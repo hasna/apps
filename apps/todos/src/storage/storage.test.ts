@@ -1483,17 +1483,32 @@ describe("storage adapter contracts", () => {
     expect(await adapter.tasks.lock!(b.id, "seneca")).toMatchObject({ success: false });
 
     // dependencies (A depends on B)
-    const dep = await adapter.dependencies!.add(a.id, b.id);
+    const dep = await adapter.dependencies!.add(a.id, b.id, { agentId: "seneca" });
     expect(dep).toEqual({ task_id: a.id, depends_on: b.id });
     const edges = await adapter.dependencies!.list(a.id);
     expect(edges.dependencies).toEqual([{ task_id: a.id, depends_on: b.id }]);
     expect((await adapter.dependencies!.list(b.id)).blocked_by).toEqual([{ task_id: a.id, depends_on: b.id }]);
+    expect(await adapter.audit.getTaskHistory(a.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        action: "dependency_add",
+        field: "dependencies",
+        old_value: null,
+        new_value: b.id,
+        agent_id: "seneca",
+      }),
+    ]));
+    await adapter.dependencies!.add(a.id, b.id, { agentId: "seneca" });
+    expect((await adapter.audit.getTaskHistory(a.id))
+      .filter((entry) => entry.action === "dependency_add" && entry.new_value === b.id)).toHaveLength(1);
     // cycle guard: B depends on A would close a loop
     await expect(Promise.resolve(adapter.dependencies!.add(b.id, a.id))).rejects.toThrow(/cycle/);
     // missing task rejected
     await expect(Promise.resolve(adapter.dependencies!.add(a.id, "nope"))).rejects.toThrow(/not found/);
-    expect(await adapter.dependencies!.remove(a.id, b.id)).toBe(true);
-    expect(await adapter.dependencies!.remove(a.id, b.id)).toBe(false);
+    expect(await adapter.dependencies!.remove(a.id, b.id, { agentId: "seneca" })).toBe(true);
+    expect(await adapter.dependencies!.remove(a.id, b.id, { agentId: "seneca" })).toBe(false);
+    expect((await adapter.audit.getTaskHistory(a.id))
+      .filter((entry) => entry.action === "dependency_remove" && entry.old_value === b.id))
+      .toEqual([expect.objectContaining({ field: "dependencies", new_value: null, agent_id: "seneca" })]);
 
     // verifications (attached to a real cloud task)
     const v = await adapter.verifications!.add({ task_id: a.id, command: "bun test", status: "passed", agent_id: "seneca" });
@@ -2590,6 +2605,37 @@ function createMemoryPostgresClient(): {
           updatedAt: String(auditUpdatedAt), deletedAt: null, version: null,
         });
         return { rows: [{ payload: taskPayload }] as T[] };
+      }
+
+      if (sql.includes("todos:add-dependency-audit-atomic")) {
+        const [service, dependencyId, rawDependency, dependencyUpdatedAt, , auditId, rawAudit, auditUpdatedAt] = values;
+        const key = recordKey(service, "dependencies", dependencyId);
+        const existing = rows.get(key);
+        if (existing && !existing.deletedAt) return { rows: [{ payload: existing.payload }] as T[] };
+        const dependency = parseJsonb(rawDependency);
+        rows.set(key, {
+          service: String(service), objectType: "dependencies", objectId: String(dependencyId), payload: dependency,
+          updatedAt: String(dependencyUpdatedAt), deletedAt: null, version: null,
+        });
+        rows.set(recordKey(service, "audit_history", auditId), {
+          service: String(service), objectType: "audit_history", objectId: String(auditId), payload: parseJsonb(rawAudit),
+          updatedAt: String(auditUpdatedAt), deletedAt: null, version: null,
+        });
+        return { rows: [{ payload: dependency }] as T[] };
+      }
+
+      if (sql.includes("todos:remove-dependency-audit-atomic")) {
+        const [service, dependencyId, removedAt, , auditId, rawAudit, auditUpdatedAt] = values;
+        const row = rows.get(recordKey(service, "dependencies", dependencyId));
+        if (!row || row.deletedAt) return { rows: [{ removed: false }] as T[] };
+        row.deletedAt = String(removedAt);
+        row.updatedAt = String(removedAt);
+        row.version = (row.version ?? 0) + 1;
+        rows.set(recordKey(service, "audit_history", auditId), {
+          service: String(service), objectType: "audit_history", objectId: String(auditId), payload: parseJsonb(rawAudit),
+          updatedAt: String(auditUpdatedAt), deletedAt: null, version: null,
+        });
+        return { rows: [{ removed: true }] as T[] };
       }
 
       if (sql.includes("todos:claim-task-atomic")) {

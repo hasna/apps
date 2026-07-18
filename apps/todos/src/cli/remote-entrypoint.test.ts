@@ -856,6 +856,11 @@ describe("remote CLI entrypoint authority boundary", () => {
         if (commentMatch && request.method === "GET") {
           return Response.json({ comments: [], count: 0, has_more: false, next_cursor: null });
         }
+        const dependencyMatch = url.pathname.match(/^\/v1\/tasks\/([^/]+)\/dependencies$/);
+        if (dependencyMatch && request.method === "GET") {
+          if (!find(tasks, dependencyMatch[1]!)) return Response.json({ error: "task not found" }, { status: 404 });
+          return Response.json({ dependencies: [], blocked_by: [] });
+        }
         const actionMatch = url.pathname.match(/^\/v1\/tasks\/([^/]+)\/(start|complete)$/);
         if (actionMatch && request.method === "POST") {
           const task = find(tasks, actionMatch[1]!);

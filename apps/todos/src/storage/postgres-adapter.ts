@@ -568,6 +568,103 @@ class PostgresJsonRecordStore {
     return payloadRecord<Task>(row.payload);
   }
 
+  async addDependencyWithAudit(
+    dependency: TaskDependency & { id: string; created_at: string; updated_at: string },
+    audit: TaskHistory,
+    context: TodosStorageContext = {},
+  ): Promise<TaskDependency> {
+    await this.ensureSchema();
+    const result = await this.options.client.query<{ payload: unknown }>(
+      `/* todos:add-dependency-audit-atomic */ WITH inserted_dependency AS (
+        INSERT INTO ${this.tableName} (
+          service, object_type, object_id, payload, updated_at,
+          deleted_at, source_machine_id, version
+        ) VALUES ($1, 'dependencies', $2, $3::jsonb, $4::timestamptz, NULL, $5, NULL)
+        ON CONFLICT (service, object_type, object_id) DO UPDATE SET
+          payload = EXCLUDED.payload,
+          updated_at = EXCLUDED.updated_at,
+          deleted_at = NULL,
+          source_machine_id = EXCLUDED.source_machine_id,
+          version = NULL
+        WHERE ${this.tableName}.deleted_at IS NOT NULL
+        RETURNING payload
+      ), inserted_audit AS (
+        INSERT INTO ${this.tableName} (
+          service, object_type, object_id, payload, updated_at,
+          deleted_at, source_machine_id, version
+        )
+        SELECT $1, 'audit_history', $6, $7::jsonb, $8::timestamptz, NULL, $5, NULL
+        FROM inserted_dependency
+        RETURNING object_id
+      ), current_dependency AS (
+        SELECT payload FROM inserted_dependency
+        UNION ALL
+        SELECT payload FROM ${this.tableName}
+        WHERE service = $1 AND object_type = 'dependencies' AND object_id = $2
+          AND deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM inserted_dependency)
+        LIMIT 1
+      )
+      SELECT payload FROM current_dependency
+      WHERE EXISTS (SELECT 1 FROM inserted_audit)
+         OR NOT EXISTS (SELECT 1 FROM inserted_dependency)`,
+      [
+        this.service,
+        dependency.id,
+        jsonbParam(dependency),
+        dependency.updated_at,
+        this.machineId(context),
+        audit.id,
+        jsonbParam(audit),
+        audit.created_at,
+      ],
+    );
+    const row = result.rows[0];
+    if (!row) throw new Error(`Dependency write did not persist: ${dependency.task_id} -> ${dependency.depends_on}`);
+    const persisted = payloadRecord<TaskDependency>(row.payload);
+    return { task_id: persisted.task_id, depends_on: persisted.depends_on };
+  }
+
+  async removeDependencyWithAudit(
+    dependencyId: string,
+    audit: TaskHistory,
+    context: TodosStorageContext = {},
+  ): Promise<boolean> {
+    await this.ensureSchema();
+    const timestamp = audit.created_at;
+    const result = await this.options.client.query<{ removed: boolean }>(
+      `/* todos:remove-dependency-audit-atomic */ WITH removed_dependency AS (
+        UPDATE ${this.tableName} SET
+          deleted_at = $3::timestamptz,
+          updated_at = $3::timestamptz,
+          source_machine_id = COALESCE($4, source_machine_id),
+          version = COALESCE(version, 0) + 1
+        WHERE service = $1 AND object_type = 'dependencies' AND object_id = $2
+          AND deleted_at IS NULL
+        RETURNING object_id
+      ), inserted_audit AS (
+        INSERT INTO ${this.tableName} (
+          service, object_type, object_id, payload, updated_at,
+          deleted_at, source_machine_id, version
+        )
+        SELECT $1, 'audit_history', $5, $6::jsonb, $7::timestamptz, NULL, $4, NULL
+        FROM removed_dependency
+        RETURNING object_id
+      )
+      SELECT EXISTS (SELECT 1 FROM removed_dependency)
+         AND EXISTS (SELECT 1 FROM inserted_audit) AS removed`,
+      [
+        this.service,
+        dependencyId,
+        timestamp,
+        this.machineId(context),
+        audit.id,
+        jsonbParam(audit),
+        audit.created_at,
+      ],
+    );
+    return Boolean(result.rows[0]?.removed);
+  }
+
   async compareAndSetTaskWithAudit(task: Task, guard: TaskCasGuard): Promise<Task | null> {
     await this.ensureSchema();
     const context = guard.context ?? {};
@@ -1508,8 +1605,21 @@ async function addDependency(
   }
   const timestamp = new Date().toISOString();
   const record = { id: dependencyId(taskId, dependsOn), task_id: taskId, depends_on: dependsOn, created_at: timestamp, updated_at: timestamp };
-  await store.upsert("dependencies", record, context);
-  return { task_id: taskId, depends_on: dependsOn };
+  return store.addDependencyWithAudit(
+    record,
+    taskAudit(
+      taskId,
+      "dependency_add",
+      "dependencies",
+      null,
+      dependsOn,
+      context,
+      undefined,
+      timestamp,
+      store.machineId(context),
+    ),
+    context,
+  );
 }
 
 /** Remove a dependency edge. Returns false when the edge did not exist. */
@@ -1521,8 +1631,22 @@ async function removeDependency(
 ): Promise<boolean> {
   const existing = await store.get<unknown>("dependencies", dependencyId(taskId, dependsOn));
   if (!existing) return false;
-  await store.delete("dependencies", dependencyId(taskId, dependsOn), context);
-  return true;
+  const timestamp = new Date().toISOString();
+  return store.removeDependencyWithAudit(
+    dependencyId(taskId, dependsOn),
+    taskAudit(
+      taskId,
+      "dependency_remove",
+      "dependencies",
+      dependsOn,
+      null,
+      context,
+      undefined,
+      timestamp,
+      store.machineId(context),
+    ),
+    context,
+  );
 }
 
 /** List a task's outgoing (dependencies) and incoming (blocked_by) dependency edges. */

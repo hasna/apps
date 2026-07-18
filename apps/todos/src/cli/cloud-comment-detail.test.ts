@@ -267,6 +267,9 @@ describe("cloud task detail comments", () => {
         if (url.pathname === `/v1/tasks/${TASK_ID}/comments` && request.method === "GET") {
           return Response.json({ comments, count: comments.length });
         }
+        if (url.pathname === `/v1/tasks/${TASK_ID}/dependencies` && request.method === "GET") {
+          return Response.json({ dependencies: [], blocked_by: [] });
+        }
         return Response.json({ error: "not found" }, { status: 404 });
       },
     });
@@ -298,6 +301,7 @@ describe("cloud task detail comments", () => {
       expect(requests.slice(requestsBeforeInspect).map((request) => `${request.method} ${request.path}`)).toEqual([
         `GET /v1/tasks/${TASK_ID}`,
         `GET /v1/tasks/${TASK_ID}/comments`,
+        `GET /v1/tasks/${TASK_ID}/dependencies`,
       ]);
       expect(existsSync(join(root, "todos.db"))).toBe(false);
 
@@ -340,6 +344,62 @@ describe("cloud task detail comments", () => {
         { method: "POST", path: `/v1/tasks/${TASK_ID}/comments`, authorized: true },
         { method: "GET", path: `/v1/tasks/${TASK_ID}/comments`, authorized: true },
       ]));
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("inspect hydrates persisted dependency relations from the remote authority", async () => {
+    const blockedTaskId = "33333333-3333-4333-8333-333333333333";
+    const requests: string[] = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        requests.push(`${request.method} ${url.pathname}`);
+        if (url.pathname === `/v1/tasks/${TASK_ID}` && request.method === "GET") {
+          return Response.json({ task: taskFixture({ title: "Dependent task", status: "in_progress" }) });
+        }
+        if (url.pathname === `/v1/tasks/${PARENT_ID}` && request.method === "GET") {
+          return Response.json({ task: taskFixture({ id: PARENT_ID, title: "Required task", status: "pending" }) });
+        }
+        if (url.pathname === `/v1/tasks/${blockedTaskId}` && request.method === "GET") {
+          return Response.json({ task: taskFixture({ id: blockedTaskId, title: "Downstream task", status: "pending" }) });
+        }
+        if (url.pathname === `/v1/tasks/${TASK_ID}/dependencies` && request.method === "GET") {
+          return Response.json({
+            dependencies: [{ task_id: TASK_ID, depends_on: PARENT_ID }],
+            blocked_by: [{ task_id: blockedTaskId, depends_on: TASK_ID }],
+          });
+        }
+        if (url.pathname === `/v1/tasks/${TASK_ID}/comments` && request.method === "GET") {
+          return Response.json({ comments: [], count: 0 });
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-dependency-detail-"));
+    tempRoots.push(root);
+    try {
+      const result = await runCli(
+        ["--json", "inspect", TASK_ID],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        id: TASK_ID,
+        dependencies: [{ id: PARENT_ID, title: "Required task", status: "pending" }],
+        blocked_by: [{ id: blockedTaskId, title: "Downstream task", status: "pending" }],
+      });
+      expect(requests).toEqual(expect.arrayContaining([
+        `GET /v1/tasks/${TASK_ID}/dependencies`,
+        `GET /v1/tasks/${PARENT_ID}`,
+        `GET /v1/tasks/${blockedTaskId}`,
+      ]));
+      expect(existsSync(join(root, "todos.db"))).toBe(false);
     } finally {
       server.stop(true);
     }

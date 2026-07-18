@@ -1719,6 +1719,42 @@ export async function cloudGetTasksByIds(client: HasnaStorageClient, ids: readon
   return map;
 }
 
+export interface CloudTaskDependencyRelations {
+  dependencies: Task[];
+  blocked_by: Task[];
+}
+
+/**
+ * Hydrate a task's dependency edges into the full task rows expected by the
+ * `show`/`inspect` relation contract. The task endpoint intentionally returns
+ * only the task row, so callers must join through the authoritative dependency
+ * endpoint instead of defaulting relation arrays to an incorrect empty value.
+ */
+export async function cloudGetTaskDependencyRelations(
+  client: HasnaStorageClient,
+  taskId: string,
+): Promise<CloudTaskDependencyRelations> {
+  const edges = await cloudGetDependencies(client, taskId);
+  const related = await cloudGetTasksByIds(client, [
+    ...edges.dependencies.map((edge) => edge.depends_on),
+    ...edges.blocked_by.map((edge) => edge.task_id),
+  ]);
+  const requiredTask = (id: string, relation: "dependency" | "dependent"): Task => {
+    const task = related.get(id);
+    if (!task) {
+      throw new Error(
+        `REMOTE_API_INCOMPATIBLE: ${relation} edge for task ${taskId} references missing task ${id}; ` +
+          "local SQLite fallback is disabled",
+      );
+    }
+    return task;
+  };
+  return {
+    dependencies: edges.dependencies.map((edge) => requiredTask(edge.depends_on, "dependency")),
+    blocked_by: edges.blocked_by.map((edge) => requiredTask(edge.task_id, "dependent")),
+  };
+}
+
 /**
  * For each candidate task, its incomplete blocking dependencies (parity with
  * `getBlockingDeps`): the tasks it depends on whose status is not `completed`.
