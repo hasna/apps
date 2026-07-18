@@ -62,11 +62,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/open-automations.git"
+    "url": "git+https://github.com/hasna/automations.git"
   },
-  "homepage": "https://github.com/hasna/open-automations#readme",
+  "homepage": "https://github.com/hasna/automations#readme",
   "bugs": {
-    "url": "https://github.com/hasna/open-automations/issues"
+    "url": "https://github.com/hasna/automations/issues"
   },
   "engines": {
     "bun": ">=1.0.0"
