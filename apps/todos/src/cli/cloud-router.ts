@@ -11,6 +11,17 @@ import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts/
 import { resolve as resolvePath } from "node:path";
 import type { Agent, CreatePlanInput, CreateTaskListInput, Plan, Project, RegisterAgentInput, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList, UpdatePlanInput, UpdateTaskListInput } from "../types/index.js";
 import { redactEvidenceText } from "../lib/redaction.js";
+import type {
+  IncidentMutationResult,
+  IncidentOutboxRecord,
+  IncidentOutboxStatus,
+} from "../incidents/postgres-store.js";
+import type {
+  IncidentState,
+  IncidentTransition,
+  NormalizedIncidentCreateInput,
+  NormalizedIncidentTransitionInput,
+} from "../incidents/contracts.js";
 
 type Env = Record<string, string | undefined>;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -1960,4 +1971,134 @@ export async function cloudTimeline(client: HasnaStorageClient, options: CloudTi
   const offset = options.offset ?? 0;
   const limit = options.limit ?? 50;
   return { entries: entries.slice(offset, offset + limit), total, limit, offset };
+}
+
+/** Canonical incident commands are remote-only and never consult local SQLite. */
+export async function cloudListIncidents(
+  client: HasnaStorageClient,
+  query: Record<string, string | number | boolean | undefined> = {},
+): Promise<IncidentState[]> {
+  const raw = await client.transport.get<unknown>("/incidents", { query });
+  return (raw as { incidents?: IncidentState[] }).incidents ?? [];
+}
+
+export async function cloudListIncidentBlockers(
+  client: HasnaStorageClient,
+  query: Record<string, string | number | undefined> = {},
+): Promise<IncidentState[]> {
+  const raw = await client.transport.get<unknown>("/incidents/blockers", { query });
+  return (raw as { incidents?: IncidentState[] }).incidents ?? [];
+}
+
+export async function cloudGetIncident(client: HasnaStorageClient, id: string): Promise<IncidentState | null> {
+  try {
+    const raw = await client.transport.get<unknown>(`/incidents/${encodeURIComponent(id)}`);
+    return (raw as { incident?: IncidentState }).incident ?? null;
+  } catch (error) {
+    if (error && typeof error === "object" && (error as { status?: unknown }).status === 404) return null;
+    throw error;
+  }
+}
+
+export async function cloudCreateIncident(
+  client: HasnaStorageClient,
+  input: NormalizedIncidentCreateInput,
+): Promise<IncidentMutationResult> {
+  const raw = await client.transport.post<unknown>("/incidents", input as unknown as Record<string, unknown>);
+  return (raw as { result: IncidentMutationResult }).result;
+}
+
+export async function cloudTransitionIncident(
+  client: HasnaStorageClient,
+  id: string,
+  input: NormalizedIncidentTransitionInput,
+): Promise<IncidentMutationResult> {
+  const raw = await client.transport.post<unknown>(
+    `/incidents/${encodeURIComponent(id)}/transitions`,
+    {
+      expected_version: input.expected_version,
+      idempotency_key: input.idempotency_key,
+      reason: input.reason,
+      ...input.patch,
+    },
+  );
+  return (raw as { result: IncidentMutationResult }).result;
+}
+
+export async function cloudListIncidentTransitions(
+  client: HasnaStorageClient,
+  id: string,
+): Promise<IncidentTransition[]> {
+  const raw = await client.transport.get<unknown>(`/incidents/${encodeURIComponent(id)}/transitions`);
+  return (raw as { transitions?: IncidentTransition[] }).transitions ?? [];
+}
+
+export async function cloudListDeadIncidentOutbox(
+  client: HasnaStorageClient,
+  query: { limit?: number; before_created_at?: string; before_event_id?: string } = {},
+): Promise<IncidentOutboxRecord[]> {
+  const raw = await client.transport.get<unknown>("/incidents/outbox", { query });
+  return (raw as { outbox?: IncidentOutboxRecord[] }).outbox ?? [];
+}
+
+export async function cloudGetDeadIncidentOutbox(
+  client: HasnaStorageClient,
+  eventId: string,
+): Promise<IncidentOutboxRecord | null> {
+  try {
+    const raw = await client.transport.get<unknown>(`/incidents/outbox/${encodeURIComponent(eventId)}`);
+    return (raw as { outbox?: IncidentOutboxRecord }).outbox ?? null;
+  } catch (error) {
+    if (error && typeof error === "object" && (error as { status?: unknown }).status === 404) return null;
+    throw error;
+  }
+}
+
+export async function cloudGetIncidentOutboxStatus(client: HasnaStorageClient): Promise<IncidentOutboxStatus> {
+  const raw = await client.transport.get<unknown>("/incidents/outbox/status");
+  return (raw as { status: IncidentOutboxStatus }).status;
+}
+
+export async function cloudClaimIncidentOutbox(
+  client: HasnaStorageClient,
+  input: { limit?: number; lease_seconds?: number } = {},
+): Promise<IncidentOutboxRecord[]> {
+  const raw = await client.transport.post<unknown>("/incidents/outbox/claim", input);
+  return (raw as { outbox?: IncidentOutboxRecord[] }).outbox ?? [];
+}
+
+export async function cloudAckIncidentOutbox(
+  client: HasnaStorageClient,
+  eventId: string,
+  input: { lease_token: string; delivery_id: string },
+): Promise<IncidentOutboxRecord> {
+  const raw = await client.transport.post<unknown>(
+    `/incidents/outbox/${encodeURIComponent(eventId)}/ack`,
+    input,
+  );
+  return (raw as { outbox: IncidentOutboxRecord }).outbox;
+}
+
+export async function cloudFailIncidentOutbox(
+  client: HasnaStorageClient,
+  eventId: string,
+  input: { lease_token: string; failure_code: string; failure: string },
+): Promise<IncidentOutboxRecord> {
+  const raw = await client.transport.post<unknown>(
+    `/incidents/outbox/${encodeURIComponent(eventId)}/fail`,
+    input,
+  );
+  return (raw as { outbox: IncidentOutboxRecord }).outbox;
+}
+
+export async function cloudRequeueIncidentOutbox(
+  client: HasnaStorageClient,
+  eventId: string,
+  input: { expected_attempts: number; idempotency_key: string; reason: string },
+): Promise<IncidentOutboxRecord> {
+  const raw = await client.transport.post<unknown>(
+    `/incidents/outbox/${encodeURIComponent(eventId)}/requeue`,
+    input,
+  );
+  return (raw as { outbox: IncidentOutboxRecord }).outbox;
 }

@@ -192,6 +192,59 @@ export type {
 // Core database
 export { getDatabase, closeDatabase, resetDatabase, resolvePartialId, now, uuid } from "./db/database.js";
 
+// Canonical incident state and projection outbox contracts
+export {
+  ACTIVE_INCIDENT_STATUSES,
+  INCIDENT_AUTHORITY_ID_PATTERN,
+  INCIDENT_BLOCKED_SCOPE_PATTERNS,
+  INCIDENT_SEVERITIES,
+  INCIDENT_STATUSES,
+  IncidentValidationError,
+  applyIncidentTransition,
+  buildIncidentProjectionEvent,
+  createInitialIncident,
+  incidentEventId,
+  incidentTransitionId,
+  normalizeIncidentCreateInput,
+  normalizeIncidentAuthorityId,
+  normalizeIncidentTransitionInput,
+  stableIncidentFingerprint,
+  supersedeIncident,
+} from "./incidents/contracts.js";
+export type {
+  AppliedIncidentTransition,
+  IncidentProjectionEvent,
+  IncidentSeverity,
+  IncidentState,
+  IncidentStatus,
+  IncidentTransition,
+  IncidentTransitionPatch,
+  NormalizedIncidentCreateInput,
+  NormalizedIncidentTransitionInput,
+} from "./incidents/contracts.js";
+export {
+  IncidentIdempotencyConflictError,
+  IncidentLeaseConflictError,
+  IncidentNotFoundError,
+  IncidentOutboxRecoveryConflictError,
+  IncidentVersionConflictError,
+  createPostgresIncidentStore,
+  postgresIncidentRollbackSql,
+  postgresIncidentSchemaSql,
+} from "./incidents/postgres-store.js";
+export type {
+  CreatePostgresIncidentStoreOptions,
+  IncidentAuthorityContext,
+  IncidentDeadOutboxListOptions,
+  IncidentListFilter,
+  IncidentMutationResult,
+  IncidentOutboxClaimOptions,
+  IncidentOutboxRecord,
+  IncidentOutboxRequeueInput,
+  IncidentOutboxStatus,
+  TodosIncidentStore,
+} from "./incidents/postgres-store.js";
+
 // Tasks
 export {
   createTask,

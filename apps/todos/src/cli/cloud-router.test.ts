@@ -42,6 +42,19 @@ import {
   cloudResolvePlan,
   cloudResolveTaskListRef,
   cloudResolveTaskRef,
+  cloudListIncidents,
+  cloudListIncidentBlockers,
+  cloudGetIncident,
+  cloudCreateIncident,
+  cloudTransitionIncident,
+  cloudListIncidentTransitions,
+  cloudListDeadIncidentOutbox,
+  cloudGetDeadIncidentOutbox,
+  cloudGetIncidentOutboxStatus,
+  cloudClaimIncidentOutbox,
+  cloudAckIncidentOutbox,
+  cloudFailIncidentOutbox,
+  cloudRequeueIncidentOutbox,
 } from "./cloud-router.js";
 
 const CLOUD_ENV = {
@@ -1256,5 +1269,239 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
     const client = getTodosCloudClient(CLOUD_ENV)!;
     await expect(cloudUnlockTask(client, "task-1", undefined, true)).resolves.toBe(true);
     expect(calls[0]!.body).toEqual({ force: true });
+  });
+});
+
+describe("canonical incident remote routing", () => {
+  const incidentId = "11111111-1111-4111-8111-111111111111";
+  const occurredAt = "2026-07-18T10:00:00.000Z";
+  const incident = {
+    id: incidentId,
+    title: "Dispatch authority unavailable",
+    severity: "high",
+    status: "open",
+    owner: "platform-todos",
+    affected_scopes: ["dispatch"],
+    blocked_scopes: ["channel:incidents"],
+    containment: null,
+    next_action: "Restore the canonical authority",
+    deadline: null,
+    closure_evidence: [],
+    supersedes_id: null,
+    superseded_by_id: null,
+    resolved_at: null,
+    version: 1,
+    created_at: occurredAt,
+    updated_at: occurredAt,
+  };
+  const transition = {
+    id: "itr_fixture",
+    authority_id: "authority-fixture",
+    incident_id: incidentId,
+    incident_version: 1,
+    idempotency_key: "incident-create-fixture",
+    request_fingerprint: "fingerprint-fixture",
+    action: "created",
+    actor_id: "authenticated-agent",
+    effective_actor_id: "effective-agent",
+    actor_key_id: "kid-fixture",
+    actor_act_as: true,
+    reason: "Incident created",
+    before: null,
+    after: incident,
+    created_at: occurredAt,
+  };
+  const event = {
+    schema_version: 1,
+    source: "todos",
+    event_id: "iev_fixture",
+    projection_key: `todos:incident:authority-fixture:${incidentId}:v1`,
+    authority_id: "authority-fixture",
+    incident_id: incidentId,
+    transition_id: transition.id,
+    incident_version: 1,
+    occurred_at: occurredAt,
+    incident,
+  };
+
+  test("maps incident list, blockers, detail, create, transition, history, and recovery to /v1 only", async () => {
+    const calls = installFetch((call) => {
+      const url = new URL(call.url);
+      if (url.pathname === "/v1/incidents" && call.method === "GET") return { body: { incidents: [incident] } };
+      if (url.pathname === "/v1/incidents/blockers") return { body: { incidents: [incident] } };
+      if (url.pathname === `/v1/incidents/${incidentId}`) return { body: { incident } };
+      if (url.pathname === "/v1/incidents" && call.method === "POST") {
+        return { status: 201, body: { result: { incident, transitions: [transition], events: [event], replayed: false } } };
+      }
+      if (url.pathname === `/v1/incidents/${incidentId}/transitions` && call.method === "POST") {
+        return { body: { result: { incident: { ...incident, version: 2 }, transitions: [transition], events: [event], replayed: false } } };
+      }
+      if (url.pathname === `/v1/incidents/${incidentId}/transitions`) return { body: { transitions: [transition] } };
+      if (url.pathname === "/v1/incidents/outbox/iev_fixture%2Fdead/requeue") {
+        return {
+          body: {
+            outbox: {
+              event_id: "iev_fixture/dead",
+              projection_key: event.projection_key,
+              incident_id: incidentId,
+              incident_version: 1,
+              depends_on_event_id: null,
+              payload: event,
+              status: "pending",
+              attempts: 0,
+              next_attempt_at: occurredAt,
+              lease_token: null,
+              leased_by: null,
+              lease_expires_at: null,
+              delivery_id: null,
+              acked_at: null,
+              last_error: null,
+              failure_code: null,
+              failure_fingerprint: null,
+              consecutive_failures: 0,
+              created_at: occurredAt,
+              updated_at: occurredAt,
+            },
+          },
+        };
+      }
+      return { status: 500, body: { error: `unexpected ${call.method} ${url.pathname}` } };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudListIncidents(client, { status: "open", active: true, limit: 3 })).resolves.toEqual([incident]);
+    await expect(cloudListIncidentBlockers(client, { scope: "dispatch", limit: 2 })).resolves.toEqual([incident]);
+    await expect(cloudGetIncident(client, incidentId)).resolves.toEqual(incident);
+    await expect(cloudCreateIncident(client, {
+      id: incidentId,
+      idempotency_key: "incident-create-fixture",
+      title: incident.title,
+      severity: "high",
+      status: "open",
+      owner: incident.owner,
+      affected_scopes: ["dispatch"],
+      blocked_scopes: ["channel:incidents"],
+      containment: null,
+      next_action: incident.next_action,
+      deadline: null,
+      closure_evidence: [],
+      supersedes_id: null,
+      supersedes_expected_version: null,
+    })).resolves.toMatchObject({ incident, replayed: false });
+    await expect(cloudTransitionIncident(client, incidentId, {
+      expected_version: 1,
+      idempotency_key: "incident-transition-fixture",
+      reason: "Begin investigation",
+      patch: { status: "investigating" },
+    })).resolves.toMatchObject({ incident: { version: 2 }, replayed: false });
+    await expect(cloudListIncidentTransitions(client, incidentId)).resolves.toEqual([transition]);
+    await expect(cloudRequeueIncidentOutbox(client, "iev_fixture/dead", {
+      expected_attempts: 5,
+      idempotency_key: "incident-requeue-fixture",
+      reason: "Operator repaired the projector",
+    })).resolves.toMatchObject({ event_id: "iev_fixture/dead", status: "pending", attempts: 0 });
+
+    expect(calls.every((call) => call.headers.authorization === "Bearer hasna_todos_test_key")).toBe(true);
+    expect(new URL(calls[0]!.url).searchParams.get("status")).toBe("open");
+    expect(new URL(calls[0]!.url).searchParams.get("active")).toBe("true");
+    expect(new URL(calls[1]!.url).searchParams.get("scope")).toBe("dispatch");
+    expect(calls[3]!.method).toBe("POST");
+    expect(calls[3]!.body).toMatchObject({ id: incidentId, idempotency_key: "incident-create-fixture" });
+    expect(calls[4]!.body).toEqual({
+      expected_version: 1,
+      idempotency_key: "incident-transition-fixture",
+      reason: "Begin investigation",
+      status: "investigating",
+    });
+    expect(calls[6]!.url).toEndWith("/v1/incidents/outbox/iev_fixture%2Fdead/requeue");
+  });
+
+  test("maps an incident detail 404 to null without local fallback", async () => {
+    const calls = installFetch(() => ({ status: 404, body: { error: "Incident not found" } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    await expect(cloudGetIncident(client, incidentId)).resolves.toBeNull();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe(`https://todos.hasna.xyz/v1/incidents/${incidentId}`);
+  });
+
+  test("maps bounded outbox status, dead inspection, claim, ack, and typed failure without local fallback", async () => {
+    const outbox = {
+      event_id: event.event_id,
+      projection_key: event.projection_key,
+      incident_id: incidentId,
+      incident_version: 1,
+      depends_on_event_id: null,
+      payload: event,
+      status: "dead",
+      attempts: 3,
+      next_attempt_at: occurredAt,
+      lease_token: null,
+      leased_by: null,
+      lease_expires_at: null,
+      delivery_id: null,
+      acked_at: null,
+      last_error: "projector unavailable",
+      failure_code: "CONV_HTTP_503",
+      failure_fingerprint: "a".repeat(64),
+      consecutive_failures: 3,
+      created_at: occurredAt,
+      updated_at: occurredAt,
+    };
+    const leased = {
+      ...outbox,
+      status: "leased",
+      attempts: 1,
+      lease_token: "lease-1",
+      leased_by: "projector",
+      lease_expires_at: "2026-07-18T10:01:00.000Z",
+      last_error: null,
+      failure_code: null,
+      failure_fingerprint: null,
+      consecutive_failures: 0,
+    };
+    const calls = installFetch((call) => {
+      const url = new URL(call.url);
+      if (url.pathname === "/v1/incidents/outbox/status") {
+        return { body: { status: { pending: 2, leased: 1, acked: 4, dead: 1, total: 8 } } };
+      }
+      if (url.pathname === "/v1/incidents/outbox" && call.method === "GET") return { body: { outbox: [outbox], count: 1 } };
+      if (url.pathname === `/v1/incidents/outbox/${event.event_id}` && call.method === "GET") return { body: { outbox } };
+      if (url.pathname === "/v1/incidents/outbox/claim") return { body: { outbox: [leased], count: 1 } };
+      if (url.pathname.endsWith("/ack")) return { body: { outbox: { ...leased, status: "acked", lease_token: null } } };
+      if (url.pathname.endsWith("/fail")) return { body: { outbox } };
+      return { status: 500, body: { error: `unexpected ${call.method} ${url.pathname}` } };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudGetIncidentOutboxStatus(client)).resolves.toEqual({ pending: 2, leased: 1, acked: 4, dead: 1, total: 8 });
+    await expect(cloudListDeadIncidentOutbox(client, { limit: 10 })).resolves.toEqual([outbox]);
+    await expect(cloudGetDeadIncidentOutbox(client, event.event_id)).resolves.toEqual(outbox);
+    await expect(cloudClaimIncidentOutbox(client, { limit: 1, lease_seconds: 60 })).resolves.toEqual([leased]);
+    await expect(cloudAckIncidentOutbox(client, event.event_id, {
+      lease_token: "lease-1",
+      delivery_id: "message-1",
+    })).resolves.toMatchObject({ status: "acked" });
+    await expect(cloudFailIncidentOutbox(client, event.event_id, {
+      lease_token: "lease-1",
+      failure_code: "CONV_HTTP_503",
+      failure: "projector unavailable request req-123",
+    })).resolves.toEqual(outbox);
+
+    expect(calls.map((call) => `${call.method} ${new URL(call.url).pathname}`)).toEqual([
+      "GET /v1/incidents/outbox/status",
+      "GET /v1/incidents/outbox",
+      `GET /v1/incidents/outbox/${event.event_id}`,
+      "POST /v1/incidents/outbox/claim",
+      `POST /v1/incidents/outbox/${event.event_id}/ack`,
+      `POST /v1/incidents/outbox/${event.event_id}/fail`,
+    ]);
+    expect(new URL(calls[1]!.url).searchParams.get("limit")).toBe("10");
+    expect(calls[3]!.body).toEqual({ limit: 1, lease_seconds: 60 });
+    expect(calls[5]!.body).toEqual({
+      lease_token: "lease-1",
+      failure_code: "CONV_HTTP_503",
+      failure: "projector unavailable request req-123",
+    });
+    expect(calls.every((call) => call.headers.authorization === "Bearer hasna_todos_test_key")).toBe(true);
   });
 });

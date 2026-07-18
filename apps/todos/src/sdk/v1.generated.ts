@@ -14,6 +14,20 @@ export interface TaskComment { "id": string; "task_id": string; "agent_id": stri
 
 export interface Plan { "id": string; "slug": string | null; "project_id"?: string | null; "task_list_id"?: string | null; "agent_id"?: string | null; "name": string; "description"?: string | null; "status": "active" | "completed" | "archived"; "created_at": string; "updated_at": string }
 
+export interface Incident { "id": string; "title": string; "severity": "info" | "low" | "medium" | "high" | "critical"; "status": "open" | "investigating" | "contained" | "monitoring" | "resolved" | "superseded"; "owner": string; "affected_scopes": Array<string>; "blocked_scopes": Array<string>; "containment": string | null; "next_action": string | null; "deadline": string | null; "closure_evidence": Array<string>; "supersedes_id": string | null; "superseded_by_id": string | null; "resolved_at": string | null; "version": number; "created_at": string; "updated_at": string }
+
+export interface IncidentTransition { "id": string; "authority_id": string; "incident_id": string; "incident_version": number; "idempotency_key": string; "request_fingerprint": string; "action": "created" | "updated" | "resolved" | "superseded"; "actor_id": string; "effective_actor_id": string; "actor_key_id": string | null; "actor_act_as": boolean; "reason": string; "before": { "id": string; "title": string; "severity": "info" | "low" | "medium" | "high" | "critical"; "status": "open" | "investigating" | "contained" | "monitoring" | "resolved" | "superseded"; "owner": string; "affected_scopes": Array<string>; "blocked_scopes": Array<string>; "containment": string | null; "next_action": string | null; "deadline": string | null; "closure_evidence": Array<string>; "supersedes_id": string | null; "superseded_by_id": string | null; "resolved_at": string | null; "version": number; "created_at": string; "updated_at": string } | null; "after": { "id": string; "title": string; "severity": "info" | "low" | "medium" | "high" | "critical"; "status": "open" | "investigating" | "contained" | "monitoring" | "resolved" | "superseded"; "owner": string; "affected_scopes": Array<string>; "blocked_scopes": Array<string>; "containment": string | null; "next_action": string | null; "deadline": string | null; "closure_evidence": Array<string>; "supersedes_id": string | null; "superseded_by_id": string | null; "resolved_at": string | null; "version": number; "created_at": string; "updated_at": string }; "created_at": string }
+
+export interface IncidentProjectionEvent { "schema_version": 1; "source": "todos"; "event_id": string; "projection_key": string; "authority_id": string; "incident_id": string; "transition_id": string; "incident_version": number; "occurred_at": string; "incident": { "id": string; "title": string; "severity": "info" | "low" | "medium" | "high" | "critical"; "status": "open" | "investigating" | "contained" | "monitoring" | "resolved" | "superseded"; "owner": string; "affected_scopes": Array<string>; "blocked_scopes": Array<string>; "containment": string | null; "next_action": string | null; "deadline": string | null; "closure_evidence": Array<string>; "supersedes_id": string | null; "superseded_by_id": string | null; "resolved_at": string | null; "version": number; "created_at": string; "updated_at": string } }
+
+export interface IncidentOutboxRecord { "event_id": string; "projection_key": string; "incident_id": string; "incident_version": number; "depends_on_event_id": string | null; "payload": { "schema_version": 1; "source": "todos"; "event_id": string; "projection_key": string; "authority_id": string; "incident_id": string; "transition_id": string; "incident_version": number; "occurred_at": string; "incident": { "id": string; "title": string; "severity": "info" | "low" | "medium" | "high" | "critical"; "status": "open" | "investigating" | "contained" | "monitoring" | "resolved" | "superseded"; "owner": string; "affected_scopes": Array<string>; "blocked_scopes": Array<string>; "containment": string | null; "next_action": string | null; "deadline": string | null; "closure_evidence": Array<string>; "supersedes_id": string | null; "superseded_by_id": string | null; "resolved_at": string | null; "version": number; "created_at": string; "updated_at": string } }; "status": "pending" | "leased" | "acked" | "dead"; "attempts": number; "next_attempt_at": string; "lease_token": string | null; "leased_by": string | null; "lease_expires_at": string | null; "delivery_id": string | null; "acked_at": string | null; "last_error": string | null; "failure_code": string | null; "failure_fingerprint": string | null; "consecutive_failures": number; "created_at": string; "updated_at": string }
+
+export interface IncidentMutationResult { "incident": Incident; "transitions": Array<IncidentTransition>; "events": Array<IncidentProjectionEvent>; "replayed": boolean }
+
+export interface CreateIncidentInput { "id": string; "idempotency_key": string; "title": string; "severity": "info" | "low" | "medium" | "high" | "critical"; "status"?: "open" | "investigating" | "contained" | "monitoring"; "owner": string; "affected_scopes": Array<string>; "blocked_scopes"?: Array<string>; "containment"?: string | null; "next_action": string; "deadline"?: string | null; "closure_evidence"?: Array<string>; "supersedes_id"?: string | null; "supersedes_expected_version"?: number | null }
+
+export interface TransitionIncidentInput { "expected_version": number; "idempotency_key": string; "reason": string; "title"?: string; "severity"?: "info" | "low" | "medium" | "high" | "critical"; "status"?: "open" | "investigating" | "contained" | "monitoring" | "resolved"; "owner"?: string; "affected_scopes"?: Array<string>; "blocked_scopes"?: Array<string>; "containment"?: string | null; "next_action"?: string | null; "deadline"?: string | null; "closure_evidence"?: Array<string> }
+
 export interface CreateTaskInput { "title": string; "description"?: string; "status"?: "pending" | "in_progress" | "completed" | "failed" | "cancelled"; "priority"?: "low" | "medium" | "high" | "critical"; "project_id"?: string; "assigned_to"?: string; "agent_id"?: string; "assigned_by"?: string; "tags"?: Array<string> }
 
 export interface UpdateTaskInput { "title"?: string; "description"?: string; "status"?: "pending" | "in_progress" | "completed" | "failed" | "cancelled"; "priority"?: "low" | "medium" | "high" | "critical"; "project_id"?: string | null; "assigned_to"?: string | null; "working_dir"?: string | null; "plan_id"?: string | null; "task_list_id"?: string | null; "cycle_id"?: string | null; "tags"?: Array<string>; "metadata"?: Record<string, unknown>; "due_at"?: string | null; "estimated_minutes"?: number; "sla_minutes"?: number | null; "actual_minutes"?: number; "completed_at"?: string | null; "confidence"?: number | null; "retry_count"?: number; "max_retries"?: number; "retry_after"?: string | null; "requires_approval"?: boolean; "approved_by"?: string; "recurrence_rule"?: string | null; "version"?: number; "task_type"?: string | null }
@@ -98,6 +112,123 @@ export class TodosV1Client {
     /** Bulk-ingest a full or partial snapshot (idempotent upsert by id) */
     async importSnapshot(body: { "exportedAt"?: string; "source"?: string; "tasks"?: Array<Task>; "projects"?: Array<Project>; "projectMachinePaths"?: Array<Record<string, unknown>>; "plans"?: Array<Record<string, unknown>>; "agents"?: Array<Record<string, unknown>>; "taskLists"?: Array<Record<string, unknown>>; "templates"?: Array<Record<string, unknown>>; "auditHistory"?: Array<Record<string, unknown>>; "tombstones"?: Array<Record<string, unknown>> }, init?: RequestInit): Promise<{ "received"?: number; "result"?: { "inserted"?: number; "updated"?: number; "deleted"?: number; "skipped"?: number; "errors"?: Array<string> } }> {
       return this.request("POST", `/v1/import`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** List canonical incidents */
+    async listIncidents(query?: { "status"?: "open" | "investigating" | "contained" | "monitoring" | "resolved" | "superseded"; "severity"?: "info" | "low" | "medium" | "high" | "critical"; "owner"?: string; "scope"?: string; "active"?: boolean; "limit"?: number; "before_updated_at"?: string; "before_id"?: string }, init?: RequestInit): Promise<{ "incidents": Array<Incident>; "count": number }> {
+      return this.request("GET", `/v1/incidents`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Create or atomically supersede a canonical incident */
+    async createIncident(body: CreateIncidentInput, init?: RequestInit): Promise<{ "result": IncidentMutationResult }> {
+      return this.request("POST", `/v1/incidents`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** List active canonical blockers */
+    async listIncidentBlockers(query?: { "severity"?: "info" | "low" | "medium" | "high" | "critical"; "owner"?: string; "scope"?: string; "limit"?: number; "before_updated_at"?: string; "before_id"?: string }, init?: RequestInit): Promise<{ "incidents": Array<Incident>; "count": number; "active_statuses": Array<"open" | "investigating" | "contained" | "monitoring"> }> {
+      return this.request("GET", `/v1/incidents/blockers`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** List dead incident projection events for operator recovery */
+    async listDeadIncidentOutbox(query?: { "limit"?: number; "before_created_at"?: string; "before_event_id"?: string }, init?: RequestInit): Promise<{ "outbox": Array<IncidentOutboxRecord>; "count": number }> {
+      return this.request("GET", `/v1/incidents/outbox`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Lease causally ready incident projections */
+    async claimIncidentOutbox(body?: { "limit"?: number; "lease_seconds"?: number }, init?: RequestInit): Promise<{ "outbox": Array<IncidentOutboxRecord>; "count": number }> {
+      return this.request("POST", `/v1/incidents/outbox/claim`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Get authority-scoped incident projection outbox counts */
+    async getIncidentOutboxStatus(init?: RequestInit): Promise<{ "status": { "pending": number; "leased": number; "acked": number; "dead": number; "total": number } }> {
+      return this.request("GET", `/v1/incidents/outbox/status`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Get one exact dead incident projection event */
+    async getDeadIncidentOutbox(eventId: string, init?: RequestInit): Promise<{ "outbox": IncidentOutboxRecord }> {
+      return this.request("GET", `/v1/incidents/outbox/${encodeURIComponent(String(eventId))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Acknowledge an exact projection lease */
+    async ackIncidentOutbox(eventId: string, body: { "lease_token": string; "delivery_id": string }, init?: RequestInit): Promise<{ "outbox": IncidentOutboxRecord }> {
+      return this.request("POST", `/v1/incidents/outbox/${encodeURIComponent(String(eventId))}/ack`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Fail an exact projection lease with bounded backoff */
+    async failIncidentOutbox(eventId: string, body: { "lease_token": string; "failure_code": string; "failure": string }, init?: RequestInit): Promise<{ "outbox": IncidentOutboxRecord }> {
+      return this.request("POST", `/v1/incidents/outbox/${encodeURIComponent(String(eventId))}/fail`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Audit and requeue one exact dead projection */
+    async requeueIncidentOutbox(eventId: string, body: { "expected_attempts": number; "idempotency_key": string; "reason": string }, init?: RequestInit): Promise<{ "outbox": IncidentOutboxRecord }> {
+      return this.request("POST", `/v1/incidents/outbox/${encodeURIComponent(String(eventId))}/requeue`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Get a canonical incident */
+    async getIncident(id: string, init?: RequestInit): Promise<{ "incident": Incident }> {
+      return this.request("GET", `/v1/incidents/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** List immutable incident transitions */
+    async listIncidentTransitions(id: string, init?: RequestInit): Promise<{ "transitions": Array<IncidentTransition>; "count": number }> {
+      return this.request("GET", `/v1/incidents/${encodeURIComponent(String(id))}/transitions`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** CAS-transition a canonical incident */
+    async transitionIncident(id: string, body: TransitionIncidentInput, init?: RequestInit): Promise<{ "result": IncidentMutationResult }> {
+      return this.request("POST", `/v1/incidents/${encodeURIComponent(String(id))}/transitions`, {
         body,
         query: undefined,
         init,

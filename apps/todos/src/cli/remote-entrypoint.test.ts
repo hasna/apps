@@ -136,6 +136,7 @@ describe("remote CLI entrypoint authority boundary", () => {
     const registered = [...registeredCliNames()].sort();
     const matrix = getTodosCliCommandCapabilityMatrix();
     expect([...matrix.keys()].sort()).toEqual(registered);
+    expect(matrix.get("incidents")).toBe("remote-http");
     expect([...matrix.values()].filter((owner) => owner === "local-only").length).toBeGreaterThanOrEqual(97);
     expect([...matrix.values()].every((owner) => ["diagnostic", "remote-http", "local-only"].includes(owner))).toBe(true);
   });
@@ -217,6 +218,7 @@ describe("remote CLI entrypoint authority boundary", () => {
 
     for (const args of [
       ["storage", "status"],
+      ["incidents", "list"],
       ["config"],
       ["config", "--get", "completion_guard.enabled"],
       ["init", "fixture-agent"],
@@ -461,6 +463,96 @@ describe("remote CLI entrypoint authority boundary", () => {
       expect(missingKey.exitCode).toBe(1);
       expect(missingKey.stderr).toContain("REMOTE_API_KEY_MISSING");
       expectNoLocalDatabase(root, localDbPath);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("built canonical incident command is remote-only and never falls back to SQLite", async () => {
+    const requests: Array<{ method: string; path: string; authorization: string | null }> = [];
+    const incidentId = "11111111-1111-4111-8111-111111111111";
+    const now = "2026-07-18T10:00:00.000Z";
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        requests.push({
+          method: request.method,
+          path: `${url.pathname}${url.search}`,
+          authorization: request.headers.get("authorization"),
+        });
+        if (url.pathname === "/v1/incidents") {
+          return Response.json({
+            incidents: [{
+              id: incidentId,
+              title: "Dispatch authority unavailable",
+              severity: "high",
+              status: "open",
+              owner: "platform-todos",
+              affected_scopes: ["dispatch"],
+              blocked_scopes: ["channel:incidents"],
+              containment: null,
+              next_action: "Restore the authority",
+              deadline: null,
+              closure_evidence: [],
+              supersedes_id: null,
+              superseded_by_id: null,
+              resolved_at: null,
+              version: 1,
+              created_at: now,
+              updated_at: now,
+            }],
+          });
+        }
+        return Response.json({ error: "fixture route missing" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-incidents-remote-only-"));
+    tempRoots.push(root);
+    const remoteHome = join(root, "remote-home");
+    const localHome = join(root, "local-home");
+    const cwd = join(root, "cwd");
+    mkdirSync(remoteHome);
+    mkdirSync(localHome);
+    mkdirSync(cwd);
+    const remoteDbPath = join(root, "remote-db-must-not-exist", "todos.db");
+    const localDbPath = join(root, "local-db-must-not-exist", "todos.db");
+    const common = {
+      PATH: process.env.PATH ?? "",
+      BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
+      TMPDIR: root,
+      LANG: "C.UTF-8",
+      TODOS_AUTO_PROJECT: "false",
+    };
+
+    try {
+      const remote = await runCli(executable, ["--json", "incidents", "list"], {
+        ...common,
+        HOME: remoteHome,
+        TODOS_DB_PATH: remoteDbPath,
+        HASNA_TODOS_STORAGE_MODE: "remote",
+        HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
+        HASNA_TODOS_API_KEY: "fixture-remote-key",
+      }, cwd);
+      expect({ exitCode: remote.exitCode, stderr: remote.stderr }).toEqual({ exitCode: 0, stderr: "" });
+      expect(JSON.parse(remote.stdout)).toEqual([expect.objectContaining({ id: incidentId, status: "open" })]);
+      expect(requests).toEqual([{
+        method: "GET",
+        path: "/v1/incidents?limit=100",
+        authorization: "Bearer fixture-remote-key",
+      }]);
+      expectNoLocalDatabase(remoteHome, remoteDbPath);
+
+      const local = await runCli(executable, ["--json", "incidents", "list"], {
+        ...common,
+        HOME: localHome,
+        TODOS_DB_PATH: localDbPath,
+      }, cwd);
+      expect(local.exitCode).toBe(1);
+      expect(local.stderr).toContain("INCIDENT_REMOTE_ONLY");
+      expect(requests).toHaveLength(1);
+      expectNoLocalDatabase(localHome, localDbPath);
     } finally {
       server.stop(true);
     }

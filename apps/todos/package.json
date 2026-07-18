@@ -55,6 +55,7 @@
     "smoke:dist-server": "bun --no-install scripts/verify-dist-server-runtime.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "verify:incident-postgres": "bash scripts/verify-incident-postgres.sh",
     "test:no-cloud": "bun test src/no-cloud-boundary.test.ts src/local-first.test.ts src/lib/public-release-gate.test.ts",
     "dev:cli": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts",

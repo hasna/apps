@@ -21,7 +21,7 @@ const REGISTERED_CANONICAL_COMMANDS = [
   "delete", "deps", "dispatch", "dispatches", "doctor", "done", "encryption", "env-snapshot",
   "event-hooks", "events", "export", "extensions", "extract", "extract-watch", "fail", "fields",
   "find-commit", "find-ref", "findings", "focus", "handoff", "health", "heartbeat", "history",
-  "hook", "hooks", "import", "inbox", "init", "inspect", "interactive", "issues",
+  "hook", "hooks", "import", "inbox", "incidents", "init", "inspect", "interactive", "issues",
   "knowledge", "link-commit", "link-ref", "list", "lists", "lock", "log", "machines",
   "manual", "mcp", "mine", "next", "notifications", "onboarding", "org", "overdue",
   "pin", "plans", "policies", "priorities", "project-bootstrap", "project-panel", "project-rename", "projects",
@@ -64,7 +64,7 @@ export const TODOS_CLI_COMMAND_ALIASES = {
 const DIAGNOSTIC_COMMANDS = new Set(["help", "manual", "completions", "completion", "config", "storage"]);
 const REMOTE_COMMANDS = new Set([
   "active", "add", "agent", "agents", "approve", "bulk", "claim", "comment", "count", "delete", "deps",
-  "doctor", "done", "fail", "find-commit", "find-ref", "health", "heartbeat", "history", "init", "inspect", "link-commit",
+  "doctor", "done", "fail", "find-commit", "find-ref", "health", "heartbeat", "history", "incidents", "init", "inspect", "link-commit",
   "link-ref", "list", "lists", "lock", "log-progress", "next", "plans", "project-rename", "projects", "recap",
   "record-verification", "release", "remove", "show", "standup", "start", "status", "task", "task-lists", "timeline",
   "tl", "unlock", "update",

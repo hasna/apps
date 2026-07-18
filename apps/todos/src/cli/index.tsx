@@ -119,6 +119,7 @@ try {
 const [
   { handleError },
   { registerTaskCommands },
+  { registerIncidentCommands },
   { registerPlanTemplateCommands },
   { registerProjectCommands },
   { registerAgentCommands },
@@ -149,6 +150,7 @@ const [
 ] = await Promise.all([
   import("./helpers.js"),
   import("./commands/task-commands.js"),
+  import("./commands/incident-commands.js"),
   import("./commands/plan-template-commands.js"),
   import("./commands/project-commands.js"),
   import("./commands/agent-commands.js"),
@@ -179,6 +181,7 @@ const [
 ]);
 
 registerTaskCommands(program);
+registerIncidentCommands(program);
 registerPlanTemplateCommands(program);
 registerProjectCommands(program);
 registerAgentCommands(program);

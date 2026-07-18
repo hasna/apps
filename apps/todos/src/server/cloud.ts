@@ -19,6 +19,11 @@ import {
   postgresTodosSyncSchemaSql,
 } from "../storage/postgres-sync.js";
 import {
+  createPostgresIncidentStore,
+  postgresIncidentSchemaSql,
+  type TodosIncidentStore,
+} from "../incidents/postgres-store.js";
+import {
   backfillPostgresCommentRedaction,
   type CommentRedactionBackfillOptions,
   type CommentRedactionBackfillResult,
@@ -46,6 +51,28 @@ export function resolveSigningSecret(env: NodeJS.ProcessEnv = process.env): stri
   );
 }
 
+/**
+ * Stable server-owned namespace for canonical incident state. This deliberately
+ * does not derive from an API-key kid: credentials can rotate without splitting
+ * one authority's incident history. Request headers never select this value.
+ */
+export function resolveCloudIncidentAuthorityId(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const value = env.HASNA_TODOS_AUTHORITY_ID?.trim();
+  if (!value) return undefined;
+  if (!/^[A-Za-z0-9._:-]{1,128}$/.test(value)) {
+    throw new Error("HASNA_TODOS_AUTHORITY_ID must match ^[A-Za-z0-9._:-]{1,128}$");
+  }
+  return value;
+}
+
+export function getCloudIncidentAuthorityId(): string {
+  const authorityId = resolveCloudIncidentAuthorityId();
+  if (!authorityId) {
+    throw new Error("Canonical incidents require server-owned HASNA_TODOS_AUTHORITY_ID; API-key identity is not an authority fallback.");
+  }
+  return authorityId;
+}
+
 /** True when this process is configured to serve the cloud `/v1` API. */
 export function isCloudModeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return Boolean(resolveCloudDatabaseUrl(env));
@@ -55,6 +82,7 @@ let cachedClient: TodosCloudQueryClient | null = null;
 let cachedAdapter: TodosStorageAdapter | null = null;
 let cachedStore: ApiKeyStore | null = null;
 let cachedVerifier: ApiKeyVerifier | null = null;
+let cachedIncidentStore: TodosIncidentStore | null = null;
 let schemaEnsured: Promise<void> | null = null;
 
 function getClient(): TodosCloudQueryClient {
@@ -75,6 +103,13 @@ export function getCloudStorageAdapter(): TodosStorageAdapter {
   const client = getClient();
   cachedAdapter = createPostgresTodosStorageAdapter({ client, service: TODOS_APP_SLUG });
   return cachedAdapter;
+}
+
+/** Canonical incident aggregate over the same remote Postgres pool. */
+export function getCloudIncidentStore(): TodosIncidentStore {
+  if (cachedIncidentStore) return cachedIncidentStore;
+  cachedIncidentStore = createPostgresIncidentStore(getClient(), { service: TODOS_APP_SLUG });
+  return cachedIncidentStore;
 }
 
 /**
@@ -136,6 +171,9 @@ export async function ensureCloudSchema(): Promise<void> {
   schemaEnsured = (async () => {
     const client = getClient();
     for (const sql of postgresTodosSyncSchemaSql()) {
+      await client.query(sql);
+    }
+    for (const sql of postgresIncidentSchemaSql()) {
       await client.query(sql);
     }
     await getApiKeyStore().ensureSchema();
@@ -202,5 +240,6 @@ export async function closeCloud(): Promise<void> {
   cachedAdapter = null;
   cachedStore = null;
   cachedVerifier = null;
+  cachedIncidentStore = null;
   schemaEnsured = null;
 }

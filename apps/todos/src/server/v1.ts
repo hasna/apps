@@ -10,14 +10,39 @@
 import { LockError, ProjectNotFoundError, ResourceConflictError, TASK_PRIORITIES, TASK_STATUSES, TaskNotFoundError, VersionConflictError } from "../types/index.js";
 import type { CreatePlanInput, CreateProjectInput, CreateTaskInput, CreateTaskListInput, RenameProjectInput, TaskComment, UpdateTaskInput, UpdateTaskListInput } from "../types/index.js";
 import type { TodosStorageContext, TodosStorageSnapshot, TodosTaskCompletionOptions } from "../storage/interfaces.js";
-import { getCloudStorageAdapter, getCloudVerifier, ensureCloudSchema } from "./cloud.js";
+import {
+  ensureCloudSchema,
+  getCloudIncidentAuthorityId,
+  getCloudIncidentStore,
+  getCloudStorageAdapter,
+  getCloudVerifier,
+} from "./cloud.js";
 import { redactEvidenceText } from "../lib/redaction.js";
 import { isCanonicalSlug, normalizeSlug } from "../lib/slugs.js";
+import {
+  IncidentIdempotencyConflictError,
+  IncidentLeaseConflictError,
+  IncidentNotFoundError,
+  IncidentOutboxRecoveryConflictError,
+  IncidentVersionConflictError,
+  type IncidentAuthorityContext,
+  type IncidentListFilter,
+} from "../incidents/postgres-store.js";
+import {
+  ACTIVE_INCIDENT_STATUSES,
+  INCIDENT_SEVERITIES,
+  INCIDENT_STATUSES,
+  IncidentValidationError,
+  normalizeIncidentCreateInput,
+  normalizeIncidentTransitionInput,
+} from "../incidents/contracts.js";
 
 export interface V1RequestDependencies {
   getVerifier?: typeof getCloudVerifier;
   ensureSchema?: typeof ensureCloudSchema;
   getStorageAdapter?: typeof getCloudStorageAdapter;
+  getIncidentStore?: typeof getCloudIncidentStore;
+  getIncidentAuthorityId?: typeof getCloudIncidentAuthorityId;
 }
 
 const JSON_HEADERS = { "Content-Type": "application/json" } as const;
@@ -448,6 +473,262 @@ export function countSnapshotRecords(s: TodosStorageSnapshot): number {
   );
 }
 
+function strictIncidentObject(value: unknown, fields: readonly string[], label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new IncidentValidationError(`${label} must be an object`);
+  }
+  const record = value as Record<string, unknown>;
+  const allowed = new Set(fields);
+  const unknown = Object.keys(record).find((field) => !allowed.has(field));
+  if (unknown) throw new IncidentValidationError(`unknown ${label} field: ${unknown}`);
+  return record;
+}
+
+function incidentInteger(value: unknown, field: string, min: number, max: number): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < min || value > max) {
+    throw new IncidentValidationError(`${field} must be an integer from ${min} to ${max}`);
+  }
+  return value;
+}
+
+function incidentString(value: unknown, field: string, max: number): string {
+  if (typeof value !== "string" || !value.trim() || value.trim().length > max) {
+    throw new IncidentValidationError(`${field} must be a non-empty string of at most ${max} characters`);
+  }
+  return value.trim();
+}
+
+function incidentCommandKey(value: unknown): string {
+  const key = incidentString(value, "idempotency_key", 128);
+  if (key.length < 8 || !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(key)) {
+    throw new IncidentValidationError("idempotency_key must be 8-128 URL-safe characters");
+  }
+  return key;
+}
+
+function incidentFailureCode(value: unknown): string {
+  const code = incidentString(value, "failure_code", 64);
+  if (!/^[A-Z][A-Z0-9_:-]{1,63}$/.test(code)) {
+    throw new IncidentValidationError("failure_code must match ^[A-Z][A-Z0-9_:-]{1,63}$");
+  }
+  return code;
+}
+
+function decodeIncidentPathValue(value: string, field: string, max: number): string {
+  try {
+    return incidentString(decodeURIComponent(value), field, max);
+  } catch (cause) {
+    if (cause instanceof IncidentValidationError) throw cause;
+    throw new IncidentValidationError(`${field} must be valid URL-encoded text`);
+  }
+}
+
+function parseDeadIncidentOutboxFilters(url: URL) {
+  const allowed = new Set(["limit", "before_created_at", "before_event_id"]);
+  for (const key of url.searchParams.keys()) {
+    if (!allowed.has(key)) throw new IncidentValidationError(`unknown incident outbox query field: ${key}`);
+  }
+  const rawLimit = url.searchParams.get("limit");
+  const limit = rawLimit === null ? 100 : incidentInteger(Number(rawLimit), "limit", 1, 1_000);
+  const beforeCreatedAt = url.searchParams.get("before_created_at");
+  const beforeEventId = url.searchParams.get("before_event_id");
+  if ((beforeCreatedAt === null) !== (beforeEventId === null)) {
+    throw new IncidentValidationError("before_created_at and before_event_id must be provided together");
+  }
+  if (beforeCreatedAt !== null && !isValidTimestamp(beforeCreatedAt)) {
+    throw new IncidentValidationError("before_created_at must be RFC3339");
+  }
+  return {
+    limit,
+    ...(beforeCreatedAt !== null && beforeEventId !== null ? {
+      before: {
+        created_at: new Date(beforeCreatedAt).toISOString(),
+        event_id: incidentString(beforeEventId, "before_event_id", 128),
+      },
+    } : {}),
+  };
+}
+
+function parseIncidentFilters(url: URL, blockersOnly: boolean): IncidentListFilter {
+  const allowed = new Set([
+    "severity", "owner", "scope", "limit", "before_updated_at", "before_id",
+    ...(blockersOnly ? [] : ["status", "active"]),
+  ]);
+  for (const key of url.searchParams.keys()) {
+    if (!allowed.has(key)) throw new IncidentValidationError(`unknown incident query field: ${key}`);
+  }
+  const status = url.searchParams.get("status");
+  if (status && !(INCIDENT_STATUSES as readonly string[]).includes(status)) {
+    throw new IncidentValidationError(`status must be one of: ${INCIDENT_STATUSES.join(", ")}`);
+  }
+  const severity = url.searchParams.get("severity");
+  if (severity && !(INCIDENT_SEVERITIES as readonly string[]).includes(severity)) {
+    throw new IncidentValidationError(`severity must be one of: ${INCIDENT_SEVERITIES.join(", ")}`);
+  }
+  const active = url.searchParams.get("active");
+  if (active !== null && active !== "true" && active !== "false") {
+    throw new IncidentValidationError("active must be true or false");
+  }
+  const limitValue = url.searchParams.get("limit");
+  const limit = limitValue === null ? undefined : Number(limitValue);
+  if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 1_000)) {
+    throw new IncidentValidationError("limit must be an integer from 1 to 1000");
+  }
+  const beforeUpdatedAt = url.searchParams.get("before_updated_at");
+  const beforeId = url.searchParams.get("before_id");
+  if ((beforeUpdatedAt === null) !== (beforeId === null)) {
+    throw new IncidentValidationError("before_updated_at and before_id must be provided together");
+  }
+  if (beforeUpdatedAt !== null && !isValidTimestamp(beforeUpdatedAt)) {
+    throw new IncidentValidationError("before_updated_at must be RFC3339");
+  }
+  if (beforeId !== null && !beforeId.trim()) throw new IncidentValidationError("before_id must be non-empty");
+  return {
+    ...(status ? { status: status as typeof INCIDENT_STATUSES[number] } : {}),
+    ...(severity ? { severity: severity as typeof INCIDENT_SEVERITIES[number] } : {}),
+    ...(url.searchParams.get("owner") ? { owner: url.searchParams.get("owner")! } : {}),
+    ...(url.searchParams.get("scope") ? { scope: url.searchParams.get("scope")! } : {}),
+    ...(active === "true" ? { activeOnly: true } : {}),
+    ...(limit !== undefined ? { limit } : {}),
+    ...(beforeUpdatedAt !== null && beforeId !== null ? {
+      before: { updated_at: new Date(beforeUpdatedAt).toISOString(), id: beforeId.trim() },
+    } : {}),
+  };
+}
+
+function incidentActor(authority: MutationAuthority | null, authorityId: string): IncidentAuthorityContext {
+  if (!authority) throw new IncidentValidationError("incident mutation requires authenticated authority");
+  return {
+    authorityId,
+    // Owner is incident state; immutable transition provenance uses the actual
+    // authenticated principal even when an administrator explicitly acts as.
+    actorId: authority.authenticatedAgentId ?? authority.effectiveAgentId,
+    effectiveActorId: authority.effectiveAgentId,
+    actorKeyId: authority.actorKeyId ?? null,
+    actorActAs: authority.actAs,
+  };
+}
+
+async function handleIncidentRequest(
+  req: Request,
+  url: URL,
+  method: string,
+  id: string | undefined,
+  action: string | undefined,
+  subId: string | undefined,
+  mutationAuthority: MutationAuthority | null,
+  dependencies: V1RequestDependencies,
+): Promise<Response> {
+  let authorityId: string;
+  let incidents: ReturnType<typeof getCloudIncidentStore>;
+  try {
+    authorityId = (dependencies.getIncidentAuthorityId ?? getCloudIncidentAuthorityId)();
+    incidents = (dependencies.getIncidentStore ?? getCloudIncidentStore)();
+  } catch (cause) {
+    return error(503, cause instanceof Error ? cause.message : "canonical incident authority is unavailable");
+  }
+  const actor = method === "GET" || method === "HEAD" ? null : incidentActor(mutationAuthority, authorityId);
+
+  if (!id) {
+    if (method === "GET") {
+      const values = await incidents.list(parseIncidentFilters(url, false), authorityId);
+      return json({ incidents: values, count: values.length });
+    }
+    if (method === "POST") {
+      const body = await readJson<unknown>(req);
+      if (body === null) return error(400, "invalid JSON body");
+      const result = await incidents.create(normalizeIncidentCreateInput(body), actor!);
+      return json({ result }, result.replayed ? 200 : 201);
+    }
+    return error(405, `method ${method} not allowed on /v1/incidents`);
+  }
+
+  if (id === "blockers" && !action) {
+    if (method !== "GET") return error(405, `method ${method} not allowed on /v1/incidents/blockers`);
+    const filter = parseIncidentFilters(url, true);
+    const values = await incidents.listActiveBlockers(filter, authorityId);
+    return json({ incidents: values, count: values.length, active_statuses: ACTIVE_INCIDENT_STATUSES });
+  }
+
+  if (id === "outbox") {
+    if (!action && method === "GET") {
+      const records = await incidents.listDeadOutbox(parseDeadIncidentOutboxFilters(url), authorityId);
+      return json({ outbox: records, count: records.length });
+    }
+    if (action === "claim" && !subId) {
+      if (method !== "POST") return error(405, `method ${method} not allowed on /v1/incidents/outbox/claim`);
+      const raw = await readOptionalJson(req);
+      if (!raw.ok) return error(400, "invalid JSON body");
+      const body = strictIncidentObject(raw.value, ["limit", "lease_seconds"], "incident outbox claim");
+      const limit = body.limit === undefined ? undefined : incidentInteger(body.limit, "limit", 1, 100);
+      const leaseSeconds = body.lease_seconds === undefined
+        ? undefined
+        : incidentInteger(body.lease_seconds, "lease_seconds", 5, 3_600);
+      const records = await incidents.claimOutbox(actor!, {
+        ...(limit !== undefined ? { limit } : {}),
+        ...(leaseSeconds !== undefined ? { leaseSeconds } : {}),
+      });
+      return json({ outbox: records, count: records.length });
+    }
+    if (action === "status" && !subId) {
+      if (method !== "GET") return error(405, `method ${method} not allowed on /v1/incidents/outbox/status`);
+      return json({ status: await incidents.getOutboxStatus(authorityId) });
+    }
+    if (action && !subId && method === "GET") {
+      const eventId = decodeIncidentPathValue(action, "event_id", 128);
+      const record = await incidents.getDeadOutbox(eventId, authorityId);
+      return record ? json({ outbox: record }) : error(404, `Dead incident outbox event not found: ${eventId}`);
+    }
+    if (action && subId) {
+      if (method !== "POST") return error(405, `method ${method} not allowed on /v1/incidents/outbox/:event/${subId}`);
+      const body = await readJson<unknown>(req);
+      if (body === null) return error(400, "invalid JSON body");
+      const eventId = decodeIncidentPathValue(action, "event_id", 128);
+      if (subId === "ack") {
+        const input = strictIncidentObject(body, ["lease_token", "delivery_id"], "incident outbox ack");
+        const leaseToken = incidentString(input.lease_token, "lease_token", 256);
+        const deliveryId = incidentString(input.delivery_id, "delivery_id", 256);
+        return json({ outbox: await incidents.ackOutbox(eventId, leaseToken, deliveryId, actor!) });
+      }
+      if (subId === "fail") {
+        const input = strictIncidentObject(body, ["lease_token", "failure_code", "failure"], "incident outbox fail");
+        const leaseToken = incidentString(input.lease_token, "lease_token", 256);
+        const failureCode = incidentFailureCode(input.failure_code);
+        const failure = redactEvidenceText(incidentString(input.failure, "failure", 4_000));
+        return json({ outbox: await incidents.failOutbox(eventId, leaseToken, failureCode, failure, actor!) });
+      }
+      if (subId === "requeue") {
+        const input = strictIncidentObject(body, ["expected_attempts", "idempotency_key", "reason"], "incident outbox requeue");
+        return json({ outbox: await incidents.requeueOutbox(eventId, {
+          expectedAttempts: incidentInteger(input.expected_attempts, "expected_attempts", 1, 1_000_000),
+          idempotencyKey: incidentCommandKey(input.idempotency_key),
+          reason: incidentString(input.reason, "reason", 2_000),
+        }, actor!) });
+      }
+    }
+    return error(404, "unknown incident outbox route");
+  }
+
+  if (!action) {
+    if (method !== "GET") return error(405, `method ${method} not allowed on /v1/incidents/:id`);
+    const incident = await incidents.get(id, authorityId);
+    return incident ? json({ incident }) : error(404, `Incident not found: ${id}`);
+  }
+  if (action === "transitions" && !subId) {
+    if (method === "GET") {
+      const transitions = await incidents.listTransitions(id, authorityId);
+      return json({ transitions, count: transitions.length });
+    }
+    if (method === "POST") {
+      const body = await readJson<unknown>(req);
+      if (body === null) return error(400, "invalid JSON body");
+      return json({ result: await incidents.transition(id, normalizeIncidentTransitionInput(body), actor!) });
+    }
+    return error(405, `method ${method} not allowed on /v1/incidents/:id/transitions`);
+  }
+  return error(404, "unknown incident route");
+}
+
 /**
  * Handle a `/v1/*` request. Returns `null` when the path is not a `/v1` route so
  * the caller can fall through to other handlers.
@@ -470,10 +751,18 @@ export async function handleV1Request(
   // Every other non-GET/HEAD route mutates durable state.
   const isMutation = method !== "GET" && method !== "HEAD" && !(resource === "tasks" && id === "exists" && !action);
   const isImport = resource === "import" && method === "POST";
+  const isIncidentOutbox = resource === "incidents" && id === "outbox";
+  const isIncidentRecovery = isIncidentOutbox && (subId === "requeue" || method === "GET");
   // Import has an OR policy (`todos:import` or administrative scope) which the
   // contracts verifier cannot express as a flat requiredScopes array, so it is
   // authenticated here and authorized explicitly below.
-  const requiredScopes = isImport ? [] : [isMutation ? "todos:write" : "todos:read"];
+  const requiredScopes = isImport
+    ? []
+    : [isIncidentRecovery
+      ? "todos:incidents:recover"
+      : isIncidentOutbox
+        ? "todos:incidents:project"
+        : isMutation ? "todos:write" : "todos:read"];
 
   // ── Auth (contracts API-key verifier) ──
   let verifier;
@@ -552,6 +841,13 @@ export async function handleV1Request(
   }
 
   try {
+    // Canonical incident state is a dedicated Postgres aggregate. It never
+    // creates tasks or dispatches agents; task creation and agent execution
+    // remain separate explicit operations.
+    if (resource === "incidents") {
+      return await handleIncidentRequest(req, url, method, id, action, subId, mutationAuthority, dependencies);
+    }
+
     // ── /v1/tasks ──
     if (resource === "tasks") {
       // ── POST /v1/tasks/exists — bulk existence check for parity verification ──
@@ -1383,6 +1679,14 @@ export async function handleV1Request(
 
     return error(404, `unknown /v1 resource: ${resource ?? "(root)"}`);
   } catch (e) {
+    if (e instanceof IncidentValidationError) return error(400, e.message, { code: "INCIDENT_VALIDATION_ERROR" });
+    if (e instanceof IncidentNotFoundError) return error(404, e.message, { code: "INCIDENT_NOT_FOUND" });
+    if (e instanceof IncidentVersionConflictError) {
+      return error(409, e.message, { code: "INCIDENT_VERSION_CONFLICT", expected: e.expected, actual: e.actual, conflict: true });
+    }
+    if (e instanceof IncidentIdempotencyConflictError) return error(409, e.message, { code: "INCIDENT_IDEMPOTENCY_CONFLICT", conflict: true });
+    if (e instanceof IncidentLeaseConflictError) return error(409, e.message, { code: "INCIDENT_LEASE_CONFLICT", conflict: true });
+    if (e instanceof IncidentOutboxRecoveryConflictError) return error(409, e.message, { code: "INCIDENT_OUTBOX_RECOVERY_CONFLICT", conflict: true });
     if (e instanceof LockError) return error(409, e.message, { code: LockError.code });
     if (e instanceof VersionConflictError) return error(409, e.message, { code: VersionConflictError.code, conflict: true });
     if (e instanceof TaskNotFoundError) return error(404, e.message, { code: TaskNotFoundError.code });

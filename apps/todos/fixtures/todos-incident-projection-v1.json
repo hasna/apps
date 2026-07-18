@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "source": "todos",
+  "event_id": "iev_adf149b3daa8a314dd30b92b188f0024",
+  "projection_key": "todos:incident:todos.hasna.xyz:v1:11111111-1111-4111-8111-111111111111:v1",
+  "authority_id": "todos.hasna.xyz:v1",
+  "incident_id": "11111111-1111-4111-8111-111111111111",
+  "transition_id": "itr_adf149b3daa8a314dd30b92b188f0024",
+  "incident_version": 1,
+  "occurred_at": "2026-07-18T20:01:00.000Z",
+  "incident": {
+    "id": "11111111-1111-4111-8111-111111111111",
+    "title": "Canonical cross-service incident fixture",
+    "severity": "high",
+    "status": "investigating",
+    "owner": "projector-01",
+    "affected_scopes": [
+      "service:conversations"
+    ],
+    "blocked_scopes": [
+      "agent:projector-01",
+      "channel:incidents",
+      "project:wks_8vJJzXTiFo6sxwRkpPqoI"
+    ],
+    "containment": null,
+    "next_action": "Project and acknowledge the canonical incident state",
+    "deadline": null,
+    "closure_evidence": [],
+    "supersedes_id": null,
+    "superseded_by_id": null,
+    "resolved_at": null,
+    "version": 1,
+    "created_at": "2026-07-18T20:01:00.000Z",
+    "updated_at": "2026-07-18T20:01:00.000Z"
+  }
+}

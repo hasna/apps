@@ -23,6 +23,13 @@ export type {
   UpdateTaskInput as TodosV1UpdateTaskInput,
   CreateProjectInput as TodosV1CreateProjectInput,
   CreateTaskCommentInput as TodosV1CreateTaskCommentInput,
+  Incident as TodosV1Incident,
+  IncidentTransition as TodosV1IncidentTransition,
+  IncidentProjectionEvent as TodosV1IncidentProjectionEvent,
+  IncidentOutboxRecord as TodosV1IncidentOutboxRecord,
+  IncidentMutationResult as TodosV1IncidentMutationResult,
+  CreateIncidentInput as TodosV1CreateIncidentInput,
+  TransitionIncidentInput as TodosV1TransitionIncidentInput,
 } from "./v1.generated.js";
 
 export {
