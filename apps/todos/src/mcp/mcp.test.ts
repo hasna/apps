@@ -1594,10 +1594,11 @@ describe("MCP tool wrappers", () => {
     const { join } = await import("node:path");
     const repositoryRoot = join(import.meta.dir, "../..");
     const fixture = mkdtempSync(join(tmpdir(), "todos-mcp-release-compatibility-"));
-    writeFileSync(join(fixture, "package.json"), readFileSync(join(repositoryRoot, "package.json")));
-    writeFileSync(join(fixture, "bun.lock"), readFileSync(join(repositoryRoot, "bun.lock")));
 
     try {
+      writeFileSync(join(fixture, "package.json"), readFileSync(join(repositoryRoot, "package.json")));
+      writeFileSync(join(fixture, "bun.lock"), readFileSync(join(repositoryRoot, "bun.lock")));
+
       const tools = captureTools(registerTaskProjectTools);
       const tool = tools.get("check_release_compatibility");
       expect(tool).toBeDefined();
