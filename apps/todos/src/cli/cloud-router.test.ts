@@ -873,7 +873,7 @@ describe("cloud agent + lock + deps + verification routing (identity/coordinatio
     expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t1/dependencies/t2");
   });
 
-  test("deps list -> GET /v1/tasks/:id/dependencies, defaults arrays", async () => {
+  test("deps list -> GET /v1/tasks/:id/dependencies, requires both relation arrays", async () => {
     const calls = installFetch(() => ({ body: { dependencies: [{ task_id: "t1", depends_on: "t2" }], blocked_by: [] } }));
     const client = getTodosCloudClient(CLOUD_ENV)!;
     const edges = await cloudGetDependencies(client, "t1");
