@@ -38,72 +38,20 @@ export interface ProviderAdapter {
   buildInvocation(target: AgentTarget): AgentInvocation;
 }
 
-const CODEX_LIKE_PROTECTED_EXTRA_ARGS = [
-  "e",
-  "exec",
-  "agent",
-  "start",
-  "-a",
-  "--ask-for-approval",
-  "--approval-policy",
-  "-c",
-  "--config",
-  "-C",
-  "--cd",
-  "--add-dir",
-  "--cwd",
-  "-m",
-  "--model",
-  "-p",
-  "--profile",
-  "-s",
-  "--sandbox",
-  "--json",
-  "--ephemeral",
-  "--ignore-rules",
-  "--skip-git-repo-check",
-  "--json",
-  "--output-last-message",
-  "-o",
-  "--output-schema",
-  "--full-auto",
-  "--yolo",
-  "--dangerously-bypass-approvals-and-sandbox",
-  "--dangerously-bypass-hook-trust",
-] as const;
-
-export const PROTECTED_AGENT_EXTRA_ARGS: Readonly<Record<AgentProvider, ReadonlySet<string>>> = {
-  claude: new Set([
-    "-p",
-    "--print",
-    "--output-format",
-    "--permission-mode",
-    "--dangerously-skip-permissions",
-    "--allow-dangerously-skip-permissions",
-    "--safe-mode",
-    "--setting-sources",
-    "--settings",
-    "--no-session-persistence",
-    "--add-dir",
-    "--allowed-tools",
-    "--allowedTools",
-    "-m",
-    "--model",
-    "--effort",
-    "--agent",
-  ]),
-  cursor: new Set([
-    "-p", "--print", "--mode", "-f", "--force", "--yolo", "--sandbox", "-m", "--model", "--agent",
-    "--plan", "--workspace", "--add-dir", "--approve-mcps",
-  ]),
-  codewith: new Set(["--auth-profile", ...CODEX_LIKE_PROTECTED_EXTRA_ARGS]),
-  codex: new Set(CODEX_LIKE_PROTECTED_EXTRA_ARGS),
-  aicopilot: new Set(["run", "-f", "--format", "--pure", "--auto", "--dangerously-skip-permissions", "-d", "--dir", "-m", "--model", "--variant", "-a", "--agent"]),
-  opencode: new Set(["run", "-f", "--format", "--pure", "--auto", "--dangerously-skip-permissions", "-d", "--dir", "-m", "--model", "--variant", "-a", "--agent"]),
-};
-
-/** @deprecated Use PROTECTED_AGENT_EXTRA_ARGS so every provider is validated. */
-export const UNSAFE_CODEWITH_EXEC_EXTRA_ARGS = PROTECTED_AGENT_EXTRA_ARGS.codewith;
+/**
+ * Provider CLI passthrough is fail-closed. A future safe passthrough must be
+ * reviewed and added here explicitly; modeled target fields remain the normal
+ * way to configure execution, output, permissions, sandboxing, model, and cwd.
+ */
+const NO_ALLOWED_AGENT_EXTRA_ARGS: readonly string[] = Object.freeze([]);
+const ALLOWED_AGENT_EXTRA_ARGS: Readonly<Record<AgentProvider, readonly string[]>> = Object.freeze({
+  claude: NO_ALLOWED_AGENT_EXTRA_ARGS,
+  cursor: NO_ALLOWED_AGENT_EXTRA_ARGS,
+  codewith: NO_ALLOWED_AGENT_EXTRA_ARGS,
+  codex: NO_ALLOWED_AGENT_EXTRA_ARGS,
+  aicopilot: NO_ALLOWED_AGENT_EXTRA_ARGS,
+  opencode: NO_ALLOWED_AGENT_EXTRA_ARGS,
+});
 
 const CODEX_LIKE_SANDBOXES: readonly AgentSandbox[] = ["read-only", "workspace-write", "danger-full-access"];
 const CURSOR_SANDBOXES: readonly AgentSandbox[] = ["enabled", "disabled"];
@@ -114,25 +62,18 @@ function assertOptionalNonEmptyString(value: unknown, label: string): void {
   if (typeof value !== "string" || value.trim() === "") throw new Error(`${label} must be a non-empty string`);
 }
 
-function protectedExtraArgName(arg: string, protectedArgs: ReadonlySet<string>): string {
-  const equals = arg.indexOf("=");
-  const name = equals > 0 ? arg.slice(0, equals) : arg;
-  if (protectedArgs.has(name)) return name;
-  if (!arg.startsWith("--")) {
-    const attachedShort = [...protectedArgs].find((candidate) =>
-      candidate.length === 2 && candidate.startsWith("-") && arg.length > 2 && arg.startsWith(candidate)
-    );
-    if (attachedShort) return attachedShort;
-  }
-  return name;
+function extraArgNameForError(arg: string): string {
+  if (arg.startsWith("--")) return arg.split("=", 1)[0] || "<option>";
+  if (arg.startsWith("-") && arg.length > 1) return arg.slice(0, 2);
+  return "<positional argument>";
 }
 
 function validateExtraArgs(target: AgentTarget, label: string): void {
-  const protectedArgs = PROTECTED_AGENT_EXTRA_ARGS[target.provider];
-  const unsafe = target.extraArgs?.find((arg) => protectedArgs.has(protectedExtraArgName(arg, protectedArgs)));
-  if (unsafe) {
+  const allowedArgs = ALLOWED_AGENT_EXTRA_ARGS[target.provider];
+  const unsupported = target.extraArgs?.find((arg) => !allowedArgs.includes(arg));
+  if (unsupported !== undefined) {
     throw new Error(
-      `${label}.extraArgs cannot include ${unsafe}; ${target.provider} execution and safety options are managed by the adapter`,
+      `${label}.extraArgs does not allow ${extraArgNameForError(unsupported)}; ${target.provider} provider arguments are fail-closed and supported options must use modeled target fields`,
     );
   }
 }

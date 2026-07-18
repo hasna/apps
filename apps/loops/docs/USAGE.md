@@ -1190,9 +1190,12 @@ The adapters intentionally use provider command surfaces instead of pretending e
   Relaxed sandboxes and native provider bypass modes also require explicit
   `--manual-break-glass`.
 - `--permission-mode` maps `plan`, `auto`, and `bypass` where the provider supports it. Claude uses native permission modes, Cursor maps bypass to `--force`, and OpenCode/AICopilot map bypass to `--dangerously-skip-permissions`.
-- `extraArgs` cannot repeat adapter-managed execution, output, permission,
-  sandbox, model, cwd, or bypass options. Both split flags and `--option=value`
-  forms are rejected for every provider.
+- `extraArgs` is fail-closed: every provider currently rejects non-empty
+  passthrough arguments, including unknown options, positional subcommands,
+  split values, `--option=value`, and attached short-option forms. Configure
+  execution, output, permissions, sandboxing, model, cwd, and other supported
+  behavior through the modeled agent-target fields. A passthrough option must
+  be explicitly reviewed and added to the provider allowlist before use.
 - `--variant` is provider-specific reasoning/model effort. Claude maps it to `--effort`, Codewith/Codex map it to `model_reasoning_effort`, and OpenCode/AICopilot pass `--variant`.
 - Daemon and scheduled runs prepend common user executable directories such as `~/.local/bin` and `~/.bun/bin` before resolving provider CLIs.
 - Agent targets that set neither `timeoutMs` nor `idleTimeoutMs` get a default

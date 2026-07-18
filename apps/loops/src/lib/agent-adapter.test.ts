@@ -739,7 +739,7 @@ describe("provider adapter contracts", () => {
       "codex.agent is not supported for provider codex",
     );
     expect(() => providerAdapter("codewith").validate(baseTarget({ provider: "codewith", extraArgs: ["exec"] }))).toThrow(
-      "codewith.extraArgs cannot include exec",
+      "codewith.extraArgs does not allow <positional argument>",
     );
     expect(() => providerAdapter("codewith").validate(baseTarget({
       provider: "codewith",
@@ -800,7 +800,41 @@ describe("provider adapter contracts", () => {
         provider: entry.provider,
         model: entry.model,
         extraArgs: entry.extraArgs,
-      }))).toThrow(`${entry.provider}.extraArgs cannot include ${entry.extraArgs[0]}`);
+      }))).toThrow(`${entry.provider}.extraArgs does not allow`);
+    }
+  });
+
+  test("fails closed for every unmanaged extra arg form", () => {
+    const cases: Array<{ provider: AgentTarget["provider"]; extraArgs: string[]; expected: string; model?: string }> = [
+      { provider: "codewith", extraArgs: ["--durable", "true"], expected: "--durable" },
+      { provider: "codewith", extraArgs: ["--durable=true"], expected: "--durable" },
+      { provider: "cursor", extraArgs: ["--trust", "workspace"], expected: "--trust" },
+      { provider: "cursor", extraArgs: ["--trust=workspace"], expected: "--trust" },
+      { provider: "claude", extraArgs: ["--mcp-config", "/tmp/mcp.json"], expected: "--mcp-config" },
+      { provider: "claude", extraArgs: ["--mcp-config=/tmp/mcp.json"], expected: "--mcp-config" },
+      { provider: "aicopilot", extraArgs: ["--command", "shell"], expected: "--command" },
+      { provider: "aicopilot", extraArgs: ["--command=shell"], expected: "--command" },
+      { provider: "opencode", model: "openrouter/test/model", extraArgs: ["--command", "shell"], expected: "--command" },
+      { provider: "opencode", model: "openrouter/test/model", extraArgs: ["--command=shell"], expected: "--command" },
+      { provider: "codex", extraArgs: ["-Zunmanaged"], expected: "-Z" },
+      { provider: "codewith", extraArgs: ["resume"], expected: "<positional argument>" },
+      { provider: "claude", extraArgs: ["--future-unsafe-option"], expected: "--future-unsafe-option" },
+    ];
+
+    for (const entry of cases) {
+      expect(() => providerAdapter(entry.provider).validate(baseTarget({
+        provider: entry.provider,
+        model: entry.model,
+        extraArgs: entry.extraArgs,
+      }))).toThrow(`${entry.provider}.extraArgs does not allow ${entry.expected}`);
+    }
+  });
+
+  test("accepts omitted or empty extra args for every provider", () => {
+    for (const provider of Object.keys(PROVIDER_ADAPTERS) as AgentTarget["provider"][]) {
+      const model = provider === "opencode" ? "openrouter/test/model" : undefined;
+      expect(() => providerAdapter(provider).validate(baseTarget({ provider, model }))).not.toThrow();
+      expect(() => providerAdapter(provider).validate(baseTarget({ provider, model, extraArgs: [] }))).not.toThrow();
     }
   });
 
