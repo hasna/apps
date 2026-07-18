@@ -200,6 +200,40 @@ describe("conversations-serve", () => {
     }
   });
 
+  test("incident projector GET awaits and sanitizes rejected storage handlers without leaking logs", async () => {
+    const deps = makeDeps();
+    (deps.client as any).get = async (sql: string) => {
+      if (/FROM incident_projections WHERE tenant_id/i.test(sql)) {
+        throw new Error("SENTINEL_DB_PASSWORD_HOST_INTERNAL");
+      }
+      return null;
+    };
+    const logs: string[] = [];
+    const originalConsoleError = console.error;
+    console.error = (...args: unknown[]) => { logs.push(args.map(String).join(" ")); };
+    const isolated = startApiServer({ port: 0, host: "127.0.0.1", deps });
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${isolated.port}/v1/incident-projections/iev_0123456789abcdef0123456789abcdef`,
+        { headers: { "x-api-key": roKey } },
+      );
+      expect(response.status).toBe(503);
+      expect(response.headers.get("content-type")).toBe("application/json; charset=utf-8");
+      const rawBody = await response.text();
+      expect(JSON.parse(rawBody)).toEqual({
+        error: "Incident projection service is temporarily unavailable",
+        code: "INCIDENT_PROJECTION_UNAVAILABLE",
+      });
+      expect(rawBody).not.toContain("SENTINEL");
+      expect(logs.join("\n")).not.toContain("SENTINEL");
+      expect(logs.join("\n")).not.toContain("PASSWORD");
+      expect(logs.join("\n")).not.toContain("HOST_INTERNAL");
+    } finally {
+      isolated.stop(true);
+      console.error = originalConsoleError;
+    }
+  });
+
   test("blocker reads and acknowledgements cannot impersonate another agent", async () => {
     const blockers = await fetch(`${base}/v1/messages/blockers?agent=other`, {
       headers: { "x-api-key": rwKey },

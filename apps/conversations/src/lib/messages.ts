@@ -1148,7 +1148,17 @@ export function getUnreadBlockers(agent: string, opts?: { limit?: number; offset
   const limitClause = safeLimit > 0 ? `LIMIT ${safeLimit}` : safeOffset > 0 ? "LIMIT -1" : "";
   const offsetClause = safeOffset > 0 ? `OFFSET ${safeOffset}` : "";
   const rows = db.prepare(`
-    WITH latest AS (
+    WITH member_channel_scopes(scope) AS (
+      SELECT 'channel:' || lower(channel)
+      FROM channel_members
+      WHERE lower(agent) = lower(?)
+      UNION
+      SELECT 'channel:' || lower(alias.old_channel)
+      FROM channel_rename_aliases alias
+      JOIN channel_members member ON lower(member.channel) = lower(alias.current_channel)
+      WHERE lower(member.agent) = lower(?)
+    ),
+    latest AS (
       SELECT p.*
       FROM incident_projections p
       JOIN (
@@ -1195,9 +1205,7 @@ export function getUnreadBlockers(agent: string, opts?: { limit?: number; offset
         )
         AND (
           lower(scope.scope) = 'agent:' || lower(?)
-          OR lower(scope.scope) IN (
-            SELECT 'channel:' || lower(channel) FROM channel_members WHERE lower(agent) = lower(?)
-          )
+          OR lower(scope.scope) IN (SELECT scope FROM member_channel_scopes)
           OR scope.scope IN (
             SELECT 'project:' || project_id FROM agent_presence
             WHERE lower(agent) = lower(?) AND project_id <> ''
@@ -1222,7 +1230,7 @@ export function getUnreadBlockers(agent: string, opts?: { limit?: number; offset
     SELECT m.* FROM messages m JOIN eligible_ids eligible ON eligible.id = m.id
     ORDER BY m.created_at ASC, m.id ASC
     ${limitClause} ${offsetClause}
-  `).all(binding?.tenant_id ?? null, binding?.authority_id ?? null, agent, agent, agent, agent, agent, agent) as Record<string, unknown>[];
+  `).all(agent, agent, binding?.tenant_id ?? null, binding?.authority_id ?? null, agent, agent, agent, agent, agent) as Record<string, unknown>[];
   return rows.map(parseMessage);
 }
 

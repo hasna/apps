@@ -169,6 +169,69 @@ describe("append-only incident projections", () => {
     expect(db.prepare("SELECT COUNT(*) AS n FROM agent_presence WHERE agent = ?").get("direct-agent")).toEqual({ n: 0 });
   });
 
+  test("keeps canonical channel blockers visible across reserved rename aliases and stale projector routing", () => {
+    const routedContext: IncidentProjectorContext = {
+      ...context,
+      routing: { channel: "incidents", project_id: "engineering" },
+    };
+    createChannel("incidents", "channel-reader");
+    const projection = appendIncidentProjection(fixture(1, {
+      id: "77777777-7777-4777-8777-777777777777",
+      blocked: ["channel:incidents"],
+    }), routedContext);
+    const db = getDb();
+    const canonicalScope = db.prepare(
+      "SELECT scope FROM incident_projection_scopes WHERE projection_id = ? ORDER BY scope",
+    ).all(projection.id);
+    expect(getUnreadBlockers("channel-reader").map((message) => message.id)).toEqual([projection.message.id]);
+    expect(getUnreadBlockers("outsider")).toEqual([]);
+
+    renameChannel("incidents", "incident-log");
+    expect(getUnreadBlockers("channel-reader").map((message) => message.id)).toEqual([projection.message.id]);
+    renameChannel("incident-log", "incident-archive");
+    expect(getUnreadBlockers("channel-reader").map((message) => message.id)).toEqual([projection.message.id]);
+    expect(getUnreadBlockers("outsider")).toEqual([]);
+    expect(db.prepare(
+      "SELECT old_channel, current_channel FROM channel_rename_aliases ORDER BY old_channel",
+    ).all()).toEqual([
+      { old_channel: "incident-log", current_channel: "incident-archive" },
+      { old_channel: "incidents", current_channel: "incident-archive" },
+    ]);
+    expect(db.prepare(
+      "SELECT scope FROM incident_projection_scopes WHERE projection_id = ? ORDER BY scope",
+    ).all(projection.id)).toEqual(canonicalScope);
+
+    expect(markRead([projection.message.id], "channel-reader")).toBe(1);
+    expect(markRead([projection.message.id], "channel-reader")).toBe(0);
+    expect(markRead([projection.message.id], "outsider")).toBe(0);
+
+    const future = appendIncidentProjection(fixture(1, {
+      id: "88888888-8888-4888-8888-888888888888",
+      blocked: ["channel:incidents"],
+    }), routedContext);
+    expect(future.message.channel).toBe("incident-archive");
+    expect(future.message.session_id).toBe("channel:incident-archive");
+    expect(future.message.to_agent).toBe("incident-archive");
+    expect(getUnreadBlockers("channel-reader").map((message) => message.id)).toEqual([future.message.id]);
+    expect(getUnreadBlockers("outsider")).toEqual([]);
+
+    expect(() => createChannel("incidents", "attacker")).toThrow("reserved historical alias");
+    createChannel("unrelated", "attacker");
+    expect(() => renameChannel("unrelated", "incidents")).toThrow("reserved historical alias");
+    expect(db.prepare(
+      "SELECT current_channel FROM channel_rename_aliases WHERE old_channel = 'incidents'",
+    ).get()).toEqual({ current_channel: "incident-archive" });
+
+    renameChannel("incident-archive", "incidents");
+    expect(getUnreadBlockers("channel-reader").map((message) => message.id)).toEqual([future.message.id]);
+    expect(db.prepare(
+      "SELECT old_channel, current_channel FROM channel_rename_aliases ORDER BY old_channel",
+    ).all()).toEqual([
+      { old_channel: "incident-archive", current_channel: "incidents" },
+      { old_channel: "incident-log", current_channel: "incidents" },
+    ]);
+  });
+
   test("missing reciprocal supersession source rolls back message, ledger, and scopes together", () => {
     const replacementId = "22222222-2222-4222-8222-222222222222";
     const missingId = "33333333-3333-4333-8333-333333333333";

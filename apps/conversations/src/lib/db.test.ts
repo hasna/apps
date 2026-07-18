@@ -43,6 +43,7 @@ describe("db", () => {
     expect(tableNames).toContain("messages");
     expect(tableNames).toContain("channels");
     expect(tableNames).toContain("channel_members");
+    expect(tableNames).toContain("channel_rename_aliases");
     expect(tableNames).toContain("channel_subscriptions");
     expect(tableNames).toContain("channel_notification_reads");
     expect(tableNames).toContain("projects");
@@ -74,6 +75,7 @@ describe("db", () => {
     expect(names).toContain("idx_projects_status");
     expect(names).toContain("idx_channels_project");
     expect(names).toContain("idx_channel_subscriptions_agent");
+    expect(names).toContain("idx_channel_rename_aliases_current");
     expect(names).toContain("idx_channel_notification_reads_agent");
     expect(names).toContain("idx_incident_projections_active_scope");
     expect(names).toContain("idx_incident_projections_message");

@@ -699,6 +699,15 @@ export function getDb(): Database {
     )
   `);
   db.exec(`
+    CREATE TABLE IF NOT EXISTS channel_rename_aliases (
+      old_channel TEXT PRIMARY KEY,
+      current_channel TEXT NOT NULL,
+      renamed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
+      CHECK (old_channel <> current_channel)
+    )
+  `);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_channel_rename_aliases_current ON channel_rename_aliases(current_channel)");
+  db.exec(`
     CREATE TABLE IF NOT EXISTS channel_subscriptions (
       channel TEXT NOT NULL REFERENCES channels(name),
       agent TEXT NOT NULL,

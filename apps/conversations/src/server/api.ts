@@ -32,7 +32,11 @@ import {
   metadataSpoofsIncidentProjection,
   validateIncidentProjectorBinding,
 } from "../lib/incident-projection-contract.js";
-import { appendIncidentProjectionPg, getIncidentProjectionPg } from "./incident-projections.js";
+import {
+  appendIncidentProjectionPg,
+  CHANNEL_IDENTITY_ADVISORY_LOCK,
+  getIncidentProjectionPg,
+} from "./incident-projections.js";
 import type { IncidentProjectionRequestV1, IncidentProjectorContext } from "../types.js";
 
 export const APP = "conversations";
@@ -52,6 +56,20 @@ function json(data: unknown, status = 200, extra?: Record<string, string>): Resp
     status,
     headers: { "Content-Type": "application/json; charset=utf-8", ...SECURITY_HEADERS, ...(extra || {}) },
   });
+}
+
+class ApiRequestValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ApiRequestValidationError";
+  }
+}
+
+function incidentProjectionUnavailable(): Response {
+  return json({
+    error: "Incident projection service is temporarily unavailable",
+    code: "INCIDENT_PROJECTION_UNAVAILABLE",
+  }, 503);
 }
 
 function signingSecret(): string {
@@ -163,7 +181,17 @@ async function visibleIncidentBlockerIds(
          )
        )`;
   const rows = await client.many<{ id: string | number }>(
-    `WITH latest AS (
+    `WITH member_channel_scopes(scope) AS (
+       SELECT 'channel:' || lower(channel)
+       FROM channel_members
+       WHERE lower(agent) = lower($3)
+       UNION
+       SELECT 'channel:' || lower(alias.old_channel)
+       FROM channel_rename_aliases alias
+       JOIN channel_members member ON lower(member.channel) = lower(alias.current_channel)
+       WHERE lower(member.agent) = lower($3)
+     ),
+     latest AS (
        SELECT p.*
        FROM incident_projections p
        JOIN (
@@ -203,9 +231,7 @@ async function visibleIncidentBlockerIds(
        ${receiptFilter}
        AND (
          lower(scope.scope) = 'agent:' || lower($3)
-         OR lower(scope.scope) IN (
-           SELECT 'channel:' || lower(channel) FROM channel_members WHERE lower(agent) = lower($3)
-         )
+         OR lower(scope.scope) IN (SELECT scope FROM member_channel_scopes)
          OR scope.scope IN (
            SELECT 'project:' || project_id FROM agent_presence
            WHERE lower(agent) = lower($3) AND project_id <> ''
@@ -222,7 +248,7 @@ async function upsertReadReceipts(client: TypedQueryClient, ids: number[], agent
   const result = await client.query(
     `INSERT INTO message_read_receipts (message_id, agent, read_at)
      SELECT message_id, $2, NOW() FROM unnest($1::bigint[]) AS message_id
-     ON CONFLICT (message_id, agent) DO UPDATE SET read_at = EXCLUDED.read_at`,
+     ON CONFLICT (message_id, agent) DO NOTHING`,
     [ids, agent.toLowerCase()],
   );
   return result.rowCount;
@@ -257,9 +283,14 @@ async function requireIncidentBlockerContext(
 async function readJson(req: Request): Promise<Record<string, unknown>> {
   const text = await req.text();
   if (!text.trim()) return {};
-  const parsed = JSON.parse(text);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new ApiRequestValidationError("Request body must contain valid JSON");
+  }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("Request body must be a JSON object");
+    throw new ApiRequestValidationError("Request body must be a JSON object");
   }
   return parsed as Record<string, unknown>;
 }
@@ -431,11 +462,26 @@ export async function renameChannelServer(
   const to = normalizeChannelName(newName);
   try {
     return await client.transaction(async (tx) => {
+      await tx.get(
+        "SELECT pg_advisory_xact_lock($1::bigint) AS channel_identity_locked",
+        [CHANNEL_IDENTITY_ADVISORY_LOCK],
+      );
       const existing = await tx.get(`SELECT name FROM channels WHERE name = $1 FOR UPDATE`, [from]);
       if (!existing) return { ok: false as const, error: `Channel not found: ${from}`, status: 404 };
       if (from === to) return { ok: true as const, name: from };
       const conflict = await tx.get(`SELECT name FROM channels WHERE name = $1 FOR UPDATE`, [to]);
       if (conflict) return { ok: false as const, error: `Channel #${to} already exists.`, status: 409 };
+      const targetAlias = await tx.get<{ current_channel: string }>(
+        `SELECT current_channel FROM channel_rename_aliases WHERE old_channel = $1 FOR UPDATE`,
+        [to],
+      );
+      if (targetAlias && targetAlias.current_channel !== from) {
+        return {
+          ok: false as const,
+          error: `Channel #${to} is a reserved historical alias for #${targetAlias.current_channel}.`,
+          status: 409,
+        };
+      }
 
       await tx.get(
         `SELECT set_config('hasna.conversations.channel_scope_rewrite', $1, TRUE) AS configured`,
@@ -454,6 +500,22 @@ export async function renameChannelServer(
          FROM channels WHERE name = $2`,
         [to, from],
       );
+      await tx.query(`DELETE FROM channel_rename_aliases WHERE old_channel = $1`, [to]);
+      await tx.query(
+        `UPDATE channel_rename_aliases
+         SET current_channel = $1, renamed_at = NOW()
+         WHERE current_channel = $2`,
+        [to, from],
+      );
+      await tx.query(
+        `INSERT INTO channel_rename_aliases (old_channel, current_channel)
+         VALUES ($1, $2)
+         ON CONFLICT (old_channel) DO UPDATE SET
+           current_channel = EXCLUDED.current_channel,
+           renamed_at = NOW()`,
+        [from, to],
+      );
+      await tx.query(`DELETE FROM channel_rename_aliases WHERE old_channel = current_channel`);
       await tx.query(`UPDATE channel_members SET channel = $1 WHERE channel = $2`, [to, from]);
       await tx.query(`UPDATE channel_subscriptions SET channel = $1 WHERE channel = $2`, [to, from]);
       await tx.query(
@@ -697,12 +759,20 @@ export function startApiServer(options: StartApiServerOptions = {}) {
               "WWW-Authenticate": "Bearer",
             });
           }
-          return handleV1(path, method, req, url, deps, decision.principal.agent);
+          return await handleV1(path, method, req, url, deps, decision.principal.agent);
         }
 
         return json({ error: "Not found" }, 404);
       } catch (e) {
-        return json({ error: (e as Error).message }, 400);
+        if (e instanceof ApiRequestValidationError) {
+          return json({ error: e.message }, 400);
+        }
+        if (path === "/v1/incident-projections" || path.startsWith("/v1/incident-projections/")) {
+          console.error("[incident-projector] request failed with an unexpected storage/runtime error");
+          return incidentProjectionUnavailable();
+        }
+        console.error(`[api] unexpected ${method} request failure`);
+        return json({ error: "Service is temporarily unavailable", code: "SERVICE_UNAVAILABLE" }, 503);
       }
     },
   });
@@ -747,10 +817,7 @@ async function handleV1(
         return json({ error: error.message, code: error.code }, 400);
       }
       console.error("[incident-projector] append failed with an unexpected storage/runtime error");
-      return json({
-        error: "Incident projection service is temporarily unavailable",
-        code: "INCIDENT_PROJECTION_UNAVAILABLE",
-      }, 503);
+      return incidentProjectionUnavailable();
     }
   }
 
@@ -783,7 +850,17 @@ async function handleV1(
       throw error;
     }
     const rows = await client.many<Record<string, unknown>>(
-      `WITH latest AS (
+      `WITH member_channel_scopes(scope) AS (
+         SELECT 'channel:' || lower(channel)
+         FROM channel_members
+         WHERE lower(agent) = lower($3)
+         UNION
+         SELECT 'channel:' || lower(alias.old_channel)
+         FROM channel_rename_aliases alias
+         JOIN channel_members member ON lower(member.channel) = lower(alias.current_channel)
+         WHERE lower(member.agent) = lower($3)
+       ),
+       latest AS (
          SELECT p.*
          FROM incident_projections p
          JOIN (
@@ -831,9 +908,7 @@ async function handleV1(
            )
            AND (
              lower(scope.scope) = 'agent:' || lower($3)
-             OR lower(scope.scope) IN (
-               SELECT 'channel:' || lower(channel) FROM channel_members WHERE lower(agent) = lower($3)
-             )
+             OR lower(scope.scope) IN (SELECT scope FROM member_channel_scopes)
              OR scope.scope IN (
                SELECT 'project:' || project_id FROM agent_presence
                WHERE lower(agent) = lower($3) AND project_id <> ''
@@ -969,7 +1044,7 @@ async function handleV1(
       if ([...projected].some((id) => !visible.has(id))) {
         return json({ error: "one or more incident blockers are not visible to the authenticated agent" }, 403);
       }
-      await upsertReadReceipts(client, ids, reader);
+      const acknowledged = await upsertReadReceipts(client, ids, reader);
       const ordinary = ids.filter((id) => !projected.has(id));
       const res = await client.query(
         `UPDATE messages SET read_at = NOW()::text
@@ -977,7 +1052,7 @@ async function handleV1(
            AND NOT EXISTS (SELECT 1 FROM incident_projections p WHERE p.message_id = messages.id)`,
         [ordinary],
       );
-      marked = projected.size + res.rowCount;
+      marked = acknowledged + res.rowCount;
     } else if (all) {
       const projected = await visibleIncidentBlockerIds(client, deps.incidentProjector, reader);
       const acknowledged = await upsertReadReceipts(client, projected, reader);
@@ -1525,25 +1600,40 @@ async function handleV1(
     if (!rawName || !createdBy) return json({ error: "name and created_by are required" }, 400);
     const name = normalizeChannelName(rawName);
     const projectId = str(body.project_id);
-    if (projectId) {
-      const proj = await client.get(`SELECT id FROM projects WHERE id = $1`, [projectId]);
-      if (!proj) return json({ error: `Project not found: ${projectId}` }, 400);
-    }
-    const existing = await client.get(`SELECT name FROM channels WHERE name = $1`, [name]);
-    if (existing) return json({ error: "Channel already exists" }, 409);
     const tags = Array.isArray(body.tags) ? JSON.stringify(body.tags) : null;
     const metadata = body.metadata && typeof body.metadata === "object" ? JSON.stringify(body.metadata) : null;
-    const row = await client.get<Record<string, unknown>>(
-      `INSERT INTO channels (name, description, topic, project_id, created_by, metadata, tags)
-       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-      [name, str(body.description) ?? null, str(body.topic) ?? null, projectId ?? null, createdBy, metadata, tags],
-    );
-    // Creator auto-joins the channel, mirroring the local createChannel.
-    await client.query(
-      `INSERT INTO channel_members (channel, agent) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
-      [name, createdBy],
-    );
-    return json({ channel: row ? parseServerChannel(row) : null }, 201);
+    return await client.transaction(async (tx) => {
+      await tx.get(
+        "SELECT pg_advisory_xact_lock($1::bigint) AS channel_identity_locked",
+        [CHANNEL_IDENTITY_ADVISORY_LOCK],
+      );
+      if (projectId) {
+        const proj = await tx.get(`SELECT id FROM projects WHERE id = $1`, [projectId]);
+        if (!proj) return json({ error: `Project not found: ${projectId}` }, 400);
+      }
+      const existing = await tx.get(`SELECT name FROM channels WHERE name = $1`, [name]);
+      if (existing) return json({ error: "Channel already exists" }, 409);
+      const historicalAlias = await tx.get<{ current_channel: string }>(
+        `SELECT current_channel FROM channel_rename_aliases WHERE old_channel = $1`,
+        [name],
+      );
+      if (historicalAlias) {
+        return json({
+          error: `Channel #${name} is a reserved historical alias for #${historicalAlias.current_channel}.`,
+        }, 409);
+      }
+      const row = await tx.get<Record<string, unknown>>(
+        `INSERT INTO channels (name, description, topic, project_id, created_by, metadata, tags)
+         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+        [name, str(body.description) ?? null, str(body.topic) ?? null, projectId ?? null, createdBy, metadata, tags],
+      );
+      // Creator auto-joins the channel, mirroring the local createChannel.
+      await tx.query(
+        `INSERT INTO channel_members (channel, agent) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
+        [name, createdBy],
+      );
+      return json({ channel: row ? parseServerChannel(row) : null }, 201);
+    });
   }
 
   if (sub === "channels/mine" && method === "GET") {

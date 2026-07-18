@@ -153,7 +153,12 @@ export function appendIncidentProjection(
     // closes the relation by supplying reciprocal supersedes_id.
     assertSupersededSource(request.incident.supersedes_id);
 
-    let channel = display.channel ?? null;
+    const routedChannel = display.channel
+      ? db.prepare(
+          "SELECT current_channel FROM channel_rename_aliases WHERE old_channel = ?",
+        ).get(display.channel) as { current_channel: string } | null
+      : null;
+    let channel = routedChannel?.current_channel ?? display.channel ?? null;
     let projectId = display.project_id ?? null;
     let sessionId = channel
       ? `channel:${channel}`

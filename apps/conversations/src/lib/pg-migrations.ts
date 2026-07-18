@@ -51,6 +51,15 @@ export const PG_MIGRATIONS: string[] = [
     PRIMARY KEY (channel, agent)
   );
 
+  CREATE TABLE IF NOT EXISTS channel_rename_aliases (
+    old_channel TEXT PRIMARY KEY,
+    current_channel TEXT NOT NULL,
+    renamed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (old_channel <> current_channel)
+  );
+  CREATE INDEX IF NOT EXISTS idx_channel_rename_aliases_current
+    ON channel_rename_aliases(current_channel);
+
   CREATE TABLE IF NOT EXISTS channel_subscriptions (
     channel TEXT NOT NULL REFERENCES channels(name),
     agent TEXT NOT NULL,

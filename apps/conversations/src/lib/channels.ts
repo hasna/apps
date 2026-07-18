@@ -52,6 +52,15 @@ export function createChannel(
   const db = getDb();
   const channelName = normalizeChannelName(name);
 
+  const historicalAlias = db.prepare(
+    "SELECT current_channel FROM channel_rename_aliases WHERE old_channel = ?",
+  ).get(channelName) as { current_channel: string } | null;
+  if (historicalAlias) {
+    throw new Error(
+      `Channel #${channelName} is a reserved historical alias for #${historicalAlias.current_channel}.`,
+    );
+  }
+
   if (options?.project_id) {
     const projectExists = db.prepare("SELECT id FROM projects WHERE id = ?").get(options.project_id);
     if (!projectExists) {
@@ -288,6 +297,14 @@ export function renameChannel(oldName: string, newName: string): Channel {
   if (conflict) {
     throw new Error(`Channel #${to} already exists.`);
   }
+  const targetAlias = db.prepare(
+    "SELECT current_channel FROM channel_rename_aliases WHERE old_channel = ?",
+  ).get(to) as { current_channel: string } | null;
+  if (targetAlias && targetAlias.current_channel !== from) {
+    throw new Error(
+      `Channel #${to} is a reserved historical alias for #${targetAlias.current_channel}.`,
+    );
+  }
 
   db.exec("BEGIN");
   try {
@@ -302,6 +319,24 @@ export function renameChannel(oldName: string, newName: string): Channel {
     ).run(`channel:${from}`, `channel:${to}`, from, to, from, to);
     // Channel row itself (PK is the name column).
     db.prepare("UPDATE channels SET name = ? WHERE name = ?").run(to, from);
+
+    // Preserve the name-based canonical scope identity without rewriting the
+    // append-only incident ledger. Existing aliases are flattened so every
+    // historical name resolves directly to the current channel after chains.
+    db.prepare("DELETE FROM channel_rename_aliases WHERE old_channel = ?").run(to);
+    db.prepare(
+      `UPDATE channel_rename_aliases
+       SET current_channel = ?, renamed_at = strftime('%Y-%m-%dT%H:%M:%f', 'now')
+       WHERE current_channel = ?`,
+    ).run(to, from);
+    db.prepare(
+      `INSERT INTO channel_rename_aliases (old_channel, current_channel)
+       VALUES (?, ?)
+       ON CONFLICT(old_channel) DO UPDATE SET
+         current_channel = excluded.current_channel,
+         renamed_at = strftime('%Y-%m-%dT%H:%M:%f', 'now')`,
+    ).run(from, to);
+    db.prepare("DELETE FROM channel_rename_aliases WHERE old_channel = current_channel").run();
 
     // Messages: channel field, the channel's session id, and the to_agent
     // field (channel messages address the channel name as recipient).

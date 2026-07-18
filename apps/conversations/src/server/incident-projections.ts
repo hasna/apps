@@ -15,6 +15,38 @@ import type {
 
 type Row = Record<string, unknown>;
 
+// One transaction-scoped identity fence covers both existing and not-yet-
+// created channel names. Projectors take the shared form; channel create/rename
+// take the exclusive form. This deliberately favors a small correctness fence
+// over per-name gap-lock complexity for an infrequent control-plane operation.
+export const CHANNEL_IDENTITY_ADVISORY_LOCK = 0x434f4e56;
+
+async function resolveLockedProjectionChannel(
+  client: TypedQueryClient,
+  configuredChannel: string,
+): Promise<string> {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const before = await client.get<{ current_channel: string }>(
+      "SELECT current_channel FROM channel_rename_aliases WHERE old_channel = $1",
+      [configuredChannel],
+    );
+    const candidate = before?.current_channel ?? configuredChannel;
+    // This row-identity lock serializes projector writes with renameChannelServer.
+    // If a rename committed while this SELECT waited, the row disappears and
+    // the alias re-read below moves the projector to the new current channel.
+    await client.get("SELECT name FROM channels WHERE name = $1 FOR SHARE", [candidate]);
+    const after = await client.get<{ current_channel: string }>(
+      "SELECT current_channel FROM channel_rename_aliases WHERE old_channel = $1",
+      [configuredChannel],
+    );
+    const resolved = after?.current_channel ?? configuredChannel;
+    if (resolved === candidate) return resolved;
+  }
+  throw new IncidentProjectionConflictError(
+    `Channel routing for #${configuredChannel} changed repeatedly; retry the projection`,
+  );
+}
+
 async function loadRecord(
   client: TypedQueryClient,
   row: Row,
@@ -61,6 +93,10 @@ export async function appendIncidentProjectionPg(
 
   try {
     return await client.transaction(async (tx) => {
+      await tx.get(
+        "SELECT pg_advisory_xact_lock_shared($1::bigint) AS channel_identity_locked",
+        [CHANNEL_IDENTITY_ADVISORY_LOCK],
+      );
     const existing = await tx.get<Row>(
       "SELECT * FROM incident_projections WHERE tenant_id = $1 AND event_id = $2",
       [context.tenant_id, request.event_id],
@@ -117,7 +153,9 @@ export async function appendIncidentProjectionPg(
     };
     await assertSupersededSource(request.incident.supersedes_id);
 
-    let channel = display.channel ?? null;
+    let channel = display.channel
+      ? await resolveLockedProjectionChannel(tx, display.channel)
+      : null;
     let projectId = display.project_id ?? null;
     let sessionId = channel
       ? `channel:${channel}`

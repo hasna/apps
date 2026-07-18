@@ -225,6 +225,7 @@ export const openapiSpec = {
         responses: {
           "200": { description: "projection", content: { "application/json": { schema: { $ref: "#/components/schemas/IncidentProjectionResponse" } } } },
           "404": { description: "not found", content: { "application/json": { schema: { $ref: "#/components/schemas/IncidentProjectionError" } } } },
+          "503": { description: "projector authority or storage temporarily unavailable", content: { "application/json": { schema: { $ref: "#/components/schemas/IncidentProjectionError" } } } },
         },
       },
     },

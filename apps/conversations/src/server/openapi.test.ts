@@ -12,7 +12,9 @@ describe("incident projection public contract", () => {
       "#/components/schemas/IncidentProjectionEventV1",
     );
     expect(Object.keys(append.responses).sort()).toEqual(["200", "201", "400", "409", "503"]);
-    expect(spec.paths["/v1/incident-projections/{event_id}"].get.operationId).toBe("getIncidentProjection");
+    const get = spec.paths["/v1/incident-projections/{event_id}"].get;
+    expect(get.operationId).toBe("getIncidentProjection");
+    expect(Object.keys(get.responses).sort()).toEqual(["200", "404", "503"]);
     expect(spec.paths["/v1/messages/blockers"].get.operationId).toBe("listUnreadBlockers");
     expect(spec.components.schemas.IncidentProjectionEventV1.additionalProperties).toBe(false);
     expect(spec.components.schemas.IncidentSnapshotV1.additionalProperties).toBe(false);

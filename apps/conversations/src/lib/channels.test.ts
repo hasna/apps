@@ -305,6 +305,7 @@ describe("renameChannel", () => {
     expect(getChannel("old-name")?.name).toBe("old-name");
     expect(getChannel("failed-rename")).toBeNull();
     expect(db.prepare("SELECT COUNT(*) AS n FROM message_scope_rewrite_guard").get()).toEqual({ n: 0 });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM channel_rename_aliases").get()).toEqual({ n: 0 });
     expect(() => db.prepare("UPDATE messages SET project_id = 'other' WHERE id = ?").run(parent.id)).toThrow(
       "reply parent scope is immutable",
     );

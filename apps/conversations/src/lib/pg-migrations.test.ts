@@ -25,6 +25,7 @@ describe("PG_MIGRATIONS", () => {
     expect(sql).toContain("create table if not exists _migrations");
     expect(sql).toContain("create table if not exists incident_projections");
     expect(sql).toContain("create table if not exists incident_projection_scopes");
+    expect(sql).toContain("create table if not exists channel_rename_aliases");
     expect(sql).toContain("metadata text");
     expect(sql).toContain("tags text");
     const channelsDefinition = sql.slice(
@@ -41,6 +42,7 @@ describe("PG_MIGRATIONS", () => {
     expect(sql).toContain("idx_messages_search");
     expect(sql).toContain("idx_incident_projections_active_scope");
     expect(sql).toContain("idx_incident_projection_scopes_lookup");
+    expect(sql).toContain("idx_channel_rename_aliases_current");
     expect(sql).toContain("incident_projections_no_update");
     expect(sql).toContain("incident_projections_no_delete");
     expect(sql).toContain("incident_projection_scopes_no_update");
