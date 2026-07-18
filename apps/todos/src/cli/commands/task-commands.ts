@@ -754,12 +754,18 @@ export function registerTaskCommands(program: Command) {
       let task: any;
       if (cloud) {
         const remote = await cloudGetTask(cloud, await resolveTaskIdForCommand(id, cloud));
-        const commentPage = remote ? await cloudListComments(cloud, remote.id) : null;
+        const [commentPage, dependencyRelations] = remote
+          ? await Promise.all([
+              cloudListComments(cloud, remote.id),
+              cloudGetTaskDependencyRelations(cloud, remote.id),
+            ])
+          : [null, null];
         // The /v1 API returns the task row without relation graphs; default the
-        // relation arrays so the detail renderer below never touches undefined.
+        // unsupported relation arrays, while hydrating dependency relations
+        // through their authoritative endpoint.
         task = remote
           ? {
-              subtasks: [], dependencies: [], blocked_by: [], ...remote, tags: remote.tags ?? [],
+              subtasks: [], ...remote, ...dependencyRelations!, tags: remote.tags ?? [],
               comments: commentPage!.comments,
               comments_page: {
                 count: commentPage!.count,

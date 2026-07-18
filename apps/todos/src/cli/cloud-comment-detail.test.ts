@@ -349,7 +349,7 @@ describe("cloud task detail comments", () => {
     }
   });
 
-  test("inspect hydrates persisted dependency relations from the remote authority", async () => {
+  test("show and inspect hydrate persisted dependency relations from the remote authority", async () => {
     const blockedTaskId = "33333333-3333-4333-8333-333333333333";
     const requests: string[] = [];
     const server = Bun.serve({
@@ -383,22 +383,25 @@ describe("cloud task detail comments", () => {
     const root = mkdtempSync(join(tmpdir(), "todos-cloud-dependency-detail-"));
     tempRoots.push(root);
     try {
-      const result = await runCli(
-        ["--json", "inspect", TASK_ID],
-        root,
-        `http://127.0.0.1:${server.port}`,
-      );
-      expect(result).toMatchObject({ exitCode: 0, stderr: "" });
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        id: TASK_ID,
-        dependencies: [{ id: PARENT_ID, title: "Required task", status: "pending" }],
-        blocked_by: [{ id: blockedTaskId, title: "Downstream task", status: "pending" }],
-      });
+      for (const command of ["show", "inspect"]) {
+        const result = await runCli(
+          ["--json", command, TASK_ID],
+          root,
+          `http://127.0.0.1:${server.port}`,
+        );
+        expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          id: TASK_ID,
+          dependencies: [{ id: PARENT_ID, title: "Required task", status: "pending" }],
+          blocked_by: [{ id: blockedTaskId, title: "Downstream task", status: "pending" }],
+        });
+      }
       expect(requests).toEqual(expect.arrayContaining([
         `GET /v1/tasks/${TASK_ID}/dependencies`,
         `GET /v1/tasks/${PARENT_ID}`,
         `GET /v1/tasks/${blockedTaskId}`,
       ]));
+      expect(requests.filter((request) => request === `GET /v1/tasks/${TASK_ID}/dependencies`)).toHaveLength(2);
       expect(existsSync(join(root, "todos.db"))).toBe(false);
     } finally {
       server.stop(true);
