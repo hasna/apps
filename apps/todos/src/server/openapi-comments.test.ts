@@ -71,10 +71,12 @@ describe("task list and completion OpenAPI contract", () => {
       properties: {
         status: { type: "string", enum: ["pending", "in_progress", "completed", "failed", "cancelled"] },
         priority: { type: "string", enum: ["low", "medium", "high", "critical"] },
+        task_list_id: { type: "string", nullable: true },
       },
     });
     const generated = readFileSync(new URL("../sdk/v1.generated.ts", import.meta.url), "utf8");
     expect(generated).toContain('"status"?: "pending" | "in_progress" | "completed" | "failed" | "cancelled"');
+    expect(generated).toContain('"task_list_id"?: string | null');
     expect(generated).not.toContain('export interface UpdateTaskInput { "title"?: string; "description"?: string; "status"?: string;');
   });
 

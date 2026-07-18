@@ -738,6 +738,26 @@ describe("storage adapter contracts", () => {
     expect(postgres.calls.some((call) => call.values?.includes("apple06"))).toBe(true);
   });
 
+  test("Postgres task updates preserve omitted task lists and detach explicit null task lists", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client: postgres.client });
+    const taskList = await adapter.taskLists.create({ name: "Remote queue", slug: "remote-queue" });
+    const task = await adapter.tasks.create({ title: "Remote detach", task_list_id: taskList.id });
+
+    const preserved = await adapter.tasks.update(task.id, {
+      version: task.version,
+      priority: "high",
+    });
+    expect(preserved).toMatchObject({ task_list_id: taskList.id, priority: "high" });
+
+    const detached = await adapter.tasks.update(task.id, {
+      version: preserved.version,
+      task_list_id: null,
+    });
+    expect(detached.task_list_id).toBeNull();
+    expect(await adapter.tasks.get(task.id)).toMatchObject({ task_list_id: null });
+  });
+
   test("Postgres completion atomically merges evidence and completion metadata without dropping omitted keys", async () => {
     const postgres = createMemoryPostgresClient();
     const adapter = createPostgresTodosStorageAdapter({ client: postgres.client });

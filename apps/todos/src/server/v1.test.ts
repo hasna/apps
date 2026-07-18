@@ -548,6 +548,27 @@ describe("/v1 mutation actor authority", () => {
     });
   });
 
+  test("task update preserves an omitted task list and detaches an explicit null task list", async () => {
+    const taskList = await store.taskLists.create({ name: "Remote queue", slug: "remote-queue" });
+    const task = await store.tasks.create({ title: "remote detach", task_list_id: taskList.id });
+
+    const preservedResponse = await request(`/v1/tasks/${task.id}`, "PATCH", {
+      priority: "high",
+      version: task.version,
+    });
+    expect(preservedResponse?.status).toBe(200);
+    const preserved = (await preservedResponse!.json() as { task: typeof task }).task;
+    expect(preserved).toMatchObject({ task_list_id: taskList.id, priority: "high" });
+
+    const detachedResponse = await request(`/v1/tasks/${task.id}`, "PATCH", {
+      task_list_id: null,
+      version: preserved.version,
+    });
+    expect(detachedResponse?.status).toBe(200);
+    expect(await detachedResponse!.json()).toMatchObject({ task: { task_list_id: null } });
+    expect(await store.tasks.get(task.id)).toMatchObject({ task_list_id: null });
+  });
+
   test("task update accepts calendar-valid RFC3339 leap-day timestamps", async () => {
     const task = await store.tasks.create({ title: "valid leap timestamp" });
     const response = await request(`/v1/tasks/${task.id}`, "PATCH", {

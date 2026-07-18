@@ -1169,7 +1169,7 @@ async function updateTask(
     tags: input.tags ?? existing.tags,
     metadata: input.metadata ?? existing.metadata,
     requires_approval: input.requires_approval ?? existing.requires_approval,
-    task_list_id: input.task_list_id ?? existing.task_list_id,
+    task_list_id: input.task_list_id !== undefined ? input.task_list_id : existing.task_list_id,
     completed_at: completedNow
       ? input.completed_at ?? timestamp
       : reopened && input.completed_at === undefined
