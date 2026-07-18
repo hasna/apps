@@ -27,7 +27,7 @@ import {
   ValidationError,
   WorkflowRunDefinitionConflictError,
 } from "../lib/errors.js";
-import { workflowStepAgentSessionContract } from "../lib/agent-adapter.js";
+import { validateAgentTarget, workflowStepAgentSessionContract } from "../lib/agent-adapter.js";
 import type { AgentSessionContract } from "../types.js";
 import {
   publicGoal,
@@ -318,6 +318,19 @@ function safeImportedLoop(loop: Loop, opts: { preserveLoopScheduling: boolean })
   };
 }
 
+function validateImportedAgentTargets(workflows: WorkflowSpec[], loops: Loop[]): void {
+  for (const [workflowIndex, workflow] of workflows.entries()) {
+    for (const [stepIndex, step] of workflow.steps.entries()) {
+      if (step.target.type === "agent") {
+        validateAgentTarget(step.target, `workflows[${workflowIndex}].steps[${stepIndex}].target`);
+      }
+    }
+  }
+  for (const [loopIndex, loop] of loops.entries()) {
+    if (loop.target.type === "agent") validateAgentTarget(loop.target, `loops[${loopIndex}].target`);
+  }
+}
+
 /**
  * Bulk id-preserving import for a local->self-hosted backfill.
  *
@@ -339,6 +352,7 @@ async function handleImportRequest(ctx: V1RequestContext, segments: string[]): P
   const workflows = Array.isArray(body.workflows) ? body.workflows : [];
   const loops = Array.isArray(body.loops) ? body.loops : [];
   const runs = Array.isArray(body.runs) ? body.runs : [];
+  validateImportedAgentTargets(workflows, loops);
   const preserveWorkflowActivation = body.preserveWorkflowActivation === true;
   const preserveLoopScheduling = body.preserveLoopScheduling === true;
   const imported = { workflows: 0, loops: 0, runs: 0 };

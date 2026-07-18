@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
 import type { AgentTarget } from "../types.js";
 import { agentSessionContract, BoundedOutputBuffer, PROVIDER_ADAPTERS, providerAdapter, spawnCapture } from "./agent-adapter.js";
-import { executeLoop } from "./executor.js";
+import { ValidationError } from "./errors.js";
+import { executeLoop, executeTarget } from "./executor.js";
 import { Store } from "./store.js";
 
 async function fakeCodewith(
@@ -835,6 +836,27 @@ describe("provider adapter contracts", () => {
       const model = provider === "opencode" ? "openrouter/test/model" : undefined;
       expect(() => providerAdapter(provider).validate(baseTarget({ provider, model }))).not.toThrow();
       expect(() => providerAdapter(provider).validate(baseTarget({ provider, model, extraArgs: [] }))).not.toThrow();
+    }
+  });
+
+  test("rejects malformed extra args before later arguments reach validation, invocation, or execution", async () => {
+    const sparse: unknown[] = [];
+    sparse.length = 2;
+    sparse[1] = "--dangerously-bypass-hook-trust";
+    const cases: unknown[][] = [
+      [undefined, "--dangerously-bypass-hook-trust"],
+      [null, "--dangerously-bypass-hook-trust"],
+      sparse,
+    ];
+
+    for (const extraArgs of cases) {
+      const target = baseTarget({
+        provider: "codewith",
+        extraArgs: extraArgs as string[],
+      });
+      expect(() => providerAdapter("codewith").validate(target)).toThrow(ValidationError);
+      expect(() => providerAdapter("codewith").buildInvocation(target)).toThrow(ValidationError);
+      await expect(executeTarget(target)).rejects.toThrow(ValidationError);
     }
   });
 

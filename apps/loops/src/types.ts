@@ -190,7 +190,11 @@ export interface AgentTargetBase {
   variant?: string;
   agent?: string;
   authProfile?: string;
-  /** Additional provider flags. Adapter-managed execution, output, permission, sandbox, model, cwd, and bypass flags are rejected. */
+  /**
+   * Provider CLI passthrough arguments. Fail-closed: omitted or empty is valid,
+   * while every non-empty or malformed entry is rejected until that exact
+   * provider option is explicitly reviewed and allowlisted by the adapter.
+   */
   extraArgs?: string[];
   addDirs?: string[];
   timeoutMs?: TimeoutMs;

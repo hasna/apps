@@ -1196,6 +1196,10 @@ The adapters intentionally use provider command surfaces instead of pretending e
   execution, output, permissions, sandboxing, model, cwd, and other supported
   behavior through the modeled agent-target fields. A passthrough option must
   be explicitly reviewed and added to the provider allowlist before use.
+  Legacy persisted targets are not silently accepted or rewritten: execution
+  fails validation until `extraArgs` is removed and replaced with modeled
+  fields. API and migration imports reject those targets instead of stripping
+  the arguments; update the source record and retry the import.
 - `--variant` is provider-specific reasoning/model effort. Claude maps it to `--effort`, Codewith/Codex map it to `model_reasoning_effort`, and OpenCode/AICopilot pass `--variant`.
 - Daemon and scheduled runs prepend common user executable directories such as `~/.local/bin` and `~/.bun/bin` before resolving provider CLIs.
 - Agent targets that set neither `timeoutMs` nor `idleTimeoutMs` get a default

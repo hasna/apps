@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import type { AgentAllowlistSpec, AgentPromptSource, AgentTarget, CreateWorkflowInput, ExecutableTarget, GoalSpec, WorkflowSpec, WorkflowStep } from "../types.js";
 import { AGENT_PROVIDERS, providerAdapter } from "./agent-adapter.js";
+import { ValidationError } from "./errors.js";
 import { GOAL_OBJECTIVE_MAX_CHARS } from "./goal/types.js";
 
 export type WorkflowSpecBody = Pick<WorkflowSpec, "name" | "description" | "version" | "steps">;
@@ -40,13 +41,14 @@ function optionalBoolean(value: unknown, label: string): boolean | undefined {
 
 function optionalStringArray(value: unknown, label: string): string[] | undefined {
   if (value === undefined) return undefined;
-  if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
-  const values = value
-    .map((entry, index) => {
-      assertString(entry, `${label}[${index}]`);
-      return entry.trim();
-    })
-    .filter(Boolean);
+  if (!Array.isArray(value)) throw new ValidationError(`${label} must be an array`);
+  const values: string[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.prototype.hasOwnProperty.call(value, index) || typeof value[index] !== "string" || value[index].trim() === "") {
+      throw new ValidationError(`${label}[${index}] must be a non-empty string`);
+    }
+    values.push(value[index].trim());
+  }
   return values.length ? values : undefined;
 }
 

@@ -364,6 +364,80 @@ describe("loops-api foundation", () => {
     }
   });
 
+  test("POST /v1/loops rejects invalid agent extraArgs as 422 without persistence", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+
+    try {
+      for (const [name, extraArgs] of [
+        ["unknown-option", ["--durable", "true"]],
+        ["malformed-entry", [null, "--dangerously-bypass-hook-trust"]],
+      ] as const) {
+        const response = await fetch(apiUrl(server, "/v1/loops"), {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify({
+            name: `invalid-extra-args-${name}`,
+            schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+            target: {
+              type: "agent",
+              provider: "codewith",
+              prompt: "do not execute",
+              extraArgs,
+            },
+          }),
+        });
+        expect(response.status).toBe(422);
+        expect(await response.json()).toEqual({ ok: false, error: "validation_failed" });
+      }
+      expect(await storage.countLoops()).toBe(0);
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("POST /v1/import rejects legacy agent extraArgs instead of persisting or stripping them", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+    const legacyLoop = {
+      id: "loop-import-legacy-extra-args",
+      name: "legacy-extra-args",
+      status: "paused",
+      schedule: { type: "once", at: "2026-01-01T00:00:00.000Z" },
+      target: {
+        type: "agent",
+        provider: "codewith",
+        prompt: "do not execute",
+        extraArgs: ["--durable", "true"],
+      },
+      catchUp: "latest",
+      catchUpLimit: 50,
+      overlap: "skip",
+      maxAttempts: 1,
+      retryDelayMs: 60_000,
+      leaseMs: 1_800_000,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+
+    try {
+      const response = await fetch(apiUrl(server, "/v1/import"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ loops: [legacyLoop] }),
+      });
+      expect(response.status).toBe(422);
+      expect(await response.json()).toEqual({ ok: false, error: "validation_failed" });
+      expect(await storage.getLoop(legacyLoop.id)).toBeUndefined();
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
   test("POST /v1/import upserts id-preserving rows, pauses imported loops by default, is idempotent, and skips running runs", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");

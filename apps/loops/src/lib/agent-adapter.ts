@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import type { AgentAllowlistEnforcement, AgentProvider, AgentSandbox, AgentSessionContract, AgentTarget, WorkflowStep } from "../types.js";
+import { ValidationError } from "./errors.js";
 import { scrubSecrets } from "./redact.js";
 
 export type ProviderPromptChannel = "stdin" | "argv";
@@ -59,7 +60,7 @@ const PERMISSION_MODES = ["default", "plan", "auto", "bypass"];
 
 function assertOptionalNonEmptyString(value: unknown, label: string): void {
   if (value === undefined) return;
-  if (typeof value !== "string" || value.trim() === "") throw new Error(`${label} must be a non-empty string`);
+  if (typeof value !== "string" || value.trim() === "") throw new ValidationError(`${label} must be a non-empty string`);
 }
 
 function extraArgNameForError(arg: string): string {
@@ -70,18 +71,26 @@ function extraArgNameForError(arg: string): string {
 
 function validateExtraArgs(target: AgentTarget, label: string): void {
   const allowedArgs = ALLOWED_AGENT_EXTRA_ARGS[target.provider];
-  const unsupported = target.extraArgs?.find((arg) => !allowedArgs.includes(arg));
-  if (unsupported !== undefined) {
-    throw new Error(
-      `${label}.extraArgs does not allow ${extraArgNameForError(unsupported)}; ${target.provider} provider arguments are fail-closed and supported options must use modeled target fields`,
-    );
+  const extraArgs: unknown = target.extraArgs;
+  if (extraArgs === undefined) return;
+  if (!Array.isArray(extraArgs)) throw new ValidationError(`${label}.extraArgs must be an array of strings`);
+  for (let index = 0; index < extraArgs.length; index += 1) {
+    if (!Object.prototype.hasOwnProperty.call(extraArgs, index) || typeof extraArgs[index] !== "string") {
+      throw new ValidationError(`${label}.extraArgs[${index}] must be a string`);
+    }
+    const arg = extraArgs[index];
+    if (!allowedArgs.includes(arg)) {
+      throw new ValidationError(
+        `${label}.extraArgs does not allow ${extraArgNameForError(arg)}; ${target.provider} provider arguments are fail-closed and supported options must use modeled target fields`,
+      );
+    }
   }
 }
 
 function validateAgentOptions(target: AgentTarget, label: string, capabilities: ProviderCapabilities): void {
   const provider = target.provider;
   if (typeof target.prompt !== "string" || target.prompt.trim() === "") {
-    throw new Error(`${label}.prompt must be a non-empty string`);
+    throw new ValidationError(`${label}.prompt must be a non-empty string`);
   }
   assertOptionalNonEmptyString(target.model, `${label}.model`);
   assertOptionalNonEmptyString(target.variant, `${label}.variant`);
@@ -89,58 +98,58 @@ function validateAgentOptions(target: AgentTarget, label: string, capabilities: 
   assertOptionalNonEmptyString(target.authProfile, `${label}.authProfile`);
   assertOptionalNonEmptyString(target.configIsolation, `${label}.configIsolation`);
   if (target.configIsolation !== undefined && target.configIsolation !== "safe" && target.configIsolation !== "none") {
-    throw new Error(`${label}.configIsolation must be safe or none`);
+    throw new ValidationError(`${label}.configIsolation must be safe or none`);
   }
   if (target.authProfile !== undefined && provider !== "codewith") {
-    throw new Error(`${label}.authProfile is currently supported only for provider codewith`);
+    throw new ValidationError(`${label}.authProfile is currently supported only for provider codewith`);
   }
   if (provider === "opencode" && (typeof target.model !== "string" || target.model.trim() === "")) {
-    throw new Error(`${label}.model is required for provider opencode; pass a provider/model id such as openrouter/google/gemini-2.5-flash`);
+    throw new ValidationError(`${label}.model is required for provider opencode; pass a provider/model id such as openrouter/google/gemini-2.5-flash`);
   }
   if (provider === "cursor" && target.variant !== undefined) {
-    throw new Error(`${label}.variant is not supported for provider cursor`);
+    throw new ValidationError(`${label}.variant is not supported for provider cursor`);
   }
   if (provider === "codex" && target.agent !== undefined) {
-    throw new Error(`${label}.agent is not supported for provider codex`);
+    throw new ValidationError(`${label}.agent is not supported for provider codex`);
   }
   if (provider === "codewith" && target.agent !== undefined) {
-    throw new Error(`${label}.agent is not supported for provider codewith`);
+    throw new ValidationError(`${label}.agent is not supported for provider codewith`);
   }
   validateExtraArgs(target, label);
   if (target.addDirs?.length && !["codewith", "codex"].includes(provider)) {
-    throw new Error(`${label}.addDirs is currently supported only for provider codewith or codex`);
+    throw new ValidationError(`${label}.addDirs is currently supported only for provider codewith or codex`);
   }
   if (target.permissionMode !== undefined) {
     if (!PERMISSION_MODES.includes(target.permissionMode)) {
-      throw new Error(`${label}.permissionMode must be one of ${PERMISSION_MODES.join(", ")}`);
+      throw new ValidationError(`${label}.permissionMode must be one of ${PERMISSION_MODES.join(", ")}`);
     }
     if (target.permissionMode === "plan" && !["claude", "cursor"].includes(provider)) {
-      throw new Error(`${label}.permissionMode plan is currently supported only for provider claude or cursor`);
+      throw new ValidationError(`${label}.permissionMode plan is currently supported only for provider claude or cursor`);
     }
     if (target.permissionMode === "auto" && provider !== "claude") {
-      throw new Error(`${label}.permissionMode auto is currently supported only for provider claude`);
+      throw new ValidationError(`${label}.permissionMode auto is currently supported only for provider claude`);
     }
   }
   if (target.sandbox !== undefined) {
     if (!capabilities.sandbox.length) {
-      throw new Error(`${label}.sandbox is currently supported only for provider codewith, codex, or cursor`);
+      throw new ValidationError(`${label}.sandbox is currently supported only for provider codewith, codex, or cursor`);
     }
     if (!capabilities.sandbox.includes(target.sandbox)) {
-      throw new Error(`${label}.sandbox must be one of ${capabilities.sandbox.join(", ")}`);
+      throw new ValidationError(`${label}.sandbox must be one of ${capabilities.sandbox.join(", ")}`);
     }
   }
   if (target.manualBreakGlass !== undefined && typeof target.manualBreakGlass !== "boolean") {
-    throw new Error(`${label}.manualBreakGlass must be a boolean`);
+    throw new ValidationError(`${label}.manualBreakGlass must be a boolean`);
   }
   if (target.allowlist?.enforcement !== undefined && target.allowlist.enforcement !== "metadata_only") {
-    throw new Error(`${label}.allowlist.enforcement must be metadata_only`);
+    throw new ValidationError(`${label}.allowlist.enforcement must be metadata_only`);
   }
   const safetyReason = typeof target.allowlist?.safetyReason === "string" ? target.allowlist.safetyReason.trim() : "";
   if (target.allowlist?.safetyReason !== undefined && !safetyReason) {
-    throw new Error(`${label}.allowlist.safetyReason must be a non-empty string`);
+    throw new ValidationError(`${label}.allowlist.safetyReason must be a non-empty string`);
   }
   if ((target.allowlist?.tools?.length || target.allowlist?.commands?.length) && !safetyReason) {
-    throw new Error(`${label}.allowlist.safetyReason is required when tool or command restrictions are declared`);
+    throw new ValidationError(`${label}.allowlist.safetyReason is required when tool or command restrictions are declared`);
   }
   const effectiveSandbox = effectiveAgentSandbox(target);
   const providerBypass = target.permissionMode === "bypass" && ["claude", "cursor", "aicopilot", "opencode"].includes(provider);
@@ -149,10 +158,10 @@ function validateAgentOptions(target: AgentTarget, label: string, capabilities: 
     (provider === "cursor" && effectiveSandbox === "disabled");
   const relaxedOption = providerBypass ? "permissionMode=bypass" : `sandbox=${effectiveSandbox}`;
   if (relaxed && target.manualBreakGlass !== true) {
-    throw new Error(`${label}.manualBreakGlass=true is required when ${relaxedOption}`);
+    throw new ValidationError(`${label}.manualBreakGlass=true is required when ${relaxedOption}`);
   }
   if (relaxed && !safetyReason) {
-    throw new Error(`${label}.allowlist.safetyReason is required when ${relaxedOption}`);
+    throw new ValidationError(`${label}.allowlist.safetyReason is required when ${relaxedOption}`);
   }
 }
 
@@ -353,8 +362,20 @@ export const AGENT_PROVIDERS = Object.keys(PROVIDER_ADAPTERS) as AgentProvider[]
 
 export function providerAdapter(provider: AgentProvider): ProviderAdapter {
   const adapter = PROVIDER_ADAPTERS[provider];
-  if (!adapter) throw new Error(`unsupported agent provider: ${String(provider)}`);
+  if (!adapter) throw new ValidationError(`unsupported agent provider: ${String(provider)}`);
   return adapter;
+}
+
+/** Validate an untrusted or persisted agent target without relying on TypeScript-only shape guarantees. */
+export function validateAgentTarget(target: unknown, label = "agent target"): asserts target is AgentTarget {
+  if (!target || typeof target !== "object" || Array.isArray(target)) {
+    throw new ValidationError(`${label} must be an object`);
+  }
+  const provider = (target as { provider?: unknown }).provider;
+  if (typeof provider !== "string" || !AGENT_PROVIDERS.includes(provider as AgentProvider)) {
+    throw new ValidationError(`${label}.provider must be one of ${AGENT_PROVIDERS.join(", ")}`);
+  }
+  providerAdapter(provider as AgentProvider).validate(target as AgentTarget, label);
 }
 
 export interface SpawnCaptureOptions {
