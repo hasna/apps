@@ -70,7 +70,7 @@ await expectStatus(`/v1/tasks/${task.task.id}`, 200, {
 await expectStatus(`/v1/tasks/${task.task.id}`, 409, {
   method: "PATCH",
   headers: authHeaders,
-  body: JSON.stringify({ status: "done", version: 1 }),
+  body: JSON.stringify({ status: "completed", version: 1 }),
 });
 await expectStatus(`/v1/tasks/${task.task.id}`, 200, { method: "DELETE", headers: authHeaders });
 

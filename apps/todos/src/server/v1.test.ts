@@ -361,6 +361,22 @@ describe("/v1 task hierarchy and lock authorization", () => {
     });
   });
 
+  test("generic task PATCH returns 409 for a stale canonical completion update", async () => {
+    const task = await store.tasks.create({ title: "stale canonical completion" });
+    const startedResponse = await request(`/v1/tasks/${task.id}`, "PATCH", {
+      status: "in_progress",
+      version: task.version,
+    });
+    expect(startedResponse?.status).toBe(200);
+
+    const conflict = await request(`/v1/tasks/${task.id}`, "PATCH", {
+      status: "completed",
+      version: task.version,
+    });
+    expect(conflict?.status).toBe(409);
+    expect(await store.tasks.get(task.id)).toMatchObject({ status: "in_progress" });
+  });
+
   test("create persists parent_id and parent filtering includes only children", async () => {
     const parent = await store.tasks.create({ title: "parent" });
     const created = await request("/v1/tasks", "POST", { title: "child", parent_id: parent.id });
@@ -484,6 +500,8 @@ describe("/v1 mutation actor authority", () => {
       { metadata: [] },
       { due_at: "not-a-timestamp" },
       { due_at: "2026-07-19" },
+      { due_at: "2026-02-31T00:00:00Z" },
+      { completed_at: "2025-02-29T00:00:00+00:00" },
       { completed_at: false },
       { retry_after: 42 },
       { requires_approval: "yes" },
@@ -530,6 +548,19 @@ describe("/v1 mutation actor authority", () => {
     });
   });
 
+  test("task update accepts calendar-valid RFC3339 leap-day timestamps", async () => {
+    const task = await store.tasks.create({ title: "valid leap timestamp" });
+    const response = await request(`/v1/tasks/${task.id}`, "PATCH", {
+      due_at: "2024-02-29T23:59:59+14:00",
+      version: task.version,
+    });
+
+    expect(response?.status).toBe(200);
+    expect(await response!.json()).toMatchObject({
+      task: { due_at: "2024-02-29T23:59:59+14:00" },
+    });
+  });
+
   test("approval stores the normalized effective actor instead of the body spelling", async () => {
     const task = await store.tasks.create({ title: "normalized approval", requires_approval: true });
     const response = await request(`/v1/tasks/${task.id}`, "PATCH", {
@@ -542,14 +573,16 @@ describe("/v1 mutation actor authority", () => {
   });
 
   test("fail rejects a malformed retry timestamp before changing task state", async () => {
-    const task = await store.tasks.create({ title: "invalid retry timestamp" });
-    const response = await request(`/v1/tasks/${task.id}/fail`, "POST", {
-      retry: true,
-      retry_after: "tomorrow",
-    });
+    for (const retryAfter of ["tomorrow", "2026-02-31T00:00:00Z"]) {
+      const task = await store.tasks.create({ title: `invalid retry timestamp ${retryAfter}` });
+      const response = await request(`/v1/tasks/${task.id}/fail`, "POST", {
+        retry: true,
+        retry_after: retryAfter,
+      });
 
-    expect(response?.status).toBe(400);
-    expect(await store.tasks.get(task.id)).toMatchObject({ status: "pending", version: task.version });
+      expect(response?.status).toBe(400);
+      expect(await store.tasks.get(task.id)).toMatchObject({ status: "pending", version: task.version });
+    }
   });
 
   test("task assignment and approval assertions cannot name a different actor", async () => {

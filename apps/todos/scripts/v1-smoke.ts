@@ -49,7 +49,7 @@ try {
   const updBody = await upd.json();
   ok("UPDATE task", upd.status === 200 && updBody.task?.status === "in_progress" && updBody.task?.title === "v1 smoke DONE", JSON.stringify(updBody.task && { v: updBody.task.version }));
 
-  const conflict = await fetch(`${B}/v1/tasks/${id}`, { method: "PATCH", headers: H, body: JSON.stringify({ status: "done", version: 1 }) });
+  const conflict = await fetch(`${B}/v1/tasks/${id}`, { method: "PATCH", headers: H, body: JSON.stringify({ status: "completed", version: 1 }) });
   ok("stale version -> 409", conflict.status === 409);
 
   const del = await (await fetch(`${B}/v1/tasks/${id}`, { method: "DELETE", headers: H })).json();

@@ -194,6 +194,7 @@ describe("server image build context", () => {
   test("ships a candidate build gate for architecture, TLS, API, and inventory", () => {
     const buildspec = readFileSync(join(root, "buildspec.container-candidate.yml"), "utf8");
     const containerSmoke = readFileSync(join(root, "scripts/container-http-smoke.ts"), "utf8");
+    const v1Smoke = readFileSync(join(root, "scripts/v1-smoke.ts"), "utf8");
 
     expect(buildspec).toContain("docker build --platform linux/arm64");
     expect(buildspec).toContain(
@@ -252,6 +253,10 @@ describe("server image build context", () => {
     );
     expect(containerSmoke).toContain("dashboardAssets.size === 0");
     expect(containerSmoke).toContain('await expectStatus(`${assetUrl.pathname}${assetUrl.search}`, 200)');
+    for (const smoke of [containerSmoke, v1Smoke]) {
+      expect(smoke).toContain('status: "completed", version: 1');
+      expect(smoke).not.toContain('status: "done", version: 1');
+    }
     expect(buildspec).not.toContain("terraform");
     expect(buildspec).not.toContain("update-service");
   });
