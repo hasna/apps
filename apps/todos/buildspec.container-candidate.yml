@@ -53,10 +53,10 @@ phases:
   build:
     commands:
       - set -euo pipefail
-      - docker build --platform linux/arm64 --build-arg "BUN_IMAGE=${BUN_IMAGE_OVERRIDE}" --label "org.opencontainers.image.source=https://github.com/hasna/todos" --label "org.opencontainers.image.revision=${SOURCE_SHA}" --label "org.opencontainers.image.version=0.11.91" -t "${IMAGE}" .
+      - docker build --platform linux/arm64 --build-arg "BUN_IMAGE=${BUN_IMAGE_OVERRIDE}" --label "org.opencontainers.image.source=https://github.com/hasna/todos" --label "org.opencontainers.image.revision=${SOURCE_SHA}" --label "org.opencontainers.image.version=0.11.92" -t "${IMAGE}" .
       - test "$(docker image inspect "${IMAGE}" --format '{{.Architecture}}')" = arm64
       - test "$(docker run --rm --entrypoint bun "${IMAGE}" --version)" = 1.3.14
-      - test "$(docker run --rm --entrypoint bun "${IMAGE}" dist/server/index.js --version)" = 0.11.91
+      - test "$(docker run --rm --entrypoint bun "${IMAGE}" dist/server/index.js --version)" = 0.11.92
       - docker run --rm --entrypoint sh "${IMAGE}" -ec 'apk info -e musl; apk info -vv | grep -q "^libcrypto3-3.5.7-r0 - "; apk info -vv | grep -q "^libssl3-3.5.7-r0 - "; test -x /lib/ld-musl-aarch64.so.1; test ! -e /lib/ld-linux-aarch64.so.1; test ! -e /lib64/ld-linux-aarch64.so.1; apk info -e bash; ! apk info -e glibc; ! apk info -e perl; ! apk info -e sqlite-libs; ! apk info -e openssl; ! command -v openssl; ! command -v git; ! command -v tmux'
       - docker run --rm --entrypoint sh "${IMAGE}" -ec 'test -f /app/bin/contracts-cli.js; test ! -e /app/node_modules; test ! -e /app/package.json; test ! -e /app/bun.lock; ! find /app -type f \( -name package.json -o -name bun.lock -o -name bun.lockb \) -print -quit | grep -q .'
       - docker run --rm --entrypoint sh "${IMAGE}" -c 'apk info -vv | sort' > container-apk-inventory.txt

@@ -3,7 +3,8 @@ import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
-import { isCloudRouting } from "./cloud-router.js";
+import { cloudResolveTaskRef, getTodosCloudClient, isCloudRouting } from "./cloud-router.js";
+import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
 import { getDatabase, resolvePartialId } from "../db/database.js";
 import { ensureProject, getProject, getProjectByPath, slugify } from "../db/projects.js";
 import { getPackageVersion } from "../lib/package-version.js";
@@ -60,6 +61,13 @@ export function resolveTaskId(partialId: string): string {
   // normalized or it would 404 a task that actually exists.
   if (TASK_UUID_RE.test(raw)) return raw.toLowerCase();
 
+  if (isCloudRouting()) {
+    throw new Error(
+      `REMOTE_SHORT_REF_REQUIRES_HTTP_RESOLUTION: ${raw} must be resolved through /v1 before local helpers; ` +
+        "local SQLite fallback is disabled",
+    );
+  }
+
   // Rule 2: prefix / short_id → expand against the local mirror.
   const cloud = isCloudRouting();
   let similar: { id: string }[] = [];
@@ -88,6 +96,14 @@ export function resolveTaskId(partialId: string): string {
     ));
   }
   process.exit(1);
+}
+
+/** Resolve task references through the selected authority before any DB helper. */
+export async function resolveTaskIdForCommand(
+  input: string,
+  cloud: HasnaStorageClient | null = getTodosCloudClient(),
+): Promise<string> {
+  return cloud ? cloudResolveTaskRef(cloud, input) : resolveTaskId(input);
 }
 
 type CloudTaskResolutionCacheInput = Pick<Task, "id"> & Partial<Task>;

@@ -12,6 +12,7 @@ export function localRoutingTestEnv(
     ...process.env,
     HASNA_TODOS_STORAGE_MODE: "local",
     TODOS_STORAGE_MODE: "local",
+    HASNA_TODOS_DB_PATH: "",
     HASNA_TODOS_API_URL: "",
     HASNA_TODOS_API_KEY: "",
     TODOS_API_URL: "",

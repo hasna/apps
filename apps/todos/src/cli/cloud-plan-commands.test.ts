@@ -170,7 +170,7 @@ describe("cloud CLI plan commands", () => {
     }
   });
 
-  test("fails closed when an older cloud server has no plan delete route", async () => {
+  test("treats a resource DELETE 404 as a normal not-found result", async () => {
     const server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -190,8 +190,8 @@ describe("cloud CLI plan commands", () => {
     try {
       const result = await runCli(["--json", "plans", "--delete", PLAN_ID], root, `http://127.0.0.1:${server.port}`);
       expect(result.exitCode).not.toBe(0);
-      expect(result.stderr).toContain("upgrade the server before retrying");
-      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe("");
+      expect(JSON.parse(result.stdout)).toEqual({ deleted: false });
     } finally {
       server.stop(true);
     }

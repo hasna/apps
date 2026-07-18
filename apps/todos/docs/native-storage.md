@@ -12,13 +12,48 @@ export.
 ## Modes
 
 - `HASNA_TODOS_STORAGE_MODE=local`: default local SQLite/file behavior.
-- `HASNA_TODOS_STORAGE_MODE=remote`: use a remote adapter backed by Postgres
-  on AWS RDS and optional S3 artifact storage.
+- `HASNA_TODOS_STORAGE_MODE=remote`: ordinary CLI coordination commands use the
+  configured authenticated Todos `/v1` HTTP authority. The public storage
+  library can separately construct an injected Postgres adapter for server-side
+  integrations.
 - `HASNA_TODOS_STORAGE_MODE=hybrid`: use a local plus remote adapter with
   explicit sync behavior.
 
 Legacy hosted API toggles are not storage selectors. They must not change the
 local CLI default.
+
+## CLI Remote HTTP Authority
+
+The open CLI remote route uses only these canonical settings:
+
+| Setting | Purpose |
+| --- | --- |
+| `HASNA_TODOS_STORAGE_MODE` | Set to `remote`, `self_hosted`, `cloud`, or `hybrid` to select authenticated HTTP. |
+| `HASNA_TODOS_API_URL` | Self-hosted Todos authority root, or the same root ending in `/v1`. |
+| `HASNA_TODOS_API_KEY` | API key supplied to the authority as a bearer credential. |
+
+The URL must use HTTPS, except for loopback development authorities. Userinfo,
+query strings, fragments, redirects, `/api/v1`, and non-root custom paths are
+rejected. The CLI does not infer an authority from `TODOS_URL`, does not use a
+private SaaS route, and does not send the bearer credential across redirects.
+
+Remote selection is fail-closed. A missing URL or key, conflicting mode
+selectors, an incompatible collection route, authentication failure, timeout,
+or server failure is reported with a `REMOTE_*` diagnostic before local SQLite
+can open. A resource-level 404 remains a normal not-found result. There is no
+SQLite or Postgres fallback for a remote CLI invocation.
+
+The supported coordination surface includes storage/status diagnostics,
+projects, task lists, project-scoped plans, task create/upsert/list/show/update,
+task-list and plan moves, comments, start/complete/delete, and next/claim. A
+command without a safe `/v1` equivalent exits with `REMOTE_COMMAND_UNSUPPORTED`
+before local helpers run.
+
+`todos storage status --json` is a configuration-only diagnostic. In remote
+mode it reports the redacted `/v1` base, URL/key presence, HTTP transport, and
+the disabled local fallback without opening a database or making a network
+request. `todos health` and `todos doctor` authenticate against the required
+remote routes.
 
 ## Native AWS Configuration
 

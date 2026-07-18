@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, readdirSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   validateNpmView,
   getInstallSmokeCommands,
@@ -10,26 +11,43 @@ import {
   validatePackedProvenanceMetadata,
   validateInstallSmokeCommands,
   validatePublicTextSurfaces,
+  validateReleaseArtifactIntegrity,
+  validateReleaseGateArguments,
+  isPublicReleaseTextSurface,
   validateReleaseProvenanceMetadata,
+  validateReleaseRepositoryState,
   validateRootPackageMetadata,
   validateSdkPackageMetadata,
   type PackageJson,
   type ReleaseGateFailure,
+  type ReleaseSourceIdentity,
   type TextFile,
 } from "../src/lib/public-release-gate";
 
 type PackResult = {
   filename: string;
   files: Array<{ path: string }>;
+  integrity?: string;
 };
 
 const root = resolve(import.meta.dir, "..");
-const args = new Set(process.argv.slice(2));
+const rawArgs = process.argv.slice(2);
+const args = new Set(rawArgs);
 
 main();
 
 function main(): void {
   const failures: ReleaseGateFailure[] = [];
+  const argumentFailures = validateReleaseGateArguments(rawArgs);
+  if (argumentFailures.length > 0) failReleaseGate(argumentFailures);
+  const repositoryState = runCapture("git", ["status", "--porcelain=v1", "--untracked-files=all"]);
+  if (repositoryState.status !== 0) {
+    failReleaseGate([{ check: "release-worktree-state", message: repositoryState.stderr || "git status failed" }]);
+  }
+  const repositoryFailures = validateReleaseRepositoryState(repositoryState.stdout);
+  if (repositoryFailures.length > 0) failReleaseGate(repositoryFailures);
+
+  const sourceIdentity = readReleaseSourceIdentity();
   const packageJson = readJson<PackageJson>("package.json");
   const sdkPackageJson = readJson<PackageJson>("sdk/package.json");
 
@@ -48,54 +66,93 @@ function main(): void {
     }
   }
 
-  if (!args.has("--skip-build")) {
-    runOrExit("bun", ["run", "build"]);
+  runOrExit("bun", ["run", "build"]);
+  writeReleaseProvenance(packageJson, sourceIdentity);
+
+  const postBuildState = runCapture("git", ["status", "--porcelain=v1", "--untracked-files=all"]);
+  if (postBuildState.status !== 0) {
+    failReleaseGate([{ check: "release-worktree-state", message: postBuildState.stderr || "git status after build failed" }]);
   }
-  writeReleaseProvenance(packageJson);
+  const postBuildFailures = validateReleaseRepositoryState(postBuildState.stdout);
+  if (postBuildFailures.length > 0) failReleaseGate(postBuildFailures);
 
   const tempDir = mkdtempSync(join(tmpdir(), "todos-release-"));
+  let tarballIntegrity = "";
   try {
     const pack = npmPack(tempDir);
+    const tarball = join(tempDir, pack.filename);
+    tarballIntegrity = `sha512-${createHash("sha512").update(readFileSync(tarball)).digest("base64")}`;
+    failures.push(...validateReleaseArtifactIntegrity(pack.integrity, tarballIntegrity));
     failures.push(...validatePackedPackageFiles(pack.files.map((file) => `package/${file.path}`)));
-    failures.push(...validatePackedProvenanceMetadata(readPackedPackageJson(join(tempDir, pack.filename))));
-    failures.push(...validateReleaseProvenanceMetadata(readPackedReleaseProvenance(join(tempDir, pack.filename)), packageJson));
-    failures.push(...scanPackedText(join(tempDir, pack.filename)));
+    failures.push(...validatePackedProvenanceMetadata(readPackedPackageJson(tarball), packageJson));
+    failures.push(...validateReleaseProvenanceMetadata(readPackedReleaseProvenance(tarball), packageJson, sourceIdentity));
+    failures.push(...scanPackedText(tarball));
 
     if (!args.has("--skip-install-smoke")) {
-      installSmoke(join(tempDir, pack.filename));
+      installSmoke(tarball);
     }
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
 
-  if (failures.length > 0) {
-    console.error("Public release gate failed:");
-    for (const failure of failures) {
-      console.error(`- ${failure.check}: ${failure.message}`);
-    }
-    process.exit(1);
+  const postPackState = runCapture("git", ["status", "--porcelain=v1", "--untracked-files=all"]);
+  if (postPackState.status !== 0) {
+    failures.push({ check: "release-worktree-state", message: postPackState.stderr || "git status after pack failed" });
+  } else {
+    failures.push(...validateReleaseRepositoryState(postPackState.stdout));
   }
 
+  if (failures.length > 0) failReleaseGate(failures);
+
+  console.log(JSON.stringify({
+    package: `${packageJson.name}@${packageJson.version}`,
+    git_commit: sourceIdentity.gitCommit,
+    git_tree: sourceIdentity.gitTree,
+    source_tree_sha256: sourceIdentity.sourceTreeSha256,
+    tarball_integrity: tarballIntegrity,
+  }));
   console.log("Public release gate passed.");
 }
 
-function writeReleaseProvenance(packageJson: PackageJson): void {
-  const commit = runCapture("git", ["rev-parse", "HEAD"]);
-  if (commit.status !== 0) {
-    console.error(commit.stderr || "Could not resolve git commit for release provenance.");
-    process.exit(commit.status || 1);
-  }
-
+function writeReleaseProvenance(packageJson: PackageJson, sourceIdentity: ReleaseSourceIdentity): void {
   writeFileSync(
     join(root, "dist", "release-provenance.json"),
     `${JSON.stringify({
       packageName: packageJson.name,
       packageVersion: packageJson.version,
       repository: packageJson.repository?.url,
-      gitCommit: commit.stdout.trim(),
+      gitCommit: sourceIdentity.gitCommit,
+      gitTree: sourceIdentity.gitTree,
+      sourceTreeSha256: sourceIdentity.sourceTreeSha256,
       generatedAt: new Date().toISOString(),
     }, null, 2)}\n`,
   );
+}
+
+function readReleaseSourceIdentity(): ReleaseSourceIdentity {
+  const commit = runCapture("git", ["rev-parse", "HEAD"]);
+  const tree = runCapture("git", ["rev-parse", "HEAD^{tree}"]);
+  const listing = spawnSync("git", ["ls-tree", "-r", "--full-tree", "-z", "HEAD"], {
+    cwd: root,
+    env: process.env,
+  });
+  if (commit.status !== 0 || tree.status !== 0 || listing.status !== 0 || !listing.stdout) {
+    failReleaseGate([{
+      check: "release-source-identity",
+      message: commit.stderr || tree.stderr || listing.stderr?.toString("utf8") || "could not resolve clean source identity",
+    }]);
+  }
+  return {
+    gitCommit: commit.stdout.trim(),
+    gitTree: tree.stdout.trim(),
+    sourceTreeSha256: createHash("sha256").update(listing.stdout).digest("hex"),
+  };
+}
+
+function failReleaseGate(failures: ReleaseGateFailure[]): never {
+  console.error("Public release gate failed:");
+  for (const failure of failures) console.error(`- ${failure.check}: ${failure.message}`);
+  process.exit(1);
 }
 
 function npmPack(destination: string): PackResult {
@@ -184,6 +241,8 @@ function readPackedReleaseProvenance(tarball: string): {
   packageVersion?: string;
   repository?: string;
   gitCommit?: string;
+  gitTree?: string;
+  sourceTreeSha256?: string;
   generatedAt?: string;
 } {
   return readPackedJson(tarball, "package/dist/release-provenance.json");
@@ -221,7 +280,9 @@ function collectPublicTextSurfaces(dir: string): TextFile[] {
     if (stats.isDirectory()) return collectPublicTextSurfaces(path);
     if (!/\.(md|json|ya?ml|sh|ts|tsx)$/.test(path)) return [];
     if (path.endsWith(".test.ts") || path.endsWith(".test.tsx")) return [];
-    return [{ path: relative(root, path), text: readFileSync(path, "utf8") }];
+    const publicPath = relative(root, path);
+    if (!isPublicReleaseTextSurface(publicPath)) return [];
+    return [{ path: publicPath, text: readFileSync(path, "utf8") }];
   });
 }
 

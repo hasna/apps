@@ -72,9 +72,14 @@ import {
   cloudTaskStats,
   cloudRecentActivity,
   cloudNextTask,
+  cloudClaimNext,
+  cloudResolveProjectRef,
   cloudBlockingDepsMap,
   cloudRecap,
   cloudTimeline,
+  cloudListProjects,
+  cloudListPlans,
+  cloudListTaskLists,
 } from "../cloud-router.js";
 import { TASK_STATUSES } from "../../types/index.js";
 
@@ -284,19 +289,21 @@ export function registerQueryCommands(program: Command) {
     .action(async (opts) => {
       const globalOpts = program.opts();
       const json = opts.json || globalOpts.json;
-      const db = getDatabase();
       const filters: Record<string, string> = {};
       const projectInput = opts.project || globalOpts.project;
-      if (projectInput) {
+      const cloud = getTodosCloudClient();
+      if (cloud && projectInput) {
+        filters.project_id = await cloudResolveProjectRef(cloud, projectInput);
+      } else if (projectInput) {
+        const db = getDatabase();
         const pid = autoProject({ project: projectInput })
           || resolvePartialId(db, "projects", projectInput)
           || (db.query("SELECT id FROM projects WHERE path = ? OR name = ? OR task_list_id = ?").get(projectInput, projectInput, projectInput) as any)?.id;
         if (pid) filters.project_id = pid;
       }
-      const cloud = getTodosCloudClient();
       const task = cloud
         ? await cloudNextTask(cloud, opts.agent, Object.keys(filters).length ? filters : undefined)
-        : getNextTask(opts.agent, Object.keys(filters).length ? filters : undefined, db);
+        : getNextTask(opts.agent, Object.keys(filters).length ? filters : undefined, getDatabase());
       if (!task) {
         if (json) { console.log(JSON.stringify(null)); return; }
         console.log(chalk.dim("No tasks available."));
@@ -319,6 +326,18 @@ export function registerQueryCommands(program: Command) {
     .action(async (agent, opts) => {
       const globalOpts = program.opts();
       const json = opts.json || globalOpts.json;
+      const cloud = getTodosCloudClient();
+      if (cloud) {
+        const task = await cloudClaimNext(cloud, agent);
+        if (!task) {
+          if (json) { console.log(JSON.stringify(null)); return; }
+          console.log(chalk.dim("No tasks available to claim."));
+          return;
+        }
+        if (json) { console.log(JSON.stringify(task, null, 2)); return; }
+        console.log(chalk.green(`Claimed: ${task.short_id || task.id.slice(0, 8)} | ${task.priority} | ${task.title}`));
+        return;
+      }
       const db = getDatabase();
       const filters: Record<string, string> = {};
       const projectInput = opts.project || globalOpts.project;
@@ -368,15 +387,19 @@ export function registerQueryCommands(program: Command) {
       const globalOpts = program.opts();
       const json = opts.json || globalOpts.json;
       const filters: Record<string, string> = {};
-      if (opts.project) filters.project_id = opts.project;
+      const projectRef = opts.project || globalOpts.project;
+      if (projectRef) filters.project_id = projectRef;
 
       const cloud = getTodosCloudClient();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let s: any;
       if (cloud) {
+        const projectId = projectRef
+          ? await cloudResolveProjectRef(cloud, projectRef)
+          : undefined;
         // self_hosted cloud routing: build the health snapshot from the shared
         // cloud dataset (counts + active/next lists) instead of the local mirror.
-        const baseFilter = opts.project ? { project_id: opts.project } : {};
+        const baseFilter = projectId ? { project_id: projectId } : {};
         const [stats, pending, in_progress, completed, activeTasks, nextTasks] = await Promise.all([
           cloudGetStats(cloud),
           cloudCountTasks(cloud, { ...baseFilter, status: "pending" } as never),
@@ -387,10 +410,14 @@ export function registerQueryCommands(program: Command) {
         ]);
         s = {
           source: "cloud",
+          transport: "http-v1",
+          authority: { v1_base_url: cloud.baseUrl, local_fallback: false },
           pending,
           in_progress,
           completed,
-          total: (stats.tasks as number | undefined) ?? pending + in_progress + completed,
+          total: projectId
+            ? pending + in_progress + completed
+            : (stats.tasks as number | undefined) ?? pending + in_progress + completed,
           active_work: activeTasks.map((t) => ({
             id: t.id,
             short_id: t.short_id ?? null,
@@ -830,6 +857,42 @@ export function registerQueryCommands(program: Command) {
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
       const globalOpts = program.opts();
+      const cloud = getTodosCloudClient();
+      if (cloud) {
+        if (opts.apply || opts.fix) {
+          handleError(new Error(
+            "REMOTE_COMMAND_UNSUPPORTED: doctor --apply cannot repair a remote /v1 authority; local SQLite fallback is disabled",
+          ));
+        }
+        const [stats, projects, taskLists, plans] = await Promise.all([
+          cloudGetStats(cloud),
+          cloudListProjects(cloud),
+          cloudListTaskLists(cloud),
+          cloudListPlans(cloud),
+        ]);
+        const result = {
+          schema_version: "todos.remote-doctor.v1",
+          ok: true,
+          dry_run: true,
+          mode: "remote-http",
+          authority: { v1_base_url: cloud.baseUrl, local_fallback: false },
+          routes: {
+            stats: true,
+            projects: projects.length,
+            task_lists: taskLists.length,
+            plans: plans.length,
+            tasks: stats.tasks,
+          },
+        };
+        if (opts.json || globalOpts.json) console.log(JSON.stringify(result));
+        else {
+          console.log(chalk.bold("todos doctor (remote)\n"));
+          console.log(`  ${chalk.green("✓")} Authenticated /v1 authority: ${cloud.baseUrl}`);
+          console.log(`  ${chalk.green("✓")} Required coordination routes are available`);
+          console.log("  Local fallback: disabled");
+        }
+        return;
+      }
       const { runTodosDoctor } = await import("../../lib/doctor.js");
       const result = runTodosDoctor({ apply: Boolean(opts.apply || opts.fix) });
 
@@ -999,6 +1062,32 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .action(async (opts) => {
       const globalOpts = program.opts();
       const checks: { name: string; ok: boolean; message: string }[] = [];
+
+      const cloud = getTodosCloudClient();
+      if (cloud) {
+        try {
+          const stats = await cloudGetStats(cloud);
+          checks.push({ name: "Authority", ok: true, message: `${cloud.baseUrl} · authenticated HTTP` });
+          checks.push({ name: "Tasks", ok: true, message: `${stats.tasks ?? 0} tasks` });
+          checks.push({ name: "Fallback", ok: true, message: "local SQLite disabled" });
+        } catch (error) {
+          checks.push({ name: "Authority", ok: false, message: error instanceof Error ? error.message : String(error) });
+        }
+        const { getPackageVersion } = await import("../helpers.js");
+        checks.push({ name: "Version", ok: true, message: `v${getPackageVersion()} · remote HTTP client` });
+        const ok = checks.every((check) => check.ok);
+        if (opts.json || globalOpts.json) {
+          console.log(JSON.stringify({ ok, mode: "remote-http", checks }));
+        } else {
+          console.log(chalk.bold("todos health\n"));
+          for (const check of checks) {
+            const icon = check.ok ? chalk.green("✓") : chalk.yellow("!");
+            console.log(`  ${icon} ${check.name.padEnd(14)} ${check.message}`);
+          }
+        }
+        if (!ok) process.exitCode = 1;
+        return;
+      }
 
       // 1. Database check
       try {

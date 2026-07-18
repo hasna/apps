@@ -32,12 +32,13 @@ import {
   cloudUpsertTaskByFingerprint,
   cloudResolveProjectRef,
   cloudResolveTaskListRef,
+  cloudResolvePlan,
 } from "../cloud-router.js";
 import type { TaskPriority, TaskStatus } from "../../types/index.js";
 import {
   formatTaskLine,
   resolveTaskId,
-  cacheCloudTaskForIdResolution,
+  resolveTaskIdForCommand,
   normalizeStatus,
   autoProject,
   handleError,
@@ -268,13 +269,19 @@ export function registerTaskCommands(program: Command) {
           if (opts.list && !cloudTaskListId) {
             throw new Error(`Could not resolve task list ID or slug: ${opts.list}`);
           }
+          const cloudPlan = opts.plan
+            ? await cloudResolvePlan(cloud, opts.plan, cloudProjectId)
+            : null;
+          if (opts.plan && !cloudPlan) {
+            throw new Error(`Could not resolve plan ID or slug: ${opts.plan}`);
+          }
           task = await cloudCreateTask(cloud, {
             title,
             description: opts.description,
             priority: parsePriority(opts.priority),
-            parent_id: opts.parent,
+            parent_id: opts.parent ? await resolveTaskIdForCommand(opts.parent, cloud) : undefined,
             tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
-            plan_id: opts.plan,
+            plan_id: cloudPlan?.id,
             assigned_to: opts.assign,
             status: parseStatus(opts.status),
             task_list_id: cloudTaskListId,
@@ -288,7 +295,6 @@ export function registerTaskCommands(program: Command) {
             due_at: opts.due ? (opts.due.length === 10 ? opts.due + "T00:00:00.000Z" : opts.due) : undefined,
             reason: opts.reason,
           });
-          cacheCloudTaskForIdResolution(task);
         } catch (e) {
           handleError(e);
         }
@@ -388,18 +394,6 @@ export function registerTaskCommands(program: Command) {
       opts.tags = opts.tags || opts.tag;
       opts.list = opts.list || opts.taskList;
       const explicitProject = opts.project || globalOpts.project;
-      const projectId = explicitProject
-        ? resolveProjectIdOrSlug(explicitProject)
-        : autoProject(globalOpts);
-      const taskListId = opts.list ? (() => {
-        const db = getDatabase();
-        const id = resolvePartialId(db, "task_lists", opts.list);
-        if (!id) {
-          console.error(chalk.red(`Could not resolve task list ID: ${opts.list}`));
-          process.exit(1);
-        }
-        return id;
-      })() : undefined;
       // self_hosted cloud routing: dedupe-and-upsert on the SHARED dataset. The
       // local path wrote the task to this machine's sqlite by fingerprint, so on a
       // flipped machine the row never reached the cloud /v1 API (a split-brain write).
@@ -407,6 +401,12 @@ export function registerTaskCommands(program: Command) {
       if (cloud) {
         let cloudResult;
         try {
+          const projectId = explicitProject
+            ? await cloudResolveProjectRef(cloud, explicitProject)
+            : undefined;
+          const taskListId = opts.list
+            ? await cloudResolveTaskListRef(cloud, opts.list, projectId)
+            : undefined;
           cloudResult = await cloudUpsertTaskByFingerprint(cloud, {
             fingerprint: opts.fingerprint,
             title: opts.title,
@@ -431,6 +431,18 @@ export function registerTaskCommands(program: Command) {
         }
         return;
       }
+      const projectId = explicitProject
+        ? resolveProjectIdOrSlug(explicitProject)
+        : autoProject(globalOpts);
+      const taskListId = opts.list ? (() => {
+        const db = getDatabase();
+        const id = resolvePartialId(db, "task_lists", opts.list);
+        if (!id) {
+          console.error(chalk.red(`Could not resolve task list ID: ${opts.list}`));
+          process.exit(1);
+        }
+        return id;
+      })() : undefined;
       let result;
       try {
         result = upsertTaskByFingerprint({
@@ -706,8 +718,12 @@ export function registerTaskCommands(program: Command) {
     .action(async () => {
       const globalOpts = program.opts();
       const cloud = getTodosCloudClient();
-      const projectId = cloud ? undefined : autoProject(globalOpts);
-      const all = cloud ? await cloudListTasks(cloud, {}) : listTasks({ project_id: projectId });
+      const projectId = cloud
+        ? (globalOpts.project ? await cloudResolveProjectRef(cloud, globalOpts.project) : undefined)
+        : autoProject(globalOpts);
+      const all = cloud
+        ? await cloudListTasks(cloud, projectId ? { project_id: projectId } : {})
+        : listTasks({ project_id: projectId });
       const counts: Record<string, number> = { total: all.length };
       for (const t of all) counts[t.status] = (counts[t.status] || 0) + 1;
 
@@ -735,7 +751,7 @@ export function registerTaskCommands(program: Command) {
       const cloud = getTodosCloudClient();
       let task: any;
       if (cloud) {
-        const remote = await cloudGetTask(cloud, resolveTaskId(id));
+        const remote = await cloudGetTask(cloud, await resolveTaskIdForCommand(id, cloud));
         const commentPage = remote ? await cloudListComments(cloud, remote.id) : null;
         // The /v1 API returns the task row without relation graphs; default the
         // relation arrays so the detail renderer below never touches undefined.
@@ -1057,20 +1073,43 @@ export function registerTaskCommands(program: Command) {
       opts.tags = opts.tags || opts.tag;
       opts.list = opts.list || opts.taskList;
 
+      if (opts.plan && opts.clearPlan) {
+        handleError(new Error("Use either --plan or --clear-plan, not both."));
+      }
+      if (opts.approval && opts.clearApproval) {
+        handleError(new Error("Use either --approval or --clear-approval, not both."));
+      }
+      if (opts.list && opts.clearList) {
+        handleError(new Error("Use either --list or --clear-list, not both."));
+      }
+      if (opts.workingDir !== undefined && opts.clearWorkingDir) {
+        handleError(new Error("Use either --working-dir or --clear-working-dir, not both."));
+      }
+
       // self_hosted cloud routing: PATCH straight against <app>.hasna.xyz/v1.
       const cloud = getTodosCloudClient();
       if (cloud) {
         let task;
         try {
-          task = await cloudUpdateTask(cloud, resolveTaskId(id), {
+          const currentId = await resolveTaskIdForCommand(id, cloud);
+          const current = await cloudGetTask(cloud, currentId);
+          if (!current) throw new Error(`Task not found: ${id}`);
+          const plan = opts.plan ? await cloudResolvePlan(cloud, opts.plan, current.project_id ?? undefined) : null;
+          if (opts.plan && !plan) throw new Error(`Plan not found: ${opts.plan}`);
+          const taskListId = opts.list
+            ? await cloudResolveTaskListRef(cloud, opts.list, current.project_id ?? undefined)
+            : opts.clearList
+              ? null
+              : undefined;
+          task = await cloudUpdateTask(cloud, currentId, {
             title: opts.title,
             description: opts.description,
             status: parseStatus(opts.status),
             priority: parsePriority(opts.priority),
             assigned_to: opts.assign,
             tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
-            plan_id: opts.plan ? opts.plan : opts.clearPlan ? null : undefined,
-            task_list_id: opts.list ? opts.list : opts.clearList ? null : undefined,
+            plan_id: plan?.id ?? (opts.clearPlan ? null : undefined),
+            task_list_id: taskListId,
             working_dir: opts.workingDir ? resolve(opts.workingDir) : opts.clearWorkingDir ? null : undefined,
             estimated_minutes: opts.estimated !== undefined ? parseIntOption(opts.estimated, "--estimated") : undefined,
             sla_minutes: opts.slaMinutes !== undefined || opts.sla !== undefined ? parseIntOption(opts.slaMinutes ?? opts.sla, "--sla-minutes") : undefined,
@@ -1096,23 +1135,6 @@ export function registerTaskCommands(program: Command) {
         console.error(chalk.red(`Task not found: ${id}`));
         process.exit(1);
       }
-      if (opts.plan && opts.clearPlan) {
-        console.error(chalk.red("Use either --plan or --clear-plan, not both."));
-        process.exit(1);
-      }
-      if (opts.approval && opts.clearApproval) {
-        console.error(chalk.red("Use either --approval or --clear-approval, not both."));
-        process.exit(1);
-      }
-      if (opts.list && opts.clearList) {
-        console.error(chalk.red("Use either --list or --clear-list, not both."));
-        process.exit(1);
-      }
-      if (opts.workingDir !== undefined && opts.clearWorkingDir) {
-        console.error(chalk.red("Use either --working-dir or --clear-working-dir, not both."));
-        process.exit(1);
-      }
-
       const taskListId = opts.list ? (() => {
         const resolved = resolveTaskListRef(opts.list, current.project_id);
         if ("error" in resolved) {
@@ -1170,7 +1192,7 @@ export function registerTaskCommands(program: Command) {
       if (cloud) {
         let task;
         try {
-          task = await cloudTaskAction(cloud, resolveTaskId(id), "complete", { agent_id: globalOpts.agent });
+          task = await cloudTaskAction(cloud, await resolveTaskIdForCommand(id, cloud), "complete", { agent_id: globalOpts.agent });
         } catch (e) {
           handleError(e);
         }
@@ -1274,7 +1296,7 @@ export function registerTaskCommands(program: Command) {
       let task;
       if (cloud) {
         try {
-          task = await cloudTaskAction(cloud, resolveTaskId(id), "start", { agent_id: agentId });
+          task = await cloudTaskAction(cloud, await resolveTaskIdForCommand(id, cloud), "start", { agent_id: agentId });
         } catch (e) {
           handleError(e);
         }
@@ -1358,10 +1380,11 @@ export function registerTaskCommands(program: Command) {
     .action(async (id: string) => {
       const globalOpts = program.opts();
       const cloud = getTodosCloudClient();
-      const deleted = cloud ? await cloudDeleteTask(cloud, resolveTaskId(id)) : deleteTask(resolveTaskId(id));
+      const deleted = cloud ? await cloudDeleteTask(cloud, await resolveTaskIdForCommand(id, cloud)) : deleteTask(resolveTaskId(id));
 
       if (globalOpts.json) {
         output({ deleted }, true);
+        if (!deleted) process.exitCode = 1;
       } else if (deleted) {
         console.log(chalk.green("Task deleted."));
       } else {
@@ -1374,8 +1397,22 @@ export function registerTaskCommands(program: Command) {
   program
     .command("remove <id>")
     .description("Remove/delete a task (alias for delete)")
-    .action((id: string) => {
+    .action(async (id: string) => {
       const globalOpts = program.opts();
+      const cloud = getTodosCloudClient();
+      if (cloud) {
+        const deleted = await cloudDeleteTask(cloud, await resolveTaskIdForCommand(id, cloud));
+        if (globalOpts.json) {
+          output({ deleted }, true);
+          if (!deleted) process.exitCode = 1;
+        } else if (deleted) {
+          console.log(chalk.green("Task removed."));
+        } else {
+          console.error(chalk.red("Task not found."));
+          process.exit(1);
+        }
+        return;
+      }
       const resolvedId = resolveTaskId(id);
       const deleted = deleteTask(resolvedId);
       if (globalOpts.json) {

@@ -1,24 +1,11 @@
 /**
- * Client-side self_hosted cloud routing for the `todos` CLI.
+ * Authenticated `/v1` routing for the open Todos CLI.
  *
- * THE MISSING PIECE (B2): historically the CLI always read/wrote the local
- * SQLite store even when a machine was flipped to `self_hosted` — there was
- * ZERO `/v1` / bearer / API-URL code on the client, so `HASNA_TODOS_*` env had
- * no effect. This module wires the CLI's task data path to the cloud HTTP API
- * (`https://todos.hasna.xyz/v1`) via the LOCKED `@hasna/contracts` HTTP storage
- * client whenever the client-flip contract resolves to `cloud-http`:
- *
- *   mode = self_hosted (or cloud)  AND  HASNA_TODOS_API_URL  AND  HASNA_TODOS_API_KEY
- *
- * When those are set, ALL task reads and writes go to the cloud with the bearer
- * key — NOT local, NOT a DSN. When they are unset, the client falls straight
- * back to the local SQLite store. Misconfigured cloud (mode set but URL/key
- * missing) THROWS via the contracts resolver so we never silently drift back to
- * the wrong dataset.
- *
- * SAFETY: reversible by construction (unset the two env vars -> local). Never
- * logs or embeds the API key (it lives only inside the transport). No DSN, no
- * subnet routing — pure API-client path per the locked architecture.
+ * Local mode remains SQLite-backed. An explicit remote/self-hosted mode instead
+ * requires the canonical API URL and API key, validates the authority before a
+ * local-capable command module can run, and never falls back to SQLite. This is
+ * the repo-owned self-hosted REST contract; it has no dependency on a private
+ * SaaS API or database connection string.
  */
 import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
 import { resolve as resolvePath } from "node:path";
@@ -27,31 +14,323 @@ import { redactEvidenceText } from "../lib/redaction.js";
 
 type Env = Record<string, string | undefined>;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const CLOUD_MODES = new Set(["self_hosted", "cloud", "remote", "hybrid"]);
+const VALID_STORAGE_MODES = new Set(["local", ...CLOUD_MODES]);
 
 let _cache: { client: HasnaStorageClient | null } | undefined;
 
+export interface TodosRemoteAuthorityConfigStatus {
+  selected: boolean;
+  ok: boolean;
+  mode: string;
+  api_url_configured: boolean;
+  api_key_configured: boolean;
+  v1_base_url: string | null;
+  issues: string[];
+  local_fallback: false;
+}
+
+export interface TodosCliStorageModeResolution {
+  mode: string;
+  selected: boolean;
+  source: "HASNA_TODOS_STORAGE_MODE" | "TODOS_STORAGE_MODE" | "default";
+}
+
+function cleanMode(value: string | undefined): string | null {
+  const normalized = value?.trim().toLowerCase();
+  return normalized || null;
+}
+
+function modeRole(mode: string): "local" | "remote" {
+  return mode === "local" ? "local" : "remote";
+}
+
 /**
- * Resolve the todos cloud storage client from the environment. Returns a ready
- * client when the flip resolves to `cloud-http`, or `null` for local. Throws
- * when cloud is requested (mode=self_hosted/cloud) but the URL or key is missing
- * — no silent local fallback for a misconfigured cloud request.
+ * Resolve the CLI storage selector without allowing an invalid or conflicting
+ * environment to drift into SQLite. Empty canonical values do not mask the
+ * legacy fallback; explicit canonical/fallback disagreement is rejected.
+ */
+export function resolveTodosCliStorageMode(env: Env = process.env as Env): TodosCliStorageModeResolution {
+  const canonical = cleanMode(env.HASNA_TODOS_STORAGE_MODE);
+  const fallback = cleanMode(env.TODOS_STORAGE_MODE);
+
+  for (const [source, value] of [
+    ["HASNA_TODOS_STORAGE_MODE", canonical],
+    ["TODOS_STORAGE_MODE", fallback],
+  ] as const) {
+    if (value && !VALID_STORAGE_MODES.has(value)) {
+      throw new Error(
+        `REMOTE_STORAGE_MODE_INVALID: ${source}=${value} must be local, remote, self_hosted, cloud, or hybrid; ` +
+          "local SQLite fallback is disabled for invalid routing state",
+      );
+    }
+  }
+
+  if (canonical && fallback && modeRole(canonical) !== modeRole(fallback)) {
+    throw new Error(
+      `REMOTE_STORAGE_MODE_CONFLICT: HASNA_TODOS_STORAGE_MODE=${canonical} conflicts with ` +
+        `TODOS_STORAGE_MODE=${fallback}; local SQLite fallback is disabled`,
+    );
+  }
+
+  const mode = canonical ?? fallback ?? "local";
+  return {
+    mode,
+    selected: CLOUD_MODES.has(mode),
+    source: canonical
+      ? "HASNA_TODOS_STORAGE_MODE"
+      : fallback
+        ? "TODOS_STORAGE_MODE"
+        : "default",
+  };
+}
+
+function requestedStorageMode(env: Env): string {
+  return resolveTodosCliStorageMode(env).mode;
+}
+
+function normalizeRemoteAuthorityUrl(value: string | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    throw new Error(
+      "REMOTE_API_URL_INVALID: HASNA_TODOS_API_URL must be an absolute http(s) URL; local SQLite fallback is disabled",
+    );
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(
+      "REMOTE_API_URL_INVALID: HASNA_TODOS_API_URL must be an absolute http(s) URL; local SQLite fallback is disabled",
+    );
+  }
+  if (url.username || url.password) {
+    throw new Error(
+      "REMOTE_API_URL_INVALID: HASNA_TODOS_API_URL must not contain userinfo; local SQLite fallback is disabled",
+    );
+  }
+  if (url.search || url.hash) {
+    throw new Error(
+      "REMOTE_API_URL_INVALID: HASNA_TODOS_API_URL must not contain a query or fragment; local SQLite fallback is disabled",
+    );
+  }
+  if (url.pathname !== "/" && url.pathname !== "/v1" && url.pathname !== "/v1/") {
+    throw new Error(
+      "REMOTE_API_URL_INVALID: HASNA_TODOS_API_URL must be an authority root or end in /v1, not /api/v1 or another path; " +
+        "local SQLite fallback is disabled",
+    );
+  }
+  const hostname = url.hostname.toLowerCase();
+  const loopback = hostname === "localhost" || hostname === "::1" || hostname === "[::1]" || /^127(?:\.\d{1,3}){3}$/.test(hostname);
+  if (url.protocol === "http:" && !loopback) {
+    throw new Error(
+      "REMOTE_API_URL_INVALID: plaintext HTTP is allowed only for loopback Todos authorities; local SQLite fallback is disabled",
+    );
+  }
+  return url.origin;
+}
+
+export function getTodosRemoteAuthorityConfigStatus(
+  env: Env = process.env as Env,
+): TodosRemoteAuthorityConfigStatus {
+  let resolution: TodosCliStorageModeResolution;
+  try {
+    resolution = resolveTodosCliStorageMode(env);
+  } catch (error) {
+    const issue = error instanceof Error ? error.message : String(error);
+    return {
+      selected: true,
+      ok: false,
+      mode: cleanMode(env.HASNA_TODOS_STORAGE_MODE) ?? cleanMode(env.TODOS_STORAGE_MODE) ?? "invalid",
+      api_url_configured: Boolean(env.HASNA_TODOS_API_URL?.trim()),
+      api_key_configured: Boolean(env.HASNA_TODOS_API_KEY?.trim()),
+      v1_base_url: null,
+      issues: [issue],
+      local_fallback: false,
+    };
+  }
+  const { mode, selected } = resolution;
+  if (!selected) {
+    return {
+      selected: false,
+      ok: true,
+      mode: mode || "local",
+      api_url_configured: false,
+      api_key_configured: false,
+      v1_base_url: null,
+      issues: [],
+      local_fallback: false,
+    };
+  }
+
+  const issues: string[] = [];
+  let apiUrl: string | null = null;
+  try {
+    apiUrl = normalizeRemoteAuthorityUrl(env.HASNA_TODOS_API_URL);
+  } catch (error) {
+    issues.push(error instanceof Error ? error.message : String(error));
+  }
+  const apiKeyConfigured = Boolean(env.HASNA_TODOS_API_KEY?.trim());
+  if (!apiUrl && issues.length === 0) {
+    issues.push(
+      "REMOTE_API_URL_MISSING: remote Todos storage requires HASNA_TODOS_API_URL; local SQLite fallback is disabled",
+    );
+  }
+  if (!apiKeyConfigured) {
+    issues.push(
+      "REMOTE_API_KEY_MISSING: remote Todos storage requires HASNA_TODOS_API_KEY; local SQLite fallback is disabled",
+    );
+  }
+
+  return {
+    selected: true,
+    ok: issues.length === 0,
+    mode,
+    api_url_configured: apiUrl !== null,
+    api_key_configured: apiKeyConfigured,
+    v1_base_url: apiUrl ? `${apiUrl}/v1` : null,
+    issues,
+    local_fallback: false,
+  };
+}
+
+function requireTodosRemoteAuthorityEnv(env: Env): Env {
+  const status = getTodosRemoteAuthorityConfigStatus(env);
+  if (!status.ok) throw new Error(status.issues[0]);
+  return {
+    ...env,
+    HASNA_TODOS_STORAGE_MODE: "cloud",
+    HASNA_TODOS_API_URL: status.v1_base_url!.replace(/\/v1$/, ""),
+    HASNA_TODOS_API_KEY: env.HASNA_TODOS_API_KEY!.trim(),
+  };
+}
+
+function classifyRemoteRequestError(baseUrl: string, route: string, error: unknown): never {
+  const status = error && typeof error === "object" ? (error as { status?: unknown }).status : undefined;
+  if (status === 401) {
+    throw new Error(
+      `REMOTE_API_UNAUTHORIZED: configured Todos authority ${baseUrl} rejected HASNA_TODOS_API_KEY for ${route}; ` +
+        "local SQLite fallback is disabled",
+      { cause: error },
+    );
+  }
+  if (status === 403) {
+    throw new Error(
+      `REMOTE_API_FORBIDDEN: configured Todos authority ${baseUrl} denied ${route}; local SQLite fallback is disabled`,
+      { cause: error },
+    );
+  }
+  if (typeof status === "number" && status >= 300 && status < 400) {
+    throw new Error(
+      `REMOTE_API_REDIRECT_REJECTED: configured Todos authority ${baseUrl} redirected ${route}; ` +
+        "authenticated redirects are disabled to prevent credential leakage",
+      { cause: error },
+    );
+  }
+  if (typeof status === "number" && status >= 500) {
+    throw new Error(
+      `REMOTE_API_UNAVAILABLE: configured Todos authority ${baseUrl} returned HTTP ${status} for ${route}; ` +
+        "local SQLite fallback is disabled",
+      { cause: error },
+    );
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  if ((error instanceof Error && error.name === "AbortError") || /abort|timed?\s*out/i.test(message)) {
+    throw new Error(
+      `REMOTE_API_TIMEOUT: configured Todos authority ${baseUrl} timed out for ${route}; local SQLite fallback is disabled`,
+      { cause: error },
+    );
+  }
+  if (status === undefined) {
+    throw new Error(
+      `REMOTE_API_UNREACHABLE: configured Todos authority ${baseUrl} could not be reached for ${route}; ` +
+        "local SQLite fallback is disabled",
+      { cause: error },
+    );
+  }
+  throw error;
+}
+
+function protectRemoteClient(client: HasnaStorageClient): HasnaStorageClient {
+  const baseUrl = remoteAuthorityBase(client);
+  const protect = async <T>(route: string, request: () => Promise<T>): Promise<T> => {
+    try {
+      return await request();
+    } catch (error) {
+      return classifyRemoteRequestError(baseUrl, route, error);
+    }
+  };
+  const transport = client.transport;
+  const protectedTransport = {
+    baseUrl: transport.baseUrl,
+    request: <T = unknown>(method: string, path: string, body?: unknown, options?: Parameters<typeof transport.request>[3]) =>
+      protect(path, () => transport.request<T>(method, path, body, options)),
+    get: <T = unknown>(path: string, options?: Parameters<typeof transport.get>[1]) =>
+      protect(path, () => transport.get<T>(path, options)),
+    post: <T = unknown>(path: string, body?: unknown, options?: Parameters<typeof transport.post>[2]) =>
+      protect(path, () => transport.post<T>(path, body, options)),
+    put: <T = unknown>(path: string, body?: unknown, options?: Parameters<typeof transport.put>[2]) =>
+      protect(path, () => transport.put<T>(path, body, options)),
+    patch: <T = unknown>(path: string, body?: unknown, options?: Parameters<typeof transport.patch>[2]) =>
+      protect(path, () => transport.patch<T>(path, body, options)),
+    del: <T = unknown>(path: string, body?: unknown, options?: Parameters<typeof transport.del>[2]) =>
+      protect(path, () => transport.del<T>(path, body, options)),
+  };
+  return {
+    name: client.name,
+    baseUrl: client.baseUrl,
+    transport: protectedTransport,
+    list: (resource, options) => protect(`/${resource}`, () => client.list(resource, options)),
+    get: (resource, id, options) => protect(`/${resource}/${encodeURIComponent(id)}`, () => client.get(resource, id, options)),
+    create: (resource, body, options) => protect(`/${resource}`, () => client.create(resource, body, options)),
+    update: (resource, id, patch, options) => protect(`/${resource}/${encodeURIComponent(id)}`, () => client.update(resource, id, patch, options)),
+    delete: (resource, id, options) => protect(`/${resource}/${encodeURIComponent(id)}`, () => client.delete(resource, id, options)),
+  };
+}
+
+function remoteAuthorityBase(client: HasnaStorageClient): string {
+  return client.baseUrl.replace(/\/v1\/?$/, "");
+}
+
+async function requiredRemoteRoute<T>(
+  client: HasnaStorageClient,
+  route: string,
+  request: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await request();
+  } catch (error) {
+    const status = error && typeof error === "object" ? (error as { status?: unknown }).status : undefined;
+    if (status === 404) {
+      throw new Error(
+        `REMOTE_API_INCOMPATIBLE: configured Todos authority ${remoteAuthorityBase(client)} does not expose ${route}; ` +
+          "deploy the @hasna/todos /v1 server contract before retrying; local SQLite fallback is disabled",
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+}
+
+/**
+ * Resolve the Todos HTTP storage client from the environment. Returns a ready
+ * client for an explicit remote mode, or `null` for local mode. A selected
+ * remote mode with a missing or invalid URL/key always throws.
  */
 export function getTodosCloudClient(env: Env = process.env as Env): HasnaStorageClient | null {
   if (_cache !== undefined) return _cache.client;
-  // Local-first guard (flip safety): NEVER route to cloud unless a storage MODE is
-  // explicitly requested. @hasna/contracts >= 0.5.1 changed the resolver so that a
-  // bare API_URL+API_KEY (no mode) resolves to cloud — which would silently drift
-  // any machine that merely has those env vars present, violating the reversible
-  // "unset the mode -> local" contract. Require an explicit cloud mode here so the
-  // flip stays deliberate and `HASNA_TODOS_STORAGE_MODE` is the single switch.
-  const mode = (env.HASNA_TODOS_STORAGE_MODE ?? env.TODOS_STORAGE_MODE ?? "").trim().toLowerCase();
-  const CLOUD_MODES = new Set(["self_hosted", "cloud", "remote", "hybrid"]);
+  // Never route over HTTP from URL/key presence alone. The mode is the explicit
+  // authority selector; an absent selector preserves the local default.
+  const mode = requestedStorageMode(env);
   if (!CLOUD_MODES.has(mode)) {
     _cache = { client: null };
     return _cache.client;
   }
-  const resolved = resolveStorageClient("todos", env);
-  _cache = { client: resolved.transport === "cloud-http" ? resolved.client : null };
+  const resolved = resolveStorageClient("todos", requireTodosRemoteAuthorityEnv(env), {
+    fetchImpl: (input, init) => globalThis.fetch(input, { ...init, redirect: "manual" }),
+  });
+  _cache = { client: resolved.transport === "cloud-http" ? protectRemoteClient(resolved.client) : null };
   return _cache.client;
 }
 
@@ -91,9 +370,25 @@ function toListQuery(filter: TaskFilter = {}): Record<string, string | number> {
 
 /** List tasks from the cloud (`GET /v1/tasks`). Returns the `tasks` array. */
 export async function cloudListTasks(client: HasnaStorageClient, filter: TaskFilter = {}): Promise<Task[]> {
-  const res = await client.list<Task>("tasks", { query: toListQuery(filter) });
+  const res = await requiredRemoteRoute(client, "/v1/tasks", () =>
+    client.list<Task>("tasks", { query: toListQuery(filter) }));
   const envelope = res.raw as { tasks?: Task[] } | undefined;
   return Array.isArray(envelope?.tasks) ? envelope!.tasks : res.items;
+}
+
+/** Resolve an exact UUID, exact short id, or unique UUID prefix using /v1 only. */
+export async function cloudResolveTaskRef(client: HasnaStorageClient, ref: string): Promise<string> {
+  const input = ref.trim().toLowerCase();
+  if (!input) throw new Error("Task reference must not be empty");
+  if (UUID_RE.test(input)) return input;
+  const tasks = await cloudListTasks(client, { limit: 10_000 } as TaskFilter);
+  const exactShort = tasks.filter((task) => task.short_id?.toLowerCase() === input);
+  if (exactShort.length === 1) return exactShort[0]!.id;
+  if (exactShort.length > 1) throw new Error(`Task reference is ambiguous: "${ref}"`);
+  const prefixes = tasks.filter((task) => task.id.toLowerCase().startsWith(input));
+  if (prefixes.length === 1) return prefixes[0]!.id;
+  if (prefixes.length > 1) throw new Error(`Task reference is ambiguous: "${ref}"`);
+  throw new Error(`Task not found: ${ref}`);
 }
 
 /** Fetch one task by id (`GET /v1/tasks/:id`); `null` on 404. */
@@ -104,7 +399,7 @@ export async function cloudGetTask(client: HasnaStorageClient, id: string): Prom
 
 /** Create a task (`POST /v1/tasks`, retry-safe idempotency key). */
 export async function cloudCreateTask(client: HasnaStorageClient, input: Record<string, unknown>): Promise<Task> {
-  return unwrapTask(await client.create<unknown>("tasks", input));
+  return unwrapTask(await requiredRemoteRoute(client, "/v1/tasks", () => client.create<unknown>("tasks", input)));
 }
 
 /** Update a task (`PATCH /v1/tasks/:id`). */
@@ -114,8 +409,13 @@ export async function cloudUpdateTask(client: HasnaStorageClient, id: string, pa
 
 /** Delete a task (`DELETE /v1/tasks/:id`); resolves for 2xx and 404. */
 export async function cloudDeleteTask(client: HasnaStorageClient, id: string): Promise<boolean> {
-  await client.delete("tasks", id);
-  return true;
+  try {
+    await client.transport.del(`/tasks/${encodeURIComponent(id)}`);
+    return true;
+  } catch (error) {
+    if (error && typeof error === "object" && (error as { status?: unknown }).status === 404) return false;
+    throw error;
+  }
 }
 
 /** Run a task lifecycle action (`POST /v1/tasks/:id/{start|complete|fail|claim}`). */
@@ -144,7 +444,8 @@ export interface CloudStats {
  * local SQLite island.
  */
 export async function cloudGetStats(client: HasnaStorageClient): Promise<CloudStats> {
-  const raw = await client.transport.get<unknown>("/stats");
+  const raw = await requiredRemoteRoute(client, "/v1/stats", () =>
+    client.transport.get<unknown>("/stats"));
   return (raw ?? {}) as CloudStats;
 }
 
@@ -157,9 +458,23 @@ export async function cloudListAgents(client: HasnaStorageClient): Promise<Agent
 
 /** List projects from the cloud (`GET /v1/projects`). */
 export async function cloudListProjects(client: HasnaStorageClient): Promise<Project[]> {
-  const res = await client.list<Project>("projects");
+  const res = await requiredRemoteRoute(client, "/v1/projects", () => client.list<Project>("projects"));
   const envelope = res.raw as { projects?: Project[] } | undefined;
   return Array.isArray(envelope?.projects) ? envelope!.projects : res.items;
+}
+
+function unwrapProject(raw: unknown): Project {
+  if (raw && typeof raw === "object" && "project" in (raw as Record<string, unknown>)) {
+    return (raw as { project: Project }).project;
+  }
+  return raw as Project;
+}
+
+export async function cloudCreateProject(
+  client: HasnaStorageClient,
+  input: Record<string, unknown>,
+): Promise<Project> {
+  return unwrapProject(await requiredRemoteRoute(client, "/v1/projects", () => client.create("projects", input)));
 }
 
 function cloudProjectSlug(value: string): string {
@@ -210,6 +525,12 @@ export async function cloudResolveProjectRef(client: HasnaStorageClient, ref: st
   return resolveCloudProjectRef(await cloudListProjects(client), ref);
 }
 
+export async function cloudResolveProject(client: HasnaStorageClient, ref: string): Promise<Project> {
+  const projects = await cloudListProjects(client);
+  const id = resolveCloudProjectRef(projects, ref);
+  return projects.find((project) => project.id === id)!;
+}
+
 /** Update one cloud project by exact UUID (`PATCH /v1/projects/:id`). */
 export async function cloudUpdateProject(
   client: HasnaStorageClient,
@@ -226,7 +547,7 @@ export async function cloudUpdateProject(
 /** List plans from the cloud (`GET /v1/plans`), optionally scoped to a project. */
 export async function cloudListPlans(client: HasnaStorageClient, projectId?: string): Promise<Plan[]> {
   const query = projectId ? { project_id: projectId } : {};
-  const res = await client.list<Plan>("plans", { query });
+  const res = await requiredRemoteRoute(client, "/v1/plans", () => client.list<Plan>("plans", { query }));
   const envelope = res.raw as { plans?: Plan[] } | undefined;
   return Array.isArray(envelope?.plans) ? envelope!.plans : res.items;
 }
@@ -240,7 +561,8 @@ function unwrapPlan(raw: unknown): Plan {
 
 /** Create one cloud plan (`POST /v1/plans`). */
 export async function cloudCreatePlan(client: HasnaStorageClient, input: CreatePlanInput): Promise<Plan> {
-  return unwrapPlan(await client.create<unknown>("plans", input as unknown as Record<string, unknown>));
+  return unwrapPlan(await requiredRemoteRoute(client, "/v1/plans", () =>
+    client.create<unknown>("plans", input as unknown as Record<string, unknown>)));
 }
 
 /** Update one cloud plan (`PATCH /v1/plans/:id`). */
@@ -250,18 +572,13 @@ export async function cloudUpdatePlan(client: HasnaStorageClient, id: string, pa
 
 /** Delete one cloud plan (`DELETE /v1/plans/:id`). */
 export async function cloudDeletePlan(client: HasnaStorageClient, id: string): Promise<boolean> {
-  let raw: unknown;
   try {
-    raw = await client.transport.del<unknown>(`/plans/${encodeURIComponent(id)}`);
+    await client.transport.del<unknown>(`/plans/${encodeURIComponent(id)}`);
   } catch (error) {
     if (error && typeof error === "object" && "status" in error && (error as { status?: unknown }).status === 404) {
-      throw new Error("Cloud plan deletion is not supported by this todos server; upgrade the server before retrying");
+      return false;
     }
     throw error;
-  }
-  if (raw && typeof raw === "object" && "deleted" in (raw as Record<string, unknown>) &&
-      (raw as { deleted: unknown }).deleted !== true) {
-    throw new Error("Cloud plan deletion was not confirmed by the todos server");
   }
   return true;
 }
@@ -433,7 +750,8 @@ export async function cloudUpsertTaskByFingerprint(
   client: HasnaStorageClient,
   input: Record<string, unknown> & { fingerprint: string; title: string },
 ): Promise<CloudUpsertTaskResult> {
-  const raw = await client.transport.post<unknown>("/tasks/upsert", input);
+  const raw = await requiredRemoteRoute(client, "/v1/tasks/upsert", () =>
+    client.transport.post<unknown>("/tasks/upsert", input));
   const envelope = (raw ?? {}) as { task?: unknown; created?: boolean };
   return {
     task: unwrapTask(envelope.task ?? raw),
@@ -449,7 +767,8 @@ export async function cloudUpsertTaskByFingerprint(
  */
 export async function cloudCountTasks(client: HasnaStorageClient, filter: TaskFilter = {}): Promise<number> {
   const { limit: _drop, offset: _o, ...rest } = filter;
-  const res = await client.list<Task>("tasks", { query: { ...toListQuery(rest), limit: 1 } });
+  const res = await requiredRemoteRoute(client, "/v1/tasks", () =>
+    client.list<Task>("tasks", { query: { ...toListQuery(rest), limit: 1 } }));
   const envelope = res.raw as { total?: number; count?: number; tasks?: Task[] } | undefined;
   if (typeof envelope?.total === "number") return envelope.total;
   // Fallback for older servers without `total`: list everything and count.
@@ -593,8 +912,11 @@ export async function cloudFindRefs(client: HasnaStorageClient, ref: string): Pr
 export async function cloudResolvePlan(client: HasnaStorageClient, ref: string, projectId?: string): Promise<Plan | null> {
   const normalizedRef = ref.toLowerCase();
   if (UUID_RE.test(ref)) {
-    const direct = await client.get<unknown>("plans", normalizedRef).catch(() => null);
-    if (direct) return unwrapPlan(direct);
+    const direct = await client.get<unknown>("plans", normalizedRef);
+    if (direct) {
+      const plan = unwrapPlan(direct);
+      if (!projectId || plan.project_id === projectId) return plan;
+    }
   }
   const plans = await cloudListPlans(client, projectId);
   const matchGroups = [
@@ -871,11 +1193,24 @@ export async function cloudRecentActivity(client: HasnaStorageClient, limit = 50
  */
 export async function cloudListTaskLists(client: HasnaStorageClient, projectId?: string): Promise<TaskList[]> {
   const query = projectId ? { project_id: projectId } : {};
-  const raw = await client.transport.get<unknown>("/task-lists", { query });
+  const raw = await requiredRemoteRoute(client, "/v1/task-lists", () =>
+    client.transport.get<unknown>("/task-lists", { query }));
   const envelope = (raw ?? {}) as { task_lists?: TaskList[]; taskLists?: TaskList[] };
   if (Array.isArray(envelope.task_lists)) return envelope.task_lists;
   if (Array.isArray(envelope.taskLists)) return envelope.taskLists;
   return Array.isArray(raw) ? (raw as TaskList[]) : [];
+}
+
+function unwrapTaskList(raw: unknown): TaskList {
+  if (raw && typeof raw === "object" && "task_list" in (raw as Record<string, unknown>)) {
+    return (raw as { task_list: TaskList }).task_list;
+  }
+  return raw as TaskList;
+}
+
+export async function cloudGetTaskList(client: HasnaStorageClient, id: string): Promise<TaskList | null> {
+  const raw = await client.get<unknown>("task-lists", id);
+  return raw == null ? null : unwrapTaskList(raw);
 }
 
 /** Resolve a cloud task-list UUID, unique UUID prefix, or project-scoped slug. */
@@ -918,11 +1253,8 @@ export async function cloudCreateTaskList(
   client: HasnaStorageClient,
   input: CreateTaskListInput,
 ): Promise<TaskList> {
-  const raw = await client.transport.post<unknown>("/task-lists", input as unknown as Record<string, unknown>);
-  if (raw && typeof raw === "object" && "task_list" in (raw as Record<string, unknown>)) {
-    return (raw as { task_list: TaskList }).task_list;
-  }
-  return raw as TaskList;
+  return unwrapTaskList(await requiredRemoteRoute(client, "/v1/task-lists", () =>
+    client.transport.post<unknown>("/task-lists", input as unknown as Record<string, unknown>)));
 }
 
 /** Update one cloud task list by exact UUID (`PATCH /v1/task-lists/:id`). */
@@ -931,11 +1263,7 @@ export async function cloudUpdateTaskList(
   id: string,
   patch: UpdateTaskListInput,
 ): Promise<TaskList> {
-  const raw = await client.update<unknown>("task-lists", id, patch as unknown as Record<string, unknown>);
-  if (raw && typeof raw === "object" && "task_list" in (raw as Record<string, unknown>)) {
-    return (raw as { task_list: TaskList }).task_list;
-  }
-  return raw as TaskList;
+  return unwrapTaskList(await client.update<unknown>("task-lists", id, patch as unknown as Record<string, unknown>));
 }
 
 /** Rename a cloud project through the server's atomic cascade operation. */
@@ -956,8 +1284,13 @@ export async function cloudRenameProject(
 
 /** Delete a task list in the cloud (`DELETE /v1/task-lists/:id`). */
 export async function cloudDeleteTaskList(client: HasnaStorageClient, id: string): Promise<boolean> {
-  await client.delete("task-lists", id);
-  return true;
+  try {
+    await client.transport.del(`/task-lists/${encodeURIComponent(id)}`);
+    return true;
+  } catch (error) {
+    if (error && typeof error === "object" && (error as { status?: unknown }).status === 404) return false;
+    throw error;
+  }
 }
 
 /**
@@ -975,7 +1308,17 @@ export async function cloudNextTask(
   if (filters?.project_id) query["project_id"] = filters.project_id;
   if (filters?.task_list_id) query["task_list_id"] = filters.task_list_id;
   if (filters?.plan_id) query["plan_id"] = filters.plan_id;
-  const raw = await client.transport.get<unknown>("/next", { query });
+  const raw = await requiredRemoteRoute(client, "/v1/next", () =>
+    client.transport.get<unknown>("/next", { query }));
+  if (raw == null) return null;
+  const task = unwrapTask(raw);
+  return task && (task as Task).id ? task : null;
+}
+
+/** Atomically claim the shared queue's next task (`POST /v1/tasks/next/claim`). */
+export async function cloudClaimNext(client: HasnaStorageClient, agentId: string): Promise<Task | null> {
+  const raw = await requiredRemoteRoute(client, "/v1/tasks/next/claim", () =>
+    client.transport.post<unknown>("/tasks/next/claim", { agent_id: agentId }));
   if (raw == null) return null;
   const task = unwrapTask(raw);
   return task && (task as Task).id ? task : null;

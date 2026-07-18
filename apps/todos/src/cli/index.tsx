@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
 import { getPackageVersion } from "../lib/package-version.js";
-import { handleError } from "./helpers.js";
+import { initializeTodosCliAuthority } from "./stage-a.js";
 
 const program = new Command();
 
@@ -106,7 +106,18 @@ program
   .option("--agent <name>", "Agent name")
   .option("--session <id>", "Session ID");
 
+// Validate and select remote HTTP authority before importing command modules.
+// Those modules expose local helpers, so loading them before this boundary made
+// packaged remote invocations hit the native adapter containment first.
+try {
+  initializeTodosCliAuthority();
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+}
+
 const [
+  { handleError },
   { registerTaskCommands },
   { registerPlanTemplateCommands },
   { registerProjectCommands },
@@ -136,6 +147,7 @@ const [
   { registerScaleHardeningCommands },
   { registerHelpCommands },
 ] = await Promise.all([
+  import("./helpers.js"),
   import("./commands/task-commands.js"),
   import("./commands/plan-template-commands.js"),
   import("./commands/project-commands.js"),

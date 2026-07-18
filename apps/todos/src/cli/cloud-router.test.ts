@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   getTodosCloudClient,
+  getTodosRemoteAuthorityConfigStatus,
+  resolveTodosCliStorageMode,
   isCloudRouting,
   resetTodosCloudClient,
   cloudListTasks,
@@ -25,6 +27,7 @@ import {
   cloudChangedSince,
   cloudTaskStats,
   cloudRecentActivity,
+  cloudListProjects,
   cloudListTaskLists,
   cloudNextTask,
   cloudAllDependencies,
@@ -34,6 +37,7 @@ import {
   cloudCreateTaskList,
   cloudDeleteTaskList,
   cloudResolveProjectRef,
+  cloudResolvePlan,
   cloudResolveTaskListRef,
 } from "./cloud-router.js";
 
@@ -43,7 +47,7 @@ const CLOUD_ENV = {
   HASNA_TODOS_API_KEY: "hasna_todos_test_key",
 };
 
-type Call = { url: string; method: string; headers: Record<string, string>; body: unknown };
+type Call = { url: string; method: string; headers: Record<string, string>; body: unknown; redirect?: RequestRedirect };
 
 let previousFetch: typeof globalThis.fetch | undefined;
 
@@ -59,6 +63,7 @@ function installFetch(handler: (call: Call) => { status?: number; body?: unknown
       method: (init.method || "GET").toUpperCase(),
       headers,
       body: init.body ? JSON.parse(init.body) : undefined,
+      redirect: init.redirect,
     };
     calls.push(call);
     const { status = 200, body = {} } = handler(call);
@@ -109,10 +114,112 @@ describe("todos client self_hosted resolver", () => {
     expect(client!.baseUrl).toBe("https://todos.hasna.xyz/v1");
   });
 
-  test("mode=self_hosted but missing API key -> throws (no silent local drift)", () => {
+  test("mode=remote rejects an implicit default when HASNA_TODOS_API_URL is missing", () => {
+    expect(() => getTodosCloudClient({
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_KEY: "fixture-key",
+      TODOS_URL: "https://todos.md",
+    } as never)).toThrow(
+      "REMOTE_API_URL_MISSING: remote Todos storage requires HASNA_TODOS_API_URL",
+    );
+  });
+
+  test("mode=self_hosted reports the exact missing API key without local fallback", () => {
     expect(() =>
       getTodosCloudClient({ HASNA_TODOS_STORAGE_MODE: "self_hosted", HASNA_TODOS_API_URL: "https://todos.hasna.xyz" }),
-    ).toThrow();
+    ).toThrow(
+      "REMOTE_API_KEY_MISSING: remote Todos storage requires HASNA_TODOS_API_KEY",
+    );
+  });
+
+  test("blank canonical mode does not mask fallback remote mode", () => {
+    expect(resolveTodosCliStorageMode({
+      HASNA_TODOS_STORAGE_MODE: "   ",
+      TODOS_STORAGE_MODE: "remote",
+    })).toEqual({ mode: "remote", selected: true, source: "TODOS_STORAGE_MODE" });
+  });
+
+  test("invalid and conflicting selectors fail closed before local routing", () => {
+    expect(() => resolveTodosCliStorageMode({ HASNA_TODOS_STORAGE_MODE: "remtoe" })).toThrow(
+      "REMOTE_STORAGE_MODE_INVALID",
+    );
+    expect(() => resolveTodosCliStorageMode({
+      HASNA_TODOS_STORAGE_MODE: "local",
+      TODOS_STORAGE_MODE: "remote",
+    })).toThrow("REMOTE_STORAGE_MODE_CONFLICT");
+  });
+
+  test.each([
+    "https://fixture-user@todos.example",
+    "https://todos.example?route=v1",
+    "https://todos.example#v1",
+    "https://todos.example/api/v1",
+    "https://todos.example/custom",
+    "http://todos.example",
+  ])("rejects ambiguous or credential-unsafe authority URL %s", (apiUrl) => {
+    expect(() => getTodosCloudClient({
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_URL: apiUrl,
+      HASNA_TODOS_API_KEY: "fixture-key",
+    })).toThrow("REMOTE_API_URL_INVALID");
+  });
+
+  test("accepts exact /v1 and loopback HTTP without duplicating the route prefix", () => {
+    const status = getTodosRemoteAuthorityConfigStatus({
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_URL: "http://127.0.0.1:18881/v1",
+      HASNA_TODOS_API_KEY: "fixture-key",
+    });
+    expect(status).toMatchObject({ ok: true, v1_base_url: "http://127.0.0.1:18881/v1" });
+  });
+});
+
+describe("remote authority compatibility diagnostics", () => {
+  test("does not treat a health-only platform host as a Todos /v1 CRUD authority", async () => {
+    const calls = installFetch((call) => {
+      if (call.url === "https://todos.md/v1/projects") {
+        return { status: 404, body: { error: "not found" } };
+      }
+      return { status: 200, body: { status: "ok", service: "platform-todos", mode: "oss" } };
+    });
+    const client = getTodosCloudClient({
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_URL: "https://todos.md",
+      HASNA_TODOS_API_KEY: "fixture-key",
+    } as never)!;
+
+    await expect(cloudListProjects(client)).rejects.toThrow(
+      "REMOTE_API_INCOMPATIBLE: configured Todos authority https://todos.md does not expose /v1/projects",
+    );
+    expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
+      "GET https://todos.md/v1/projects",
+    ]);
+  });
+
+  test.each([
+    [401, "REMOTE_API_UNAUTHORIZED"],
+    [403, "REMOTE_API_FORBIDDEN"],
+    [503, "REMOTE_API_UNAVAILABLE"],
+  ])("classifies HTTP %i without local fallback", async (status, expected) => {
+    installFetch(() => ({ status, body: { error: "fixture rejection" } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    await expect(cloudListProjects(client)).rejects.toThrow(expected);
+  });
+
+  test("rejects redirects before fetch can forward authentication", async () => {
+    const calls = installFetch(() => ({ status: 302, body: { redirect: true } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    await expect(cloudListProjects(client)).rejects.toThrow("REMOTE_API_REDIRECT_REJECTED");
+    expect(calls[0]!.redirect).toBe("manual");
+  });
+
+  test("classifies timeout-like transport failures", async () => {
+    previousFetch ??= globalThis.fetch;
+    globalThis.fetch = async () => {
+      throw new DOMException("fixture timed out", "AbortError");
+    };
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    await expect(cloudListProjects(client)).rejects.toThrow("REMOTE_API_TIMEOUT");
   });
 });
 
@@ -168,6 +275,12 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     await expect(cloudDeleteTask(client, "t3")).resolves.toBe(true);
     expect(calls[0]!.method).toBe("DELETE");
     expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t3");
+  });
+
+  test("delete preserves a resource 404 as a normal not-found result", async () => {
+    installFetch(() => ({ status: 404, body: { error: "not found" } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    await expect(cloudDeleteTask(client, "missing")).resolves.toBe(false);
   });
 
   test("action -> POST /v1/tasks/:id/start, unwraps { task }", async () => {
@@ -339,7 +452,7 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     expect(calls).toHaveLength(1);
   });
 
-  test("comments gives an actionable compatibility error for an older server and propagates 5xx", async () => {
+  test("comments gives an actionable compatibility error for an older server and classifies 5xx", async () => {
     for (const status of [404, 405]) {
       resetTodosCloudClient();
       installFetch(() => ({ status, body: { error: "unsupported" } }));
@@ -350,12 +463,7 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     resetTodosCloudClient();
     installFetch(() => ({ status: 500, body: { error: "failed" } }));
     const retryingClient = getTodosCloudClient(CLOUD_ENV)!;
-    try {
-      await cloudListComments(retryingClient, "t4");
-      throw new Error("expected cloudListComments to reject");
-    } catch (error) {
-      expect((error as { status?: number }).status).toBe(500);
-    }
+    await expect(cloudListComments(retryingClient, "t4")).rejects.toThrow("REMOTE_API_UNAVAILABLE");
   });
 });
 
@@ -756,6 +864,22 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
     expect(calls[0]!.url).toContain("project_id=project-1");
     expect(calls[1]!.url).toContain("project_id=project-1");
     expect(calls[2]!.url).not.toContain("project_id=");
+  });
+
+  test("project-scoped plan resolution rejects an exact UUID from another project", async () => {
+    const planId = "77777777-7777-4777-8777-777777777777";
+    const calls = installFetch((call) => {
+      if (call.url.endsWith(`/plans/${planId}`)) {
+        return { body: { plan: { id: planId, project_id: "project-b", slug: "foreign", name: "Foreign" } } };
+      }
+      return { body: { plans: [] } };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    await expect(cloudResolvePlan(client, planId, "project-a")).resolves.toBeNull();
+    expect(calls.map((call) => call.url)).toEqual([
+      `https://todos.hasna.xyz/v1/plans/${planId}`,
+      "https://todos.hasna.xyz/v1/plans?project_id=project-a",
+    ]);
   });
 
   test("task-list resolution fails explicitly for missing and ambiguous references", async () => {

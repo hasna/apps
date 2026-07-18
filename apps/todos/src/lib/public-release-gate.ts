@@ -41,7 +41,15 @@ export type ReleaseProvenance = {
   packageVersion?: string;
   repository?: string;
   gitCommit?: string;
+  gitTree?: string;
+  sourceTreeSha256?: string;
   generatedAt?: string;
+};
+
+export type ReleaseSourceIdentity = {
+  gitCommit: string;
+  gitTree: string;
+  sourceTreeSha256: string;
 };
 
 export type InstallSmokeCommand = {
@@ -198,6 +206,21 @@ export function validatePublicTextSurfaces(files: TextFile[]): ReleaseGateFailur
   return failures;
 }
 
+export function isPublicReleaseTextSurface(path: string): boolean {
+  const normalized = path.replaceAll("\\", "/");
+  if (normalized.startsWith("docs/")) return true;
+  return new Set([
+    "README.md",
+    "CHANGELOG.md",
+    "CODE_OF_CONDUCT.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "package.json",
+    "sdk/README.md",
+    "sdk/package.json",
+  ]).has(normalized);
+}
+
 export function validatePackedPackageFiles(paths: string[]): ReleaseGateFailure[] {
   const failures: ReleaseGateFailure[] = [];
   for (const required of [
@@ -225,13 +248,24 @@ export function validatePackedPackageFiles(paths: string[]): ReleaseGateFailure[
   return failures;
 }
 
-export function validatePackedProvenanceMetadata(packageJson: PackageJson): ReleaseGateFailure[] {
-  return validateRootPackageMetadata(packageJson);
+export function validatePackedProvenanceMetadata(
+  packageJson: PackageJson,
+  sourcePackageJson?: PackageJson,
+): ReleaseGateFailure[] {
+  const failures = validateRootPackageMetadata(packageJson);
+  addIf(
+    failures,
+    sourcePackageJson !== undefined && packageJson.version !== sourcePackageJson.version,
+    "packed-version",
+    "packed package version must match the clean source package version",
+  );
+  return failures;
 }
 
 export function validateReleaseProvenanceMetadata(
   provenance: ReleaseProvenance,
   packageJson: PackageJson,
+  expectedSource?: ReleaseSourceIdentity,
 ): ReleaseGateFailure[] {
   const failures: ReleaseGateFailure[] = [];
   addIf(
@@ -260,11 +294,82 @@ export function validateReleaseProvenanceMetadata(
   );
   addIf(
     failures,
+    !provenance.gitTree || !/^[0-9a-f]{40}$/i.test(provenance.gitTree),
+    "provenance-git-tree",
+    "release provenance gitTree must be a 40-character tree SHA",
+  );
+  addIf(
+    failures,
+    !provenance.sourceTreeSha256 || !/^[0-9a-f]{64}$/i.test(provenance.sourceTreeSha256),
+    "provenance-source-hash",
+    "release provenance sourceTreeSha256 must be a 64-character SHA-256 digest",
+  );
+  addIf(
+    failures,
     !provenance.generatedAt || Number.isNaN(Date.parse(provenance.generatedAt)),
     "provenance-generated-at",
     "release provenance generatedAt must be an ISO timestamp",
   );
+  if (expectedSource) {
+    addIf(
+      failures,
+      provenance.gitCommit !== expectedSource.gitCommit,
+      "provenance-commit-match",
+      "release provenance commit must match the clean source commit",
+    );
+    addIf(
+      failures,
+      provenance.gitTree !== expectedSource.gitTree,
+      "provenance-tree-match",
+      "release provenance tree must match the clean source tree",
+    );
+    addIf(
+      failures,
+      provenance.sourceTreeSha256 !== expectedSource.sourceTreeSha256,
+      "provenance-source-hash-match",
+      "release provenance source hash must match the clean source tree listing",
+    );
+  }
   return failures;
+}
+
+export function validateReleaseRepositoryState(porcelainStatus: string): ReleaseGateFailure[] {
+  if (!porcelainStatus.trim()) return [];
+  const entries = porcelainStatus.split(/\r?\n/).filter(Boolean).length;
+  return [{
+    check: "release-worktree-dirty",
+    message: `release input must be a clean tracked tree with no untracked files (${entries} change${entries === 1 ? "" : "s"} found)`,
+  }];
+}
+
+export function validateReleaseGateArguments(args: string[]): ReleaseGateFailure[] {
+  const failures: ReleaseGateFailure[] = [];
+  const allowed = new Set(["--skip-npm-view", "--skip-install-smoke"]);
+  if (args.includes("--skip-build")) {
+    failures.push({
+      check: "release-build-required",
+      message: "release verification must rebuild the artifact from the clean source commit",
+    });
+  }
+  for (const arg of args) {
+    if (arg !== "--skip-build" && !allowed.has(arg)) {
+      failures.push({ check: "release-argument", message: `unsupported release verification argument: ${arg}` });
+    }
+  }
+  return failures;
+}
+
+export function validateReleaseArtifactIntegrity(
+  reportedIntegrity: string | undefined,
+  computedIntegrity: string,
+): ReleaseGateFailure[] {
+  if (!/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(computedIntegrity)) {
+    return [{ check: "tarball-integrity", message: "computed tarball integrity must be a valid sha512 SRI value" }];
+  }
+  if (reportedIntegrity !== undefined && reportedIntegrity !== computedIntegrity) {
+    return [{ check: "tarball-integrity", message: "packed tarball bytes do not match the packer's reported integrity" }];
+  }
+  return [];
 }
 
 export function validateNpmView(packageName: string, rawJson: string): ReleaseGateFailure[] {

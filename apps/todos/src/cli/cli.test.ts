@@ -2084,7 +2084,7 @@ describe("CLI integration", () => {
     try { unlinkSync(dbPath); } catch {}
   });
 
-  it("should redact remote native storage settings in the CLI", async () => {
+  it("should report missing HTTP authority settings without using native remote adapters", async () => {
     const dbPath = "/tmp/test-cli-storage-remote.db";
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
@@ -2102,29 +2102,33 @@ describe("CLI integration", () => {
       TODOS_S3_BUCKET: "",
     });
 
-    expect(status.exitCode).toBe(0);
+    expect(status.exitCode).toBe(1);
     const payload = JSON.parse(status.stdout);
     expect(payload.mode).toBe("remote");
     expect(payload.remote_enabled).toBe(true);
-    expect(payload.database.configured).toBe(true);
-    expect(payload.database.redacted_url).toContain("***:***@rds.example.invalid");
-    expect(payload.database.redacted_url).not.toContain("todo_user");
-    expect(payload.database.redacted_url).not.toContain("super-secret");
-    expect(payload.canonical.runtimeSecretPath).toBe("hasna/xyz/opensource/todos/prod/rds");
-    expect(payload.canonical.primaryEnv).toBe("HASNA_TODOS_DATABASE_URL");
-    expect(payload.object_storage).toMatchObject({
-      configured: true,
-      bucket: "hasna-opensource-todos-prod",
-      prefix: "todos/prod/",
-      region: "us-east-1",
+    expect(payload.transport).toBe("http-v1");
+    expect(payload.database.configured).toBe(false);
+    expect(payload.database.redacted_url).toBeNull();
+    expect(payload.object_storage.configured).toBe(false);
+    expect(payload.remote_authority).toMatchObject({
+      selected: true,
+      ok: false,
+      api_url_configured: false,
+      api_key_configured: false,
+      local_fallback: false,
     });
-    expect(payload.sync.batch_size).toBe(25);
+    expect(payload.issues).toEqual(expect.arrayContaining([
+      expect.stringContaining("REMOTE_API_URL_MISSING"),
+      expect.stringContaining("REMOTE_API_KEY_MISSING"),
+    ]));
+    expect(status.stdout).not.toContain("todo_user");
+    expect(status.stdout).not.toContain("super-secret");
     expect(payload.no_network).toBe(true);
 
     try { unlinkSync(dbPath); } catch {}
   });
 
-  it("should render native storage sync plan SQL as a dry-run", async () => {
+  it("should reject native storage sync planning in remote mode before local helpers", async () => {
     const dbPath = "/tmp/test-cli-storage-sync-plan.db";
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
@@ -2139,15 +2143,10 @@ describe("CLI integration", () => {
       TODOS_S3_BUCKET: "",
     });
 
-    expect(plan.exitCode).toBe(0);
-    const payload = JSON.parse(plan.stdout);
-    expect(payload.dry_run).toBe(true);
-    expect(payload.no_network).toBe(true);
-    expect(payload.status.mode).toBe("hybrid");
-    expect(payload.postgres.required).toBe(true);
-    expect(payload.postgres.configured).toBe(true);
-    expect(payload.postgres.schema_sql.join("\n")).toContain("CREATE TABLE IF NOT EXISTS todos_sync_records");
-    expect(payload.steps).toContain("Report planned changes without opening network connections");
+    expect(plan.exitCode).toBe(1);
+    expect(plan.stdout).toBe("");
+    expect(plan.stderr).toContain("REMOTE_COMMAND_UNSUPPORTED");
+    expect(plan.stderr).toContain("local SQLite fallback is disabled");
 
     try { unlinkSync(dbPath); } catch {}
   });

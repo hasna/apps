@@ -6,7 +6,11 @@ import {
   validatePackedPackageFiles,
   validatePackedProvenanceMetadata,
   validatePublicTextSurfaces,
+  validateReleaseArtifactIntegrity,
+  validateReleaseGateArguments,
+  isPublicReleaseTextSurface,
   validateReleaseProvenanceMetadata,
+  validateReleaseRepositoryState,
   validateRootPackageMetadata,
   validateSdkPackageMetadata,
   type PackageJson,
@@ -86,6 +90,20 @@ describe("public release gate", () => {
     expect(failures.map((failure) => failure.check)).toContain("readme-install");
   });
 
+  test("scopes source scanning to public surfaces while packed text stays authoritative", () => {
+    expect(isPublicReleaseTextSurface("buildspec.container-candidate.yml")).toBe(false);
+    expect(isPublicReleaseTextSurface("scripts/verify-public-release.ts")).toBe(false);
+    expect(isPublicReleaseTextSurface("src/cli/index.tsx")).toBe(false);
+    expect(isPublicReleaseTextSurface("README.md")).toBe(true);
+    expect(isPublicReleaseTextSurface("docs/native-storage.md")).toBe(true);
+    expect(isPublicReleaseTextSurface("sdk/package.json")).toBe(true);
+
+    const publishedFailures = validatePublicTextSurfaces([
+      { path: "README.md", text: "bun install -g @hasna/todos\nAWS_REGION" },
+    ]);
+    expect(publishedFailures.map((failure) => failure.check)).toContain("public-text-boundary");
+  });
+
   test("checks generated npm package contents", () => {
     expect(
       validatePackedPackageFiles([
@@ -109,18 +127,66 @@ describe("public release gate", () => {
   });
 
   test("requires packed package provenance and public npm visibility", () => {
-    expect(validatePackedProvenanceMetadata(rootPackage)).toEqual([]);
+    expect(validatePackedProvenanceMetadata(rootPackage, rootPackage)).toEqual([]);
     expect(validateReleaseProvenanceMetadata({
       packageName: "@hasna/todos",
       packageVersion: "0.11.41",
       repository: "https://github.com/hasna/todos.git",
       gitCommit: "0123456789abcdef0123456789abcdef01234567",
+      gitTree: "89abcdef0123456789abcdef0123456789abcdef",
+      sourceTreeSha256: "a".repeat(64),
       generatedAt: "2026-05-21T00:00:00.000Z",
-    }, rootPackage)).toEqual([]);
+    }, rootPackage, {
+      gitCommit: "0123456789abcdef0123456789abcdef01234567",
+      gitTree: "89abcdef0123456789abcdef0123456789abcdef",
+      sourceTreeSha256: "a".repeat(64),
+    })).toEqual([]);
 
     expect(validateReleaseProvenanceMetadata({}, rootPackage).map((failure) => failure.check)).toContain("provenance-git-commit");
+    expect(validatePackedProvenanceMetadata({ ...rootPackage, version: "0.11.40" }, rootPackage).map((failure) => failure.check)).toContain("packed-version");
     expect(validateNpmView("@hasna/todos", JSON.stringify({ name: "@hasna/todos", version: "0.11.40" }))).toEqual([]);
     expect(validateNpmView("@hasna/todos", JSON.stringify({ name: "@scope/other" }))).not.toEqual([]);
+  });
+
+  test("rejects dirty release inputs and mismatched artifact integrity", () => {
+    expect(validateReleaseRepositoryState("")).toEqual([]);
+    expect(validateReleaseRepositoryState(" M package.json\n?? untracked.txt\n").map((failure) => failure.check)).toEqual([
+      "release-worktree-dirty",
+    ]);
+    expect(validateReleaseArtifactIntegrity("sha512-YWJj", "sha512-YWJj")).toEqual([]);
+    expect(validateReleaseArtifactIntegrity("sha512-YWJj", "sha512-ZGVm").map((failure) => failure.check)).toEqual([
+      "tarball-integrity",
+    ]);
+  });
+
+  test("does not allow release verification to reuse stale build output", () => {
+    expect(validateReleaseGateArguments([])).toEqual([]);
+    expect(validateReleaseGateArguments(["--skip-npm-view", "--skip-install-smoke"])).toEqual([]);
+    expect(validateReleaseGateArguments(["--skip-build"]).map((failure) => failure.check)).toEqual([
+      "release-build-required",
+    ]);
+  });
+
+  test("binds release provenance to the exact commit tree and source hash", () => {
+    const provenance = {
+      packageName: "@hasna/todos",
+      packageVersion: rootPackage.version,
+      repository: "https://github.com/hasna/todos.git",
+      gitCommit: "0".repeat(40),
+      gitTree: "1".repeat(40),
+      sourceTreeSha256: "2".repeat(64),
+      generatedAt: "2026-07-18T00:00:00.000Z",
+    };
+    const failures = validateReleaseProvenanceMetadata(provenance, rootPackage, {
+      gitCommit: "3".repeat(40),
+      gitTree: "4".repeat(40),
+      sourceTreeSha256: "5".repeat(64),
+    });
+    expect(failures.map((failure) => failure.check)).toEqual([
+      "provenance-commit-match",
+      "provenance-tree-match",
+      "provenance-source-hash-match",
+    ]);
   });
 
   test("keeps the Bun install smoke plan public, local, and stable", () => {
