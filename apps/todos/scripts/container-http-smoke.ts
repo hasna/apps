@@ -36,6 +36,22 @@ const dashboardHtml = await dashboardResponse.text();
 if (!dashboardHtml.includes('<div id="root">')) {
   throw new Error("/: production image did not serve the built dashboard entrypoint");
 }
+const dashboardAssets = new Set<string>();
+for (const tag of dashboardHtml.match(/<(?:script|link)\b[^>]*>/gi) ?? []) {
+  const match = /\b(?:src|href)\s*=\s*["']([^"']+)["']/i.exec(tag);
+  const candidate = match?.[1];
+  if (!candidate) continue;
+  const pathname = candidate.split(/[?#]/, 1)[0]!.toLowerCase();
+  if (pathname.endsWith(".js") || pathname.endsWith(".css")) dashboardAssets.add(candidate);
+}
+if (dashboardAssets.size === 0) throw new Error("/: dashboard references no JS/CSS assets");
+for (const path of dashboardAssets) {
+  const assetUrl = new URL(path, `${baseUrl}/`);
+  if (assetUrl.origin !== new URL(baseUrl).origin) {
+    throw new Error(`/: dashboard asset must stay on the app origin: ${path}`);
+  }
+  await expectStatus(`${assetUrl.pathname}${assetUrl.search}`, 200);
+}
 await expectStatus("/v1/tasks", 401);
 
 const taskResponse = await expectStatus("/v1/tasks", 201, {

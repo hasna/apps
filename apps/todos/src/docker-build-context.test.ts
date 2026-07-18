@@ -2,7 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import packageJson from "../package.json";
-import { validateDistServerRuntimeEvidence } from "../scripts/verify-dist-server-runtime";
+import {
+  extractDashboardAssetPaths,
+  validateDistServerRuntimeEvidence,
+  verifyDashboardAssets,
+} from "../scripts/verify-dist-server-runtime";
 
 const root = join(import.meta.dir, "..");
 
@@ -17,6 +21,7 @@ describe("server image build context", () => {
       versionRouteVersion: "0.11.92",
       dashboardRouteStatus: 200,
       dashboardRootPresent: true,
+      dashboardAssetFailures: [],
     };
     expect(validateDistServerRuntimeEvidence(evidence)).toContain(
       "server must exit zero after graceful smoke shutdown",
@@ -34,6 +39,35 @@ describe("server image build context", () => {
       dashboardRouteStatus: 404,
       dashboardRootPresent: false,
     })).toContain("GET / must serve the built dashboard contract");
+    expect(validateDistServerRuntimeEvidence({
+      ...evidence,
+      startupExitCode: 0,
+      dashboardAssetFailures: ["GET /assets/app.js returned 404"],
+    })).toContain("dashboard JS/CSS assets must all be locally fetchable");
+  });
+
+  test("parses and fetches every local JS/CSS asset referenced by the dashboard", async () => {
+    const html = [
+      '<link rel="stylesheet" href="/assets/app.css?v=1">',
+      '<script type="module" src="./assets/app.js"></script>',
+      '<img src="/logo.jpg">',
+    ].join("\n");
+    expect(extractDashboardAssetPaths(html)).toEqual(["./assets/app.js", "/assets/app.css?v=1"]);
+    const fetched: string[] = [];
+    const failures = await verifyDashboardAssets("http://127.0.0.1:19427", html, async (input) => {
+      const url = String(input);
+      fetched.push(url);
+      return new Response(url.includes("app.js") ? "missing" : "ok", {
+        status: url.includes("app.js") ? 404 : 200,
+      });
+    });
+    expect(fetched).toEqual([
+      "http://127.0.0.1:19427/assets/app.js",
+      "http://127.0.0.1:19427/assets/app.css?v=1",
+    ]);
+    expect(failures).toEqual(["GET /assets/app.js returned 404"]);
+    expect(await verifyDashboardAssets("http://127.0.0.1:19427", '<script src="https://example.com/app.js"></script>'))
+      .toEqual(["dashboard asset must stay on the smoke server origin: https://example.com/app.js"]);
   });
 
   test("installs the public contracts package without a local vendor tree", () => {
@@ -121,6 +155,22 @@ describe("server image build context", () => {
     expect(dockerignore).not.toMatch(/^dashboard$/m);
     expect(dockerignore).toContain("dashboard/node_modules");
     expect(dockerignore).toContain("dashboard/dist");
+    for (const sensitivePattern of [
+      ".env*",
+      "**/.env*",
+      ".secrets*",
+      "**/.secrets*",
+      ".hasna",
+      "**/.hasna",
+      ".husna",
+      "**/.husna",
+      "*.db*",
+      "**/*.db*",
+      "*.sqlite*",
+      "**/*.sqlite*",
+    ]) {
+      expect(dockerignore.split(/\r?\n/)).toContain(sensitivePattern);
+    }
   });
 
   test("transfers quarantined workspace dependencies without dashboard auto-install", () => {
@@ -143,6 +193,7 @@ describe("server image build context", () => {
 
   test("ships a candidate build gate for architecture, TLS, API, and inventory", () => {
     const buildspec = readFileSync(join(root, "buildspec.container-candidate.yml"), "utf8");
+    const containerSmoke = readFileSync(join(root, "scripts/container-http-smoke.ts"), "utf8");
 
     expect(buildspec).toContain("docker build --platform linux/arm64");
     expect(buildspec).toContain(
@@ -193,12 +244,14 @@ describe("server image build context", () => {
     expect(buildspec).toContain("wrong-postgres");
     expect(buildspec).toContain("bun dist/server/index.js migrate");
     expect(buildspec).toContain("scripts/container-http-smoke.ts");
-    expect(readFileSync(join(root, "scripts/container-http-smoke.ts"), "utf8")).toContain(
+    expect(containerSmoke).toContain(
       'versionPayload.version !== "0.11.92"',
     );
-    expect(readFileSync(join(root, "scripts/container-http-smoke.ts"), "utf8")).toContain(
+    expect(containerSmoke).toContain(
       'dashboardHtml.includes(\'<div id="root">\')',
     );
+    expect(containerSmoke).toContain("dashboardAssets.size === 0");
+    expect(containerSmoke).toContain('await expectStatus(`${assetUrl.pathname}${assetUrl.search}`, 200)');
     expect(buildspec).not.toContain("terraform");
     expect(buildspec).not.toContain("update-service");
   });

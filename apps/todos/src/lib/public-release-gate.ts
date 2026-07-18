@@ -1,3 +1,8 @@
+import {
+  validateReleaseArtifactManifestMetadata,
+  type ReleaseArtifactManifest,
+} from "./release-artifact-manifest.js";
+
 export type PackageJson = {
   name?: string;
   version?: string;
@@ -60,6 +65,7 @@ export type ReleaseProvenance = {
     authoritative?: boolean;
     skippedChecks?: string[];
   };
+  artifacts?: ReleaseArtifactManifest;
 };
 
 export type ReleaseSourceIdentity = {
@@ -399,6 +405,9 @@ export function validateReleaseProvenanceMetadata(
     "provenance-generated-at",
     "release provenance generatedAt must be an ISO timestamp",
   );
+  if (provenance.artifacts !== undefined) {
+    failures.push(...validateReleaseArtifactManifestMetadata(provenance.artifacts));
+  }
   if (expectedSource) {
     addIf(
       failures,
@@ -420,6 +429,12 @@ export function validateReleaseProvenanceMetadata(
     );
   }
   if (expectedBuild) {
+    addIf(
+      failures,
+      provenance.artifacts === undefined,
+      "provenance-artifact-manifest",
+      "release provenance must bind every published dist and dashboard artifact",
+    );
     addIf(
       failures,
       provenance.toolchain?.bunVersion !== expectedBuild.bunVersion,

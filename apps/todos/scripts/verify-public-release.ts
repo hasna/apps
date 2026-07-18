@@ -33,11 +33,16 @@ import {
   type ReleaseBuildIdentity,
   type ReleaseGateFailure,
   type ReleaseSourceIdentity,
+  type ReleaseProvenance,
   type TextFile,
   type TrackedWorktreeProof,
 } from "../src/lib/public-release-gate";
 import { withVerifiedArtifactPromotion } from "../src/lib/release-artifact-promotion";
 import { scanExtractedPackedFiles } from "../src/lib/release-packed-scan";
+import {
+  createReleaseArtifactManifest,
+  validateReleaseArtifactManifest,
+} from "../src/lib/release-artifact-manifest";
 
 type PackResult = {
   filename: string;
@@ -156,8 +161,9 @@ function main(): void {
     const packedPackageJson = readPackedPackageJson(firstTarball);
     failures.push(...validatePackedPackageFiles(firstPack.files.map((file) => `package/${file.path}`), packedPackageJson));
     failures.push(...validatePackedProvenanceMetadata(packedPackageJson, packageJson));
-    failures.push(...validateReleaseProvenanceMetadata(
-      readPackedReleaseProvenance(firstTarball),
+    failures.push(...validatePackedReleaseProvenance(
+      firstTarball,
+      firstPayloadDir,
       packageJson,
       sourceIdentity,
       buildIdentity,
@@ -182,8 +188,9 @@ function main(): void {
     const secondPackedPackageJson = readPackedPackageJson(secondTarball);
     failures.push(...validatePackedPackageFiles(secondPack.files.map((file) => `package/${file.path}`), secondPackedPackageJson));
     failures.push(...validatePackedProvenanceMetadata(secondPackedPackageJson, packageJson));
-    failures.push(...validateReleaseProvenanceMetadata(
-      readPackedReleaseProvenance(secondTarball),
+    failures.push(...validatePackedReleaseProvenance(
+      secondTarball,
+      secondPayloadDir,
       packageJson,
       sourceIdentity,
       buildIdentity,
@@ -206,8 +213,9 @@ function main(): void {
       const finalPackedPackageJson = readPackedPackageJson(finalTarball);
       failures.push(...validatePackedPackageFiles(finalPack.files.map((file) => `package/${file.path}`), finalPackedPackageJson));
       failures.push(...validatePackedProvenanceMetadata(finalPackedPackageJson, packageJson));
-      failures.push(...validateReleaseProvenanceMetadata(
-        readPackedReleaseProvenance(finalTarball),
+      failures.push(...validatePackedReleaseProvenance(
+        finalTarball,
+        finalPayloadDir,
         packageJson,
         sourceIdentity,
         buildIdentity,
@@ -253,6 +261,7 @@ function writeReleaseProvenance(
   generatedAt: string,
   buildIdentity: ReleaseBuildIdentity,
 ): void {
+  const artifacts = createReleaseArtifactManifest(buildRoot);
   writeFileSync(
     join(buildRoot, "dist", "release-provenance.json"),
     `${JSON.stringify({
@@ -277,6 +286,7 @@ function writeReleaseProvenance(
         authoritative: buildIdentity.authoritative,
         skippedChecks: buildIdentity.skippedChecks,
       },
+      artifacts,
     }, null, 2)}\n`,
   );
 }
@@ -470,28 +480,22 @@ function readPackedPackageJson(tarball: string): PackageJson {
   return readPackedJson<PackageJson>(tarball, "package/package.json");
 }
 
-function readPackedReleaseProvenance(tarball: string): {
-  packageName?: string;
-  packageVersion?: string;
-  repository?: string;
-  gitCommit?: string;
-  gitTree?: string;
-  sourceTreeSha256?: string;
-  generatedAt?: string;
-  toolchain?: { bunVersion?: string };
-  dependencies?: {
-    lockfile?: string;
-    lockfileSha256?: string;
-    installCommand?: string;
-    isolatedSource?: boolean;
-  };
-  gate?: {
-    mode?: "review" | "publish";
-    authoritative?: boolean;
-    skippedChecks?: string[];
-  };
-} {
+function readPackedReleaseProvenance(tarball: string): ReleaseProvenance {
   return readPackedJson(tarball, "package/dist/release-provenance.json");
+}
+
+function validatePackedReleaseProvenance(
+  tarball: string,
+  payloadRoot: string,
+  packageJson: PackageJson,
+  sourceIdentity: ReleaseSourceIdentity,
+  buildIdentity: ReleaseBuildIdentity,
+): ReleaseGateFailure[] {
+  const provenance = readPackedReleaseProvenance(tarball);
+  return [
+    ...validateReleaseProvenanceMetadata(provenance, packageJson, sourceIdentity, buildIdentity),
+    ...validateReleaseArtifactManifest(join(payloadRoot, "package"), provenance.artifacts),
+  ];
 }
 
 function readPackedJson<T>(tarball: string, path: string): T {

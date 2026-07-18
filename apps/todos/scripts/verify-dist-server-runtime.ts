@@ -13,7 +13,51 @@ export type DistServerRuntimeEvidence = {
   versionRouteVersion: string | null;
   dashboardRouteStatus: number | null;
   dashboardRootPresent: boolean;
+  dashboardAssetFailures: string[];
 };
+
+export function extractDashboardAssetPaths(html: string): string[] {
+  const paths = new Set<string>();
+  for (const tag of html.match(/<(?:script|link)\b[^>]*>/gi) ?? []) {
+    const match = /\b(?:src|href)\s*=\s*["']([^"']+)["']/i.exec(tag);
+    const candidate = match?.[1];
+    if (!candidate) continue;
+    const pathname = candidate.split(/[?#]/, 1)[0]!.toLowerCase();
+    if (pathname.endsWith(".js") || pathname.endsWith(".css")) paths.add(candidate);
+  }
+  return [...paths].sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
+}
+
+export async function verifyDashboardAssets(
+  baseUrl: string,
+  html: string,
+  fetchAsset: typeof fetch = fetch,
+): Promise<string[]> {
+  const assetPaths = extractDashboardAssetPaths(html);
+  if (assetPaths.length === 0) return ["dashboard HTML references no JS/CSS assets"];
+  const failures: string[] = [];
+  const expectedOrigin = new URL(baseUrl).origin;
+  for (const path of assetPaths) {
+    let assetUrl: URL;
+    try {
+      assetUrl = new URL(path, `${baseUrl}/`);
+    } catch {
+      failures.push(`invalid dashboard asset URL: ${path}`);
+      continue;
+    }
+    if (assetUrl.origin !== expectedOrigin) {
+      failures.push(`dashboard asset must stay on the smoke server origin: ${path}`);
+      continue;
+    }
+    try {
+      const response = await fetchAsset(assetUrl);
+      if (!response.ok) failures.push(`GET ${assetUrl.pathname} returned ${response.status}`);
+    } catch (error) {
+      failures.push(`GET ${assetUrl.pathname} failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return failures;
+}
 
 export function validateDistServerRuntimeEvidence(evidence: DistServerRuntimeEvidence): string[] {
   const failures: string[] = [];
@@ -26,6 +70,10 @@ export function validateDistServerRuntimeEvidence(evidence: DistServerRuntimeEvi
   }
   if (evidence.dashboardRouteStatus !== 200 || !evidence.dashboardRootPresent) {
     failures.push("GET / must serve the built dashboard contract");
+  }
+  if (evidence.dashboardAssetFailures.length > 0) {
+    failures.push("dashboard JS/CSS assets must all be locally fetchable");
+    failures.push(...evidence.dashboardAssetFailures);
   }
   if (evidence.startupExitCode !== 0) failures.push("server must exit zero after graceful smoke shutdown");
   return failures;
@@ -97,6 +145,7 @@ async function main(): Promise<void> {
     let versionRouteVersion: string | null = null;
     let dashboardRouteStatus: number | null = null;
     let dashboardRootPresent = false;
+    let dashboardAssetFailures: string[] = [];
     let lastRouteError: unknown;
     const deadline = Date.now() + 5_000;
     try {
@@ -110,6 +159,7 @@ async function main(): Promise<void> {
           dashboardRouteStatus = dashboardResponse.status;
           const dashboardHtml = await dashboardResponse.text();
           dashboardRootPresent = dashboardHtml.includes('<div id="root">');
+          dashboardAssetFailures = await verifyDashboardAssets(baseUrl, dashboardHtml);
           break;
         } catch (error) {
           lastRouteError = error;
@@ -137,6 +187,7 @@ async function main(): Promise<void> {
       versionRouteVersion,
       dashboardRouteStatus,
       dashboardRootPresent,
+      dashboardAssetFailures,
     };
     const failures = validateDistServerRuntimeEvidence(evidence);
     if (failures.length > 0) {

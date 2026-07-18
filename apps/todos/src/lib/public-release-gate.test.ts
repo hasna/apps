@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { scanExtractedPackedFiles } from "./release-packed-scan";
+import { computeReleaseArtifactManifestSha256 } from "./release-artifact-manifest";
 import {
   classifyReleaseGateAuthority,
   derivePackedPackageTargets,
@@ -454,6 +455,13 @@ describe("public release gate", () => {
   });
 
   test("binds release provenance to the exact commit tree and source hash", () => {
+    const artifactManifestBody = {
+      schemaVersion: 1 as const,
+      algorithm: "sha256" as const,
+      roots: ["dist", "dashboard/dist"],
+      excluded: ["dist/release-provenance.json"],
+      files: [{ path: "dist/server/index.js", type: "file" as const, size: 7, sha256: "7".repeat(64) }],
+    };
     const provenance = {
       packageName: "@hasna/todos",
       packageVersion: rootPackage.version,
@@ -470,6 +478,10 @@ describe("public release gate", () => {
         isolatedSource: true,
       },
       gate: { mode: "publish", authoritative: true, skippedChecks: [] },
+      artifacts: {
+        ...artifactManifestBody,
+        manifestSha256: computeReleaseArtifactManifestSha256(artifactManifestBody),
+      },
     };
     const failures = validateReleaseProvenanceMetadata(provenance, rootPackage, {
       gitCommit: "3".repeat(40),

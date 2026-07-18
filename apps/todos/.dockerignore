@@ -12,3 +12,15 @@ sdk
 .claude
 .codewith
 .takumi
+.env*
+**/.env*
+.secrets*
+**/.secrets*
+.hasna
+**/.hasna
+.husna
+**/.husna
+*.db*
+**/*.db*
+*.sqlite*
+**/*.sqlite*

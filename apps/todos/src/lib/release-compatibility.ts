@@ -11,7 +11,9 @@ import {
   validateReleaseProvenanceMetadata,
   type PackageJson as ReleasePackageJson,
   type ReleaseSourceIdentity,
+  type ReleaseProvenance,
 } from "./public-release-gate.js";
+import { validateReleaseArtifactManifest } from "./release-artifact-manifest.js";
 
 export const LOCAL_RELEASE_COMPATIBILITY_SCHEMA_VERSION = 1;
 
@@ -264,9 +266,9 @@ function checkInstallPlan(packageJson: PackageJson): ReleaseCompatibilityCheck[]
 }
 
 function readCurrentSourceIdentity(root: string): ReleaseSourceIdentity | null {
-  const commit = spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" });
-  const tree = spawnSync("git", ["rev-parse", "HEAD^{tree}"], { cwd: root, encoding: "utf8" });
-  const listing = spawnSync("git", ["ls-tree", "-r", "--full-tree", "-z", "HEAD"], { cwd: root });
+  const commit = spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8", env: process.env });
+  const tree = spawnSync("git", ["rev-parse", "HEAD^{tree}"], { cwd: root, encoding: "utf8", env: process.env });
+  const listing = spawnSync("git", ["ls-tree", "-r", "--full-tree", "-z", "HEAD"], { cwd: root, env: process.env });
   if (commit.status !== 0 || tree.status !== 0 || listing.status !== 0 || !listing.stdout) return null;
   return {
     gitCommit: commit.stdout.trim(),
@@ -306,25 +308,7 @@ function checkServerRuntime(root: string, packageJson: PackageJson): ReleaseComp
     return checks;
   }
   try {
-    const provenance = JSON.parse(readFileSync(provenancePath, "utf8")) as {
-      packageName?: string;
-      packageVersion?: string;
-      gitCommit?: string;
-      gitTree?: string;
-      sourceTreeSha256?: string;
-      toolchain?: { bunVersion?: string };
-      dependencies?: {
-        lockfile?: string;
-        lockfileSha256?: string;
-        installCommand?: string;
-        isolatedSource?: boolean;
-      };
-      gate?: {
-        mode?: "review" | "publish";
-        authoritative?: boolean;
-        skippedChecks?: string[];
-      };
-    };
+    const provenance = JSON.parse(readFileSync(provenancePath, "utf8")) as ReleaseProvenance;
     const lockfilePath = join(root, "bun.lock");
     const lockfileSha256 = existsSync(lockfilePath)
       ? createHash("sha256").update(readFileSync(lockfilePath)).digest("hex")
@@ -344,8 +328,9 @@ function checkServerRuntime(root: string, packageJson: PackageJson): ReleaseComp
         },
       )
       : [{ check: "provenance-source-identity", message: "current Git source identity or bun.lock is unavailable" }];
+    provenanceFailures.push(...validateReleaseArtifactManifest(root, provenance.artifacts));
     checks.push(provenanceFailures.length === 0
-      ? pass("server-runtime-provenance", "Built server is bound to the package, source identity, Bun 1.3.14, current frozen lockfile, and an authoritative no-skip publish gate.")
+      ? pass("server-runtime-provenance", "Built server and dashboard artifacts are byte-bound to the package, source identity, Bun 1.3.14, current frozen lockfile, and an authoritative no-skip publish gate.")
       : fail("server-runtime-provenance", "Built server release provenance is missing, stale, or incomplete.", {
         failures: provenanceFailures,
       }));
