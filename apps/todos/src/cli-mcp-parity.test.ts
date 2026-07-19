@@ -119,7 +119,7 @@ describe("CLI/MCP parity manifest", () => {
 
   test("keeps documented top-level CLI commands present in CLI help output", () => {
     const help = Bun.spawnSync({
-      cmd: [process.execPath, "src/cli/index.tsx", "--help"],
+      cmd: [process.execPath, "--no-env-file", "src/cli/index.tsx", "--help"],
       cwd: join(import.meta.dir, ".."),
       stdout: "pipe",
       stderr: "pipe",

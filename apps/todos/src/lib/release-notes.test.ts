@@ -111,6 +111,7 @@ describe("local release notes generation", () => {
     const proc = Bun.spawn({
       cmd: [
         process.execPath,
+        "--no-env-file",
         "src/cli/index.tsx",
         "release-notes",
         "--project",

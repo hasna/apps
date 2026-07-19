@@ -35,7 +35,7 @@ async function buildCli(): Promise<string> {
 }
 
 async function runCli(executable: string, args: string[], env: Record<string, string>, cwd = REPO_ROOT): Promise<CliResult> {
-  const proc = Bun.spawn(["bun", executable, ...args], {
+  const proc = Bun.spawn([process.execPath, "--no-env-file", executable, ...args], {
     cwd,
     env: { ...env, NODE_PATH: join(REPO_ROOT, "node_modules") },
     stdout: "pipe",

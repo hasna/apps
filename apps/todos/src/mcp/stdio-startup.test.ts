@@ -52,7 +52,7 @@ afterAll(async () => {
 
 describe("C1: `todos mcp` starts a stdio MCP server", () => {
   it("responds to the MCP handshake and lists tools", async () => {
-    const tools = await connectAndListTools("bun", ["run", "src/cli/index.tsx", "mcp"]);
+    const tools = await connectAndListTools(process.execPath, ["--no-env-file", "run", "src/cli/index.tsx", "mcp"]);
     expect(tools.length).toBeGreaterThan(0);
     // minimal (default) profile core tool
     expect(tools).toContain("bootstrap");
@@ -61,13 +61,13 @@ describe("C1: `todos mcp` starts a stdio MCP server", () => {
 
 describe("C2: bare `todos-mcp` defaults to stdio (not HTTP)", () => {
   it("running mcp/index.ts with no flags speaks stdio", async () => {
-    const tools = await connectAndListTools("bun", ["run", "src/mcp/index.ts"]);
+    const tools = await connectAndListTools(process.execPath, ["--no-env-file", "run", "src/mcp/index.ts"]);
     expect(tools.length).toBeGreaterThan(0);
     expect(tools).toContain("bootstrap");
   }, 30000);
 
   it("still speaks stdio with an explicit --stdio flag (register-writer form)", async () => {
-    const tools = await connectAndListTools("bun", ["run", "src/mcp/index.ts", "--stdio"]);
+    const tools = await connectAndListTools(process.execPath, ["--no-env-file", "run", "src/mcp/index.ts", "--stdio"]);
     expect(tools).toContain("bootstrap");
   }, 30000);
 });

@@ -1,5 +1,7 @@
-import { afterEach, describe, expect, it } from "bun:test";
-import { readFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   incidentEventId,
   incidentTransitionId,
@@ -8,6 +10,7 @@ import {
 } from "../incidents/contracts.js";
 import { canonicalIncidentJson } from "../incidents/outbox-publisher.js";
 import type { IncidentOutboxRecord } from "../incidents/postgres-store.js";
+import { localRoutingTestEnv } from "../test/local-routing-env.js";
 
 const fixture = JSON.parse(readFileSync(
   new URL("../../fixtures/todos-incident-projection-v1.json", import.meta.url),
@@ -15,9 +18,18 @@ const fixture = JSON.parse(readFileSync(
 )) as IncidentProjectionEvent;
 
 const servers: Array<ReturnType<typeof Bun.serve>> = [];
+let testRoot = "";
+
+beforeEach(() => {
+  testRoot = mkdtempSync(join(tmpdir(), "todos-incident-outbox-cli-"));
+});
 
 afterEach(async () => {
-  while (servers.length) await servers.pop()!.stop(true);
+  try {
+    while (servers.length) await servers.pop()!.stop(true);
+  } finally {
+    rmSync(testRoot, { recursive: true, force: true });
+  }
 });
 
 function serve(handler: (request: Request) => Response | Promise<Response>) {
@@ -26,17 +38,29 @@ function serve(handler: (request: Request) => Response | Promise<Response>) {
   return { baseUrl: `http://127.0.0.1:${server.port}` };
 }
 
-function cliEnv(baseUrl: string): Record<string, string> {
-  const env = { ...process.env } as Record<string, string>;
-  env.HASNA_TODOS_STORAGE_MODE = "remote";
-  env.HASNA_TODOS_API_URL = baseUrl;
-  env.HASNA_TODOS_API_KEY = "test-sentinel-key";
-  delete env.TODOS_STORAGE_MODE;
-  delete env.HASNA_CONVERSATIONS_API_URL;
-  delete env.HASNA_CONVERSATIONS_API_KEY;
-  delete env.CONVERSATIONS_API_URL;
-  delete env.CONVERSATIONS_API_KEY;
-  return env;
+function cliEnv(baseUrl: string): Record<string, string | undefined> {
+  const home = join(testRoot, "home");
+  const cache = join(testRoot, "cache");
+  const events = join(testRoot, "events");
+  for (const directory of [home, cache, events]) {
+    mkdirSync(directory, { recursive: true });
+  }
+  return localRoutingTestEnv({
+    HOME: home,
+    USERPROFILE: home,
+    TMPDIR: testRoot,
+    TMP: testRoot,
+    TEMP: testRoot,
+    XDG_CACHE_HOME: cache,
+    BUN_INSTALL_CACHE_DIR: cache,
+    HASNA_EVENTS_DIR: events,
+    TODOS_DB_PATH: join(testRoot, "todos.db"),
+    TODOS_AUTO_PROJECT: "false",
+    HASNA_TODOS_STORAGE_MODE: "remote",
+    TODOS_STORAGE_MODE: undefined,
+    HASNA_TODOS_API_URL: baseUrl,
+    HASNA_TODOS_API_KEY: "test-sentinel-key",
+  });
 }
 
 function outboxRecord(status: "leased" | "acked"): IncidentOutboxRecord {
@@ -149,8 +173,8 @@ function projection(replayed: boolean) {
   };
 }
 
-async function runCli(args: string[], env: Record<string, string>) {
-  const processHandle = Bun.spawn(["bun", "run", "src/cli/index.tsx", "--json", ...args], {
+async function runCli(args: string[], env: Record<string, string | undefined>) {
+  const processHandle = Bun.spawn([process.execPath, "--no-env-file", "run", "src/cli/index.tsx", "--json", ...args], {
     cwd: new URL("../..", import.meta.url).pathname,
     env,
     stdout: "pipe",

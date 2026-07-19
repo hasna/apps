@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import packageJson from "../package.json";
@@ -7,8 +7,10 @@ import { createTask } from "./db/task-crud.js";
 import { closeDatabase, getDatabase, resetDatabase } from "./db/database.js";
 import { createMcpManifest } from "./mcp.js";
 import { withNoNetwork } from "./test/no-network.js";
+import { localRoutingTestEnv } from "./test/local-routing-env.js";
 
 const CWD = join(import.meta.dir, "..");
+const CLI_ENTRYPOINT = join(CWD, "src/cli/index.tsx");
 const cloudPackage = "@hasna" + "/cloud";
 const originalFetch = globalThis.fetch;
 
@@ -19,24 +21,30 @@ let dbPath: string;
 async function runCli(
   args: string[],
   env: Record<string, string | undefined>,
+  cwd = CWD,
+  ambientEnv: Readonly<Record<string, string | undefined>> = process.env,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  const childEnv = Object.fromEntries(
-    Object.entries({
-      ...process.env,
-      HOME: fakeHome,
-      TODOS_DB_PATH: dbPath,
-      TODOS_AUTO_PROJECT: "false",
-      HASNA_TODOS_STORAGE_MODE: "local",
-      TODOS_STORAGE_MODE: "local",
-      HASNA_TODOS_API_URL: "",
-      HASNA_TODOS_API_KEY: "",
-      TODOS_API_URL: "",
-      TODOS_API_KEY: "",
-      ...env,
-    }).filter((entry): entry is [string, string] => entry[1] !== undefined),
-  );
-  const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
-    cwd: CWD,
+  const childTemp = join(tmpDir, "child-tmp");
+  const childCache = join(tmpDir, "child-cache");
+  const childEvents = join(tmpDir, "child-events");
+  for (const directory of [fakeHome, childTemp, childCache, childEvents]) {
+    mkdirSync(directory, { recursive: true });
+  }
+  const childEnv = localRoutingTestEnv({
+    HOME: fakeHome,
+    USERPROFILE: fakeHome,
+    TMPDIR: childTemp,
+    TMP: childTemp,
+    TEMP: childTemp,
+    XDG_CACHE_HOME: childCache,
+    BUN_INSTALL_CACHE_DIR: childCache,
+    HASNA_EVENTS_DIR: childEvents,
+    TODOS_DB_PATH: dbPath,
+    TODOS_AUTO_PROJECT: "false",
+    ...env,
+  }, ambientEnv);
+  const proc = Bun.spawn([process.execPath, "--no-env-file", "run", CLI_ENTRYPOINT, ...args], {
+    cwd,
     env: childEnv,
     stdout: "pipe",
     stderr: "pipe",
@@ -112,6 +120,46 @@ describe("OSS local-first runtime defaults", () => {
 
     expect(task.title).toBe("Trapped local task");
     expect(calls).toEqual([]);
+  });
+
+  test("CLI launcher ignores poisoned working-directory dotenv and ambient provider configuration", async () => {
+    const poisonedCwd = join(tmpDir, "poisoned-cwd");
+    mkdirSync(poisonedCwd, { recursive: true });
+    writeFileSync(join(poisonedCwd, ".env"), [
+      "HASNA_TODOS_STORAGE_MODE=self_hosted",
+      "TODOS_STORAGE_MODE=self_hosted",
+      "HASNA_TODOS_API_URL=not-an-absolute-url",
+      "HASNA_TODOS_API_KEY=dotenv-sentinel",
+      "TODOS_API_URL=not-an-absolute-url",
+      "TODOS_API_KEY=dotenv-sentinel",
+      "AWS_PROFILE=production",
+      "",
+    ].join("\n"));
+
+    const result = await runCli(
+      ["--json", "add", "Hermetic dotenv task"],
+      {
+        HASNA_TODOS_STORAGE_MODE: undefined,
+        TODOS_STORAGE_MODE: undefined,
+        HASNA_TODOS_API_URL: undefined,
+        HASNA_TODOS_API_KEY: undefined,
+        TODOS_API_URL: undefined,
+        TODOS_API_KEY: undefined,
+      },
+      poisonedCwd,
+      {
+        PATH: process.env["PATH"],
+        HOME: "/outside/live-home",
+        BASH_ENV: "/outside/bash-init",
+        ENV: "/outside/sh-init",
+        DOTENV_CONFIG_PATH: "/outside/live.env",
+        HTTPS_PROXY: "http://proxy.example.invalid:8080",
+        AWS_PROFILE: "production",
+      },
+    );
+
+    expect(result.exitCode, result.stderr || result.stdout).toBe(0);
+    expect(JSON.parse(result.stdout).title).toBe("Hermetic dotenv task");
   });
 
   // Safe-by-default boundary: self_hosted cloud routing only engages when an

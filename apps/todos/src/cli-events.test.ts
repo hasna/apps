@@ -2,25 +2,22 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { localRoutingTestEnv } from "./test/local-routing-env.js";
 
 let tempDir = "";
 
 async function runTodos(args: string[]) {
   const child = Bun.spawn({
-    cmd: ["bun", "run", "src/cli/index.tsx", ...args],
+    cmd: [process.execPath, "--no-env-file", "run", "src/cli/index.tsx", ...args],
     cwd: process.cwd(),
-    env: {
-      ...process.env,
+    env: localRoutingTestEnv({
       HOME: join(tempDir, "home"),
+      USERPROFILE: join(tempDir, "home"),
+      TMPDIR: tempDir,
       HASNA_EVENTS_DIR: join(tempDir, "events"),
       TODOS_DB_PATH: join(tempDir, "todos.db"),
-      HASNA_TODOS_STORAGE_MODE: "local",
-      TODOS_STORAGE_MODE: "local",
-      HASNA_TODOS_API_URL: "",
-      HASNA_TODOS_API_KEY: "",
-      TODOS_API_URL: "",
-      TODOS_API_KEY: "",
-    },
+      TODOS_AUTO_PROJECT: "false",
+    }),
     stdout: "pipe",
     stderr: "pipe",
   });

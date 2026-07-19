@@ -55,6 +55,15 @@ function openMigratedTestDatabase(dbPath: string): Database {
   }
 }
 
+function withMigratedTestDatabase<T>(dbPath: string, use: (db: Database) => T): T {
+  const db = openMigratedTestDatabase(dbPath);
+  try {
+    return use(db);
+  } finally {
+    db.close();
+  }
+}
+
 async function runCli(
   args: string[],
   dbPath: string,
@@ -561,6 +570,18 @@ describe("CLI integration", () => {
     expect(JSON.parse(completedJson.stdout)).toHaveLength(80);
   });
 
+  it("should close migrated test database handles when fixture setup throws", () => {
+    const dbPath = join(testRoot, "exception-safe-fixture.db");
+    let escapedHandle: Database | undefined;
+
+    expect(() => withMigratedTestDatabase(dbPath, (db) => {
+      escapedHandle = db;
+      throw new Error("expected fixture failure");
+    })).toThrow("expected fixture failure");
+
+    expect(() => escapedHandle!.query("SELECT 1").get()).toThrow();
+  });
+
   it("should emit complete parseable JSON for a >1MB doctor routing report over a pipe", async () => {
     // Regression guard: at fleet scale `doctor routing --json` is multi-MB and
     // a bare console.log intermittently truncated it when stdout was a pipe
@@ -568,9 +589,7 @@ describe("CLI integration", () => {
     const dbPath = join(testRoot, "large-doctor-routing.db");
     const projectDir = join(testRoot, "large-doctor-project");
     mkdirSync(projectDir, { recursive: true });
-    const seedDb = new Database(dbPath);
-    runMigrations(seedDb);
-    try {
+    withMigratedTestDatabase(dbPath, (seedDb) => {
       const project = createProject({ name: "LargeDoctor", path: projectDir }, seedDb);
       createTaskList({ name: "LargeDoctor list", slug: project.task_list_id!, project_id: project.id }, seedDb);
       const longTitle = "routing-drift-payload ".repeat(30);
@@ -587,9 +606,7 @@ describe("CLI integration", () => {
         }
       });
       seed();
-    } finally {
-      seedDb.close();
-    }
+    });
 
     const run = await runCli(["doctor", "routing", "--json"], dbPath);
     expect(run.exitCode).toBe(1); // findings present
@@ -619,37 +636,36 @@ describe("CLI integration", () => {
     writeFileSync(outsideSentinel, "unchanged\n");
     writeFileSync(shellInit, `printf 'contaminated\\n' > '${outsideSentinel}'\n`);
 
-    const db = new Database(dbPath);
-    runMigrations(db);
-    const project = createProject({ name: "DoctorApply", path: projectDir }, db);
-    const list = createTaskList({ name: "DoctorApply list", slug: project.task_list_id!, project_id: project.id }, db);
-    const drifted = createTask({
-      title: "drifted apply task",
-      project_id: project.id,
-      task_list_id: list.id,
-      working_dir: "/somewhere/wrong",
-      status: "pending",
-      tags: ["auto:route"],
-    }, db);
-    db.close();
+    const { project, drifted } = withMigratedTestDatabase(dbPath, (db) => {
+      const project = createProject({ name: "DoctorApply", path: projectDir }, db);
+      const list = createTaskList({ name: "DoctorApply list", slug: project.task_list_id!, project_id: project.id }, db);
+      const drifted = createTask({
+        title: "drifted apply task",
+        project_id: project.id,
+        task_list_id: list.id,
+        working_dir: "/somewhere/wrong",
+        status: "pending",
+        tags: ["auto:route"],
+      }, db);
+      return { project, drifted };
+    });
 
-    const parallelDb = new Database(parallelDbPath);
-    runMigrations(parallelDb);
-    const parallelProject = createProject({ name: "DoctorParallel", path: parallelProjectDir }, parallelDb);
-    const parallelList = createTaskList({
-      name: "DoctorParallel list",
-      slug: parallelProject.task_list_id!,
-      project_id: parallelProject.id,
-    }, parallelDb);
-    const parallelDrifted = createTask({
-      title: "parallel drift must remain",
-      project_id: parallelProject.id,
-      task_list_id: parallelList.id,
-      working_dir: "/parallel/wrong",
-      status: "pending",
-      tags: ["auto:route"],
-    }, parallelDb);
-    parallelDb.close();
+    const parallelDrifted = withMigratedTestDatabase(parallelDbPath, (parallelDb) => {
+      const parallelProject = createProject({ name: "DoctorParallel", path: parallelProjectDir }, parallelDb);
+      const parallelList = createTaskList({
+        name: "DoctorParallel list",
+        slug: parallelProject.task_list_id!,
+        project_id: parallelProject.id,
+      }, parallelDb);
+      return createTask({
+        title: "parallel drift must remain",
+        project_id: parallelProject.id,
+        task_list_id: parallelList.id,
+        working_dir: "/parallel/wrong",
+        status: "pending",
+        tags: ["auto:route"],
+      }, parallelDb);
+    });
 
     const poisonedAmbient = {
       PATH: process.env["PATH"],
@@ -681,14 +697,14 @@ describe("CLI integration", () => {
     expect(existsSync(parallelRun.runRoot)).toBe(false);
 
     // the mutation must be persisted in the scratch db
-    const verify = new Database(dbPath);
-    const row = verify.query("SELECT working_dir FROM tasks WHERE id = ?").get(drifted.id) as { working_dir: string };
-    verify.close();
+    const row = withMigratedTestDatabase(dbPath, (verify) => (
+      verify.query("SELECT working_dir FROM tasks WHERE id = ?").get(drifted.id) as { working_dir: string }
+    ));
     expect(row.working_dir).toBe(projectDir);
 
-    const parallelVerify = new Database(parallelDbPath);
-    const parallelRow = parallelVerify.query("SELECT working_dir FROM tasks WHERE id = ?").get(parallelDrifted.id) as { working_dir: string };
-    parallelVerify.close();
+    const parallelRow = withMigratedTestDatabase(parallelDbPath, (parallelVerify) => (
+      parallelVerify.query("SELECT working_dir FROM tasks WHERE id = ?").get(parallelDrifted.id) as { working_dir: string }
+    ));
     expect(parallelRow.working_dir).toBe("/parallel/wrong");
     expect(readFileSync(outsideSentinel, "utf8")).toBe("unchanged\n");
 

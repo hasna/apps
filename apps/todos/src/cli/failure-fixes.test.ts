@@ -14,7 +14,7 @@ let fakeHome: string;
 
 function run(args: string): string {
   return execSync(
-    `bun run src/cli/index.tsx ${args}`,
+    `bun --no-env-file run src/cli/index.tsx ${args}`,
     {
       encoding: "utf-8",
       cwd: CWD,
@@ -28,7 +28,7 @@ function run(args: string): string {
 function runExpectFail(args: string): { code: number; output: string } {
   try {
     execSync(
-      `bun run src/cli/index.tsx ${args} 2>&1`,
+      `bun --no-env-file run src/cli/index.tsx ${args} 2>&1`,
       {
         encoding: "utf-8",
         cwd: CWD,
@@ -83,7 +83,7 @@ describe("H1: global --json works on automation commands", () => {
 
   it("`--json next` emits JSON null when no task is available", () => {
     const out = execSync(
-      `bun run src/cli/index.tsx --json next`,
+      `bun --no-env-file run src/cli/index.tsx --json next`,
       {
         encoding: "utf-8",
         cwd: CWD,

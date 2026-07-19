@@ -19,7 +19,7 @@ afterEach(() => {
 });
 
 async function runCli(args: string[], root: string, baseUrl: string) {
-  const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
+  const proc = Bun.spawn([process.execPath, "--no-env-file", "run", "src/cli/index.tsx", ...args], {
     cwd: REPO_ROOT,
     env: {
       PATH: process.env.PATH ?? "",

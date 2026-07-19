@@ -83,7 +83,7 @@ describe("environment snapshots", () => {
     const root = makeProject();
     const output = join(root, "cli-snapshot.json");
     const result = Bun.spawnSync({
-      cmd: [process.execPath, "src/cli/index.tsx", "--json", "env-snapshot", "capture", "--root", root, "--output", output, "--command", "bun test"],
+      cmd: [process.execPath, "--no-env-file", "src/cli/index.tsx", "--json", "env-snapshot", "capture", "--root", root, "--output", output, "--command", "bun test"],
       cwd: join(import.meta.dir, "..", ".."),
       stdout: "pipe",
       stderr: "pipe",
