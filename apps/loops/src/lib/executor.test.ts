@@ -783,7 +783,20 @@ describe("executeLoop", () => {
       const root = mkdtempSync(join(tmpdir(), "loops-worktree-local-extra-args-snapshot-"));
       const notRepo = join(root, "not-a-repo");
       mkdirSync(notRepo, { recursive: true });
-      const bin = fakePwdBinary(root);
+      const bin = join(root, "bin");
+      mkdirSync(bin, { recursive: true });
+      const fake = join(bin, "claude");
+      writeFileSync(
+        fake,
+        [
+          "#!/usr/bin/env bash",
+          "pwd",
+          "printf 'env-contract:%s\\n' \"${LOOPS_AGENT_SESSION_CONTRACT:-}\"",
+          "printf 'stdin:'",
+          "cat",
+        ].join("\n"),
+      );
+      chmodSync(fake, 0o755);
       const wtPath = join(root, "worktrees", "repo", "run-1");
       let extraArgsReads = 0;
       const target: AgentTarget = {
@@ -791,6 +804,7 @@ describe("executeLoop", () => {
         provider: "claude",
         prompt: "work",
         configIsolation: "safe",
+        allowlist: { safetyReason: "verify local fallback contract cwd" },
         cwd: wtPath,
         timeoutMs: 30_000,
         worktree: {
@@ -817,7 +831,13 @@ describe("executeLoop", () => {
           env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
         });
         expect(result.status).toBe("succeeded");
-        expect(result.stdout.trim()).toBe(realpathSync(notRepo));
+        expect(result.stdout.split(/\r?\n/, 1)[0]).toBe(realpathSync(notRepo));
+        const envContract = result.stdout.split(/\r?\n/).find((line) => line.startsWith("env-contract:"));
+        const stdin = result.stdout.slice(result.stdout.indexOf("stdin:"));
+        expect(envContract).toContain(`\"cwd\":\"${notRepo}\"`);
+        expect(envContract).not.toContain(wtPath);
+        expect(stdin).toContain(`- Cwd: ${notRepo}`);
+        expect(stdin).not.toContain(wtPath);
         expect(extraArgsReads).toBe(1);
       } finally {
         rmSync(root, { recursive: true, force: true });
@@ -832,8 +852,28 @@ describe("executeLoop", () => {
       const binDir = join(home, ".local", "bin");
       mkdirSync(binDir, { recursive: true });
       const fake = join(binDir, "codex");
-      writeFileSync(fake, '#!/usr/bin/env bash\nprintf \'%s\\n\' "$@"\ncat >/dev/null\n');
+      writeFileSync(
+        fake,
+        [
+          "#!/usr/bin/env bash",
+          "printf '%s\\n' \"$@\"",
+          "printf 'env-contract:%s\\n' \"${LOOPS_AGENT_SESSION_CONTRACT:-}\"",
+          "printf 'stdin:'",
+          "cat",
+        ].join("\n"),
+      );
       chmodSync(fake, 0o755);
+      const mktempLog = join(root, "mktemp.log");
+      const fakeMktemp = join(binDir, "mktemp");
+      writeFileSync(
+        fakeMktemp,
+        [
+          "#!/usr/bin/env bash",
+          `printf 'mktemp\\n' >> ${JSON.stringify(mktempLog)}`,
+          'exec /usr/bin/mktemp "$@"',
+        ].join("\n"),
+      );
+      chmodSync(fakeMktemp, 0o755);
       const wtPath = join(root, "worktrees", "repo", "run-1");
       let extraArgsReads = 0;
       const target: AgentTarget = {
@@ -841,6 +881,7 @@ describe("executeLoop", () => {
         provider: "codex",
         prompt: "work",
         configIsolation: "safe",
+        allowlist: { safetyReason: "verify remote fallback contract cwd" },
         cwd: wtPath,
         timeoutMs: 30_000,
         worktree: {
@@ -871,7 +912,13 @@ describe("executeLoop", () => {
         expect(result.status).toBe("succeeded");
         expect(result.stderr).toContain("worktree preparation failed (mode=auto)");
         expect(result.stdout).toContain(`--cd\n${notRepo}`);
-        expect(result.stdout).not.toContain(wtPath);
+        const envContract = result.stdout.split(/\r?\n/).find((line) => line.startsWith("env-contract:"));
+        const stdin = result.stdout.slice(result.stdout.indexOf("stdin:"));
+        expect(envContract).toContain(`\"cwd\":\"${notRepo}\"`);
+        expect(envContract).not.toContain(wtPath);
+        expect(stdin).toContain(`- Cwd: ${notRepo}`);
+        expect(stdin).not.toContain(wtPath);
+        expect(readFileSync(mktempLog, "utf8").trim().split(/\r?\n/)).toEqual(["mktemp"]);
         expect(extraArgsReads).toBe(1);
       } finally {
         rmSync(root, { recursive: true, force: true });

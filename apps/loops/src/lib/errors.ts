@@ -89,13 +89,14 @@ export function publicValidationDetails(value: unknown): Readonly<PublicValidati
   ) {
     return undefined;
   }
-  if (
-    (["invalid_item", "option_not_allowed"] as AgentExtraArgsValidationReason[]).includes(reason as AgentExtraArgsValidationReason) !==
-      (index !== undefined)
-  ) {
+  const indexedReason = reason === "invalid_item" || reason === "option_not_allowed";
+  if (indexedReason !== (index !== undefined)) return undefined;
+  if (index === undefined) {
+    if (!path.endsWith(".extraArgs")) return undefined;
+  } else if (!path.endsWith(`.extraArgs[${index}]`)) {
     return undefined;
   }
-  if (["not_array", "invalid_array"].includes(reason) && option !== undefined) return undefined;
+  if (option !== undefined && reason !== "option_not_allowed") return undefined;
   return Object.freeze({
     code,
     reason: reason as AgentExtraArgsValidationReason,
@@ -120,6 +121,15 @@ export class ValidationError extends CodedError {
       value: projected,
       writable: false,
     });
+  }
+}
+
+/** Safely capture and re-project even forged/subclass validation errors. */
+export function validationErrorPublicDetails(error: ValidationError): Readonly<PublicValidationDetails> | undefined {
+  try {
+    return publicValidationDetails(error.publicDetails);
+  } catch {
+    return undefined;
   }
 }
 

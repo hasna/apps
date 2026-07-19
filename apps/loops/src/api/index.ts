@@ -24,8 +24,8 @@ import {
   LegacyWorkflowRunProvenanceError,
   LoopArchivedError,
   LoopNotFoundError,
-  publicValidationDetails,
   ValidationError,
+  validationErrorPublicDetails,
   WorkflowRunDefinitionConflictError,
 } from "../lib/errors.js";
 import { validateAgentTarget, workflowStepAgentSessionContract } from "../lib/agent-adapter.js";
@@ -1474,7 +1474,7 @@ function errorResponse(error: unknown): Response {
   if (error instanceof LoopNotFoundError) return fail("loop_not_found", 404);
   if (error instanceof LoopArchivedError) return fail("loop_archived", 409);
   if (error instanceof ValidationError) {
-    const details = publicValidationDetails(error.publicDetails);
+    const details = validationErrorPublicDetails(error);
     return fail("validation_failed", 422, details ? { details } : undefined);
   }
   if (error instanceof LegacyWorkflowRunProvenanceError) return fail("workflow_run_provenance_missing", 409);

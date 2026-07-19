@@ -428,12 +428,12 @@ function commandForShell(spec: CommandSpec): string {
   return [spec.command, ...spec.args.map(shellQuote)].join(" ");
 }
 
-function hereDoc(value: string): string[] {
+function hereDoc(value: string, destinationVariable = "__OPENLOOPS_STDIN"): string[] {
   let delimiter = `__OPENLOOPS_STDIN_${randomBytes(8).toString("hex").toUpperCase()}__`;
   while (value.split(/\r?\n/).includes(delimiter)) {
     delimiter = `__OPENLOOPS_STDIN_${randomBytes(8).toString("hex").toUpperCase()}__`;
   }
-  return [`cat > "$__OPENLOOPS_STDIN" <<'${delimiter}'`, value, delimiter];
+  return [`cat > "$${destinationVariable}" <<'${delimiter}'`, value, delimiter];
 }
 
 function remoteBootstrapLines(
@@ -594,28 +594,48 @@ function remoteScript(spec: CommandSpec, metadata: ExecutionMetadata, fallbackSp
   // machine and fails closed when preparation fails; mode=auto falls back to
   // the original checkout using the rebuilt fallback invocation.
   const lines = remoteBootstrapLines(spec, metadata, { worktree: true });
+  const hasAutoFallback = Boolean(spec.worktree?.enabled && spec.worktree.mode === "auto" && fallbackSpec);
 
-  let stdinRedirect = "";
-  if (spec.stdin !== undefined) {
+  let primaryStdinRedirect = "";
+  if (hasAutoFallback) {
+    if (spec.stdin !== undefined || fallbackSpec?.stdin !== undefined) {
+      lines.push('__OPENLOOPS_STDIN=""', 'trap \'rm -f "$__OPENLOOPS_STDIN"\' EXIT');
+    }
+  } else if (spec.stdin !== undefined) {
     lines.push('__OPENLOOPS_STDIN="$(mktemp -t openloops-stdin.XXXXXX)"', 'trap \'rm -f "$__OPENLOOPS_STDIN"\' EXIT');
     lines.push(...hereDoc(spec.stdin));
-    stdinRedirect = ' < "$__OPENLOOPS_STDIN"';
+    primaryStdinRedirect = ' < "$__OPENLOOPS_STDIN"';
   }
 
-  const invocationFor = (invocationSpec: CommandSpec): string =>
+  const invocationFor = (invocationSpec: CommandSpec, stdinRedirect: string): string =>
     invocationSpec.shell
       ? `sh -c ${shellQuote(commandForShell(invocationSpec))}${stdinRedirect}`
       : `${[invocationSpec.command, ...invocationSpec.args].map(shellQuote).join(" ")}${stdinRedirect}`;
-  if (spec.worktree?.enabled && spec.worktree.mode === "auto" && fallbackSpec) {
+  const sessionContractLine = (invocationSpec: CommandSpec): string =>
+    invocationSpec.sessionContract
+      ? `export LOOPS_AGENT_SESSION_CONTRACT=${shellQuote(JSON.stringify(invocationSpec.sessionContract))}`
+      : "unset LOOPS_AGENT_SESSION_CONTRACT";
+  const fallbackBranchLines = (invocationSpec: CommandSpec): string[] => {
+    const branchLines: string[] = [];
+    let stdinRedirect = "";
+    if (invocationSpec.stdin !== undefined) {
+      branchLines.push('__OPENLOOPS_STDIN="$(mktemp -t openloops-stdin.XXXXXX)"');
+      branchLines.push(...hereDoc(invocationSpec.stdin));
+      stdinRedirect = ' < "$__OPENLOOPS_STDIN"';
+    }
+    branchLines.push(sessionContractLine(invocationSpec), invocationFor(invocationSpec, stdinRedirect));
+    return branchLines;
+  };
+  if (hasAutoFallback && fallbackSpec) {
     lines.push(
       'if [ "${__OPENLOOPS_WORKTREE_OK:-0}" = 1 ]; then',
-      `  ${invocationFor(spec)}`,
+      ...fallbackBranchLines(spec),
       "else",
-      `  ${invocationFor(fallbackSpec)}`,
+      ...fallbackBranchLines(fallbackSpec),
       "fi",
     );
   } else {
-    lines.push(invocationFor(spec));
+    lines.push(invocationFor(spec, primaryStdinRedirect));
   }
   return `${lines.join("\n")}\n`;
 }
@@ -1156,6 +1176,10 @@ export async function executeTarget(
   if (worktreeEntry?.failure) return worktreeEntry.failure;
   if (worktreeEntry?.fallbackCwd) {
     spec = worktreeFallbackSpec(spec, worktreeEntry.fallbackCwd) ?? spec;
+    // executionEnv was composed from the primary worktree contract before
+    // preparation. Refresh the generated agent metadata after the spec swap
+    // without repeating account/credential resolution.
+    Object.assign(env, allowlistEnv(spec.allowlist, spec.sessionContract));
   }
 
   const child = spawn(spec.command, spec.args, {

@@ -6,7 +6,7 @@ import { Database } from "bun:sqlite";
 import { createSqliteLoopStorage } from "../lib/storage/sqlite.js";
 import type { LoopStorageContract } from "../lib/storage/contract.js";
 import type { TenantAuthContext } from "../lib/auth/tenant-auth.js";
-import { ValidationError, type PublicValidationDetails } from "../lib/errors.js";
+import { publicValidationDetails, ValidationError, type PublicValidationDetails } from "../lib/errors.js";
 import type { LoopsApiServerOptions } from "./index.js";
 import type { Loop, LoopRun, WorkflowSpec } from "../types.js";
 
@@ -420,6 +420,38 @@ describe("loops-api foundation", () => {
     expect(error.publicDetails).toBeUndefined();
   });
 
+  test("public validation detail projection rejects producer-impossible relationships", () => {
+    const impossible = [
+      {
+        code: "agent_extra_args_invalid",
+        reason: "invalid_item",
+        path: "target.extraArgs[0]",
+        index: 0,
+        option: "--private",
+      },
+      {
+        code: "agent_extra_args_invalid",
+        reason: "option_not_allowed",
+        path: "target.extraArgs[9]",
+        index: 0,
+        option: "--private",
+      },
+      {
+        code: "agent_extra_args_invalid",
+        reason: "not_array",
+        path: "target.extraArgs[9]",
+      },
+      {
+        code: "agent_extra_args_invalid",
+        reason: "not_array",
+        path: "privatePath",
+      },
+    ];
+    for (const details of impossible) {
+      expect(publicValidationDetails(details)).toBeUndefined();
+    }
+  });
+
   test("API re-projects forged validation details through the bounded public schema", async () => {
     const mod = await import("./index.js");
     const forged = Object.create(ValidationError.prototype) as ValidationError;
@@ -454,6 +486,62 @@ describe("loops-api foundation", () => {
         },
       });
       expect(JSON.stringify(body)).not.toContain("super-secret");
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("API hides throwing own or inherited public-details getters", async () => {
+    const mod = await import("./index.js");
+    for (const inherited of [false, true]) {
+      const forgedPrototype = inherited ? Object.create(ValidationError.prototype) : ValidationError.prototype;
+      const forged = Object.create(forgedPrototype) as ValidationError;
+      Object.defineProperty(inherited ? forgedPrototype : forged, "publicDetails", {
+        configurable: true,
+        get() {
+          throw new Error("private-public-details-getter-sentinel");
+        },
+      });
+      const storage = {
+        listLoops: async () => { throw forged; },
+      } as unknown as LoopStorageContract;
+      const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+
+      try {
+        const response = await fetch(apiUrl(server, "/v1/loops"));
+        expect(response.status).toBe(422);
+        expect(response.headers.get("content-type")).toContain("application/json");
+        const body = await response.text();
+        expect(JSON.parse(body)).toEqual({ ok: false, error: "validation_failed" });
+        expect(body).not.toContain("private-public-details-getter-sentinel");
+        expect(body).not.toContain(import.meta.dir);
+      } finally {
+        server.stop(true);
+      }
+    }
+  });
+
+  test("API hides forged validation details with impossible field relationships", async () => {
+    const mod = await import("./index.js");
+    const forged = Object.create(ValidationError.prototype) as ValidationError;
+    Object.defineProperty(forged, "publicDetails", {
+      value: {
+        code: "agent_extra_args_invalid",
+        reason: "invalid_item",
+        path: "target.extraArgs[0]",
+        index: 0,
+        option: "--private",
+      },
+    });
+    const storage = {
+      listLoops: async () => { throw forged; },
+    } as unknown as LoopStorageContract;
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+
+    try {
+      const response = await fetch(apiUrl(server, "/v1/loops"));
+      expect(response.status).toBe(422);
+      expect(await response.json()).toEqual({ ok: false, error: "validation_failed" });
     } finally {
       server.stop(true);
     }
