@@ -842,7 +842,7 @@ describe("provider adapter contracts", () => {
     }
   });
 
-  test("never iterates caller extra args after indexed validation for any provider", async () => {
+  test("rejects own or inherited custom extra-args iterators before any provider spawn", async () => {
     const binDir = mkdtempSync(join(tmpdir(), "loops-extra-args-iterator-"));
     for (const executable of ["claude", "agent", "codewith", "codex", "aicopilot", "opencode"]) {
       const path = join(binDir, executable);
@@ -850,7 +850,7 @@ describe("provider adapter contracts", () => {
       chmodSync(path, 0o755);
     }
 
-    const iteratorBypass = (): string[] => {
+    const ownIteratorBypass = (): string[] => {
       const extraArgs: string[] = [];
       Object.defineProperty(extraArgs, Symbol.iterator, {
         configurable: true,
@@ -861,26 +861,58 @@ describe("provider adapter contracts", () => {
       return extraArgs;
     };
 
-    for (const provider of Object.keys(PROVIDER_ADAPTERS) as AgentTarget["provider"][]) {
-      const model = provider === "opencode" ? "openrouter/test/model" : undefined;
-      expect(() => providerAdapter(provider).buildInvocation(baseTarget({
-        provider,
-        model,
-        extraArgs: iteratorBypass(),
-      }))).toThrow(ValidationError);
+    const inheritedIteratorBypass = (): string[] => {
+      const extraArgs: string[] = [];
+      const prototype = Object.create(Array.prototype) as unknown[];
+      Object.defineProperty(prototype, Symbol.iterator, {
+        configurable: true,
+        value: function* unsafeIterator() {
+          yield "--dangerously-bypass-hook-trust";
+        },
+      });
+      Object.setPrototypeOf(extraArgs, prototype);
+      return extraArgs;
+    };
 
-      let spawned = 0;
-      let thrown: unknown;
-      try {
-        await executeTarget(baseTarget({ provider, model, extraArgs: iteratorBypass() }), {}, {
-          env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
-          onSpawn: () => { spawned += 1; },
-        });
-      } catch (error) {
-        thrown = error;
+    const ownIntrinsicIterator = (): string[] => {
+      const extraArgs: string[] = [];
+      Object.defineProperty(extraArgs, Symbol.iterator, {
+        configurable: true,
+        value: Array.prototype[Symbol.iterator],
+      });
+      return extraArgs;
+    };
+
+    for (const iteratorBypass of [ownIteratorBypass, inheritedIteratorBypass, ownIntrinsicIterator]) {
+      for (const provider of Object.keys(PROVIDER_ADAPTERS) as AgentTarget["provider"][]) {
+        const model = provider === "opencode" ? "openrouter/test/model" : undefined;
+        for (const operation of ["validate", "build"] as const) {
+          let rejected: unknown;
+          try {
+            const target = baseTarget({ provider, model, extraArgs: iteratorBypass() });
+            if (operation === "validate") providerAdapter(provider).validate(target);
+            else providerAdapter(provider).buildInvocation(target);
+          } catch (error) {
+            rejected = error;
+          }
+          expect(rejected).toBeInstanceOf(ValidationError);
+          expect((rejected as ValidationError).publicDetails?.reason).toBe("invalid_array");
+        }
+
+        let spawned = 0;
+        let thrown: unknown;
+        try {
+          await executeTarget(baseTarget({ provider, model, extraArgs: iteratorBypass() }), {}, {
+            env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+            onSpawn: () => { spawned += 1; },
+          });
+        } catch (error) {
+          thrown = error;
+        }
+        expect(thrown).toBeInstanceOf(ValidationError);
+        expect((thrown as ValidationError).publicDetails?.reason).toBe("invalid_array");
+        expect(spawned).toBe(0);
       }
-      expect(thrown).toBeInstanceOf(ValidationError);
-      expect(spawned).toBe(0);
     }
   });
 

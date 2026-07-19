@@ -32,11 +32,19 @@ export interface AgentInvocation {
   preflightAnyOf?: string[];
 }
 
+export interface PreparedAgentInvocation {
+  /** Invocation built from the first validated snapshot. */
+  invocation: AgentInvocation;
+  /** Rebuild only cwd-dependent fields while reusing that same snapshot. */
+  forCwd(cwd: string): AgentInvocation;
+}
+
 export interface ProviderAdapter {
   provider: AgentProvider;
   capabilities: ProviderCapabilities;
   validate(target: AgentTarget, label?: string): void;
   buildInvocation(target: AgentTarget): AgentInvocation;
+  prepareInvocation(target: AgentTarget): PreparedAgentInvocation;
 }
 
 /**
@@ -53,6 +61,7 @@ const ALLOWED_AGENT_EXTRA_ARGS: Readonly<Record<AgentProvider, readonly string[]
   aicopilot: NO_ALLOWED_AGENT_EXTRA_ARGS,
   opencode: NO_ALLOWED_AGENT_EXTRA_ARGS,
 });
+const INTRINSIC_ARRAY_ITERATOR = Array.prototype[Symbol.iterator];
 
 const CODEX_LIKE_SANDBOXES: readonly AgentSandbox[] = ["read-only", "workspace-write", "danger-full-access"];
 const CURSOR_SANDBOXES: readonly AgentSandbox[] = ["enabled", "disabled"];
@@ -105,7 +114,7 @@ function extraArgsValidationError(
  * Capture one plain indexed snapshot of untrusted caller input. Never iterate,
  * spread, or re-read the source Array after this function returns.
  */
-function validatedExtraArgsSnapshot(target: AgentTarget, label: string): string[] {
+function validatedExtraArgsSnapshot(target: AgentTarget, label: string): readonly string[] {
   const allowedArgs = ALLOWED_AGENT_EXTRA_ARGS[target.provider];
   const extraArgs: unknown = target.extraArgs;
   if (extraArgs === undefined) return [];
@@ -126,7 +135,9 @@ function validatedExtraArgsSnapshot(target: AgentTarget, label: string): string[
     // Capture length exactly once and reject the reported bypass shape rather
     // than consulting a caller-controlled iterator at any later point.
     length = source.length;
-    hasCustomIterator = Object.prototype.hasOwnProperty.call(source, Symbol.iterator);
+    hasCustomIterator =
+      Object.prototype.hasOwnProperty.call(source, Symbol.iterator) ||
+      source[Symbol.iterator] !== INTRINSIC_ARRAY_ITERATOR;
   } catch {
     throw extraArgsValidationError(label, "invalid_array", `${label}.extraArgs must be a plain indexed array of strings`);
   }
@@ -160,10 +171,10 @@ function validatedExtraArgsSnapshot(target: AgentTarget, label: string): string[
     }
     snapshot.push(value);
   }
-  return snapshot;
+  return Object.freeze(snapshot);
 }
 
-function validateAgentOptions(target: AgentTarget, label: string, capabilities: ProviderCapabilities): string[] {
+function validateAgentOptions(target: AgentTarget, label: string, capabilities: ProviderCapabilities): readonly string[] {
   const provider = target.provider;
   if (typeof target.prompt !== "string" || target.prompt.trim() === "") {
     throw new ValidationError(`${label}.prompt must be a non-empty string`);
@@ -256,7 +267,7 @@ export function effectiveAgentSandbox(target: AgentTarget): AgentSandbox | "prov
   return "provider-default";
 }
 
-export function agentSessionContract(target: AgentTarget): AgentSessionContract | undefined {
+export function agentSessionContract(target: AgentTarget, cwd: string | undefined = target.cwd): AgentSessionContract | undefined {
   const allowlist = target.allowlist;
   const hasContract = Boolean(
     allowlist?.tools?.length ||
@@ -271,7 +282,7 @@ export function agentSessionContract(target: AgentTarget): AgentSessionContract 
     version: 1,
     provider: target.provider,
     model: target.model,
-    cwd: target.cwd,
+    cwd,
     permissionMode: target.permissionMode ?? "default",
     sandbox: effectiveAgentSandbox(target),
     manualBreakGlass: target.manualBreakGlass === true,
@@ -296,8 +307,8 @@ export function workflowStepAgentSessionContract(step: WorkflowStep): AgentSessi
   return agentSessionContract(target);
 }
 
-export function agentSessionContractPrompt(target: AgentTarget): string | undefined {
-  const contract = agentSessionContract(target);
+export function agentSessionContractPrompt(target: AgentTarget, cwd: string | undefined = target.cwd): string | undefined {
+  const contract = agentSessionContract(target, cwd);
   if (!contract) return undefined;
   const lines = [
     "OpenLoops agent session contract:",
@@ -317,16 +328,20 @@ export function agentSessionContractPrompt(target: AgentTarget): string | undefi
   return lines.join("\n");
 }
 
-function promptWithAgentSessionContract(target: AgentTarget): string {
-  const contract = agentSessionContractPrompt(target);
+function promptWithAgentSessionContract(target: AgentTarget, cwd: string | undefined = target.cwd): string {
+  const contract = agentSessionContractPrompt(target, cwd);
   if (!contract || target.prompt.includes("OpenLoops agent session contract:")) return target.prompt;
   return `${target.prompt}\n\n${contract}`;
 }
 
-function buildAgentInvocation(target: AgentTarget, extraArgs: readonly string[]): AgentInvocation {
+function buildAgentInvocation(
+  target: AgentTarget,
+  extraArgs: readonly string[],
+  cwd: string | undefined = target.cwd,
+): AgentInvocation {
   const isolation = target.configIsolation ?? "safe";
   const permissionMode = target.permissionMode ?? "default";
-  const prompt = promptWithAgentSessionContract(target);
+  const prompt = promptWithAgentSessionContract(target, cwd);
   const args: string[] = [];
   switch (target.provider) {
     case "claude": {
@@ -379,7 +394,7 @@ function buildAgentInvocation(target: AgentTarget, extraArgs: readonly string[])
       // workers need gh/git egress, so opt the workspace sandbox back into it.
       if (sandbox === "workspace-write") args.push("-c", "sandbox_workspace_write.network_access=true");
       args.push("--ask-for-approval", "never", "exec", "--json", "--ephemeral", "--sandbox", sandbox, "--skip-git-repo-check");
-      if (target.cwd) args.push("--cd", target.cwd);
+      if (cwd) args.push("--cd", cwd);
       for (const dir of target.addDirs ?? []) args.push("--add-dir", dir);
       if (target.model) args.push("--model", target.model);
       args.push(...extraArgs);
@@ -391,7 +406,7 @@ function buildAgentInvocation(target: AgentTarget, extraArgs: readonly string[])
       if (target.variant) args.push("-c", `model_reasoning_effort=${configStringValue(target.variant)}`);
       args.push("--ask-for-approval", "never", "exec", "--json", "--ephemeral", "--sandbox", codewithLikeSandbox(target), "--skip-git-repo-check");
       if (isolation === "safe") args.push("--ignore-rules");
-      if (target.cwd) args.push("--cd", target.cwd);
+      if (cwd) args.push("--cd", cwd);
       for (const dir of target.addDirs ?? []) args.push("--add-dir", dir);
       if (target.model) args.push("--model", target.model);
       args.push(...extraArgs);
@@ -402,7 +417,7 @@ function buildAgentInvocation(target: AgentTarget, extraArgs: readonly string[])
       args.push("run", "--format", "json");
       if (isolation === "safe") args.push("--pure");
       if (permissionMode === "bypass") args.push("--dangerously-skip-permissions");
-      if (target.cwd) args.push("--dir", target.cwd);
+      if (cwd) args.push("--dir", cwd);
       if (target.model) args.push("--model", target.model);
       if (target.variant) args.push("--variant", target.variant);
       if (target.agent) args.push("--agent", target.agent);
@@ -413,6 +428,15 @@ function buildAgentInvocation(target: AgentTarget, extraArgs: readonly string[])
 }
 
 function adapterFor(provider: AgentProvider, capabilities: ProviderCapabilities): ProviderAdapter {
+  const prepareInvocation = (target: AgentTarget): PreparedAgentInvocation => {
+    const extraArgs = validateAgentOptions(target, provider, capabilities);
+    return {
+      invocation: buildAgentInvocation(target, extraArgs),
+      forCwd(cwd: string): AgentInvocation {
+        return buildAgentInvocation(target, extraArgs, cwd);
+      },
+    };
+  };
   return {
     provider,
     capabilities,
@@ -420,9 +444,9 @@ function adapterFor(provider: AgentProvider, capabilities: ProviderCapabilities)
       validateAgentOptions(target, label, capabilities);
     },
     buildInvocation(target: AgentTarget): AgentInvocation {
-      const extraArgs = validateAgentOptions(target, provider, capabilities);
-      return buildAgentInvocation(target, extraArgs);
+      return prepareInvocation(target).invocation;
     },
+    prepareInvocation,
   };
 }
 

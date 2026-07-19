@@ -24,6 +24,7 @@ import {
   LegacyWorkflowRunProvenanceError,
   LoopArchivedError,
   LoopNotFoundError,
+  publicValidationDetails,
   ValidationError,
   WorkflowRunDefinitionConflictError,
 } from "../lib/errors.js";
@@ -1473,7 +1474,8 @@ function errorResponse(error: unknown): Response {
   if (error instanceof LoopNotFoundError) return fail("loop_not_found", 404);
   if (error instanceof LoopArchivedError) return fail("loop_archived", 409);
   if (error instanceof ValidationError) {
-    return fail("validation_failed", 422, error.publicDetails ? { details: error.publicDetails } : undefined);
+    const details = publicValidationDetails(error.publicDetails);
+    return fail("validation_failed", 422, details ? { details } : undefined);
   }
   if (error instanceof LegacyWorkflowRunProvenanceError) return fail("workflow_run_provenance_missing", 409);
   if (error instanceof WorkflowRunDefinitionConflictError) return fail("workflow_run_definition_conflict", 409);

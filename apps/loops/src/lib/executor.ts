@@ -19,7 +19,7 @@ import type {
   PersistGuardOptions,
 } from "../types.js";
 import { accountToolForProvider, resolveAccountEnv, resolveAccountEnvSync } from "./accounts.js";
-import { agentSessionContract, BoundedOutputBuffer, killProcessGroup, providerAdapter, spawnCapture } from "./agent-adapter.js";
+import { agentSessionContract, BoundedOutputBuffer, killProcessGroup, providerAdapter, spawnCapture, type AgentInvocation } from "./agent-adapter.js";
 import { commandNotFoundMessage, executableExists, normalizeExecutionPath } from "./env.js";
 import { nowIso } from "./ids.js";
 import { refreshLoopMachine, resolveMachineCommand } from "./machines.js";
@@ -118,6 +118,8 @@ interface CommandSpec {
   sessionContract?: AgentSessionContract;
   agentProvider?: AgentProvider;
   worktree?: AgentWorktreeSpec;
+  /** Rebuild cwd-dependent provider argv/prompt from the original validated extraArgs snapshot. */
+  invocationForCwd?: (cwd: string) => AgentInvocation;
 }
 
 interface MachineCommandPlan {
@@ -352,7 +354,8 @@ function commandSpec(target: ExecutableTarget, opts: ExecuteOptions): CommandSpe
     assertCodewithAuthProfileSupported(agentTarget.authProfile);
   }
   const adapter = providerAdapter(agentTarget.provider);
-  const invocation = adapter.buildInvocation(agentTarget);
+  const preparedInvocation = adapter.prepareInvocation(agentTarget);
+  const invocation = preparedInvocation.invocation;
   return {
     command: invocation.command,
     args: invocation.args,
@@ -370,6 +373,7 @@ function commandSpec(target: ExecutableTarget, opts: ExecuteOptions): CommandSpe
     sessionContract: agentSessionContract(agentTarget),
     agentProvider: agentTarget.provider,
     worktree: agentTarget.worktree,
+    invocationForCwd: preparedInvocation.forCwd,
   };
 }
 
@@ -937,17 +941,21 @@ async function enterWorktree(
  * (`--cd`/`--cwd`/`--dir`), and codewith durable agents rebuild their
  * start/control args from the recorded target.
  */
-function worktreeFallbackSpec(target: ExecutableTarget, opts: ExecuteOptions, fallbackCwd: string): CommandSpec | undefined {
-  if (target.type !== "agent") return undefined;
-  const agentTarget = target as AgentTarget;
-  const fallbackTarget: AgentTarget = {
-    ...agentTarget,
+function worktreeFallbackSpec(spec: CommandSpec, fallbackCwd: string): CommandSpec | undefined {
+  const invocation = spec.invocationForCwd?.(fallbackCwd);
+  if (!invocation) return undefined;
+  return {
+    ...spec,
+    command: invocation.command,
+    args: invocation.args,
     cwd: fallbackCwd,
-    worktree: agentTarget.worktree
-      ? { ...agentTarget.worktree, enabled: false, cwd: fallbackCwd, reason: "auto worktree preparation failed" }
+    preflightAnyOf: invocation.preflightAnyOf,
+    stdin: invocation.stdin,
+    sessionContract: spec.sessionContract ? { ...spec.sessionContract, cwd: fallbackCwd } : undefined,
+    worktree: spec.worktree
+      ? { ...spec.worktree, enabled: false, cwd: fallbackCwd, reason: "auto worktree preparation failed" }
       : undefined,
   };
-  return commandSpec(fallbackTarget, opts);
 }
 
 function preflightRemoteSpec(
@@ -1119,7 +1127,7 @@ export async function executeTarget(
     // cwd into argv), so the remote script carries both and picks at runtime.
     const remoteFallbackSpec =
       spec.worktree?.enabled && spec.worktree.mode === "auto"
-        ? worktreeFallbackSpec(target, opts, spec.worktree.originalCwd)
+        ? worktreeFallbackSpec(spec, spec.worktree.originalCwd)
         : undefined;
     return executeRemoteSpec(spec, machine, metadata, opts, remoteFallbackSpec);
   }
@@ -1147,7 +1155,7 @@ export async function executeTarget(
   const worktreeEntry = await enterWorktree(spec, opts, env, startedAt);
   if (worktreeEntry?.failure) return worktreeEntry.failure;
   if (worktreeEntry?.fallbackCwd) {
-    spec = worktreeFallbackSpec(target, opts, worktreeEntry.fallbackCwd) ?? spec;
+    spec = worktreeFallbackSpec(spec, worktreeEntry.fallbackCwd) ?? spec;
   }
 
   const child = spawn(spec.command, spec.args, {

@@ -3,8 +3,9 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
+import type { AgentTarget } from "../types.js";
 import { Store } from "./store.js";
-import { defaultAgentIdleTimeoutMs, executeLoop, isStaleWorktreeRegistration, preflightTarget, type SpawnedProcessInfo } from "./executor.js";
+import { defaultAgentIdleTimeoutMs, executeLoop, executeTarget, isStaleWorktreeRegistration, preflightTarget, type SpawnedProcessInfo } from "./executor.js";
 import { openGate, waitUntil } from "../test-helpers.js";
 
 function gateWaitScript(gate: string): string {
@@ -774,6 +775,105 @@ describe("executeLoop", () => {
         expect(result.stdout).not.toContain(wtPath);
       } finally {
         store.close();
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test("local auto worktree fallback reuses one validated extra-args snapshot", async () => {
+      const root = mkdtempSync(join(tmpdir(), "loops-worktree-local-extra-args-snapshot-"));
+      const notRepo = join(root, "not-a-repo");
+      mkdirSync(notRepo, { recursive: true });
+      const bin = fakePwdBinary(root);
+      const wtPath = join(root, "worktrees", "repo", "run-1");
+      let extraArgsReads = 0;
+      const target: AgentTarget = {
+        type: "agent",
+        provider: "claude",
+        prompt: "work",
+        configIsolation: "safe",
+        cwd: wtPath,
+        timeoutMs: 30_000,
+        worktree: {
+          mode: "auto",
+          enabled: true,
+          originalCwd: notRepo,
+          cwd: wtPath,
+          repoRoot: notRepo,
+          path: wtPath,
+          branch: "openloops/exec-test",
+        },
+      };
+      Object.defineProperty(target, "extraArgs", {
+        configurable: true,
+        enumerable: true,
+        get() {
+          extraArgsReads += 1;
+          return [];
+        },
+      });
+
+      try {
+        const result = await executeTarget(target, {}, {
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+        });
+        expect(result.status).toBe("succeeded");
+        expect(result.stdout.trim()).toBe(realpathSync(notRepo));
+        expect(extraArgsReads).toBe(1);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test("remote auto worktree fallback reuses one validated extra-args snapshot", async () => {
+      const root = mkdtempSync(join(tmpdir(), "loops-worktree-remote-extra-args-snapshot-"));
+      const notRepo = join(root, "not-a-repo");
+      mkdirSync(notRepo, { recursive: true });
+      const home = join(root, "home");
+      const binDir = join(home, ".local", "bin");
+      mkdirSync(binDir, { recursive: true });
+      const fake = join(binDir, "codex");
+      writeFileSync(fake, '#!/usr/bin/env bash\nprintf \'%s\\n\' "$@"\ncat >/dev/null\n');
+      chmodSync(fake, 0o755);
+      const wtPath = join(root, "worktrees", "repo", "run-1");
+      let extraArgsReads = 0;
+      const target: AgentTarget = {
+        type: "agent",
+        provider: "codex",
+        prompt: "work",
+        configIsolation: "safe",
+        cwd: wtPath,
+        timeoutMs: 30_000,
+        worktree: {
+          mode: "auto",
+          enabled: true,
+          originalCwd: notRepo,
+          cwd: wtPath,
+          repoRoot: notRepo,
+          path: wtPath,
+          branch: "openloops/exec-test",
+        },
+      };
+      Object.defineProperty(target, "extraArgs", {
+        configurable: true,
+        enumerable: true,
+        get() {
+          extraArgsReads += 1;
+          return [];
+        },
+      });
+
+      try {
+        const result = await executeTarget(target, {}, {
+          ...remoteHooks,
+          machine: { id: "remote-test", local: false, route: "ssh" },
+          env: { HOME: home, PATH: "/usr/bin:/bin" },
+        });
+        expect(result.status).toBe("succeeded");
+        expect(result.stderr).toContain("worktree preparation failed (mode=auto)");
+        expect(result.stdout).toContain(`--cd\n${notRepo}`);
+        expect(result.stdout).not.toContain(wtPath);
+        expect(extraArgsReads).toBe(1);
+      } finally {
         rmSync(root, { recursive: true, force: true });
       }
     });

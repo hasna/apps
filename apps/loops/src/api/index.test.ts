@@ -359,6 +359,106 @@ describe("loops-api foundation", () => {
     }
   });
 
+  test("validation details snapshot each getter once and cannot be replaced or mutated", () => {
+    const expected = {
+      code: "agent_extra_args_invalid",
+      reason: "option_not_allowed",
+      path: "target.extraArgs[0]",
+      index: 0,
+      option: "--durable",
+    } as const;
+    const changed = {
+      code: "private_unvalidated_code",
+      reason: "private_unvalidated_reason",
+      path: "privateUnvalidatedPath",
+      index: 99,
+      option: "--private-unvalidated-option",
+    } as const;
+    const reads = { code: 0, reason: 0, path: 0, index: 0, option: 0 };
+    const details = {} as PublicValidationDetails;
+    for (const key of Object.keys(expected) as (keyof typeof expected)[]) {
+      Object.defineProperty(details, key, {
+        enumerable: true,
+        get() {
+          reads[key] += 1;
+          return reads[key] === 1 ? expected[key] : changed[key];
+        },
+      });
+    }
+    const error = new ValidationError("private validation context", details);
+
+    expect(reads).toEqual({ code: 1, reason: 1, path: 1, index: 1, option: 1 });
+    expect(error.publicDetails).toEqual(expected);
+    expect(Object.getOwnPropertyDescriptor(error, "publicDetails")).toMatchObject({
+      configurable: false,
+      writable: false,
+    });
+    expect(() => {
+      (error as { publicDetails?: unknown }).publicDetails = {
+        code: "agent_extra_args_invalid",
+        reason: "not_array",
+        path: "privateSecret",
+        privateValue: "bearer super-secret",
+      };
+    }).toThrow();
+    expect(() => {
+      Object.defineProperty(error, "publicDetails", { value: undefined });
+    }).toThrow();
+    expect(() => {
+      (error.publicDetails as { path: string }).path = "privateSecret";
+    }).toThrow();
+  });
+
+  test("throwing validation-detail getters fail closed without exposing metadata", () => {
+    const details = {} as PublicValidationDetails;
+    Object.defineProperty(details, "code", {
+      get() {
+        throw new Error("bearer super-secret");
+      },
+    });
+    const error = new ValidationError("private validation context", details);
+    expect(error.publicDetails).toBeUndefined();
+  });
+
+  test("API re-projects forged validation details through the bounded public schema", async () => {
+    const mod = await import("./index.js");
+    const forged = Object.create(ValidationError.prototype) as ValidationError;
+    Object.defineProperty(forged, "publicDetails", {
+      value: {
+        code: "agent_extra_args_invalid",
+        reason: "option_not_allowed",
+        path: "target.extraArgs[0]",
+        index: 0,
+        option: "--durable",
+        privateValue: "bearer super-secret",
+      },
+    });
+    const storage = {
+      listLoops: async () => { throw forged; },
+    } as unknown as LoopStorageContract;
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+
+    try {
+      const response = await fetch(apiUrl(server, "/v1/loops"));
+      expect(response.status).toBe(422);
+      const body = await response.json();
+      expect(body).toEqual({
+        ok: false,
+        error: "validation_failed",
+        details: {
+          code: "agent_extra_args_invalid",
+          reason: "option_not_allowed",
+          path: "target.extraArgs[0]",
+          index: 0,
+          option: "--durable",
+        },
+      });
+      expect(JSON.stringify(body)).not.toContain("super-secret");
+    } finally {
+      server.stop(true);
+    }
+  });
+
   test("api command failures use stable logs without provider details", async () => {
     const mod = await import("./index.js");
     const logged: string[] = [];

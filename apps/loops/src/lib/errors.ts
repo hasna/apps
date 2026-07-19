@@ -58,43 +58,68 @@ const AGENT_EXTRA_ARGS_VALIDATION_REASONS: ReadonlySet<string> = new Set([
 const PUBLIC_VALIDATION_PATH = /^[A-Za-z][A-Za-z0-9_-]*(?:(?:\[\d+\])|(?:\.[A-Za-z][A-Za-z0-9_-]*))*$/;
 const PUBLIC_VALIDATION_OPTION = /^(?:--[A-Za-z0-9][A-Za-z0-9-]{0,63}|-[A-Za-z0-9])$/;
 
-function boundedPublicValidationDetails(value: PublicValidationDetails): Readonly<PublicValidationDetails> | undefined {
+export function publicValidationDetails(value: unknown): Readonly<PublicValidationDetails> | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  let code: unknown;
+  let reason: unknown;
+  let path: unknown;
+  let index: unknown;
+  let option: unknown;
+  try {
+    const candidate = value as Record<string, unknown>;
+    // Capture every allowed primitive exactly once. Validation and projection
+    // below use only these locals, never caller-controlled getters again.
+    code = candidate.code;
+    reason = candidate.reason;
+    path = candidate.path;
+    index = candidate.index;
+    option = candidate.option;
+  } catch {
+    return undefined;
+  }
   if (
-    value.code !== "agent_extra_args_invalid" ||
-    !AGENT_EXTRA_ARGS_VALIDATION_REASONS.has(value.reason) ||
-    typeof value.path !== "string" ||
-    value.path.length > 512 ||
-    !PUBLIC_VALIDATION_PATH.test(value.path) ||
-    (value.index !== undefined && (!Number.isSafeInteger(value.index) || value.index < 0)) ||
-    (value.option !== undefined && (typeof value.option !== "string" || !PUBLIC_VALIDATION_OPTION.test(value.option)))
+    code !== "agent_extra_args_invalid" ||
+    typeof reason !== "string" ||
+    !AGENT_EXTRA_ARGS_VALIDATION_REASONS.has(reason) ||
+    typeof path !== "string" ||
+    path.length > 512 ||
+    !PUBLIC_VALIDATION_PATH.test(path) ||
+    (index !== undefined && (typeof index !== "number" || !Number.isSafeInteger(index) || index < 0)) ||
+    (option !== undefined && (typeof option !== "string" || !PUBLIC_VALIDATION_OPTION.test(option)))
   ) {
     return undefined;
   }
   if (
-    (["invalid_item", "option_not_allowed"] as AgentExtraArgsValidationReason[]).includes(value.reason) !==
-      (value.index !== undefined)
+    (["invalid_item", "option_not_allowed"] as AgentExtraArgsValidationReason[]).includes(reason as AgentExtraArgsValidationReason) !==
+      (index !== undefined)
   ) {
     return undefined;
   }
-  if (["not_array", "invalid_array"].includes(value.reason) && value.option !== undefined) return undefined;
+  if (["not_array", "invalid_array"].includes(reason) && option !== undefined) return undefined;
   return Object.freeze({
-    code: value.code,
-    reason: value.reason,
-    path: value.path,
-    ...(value.index === undefined ? {} : { index: value.index }),
-    ...(value.option === undefined ? {} : { option: value.option }),
+    code,
+    reason: reason as AgentExtraArgsValidationReason,
+    path,
+    ...(index === undefined ? {} : { index: index as number }),
+    ...(option === undefined ? {} : { option: option as string }),
   });
 }
 
 export class ValidationError extends CodedError {
-  readonly publicDetails?: Readonly<PublicValidationDetails>;
+  declare readonly publicDetails?: Readonly<PublicValidationDetails>;
 
   constructor(message: string, publicDetails?: PublicValidationDetails) {
     super("VALIDATION_ERROR", message);
     // Treat even internal callers as untrusted at the public API boundary:
     // project only the closed, validated field set and silently hide anything
     // malformed instead of ever echoing Error.message or arbitrary metadata.
-    this.publicDetails = publicDetails ? boundedPublicValidationDetails(publicDetails) : undefined;
+    const projected = publicValidationDetails(publicDetails);
+    Object.defineProperty(this, "publicDetails", {
+      configurable: false,
+      enumerable: false,
+      value: projected,
+      writable: false,
+    });
   }
 }
 
