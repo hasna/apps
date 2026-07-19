@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
+import { localRoutingTestEnv } from "../test/local-routing-env.js";
 
 const CWD = join(import.meta.dir, "../..");
 

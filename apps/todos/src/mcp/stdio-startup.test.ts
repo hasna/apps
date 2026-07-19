@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
+import { localRoutingTestEnv } from "../test/local-routing-env.js";
 
 const CWD = join(import.meta.dir, "../..");
 

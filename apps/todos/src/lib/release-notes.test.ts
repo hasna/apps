@@ -7,7 +7,7 @@ import { linkTaskToCommit, addTaskVerification } from "../db/task-commits.js";
 import { createTask } from "../db/task-crud.js";
 import { generateReleaseNotes, renderReleaseNotesMarkdown } from "./release-notes.js";
 import { validateJsonContract } from "../json-contracts.js";
-import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
+import { localRoutingTestEnv } from "../test/local-routing-env.js";
 
 const dbPath = "/tmp/todos-release-notes-test.db";
 

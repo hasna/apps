@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
+import { localRoutingTestEnv } from "../test/local-routing-env.js";
 
 // ── M6: the rate limiter must key on the real socket peer, not spoofable
 // client headers. Bun.serve never sets x-forwarded-for for direct connections,

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApiKey } from "../db/api-keys.js";
 import { closeDatabase, getDatabase, resetDatabase } from "../db/database.js";
-import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
+import { localRoutingTestEnv } from "../test/local-routing-env.js";
 
 let port: number;
 let proc: ReturnType<typeof Bun.spawn>;

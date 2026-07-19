@@ -9,7 +9,7 @@ import {
 import { getJsonContract, validateJsonContract } from "./json-contracts.js";
 import { getMcpToolNames } from "./mcp.js";
 import { withNoNetwork } from "./test/no-network.js";
-import { localRoutingTestEnv } from "./test/local-routing-env.fixture.test.js";
+import { localRoutingTestEnv } from "./test/local-routing-env.js";
 
 const expectedDomains = [
   "tasks",

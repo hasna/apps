@@ -9,7 +9,7 @@ import {
   writeEnvironmentSnapshot,
 } from "./environment-snapshots.js";
 import { validateJsonContract } from "../json-contracts.js";
-import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
+import { localRoutingTestEnv } from "../test/local-routing-env.js";
 
 function makeProject(): string {
   const root = mkdtempSync(join(tmpdir(), "todos-env-snapshot-"));

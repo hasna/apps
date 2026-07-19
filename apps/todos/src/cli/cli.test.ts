@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { getDatabase, closeDatabase, resetDatabase } from "../db/database.js";
@@ -8,29 +8,74 @@ import { createTask } from "../db/tasks.js";
 import { createTaskList } from "../db/task-lists.js";
 import { createProject } from "../db/projects.js";
 import { runMigrations } from "../db/schema.js";
-import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
+import { localRoutingTestEnv } from "../test/local-routing-env.js";
 
 let testRoot = "";
 
-async function runCli(args: string[], dbPath: string, extraEnv: Record<string, string> = {}) {
-  const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
-    cwd: import.meta.dir + "/../..",
-    env: localRoutingTestEnv({
-      HOME: join(testRoot, "home"),
-      HASNA_EVENTS_DIR: join(testRoot, "events"),
-      ...extraEnv,
-      TODOS_DB_PATH: dbPath,
-      TODOS_AUTO_PROJECT: "false",
-    }),
-    stdout: "pipe",
-    stderr: "pipe",
+function cliTestEnvironment(overrides: Record<string, string | undefined> = {}) {
+  const home = join(testRoot, "home");
+  const temp = join(testRoot, "tmp");
+  const cache = join(testRoot, "cache");
+  const events = join(testRoot, "events");
+  for (const directory of [home, temp, cache, events]) {
+    mkdirSync(directory, { recursive: true });
+  }
+  return localRoutingTestEnv({
+    HOME: home,
+    USERPROFILE: home,
+    TMPDIR: temp,
+    TMP: temp,
+    TEMP: temp,
+    XDG_CACHE_HOME: cache,
+    BUN_INSTALL_CACHE_DIR: cache,
+    HASNA_EVENTS_DIR: events,
+    ...overrides,
   });
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
-  return { stdout, stderr, exitCode };
+}
+
+async function runCli(
+  args: string[],
+  dbPath: string,
+  extraEnv: Record<string, string> = {},
+  ambientEnv: Readonly<Record<string, string | undefined>> = process.env,
+) {
+  const runRoot = mkdtempSync(join(testRoot, "run-"));
+  const home = join(runRoot, "home");
+  const temp = join(runRoot, "tmp");
+  const cache = join(runRoot, "cache");
+  const events = join(runRoot, "events");
+  for (const directory of [home, temp, cache, events]) {
+    mkdirSync(directory, { recursive: true });
+  }
+
+  try {
+    const proc = Bun.spawn([process.execPath, "--no-env-file", "run", "src/cli/index.tsx", ...args], {
+      cwd: import.meta.dir + "/../..",
+      env: localRoutingTestEnv({
+        HOME: home,
+        USERPROFILE: home,
+        TMPDIR: temp,
+        TMP: temp,
+        TEMP: temp,
+        XDG_CACHE_HOME: cache,
+        BUN_INSTALL_CACHE_DIR: cache,
+        HASNA_EVENTS_DIR: events,
+        ...extraEnv,
+        TODOS_DB_PATH: dbPath,
+        TODOS_AUTO_PROJECT: "false",
+      }, ambientEnv),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    return { stdout, stderr, exitCode, runRoot };
+  } finally {
+    rmSync(runRoot, { recursive: true, force: true });
+  }
 }
 
 function createMinimalSourceStore(dbPath: string): void {
@@ -117,14 +162,9 @@ function createMinimalSourceStore(dbPath: string): void {
 
 beforeEach(() => {
   testRoot = mkdtempSync(join(tmpdir(), "todos-cli-test-"));
-  process.env["TODOS_DB_PATH"] = ":memory:";
-  resetDatabase();
-  getDatabase();
 });
 
 afterEach(() => {
-  closeDatabase();
-  delete process.env["TODOS_DB_PATH"];
   rmSync(testRoot, { recursive: true, force: true });
   testRoot = "";
 });
@@ -132,14 +172,13 @@ afterEach(() => {
 describe("CLI integration", () => {
   it("should print versions for standalone companion binaries without starting services", async () => {
     const { readFileSync } = await import("node:fs");
-    const { join } = await import("node:path");
     const expectedVersion = JSON.parse(readFileSync(join(import.meta.dir, "../..", "package.json"), "utf-8")).version;
 
     for (const entrypoint of ["src/mcp/index.ts", "src/server/index.ts"]) {
       for (const flag of ["--version", "-V"]) {
-        const proc = Bun.spawn(["bun", "run", entrypoint, flag], {
+        const proc = Bun.spawn([process.execPath, "--no-env-file", "run", entrypoint, flag], {
           cwd: import.meta.dir + "/../..",
-          env: localRoutingTestEnv({ TODOS_DB_PATH: ":memory:", TODOS_AUTO_PROJECT: "false", TODOS_NO_OPEN: "true" }),
+          env: cliTestEnvironment({ TODOS_DB_PATH: ":memory:", TODOS_AUTO_PROJECT: "false", TODOS_NO_OPEN: "true" }),
           stdout: "pipe",
           stderr: "pipe",
         });
@@ -158,9 +197,9 @@ describe("CLI integration", () => {
   it("should print help for standalone companion binaries without starting services", async () => {
     for (const entrypoint of ["src/mcp/index.ts", "src/server/index.ts"]) {
       for (const flag of ["--help", "-h"]) {
-        const proc = Bun.spawn(["bun", "run", entrypoint, flag], {
+        const proc = Bun.spawn([process.execPath, "--no-env-file", "run", entrypoint, flag], {
           cwd: import.meta.dir + "/../..",
-          env: localRoutingTestEnv({ TODOS_DB_PATH: ":memory:", TODOS_AUTO_PROJECT: "false", TODOS_NO_OPEN: "true" }),
+          env: cliTestEnvironment({ TODOS_DB_PATH: ":memory:", TODOS_AUTO_PROJECT: "false", TODOS_NO_OPEN: "true" }),
           stdout: "pipe",
           stderr: "pipe",
         });
@@ -184,7 +223,6 @@ describe("CLI integration", () => {
 
   it("should show events and webhooks commands in help", async () => {
     const { mkdtempSync, rmSync } = await import("node:fs");
-    const { join } = await import("node:path");
     const { tmpdir } = await import("node:os");
     const eventsDir = mkdtempSync(join(tmpdir(), "todos-events-cli-"));
     try {
@@ -214,10 +252,10 @@ describe("CLI integration", () => {
 
   it("should run add command", async () => {
     const proc = Bun.spawn(
-      ["bun", "run", "src/cli/index.tsx", "add", "CLI test task", "--json"],
+      [process.execPath, "--no-env-file", "run", "src/cli/index.tsx", "add", "CLI test task", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: localRoutingTestEnv({ TODOS_DB_PATH: "/tmp/test-cli-todos.db", TODOS_AUTO_PROJECT: "false" }),
+        env: cliTestEnvironment({ TODOS_DB_PATH: join(testRoot, "test-cli-todos.db"), TODOS_AUTO_PROJECT: "false" }),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -231,11 +269,11 @@ describe("CLI integration", () => {
 
     // Cleanup
     const { unlinkSync } = await import("node:fs");
-    try { unlinkSync("/tmp/test-cli-todos.db"); } catch {}
+    try { unlinkSync(join(testRoot, "test-cli-todos.db")); } catch {}
   });
 
   it("upserts tasks by fingerprint and merges expectation metadata", async () => {
-    const dbPath = "/tmp/test-cli-task-upsert.db";
+    const dbPath = join(testRoot, "test-cli-task-upsert.db");
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
 
@@ -291,7 +329,7 @@ describe("CLI integration", () => {
   });
 
   it("exposes route state and workflow pointers through task automation commands", async () => {
-    const dbPath = "/tmp/test-cli-task-routing.db";
+    const dbPath = join(testRoot, "test-cli-task-routing.db");
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
 
@@ -324,7 +362,7 @@ describe("CLI integration", () => {
         "--run",
         "run_cli",
         "--manifest",
-        "/tmp/todos-cli-routing/manifest.json",
+        join(testRoot, "todos-cli-routing", "manifest.json"),
         "--state",
         "working",
       ], dbPath);
@@ -371,10 +409,10 @@ describe("CLI integration", () => {
 
   it("should run list command", async () => {
     const proc = Bun.spawn(
-      ["bun", "run", "src/cli/index.tsx", "list", "--json"],
+      [process.execPath, "--no-env-file", "run", "src/cli/index.tsx", "list", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: localRoutingTestEnv({ TODOS_DB_PATH: "/tmp/test-cli-list.db", TODOS_AUTO_PROJECT: "false" }),
+        env: cliTestEnvironment({ TODOS_DB_PATH: join(testRoot, "test-cli-list.db"), TODOS_AUTO_PROJECT: "false" }),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -387,7 +425,7 @@ describe("CLI integration", () => {
     expect(Array.isArray(parsed)).toBe(true);
 
     const { unlinkSync } = await import("node:fs");
-    try { unlinkSync("/tmp/test-cli-list.db"); } catch {}
+    try { unlinkSync(join(testRoot, "test-cli-list.db")); } catch {}
   });
 
   it("redacts credential-like task descriptions in broad list/search output but not explicit detail output", async () => {
@@ -546,20 +584,26 @@ describe("CLI integration", () => {
     expect(doctor.findings).toHaveLength(1200);
   }, 30_000);
 
-  it("should apply doctor routing repairs end-to-end through the real binary (--apply must not silently dry-run)", async () => {
+  it("should apply doctor routing repairs through isolated concurrent CLI processes without ambient contamination", async () => {
     // Regression guard for Commander parent-option shadowing: the actionable
     // parent `doctor` declares its own legacy --apply/--fix and, without
     // positional options, strips them from argv before dispatching — so
     // `doctor routing --apply` silently dry-ran (repaired 0, no undo record)
     // while every library-level test stayed green. Drive the REAL binary.
-    const dbPath = join(testRoot, "doctor-routing-apply.db");
-    const projectDir = join(testRoot, "doctor-apply-project");
+    const doctorRoot = mkdtempSync(join(testRoot, "doctor-routing-apply-"));
+    const dbPath = join(doctorRoot, "todos.db");
+    const projectDir = join(doctorRoot, "project");
+    const parallelDbPath = join(testRoot, "doctor-routing-parallel.db");
+    const parallelProjectDir = join(testRoot, "doctor-routing-parallel-project");
+    const outsideSentinel = join(testRoot, "outside-sentinel.txt");
+    const shellInit = join(testRoot, "poisoned-shell-init.sh");
     mkdirSync(projectDir, { recursive: true });
-    const previousDbPath = process.env["TODOS_DB_PATH"];
-    closeDatabase();
-    process.env["TODOS_DB_PATH"] = dbPath;
-    resetDatabase();
-    const db = getDatabase();
+    mkdirSync(parallelProjectDir, { recursive: true });
+    writeFileSync(outsideSentinel, "unchanged\n");
+    writeFileSync(shellInit, `printf 'contaminated\\n' > '${outsideSentinel}'\n`);
+
+    const db = new Database(dbPath);
+    runMigrations(db);
     const project = createProject({ name: "DoctorApply", path: projectDir }, db);
     const list = createTaskList({ name: "DoctorApply list", slug: project.task_list_id!, project_id: project.id }, db);
     const drifted = createTask({
@@ -570,18 +614,54 @@ describe("CLI integration", () => {
       status: "pending",
       tags: ["auto:route"],
     }, db);
-    closeDatabase();
-    if (previousDbPath === undefined) delete process.env["TODOS_DB_PATH"];
-    else process.env["TODOS_DB_PATH"] = previousDbPath;
-    resetDatabase();
+    db.close();
 
-    const undoPath = join(testRoot, "doctor-routing-apply-undo.json");
-    const run = await runCli(["doctor", "routing", "--apply", "--undo-record", undoPath, "--json"], dbPath);
+    const parallelDb = new Database(parallelDbPath);
+    runMigrations(parallelDb);
+    const parallelProject = createProject({ name: "DoctorParallel", path: parallelProjectDir }, parallelDb);
+    const parallelList = createTaskList({
+      name: "DoctorParallel list",
+      slug: parallelProject.task_list_id!,
+      project_id: parallelProject.id,
+    }, parallelDb);
+    const parallelDrifted = createTask({
+      title: "parallel drift must remain",
+      project_id: parallelProject.id,
+      task_list_id: parallelList.id,
+      working_dir: "/parallel/wrong",
+      status: "pending",
+      tags: ["auto:route"],
+    }, parallelDb);
+    parallelDb.close();
+
+    const poisonedAmbient = {
+      PATH: process.env["PATH"],
+      HOME: "/outside/live-home",
+      BASH_ENV: shellInit,
+      ENV: shellInit,
+      DOTENV_CONFIG_PATH: join(testRoot, "outside.env"),
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_URL: "https://todos.example.invalid",
+      HASNA_TODOS_API_KEY: "not-a-real-key",
+      TODOS_API_URL: "https://legacy.example.invalid",
+      HTTPS_PROXY: "http://proxy.example.invalid:8080",
+      AWS_PROFILE: "production",
+    };
+
+    const undoPath = join(doctorRoot, "undo.json");
+    const [run, parallelRun] = await Promise.all([
+      runCli(["doctor", "routing", "--apply", "--undo-record", undoPath, "--json"], dbPath, {}, poisonedAmbient),
+      runCli(["list", "--json"], parallelDbPath, {}, poisonedAmbient),
+    ]);
     const doctor = JSON.parse(run.stdout);
     expect(doctor.dry_run).toBe(false); // the flag must actually reach the subcommand
     expect(doctor.summary.repaired).toBeGreaterThan(0);
     expect(doctor.summary.repair_failed).toBe(0);
     expect(run.exitCode).toBe(0); // seeded safe_auto drift fully repaired
+    expect(parallelRun.exitCode).toBe(0);
+    expect(JSON.parse(parallelRun.stdout)[0].id).toBe(parallelDrifted.id);
+    expect(existsSync(run.runRoot)).toBe(false);
+    expect(existsSync(parallelRun.runRoot)).toBe(false);
 
     // the mutation must be persisted in the scratch db
     const verify = new Database(dbPath);
@@ -589,20 +669,33 @@ describe("CLI integration", () => {
     verify.close();
     expect(row.working_dir).toBe(projectDir);
 
+    const parallelVerify = new Database(parallelDbPath);
+    const parallelRow = parallelVerify.query("SELECT working_dir FROM tasks WHERE id = ?").get(parallelDrifted.id) as { working_dir: string };
+    parallelVerify.close();
+    expect(parallelRow.working_dir).toBe("/parallel/wrong");
+    expect(readFileSync(outsideSentinel, "utf8")).toBe("unchanged\n");
+
     // undo record written with honest undo commands
-    const { readFileSync: readUndo } = await import("node:fs");
-    const undo = JSON.parse(readUndo(undoPath, "utf8"));
+    const undo = JSON.parse(readFileSync(undoPath, "utf8"));
     expect(undo.repairs.length).toBeGreaterThan(0);
     expect(undo.repairs[0].undo_command).toContain("todos update");
+    expect(doctor.undo_record_path).toBe(undoPath);
+    expect(undo.database_path).toBe(dbPath);
+    expect(undo.backup.path.startsWith(doctorRoot)).toBe(true);
+    expect(JSON.stringify(undo)).not.toContain("todos.example.invalid");
 
     // legacy parent `doctor --apply` must remain unregressed by the fallback
     const legacy = await runCli(["doctor", "--apply", "--json"], dbPath);
     expect(legacy.exitCode).toBe(0);
     expect(JSON.parse(legacy.stdout).dry_run).toBe(false);
+    expect(existsSync(legacy.runRoot)).toBe(false);
+
+    rmSync(doctorRoot, { recursive: true, force: true });
+    expect(existsSync(doctorRoot)).toBe(false);
   });
 
   it("should run usage report command", async () => {
-    const dbPath = "/tmp/test-cli-usage.db";
+    const dbPath = join(testRoot, "test-cli-usage.db");
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
 
@@ -621,7 +714,7 @@ describe("CLI integration", () => {
   });
 
   it("should run local reports command", async () => {
-    const dbPath = "/tmp/test-cli-local-reports.db";
+    const dbPath = join(testRoot, "test-cli-local-reports.db");
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
 
@@ -640,10 +733,9 @@ describe("CLI integration", () => {
   });
 
   it("manages local workflow states through the CLI", async () => {
-    const dbPath = "/tmp/test-cli-workflow-states.db";
-    const home = `/tmp/test-cli-workflow-states-home-${Date.now()}`;
+    const dbPath = join(testRoot, "test-cli-workflow-states.db");
+    const home = join(testRoot, `test-cli-workflow-states-home-${Date.now()}`);
     const { mkdirSync, rmSync, unlinkSync, writeFileSync } = await import("node:fs");
-    const { join } = await import("node:path");
     try { unlinkSync(dbPath); } catch {}
     mkdirSync(join(home, ".hasna", "todos"), { recursive: true });
     writeFileSync(join(home, ".hasna", "todos", "config.json"), JSON.stringify({
@@ -676,7 +768,7 @@ describe("CLI integration", () => {
   });
 
   it("should print a deterministic terminal dashboard snapshot", async () => {
-    const dbPath = "/tmp/test-cli-dashboard-snapshot.db";
+    const dbPath = join(testRoot, "test-cli-dashboard-snapshot.db");
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
 
@@ -702,7 +794,7 @@ describe("CLI integration", () => {
   });
 
   it("should generate shell completions for bash zsh and fish", async () => {
-    const dbPath = "/tmp/test-cli-completions.db";
+    const dbPath = join(testRoot, "test-cli-completions.db");
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
 
@@ -732,7 +824,7 @@ describe("CLI integration", () => {
   });
 
   it("should print a manpage-grade local CLI manual", async () => {
-    const dbPath = "/tmp/test-cli-manual.db";
+    const dbPath = join(testRoot, "test-cli-manual.db");
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
 
@@ -762,10 +854,10 @@ describe("CLI integration", () => {
   it("should run search command", async () => {
     // First add a task, then search for it
     const addProc = Bun.spawn(
-      ["bun", "run", "src/cli/index.tsx", "add", "searchable item", "--json"],
+      [process.execPath, "--no-env-file", "run", "src/cli/index.tsx", "add", "searchable item", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: localRoutingTestEnv({ TODOS_DB_PATH: "/tmp/test-cli-search.db", TODOS_AUTO_PROJECT: "false" }),
+        env: cliTestEnvironment({ TODOS_DB_PATH: join(testRoot, "test-cli-search.db"), TODOS_AUTO_PROJECT: "false" }),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -773,10 +865,10 @@ describe("CLI integration", () => {
     await addProc.exited;
 
     const searchProc = Bun.spawn(
-      ["bun", "run", "src/cli/index.tsx", "search", "searchable", "--json"],
+      [process.execPath, "--no-env-file", "run", "src/cli/index.tsx", "search", "searchable", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: localRoutingTestEnv({ TODOS_DB_PATH: "/tmp/test-cli-search.db", TODOS_AUTO_PROJECT: "false" }),
+        env: cliTestEnvironment({ TODOS_DB_PATH: join(testRoot, "test-cli-search.db"), TODOS_AUTO_PROJECT: "false" }),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -789,11 +881,11 @@ describe("CLI integration", () => {
     expect(results[0].title).toBe("searchable item");
 
     const { unlinkSync } = await import("node:fs");
-    try { unlinkSync("/tmp/test-cli-search.db"); } catch {}
+    try { unlinkSync(join(testRoot, "test-cli-search.db")); } catch {}
   });
 
   it("should save and run local search views from the CLI", async () => {
-    const dbPath = "/tmp/test-cli-views.db";
+    const dbPath = join(testRoot, "test-cli-views.db");
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
 
@@ -843,7 +935,7 @@ describe("CLI integration", () => {
   });
 
   it("should manage local project knowledge records from the CLI", async () => {
-    const dbPath = "/tmp/test-cli-knowledge.db";
+    const dbPath = join(testRoot, "test-cli-knowledge.db");
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
 
@@ -897,7 +989,7 @@ describe("CLI integration", () => {
   });
 
   it("should manage local risk register entries and health reports from the CLI", async () => {
-    const dbPath = "/tmp/test-cli-risks.db";
+    const dbPath = join(testRoot, "test-cli-risks.db");
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
 
@@ -1040,7 +1132,7 @@ describe("CLI integration", () => {
   });
 
   it("should create and export local retrospectives from the CLI", async () => {
-    const dbPath = "/tmp/test-cli-retrospectives.db";
+    const dbPath = join(testRoot, "test-cli-retrospectives.db");
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
 
@@ -1079,7 +1171,7 @@ describe("CLI integration", () => {
   });
 
   it("should generate local agent reliability scorecards from the CLI", async () => {
-    const dbPath = "/tmp/test-cli-agent-reliability.db";
+    const dbPath = join(testRoot, "test-cli-agent-reliability.db");
     const { unlinkSync } = await import("node:fs");
     try {
       unlinkSync(dbPath);
@@ -1119,7 +1211,7 @@ describe("CLI integration", () => {
   });
 
   it("should manage local task fields from the CLI", async () => {
-    const dbPath = "/tmp/test-cli-fields.db";
+    const dbPath = join(testRoot, "test-cli-fields.db");
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
 
@@ -1174,10 +1266,9 @@ describe("CLI integration", () => {
   });
 
   it("should resolve local mentions from the CLI without network lookups", async () => {
-    const dbPath = "/tmp/test-cli-mentions.db";
+    const dbPath = join(testRoot, "test-cli-mentions.db");
     const { mkdtempSync, rmSync, writeFileSync, unlinkSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
     const root = mkdtempSync(join(tmpdir(), "todos-cli-mentions-"));
     try { unlinkSync(dbPath); } catch {}
 
@@ -1211,7 +1302,7 @@ describe("CLI integration", () => {
   });
 
   it("should scan and merge duplicate tasks from the CLI", async () => {
-    const dbPath = "/tmp/test-cli-dedupe.db";
+    const dbPath = join(testRoot, "test-cli-dedupe.db");
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
 
@@ -1255,7 +1346,6 @@ describe("CLI integration", () => {
   it("should bootstrap a local project from CLI JSON output", async () => {
     const { mkdtempSync, mkdirSync, writeFileSync, unlinkSync, rmSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
     const root = mkdtempSync(join(tmpdir(), "todos-cli-bootstrap-"));
     const dbPath = join(root, "todos.db");
     mkdirSync(join(root, ".git"));
@@ -1279,8 +1369,7 @@ describe("CLI integration", () => {
   it("should search description fingerprints inside task-list slugs", async () => {
     const { mkdtempSync, rmSync, unlinkSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
-    const dbPath = "/tmp/test-cli-search-task-list-slug.db";
+    const dbPath = join(testRoot, "test-cli-search-task-list-slug.db");
     const tempRoot = mkdtempSync(join(tmpdir(), "todos-cli-search-slug-"));
     const previousDbPath = process.env["TODOS_DB_PATH"];
     const previousHome = process.env["HOME"];
@@ -1337,7 +1426,6 @@ describe("CLI integration", () => {
   it("should resolve task-list slugs inside the selected project", async () => {
     const { mkdirSync, mkdtempSync, rmSync, unlinkSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
     const tempRoot = mkdtempSync(join(tmpdir(), "todos-cli-project-slug-"));
     const dbPath = join(tempRoot, "todos.db");
     const projectAPath = join(tempRoot, "project-a");
@@ -1406,10 +1494,10 @@ describe("CLI integration", () => {
   it("should run week command", async () => {
     // Add a task so there's activity
     const addProc = Bun.spawn(
-      ["bun", "run", "src/cli/index.tsx", "add", "weekly test task", "--json"],
+      [process.execPath, "--no-env-file", "run", "src/cli/index.tsx", "add", "weekly test task", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: localRoutingTestEnv({ TODOS_DB_PATH: "/tmp/test-cli-week.db", TODOS_AUTO_PROJECT: "false" }),
+        env: cliTestEnvironment({ TODOS_DB_PATH: join(testRoot, "test-cli-week.db"), TODOS_AUTO_PROJECT: "false" }),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -1417,10 +1505,10 @@ describe("CLI integration", () => {
     await addProc.exited;
 
     const weekProc = Bun.spawn(
-      ["bun", "run", "src/cli/index.tsx", "week", "--json"],
+      [process.execPath, "--no-env-file", "run", "src/cli/index.tsx", "week", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: localRoutingTestEnv({ TODOS_DB_PATH: "/tmp/test-cli-week.db", TODOS_AUTO_PROJECT: "false" }),
+        env: cliTestEnvironment({ TODOS_DB_PATH: join(testRoot, "test-cli-week.db"), TODOS_AUTO_PROJECT: "false" }),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -1434,15 +1522,15 @@ describe("CLI integration", () => {
     expect(result.days).toBeDefined();
 
     const { unlinkSync } = await import("node:fs");
-    try { unlinkSync("/tmp/test-cli-week.db"); } catch {}
+    try { unlinkSync(join(testRoot, "test-cli-week.db")); } catch {}
   });
 
   it("should run mine command", async () => {
     const proc = Bun.spawn(
-      ["bun", "run", "src/cli/index.tsx", "mine", "test-agent", "--json"],
+      [process.execPath, "--no-env-file", "run", "src/cli/index.tsx", "mine", "test-agent", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: localRoutingTestEnv({ TODOS_DB_PATH: "/tmp/test-cli-mine.db", TODOS_AUTO_PROJECT: "false" }),
+        env: cliTestEnvironment({ TODOS_DB_PATH: join(testRoot, "test-cli-mine.db"), TODOS_AUTO_PROJECT: "false" }),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -1454,15 +1542,15 @@ describe("CLI integration", () => {
     expect(Array.isArray(result)).toBe(true);
 
     const { unlinkSync } = await import("node:fs");
-    try { unlinkSync("/tmp/test-cli-mine.db"); } catch {}
+    try { unlinkSync(join(testRoot, "test-cli-mine.db")); } catch {}
   });
 
   it("should run blocked command", async () => {
     const proc = Bun.spawn(
-      ["bun", "run", "src/cli/index.tsx", "blocked", "--json"],
+      [process.execPath, "--no-env-file", "run", "src/cli/index.tsx", "blocked", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: localRoutingTestEnv({ TODOS_DB_PATH: "/tmp/test-cli-blocked.db", TODOS_AUTO_PROJECT: "false" }),
+        env: cliTestEnvironment({ TODOS_DB_PATH: join(testRoot, "test-cli-blocked.db"), TODOS_AUTO_PROJECT: "false" }),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -1474,15 +1562,15 @@ describe("CLI integration", () => {
     expect(Array.isArray(result)).toBe(true);
 
     const { unlinkSync } = await import("node:fs");
-    try { unlinkSync("/tmp/test-cli-blocked.db"); } catch {}
+    try { unlinkSync(join(testRoot, "test-cli-blocked.db")); } catch {}
   });
 
   it("should run burndown command", async () => {
     const proc = Bun.spawn(
-      ["bun", "run", "src/cli/index.tsx", "burndown", "--json"],
+      [process.execPath, "--no-env-file", "run", "src/cli/index.tsx", "burndown", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: localRoutingTestEnv({ TODOS_DB_PATH: "/tmp/test-cli-burndown.db", TODOS_AUTO_PROJECT: "false" }),
+        env: cliTestEnvironment({ TODOS_DB_PATH: join(testRoot, "test-cli-burndown.db"), TODOS_AUTO_PROJECT: "false" }),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -1497,15 +1585,15 @@ describe("CLI integration", () => {
     expect(result[0].completed).toBeDefined();
 
     const { unlinkSync } = await import("node:fs");
-    try { unlinkSync("/tmp/test-cli-burndown.db"); } catch {}
+    try { unlinkSync(join(testRoot, "test-cli-burndown.db")); } catch {}
   });
 
   it("should run log command", async () => {
     const proc = Bun.spawn(
-      ["bun", "run", "src/cli/index.tsx", "log", "--json"],
+      [process.execPath, "--no-env-file", "run", "src/cli/index.tsx", "log", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: localRoutingTestEnv({ TODOS_DB_PATH: "/tmp/test-cli-log.db", TODOS_AUTO_PROJECT: "false" }),
+        env: cliTestEnvironment({ TODOS_DB_PATH: join(testRoot, "test-cli-log.db"), TODOS_AUTO_PROJECT: "false" }),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -1517,15 +1605,15 @@ describe("CLI integration", () => {
     expect(Array.isArray(result)).toBe(true);
 
     const { unlinkSync } = await import("node:fs");
-    try { unlinkSync("/tmp/test-cli-log.db"); } catch {}
+    try { unlinkSync(join(testRoot, "test-cli-log.db")); } catch {}
   });
 
   it("should run ready command", async () => {
     const proc = Bun.spawn(
-      ["bun", "run", "src/cli/index.tsx", "ready", "--json"],
+      [process.execPath, "--no-env-file", "run", "src/cli/index.tsx", "ready", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: localRoutingTestEnv({ TODOS_DB_PATH: "/tmp/test-cli-ready.db", TODOS_AUTO_PROJECT: "false" }),
+        env: cliTestEnvironment({ TODOS_DB_PATH: join(testRoot, "test-cli-ready.db"), TODOS_AUTO_PROJECT: "false" }),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -1537,7 +1625,7 @@ describe("CLI integration", () => {
     expect(Array.isArray(result)).toBe(true);
 
     const { unlinkSync } = await import("node:fs");
-    try { unlinkSync("/tmp/test-cli-ready.db"); } catch {}
+    try { unlinkSync(join(testRoot, "test-cli-ready.db")); } catch {}
   });
 
   it("should expose source discovery JSON for ready --source-store while preserving legacy ready array JSON", async () => {
@@ -1575,7 +1663,7 @@ describe("CLI integration", () => {
   });
 
   it("should expose a dependency graph through deps --graph --json", async () => {
-    const dbPath = "/tmp/test-cli-deps-graph.db";
+    const dbPath = join(testRoot, "test-cli-deps-graph.db");
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
 
@@ -1598,7 +1686,7 @@ describe("CLI integration", () => {
   });
 
   it("should link and query local git traceability evidence", async () => {
-    const dbPath = "/tmp/test-cli-git-traceability.db";
+    const dbPath = join(testRoot, "test-cli-git-traceability.db");
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
     try { unlinkSync(`${dbPath}-shm`); } catch {}
@@ -1661,7 +1749,7 @@ describe("CLI integration", () => {
   });
 
   it("should create a local branch-safe work plan from the CLI", async () => {
-    const dbPath = "/tmp/test-cli-branch-plan.db";
+    const dbPath = join(testRoot, "test-cli-branch-plan.db");
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
     try { unlinkSync(`${dbPath}-shm`); } catch {}
@@ -1695,7 +1783,7 @@ describe("CLI integration", () => {
   });
 
   it("should manage and run local verification providers from the CLI", async () => {
-    const dbPath = "/tmp/test-cli-verification-providers.db";
+    const dbPath = join(testRoot, "test-cli-verification-providers.db");
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
     try { unlinkSync(`${dbPath}-shm`); } catch {}
@@ -1744,9 +1832,8 @@ describe("CLI integration", () => {
   });
 
   it("should record a local run ledger with command, file, artifact, and finish evidence", async () => {
-    const dbPath = "/tmp/test-cli-run-ledger.db";
+    const dbPath = join(testRoot, "test-cli-run-ledger.db");
     const { mkdtempSync, rmSync, unlinkSync, writeFileSync } = await import("node:fs");
-    const { join } = await import("node:path");
     const { tmpdir } = await import("node:os");
     try { unlinkSync(dbPath); } catch {}
     try { unlinkSync(`${dbPath}-shm`); } catch {}
@@ -1816,9 +1903,8 @@ describe("CLI integration", () => {
   });
 
   it("should simulate an agent replay fixture from the CLI without a project database", async () => {
-    const dbPath = "/tmp/test-cli-replay-simulator.db";
+    const dbPath = join(testRoot, "test-cli-replay-simulator.db");
     const { mkdtempSync, rmSync, unlinkSync, writeFileSync } = await import("node:fs");
-    const { join } = await import("node:path");
     const { tmpdir } = await import("node:os");
     try { unlinkSync(dbPath); } catch {}
     try { unlinkSync(`${dbPath}-shm`); } catch {}
@@ -1857,9 +1943,9 @@ describe("CLI integration", () => {
   });
 
   it("should capture local inbox intake and dedupe repeated failures", async () => {
-    const dbPath = "/tmp/test-cli-inbox-intake.db";
+    const dbPath = join(testRoot, "test-cli-inbox-intake.db");
     const { unlinkSync, writeFileSync } = await import("node:fs");
-    const filePath = "/tmp/test-cli-inbox-intake.log";
+    const filePath = join(testRoot, "test-cli-inbox-intake.log");
     try { unlinkSync(dbPath); } catch {}
     try { unlinkSync(`${dbPath}-shm`); } catch {}
     try { unlinkSync(`${dbPath}-wal`); } catch {}
@@ -1898,7 +1984,7 @@ describe("CLI integration", () => {
   });
 
   it("should preview and apply local natural-language inbox intake from the CLI", async () => {
-    const dbPath = "/tmp/test-cli-natural-intake.db";
+    const dbPath = join(testRoot, "test-cli-natural-intake.db");
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
     try { unlinkSync(`${dbPath}-shm`); } catch {}
@@ -1936,9 +2022,9 @@ describe("CLI integration", () => {
   });
 
   it("should export and import a local bridge bundle through the CLI", async () => {
-    const sourceDb = "/tmp/test-cli-bridge-source.db";
-    const targetDb = "/tmp/test-cli-bridge-target.db";
-    const bundlePath = "/tmp/test-cli-bridge-bundle.json";
+    const sourceDb = join(testRoot, "test-cli-bridge-source.db");
+    const targetDb = join(testRoot, "test-cli-bridge-target.db");
+    const bundlePath = join(testRoot, "test-cli-bridge-bundle.json");
     const { unlinkSync } = await import("node:fs");
     for (const path of [sourceDb, targetDb, bundlePath, `${sourceDb}-shm`, `${sourceDb}-wal`, `${targetDb}-shm`, `${targetDb}-wal`]) {
       try { unlinkSync(path); } catch {}
@@ -1989,9 +2075,9 @@ describe("CLI integration", () => {
   }, 30000);
 
   it("should create verify integrity-check and restore a local backup through the CLI", async () => {
-    const sourceDb = "/tmp/test-cli-backup-source.db";
-    const targetDb = "/tmp/test-cli-backup-target.db";
-    const backupPath = "/tmp/test-cli-backup-bundle.json";
+    const sourceDb = join(testRoot, "test-cli-backup-source.db");
+    const targetDb = join(testRoot, "test-cli-backup-target.db");
+    const backupPath = join(testRoot, "test-cli-backup-bundle.json");
     const { unlinkSync } = await import("node:fs");
     for (const path of [sourceDb, targetDb, backupPath, `${sourceDb}-shm`, `${sourceDb}-wal`, `${targetDb}-shm`, `${targetDb}-wal`]) {
       try { unlinkSync(path); } catch {}
@@ -2037,7 +2123,7 @@ describe("CLI integration", () => {
   }, 30000);
 
   it("should inspect native storage status without network access", async () => {
-    const dbPath = "/tmp/test-cli-storage-status.db";
+    const dbPath = join(testRoot, "test-cli-storage-status.db");
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
 
@@ -2087,7 +2173,7 @@ describe("CLI integration", () => {
   });
 
   it("should report missing HTTP authority settings without using native remote adapters", async () => {
-    const dbPath = "/tmp/test-cli-storage-remote.db";
+    const dbPath = join(testRoot, "test-cli-storage-remote.db");
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
 
@@ -2131,7 +2217,7 @@ describe("CLI integration", () => {
   });
 
   it("should reject native storage sync planning in remote mode before local helpers", async () => {
-    const dbPath = "/tmp/test-cli-storage-sync-plan.db";
+    const dbPath = join(testRoot, "test-cli-storage-sync-plan.db");
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
 
@@ -2154,9 +2240,8 @@ describe("CLI integration", () => {
   });
 
   it("should preview native S3 run artifact sync without network access", async () => {
-    const dbPath = "/tmp/test-cli-storage-artifacts.db";
+    const dbPath = join(testRoot, "test-cli-storage-artifacts.db");
     const { mkdtempSync, rmSync, unlinkSync, writeFileSync } = await import("node:fs");
-    const { join } = await import("node:path");
     const { tmpdir } = await import("node:os");
     const artifactRoot = mkdtempSync(join(tmpdir(), "todos-cli-storage-artifacts-"));
     const artifactPath = join(artifactRoot, "evidence.log");
@@ -2205,9 +2290,9 @@ describe("CLI integration", () => {
   });
 
   it("should export and import todos.md markdown through the CLI", async () => {
-    const sourceDb = "/tmp/test-cli-todos-md-source.db";
-    const targetDb = "/tmp/test-cli-todos-md-target.db";
-    const markdownPath = "/tmp/test-cli-todos.md";
+    const sourceDb = join(testRoot, "test-cli-todos-md-source.db");
+    const targetDb = join(testRoot, "test-cli-todos-md-target.db");
+    const markdownPath = join(testRoot, "test-cli-todos.md");
     const { unlinkSync } = await import("node:fs");
     for (const path of [sourceDb, targetDb, markdownPath, `${sourceDb}-shm`, `${sourceDb}-wal`, `${targetDb}-shm`, `${targetDb}-wal`]) {
       try { unlinkSync(path); } catch {}
@@ -2241,7 +2326,7 @@ describe("CLI integration", () => {
   }, 30000);
 
   it("should list and import bundled onboarding fixtures through the CLI", async () => {
-    const dbPath = "/tmp/test-cli-onboarding-fixtures.db";
+    const dbPath = join(testRoot, "test-cli-onboarding-fixtures.db");
     const { unlinkSync } = await import("node:fs");
     for (const path of [dbPath, `${dbPath}-shm`, `${dbPath}-wal`]) {
       try { unlinkSync(path); } catch {}
@@ -2285,7 +2370,7 @@ describe("CLI integration", () => {
   });
 
   it("should list read and poll local snapshots through the CLI", async () => {
-    const dbPath = "/tmp/test-cli-local-snapshots.db";
+    const dbPath = join(testRoot, "test-cli-local-snapshots.db");
     const { unlinkSync } = await import("node:fs");
     for (const path of [dbPath, `${dbPath}-shm`, `${dbPath}-wal`]) {
       try { unlinkSync(path); } catch {}
@@ -2321,8 +2406,8 @@ describe("CLI integration", () => {
   });
 
   it("should list show and write SDK integration fixtures through the CLI", async () => {
-    const dbPath = "/tmp/test-cli-sdk-fixtures.db";
-    const outputDir = "/tmp/test-cli-sdk-fixtures";
+    const dbPath = join(testRoot, "test-cli-sdk-fixtures.db");
+    const outputDir = join(testRoot, "test-cli-sdk-fixtures");
     const { rmSync, unlinkSync } = await import("node:fs");
     rmSync(outputDir, { recursive: true, force: true });
     for (const path of [dbPath, `${dbPath}-shm`, `${dbPath}-wal`]) {
@@ -2358,12 +2443,11 @@ describe("CLI integration", () => {
   });
 
   it("should encrypt and decrypt local bridge bundles through the CLI", async () => {
-    const sourceDb = "/tmp/test-cli-bridge-encrypted-source.db";
-    const targetDb = "/tmp/test-cli-bridge-encrypted-target.db";
-    const bundlePath = "/tmp/test-cli-bridge-bundle.enc.json";
+    const sourceDb = join(testRoot, "test-cli-bridge-encrypted-source.db");
+    const targetDb = join(testRoot, "test-cli-bridge-encrypted-target.db");
+    const bundlePath = join(testRoot, "test-cli-bridge-bundle.enc.json");
     const { mkdtempSync, rmSync, unlinkSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
     const home = mkdtempSync(join(tmpdir(), "todos-cli-encryption-home-"));
     const env = {
       HOME: home,
@@ -2401,8 +2485,8 @@ describe("CLI integration", () => {
   }, 30000);
 
   it("should create all tasks and dependencies from a reusable plan template", async () => {
-    const dbPath = "/tmp/test-cli-plan-template-use.db";
-    const importPath = "/tmp/test-cli-plan-template-use.json";
+    const dbPath = join(testRoot, "test-cli-plan-template-use.db");
+    const importPath = join(testRoot, "test-cli-plan-template-use.json");
     const { unlinkSync, writeFileSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
     try { unlinkSync(`${dbPath}-shm`); } catch {}
@@ -2474,10 +2558,9 @@ describe("CLI integration", () => {
   });
 
   it("should expose and write the bundled local template library from the CLI", async () => {
-    const dbPath = "/tmp/test-cli-template-library.db";
+    const dbPath = join(testRoot, "test-cli-template-library.db");
     const { mkdtempSync, rmSync, unlinkSync, existsSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
     try { unlinkSync(dbPath); } catch {}
     const dir = mkdtempSync(join(tmpdir(), "todos-cli-template-library-"));
 
@@ -2514,10 +2597,10 @@ describe("CLI integration", () => {
 
   it("should run sprint command", async () => {
     const proc = Bun.spawn(
-      ["bun", "run", "src/cli/index.tsx", "sprint", "--json"],
+      [process.execPath, "--no-env-file", "run", "src/cli/index.tsx", "sprint", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: localRoutingTestEnv({ TODOS_DB_PATH: "/tmp/test-cli-sprint.db", TODOS_AUTO_PROJECT: "false" }),
+        env: cliTestEnvironment({ TODOS_DB_PATH: join(testRoot, "test-cli-sprint.db"), TODOS_AUTO_PROJECT: "false" }),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -2532,12 +2615,12 @@ describe("CLI integration", () => {
     expect(result.overdue).toBeDefined();
 
     const { unlinkSync } = await import("node:fs");
-    try { unlinkSync("/tmp/test-cli-sprint.db"); } catch {}
+    try { unlinkSync(join(testRoot, "test-cli-sprint.db")); } catch {}
   });
 
   it("should create and list handoffs", async () => {
     const { unlinkSync } = await import("node:fs");
-    const dbPath = "/tmp/test-cli-handoff.db";
+    const dbPath = join(testRoot, "test-cli-handoff.db");
     try { unlinkSync(dbPath); } catch {}
     try { unlinkSync(`${dbPath}-shm`); } catch {}
     try { unlinkSync(`${dbPath}-wal`); } catch {}
@@ -2589,7 +2672,6 @@ describe("CLI integration", () => {
 
   it("should export and import local handoff bundles from the CLI", async () => {
     const { unlinkSync, mkdtempSync } = await import("node:fs");
-    const { join } = await import("node:path");
     const { tmpdir } = await import("node:os");
     const dir = mkdtempSync(join(tmpdir(), "todos-cli-handoff-bundle-"));
     const sourceDb = join(dir, "source.db");
@@ -2640,10 +2722,10 @@ describe("CLI integration", () => {
 
   it("should run overdue command", async () => {
     const proc = Bun.spawn(
-      ["bun", "run", "src/cli/index.tsx", "overdue", "--json"],
+      [process.execPath, "--no-env-file", "run", "src/cli/index.tsx", "overdue", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: localRoutingTestEnv({ TODOS_DB_PATH: "/tmp/test-cli-overdue.db", TODOS_AUTO_PROJECT: "false" }),
+        env: cliTestEnvironment({ TODOS_DB_PATH: join(testRoot, "test-cli-overdue.db"), TODOS_AUTO_PROJECT: "false" }),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -2655,11 +2737,11 @@ describe("CLI integration", () => {
     expect(Array.isArray(result)).toBe(true);
 
     const { unlinkSync } = await import("node:fs");
-    try { unlinkSync("/tmp/test-cli-overdue.db"); } catch {}
+    try { unlinkSync(join(testRoot, "test-cli-overdue.db")); } catch {}
   });
 
   it("should create and list local SLA escalations", async () => {
-    const dbPath = "/tmp/test-cli-sla.db";
+    const dbPath = join(testRoot, "test-cli-sla.db");
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
 
@@ -2678,9 +2760,8 @@ describe("CLI integration", () => {
   });
 
   it("should manage local workspace trust profiles", async () => {
-    const dbPath = "/tmp/test-cli-trust.db";
+    const dbPath = join(testRoot, "test-cli-trust.db");
     const { mkdtempSync, rmSync, unlinkSync } = await import("node:fs");
-    const { join } = await import("node:path");
     const { tmpdir } = await import("node:os");
     const home = mkdtempSync(join(tmpdir(), "todos-cli-trust-home-"));
     const project = join(home, "project");
@@ -2728,9 +2809,8 @@ describe("CLI integration", () => {
   });
 
   it("should manage local secret redaction from the CLI", async () => {
-    const dbPath = "/tmp/test-cli-redaction.db";
+    const dbPath = join(testRoot, "test-cli-redaction.db");
     const { mkdtempSync, rmSync, unlinkSync } = await import("node:fs");
-    const { join } = await import("node:path");
     const { tmpdir } = await import("node:os");
     const home = mkdtempSync(join(tmpdir(), "todos-cli-redaction-home-"));
     const previousHome = process.env["HOME"];
@@ -2759,7 +2839,7 @@ describe("CLI integration", () => {
   });
 
   it("should preview and apply local retention cleanup from the CLI", async () => {
-    const dbPath = "/tmp/test-cli-retention.db";
+    const dbPath = join(testRoot, "test-cli-retention.db");
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
 
@@ -2808,7 +2888,7 @@ describe("CLI integration", () => {
   });
 
   it("should report local scale hardening and preview compaction from the CLI", async () => {
-    const dbPath = `/tmp/test-cli-scale-hardening-${crypto.randomUUID()}.db`;
+    const dbPath = join(testRoot, `test-cli-scale-hardening-${crypto.randomUUID()}.db`);
     process.env["TODOS_DB_PATH"] = dbPath;
     resetDatabase();
     const db = getDatabase();
@@ -2842,9 +2922,8 @@ describe("CLI integration", () => {
   });
 
   it("should manage local runner sandbox profiles and guard run commands", async () => {
-    const dbPath = "/tmp/test-cli-sandbox.db";
+    const dbPath = join(testRoot, "test-cli-sandbox.db");
     const { mkdtempSync, rmSync, unlinkSync } = await import("node:fs");
-    const { join } = await import("node:path");
     const { tmpdir } = await import("node:os");
     const home = mkdtempSync(join(tmpdir(), "todos-cli-sandbox-home-"));
     const project = join(home, "project");
@@ -2901,9 +2980,8 @@ describe("CLI integration", () => {
   });
 
   it("should inspect, install, list, verify, and remove local extensions", async () => {
-    const dbPath = "/tmp/test-cli-extensions.db";
+    const dbPath = join(testRoot, "test-cli-extensions.db");
     const { mkdtempSync, rmSync, unlinkSync, writeFileSync } = await import("node:fs");
-    const { join } = await import("node:path");
     const { tmpdir } = await import("node:os");
     const home = mkdtempSync(join(tmpdir(), "todos-cli-extensions-home-"));
     const source = mkdtempSync(join(tmpdir(), "todos-cli-extensions-source-"));
@@ -2966,7 +3044,7 @@ describe("CLI integration", () => {
   });
 
   it("should list and render local workflow prompts", async () => {
-    const dbPath = "/tmp/test-cli-workflows.db";
+    const dbPath = join(testRoot, "test-cli-workflows.db");
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
 
@@ -3000,9 +3078,8 @@ describe("CLI integration", () => {
   });
 
   it("should manage local policy packs and validate task evidence", async () => {
-    const dbPath = "/tmp/test-cli-policies.db";
+    const dbPath = join(testRoot, "test-cli-policies.db");
     const { mkdtempSync, rmSync, unlinkSync } = await import("node:fs");
-    const { join } = await import("node:path");
     const { tmpdir } = await import("node:os");
     const home = mkdtempSync(join(tmpdir(), "todos-cli-policies-home-"));
     const project = join(home, "project");
@@ -3060,7 +3137,7 @@ describe("CLI integration", () => {
   });
 
   it("should manage local task contracts and review gates from the CLI", async () => {
-    const dbPath = "/tmp/test-cli-task-contracts.db";
+    const dbPath = join(testRoot, "test-cli-task-contracts.db");
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
 
@@ -3117,10 +3194,9 @@ describe("CLI integration", () => {
   });
 
   it("should manage local review queues and routing rules from the CLI", async () => {
-    const dbPath = "/tmp/test-cli-review-queues.db";
+    const dbPath = join(testRoot, "test-cli-review-queues.db");
     const { mkdtempSync, rmSync, unlinkSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
     const home = mkdtempSync(join(tmpdir(), "todos-cli-review-home-"));
     const env = { HOME: home };
     try {
@@ -3189,7 +3265,7 @@ describe("CLI integration", () => {
   });
 
   it("should manage local approval gates and block failed checks in json mode", async () => {
-    const dbPath = "/tmp/test-cli-approval-gates.db";
+    const dbPath = join(testRoot, "test-cli-approval-gates.db");
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
 
@@ -3238,7 +3314,7 @@ describe("CLI integration", () => {
   });
 
   it("should build local agent context packs from the CLI", async () => {
-    const dbPath = "/tmp/test-cli-context-pack.db";
+    const dbPath = join(testRoot, "test-cli-context-pack.db");
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
 
@@ -3286,7 +3362,7 @@ describe("CLI integration", () => {
   });
 
   it("should show a redacted local activity timeline from the CLI", async () => {
-    const dbPath = "/tmp/test-cli-activity-timeline.db";
+    const dbPath = join(testRoot, "test-cli-activity-timeline.db");
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
 
@@ -3305,7 +3381,7 @@ describe("CLI integration", () => {
   });
 
   it("should track local time and focus sessions from the CLI", async () => {
-    const dbPath = "/tmp/test-cli-time-tracking.db";
+    const dbPath = join(testRoot, "test-cli-time-tracking.db");
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
 
@@ -3345,7 +3421,7 @@ describe("CLI integration", () => {
   });
 
   it("should manage local kanban boards from the CLI", async () => {
-    const dbPath = "/tmp/test-cli-boards.db";
+    const dbPath = join(testRoot, "test-cli-boards.db");
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
 
@@ -3384,8 +3460,8 @@ describe("CLI integration", () => {
   });
 
   it("should list export and import local calendar events from the CLI", async () => {
-    const dbPath = "/tmp/test-cli-calendar.db";
-    const icsPath = "/tmp/test-cli-calendar.ics";
+    const dbPath = join(testRoot, "test-cli-calendar.db");
+    const icsPath = join(testRoot, "test-cli-calendar.ics");
     const { unlinkSync, writeFileSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
     try { unlinkSync(icsPath); } catch {}
@@ -3438,7 +3514,7 @@ END:VCALENDAR`);
   });
 
   it("should queue and run local agent dispatches", async () => {
-    const dbPath = "/tmp/test-cli-agent-runs.db";
+    const dbPath = join(testRoot, "test-cli-agent-runs.db");
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
 
@@ -3471,7 +3547,6 @@ END:VCALENDAR`);
   it("should manage local event hooks from the CLI", async () => {
     const { mkdtempSync, readFileSync, rmSync, unlinkSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
     const previousHome = process.env["HOME"];
     const home = mkdtempSync(join(tmpdir(), "todos-cli-event-hooks-"));
     process.env["HOME"] = home;
@@ -3504,7 +3579,6 @@ END:VCALENDAR`);
   it("should manage local terminal notification rules from the CLI", async () => {
     const { mkdtempSync, rmSync, unlinkSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
     const previousHome = process.env["HOME"];
     const home = mkdtempSync(join(tmpdir(), "todos-cli-terminal-notifications-"));
     process.env["HOME"] = home;
@@ -3582,7 +3656,6 @@ END:VCALENDAR`);
   it("should manage local roadmaps, milestones, release groups, and imports from the CLI", async () => {
     const { mkdtempSync, rmSync, unlinkSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
     const previousHome = process.env["HOME"];
     const home = mkdtempSync(join(tmpdir(), "todos-cli-roadmaps-"));
     process.env["HOME"] = home;
@@ -3661,7 +3734,6 @@ END:VCALENDAR`);
   it("should manage local capacity profiles and planning forecasts from the CLI", async () => {
     const { mkdtempSync, rmSync, unlinkSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
     const previousHome = process.env["HOME"];
     const home = mkdtempSync(join(tmpdir(), "todos-cli-capacity-"));
     process.env["HOME"] = home;
@@ -3727,7 +3799,6 @@ END:VCALENDAR`);
   it("should seal and verify local audit ledger checkpoints from the CLI", async () => {
     const { mkdtempSync, rmSync, unlinkSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
     const previousHome = process.env["HOME"];
     const home = mkdtempSync(join(tmpdir(), "todos-cli-audit-ledger-"));
     process.env["HOME"] = home;
@@ -3767,7 +3838,6 @@ END:VCALENDAR`);
   it("should check release compatibility from the CLI", async () => {
     const { mkdtempSync, rmSync, unlinkSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
     const home = mkdtempSync(join(tmpdir(), "todos-cli-release-compat-"));
     const dbPath = join(home, "todos.db");
 
@@ -3800,7 +3870,6 @@ END:VCALENDAR`);
   it("should import external issue data from the CLI with dry-run and dedupe", async () => {
     const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
     const home = mkdtempSync(join(tmpdir(), "todos-cli-issues-import-"));
     const dbPath = join(home, "todos.db");
     const fixture = join(home, "issues.json");
@@ -3846,7 +3915,6 @@ END:VCALENDAR`);
   it("should extract source TODOs with index metadata and watcher output", async () => {
     const { mkdtempSync, rmSync, writeFileSync, unlinkSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
     const root = mkdtempSync(join(tmpdir(), "todos-cli-extract-"));
     const dbPath = join(root, "todos.db");
 
@@ -3875,7 +3943,7 @@ END:VCALENDAR`);
   });
 
   it("should register machines with topology metadata and report diagnostics", async () => {
-    const dbPath = "/tmp/test-cli-machines-topology.db";
+    const dbPath = join(testRoot, "test-cli-machines-topology.db");
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
 
@@ -3922,7 +3990,7 @@ END:VCALENDAR`);
   });
 
   it("should expose bridge-bundle machine sync and preserve JSON output with no peers", async () => {
-    const dbPath = "/tmp/test-cli-machines-sync-help.db";
+    const dbPath = join(testRoot, "test-cli-machines-sync-help.db");
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
 
@@ -3947,7 +4015,6 @@ END:VCALENDAR`);
   it("should hard-error when the global --project filter cannot be resolved instead of listing everything", async () => {
     const { mkdtempSync, rmSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
     const home = mkdtempSync(join(tmpdir(), "todos-cli-project-filter-"));
     const dbPath = join(home, "todos.db");
     const projectPath = join(home, "alpha-rocket");
@@ -3972,7 +4039,6 @@ END:VCALENDAR`);
   it("should resolve the global --project filter by path, slug, and name", async () => {
     const { mkdtempSync, rmSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
     const home = mkdtempSync(join(tmpdir(), "todos-cli-project-resolve-"));
     const dbPath = join(home, "todos.db");
     const projectPath = join(home, "alpha-rocket");
@@ -3996,7 +4062,6 @@ END:VCALENDAR`);
   it("should hard-error on an unresolvable --project in next instead of picking machine-wide tasks", async () => {
     const { mkdtempSync, rmSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
     const home = mkdtempSync(join(tmpdir(), "todos-cli-next-project-"));
     const dbPath = join(home, "todos.db");
 
@@ -4015,7 +4080,6 @@ END:VCALENDAR`);
   it("should hard-error on an unresolvable global --project in mine instead of dropping the filter", async () => {
     const { mkdtempSync, rmSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
     const home = mkdtempSync(join(tmpdir(), "todos-cli-mine-project-"));
     const dbPath = join(home, "todos.db");
 
