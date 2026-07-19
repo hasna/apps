@@ -1,10 +1,11 @@
-import { describe, test, expect, beforeAll, afterAll, beforeEach } from "bun:test";
+import { describe, test, expect, beforeAll, afterAll, beforeEach, spyOn } from "bun:test";
 import { startDashboardServer } from "./serve";
 import { sendMessage } from "../lib/messages";
 import { createChannel, joinChannel } from "../lib/channels";
 import { createProject } from "../lib/projects";
 import { closeDb } from "../lib/db";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { getStore } from "../lib/store";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
@@ -46,6 +47,67 @@ afterAll(() => {
 });
 
 const base = () => `http://localhost:${server.port}`;
+
+describe("dashboard broad-read query validation", () => {
+  test("rejects malformed reviewer repros before store reads or export artifacts", async () => {
+    const store = getStore();
+    const readSpy = spyOn(store, "readMessagePreviews");
+    const searchSpy = spyOn(store, "searchMessagePreviews");
+    const exportSpy = spyOn(store, "exportMessages");
+    const exportDir = process.env.CONVERSATIONS_EXPORT_DIR!;
+    const artifactFileCount = () => existsSync(exportDir) ? readdirSync(exportDir).length : 0;
+    const beforeArtifacts = artifactFileCount();
+    const cases = [
+      ["/api/messages?from=", "from must not be empty"],
+      ["/api/messages?limit=", "limit must be a positive integer"],
+      ["/api/messages?session=", "session must not be empty"],
+      ["/api/messages?session=fixture&session_id=", "session_id must not be empty"],
+      ["/api/messages?session=one&session_id=two", "session and session_id must match when both are provided"],
+      ["/api/messages?cursor=", "cursor must be a non-negative integer"],
+      ["/api/messages?offset=", "cursor must be a non-negative integer"],
+      ["/api/messages?max_bytes=", "max_bytes must be a positive integer"],
+      ["/api/messages/search?q=fixture&channel=", "channel must not be empty"],
+      ["/api/messages/search?q=fixture&limit=", "limit must be a positive integer"],
+      ["/api/messages/search?q=fixture&since=1", "since must be a valid ISO 8601 date"],
+      ["/api/messages/search?q=fixture&until=1", "until must be a valid ISO 8601 date"],
+      ["/api/messages/pinned?channel=", "channel must not be empty"],
+      ["/api/messages/pinned?session_id=", "session_id must not be empty"],
+      ["/api/messages/pinned?session=fixture&session_id=", "session_id must not be empty"],
+      ["/api/messages/pinned?cursor=", "cursor must be a non-negative integer"],
+      ["/api/export?format=xml", "format must be json or csv"],
+      ["/api/export?format=", "format must not be empty"],
+      ["/api/export?channel=", "channel must not be empty"],
+      ["/api/export?session=", "session must not be empty"],
+      ["/api/export?session=fixture&session_id=", "session_id must not be empty"],
+      ["/api/export?from=", "from must not be empty"],
+      ["/api/export?since=1", "since must be a valid ISO 8601 date"],
+      ["/api/export?until=1", "until must be a valid ISO 8601 date"],
+      ["/api/export?limit=", "limit must be a positive integer"],
+    ] as const;
+
+    try {
+      const results: Array<{ path: string; status: number; body: unknown }> = [];
+      for (const [path] of cases) {
+        const response = await fetch(`${base()}${path}`);
+        results.push({ path, status: response.status, body: await response.json() });
+      }
+
+      expect(results).toEqual(cases.map(([path, error]) => ({
+        path,
+        status: 400,
+        body: { error },
+      })));
+      expect(readSpy).toHaveBeenCalledTimes(0);
+      expect(searchSpy).toHaveBeenCalledTimes(0);
+      expect(exportSpy).toHaveBeenCalledTimes(0);
+      expect(artifactFileCount()).toBe(beforeArtifacts);
+    } finally {
+      readSpy.mockRestore();
+      searchSpy.mockRestore();
+      exportSpy.mockRestore();
+    }
+  });
+});
 
 describe("API /api/status", () => {
   test("returns status object", async () => {

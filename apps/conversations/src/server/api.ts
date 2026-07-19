@@ -55,11 +55,14 @@ import {
   packMessagePreviewPage,
   redactSensitiveText,
   resolveCollectionLimit,
-  resolveCollectionMaxBytes,
-  resolveCollectionOffset,
-  resolveCollectionPreviewBytes,
   resolveCollectionTimeoutMs,
 } from "../lib/message-previews.js";
+import {
+  resolveAliasedString,
+  resolveCollectionQueryOptions,
+  resolveIso8601Date,
+  resolvePresentString,
+} from "../lib/strict-query-values.js";
 import {
   loadMessageExportArtifact,
   resolveMessageExportOptions,
@@ -348,19 +351,19 @@ function strictBooleanParam(raw: string | null, name: string): boolean {
 }
 
 function strictStringParam(raw: string | null, name: string): string | undefined {
-  if (raw === null) return undefined;
-  const normalized = raw.trim();
-  if (!normalized) throw new ApiRequestValidationError(`${name} must not be empty`);
-  return normalized;
+  try {
+    return resolvePresentString(raw, name);
+  } catch (error) {
+    throw new ApiRequestValidationError(error instanceof Error ? error.message : String(error));
+  }
 }
 
 function strictDateParam(raw: string | null, name: string): string | undefined {
-  const normalized = strictStringParam(raw, name);
-  if (normalized === undefined) return undefined;
-  if (!Number.isFinite(Date.parse(normalized))) {
-    throw new ApiRequestValidationError(`${name} must be a valid ISO 8601 date`);
+  try {
+    return resolveIso8601Date(raw, name);
+  } catch (error) {
+    throw new ApiRequestValidationError(error instanceof Error ? error.message : String(error));
   }
-  return normalized;
 }
 
 function clampLimit(raw: string | null, def = 50, max = 500): number {
@@ -394,20 +397,7 @@ function collectionReadOptions(url: URL): {
   timeoutMs: number;
 } {
   try {
-    const rawOffset = url.searchParams.get("offset");
-    const rawCursor = url.searchParams.get("cursor");
-    const offset = resolveCollectionOffset(rawOffset);
-    const cursor = resolveCollectionOffset(rawCursor);
-    if (rawOffset !== null && rawCursor !== null && offset !== cursor) {
-      throw new Error("offset and cursor must match when both are provided");
-    }
-    return {
-      limit: resolveCollectionLimit(url.searchParams.get("limit")),
-      offset: rawOffset !== null ? offset : cursor,
-      maxBytes: resolveCollectionMaxBytes(url.searchParams.get("max_bytes")),
-      previewBytes: resolveCollectionPreviewBytes(url.searchParams.get("preview_bytes")),
-      timeoutMs: resolveCollectionTimeoutMs(url.searchParams.get("timeout_ms")),
-    };
+    return resolveCollectionQueryOptions(url.searchParams);
   } catch (error) {
     throw new ApiRequestValidationError(error instanceof Error ? error.message : String(error));
   }
@@ -1065,8 +1055,12 @@ async function handleV1(
     const to = strictStringParam(url.searchParams.get("to"), "to");
     const from = strictStringParam(url.searchParams.get("from"), "from");
     const channel = strictStringParam(url.searchParams.get("channel"), "channel");
-    const session = strictStringParam(url.searchParams.get("session"), "session")
-      ?? strictStringParam(url.searchParams.get("session_id"), "session_id");
+    let session: string | undefined;
+    try {
+      session = resolveAliasedString(url.searchParams, "session", "session_id");
+    } catch (error) {
+      throw new ApiRequestValidationError(error instanceof Error ? error.message : String(error));
+    }
     const projectId = strictStringParam(url.searchParams.get("project_id"), "project_id");
     const since = strictDateParam(url.searchParams.get("since"), "since");
     const id = strictIntegerParam(url.searchParams.get("id"), "id");
@@ -1332,8 +1326,12 @@ async function handleV1(
   if (sub === "messages/pinned" && method === "GET") {
     const collection = collectionReadOptions(url);
     const channel = strictStringParam(url.searchParams.get("channel"), "channel");
-    const session = strictStringParam(url.searchParams.get("session"), "session")
-      ?? strictStringParam(url.searchParams.get("session_id"), "session_id");
+    let session: string | undefined;
+    try {
+      session = resolveAliasedString(url.searchParams, "session", "session_id");
+    } catch (error) {
+      throw new ApiRequestValidationError(error instanceof Error ? error.message : String(error));
+    }
     const clauses = ["pinned_at IS NOT NULL"];
     const params: unknown[] = [];
     if (channel) { params.push(channel); clauses.push(`channel = $${params.length}`); }
@@ -1380,9 +1378,11 @@ async function handleV1(
     const queryValue = (name: string): unknown => method === "POST" ? body[name] : url.searchParams.get(name) ?? undefined;
     const optionalString = (name: string): string | undefined => {
       const value = queryValue(name);
-      if (value === undefined || value === null) return undefined;
-      if (typeof value !== "string" || !value.trim()) throw new ApiRequestValidationError(`${name} must be a non-empty string`);
-      return value.trim();
+      try {
+        return resolvePresentString(value, name);
+      } catch (error) {
+        throw new ApiRequestValidationError(error instanceof Error ? error.message : String(error));
+      }
     };
     const optionalNumber = (name: string): number | undefined => {
       const value = queryValue(name);
@@ -1407,9 +1407,14 @@ async function handleV1(
     if (authorization && authorization.acknowledged !== true) {
       throw new ApiRequestValidationError("authorization.acknowledged must be true");
     }
+    const sessionId = optionalString("session_id");
+    const sessionAlias = optionalString("session");
+    if (sessionId !== undefined && sessionAlias !== undefined && sessionId !== sessionAlias) {
+      throw new ApiRequestValidationError("session_id and session must match when both are provided");
+    }
     const opts: ExportMessagesOptions = {
       channel: optionalString("channel"),
-      session_id: optionalString("session_id") ?? optionalString("session"),
+      session_id: sessionId ?? sessionAlias,
       from: optionalString("from"),
       since: optionalString("since"),
       until: optionalString("until"),

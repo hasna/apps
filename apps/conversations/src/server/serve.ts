@@ -20,6 +20,13 @@ import { getRelated, getAgentNetwork, getGraphStats } from "../lib/graph.js";
 import { listLocks } from "../lib/locks.js";
 import { handleMcpRequest, healthPayload } from "../mcp/http.js";
 import { buildServer } from "../mcp/index.js";
+import {
+  resolveAliasedString,
+  resolveCollectionQueryOptions,
+  resolveExportFormat,
+  resolveIso8601Date,
+  resolvePresentString,
+} from "../lib/strict-query-values.js";
 import { join, resolve, sep } from "path";
 import { existsSync } from "fs";
 
@@ -213,24 +220,28 @@ export function startDashboardServer(port = 0, host?: string) {
       }
 
       if (path === "/api/messages" && req.method === "GET") {
-        const session = url.searchParams.get("session") || undefined;
-        const channel = url.searchParams.get("channel") || undefined;
-        const from = url.searchParams.get("from") || undefined;
-        const to = url.searchParams.get("to") || undefined;
         try {
+          const session = resolveAliasedString(url.searchParams, "session", "session_id");
+          const channel = resolvePresentString(url.searchParams.get("channel"), "channel");
+          const from = resolvePresentString(url.searchParams.get("from"), "from");
+          const to = resolvePresentString(url.searchParams.get("to"), "to");
+          const since = resolveIso8601Date(url.searchParams.get("since"), "since");
+          const fields = resolvePresentString(url.searchParams.get("fields"), "fields");
+          const collection = resolveCollectionQueryOptions(url.searchParams);
           const page = await getStore().readMessagePreviews({
             session_id: session,
             channel,
             from,
             to,
-            limit: url.searchParams.get("limit") ? Number(url.searchParams.get("limit")) : undefined,
-            offset: url.searchParams.get("offset") ? Number(url.searchParams.get("offset")) : undefined,
-            max_bytes: url.searchParams.get("max_bytes") ? Number(url.searchParams.get("max_bytes")) : undefined,
-            preview_bytes: url.searchParams.get("preview_bytes") ? Number(url.searchParams.get("preview_bytes")) : undefined,
-            timeout_ms: url.searchParams.get("timeout_ms") ? Number(url.searchParams.get("timeout_ms")) : undefined,
+            since,
+            limit: collection.limit,
+            offset: collection.offset,
+            max_bytes: collection.maxBytes,
+            preview_bytes: collection.previewBytes,
+            timeout_ms: collection.timeoutMs,
             order: "desc",
           });
-          return jsonResponse(applyFields(page.messages, url.searchParams.get("fields")));
+          return jsonResponse(applyFields(page.messages, fields));
         } catch (error) {
           return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
         }
@@ -269,24 +280,27 @@ export function startDashboardServer(port = 0, host?: string) {
       }
 
       if (path === "/api/messages/search" && req.method === "GET") {
-        const q = url.searchParams.get("q") || "";
-        if (!q.trim()) {
-          return jsonResponse({ error: "Query parameter 'q' is required" }, 400);
-        }
-        const channel = url.searchParams.get("channel") || undefined;
-        const from = url.searchParams.get("from") || undefined;
-        const to = url.searchParams.get("to") || undefined;
         try {
+          const q = resolvePresentString(url.searchParams.get("q"), "q");
+          if (!q) return jsonResponse({ error: "Query parameter 'q' is required" }, 400);
+          const channel = resolvePresentString(url.searchParams.get("channel"), "channel");
+          const from = resolvePresentString(url.searchParams.get("from"), "from");
+          const to = resolvePresentString(url.searchParams.get("to"), "to");
+          const since = resolveIso8601Date(url.searchParams.get("since"), "since");
+          const until = resolveIso8601Date(url.searchParams.get("until"), "until");
+          const collection = resolveCollectionQueryOptions(url.searchParams);
           const page = await getStore().searchMessagePreviews({
-            query: q.trim(),
+            query: q,
             channel,
             from,
             to,
-            limit: url.searchParams.get("limit") ? Number(url.searchParams.get("limit")) : undefined,
-            offset: url.searchParams.get("offset") ? Number(url.searchParams.get("offset")) : undefined,
-            max_bytes: url.searchParams.get("max_bytes") ? Number(url.searchParams.get("max_bytes")) : undefined,
-            preview_bytes: url.searchParams.get("preview_bytes") ? Number(url.searchParams.get("preview_bytes")) : undefined,
-            timeout_ms: url.searchParams.get("timeout_ms") ? Number(url.searchParams.get("timeout_ms")) : undefined,
+            since,
+            until,
+            limit: collection.limit,
+            offset: collection.offset,
+            max_bytes: collection.maxBytes,
+            preview_bytes: collection.previewBytes,
+            timeout_ms: collection.timeoutMs,
           });
           return jsonResponse(page.messages);
         } catch (error) {
@@ -295,41 +309,47 @@ export function startDashboardServer(port = 0, host?: string) {
       }
 
       if (path === "/api/export" && req.method === "GET") {
-        const channel = url.searchParams.get("channel") || undefined;
-        const session = url.searchParams.get("session") || undefined;
-        const from = url.searchParams.get("from") || undefined;
-        const since = url.searchParams.get("since") || undefined;
-        const until = url.searchParams.get("until") || undefined;
-        const format = url.searchParams.get("format") === "csv" ? "csv" : "json";
-        const artifact = await getStore().exportMessages({
-          channel,
-          session_id: session,
-          from,
-          since,
-          until,
-          format,
-          detail: "preview",
-          limit: url.searchParams.get("limit") ? Number(url.searchParams.get("limit")) : undefined,
-          max_bytes: url.searchParams.get("max_bytes") ? Number(url.searchParams.get("max_bytes")) : undefined,
-          preview_bytes: url.searchParams.get("preview_bytes") ? Number(url.searchParams.get("preview_bytes")) : undefined,
-          timeout_ms: url.searchParams.get("timeout_ms") ? Number(url.searchParams.get("timeout_ms")) : undefined,
-        });
-        return jsonResponse({ artifact });
+        try {
+          const channel = resolvePresentString(url.searchParams.get("channel"), "channel");
+          const session = resolveAliasedString(url.searchParams, "session", "session_id");
+          const from = resolvePresentString(url.searchParams.get("from"), "from");
+          const since = resolveIso8601Date(url.searchParams.get("since"), "since");
+          const until = resolveIso8601Date(url.searchParams.get("until"), "until");
+          const format = resolveExportFormat(url.searchParams.get("format"));
+          const collection = resolveCollectionQueryOptions(url.searchParams);
+          const artifact = await getStore().exportMessages({
+            channel,
+            session_id: session,
+            from,
+            since,
+            until,
+            format,
+            detail: "preview",
+            limit: collection.limit,
+            max_bytes: collection.maxBytes,
+            preview_bytes: collection.previewBytes,
+            timeout_ms: collection.timeoutMs,
+          });
+          return jsonResponse({ artifact });
+        } catch (error) {
+          return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
+        }
       }
 
       if (path === "/api/messages/pinned" && req.method === "GET") {
-        const channel = url.searchParams.get("channel") || undefined;
-        const session_id = url.searchParams.get("session_id") || undefined;
         try {
+          const channel = resolvePresentString(url.searchParams.get("channel"), "channel");
+          const session_id = resolveAliasedString(url.searchParams, "session", "session_id");
+          const collection = resolveCollectionQueryOptions(url.searchParams);
           const page = await getStore().readMessagePreviews({
             pinned_only: true,
             channel,
             session_id,
-            limit: url.searchParams.get("limit") ? Number(url.searchParams.get("limit")) : undefined,
-            offset: url.searchParams.get("offset") ? Number(url.searchParams.get("offset")) : undefined,
-            max_bytes: url.searchParams.get("max_bytes") ? Number(url.searchParams.get("max_bytes")) : undefined,
-            preview_bytes: url.searchParams.get("preview_bytes") ? Number(url.searchParams.get("preview_bytes")) : undefined,
-            timeout_ms: url.searchParams.get("timeout_ms") ? Number(url.searchParams.get("timeout_ms")) : undefined,
+            limit: collection.limit,
+            offset: collection.offset,
+            max_bytes: collection.maxBytes,
+            preview_bytes: collection.previewBytes,
+            timeout_ms: collection.timeoutMs,
             order: "desc",
           });
           return jsonResponse(page.messages);

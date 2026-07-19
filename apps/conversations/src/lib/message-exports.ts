@@ -21,6 +21,7 @@ import {
   resolveCollectionPreviewBytes,
   resolveCollectionTimeoutMs,
 } from "./message-previews.js";
+import { resolveIso8601Date } from "./strict-query-values.js";
 
 export interface ResolvedExportOptions {
   format: ExportFormat;
@@ -50,9 +51,7 @@ export interface LoadedMessageExportArtifact {
 }
 
 function validateDate(value: string | undefined, name: string): void {
-  if (value !== undefined && !Number.isFinite(Date.parse(value))) {
-    throw new Error(`${name} must be a valid ISO 8601 date`);
-  }
+  resolveIso8601Date(value, name);
 }
 
 export function resolveMessageExportOptions(opts: ExportMessagesOptions = {}): ResolvedExportOptions {
