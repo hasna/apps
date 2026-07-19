@@ -562,7 +562,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
         post: {
           operationId: "claimIncidentOutbox",
           summary: "Lease causally ready incident projections",
-          description: "Requires todos:incidents:project. A superseding replacement is ineligible until the old superseded event is acknowledged.",
+          description: "Requires todos:incident-project. A superseding replacement is ineligible until the old superseded event is acknowledged.",
           requestBody: { required: false, content: { "application/json": { schema: { type: "object", additionalProperties: false, properties: {
             limit: { type: "integer", minimum: 1, maximum: 100 }, lease_seconds: { type: "integer", minimum: 5, maximum: 3600 },
           } } } } },
@@ -575,7 +575,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
         get: {
           operationId: "listDeadIncidentOutbox",
           summary: "List dead incident projection events for operator recovery",
-          description: "Requires todos:incidents:recover. Dead records never expose a lease token.",
+          description: "Requires todos:incident-recover. Dead records never expose a lease token.",
           parameters: [
             { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 1000 } },
             { name: "before_created_at", in: "query", schema: { type: "string", format: "date-time" } },
@@ -590,7 +590,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
         get: {
           operationId: "getDeadIncidentOutbox",
           summary: "Get one exact dead incident projection event",
-          description: "Requires todos:incidents:recover. Returns 404 unless the event is dead; lease credentials are never exposed.",
+          description: "Requires todos:incident-recover. Returns 404 unless the event is dead; lease credentials are never exposed.",
           parameters: [{ name: "event_id", in: "path", required: true, schema: { type: "string" } }],
           responses: {
             "200": { content: { "application/json": { schema: { type: "object", required: ["outbox"], properties: { outbox: { $ref: "#/components/schemas/IncidentOutboxRecord" } } } } } },
@@ -602,7 +602,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
         get: {
           operationId: "getIncidentOutboxStatus",
           summary: "Get authority-scoped incident projection outbox counts",
-          description: "Requires todos:incidents:recover. Returns counts only and never lease credentials.",
+          description: "Requires todos:incident-project. Returns counts only and never lease credentials.",
           responses: { "200": { content: { "application/json": { schema: { type: "object", required: ["status"], properties: {
             status: { type: "object", additionalProperties: false, required: ["pending", "leased", "acked", "dead", "total"], properties: {
               pending: { type: "integer", minimum: 0 }, leased: { type: "integer", minimum: 0 },
@@ -615,6 +615,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
         post: {
           operationId: "ackIncidentOutbox",
           summary: "Acknowledge an exact projection lease",
+          description: "Requires todos:incident-project. The delivery identity must match the exact leased event.",
           parameters: [{ name: "event_id", in: "path", required: true, schema: { type: "string" } }],
           requestBody: { required: true, content: { "application/json": { schema: { type: "object", additionalProperties: false, required: ["lease_token", "delivery_id"], properties: {
             lease_token: { type: "string" }, delivery_id: { type: "string" },
@@ -626,6 +627,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
         post: {
           operationId: "failIncidentOutbox",
           summary: "Fail an exact projection lease with bounded backoff",
+          description: "Requires todos:incident-project. Persists only a stable failure class and bounded redacted summary.",
           parameters: [{ name: "event_id", in: "path", required: true, schema: { type: "string" } }],
           requestBody: { required: true, content: { "application/json": { schema: { type: "object", additionalProperties: false, required: ["lease_token", "failure_code", "failure"], properties: {
             lease_token: { type: "string" }, failure_code: { type: "string", pattern: "^[A-Z][A-Z0-9_:-]{1,63}$" }, failure: { type: "string" },
@@ -637,7 +639,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
         post: {
           operationId: "requeueIncidentOutbox",
           summary: "Audit and requeue one exact dead projection",
-          description: "Requires todos:incidents:recover. Never skips or acknowledges the dead transition.",
+          description: "Requires todos:incident-recover. Never skips or acknowledges the dead transition.",
           parameters: [{ name: "event_id", in: "path", required: true, schema: { type: "string" } }],
           requestBody: { required: true, content: { "application/json": { schema: { type: "object", additionalProperties: false, required: ["expected_attempts", "idempotency_key", "reason"], properties: {
             expected_attempts: { type: "integer", minimum: 1 }, idempotency_key: { type: "string", minLength: 8 }, reason: { type: "string" },

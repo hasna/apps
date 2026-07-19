@@ -48,9 +48,14 @@ describe("canonical incident OpenAPI contract", () => {
     expect(Object.keys(incidents.post.responses).sort()).toEqual(["200", "201", "409", "503"]);
     expect(document.paths["/v1/incidents/{id}"]).not.toHaveProperty("delete");
     expect(document.paths["/v1/incidents/blockers"].get.description).toMatch(/blocked_scopes only/i);
-    expect(document.paths["/v1/incidents/outbox/claim"].post.description).toContain("todos:incidents:project");
+    expect(document.paths["/v1/incidents/outbox/claim"].post.description).toContain("todos:incident-project");
+    expect(document.paths["/v1/incidents/outbox/status"].get.description).toContain("todos:incident-project");
+    expect(document.paths["/v1/incidents/outbox/{event_id}/ack"].post.description).toContain("todos:incident-project");
+    expect(document.paths["/v1/incidents/outbox/{event_id}/fail"].post.description).toContain("todos:incident-project");
+    expect(document.paths["/v1/incidents/outbox"].get.description).toContain("todos:incident-recover");
+    expect(document.paths["/v1/incidents/outbox/{event_id}"].get.description).toContain("todos:incident-recover");
     expect(document.paths["/v1/incidents/outbox/{event_id}/requeue"].post.description)
-      .toContain("todos:incidents:recover");
+      .toContain("todos:incident-recover");
     expect(document.paths["/v1/incidents/outbox"].get.operationId).toBe("listDeadIncidentOutbox");
     expect(document.paths["/v1/incidents/outbox/{event_id}"].get.operationId).toBe("getDeadIncidentOutbox");
     expect(document.paths["/v1/incidents/outbox/status"].get.operationId).toBe("getIncidentOutboxStatus");

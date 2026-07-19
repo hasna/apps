@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
+import { mintApiKey, verifyApiKey } from "@hasna/contracts/auth";
 import type { TodosStorageAdapter } from "../storage/interfaces.js";
 import { handleV1Request, type V1RequestDependencies } from "../server/v1.js";
 import {
@@ -113,7 +114,9 @@ class MemoryIncidentStore implements TodosIncidentStore {
   }
 
   async claimOutbox() { return []; }
-  async ackOutbox(): Promise<IncidentOutboxRecord> { throw new Error("unused"); }
+  async ackOutbox(eventId: string): Promise<IncidentOutboxRecord> {
+    return { event_id: eventId } as IncidentOutboxRecord;
+  }
   async failOutbox(eventId: string, leaseToken: string, failureCode: string, failure: string): Promise<IncidentOutboxRecord> {
     this.failCall = { eventId, leaseToken, failureCode, failure };
     return { event_id: eventId } as IncidentOutboxRecord;
@@ -360,19 +363,76 @@ describe("/v1 canonical incidents", () => {
   });
 
   test("requests dedicated projector and recovery scopes for outbox operations", async () => {
+    expect((await request("/v1/incidents/outbox/status"))?.status).toBe(200);
+    expect(lastRequiredScopes).toEqual(["todos:incident-project"]);
+
     expect((await request("/v1/incidents/outbox/claim", "POST", {}))?.status).toBe(200);
-    expect(lastRequiredScopes).toEqual(["todos:incidents:project"]);
+    expect(lastRequiredScopes).toEqual(["todos:incident-project"]);
 
     expect((await request("/v1/incidents/outbox/event-1/requeue", "POST", {
       expected_attempts: 12,
       idempotency_key: "incident-requeue-api-0001",
       reason: "Destination recovered",
     }))?.status).toBe(200);
-    expect(lastRequiredScopes).toEqual(["todos:incidents:recover"]);
+    expect(lastRequiredScopes).toEqual(["todos:incident-recover"]);
     expect(incidentStore.requeueCall).toMatchObject({
       eventId: "event-1",
       authority: { authorityId: "engineering", actorId: "agent-a", effectiveActorId: "agent-a", actorActAs: false },
     });
+  });
+
+  test("mints and enforces the real narrow outbox scopes through the actual handler", async () => {
+    const signingSecret = "synthetic-v1-auth-signing-material-e00050".repeat(2);
+    const verifier = verifyApiKey({ app: "todos", signingSecret, isRevoked: async () => false });
+    dependencies.getVerifier = () => verifier;
+    const mint = (agent: string, scopes: string[]) => mintApiKey({
+      app: "todos",
+      agent,
+      scopes,
+      signingSecret,
+    }).token;
+    for (const legacyScope of ["todos:incidents:project", "todos:incidents:recover"]) {
+      expect(() => mint("legacy-incident-key", [legacyScope])).toThrow();
+    }
+
+    const projectKey = mint("incident-projector", ["todos:incident-project"]);
+    const recoveryKey = mint("incident-recovery", ["todos:incident-recover"]);
+    const readKey = mint("incident-reader", ["todos:read"]);
+    const unrelatedKey = mint("incident-writer", ["todos:write"]);
+    const wildcardKey = mint("incident-admin", ["todos:*"]);
+    const headers = (token: string) => ({ "x-api-key": token });
+    const ackBody = { lease_token: "synthetic-lease", delivery_id: "synthetic-delivery" };
+    const failBody = { lease_token: "synthetic-lease", failure_code: "SYNTHETIC_FAILURE", failure: "synthetic failure" };
+    const requeueBody = {
+      expected_attempts: 3,
+      idempotency_key: "synthetic-requeue-e00050",
+      reason: "Synthetic recovery matrix",
+    };
+    const dead = deadOutboxRecord();
+    incidentStore.deadOutbox.set(`engineering:${dead.event_id}`, dead);
+
+    expect((await request("/v1/incidents/outbox/status", "GET", undefined, headers(projectKey)))?.status).toBe(200);
+    expect((await request("/v1/incidents/outbox/claim", "POST", {}, headers(projectKey)))?.status).toBe(200);
+    expect((await request(`/v1/incidents/outbox/${dead.event_id}/ack`, "POST", ackBody, headers(projectKey)))?.status).toBe(200);
+    expect((await request(`/v1/incidents/outbox/${dead.event_id}/fail`, "POST", failBody, headers(projectKey)))?.status).toBe(200);
+    expect((await request("/v1/incidents/outbox", "GET", undefined, headers(projectKey)))?.status).toBe(403);
+    expect((await request(`/v1/incidents/outbox/${dead.event_id}`, "GET", undefined, headers(projectKey)))?.status).toBe(403);
+    expect((await request(`/v1/incidents/outbox/${dead.event_id}/requeue`, "POST", requeueBody, headers(projectKey)))?.status).toBe(403);
+
+    expect((await request("/v1/incidents/outbox", "GET", undefined, headers(recoveryKey)))?.status).toBe(200);
+    expect((await request(`/v1/incidents/outbox/${dead.event_id}`, "GET", undefined, headers(recoveryKey)))?.status).toBe(200);
+    expect((await request(`/v1/incidents/outbox/${dead.event_id}/requeue`, "POST", requeueBody, headers(recoveryKey)))?.status).toBe(200);
+    expect((await request("/v1/incidents/outbox/status", "GET", undefined, headers(recoveryKey)))?.status).toBe(403);
+    expect((await request("/v1/incidents/outbox/claim", "POST", {}, headers(recoveryKey)))?.status).toBe(403);
+    expect((await request(`/v1/incidents/outbox/${dead.event_id}/ack`, "POST", ackBody, headers(recoveryKey)))?.status).toBe(403);
+    expect((await request(`/v1/incidents/outbox/${dead.event_id}/fail`, "POST", failBody, headers(recoveryKey)))?.status).toBe(403);
+
+    for (const insufficientKey of [readKey, unrelatedKey]) {
+      expect((await request("/v1/incidents/outbox/status", "GET", undefined, headers(insufficientKey)))?.status).toBe(403);
+      expect((await request("/v1/incidents/outbox", "GET", undefined, headers(insufficientKey)))?.status).toBe(403);
+    }
+    expect((await request("/v1/incidents/outbox/status", "GET", undefined, headers(wildcardKey)))?.status).toBe(200);
+    expect((await request("/v1/incidents/outbox", "GET", undefined, headers(wildcardKey)))?.status).toBe(200);
   });
 
   test("returns typed 400s for malformed claim, ack, fail, and recovery inputs", async () => {
@@ -430,11 +490,12 @@ describe("/v1 canonical incidents", () => {
 
     const listed = await request("/v1/incidents/outbox?limit=10");
     expect(listed?.status).toBe(200);
-    expect(lastRequiredScopes).toEqual(["todos:incidents:recover"]);
+    expect(lastRequiredScopes).toEqual(["todos:incident-recover"]);
     expect(await listed!.json()).toEqual({ outbox: [record], count: 1 });
 
     const status = await request("/v1/incidents/outbox/status");
     expect(status?.status).toBe(200);
+    expect(lastRequiredScopes).toEqual(["todos:incident-project"]);
     expect(await status!.json()).toEqual({ status: { pending: 0, leased: 0, acked: 0, dead: 1, total: 1 } });
 
     const exact = await request(`/v1/incidents/outbox/${encodeURIComponent(record.event_id)}`);

@@ -761,16 +761,19 @@ export async function handleV1Request(
   const isMutation = method !== "GET" && method !== "HEAD" && !(resource === "tasks" && id === "exists" && !action);
   const isImport = resource === "import" && method === "POST";
   const isIncidentOutbox = resource === "incidents" && id === "outbox";
-  const isIncidentRecovery = isIncidentOutbox && (subId === "requeue" || method === "GET");
+  const isIncidentRecovery = isIncidentOutbox && (
+    subId === "requeue"
+    || (method === "GET" && action !== "status")
+  );
   // Import has an OR policy (`todos:import` or administrative scope) which the
   // contracts verifier cannot express as a flat requiredScopes array, so it is
   // authenticated here and authorized explicitly below.
   const requiredScopes = isImport
     ? []
     : [isIncidentRecovery
-      ? "todos:incidents:recover"
+      ? "todos:incident-recover"
       : isIncidentOutbox
-        ? "todos:incidents:project"
+        ? "todos:incident-project"
         : isMutation ? "todos:write" : "todos:read"];
 
   // ── Auth (contracts API-key verifier) ──
