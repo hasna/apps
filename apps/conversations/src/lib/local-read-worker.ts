@@ -5,6 +5,7 @@ import {
   getMessagesForAgent,
   getPinnedMessages,
   getUnreadBlockerPreviews,
+  readMentionPreviews,
   readMessagePreviews,
   searchMessagePreviews,
 } from "./messages.js";
@@ -14,6 +15,7 @@ type LocalReadOperation =
   | "readMessagePreviews"
   | "searchMessagePreviews"
   | "getUnreadBlockerPreviews"
+  | "readMentionPreviews"
   | "getMessagesForAgent"
   | "getPinnedMessages"
   | "readChannelNotifications"
@@ -77,6 +79,9 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
         break;
       case "getUnreadBlockerPreviews":
         result = getUnreadBlockerPreviews(request.args[0] as string, request.args[1] as never);
+        break;
+      case "readMentionPreviews":
+        result = readMentionPreviews(request.args[0] as string, request.args[1] as never);
         break;
       case "getMessagesForAgent":
         result = getMessagesForAgent(request.args[0] as string, request.args[1] as never);

@@ -3,7 +3,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerAdvancedTools } from "./advanced";
-import { closeDb } from "../../lib/db";
+import { closeDb, getDb } from "../../lib/db";
 import { createDisposableStore, enterHermeticTestEnv, installNetworkGuard } from "../../test/hermetic";
 
 const TEST_STORE = createDisposableStore("advanced-mcp");
@@ -173,6 +173,69 @@ describe("advanced MCP tools", () => {
       expect(Array.isArray(result.mentions)).toBe(true);
       expect(result.mentions[0].message.preview).toContain("bounded mention");
       expect(result.mentions[0].message.content).toBeUndefined();
+    });
+
+    test("uses mention-row identity and state and marks only returned mention rows", async () => {
+      const { sendMessage } = await import("../../lib/messages");
+      const first = sendMessage({
+        from: "mention-projection-sender",
+        to: "mention-projection-channel",
+        channel: "mention-projection-channel",
+        content: "@mention-projection-reader first dedicated mention",
+      });
+      const second = sendMessage({
+        from: "mention-projection-sender",
+        to: "mention-projection-channel",
+        channel: "mention-projection-channel",
+        content: "@mention-projection-reader second dedicated mention",
+      });
+      const db = getDb();
+      const firstMention = db.prepare(
+        "SELECT id, notified_at FROM message_mentions WHERE message_id = ? AND mentioned_agent = ?",
+      ).get(first.id, "mention-projection-reader") as { id: number; notified_at: string | null };
+      const secondMention = db.prepare(
+        "SELECT id, notified_at FROM message_mentions WHERE message_id = ? AND mentioned_agent = ?",
+      ).get(second.id, "mention-projection-reader") as { id: number; notified_at: string | null };
+
+      // Generic message read state is deliberately opposite to mention state.
+      // get_mentions must use mm.notified_at, not messages.read_at.
+      db.prepare("UPDATE messages SET read_at = created_at WHERE id IN (?, ?)").run(first.id, second.id);
+
+      const peek = parseResult(await client.callTool({
+        name: "get_mentions",
+        arguments: {
+          agent: "mention-projection-reader",
+          unread_only: true,
+          limit: 1,
+          mark_read: false,
+        },
+      }) as any) as any;
+
+      expect(peek.mentions).toHaveLength(1);
+      expect(peek.mentions[0].mention_id).toBe(secondMention.id);
+      expect(peek.mentions[0].message_id).toBe(second.id);
+      expect(peek.mentions[0].message.id).toBe(second.id);
+      expect(peek.mentions[0].message.mention_id).toBe(secondMention.id);
+      expect(peek.mentions[0].message.unread).toBe(true);
+      expect(db.prepare("SELECT notified_at FROM message_mentions WHERE id = ?").get(secondMention.id)).toEqual({ notified_at: null });
+
+      const consumed = parseResult(await client.callTool({
+        name: "get_mentions",
+        arguments: {
+          agent: "mention-projection-reader",
+          unread_only: true,
+          limit: 1,
+          mark_read: true,
+        },
+      }) as any) as any;
+
+      expect(consumed.mentions).toHaveLength(1);
+      expect(consumed.mentions[0].mention_id).toBe(secondMention.id);
+      expect(consumed.mentions[0].message_id).toBe(second.id);
+      expect(consumed.mentions[0].message.unread).toBe(false);
+      expect(consumed.marked_read).toBe(1);
+      expect(db.prepare("SELECT notified_at FROM message_mentions WHERE id = ?").get(secondMention.id)).not.toEqual({ notified_at: null });
+      expect(db.prepare("SELECT notified_at FROM message_mentions WHERE id = ?").get(firstMention.id)).toEqual({ notified_at: null });
     });
   });
 

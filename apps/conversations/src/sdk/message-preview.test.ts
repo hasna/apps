@@ -2,14 +2,18 @@ import { describe, expect, test } from "bun:test";
 import {
   ConversationsClient,
   type ChannelNotificationPage,
+  type Message,
   type MessageExportArtifactResponse,
+  type MessagePreview,
   type MessagePreviewPage,
   type MessageResponse,
 } from "./index";
+import { openapiSpec } from "../server/openapi";
 
 const previewPage = {
   messages: [{
     id: 41,
+    mention_id: 7,
     session_id: "channel:engineering",
     from_agent: "alice",
     to_agent: "engineering",
@@ -48,6 +52,12 @@ const previewPage = {
 } satisfies MessagePreviewPage;
 
 describe("generated safe message-read client", () => {
+  test("models mention identity on previews, not exact full messages", () => {
+    expect(openapiSpec.components.schemas.MessagePreview.properties).toHaveProperty("mention_id");
+    expect(openapiSpec.components.schemas.Message.properties).not.toHaveProperty("mention_id");
+    expect(previewPage.messages[0].mention_id).toBe(7);
+  });
+
   test("types list/blocker reads as preview pages and keeps exact get typed separately", async () => {
     const requests: string[] = [];
     const exact: MessageResponse = { message: { id: 41, content: "exact coordination update" } };
@@ -154,5 +164,33 @@ describe("generated safe message-read client", () => {
     expect(artifact.artifact.path).toBeNull();
     expect(requests[1].init?.method).toBe("POST");
     expect(String(requests[1].init?.body)).toContain('"detail":"preview"');
+  });
+
+  test("downloadMessageExport returns parsed JSON records or CSV text with matching types", async () => {
+    const responses = [
+      new Response(JSON.stringify(previewPage.messages), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      new Response("id,preview\n41,bounded coordination update", {
+        status: 200,
+        headers: { "content-type": "text/csv" },
+      }),
+    ];
+    const client = new ConversationsClient({
+      baseUrl: "https://conversations.invalid",
+      fetch: (async () => responses.shift()!) as unknown as typeof fetch,
+    });
+
+    const jsonArtifact: Array<MessagePreview | Message> | string = await client.downloadMessageExport(
+      "00000000-0000-4000-8000-000000000001",
+    );
+    const csvArtifact: Array<MessagePreview | Message> | string = await client.downloadMessageExport(
+      "00000000-0000-4000-8000-000000000002",
+    );
+
+    expect(Array.isArray(jsonArtifact)).toBe(true);
+    expect((jsonArtifact as MessagePreview[])[0].preview).toContain("bounded");
+    expect(csvArtifact).toBe("id,preview\n41,bounded coordination update");
   });
 });

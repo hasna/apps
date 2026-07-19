@@ -319,6 +319,17 @@ export interface ReadMessagePreviewsOptions extends ReadMessagesOptions {
   timeout_ms?: number;
 }
 
+/** Dedicated @mention collection options; unread state belongs to the mention row. */
+export interface ReadMentionPreviewsOptions {
+  channel?: string;
+  unread_only?: boolean;
+  limit?: number;
+  offset?: number;
+  max_bytes?: number;
+  preview_bytes?: number;
+  timeout_ms?: number;
+}
+
 export type ExportDetail = "preview" | "full";
 export type ExportFormat = "json" | "csv";
 

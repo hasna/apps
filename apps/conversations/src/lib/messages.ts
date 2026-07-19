@@ -5,6 +5,7 @@ import type {
   SendMessageOptions,
   ReadMessagesOptions,
   ReadMessagePreviewsOptions,
+  ReadMentionPreviewsOptions,
   SearchMessagesOptions,
   SearchMessagePreviewsOptions,
   SearchResult,
@@ -1513,48 +1514,86 @@ export function listUnreadCountsWithMentions(agent: string): MentionCount[] {
   return rows;
 }
 
-/** Bounded preview compatibility reader for mention collections. */
-export function getMessagesForAgent(agent: string, opts?: { channel?: string; unread_only?: boolean; limit?: number }): Array<{ message: Message; mention_id: number }> {
+/** Dedicated bounded @mention projection keyed by message_mentions.id/notified_at. */
+export function readMentionPreviews(agent: string, opts: ReadMentionPreviewsOptions = {}): MessagePreviewPage {
   assertOptionalFilter("agent", agent);
-  assertOptionalFilter("channel", opts?.channel);
+  assertOptionalFilter("channel", opts.channel);
+  const startedAt = performance.now();
+  const timeoutMs = resolveCollectionTimeoutMs(opts.timeout_ms);
+  const limit = resolveCollectionLimit(opts.limit ?? 50);
+  const offset = resolveCollectionOffset(opts.offset);
+  const previewBytes = resolveCollectionPreviewBytes(opts.preview_bytes);
   const db = getDb();
   const conditions = ["mm.mentioned_agent = ?"];
   const params: (string | number)[] = [agent.toLowerCase()];
-  if (opts?.channel) {
+  if (opts.channel) {
     conditions.push("m.channel = ?");
     params.push(normalizeChannelName(opts.channel));
   }
-  if (opts?.unread_only) conditions.push("mm.notified_at IS NULL");
-  const limit = resolveCollectionLimit(opts?.limit ?? 50);
+  if (opts.unread_only) conditions.push("mm.notified_at IS NULL");
   const rows = db.prepare(
-    `SELECT ${previewProjectionColumns("m")}, mm.id AS mention_id FROM messages m
+    `SELECT ${previewProjectionColumns("m")}, mm.id AS mention_id,
+            CASE WHEN mm.notified_at IS NULL THEN 1 ELSE 0 END AS unread
+     FROM messages m
      JOIN message_mentions mm ON mm.message_id = m.id
      WHERE ${conditions.join(" AND ")}
-     ORDER BY m.created_at DESC, m.id DESC LIMIT ${limit + 1}`,
+     ORDER BY m.created_at DESC, m.id DESC LIMIT ${limit + 1} OFFSET ${offset}`,
   ).all(...params) as Record<string, unknown>[];
-  const page = packMessagePreviewPage(rows.map((row) => buildMessagePreview(row)), {
+  assertCollectionDeadline(startedAt, timeoutMs);
+  const page = packMessagePreviewPage(rows.map((row) => buildMessagePreview(row, previewBytes)), {
     limit,
+    cursor: offset,
+    max_bytes: opts.max_bytes,
+    timeout_ms: timeoutMs,
+  });
+  assertCollectionDeadline(startedAt, timeoutMs);
+  return page;
+}
+
+/** Bounded preview compatibility reader for mention collections. */
+export function getMessagesForAgent(agent: string, opts?: { channel?: string; unread_only?: boolean; limit?: number }): Array<{ message: Message; mention_id: number }> {
+  const page = readMentionPreviews(agent, {
+    ...opts,
     max_bytes: COLLECTION_MAX_MAX_BYTES,
   });
   return page.messages.map((preview) => ({
     message: previewAsCompatibilityMessage(preview),
-    mention_id: preview.mention_id ?? preview.id,
+    mention_id: preview.mention_id!,
   }));
+}
+
+/** Mark only explicitly returned mention rows for the named agent. */
+export function markMentionsReadByIds(agent: string, mentionIds: number[]): number {
+  assertOptionalFilter("agent", agent);
+  if (mentionIds.length === 0) return 0;
+  if (mentionIds.some((id) => !Number.isSafeInteger(id) || id <= 0)) {
+    throw new Error("mention_ids must contain only positive integers");
+  }
+  const db = getDb();
+  const placeholders = mentionIds.map(() => "?").join(",");
+  const result = db.prepare(
+    `UPDATE message_mentions
+     SET notified_at = strftime('%Y-%m-%dT%H:%M:%f', 'now')
+     WHERE mentioned_agent = ? AND id IN (${placeholders}) AND notified_at IS NULL`,
+  ).run(agent.toLowerCase(), ...mentionIds);
+  return result.changes;
 }
 
 /** Mark mentions as notified (agent has seen them). */
 export function markMentionsRead(agent: string, channel?: string): number {
+  assertOptionalFilter("agent", agent);
+  assertOptionalFilter("channel", channel);
   const db = getDb();
   if (channel) {
     const normalized = normalizeChannelName(channel);
     const result = db.prepare(
       "UPDATE message_mentions SET notified_at = strftime('%Y-%m-%dT%H:%M:%f', 'now') WHERE mentioned_agent = ? AND channel = ? AND notified_at IS NULL"
-    ).run(agent, normalized);
+    ).run(agent.toLowerCase(), normalized);
     return result.changes;
   }
   const result = db.prepare(
     "UPDATE message_mentions SET notified_at = strftime('%Y-%m-%dT%H:%M:%f', 'now') WHERE mentioned_agent = ? AND notified_at IS NULL"
-  ).run(agent);
+  ).run(agent.toLowerCase());
   return result.changes;
 }
 

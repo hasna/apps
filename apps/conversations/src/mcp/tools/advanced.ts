@@ -11,6 +11,7 @@ import { getStore } from "../../lib/store/index.js";
 // below still read the local store (no cloud endpoint yet) — documented residual.
 import { resolveIdentity } from "../../lib/identity.js";
 import { pageQueriedItems, summarizeMessage, windowItems } from "../../lib/compact-output.js";
+import { finalizeMessagePreviewPage } from "../../lib/message-previews.js";
 import { jsonText, resolveMcpWindow } from "../compact.js";
 
 export function registerAdvancedTools(server: McpServer, pkgVersion: string): void {
@@ -131,35 +132,59 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
   server.registerTool("get_mentions", {
     description: "Get a bounded, redacted page of messages that @mention a specific agent. Use get_message for one exact full body.",
     inputSchema: {
-      agent: z.string().describe("Agent name to find mentions for"),
-      channel: z.string().optional().describe("Filter to a specific channel"),
-      unread_only: z.coerce.boolean().optional().describe("Only unread (not yet notified) mentions (default: true)"),
-      limit: z.coerce.number().optional().describe("Max results (default: 50)"),
-      cursor: z.coerce.number().optional().describe("Skip first N mention results"),
-      max_bytes: z.coerce.number().optional(),
-      preview_bytes: z.coerce.number().optional(),
-      timeout_ms: z.coerce.number().optional(),
-      verbose: z.coerce.boolean().optional().describe("Deprecated compatibility flag; collections remain preview-only"),
+      agent: z.string().trim().min(1).describe("Agent name to find mentions for"),
+      channel: z.string().trim().min(1).optional().describe("Filter to a specific channel"),
+      unread_only: z.boolean().optional().describe("Only unread (not yet notified) mentions (default: true)"),
+      mark_read: z.boolean().optional().describe("Acknowledge only mention rows returned in this page"),
+      limit: z.number().int().positive().optional().describe("Max results (default: 50)"),
+      cursor: z.number().int().nonnegative().optional().describe("Skip first N mention results"),
+      max_bytes: z.number().int().positive().optional(),
+      preview_bytes: z.number().int().positive().optional(),
+      timeout_ms: z.number().int().positive().optional(),
+      verbose: z.boolean().optional().describe("Deprecated compatibility flag; collections remain preview-only"),
     },
   }, async (args: Record<string, any>) => {
-    const page = await getStore().readMessagePreviews({
-      mentions_only: args.agent as string,
+    const store = getStore();
+    const page = await store.readMentionPreviews(args.agent as string, {
       channel: args.channel,
       unread_only: args.unread_only ?? true,
       limit: args.limit,
       offset: args.cursor,
-      order: "desc",
       max_bytes: args.max_bytes,
       preview_bytes: args.preview_bytes,
       timeout_ms: args.timeout_ms,
     });
-    const { messages, ...metadata } = page;
+    const mentionIds = page.messages.map((message) => {
+      if (!Number.isSafeInteger(message.mention_id) || Number(message.mention_id) <= 0) {
+        throw new Error("mention projection returned an invalid mention_id");
+      }
+      return Number(message.mention_id);
+    });
+    let markedRead = 0;
+    let returnedPage = page;
+    if (args.mark_read === true && mentionIds.length > 0) {
+      const finalized = finalizeMessagePreviewPage({
+        ...page,
+        messages: page.messages.map((message) => ({ ...message, unread: false })),
+      });
+      if (finalized.byte_length > finalized.max_bytes) {
+        throw new Error(`mention preview envelope exceeds max_bytes (${finalized.byte_length} > ${finalized.max_bytes})`);
+      }
+      markedRead = await store.markMentionsReadByIds(args.agent as string, mentionIds);
+      returnedPage = finalized;
+    }
+    const { messages, ...metadata } = returnedPage;
     return {
       content: [{
         type: "text",
         text: jsonText({
           ...metadata,
-          mentions: messages.map((message) => ({ mention_id: message.id, message })),
+          marked_read: markedRead,
+          mentions: messages.map((message) => ({
+            mention_id: message.mention_id,
+            message_id: message.id,
+            message,
+          })),
           hint: "Use get_message with an id for one exact full message.",
         }),
       }],
@@ -169,11 +194,14 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
   server.registerTool("mark_mentions_read", {
     description: "Mark @mentions as seen for an agent. Clears unread mention counts.",
     inputSchema: {
-      agent: z.string().describe("Agent name"),
-      channel: z.string().optional().describe("Clear only mentions in this channel"),
+      agent: z.string().trim().min(1).describe("Agent name"),
+      channel: z.string().trim().min(1).optional().describe("Clear only mentions in this channel"),
+      mention_ids: z.array(z.number().int().positive()).optional().describe("Acknowledge only these mention-row ids"),
     },
   }, async (args: Record<string, any>) => {
-    const cleared = await getStore().markMentionsRead(args.agent as string, args.channel);
+    const cleared = Array.isArray(args.mention_ids)
+      ? await getStore().markMentionsReadByIds(args.agent as string, args.mention_ids)
+      : await getStore().markMentionsRead(args.agent as string, args.channel);
     return { content: [{ type: "text", text: JSON.stringify({ cleared }) }] };
   });
 

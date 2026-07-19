@@ -23,7 +23,10 @@ const REDACTION_RULES: Array<[RegExp, string]> = [
 ];
 
 function strictPositiveInteger(name: string, value: unknown, fallback: number): number {
-  if (value === undefined || value === null || value === "") return fallback;
+  if (value === undefined || value === null) return fallback;
+  if (typeof value === "string" && !value.trim()) {
+    throw new Error(`${name} must be a positive integer`);
+  }
   const parsed = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0 || !Number.isInteger(parsed)) {
     throw new Error(`${name} must be a positive integer`);
@@ -36,7 +39,10 @@ export function resolveCollectionLimit(value: unknown): number {
 }
 
 export function resolveCollectionOffset(value: unknown): number {
-  if (value === undefined || value === null || value === "") return 0;
+  if (value === undefined || value === null) return 0;
+  if (typeof value === "string" && !value.trim()) {
+    throw new Error("cursor must be a non-negative integer");
+  }
   const parsed = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(parsed) || parsed < 0 || !Number.isInteger(parsed)) {
     throw new Error("cursor must be a non-negative integer");
@@ -136,7 +142,7 @@ export function buildMessagePreview(row: Record<string, unknown>, previewBytes =
     created_at: boundedSafeString(row.created_at, 64),
     edited_at: nullableSafeString(row.edited_at, 64),
     pinned_at: nullableSafeString(row.pinned_at, 64),
-    unread: row.unread === true || (row.unread === undefined && (row.read_at === null || row.read_at === undefined)),
+    unread: row.unread === true || row.unread === 1 || (row.unread === undefined && (row.read_at === null || row.read_at === undefined)),
     blocking: row.blocking === true || row.blocking === 1,
     reply_to: row.reply_to == null ? null : Number(row.reply_to),
     attachment_count: attachments,
@@ -186,7 +192,7 @@ export function previewAsCompatibilityMessage(preview: MessagePreview): Message 
   };
 }
 
-function finalizePage(page: MessagePreviewPage): MessagePreviewPage {
+export function finalizeMessagePreviewPage(page: MessagePreviewPage): MessagePreviewPage {
   let finalized = page;
   for (let i = 0; i < 3; i++) {
     finalized = { ...finalized, byte_length: Buffer.byteLength(JSON.stringify(finalized), "utf8") };
@@ -207,7 +213,7 @@ export function packMessagePreviewPage(
   let messages: MessagePreview[] = [];
   let skippedCount = 0;
 
-  const build = (items: MessagePreview[], hasMore: boolean, skipped: number): MessagePreviewPage => finalizePage({
+  const build = (items: MessagePreview[], hasMore: boolean, skipped: number): MessagePreviewPage => finalizeMessagePreviewPage({
     messages: items,
     count: items.length,
     limit,

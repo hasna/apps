@@ -10,6 +10,13 @@ import {
   readChannelNotifications,
   subscribeToChannelNotifications,
 } from "./channel-notifications.js";
+import {
+  resolveCollectionLimit,
+  resolveCollectionMaxBytes,
+  resolveCollectionOffset,
+  resolveCollectionPreviewBytes,
+  resolveCollectionTimeoutMs,
+} from "./message-previews.js";
 import { closeDb, getDb } from "./db.js";
 import { LocalStore } from "./store/index.js";
 import {
@@ -158,6 +165,48 @@ describe("E-00051 safe public read boundaries", () => {
 
     const remaining = readChannelNotifications({ agent: "reader", limit: 20 });
     expect(remaining.notifications.map((item) => item.message_id)).toEqual([first.id]);
+  });
+
+  test("a 775-byte notification envelope failure leaves unread state unchanged", () => {
+    createChannel("ops", "creator");
+    subscribeToChannelNotifications("ops", "reader");
+    sendMessage({ from: "alice", to: "ops", channel: "ops", content: "x".repeat(115) });
+    sendMessage({ from: "alice", to: "ops", channel: "ops", content: "x".repeat(115) });
+
+    const before = readChannelNotifications({
+      agent: "reader",
+      limit: 2,
+      max_bytes: 775,
+      timeout_ms: 1_000,
+    });
+    expect(before.byte_length).toBe(775);
+    expect(before.notifications).toHaveLength(2);
+    expect(before.notifications.every((item) => item.unread)).toBe(true);
+
+    expect(() => readChannelNotifications({
+      agent: "reader",
+      limit: 2,
+      max_bytes: 775,
+      timeout_ms: 1_000,
+      mark_read: true,
+    })).toThrow("channel notification envelope exceeds max_bytes (777 > 775)");
+
+    const after = readChannelNotifications({ agent: "reader", limit: 20, max_bytes: 8 * 1024 });
+    expect(after.notifications).toHaveLength(2);
+    expect(after.notifications.every((item) => item.unread)).toBe(true);
+  });
+
+  test("present-but-empty shared collection options fail closed", () => {
+    for (const resolve of [
+      resolveCollectionLimit,
+      resolveCollectionOffset,
+      resolveCollectionMaxBytes,
+      resolveCollectionPreviewBytes,
+      resolveCollectionTimeoutMs,
+    ]) {
+      expect(() => resolve("")).toThrow();
+      expect(() => resolve("   ")).toThrow();
+    }
   });
 
   test("local collection deadlines terminate the SQLite worker with no late mutation or worker leak", async () => {

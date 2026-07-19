@@ -4,9 +4,9 @@
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
 // Source: ConversationsClient 0.5.6
 
-export interface Message { "id"?: number; "mention_id"?: number; "uuid"?: string; "session_id"?: string; "from_agent"?: string; "to_agent"?: string; "channel"?: string | null; "project_id"?: string | null; "content"?: string; "priority"?: string; "blocking"?: boolean; "reply_to"?: number | null; "working_dir"?: string | null; "repository"?: string | null; "branch"?: string | null; "metadata"?: Record<string, unknown> | null; "attachments"?: Array<Record<string, unknown>> | null; "created_at"?: string }
+export interface Message { "id"?: number; "uuid"?: string; "session_id"?: string; "from_agent"?: string; "to_agent"?: string; "channel"?: string | null; "project_id"?: string | null; "content"?: string; "priority"?: string; "blocking"?: boolean; "reply_to"?: number | null; "working_dir"?: string | null; "repository"?: string | null; "branch"?: string | null; "metadata"?: Record<string, unknown> | null; "attachments"?: Array<Record<string, unknown>> | null; "created_at"?: string }
 
-export interface MessagePreview { "id": number; "uuid"?: string; "session_id": string; "from_agent": string; "to_agent": string; "channel": string | null; "project_id": string | null; "priority": "low" | "normal" | "high" | "urgent"; "working_dir": string | null; "repository": string | null; "branch": string | null; "created_at": string; "edited_at": string | null; "pinned_at": string | null; "unread": boolean; "blocking": boolean; "reply_to": number | null; "reply_count"?: number; "attachment_count": number; "has_attachments": boolean; "has_metadata": boolean; "preview": string; "preview_bytes": number; "content_bytes": number; "truncated": boolean; "redacted": boolean; "relevance_score"?: number }
+export interface MessagePreview { "id": number; "mention_id"?: number; "uuid"?: string; "session_id": string; "from_agent": string; "to_agent": string; "channel": string | null; "project_id": string | null; "priority": "low" | "normal" | "high" | "urgent"; "working_dir": string | null; "repository": string | null; "branch": string | null; "created_at": string; "edited_at": string | null; "pinned_at": string | null; "unread": boolean; "blocking": boolean; "reply_to": number | null; "reply_count"?: number; "attachment_count": number; "has_attachments": boolean; "has_metadata": boolean; "preview": string; "preview_bytes": number; "content_bytes": number; "truncated": boolean; "redacted": boolean; "relevance_score"?: number }
 
 export interface MessagePreviewPage { "messages": Array<MessagePreview>; "count": number; "limit": number; "cursor": number; "next_cursor": number | null; "has_more": boolean; "skipped_count": number; "byte_length": number; "max_bytes": number; "timeout_ms": number; "compact": true; "detail_path": "messages/{id}"; "query"?: string }
 
@@ -242,7 +242,7 @@ export class ConversationsClient {
     }
 
     /** Download one bounded export artifact owned by the authenticated principal */
-    async downloadMessageExport(artifactId: string, init?: RequestInit): Promise<string> {
+    async downloadMessageExport(artifactId: string, init?: RequestInit): Promise<Array<MessagePreview | Message> | string> {
       return this.request("GET", `/v1/messages/exports/${encodeURIComponent(String(artifactId))}`, {
         body: undefined,
         query: undefined,

@@ -34,6 +34,21 @@ for (const interfaceName of ["IncidentProjectionEventV1", "IncidentProjectionRec
   }
 }
 
+// The endpoint negotiates two artifact representations. The shared generator
+// selects the first OpenAPI media type, while the runtime correctly parses JSON
+// arrays and returns CSV as text. Preserve that media-type union in the public
+// signature until the shared generator emits response-content unions itself.
+const downloadExportArray = /async downloadMessageExport\(([^\n]+)\): Promise<Array<MessagePreview \| Message>>/;
+const downloadExportUnion = /async downloadMessageExport\(([^\n]+)\): Promise<Array<MessagePreview \| Message> \| string>/;
+if (downloadExportArray.test(generatedCode)) {
+  generatedCode = generatedCode.replace(
+    downloadExportArray,
+    "async downloadMessageExport($1): Promise<Array<MessagePreview | Message> | string>",
+  );
+} else if (!downloadExportUnion.test(generatedCode)) {
+  throw new Error("SDK generator output for downloadMessageExport no longer contains the expected artifact type");
+}
+
 const header =
   "// @generated from src/server/openapi.ts by scripts/generate-sdk.ts — DO NOT EDIT.\n" +
   "// Regenerate: bun run sdk:generate\n\n";

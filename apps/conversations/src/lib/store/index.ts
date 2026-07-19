@@ -239,6 +239,7 @@ export interface ConversationsStore {
   getThreadReplies: Async<typeof messagesLib.getThreadReplies>;
   getUnreadBlockers: Async<typeof messagesLib.getUnreadBlockers>;
   getUnreadBlockerPreviews: Async<typeof messagesLib.getUnreadBlockerPreviews>;
+  readMentionPreviews: Async<typeof messagesLib.readMentionPreviews>;
   getMessagesForAgent: Async<typeof messagesLib.getMessagesForAgent>;
   getMessageReadStatus: Async<typeof messagesLib.getMessageReadStatus>;
   markRead: Async<typeof messagesLib.markRead>;
@@ -248,6 +249,7 @@ export interface ConversationsStore {
   markSessionRead: Async<typeof messagesLib.markSessionRead>;
   markUnread: Async<typeof messagesLib.markUnread>;
   markUnreadByIds: Async<typeof messagesLib.markUnreadByIds>;
+  markMentionsReadByIds: Async<typeof messagesLib.markMentionsReadByIds>;
   markMentionsRead: Async<typeof messagesLib.markMentionsRead>;
   listUnreadCounts: Async<typeof messagesLib.listUnreadCounts>;
   listUnreadCountsWithMentions: Async<typeof messagesLib.listUnreadCountsWithMentions>;
@@ -455,6 +457,12 @@ export class LocalStore implements ConversationsStore {
       [agent, opts],
       opts.timeout_ms,
     );
+  readMentionPreviews: ConversationsStore["readMentionPreviews"] = async (agent, opts = {}) =>
+    runLocalReadWorker<ReturnType<typeof messagesLib.readMentionPreviews>>(
+      "readMentionPreviews",
+      [agent, opts],
+      opts.timeout_ms,
+    );
   getMessagesForAgent: ConversationsStore["getMessagesForAgent"] = async (agent, opts = {}) => {
     return runLocalReadWorker<ReturnType<typeof messagesLib.getMessagesForAgent>>(
       "getMessagesForAgent",
@@ -470,6 +478,7 @@ export class LocalStore implements ConversationsStore {
   markSessionRead: ConversationsStore["markSessionRead"] = async (...a) => messagesLib.markSessionRead(...a);
   markUnread: ConversationsStore["markUnread"] = async (...a) => messagesLib.markUnread(...a);
   markUnreadByIds: ConversationsStore["markUnreadByIds"] = async (...a) => messagesLib.markUnreadByIds(...a);
+  markMentionsReadByIds: ConversationsStore["markMentionsReadByIds"] = async (...a) => messagesLib.markMentionsReadByIds(...a);
   markMentionsRead: ConversationsStore["markMentionsRead"] = async (...a) => messagesLib.markMentionsRead(...a);
   listUnreadCounts: ConversationsStore["listUnreadCounts"] = async (...a) => messagesLib.listUnreadCounts(...a);
   listUnreadCountsWithMentions: ConversationsStore["listUnreadCountsWithMentions"] = async (...a) => messagesLib.listUnreadCountsWithMentions(...a);

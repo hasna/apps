@@ -342,9 +342,9 @@ function strictIntegerParam(raw: string | null, name: string, allowZero = false)
 function strictBooleanParam(raw: string | null, name: string): boolean {
   if (raw === null) return false;
   const normalized = raw.trim().toLowerCase();
-  if (["true", "1", "yes"].includes(normalized)) return true;
-  if (["false", "0", "no"].includes(normalized)) return false;
-  throw new ApiRequestValidationError(`${name} must be true or false`);
+  if (normalized === "true" || normalized === "1") return true;
+  if (normalized === "false" || normalized === "0") return false;
+  throw new ApiRequestValidationError(`${name} must be true, false, 1, or 0`);
 }
 
 function strictStringParam(raw: string | null, name: string): string | undefined {
@@ -394,9 +394,16 @@ function collectionReadOptions(url: URL): {
   timeoutMs: number;
 } {
   try {
+    const rawOffset = url.searchParams.get("offset");
+    const rawCursor = url.searchParams.get("cursor");
+    const offset = resolveCollectionOffset(rawOffset);
+    const cursor = resolveCollectionOffset(rawCursor);
+    if (rawOffset !== null && rawCursor !== null && offset !== cursor) {
+      throw new Error("offset and cursor must match when both are provided");
+    }
     return {
       limit: resolveCollectionLimit(url.searchParams.get("limit")),
-      offset: resolveCollectionOffset(url.searchParams.get("offset") ?? url.searchParams.get("cursor")),
+      offset: rawOffset !== null ? offset : cursor,
       maxBytes: resolveCollectionMaxBytes(url.searchParams.get("max_bytes")),
       previewBytes: resolveCollectionPreviewBytes(url.searchParams.get("preview_bytes")),
       timeoutMs: resolveCollectionTimeoutMs(url.searchParams.get("timeout_ms")),
@@ -948,7 +955,7 @@ async function handleV1(
   // ---- messages ----
   if (sub === "messages/blockers" && method === "GET") {
     if (!agent) return json({ error: "authenticated agent is required" }, 401);
-    const requestedAgent = str(url.searchParams.get("agent"));
+    const requestedAgent = strictStringParam(url.searchParams.get("agent"), "agent");
     if (requestedAgent && requestedAgent.toLowerCase() !== agent.toLowerCase()) {
       return json({ error: "blocker agent must match the authenticated agent" }, 403);
     }
@@ -1160,18 +1167,44 @@ async function handleV1(
       ? (body.ids as unknown[]).map(Number).filter((n) => Number.isFinite(n))
       : [];
     const all = body.all === true;
-    const channel = str(body.channel);
+    const channel = body.channel === undefined
+      ? undefined
+      : typeof body.channel === "string" && body.channel.trim()
+        ? body.channel.trim()
+        : (() => { throw new ApiRequestValidationError("channel must be a non-empty string"); })();
     const session = str(body.session) ?? str(body.session_id);
     // markMentionsRead: stamp notified_at on the agent's @mentions (optionally
     // scoped to one channel). Routed here because the client posts it to
     // /messages/read with mentions_only=true.
-    if (body.mentions_only) {
-      const res = channel
+    if (body.mentions_only !== undefined && typeof body.mentions_only !== "boolean") {
+      throw new ApiRequestValidationError("mentions_only must be a boolean");
+    }
+    if (body.mentions_only === true) {
+      const mentionIdsProvided = body.mention_ids !== undefined;
+      if (mentionIdsProvided && !Array.isArray(body.mention_ids)) {
+        throw new ApiRequestValidationError("mention_ids must be an array of positive integers");
+      }
+      const mentionIds = Array.isArray(body.mention_ids) ? (body.mention_ids as unknown[]).map((value) => {
+        if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+          throw new ApiRequestValidationError("mention_ids must contain only positive integers");
+        }
+        return value;
+      }) : [];
+      if (mentionIdsProvided && mentionIds.length === 0) {
+        return json({ marked: 0 });
+      }
+      const res = mentionIds.length > 0
         ? await client.query(
+            `UPDATE message_mentions SET notified_at = NOW()::text
+             WHERE mentioned_agent = $1 AND id = ANY($2::bigint[]) AND notified_at IS NULL`,
+            [reader, mentionIds],
+          )
+        : channel
+          ? await client.query(
             `UPDATE message_mentions SET notified_at = NOW()::text WHERE mentioned_agent = $1 AND channel = $2 AND notified_at IS NULL`,
             [reader, normalizeChannelName(channel)],
           )
-        : await client.query(
+          : await client.query(
             `UPDATE message_mentions SET notified_at = NOW()::text WHERE mentioned_agent = $1 AND notified_at IS NULL`,
             [reader],
           );
@@ -1298,8 +1331,9 @@ async function handleV1(
   // ---- pinned messages ----
   if (sub === "messages/pinned" && method === "GET") {
     const collection = collectionReadOptions(url);
-    const channel = str(url.searchParams.get("channel"));
-    const session = str(url.searchParams.get("session")) ?? str(url.searchParams.get("session_id"));
+    const channel = strictStringParam(url.searchParams.get("channel"), "channel");
+    const session = strictStringParam(url.searchParams.get("session"), "session")
+      ?? strictStringParam(url.searchParams.get("session_id"), "session_id");
     const clauses = ["pinned_at IS NOT NULL"];
     const params: unknown[] = [];
     if (channel) { params.push(channel); clauses.push(`channel = $${params.length}`); }
@@ -1352,11 +1386,21 @@ async function handleV1(
     };
     const optionalNumber = (name: string): number | undefined => {
       const value = queryValue(name);
-      if (value === undefined || value === null || value === "") return undefined;
-      const parsed = typeof value === "number" ? value : Number(value);
+      if (value === undefined || value === null) return undefined;
+      if (typeof value !== "number" && typeof value !== "string") {
+        throw new ApiRequestValidationError(`${name} must be a positive integer`);
+      }
+      if (typeof value === "string" && !/^[1-9]\d*$/.test(value.trim())) {
+        throw new ApiRequestValidationError(`${name} must be a positive integer`);
+      }
+      const parsed = typeof value === "number" ? value : Number(value.trim());
       if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new ApiRequestValidationError(`${name} must be a positive integer`);
       return parsed;
     };
+    const requestedDetail = optionalString("detail");
+    if (method === "GET" && requestedDetail !== undefined && requestedDetail !== "preview") {
+      throw new ApiRequestValidationError("detail must be preview for GET exports");
+    }
     const authorization = method === "POST" && body.authorization && typeof body.authorization === "object" && !Array.isArray(body.authorization)
       ? body.authorization as Record<string, unknown>
       : undefined;
@@ -1370,7 +1414,7 @@ async function handleV1(
       since: optionalString("since"),
       until: optionalString("until"),
       format: optionalString("format") as ExportMessagesOptions["format"],
-      detail: (method === "GET" ? "preview" : optionalString("detail")) as ExportMessagesOptions["detail"],
+      detail: (method === "GET" ? "preview" : requestedDetail) as ExportMessagesOptions["detail"],
       limit: optionalNumber("limit"),
       max_bytes: optionalNumber("max_bytes"),
       preview_bytes: optionalNumber("preview_bytes"),
@@ -1425,19 +1469,21 @@ async function handleV1(
   // ---- messages that @mention an agent ----
   if (sub === "messages/for-agent" && method === "GET") {
     const collection = collectionReadOptions(url);
-    const who = str(url.searchParams.get("agent"));
+    const who = strictStringParam(url.searchParams.get("agent"), "agent");
     if (!who) return json({ error: "agent is required" }, 400);
     const clauses = ["mm.mentioned_agent = $1"];
     const params: unknown[] = [who.toLowerCase()];
-    const channel = str(url.searchParams.get("channel"));
+    const channel = strictStringParam(url.searchParams.get("channel"), "channel");
     if (channel) { params.push(normalizeChannelName(channel)); clauses.push(`m.channel = $${params.length}`); }
-    if (isTrue(url.searchParams.get("unread_only"))) clauses.push(`mm.notified_at IS NULL`);
+    if (strictBooleanParam(url.searchParams.get("unread_only"), "unread_only")) clauses.push(`mm.notified_at IS NULL`);
     params.push(collection.limit + 1);
     const limitIdx = params.length;
     params.push(collection.offset);
     const offsetIdx = params.length;
     const rows = await boundedCollectionQuery(client, collection.timeoutMs, (tx) => tx.many<Record<string, unknown>>(
-      `SELECT ${messagePreviewProjectionPg("m")}, mm.id AS mention_id FROM messages m
+      `SELECT ${messagePreviewProjectionPg("m")}, mm.id AS mention_id,
+              (mm.notified_at IS NULL) AS unread
+       FROM messages m
        JOIN message_mentions mm ON mm.message_id = m.id
        WHERE ${clauses.join(" AND ")}
        ORDER BY m.created_at DESC, m.id DESC LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
@@ -2271,6 +2317,7 @@ async function handleChannelNotifications(
       ? true
       : strictBooleanParam(url.searchParams.get("unread_only"), "unread_only");
     if (unreadOnly) clauses.push("snr.message_id IS NULL");
+    const markRequested = strictBooleanParam(url.searchParams.get("mark_read"), "mark_read");
     const collection = collectionReadOptions(url);
     const restricted = restrictedMessagePredicatePg("m");
     params.push(collection.limit + 1);
@@ -2292,7 +2339,6 @@ async function handleChannelNotifications(
        ORDER BY m.created_at DESC, m.id DESC LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
       params,
     ));
-    const markRequested = strictBooleanParam(url.searchParams.get("mark_read"), "mark_read");
     const candidates = rows.map((r) => ({
       message_id: Number(r.message_id),
       channel: r.channel,
@@ -2366,7 +2412,11 @@ async function handleChannelNotifications(
     const who = agent;
     const params: unknown[] = [who];
     let channelClause = "";
-    const channel = str(body.channel);
+    const channel = body.channel === undefined
+      ? undefined
+      : typeof body.channel === "string" && body.channel.trim()
+        ? body.channel.trim()
+        : (() => { throw new ApiRequestValidationError("channel must be a non-empty string"); })();
     if (channel) { params.push(normalizeChannelName(channel)); channelClause = `AND m.channel = $${params.length}`; }
     const res = await client.query(
       `INSERT INTO channel_notification_reads (agent, message_id)

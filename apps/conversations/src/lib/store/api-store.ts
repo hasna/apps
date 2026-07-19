@@ -38,7 +38,7 @@ type Q = Record<string, string | number | boolean | undefined | null>;
 
 function prune(q: Q): Record<string, string | number | boolean> {
   const out: Record<string, string | number | boolean> = {};
-  for (const [k, v] of Object.entries(q)) if (v !== undefined && v !== null && v !== "") out[k] = v;
+  for (const [k, v] of Object.entries(q)) if (v !== undefined && v !== null) out[k] = v;
   return out;
 }
 
@@ -702,21 +702,32 @@ export class ApiStore implements ConversationsStore {
       timeout_ms: timeoutMs,
     }, timeoutMs) as never;
   };
-  getMessagesForAgent: ConversationsStore["getMessagesForAgent"] = async (agent, opts) => {
-    const limit = resolveCollectionLimit(opts?.limit ?? 50);
-    const maxBytes = COLLECTION_MAX_MAX_BYTES;
-    const timeoutMs = resolveCollectionTimeoutMs(undefined);
-    const page = await this.getBounded<MessagePreviewPage>("/messages/for-agent", {
+  readMentionPreviews: ConversationsStore["readMentionPreviews"] = async (agent, opts) => {
+    const o = opts ?? {};
+    const limit = resolveCollectionLimit(o.limit ?? 50);
+    const offset = resolveCollectionOffset(o.offset);
+    const maxBytes = resolveCollectionMaxBytes(o.max_bytes);
+    const previewBytes = resolveCollectionPreviewBytes(o.preview_bytes);
+    const timeoutMs = resolveCollectionTimeoutMs(o.timeout_ms);
+    return await this.getBounded<MessagePreviewPage>("/messages/for-agent", {
       agent,
-      channel: opts?.channel,
-      unread_only: opts?.unread_only ? true : undefined,
+      channel: o.channel,
+      unread_only: o.unread_only,
       limit,
+      offset,
       max_bytes: maxBytes,
+      preview_bytes: previewBytes,
       timeout_ms: timeoutMs,
-    }, timeoutMs);
+    }, timeoutMs) as never;
+  };
+  getMessagesForAgent: ConversationsStore["getMessagesForAgent"] = async (agent, opts) => {
+    const page = await this.readMentionPreviews(agent, {
+      ...opts,
+      max_bytes: COLLECTION_MAX_MAX_BYTES,
+    });
     return page.messages.map((preview) => ({
       message: previewAsCompatibilityMessage(preview),
-      mention_id: preview.mention_id ?? preview.id,
+      mention_id: preview.mention_id!,
     })) as never;
   };
   getMessageReadStatus: ConversationsStore["getMessageReadStatus"] = async (messageId, channel) => {
@@ -740,6 +751,15 @@ export class ApiStore implements ConversationsStore {
     if (ids.length === 0) return 0 as never;
     const res = await this.post<{ marked_unread?: number }>("/messages/unread", { ids });
     return Number(res?.marked_unread ?? 0) as never;
+  };
+  markMentionsReadByIds: ConversationsStore["markMentionsReadByIds"] = async (agent, mentionIds) => {
+    if (mentionIds.length === 0) return 0 as never;
+    const res = await this.post<{ marked?: number }>("/messages/read", {
+      reader: agent,
+      mentions_only: true,
+      mention_ids: mentionIds,
+    });
+    return Number(res?.marked ?? 0) as never;
   };
   markMentionsRead: ConversationsStore["markMentionsRead"] = async (agent, channel) => {
     const res = await this.post<{ marked?: number }>("/messages/read", { reader: agent, mentions_only: true, channel: channel ? normalizeChannelName(channel) : undefined });

@@ -255,11 +255,18 @@ export function readChannelNotifications(opts: ReadChannelNotificationsOptions):
 
   let markedRead = 0;
   if (opts.mark_read && page.notifications.length > 0) {
-    markedRead = markChannelNotificationsRead(opts.agent, page.notifications.map((row) => row.message_id));
-    page = finalizeChannelNotificationPage({
-      ...page,
-      notifications: page.notifications.map((row) => ({ ...row, unread: false })),
-      marked_read: markedRead,
+    const ids = page.notifications.map((row) => row.message_id);
+    page = db.transaction(() => {
+      markedRead = markChannelNotificationsRead(opts.agent, ids);
+      const finalized = finalizeChannelNotificationPage({
+        ...page,
+        notifications: page.notifications.map((row) => ({ ...row, unread: false })),
+        marked_read: markedRead,
+      });
+      if (finalized.byte_length > maxBytes) {
+        throw new Error(`channel notification envelope exceeds max_bytes (${finalized.byte_length} > ${maxBytes})`);
+      }
+      return finalized;
     });
   }
 

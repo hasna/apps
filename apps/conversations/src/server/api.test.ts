@@ -481,6 +481,79 @@ describe("conversations-serve", () => {
     }
   });
 
+  test("dedicated broad routes reject empty or malformed values before widening", async () => {
+    const deps = makeDeps();
+    const isolated = startApiServer({ port: 0, host: "127.0.0.1", deps });
+    const isolatedBase = `http://127.0.0.1:${isolated.port}`;
+    const headers = { "x-api-key": rwKey };
+    try {
+      const cases: Array<{ path: string; init?: RequestInit }> = [
+        { path: "/v1/messages?limit=" },
+        { path: "/v1/messages?cursor=" },
+        { path: "/v1/messages?unread_only=yes" },
+        { path: "/v1/messages/pinned?channel=" },
+        { path: "/v1/messages/pinned?session_id=" },
+        { path: "/v1/messages/pinned?max_bytes=" },
+        { path: "/v1/messages/blockers?agent=" },
+        { path: "/v1/messages/blockers?cursor=" },
+        { path: "/v1/messages/for-agent?agent=" },
+        { path: "/v1/messages/for-agent?agent=test&channel=" },
+        { path: "/v1/messages/for-agent?agent=test&unread_only=yes" },
+        { path: "/v1/messages/for-agent?agent=test&timeout_ms=" },
+        { path: "/v1/messages/export?limit=" },
+        { path: "/v1/messages/export?since=not-a-date" },
+        { path: "/v1/channel-notifications/inbox?channel=" },
+        { path: "/v1/channel-notifications/inbox?since=not-a-date" },
+        { path: "/v1/channel-notifications/inbox?mark_read=yes" },
+        { path: "/v1/channel-notifications/inbox?preview_bytes=" },
+      ];
+
+      for (const item of cases) {
+        const before = (deps.client as any).queryCalls.length;
+        const response = await fetch(`${isolatedBase}${item.path}`, { headers, ...item.init });
+        expect(response.status, item.path).toBe(400);
+        expect((deps.client as any).queryCalls.length, item.path).toBe(before);
+      }
+
+      for (const body of [
+        { limit: "" },
+        { max_bytes: "" },
+        { since: "not-a-date" },
+        { format: "xml" },
+      ]) {
+        const before = (deps.client as any).queryCalls.length;
+        const response = await fetch(`${isolatedBase}/v1/messages/exports`, {
+          method: "POST",
+          headers: { ...headers, "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        expect(response.status, JSON.stringify(body)).toBe(400);
+        expect((deps.client as any).queryCalls.length, JSON.stringify(body)).toBe(before);
+      }
+    } finally {
+      isolated.stop(true);
+    }
+  });
+
+  test("an explicitly empty mention id set is an exact no-op, not a widened acknowledgement", async () => {
+    const deps = makeDeps();
+    const isolated = startApiServer({ port: 0, host: "127.0.0.1", deps });
+    const isolatedBase = `http://127.0.0.1:${isolated.port}`;
+    try {
+      const before = (deps.client as any).queryCalls.length;
+      const response = await fetch(`${isolatedBase}/v1/messages/read`, {
+        method: "POST",
+        headers: { "x-api-key": rwKey, "content-type": "application/json" },
+        body: JSON.stringify({ mentions_only: true, mention_ids: [] }),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ marked: 0 });
+      expect((deps.client as any).queryCalls.length).toBe(before);
+    } finally {
+      isolated.stop(true);
+    }
+  });
+
   test("notification pages bind to the authenticated principal and mark only returned ids", async () => {
     const deps = makeDeps();
     const isolated = startApiServer({ port: 0, host: "127.0.0.1", deps });

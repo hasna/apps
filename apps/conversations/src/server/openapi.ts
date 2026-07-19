@@ -25,7 +25,6 @@ export const openapiSpec = {
         type: "object",
         properties: {
           id: { type: "integer" },
-          mention_id: { type: "integer" },
           uuid: { type: "string" },
           session_id: { type: "string" },
           from_agent: { type: "string" },
@@ -55,6 +54,7 @@ export const openapiSpec = {
         ],
         properties: {
           id: { type: "integer" },
+          mention_id: { type: "integer", minimum: 1, description: "Mention-row id on dedicated mention projections; distinct from id." },
           uuid: { type: "string" },
           session_id: { type: "string" },
           from_agent: { type: "string" },
@@ -483,7 +483,17 @@ export const openapiSpec = {
           "200": {
             description: "bounded artifact payload",
             content: {
-              "application/json": { schema: { type: "string", format: "binary" } },
+              "application/json": {
+                schema: {
+                  type: "array",
+                  items: {
+                    oneOf: [
+                      { $ref: "#/components/schemas/MessagePreview" },
+                      { $ref: "#/components/schemas/Message" },
+                    ],
+                  },
+                },
+              },
               "text/csv": { schema: { type: "string", format: "binary" } },
             },
           },
