@@ -1,25 +1,23 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { unlinkSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
 import { closeDb } from "./db";
 import { sendMessage } from "./messages";
 import { createChannel } from "./channels";
 import { buildMessagePreview, listChannelNotificationSubscriptions, markAllChannelNotificationsRead, markChannelNotificationsRead, readChannelNotifications, subscribeToChannelNotifications, unsubscribeFromChannelNotifications } from "./channel-notifications";
+import { createDisposableStore, enterHermeticTestEnv } from "../test/hermetic";
 
-const TEST_DB = join(tmpdir(), `conversations-test-channel-notifications-${Date.now()}.db`);
+let store: ReturnType<typeof createDisposableStore>;
+let restoreEnv: () => void;
 
 beforeEach(() => {
-  process.env.CONVERSATIONS_DB_PATH = TEST_DB;
+  store = createDisposableStore("channel-notifications");
+  restoreEnv = enterHermeticTestEnv({ CONVERSATIONS_DB_PATH: store.dbPath });
   closeDb();
 });
 
 afterEach(() => {
   closeDb();
-  try { unlinkSync(TEST_DB); } catch {}
-  try { unlinkSync(TEST_DB + "-wal"); } catch {}
-  try { unlinkSync(TEST_DB + "-shm"); } catch {}
-  delete process.env.CONVERSATIONS_DB_PATH;
+  restoreEnv();
+  store.cleanup();
 });
 
 describe("channel notification subscriptions", () => {
@@ -96,6 +94,24 @@ describe("channel notifications", () => {
     expect(notifications[0].preview).not.toContain("#");
     expect(notifications[0].preview).not.toContain("_");
     expect(notifications[0].unread).toBe(true);
+  });
+
+  test("redacts sensitive values and never projects restricted channel bodies", () => {
+    createChannel("ops", "creator");
+    createChannel("security-incidents", "creator");
+    subscribeToChannelNotifications("ops", "agent-a", { preview_chars: 500 });
+    subscribeToChannelNotifications("security-incidents", "agent-a", { preview_chars: 500 });
+    const token = ["Bearer", `fixture-${"x".repeat(30)}`].join(" ");
+
+    sendMessage({ from: "alice", to: "ops", channel: "ops", content: `rotate ${token}` });
+    sendMessage({ from: "alice", to: "security-incidents", channel: "security-incidents", content: "restricted root cause body" });
+
+    const notifications = readChannelNotifications({ agent: "agent-a" });
+    expect(notifications.find((item) => item.channel === "ops")?.preview).toContain("[REDACTED:BEARER_TOKEN]");
+    expect(JSON.stringify(notifications)).not.toContain(token);
+    const restricted = notifications.find((item) => item.channel === "security-incidents");
+    expect(restricted?.preview).toBe("[REDACTED:RESTRICTED_CHANNEL_BODY]");
+    expect(JSON.stringify(restricted)).not.toContain("restricted root cause body");
   });
 
   test("marks notifications read by ids and all", () => {

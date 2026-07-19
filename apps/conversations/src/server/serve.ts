@@ -7,7 +7,7 @@
  *   conversations dashboard          # Start dashboard server
  */
 
-import { readMessages, sendMessage, markRead, searchMessages, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages } from "../lib/messages.js";
+import { readMessagePreviews, sendMessage, markRead, searchMessagePreviews, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getMessageById } from "../lib/messages.js";
 import { listSessions, getSession } from "../lib/sessions.js";
 import { listChannels, getChannel, createChannel, updateChannel, archiveChannel, unarchiveChannel, joinChannel, leaveChannel, getChannelMembers } from "../lib/channels.js";
 import { listProjects, getProject, getProjectByName, createProject, updateProject, deleteProject } from "../lib/projects.js";
@@ -212,17 +212,27 @@ export function startDashboardServer(port = 0, host?: string) {
       }
 
       if (path === "/api/messages" && req.method === "GET") {
-        const rawLimit = url.searchParams.get("limit");
-        let limit = parseInt(rawLimit || "50", 10);
-        if (!Number.isFinite(limit) || limit <= 0) limit = 50;
-        if (limit > 500) limit = 500;
         const session = url.searchParams.get("session") || undefined;
         const channel = url.searchParams.get("channel") || undefined;
         const from = url.searchParams.get("from") || undefined;
         const to = url.searchParams.get("to") || undefined;
-        const compact = url.searchParams.get("compact") === "true";
-        const messages = readMessages({ session_id: session, channel, from, to, limit, order: "desc", compact });
-        return jsonResponse(applyFields(messages, url.searchParams.get("fields")));
+        try {
+          const page = readMessagePreviews({
+            session_id: session,
+            channel,
+            from,
+            to,
+            limit: url.searchParams.get("limit") ? Number(url.searchParams.get("limit")) : undefined,
+            offset: url.searchParams.get("offset") ? Number(url.searchParams.get("offset")) : undefined,
+            max_bytes: url.searchParams.get("max_bytes") ? Number(url.searchParams.get("max_bytes")) : undefined,
+            preview_bytes: url.searchParams.get("preview_bytes") ? Number(url.searchParams.get("preview_bytes")) : undefined,
+            timeout_ms: url.searchParams.get("timeout_ms") ? Number(url.searchParams.get("timeout_ms")) : undefined,
+            order: "desc",
+          });
+          return jsonResponse(applyFields(page.messages, url.searchParams.get("fields")));
+        } catch (error) {
+          return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
+        }
       }
 
       if (path === "/api/messages" && req.method === "POST") {
@@ -262,15 +272,25 @@ export function startDashboardServer(port = 0, host?: string) {
         if (!q.trim()) {
           return jsonResponse({ error: "Query parameter 'q' is required" }, 400);
         }
-        const rawLimit = url.searchParams.get("limit");
-        let limit = parseInt(rawLimit || "50", 10);
-        if (!Number.isFinite(limit) || limit <= 0) limit = 50;
-        if (limit > 500) limit = 500;
         const channel = url.searchParams.get("channel") || undefined;
         const from = url.searchParams.get("from") || undefined;
         const to = url.searchParams.get("to") || undefined;
-        const messages = searchMessages({ query: q.trim(), channel, from, to, limit });
-        return jsonResponse(messages);
+        try {
+          const page = searchMessagePreviews({
+            query: q.trim(),
+            channel,
+            from,
+            to,
+            limit: url.searchParams.get("limit") ? Number(url.searchParams.get("limit")) : undefined,
+            offset: url.searchParams.get("offset") ? Number(url.searchParams.get("offset")) : undefined,
+            max_bytes: url.searchParams.get("max_bytes") ? Number(url.searchParams.get("max_bytes")) : undefined,
+            preview_bytes: url.searchParams.get("preview_bytes") ? Number(url.searchParams.get("preview_bytes")) : undefined,
+            timeout_ms: url.searchParams.get("timeout_ms") ? Number(url.searchParams.get("timeout_ms")) : undefined,
+          });
+          return jsonResponse(page.messages);
+        } catch (error) {
+          return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
+        }
       }
 
       if (path === "/api/export" && req.method === "GET") {
@@ -298,15 +318,22 @@ export function startDashboardServer(port = 0, host?: string) {
       if (path === "/api/messages/pinned" && req.method === "GET") {
         const channel = url.searchParams.get("channel") || undefined;
         const session_id = url.searchParams.get("session_id") || undefined;
-        const rawLimit = url.searchParams.get("limit");
-        let limit: number | undefined;
-        if (rawLimit) {
-          limit = parseInt(rawLimit, 10);
-          if (!Number.isFinite(limit) || limit <= 0) limit = 50;
-          if (limit > 500) limit = 500;
+        try {
+          const page = readMessagePreviews({
+            pinned_only: true,
+            channel,
+            session_id,
+            limit: url.searchParams.get("limit") ? Number(url.searchParams.get("limit")) : undefined,
+            offset: url.searchParams.get("offset") ? Number(url.searchParams.get("offset")) : undefined,
+            max_bytes: url.searchParams.get("max_bytes") ? Number(url.searchParams.get("max_bytes")) : undefined,
+            preview_bytes: url.searchParams.get("preview_bytes") ? Number(url.searchParams.get("preview_bytes")) : undefined,
+            timeout_ms: url.searchParams.get("timeout_ms") ? Number(url.searchParams.get("timeout_ms")) : undefined,
+            order: "desc",
+          });
+          return jsonResponse(page.messages);
+        } catch (error) {
+          return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
         }
-        const messages = getPinnedMessages({ channel, session_id, limit });
-        return jsonResponse(messages);
       }
 
       // Message pin/unpin by ID: /api/messages/:id/pin
@@ -335,6 +362,10 @@ export function startDashboardServer(port = 0, host?: string) {
       const messageMatch = path.match(/^\/api\/messages\/(\d+)$/);
       if (messageMatch) {
         const messageId = parseInt(messageMatch[1], 10);
+        if (req.method === "GET") {
+          const message = getMessageById(messageId);
+          return message ? jsonResponse(message) : jsonResponse({ error: "Message not found" }, 404);
+        }
         if (req.method === "DELETE") {
           if (!isSameOrigin(req)) {
             return jsonResponse({ error: "Invalid origin" }, 403);

@@ -24,6 +24,56 @@ export interface Message {
   truncated?: boolean;
 }
 
+/**
+ * Safe collection-read projection. It intentionally has no `content` or raw
+ * metadata field; full bodies are available only from the exact-message path.
+ */
+export interface MessagePreview {
+  id: number;
+  uuid?: string;
+  session_id: string;
+  from_agent: string;
+  to_agent: string;
+  channel: string | null;
+  project_id: string | null;
+  priority: Priority;
+  working_dir: string | null;
+  repository: string | null;
+  branch: string | null;
+  created_at: string;
+  edited_at: string | null;
+  pinned_at: string | null;
+  unread: boolean;
+  blocking: boolean;
+  reply_to: number | null;
+  reply_count?: number;
+  attachment_count: number;
+  has_attachments: boolean;
+  has_metadata: boolean;
+  preview: string;
+  preview_bytes: number;
+  content_bytes: number;
+  truncated: boolean;
+  redacted: boolean;
+  relevance_score?: number;
+}
+
+export interface MessagePreviewPage {
+  messages: MessagePreview[];
+  count: number;
+  limit: number;
+  cursor: number;
+  next_cursor: number | null;
+  has_more: boolean;
+  skipped_count: number;
+  byte_length: number;
+  max_bytes: number;
+  timeout_ms: number;
+  compact: true;
+  detail_path: "messages/{id}";
+  query?: string;
+}
+
 export interface Reaction {
   id: number;
   message_id: number;
@@ -222,6 +272,7 @@ export interface IncidentProjectionRecord {
 }
 
 export interface ReadMessagesOptions {
+  id?: number;
   session_id?: string;
   from?: string;
   to?: string;
@@ -237,8 +288,16 @@ export interface ReadMessagesOptions {
   threads_only?: boolean;
   include_reply_counts?: boolean;
   mentions_only?: string;
+  reply_to?: number;
+  pinned_only?: boolean;
   latest?: number;
   offset?: number;
+}
+
+export interface ReadMessagePreviewsOptions extends ReadMessagesOptions {
+  max_bytes?: number;
+  preview_bytes?: number;
+  timeout_ms?: number;
 }
 
 export interface SearchMessagesOptions {
@@ -252,6 +311,12 @@ export interface SearchMessagesOptions {
   sort?: "relevance" | "recent";
   snippet_length?: number;
   offset?: number;
+}
+
+export interface SearchMessagePreviewsOptions extends SearchMessagesOptions {
+  max_bytes?: number;
+  preview_bytes?: number;
+  timeout_ms?: number;
 }
 
 export interface SearchResult extends Message {

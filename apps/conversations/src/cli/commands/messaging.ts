@@ -116,43 +116,44 @@ export function registerMessagingCommands(program: Command): void {
     .option("--cursor <n>", "Skip first N messages for pagination", parseInt)
     .option("--unread", "Only unread messages")
     .option("--mark-read", "Mark returned messages as read")
-    .option("--verbose", "Show full message bodies")
+    .option("--max-bytes <n>", "Maximum collection response size", parseInt)
+    .option("--timeout-ms <n>", "Maximum collection read time", parseInt)
+    .option("--verbose", "Compatibility flag; collection bodies remain preview-only")
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
-      const messages = await await getStore().readMessages({
+      const page = await getStore().readMessagePreviews({
         session_id: opts.session,
         from: opts.from,
         to: opts.to,
         channel: opts.channel,
         since: opts.since,
-        limit: opts.json ? opts.limit : queryLimitFor(window),
-        offset: opts.json ? opts.cursor : window.offset,
+        limit: opts.limit ?? window.limit,
+        offset: opts.cursor ?? window.offset,
         unread_only: opts.unread,
+        max_bytes: opts.maxBytes,
+        timeout_ms: opts.timeoutMs,
       });
-      const page = opts.json
-        ? { items: messages, hasMore: false, nextCursor: null, count: messages.length }
-        : pageFromQuery(messages, window);
 
       if (opts.markRead) {
         const reader = resolveIdentity(opts.to);
-        const ids = page.items.filter((m) => !m.read_at).map((m) => m.id);
+        const ids = page.messages.filter((message) => message.unread).map((message) => message.id);
         if (ids.length > 0) await await getStore().markReadByIds(ids, reader);
       }
 
       if (opts.json) {
-        console.log(JSON.stringify(messages, null, 2));
+        console.log(JSON.stringify(page, null, 2));
       } else {
-        if (messages.length === 0) {
+        if (page.messages.length === 0) {
           console.log(chalk.dim("No messages found."));
         } else {
-          for (const msg of page.items) printMessageEntry(msg, { verbose: opts.verbose });
+          for (const msg of page.messages) printMessageEntry(msg);
           printCompactFooter({
             shown: page.count,
-            hasMore: page.hasMore,
-            nextCursor: page.nextCursor,
+            hasMore: page.has_more,
+            nextCursor: page.next_cursor,
             limitCapped: window.limitCapped,
-            detailHint: opts.verbose ? "Use conversations show <id> for one message." : "Use --verbose for full bodies or conversations show <id> for one message.",
+            detailHint: "Use conversations show <id> for one exact full message.",
           });
         }
       }
@@ -277,7 +278,9 @@ export function registerMessagingCommands(program: Command): void {
     .option("--to <agent>", "Filter by recipient")
     .option("--limit <n>", "Max results to return", parseInt)
     .option("--cursor <n>", "Skip first N results for pagination", parseInt)
-    .option("--verbose", "Show full message bodies")
+    .option("--max-bytes <n>", "Maximum collection response size", parseInt)
+    .option("--timeout-ms <n>", "Maximum collection read time", parseInt)
+    .option("--verbose", "Compatibility flag; collection bodies remain preview-only")
     .option("-j, --json", "Output as JSON")
     .action(async (query, opts) => {
       const q = typeof query === "string" ? query.trim() : "";
@@ -287,32 +290,31 @@ export function registerMessagingCommands(program: Command): void {
       }
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
 
-      const messages = await await getStore().searchMessages({
+      const page = await getStore().searchMessagePreviews({
         query: q,
         channel: opts.channel,
         from: opts.from,
         to: opts.to,
-        limit: opts.json ? opts.limit : queryLimitFor(window),
-        offset: opts.json ? opts.cursor : window.offset,
+        limit: opts.limit ?? window.limit,
+        offset: opts.cursor ?? window.offset,
+        max_bytes: opts.maxBytes,
+        timeout_ms: opts.timeoutMs,
       });
-      const page = opts.json
-        ? { items: messages, count: messages.length, total: messages.length, hasMore: false, nextCursor: null }
-        : pageFromQuery(messages, window);
 
       if (opts.json) {
-        console.log(JSON.stringify(messages, null, 2));
+        console.log(JSON.stringify(page, null, 2));
       } else {
-        if (messages.length === 0) {
+        if (page.messages.length === 0) {
           console.log(chalk.dim("No messages found."));
         } else {
           console.log(chalk.dim(`Search results for "${q}":\n`));
-          for (const msg of page.items) printMessageEntry(msg, { verbose: opts.verbose });
+          for (const msg of page.messages) printMessageEntry(msg);
           printCompactFooter({
             shown: page.count,
-            hasMore: page.hasMore,
-            nextCursor: page.nextCursor,
+            hasMore: page.has_more,
+            nextCursor: page.next_cursor,
             limitCapped: window.limitCapped,
-            detailHint: opts.verbose ? "Use conversations show <id> for one message." : "Use --verbose for full bodies or conversations show <id> for one message.",
+            detailHint: "Use conversations show <id> for one exact full message.",
           });
         }
       }
@@ -326,7 +328,9 @@ export function registerMessagingCommands(program: Command): void {
     .argument("<duration>", "Duration: e.g. 30m, 2h, 1d")
     .option("--limit <n>", "Max messages to show", parseInt)
     .option("--cursor <n>", "Skip first N messages for pagination", parseInt)
-    .option("--verbose", "Show full message bodies")
+    .option("--max-bytes <n>", "Maximum collection response size", parseInt)
+    .option("--timeout-ms <n>", "Maximum collection read time", parseInt)
+    .option("--verbose", "Compatibility flag; collection bodies remain preview-only")
     .option("-j, --json", "Output as JSON")
     .action(async (duration, opts) => {
       // Parse duration string: 30m, 2h, 1d
@@ -341,30 +345,29 @@ export function registerMessagingCommands(program: Command): void {
       const since = new Date(Date.now() - value * msMap[unit]).toISOString().replace("T", "T").slice(0, 23);
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
 
-      const messages = await await getStore().readMessages({
+      const page = await getStore().readMessagePreviews({
         since,
         order: "asc",
-        limit: opts.json ? (opts.limit ?? 200) : queryLimitFor(window),
-        offset: opts.json ? opts.cursor : window.offset,
+        limit: opts.limit ?? window.limit,
+        offset: opts.cursor ?? window.offset,
+        max_bytes: opts.maxBytes,
+        timeout_ms: opts.timeoutMs,
       });
-      const page = opts.json
-        ? { items: messages, count: messages.length, hasMore: false, nextCursor: null }
-        : pageFromQuery(messages, window);
 
       if (opts.json) {
-        console.log(JSON.stringify(messages, null, 2));
+        console.log(JSON.stringify(page, null, 2));
       } else {
-        if (messages.length === 0) {
+        if (page.messages.length === 0) {
           console.log(chalk.dim(`No activity in the last ${duration}.`));
         } else {
           console.log(chalk.bold(`Activity since ${duration} ago\n`));
-          for (const msg of page.items) printMessageEntry(msg, { verbose: opts.verbose });
+          for (const msg of page.messages) printMessageEntry(msg);
           printCompactFooter({
             shown: page.count,
-            hasMore: page.hasMore,
-            nextCursor: page.nextCursor,
+            hasMore: page.has_more,
+            nextCursor: page.next_cursor,
             limitCapped: window.limitCapped,
-            detailHint: opts.verbose ? "Use conversations show <id> for one message." : "Use --verbose for full bodies or conversations show <id> for one message.",
+            detailHint: "Use conversations show <id> for one exact full message.",
           });
         }
       }
@@ -595,38 +598,39 @@ export function registerMessagingCommands(program: Command): void {
   // ---- pinned ----
   program
     .command("pinned")
-    .description("List pinned messages")
+    .description("List bounded, redacted pinned-message previews")
     .option("--channel <name>", "Filter by channel")
     .option("--session <id>", "Filter by session ID")
     .option("--limit <n>", "Max results", parseInt)
     .option("--cursor <n>", "Skip first N results for pagination", parseInt)
-    .option("--verbose", "Show full message bodies")
+    .option("--max-bytes <n>", "Maximum response-envelope bytes", parseInt)
+    .option("--timeout-ms <n>", "Maximum collection query time", parseInt)
+    .option("--verbose", "Deprecated compatibility flag; collections remain preview-only")
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
-      const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
-      const messages = await await getStore().getPinnedMessages({
+      const page = await getStore().readMessagePreviews({
+        pinned_only: true,
         channel: opts.channel,
         session_id: opts.session,
-        limit: opts.json ? opts.limit : queryLimitFor(window),
-        offset: opts.json ? opts.cursor : window.offset,
+        limit: opts.limit,
+        offset: opts.cursor,
+        order: "desc",
+        max_bytes: opts.maxBytes,
+        timeout_ms: opts.timeoutMs,
       });
-      const page = opts.json
-        ? { items: messages, count: messages.length, total: messages.length, hasMore: false, nextCursor: null }
-        : pageFromQuery(messages, window);
       if (opts.json) {
-        console.log(JSON.stringify(messages, null, 2));
+        console.log(JSON.stringify(page, null, 2));
       } else {
-        if (messages.length === 0) {
+        if (page.messages.length === 0) {
           console.log(chalk.dim("No pinned messages."));
         } else {
           console.log(chalk.dim("Pinned messages:\n"));
-          for (const msg of page.items) printMessageEntry(msg, { verbose: opts.verbose });
+          for (const msg of page.messages) printMessageEntry(msg);
           printCompactFooter({
             shown: page.count,
-            hasMore: page.hasMore,
-            nextCursor: page.nextCursor,
-            limitCapped: window.limitCapped,
-            detailHint: opts.verbose ? "Use conversations show <id> for one message." : "Use --verbose for full bodies or conversations show <id> for one message.",
+            hasMore: page.has_more,
+            nextCursor: page.next_cursor,
+            detailHint: "Use conversations show <id> for one exact full message.",
           });
         }
       }
@@ -640,31 +644,35 @@ export function registerMessagingCommands(program: Command): void {
     .option("--from <agent>", "Agent to check blockers for")
     .option("--limit <n>", "Max blockers to show", parseInt)
     .option("--cursor <n>", "Skip first N blockers for pagination", parseInt)
-    .option("--verbose", "Show full message bodies")
+    .option("--max-bytes <n>", "Maximum collection response size", parseInt)
+    .option("--timeout-ms <n>", "Maximum collection read time", parseInt)
+    .option("--verbose", "Compatibility flag; blocker bodies remain preview-only")
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
       const agent = resolveIdentity(opts.from);
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
-      const blockers = await getStore().getUnreadBlockers(agent, opts.json ? undefined : { limit: queryLimitFor(window), offset: window.offset });
-      const page = opts.json
-        ? { items: blockers, count: blockers.length, total: blockers.length, hasMore: false, nextCursor: null }
-        : pageFromQuery(blockers, window);
+      const page = await getStore().getUnreadBlockerPreviews(agent, {
+        limit: opts.limit ?? window.limit,
+        offset: opts.cursor ?? window.offset,
+        max_bytes: opts.maxBytes,
+        timeout_ms: opts.timeoutMs,
+      });
 
       if (opts.json) {
-        console.log(JSON.stringify(blockers, null, 2));
+        console.log(JSON.stringify(page, null, 2));
       } else {
-        if (blockers.length === 0) {
+        if (page.messages.length === 0) {
           console.log(chalk.dim("No blocking messages."));
         } else {
           console.log(chalk.red.bold("Blocking messages:\n"));
-          for (const b of page.items) printMessageEntry(b, { verbose: opts.verbose, destination: b.channel ? chalk.magenta(`#${b.channel}`) : chalk.yellow("DM") });
-          console.log(chalk.dim(`Acknowledge shown blockers with: conversations mark-read ${page.items.map(b => b.id).join(" ")}`));
+          for (const b of page.messages) printMessageEntry(b, { destination: b.channel ? chalk.magenta(`#${b.channel}`) : chalk.yellow("DM") });
+          console.log(chalk.dim(`Acknowledge shown blockers with: conversations mark-read ${page.messages.map(b => b.id).join(" ")}`));
           printCompactFooter({
             shown: page.count,
-            hasMore: page.hasMore,
-            nextCursor: page.nextCursor,
+            hasMore: page.has_more,
+            nextCursor: page.next_cursor,
             limitCapped: window.limitCapped,
-            detailHint: opts.verbose ? "Use conversations show <id> for one blocker." : "Use --verbose for full bodies or conversations show <id> for one blocker.",
+            detailHint: "Use conversations show <id> for one exact blocker message.",
           });
         }
       }
@@ -731,7 +739,7 @@ export function registerMessagingCommands(program: Command): void {
     .option("--channel <name>", "Watch a specific channel")
     .option("--all", "Watch DMs and all subscribed channels")
     .option("--interval <ms>", "Poll interval in milliseconds", parseInt)
-    .option("--verbose", "Show full message bodies")
+    .option("--verbose", "Show full bodies for exact-ID messages delivered after polling")
     .action(async (opts) => {
       const agent = resolveIdentity(opts.from);
       await getStore().heartbeat(agent);
@@ -769,7 +777,7 @@ export function registerMessagingCommands(program: Command): void {
         }
       };
 
-      const renderMessage = (msg: import("../../types.js").Message) => {
+      const renderMessage = (msg: import("../../types.js").Message | import("../../types.js").MessagePreview) => {
         const time = chalk.dim(msg.created_at.slice(11, 19));
         const where = msg.channel
           ? chalk.magenta(`#${msg.channel}`)
@@ -786,12 +794,15 @@ export function registerMessagingCommands(program: Command): void {
         console.log(`  ${sender}  ${where}  ${time}${priority}${blocking}`);
 
         // Content with indent
-        const content = opts.verbose
-          ? renderContentLocal(msg.content) as string
-          : previewText(msg.content);
+        const projected = "preview" in msg;
+        const content = projected
+          ? msg.preview
+          : opts.verbose
+            ? renderContentLocal(msg.content) as string
+            : previewText(msg.content);
         const indented = content.split("\n").map((l: string) => "    " + l).join("\n");
         console.log(indented);
-        if (!opts.verbose) {
+        if (projected || !opts.verbose) {
           console.log(chalk.dim(`    Inspect with: conversations show ${msg.id}`));
         }
 
@@ -818,7 +829,7 @@ export function registerMessagingCommands(program: Command): void {
 
       // Show recent messages first
       if (opts.all) {
-        const dmRecent = await await getStore().readMessages({ to: agent, limit: 20, order: "asc" });
+        const dmRecent = (await getStore().readMessagePreviews({ to: agent, limit: 20, order: "asc" })).messages;
         const pendingNotifications = (await getStore().readChannelNotifications({
           agent,
           unread_only: true,
@@ -838,12 +849,12 @@ export function registerMessagingCommands(program: Command): void {
           console.log(chalk.dim(`  ── Live ──\n`));
         }
       } else {
-        const recent = await await getStore().readMessages({
+        const recent = (await getStore().readMessagePreviews({
           to: opts.channel ? undefined : agent,
           channel: opts.channel,
           limit: 20,
           order: "asc",
-        });
+        })).messages;
         if (recent.length > 0) {
           console.log(chalk.dim(`  ── Recent messages (${recent.length}) ──\n`));
           for (const msg of recent) { renderMessage(msg); }

@@ -1,19 +1,15 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { unlinkSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
 import { createChannel } from "../../lib/channels.js";
 import { closeDb } from "../../lib/db.js";
 import { sendMessage } from "../../lib/messages.js";
 import { createProject } from "../../lib/projects.js";
+import { createDisposableStore, enterHermeticTestEnv, hermeticSpawnEnv } from "../../test/hermetic.js";
 
-const TEST_DB = join(tmpdir(), `conversations-test-project-panel-cli-${Date.now()}.db`);
+let testStore: ReturnType<typeof createDisposableStore>;
+let restoreEnv: () => void;
 
 function cleanupDb(): void {
   closeDb();
-  try { unlinkSync(TEST_DB); } catch {}
-  try { unlinkSync(`${TEST_DB}-wal`); } catch {}
-  try { unlinkSync(`${TEST_DB}-shm`); } catch {}
 }
 
 function runCli(args: string[]) {
@@ -21,18 +17,20 @@ function runCli(args: string[]) {
     cmd: ["bun", "run", "src/cli/index.tsx", ...args],
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, CONVERSATIONS_DB_PATH: TEST_DB },
+    env: hermeticSpawnEnv({ CONVERSATIONS_DB_PATH: testStore.dbPath }),
   });
 }
 
 beforeEach(() => {
-  process.env.CONVERSATIONS_DB_PATH = TEST_DB;
+  testStore = createDisposableStore("project-panel-cli");
+  restoreEnv = enterHermeticTestEnv({ CONVERSATIONS_DB_PATH: testStore.dbPath });
   cleanupDb();
 });
 
 afterEach(() => {
   cleanupDb();
-  delete process.env.CONVERSATIONS_DB_PATH;
+  restoreEnv();
+  testStore.cleanup();
 });
 
 describe("conversations project-panel CLI", () => {

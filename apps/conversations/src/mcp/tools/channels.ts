@@ -13,7 +13,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { getStore } from "../../lib/store/index.js";
 import { resolveIdentity } from "../../lib/identity.js";
-import { compactQueriedMessages, compactWindowedChannels, jsonText, resolveMcpWindow } from "../compact.js";
+import { compactWindowedChannels, jsonText } from "../compact.js";
 
 export function registerChannelTools(server: McpServer): void {
 
@@ -119,50 +119,51 @@ export function registerChannelTools(server: McpServer): void {
   });
 
   server.registerTool("read_channel", {
-    description: "Read messages from a channel.",
+    description: "Peek at a bounded, redacted page of channel message previews. Non-mutating unless mark_read:true is explicit; use get_message for one exact full body.",
     inputSchema: {
       channel: z.string(),
       from: z.string().optional().describe("Agent reading the channel — used for per-agent read receipts"),
       since: z.string().optional(),
       limit: z.coerce.number().optional(),
       mark_read: z.coerce.boolean().optional(),
-      max_content_length: z.coerce.number().optional().describe("Truncate each message content to N chars (adds truncated:true flag)"),
+      max_content_length: z.coerce.number().optional().describe("Deprecated compatibility alias; channel collections are always preview-only"),
+      preview_bytes: z.coerce.number().optional().describe("Maximum bytes per redacted preview (hard-capped by the server)"),
+      max_bytes: z.coerce.number().optional().describe("Maximum bytes for the entire response envelope"),
+      timeout_ms: z.coerce.number().optional().describe("Maximum collection-query time in milliseconds (hard-capped by the server)"),
       threads_only: z.coerce.boolean().optional().describe("Only return root messages (hides thread replies)"),
       include_reply_counts: z.coerce.boolean().optional().describe("Include reply_count on each message"),
       latest: z.coerce.number().optional().describe("Return the N most recent messages, newest first"),
       cursor: z.coerce.number().optional().describe("Alias for offset pagination"),
-      verbose: z.coerce.boolean().optional().describe("Return full raw message records instead of compact previews"),
+      verbose: z.coerce.boolean().optional().describe("Deprecated compatibility flag; channel collections remain preview-only"),
     },
   }, async (args: Record<string, any>) => {
     const store = getStore();
     const { channel, from: fromParam, since, limit, mark_read, max_content_length, threads_only, include_reply_counts, latest } = args;
-    const window = resolveMcpWindow(args);
-    const verbose = args.verbose === true;
-    const messages = await store.readMessages({
+    const page = await store.readMessagePreviews({
       channel,
       since,
-      limit: verbose ? limit : window.limit + 1,
-      offset: verbose ? args.cursor : window.offset,
-      max_content_length: verbose ? max_content_length : undefined,
+      limit,
+      offset: args.cursor,
+      preview_bytes: args.preview_bytes ?? max_content_length,
+      max_bytes: args.max_bytes,
+      timeout_ms: args.timeout_ms,
       threads_only,
       include_reply_counts,
       latest,
     });
-    const visible = verbose ? messages : messages.slice(0, window.limit);
 
-    if (mark_read !== false && visible.length > 0) {
-      await store.markReadByIds(visible.map((m) => m.id));
-    }
-
-    // Record per-agent read receipts for all channel messages
-    if (fromParam && visible.length > 0) {
+    if (mark_read === true && page.messages.length > 0) {
       const agent = resolveIdentity(fromParam);
-      await store.recordReadReceiptsBatch(visible.map((m) => m.id), agent);
-      await store.markChannelNotificationsRead(agent, visible.map((m) => m.id));
+      const ids = page.messages.map((message) => message.id);
+      await store.markReadByIds(ids, agent);
+      if (fromParam) {
+        await store.recordReadReceiptsBatch(ids, agent);
+        await store.markChannelNotificationsRead(agent, ids);
+      }
     }
 
     return {
-      content: [{ type: "text", text: jsonText(verbose ? messages : compactQueriedMessages(messages, args)) }],
+      content: [{ type: "text", text: jsonText(page) }],
     };
   });
 
@@ -429,8 +430,8 @@ export function registerChannelTools(server: McpServer): void {
     const { channel, since, limit } = args;
     const sinceTs = since ?? new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
-    // Newest-first window through the Store (no direct sqlite).
-    const rows = await store.readMessages({ channel, since: sinceTs, latest: limit ?? 100 });
+    // Newest-first bounded projection through the Store (no full bodies).
+    const rows = (await store.readMessagePreviews({ channel, since: sinceTs, latest: limit ?? 100 })).messages;
     const total = rows.length;
 
     if (total === 0) {
@@ -448,10 +449,10 @@ export function registerChannelTools(server: McpServer): void {
       agents.add(from);
       agentCounts[from] = (agentCounts[from] ?? 0) + 1;
       if (m.blocking) {
-        blockers.push({ id: m.id, from, content: m.content.slice(0, 150), created_at: m.created_at });
+        blockers.push({ id: m.id, from, content: m.preview.slice(0, 150), created_at: m.created_at });
       }
       // Count @mentions
-      const mentionedAgents = m.content.match(/@([a-zA-Z0-9_-]+)/g) ?? [];
+      const mentionedAgents = m.preview.match(/@([a-zA-Z0-9_-]+)/g) ?? [];
       for (const mention of mentionedAgents) {
         const a = mention.slice(1).toLowerCase();
         mentions[a] = (mentions[a] ?? 0) + 1;
@@ -480,7 +481,7 @@ export function registerChannelTools(server: McpServer): void {
     if (highPri.length > 0) {
       parts.push(`\n🔴 High priority (${highPri.length}):`);
       for (const m of highPri) {
-        parts.push(`  • [${m.priority}] ${m.from_agent}: ${m.content.slice(0, 100)}`);
+        parts.push(`  • [${m.priority}] ${m.from_agent}: ${m.preview.slice(0, 100)}`);
       }
     }
 

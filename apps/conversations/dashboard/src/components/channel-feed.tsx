@@ -96,7 +96,7 @@ export function ChannelFeed({ channelName, onBack }: ChannelFeedProps) {
                 )}
               </div>
               <div className="text-sm pl-8">
-                <Markdown>{msg.content}</Markdown>
+                <Markdown>{msg.preview}</Markdown>
               </div>
             </article>
           ))}

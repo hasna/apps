@@ -25,6 +25,7 @@ import { version as pkgVersion } from "../../package.json";
 import { openapiSpec } from "./openapi.js";
 import { normalizeChannelName } from "../lib/channel-names.js";
 import { extractTopics } from "../lib/topic-extract.js";
+import { buildMessagePreview as buildChannelNotificationPreview } from "../lib/channel-notifications.js";
 import {
   IncidentProjectionConflictError,
   IncidentProjectionValidationError,
@@ -38,6 +39,18 @@ import {
   getIncidentProjectionPg,
 } from "./incident-projections.js";
 import type { IncidentProjectionRequestV1, IncidentProjectorContext } from "../types.js";
+import {
+  COLLECTION_PREVIEW_SCAN_CHARS,
+  RESTRICTED_CHANNEL_PREVIEW,
+  buildMessagePreview as buildCollectionMessagePreview,
+  packMessagePreviewPage,
+  redactSensitiveText,
+  resolveCollectionLimit,
+  resolveCollectionMaxBytes,
+  resolveCollectionOffset,
+  resolveCollectionPreviewBytes,
+  resolveCollectionTimeoutMs,
+} from "../lib/message-previews.js";
 
 export const APP = "conversations";
 const SCOPE_READ = `${APP}:read`;
@@ -303,6 +316,65 @@ function clampLimit(raw: string | null, def = 50, max = 500): number {
   let n = parseInt(raw || String(def), 10);
   if (!Number.isFinite(n) || n <= 0) n = def;
   return Math.min(n, max);
+}
+
+function restrictedMessagePredicatePg(alias = ""): string {
+  const c = alias ? `${alias}.` : "";
+  return `(lower(COALESCE(${c}channel, '')) LIKE '%incident%' OR lower(COALESCE(${c}channel, '')) LIKE '%security%' OR lower(COALESCE(${c}to_agent, '')) LIKE '%incident%' OR lower(COALESCE(${c}to_agent, '')) LIKE '%security%' OR lower(COALESCE(${c}session_id, '')) LIKE '%incident%' OR lower(COALESCE(${c}session_id, '')) LIKE '%security%')`;
+}
+
+function messagePreviewProjectionPg(alias = ""): string {
+  const c = alias ? `${alias}.` : "";
+  const restricted = restrictedMessagePredicatePg(alias);
+  return `${c}id, ${c}uuid, ${c}session_id, ${c}from_agent, ${c}to_agent, ${c}channel, ${c}project_id,
+          ${c}priority, ${c}blocking, ${c}reply_to, ${c}working_dir, ${c}repository, ${c}branch,
+          ${c}created_at, ${c}read_at, ${c}edited_at, ${c}pinned_at,
+          CASE WHEN ${c}metadata IS NULL OR ${c}metadata = '' THEN FALSE ELSE TRUE END AS has_metadata,
+          CASE WHEN ${c}attachments IS NULL OR ${c}attachments = '' THEN 0 ELSE jsonb_array_length(${c}attachments::jsonb) END AS attachment_count,
+          CASE WHEN ${restricted} THEN '' ELSE left(${c}content, ${COLLECTION_PREVIEW_SCAN_CHARS}) END AS preview_source,
+          octet_length(${c}content) AS content_bytes`;
+}
+
+function collectionReadOptions(url: URL): {
+  limit: number;
+  offset: number;
+  maxBytes: number;
+  previewBytes: number;
+  timeoutMs: number;
+} {
+  try {
+    return {
+      limit: resolveCollectionLimit(url.searchParams.get("limit")),
+      offset: resolveCollectionOffset(url.searchParams.get("offset") ?? url.searchParams.get("cursor")),
+      maxBytes: resolveCollectionMaxBytes(url.searchParams.get("max_bytes")),
+      previewBytes: resolveCollectionPreviewBytes(url.searchParams.get("preview_bytes")),
+      timeoutMs: resolveCollectionTimeoutMs(url.searchParams.get("timeout_ms")),
+    };
+  } catch (error) {
+    throw new ApiRequestValidationError(error instanceof Error ? error.message : String(error));
+  }
+}
+
+function analyticsReadOptions(url: URL): { limit: number; timeoutMs: number } {
+  try {
+    return {
+      limit: resolveCollectionLimit(url.searchParams.get("limit") ?? 100),
+      timeoutMs: resolveCollectionTimeoutMs(url.searchParams.get("timeout_ms")),
+    };
+  } catch (error) {
+    throw new ApiRequestValidationError(error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function boundedCollectionQuery<T>(
+  client: PoolQueryClient,
+  timeoutMs: number,
+  query: (tx: TypedQueryClient) => Promise<T>,
+): Promise<T> {
+  return client.transaction(async (tx) => {
+    await tx.execute(`SET LOCAL statement_timeout = ${Math.max(1, Math.floor(timeoutMs))}`);
+    return query(tx);
+  });
 }
 
 /** Truthy query-param check: "true", "1", "yes" all count. */
@@ -837,9 +909,7 @@ async function handleV1(
       return json({ error: "blocker agent must match the authenticated agent" }, 403);
     }
     const who = agent;
-    const limit = clampLimit(url.searchParams.get("limit"), 50, 500);
-    const offsetRaw = Number(url.searchParams.get("offset") ?? 0);
-    const offset = Number.isSafeInteger(offsetRaw) && offsetRaw > 0 ? offsetRaw : 0;
+    const collection = collectionReadOptions(url);
     let projector: IncidentProjectorContext | null;
     try {
       projector = await requireIncidentBlockerContext(client, deps.incidentProjector);
@@ -849,7 +919,7 @@ async function handleV1(
       }
       throw error;
     }
-    const rows = await client.many<Record<string, unknown>>(
+    const rows = await boundedCollectionQuery(client, collection.timeoutMs, (tx) => tx.many<Record<string, unknown>>(
       `WITH member_channel_scopes(scope) AS (
          SELECT 'channel:' || lower(channel)
          FROM channel_members
@@ -928,11 +998,16 @@ async function handleV1(
        eligible_ids AS (
          SELECT id FROM projected_ids UNION SELECT id FROM legacy_ids
        )
-       SELECT m.* FROM messages m JOIN eligible_ids eligible ON eligible.id = m.id
+       SELECT ${messagePreviewProjectionPg("m")} FROM messages m JOIN eligible_ids eligible ON eligible.id = m.id
        ORDER BY m.created_at ASC, m.id ASC LIMIT $4 OFFSET $5`,
-      [projector?.tenant_id ?? null, projector?.authority_id ?? null, who, limit, offset],
-    );
-    return json({ messages: rows.map(parseServerMessage) });
+      [projector?.tenant_id ?? null, projector?.authority_id ?? null, who, collection.limit + 1, collection.offset],
+    ));
+    return json(packMessagePreviewPage(rows.map((row) => buildCollectionMessagePreview(row, collection.previewBytes)), {
+      limit: collection.limit,
+      cursor: collection.offset,
+      max_bytes: collection.maxBytes,
+      timeout_ms: collection.timeoutMs,
+    }));
   }
 
   if (sub === "messages" && method === "GET") {
@@ -942,21 +1017,23 @@ async function handleV1(
     const session = str(url.searchParams.get("session")) ?? str(url.searchParams.get("session_id"));
     const projectId = str(url.searchParams.get("project_id"));
     const since = str(url.searchParams.get("since"));
+    const idRaw = str(url.searchParams.get("id"));
+    const replyToRaw = str(url.searchParams.get("reply_to"));
     const sinceIdRaw = str(url.searchParams.get("since_id"));
     const q = str(url.searchParams.get("q"));
     const uuid = str(url.searchParams.get("uuid"));
     const mentionsOnly = str(url.searchParams.get("mentions_only"));
     const unreadOnly = isTrue(url.searchParams.get("unread_only"));
     const threadsOnly = isTrue(url.searchParams.get("threads_only"));
+    const pinnedOnly = isTrue(url.searchParams.get("pinned_only"));
     const includeReplyCounts = isTrue(url.searchParams.get("include_reply_counts"));
+    const detail = str(url.searchParams.get("detail"));
     // Default DESC (newest first) preserves the original behaviour; ?order=asc
     // gives chronological order for read_channel-style paging.
     const order = str(url.searchParams.get("order"))?.toLowerCase() === "asc" ? "ASC" : "DESC";
-    const limit = clampLimit(url.searchParams.get("limit"));
-    const offsetRaw = parseInt(url.searchParams.get("offset") || url.searchParams.get("cursor") || "0", 10);
-    const offset = Number.isFinite(offsetRaw) && offsetRaw > 0 ? offsetRaw : 0;
     const clauses: string[] = [];
     const params: unknown[] = [];
+    if (idRaw && Number.isSafeInteger(Number(idRaw)) && Number(idRaw) > 0) { params.push(Number(idRaw)); clauses.push(`id = $${params.length}`); }
     if (to) { params.push(to); clauses.push(`to_agent = $${params.length}`); }
     if (from) { params.push(from); clauses.push(`from_agent = $${params.length}`); }
     if (channel) { params.push(channel); clauses.push(`channel = $${params.length}`); }
@@ -972,32 +1049,48 @@ async function handleV1(
     }
     if (unreadOnly) clauses.push(`read_at IS NULL`);
     if (threadsOnly) clauses.push(`reply_to IS NULL`);
+    if (replyToRaw && Number.isSafeInteger(Number(replyToRaw)) && Number(replyToRaw) > 0) { params.push(Number(replyToRaw)); clauses.push(`reply_to = $${params.length}`); }
+    if (pinnedOnly) clauses.push(`pinned_at IS NOT NULL`);
     if (isTrue(url.searchParams.get("blocking_only"))) clauses.push(`blocking = true`);
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
     // count=1 → authoritative total (honours the same filters). Lets callers
     // verify backfill parity from the API without paging through every row.
     if (str(url.searchParams.get("count"))) {
-      const row = await client.get<{ n: string | number }>(
+      let timeoutMs: number;
+      try {
+        timeoutMs = resolveCollectionTimeoutMs(url.searchParams.get("timeout_ms"));
+      } catch (error) {
+        throw new ApiRequestValidationError(error instanceof Error ? error.message : String(error));
+      }
+      const row = await boundedCollectionQuery(client, timeoutMs, (tx) => tx.get<{ n: string | number }>(
         `SELECT count(*)::bigint AS n FROM messages ${where}`,
         params,
-      );
+      ));
       return json({ count: Number(row?.n ?? 0) });
     }
+    const collection = collectionReadOptions(url);
     const replyCountSelect = includeReplyCounts
       ? `, (SELECT count(*) FROM messages r WHERE r.reply_to = messages.id)::int AS reply_count`
       : "";
-    params.push(limit);
+
+    if (detail === "full") return json({ error: "Full collection reads are disabled; use GET /v1/messages/{id} for one exact message" }, 400);
+
+    params.push(collection.limit + 1);
     const limitIdx = params.length;
-    params.push(offset);
+    params.push(collection.offset);
     const offsetIdx = params.length;
-    const rows = await client.many(
-      `SELECT id, uuid, session_id, from_agent, to_agent, channel, project_id, content, priority,
-              blocking, reply_to, working_dir, repository, branch, metadata, edited_at, pinned_at,
-              attachments, created_at, read_at${replyCountSelect}
+    const rows = await boundedCollectionQuery(client, collection.timeoutMs, (tx) => tx.many<Record<string, unknown>>(
+      `SELECT ${messagePreviewProjectionPg()}${replyCountSelect}
        FROM messages ${where} ORDER BY created_at ${order}, id ${order} LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
       params,
-    );
-    return json({ messages: rows });
+    ));
+    return json(packMessagePreviewPage(rows.map((row) => buildCollectionMessagePreview(row, collection.previewBytes)), {
+      limit: collection.limit,
+      cursor: collection.offset,
+      max_bytes: collection.maxBytes,
+      timeout_ms: collection.timeoutMs,
+      query: q,
+    }));
   }
 
   // ---- mark messages read (per-agent receipts + global read_at) ----
@@ -1152,27 +1245,28 @@ async function handleV1(
 
   // ---- pinned messages ----
   if (sub === "messages/pinned" && method === "GET") {
+    const collection = collectionReadOptions(url);
     const channel = str(url.searchParams.get("channel"));
     const session = str(url.searchParams.get("session")) ?? str(url.searchParams.get("session_id"));
-    const limit = clampLimit(url.searchParams.get("limit"));
-    const offsetRaw = parseInt(url.searchParams.get("offset") || "0", 10);
-    const offset = Number.isFinite(offsetRaw) && offsetRaw > 0 ? offsetRaw : 0;
     const clauses = ["pinned_at IS NOT NULL"];
     const params: unknown[] = [];
     if (channel) { params.push(channel); clauses.push(`channel = $${params.length}`); }
     if (session) { params.push(session); clauses.push(`session_id = $${params.length}`); }
-    params.push(limit);
+    params.push(collection.limit + 1);
     const limitIdx = params.length;
-    params.push(offset);
+    params.push(collection.offset);
     const offsetIdx = params.length;
-    const rows = await client.many(
-      `SELECT id, uuid, session_id, from_agent, to_agent, channel, project_id, content, priority,
-              blocking, reply_to, working_dir, repository, branch, metadata, edited_at, pinned_at,
-              attachments, created_at, read_at
-       FROM messages WHERE ${clauses.join(" AND ")} ORDER BY pinned_at DESC LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+    const rows = await boundedCollectionQuery(client, collection.timeoutMs, (tx) => tx.many<Record<string, unknown>>(
+      `SELECT ${messagePreviewProjectionPg()}
+       FROM messages WHERE ${clauses.join(" AND ")} ORDER BY pinned_at DESC, id DESC LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
       params,
-    );
-    return json({ messages: rows });
+    ));
+    return json(packMessagePreviewPage(rows.map((row) => buildCollectionMessagePreview(row, collection.previewBytes)), {
+      limit: collection.limit,
+      cursor: collection.offset,
+      max_bytes: collection.maxBytes,
+      timeout_ms: collection.timeoutMs,
+    }));
   }
 
   // ---- export messages (json|csv) ----
@@ -1212,6 +1306,7 @@ async function handleV1(
 
   // ---- messages that @mention an agent ----
   if (sub === "messages/for-agent" && method === "GET") {
+    const collection = collectionReadOptions(url);
     const who = str(url.searchParams.get("agent"));
     if (!who) return json({ error: "agent is required" }, 400);
     const clauses = ["mm.mentioned_agent = $1"];
@@ -1219,20 +1314,23 @@ async function handleV1(
     const channel = str(url.searchParams.get("channel"));
     if (channel) { params.push(normalizeChannelName(channel)); clauses.push(`m.channel = $${params.length}`); }
     if (isTrue(url.searchParams.get("unread_only"))) clauses.push(`mm.notified_at IS NULL`);
-    const limit = clampLimit(url.searchParams.get("limit"), 50, 1000);
-    params.push(limit);
-    const rows = await client.many<Record<string, unknown>>(
-      `SELECT m.*, mm.id AS mention_id FROM messages m
+    params.push(collection.limit + 1);
+    const limitIdx = params.length;
+    params.push(collection.offset);
+    const offsetIdx = params.length;
+    const rows = await boundedCollectionQuery(client, collection.timeoutMs, (tx) => tx.many<Record<string, unknown>>(
+      `SELECT ${messagePreviewProjectionPg("m")}, mm.id AS mention_id FROM messages m
        JOIN message_mentions mm ON mm.message_id = m.id
        WHERE ${clauses.join(" AND ")}
-       ORDER BY m.created_at DESC LIMIT $${params.length}`,
+       ORDER BY m.created_at DESC, m.id DESC LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
       params,
-    );
-    const items = rows.map((r) => {
-      const { mention_id, ...rest } = r as Record<string, unknown> & { mention_id: number };
-      return { message: parseServerMessage(rest), mention_id: Number(mention_id) };
-    });
-    return json({ items });
+    ));
+    return json(packMessagePreviewPage(rows.map((row) => buildCollectionMessagePreview(row, collection.previewBytes)), {
+      limit: collection.limit,
+      cursor: collection.offset,
+      max_bytes: collection.maxBytes,
+      timeout_ms: collection.timeoutMs,
+    }));
   }
 
   if (sub === "messages" && method === "POST") {
@@ -1493,11 +1591,18 @@ async function handleV1(
   const replyMatch = sub.match(/^messages\/(\d+)\/replies$/);
   if (replyMatch && method === "GET") {
     const id = Number(replyMatch[1]);
-    const rows = await client.many(
-      `SELECT * FROM messages WHERE reply_to = $1 ORDER BY created_at ASC, id ASC`,
-      [id],
-    );
-    return json({ messages: rows });
+    const collection = collectionReadOptions(url);
+    const rows = await boundedCollectionQuery(client, collection.timeoutMs, (tx) => tx.many<Record<string, unknown>>(
+      `SELECT ${messagePreviewProjectionPg()} FROM messages WHERE reply_to = $1
+       ORDER BY created_at ASC, id ASC LIMIT $2 OFFSET $3`,
+      [id, collection.limit + 1, collection.offset],
+    ));
+    return json(packMessagePreviewPage(rows.map((row) => buildCollectionMessagePreview(row, collection.previewBytes)), {
+      limit: collection.limit,
+      cursor: collection.offset,
+      max_bytes: collection.maxBytes,
+      timeout_ms: collection.timeoutMs,
+    }));
   }
 
   // ---- per-message read status (channel members who have/haven't read) ----
@@ -1961,18 +2066,12 @@ async function handleV1(
 
 // ---- channel notifications router -------------------------------------------
 
-function buildMessagePreview(content: string, maxChars = 140): string {
-  const normalized = content.replace(/[*#`~_>\-]/g, " ").replace(/\s+/g, " ").trim();
-  if (normalized.length <= maxChars) return normalized;
-  return normalized.slice(0, Math.max(1, maxChars)).trimEnd() + "…";
-}
-
 async function handleChannelNotifications(
   sub: string,
   method: string,
   req: Request,
   url: URL,
-  client: TypedQueryClient,
+  client: PoolQueryClient,
   agent: string | null,
 ): Promise<Response | null> {
   if (sub !== "channel-notifications" && !sub.startsWith("channel-notifications/")) return null;
@@ -2033,31 +2132,55 @@ async function handleChannelNotifications(
     if (since) { params.push(since); clauses.push(`m.created_at > $${params.length}`); }
     // Default filters to unread unless explicitly unread_only=false (matches local).
     if (url.searchParams.get("unread_only") !== "false") clauses.push("snr.message_id IS NULL");
-    const limit = clampLimit(url.searchParams.get("limit"), 20, 500);
-    const rows = await client.many<{
+    const collection = collectionReadOptions(url);
+    const restricted = restrictedMessagePredicatePg("m");
+    params.push(collection.limit + 1);
+    const limitIdx = params.length;
+    params.push(collection.offset);
+    const offsetIdx = params.length;
+    const rows = await boundedCollectionQuery(client, collection.timeoutMs, (tx) => tx.many<{
       message_id: number; channel: string; from_agent: string; created_at: string;
-      priority: string; content: string; attachments: string | null; preview_chars: number; read_message_id: number | null;
+      priority: string; preview_source: string; attachment_count: number; preview_chars: number; read_message_id: number | null;
     }>(
-      `SELECT m.id AS message_id, m.channel, m.from_agent, m.created_at, m.priority, m.content, m.attachments,
+      `SELECT m.id AS message_id, m.channel, m.from_agent, m.created_at, m.priority,
+              CASE WHEN ${restricted} THEN '${RESTRICTED_CHANNEL_PREVIEW}' ELSE left(m.content, ${COLLECTION_PREVIEW_SCAN_CHARS}) END AS preview_source,
+              CASE WHEN m.attachments IS NULL OR m.attachments = '' THEN 0 ELSE jsonb_array_length(m.attachments::jsonb) END AS attachment_count,
               s.preview_chars, snr.message_id AS read_message_id
        FROM messages m
        INNER JOIN channel_subscriptions s ON s.channel = m.channel
        LEFT JOIN channel_notification_reads snr ON snr.message_id = m.id AND snr.agent = s.agent
        WHERE ${clauses.join(" AND ")}
-       ORDER BY m.created_at DESC, m.id DESC LIMIT ${limit}`,
+       ORDER BY m.created_at DESC, m.id DESC LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
       params,
-    );
-    const notifications = rows.map((r) => ({
+    ));
+    const candidates = rows.slice(0, collection.limit).map((r) => ({
       message_id: Number(r.message_id),
       channel: r.channel,
       from_agent: r.from_agent,
       created_at: r.created_at,
       priority: r.priority,
-      preview: buildMessagePreview(r.content, Number(r.preview_chars ?? 140)),
+      preview: buildChannelNotificationPreview(r.preview_source, Math.min(Number(r.preview_chars ?? 140), collection.previewBytes)),
       unread: r.read_message_id == null,
-      has_attachments: !!r.attachments && r.attachments !== "[]",
+      has_attachments: Number(r.attachment_count) > 0,
     }));
-    return json({ notifications });
+    const notifications: typeof candidates = [];
+    for (const candidate of candidates) {
+      const envelope = { notifications: [...notifications, candidate] };
+      if (Buffer.byteLength(JSON.stringify(envelope), "utf8") > collection.maxBytes) break;
+      notifications.push(candidate);
+    }
+    const skipped = notifications.length === 0 && candidates.length > 0 ? 1 : 0;
+    const consumed = notifications.length + skipped;
+    const hasMore = rows.length > consumed;
+    return json({
+      notifications,
+      count: notifications.length,
+      cursor: collection.offset,
+      next_cursor: hasMore || skipped > 0 ? collection.offset + consumed : null,
+      has_more: hasMore,
+      skipped_count: skipped,
+      max_bytes: collection.maxBytes,
+    });
   }
 
   if (sub === "channel-notifications/read" && method === "POST") {
@@ -2733,7 +2856,7 @@ async function handleAnalytics(
   method: string,
   req: Request,
   url: URL,
-  client: TypedQueryClient,
+  client: PoolQueryClient,
 ): Promise<Response | null> {
   // ---- sessions ----
   if (sub === "sessions" && method === "GET") {
@@ -2818,39 +2941,45 @@ async function handleAnalytics(
   const topicChannelMatch = sub.match(/^topics\/channel\/([^/]+)$/);
   if (topicChannelMatch && method === "GET") {
     const channel = normalizeChannelName(decodeURIComponent(topicChannelMatch[1]));
-    const limit = clampLimit(url.searchParams.get("limit"), 100, 1000);
+    const collection = analyticsReadOptions(url);
     const since = str(url.searchParams.get("since"));
     const params: unknown[] = [channel];
     let sinceClause = "";
     if (since) { params.push(since); sinceClause = `AND created_at > $${params.length}`; }
-    const rows = await client.many<{ content: string }>(
-      `SELECT content FROM messages WHERE channel = $1 ${sinceClause} ORDER BY created_at DESC LIMIT ${limit}`,
+    params.push(collection.limit);
+    const rows = await boundedCollectionQuery(client, collection.timeoutMs, (tx) => tx.many<{ preview_source: string }>(
+      `SELECT CASE WHEN ${restrictedMessagePredicatePg()} THEN '' ELSE left(content, ${COLLECTION_PREVIEW_SCAN_CHARS}) END AS preview_source
+       FROM messages WHERE channel = $1 ${sinceClause} ORDER BY created_at DESC LIMIT $${params.length}`,
       params,
-    );
-    return json({ topics: extractTopics(rows.map((r) => r.content).join("\n"), 15) });
+    ));
+    return json({ topics: extractTopics(rows.map((r) => redactSensitiveText(r.preview_source)).join("\n"), 15) });
   }
   const topicSessionMatch = sub.match(/^topics\/session\/([^/]+)$/);
   if (topicSessionMatch && method === "GET") {
     const sid = decodeURIComponent(topicSessionMatch[1]);
-    const limit = clampLimit(url.searchParams.get("limit"), 100, 1000);
-    const rows = await client.many<{ content: string }>(
-      `SELECT content FROM messages WHERE session_id = $1 ORDER BY created_at DESC LIMIT ${limit}`,
-      [sid],
-    );
-    return json({ topics: extractTopics(rows.map((r) => r.content).join("\n"), 15) });
+    const collection = analyticsReadOptions(url);
+    const rows = await boundedCollectionQuery(client, collection.timeoutMs, (tx) => tx.many<{ preview_source: string }>(
+      `SELECT CASE WHEN ${restrictedMessagePredicatePg()} THEN '' ELSE left(content, ${COLLECTION_PREVIEW_SCAN_CHARS}) END AS preview_source
+       FROM messages WHERE session_id = $1 ORDER BY created_at DESC LIMIT $2`,
+      [sid, collection.limit],
+    ));
+    return json({ topics: extractTopics(rows.map((r) => redactSensitiveText(r.preview_source)).join("\n"), 15) });
   }
   if (sub === "topics/trending" && method === "GET") {
     const hours = Number(str(url.searchParams.get("hours")) ?? "24") || 24;
-    const topN = Number(str(url.searchParams.get("top_n")) ?? "20") || 20;
+    const topN = Math.min(Math.max(1, Number(str(url.searchParams.get("top_n")) ?? "20") || 20), 100);
+    const collection = analyticsReadOptions(url);
     const projectId = str(url.searchParams.get("project_id"));
     const params: unknown[] = [];
     let where = `WHERE created_at > NOW() - interval '${Math.floor(hours)} hours'`;
     if (projectId) { params.push(projectId); where += ` AND project_id = $${params.length}`; }
-    const rows = await client.many<{ content: string }>(
-      `SELECT content FROM messages ${where} ORDER BY created_at DESC LIMIT 500`,
+    params.push(collection.limit);
+    const rows = await boundedCollectionQuery(client, collection.timeoutMs, (tx) => tx.many<{ preview_source: string }>(
+      `SELECT CASE WHEN ${restrictedMessagePredicatePg()} THEN '' ELSE left(content, ${COLLECTION_PREVIEW_SCAN_CHARS}) END AS preview_source
+       FROM messages ${where} ORDER BY created_at DESC LIMIT $${params.length}`,
       params,
-    );
-    return json({ topics: extractTopics(rows.map((r) => r.content).join("\n"), topN) });
+    ));
+    return json({ topics: extractTopics(rows.map((r) => redactSensitiveText(r.preview_source)).join("\n"), topN) });
   }
 
   // ---- graph ----
@@ -2932,26 +3061,27 @@ async function handleAnalytics(
   const summaryMatch = sub.match(/^summary\/([^/]+)$/);
   if (summaryMatch && method === "GET") {
     const key = decodeURIComponent(summaryMatch[1]);
-    const limit = clampLimit(url.searchParams.get("limit"), 50, 1000);
+    const collection = collectionReadOptions(url);
     const isChannelRow = key.startsWith("channel:") ? true : Boolean(await client.get(`SELECT 1 FROM channels WHERE name = $1`, [key]));
     const filterCol = isChannelRow ? "channel" : "session_id";
-    const rows = await client.many<Record<string, unknown>>(
-      `SELECT * FROM messages WHERE ${filterCol} = $1 ORDER BY created_at DESC LIMIT ${limit}`,
-      [key],
-    );
+    const rows = await boundedCollectionQuery(client, collection.timeoutMs, (tx) => tx.many<Record<string, unknown>>(
+      `SELECT ${messagePreviewProjectionPg()} FROM messages WHERE ${filterCol} = $1
+       ORDER BY created_at DESC, id DESC LIMIT $2`,
+      [key, collection.limit],
+    ));
     if (rows.length === 0) return json({ summary: null });
-    const msgs = rows.map(parseServerMessage);
+    const msgs = rows.map((row) => buildCollectionMessagePreview(row, collection.previewBytes));
     const agents = new Set<string>();
     for (const m of msgs) { agents.add(String(m.from_agent)); if (m.to_agent) agents.add(String(m.to_agent)); }
     const dates = msgs.map((m) => String(m.created_at)).sort();
-    const topics = extractTopics(msgs.map((m) => String(m.content)).join("\n"), 10);
+    const topics = extractTopics(msgs.map((m) => m.preview).join("\n"), 10);
     const keyMessages: Array<{ id: number; from: string; content: string; reason: string }> = [];
     for (const m of msgs) {
       const p = String(m.priority);
-      if (p === "high" || p === "urgent") keyMessages.push({ id: Number(m.id), from: String(m.from_agent), content: String(m.content).slice(0, 200), reason: `${p} priority` });
-      if (m.blocking) keyMessages.push({ id: Number(m.id), from: String(m.from_agent), content: String(m.content).slice(0, 200), reason: "blocking message" });
+      if (p === "high" || p === "urgent") keyMessages.push({ id: Number(m.id), from: String(m.from_agent), content: m.preview.slice(0, 200), reason: `${p} priority` });
+      if (m.blocking) keyMessages.push({ id: Number(m.id), from: String(m.from_agent), content: m.preview.slice(0, 200), reason: "blocking message" });
     }
-    for (const m of msgs) if (m.pinned_at) keyMessages.push({ id: Number(m.id), from: String(m.from_agent), content: String(m.content).slice(0, 200), reason: "pinned" });
+    for (const m of msgs) if (m.pinned_at) keyMessages.push({ id: Number(m.id), from: String(m.from_agent), content: m.preview.slice(0, 200), reason: "pinned" });
     const msgIds = msgs.map((m) => Number(m.id));
     if (msgIds.length > 0) {
       const reacted = await client.many<{ message_id: number; c: number }>(
@@ -2960,12 +3090,12 @@ async function handleAnalytics(
       );
       for (const r of reacted) {
         const m = msgs.find((x) => Number(x.id) === Number(r.message_id));
-        if (m) keyMessages.push({ id: Number(r.message_id), from: String(m.from_agent), content: String(m.content).slice(0, 200), reason: `${r.c} reaction(s)` });
+        if (m) keyMessages.push({ id: Number(r.message_id), from: String(m.from_agent), content: m.preview.slice(0, 200), reason: `${r.c} reaction(s)` });
       }
     }
     const seen = new Set<number>();
     const uniqueKey = keyMessages.filter((k) => (seen.has(k.id) ? false : (seen.add(k.id), true))).slice(0, 10);
-    const blockers = msgs.filter((m) => m.blocking && !m.read_at).map((m) => ({ id: Number(m.id), from: String(m.from_agent), content: String(m.content).slice(0, 200), created_at: m.created_at }));
+    const blockers = msgs.filter((m) => m.blocking && m.unread).map((m) => ({ id: Number(m.id), from: String(m.from_agent), content: m.preview.slice(0, 200), created_at: m.created_at }));
     const replyCount = msgs.filter((m) => m.reply_to).length;
     let reactionCount = 0;
     if (msgIds.length > 0) {

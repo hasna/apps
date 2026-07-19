@@ -6,6 +6,12 @@
 
 export interface Message { "id"?: number; "uuid"?: string; "session_id"?: string; "from_agent"?: string; "to_agent"?: string; "channel"?: string | null; "project_id"?: string | null; "content"?: string; "priority"?: string; "blocking"?: boolean; "reply_to"?: number | null; "working_dir"?: string | null; "repository"?: string | null; "branch"?: string | null; "metadata"?: Record<string, unknown> | null; "attachments"?: Array<Record<string, unknown>> | null; "created_at"?: string }
 
+export interface MessagePreview { "id": number; "uuid"?: string; "session_id": string; "from_agent": string; "to_agent": string; "channel": string | null; "project_id": string | null; "priority": "low" | "normal" | "high" | "urgent"; "working_dir": string | null; "repository": string | null; "branch": string | null; "created_at": string; "edited_at": string | null; "pinned_at": string | null; "unread": boolean; "blocking": boolean; "reply_to": number | null; "reply_count"?: number; "attachment_count": number; "has_attachments": boolean; "has_metadata": boolean; "preview": string; "preview_bytes": number; "content_bytes": number; "truncated": boolean; "redacted": boolean; "relevance_score"?: number }
+
+export interface MessagePreviewPage { "messages": Array<MessagePreview>; "count": number; "limit": number; "cursor": number; "next_cursor": number | null; "has_more": boolean; "skipped_count": number; "byte_length": number; "max_bytes": number; "timeout_ms": number; "compact": true; "detail_path": "messages/{id}"; "query"?: string }
+
+export interface MessageResponse { "message": Message }
+
 export interface Channel { "name"?: string; "description"?: string | null; "topic"?: string | null; "project_id"?: string | null; "created_by"?: string; "created_at"?: string; "archived_at"?: string | null }
 
 export interface Project { "id"?: string; "name"?: string; "description"?: string | null; "path"?: string | null; "repository"?: string | null; "created_by"?: string; "status"?: string; "created_at"?: string }
@@ -169,8 +175,8 @@ export class ConversationsClient {
       });
     }
 
-    /** List messages */
-    async listMessages(query?: { "to"?: string; "from"?: string; "channel"?: string; "session"?: string; "limit"?: number; "count"?: boolean }, init?: RequestInit): Promise<Record<string, unknown>> {
+    /** List bounded, redacted message previews */
+    async listMessages(query?: { "to"?: string; "from"?: string; "channel"?: string; "session"?: string; "limit"?: number; "offset"?: number; "order"?: "asc" | "desc"; "q"?: string; "unread_only"?: boolean; "threads_only"?: boolean; "pinned_only"?: boolean; "reply_to"?: number; "max_bytes"?: number; "preview_bytes"?: number; "timeout_ms"?: number }, init?: RequestInit): Promise<MessagePreviewPage> {
       return this.request("GET", `/v1/messages`, {
         body: undefined,
         query,
@@ -187,8 +193,8 @@ export class ConversationsClient {
       });
     }
 
-    /** List canonical current blockers visible to one agent */
-    async listUnreadBlockers(query?: { "agent": string; "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<Record<string, unknown>> {
+    /** List bounded, redacted current-blocker previews visible to one agent */
+    async listUnreadBlockers(query?: { "agent": string; "limit"?: number; "offset"?: number; "max_bytes"?: number; "preview_bytes"?: number; "timeout_ms"?: number }, init?: RequestInit): Promise<MessagePreviewPage> {
       return this.request("GET", `/v1/messages/blockers`, {
         body: undefined,
         query,
@@ -205,7 +211,8 @@ export class ConversationsClient {
       });
     }
 
-    async getMessage(id: number, init?: RequestInit): Promise<Record<string, unknown>> {
+    /** Get one exact full message */
+    async getMessage(id: number, init?: RequestInit): Promise<MessageResponse> {
       return this.request("GET", `/v1/messages/${encodeURIComponent(String(id))}`, {
         body: undefined,
         query: undefined,

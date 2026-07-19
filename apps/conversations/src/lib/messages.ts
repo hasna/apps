@@ -1,11 +1,31 @@
 import { getDb, getDataDir } from "./db.js";
-import type { Message, Attachment, SendMessageOptions, ReadMessagesOptions, SearchMessagesOptions, SearchResult } from "../types.js";
+import type {
+  Message,
+  Attachment,
+  SendMessageOptions,
+  ReadMessagesOptions,
+  ReadMessagePreviewsOptions,
+  SearchMessagesOptions,
+  SearchMessagePreviewsOptions,
+  SearchResult,
+  MessagePreview,
+  MessagePreviewPage,
+} from "../types.js";
 import { createHash, randomUUID } from "crypto";
 import { mkdirSync, copyFileSync, statSync, existsSync, realpathSync } from "fs";
 import { join, basename, resolve } from "path";
 import { fireWebhooks } from "./webhooks.js";
 import { normalizeChannelName } from "./channel-names.js";
 import { markChannelNotificationsRead } from "./channel-notifications.js";
+import {
+  COLLECTION_PREVIEW_SCAN_CHARS,
+  buildMessagePreview,
+  packMessagePreviewPage,
+  resolveCollectionLimit,
+  resolveCollectionOffset,
+  resolveCollectionPreviewBytes,
+  resolveCollectionTimeoutMs,
+} from "./message-previews.js";
 import {
   IncidentProjectorConfigurationError,
   metadataSpoofsIncidentProjection,
@@ -341,6 +361,76 @@ export function readMessages(opts: ReadMessagesOptions = {}): Message[] {
   return messages;
 }
 
+function previewProjectionColumns(alias = ""): string {
+  const c = alias ? `${alias}.` : "";
+  const restricted = `(lower(COALESCE(${c}channel, '')) LIKE '%incident%' OR lower(COALESCE(${c}channel, '')) LIKE '%security%' OR lower(COALESCE(${c}to_agent, '')) LIKE '%incident%' OR lower(COALESCE(${c}to_agent, '')) LIKE '%security%' OR lower(COALESCE(${c}session_id, '')) LIKE '%incident%' OR lower(COALESCE(${c}session_id, '')) LIKE '%security%')`;
+  return `${c}id, ${c}uuid, ${c}session_id, ${c}from_agent, ${c}to_agent, ${c}channel, ${c}project_id,
+          ${c}priority, ${c}blocking, ${c}reply_to, ${c}working_dir, ${c}repository, ${c}branch,
+          ${c}created_at, ${c}read_at, ${c}edited_at, ${c}pinned_at,
+          CASE WHEN ${c}metadata IS NULL OR ${c}metadata = '' THEN 0 ELSE 1 END AS has_metadata,
+          CASE WHEN json_valid(${c}attachments) THEN json_array_length(${c}attachments) ELSE 0 END AS attachment_count,
+          CASE WHEN ${restricted} THEN '' ELSE substr(${c}content, 1, ${COLLECTION_PREVIEW_SCAN_CHARS}) END AS preview_source,
+          length(CAST(${c}content AS BLOB)) AS content_bytes`;
+}
+
+function assertCollectionDeadline(startedAt: number, timeoutMs: number): void {
+  if (performance.now() - startedAt > timeoutMs) {
+    throw new Error(`message collection exceeded timeout_ms (${timeoutMs})`);
+  }
+}
+
+/**
+ * Bounded collection read used by CLI/MCP/audit surfaces. The SQL projection
+ * never selects the full content or raw metadata value into the caller.
+ */
+export function readMessagePreviews(opts: ReadMessagePreviewsOptions = {}): MessagePreviewPage {
+  const startedAt = performance.now();
+  const timeoutMs = resolveCollectionTimeoutMs(opts.timeout_ms);
+  const limit = resolveCollectionLimit(opts.latest ?? opts.limit);
+  const offset = resolveCollectionOffset(opts.offset);
+  const previewBytes = resolveCollectionPreviewBytes(opts.preview_bytes);
+  const db = getDb();
+  const conditions: string[] = [];
+  const params: (string | number)[] = [];
+
+  if (opts.id !== undefined) { conditions.push("id = ?"); params.push(opts.id); }
+  if (opts.session_id) { conditions.push("session_id = ?"); params.push(opts.session_id); }
+  if (opts.from) { conditions.push("from_agent = ?"); params.push(opts.from); }
+  if (opts.to) { conditions.push("to_agent = ?"); params.push(opts.to); }
+  if (opts.channel) { conditions.push("channel = ?"); params.push(normalizeChannelName(opts.channel)); }
+  if (opts.project_id) { conditions.push("project_id = ?"); params.push(opts.project_id); }
+  if (opts.since) { conditions.push("created_at > ?"); params.push(opts.since); }
+  if (opts.since_id !== undefined) { conditions.push("id > ?"); params.push(opts.since_id); }
+  if (opts.unread_only) conditions.push("read_at IS NULL");
+  if (opts.threads_only) conditions.push("reply_to IS NULL");
+  if (opts.reply_to !== undefined) { conditions.push("reply_to = ?"); params.push(opts.reply_to); }
+  if (opts.pinned_only) conditions.push("pinned_at IS NOT NULL");
+  if (opts.mentions_only) {
+    conditions.push("id IN (SELECT message_id FROM message_mentions WHERE mentioned_agent = ?)");
+    params.push(opts.mentions_only.toLowerCase());
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const order = opts.latest || opts.order?.toLowerCase() === "desc" ? "DESC" : "ASC";
+  const replyCountSelect = opts.include_reply_counts
+    ? ", (SELECT COUNT(*) FROM messages replies WHERE replies.reply_to = messages.id) AS reply_count"
+    : "";
+  const rows = db.prepare(
+    `SELECT ${previewProjectionColumns()}${replyCountSelect}
+     FROM messages ${where} ORDER BY created_at ${order}, id ${order} LIMIT ${limit + 1} OFFSET ${offset}`,
+  ).all(...params) as Record<string, unknown>[];
+  assertCollectionDeadline(startedAt, timeoutMs);
+  const previews = rows.map((row) => buildMessagePreview(row, previewBytes));
+  const page = packMessagePreviewPage(previews, {
+    limit,
+    cursor: offset,
+    max_bytes: opts.max_bytes,
+    timeout_ms: timeoutMs,
+  });
+  assertCollectionDeadline(startedAt, timeoutMs);
+  return page;
+}
+
 export interface CountMessagesOptions {
   session_id?: string;
   from?: string;
@@ -586,7 +676,7 @@ export const DEFAULT_DIGEST_MAX_BYTES = 8192;
 export const MIN_DIGEST_MAX_BYTES = 512;
 export const MAX_DIGEST_MAX_BYTES = 65536;
 export const DEFAULT_DIGEST_LIMIT = 200;
-export const MAX_DIGEST_LIMIT = 1000;
+export const MAX_DIGEST_LIMIT = 100;
 export const DEFAULT_DIGEST_SNIPPET_BYTES = 320;
 
 const DIGEST_ID_PLACEHOLDER = "0000000000000000";
@@ -638,24 +728,24 @@ function truncateUtf8(value: string, maxBytes: number): { text: string; truncate
   return { text: `${text}${suffix}`, truncated: true };
 }
 
-function makeDigestMessage(message: Message, snippetBytes: number): DigestMessage {
-  const normalized = normalizeSnippetText(message.content);
+function makeDigestMessage(message: MessagePreview, snippetBytes: number): DigestMessage {
+  const normalized = normalizeSnippetText(message.preview);
   const snippet = truncateUtf8(normalized, snippetBytes);
-  const attachmentCount = message.attachments?.length ?? 0;
+  const attachmentCount = message.attachment_count;
   return {
     id: message.id,
     from: message.from_agent,
     created_at: message.created_at,
     snippet: snippet.text,
     snippet_bytes: Buffer.byteLength(snippet.text, "utf8"),
-    truncated: snippet.truncated,
+    truncated: message.truncated || snippet.truncated,
     priority: message.priority,
     has_attachments: attachmentCount > 0,
     attachment_count: attachmentCount,
     channel: message.channel,
     to: message.to_agent,
     reply_to: message.reply_to,
-    unread: !message.read_at,
+    unread: message.unread,
   };
 }
 
@@ -732,7 +822,7 @@ function queryDigestMessages(opts: {
   project_id?: string;
   unread_only?: boolean;
   limit: number;
-}): Message[] {
+}): MessagePreview[] {
   const db = getDb();
   const conditions: string[] = [];
   const params: (string | number)[] = [];
@@ -748,9 +838,9 @@ function queryDigestMessages(opts: {
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
   const safeLimit = Math.max(1, Math.min(Math.floor(opts.limit), MAX_DIGEST_LIMIT));
   const rows = db.prepare(
-    `SELECT * FROM messages ${where} ORDER BY id ASC LIMIT ${safeLimit}`
+    `SELECT ${previewProjectionColumns()} FROM messages ${where} ORDER BY id ASC LIMIT ${safeLimit}`
   ).all(...params) as Record<string, unknown>[];
-  return rows.map(parseMessage);
+  return rows.map((row) => buildMessagePreview(row, DEFAULT_DIGEST_SNIPPET_BYTES));
 }
 
 function buildDigestResult(opts: {
@@ -853,7 +943,7 @@ export interface DigestAssembly {
 export function assembleDigest(
   norm: DigestNorm,
   counts: DigestCounts,
-  messages: Message[],
+  messages: MessagePreview[],
   markReadRequested: boolean,
 ): DigestAssembly {
   const build = (entries: DigestMessage[], extra: Partial<Parameters<typeof buildDigestResult>[0]> = {}): DigestResult =>
@@ -1118,7 +1208,11 @@ export function getPinnedMessages(opts?: { channel?: string; session_id?: string
   return rows.map(parseMessage);
 }
 
-export function getUnreadBlockers(agent: string, opts?: { limit?: number; offset?: number }): Message[] {
+function queryUnreadBlockerRows(
+  agent: string,
+  opts: { limit?: number; offset?: number } | undefined,
+  projection: "full" | "preview",
+): Record<string, unknown>[] {
   const db = getDb();
   const tenantId = process.env.HASNA_CONVERSATIONS_TENANT_ID?.trim();
   const authorityId = process.env.HASNA_CONVERSATIONS_INCIDENT_AUTHORITY_ID?.trim();
@@ -1147,7 +1241,8 @@ export function getUnreadBlockers(agent: string, opts?: { limit?: number; offset
     : 0;
   const limitClause = safeLimit > 0 ? `LIMIT ${safeLimit}` : safeOffset > 0 ? "LIMIT -1" : "";
   const offsetClause = safeOffset > 0 ? `OFFSET ${safeOffset}` : "";
-  const rows = db.prepare(`
+  const select = projection === "preview" ? previewProjectionColumns("m") : "m.*";
+  return db.prepare(`
     WITH member_channel_scopes(scope) AS (
       SELECT 'channel:' || lower(channel)
       FROM channel_members
@@ -1227,11 +1322,35 @@ export function getUnreadBlockers(agent: string, opts?: { limit?: number; offset
       UNION
       SELECT id FROM legacy_ids
     )
-    SELECT m.* FROM messages m JOIN eligible_ids eligible ON eligible.id = m.id
+    SELECT ${select} FROM messages m JOIN eligible_ids eligible ON eligible.id = m.id
     ORDER BY m.created_at ASC, m.id ASC
     ${limitClause} ${offsetClause}
   `).all(agent, agent, binding?.tenant_id ?? null, binding?.authority_id ?? null, agent, agent, agent, agent, agent) as Record<string, unknown>[];
-  return rows.map(parseMessage);
+}
+
+export function getUnreadBlockers(agent: string, opts?: { limit?: number; offset?: number }): Message[] {
+  return queryUnreadBlockerRows(agent, opts, "full").map(parseMessage);
+}
+
+export function getUnreadBlockerPreviews(
+  agent: string,
+  opts: { limit?: number; offset?: number; max_bytes?: number; preview_bytes?: number; timeout_ms?: number } = {},
+): MessagePreviewPage {
+  const startedAt = performance.now();
+  const timeoutMs = resolveCollectionTimeoutMs(opts.timeout_ms);
+  const limit = resolveCollectionLimit(opts.limit);
+  const offset = resolveCollectionOffset(opts.offset);
+  const previewBytes = resolveCollectionPreviewBytes(opts.preview_bytes);
+  const rows = queryUnreadBlockerRows(agent, { limit: limit + 1, offset }, "preview");
+  assertCollectionDeadline(startedAt, timeoutMs);
+  const page = packMessagePreviewPage(rows.map((row) => buildMessagePreview(row, previewBytes)), {
+    limit,
+    cursor: offset,
+    max_bytes: opts.max_bytes,
+    timeout_ms: timeoutMs,
+  });
+  assertCollectionDeadline(startedAt, timeoutMs);
+  return page;
 }
 
 export function getThreadReplies(messageId: number): Message[] {
@@ -1328,6 +1447,72 @@ export function searchMessages(opts: SearchMessagesOptions): SearchResult[] {
   return rows.map((row) => {
     const msg = parseMessage(row);
     return { ...msg, snippet: null, relevance_score: 0 };
+  });
+}
+
+/** Search equivalent of readMessagePreviews; FTS/LIKE run in SQLite but only a
+ * bounded, redacted snippet projection leaves the storage boundary. */
+export function searchMessagePreviews(opts: SearchMessagePreviewsOptions): MessagePreviewPage {
+  const startedAt = performance.now();
+  const timeoutMs = resolveCollectionTimeoutMs(opts.timeout_ms);
+  const limit = resolveCollectionLimit(opts.limit);
+  const offset = resolveCollectionOffset(opts.offset);
+  const previewBytes = resolveCollectionPreviewBytes(opts.preview_bytes);
+  const db = getDb();
+  const sortByRelevance = opts.sort !== "recent";
+
+  try {
+    const params: (string | number)[] = [];
+    const query = opts.query.trim();
+    const ftsQuery = query.startsWith('"') && query.endsWith('"')
+      ? query
+      : query.split(/\s+/).filter(Boolean).map((word) => `"${word.replace(/"/g, '""')}"`).join(" ");
+    params.push(ftsQuery);
+    const clauses: string[] = [];
+    if (opts.channel) { clauses.push("m.channel = ?"); params.push(normalizeChannelName(opts.channel)); }
+    if (opts.from) { clauses.push("m.from_agent = ?"); params.push(opts.from); }
+    if (opts.to) { clauses.push("m.to_agent = ?"); params.push(opts.to); }
+    if (opts.since) { clauses.push("m.created_at >= ?"); params.push(opts.since); }
+    if (opts.until) { clauses.push("m.created_at <= ?"); params.push(opts.until); }
+    const extra = clauses.length > 0 ? ` AND ${clauses.join(" AND ")}` : "";
+    const order = sortByRelevance ? "ORDER BY rank" : "ORDER BY m.created_at DESC, m.id DESC";
+    const rows = db.prepare(
+      `SELECT ${previewProjectionColumns("m")}, rank AS relevance_score
+       FROM messages m JOIN messages_fts ON messages_fts.rowid = m.id
+       WHERE messages_fts MATCH ?${extra} ${order} LIMIT ${limit + 1} OFFSET ${offset}`,
+    ).all(...params) as Record<string, unknown>[];
+    assertCollectionDeadline(startedAt, timeoutMs);
+    const page = packMessagePreviewPage(rows.map((row) => buildMessagePreview(row, previewBytes)), {
+      limit,
+      cursor: offset,
+      max_bytes: opts.max_bytes,
+      timeout_ms: timeoutMs,
+      query: opts.query,
+    });
+    assertCollectionDeadline(startedAt, timeoutMs);
+    return page;
+  } catch (error) {
+    if (error instanceof Error && (error.message.includes("max_bytes") || error.message.includes("timeout_ms") || error.message.includes("envelope exceeds"))) throw error;
+  }
+
+  const conditions: string[] = ["content LIKE ?"];
+  const params: (string | number)[] = [`%${opts.query}%`];
+  if (opts.channel) { conditions.push("channel = ?"); params.push(normalizeChannelName(opts.channel)); }
+  if (opts.from) { conditions.push("from_agent = ?"); params.push(opts.from); }
+  if (opts.to) { conditions.push("to_agent = ?"); params.push(opts.to); }
+  if (opts.since) { conditions.push("created_at >= ?"); params.push(opts.since); }
+  if (opts.until) { conditions.push("created_at <= ?"); params.push(opts.until); }
+  const rows = db.prepare(
+    `SELECT ${previewProjectionColumns()}, 0 AS relevance_score FROM messages
+     WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC, id DESC LIMIT ${limit + 1} OFFSET ${offset}`,
+  ).all(...params) as Record<string, unknown>[];
+  assertCollectionDeadline(startedAt, timeoutMs);
+  return packMessagePreviewPage(rows.map((row) => buildMessagePreview(row, previewBytes)), {
+    limit,
+    cursor: offset,
+    max_bytes: opts.max_bytes,
+    timeout_ms: timeoutMs,
+    query: opts.query,
   });
 }
 

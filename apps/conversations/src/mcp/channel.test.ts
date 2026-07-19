@@ -9,6 +9,10 @@ import { createChannel } from "../lib/channels.js";
 import { readChannelNotifications, subscribeToChannelNotifications } from "../lib/channel-notifications.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerChannelBridge, setSessionAgent, setClaudeSessionId, getSessionAgent, getClaudeSessionId } from "./channel.js";
+import { enterHermeticTestEnv, installNetworkGuard } from "../test/hermetic.js";
+
+let restoreEnv: () => void;
+let restoreNetwork: () => void;
 
 function createTestDbPath(): string {
   return join(tmpdir(), `conversations-channel-${Date.now()}-${Math.random().toString(16).slice(2)}.db`);
@@ -23,6 +27,11 @@ async function waitFor(check: () => boolean, timeoutMs = 1500): Promise<void> {
   throw new Error("Timed out waiting for channel bridge condition");
 }
 
+beforeEach(() => {
+  restoreEnv = enterHermeticTestEnv();
+  restoreNetwork = installNetworkGuard();
+});
+
 afterEach(() => {
   closeDb();
   const dbPath = process.env.CONVERSATIONS_DB_PATH;
@@ -32,6 +41,8 @@ afterEach(() => {
     try { unlinkSync(dbPath + "-shm"); } catch {}
     delete process.env.CONVERSATIONS_DB_PATH;
   }
+  restoreNetwork();
+  restoreEnv();
 });
 
 describe("channel bridge delivery", () => {

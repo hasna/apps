@@ -202,7 +202,7 @@ export function registerAnalyticsCommands(program: Command): void {
       const onlineAgents = await store.listAgents({ online_only: true });
 
       // Unread DMs
-      const unreadDMs = await store.readMessages({ to: agent, unread_only: true, limit: 5 });
+      const unreadDMs = (await store.readMessagePreviews({ to: agent, unread_only: true, limit: 5 })).messages;
 
       // Channels I'm in (with per-channel unread counts) — routed through the Store
       const myChannels = await store.getMemberChannels(agent);
@@ -215,7 +215,7 @@ export function registerAnalyticsCommands(program: Command): void {
       });
 
       // Recent DMs (last 3 messages to me)
-      const recentDMs = await store.readMessages({ to: agent, limit: 3 });
+      const recentDMs = (await store.readMessagePreviews({ to: agent, limit: 3, order: "desc" })).messages;
 
       const context = {
         agent,
@@ -246,7 +246,7 @@ export function registerAnalyticsCommands(program: Command): void {
         if (unreadDMs.length > 0) {
           console.log(`${chalk.bold("Unread DMs:")} ${chalk.yellow(unreadDMs.length + " message(s)")}`);
           for (const msg of unreadDMs.slice(0, 3)) {
-            console.log(`  ${chalk.dim(msg.created_at.slice(11, 16))} ${chalk.cyan(msg.from_agent)}: ${msg.content.slice(0, 80)}`);
+            console.log(`  ${chalk.dim(msg.created_at.slice(11, 16))} ${chalk.cyan(msg.from_agent)}: ${msg.preview.slice(0, 80)}`);
           }
         } else {
           console.log(`${chalk.bold("Unread DMs:")} ${chalk.dim("none")}`);
@@ -324,7 +324,7 @@ export function registerAnalyticsCommands(program: Command): void {
             hasMore: page.hasMore,
             nextCursor: page.nextCursor,
             limitCapped: window.limitCapped,
-            detailHint: "Use conversations read --session <id> --verbose for message bodies.",
+            detailHint: "Use conversations read --session <id> for previews, then conversations show <message-id> for one exact full message.",
           });
         }
       }

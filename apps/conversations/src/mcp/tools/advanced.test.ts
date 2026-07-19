@@ -4,18 +4,21 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerAdvancedTools } from "./advanced";
 import { closeDb } from "../../lib/db";
-import { unlinkSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
+import { createDisposableStore, enterHermeticTestEnv, installNetworkGuard } from "../../test/hermetic";
 
-const TEST_DB = join(tmpdir(), `conversations-test-advanced-mcp-${Date.now()}.db`);
+const TEST_STORE = createDisposableStore("advanced-mcp");
 
 describe("advanced MCP tools", () => {
   let client: Client;
+  let restoreEnv: () => void;
+  let restoreNetwork: () => void;
 
   beforeAll(async () => {
-    process.env.CONVERSATIONS_DB_PATH = TEST_DB;
-    process.env.CONVERSATIONS_AGENT_ID = "advanced-test-agent";
+    restoreEnv = enterHermeticTestEnv({
+      CONVERSATIONS_DB_PATH: TEST_STORE.dbPath,
+      CONVERSATIONS_AGENT_ID: "advanced-test-agent",
+    });
+    restoreNetwork = installNetworkGuard();
     closeDb();
 
     const server = new McpServer({ name: "test-advanced-mcp", version: "0.0.1" });
@@ -28,13 +31,11 @@ describe("advanced MCP tools", () => {
   });
 
   afterAll(async () => {
-    delete process.env.CONVERSATIONS_DB_PATH;
-    delete process.env.CONVERSATIONS_AGENT_ID;
-    closeDb();
-    try { unlinkSync(TEST_DB); } catch {}
-    try { unlinkSync(TEST_DB + "-wal"); } catch {}
-    try { unlinkSync(TEST_DB + "-shm"); } catch {}
     await client.close();
+    closeDb();
+    restoreNetwork();
+    restoreEnv();
+    TEST_STORE.cleanup();
   });
 
   function parseResult(result: { content: unknown[] }): unknown {
@@ -157,12 +158,21 @@ describe("advanced MCP tools", () => {
   });
 
   describe("get_mentions", () => {
-    test("returns mentions for agent", async () => {
+    test("returns preview-only mentions even when verbose is requested", async () => {
+      const { sendMessage } = await import("../../lib/messages");
+      sendMessage({
+        from: "mention-sender",
+        to: "mention-safe-channel",
+        channel: "mention-safe-channel",
+        content: "@advanced-test-agent bounded mention body",
+      });
       const result = parseResult(await client.callTool({
         name: "get_mentions",
-        arguments: { agent: "advanced-test-agent" },
+        arguments: { agent: "advanced-test-agent", unread_only: false, verbose: true },
       }) as any) as any;
       expect(Array.isArray(result.mentions)).toBe(true);
+      expect(result.mentions[0].message.preview).toContain("bounded mention");
+      expect(result.mentions[0].message.content).toBeUndefined();
     });
   });
 
@@ -172,7 +182,7 @@ describe("advanced MCP tools", () => {
         name: "mark_mentions_read",
         arguments: { agent: "advanced-test-agent" },
       }) as any) as any;
-      expect(result.cleared).toBe(0);
+      expect(result.cleared).toBeGreaterThanOrEqual(1);
     });
   });
 
@@ -339,6 +349,20 @@ describe("advanced MCP tools", () => {
         arguments: { message_id: 99999 },
       }) as any) as any;
       expect(Array.isArray(result.replies)).toBe(true);
+    });
+
+    test("thread collections never expose full bodies through verbose compatibility", async () => {
+      const { sendMessage } = await import("../../lib/messages");
+      const parent = sendMessage({ from: "thread-a", to: "thread-b", content: "parent exact-only body" });
+      sendMessage({ from: "thread-b", to: "thread-a", content: "reply exact-only body", reply_to: parent.id, session_id: parent.session_id });
+      const result = parseResult(await client.callTool({
+        name: "get_thread_replies",
+        arguments: { message_id: parent.id, verbose: true },
+      }) as any) as any;
+      expect(result.parent.preview).toContain("parent exact-only");
+      expect(result.parent.content).toBeUndefined();
+      expect(result.replies[0].preview).toContain("reply exact-only");
+      expect(result.replies[0].content).toBeUndefined();
     });
   });
 

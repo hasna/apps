@@ -6,7 +6,7 @@ import {
 } from "@hasna/contracts";
 import { normalizeChannelName } from "./channel-names.js";
 import { getStore, type ConversationsStore } from "./store/index.js";
-import type { ChannelInfo, Message, ProjectInfo } from "../types.js";
+import type { ChannelInfo, MessagePreview, ProjectInfo } from "../types.js";
 
 export interface ConversationsProjectPanelOptions {
   limit?: number;
@@ -68,7 +68,7 @@ function channelResource(channel: ChannelInfo) {
   };
 }
 
-function messageResource(message: Message) {
+function messageResource(message: MessagePreview) {
   return {
     kind: "comment" as const,
     id: String(message.id),
@@ -94,7 +94,7 @@ function preview(content: string, max = 180): string {
   return compact.length > max ? `${compact.slice(0, max - 1)}…` : compact;
 }
 
-function priorityForMessage(message: Message): "low" | "medium" | "high" | "critical" | "unknown" {
+function priorityForMessage(message: MessagePreview): "low" | "medium" | "high" | "critical" | "unknown" {
   if (message.blocking || message.priority === "urgent") return "critical";
   if (message.priority === "high") return "high";
   if (message.priority === "normal") return "medium";
@@ -102,7 +102,7 @@ function priorityForMessage(message: Message): "low" | "medium" | "high" | "crit
   return "unknown";
 }
 
-function stateForConversation(channels: ChannelInfo[], messages: Message[]): ProjectPanelInput["state"] {
+function stateForConversation(channels: ChannelInfo[], messages: MessagePreview[]): ProjectPanelInput["state"] {
   return channels.length === 0 && messages.length === 0 ? "empty" : "ready";
 }
 
@@ -135,27 +135,27 @@ async function countScope(
   return total;
 }
 
-async function selectMessages(store: ConversationsStore, projectId: string | null, channels: ChannelInfo[], limit: number): Promise<Message[]> {
-  const messagesById = new Map<number, Message>();
+async function selectMessages(store: ConversationsStore, projectId: string | null, channels: ChannelInfo[], limit: number): Promise<MessagePreview[]> {
+  const messagesById = new Map<number, MessagePreview>();
   if (projectId) {
-    for (const message of await store.readMessages({
+    for (const message of (await store.readMessagePreviews({
       project_id: projectId,
       latest: limit,
-      max_content_length: 200,
+      preview_bytes: 200,
       include_reply_counts: true,
-    })) {
+    })).messages) {
       messagesById.set(message.id, message);
     }
   }
 
   const channelLimit = projectId ? limit : Math.max(1, Math.ceil(limit / Math.max(1, channels.length)));
   for (const channel of channels) {
-    for (const message of await store.readMessages({
+    for (const message of (await store.readMessagePreviews({
       channel: channel.name,
       latest: channelLimit,
-      max_content_length: 200,
+      preview_bytes: 200,
       include_reply_counts: true,
-    })) {
+    })).messages) {
       messagesById.set(message.id, message);
     }
   }
@@ -195,7 +195,7 @@ export async function createConversationsProjectPanel(projectRef: string, option
   const messages = await selectMessages(store, project?.id ?? null, channels, limit);
   const messageCount = await countScope(store, project?.id ?? null, channelNames, false);
   const blockingCount = await countScope(store, project?.id ?? null, channelNames, true);
-  const unreadCount = messages.filter((message) => message.read_at === null).length;
+  const unreadCount = messages.filter((message) => message.unread).length;
   const onlineAgents = (await store.listAgents({ online_only: true })).filter((agent) => !project || agent.project_id === project.id || agent.project_id === null);
   const participants = new Set<string>(messages.flatMap((message) => [message.from_agent, message.to_agent]).filter(Boolean));
   for (const channel of channels) {
@@ -241,8 +241,8 @@ export async function createConversationsProjectPanel(projectRef: string, option
     items: messages.map((message) => ({
       id: String(message.id),
       title: message.channel ? `#${message.channel}: ${message.from_agent}` : `${message.from_agent} -> ${message.to_agent}`,
-      summary: preview(message.content),
-      status: message.blocking ? "blocking" : message.read_at ? "read" : "unread",
+      summary: preview(message.preview),
+      status: message.blocking ? "blocking" : message.unread ? "unread" : "read",
       priority: priorityForMessage(message),
       timestamp: toTimestamp(message.created_at),
       resourceRefs: [
@@ -255,7 +255,7 @@ export async function createConversationsProjectPanel(projectRef: string, option
         to_agent: message.to_agent,
         reply_to: message.reply_to,
         reply_count: message.reply_count ?? 0,
-        has_attachments: Boolean(message.attachments?.length),
+        has_attachments: message.has_attachments,
       },
     })),
     actions: [

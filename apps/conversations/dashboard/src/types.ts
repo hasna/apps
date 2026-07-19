@@ -4,14 +4,14 @@ export interface Message {
   from_agent: string;
   to_agent: string;
   channel: string | null;
-  content: string;
+  preview: string;
   priority: string;
   working_dir: string | null;
   repository: string | null;
   branch: string | null;
-  metadata: Record<string, unknown> | null;
+  has_metadata: boolean;
   created_at: string;
-  read_at: string | null;
+  unread: boolean;
 }
 
 export interface Session {

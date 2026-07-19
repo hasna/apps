@@ -86,6 +86,28 @@ describe("getChannelTopics", () => {
     createChannel("empty-channel", "tester");
     expect(getChannelTopics("empty-channel")).toEqual([]);
   });
+
+  test("does not derive topics from secrets, restricted channels, or content beyond the collection scan bound", () => {
+    createChannel("safe-topics", "tester");
+    createChannel("security-incidents", "tester");
+    sendMessage({
+      from: "a",
+      to: "safe-topics",
+      channel: "safe-topics",
+      content: `deployment Bearer abcdefghijklmnopqrstuvwxyz123456 ${"padding ".repeat(700)} tailtopic ${"tailtopic ".repeat(20)}`,
+    });
+    sendMessage({
+      from: "a",
+      to: "security-incidents",
+      channel: "security-incidents",
+      content: "restrictedbody restrictedbody restrictedbody",
+    });
+
+    const safeWords = getChannelTopics("safe-topics").map((topic) => topic.topic);
+    expect(safeWords.join(" ")).not.toContain("abcdefghijklmnopqrstuvwxyz");
+    expect(safeWords).not.toContain("tailtopic");
+    expect(getChannelTopics("security-incidents")).toEqual([]);
+  });
 });
 
 describe("getSessionTopics", () => {

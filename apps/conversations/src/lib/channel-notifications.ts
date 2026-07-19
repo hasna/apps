@@ -1,16 +1,32 @@
 import { getDb } from "./db.js";
 import type { ChannelNotification, ChannelNotificationSubscription } from "../types.js";
 import { normalizeChannelName } from "./channel-names.js";
+import {
+  COLLECTION_MAX_LIMIT,
+  COLLECTION_MAX_PREVIEW_BYTES,
+  COLLECTION_PREVIEW_SCAN_CHARS,
+  RESTRICTED_CHANNEL_PREVIEW,
+  redactSensitiveText,
+} from "./message-previews.js";
 
 const DEFAULT_PREVIEW_CHARS = 140;
 
 export function buildMessagePreview(content: string, maxChars = DEFAULT_PREVIEW_CHARS): string {
-  const normalized = content
+  if (content === RESTRICTED_CHANNEL_PREVIEW) return content;
+  const markers: string[] = [];
+  const protectedContent = redactSensitiveText(content).replace(/\[REDACTED:[A-Z_]+\]/g, (marker) => {
+    const placeholder = `REDACTIONMARKER${markers.length}TOKEN`;
+    markers.push(marker);
+    return placeholder;
+  });
+  const normalized = protectedContent
     .replace(/[*#`~_>\-]/g, " ")
     .replace(/\s+/g, " ")
-    .trim();
-  if (normalized.length <= maxChars) return normalized;
-  return normalized.slice(0, Math.max(1, maxChars)).trimEnd() + "…";
+    .trim()
+    .replace(/REDACTIONMARKER(\d+)TOKEN/g, (_match, index) => markers[Number(index)] ?? "[REDACTED]");
+  const boundedMaxChars = Math.min(Math.max(1, maxChars), COLLECTION_MAX_PREVIEW_BYTES);
+  if (normalized.length <= boundedMaxChars) return normalized;
+  return normalized.slice(0, boundedMaxChars).trimEnd() + "…";
 }
 
 export function subscribeToChannelNotifications(
@@ -104,6 +120,7 @@ export function readChannelNotifications(opts: ReadChannelNotificationsOptions):
     ? Math.floor(opts.limit as number)
     : 20;
 
+  const restricted = `(lower(COALESCE(m.channel, '')) LIKE '%incident%' OR lower(COALESCE(m.channel, '')) LIKE '%security%' OR lower(COALESCE(m.to_agent, '')) LIKE '%incident%' OR lower(COALESCE(m.to_agent, '')) LIKE '%security%' OR lower(COALESCE(m.session_id, '')) LIKE '%incident%' OR lower(COALESCE(m.session_id, '')) LIKE '%security%')`;
   const rows = db.prepare(`
     SELECT
       m.id AS message_id,
@@ -111,8 +128,8 @@ export function readChannelNotifications(opts: ReadChannelNotificationsOptions):
       m.from_agent,
       m.created_at,
       m.priority,
-      m.content,
-      m.attachments,
+      CASE WHEN ${restricted} THEN '${RESTRICTED_CHANNEL_PREVIEW}' ELSE substr(m.content, 1, ${COLLECTION_PREVIEW_SCAN_CHARS}) END AS preview_source,
+      CASE WHEN m.attachments IS NULL OR m.attachments = '' THEN 0 ELSE json_array_length(m.attachments) END AS attachment_count,
       s.preview_chars,
       snr.message_id AS read_message_id
     FROM messages m
@@ -122,15 +139,15 @@ export function readChannelNotifications(opts: ReadChannelNotificationsOptions):
       ON snr.message_id = m.id AND snr.agent = s.agent
     WHERE ${conditions.join(" AND ")}
     ORDER BY m.created_at DESC, m.id DESC
-    LIMIT ${Math.max(1, Math.min(limit, 500))}
+    LIMIT ${Math.max(1, Math.min(limit, COLLECTION_MAX_LIMIT))}
   `).all(...params) as Array<{
     message_id: number;
     channel: string;
     from_agent: string;
     created_at: string;
     priority: "low" | "normal" | "high" | "urgent";
-    content: string;
-    attachments: string | null;
+    preview_source: string;
+    attachment_count: number;
     preview_chars: number;
     read_message_id: number | null;
   }>;
@@ -141,9 +158,9 @@ export function readChannelNotifications(opts: ReadChannelNotificationsOptions):
     from_agent: row.from_agent,
     created_at: row.created_at,
     priority: row.priority,
-    preview: buildMessagePreview(row.content, row.preview_chars),
+    preview: buildMessagePreview(row.preview_source, row.preview_chars),
     unread: row.read_message_id == null,
-    has_attachments: !!row.attachments && row.attachments !== "[]",
+    has_attachments: row.attachment_count > 0,
   })) satisfies ChannelNotification[];
 
   if (opts.mark_read && notifications.length > 0) {
@@ -171,6 +188,17 @@ export function markChannelNotificationsRead(agent: string, messageIds: number[]
 }
 
 export function markAllChannelNotificationsRead(agent: string, channel?: string): number {
-  const unread = readChannelNotifications({ agent, channel, unread_only: true, limit: 10000 });
-  return markChannelNotificationsRead(agent, unread.map((row) => row.message_id));
+  const db = getDb();
+  const channelName = channel ? normalizeChannelName(channel) : null;
+  const result = db.prepare(`
+    INSERT OR IGNORE INTO channel_notification_reads (agent, message_id)
+    SELECT ?, m.id
+    FROM messages m
+    INNER JOIN channel_subscriptions s ON s.channel = m.channel AND s.agent = ?
+    WHERE m.channel IS NOT NULL
+      AND m.from_agent != ?
+      AND m.id > s.since_message_id
+      ${channelName ? "AND m.channel = ?" : ""}
+  `).run(...(channelName ? [agent, agent, agent, channelName] : [agent, agent, agent]));
+  return result.changes;
 }

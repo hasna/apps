@@ -45,7 +45,7 @@ export function compactQueriedMessages(messages: Message[], args: Record<string,
     next_cursor: page.next_cursor,
     has_more: page.has_more,
     compact: true,
-    hint: "Use verbose:true for full records or get_message with an id for one full message.",
+    hint: "Use get_message with an id for one exact full message; collection reads remain preview-only.",
   };
 }
 
@@ -61,7 +61,7 @@ export function compactQueriedSearchMessages(messages: SearchResult[], args: Rec
     next_cursor: page.next_cursor,
     has_more: page.has_more,
     compact: true,
-    hint: "Use verbose:true for full records or get_message with an id for one full message.",
+    hint: "Use get_message with an id for one exact full message; collection searches remain preview-only.",
   };
 }
 

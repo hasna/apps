@@ -141,7 +141,7 @@ export function registerChannelCommands(program: Command): void {
             hasMore: page.hasMore,
             nextCursor: page.nextCursor,
             limitCapped: window.limitCapped,
-            detailHint: "Use conversations channel read <name> --verbose for message bodies.",
+            detailHint: "Use conversations channel read <name> for previews, then conversations show <id> for one exact full message.",
           });
         }
       }
@@ -335,13 +335,16 @@ export function registerChannelCommands(program: Command): void {
 
   channel
     .command("read")
-    .description("Read messages from a channel")
+    .description("Peek at bounded, redacted message previews from a channel")
     .argument("<channel>", "Channel name")
     .option("--from <agent>", "Agent reading the channel")
     .option("--since <timestamp>", "Messages after this ISO timestamp")
     .option("--limit <n>", "Max messages to return", parseInt)
     .option("--cursor <n>", "Skip first N messages for pagination", parseInt)
-    .option("--verbose", "Show full message bodies")
+    .option("--mark-read", "Explicitly acknowledge the returned message IDs")
+    .option("--max-bytes <n>", "Maximum response-envelope bytes", parseInt)
+    .option("--timeout-ms <n>", "Maximum collection query time", parseInt)
+    .option("--verbose", "Deprecated compatibility flag; collections remain preview-only")
     .option("-j, --json", "Output as JSON")
     .action(async (channelName, opts) => {
       const channelArg = typeof channelName === "string" ? channelName.trim() : "";
@@ -349,40 +352,41 @@ export function registerChannelCommands(program: Command): void {
         console.error(chalk.red("Channel name cannot be empty."));
         process.exit(1);
       }
-      const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
-      const messages = await await getStore().readMessages({
+      const page = await getStore().readMessagePreviews({
         channel: channelArg,
         since: opts.since,
-        limit: opts.json ? opts.limit : queryLimitFor(window),
-        offset: opts.json ? opts.cursor : window.offset,
+        limit: opts.limit,
+        offset: opts.cursor,
+        max_bytes: opts.maxBytes,
+        timeout_ms: opts.timeoutMs,
       });
-      const page = opts.json
-        ? { items: messages, count: messages.length, hasMore: false, nextCursor: null }
-        : pageFromQuery(messages, window);
 
-      if (opts.from && page.items.length > 0) {
+      if (opts.markRead && page.messages.length > 0) {
         const agent = resolveIdentity(opts.from).trim();
         if (!agent) {
           console.error(chalk.red("Agent identity is required."));
           process.exit(1);
         }
-        await await getStore().recordReadReceiptsBatch(page.items.map((m) => m.id), agent);
-        await getStore().markChannelNotificationsRead(agent, page.items.map((m) => m.id));
+        const ids = page.messages.map((message) => message.id);
+        await getStore().markReadByIds(ids, agent);
+        if (opts.from) {
+          await getStore().recordReadReceiptsBatch(ids, agent);
+          await getStore().markChannelNotificationsRead(agent, ids);
+        }
       }
 
       if (opts.json) {
-        console.log(JSON.stringify(messages, null, 2));
+        console.log(JSON.stringify(page, null, 2));
       } else {
-        if (messages.length === 0) {
+        if (page.messages.length === 0) {
           console.log(chalk.dim(`No messages in #${channelArg}.`));
         } else {
-          for (const msg of page.items) printMessageEntry(msg, { verbose: opts.verbose, destination: chalk.magenta(`#${channelArg}`) });
+          for (const msg of page.messages) printMessageEntry(msg, { destination: chalk.magenta(`#${channelArg}`) });
           printCompactFooter({
             shown: page.count,
-            hasMore: page.hasMore,
-            nextCursor: page.nextCursor,
-            limitCapped: window.limitCapped,
-            detailHint: opts.verbose ? "Use conversations show <id> for one message." : "Use --verbose for full bodies or conversations show <id> for one message.",
+            hasMore: page.has_more,
+            nextCursor: page.next_cursor,
+            detailHint: "Use conversations show <id> for one exact full message.",
           });
         }
       }

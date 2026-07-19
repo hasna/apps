@@ -1,21 +1,18 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { unlinkSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
+import { createDisposableStore, hermeticSpawnEnv } from "../test/hermetic.js";
 
-const TEST_DB = join(tmpdir(), `conversations-cli-receipts-locks-${Date.now()}.db`);
+const TEST_STORE = createDisposableStore("cli-receipts-locks");
 const CLI = ["bun", "run", "./src/cli/index.tsx"];
 
 function runCli(args: string[], agent: string) {
   const result = Bun.spawnSync({
     cmd: [...CLI, ...args],
     cwd: process.cwd(),
-    env: {
-      ...process.env,
-      CONVERSATIONS_DB_PATH: TEST_DB,
+    env: hermeticSpawnEnv({
+      CONVERSATIONS_DB_PATH: TEST_STORE.dbPath,
       CONVERSATIONS_AGENT_ID: agent,
       FORCE_COLOR: "0",
-    },
+    }),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -28,9 +25,7 @@ function runCli(args: string[], agent: string) {
 
 describe("receipts + locks CLI (e2e)", () => {
   afterAll(() => {
-    try { unlinkSync(TEST_DB); } catch {}
-    try { unlinkSync(`${TEST_DB}-wal`); } catch {}
-    try { unlinkSync(`${TEST_DB}-shm`); } catch {}
+    TEST_STORE.cleanup();
   });
 
   test("receipts shows who has and has not read a channel message", () => {
@@ -44,7 +39,7 @@ describe("receipts + locks CLI (e2e)", () => {
     const messageId = JSON.parse(send.stdout).id as number;
 
     // bob reads the channel (records a read receipt); carol does not
-    const read = runCli(["channel", "read", "receipt-ch", "--from", "bob"], "bob");
+    const read = runCli(["channel", "read", "receipt-ch", "--from", "bob", "--mark-read"], "bob");
     expect(read.exitCode).toBe(0);
 
     const receipts = runCli(["receipts", String(messageId), "--channel", "receipt-ch", "--json"], "alice");
@@ -79,7 +74,7 @@ describe("receipts + locks CLI (e2e)", () => {
     expect(send.exitCode).toBe(0);
     const messageId = JSON.parse(send.stdout).id as number;
 
-    const read = runCli(["channel", "read", "mixed-receipt-ch", "--from", "Bob"], "Bob");
+    const read = runCli(["channel", "read", "mixed-receipt-ch", "--from", "Bob", "--mark-read"], "Bob");
     expect(read.exitCode).toBe(0);
 
     const receipts = runCli(["receipts", String(messageId), "--channel", "mixed-receipt-ch", "--json"], "Admin");

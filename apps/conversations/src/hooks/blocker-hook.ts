@@ -24,7 +24,8 @@ if (process.argv.includes("--help") || process.argv.includes("-h")) {
 const agent = resolveIdentity();
 
 // Routed through the Store: local sqlite or the self_hosted/cloud API.
-const blockers = await getStore().getUnreadBlockers(agent, { limit: 10 });
+const blockerPage = await getStore().getUnreadBlockerPreviews(agent, { limit: 10 });
+const blockers = blockerPage.messages;
 
 closeDb();
 
@@ -37,7 +38,7 @@ if (blockers.length === 0) {
 const ids = blockers.map((b) => b.id);
 const details = blockers.map((b) => {
   const where = b.channel ? `#${b.channel}` : "DM";
-  return `[#${b.id}] ${b.from_agent} (${where}): ${b.content}`;
+  return `[#${b.id}] ${b.from_agent} (${where}): ${b.preview}`;
 }).join("\n");
 
 console.log(`BLOCKING MESSAGES — You have ${blockers.length} unread blocker(s). You MUST acknowledge them by calling mark_read with IDs [${ids.join(", ")}] BEFORE doing any other work.\n\n${details}`);

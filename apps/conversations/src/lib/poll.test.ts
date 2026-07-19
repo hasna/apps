@@ -2,23 +2,25 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { startPolling } from "./poll";
 import { sendMessage } from "./messages";
 import { closeDb } from "./db";
-import { unlinkSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
 import type { Message } from "../types";
+import { createDisposableStore, enterHermeticTestEnv, installNetworkGuard } from "../test/hermetic";
 
-const TEST_DB = join(tmpdir(), `conversations-test-poll-${Date.now()}.db`);
+let testStore: ReturnType<typeof createDisposableStore>;
+let restoreEnv: () => void;
+let restoreNetwork: () => void;
 
 beforeEach(() => {
-  process.env.CONVERSATIONS_DB_PATH = TEST_DB;
+  testStore = createDisposableStore("poll");
+  restoreEnv = enterHermeticTestEnv({ CONVERSATIONS_DB_PATH: testStore.dbPath });
+  restoreNetwork = installNetworkGuard();
   closeDb();
 });
 
 afterEach(() => {
   closeDb();
-  try { unlinkSync(TEST_DB); } catch {}
-  try { unlinkSync(TEST_DB + "-wal"); } catch {}
-  try { unlinkSync(TEST_DB + "-shm"); } catch {}
+  restoreNetwork();
+  restoreEnv();
+  testStore.cleanup();
 });
 
 describe("startPolling", () => {

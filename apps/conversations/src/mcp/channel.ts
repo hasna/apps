@@ -122,9 +122,11 @@ export function registerChannelBridge(
 
       // Poll DMs to this agent — skip messages FROM self (no echoes)
       if (agent) {
-        const msgs = (await await getStore().readMessages({ to: agent, unread_only: true, order: "asc", limit: 20 }))
-          .filter(m => m.id > lastAgentMsgId && m.from_agent !== agent);
-        for (const msg of msgs) {
+        const previews = (await getStore().readMessagePreviews({ to: agent, unread_only: true, order: "asc", limit: 20 })).messages
+          .filter(message => message.id > lastAgentMsgId && message.from_agent !== agent);
+        for (const preview of previews) {
+          const msg = await getStore().getMessageById(preview.id);
+          if (!msg) continue;
           const delivered = await pushNotification(msg, "dm");
           if (!delivered) break;
           lastAgentMsgId = msg.id;
@@ -133,9 +135,11 @@ export function registerChannelBridge(
 
       // Poll direct session-targeted messages — skip self (no echoes)
       if (sid) {
-        const msgs = (await await getStore().readMessages({ to: `session:${sid}`, unread_only: true, order: "asc", limit: 20 }))
-          .filter(m => m.id > lastSessionMsgId && m.from_agent !== agent);
-        for (const msg of msgs) {
+        const previews = (await getStore().readMessagePreviews({ to: `session:${sid}`, unread_only: true, order: "asc", limit: 20 })).messages
+          .filter(message => message.id > lastSessionMsgId && message.from_agent !== agent);
+        for (const preview of previews) {
+          const msg = await getStore().getMessageById(preview.id);
+          if (!msg) continue;
           const delivered = await pushNotification(msg, "direct");
           if (!delivered) break;
           lastSessionMsgId = msg.id;

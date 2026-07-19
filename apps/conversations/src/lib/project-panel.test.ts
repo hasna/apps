@@ -1,30 +1,31 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { unlinkSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
 import { createChannel } from "./channels.js";
 import { closeDb } from "./db.js";
 import { sendMessage } from "./messages.js";
 import { createConversationsProjectPanel } from "./project-panel.js";
 import { createProject } from "./projects.js";
+import { createDisposableStore, enterHermeticTestEnv, installNetworkGuard } from "../test/hermetic.js";
 
-const TEST_DB = join(tmpdir(), `conversations-test-project-panel-${Date.now()}.db`);
+let testStore: ReturnType<typeof createDisposableStore>;
+let restoreEnv: () => void;
+let restoreNetwork: () => void;
 
 function cleanupDb(): void {
   closeDb();
-  try { unlinkSync(TEST_DB); } catch {}
-  try { unlinkSync(`${TEST_DB}-wal`); } catch {}
-  try { unlinkSync(`${TEST_DB}-shm`); } catch {}
 }
 
 beforeEach(() => {
-  process.env.CONVERSATIONS_DB_PATH = TEST_DB;
+  testStore = createDisposableStore("project-panel");
+  restoreEnv = enterHermeticTestEnv({ CONVERSATIONS_DB_PATH: testStore.dbPath });
+  restoreNetwork = installNetworkGuard();
   cleanupDb();
 });
 
 afterEach(() => {
   cleanupDb();
-  delete process.env.CONVERSATIONS_DB_PATH;
+  restoreNetwork();
+  restoreEnv();
+  testStore.cleanup();
 });
 
 describe("createConversationsProjectPanel", () => {

@@ -71,7 +71,7 @@ export function App() {
       // Compute unread counts per channel
       const counts: Record<string, number> = {};
       for (const m of allMsgsRes) {
-        if (m.channel && !m.read_at) {
+        if (m.channel && m.unread) {
           counts[m.channel] = (counts[m.channel] || 0) + 1;
         }
       }

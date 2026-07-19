@@ -4,17 +4,27 @@ import { sendMessage } from "../lib/messages";
 import { createChannel, joinChannel } from "../lib/channels";
 import { createProject } from "../lib/projects";
 import { closeDb } from "../lib/db";
-import { mkdirSync, rmSync, unlinkSync, writeFileSync } from "fs";
+import { mkdirSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import {
+  createDisposableStore,
+  enterHermeticTestEnv,
+  installNetworkGuard,
+} from "../test/hermetic";
 
-const TEST_DB = join(tmpdir(), `conversations-test-server-${Date.now()}.db`);
+const TEST_STORE = createDisposableStore("dashboard-server");
 const TEST_DASHBOARD_DIST = join(tmpdir(), `conversations-test-dashboard-dist-${Date.now()}`);
 let server: ReturnType<typeof startDashboardServer>;
+let restoreEnv: () => void;
+let restoreNetwork: () => void;
 
 beforeAll(() => {
-  process.env.CONVERSATIONS_DB_PATH = TEST_DB;
-  process.env.CONVERSATIONS_DASHBOARD_DIST = TEST_DASHBOARD_DIST;
+  restoreEnv = enterHermeticTestEnv({
+    CONVERSATIONS_DB_PATH: TEST_STORE.dbPath,
+    CONVERSATIONS_DASHBOARD_DIST: TEST_DASHBOARD_DIST,
+  });
+  restoreNetwork = installNetworkGuard({ allowLoopback: true });
   mkdirSync(TEST_DASHBOARD_DIST, { recursive: true });
   writeFileSync(
     join(TEST_DASHBOARD_DIST, "index.html"),
@@ -27,11 +37,10 @@ beforeAll(() => {
 
 afterAll(() => {
   server?.stop();
-  delete process.env.CONVERSATIONS_DASHBOARD_DIST;
   closeDb();
-  try { unlinkSync(TEST_DB); } catch {}
-  try { unlinkSync(TEST_DB + "-wal"); } catch {}
-  try { unlinkSync(TEST_DB + "-shm"); } catch {}
+  restoreNetwork?.();
+  restoreEnv?.();
+  TEST_STORE.cleanup();
   rmSync(TEST_DASHBOARD_DIST, { recursive: true, force: true });
 });
 
@@ -58,7 +67,12 @@ describe("API /api/messages", () => {
     expect(res.status).toBe(200);
     const data = await res.json() as any[];
     expect(data.length).toBeGreaterThanOrEqual(1);
-    expect(data[0].content).toBe("test-msg"); // reversed order: newest first
+    expect(data[0].preview).toBe("test-msg"); // reversed order: newest first
+    expect(data[0].content).toBeUndefined();
+
+    const exact = await fetch(`${base()}/api/messages/${data[0].id}`);
+    expect(exact.status).toBe(200);
+    expect((await exact.json() as any).content).toBe("test-msg");
   });
 
   test("GET respects limit param", async () => {
@@ -178,7 +192,8 @@ describe("API /api/messages/search", () => {
     expect(res.status).toBe(200);
     const data = await res.json() as any[];
     expect(data).toHaveLength(1);
-    expect(data[0].content).toBe("unique-search-term-xyz");
+    expect(data[0].preview).toContain("unique-search-term-xyz");
+    expect(data[0].content).toBeUndefined();
   });
 
   test("returns 400 when query is missing", async () => {

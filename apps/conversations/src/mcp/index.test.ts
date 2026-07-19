@@ -3,20 +3,18 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { server } from "./index.js";
 import { closeDb } from "../lib/db.js";
-import { sendMessage, readMessages } from "../lib/messages.js";
+import { getMessageById, getReadReceipts, sendMessage, readMessages } from "../lib/messages.js";
 import { createChannel } from "../lib/channels.js";
 import { resolveIdentity } from "../lib/identity.js";
 import { heartbeat } from "../lib/presence.js";
-import { unlinkSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
+import { createDisposableStore, enterHermeticTestEnv } from "../test/hermetic.js";
 
-const TEST_DB = join(tmpdir(), `conversations-test-mcp-${Date.now()}.db`);
+const TEST_STORE = createDisposableStore("mcp-index");
 let client: Client;
+let restoreEnv: () => void;
 
 beforeAll(async () => {
-  process.env.CONVERSATIONS_DB_PATH = TEST_DB;
-  delete process.env.CONVERSATIONS_AGENT_ID;
+  restoreEnv = enterHermeticTestEnv({ CONVERSATIONS_DB_PATH: TEST_STORE.dbPath });
   closeDb();
 
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -29,9 +27,8 @@ beforeAll(async () => {
 afterAll(async () => {
   await client.close();
   closeDb();
-  try { unlinkSync(TEST_DB); } catch {}
-  try { unlinkSync(TEST_DB + "-wal"); } catch {}
-  try { unlinkSync(TEST_DB + "-shm"); } catch {}
+  restoreEnv();
+  TEST_STORE.cleanup();
 });
 
 function parseResult(result: { content: unknown[] }): unknown {
@@ -314,7 +311,7 @@ describe("channel notification subscription tools", () => {
     expect(list[0].channel).toBe("notify-channel");
   });
 
-  test("reads preview-only notifications and clears them after read_channel", async () => {
+  test("keeps read_channel pure by default and clears only after explicit mark_read", async () => {
     createChannel("notify-channel-read", "creator");
     await client.callTool({
       name: "subscribe_channel_notifications",
@@ -343,12 +340,28 @@ describe("channel notification subscription tools", () => {
       arguments: { from: "watcher-agent", channel: "notify-channel-read", limit: 10 },
     });
 
+    const afterPeekResult = await client.callTool({
+      name: "read_channel_notifications",
+      arguments: { from: "watcher-agent" },
+    });
+    const afterPeekPayload = parseResult(afterPeekResult as any) as any;
+    expect(afterPeekPayload.count).toBe(1);
+    expect(getMessageById(sent.id)?.read_at).toBeNull();
+    expect(getReadReceipts(sent.id)).toEqual([]);
+
+    await client.callTool({
+      name: "read_channel",
+      arguments: { from: "watcher-agent", channel: "notify-channel-read", limit: 10, mark_read: true },
+    });
+
     const afterReadResult = await client.callTool({
       name: "read_channel_notifications",
       arguments: { from: "watcher-agent" },
     });
     const afterReadPayload = parseResult(afterReadResult as any) as any;
     expect(afterReadPayload.count).toBe(0);
+    expect(getMessageById(sent.id)?.read_at).not.toBeNull();
+    expect(getReadReceipts(sent.id).map((receipt) => receipt.agent)).toContain("watcher-agent");
   });
 });
 

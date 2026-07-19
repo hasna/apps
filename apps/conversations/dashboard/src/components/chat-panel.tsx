@@ -80,7 +80,7 @@ export function ChatPanel({ open, onClose, sessionId, title }: ChatPanelProps) {
                 <span className="text-xs text-muted-foreground">{msg.created_at.slice(11, 19)}</span>
               </div>
               <div className="mt-0.5 text-sm">
-                <Markdown>{msg.content}</Markdown>
+                <Markdown>{msg.preview}</Markdown>
               </div>
             </div>
           ))

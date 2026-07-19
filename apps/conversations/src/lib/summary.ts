@@ -1,6 +1,6 @@
 import { getDb } from "./db.js";
-import type { Message } from "../types.js";
 import { extractTopics, type TopicWeight } from "./topics.js";
+import { readMessagePreviews } from "./messages.js";
 
 export interface ConversationSummary {
   session_id: string;
@@ -31,28 +31,29 @@ export function getConversationSummary(sessionOrChannel: string, opts?: SummaryO
 
   // Detect if this is a channel or session
   const isChannel = sessionOrChannel.startsWith("channel:") || db.prepare("SELECT 1 FROM channels WHERE name = ?").get(sessionOrChannel);
-  const filterCol = isChannel ? "channel" : "session_id";
   const filterVal = isChannel && !sessionOrChannel.startsWith("channel:") ? sessionOrChannel : sessionOrChannel;
 
-  const messages = db.prepare(
-    `SELECT * FROM messages WHERE ${filterCol} = ? ORDER BY created_at DESC LIMIT ${limit}`
-  ).all(filterVal) as Record<string, unknown>[];
+  const messages = readMessagePreviews({
+    ...(isChannel ? { channel: filterVal } : { session_id: filterVal }),
+    latest: limit,
+    preview_bytes: 320,
+  }).messages;
 
   if (messages.length === 0) return null;
 
   // Participants
   const agents = new Set<string>();
   for (const m of messages) {
-    agents.add(m.from_agent as string);
-    if (m.to_agent) agents.add(m.to_agent as string);
+    agents.add(m.from_agent);
+    if (m.to_agent) agents.add(m.to_agent);
   }
 
   // Date range
-  const dates = messages.map((m) => m.created_at as string).sort();
+  const dates = messages.map((m) => m.created_at).sort();
   const dateRange = { first: dates[0], last: dates[dates.length - 1] };
 
   // Topics
-  const allContent = messages.map((m) => m.content as string).join("\n");
+  const allContent = messages.map((m) => m.preview).join("\n");
   const topics = extractTopics(allContent, 10);
 
   // Key messages: high priority, pinned, most reactions, most replies
@@ -63,17 +64,17 @@ export function getConversationSummary(sessionOrChannel: string, opts?: SummaryO
     const priority = m.priority as string;
     if (priority === "high" || priority === "urgent") {
       keyMessages.push({
-        id: m.id as number,
-        from: m.from_agent as string,
-        content: (m.content as string).slice(0, 200),
+        id: m.id,
+        from: m.from_agent,
+        content: m.preview.slice(0, 200),
         reason: `${priority} priority`,
       });
     }
     if (m.blocking) {
       keyMessages.push({
-        id: m.id as number,
-        from: m.from_agent as string,
-        content: (m.content as string).slice(0, 200),
+        id: m.id,
+        from: m.from_agent,
+        content: m.preview.slice(0, 200),
         reason: "blocking message",
       });
     }
@@ -83,16 +84,16 @@ export function getConversationSummary(sessionOrChannel: string, opts?: SummaryO
   for (const m of messages) {
     if (m.pinned_at) {
       keyMessages.push({
-        id: m.id as number,
-        from: m.from_agent as string,
-        content: (m.content as string).slice(0, 200),
+        id: m.id,
+        from: m.from_agent,
+        content: m.preview.slice(0, 200),
         reason: "pinned",
       });
     }
   }
 
   // Most reacted (top 3)
-  const msgIds = messages.map((m) => m.id as number);
+  const msgIds = messages.map((m) => m.id);
   if (msgIds.length > 0) {
     const placeholders = msgIds.map(() => "?").join(",");
     const reacted = db.prepare(
@@ -100,12 +101,12 @@ export function getConversationSummary(sessionOrChannel: string, opts?: SummaryO
     ).all(...msgIds) as { message_id: number; c: number }[];
 
     for (const r of reacted) {
-      const m = messages.find((msg) => (msg.id as number) === r.message_id);
+      const m = messages.find((msg) => msg.id === r.message_id);
       if (m) {
         keyMessages.push({
           id: r.message_id,
-          from: m.from_agent as string,
-          content: (m.content as string).slice(0, 200),
+          from: m.from_agent,
+          content: m.preview.slice(0, 200),
           reason: `${r.c} reaction(s)`,
         });
       }
@@ -122,12 +123,12 @@ export function getConversationSummary(sessionOrChannel: string, opts?: SummaryO
 
   // Unresolved blockers
   const blockers = messages
-    .filter((m) => m.blocking && !m.read_at)
+    .filter((m) => m.blocking && m.unread)
     .map((m) => ({
-      id: m.id as number,
-      from: m.from_agent as string,
-      content: (m.content as string).slice(0, 200),
-      created_at: m.created_at as string,
+      id: m.id,
+      from: m.from_agent,
+      content: m.preview.slice(0, 200),
+      created_at: m.created_at,
     }));
 
   // Activity metrics

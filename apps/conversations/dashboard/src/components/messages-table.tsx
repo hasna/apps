@@ -101,14 +101,14 @@ export function MessagesTable({ messages, onSelectMessage }: MessagesTableProps)
               </TableCell>
               <TableCell className="max-w-xs">
                 <div className="line-clamp-2">
-                  <Markdown>{msg.content}</Markdown>
+                  <Markdown>{msg.preview}</Markdown>
                 </div>
               </TableCell>
               <TableCell>
                 <PriorityBadge priority={msg.priority} />
               </TableCell>
               <TableCell>
-                {msg.read_at ? (
+                {!msg.unread ? (
                   <Badge
                     variant="outline"
                     className="border-green-300 text-green-700 dark:border-green-800 dark:text-green-400"

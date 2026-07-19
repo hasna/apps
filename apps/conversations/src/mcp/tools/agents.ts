@@ -8,7 +8,7 @@ import { z } from "zod";
 import { getStore } from "../../lib/store/index.js";
 import { resolveIdentity, updateCachedAutoName } from "../../lib/identity.js";
 import { setSessionAgent, setClaudeSessionId } from "../channel.js";
-import { compactQueriedMessages, compactWindowedAgents, jsonText, resolveMcpWindow } from "../compact.js";
+import { compactWindowedAgents, jsonText } from "../compact.js";
 
 export function registerAgentTools(
   server: McpServer,
@@ -228,24 +228,29 @@ export function registerAgentTools(
   });
 
   server.registerTool("get_blockers", {
-    description: "Check for unread blocking messages.",
+    description: "Peek at a bounded, redacted page of unread blocking-message previews. Incident and security bodies never cross this collection path.",
     inputSchema: {
       from: z.string().optional(),
       limit: z.coerce.number().optional(),
       cursor: z.coerce.number().optional(),
-      verbose: z.coerce.boolean().optional().describe("Return full raw blocker messages instead of previews"),
+      preview_bytes: z.coerce.number().optional().describe("Maximum bytes per redacted preview (hard-capped by the server)"),
+      max_bytes: z.coerce.number().optional().describe("Maximum bytes for the entire response envelope"),
+      timeout_ms: z.coerce.number().optional().describe("Maximum collection-query time in milliseconds (hard-capped by the server)"),
+      verbose: z.coerce.boolean().optional().describe("Deprecated compatibility flag; blocker collections remain preview-only"),
     },
   }, async (args: Record<string, any>) => {
     const { from: fromParam } = args;
     const agent = resolveIdentity(fromParam);
-    const window = resolveMcpWindow(args);
-    const blockers = await getStore().getUnreadBlockers(
-      agent,
-      args.verbose ? undefined : { limit: window.limit + 1, offset: window.offset },
-    );
+    const page = await getStore().getUnreadBlockerPreviews(agent, {
+      limit: args.limit,
+      offset: args.cursor,
+      preview_bytes: args.preview_bytes,
+      max_bytes: args.max_bytes,
+      timeout_ms: args.timeout_ms,
+    });
 
     return {
-      content: [{ type: "text", text: jsonText(args.verbose ? blockers : compactQueriedMessages(blockers, args)) }],
+      content: [{ type: "text", text: jsonText(page) }],
     };
   });
 }

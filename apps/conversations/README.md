@@ -20,6 +20,7 @@ conversations read --to codex --json
 conversations channel create engineering --description "Engineering coordination"
 conversations channel send engineering "Build is green"
 conversations channel read engineering --json
+conversations channel read engineering --from codex --mark-read
 conversations channel join engineering
 conversations dashboard
 conversations storage status
@@ -57,17 +58,22 @@ ids, previews, and a hint for the next detail step.
 
 ```bash
 conversations read --to codex              # compact previews
-conversations read --to codex --verbose    # full message bodies
 conversations show 123                     # one full message
-conversations read --to codex --json       # full machine-readable records
+conversations read --to codex --json       # bounded machine-readable preview page
 conversations read --to codex --limit 10 --cursor 10
 conversations digest engineering --cursor 123 --max-bytes 8192 --json
 ```
 
 The same gradual disclosure pattern applies to channel reads, message search,
-recent activity, pinned messages, blockers, channel/project/agent/session lists,
-and watch output. Use `--json` when a script needs the stable full record shape;
-use terminal defaults for agent-safe scanning.
+recent activity, pinned messages, blockers, mentions, threads, summaries, and
+watch startup output. Collection paths are server/store projections: they never
+carry full content, raw metadata, or raw attachments across the API/MCP boundary.
+`--json` returns the stable preview-page envelope; `--verbose` remains accepted
+for compatibility but does not restore collection bodies. Use `show <id>` for
+one explicit exact message.
+
+Reads are pure peeks by default. Pass `--mark-read` (and `--from <agent>` when
+needed) only when the returned IDs should be acknowledged and receipts updated.
 
 For long-running loops and autonomous agents, `conversations digest <channel>`
 returns a stable compact evidence packet instead of replaying the full channel.
@@ -129,11 +135,12 @@ MCP exposes channel-first tools such as `create_channel`, `list_channels`,
 `send_to_channel`, `read_channel`, `join_channel`, `leave_channel`,
 `subscribe_channel_notifications`, and `summarize_channel`.
 
-MCP read/list/search tools also default to compact summaries. Pass
-`verbose: true` to `read_messages`, `read_channel`, `search_messages`,
-`list_tasks`, `search_tasks`, `get_comments`, `get_task_tree`, and related list
-tools when full raw records are needed. Detail tools such as `get_message`,
-`get_task`, and `get_project` return full records for a single id.
+MCP message collection tools (`read_messages`, `read_channel`,
+`search_messages`, `get_blockers`, `get_mentions`, thread reads, and pinned
+reads) return byte/result/time-capped redacted previews. Their compatibility
+`verbose` flags never return source bodies. `get_message` is the explicit exact
+full-content path for one id. Reads do not change read state or receipts unless
+`mark_read: true` is passed explicitly.
 Use `read_digest` with `channel`, `cursor`, and `max_bytes` for byte-capped
 channel evidence packets that return snippets plus `digest_id`, `message_ids`,
 and `next_cursor`.
@@ -161,6 +168,13 @@ via the vendored `@hasna/contracts` storage kit — no SQLite, no cache, no sync
 engine in the process. Requests to `/v1/*` are authenticated with
 `@hasna/contracts` API keys (scope grammar `conversations:read` /
 `conversations:write`).
+
+`GET /v1/messages` and blocker/pinned/thread/mention/summary collection routes
+project bounded previews in SQL before serialization. They cap results (100),
+response bytes (64 KiB), preview bytes (1 KiB), and query time (5 seconds), with
+lower defaults. Incident and security bodies are replaced with a neutral marker
+on every collection path. `GET /v1/messages/{id}` is the sole general exact-body
+read; `detail=full` collection requests are rejected.
 
 ```bash
 export HASNA_CONVERSATIONS_STORAGE_MODE=cloud

@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Changed
+- Message collection reads are now bounded, redacted SQL/server projections. CLI, MCP, Store, HTTP, blocker, pinned, mention, thread, digest, summary, project-panel, watch-startup, and hook collection paths no longer carry source bodies, raw metadata, or raw attachments across collection boundaries. Incident/security collections use a neutral body marker; full content is available only from the exact message-id path.
+- Message/channel reads are pure peeks by default. Read-state and receipt mutations now require explicit `--mark-read` / `mark_read: true`; legacy `verbose` collection flags remain accepted but stay preview-only.
+- Collection APIs enforce hard result, response-byte, preview-byte, and statement-timeout caps, and expose the preview-page contract in OpenAPI and the generated SDK.
+
+### Added
+- Hermetic safe-read regressions clear ambient cloud/API/database/dotenv routes, block unexpected network access, and verify redaction, restricted-channel suppression, exact-id disclosure, non-mutating peeks, explicit acknowledgements, and cap failures.
+
 ## [0.5.1] - 2026-07-08
 
 ### Fixed

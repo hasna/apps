@@ -4,13 +4,11 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerMessagingTools } from "./messaging";
 import { createChannel } from "../../lib/channels";
-import { sendMessage } from "../../lib/messages";
+import { getMessageById, getReadReceipts, sendMessage } from "../../lib/messages";
 import { closeDb } from "../../lib/db";
-import { unlinkSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
+import { createDisposableStore, enterHermeticTestEnv, installNetworkGuard } from "../../test/hermetic";
 
-const TEST_DB = join(tmpdir(), `conversations-test-messaging-mcp-${Date.now()}.db`);
+const TEST_STORE = createDisposableStore("messaging-mcp");
 
 async function resolveProjectId(explicit: string | undefined, _agent: string): Promise<string | undefined> {
   return explicit;
@@ -18,10 +16,15 @@ async function resolveProjectId(explicit: string | undefined, _agent: string): P
 
 describe("messaging MCP tools", () => {
   let client: Client;
+  let restoreEnv: () => void;
+  let restoreNetwork: () => void;
 
   beforeAll(async () => {
-    process.env.CONVERSATIONS_DB_PATH = TEST_DB;
-    process.env.CONVERSATIONS_AGENT_ID = "messaging-test-agent";
+    restoreEnv = enterHermeticTestEnv({
+      CONVERSATIONS_DB_PATH: TEST_STORE.dbPath,
+      CONVERSATIONS_AGENT_ID: "messaging-test-agent",
+    });
+    restoreNetwork = installNetworkGuard();
     closeDb();
 
     const server = new McpServer({ name: "test-messaging-mcp", version: "0.0.1" });
@@ -34,13 +37,11 @@ describe("messaging MCP tools", () => {
   });
 
   afterAll(async () => {
-    delete process.env.CONVERSATIONS_DB_PATH;
-    delete process.env.CONVERSATIONS_AGENT_ID;
-    closeDb();
-    try { unlinkSync(TEST_DB); } catch {}
-    try { unlinkSync(TEST_DB + "-wal"); } catch {}
-    try { unlinkSync(TEST_DB + "-shm"); } catch {}
     await client.close();
+    closeDb();
+    restoreNetwork();
+    restoreEnv();
+    TEST_STORE.cleanup();
   });
 
   function parseResult(result: { content: unknown[] }): unknown {
@@ -111,27 +112,41 @@ describe("messaging MCP tools", () => {
       expect(result.count).toBeLessThanOrEqual(5);
     });
 
-    test("returns compact previews by default and full content with verbose", async () => {
+    test("keeps collections preview-only and uses get_message for one exact full body", async () => {
       const long = `compact preview ${"x".repeat(220)} tail-visible-only-in-verbose`;
-      await client.callTool({
+      const sent = parseResult(await client.callTool({
         name: "send_message",
         arguments: { to: "compact-reader", content: long },
-      });
+      }) as any) as any;
 
       const compact = parseResult(await client.callTool({
         name: "read_messages",
-        arguments: { to: "compact-reader", mark_read: false },
+        arguments: { to: "compact-reader" },
       }) as any) as any;
       expect(compact.compact).toBe(true);
       expect(compact.messages[0].preview).toContain("compact preview");
       expect(compact.messages[0].content).toBeUndefined();
+      expect(getMessageById(sent.id)?.read_at).toBeNull();
+      expect(getReadReceipts(sent.id)).toEqual([]);
 
       const verbose = parseResult(await client.callTool({
         name: "read_messages",
-        arguments: { to: "compact-reader", verbose: true, mark_read: false },
+        arguments: { to: "compact-reader", verbose: true },
       }) as any) as any;
-      expect(verbose.compact).toBe(false);
-      expect(verbose.messages.some((m: any) => m.content.includes("tail-visible-only-in-verbose"))).toBe(true);
+      expect(verbose.compact).toBe(true);
+      expect(verbose.messages.every((message: any) => message.content === undefined)).toBe(true);
+
+      const exact = parseResult(await client.callTool({
+        name: "get_message",
+        arguments: { id: sent.id },
+      }) as any) as any;
+      expect(exact.content).toBe(long);
+
+      await client.callTool({
+        name: "read_messages",
+        arguments: { to: "compact-reader", mark_read: true },
+      });
+      expect(getMessageById(sent.id)?.read_at).not.toBeNull();
     });
 
     test("supports latest param", async () => {

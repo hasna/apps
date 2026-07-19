@@ -3,21 +3,57 @@ import { startApiServer, type ApiServerDeps } from "./api.js";
 import { mintApiKey } from "@hasna/contracts/auth";
 import { verifyApiKey, ApiKeyStore } from "@hasna/contracts/auth";
 import { readFileSync } from "node:fs";
+import { enterHermeticTestEnv, installNetworkGuard } from "../test/hermetic.js";
 
 // In-memory query shim standing in for the vendored kit's TypedQueryClient.
 // Exercises the router + auth without a live Postgres.
 function makeFakeClient(incidentProjectionCount = 0) {
   const channels: Record<string, any> = {};
   const messages: any[] = [];
+  const queries: string[] = [];
   let nextId = 1;
   const client = {
     async many(sql: string, _p: readonly unknown[] = []): Promise<any[]> {
+      queries.push(sql);
       if (/FROM channels/i.test(sql)) return Object.values(channels);
-      if (/FROM messages/i.test(sql)) return messages.slice().reverse();
+      if (/FROM messages/i.test(sql)) {
+        const rows = messages.slice().reverse();
+        if (/preview_source/i.test(sql)) {
+          return rows.map((message) => {
+            const scope = [message.channel, message.to_agent, message.session_id].join(" ").toLowerCase();
+            const restricted = scope.includes("incident") || scope.includes("security");
+            return {
+              id: message.id,
+              uuid: message.uuid,
+              session_id: message.session_id,
+              from_agent: message.from_agent,
+              to_agent: message.to_agent,
+              channel: message.channel,
+              project_id: message.project_id,
+              priority: message.priority,
+              blocking: message.blocking,
+              reply_to: message.reply_to,
+              working_dir: message.working_dir,
+              repository: message.repository,
+              branch: message.branch,
+              created_at: message.created_at,
+              read_at: message.read_at ?? null,
+              edited_at: message.edited_at ?? null,
+              pinned_at: message.pinned_at ?? null,
+              has_metadata: Boolean(message.metadata),
+              attachment_count: Array.isArray(message.attachments) ? message.attachments.length : 0,
+              preview_source: restricted ? "" : String(message.content ?? "").slice(0, 4096),
+              content_bytes: Buffer.byteLength(String(message.content ?? "")),
+            };
+          });
+        }
+        return rows;
+      }
       if (/revoked_at IS NOT NULL/i.test(sql)) return [];
       return [];
     },
     async query(sql: string, p: readonly unknown[] = []): Promise<{ rows: any[]; rowCount: number }> {
+      queries.push(sql);
       if (/INSERT INTO messages/i.test(sql) && /ON CONFLICT/i.test(sql)) {
         // One COALESCE(...) is emitted per row (for created_at) → row count.
         const numRows = (sql.match(/COALESCE\(/g) || []).length || 1;
@@ -38,6 +74,7 @@ function makeFakeClient(incidentProjectionCount = 0) {
       return { rows: [], rowCount: 0 };
     },
     async get(sql: string, p: readonly unknown[] = []): Promise<any> {
+      queries.push(sql);
       if (/SELECT 1 AS ok/i.test(sql)) return { ok: 1 };
       if (/count\(\*\).*incident_projections/is.test(sql)) return { n: incidentProjectionCount };
       if (/count\(\*\)/i.test(sql)) return { n: messages.length };
@@ -56,6 +93,9 @@ function makeFakeClient(incidentProjectionCount = 0) {
       if (/SELECT id, session_id, channel, project_id FROM messages WHERE id/i.test(sql)) {
         return messages.find((m) => m.id === Number((p as any[])[0])) ?? null;
       }
+      if (/SELECT \* FROM messages WHERE id/i.test(sql)) {
+        return messages.find((m) => m.id === Number((p as any[])[0])) ?? null;
+      }
       if (/INSERT INTO messages/i.test(sql)) {
         const [
           session_id, from_agent, to_agent, channel, project_id, content, priority, blocking,
@@ -65,16 +105,18 @@ function makeFakeClient(incidentProjectionCount = 0) {
           id: nextId++, uuid: `u${nextId}`, session_id, from_agent, to_agent, channel, project_id,
           content, priority, blocking, reply_to, metadata, working_dir, repository, branch, attachments,
           created_at: new Date().toISOString(),
+          read_at: null,
         };
         messages.push(row);
         return row;
       }
       return null;
     },
-    async execute(_sql: string, _p: readonly unknown[] = []): Promise<void> {},
+    async execute(sql: string, _p: readonly unknown[] = []): Promise<void> { queries.push(sql); },
     async transaction<T>(fn: (tx: any) => Promise<T>): Promise<T> {
       return fn(client);
     },
+    queries,
   };
   return client;
 }
@@ -102,8 +144,12 @@ let base: string;
 let rwKey: string;
 let roKey: string;
 let projectorKey: string;
+let restoreEnv: () => void;
+let restoreNetwork: () => void;
 
 beforeAll(() => {
+  restoreEnv = enterHermeticTestEnv();
+  restoreNetwork = installNetworkGuard({ allowLoopback: true });
   server = startApiServer({ port: 0, host: "127.0.0.1", deps: makeDeps() });
   base = `http://127.0.0.1:${server.port}`;
   rwKey = mintApiKey({ app: "conversations", agent: "test", scopes: ["conversations:read", "conversations:write"], signingSecret: SIGNING }).token;
@@ -111,7 +157,11 @@ beforeAll(() => {
   projectorKey = mintApiKey({ app: "conversations", agent: "todos-projector", scopes: ["conversations:incident-project"], signingSecret: SIGNING }).token;
 });
 
-afterAll(() => { server.stop(true); });
+afterAll(() => {
+  server.stop(true);
+  restoreNetwork();
+  restoreEnv();
+});
 
 describe("conversations-serve", () => {
   test("GET /health is unauthenticated and returns status+version+mode", async () => {
@@ -316,6 +366,63 @@ describe("conversations-serve", () => {
 
     const list = await (await fetch(`${base}/v1/messages?channel=deploys`, { headers: { "x-api-key": rwKey } })).json();
     expect(list.messages.length).toBeGreaterThan(0);
+    expect(list.messages[0].content).toBeUndefined();
+  });
+
+  test("collection reads project, redact, cap, and reserve full content for exact IDs", async () => {
+    const deps = makeDeps();
+    const isolated = startApiServer({ port: 0, host: "127.0.0.1", deps });
+    const isolatedBase = `http://127.0.0.1:${isolated.port}`;
+    try {
+      const token = ["Bearer", `fixture-${"x".repeat(30)}`].join(" ");
+      const normalBody = `coordination update ${token}`;
+      const restrictedBody = "incident detail must remain exact-only";
+      const normalResponse = await fetch(`${isolatedBase}/v1/messages`, {
+        method: "POST",
+        headers: { "x-api-key": rwKey, "content-type": "application/json" },
+        body: JSON.stringify({ from: "a", to: "audit", channel: "audit", content: normalBody, metadata: { internal: "hidden" } }),
+      });
+      const restrictedResponse = await fetch(`${isolatedBase}/v1/messages`, {
+        method: "POST",
+        headers: { "x-api-key": rwKey, "content-type": "application/json" },
+        body: JSON.stringify({ from: "a", to: "incidents", channel: "incidents", content: restrictedBody }),
+      });
+      const normal = (await normalResponse.json()).message;
+      expect(restrictedResponse.status).toBe(201);
+
+      const listResponse = await fetch(`${isolatedBase}/v1/messages?limit=9999&max_bytes=4096`, {
+        headers: { "x-api-key": rwKey },
+      });
+      expect(listResponse.status).toBe(200);
+      const page = await listResponse.json();
+      expect(page.compact).toBe(true);
+      expect(page.limit).toBe(100);
+      expect(page.byte_length).toBeLessThanOrEqual(4096);
+      expect(page.messages.every((message: any) => message.content === undefined && message.metadata === undefined && message.attachments === undefined)).toBe(true);
+      const normalPreview = page.messages.find((message: any) => message.id === normal.id);
+      expect(normalPreview.preview).toContain("[REDACTED:BEARER_TOKEN]");
+      expect(normalPreview.preview).not.toContain(token);
+      const restrictedPreview = page.messages.find((message: any) => message.channel === "incidents");
+      expect(restrictedPreview.preview).toBe("[REDACTED:RESTRICTED_CHANNEL_BODY]");
+      expect(JSON.stringify(restrictedPreview)).not.toContain(restrictedBody);
+
+      const projectedQuery = (deps.client as any).queries.find((sql: string) => /preview_source/i.test(sql) && /ORDER BY created_at/i.test(sql));
+      expect(projectedQuery).toBeTruthy();
+      expect(projectedQuery).not.toMatch(/SELECT\s+(?:m\.)?\*/i);
+
+      const broadFull = await fetch(`${isolatedBase}/v1/messages?detail=full`, { headers: { "x-api-key": rwKey } });
+      expect(broadFull.status).toBe(400);
+      expect((await broadFull.json()).error).toContain("exact message");
+
+      const exact = await fetch(`${isolatedBase}/v1/messages/${normal.id}`, { headers: { "x-api-key": rwKey } });
+      expect(exact.status).toBe(200);
+      expect((await exact.json()).message.content).toBe(normalBody);
+
+      const malformed = await fetch(`${isolatedBase}/v1/messages?max_bytes=not-a-number`, { headers: { "x-api-key": rwKey } });
+      expect(malformed.status).toBe(400);
+    } finally {
+      isolated.stop(true);
+    }
   });
 
   test("POST /v1/messages validates required fields", async () => {

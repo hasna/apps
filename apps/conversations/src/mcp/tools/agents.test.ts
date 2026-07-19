@@ -5,20 +5,20 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerAgentTools } from "./agents";
 import { closeDb } from "../../lib/db";
 import { resolveIdentity, _resetAutoName } from "../../lib/identity";
-import { unlinkSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
+import { createDisposableStore, enterHermeticTestEnv, installNetworkGuard } from "../../test/hermetic";
 
-const TEST_DB = join(tmpdir(), `conversations-test-agents-mcp-${Date.now()}.db`);
+const TEST_STORE = createDisposableStore("agents-mcp");
 
 describe("agent MCP tools", () => {
   let client: Client;
+  let restoreEnv: () => void;
+  let restoreNetwork: () => void;
   let agentFocus: Map<string, { project_id: string | null }>;
   const getAgentFocus = async (agentId: string) => agentFocus.get(agentId)?.project_id ?? null;
 
   beforeAll(async () => {
-    process.env.CONVERSATIONS_DB_PATH = TEST_DB;
-    delete process.env.CONVERSATIONS_AGENT_ID;
+    restoreEnv = enterHermeticTestEnv({ CONVERSATIONS_DB_PATH: TEST_STORE.dbPath });
+    restoreNetwork = installNetworkGuard();
     closeDb();
 
     const server = new McpServer({ name: "test-agents-mcp", version: "0.0.1" });
@@ -32,12 +32,11 @@ describe("agent MCP tools", () => {
   });
 
   afterAll(async () => {
-    delete process.env.CONVERSATIONS_DB_PATH;
-    closeDb();
-    try { unlinkSync(TEST_DB); } catch {}
-    try { unlinkSync(TEST_DB + "-wal"); } catch {}
-    try { unlinkSync(TEST_DB + "-shm"); } catch {}
     await client.close();
+    closeDb();
+    restoreNetwork();
+    restoreEnv();
+    TEST_STORE.cleanup();
   });
 
   function parseResult(result: { content: unknown[] }): unknown {

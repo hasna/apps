@@ -11,7 +11,7 @@ import { getStore } from "../../lib/store/index.js";
 // Reads/writes route through getStore(): ApiStore when HASNA_CONVERSATIONS_API_URL
 // + _API_KEY are set (self_hosted/cloud), else LocalStore.
 import { resolveIdentity } from "../../lib/identity.js";
-import { compactQueriedMessages, compactQueriedSearchMessages, compactWindowedSessions, jsonText, resolveMcpWindow } from "../compact.js";
+import { compactWindowedSessions, jsonText } from "../compact.js";
 
 export function registerMessagingTools(
   server: McpServer,
@@ -98,7 +98,7 @@ export function registerMessagingTools(
   });
 
   server.registerTool("read_messages", {
-    description: "Read DMs with optional filters.",
+    description: "Peek at a bounded, redacted page of message previews. This is non-mutating unless mark_read:true is explicit; use get_message for one exact full body.",
     inputSchema: {
       session_id: z.string().optional(),
       from: z.string().optional(),
@@ -109,36 +109,45 @@ export function registerMessagingTools(
       limit: z.coerce.number().optional(),
       unread_only: z.coerce.boolean().optional(),
       mark_read: z.coerce.boolean().optional(),
-      max_content_length: z.coerce.number().optional().describe("Truncate each message content to N chars (adds truncated:true flag)"),
+      max_content_length: z.coerce.number().optional().describe("Deprecated compatibility alias; collection bodies are always preview-only"),
+      preview_bytes: z.coerce.number().optional().describe("Maximum bytes per redacted preview (hard-capped by the server)"),
+      max_bytes: z.coerce.number().optional().describe("Maximum bytes for the entire response envelope"),
+      timeout_ms: z.coerce.number().optional().describe("Maximum collection-query time in milliseconds (hard-capped by the server)"),
       threads_only: z.coerce.boolean().optional().describe("Only return root messages (reply_to IS NULL) — hides thread replies"),
       include_reply_counts: z.coerce.boolean().optional().describe("Include reply_count on each message (adds one extra query)"),
       mentions_only: z.string().optional().describe("Only return messages that @mention this agent"),
       latest: z.coerce.number().optional().describe("Return the N most recent unread messages, newest first. Shorthand for order:desc + limit:N."),
       offset: z.coerce.number().optional().describe("Skip first N messages for pagination (use with limit)"),
       cursor: z.coerce.number().optional().describe("Alias for offset"),
-      verbose: z.coerce.boolean().optional().describe("Return full raw message records instead of compact previews"),
+      verbose: z.coerce.boolean().optional().describe("Deprecated compatibility flag; collection reads remain preview-only"),
     },
   }, async (args: Record<string, any>) => {
     const agent = resolveIdentity(args.from);
-    const window = resolveMcpWindow(args);
-    const verbose = args.verbose === true;
-    const messages = await await getStore().readMessages({
-      ...args,
-      limit: verbose ? args.limit : window.limit + 1,
-      offset: verbose ? (args.offset ?? args.cursor) : window.offset,
+    const page = await getStore().readMessagePreviews({
+      session_id: args.session_id,
+      from: args.from,
+      to: args.to,
+      channel: args.channel,
       project_id: args.project_id ?? (await resolveProjectId(undefined, agent)),
+      since: args.since,
+      limit: args.limit,
+      unread_only: args.unread_only,
+      threads_only: args.threads_only,
+      include_reply_counts: args.include_reply_counts,
+      mentions_only: args.mentions_only,
+      latest: args.latest,
+      offset: args.offset ?? args.cursor,
+      preview_bytes: args.preview_bytes ?? args.max_content_length,
+      max_bytes: args.max_bytes,
+      timeout_ms: args.timeout_ms,
     });
 
-    if (args.mark_read !== false && messages.length > 0) {
-      const visible = verbose ? messages : messages.slice(0, window.limit);
-      await await getStore().markReadByIds(visible.map((m) => m.id), agent);
+    if (args.mark_read === true && page.messages.length > 0) {
+      await getStore().markReadByIds(page.messages.map((message) => message.id), agent);
     }
 
-    const payload = verbose
-      ? { messages, count: messages.length, offset: args.offset ?? args.cursor ?? 0, compact: false }
-      : compactQueriedMessages(messages, args);
     return {
-      content: [{ type: "text", text: jsonText(payload) }],
+      content: [{ type: "text", text: jsonText(page) }],
     };
   });
 
@@ -273,7 +282,7 @@ export function registerMessagingTools(
   });
 
   server.registerTool("search_messages", {
-    description: "Full-text search across messages. Uses FTS5 with BM25 ranking if available, falls back to LIKE. Returns messages with snippet and relevance_score.",
+    description: "Search messages and return a bounded, redacted preview page. Full bodies never cross this collection path; use get_message for one exact result.",
     inputSchema: {
       query: z.string().describe("Search query. Wrap in quotes for exact phrase: '\"BUG-005\"'"),
       channel: z.string().optional().describe("Limit to a specific channel"),
@@ -284,13 +293,14 @@ export function registerMessagingTools(
       sort: z.enum(["relevance", "recent"]).optional().describe("Sort order (default: relevance)"),
       limit: z.coerce.number().optional().describe("Max results (default: 20)"),
       cursor: z.coerce.number().optional().describe("Skip first N results for pagination"),
-      verbose: z.coerce.boolean().optional().describe("Return full raw message records instead of compact previews"),
+      preview_bytes: z.coerce.number().optional().describe("Maximum bytes per redacted preview (hard-capped by the server)"),
+      max_bytes: z.coerce.number().optional().describe("Maximum bytes for the entire response envelope"),
+      timeout_ms: z.coerce.number().optional().describe("Maximum collection-query time in milliseconds (hard-capped by the server)"),
+      verbose: z.coerce.boolean().optional().describe("Deprecated compatibility flag; collection searches remain preview-only"),
     },
   }, async (args: Record<string, any>) => {
     const { query, channel, from, to, since, until, sort } = args;
-    const window = resolveMcpWindow(args);
-    const verbose = args.verbose === true;
-    const results = await await getStore().searchMessages({
+    const page = await getStore().searchMessagePreviews({
       query,
       channel,
       from,
@@ -298,15 +308,16 @@ export function registerMessagingTools(
       since,
       until,
       sort,
-      limit: verbose ? args.limit : window.limit + 1,
-      offset: verbose ? args.cursor : window.offset,
+      limit: args.limit,
+      offset: args.cursor,
+      preview_bytes: args.preview_bytes,
+      max_bytes: args.max_bytes,
+      timeout_ms: args.timeout_ms,
     });
+    const { messages, ...pageMetadata } = page;
 
-    const payload = verbose
-      ? { results, count: results.length, query, compact: false }
-      : compactQueriedSearchMessages(results, args);
     return {
-      content: [{ type: "text", text: jsonText(payload) }],
+      content: [{ type: "text", text: jsonText({ ...pageMetadata, results: messages }) }],
     };
   });
 
@@ -467,28 +478,33 @@ export function registerMessagingTools(
   });
 
   server.registerTool("get_pinned_messages", {
-    description: "Get pinned messages by channel or session.",
+    description: "Get a bounded, redacted page of pinned-message previews by channel or session.",
     inputSchema: {
       channel: z.string().optional(),
       session_id: z.string().optional(),
       limit: z.coerce.number().optional(),
       cursor: z.coerce.number().optional(),
-      verbose: z.coerce.boolean().optional().describe("Return full raw message records instead of compact previews"),
+      preview_bytes: z.coerce.number().optional(),
+      max_bytes: z.coerce.number().optional(),
+      timeout_ms: z.coerce.number().optional(),
+      verbose: z.coerce.boolean().optional().describe("Deprecated compatibility flag; collections remain preview-only"),
     },
   }, async (args: Record<string, any>) => {
     const { channel, session_id } = args;
-    const window = resolveMcpWindow(args);
-    const verbose = args.verbose === true;
-    const messages = await await getStore().getPinnedMessages({
+    const page = await getStore().readMessagePreviews({
+      pinned_only: true,
       channel,
       session_id,
-      limit: verbose ? args.limit : window.limit + 1,
-      offset: verbose ? args.cursor : window.offset,
+      limit: args.limit,
+      offset: args.cursor,
+      order: "desc",
+      preview_bytes: args.preview_bytes,
+      max_bytes: args.max_bytes,
+      timeout_ms: args.timeout_ms,
     });
 
-    const payload = verbose ? messages : compactQueriedMessages(messages, args);
     return {
-      content: [{ type: "text", text: jsonText(payload) }],
+      content: [{ type: "text", text: jsonText(page) }],
     };
   });
 

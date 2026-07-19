@@ -129,37 +129,38 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
   });
 
   server.registerTool("get_mentions", {
-    description: "Get messages that @mention a specific agent. Useful for catching up on missed pings.",
+    description: "Get a bounded, redacted page of messages that @mention a specific agent. Use get_message for one exact full body.",
     inputSchema: {
       agent: z.string().describe("Agent name to find mentions for"),
       channel: z.string().optional().describe("Filter to a specific channel"),
       unread_only: z.coerce.boolean().optional().describe("Only unread (not yet notified) mentions (default: true)"),
       limit: z.coerce.number().optional().describe("Max results (default: 50)"),
       cursor: z.coerce.number().optional().describe("Skip first N mention results"),
-      verbose: z.coerce.boolean().optional().describe("Return full raw mention message records"),
+      max_bytes: z.coerce.number().optional(),
+      preview_bytes: z.coerce.number().optional(),
+      timeout_ms: z.coerce.number().optional(),
+      verbose: z.coerce.boolean().optional().describe("Deprecated compatibility flag; collections remain preview-only"),
     },
   }, async (args: Record<string, any>) => {
-    const window = resolveMcpWindow(args);
-    const verbose = args.verbose === true;
-    const results = await getStore().getMessagesForAgent(args.agent as string, {
+    const page = await getStore().readMessagePreviews({
+      mentions_only: args.agent as string,
       channel: args.channel,
       unread_only: args.unread_only ?? true,
-      limit: verbose ? args.limit : window.offset + window.limit + 1,
+      limit: args.limit,
+      offset: args.cursor,
+      order: "desc",
+      max_bytes: args.max_bytes,
+      preview_bytes: args.preview_bytes,
+      timeout_ms: args.timeout_ms,
     });
-    if (verbose) return { content: [{ type: "text", text: jsonText({ mentions: results, count: results.length, compact: false }) }] };
-    const page = pageQueriedItems(results.slice(window.offset), window);
+    const { messages, ...metadata } = page;
     return {
       content: [{
         type: "text",
         text: jsonText({
-          mentions: page.items.map((item) => ({ mention_id: item.mention_id, message: summarizeMessage(item.message) })),
-          count: page.count,
-          limit: page.limit,
-          cursor: page.cursor,
-          next_cursor: page.next_cursor,
-          has_more: page.has_more,
-          compact: true,
-          hint: "Use verbose:true for full mention messages or get_message with an id.",
+          ...metadata,
+          mentions: messages.map((message) => ({ mention_id: message.id, message })),
+          hint: "Use get_message with an id for one exact full message.",
         }),
       }],
     };
@@ -402,48 +403,56 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
   // ---- Thread Tools ----
 
   server.registerTool("get_thread_replies", {
-    description: "Get all replies in a thread for a given parent message ID. Also accessible as read_thread.",
+    description: "Get a bounded, redacted preview page for a thread. Also accessible as read_thread; use get_message for one exact full body.",
     inputSchema: {
       message_id: z.coerce.number(),
       limit: z.coerce.number().optional(),
-      verbose: z.coerce.boolean().optional().describe("Return full raw parent/reply message records"),
+      max_bytes: z.coerce.number().optional(),
+      preview_bytes: z.coerce.number().optional(),
+      timeout_ms: z.coerce.number().optional(),
+      verbose: z.coerce.boolean().optional().describe("Deprecated compatibility flag; collections remain preview-only"),
     },
   }, async (args: Record<string, any>) => {
-    let replies = await getStore().getThreadReplies(args.message_id);
-    if (args.limit) replies = replies.slice(0, args.limit);
-    const parent = await getStore().getMessageById(args.message_id);
-    const payload = args.verbose
-      ? { parent, replies, reply_count: replies.length, compact: false }
-      : {
-          parent: parent ? summarizeMessage(parent) : null,
-          replies: replies.map((reply) => summarizeMessage(reply)),
-          reply_count: replies.length,
-          compact: true,
-          hint: "Use verbose:true for full thread messages or get_message with an id.",
-        };
+    const [parents, replies] = await Promise.all([
+      getStore().readMessagePreviews({ id: args.message_id, limit: 1, preview_bytes: args.preview_bytes, timeout_ms: args.timeout_ms }),
+      getStore().readMessagePreviews({ reply_to: args.message_id, limit: args.limit, order: "asc", max_bytes: args.max_bytes, preview_bytes: args.preview_bytes, timeout_ms: args.timeout_ms }),
+    ]);
+    const payload = {
+      parent: parents.messages[0] ?? null,
+      replies: replies.messages,
+      reply_count: replies.count,
+      next_cursor: replies.next_cursor,
+      has_more: replies.has_more,
+      compact: true,
+      hint: "Use get_message with an id for one exact full message.",
+    };
     return { content: [{ type: "text", text: jsonText(payload) }] };
   });
 
   server.registerTool("read_thread", {
-    description: "Alias for get_thread_replies. Read all replies to a specific message, forming a thread view.",
+    description: "Alias for get_thread_replies. Read bounded, redacted previews for one thread.",
     inputSchema: {
       message_id: z.coerce.number(),
       limit: z.coerce.number().optional(),
-      verbose: z.coerce.boolean().optional().describe("Return full raw parent/reply message records"),
+      max_bytes: z.coerce.number().optional(),
+      preview_bytes: z.coerce.number().optional(),
+      timeout_ms: z.coerce.number().optional(),
+      verbose: z.coerce.boolean().optional().describe("Deprecated compatibility flag; collections remain preview-only"),
     },
   }, async (args: Record<string, any>) => {
-    let replies = await getStore().getThreadReplies(args.message_id);
-    if (args.limit) replies = replies.slice(0, args.limit);
-    const parent = await getStore().getMessageById(args.message_id);
-    const payload = args.verbose
-      ? { parent, replies, reply_count: replies.length, compact: false }
-      : {
-          parent: parent ? summarizeMessage(parent) : null,
-          replies: replies.map((reply) => summarizeMessage(reply)),
-          reply_count: replies.length,
-          compact: true,
-          hint: "Use verbose:true for full thread messages or get_message with an id.",
-        };
+    const [parents, replies] = await Promise.all([
+      getStore().readMessagePreviews({ id: args.message_id, limit: 1, preview_bytes: args.preview_bytes, timeout_ms: args.timeout_ms }),
+      getStore().readMessagePreviews({ reply_to: args.message_id, limit: args.limit, order: "asc", max_bytes: args.max_bytes, preview_bytes: args.preview_bytes, timeout_ms: args.timeout_ms }),
+    ]);
+    const payload = {
+      parent: parents.messages[0] ?? null,
+      replies: replies.messages,
+      reply_count: replies.count,
+      next_cursor: replies.next_cursor,
+      has_more: replies.has_more,
+      compact: true,
+      hint: "Use get_message with an id for one exact full message.",
+    };
     return { content: [{ type: "text", text: jsonText(payload) }] };
   });
 
@@ -495,21 +504,21 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     const descriptions: Record<string, string> = {
       // DM tools
       send_message: "Send DM to agent. Required: to, content. Optional: from?, priority?(low|normal|high|urgent), blocking?",
-      read_messages: "Read messages with filters. Optional: session_id?, from?, to?, channel?, since?(ISO), limit?, unread_only?, mark_read?(default true \u2014 auto-marks returned messages as read, pass false to peek without consuming)",
+      read_messages: "Read a bounded, redacted preview page with filters. Pure peek by default; mark_read:true explicitly acknowledges returned IDs. Optional: session_id?, from?, to?, channel?, since?(ISO), limit?, cursor?, unread_only?, max_bytes?, timeout_ms?",
       get_message: "Get the full content of a specific message by id. Required: id",
       read_digest: "Cursored byte-capped digest — preview snippets only, no full bodies, non-destructive unless mark_read:true. Returns { digest_id, message_ids, next_cursor, messages, byte_length }. Optional: channel?, session_id?, to?, since?(ISO), cursor?(message id), max_bytes?, limit?, unread_only?, mark_read?, project_id?",
       list_sessions: "List all DM sessions. Optional: agent?(filter by participant)",
       reply: "Reply to a specific message, creating a thread (sets reply_to). Use read_thread to retrieve. Required: message_id, content. Optional: from?",
       mark_read: "Mark messages as read. Optional: from?, ids?(array), all?(bool \u2014 mark all unread)",
       mark_channel_read: "Mark ALL messages in a channel as read without fetching. Required: channel. Optional: from?",
-      search_messages: "Full-text search messages. Required: query. Optional: channel?, from?, to?, limit?",
+      search_messages: "Search messages and return bounded, redacted previews. Required: query. Optional: channel?, from?, to?, limit?, cursor?, max_bytes?, timeout_ms?",
       export_messages: "Export messages as JSON or CSV. Optional: channel?, session_id?, from?, since?, until?, format?(json|csv)",
       // Channel tools
       create_channel: "Create channel and auto-join. Required: name. Optional: from?, description?, topic?, project_id?",
       list_unread_counts: "Get unread message counts per channel (no content). Ideal for session start triage. Optional: agent?(filter to agent's channels)",
       list_channels: "List channels with member/message counts. Optional: project_id?, include_archived?",
       send_to_channel: "Post message to channel. Required: channel, content. Optional: from?, priority?(low|normal|high|urgent), blocking?",
-      read_channel: "Read messages in a channel. Required: channel. Optional: since?(ISO), limit?, mark_read?(default true \u2014 auto-marks returned messages as read)",
+      read_channel: "Peek at a bounded, redacted channel preview page. Pure by default; mark_read:true explicitly records receipts for returned IDs. Required: channel. Optional: since?(ISO), limit?, cursor?, max_bytes?, timeout_ms?",
       join_channel: "Join a channel. Required: channel. Optional: from?",
       leave_channel: "Leave a channel. Required: channel. Optional: from?",
       update_channel: "Update channel fields. Required: name. Optional: description?, topic?(use 'null' to remove), project_id?(use 'null' to remove)",

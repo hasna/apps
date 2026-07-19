@@ -4,18 +4,22 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerChannelTools } from "./channels";
 import { closeDb } from "../../lib/db";
-import { unlinkSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
+import { getMessageById, getReadReceipts } from "../../lib/messages";
+import { createDisposableStore, enterHermeticTestEnv, installNetworkGuard } from "../../test/hermetic";
 
-const TEST_DB = join(tmpdir(), `conversations-test-channels-mcp-${Date.now()}.db`);
+const TEST_STORE = createDisposableStore("channels-mcp");
 
 describe("channels MCP tools", () => {
   let client: Client;
+  let restoreEnv: () => void;
+  let restoreNetwork: () => void;
 
   beforeAll(async () => {
-    process.env.CONVERSATIONS_DB_PATH = TEST_DB;
-    process.env.CONVERSATIONS_AGENT_ID = "channels-test-agent";
+    restoreEnv = enterHermeticTestEnv({
+      CONVERSATIONS_DB_PATH: TEST_STORE.dbPath,
+      CONVERSATIONS_AGENT_ID: "channels-test-agent",
+    });
+    restoreNetwork = installNetworkGuard();
     closeDb();
 
     const server = new McpServer({ name: "test-channels-mcp", version: "0.0.1" });
@@ -28,13 +32,11 @@ describe("channels MCP tools", () => {
   });
 
   afterAll(async () => {
-    delete process.env.CONVERSATIONS_DB_PATH;
-    delete process.env.CONVERSATIONS_AGENT_ID;
-    closeDb();
-    try { unlinkSync(TEST_DB); } catch {}
-    try { unlinkSync(TEST_DB + "-wal"); } catch {}
-    try { unlinkSync(TEST_DB + "-shm"); } catch {}
     await client.close();
+    closeDb();
+    restoreNetwork();
+    restoreEnv();
+    TEST_STORE.cleanup();
   });
 
   function parseResult(result: { content: unknown[] }): unknown {
@@ -152,20 +154,25 @@ describe("channels MCP tools", () => {
       expect(result.count).toBeLessThanOrEqual(1);
     });
 
-    test("reads with mark_read=false", async () => {
-      const result = parseResult(await client.callTool({
-        name: "read_channel",
-        arguments: { channel: "test-channel-1", mark_read: false },
+    test("defaults to a pure peek and records receipts only with mark_read:true", async () => {
+      const sent = parseResult(await client.callTool({
+        name: "send_to_channel",
+        arguments: { channel: "test-channel-1", content: "explicit acknowledgement fixture", from: "ack-sender" },
       }) as any) as any;
-      expect(Array.isArray(result.messages)).toBe(true);
-    });
+      const peek = parseResult(await client.callTool({
+        name: "read_channel",
+        arguments: { channel: "test-channel-1", from: "reader-agent" },
+      }) as any) as any;
+      expect(Array.isArray(peek.messages)).toBe(true);
+      expect(getMessageById(sent.id)?.read_at).toBeNull();
+      expect(getReadReceipts(sent.id)).toEqual([]);
 
-    test("records per-agent read receipts", async () => {
-      const result = parseResult(await client.callTool({
+      await client.callTool({
         name: "read_channel",
         arguments: { channel: "test-channel-1", from: "reader-agent", mark_read: true },
-      }) as any) as any;
-      expect(Array.isArray(result.messages)).toBe(true);
+      });
+      expect(getMessageById(sent.id)?.read_at).not.toBeNull();
+      expect(getReadReceipts(sent.id).map((receipt) => receipt.agent)).toContain("reader-agent");
     });
 
     test("supports threads_only and include_reply_counts", async () => {

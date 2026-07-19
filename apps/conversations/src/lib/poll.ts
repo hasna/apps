@@ -34,7 +34,7 @@ export function startPolling(opts: PollOptions): { stop: () => void } {
   // poll awaits it before querying, keeping the "only NEW messages" contract in
   // both modes.
   const seeded = store
-    .readMessages({
+    .readMessagePreviews({
       session_id: opts.session_id,
       to: opts.to_agent,
       channel: opts.channel,
@@ -42,7 +42,7 @@ export function startPolling(opts: PollOptions): { stop: () => void } {
       limit: 1,
     })
     .then((latest) => {
-      if (latest.length > 0 && latest[0].id > lastSeenId) lastSeenId = latest[0].id;
+      if (latest.messages.length > 0 && latest.messages[0].id > lastSeenId) lastSeenId = latest.messages[0].id;
     })
     .catch(() => {
       // A failed seed just means the first poll starts from id 0; never fatal.
@@ -56,7 +56,7 @@ export function startPolling(opts: PollOptions): { stop: () => void } {
       await seeded;
       if (stopped) return;
 
-      const messages = await store.readMessages({
+      const page = await store.readMessagePreviews({
         session_id: opts.session_id,
         to: opts.to_agent,
         channel: opts.channel,
@@ -64,8 +64,10 @@ export function startPolling(opts: PollOptions): { stop: () => void } {
         order: "asc",
       });
 
-      if (messages.length > 0) {
-        lastSeenId = messages[messages.length - 1].id;
+      if (page.messages.length > 0) {
+        lastSeenId = page.messages[page.messages.length - 1].id;
+        const messages = (await Promise.all(page.messages.map((preview) => store.getMessageById(preview.id))))
+          .filter((message): message is Message => message !== null);
         try {
           opts.on_messages(messages);
         } catch (error) {
