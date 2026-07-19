@@ -1,156 +1,177 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, useInput } from "ink";
 import TextInput from "ink-text-input";
-import { readMessages, sendMessage, markSessionRead, markChannelRead } from "../../lib/messages.js";
+import { getStore } from "../../lib/store/index.js";
 import { startPolling } from "../../lib/poll.js";
 import { MessageBubble } from "./MessageBubble.js";
-import type { Message } from "../../types.js";
+import type { Message, MessagePreview } from "../../types.js";
 
 interface ChatViewProps {
   agent: string;
   onBack: () => void;
-  // DM mode
   sessionId?: string;
   recipient?: string;
-  // Channel mode
   channelName?: string;
 }
 
 export function ChatView({ agent, onBack, sessionId: initialSessionId, recipient, channelName }: ChatViewProps) {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const store = useMemo(() => getStore(), []);
+  const [messages, setMessages] = useState<MessagePreview[]>([]);
+  const [detail, setDetail] = useState<Message | null>(null);
+  const [selectedIndex, setSelectedIndex] = useState(0);
   const [input, setInput] = useState("");
+  const [inputFocused, setInputFocused] = useState(true);
   const [sessionId, setSessionId] = useState(initialSessionId);
   const isChannel = !!channelName;
   const seenIds = useRef<Set<number>>(new Set());
 
-  // Load existing messages + poll for new ones
+  // Broad history is always a bounded preview page. No read state changes here.
   useEffect(() => {
+    let cancelled = false;
     seenIds.current = new Set();
+    setDetail(null);
     const opts = isChannel
-      ? { channel: channelName }
-      : sessionId
-        ? { session_id: sessionId }
-        : {};
-
-    // Only load if we have something to query
-    if (isChannel || sessionId) {
-      const existing = readMessages(opts);
-      for (const msg of existing) {
-        seenIds.current.add(msg.id);
-      }
-      setMessages(existing);
-    } else {
-      setMessages([]);
-    }
-
-    const pollOpts = isChannel
       ? { channel: channelName }
       : sessionId
         ? { session_id: sessionId }
         : null;
 
-    if (!pollOpts) return;
+    if (!opts) {
+      setMessages([]);
+      return;
+    }
+
+    void store.readMessagePreviews({ ...opts, order: "asc", limit: 100 })
+      .then((page) => {
+        if (cancelled) return;
+        for (const message of page.messages) seenIds.current.add(message.id);
+        setMessages(page.messages);
+        setSelectedIndex(Math.max(0, page.messages.length - 1));
+      });
 
     const { stop } = startPolling({
-      ...pollOpts,
+      ...opts,
       interval_ms: 200,
-      on_messages: (newMsgs) => {
-        const unseen = newMsgs.filter((msg) => !seenIds.current.has(msg.id));
+      on_messages: (newPreviews) => {
+        if (cancelled) return;
+        const unseen = newPreviews.filter((message) => !seenIds.current.has(message.id));
         if (unseen.length === 0) return;
-        for (const msg of unseen) {
-          seenIds.current.add(msg.id);
-        }
-        setMessages((prev) => [...prev, ...unseen]);
+        for (const message of unseen) seenIds.current.add(message.id);
+        setMessages((previous) => [...previous, ...unseen]);
+        setSelectedIndex((previous) => previous + unseen.length);
       },
     });
 
-    return stop;
-  }, [sessionId, channelName]);
+    return () => {
+      cancelled = true;
+      stop();
+    };
+  }, [store, sessionId, channelName, isChannel]);
 
-  // Mark as read
-  useEffect(() => {
-    if (messages.length === 0) return;
-    if (isChannel && channelName) {
-      markChannelRead(channelName, agent);
-    } else if (sessionId) {
-      markSessionRead(sessionId, agent);
+  const selected = messages[selectedIndex] ?? null;
+
+  // Full content and acknowledgement are explicit, exact-id actions only.
+  useInput((keyInput, key) => {
+    if (key.escape) {
+      if (detail) setDetail(null);
+      else onBack();
+      return;
     }
-  }, [messages.length, isChannel, channelName, sessionId, agent]);
-
-  useInput((_, key) => {
-    if (key.escape) onBack();
+    if (key.tab && !detail) {
+      setInputFocused((focused) => !focused);
+      return;
+    }
+    if (inputFocused || detail) return;
+    if (key.upArrow) setSelectedIndex((index) => Math.max(0, index - 1));
+    if (key.downArrow) setSelectedIndex((index) => Math.min(Math.max(0, messages.length - 1), index + 1));
+    if (keyInput === "v" && selected) {
+      void store.getMessageById(selected.id).then((message) => {
+        if (message) setDetail(message);
+      });
+    }
+    if (keyInput === "m" && selected) {
+      void store.markReadByIds([selected.id], agent).then(() => {
+        setMessages((current) => current.map((message) => (
+          message.id === selected.id ? { ...message, unread: false } : message
+        )));
+      });
+    }
   });
 
   const handleSubmit = (value: string) => {
-    if (!value.trim()) return;
+    const content = value.trim();
+    if (!content) return;
 
-    if (isChannel && channelName) {
-      const msg = sendMessage({
-        from: agent,
-        to: channelName,
-        content: value.trim(),
-        channel: channelName,
-        session_id: `channel:${channelName}`,
-      });
-      seenIds.current.add(msg.id);
-      setMessages((prev) => [...prev, msg]);
-    } else {
-      const to = recipient || agent;
-      const msg = sendMessage({
-        from: agent,
-        to,
-        content: value.trim(),
-        session_id: sessionId,
-      });
-      seenIds.current.add(msg.id);
-      setMessages((prev) => [...prev, msg]);
-      // For new conversations, capture the real session ID from the first message
-      if (!sessionId) {
-        setSessionId(msg.session_id);
+    void (async () => {
+      const sent = await store.sendMessage(isChannel && channelName
+        ? {
+            from: agent,
+            to: channelName,
+            content,
+            channel: channelName,
+            session_id: `channel:${channelName}`,
+          }
+        : {
+            from: agent,
+            to: recipient || agent,
+            content,
+            session_id: sessionId,
+          });
+      const page = await store.readMessagePreviews({ id: sent.id, limit: 1 });
+      const preview = page.messages[0];
+      if (preview && !seenIds.current.has(preview.id)) {
+        seenIds.current.add(preview.id);
+        setMessages((previous) => [...previous, preview]);
+        setSelectedIndex((index) => index + 1);
       }
-    }
-
+      if (!sessionId) setSessionId(sent.session_id);
+    })();
     setInput("");
   };
 
-  const title = isChannel
-    ? `#${channelName}`
-    : recipient || "self";
-
-  const prompt = isChannel
-    ? `${agent} → #${channelName}`
-    : `${agent} → ${recipient || "self"}`;
+  const title = isChannel ? `#${channelName}` : recipient || "self";
+  const prompt = isChannel ? `${agent} → #${channelName}` : `${agent} → ${recipient || "self"}`;
 
   return (
     <Box flexDirection="column" padding={1}>
       <Box marginBottom={1}>
         <Text bold color={isChannel ? "magenta" : "cyan"}>{title}</Text>
-        <Text dimColor>  (Esc: back)</Text>
+        <Text dimColor>  (Tab: type/browse, ↑/↓: select, v: exact detail, m: mark selected, Esc: back)</Text>
       </Box>
 
       <Box flexDirection="column" flexGrow={1}>
-        {messages.length === 0 ? (
+        {detail ? (
+          <Box flexDirection="column">
+            <Text bold>Exact message #{detail.id}</Text>
+            <Text>{detail.content}</Text>
+            <Text dimColor>Esc returns to preview history.</Text>
+          </Box>
+        ) : messages.length === 0 ? (
           <Text dimColor>No messages yet. Type below and press Enter.</Text>
         ) : (
-          messages.map((msg) => (
+          messages.map((message, index) => (
             <MessageBubble
-              key={msg.id}
-              message={msg}
-              isOwn={msg.from_agent === agent}
+              key={message.id}
+              message={message}
+              isOwn={message.from_agent === agent}
+              selected={index === selectedIndex}
             />
           ))
         )}
       </Box>
 
-      <Box marginTop={1}>
-        <Text color={isChannel ? "magenta" : "cyan"}>{prompt}: </Text>
-        <TextInput
-          value={input}
-          onChange={setInput}
-          onSubmit={handleSubmit}
-          placeholder="Type a message..."
-        />
-      </Box>
+      {!detail && (
+        <Box marginTop={1}>
+          <Text color={isChannel ? "magenta" : "cyan"}>{prompt}: </Text>
+          <TextInput
+            value={input}
+            onChange={setInput}
+            onSubmit={handleSubmit}
+            focus={inputFocused}
+            placeholder="Type a message..."
+          />
+        </Box>
+      )}
     </Box>
   );
 }

@@ -1,11 +1,22 @@
-import { describe, test, expect } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import * as index from "./index";
+import { enterHermeticTestEnv } from "./test/hermetic";
 
 // The public SDK surface is the Store abstraction + domain types (see the module
 // header in index.ts). The raw sqlite-bound helpers and getDb handle are NOT
 // exported — that was the split-brain bug. These tests pin the new surface.
 
 describe("public API exports", () => {
+  let restoreEnv: () => void;
+
+  beforeAll(() => {
+    restoreEnv = enterHermeticTestEnv({ HASNA_CONVERSATIONS_STORAGE_MODE: "local" });
+  });
+
+  afterAll(() => {
+    restoreEnv();
+  });
+
   test("exports the Store resolver and implementations", () => {
     expect(typeof index.getStore).toBe("function");
     expect(typeof index.LocalStore).toBe("function");

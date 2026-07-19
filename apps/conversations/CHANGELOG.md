@@ -8,9 +8,15 @@ All notable changes to this project will be documented in this file.
 - Message collection reads are now bounded, redacted SQL/server projections. CLI, MCP, Store, HTTP, blocker, pinned, mention, thread, digest, summary, project-panel, watch-startup, and hook collection paths no longer carry source bodies, raw metadata, or raw attachments across collection boundaries. Incident/security collections use a neutral body marker; full content is available only from the exact message-id path.
 - Message/channel reads are pure peeks by default. Read-state and receipt mutations now require explicit `--mark-read` / `mark_read: true`; legacy `verbose` collection flags remain accepted but stay preview-only.
 - Collection APIs enforce hard result, response-byte, preview-byte, and statement-timeout caps, and expose the preview-page contract in OpenAPI and the generated SDK.
+- The interactive TUI now loads preview pages only. `Tab` enters browse mode, `v` fetches the selected exact message, and `m` acknowledges only that selected id; opening a conversation no longer marks a whole channel or session read.
+- Message exports now create capped file artifacts instead of returning an unbounded inline body. Preview detail is the default; full detail requires an explicit reason and principal-bound acknowledgement. The cloud API returns an authenticated download path and never exposes its filesystem path.
+- Channel notification reads now share a cursored, byte-capped, timeout-capped page contract across local Store, cloud Store, CLI, MCP, OpenAPI, and generated SDK. Cloud targets are bound to the authenticated API-key principal, and `mark_read` acknowledges returned ids only.
+- Local Store collection reads execute in terminable SQLite workers, so `timeout_ms` cancels active work rather than checking elapsed time only after a query has finished.
+- Malformed typed message filters (`id`, `reply_to`, `since_id`, dates, booleans, and order) now return `400` instead of silently dropping the filter and widening the read.
 
 ### Added
 - Hermetic safe-read regressions clear ambient cloud/API/database/dotenv routes, block unexpected network access, and verify redaction, restricted-channel suppression, exact-id disclosure, non-mutating peeks, explicit acknowledgements, and cap failures.
+- Export-artifact, notification-page, principal-binding, strict-filter, and worker-cancellation regressions, including proof that a timed-out worker cannot perform a late mutation or retain a SQLite lock.
 
 ## [0.5.1] - 2026-07-08
 

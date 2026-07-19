@@ -3,14 +3,21 @@ import { sendMessage, readMessages, readDigest, markRead, markReadByIds, markSes
 import { createChannel, joinChannel } from "./channels";
 import { readChannelNotifications, subscribeToChannelNotifications } from "./channel-notifications";
 import { closeDb, getDb } from "./db";
-import { unlinkSync } from "fs";
+import { readFileSync, rmSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
 const TEST_DB = join(tmpdir(), `conversations-test-msg-${Date.now()}.db`);
+const TEST_EXPORT_DIR = join(tmpdir(), `conversations-test-msg-exports-${Date.now()}`);
+
+function readExportArtifact(result: ReturnType<typeof exportMessages>): string {
+  expect(result.path).toBeTruthy();
+  return readFileSync(result.path!, "utf8");
+}
 
 beforeEach(() => {
   process.env.CONVERSATIONS_DB_PATH = TEST_DB;
+  process.env.CONVERSATIONS_EXPORT_DIR = TEST_EXPORT_DIR;
   closeDb();
 });
 
@@ -19,6 +26,8 @@ afterEach(() => {
   try { unlinkSync(TEST_DB); } catch {}
   try { unlinkSync(TEST_DB + "-wal"); } catch {}
   try { unlinkSync(TEST_DB + "-shm"); } catch {}
+  rmSync(TEST_EXPORT_DIR, { recursive: true, force: true });
+  delete process.env.CONVERSATIONS_EXPORT_DIR;
 });
 
 describe("sendMessage", () => {
@@ -298,22 +307,25 @@ describe("markAllRead", () => {
 });
 
 describe("exportMessages", () => {
-  test("returns JSON by default", () => {
+  test("writes a preview JSON artifact by default", () => {
     sendMessage({ from: "alice", to: "bob", content: "hello" });
     sendMessage({ from: "bob", to: "alice", content: "world" });
     const result = exportMessages();
-    const parsed = JSON.parse(result);
+    const parsed = JSON.parse(readExportArtifact(result));
     expect(Array.isArray(parsed)).toBe(true);
     expect(parsed).toHaveLength(2);
-    expect(parsed[0].content).toBe("hello");
-    expect(parsed[1].content).toBe("world");
+    expect(parsed[0].preview).toBe("hello");
+    expect(parsed[1].preview).toBe("world");
+    expect(parsed[0].content).toBeUndefined();
+    expect(result.byte_length).toBeLessThanOrEqual(result.max_bytes);
   });
 
   test("returns CSV with headers", () => {
     sendMessage({ from: "alice", to: "bob", content: "hello" });
     const result = exportMessages({ format: "csv" });
-    const lines = result.split("\n");
-    expect(lines[0]).toBe("id,session_id,from_agent,to_agent,channel,content,priority,created_at,read_at");
+    const lines = readExportArtifact(result).split("\n");
+    expect(lines[0]).toContain("preview");
+    expect(lines[0]).not.toContain("content");
     expect(lines).toHaveLength(2);
     expect(lines[1]).toContain("alice");
     expect(lines[1]).toContain("bob");
@@ -324,9 +336,9 @@ describe("exportMessages", () => {
     sendMessage({ from: "a", to: "general", content: "in-channel", channel: "general" });
     sendMessage({ from: "a", to: "b", content: "no-channel" });
     const result = exportMessages({ channel: "general" });
-    const parsed = JSON.parse(result);
+    const parsed = JSON.parse(readExportArtifact(result));
     expect(parsed).toHaveLength(1);
-    expect(parsed[0].content).toBe("in-channel");
+    expect(parsed[0].preview).toBe("in-channel");
   });
 
   test("filters by date range (since/until)", () => {
@@ -335,7 +347,7 @@ describe("exportMessages", () => {
     sendMessage({ from: "a", to: "b", content: "new" });
     const until = new Date(Date.now() + 60000).toISOString();
     const result = exportMessages({ since, until });
-    const parsed = JSON.parse(result);
+    const parsed = JSON.parse(readExportArtifact(result));
     // The "new" message should be included (created_at >= since)
     // The "old" message may or may not be included depending on timing
     for (const msg of parsed) {
@@ -346,7 +358,7 @@ describe("exportMessages", () => {
   test("escapes CSV fields with commas", () => {
     sendMessage({ from: "alice", to: "bob", content: "hello, world" });
     const result = exportMessages({ format: "csv" });
-    const lines = result.split("\n");
+    const lines = readExportArtifact(result).split("\n");
     expect(lines[1]).toContain('"hello, world"');
   });
 
@@ -354,18 +366,31 @@ describe("exportMessages", () => {
     sendMessage({ from: "a", to: "b", content: "1", session_id: "s1" });
     sendMessage({ from: "a", to: "b", content: "2", session_id: "s2" });
     const result = exportMessages({ session_id: "s1" });
-    const parsed = JSON.parse(result);
+    const parsed = JSON.parse(readExportArtifact(result));
     expect(parsed).toHaveLength(1);
-    expect(parsed[0].content).toBe("1");
+    expect(parsed[0].preview).toBe("1");
   });
 
   test("filters by from", () => {
     sendMessage({ from: "alice", to: "bob", content: "1" });
     sendMessage({ from: "charlie", to: "bob", content: "2" });
     const result = exportMessages({ from: "alice" });
-    const parsed = JSON.parse(result);
+    const parsed = JSON.parse(readExportArtifact(result));
     expect(parsed).toHaveLength(1);
     expect(parsed[0].from_agent).toBe("alice");
+  });
+
+  test("requires explicit principal-bound authorization for full artifacts", () => {
+    sendMessage({ from: "alice", to: "bob", content: "exact body" });
+    expect(() => exportMessages({ detail: "full" })).toThrow("principal-bound authorization");
+
+    const result = exportMessages({
+      detail: "full",
+      authorization: { principal: "alice", reason: "audited incident handoff", acknowledged: true },
+    });
+    const parsed = JSON.parse(readExportArtifact(result));
+    expect(parsed[0].content).toBe("exact body");
+    expect(result.detail).toBe("full");
   });
 });
 
@@ -498,6 +523,17 @@ describe("getPinnedMessages", () => {
     pinMessage(msg3.id);
     const pinned = getPinnedMessages({ limit: 2 });
     expect(pinned).toHaveLength(2);
+  });
+
+  test("orders by pin time rather than message creation time", () => {
+    const older = sendMessage({ from: "a", to: "b", content: "older message, newer pin" });
+    const newer = sendMessage({ from: "a", to: "b", content: "newer message, older pin" });
+    pinMessage(older.id);
+    pinMessage(newer.id);
+    getDb().prepare("UPDATE messages SET pinned_at = ? WHERE id = ?").run("2026-07-19T00:00:02.000Z", older.id);
+    getDb().prepare("UPDATE messages SET pinned_at = ? WHERE id = ?").run("2026-07-19T00:00:01.000Z", newer.id);
+
+    expect(getPinnedMessages().map((message) => message.id)).toEqual([older.id, newer.id]);
   });
 
   test("returns empty array when no pinned messages", () => {
@@ -851,11 +887,11 @@ describe("readDigest", () => {
     subscribeToChannelNotifications("digest-notify", "reader");
     const msg = sendMessage({ from: "alice", to: "digest-notify", channel: "digest-notify", content: "notify me" });
 
-    expect(readChannelNotifications({ agent: "reader", channel: "digest-notify", unread_only: true })).toHaveLength(1);
+    expect(readChannelNotifications({ agent: "reader", channel: "digest-notify", unread_only: true }).notifications).toHaveLength(1);
     const result = readDigest({ channel: "digest-notify", mark_read: true, reader: "reader" });
 
     expect(result.message_ids).toEqual([msg.id]);
-    expect(readChannelNotifications({ agent: "reader", channel: "digest-notify", unread_only: true })).toHaveLength(0);
+    expect(readChannelNotifications({ agent: "reader", channel: "digest-notify", unread_only: true }).notifications).toHaveLength(0);
   });
 
   test("supports unread-only mode explicitly", () => {
@@ -1024,12 +1060,26 @@ describe("listUnreadCountsWithMentions", () => {
 describe("getMessagesForAgent", () => {
   test("returns messages mentioning agent", async () => {
     createChannel("team", "admin");
-    sendMessage({ from: "a", to: "team", channel: "team", content: "ping @dave" });
+    sendMessage({ from: "a", to: "team", channel: "team", content: "no mention" });
+    const mentioned = sendMessage({ from: "a", to: "team", channel: "team", content: "ping @dave" });
     // processMentions is async — give it time
     await new Promise((r) => setTimeout(r, 100));
     const result = getMessagesForAgent("dave");
     expect(result.length).toBeGreaterThanOrEqual(1);
-    expect(result[0].mention_id).toBeDefined();
+    const mention = getDb().prepare("SELECT id FROM message_mentions WHERE message_id = ?").get(mentioned.id) as { id: number };
+    expect(result[0].message.id).toBe(mentioned.id);
+    expect(result[0].mention_id).toBe(mention.id);
+    expect(result[0].mention_id).not.toBe(result[0].message.id);
+  });
+
+  test("unread_only follows mention notification state, not message read_at", async () => {
+    createChannel("mention-state", "admin");
+    sendMessage({ from: "a", to: "mention-state", channel: "mention-state", content: "ping @dave" });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(getMessagesForAgent("dave", { unread_only: true })).toHaveLength(1);
+    markMentionsRead("dave");
+    expect(getMessagesForAgent("dave", { unread_only: true })).toHaveLength(0);
   });
 
   test("filters by channel", async () => {

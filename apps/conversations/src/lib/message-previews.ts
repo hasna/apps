@@ -1,4 +1,4 @@
-import type { MessagePreview, MessagePreviewPage, Priority } from "../types.js";
+import type { Message, MessagePreview, MessagePreviewPage, Priority } from "../types.js";
 
 export const COLLECTION_DEFAULT_LIMIT = 20;
 export const COLLECTION_MAX_LIMIT = 100;
@@ -148,10 +148,42 @@ export function buildMessagePreview(row: Record<string, unknown>, previewBytes =
     truncated: restricted || preview.truncated || contentBytes > Buffer.byteLength(source),
     redacted: restricted || redactedSource !== source,
   };
+  if (row.mention_id != null) message.mention_id = Number(row.mention_id);
   if (row.uuid != null) message.uuid = boundedSafeString(row.uuid, 128);
   if (replyCount !== undefined) message.reply_count = replyCount;
   if (row.relevance_score != null) message.relevance_score = Number(row.relevance_score) || 0;
   return message;
+}
+
+/**
+ * Temporary compatibility shape for older Store callers. `content` is the
+ * already bounded/redacted preview and raw metadata/attachments are withheld.
+ * New collection consumers should use MessagePreviewPage directly.
+ */
+export function previewAsCompatibilityMessage(preview: MessagePreview): Message {
+  return {
+    id: preview.id,
+    session_id: preview.session_id,
+    from_agent: preview.from_agent,
+    to_agent: preview.to_agent,
+    channel: preview.channel,
+    project_id: preview.project_id,
+    content: preview.preview,
+    priority: preview.priority,
+    working_dir: preview.working_dir,
+    repository: preview.repository,
+    branch: preview.branch,
+    metadata: null,
+    created_at: preview.created_at,
+    read_at: preview.unread ? null : preview.created_at,
+    edited_at: preview.edited_at,
+    pinned_at: preview.pinned_at,
+    blocking: preview.blocking,
+    attachments: null,
+    reply_to: preview.reply_to,
+    reply_count: preview.reply_count,
+    truncated: true,
+  };
 }
 
 function finalizePage(page: MessagePreviewPage): MessagePreviewPage {

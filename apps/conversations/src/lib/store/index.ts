@@ -44,6 +44,8 @@ import * as hotLib from "../hot.js";
 import * as messagesLib from "../messages.js";
 import * as incidentProjectionsLib from "../incident-projections.js";
 import type { IncidentProjectionRecord, IncidentProjectionRequestV1 } from "../../types.js";
+import { previewAsCompatibilityMessage, COLLECTION_MAX_MAX_BYTES } from "../message-previews.js";
+import { runLocalReadWorker } from "../local-read-runner.js";
 
 const APP = "conversations";
 
@@ -290,7 +292,12 @@ export class LocalStore implements ConversationsStore {
   unsubscribeFromChannelNotifications: ConversationsStore["unsubscribeFromChannelNotifications"] = async (...a) => notificationsLib.unsubscribeFromChannelNotifications(...a);
   listChannelNotificationSubscriptions: ConversationsStore["listChannelNotificationSubscriptions"] = async (...a) => notificationsLib.listChannelNotificationSubscriptions(...a);
   getSubscribedChannels: ConversationsStore["getSubscribedChannels"] = async (...a) => notificationsLib.getSubscribedChannels(...a);
-  readChannelNotifications: ConversationsStore["readChannelNotifications"] = async (...a) => notificationsLib.readChannelNotifications(...a);
+  readChannelNotifications: ConversationsStore["readChannelNotifications"] = async (opts) =>
+    runLocalReadWorker<ReturnType<typeof notificationsLib.readChannelNotifications>>(
+      "readChannelNotifications",
+      [opts],
+      opts.timeout_ms,
+    );
   markChannelNotificationsRead: ConversationsStore["markChannelNotificationsRead"] = async (...a) => notificationsLib.markChannelNotificationsRead(...a);
   markAllChannelNotificationsRead: ConversationsStore["markAllChannelNotificationsRead"] = async (...a) => notificationsLib.markAllChannelNotificationsRead(...a);
 
@@ -382,17 +389,79 @@ export class LocalStore implements ConversationsStore {
   getMessageById: ConversationsStore["getMessageById"] = async (...a) => messagesLib.getMessageById(...a);
   deleteMessage: ConversationsStore["deleteMessage"] = async (...a) => messagesLib.deleteMessage(...a);
   editMessage: ConversationsStore["editMessage"] = async (...a) => messagesLib.editMessage(...a);
-  readMessages: ConversationsStore["readMessages"] = async (...a) => messagesLib.readMessages(...a);
-  readMessagePreviews: ConversationsStore["readMessagePreviews"] = async (...a) => messagesLib.readMessagePreviews(...a);
+  readMessages: ConversationsStore["readMessages"] = async (opts = {}) => {
+    const page = await this.readMessagePreviews({
+      ...opts,
+      preview_bytes: opts.max_content_length,
+      max_bytes: COLLECTION_MAX_MAX_BYTES,
+      timeout_ms: 5_000,
+    });
+    return page.messages.map(previewAsCompatibilityMessage);
+  };
+  readMessagePreviews: ConversationsStore["readMessagePreviews"] = async (opts = {}) =>
+    runLocalReadWorker<ReturnType<typeof messagesLib.readMessagePreviews>>(
+      "readMessagePreviews",
+      [opts],
+      opts.timeout_ms,
+    );
   countMessages: ConversationsStore["countMessages"] = async (...a) => messagesLib.countMessages(...a);
-  searchMessages: ConversationsStore["searchMessages"] = async (...a) => messagesLib.searchMessages(...a);
-  searchMessagePreviews: ConversationsStore["searchMessagePreviews"] = async (...a) => messagesLib.searchMessagePreviews(...a);
+  searchMessages: ConversationsStore["searchMessages"] = async (opts) => {
+    const page = await this.searchMessagePreviews({
+      ...opts,
+      preview_bytes: opts.snippet_length,
+      max_bytes: COLLECTION_MAX_MAX_BYTES,
+      timeout_ms: 5_000,
+    });
+    return page.messages.map((preview) => ({
+      ...previewAsCompatibilityMessage(preview),
+      snippet: preview.preview,
+      relevance_score: preview.relevance_score ?? 0,
+    }));
+  };
+  searchMessagePreviews: ConversationsStore["searchMessagePreviews"] = async (opts) =>
+    runLocalReadWorker<ReturnType<typeof messagesLib.searchMessagePreviews>>(
+      "searchMessagePreviews",
+      [opts],
+      opts.timeout_ms,
+    );
   readDigest: ConversationsStore["readDigest"] = async (...a) => messagesLib.readDigest(...a);
-  exportMessages: ConversationsStore["exportMessages"] = async (...a) => messagesLib.exportMessages(...a);
-  getThreadReplies: ConversationsStore["getThreadReplies"] = async (...a) => messagesLib.getThreadReplies(...a);
-  getUnreadBlockers: ConversationsStore["getUnreadBlockers"] = async (...a) => messagesLib.getUnreadBlockers(...a);
-  getUnreadBlockerPreviews: ConversationsStore["getUnreadBlockerPreviews"] = async (...a) => messagesLib.getUnreadBlockerPreviews(...a);
-  getMessagesForAgent: ConversationsStore["getMessagesForAgent"] = async (...a) => messagesLib.getMessagesForAgent(...a);
+  exportMessages: ConversationsStore["exportMessages"] = async (opts = {}) =>
+    runLocalReadWorker<ReturnType<typeof messagesLib.exportMessages>>(
+      "exportMessages",
+      [opts],
+      opts.timeout_ms,
+    );
+  getThreadReplies: ConversationsStore["getThreadReplies"] = async (messageId) => {
+    const page = await this.readMessagePreviews({
+      reply_to: messageId,
+      order: "asc",
+      limit: 100,
+      max_bytes: COLLECTION_MAX_MAX_BYTES,
+      timeout_ms: 5_000,
+    });
+    return page.messages.map(previewAsCompatibilityMessage);
+  };
+  getUnreadBlockers: ConversationsStore["getUnreadBlockers"] = async (agent, opts = {}) => {
+    const page = await this.getUnreadBlockerPreviews(agent, {
+      ...opts,
+      max_bytes: COLLECTION_MAX_MAX_BYTES,
+      timeout_ms: 5_000,
+    });
+    return page.messages.map(previewAsCompatibilityMessage);
+  };
+  getUnreadBlockerPreviews: ConversationsStore["getUnreadBlockerPreviews"] = async (agent, opts = {}) =>
+    runLocalReadWorker<ReturnType<typeof messagesLib.getUnreadBlockerPreviews>>(
+      "getUnreadBlockerPreviews",
+      [agent, opts],
+      opts.timeout_ms,
+    );
+  getMessagesForAgent: ConversationsStore["getMessagesForAgent"] = async (agent, opts = {}) => {
+    return runLocalReadWorker<ReturnType<typeof messagesLib.getMessagesForAgent>>(
+      "getMessagesForAgent",
+      [agent, opts],
+      undefined,
+    );
+  };
   getMessageReadStatus: ConversationsStore["getMessageReadStatus"] = async (...a) => messagesLib.getMessageReadStatus(...a);
   markRead: ConversationsStore["markRead"] = async (...a) => messagesLib.markRead(...a);
   markReadByIds: ConversationsStore["markReadByIds"] = async (...a) => messagesLib.markReadByIds(...a);
@@ -406,7 +475,13 @@ export class LocalStore implements ConversationsStore {
   listUnreadCountsWithMentions: ConversationsStore["listUnreadCountsWithMentions"] = async (...a) => messagesLib.listUnreadCountsWithMentions(...a);
   pinMessage: ConversationsStore["pinMessage"] = async (...a) => messagesLib.pinMessage(...a);
   unpinMessage: ConversationsStore["unpinMessage"] = async (...a) => messagesLib.unpinMessage(...a);
-  getPinnedMessages: ConversationsStore["getPinnedMessages"] = async (...a) => messagesLib.getPinnedMessages(...a);
+  getPinnedMessages: ConversationsStore["getPinnedMessages"] = async (opts = {}) => {
+    return runLocalReadWorker<ReturnType<typeof messagesLib.getPinnedMessages>>(
+      "getPinnedMessages",
+      [opts],
+      undefined,
+    );
+  };
   recordReadReceipt: ConversationsStore["recordReadReceipt"] = async (...a) => messagesLib.recordReadReceipt(...a);
   recordReadReceiptsBatch: ConversationsStore["recordReadReceiptsBatch"] = async (...a) => messagesLib.recordReadReceiptsBatch(...a);
   getReadReceipts: ConversationsStore["getReadReceipts"] = async (...a) => messagesLib.getReadReceipts(...a);

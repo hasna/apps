@@ -260,21 +260,29 @@ export function registerChannelTools(server: McpServer): void {
       channel: z.string().optional(),
       unread_only: z.coerce.boolean().optional(),
       limit: z.coerce.number().optional(),
+      cursor: z.coerce.number().optional(),
+      max_bytes: z.coerce.number().optional(),
+      preview_bytes: z.coerce.number().optional(),
+      timeout_ms: z.coerce.number().optional(),
       since: z.string().optional(),
       mark_read: z.coerce.boolean().optional(),
     },
   }, async (args: Record<string, any>) => {
     const store = getStore();
     const agent = resolveIdentity(args.from);
-    const notifications = await store.readChannelNotifications({
+    const page = await store.readChannelNotifications({
       agent,
       channel: args.channel,
       unread_only: args.unread_only,
       limit: args.limit,
+      cursor: args.cursor,
+      max_bytes: args.max_bytes,
+      preview_bytes: args.preview_bytes,
+      timeout_ms: args.timeout_ms,
       since: args.since,
       mark_read: args.mark_read,
     });
-    return { content: [{ type: "text", text: JSON.stringify({ notifications, count: notifications.length }) }] };
+    return { content: [{ type: "text", text: JSON.stringify(page) }] };
   });
 
   server.registerTool("mark_channel_notifications_read", {

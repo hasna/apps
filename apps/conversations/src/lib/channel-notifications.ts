@@ -1,5 +1,5 @@
 import { getDb } from "./db.js";
-import type { ChannelNotification, ChannelNotificationSubscription } from "../types.js";
+import type { ChannelNotification, ChannelNotificationPage, ChannelNotificationSubscription } from "../types.js";
 import { normalizeChannelName } from "./channel-names.js";
 import {
   COLLECTION_MAX_LIMIT,
@@ -7,6 +7,12 @@ import {
   COLLECTION_PREVIEW_SCAN_CHARS,
   RESTRICTED_CHANNEL_PREVIEW,
   redactSensitiveText,
+  resolveCollectionLimit,
+  resolveCollectionMaxBytes,
+  resolveCollectionOffset,
+  resolveCollectionPreviewBytes,
+  resolveCollectionTimeoutMs,
+  truncateUtf8,
 } from "./message-previews.js";
 
 const DEFAULT_PREVIEW_CHARS = 140;
@@ -27,6 +33,14 @@ export function buildMessagePreview(content: string, maxChars = DEFAULT_PREVIEW_
   const boundedMaxChars = Math.min(Math.max(1, maxChars), COLLECTION_MAX_PREVIEW_BYTES);
   if (normalized.length <= boundedMaxChars) return normalized;
   return normalized.slice(0, boundedMaxChars).trimEnd() + "…";
+}
+
+/** Apply the subscription's character cap and the caller's UTF-8 byte cap. */
+export function buildByteBoundedMessagePreview(content: string, maxChars: number, maxBytes: number): string {
+  const preview = buildMessagePreview(content, maxChars);
+  // Keep the explicit restricted-channel marker intact; it contains no body-derived data.
+  if (preview === RESTRICTED_CHANNEL_PREVIEW) return preview;
+  return truncateUtf8(preview, resolveCollectionPreviewBytes(maxBytes)).text;
 }
 
 export function subscribeToChannelNotifications(
@@ -92,9 +106,75 @@ export interface ReadChannelNotificationsOptions {
   limit?: number;
   since?: string;
   mark_read?: boolean;
+  cursor?: number;
+  max_bytes?: number;
+  preview_bytes?: number;
+  timeout_ms?: number;
 }
 
-export function readChannelNotifications(opts: ReadChannelNotificationsOptions): ChannelNotification[] {
+export function finalizeChannelNotificationPage(page: ChannelNotificationPage): ChannelNotificationPage {
+  let finalized = page;
+  for (let index = 0; index < 3; index++) {
+    finalized = { ...finalized, byte_length: Buffer.byteLength(JSON.stringify(finalized), "utf8") };
+  }
+  return finalized;
+}
+
+export function packChannelNotificationPage(
+  candidates: ChannelNotification[],
+  options: { limit?: unknown; cursor?: unknown; max_bytes?: unknown; timeout_ms?: unknown; marked_read?: number } = {},
+): ChannelNotificationPage {
+  const limit = resolveCollectionLimit(options.limit);
+  const cursor = resolveCollectionOffset(options.cursor);
+  const maxBytes = resolveCollectionMaxBytes(options.max_bytes);
+  const timeoutMs = resolveCollectionTimeoutMs(options.timeout_ms);
+  const windowed = candidates.slice(0, limit + 1);
+  const available = windowed.slice(0, limit);
+
+  const buildPage = (notifications: ChannelNotification[], skippedCount: number): ChannelNotificationPage => {
+    const consumed = notifications.length + skippedCount;
+    const hasMore = windowed.length > consumed;
+    return finalizeChannelNotificationPage({
+      notifications,
+      count: notifications.length,
+      limit,
+      cursor,
+      next_cursor: hasMore || skippedCount > 0 ? cursor + consumed : null,
+      has_more: hasMore,
+      skipped_count: skippedCount,
+      byte_length: 0,
+      max_bytes: maxBytes,
+      timeout_ms: timeoutMs,
+      marked_read: Math.max(0, Math.floor(options.marked_read ?? 0)),
+      compact: true,
+      detail_path: "messages/{id}",
+    });
+  };
+
+  let notifications: ChannelNotification[] = [];
+  let skippedCount = 0;
+  for (const candidate of available) {
+    const next = buildPage([...notifications, candidate], skippedCount);
+    if (next.byte_length > maxBytes) {
+      if (notifications.length === 0) skippedCount = 1;
+      break;
+    }
+    notifications = [...notifications, candidate];
+  }
+
+  const page = buildPage(notifications, skippedCount);
+  if (page.byte_length > maxBytes) {
+    throw new Error(`channel notification envelope exceeds max_bytes (${page.byte_length} > ${maxBytes})`);
+  }
+  return page;
+}
+
+export function readChannelNotifications(opts: ReadChannelNotificationsOptions): ChannelNotificationPage {
+  if (!opts.agent?.trim()) throw new Error("agent must be a non-empty string");
+  if (opts.channel !== undefined && !opts.channel.trim()) throw new Error("channel must be a non-empty string");
+  if (opts.since !== undefined && !Number.isFinite(Date.parse(opts.since))) {
+    throw new Error("since must be a valid ISO 8601 date");
+  }
   const db = getDb();
   const conditions: string[] = [
     "s.agent = ?",
@@ -116,9 +196,11 @@ export function readChannelNotifications(opts: ReadChannelNotificationsOptions):
     conditions.push("snr.message_id IS NULL");
   }
 
-  const limit = Number.isFinite(opts.limit) && (opts.limit as number) > 0
-    ? Math.floor(opts.limit as number)
-    : 20;
+  const limit = resolveCollectionLimit(opts.limit);
+  const cursor = resolveCollectionOffset(opts.cursor);
+  const maxBytes = resolveCollectionMaxBytes(opts.max_bytes);
+  const previewBytes = resolveCollectionPreviewBytes(opts.preview_bytes);
+  const timeoutMs = resolveCollectionTimeoutMs(opts.timeout_ms);
 
   const restricted = `(lower(COALESCE(m.channel, '')) LIKE '%incident%' OR lower(COALESCE(m.channel, '')) LIKE '%security%' OR lower(COALESCE(m.to_agent, '')) LIKE '%incident%' OR lower(COALESCE(m.to_agent, '')) LIKE '%security%' OR lower(COALESCE(m.session_id, '')) LIKE '%incident%' OR lower(COALESCE(m.session_id, '')) LIKE '%security%')`;
   const rows = db.prepare(`
@@ -139,7 +221,8 @@ export function readChannelNotifications(opts: ReadChannelNotificationsOptions):
       ON snr.message_id = m.id AND snr.agent = s.agent
     WHERE ${conditions.join(" AND ")}
     ORDER BY m.created_at DESC, m.id DESC
-    LIMIT ${Math.max(1, Math.min(limit, COLLECTION_MAX_LIMIT))}
+    LIMIT ${Math.max(1, Math.min(limit + 1, COLLECTION_MAX_LIMIT + 1))}
+    OFFSET ${cursor}
   `).all(...params) as Array<{
     message_id: number;
     channel: string;
@@ -152,23 +235,38 @@ export function readChannelNotifications(opts: ReadChannelNotificationsOptions):
     read_message_id: number | null;
   }>;
 
-  const notifications = rows.map((row) => ({
+  const candidates = rows.map((row) => ({
     message_id: row.message_id,
     channel: row.channel,
     from_agent: row.from_agent,
     created_at: row.created_at,
     priority: row.priority,
-    preview: buildMessagePreview(row.preview_source, row.preview_chars),
+    preview: buildByteBoundedMessagePreview(row.preview_source, row.preview_chars, previewBytes),
     unread: row.read_message_id == null,
     has_attachments: row.attachment_count > 0,
   })) satisfies ChannelNotification[];
 
-  if (opts.mark_read && notifications.length > 0) {
-    markChannelNotificationsRead(opts.agent, notifications.map((row) => row.message_id));
-    for (const row of notifications) row.unread = false;
+  let page = packChannelNotificationPage(candidates, {
+    limit,
+    cursor,
+    max_bytes: maxBytes,
+    timeout_ms: timeoutMs,
+  });
+
+  let markedRead = 0;
+  if (opts.mark_read && page.notifications.length > 0) {
+    markedRead = markChannelNotificationsRead(opts.agent, page.notifications.map((row) => row.message_id));
+    page = finalizeChannelNotificationPage({
+      ...page,
+      notifications: page.notifications.map((row) => ({ ...row, unread: false })),
+      marked_read: markedRead,
+    });
   }
 
-  return notifications;
+  if (page.byte_length > maxBytes) {
+    throw new Error(`channel notification envelope exceeds max_bytes (${page.byte_length} > ${maxBytes})`);
+  }
+  return page;
 }
 
 export function markChannelNotificationsRead(agent: string, messageIds: number[]): number {

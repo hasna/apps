@@ -466,15 +466,26 @@ export function registerMessagingCommands(program: Command): void {
   // ---- export ----
   program
     .command("export")
-    .description("Export messages as JSON or CSV")
+    .description("Create a bounded message export artifact (preview-only by default)")
     .option("--channel <name>", "Filter by channel")
     .option("--session <id>", "Filter by session ID")
     .option("--from <agent>", "Filter by sender")
     .option("--since <date>", "Messages after this ISO date")
     .option("--until <date>", "Messages before this ISO date")
     .option("--format <format>", "Output format: json or csv", "json")
+    .option("--limit <n>", "Maximum records (hard-capped at 100)", parseInt)
+    .option("--max-bytes <n>", "Maximum artifact bytes (hard-capped at 65536)", parseInt)
+    .option("--preview-bytes <n>", "Maximum preview bytes per record", parseInt)
+    .option("--timeout-ms <n>", "Maximum export query time", parseInt)
+    .option("--full", "Explicitly request full message bodies")
+    .option("--authorize-full <reason>", "Reason for the principal-bound full export")
+    .option("--as <agent>", "Authenticated local principal for a full export")
     .action(async (opts) => {
       const format = opts.format === "csv" ? "csv" : "json";
+      const principal = opts.full ? resolveIdentity(opts.as).trim() : undefined;
+      if (opts.full && (!principal || !opts.authorizeFull?.trim())) {
+        throw new Error("Full export requires --as <agent> and --authorize-full <reason>");
+      }
       const result = await getStore().exportMessages({
         channel: opts.channel,
         session_id: opts.session,
@@ -482,8 +493,18 @@ export function registerMessagingCommands(program: Command): void {
         since: normalizeSince(opts.since),
         until: opts.until,
         format,
+        detail: opts.full ? "full" : "preview",
+        limit: opts.limit,
+        max_bytes: opts.maxBytes,
+        preview_bytes: opts.previewBytes,
+        timeout_ms: opts.timeoutMs,
+        authorization: opts.full ? {
+          principal: principal!,
+          reason: opts.authorizeFull.trim(),
+          acknowledged: true,
+        } : undefined,
       });
-      console.log(result);
+      console.log(JSON.stringify(result, null, 2));
       closeDb();
     });
 
@@ -687,6 +708,10 @@ export function registerMessagingCommands(program: Command): void {
     .option("--channel <name>", "Filter to a single channel")
     .option("--since <timestamp>", "Notifications after this ISO timestamp")
     .option("--limit <n>", "Max notifications to return", parseInt)
+    .option("--cursor <n>", "Notification page cursor", parseInt)
+    .option("--max-bytes <n>", "Maximum notification envelope bytes", parseInt)
+    .option("--preview-bytes <n>", "Maximum bytes per notification preview", parseInt)
+    .option("--timeout-ms <n>", "Maximum notification query time", parseInt)
     .option("--all", "Include already-read notifications")
     .option("--mark-read", "Mark returned notifications as read")
     .option("--clear", "Mark all matching unread notifications as read without listing")
@@ -706,17 +731,22 @@ export function registerMessagingCommands(program: Command): void {
         return;
       }
 
-      const notifications = await getStore().readChannelNotifications({
+      const page = await getStore().readChannelNotifications({
         agent,
         channel: opts.channel,
         since: normalizeSince(opts.since),
         unread_only: !opts.all,
         limit: opts.limit,
+        cursor: opts.cursor,
+        max_bytes: opts.maxBytes,
+        preview_bytes: opts.previewBytes,
+        timeout_ms: opts.timeoutMs,
         mark_read: opts.markRead,
       });
+      const notifications = page.notifications;
 
       if (opts.json) {
-        console.log(JSON.stringify(notifications, null, 2));
+        console.log(JSON.stringify(page, null, 2));
       } else if (notifications.length === 0) {
         console.log(chalk.dim("No channel notifications."));
       } else {
@@ -835,7 +865,7 @@ export function registerMessagingCommands(program: Command): void {
           unread_only: true,
           limit: 20,
           mark_read: true,
-        })).sort((left, right) => left.created_at.localeCompare(right.created_at) || left.message_id - right.message_id);
+        })).notifications.sort((left, right) => left.created_at.localeCompare(right.created_at) || left.message_id - right.message_id);
 
         if (dmRecent.length > 0) {
           console.log(chalk.dim(`  ── Recent DMs (${dmRecent.length}) ──\n`));
@@ -862,15 +892,14 @@ export function registerMessagingCommands(program: Command): void {
         }
       }
 
-      const onNewMessages = (messages: import("../../types.js").Message[]) => {
+      const onNewMessages = (messages: import("../../types.js").MessagePreview[]) => {
         for (const msg of messages) {
           if (msg.from_agent === agent) continue;
           renderMessage(msg);
 
           // Desktop notification (short preview)
           const where = msg.channel ? `#${msg.channel}` : "DM";
-          const preview = buildMessagePreview(msg.content, 150);
-          desktopNotify(`${msg.from_agent} (${where})`, preview);
+          desktopNotify(`${msg.from_agent} (${where})`, msg.preview);
         }
       };
 
@@ -896,7 +925,7 @@ export function registerMessagingCommands(program: Command): void {
               unread_only: true,
               limit: 200,
               mark_read: true,
-            })).sort((left, right) => left.created_at.localeCompare(right.created_at) || left.message_id - right.message_id);
+            })).notifications.sort((left, right) => left.created_at.localeCompare(right.created_at) || left.message_id - right.message_id);
 
             if (notifications.length > 0) {
               onNewNotifications(notifications);

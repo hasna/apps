@@ -208,7 +208,7 @@ export function registerAnalyticsCommands(program: Command): void {
       const myChannels = await store.getMemberChannels(agent);
 
       const subscriptions = await store.listChannelNotificationSubscriptions(agent);
-      const channelNotifications = await store.readChannelNotifications({
+      const channelNotificationPage = await store.readChannelNotifications({
         agent,
         unread_only: true,
         limit: 5,
@@ -223,7 +223,12 @@ export function registerAnalyticsCommands(program: Command): void {
         unread_dms: unreadDMs,
         channels: myChannels,
         channel_subscriptions: subscriptions,
-        channel_notifications: channelNotifications,
+        channel_notifications: channelNotificationPage.notifications,
+        channel_notification_page: {
+          next_cursor: channelNotificationPage.next_cursor,
+          has_more: channelNotificationPage.has_more,
+          byte_length: channelNotificationPage.byte_length,
+        },
         recent_dms: recentDMs,
       };
 
@@ -276,9 +281,9 @@ export function registerAnalyticsCommands(program: Command): void {
           console.log(`${chalk.bold("Subscribed channels:")} ${chalk.dim("none")}`);
         }
 
-        if (channelNotifications.length > 0) {
+        if (channelNotificationPage.notifications.length > 0) {
           console.log(`${chalk.bold("Channel notifications:")}`);
-          for (const notification of channelNotifications) {
+          for (const notification of channelNotificationPage.notifications) {
             console.log(
               `  ${chalk.dim(notification.created_at.slice(11, 16))} ${chalk.cyan(notification.from_agent)} ${chalk.magenta("#" + notification.channel)} ${chalk.dim(`msg #${notification.message_id}`)}`
             );

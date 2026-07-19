@@ -1,32 +1,41 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { sendMessage } from "../lib/messages";
 import { closeDb } from "../lib/db";
-import { unlinkSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
 import { execSync } from "child_process";
-
-const TEST_DB = join(tmpdir(), `conversations-test-blocker-hook-${Date.now()}.db`);
+import { createDisposableStore, enterHermeticTestEnv, hermeticSpawnEnv } from "../test/hermetic";
 
 describe("blocker-hook", () => {
+  let testStore: ReturnType<typeof createDisposableStore>;
+  let restoreEnv: () => void;
+
   beforeEach(() => {
-    process.env.CONVERSATIONS_DB_PATH = TEST_DB;
+    testStore = createDisposableStore("blocker-hook");
+    restoreEnv = enterHermeticTestEnv({
+      HASNA_CONVERSATIONS_STORAGE_MODE: "local",
+      CONVERSATIONS_DB_PATH: testStore.dbPath,
+    });
     closeDb();
   });
 
   afterEach(() => {
-    delete process.env.CONVERSATIONS_DB_PATH;
-    delete process.env.CONVERSATIONS_AGENT_ID;
     closeDb();
-    try { unlinkSync(TEST_DB); } catch {}
-    try { unlinkSync(TEST_DB + "-wal"); } catch {}
-    try { unlinkSync(TEST_DB + "-shm"); } catch {}
+    restoreEnv();
+    testStore.cleanup();
   });
+
+  function spawnEnv(): Record<string, string> {
+    const agent = process.env.CONVERSATIONS_AGENT_ID;
+    return hermeticSpawnEnv({
+      HASNA_CONVERSATIONS_STORAGE_MODE: "local",
+      CONVERSATIONS_DB_PATH: testStore.dbPath,
+      ...(agent ? { CONVERSATIONS_AGENT_ID: agent } : {}),
+    });
+  }
 
   test("exits 0 with no blockers", () => {
     process.env.CONVERSATIONS_AGENT_ID = "hook-test-no-blockers";
     const output = execSync(`bun run src/hooks/blocker-hook.ts`, {
-      env: { ...process.env },
+      env: spawnEnv(),
       encoding: "utf-8",
     });
     expect(output).toBe("");
@@ -43,7 +52,7 @@ describe("blocker-hook", () => {
     });
 
     const output = execSync(`bun run src/hooks/blocker-hook.ts`, {
-      env: { ...process.env },
+      env: spawnEnv(),
       encoding: "utf-8",
     });
     expect(output).toContain("BLOCKING MESSAGES");
@@ -63,7 +72,7 @@ describe("blocker-hook", () => {
     // Should exit 0, not 2
     try {
       execSync(`bun run src/hooks/blocker-hook.ts`, {
-        env: { ...process.env },
+        env: spawnEnv(),
         encoding: "utf-8",
       });
       // exit 0 is expected
@@ -87,7 +96,7 @@ describe("blocker-hook", () => {
     markRead([msg.id], "hook-test-read");
 
     const output = execSync(`bun run src/hooks/blocker-hook.ts`, {
-      env: { ...process.env },
+      env: spawnEnv(),
       encoding: "utf-8",
     });
     expect(output).toBe("");
@@ -95,7 +104,7 @@ describe("blocker-hook", () => {
 
   test("shows --help output", () => {
     const output = execSync(`bun run src/hooks/blocker-hook.ts --help`, {
-      env: { ...process.env },
+      env: spawnEnv(),
       encoding: "utf-8",
     });
     expect(output).toContain("PreToolUse hook");

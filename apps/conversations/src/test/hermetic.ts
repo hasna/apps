@@ -40,6 +40,9 @@ export const AMBIENT_TEST_ENV_KEYS = [
   "CONVERSATIONS_DASHBOARD_HOST",
   "CONVERSATIONS_DASHBOARD_PORT",
   "CONVERSATIONS_REGISTRY_TIMEOUT_MS",
+  "CONVERSATIONS_LOCAL_READ_WORKER",
+  "HASNA_CONVERSATIONS_EXPORT_DIR",
+  "CONVERSATIONS_EXPORT_DIR",
 ] as const;
 
 export function enterHermeticTestEnv(overrides: Record<string, string> = {}): () => void {

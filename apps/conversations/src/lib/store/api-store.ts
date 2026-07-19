@@ -30,8 +30,9 @@ import {
   resolveCollectionOffset,
   resolveCollectionPreviewBytes,
   resolveCollectionTimeoutMs,
+  previewAsCompatibilityMessage,
 } from "../message-previews.js";
-import type { Message, MessagePreview, MessagePreviewPage } from "../../types.js";
+import type { ChannelNotificationPage, MessagePreviewPage } from "../../types.js";
 
 type Q = Record<string, string | number | boolean | undefined | null>;
 
@@ -49,37 +50,6 @@ function isHttpStatus(error: unknown, status: number): boolean {
       (error as { name?: string }).name === "HasnaHttpError" &&
       (error as { status?: number }).status === status,
   );
-}
-
-/**
- * Compatibility for legacy Store consumers while the remote transport remains
- * projection-only. `content` is the already bounded/redacted preview, never the
- * source body; exact content is available only through getMessageById.
- */
-function previewAsCompatibilityMessage(preview: MessagePreview): Message {
-  return {
-    id: preview.id,
-    session_id: preview.session_id,
-    from_agent: preview.from_agent,
-    to_agent: preview.to_agent,
-    channel: preview.channel,
-    project_id: preview.project_id,
-    content: preview.preview,
-    priority: preview.priority,
-    working_dir: preview.working_dir,
-    repository: preview.repository,
-    branch: preview.branch,
-    metadata: null,
-    created_at: preview.created_at,
-    read_at: preview.unread ? null : preview.created_at,
-    edited_at: preview.edited_at,
-    pinned_at: preview.pinned_at,
-    blocking: preview.blocking,
-    attachments: null,
-    reply_to: preview.reply_to,
-    reply_count: preview.reply_count,
-    truncated: true,
-  };
 }
 
 export class ApiStore implements ConversationsStore {
@@ -211,14 +181,23 @@ export class ApiStore implements ConversationsStore {
     return (body.channels ?? []) as never;
   };
   readChannelNotifications: ConversationsStore["readChannelNotifications"] = async (opts) => {
-    const body = await this.get<{ notifications?: unknown[] }>("/channel-notifications/inbox", {
+    const limit = resolveCollectionLimit(opts.limit);
+    const cursor = resolveCollectionOffset(opts.cursor);
+    const maxBytes = resolveCollectionMaxBytes(opts.max_bytes);
+    const previewBytes = resolveCollectionPreviewBytes(opts.preview_bytes);
+    const timeoutMs = resolveCollectionTimeoutMs(opts.timeout_ms);
+    return await this.getBounded<ChannelNotificationPage>("/channel-notifications/inbox", {
       agent: opts.agent,
       channel: opts.channel ? normalizeChannelName(opts.channel) : undefined,
       unread_only: opts.unread_only,
-      limit: opts.limit,
+      limit,
+      cursor,
+      max_bytes: maxBytes,
+      preview_bytes: previewBytes,
+      timeout_ms: timeoutMs,
       since: normalizeSince(opts.since),
-    });
-    return (body.notifications ?? []) as never;
+      mark_read: opts.mark_read ? true : undefined,
+    }, timeoutMs) as never;
   };
   markChannelNotificationsRead: ConversationsStore["markChannelNotificationsRead"] = async (agent, messageIds) => {
     const body = await this.post<{ marked?: number }>("/channel-notifications/read", { agent, message_ids: messageIds });
@@ -696,8 +675,8 @@ export class ApiStore implements ConversationsStore {
     })) as never;
   };
   exportMessages: ConversationsStore["exportMessages"] = async (opts) => {
-    const body = await this.get<{ export?: string }>("/messages/export", opts as Q);
-    return String(body?.export ?? "") as never;
+    const body = await this.post<{ artifact: unknown }>("/messages/exports", opts ?? {});
+    return body.artifact as never;
   };
   getThreadReplies: ConversationsStore["getThreadReplies"] = async (messageId) => {
     const page = await this.readMessagePreviews({ reply_to: messageId, order: "asc", limit: 100 });
@@ -724,14 +703,21 @@ export class ApiStore implements ConversationsStore {
     }, timeoutMs) as never;
   };
   getMessagesForAgent: ConversationsStore["getMessagesForAgent"] = async (agent, opts) => {
-    const page = await this.readMessagePreviews({
-      mentions_only: agent,
+    const limit = resolveCollectionLimit(opts?.limit ?? 50);
+    const maxBytes = COLLECTION_MAX_MAX_BYTES;
+    const timeoutMs = resolveCollectionTimeoutMs(undefined);
+    const page = await this.getBounded<MessagePreviewPage>("/messages/for-agent", {
+      agent,
       channel: opts?.channel,
-      unread_only: opts?.unread_only,
-      limit: opts?.limit,
-      order: "desc",
-    });
-    return page.messages.map((preview) => ({ message: previewAsCompatibilityMessage(preview), mention_id: preview.id })) as never;
+      unread_only: opts?.unread_only ? true : undefined,
+      limit,
+      max_bytes: maxBytes,
+      timeout_ms: timeoutMs,
+    }, timeoutMs);
+    return page.messages.map((preview) => ({
+      message: previewAsCompatibilityMessage(preview),
+      mention_id: preview.mention_id ?? preview.id,
+    })) as never;
   };
   getMessageReadStatus: ConversationsStore["getMessageReadStatus"] = async (messageId, channel) => {
     const body = await this.get<{ receipts?: unknown[]; unread_by?: string[] }>(`/messages/${encodeURIComponent(String(messageId))}/read-status`, { channel });
@@ -786,14 +772,18 @@ export class ApiStore implements ConversationsStore {
     }
   };
   getPinnedMessages: ConversationsStore["getPinnedMessages"] = async (opts) => {
-    const page = await this.readMessagePreviews({
-      pinned_only: true,
+    const limit = resolveCollectionLimit(opts?.limit);
+    const offset = resolveCollectionOffset(opts?.offset);
+    const maxBytes = COLLECTION_MAX_MAX_BYTES;
+    const timeoutMs = resolveCollectionTimeoutMs(undefined);
+    const page = await this.getBounded<MessagePreviewPage>("/messages/pinned", {
       channel: opts?.channel,
       session_id: opts?.session_id,
-      limit: opts?.limit,
-      offset: opts?.offset,
-      order: "desc",
-    });
+      limit,
+      offset,
+      max_bytes: maxBytes,
+      timeout_ms: timeoutMs,
+    }, timeoutMs);
     return page.messages.map(previewAsCompatibilityMessage) as never;
   };
   recordReadReceipt: ConversationsStore["recordReadReceipt"] = async (messageId, agent) => {

@@ -63,7 +63,7 @@ describe("channel notifications", () => {
 
     const subscription = subscribeToChannelNotifications("ops", "agent-a");
     expect(subscription.since_message_id).toBe(historical.id);
-    expect(readChannelNotifications({ agent: "agent-a" })).toHaveLength(0);
+    expect(readChannelNotifications({ agent: "agent-a" }).notifications).toHaveLength(0);
 
     const fresh = sendMessage({
       from: "alice",
@@ -73,7 +73,7 @@ describe("channel notifications", () => {
       content: "sent after subscribing",
     });
 
-    const notifications = readChannelNotifications({ agent: "agent-a" });
+    const notifications = readChannelNotifications({ agent: "agent-a" }).notifications;
     expect(notifications).toHaveLength(1);
     expect(notifications[0].message_id).toBe(fresh.id);
   });
@@ -87,7 +87,7 @@ describe("channel notifications", () => {
     sendMessage({ from: "alice", to: "other", channel: "other", session_id: "channel:other", content: "should not show" });
     sendMessage({ from: "agent-a", to: "ops", channel: "ops", session_id: "channel:ops", content: "my own message" });
 
-    const notifications = readChannelNotifications({ agent: "agent-a" });
+    const notifications = readChannelNotifications({ agent: "agent-a" }).notifications;
     expect(notifications).toHaveLength(1);
     expect(notifications[0].channel).toBe("ops");
     expect(notifications[0].preview).toBe("deploy finished succ…");
@@ -106,7 +106,7 @@ describe("channel notifications", () => {
     sendMessage({ from: "alice", to: "ops", channel: "ops", content: `rotate ${token}` });
     sendMessage({ from: "alice", to: "security-incidents", channel: "security-incidents", content: "restricted root cause body" });
 
-    const notifications = readChannelNotifications({ agent: "agent-a" });
+    const notifications = readChannelNotifications({ agent: "agent-a" }).notifications;
     expect(notifications.find((item) => item.channel === "ops")?.preview).toContain("[REDACTED:BEARER_TOKEN]");
     expect(JSON.stringify(notifications)).not.toContain(token);
     const restricted = notifications.find((item) => item.channel === "security-incidents");
@@ -123,12 +123,12 @@ describe("channel notifications", () => {
 
     expect(markChannelNotificationsRead("agent-a", [one.id])).toBe(1);
 
-    let unread = readChannelNotifications({ agent: "agent-a" });
+    let unread = readChannelNotifications({ agent: "agent-a" }).notifications;
     expect(unread).toHaveLength(1);
     expect(unread[0].message_id).toBe(two.id);
 
     expect(markAllChannelNotificationsRead("agent-a", "ops")).toBe(1);
-    unread = readChannelNotifications({ agent: "agent-a" });
+    unread = readChannelNotifications({ agent: "agent-a" }).notifications;
     expect(unread).toHaveLength(0);
   });
 
@@ -137,10 +137,26 @@ describe("channel notifications", () => {
     subscribeToChannelNotifications("ops", "agent-a");
 
     sendMessage({ from: "alice", to: "ops", channel: "ops", session_id: "channel:ops", content: "preview me" });
-    const notifications = readChannelNotifications({ agent: "agent-a", mark_read: true });
+    const page = readChannelNotifications({ agent: "agent-a", mark_read: true });
+    const notifications = page.notifications;
     expect(notifications).toHaveLength(1);
     expect(notifications[0].unread).toBe(false);
-    expect(readChannelNotifications({ agent: "agent-a" })).toHaveLength(0);
+    expect(page.marked_read).toBe(1);
+    expect(readChannelNotifications({ agent: "agent-a" }).notifications).toHaveLength(0);
+  });
+
+  test("preview_bytes caps UTF-8 bytes rather than characters", () => {
+    createChannel("unicode", "creator");
+    subscribeToChannelNotifications("unicode", "agent-a", { preview_chars: 500 });
+    sendMessage({
+      from: "alice",
+      to: "unicode",
+      channel: "unicode",
+      content: "🙂".repeat(100),
+    });
+
+    const [notification] = readChannelNotifications({ agent: "agent-a", preview_bytes: 12 }).notifications;
+    expect(Buffer.byteLength(notification.preview, "utf8")).toBeLessThanOrEqual(12);
   });
 });
 

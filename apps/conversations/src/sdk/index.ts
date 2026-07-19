@@ -4,11 +4,23 @@
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
 // Source: ConversationsClient 0.5.6
 
-export interface Message { "id"?: number; "uuid"?: string; "session_id"?: string; "from_agent"?: string; "to_agent"?: string; "channel"?: string | null; "project_id"?: string | null; "content"?: string; "priority"?: string; "blocking"?: boolean; "reply_to"?: number | null; "working_dir"?: string | null; "repository"?: string | null; "branch"?: string | null; "metadata"?: Record<string, unknown> | null; "attachments"?: Array<Record<string, unknown>> | null; "created_at"?: string }
+export interface Message { "id"?: number; "mention_id"?: number; "uuid"?: string; "session_id"?: string; "from_agent"?: string; "to_agent"?: string; "channel"?: string | null; "project_id"?: string | null; "content"?: string; "priority"?: string; "blocking"?: boolean; "reply_to"?: number | null; "working_dir"?: string | null; "repository"?: string | null; "branch"?: string | null; "metadata"?: Record<string, unknown> | null; "attachments"?: Array<Record<string, unknown>> | null; "created_at"?: string }
 
 export interface MessagePreview { "id": number; "uuid"?: string; "session_id": string; "from_agent": string; "to_agent": string; "channel": string | null; "project_id": string | null; "priority": "low" | "normal" | "high" | "urgent"; "working_dir": string | null; "repository": string | null; "branch": string | null; "created_at": string; "edited_at": string | null; "pinned_at": string | null; "unread": boolean; "blocking": boolean; "reply_to": number | null; "reply_count"?: number; "attachment_count": number; "has_attachments": boolean; "has_metadata": boolean; "preview": string; "preview_bytes": number; "content_bytes": number; "truncated": boolean; "redacted": boolean; "relevance_score"?: number }
 
 export interface MessagePreviewPage { "messages": Array<MessagePreview>; "count": number; "limit": number; "cursor": number; "next_cursor": number | null; "has_more": boolean; "skipped_count": number; "byte_length": number; "max_bytes": number; "timeout_ms": number; "compact": true; "detail_path": "messages/{id}"; "query"?: string }
+
+export interface ChannelNotification { "message_id": number; "channel": string; "from_agent": string; "created_at": string; "priority": "low" | "normal" | "high" | "urgent"; "preview": string; "unread": boolean; "has_attachments": boolean }
+
+export interface ChannelNotificationPage { "notifications": Array<ChannelNotification>; "count": number; "limit": number; "cursor": number; "next_cursor": number | null; "has_more": boolean; "skipped_count": number; "byte_length": number; "max_bytes": number; "timeout_ms": number; "marked_read": number; "compact": true; "detail_path": "messages/{id}" }
+
+export interface FullExportAuthorization { "principal": string; "reason": string; "acknowledged": true }
+
+export interface MessageExportRequest { "channel"?: string; "session_id"?: string; "from"?: string; "since"?: string; "until"?: string; "format"?: "json" | "csv"; "detail"?: "preview" | "full"; "limit"?: number; "max_bytes"?: number; "preview_bytes"?: number; "timeout_ms"?: number; "authorization"?: FullExportAuthorization }
+
+export interface MessageExportArtifact { "artifact_id": string; "filename": string; "path": string | null; "download_path": string | null; "sha256": string; "format": "json" | "csv"; "detail": "preview" | "full"; "count": number; "has_more": boolean; "skipped_count": number; "byte_length": number; "max_bytes": number; "timeout_ms": number; "created_at": string }
+
+export interface MessageExportArtifactResponse { "artifact": MessageExportArtifact }
 
 export interface MessageResponse { "message": Message }
 
@@ -117,6 +129,15 @@ export class ConversationsClient {
       });
     }
 
+    /** Read a bounded, cursored page of notifications for the authenticated principal */
+    async readChannelNotifications(query?: { "agent"?: string; "channel"?: string; "since"?: string; "unread_only"?: boolean; "mark_read"?: boolean; "limit"?: number; "cursor"?: number; "max_bytes"?: number; "preview_bytes"?: number; "timeout_ms"?: number }, init?: RequestInit): Promise<ChannelNotificationPage> {
+      return this.request("GET", `/v1/channel-notifications/inbox`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
     async listChannels(query?: { "include_archived"?: boolean }, init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("GET", `/v1/channels`, {
         body: undefined,
@@ -176,7 +197,7 @@ export class ConversationsClient {
     }
 
     /** List bounded, redacted message previews */
-    async listMessages(query?: { "to"?: string; "from"?: string; "channel"?: string; "session"?: string; "limit"?: number; "offset"?: number; "order"?: "asc" | "desc"; "q"?: string; "unread_only"?: boolean; "threads_only"?: boolean; "pinned_only"?: boolean; "reply_to"?: number; "max_bytes"?: number; "preview_bytes"?: number; "timeout_ms"?: number }, init?: RequestInit): Promise<MessagePreviewPage> {
+    async listMessages(query?: { "to"?: string; "from"?: string; "channel"?: string; "session"?: string; "id"?: number; "since_id"?: number; "limit"?: number; "offset"?: number; "order"?: "asc" | "desc"; "q"?: string; "unread_only"?: boolean; "threads_only"?: boolean; "pinned_only"?: boolean; "reply_to"?: number; "detail"?: "preview"; "max_bytes"?: number; "preview_bytes"?: number; "timeout_ms"?: number }, init?: RequestInit): Promise<MessagePreviewPage> {
       return this.request("GET", `/v1/messages`, {
         body: undefined,
         query,
@@ -206,6 +227,24 @@ export class ConversationsClient {
     async bulkIngestMessages(body: { "messages": Array<{ "uuid": string; "from": string; "to": string; "content": string; "channel"?: string; "project_id"?: string; "session_id"?: string; "priority"?: string; "blocking"?: boolean; "created_at"?: string; "read_at"?: string; "edited_at"?: string; "pinned_at"?: string; "working_dir"?: string; "repository"?: string; "branch"?: string; "metadata"?: string; "attachments"?: string; "reply_to"?: number }> }, init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("POST", `/v1/messages/bulk`, {
         body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Create a bounded message export artifact */
+    async createMessageExport(body?: MessageExportRequest, init?: RequestInit): Promise<MessageExportArtifactResponse> {
+      return this.request("POST", `/v1/messages/exports`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Download one bounded export artifact owned by the authenticated principal */
+    async downloadMessageExport(artifactId: string, init?: RequestInit): Promise<string> {
+      return this.request("GET", `/v1/messages/exports/${encodeURIComponent(String(artifactId))}`, {
+        body: undefined,
         query: undefined,
         init,
       });

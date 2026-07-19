@@ -4,7 +4,7 @@ import { sendMessage } from "../lib/messages";
 import { createChannel, joinChannel } from "../lib/channels";
 import { createProject } from "../lib/projects";
 import { closeDb } from "../lib/db";
-import { mkdirSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
@@ -22,6 +22,7 @@ let restoreNetwork: () => void;
 beforeAll(() => {
   restoreEnv = enterHermeticTestEnv({
     CONVERSATIONS_DB_PATH: TEST_STORE.dbPath,
+    CONVERSATIONS_EXPORT_DIR: `${TEST_STORE.dbPath}.exports`,
     CONVERSATIONS_DASHBOARD_DIST: TEST_DASHBOARD_DIST,
   });
   restoreNetwork = installNetworkGuard({ allowLoopback: true });
@@ -577,15 +578,17 @@ describe("API /api/agents", () => {
 });
 
 describe("API /api/export", () => {
-  test("GET exports messages as JSON by default", async () => {
+  test("GET creates a preview JSON artifact by default", async () => {
     sendMessage({ from: "export-user", to: "other", content: "export-test-msg" });
     const res = await fetch(`${base()}/api/export`);
     expect(res.status).toBe(200);
     const ct = res.headers.get("content-type") || "";
     expect(ct).toContain("application/json");
-    const data = await res.json() as any[];
-    expect(Array.isArray(data)).toBe(true);
-    expect(data.length).toBeGreaterThanOrEqual(1);
+    const data = await res.json() as any;
+    expect(data.artifact.detail).toBe("preview");
+    const payload = JSON.parse(readFileSync(data.artifact.path, "utf8"));
+    expect(payload.length).toBeGreaterThanOrEqual(1);
+    expect(payload.every((message: any) => message.content === undefined)).toBe(true);
   });
 
   test("GET exports messages as CSV", async () => {
@@ -593,9 +596,10 @@ describe("API /api/export", () => {
     const res = await fetch(`${base()}/api/export?format=csv`);
     expect(res.status).toBe(200);
     const ct = res.headers.get("content-type") || "";
-    expect(ct).toContain("text/csv");
-    const text = await res.text();
-    expect(text.length).toBeGreaterThan(0);
+    expect(ct).toContain("application/json");
+    const data = await res.json() as any;
+    expect(data.artifact.format).toBe("csv");
+    expect(readFileSync(data.artifact.path, "utf8")).toContain("preview");
   });
 
   test("GET filters by channel", async () => {
@@ -603,16 +607,18 @@ describe("API /api/export", () => {
     sendMessage({ from: "a", to: "export-sp", content: "export-sp-msg", channel: "export-sp" });
     const res = await fetch(`${base()}/api/export?channel=export-sp`);
     expect(res.status).toBe(200);
-    const data = await res.json() as any[];
-    expect(data.every((m: any) => m.channel === "export-sp")).toBe(true);
+    const data = await res.json() as any;
+    const payload = JSON.parse(readFileSync(data.artifact.path, "utf8"));
+    expect(payload.every((m: any) => m.channel === "export-sp")).toBe(true);
   });
 
   test("GET filters by from", async () => {
     sendMessage({ from: "export-sender", to: "b", content: "export-from-msg" });
     const res = await fetch(`${base()}/api/export?from=export-sender`);
     expect(res.status).toBe(200);
-    const data = await res.json() as any[];
-    expect(data.every((m: any) => m.from_agent === "export-sender")).toBe(true);
+    const data = await res.json() as any;
+    const payload = JSON.parse(readFileSync(data.artifact.path, "utf8"));
+    expect(payload.every((m: any) => m.from_agent === "export-sender")).toBe(true);
   });
 });
 

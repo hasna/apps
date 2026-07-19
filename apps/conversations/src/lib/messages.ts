@@ -10,6 +10,8 @@ import type {
   SearchResult,
   MessagePreview,
   MessagePreviewPage,
+  ExportMessagesOptions,
+  MessageExportArtifact,
 } from "../types.js";
 import { createHash, randomUUID } from "crypto";
 import { mkdirSync, copyFileSync, statSync, existsSync, realpathSync } from "fs";
@@ -19,8 +21,10 @@ import { normalizeChannelName } from "./channel-names.js";
 import { markChannelNotificationsRead } from "./channel-notifications.js";
 import {
   COLLECTION_PREVIEW_SCAN_CHARS,
+  COLLECTION_MAX_MAX_BYTES,
   buildMessagePreview,
   packMessagePreviewPage,
+  previewAsCompatibilityMessage,
   resolveCollectionLimit,
   resolveCollectionOffset,
   resolveCollectionPreviewBytes,
@@ -31,6 +35,11 @@ import {
   metadataSpoofsIncidentProjection,
   validateIncidentProjectorBinding,
 } from "./incident-projection-contract.js";
+import {
+  resolveMessageExportOptions,
+  serializeMessageExport,
+  writeMessageExportArtifact,
+} from "./message-exports.js";
 
 /** Strip null/undefined fields from a message for compact output. */
 export function compactMessage(msg: Message): Partial<Message> {
@@ -273,94 +282,6 @@ export function sendMessage(opts: SendMessageOptions): Message {
   return message;
 }
 
-export function readMessages(opts: ReadMessagesOptions = {}): Message[] {
-  const db = getDb();
-  const conditions: string[] = [];
-  const params: (string | number)[] = [];
-
-  if (opts.session_id) {
-    conditions.push("session_id = ?");
-    params.push(opts.session_id);
-  }
-  if (opts.from) {
-    conditions.push("from_agent = ?");
-    params.push(opts.from);
-  }
-  if (opts.to) {
-    conditions.push("to_agent = ?");
-    params.push(opts.to);
-  }
-  if (opts.channel) {
-    conditions.push("channel = ?");
-    params.push(normalizeChannelName(opts.channel));
-  }
-  if (opts.project_id) {
-    conditions.push("project_id = ?");
-    params.push(opts.project_id);
-  }
-  if (opts.since) {
-    conditions.push("created_at > ?");
-    params.push(opts.since);
-  }
-  if (opts.since_id !== undefined) {
-    conditions.push("id > ?");
-    params.push(opts.since_id);
-  }
-  if (opts.unread_only) {
-    conditions.push("read_at IS NULL");
-  }
-  if (opts.threads_only) {
-    conditions.push("reply_to IS NULL");
-  }
-  if (opts.mentions_only) {
-    conditions.push(`id IN (SELECT message_id FROM message_mentions WHERE mentioned_agent = ?)`);
-    params.push(opts.mentions_only.toLowerCase());
-  }
-
-  // latest: N — return the N most recent messages (newest first), overrides limit + order
-  const isLatest = opts.latest && opts.latest > 0;
-  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-  const resolvedLimit = isLatest
-    ? Math.floor(opts.latest as number)
-    : Number.isFinite(opts.limit) && (opts.limit as number) > 0
-      ? Math.floor(opts.limit as number)
-      : 20;
-  const order = isLatest ? "DESC" : (opts.order?.toLowerCase() === "desc" ? "DESC" : "ASC");
-
-  // SQLite LIMIT/OFFSET require literal integers — validated and bounded here
-  const resolvedOffset = Number.isFinite(opts.offset) ? Math.floor(opts.offset as number) : 0;
-  const safeLimit = Math.max(1, Math.min(resolvedLimit, 10000));
-  const safeOffset = Math.max(0, Math.floor(resolvedOffset));
-  const rows = db.prepare(
-    `SELECT * FROM messages ${where} ORDER BY created_at ${order}, id ${order} LIMIT ${safeLimit} OFFSET ${safeOffset}`
-  ).all(...params) as Record<string, unknown>[];
-
-  let messages = rows.map(parseMessage);
-
-  // Attach reply_count if requested
-  if (opts.include_reply_counts && messages.length > 0) {
-    const db2 = getDb();
-    const counts = db2.prepare(
-      `SELECT reply_to, COUNT(*) as c FROM messages WHERE reply_to IN (${messages.map(() => "?").join(",")}) GROUP BY reply_to`
-    ).all(...messages.map((m) => m.id)) as Array<{ reply_to: number; c: number }>;
-    const countMap = new Map(counts.map((r) => [r.reply_to, r.c]));
-    messages = messages.map((m) => ({ ...m, reply_count: countMap.get(m.id) ?? 0 }));
-  }
-
-  // Truncate content if max_content_length is set
-  if (opts.max_content_length && opts.max_content_length > 0) {
-    messages = messages.map((m) => {
-      if (m.content.length > opts.max_content_length!) {
-        return { ...m, content: m.content.slice(0, opts.max_content_length) + "…", truncated: true };
-      }
-      return m;
-    });
-  }
-
-  if (opts.compact) return messages.map(compactMessage) as Message[];
-  return messages;
-}
-
 function previewProjectionColumns(alias = ""): string {
   const c = alias ? `${alias}.` : "";
   const restricted = `(lower(COALESCE(${c}channel, '')) LIKE '%incident%' OR lower(COALESCE(${c}channel, '')) LIKE '%security%' OR lower(COALESCE(${c}to_agent, '')) LIKE '%incident%' OR lower(COALESCE(${c}to_agent, '')) LIKE '%security%' OR lower(COALESCE(${c}session_id, '')) LIKE '%incident%' OR lower(COALESCE(${c}session_id, '')) LIKE '%security%')`;
@@ -379,11 +300,46 @@ function assertCollectionDeadline(startedAt: number, timeoutMs: number): void {
   }
 }
 
+function assertOptionalPositiveId(name: string, value: unknown, allowZero = false): void {
+  if (value === undefined || value === null) return;
+  if (!Number.isSafeInteger(value) || (allowZero ? Number(value) < 0 : Number(value) <= 0)) {
+    throw new Error(`${name} must be ${allowZero ? "a non-negative" : "a positive"} integer`);
+  }
+}
+
+function assertOptionalFilter(name: string, value: unknown): void {
+  if (value !== undefined && value !== null && (typeof value !== "string" || !value.trim())) {
+    throw new Error(`${name} must be a non-empty string`);
+  }
+}
+
+function assertOptionalDate(name: string, value: unknown): void {
+  assertOptionalFilter(name, value);
+  if (typeof value === "string" && !Number.isFinite(Date.parse(value))) {
+    throw new Error(`${name} must be a valid ISO 8601 date`);
+  }
+}
+
+function validateReadPreviewFilters(opts: ReadMessagePreviewsOptions): void {
+  assertOptionalPositiveId("id", opts.id);
+  assertOptionalPositiveId("reply_to", opts.reply_to);
+  assertOptionalPositiveId("since_id", opts.since_id, true);
+  for (const [name, value] of [
+    ["session_id", opts.session_id], ["from", opts.from], ["to", opts.to], ["channel", opts.channel],
+    ["project_id", opts.project_id], ["mentions_only", opts.mentions_only],
+  ] as const) assertOptionalFilter(name, value);
+  assertOptionalDate("since", opts.since);
+  if (opts.order !== undefined && opts.order !== "asc" && opts.order !== "desc") {
+    throw new Error("order must be asc or desc");
+  }
+}
+
 /**
  * Bounded collection read used by CLI/MCP/audit surfaces. The SQL projection
  * never selects the full content or raw metadata value into the caller.
  */
 export function readMessagePreviews(opts: ReadMessagePreviewsOptions = {}): MessagePreviewPage {
+  validateReadPreviewFilters(opts);
   const startedAt = performance.now();
   const timeoutMs = resolveCollectionTimeoutMs(opts.timeout_ms);
   const limit = resolveCollectionLimit(opts.latest ?? opts.limit);
@@ -429,6 +385,20 @@ export function readMessagePreviews(opts: ReadMessagePreviewsOptions = {}): Mess
   });
   assertCollectionDeadline(startedAt, timeoutMs);
   return page;
+}
+
+/**
+ * Public compatibility collection read. It returns bounded/redacted preview
+ * text in the legacy `content` slot and never returns raw metadata or
+ * attachments. Use getMessageById for one explicit full message.
+ */
+export function readMessages(opts: ReadMessagesOptions = {}): Message[] {
+  const page = readMessagePreviews({
+    ...opts,
+    preview_bytes: opts.max_content_length,
+    max_bytes: COLLECTION_MAX_MAX_BYTES,
+  });
+  return page.messages.map(previewAsCompatibilityMessage);
 }
 
 export interface CountMessagesOptions {
@@ -1066,25 +1036,13 @@ export function readDigest(opts: ReadDigestOptions = {}): DigestResult {
   return assembly.rebuild(markedRead);
 }
 
-export interface ExportMessagesOptions {
-  channel?: string;
-  session_id?: string;
-  from?: string;
-  since?: string;
-  until?: string;
-  format?: "json" | "csv";
-}
-
-function escapeCsvField(value: string | null | undefined): string {
-  if (value === null || value === undefined) return "";
-  const str = String(value);
-  if (str.includes(",") || str.includes('"') || str.includes("\n") || str.includes("\r")) {
-    return `"${str.replace(/"/g, '""')}"`;
-  }
-  return str;
-}
-
-export function exportMessages(opts?: ExportMessagesOptions): string {
+/**
+ * Write a bounded export artifact. Preview projection is the default; raw
+ * bodies are selected only after explicit full-export authorization passes.
+ */
+export function exportMessages(opts: ExportMessagesOptions = {}): MessageExportArtifact {
+  const resolved = resolveMessageExportOptions(opts);
+  const startedAt = performance.now();
   const db = getDb();
   const conditions: string[] = [];
   const params: (string | number)[] = [];
@@ -1112,32 +1070,27 @@ export function exportMessages(opts?: ExportMessagesOptions): string {
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
+  const projection = resolved.detail === "preview" ? previewProjectionColumns() : "*";
   const rows = db.prepare(
-    `SELECT * FROM messages ${where} ORDER BY created_at ASC, id ASC`
+    `SELECT ${projection} FROM messages ${where} ORDER BY created_at ASC, id ASC LIMIT ${resolved.limit + 1}`,
   ).all(...params) as Record<string, unknown>[];
-
-  const messages = rows.map(parseMessage);
-  const format = opts?.format ?? "json";
-
-  if (format === "csv") {
-    const headers = "id,session_id,from_agent,to_agent,channel,content,priority,created_at,read_at";
-    const lines = messages.map((m) =>
-      [
-        String(m.id),
-        escapeCsvField(m.session_id),
-        escapeCsvField(m.from_agent),
-        escapeCsvField(m.to_agent),
-        escapeCsvField(m.channel),
-        escapeCsvField(m.content),
-        escapeCsvField(m.priority),
-        escapeCsvField(m.created_at),
-        escapeCsvField(m.read_at),
-      ].join(",")
-    );
-    return [headers, ...lines].join("\n");
-  }
-
-  return JSON.stringify(messages, null, 2);
+  assertCollectionDeadline(startedAt, resolved.timeoutMs);
+  const records = rows.slice(0, resolved.limit).map((row) => resolved.detail === "preview"
+    ? buildMessagePreview(row, resolved.previewBytes) as unknown as Record<string, unknown>
+    : parseMessage(row) as unknown as Record<string, unknown>);
+  const serialized = serializeMessageExport(records, {
+    format: resolved.format,
+    detail: resolved.detail,
+    maxBytes: resolved.maxBytes,
+    hasMore: rows.length > resolved.limit,
+  });
+  assertCollectionDeadline(startedAt, resolved.timeoutMs);
+  return writeMessageExportArtifact(
+    serialized,
+    resolved,
+    opts.authorization?.principal ?? "local",
+    "local",
+  );
 }
 
 export function deleteMessage(id: number, agent: string): boolean {
@@ -1176,11 +1129,13 @@ export function unpinMessage(id: number): Message | null {
   return row ? parseMessage(row) : null;
 }
 
+/** Bounded preview compatibility reader for pinned collections. */
 export function getPinnedMessages(opts?: { channel?: string; session_id?: string; limit?: number; offset?: number }): Message[] {
+  assertOptionalFilter("channel", opts?.channel);
+  assertOptionalFilter("session_id", opts?.session_id);
   const db = getDb();
-  const conditions: string[] = ["pinned_at IS NOT NULL"];
+  const conditions = ["pinned_at IS NOT NULL"];
   const params: (string | number)[] = [];
-
   if (opts?.channel) {
     conditions.push("channel = ?");
     params.push(normalizeChannelName(opts.channel));
@@ -1189,29 +1144,23 @@ export function getPinnedMessages(opts?: { channel?: string; session_id?: string
     conditions.push("session_id = ?");
     params.push(opts.session_id);
   }
-
-  const where = `WHERE ${conditions.join(" AND ")}`;
-  // LIMIT must be a literal integer — validated and capped
-  const safeLimit = Number.isFinite(opts?.limit) && (opts!.limit as number) > 0
-    ? Math.floor(opts!.limit as number)
-    : 0;
-  const safeOffset = Number.isFinite(opts?.offset) && (opts!.offset as number) > 0
-    ? Math.floor(opts!.offset as number)
-    : 0;
-  const limitClause = safeLimit > 0 ? `LIMIT ${safeLimit}` : safeOffset > 0 ? "LIMIT -1" : "";
-  const offsetClause = safeOffset > 0 ? `OFFSET ${safeOffset}` : "";
-
+  const limit = resolveCollectionLimit(opts?.limit);
+  const offset = resolveCollectionOffset(opts?.offset);
   const rows = db.prepare(
-    `SELECT * FROM messages ${where} ORDER BY pinned_at DESC, id DESC ${limitClause} ${offsetClause}`
+    `SELECT ${previewProjectionColumns()} FROM messages
+     WHERE ${conditions.join(" AND ")}
+     ORDER BY pinned_at DESC, id DESC LIMIT ${limit + 1} OFFSET ${offset}`,
   ).all(...params) as Record<string, unknown>[];
-
-  return rows.map(parseMessage);
+  return packMessagePreviewPage(rows.map((row) => buildMessagePreview(row)), {
+    limit,
+    cursor: offset,
+    max_bytes: COLLECTION_MAX_MAX_BYTES,
+  }).messages.map(previewAsCompatibilityMessage);
 }
 
 function queryUnreadBlockerRows(
   agent: string,
   opts: { limit?: number; offset?: number } | undefined,
-  projection: "full" | "preview",
 ): Record<string, unknown>[] {
   const db = getDb();
   const tenantId = process.env.HASNA_CONVERSATIONS_TENANT_ID?.trim();
@@ -1241,7 +1190,6 @@ function queryUnreadBlockerRows(
     : 0;
   const limitClause = safeLimit > 0 ? `LIMIT ${safeLimit}` : safeOffset > 0 ? "LIMIT -1" : "";
   const offsetClause = safeOffset > 0 ? `OFFSET ${safeOffset}` : "";
-  const select = projection === "preview" ? previewProjectionColumns("m") : "m.*";
   return db.prepare(`
     WITH member_channel_scopes(scope) AS (
       SELECT 'channel:' || lower(channel)
@@ -1322,26 +1270,30 @@ function queryUnreadBlockerRows(
       UNION
       SELECT id FROM legacy_ids
     )
-    SELECT ${select} FROM messages m JOIN eligible_ids eligible ON eligible.id = m.id
+    SELECT ${previewProjectionColumns("m")} FROM messages m JOIN eligible_ids eligible ON eligible.id = m.id
     ORDER BY m.created_at ASC, m.id ASC
     ${limitClause} ${offsetClause}
   `).all(agent, agent, binding?.tenant_id ?? null, binding?.authority_id ?? null, agent, agent, agent, agent, agent) as Record<string, unknown>[];
 }
 
 export function getUnreadBlockers(agent: string, opts?: { limit?: number; offset?: number }): Message[] {
-  return queryUnreadBlockerRows(agent, opts, "full").map(parseMessage);
+  return getUnreadBlockerPreviews(agent, {
+    ...opts,
+    max_bytes: COLLECTION_MAX_MAX_BYTES,
+  }).messages.map(previewAsCompatibilityMessage);
 }
 
 export function getUnreadBlockerPreviews(
   agent: string,
   opts: { limit?: number; offset?: number; max_bytes?: number; preview_bytes?: number; timeout_ms?: number } = {},
 ): MessagePreviewPage {
+  assertOptionalFilter("agent", agent);
   const startedAt = performance.now();
   const timeoutMs = resolveCollectionTimeoutMs(opts.timeout_ms);
   const limit = resolveCollectionLimit(opts.limit);
   const offset = resolveCollectionOffset(opts.offset);
   const previewBytes = resolveCollectionPreviewBytes(opts.preview_bytes);
-  const rows = queryUnreadBlockerRows(agent, { limit: limit + 1, offset }, "preview");
+  const rows = queryUnreadBlockerRows(agent, { limit: limit + 1, offset });
   assertCollectionDeadline(startedAt, timeoutMs);
   const page = packMessagePreviewPage(rows.map((row) => buildMessagePreview(row, previewBytes)), {
     limit,
@@ -1354,105 +1306,26 @@ export function getUnreadBlockerPreviews(
 }
 
 export function getThreadReplies(messageId: number): Message[] {
-  const db = getDb();
-  const rows = db.prepare(
-    "SELECT * FROM messages WHERE reply_to = ? ORDER BY created_at ASC, id ASC"
-  ).all(messageId) as Record<string, unknown>[];
-  return rows.map(parseMessage);
-}
-
-export function searchMessages(opts: SearchMessagesOptions): SearchResult[] {
-  const db = getDb();
-
-  const limit = Number.isFinite(opts.limit) && (opts.limit as number) > 0
-    ? Math.floor(opts.limit as number)
-    : 20;
-  const offset = Number.isFinite(opts.offset) && (opts.offset as number) > 0
-    ? Math.floor(opts.offset as number)
-    : 0;
-  const sortByRelevance = opts.sort !== "recent";
-
-  // Priority weight map for scoring boost
-  const priorityWeights: Record<string, number> = { urgent: 10, high: 5, normal: 1, low: 0.5 };
-
-  // Try FTS5 first for proper full-text search with BM25 ranking
-  try {
-    const ftsParams: (string | number)[] = [];
-
-    // Build FTS match expression — support phrase queries and prefix matching
-    const query = opts.query.trim();
-    let ftsQuery: string;
-    if (query.startsWith('"') && query.endsWith('"')) {
-      // Exact phrase query — pass through
-      ftsQuery = query;
-    } else {
-      // Quote each word for prefix matching
-      const words = query.split(/\s+/).filter(Boolean);
-      ftsQuery = words.map((w) => `"${w.replace(/"/g, '""')}"`).join(" ");
-    }
-
-    ftsParams.push(ftsQuery);
-
-    let extraWhere = "";
-    if (opts.channel) { extraWhere += " AND m.channel = ?"; ftsParams.push(normalizeChannelName(opts.channel)); }
-    if (opts.from) { extraWhere += " AND m.from_agent = ?"; ftsParams.push(opts.from); }
-    if (opts.to) { extraWhere += " AND m.to_agent = ?"; ftsParams.push(opts.to); }
-    if (opts.since) { extraWhere += " AND m.created_at >= ?"; ftsParams.push(opts.since); }
-    if (opts.until) { extraWhere += " AND m.created_at <= ?"; ftsParams.push(opts.until); }
-
-    const orderClause = sortByRelevance ? "ORDER BY rank" : "ORDER BY m.created_at DESC, m.id DESC";
-
-    const rows = db.prepare(
-      `SELECT m.*, rank,
-        snippet(messages_fts, 0, '**', '**', '...', 20) as snippet
-       FROM messages m
-       JOIN messages_fts ON messages_fts.rowid = m.id
-       WHERE messages_fts MATCH ?${extraWhere}
-       ${orderClause} LIMIT ${limit} OFFSET ${offset}`
-    ).all(...ftsParams) as Record<string, unknown>[];
-
-    // Normalize: FTS5 rank is negative (closer to 0 = better). Convert to positive scale.
-    const maxRank = rows.reduce((max, r) => Math.max(max, Math.abs(r.rank as number || 0)), 0) || 1;
-
-    return rows.map((row) => {
-      const msg = parseMessage(row);
-      // Normalize FTS rank to 0-100 scale (higher = more relevant)
-      const ftsScore = maxRank > 0 ? (Math.abs(row.rank as number || 0) / maxRank) * 100 : 50;
-      const priorityBoost = priorityWeights[msg.priority] || 1;
-      const pinnedBoost = msg.pinned_at ? 20 : 0;
-      const blockingBoost = msg.blocking ? 15 : 0;
-      const relevance_score = Math.round((ftsScore * priorityBoost + pinnedBoost + blockingBoost) * 100) / 100;
-      return { ...msg, snippet: (row.snippet as string) || null, relevance_score };
-    });
-  } catch {
-    // Fallback to LIKE if FTS not available
-  }
-
-  // LIKE fallback
-  const conditions: string[] = ["content LIKE ?"];
-  const params: (string | number)[] = [`%${opts.query}%`];
-
-  if (opts.channel) { conditions.push("channel = ?"); params.push(normalizeChannelName(opts.channel)); }
-  if (opts.from) { conditions.push("from_agent = ?"); params.push(opts.from); }
-  if (opts.to) { conditions.push("to_agent = ?"); params.push(opts.to); }
-  if (opts.since) { conditions.push("created_at >= ?"); params.push(opts.since); }
-  if (opts.until) { conditions.push("created_at <= ?"); params.push(opts.until); }
-
-  const where = `WHERE ${conditions.join(" AND ")}`;
-
-  const rows = db.prepare(
-    `SELECT * FROM messages ${where} ORDER BY created_at DESC, id DESC LIMIT ${limit} OFFSET ${offset}`
-  ).all(...params) as Record<string, unknown>[];
-
-  return rows.map((row) => {
-    const msg = parseMessage(row);
-    return { ...msg, snippet: null, relevance_score: 0 };
-  });
+  return readMessagePreviews({
+    reply_to: messageId,
+    order: "asc",
+    limit: 100,
+    max_bytes: COLLECTION_MAX_MAX_BYTES,
+  }).messages.map(previewAsCompatibilityMessage);
 }
 
 /** Search equivalent of readMessagePreviews; FTS/LIKE run in SQLite but only a
  * bounded, redacted snippet projection leaves the storage boundary. */
 export function searchMessagePreviews(opts: SearchMessagePreviewsOptions): MessagePreviewPage {
+  assertOptionalFilter("query", opts.query);
+  assertOptionalFilter("channel", opts.channel);
+  assertOptionalFilter("from", opts.from);
+  assertOptionalFilter("to", opts.to);
+  assertOptionalDate("since", opts.since);
+  assertOptionalDate("until", opts.until);
+  if (opts.since && opts.until && Date.parse(opts.since) > Date.parse(opts.until)) {
+    throw new Error("since must not be later than until");
+  }
   const startedAt = performance.now();
   const timeoutMs = resolveCollectionTimeoutMs(opts.timeout_ms);
   const limit = resolveCollectionLimit(opts.limit);
@@ -1477,7 +1350,7 @@ export function searchMessagePreviews(opts: SearchMessagePreviewsOptions): Messa
     const extra = clauses.length > 0 ? ` AND ${clauses.join(" AND ")}` : "";
     const order = sortByRelevance ? "ORDER BY rank" : "ORDER BY m.created_at DESC, m.id DESC";
     const rows = db.prepare(
-      `SELECT ${previewProjectionColumns("m")}, rank AS relevance_score
+      `SELECT ${previewProjectionColumns("m")}, ABS(rank) AS relevance_score
        FROM messages m JOIN messages_fts ON messages_fts.rowid = m.id
        WHERE messages_fts MATCH ?${extra} ${order} LIMIT ${limit + 1} OFFSET ${offset}`,
     ).all(...params) as Record<string, unknown>[];
@@ -1514,6 +1387,19 @@ export function searchMessagePreviews(opts: SearchMessagePreviewsOptions): Messa
     timeout_ms: timeoutMs,
     query: opts.query,
   });
+}
+
+/** Public compatibility search: preview text only, never raw rows. */
+export function searchMessages(opts: SearchMessagesOptions): SearchResult[] {
+  return searchMessagePreviews({
+    ...opts,
+    preview_bytes: opts.snippet_length,
+    max_bytes: COLLECTION_MAX_MAX_BYTES,
+  }).messages.map((preview) => ({
+    ...previewAsCompatibilityMessage(preview),
+    snippet: preview.preview,
+    relevance_score: preview.relevance_score ?? 0,
+  }));
 }
 
 export interface UnreadCount {
@@ -1627,22 +1513,33 @@ export function listUnreadCountsWithMentions(agent: string): MentionCount[] {
   return rows;
 }
 
-/** Get messages that mention a specific agent. */
+/** Bounded preview compatibility reader for mention collections. */
 export function getMessagesForAgent(agent: string, opts?: { channel?: string; unread_only?: boolean; limit?: number }): Array<{ message: Message; mention_id: number }> {
+  assertOptionalFilter("agent", agent);
+  assertOptionalFilter("channel", opts?.channel);
   const db = getDb();
   const conditions = ["mm.mentioned_agent = ?"];
   const params: (string | number)[] = [agent.toLowerCase()];
-  if (opts?.channel) { conditions.push("m.channel = ?"); params.push(normalizeChannelName(opts.channel)); }
-  if (opts?.unread_only) { conditions.push("mm.notified_at IS NULL"); }
-  // LIMIT must be a literal integer — validated and capped
-  const safeLimit = Math.max(1, Math.min(Math.floor(opts?.limit ?? 50), 1000));
+  if (opts?.channel) {
+    conditions.push("m.channel = ?");
+    params.push(normalizeChannelName(opts.channel));
+  }
+  if (opts?.unread_only) conditions.push("mm.notified_at IS NULL");
+  const limit = resolveCollectionLimit(opts?.limit ?? 50);
   const rows = db.prepare(
-    `SELECT m.*, mm.id AS mention_id FROM messages m
+    `SELECT ${previewProjectionColumns("m")}, mm.id AS mention_id FROM messages m
      JOIN message_mentions mm ON mm.message_id = m.id
      WHERE ${conditions.join(" AND ")}
-     ORDER BY m.created_at DESC LIMIT ${safeLimit}`
-  ).all(...params) as Array<Record<string, unknown> & { mention_id: number }>;
-  return rows.map(({ mention_id, ...row }) => ({ message: parseMessage(row), mention_id }));
+     ORDER BY m.created_at DESC, m.id DESC LIMIT ${limit + 1}`,
+  ).all(...params) as Record<string, unknown>[];
+  const page = packMessagePreviewPage(rows.map((row) => buildMessagePreview(row)), {
+    limit,
+    max_bytes: COLLECTION_MAX_MAX_BYTES,
+  });
+  return page.messages.map((preview) => ({
+    message: previewAsCompatibilityMessage(preview),
+    mention_id: preview.mention_id ?? preview.id,
+  }));
 }
 
 /** Mark mentions as notified (agent has seen them). */

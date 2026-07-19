@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   ConversationsClient,
+  type ChannelNotificationPage,
+  type MessageExportArtifactResponse,
   type MessagePreviewPage,
   type MessageResponse,
 } from "./index";
@@ -75,5 +77,82 @@ describe("generated safe message-read client", () => {
     expect(requests[0]).toContain("max_bytes=4096");
     expect(requests[0]).toContain("preview_bytes=128");
     expect(requests[2]).toEndWith("/v1/messages/41");
+  });
+
+  test("types notification pages and artifact-only exports with caps", async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const notifications: ChannelNotificationPage = {
+      notifications: [{
+        message_id: 41,
+        channel: "engineering",
+        from_agent: "alice",
+        created_at: "2026-07-19T00:00:00.000Z",
+        priority: "normal",
+        preview: "bounded coordination update",
+        unread: false,
+        has_attachments: false,
+      }],
+      count: 1,
+      limit: 10,
+      cursor: 0,
+      next_cursor: null,
+      has_more: false,
+      skipped_count: 0,
+      byte_length: 512,
+      max_bytes: 4096,
+      timeout_ms: 1000,
+      marked_read: 1,
+      compact: true,
+      detail_path: "messages/{id}",
+    };
+    const exported: MessageExportArtifactResponse = {
+      artifact: {
+        artifact_id: "00000000-0000-4000-8000-000000000001",
+        filename: "message-export.json",
+        path: null,
+        download_path: "/v1/messages/exports/00000000-0000-4000-8000-000000000001",
+        sha256: "a".repeat(64),
+        format: "json",
+        detail: "preview",
+        count: 1,
+        has_more: false,
+        skipped_count: 0,
+        byte_length: 512,
+        max_bytes: 4096,
+        timeout_ms: 1000,
+        created_at: "2026-07-19T00:00:00.000Z",
+      },
+    };
+    const client = new ConversationsClient({
+      baseUrl: "https://conversations.invalid",
+      fetch: (async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        requests.push({ url, init });
+        const body = url.includes("channel-notifications") ? notifications : exported;
+        return new Response(JSON.stringify(body), { status: url.includes("exports") ? 201 : 200, headers: { "content-type": "application/json" } });
+      }) as unknown as typeof fetch,
+    });
+
+    const page: ChannelNotificationPage = await client.readChannelNotifications({
+      limit: 10,
+      cursor: 0,
+      max_bytes: 4096,
+      preview_bytes: 128,
+      timeout_ms: 1000,
+      mark_read: true,
+    });
+    const artifact: MessageExportArtifactResponse = await client.createMessageExport({
+      detail: "preview",
+      limit: 10,
+      max_bytes: 4096,
+      preview_bytes: 128,
+      timeout_ms: 1000,
+    });
+
+    expect(page.marked_read).toBe(1);
+    expect(requests[0].url).toContain("cursor=0");
+    expect(artifact.artifact.path).toBeNull();
+    expect(requests[1].init?.method).toBe("POST");
+    expect(String(requests[1].init?.body)).toContain('"detail":"preview"');
   });
 });

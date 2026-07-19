@@ -3,7 +3,7 @@ import { startApiServer, type ApiServerDeps } from "./api.js";
 import { mintApiKey } from "@hasna/contracts/auth";
 import { verifyApiKey, ApiKeyStore } from "@hasna/contracts/auth";
 import { readFileSync } from "node:fs";
-import { enterHermeticTestEnv, installNetworkGuard } from "../test/hermetic.js";
+import { createDisposableStore, enterHermeticTestEnv, installNetworkGuard } from "../test/hermetic.js";
 
 // In-memory query shim standing in for the vendored kit's TypedQueryClient.
 // Exercises the router + auth without a live Postgres.
@@ -11,13 +11,28 @@ function makeFakeClient(incidentProjectionCount = 0) {
   const channels: Record<string, any> = {};
   const messages: any[] = [];
   const queries: string[] = [];
+  const queryCalls: Array<{ sql: string; params: readonly unknown[] }> = [];
   let nextId = 1;
   const client = {
     async many(sql: string, _p: readonly unknown[] = []): Promise<any[]> {
       queries.push(sql);
+      queryCalls.push({ sql, params: _p });
       if (/FROM channels/i.test(sql)) return Object.values(channels);
       if (/FROM messages/i.test(sql)) {
         const rows = messages.slice().reverse();
+        if (/channel_subscriptions s/i.test(sql) && /read_message_id/i.test(sql)) {
+          return rows.map((message) => ({
+            message_id: message.id,
+            channel: message.channel,
+            from_agent: message.from_agent,
+            created_at: message.created_at,
+            priority: message.priority,
+            preview_source: String(message.content ?? "").slice(0, 4096),
+            attachment_count: Array.isArray(message.attachments) ? message.attachments.length : 0,
+            preview_chars: 140,
+            read_message_id: null,
+          }));
+        }
         if (/preview_source/i.test(sql)) {
           return rows.map((message) => {
             const scope = [message.channel, message.to_agent, message.session_id].join(" ").toLowerCase();
@@ -54,6 +69,11 @@ function makeFakeClient(incidentProjectionCount = 0) {
     },
     async query(sql: string, p: readonly unknown[] = []): Promise<{ rows: any[]; rowCount: number }> {
       queries.push(sql);
+      queryCalls.push({ sql, params: p });
+      if (/INSERT INTO channel_notification_reads/i.test(sql)) {
+        const ids = Array.isArray((p as any[])[1]) ? (p as any[])[1] : [];
+        return { rows: [], rowCount: ids.length };
+      }
       if (/INSERT INTO messages/i.test(sql) && /ON CONFLICT/i.test(sql)) {
         // One COALESCE(...) is emitted per row (for created_at) → row count.
         const numRows = (sql.match(/COALESCE\(/g) || []).length || 1;
@@ -75,6 +95,7 @@ function makeFakeClient(incidentProjectionCount = 0) {
     },
     async get(sql: string, p: readonly unknown[] = []): Promise<any> {
       queries.push(sql);
+      queryCalls.push({ sql, params: p });
       if (/SELECT 1 AS ok/i.test(sql)) return { ok: 1 };
       if (/count\(\*\).*incident_projections/is.test(sql)) return { n: incidentProjectionCount };
       if (/count\(\*\)/i.test(sql)) return { n: messages.length };
@@ -112,11 +133,15 @@ function makeFakeClient(incidentProjectionCount = 0) {
       }
       return null;
     },
-    async execute(sql: string, _p: readonly unknown[] = []): Promise<void> { queries.push(sql); },
+    async execute(sql: string, _p: readonly unknown[] = []): Promise<void> {
+      queries.push(sql);
+      queryCalls.push({ sql, params: _p });
+    },
     async transaction<T>(fn: (tx: any) => Promise<T>): Promise<T> {
       return fn(client);
     },
     queries,
+    queryCalls,
   };
   return client;
 }
@@ -146,9 +171,10 @@ let roKey: string;
 let projectorKey: string;
 let restoreEnv: () => void;
 let restoreNetwork: () => void;
+const API_EXPORT_STORE = createDisposableStore("cloud-api-exports");
 
 beforeAll(() => {
-  restoreEnv = enterHermeticTestEnv();
+  restoreEnv = enterHermeticTestEnv({ CONVERSATIONS_EXPORT_DIR: `${API_EXPORT_STORE.dbPath}.artifacts` });
   restoreNetwork = installNetworkGuard({ allowLoopback: true });
   server = startApiServer({ port: 0, host: "127.0.0.1", deps: makeDeps() });
   base = `http://127.0.0.1:${server.port}`;
@@ -161,6 +187,7 @@ afterAll(() => {
   server.stop(true);
   restoreNetwork();
   restoreEnv();
+  API_EXPORT_STORE.cleanup();
 });
 
 describe("conversations-serve", () => {
@@ -420,6 +447,141 @@ describe("conversations-serve", () => {
 
       const malformed = await fetch(`${isolatedBase}/v1/messages?max_bytes=not-a-number`, { headers: { "x-api-key": rwKey } });
       expect(malformed.status).toBe(400);
+    } finally {
+      isolated.stop(true);
+    }
+  });
+
+  test("malformed typed collection filters return 400 before any widened query", async () => {
+    const deps = makeDeps();
+    const isolated = startApiServer({ port: 0, host: "127.0.0.1", deps });
+    const isolatedBase = `http://127.0.0.1:${isolated.port}`;
+    try {
+      for (const query of [
+        "id=not-an-id",
+        "id=0",
+        "reply_to=-1",
+        "reply_to=1.5",
+        "since_id=-1",
+        "since_id=1.5",
+        "since=not-a-date",
+        "unread_only=perhaps",
+        "order=relevance",
+        "q=%20%20",
+      ]) {
+        const before = (deps.client as any).queryCalls.length;
+        const response = await fetch(`${isolatedBase}/v1/messages?${query}`, { headers: { "x-api-key": rwKey } });
+        expect(response.status).toBe(400);
+        expect((deps.client as any).queryCalls.length).toBe(before);
+      }
+      const validZeroCursor = await fetch(`${isolatedBase}/v1/messages?since_id=0`, { headers: { "x-api-key": rwKey } });
+      expect(validZeroCursor.status).toBe(200);
+    } finally {
+      isolated.stop(true);
+    }
+  });
+
+  test("notification pages bind to the authenticated principal and mark only returned ids", async () => {
+    const deps = makeDeps();
+    const isolated = startApiServer({ port: 0, host: "127.0.0.1", deps });
+    const isolatedBase = `http://127.0.0.1:${isolated.port}`;
+    try {
+      for (const content of ["first", "second", "third"]) {
+        const sent = await fetch(`${isolatedBase}/v1/messages`, {
+          method: "POST",
+          headers: { "x-api-key": rwKey, "content-type": "application/json" },
+          body: JSON.stringify({ from: "alice", to: "ops", channel: "ops", content }),
+        });
+        expect(sent.status).toBe(201);
+      }
+
+      const spoofed = await fetch(`${isolatedBase}/v1/channel-notifications/inbox?agent=other`, {
+        headers: { "x-api-key": rwKey },
+      });
+      expect(spoofed.status).toBe(403);
+
+      const pageResponse = await fetch(
+        `${isolatedBase}/v1/channel-notifications/inbox?agent=test&limit=2&cursor=0&max_bytes=4096&preview_bytes=80&timeout_ms=1000&mark_read=true`,
+        { headers: { "x-api-key": rwKey } },
+      );
+      expect(pageResponse.status).toBe(200);
+      const page = await pageResponse.json();
+      expect(page.notifications).toHaveLength(2);
+      expect(page.notifications.every((notification: any) => notification.unread === false)).toBe(true);
+      expect(page.marked_read).toBe(2);
+      expect(page.has_more).toBe(true);
+      expect(page.next_cursor).toBe(2);
+      expect(page.byte_length).toBeLessThanOrEqual(page.max_bytes);
+      const markCall = (deps.client as any).queryCalls.findLast((call: any) => /INSERT INTO channel_notification_reads/i.test(call.sql));
+      expect(markCall.params[1]).toEqual(page.notifications.map((notification: any) => notification.message_id));
+    } finally {
+      isolated.stop(true);
+    }
+  });
+
+  test("exports are bounded artifacts and full detail is principal-bound", async () => {
+    const deps = makeDeps();
+    const isolated = startApiServer({ port: 0, host: "127.0.0.1", deps });
+    const isolatedBase = `http://127.0.0.1:${isolated.port}`;
+    const rawBody = "principal-bound full export body";
+    try {
+      await fetch(`${isolatedBase}/v1/messages`, {
+        method: "POST",
+        headers: { "x-api-key": rwKey, "content-type": "application/json" },
+        body: JSON.stringify({ from: "test", to: "security-audit", channel: "security-audit", content: rawBody, metadata: { raw: "hidden" } }),
+      });
+
+      const previewResponse = await fetch(`${isolatedBase}/v1/messages/exports`, {
+        method: "POST",
+        headers: { "x-api-key": rwKey, "content-type": "application/json" },
+        body: JSON.stringify({ channel: "security-audit", max_bytes: 4096, limit: 10 }),
+      });
+      expect(previewResponse.status).toBe(201);
+      const previewArtifact = (await previewResponse.json()).artifact;
+      expect(previewArtifact.path).toBeNull();
+      expect(previewArtifact.detail).toBe("preview");
+      expect(previewArtifact.byte_length).toBeLessThanOrEqual(4096);
+      const previewDownload = await fetch(`${isolatedBase}${previewArtifact.download_path}`, { headers: { "x-api-key": rwKey } });
+      expect(previewDownload.status).toBe(200);
+      const previewPayload = await previewDownload.text();
+      expect(previewPayload).not.toContain(rawBody);
+      expect(previewPayload).not.toContain('"content"');
+      expect(previewDownload.headers.get("x-content-sha256")).toBe(previewArtifact.sha256);
+
+      const otherPrincipalDownload = await fetch(`${isolatedBase}${previewArtifact.download_path}`, { headers: { "x-api-key": roKey } });
+      expect(otherPrincipalDownload.status).toBe(404);
+
+      const missingAuthorization = await fetch(`${isolatedBase}/v1/messages/exports`, {
+        method: "POST",
+        headers: { "x-api-key": rwKey, "content-type": "application/json" },
+        body: JSON.stringify({ detail: "full" }),
+      });
+      expect(missingAuthorization.status).toBe(400);
+      const spoofedAuthorization = await fetch(`${isolatedBase}/v1/messages/exports`, {
+        method: "POST",
+        headers: { "x-api-key": rwKey, "content-type": "application/json" },
+        body: JSON.stringify({
+          detail: "full",
+          authorization: { principal: "other", reason: "not authorized", acknowledged: true },
+        }),
+      });
+      expect(spoofedAuthorization.status).toBe(403);
+
+      const fullResponse = await fetch(`${isolatedBase}/v1/messages/exports`, {
+        method: "POST",
+        headers: { "x-api-key": rwKey, "content-type": "application/json" },
+        body: JSON.stringify({
+          channel: "security-audit",
+          detail: "full",
+          max_bytes: 4096,
+          authorization: { principal: "test", reason: "audited incident handoff", acknowledged: true },
+        }),
+      });
+      expect(fullResponse.status).toBe(201);
+      const fullArtifact = (await fullResponse.json()).artifact;
+      const fullDownload = await fetch(`${isolatedBase}${fullArtifact.download_path}`, { headers: { "x-api-key": rwKey } });
+      expect(fullDownload.status).toBe(200);
+      expect(await fullDownload.text()).toContain(rawBody);
     } finally {
       isolated.stop(true);
     }

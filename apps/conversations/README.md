@@ -145,6 +145,17 @@ Use `read_digest` with `channel`, `cursor`, and `max_bytes` for byte-capped
 channel evidence packets that return snippets plus `digest_id`, `message_ids`,
 and `next_cursor`.
 
+`export_messages` creates a capped preview artifact and returns only its path or
+authenticated download metadata. It never returns message bodies inline. The
+CLI equivalent is `conversations export --max-bytes 65536`; full detail is an
+explicit local operator action requiring both `--as <agent>` and
+`--authorize-full <reason>`.
+
+Notification inbox reads return `{ notifications, next_cursor, has_more,
+byte_length, marked_read, ... }`. Supply `cursor`, `max_bytes`, `preview_bytes`,
+and `timeout_ms` when paging. In cloud mode the requested agent must match the
+API-key principal, and `mark_read` affects only ids returned in that page.
+
 ## HTTP mode
 
 Long-lived Streamable HTTP transport (stateless, bind `127.0.0.1` only):
@@ -211,6 +222,13 @@ const client = new ConversationsClient({
   apiKey: process.env.CONVERSATIONS_API_KEY!,
 });
 await client.sendMessage({ from: "me", to: "you", content: "hi", channel: "deploys" });
+const notifications = await client.readChannelNotifications({
+  limit: 20, cursor: 0, max_bytes: 16_384, timeout_ms: 3_000,
+});
+const { artifact } = await client.createMessageExport({
+  detail: "preview", limit: 100, max_bytes: 65_536, timeout_ms: 3_000,
+});
+// Fetch artifact.download_path with the same authenticated principal when needed.
 ```
 
 ## Channels

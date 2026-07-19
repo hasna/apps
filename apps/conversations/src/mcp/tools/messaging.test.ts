@@ -7,6 +7,8 @@ import { createChannel } from "../../lib/channels";
 import { getMessageById, getReadReceipts, sendMessage } from "../../lib/messages";
 import { closeDb } from "../../lib/db";
 import { createDisposableStore, enterHermeticTestEnv, installNetworkGuard } from "../../test/hermetic";
+import { createHash } from "node:crypto";
+import { readFileSync, statSync } from "node:fs";
 
 const TEST_STORE = createDisposableStore("messaging-mcp");
 
@@ -240,12 +242,35 @@ describe("messaging MCP tools", () => {
   });
 
   describe("export_messages", () => {
-    test("exports as JSON by default", async () => {
+    test("returns a bounded preview artifact without inline bodies", async () => {
+      const privateBody = "MCP_EXPORT_BODY_MUST_NOT_BE_INLINE";
+      sendMessage({ from: "export-sender", to: "export-reader", content: privateBody });
       const result = parseResult(await client.callTool({
         name: "export_messages",
         arguments: {},
       }) as any) as any;
-      expect(Array.isArray(result)).toBe(true);
+
+      expect(result.artifact_id).toMatch(/^[0-9a-f-]{36}$/i);
+      expect(typeof result.path).toBe("string");
+      expect(result.download_path).toBeNull();
+      expect(result.sha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(result.format).toBe("json");
+      expect(result.detail).toBe("preview");
+      expect(typeof result.count).toBe("number");
+      expect(result.byte_length).toBeLessThanOrEqual(result.max_bytes);
+      expect(typeof result.created_at).toBe("string");
+      expect(JSON.stringify(result)).not.toContain(privateBody);
+      expect(result.messages).toBeUndefined();
+      expect(result.content).toBeUndefined();
+
+      const artifact = readFileSync(result.path);
+      expect(statSync(result.path).mode & 0o777).toBe(0o600);
+      expect(createHash("sha256").update(artifact).digest("hex")).toBe(result.sha256);
+      const records = JSON.parse(artifact.toString("utf8")) as Array<Record<string, unknown>>;
+      expect(records.length).toBe(result.count);
+      expect(records.every((record) => !("content" in record))).toBe(true);
+      expect(records.every((record) => !("metadata" in record))).toBe(true);
+      expect(records.every((record) => !("attachments" in record))).toBe(true);
     });
   });
 

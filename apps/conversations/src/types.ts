@@ -30,6 +30,8 @@ export interface Message {
  */
 export interface MessagePreview {
   id: number;
+  /** Present on mention collection reads; distinct from the message id. */
+  mention_id?: number;
   uuid?: string;
   session_id: string;
   from_agent: string;
@@ -132,6 +134,23 @@ export interface ChannelNotification {
   preview: string;
   unread: boolean;
   has_attachments: boolean;
+}
+
+/** Bounded, cursored notification page shared by local and cloud transports. */
+export interface ChannelNotificationPage {
+  notifications: ChannelNotification[];
+  count: number;
+  limit: number;
+  cursor: number;
+  next_cursor: number | null;
+  has_more: boolean;
+  skipped_count: number;
+  byte_length: number;
+  max_bytes: number;
+  timeout_ms: number;
+  marked_read: number;
+  compact: true;
+  detail_path: "messages/{id}";
 }
 
 export interface ChannelInfo extends Channel {
@@ -298,6 +317,55 @@ export interface ReadMessagePreviewsOptions extends ReadMessagesOptions {
   max_bytes?: number;
   preview_bytes?: number;
   timeout_ms?: number;
+}
+
+export type ExportDetail = "preview" | "full";
+export type ExportFormat = "json" | "csv";
+
+/**
+ * Full exports are deliberately separate from ordinary preview exports. The
+ * acknowledgement is explicit and is bound to the authenticated principal by
+ * the HTTP surface (or to the local invoking identity by the CLI).
+ */
+export interface FullExportAuthorization {
+  principal: string;
+  reason: string;
+  acknowledged: true;
+}
+
+export interface ExportMessagesOptions {
+  channel?: string;
+  session_id?: string;
+  from?: string;
+  since?: string;
+  until?: string;
+  format?: ExportFormat;
+  detail?: ExportDetail;
+  limit?: number;
+  max_bytes?: number;
+  preview_bytes?: number;
+  timeout_ms?: number;
+  authorization?: FullExportAuthorization;
+}
+
+/** Export results are file artifacts; message bodies are never returned inline. */
+export interface MessageExportArtifact {
+  artifact_id: string;
+  filename: string;
+  /** Absolute local path for LocalStore artifacts; never exposed by the HTTP API. */
+  path: string | null;
+  /** Authenticated HTTP retrieval path for remote artifacts. */
+  download_path: string | null;
+  sha256: string;
+  format: ExportFormat;
+  detail: ExportDetail;
+  count: number;
+  has_more: boolean;
+  skipped_count: number;
+  byte_length: number;
+  max_bytes: number;
+  timeout_ms: number;
+  created_at: string;
 }
 
 export interface SearchMessagesOptions {

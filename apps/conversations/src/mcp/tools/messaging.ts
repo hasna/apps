@@ -322,21 +322,37 @@ export function registerMessagingTools(
   });
 
   server.registerTool("export_messages", {
-    description: "Export messages as JSON or CSV.",
+    description: "Create a bounded preview-only message export artifact. Returns artifact metadata, never inline message bodies.",
     inputSchema: {
       channel: z.string().optional(),
       session_id: z.string().optional(),
       from: z.string().optional(),
       since: z.string().optional(),
       until: z.string().optional(),
-      format: z.string().optional(),
+      format: z.enum(["json", "csv"]).optional(),
+      limit: z.coerce.number().optional(),
+      max_bytes: z.coerce.number().optional(),
+      preview_bytes: z.coerce.number().optional(),
+      timeout_ms: z.coerce.number().optional(),
     },
   }, async (args: Record<string, any>) => {
-    const { channel, session_id, from, since, until, format } = args;
-    const result = await getStore().exportMessages({ channel, session_id, from, since, until, format });
+    const { channel, session_id, from, since, until, format, limit, max_bytes, preview_bytes, timeout_ms } = args;
+    const result = await getStore().exportMessages({
+      channel,
+      session_id,
+      from,
+      since,
+      until,
+      format,
+      detail: "preview",
+      limit,
+      max_bytes,
+      preview_bytes,
+      timeout_ms,
+    });
 
     return {
-      content: [{ type: "text", text: result }],
+      content: [{ type: "text", text: JSON.stringify(result) }],
     };
   });
 

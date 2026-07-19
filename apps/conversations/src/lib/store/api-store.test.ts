@@ -2,6 +2,7 @@ import { describe, test, expect } from "bun:test";
 import { readFileSync } from "fs";
 import { ApiStore } from "./api-store.js";
 import type { HasnaStorageClient } from "../contracts-client/storage.js";
+import type { ChannelNotificationPage, MessageExportArtifact, MessagePreview, MessagePreviewPage } from "../../types.js";
 
 // A minimal fake HasnaStorageClient whose transport returns whatever the test
 // queues, so we can assert ApiStore normalizes raw API rows into the client
@@ -29,7 +30,10 @@ function capturingClient(response: unknown): {
   const calls: Array<{ resource: string; body: unknown; options: unknown }> = [];
   const transport = {
     baseUrl: "https://conversations.hasna.xyz/v1",
-    get: async () => response,
+    get: async (resource: string, options: unknown) => {
+      calls.push({ resource, body: undefined, options });
+      return response;
+    },
     post: async (resource: string, body: unknown, options: unknown) => {
       calls.push({ resource, body, options });
       return response;
@@ -47,6 +51,50 @@ function capturingClient(response: unknown): {
     },
   } as unknown as HasnaStorageClient;
   return { client, calls };
+}
+
+function previewPage(preview: Partial<MessagePreview> = {}): MessagePreviewPage {
+  const message: MessagePreview = {
+    id: 7,
+    session_id: "session-1",
+    from_agent: "alice",
+    to_agent: "bob",
+    channel: null,
+    project_id: null,
+    priority: "normal",
+    working_dir: null,
+    repository: null,
+    branch: null,
+    created_at: "2026-07-19T00:00:00.000Z",
+    edited_at: null,
+    pinned_at: null,
+    unread: true,
+    blocking: false,
+    reply_to: null,
+    attachment_count: 0,
+    has_attachments: false,
+    has_metadata: false,
+    preview: "bounded preview",
+    preview_bytes: 15,
+    content_bytes: 15,
+    truncated: false,
+    redacted: false,
+    ...preview,
+  };
+  return {
+    messages: [message],
+    count: 1,
+    limit: 20,
+    cursor: 0,
+    next_cursor: null,
+    has_more: false,
+    skipped_count: 0,
+    byte_length: 512,
+    max_bytes: 65_536,
+    timeout_ms: 3_000,
+    compact: true,
+    detail_path: "messages/{id}",
+  };
 }
 
 /** A client whose transport rejects every read with a 404 HasnaHttpError. */
@@ -122,6 +170,106 @@ describe("ApiStore project normalization", () => {
 });
 
 describe("ApiStore message transport", () => {
+  test("uses dedicated preview routes for mention identity and pin ordering", async () => {
+    const mentions = capturingClient(previewPage({ mention_id: 41 }));
+    const mentionRows = await new ApiStore(mentions.client).getMessagesForAgent("alice", {
+      unread_only: true,
+      limit: 5,
+    });
+    expect(mentions.calls[0].resource).toBe("/messages/for-agent");
+    expect(mentions.calls[0].options).toMatchObject({
+      query: { agent: "alice", unread_only: true, limit: 5 },
+      retry: false,
+    });
+    expect(mentionRows[0].mention_id).toBe(41);
+
+    const pinned = capturingClient(previewPage({ pinned_at: "2026-07-19T00:00:01.000Z" }));
+    await new ApiStore(pinned.client).getPinnedMessages({ session_id: "session-1", offset: 2, limit: 3 });
+    expect(pinned.calls[0].resource).toBe("/messages/pinned");
+    expect(pinned.calls[0].options).toMatchObject({
+      query: { session_id: "session-1", offset: 2, limit: 3 },
+      retry: false,
+    });
+  });
+
+  test("posts bounded artifact export options without requesting inline bodies", async () => {
+    const artifact = {
+      artifact_id: "00000000-0000-4000-8000-000000000001",
+      filename: "message-export.json",
+      path: null,
+      download_path: "/v1/messages/exports/00000000-0000-4000-8000-000000000001",
+      sha256: "a".repeat(64),
+      format: "json",
+      detail: "preview",
+      count: 1,
+      has_more: false,
+      skipped_count: 0,
+      byte_length: 512,
+      max_bytes: 4096,
+      timeout_ms: 1000,
+      created_at: "2026-07-19T00:00:00.000Z",
+    } satisfies MessageExportArtifact;
+    const { client, calls } = capturingClient({ artifact });
+    const result = await new ApiStore(client).exportMessages({
+      channel: "engineering",
+      detail: "preview",
+      limit: 10,
+      max_bytes: 4096,
+      preview_bytes: 128,
+      timeout_ms: 1000,
+    });
+
+    expect(calls).toEqual([{
+      resource: "/messages/exports",
+      body: {
+        channel: "engineering",
+        detail: "preview",
+        limit: 10,
+        max_bytes: 4096,
+        preview_bytes: 128,
+        timeout_ms: 1000,
+      },
+      options: undefined,
+    }]);
+    expect(result).toEqual(artifact);
+  });
+
+  test("forwards notification cursor, byte, preview, timeout, and mark options", async () => {
+    const page = {
+      notifications: [], count: 0, limit: 10, cursor: 20, next_cursor: null, has_more: false,
+      skipped_count: 0, byte_length: 256, max_bytes: 4096, timeout_ms: 1000, marked_read: 0,
+      compact: true, detail_path: "messages/{id}",
+    } satisfies ChannelNotificationPage;
+    const { client, calls } = capturingClient(page);
+    const result = await new ApiStore(client).readChannelNotifications({
+      agent: "alice",
+      channel: "engineering",
+      limit: 10,
+      cursor: 20,
+      max_bytes: 4096,
+      preview_bytes: 128,
+      timeout_ms: 1000,
+      mark_read: true,
+    });
+
+    expect(result).toEqual(page);
+    expect(calls[0].resource).toBe("/channel-notifications/inbox");
+    expect(calls[0].options).toEqual({
+      query: {
+        agent: "alice",
+        channel: "engineering",
+        limit: 10,
+        cursor: 20,
+        max_bytes: 4096,
+        preview_bytes: 128,
+        timeout_ms: 1000,
+        mark_read: true,
+      },
+      timeoutMs: 1000,
+      retry: false,
+    });
+  });
+
   test("forwards reply correlation, metadata, and source context to cloud create", async () => {
     const { client, calls } = capturingClient({
       message: {

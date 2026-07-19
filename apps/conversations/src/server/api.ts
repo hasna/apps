@@ -25,7 +25,11 @@ import { version as pkgVersion } from "../../package.json";
 import { openapiSpec } from "./openapi.js";
 import { normalizeChannelName } from "../lib/channel-names.js";
 import { extractTopics } from "../lib/topic-extract.js";
-import { buildMessagePreview as buildChannelNotificationPreview } from "../lib/channel-notifications.js";
+import {
+  buildByteBoundedMessagePreview as buildChannelNotificationPreview,
+  finalizeChannelNotificationPage,
+  packChannelNotificationPage,
+} from "../lib/channel-notifications.js";
 import {
   IncidentProjectionConflictError,
   IncidentProjectionValidationError,
@@ -38,7 +42,12 @@ import {
   CHANNEL_IDENTITY_ADVISORY_LOCK,
   getIncidentProjectionPg,
 } from "./incident-projections.js";
-import type { IncidentProjectionRequestV1, IncidentProjectorContext } from "../types.js";
+import type {
+  ChannelNotification,
+  ExportMessagesOptions,
+  IncidentProjectionRequestV1,
+  IncidentProjectorContext,
+} from "../types.js";
 import {
   COLLECTION_PREVIEW_SCAN_CHARS,
   RESTRICTED_CHANNEL_PREVIEW,
@@ -51,6 +60,12 @@ import {
   resolveCollectionPreviewBytes,
   resolveCollectionTimeoutMs,
 } from "../lib/message-previews.js";
+import {
+  loadMessageExportArtifact,
+  resolveMessageExportOptions,
+  serializeMessageExport,
+  writeMessageExportArtifact,
+} from "../lib/message-exports.js";
 
 export const APP = "conversations";
 const SCOPE_READ = `${APP}:read`;
@@ -312,6 +327,42 @@ function str(v: unknown): string | undefined {
   return typeof v === "string" && v.trim() ? v.trim() : undefined;
 }
 
+function strictIntegerParam(raw: string | null, name: string, allowZero = false): number | undefined {
+  if (raw === null) return undefined;
+  const normalized = raw.trim();
+  const pattern = allowZero ? /^(?:0|[1-9]\d*)$/ : /^[1-9]\d*$/;
+  if (!pattern.test(normalized)) {
+    throw new ApiRequestValidationError(`${name} must be ${allowZero ? "a non-negative" : "a positive"} integer`);
+  }
+  const parsed = Number(normalized);
+  if (!Number.isSafeInteger(parsed)) throw new ApiRequestValidationError(`${name} is outside the safe integer range`);
+  return parsed;
+}
+
+function strictBooleanParam(raw: string | null, name: string): boolean {
+  if (raw === null) return false;
+  const normalized = raw.trim().toLowerCase();
+  if (["true", "1", "yes"].includes(normalized)) return true;
+  if (["false", "0", "no"].includes(normalized)) return false;
+  throw new ApiRequestValidationError(`${name} must be true or false`);
+}
+
+function strictStringParam(raw: string | null, name: string): string | undefined {
+  if (raw === null) return undefined;
+  const normalized = raw.trim();
+  if (!normalized) throw new ApiRequestValidationError(`${name} must not be empty`);
+  return normalized;
+}
+
+function strictDateParam(raw: string | null, name: string): string | undefined {
+  const normalized = strictStringParam(raw, name);
+  if (normalized === undefined) return undefined;
+  if (!Number.isFinite(Date.parse(normalized))) {
+    throw new ApiRequestValidationError(`${name} must be a valid ISO 8601 date`);
+  }
+  return normalized;
+}
+
 function clampLimit(raw: string | null, def = 50, max = 500): number {
   let n = parseInt(raw || String(def), 10);
   if (!Number.isFinite(n) || n <= 0) n = def;
@@ -468,13 +519,6 @@ function parseServerProject(row: Record<string, unknown>): Record<string, unknow
   };
   if (row.channel_count != null) out.channel_count = Number(row.channel_count);
   return out;
-}
-
-/** RFC-4180 CSV field escape (mirrors messages.ts escapeCsvField). */
-function csv(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  const s = String(value);
-  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
 /** Extract unique @mentions (lowercase) from message content. */
@@ -1011,29 +1055,39 @@ async function handleV1(
   }
 
   if (sub === "messages" && method === "GET") {
-    const to = str(url.searchParams.get("to"));
-    const from = str(url.searchParams.get("from"));
-    const channel = str(url.searchParams.get("channel"));
-    const session = str(url.searchParams.get("session")) ?? str(url.searchParams.get("session_id"));
-    const projectId = str(url.searchParams.get("project_id"));
-    const since = str(url.searchParams.get("since"));
-    const idRaw = str(url.searchParams.get("id"));
-    const replyToRaw = str(url.searchParams.get("reply_to"));
-    const sinceIdRaw = str(url.searchParams.get("since_id"));
-    const q = str(url.searchParams.get("q"));
-    const uuid = str(url.searchParams.get("uuid"));
-    const mentionsOnly = str(url.searchParams.get("mentions_only"));
-    const unreadOnly = isTrue(url.searchParams.get("unread_only"));
-    const threadsOnly = isTrue(url.searchParams.get("threads_only"));
-    const pinnedOnly = isTrue(url.searchParams.get("pinned_only"));
-    const includeReplyCounts = isTrue(url.searchParams.get("include_reply_counts"));
-    const detail = str(url.searchParams.get("detail"));
+    const to = strictStringParam(url.searchParams.get("to"), "to");
+    const from = strictStringParam(url.searchParams.get("from"), "from");
+    const channel = strictStringParam(url.searchParams.get("channel"), "channel");
+    const session = strictStringParam(url.searchParams.get("session"), "session")
+      ?? strictStringParam(url.searchParams.get("session_id"), "session_id");
+    const projectId = strictStringParam(url.searchParams.get("project_id"), "project_id");
+    const since = strictDateParam(url.searchParams.get("since"), "since");
+    const id = strictIntegerParam(url.searchParams.get("id"), "id");
+    const replyTo = strictIntegerParam(url.searchParams.get("reply_to"), "reply_to");
+    const sinceId = strictIntegerParam(url.searchParams.get("since_id"), "since_id", true);
+    const q = strictStringParam(url.searchParams.get("q"), "q");
+    const uuid = strictStringParam(url.searchParams.get("uuid"), "uuid");
+    const mentionsOnly = strictStringParam(url.searchParams.get("mentions_only"), "mentions_only");
+    const unreadOnly = strictBooleanParam(url.searchParams.get("unread_only"), "unread_only");
+    const threadsOnly = strictBooleanParam(url.searchParams.get("threads_only"), "threads_only");
+    const pinnedOnly = strictBooleanParam(url.searchParams.get("pinned_only"), "pinned_only");
+    const includeReplyCounts = strictBooleanParam(url.searchParams.get("include_reply_counts"), "include_reply_counts");
+    const blockingOnly = strictBooleanParam(url.searchParams.get("blocking_only"), "blocking_only");
+    const countOnly = strictBooleanParam(url.searchParams.get("count"), "count");
+    const detail = strictStringParam(url.searchParams.get("detail"), "detail");
+    if (detail && detail !== "preview") {
+      throw new ApiRequestValidationError("detail must be preview; use GET /v1/messages/{id} for one exact message");
+    }
     // Default DESC (newest first) preserves the original behaviour; ?order=asc
     // gives chronological order for read_channel-style paging.
-    const order = str(url.searchParams.get("order"))?.toLowerCase() === "asc" ? "ASC" : "DESC";
+    const requestedOrder = strictStringParam(url.searchParams.get("order"), "order")?.toLowerCase();
+    if (requestedOrder && requestedOrder !== "asc" && requestedOrder !== "desc") {
+      throw new ApiRequestValidationError("order must be asc or desc");
+    }
+    const order = requestedOrder === "asc" ? "ASC" : "DESC";
     const clauses: string[] = [];
     const params: unknown[] = [];
-    if (idRaw && Number.isSafeInteger(Number(idRaw)) && Number(idRaw) > 0) { params.push(Number(idRaw)); clauses.push(`id = $${params.length}`); }
+    if (id !== undefined) { params.push(id); clauses.push(`id = $${params.length}`); }
     if (to) { params.push(to); clauses.push(`to_agent = $${params.length}`); }
     if (from) { params.push(from); clauses.push(`from_agent = $${params.length}`); }
     if (channel) { params.push(channel); clauses.push(`channel = $${params.length}`); }
@@ -1041,7 +1095,7 @@ async function handleV1(
     if (projectId) { params.push(projectId); clauses.push(`project_id = $${params.length}`); }
     if (uuid) { params.push(uuid); clauses.push(`uuid = $${params.length}`); }
     if (since) { params.push(since); clauses.push(`created_at > $${params.length}`); }
-    if (sinceIdRaw && Number.isFinite(Number(sinceIdRaw))) { params.push(Number(sinceIdRaw)); clauses.push(`id > $${params.length}`); }
+    if (sinceId !== undefined) { params.push(sinceId); clauses.push(`id > $${params.length}`); }
     if (q) { params.push(`%${q}%`); clauses.push(`content ILIKE $${params.length}`); }
     if (mentionsOnly) {
       params.push(mentionsOnly.toLowerCase());
@@ -1049,13 +1103,13 @@ async function handleV1(
     }
     if (unreadOnly) clauses.push(`read_at IS NULL`);
     if (threadsOnly) clauses.push(`reply_to IS NULL`);
-    if (replyToRaw && Number.isSafeInteger(Number(replyToRaw)) && Number(replyToRaw) > 0) { params.push(Number(replyToRaw)); clauses.push(`reply_to = $${params.length}`); }
+    if (replyTo !== undefined) { params.push(replyTo); clauses.push(`reply_to = $${params.length}`); }
     if (pinnedOnly) clauses.push(`pinned_at IS NOT NULL`);
-    if (isTrue(url.searchParams.get("blocking_only"))) clauses.push(`blocking = true`);
+    if (blockingOnly) clauses.push(`blocking = true`);
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
     // count=1 → authoritative total (honours the same filters). Lets callers
     // verify backfill parity from the API without paging through every row.
-    if (str(url.searchParams.get("count"))) {
+    if (countOnly) {
       let timeoutMs: number;
       try {
         timeoutMs = resolveCollectionTimeoutMs(url.searchParams.get("timeout_ms"));
@@ -1072,8 +1126,6 @@ async function handleV1(
     const replyCountSelect = includeReplyCounts
       ? `, (SELECT count(*) FROM messages r WHERE r.reply_to = messages.id)::int AS reply_count`
       : "";
-
-    if (detail === "full") return json({ error: "Full collection reads are disabled; use GET /v1/messages/{id} for one exact message" }, 400);
 
     params.push(collection.limit + 1);
     const limitIdx = params.length;
@@ -1269,39 +1321,105 @@ async function handleV1(
     }));
   }
 
-  // ---- export messages (json|csv) ----
-  if (sub === "messages/export" && method === "GET") {
+  const exportArtifactMatch = sub.match(/^messages\/exports\/([0-9a-f-]+)$/i);
+  if (exportArtifactMatch && method === "GET") {
+    if (!agent) return json({ error: "authenticated agent is required" }, 401);
+    const loaded = loadMessageExportArtifact(exportArtifactMatch[1], agent);
+    if (!loaded) return json({ error: "Export artifact not found" }, 404);
+    const responseBytes = new Uint8Array(loaded.payload).buffer;
+    return new Response(responseBytes, {
+      status: 200,
+      headers: {
+        ...SECURITY_HEADERS,
+        "Content-Type": loaded.contentType,
+        "Content-Length": String(loaded.artifact.byte_length),
+        "Content-Disposition": `attachment; filename="${loaded.artifact.filename}"`,
+        "X-Content-SHA256": loaded.artifact.sha256,
+      },
+    });
+  }
+
+  // ---- bounded export artifacts (preview by default; full is explicit) ----
+  if ((sub === "messages/exports" && method === "POST") || (sub === "messages/export" && method === "GET")) {
+    if (!agent) return json({ error: "authenticated agent is required" }, 401);
+    const body = method === "POST" ? await readJson(req) : {};
+    const queryValue = (name: string): unknown => method === "POST" ? body[name] : url.searchParams.get(name) ?? undefined;
+    const optionalString = (name: string): string | undefined => {
+      const value = queryValue(name);
+      if (value === undefined || value === null) return undefined;
+      if (typeof value !== "string" || !value.trim()) throw new ApiRequestValidationError(`${name} must be a non-empty string`);
+      return value.trim();
+    };
+    const optionalNumber = (name: string): number | undefined => {
+      const value = queryValue(name);
+      if (value === undefined || value === null || value === "") return undefined;
+      const parsed = typeof value === "number" ? value : Number(value);
+      if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new ApiRequestValidationError(`${name} must be a positive integer`);
+      return parsed;
+    };
+    const authorization = method === "POST" && body.authorization && typeof body.authorization === "object" && !Array.isArray(body.authorization)
+      ? body.authorization as Record<string, unknown>
+      : undefined;
+    if (authorization && authorization.acknowledged !== true) {
+      throw new ApiRequestValidationError("authorization.acknowledged must be true");
+    }
+    const opts: ExportMessagesOptions = {
+      channel: optionalString("channel"),
+      session_id: optionalString("session_id") ?? optionalString("session"),
+      from: optionalString("from"),
+      since: optionalString("since"),
+      until: optionalString("until"),
+      format: optionalString("format") as ExportMessagesOptions["format"],
+      detail: (method === "GET" ? "preview" : optionalString("detail")) as ExportMessagesOptions["detail"],
+      limit: optionalNumber("limit"),
+      max_bytes: optionalNumber("max_bytes"),
+      preview_bytes: optionalNumber("preview_bytes"),
+      timeout_ms: optionalNumber("timeout_ms"),
+      authorization: authorization ? {
+        principal: typeof authorization.principal === "string" ? authorization.principal : "",
+        reason: typeof authorization.reason === "string" ? authorization.reason : "",
+        acknowledged: true,
+      } : undefined,
+    };
+    if (opts.detail === "full" && opts.authorization && opts.authorization.principal.toLowerCase() !== agent.toLowerCase()) {
+      return json({ error: "full export authorization principal must match the authenticated agent" }, 403);
+    }
+    let resolved: ReturnType<typeof resolveMessageExportOptions>;
+    try {
+      resolved = resolveMessageExportOptions(opts);
+    } catch (error) {
+      throw new ApiRequestValidationError(error instanceof Error ? error.message : String(error));
+    }
     const clauses: string[] = [];
     const params: unknown[] = [];
-    const channel = str(url.searchParams.get("channel"));
-    const session = str(url.searchParams.get("session_id")) ?? str(url.searchParams.get("session"));
-    const from = str(url.searchParams.get("from"));
-    const since = str(url.searchParams.get("since"));
-    const until = str(url.searchParams.get("until"));
-    if (channel) { params.push(normalizeChannelName(channel)); clauses.push(`channel = $${params.length}`); }
-    if (session) { params.push(session); clauses.push(`session_id = $${params.length}`); }
-    if (from) { params.push(from); clauses.push(`from_agent = $${params.length}`); }
-    if (since) { params.push(since); clauses.push(`created_at >= $${params.length}`); }
-    if (until) { params.push(until); clauses.push(`created_at <= $${params.length}`); }
+    if (opts.channel) { params.push(normalizeChannelName(opts.channel)); clauses.push(`channel = $${params.length}`); }
+    if (opts.session_id) { params.push(opts.session_id); clauses.push(`session_id = $${params.length}`); }
+    if (opts.from) { params.push(opts.from); clauses.push(`from_agent = $${params.length}`); }
+    if (opts.since) { params.push(opts.since); clauses.push(`created_at >= $${params.length}`); }
+    if (opts.until) { params.push(opts.until); clauses.push(`created_at <= $${params.length}`); }
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-    const rows = await client.many<Record<string, unknown>>(
-      `SELECT id, uuid, session_id, from_agent, to_agent, channel, project_id, content, priority,
-              blocking, reply_to, working_dir, repository, branch, metadata, edited_at, pinned_at,
-              attachments, created_at, read_at
-       FROM messages ${where} ORDER BY created_at ASC, id ASC`,
+    params.push(resolved.limit + 1);
+    const limitIdx = params.length;
+    const projection = resolved.detail === "preview"
+      ? messagePreviewProjectionPg()
+      : `id, uuid, session_id, from_agent, to_agent, channel, project_id, content, priority,
+         blocking, reply_to, working_dir, repository, branch, metadata, edited_at, pinned_at,
+         attachments, created_at, read_at`;
+    const rows = await boundedCollectionQuery(client, resolved.timeoutMs, (tx) => tx.many<Record<string, unknown>>(
+      `SELECT ${projection} FROM messages ${where} ORDER BY created_at ASC, id ASC LIMIT $${limitIdx}`,
       params,
-    );
-    const messages = rows.map(parseServerMessage);
-    const format = str(url.searchParams.get("format")) === "csv" ? "csv" : "json";
-    if (format === "csv") {
-      const headers = "id,session_id,from_agent,to_agent,channel,content,priority,created_at,read_at";
-      const lines = messages.map((m) => [
-        String(m.id), csv(m.session_id), csv(m.from_agent), csv(m.to_agent), csv(m.channel),
-        csv(m.content), csv(m.priority), csv(m.created_at), csv(m.read_at),
-      ].join(","));
-      return json({ export: [headers, ...lines].join("\n") });
-    }
-    return json({ export: JSON.stringify(messages, null, 2) });
+    ));
+    const records = rows.slice(0, resolved.limit).map((row) => resolved.detail === "preview"
+      ? buildCollectionMessagePreview(row, resolved.previewBytes) as unknown as Record<string, unknown>
+      : parseServerMessage(row));
+    const serialized = serializeMessageExport(records, {
+      format: resolved.format,
+      detail: resolved.detail,
+      maxBytes: resolved.maxBytes,
+      hasMore: rows.length > resolved.limit,
+    });
+    const artifact = writeMessageExportArtifact(serialized, resolved, agent, "remote");
+    return json({ artifact }, 201);
   }
 
   // ---- messages that @mention an agent ----
@@ -2078,13 +2196,23 @@ async function handleChannelNotifications(
 
   if (sub === "channel-notifications" && method === "POST") {
     const body = await readJson(req);
-    const channel = str(body.channel);
-    const who = str(body.agent) ?? agent ?? undefined;
-    if (!channel || !who) return json({ error: "channel and agent are required" }, 400);
+    const channel = typeof body.channel === "string" ? body.channel.trim() : undefined;
+    if (!agent) return json({ error: "authenticated agent is required" }, 401);
+    const requestedAgent = body.agent === undefined ? undefined : typeof body.agent === "string" && body.agent.trim()
+      ? body.agent.trim()
+      : (() => { throw new ApiRequestValidationError("agent must be a non-empty string"); })();
+    if (requestedAgent && requestedAgent.toLowerCase() !== agent.toLowerCase()) {
+      return json({ error: "notification agent must match the authenticated agent" }, 403);
+    }
+    const who = agent;
+    if (!channel) return json({ error: "channel is required" }, 400);
     const channelName = normalizeChannelName(channel);
     const exists = await client.get(`SELECT name FROM channels WHERE name = $1`, [channelName]);
     if (!exists) return json({ error: `Channel not found: ${channel}` }, 404);
-    const previewChars = Number.isFinite(Number(body.preview_chars)) && Number(body.preview_chars) > 0 ? Math.floor(Number(body.preview_chars)) : 140;
+    const previewChars = body.preview_chars === undefined ? 140 : Number(body.preview_chars);
+    if (!Number.isSafeInteger(previewChars) || previewChars <= 0 || previewChars > 1024) {
+      throw new ApiRequestValidationError("preview_chars must be a positive integer no greater than 1024");
+    }
     const maxRow = await client.get<{ max_id: number }>(`SELECT COALESCE(MAX(id), 0)::int AS max_id FROM messages WHERE channel = $1`, [channelName]);
     await client.query(
       `INSERT INTO channel_subscriptions (channel, agent, preview_chars, since_message_id) VALUES ($1,$2,$3,$4)
@@ -2099,21 +2227,25 @@ async function handleChannelNotifications(
   }
 
   if (sub === "channel-notifications" && method === "GET") {
-    const who = str(url.searchParams.get("agent"));
-    const rows = who
-      ? await client.many(
-          `SELECT channel, agent, created_at, preview_chars, since_message_id FROM channel_subscriptions WHERE agent = $1 ORDER BY created_at ASC, channel ASC`,
-          [who],
-        )
-      : await client.many(
-          `SELECT channel, agent, created_at, preview_chars, since_message_id FROM channel_subscriptions ORDER BY agent ASC, channel ASC`,
-        );
+    if (!agent) return json({ error: "authenticated agent is required" }, 401);
+    const requestedAgent = strictStringParam(url.searchParams.get("agent"), "agent");
+    if (requestedAgent && requestedAgent.toLowerCase() !== agent.toLowerCase()) {
+      return json({ error: "notification agent must match the authenticated agent" }, 403);
+    }
+    const rows = await client.many(
+      `SELECT channel, agent, created_at, preview_chars, since_message_id FROM channel_subscriptions WHERE agent = $1 ORDER BY created_at ASC, channel ASC`,
+      [agent],
+    );
     return json({ subscriptions: rows });
   }
 
   if (sub === "channel-notifications/subscribed" && method === "GET") {
-    const who = str(url.searchParams.get("agent"));
-    if (!who) return json({ error: "agent is required" }, 400);
+    if (!agent) return json({ error: "authenticated agent is required" }, 401);
+    const requestedAgent = strictStringParam(url.searchParams.get("agent"), "agent");
+    if (requestedAgent && requestedAgent.toLowerCase() !== agent.toLowerCase()) {
+      return json({ error: "notification agent must match the authenticated agent" }, 403);
+    }
+    const who = agent;
     const rows = await client.many<{ channel: string }>(
       `SELECT channel FROM channel_subscriptions WHERE agent = $1 ORDER BY created_at ASC, channel ASC`,
       [who],
@@ -2122,16 +2254,23 @@ async function handleChannelNotifications(
   }
 
   if (sub === "channel-notifications/inbox" && method === "GET") {
-    const who = str(url.searchParams.get("agent"));
-    if (!who) return json({ error: "agent is required" }, 400);
+    if (!agent) return json({ error: "authenticated agent is required" }, 401);
+    const requestedAgent = strictStringParam(url.searchParams.get("agent"), "agent");
+    if (requestedAgent && requestedAgent.toLowerCase() !== agent.toLowerCase()) {
+      return json({ error: "notification agent must match the authenticated agent" }, 403);
+    }
+    const who = agent;
     const clauses = ["s.agent = $1", "m.channel IS NOT NULL", "m.from_agent <> $1", "m.id > s.since_message_id"];
     const params: unknown[] = [who];
-    const channel = str(url.searchParams.get("channel"));
+    const channel = strictStringParam(url.searchParams.get("channel"), "channel");
     if (channel) { params.push(normalizeChannelName(channel)); clauses.push(`m.channel = $${params.length}`); }
-    const since = str(url.searchParams.get("since"));
+    const since = strictDateParam(url.searchParams.get("since"), "since");
     if (since) { params.push(since); clauses.push(`m.created_at > $${params.length}`); }
     // Default filters to unread unless explicitly unread_only=false (matches local).
-    if (url.searchParams.get("unread_only") !== "false") clauses.push("snr.message_id IS NULL");
+    const unreadOnly = url.searchParams.get("unread_only") === null
+      ? true
+      : strictBooleanParam(url.searchParams.get("unread_only"), "unread_only");
+    if (unreadOnly) clauses.push("snr.message_id IS NULL");
     const collection = collectionReadOptions(url);
     const restricted = restrictedMessagePredicatePg("m");
     params.push(collection.limit + 1);
@@ -2153,40 +2292,59 @@ async function handleChannelNotifications(
        ORDER BY m.created_at DESC, m.id DESC LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
       params,
     ));
-    const candidates = rows.slice(0, collection.limit).map((r) => ({
+    const markRequested = strictBooleanParam(url.searchParams.get("mark_read"), "mark_read");
+    const candidates = rows.map((r) => ({
       message_id: Number(r.message_id),
       channel: r.channel,
       from_agent: r.from_agent,
       created_at: r.created_at,
-      priority: r.priority,
-      preview: buildChannelNotificationPreview(r.preview_source, Math.min(Number(r.preview_chars ?? 140), collection.previewBytes)),
-      unread: r.read_message_id == null,
+      priority: r.priority as ChannelNotification["priority"],
+      preview: buildChannelNotificationPreview(r.preview_source, Number(r.preview_chars ?? 140), collection.previewBytes),
+      unread: markRequested ? false : r.read_message_id == null,
       has_attachments: Number(r.attachment_count) > 0,
-    }));
-    const notifications: typeof candidates = [];
-    for (const candidate of candidates) {
-      const envelope = { notifications: [...notifications, candidate] };
-      if (Buffer.byteLength(JSON.stringify(envelope), "utf8") > collection.maxBytes) break;
-      notifications.push(candidate);
-    }
-    const skipped = notifications.length === 0 && candidates.length > 0 ? 1 : 0;
-    const consumed = notifications.length + skipped;
-    const hasMore = rows.length > consumed;
-    return json({
-      notifications,
-      count: notifications.length,
+    })) satisfies ChannelNotification[];
+    let page = packChannelNotificationPage(candidates, {
+      limit: collection.limit,
       cursor: collection.offset,
-      next_cursor: hasMore || skipped > 0 ? collection.offset + consumed : null,
-      has_more: hasMore,
-      skipped_count: skipped,
       max_bytes: collection.maxBytes,
+      timeout_ms: collection.timeoutMs,
+      marked_read: markRequested ? Math.min(collection.limit, candidates.length) : 0,
     });
+    if (markRequested && page.notifications.length > 0) {
+      const ids = page.notifications.map((notification) => notification.message_id);
+      const marked = await client.query(
+        `INSERT INTO channel_notification_reads (agent, message_id)
+         SELECT $1, x FROM unnest($2::bigint[]) AS x ON CONFLICT DO NOTHING`,
+        [who, ids],
+      );
+      page = finalizeChannelNotificationPage({ ...page, marked_read: marked.rowCount });
+    }
+    if (page.byte_length > collection.maxBytes) {
+      throw new ApiRequestValidationError(`channel notification envelope exceeds max_bytes (${page.byte_length} > ${collection.maxBytes})`);
+    }
+    return json(page);
   }
 
   if (sub === "channel-notifications/read" && method === "POST") {
     const body = await readJson(req);
-    const who = str(body.agent) ?? agent ?? undefined;
-    const ids = Array.isArray(body.message_ids) ? (body.message_ids as unknown[]).map(Number).filter((n) => Number.isFinite(n)) : [];
+    if (!agent) return json({ error: "authenticated agent is required" }, 401);
+    const requestedAgent = body.agent === undefined ? undefined : typeof body.agent === "string" && body.agent.trim()
+      ? body.agent.trim()
+      : (() => { throw new ApiRequestValidationError("agent must be a non-empty string"); })();
+    if (requestedAgent && requestedAgent.toLowerCase() !== agent.toLowerCase()) {
+      return json({ error: "notification agent must match the authenticated agent" }, 403);
+    }
+    const who = agent;
+    if (body.message_ids !== undefined && !Array.isArray(body.message_ids)) {
+      throw new ApiRequestValidationError("message_ids must be an array of positive integers");
+    }
+    const ids = Array.isArray(body.message_ids) ? (body.message_ids as unknown[]).map((value) => {
+      const parsed = Number(value);
+      if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+        throw new ApiRequestValidationError("message_ids must contain only positive integers");
+      }
+      return parsed;
+    }) : [];
     if (!who || ids.length === 0) return json({ marked: 0 });
     const res = await client.query(
       `INSERT INTO channel_notification_reads (agent, message_id)
@@ -2198,8 +2356,14 @@ async function handleChannelNotifications(
 
   if (sub === "channel-notifications/read-all" && method === "POST") {
     const body = await readJson(req);
-    const who = str(body.agent) ?? agent ?? undefined;
-    if (!who) return json({ error: "agent is required" }, 400);
+    if (!agent) return json({ error: "authenticated agent is required" }, 401);
+    const requestedAgent = body.agent === undefined ? undefined : typeof body.agent === "string" && body.agent.trim()
+      ? body.agent.trim()
+      : (() => { throw new ApiRequestValidationError("agent must be a non-empty string"); })();
+    if (requestedAgent && requestedAgent.toLowerCase() !== agent.toLowerCase()) {
+      return json({ error: "notification agent must match the authenticated agent" }, 403);
+    }
+    const who = agent;
     const params: unknown[] = [who];
     let channelClause = "";
     const channel = str(body.channel);
@@ -2218,8 +2382,13 @@ async function handleChannelNotifications(
 
   const unsubMatch = sub.match(/^channel-notifications\/([^/]+)\/([^/]+)$/);
   if (unsubMatch && method === "DELETE") {
+    if (!agent) return json({ error: "authenticated agent is required" }, 401);
     const channelName = normalizeChannelName(decodeURIComponent(unsubMatch[1]));
-    const who = decodeURIComponent(unsubMatch[2]);
+    const requestedAgent = decodeURIComponent(unsubMatch[2]);
+    if (requestedAgent.toLowerCase() !== agent.toLowerCase()) {
+      return json({ error: "notification agent must match the authenticated agent" }, 403);
+    }
+    const who = agent;
     const res = await client.query(`DELETE FROM channel_subscriptions WHERE channel = $1 AND agent = $2`, [channelName, who]);
     if (res.rowCount === 0) return json({ error: "Subscription not found" }, 404);
     return json({ unsubscribed: true });

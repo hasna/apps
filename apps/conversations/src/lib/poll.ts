@@ -6,14 +6,14 @@
 // split-brain bug this eliminates.
 
 import { getStore } from "./store/index.js";
-import type { Message } from "../types.js";
+import type { MessagePreview } from "../types.js";
 
 export interface PollOptions {
   session_id?: string;
   to_agent?: string;
   channel?: string;
   interval_ms?: number;
-  on_messages: (messages: Message[]) => void;
+  on_messages: (messages: MessagePreview[]) => void;
 }
 
 /**
@@ -27,22 +27,34 @@ export function startPolling(opts: PollOptions): { stop: () => void } {
   let stopped = false;
   let inFlight = false;
   let lastSeenId = 0;
+  const startedAt = Date.now();
 
-  // Seed lastSeenId at call time so we never replay messages that already
-  // existed when watching began. The read is issued synchronously (the local
-  // transport resolves inline; the cloud transport on the next tick) and every
-  // poll awaits it before querying, keeping the "only NEW messages" contract in
-  // both modes.
+  const createdAtMillis = (value: string): number => {
+    // SQLite timestamps are UTC but omit the trailing Z; cloud timestamps are
+    // already ISO strings. Normalize both before comparing to the call-time
+    // boundary so an asynchronous worker seed cannot swallow a newly sent row.
+    const normalized = /(?:Z|[+-]\d\d:\d\d)$/i.test(value) ? value : `${value}Z`;
+    return Date.parse(normalized);
+  };
+
+  // Seed from preview rows that predate this function call. Local reads now run
+  // in a real worker, so a message can be written while that worker starts; the
+  // call-time timestamp prevents such a new row from being swallowed into the
+  // high-water mark. Equal-millisecond rows are conservatively treated as new.
   const seeded = store
     .readMessagePreviews({
       session_id: opts.session_id,
       to: opts.to_agent,
       channel: opts.channel,
       order: "desc",
-      limit: 1,
+      limit: 100,
     })
     .then((latest) => {
-      if (latest.messages.length > 0 && latest.messages[0].id > lastSeenId) lastSeenId = latest.messages[0].id;
+      for (const message of latest.messages) {
+        if (createdAtMillis(message.created_at) < startedAt && message.id > lastSeenId) {
+          lastSeenId = message.id;
+        }
+      }
     })
     .catch(() => {
       // A failed seed just means the first poll starts from id 0; never fatal.
@@ -66,10 +78,10 @@ export function startPolling(opts: PollOptions): { stop: () => void } {
 
       if (page.messages.length > 0) {
         lastSeenId = page.messages[page.messages.length - 1].id;
-        const messages = (await Promise.all(page.messages.map((preview) => store.getMessageById(preview.id))))
-          .filter((message): message is Message => message !== null);
         try {
-          opts.on_messages(messages);
+          // Polling is a broad collection read, so it never upgrades previews
+          // into full message bodies. Callers may fetch one exact id explicitly.
+          opts.on_messages(page.messages);
         } catch (error) {
           console.error("Polling callback error:", error);
         }

@@ -125,11 +125,16 @@ export function registerChannelBridge(
         const previews = (await getStore().readMessagePreviews({ to: agent, unread_only: true, order: "asc", limit: 20 })).messages
           .filter(message => message.id > lastAgentMsgId && message.from_agent !== agent);
         for (const preview of previews) {
-          const msg = await getStore().getMessageById(preview.id);
-          if (!msg) continue;
-          const delivered = await pushNotification(msg, "dm");
+          const delivered = await pushNotification({
+            id: preview.id,
+            content: preview.preview,
+            from_agent: preview.from_agent,
+            session_id: preview.session_id,
+            channel: preview.channel,
+            priority: preview.priority,
+          }, "dm");
           if (!delivered) break;
-          lastAgentMsgId = msg.id;
+          lastAgentMsgId = preview.id;
         }
       }
 
@@ -138,11 +143,16 @@ export function registerChannelBridge(
         const previews = (await getStore().readMessagePreviews({ to: `session:${sid}`, unread_only: true, order: "asc", limit: 20 })).messages
           .filter(message => message.id > lastSessionMsgId && message.from_agent !== agent);
         for (const preview of previews) {
-          const msg = await getStore().getMessageById(preview.id);
-          if (!msg) continue;
-          const delivered = await pushNotification(msg, "direct");
+          const delivered = await pushNotification({
+            id: preview.id,
+            content: preview.preview,
+            from_agent: preview.from_agent,
+            session_id: preview.session_id,
+            channel: preview.channel,
+            priority: preview.priority,
+          }, "direct");
           if (!delivered) break;
-          lastSessionMsgId = msg.id;
+          lastSessionMsgId = preview.id;
         }
       }
 
@@ -152,7 +162,7 @@ export function registerChannelBridge(
           unread_only: true,
           limit: 20,
           mark_read: false,
-        })).sort((left, right) => left.created_at.localeCompare(right.created_at) || left.message_id - right.message_id);
+        })).notifications.sort((left, right) => left.created_at.localeCompare(right.created_at) || left.message_id - right.message_id);
 
         for (const notification of notifications) {
           const delivered = await pushNotification({

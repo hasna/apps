@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { startPolling } from "./poll";
 import { sendMessage } from "./messages";
 import { closeDb } from "./db";
-import type { Message } from "../types";
+import type { MessagePreview } from "../types";
 import { createDisposableStore, enterHermeticTestEnv, installNetworkGuard } from "../test/hermetic";
 
 let testStore: ReturnType<typeof createDisposableStore>;
@@ -34,7 +34,7 @@ describe("startPolling", () => {
   });
 
   test("detects new messages", async () => {
-    const received: Message[] = [];
+    const received: MessagePreview[] = [];
 
     const { stop } = startPolling({
       to_agent: "bob",
@@ -50,11 +50,11 @@ describe("startPolling", () => {
     stop();
 
     expect(received.length).toBeGreaterThanOrEqual(1);
-    expect(received[0].content).toBe("hello");
+    expect(received[0].preview).toBe("hello");
   });
 
   test("filters by session_id", async () => {
-    const received: Message[] = [];
+    const received: MessagePreview[] = [];
 
     const { stop } = startPolling({
       session_id: "target-session",
@@ -72,7 +72,7 @@ describe("startPolling", () => {
   });
 
   test("filters by channel", async () => {
-    const received: Message[] = [];
+    const received: MessagePreview[] = [];
 
     const { stop } = startPolling({
       channel: "general",

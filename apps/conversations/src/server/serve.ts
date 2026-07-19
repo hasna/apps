@@ -7,7 +7,8 @@
  *   conversations dashboard          # Start dashboard server
  */
 
-import { readMessagePreviews, sendMessage, markRead, searchMessagePreviews, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getMessageById } from "../lib/messages.js";
+import { sendMessage, markRead, deleteMessage, editMessage, pinMessage, unpinMessage, getMessageById } from "../lib/messages.js";
+import { getStore } from "../lib/store/index.js";
 import { listSessions, getSession } from "../lib/sessions.js";
 import { listChannels, getChannel, createChannel, updateChannel, archiveChannel, unarchiveChannel, joinChannel, leaveChannel, getChannelMembers } from "../lib/channels.js";
 import { listProjects, getProject, getProjectByName, createProject, updateProject, deleteProject } from "../lib/projects.js";
@@ -217,7 +218,7 @@ export function startDashboardServer(port = 0, host?: string) {
         const from = url.searchParams.get("from") || undefined;
         const to = url.searchParams.get("to") || undefined;
         try {
-          const page = readMessagePreviews({
+          const page = await getStore().readMessagePreviews({
             session_id: session,
             channel,
             from,
@@ -276,7 +277,7 @@ export function startDashboardServer(port = 0, host?: string) {
         const from = url.searchParams.get("from") || undefined;
         const to = url.searchParams.get("to") || undefined;
         try {
-          const page = searchMessagePreviews({
+          const page = await getStore().searchMessagePreviews({
             query: q.trim(),
             channel,
             from,
@@ -300,26 +301,27 @@ export function startDashboardServer(port = 0, host?: string) {
         const since = url.searchParams.get("since") || undefined;
         const until = url.searchParams.get("until") || undefined;
         const format = url.searchParams.get("format") === "csv" ? "csv" : "json";
-        const result = exportMessages({ channel, session_id: session, from, since, until, format });
-
-        if (format === "csv") {
-          return new Response(result, {
-            status: 200,
-            headers: securityHeaders({
-              "Content-Type": "text/csv; charset=utf-8",
-              "Content-Disposition": "attachment; filename=\"messages.csv\"",
-              "Cache-Control": "no-store",
-            }),
-          });
-        }
-        return jsonResponse(JSON.parse(result));
+        const artifact = await getStore().exportMessages({
+          channel,
+          session_id: session,
+          from,
+          since,
+          until,
+          format,
+          detail: "preview",
+          limit: url.searchParams.get("limit") ? Number(url.searchParams.get("limit")) : undefined,
+          max_bytes: url.searchParams.get("max_bytes") ? Number(url.searchParams.get("max_bytes")) : undefined,
+          preview_bytes: url.searchParams.get("preview_bytes") ? Number(url.searchParams.get("preview_bytes")) : undefined,
+          timeout_ms: url.searchParams.get("timeout_ms") ? Number(url.searchParams.get("timeout_ms")) : undefined,
+        });
+        return jsonResponse({ artifact });
       }
 
       if (path === "/api/messages/pinned" && req.method === "GET") {
         const channel = url.searchParams.get("channel") || undefined;
         const session_id = url.searchParams.get("session_id") || undefined;
         try {
-          const page = readMessagePreviews({
+          const page = await getStore().readMessagePreviews({
             pinned_only: true,
             channel,
             session_id,

@@ -4,18 +4,21 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerProjectTools } from "./projects";
 import { closeDb } from "../../lib/db";
-import { unlinkSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
+import { createDisposableStore, enterHermeticTestEnv, installNetworkGuard } from "../../test/hermetic";
 
-const TEST_DB = join(tmpdir(), `conversations-test-projects-mcp-${Date.now()}.db`);
+const TEST_STORE = createDisposableStore("projects-mcp");
 
 describe("projects MCP tools", () => {
   let client: Client;
+  let restoreEnv: () => void;
+  let restoreNetwork: () => void;
 
   beforeAll(async () => {
-    process.env.CONVERSATIONS_DB_PATH = TEST_DB;
-    process.env.CONVERSATIONS_AGENT_ID = "projects-test-agent";
+    restoreEnv = enterHermeticTestEnv({
+      CONVERSATIONS_DB_PATH: TEST_STORE.dbPath,
+      CONVERSATIONS_AGENT_ID: "projects-test-agent",
+    });
+    restoreNetwork = installNetworkGuard();
     closeDb();
 
     const server = new McpServer({ name: "test-projects-mcp", version: "0.0.1" });
@@ -28,13 +31,11 @@ describe("projects MCP tools", () => {
   });
 
   afterAll(async () => {
-    delete process.env.CONVERSATIONS_DB_PATH;
-    delete process.env.CONVERSATIONS_AGENT_ID;
-    closeDb();
-    try { unlinkSync(TEST_DB); } catch {}
-    try { unlinkSync(TEST_DB + "-wal"); } catch {}
-    try { unlinkSync(TEST_DB + "-shm"); } catch {}
     await client.close();
+    closeDb();
+    restoreNetwork();
+    restoreEnv();
+    TEST_STORE.cleanup();
   });
 
   function parseResult(result: { content: unknown[] }): unknown {
