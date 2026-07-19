@@ -244,6 +244,28 @@ export type {
   IncidentOutboxStatus,
   TodosIncidentStore,
 } from "./incidents/postgres-store.js";
+export {
+  INCIDENT_PUBLISHER_LEASE_SAFETY_MS,
+  INCIDENT_PUBLISHER_MAX_REMOTE_WINDOWS,
+  INCIDENT_PUBLISHER_RESPONSE_LIMIT_BYTES,
+  canonicalIncidentJson,
+  createIncidentOutboxHttpApi,
+  incidentPublisherRequiredLeaseMs,
+  inspectIncidentOutboxPublisher,
+  publishIncidentOutboxOnce,
+  resolveIncidentProjectorConfig,
+  validateIncidentPublisherLeaseBudget,
+} from "./incidents/outbox-publisher.js";
+export type {
+  IncidentOutboxHttpApiOptions,
+  IncidentOutboxOperatorApi,
+  IncidentOutboxPublisherApi,
+  IncidentOutboxPublisherCallOptions,
+  IncidentPublisherEventResult,
+  IncidentPublisherOptions,
+  IncidentPublisherResult,
+  IncidentPublisherStatusResult,
+} from "./incidents/outbox-publisher.js";
 
 // Tasks
 export {

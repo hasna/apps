@@ -7,6 +7,7 @@ import {
   applyIncidentTransition,
   buildIncidentProjectionEvent,
   createInitialIncident,
+  isValidIncidentTimestamp,
   normalizeIncidentAuthorityId,
   stableIncidentFingerprint,
   supersedeIncident,
@@ -1139,7 +1140,13 @@ function parseIncidentState(value: unknown): IncidentState {
   if (typeof row.version !== "number" || !Number.isInteger(row.version) || row.version < 1) {
     throw new Error("Invalid incident version");
   }
-  return row as unknown as IncidentState;
+  return {
+    ...row,
+    deadline: storedTimestamp(row.deadline, "incident deadline", true),
+    resolved_at: storedTimestamp(row.resolved_at, "incident resolved_at", true),
+    created_at: storedTimestamp(row.created_at, "incident created_at"),
+    updated_at: storedTimestamp(row.updated_at, "incident updated_at"),
+  } as unknown as IncidentState;
 }
 
 function parseTransition(value: unknown): IncidentTransition {
@@ -1150,21 +1157,29 @@ function parseTransition(value: unknown): IncidentTransition {
   if (typeof row.incident_version !== "number" || !Number.isInteger(row.incident_version)) {
     throw new Error("Invalid incident transition version");
   }
-  parseIncidentState(row.after);
-  if (row.before !== null) parseIncidentState(row.before);
-  return row as unknown as IncidentTransition;
+  const after = parseIncidentState(row.after);
+  const before = row.before === null ? null : parseIncidentState(row.before);
+  return {
+    ...row,
+    before,
+    after,
+    created_at: storedTimestamp(row.created_at, "incident transition created_at"),
+  } as unknown as IncidentTransition;
 }
 
 function parseProjectionEvent(value: unknown): IncidentProjectionEvent {
   const row = object(value, "incident projection event");
   if (row.schema_version !== 1 || row.source !== "todos") throw new Error("Invalid incident projection event contract");
-  parseIncidentState(row.incident);
-  return row as unknown as IncidentProjectionEvent;
+  return {
+    ...row,
+    occurred_at: storedTimestamp(row.occurred_at, "incident projection occurred_at"),
+    incident: parseIncidentState(row.incident),
+  } as unknown as IncidentProjectionEvent;
 }
 
 function parseOutbox(value: unknown): IncidentOutboxRecord {
   const row = object(value, "incident outbox record");
-  parseProjectionEvent(row.payload);
+  const payload = parseProjectionEvent(row.payload);
   for (const field of ["event_id", "projection_key", "incident_id"] as const) {
     if (typeof row[field] !== "string" || !row[field]) throw new Error(`Invalid incident outbox ${field}`);
   }
@@ -1185,7 +1200,15 @@ function parseOutbox(value: unknown): IncidentOutboxRecord {
       (typeof row.failure_fingerprint !== "string" || !/^[0-9a-f]{64}$/.test(row.failure_fingerprint))) {
     throw new Error("Invalid incident outbox failure fingerprint");
   }
-  return row as unknown as IncidentOutboxRecord;
+  return {
+    ...row,
+    payload,
+    next_attempt_at: storedTimestamp(row.next_attempt_at, "incident outbox next_attempt_at"),
+    lease_expires_at: storedTimestamp(row.lease_expires_at, "incident outbox lease_expires_at", true),
+    acked_at: storedTimestamp(row.acked_at, "incident outbox acked_at", true),
+    created_at: storedTimestamp(row.created_at, "incident outbox created_at"),
+    updated_at: storedTimestamp(row.updated_at, "incident outbox updated_at"),
+  } as unknown as IncidentOutboxRecord;
 }
 
 function parseDeadOutbox(value: unknown): IncidentOutboxRecord {
@@ -1200,6 +1223,16 @@ function parseDeadOutbox(value: unknown): IncidentOutboxRecord {
 function object(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Invalid ${label}`);
   return value as Record<string, unknown>;
+}
+
+function storedTimestamp(value: unknown, label: string): string;
+function storedTimestamp(value: unknown, label: string, nullable: true): string | null;
+function storedTimestamp(value: unknown, label: string, nullable = false): string | null {
+  if (value === null && nullable) return null;
+  if (typeof value !== "string" || !isValidIncidentTimestamp(value)) {
+    throw new Error(`Invalid ${label} timestamp`);
+  }
+  return new Date(value).toISOString();
 }
 
 function bounded(value: unknown, label: string, max: number): string {

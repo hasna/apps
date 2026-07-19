@@ -8,6 +8,7 @@ import {
   createInitialIncident,
   incidentEventId,
   incidentTransitionId,
+  isCanonicalIncidentTimestamp,
   normalizeIncidentCreateInput,
   normalizeIncidentTransitionInput,
   stableIncidentFingerprint,
@@ -43,6 +44,17 @@ function current(overrides: Partial<IncidentState> = {}): IncidentState {
 }
 
 describe("incident input contracts", () => {
+  it("distinguishes canonical UTC millisecond wire timestamps from accepted RFC3339 inputs", () => {
+    expect(isCanonicalIncidentTimestamp("2026-07-18T20:00:00.000Z")).toBe(true);
+    for (const value of [
+      "1",
+      "2026-02-30T00:00:00.000Z",
+      "2026-07-18T20:00:00Z",
+      "2026-07-18T20:00:00.0000Z",
+      "2026-07-18T23:00:00.000+03:00",
+    ]) expect(isCanonicalIncidentTimestamp(value)).toBe(false);
+  });
+
   it("normalizes a bounded create request without accepting actor provenance", () => {
     const input = normalizeIncidentCreateInput({
       id: INCIDENT_ID,

@@ -213,13 +213,13 @@ function positiveVersion(value: unknown, field: string): number {
 
 function timestamp(value: unknown, field: string): string | null {
   if (value === undefined || value === null) return null;
-  if (typeof value !== "string" || !isValidTimestamp(value)) {
+  if (typeof value !== "string" || !isValidIncidentTimestamp(value)) {
     throw new IncidentValidationError(`${field} must be an RFC3339 timestamp or null`);
   }
   return new Date(value).toISOString();
 }
 
-function isValidTimestamp(value: string): boolean {
+export function isValidIncidentTimestamp(value: string): boolean {
   const match = RFC3339_TIMESTAMP.exec(value);
   if (!match) return false;
   const year = Number(match[1]);
@@ -236,6 +236,12 @@ function isValidTimestamp(value: string): boolean {
   const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
   const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
   return day <= days[month - 1]! && Number.isFinite(Date.parse(value));
+}
+
+export function isCanonicalIncidentTimestamp(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)
+    && isValidIncidentTimestamp(value)
+    && new Date(value).toISOString() === value;
 }
 
 function severity(value: unknown): IncidentSeverity {
@@ -326,7 +332,7 @@ export function applyIncidentTransition(
   const authority = normalizeIncidentAuthorityId(authorityId);
   const actor = boundedString(actorId, "authenticated actor", 256);
   const effectiveActor = boundedString(effectiveActorId, "effective actor", 256);
-  if (!isValidTimestamp(now)) throw new IncidentValidationError("transition time must be RFC3339");
+  if (!isValidIncidentTimestamp(now)) throw new IncidentValidationError("transition time must be RFC3339");
   if (current.version !== input.expected_version) {
     throw new IncidentValidationError(`incident version conflict: expected ${input.expected_version}, current ${current.version}`);
   }
@@ -394,7 +400,7 @@ export function createInitialIncident(
   const authority = normalizeIncidentAuthorityId(authorityId);
   const actor = boundedString(actorId, "authenticated actor", 256);
   const effectiveActor = boundedString(effectiveActorId, "effective actor", 256);
-  if (!isValidTimestamp(now)) throw new IncidentValidationError("creation time must be RFC3339");
+  if (!isValidIncidentTimestamp(now)) throw new IncidentValidationError("creation time must be RFC3339");
   const createdAt = new Date(now).toISOString();
   const incident: IncidentState = {
     id: input.id,
@@ -460,7 +466,7 @@ export function supersedeIncident(
   const actor = boundedString(actorId, "authenticated actor", 256);
   const effectiveActor = boundedString(effectiveActorId, "effective actor", 256);
   const key = idempotencyKey(idempotencyKeyValue);
-  if (!isValidTimestamp(now)) throw new IncidentValidationError("supersession time must be RFC3339");
+  if (!isValidIncidentTimestamp(now)) throw new IncidentValidationError("supersession time must be RFC3339");
   const at = new Date(now).toISOString();
   const incident: IncidentState = {
     ...current,

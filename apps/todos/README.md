@@ -1373,6 +1373,12 @@ indexes, and tightening database file permissions.
 todos-mcp
 ```
 
+## Incident Outbox Publisher
+
+The remote incident projection outbox has an explicit bounded one-shot operator
+command, strict inspection surfaces, and audited dead-letter recovery. See
+[Incident outbox publisher](docs/incident-outbox-publisher.md).
+
 ## HTTP mode
 
 Shared Streamable HTTP transport for long-lived local MCP (stdio remains the default). MCP is mounted on the existing `todos-serve` HTTP server — no second server:

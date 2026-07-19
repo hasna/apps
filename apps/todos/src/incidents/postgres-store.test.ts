@@ -13,6 +13,9 @@ import {
 const INCIDENT_ID = "11111111-1111-4111-8111-111111111111";
 const OLD_INCIDENT_ID = "22222222-2222-4222-8222-222222222222";
 const NOW = "2026-07-18T20:00:00.000Z";
+const OFFSET_NOW = "2026-07-18T23:00:00.000+03:00";
+const NEXT = "2026-07-18T20:00:01.000Z";
+const OFFSET_NEXT = "2026-07-18T23:00:01.000+03:00";
 
 interface ScriptItem {
   marker: string;
@@ -283,6 +286,113 @@ describe("Postgres incident atomic commands", () => {
     )).rejects.toBeInstanceOf(IncidentVersionConflictError);
   });
 
+  it("canonicalizes offset-bearing PostgreSQL timestamps before building transitions and returning outbox records", async () => {
+    const canonicalCurrent = {
+      ...createdEnvelope().incident,
+      deadline: "2026-07-19T00:00:00.000Z",
+    };
+    const offsetCurrent = {
+      ...canonicalCurrent,
+      deadline: "2026-07-19T03:00:00.000+03:00",
+      created_at: OFFSET_NOW,
+      updated_at: OFFSET_NOW,
+    };
+    const input = normalizeIncidentTransitionInput({
+      expected_version: 1,
+      idempotency_key: "test-offset-transition-v2",
+      reason: "Decode PostgreSQL timestamps before hashing",
+      status: "contained",
+      containment: "Canonical UTC representation restored",
+      next_action: "Project the exact v2 payload",
+    });
+    const applied = applyIncidentTransition(canonicalCurrent, input, "actor", NEXT, "engineering", "key-a");
+    const event = buildIncidentProjectionEvent("engineering", applied.transition);
+    const envelope = { incident: applied.incident, transitions: [applied.transition], events: [event] };
+    const rawOutbox = {
+      event_id: event.event_id,
+      projection_key: event.projection_key,
+      incident_id: event.incident_id,
+      incident_version: event.incident_version,
+      depends_on_event_id: null,
+      payload: {
+        ...event,
+        occurred_at: OFFSET_NEXT,
+        incident: {
+          ...event.incident,
+          deadline: "2026-07-19T03:00:00.000+03:00",
+          created_at: OFFSET_NOW,
+          updated_at: OFFSET_NEXT,
+        },
+      },
+      status: "leased",
+      attempts: 1,
+      next_attempt_at: OFFSET_NEXT,
+      lease_token: "lease-offset",
+      leased_by: "projector",
+      lease_expires_at: "2026-07-18T23:01:01.000+03:00",
+      delivery_id: null,
+      acked_at: null,
+      last_error: null,
+      failure_code: null,
+      failure_fingerprint: null,
+      consecutive_failures: 0,
+      created_at: OFFSET_NEXT,
+      updated_at: OFFSET_NEXT,
+    };
+    const client = new ScriptedClient([
+      { marker: "todos:incident-transition-replay", rows: [] },
+      { marker: "todos:incident-get", rows: [{ incident: offsetCurrent }] },
+      { marker: "todos:incident-transition-atomic", rows: [{ result: envelope }] },
+      { marker: "todos:incident-outbox-claim", rows: [{ outbox: rawOutbox }] },
+    ]);
+    const store = createPostgresIncidentStore(client, { now: () => NEXT, leaseToken: () => "lease-offset" });
+    const authority = { authorityId: "engineering", actorId: "actor", actorKeyId: "key-a" };
+
+    const result = await store.transition(INCIDENT_ID, input, authority);
+    expect(result).toEqual({ ...envelope, replayed: false });
+    const mutation = client.calls[2]!;
+    expect(mutation.values[4]).toMatchObject({
+      deadline: "2026-07-19T00:00:00.000Z",
+      created_at: NOW,
+      updated_at: NEXT,
+    });
+    expect(mutation.values[5]).toMatchObject({
+      created_at: NEXT,
+      before: { created_at: NOW, updated_at: NOW },
+      after: { created_at: NOW, updated_at: NEXT },
+    });
+    expect(mutation.values[6]).toMatchObject({
+      occurred_at: NEXT,
+      incident: { created_at: NOW, updated_at: NEXT },
+    });
+
+    const [claimed] = await store.claimOutbox(authority, { limit: 1, leaseSeconds: 60 });
+    expect(claimed).toMatchObject({
+      next_attempt_at: NEXT,
+      lease_expires_at: "2026-07-18T20:01:01.000Z",
+      acked_at: null,
+      created_at: NEXT,
+      updated_at: NEXT,
+      payload: {
+        occurred_at: NEXT,
+        incident: {
+          deadline: "2026-07-19T00:00:00.000Z",
+          resolved_at: null,
+          created_at: NOW,
+          updated_at: NEXT,
+        },
+      },
+    });
+  });
+
+  it("rejects malformed PostgreSQL timestamps instead of silently canonicalizing them", async () => {
+    const malformed = { ...createdEnvelope().incident, created_at: "2026-02-30T00:00:00.000Z" };
+    const store = createPostgresIncidentStore(new ScriptedClient([
+      { marker: "todos:incident-get", rows: [{ incident: malformed }] },
+    ]));
+    await expect(store.get(INCIDENT_ID, "engineering")).rejects.toThrow("Invalid incident created_at timestamp");
+  });
+
   it("uses authority-scoped canonical rows for reads and active blocker queries", async () => {
     const incident = createdEnvelope().incident;
     const client = new ScriptedClient([
@@ -345,6 +455,32 @@ describe("Postgres incident atomic commands", () => {
     await expect(store.ackOutbox(event.event_id, "wrong-lease", "message-1", {
       authorityId: "engineering", actorId: "projector", actorKeyId: "key-a",
     })).rejects.toBeInstanceOf(IncidentLeaseConflictError);
+  });
+
+  it("replays the exact ACK delivery idempotently and rejects a changed delivery identity", async () => {
+    const leased = outboxRecord();
+    const acked = outboxRecord({
+      status: "acked",
+      lease_token: null,
+      leased_by: null,
+      lease_expires_at: null,
+      delivery_id: "42",
+      acked_at: NOW,
+    });
+    const client = new ScriptedClient([
+      { marker: "todos:incident-outbox-ack", rows: [{ outbox: acked }] },
+      { marker: "todos:incident-outbox-ack", rows: [{ outbox: acked }] },
+      { marker: "todos:incident-outbox-ack", rows: [] },
+    ]);
+    const store = createPostgresIncidentStore(client, { now: () => NOW });
+    const authority = { authorityId: "engineering", actorId: "projector", actorKeyId: "key-a" };
+    expect(await store.ackOutbox(leased.event_id, "lease-1", "42", authority)).toEqual(acked);
+    expect(await store.ackOutbox(leased.event_id, "lease-1", "42", authority)).toEqual(acked);
+    await expect(store.ackOutbox(leased.event_id, "lease-1", "43", authority))
+      .rejects.toBeInstanceOf(IncidentLeaseConflictError);
+    expect(client.calls[0]!.sql).toContain("status = 'acked' AND delivery_id = $6");
+    expect(client.calls[1]!.values[5]).toBe("42");
+    expect(client.calls[2]!.values[5]).toBe("43");
   });
 
   it("dead-letters the third unchanged failure class without persisting credential-bearing runtime details", async () => {
