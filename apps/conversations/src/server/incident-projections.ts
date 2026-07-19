@@ -6,6 +6,10 @@ import {
   IncidentProjectionConflictError,
   validateIncidentProjection,
 } from "../lib/incident-projection-contract.js";
+import {
+  normalizeIncidentProjectionMessageTimestamps,
+  normalizeIncidentProjectionTimestamp,
+} from "../lib/incident-projection-timestamps.js";
 import type {
   IncidentProjectionRecord,
   IncidentProjectionRequestV1,
@@ -66,7 +70,7 @@ async function loadRecord(
     incident_id: String(row.incident_id),
     transition_id: String(row.transition_id),
     incident_version: Number(row.incident_version),
-    occurred_at: new Date(String(row.occurred_at)).toISOString(),
+    occurred_at: normalizeIncidentProjectionTimestamp(row.occurred_at, "projection.occurred_at"),
     status: row.status as IncidentProjectionRecord["status"],
     severity: row.severity as IncidentProjectionRecord["severity"],
     blocking: Boolean(row.blocking),
@@ -75,8 +79,8 @@ async function loadRecord(
     superseded_by_incident_id: row.superseded_by_incident_id == null ? null : String(row.superseded_by_incident_id),
     canonical_payload: String(row.canonical_payload),
     payload_hash: String(row.payload_hash),
-    created_at: new Date(String(row.created_at)).toISOString(),
-    message: parseMessage(messageRow) as Message,
+    created_at: normalizeIncidentProjectionTimestamp(row.created_at, "projection.created_at"),
+    message: normalizeIncidentProjectionMessageTimestamps(parseMessage(messageRow) as Message),
     replayed,
   };
 }

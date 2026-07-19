@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import assert from "node:assert/strict";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { Pool } from "pg";
 import { ApiKeyStore, mintApiKey, verifyApiKey } from "@hasna/contracts/auth";
@@ -18,18 +18,73 @@ import { renameChannelServer, startApiServer } from "../src/server/api.js";
 import { ConversationsClient } from "../src/sdk/index.js";
 import type { IncidentProjectionRequestV1, IncidentProjectorContext } from "../src/types.js";
 
+const APP_TARGET_ENV_NAMES = ["CONVERSATIONS", "TODOS"].flatMap((app) => [
+  `HASNA_${app}_DATABASE_URL_OWNER`,
+  `${app}_DATABASE_URL_OWNER`,
+  `HASNA_${app}_DATABASE_URL`,
+  `${app}_DATABASE_URL`,
+  `HASNA_${app}_API_URL`,
+  `${app}_API_URL`,
+  `HASNA_${app}_API_KEY`,
+  `${app}_API_KEY`,
+  `HASNA_${app}_API_SIGNING_KEY`,
+  `${app}_API_SIGNING_KEY`,
+  `HASNA_${app}_STORAGE_MODE`,
+  `HASNA_${app}_MODE`,
+  `${app}_STORAGE_MODE`,
+  `${app}_MODE`,
+]);
+const LIBPQ_TARGET_ENV_NAMES = [
+  "DATABASE_URL",
+  "PGHOST",
+  "PGHOSTADDR",
+  "PGPORT",
+  "PGDATABASE",
+  "PGUSER",
+  "PGPASSWORD",
+  "PGPASSFILE",
+  "PGSERVICE",
+  "PGSERVICEFILE",
+  "PGSSLMODE",
+  "PGREQUIRESSL",
+  "PGCONNECT_TIMEOUT",
+  "PGTARGETSESSIONATTRS",
+  "PGOPTIONS",
+  "PGAPPNAME",
+  "HASNA_API_SIGNING_KEY",
+  "API_KEY_SIGNING_SECRET",
+];
+const AMBIENT_TARGET_ENV_NAMES = [...APP_TARGET_ENV_NAMES, ...LIBPQ_TARGET_ENV_NAMES];
+
+function assertNoAmbientTargetEnvironment(env: NodeJS.ProcessEnv): void {
+  const found = AMBIENT_TARGET_ENV_NAMES.find((name) => env[name] !== undefined);
+  if (found) throw new Error(`refusing ambient target setting: ${found}`);
+}
+
+function unsetAmbientTargetEnvironment(env: NodeJS.ProcessEnv): void {
+  for (const name of AMBIENT_TARGET_ENV_NAMES) delete env[name];
+}
+
+const hostileAmbient: NodeJS.ProcessEnv = {
+  HASNA_CONVERSATIONS_DATABASE_URL: "hostile-test-sentinel",
+  HASNA_TODOS_API_URL: "hostile-test-sentinel",
+  PGHOST: "hostile-test-sentinel",
+};
+assert.throws(
+  () => assertNoAmbientTargetEnvironment(hostileAmbient),
+  /refusing ambient target setting: HASNA_CONVERSATIONS_DATABASE_URL/,
+);
+unsetAmbientTargetEnvironment(hostileAmbient);
+assertNoAmbientTargetEnvironment(hostileAmbient);
+unsetAmbientTargetEnvironment(process.env);
+assertNoAmbientTargetEnvironment(process.env);
+
 const socket = "/var/run/postgresql";
 const port = 5432;
-const user = process.env.USER || "hasna";
+const user = "hasna";
 const database = `oc_incident_52e65cba_${process.pid}_${randomBytes(4).toString("hex")}`;
 if (!/^[a-z0-9_]+$/.test(database)) throw new Error("unsafe temporary database name");
 const quotedDatabase = `"${database}"`;
-
-function assertPasswordlessLocalPgEnvironment(env: NodeJS.ProcessEnv): void {
-  for (const name of ["PGPASSWORD", "PGPASSFILE", "PGSERVICE", "PGSERVICEFILE"] as const) {
-    if (env[name]) throw new Error(`refusing ambient PostgreSQL credential or service setting: ${name}`);
-  }
-}
 
 function localPoolConfig(targetDatabase: string, max: number) {
   return { host: socket, port, database: targetDatabase, user, max };
@@ -40,17 +95,11 @@ async function createOwnedDatabase(pool: Pool, quotedName: string): Promise<bool
   return true;
 }
 
-assert.throws(
-  () => assertPasswordlessLocalPgEnvironment({ PGPASSWORD: "hostile-test-sentinel" }),
-  /PGPASSWORD/,
-);
 const hostileTargetConfig = localPoolConfig("hostile_target_sentinel", 1);
 assert.deepEqual(
   { host: hostileTargetConfig.host, port: hostileTargetConfig.port, database: hostileTargetConfig.database },
   { host: socket, port, database: "hostile_target_sentinel" },
 );
-assertPasswordlessLocalPgEnvironment(process.env);
-
 const admin = new Pool(localPoolConfig("postgres", 1));
 let taskClient: ReturnType<typeof createQueryClient> | null = null;
 let guardReuseClient: ReturnType<typeof createQueryClient> | null = null;
@@ -156,11 +205,80 @@ try {
     baseUrl: `http://127.0.0.1:${apiServer.port}`,
     apiKey: projectorKey,
   });
-  const httpCreated = await sdk.appendIncidentProjection(fixture);
-  const httpReplay = await sdk.appendIncidentProjection(fixture);
+  const occurredAt = "2026-07-18T20:01:51.314Z";
+  fixture.occurred_at = occurredAt;
+  fixture.incident.created_at = occurredAt;
+  fixture.incident.updated_at = occurredAt;
+  const projectionUrl = `http://127.0.0.1:${apiServer.port}/v1/incident-projections`;
+  const projectionHeaders = { "x-api-key": projectorKey, "content-type": "application/json" };
+  const createdResponse = await fetch(projectionUrl, {
+    method: "POST",
+    headers: projectionHeaders,
+    body: JSON.stringify(fixture),
+  });
+  assert.equal(createdResponse.status, 201);
+  const httpCreated = await createdResponse.json() as Awaited<ReturnType<typeof sdk.appendIncidentProjection>>;
+  const replayResponse = await fetch(projectionUrl, {
+    method: "POST",
+    headers: projectionHeaders,
+    body: JSON.stringify(fixture),
+  });
+  assert.equal(replayResponse.status, 200);
+  const httpReplay = await replayResponse.json() as Awaited<ReturnType<typeof sdk.appendIncidentProjection>>;
+  const projectionReadKey = mintApiKey({
+    app: "conversations",
+    agent: "projection-reader",
+    scopes: ["conversations:read"],
+    signingSecret,
+  }).token;
+  const getResponse = await fetch(`${projectionUrl}/${fixture.event_id}`, {
+    headers: { "x-api-key": projectionReadKey },
+  });
+  assert.equal(getResponse.status, 200);
+  const httpFetched = await getResponse.json() as Awaited<ReturnType<typeof sdk.getIncidentProjection>>;
   assert.equal(httpCreated.projection.replayed, false);
   assert.equal(httpReplay.projection.replayed, true);
+  assert.equal(httpFetched.projection.replayed, false);
   assert.equal(httpCreated.projection.message_id, httpReplay.projection.message_id);
+  const storedTimestamps = await taskClient.one<{
+    occurred_at: Date;
+    projection_created_at: Date;
+    message_created_at: Date;
+    edited_at: string | null;
+    pinned_at: string | null;
+    read_at: string | null;
+  }>(
+    `SELECT p.occurred_at, p.created_at AS projection_created_at,
+            m.created_at AS message_created_at, m.edited_at, m.pinned_at, m.read_at
+     FROM incident_projections p JOIN messages m ON m.id = p.message_id
+     WHERE p.tenant_id = $1 AND p.event_id = $2`,
+    [context.tenant_id, fixture.event_id],
+  );
+  for (const response of [httpCreated, httpReplay, httpFetched]) {
+    const projection = response.projection;
+    const canonical = JSON.parse(projection.canonical_payload);
+    assert.equal(projection.occurred_at, occurredAt);
+    assert.equal(canonical.occurred_at, occurredAt);
+    assert.equal(canonical.incident.created_at, occurredAt);
+    assert.equal(canonical.incident.updated_at, occurredAt);
+    assert.equal(canonical.incident.deadline, null);
+    assert.equal(canonical.incident.resolved_at, null);
+    assert.equal(
+      projection.payload_hash,
+      createHash("sha256").update(projection.canonical_payload).digest("hex"),
+    );
+    assert.equal(projection.created_at, storedTimestamps.projection_created_at.toISOString());
+    assert.equal(projection.message.created_at, storedTimestamps.message_created_at.toISOString());
+    assert.equal(projection.message.edited_at, storedTimestamps.edited_at);
+    assert.equal(projection.message.pinned_at, storedTimestamps.pinned_at);
+    assert.equal(projection.message.read_at, storedTimestamps.read_at);
+  }
+  assert.equal(httpReplay.projection.canonical_payload, httpCreated.projection.canonical_payload);
+  assert.equal(httpReplay.projection.payload_hash, httpCreated.projection.payload_hash);
+  assert.equal(httpReplay.projection.occurred_at, httpCreated.projection.occurred_at);
+  assert.equal(httpFetched.projection.canonical_payload, httpCreated.projection.canonical_payload);
+  assert.equal(httpFetched.projection.payload_hash, httpCreated.projection.payload_hash);
+  assert.equal(httpFetched.projection.occurred_at, httpCreated.projection.occurred_at);
 
   await taskClient.query(
     `INSERT INTO channels (name, created_by) VALUES ('incidents', 'verifier') ON CONFLICT (name) DO NOTHING`,

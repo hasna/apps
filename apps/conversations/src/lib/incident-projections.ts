@@ -8,6 +8,10 @@ import {
   validateIncidentProjectorBinding,
   validateIncidentProjection,
 } from "./incident-projection-contract.js";
+import {
+  normalizeIncidentProjectionMessageTimestamps,
+  normalizeIncidentProjectionTimestamp,
+} from "./incident-projection-timestamps.js";
 import type {
   IncidentProjectionRecord,
   IncidentProjectionRequestV1,
@@ -54,7 +58,7 @@ function projectionRecord(row: ProjectionRow, message: Message, replayed: boolea
     incident_id: String(row.incident_id),
     transition_id: String(row.transition_id),
     incident_version: Number(row.incident_version),
-    occurred_at: String(row.occurred_at),
+    occurred_at: normalizeIncidentProjectionTimestamp(row.occurred_at, "projection.occurred_at"),
     status: row.status as IncidentProjectionRecord["status"],
     severity: row.severity as IncidentProjectionRecord["severity"],
     blocking: Boolean(row.blocking),
@@ -63,8 +67,8 @@ function projectionRecord(row: ProjectionRow, message: Message, replayed: boolea
     superseded_by_incident_id: row.superseded_by_incident_id == null ? null : String(row.superseded_by_incident_id),
     canonical_payload: String(row.canonical_payload),
     payload_hash: String(row.payload_hash),
-    created_at: String(row.created_at),
-    message,
+    created_at: normalizeIncidentProjectionTimestamp(row.created_at, "projection.created_at"),
+    message: normalizeIncidentProjectionMessageTimestamps(message),
     replayed,
   };
 }

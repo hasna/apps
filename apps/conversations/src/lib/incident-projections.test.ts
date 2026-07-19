@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { createHash } from "crypto";
 import { unlinkSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { closeDb, getDb } from "./db";
 import { deleteMessage, editMessage, getMessageById, getUnreadBlockers, markRead, recordReadReceipt, sendMessage } from "./messages";
-import { appendIncidentProjection } from "./incident-projections";
+import { appendIncidentProjection, getIncidentProjection } from "./incident-projections";
 import { createChannel, renameChannel } from "./channels";
 import { computeIncidentProjectionIds } from "./incident-projection-contract";
 import type { IncidentProjectionRequestV1, IncidentProjectorContext, IncidentStatus } from "../types";
@@ -81,6 +82,48 @@ afterEach(() => {
 });
 
 describe("append-only incident projections", () => {
+  test("preserves exact projection timestamps across append, replay, and GET", () => {
+    const event = fixture();
+    const occurredAt = "2026-07-18T20:01:51.314Z";
+    event.occurred_at = occurredAt;
+    event.incident.created_at = occurredAt;
+    event.incident.updated_at = occurredAt;
+
+    const created = appendIncidentProjection(event, context);
+    const replay = appendIncidentProjection(event, context);
+    const fetched = getIncidentProjection(event.event_id, context);
+    expect(fetched).not.toBeNull();
+
+    expect(created.replayed).toBe(false);
+    expect(replay.replayed).toBe(true);
+    expect(fetched!.replayed).toBe(false);
+    for (const record of [created, replay, fetched!]) {
+      const canonical = JSON.parse(record.canonical_payload);
+      expect(record.occurred_at).toBe(occurredAt);
+      expect(canonical.occurred_at).toBe(occurredAt);
+      expect(canonical.incident.created_at).toBe(occurredAt);
+      expect(canonical.incident.updated_at).toBe(occurredAt);
+      expect(canonical.incident.deadline).toBeNull();
+      expect(canonical.incident.resolved_at).toBeNull();
+      expect(record.payload_hash).toBe(
+        createHash("sha256").update(record.canonical_payload).digest("hex"),
+      );
+      expect(record.created_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+      expect(new Date(record.created_at).toISOString()).toBe(record.created_at);
+      expect(record.message.created_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+      expect(new Date(record.message.created_at).toISOString()).toBe(record.message.created_at);
+      expect(record.message.edited_at).toBeNull();
+      expect(record.message.pinned_at).toBeNull();
+      expect(record.message.read_at).toBeNull();
+    }
+    expect(replay.canonical_payload).toBe(created.canonical_payload);
+    expect(replay.payload_hash).toBe(created.payload_hash);
+    expect(replay.occurred_at).toBe(created.occurred_at);
+    expect(fetched!.canonical_payload).toBe(created.canonical_payload);
+    expect(fetched!.payload_hash).toBe(created.payload_hash);
+    expect(fetched!.occurred_at).toBe(created.occurred_at);
+  });
+
   test("identical replay returns the exact existing projection and message", () => {
     const first = appendIncidentProjection(fixture(), context);
     const replay = appendIncidentProjection(fixture(), context);
