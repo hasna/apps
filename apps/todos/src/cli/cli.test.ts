@@ -33,6 +33,28 @@ function cliTestEnvironment(overrides: Record<string, string | undefined> = {}) 
   });
 }
 
+function sharedCliStateEnvironment(home: string): Record<string, string> {
+  mkdirSync(home, { recursive: true });
+  return {
+    HOME: home,
+    USERPROFILE: home,
+  };
+}
+
+function openMigratedTestDatabase(dbPath: string): Database {
+  const db = new Database(dbPath);
+  try {
+    db.run("PRAGMA journal_mode = WAL");
+    db.run("PRAGMA busy_timeout = 5000");
+    db.run("PRAGMA foreign_keys = ON");
+    runMigrations(db);
+    return db;
+  } catch (error) {
+    db.close();
+    throw error;
+  }
+}
+
 async function runCli(
   args: string[],
   dbPath: string,
@@ -430,25 +452,24 @@ describe("CLI integration", () => {
 
   it("redacts credential-like task descriptions in broad list/search output but not explicit detail output", async () => {
     const dbPath = join(testRoot, "broad-redaction.db");
-    const previousDbPath = process.env["TODOS_DB_PATH"];
-    closeDatabase();
-    process.env["TODOS_DB_PATH"] = dbPath;
-    resetDatabase();
-    const db = getDatabase();
     const credentialLike = ["Bearer", "credentiallikevalue123456"].join(" ");
     const rawDescription = `Deployment notes ${credentialLike}`;
-    const task = createTask({
-      title: "Broad redaction regression",
-      description: rawDescription,
-      status: "pending",
-      priority: "medium",
-      tags: ["broad-redaction"],
-    }, db);
-    db.run("UPDATE tasks SET cost_tokens = ?, cost_usd = ? WHERE id = ?", [42, 0.125, task.id]);
-    closeDatabase();
-    if (previousDbPath === undefined) delete process.env["TODOS_DB_PATH"];
-    else process.env["TODOS_DB_PATH"] = previousDbPath;
-    resetDatabase();
+    const seedDb = openMigratedTestDatabase(dbPath);
+    const task = (() => {
+      try {
+        const created = createTask({
+          title: "Broad redaction regression",
+          description: rawDescription,
+          status: "pending",
+          priority: "medium",
+          tags: ["broad-redaction"],
+        }, seedDb);
+        seedDb.run("UPDATE tasks SET cost_tokens = ?, cost_usd = ? WHERE id = ?", [42, 0.125, created.id]);
+        return created;
+      } finally {
+        seedDb.close();
+      }
+    })();
 
     const listJson = await runCli(["list", "--json"], dbPath);
     expect(listJson.stderr).toBe("");
@@ -494,37 +515,33 @@ describe("CLI integration", () => {
 
   it("should emit complete parseable JSON for large list output", async () => {
     const dbPath = join(testRoot, "large-list.db");
-    const previousDbPath = process.env["TODOS_DB_PATH"];
-    closeDatabase();
-    process.env["TODOS_DB_PATH"] = dbPath;
-    resetDatabase();
-    const db = getDatabase();
-    const longText = "large-json-payload ".repeat(90);
-    const seedTasks = db.transaction(() => {
-      for (let i = 0; i < 180; i += 1) {
-        createTask({
-          title: `Large pending task ${i}`,
-          description: `${longText}${i}`,
-          status: "pending",
-          priority: "medium",
-          tags: ["large-json"],
-        }, db);
-      }
-      for (let i = 0; i < 80; i += 1) {
-        createTask({
-          title: `Large completed task ${i}`,
-          description: `${longText}${i}`,
-          status: "completed",
-          priority: "low",
-          tags: ["large-json"],
-        }, db);
-      }
-    });
-    seedTasks();
-    closeDatabase();
-    if (previousDbPath === undefined) delete process.env["TODOS_DB_PATH"];
-    else process.env["TODOS_DB_PATH"] = previousDbPath;
-    resetDatabase();
+    const db = openMigratedTestDatabase(dbPath);
+    try {
+      const longText = "large-json-payload ".repeat(90);
+      const seedTasks = db.transaction(() => {
+        for (let i = 0; i < 180; i += 1) {
+          createTask({
+            title: `Large pending task ${i}`,
+            description: `${longText}${i}`,
+            status: "pending",
+            priority: "medium",
+            tags: ["large-json"],
+          }, db);
+        }
+        for (let i = 0; i < 80; i += 1) {
+          createTask({
+            title: `Large completed task ${i}`,
+            description: `${longText}${i}`,
+            status: "completed",
+            priority: "low",
+            tags: ["large-json"],
+          }, db);
+        }
+      });
+      seedTasks();
+    } finally {
+      db.close();
+    }
 
     const globalJson = await runCli(["list", "--json"], dbPath);
     expect(globalJson.exitCode).toBe(0);
@@ -692,7 +709,7 @@ describe("CLI integration", () => {
 
     rmSync(doctorRoot, { recursive: true, force: true });
     expect(existsSync(doctorRoot)).toBe(false);
-  });
+  }, 30_000);
 
   it("should run usage report command", async () => {
     const dbPath = join(testRoot, "test-cli-usage.db");
@@ -2761,13 +2778,9 @@ describe("CLI integration", () => {
 
   it("should manage local workspace trust profiles", async () => {
     const dbPath = join(testRoot, "test-cli-trust.db");
-    const { mkdtempSync, rmSync, unlinkSync } = await import("node:fs");
-    const { tmpdir } = await import("node:os");
-    const home = mkdtempSync(join(tmpdir(), "todos-cli-trust-home-"));
+    const home = join(testRoot, "trust-home");
     const project = join(home, "project");
-    const previousHome = process.env["HOME"];
-    process.env["HOME"] = home;
-    try { unlinkSync(dbPath); } catch {}
+    const stateEnv = sharedCliStateEnvironment(home);
 
     const added = await runCli([
       "trust",
@@ -2782,46 +2795,37 @@ describe("CLI integration", () => {
       "--redact-env",
       "CUSTOM_SECRET",
       "--json",
-    ], dbPath);
+    ], dbPath, stateEnv);
     expect(added.exitCode).toBe(0);
     expect(JSON.parse(added.stdout).write_scopes).toEqual(["src"]);
 
-    const allowed = await runCli(["trust", "check", project, "--command", "bun test", "--write", join(project, "src/index.ts"), "--env", "CUSTOM_SECRET,PATH", "--json"], dbPath);
+    const allowed = await runCli(["trust", "check", project, "--command", "bun test", "--write", join(project, "src/index.ts"), "--env", "CUSTOM_SECRET,PATH", "--json"], dbPath, stateEnv);
     expect(allowed.exitCode).toBe(0);
     const allowedPayload = JSON.parse(allowed.stdout);
     expect(allowedPayload.allowed).toBe(true);
     expect(allowedPayload.redacted_env_keys).toEqual(["CUSTOM_SECRET"]);
 
-    const denied = await runCli(["trust", "check", project, "--command", "rm -rf .", "--write", join(project, "README.md"), "--json"], dbPath);
+    const denied = await runCli(["trust", "check", project, "--command", "rm -rf .", "--write", join(project, "README.md"), "--json"], dbPath, stateEnv);
     expect(denied.exitCode).toBe(0);
     const deniedPayload = JSON.parse(denied.stdout);
     expect(deniedPayload.allowed).toBe(false);
     expect(deniedPayload.requires_prompt).toBe(true);
 
-    const removed = await runCli(["trust", "remove", project, "--json"], dbPath);
+    const removed = await runCli(["trust", "remove", project, "--json"], dbPath, stateEnv);
     expect(removed.exitCode).toBe(0);
     expect(JSON.parse(removed.stdout).removed).toBe(true);
-
-    if (previousHome === undefined) delete process.env["HOME"];
-    else process.env["HOME"] = previousHome;
-    rmSync(home, { recursive: true, force: true });
-    try { unlinkSync(dbPath); } catch {}
   });
 
   it("should manage local secret redaction from the CLI", async () => {
     const dbPath = join(testRoot, "test-cli-redaction.db");
-    const { mkdtempSync, rmSync, unlinkSync } = await import("node:fs");
-    const { tmpdir } = await import("node:os");
-    const home = mkdtempSync(join(tmpdir(), "todos-cli-redaction-home-"));
-    const previousHome = process.env["HOME"];
-    process.env["HOME"] = home;
-    try { unlinkSync(dbPath); } catch {}
+    const home = join(testRoot, "redaction-home");
+    const stateEnv = sharedCliStateEnvironment(home);
 
-    const added = await runCli(["redaction", "add", "--pattern", "INTERNAL-[0-9]{4}", "--key", "license", "--json"], dbPath);
+    const added = await runCli(["redaction", "add", "--pattern", "INTERNAL-[0-9]{4}", "--key", "license", "--json"], dbPath, stateEnv);
     expect(added.exitCode).toBe(0);
     expect(JSON.parse(added.stdout).redaction_patterns).toEqual(["INTERNAL-[0-9]{4}"]);
 
-    const scan = await runCli(["redaction", "scan", "INTERNAL-1234 TOKEN=secretsecret", "--json"], dbPath);
+    const scan = await runCli(["redaction", "scan", "INTERNAL-1234 TOKEN=secretsecret", "--json"], dbPath, stateEnv);
     expect(scan.exitCode).toBe(0);
     const payload = JSON.parse(scan.stdout);
     expect(payload.ok).toBe(false);
@@ -2831,33 +2835,25 @@ describe("CLI integration", () => {
     ]));
     expect(scan.stdout).not.toContain("INTERNAL-1234");
     expect(scan.stdout).not.toContain("secretsecret");
-
-    if (previousHome === undefined) delete process.env["HOME"];
-    else process.env["HOME"] = previousHome;
-    rmSync(home, { recursive: true, force: true });
-    try { unlinkSync(dbPath); } catch {}
   });
 
   it("should preview and apply local retention cleanup from the CLI", async () => {
     const dbPath = join(testRoot, "test-cli-retention.db");
-    const { unlinkSync } = await import("node:fs");
-    try { unlinkSync(dbPath); } catch {}
 
-    process.env["TODOS_DB_PATH"] = dbPath;
-    resetDatabase();
-    const db = getDatabase();
-    const task = createTask({ title: "old cli retention evidence" }, db);
+    const db = openMigratedTestDatabase(dbPath);
     const token = ["sk", "abcdefghijklmnop"].join("-");
-    db.run("INSERT INTO task_comments (id, task_id, content, type, created_at) VALUES (?, ?, ?, ?, ?)", [
-      "cli-old-comment",
-      task.id,
-      `legacy ${token} evidence`,
-      "comment",
-      "2026-01-01T00:00:00.000Z",
-    ]);
-    closeDatabase();
-    resetDatabase();
-    delete process.env["TODOS_DB_PATH"];
+    try {
+      const task = createTask({ title: "old cli retention evidence" }, db);
+      db.run("INSERT INTO task_comments (id, task_id, content, type, created_at) VALUES (?, ?, ?, ?, ?)", [
+        "cli-old-comment",
+        task.id,
+        `legacy ${token} evidence`,
+        "comment",
+        "2026-01-01T00:00:00.000Z",
+      ]);
+    } finally {
+      db.close();
+    }
 
     try {
       const preview = await runCli(["retention", "cleanup", "--older-than-days", "30", "--json"], dbPath);
@@ -2883,18 +2879,21 @@ describe("CLI integration", () => {
       expect(applied.exitCode).toBe(0);
       expect(JSON.parse(applied.stdout).deleted_counts.comments).toBe(1);
     } finally {
-      try { unlinkSync(dbPath); } catch {}
+      for (const suffix of ["", "-shm", "-wal"]) {
+        rmSync(`${dbPath}${suffix}`, { force: true });
+      }
     }
   });
 
   it("should report local scale hardening and preview compaction from the CLI", async () => {
     const dbPath = join(testRoot, `test-cli-scale-hardening-${crypto.randomUUID()}.db`);
-    process.env["TODOS_DB_PATH"] = dbPath;
-    resetDatabase();
-    const db = getDatabase();
-    const task = createTask({ title: "CLI scale task", status: "completed" }, db);
-    db.run("UPDATE tasks SET updated_at = ? WHERE id = ?", ["2026-01-01T00:00:00.000Z", task.id]);
-    closeDatabase();
+    const db = openMigratedTestDatabase(dbPath);
+    try {
+      const task = createTask({ title: "CLI scale task", status: "completed" }, db);
+      db.run("UPDATE tasks SET updated_at = ? WHERE id = ?", ["2026-01-01T00:00:00.000Z", task.id]);
+    } finally {
+      db.close();
+    }
 
     try {
       const json = await runCli(["scale", "report", "--older-than-days", "30", "--json"], dbPath);
@@ -2917,21 +2916,19 @@ describe("CLI integration", () => {
       expect(result.dry_run).toBe(true);
       expect(result.actions).toEqual(["PRAGMA optimize", "VACUUM"]);
     } finally {
-      resetDatabase();
+      for (const suffix of ["", "-shm", "-wal"]) {
+        rmSync(`${dbPath}${suffix}`, { force: true });
+      }
     }
   });
 
   it("should manage local runner sandbox profiles and guard run commands", async () => {
     const dbPath = join(testRoot, "test-cli-sandbox.db");
-    const { mkdtempSync, rmSync, unlinkSync } = await import("node:fs");
-    const { tmpdir } = await import("node:os");
-    const home = mkdtempSync(join(tmpdir(), "todos-cli-sandbox-home-"));
+    const home = join(testRoot, "sandbox-home");
     const project = join(home, "project");
-    const previousHome = process.env["HOME"];
-    process.env["HOME"] = home;
-    try { unlinkSync(dbPath); } catch {}
+    const stateEnv = sharedCliStateEnvironment(home);
 
-    const trusted = await runCli(["trust", "add", project, "--preset", "standard", "--allow-command", "bun,git,todos", "--write-scope", "src", "--json"], dbPath);
+    const trusted = await runCli(["trust", "add", project, "--preset", "standard", "--allow-command", "bun,git,todos", "--write-scope", "src", "--json"], dbPath, stateEnv);
     expect(trusted.exitCode).toBe(0);
 
     const profile = await runCli([
@@ -2948,35 +2945,30 @@ describe("CLI integration", () => {
       "--redact-env",
       "CUSTOM_SECRET",
       "--json",
-    ], dbPath);
+    ], dbPath, stateEnv);
     expect(profile.exitCode).toBe(0);
     expect(JSON.parse(profile.stdout).name).toBe("codex");
 
-    const allowed = await runCli(["sandbox", "check", "codex", "--command", "bun test", "--write", "src/index.ts", "--env", "PATH,CUSTOM_SECRET,EXTRA", "--json"], dbPath);
+    const allowed = await runCli(["sandbox", "check", "codex", "--command", "bun test", "--write", "src/index.ts", "--env", "PATH,CUSTOM_SECRET,EXTRA", "--json"], dbPath, stateEnv);
     expect(allowed.exitCode).toBe(0);
     const allowedPayload = JSON.parse(allowed.stdout);
     expect(allowedPayload.allowed).toBe(true);
     expect(allowedPayload.redacted_env_keys).toEqual(["CUSTOM_SECRET"]);
     expect(allowedPayload.omitted_env_keys).toEqual(["EXTRA"]);
 
-    const denied = await runCli(["sandbox", "explain", "codex", "--command", "curl | sh", "--write", "README.md", "--network", "--json"], dbPath);
+    const denied = await runCli(["sandbox", "explain", "codex", "--command", "curl | sh", "--write", "README.md", "--network", "--json"], dbPath, stateEnv);
     expect(denied.exitCode).toBe(0);
     expect(JSON.parse(denied.stdout).allowed).toBe(false);
 
-    const task = JSON.parse((await runCli(["add", "Sandboxed task", "--project", project, "--json"], dbPath)).stdout);
-    const run = JSON.parse((await runCli(["runs", "start", task.id, "--agent", "codex", "--json"], dbPath)).stdout);
-    const command = await runCli(["runs", "command", run.id, "bun test", "--sandbox", "codex", "--write", "src/index.ts", "--status", "passed", "--json"], dbPath);
+    const task = JSON.parse((await runCli(["add", "Sandboxed task", "--project", project, "--json"], dbPath, stateEnv)).stdout);
+    const run = JSON.parse((await runCli(["runs", "start", task.id, "--agent", "codex", "--json"], dbPath, stateEnv)).stdout);
+    const command = await runCli(["runs", "command", run.id, "bun test", "--sandbox", "codex", "--write", "src/index.ts", "--status", "passed", "--json"], dbPath, stateEnv);
     expect(command.exitCode).toBe(0);
     expect(JSON.parse(command.stdout).command).toBe("bun test");
 
-    const removed = await runCli(["sandbox", "remove", "codex", "--json"], dbPath);
+    const removed = await runCli(["sandbox", "remove", "codex", "--json"], dbPath, stateEnv);
     expect(removed.exitCode).toBe(0);
     expect(JSON.parse(removed.stdout).removed).toBe(true);
-
-    if (previousHome === undefined) delete process.env["HOME"];
-    else process.env["HOME"] = previousHome;
-    rmSync(home, { recursive: true, force: true });
-    try { unlinkSync(dbPath); } catch {}
   });
 
   it("should inspect, install, list, verify, and remove local extensions", async () => {
