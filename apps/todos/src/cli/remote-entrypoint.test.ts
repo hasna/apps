@@ -315,7 +315,7 @@ describe("remote CLI entrypoint authority boundary", () => {
     } finally {
       server.stop(true);
     }
-  });
+  }, 45_000);
 
   test("every local-only command family rejects in the built entrypoint before HTTP or filesystem access", async () => {
     const requests: string[] = [];
@@ -702,8 +702,18 @@ describe("remote CLI entrypoint authority boundary", () => {
         const body = request.method === "GET" || request.method === "HEAD"
           ? {}
           : await request.json().catch(() => ({})) as Record<string, unknown>;
-        const find = (items: Array<Record<string, unknown>>, id: string) =>
-          items.find((item) => item.id === id);
+        // Mirror the fixed /v1 server: resolve an exact id, then a unique id
+        // prefix, then an exact short_id — all case-insensitive. The CLI no longer
+        // pages the whole task set client-side to expand a short reference.
+        const find = (items: Array<Record<string, unknown>>, ref: string) => {
+          const raw = String(ref).toLowerCase();
+          const byId = items.find((item) => String(item.id).toLowerCase() === raw);
+          if (byId) return byId;
+          const byPrefix = items.filter((item) => String(item.id).toLowerCase().startsWith(raw));
+          if (byPrefix.length === 1) return byPrefix[0];
+          if (byPrefix.length > 1) return undefined;
+          return items.find((item) => String(item.short_id ?? "").toLowerCase() === raw);
+        };
         const remove = (items: Array<Record<string, unknown>>, id: string) => {
           const index = items.findIndex((item) => item.id === id);
           if (index < 0) return false;

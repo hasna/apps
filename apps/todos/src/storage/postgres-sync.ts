@@ -255,6 +255,44 @@ export function postgresTodosCommentCursorIndexSql(
     WHERE object_type = 'comments' AND deleted_at IS NULL`;
 }
 
+/**
+ * Predeploy-only expression index that keeps short-reference resolution
+ * (`GET /v1/tasks/:ref` → resolveTaskRef) O(log n) as the shared task set grows.
+ * This covers the case-insensitive `short_id` lookup; the id-prefix branch is
+ * served by the companion `_task_object_id_c_idx` (COLLATE "C"), since the default
+ * PK collation cannot serve that byte-ordered range. CONCURRENTLY avoids blocking
+ * writes on the shared sync table and must run outside a
+ * transaction; it is deliberately excluded from request-path `ensureSchema()`.
+ * OPTIONAL: resolution is correct without it (a filtered task-row scan), so it is
+ * a pure latency optimization for large datasets.
+ */
+export function postgresTodosTaskShortIdIndexSql(
+  tableName = DEFAULT_TODOS_POSTGRES_SYNC_TABLE,
+): string {
+  assertSafeIdentifier(tableName);
+  return `CREATE INDEX CONCURRENTLY IF NOT EXISTS ${tableName}_task_short_id_idx
+    ON ${tableName} ((LOWER(payload->>'short_id')))
+    WHERE object_type = 'tasks' AND deleted_at IS NULL`;
+}
+
+/**
+ * Predeploy-only byte-order (COLLATE "C") index over task object_id so the
+ * id-prefix branch of resolveTaskRef (`object_id COLLATE "C" >= $lo AND < $hi`)
+ * is an index range scan rather than a seq scan. The default locale collation
+ * cannot serve this range (its ordering disagrees with the code-point upper
+ * bound), so a dedicated C-collation index is required. CONCURRENTLY, outside a
+ * transaction; excluded from request-path `ensureSchema()`. OPTIONAL: resolution
+ * is correct without it (the range is still byte-ordered), just not index-bounded.
+ */
+export function postgresTodosTaskObjectIdIndexSql(
+  tableName = DEFAULT_TODOS_POSTGRES_SYNC_TABLE,
+): string {
+  assertSafeIdentifier(tableName);
+  return `CREATE INDEX CONCURRENTLY IF NOT EXISTS ${tableName}_task_object_id_c_idx
+    ON ${tableName} (service, (object_id COLLATE "C"))
+    WHERE object_type = 'tasks' AND deleted_at IS NULL`;
+}
+
 export class PostgresTodosSyncStore {
   private readonly service: string;
   private readonly sourceMachineId?: string;

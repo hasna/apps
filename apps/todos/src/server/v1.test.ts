@@ -388,3 +388,41 @@ describe("/v1 task hierarchy and lock authorization", () => {
     expect((await request(`/v1/tasks/${task.id}/unlock`, "POST"))?.status).toBe(403);
   });
 });
+
+describe("/v1 short task reference resolution", () => {
+  test("GET /v1/tasks/:ref resolves a unique id-prefix and an exact (case-insensitive) short_id", async () => {
+    const created = await request("/v1/tasks", "POST", { title: "resolvable" });
+    const { task } = await created!.json() as { task: { id: string } };
+    // New tasks are created with a null short_id; the 50k legacy tasks carry one,
+    // so seed a legacy-style short_id directly to exercise short_id resolution.
+    db.query("UPDATE tasks SET short_id = ? WHERE id = ?").run("OPE2-00125", task.id);
+
+    const byPrefix = await request(`/v1/tasks/${task.id.slice(0, 8)}`);
+    expect(byPrefix?.status).toBe(200);
+    expect((await byPrefix!.json() as { task: { id: string } }).task.id).toBe(task.id);
+
+    const byShort = await request("/v1/tasks/ope2-00125");
+    expect(byShort?.status).toBe(200);
+    expect((await byShort!.json() as { task: { id: string } }).task.id).toBe(task.id);
+
+    const byShortExact = await request("/v1/tasks/OPE2-00125");
+    expect(byShortExact?.status).toBe(200);
+    expect((await byShortExact!.json() as { task: { id: string } }).task.id).toBe(task.id);
+  });
+
+  test("GET /v1/tasks/:ref 404s an unknown reference and does not resolve a full-UUID exact miss", async () => {
+    expect((await request("/v1/tasks/NOPE-00001"))?.status).toBe(404);
+    expect((await request("/v1/tasks/ffffffff-ffff-4fff-8fff-ffffffffffff"))?.status).toBe(404);
+  });
+
+  test("GET /v1/tasks/:ref 409s an ambiguous id-prefix", async () => {
+    const a = await request("/v1/tasks", "POST", { title: "a" });
+    const b = await request("/v1/tasks", "POST", { title: "b" });
+    const idA = (await a!.json() as { task: { id: string } }).task.id;
+    const idB = (await b!.json() as { task: { id: string } }).task.id;
+    // Force two live tasks to share an id prefix so the prefix is ambiguous.
+    db.query("UPDATE tasks SET id = ? WHERE id = ?").run("dddddddd-0000-4000-8000-000000000001", idA);
+    db.query("UPDATE tasks SET id = ? WHERE id = ?").run("dddddddd-0000-4000-8000-000000000002", idB);
+    expect((await request("/v1/tasks/dddddddd"))?.status).toBe(409);
+  });
+});

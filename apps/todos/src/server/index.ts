@@ -81,6 +81,8 @@ async function runMigrate(): Promise<void> {
   const {
     ensureCloudSchema,
     ensureCloudCommentCursorIndex,
+    ensureCloudTaskShortIdIndex,
+    ensureCloudTaskObjectIdIndex,
     ensureCloudScopedSlugUniqueIndexes,
     normalizeCloudPayloads,
     pingCloud,
@@ -101,6 +103,10 @@ async function runMigrate(): Promise<void> {
   console.log(`migrate: normalized ${normalized} payload row(s)`);
   console.log("migrate: prebuilding comment cursor index concurrently…");
   await ensureCloudCommentCursorIndex();
+  console.log("migrate: prebuilding task short_id resolution index concurrently…");
+  await ensureCloudTaskShortIdIndex();
+  console.log("migrate: prebuilding task object_id (COLLATE C) prefix index concurrently…");
+  await ensureCloudTaskObjectIdIndex();
   console.log("migrate: auditing scoped slug duplicates and building unique indexes concurrently…");
   await ensureCloudScopedSlugUniqueIndexes();
   console.log("migrate: done");
