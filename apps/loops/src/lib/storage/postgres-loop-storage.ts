@@ -98,6 +98,7 @@ import type {
   WriteRunReceiptInput,
 } from "../../types.js";
 import { normalizeRunReceipt } from "../run-receipts.js";
+import { normalizeLoopLabels } from "../labels.js";
 import type { PoolQueryClient, TypedQueryClient } from "../../generated/storage-kit/query.js";
 import type { LoopStorageContract, LoopStorageMethodName } from "./contract.js";
 
@@ -326,6 +327,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
       id: genId(),
       name: input.name,
       description: input.description,
+      labels: normalizeLoopLabels(input.labels),
       status: "active",
       schedule: input.schedule,
       target,
@@ -343,13 +345,14 @@ export class PostgresLoopStorage implements LoopStorageContract {
       updatedAt: now,
     };
     await this.client.execute(
-      `INSERT INTO loops (id, name, description, status, schedule_json, target_json, machine_json, next_run_at, retry_scheduled_for,
+      `INSERT INTO loops (id, name, description, labels_json, status, schedule_json, target_json, machine_json, next_run_at, retry_scheduled_for,
         goal_json, catch_up, catch_up_limit, overlap, max_attempts, retry_delay_ms, lease_ms, expires_at, created_at, updated_at, tenant_id)
-       VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7::jsonb,$8,NULL,$9::jsonb,$10,$11,$12,$13,$14,$15,$16,$17,$18,open_loops_current_tenant_id())`,
+       VALUES ($1,$2,$3,$4::jsonb,$5,$6::jsonb,$7::jsonb,$8::jsonb,$9,NULL,$10::jsonb,$11,$12,$13,$14,$15,$16,$17,$18,$19,open_loops_current_tenant_id())`,
       [
         loop.id,
         loop.name,
         loop.description ?? null,
+        JSON.stringify(loop.labels),
         loop.status,
         JSON.stringify(loop.schedule),
         JSON.stringify(loop.target),
@@ -393,45 +396,33 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const opts = args[0] ?? {};
     const limit = opts.limit ?? 200;
     const offset = Math.max(0, Math.floor(opts.offset ?? 0));
-    let rows: LoopRow[];
     // Exact-name lookup short-circuits every other filter: returns *all* loops
     // (archived included) matching the name so callers can detect ambiguity.
     if (opts.name != null) {
-      rows = await this.client.many<LoopRow>(
+      const rows = await this.client.many<LoopRow>(
         "SELECT * FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND name = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
         [opts.name, limit, offset],
       );
-    } else if (opts.status && opts.archived) {
-      rows = await this.client.many<LoopRow>(
-        "SELECT * FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND status = $1 AND archived_at IS NOT NULL ORDER BY next_run_at ASC LIMIT $2 OFFSET $3",
-        [opts.status, limit, offset],
-      );
-    } else if (opts.status && opts.includeArchived) {
-      rows = await this.client.many<LoopRow>(
-        "SELECT * FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND status = $1 ORDER BY next_run_at ASC LIMIT $2 OFFSET $3",
-        [opts.status, limit, offset],
-      );
-    } else if (opts.status) {
-      rows = await this.client.many<LoopRow>(
-        "SELECT * FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND status = $1 AND archived_at IS NULL ORDER BY next_run_at ASC LIMIT $2 OFFSET $3",
-        [opts.status, limit, offset],
-      );
-    } else if (opts.archived) {
-      rows = await this.client.many<LoopRow>(
-        "SELECT * FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND archived_at IS NOT NULL ORDER BY archived_at DESC LIMIT $1 OFFSET $2",
-        [limit, offset],
-      );
-    } else if (opts.includeArchived) {
-      rows = await this.client.many<LoopRow>(
-        "SELECT * FROM loops WHERE tenant_id = open_loops_current_tenant_id() ORDER BY status ASC, next_run_at ASC LIMIT $1 OFFSET $2",
-        [limit, offset],
-      );
-    } else {
-      rows = await this.client.many<LoopRow>(
-        "SELECT * FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND archived_at IS NULL ORDER BY status ASC, next_run_at ASC LIMIT $1 OFFSET $2",
-        [limit, offset],
-      );
+      return rows.map(rowToLoop);
     }
+    const labels = normalizeLoopLabels(opts.labels);
+    const params: unknown[] = [];
+    const bind = (value: unknown): string => {
+      params.push(value);
+      return `$${params.length}`;
+    };
+    const filters: string[] = [];
+    if (opts.status) filters.push(`status = ${bind(opts.status)}`);
+    if (opts.archived) filters.push("archived_at IS NOT NULL");
+    else if (!opts.includeArchived) filters.push("archived_at IS NULL");
+    for (const label of labels) filters.push(`labels_json @> ${bind(JSON.stringify([label]))}::jsonb`);
+    const order = opts.archived ? "archived_at DESC" : "status ASC, next_run_at ASC";
+    const limitParam = bind(limit);
+    const offsetParam = bind(offset);
+    const rows = await this.client.many<LoopRow>(
+      `SELECT * FROM loops WHERE tenant_id = open_loops_current_tenant_id()${filters.length ? ` AND ${filters.join(" AND ")}` : ""} ORDER BY ${order} LIMIT ${limitParam} OFFSET ${offsetParam}`,
+      params,
+    );
     return rows.map(rowToLoop);
   }
 
@@ -453,13 +444,19 @@ export class PostgresLoopStorage implements LoopStorageContract {
       const current = await this.loadLoop(c, id);
       if (!current) throw new LoopNotFoundError(id);
       if (current.archivedAt) throw new LoopArchivedError(current.name || id);
-      const merged: Loop = { ...current, ...patch, updatedAt: updated };
+      const merged: Loop = {
+        ...current,
+        ...patch,
+        labels: patch.labels !== undefined ? normalizeLoopLabels(patch.labels) : current.labels,
+        updatedAt: updated,
+      };
       const res = await c.query(
-        `UPDATE loops SET status=$1, next_run_at=$2, retry_scheduled_for=$3, expires_at=$4, updated_at=$5
-         WHERE tenant_id = open_loops_current_tenant_id() AND id=$6
-           AND ($7::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$7 AND expires_at > $8))`,
+        `UPDATE loops SET status=$1, labels_json=$2::jsonb, next_run_at=$3, retry_scheduled_for=$4, expires_at=$5, updated_at=$6
+         WHERE tenant_id = open_loops_current_tenant_id() AND id=$7
+           AND ($8::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$8 AND expires_at > $9))`,
         [
           merged.status,
+          JSON.stringify(merged.labels),
           merged.nextRunAt ?? null,
           merged.retryScheduledFor ?? null,
           merged.expiresAt ?? null,
@@ -640,13 +637,14 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const existing = await this.loadLoop(this.client, loop.id);
     if (existing && !opts.replace) return existing;
     await this.client.execute(
-      `INSERT INTO loops (id, name, description, status, archived_at, archived_from_status, schedule_json, target_json,
+      `INSERT INTO loops (id, name, description, labels_json, status, archived_at, archived_from_status, schedule_json, target_json,
         goal_json, machine_json, next_run_at, retry_scheduled_for, catch_up, catch_up_limit, overlap, max_attempts,
         retry_delay_ms, lease_ms, expires_at, created_at, updated_at, tenant_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,open_loops_current_tenant_id())
+       VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,open_loops_current_tenant_id())
        ON CONFLICT(tenant_id,id) DO UPDATE SET
          name=EXCLUDED.name,
          description=EXCLUDED.description,
+         labels_json=EXCLUDED.labels_json,
          status=EXCLUDED.status,
          archived_at=EXCLUDED.archived_at,
          archived_from_status=EXCLUDED.archived_from_status,
@@ -669,6 +667,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
         loop.id,
         loop.name,
         loop.description ?? null,
+        JSON.stringify(normalizeLoopLabels(loop.labels)),
         loop.status,
         loop.archivedAt ?? null,
         loop.archivedFromStatus ?? null,
@@ -984,25 +983,27 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const opts = args[0] ?? {};
     const limit = opts.limit ?? 100;
     const offset = Math.max(0, Math.floor(opts.offset ?? 0));
-    let rows: RunRow[];
-    if (opts.loopId && opts.status) {
-      rows = await this.client.many<RunRow>(
-        "SELECT * FROM loop_runs WHERE tenant_id = open_loops_current_tenant_id() AND loop_id = $1 AND status = $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4",
-        [opts.loopId, opts.status, limit, offset],
-      );
-    } else if (opts.loopId) {
-      rows = await this.client.many<RunRow>(
-        "SELECT * FROM loop_runs WHERE tenant_id = open_loops_current_tenant_id() AND loop_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
-        [opts.loopId, limit, offset],
-      );
-    } else if (opts.status) {
-      rows = await this.client.many<RunRow>(
-        "SELECT * FROM loop_runs WHERE tenant_id = open_loops_current_tenant_id() AND status = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
-        [opts.status, limit, offset],
-      );
-    } else {
-      rows = await this.client.many<RunRow>("SELECT * FROM loop_runs WHERE tenant_id = open_loops_current_tenant_id() ORDER BY created_at DESC LIMIT $1 OFFSET $2", [limit, offset]);
+    const labels = normalizeLoopLabels(opts.labels);
+    const params: unknown[] = [];
+    const bind = (value: unknown): string => {
+      params.push(value);
+      return `$${params.length}`;
+    };
+    const filters: string[] = [];
+    if (opts.loopId) filters.push(`loop_runs.loop_id = ${bind(opts.loopId)}`);
+    if (opts.status) filters.push(`loop_runs.status = ${bind(opts.status)}`);
+    for (const label of labels) {
+      filters.push(`label_loops.labels_json @> ${bind(JSON.stringify([label]))}::jsonb`);
     }
+    const join = labels.length
+      ? " JOIN loops AS label_loops ON label_loops.tenant_id = loop_runs.tenant_id AND label_loops.id = loop_runs.loop_id"
+      : "";
+    const limitParam = bind(limit);
+    const offsetParam = bind(offset);
+    const rows = await this.client.many<RunRow>(
+      `SELECT loop_runs.* FROM loop_runs${join} WHERE loop_runs.tenant_id = open_loops_current_tenant_id()${filters.length ? ` AND ${filters.join(" AND ")}` : ""} ORDER BY loop_runs.created_at DESC LIMIT ${limitParam} OFFSET ${offsetParam}`,
+      params,
+    );
     return rows.map(rowToRun);
   }
 

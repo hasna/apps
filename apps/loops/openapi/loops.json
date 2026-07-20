@@ -129,6 +129,18 @@
             "schema": {
               "type": "boolean"
             }
+          },
+          {
+            "name": "labels",
+            "in": "query",
+            "required": false,
+            "description": "Comma-separated labels; all labels must match.",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
           }
         ],
         "responses": {
@@ -512,6 +524,18 @@
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "labels",
+            "in": "query",
+            "required": false,
+            "description": "Comma-separated current loop labels; all labels must match.",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             }
           },
           {
@@ -3351,6 +3375,13 @@
             "type": "string",
             "nullable": true
           },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32
+          },
           "status": {
             "type": "string"
           },
@@ -3376,6 +3407,7 @@
         "required": [
           "id",
           "name",
+          "labels",
           "status"
         ]
       },
@@ -3387,6 +3419,13 @@
           },
           "description": {
             "type": "string"
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32
           },
           "schedule": {
             "type": "object",
@@ -3426,6 +3465,13 @@
           "expiresAt": {
             "type": "string",
             "nullable": true
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32
           }
         }
       },

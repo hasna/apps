@@ -78,6 +78,7 @@ import {
 } from "../lib/templates.js";
 import { backupDatabase } from "../lib/backup.js";
 import { CodedError, ValidationError } from "../lib/errors.js";
+import { mergeLoopLabels, normalizeLoopLabels, removeLoopLabels } from "../lib/labels.js";
 import {
   addAgentRoutingOptions,
   addRouteEventOptions,
@@ -415,7 +416,9 @@ function defaultLoopDescription(name: string, schedule: ScheduleSpec, target: Lo
   ].join(" ");
 }
 
-function baseCreateInput(name: string, opts: Record<string, string | boolean | undefined>, target: LoopTarget): CreateLoopInput {
+type LoopCreateOptions = Record<string, string | string[] | boolean | undefined>;
+
+function baseCreateInput(name: string, opts: LoopCreateOptions, target: LoopTarget): CreateLoopInput {
   const schedule = parseSchedule({
     at: typeof opts.at === "string" ? opts.at : undefined,
     every: typeof opts.every === "string" ? opts.every : undefined,
@@ -434,6 +437,7 @@ function baseCreateInput(name: string, opts: Record<string, string | boolean | u
   return {
     name,
     description: explicitDescription ?? defaultLoopDescription(name, schedule, target),
+    labels: normalizeLoopLabels(Array.isArray(opts.label) ? opts.label : typeof opts.label === "string" ? [opts.label] : undefined),
     schedule,
     target,
     goal: goalFromOpts(opts),
@@ -459,6 +463,10 @@ function addScheduleOptions(command: Command): Command {
     .option("-d, --description <text>", "description");
 }
 
+function addLabelOptions(command: Command): Command {
+  return command.option("--label <label>", "loop label; repeatable or comma-separated", collectValues, [] as string[]);
+}
+
 function addAccountOptions(command: Command): Command {
   return command
     .option("--account <profile>", "OpenAccounts profile name for this target")
@@ -477,7 +485,7 @@ function addGoalOptions(command: Command): Command {
     .option("--goal-max-turns <n>", "maximum goal orchestration turns");
 }
 
-function goalFromOpts(opts: Record<string, string | boolean | undefined>) {
+function goalFromOpts(opts: LoopCreateOptions) {
   const hasGoalOption = opts.goal !== undefined || opts.goalBudget !== undefined || opts.goalModel !== undefined || opts.goalMaxTurns !== undefined;
   if (!hasGoalOption) return undefined;
   if (typeof opts.goal !== "string") throw new ValidationError("--goal is required when using goal options");
@@ -586,7 +594,7 @@ const create = program.command("create").description("create loops");
 addGoalOptions(
   addAccountOptions(
     addMachineOptions(
-      addScheduleOptions(
+      addLabelOptions(addScheduleOptions(
       create
         .command("command <name>")
         .description("create a deterministic shell command loop")
@@ -596,7 +604,7 @@ addGoalOptions(
         .option("--no-shell", "execute without a shell")
         .option("--preflight-each-run", "check target executables/accounts before every scheduled run")
         .option("--preflight", "check target executables/accounts before storing the loop"),
-      ),
+      )),
     ),
   ),
 ).action(runAction(async (name, opts) => {
@@ -622,7 +630,7 @@ addGoalOptions(
 addGoalOptions(
   addAccountOptions(
     addMachineOptions(
-      addScheduleOptions(
+      addLabelOptions(addScheduleOptions(
       create
         .command("agent <name>")
         .description("create a headless coding-agent loop")
@@ -645,7 +653,7 @@ addGoalOptions(
         .option("--config-isolation <mode>", "safe or none", "safe")
         .option("--preflight-each-run", "check provider/account readiness before every scheduled run")
         .option("--preflight", "check target executables/accounts before storing the loop"),
-      ),
+      )),
     ),
   ),
 ).action(runAction(async (name, opts) => {
@@ -688,7 +696,7 @@ addGoalOptions(
 
 addGoalOptions(
   addMachineOptions(
-    addScheduleOptions(
+    addLabelOptions(addScheduleOptions(
     create
       .command("workflow <name>")
       .description("schedule a stored workflow")
@@ -696,7 +704,7 @@ addGoalOptions(
       .option("--timeout <duration>", "workflow run timeout; use none/unlimited for no workflow-level timeout")
       .option("--preflight-each-run", "check workflow steps before every scheduled run")
       .option("--preflight", "check workflow step executables/accounts before storing the loop"),
-    ),
+    )),
   ),
 ).action(runAction((name, opts) => withStore(async (store) => {
   const workflow = await store.requireWorkflow(opts.workflow);
@@ -1772,19 +1780,26 @@ program
   .alias("ls")
   .description("list loops with schedule and next-run summaries")
   .option("--status <status>", "filter by status")
+  .option("--label <label>", "require a label; repeatable or comma-separated", collectValues, [] as string[])
   .option("--archived", "show only archived loops")
   .option("--all", "include archived loops")
   .action(runAction(async (opts) => {
     if (opts.archived && opts.all) throw new ValidationError("use either --archived or --all, not both");
     const loops = await withStore((store) =>
-      store.listLoops({ status: opts.status, archived: opts.archived, includeArchived: opts.all }),
+      store.listLoops({
+        status: opts.status,
+        labels: normalizeLoopLabels(opts.label),
+        archived: opts.archived,
+        includeArchived: opts.all,
+      }),
     );
     if (isJson()) print(loops.map(publicLoop));
     else {
       for (const loop of loops) {
         const machine = loop.machine ? `  machine=${loop.machine.id}` : "";
         const archive = loop.archivedAt ? `  archived=${loop.archivedAt} from=${loop.archivedFromStatus ?? "-"}` : "";
-        console.log(`${loop.id}  ${loop.status.padEnd(7)}  cadence=${scheduleLabel(loop.schedule)}  next=${loop.nextRunAt ?? "-"}  ${loop.name}${machine}${archive}`);
+        const labels = loop.labels?.length ? `  labels=${loop.labels.join(",")}` : "";
+        console.log(`${loop.id}  ${loop.status.padEnd(7)}  cadence=${scheduleLabel(loop.schedule)}  next=${loop.nextRunAt ?? "-"}  ${loop.name}${labels}${machine}${archive}`);
       }
     }
   }));
@@ -1817,11 +1832,12 @@ program
   .command("runs [idOrName]")
   .description("list recent runs, optionally for one loop")
   .option("--limit <n>", "limit", "50")
+  .option("--label <label>", "require the loop's current label; repeatable or comma-separated", collectValues, [] as string[])
   .option("--show-output", "show stdout/stderr")
   .action(runAction((idOrName, opts) => withStore(async (store) => {
     const limit = positiveInteger(opts.limit, "--limit") ?? 50;
     const loop = idOrName ? await store.requireLoop(idOrName) : undefined;
-    const runs = await store.listRuns({ loopId: loop?.id, limit });
+    const runs = await store.listRuns({ loopId: loop?.id, labels: normalizeLoopLabels(opts.label), limit });
     if (isJson()) print(runs.map((run) => publicRun(run, opts.showOutput)));
     else {
       for (const run of runs) {
@@ -1831,6 +1847,40 @@ program
         if (opts.showOutput) printTextOutput(run);
       }
     }
+  })));
+
+const labels = program.command("labels").description("set or edit persisted loop labels");
+
+labels
+  .command("set <idOrName> <labels...>")
+  .description("replace all loop labels")
+  .action(runAction((idOrName, values: string[]) => withStore(async (store) => {
+    const loop = await store.requireUniqueLoop(idOrName);
+    print(publicLoop(await store.updateLoop(loop.id, { labels: normalizeLoopLabels(values) })));
+  })));
+
+labels
+  .command("add <idOrName> <labels...>")
+  .description("add loop labels")
+  .action(runAction((idOrName, values: string[]) => withStore(async (store) => {
+    const loop = await store.requireUniqueLoop(idOrName);
+    print(publicLoop(await store.updateLoop(loop.id, { labels: mergeLoopLabels(loop.labels, values) })));
+  })));
+
+labels
+  .command("remove <idOrName> <labels...>")
+  .description("remove loop labels")
+  .action(runAction((idOrName, values: string[]) => withStore(async (store) => {
+    const loop = await store.requireUniqueLoop(idOrName);
+    print(publicLoop(await store.updateLoop(loop.id, { labels: removeLoopLabels(loop.labels, values) })));
+  })));
+
+labels
+  .command("clear <idOrName>")
+  .description("remove all loop labels")
+  .action(runAction((idOrName) => withStore(async (store) => {
+    const loop = await store.requireUniqueLoop(idOrName);
+    print(publicLoop(await store.updateLoop(loop.id, { labels: [] })));
   })));
 
 const receipts = program.command("receipts").description("read and write scheduler-neutral run receipts");

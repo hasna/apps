@@ -17,6 +17,7 @@ import {
 } from "../lib/format.js";
 import { buildHealthReport, buildHealthScan, classifyRunFailure, expectationForLoop } from "../lib/health.js";
 import { nowIso } from "../lib/ids.js";
+import { LOOP_LABEL_MAX_COUNT, mergeLoopLabels, normalizeLoopLabels, removeLoopLabels } from "../lib/labels.js";
 import { dataDir } from "../lib/paths.js";
 import { computeNextAfter } from "../lib/recurrence.js";
 import { runLoopNow } from "../lib/scheduler.js";
@@ -28,6 +29,7 @@ import { workflowBodyFromJson } from "../lib/workflow-spec.js";
 import type {
   CatchUpPolicy,
   CreateLoopInput,
+  LoopRun,
   LoopStatus,
   LoopTarget,
   OverlapPolicy,
@@ -48,6 +50,9 @@ const OVERLAP_POLICIES = ["skip", "allow"] as const;
 const INTERVAL_ANCHORS = ["fixed_rate", "fixed_delay"] as const;
 
 const MAX_LIMIT = 500;
+const MAX_OUTPUT_RUN_LIMIT = 25;
+const MAX_OUTPUT_CHARS = 32_000;
+const MAX_RESPONSE_CHARS = 128_000;
 
 const MUTATION_ENV = "LOOPS_MCP_ALLOW_MUTATIONS";
 
@@ -59,8 +64,17 @@ const workflowIdOrNameSchema = z.string().min(1).describe("Workflow id or exact 
 const showOutputSchema = z
   .boolean()
   .optional()
-  .describe("Include raw stdout/stderr (default false: only redacted lengths are returned).");
+  .describe("Include bounded stdout/stderr (default false: only redacted lengths are returned).");
 const limitSchema = z.number().int().min(1).max(MAX_LIMIT).optional().describe(`Maximum entries to return (1-${MAX_LIMIT}).`);
+const labelSchema = z.string().min(1).max(64);
+const labelsSchema = z.array(labelSchema).max(LOOP_LABEL_MAX_COUNT);
+const maxOutputCharsSchema = z
+  .number()
+  .int()
+  .min(1)
+  .max(MAX_OUTPUT_CHARS)
+  .optional()
+  .describe(`Maximum characters returned for each stdout/stderr field (1-${MAX_OUTPUT_CHARS}).`);
 const runReceiptSummarySchema = z.object({
   text: z.string().optional().describe("Short human summary. It is scrubbed and bounded before storage."),
   stdout_bytes: z.number().int().min(0).optional().describe("Original stdout byte count."),
@@ -132,6 +146,7 @@ const scheduleSchema = z
 const createLoopCommonSchema = {
   name: z.string().min(1).describe("Unique loop name."),
   description: z.string().optional().describe("Why/how/outcome description; a default is generated when omitted."),
+  labels: labelsSchema.optional().describe("Persisted loop labels; normalized lowercase and deduplicated."),
   schedule: scheduleSchema,
   timeoutMs: optionalTimeoutSchema,
   catchUp: catchUpSchema,
@@ -181,12 +196,36 @@ function mutationAnnotations(opts: { destructive?: boolean; idempotent?: boolean
   };
 }
 
+function boundedJsonText(value: unknown): string {
+  const json = JSON.stringify(value, null, 2);
+  if (json.length <= MAX_RESPONSE_CHARS) return json;
+
+  let previewLength = Math.max(0, MAX_RESPONSE_CHARS - 1_024);
+  let bounded = "";
+  while (previewLength >= 0) {
+    bounded = JSON.stringify(
+      {
+        truncated: true,
+        maxResponseChars: MAX_RESPONSE_CHARS,
+        originalChars: json.length,
+        message: "MCP response exceeded the aggregate response cap; narrow filters or disable showOutput.",
+        preview: json.slice(0, previewLength),
+      },
+      null,
+      2,
+    );
+    if (bounded.length <= MAX_RESPONSE_CHARS) return bounded;
+    previewLength -= Math.max(256, bounded.length - MAX_RESPONSE_CHARS);
+  }
+  return JSON.stringify({ truncated: true, maxResponseChars: MAX_RESPONSE_CHARS, originalChars: json.length });
+}
+
 function jsonResult(value: unknown) {
   return {
     content: [
       {
         type: "text" as const,
-        text: JSON.stringify(value, null, 2),
+        text: boundedJsonText(value),
       },
     ],
   };
@@ -258,6 +297,23 @@ function requireMutationsEnabled(): void {
   }
 }
 
+function truncateOutput(value: string | undefined, maxChars: number): string | undefined {
+  if (!value || value.length <= maxChars) return value;
+  const marker = `\n[truncated ${value.length - maxChars} chars]`;
+  if (marker.length >= maxChars) return marker.slice(0, maxChars);
+  return `${value.slice(0, maxChars - marker.length)}${marker}`;
+}
+
+function publicMcpRun(run: LoopRun, showOutput: boolean, maxOutputChars = MAX_OUTPUT_CHARS): Record<string, unknown> {
+  const value = publicRun(run, showOutput);
+  if (!showOutput) return value;
+  return {
+    ...value,
+    stdout: truncateOutput(run.stdout, maxOutputChars),
+    stderr: truncateOutput(run.stderr, maxOutputChars),
+  };
+}
+
 function nonEmpty(value: string, label: string): string {
   const trimmed = value.trim();
   if (!trimmed) throw new Error(`${label} must be non-empty`);
@@ -316,6 +372,7 @@ function defaultLoopDescription(name: string, schedule: ScheduleSpec, target: Lo
 function commonCreateInput(input: {
   name: string;
   description?: string;
+  labels?: string[];
   schedule: z.infer<typeof scheduleSchema>;
   target: LoopTarget;
   catchUp?: (typeof CATCH_UP_POLICIES)[number];
@@ -333,6 +390,7 @@ function commonCreateInput(input: {
     description: input.description?.trim() || defaultLoopDescription(name, schedule, input.target),
     schedule,
     target: input.target,
+    labels: normalizeLoopLabels(input.labels),
     catchUp: input.catchUp as CatchUpPolicy | undefined,
     catchUpLimit: input.catchUpLimit,
     overlap: input.overlap as OverlapPolicy | undefined,
@@ -386,15 +444,17 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
     annotations: READ_ONLY_ANNOTATIONS,
     inputSchema: {
       status: z.enum(LOOP_STATUS_FILTERS).optional().describe("Filter by loop status; 'all' disables the filter."),
+      labels: labelsSchema.optional().describe("Require all listed labels."),
       limit: limitSchema,
       includeArchived: z.boolean().optional().describe("Include archived loops alongside live ones (default false)."),
       archivedOnly: z.boolean().optional().describe("Return only archived loops (default false)."),
     },
-    handler: ({ status, limit, includeArchived, archivedOnly }) =>
+    handler: ({ status, labels, limit, includeArchived, archivedOnly }) =>
       withStore(async (store) => ({
         loops: (
           await store.listLoops({
             status: filteredLoopStatus(status),
+            labels: normalizeLoopLabels(labels),
             limit,
             includeArchived: includeArchived ?? false,
             archived: archivedOnly ?? false,
@@ -411,8 +471,9 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
       idOrName: loopIdOrNameSchema,
       includeLatestRun: z.boolean().optional().describe("Include the most recent run record (default false)."),
       showOutput: showOutputSchema,
+      maxOutputChars: maxOutputCharsSchema,
     },
-    handler: ({ idOrName, includeLatestRun, showOutput }) =>
+    handler: ({ idOrName, includeLatestRun, showOutput, maxOutputChars }) =>
       withStore(async (store) => {
         const loop = await store.requireLoop(idOrName);
         const latestRun = includeLatestRun ? (await store.listRuns({ loopId: loop.id, limit: 1 }))[0] : undefined;
@@ -420,33 +481,47 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
           loop: publicLoop(loop),
           // publicRun redacts stdout/stderr client-side unless showOutput; the
           // ApiStore returns raw output so this redaction stays identical to local.
-          latestRun: latestRun ? publicRun(latestRun, showOutput ?? false) : undefined,
+          latestRun: latestRun
+            ? publicMcpRun(latestRun, showOutput ?? false, maxOutputChars ?? MAX_OUTPUT_CHARS)
+            : undefined,
         };
       }),
   },
   {
     name: "loops_runs",
     aliases: ["loop_runs"],
-    description: "List loop runs with optional loop/status filtering.",
+    description: "List loop runs with optional loop/status/current-label filtering and bounded output.",
     readOnly: true,
     annotations: READ_ONLY_ANNOTATIONS,
     inputSchema: {
       idOrName: loopIdOrNameSchema.optional(),
       status: z.enum(RUN_STATUSES).optional().describe("Filter by run status."),
+      labels: labelsSchema.optional().describe("Require all current labels on the run's loop."),
       limit: limitSchema,
       showOutput: showOutputSchema,
+      maxOutputChars: maxOutputCharsSchema,
     },
-    handler: ({ idOrName, status, limit, showOutput }) =>
+    handler: ({ idOrName, status, labels, limit, showOutput, maxOutputChars }) =>
       withStore(async (store) => {
         const loop = idOrName ? await store.requireLoop(idOrName) : undefined;
+        const effectiveLimit = showOutput
+          ? Math.min(limit ?? MAX_OUTPUT_RUN_LIMIT, MAX_OUTPUT_RUN_LIMIT)
+          : limit;
         const runs = (
           await store.listRuns({
             loopId: loop?.id,
             status: status as RunStatus | undefined,
-            limit,
+            labels: normalizeLoopLabels(labels),
+            limit: effectiveLimit,
           })
-        ).map((run) => publicRun(run, showOutput ?? false));
-        return { loop: loop ? publicLoop(loop) : undefined, runs };
+        ).map((run) => publicMcpRun(run, showOutput ?? false, maxOutputChars ?? MAX_OUTPUT_CHARS));
+        return {
+          loop: loop ? publicLoop(loop) : undefined,
+          runs,
+          outputLimitApplied: showOutput && (limit ?? MAX_OUTPUT_RUN_LIMIT) > MAX_OUTPUT_RUN_LIMIT
+            ? { requested: limit, returnedAtMost: MAX_OUTPUT_RUN_LIMIT }
+            : undefined,
+        };
       }),
   },
   {
@@ -789,6 +864,36 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
             ? undefined
             : "loops daemon is not running: the loop is marked due, but nothing will execute it until the daemon starts ('loops daemon start').",
         };
+      }),
+  },
+  {
+    name: "loops_labels_update",
+    aliases: ["loop_update_labels"],
+    description: "Set, add, remove, or clear persisted labels on a loop.",
+    readOnly: false,
+    guarded: true,
+    annotations: mutationAnnotations({ idempotent: true }),
+    inputSchema: {
+      idOrName: loopIdOrNameSchema,
+      mode: z.enum(["set", "add", "remove", "clear"]),
+      labels: labelsSchema.optional(),
+    },
+    handler: ({ idOrName, mode, labels }) =>
+      withStore(async (store) => {
+        const loop = await store.requireUniqueLoop(idOrName);
+        const normalized = normalizeLoopLabels(labels);
+        if (mode !== "clear" && normalized.length === 0) {
+          throw new Error("labels are required unless mode is clear");
+        }
+        const nextLabels =
+          mode === "clear"
+            ? []
+            : mode === "set"
+              ? normalized
+              : mode === "add"
+                ? mergeLoopLabels(loop.labels, normalized)
+                : removeLoopLabels(loop.labels, normalized);
+        return { loop: publicLoop(await store.updateLoop(loop.id, { labels: nextLabels })) };
       }),
   },
   {

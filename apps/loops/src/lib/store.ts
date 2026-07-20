@@ -62,6 +62,7 @@ import {
   stageWorkflowRunManifest,
 } from "./run-artifacts.js";
 import { normalizeRunReceipt } from "./run-receipts.js";
+import { normalizeLoopLabels } from "./labels.js";
 import { runLocalCommand, todosMutationSummary } from "./route/todos-cli.js";
 
 interface DaemonLeaseFence {
@@ -102,6 +103,7 @@ export interface LoopRow {
   id: string;
   name: string;
   description: string | null;
+  labels_json: string | null;
   status: string;
   archived_at: string | null;
   archived_from_status: string | null;
@@ -370,6 +372,7 @@ export function rowToLoop(row: LoopRow): Loop {
     id: row.id,
     name: row.name,
     description: row.description ?? undefined,
+    labels: row.labels_json ? normalizeLoopLabels(JSON.parse(row.labels_json) as string[]) : [],
     status: row.status as LoopStatus,
     archivedAt: row.archived_at ?? undefined,
     archivedFromStatus: row.archived_from_status ? (row.archived_from_status as LoopStatus) : undefined,
@@ -1148,6 +1151,15 @@ export class Store {
           this.addColumnIfMissing("workflow_runs", "workflow_definition_hash", "TEXT");
         },
       },
+      {
+        id: "0013_loop_labels",
+        apply: () => {
+          // Additive metadata: old binaries ignore the column, while new
+          // binaries normalize legacy NULL/absent state to an empty label set.
+          // Keep user_version and the compatibility floor unchanged.
+          this.addColumnIfMissing("loops", "labels_json", "TEXT NOT NULL DEFAULT '[]'");
+        },
+      },
     ];
   }
 
@@ -1157,6 +1169,7 @@ export class Store {
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         description TEXT,
+        labels_json TEXT NOT NULL DEFAULT '[]',
         status TEXT NOT NULL,
         archived_at TEXT,
         archived_from_status TEXT,
@@ -1534,6 +1547,7 @@ export class Store {
       id: genId(),
       name: input.name,
       description: input.description,
+      labels: normalizeLoopLabels(input.labels),
       status: "active",
       schedule: input.schedule,
       target,
@@ -1552,15 +1566,16 @@ export class Store {
     };
     this.db
       .query(
-        `INSERT INTO loops (id, name, description, status, schedule_json, target_json, machine_json, next_run_at, retry_scheduled_for,
+        `INSERT INTO loops (id, name, description, labels_json, status, schedule_json, target_json, machine_json, next_run_at, retry_scheduled_for,
           goal_json, catch_up, catch_up_limit, overlap, max_attempts, retry_delay_ms, lease_ms, expires_at, created_at, updated_at)
-         VALUES ($id, $name, $description, $status, $schedule, $target, $machine, $nextRun, NULL, $goal, $catchUp, $catchUpLimit,
+         VALUES ($id, $name, $description, $labels, $status, $schedule, $target, $machine, $nextRun, NULL, $goal, $catchUp, $catchUpLimit,
           $overlap, $maxAttempts, $retryDelay, $leaseMs, $expiresAt, $created, $updated)`,
       )
       .run({
         $id: loop.id,
         $name: loop.name,
         $description: loop.description ?? null,
+        $labels: JSON.stringify(loop.labels),
         $status: loop.status,
         $schedule: JSON.stringify(loop.schedule),
         $target: JSON.stringify(loop.target),
@@ -1617,7 +1632,7 @@ export class Store {
     })();
   }
 
-  listLoops(opts: { status?: LoopStatus; limit?: number; offset?: number; archived?: boolean; includeArchived?: boolean; name?: string } = {}): Loop[] {
+  listLoops(opts: { status?: LoopStatus; labels?: string[]; limit?: number; offset?: number; archived?: boolean; includeArchived?: boolean; name?: string } = {}): Loop[] {
     const limit = opts.limit ?? 200;
     const offset = Math.max(0, Math.floor(opts.offset ?? 0));
     // Exact-name lookup short-circuits every other filter: it returns *all*
@@ -1629,30 +1644,25 @@ export class Store {
         .all(opts.name, limit, offset);
       return this.withLatestRunSummaries(rows.map(rowToLoop));
     }
-    let rows: LoopRow[];
-    if (opts.status && opts.archived) {
-      rows = this.db
-        .query<LoopRow, [string, number, number]>("SELECT * FROM loops WHERE status = ? AND archived_at IS NOT NULL ORDER BY next_run_at ASC LIMIT ? OFFSET ?")
-        .all(opts.status, limit, offset);
-    } else if (opts.status && opts.includeArchived) {
-      rows = this.db
-        .query<LoopRow, [string, number, number]>("SELECT * FROM loops WHERE status = ? ORDER BY next_run_at ASC LIMIT ? OFFSET ?")
-        .all(opts.status, limit, offset);
-    } else if (opts.status) {
-      rows = this.db
-        .query<LoopRow, [string, number, number]>("SELECT * FROM loops WHERE status = ? AND archived_at IS NULL ORDER BY next_run_at ASC LIMIT ? OFFSET ?")
-        .all(opts.status, limit, offset);
-    } else if (opts.archived) {
-      rows = this.db
-        .query<LoopRow, [number, number]>("SELECT * FROM loops WHERE archived_at IS NOT NULL ORDER BY archived_at DESC LIMIT ? OFFSET ?")
-        .all(limit, offset);
-    } else if (opts.includeArchived) {
-      rows = this.db.query<LoopRow, [number, number]>("SELECT * FROM loops ORDER BY status ASC, next_run_at ASC LIMIT ? OFFSET ?").all(limit, offset);
-    } else {
-      rows = this.db
-        .query<LoopRow, [number, number]>("SELECT * FROM loops WHERE archived_at IS NULL ORDER BY status ASC, next_run_at ASC LIMIT ? OFFSET ?")
-        .all(limit, offset);
+    const labels = normalizeLoopLabels(opts.labels);
+    const where: string[] = [];
+    const params: Array<string | number> = [];
+    if (opts.status) {
+      where.push("loops.status = ?");
+      params.push(opts.status);
     }
+    if (opts.archived) where.push("loops.archived_at IS NOT NULL");
+    else if (!opts.includeArchived) where.push("loops.archived_at IS NULL");
+    for (const label of labels) {
+      where.push("EXISTS (SELECT 1 FROM json_each(loops.labels_json) WHERE value = ?)");
+      params.push(label);
+    }
+    const order = opts.archived ? "loops.archived_at DESC" : "loops.status ASC, loops.next_run_at ASC";
+    const rows = this.db
+      .query<LoopRow, Array<string | number>>(
+        `SELECT loops.* FROM loops${where.length ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY ${order} LIMIT ? OFFSET ?`,
+      )
+      .all(...params, limit, offset);
     return this.withLatestRunSummaries(rows.map(rowToLoop));
   }
 
@@ -1701,7 +1711,7 @@ export class Store {
 
   updateLoop(
     id: string,
-    patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt">>,
+    patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt" | "labels">>,
     opts: DaemonLeaseFence = {},
   ): Loop {
     const updated = (opts.now ?? new Date()).toISOString();
@@ -1712,10 +1722,15 @@ export class Store {
       // Archived loops are frozen: the explicit unarchive mutation path is
       // unarchiveLoop(), which restores status directly.
       if (current.archivedAt) throw new LoopArchivedError(current.name || id);
-      const merged: Loop = { ...current, ...patch, updatedAt: updated };
+      const merged: Loop = {
+        ...current,
+        ...patch,
+        labels: patch.labels !== undefined ? normalizeLoopLabels(patch.labels) : current.labels,
+        updatedAt: updated,
+      };
       const res = this.db
         .query(
-          `UPDATE loops SET status=$status, next_run_at=$nextRun, retry_scheduled_for=$retrySlot,
+          `UPDATE loops SET status=$status, labels_json=$labels, next_run_at=$nextRun, retry_scheduled_for=$retrySlot,
            expires_at=$expiresAt, updated_at=$updated
            WHERE id=$id
              AND ($daemonLeaseId IS NULL OR EXISTS (
@@ -1725,6 +1740,7 @@ export class Store {
         .run({
           $id: id,
           $status: merged.status,
+          $labels: JSON.stringify(merged.labels),
           $nextRun: merged.nextRunAt ?? null,
           $retrySlot: merged.retryScheduledFor ?? null,
           $expiresAt: merged.expiresAt ?? null,
@@ -4254,27 +4270,30 @@ export class Store {
     return this.getRun(id);
   }
 
-  listRuns(opts: { loopId?: string; status?: RunStatus; limit?: number; offset?: number } = {}): LoopRun[] {
+  listRuns(opts: { loopId?: string; status?: RunStatus; labels?: string[]; limit?: number; offset?: number } = {}): LoopRun[] {
     const limit = opts.limit ?? 100;
     const offset = Math.max(0, Math.floor(opts.offset ?? 0));
-    let rows: RunRow[];
-    if (opts.loopId && opts.status) {
-      rows = this.db
-        .query<RunRow, [string, string, number, number]>(
-          "SELECT * FROM loop_runs WHERE loop_id = ? AND status = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
-        )
-        .all(opts.loopId, opts.status, limit, offset);
-    } else if (opts.loopId) {
-      rows = this.db
-        .query<RunRow, [string, number, number]>("SELECT * FROM loop_runs WHERE loop_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?")
-        .all(opts.loopId, limit, offset);
-    } else if (opts.status) {
-      rows = this.db
-        .query<RunRow, [string, number, number]>("SELECT * FROM loop_runs WHERE status = ? ORDER BY created_at DESC LIMIT ? OFFSET ?")
-        .all(opts.status, limit, offset);
-    } else {
-      rows = this.db.query<RunRow, [number, number]>("SELECT * FROM loop_runs ORDER BY created_at DESC LIMIT ? OFFSET ?").all(limit, offset);
+    const labels = normalizeLoopLabels(opts.labels);
+    const where: string[] = [];
+    const params: Array<string | number> = [];
+    if (opts.loopId) {
+      where.push("loop_runs.loop_id = ?");
+      params.push(opts.loopId);
     }
+    if (opts.status) {
+      where.push("loop_runs.status = ?");
+      params.push(opts.status);
+    }
+    for (const label of labels) {
+      where.push("EXISTS (SELECT 1 FROM json_each(label_loops.labels_json) WHERE value = ?)");
+      params.push(label);
+    }
+    const join = labels.length ? " JOIN loops AS label_loops ON label_loops.id = loop_runs.loop_id" : "";
+    const rows = this.db
+      .query<RunRow, Array<string | number>>(
+        `SELECT loop_runs.* FROM loop_runs${join}${where.length ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY loop_runs.created_at DESC LIMIT ? OFFSET ?`,
+      )
+      .all(...params, limit, offset);
     return rows.map(rowToRun);
   }
 
@@ -4674,15 +4693,16 @@ export class Store {
     this.assertNoNestedWorkflowGoal(loop.target, loop.goal);
     this.db
       .query(
-        `INSERT INTO loops (id, name, description, status, archived_at, archived_from_status, schedule_json, target_json,
+        `INSERT INTO loops (id, name, description, labels_json, status, archived_at, archived_from_status, schedule_json, target_json,
           goal_json, machine_json, next_run_at, retry_scheduled_for, catch_up, catch_up_limit, overlap, max_attempts,
           retry_delay_ms, lease_ms, expires_at, created_at, updated_at)
-         VALUES ($id, $name, $description, $status, $archivedAt, $archivedFromStatus, $schedule, $target,
+         VALUES ($id, $name, $description, $labels, $status, $archivedAt, $archivedFromStatus, $schedule, $target,
           $goal, $machine, $nextRun, $retrySlot, $catchUp, $catchUpLimit, $overlap, $maxAttempts,
           $retryDelay, $leaseMs, $expiresAt, $created, $updated)
          ON CONFLICT(id) DO UPDATE SET
            name=$name,
            description=$description,
+           labels_json=$labels,
            status=$status,
            archived_at=$archivedAt,
            archived_from_status=$archivedFromStatus,
@@ -4706,6 +4726,7 @@ export class Store {
         $id: loop.id,
         $name: loop.name,
         $description: loop.description ?? null,
+        $labels: JSON.stringify(normalizeLoopLabels(loop.labels)),
         $status: loop.status,
         $archivedAt: loop.archivedAt ?? null,
         $archivedFromStatus: loop.archivedFromStatus ?? null,

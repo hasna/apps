@@ -9,6 +9,28 @@ import { LoopsClient as HttpLoopsClient } from "./http.js";
 import { LoopsClient, migrationHash, openAutomationsRuntimeBinding } from "./index.js";
 
 describe("loops sdk", () => {
+  test("lists, filters runs, and updates normalized labels", async () => {
+    const store = new Store(":memory:");
+    const client = new LoopsClient({ store, runnerId: "manual" });
+    try {
+      const loop = await client.create({
+        name: "sdk-labels",
+        labels: ["BrowserPlan"],
+        schedule: { type: "once", at: "2026-08-01T00:00:00Z" },
+        target: { type: "command", command: "true" },
+      });
+      store.claimRun(loop, "2026-08-01T00:00:00.000Z", "test");
+
+      expect((await client.list({ labels: ["browserplan"] })).map((entry) => entry.name)).toEqual(["sdk-labels"]);
+      expect((await client.runs(undefined, { labels: ["browserplan"] })).map((run) => run.loopName)).toEqual(["sdk-labels"]);
+      expect((await client.addLabels(loop.id, ["nightly", "browserplan"])).labels).toEqual(["browserplan", "nightly"]);
+      expect((await client.removeLabels(loop.id, ["BROWSERPLAN"])).labels).toEqual(["nightly"]);
+      expect((await client.setLabels(loop.id, [])).labels).toEqual([]);
+    } finally {
+      await client.close();
+    }
+  });
+
   test("generated HTTP client exposes pagination and output query params", async () => {
     const urls: string[] = [];
     const fetchImpl = async (input: string | URL) => {
@@ -17,12 +39,16 @@ describe("loops sdk", () => {
     };
     const client = new HttpLoopsClient({ baseUrl: "http://127.0.0.1:8787", fetch: fetchImpl as typeof fetch });
 
-    await client.listLoops({ limit: 10, offset: 20, includeArchived: true });
-    await client.listRuns({ limit: 5, offset: 15, showOutput: true });
+    await client.listLoops({ limit: 10, offset: 20, includeArchived: true, labels: ["browserplan", "nightly"] });
+    await client.listRuns({ limit: 5, offset: 15, showOutput: true, labels: ["browserplan"] });
     await client.getRun("run-1", { showOutput: true });
 
-    expect(urls[0]).toBe("http://127.0.0.1:8787/v1/loops?limit=10&offset=20&includeArchived=true");
-    expect(urls[1]).toBe("http://127.0.0.1:8787/v1/runs?limit=5&offset=15&showOutput=true");
+    expect(urls[0]).toBe(
+      "http://127.0.0.1:8787/v1/loops?limit=10&offset=20&includeArchived=true&labels=browserplan%2Cnightly",
+    );
+    expect(urls[1]).toBe(
+      "http://127.0.0.1:8787/v1/runs?limit=5&offset=15&showOutput=true&labels=browserplan",
+    );
     expect(urls[2]).toBe("http://127.0.0.1:8787/v1/runs/run-1?showOutput=true");
   });
 

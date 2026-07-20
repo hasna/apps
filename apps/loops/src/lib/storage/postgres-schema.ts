@@ -682,6 +682,12 @@ ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS workflow_definition_hash TEXT
     `,
   ),
   migration(
+    "0012_loop_labels",
+    `
+ALTER TABLE loops ADD COLUMN IF NOT EXISTS labels_json JSONB NOT NULL DEFAULT '[]'::jsonb;
+    `,
+  ),
+  migration(
     "0008_tenant_prepare",
     `
 CREATE TABLE tenants (
