@@ -428,6 +428,7 @@ describe("agent adapters", () => {
       expect(result.status).toBe("succeeded");
       const args = result.stdout.trim().split(/\r?\n/);
       expect(args).toContain("-p");
+      expect(args).toContain("--trust");
       expect(args).toContain("--force");
       expect(args).toContain("--sandbox");
       expect(args[args.indexOf("--sandbox") + 1]).toBe("disabled");
@@ -465,6 +466,7 @@ describe("agent adapters", () => {
       });
       expect(result.status).toBe("succeeded");
       const args = result.stdout.trim().split(/\r?\n/);
+      expect(args).toContain("--trust");
       expect(args).toContain("--sandbox");
       expect(args[args.indexOf("--sandbox") + 1]).toBe("enabled");
     } finally {
