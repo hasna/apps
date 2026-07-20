@@ -13,6 +13,7 @@ import type {
   CommandTarget,
   ExecutableTarget,
   ExecutorResult,
+  KnowledgeFeedbackConfig,
   Loop,
   LoopMachineRef,
   LoopRun,
@@ -21,6 +22,7 @@ import type {
 import { accountToolForProvider, resolveAccountEnv, resolveAccountEnvSync } from "./accounts.js";
 import { agentSessionContract, BoundedOutputBuffer, killProcessGroup, providerAdapter, spawnCapture, type AgentInvocation } from "./agent-adapter.js";
 import { commandNotFoundMessage, executableExists, normalizeExecutionPath } from "./env.js";
+import { targetWithKnowledgeContext } from "./knowledge-feedback.js";
 import { nowIso } from "./ids.js";
 import { refreshLoopMachine, resolveMachineCommand } from "./machines.js";
 import { processStartTimeMs } from "./process-identity.js";
@@ -69,6 +71,8 @@ export interface ExecuteOptions extends PersistGuardOptions {
   onSpawnProcess?: (info: SpawnedProcessInfo) => void;
   /** Progress from durable provider controllers, for example Codewith background agents. */
   onAgentProgress?: (info: AgentProgressInfo) => void;
+  /** Inherited Knowledge feedback config, used mainly by workflow loops for step agents. */
+  knowledgeFeedback?: KnowledgeFeedbackConfig;
   machine?: LoopMachineRef;
   machineResolver?: (machine: LoopMachineRef) => LoopMachineRef;
   machineCommandResolver?: (machineId: string, command: string) => MachineCommandPlan;
@@ -1230,7 +1234,21 @@ export async function executeTarget(
   metadata: ExecutionMetadata = {},
   opts: ExecuteOptions = {},
 ): Promise<ExecutorResult> {
-  let spec = commandSpec(target, opts);
+  const startedAt = nowIso();
+  let executionTarget: ExecutableTarget;
+  try {
+    executionTarget = await targetWithKnowledgeContext(target, metadata, {
+      env: opts.env,
+      log: opts.log,
+      knowledgeFeedback: opts.knowledgeFeedback,
+    });
+  } catch (error) {
+    return failureResult(
+      startedAt,
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+  let spec = commandSpec(executionTarget, opts);
   const machine = resolvedMachine(opts);
   if (machine && !machine.local) {
     // Auto-mode worktree fallback needs a rebuilt invocation (providers bake
@@ -1242,7 +1260,6 @@ export async function executeTarget(
     return executeRemoteSpec(spec, machine, metadata, opts, remoteFallbackSpec);
   }
   const maxOutputBytes = opts.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
-  const startedAt = nowIso();
   const stdout = new BoundedOutputBuffer(maxOutputBytes);
   const stderr = new BoundedOutputBuffer(maxOutputBytes);
   let timedOut = false;

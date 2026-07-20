@@ -160,6 +160,77 @@ describe("workflow goal spec validation", () => {
     expect(workflow.steps[1]?.target.timeoutMs).toBeNull();
   });
 
+  test("validates and normalizes opt-in Knowledge feedback target config", () => {
+    const workflow = workflowBodyFromJson({
+      name: "knowledge-feedback-workflow",
+      steps: [
+        {
+          id: "command",
+          target: {
+            type: "command",
+            command: "true",
+            knowledgeFeedback: {
+              enabled: true,
+              emit: true,
+              readContext: false,
+              command: " knowledge ",
+              store: " /tmp/knowledge ",
+              scope: "project",
+              maxItems: 4,
+              maxTokens: 800,
+              timeoutMs: 5_000,
+              tags: [" openloops ", " feedback "],
+              required: false,
+            },
+          },
+        },
+      ],
+    });
+
+    expect(workflow.steps[0]?.target.knowledgeFeedback).toEqual({
+      enabled: true,
+      emit: true,
+      readContext: false,
+      command: "knowledge",
+      store: "/tmp/knowledge",
+      scope: "project",
+      maxItems: 4,
+      maxTokens: 800,
+      timeoutMs: 5_000,
+      tags: ["openloops", "feedback"],
+      required: false,
+    });
+
+    expect(() =>
+      workflowBodyFromJson({
+        name: "invalid-knowledge-scope",
+        steps: [{
+          id: "worker",
+          target: {
+            type: "agent",
+            provider: "codewith",
+            prompt: "work",
+            knowledgeFeedback: { enabled: true, scope: "unsafe" },
+          },
+        }],
+      }),
+    ).toThrow("knowledgeFeedback.scope");
+
+    expect(() =>
+      workflowBodyFromJson({
+        name: "invalid-knowledge-budget",
+        steps: [{
+          id: "worker",
+          target: {
+            type: "command",
+            command: "true",
+            knowledgeFeedback: { enabled: true, maxItems: 0 },
+          },
+        }],
+      }),
+    ).toThrow("knowledgeFeedback.maxItems");
+  });
+
   test("resolves workflow agent promptFile relative to the workflow file directory", () => {
     const root = mkdtempSync(join(tmpdir(), "loops-workflow-prompt-file-"));
     const promptFile = join(root, "prompts", "worker.md");

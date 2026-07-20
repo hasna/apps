@@ -77,6 +77,33 @@ export interface RuntimePreflightPolicy {
   beforeRun?: boolean;
 }
 
+export type KnowledgeFeedbackScope = "local" | "global" | "project";
+
+export interface KnowledgeFeedbackConfig {
+  /** Opt into outcome emission and pre-agent context reads. Explicit false disables inherited or environment config. */
+  enabled?: boolean;
+  /** Emit failed, timed-out, and abandoned loop outcomes to the Knowledge CLI. Defaults true when enabled. */
+  emit?: boolean;
+  /** Read bounded Knowledge CLI context before agent runs. Defaults true when enabled. */
+  readContext?: boolean;
+  /** Knowledge CLI executable; defaults to `knowledge`. */
+  command?: string;
+  /** Optional Knowledge store override passed as `--store`. */
+  store?: string;
+  /** Knowledge scope passed to the CLI; defaults to `local`. */
+  scope?: KnowledgeFeedbackScope;
+  /** Context-pack item budget. */
+  maxItems?: number;
+  /** Context-pack token budget. */
+  maxTokens?: number;
+  /** Knowledge CLI timeout in milliseconds. */
+  timeoutMs?: number;
+  /** Tags recorded in the durable knowledge content; the first tag is also passed to the CLI. */
+  tags?: string[];
+  /** If true, failed context reads fail agent execution. Outcome emission always remains non-fatal. */
+  required?: boolean;
+}
+
 export interface OpenAutomationsRuntimeBinding {
   integration: "open-automations";
   role: "runtime";
@@ -109,6 +136,7 @@ export interface CommandTarget {
   idleTimeoutMs?: number;
   account?: AccountRef;
   preflight?: RuntimePreflightPolicy;
+  knowledgeFeedback?: KnowledgeFeedbackConfig;
 }
 
 export type TimeoutMs = number | null;
@@ -209,6 +237,7 @@ export interface AgentTargetBase {
   routing?: AgentRoutingSpec;
   account?: AccountRef;
   preflight?: RuntimePreflightPolicy;
+  knowledgeFeedback?: KnowledgeFeedbackConfig;
 }
 
 export interface AgentTarget extends AgentTargetBase {
@@ -226,6 +255,7 @@ export interface WorkflowTarget {
   input?: Record<string, string>;
   timeoutMs?: TimeoutMs;
   preflight?: RuntimePreflightPolicy;
+  knowledgeFeedback?: KnowledgeFeedbackConfig;
 }
 
 export type ExecutableTarget = CommandTarget | AgentTarget;

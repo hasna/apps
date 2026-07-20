@@ -1035,6 +1035,37 @@ loops workflows run transcript-feedback-to-loops --show-output
 
 See `docs/TRANSCRIPT_LOOP_PATTERNS.md` for transcript-to-loop guardrails and example schedules for review, maintenance, CI optimization, feedback triage, and knowledge-capture loops.
 
+## Knowledge Feedback
+
+Knowledge feedback is opt-in per command, agent, or workflow loop. Add
+`--knowledge-feedback` when creating the loop, or set `knowledgeFeedback` on
+the target JSON. Failed, timed-out, and abandoned outcomes are emitted after
+run finalization through an argv-based `knowledge upsert`; stable failure
+fingerprints dedupe repeated evidence.
+
+```bash
+loops create agent repair-check \
+  --provider codewith \
+  --every 30m \
+  --prompt "Inspect the latest failure and propose the smallest repair." \
+  --knowledge-feedback \
+  --knowledge-store /path/to/knowledge-store
+```
+
+Before an agent starts, OpenLoops may append a bounded, scrubbed
+`knowledge context pack` result as read-only historical context. Evidence and
+citation identifiers are schema-validated, individually bounded, and omitted
+when they contain unsafe or secret-like data. Optional lookup failures leave
+the original prompt unchanged; set `required: true` only when that context must
+be available before agent execution. Outcome emission always remains
+best-effort and cannot change the finalized run.
+
+Available creation flags are `--knowledge-store`, `--knowledge-scope`,
+`--knowledge-command`, `--knowledge-max-items`, `--knowledge-max-tokens`, and
+`--knowledge-timeout`. `LOOPS_KNOWLEDGE_FEEDBACK=1` enables the same integration
+through the runner environment. Durable records use the Knowledge CLI; this
+feature does not create ad hoc Markdown knowledge files.
+
 ## Manage
 
 ```bash

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
@@ -133,6 +133,119 @@ describe("loops-runner", () => {
     } finally {
       server.stop(true);
       await storage.close();
+    }
+  });
+
+  test("runRunnerOnce emits best-effort Knowledge feedback after API finalization", async () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-runner-knowledge-"));
+    const finalizedMarker = join(root, "finalized.txt");
+    const observedMarker = join(root, "observed.txt");
+    const command = join(root, "knowledge-fixture.ts");
+    const secret = ["ghp", "1234567890abcdef1234567890abcdef"].join("_");
+    writeFileSync(command, [
+      "#!/usr/bin/env bun",
+      'import { existsSync, writeFileSync } from "node:fs";',
+      `writeFileSync(${JSON.stringify(observedMarker)}, JSON.stringify({`,
+      `  phase: existsSync(${JSON.stringify(finalizedMarker)}) ? "after-finalize" : "before-finalize",`,
+      "  args: process.argv.slice(2),",
+      "}));",
+      "process.exit(9);",
+      "",
+    ].join("\n"));
+    chmodSync(command, 0o755);
+
+    const claim = {
+      loop: {
+        id: "loop-knowledge-runner",
+        name: "runner-knowledge-loop",
+        status: "active",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: {
+          type: "command",
+          command: "true",
+          knowledgeFeedback: { enabled: true, command },
+        },
+        catchUp: "latest",
+        catchUpLimit: 1,
+        overlap: "skip",
+        maxAttempts: 1,
+        retryDelayMs: 1_000,
+        leaseMs: 60_000,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+      run: {
+        id: "run-knowledge-runner",
+        loopId: "loop-knowledge-runner",
+        loopName: "runner-knowledge-loop",
+        scheduledFor: "2026-01-01T00:00:00.000Z",
+        attempt: 1,
+        status: "running",
+        startedAt: "2026-01-01T00:00:00.000Z",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+      claimToken: "knowledge-claim-token",
+    };
+    const response = (body: unknown, status = 200): Response => ({
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => body,
+    }) as Response;
+    const fetchImpl = (async (url: string | URL) => {
+      const path = String(url);
+      if (path.endsWith("/v1/runners/claim")) {
+        return response({ ok: true, claims: [claim] });
+      }
+      if (path.includes("/heartbeat")) {
+        return response({ ok: true });
+      }
+      if (path.includes("/finalize")) {
+        writeFileSync(finalizedMarker, "finalized");
+        return response({
+          ok: true,
+          run: {
+            ...claim.run,
+            status: "failed",
+            finishedAt: "2026-01-01T00:00:01.000Z",
+            durationMs: 1_000,
+            error: "runner failure",
+            exitCode: 1,
+          },
+        });
+      }
+      return response({ error: "not_found" }, 404);
+    }) as unknown as typeof fetch;
+
+    try {
+      const result = await runRunnerOnce({
+        apiUrl: "http://127.0.0.1:1/",
+        apiKey: "test-token",
+        runnerId: "runner-knowledge",
+        fetchImpl,
+        execute: async (_loop, run) => ({
+          status: "failed",
+          startedAt: run.startedAt ?? "2026-01-01T00:00:00.000Z",
+          finishedAt: "2026-01-01T00:00:01.000Z",
+          durationMs: 1_000,
+          stdout: `runner stdout ${secret}`,
+          stderr: `runner stderr ${secret}`,
+          error: `runner failure ${secret}`,
+          exitCode: 1,
+        }),
+      });
+
+      expect(result).toMatchObject({ ok: false, claimed: 1 });
+      expect(result.completed[0]?.status).toBe("failed");
+      const observed = JSON.parse(readFileSync(observedMarker, "utf8")) as {
+        phase: string;
+        args: string[];
+      };
+      expect(observed.phase).toBe("after-finalize");
+      expect(observed.args.join("\n")).not.toContain(secret);
+      expect(observed.args.join("\n")).toContain("[SCRUBBED]");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

@@ -1,6 +1,7 @@
 import type { ExecutorResult, Loop, LoopRun } from "../types.js";
 import { LoopArchivedError } from "./errors.js";
 import { classifyRunFailure } from "./health.js";
+import { emitKnowledgeForLoopRun } from "./knowledge-feedback.js";
 import { computeNextAfter, dueSlots } from "./recurrence.js";
 import type { Store } from "./store.js";
 import { executeLoopTarget } from "./workflow-runner.js";
@@ -365,6 +366,24 @@ export async function executeClaimedRun(deps: {
   finalizeResult?: (result: ExecutorResult, loop: Loop, run: LoopRun) => Omit<ExecutorResult, "status"> & { status: LoopRun["status"] };
   onError?: (loop: Loop, error: unknown) => void;
 }): Promise<LoopRun> {
+  const emitAfterFinalize = async (finalRun: LoopRun): Promise<void> => {
+    try {
+      const feedback = await emitKnowledgeForLoopRun(deps.loop, finalRun);
+      if (feedback && !feedback.ok && feedback.error) {
+        try {
+          deps.onError?.(deps.loop, new Error(feedback.error));
+        } catch {
+          // Emission reporting is best-effort and must not alter the finalized run.
+        }
+      }
+    } catch (error) {
+      try {
+        deps.onError?.(deps.loop, error);
+      } catch {
+        // Emission is isolated from the finalized run even if reporting throws.
+      }
+    }
+  };
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   const heartbeatEveryMs = Math.max(10, Math.min(60_000, Math.floor(deps.loop.leaseMs / 3)));
   heartbeat = setInterval(() => {
@@ -382,7 +401,7 @@ export async function executeClaimedRun(deps: {
       })))(deps.loop, deps.run);
     const finalResult = deps.finalizeResult?.(result, deps.loop, deps.run) ?? result;
     deps.beforeFinalize?.(deps.loop, deps.run);
-    return deps.store.finalizeRun(deps.run.id, {
+    const finalRun = deps.store.finalizeRun(deps.run.id, {
       status: finalResult.status,
       finishedAt: finalResult.finishedAt,
       durationMs: finalResult.durationMs,
@@ -396,6 +415,8 @@ export async function executeClaimedRun(deps: {
       daemonLeaseId: deps.daemonLeaseId,
       now: deps.now?.() ?? new Date(finalResult.finishedAt),
     });
+    await emitAfterFinalize(finalRun);
+    return finalRun;
   } catch (err) {
     deps.onError?.(deps.loop, err);
     try {
@@ -404,7 +425,7 @@ export async function executeClaimedRun(deps: {
       return deps.store.getRun(deps.run.id) ?? deps.run;
     }
     const finishedAt = new Date();
-    return deps.store.finalizeRun(deps.run.id, {
+    const finalRun = deps.store.finalizeRun(deps.run.id, {
       status: "failed",
       finishedAt: finishedAt.toISOString(),
       durationMs: finishedAt.getTime() - new Date(deps.run.startedAt ?? deps.run.createdAt).getTime(),
@@ -416,6 +437,8 @@ export async function executeClaimedRun(deps: {
       daemonLeaseId: deps.daemonLeaseId,
       now: deps.now?.() ?? finishedAt,
     });
+    await emitAfterFinalize(finalRun);
+    return finalRun;
   } finally {
     if (heartbeat) clearInterval(heartbeat);
   }

@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ExecutorResult, Loop, LoopRun } from "../types.js";
 import { buildHealthReport } from "./health.js";
 import {
@@ -106,6 +109,71 @@ describe("scheduler", () => {
       expect(store.getLoop(loop.id)?.status).toBe("stopped");
     } finally {
       store.close();
+    }
+  });
+
+  test("emits Knowledge feedback only after finalization and isolates emission failure", async () => {
+    const root = mkdtempSync(join(tmpdir(), "openloops-knowledge-finalize-"));
+    const database = join(root, "loops.sqlite");
+    const marker = join(root, "observed-status.txt");
+    const command = join(root, "knowledge-fixture.ts");
+    writeFileSync(command, [
+      "#!/usr/bin/env bun",
+      'import { Database } from "bun:sqlite";',
+      'import { writeFileSync } from "node:fs";',
+      `const db = new Database(${JSON.stringify(database)}, { readonly: true });`,
+      'const row = db.query("SELECT status FROM loop_runs LIMIT 1").get();',
+      "db.close();",
+      `writeFileSync(${JSON.stringify(marker)}, String(row?.status ?? "missing"));`,
+      "process.exit(7);",
+      "",
+    ].join("\n"));
+    chmodSync(command, 0o755);
+
+    const store = new Store(database);
+    try {
+      const loop = store.createLoop(
+        {
+          name: "knowledge-after-finalize",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: {
+            type: "command",
+            command: "true",
+            knowledgeFeedback: { enabled: true, command },
+          },
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      const claim = store.claimRun(
+        loop,
+        "2026-01-01T00:00:00.000Z",
+        "knowledge-runner",
+        new Date("2026-01-01T00:00:00.000Z"),
+      );
+      expect(claim).toBeDefined();
+      const reported: unknown[] = [];
+      const finalRun = await executeClaimedRun({
+        store,
+        runnerId: "knowledge-runner",
+        loop: claim!.loop,
+        run: claim!.run,
+        execute: async () => result("succeeded", "2026-01-01T00:00:00.000Z"),
+        finalizeResult: (execution) => ({
+          ...execution,
+          status: "failed",
+          exitCode: 1,
+          error: "finalizer policy failure",
+        }),
+        onError: (_candidate, error) => reported.push(error),
+      });
+
+      expect(finalRun.status).toBe("failed");
+      expect(store.getRun(finalRun.id)?.status).toBe("failed");
+      expect(readFileSync(marker, "utf8")).toBe("failed");
+      expect(reported).toHaveLength(1);
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

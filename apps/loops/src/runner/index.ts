@@ -15,6 +15,7 @@ import type {
 } from "../types.js";
 import { executeLoop } from "../lib/executor.js";
 import { executeLoopTarget, type WorkflowExecutionStore } from "../lib/workflow-runner.js";
+import { emitKnowledgeForLoopRun } from "../lib/knowledge-feedback.js";
 import { buildDeploymentStatus, deploymentStatusLine } from "../lib/mode.js";
 import { packageVersion } from "../lib/version.js";
 
@@ -322,6 +323,19 @@ export async function runRunnerOnce(opts: RunRunnerOnceOptions = {}): Promise<Ru
       pid: result.pid,
     });
     const run = (finalized.run ?? claim.run) as LoopRun;
+    try {
+      await emitKnowledgeForLoopRun(claim.loop, {
+        ...run,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        error: result.error,
+        exitCode: result.exitCode,
+      }, {
+        env: opts.env,
+      });
+    } catch {
+      // Knowledge feedback is best-effort after API finalization.
+    }
     completed.push(run);
   }
   return { ok: completed.every((run) => run.status === "succeeded"), claimed: claims.length, completed };

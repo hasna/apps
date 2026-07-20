@@ -1,6 +1,16 @@
 import { readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
-import type { AgentAllowlistSpec, AgentPromptSource, AgentTarget, CreateWorkflowInput, ExecutableTarget, GoalSpec, WorkflowSpec, WorkflowStep } from "../types.js";
+import type {
+  AgentAllowlistSpec,
+  AgentPromptSource,
+  AgentTarget,
+  CreateWorkflowInput,
+  ExecutableTarget,
+  GoalSpec,
+  KnowledgeFeedbackConfig,
+  WorkflowSpec,
+  WorkflowStep,
+} from "../types.js";
 import { AGENT_PROVIDERS, providerAdapter } from "./agent-adapter.js";
 import { ValidationError } from "./errors.js";
 import { GOAL_OBJECTIVE_MAX_CHARS } from "./goal/types.js";
@@ -50,6 +60,45 @@ function optionalStringArray(value: unknown, label: string): string[] | undefine
     values.push(value[index].trim());
   }
   return values.length ? values : undefined;
+}
+
+function optionalKnowledgeFeedback(value: unknown, label: string): KnowledgeFeedbackConfig | undefined {
+  if (value === undefined) return undefined;
+  assertObject(value, label);
+  const normalized: KnowledgeFeedbackConfig = {};
+  if (value.enabled !== undefined) normalized.enabled = optionalBoolean(value.enabled, `${label}.enabled`);
+  if (value.emit !== undefined) normalized.emit = optionalBoolean(value.emit, `${label}.emit`);
+  if (value.readContext !== undefined) {
+    normalized.readContext = optionalBoolean(value.readContext, `${label}.readContext`);
+  }
+  if (value.command !== undefined) {
+    assertString(value.command, `${label}.command`);
+    normalized.command = value.command.trim();
+  }
+  if (value.store !== undefined) {
+    assertString(value.store, `${label}.store`);
+    normalized.store = value.store.trim();
+  }
+  if (value.scope !== undefined) {
+    if (value.scope !== "local" && value.scope !== "global" && value.scope !== "project") {
+      throw new Error(`${label}.scope must be local, global, or project`);
+    }
+    normalized.scope = value.scope;
+  }
+  if (value.maxItems !== undefined) {
+    normalized.maxItems = optionalPositiveInteger(value.maxItems, `${label}.maxItems`);
+  }
+  if (value.maxTokens !== undefined) {
+    normalized.maxTokens = optionalPositiveInteger(value.maxTokens, `${label}.maxTokens`);
+  }
+  if (value.timeoutMs !== undefined) {
+    normalized.timeoutMs = optionalPositiveInteger(value.timeoutMs, `${label}.timeoutMs`);
+  }
+  if (value.tags !== undefined) normalized.tags = optionalStringArray(value.tags, `${label}.tags`);
+  if (value.required !== undefined) {
+    normalized.required = optionalBoolean(value.required, `${label}.required`);
+  }
+  return normalized;
 }
 
 function normalizeAllowlist(value: unknown, label: string): AgentAllowlistSpec | undefined {
@@ -141,10 +190,17 @@ function validateTarget(value: unknown, label: string, opts: WorkflowNormalizeOp
     assertString(value.command, `${label}.command`);
     optionalTimeoutMs(value.timeoutMs, `${label}.timeoutMs`);
     optionalPositiveInteger(value.idleTimeoutMs, `${label}.idleTimeoutMs`);
+    const knowledgeFeedback = optionalKnowledgeFeedback(
+      value.knowledgeFeedback,
+      `${label}.knowledgeFeedback`,
+    );
     if (value.shell !== true && /\s/.test(value.command.trim())) {
       throw new Error(`${label}.command must be an executable without spaces when shell is false; put flags in args or set shell true`);
     }
-    return value as unknown as ExecutableTarget;
+    const target: Record<string, unknown> = { ...value };
+    if (knowledgeFeedback === undefined) delete target.knowledgeFeedback;
+    else target.knowledgeFeedback = knowledgeFeedback;
+    return target as unknown as ExecutableTarget;
   }
   if (value.type === "agent") {
     assertString(value.provider, `${label}.provider`);
@@ -193,10 +249,21 @@ function validateTarget(value: unknown, label: string, opts: WorkflowNormalizeOp
       if (value.routing.eventType !== undefined) assertString(value.routing.eventType, `${label}.routing.eventType`);
       if (value.routing.eventSource !== undefined) assertString(value.routing.eventSource, `${label}.routing.eventSource`);
     }
-    const target: Record<string, unknown> = { ...value, extraArgs, allowlist, manualBreakGlass };
+    const knowledgeFeedback = optionalKnowledgeFeedback(
+      value.knowledgeFeedback,
+      `${label}.knowledgeFeedback`,
+    );
+    const target: Record<string, unknown> = {
+      ...value,
+      extraArgs,
+      allowlist,
+      manualBreakGlass,
+      knowledgeFeedback,
+    };
     if (!extraArgs) delete target.extraArgs;
     if (!allowlist) delete target.allowlist;
     if (manualBreakGlass === undefined) delete target.manualBreakGlass;
+    if (knowledgeFeedback === undefined) delete target.knowledgeFeedback;
     delete target.promptFile;
     delete target.promptSource;
     return { ...target, ...promptFields } as unknown as ExecutableTarget;

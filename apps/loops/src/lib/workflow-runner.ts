@@ -450,6 +450,8 @@ export async function executeLoopTarget(
   run: LoopRun,
   opts: ExecuteOptions = {},
 ): Promise<ExecutorResult> {
+  const knowledgeFeedback = loop.target.knowledgeFeedback ?? opts.knowledgeFeedback;
+  const executionOpts: ExecuteOptions = { ...opts, knowledgeFeedback };
   if (loop.target.type !== "workflow") {
     if (loop.goal && loop.target.preflight?.beforeRun) {
       const startedAt = nowIso();
@@ -462,7 +464,7 @@ export async function executeLoopTarget(
             runId: run.id,
             scheduledFor: run.scheduledFor,
           },
-          { ...opts, machine: opts.machine ?? loop.machine },
+          { ...executionOpts, machine: executionOpts.machine ?? loop.machine },
         );
       } catch (error) {
         return preflightFailureResult(error, startedAt);
@@ -470,19 +472,22 @@ export async function executeLoopTarget(
     }
     if (loop.goal) {
       return runGoal(store, loop.goal, {
-        ...opts,
-        model: opts.goalModel,
+        ...executionOpts,
+        model: executionOpts.goalModel,
         target: loop.target,
         context: goalExecutionContext({ loop, loopRun: run }),
       });
     }
-    return executeLoop(loop, run, opts);
+    return executeLoop(loop, run, executionOpts);
   }
   const workflow = await store.requireWorkflow(loop.target.workflowId);
   if (loop.target.preflight?.beforeRun) {
     const startedAt = nowIso();
     try {
-      preflightWorkflow(workflow, { ...opts, machine: opts.machine ?? loop.machine });
+      preflightWorkflow(workflow, {
+        ...executionOpts,
+        machine: executionOpts.machine ?? loop.machine,
+      });
     } catch (error) {
       return preflightFailureResult(error, startedAt);
     }
@@ -491,16 +496,16 @@ export async function executeLoopTarget(
     const loopGoal = loop.goal;
     const workflowForLoopGoal: WorkflowSpec = workflow.goal ? { ...workflow, goal: undefined } : workflow;
     return runGoal(store, loopGoal, {
-      ...opts,
-      model: opts.goalModel,
+      ...executionOpts,
+      model: executionOpts.goalModel,
       context: goalExecutionContext({ loop, loopRun: run, workflow }),
       executeNode: async (node) =>
         executeWorkflow(store, workflowForLoopGoal, {
-          ...opts,
+          ...executionOpts,
           loop,
           loopRun: run,
           scheduledFor: run.scheduledFor,
-          env: withGoalNodeEnv(opts.env, node),
+          env: withGoalNodeEnv(executionOpts.env, node),
           goalNodePrompt: iterationPrompt(loopGoal, node),
           idempotencyKey: `${loop.id}:${run.scheduledFor}:attempt:${run.attempt}:goal:${node.key}`,
         }),
@@ -510,8 +515,8 @@ export async function executeLoopTarget(
   const controller = workflowTimeoutMs !== undefined ? new AbortController() : undefined;
   let workflowTimedOut = false;
   const externalAbort = (): void => controller?.abort();
-  if (controller && opts.signal?.aborted) controller.abort();
-  if (controller) opts.signal?.addEventListener("abort", externalAbort, { once: true });
+  if (controller && executionOpts.signal?.aborted) controller.abort();
+  if (controller) executionOpts.signal?.addEventListener("abort", externalAbort, { once: true });
   const timer = controller
     ? setTimeout(() => {
         workflowTimedOut = true;
@@ -521,8 +526,8 @@ export async function executeLoopTarget(
   timer?.unref();
   try {
     return await executeWorkflow(store, workflow, {
-      ...opts,
-      signal: controller?.signal ?? opts.signal,
+      ...executionOpts,
+      signal: controller?.signal ?? executionOpts.signal,
       signalTimeoutMessage: () =>
         workflowTimedOut && loop.target.type === "workflow" ? `workflow timed out after ${workflowTimeoutMs}ms` : undefined,
       loop,
@@ -532,6 +537,6 @@ export async function executeLoopTarget(
     });
   } finally {
     if (timer) clearTimeout(timer);
-    if (controller) opts.signal?.removeEventListener("abort", externalAbort);
+    if (controller) executionOpts.signal?.removeEventListener("abort", externalAbort);
   }
 }

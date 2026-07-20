@@ -1323,6 +1323,97 @@ describe("loops CLI", () => {
     expect(JSON.parse(relaxed.stdout).validation.error).toContain("manualBreakGlass=true");
   });
 
+  test("create command, agent, and workflow persist opt-in Knowledge feedback config", () => {
+    const dataDir = freshDataDir("loops-cli-knowledge-feedback-");
+    const command = runCli(dataDir, [
+      "--json",
+      "create",
+      "command",
+      "knowledge-command",
+      "--at",
+      futureAt(),
+      "--cmd",
+      "true",
+      "--knowledge-feedback",
+      "--knowledge-store",
+      "/tmp/knowledge-command",
+      "--knowledge-scope",
+      "project",
+      "--knowledge-command",
+      "knowledge-custom",
+      "--knowledge-max-items",
+      "4",
+      "--knowledge-max-tokens",
+      "900",
+      "--knowledge-timeout",
+      "3s",
+    ]);
+    expect(command.status).toBe(0);
+    expect(JSON.parse(command.stdout).target.knowledgeFeedback).toEqual({
+      enabled: true,
+      command: "knowledge-custom",
+      store: "/tmp/knowledge-command",
+      scope: "project",
+      maxItems: 4,
+      maxTokens: 900,
+      timeoutMs: 3_000,
+    });
+
+    const agent = runCli(dataDir, [
+      "--json",
+      "create",
+      "agent",
+      "knowledge-agent",
+      "--provider",
+      "codewith",
+      "--at",
+      futureAt(),
+      "--prompt",
+      "inspect status",
+      "--knowledge-feedback",
+    ]);
+    expect(agent.status).toBe(0);
+    expect(JSON.parse(agent.stdout).target.knowledgeFeedback).toEqual({ enabled: true });
+
+    const file = workflowFile(dataDir, {
+      name: "knowledge-workflow",
+      steps: [{ id: "step", target: { type: "command", command: "true" } }],
+    });
+    const workflowCreate = runCli(dataDir, ["--json", "workflows", "create", file]);
+    expect(workflowCreate.status).toBe(0);
+    const workflow = JSON.parse(workflowCreate.stdout);
+    const workflowLoop = runCli(dataDir, [
+      "--json",
+      "create",
+      "workflow",
+      "knowledge-workflow-loop",
+      "--workflow",
+      workflow.id,
+      "--at",
+      futureAt(),
+      "--knowledge-feedback",
+    ]);
+    expect(workflowLoop.status).toBe(0);
+    expect(JSON.parse(workflowLoop.stdout).target.knowledgeFeedback).toEqual({ enabled: true });
+
+    const invalid = runCli(dataDir, [
+      "--json",
+      "create",
+      "agent",
+      "invalid-knowledge-scope",
+      "--provider",
+      "codewith",
+      "--at",
+      futureAt(),
+      "--prompt",
+      "inspect status",
+      "--knowledge-scope",
+      "unsafe",
+    ]);
+    expect(invalid.status).toBe(1);
+    expect(JSON.parse(invalid.stdout).error.message).toContain("--knowledge-scope");
+  });
+
   test("create command, agent, and workflow accept explicit unlimited timeouts", () => {
     const dataDir = freshDataDir("loops-cli-timeout-none-");
     const command = runCli(dataDir, [
