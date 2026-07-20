@@ -254,32 +254,57 @@ function codewithProfileCandidateFromLine(line: string): string | undefined {
   return candidate;
 }
 
-function codewithProfileCandidatesFromJson(value: unknown): string[] {
-  const candidates: string[] = [];
-  const root = value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
-  const addProfile = (entry: unknown): void => {
-    if (!entry || typeof entry !== "object") return;
-    const name = (entry as { name?: unknown }).name;
-    if (typeof name === "string" && name) candidates.push(name);
-  };
-  const data = root?.data;
-  if (Array.isArray(data)) data.forEach(addProfile);
-  const profiles = root?.profiles;
-  if (Array.isArray(profiles)) profiles.forEach(addProfile);
-  return candidates;
+interface CodewithProfileInventory {
+  usable: Set<string>;
+  unusable: Set<string>;
 }
 
-function codewithProfileCandidatesFromOutput(output: string): string[] {
+function codewithProfileInventoryFromJson(value: unknown): CodewithProfileInventory | undefined {
+  const root = value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
+  if (!root) return undefined;
+  const entries: unknown[] = [];
+  let hasProfileArray = false;
+  if (Array.isArray(root.data)) {
+    hasProfileArray = true;
+    entries.push(...root.data);
+  }
+  if (Array.isArray(root.profiles)) {
+    hasProfileArray = true;
+    entries.push(...root.profiles);
+  }
+  if (!hasProfileArray) return undefined;
+  const inventory: CodewithProfileInventory = {
+    usable: new Set<string>(),
+    unusable: new Set<string>(),
+  };
+  const addProfile = (entry: unknown): void => {
+    if (!entry || typeof entry !== "object") return;
+    const record = entry as { name?: unknown; usable?: unknown };
+    if (typeof record.name !== "string" || !record.name) return;
+    if (record.usable === false) {
+      inventory.usable.delete(record.name);
+      inventory.unusable.add(record.name);
+      return;
+    }
+    if (!inventory.unusable.has(record.name)) inventory.usable.add(record.name);
+  };
+  entries.forEach(addProfile);
+  return inventory;
+}
+
+function codewithProfileInventoryFromOutput(output: string): CodewithProfileInventory | undefined {
   const trimmed = output.trim();
   const jsonStart = trimmed.indexOf("{");
   const jsonEnd = trimmed.lastIndexOf("}");
-  if (jsonStart >= 0 && jsonEnd >= jsonStart) {
-    try {
-      return codewithProfileCandidatesFromJson(JSON.parse(trimmed.slice(jsonStart, jsonEnd + 1)));
-    } catch {
-      // Fall back to the text parser for older Codewith profile-list output.
-    }
+  if (jsonStart < 0 || jsonEnd < jsonStart) return undefined;
+  try {
+    return codewithProfileInventoryFromJson(JSON.parse(trimmed.slice(jsonStart, jsonEnd + 1)));
+  } catch {
+    return undefined;
   }
+}
+
+function codewithProfileCandidatesFromText(output: string): string[] {
   return output.split(/\r?\n/).map(codewithProfileCandidateFromLine).filter(Boolean) as string[];
 }
 
@@ -659,17 +684,54 @@ function remotePreflightScript(spec: CommandSpec, metadata: ExecutionMetadata): 
     lines.push(
       `__OPENLOOPS_CODEWITH_PROFILE=${shellQuote(spec.nativeAuthProfile.profile)}`,
       "export __OPENLOOPS_CODEWITH_PROFILE",
-      "__openloops_codewith_profile_list_contains() {",
-      `  printf '%s\\n' "$__OPENLOOPS_CODEWITH_PROFILES" | awk '{ line = $0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", line); if (line == "" || line == "No auth profiles saved.") next; if (line ~ /"(data|profiles)"[[:space:]]*:[[:space:]]*\\[/) { in_profiles = 1; next } if (in_profiles && line ~ /^\\]/) { in_profiles = 0; next } json = line; if (in_profiles && json ~ /"name"[[:space:]]*:[[:space:]]*"/) { sub(/^.*"name"[[:space:]]*:[[:space:]]*"/, "", json); sub(/".*$/, "", json); if (json == ENVIRON["__OPENLOOPS_CODEWITH_PROFILE"]) found = 1; next } split(line, cols, /[[:space:]]+/); candidate = (cols[1] == "*" ? cols[2] : cols[1]); if (candidate == "NAME" && (cols[2] == "ACCOUNT" || cols[3] == "ACCOUNT")) next; if (candidate == ENVIRON["__OPENLOOPS_CODEWITH_PROFILE"]) found = 1 } END { exit(found ? 0 : 1) }'`,
+      "__openloops_codewith_table_contains() {",
+      `  printf '%s\\n' "$__OPENLOOPS_CODEWITH_PROFILES" | awk '{ line = $0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", line); if (line == "" || line == "No auth profiles saved.") next; split(line, cols, /[[:space:]]+/); candidate = (cols[1] == "*" ? cols[2] : cols[1]); if (candidate == "NAME" && (cols[2] == "ACCOUNT" || cols[3] == "ACCOUNT")) next; if (candidate == ENVIRON["__OPENLOOPS_CODEWITH_PROFILE"]) found = 1 } END { exit(found ? 0 : 1) }'`,
       "}",
-      `if __OPENLOOPS_CODEWITH_PROFILES="$(${shellQuote(spec.command)} profile list --json 2>/dev/null)" && __openloops_codewith_profile_list_contains; then`,
-      "  :",
+      "__openloops_codewith_json_profile_state() {",
+      `  printf '%s\\n' "$__OPENLOOPS_CODEWITH_PROFILES" | awk 'BEGIN { RS = "\\0" } { json = $0; gsub(/[\\r\\n]/, " ", json); if (json !~ /^[[:space:]]*\\{/ || json !~ /\\}[[:space:]]*$/ || json !~ /"(data|profiles)"[[:space:]]*:[[:space:]]*\\[/) exit 2; gsub(/\\}[[:space:]]*,[[:space:]]*\\{/, "}\\n{", json); count = split(json, entries, /\\n/); for (i = 1; i <= count; i++) { entry = entries[i]; if (entry !~ /"name"[[:space:]]*:[[:space:]]*"/) continue; name = entry; sub(/^.*"name"[[:space:]]*:[[:space:]]*"/, "", name); sub(/".*$/, "", name); if (name != ENVIRON["__OPENLOOPS_CODEWITH_PROFILE"]) continue; if (entry ~ /"usable"[[:space:]]*:[[:space:]]*false/) exit 3; found = 1 } exit(found ? 0 : 4) }'`,
+      "}",
+      "__OPENLOOPS_CODEWITH_JSON_ERROR=\"$(mktemp -t openloops-codewith-profile.XXXXXX)\" || {",
+      `  printf '%s\\n' ${shellQuote("codewith auth profile preflight failed")} >&2`,
+      "  exit 1",
+      "}",
+      `if __OPENLOOPS_CODEWITH_PROFILES="$(${shellQuote(spec.command)} profile list --json 2>"$__OPENLOOPS_CODEWITH_JSON_ERROR")"; then`,
+      "  if __openloops_codewith_json_profile_state; then",
+      "    __OPENLOOPS_CODEWITH_JSON_STATE=0",
+      "  else",
+      "    __OPENLOOPS_CODEWITH_JSON_STATE=$?",
+      "  fi",
+      "  if [ \"$__OPENLOOPS_CODEWITH_JSON_STATE\" -eq 0 ]; then",
+      "    rm -f \"$__OPENLOOPS_CODEWITH_JSON_ERROR\"",
+      "    :",
+      "  elif [ \"$__OPENLOOPS_CODEWITH_JSON_STATE\" -eq 2 ]; then",
+      "    __OPENLOOPS_CODEWITH_FALLBACK=1",
+      "  elif [ \"$__OPENLOOPS_CODEWITH_JSON_STATE\" -eq 3 ]; then",
+      "    rm -f \"$__OPENLOOPS_CODEWITH_JSON_ERROR\"",
+      `    printf '%s\\n' ${shellQuote(`codewith auth profile preflight failed: profile is unusable: ${profileForError}`)} >&2`,
+      "    exit 1",
+      "  else",
+      "    rm -f \"$__OPENLOOPS_CODEWITH_JSON_ERROR\"",
+      `    printf '%s\\n' ${shellQuote(`codewith auth profile not found: ${profileForError}`)} >&2`,
+      "    exit 1",
+      "  fi",
       "else",
+      "  __OPENLOOPS_CODEWITH_JSON_STATUS=$?",
+      "  __OPENLOOPS_CODEWITH_JSON_DETAIL=\"$(cat \"$__OPENLOOPS_CODEWITH_JSON_ERROR\")\"",
+      "  if { [ \"$__OPENLOOPS_CODEWITH_JSON_STATUS\" -eq 2 ] || [ \"$__OPENLOOPS_CODEWITH_JSON_STATUS\" -eq 64 ]; } && printf '%s\\n' \"$__OPENLOOPS_CODEWITH_JSON_DETAIL\" | grep -Eiq -- '(--json.*(unknown|unsupported|unrecognized|unexpected|invalid)|(unknown|unsupported|unrecognized|unexpected|invalid).*(argument|option).*--json)'; then",
+      "    __OPENLOOPS_CODEWITH_FALLBACK=1",
+      "  else",
+      "    rm -f \"$__OPENLOOPS_CODEWITH_JSON_ERROR\"",
+      `    printf '%s\\n' ${shellQuote("codewith auth profile preflight failed")} >&2`,
+      "    exit 1",
+      "  fi",
+      "fi",
+      "rm -f \"$__OPENLOOPS_CODEWITH_JSON_ERROR\"",
+      "if [ \"${__OPENLOOPS_CODEWITH_FALLBACK:-0}\" -eq 1 ]; then",
       `  __OPENLOOPS_CODEWITH_PROFILES="$(${shellQuote(spec.command)} profile list)" || {`,
       `    printf '%s\\n' ${shellQuote("codewith auth profile preflight failed")} >&2`,
       "    exit 1",
       "  }",
-      "  if ! __openloops_codewith_profile_list_contains; then",
+      "  if ! __openloops_codewith_table_contains; then",
       `    printf '%s\\n' ${shellQuote(`codewith auth profile not found: ${profileForError}`)} >&2`,
       "    exit 1",
       "  fi",
@@ -729,7 +791,43 @@ function codewithProfileSetFromResult(result: {
     const detail = (result.stderr || result.stdout || `exit ${result.status ?? "unknown"}`).trim();
     throw new Error(`codewith auth profile preflight failed${detail ? `: ${detail}` : ""}`);
   }
-  return new Set(codewithProfileCandidatesFromOutput(result.stdout || ""));
+  return new Set(codewithProfileCandidatesFromText(result.stdout || ""));
+}
+
+function codewithJsonModeUnsupported(result: {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+  error?: string;
+}): boolean {
+  if (result.error || (result.status !== 2 && result.status !== 64)) return false;
+  const detail = `${result.stderr}\n${result.stdout}`;
+  return /(?:--json.*(?:unknown|unsupported|unrecognized|unexpected|invalid)|(?:unknown|unsupported|unrecognized|unexpected|invalid).*(?:argument|option).*--json)/i.test(
+    detail,
+  );
+}
+
+function assertCodewithJsonProfileListed(
+  profile: string,
+  result: { status: number | null; stdout: string; stderr: string; error?: string },
+): boolean {
+  if (result.error) {
+    throw new Error(`codewith auth profile preflight failed: ${result.error}`);
+  }
+  if ((result.status ?? 1) !== 0) {
+    if (codewithJsonModeUnsupported(result)) return false;
+    const detail = (result.stderr || result.stdout || `exit ${result.status ?? "unknown"}`).trim();
+    throw new Error(`codewith auth profile preflight failed${detail ? `: ${detail}` : ""}`);
+  }
+  const inventory = codewithProfileInventoryFromOutput(result.stdout || "");
+  if (!inventory) return false;
+  if (inventory.unusable.has(profile)) {
+    throw new Error(`codewith auth profile preflight failed: profile is unusable: ${codewithProfileForError(profile)}`);
+  }
+  if (!inventory.usable.has(profile)) {
+    throw new Error(`codewith auth profile not found: ${codewithProfileForError(profile)}`);
+  }
+  return true;
 }
 
 function preflightNativeAuthProfileSync(spec: CommandSpec, env: NodeJS.ProcessEnv): void {
@@ -749,22 +847,14 @@ function preflightNativeAuthProfileSync(spec: CommandSpec, env: NodeJS.ProcessEn
     };
   };
   const jsonResult = runProfileList(["profile", "list", "--json"]);
-  try {
-    if (codewithProfileSetFromResult(jsonResult).has(spec.nativeAuthProfile.profile)) return;
-  } catch {
-    // Older Codewith CLIs do not support --json; fall back to the table output.
-  }
+  if (assertCodewithJsonProfileListed(spec.nativeAuthProfile.profile, jsonResult)) return;
   assertCodewithProfileListed(spec.nativeAuthProfile.profile, runProfileList(["profile", "list"]));
 }
 
 async function preflightNativeAuthProfile(spec: CommandSpec, env: NodeJS.ProcessEnv): Promise<void> {
   if (spec.nativeAuthProfile?.provider !== "codewith") return;
   const jsonResult = await spawnCapture(spec.command, ["profile", "list", "--json"], { env, timeoutMs: 15_000 });
-  try {
-    if (codewithProfileSetFromResult(jsonResult).has(spec.nativeAuthProfile.profile)) return;
-  } catch {
-    // Older Codewith CLIs do not support --json; fall back to the table output.
-  }
+  if (assertCodewithJsonProfileListed(spec.nativeAuthProfile.profile, jsonResult)) return;
   const tableResult = await spawnCapture(spec.command, ["profile", "list"], { env, timeoutMs: 15_000 });
   assertCodewithProfileListed(spec.nativeAuthProfile.profile, tableResult);
 }

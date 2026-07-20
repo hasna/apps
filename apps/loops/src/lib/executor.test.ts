@@ -67,6 +67,40 @@ function writeFakeCodewithJsonFailureThenProfileList(fake: string, output: strin
   chmodSync(fake, 0o755);
 }
 
+function writeFakeCodewithJsonThenProfileList(
+  fake: string,
+  jsonOutput: string,
+  tableOutput: string,
+  invocationLog?: string,
+): void {
+  const jsonDelimiter = "__OPENLOOPS_FAKE_CODEWITH_JSON_PROFILE_LIST__";
+  const tableDelimiter = "__OPENLOOPS_FAKE_CODEWITH_TABLE_PROFILE_LIST__";
+  writeFileSync(
+    fake,
+    [
+      "#!/usr/bin/env bash",
+      invocationLog ? `printf '%s\\n' "$*" >> ${JSON.stringify(invocationLog)}` : "",
+      'if [[ "${1:-}" == "profile" && "${2:-}" == "list" && "${3:-}" == "--json" ]]; then',
+      `cat <<'${jsonDelimiter}'`,
+      jsonOutput.endsWith("\n") ? jsonOutput.slice(0, -1) : jsonOutput,
+      jsonDelimiter,
+      "exit 0",
+      "fi",
+      'if [[ "${1:-}" == "profile" && "${2:-}" == "list" ]]; then',
+      `cat <<'${tableDelimiter}'`,
+      tableOutput.endsWith("\n") ? tableOutput.slice(0, -1) : tableOutput,
+      tableDelimiter,
+      "exit 0",
+      "fi",
+      "exit 0",
+      "",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  );
+  chmodSync(fake, 0o755);
+}
+
 function remoteCodewithPreflightOptions(home: string, scriptFile?: string) {
   const runner = scriptFile
     ? `cat > ${JSON.stringify(scriptFile)}; HOME=${JSON.stringify(home)} PATH=/usr/bin:/bin bash ${JSON.stringify(scriptFile)}`
@@ -1618,6 +1652,152 @@ describe("executeLoop", () => {
     }
   });
 
+  test("local sync codewith auth profile preflight accepts usable compact multi-entry JSON", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-local-codewith-json-usable-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithJsonThenProfileList(
+      fake,
+      JSON.stringify({
+        data: [
+          { name: "account001", usable: false },
+          { name: "openai-api-default", usable: true },
+          { name: "account003", usable: true },
+        ],
+      }),
+      "NAME ACCOUNT PROVIDER MODE PLAN\naccount001 - ChatGPT chatgpt Pro",
+    );
+    const env = { HOME: home, PATH: `${binDir}:/usr/bin:/bin` };
+    try {
+      expect(() =>
+        preflightTarget(
+          {
+            type: "agent",
+            provider: "codewith",
+            authProfile: "openai-api-default",
+            prompt: "run",
+            configIsolation: "safe",
+          },
+          {},
+          { env },
+        ),
+      ).not.toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("local sync codewith auth profile preflight rejects unusable JSON without table fallback", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-local-codewith-json-unusable-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    const invocationLog = join(root, "invocations.log");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithJsonThenProfileList(
+      fake,
+      JSON.stringify({ data: [{ name: "account002", usable: false }] }),
+      "NAME ACCOUNT PROVIDER MODE PLAN\naccount002 - ChatGPT chatgpt Pro",
+      invocationLog,
+    );
+    const env = { HOME: home, PATH: `${binDir}:/usr/bin:/bin` };
+    try {
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "account002", prompt: "run", configIsolation: "safe" },
+          {},
+          { env },
+        ),
+      ).toThrow("codewith auth profile preflight failed: profile is unusable: account002");
+      expect(readFileSync(invocationLog, "utf8").trim().split(/\r?\n/)).toEqual(["profile list --json"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("local async codewith auth profile preflight rejects unusable JSON without table fallback", async () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-local-codewith-json-unusable-async-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    const invocationLog = join(root, "invocations.log");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithJsonThenProfileList(
+      fake,
+      JSON.stringify({ profiles: [{ name: "account002", usable: false }] }),
+      "NAME ACCOUNT PROVIDER MODE PLAN\naccount002 - ChatGPT chatgpt Pro",
+      invocationLog,
+    );
+    const env = { HOME: home, PATH: `${binDir}:/usr/bin:/bin` };
+    try {
+      const result = await executeTarget(
+        { type: "agent", provider: "codewith", authProfile: "account002", prompt: "run", configIsolation: "safe" },
+        {},
+        { env },
+      );
+      expect(result.status).toBe("failed");
+      expect(result.error).toContain("codewith auth profile preflight failed: profile is unusable: account002");
+      expect(readFileSync(invocationLog, "utf8").trim().split(/\r?\n/)).toEqual(["profile list --json"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("local codewith auth profile preflight treats valid JSON inventory as authoritative when profile is missing", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-local-codewith-json-missing-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    const invocationLog = join(root, "invocations.log");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithJsonThenProfileList(
+      fake,
+      JSON.stringify({ data: [{ name: "account001", usable: true }] }),
+      "NAME ACCOUNT PROVIDER MODE PLAN\nmissing - ChatGPT chatgpt Pro",
+      invocationLog,
+    );
+    const env = { HOME: home, PATH: `${binDir}:/usr/bin:/bin` };
+    try {
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "missing", prompt: "run", configIsolation: "safe" },
+          {},
+          { env },
+        ),
+      ).toThrow("codewith auth profile not found: missing");
+      expect(readFileSync(invocationLog, "utf8").trim().split(/\r?\n/)).toEqual(["profile list --json"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("local codewith auth profile preflight preserves legacy profiles JSON without usable", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-local-codewith-json-legacy-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithJsonThenProfileList(
+      fake,
+      JSON.stringify({ profiles: [{ name: "account001" }, { name: "account002" }] }),
+      "NAME ACCOUNT PROVIDER MODE PLAN",
+    );
+    const env = { HOME: home, PATH: `${binDir}:/usr/bin:/bin` };
+    try {
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "account002", prompt: "run", configIsolation: "safe" },
+          {},
+          { env },
+        ),
+      ).not.toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("local codewith auth profile preflight does not accept JSON currentProfile without a saved profile", () => {
     const root = mkdtempSync(join(tmpdir(), "loops-local-codewith-json-current-"));
     const home = join(root, "home");
@@ -1740,6 +1920,66 @@ describe("executeLoop", () => {
           remoteCodewithPreflightOptions(home),
         ),
       ).not.toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("remote codewith auth profile preflight rejects unusable compact JSON without table fallback", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-remote-codewith-auth-json-unusable-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    const invocationLog = join(root, "invocations.log");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithJsonThenProfileList(
+      fake,
+      JSON.stringify({
+        profiles: [
+          { name: "account001", usable: true },
+          { name: "account002", usable: false },
+          { name: "account003", usable: true },
+        ],
+      }),
+      "NAME ACCOUNT PROVIDER MODE PLAN\naccount002 - ChatGPT chatgpt Pro",
+      invocationLog,
+    );
+    try {
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "account002", prompt: "run", configIsolation: "safe" },
+          {},
+          remoteCodewithPreflightOptions(home),
+        ),
+      ).toThrow("codewith auth profile preflight failed: profile is unusable: account002");
+      expect(readFileSync(invocationLog, "utf8").trim().split(/\r?\n/)).toEqual(["profile list --json"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("remote codewith auth profile preflight treats valid JSON inventory as authoritative when profile is missing", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-remote-codewith-auth-json-missing-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    const invocationLog = join(root, "invocations.log");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithJsonThenProfileList(
+      fake,
+      JSON.stringify({ data: [{ name: "account001", usable: true }] }),
+      "NAME ACCOUNT PROVIDER MODE PLAN\nmissing - ChatGPT chatgpt Pro",
+      invocationLog,
+    );
+    try {
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "missing", prompt: "run", configIsolation: "safe" },
+          {},
+          remoteCodewithPreflightOptions(home),
+        ),
+      ).toThrow("codewith auth profile not found: missing");
+      expect(readFileSync(invocationLog, "utf8").trim().split(/\r?\n/)).toEqual(["profile list --json"]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
