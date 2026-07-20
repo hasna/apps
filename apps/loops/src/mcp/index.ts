@@ -1,10 +1,11 @@
 #!/usr/bin/env bun
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { isStdioMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
 import { z } from "zod/v3";
 import { daemonStatus } from "../daemon/control.js";
 import { runDoctor } from "../lib/doctor.js";
-import { CodedError } from "../lib/errors.js";
+import { CodedError, LoopArchivedError } from "../lib/errors.js";
 import {
   publicLoop,
   publicRun,
@@ -20,6 +21,7 @@ import { dataDir } from "../lib/paths.js";
 import { computeNextAfter } from "../lib/recurrence.js";
 import { runLoopNow } from "../lib/scheduler.js";
 import { Store } from "../lib/store.js";
+import { LocalStore, getStore, isCloudStore, type LoopStore } from "../lib/store/index.js";
 import { packageVersion } from "../lib/version.js";
 import { preflightWorkflow } from "../lib/workflow-runner.js";
 import { workflowBodyFromJson } from "../lib/workflow-spec.js";
@@ -206,7 +208,37 @@ function errorResult(error: unknown) {
   };
 }
 
-async function withStore<T>(fn: (store: Store) => T | Promise<T>): Promise<T> {
+/**
+ * Resolve the client store (local sqlite OR the hosted `/v1` API) from the
+ * client-flip env and run `fn` against it, always closing afterwards. EVERY MCP
+ * data tool goes through here so there is no per-tool `if (cloud) … else local`
+ * branch and no way to silently touch the on-box island while the process is
+ * flipped to the hosted API. Mirrors the CLI's `withStore`.
+ */
+async function withStore<T>(fn: (store: LoopStore) => T | Promise<T>): Promise<T> {
+  const store = getStore();
+  try {
+    return await fn(store);
+  } finally {
+    await store.close();
+  }
+}
+
+/**
+ * Guard for the on-box diagnostic/runtime tools (doctor, health, daemon status,
+ * per-loop diagnose, run-now scheduling). These read this machine's daemon and
+ * sqlite runtime and are meaningless — and would silently hit the local island —
+ * when the process is flipped to the hosted API. Fail loudly instead, then run
+ * against a scoped local {@link Store} (opened and closed here). Mirrors the
+ * CLI's `assertLocalOnlyCommand` + `new Store()` pattern.
+ */
+async function withLocalStore<T>(operation: string, fn: (store: Store) => T | Promise<T>): Promise<T> {
+  if (isCloudStore()) {
+    throw new Error(
+      `'${operation}' inspects this machine's local OpenLoops runtime and is not available while flipped to the hosted OpenLoops API. ` +
+        `Unset HASNA_LOOPS_API_URL/HASNA_LOOPS_API_KEY (or set HASNA_LOOPS_STORAGE_MODE=local) to run it here.`,
+    );
+  }
   const store = new Store();
   try {
     return await fn(store);
@@ -359,15 +391,15 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
       archivedOnly: z.boolean().optional().describe("Return only archived loops (default false)."),
     },
     handler: ({ status, limit, includeArchived, archivedOnly }) =>
-      withStore((store) => ({
-        loops: store
-          .listLoops({
+      withStore(async (store) => ({
+        loops: (
+          await store.listLoops({
             status: filteredLoopStatus(status),
             limit,
             includeArchived: includeArchived ?? false,
             archived: archivedOnly ?? false,
           })
-          .map(publicLoop),
+        ).map(publicLoop),
       })),
   },
   {
@@ -381,11 +413,13 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
       showOutput: showOutputSchema,
     },
     handler: ({ idOrName, includeLatestRun, showOutput }) =>
-      withStore((store) => {
-        const loop = store.requireLoop(idOrName);
-        const latestRun = includeLatestRun ? store.listRuns({ loopId: loop.id, limit: 1 })[0] : undefined;
+      withStore(async (store) => {
+        const loop = await store.requireLoop(idOrName);
+        const latestRun = includeLatestRun ? (await store.listRuns({ loopId: loop.id, limit: 1 }))[0] : undefined;
         return {
           loop: publicLoop(loop),
+          // publicRun redacts stdout/stderr client-side unless showOutput; the
+          // ApiStore returns raw output so this redaction stays identical to local.
           latestRun: latestRun ? publicRun(latestRun, showOutput ?? false) : undefined,
         };
       }),
@@ -403,15 +437,15 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
       showOutput: showOutputSchema,
     },
     handler: ({ idOrName, status, limit, showOutput }) =>
-      withStore((store) => {
-        const loop = idOrName ? store.requireLoop(idOrName) : undefined;
-        const runs = store
-          .listRuns({
+      withStore(async (store) => {
+        const loop = idOrName ? await store.requireLoop(idOrName) : undefined;
+        const runs = (
+          await store.listRuns({
             loopId: loop?.id,
             status: status as RunStatus | undefined,
             limit,
           })
-          .map((run) => publicRun(run, showOutput ?? false));
+        ).map((run) => publicRun(run, showOutput ?? false));
         return { loop: loop ? publicLoop(loop) : undefined, runs };
       }),
   },
@@ -429,10 +463,10 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
       limit: limitSchema,
     },
     handler: ({ loop_id, repo, task_id, knowledge_id, status, limit }) =>
-      withStore((store) => ({
-        receipts: store
-          .listRunReceipts({ loopId: loop_id, repo, taskId: task_id, knowledgeId: knowledge_id, status, limit })
-          .map(publicRunReceipt),
+      withStore(async (store) => ({
+        receipts: (
+          await store.listRunReceipts({ loopId: loop_id, repo, taskId: task_id, knowledgeId: knowledge_id, status, limit })
+        ).map(publicRunReceipt),
       })),
   },
   {
@@ -444,8 +478,8 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
       run_id: z.string().min(1).describe("Run id."),
     },
     handler: ({ run_id }) =>
-      withStore((store) => {
-        const receipt = store.getRunReceipt(run_id);
+      withStore(async (store) => {
+        const receipt = await store.getRunReceipt(run_id);
         if (!receipt) throw new Error(`run receipt not found: ${run_id}`);
         return { receipt: publicRunReceipt(receipt) };
       }),
@@ -459,7 +493,7 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
     inputSchema: runReceiptInputSchema,
     handler: (input) => {
       requireMutationsEnabled();
-      return withStore((store) => ({ receipt: publicRunReceipt(store.writeRunReceipt(input as WriteRunReceiptInput)) }));
+      return withStore(async (store) => ({ receipt: publicRunReceipt(await store.writeRunReceipt(input as WriteRunReceiptInput)) }));
     },
   },
   {
@@ -468,7 +502,7 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
     readOnly: true,
     annotations: READ_ONLY_ANNOTATIONS,
     inputSchema: {},
-    handler: () => withStore((store) => runDoctor(store)),
+    handler: () => withLocalStore("loops_doctor", (store) => runDoctor(store)),
   },
   {
     name: "loops_health",
@@ -481,7 +515,7 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
       limit: limitSchema,
     },
     handler: ({ includeArchived, includeInactive, limit }) =>
-      withStore((store) => buildHealthReport(store, { includeArchived, includeInactive, limit })),
+      withLocalStore("loops_health", (store) => buildHealthReport(store, { includeArchived, includeInactive, limit })),
   },
   {
     name: "loops_health_scan",
@@ -499,7 +533,7 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
       limit: limitSchema,
     },
     handler: ({ includeStatuses, includeArchived, latestRun, doctor, daemon, staleRunningMs, maxFindings, limit }) =>
-      withStore((store) => buildHealthScan(store, {
+      withLocalStore("loops_health_scan", (store) => buildHealthScan(store, {
         includeStatuses: includeStatuses as LoopStatus[] | undefined,
         includeArchived,
         latestRun,
@@ -522,7 +556,7 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
       showOutput: showOutputSchema,
     },
     handler: ({ idOrName, runLimit, showOutput }) =>
-      withStore((store) => {
+      withLocalStore("loops_diagnose", (store) => {
         const loop = store.requireLoop(idOrName);
         const runs = store.listRuns({ loopId: loop.id, limit: runLimit ?? 5 });
         return {
@@ -542,7 +576,7 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
     readOnly: true,
     annotations: READ_ONLY_ANNOTATIONS,
     inputSchema: {},
-    handler: () => withStore((store) => daemonStatus(store)),
+    handler: () => withLocalStore("loops_daemon_status", (store) => daemonStatus(store)),
   },
   {
     name: "loops_workflows_list",
@@ -556,14 +590,14 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
       offset: z.number().int().min(0).optional().describe("Entries to skip before returning results (pagination)."),
     },
     handler: ({ status, limit, offset }) =>
-      withStore((store) => ({
-        workflows: store
-          .listWorkflows({
+      withStore(async (store) => ({
+        workflows: (
+          await store.listWorkflows({
             status: filteredWorkflowStatus(status),
             limit,
             offset,
           })
-          .map(publicWorkflow),
+        ).map(publicWorkflow),
       })),
   },
   {
@@ -580,16 +614,18 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
       showOutput: showOutputSchema,
     },
     handler: ({ idOrName, includeRuns, includeEvents, runLimit, showOutput }) =>
-      withStore((store) => {
-        const workflow = store.requireWorkflow(idOrName);
-        const runs = includeRuns ? store.listWorkflowRuns({ workflowId: workflow.id, limit: runLimit ?? 20 }) : [];
+      withStore(async (store) => {
+        const workflow = await store.requireWorkflow(idOrName);
+        const runs = includeRuns ? await store.listWorkflowRuns({ workflowId: workflow.id, limit: runLimit ?? 20 }) : [];
         return {
           workflow: publicWorkflow(workflow),
-          runs: runs.map((run) => ({
-            ...publicWorkflowRun(run),
-            steps: store.listWorkflowStepRuns(run.id).map((step) => publicWorkflowStepRun(step, showOutput ?? false)),
-            events: includeEvents ? store.listWorkflowEvents(run.id).map(publicWorkflowEvent) : undefined,
-          })),
+          runs: await Promise.all(
+            runs.map(async (run) => ({
+              ...publicWorkflowRun(run),
+              steps: (await store.listWorkflowStepRuns(run.id)).map((step) => publicWorkflowStepRun(step, showOutput ?? false)),
+              events: includeEvents ? (await store.listWorkflowEvents(run.id)).map(publicWorkflowEvent) : undefined,
+            })),
+          ),
         };
       }),
   },
@@ -643,13 +679,13 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
       showOutput: showOutputSchema,
     },
     handler: ({ runId, includeEvents, showOutput }) =>
-      withStore((store) => {
-        const run = store.getWorkflowRun(runId);
+      withStore(async (store) => {
+        const run = await store.getWorkflowRun(runId);
         if (!run) throw new Error(`workflow run not found: ${runId}`);
         return {
           run: publicWorkflowRun(run),
-          steps: store.listWorkflowStepRuns(run.id).map((step) => publicWorkflowStepRun(step, showOutput ?? false)),
-          events: (includeEvents ?? true) ? store.listWorkflowEvents(run.id).map(publicWorkflowEvent) : undefined,
+          steps: (await store.listWorkflowStepRuns(run.id)).map((step) => publicWorkflowStepRun(step, showOutput ?? false)),
+          events: (includeEvents ?? true) ? (await store.listWorkflowEvents(run.id)).map(publicWorkflowEvent) : undefined,
         };
       }),
   },
@@ -662,7 +698,11 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
     annotations: mutationAnnotations({ idempotent: true }),
     inputSchema: { idOrName: loopIdOrNameSchema },
     handler: ({ idOrName }) =>
-      withStore((store) => ({ loop: publicLoop(store.updateLoop(store.requireUniqueLoop(idOrName).id, { status: "paused" })) })),
+      withStore(async (store) => {
+        const loop = await store.requireUniqueLoop(idOrName);
+        if (loop.archivedAt) throw new LoopArchivedError(idOrName);
+        return { loop: publicLoop(await store.updateLoop(loop.id, { status: "paused" })) };
+      }),
   },
   {
     name: "loops_resume",
@@ -673,8 +713,9 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
     annotations: mutationAnnotations({ idempotent: true }),
     inputSchema: { idOrName: loopIdOrNameSchema },
     handler: ({ idOrName }) =>
-      withStore((store) => {
-        const loop = store.requireUniqueLoop(idOrName);
+      withStore(async (store) => {
+        const loop = await store.requireUniqueLoop(idOrName);
+        if (loop.archivedAt) throw new LoopArchivedError(idOrName);
         // A stopped loop has next_run_at NULL; dueLoops requires it IS NOT NULL,
         // so resuming without recomputing leaves the loop active but permanently
         // dormant. Recompute the next slot from now when it is missing.
@@ -683,7 +724,7 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
           const now = new Date();
           nextRunAt = computeNextAfter(loop.schedule, now, now);
         }
-        return { loop: publicLoop(store.updateLoop(loop.id, { status: "active", nextRunAt })) };
+        return { loop: publicLoop(await store.updateLoop(loop.id, { status: "active", nextRunAt })) };
       }),
   },
   {
@@ -695,9 +736,11 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
     annotations: mutationAnnotations({ idempotent: true }),
     inputSchema: { idOrName: loopIdOrNameSchema },
     handler: ({ idOrName }) =>
-      withStore((store) => ({
-        loop: publicLoop(store.updateLoop(store.requireUniqueLoop(idOrName).id, { status: "stopped", nextRunAt: undefined })),
-      })),
+      withStore(async (store) => {
+        const loop = await store.requireUniqueLoop(idOrName);
+        if (loop.archivedAt) throw new LoopArchivedError(idOrName);
+        return { loop: publicLoop(await store.updateLoop(loop.id, { status: "stopped", nextRunAt: undefined })) };
+      }),
   },
   {
     name: "loops_run_now",
@@ -709,11 +752,35 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
     annotations: mutationAnnotations(),
     inputSchema: { idOrName: loopIdOrNameSchema },
     handler: ({ idOrName }) =>
-      withStore(async (store) => {
-        const daemon = daemonStatus(store);
-        // requireUniqueLoop so an ambiguous name errors instead of scheduling the
-        // newest same-named loop.
-        const result = await runLoopNow({ store, idOrName: store.requireUniqueLoop(idOrName).id, runnerId: `mcp:${process.pid}`, mode: "schedule" });
+      withStore<{
+        scheduledFor: string;
+        loop: ReturnType<typeof publicLoop>;
+        daemon: { running: boolean; stale: boolean; pid: number | undefined } | undefined;
+        warning: string | undefined;
+      }>(async (store) => {
+        if (store.transport === "cloud-http") {
+          // Flipped to cloud: marking due is a schedule mutation on the hosted
+          // loop record (set next_run_at=now) via the ApiStore; a self-hosted
+          // runner picks it up. There is no local daemon to report.
+          const loop = await store.requireUniqueLoop(idOrName);
+          if (loop.archivedAt) throw new LoopArchivedError(idOrName);
+          const now = new Date().toISOString();
+          const updated = await store.updateLoop(loop.id, { status: "active", nextRunAt: now });
+          return {
+            scheduledFor: now,
+            loop: publicLoop(updated),
+            daemon: undefined,
+            warning:
+              "loops is flipped to self_hosted: the loop is marked due on the hosted control plane; a self-hosted runner must execute it.",
+          };
+        }
+        // Local: schedule via the shared runLoopNow (schedule mode) against this
+        // machine's on-box store and report daemon liveness so the operator knows
+        // whether anything will pick the run up. requireUniqueLoop so an ambiguous
+        // name errors instead of scheduling the newest same-named loop.
+        const raw = (store as LocalStore).raw;
+        const daemon = daemonStatus(raw);
+        const result = await runLoopNow({ store: raw, idOrName: raw.requireUniqueLoop(idOrName).id, runnerId: `mcp:${process.pid}`, mode: "schedule" });
         return {
           scheduledFor: result.scheduledFor,
           loop: publicLoop(result.loop),
@@ -731,7 +798,8 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
     guarded: true,
     annotations: mutationAnnotations({ idempotent: true }),
     inputSchema: { idOrName: loopIdOrNameSchema },
-    handler: ({ idOrName }) => withStore((store) => ({ loop: publicLoop(store.archiveLoop(idOrName)) })),
+    handler: ({ idOrName }) =>
+      withStore(async (store) => ({ loop: publicLoop(await store.archiveLoop(idOrName)) })),
   },
   {
     name: "loops_unarchive",
@@ -740,7 +808,8 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
     guarded: true,
     annotations: mutationAnnotations({ idempotent: true }),
     inputSchema: { idOrName: loopIdOrNameSchema },
-    handler: ({ idOrName }) => withStore((store) => ({ loop: publicLoop(store.unarchiveLoop(idOrName)) })),
+    handler: ({ idOrName }) =>
+      withStore(async (store) => ({ loop: publicLoop(await store.unarchiveLoop(idOrName)) })),
   },
   {
     name: "loops_create_command",
@@ -762,24 +831,21 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
       // CLI or SDK.
       shell: z.never().optional().describe("Not supported over MCP: shell execution is rejected. Use 'command' plus 'args' instead."),
     },
-    handler: (input) =>
-      withStore((store) => {
-        const timeoutMs = input.timeoutMs as TimeoutMs | undefined;
-        const loop = store.createLoop(
-          commonCreateInput({
-            ...input,
-            target: {
-              type: "command",
-              command: nonEmpty(input.command, "command"),
-              args: input.args,
-              cwd: input.cwd,
-              shell: false,
-              timeoutMs,
-            },
-          }),
-        );
-        return { loop: publicLoop(loop) };
-      }),
+    handler: (input) => {
+      const timeoutMs = input.timeoutMs as TimeoutMs | undefined;
+      const createInput = commonCreateInput({
+        ...input,
+        target: {
+          type: "command",
+          command: nonEmpty(input.command, "command"),
+          args: input.args,
+          cwd: input.cwd,
+          shell: false,
+          timeoutMs,
+        },
+      });
+      return withStore(async (store) => ({ loop: publicLoop(await store.createLoop(createInput)) }));
+    },
   },
   {
     name: "loops_create_workflow",
@@ -793,23 +859,21 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
       workflow: workflowIdOrNameSchema,
       workflowInput: z.record(z.string(), z.string()).optional().describe("String key/value input passed to the workflow on each run."),
     },
-    handler: (input) =>
-      withStore((store) => {
-        const workflow = store.requireWorkflow(input.workflow);
-        const timeoutMs = input.timeoutMs as TimeoutMs | undefined;
-        const loop = store.createLoop(
-          commonCreateInput({
-            ...input,
-            target: {
-              type: "workflow",
-              workflowId: workflow.id,
-              input: input.workflowInput,
-              timeoutMs,
-            },
-          }),
-        );
-        return { workflow: publicWorkflow(workflow), loop: publicLoop(loop) };
-      }),
+    handler: (input) => {
+      // Resolve the workflow spec and create the loop against the SAME resolved
+      // store: both live on whichever backend is active (local sqlite OR the
+      // hosted API), so a cloud-flipped process never reads the spec from the
+      // on-box island while writing the loop to the cloud.
+      const timeoutMs = input.timeoutMs as TimeoutMs | undefined;
+      return withStore(async (store) => {
+        const wf = await store.requireWorkflow(input.workflow);
+        const createInput = commonCreateInput({
+          ...input,
+          target: { type: "workflow", workflowId: wf.id, input: input.workflowInput, timeoutMs },
+        });
+        return { workflow: publicWorkflow(wf), loop: publicLoop(await store.createLoop(createInput)) };
+      });
+    },
   },
 ];
 
@@ -917,8 +981,28 @@ async function main(): Promise<void> {
     console.log(JSON.stringify(listToolsForCli(), null, 2));
     return;
   }
-  const server = createLoopsMcpServer();
-  await server.connect(new StdioServerTransport());
+
+  // Explicit stdio opt-out (--stdio / MCP_STDIO=1) keeps the legacy
+  // one-process-per-agent transport for callers that need it.
+  if (isStdioMode()) {
+    const server = createLoopsMcpServer();
+    await server.connect(new StdioServerTransport());
+    return;
+  }
+
+  // Default: shared Streamable HTTP server (one process, many agents).
+  // Env (e.g. HASNA_LOOPS_API_URL/API_KEY) is baked into this long-lived
+  // daemon, so every agent that connects routes deterministically —
+  // independent of the caller's own shell environment.
+  const handle = await startMcpHttpServer(() => createLoopsMcpServer(), {
+    port: resolveMcpHttpPort(),
+  });
+  process.on("SIGINT", () => {
+    void handle.close().finally(() => process.exit(0));
+  });
+  process.on("SIGTERM", () => {
+    void handle.close().finally(() => process.exit(0));
+  });
 }
 
 if (import.meta.main) {

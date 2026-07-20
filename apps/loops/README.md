@@ -33,23 +33,20 @@ OpenLoops has three deployment modes:
   shared by serve, SDK, and tests. This release exposes status, storage-backed
   `/v1` loop CRUD and run listing, runner claim/heartbeat/finalize protocol
   endpoints, a one-shot `loops-runner run-once` execution path for embedded
-  control-plane hosts, id-preserving local export/import, and preview-only
-  self-hosted migration/sync commands; full fleet rollout and id-preserving
-  remote apply are follow-up work.
-- `cloud`: a hosted control-plane contract. This release exposes client/runner status only; hosted tenant auth and infrastructure live outside this package.
+  control-plane hosts, id-preserving local export/import, tenant-bound API-key
+  authentication, and forced Postgres row-level tenant isolation.
+- `cloud`: a hosted control-plane contract using the same tenant-bound API.
 
 `local` is the default and requires no network, token, Postgres, or hosted
-service. Set `LOOPS_MODE` or `HASNA_LOOPS_MODE` to `local`, `self_hosted`, or
-`cloud` to choose explicitly. Without an explicit mode, `LOOPS_CLOUD_API_URL`
-selects `cloud`, while `LOOPS_API_URL` or `LOOPS_DATABASE_URL` selects
-`self_hosted`.
+service. Set `HASNA_LOOPS_STORAGE_MODE` to `local`, `self_hosted`, or
+`cloud` to choose explicitly. Without an explicit mode,
+`HASNA_LOOPS_API_URL` or `HASNA_LOOPS_DATABASE_URL` selects `self_hosted`.
 
 The public `@hasna/loops` package owns the local runtime, mode resolver,
-self-hosted API contract, runner contract, SDK, MCP server, and CLI. Hosted
-tenant auth, account administration, and infrastructure live outside this
-package. Cloud mode is a public contract until a cloud-specific hosted URL and
-cloud token are configured through `LOOPS_CLOUD_API_URL` plus
-`LOOPS_CLOUD_TOKEN` or `HASNA_LOOPS_CLOUD_TOKEN`.
+self-hosted API contract, tenant authentication and authorization, runner
+contract, SDK, MCP server, and CLI. Account provisioning and infrastructure
+deployment remain operator responsibilities. Cloud clients use
+`HASNA_LOOPS_API_URL` plus `HASNA_LOOPS_API_KEY`.
 
 Scheduler state is explicit in status JSON. `schedulerState.localStore` is
 SQLite plus local run artifact files: authoritative in `local`, cache/spool in
@@ -73,7 +70,6 @@ loops self-hosted status
 loops self-hosted migrate --dry-run
 loops self-hosted push --dry-run
 loops self-hosted pull --dry-run
-loops self-hosted runner-register --runner-id <id> --machine-id <machine> --apply
 loops export --file ./loops-export.json --dry-run
 loops export --file ./loops-export.json
 loops import ./loops-export.json
@@ -81,12 +77,51 @@ loops import ./loops-export.json --apply
 loops cloud status
 loops-api status
 loops-serve version
-HASNA_LOOPS_DATABASE_URL=... loops-serve migrate --dry-run
+HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --dry-run
+loops-serve db-credentials reconcile
+HASNA_LOOPS_DATABASE_URL=... HASNA_LOOPS_AUTH_DATABASE_URL=... loops-serve serve
 loops-runner status
 ```
 
+`loops self-hosted push` is safe by default: imported workflows are archived and
+imported loops are paused with `nextRunAt`/`retryScheduledFor` cleared. Even
+without `--replace`, the control-plane import boundary may rewrite existing
+same-id workflows/loops into that disabled representation; use explicit
+preserve flags only for an intentional activation.
+
 See [Deployment Modes](docs/DEPLOYMENT_MODES.md) for the full package boundary
 and machine-placement contract.
+
+### Provider database credentials
+
+`loops-serve db-credentials reconcile` is the fixed in-cluster reconciler for
+provider-managed RDS app credentials. It reads the RDS-managed master secret
+with the AWS Secrets Manager SDK, builds `sslmode=verify-full` DSNs only in
+memory, and writes each app DSN to that app's Secrets Manager secret through
+`AWSPENDING` before promoting `AWSCURRENT`. It never accepts database URLs,
+passwords, access keys, profiles, or secret material as command flags.
+
+Required environment is intentionally strict: `AWS_REGION`,
+`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`, `HASNA_LOOPS_RDS_MASTER_SECRET_ARN`,
+`HASNA_LOOPS_MIGRATOR_DATABASE_URL_SECRET_ARN`,
+`HASNA_LOOPS_RUNTIME_DATABASE_URL_SECRET_ARN`,
+`HASNA_LOOPS_AUTH_DATABASE_URL_SECRET_ARN`, `HASNA_LOOPS_RDS_INSTANCE_ID`,
+`HASNA_LOOPS_RDS_ENDPOINT`, `HASNA_LOOPS_RDS_PORT`,
+`HASNA_LOOPS_RDS_DATABASE`, and `HASNA_LOOPS_RDS_MASTER_USERNAME`. Static AWS
+credential environment variables, profile/web-identity inputs, full credential
+URIs, non-RDS-style endpoints, duplicate secret ARNs, cross-region secret ARNs,
+and malformed identifiers fail closed before any secret or database operation.
+
+The command normalizes the fixed NOLOGIN database roles
+`open_loops_owner`, `open_loops_migrator`, `open_loops_runtime`, and
+`open_loops_authenticator`; manages exactly three LOGIN users
+`open_loops_migrator_login`, `open_loops_runtime_login`, and
+`open_loops_authenticator_login`; grants only the migrator login exact
+owner/migrator membership plus `CREATEROLE`; and keeps runtime/authenticator
+without memberships until migration `0010_tenant_enforce` has landed. After
+`0010`, runtime and authenticator are attached only to their matching roles.
+If PostgreSQL 16 implicit creator memberships cannot be normalized, the
+reconciler fails before publishing app credentials.
 
 ## Install
 
@@ -1055,3 +1090,48 @@ The adapters intentionally use provider command surfaces instead of pretending e
 - Daemon and scheduled runs prepend common user executable directories such as `~/.local/bin` and `~/.bun/bin` before resolving provider CLIs.
 
 For production loops that can mutate repos, use disposable worktrees (`--worktree-mode required` / `worktreeMode=required`) and explicit prompts that name allowed write scope. Worktrees are executor-enforced: when a target carries worktree metadata, the executor prepares and enters the git worktree before spawning the child process, records the worktree it entered, and with `mode=required` fails the run closed instead of falling back to the original checkout when preparation fails. Existing managed worktrees are reused only after top-level and git-common-dir checks; a clean detached or stale-branch checkout may be reattached to the expected generated branch, while dirty or unsafe mismatches fail with cleanup evidence. Remote machine runs with a required worktree apply the same checks on the remote side before the target executes.
+
+## Immutable ECR Candidate Images
+
+`.github/workflows/ecr-candidate.yml` is the repository workflow for building
+an AWS ECR release candidate. It is manual and source-only: it does not update
+`latest`, ECS task definitions, services, or deployments. The job checks out
+an exact full commit SHA, proves that commit is reachable from `origin/main`,
+builds the `Dockerfile` `runner` target natively for `linux/arm64`, blocks on
+local Trivy critical/high findings, and only then assumes the ECR push role.
+After the immutable push it waits for ECR scanning and blocks on critical/high
+findings there as well. The retained artifact contains the local scan report,
+a CycloneDX SBOM, an unsigned in-toto/SLSA provenance statement, and bounded
+ECR scan counts. The statement is evidence, not a cryptographic attestation.
+
+Before the first run, repository administrators must create a protected GitHub
+environment named `ecr-candidate` with required reviewers and no deployment
+branches other than `main`. Configure these repository variables (not secrets):
+
+- `AWS_REGION`: AWS region containing the existing candidate repository.
+- `AWS_ROLE_ARN`: OIDC role dedicated to this workflow.
+- `ECR_REPOSITORY`: existing ECR repository name. It must use immutable tags
+  and scan-on-push.
+
+The OIDC role trust must constrain `token.actions.githubusercontent.com:aud`
+to `sts.amazonaws.com` and `token.actions.githubusercontent.com:sub` to exactly
+`repo:hasna/loops:environment:ecr-candidate`. Its permissions should allow
+`ecr:GetAuthorizationToken` on `*`, and only these actions on the configured
+repository ARN: `ecr:DescribeRepositories`, `ecr:BatchCheckLayerAvailability`,
+`ecr:GetDownloadUrlForLayer`, `ecr:BatchGetImage`, `ecr:InitiateLayerUpload`,
+`ecr:UploadLayerPart`, `ecr:CompleteLayerUpload`, `ecr:PutImage`,
+`ecr:DescribeImages`, and `ecr:DescribeImageScanFindings`. No static AWS access
+key is used.
+
+Dispatch only after the source commit is merged to `main`:
+
+```bash
+sha="$(git rev-parse origin/main)"
+gh workflow run ecr-candidate.yml --repo hasna/loops --ref main \
+  -f source_sha="${sha}" -f confirmation="push ${sha}"
+```
+
+Dispatch is an AWS mutation and requires the applicable operator approval and
+fresh release preflight. Do not run it merely because the source workflow has
+merged. Review the workflow summary and retained evidence; promote only by
+the reported immutable digest through the separate deployment process.

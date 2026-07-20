@@ -520,11 +520,30 @@ function remoteWorktreePrepareLines(worktree: AgentWorktreeSpec): string[] {
     '  git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "worktree repoRoot is not a git repository: $repo" >&2; return 1; }',
     '  mkdir -p "$(dirname "$path")" || return 1',
     "  # Preparation chatter goes to stderr so run stdout stays the agent's.",
-    '  if git -C "$repo" show-ref --verify --quiet "refs/heads/$branch"; then',
-    '    git -C "$repo" worktree add "$path" "$branch" 1>&2 || return 1',
-    "  else",
-    '    git -C "$repo" worktree add -b "$branch" "$path" HEAD 1>&2 || return 1',
+    "  __openloops_worktree_add() {",
+    '    if git -C "$repo" show-ref --verify --quiet "refs/heads/$branch"; then',
+    '      git -C "$repo" worktree add "$path" "$branch"',
+    "    else",
+    '      git -C "$repo" worktree add -b "$branch" "$path" HEAD',
+    "    fi",
+    "  }",
+    "  local __ol_add_out",
+    '  if __ol_add_out="$(__openloops_worktree_add 2>&1)"; then',
+    '    if [ -n "$__ol_add_out" ]; then printf "%s\\n" "$__ol_add_out" >&2; fi',
+    "    return 0",
     "  fi",
+    '  printf "%s\\n" "$__ol_add_out" >&2',
+    "  # Self-heal git's own remedy for a stale 'missing but already registered",
+    "  # worktree': prune the dead registration (metadata-only; the directory is",
+    "  # already gone) and retry the add exactly once, then fail honestly.",
+    '  case "$__ol_add_out" in',
+    '    *"missing but already registered worktree"*)',
+    '      git -C "$repo" worktree prune 1>&2 || true',
+    '      __openloops_worktree_add 1>&2 || return 1',
+    "      return 0",
+    "      ;;",
+    "  esac",
+    "  return 1",
     "}",
   ];
 }
@@ -729,6 +748,18 @@ function spawnDetail(result: Awaited<ReturnType<typeof spawnCapture>>): string {
   return (result.stderr || result.stdout || result.error || "").toString().trim();
 }
 
+/**
+ * Detects git's "missing but already registered worktree" error: the target
+ * path is recorded in `.git/worktrees/` but its directory was deleted out from
+ * under it, so `git worktree add` refuses. git's own prescribed remedy is
+ * `git worktree prune` (or `add -f`). Left unhandled this terminal-fails worktree
+ * prep on every attempt and the drain dedupes the failed item into a silent
+ * wedge — historically the single biggest burner of the redispatch cap.
+ */
+export function isStaleWorktreeRegistration(detail: string | undefined): boolean {
+  return typeof detail === "string" && /missing but already registered worktree/i.test(detail);
+}
+
 function resolvedDirEquals(left: string, right: string): boolean {
   try {
     return realpathSync(left) === realpathSync(right);
@@ -840,9 +871,18 @@ async function ensureLocalWorktree(
     return { error: `could not create worktree parent directory: ${error instanceof Error ? error.message : String(error)}` };
   }
   const hasBranch = await git(["-C", repoRoot, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
-  const add = hasBranch.status === 0
-    ? await git(["-C", repoRoot, "worktree", "add", path, branch])
-    : await git(["-C", repoRoot, "worktree", "add", "-b", branch, path, "HEAD"]);
+  const runAdd = (): Promise<Awaited<ReturnType<typeof git>>> =>
+    hasBranch.status === 0
+      ? git(["-C", repoRoot, "worktree", "add", path, branch])
+      : git(["-C", repoRoot, "worktree", "add", "-b", branch, path, "HEAD"]);
+  let add = await runAdd();
+  if ((add.error || (add.status ?? 1) !== 0) && isStaleWorktreeRegistration(spawnDetail(add))) {
+    // Self-heal git's own prescribed remedy for a stale registration: prune the
+    // dead entry (metadata-only; the directory is already gone) and retry the
+    // add exactly once, then fail honestly if it still cannot proceed.
+    await git(["-C", repoRoot, "worktree", "prune"]);
+    add = await runAdd();
+  }
   if (add.error || (add.status ?? 1) !== 0) {
     const detail = spawnDetail(add);
     return { error: `git worktree add failed for ${path}${detail ? `: ${detail}` : ""}` };

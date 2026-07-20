@@ -193,7 +193,10 @@ export function retryBackoffDelayMs(loop: Loop, run: LoopRun, random: () => numb
   const attempt = Math.max(1, run.attempt);
   const failure = classifyRunFailure(run);
   const throttled =
-    failure?.classification === "rate_limit" || failure?.classification === "auth" || failure?.classification === "provider_unavailable";
+    failure?.classification === "rate_limit" ||
+    failure?.classification === "auth" ||
+    failure?.classification === "provider_capacity" ||
+    failure?.classification === "provider_unavailable";
   const growth = 2 ** Math.min(attempt - 1, MAX_RETRY_EXPONENT);
   const base = loop.retryDelayMs * growth * (throttled ? THROTTLED_RETRY_MULTIPLIER : 1);
   const jitter = 0.5 + random();

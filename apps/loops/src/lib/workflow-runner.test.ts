@@ -484,6 +484,66 @@ describe("workflow runner", () => {
     }
   });
 
+  test("workflow Cursor resource_exhausted failures are reported as retry-pending provider capacity", async () => {
+    const store = new Store(":memory:");
+    try {
+      const workflow = store.createWorkflow({
+        name: "machine-tasks-inprogress-completion-audit-workflow",
+        steps: [
+          {
+            id: "cursor-inprogress-audit",
+            target: {
+              type: "command",
+              command: "printf '%s\\n%s' 'Connection lost to https://agentn.global.api5.cursor.sh attempts 1-3' 'RetriableError: [resource_exhausted] Error' >&2; exit 1",
+              shell: true,
+            },
+          },
+        ],
+      });
+      const loop = store.createLoop(
+        {
+          name: "machine-tasks-in-progress-audit",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "workflow", workflowId: workflow.id },
+          maxAttempts: 2,
+          retryDelayMs: 1_000,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+
+      const first = await tick({
+        store,
+        runnerId: "test",
+        now: () => new Date("2026-01-01T00:00:00Z"),
+        random: () => 0.5,
+      });
+
+      expect(first.completed[0]?.status).toBe("failed");
+      expect(first.completed[0]?.attempt).toBe(1);
+      const retrying = store.getLoop(loop.id);
+      expect(retrying?.status).toBe("active");
+      expect(retrying?.retryScheduledFor).toBe("2026-01-01T00:00:00.000Z");
+      expect(retrying?.nextRunAt).toBeDefined();
+      expect(retrying?.nextRunAt).not.toBe(retrying?.retryScheduledFor);
+
+      const report = buildHealthReport(store);
+      const expectation = report.expectations.find((entry) => entry.loop.id === loop.id);
+      expect(report.ok).toBe(true);
+      expect(report.summary.unhealthy).toBe(0);
+      expect(report.summary.warnings).toBe(1);
+      expect(report.classifications.provider_capacity).toBe(1);
+      expect(expectation?.ok).toBe(true);
+      expect(expectation?.check.status).toBe("warn");
+      expect(expectation?.check.message).toContain("capacity/resource exhaustion");
+      expect(expectation?.loop.retryScheduledFor).toBe("2026-01-01T00:00:00.000Z");
+      expect(expectation?.failure?.classification).toBe("provider_capacity");
+      expect(expectation?.failure?.evidence.summary).toBe("provider capacity exhausted: resource_exhausted agentn.global.api5.cursor.sh");
+      expect(expectation?.recommendedTask).toBeUndefined();
+    } finally {
+      store.close();
+    }
+  });
+
   test("same idempotency key cannot double-run an active workflow step", async () => {
     const store = new Store(":memory:");
     const root = mkdtempSync(join(tmpdir(), "loops-idempotent-active-"));

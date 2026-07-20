@@ -295,6 +295,16 @@ export interface WorkflowWorkItem {
   priority: number;
   status: WorkflowWorkItemStatus;
   attempts: number;
+  /**
+   * Consecutive non-productive "gate death" finishes (runs that failed at
+   * worktree prep or a fast triage/planner gate before any real work). Gate
+   * deaths refund their redispatch attempt, so this second counter bounds a
+   * deterministic infrastructure fault: at the ceiling the item is
+   * dead-lettered instead of retrying forever. Reset by a run that reaches
+   * the worker (success, productive failure, or tempfail) and by an
+   * operator requeue with attempts reset.
+   */
+  gateDeaths: number;
   nextAttemptAt?: string;
   leaseExpiresAt?: string;
   workflowId?: string;
@@ -306,6 +316,7 @@ export interface WorkflowWorkItem {
 }
 
 export interface UpsertWorkflowWorkItemInput {
+  id?: string;
   routeKey: string;
   idempotencyKey: string;
   invocationId: string;

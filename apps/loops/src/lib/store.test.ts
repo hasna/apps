@@ -1739,8 +1739,11 @@ exit 0
         "0008_work_item_route_scope",
         "0009_run_receipts",
         "0010_work_item_machine_id",
+        "0011_work_item_gate_deaths",
       ]);
       const version = store["db"].query("PRAGMA user_version").get() as { user_version: number };
+      // 0011 is additive (gate_deaths counter) and deliberately does NOT bump
+      // the schema user_version — older v8 binaries keep opening this database.
       expect(version.user_version).toBe(8);
     } finally {
       store.close();
@@ -1756,17 +1759,34 @@ exit 0
     }
   });
 
-  test("refuses to open databases written by a newer schema version", () => {
+  test("refuses to open newer databases only on a known-breaking delta", () => {
+    // The schema-compat contract (post-2026-07-07 lockout): a database carries
+    // its compatibility floor; a newer user_version alone no longer refuses —
+    // full soft-open matrix in schema-compat.test.ts. Refusal remains for a
+    // floor above this binary (breaking delta)…
     const root = mkdtempSync(join(tmpdir(), "loops-newer-schema-"));
     const dbFile = join(root, "loops.db");
     new Store(dbFile).close();
     const raw = new Database(dbFile);
     try {
       raw.exec("PRAGMA user_version = 99");
+      raw.query("UPDATE schema_compat SET min_compatible_user_version = 99 WHERE id = 1").run();
     } finally {
       raw.close();
     }
-    expect(() => new Store(dbFile)).toThrow(/newer than this binary supports/);
+    expect(() => new Store(dbFile)).toThrow(/requires a binary with schema support >= 99/);
+
+    // …and for a newer database with no floor at all (pre-contract/unblessed).
+    const bare = join(root, "loops-bare.db");
+    new Store(bare).close();
+    const rawBare = new Database(bare);
+    try {
+      rawBare.exec("PRAGMA user_version = 99");
+      rawBare.exec("DROP TABLE schema_compat");
+    } finally {
+      rawBare.close();
+    }
+    expect(() => new Store(bare)).toThrow(/newer than this binary supports/);
   });
 
   test("upgrades version 6 stores before creating claim-token indexes", () => {

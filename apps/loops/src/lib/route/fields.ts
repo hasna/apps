@@ -195,6 +195,17 @@ const ROUTE_MANUAL_GATE_FIELDS = [
   "approvalRequired",
 ];
 
+/**
+ * First route-disallowed tag on a task, if any. Exposed so drains can exclude
+ * tasks that can never route (no-auto/blocked/manual/…) from the bounded
+ * candidate window *before* slicing, instead of letting them occupy scan slots
+ * every tick only to be rejected by eligibility — the "skip re-burns the window
+ * forever" half of the merge-lane decay.
+ */
+export function taskRouteDisallowedTag(tags: string[]): string | undefined {
+  return tags.find((tag) => ROUTE_DISALLOWED_TASK_TAGS.has(tag.toLowerCase()));
+}
+
 export function taskRouteEligibility(data: Record<string, unknown>, metadata: Record<string, unknown>): { eligible: boolean; reason?: string; tags: string[] } {
   const records = taskEventRecords(data, metadata);
   const automation = automationRecords(data, metadata);
