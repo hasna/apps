@@ -380,6 +380,175 @@ describe("routeTodosTaskEvent per-route --max-active scope", () => {
   });
 });
 
+describe("routeTodosTaskEvent operator-authoritative project-group admission", () => {
+  let env: RouteEnv;
+  beforeEach(() => {
+    env = withRouteEnv();
+  });
+  afterEach(() => {
+    env.restore();
+  });
+
+  function groupTaskEvent(taskId: string, fields: Record<string, unknown> = {}) {
+    return {
+      id: `evt-${taskId}`,
+      type: "task.created",
+      source: "todos",
+      subject: `task:${taskId}`,
+      data: {
+        id: taskId,
+        title: `Project-group task ${taskId}`,
+        status: "pending",
+        tags: ["auto:route"],
+        project_path: process.cwd(),
+        ...fields,
+      },
+    } as never;
+  }
+
+  test("metadata can only tighten a configured ceiling and accepts numeric or string integers", () => {
+    const numeric = routeTodosTaskEvent(
+      groupTaskEvent("metadata-numeric", { max_active_per_project_group: 2 }),
+      { ...ROUTE_OPTS, dryRun: true, projectGroup: "operator-group", maxActivePerProjectGroup: "4" },
+    );
+    const numericValue = numeric.value as Record<string, any>;
+    expect(numericValue.throttle.limits.maxActivePerProjectGroup).toBe(2);
+    expect(numericValue.invocation.scope.routeThrottle.limits.maxActivePerProjectGroup).toBe(2);
+
+    const string = routeTodosTaskEvent(
+      groupTaskEvent("metadata-string", { max_active_per_project_group: "3" }),
+      { ...ROUTE_OPTS, dryRun: true, projectGroup: "operator-group", maxActivePerProjectGroup: "4" },
+    );
+    const stringValue = string.value as Record<string, any>;
+    expect(stringValue.throttle.limits.maxActivePerProjectGroup).toBe(3);
+
+    const raised = routeTodosTaskEvent(
+      groupTaskEvent("metadata-raised", { max_active_per_project_group: 40 }),
+      { ...ROUTE_OPTS, dryRun: true, projectGroup: "operator-group", maxActivePerProjectGroup: "4" },
+    );
+    const raisedValue = raised.value as Record<string, any>;
+    expect(raisedValue.throttle.limits.maxActivePerProjectGroup).toBe(4);
+
+    const unconfigured = routeTodosTaskEvent(
+      groupTaskEvent("metadata-unconfigured", { max_active_per_project_group: 1 }),
+      { ...ROUTE_OPTS, dryRun: true, projectGroup: "operator-group" },
+    );
+    const unconfiguredValue = unconfigured.value as Record<string, any>;
+    expect(unconfiguredValue.throttle).toBeUndefined();
+    expect(unconfiguredValue.invocation.scope.routeThrottle.limits).toBeUndefined();
+  });
+
+  test("mixed siblings cannot omit or raise the configured cap or redirect its group", () => {
+    const opts: TodosTaskRouteOptions = {
+      ...ROUTE_OPTS,
+      projectGroup: "operator-group",
+      maxActivePerProjectGroup: "1",
+    };
+
+    const first = routeTodosTaskEvent(
+      groupTaskEvent("mixed-first", {
+        project_group: "metadata-group",
+        max_active_per_project_group: 1,
+      }),
+      opts,
+    );
+    const firstValue = first.value as Record<string, any>;
+    expect(first.kind).toBe("created");
+    expect(firstValue.workItem.projectGroup).toBe("operator-group");
+    expect(firstValue.invocation.scope.routeThrottle).toMatchObject({
+      projectGroup: "operator-group",
+      limits: { maxActivePerProjectGroup: 1 },
+    });
+
+    const omitted = routeTodosTaskEvent(
+      groupTaskEvent("mixed-omitted", { project_group: "different-metadata-group" }),
+      opts,
+    );
+    const raisedString = routeTodosTaskEvent(
+      groupTaskEvent("mixed-raised-string", {
+        project_group: "different-metadata-group",
+        max_active_per_project_group: "50",
+      }),
+      opts,
+    );
+    const raisedNumeric = routeTodosTaskEvent(
+      groupTaskEvent("mixed-raised-numeric", {
+        project_group: "different-metadata-group",
+        max_active_per_project_group: 50,
+      }),
+      opts,
+    );
+
+    for (const result of [omitted, raisedString, raisedNumeric]) {
+      const value = result.value as Record<string, any>;
+      expect(result.kind).toBe("throttled");
+      expect(value.reason).toContain("project-group active workflow limit reached (1/1)");
+      expect(value.workItem.projectGroup).toBe("operator-group");
+      expect(value.throttle).toMatchObject({
+        projectGroup: "operator-group",
+        limits: { maxActivePerProjectGroup: 1 },
+        counts: { projectGroup: 1 },
+      });
+    }
+  });
+
+  test("concurrent admissions against one local store serialize under the group cap", async () => {
+    const store = new Store(dbPath());
+    store.close();
+    const cliPath = join(import.meta.dir, "../../cli/index.ts");
+    const argsFor = (taskId: string) => [
+      process.execPath,
+      cliPath,
+      "--json",
+      "routes",
+      "create",
+      "todos-task",
+      "--event-json",
+      JSON.stringify(groupTaskEvent(taskId)),
+      "--project-group",
+      "operator-group",
+      "--max-active-per-project-group",
+      "1",
+      "--sandbox",
+      "workspace-write",
+      "--worktree-mode",
+      "off",
+    ];
+    const run = async (taskId: string) => {
+      const child = Bun.spawn(argsFor(taskId), {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          LOOPS_DATA_DIR: env.dataDir,
+          HASNA_LOOPS_STORAGE_MODE: "local",
+          HASNA_LOOPS_API_URL: "",
+          HASNA_LOOPS_API_KEY: "",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        child.exited,
+      ]);
+      return { stdout, stderr, exitCode };
+    };
+
+    const attempts = await Promise.all([run("concurrent-a"), run("concurrent-b")]);
+    for (const attempt of attempts) {
+      expect(attempt.exitCode, attempt.stderr).toBe(0);
+    }
+    const values = attempts.map((attempt) => JSON.parse(attempt.stdout));
+    expect(values.filter((value) => value.deduped === false)).toHaveLength(1);
+    expect(values.filter((value) => value.skipped === true)).toHaveLength(1);
+    expect(values.find((value) => value.skipped === true)?.reason).toContain(
+      "project-group active workflow limit reached (1/1)",
+    );
+    expect(loopCount()).toBe(1);
+  }, 15_000);
+});
+
 describe("routeTodosTaskEvent least-loaded auth-profile pool", () => {
   let env: RouteEnv;
   beforeEach(() => {
