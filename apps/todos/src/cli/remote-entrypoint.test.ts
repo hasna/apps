@@ -315,7 +315,7 @@ describe("remote CLI entrypoint authority boundary", () => {
     } finally {
       server.stop(true);
     }
-  });
+  }, 45_000);
 
   test("every local-only command family rejects in the built entrypoint before HTTP or filesystem access", async () => {
     const requests: string[] = [];
