@@ -446,6 +446,8 @@ describe("permission and break-glass fail-closed rendering", () => {
       taskId: "t",
       projectPath: plainPath,
       sandbox: "danger-full-access",
+      allowTools: "functions.exec_command",
+      allowCommands: "git,bun",
       manualBreakGlass: "true",
       safetyReason: "operator-approved isolated emergency repair",
     });
@@ -454,9 +456,39 @@ describe("permission and break-glass fail-closed rendering", () => {
     expect(target.manualBreakGlass).toBe(true);
     expect(target.allowlist).toEqual({
       enforcement: "metadata_only",
-      commands: ["manual-break-glass"],
+      tools: ["functions.exec_command"],
+      commands: ["git", "bun", "manual-break-glass"],
       safetyReason: "operator-approved isolated emergency repair",
     });
+  });
+
+  test("builtin allowlist variables require a safety reason and reach every generated agent target", () => {
+    expect(() =>
+      renderLoopTemplate(TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID, {
+        taskId: "t",
+        projectPath: plainPath,
+        allowTools: "functions.exec_command",
+      }),
+    ).toThrow("allowlist.safetyReason");
+
+    const workflow = renderLoopTemplate(TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID, {
+      taskId: "t",
+      projectPath: plainPath,
+      allowTools: "functions.exec_command,functions.view_image",
+      allowCommands: "git,bun",
+      safetyReason: "bounded repository inspection and verification",
+    });
+    for (const step of agentSteps(workflow)) {
+      const target = agentTargetOf(step);
+      expect(target.manualBreakGlass).toBeUndefined();
+      expect(target.sandbox).toBe("workspace-write");
+      expect(target.allowlist).toEqual({
+        enforcement: "metadata_only",
+        tools: ["functions.exec_command", "functions.view_image"],
+        commands: ["git", "bun"],
+        safetyReason: "bounded repository inspection and verification",
+      });
+    }
   });
 
   test("codewith/codex default to workspace-write sandbox with bypass permission mode", () => {

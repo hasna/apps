@@ -74,6 +74,8 @@ function workerVerifierAgentVariables(opts: { addDirs: boolean; branchNoun: stri
       : []),
     { name: "permissionMode", default: "bypass", description: "Provider permission mode: default, plan, auto, or bypass." },
     { name: "sandbox", default: "workspace-write", description: "Provider sandbox mode." },
+    { name: "allowTools", description: "Comma-separated advisory provider session tool restrictions." },
+    { name: "allowCommands", description: "Comma-separated advisory provider session command restrictions." },
     { name: "safetyReason", description: "Auditable reason required for advisory restrictions or relaxed sandbox access." },
     { name: "manualBreakGlass", default: "false", description: "Allow explicit danger-full-access in a generated workflow. Intended for manual emergency use only." },
     { name: "worktreeMode", default: "auto", description: "Worktree isolation mode: auto, required, off, or main." },
