@@ -410,6 +410,7 @@ function buildAgentInvocation(
         ].join("\n"),
         "openloops-cursor",
         "-p",
+        "--trust",
       );
       if (permissionMode === "plan") args.push("--mode", "plan");
       if (permissionMode === "bypass") args.push("--force");
