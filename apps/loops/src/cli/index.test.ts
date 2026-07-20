@@ -5928,7 +5928,12 @@ describe("loops CLI", () => {
     ]);
     expect(preview.status).toBe(0);
     const value = JSON.parse(preview.stdout);
-    expect(value.invocation.scope.routeThrottle).toEqual({ maxActiveScope: "codewith-impl", maxPerProfile: 2 });
+    expect(value.invocation.scope.routeThrottle).toMatchObject({
+      maxActiveScope: "codewith-impl",
+      maxPerProfile: 2,
+      limits: { maxActive: 4, maxActiveScope: "codewith-impl", maxPerProfile: 2 },
+      routeScope: "codewith-impl",
+    });
     expect(value.throttle.limits).toMatchObject({ maxActive: 4, maxActiveScope: "codewith-impl", maxPerProfile: 2 });
   });
 
