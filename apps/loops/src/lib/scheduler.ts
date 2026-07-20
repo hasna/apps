@@ -354,6 +354,50 @@ export function advanceLoop(
   }, { daemonLeaseId: opts.daemonLeaseId });
 }
 
+async function emitKnowledgeBestEffort(
+  loop: Loop,
+  run: LoopRun,
+  onError?: (loop: Loop, error: unknown) => void,
+): Promise<void> {
+  const report = (error: unknown): void => {
+    try {
+      onError?.(loop, error);
+    } catch {
+      // Knowledge reporting must never alter run finalization or scheduling.
+    }
+  };
+  try {
+    const feedback = await emitKnowledgeForLoopRun(loop, run);
+    if (feedback && !feedback.ok && feedback.error) report(new Error(feedback.error));
+  } catch (error) {
+    report(error);
+  }
+}
+
+interface RecoveredKnowledgeEmission {
+  loop: Loop;
+  run: LoopRun;
+}
+
+async function emitRecoveredKnowledgeBestEffort(
+  emissions: RecoveredKnowledgeEmission[],
+  onError?: (loop: Loop, error: unknown) => void,
+): Promise<void> {
+  for (const { loop, run } of emissions) {
+    await emitKnowledgeBestEffort(loop, run, onError);
+  }
+}
+
+function emitRecoveredKnowledgeInBackground(
+  emissions: RecoveredKnowledgeEmission[],
+  onError?: (loop: Loop, error: unknown) => void,
+): void {
+  void emitRecoveredKnowledgeBestEffort(emissions, onError).catch(() => {
+    // Defensive terminal catch: claimDueRuns is synchronous and must never
+    // leave a rejected background emission promise unobserved.
+  });
+}
+
 export async function executeClaimedRun(deps: {
   store: Store;
   runnerId: string;
@@ -366,24 +410,6 @@ export async function executeClaimedRun(deps: {
   finalizeResult?: (result: ExecutorResult, loop: Loop, run: LoopRun) => Omit<ExecutorResult, "status"> & { status: LoopRun["status"] };
   onError?: (loop: Loop, error: unknown) => void;
 }): Promise<LoopRun> {
-  const emitAfterFinalize = async (finalRun: LoopRun): Promise<void> => {
-    try {
-      const feedback = await emitKnowledgeForLoopRun(deps.loop, finalRun);
-      if (feedback && !feedback.ok && feedback.error) {
-        try {
-          deps.onError?.(deps.loop, new Error(feedback.error));
-        } catch {
-          // Emission reporting is best-effort and must not alter the finalized run.
-        }
-      }
-    } catch (error) {
-      try {
-        deps.onError?.(deps.loop, error);
-      } catch {
-        // Emission is isolated from the finalized run even if reporting throws.
-      }
-    }
-  };
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   const heartbeatEveryMs = Math.max(10, Math.min(60_000, Math.floor(deps.loop.leaseMs / 3)));
   heartbeat = setInterval(() => {
@@ -415,7 +441,7 @@ export async function executeClaimedRun(deps: {
       daemonLeaseId: deps.daemonLeaseId,
       now: deps.now?.() ?? new Date(finalResult.finishedAt),
     });
-    await emitAfterFinalize(finalRun);
+    await emitKnowledgeBestEffort(deps.loop, finalRun, deps.onError);
     return finalRun;
   } catch (err) {
     deps.onError?.(deps.loop, err);
@@ -437,7 +463,7 @@ export async function executeClaimedRun(deps: {
       daemonLeaseId: deps.daemonLeaseId,
       now: deps.now?.() ?? finishedAt,
     });
-    await emitAfterFinalize(finalRun);
+    await emitKnowledgeBestEffort(deps.loop, finalRun, deps.onError);
     return finalRun;
   } finally {
     if (heartbeat) clearInterval(heartbeat);
@@ -595,7 +621,10 @@ function claimSlot(deps: SchedulerDeps, loop: Loop, scheduledFor: string): Claim
  * execution, so outcomes are unknown while claiming and that retry gate cannot
  * apply to it.
  */
-function recoverAndExpire(deps: SchedulerDeps, now: Date): { recovered: LoopRun[]; expired: Loop[] } {
+function recoverAndExpire(
+  deps: SchedulerDeps,
+  now: Date,
+): { recovered: LoopRun[]; expired: Loop[]; knowledgeEmissions: RecoveredKnowledgeEmission[] } {
   const recovered = deps.store.recoverExpiredRunLeases(now, { daemonLeaseId: deps.daemonLeaseId });
   const recoveredByLoop = new Map<string, LoopRun[]>();
   for (const run of recovered) {
@@ -618,13 +647,19 @@ function recoverAndExpire(deps: SchedulerDeps, now: Date): { recovered: LoopRun[
       }
     }
   }
+  const knowledgeEmissions: RecoveredKnowledgeEmission[] = [];
+  for (const run of recovered) {
+    const loop = deps.store.getLoop(run.loopId);
+    if (loop) knowledgeEmissions.push({ loop, run });
+  }
   const expired = deps.store.expireLoops(now, { daemonLeaseId: deps.daemonLeaseId });
-  return { recovered, expired };
+  return { recovered, expired, knowledgeEmissions };
 }
 
 export function claimDueRuns(deps: SchedulerDeps & { maxClaims?: number; laneLimits?: LaneLimits }): ClaimDueRunsResult {
   const now = deps.now?.() ?? new Date();
-  const { recovered, expired } = recoverAndExpire(deps, now);
+  const { recovered, expired, knowledgeEmissions } = recoverAndExpire(deps, now);
+  emitRecoveredKnowledgeInBackground(knowledgeEmissions, deps.onError);
   const claims: ClaimedLoopRun[] = [];
   const claimed: LoopRun[] = [];
   const skipped: LoopRun[] = [];
@@ -673,7 +708,8 @@ export function claimDueRuns(deps: SchedulerDeps & { maxClaims?: number; laneLim
 
 export async function tick(deps: SchedulerDeps): Promise<TickResult> {
   const now = deps.now?.() ?? new Date();
-  const { recovered, expired } = recoverAndExpire(deps, now);
+  const { recovered, expired, knowledgeEmissions } = recoverAndExpire(deps, now);
+  await emitRecoveredKnowledgeBestEffort(knowledgeEmissions, deps.onError);
   const claimed: LoopRun[] = [];
   const completed: LoopRun[] = [];
   const skipped: LoopRun[] = [];

@@ -46,6 +46,7 @@ import {
 import { buildDeploymentStatus, deploymentStatusLine } from "../lib/mode.js";
 import { computeNextAfter, dueSlots } from "../lib/recurrence.js";
 import { normalizeLoopLabels } from "../lib/labels.js";
+import { emitKnowledgeForLoopRun } from "../lib/knowledge-feedback.js";
 import { scrubSecretsDeep } from "../lib/redact.js";
 import type { LoopStorageContract } from "../lib/storage/contract.js";
 import { routePolicy, type RoutePolicy } from "../lib/auth/route-policy.js";
@@ -647,7 +648,13 @@ async function handleRunsRequest(ctx: V1RequestContext, segments: string[]): Pro
     const deferred = recovered.deferred;
     for (const run of abandoned) {
       const loop = await storage.getLoop(run.loopId);
-      if (loop) await advanceLoopAfterRun(storage, loop, run, new Date(run.finishedAt ?? now), false);
+      if (!loop) continue;
+      await advanceLoopAfterRun(storage, loop, run, new Date(run.finishedAt ?? now), false);
+      try {
+        await emitKnowledgeForLoopRun(loop, run);
+      } catch {
+        // Optional Knowledge feedback must not alter recovery or its response.
+      }
     }
     return ok({
       abandoned: abandoned.map((run) => publicRun(run, false, { redactError: true })),

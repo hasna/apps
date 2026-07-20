@@ -273,6 +273,124 @@ describe("scheduler", () => {
     }
   });
 
+  test("emits scrubbed Knowledge feedback after abandoned recovery advances the loop", async () => {
+    const root = mkdtempSync(join(tmpdir(), "openloops-knowledge-recovery-"));
+    const database = join(root, "loops.sqlite");
+    const marker = join(root, "recovery-feedback.json");
+    const command = join(root, "knowledge-fixture.ts");
+    writeFileSync(command, [
+      "#!/usr/bin/env bun",
+      'import { Database } from "bun:sqlite";',
+      'import { writeFileSync } from "node:fs";',
+      `const db = new Database(${JSON.stringify(database)}, { readonly: true });`,
+      'const row = db.query("SELECT loop_runs.status AS run_status, loops.status AS loop_status, loops.next_run_at AS next_run_at FROM loop_runs JOIN loops ON loops.id = loop_runs.loop_id LIMIT 1").get();',
+      "db.close();",
+      `writeFileSync(${JSON.stringify(marker)}, JSON.stringify({ row, args: process.argv.slice(2) }));`,
+      "process.exit(7);",
+      "",
+    ].join("\n"));
+    chmodSync(command, 0o755);
+
+    const store = new Store(database);
+    try {
+      const scheduledFor = "2026-01-01T00:00:00.000Z";
+      const loop = store.createLoop(
+        {
+          name: "abandoned-knowledge",
+          schedule: { type: "once", at: scheduledFor },
+          target: {
+            type: "command",
+            command: "sk-ant-recovery-secret-12345678",
+            knowledgeFeedback: { enabled: true, command },
+          },
+          maxAttempts: 1,
+          leaseMs: 10,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      store.claimRun(loop, scheduledFor, "test", new Date(scheduledFor));
+
+      const out = await tick({
+        store,
+        runnerId: "test",
+        now: () => new Date("2026-01-01T00:00:01.000Z"),
+      });
+
+      expect(out.recovered).toHaveLength(1);
+      const observed = JSON.parse(readFileSync(marker, "utf8")) as {
+        row: { run_status: string; loop_status: string; next_run_at: string | null };
+        args: string[];
+      };
+      expect(observed.row).toEqual({
+        run_status: "abandoned",
+        loop_status: "stopped",
+        next_run_at: null,
+      });
+      expect(observed.args.join("\n")).not.toContain("sk-ant-recovery-secret-12345678");
+      expect(observed.args.join("\n")).toContain("[SCRUBBED]");
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("claimDueRuns contains background Knowledge and reporting failures after recovery advance", async () => {
+    const root = mkdtempSync(join(tmpdir(), "openloops-knowledge-background-recovery-"));
+    const command = join(root, "knowledge-fixture.ts");
+    writeFileSync(command, [
+      "#!/usr/bin/env bun",
+      "process.exit(7);",
+      "",
+    ].join("\n"));
+    chmodSync(command, 0o755);
+
+    const store = new Store(":memory:");
+    try {
+      const scheduledFor = "2026-01-01T00:00:00.000Z";
+      const loop = store.createLoop(
+        {
+          name: "background-abandoned-knowledge",
+          schedule: { type: "once", at: scheduledFor },
+          target: {
+            type: "command",
+            command: "true",
+            knowledgeFeedback: { enabled: true, command },
+          },
+          maxAttempts: 1,
+          leaseMs: 10,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      store.claimRun(loop, scheduledFor, "test", new Date(scheduledFor));
+      let reportFailure!: () => void;
+      const reported = new Promise<void>((resolve) => {
+        reportFailure = resolve;
+      });
+
+      const out = claimDueRuns({
+        store,
+        runnerId: "test",
+        maxClaims: 0,
+        now: () => new Date("2026-01-01T00:00:01.000Z"),
+        onError: () => {
+          reportFailure();
+          throw new Error("reporter failed");
+        },
+      });
+
+      expect(out.recovered).toHaveLength(1);
+      expect(store.getLoop(loop.id)).toMatchObject({
+        status: "stopped",
+        nextRunAt: undefined,
+      });
+      await reported;
+      expect(store.getRunBySlot(loop.id, scheduledFor)?.status).toBe("abandoned");
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("stale daemon tick cannot recover expired runs or advance loop cursor after database lease loss", async () => {
     const store = new Store(":memory:");
     try {

@@ -1,4 +1,6 @@
 import { spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "bun:test";
@@ -1612,6 +1614,67 @@ describe("loops-api foundation", () => {
     } finally {
       server.stop(true);
       await storage.close();
+    }
+  });
+
+  test("single-run recovery emits scrubbed Knowledge feedback after advancing the loop", async () => {
+    const mod = await import("./index.js");
+    const root = mkdtempSync(join(tmpdir(), "openloops-api-knowledge-recovery-"));
+    const database = join(root, "loops.sqlite");
+    const marker = join(root, "recovery-feedback.json");
+    const command = join(root, "knowledge-fixture.ts");
+    writeFileSync(command, [
+      "#!/usr/bin/env bun",
+      'import { Database } from "bun:sqlite";',
+      'import { writeFileSync } from "node:fs";',
+      `const db = new Database(${JSON.stringify(database)}, { readonly: true });`,
+      'const row = db.query("SELECT loop_runs.status AS run_status, loops.status AS loop_status, loops.next_run_at AS next_run_at FROM loop_runs JOIN loops ON loops.id = loop_runs.loop_id LIMIT 1").get();',
+      "db.close();",
+      `writeFileSync(${JSON.stringify(marker)}, JSON.stringify({ row, args: process.argv.slice(2) }));`,
+      "process.exit(7);",
+      "",
+    ].join("\n"));
+    chmodSync(command, 0o755);
+
+    const storage = createSqliteLoopStorage(database);
+    const claimedAt = new Date("2026-01-01T00:00:00Z");
+    const recoveredAt = new Date("2026-01-01T00:00:02Z");
+    const loop = await storage.createLoop({
+      name: "api-abandoned-knowledge",
+      schedule: { type: "once", at: claimedAt.toISOString() },
+      target: {
+        type: "command",
+        command: "sk-ant-recovery-secret-12345678",
+        knowledgeFeedback: { enabled: true, command },
+      },
+      maxAttempts: 1,
+      leaseMs: 1_000,
+    }, claimedAt);
+    const claimed = await storage.claimRun(loop, claimedAt.toISOString(), "runner-a", claimedAt);
+    expect(claimed).toBeTruthy();
+    const server = createTestServer(
+      mod,
+      { host: "127.0.0.1", port: 0, storage, now: () => recoveredAt },
+      runnerPrincipal("runner-a"),
+    );
+    try {
+      const response = await fetch(apiUrl(server, `/v1/runs/${claimed!.run.id}/recover`), { method: "POST" });
+      expect(response.status).toBe(200);
+      const observed = JSON.parse(readFileSync(marker, "utf8")) as {
+        row: { run_status: string; loop_status: string; next_run_at: string | null };
+        args: string[];
+      };
+      expect(observed.row).toEqual({
+        run_status: "abandoned",
+        loop_status: "stopped",
+        next_run_at: null,
+      });
+      expect(observed.args.join("\n")).not.toContain("sk-ant-recovery-secret-12345678");
+      expect(observed.args.join("\n")).toContain("[SCRUBBED]");
+    } finally {
+      server.stop(true);
+      await storage.close();
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
