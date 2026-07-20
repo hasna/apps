@@ -85,6 +85,65 @@ describe("public package cloud boundary", () => {
     );
   });
 
+  test("rejects normalized dot encodings in source and built package files", () => {
+    const unicodeDot = "\u3002";
+    const percentEncodedDot = "%2E";
+    const javascriptEscapedDot = ["\\", "u002e"].join("");
+    const zeroPaddedJavascriptEscapedIdeographicDot = ["\\", "u{003002}"].join("");
+    const zeroPaddedJavascriptEscapedFullwidthDot = ["\\", "u{00ff0e}"].join("");
+    const zeroPaddedJavascriptEscapedHalfwidthDot = ["\\", "u{00ff61}"].join("");
+    const unicodeHostedSuffix = ["hasna", "xyz"].join(unicodeDot);
+    const percentEncodedHostedSuffix = ["hasna", "xyz"].join(percentEncodedDot);
+    const javascriptEscapedHostedSuffix = ["hasna", "xyz"].join(javascriptEscapedDot);
+    const zeroPaddedIdeographicHostedSuffix = ["hasna", "xyz"].join(
+      zeroPaddedJavascriptEscapedIdeographicDot,
+    );
+    const zeroPaddedFullwidthHostedSuffix = ["hasna", "xyz"].join(
+      zeroPaddedJavascriptEscapedFullwidthDot,
+    );
+    const zeroPaddedHalfwidthHostedSuffix = ["hasna", "xyz"].join(
+      zeroPaddedJavascriptEscapedHalfwidthDot,
+    );
+
+    withBoundaryFixture(
+      {
+        "src/unicode-dot.ts": `export const endpoint = "https://api.${unicodeHostedSuffix}/v1";`,
+        "src/percent-dot.ts": `export const endpoint = "https://api.${percentEncodedHostedSuffix}/v1";`,
+        "src/javascript-escape.ts": `export const endpoint = "https://api.${javascriptEscapedHostedSuffix}/v1";`,
+        "src/javascript-escape-ideographic.ts":
+          `export const endpoint = "https://api.${zeroPaddedIdeographicHostedSuffix}/v1";`,
+        "src/javascript-escape-fullwidth.ts":
+          `export const endpoint = "https://api.${zeroPaddedFullwidthHostedSuffix}/v1";`,
+        "src/javascript-escape-halfwidth.ts":
+          `export const endpoint = "https://api.${zeroPaddedHalfwidthHostedSuffix}/v1";`,
+        "dist/unicode-dot.js": `export const endpoint = "https://api.${unicodeHostedSuffix}/v1";`,
+        "dist/percent-dot.js": `export const endpoint = "https://api.${percentEncodedHostedSuffix}/v1";`,
+        "dist/javascript-escape.js": `export const endpoint = "https://api.${javascriptEscapedHostedSuffix}/v1";`,
+        "dist/javascript-escape-ideographic.js":
+          `export const endpoint = "https://api.${zeroPaddedIdeographicHostedSuffix}/v1";`,
+        "dist/javascript-escape-fullwidth.js":
+          `export const endpoint = "https://api.${zeroPaddedFullwidthHostedSuffix}/v1";`,
+        "dist/javascript-escape-halfwidth.js":
+          `export const endpoint = "https://api.${zeroPaddedHalfwidthHostedSuffix}/v1";`,
+      },
+      (result) => {
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("src/unicode-dot.ts: internal hosted domain suffix");
+        expect(result.stderr).toContain("src/percent-dot.ts: internal hosted domain suffix");
+        expect(result.stderr).toContain("src/javascript-escape.ts: internal hosted domain suffix");
+        expect(result.stderr).toContain("src/javascript-escape-ideographic.ts: internal hosted domain suffix");
+        expect(result.stderr).toContain("src/javascript-escape-fullwidth.ts: internal hosted domain suffix");
+        expect(result.stderr).toContain("src/javascript-escape-halfwidth.ts: internal hosted domain suffix");
+        expect(result.stderr).toContain("dist/unicode-dot.js: internal hosted domain suffix");
+        expect(result.stderr).toContain("dist/percent-dot.js: internal hosted domain suffix");
+        expect(result.stderr).toContain("dist/javascript-escape.js: internal hosted domain suffix");
+        expect(result.stderr).toContain("dist/javascript-escape-ideographic.js: internal hosted domain suffix");
+        expect(result.stderr).toContain("dist/javascript-escape-fullwidth.js: internal hosted domain suffix");
+        expect(result.stderr).toContain("dist/javascript-escape-halfwidth.js: internal hosted domain suffix");
+      },
+    );
+  });
+
   test("allows neutral deployment placeholders and unrelated domains", () => {
     const hostedSuffix = ["hasna", "xyz"].join(".");
     withBoundaryFixture(

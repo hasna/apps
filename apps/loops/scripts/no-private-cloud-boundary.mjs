@@ -37,6 +37,10 @@ const privateHostedDomainPattern = new RegExp(
   `(?:^|[^a-z0-9-])(?:[a-z0-9-]+\\.)*${escapedPrivateHostedDomainSuffix}(?=$|[^a-z0-9.-]|\\.(?:$|[^a-z0-9-]))`,
   "i",
 );
+const unicodeDotEquivalentPattern = /[\u3002\uff0e\uff61]/g;
+const percentEncodedDotPattern = /%(?:2e|e3%80%82|ef%bc%8e|ef%bd%a1)/gi;
+const javascriptDotEscapePattern =
+  /\\(?:x2e|u(?:002e|3002|ff0e|ff61)|u\{0*(?:2e|3002|ff0e|ff61)\})/gi;
 const localHomePath = ["/home", "hasna"].join("/");
 const disallowedPublicPathLiterals = [
   localHomePath,
@@ -79,6 +83,13 @@ function parseRoot(args) {
 
 const root = parseRoot(process.argv.slice(2));
 
+function normalizeHostedDomainDots(text) {
+  return text
+    .replace(unicodeDotEquivalentPattern, ".")
+    .replace(percentEncodedDotPattern, ".")
+    .replace(javascriptDotEscapePattern, ".");
+}
+
 function* walk(dir) {
   for (const entry of readdirSync(dir)) {
     if (skippedDirs.has(entry)) continue;
@@ -102,7 +113,8 @@ for (const path of walk(root)) {
   const rel = relative(root, path);
   const isTestFile = /\.test\.[cm]?[jt]s$/.test(rel);
   const text = readFileSync(path, "utf8");
-  if (privateHostedDomainPattern.test(text)) {
+  const normalizedHostedDomainText = normalizeHostedDomainDots(text);
+  if (privateHostedDomainPattern.test(normalizedHostedDomainText)) {
     findings.push(`${rel}: internal hosted domain suffix`);
   }
   for (const literal of disallowedLiterals) {
