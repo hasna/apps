@@ -112,4 +112,14 @@ describe("sandboxes CLI", () => {
     expect(res.code).toBe(1)
     expect(res.err.toLowerCase()).toContain("unknown provider")
   })
+
+  test("invalid numeric options fail cleanly, not with a crash", async () => {
+    const id = await createSandbox()
+    const bad = await cli(["--provider", "local", "keep-alive", id, "--timeout", "soon"])
+    expect(bad.code).toBe(1)
+    expect(bad.err).toContain("--timeout")
+    const badPort = await cli(["--provider", "local", "expose-port", id, "abc"])
+    expect(badPort.code).toBe(1)
+    expect(badPort.err.toLowerCase()).toContain("port")
+  })
 })
