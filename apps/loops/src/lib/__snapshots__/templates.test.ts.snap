@@ -938,6 +938,14 @@ exports[`builtin rendered workflow snapshots builtin template summaries 1`] = `
         "description": "Provider sandbox mode."
       },
       {
+        "name": "allowTools",
+        "description": "Comma-separated advisory provider session tool restrictions."
+      },
+      {
+        "name": "allowCommands",
+        "description": "Comma-separated advisory provider session command restrictions."
+      },
+      {
         "name": "safetyReason",
         "description": "Auditable reason required for advisory restrictions or relaxed sandbox access."
       },
@@ -1061,6 +1069,14 @@ exports[`builtin rendered workflow snapshots builtin template summaries 1`] = `
         "description": "Provider sandbox mode."
       },
       {
+        "name": "allowTools",
+        "description": "Comma-separated advisory provider session tool restrictions."
+      },
+      {
+        "name": "allowCommands",
+        "description": "Comma-separated advisory provider session command restrictions."
+      },
+      {
         "name": "safetyReason",
         "description": "Auditable reason required for advisory restrictions or relaxed sandbox access."
       },
@@ -1167,6 +1183,14 @@ exports[`builtin rendered workflow snapshots builtin template summaries 1`] = `
         "name": "sandbox",
         "default": "workspace-write",
         "description": "Provider sandbox mode."
+      },
+      {
+        "name": "allowTools",
+        "description": "Comma-separated advisory provider session tool restrictions."
+      },
+      {
+        "name": "allowCommands",
+        "description": "Comma-separated advisory provider session command restrictions."
       },
       {
         "name": "safetyReason",

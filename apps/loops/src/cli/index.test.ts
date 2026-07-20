@@ -3741,6 +3741,12 @@ describe("loops CLI", () => {
       "provider=codewith",
       "--var",
       "authProfile=account005",
+      "--var",
+      "allowTools=functions.exec_command,functions.view_image",
+      "--var",
+      "allowCommands=git,bun",
+      "--var",
+      "safetyReason=bounded event workflow repository access",
     ]);
 
     expect(render.status).toBe(0);
@@ -3751,6 +3757,14 @@ describe("loops CLI", () => {
     expect(workflow.steps[0].target.cwd).toBe("/tmp/knowledge");
     expect(workflow.steps[0].timeoutMs).toBeNull();
     expect(workflow.steps[1].timeoutMs).toBeNull();
+    for (const step of workflow.steps) {
+      expect(step.target.allowlist).toEqual({
+        enforcement: "metadata_only",
+        tools: ["functions.exec_command", "functions.view_image"],
+        commands: ["git", "bun"],
+        safetyReason: "bounded event workflow repository access",
+      });
+    }
 
     const finiteRender = runCli(dataDir, [
       "--json",
@@ -5485,6 +5499,12 @@ describe("loops CLI", () => {
       "--provider-admission-check",
       "--sandbox",
       "workspace-write",
+      "--allow-tool",
+      "functions.exec_command,functions.view_image",
+      "--allow-command",
+      "git,bun",
+      "--safety-reason",
+      "bounded route worker repository access",
     ]);
     expect(scheduled.status).toBe(0);
     const loop = JSON.parse(scheduled.stdout);
@@ -5493,7 +5513,94 @@ describe("loops CLI", () => {
     expect(loop.target.args).toEqual(expect.arrayContaining(["--triage-auth-profile", "account004", "--planner-auth-profile", "account005"]));
     expect(loop.target.args).toEqual(expect.arrayContaining(["--max-dispatch", "2"]));
     expect(loop.target.args).toEqual(expect.arrayContaining(["--provider-active-cap", "6"]));
+    expect(loop.target.args).toEqual(expect.arrayContaining(["--allow-tool", "functions.exec_command"]));
+    expect(loop.target.args).toEqual(expect.arrayContaining(["--allow-tool", "functions.view_image"]));
+    expect(loop.target.args).toEqual(expect.arrayContaining(["--allow-command", "git"]));
+    expect(loop.target.args).toEqual(expect.arrayContaining(["--allow-command", "bun"]));
+    expect(loop.target.args).toEqual(expect.arrayContaining(["--safety-reason", "bounded route worker repository access"]));
     expect(loop.target.args).toContain("--provider-admission-check");
+  });
+
+  test("routes schedule rejects advisory allowlists without a safety reason before storing the drain loop", () => {
+    const dataDir = freshDataDir("loops-cli-routes-allowlists-schedule-reason-");
+    const scheduled = runCli(dataDir, [
+      "--json",
+      "routes",
+      "schedule",
+      "todos-task",
+      "route-drain-missing-allowlist-reason",
+      "--every",
+      "5m",
+      "--allow-command",
+      "git",
+    ]);
+    expect(scheduled.status).not.toBe(0);
+    expect(`${scheduled.stdout}\n${scheduled.stderr}`).toContain("--safety-reason is required");
+    expect(JSON.parse(runCli(dataDir, ["--json", "list"]).stdout)).toHaveLength(0);
+  });
+
+  test("routes preview propagates advisory allowlists to generated agent targets and fails closed without a reason", () => {
+    const dataDir = freshDataDir("loops-cli-routes-allowlists-");
+    const event = {
+      id: "evt-routes-allowlists-0001",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-routes-allowlists-0001",
+        title: "Route with bounded agent access",
+        working_dir: "/tmp/open-loops",
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    const preview = runCli(dataDir, [
+      "--json",
+      "routes",
+      "preview",
+      "todos-task",
+      "--event-json",
+      JSON.stringify(event),
+      "--worktree-mode",
+      "off",
+      "--sandbox",
+      "workspace-write",
+      "--allow-tool",
+      "functions.exec_command,functions.view_image",
+      "--allow-command",
+      "git,bun",
+      "--safety-reason",
+      "bounded route worker repository access",
+    ]);
+    expect(preview.status).toBe(0);
+    const value = JSON.parse(preview.stdout);
+    for (const step of agentStepsOf(value.workflow)) {
+      expect(step.target.allowlist).toEqual({
+        enforcement: "metadata_only",
+        tools: ["functions.exec_command", "functions.view_image"],
+        commands: ["git", "bun"],
+        safetyReason: "bounded route worker repository access",
+      });
+      expect(step.target.manualBreakGlass).toBeUndefined();
+      expect(step.target.sandbox).toBe("workspace-write");
+    }
+
+    const missingReason = runCli(dataDir, [
+      "--json",
+      "routes",
+      "preview",
+      "todos-task",
+      "--event-json",
+      JSON.stringify({ ...event, id: "evt-routes-allowlists-0002", data: { ...event.data, id: "task-routes-allowlists-0002" } }),
+      "--worktree-mode",
+      "off",
+      "--sandbox",
+      "workspace-write",
+      "--allow-command",
+      "git",
+    ]);
+    expect(missingReason.status).not.toBe(0);
+    expect(`${missingReason.stdout}\n${missingReason.stderr}`).toContain("allowlist.safetyReason");
   });
 
   test("routes schedule rejects unsupported todos task templates before storing a drain loop", () => {
@@ -8859,6 +8966,12 @@ describe("loops CLI", () => {
       "workspace-write",
       "--permission-mode",
       "bypass",
+      "--allow-tool",
+      "functions.exec_command,functions.view_image",
+      "--allow-command",
+      "git,bun",
+      "--safety-reason",
+      "bounded generic event repository access",
     ];
 
     const first = runCli(dataDir, args, JSON.stringify(event));
@@ -8872,6 +8985,14 @@ describe("loops CLI", () => {
     expect(firstValue.workflow.steps[0].target.cwd).toBe("/tmp/open-knowledge");
     expect(firstValue.workflow.steps[0].target.addDirs).toEqual(["/tmp/knowledge-store", "/tmp/loops-store"]);
     expect(firstValue.workflow.steps[1].target.addDirs).toEqual(["/tmp/knowledge-store", "/tmp/loops-store"]);
+    for (const step of firstValue.workflow.steps) {
+      expect(step.target.allowlist).toEqual({
+        enforcement: "metadata_only",
+        tools: ["functions.exec_command", "functions.view_image"],
+        commands: ["git", "bun"],
+        safetyReason: "bounded generic event repository access",
+      });
+    }
     expect(firstValue.loop.target.input.workflowInvocationId).toBe(firstValue.invocation.id);
     expect(firstValue.loop.target.input.workflowWorkItemId).toBe(firstValue.workItem.id);
     const profiles = firstValue.workflow.steps.map((step: { target: { authProfile?: string } }) => step.target.authProfile);

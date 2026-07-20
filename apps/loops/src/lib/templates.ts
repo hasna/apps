@@ -108,6 +108,8 @@ export interface AgentWorkflowTemplateBaseInput {
   addDirs?: string[];
   permissionMode?: AgentPermissionMode;
   sandbox?: AgentSandbox;
+  allowTools?: string[];
+  allowCommands?: string[];
   safetyReason?: string;
   manualBreakGlass?: boolean;
   worktreeMode?: AgentWorktreeMode;
@@ -420,6 +422,24 @@ function failClosedSandbox(input: AgentWorkflowTemplateBaseInput, provider: Agen
   );
 }
 
+function agentAllowlist(input: AgentWorkflowTemplateBaseInput) {
+  const tools = input.allowTools?.length ? [...new Set(input.allowTools)] : undefined;
+  const commands = [...(input.allowCommands ?? [])];
+  if (input.manualBreakGlass) commands.push("manual-break-glass");
+  const uniqueCommands = commands.length ? [...new Set(commands)] : undefined;
+  const safetyReason = input.safetyReason?.trim() || undefined;
+  if ((tools?.length || uniqueCommands?.length) && !safetyReason) {
+    throw new Error("allowlist.safetyReason is required when tool or command restrictions are declared");
+  }
+  if (!tools?.length && !uniqueCommands?.length && !safetyReason) return undefined;
+  return {
+    tools,
+    commands: uniqueCommands,
+    enforcement: "metadata_only" as const,
+    safetyReason,
+  };
+}
+
 function agentTarget(
   input: AgentWorkflowTemplateBaseInput,
   prompt: string,
@@ -473,13 +493,7 @@ function agentTarget(
       branch: plan.branch,
       reason: plan.reason,
     },
-    allowlist: input.manualBreakGlass
-      ? {
-          enforcement: "metadata_only",
-          commands: ["manual-break-glass"],
-          safetyReason: input.safetyReason?.trim(),
-        }
-      : undefined,
+    allowlist: agentAllowlist(input),
     routing: {
       projectPath: input.routeProjectPath ?? input.projectPath,
       ...(input.projectGroup ? { projectGroup: input.projectGroup } : {}),
@@ -1236,6 +1250,8 @@ function agentTemplateInput(values: Record<string, string | undefined>): AgentWo
     variant: values.variant,
     agent: values.agent,
     addDirs: listVar(values.addDirs ?? values.addDir),
+    allowTools: listVar(values.allowTools ?? values.allowTool),
+    allowCommands: listVar(values.allowCommands ?? values.allowCommand),
     permissionMode: values.permissionMode as AgentPermissionMode | undefined,
     sandbox: values.sandbox as AgentSandbox | undefined,
     safetyReason: values.safetyReason,

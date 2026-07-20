@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { ValidationError } from "../errors.js";
 import { TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID } from "../templates.js";
 import { collectValues, listFromRepeatedOpts } from "./parse.js";
 import { providerActiveCapFromOpts } from "./provider-admission.js";
@@ -140,6 +141,20 @@ const AGENT_ROUTING_OPTION_SPECS: RouteOptionSpec[] = [
   },
   { flags: "--permission-mode <mode>", key: "permissionMode", kind: "value", description: "provider permission mode: default, plan, auto, or bypass; defaults to bypass for sandboxed codewith/codex routes and provider-default otherwise" },
   { flags: "--sandbox <mode>", key: "sandbox", kind: "value", description: "provider sandbox" },
+  {
+    flags: "--allow-tool <name>",
+    key: "allowTool",
+    kind: "repeat",
+    description: "advisory provider session tool restriction; may be repeated or comma-separated",
+    serializeValue: (opts) => listFromRepeatedOpts(opts.allowTool as string[] | undefined),
+  },
+  {
+    flags: "--allow-command <name>",
+    key: "allowCommand",
+    kind: "repeat",
+    description: "advisory provider session command restriction; may be repeated or comma-separated",
+    serializeValue: (opts) => listFromRepeatedOpts(opts.allowCommand as string[] | undefined),
+  },
   { flags: "--safety-reason <reason>", key: "safetyReason", kind: "value", description: "auditable reason required for advisory restrictions or relaxed sandbox access" },
   {
     flags: "--manual-break-glass",
@@ -308,6 +323,11 @@ function serializeOptionSpecs(specs: RouteOptionSpec[], opts: Record<string, unk
  */
 export function routeDrainArgs(opts: TodosDrainOptions): string[] {
   providerActiveCapFromOpts(opts);
+  const allowTools = listFromRepeatedOpts(opts.allowTool);
+  const allowCommands = listFromRepeatedOpts(opts.allowCommand);
+  if ((allowTools?.length || allowCommands?.length) && !opts.safetyReason?.trim()) {
+    throw new ValidationError("--safety-reason is required when --allow-tool or --allow-command is used");
+  }
   const args = ["routes", "drain", "todos-task"];
   serializeOptionSpecs(DRAIN_FILTER_OPTION_SPECS, opts as Record<string, unknown>, args);
   serializeOptionSpecs(AGENT_ROUTING_OPTION_SPECS, opts as Record<string, unknown>, args);
