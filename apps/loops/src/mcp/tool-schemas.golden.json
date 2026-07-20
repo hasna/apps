@@ -405,7 +405,7 @@
         },
         "showOutput": {
           "type": "boolean",
-          "description": "Include bounded stdout/stderr (default false: only redacted lengths are returned)."
+          "description": "Include scrubbed, bounded stdout/stderr (default false: only redacted lengths are returned)."
         }
       },
       "required": [
@@ -509,7 +509,7 @@
         },
         "showOutput": {
           "type": "boolean",
-          "description": "Include bounded stdout/stderr (default false: only redacted lengths are returned)."
+          "description": "Include scrubbed, bounded stdout/stderr (default false: only redacted lengths are returned)."
         },
         "maxOutputChars": {
           "type": "integer",
@@ -1001,7 +1001,7 @@
         },
         "showOutput": {
           "type": "boolean",
-          "description": "Include bounded stdout/stderr (default false: only redacted lengths are returned)."
+          "description": "Include scrubbed, bounded stdout/stderr (default false: only redacted lengths are returned)."
         }
       },
       "required": [
@@ -1503,7 +1503,7 @@
         },
         "showOutput": {
           "type": "boolean",
-          "description": "Include bounded stdout/stderr (default false: only redacted lengths are returned)."
+          "description": "Include scrubbed, bounded stdout/stderr (default false: only redacted lengths are returned)."
         },
         "maxOutputChars": {
           "type": "integer",
@@ -1532,7 +1532,7 @@
         },
         "showOutput": {
           "type": "boolean",
-          "description": "Include bounded stdout/stderr (default false: only redacted lengths are returned)."
+          "description": "Include scrubbed, bounded stdout/stderr (default false: only redacted lengths are returned)."
         },
         "maxOutputChars": {
           "type": "integer",
@@ -1610,7 +1610,7 @@
         },
         "showOutput": {
           "type": "boolean",
-          "description": "Include bounded stdout/stderr (default false: only redacted lengths are returned)."
+          "description": "Include scrubbed, bounded stdout/stderr (default false: only redacted lengths are returned)."
         }
       },
       "required": [
@@ -1636,7 +1636,7 @@
         },
         "showOutput": {
           "type": "boolean",
-          "description": "Include bounded stdout/stderr (default false: only redacted lengths are returned)."
+          "description": "Include scrubbed, bounded stdout/stderr (default false: only redacted lengths are returned)."
         }
       },
       "required": [
@@ -1730,7 +1730,7 @@
         },
         "showOutput": {
           "type": "boolean",
-          "description": "Include bounded stdout/stderr (default false: only redacted lengths are returned)."
+          "description": "Include scrubbed, bounded stdout/stderr (default false: only redacted lengths are returned)."
         }
       },
       "required": [
@@ -1756,7 +1756,7 @@
         },
         "showOutput": {
           "type": "boolean",
-          "description": "Include bounded stdout/stderr (default false: only redacted lengths are returned)."
+          "description": "Include scrubbed, bounded stdout/stderr (default false: only redacted lengths are returned)."
         }
       },
       "required": [

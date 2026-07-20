@@ -2083,6 +2083,49 @@ exit 0
     }
   });
 
+  test("scrubs SQLite workflow reasons and errors across recover, skip, finalize, cancel, and skipped runs", () => {
+    const store = new Store(":memory:");
+    try {
+      const workflow = store.createWorkflow({
+        name: "scrub-workflow-reasons",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const reason = `operation failed with ${GH_PAT}`;
+
+      const recoveredRun = store.createWorkflowRun({ workflow });
+      store.startWorkflowStepRun(recoveredRun.id, "worker");
+      const recovered = store.recoverWorkflowRun(recoveredRun.id, reason);
+      expect(recovered.recoveredSteps[0]?.error).toBe("operation failed with [SCRUBBED]");
+      expect(JSON.stringify(store.listWorkflowEvents(recoveredRun.id))).not.toContain("ghp_");
+
+      const skippedRun = store.createWorkflowRun({ workflow });
+      const skipped = store.skipWorkflowStepRun(skippedRun.id, "worker", reason);
+      expect(skipped.error).toBe("operation failed with [SCRUBBED]");
+      expect(JSON.stringify(store.listWorkflowEvents(skippedRun.id))).not.toContain("ghp_");
+
+      const finalizedRun = store.createWorkflowRun({ workflow });
+      const finalized = store.finalizeWorkflowRun(finalizedRun.id, "failed", { error: reason });
+      expect(finalized.error).toBe("operation failed with [SCRUBBED]");
+      expect(JSON.stringify(store.listWorkflowEvents(finalizedRun.id))).not.toContain("ghp_");
+
+      const cancelledRun = store.createWorkflowRun({ workflow });
+      const cancelled = store.cancelWorkflowRun(cancelledRun.id, reason);
+      expect(cancelled.error).toBe("operation failed with [SCRUBBED]");
+      expect(store.listWorkflowStepRuns(cancelledRun.id)[0]?.error).toBe("operation failed with [SCRUBBED]");
+      expect(JSON.stringify(store.listWorkflowEvents(cancelledRun.id))).not.toContain("ghp_");
+
+      const loop = store.createLoop({
+        name: "scrub-skipped-reason",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: { type: "command", command: "true" },
+      });
+      const skippedLoopRun = store.createSkippedRun(loop, "2026-01-01T00:00:00.000Z", reason);
+      expect(skippedLoopRun.error).toBe("operation failed with [SCRUBBED]");
+    } finally {
+      store.close();
+    }
+  });
+
   test("records process identity and reports abandoned vs deferred lease recovery", () => {
     const store = new Store(":memory:");
     try {

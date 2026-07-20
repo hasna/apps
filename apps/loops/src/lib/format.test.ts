@@ -2,12 +2,17 @@ import { describe, expect, test } from "bun:test";
 import {
   publicExecutorResult,
   publicLoop,
+  publicRun,
   publicWorkflow,
   publicWorkflowEvent,
   publicWorkflowRun,
   publicWorkflowStepRun,
   textOutputBlocks,
 } from "./format.js";
+
+const j = (...parts: string[]): string => parts.join("");
+const ANT_KEY = j("sk-", "ant-api03-abcDEF123456789_-suffix");
+const GH_PAT = j("ghp", "_AbCdEf0123456789AbCdEf0123456789");
 
 describe("textOutputBlocks", () => {
   test("renders stdout and stderr blocks for human --show-output mode", () => {
@@ -21,6 +26,19 @@ describe("textOutputBlocks", () => {
 
   test("omits empty output streams", () => {
     expect(textOutputBlocks({ stdout: "", stderr: undefined }, { indent: "  " })).toEqual([]);
+  });
+
+  test("scrubs historical output before rendering show-output blocks", () => {
+    const rendered = textOutputBlocks(
+      {
+        stdout: `raw historical stdout ${ANT_KEY}`,
+        stderr: `raw historical stderr ${GH_PAT}`,
+      },
+      { indent: "  " },
+    ).join("\n");
+    expect(rendered).toContain("[SCRUBBED]");
+    expect(rendered).not.toContain("sk-ant-");
+    expect(rendered).not.toContain("ghp_");
   });
 
   test("redacts loop agent prompts without leaking a prefix", () => {
@@ -121,6 +139,8 @@ describe("textOutputBlocks", () => {
         reason: "SECRET_WORKFLOW_EVENT_REASON should not leak",
         nested: { prompt: "SECRET_WORKFLOW_EVENT_PROMPT should not leak" },
         safe: "visible",
+        historicalOutput: `visible ${ANT_KEY}`,
+        nestedHistory: { result: GH_PAT },
       },
       createdAt: "2026-01-01T00:00:00Z",
     });
@@ -132,7 +152,10 @@ describe("textOutputBlocks", () => {
     expect(json).not.toContain("SECRET_WORKFLOW_EVENT_ERROR");
     expect(json).not.toContain("SECRET_WORKFLOW_EVENT_REASON");
     expect(json).not.toContain("SECRET_WORKFLOW_EVENT_PROMPT");
+    expect(json).not.toContain("sk-ant-");
+    expect(json).not.toContain("ghp_");
     expect(json).toContain("visible");
+    expect(json).toContain("[SCRUBBED]");
     expect(json).toContain("[redacted");
   });
 
@@ -153,6 +176,56 @@ describe("textOutputBlocks", () => {
     );
     expect(JSON.stringify(value)).toContain("VISIBLE_WORKFLOW_STDOUT");
     expect(JSON.stringify(value)).toContain("VISIBLE_WORKFLOW_STDERR");
+  });
+
+  test("all public show-output views scrub stored historical secrets", () => {
+    const loopRun = publicRun(
+      {
+        id: "run",
+        loopId: "loop",
+        loopName: "loop",
+        scheduledFor: "2026-01-01T00:00:00Z",
+        attempt: 1,
+        status: "failed",
+        stdout: `stdout ${ANT_KEY}`,
+        stderr: `stderr ${GH_PAT}`,
+        error: `error ${ANT_KEY}`,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      },
+      true,
+    );
+    const stepRun = publicWorkflowStepRun(
+      {
+        id: "step-run",
+        workflowRunId: "run",
+        stepId: "step",
+        sequence: 1,
+        status: "failed",
+        stdout: `stdout ${ANT_KEY}`,
+        stderr: `stderr ${GH_PAT}`,
+        error: `error ${ANT_KEY}`,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      },
+      true,
+    );
+    const executor = publicExecutorResult(
+      {
+        status: "failed",
+        stdout: `stdout ${ANT_KEY}`,
+        stderr: `stderr ${GH_PAT}`,
+        error: `error ${ANT_KEY}`,
+        startedAt: "2026-01-01T00:00:00Z",
+        finishedAt: "2026-01-01T00:00:01Z",
+        durationMs: 1_000,
+      },
+      true,
+    );
+    const json = JSON.stringify({ loopRun, stepRun, executor });
+    expect(json).toContain("[SCRUBBED]");
+    expect(json).not.toContain("sk-ant-");
+    expect(json).not.toContain("ghp_");
   });
 
   test("redacts executor result output and error by default", () => {

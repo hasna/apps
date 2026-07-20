@@ -64,7 +64,7 @@ const workflowIdOrNameSchema = z.string().min(1).describe("Workflow id or exact 
 const showOutputSchema = z
   .boolean()
   .optional()
-  .describe("Include bounded stdout/stderr (default false: only redacted lengths are returned).");
+  .describe("Include scrubbed, bounded stdout/stderr (default false: only redacted lengths are returned).");
 const limitSchema = z.number().int().min(1).max(MAX_LIMIT).optional().describe(`Maximum entries to return (1-${MAX_LIMIT}).`);
 const labelSchema = z.string().min(1).max(64);
 const labelsSchema = z.array(labelSchema).max(LOOP_LABEL_MAX_COUNT);
@@ -309,8 +309,8 @@ function publicMcpRun(run: LoopRun, showOutput: boolean, maxOutputChars = MAX_OU
   if (!showOutput) return value;
   return {
     ...value,
-    stdout: truncateOutput(run.stdout, maxOutputChars),
-    stderr: truncateOutput(run.stderr, maxOutputChars),
+    stdout: truncateOutput(value.stdout as string | undefined, maxOutputChars),
+    stderr: truncateOutput(value.stderr as string | undefined, maxOutputChars),
   };
 }
 
