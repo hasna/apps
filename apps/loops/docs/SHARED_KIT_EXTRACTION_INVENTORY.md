@@ -8,6 +8,13 @@ This is a report-only inventory for the P5 shared-kits workstream. It does not
 publish packages, edit Bun release-age exclusions, migrate consumers, or change
 runtime code.
 
+Current-status correction (2026-07-20): the cross-repo observations below
+remain the 2026-07-07 inventory. OpenLoops state normalization landed through
+PR #81 at commit `0acb5e79` and merge commit `6d1e9536`. The current strict
+storage kit is version `0.5.2`, established through PR #93 at commit
+`1456b852`, and its validation command is `bun run check:contracts`. PR #84 is
+not current normalization evidence and has its own disposition.
+
 ## Summary
 
 The strongest extraction candidate is the generated Hasna storage kit. It is
@@ -24,13 +31,11 @@ human package-boundary decision.
 
 Recommended first automation slice:
 
-1. Normalize OpenLoops' generated storage kit to
-   `@hasna/contracts vendor-kit` version `0.5.1` from the vendored generator
-   source committed in `hasna/loops` at
-   `fe0b4e767605611605e6f4fa4776e931a41ba91b`
-   (`vendor/contracts/src/kit/generate.ts` and
-   `vendor/contracts/src/kit/templates/*`). Do not use `latest` or an
-   unpinned `bunx @hasna/contracts` invocation for this check.
+1. Treat OpenLoops normalization as complete: version `0.5.1` state
+   normalization landed through PR #81 at commit `0acb5e79` and merge commit
+   `6d1e9536`; the current strict storage kit is version `0.5.2`, established
+   through PR #93 at commit `1456b852`. Validate it with
+   `bun run check:contracts`.
 2. After human approval of package ownership/name, extract the generated kit
    into a shared package or stable `@hasna/contracts` subpath.
 3. Migrate consumers one repo cohort at a time, preserving their local storage
@@ -332,8 +337,11 @@ package. Do not create a separate logging package without deciding whether
 ### 1. `@hasna/storage-kit`
 
 Status: highest-confidence candidate; package publish/name needs human
-approval. OpenLoops normalization to the pinned generated kit has already run
-through task `2b166a36-1e7c-4882-be7f-610c4f478d39` and produced PR #84.
+approval. OpenLoops normalization is complete: version `0.5.1` state
+normalization landed through PR #81 at commit `0acb5e79` and merge commit
+`6d1e9536`, and the current strict storage kit is version `0.5.2`, established
+through PR #93 at commit `1456b852`. PR #84 is not current normalization
+evidence and has its own disposition.
 
 Responsibilities:
 
@@ -356,13 +364,11 @@ Non-responsibilities:
 
 Migration order:
 
-1. Normalize `open-loops/src/generated/storage-kit` to
-   `@hasna/contracts vendor-kit` version `0.5.1` from the vendored generator
-   source committed in `hasna/loops` at
-   `fe0b4e767605611605e6f4fa4776e931a41ba91b` and verify no OpenLoops semantic
-   drift. This is the source/ref used for the current OpenLoops normalization
-   evidence; do not substitute an npm `latest` range or a machine-local
-   generator.
+1. Keep `open-loops/src/generated/storage-kit` on the current strict
+   `@hasna/contracts` version `0.5.2` and verify it with
+   `bun run check:contracts`. The earlier version `0.5.1` state normalization
+   landed through PR #81 at commit `0acb5e79` and merge commit `6d1e9536`; PR
+   #93 commit `1456b852` established the current strict version.
 2. Human approval: decide whether the importable boundary is a new
    `@hasna/storage-kit` package or an `@hasna/contracts/storage-kit` subpath.
 3. Move generator source into the approved package boundary and add package
@@ -377,12 +383,11 @@ Migration order:
 
 Validation:
 
-- From a branch that carries the vendored generator source:
-  `bun -e 'import {checkKit} from "./vendor/contracts/src/kit/generate.ts"; const result = checkKit({targetRepo:"."}); if (!result.ok) { console.error(JSON.stringify(result, null, 2)); process.exit(1); } console.log(JSON.stringify(result, null, 2));'`
+- For the current OpenLoops checkout: `bun run check:contracts`.
 - Per consumer: `bun run typecheck`, targeted storage tests, and package
   boundary/no-cloud tests where present.
 - For OpenLoops: `bun run typecheck`, `bun test src/lib/storage/*.test.ts`,
-  and `bun run test:boundary`.
+  `bun run test:boundary`, and `bun run check:contracts`.
 
 Blockers:
 
@@ -515,9 +520,11 @@ Blockers:
 
 Ready for automation now:
 
-- OpenLoops generated storage-kit normalization was completed by task
-  `2b166a36-1e7c-4882-be7f-610c4f478d39` and produced PR #84. Treat PR #84 as
-  the current normalization evidence; do not auto-route a duplicate task.
+- OpenLoops generated storage-kit normalization is complete. Version `0.5.1`
+  state normalization landed through PR #81 at commit `0acb5e79` and merge
+  commit `6d1e9536`; PR #93 commit `1456b852` established the current strict
+  version `0.5.2`. PR #84 is not current normalization evidence and has its own
+  disposition. Do not auto-route a duplicate normalization task.
 
 Ready after human approval:
 
@@ -541,10 +548,11 @@ Created follow-up task:
    Task: `2b166a36-1e7c-4882-be7f-610c4f478d39`
    Fingerprint: `open-loops:p5:shared-kit:storage-kit:open-loops-normalize`
    Dependency: this inventory task.
-   Status: completed in todos; produced PR #84
-   (`https://github.com/hasna/loops/pull/84`). PR #84 is the live
-   normalization PR as of 2026-07-07 and still needs valid non-author review
-   before merge.
+   Historical output: PR #84 (`https://github.com/hasna/loops/pull/84`).
+   Current status: version `0.5.1` state normalization landed through PR #81
+   at commit `0acb5e79` and merge commit `6d1e9536`; PR #93 commit `1456b852`
+   established the current strict version `0.5.2`. PR #84 is not current
+   normalization evidence and has its own disposition.
 
 Recommended follow-up tasks that were not created in this worker step:
 
