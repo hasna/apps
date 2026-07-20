@@ -86,6 +86,7 @@ export interface LoopStore {
   requireUniqueLoop(idOrName: string): Promise<Loop>;
   listLoops(opts?: {
     status?: LoopStatus;
+    labels?: string[];
     limit?: number;
     offset?: number;
     archived?: boolean;
@@ -93,7 +94,7 @@ export interface LoopStore {
     name?: string;
   }): Promise<Loop[]>;
   countLoops(status?: LoopStatus, opts?: { archived?: boolean; includeArchived?: boolean }): Promise<number>;
-  updateLoop(id: string, patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt">>): Promise<Loop>;
+  updateLoop(id: string, patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt" | "labels">>): Promise<Loop>;
   renameLoop(id: string, name: string): Promise<Loop>;
   archiveLoop(idOrName: string): Promise<Loop>;
   unarchiveLoop(idOrName: string): Promise<Loop>;
@@ -133,7 +134,7 @@ export interface LoopStore {
   listGoalRuns(opts?: { goalId?: string; runId?: string; limit?: number }): Promise<GoalRun[]>;
 
   // ── Runs & receipts ────────────────────────────────────────────────────────────
-  listRuns(opts?: { loopId?: string; status?: RunStatus; limit?: number; offset?: number }): Promise<LoopRun[]>;
+  listRuns(opts?: { loopId?: string; status?: RunStatus; labels?: string[]; limit?: number; offset?: number }): Promise<LoopRun[]>;
   getRun(id: string): Promise<LoopRun | undefined>;
   writeRunReceipt(input: WriteRunReceiptInput): Promise<RunReceipt>;
   getRunReceipt(runId: string): Promise<RunReceipt | undefined>;
@@ -203,7 +204,7 @@ export class LocalStore implements LoopStore {
   }
   async updateLoop(
     id: string,
-    patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt">>,
+    patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt" | "labels">>,
   ): Promise<Loop> {
     return this.store.updateLoop(id, patch);
   }
@@ -414,7 +415,8 @@ export class ApiStore implements LoopStore {
     throw new AmbiguousNameError(idOrName);
   }
   async listLoops(opts: Parameters<LoopStore["listLoops"]>[0] = {}): Promise<Loop[]> {
-    const raw = await this.t.get("/loops", { query: clean({ ...opts }) });
+    const { labels, ...query } = opts;
+    const raw = await this.t.get("/loops", { query: clean({ ...query, labels: labels?.join(",") }) });
     return pickArray<Loop>(raw, "loops");
   }
   async countLoops(status?: LoopStatus, opts: { archived?: boolean; includeArchived?: boolean } = {}): Promise<number> {
@@ -423,7 +425,7 @@ export class ApiStore implements LoopStore {
   }
   async updateLoop(
     id: string,
-    patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt">>,
+    patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt" | "labels">>,
   ): Promise<Loop> {
     return pickObject<Loop>(await this.t.patch(`/loops/${encodeURIComponent(id)}`, patch), "loop")!;
   }
@@ -584,7 +586,8 @@ export class ApiStore implements LoopStore {
 
   // ── Runs & receipts ────────────────────────────────────────────────────────────
   async listRuns(opts: Parameters<LoopStore["listRuns"]>[0] = {}): Promise<LoopRun[]> {
-    const raw = await this.t.get("/runs", { query: clean({ ...opts, showOutput: true }) });
+    const { labels, ...query } = opts;
+    const raw = await this.t.get("/runs", { query: clean({ ...query, labels: labels?.join(","), showOutput: true }) });
     return pickArray<LoopRun>(raw, "runs");
   }
   async getRun(id: string): Promise<LoopRun | undefined> {

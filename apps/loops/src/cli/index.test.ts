@@ -133,6 +133,57 @@ function authProfilesOf(workflow: { steps: TestWorkflowStep[] }): string[] {
 }
 
 describe("loops CLI", () => {
+  test("create/list/show/runs support labels and labels set/add/remove/clear", () => {
+    const dataDir = freshDataDir("loops-cli-labels-");
+    const create = runCli(dataDir, [
+      "--json",
+      "create",
+      "command",
+      "browser",
+      "--at",
+      futureAt(),
+      "--cmd",
+      "true",
+      "--label",
+      "BrowserPlan",
+      "--label",
+      "nightly",
+    ]);
+    expect(create.status).toBe(0);
+    expect(JSON.parse(create.stdout).labels).toEqual(["browserplan", "nightly"]);
+
+    expect(JSON.parse(runCli(dataDir, ["--json", "show", "browser"]).stdout).labels).toEqual([
+      "browserplan",
+      "nightly",
+    ]);
+    expect(
+      JSON.parse(runCli(dataDir, ["--json", "list", "--label", "browserplan", "--label", "nightly"]).stdout).map(
+        (loop: { name: string }) => loop.name,
+      ),
+    ).toEqual(["browser"]);
+
+    expect(runCli(dataDir, ["--json", "run-now", "browser"]).status).toBe(0);
+    expect(
+      JSON.parse(runCli(dataDir, ["--json", "runs", "--label", "browserplan"]).stdout).map(
+        (run: { loopName: string }) => run.loopName,
+      ),
+    ).toEqual(["browser"]);
+
+    expect(JSON.parse(runCli(dataDir, ["--json", "labels", "add", "browser", "urgent"]).stdout).labels).toEqual([
+      "browserplan",
+      "nightly",
+      "urgent",
+    ]);
+    expect(JSON.parse(runCli(dataDir, ["--json", "labels", "remove", "browser", "nightly"]).stdout).labels).toEqual([
+      "browserplan",
+      "urgent",
+    ]);
+    expect(JSON.parse(runCli(dataDir, ["--json", "labels", "set", "browser", "BrowserPlan"]).stdout).labels).toEqual([
+      "browserplan",
+    ]);
+    expect(JSON.parse(runCli(dataDir, ["--json", "labels", "clear", "browser"]).stdout).labels).toEqual([]);
+  });
+
   test("reports the package version", () => {
     const dataDir = freshDataDir("loops-cli-version-");
     const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { version: string };

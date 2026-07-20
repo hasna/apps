@@ -3,13 +3,17 @@
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
 // Source: OpenLoops 0.4.28
 
+export interface PublicValidationDetails { "code": string; "reason": "not_array" | "invalid_array" | "invalid_item" | "option_not_allowed"; "path": string; "index"?: number; "option"?: string }
+
+export interface ValidationFailureResponse { "ok": boolean; "error": string; "details"?: PublicValidationDetails }
+
 export interface Foundation { "status": string; "version": string; "mode": string; "service"?: string; "detail"?: string }
 
-export interface Loop { "id": string; "name": string; "description"?: string | null; "status": string; "schedule"?: Record<string, unknown>; "target"?: Record<string, unknown>; "nextRunAt"?: string | null; "createdAt"?: string; "updatedAt"?: string }
+export interface Loop { "id": string; "name": string; "description"?: string | null; "labels": Array<string>; "status": string; "schedule"?: Record<string, unknown>; "target"?: Record<string, unknown>; "nextRunAt"?: string | null; "createdAt"?: string; "updatedAt"?: string }
 
-export interface CreateLoopInput { "name": string; "description"?: string; "schedule": Record<string, unknown>; "target": Record<string, unknown> }
+export interface CreateLoopInput { "name": string; "description"?: string; "labels"?: Array<string>; "schedule": Record<string, unknown>; "target": Record<string, unknown> }
 
-export interface UpdateLoopInput { "status"?: "active" | "paused" | "stopped" | "expired"; "nextRunAt"?: string | null; "retryScheduledFor"?: string | null; "expiresAt"?: string | null }
+export interface UpdateLoopInput { "status"?: "active" | "paused" | "stopped" | "expired"; "nextRunAt"?: string | null; "retryScheduledFor"?: string | null; "expiresAt"?: string | null; "labels"?: Array<string> }
 
 export interface Run { "id": string; "loopId": string; "status": string; "attempt"?: number; "scheduledFor"?: string; "startedAt"?: string | null; "finishedAt"?: string | null }
 
@@ -71,7 +75,9 @@ export interface GenericWorkflowEvent { "id": string; "workflowRunId": string; "
 
 export interface AgentSessionContractWorkflowEvent { "id": string; "workflowRunId": string; "sequence": number; "eventType": "agent_session_contract"; "stepId": string; "payload": AgentSessionContract; "createdAt": string }
 
-export type WorkflowEvent = AgentSessionContractWorkflowEvent | GenericWorkflowEvent;
+export interface CustomWorkflowEvent { "id": string; "workflowRunId": string; "sequence": number; "eventKind": "custom"; "eventType": string; "stepId"?: string; "payload"?: Record<string, unknown>; "createdAt": string }
+
+export type WorkflowEvent = AgentSessionContractWorkflowEvent | GenericWorkflowEvent | CustomWorkflowEvent;
 
 export interface WorkflowEventResponse { "ok": boolean; "event": WorkflowEvent }
 
@@ -285,7 +291,7 @@ export class LoopsClient {
     }
 
     /** List loops */
-    async listLoops(query?: { "status"?: "active" | "paused" | "stopped" | "expired"; "limit"?: number; "offset"?: number; "includeArchived"?: boolean; "archived"?: boolean }, init?: RequestInit): Promise<LoopListResponse> {
+    async listLoops(query?: { "status"?: "active" | "paused" | "stopped" | "expired"; "limit"?: number; "offset"?: number; "includeArchived"?: boolean; "archived"?: boolean; "labels"?: Array<string> }, init?: RequestInit): Promise<LoopListResponse> {
       return this.request("GET", `/v1/loops`, {
         body: undefined,
         query,
@@ -411,7 +417,7 @@ export class LoopsClient {
     }
 
     /** List runs */
-    async listRuns(query?: { "loopId"?: string; "status"?: string; "limit"?: number; "offset"?: number; "showOutput"?: boolean }, init?: RequestInit): Promise<RunListResponse> {
+    async listRuns(query?: { "loopId"?: string; "status"?: string; "labels"?: Array<string>; "limit"?: number; "offset"?: number; "showOutput"?: boolean }, init?: RequestInit): Promise<RunListResponse> {
       return this.request("GET", `/v1/runs`, {
         body: undefined,
         query,

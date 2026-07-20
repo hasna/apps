@@ -525,6 +525,8 @@ export interface Loop {
   id: string;
   name: string;
   description?: string;
+  /** Persisted loop labels. Legacy in-memory fixtures may omit this; stores normalize it to an empty array. */
+  labels?: string[];
   status: LoopStatus;
   archivedAt?: string;
   archivedFromStatus?: LoopStatus;
@@ -625,6 +627,7 @@ export interface WriteRunReceiptInput {
 export interface CreateLoopInput {
   name: string;
   description?: string;
+  labels?: string[];
   schedule: ScheduleSpec;
   target: LoopTargetInput;
   goal?: GoalSpec;

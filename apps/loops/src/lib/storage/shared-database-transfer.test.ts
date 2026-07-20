@@ -82,7 +82,7 @@ describe("shared database transfer", () => {
       "target",
     )).toThrow("checksum mismatch");
     expect(() => assertExactLedger(ledgerRows("0008_tenant_prepare"), "0007_work_item_gate_deaths", "target"))
-      .toThrow("unexpected rows: 0011_workflow_run_provenance, 0008_tenant_prepare");
+      .toThrow("unexpected rows: 0011_workflow_run_provenance, 0012_loop_labels, 0008_tenant_prepare");
   });
 
   test("runs fixed PG16 logical transfer steps with filtered api_keys and cleans the archive", async () => {
