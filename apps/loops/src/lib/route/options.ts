@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID } from "../templates.js";
 import { collectValues, listFromRepeatedOpts } from "./parse.js";
+import { providerActiveCapFromOpts } from "./provider-admission.js";
 import { defaultLoopsProject } from "./todos-cli.js";
 import type { TodosDrainOptions } from "./types.js";
 
@@ -70,6 +71,14 @@ const DRAIN_FILTER_OPTION_SPECS: RouteOptionSpec[] = [
   { flags: "--limit <n>", key: "limit", kind: "value", description: "maximum filtered ready-task candidates to consider", defaultValue: "50" },
   { flags: "--scan-limit <n>", key: "scanLimit", kind: "value", description: "maximum raw todos ready rows to fetch before filters; defaults to 500 when filters are used" },
   { flags: "--max-dispatch <n>", key: "maxDispatch", kind: "value", description: "maximum new workflow loops to create in this drain run", defaultValue: "1" },
+  { flags: "--launch-gate <name>", key: "launchGate", kind: "value", description: "human label for a launch/admission gate checked before draining" },
+  {
+    flags: "--launch-gate-blocker <project::task>",
+    key: "launchGateBlocker",
+    kind: "repeat",
+    description: "skip the whole drain while this todos blocker task is not completed; format <todos-project-path>::<task-id>; may be repeated or comma-separated",
+    serializeValue: (opts) => listFromRepeatedOpts(opts.launchGateBlocker as string[] | undefined),
+  },
   { flags: "--evidence-dir <path>", key: "evidenceDir", kind: "value", description: "write a JSON drain report to this directory" },
   { flags: "--compact", key: "compact", kind: "boolean", description: "print compact JSON to stdout while preserving the full evidence file" },
 ];
@@ -129,8 +138,9 @@ const AGENT_ROUTING_OPTION_SPECS: RouteOptionSpec[] = [
     description: "verifier idle watchdog; use none/off to disable when an external heartbeat exists",
     defaultValue: "15m",
   },
-  { flags: "--permission-mode <mode>", key: "permissionMode", kind: "value", description: "provider permission mode: default, plan, auto, or bypass", defaultValue: "bypass" },
+  { flags: "--permission-mode <mode>", key: "permissionMode", kind: "value", description: "provider permission mode: default, plan, auto, or bypass; defaults to bypass for sandboxed codewith/codex routes and provider-default otherwise" },
   { flags: "--sandbox <mode>", key: "sandbox", kind: "value", description: "provider sandbox" },
+  { flags: "--safety-reason <reason>", key: "safetyReason", kind: "value", description: "auditable reason required for advisory restrictions or relaxed sandbox access" },
   {
     flags: "--manual-break-glass",
     key: "manualBreakGlass",
@@ -157,6 +167,24 @@ const AGENT_ROUTING_OPTION_SPECS: RouteOptionSpec[] = [
     key: "maxActiveScope",
     kind: "value",
     description: "scope --max-active counting to this route/drain identity (defaults to the LOOPS_LOOP_NAME of the running loop, else the route key) so each drain's --max-active is its own ceiling instead of a store-wide one",
+  },
+  {
+    flags: "--provider-active-cap <n>",
+    key: "providerActiveCap",
+    kind: "value",
+    description: "skip creating a workflow when provider-native diagnostics report at least this many active background-agent runs",
+  },
+  {
+    flags: "--codewith-active-cap <n>",
+    key: "codewithActiveCap",
+    kind: "value",
+    description: "alias for --provider-active-cap for Codewith background-agent diagnostics",
+  },
+  {
+    flags: "--provider-admission-check",
+    key: "providerAdmissionCheck",
+    kind: "boolean",
+    description: "check provider-native admission diagnostics before creating workflow loops; currently implemented for Codewith",
   },
   {
     flags: "--max-per-profile <n>",
@@ -279,6 +307,7 @@ function serializeOptionSpecs(specs: RouteOptionSpec[], opts: Record<string, unk
  * operator passed to `routes schedule`.
  */
 export function routeDrainArgs(opts: TodosDrainOptions): string[] {
+  providerActiveCapFromOpts(opts);
   const args = ["routes", "drain", "todos-task"];
   serializeOptionSpecs(DRAIN_FILTER_OPTION_SPECS, opts as Record<string, unknown>, args);
   serializeOptionSpecs(AGENT_ROUTING_OPTION_SPECS, opts as Record<string, unknown>, args);

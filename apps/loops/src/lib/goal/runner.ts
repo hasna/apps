@@ -5,15 +5,39 @@ import { executeTarget } from "../executor.js";
 import { nowIso } from "../ids.js";
 import { scrubSecrets, scrubSecretsDeep } from "../redact.js";
 import { summarizeExecutorResult } from "../run-envelope.js";
-import type { Store } from "../store.js";
+import type { CreateGoalInput, CreateGoalPlanNodeInput, RecordGoalEventInput } from "../store.js";
 import { assertAcyclicNodes, nodeBudgetExhausted, readyNodeKeys, rollupSummary, updateReadyFlags } from "./status.js";
 import { executionMetadata, withGoalNodeEnv } from "./metadata.js";
 import { resolveGoalModel, resolveGoalVerifierModel } from "./model-factory.js";
 import { achievementPrompt, goalNodeTarget, planPrompt } from "./prompts.js";
-import type { Goal, GoalExecutorResult, GoalPlan, GoalPlanNode, GoalSpec, RunGoalOptions } from "./types.js";
+import type { Goal, GoalExecutorResult, GoalPlan, GoalPlanNode, GoalRun, GoalSpec, GoalStatus, RunGoalOptions } from "./types.js";
 import { GOAL_OBJECTIVE_MAX_CHARS } from "./types.js";
 
 const DEFAULT_MAX_TURNS = 10;
+
+type MaybePromise<T> = T | Promise<T>;
+
+export interface GoalRunnerStore {
+  findGoalByContext(context: {
+    loopRunId?: string;
+    workflowRunId?: string;
+    workflowStepId?: string;
+    sourceType?: string;
+    sourceId?: string;
+  }): MaybePromise<Goal | undefined>;
+  createGoal(input: CreateGoalInput, opts?: { daemonLeaseId?: string; now?: Date }): MaybePromise<Goal>;
+  requireGoal(id: string): MaybePromise<Goal>;
+  createGoalPlanNodes(goalId: string, nodes: CreateGoalPlanNodeInput[], opts?: { daemonLeaseId?: string; now?: Date }): MaybePromise<GoalPlanNode[]>;
+  listGoalPlanNodes(goalIdOrPlanId: string): MaybePromise<GoalPlanNode[]>;
+  updateGoalStatus(goalId: string, status: GoalStatus, opts?: { daemonLeaseId?: string; now?: Date }): MaybePromise<Goal>;
+  updateGoalPlanNode(
+    goalId: string,
+    key: string,
+    patch: Partial<Pick<GoalPlanNode, "status" | "tokensUsed" | "timeUsedSeconds" | "ready">>,
+    opts?: { daemonLeaseId?: string; now?: Date },
+  ): MaybePromise<GoalPlanNode>;
+  recordGoalEvent(input: RecordGoalEventInput, opts?: { daemonLeaseId?: string; now?: Date }): MaybePromise<GoalRun>;
+}
 
 const PlanNodeSchema = z.object({
   key: z.string().min(1).max(64).regex(/^[A-Za-z0-9_.-]+$/),
@@ -89,12 +113,12 @@ function planStatusForGoal(goal: Goal): GoalPlan["status"] {
   return goal.status;
 }
 
-function syncReadyFlags(store: Store, goal: Goal, nodes: GoalPlanNode[], opts: RunGoalOptions): GoalPlanNode[] {
+async function syncReadyFlags(store: GoalRunnerStore, goal: Goal, nodes: GoalPlanNode[], opts: RunGoalOptions): Promise<GoalPlanNode[]> {
   const withReady = updateReadyFlags(nodes, planStatusForGoal(goal));
   for (const node of withReady) {
     const current = nodes.find((entry) => entry.key === node.key);
     if (current && current.ready !== node.ready) {
-      store.updateGoalPlanNode(goal.goalId, node.key, { ready: node.ready }, { daemonLeaseId: opts.daemonLeaseId });
+      await store.updateGoalPlanNode(goal.goalId, node.key, { ready: node.ready }, { daemonLeaseId: opts.daemonLeaseId });
     }
   }
   return withReady;
@@ -226,8 +250,8 @@ function nodeEvidence(node: GoalPlanNode, result: ExecutorResult): string {
   ].filter(Boolean).join("\n");
 }
 
-async function planGoal(store: Store, goal: Goal, spec: GoalSpec, model: LanguageModel, opts: RunGoalOptions): Promise<GoalPlanNode[]> {
-  const existing = store.listGoalPlanNodes(goal.goalId);
+async function planGoal(store: GoalRunnerStore, goal: Goal, spec: GoalSpec, model: LanguageModel, opts: RunGoalOptions): Promise<GoalPlanNode[]> {
+  const existing = await store.listGoalPlanNodes(goal.goalId);
   if (existing.length > 0) return existing;
   const planned = await generateObject({
     model,
@@ -246,7 +270,7 @@ async function planGoal(store: Store, goal: Goal, spec: GoalSpec, model: Languag
     sequence: index,
   }));
   assertAcyclicNodes(rawNodes.map((node) => ({ key: node.key, dependsOn: node.dependsOn })));
-  store.recordGoalEvent(
+  await store.recordGoalEvent(
     {
       goalId: goal.goalId,
       turn: 0,
@@ -258,7 +282,7 @@ async function planGoal(store: Store, goal: Goal, spec: GoalSpec, model: Languag
     },
     { daemonLeaseId: opts.daemonLeaseId },
   );
-  return store.createGoalPlanNodes(goal.goalId, rawNodes, { daemonLeaseId: opts.daemonLeaseId });
+  return await store.createGoalPlanNodes(goal.goalId, rawNodes, { daemonLeaseId: opts.daemonLeaseId });
 }
 
 function stdoutFor(
@@ -289,19 +313,19 @@ function stdoutFor(
   );
 }
 
-export async function runGoal(store: Store, input: GoalSpec, opts: RunGoalOptions = {}): Promise<GoalExecutorResult> {
+export async function runGoal(store: GoalRunnerStore, input: GoalSpec, opts: RunGoalOptions = {}): Promise<GoalExecutorResult> {
   const spec = normalizeGoalSpec(input);
   const model = opts.model ?? resolveGoalModel({ model: spec.model, env: opts.env });
   const verifier = verifierModelFor(spec, opts, model);
   const startedAt = nowIso();
-  const existing = store.findGoalByContext({
+  const existing = await store.findGoalByContext({
     loopRunId: opts.context?.loopRunId,
     workflowRunId: opts.context?.workflowRunId,
     workflowStepId: opts.context?.workflowStepId,
     sourceType: opts.context?.loopRunId || opts.context?.workflowRunId ? undefined : "manual",
     sourceId: opts.context?.loopRunId || opts.context?.workflowRunId ? undefined : spec.objective,
   });
-  let goal = existing ?? store.createGoal(
+  let goal = existing ?? await store.createGoal(
     {
       objective: spec.objective,
       tokenBudget: spec.tokenBudget,
@@ -318,7 +342,7 @@ export async function runGoal(store: Store, input: GoalSpec, opts: RunGoalOption
     { daemonLeaseId: opts.daemonLeaseId },
   );
   let nodes = await planGoal(store, goal, spec, model, opts);
-  goal = store.requireGoal(goal.goalId);
+  goal = await store.requireGoal(goal.goalId);
   const evidence: string[] = [];
   let validation: unknown;
   let lastBlocker = "";
@@ -326,14 +350,14 @@ export async function runGoal(store: Store, input: GoalSpec, opts: RunGoalOption
   let lastDiagnostic: NoReadyDiagnostic | undefined;
 
   if (budgetExhausted(goal)) {
-    goal = store.updateGoalStatus(goal.goalId, "budgetLimited", { daemonLeaseId: opts.daemonLeaseId });
+    goal = await store.updateGoalStatus(goal.goalId, "budgetLimited", { daemonLeaseId: opts.daemonLeaseId });
     return resultFromGoal(goal, "failed", stdoutFor(goal, nodes, evidence), "goal token budget exhausted after planning", startedAt);
   }
 
   // autoExecute off: plan and persist only; readyOnly and aiDirected both run the
   // dependency-driven execution loop below (aiDirected keeps current behavior).
   if ((goal.autoExecute ?? spec.autoExecute) === "off") {
-    nodes = syncReadyFlags(store, goal, nodes, opts);
+    nodes = await syncReadyFlags(store, goal, nodes, opts);
     return resultFromGoal(
       goal,
       "succeeded",
@@ -348,13 +372,13 @@ export async function runGoal(store: Store, input: GoalSpec, opts: RunGoalOption
 
   for (let turn = 1; turn <= (spec.maxTurns ?? DEFAULT_MAX_TURNS); turn++) {
     if (opts.signal?.aborted) {
-      goal = store.updateGoalStatus(goal.goalId, "cancelled", { daemonLeaseId: opts.daemonLeaseId });
+      goal = await store.updateGoalStatus(goal.goalId, "cancelled", { daemonLeaseId: opts.daemonLeaseId });
       return resultFromGoal(goal, "failed", stdoutFor(goal, nodes, evidence), "goal cancelled", startedAt);
     }
-    goal = store.requireGoal(goal.goalId);
-    nodes = syncReadyFlags(store, goal, store.listGoalPlanNodes(goal.goalId), opts);
+    goal = await store.requireGoal(goal.goalId);
+    nodes = await syncReadyFlags(store, goal, await store.listGoalPlanNodes(goal.goalId), opts);
     if (budgetExhausted(goal)) {
-      goal = store.updateGoalStatus(goal.goalId, "budgetLimited", { daemonLeaseId: opts.daemonLeaseId });
+      goal = await store.updateGoalStatus(goal.goalId, "budgetLimited", { daemonLeaseId: opts.daemonLeaseId });
       return resultFromGoal(goal, "failed", stdoutFor(goal, nodes, evidence), "goal token budget exhausted", startedAt);
     }
 
@@ -364,12 +388,12 @@ export async function runGoal(store: Store, input: GoalSpec, opts: RunGoalOption
     });
     if (readyKeys.length > 0) {
       for (const key of readyKeys) {
-        const node = store.listGoalPlanNodes(goal.goalId).find((entry) => entry.key === key);
+        const node = (await store.listGoalPlanNodes(goal.goalId)).find((entry) => entry.key === key);
         if (!node || node.status !== "pending") continue;
         opts.beforePersist?.();
-        store.updateGoalPlanNode(goal.goalId, node.key, { status: "active", ready: false }, { daemonLeaseId: opts.daemonLeaseId });
+        await store.updateGoalPlanNode(goal.goalId, node.key, { status: "active", ready: false }, { daemonLeaseId: opts.daemonLeaseId });
         const result = await executeUnderlyingTarget(opts.target, goal, node, opts);
-        store.recordGoalEvent(
+        await store.recordGoalEvent(
           {
             goalId: goal.goalId,
             turn,
@@ -388,7 +412,7 @@ export async function runGoal(store: Store, input: GoalSpec, opts: RunGoalOption
         );
         if (result.status === "succeeded") {
           evidence.push(nodeEvidence(node, result));
-          store.updateGoalPlanNode(goal.goalId, node.key, {
+          await store.updateGoalPlanNode(goal.goalId, node.key, {
             status: "complete",
             timeUsedSeconds: Math.round(result.durationMs / 1000),
           }, { daemonLeaseId: opts.daemonLeaseId });
@@ -400,12 +424,12 @@ export async function runGoal(store: Store, input: GoalSpec, opts: RunGoalOption
           lastBlocker = blocker;
           repeatedBlockerCount = 1;
         }
-        store.updateGoalPlanNode(goal.goalId, node.key, { status: repeatedBlockerCount >= 3 ? "blocked" : "pending" }, {
+        await store.updateGoalPlanNode(goal.goalId, node.key, { status: repeatedBlockerCount >= 3 ? "blocked" : "pending" }, {
           daemonLeaseId: opts.daemonLeaseId,
         });
         if (repeatedBlockerCount >= 3) {
-          goal = store.updateGoalStatus(goal.goalId, "blocked", { daemonLeaseId: opts.daemonLeaseId });
-          return resultFromGoal(goal, "failed", stdoutFor(goal, store.listGoalPlanNodes(goal.goalId), evidence), blocker, startedAt);
+          goal = await store.updateGoalStatus(goal.goalId, "blocked", { daemonLeaseId: opts.daemonLeaseId });
+          return resultFromGoal(goal, "failed", stdoutFor(goal, await store.listGoalPlanNodes(goal.goalId), evidence), blocker, startedAt);
         }
         break;
       }
@@ -426,7 +450,7 @@ export async function runGoal(store: Store, input: GoalSpec, opts: RunGoalOption
       const unmet = achieved ? [] : judged.object.unmetRequirements.length > 0
         ? judged.object.unmetRequirements
         : ["adversarial review did not prove completion"];
-      store.recordGoalEvent(
+      await store.recordGoalEvent(
         {
           goalId: goal.goalId,
           turn,
@@ -443,9 +467,9 @@ export async function runGoal(store: Store, input: GoalSpec, opts: RunGoalOption
         },
         { daemonLeaseId: opts.daemonLeaseId },
       );
-      goal = store.requireGoal(goal.goalId);
+      goal = await store.requireGoal(goal.goalId);
       if (achieved) {
-        goal = store.updateGoalStatus(goal.goalId, "complete", { daemonLeaseId: opts.daemonLeaseId });
+        goal = await store.updateGoalStatus(goal.goalId, "complete", { daemonLeaseId: opts.daemonLeaseId });
         return resultFromGoal(goal, "succeeded", stdoutFor(goal, nodes, evidence, validation), undefined, startedAt);
       }
       const blocker = sameBlockerKey(unmet);
@@ -455,7 +479,7 @@ export async function runGoal(store: Store, input: GoalSpec, opts: RunGoalOption
         repeatedBlockerCount = 1;
       }
       if (repeatedBlockerCount >= 3) {
-        goal = store.updateGoalStatus(goal.goalId, "blocked", { daemonLeaseId: opts.daemonLeaseId });
+        goal = await store.updateGoalStatus(goal.goalId, "blocked", { daemonLeaseId: opts.daemonLeaseId });
         return resultFromGoal(goal, "failed", stdoutFor(goal, nodes, evidence, validation), blocker, startedAt);
       }
       continue;
@@ -469,7 +493,7 @@ export async function runGoal(store: Store, input: GoalSpec, opts: RunGoalOption
       lastBlocker = blocker;
       repeatedBlockerCount = 1;
     }
-    store.recordGoalEvent(
+    await store.recordGoalEvent(
       {
         goalId: goal.goalId,
         turn,
@@ -480,17 +504,17 @@ export async function runGoal(store: Store, input: GoalSpec, opts: RunGoalOption
       { daemonLeaseId: opts.daemonLeaseId },
     );
     if (repeatedBlockerCount >= 3) {
-      goal = store.updateGoalStatus(goal.goalId, "blocked", { daemonLeaseId: opts.daemonLeaseId });
+      goal = await store.updateGoalStatus(goal.goalId, "blocked", { daemonLeaseId: opts.daemonLeaseId });
       return resultFromGoal(goal, "failed", stdoutFor(goal, nodes, evidence, validation, diagnostic), blocker, startedAt);
     }
   }
 
-  goal = store.updateGoalStatus(goal.goalId, "usageLimited", { daemonLeaseId: opts.daemonLeaseId });
+  goal = await store.updateGoalStatus(goal.goalId, "usageLimited", { daemonLeaseId: opts.daemonLeaseId });
   const exhaustedError = lastDiagnostic?.blocker ?? (lastBlocker ? `${lastBlocker}; max turns exhausted` : "goal max turns exhausted");
   return resultFromGoal(
     goal,
     "failed",
-    stdoutFor(goal, store.listGoalPlanNodes(goal.goalId), evidence, validation, lastDiagnostic),
+    stdoutFor(goal, await store.listGoalPlanNodes(goal.goalId), evidence, validation, lastDiagnostic),
     exhaustedError,
     startedAt,
   );

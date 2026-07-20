@@ -567,6 +567,7 @@ describe("scheduler", () => {
     const loop = loopFixture({ retryDelayMs: 1_000 });
     expect(retryBackoffDelayMs(loop, runFixture({ error: "429 too many requests" }), noJitter)).toBe(4_000);
     expect(retryBackoffDelayMs(loop, runFixture({ error: "invalid token" }), noJitter)).toBe(4_000);
+    expect(retryBackoffDelayMs(loop, runFixture({ stderr: "Connection lost to https://agentn.global.api5.cursor.sh attempts 1-3\nRetriableError: [resource_exhausted] Error" }), noJitter)).toBe(4_000);
     expect(retryBackoffDelayMs(loop, runFixture({ stderr: "Error: [unavailable] getaddrinfo EAI_AGAIN api2.cursor.sh" }), noJitter)).toBe(4_000);
     expect(retryBackoffDelayMs(loop, runFixture({ error: "boom" }), noJitter)).toBe(1_000);
     const slow = loopFixture({ retryDelayMs: 3_600_000 });

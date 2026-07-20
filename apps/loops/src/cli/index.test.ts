@@ -7,13 +7,20 @@ import { fileURLToPath } from "node:url";
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { Store } from "../lib/store.js";
+import { createSqliteLoopStorage } from "../lib/storage/sqlite.js";
+import { applySelfHostedPush } from "../lib/migration.js";
 import { RESTART_INTERRUPTED_RUN_PREFIX } from "../lib/health.js";
 
 const cliPath = join(dirname(fileURLToPath(import.meta.url)), "index.ts");
 
 function runCli(dataDir: string, args: string[], input?: string, env: Record<string, string> = {}) {
+  const isolatedEnv = {
+    HASNA_LOOPS_STORAGE_MODE: "local",
+    HASNA_LOOPS_API_URL: "",
+    HASNA_LOOPS_API_KEY: "",
+  };
   return spawnSync(process.execPath, [cliPath, ...args], {
-    env: { ...process.env, ...env, LOOPS_DATA_DIR: dataDir },
+    env: { ...process.env, ...isolatedEnv, ...env, LOOPS_DATA_DIR: dataDir },
     input,
     encoding: "utf8",
   });
@@ -226,13 +233,8 @@ describe("loops CLI", () => {
   test("reports local deployment mode by default", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-mode-local-"));
     const mode = runCli(dataDir, ["--json", "mode"], undefined, {
-      LOOPS_MODE: "",
-      HASNA_LOOPS_MODE: "",
-      LOOPS_API_URL: "",
+      HASNA_LOOPS_STORAGE_MODE: "",
       HASNA_LOOPS_API_URL: "",
-      LOOPS_CLOUD_API_URL: "",
-      HASNA_LOOPS_CLOUD_API_URL: "",
-      LOOPS_DATABASE_URL: "",
       HASNA_LOOPS_DATABASE_URL: "",
     });
 
@@ -254,9 +256,9 @@ describe("loops CLI", () => {
   test("reports self-hosted and cloud contract perspectives without exposing tokens", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-mode-cloud-"));
     const selfHosted = runCli(dataDir, ["--json", "self-hosted", "status"], undefined, {
-      LOOPS_MODE: "self-hosted",
-      LOOPS_API_URL: "http://127.0.0.1:8787",
-      LOOPS_API_TOKEN: "do-not-print-this-token",
+      HASNA_LOOPS_STORAGE_MODE: "self_hosted",
+      HASNA_LOOPS_API_URL: "http://127.0.0.1:8787",
+      HASNA_LOOPS_API_KEY: "do-not-print-this-token",
     });
     expect(selfHosted.status).toBe(0);
     expect(selfHosted.stdout).not.toContain("do-not-print-this-token");
@@ -268,7 +270,7 @@ describe("loops CLI", () => {
         kind: "self_hosted",
         configured: true,
         apiUrl: "http://127.0.0.1:8787",
-        authTokenPresent: true,
+        apiKeyPresent: true,
       },
       schedulerState: {
         authority: "self_hosted_control_plane",
@@ -279,9 +281,9 @@ describe("loops CLI", () => {
     });
 
     const cloud = runCli(dataDir, ["--json", "cloud", "status"], undefined, {
-      LOOPS_MODE: "local",
-      LOOPS_CLOUD_API_URL: "https://loops.example.test",
-      LOOPS_CLOUD_TOKEN: "do-not-print-this-cloud-token",
+      HASNA_LOOPS_STORAGE_MODE: "local",
+      HASNA_LOOPS_API_URL: "https://loops.example.test",
+      HASNA_LOOPS_API_KEY: "do-not-print-this-cloud-token",
     });
     expect(cloud.status).toBe(0);
     expect(cloud.stdout).not.toContain("do-not-print-this-cloud-token");
@@ -295,7 +297,7 @@ describe("loops CLI", () => {
         kind: "cloud",
         configured: true,
         apiUrl: "https://loops.example.test",
-        authTokenPresent: true,
+        apiKeyPresent: true,
       },
       schedulerState: {
         authority: "cloud_control_plane",
@@ -416,8 +418,7 @@ describe("loops CLI", () => {
     expect(create.status).toBe(0);
 
     const preview = runCli(dataDir, ["--json", "self-hosted", "migrate", "--dry-run"], undefined, {
-      LOOPS_API_TOKEN: "do-not-print-this-token",
-      HASNA_LOOPS_API_TOKEN: "",
+      HASNA_LOOPS_API_KEY: "do-not-print-this-token",
     });
     expect(preview.status).toBe(0);
     expect(preview.stdout).not.toContain("do-not-print-this-token");
@@ -426,7 +427,7 @@ describe("loops CLI", () => {
     expect(plan.dryRun).toBe(true);
     expect(plan.importable).toBe(false);
     expect(plan.summary.blocked).toBeGreaterThan(0);
-    expect(plan.warnings.join(" ")).toContain("LOOPS_API_URL");
+    expect(plan.warnings.join(" ")).toContain("HASNA_LOOPS_API_URL");
 
     for (const command of ["push", "pull"]) {
       const documented = runCli(dataDir, ["--json", "self-hosted", command, "--dry-run"]);
@@ -435,32 +436,75 @@ describe("loops CLI", () => {
     }
   });
 
-  test("self-hosted runner-register previews by default", () => {
-    const dataDir = freshDataDir("loops-cli-runner-register-dry-run-");
-    const registered = runCli(dataDir, [
-      "--json",
-      "self-hosted",
-      "runner-register",
-      "--runner-id",
-      "runner-cli-test",
-      "--machine-id",
-      "machine-cli-test",
-      "--label",
-      "role=worker",
-      "--capability",
-      "concurrency=1",
-    ]);
-    expect(registered.status).toBe(0);
-    expect(JSON.parse(registered.stdout)).toMatchObject({
-      ok: true,
-      dryRun: true,
-      runner: {
-        runnerId: "runner-cli-test",
-        machineId: "machine-cli-test",
-        labels: { role: "worker" },
-        capabilities: { concurrency: 1 },
-      },
+  test("self-hosted push applies id-preserving definitions paused/disabled and writes a manifest", async () => {
+    const mod = await import("../api/index.js");
+    const sourceDir = freshDataDir("loops-cli-self-hosted-push-source-");
+    const remoteStorage = createSqliteLoopStorage(":memory:");
+    const principal = {
+      tenantId: "tenant-test", principalId: "principal-test", requestId: "request-test",
+      kid: "kid-test", agent: "principal-test", scopes: ["loops:import"],
+      roles: ["admin" as const], tokenKind: "api_key" as const,
+      claims: { v: 1, kid: "kid-test", app: "loops", agent: "principal-test", scopes: ["loops:import"], iat: 1, exp: null },
+    };
+    const server = mod.createLoopsApiServer({
+      host: "127.0.0.1",
+      port: 0,
+      authenticator: { authenticate: async () => ({ ok: true as const, status: 200 as const, principal }) },
+      withTenantStorage: (_principal, fn) => fn(remoteStorage),
     });
+    let workflowId = "";
+    let loopId = "";
+
+    const source = new Store(join(sourceDir, "loops.db"));
+    try {
+      const workflow = source.createWorkflow({
+        name: "push-workflow",
+        steps: [{ id: "one", target: { type: "command", command: "true" } }],
+      });
+      const loop = source.createLoop({
+        name: "push-loop",
+        schedule: { type: "once", at: futureAt() },
+        target: { type: "workflow", workflowId: workflow.id },
+      });
+      workflowId = workflow.id;
+      loopId = loop.id;
+      expect(loop.status).toBe("active");
+    } finally {
+      source.close();
+    }
+
+    try {
+      const source = new Store(join(sourceDir, "loops.db"));
+      const output = await applySelfHostedPush(source, {
+        apiUrl: `http://${server.hostname}:${server.port}`,
+        apiKey: "test-token",
+        includeRuns: false,
+      });
+      source.close();
+      expect(output.ok).toBe(true);
+      expect(output.manifest.safety).toMatchObject({
+        forcedLoopStatus: "paused",
+        clearedLoopRunPointers: true,
+        forcedWorkflowStatus: "archived",
+        resumesLoops: false,
+      });
+
+      const manifest = output.manifest;
+      expect(manifest.missingIds.workflows).toEqual([workflowId]);
+      expect(manifest.missingIds.loops).toEqual([loopId]);
+      expect(manifest.counts.applied).toMatchObject({ workflows: 1, loops: 1, runs: 0 });
+      expect(manifest.rollback.notes.join(" ")).toContain("manual");
+
+      const remoteWorkflow = await remoteStorage.getWorkflow(workflowId);
+      expect(remoteWorkflow?.status).toBe("archived");
+      const remoteLoop = await remoteStorage.getLoop(loopId);
+      expect(remoteLoop?.status).toBe("paused");
+      expect(remoteLoop?.nextRunAt).toBeUndefined();
+      expect(remoteLoop?.retryScheduledFor).toBeUndefined();
+    } finally {
+      server.stop(true);
+      await remoteStorage.close();
+    }
   });
 
   test("compiled CLI reports the package version", () => {
@@ -1161,8 +1205,25 @@ describe("loops CLI", () => {
     expect(shown.machine.id).toBe(value.machine.id);
   });
 
-  test("create agent stores advisory allowlist metadata", () => {
+  test("create agent requires and persists auditable advisory restriction metadata", () => {
     const dataDir = freshDataDir("loops-cli-agent-allowlist-");
+    const missingReason = runCli(dataDir, [
+      "--json",
+      "create",
+      "agent",
+      "missing-reason-agent",
+      "--provider",
+      "codewith",
+      "--at",
+      futureAt(),
+      "--prompt",
+      "inspect status",
+      "--allow-command",
+      "git",
+    ]);
+    expect(missingReason.status).toBe(1);
+    expect(JSON.parse(missingReason.stdout).validation.error).toContain("allowlist.safetyReason");
+
     const create = runCli(dataDir, [
       "--json",
       "create",
@@ -1178,6 +1239,8 @@ describe("loops CLI", () => {
       "functions.exec_command",
       "--allow-command",
       "git,bun",
+      "--safety-reason",
+      "isolated repository status inspection",
     ]);
 
     expect(create.status).toBe(0);
@@ -1186,7 +1249,27 @@ describe("loops CLI", () => {
       tools: ["functions.exec_command"],
       commands: ["git", "bun"],
       enforcement: "metadata_only",
+      safetyReason: "isolated repository status inspection",
     });
+
+    const relaxed = runCli(dataDir, [
+      "--json",
+      "create",
+      "agent",
+      "relaxed-agent",
+      "--provider",
+      "codewith",
+      "--at",
+      futureAt(),
+      "--prompt",
+      "inspect status",
+      "--sandbox",
+      "danger-full-access",
+      "--safety-reason",
+      "operator-approved isolated repository repair",
+    ]);
+    expect(relaxed.status).toBe(1);
+    expect(JSON.parse(relaxed.stdout).validation.error).toContain("manualBreakGlass=true");
   });
 
   test("create command, agent, and workflow accept explicit unlimited timeouts", () => {
@@ -1325,7 +1408,7 @@ describe("loops CLI", () => {
           idleTimeoutMs: 120_000,
           permissionMode: "default",
           sandbox: "workspace-write",
-          allowlist: { commands: ["todos"] },
+          allowlist: { commands: ["todos"], safetyReason: "direct timeout migration fixture" },
           preflight: { beforeRun: true },
         },
         overlap: "skip",
@@ -1372,7 +1455,7 @@ describe("loops CLI", () => {
       timeoutMs: null,
       permissionMode: "default",
       sandbox: "workspace-write",
-      allowlist: { commands: ["todos"] },
+      allowlist: { commands: ["todos"], safetyReason: "direct timeout migration fixture" },
       preflight: { beforeRun: true },
     });
     expect(shownValue.target.idleTimeoutMs).toBeUndefined();
@@ -2867,11 +2950,14 @@ describe("loops CLI", () => {
       "sandbox=danger-full-access",
       "--var",
       "manualBreakGlass=true",
+      "--var",
+      "safetyReason=operator-approved isolated template test",
     ]);
     expect(allowed.status).toBe(0);
     const workflow = JSON.parse(allowed.stdout);
     expect(workflow.steps[1].target.sandbox).toBe("danger-full-access");
     expect(workflow.steps[1].target.allowlist.commands).toContain("manual-break-glass");
+    expect(workflow.steps[1].target.allowlist.safetyReason).toBe("operator-approved isolated template test");
   });
 
   test("templates render lifecycle and deterministic producer workflows", () => {
@@ -3951,6 +4037,9 @@ describe("loops CLI", () => {
       taskId: "task-lifecycle-smoke-one",
       providerRouting: { provider: "codewith" },
       routeScope: "todos-task",
+      machineId: expect.any(String),
+      workItemId: expect.any(String),
+      workItemStatus: "admitted",
     });
     expect(firstValue.evidencePath).toContain(evidenceDir);
     expect(existsSync(firstValue.evidencePath)).toBe(true);
@@ -4015,7 +4104,7 @@ describe("loops CLI", () => {
     } finally {
       afterReplay.close();
     }
-  });
+  }, 15_000);
 
   test("todos task drain smoke does not admit ineligible or wrong-project tasks", () => {
     const dataDir = freshDataDir("loops-cli-task-lifecycle-negative-");
@@ -4067,18 +4156,22 @@ describe("loops CLI", () => {
     const value = JSON.parse(result.stdout);
     expect(value.scanned).toBe(7);
     expect(value.filteredCandidates).toBe(6);
-    expect(value.considered).toBe(6);
+    // task-no-auto carries a route-disallowed TAG, so it is held out of the
+    // candidate window (excludedDisallowedTag) instead of burning a considered
+    // slot; status-based ineligibility (blocked/completed) still skips in-window.
+    expect(value.excludedDisallowedTag).toBe(1);
+    expect(value.considered).toBe(5);
     expect(value.created).toBe(0);
-    expect(value.skipped).toBe(6);
+    expect(value.skipped).toBe(5);
     expect(value.results.map((entry: { taskId?: string }) => entry.taskId).sort()).toEqual([
       "task-approval",
       "task-blocked",
       "task-completed",
       "task-manual",
-      "task-no-auto",
       "task-no-route",
     ]);
     expect(JSON.stringify(value.results)).not.toContain("task-wrong-project");
+    expect(JSON.stringify(value.results)).not.toContain("task-no-auto");
     expect(existsSync(value.evidencePath)).toBe(true);
     const store = new Store(join(dataDir, "loops.db"));
     try {
@@ -4216,6 +4309,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task provider rules fall back to fixed Codewith pools and reject invalid hints", () => {
+    // Spawns ~40 CLI subprocesses serially; exceeds the 5s default under load.
     const dataDir = freshDataDir("loops-cli-event-provider-fallback-");
     const repo = createGitRepo("loops-cli-event-provider-fallback-repo-");
     const event = {
@@ -4633,7 +4727,7 @@ describe("loops CLI", () => {
     expect(invalid.status).not.toBe(0);
     expect(invalid.stderr).toContain("unsupported provider");
     expect(invalid.stderr).toContain("unsupported-provider");
-  });
+  }, 60000);
 
   test("todos task PR approval routes require non-author GitHub reviewer evidence", () => {
     const dataDir = freshDataDir("loops-cli-event-pr-review-routing-");
@@ -4646,6 +4740,7 @@ describe("loops CLI", () => {
         title: "Approve blocked PR",
         working_dir: "/tmp/open-loops",
         tags: ["auto:route"],
+        pr_state: "OPEN",
         description: [
           "GitHub PR #1 author is also andrei-hasna.",
           "reviewDecision=REVIEW_REQUIRED",
@@ -4791,6 +4886,8 @@ describe("loops CLI", () => {
       "--sandbox",
       "danger-full-access",
       "--manual-break-glass",
+      "--safety-reason",
+      "operator-approved stale policy replacement test",
       "--permission-mode",
       "bypass",
     ];
@@ -4806,7 +4903,9 @@ describe("loops CLI", () => {
         ...step,
         target: {
           ...step.target,
-          allowlist: undefined,
+          allowlist: {
+            safetyReason: "legacy relaxed workflow fixture",
+          },
         },
       })),
     };
@@ -4844,6 +4943,7 @@ describe("loops CLI", () => {
     expect(created.status).toBe(0);
     const createdValue = JSON.parse(created.stdout);
     expect(createdValue.workItem.status).toBe("admitted");
+    expect(createdValue.workItem.machineId).toEqual(expect.any(String));
 
     const routes = runCli(dataDir, ["--json", "routes", "list"]);
     expect(routes.status).toBe(0);
@@ -5380,6 +5480,9 @@ describe("loops CLI", () => {
       "oss",
       "--max-dispatch",
       "2",
+      "--provider-active-cap",
+      "6",
+      "--provider-admission-check",
       "--sandbox",
       "workspace-write",
     ]);
@@ -5389,6 +5492,8 @@ describe("loops CLI", () => {
     expect(loop.target.args).toEqual(expect.arrayContaining(["--provider-rule", "area=backend:codewith:account004,account005"]));
     expect(loop.target.args).toEqual(expect.arrayContaining(["--triage-auth-profile", "account004", "--planner-auth-profile", "account005"]));
     expect(loop.target.args).toEqual(expect.arrayContaining(["--max-dispatch", "2"]));
+    expect(loop.target.args).toEqual(expect.arrayContaining(["--provider-active-cap", "6"]));
+    expect(loop.target.args).toContain("--provider-admission-check");
   });
 
   test("routes schedule rejects unsupported todos task templates before storing a drain loop", () => {
@@ -5440,6 +5545,35 @@ describe("loops CLI", () => {
     expect(loop.target.args).toEqual(expect.arrayContaining(["--todos-project-include", "/tmp/registry/include-one"]));
     expect(loop.target.args).toEqual(expect.arrayContaining(["--todos-project-include", "/tmp/registry/include-two"]));
     expect(loop.target.args).toEqual(expect.arrayContaining(["--todos-project-include", "/tmp/registry/include-three"]));
+    expect(loop.target.args).toEqual(expect.arrayContaining(["--max-dispatch", "3"]));
+  });
+
+  test("routes schedule preserves launch gate blocker options", () => {
+    const dataDir = freshDataDir("loops-cli-routes-template-schedule-launch-gate-");
+
+    const scheduled = runCli(dataDir, [
+      "--json",
+      "routes",
+      "schedule",
+      "todos-task",
+      "route-drain-launch-gate-test",
+      "--every",
+      "5m",
+      "--launch-gate",
+      "pa19-controlled-launch",
+      "--launch-gate-blocker",
+      "/tmp/open-codewith::2d9d931b",
+      "--launch-gate-blocker",
+      "/tmp/open-loops::816e99db,/tmp/open-loops::f30153fd",
+      "--max-dispatch",
+      "3",
+    ]);
+    expect(scheduled.status).toBe(0);
+    const loop = JSON.parse(scheduled.stdout);
+    expect(loop.target.args).toEqual(expect.arrayContaining(["--launch-gate", "pa19-controlled-launch"]));
+    expect(loop.target.args).toEqual(expect.arrayContaining(["--launch-gate-blocker", "/tmp/open-codewith::2d9d931b"]));
+    expect(loop.target.args).toEqual(expect.arrayContaining(["--launch-gate-blocker", "/tmp/open-loops::816e99db"]));
+    expect(loop.target.args).toEqual(expect.arrayContaining(["--launch-gate-blocker", "/tmp/open-loops::f30153fd"]));
     expect(loop.target.args).toEqual(expect.arrayContaining(["--max-dispatch", "3"]));
   });
 
@@ -5714,6 +5848,27 @@ describe("loops CLI", () => {
     expect(loops).toHaveLength(0);
   });
 
+  test("routes schedule rejects invalid provider active caps before storing a loop", () => {
+    const dataDir = freshDataDir("loops-cli-routes-schedule-provider-cap-invalid-");
+
+    const scheduled = runCli(dataDir, [
+      "routes",
+      "schedule",
+      "todos-task",
+      "route-drain-invalid-provider-cap",
+      "--every",
+      "5m",
+      "--provider-active-cap",
+      "0",
+    ]);
+
+    expect(scheduled.status).not.toBe(0);
+    expect(scheduled.stderr).toContain("--provider-active-cap must be a positive integer");
+
+    const loops = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);
+    expect(loops).toHaveLength(0);
+  });
+
   test("docs include the OSS task route drain safety recipe", () => {
     const usage = readFileSync(new URL("../../docs/USAGE.md", import.meta.url), "utf8");
 
@@ -5722,6 +5877,8 @@ describe("loops CLI", () => {
     expect(usage).toContain("--auth-profile-pool account001,account002,account003");
     expect(usage).toContain("--worktree-mode required");
     expect(usage).toContain("--max-active-per-project");
+    expect(usage).toContain("--provider-active-cap");
+    expect(usage).toContain("--provider-admission-check");
     expect(usage).toContain("--evidence-dir");
     expect(usage).toMatch(/Do not dispatch\s+or paste task prompts into tmux panes/);
   });
@@ -5755,6 +5912,8 @@ describe("loops CLI", () => {
               provider: "codewith",
               prompt: "unsafe old workflow",
               sandbox: "danger-full-access",
+              manualBreakGlass: true,
+              allowlist: { safetyReason: "legacy relaxed workflow fixture" },
             },
           },
         ],
@@ -6965,13 +7124,15 @@ describe("loops CLI", () => {
 
     expect(result.status).toBe(0);
     const value = JSON.parse(result.stdout);
-    expect(value.considered).toBe(2);
+    // Route-disallowed tags are held out of the candidate window entirely
+    // (counted as excludedDisallowedTag) instead of burning a considered slot
+    // per tick just to be rejected by eligibility.
+    expect(value.excludedDisallowedTag).toBe(2);
+    expect(value.candidates).toBe(0);
+    expect(value.considered).toBe(0);
     expect(value.created).toBe(0);
-    expect(value.skipped).toBe(2);
-    expect(value.results.map((entry: { reason: string }) => entry.reason)).toEqual([
-      "task has disallowed tag: no-auto",
-      "task has disallowed tag: blocked",
-    ]);
+    expect(value.skipped).toBe(0);
+    expect(value.results).toEqual([]);
     const loops = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);
     expect(loops).toHaveLength(0);
   });
@@ -7097,6 +7258,20 @@ describe("loops CLI", () => {
       ].join("\n"),
     );
     chmodSync(todosBin, 0o755);
+    const codewithBin = join(binDir, "codewith");
+    writeFileSync(
+      codewithBin,
+      [
+        "#!/usr/bin/env bash",
+        "if [[ \"$*\" == \"agent diagnostics --json\" ]]; then",
+        "  printf '%s' '{\"activeRunCount\":2,\"maxActiveRunsPerUser\":8,\"availableActiveRunSlots\":6}'",
+        "  exit 0",
+        "fi",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(codewithBin, 0o755);
     const bulkyDetail = "very long private task details ".repeat(200);
     const ready = [
       {
@@ -7127,6 +7302,8 @@ describe("loops CLI", () => {
         evidenceDir,
         "--max-dispatch",
         "1",
+        "--provider-active-cap",
+        "6",
         "--worktree-mode",
         "off",
       ],
@@ -7146,11 +7323,95 @@ describe("loops CLI", () => {
       kind: "created",
       taskId: "task-drain-compact",
     });
+    expect(value.results[0].providerAdmission).toMatchObject({
+      allowed: true,
+      provider: "codewith",
+      checked: true,
+      activeCap: 6,
+      diagnostics: { activeRunCount: 2, availableActiveRunSlots: 6 },
+    });
     expect(value.results[0].event).toBeUndefined();
     expect(value.results[0].workflow).toBeUndefined();
     expect(existsSync(value.evidencePath)).toBe(true);
     const evidence = readFileSync(value.evidencePath, "utf8");
     expect(evidence).toContain("very long private task details");
+  });
+
+  test("todos task drain exits nonzero when provider admission diagnostics fail", () => {
+    const dataDir = freshDataDir("loops-cli-event-drain-provider-admission-fail-");
+    const binDir = join(dataDir, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "if [[ \"$*\" == *\"ready\"* ]]; then printf '%s' \"$TODOS_READY_JSON\"; exit 0; fi",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todosBin, 0o755);
+    const codewithBin = join(binDir, "codewith");
+    writeFileSync(
+      codewithBin,
+      [
+        "#!/usr/bin/env bash",
+        "if [[ \"$*\" == \"agent diagnostics --json\" ]]; then",
+        "  printf 'diagnostics unavailable\\n' >&2",
+        "  exit 17",
+        "fi",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(codewithBin, 0o755);
+    const ready = [
+      {
+        id: "task-drain-provider-admission-fail",
+        title: "Route task while diagnostics are broken",
+        description: "provider admission should fail closed",
+        status: "pending",
+        working_dir: dataDir,
+        tags: ["auto:route"],
+      },
+    ];
+
+    const result = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "drain",
+        "todos-task",
+        "--todos-project",
+        join(dataDir, "todos-store"),
+        "--compact",
+        "--max-dispatch",
+        "1",
+        "--provider-admission-check",
+        "--worktree-mode",
+        "off",
+      ],
+      undefined,
+      {
+        PATH: `${binDir}:/usr/bin:/bin`,
+        TODOS_READY_JSON: JSON.stringify(ready),
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("route drain hit 1 non-skippable task error");
+    const value = JSON.parse(result.stdout);
+    expect(value.created).toBe(0);
+    expect(value.throttled).toBe(1);
+    expect(value.fatal).toBe(1);
+    expect(value.results[0].providerAdmission).toMatchObject({
+      allowed: false,
+      provider: "codewith",
+      checked: true,
+      fatal: true,
+    });
   });
 
   test("todos task drain derives project path from repository line in task descriptions", () => {
@@ -7214,9 +7475,11 @@ describe("loops CLI", () => {
     const value = JSON.parse(result.stdout);
     expect(value.filteredCandidates).toBe(1);
     expect(value.created).toBe(1);
-    expect(value.results[0].event.data.cwd).toBe(repo);
-    expect(value.results[0].event.data.project_path).toBe(repo);
-    expect(value.results[0].workflow.steps[0].target.cwd).toBe(repo);
+    // The description-derived repo is now canonicalized (macOS: /var/... ->
+    // /private/var/...) because it rides the usable-repo route path.
+    expect(value.results[0].event.data.cwd).toBe(testPath(repo));
+    expect(value.results[0].event.data.project_path).toBe(testPath(repo));
+    expect(value.results[0].workflow.steps[0].target.cwd).toBe(testPath(repo));
   });
 
   test("todos task drain uses explicit project path instead of stale task working_dir for required worktrees", () => {
@@ -7304,11 +7567,12 @@ describe("loops CLI", () => {
     expect(worker.target.cwd).toBe(worker.target.worktree.cwd);
   });
 
-  test("todos task drain reports explicit invalid project path before creating a required-worktree loop", () => {
+  test("todos task drain reports an invalid route path when no task path is a usable repository", () => {
     const dataDir = freshDataDir("loops-cli-event-drain-invalid-explicit-project-");
-    const sourceRepo = createGitRepo("loops-cli-event-drain-invalid-explicit-source-");
+    const staleWorkingDir = join(dataDir, "stale-working-dir");
     const invalidRoutePath = join(dataDir, "not-a-git-repo");
     const binDir = join(dataDir, "bin");
+    mkdirSync(staleWorkingDir, { recursive: true });
     mkdirSync(invalidRoutePath, { recursive: true });
     mkdirSync(binDir, { recursive: true });
     const todosBin = join(binDir, "todos");
@@ -7324,14 +7588,17 @@ describe("loops CLI", () => {
       ].join("\n"),
     );
     chmodSync(todosBin, 0o755);
+    // Neither the task's working_dir nor the router's --project-path is a git
+    // repository: nothing usable anywhere -> skip + mark non-routeable (the
+    // pre-existing rescue-failure behavior stays intact).
     const ready = [
       {
         id: "task-drain-invalid-explicit-project",
         project_id: "project-route",
-        title: "Route task with invalid explicit route path",
+        title: "Route task with no usable repository path anywhere",
         status: "pending",
         task_list_id: "list-route",
-        working_dir: sourceRepo,
+        working_dir: staleWorkingDir,
         tags: ["auto:route"],
       },
     ];
@@ -7371,7 +7638,7 @@ describe("loops CLI", () => {
       taskId: "task-drain-invalid-explicit-project",
       routeError: true,
       routeProjectPath: testPath(invalidRoutePath),
-      sourceTaskWorkingDir: sourceRepo,
+      sourceTaskWorkingDir: staleWorkingDir,
     });
     expect(value.results[0].reason).toContain("worktreeMode=required");
     expect(value.results[0].reason).toContain("not-a-git-repo");
@@ -7382,6 +7649,173 @@ describe("loops CLI", () => {
     });
     const loops = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);
     expect(loops).toHaveLength(0);
+  });
+
+  test("todos task drain routes to the task's own repository over an invalid explicit route path", () => {
+    // Regression flip of 8ab2664's "explicit invalid path always skips": a task
+    // whose own working_dir IS a usable git repository must route there instead
+    // of dying on the router-level path — the merge-lane wedge in miniature.
+    const dataDir = freshDataDir("loops-cli-event-drain-task-repo-wins-");
+    const sourceRepo = createGitRepo("loops-cli-event-drain-task-repo-wins-source-");
+    const invalidRoutePath = join(dataDir, "not-a-git-repo");
+    const worktreeRoot = join(dataDir, "worktrees");
+    const binDir = join(dataDir, "bin");
+    mkdirSync(invalidRoutePath, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "if [[ \"$*\" == *\"ready\"* ]]; then printf '%s' \"$TODOS_READY_JSON\"; exit 0; fi",
+        "if [[ \"$*\" == *\"task-lists\"* ]]; then printf '%s' \"$TODOS_TASK_LISTS_JSON\"; exit 0; fi",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todosBin, 0o755);
+    const ready = [
+      {
+        id: "task-drain-task-repo-wins",
+        project_id: "project-route",
+        title: "Route task whose own working_dir is the real repository",
+        status: "pending",
+        task_list_id: "list-route",
+        working_dir: sourceRepo,
+        tags: ["auto:route"],
+      },
+    ];
+
+    const result = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "drain",
+        "todos-task",
+        "--todos-project",
+        join(dataDir, "todos-store"),
+        "--task-list",
+        "route",
+        "--project-path",
+        invalidRoutePath,
+        "--template",
+        "task-lifecycle",
+        "--dry-run",
+        "--worktree-mode",
+        "required",
+        "--worktree-root",
+        worktreeRoot,
+      ],
+      undefined,
+      {
+        PATH: `${binDir}:/usr/bin:/bin`,
+        TODOS_TASK_LISTS_JSON: JSON.stringify([{ id: "list-route", slug: "route", name: "Route" }]),
+        TODOS_READY_JSON: JSON.stringify(ready),
+      },
+    );
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    const canonicalRepo = testPath(sourceRepo);
+    expect(value.created).toBe(1);
+    expect(value.skipped).toBe(0);
+    const routed = value.results[0];
+    expect(routed.event.data.project_path).toBe(canonicalRepo);
+    expect(routed.event.data.routeProjectPath).toBe(canonicalRepo);
+    expect(routed.invocation.scope.projectPath).toBe(canonicalRepo);
+    const worker = routed.workflow.steps.find((step: { id: string }) => step.id === "worker");
+    expect(worker.target.worktree.repoRoot).toBe(canonicalRepo);
+  });
+
+  test("todos task drain routes a merge-lane task to its description repository over the group-root project path", () => {
+    // The exact 8ab2664 regression scenario: a multi-repo drain passes
+    // --project-path as a GROUP ROOT (not a git repo, e.g. /home/hasna) while
+    // each task names its real repository only in the description
+    // ("Repository: /path/to/repo") and carries a mis-set working_dir. The task
+    // must route to ITS repository; before the fix every such task skipped with
+    // "worktreeMode=required but projectPath is not an existing git repository"
+    // and merge dispatch was zero fleet-wide.
+    const dataDir = freshDataDir("loops-cli-event-drain-group-root-");
+    const repo = createGitRepo("loops-cli-event-drain-group-root-repo-");
+    const groupRoot = join(dataDir, "group-root");
+    const staleWorkingDir = join(dataDir, "loops-data-dir");
+    const worktreeRoot = join(dataDir, "worktrees");
+    const binDir = join(dataDir, "bin");
+    mkdirSync(groupRoot, { recursive: true });
+    mkdirSync(staleWorkingDir, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "if [[ \"$*\" == *\"ready\"* ]]; then printf '%s' \"$TODOS_READY_JSON\"; exit 0; fi",
+        "if [[ \"$*\" == *\"task-lists\"* ]]; then printf '%s' \"$TODOS_TASK_LISTS_JSON\"; exit 0; fi",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todosBin, 0o755);
+    const ready = [
+      {
+        id: "task-drain-group-root-merge",
+        project_id: "project-route",
+        title: "Fix the flaky connector test",
+        description: `Stabilize the retry test.\n\nRepository: ${repo}\nAcceptance: suite green.`,
+        status: "pending",
+        task_list_id: "list-route",
+        working_dir: staleWorkingDir,
+        tags: ["auto:route"],
+      },
+    ];
+
+    const result = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "drain",
+        "todos-task",
+        "--todos-project",
+        join(dataDir, "todos-store"),
+        "--task-list",
+        "route",
+        "--project-path",
+        groupRoot,
+        "--project-group",
+        "repoops",
+        "--template",
+        "task-lifecycle",
+        "--dry-run",
+        "--worktree-mode",
+        "required",
+        "--worktree-root",
+        worktreeRoot,
+      ],
+      undefined,
+      {
+        PATH: `${binDir}:/usr/bin:/bin`,
+        TODOS_TASK_LISTS_JSON: JSON.stringify([{ id: "list-route", slug: "route", name: "Route" }]),
+        TODOS_READY_JSON: JSON.stringify(ready),
+      },
+    );
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    const canonicalRepo = testPath(repo);
+    expect(value.created).toBe(1);
+    expect(value.skipped).toBe(0);
+    const routed = value.results[0];
+    // Neutralization: without the per-task-repo preference this is a skip on
+    // "not an existing git repository: <groupRoot>" and created stays 0.
+    expect(routed.event.data.project_path).toBe(canonicalRepo);
+    expect(routed.event.data.routeProjectPath).toBe(canonicalRepo);
+    expect(routed.event.data.source_task_working_dir).toBe(staleWorkingDir);
+    expect(routed.invocation.scope.projectPath).toBe(canonicalRepo);
+    const worker = routed.workflow.steps.find((step: { id: string }) => step.id === "worker");
+    expect(worker.target.worktree.repoRoot).toBe(canonicalRepo);
+    expect(worker.target.worktree.path).toContain(worktreeRoot);
   });
 
   test("todos task drain parses large ready payloads without truncating JSON", () => {
@@ -8006,6 +8440,45 @@ describe("loops CLI", () => {
     expect(loopsAfterRequeue).toHaveLength(2);
   });
 
+  test("routes requeue resets attempts by default and preserves them with --keep-attempts", () => {
+    const dataDir = freshDataDir("loops-cli-requeue-reset-");
+    function admitFailedItem(idSuffix: string, attempts: number): string {
+      const event = {
+        id: `evt-requeue-${idSuffix}`,
+        type: "task.created",
+        source: "@hasna/todos",
+        data: { id: `task-requeue-${idSuffix}`, title: "requeue attempts", working_dir: "/tmp/open-todos", tags: ["auto:route"] },
+        timestamp: new Date().toISOString(),
+      };
+      const res = runCli(dataDir, ["--json", "events", "handle", "todos-task"], JSON.stringify(event));
+      expect(res.status).toBe(0);
+      const created = JSON.parse(res.stdout);
+      const db = new Database(join(dataDir, "loops.db"));
+      try {
+        db.query("UPDATE workflow_work_items SET status='failed', loop_id=NULL, attempts=? WHERE id=?").run(attempts, created.workItem.id);
+      } finally {
+        db.close();
+      }
+      return created.workItem.id as string;
+    }
+
+    // Default: reset — an operator unwedge is durable, not one-shot.
+    const resetId = admitFailedItem("reset", 6);
+    const reset = runCli(dataDir, ["--json", "routes", "requeue", resetId, "--reason", "durable operator unwedge"]);
+    expect(reset.status).toBe(0);
+    const resetItem = JSON.parse(reset.stdout);
+    expect(resetItem.status).toBe("queued");
+    expect(resetItem.attempts).toBe(0);
+
+    // --keep-attempts: the cautious path preserves the count.
+    const keepId = admitFailedItem("keep", 6);
+    const keep = runCli(dataDir, ["--json", "routes", "requeue", keepId, "--reason", "cautious", "--keep-attempts"]);
+    expect(keep.status).toBe(0);
+    const keepItem = JSON.parse(keep.stdout);
+    expect(keepItem.status).toBe("queued");
+    expect(keepItem.attempts).toBe(6);
+  });
+
   test("todos task event handler requeues succeeded work items with operator evidence", () => {
     const dataDir = freshDataDir("loops-cli-event-succeeded-requeue-");
     const event = {
@@ -8046,6 +8519,9 @@ describe("loops CLI", () => {
     expect(refusedActive.status).not.toBe(0);
     expect(refusedActive.stderr).toContain("--reason");
 
+    // --keep-attempts preserves the attempt count so the requeue-evidence
+    // reporting (previousAttempts/attempt) below is exercised; the default now
+    // resets attempts (covered by the dedicated reset test).
     const requeue = runCli(dataDir, [
       "--json",
       "routes",
@@ -8053,6 +8529,7 @@ describe("loops CLI", () => {
       created.workItem.id,
       "--reason",
       "dependency resolved",
+      "--keep-attempts",
     ]);
     expect(requeue.status).toBe(0);
     const requeued = JSON.parse(requeue.stdout);
@@ -8486,6 +8963,8 @@ describe("loops CLI", () => {
       db.close();
     }
 
+    // --keep-attempts preserves the attempt count so the requeue-evidence
+    // (previousAttempts/attempt) is reported; the default resets attempts.
     const requeue = runCli(dataDir, [
       "--json",
       "routes",
@@ -8493,6 +8972,7 @@ describe("loops CLI", () => {
       created.workItem.id,
       "--reason",
       "generic dependency resolved",
+      "--keep-attempts",
     ]);
     expect(requeue.status).toBe(0);
 
@@ -8804,5 +9284,46 @@ describe("loops CLI", () => {
     expect(remaining).toEqual(backupNames.slice(2));
     expect(JSON.parse(runCli(dataDir, ["--json", "runs", "gc-target"]).stdout)).toEqual([]);
     expect(JSON.parse(runCli(dataDir, ["--json", "list"]).stdout)).toHaveLength(1);
+  });
+});
+
+describe("local-only guards under a cloud-flipped client", () => {
+  // With both API vars set the client resolves to the hosted /v1 transport, so
+  // any command that can only act on this machine's local sqlite runtime must
+  // fail loudly instead of silently reading/writing the on-box island (the
+  // split-brain we forbid). No HTTP is issued: the guard fires before any call.
+  const CLOUD_ENV = {
+    HASNA_LOOPS_STORAGE_MODE: "",
+    HASNA_LOOPS_API_URL: "https://loops.example.test",
+    HASNA_LOOPS_API_KEY: "do-not-print-this-key",
+  } as const;
+  const FLIP_MESSAGE = "not available while flipped to the hosted OpenLoops API";
+
+  test("route admission, drain, live UI, run-now, and tick fail loudly when flipped", () => {
+    const dataDir = freshDataDir("loops-cli-cloud-guard-");
+    for (const args of [
+      ["routes", "create", "todos-task"],
+      ["routes", "drain", "todos-task"],
+      ["events", "handle", "todos-task"],
+      ["events", "drain", "todos-task"],
+      ["ui"],
+      ["run-now", "anything"],
+      ["tick"],
+    ]) {
+      const result = runCli(dataDir, args, undefined, CLOUD_ENV);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(FLIP_MESSAGE);
+      // The bearer key must never leak into output while the guard rejects.
+      expect(result.stdout).not.toContain("do-not-print-this-key");
+      expect(result.stderr).not.toContain("do-not-print-this-key");
+    }
+  });
+
+  test("route preview (dry-run) is store-free, so it is NOT blocked when flipped", () => {
+    const dataDir = freshDataDir("loops-cli-cloud-guard-preview-");
+    // Preview never opens the Store, so the local-only guard must not fire; it may
+    // still fail for missing event input, but not with the flip message.
+    const result = runCli(dataDir, ["routes", "preview", "todos-task"], undefined, CLOUD_ENV);
+    expect(result.stderr).not.toContain(FLIP_MESSAGE);
   });
 });

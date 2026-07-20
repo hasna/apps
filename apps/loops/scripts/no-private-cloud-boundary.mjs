@@ -1,15 +1,30 @@
 #!/usr/bin/env bun
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { extname, join, relative } from "node:path";
+import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import { basename, extname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const root = join(fileURLToPath(new URL("..", import.meta.url)));
+const defaultRoot = join(fileURLToPath(new URL("..", import.meta.url)));
 const skippedDirs = new Set([".git", ".hasna", ".bun-cache", ".tmp", "node_modules"]);
 const skippedFiles = new Set([".project.json"]);
-const scannedExtensions = new Set([".ts", ".js", ".json", ".md", ".yml", ".yaml", ".toml", ".lock"]);
+const scannedExtensions = new Set([
+  ".ts",
+  ".tsx",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".cjs",
+  ".json",
+  ".md",
+  ".yml",
+  ".yaml",
+  ".toml",
+  ".lock",
+]);
+const scannedExtensionlessFiles = new Set(["LICENSE"]);
 
 const privatePackageScope = ["@hasna", "tools"].join("");
 const privatePackageName = ["platform", "loops"].join("-");
+const privateHostedDomainSuffix = ["hasna", "xyz"].join(".");
 const disallowedLiterals = [
   `${privatePackageScope}/${privatePackageName}`,
   ["@hasna", "xyz"].join("") + `/${privatePackageName}`,
@@ -17,6 +32,17 @@ const disallowedLiterals = [
   ["loops", "hasnatools"].join("."),
   ["openloops", "hasnatools"].join("."),
 ];
+const escapedPrivateHostedDomainSuffix = privateHostedDomainSuffix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const privateHostedDomainPattern = new RegExp(
+  `(?:^|[^a-z0-9-])(?:[a-z0-9-]+\\.)*${escapedPrivateHostedDomainSuffix}(?=$|[^a-z0-9.-]|\\.(?:$|[^a-z0-9-]))`,
+  "i",
+);
+const unicodeDotEquivalentPattern = /[\u3002\uff0e\uff61]/g;
+const percentEncodedBytesPattern = /(?:%[0-9a-f]{2})+/gi;
+const percentEncodedBytePattern = /%([0-9a-f]{2})/gi;
+const javascriptCharacterEscapePattern =
+  /\\(?:x([0-9a-f]{2})|u([0-9a-f]{4})|u\{([0-9a-f]{1,6})\})/gi;
+const maxCanonicalizationPasses = 2;
 const localHomePath = ["/home", "hasna"].join("/");
 const disallowedPublicPathLiterals = [
   localHomePath,
@@ -40,15 +66,77 @@ const secretPatterns = [
   { id: "generic-credential-assignment", pattern: /\b(?:api[_-]?key|secret|token|password)\s*[:=]\s*["'][A-Za-z0-9._~+/=-]{16,}["']/i },
 ];
 
+function parseRoot(args) {
+  let root = defaultRoot;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg !== "--root") {
+      throw new Error(`Unknown argument: ${arg}`);
+    }
+    const value = args[index + 1];
+    if (!value) {
+      throw new Error("--root requires a path");
+    }
+    root = resolve(value);
+    index += 1;
+  }
+  return root;
+}
+
+const root = parseRoot(process.argv.slice(2));
+
+function decodePercentEncodedBytes(text) {
+  return text.replace(percentEncodedBytesPattern, (encodedBytes) => {
+    try {
+      return decodeURIComponent(encodedBytes);
+    } catch {
+      return encodedBytes.replace(percentEncodedBytePattern, (encodedByte, hex) => {
+        const value = Number.parseInt(hex, 16);
+        return value <= 0x7f ? String.fromCodePoint(value) : encodedByte;
+      });
+    }
+  });
+}
+
+function decodeJavascriptCharacterEscapes(text) {
+  return text.replace(
+    javascriptCharacterEscapePattern,
+    (escape, hexByte, hexCodeUnit, hexCodePoint) => {
+      const hex = hexByte ?? hexCodeUnit ?? hexCodePoint;
+      const value = Number.parseInt(hex, 16);
+      if (!Number.isFinite(value) || value > 0x10ffff) return escape;
+      return String.fromCodePoint(value);
+    },
+  );
+}
+
+function normalizeHostedDomainText(text) {
+  let normalized = text;
+  for (let pass = 0; pass < maxCanonicalizationPasses; pass += 1) {
+    const next = decodePercentEncodedBytes(
+      decodeJavascriptCharacterEscapes(normalized),
+    )
+      .normalize("NFKC")
+      .replace(unicodeDotEquivalentPattern, ".");
+    if (next === normalized) break;
+    normalized = next;
+  }
+  return normalized;
+}
+
 function* walk(dir) {
   for (const entry of readdirSync(dir)) {
     if (skippedDirs.has(entry)) continue;
     if (skippedFiles.has(entry)) continue;
     const path = join(dir, entry);
-    const stat = statSync(path);
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink()) continue;
     if (stat.isDirectory()) {
       yield* walk(path);
-    } else if (stat.isFile() && scannedExtensions.has(extname(path))) {
+    } else if (
+      stat.isFile() &&
+      (scannedExtensions.has(extname(path)) || scannedExtensionlessFiles.has(basename(path)))
+    ) {
       yield path;
     }
   }
@@ -56,9 +144,13 @@ function* walk(dir) {
 
 const findings = [];
 for (const path of walk(root)) {
-  const rel = relative(root, path);
+  const rel = relative(root, path).split(sep).join("/");
   const isTestFile = /\.test\.[cm]?[jt]s$/.test(rel);
   const text = readFileSync(path, "utf8");
+  const normalizedHostedDomainText = normalizeHostedDomainText(text);
+  if (privateHostedDomainPattern.test(normalizedHostedDomainText)) {
+    findings.push(`${rel}: internal hosted domain suffix`);
+  }
   for (const literal of disallowedLiterals) {
     if (text.includes(literal)) findings.push(`${rel}: private cloud boundary literal "${literal}"`);
   }

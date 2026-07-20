@@ -5,6 +5,8 @@ import { gitProjectRootForPath, isExistingGitProjectPath, realpathOrResolve } fr
 import { taskEventField } from "./fields.js";
 import { nonNegativeInteger, positiveInteger } from "./parse.js";
 
+export { isExistingGitProjectPath };
+
 /** Active-workflow admission throttles and canonical project-path handling. */
 
 export interface RouteThrottleLimits {

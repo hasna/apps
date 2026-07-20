@@ -5,7 +5,30 @@ documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
 unless noted.
 
+## 0.4.26
+
+### Fixed
+
+- `PostgresLoopStorage.createWorkflow` is now implemented (ported from the sqlite
+  `Store`), so `POST /v1/workflows` on the self-hosted server persists workflow
+  specs instead of returning `500 not_implemented`. This unblocks the cloud-mode
+  CLI `workflows create` / `templates create-workflow` and the MCP workflow
+  tools. `archiveWorkflow` is likewise ported so `POST /v1/workflows/:id/archive`
+  works on the Postgres backend. Requires an ECS redeploy of the loops server
+  image for the live self-hosted API to pick up the new endpoints.
+
 ## Unreleased
+
+### Added
+
+- `loops-mcp` now serves a shared Streamable HTTP transport (default
+  `http://127.0.0.1:8890/mcp`, `GET /health`) in addition to stdio. Running
+  it as one long-lived daemon with the routing env baked in (e.g.
+  `HASNA_LOOPS_API_URL` + `HASNA_LOOPS_API_KEY`) makes every connecting agent
+  route CRUD deterministically to the same backend regardless of the caller's
+  own shell environment (including non-login SSH). Select the transport with
+  `--http`/`MCP_HTTP=1` (default) or `--stdio`/`MCP_STDIO=1`; the port is set
+  via `--port` or `MCP_HTTP_PORT`.
 
 ### Changed
 
@@ -18,6 +41,127 @@ unless noted.
   `loops-serve migrate` are shipped; long-running runner daemon mode, workflow
   execution over the runner protocol, and id-preserving remote import remain
   follow-up work.
+
+## 0.4.18 (2026-07-07/08)
+
+Drain reliability: kill the todos-task redispatch "black hole" family, then the
+merge-lane routing wedge and the schema-lockout class behind it. One artifact
+consolidates the whole independently-reviewed family: #82 (dead-letter at the
+cap + attempt refunds + requeue reset + worktree self-heal), #88 (per-task
+repository routing + candidate-window memory), #89 (schema-compat soft-open +
+gate-death ceiling), plus the previously unpublished 0.4.15–0.4.17 ride-alongs
+documented below.
+
+### Fixed
+
+- **Merge-lane wedge — the task's own repository wins over a group-root
+  `--project-path`:** commit 8ab2664 made the router-level `--project-path` win
+  unconditionally in todos-task drains, so multi-repo routers that pass it as a
+  concurrency group root (a non-repository directory such as the operator's
+  home) sent every task to the group root and skipped it (`worktreeMode=required
+  but projectPath is not an existing git repository`), zeroing merge dispatch
+  fleet-wide. A drain
+  now routes each task to its own first *usable* repository path (explicit
+  `project_path`, metadata, the description's `Repository:` line, then
+  `working_dir` — first that is a real git repo, probed once per path per tick);
+  the router-level `--project-path` remains the rescue fallback for tasks whose
+  recorded path is stale or broken (8ab2664's original intent). Registry drains
+  are unchanged (the scanned source project still wins; task-controlled fields
+  cannot redirect a route).
+- **Route-disallowed tasks no longer burn the candidate window:** tasks bearing
+  `no-auto`/`blocked`/`manual`-class tags can never route, but each occupied one
+  of the bounded candidate rows every tick just to be rejected by eligibility —
+  enough marked tasks starved a drain into `considered=N created=0` forever.
+  They are now held out of the window before slicing (unless the drain's own
+  `--tags` explicitly selects that tag) and counted as `excludedDisallowedTag`
+  in drain reports, so the exclusion is auditable.
+- **Deterministic gate deaths are bounded by a secondary ceiling:** gate deaths
+  (runs that fail at worktree prep or a fast triage/planner gate before any real
+  work) refund their redispatch attempt — correct for transient faults, but a
+  deterministic fault would retry forever at the backoff floor. Work items now
+  count consecutive gate deaths (`gate_deaths`, additive migration
+  `0011_work_item_gate_deaths`, no schema `user_version` bump); at the ceiling
+  (20) the item is dead-lettered — visible in drain reports — instead of
+  spinning, and the bounded route re-admission will not requeue it. A
+  productive failure or an `exit 75` tempfail (runs that reached the worker)
+  resets the streak; `loops routes requeue` (default attempts reset) re-arms
+  the full ceiling. Known gap (review finding N1; fix queued for the next
+  patch): a non-closing SUCCESS does not yet reset the streak — bounded and
+  safe (it errs toward a recoverable early dead-letter, and the redispatch cap
+  independently bounds chronically non-closing successes).
+- **Redispatch cap no longer a silent black hole** (the original #82 core: a
+  still-actionable task whose runs kept finishing without closing it was
+  deduped forever once its attempt count reached the cap): when a todos-task
+  work item reaches `MAX_TODOS_TASK_ROUTE_REDISPATCHES` (8) it is transitioned
+  to a visible `dead_letter` state instead of being deduped forever with no
+  signal. Drain reports gain a `deadLettered` count (and the deduped result
+  carries `deadLettered: true` + the reason), so a capped task is surfaced and
+  an operator can requeue it rather than the drain silently reporting
+  `created=0`.
+- **Gate deaths no longer count toward the cap:** a run that dies before doing
+  real work — worktree preparation failure, or a fast (`<60s`) `triage`/`planner`
+  gate failure — has its attempt refunded by `finalizeWorkflowRun`, so an infra
+  fault cannot dead-letter a task that never reached its worker.
+- **`exit(75)` tempfail is requeueable, not dedupe-bait:** a step that exits 75
+  (`EX_TEMPFAIL`, "retry later") drops its work item back to `queued` with the
+  attempt refunded, so the "retry next tick" contract fires instead of leaving a
+  terminal row that counts toward the cap.
+- **`loops routes requeue` resets attempts by default:** an operator unwedge is
+  now durable rather than one-shot (a capped item no longer re-caps after a
+  single further terminal run). `--keep-attempts` preserves the count for the
+  cautious path; the bounded route-path re-admission still preserves attempts so
+  the cap keeps working.
+- **Executor self-heals a stale worktree registration:** on git's "missing but
+  already registered worktree" error, `ensureLocalWorktree` (and the remote
+  worktree-prep script) now runs `git worktree prune` and retries the add exactly
+  once — git's own prescribed remedy — before failing honestly. This removes the
+  single biggest burner of the redispatch cap at its source.
+
+### Changed
+
+- **Newer-schema databases soft-open when the delta is non-breaking:** an older
+  binary used to refuse ANY database with a newer `PRAGMA user_version` — during
+  the 2026-07-07 schema-8 lockout that bricked the whole CLI fleet over purely
+  additive migrations. The database now carries a compatibility floor
+  (`schema_compat.min_compatible_user_version`, raised only by BREAKING
+  migrations; additive ones leave it untouched): a binary opens any newer
+  database whose floor it meets, preserves the newer `user_version` stamp
+  (never downgrades it), and refuses only on a known-breaking delta or when the
+  floor row is absent (pre-contract/unblessed databases stay conservative).
+
+## 0.4.15 – 0.4.17 (2026-07-06/07 — unpublished; first shipped with 0.4.18)
+
+These three versions were committed to `main` with version bumps but never
+published to npm individually; the 0.4.18 release is the first registry artifact
+that carries them. Consolidated here so the published history stays honest.
+
+### Added
+
+- **0.4.15** — self-hosted client mode: the CLI routes loop reads/writes to the
+  hosted `/v1` API when `self_hosted` mode is configured (#74).
+- **0.4.16** — id-preserving bulk import endpoint (`POST /v1/import`) for
+  self-hosted backfill, plus `loops self-hosted push --apply` in the CLI (#76).
+- **0.4.17** — `GET /v1/loops/count` and `GET /v1/runs/count` endpoints (#77).
+- Run receipt contract: run receipts table + API surface for verifiable run
+  evidence (`migrations/0005_run_receipts.sql` mirror).
+
+### Changed
+
+- **SQLite schema `user_version` 7 → 8** via ledger migrations
+  `0009_run_receipts` and `0010_work_item_machine_id` (additive; applied
+  automatically on first open). NOTE: binaries older than this range refuse to
+  open a migrated database ("schema version 8 is newer than this binary
+  supports"), so downgrading below 0.4.15 after opening a database with this
+  release requires restoring a pre-upgrade backup. A version-tolerance softening
+  (open unless a known-breaking delta) is planned follow-up work.
+- Launch-gated route drains: `--launch-gate`/`--launch-gate-blocker` hold a
+  drain closed until named blocker tasks are completed.
+
+### Fixed
+
+- codewith agent JSON output parsing (#17).
+- PR handoff: no-remote fallback repaired and handoff artifact errors scrubbed
+  from templates.
 
 ## 0.4.14 (2026-07-06)
 

@@ -3,14 +3,22 @@
   "name": "loops",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.4.1",
-  "description": "Persistent local loop and workflow runner for deterministic commands and headless AI coding agents. CLI + MCP + HTTP API (loops-serve) + generated SDK. Self-hosted mode runs loops-serve against Hasna-owned Postgres/RDS with API-key auth via @hasna/contracts; the generated storage kit's HASNA_LOOPS_STORAGE_MODE=cloud flag is only its direct-Postgres implementation term.",
-  "bins": ["loops", "loops-mcp", "loops-serve", "loops-daemon", "loops-runner"],
+  "kitVersion": "0.5.2",
+  "description": "Persistent loop and workflow runner for deterministic commands and headless AI coding agents. CLI + MCP + HTTP API (loops-serve) + generated SDK. Canonical deployment modes are local, self_hosted, and cloud; self_hosted runs loops-serve against operator-owned Postgres with API-key auth.",
+  "bins": [
+    "loops",
+    "loops-mcp",
+    "loops-serve",
+    "loops-daemon",
+    "loops-runner"
+  ],
   "storage": {
     "mode": "local",
     "envPrefix": "HASNA_LOOPS_",
-    "aliasEnvPrefix": "LOOPS_",
-    "databaseUrlSecretRef": "hasna/oss/loops/database-url",
+    "databaseUrlSecretRef": "hasna/oss/loops/runtime-database-url",
+    "runtimeDatabaseUrlSecretRef": "hasna/oss/loops/runtime-database-url",
+    "authDatabaseUrlSecretRef": "hasna/oss/loops/auth-database-url",
+    "migratorDatabaseUrlSecretRef": "hasna/oss/loops/migrator-database-url",
     "sqlitePath": "~/.hasna/loops/loops.db"
   },
   "metadata": {
@@ -22,11 +30,20 @@
       "openapiPath": "/openapi.json",
       "apiVersion": "v1",
       "auth": "api-key",
-      "signingSecretSecretRef": "hasna/oss/loops/api-key-signing-secret"
+      "signingSecretSecretRef": "hasna/oss/loops/api-key-signing-secret",
+      "aws": {
+        "minimumDesiredCount": 2,
+        "minimumAvailabilityZones": 2,
+        "capacityProviderBase": "FARGATE:1",
+        "healthCheckPath": "/ready",
+        "requiresAlarmActions": true,
+        "requiresKmsEncryptedLogs": true,
+        "requiresSecretRotation": true
+      }
     },
     "client": {
-      "apiUrlEnv": "LOOPS_API_URL",
-      "apiKeyEnv": "LOOPS_API_KEY"
+      "apiUrlEnv": "HASNA_LOOPS_API_URL",
+      "apiKeyEnv": "HASNA_LOOPS_API_KEY"
     }
   }
 }

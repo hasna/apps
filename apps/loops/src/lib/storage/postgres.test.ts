@@ -1,13 +1,21 @@
 import { describe, expect, test } from "bun:test";
 import { PostgresStorage } from "./postgres.js";
-import { POSTGRES_MIGRATION_LEDGER_TABLE, POSTGRES_STORAGE_MIGRATIONS, checksumStorageSql } from "./postgres-schema.js";
+import {
+  POSTGRES_MIGRATION_ADVISORY_LOCK_SQL,
+  POSTGRES_MIGRATION_LEDGER_TABLE,
+  POSTGRES_STORAGE_MIGRATIONS,
+  checksumStorageSql,
+} from "./postgres-schema.js";
 import type { PostgresQueryExecutor } from "./postgres.js";
 
 class FakePostgresExecutor implements PostgresQueryExecutor {
   readonly executed: Array<{ sql: string; params?: readonly unknown[] }> = [];
+  readonly queried: string[] = [];
   ledger: Array<{ id: string; checksum: string; applied_at: string }> = [];
 
   async query<T extends Record<string, unknown>>(sql: string): Promise<T[]> {
+    this.queried.push(sql);
+    if (sql === POSTGRES_MIGRATION_ADVISORY_LOCK_SQL) return [];
     if (!sql.includes(POSTGRES_MIGRATION_LEDGER_TABLE)) throw new Error(`unexpected query: ${sql}`);
     return this.ledger as unknown as T[];
   }
@@ -23,8 +31,8 @@ class FakePostgresExecutor implements PostgresQueryExecutor {
     }
   }
 
-  async transaction<T>(fn: () => Promise<T>): Promise<T> {
-    return fn();
+  async transaction<T>(fn: (executor: PostgresQueryExecutor) => Promise<T>): Promise<T> {
+    return fn(this);
   }
 }
 
@@ -36,6 +44,12 @@ describe("Postgres storage migrations", () => {
       "0003_remote_runners_and_audit",
       "0004_work_item_route_scope",
       "0005_run_receipts",
+      "0006_work_item_machine_id",
+      "0007_work_item_gate_deaths",
+      "0011_workflow_run_provenance",
+      "0008_tenant_prepare",
+      "0009_tenant_backfill",
+      "0010_tenant_enforce",
     ]);
     for (const migration of POSTGRES_STORAGE_MIGRATIONS) {
       expect(migration.checksum).toBe(checksumStorageSql(migration.sql));
@@ -58,8 +72,11 @@ describe("Postgres storage migrations", () => {
     // additive migration) breaks every existing database: migrate() fails
     // closed with "checksum mismatch" because the ledger recorded the original
     // checksum. This pins the released checksums so that defect class fails
-    // here first. When adding schema, append a NEW migration and pin it below —
-    // never touch a released block. (Regression: route_scope was briefly folded
+    // here first. The published npm/loops/v0.4.28 source contains migrations
+    // through 0007; 0008-0010 were finalized after that tag and are pinned here
+    // before their first package release. When adding schema, append a NEW
+    // migration and pin it below — never touch a released block. (Regression:
+    // route_scope was briefly folded
     // into 0002_workflows_goals, which would have bricked upgrades of every
     // existing postgres deployment.)
     const pinned: Record<string, string> = {
@@ -68,6 +85,12 @@ describe("Postgres storage migrations", () => {
       "0003_remote_runners_and_audit": "sha256:9f0816668315c08aefeda1afebb58ad74e803d6dd1bca580e0697f602486c520",
       "0004_work_item_route_scope": "sha256:341e439861d595ce3d069b0106f1f09134042bac0a70f3d00a1374e09f5404d9",
       "0005_run_receipts": "sha256:27228e19e0101d31ce9da18d76d918a96dd8afff576fb291cbf8d018e97fe5d6",
+      "0006_work_item_machine_id": "sha256:80887626208cbb3659a436e6e26c56f0b0229f0bcb8d292de51738ee99ed11d1",
+      "0007_work_item_gate_deaths": "sha256:95ac3c0dfeef6f6e6d4bd8b92473d19aabae0c83ebc3b1f4409d84fc0bbfa11c",
+      "0011_workflow_run_provenance": "sha256:5011c78d0d2cbf3fbcc601ce2bdea4a39cdde21cb9df931ca5c9c1dc3cd7e5b6",
+      "0008_tenant_prepare": "sha256:76924f61f71fa2e7d3fb7773ff372200e26d0b3e48a5d05585adaeeca8f30043",
+      "0009_tenant_backfill": "sha256:7bfd222e503736ec0bc2811f8a31d3e57820a0fa1106795e09fd26a5cf966f2c",
+      "0010_tenant_enforce": "sha256:f923c70c2960e0372b4c01c5f01d9432fa0c76b24921c616dc149fa191409053",
     };
     for (const migration of POSTGRES_STORAGE_MIGRATIONS) {
       expect(`${migration.id} ${migration.checksum}`).toBe(`${migration.id} ${pinned[migration.id]}`);
@@ -78,8 +101,15 @@ describe("Postgres storage migrations", () => {
       if (migration.id === "0004_work_item_route_scope") {
         expect(migration.sql).toContain("ADD COLUMN IF NOT EXISTS route_scope");
         expect(migration.sql).toContain("idx_workflow_work_items_scope");
+      } else if (migration.id === "0006_work_item_machine_id") {
+        expect(migration.sql).toContain("ADD COLUMN IF NOT EXISTS machine_id");
+        expect(migration.sql).toContain("idx_workflow_work_items_machine");
       } else {
         expect(migration.sql).not.toContain("route_scope");
+        if (migration.id === "0002_workflows_goals") {
+          expect(migration.sql).not.toContain("machine_id TEXT");
+          expect(migration.sql).not.toContain("idx_workflow_work_items_machine");
+        }
       }
     }
   });
@@ -98,6 +128,8 @@ describe("Postgres storage migrations", () => {
     expect(result.applied.map((migration) => migration.id)).toEqual(POSTGRES_STORAGE_MIGRATIONS.map((migration) => migration.id));
     expect(executor.executed[0]?.sql).toContain(POSTGRES_MIGRATION_LEDGER_TABLE);
     expect(executor.executed.filter((entry) => entry.sql.startsWith("INSERT INTO"))).toHaveLength(POSTGRES_STORAGE_MIGRATIONS.length);
+    expect(executor.queried[1]).toBe(POSTGRES_MIGRATION_ADVISORY_LOCK_SQL);
+    expect(executor.queried[2]).toContain(POSTGRES_MIGRATION_LEDGER_TABLE);
 
     const second = await storage.migrate();
     expect(second.plan.every((item) => item.state === "already_applied")).toBe(true);
@@ -118,7 +150,8 @@ describe("Postgres storage migrations", () => {
 
     expect(executor.executed).toHaveLength(0);
     expect(dryRun.applied.map((migration) => migration.id)).toEqual([POSTGRES_STORAGE_MIGRATIONS[0]!.id]);
-    expect(dryRun.plan.map((item) => item.state)).toEqual(["already_applied", "pending", "pending", "pending", "pending"]);
+    expect(dryRun.plan[0]?.state).toBe("already_applied");
+    expect(dryRun.plan.slice(1).every((item) => item.state === "pending")).toBe(true);
   });
 
   test("existing pre-route_scope database upgrades by applying only later additive migrations", async () => {
@@ -136,13 +169,27 @@ describe("Postgres storage migrations", () => {
     }));
     const storage = new PostgresStorage(executor);
 
-    const result = await storage.migrate();
+    const result = await storage.migrate({ through: "0007_work_item_gate_deaths" });
 
     const executedSql = executor.executed.filter((entry) => !entry.sql.startsWith("INSERT INTO") && !entry.sql.includes("CREATE TABLE IF NOT EXISTS open_loops_schema_migrations"));
-    expect(executedSql).toHaveLength(2);
+    expect(executedSql).toHaveLength(4);
     expect(executedSql[0]!.sql).toContain("ADD COLUMN IF NOT EXISTS route_scope");
     expect(executedSql[1]!.sql).toContain("CREATE TABLE IF NOT EXISTS run_receipts");
-    expect(result.applied.map((migration) => migration.id)).toEqual(POSTGRES_STORAGE_MIGRATIONS.map((migration) => migration.id));
+    expect(executedSql[2]!.sql).toContain("ADD COLUMN IF NOT EXISTS machine_id");
+    expect(executedSql[3]!.sql).toContain("ADD COLUMN IF NOT EXISTS gate_deaths");
+    expect(result.applied.map((migration) => migration.id)).toEqual(POSTGRES_STORAGE_MIGRATIONS.slice(0, 7).map((migration) => migration.id));
+  });
+
+  test("tenant preparation can stop before explicit backfill and enforcement", async () => {
+    const executor = new FakePostgresExecutor();
+    const storage = new PostgresStorage(executor);
+
+    const result = await storage.migrate({ through: "0008_tenant_prepare" });
+
+    expect(result.applied.at(-1)?.id).toBe("0008_tenant_prepare");
+    expect(result.applied.some((migration) => migration.id === "0009_tenant_backfill")).toBe(false);
+    expect(executor.executed.some((entry) => entry.sql.includes("tenant_row_assignments"))).toBe(true);
+    expect(executor.executed.some((entry) => entry.sql.includes("tenant backfill incomplete"))).toBe(false);
   });
 
   test("dry-run fails closed when an applied migration checksum changes", async () => {

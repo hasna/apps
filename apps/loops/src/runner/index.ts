@@ -1,13 +1,27 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
-import type { ExecutorResult, Loop, LoopRun } from "../types.js";
+import type {
+  ExecutorResult,
+  Goal,
+  GoalPlanNode,
+  GoalRun,
+  GoalStatus,
+  Loop,
+  LoopRun,
+  WorkflowRun,
+  WorkflowRunStatus,
+  WorkflowSpec,
+  WorkflowStepRun,
+} from "../types.js";
 import { executeLoop } from "../lib/executor.js";
+import { executeLoopTarget, type WorkflowExecutionStore } from "../lib/workflow-runner.js";
 import { buildDeploymentStatus, deploymentStatusLine } from "../lib/mode.js";
 import { packageVersion } from "../lib/version.js";
 
 const program = new Command();
 const DEFAULT_RUNNER_ID = `runner:${process.pid}`;
 const MIN_RUNNER_LEASE_MS = 1_000;
+const DEFAULT_RUNNER_POLL_INTERVAL_MS = 5_000;
 // After this many consecutive heartbeat failures the control plane has almost
 // certainly expired our lease (and may have handed the run to another runner),
 // so we abort execution instead of racing a second executor.
@@ -15,33 +29,24 @@ const MAX_CONSECUTIVE_HEARTBEAT_FAILURES = 3;
 
 program
   .name("loops-runner")
-  .description("OpenLoops control-plane runner foundation")
+  .description("OpenLoops control-plane runner")
   .version(packageVersion())
   .option("-j, --json", "print JSON");
 
 function configuredApiUrl(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  return env.LOOPS_API_URL?.trim() || env.HASNA_LOOPS_API_URL?.trim() || env.LOOPS_CLOUD_API_URL?.trim() || env.HASNA_LOOPS_CLOUD_API_URL?.trim();
+  return env.HASNA_LOOPS_API_URL?.trim();
 }
 
-function configuredApiToken(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  return env.LOOPS_API_TOKEN?.trim() || env.HASNA_LOOPS_API_TOKEN?.trim() || env.LOOPS_CLOUD_TOKEN?.trim() || env.HASNA_LOOPS_CLOUD_TOKEN?.trim();
-}
-
-function isLocalApiUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return ["127.0.0.1", "localhost", "::1"].includes(url.hostname);
-  } catch {
-    return false;
-  }
+function configuredApiKey(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return env.HASNA_LOOPS_API_KEY?.trim();
 }
 
 export function runnerStatus(machineId = process.env.LOOPS_RUNNER_MACHINE_ID || process.env.HASNA_MACHINE_ID) {
   const deployment = buildDeploymentStatus();
   const local = deployment.deploymentMode === "local";
   const apiUrl = configuredApiUrl();
-  const token = configuredApiToken();
-  const apiReady = Boolean(apiUrl && (isLocalApiUrl(apiUrl) || token));
+  const token = configuredApiKey();
+  const apiReady = Boolean(apiUrl && token);
   return {
     ok: local || apiReady,
     service: "loops-runner",
@@ -61,6 +66,7 @@ export interface RunnerApiClaim {
   loop: Loop;
   run: LoopRun;
   claimToken: string;
+  workflow?: WorkflowSpec;
 }
 
 export interface RunnerOnceResult {
@@ -69,9 +75,16 @@ export interface RunnerOnceResult {
   completed: LoopRun[];
 }
 
+export interface RunnerLoopResult extends RunnerOnceResult {
+  iterations: number;
+  errors: number;
+  idle: boolean;
+  stopped: boolean;
+}
+
 export interface RunRunnerOnceOptions {
   apiUrl?: string;
-  apiToken?: string;
+  apiKey?: string;
   runnerId?: string;
   machineId?: string;
   now?: Date;
@@ -81,12 +94,22 @@ export interface RunRunnerOnceOptions {
   env?: NodeJS.ProcessEnv;
 }
 
+export interface RunRunnerLoopOptions extends RunRunnerOnceOptions {
+  pollIntervalMs?: number;
+  maxIterations?: number;
+  idleExitAfterMs?: number;
+  signal?: AbortSignal;
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  nowMs?: () => number;
+  onError?: (error: unknown) => void;
+}
+
 function resolveRunnerConfig(opts: RunRunnerOnceOptions): { apiUrl: string; token?: string; runnerId: string; machineId?: string } {
   const env = opts.env ?? process.env;
   const apiUrl = opts.apiUrl ?? configuredApiUrl(env);
-  if (!apiUrl) throw new Error("loops-runner requires LOOPS_API_URL or HASNA_LOOPS_API_URL");
-  const token = opts.apiToken ?? configuredApiToken(env);
-  if (!isLocalApiUrl(apiUrl) && !token) throw new Error("non-local loops-runner requires LOOPS_API_TOKEN or HASNA_LOOPS_API_TOKEN");
+  if (!apiUrl) throw new Error("loops-runner requires HASNA_LOOPS_API_URL");
+  const token = opts.apiKey ?? configuredApiKey(env);
+  if (!token) throw new Error("loops-runner requires HASNA_LOOPS_API_KEY");
   return {
     apiUrl,
     token,
@@ -113,6 +136,166 @@ async function postJson(fetchImpl: typeof fetch, config: { apiUrl: string; token
   return payload;
 }
 
+class RunnerWorkflowApiStore implements WorkflowExecutionStore {
+  readonly serverDerivedAgentSessionContracts = true;
+
+  constructor(
+    private readonly fetchImpl: typeof fetch,
+    private readonly config: { apiUrl: string; token?: string },
+    private readonly claim: RunnerApiClaim,
+  ) {}
+
+  private workflowRunPath(workflowRunId: string, suffix = ""): string {
+    return `/v1/runs/${encodeURIComponent(this.claim.run.id)}/workflow-runs/${encodeURIComponent(workflowRunId)}${suffix}`;
+  }
+
+  private goalPath(goalId: string, suffix = ""): string {
+    return `/v1/runs/${encodeURIComponent(this.claim.run.id)}/goals/${encodeURIComponent(goalId)}${suffix}`;
+  }
+
+  private stepPath(workflowRunId: string, stepId: string, action: string): string {
+    return `${this.workflowRunPath(workflowRunId)}/steps/${encodeURIComponent(stepId)}/${action}`;
+  }
+
+  private async post(path: string, body: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+    return postJson(this.fetchImpl, this.config, path, { claimToken: this.claim.claimToken, ...body });
+  }
+
+  async requireWorkflow(idOrName: string): Promise<WorkflowSpec> {
+    if (this.claim.workflow && (this.claim.workflow.id === idOrName || this.claim.workflow.name === idOrName)) return this.claim.workflow;
+    throw new Error(`workflow not included in runner claim: ${idOrName}`);
+  }
+
+  async createWorkflowRun(input: Parameters<WorkflowExecutionStore["createWorkflowRun"]>[0]): Promise<WorkflowRun> {
+    const raw = await this.post(`/v1/runs/${encodeURIComponent(this.claim.run.id)}/workflow-runs`, {
+      scheduledFor: input.scheduledFor,
+      idempotencyKey: input.idempotencyKey,
+    });
+    return raw.workflowRun as WorkflowRun;
+  }
+
+  async getWorkflowRun(id: string): Promise<WorkflowRun | undefined> {
+    const raw = await this.post(this.workflowRunPath(id, "/get"));
+    return raw.workflowRun as WorkflowRun | undefined;
+  }
+
+  async requireWorkflowRun(id: string): Promise<WorkflowRun> {
+    const run = await this.getWorkflowRun(id);
+    if (!run) throw new Error(`workflow run not found: ${id}`);
+    return run;
+  }
+
+  async listWorkflowStepRuns(workflowRunId: string): Promise<WorkflowStepRun[]> {
+    const raw = await this.post(this.workflowRunPath(workflowRunId, "/steps"));
+    return (Array.isArray(raw.steps) ? raw.steps : []) as WorkflowStepRun[];
+  }
+
+  async getWorkflowStepRun(workflowRunId: string, stepId: string): Promise<WorkflowStepRun | undefined> {
+    const raw = await this.post(this.stepPath(workflowRunId, stepId, "get"));
+    return raw.step as WorkflowStepRun | undefined;
+  }
+
+  async isWorkflowRunTerminal(workflowRunId: string): Promise<boolean> {
+    const run = await this.getWorkflowRun(workflowRunId);
+    return Boolean(run && ["succeeded", "failed", "timed_out", "cancelled"].includes(run.status));
+  }
+
+  async startWorkflowStepRun(workflowRunId: string, stepId: string): Promise<WorkflowStepRun> {
+    return (await this.post(this.stepPath(workflowRunId, stepId, "start"))).step as WorkflowStepRun;
+  }
+
+  async recoverWorkflowRun(workflowRunId: string, reason?: string): Promise<{ run: WorkflowRun; recoveredSteps: WorkflowStepRun[] }> {
+    const raw = await this.post(this.workflowRunPath(workflowRunId, "/recover"), { reason });
+    return {
+      run: raw.workflowRun as WorkflowRun,
+      recoveredSteps: (Array.isArray(raw.recoveredSteps) ? raw.recoveredSteps : []) as WorkflowStepRun[],
+    };
+  }
+
+  async finalizeWorkflowStepRun(
+    workflowRunId: string,
+    stepId: string,
+    patch: Pick<WorkflowStepRun, "status" | "finishedAt" | "durationMs" | "stdout" | "stderr"> &
+      Partial<Pick<WorkflowStepRun, "exitCode" | "error">>,
+  ): Promise<WorkflowStepRun> {
+    return (await this.post(this.stepPath(workflowRunId, stepId, "finalize"), patch as unknown as Record<string, unknown>)).step as WorkflowStepRun;
+  }
+
+  async finalizeWorkflowRun(
+    workflowRunId: string,
+    status: WorkflowRunStatus,
+    patch: Partial<Pick<WorkflowRun, "finishedAt" | "durationMs" | "error">> = {},
+  ): Promise<WorkflowRun> {
+    return (await this.post(this.workflowRunPath(workflowRunId, "/finalize"), {
+      status,
+      ...patch,
+    })).workflowRun as WorkflowRun;
+  }
+
+  async markWorkflowStepPid(workflowRunId: string, stepId: string, pid: number): Promise<WorkflowStepRun> {
+    return (await this.post(this.stepPath(workflowRunId, stepId, "pid"), { pid })).step as WorkflowStepRun;
+  }
+
+  async recordWorkflowStepProgress(
+    workflowRunId: string,
+    stepId: string,
+    progress: { stdout?: string; stderr?: string; payload?: Record<string, unknown> },
+  ): Promise<WorkflowStepRun> {
+    return (await this.post(this.stepPath(workflowRunId, stepId, "progress"), progress)).step as WorkflowStepRun;
+  }
+
+  async appendWorkflowEvent(
+    workflowRunId: string,
+    eventType: string,
+    stepId?: string,
+    payload?: Record<string, unknown>,
+  ): Promise<unknown> {
+    return (await this.post(this.workflowRunPath(workflowRunId, "/events"), { eventType, stepId, payload })).event;
+  }
+
+  async skipWorkflowStepRun(workflowRunId: string, stepId: string, reason: string): Promise<WorkflowStepRun> {
+    return (await this.post(this.stepPath(workflowRunId, stepId, "skip"), { reason })).step as WorkflowStepRun;
+  }
+
+  async findGoalByContext(context: Parameters<WorkflowExecutionStore["findGoalByContext"]>[0]): Promise<Goal | undefined> {
+    return (await this.post(`/v1/runs/${encodeURIComponent(this.claim.run.id)}/goals/find`, { context })).goal as Goal | undefined;
+  }
+
+  async createGoal(input: Parameters<WorkflowExecutionStore["createGoal"]>[0]): Promise<Goal> {
+    return (await this.post(`/v1/runs/${encodeURIComponent(this.claim.run.id)}/goals`, { input })).goal as Goal;
+  }
+
+  async requireGoal(id: string): Promise<Goal> {
+    return (await this.post(this.goalPath(id, "/get"))).goal as Goal;
+  }
+
+  async createGoalPlanNodes(goalId: string, nodes: Parameters<WorkflowExecutionStore["createGoalPlanNodes"]>[1]): Promise<GoalPlanNode[]> {
+    const raw = await this.post(this.goalPath(goalId, "/plan-nodes"), { nodes });
+    return (Array.isArray(raw.nodes) ? raw.nodes : []) as GoalPlanNode[];
+  }
+
+  async listGoalPlanNodes(goalIdOrPlanId: string): Promise<GoalPlanNode[]> {
+    const raw = await this.post(this.goalPath(goalIdOrPlanId, "/plan-nodes/list"));
+    return (Array.isArray(raw.nodes) ? raw.nodes : []) as GoalPlanNode[];
+  }
+
+  async updateGoalStatus(goalId: string, status: GoalStatus): Promise<Goal> {
+    return (await this.post(this.goalPath(goalId, "/status"), { status })).goal as Goal;
+  }
+
+  async updateGoalPlanNode(
+    goalId: string,
+    key: string,
+    patch: Partial<Pick<GoalPlanNode, "status" | "tokensUsed" | "timeUsedSeconds" | "ready">>,
+  ): Promise<GoalPlanNode> {
+    return (await this.post(this.goalPath(goalId, `/plan-nodes/${encodeURIComponent(key)}`), patch as Record<string, unknown>)).node as GoalPlanNode;
+  }
+
+  async recordGoalEvent(input: Parameters<WorkflowExecutionStore["recordGoalEvent"]>[0]): Promise<GoalRun> {
+    return (await this.post(this.goalPath(input.goalId, "/events"), input as unknown as Record<string, unknown>)).goalRun as GoalRun;
+  }
+}
+
 export async function runRunnerOnce(opts: RunRunnerOnceOptions = {}): Promise<RunnerOnceResult> {
   const config = resolveRunnerConfig(opts);
   const fetchImpl = opts.fetchImpl ?? fetch;
@@ -122,7 +305,6 @@ export async function runRunnerOnce(opts: RunRunnerOnceOptions = {}): Promise<Ru
     now: (opts.now ?? new Date()).toISOString(),
     maxClaims: 1,
   };
-  await postJson(fetchImpl, config, "/v1/runners/register", runnerBody);
   const claimed = await postJson(fetchImpl, config, "/v1/runners/claim", runnerBody);
   const claims = (Array.isArray(claimed.claims) ? claimed.claims : []) as RunnerApiClaim[];
   const completed: LoopRun[] = [];
@@ -145,13 +327,75 @@ export async function runRunnerOnce(opts: RunRunnerOnceOptions = {}): Promise<Ru
   return { ok: completed.every((run) => run.status === "succeeded"), claimed: claims.length, completed };
 }
 
+export async function runRunnerLoop(opts: RunRunnerLoopOptions = {}): Promise<RunnerLoopResult> {
+  resolveRunnerConfig(opts);
+  const pollIntervalMs = normalizedInteger(opts.pollIntervalMs ?? DEFAULT_RUNNER_POLL_INTERVAL_MS, "pollIntervalMs", 1);
+  const maxIterations = opts.maxIterations === undefined
+    ? undefined
+    : normalizedInteger(opts.maxIterations, "maxIterations", 1);
+  const idleExitAfterMs = opts.idleExitAfterMs === undefined
+    ? undefined
+    : normalizedInteger(opts.idleExitAfterMs, "idleExitAfterMs", 0);
+  const sleep = opts.sleep ?? sleepMs;
+  const nowMs = opts.nowMs ?? (() => Date.now());
+  const completed: LoopRun[] = [];
+  let ok = true;
+  let iterations = 0;
+  let claimed = 0;
+  let errors = 0;
+  let idle = false;
+  let lastClaimedAt = nowMs();
+
+  while (!opts.signal?.aborted && (maxIterations === undefined || iterations < maxIterations)) {
+    iterations += 1;
+    let claimedThisIteration = 0;
+    try {
+      const result = await runRunnerOnce(opts);
+      claimedThisIteration = result.claimed;
+      claimed += result.claimed;
+      completed.push(...result.completed);
+      if (!result.ok) ok = false;
+      if (result.claimed > 0) lastClaimedAt = nowMs();
+    } catch (error) {
+      errors += 1;
+      ok = false;
+      opts.onError?.(error);
+    }
+
+    if (idleExitAfterMs !== undefined && nowMs() - lastClaimedAt >= idleExitAfterMs) {
+      idle = true;
+      break;
+    }
+    if (opts.signal?.aborted || (maxIterations !== undefined && iterations >= maxIterations)) break;
+    if (claimedThisIteration === 0) await sleep(pollIntervalMs, opts.signal);
+  }
+
+  return {
+    ok: ok && errors === 0,
+    claimed,
+    completed,
+    iterations,
+    errors,
+    idle,
+    stopped: Boolean(opts.signal?.aborted),
+  };
+}
+
 async function executeClaimWithHeartbeat(
   fetchImpl: typeof fetch,
   config: { apiUrl: string; token?: string },
   claim: RunnerApiClaim,
   opts: RunRunnerOnceOptions,
 ): Promise<ExecutorResult> {
-  const execute = opts.execute ?? executeLoop;
+  const execute = opts.execute ?? (
+    claim.loop.target.type === "workflow"
+      ? ((loop, run, executeOpts) => {
+          const workflowId = claim.loop.target.type === "workflow" ? claim.loop.target.workflowId : "unknown";
+          if (!claim.workflow) throw new Error(`runner claim for workflow loop ${loop.id} did not include workflow ${workflowId}`);
+          return executeLoopTarget(new RunnerWorkflowApiStore(fetchImpl, config, claim), loop, run, executeOpts);
+        })
+      : executeLoop
+  );
   const leaseMs = runnerLeaseMs(claim.loop.leaseMs);
   const heartbeatIntervalMs = runnerHeartbeatIntervalMs(leaseMs, opts.heartbeatIntervalMs);
   const heartbeat = async () => {
@@ -198,6 +442,41 @@ function runnerHeartbeatIntervalMs(leaseMs: number, configured?: number): number
   return Math.min(30_000, safeDefault, requested);
 }
 
+function normalizedInteger(value: number, name: string, min: number): number {
+  if (!Number.isInteger(value) || value < min) throw new Error(`${name} must be an integer >= ${min}`);
+  return value;
+}
+
+function parseIntegerOption(name: string, min: number): (value: string) => number {
+  return (value) => {
+    const parsed = Number(value);
+    if (!Number.isInteger(parsed) || parsed < min) throw new Error(`${name} must be an integer >= ${min}`);
+    return parsed;
+  };
+}
+
+function sleepMs(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0 || signal?.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    let timer: ReturnType<typeof setTimeout>;
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    timer = setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
+  });
+}
+
+function shutdownSignal(): AbortSignal {
+  const controller = new AbortController();
+  const stop = () => controller.abort();
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+  return controller.signal;
+}
+
 function wantsJson(opts?: { json?: boolean }): boolean {
   return Boolean(program.opts().json || opts?.json);
 }
@@ -235,9 +514,45 @@ program
     if (!result.ok) process.exitCode = 1;
   });
 
+program
+  .command("run")
+  .description("poll the control-plane and execute claimed runs until stopped")
+  .option("--api-url <url>", "control-plane API URL")
+  .option("--runner-id <id>", "runner id")
+  .option("--machine-id <id>", "machine id")
+  .option("--poll-interval-ms <ms>", "idle polling interval", parseIntegerOption("pollIntervalMs", 1))
+  .option("--max-iterations <n>", "stop after this many claim iterations", parseIntegerOption("maxIterations", 1))
+  .option("--idle-exit-after-ms <ms>", "stop after this many idle milliseconds", parseIntegerOption("idleExitAfterMs", 0))
+  .option("-j, --json", "print JSON")
+  .action(async (opts) => {
+    const result = await runRunnerLoop({
+      apiUrl: opts.apiUrl,
+      runnerId: opts.runnerId,
+      machineId: opts.machineId,
+      pollIntervalMs: opts.pollIntervalMs,
+      maxIterations: opts.maxIterations,
+      idleExitAfterMs: opts.idleExitAfterMs,
+      signal: shutdownSignal(),
+    });
+    if (wantsJson(opts)) console.log(JSON.stringify(result, null, 2));
+    else {
+      console.log(
+        `iterations=${result.iterations} claimed=${result.claimed} completed=${result.completed.length} errors=${result.errors}`,
+      );
+    }
+    if (!result.ok) process.exitCode = 1;
+  });
+
 if (import.meta.main) {
   main().catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
+    logRunnerCommandFailure(error);
     process.exit(1);
   });
+}
+
+export function logRunnerCommandFailure(error: unknown): void {
+  console.error(JSON.stringify({
+    evt: "loops_runner_command_failed",
+    errorType: error instanceof Error ? "error" : typeof error,
+  }));
 }
