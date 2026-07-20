@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { lstatSync, readdirSync, readFileSync } from "node:fs";
-import { basename, extname, join, relative, resolve } from "node:path";
+import { basename, extname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const defaultRoot = join(fileURLToPath(new URL("..", import.meta.url)));
@@ -38,9 +38,11 @@ const privateHostedDomainPattern = new RegExp(
   "i",
 );
 const unicodeDotEquivalentPattern = /[\u3002\uff0e\uff61]/g;
-const percentEncodedDotPattern = /%(?:2e|e3%80%82|ef%bc%8e|ef%bd%a1)/gi;
-const javascriptDotEscapePattern =
-  /\\(?:x2e|u(?:002e|3002|ff0e|ff61)|u\{0*(?:2e|3002|ff0e|ff61)\})/gi;
+const percentEncodedBytesPattern = /(?:%[0-9a-f]{2})+/gi;
+const percentEncodedBytePattern = /%([0-9a-f]{2})/gi;
+const javascriptCharacterEscapePattern =
+  /\\(?:x([0-9a-f]{2})|u([0-9a-f]{4})|u\{([0-9a-f]{1,6})\})/gi;
+const maxCanonicalizationPasses = 2;
 const localHomePath = ["/home", "hasna"].join("/");
 const disallowedPublicPathLiterals = [
   localHomePath,
@@ -83,11 +85,43 @@ function parseRoot(args) {
 
 const root = parseRoot(process.argv.slice(2));
 
-function normalizeHostedDomainDots(text) {
-  return text
-    .replace(unicodeDotEquivalentPattern, ".")
-    .replace(percentEncodedDotPattern, ".")
-    .replace(javascriptDotEscapePattern, ".");
+function decodePercentEncodedBytes(text) {
+  return text.replace(percentEncodedBytesPattern, (encodedBytes) => {
+    try {
+      return decodeURIComponent(encodedBytes);
+    } catch {
+      return encodedBytes.replace(percentEncodedBytePattern, (encodedByte, hex) => {
+        const value = Number.parseInt(hex, 16);
+        return value <= 0x7f ? String.fromCodePoint(value) : encodedByte;
+      });
+    }
+  });
+}
+
+function decodeJavascriptCharacterEscapes(text) {
+  return text.replace(
+    javascriptCharacterEscapePattern,
+    (escape, hexByte, hexCodeUnit, hexCodePoint) => {
+      const hex = hexByte ?? hexCodeUnit ?? hexCodePoint;
+      const value = Number.parseInt(hex, 16);
+      if (!Number.isFinite(value) || value > 0x10ffff) return escape;
+      return String.fromCodePoint(value);
+    },
+  );
+}
+
+function normalizeHostedDomainText(text) {
+  let normalized = text;
+  for (let pass = 0; pass < maxCanonicalizationPasses; pass += 1) {
+    const next = decodePercentEncodedBytes(
+      decodeJavascriptCharacterEscapes(normalized),
+    )
+      .normalize("NFKC")
+      .replace(unicodeDotEquivalentPattern, ".");
+    if (next === normalized) break;
+    normalized = next;
+  }
+  return normalized;
 }
 
 function* walk(dir) {
@@ -110,10 +144,10 @@ function* walk(dir) {
 
 const findings = [];
 for (const path of walk(root)) {
-  const rel = relative(root, path);
+  const rel = relative(root, path).split(sep).join("/");
   const isTestFile = /\.test\.[cm]?[jt]s$/.test(rel);
   const text = readFileSync(path, "utf8");
-  const normalizedHostedDomainText = normalizeHostedDomainDots(text);
+  const normalizedHostedDomainText = normalizeHostedDomainText(text);
   if (privateHostedDomainPattern.test(normalizedHostedDomainText)) {
     findings.push(`${rel}: internal hosted domain suffix`);
   }
