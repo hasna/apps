@@ -19,6 +19,16 @@ unless noted.
 
 ## Unreleased
 
+### Fixed
+
+- **Codewith auth-profile preflight:** use JSON-first exact profile matching for
+  local and remote runs. Root `data`/`profiles` entries are authoritative:
+  `usable: false` is rejected, legacy entries without `usable` remain accepted,
+  and `currentProfile` does not add inventory membership. Human-table parsing,
+  including active `*` rows, is used only when JSON mode is unsupported or its
+  inventory is structurally unavailable. NUL-containing names, missing
+  profiles, and non-fallback profile-list failures fail closed.
+
 ### Added
 
 - `loops-mcp` now serves a shared Streamable HTTP transport (default
