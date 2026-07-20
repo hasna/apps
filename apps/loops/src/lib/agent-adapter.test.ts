@@ -922,7 +922,7 @@ describe("provider adapter contracts", () => {
     }
   });
 
-  test("rejects malformed addDirs before building provider arguments and preserves valid arrays", () => {
+  test("rejects malformed or filesystem-root addDirs before building provider arguments and preserves valid arrays", () => {
     expect(() => providerAdapter("codewith").buildInvocation(baseTarget({
       provider: "codewith",
       addDirs: "/" as unknown as string[],
@@ -931,14 +931,27 @@ describe("provider adapter contracts", () => {
       provider: "codex",
       addDirs: ["/tmp/allowed", null] as unknown as string[],
     }))).toThrow("codex.addDirs[1] must be a non-empty string");
+    for (const directory of ["/", "//", "/.", "/tmp/..", "\\", "C:\\", "C:/", "C:\\tmp\\..", "C:/tmp/.."]) {
+      const target = baseTarget({
+        provider: "codewith",
+        addDirs: [directory],
+      });
+      expect(() => providerAdapter("codewith").validate(target)).toThrow(
+        "codewith.addDirs[0] must not resolve to a filesystem root",
+      );
+      expect(() => providerAdapter("codewith").buildInvocation(target)).toThrow(
+        "codewith.addDirs[0] must not resolve to a filesystem root",
+      );
+    }
 
     const invocation = providerAdapter("codewith").buildInvocation(baseTarget({
       provider: "codewith",
-      addDirs: ["/tmp/allowed", "/tmp/also-allowed"],
+      addDirs: ["/tmp/allowed", "/tmp/also-allowed", "C:\\tmp\\allowed"],
     }));
-    expect(invocation.args.filter((arg) => arg === "--add-dir")).toHaveLength(2);
+    expect(invocation.args.filter((arg) => arg === "--add-dir")).toHaveLength(3);
     expect(invocation.args).toContain("/tmp/allowed");
     expect(invocation.args).toContain("/tmp/also-allowed");
+    expect(invocation.args).toContain("C:\\tmp\\allowed");
   });
 
   test("rejects own or inherited custom extra-args iterators before any provider spawn", async () => {

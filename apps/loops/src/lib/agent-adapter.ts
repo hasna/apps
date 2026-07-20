@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { posix, win32 } from "node:path";
 import type { AgentAllowlistEnforcement, AgentProvider, AgentSandbox, AgentSessionContract, AgentTarget, WorkflowStep } from "../types.js";
 import { ValidationError } from "./errors.js";
 import { scrubSecrets } from "./redact.js";
@@ -192,7 +193,17 @@ function validatedAddDirsSnapshot(value: unknown, label: string): readonly strin
     if (typeof directory !== "string" || directory.trim() === "") {
       throw new ValidationError(`${label}[${index}] must be a non-empty string`);
     }
-    snapshot.push(directory.trim());
+    const normalizedDirectory = directory.trim();
+    const normalizedPosixPath = posix.normalize(normalizedDirectory);
+    const normalizedWindowsPath = win32.normalize(normalizedDirectory);
+    const windowsRoot = win32.parse(normalizedWindowsPath).root;
+    if (
+      normalizedPosixPath === posix.parse(normalizedPosixPath).root ||
+      (windowsRoot !== "" && normalizedWindowsPath === windowsRoot)
+    ) {
+      throw new ValidationError(`${label}[${index}] must not resolve to a filesystem root`);
+    }
+    snapshot.push(normalizedDirectory);
   }
   return Object.freeze(snapshot);
 }

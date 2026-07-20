@@ -783,7 +783,16 @@ describe("loops-api foundation", () => {
     };
 
     try {
-      for (const addDirs of ["/", ["/tmp/allowed", null]] as const) {
+      for (const addDirs of [
+        "/",
+        ["/tmp/allowed", null],
+        ["/"],
+        ["//"],
+        ["/."],
+        ["/tmp/.."],
+        ["C:\\"],
+        ["C:/tmp/.."],
+      ] as const) {
         const response = await fetch(apiUrl(server, "/v1/import"), {
           method: "POST",
           headers: jsonHeaders,
