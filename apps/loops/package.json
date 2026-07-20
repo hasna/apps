@@ -81,7 +81,7 @@
     "test": "bun test",
     "test:boundary": "bun run scripts/no-private-cloud-boundary.mjs",
     "check:contracts": "bun run scripts/check-storage-kit.mjs",
-    "check:supply-chain": "bun audit && bun audit --production && bun run check:contracts && bun pm pack --dry-run --ignore-scripts",
+    "check:supply-chain": "bun audit && bun audit --production && bun run check:contracts && bun pm pack --dry-run --ignore-scripts && bun run test:boundary && bun run scripts/check-packed-boundary.mjs",
     "prepare": "test -d dist || bun run build",
     "dev:cli": "bun run src/cli/index.ts",
     "dev:daemon": "bun run src/daemon/index.ts",
