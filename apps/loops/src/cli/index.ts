@@ -196,8 +196,14 @@ function runTimestamp(run: { finishedAt?: string; startedAt?: string; createdAt:
   return new Date(run.finishedAt ?? run.startedAt ?? run.createdAt).getTime();
 }
 
-async function workflowMap(store: LoopStore): Promise<Map<string, WorkflowSpec>> {
-  return new Map((await store.listWorkflows({ limit: 500 })).map((workflow) => [workflow.id, workflow]));
+async function workflowMapForLoops(store: LoopStore, loops: Loop[]): Promise<Map<string, WorkflowSpec>> {
+  const workflowIds = [...new Set(
+    loops
+      .filter((loop) => loop.target.type === "workflow")
+      .map((loop) => loop.target.type === "workflow" ? loop.target.workflowId : ""),
+  )];
+  const workflows = await Promise.all(workflowIds.map((id) => store.getWorkflow(id)));
+  return new Map(workflows.filter((workflow): workflow is WorkflowSpec => Boolean(workflow)).map((workflow) => [workflow.id, workflow]));
 }
 
 /**
@@ -1875,16 +1881,21 @@ program
     const loop = idOrName ? await store.requireLoop(idOrName) : undefined;
     const runs = await store.listRuns({ loopId: loop?.id, status: parseRunStatus(opts.status), limit });
     if (opts.summary) {
-      const workflows = await workflowMap(store);
       const loopCache = new Map<string, Loop>();
+      const workflowCache = new Map<string, WorkflowSpec>();
       if (loop) loopCache.set(loop.id, loop);
       const summaries = [];
       for (const run of runs) {
         const summaryLoop = loopCache.get(run.loopId) ?? await store.getLoop(run.loopId);
         if (summaryLoop) loopCache.set(summaryLoop.id, summaryLoop);
+        let workflow: WorkflowSpec | undefined;
+        if (summaryLoop?.target.type === "workflow") {
+          workflow = workflowCache.get(summaryLoop.target.workflowId) ?? await store.getWorkflow(summaryLoop.target.workflowId);
+          if (workflow) workflowCache.set(workflow.id, workflow);
+        }
         summaries.push(runSummary(run, {
           loop: summaryLoop,
-          workflow: summaryLoop?.target.type === "workflow" ? workflows.get(summaryLoop.target.workflowId) : undefined,
+          workflow,
           showOutput: Boolean(opts.showOutput),
           maxOutputChars: positiveInteger(opts.maxOutputChars, "--max-output-chars") ?? 500,
         }));
@@ -1951,7 +1962,8 @@ program
     const scanLimit = Math.min(500, positiveInteger(opts.scanLimit, "--scan-limit") ?? 500);
     const issueLimit = Math.min(500, positiveInteger(opts.limit, "--limit") ?? 200);
     const candidates = await store.listLoops({ status, limit: scanLimit + 1 });
-    const raw = lintLoops(candidates.slice(0, scanLimit), await workflowMap(store), {
+    const loops = candidates.slice(0, scanLimit);
+    const raw = lintLoops(loops, await workflowMapForLoops(store, loops), {
       longCommandChars: positiveInteger(opts.longCommandChars, "--long-command-chars") ?? 500,
     });
     const issues = raw.issues as LoopLintIssue[];

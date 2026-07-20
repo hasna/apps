@@ -145,7 +145,7 @@ function targetSummary(loop: Loop | undefined): Record<string, unknown> | undefi
   if (loop.target.type === "command") {
     const executable = loop.target.shell || /\s/.test(loop.target.command)
       ? redact(scrubSecrets(loop.target.command))
-      : basename(loop.target.command);
+      : scrubSecrets(basename(loop.target.command));
     return {
       type: "command",
       executable,

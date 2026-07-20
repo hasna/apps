@@ -35,6 +35,7 @@ import { workflowBodyFromJson } from "../lib/workflow-spec.js";
 import type {
   CatchUpPolicy,
   CreateLoopInput,
+  Loop,
   LoopStatus,
   LoopTarget,
   OverlapPolicy,
@@ -299,8 +300,14 @@ function runTimestamp(run: { finishedAt?: string; startedAt?: string; createdAt:
   return new Date(run.finishedAt ?? run.startedAt ?? run.createdAt).getTime();
 }
 
-async function insightsWorkflowMap(store: LoopStore): Promise<Map<string, WorkflowSpec>> {
-  return new Map((await store.listWorkflows({ limit: MAX_LIMIT })).map((workflow) => [workflow.id, workflow]));
+async function insightsWorkflowMap(store: LoopStore, loops: Loop[]): Promise<Map<string, WorkflowSpec>> {
+  const workflowIds = [...new Set(
+    loops
+      .filter((loop) => loop.target.type === "workflow")
+      .map((loop) => loop.target.type === "workflow" ? loop.target.workflowId : ""),
+  )];
+  const workflows = await Promise.all(workflowIds.map((id) => store.getWorkflow(id)));
+  return new Map(workflows.filter((workflow): workflow is WorkflowSpec => Boolean(workflow)).map((workflow) => [workflow.id, workflow]));
 }
 
 function normalizeSchedule(input: z.infer<typeof scheduleSchema>): ScheduleSpec {
@@ -565,7 +572,7 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
           limit: resolvedScanLimit + 1,
         });
         const loops = candidates.slice(0, resolvedScanLimit);
-        const raw = lintLoops(loops, await insightsWorkflowMap(store), { longCommandChars });
+        const raw = lintLoops(loops, await insightsWorkflowMap(store, loops), { longCommandChars });
         const issues = raw.issues as LoopLintIssue[];
         return {
           ...raw,

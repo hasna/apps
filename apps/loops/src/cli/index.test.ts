@@ -234,6 +234,7 @@ describe("loops CLI", () => {
     const dataDir = freshDataDir("loops-cli-insights-");
     let loopId = "";
     let runId = "";
+    let workflowHazardId = "";
     const store = new Store(join(dataDir, "loops.db"));
     try {
       const summaryLoop = store.createLoop({
@@ -256,6 +257,22 @@ describe("loops CLI", () => {
         name: "wrapper-hazard",
         schedule: { type: "once", at: futureAt() },
         target: { type: "command", command: "bash", args: ["-c", "cat /tmp/large.log"] },
+      });
+      const workflowHazard = store.createWorkflow({
+        name: "workflow-hazard",
+        steps: [{ id: "history", target: { type: "command", command: "git", args: ["log"] } }],
+      });
+      workflowHazardId = workflowHazard.id;
+      for (let index = 0; index < 500; index += 1) {
+        store.createWorkflow({
+          name: `workflow-filler-${index}`,
+          steps: [{ id: "noop", target: { type: "command", command: "true" } }],
+        });
+      }
+      store.createLoop({
+        name: "workflow-wrapper-hazard",
+        schedule: { type: "once", at: futureAt() },
+        target: { type: "workflow", workflowId: workflowHazard.id },
       });
     } finally {
       store.close();
@@ -289,8 +306,12 @@ describe("loops CLI", () => {
 
     const lint = runCli(dataDir, ["--json", "lint"]);
     expect(lint.status).toBe(0);
-    const lintValue = JSON.parse(lint.stdout) as { issues: Array<{ code: string }> };
+    const lintValue = JSON.parse(lint.stdout) as { issues: Array<{ code: string; targetPath: string }> };
     expect(lintValue.issues.map((issue) => issue.code)).toEqual(expect.arrayContaining(["wrapper-script", "unbounded-output"]));
+    expect(lintValue.issues).toContainEqual(expect.objectContaining({
+      code: "unbounded-output",
+      targetPath: `workflow:${workflowHazardId}:step:history`,
+    }));
   });
 
   test("reports local deployment mode by default", () => {
