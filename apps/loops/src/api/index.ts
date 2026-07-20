@@ -739,6 +739,7 @@ const WORKFLOW_EVENT_SCAN_LIMIT = 2_147_483_647;
 function validateExistingAgentSessionContractEvents(
   workflow: WorkflowSpec,
   events: StoredWorkflowEvent[],
+  permittedMissingStepId?: string,
 ) {
   const contractEvents = events.filter((event) => event.eventType === "agent_session_contract");
   const workflowStepIds = new Set(workflow.steps.map((step) => step.id));
@@ -756,7 +757,10 @@ function validateExistingAgentSessionContractEvents(
       if (existing.length > 0) throw apiError("agent_session_contract_fabricated", 409);
       continue;
     }
-    if (existing.length === 0) throw apiError("agent_session_contract_missing", 409);
+    if (existing.length === 0) {
+      if (step.id === permittedMissingStepId) continue;
+      throw apiError("agent_session_contract_missing", 409);
+    }
     if (existing.length > 1) throw apiError("agent_session_contract_duplicate", 409);
     if (!isDeepStrictEqual(existing[0]!.payload, contractPayload(expected))) {
       throw apiError("agent_session_contract_stored_mismatch", 409);
@@ -831,6 +835,7 @@ async function handleRunWorkflowExecutionRequest(ctx: V1RequestContext, runId: s
     const existingContracts = validateExistingAgentSessionContractEvents(
       workflow,
       await storage.listWorkflowEvents(workflowRunId, WORKFLOW_EVENT_SCAN_LIMIT),
+      stepId,
     );
     const duplicates = existingContracts.filter((event) =>
       event.eventType === "agent_session_contract" && event.stepId === stepId

@@ -1865,6 +1865,48 @@ describe("loops-api foundation", () => {
       expect((await storage.listWorkflowEvents(created.workflowRun.id)).filter((event) =>
         event.eventType === "agent_session_contract" && event.stepId === "contract-agent"
       )).toHaveLength(0);
+
+      const restoreMissingContract = () => fetch(
+        apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs/${created.workflowRun.id}/events`),
+        {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify({
+            claimToken: claimed.claims[0]!.claimToken,
+            eventType: "agent_session_contract",
+            stepId: "contract-agent",
+            payload: contractPayload,
+          }),
+        },
+      );
+      const restoredContract = await restoreMissingContract();
+      expect(restoredContract.status).toBe(200);
+      expect(await restoredContract.json()).toMatchObject({
+        event: {
+          eventType: "agent_session_contract",
+          stepId: "contract-agent",
+          payload: contractPayload,
+        },
+      });
+      expect((await storage.listWorkflowEvents(created.workflowRun.id)).filter((event) =>
+        event.eventType === "agent_session_contract" && event.stepId === "contract-agent"
+      )).toHaveLength(1);
+
+      const repeatedRestore = await restoreMissingContract();
+      expect(repeatedRestore.status).toBe(409);
+      expect(await repeatedRestore.json()).toMatchObject({ ok: false, error: "agent_session_contract_duplicate" });
+      expect((await storage.listWorkflowEvents(created.workflowRun.id)).filter((event) =>
+        event.eventType === "agent_session_contract" && event.stepId === "contract-agent"
+      )).toHaveLength(1);
+
+      internal.db.query(
+        "DELETE FROM workflow_events WHERE workflow_run_id = ? AND event_type = 'agent_session_contract' AND step_id = ?",
+      ).run(created.workflowRun.id, "contract-agent");
+      const concurrentRestores = await Promise.all([restoreMissingContract(), restoreMissingContract()]);
+      expect(concurrentRestores.map((response) => response.status).sort()).toEqual([200, 409]);
+      expect((await storage.listWorkflowEvents(created.workflowRun.id)).filter((event) =>
+        event.eventType === "agent_session_contract" && event.stepId === "contract-agent"
+      )).toHaveLength(1);
     } finally {
       server.stop(true);
       await storage.close();
