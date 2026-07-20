@@ -284,6 +284,8 @@ export interface WorkflowWorkItem {
   subjectRef: string;
   projectKey?: string;
   projectGroup?: string;
+  /** Machine that reserved/admitted this route work item, when known. */
+  machineId?: string;
   /**
    * The drain/route identity (loop name) that admitted this item. Used to scope
    * the `--max-active` global admission count to a single route instead of the
@@ -293,6 +295,16 @@ export interface WorkflowWorkItem {
   priority: number;
   status: WorkflowWorkItemStatus;
   attempts: number;
+  /**
+   * Consecutive non-productive "gate death" finishes (runs that failed at
+   * worktree prep or a fast triage/planner gate before any real work). Gate
+   * deaths refund their redispatch attempt, so this second counter bounds a
+   * deterministic infrastructure fault: at the ceiling the item is
+   * dead-lettered instead of retrying forever. Reset by a run that reaches
+   * the worker (success, productive failure, or tempfail) and by an
+   * operator requeue with attempts reset.
+   */
+  gateDeaths: number;
   nextAttemptAt?: string;
   leaseExpiresAt?: string;
   workflowId?: string;
@@ -304,6 +316,7 @@ export interface WorkflowWorkItem {
 }
 
 export interface UpsertWorkflowWorkItemInput {
+  id?: string;
   routeKey: string;
   idempotencyKey: string;
   invocationId: string;
@@ -312,6 +325,7 @@ export interface UpsertWorkflowWorkItemInput {
   subjectRef: string;
   projectKey?: string;
   projectGroup?: string;
+  machineId?: string;
   routeScope?: string;
   priority?: number;
   status?: Extract<WorkflowWorkItemStatus, "queued" | "deferred">;
@@ -478,6 +492,56 @@ export interface LoopRun {
   goalRunId?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export type RunReceiptMachine = string | Record<string, unknown>;
+
+export interface RunReceiptSummary {
+  text?: string;
+  stdout_bytes: number;
+  stderr_bytes: number;
+  stdout_excerpt?: string;
+  stderr_excerpt?: string;
+  error?: string;
+  duration_ms?: number;
+}
+
+export interface RunReceipt {
+  loop_id: string;
+  run_id: string;
+  machine: RunReceiptMachine;
+  repo: string;
+  task_ids: string[];
+  knowledge_ids: string[];
+  digest_id: string;
+  started_at: string | null;
+  finished_at: string | null;
+  status: string;
+  exit_code: number | null;
+  summary: RunReceiptSummary;
+  evidence_paths: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WriteRunReceiptInput {
+  loop_id?: string;
+  run_id: string;
+  machine?: RunReceiptMachine;
+  repo?: string;
+  task_ids?: string[];
+  knowledge_ids?: string[];
+  digest_id?: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  status?: string;
+  exit_code?: number | null;
+  summary?: string | Partial<RunReceiptSummary> | null;
+  evidence_paths?: string[];
+  stdout?: string;
+  stderr?: string;
+  error?: string;
+  duration_ms?: number;
 }
 
 export interface CreateLoopInput {

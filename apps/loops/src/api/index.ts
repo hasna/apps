@@ -1,13 +1,41 @@
 #!/usr/bin/env bun
-import { timingSafeEqual } from "node:crypto";
 import { Command } from "commander";
-import type { CreateLoopInput, LoopStatus, RunStatus } from "../types.js";
+import type {
+  CreateLoopInput,
+  CreateWorkflowInvocationInput,
+  CreateWorkflowInput,
+  Loop,
+  LoopRun,
+  LoopStatus,
+  RunStatus,
+  UpsertWorkflowWorkItemInput,
+  WorkflowRunStatus,
+  WorkflowSpec,
+  WorkflowStepRunStatus,
+  WorkflowWorkItemStatus,
+  WriteRunReceiptInput,
+} from "../types.js";
+import type { GoalStatus } from "../lib/goal/types.js";
 import { LoopArchivedError, LoopNotFoundError, ValidationError } from "../lib/errors.js";
-import { publicLoop, publicRun, redact } from "../lib/format.js";
+import {
+  publicGoal,
+  publicGoalRun,
+  publicLoop,
+  publicRun,
+  publicRunReceipt,
+  publicWorkflow,
+  publicWorkflowEvent,
+  publicWorkflowInvocation,
+  publicWorkflowRun,
+  publicWorkflowStepRun,
+  publicWorkflowWorkItem,
+} from "../lib/format.js";
 import { buildDeploymentStatus, deploymentStatusLine } from "../lib/mode.js";
 import { computeNextAfter, dueSlots } from "../lib/recurrence.js";
 import { scrubSecretsDeep } from "../lib/redact.js";
 import type { LoopStorageContract } from "../lib/storage/contract.js";
+import { routePolicy, type RoutePolicy } from "../lib/auth/route-policy.js";
+import type { TenantAuthContext, TenantAuthDecision } from "../lib/auth/tenant-auth.js";
 import { packageVersion } from "../lib/version.js";
 import openApiSpec from "../../openapi/loops.json" with { type: "json" };
 
@@ -19,6 +47,10 @@ export function openApiDocument(): Record<string, unknown> {
 const program = new Command();
 const DEFAULT_BODY_LIMIT_BYTES = 64 * 1024;
 const DEFAULT_EVIDENCE_LIMIT_BYTES = 256 * 1024;
+// Bulk id-preserving import (POST /v1/import) accepts batches of full loop/run/
+// workflow rows, so it needs a much larger body budget than single-object CRUD.
+// The client batches by byte budget well under this ceiling.
+const DEFAULT_IMPORT_LIMIT_BYTES = 32 * 1024 * 1024;
 const MIN_RUNNER_LEASE_MS = 1_000;
 
 program
@@ -37,31 +69,6 @@ function printStatus(opts?: { json?: boolean }): void {
   else console.log(deploymentStatusLine(status));
 }
 
-function configuredAuthToken(): string | undefined {
-  return process.env.LOOPS_API_TOKEN?.trim() || process.env.HASNA_LOOPS_API_TOKEN?.trim();
-}
-
-function isLocalBind(host: string): boolean {
-  return ["127.0.0.1", "localhost", "::1"].includes(host);
-}
-
-function bearerTokenMatches(authorization: string, token: string): boolean {
-  const expected = `Bearer ${token}`;
-  const a = new TextEncoder().encode(authorization);
-  const b = new TextEncoder().encode(expected);
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
-function authorizeRequest(request: Request, host: string): Response | undefined {
-  if (isLocalBind(host)) return undefined;
-  const token = configuredAuthToken();
-  if (!token) return Response.json({ ok: false, error: "auth_required" }, { status: 401 });
-  const authorization = request.headers.get("authorization") ?? "";
-  return bearerTokenMatches(authorization, token)
-    ? undefined
-    : Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
-}
-
 function ok(payload: Record<string, unknown> = {}, init?: ResponseInit): Response {
   return Response.json({ ok: true, ...payload }, init);
 }
@@ -78,17 +85,11 @@ export function apiStatus() {
   };
 }
 
-/**
- * Framework-agnostic API-key verifier shape (matches
- * `@hasna/contracts/auth` `ApiKeyVerifier`). Kept structural so the api module
- * has no hard dependency on the auth package: the serve entry injects the real
- * verifier built from the vendored kit's client + the HMAC signing secret.
- */
 export interface ApiAuthenticator {
   authenticate(
     headers: Headers,
-    context?: { method?: string | null; path?: string | null; requiredScopes?: readonly string[] },
-  ): Promise<{ ok: boolean; status: number; reason?: string; message?: string }>;
+    context: { method: string; path: string; policy: RoutePolicy },
+  ): Promise<TenantAuthDecision>;
 }
 
 export interface LoopsApiServerOptions {
@@ -97,19 +98,28 @@ export interface LoopsApiServerOptions {
   storage?: LoopStorageContract;
   bodyLimitBytes?: number;
   evidenceLimitBytes?: number;
+  importLimitBytes?: number;
   now?: () => Date;
   /**
    * API-key verifier (from `@hasna/contracts/auth`). When present, every
    * request outside the open foundation probes (`/health`, `/ready`,
-   * `/version`, `/status`) must present a valid `loops:*` scoped key. This is
+   * `/version`, `/openapi.json`) must present a valid `loops:*` scoped key. This is
    * the internet-facing auth path (no bearer token, no loopback bypass).
    */
   authenticator?: ApiAuthenticator;
+  withTenantStorage?: <T>(
+    principal: TenantAuthContext,
+    fn: (storage: LoopStorageContract) => Promise<T>,
+  ) => Promise<T>;
   /**
    * Readiness probe. Should prove the storage backend is reachable AND fully
-   * migrated. Returns `{ ready, detail? }`. Defaults to a storage list probe.
+   * migrated. Returns a stable public code only. Defaults to a storage list probe.
    */
-  readyCheck?: () => Promise<{ ready: boolean; detail?: string }>;
+  readyCheck?: () => Promise<{
+    ready: boolean;
+    code?: "storage_unconfigured" | "storage_unreachable" | "auth_unreachable" | "unsafe_database_role" |
+      "pending_migrations" | "unknown_migrations" | "migration_checksum_mismatch";
+  }>;
 }
 
 /** Deployment mode for the foundation probes ({ status, version, mode }). */
@@ -122,22 +132,31 @@ function foundationEnvelope(status: string, extra: Record<string, unknown> = {})
   return { status, version: packageVersion(), mode: foundationMode(), service: "loops", ...extra };
 }
 
+const PUBLIC_READINESS_CODES = new Set([
+  "storage_unconfigured",
+  "storage_unreachable",
+  "auth_unreachable",
+  "unsafe_database_role",
+  "pending_migrations",
+  "unknown_migrations",
+  "migration_checksum_mismatch",
+]);
+
 export function createLoopsApiServer(opts: LoopsApiServerOptions = {}) {
   const host = opts.host ?? "127.0.0.1";
   const port = opts.port ?? 8787;
-  // A non-local bind must be gated by EITHER the contracts API-key verifier
-  // (internet-facing path) OR the legacy bearer token (local/dev path). Never
-  // expose the control plane unauthenticated.
-  if (!isLocalBind(host) && !opts.authenticator && !configuredAuthToken()) {
-    throw new Error("non-local loops-serve binds require an API-key authenticator or LOOPS_API_TOKEN");
+  if (!opts.authenticator || !opts.withTenantStorage) {
+    throw new Error("loops-api requires a tenant authenticator and request-scoped tenant storage");
   }
-  const defaultReady = async (): Promise<{ ready: boolean; detail?: string }> => {
-    if (!opts.storage) return { ready: false, detail: "storage_unconfigured" };
+  const authenticator = opts.authenticator;
+  const withTenantStorage = opts.withTenantStorage;
+  const defaultReady = async (): Promise<{ ready: boolean; code?: string }> => {
+    if (!opts.storage) return { ready: false, code: "storage_unconfigured" };
     try {
       await opts.storage.listLoops({ limit: 1 });
       return { ready: true };
-    } catch (error) {
-      return { ready: false, detail: error instanceof Error ? error.message : "storage_unreachable" };
+    } catch {
+      return { ready: false, code: "storage_unreachable" };
     }
   };
   const readyCheck = opts.readyCheck ?? defaultReady;
@@ -156,41 +175,63 @@ export function createLoopsApiServer(opts: LoopsApiServerOptions = {}) {
       }
       if (request.method === "GET" && (url.pathname === "/ready" || url.pathname === "/readyz")) {
         const result = await readyCheck();
+        const code = result.ready
+          ? undefined
+          : PUBLIC_READINESS_CODES.has(result.code ?? "")
+            ? result.code
+            : "storage_unreachable";
         return Response.json(
-          foundationEnvelope(result.ready ? "ready" : "not_ready", result.detail ? { detail: result.detail } : {}),
+          foundationEnvelope(result.ready ? "ready" : "not_ready", code ? { code } : {}),
           { status: result.ready ? 200 : 503 },
         );
       }
       if (request.method === "GET" && url.pathname === "/openapi.json") {
         return Response.json(openApiDocument());
       }
-      // ── Authenticated control plane (/status included) ───────────────────
-      if (opts.authenticator) {
-        const decision = await opts.authenticator.authenticate(request.headers, {
+      const policy = routePolicy(request.method, url.pathname);
+      if (!policy) return fail("route_policy_missing", 403);
+      let decision: TenantAuthDecision;
+      try {
+        decision = await authenticator.authenticate(request.headers, {
           method: request.method,
           path: url.pathname,
+          policy,
         });
-        if (!decision.ok) {
-          return Response.json(
-            { ok: false, error: decision.reason ?? "unauthorized", message: decision.message },
-            { status: decision.status || 401 },
-          );
-        }
-      } else {
-        const unauthorized = authorizeRequest(request, host);
-        if (unauthorized) return unauthorized;
+      } catch (error) {
+        const requestId = requestIdentifier(request);
+        logInternalFailure(request, error, "auth_unavailable", requestId);
+        return Response.json(
+          { ok: false, error: "auth_unavailable", requestId },
+          { status: 503 },
+        );
       }
+      if (!decision.ok) {
+        return Response.json(
+          { ok: false, error: decision.reason, message: decision.message, requestId: decision.requestId },
+          { status: decision.status },
+        );
+      }
+      const principal = decision.principal;
       if (request.method === "GET" && url.pathname === "/status") {
         return Response.json(apiStatus());
       }
-      return handleV1Request({
-        request,
-        url,
-        storage: opts.storage,
-        bodyLimitBytes: opts.bodyLimitBytes ?? DEFAULT_BODY_LIMIT_BYTES,
-        evidenceLimitBytes: opts.evidenceLimitBytes ?? DEFAULT_EVIDENCE_LIMIT_BYTES,
-        now: opts.now ?? (() => new Date()),
-      });
+      const execute = (storage?: LoopStorageContract) => handleV1Request({
+          request,
+          url,
+          storage,
+          auth: principal,
+          bodyLimitBytes: opts.bodyLimitBytes ?? DEFAULT_BODY_LIMIT_BYTES,
+          evidenceLimitBytes: opts.evidenceLimitBytes ?? DEFAULT_EVIDENCE_LIMIT_BYTES,
+          importLimitBytes: opts.importLimitBytes ?? DEFAULT_IMPORT_LIMIT_BYTES,
+          now: opts.now ?? (() => new Date()),
+        });
+      try {
+        return await withTenantStorage(principal, (storage) => execute(storage));
+      } catch (error) {
+        const response = errorResponse(error);
+        if (response.status >= 500) logInternalFailure(request, error, "internal_error", principal.requestId);
+        return response;
+      }
     },
   });
 }
@@ -199,27 +240,120 @@ interface V1RequestContext {
   request: Request;
   url: URL;
   storage?: LoopStorageContract;
+  auth: TenantAuthContext;
   bodyLimitBytes: number;
   evidenceLimitBytes: number;
+  importLimitBytes: number;
   now: () => Date;
 }
+
+type RunnerGoalInput = Parameters<LoopStorageContract["createGoal"]>[0];
+type RunnerGoalPlanNodeInput = Parameters<LoopStorageContract["createGoalPlanNodes"]>[1][number];
+type RunnerGoalEventInput = Parameters<LoopStorageContract["recordGoalEvent"]>[0];
 
 async function handleV1Request(ctx: V1RequestContext): Promise<Response> {
   const segments = ctx.url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
   if (segments[0] !== "v1") return fail("not_found", 404);
   if (ctx.request.method === "GET" && segments.length === 1) return ok({ service: "loops-api", version: "v1" });
   if (ctx.request.method === "GET" && segments[1] === "status") return Response.json(apiStatus());
-  try {
-    if (segments[1] === "loops") return await handleLoopsRequest(ctx, segments.slice(2));
-    if (segments[1] === "runs") return await handleRunsRequest(ctx, segments.slice(2));
-    if (segments[1] === "runners") return await handleRunnerRequest(ctx, segments.slice(2));
-    if (segments[1] === "leases" && segments[2] === "recover" && ctx.request.method === "POST") {
-      return runnerProtocolPending("lease recovery is implemented in the runner protocol stage");
+  if (segments[1] === "import") return await handleImportRequest(ctx, segments.slice(2));
+  if (segments[1] === "loops") return await handleLoopsRequest(ctx, segments.slice(2));
+  if (segments[1] === "runs") return await handleRunsRequest(ctx, segments.slice(2));
+  if (segments[1] === "receipts") return await handleReceiptsRequest(ctx, segments.slice(2));
+  if (segments[1] === "workflows") return await handleWorkflowsRequest(ctx, segments.slice(2));
+  if (segments[1] === "workflow-runs") return await handleWorkflowRunsRequest(ctx, segments.slice(2));
+  if (segments[1] === "work-items") return await handleWorkItemsRequest(ctx, segments.slice(2));
+  if (segments[1] === "invocations") return await handleInvocationsRequest(ctx, segments.slice(2));
+  if (segments[1] === "goals") return await handleGoalsRequest(ctx, segments.slice(2));
+  if (segments[1] === "goal-runs") return await handleGoalRunsRequest(ctx, segments.slice(2));
+  if (segments[1] === "history") return await handleHistoryRequest(ctx, segments.slice(2));
+  if (segments[1] === "runners") return await handleRunnerRequest(ctx, segments.slice(2));
+  if (segments[1] === "leases" && segments[2] === "recover" && ctx.request.method === "POST") {
+    if (ctx.auth.tokenKind === "machine" || !ctx.auth.roles.some((role) => role === "admin" || role === "service")) {
+      return fail("maintenance_principal_required", 403);
     }
-    return fail("not_found", 404);
-  } catch (error) {
-    return errorResponse(error);
+    const storage = requireStorage(ctx.storage);
+    const recovered = await storage.recoverExpiredRunLeasesDetailed(ctx.now());
+    return ok({
+      abandoned: recovered.abandoned.map((run) => publicRun(run, false, { redactError: true })),
+      deferred: recovered.deferred.map((run) => publicRun(run, false, { redactError: true })),
+    });
   }
+  return fail("not_found", 404);
+}
+
+interface ImportRequestBody {
+  workflows?: WorkflowSpec[];
+  loops?: Loop[];
+  runs?: LoopRun[];
+  replace?: boolean;
+  preserveLoopScheduling?: boolean;
+  preserveWorkflowActivation?: boolean;
+}
+
+function safeImportedWorkflow(workflow: WorkflowSpec, opts: { preserveWorkflowActivation: boolean }): WorkflowSpec {
+  if (opts.preserveWorkflowActivation) return workflow;
+  return { ...workflow, status: "archived" };
+}
+
+function safeImportedLoop(loop: Loop, opts: { preserveLoopScheduling: boolean }): Loop {
+  if (opts.preserveLoopScheduling) return loop;
+  return {
+    ...loop,
+    status: "paused",
+    nextRunAt: undefined,
+    retryScheduledFor: undefined,
+  };
+}
+
+/**
+ * Bulk id-preserving import for a local->self-hosted backfill.
+ *
+ * Accepts batches of full `workflows` / `loops` / `runs` rows (the same public
+ * shapes that `loops export` emits) and upserts them by id via the storage
+ * `upsertMigration*` methods. Backfill safety is enforced at this API boundary:
+ * workflows are archived and loops are paused with scheduling pointers cleared
+ * unless explicit preserve flags are supplied. Rows are applied in FK-safe order
+ * (workflows, then loops, then runs). Volatile `running` runs are skipped (they
+ * carry lease/process ownership) and reported in `skippedRunning` rather than
+ * failing the batch. This is the endpoint the migration module noted as the
+ * missing "id-preserving import" surface for self-hosted push.
+ */
+async function handleImportRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
+  if (segments.length !== 0 || ctx.request.method !== "POST") return fail("not_found", 404);
+  const storage = requireStorage(ctx.storage);
+  const body = await readJsonBody<ImportRequestBody>(ctx.request, ctx.importLimitBytes);
+  const replace = body.replace === true;
+  const workflows = Array.isArray(body.workflows) ? body.workflows : [];
+  const loops = Array.isArray(body.loops) ? body.loops : [];
+  const runs = Array.isArray(body.runs) ? body.runs : [];
+  const preserveWorkflowActivation = body.preserveWorkflowActivation === true;
+  const preserveLoopScheduling = body.preserveLoopScheduling === true;
+  const imported = { workflows: 0, loops: 0, runs: 0 };
+  let skippedRunning = 0;
+  // FK-safe order: workflow_specs, then loops (loop_runs.loop_id REFERENCES
+  // loops), then loop_runs.
+  for (const workflow of workflows) {
+    await storage.upsertMigrationWorkflow(safeImportedWorkflow(workflow, { preserveWorkflowActivation }), {
+      replace: replace || !preserveWorkflowActivation,
+    });
+    imported.workflows += 1;
+  }
+  for (const loop of loops) {
+    await storage.upsertMigrationLoop(safeImportedLoop(loop, { preserveLoopScheduling }), {
+      replace: replace || !preserveLoopScheduling,
+    });
+    imported.loops += 1;
+  }
+  for (const run of runs) {
+    if (run.status === "running") {
+      skippedRunning += 1;
+      continue;
+    }
+    await storage.upsertMigrationRun(run, { replace });
+    imported.runs += 1;
+  }
+  return ok({ imported, skippedRunning });
 }
 
 async function handleLoopsRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
@@ -228,8 +362,10 @@ async function handleLoopsRequest(ctx: V1RequestContext, segments: string[]): Pr
     const loops = await storage.listLoops({
       status: optionalEnum<LoopStatus>(ctx.url.searchParams.get("status"), ["active", "paused", "stopped", "expired"]),
       limit: optionalLimit(ctx.url.searchParams.get("limit")),
+      offset: optionalOffset(ctx.url.searchParams.get("offset")),
       includeArchived: optionalBoolean(ctx.url.searchParams.get("includeArchived")),
       archived: optionalBoolean(ctx.url.searchParams.get("archived")),
+      name: optionalString(ctx.url.searchParams.get("name")),
     });
     return ok({ loops: loops.map(publicLoop) });
   }
@@ -237,6 +373,18 @@ async function handleLoopsRequest(ctx: V1RequestContext, segments: string[]): Pr
     const body = await readJsonBody<CreateLoopInput>(ctx.request, ctx.bodyLimitBytes);
     const loop = await storage.createLoop(body);
     return ok({ loop: publicLoop(loop) }, { status: 201 });
+  }
+  // GET /v1/loops/count — total-row verification (the list route caps at 1000
+  // with no offset, so counting a large backfilled table needs this).
+  if (segments.length === 1 && segments[0] === "count" && ctx.request.method === "GET") {
+    const count = await storage.countLoops(
+      optionalEnum<LoopStatus>(ctx.url.searchParams.get("status"), ["active", "paused", "stopped", "expired"]),
+      {
+        includeArchived: optionalBoolean(ctx.url.searchParams.get("includeArchived")),
+        archived: optionalBoolean(ctx.url.searchParams.get("archived")),
+      },
+    );
+    return ok({ count });
   }
   const id = segments[0];
   if (!id) return fail("not_found", 404);
@@ -272,31 +420,196 @@ async function handleLoopsRequest(ctx: V1RequestContext, segments: string[]): Pr
   if (segments.length === 2 && segments[1] === "unarchive" && ctx.request.method === "POST") {
     return ok({ loop: publicLoop(await storage.unarchiveLoop(id)) });
   }
+  if (segments.length === 2 && segments[1] === "rename" && ctx.request.method === "POST") {
+    const body = await readJsonBody<{ name?: unknown }>(ctx.request, ctx.bodyLimitBytes);
+    const name = requiredString(body.name, "name");
+    return ok({ loop: publicLoop(await storage.renameLoop(id, name)) });
+  }
+  return fail("not_found", 404);
+}
+
+async function handleWorkflowsRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
+  const storage = requireStorage(ctx.storage);
+  if (segments.length === 0 && ctx.request.method === "GET") {
+    const workflows = await storage.listWorkflows({
+      status: optionalEnum<WorkflowSpec["status"]>(ctx.url.searchParams.get("status"), ["active", "archived"]),
+      limit: optionalLimit(ctx.url.searchParams.get("limit")),
+      offset: optionalOffset(ctx.url.searchParams.get("offset")),
+    });
+    return ok({ workflows: workflows.map(publicWorkflow) });
+  }
+  if (segments.length === 0 && ctx.request.method === "POST") {
+    const body = await readJsonBody<CreateWorkflowInput>(ctx.request, ctx.bodyLimitBytes);
+    return ok({ workflow: publicWorkflow(await storage.createWorkflow(body)) }, { status: 201 });
+  }
+  if (segments.length === 1 && segments[0] === "count" && ctx.request.method === "GET") {
+    const count = await storage.countWorkflows({
+      status: optionalEnum<WorkflowSpec["status"]>(ctx.url.searchParams.get("status"), ["active", "archived"]),
+    });
+    return ok({ count });
+  }
+  const id = segments[0];
+  if (!id) return fail("not_found", 404);
+  if (segments.length === 1 && ctx.request.method === "GET") {
+    const workflow = await storage.getWorkflow(id);
+    if (!workflow) return fail("workflow_not_found", 404);
+    return ok({ workflow: publicWorkflow(workflow) });
+  }
+  if (segments.length === 2 && segments[1] === "archive" && ctx.request.method === "POST") {
+    return ok({ workflow: publicWorkflow(await storage.archiveWorkflow(id)) });
+  }
+  return fail("not_found", 404);
+}
+
+async function handleWorkflowRunsRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
+  const storage = requireStorage(ctx.storage);
+  if (segments.length === 0 && ctx.request.method === "GET") {
+    const runs = await storage.listWorkflowRuns({
+      workflowId: ctx.url.searchParams.get("workflowId") ?? undefined,
+      loopRunId: ctx.url.searchParams.get("loopRunId") ?? undefined,
+      limit: optionalLimit(ctx.url.searchParams.get("limit")),
+    });
+    return ok({ workflowRuns: runs.map(publicWorkflowRun) });
+  }
+  const id = segments[0];
+  if (!id) return fail("not_found", 404);
+  if (segments.length === 1 && ctx.request.method === "GET") {
+    const run = await storage.getWorkflowRun(id);
+    if (!run) return fail("workflow_run_not_found", 404);
+    return ok({ workflowRun: publicWorkflowRun(run) });
+  }
+  if (segments.length === 2 && segments[1] === "steps" && ctx.request.method === "GET") {
+    const steps = await storage.listWorkflowStepRuns(id);
+    return ok({ steps: steps.map((step) => publicWorkflowStepRun(step)) });
+  }
+  if (segments.length === 2 && segments[1] === "events" && ctx.request.method === "GET") {
+    const events = await storage.listWorkflowEvents(id, optionalLimit(ctx.url.searchParams.get("limit")) ?? 200);
+    return ok({ events: events.map(publicWorkflowEvent) });
+  }
+  return fail("not_found", 404);
+}
+
+async function handleWorkItemsRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
+  const storage = requireStorage(ctx.storage);
+  if (segments.length === 0 && ctx.request.method === "GET") {
+    const items = await storage.listWorkflowWorkItems({
+      status: optionalString(ctx.url.searchParams.get("status")) as WorkflowWorkItemStatus | undefined,
+      routeKey: ctx.url.searchParams.get("routeKey") ?? undefined,
+      limit: optionalLimit(ctx.url.searchParams.get("limit")),
+    });
+    return ok({ workItems: items.map(publicWorkflowWorkItem) });
+  }
+  if (segments.length === 0 && ctx.request.method === "POST") {
+    const body = await readJsonBody<UpsertWorkflowWorkItemInput>(ctx.request, ctx.bodyLimitBytes);
+    return ok({ workItem: publicWorkflowWorkItem(await storage.upsertWorkflowWorkItem(body)) }, { status: 201 });
+  }
+  const id = segments[0];
+  if (!id) return fail("not_found", 404);
+  if (segments.length === 1 && ctx.request.method === "GET") {
+    const item = await storage.getWorkflowWorkItem(id);
+    if (!item) return fail("work_item_not_found", 404);
+    return ok({ workItem: publicWorkflowWorkItem(item) });
+  }
+  return fail("not_found", 404);
+}
+
+async function handleInvocationsRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
+  const storage = requireStorage(ctx.storage);
+  if (segments.length === 0 && ctx.request.method === "GET") {
+    const invocations = await storage.listWorkflowInvocations({ limit: optionalLimit(ctx.url.searchParams.get("limit")) });
+    return ok({ invocations: invocations.map(publicWorkflowInvocation) });
+  }
+  if (segments.length === 0 && ctx.request.method === "POST") {
+    const body = await readJsonBody<CreateWorkflowInvocationInput>(ctx.request, ctx.bodyLimitBytes);
+    return ok({ invocation: publicWorkflowInvocation(await storage.createWorkflowInvocation(body)) }, { status: 201 });
+  }
+  const id = segments[0];
+  if (!id) return fail("not_found", 404);
+  if (segments.length === 1 && ctx.request.method === "GET") {
+    const invocation = await storage.getWorkflowInvocation(id);
+    if (!invocation) return fail("invocation_not_found", 404);
+    return ok({ invocation: publicWorkflowInvocation(invocation) });
+  }
+  return fail("not_found", 404);
+}
+
+async function handleGoalsRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
+  const storage = requireStorage(ctx.storage);
+  if (segments.length === 0 && ctx.request.method === "GET") {
+    const goals = await storage.listGoals({
+      status: optionalString(ctx.url.searchParams.get("status")) as GoalStatus | undefined,
+      limit: optionalLimit(ctx.url.searchParams.get("limit")),
+    });
+    return ok({ goals: goals.map(publicGoal) });
+  }
+  const id = segments[0];
+  if (!id) return fail("not_found", 404);
+  if (segments.length === 1 && ctx.request.method === "GET") {
+    const goal = await storage.getGoal(id);
+    if (!goal) return fail("goal_not_found", 404);
+    return ok({ goal: publicGoal(goal) });
+  }
+  if (segments.length === 2 && segments[1] === "plan-nodes" && ctx.request.method === "GET") {
+    const nodes = await storage.listGoalPlanNodes(id);
+    return ok({ nodes });
+  }
+  return fail("not_found", 404);
+}
+
+async function handleGoalRunsRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
+  const storage = requireStorage(ctx.storage);
+  if (segments.length === 0 && ctx.request.method === "GET") {
+    const runs = await storage.listGoalRuns({
+      goalId: ctx.url.searchParams.get("goalId") ?? undefined,
+      runId: ctx.url.searchParams.get("runId") ?? undefined,
+      limit: optionalLimit(ctx.url.searchParams.get("limit")),
+    });
+    return ok({ goalRuns: runs.map(publicGoalRun) });
+  }
+  return fail("not_found", 404);
+}
+
+async function handleHistoryRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
+  const storage = requireStorage(ctx.storage);
+  if (segments.length === 1 && segments[0] === "prune" && ctx.request.method === "POST") {
+    const body = await readJsonBody<{ maxAgeDays?: unknown; keepPerLoop?: unknown; dryRun?: unknown }>(ctx.request, ctx.bodyLimitBytes);
+    const history = await storage.pruneHistory({
+      maxAgeDays: optionalInteger(body.maxAgeDays),
+      keepPerLoop: optionalInteger(body.keepPerLoop),
+      dryRun: body.dryRun === undefined ? undefined : Boolean(body.dryRun),
+    });
+    return ok({ history });
+  }
   return fail("not_found", 404);
 }
 
 async function handleRunsRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
   const id = segments[0];
+  if (id && segments[1] === "workflow-runs") {
+    return await handleRunWorkflowExecutionRequest(ctx, id, segments.slice(2));
+  }
+  if (id && segments[1] === "goals") {
+    return await handleRunGoalExecutionRequest(ctx, id, segments.slice(2));
+  }
   if (segments.length === 2 && id && ["heartbeat", "finalize", "evidence"].includes(segments[1] ?? "") && ctx.request.method === "POST") {
     const storage = requireStorage(ctx.storage);
     const action = segments[1];
     const now = ctx.now();
-    if (action === "heartbeat") return heartbeatRun(storage, id, await readJsonBody<Record<string, unknown>>(ctx.request, ctx.bodyLimitBytes), now);
-    if (action === "finalize") return finalizeRun(storage, id, await readJsonBody<Record<string, unknown>>(ctx.request, ctx.bodyLimitBytes), now);
-    return acceptRunEvidence(storage, id, await readJsonBody<Record<string, unknown>>(ctx.request, ctx.evidenceLimitBytes), now);
+    if (action === "heartbeat") return heartbeatRun(storage, ctx.auth.principalId, id, await readJsonBody<Record<string, unknown>>(ctx.request, ctx.bodyLimitBytes), now);
+    if (action === "finalize") return finalizeRun(storage, ctx.auth.principalId, id, await readJsonBody<Record<string, unknown>>(ctx.request, ctx.bodyLimitBytes), now);
+    return acceptRunEvidence(storage, ctx.auth.principalId, id, await readJsonBody<Record<string, unknown>>(ctx.request, ctx.evidenceLimitBytes), now);
   }
   if (segments.length === 2 && id && segments[1] === "recover" && ctx.request.method === "POST") {
     const storage = requireStorage(ctx.storage);
     const now = ctx.now();
-    // Scope to the requested run: the route is POST /v1/runs/:id/recover, so the
-    // response and loop advancement must reflect only that run, not every
-    // lease-expired run in the store. (The underlying store only exposes a
-    // global lease sweep; we filter its result to :id.)
     const target = await storage.getRun(id);
     if (!target) return fail("run_not_found", 404);
-    const recovered = await storage.recoverExpiredRunLeasesDetailed(now);
-    const abandoned = recovered.abandoned.filter((run) => run.id === id);
-    const deferred = recovered.deferred.filter((run) => run.id === id);
+    if ((ctx.auth.tokenKind === "machine" || ctx.auth.roles.includes("worker")) && target.claimedBy !== ctx.auth.principalId) {
+      return fail("run_claim_owner_mismatch", 403);
+    }
+    const recovered = await storage.recoverExpiredRunLeasesDetailed(now, { runId: id, limit: 1, scanLimit: 1 });
+    const abandoned = recovered.abandoned;
+    const deferred = recovered.deferred;
     for (const run of abandoned) {
       const loop = await storage.getLoop(run.loopId);
       if (loop) await advanceLoopAfterRun(storage, loop, run, new Date(run.finishedAt ?? now), false);
@@ -309,11 +622,20 @@ async function handleRunsRequest(ctx: V1RequestContext, segments: string[]): Pro
 
   const storage = requireStorage(ctx.storage);
   const showOutput = optionalBoolean(ctx.url.searchParams.get("showOutput")) ?? false;
+  // GET /v1/runs/count — total-row verification (run history is far larger than
+  // the 1000-row list cap).
+  if (segments.length === 1 && id === "count" && ctx.request.method === "GET") {
+    const count = await storage.countRuns(
+      optionalEnum<RunStatus>(ctx.url.searchParams.get("status"), ["running", "succeeded", "failed", "timed_out", "abandoned", "skipped"]),
+    );
+    return ok({ count });
+  }
   if (segments.length === 0 && ctx.request.method === "GET") {
     const runs = await storage.listRuns({
       loopId: ctx.url.searchParams.get("loopId") ?? undefined,
       status: optionalEnum<RunStatus>(ctx.url.searchParams.get("status"), ["running", "succeeded", "failed", "timed_out", "abandoned", "skipped"]),
       limit: optionalLimit(ctx.url.searchParams.get("limit")),
+      offset: optionalOffset(ctx.url.searchParams.get("offset")),
     });
     return ok({ runs: runs.map((run) => publicRun(run, showOutput, { redactError: true })) });
   }
@@ -326,17 +648,364 @@ async function handleRunsRequest(ctx: V1RequestContext, segments: string[]): Pro
   return fail("not_found", 404);
 }
 
+async function authorizeRunnerClaim(
+  storage: LoopStorageContract,
+  principalId: string,
+  runId: string,
+  claimToken: string,
+  now: Date,
+): Promise<{ ok: true; run: LoopRun; loop: Loop } | { ok: false; response: Response }> {
+  const run = await storage.getRun(runId);
+  if (!run) return { ok: false, response: fail("run_not_found", 404) };
+  if (run.status !== "running" || !run.claimedBy) return { ok: false, response: fail("run_not_running", 409) };
+  if (run.claimedBy !== principalId) return { ok: false, response: fail("runner_identity_mismatch", 403) };
+  const loop = await storage.getLoop(run.loopId);
+  if (!loop) return { ok: false, response: fail("loop_not_found", 404) };
+  const heartbeat = await storage.heartbeatRunLease(
+    run.id,
+    run.claimedBy,
+    runnerLeaseMs(loop.leaseMs),
+    now,
+    { claimToken },
+  );
+  if (!heartbeat) return { ok: false, response: fail("stale_claim", 409) };
+  return { ok: true, run: heartbeat, loop };
+}
+
+async function requireClaimedWorkflowRun(
+  storage: LoopStorageContract,
+  workflowRunId: string,
+  runId: string,
+): Promise<{ ok: true; workflowRun: Awaited<ReturnType<LoopStorageContract["getWorkflowRun"]>> & {} } | { ok: false; response: Response }> {
+  const workflowRun = await storage.getWorkflowRun(workflowRunId);
+  if (!workflowRun) return { ok: false, response: fail("workflow_run_not_found", 404) };
+  if (workflowRun.loopRunId !== runId) return { ok: false, response: fail("workflow_run_claim_mismatch", 403) };
+  return { ok: true, workflowRun };
+}
+
+async function handleRunWorkflowExecutionRequest(ctx: V1RequestContext, runId: string, segments: string[]): Promise<Response> {
+  const storage = requireStorage(ctx.storage);
+  if (ctx.request.method === "POST" && segments.length === 0) {
+    const body = await readJsonBody<Record<string, unknown>>(ctx.request, ctx.bodyLimitBytes);
+    const claimToken = requiredString(body.claimToken, "claimToken");
+    const authorized = await authorizeRunnerClaim(storage, ctx.auth.principalId, runId, claimToken, ctx.now());
+    if (!authorized.ok) return authorized.response;
+    if (authorized.loop.target.type !== "workflow") return fail("loop_not_workflow", 409);
+    const workflow = await storage.getWorkflow(authorized.loop.target.workflowId);
+    if (!workflow) return fail("workflow_not_found", 404);
+    const idempotencyKey = optionalString(body.idempotencyKey);
+    const scheduledFor = optionalIsoString(body.scheduledFor) ?? authorized.run.scheduledFor;
+    const workflowRun = await storage.createWorkflowRun({
+      workflow,
+      loop: authorized.loop,
+      loopRun: authorized.run,
+      scheduledFor,
+      idempotencyKey,
+    });
+    return ok({ workflowRun });
+  }
+
+  const workflowRunId = segments[0];
+  if (!workflowRunId) return fail("not_found", 404);
+
+  if (ctx.request.method !== "POST") return fail("not_found", 404);
+  const body = await readJsonBody<Record<string, unknown>>(ctx.request, ctx.bodyLimitBytes);
+  const claimToken = requiredString(body.claimToken, "claimToken");
+  const authorized = await authorizeRunnerClaim(storage, ctx.auth.principalId, runId, claimToken, ctx.now());
+  if (!authorized.ok) return authorized.response;
+  const scopedRun = await requireClaimedWorkflowRun(storage, workflowRunId, runId);
+  if (!scopedRun.ok) return scopedRun.response;
+
+  if (segments.length === 2 && segments[1] === "get") return ok({ workflowRun: scopedRun.workflowRun });
+  if (segments.length === 2 && segments[1] === "steps") {
+    return ok({ steps: await storage.listWorkflowStepRuns(workflowRunId) });
+  }
+  if (segments.length === 2 && segments[1] === "recover") {
+    const recovered = await storage.recoverWorkflowRun(workflowRunId, optionalText(body.reason));
+    return ok({ workflowRun: recovered.run, recoveredSteps: recovered.recoveredSteps });
+  }
+  if (segments.length === 2 && segments[1] === "finalize") {
+    const status = optionalEnum<WorkflowRunStatus>(
+      optionalString(body.status) ?? null,
+      ["running", "succeeded", "failed", "timed_out", "cancelled"],
+    );
+    if (!status || status === "running") throw apiError("status_required", 422);
+    const workflowRun = await storage.finalizeWorkflowRun(workflowRunId, status, {
+      finishedAt: optionalIsoString(body.finishedAt),
+      durationMs: optionalPositiveInteger(body.durationMs, 0, Number.MAX_SAFE_INTEGER),
+      error: optionalText(body.error),
+    });
+    return ok({ workflowRun });
+  }
+
+  if (segments[1] !== "steps") return fail("not_found", 404);
+  const stepId = segments[2];
+  if (!stepId) return fail("not_found", 404);
+  const action = segments[3];
+  if (!action) return fail("not_found", 404);
+  if (action === "get") {
+    const step = await storage.getWorkflowStepRun(workflowRunId, stepId);
+    if (!step) return fail("workflow_step_not_found", 404);
+    return ok({ step });
+  }
+  if (action === "start") {
+    return ok({ step: await storage.startWorkflowStepRun(workflowRunId, stepId) });
+  }
+  if (action === "pid") {
+    const pid = optionalInteger(body.pid);
+    if (pid === undefined) throw apiError("pid_required", 422);
+    return ok({ step: await storage.markWorkflowStepPid(workflowRunId, stepId, pid) });
+  }
+  if (action === "progress") {
+    return ok({
+      step: await storage.recordWorkflowStepProgress(workflowRunId, stepId, {
+        stdout: optionalText(body.stdout),
+        stderr: optionalText(body.stderr),
+        payload: objectRecord(body.payload),
+      }),
+    });
+  }
+  if (action === "skip") {
+    return ok({ step: await storage.skipWorkflowStepRun(workflowRunId, stepId, requiredString(body.reason, "reason")) });
+  }
+  if (action === "finalize") {
+    const status = optionalEnum<WorkflowStepRunStatus>(
+      optionalString(body.status) ?? null,
+      ["pending", "running", "succeeded", "failed", "timed_out", "skipped", "cancelled"],
+    );
+    if (!status || status === "pending" || status === "running") throw apiError("status_required", 422);
+    return ok({
+      step: await storage.finalizeWorkflowStepRun(workflowRunId, stepId, {
+        status,
+        finishedAt: optionalIsoString(body.finishedAt) ?? new Date().toISOString(),
+        durationMs: optionalPositiveInteger(body.durationMs, 0, Number.MAX_SAFE_INTEGER) ?? 0,
+        stdout: optionalText(body.stdout) ?? "",
+        stderr: optionalText(body.stderr) ?? "",
+        exitCode: optionalInteger(body.exitCode),
+        error: optionalText(body.error),
+      }),
+    });
+  }
+  return fail("not_found", 404);
+}
+
+async function requireClaimedGoal(
+  storage: LoopStorageContract,
+  goalId: string,
+  runId: string,
+): Promise<{ ok: true; goal: Awaited<ReturnType<LoopStorageContract["getGoal"]>> & {} } | { ok: false; response: Response }> {
+  const goal = await storage.getGoal(goalId);
+  if (!goal) return { ok: false, response: fail("goal_not_found", 404) };
+  if (goal.loopRunId === runId) return { ok: true, goal };
+  if (goal.workflowRunId) {
+    const scopedRun = await requireClaimedWorkflowRun(storage, goal.workflowRunId, runId);
+    if (scopedRun.ok) return { ok: true, goal };
+  }
+  return { ok: false, response: fail("goal_claim_mismatch", 403) };
+}
+
+async function scopeRunnerGoalInput(
+  storage: LoopStorageContract,
+  authorized: { run: LoopRun; loop: Loop },
+  input: RunnerGoalInput,
+): Promise<{ ok: true; input: RunnerGoalInput } | { ok: false; response: Response }> {
+  const scoped: RunnerGoalInput = {
+    objective: input.objective,
+    tokenBudget: input.tokenBudget,
+    autoExecute: input.autoExecute,
+    maxTokens: input.maxTokens,
+    loopId: authorized.loop.id,
+    loopRunId: authorized.run.id,
+    workflowId: input.workflowId,
+    workflowRunId: input.workflowRunId,
+    workflowStepId: input.workflowStepId,
+  };
+  if (scoped.workflowRunId) {
+    const scopedRun = await requireClaimedWorkflowRun(storage, scoped.workflowRunId, authorized.run.id);
+    if (!scopedRun.ok) return scopedRun;
+    scoped.workflowId = scopedRun.workflowRun.workflowId;
+  } else if (scoped.workflowId && authorized.loop.target.type === "workflow" && scoped.workflowId !== authorized.loop.target.workflowId) {
+    return { ok: false, response: fail("workflow_claim_mismatch", 403) };
+  }
+  return { ok: true, input: scoped };
+}
+
+async function scopeRunnerGoalContext(
+  storage: LoopStorageContract,
+  runId: string,
+  context: Record<string, unknown>,
+): Promise<{
+  ok: true;
+  context: {
+    loopRunId?: string;
+    workflowRunId?: string;
+    workflowStepId?: string;
+  };
+} | { ok: false; response: Response }> {
+  const scoped = {
+    loopRunId: optionalString(context.loopRunId),
+    workflowRunId: optionalString(context.workflowRunId),
+    workflowStepId: optionalString(context.workflowStepId),
+  };
+  if (scoped.loopRunId && scoped.loopRunId !== runId) return { ok: false, response: fail("goal_context_claim_mismatch", 403) };
+  if (scoped.workflowRunId) {
+    const scopedRun = await requireClaimedWorkflowRun(storage, scoped.workflowRunId, runId);
+    if (!scopedRun.ok) return scopedRun;
+  }
+  scoped.loopRunId ??= runId;
+  return { ok: true, context: scoped };
+}
+
+function createGoalInputFromBody(value: unknown): RunnerGoalInput {
+  const input = objectRecord(value);
+  return {
+    objective: requiredString(input.objective, "objective"),
+    tokenBudget: optionalPositiveInteger(input.tokenBudget, 1, Number.MAX_SAFE_INTEGER),
+    autoExecute: optionalEnum(optionalString(input.autoExecute) ?? null, ["off", "readyOnly", "aiDirected"]),
+    maxTokens: optionalPositiveInteger(input.maxTokens, 1, Number.MAX_SAFE_INTEGER),
+    loopId: optionalString(input.loopId),
+    loopRunId: optionalString(input.loopRunId),
+    workflowId: optionalString(input.workflowId),
+    workflowRunId: optionalString(input.workflowRunId),
+    workflowStepId: optionalString(input.workflowStepId),
+  };
+}
+
+function goalPlanNodesFromBody(value: unknown): RunnerGoalPlanNodeInput[] {
+  if (!Array.isArray(value)) throw apiError("nodes_required", 422);
+  return value.map((entry) => {
+    const node = objectRecord(entry);
+    const dependsOn = node.dependsOn === undefined
+      ? undefined
+      : Array.isArray(node.dependsOn) ? node.dependsOn.map((dependency) => requiredString(dependency, "dependsOn")) : undefined;
+    if (node.dependsOn !== undefined && !dependsOn) throw apiError("invalid_dependsOn", 422);
+    return {
+      key: requiredString(node.key, "key"),
+      objective: requiredString(node.objective, "objective"),
+      dependsOn,
+      priority: optionalInteger(node.priority),
+      tokenBudget: optionalPositiveInteger(node.tokenBudget, 1, Number.MAX_SAFE_INTEGER),
+    };
+  });
+}
+
+const GOAL_RUN_STATUSES = ["pending", "active", "paused", "blocked", "usageLimited", "budgetLimited", "complete", "cancelled"] as const;
+
+function goalEventFromBody(goalId: string, value: unknown): RunnerGoalEventInput {
+  const input = objectRecord(value);
+  const phase = optionalEnum(optionalString(input.phase) ?? null, ["plan", "execute", "validate", "status"]);
+  const status = optionalEnum(optionalString(input.status) ?? null, GOAL_RUN_STATUSES);
+  if (!phase) throw apiError("phase_required", 422);
+  if (!status) throw apiError("status_required", 422);
+  return {
+    goalId,
+    turn: optionalPositiveInteger(input.turn, 0, Number.MAX_SAFE_INTEGER),
+    phase,
+    status,
+    nodeKey: optionalString(input.nodeKey),
+    tokensUsed: optionalPositiveInteger(input.tokensUsed, 0, Number.MAX_SAFE_INTEGER),
+    evidence: input.evidence === undefined ? undefined : objectRecord(input.evidence),
+    rawResponse: input.rawResponse,
+  };
+}
+
+async function handleRunGoalExecutionRequest(ctx: V1RequestContext, runId: string, segments: string[]): Promise<Response> {
+  if (ctx.request.method !== "POST") return fail("not_found", 404);
+  const storage = requireStorage(ctx.storage);
+  const body = await readJsonBody<Record<string, unknown>>(ctx.request, ctx.bodyLimitBytes);
+  const claimToken = requiredString(body.claimToken, "claimToken");
+  const authorized = await authorizeRunnerClaim(storage, ctx.auth.principalId, runId, claimToken, ctx.now());
+  if (!authorized.ok) return authorized.response;
+
+  if (segments.length === 1 && segments[0] === "find") {
+    const context = await scopeRunnerGoalContext(storage, runId, objectRecord(body.context));
+    if (!context.ok) return context.response;
+    return ok({ goal: await storage.findGoalByContext(context.context) });
+  }
+  if (segments.length === 0) {
+    const scoped = await scopeRunnerGoalInput(storage, authorized, createGoalInputFromBody(body.input ?? body.goal ?? body));
+    if (!scoped.ok) return scoped.response;
+    return ok({ goal: await storage.createGoal(scoped.input) });
+  }
+
+  const goalId = segments[0];
+  if (!goalId) return fail("not_found", 404);
+  const scopedGoal = await requireClaimedGoal(storage, goalId, runId);
+  if (!scopedGoal.ok) return scopedGoal.response;
+
+  if (segments.length === 2 && segments[1] === "get") return ok({ goal: scopedGoal.goal });
+  if (segments.length === 2 && segments[1] === "status") {
+    const status = optionalEnum<GoalStatus>(
+      optionalString(body.status) ?? null,
+      ["active", "paused", "blocked", "usageLimited", "budgetLimited", "complete", "cancelled"],
+    );
+    if (!status) throw apiError("status_required", 422);
+    return ok({ goal: await storage.updateGoalStatus(goalId, status) });
+  }
+  if (segments.length === 2 && segments[1] === "events") {
+    return ok({ goalRun: await storage.recordGoalEvent(goalEventFromBody(goalId, body.input ?? body.event ?? body)) });
+  }
+  if (segments.length === 2 && segments[1] === "plan-nodes") {
+    return ok({ nodes: await storage.createGoalPlanNodes(goalId, goalPlanNodesFromBody(body.nodes)) });
+  }
+  if (segments.length === 3 && segments[1] === "plan-nodes" && segments[2] === "list") {
+    return ok({ nodes: await storage.listGoalPlanNodes(goalId) });
+  }
+  if (segments.length === 3 && segments[1] === "plan-nodes") {
+    const key = segments[2]!;
+    const status = optionalEnum(optionalString(body.status) ?? null, GOAL_RUN_STATUSES);
+    const ready = body.ready === undefined
+      ? undefined
+      : typeof body.ready === "boolean" ? body.ready : (() => { throw apiError("invalid_boolean", 422); })();
+    return ok({
+      node: await storage.updateGoalPlanNode(goalId, key, {
+        status,
+        tokensUsed: optionalPositiveInteger(body.tokensUsed, 0, Number.MAX_SAFE_INTEGER),
+        timeUsedSeconds: optionalPositiveInteger(body.timeUsedSeconds, 0, Number.MAX_SAFE_INTEGER),
+        ready,
+      }),
+    });
+  }
+
+  return fail("not_found", 404);
+}
+
+async function handleReceiptsRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
+  const storage = requireStorage(ctx.storage);
+  const id = segments[0];
+  if (segments.length === 0 && ctx.request.method === "GET") {
+    const receipts = await storage.listRunReceipts({
+      loopId: ctx.url.searchParams.get("loopId") ?? undefined,
+      repo: ctx.url.searchParams.get("repo") ?? undefined,
+      taskId: ctx.url.searchParams.get("taskId") ?? undefined,
+      knowledgeId: ctx.url.searchParams.get("knowledgeId") ?? undefined,
+      status: ctx.url.searchParams.get("status") ?? undefined,
+      limit: optionalLimit(ctx.url.searchParams.get("limit")),
+    });
+    return ok({ receipts: receipts.map(publicRunReceipt) });
+  }
+  if (segments.length === 0 && ctx.request.method === "POST") {
+    const body = await readJsonBody<WriteRunReceiptInput>(ctx.request, ctx.evidenceLimitBytes);
+    return ok({ receipt: publicRunReceipt(await storage.writeRunReceipt(body)) }, { status: 201 });
+  }
+  if (!id) return fail("not_found", 404);
+  if (segments.length === 1 && ctx.request.method === "GET") {
+    const receipt = await storage.getRunReceipt(id);
+    if (!receipt) return fail("run_receipt_not_found", 404);
+    return ok({ receipt: publicRunReceipt(receipt) });
+  }
+  return fail("not_found", 404);
+}
+
 async function handleRunnerRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
   if (ctx.request.method !== "POST") return fail("not_found", 404);
-  const action = segments.length === 1 ? segments[0] : segments[1];
-  if (action === "register" || action === "heartbeat") {
-    const body = await readJsonBody<Record<string, unknown>>(ctx.request, ctx.bodyLimitBytes);
-    return ok({ runner: runnerRecord(body) });
-  }
+  if (segments.length !== 1) return fail("not_found", 404);
+  const action = segments[0];
   if (action === "poll" || action === "claim") {
     const storage = requireStorage(ctx.storage);
     const body = await readJsonBody<Record<string, unknown>>(ctx.request, ctx.bodyLimitBytes);
     const runner = runnerRecord(body);
+    requireBoundRunner(ctx.auth, runner);
     const claims = await claimRuns(storage, runner, {
       now: ctx.now(),
       maxClaims: optionalPositiveInteger(body.maxClaims, 1, 100) ?? 1,
@@ -344,6 +1013,16 @@ async function handleRunnerRequest(ctx: V1RequestContext, segments: string[]): P
     return ok({ runner, claims });
   }
   return fail("not_found", 404);
+}
+
+function requireBoundRunner(auth: TenantAuthContext, runner: RunnerRecord): void {
+  if (
+    runner.id !== auth.principalId ||
+    (runner.machineId !== undefined && runner.machineId !== auth.principalId) ||
+    (runner.hostname !== undefined && runner.hostname !== auth.principalId)
+  ) {
+    throw apiError("runner_identity_mismatch", 403);
+  }
 }
 
 interface RunnerRecord {
@@ -359,7 +1038,7 @@ function runnerRecord(body: Record<string, unknown>): RunnerRecord {
   const machineId = optionalString(body.machineId);
   const hostname = optionalString(body.hostname);
   const id = optionalString(body.runnerId) ?? machineId ?? hostname;
-  if (!id) throw Object.assign(new Error("runner_id_required"), { status: 422 });
+  if (!id) throw apiError("runner_id_required", 422);
   return {
     id,
     machineId,
@@ -379,8 +1058,10 @@ async function claimRuns(
   for (const loop of await storage.dueLoops(opts.now)) {
     if (claims.length >= opts.maxClaims) break;
     if (!runnerMatchesLoop(loop.machine, runner)) continue;
-    if (loop.target.type === "workflow") continue;
-    if (loop.overlap === "skip" && (await storage.listRuns({ loopId: loop.id, status: "running", limit: 1 })).length > 0) continue;
+    const workflow = loop.target.type === "workflow"
+      ? await storage.getWorkflow(loop.target.workflowId)
+      : undefined;
+    if (loop.target.type === "workflow" && !workflow) continue;
     for (const slot of dueSlots(loop, opts.now).slots) {
       if (claims.length >= opts.maxClaims) break;
       const claim = await storage.claimRun(loop, slot, runner.id, opts.now);
@@ -393,9 +1074,10 @@ async function claimRuns(
         { claimToken: claim.claimToken },
       ) ?? claim.run;
       claims.push({
-        loop: publicLoop(claim.loop),
+        loop: claim.loop,
         run: publicRun(run, false, { redactError: true }),
         claimToken: claim.claimToken,
+        ...(workflow ? { workflow } : {}),
       });
       if (loop.overlap === "skip") break;
     }
@@ -405,15 +1087,15 @@ async function claimRuns(
 
 function runnerMatchesLoop(machine: { id?: string; requestedId?: string } | undefined, runner: RunnerRecord): boolean {
   if (!machine) return true;
-  const candidates = new Set([runner.id, runner.machineId, runner.hostname].filter(Boolean));
-  return candidates.has(machine.id) || (machine.requestedId ? candidates.has(machine.requestedId) : false);
+  return machine.id === runner.id;
 }
 
-async function heartbeatRun(storage: LoopStorageContract, runId: string, body: Record<string, unknown>, now: Date): Promise<Response> {
+async function heartbeatRun(storage: LoopStorageContract, principalId: string, runId: string, body: Record<string, unknown>, now: Date): Promise<Response> {
   const claimToken = requiredString(body.claimToken, "claimToken");
   const run = await storage.getRun(runId);
   if (!run) return fail("run_not_found", 404);
   if (run.status !== "running" || !run.claimedBy) return fail("run_not_running", 409);
+  if (run.claimedBy !== principalId) return fail("runner_identity_mismatch", 403);
   const loop = await storage.getLoop(run.loopId);
   if (!loop) return fail("loop_not_found", 404);
   const heartbeat = await storage.heartbeatRunLease(
@@ -427,16 +1109,17 @@ async function heartbeatRun(storage: LoopStorageContract, runId: string, body: R
   return ok({ run: publicRun(heartbeat, false, { redactError: true }) });
 }
 
-async function finalizeRun(storage: LoopStorageContract, runId: string, body: Record<string, unknown>, now: Date): Promise<Response> {
+async function finalizeRun(storage: LoopStorageContract, principalId: string, runId: string, body: Record<string, unknown>, now: Date): Promise<Response> {
   const claimToken = requiredString(body.claimToken, "claimToken");
   const status = optionalEnum<"succeeded" | "failed" | "timed_out">(
     optionalString(body.status) ?? null,
     ["succeeded", "failed", "timed_out"],
   );
-  if (!status) throw Object.assign(new Error("status_required"), { status: 422 });
+  if (!status) throw apiError("status_required", 422);
   const existing = await storage.getRun(runId);
   if (!existing) return fail("run_not_found", 404);
   if (existing.status !== "running" || !existing.claimedBy) return fail("run_not_running", 409);
+  if (existing.claimedBy !== principalId) return fail("runner_identity_mismatch", 403);
   const loop = await storage.getLoop(existing.loopId);
   if (!loop) return fail("loop_not_found", 404);
   const finishedAt = optionalIsoString(body.finishedAt) ?? new Date().toISOString();
@@ -461,8 +1144,8 @@ async function finalizeRun(storage: LoopStorageContract, runId: string, body: Re
   return ok({ run: publicRun(finalized, false, { redactError: true }) });
 }
 
-async function acceptRunEvidence(storage: LoopStorageContract, runId: string, body: Record<string, unknown>, now: Date): Promise<Response> {
-  const heartbeat = await heartbeatRun(storage, runId, body, now);
+async function acceptRunEvidence(storage: LoopStorageContract, principalId: string, runId: string, body: Record<string, unknown>, now: Date): Promise<Response> {
+  const heartbeat = await heartbeatRun(storage, principalId, runId, body, now);
   if (!heartbeat.ok) return heartbeat;
   return ok({ accepted: true, evidence: scrubSecretsDeep(body.evidence ?? body) });
 }
@@ -504,18 +1187,18 @@ function runnerLeaseMs(leaseMs: number): number {
 }
 
 function requireStorage(storage: LoopStorageContract | undefined): LoopStorageContract {
-  if (!storage) throw Object.assign(new Error("storage_unconfigured"), { status: 503, code: "storage_unconfigured" });
+  if (!storage) throw apiError("storage_unconfigured", 503);
   return storage;
 }
 
 async function readJsonBody<T>(request: Request, limitBytes: number): Promise<T> {
   const contentType = request.headers.get("content-type") ?? "";
-  if (!isJsonContentType(contentType)) throw Object.assign(new Error("unsupported_media_type"), { status: 415 });
+  if (!isJsonContentType(contentType)) throw apiError("unsupported_media_type", 415);
   const text = await readBodyText(request, limitBytes);
   try {
     return JSON.parse(text || "{}") as T;
   } catch {
-    throw Object.assign(new Error("invalid_json"), { status: 400 });
+    throw apiError("invalid_json", 400);
   }
 }
 
@@ -528,8 +1211,8 @@ async function readBodyText(request: Request, limitBytes: number): Promise<strin
   const contentLength = request.headers.get("content-length");
   if (contentLength) {
     const declaredBytes = Number(contentLength);
-    if (!Number.isFinite(declaredBytes) || declaredBytes < 0) throw Object.assign(new Error("invalid_content_length"), { status: 400 });
-    if (declaredBytes > limitBytes) throw Object.assign(new Error("body_too_large"), { status: 413 });
+    if (!Number.isFinite(declaredBytes) || declaredBytes < 0) throw apiError("invalid_content_length", 400);
+    if (declaredBytes > limitBytes) throw apiError("body_too_large", 413);
   }
   if (!request.body) return "";
 
@@ -544,7 +1227,7 @@ async function readBodyText(request: Request, limitBytes: number): Promise<strin
     receivedBytes += value.byteLength;
     if (receivedBytes > limitBytes) {
       await reader.cancel().catch(() => undefined);
-      throw Object.assign(new Error("body_too_large"), { status: 413 });
+      throw apiError("body_too_large", 413);
     }
     chunks.push(value);
   }
@@ -558,46 +1241,55 @@ async function readBodyText(request: Request, limitBytes: number): Promise<strin
   return new TextDecoder().decode(bytes);
 }
 
-function runnerProtocolPending(message: string): Response {
-  return fail("runner_protocol_pending", 501, { message });
-}
+// Per-request page cap. A single response never streams more than this many rows
+// into memory; larger result sets are walked with `offset` pagination. Values
+// above the cap are clamped (not rejected) so a caller asking for "everything"
+// still gets a valid first page instead of a 422 or an empty array.
+const MAX_PAGE_LIMIT = 1000;
 
 function optionalLimit(value: string | null): number | undefined {
   if (value == null || value === "") return undefined;
   const limit = Number(value);
-  if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw Object.assign(new Error("invalid_limit"), { status: 422 });
-  return limit;
+  if (!Number.isInteger(limit) || limit < 1) throw apiError("invalid_limit", 422);
+  return Math.min(limit, MAX_PAGE_LIMIT);
+}
+
+function optionalOffset(value: string | null): number | undefined {
+  if (value == null || value === "") return undefined;
+  const offset = Number(value);
+  if (!Number.isInteger(offset) || offset < 0) throw apiError("invalid_offset", 422);
+  return offset;
 }
 
 function optionalString(value: unknown): string | undefined {
   if (value === undefined || value === null) return undefined;
-  if (typeof value !== "string" || value.trim() === "") throw Object.assign(new Error("invalid_string"), { status: 422 });
+  if (typeof value !== "string" || value.trim() === "") throw apiError("invalid_string", 422);
   return value.trim();
 }
 
 function requiredString(value: unknown, name: string): string {
   const result = optionalString(value);
-  if (!result) throw Object.assign(new Error(`${name}_required`), { status: 422 });
+  if (!result) throw apiError(`${name}_required`, 422);
   return result;
 }
 
 function optionalText(value: unknown): string | undefined {
   if (value === undefined || value === null) return undefined;
-  if (typeof value !== "string") throw Object.assign(new Error("invalid_string"), { status: 422 });
+  if (typeof value !== "string") throw apiError("invalid_string", 422);
   return value;
 }
 
 function optionalInteger(value: unknown): number | undefined {
   if (value === undefined || value === null || value === "") return undefined;
   const result = Number(value);
-  if (!Number.isInteger(result)) throw Object.assign(new Error("invalid_integer"), { status: 422 });
+  if (!Number.isInteger(result)) throw apiError("invalid_integer", 422);
   return result;
 }
 
 function optionalPositiveInteger(value: unknown, min: number, max: number): number | undefined {
   const result = optionalInteger(value);
   if (result === undefined) return undefined;
-  if (result < min || result > max) throw Object.assign(new Error("invalid_integer_range"), { status: 422 });
+  if (result < min || result > max) throw apiError("invalid_integer_range", 422);
   return result;
 }
 
@@ -605,16 +1297,16 @@ function optionalIsoString(value: unknown): string | undefined {
   const text = optionalString(value);
   if (!text) return undefined;
   const parsed = new Date(text);
-  if (Number.isNaN(parsed.getTime())) throw Object.assign(new Error("invalid_datetime"), { status: 422 });
+  if (Number.isNaN(parsed.getTime())) throw apiError("invalid_datetime", 422);
   return parsed.toISOString();
 }
 
 function stringRecord(value: unknown): Record<string, string> {
   if (value === undefined || value === null) return {};
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw Object.assign(new Error("invalid_string_record"), { status: 422 });
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw apiError("invalid_string_record", 422);
   const result: Record<string, string> = {};
   for (const [key, entry] of Object.entries(value)) {
-    if (typeof entry !== "string") throw Object.assign(new Error("invalid_string_record"), { status: 422 });
+    if (typeof entry !== "string") throw apiError("invalid_string_record", 422);
     result[key] = entry;
   }
   return result;
@@ -622,7 +1314,7 @@ function stringRecord(value: unknown): Record<string, string> {
 
 function objectRecord(value: unknown): Record<string, unknown> {
   if (value === undefined || value === null) return {};
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw Object.assign(new Error("invalid_object"), { status: 422 });
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw apiError("invalid_object", 422);
   return value as Record<string, unknown>;
 }
 
@@ -630,23 +1322,58 @@ function optionalBoolean(value: string | null): boolean | undefined {
   if (value == null || value === "") return undefined;
   if (["1", "true", "yes"].includes(value.toLowerCase())) return true;
   if (["0", "false", "no"].includes(value.toLowerCase())) return false;
-  throw Object.assign(new Error("invalid_boolean"), { status: 422 });
+  throw apiError("invalid_boolean", 422);
 }
 
 function optionalEnum<T extends string>(value: string | null, allowed: readonly T[]): T | undefined {
   if (value == null || value === "") return undefined;
   if ((allowed as readonly string[]).includes(value)) return value as T;
-  throw Object.assign(new Error("invalid_filter"), { status: 422 });
+  throw apiError("invalid_filter", 422);
+}
+
+class PublicApiError extends Error {
+  constructor(readonly code: string, readonly status: number) {
+    super(code);
+    this.name = "PublicApiError";
+  }
+}
+
+function apiError(code: string, status: number): PublicApiError {
+  return new PublicApiError(code, status);
 }
 
 function errorResponse(error: unknown): Response {
-  if (error instanceof LoopNotFoundError) return fail("loop_not_found", 404, { message: error.message });
-  if (error instanceof LoopArchivedError) return fail("loop_archived", 409, { message: error.message });
-  if (error instanceof ValidationError) return fail("validation_failed", 422, { message: error.message });
-  const status = typeof error === "object" && error && "status" in error && typeof error.status === "number" ? error.status : 500;
-  const message = error instanceof Error ? error.message : String(error);
-  const code = typeof error === "object" && error && "code" in error && typeof error.code === "string" ? error.code : status === 500 ? "internal_error" : message;
-  return fail(code, status, status === 500 ? { message: redact(message, 240) } : undefined);
+  if (error instanceof LoopNotFoundError) return fail("loop_not_found", 404);
+  if (error instanceof LoopArchivedError) return fail("loop_archived", 409);
+  if (error instanceof ValidationError) return fail("validation_failed", 422);
+  if (error instanceof PublicApiError) return fail(error.code, error.status);
+  return fail("internal_error", 500);
+}
+
+function requestIdentifier(request: Request): string {
+  const supplied = request.headers.get("x-request-id")?.trim();
+  return supplied && /^[A-Za-z0-9._:-]{1,128}$/.test(supplied) ? supplied : crypto.randomUUID();
+}
+
+function logInternalFailure(request: Request, error: unknown, code: string, requestId = requestIdentifier(request)): void {
+  // Never log request paths or Error fields here: both may contain credentials
+  // supplied by a client or database provider. Stable code/request/method are
+  // enough for correlation with protected infrastructure logs.
+  console.error(JSON.stringify({
+    evt: "loops_api_request_failed",
+    code,
+    requestId,
+    method: request.method,
+    route: "unknown_route",
+    errorType: error instanceof Error ? "error" : typeof error,
+  }));
+}
+
+export function logApiCommandFailure(error: unknown): void {
+  console.error(JSON.stringify({
+    evt: "loops_api_command_failed",
+    errorType: error instanceof Error ? "error" : typeof error,
+  }));
 }
 
 export async function main(argv = process.argv): Promise<void> {
@@ -657,25 +1384,13 @@ program.action(() => printStatus());
 
 program.command("status").option("-j, --json", "print JSON").action((opts) => printStatus(opts));
 
-program
-  .command("serve")
-  .description("serve the foundation health/status endpoints")
-  .option("--host <host>", "host", "127.0.0.1")
-  .option("--port <port>", "port", (value) => Number(value), 8787)
-  .action((opts) => {
-    const host = String(opts.host);
-    const port = Number(opts.port);
-    const server = createLoopsApiServer({ host, port });
-    console.log(`loops-api listening on http://${server.hostname}:${server.port}`);
-  });
-
 // Only auto-run the loops-api CLI when THIS file is the direct entry. When bun
 // bundles api/index.ts into another entry (e.g. loops-serve), it inlines this
 // code and sets import.meta.main=true for the whole bundle; the URL check keeps
 // this CLI from double-parsing argv against the serve program.
 if (import.meta.main && (import.meta.url.endsWith("api/index.ts") || import.meta.url.endsWith("api/index.js"))) {
   main().catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
+    logApiCommandFailure(error);
     process.exit(1);
   });
 }

@@ -172,7 +172,10 @@ describe("prReviewRoutingDecision freshness gate", () => {
 
   test("routes normally when the PR is still open", () => {
     const data = { pr_state: "OPEN", description: `${MERGE_INTENT}\n${REVIEW_REQUIRED}` };
-    const decision = prReviewRoutingDecision(data, {}, opts({ githubReviewer: "reviewer-bob" }), () => "alice", noState);
+    const state: PrStateResolver = () => {
+      throw new Error("state resolver should not be called when pr_state is baked in");
+    };
+    const decision = prReviewRoutingDecision(data, {}, opts({ githubReviewer: "reviewer-bob" }), () => "alice", state);
     expect(decision.allowed).toBe(true);
     expect(decision.author).toBe("alice");
     expect(decision.selectedReviewer).toBe("reviewer-bob");

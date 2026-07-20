@@ -20,6 +20,36 @@
       "id": "0004_work_item_route_scope",
       "file": "0004_work_item_route_scope.sql",
       "checksum": "sha256:341e439861d595ce3d069b0106f1f09134042bac0a70f3d00a1374e09f5404d9"
+    },
+    {
+      "id": "0005_run_receipts",
+      "file": "0005_run_receipts.sql",
+      "checksum": "sha256:27228e19e0101d31ce9da18d76d918a96dd8afff576fb291cbf8d018e97fe5d6"
+    },
+    {
+      "id": "0006_work_item_machine_id",
+      "file": "0006_work_item_machine_id.sql",
+      "checksum": "sha256:80887626208cbb3659a436e6e26c56f0b0229f0bcb8d292de51738ee99ed11d1"
+    },
+    {
+      "id": "0007_work_item_gate_deaths",
+      "file": "0007_work_item_gate_deaths.sql",
+      "checksum": "sha256:95ac3c0dfeef6f6e6d4bd8b92473d19aabae0c83ebc3b1f4409d84fc0bbfa11c"
+    },
+    {
+      "id": "0008_tenant_prepare",
+      "file": "0008_tenant_prepare.sql",
+      "checksum": "sha256:76924f61f71fa2e7d3fb7773ff372200e26d0b3e48a5d05585adaeeca8f30043"
+    },
+    {
+      "id": "0009_tenant_backfill",
+      "file": "0009_tenant_backfill.sql",
+      "checksum": "sha256:7bfd222e503736ec0bc2811f8a31d3e57820a0fa1106795e09fd26a5cf966f2c"
+    },
+    {
+      "id": "0010_tenant_enforce",
+      "file": "0010_tenant_enforce.sql",
+      "checksum": "sha256:f923c70c2960e0372b4c01c5f01d9432fa0c76b24921c616dc149fa191409053"
     }
   ]
 }
