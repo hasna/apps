@@ -887,6 +887,20 @@ anti-hog caps counted over all routes. Raise a router's `--max-active`
 deliberately once counting is per-route; keep `--max-per-profile` set so the
 extra concurrency spreads across subscription accounts.
 
+Route flags or an expanded named policy are authoritative ceilings. Positive
+integer task/event fields (`max_active`, `max_active_per_project`, and
+`max_active_per_project_group`, including camel-case aliases) may only tighten
+an already configured ceiling for that admission attempt; metadata cannot
+create a cap, raise it, or override an explicit `--project-group`. Generated
+workflow prompts and invocation manifests include the resolved route scope,
+project group, and throttle limits so the admission decision is auditable from
+the same evidence the agent sees.
+
+These caps are local-store admission controls, not a distributed semaphore. The
+count and admission write are serialized in one transaction for routers sharing
+the same local `loops.db`; different `LOOPS_DATA_DIR` databases or machines do
+not share project-group counts.
+
 `--max-active` and related route throttles count OpenLoops routed workflow work
 items; they do not know whether Codewith is already at its live background-agent
 admission limit. Add `--provider-active-cap <n>` (or the Codewith-specific alias

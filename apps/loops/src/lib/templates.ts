@@ -89,6 +89,14 @@ export interface AgentWorkflowTemplateBaseInput {
   projectPath: string;
   routeProjectPath?: string;
   projectGroup?: string;
+  routeScope?: string;
+  routeThrottleLimits?: {
+    maxActive?: number;
+    maxActiveScope?: string;
+    maxActivePerProject?: number;
+    maxActivePerProjectGroup?: number;
+    maxPerProfile?: number;
+  };
   provider?: AgentProvider;
   authProfile?: string;
   authProfilePool?: string[];
@@ -210,6 +218,25 @@ function prReviewFollowUpFragment(input: TodosTaskWorkflowTemplateInput): string
 function taskLabel(input: TodosTaskWorkflowTemplateInput): string {
   const head = input.taskTitle?.trim() || input.taskId;
   return head.length > 160 ? `${head.slice(0, 157)}...` : head;
+}
+
+function routeAdmissionContext(input: AgentWorkflowTemplateBaseInput): Record<string, unknown> | undefined {
+  const limits = input.routeThrottleLimits
+    ? {
+        maxActive: input.routeThrottleLimits.maxActive,
+        maxActiveScope: input.routeThrottleLimits.maxActiveScope,
+        maxActivePerProject: input.routeThrottleLimits.maxActivePerProject,
+        maxActivePerProjectGroup: input.routeThrottleLimits.maxActivePerProjectGroup,
+        maxPerProfile: input.routeThrottleLimits.maxPerProfile,
+      }
+    : undefined;
+  const hasLimits = Boolean(limits && Object.values(limits).some((value) => value !== undefined));
+  if (!input.projectGroup && !input.routeScope && !hasLimits) return undefined;
+  return {
+    projectGroup: input.projectGroup,
+    routeScope: input.routeScope,
+    ...(hasLimits ? { limits } : {}),
+  };
 }
 
 const UNLIMITED_AGENT_TIMEOUT_MS: TimeoutMs = null;
@@ -725,6 +752,7 @@ export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTe
     projectPath: input.projectPath,
     routeProjectPath: input.routeProjectPath,
     projectGroup: input.projectGroup,
+    routeAdmission: routeAdmissionContext(input),
     worktree: worktreeContextFragment(plan),
   };
   const workerPrompt = [
@@ -798,6 +826,7 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
     projectGroup: input.projectGroup,
     todosProjectPath,
     prReviewRouting: prReviewRoutingContext(input),
+    routeAdmission: routeAdmissionContext(input),
     worktree: worktreeContextFragment(plan),
   };
   const handoffArtifactPath = prHandoffArtifactPath(plan, input.taskId);
@@ -1118,6 +1147,7 @@ export function renderEventWorkerVerifierWorkflow(input: EventWorkflowTemplateIn
     projectPath: input.projectPath,
     routeProjectPath: input.routeProjectPath,
     projectGroup: input.projectGroup,
+    routeAdmission: routeAdmissionContext(input),
     worktree: worktreeContextFragment(plan),
   };
   const eventContextLines = [
@@ -1233,12 +1263,34 @@ function accountPoolVar(value: string | undefined, tool?: string): AccountRef[] 
   return listVar(value)?.map((profile) => ({ profile, tool }));
 }
 
+function positiveTemplateInteger(raw: string | undefined, label: string): number | undefined {
+  if (raw === undefined || raw.trim() === "") return undefined;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0) throw new Error(`${label} must be a positive integer`);
+  return value;
+}
+
+function nonNegativeTemplateInteger(raw: string | undefined, label: string): number | undefined {
+  if (raw === undefined || raw.trim() === "") return undefined;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0) throw new Error(`${label} must be a non-negative integer`);
+  return value;
+}
+
 /** Variable mapping shared by every agent-backed builtin template. */
 function agentTemplateInput(values: Record<string, string | undefined>): AgentWorkflowTemplateBaseInput {
   return {
     projectPath: values.projectPath ?? values.cwd ?? process.cwd(),
     routeProjectPath: values.routeProjectPath,
     projectGroup: values.projectGroup,
+    routeScope: values.routeScope,
+    routeThrottleLimits: {
+      maxActive: positiveTemplateInteger(values.maxActive, "maxActive"),
+      maxActiveScope: values.maxActiveScope?.trim() || undefined,
+      maxActivePerProject: positiveTemplateInteger(values.maxActivePerProject, "maxActivePerProject"),
+      maxActivePerProjectGroup: positiveTemplateInteger(values.maxActivePerProjectGroup, "maxActivePerProjectGroup"),
+      maxPerProfile: nonNegativeTemplateInteger(values.maxPerProfile, "maxPerProfile"),
+    },
     provider: values.provider as AgentProvider | undefined,
     authProfile: values.authProfile,
     authProfilePool: listVar(values.authProfilePool),
