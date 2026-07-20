@@ -1985,6 +1985,36 @@ describe("executeLoop", () => {
     }
   });
 
+  test("remote codewith auth profile preflight ignores currentProfile outside an empty authoritative inventory", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-remote-codewith-auth-json-current-only-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    const invocationLog = join(root, "invocations.log");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithJsonThenProfileList(
+      fake,
+      JSON.stringify({
+        currentProfile: { name: "account002", profileKind: "named", available: false },
+        data: [],
+      }),
+      "NAME ACCOUNT PROVIDER MODE PLAN\naccount002 - ChatGPT chatgpt Pro",
+      invocationLog,
+    );
+    try {
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "account002", prompt: "run", configIsolation: "safe" },
+          {},
+          remoteCodewithPreflightOptions(home),
+        ),
+      ).toThrow("codewith auth profile not found: account002");
+      expect(readFileSync(invocationLog, "utf8").trim().split(/\r?\n/)).toEqual(["profile list --json"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("remote codewith auth profile preflight falls back to table output when JSON is unsupported", () => {
     const root = mkdtempSync(join(tmpdir(), "loops-remote-codewith-auth-json-fallback-"));
     const home = join(root, "home");
