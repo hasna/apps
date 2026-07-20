@@ -1,6 +1,6 @@
 {
   "name": "@hasna/sandboxes",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -35,17 +35,19 @@
   "scripts": {
     "test": "bun run test:hermetic",
     "test:hermetic": "tmp=$(mktemp -d); trap 'rm -rf \"$tmp\"' EXIT; env -i PATH=\"$PATH\" HOME=\"$tmp\" XDG_CONFIG_HOME=\"$tmp/config\" TMPDIR=\"$tmp\" TZ=UTC bun test tests/managed-adapters tests/cli-mcp",
+    "test:transport": "bun run build && bun tests/transport/transport-smoke.ts",
     "test:node": "bun run build && node tests/node/managed-promise-boundary.mjs",
     "test:types": "bun run build && tsc -p tests/types/tsconfig.json",
     "typecheck": "tsc --noEmit",
     "build": "bun run build:adapters && bun run build:bins",
     "build:adapters": "bun build src/adapters/managed/index.ts --outdir dist --target node --format esm --external e2b --external @daytona/sdk && tsc -p tsconfig.build.json && bun scripts/fix-declaration-imports.ts && mkdir -p dist/adapters/managed && cp scripts/e2b-guest-broker-v1.py dist/adapters/managed/e2b-guest-broker-v1.py",
-    "build:bins": "bun build src/cli/index.ts --outdir dist/cli --target bun --format esm --external e2b --external @daytona/sdk --external @modelcontextprotocol/sdk --external commander && bun build src/mcp/index.ts --outdir dist/mcp --target bun --format esm --external e2b --external @daytona/sdk --external @modelcontextprotocol/sdk --external commander && bun scripts/finalize-bins.ts",
+    "build:bins": "bun build src/cli/index.ts --outdir dist/cli --target bun --format esm --external e2b --external @daytona/sdk --external @modelcontextprotocol/sdk --external commander && bun build src/mcp/index.ts --outdir dist/mcp --target bun --format esm --external e2b --external @daytona/sdk --external @modelcontextprotocol/sdk --external @hasna/mcp-harness --external commander && bun scripts/finalize-bins.ts",
     "audit": "bun audit",
     "prepack": "bun run build"
   },
   "dependencies": {
     "@daytona/sdk": "0.193.0",
+    "@hasna/mcp-harness": "0.1.0",
     "@modelcontextprotocol/sdk": "1.12.1",
     "@types/ws": "8.18.1",
     "commander": "13.1.0",

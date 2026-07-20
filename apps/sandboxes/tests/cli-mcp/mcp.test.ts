@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
-import { createSandboxesMcpServer, SANDBOX_TOOLS } from "../../src/mcp/index"
+import { createSandboxesMcpServer, MCP_VERSION, SANDBOX_TOOLS } from "../../src/mcp/index"
 
 let home: string
 
@@ -121,7 +121,7 @@ describe("sandboxes-mcp server", () => {
   test("version and health tools", async () => {
     const client = await connect()
     const version = payload(await client.callTool({ name: "version", arguments: {} })) as { version: string; providers: string[] }
-    expect(version.version).toBe("1.0.0")
+    expect(version.version).toBe(MCP_VERSION)
     expect(version.providers).toContain("local")
     const health = payload(await client.callTool({ name: "health", arguments: {} })) as { status: string }
     expect(health.status).toBe("ok")

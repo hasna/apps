@@ -11,10 +11,59 @@ import { join, relative } from "node:path"
 import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js"
+import { startMcpHttpServer } from "@hasna/mcp-harness/node"
 import { isSandboxProvider, resolveBackend, SANDBOX_PROVIDERS, type SecretsReader } from "../runtime/resolve"
 import type { SandboxBackend, SandboxProvider } from "../runtime/types"
 
-export const MCP_VERSION = "1.0.0"
+/** HTTP port the fleet daemon (systemd `hasna-sandboxes-mcp.service`) expects. */
+export const DEFAULT_MCP_HTTP_PORT = 8875
+
+/**
+ * stdio-vs-HTTP selection with identical semantics to `@hasna/sandboxes@0.2.5`
+ * (which delegated to `@hasna/mcp-harness`). Implemented locally so this fast
+ * path carries no dependency on the harness `.` entrypoint — that one top-level
+ * imports an SDK transport module (`webStandardStreamableHttp`) not present in
+ * our pinned `@modelcontextprotocol/sdk`. HTTP is the default; the systemd unit
+ * passes no args, so with no `--stdio`/`MCP_STDIO=1` it serves HTTP on :8875.
+ */
+export function isStdioMode(argv: readonly string[], env: NodeJS.ProcessEnv = process.env): boolean {
+  return argv.includes("--stdio") || env.MCP_STDIO === "1"
+}
+
+function parsePort(value: string): number {
+  const port = Number(value)
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    throw new Error(`invalid MCP HTTP port: ${JSON.stringify(value)}`)
+  }
+  return port
+}
+
+/** Resolve the HTTP port: `--port=<n>` / `--port <n>` / `MCP_HTTP_PORT`, else default. */
+export function resolveMcpHttpPort(argv: readonly string[], env: NodeJS.ProcessEnv = process.env): number {
+  const inline = argv.find((arg) => arg.startsWith("--port="))
+  if (inline !== undefined) return parsePort(inline.slice("--port=".length))
+  const flagIdx = argv.indexOf("--port")
+  if (flagIdx !== -1) {
+    const value = argv[flagIdx + 1]
+    if (value !== undefined) return parsePort(value)
+  }
+  const envPort = env.MCP_HTTP_PORT
+  if (typeof envPort === "string" && envPort.length > 0) return parsePort(envPort)
+  return DEFAULT_MCP_HTTP_PORT
+}
+
+function resolvePackageVersion(): string {
+  try {
+    const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { version?: unknown }
+    return typeof pkg.version === "string" ? pkg.version : "0.0.0"
+  } catch {
+    return "0.0.0"
+  }
+}
+
+// Reported as `serverInfo.version` in the MCP `initialize` handshake and by the
+// `version`/`health` tools; sourced from package.json so it never drifts.
+export const MCP_VERSION = resolvePackageVersion()
 
 export interface McpDeps {
   resolve?: (provider: SandboxProvider) => Promise<SandboxBackend>
@@ -311,10 +360,63 @@ export function createSandboxesMcpServer(deps: McpDeps = {}): Server {
   return server
 }
 
+/**
+ * Start the Streamable HTTP transport on 127.0.0.1 at `/mcp`, wired through the
+ * shared `@hasna/mcp-harness` Node adapter — the exact transport the fleet
+ * daemon (@hasna/sandboxes@0.2.5) served on :8875, so the unchanged systemd
+ * unit stays a drop-in. Each request builds a fresh, stateless server.
+ */
+export function startSandboxesHttpServer(
+  options: { port?: number; hostname?: string; deps?: McpDeps } = {},
+): Promise<{ port: number; host: string; close: () => Promise<void> }> {
+  const deps = options.deps ?? {}
+  return startMcpHttpServer(() => createSandboxesMcpServer(deps), {
+    ...(options.port === undefined ? {} : { port: options.port }),
+    ...(options.hostname === undefined ? {} : { host: options.hostname }),
+    serviceName: "sandboxes",
+    defaultPort: DEFAULT_MCP_HTTP_PORT,
+  })
+}
+
+function printHelp(): void {
+  process.stdout.write(
+    [
+      "Usage: sandboxes-mcp [options]",
+      "",
+      "MCP server for @hasna/sandboxes disposable sandbox lifecycle tools.",
+      `Defaults to Streamable HTTP on 127.0.0.1:${DEFAULT_MCP_HTTP_PORT}/mcp (the transport`,
+      "the fleet daemon exposes); pass --stdio to serve over stdio instead.",
+      "",
+      "Options:",
+      "  --http           Serve over Streamable HTTP (default; env MCP_HTTP=1)",
+      "  --stdio          Serve over stdio (env MCP_STDIO=1)",
+      `  --port <n>       HTTP port (default ${DEFAULT_MCP_HTTP_PORT}, env MCP_HTTP_PORT)`,
+      "  -h, --help       Show this help",
+      "  -V, --version    Show version",
+      "",
+    ].join("\n") + "\n",
+  )
+}
+
+async function runCli(argv: string[]): Promise<void> {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    printHelp()
+    return
+  }
+  if (argv.includes("--version") || argv.includes("-V")) {
+    process.stdout.write(`${MCP_VERSION}\n`)
+    return
+  }
+  if (isStdioMode(argv)) {
+    const server = createSandboxesMcpServer()
+    await server.connect(new StdioServerTransport())
+    return
+  }
+  await startSandboxesHttpServer({ port: resolveMcpHttpPort(argv) })
+}
+
 if (import.meta.main) {
-  const server = createSandboxesMcpServer()
-  const transport = new StdioServerTransport()
-  server.connect(transport).catch((error: unknown) => {
+  runCli(process.argv.slice(2)).catch((error: unknown) => {
     process.stderr.write(`fatal: ${error instanceof Error ? error.message : String(error)}\n`)
     process.exit(1)
   })
