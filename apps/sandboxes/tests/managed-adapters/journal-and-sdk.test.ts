@@ -71,10 +71,17 @@ describe("managed package boundary", () => {
       dependencies?: Record<string, unknown>
     }
     expect(manifest.types).toBe("./dist/types/index.d.ts")
-    // Canonical hasna/sandboxes publishes only the reviewed managed-adapter root.
-    // The authenticated broker artifact is shipped as an exact pinned package file.
+    // Canonical hasna/sandboxes publishes the reviewed managed-adapter root plus
+    // an explicit ./adapters alias. The 1.0.0 rebuild also ships the `sandboxes`
+    // CLI and `sandboxes-mcp` server bins. The authenticated broker artifact is
+    // shipped as an exact pinned package file.
     expect(manifest.exports).toEqual({
       ".": {
+        types: "./dist/types/index.d.ts",
+        import: "./dist/index.js",
+        default: "./dist/index.js",
+      },
+      "./adapters": {
         types: "./dist/types/index.d.ts",
         import: "./dist/index.js",
         default: "./dist/index.js",
@@ -82,6 +89,8 @@ describe("managed package boundary", () => {
     })
     expect(manifest.files).toEqual([
       "dist/index.js",
+      "dist/cli/index.js",
+      "dist/mcp/index.js",
       "dist/adapters/managed/e2b-guest-broker-v1.py",
       "dist/types",
     ])
