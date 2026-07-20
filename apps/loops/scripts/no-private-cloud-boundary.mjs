@@ -1,15 +1,30 @@
 #!/usr/bin/env bun
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { extname, join, relative } from "node:path";
+import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import { basename, extname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const root = join(fileURLToPath(new URL("..", import.meta.url)));
+const defaultRoot = join(fileURLToPath(new URL("..", import.meta.url)));
 const skippedDirs = new Set([".git", ".hasna", "node_modules"]);
 const skippedFiles = new Set([".project.json"]);
-const scannedExtensions = new Set([".ts", ".js", ".json", ".md", ".yml", ".yaml", ".toml", ".lock"]);
+const scannedExtensions = new Set([
+  ".ts",
+  ".tsx",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".cjs",
+  ".json",
+  ".md",
+  ".yml",
+  ".yaml",
+  ".toml",
+  ".lock",
+]);
+const scannedExtensionlessFiles = new Set(["LICENSE"]);
 
 const privatePackageScope = ["@hasna", "tools"].join("");
 const privatePackageName = ["platform", "loops"].join("-");
+const privateHostedDomainSuffix = ["hasna", "xyz"].join(".");
 const disallowedLiterals = [
   `${privatePackageScope}/${privatePackageName}`,
   ["@hasna", "xyz"].join("") + `/${privatePackageName}`,
@@ -17,6 +32,11 @@ const disallowedLiterals = [
   ["loops", "hasnatools"].join("."),
   ["openloops", "hasnatools"].join("."),
 ];
+const escapedPrivateHostedDomainSuffix = privateHostedDomainSuffix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const privateHostedDomainPattern = new RegExp(
+  `(?:^|[^a-z0-9-])(?:[a-z0-9-]+\\.)*${escapedPrivateHostedDomainSuffix}(?=$|[^a-z0-9.-]|\\.(?:$|[^a-z0-9-]))`,
+  "i",
+);
 const localHomePath = ["/home", "hasna"].join("/");
 const disallowedPublicPathLiterals = [
   localHomePath,
@@ -40,15 +60,38 @@ const secretPatterns = [
   { id: "generic-credential-assignment", pattern: /\b(?:api[_-]?key|secret|token|password)\s*[:=]\s*["'][A-Za-z0-9._~+/=-]{16,}["']/i },
 ];
 
+function parseRoot(args) {
+  let root = defaultRoot;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg !== "--root") {
+      throw new Error(`Unknown argument: ${arg}`);
+    }
+    const value = args[index + 1];
+    if (!value) {
+      throw new Error("--root requires a path");
+    }
+    root = resolve(value);
+    index += 1;
+  }
+  return root;
+}
+
+const root = parseRoot(process.argv.slice(2));
+
 function* walk(dir) {
   for (const entry of readdirSync(dir)) {
     if (skippedDirs.has(entry)) continue;
     if (skippedFiles.has(entry)) continue;
     const path = join(dir, entry);
-    const stat = statSync(path);
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink()) continue;
     if (stat.isDirectory()) {
       yield* walk(path);
-    } else if (stat.isFile() && scannedExtensions.has(extname(path))) {
+    } else if (
+      stat.isFile() &&
+      (scannedExtensions.has(extname(path)) || scannedExtensionlessFiles.has(basename(path)))
+    ) {
       yield path;
     }
   }
@@ -59,6 +102,9 @@ for (const path of walk(root)) {
   const rel = relative(root, path);
   const isTestFile = /\.test\.[cm]?[jt]s$/.test(rel);
   const text = readFileSync(path, "utf8");
+  if (privateHostedDomainPattern.test(text)) {
+    findings.push(`${rel}: internal hosted domain suffix`);
+  }
   for (const literal of disallowedLiterals) {
     if (text.includes(literal)) findings.push(`${rel}: private cloud boundary literal "${literal}"`);
   }
