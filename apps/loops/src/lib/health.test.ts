@@ -23,6 +23,7 @@ describe("loop health classification", () => {
     const cases: Array<[RunFailureClassification, Partial<LoopRun>]> = [
       ["rate_limit", { error: "429 too many requests" }],
       ["auth", { stderr: "invalid token" }],
+      ["provider_capacity", { stderr: "Connection lost to https://agentn.global.api5.cursor.sh attempts 1-3\nRetriableError: [resource_exhausted] Error" }],
       ["provider_unavailable", { stderr: "Error: [unavailable] getaddrinfo EAI_AGAIN api2.cursor.sh" }],
       [
         "auth",
@@ -68,6 +69,64 @@ describe("loop health classification", () => {
     expect(signal?.fingerprint).toMatch(/^[a-f0-9]{16}$/);
   });
 
+  test("surfaces safe provider-capacity evidence for Cursor resource_exhausted failures", () => {
+    const signal = classifyRunFailure(run({
+      error: "step cursor-inprogress-audit failed: process exited with code 1",
+      stderr: "Connection lost to https://agentn.global.api5.cursor.sh attempts 1-3\nRetriableError: [resource_exhausted] Error",
+      exitCode: 1,
+    }));
+
+    expect(signal?.classification).toBe("provider_capacity");
+    expect(signal?.evidence.summary).toBe("provider capacity exhausted: resource_exhausted agentn.global.api5.cursor.sh");
+    expect(signal?.fingerprint).toMatch(/^[a-f0-9]{16}$/);
+  });
+
+  test("recognizes exact and valid subdomain Cursor hosts for provider capacity", () => {
+    const cases = [
+      ["https://cursor.sh", "cursor.sh"],
+      ["HTTPS://API2.CURSOR.SH/v1/agents", "api2.cursor.sh"],
+      ["agentn.global.api5.cursor.sh:443", "agentn.global.api5.cursor.sh"],
+    ];
+
+    for (const [reference, expectedHost] of cases) {
+      const signal = classifyRunFailure(run({
+        stderr: `Connection lost to ${reference}\nRetriableError: [resource_exhausted] Error`,
+      }));
+
+      expect(signal?.classification).toBe("provider_capacity");
+      expect(signal?.evidence.summary).toBe(`provider capacity exhausted: resource_exhausted ${expectedHost}`);
+    }
+  });
+
+  test("rejects hostile and malformed Cursor-like references for provider capacity", () => {
+    const references = [
+      "https://api.cursor.sh.evil.example",
+      "https://cursor.sh.evil.example/path",
+      "https://evilcursor.sh",
+      "https://cursor-sh.example",
+      "https://api.cursor.sh.",
+      "https://api..cursor.sh",
+      "https://-api.cursor.sh",
+      "https://api-.cursor.sh",
+      `https://${"a".repeat(64)}.cursor.sh`,
+      "https://api.cursor.sh@evil.example",
+      "https://evil.example/api.cursor.sh",
+      "https://api.cursor.sh%2eevil.example",
+      "https://%63ursor.sh",
+      "https://api\u3002cursor.sh",
+      "https://api.cursor.sh\\@evil.example",
+    ];
+
+    for (const reference of references) {
+      const signal = classifyRunFailure(run({
+        stderr: `Connection lost to ${reference}\nRetriableError: [resource_exhausted] Error`,
+      }));
+
+      expect(signal?.classification).toBe("unknown");
+      expect(signal?.evidence.summary).toBeUndefined();
+    }
+  });
+
   test("does not broaden provider-unavailable classification to unrelated failures", () => {
     const cases: Array<[RunFailureClassification, Partial<LoopRun>]> = [
       ["auth", { stderr: "Error: unauthorized invalid token" }],
@@ -87,6 +146,18 @@ describe("loop health classification", () => {
       ["unknown", { stderr: "socket hang up api2.cursor.sh" }],
       ["unknown", { stderr: "Error: [unavailable] ECONNRESET api2.cursor.sh" }],
       ["unknown", { stderr: "Error: [unavailable] getaddrinfo EAI_AGAIN github.com" }],
+    ];
+
+    for (const [classification, patch] of cases) {
+      expect(classifyRunFailure(run(patch))?.classification).toBe(classification);
+    }
+  });
+
+  test("does not broaden provider-capacity classification to unrelated resource_exhausted text", () => {
+    const cases: Array<[RunFailureClassification, Partial<LoopRun>]> = [
+      ["unknown", { error: "RetriableError: [resource_exhausted] Error" }],
+      ["unknown", { stderr: "RetriableError: [resource_exhausted] Error https://api.github.com" }],
+      ["rate_limit", { stderr: "quota exceeded while calling https://api2.cursor.sh" }],
     ];
 
     for (const [classification, patch] of cases) {
@@ -308,6 +379,86 @@ describe("loop health classification", () => {
       expect(expectation?.failure?.classification).toBe("provider_unavailable");
       expect(expectation?.recommendedTask?.priority).toBe("high");
       expect(expectation?.recommendedTask?.description).toContain("Summary: provider DNS lookup failed: EAI_AGAIN api2.cursor.sh");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("auth failures with pending retries remain unhealthy and routeable", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "auth-pending-retry",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "command", command: "agent" },
+          maxAttempts: 2,
+          retryDelayMs: 1_000,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      const scheduledFor = "2026-01-01T00:00:00.000Z";
+      const claim = store.claimRun(loop, scheduledFor, "test", new Date("2026-01-01T00:00:00Z"));
+      expect(claim).toBeDefined();
+      store.finalizeRun(claim!.run.id, {
+        status: "failed",
+        finishedAt: "2026-01-01T00:00:01.000Z",
+        durationMs: 1_000,
+        stderr: "Error: invalid token",
+        error: "process exited with code 1",
+        exitCode: 1,
+      }, {
+        claimedBy: "test",
+        now: new Date("2026-01-01T00:00:01Z"),
+      });
+      store.updateLoop(loop.id, { retryScheduledFor: scheduledFor, nextRunAt: "2026-01-01T00:00:04.000Z" });
+
+      const report = buildHealthReport(store);
+      const expectation = report.expectations[0];
+      expect(report.ok).toBe(false);
+      expect(expectation?.ok).toBe(false);
+      expect(expectation?.check.status).toBe("fail");
+      expect(expectation?.failure?.classification).toBe("auth");
+      expect(expectation?.recommendedTask?.priority).toBe("high");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("exhausted provider-capacity failures remain unhealthy and routeable", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "cursor-capacity-terminal",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "command", command: "agent" },
+          maxAttempts: 1,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "test", new Date("2026-01-01T00:00:00Z"));
+      expect(claim).toBeDefined();
+      store.finalizeRun(claim!.run.id, {
+        status: "failed",
+        finishedAt: "2026-01-01T00:00:01.000Z",
+        durationMs: 1_000,
+        stderr: "Connection lost to https://agentn.global.api5.cursor.sh attempts 1-3\nRetriableError: [resource_exhausted] Error",
+        error: "process exited with code 1",
+        exitCode: 1,
+      }, {
+        claimedBy: "test",
+        now: new Date("2026-01-01T00:00:01Z"),
+      });
+
+      const report = buildHealthReport(store);
+      const expectation = report.expectations[0];
+      expect(report.ok).toBe(false);
+      expect(report.classifications.provider_capacity).toBe(1);
+      expect(expectation?.ok).toBe(false);
+      expect(expectation?.failure?.classification).toBe("provider_capacity");
+      expect(expectation?.recommendedTask?.priority).toBe("high");
+      expect(expectation?.recommendedTask?.description).toContain("Summary: provider capacity exhausted: resource_exhausted agentn.global.api5.cursor.sh");
     } finally {
       store.close();
     }
