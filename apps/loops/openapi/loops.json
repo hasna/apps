@@ -4349,10 +4349,27 @@
         },
         "required": ["id", "workflowRunId", "sequence", "eventType", "stepId", "payload", "createdAt"]
       },
+      "CustomWorkflowEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Sanitized backwards-compatible branch for historical or mixed-version custom workflow events.",
+        "properties": {
+          "id": { "type": "string" },
+          "workflowRunId": { "type": "string" },
+          "sequence": { "type": "integer", "minimum": 1 },
+          "eventKind": { "type": "string", "enum": ["custom"] },
+          "eventType": { "type": "string", "minLength": 1 },
+          "stepId": { "type": "string" },
+          "payload": { "type": "object", "additionalProperties": true },
+          "createdAt": { "type": "string", "format": "date-time" }
+        },
+        "required": ["id", "workflowRunId", "sequence", "eventKind", "eventType", "createdAt"]
+      },
       "WorkflowEvent": {
         "oneOf": [
           { "$ref": "#/components/schemas/AgentSessionContractWorkflowEvent" },
-          { "$ref": "#/components/schemas/GenericWorkflowEvent" }
+          { "$ref": "#/components/schemas/GenericWorkflowEvent" },
+          { "$ref": "#/components/schemas/CustomWorkflowEvent" }
         ]
       },
       "WorkflowEventResponse": {

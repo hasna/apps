@@ -30,15 +30,41 @@ describe("public workflow events", () => {
     }));
 
     expect(event.eventType).toBe("agent_session_contract");
-    if (event.eventType !== "agent_session_contract") throw new Error("contract event was not discriminated");
+    if ("eventKind" in event || event.eventType !== "agent_session_contract") {
+      throw new Error("contract event was not discriminated");
+    }
     expect(event.stepId).toBe("worker");
     expect(event.payload.provider).toBe("codewith");
   });
 
-  test("rejects unknown lifecycle types and malformed contract payloads", () => {
-    expect(() => publicWorkflowEvent(stored({ eventType: "fabricated_security_verdict" }))).toThrow(
-      "unsupported workflow event type",
-    );
+  test("preserves sanitized historical custom events and rejects malformed contract payloads", () => {
+    const prompt = "caller-controlled prompt";
+    const credential = `ghp_${"a1".repeat(12)}`;
+    const apiKey = "opaque-value-without-a-known-token-shape";
+    const event = publicWorkflowEvent(stored({
+      eventType: "legacy_worker_note",
+      stepId: "worker",
+      payload: {
+        note: "historical event",
+        prompt,
+        diagnostic: credential,
+        apiKey,
+        routeKey: "route-key-is-an-identifier",
+      },
+    })) as unknown as Record<string, unknown>;
+
+    expect(event).toMatchObject({
+      eventType: "legacy_worker_note",
+      eventKind: "custom",
+      stepId: "worker",
+      payload: {
+        note: "historical event",
+        prompt: `[redacted ${prompt.length} chars]`,
+        diagnostic: "[SCRUBBED]",
+        apiKey: `[redacted ${apiKey.length} chars]`,
+        routeKey: "route-key-is-an-identifier",
+      },
+    });
     expect(() => publicWorkflowEvent(stored({
       eventType: "agent_session_contract",
       stepId: "worker",
@@ -65,6 +91,10 @@ describe("public workflow events", () => {
       ...stored({}),
       unexpected: "not declared by the public schema",
     } as StoredWorkflowEvent)).toThrow("invalid workflow event envelope");
+    expect(() => publicWorkflowEvent({
+      ...stored({ eventType: "created" }),
+      eventKind: "custom",
+    } as unknown as StoredWorkflowEvent)).toThrow("invalid workflow event kind for created");
     expect(() => publicWorkflowEvent(stored({
       eventType: "agent_session_contract",
       stepId: "worker",
@@ -79,6 +109,22 @@ describe("public workflow events", () => {
         fabricated: true,
       },
     }))).toThrow("invalid agent_session_contract workflow event");
+    expect(() => publicWorkflowEvent({
+      ...stored({
+        eventType: "agent_session_contract",
+        stepId: "worker",
+        payload: {
+          version: 1,
+          provider: "codewith",
+          permissionMode: "default",
+          sandbox: "workspace-write",
+          manualBreakGlass: false,
+          timeoutMs: null,
+          restrictions: { enforcement: "metadata_only", providerEnforced: false },
+        },
+      }),
+      eventKind: "custom",
+    } as unknown as StoredWorkflowEvent)).toThrow("invalid agent_session_contract workflow event");
     expect(() => publicWorkflowEvent(stored({
       eventType: "agent_session_contract",
       stepId: "worker",

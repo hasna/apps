@@ -836,7 +836,7 @@ describe("executeLoop", () => {
         const stdin = result.stdout.slice(result.stdout.indexOf("stdin:"));
         expect(envContract).toContain(`\"cwd\":\"${notRepo}\"`);
         expect(envContract).not.toContain(wtPath);
-        expect(stdin).toContain(`- Cwd: ${notRepo}`);
+        expect(stdin).toContain(`"cwd":${JSON.stringify(notRepo)}`);
         expect(stdin).not.toContain(wtPath);
         expect(extraArgsReads).toBe(1);
       } finally {
@@ -916,7 +916,7 @@ describe("executeLoop", () => {
         const stdin = result.stdout.slice(result.stdout.indexOf("stdin:"));
         expect(envContract).toContain(`\"cwd\":\"${notRepo}\"`);
         expect(envContract).not.toContain(wtPath);
-        expect(stdin).toContain(`- Cwd: ${notRepo}`);
+        expect(stdin).toContain(`"cwd":${JSON.stringify(notRepo)}`);
         expect(stdin).not.toContain(wtPath);
         expect(readFileSync(mktempLog, "utf8").trim().split(/\r?\n/)).toEqual(["mktemp"]);
         expect(extraArgsReads).toBe(1);

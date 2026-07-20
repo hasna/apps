@@ -508,8 +508,18 @@ export interface AgentSessionContractWorkflowEvent extends Omit<WorkflowEventBas
   payload: AgentSessionContract;
 }
 
+/**
+ * Backwards-compatible public shape for historical or mixed-version custom
+ * events. `eventKind` makes the generic branch unambiguous without weakening
+ * the schemas of server-owned lifecycle and agent-session-contract events.
+ */
+export interface CustomWorkflowEvent extends WorkflowEventBase {
+  eventKind: "custom";
+  eventType: string;
+}
+
 export type WorkflowEvent = AgentSessionContractWorkflowEvent | GenericWorkflowEvent;
-export type PublicWorkflowEvent = WorkflowEvent;
+export type PublicWorkflowEvent = WorkflowEvent | CustomWorkflowEvent;
 
 export interface Loop {
   id: string;

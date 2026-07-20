@@ -47,7 +47,7 @@ describe("getStore resolver", () => {
 });
 
 describe("LocalStore public workflow events", () => {
-  test("returns the typed contract branch and rejects malformed or unknown persisted events", async () => {
+  test("returns typed contracts, preserves historical custom events, and rejects malformed contracts", async () => {
     const raw = new Store(":memory:");
     const store = new LocalStore(raw);
     try {
@@ -73,7 +73,7 @@ describe("LocalStore public workflow events", () => {
         (event) => event.eventType === "agent_session_contract",
       );
       expect(contract?.eventType).toBe("agent_session_contract");
-      if (!contract || contract.eventType !== "agent_session_contract") {
+      if (!contract || "eventKind" in contract || contract.eventType !== "agent_session_contract") {
         throw new Error("public store did not return the typed agent session contract branch");
       }
       expect(contract.payload.provider).toBe("codewith");
@@ -84,11 +84,22 @@ describe("LocalStore public workflow events", () => {
         "invalid agent_session_contract workflow event",
       );
 
-      const unknownRun = raw.createWorkflowRun({ workflow });
-      raw.appendWorkflowEvent(unknownRun.id, "fabricated_security_verdict");
-      await expect(store.listWorkflowEvents(unknownRun.id)).rejects.toThrow(
-        "unsupported workflow event type",
-      );
+      const mixedRun = raw.createWorkflowRun({ workflow });
+      raw.appendWorkflowEvent(mixedRun.id, "legacy_worker_note", "worker", {
+        note: "preserve me",
+        prompt: "do not expose me",
+      });
+      const mixed = await store.listWorkflowEvents(mixedRun.id);
+      expect(mixed.map((event) => event.eventType)).toEqual(["created", "legacy_worker_note"]);
+      expect(mixed[1]).toMatchObject({
+        eventType: "legacy_worker_note",
+        eventKind: "custom",
+        stepId: "worker",
+        payload: {
+          note: "preserve me",
+          prompt: "[redacted 16 chars]",
+        },
+      });
     } finally {
       await store.close();
     }
@@ -96,6 +107,46 @@ describe("LocalStore public workflow events", () => {
 });
 
 describe("ApiStore end-to-end against the real /v1 server", () => {
+  test("lists mixed-version custom workflow events through the API without breaking known events", async () => {
+    const storage = createSqliteLoopStorage(":memory:");
+    const principal = {
+      tenantId: "tenant-test", principalId: "principal-test", requestId: "request-test",
+      kid: "kid-test", agent: "principal-test", scopes: ["loops:*"],
+      roles: ["admin" as const], tokenKind: "api_key" as const,
+      claims: { v: 1, kid: "kid-test", app: "loops", agent: "principal-test", scopes: ["loops:*"], iat: 1, exp: null },
+    };
+    const server = createLoopsApiServer({
+      host: "127.0.0.1", port: 0,
+      authenticator: { authenticate: async () => ({ ok: true as const, status: 200 as const, principal }) },
+      withTenantStorage: (_principal, fn) => fn(storage),
+    });
+    try {
+      const workflow = await storage.createWorkflow(WORKFLOW_INPUT);
+      const run = await storage.createWorkflowRun({ workflow });
+      await storage.appendWorkflowEvent(run.id, "legacy_worker_note", "s1", {
+        note: "old producer payload",
+        reason: "private operator context",
+      });
+
+      const store = apiStoreForServer((server as { port: number }).port);
+      const events = await store.listWorkflowEvents(run.id);
+      expect(events.map((event) => event.eventType)).toEqual(["created", "legacy_worker_note"]);
+      expect(events[1]).toMatchObject({
+        eventType: "legacy_worker_note",
+        eventKind: "custom",
+        stepId: "s1",
+        payload: {
+          note: "old producer payload",
+          reason: "[redacted 24 chars]",
+        },
+      });
+      await store.close();
+    } finally {
+      server.stop?.(true);
+      await storage.close();
+    }
+  });
+
   test("loops + workflows + goals + receipts + history route to the hosted API, not local sqlite", async () => {
     const storage = createSqliteLoopStorage(":memory:");
     const principal = {

@@ -1,11 +1,13 @@
 import type {
   AgentRoutingSpec,
   AgentSessionContract,
+  PublicWorkflowEvent,
   StoredWorkflowEvent,
   WorkflowEvent,
   WorkflowLifecycleEventType,
 } from "../types.js";
 import { ValidationError } from "./errors.js";
+import { scrubSecrets } from "./redact.js";
 
 export const WORKFLOW_LIFECYCLE_EVENT_TYPES = [
   "created",
@@ -54,6 +56,48 @@ function isOptionalNonEmptyString(value: unknown): value is string | undefined {
 
 function isOptionalStringArray(value: unknown): value is string[] | undefined {
   return value === undefined || (Array.isArray(value) && value.every((entry) => typeof entry === "string"));
+}
+
+const SENSITIVE_CUSTOM_EVENT_KEYS = new Set(["env", "error", "prompt", "reason", "stderr", "stdout"]);
+const BENIGN_CUSTOM_EVENT_KEY_NAMES = new Set(["dedupekey", "idempotencykey", "routekey"]);
+const REDACTED_VALUE = /^\[redacted(?: \d+ chars)?\]$/;
+
+function isSensitiveCustomEventKey(key: string): boolean {
+  const normalized = key.replace(/[^a-z0-9]/gi, "").toLowerCase();
+  if (SENSITIVE_CUSTOM_EVENT_KEYS.has(normalized)) return true;
+  if (BENIGN_CUSTOM_EVENT_KEY_NAMES.has(normalized)) return false;
+  return normalized === "authorization" ||
+    /(?:apikey|token|secret|password|passwd|passphrase|credential|credentials)$/.test(normalized);
+}
+
+function sanitizeCustomEventValue(value: unknown, key?: string): unknown {
+  if (key && isSensitiveCustomEventKey(key)) {
+    if (typeof value === "string") {
+      if (REDACTED_VALUE.test(value)) return value;
+      return `[redacted ${value.length} chars]`;
+    }
+    if (value === undefined || value === null) return value;
+    return "[redacted]";
+  }
+  if (typeof value === "string") return scrubSecrets(value);
+  if (Array.isArray(value)) return value.map((entry) => sanitizeCustomEventValue(entry));
+  if (isRecord(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([entryKey, entryValue]) => [
+        entryKey,
+        sanitizeCustomEventValue(entryValue, entryKey),
+      ]),
+    );
+  }
+  return value;
+}
+
+function sanitizeCustomEventPayload(
+  payload: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  return payload === undefined
+    ? undefined
+    : sanitizeCustomEventValue(payload) as Record<string, unknown>;
 }
 
 function isAgentRoutingSpec(value: unknown): value is AgentRoutingSpec | undefined {
@@ -115,9 +159,11 @@ function isRfc3339DateTime(value: unknown): value is string {
   return Number.isFinite(Date.parse(value));
 }
 
-function assertStoredWorkflowEvent(value: unknown): asserts value is StoredWorkflowEvent {
+type WorkflowEventCandidate = StoredWorkflowEvent & { eventKind?: unknown };
+
+function assertStoredWorkflowEvent(value: unknown): asserts value is WorkflowEventCandidate {
   if (!isRecord(value) || !hasOnlyKeys(value, [
-    "id", "workflowRunId", "sequence", "eventType", "stepId", "payload", "createdAt",
+    "id", "workflowRunId", "sequence", "eventType", "eventKind", "stepId", "payload", "createdAt",
   ])) {
     throw new ValidationError("invalid workflow event envelope");
   }
@@ -131,6 +177,9 @@ function assertStoredWorkflowEvent(value: unknown): asserts value is StoredWorkf
   if (typeof value.eventType !== "string" || value.eventType.length === 0) {
     throw new ValidationError("invalid workflow event type");
   }
+  if (value.eventKind !== undefined && value.eventKind !== "custom") {
+    throw new ValidationError("invalid workflow event kind");
+  }
   if (value.stepId !== undefined && typeof value.stepId !== "string") {
     throw new ValidationError("invalid workflow event stepId");
   }
@@ -139,10 +188,12 @@ function assertStoredWorkflowEvent(value: unknown): asserts value is StoredWorkf
 }
 
 /** Validate a raw storage/API row before exposing the public discriminated union. */
-export function publicWorkflowEvent(event: StoredWorkflowEvent | WorkflowEvent): WorkflowEvent {
+export function publicWorkflowEvent(
+  event: StoredWorkflowEvent | PublicWorkflowEvent,
+): PublicWorkflowEvent {
   assertStoredWorkflowEvent(event);
   if (event.eventType === "agent_session_contract") {
-    if (!event.stepId || !isAgentSessionContract(event.payload)) {
+    if (event.eventKind !== undefined || !event.stepId || !isAgentSessionContract(event.payload)) {
       throw new ValidationError("invalid agent_session_contract workflow event");
     }
     return {
@@ -155,19 +206,31 @@ export function publicWorkflowEvent(event: StoredWorkflowEvent | WorkflowEvent):
       createdAt: event.createdAt,
     };
   }
-  if (!isWorkflowLifecycleEventType(event.eventType)) {
-    throw new ValidationError(`unsupported workflow event type: ${event.eventType}`);
-  }
-  if (!isOptionalRecord(event.payload)) {
-    throw new ValidationError(`invalid workflow event payload for ${event.eventType}`);
+  if (isWorkflowLifecycleEventType(event.eventType)) {
+    if (event.eventKind !== undefined) {
+      throw new ValidationError(`invalid workflow event kind for ${event.eventType}`);
+    }
+    if (!isOptionalRecord(event.payload)) {
+      throw new ValidationError(`invalid workflow event payload for ${event.eventType}`);
+    }
+    return {
+      id: event.id,
+      workflowRunId: event.workflowRunId,
+      sequence: event.sequence,
+      eventType: event.eventType,
+      stepId: event.stepId,
+      payload: event.payload,
+      createdAt: event.createdAt,
+    };
   }
   return {
     id: event.id,
     workflowRunId: event.workflowRunId,
     sequence: event.sequence,
     eventType: event.eventType,
+    eventKind: "custom",
     stepId: event.stepId,
-    payload: event.payload,
+    payload: sanitizeCustomEventPayload(event.payload),
     createdAt: event.createdAt,
   };
 }

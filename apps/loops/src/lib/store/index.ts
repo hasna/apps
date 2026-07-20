@@ -28,10 +28,10 @@ import type {
   Loop,
   LoopRun,
   LoopStatus,
+  PublicWorkflowEvent,
   RunReceipt,
   RunStatus,
   StoredWorkflowEvent,
-  WorkflowEvent,
   WorkflowInvocation,
   WorkflowRun,
   WorkflowSpec,
@@ -113,7 +113,7 @@ export interface LoopStore {
   requireWorkflowRun(id: string): Promise<WorkflowRun>;
   listWorkflowRuns(opts?: { workflowId?: string; loopRunId?: string; limit?: number }): Promise<WorkflowRun[]>;
   listWorkflowStepRuns(workflowRunId: string): Promise<WorkflowStepRun[]>;
-  listWorkflowEvents(workflowRunId: string, limit?: number): Promise<WorkflowEvent[]>;
+  listWorkflowEvents(workflowRunId: string, limit?: number): Promise<PublicWorkflowEvent[]>;
   recoverWorkflowRun(workflowRunId: string, reason?: string): Promise<{ run: WorkflowRun; recoveredSteps: WorkflowStepRun[] }>;
   cancelWorkflowRun(workflowRunId: string, reason?: string): Promise<WorkflowRun>;
 
@@ -254,7 +254,7 @@ export class LocalStore implements LoopStore {
   async listWorkflowStepRuns(workflowRunId: string): Promise<WorkflowStepRun[]> {
     return this.store.listWorkflowStepRuns(workflowRunId);
   }
-  async listWorkflowEvents(workflowRunId: string, limit?: number): Promise<WorkflowEvent[]> {
+  async listWorkflowEvents(workflowRunId: string, limit?: number): Promise<PublicWorkflowEvent[]> {
     const events = limit === undefined
       ? this.store.listWorkflowEvents(workflowRunId)
       : this.store.listWorkflowEvents(workflowRunId, limit);
@@ -501,7 +501,7 @@ export class ApiStore implements LoopStore {
     const raw = await this.t.get(`/workflow-runs/${encodeURIComponent(workflowRunId)}/steps`);
     return pickArray<WorkflowStepRun>(raw, "steps");
   }
-  async listWorkflowEvents(workflowRunId: string, limit?: number): Promise<WorkflowEvent[]> {
+  async listWorkflowEvents(workflowRunId: string, limit?: number): Promise<PublicWorkflowEvent[]> {
     const raw = await this.t.get(`/workflow-runs/${encodeURIComponent(workflowRunId)}/events`, { query: clean({ limit }) });
     return pickArray<StoredWorkflowEvent>(raw, "events").map(publicWorkflowEvent);
   }

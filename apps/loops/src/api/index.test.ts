@@ -100,6 +100,22 @@ describe("loops-api foundation", () => {
         },
       },
     });
+    expect(document.components.schemas.CustomWorkflowEvent).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      required: ["id", "workflowRunId", "sequence", "eventKind", "eventType", "createdAt"],
+      properties: {
+        eventKind: { type: "string", enum: ["custom"] },
+        eventType: { type: "string", minLength: 1 },
+      },
+    });
+    expect(document.components.schemas.WorkflowEvent).toMatchObject({
+      oneOf: [
+        { $ref: "#/components/schemas/AgentSessionContractWorkflowEvent" },
+        { $ref: "#/components/schemas/GenericWorkflowEvent" },
+        { $ref: "#/components/schemas/CustomWorkflowEvent" },
+      ],
+    });
   });
 
   test("status command JSON uses the service envelope", () => {

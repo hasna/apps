@@ -70,6 +70,7 @@ export type {
   // workflows
   AgentSessionContractWorkflowEvent,
   CreateWorkflowInput,
+  CustomWorkflowEvent,
   GenericWorkflowEvent,
   PublicWorkflowEvent,
   WorkflowEvent,

@@ -5,8 +5,8 @@ import type {
   Loop,
   LoopRun,
   RunReceipt,
+  PublicWorkflowEvent,
   StoredWorkflowEvent,
-  WorkflowEvent,
   WorkflowInvocation,
   WorkflowRun,
   WorkflowSpec,
@@ -134,8 +134,9 @@ export function publicWorkflowStepRun(run: WorkflowStepRun, showOutput = false):
   };
 }
 
-export function publicWorkflowEvent(event: StoredWorkflowEvent | WorkflowEvent): Record<string, unknown> {
+export function publicWorkflowEvent(event: StoredWorkflowEvent | PublicWorkflowEvent): Record<string, unknown> {
   const validated = validatedWorkflowEvent(event);
+  if ("eventKind" in validated && validated.eventKind === "custom") return { ...validated };
   return { ...validated, payload: redactSensitivePayload(validated.payload) };
 }
 
