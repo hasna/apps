@@ -45,6 +45,7 @@ import {
 } from "../lib/format.js";
 import { buildDeploymentStatus, deploymentStatusLine } from "../lib/mode.js";
 import { computeNextAfter, dueSlots } from "../lib/recurrence.js";
+import { normalizeLoopLabels } from "../lib/labels.js";
 import { scrubSecretsDeep } from "../lib/redact.js";
 import type { LoopStorageContract } from "../lib/storage/contract.js";
 import { routePolicy, type RoutePolicy } from "../lib/auth/route-policy.js";
@@ -388,6 +389,7 @@ async function handleLoopsRequest(ctx: V1RequestContext, segments: string[]): Pr
   if (segments.length === 0 && ctx.request.method === "GET") {
     const loops = await storage.listLoops({
       status: optionalEnum<LoopStatus>(ctx.url.searchParams.get("status"), ["active", "paused", "stopped", "expired"]),
+      labels: labelsFromSearchParams(ctx.url.searchParams),
       limit: optionalLimit(ctx.url.searchParams.get("limit")),
       offset: optionalOffset(ctx.url.searchParams.get("offset")),
       includeArchived: optionalBoolean(ctx.url.searchParams.get("includeArchived")),
@@ -398,6 +400,7 @@ async function handleLoopsRequest(ctx: V1RequestContext, segments: string[]): Pr
   }
   if (segments.length === 0 && ctx.request.method === "POST") {
     const body = await readJsonBody<CreateLoopInput>(ctx.request, ctx.bodyLimitBytes);
+    if ("labels" in body) body.labels = normalizedLabels(body.labels);
     const target: unknown = body && typeof body === "object" ? (body as { target?: unknown }).target : undefined;
     if (target && typeof target === "object" && !Array.isArray(target) && (target as { type?: unknown }).type === "agent") {
       validateAgentTarget(target, "target");
@@ -425,7 +428,7 @@ async function handleLoopsRequest(ctx: V1RequestContext, segments: string[]): Pr
     return ok({ loop: publicLoop(loop) });
   }
   if (segments.length === 1 && ctx.request.method === "PATCH") {
-    const body = await readJsonBody<Partial<{ status: LoopStatus; nextRunAt: string | null; retryScheduledFor: string | null; expiresAt: string | null }>>(
+    const body = await readJsonBody<Partial<{ status: LoopStatus; labels: unknown; nextRunAt: string | null; retryScheduledFor: string | null; expiresAt: string | null }>>(
       ctx.request,
       ctx.bodyLimitBytes,
     );
@@ -434,8 +437,9 @@ async function handleLoopsRequest(ctx: V1RequestContext, segments: string[]): Pr
     // current value: emitting all four keys unconditionally wiped omitted
     // schedule fields (and set status=NULL -> NOT NULL 500). A key set to
     // JSON null is an explicit clear (mapped to undefined -> merged to null).
-    const patch: Partial<{ status: LoopStatus; nextRunAt: string; retryScheduledFor: string; expiresAt: string }> = {};
+    const patch: Partial<{ status: LoopStatus; labels: string[]; nextRunAt: string; retryScheduledFor: string; expiresAt: string }> = {};
     if ("status" in body && body.status !== undefined) patch.status = body.status;
+    if ("labels" in body) patch.labels = normalizedLabels(body.labels);
     if ("nextRunAt" in body) patch.nextRunAt = body.nextRunAt === null ? undefined : body.nextRunAt;
     if ("retryScheduledFor" in body) patch.retryScheduledFor = body.retryScheduledFor === null ? undefined : body.retryScheduledFor;
     if ("expiresAt" in body) patch.expiresAt = body.expiresAt === null ? undefined : body.expiresAt;
@@ -665,6 +669,7 @@ async function handleRunsRequest(ctx: V1RequestContext, segments: string[]): Pro
     const runs = await storage.listRuns({
       loopId: ctx.url.searchParams.get("loopId") ?? undefined,
       status: optionalEnum<RunStatus>(ctx.url.searchParams.get("status"), ["running", "succeeded", "failed", "timed_out", "abandoned", "skipped"]),
+      labels: labelsFromSearchParams(ctx.url.searchParams),
       limit: optionalLimit(ctx.url.searchParams.get("limit")),
       offset: optionalOffset(ctx.url.searchParams.get("offset")),
     });
@@ -1398,6 +1403,23 @@ function optionalString(value: unknown): string | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== "string" || value.trim() === "") throw apiError("invalid_string", 422);
   return value.trim();
+}
+
+function labelsFromSearchParams(params: URLSearchParams): string[] {
+  const repeated = params.getAll("label");
+  const packed = params.get("labels")?.split(",") ?? [];
+  return normalizedLabels([...repeated, ...packed].filter((label) => label !== ""));
+}
+
+function normalizedLabels(value: unknown): string[] {
+  if (!Array.isArray(value) || value.some((label) => typeof label !== "string")) {
+    throw apiError("invalid_labels", 422);
+  }
+  try {
+    return normalizeLoopLabels(value as string[]);
+  } catch {
+    throw apiError("invalid_labels", 422);
+  }
 }
 
 function requiredString(value: unknown, name: string): string {

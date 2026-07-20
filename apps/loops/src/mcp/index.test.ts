@@ -102,6 +102,7 @@ describe("open-loops MCP server", () => {
       try {
         const loop = store.createLoop({
           name: "mcp-smoke",
+          labels: ["BrowserPlan", "nightly"],
           schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
           target: { type: "command", command: "true" },
         });
@@ -136,10 +137,13 @@ describe("open-loops MCP server", () => {
       expect(toolNames).toContain("loop_runs");
       expect(toolNames).toContain("workflow_validate");
 
-      const list = textPayload(await client.callTool({ name: "loops_list", arguments: { limit: 10 } })) as {
-        loops: Array<{ id: string; name: string }>;
+      const list = textPayload(
+        await client.callTool({ name: "loops_list", arguments: { limit: 10, labels: ["browserplan", "nightly"] } }),
+      ) as {
+        loops: Array<{ id: string; name: string; labels: string[] }>;
       };
       expect(list.loops.map((loop) => loop.name)).toContain("mcp-smoke");
+      expect(list.loops[0]?.labels).toEqual(["browserplan", "nightly"]);
 
       const show = textPayload(await client.callTool({ name: "loops_show", arguments: { idOrName: seeded.loopId } })) as {
         loop: { id: string; name: string };
@@ -241,6 +245,61 @@ describe("open-loops MCP server", () => {
       const result = await client.callTool({ name: "loops_show", arguments: {} });
       expect(result.isError).toBe(true);
       expect(JSON.stringify(result.content)).toContain("idOrName");
+    } finally {
+      await client.close();
+      await transport.close();
+    }
+  });
+
+  test("caps each exposed run output and the aggregate loops_runs MCP response", async () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-mcp-output-cap-"));
+    roots.push(root);
+    withLoopDataDir(root, () => {
+      const store = new Store();
+      try {
+        const loop = store.createLoop(
+          {
+            name: "large-output-loop",
+            labels: ["large-output"],
+            schedule: { type: "interval", everyMs: 60_000 },
+            target: { type: "command", command: "true" },
+          },
+          new Date("2026-07-20T00:00:00.000Z"),
+        );
+        for (let index = 0; index < 30; index += 1) {
+          const scheduledFor = new Date(Date.parse("2026-07-20T00:00:00.000Z") + index * 60_000).toISOString();
+          const claim = store.claimRun(loop, scheduledFor, "seed");
+          if (!claim) throw new Error(`failed to seed run ${index}`);
+          store.finalizeRun(claim.run.id, {
+            status: "succeeded",
+            finishedAt: new Date(Date.parse(scheduledFor) + 1_000).toISOString(),
+            durationMs: 1_000,
+            stdout: `stdout-${index}-` + "x".repeat(100_000),
+            stderr: `stderr-${index}-` + "y".repeat(100_000),
+          });
+        }
+      } finally {
+        store.close();
+      }
+    });
+
+    const { client, transport } = await connectMcp(root);
+    try {
+      const result = await client.callTool({
+        name: "loops_runs",
+        arguments: {
+          labels: ["large-output"],
+          limit: 500,
+          showOutput: true,
+          maxOutputChars: 32_000,
+        },
+      });
+      const content = result.content as Array<{ type: string; text?: string }>;
+      const text = content[0]?.text ?? "";
+      expect(text.length).toBeLessThanOrEqual(128_000);
+      expect(text).toContain('"truncated"');
+      expect(text).not.toContain("x".repeat(32_001));
+      expect(text).not.toContain("y".repeat(32_001));
     } finally {
       await client.close();
       await transport.close();
@@ -411,13 +470,23 @@ describe("open-loops MCP server", () => {
             name: "created-command",
             command: "true",
             schedule: { type: "interval", everyMs: 60_000 },
+            labels: ["BrowserPlan", "nightly"],
           },
         }),
-      ) as { loop: { name: string; description: string; target: { type: string; shell?: boolean } } };
+      ) as { loop: { name: string; description: string; labels: string[]; target: { type: string; shell?: boolean } } };
       expect(commandLoop.loop.name).toBe("created-command");
+      expect(commandLoop.loop.labels).toEqual(["browserplan", "nightly"]);
       expect(commandLoop.loop.description).toContain("Why: keep created-command running");
       expect(commandLoop.loop.description).toContain("runs command true");
       expect(commandLoop.loop.target.shell).toBe(false);
+
+      const relabeled = textPayload(
+        await client.callTool({
+          name: "loops_labels_update",
+          arguments: { idOrName: "created-command", mode: "add", labels: ["urgent"] },
+        }),
+      ) as { loop: { labels: string[] } };
+      expect(relabeled.loop.labels).toEqual(["browserplan", "nightly", "urgent"]);
 
       // shell targets are forbidden over MCP: schema-level rejection
       const shellRejected = await client.callTool({

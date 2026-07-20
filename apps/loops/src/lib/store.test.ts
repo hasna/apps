@@ -26,6 +26,100 @@ const OPENAI_KEY = j("sk-", "proj-AbCd1234EfGh5678IjKl9012");
 const DEAD_PID = 0x3fffffff;
 
 describe("Store", () => {
+  test("persists normalized loop labels and applies AND filters to loops and current-label runs", () => {
+    const store = new Store(":memory:");
+    try {
+      const browser = store.createLoop(
+        {
+          name: "browser-loop",
+          labels: ["BrowserPlan", "nightly", "nightly"],
+          schedule: { type: "once", at: "2026-08-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2026-07-31T00:00:00Z"),
+      );
+      const maintenance = store.createLoop(
+        {
+          name: "maintenance-loop",
+          labels: ["maintenance"],
+          schedule: { type: "once", at: "2026-08-01T00:01:00Z" },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2026-07-31T00:00:00Z"),
+      );
+      store.claimRun(browser, "2026-08-01T00:00:00.000Z", "test");
+      store.claimRun(maintenance, "2026-08-01T00:01:00.000Z", "test");
+
+      expect(store.getLoop(browser.id)?.labels).toEqual(["browserplan", "nightly"]);
+      expect(store.listLoops({ labels: ["browserplan", "nightly"] }).map((loop) => loop.name)).toEqual(["browser-loop"]);
+      expect(store.listLoops({ labels: ["browserplan", "missing"] })).toEqual([]);
+      expect(store.listRuns({ labels: ["browserplan"] }).map((run) => run.loopName)).toEqual(["browser-loop"]);
+
+      store.updateLoop(browser.id, { labels: ["maintenance"] });
+      expect(store.listRuns({ labels: ["browserplan"] })).toEqual([]);
+      expect(store.listRuns({ labels: ["maintenance"] }).map((run) => run.loopName).sort()).toEqual([
+        "browser-loop",
+        "maintenance-loop",
+      ]);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("migrates unlabeled SQLite loops to empty labels without raising the compatibility floor", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-label-migration-"));
+    const dbFile = join(root, "loops.db");
+    const old = new Database(dbFile);
+    try {
+      old.exec(`
+        CREATE TABLE loops (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          description TEXT,
+          status TEXT NOT NULL,
+          schedule_json TEXT NOT NULL,
+          target_json TEXT NOT NULL,
+          goal_json TEXT,
+          machine_json TEXT,
+          next_run_at TEXT,
+          retry_scheduled_for TEXT,
+          catch_up TEXT NOT NULL,
+          catch_up_limit INTEGER NOT NULL,
+          overlap TEXT NOT NULL,
+          max_attempts INTEGER NOT NULL,
+          retry_delay_ms INTEGER NOT NULL,
+          lease_ms INTEGER NOT NULL,
+          expires_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        INSERT INTO loops (
+          id, name, description, status, schedule_json, target_json, goal_json, machine_json, next_run_at,
+          retry_scheduled_for, catch_up, catch_up_limit, overlap, max_attempts, retry_delay_ms, lease_ms,
+          expires_at, created_at, updated_at
+        ) VALUES (
+          'old-loop', 'old-loop', NULL, 'active', '{"type":"once","at":"2026-08-01T00:00:00Z"}',
+          '{"type":"command","command":"true"}', NULL, NULL, '2026-08-01T00:00:00.000Z',
+          NULL, 'latest', 50, 'skip', 1, 60000, 1800000, NULL,
+          '2026-07-20T00:00:00.000Z', '2026-07-20T00:00:00.000Z'
+        );
+        PRAGMA user_version = 8;
+      `);
+    } finally {
+      old.close();
+    }
+
+    const store = new Store(dbFile);
+    try {
+      expect(store.requireLoop("old-loop").labels).toEqual([]);
+      expect(store.listLoops({ labels: ["missing"] })).toEqual([]);
+      const version = store["db"].query("PRAGMA user_version").get() as { user_version: number };
+      expect(version.user_version).toBe(8);
+    } finally {
+      store.close();
+    }
+  });
+
   test("hardens existing store directory and sqlite files to owner-only permissions", () => {
     const root = mkdtempSync(join(tmpdir(), "loops-store-permissions-"));
     const dbFile = join(root, "loops.db");
@@ -1748,6 +1842,7 @@ exit 0
         "0010_work_item_machine_id",
         "0011_work_item_gate_deaths",
         "0012_workflow_run_provenance",
+        "0013_loop_labels",
       ]);
       const version = store["db"].query("PRAGMA user_version").get() as { user_version: number };
       // 0011/0012 are additive and deliberately do NOT bump

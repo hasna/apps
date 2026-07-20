@@ -178,6 +178,7 @@ import { createLoopsMcpServer } from "@hasna/loops/mcp";
 Available read tools include `loops_list`, `loops_show`, `loops_runs`,
 `loops_doctor`, `loops_workflows_list`, `loops_workflow_read`, and
 `loops_workflow_validate`.
+`loops_list` and `loops_runs` accept label arrays with AND semantics.
 Resources are available at `loops://runtime` and `loops://tools`.
 Those tools use the same `Store`, public redaction helpers, and workflow parser
 as the CLI and SDK, so read output and validation behavior stay aligned across
@@ -187,12 +188,16 @@ Mutation tools are disabled by default. Start the server with
 `LOOPS_MCP_ALLOW_MUTATIONS=true` only for a trusted local MCP host that should be
 allowed to change loop state. The guarded mutation tools use canonical names:
 `loops_pause`, `loops_resume`, `loops_stop`, `loops_run_now`, `loops_archive`,
-`loops_unarchive`, `loops_create_command`, and `loops_create_workflow`.
+`loops_unarchive`, `loops_labels_update`, `loops_create_command`, and
+`loops_create_workflow`.
 Deprecated `loop_*` aliases are still registered where compatibility needs them,
 but callers should use the `loops_*` names. Mutation tools do not require or
 accept confirmation-string parameters; the server-side environment opt-in is the
 gate. MCP `loops_run_now` schedules the loop for immediate daemon pickup; inline
 execution remains CLI-only.
+When `showOutput` is enabled, `loops_runs` caps each stdout/stderr field at
+32,000 characters, caps output-bearing pages at 25 runs, and caps the aggregate
+MCP JSON response at 128,000 characters.
 
 Keep host-affecting or long-running operations on the CLI: daemon
 start/stop/install/logs, inline `run-now`, `tick`, loop deletion, workflow
@@ -261,6 +266,29 @@ inventory membership. OpenLoops falls back to the human-readable table,
 including active `*` rows, only when JSON mode is unsupported or its inventory
 is structurally unavailable. Embedded NUL bytes, missing profiles, and
 non-fallback profile-list failures fail closed.
+
+## Labels
+
+Command, agent, and workflow loops accept repeatable labels:
+
+```bash
+loops create command repo-status --every 1m --cmd "git status --short" \
+  --label BrowserPlan --label maintenance
+loops list --label browserplan --label maintenance
+loops runs --label browserplan
+```
+
+Labels are normalized to lowercase, deduplicated, limited to 32 per loop, and
+must match `[a-z0-9][a-z0-9._-]{0,63}` after normalization. Repeated filters use
+AND semantics. Run filtering uses the loop's current labels rather than a
+historical snapshot on each run.
+
+```bash
+loops labels add repo-status urgent
+loops labels remove repo-status maintenance
+loops labels set repo-status browserplan nightly
+loops labels clear repo-status
+```
 
 Run an OpenCode loop with an explicit provider/model. OpenCode reads
 `~/.config/opencode/config.json` when no model is supplied, so OpenLoops rejects

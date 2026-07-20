@@ -42,6 +42,11 @@
       "checksum": "sha256:5011c78d0d2cbf3fbcc601ce2bdea4a39cdde21cb9df931ca5c9c1dc3cd7e5b6"
     },
     {
+      "id": "0012_loop_labels",
+      "file": "0012_loop_labels.sql",
+      "checksum": "sha256:d2fa64d1ff97fc9225667e9e6045bbbae13acca2fad74ca79ecbc6bcf20f1521"
+    },
+    {
       "id": "0008_tenant_prepare",
       "file": "0008_tenant_prepare.sql",
       "checksum": "sha256:76924f61f71fa2e7d3fb7773ff372200e26d0b3e48a5d05585adaeeca8f30043"

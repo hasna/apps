@@ -30,6 +30,7 @@ import { computeNextAfter } from "../lib/recurrence.js";
 import { runLoopNow, tick } from "../lib/scheduler.js";
 import { Store } from "../lib/store.js";
 import { LocalStore, getStore, type LoopStore } from "../lib/store/index.js";
+import { mergeLoopLabels, normalizeLoopLabels, removeLoopLabels } from "../lib/labels.js";
 export { runGoal } from "../lib/goal/runner.js";
 export {
   LOOPS_MIGRATION_SCHEMA,
@@ -74,6 +75,7 @@ export interface LoopsClientOptions {
 
 export interface ListLoopsFilters {
   status?: LoopStatus;
+  labels?: string[];
   limit?: number;
   /** include archived loops alongside live ones */
   includeArchived?: boolean;
@@ -83,6 +85,7 @@ export interface ListLoopsFilters {
 
 export interface ListRunsFilters {
   status?: RunStatus;
+  labels?: string[];
   limit?: number;
 }
 
@@ -135,6 +138,7 @@ export class LoopsClient {
   list(filters: ListLoopsFilters = {}): Promise<Loop[]> {
     return this.store.listLoops({
       status: filters.status,
+      labels: normalizeLoopLabels(filters.labels),
       limit: filters.limit,
       includeArchived: filters.includeArchived,
       archived: filters.archivedOnly,
@@ -172,6 +176,21 @@ export class LoopsClient {
     return this.store.updateLoop(loop.id, { status: "stopped", nextRunAt: undefined });
   }
 
+  async setLabels(idOrName: string, labels: string[]): Promise<Loop> {
+    const loop = await this.store.requireUniqueLoop(idOrName);
+    return this.store.updateLoop(loop.id, { labels: normalizeLoopLabels(labels) });
+  }
+
+  async addLabels(idOrName: string, labels: string[]): Promise<Loop> {
+    const loop = await this.store.requireUniqueLoop(idOrName);
+    return this.store.updateLoop(loop.id, { labels: mergeLoopLabels(loop.labels, labels) });
+  }
+
+  async removeLabels(idOrName: string, labels: string[]): Promise<Loop> {
+    const loop = await this.store.requireUniqueLoop(idOrName);
+    return this.store.updateLoop(loop.id, { labels: removeLoopLabels(loop.labels, labels) });
+  }
+
   archive(idOrName: string): Promise<Loop> {
     return this.store.archiveLoop(idOrName);
   }
@@ -198,7 +217,12 @@ export class LoopsClient {
         throw error;
       }
     }
-    return this.store.listRuns({ loopId, status: filters.status, limit: filters.limit });
+    return this.store.listRuns({
+      loopId,
+      status: filters.status,
+      labels: normalizeLoopLabels(filters.labels),
+      limit: filters.limit,
+    });
   }
 
   writeReceipt(input: WriteRunReceiptInput): Promise<RunReceipt> {

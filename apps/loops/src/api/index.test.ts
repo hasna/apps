@@ -605,6 +605,7 @@ describe("loops-api foundation", () => {
         headers: jsonHeaders,
         body: JSON.stringify({
           name: "api-storage-loop",
+          labels: ["BrowserPlan", "nightly"],
           schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
           target: {
             type: "command",
@@ -615,12 +616,16 @@ describe("loops-api foundation", () => {
         }),
       });
       expect(createResponse.status).toBe(201);
-      const created = (await createResponse.json()) as { ok: boolean; loop: { id: string; name: string; target: { env?: unknown } } };
+      const created = (await createResponse.json()) as {
+        ok: boolean;
+        loop: { id: string; name: string; labels: string[]; target: { env?: unknown } };
+      };
       expect(created).toMatchObject({ ok: true, loop: { name: "api-storage-loop" } });
+      expect(created.loop.labels).toEqual(["browserplan", "nightly"]);
       expect(created.loop.target.env).toBe("[redacted]");
 
-      const listResponse = await fetch(apiUrl(server, "/v1/loops?limit=10"));
-      const listed = (await listResponse.json()) as { loops: { id: string }[] };
+      const listResponse = await fetch(apiUrl(server, "/v1/loops?limit=10&labels=browserplan%2Cnightly"));
+      const listed = (await listResponse.json()) as { loops: { id: string; labels: string[] }[] };
       expect(listResponse.status).toBe(200);
       expect(listed.loops.map((loop) => loop.id)).toContain(created.loop.id);
 
@@ -630,11 +635,12 @@ describe("loops-api foundation", () => {
       const pauseResponse = await fetch(apiUrl(server, `/v1/loops/${created.loop.id}`), {
         method: "PATCH",
         headers: jsonHeaders,
-        body: JSON.stringify({ status: "paused" }),
+        body: JSON.stringify({ status: "paused", labels: ["maintenance"] }),
       });
-      const paused = (await pauseResponse.json()) as { loop: { status: string } };
+      const paused = (await pauseResponse.json()) as { loop: { status: string; labels: string[] } };
       expect(pauseResponse.status).toBe(200);
       expect(paused.loop.status).toBe("paused");
+      expect(paused.loop.labels).toEqual(["maintenance"]);
 
       const archiveResponse = await fetch(apiUrl(server, `/v1/loops/${created.loop.id}/archive`), { method: "POST" });
       const archived = (await archiveResponse.json()) as { loop: { archivedAt?: string } };
