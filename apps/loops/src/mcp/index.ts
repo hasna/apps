@@ -309,8 +309,8 @@ function publicMcpRun(run: LoopRun, showOutput: boolean, maxOutputChars = MAX_OU
   if (!showOutput) return value;
   return {
     ...value,
-    stdout: truncateOutput(run.stdout, maxOutputChars),
-    stderr: truncateOutput(run.stderr, maxOutputChars),
+    stdout: truncateOutput(value.stdout as string | undefined, maxOutputChars),
+    stderr: truncateOutput(value.stderr as string | undefined, maxOutputChars),
   };
 }
 

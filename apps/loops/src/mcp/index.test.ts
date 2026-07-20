@@ -1,6 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { afterEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -300,6 +301,80 @@ describe("open-loops MCP server", () => {
       expect(text).toContain('"truncated"');
       expect(text).not.toContain("x".repeat(32_001));
       expect(text).not.toContain("y".repeat(32_001));
+    } finally {
+      await client.close();
+      await transport.close();
+    }
+  });
+
+  test("scrubs legacy stored credentials from MCP run output on canonical and alias tools", async () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-mcp-output-scrub-"));
+    roots.push(root);
+    const canary = `${String.fromCharCode(115, 107, 45, 97, 110, 116, 45)}AbCdEf1234567890`;
+    const seeded = withLoopDataDir(root, () => {
+      const store = new Store();
+      try {
+        const loop = store.createLoop(
+          {
+            name: "secret-output-loop",
+            schedule: { type: "interval", everyMs: 60_000 },
+            target: { type: "command", command: "true" },
+          },
+          new Date("2026-07-20T00:00:00.000Z"),
+        );
+        const claim = store.claimRun(loop, "2026-07-20T00:00:00.000Z", "seed");
+        if (!claim) throw new Error("failed to seed secret output run");
+        store.finalizeRun(claim.run.id, {
+          status: "succeeded",
+          finishedAt: "2026-07-20T00:00:01.000Z",
+          durationMs: 1_000,
+          stdout: "safe stdout",
+          stderr: "safe stderr",
+        });
+        return { loopId: loop.id, runId: claim.run.id };
+      } finally {
+        store.close();
+      }
+    });
+    const raw = new Database(join(root, "loops.db"));
+    try {
+      raw.query("UPDATE loop_runs SET stdout = ?, stderr = ? WHERE id = ?").run(
+        `stdout ${canary}`,
+        `stderr ${canary}`,
+        seeded.runId,
+      );
+    } finally {
+      raw.close();
+    }
+
+    const { client, transport } = await connectMcp(root);
+    try {
+      for (const name of ["loops_runs", "loop_runs"]) {
+        const result = textPayload(
+          await client.callTool({
+            name,
+            arguments: { idOrName: seeded.loopId, showOutput: true, maxOutputChars: 32_000 },
+          }),
+        ) as { runs: Array<{ stdout?: string; stderr?: string }> };
+        expect(result.runs[0]?.stdout).toContain("[SCRUBBED]");
+        expect(result.runs[0]?.stderr).toContain("[SCRUBBED]");
+        expect(JSON.stringify(result)).not.toContain(canary);
+      }
+
+      const shown = textPayload(
+        await client.callTool({
+          name: "loops_show",
+          arguments: {
+            idOrName: seeded.loopId,
+            includeLatestRun: true,
+            showOutput: true,
+            maxOutputChars: 32_000,
+          },
+        }),
+      ) as { latestRun?: { stdout?: string; stderr?: string } };
+      expect(shown.latestRun?.stdout).toContain("[SCRUBBED]");
+      expect(shown.latestRun?.stderr).toContain("[SCRUBBED]");
+      expect(JSON.stringify(shown)).not.toContain(canary);
     } finally {
       await client.close();
       await transport.close();
