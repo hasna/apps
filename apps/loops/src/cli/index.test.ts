@@ -230,6 +230,69 @@ describe("loops CLI", () => {
     expect(receipts.map((receipt) => receipt.run_id)).toEqual(["run-cli"]);
   });
 
+  test("runs summary, grouped audit, and lint expose bounded agent contracts", () => {
+    const dataDir = freshDataDir("loops-cli-insights-");
+    let loopId = "";
+    let runId = "";
+    const store = new Store(join(dataDir, "loops.db"));
+    try {
+      const summaryLoop = store.createLoop({
+        name: "summary-loop",
+        schedule: { type: "once", at: futureAt() },
+        target: { type: "command", command: "printf", args: ["abcdefghij"] },
+      });
+      loopId = summaryLoop.id;
+      const claim = store.claimRun(summaryLoop, new Date().toISOString(), "seed", new Date());
+      expect(claim).toBeDefined();
+      runId = claim!.run.id;
+      store.finalizeRun(runId, {
+        status: "succeeded",
+        finishedAt: new Date().toISOString(),
+        durationMs: 5,
+        stdout: "abcdefghij",
+        stderr: "",
+      });
+      store.createLoop({
+        name: "wrapper-hazard",
+        schedule: { type: "once", at: futureAt() },
+        target: { type: "command", command: "bash", args: ["-c", "cat /tmp/large.log"] },
+      });
+    } finally {
+      store.close();
+    }
+
+    const summaries = runCli(dataDir, [
+      "--json",
+      "runs",
+      loopId,
+      "--summary",
+      "--show-output",
+      "--max-output-chars",
+      "4",
+    ]);
+    expect(summaries.status).toBe(0);
+    const summary = JSON.parse(summaries.stdout)[0];
+    expect(summary).toMatchObject({
+      schema: "openloops.run_summary.v1",
+      id: runId,
+      output: { stdout: { preview: "abcd", truncated: true } },
+    });
+    expect(summary.output.stdout.ref).toBe(`openloops://runs/${runId}/stdout`);
+
+    const audit = runCli(dataDir, ["--json", "audit", "--since", "1d", "--group-by", "status"]);
+    expect(audit.status).toBe(0);
+    expect(JSON.parse(audit.stdout)).toMatchObject({
+      schema: "openloops.audit.v1",
+      groupBy: "status",
+      statuses: { succeeded: 1 },
+    });
+
+    const lint = runCli(dataDir, ["--json", "lint"]);
+    expect(lint.status).toBe(0);
+    const lintValue = JSON.parse(lint.stdout) as { issues: Array<{ code: string }> };
+    expect(lintValue.issues.map((issue) => issue.code)).toEqual(expect.arrayContaining(["wrapper-script", "unbounded-output"]));
+  });
+
   test("reports local deployment mode by default", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-mode-local-"));
     const mode = runCli(dataDir, ["--json", "mode"], undefined, {

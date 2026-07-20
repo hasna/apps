@@ -70,6 +70,9 @@ describe("open-loops MCP server", () => {
     expect(names).toContain("loops_workflow_validate");
     expect(names).toContain("loops_health");
     expect(names).toContain("loops_health_scan");
+    expect(names).toContain("loops_run_summary");
+    expect(names).toContain("loops_audit");
+    expect(names).toContain("loops_lint");
     expect(names).toContain("loops_diagnose");
     expect(names).toContain("loops_daemon_status");
     expect(names).toContain("loops_workflow_run_inspect");
@@ -105,6 +108,20 @@ describe("open-loops MCP server", () => {
           schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
           target: { type: "command", command: "true" },
         });
+        const claim = store.claimRun(loop, new Date().toISOString(), "seed", new Date());
+        if (!claim) throw new Error("failed to seed MCP insight run");
+        store.finalizeRun(claim.run.id, {
+          status: "succeeded",
+          finishedAt: new Date().toISOString(),
+          durationMs: 5,
+          stdout: "abcdefghij",
+          stderr: "",
+        });
+        store.createLoop({
+          name: "mcp-wrapper-hazard",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "command", command: "bash", args: ["-c", "cat /tmp/large.log"] },
+        });
         const workflow = store.createWorkflow({
           name: "mcp-inspect-workflow",
           steps: [{ id: "check", target: { type: "command", command: "true" } }],
@@ -120,7 +137,7 @@ describe("open-loops MCP server", () => {
           summary: "mcp receipt",
           evidence_paths: ["/tmp/mcp-receipt.json"],
         });
-        return { loopId: loop.id, workflowRunId: workflowRun.id, receiptRunId: receipt.run_id };
+        return { loopId: loop.id, runId: claim.run.id, workflowRunId: workflowRun.id, receiptRunId: receipt.run_id };
       } finally {
         store.close();
       }
@@ -156,6 +173,30 @@ describe("open-loops MCP server", () => {
       ) as { receipts: Array<{ run_id: string }> };
       expect(receiptList.receipts.map((receipt) => receipt.run_id)).toEqual(["mcp-run-receipt"]);
 
+      const summary = textPayload(
+        await client.callTool({
+          name: "loops_run_summary",
+          arguments: { runId: seeded.runId, showOutput: true, maxOutputChars: 4 },
+        }),
+      ) as { summary: { schema: string; id: string; output: { stdout: { preview: string; truncated: boolean } } } };
+      expect(summary.summary).toMatchObject({
+        schema: "openloops.run_summary.v1",
+        id: seeded.runId,
+        output: { stdout: { preview: "abcd", truncated: true } },
+      });
+
+      const audit = textPayload(
+        await client.callTool({ name: "loops_audit", arguments: { since: "1d", groupBy: "status" } }),
+      ) as { audit: { schema: string; statuses: { succeeded: number } } };
+      expect(audit.audit.schema).toBe("openloops.audit.v1");
+      expect(audit.audit.statuses.succeeded).toBe(1);
+
+      const lint = textPayload(
+        await client.callTool({ name: "loops_lint", arguments: {} }),
+      ) as { schema: string; issues: Array<{ code: string }> };
+      expect(lint.schema).toBe("openloops.lint.v1");
+      expect(lint.issues.map((issue) => issue.code)).toEqual(expect.arrayContaining(["wrapper-script", "unbounded-output"]));
+
       const doctor = textPayload(await client.callTool({ name: "loops_doctor", arguments: {} })) as {
         checks: Array<{ id: string }>;
       };
@@ -165,13 +206,13 @@ describe("open-loops MCP server", () => {
         summary: { loops: number };
         expectations: Array<{ loop: { id: string } }>;
       };
-      expect(health.summary.loops).toBe(1);
-      expect(health.expectations[0]?.loop.id).toBe(seeded.loopId);
+      expect(health.summary.loops).toBe(2);
+      expect(health.expectations.map((expectation) => expectation.loop.id)).toContain(seeded.loopId);
 
       const scan = textPayload(
         await client.callTool({ name: "loops_health_scan", arguments: { daemon: true, includeStatuses: ["active"] } }),
       ) as { counts: { loops: number; daemonFindings: number }; daemon: { running: boolean } };
-      expect(scan.counts.loops).toBe(1);
+      expect(scan.counts.loops).toBe(2);
       expect(scan.daemon.running).toBe(false);
       expect(scan.counts.daemonFindings).toBe(1);
 
@@ -179,15 +220,15 @@ describe("open-loops MCP server", () => {
         await client.callTool({ name: "loops_diagnose", arguments: { idOrName: "mcp-smoke" } }),
       ) as { loop: { id: string }; expectation: { check: { status: string } }; recentRuns: unknown[] };
       expect(diagnose.loop.id).toBe(seeded.loopId);
-      expect(diagnose.expectation.check.status).toBe("warn");
-      expect(diagnose.recentRuns).toEqual([]);
+      expect(diagnose.expectation.check.status).toBe("pass");
+      expect(diagnose.recentRuns).toHaveLength(1);
 
       const daemon = textPayload(await client.callTool({ name: "loops_daemon_status", arguments: {} })) as {
         running: boolean;
         loops: { total: number };
       };
       expect(daemon.running).toBe(false);
-      expect(daemon.loops.total).toBe(1);
+      expect(daemon.loops.total).toBe(2);
 
       const inspect = textPayload(
         await client.callTool({ name: "loops_workflow_run_inspect", arguments: { runId: seeded.workflowRunId } }),

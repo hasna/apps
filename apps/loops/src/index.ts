@@ -106,6 +106,15 @@ export type {
   RunFailureSignal,
   WriteHealthScanReportsOptions,
 } from "./lib/health.js";
+export { auditRuns, lintLoops, runArtifactRefs, runSummary } from "./lib/insights.js";
+export type {
+  AuditGroupBy,
+  LintOptions,
+  LintSeverity,
+  LoopLintIssue,
+  RunArtifactRef,
+  RunSummaryOptions,
+} from "./lib/insights.js";
 export { computeNextAfter, initialNextRun, nextCronRun, parseCron, parseDuration } from "./lib/recurrence.js";
 
 // ---------------------------------------------------------------------------

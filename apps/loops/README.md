@@ -981,6 +981,9 @@ loops health --json
 loops health scan --include active,paused --latest-run --doctor --daemon --json
 loops health scan --include active,paused --latest-run --doctor --daemon \
   --upsert-todos --dry-run --max-actions 5 --evidence-dir ~/.hasna/loops/reports/health-scan
+loops runs <loop-id-or-name> --summary --json
+loops audit --since 24h --group-by failure-family --json
+loops lint --json
 loops expectations <loop-id-or-name> --json
 loops health route-tasks --project ~/.hasna/loops --task-list loop-error-self-heal --max-actions 5
 loops hygiene names --json
@@ -1004,6 +1007,13 @@ output. It is read-only unless `--upsert-todos` is supplied. The only built-in
 self-heal is `--start-daemon`, which attempts to start the daemon when status
 proves it is not running; it never stops, resumes, deletes, archives, or reaps
 loops.
+
+`runs --summary` emits the bounded `openloops.run_summary.v1` contract with
+output artifact references and optional scrubbed previews. `audit` groups a
+bounded recent-run window by status, loop, day, or failure family. `lint`
+detects inline base64, long commands, generic wrapper shells, and commands that
+can emit unbounded output. MCP clients use the equivalent read-only
+`loops_run_summary`, `loops_audit`, and `loops_lint` tools.
 
 Add `--evidence-dir <dir>` to `health route-tasks` or `hygiene route-tasks`
 when the deterministic loop should write a durable JSON heartbeat/report in

@@ -16,9 +16,16 @@ import {
   publicWorkflowStepRun,
 } from "../lib/format.js";
 import { buildHealthReport, buildHealthScan, classifyRunFailure, expectationForLoop } from "../lib/health.js";
+import {
+  auditRuns,
+  lintLoops,
+  runSummary,
+  type AuditGroupBy,
+  type LoopLintIssue,
+} from "../lib/insights.js";
 import { nowIso } from "../lib/ids.js";
 import { dataDir } from "../lib/paths.js";
-import { computeNextAfter } from "../lib/recurrence.js";
+import { computeNextAfter, parseDuration } from "../lib/recurrence.js";
 import { runLoopNow } from "../lib/scheduler.js";
 import { Store } from "../lib/store.js";
 import { LocalStore, getStore, isCloudStore, type LoopStore } from "../lib/store/index.js";
@@ -61,6 +68,7 @@ const showOutputSchema = z
   .optional()
   .describe("Include raw stdout/stderr (default false: only redacted lengths are returned).");
 const limitSchema = z.number().int().min(1).max(MAX_LIMIT).optional().describe(`Maximum entries to return (1-${MAX_LIMIT}).`);
+const summaryOutputCharsSchema = z.number().int().min(1).max(8_000).optional().describe("Maximum preview characters per output stream (1-8000).");
 const runReceiptSummarySchema = z.object({
   text: z.string().optional().describe("Short human summary. It is scrubbed and bounded before storage."),
   stdout_bytes: z.number().int().min(0).optional().describe("Original stdout byte count."),
@@ -270,6 +278,31 @@ function normalizeDate(value: string, label: string): string {
   return time.toISOString();
 }
 
+function sinceIso(value: string | undefined): string {
+  if (!value) return new Date(Date.now() - 24 * 60 * 60_000).toISOString();
+  try {
+    return new Date(Date.now() - parseDuration(value)).toISOString();
+  } catch {
+    return normalizeDate(value, "since");
+  }
+}
+
+function auditGroupBy(value: string | undefined): AuditGroupBy {
+  const groupBy = value ?? "status";
+  if (!["status", "loop", "day", "failure-family"].includes(groupBy)) {
+    throw new Error("groupBy must be status, loop, day, or failure-family");
+  }
+  return groupBy as AuditGroupBy;
+}
+
+function runTimestamp(run: { finishedAt?: string; startedAt?: string; createdAt: string }): number {
+  return new Date(run.finishedAt ?? run.startedAt ?? run.createdAt).getTime();
+}
+
+async function insightsWorkflowMap(store: LoopStore): Promise<Map<string, WorkflowSpec>> {
+  return new Map((await store.listWorkflows({ limit: MAX_LIMIT })).map((workflow) => [workflow.id, workflow]));
+}
+
 function normalizeSchedule(input: z.infer<typeof scheduleSchema>): ScheduleSpec {
   if (input.type === "once") return { type: "once", at: normalizeDate(input.at, "schedule.at") };
   if (input.type === "interval") return { type: "interval", everyMs: input.everyMs, anchor: input.anchor ?? "fixed_rate" };
@@ -447,6 +480,102 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
           })
         ).map((run) => publicRun(run, showOutput ?? false));
         return { loop: loop ? publicLoop(loop) : undefined, runs };
+      }),
+  },
+  {
+    name: "loops_run_summary",
+    aliases: ["openloops_get_run_summary"],
+    description: "Read one loop run as a compact openloops.run_summary.v1 record with bounded output previews and artifact refs.",
+    readOnly: true,
+    annotations: READ_ONLY_ANNOTATIONS,
+    inputSchema: {
+      runId: z.string().min(1).describe("Loop run id."),
+      showOutput: showOutputSchema,
+      maxOutputChars: summaryOutputCharsSchema,
+    },
+    handler: ({ runId, showOutput, maxOutputChars }) =>
+      withStore(async (store) => {
+        const run = await store.getRun(runId);
+        if (!run) throw new Error(`run not found: ${runId}`);
+        const loop = await store.getLoop(run.loopId);
+        const workflow = loop?.target.type === "workflow" ? await store.getWorkflow(loop.target.workflowId) : undefined;
+        return {
+          summary: runSummary(run, {
+            loop,
+            workflow,
+            showOutput,
+            maxOutputChars,
+          }),
+        };
+      }),
+  },
+  {
+    name: "loops_audit",
+    aliases: ["openloops_audit"],
+    description: "Summarize recent loop runs with bounded grouped counts and drill-down run ids.",
+    readOnly: true,
+    annotations: READ_ONLY_ANNOTATIONS,
+    inputSchema: {
+      since: z.string().min(1).optional().describe("ISO timestamp or duration ago such as 24h (default 24h)."),
+      groupBy: z.enum(["status", "loop", "day", "failure-family"]).optional().describe("Grouping field (default status)."),
+      status: z.enum(RUN_STATUSES).optional().describe("Filter by run status."),
+      limit: limitSchema,
+      drillDownLimit: z.number().int().min(1).max(100).optional().describe("Maximum run ids included per group (default 25)."),
+    },
+    handler: ({ since, groupBy, status, limit, drillDownLimit }) =>
+      withStore(async (store) => {
+        const resolvedSince = sinceIso(since);
+        const sinceMs = new Date(resolvedSince).getTime();
+        const resolvedLimit = limit ?? MAX_LIMIT;
+        const candidates = await store.listRuns({
+          status: status as RunStatus | undefined,
+          limit: resolvedLimit + 1,
+        });
+        const withinWindow = candidates.filter((run) => runTimestamp(run) >= sinceMs);
+        return {
+          audit: auditRuns(withinWindow.slice(0, resolvedLimit), {
+            since: resolvedSince,
+            groupBy: auditGroupBy(groupBy),
+            status: status as RunStatus | undefined,
+            drillDownLimit,
+            scanLimit: resolvedLimit,
+            hasMore: withinWindow.length > resolvedLimit,
+          }),
+        };
+      }),
+  },
+  {
+    name: "loops_lint",
+    aliases: ["openloops_lint"],
+    description: "Detect inline-base64, long-command, generic wrapper-shell, and unbounded-output loop hazards.",
+    readOnly: true,
+    annotations: READ_ONLY_ANNOTATIONS,
+    inputSchema: {
+      status: z.enum(LOOP_STATUSES).optional().describe("Filter by loop status."),
+      scanLimit: limitSchema.describe(`Maximum loops to inspect (1-${MAX_LIMIT}, default ${MAX_LIMIT}).`),
+      limit: limitSchema.describe(`Maximum issues to return (1-${MAX_LIMIT}, default 200).`),
+      longCommandChars: z.number().int().min(1).max(100_000).optional().describe("Long command threshold (default 500)."),
+    },
+    handler: ({ status, scanLimit, limit, longCommandChars }) =>
+      withStore(async (store) => {
+        const resolvedScanLimit = scanLimit ?? MAX_LIMIT;
+        const issueLimit = limit ?? 200;
+        const candidates = await store.listLoops({
+          status: status as LoopStatus | undefined,
+          limit: resolvedScanLimit + 1,
+        });
+        const loops = candidates.slice(0, resolvedScanLimit);
+        const raw = lintLoops(loops, await insightsWorkflowMap(store), { longCommandChars });
+        const issues = raw.issues as LoopLintIssue[];
+        return {
+          ...raw,
+          scanLimit: resolvedScanLimit,
+          scannedLoops: loops.length,
+          loopsTruncated: candidates.length > resolvedScanLimit,
+          issuesTotal: issues.length,
+          issues: issues.slice(0, issueLimit),
+          issuesTruncated: issues.length > issueLimit,
+        };
       }),
   },
   {

@@ -1019,6 +1019,9 @@ agent-run failures for default-loop SLOs:
 ```bash
 loops health --json
 loops health scan --include active,paused --latest-run --doctor --daemon --json
+loops runs <loop-id-or-name> --summary --json
+loops audit --since 24h --group-by failure-family --json
+loops lint --json
 loops expectations <loop-id-or-name> --json
 ```
 
@@ -1057,6 +1060,13 @@ doctor, preflight, latest-run, and stale-running issues, writes bounded
 keeps output compact. It is read-only by default. The only safe self-heal is
 `--start-daemon`, which starts the daemon only when status proves it is not
 running; it does not stop, resume, archive, delete, or reap loops.
+
+`runs --summary` emits the bounded `openloops.run_summary.v1` contract with
+output artifact references and optional scrubbed previews. `audit` groups a
+bounded recent-run window by status, loop, day, or failure family. `lint`
+detects inline base64, long commands, generic wrapper shells, and commands that
+can emit unbounded output. MCP clients use the equivalent read-only
+`loops_run_summary`, `loops_audit`, and `loops_lint` tools.
 
 Use `--evidence-dir <dir>` when a deterministic loop needs a compact JSON
 heartbeat/report on disk. Use `--auto-route` only on task lists that should feed

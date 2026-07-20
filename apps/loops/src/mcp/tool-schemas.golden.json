@@ -523,6 +523,55 @@
     }
   },
   {
+    "name": "loops_audit",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "since": {
+          "type": "string",
+          "minLength": 1,
+          "description": "ISO timestamp or duration ago such as 24h (default 24h)."
+        },
+        "groupBy": {
+          "type": "string",
+          "enum": [
+            "status",
+            "loop",
+            "day",
+            "failure-family"
+          ],
+          "description": "Grouping field (default status)."
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "running",
+            "succeeded",
+            "failed",
+            "timed_out",
+            "abandoned",
+            "skipped"
+          ],
+          "description": "Filter by run status."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "description": "Maximum entries to return (1-500)."
+        },
+        "drillDownLimit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Maximum run ids included per group (default 25)."
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
     "name": "loops_create_command",
     "inputSchema": {
       "type": "object",
@@ -1007,6 +1056,42 @@
     }
   },
   {
+    "name": "loops_lint",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "paused",
+            "stopped",
+            "expired"
+          ],
+          "description": "Filter by loop status."
+        },
+        "scanLimit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "description": "Maximum loops to inspect (1-500, default 500)."
+        },
+        "limit": {
+          "$ref": "#/properties/scanLimit",
+          "description": "Maximum issues to return (1-500, default 200)."
+        },
+        "longCommandChars": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000,
+          "description": "Long command threshold (default 500)."
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
     "name": "loops_list",
     "inputSchema": {
       "type": "object",
@@ -1324,6 +1409,34 @@
     }
   },
   {
+    "name": "loops_run_summary",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Loop run id."
+        },
+        "showOutput": {
+          "type": "boolean",
+          "description": "Include raw stdout/stderr (default false: only redacted lengths are returned)."
+        },
+        "maxOutputChars": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8000,
+          "description": "Maximum preview characters per output stream (1-8000)."
+        }
+      },
+      "required": [
+        "runId"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
     "name": "loops_runs",
     "inputSchema": {
       "type": "object",
@@ -1536,6 +1649,119 @@
           "type": "integer",
           "minimum": 0,
           "description": "Entries to skip before returning results (pagination)."
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "openloops_audit",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "since": {
+          "type": "string",
+          "minLength": 1,
+          "description": "ISO timestamp or duration ago such as 24h (default 24h)."
+        },
+        "groupBy": {
+          "type": "string",
+          "enum": [
+            "status",
+            "loop",
+            "day",
+            "failure-family"
+          ],
+          "description": "Grouping field (default status)."
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "running",
+            "succeeded",
+            "failed",
+            "timed_out",
+            "abandoned",
+            "skipped"
+          ],
+          "description": "Filter by run status."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "description": "Maximum entries to return (1-500)."
+        },
+        "drillDownLimit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Maximum run ids included per group (default 25)."
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "openloops_get_run_summary",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Loop run id."
+        },
+        "showOutput": {
+          "type": "boolean",
+          "description": "Include raw stdout/stderr (default false: only redacted lengths are returned)."
+        },
+        "maxOutputChars": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8000,
+          "description": "Maximum preview characters per output stream (1-8000)."
+        }
+      },
+      "required": [
+        "runId"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "openloops_lint",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "paused",
+            "stopped",
+            "expired"
+          ],
+          "description": "Filter by loop status."
+        },
+        "scanLimit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "description": "Maximum loops to inspect (1-500, default 500)."
+        },
+        "limit": {
+          "$ref": "#/properties/scanLimit",
+          "description": "Maximum issues to return (1-500, default 200)."
+        },
+        "longCommandChars": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000,
+          "description": "Long command threshold (default 500)."
         }
       },
       "additionalProperties": false,

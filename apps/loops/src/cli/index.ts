@@ -16,6 +16,7 @@ import type {
   LoopTemplateSummary,
   LoopTarget,
   OverlapPolicy,
+  RunStatus,
   ScheduleSpec,
   WorkflowSpec,
   WriteRunReceiptInput,
@@ -48,6 +49,16 @@ import { enableStartup, installStartup } from "../daemon/install.js";
 import { normalizeGoalSpec } from "../lib/workflow-spec.js";
 import { runDoctor } from "../lib/doctor.js";
 import { buildHealthReport, buildHealthScan, expectationForLoop, writeHealthScanReports } from "../lib/health.js";
+import {
+  auditLine,
+  auditRuns,
+  lintIssueLine,
+  lintLoops,
+  runSummary,
+  runSummaryLine,
+  type AuditGroupBy,
+  type LoopLintIssue,
+} from "../lib/insights.js";
 import { runLoopsUiApp } from "./ui.js";
 import {
   applyImportMigrationBundle,
@@ -134,6 +145,7 @@ function print(value: unknown, human?: string): void {
 }
 
 const LOOP_STATUS_VALUES: LoopStatus[] = ["active", "paused", "stopped", "expired"];
+const RUN_STATUS_VALUES: RunStatus[] = ["running", "succeeded", "failed", "timed_out", "abandoned", "skipped"];
 
 function parseLoopStatuses(value: string | undefined, label = "--include"): LoopStatus[] {
   const raw = splitList(value) ?? ["active", "paused"];
@@ -149,6 +161,43 @@ function compactHealthScanOutput(scan: unknown): unknown {
   if (!healthValue || typeof healthValue !== "object") return scan;
   const { expectations: _expectations, ...health } = healthValue as Record<string, unknown>;
   return { ...(scan as Record<string, unknown>), health };
+}
+
+function parseRunStatus(value: string | undefined): RunStatus | undefined {
+  if (value === undefined) return undefined;
+  if (!RUN_STATUS_VALUES.includes(value as RunStatus)) {
+    throw new ValidationError(`--status must be one of: ${RUN_STATUS_VALUES.join(", ")}`);
+  }
+  return value as RunStatus;
+}
+
+function parseAuditGroupBy(value: string | undefined): AuditGroupBy {
+  const groupBy = value ?? "status";
+  if (!["status", "loop", "day", "failure-family"].includes(groupBy)) {
+    throw new ValidationError("--group-by must be status, loop, day, or failure-family");
+  }
+  return groupBy as AuditGroupBy;
+}
+
+function parseSince(value: string | undefined): string {
+  const raw = value ?? "24h";
+  try {
+    return new Date(Date.now() - parseDuration(raw)).toISOString();
+  } catch {
+    const date = new Date(raw);
+    if (Number.isNaN(date.getTime())) {
+      throw new ValidationError("--since must be an ISO timestamp or duration such as 24h");
+    }
+    return date.toISOString();
+  }
+}
+
+function runTimestamp(run: { finishedAt?: string; startedAt?: string; createdAt: string }): number {
+  return new Date(run.finishedAt ?? run.startedAt ?? run.createdAt).getTime();
+}
+
+async function workflowMap(store: LoopStore): Promise<Map<string, WorkflowSpec>> {
+  return new Map((await store.listWorkflows({ limit: 500 })).map((workflow) => [workflow.id, workflow]));
 }
 
 /**
@@ -1817,12 +1866,32 @@ program
   .command("runs [idOrName]")
   .description("list recent runs, optionally for one loop")
   .option("--limit <n>", "limit", "50")
+  .option("--status <status>", "filter by run status")
+  .option("--summary", "return compact openloops.run_summary.v1 records")
   .option("--show-output", "show stdout/stderr")
+  .option("--max-output-chars <n>", "maximum output preview characters per stream", "500")
   .action(runAction((idOrName, opts) => withStore(async (store) => {
     const limit = positiveInteger(opts.limit, "--limit") ?? 50;
     const loop = idOrName ? await store.requireLoop(idOrName) : undefined;
-    const runs = await store.listRuns({ loopId: loop?.id, limit });
-    if (isJson()) print(runs.map((run) => publicRun(run, opts.showOutput)));
+    const runs = await store.listRuns({ loopId: loop?.id, status: parseRunStatus(opts.status), limit });
+    if (opts.summary) {
+      const workflows = await workflowMap(store);
+      const loopCache = new Map<string, Loop>();
+      if (loop) loopCache.set(loop.id, loop);
+      const summaries = [];
+      for (const run of runs) {
+        const summaryLoop = loopCache.get(run.loopId) ?? await store.getLoop(run.loopId);
+        if (summaryLoop) loopCache.set(summaryLoop.id, summaryLoop);
+        summaries.push(runSummary(run, {
+          loop: summaryLoop,
+          workflow: summaryLoop?.target.type === "workflow" ? workflows.get(summaryLoop.target.workflowId) : undefined,
+          showOutput: Boolean(opts.showOutput),
+          maxOutputChars: positiveInteger(opts.maxOutputChars, "--max-output-chars") ?? 500,
+        }));
+      }
+      if (isJson()) print(summaries);
+      else for (const summary of summaries) console.log(runSummaryLine(summary));
+    } else if (isJson()) print(runs.map((run) => publicRun(run, opts.showOutput)));
     else {
       for (const run of runs) {
         console.log(
@@ -1830,6 +1899,76 @@ program
         );
         if (opts.showOutput) printTextOutput(run);
       }
+    }
+  })));
+
+program
+  .command("audit")
+  .description("summarize recent runs with bounded grouped drill-down ids")
+  .option("--since <timeOrDuration>", "ISO timestamp or duration ago", "24h")
+  .option("--group-by <field>", "status, loop, day, or failure-family", "status")
+  .option("--status <status>", "filter by run status")
+  .option("--limit <n>", "maximum runs to scan", "500")
+  .option("--drill-down-limit <n>", "maximum run ids per group", "25")
+  .action(runAction((opts) => withStore(async (store) => {
+    const since = parseSince(opts.since);
+    const sinceMs = new Date(since).getTime();
+    const limit = Math.min(500, positiveInteger(opts.limit, "--limit") ?? 500);
+    const status = parseRunStatus(opts.status);
+    const candidates = await store.listRuns({ status, limit: limit + 1 });
+    const withinWindow = candidates.filter((run) => runTimestamp(run) >= sinceMs);
+    const runs = withinWindow.slice(0, limit);
+    const value = auditRuns(runs, {
+      since,
+      status,
+      groupBy: parseAuditGroupBy(opts.groupBy),
+      drillDownLimit: positiveInteger(opts.drillDownLimit, "--drill-down-limit") ?? 25,
+      scanLimit: limit,
+      hasMore: withinWindow.length > limit,
+    });
+    if (isJson()) print(value);
+    else {
+      console.log(auditLine(value));
+      for (const group of value.groups as Array<{ key: string; count: number; runIds: string[]; truncated: boolean }>) {
+        console.log(`${group.key} count=${group.count} runIds=${group.runIds.join(",")}${group.truncated ? " truncated=yes" : ""}`);
+      }
+    }
+  })));
+
+program
+  .command("lint")
+  .description("detect inline base64, long commands, wrapper shells, and unbounded-output hazards")
+  .option("--status <status>", "filter by loop status")
+  .option("--scan-limit <n>", "maximum loops to inspect", "500")
+  .option("--limit <n>", "maximum issues to return", "200")
+  .option("--long-command-chars <n>", "long command threshold", "500")
+  .action(runAction((opts) => withStore(async (store) => {
+    const status = opts.status === undefined
+      ? undefined
+      : LOOP_STATUS_VALUES.includes(opts.status as LoopStatus)
+        ? opts.status as LoopStatus
+        : (() => { throw new ValidationError(`--status must be one of: ${LOOP_STATUS_VALUES.join(", ")}`); })();
+    const scanLimit = Math.min(500, positiveInteger(opts.scanLimit, "--scan-limit") ?? 500);
+    const issueLimit = Math.min(500, positiveInteger(opts.limit, "--limit") ?? 200);
+    const candidates = await store.listLoops({ status, limit: scanLimit + 1 });
+    const raw = lintLoops(candidates.slice(0, scanLimit), await workflowMap(store), {
+      longCommandChars: positiveInteger(opts.longCommandChars, "--long-command-chars") ?? 500,
+    });
+    const issues = raw.issues as LoopLintIssue[];
+    const value = {
+      ...raw,
+      ok: issues.length === 0,
+      scanLimit,
+      scannedLoops: Math.min(candidates.length, scanLimit),
+      loopsTruncated: candidates.length > scanLimit,
+      issuesTotal: issues.length,
+      issues: issues.slice(0, issueLimit),
+      issuesTruncated: issues.length > issueLimit,
+    };
+    if (isJson()) print(value);
+    else {
+      console.log(`lint ok=${value.ok} loops=${value.scannedLoops} issues=${value.issuesTotal}`);
+      for (const issue of value.issues) console.log(lintIssueLine(issue));
     }
   })));
 
