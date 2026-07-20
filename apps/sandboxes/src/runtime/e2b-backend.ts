@@ -96,11 +96,13 @@ interface E2bApiClient {
 }
 type E2bApiClientCtor = new (config: unknown, opts?: { requireApiKey?: boolean }) => E2bApiClient
 type E2bConnectionConfigCtor = new (opts: { apiKey?: string }) => unknown
+type E2bCommandExitErrorCtor = new (...args: never[]) => Error
 
 interface E2bModule {
   Sandbox: E2bStatic
   ApiClient?: E2bApiClientCtor
   ConnectionConfig?: E2bConnectionConfigCtor
+  CommandExitError?: E2bCommandExitErrorCtor
 }
 
 export interface E2bBackendConfig {
@@ -122,6 +124,30 @@ async function loadSandbox(): Promise<E2bStatic> {
 /** Map E2B's LogLevel ("debug"|"info"|"warn"|"error") onto our neutral levels. */
 function normalizeLogLevel(level: string | undefined): LogEntry["level"] {
   return level === "warn" || level === "error" ? level : "info"
+}
+
+/**
+ * E2B's `commands.run()` REJECTS with a `CommandExitError` on any non-zero exit
+ * code: it awaits `CommandHandle.wait()`, which throws for every exit code other
+ * than 0. That error *implements* `CommandResult` (it carries the real
+ * `exitCode`/`stdout`/`stderr`), so for our provider-neutral seam a non-zero exit
+ * is a normal, reportable result — not a transport failure. Recognise it (by
+ * class when the SDK exports it, otherwise by its stable `name` + shape) so
+ * `exec` can return the true exit code and captured output instead of leaking the
+ * SDK's raw "exit status N" message and masking the code to 1.
+ */
+function asCommandExitResult(error: unknown, mod: E2bModule): E2bCommandResult | undefined {
+  const looksLikeExit =
+    (typeof mod.CommandExitError === "function" && error instanceof mod.CommandExitError) ||
+    (typeof error === "object" && error !== null && (error as { name?: unknown }).name === "CommandExitError")
+  if (!looksLikeExit) return undefined
+  const candidate = error as { exitCode?: unknown; stdout?: unknown; stderr?: unknown }
+  if (typeof candidate.exitCode !== "number") return undefined
+  return {
+    exitCode: candidate.exitCode,
+    stdout: typeof candidate.stdout === "string" ? candidate.stdout : "",
+    stderr: typeof candidate.stderr === "string" ? candidate.stderr : "",
+  }
 }
 
 export function createE2bBackend(config: E2bBackendConfig): SandboxBackend {
@@ -191,20 +217,29 @@ export function createE2bBackend(config: E2bBackendConfig): SandboxBackend {
       return this.get(id)
     },
     async exec(id: string, argv: string[], options: ExecOptions = {}): Promise<ExecResult> {
-      const Sandbox = await loadSandbox()
-      const sandbox = await Sandbox.connect(id, opts)
-      const result = await sandbox.commands.run(shellJoin(argv), {
+      const mod = await loadE2b()
+      const sandbox = await mod.Sandbox.connect(id, opts)
+      const runOpts = {
         ...opts,
         ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
         ...(options.env === undefined ? {} : { envs: options.env }),
         ...(options.timeout_ms === undefined ? {} : { timeoutMs: options.timeout_ms }),
-      })
-      return {
+      }
+      const toResult = (result: E2bCommandResult): ExecResult => ({
         session_id: `${id}:cmd`,
         exit_code: result.exitCode,
         stdout: result.stdout,
         stderr: result.stderr,
         finished: true,
+      })
+      try {
+        return toResult(await sandbox.commands.run(shellJoin(argv), runOpts))
+      } catch (error) {
+        // A non-zero exit is a real result, not a failure: recover the exit code
+        // and captured output from the SDK's CommandExitError instead of throwing.
+        const exit = asCommandExitResult(error, mod)
+        if (exit !== undefined) return toResult(exit)
+        throw error
       }
     },
     /**

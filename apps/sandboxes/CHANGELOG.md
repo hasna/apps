@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.0.2
+
+### Fixed
+
+- **`exec` now propagates non-zero exit codes instead of throwing.** The live E2B
+  backend called `sandbox.commands.run()`, which the E2B SDK *rejects* with a
+  `CommandExitError` on any non-zero exit (it awaits `CommandHandle.wait()`).
+  The backend let that error escape, so `sandboxes -p e2b exec <id> <cmd>`
+  surfaced the SDK's raw `error: exit status N`, discarded the command's
+  stdout/stderr, and masked the real exit code to `1`. `exec` now recovers the
+  true exit code and captured output from `CommandExitError` and returns a normal
+  `ExecResult`; a failing command reports its actual non-zero code. Added hermetic
+  regression coverage (faked SDK that throws exactly like the real one).
+
+## 1.0.1
+
+### Fixed
+
+- Real E2B `getLogs` via the documented `GET /v2/sandboxes/{sandboxID}/logs`
+  endpoint, and a typed unsupported result for `listExposedPorts` (E2B has no
+  port-enumeration API) instead of a misleading empty list.
+
 ## 1.0.0
 
 **From-scratch rebuild: new E2B/Daytona managed adapters + rebuilt CLI & MCP;
