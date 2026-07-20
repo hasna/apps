@@ -59,7 +59,7 @@ const workflowIdOrNameSchema = z.string().min(1).describe("Workflow id or exact 
 const showOutputSchema = z
   .boolean()
   .optional()
-  .describe("Include raw stdout/stderr (default false: only redacted lengths are returned).");
+  .describe("Include scrubbed stdout/stderr (default false: only redacted lengths are returned).");
 const limitSchema = z.number().int().min(1).max(MAX_LIMIT).optional().describe(`Maximum entries to return (1-${MAX_LIMIT}).`);
 const runReceiptSummarySchema = z.object({
   text: z.string().optional().describe("Short human summary. It is scrubbed and bounded before storage."),

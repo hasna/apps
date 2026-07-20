@@ -22,6 +22,10 @@ import {
 import { assertTenantEnforcementBootstrap, assertTenantEnforcementBootstrapIfPending, isSafeServiceConnection } from "../../serve/index.js";
 import type { CreateLoopInput, Loop, LoopRun, WorkflowSpec } from "../../types.js";
 
+const j = (...parts: string[]): string => parts.join("");
+const GH_PAT = j("ghp", "_AbCdEf0123456789AbCdEf0123456789");
+const QUOTED_SECRET = j("x9Kd2mQz", "7Lp4Rv8t");
+
 const DATABASE_URL = process.env.LOOPS_TEST_DATABASE_URL;
 const RUN_LIVE = typeof DATABASE_URL === "string" && DATABASE_URL.length > 0;
 const suite = RUN_LIVE ? describe : describe.skip;
@@ -1431,6 +1435,46 @@ suite("PostgresLoopStorage (live)", () => {
       workflow,
       idempotencyKey: "same-definition",
     })).rejects.toBeInstanceOf(LegacyWorkflowRunProvenanceError);
+  });
+
+  test("scrubs Postgres workflow reasons and deep goal evidence with SQLite parity", async () => {
+    const reason = `operation failed with ${GH_PAT}`;
+    const workflow = await storage.createWorkflow({
+      name: "pg-scrub-workflow-reasons",
+      steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+    });
+
+    const recoveredRun = await storage.createWorkflowRun({ workflow });
+    await storage.startWorkflowStepRun(recoveredRun.id, "worker");
+    const recovered = await storage.recoverWorkflowRun(recoveredRun.id, reason);
+    expect(recovered.recoveredSteps[0]?.error).toBe("operation failed with [SCRUBBED]");
+    expect(JSON.stringify(await storage.listWorkflowEvents(recoveredRun.id))).not.toContain("ghp_");
+
+    const skippedRun = await storage.createWorkflowRun({ workflow });
+    const skipped = await storage.skipWorkflowStepRun(skippedRun.id, "worker", reason);
+    expect(skipped.error).toBe("operation failed with [SCRUBBED]");
+    expect(JSON.stringify(await storage.listWorkflowEvents(skippedRun.id))).not.toContain("ghp_");
+
+    const finalizedRun = await storage.createWorkflowRun({ workflow });
+    const finalized = await storage.finalizeWorkflowRun(finalizedRun.id, "failed", { error: reason });
+    expect(finalized.error).toBe("operation failed with [SCRUBBED]");
+    expect(JSON.stringify(await storage.listWorkflowEvents(finalizedRun.id))).not.toContain("ghp_");
+
+    const loop = await storage.createLoop(loopInput("pg-scrub-skipped-reason"));
+    const skippedLoopRun = await storage.createSkippedRun(loop, "2026-07-06T14:15:00.000Z", reason);
+    expect(skippedLoopRun.error).toBe("operation failed with [SCRUBBED]");
+
+    const goal = await storage.createGoal({ objective: "scrub deep Postgres evidence" });
+    await storage.recordGoalEvent({
+      goalId: goal.goalId,
+      phase: "execute",
+      status: "active",
+      evidence: { note: `saw export DB_PASSWORD="${QUOTED_SECRET}" in output` },
+      rawResponse: { result: `export DB_PASSWORD="${QUOTED_SECRET}"` },
+    });
+    const goalRun = (await storage.listGoalRuns({ goalId: goal.goalId }))[0]!;
+    expect((goalRun.evidence as { note: string }).note).toBe('saw export DB_PASSWORD="[SCRUBBED]" in output');
+    expect(JSON.stringify(goalRun.rawResponse)).not.toContain(QUOTED_SECRET);
   });
 
   test("expired workflow leases append failed workflow events on Postgres", async () => {

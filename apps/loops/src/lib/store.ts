@@ -901,6 +901,11 @@ export function persistedRunOutput(value: string | undefined | null): string | n
   return clampPersistedRunOutput(scrubbedOrNull(value));
 }
 
+/** Scrub structured string leaves before stringify, then scrub the encoded JSON. */
+export function persistedJson(value: unknown): string {
+  return scrubSecrets(JSON.stringify(scrubSecretsDeep(value)));
+}
+
 function clampTextToChars(value: string, maxChars: number, reason: string): string {
   if (value.length <= maxChars) return value;
   const marker = `\n...[truncated by ${reason}]...\n`;
@@ -932,8 +937,7 @@ function boundedWorkflowEventPayloadJson(scrubbedJson: string): string {
 
 export function persistedWorkflowEventPayload(payload: Record<string, unknown> | undefined | null): string | null {
   if (payload == null) return null;
-  const scrubbed = scrubSecretsDeep(payload);
-  return boundedWorkflowEventPayloadJson(scrubSecrets(JSON.stringify(scrubbed)));
+  return boundedWorkflowEventPayloadJson(persistedJson(payload));
 }
 
 function chmodIfExists(path: string, mode: number): void {
@@ -3146,9 +3150,8 @@ export class Store {
           // Scrub string leaves BEFORE stringify (which escapes quotes and
           // would hide quoted secrets), then scrub the encoded document too
           // for token shapes that survive escaping. Both passes are idempotent.
-          $evidence: input.evidence ? scrubSecrets(JSON.stringify(scrubSecretsDeep(input.evidence))) : null,
-          $rawResponse:
-            input.rawResponse === undefined ? null : scrubSecrets(JSON.stringify(scrubSecretsDeep(input.rawResponse))),
+          $evidence: input.evidence ? persistedJson(input.evidence) : null,
+          $rawResponse: input.rawResponse === undefined ? null : persistedJson(input.rawResponse),
           $created: now,
           $updated: now,
         });
@@ -3564,6 +3567,7 @@ export class Store {
     run: WorkflowRun;
     recoveredSteps: WorkflowStepRun[];
   } {
+    const scrubbedReason = scrubbedOrNull(reason) ?? "";
     return this.transact(() => {
       const now = nowIso();
       const before = this.listWorkflowStepRuns(workflowRunId).filter((step) => step.status === "running");
@@ -3582,10 +3586,10 @@ export class Store {
             stdout=NULL, stderr=NULL, error=$reason, updated_at=$updated
            WHERE workflow_run_id=$workflowRunId AND status='running'`,
         )
-        .run({ $workflowRunId: workflowRunId, $reason: reason, $updated: now });
+        .run({ $workflowRunId: workflowRunId, $reason: scrubbedReason, $updated: now });
       if (before.length > 0) {
         this.appendWorkflowEvent(workflowRunId, "recovered", undefined, {
-          reason,
+          reason: scrubbedReason,
           recoveredSteps: before.map((step) => step.stepId),
         });
       }
@@ -3604,7 +3608,7 @@ export class Store {
     opts: DaemonLeaseFence = {},
   ): WorkflowStepRun {
     const finishedAt = patch.finishedAt ?? nowIso();
-    const error = patch.error === undefined ? undefined : scrubSecrets(patch.error);
+    const error = patch.error === undefined ? undefined : scrubbedOrNull(patch.error) ?? undefined;
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const res = this.db
@@ -3652,6 +3656,7 @@ export class Store {
 
   skipWorkflowStepRun(workflowRunId: string, stepId: string, reason: string, opts: DaemonLeaseFence = {}): WorkflowStepRun {
     const now = (opts.now ?? new Date()).toISOString();
+    const scrubbedReason = scrubbedOrNull(reason) ?? "";
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const res = this.db
@@ -3666,12 +3671,14 @@ export class Store {
           $workflowRunId: workflowRunId,
           $stepId: stepId,
           $finished: now,
-          $error: reason,
+          $error: scrubbedReason,
           $updated: now,
           $daemonLeaseId: opts.daemonLeaseId ?? null,
           $now: now,
         });
-      if (res.changes === 1) this.appendWorkflowEvent(workflowRunId, "step_skipped", stepId, { reason });
+      if (res.changes === 1) {
+        this.appendWorkflowEvent(workflowRunId, "step_skipped", stepId, { reason: scrubbedReason });
+      }
       this.db.exec("COMMIT");
     } catch (error) {
       try {
@@ -3693,7 +3700,7 @@ export class Store {
     opts: DaemonLeaseFence = {},
   ): WorkflowRun {
     const finishedAt = patch.finishedAt ?? nowIso();
-    const error = patch.error === undefined ? undefined : scrubSecrets(patch.error);
+    const error = patch.error === undefined ? undefined : scrubbedOrNull(patch.error) ?? undefined;
     let changed = false;
     this.db.exec("BEGIN IMMEDIATE");
     try {
@@ -3745,6 +3752,7 @@ export class Store {
 
   cancelWorkflowRun(workflowRunId: string, reason = "cancelled by user"): WorkflowRun {
     const now = nowIso();
+    const scrubbedReason = scrubbedOrNull(reason) ?? "";
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const run = this.requireWorkflowRun(workflowRunId);
@@ -3755,16 +3763,16 @@ export class Store {
              SET status='cancelled', finished_at=$finished, error=$reason, updated_at=$updated
              WHERE id=$id AND status NOT IN ('succeeded', 'failed', 'timed_out', 'cancelled')`,
           )
-          .run({ $id: workflowRunId, $finished: now, $reason: reason, $updated: now });
+          .run({ $id: workflowRunId, $finished: now, $reason: scrubbedReason, $updated: now });
         this.db
           .query(
             `UPDATE workflow_step_runs
              SET status='cancelled', finished_at=$finished, pid=NULL, error=$reason, updated_at=$updated
              WHERE workflow_run_id=$workflowRunId AND status IN ('pending', 'running')`,
           )
-          .run({ $workflowRunId: workflowRunId, $finished: now, $reason: reason, $updated: now });
-        this.setWorkflowWorkItemsForWorkflowRun(workflowRunId, "cancelled", reason, now);
-        this.appendWorkflowEvent(workflowRunId, "cancelled", undefined, { reason });
+          .run({ $workflowRunId: workflowRunId, $finished: now, $reason: scrubbedReason, $updated: now });
+        this.setWorkflowWorkItemsForWorkflowRun(workflowRunId, "cancelled", scrubbedReason, now);
+        this.appendWorkflowEvent(workflowRunId, "cancelled", undefined, { reason: scrubbedReason });
         this.maybeArchiveTerminalGeneratedRouteWorkflow(workflowRunId, now);
       }
       this.db.exec("COMMIT");
@@ -3954,6 +3962,7 @@ export class Store {
 
   createSkippedRun(loop: Loop, scheduledFor: string, reason: string, opts: DaemonLeaseFence = {}): LoopRun {
     const now = nowIso();
+    const scrubbedReason = scrubbedOrNull(reason) ?? "";
     const run: LoopRun = {
       id: genId(),
       loopId: loop.id,
@@ -3962,7 +3971,7 @@ export class Store {
       attempt: 1,
       status: "skipped",
       finishedAt: now,
-      error: reason,
+      error: scrubbedReason,
       createdAt: now,
       updatedAt: now,
     };

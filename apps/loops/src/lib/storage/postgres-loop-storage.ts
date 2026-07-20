@@ -34,6 +34,7 @@ import {
   GATE_DEATH_CEILING,
   classifyNonProductiveStepFailure,
   isLiveStepProcess,
+  persistedJson,
   persistedRunOutput,
   persistedWorkflowEventPayload,
   rowToGoal,
@@ -773,6 +774,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const [loop, scheduledFor, reason, opts = {}] = args;
     const now = nowIso();
     const id = genId();
+    const scrubbedReason = scrubbedOrNull(reason) ?? "";
     return this.client.transaction(async (c) => {
       await this.assertDaemonLeaseFence(c, opts, now);
       await c.execute(
@@ -780,7 +782,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
           claimed_by, lease_expires_at, pid, exit_code, duration_ms, stdout, stderr, error, created_at, updated_at, tenant_id)
          VALUES ($1,$2,$3,$4,1,'skipped',NULL,$5,NULL,NULL,NULL,NULL,NULL,NULL,NULL,$6,$7,$7,open_loops_current_tenant_id())
          ON CONFLICT (tenant_id, loop_id, scheduled_for) DO NOTHING`,
-        [id, loop.id, loop.name, scheduledFor, now, reason, now],
+        [id, loop.id, loop.name, scheduledFor, now, scrubbedReason, now],
       );
       const run = await this.loadRunBySlot(c, loop.id, scheduledFor);
       if (run) return run;
@@ -793,7 +795,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
         attempt: 1,
         status: "skipped",
         finishedAt: now,
-        error: reason,
+        error: scrubbedReason,
         createdAt: now,
         updatedAt: now,
       } as LoopRun;
@@ -1989,8 +1991,8 @@ export class PostgresLoopStorage implements LoopStorageContract {
           input.status,
           input.nodeKey ?? null,
           input.tokensUsed ?? 0,
-          input.evidence ? scrubbedOrNull(JSON.stringify(input.evidence)) : null,
-          input.rawResponse === undefined ? null : scrubbedOrNull(JSON.stringify(input.rawResponse)),
+          input.evidence ? persistedJson(input.evidence) : null,
+          input.rawResponse === undefined ? null : persistedJson(input.rawResponse),
           now,
           now,
         ],
@@ -2236,6 +2238,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
 
   async recoverWorkflowRun(...args: M<"recoverWorkflowRun">["args"]): Promise<M<"recoverWorkflowRun">["result"]> {
     const [workflowRunId, reason = "workflow run recovered for retry"] = args;
+    const scrubbedReason = scrubbedOrNull(reason) ?? "";
     return this.client.transaction(async (c) => {
       const now = nowIso();
       const rows = await c.many<WorkflowStepRunRow>(
@@ -2256,11 +2259,11 @@ export class PostgresLoopStorage implements LoopStorageContract {
          SET status='pending', started_at=NULL, finished_at=NULL, exit_code=NULL, pid=NULL, duration_ms=NULL,
           stdout=NULL, stderr=NULL, error=$2, updated_at=$3
          WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id=$1 AND status='running'`,
-        [workflowRunId, reason, now],
+        [workflowRunId, scrubbedReason, now],
       );
       if (before.length > 0) {
         await this.appendWorkflowEventWithClient(c, workflowRunId, "recovered", undefined, {
-          reason,
+          reason: scrubbedReason,
           recoveredSteps: before.map((step) => step.stepId),
         });
       }
@@ -2326,6 +2329,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
   async skipWorkflowStepRun(...args: M<"skipWorkflowStepRun">["args"]): Promise<M<"skipWorkflowStepRun">["result"]> {
     const [workflowRunId, stepId, reason, opts = {}] = args;
     const now = (opts.now ?? new Date()).toISOString();
+    const scrubbedReason = scrubbedOrNull(reason) ?? "";
     return this.client.transaction(async (c) => {
       const res = await c.query(
         `UPDATE workflow_step_runs SET status='skipped', finished_at=$3, pid=NULL, error=$4, updated_at=$5
@@ -2333,9 +2337,13 @@ export class PostgresLoopStorage implements LoopStorageContract {
            AND ($6::text IS NULL OR EXISTS (
              SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$6 AND expires_at > $7
            ))`,
-        [workflowRunId, stepId, now, reason, now, opts.daemonLeaseId ?? null, now],
+        [workflowRunId, stepId, now, scrubbedReason, now, opts.daemonLeaseId ?? null, now],
       );
-      if (res.rowCount === 1) await this.appendWorkflowEventWithClient(c, workflowRunId, "step_skipped", stepId, { reason });
+      if (res.rowCount === 1) {
+        await this.appendWorkflowEventWithClient(c, workflowRunId, "step_skipped", stepId, {
+          reason: scrubbedReason,
+        });
+      }
       const row = await c.get<WorkflowStepRunRow>(
         "SELECT * FROM workflow_step_runs WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id=$1 AND step_id=$2",
         [workflowRunId, stepId],
@@ -2415,20 +2423,21 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const finishedAt = patch.finishedAt ?? nowIso();
     return this.client.transaction(async (c) => {
       const now = (opts.now ?? new Date(finishedAt)).toISOString();
+      const error = patch.error === undefined ? undefined : scrubbedOrNull(patch.error) ?? undefined;
       const res = await c.query(
         `UPDATE workflow_runs SET status=$2, finished_at=$3, duration_ms=$4, error=$5, updated_at=$6
          WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 AND status NOT IN ('succeeded', 'failed', 'timed_out', 'cancelled')
            AND ($7::text IS NULL OR EXISTS (
              SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$7 AND expires_at > $8
            ))`,
-        [workflowRunId, status, finishedAt, patch.durationMs ?? null, patch.error ?? null, finishedAt, opts.daemonLeaseId ?? null, now],
+        [workflowRunId, status, finishedAt, patch.durationMs ?? null, error ?? null, finishedAt, opts.daemonLeaseId ?? null, now],
       );
       const changed = res.rowCount === 1;
       if (changed) {
-        await this.appendWorkflowEventWithClient(c, workflowRunId, status, undefined, { error: patch.error });
+        await this.appendWorkflowEventWithClient(c, workflowRunId, status, undefined, { error });
         const itemStatus: WorkflowWorkItemStatus =
           status === "succeeded" ? "succeeded" : status === "cancelled" ? "cancelled" : "failed";
-        await this.setWorkflowWorkItemsForWorkflowRun(c, workflowRunId, itemStatus, patch.error, finishedAt);
+        await this.setWorkflowWorkItemsForWorkflowRun(c, workflowRunId, itemStatus, error, finishedAt);
         if (itemStatus === "failed") await this.demoteNonProductiveWorkItems(c, workflowRunId, finishedAt);
       }
       const run = await c.get<WorkflowRunRow>(
