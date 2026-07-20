@@ -27,6 +27,14 @@ function collectKeyValue(value: string, previous: Record<string, string>): Recor
   return { ...previous, [value.slice(0, eq)]: value.slice(eq + 1) }
 }
 
+function nonNegativeInt(raw: string, label: string): number {
+  const n = Number(raw)
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) {
+    throw new Error(`${label} must be a non-negative integer (got '${raw}')`)
+  }
+  return n
+}
+
 export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number> {
   const out = deps.stdout ?? ((chunk: string): void => void process.stdout.write(chunk))
   const err = deps.stderr ?? ((chunk: string): void => void process.stderr.write(chunk))
@@ -93,7 +101,7 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number
       wrap(async (backend, options: { template?: string; timeout?: string; metadata: Record<string, string> }) => {
         const record = await backend.create({
           ...(options.template === undefined ? {} : { template: options.template }),
-          ...(options.timeout === undefined ? {} : { timeout_ms: Number(options.timeout) }),
+          ...(options.timeout === undefined ? {} : { timeout_ms: nonNegativeInt(options.timeout, "--timeout") }),
           metadata: options.metadata,
         })
         emit(`created ${record.id} (${record.provider}, ${record.status})`, record)
@@ -149,7 +157,7 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number
     .requiredOption("--timeout <ms>", "new lifetime in milliseconds")
     .action(
       wrap(async (backend, id: string, options: { timeout: string }) => {
-        const record = await backend.keepAlive(id, Number(options.timeout))
+        const record = await backend.keepAlive(id, nonNegativeInt(options.timeout, "--timeout"))
         emit(`extended ${id} -> ${record.expires_at ?? "unbounded"}`, record)
       }),
     )
@@ -165,7 +173,7 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number
         if (cmd.length === 0) throw new Error("exec requires a command")
         const result = await backend.exec(id, cmd, {
           ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-          ...(options.timeout === undefined ? {} : { timeout_ms: Number(options.timeout) }),
+          ...(options.timeout === undefined ? {} : { timeout_ms: nonNegativeInt(options.timeout, "--timeout") }),
         })
         if (json()) out(`${JSON.stringify(result, null, 2)}\n`)
         else {
@@ -234,7 +242,7 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number
     .description("forward a sandbox port and get a URL")
     .action(
       wrap(async (backend, id: string, port: string) => {
-        const exposed = await backend.exposePort(id, Number(port))
+        const exposed = await backend.exposePort(id, nonNegativeInt(port, "port"))
         emit(`${exposed.port} -> ${exposed.url}`, exposed)
       }),
     )

@@ -201,7 +201,7 @@ export const SANDBOX_TOOLS: ToolDef[] = [
   },
   {
     name: "upload_dir",
-    description: "Upload a local directory into a sandbox",
+    description: "Upload a local (host) directory into a sandbox. Reads files from the host filesystem path given in local_dir; only expose to trusted callers.",
     inputSchema: {
       type: "object",
       properties: {

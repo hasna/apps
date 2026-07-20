@@ -24,6 +24,7 @@ import type {
   Digest,
   ExecSpecV1,
   GuestBrokerAttestationV1,
+  GuestBrokerRequestFrameV1,
   GuestBrokerRequestV1,
   ManagedProviderRequestV1,
   ProviderOperationV1,
@@ -122,19 +123,34 @@ function operation(binding: BrokerBinding, request: GuestBrokerRequestV1): Provi
 }
 
 /**
- * Encode a typed guest-broker request into a wire-valid, authenticated frame and
- * decode it back — proving the request survives the exact framing contract the
- * managed adapters enforce. Returns the decoded, trusted request.
+ * Encode a typed guest-broker request into a wire-valid frame using the managed
+ * adapters' exact framing contract (canonical digests, nonce, protocol id, MAC
+ * tag). Returned frames are integrity-bound: any later mutation of the bytes,
+ * digests, or protocol id is rejected by {@link decodeGuestBrokerRequestFrame}.
+ */
+export function buildBrokerFrame(
+  binding: BrokerBinding,
+  request: GuestBrokerRequestV1,
+  authenticator: AdapterGuestBrokerAuthenticatorPortV1,
+): GuestBrokerRequestFrameV1 {
+  const attestation = localBrokerAttestation(binding)
+  const op = operation(binding, request)
+  return encodeGuestBrokerRequestFrame(request, op, attestation, authenticator)
+}
+
+/**
+ * Encode a typed guest-broker request into a wire-valid frame and decode it back
+ * — proving the request survives the exact integrity-checked framing contract the
+ * managed adapters enforce. (MAC authenticity is enforced by the transport/
+ * session bridges; decode here verifies structural + digest integrity.) Returns
+ * the decoded, trusted request.
  */
 export function roundTripBrokerRequest(
   binding: BrokerBinding,
   request: GuestBrokerRequestV1,
   authenticator: AdapterGuestBrokerAuthenticatorPortV1,
 ): GuestBrokerRequestV1 {
-  const attestation = localBrokerAttestation(binding)
-  const op = operation(binding, request)
-  const frame = encodeGuestBrokerRequestFrame(request, op, attestation, authenticator)
-  return decodeGuestBrokerRequestFrame(frame)
+  return decodeGuestBrokerRequestFrame(buildBrokerFrame(binding, request, authenticator))
 }
 
 const WORKSPACE_ROOT = "/workspace"

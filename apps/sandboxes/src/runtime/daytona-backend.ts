@@ -139,21 +139,25 @@ export function createDaytonaBackend(config: DaytonaBackendConfig): SandboxBacke
       const sandbox = await daytona.get(id)
       const b64 = Buffer.from(content).toString("base64")
       const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "."
-      await run(sandbox, ["sh", "-c", `mkdir -p ${JSON.stringify(dir)} && printf %s ${b64} | base64 -d > ${JSON.stringify(path)}`])
+      // Single-quote every interpolated value (paths + payload) so guest-supplied
+      // paths can never break out of the shell command (no $()/backtick/redirect).
+      const q = (value: string): string => shellJoin([value])
+      await run(sandbox, ["sh", "-c", `mkdir -p ${q(dir)} && printf %s ${q(b64)} | base64 -d > ${q(path)}`])
       const { createHash } = await import("node:crypto")
       return { path, size: content.byteLength, sha256: `sha256:${createHash("sha256").update(content).digest("hex")}` }
     },
     async readFile(id: string, path: string): Promise<Uint8Array> {
       const daytona = await client()
       const sandbox = await daytona.get(id)
-      const response = await run(sandbox, ["sh", "-c", `base64 -w0 ${JSON.stringify(path)} 2>/dev/null || base64 ${JSON.stringify(path)}`])
+      const q = shellJoin([path])
+      const response = await run(sandbox, ["sh", "-c", `base64 -w0 ${q} 2>/dev/null || base64 ${q}`])
       const b64 = (response.artifacts?.stdout ?? response.result ?? "").trim()
       return new Uint8Array(Buffer.from(b64, "base64"))
     },
     async listFiles(id: string, path: string): Promise<FileEntry[]> {
       const daytona = await client()
       const sandbox = await daytona.get(id)
-      const response = await run(sandbox, ["sh", "-c", `ls -1 ${JSON.stringify(path)}`])
+      const response = await run(sandbox, ["sh", "-c", `ls -1 ${shellJoin([path])}`])
       const out = (response.artifacts?.stdout ?? response.result ?? "").trim()
       if (out.length === 0) return []
       return out.split("\n").map((name) => ({ path: `${path.replace(/\/$/u, "")}/${name}`, type: "file", size: null }))
