@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { hostname } from "node:os";
 import type { Loop, LoopRun, WorkflowSpec } from "../types.js";
+import { validateAgentTarget } from "./agent-adapter.js";
 import { ValidationError } from "./errors.js";
 import { publicLoop, publicRun, publicWorkflow } from "./format.js";
 import { loopControlPlaneConfig } from "./mode.js";
@@ -233,7 +234,21 @@ export function validateLoopsMigrationBundle(value: unknown): LoopsMigrationBund
   if (!bundle.checks || !bundle.counts || !bundle.source || !bundle.hash) throw new ValidationError("migration bundle is missing required metadata");
   const typed = bundle as LoopsMigrationBundle;
   assertMigrationBundleIntegrity(typed);
+  validateMigrationAgentTargets(typed);
   return typed;
+}
+
+function validateMigrationAgentTargets(bundle: LoopsMigrationBundle): void {
+  for (const [workflowIndex, workflow] of bundle.data.workflows.entries()) {
+    for (const [stepIndex, step] of workflow.steps.entries()) {
+      if (step.target.type === "agent") {
+        validateAgentTarget(step.target, `migration workflows[${workflowIndex}].steps[${stepIndex}].target`);
+      }
+    }
+  }
+  for (const [loopIndex, loop] of bundle.data.loops.entries()) {
+    if (loop.target.type === "agent") validateAgentTarget(loop.target, `migration loops[${loopIndex}].target`);
+  }
 }
 
 function assertMigrationBundleIntegrity(bundle: LoopsMigrationBundle): void {
@@ -307,6 +322,7 @@ export function buildImportMigrationPlan(
   opts: ImportLoopsMigrationOptions = {},
 ): LoopsMigrationPlan {
   assertMigrationBundleIntegrity(bundle);
+  validateMigrationAgentTargets(bundle);
   const includeRuns = opts.includeRuns ?? true;
   const replace = opts.replace ?? false;
   const rows: LoopsMigrationPlanRow[] = [];

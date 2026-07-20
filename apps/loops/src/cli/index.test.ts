@@ -1205,8 +1205,25 @@ describe("loops CLI", () => {
     expect(shown.machine.id).toBe(value.machine.id);
   });
 
-  test("create agent stores advisory allowlist metadata", () => {
+  test("create agent requires and persists auditable advisory restriction metadata", () => {
     const dataDir = freshDataDir("loops-cli-agent-allowlist-");
+    const missingReason = runCli(dataDir, [
+      "--json",
+      "create",
+      "agent",
+      "missing-reason-agent",
+      "--provider",
+      "codewith",
+      "--at",
+      futureAt(),
+      "--prompt",
+      "inspect status",
+      "--allow-command",
+      "git",
+    ]);
+    expect(missingReason.status).toBe(1);
+    expect(JSON.parse(missingReason.stdout).validation.error).toContain("allowlist.safetyReason");
+
     const create = runCli(dataDir, [
       "--json",
       "create",
@@ -1222,6 +1239,8 @@ describe("loops CLI", () => {
       "functions.exec_command",
       "--allow-command",
       "git,bun",
+      "--safety-reason",
+      "isolated repository status inspection",
     ]);
 
     expect(create.status).toBe(0);
@@ -1230,7 +1249,27 @@ describe("loops CLI", () => {
       tools: ["functions.exec_command"],
       commands: ["git", "bun"],
       enforcement: "metadata_only",
+      safetyReason: "isolated repository status inspection",
     });
+
+    const relaxed = runCli(dataDir, [
+      "--json",
+      "create",
+      "agent",
+      "relaxed-agent",
+      "--provider",
+      "codewith",
+      "--at",
+      futureAt(),
+      "--prompt",
+      "inspect status",
+      "--sandbox",
+      "danger-full-access",
+      "--safety-reason",
+      "operator-approved isolated repository repair",
+    ]);
+    expect(relaxed.status).toBe(1);
+    expect(JSON.parse(relaxed.stdout).validation.error).toContain("manualBreakGlass=true");
   });
 
   test("create command, agent, and workflow accept explicit unlimited timeouts", () => {
@@ -1369,7 +1408,7 @@ describe("loops CLI", () => {
           idleTimeoutMs: 120_000,
           permissionMode: "default",
           sandbox: "workspace-write",
-          allowlist: { commands: ["todos"] },
+          allowlist: { commands: ["todos"], safetyReason: "direct timeout migration fixture" },
           preflight: { beforeRun: true },
         },
         overlap: "skip",
@@ -1416,7 +1455,7 @@ describe("loops CLI", () => {
       timeoutMs: null,
       permissionMode: "default",
       sandbox: "workspace-write",
-      allowlist: { commands: ["todos"] },
+      allowlist: { commands: ["todos"], safetyReason: "direct timeout migration fixture" },
       preflight: { beforeRun: true },
     });
     expect(shownValue.target.idleTimeoutMs).toBeUndefined();
@@ -2911,11 +2950,14 @@ describe("loops CLI", () => {
       "sandbox=danger-full-access",
       "--var",
       "manualBreakGlass=true",
+      "--var",
+      "safetyReason=operator-approved isolated template test",
     ]);
     expect(allowed.status).toBe(0);
     const workflow = JSON.parse(allowed.stdout);
     expect(workflow.steps[1].target.sandbox).toBe("danger-full-access");
     expect(workflow.steps[1].target.allowlist.commands).toContain("manual-break-glass");
+    expect(workflow.steps[1].target.allowlist.safetyReason).toBe("operator-approved isolated template test");
   });
 
   test("templates render lifecycle and deterministic producer workflows", () => {
@@ -4844,6 +4886,8 @@ describe("loops CLI", () => {
       "--sandbox",
       "danger-full-access",
       "--manual-break-glass",
+      "--safety-reason",
+      "operator-approved stale policy replacement test",
       "--permission-mode",
       "bypass",
     ];
@@ -4859,7 +4903,9 @@ describe("loops CLI", () => {
         ...step,
         target: {
           ...step.target,
-          allowlist: undefined,
+          allowlist: {
+            safetyReason: "legacy relaxed workflow fixture",
+          },
         },
       })),
     };
@@ -5866,6 +5912,8 @@ describe("loops CLI", () => {
               provider: "codewith",
               prompt: "unsafe old workflow",
               sandbox: "danger-full-access",
+              manualBreakGlass: true,
+              allowlist: { safetyReason: "legacy relaxed workflow fixture" },
             },
           },
         ],

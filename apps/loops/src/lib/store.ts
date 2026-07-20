@@ -22,8 +22,8 @@ import type {
   RunReceiptMachine,
   RunStatus,
   TimeoutMs,
+  StoredWorkflowEvent,
   WriteRunReceiptInput,
-  WorkflowEvent,
   WorkflowInvocation,
   WorkflowRun,
   WorkflowRunStatus,
@@ -34,7 +34,15 @@ import type {
   WorkflowWorkItemStatus,
   UpsertWorkflowWorkItemInput,
 } from "../types.js";
-import { AmbiguousNameError, LoopArchivedError, LoopNotFoundError, ValidationError } from "./errors.js";
+import {
+  AmbiguousNameError,
+  DuplicateWorkflowEventError,
+  LegacyWorkflowRunProvenanceError,
+  LoopArchivedError,
+  LoopNotFoundError,
+  ValidationError,
+  WorkflowRunDefinitionConflictError,
+} from "./errors.js";
 import { genId, nowIso } from "./ids.js";
 import { dbPath } from "./paths.js";
 import { processStartTimeMs, sameProcessStart, START_TIME_TOLERANCE_MS } from "./process-identity.js";
@@ -43,6 +51,11 @@ import { initialNextRun } from "./recurrence.js";
 import { assertGoalTransition, rollupSummary, updateReadyFlags } from "./goal/status.js";
 import { GOAL_TERMINAL } from "./goal/types.js";
 import { normalizeCreateWorkflowInput } from "./workflow-spec.js";
+import {
+  initialAgentSessionContractEvents,
+  type InitialAgentSessionContractEvent,
+  workflowDefinitionHash,
+} from "./workflow-provenance.js";
 import {
   commitWorkflowRunManifest,
   discardWorkflowRunManifest,
@@ -183,6 +196,7 @@ export interface WorkflowRunRow {
   work_item_id: string | null;
   scheduled_for: string | null;
   idempotency_key: string | null;
+  workflow_definition_hash: string | null;
   manifest_path: string | null;
   status: string;
   started_at: string | null;
@@ -594,7 +608,7 @@ export function rowToGoalRun(row: GoalRunRow): GoalRun {
   };
 }
 
-export function rowToWorkflowEvent(row: WorkflowEventRow): WorkflowEvent {
+export function rowToWorkflowEvent(row: WorkflowEventRow): StoredWorkflowEvent {
   return {
     id: row.id,
     workflowRunId: row.workflow_run_id,
@@ -675,6 +689,8 @@ export interface CreateWorkflowRunInput {
   invocationId?: string;
   workItemId?: string;
   daemonLeaseId?: string;
+  /** Internal deterministic fault-injection seam used to verify atomic initial event persistence. */
+  beforeInitialWorkflowEventPersist?: (event: InitialAgentSessionContractEvent) => void;
 }
 
 export interface CreateGoalInput {
@@ -1121,6 +1137,15 @@ export class Store {
           // column (defaults keep counting from 0 if they write rows) — no
           // SCHEMA_USER_VERSION bump, purely additive.
           this.addColumnIfMissing("workflow_work_items", "gate_deaths", "INTEGER NOT NULL DEFAULT 0");
+        },
+      },
+      {
+        id: "0012_workflow_run_provenance",
+        apply: () => {
+          // Immutable idempotency provenance. NULL marks pre-migration runs,
+          // which fail closed on retry because their creating definition is
+          // unknowable. Purely additive; older binaries safely ignore it.
+          this.addColumnIfMissing("workflow_runs", "workflow_definition_hash", "TEXT");
         },
       },
     ];
@@ -3169,6 +3194,8 @@ export class Store {
 
   createWorkflowRun(input: CreateWorkflowRunInput): WorkflowRun {
     const now = nowIso();
+    const definitionHash = workflowDefinitionHash(input.workflow);
+    const initialContractEvents = initialAgentSessionContractEvents(input.workflow);
     const targetInput = input.loop?.target.type === "workflow" ? input.loop.target.input : undefined;
     const invocationId = input.invocationId ?? targetInput?.workflowInvocationId ?? targetInput?.invocationId;
     const workItemId = input.workItemId ?? targetInput?.workflowWorkItemId ?? targetInput?.workItemId;
@@ -3180,6 +3207,8 @@ export class Store {
         .get(input.workflow.id, input.idempotencyKey);
       if (existing) {
         this.assertDaemonLeaseFence(input);
+        if (!existing.workflow_definition_hash) throw new LegacyWorkflowRunProvenanceError(existing.id);
+        if (existing.workflow_definition_hash !== definitionHash) throw new WorkflowRunDefinitionConflictError(existing.id);
         return rowToWorkflowRun(existing);
       }
     }
@@ -3226,6 +3255,8 @@ export class Store {
           )
           .get(input.workflow.id, input.idempotencyKey);
         if (existing) {
+          if (!existing.workflow_definition_hash) throw new LegacyWorkflowRunProvenanceError(existing.id);
+          if (existing.workflow_definition_hash !== definitionHash) throw new WorkflowRunDefinitionConflictError(existing.id);
           this.db.exec("COMMIT");
           discardWorkflowRunManifest(staged);
           return rowToWorkflowRun(existing);
@@ -3235,10 +3266,10 @@ export class Store {
       this.db
         .query(
           `INSERT INTO workflow_runs (id, workflow_id, workflow_name, loop_id, loop_run_id, invocation_id, work_item_id,
-            scheduled_for, idempotency_key, manifest_path, status, started_at, finished_at, duration_ms, error,
+            scheduled_for, idempotency_key, workflow_definition_hash, manifest_path, status, started_at, finished_at, duration_ms, error,
             created_at, updated_at)
            VALUES ($id, $workflowId, $workflowName, $loopId, $loopRunId, $invocationId, $workItemId, $scheduledFor,
-            $idempotencyKey, $manifestPath, 'running', $started, NULL, NULL, NULL, $created, $updated)`,
+            $idempotencyKey, $workflowDefinitionHash, $manifestPath, 'running', $started, NULL, NULL, NULL, $created, $updated)`,
         )
         .run({
           $id: runId,
@@ -3250,6 +3281,7 @@ export class Store {
           $workItemId: workItemId ?? null,
           $scheduledFor: input.scheduledFor ?? input.loopRun?.scheduledFor ?? null,
           $idempotencyKey: input.idempotencyKey ?? null,
+          $workflowDefinitionHash: definitionHash,
           $manifestPath: manifestPath ?? null,
           $started: now,
           $created: now,
@@ -3323,6 +3355,24 @@ export class Store {
           }),
           $created: now,
         });
+
+      initialContractEvents.forEach((event, index) => {
+        input.beforeInitialWorkflowEventPersist?.(event);
+        this.db
+          .query(
+            `INSERT INTO workflow_events (id, workflow_run_id, sequence, event_type, step_id, payload_json, created_at)
+             VALUES ($id, $workflowRunId, $sequence, $eventType, $stepId, $payload, $created)`,
+          )
+          .run({
+            $id: genId(),
+            $workflowRunId: runId,
+            $sequence: index + 2,
+            $eventType: event.eventType,
+            $stepId: event.stepId,
+            $payload: persistedWorkflowEventPayload(event.payload),
+            $created: now,
+          });
+      });
 
       this.db.exec("COMMIT");
       commitWorkflowRunManifest(staged);
@@ -3734,11 +3784,21 @@ export class Store {
     eventType: string,
     stepId?: string,
     payload?: Record<string, unknown>,
-  ): WorkflowEvent {
+  ): StoredWorkflowEvent {
     // MAX(sequence)+1 is only race-free while the write lock is held, so take
     // a write transaction when the caller has not already opened one.
     return this.transact(() => {
       const now = nowIso();
+      if (eventType === "agent_session_contract") {
+        const duplicate = stepId === undefined
+          ? this.db.query<{ id: string }, [string, string]>(
+              "SELECT id FROM workflow_events WHERE workflow_run_id = ? AND event_type = ? AND step_id IS NULL LIMIT 1",
+            ).get(workflowRunId, eventType)
+          : this.db.query<{ id: string }, [string, string, string]>(
+              "SELECT id FROM workflow_events WHERE workflow_run_id = ? AND event_type = ? AND step_id = ? LIMIT 1",
+            ).get(workflowRunId, eventType, stepId);
+        if (duplicate) throw new DuplicateWorkflowEventError(workflowRunId, eventType, stepId);
+      }
       const current = this.db
         .query<{ sequence: number | null }, [string]>("SELECT MAX(sequence) AS sequence FROM workflow_events WHERE workflow_run_id = ?")
         .get(workflowRunId);
@@ -3764,7 +3824,7 @@ export class Store {
     });
   }
 
-  listWorkflowEvents(workflowRunId: string, limit = 200): WorkflowEvent[] {
+  listWorkflowEvents(workflowRunId: string, limit = 200): StoredWorkflowEvent[] {
     const rows = this.db
       .query<WorkflowEventRow, [string, number]>(
         "SELECT * FROM workflow_events WHERE workflow_run_id = ? ORDER BY sequence ASC LIMIT ?",

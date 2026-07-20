@@ -121,10 +121,14 @@ export type AgentPermissionMode = "default" | "plan" | "auto" | "bypass";
 
 export type AgentSandbox = "read-only" | "workspace-write" | "danger-full-access" | "enabled" | "disabled";
 
+export type AgentAllowlistEnforcement = "metadata_only";
+
 export interface AgentAllowlistSpec {
+  /** Advisory provider metadata. Restrictions require this non-empty audit reason. */
   tools?: string[];
   commands?: string[];
-  enforcement?: "metadata_only";
+  enforcement?: AgentAllowlistEnforcement;
+  safetyReason?: string;
 }
 
 export type AgentWorktreeMode = "auto" | "required" | "off" | "main";
@@ -153,6 +157,26 @@ export interface AgentRoutingSpec {
   role?: "triage" | "planner" | "worker" | "verifier";
 }
 
+/** Server-derived audit contract for an agent step inside a workflow run. */
+export interface AgentSessionContract {
+  version: 1;
+  provider: AgentProvider;
+  model?: string;
+  cwd?: string;
+  permissionMode: AgentPermissionMode;
+  sandbox: AgentSandbox | "provider-default";
+  manualBreakGlass: boolean;
+  routing?: AgentRoutingSpec;
+  timeoutMs: TimeoutMs;
+  restrictions: {
+    tools?: string[];
+    commands?: string[];
+    enforcement: AgentAllowlistEnforcement;
+    providerEnforced: false;
+  };
+  safetyReason?: string;
+}
+
 export interface AgentPromptSource {
   type: "file";
   path: string;
@@ -166,6 +190,11 @@ export interface AgentTargetBase {
   variant?: string;
   agent?: string;
   authProfile?: string;
+  /**
+   * Provider CLI passthrough arguments. Fail-closed: omitted or empty is valid,
+   * while every non-empty or malformed entry is rejected until that exact
+   * provider option is explicitly reviewed and allowlisted by the adapter.
+   */
   extraArgs?: string[];
   addDirs?: string[];
   timeoutMs?: TimeoutMs;
@@ -173,6 +202,8 @@ export interface AgentTargetBase {
   configIsolation?: AgentConfigIsolation;
   permissionMode?: AgentPermissionMode;
   sandbox?: AgentSandbox;
+  /** Explicit operator acknowledgement required with a non-empty safetyReason for relaxed sandbox or provider bypass modes. */
+  manualBreakGlass?: boolean;
   allowlist?: AgentAllowlistSpec;
   worktree?: AgentWorktreeSpec;
   routing?: AgentRoutingSpec;
@@ -433,15 +464,62 @@ export interface WorkflowStepRun {
   updatedAt: string;
 }
 
-export interface WorkflowEvent {
+export type WorkflowLifecycleEventType =
+  | "created"
+  | "workflow_archived"
+  | "todos_workflow_pointers_synced"
+  | "todos_workflow_pointers_sync_failed"
+  | "step_started"
+  | "step_progress"
+  | "recovered"
+  | "step_pending"
+  | "step_running"
+  | "step_succeeded"
+  | "step_failed"
+  | "step_timed_out"
+  | "step_skipped"
+  | "step_cancelled"
+  | "succeeded"
+  | "failed"
+  | "timed_out"
+  | "cancelled";
+
+export interface WorkflowEventBase {
   id: string;
   workflowRunId: string;
   sequence: number;
-  eventType: string;
   stepId?: string;
   payload?: Record<string, unknown>;
   createdAt: string;
 }
+
+/** Raw persisted event shape used inside storage adapters before public validation. */
+export interface StoredWorkflowEvent extends WorkflowEventBase {
+  eventType: string;
+}
+
+export interface GenericWorkflowEvent extends WorkflowEventBase {
+  eventType: WorkflowLifecycleEventType;
+}
+
+export interface AgentSessionContractWorkflowEvent extends Omit<WorkflowEventBase, "stepId" | "payload"> {
+  eventType: "agent_session_contract";
+  stepId: string;
+  payload: AgentSessionContract;
+}
+
+/**
+ * Backwards-compatible public shape for historical or mixed-version custom
+ * events. `eventKind` makes the generic branch unambiguous without weakening
+ * the schemas of server-owned lifecycle and agent-session-contract events.
+ */
+export interface CustomWorkflowEvent extends WorkflowEventBase {
+  eventKind: "custom";
+  eventType: string;
+}
+
+export type WorkflowEvent = AgentSessionContractWorkflowEvent | GenericWorkflowEvent;
+export type PublicWorkflowEvent = WorkflowEvent | CustomWorkflowEvent;
 
 export interface Loop {
   id: string;

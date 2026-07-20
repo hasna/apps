@@ -447,10 +447,16 @@ describe("permission and break-glass fail-closed rendering", () => {
       projectPath: plainPath,
       sandbox: "danger-full-access",
       manualBreakGlass: "true",
+      safetyReason: "operator-approved isolated emergency repair",
     });
     const target = agentTargetOf(stepById(workflow, "worker"));
     expect(target.sandbox).toBe("danger-full-access");
-    expect(target.allowlist).toEqual({ enforcement: "metadata_only", commands: ["manual-break-glass"] });
+    expect(target.manualBreakGlass).toBe(true);
+    expect(target.allowlist).toEqual({
+      enforcement: "metadata_only",
+      commands: ["manual-break-glass"],
+      safetyReason: "operator-approved isolated emergency repair",
+    });
   });
 
   test("codewith/codex default to workspace-write sandbox with bypass permission mode", () => {
@@ -459,6 +465,21 @@ describe("permission and break-glass fail-closed rendering", () => {
     expect(target.sandbox).toBe("workspace-write");
     expect(target.permissionMode).toBe("bypass");
     expect(target.configIsolation).toBe("safe");
+  });
+
+  test("native providers default generated workflows to provider-managed permissions", () => {
+    const inputs = [
+      { provider: "claude" },
+      { provider: "cursor" },
+      { provider: "aicopilot" },
+      { provider: "opencode", model: "openrouter/test/model" },
+    ] as const;
+    for (const input of inputs) {
+      const workflow = renderTodosTaskWorkerVerifierWorkflow({ taskId: "t", projectPath: plainPath, ...input });
+      const target = agentTargetOf(stepById(workflow, "worker"));
+      expect(target.permissionMode).toBe("default");
+      expect(target.manualBreakGlass).toBeUndefined();
+    }
   });
 
   test("native auth profiles are rejected for non-codewith providers", () => {

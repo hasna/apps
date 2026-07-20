@@ -28,9 +28,10 @@ import type {
   Loop,
   LoopRun,
   LoopStatus,
+  PublicWorkflowEvent,
   RunReceipt,
   RunStatus,
-  WorkflowEvent,
+  StoredWorkflowEvent,
   WorkflowInvocation,
   WorkflowRun,
   WorkflowSpec,
@@ -41,6 +42,7 @@ import type {
 } from "../../types.js";
 import type { Goal, GoalPlanNode, GoalRun, GoalStatus } from "../goal/types.js";
 import { AmbiguousNameError, LoopNotFoundError } from "../errors.js";
+import { publicWorkflowEvent } from "../workflow-events.js";
 import { resolveCloudStorage } from "../cloud/resolve.js";
 import type { HasnaStorageClient } from "../cloud/storage.js";
 import type { Env } from "../cloud/mode.js";
@@ -111,7 +113,7 @@ export interface LoopStore {
   requireWorkflowRun(id: string): Promise<WorkflowRun>;
   listWorkflowRuns(opts?: { workflowId?: string; loopRunId?: string; limit?: number }): Promise<WorkflowRun[]>;
   listWorkflowStepRuns(workflowRunId: string): Promise<WorkflowStepRun[]>;
-  listWorkflowEvents(workflowRunId: string, limit?: number): Promise<WorkflowEvent[]>;
+  listWorkflowEvents(workflowRunId: string, limit?: number): Promise<PublicWorkflowEvent[]>;
   recoverWorkflowRun(workflowRunId: string, reason?: string): Promise<{ run: WorkflowRun; recoveredSteps: WorkflowStepRun[] }>;
   cancelWorkflowRun(workflowRunId: string, reason?: string): Promise<WorkflowRun>;
 
@@ -252,8 +254,11 @@ export class LocalStore implements LoopStore {
   async listWorkflowStepRuns(workflowRunId: string): Promise<WorkflowStepRun[]> {
     return this.store.listWorkflowStepRuns(workflowRunId);
   }
-  async listWorkflowEvents(workflowRunId: string, limit?: number): Promise<WorkflowEvent[]> {
-    return limit === undefined ? this.store.listWorkflowEvents(workflowRunId) : this.store.listWorkflowEvents(workflowRunId, limit);
+  async listWorkflowEvents(workflowRunId: string, limit?: number): Promise<PublicWorkflowEvent[]> {
+    const events = limit === undefined
+      ? this.store.listWorkflowEvents(workflowRunId)
+      : this.store.listWorkflowEvents(workflowRunId, limit);
+    return events.map(publicWorkflowEvent);
   }
   async recoverWorkflowRun(workflowRunId: string, reason?: string): Promise<{ run: WorkflowRun; recoveredSteps: WorkflowStepRun[] }> {
     return reason === undefined ? this.store.recoverWorkflowRun(workflowRunId) : this.store.recoverWorkflowRun(workflowRunId, reason);
@@ -496,9 +501,9 @@ export class ApiStore implements LoopStore {
     const raw = await this.t.get(`/workflow-runs/${encodeURIComponent(workflowRunId)}/steps`);
     return pickArray<WorkflowStepRun>(raw, "steps");
   }
-  async listWorkflowEvents(workflowRunId: string, limit?: number): Promise<WorkflowEvent[]> {
+  async listWorkflowEvents(workflowRunId: string, limit?: number): Promise<PublicWorkflowEvent[]> {
     const raw = await this.t.get(`/workflow-runs/${encodeURIComponent(workflowRunId)}/events`, { query: clean({ limit }) });
-    return pickArray<WorkflowEvent>(raw, "events");
+    return pickArray<StoredWorkflowEvent>(raw, "events").map(publicWorkflowEvent);
   }
   async recoverWorkflowRun(workflowRunId: string, reason?: string): Promise<{ run: WorkflowRun; recoveredSteps: WorkflowStepRun[] }> {
     const raw = await this.t.post(`/workflow-runs/${encodeURIComponent(workflowRunId)}/recover`, { reason });

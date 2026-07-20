@@ -108,6 +108,7 @@ export interface AgentWorkflowTemplateBaseInput {
   addDirs?: string[];
   permissionMode?: AgentPermissionMode;
   sandbox?: AgentSandbox;
+  safetyReason?: string;
   manualBreakGlass?: boolean;
   worktreeMode?: AgentWorktreeMode;
   worktreeRoot?: string;
@@ -410,11 +411,12 @@ function assertNativeAuthProfileSupport(input: AgentWorkflowTemplateBaseInput, p
 }
 
 function failClosedSandbox(input: AgentWorkflowTemplateBaseInput, provider: AgentProvider, sandbox: AgentSandbox | undefined): void {
-  if (!["codewith", "codex"].includes(provider)) return;
-  if (sandbox !== "danger-full-access") return;
-  if (input.manualBreakGlass) return;
+  const relaxed = (["codewith", "codex"].includes(provider) && sandbox === "danger-full-access") ||
+    (provider === "cursor" && sandbox === "disabled");
+  if (!relaxed) return;
+  if (input.manualBreakGlass && input.safetyReason?.trim()) return;
   throw new Error(
-    "danger-full-access is manual break-glass only for generated worker/verifier workflows; use sandbox=workspace-write or set manualBreakGlass=true with explicit operator approval",
+    `${sandbox} is manual break-glass only for generated worker/verifier workflows; use a restricted sandbox or set manualBreakGlass=true with a non-empty safetyReason and explicit operator approval`,
   );
 }
 
@@ -455,8 +457,11 @@ function agentTarget(
     addDirs: addDirs.length ? [...new Set(addDirs)] : undefined,
     authProfile: provider === "codewith" ? authProfileForRole(input, role, seed) : undefined,
     configIsolation: "safe",
-    permissionMode: input.permissionMode ?? "bypass",
+    permissionMode:
+      input.permissionMode ??
+      (provider === "codewith" || provider === "codex" ? "bypass" : "default"),
     sandbox,
+    manualBreakGlass: input.manualBreakGlass || undefined,
     worktree: {
       mode: plan.mode,
       enabled: plan.enabled,
@@ -468,7 +473,13 @@ function agentTarget(
       branch: plan.branch,
       reason: plan.reason,
     },
-    allowlist: input.manualBreakGlass ? { enforcement: "metadata_only", commands: ["manual-break-glass"] } : undefined,
+    allowlist: input.manualBreakGlass
+      ? {
+          enforcement: "metadata_only",
+          commands: ["manual-break-glass"],
+          safetyReason: input.safetyReason?.trim(),
+        }
+      : undefined,
     routing: {
       projectPath: input.routeProjectPath ?? input.projectPath,
       ...(input.projectGroup ? { projectGroup: input.projectGroup } : {}),
@@ -1227,6 +1238,7 @@ function agentTemplateInput(values: Record<string, string | undefined>): AgentWo
     addDirs: listVar(values.addDirs ?? values.addDir),
     permissionMode: values.permissionMode as AgentPermissionMode | undefined,
     sandbox: values.sandbox as AgentSandbox | undefined,
+    safetyReason: values.safetyReason,
     manualBreakGlass: booleanVar(values.manualBreakGlass),
     worktreeMode: values.worktreeMode as AgentWorktreeMode | undefined,
     worktreeRoot: values.worktreeRoot,

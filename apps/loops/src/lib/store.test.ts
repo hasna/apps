@@ -3,7 +3,14 @@ import { Database } from "bun:sqlite";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AmbiguousNameError, LoopArchivedError, LoopNotFoundError } from "./errors.js";
+import {
+  AmbiguousNameError,
+  DuplicateWorkflowEventError,
+  LegacyWorkflowRunProvenanceError,
+  LoopArchivedError,
+  LoopNotFoundError,
+  WorkflowRunDefinitionConflictError,
+} from "./errors.js";
 import { Store } from "./store.js";
 
 // Credential fixtures assembled at runtime so the literal token shapes never
@@ -1740,9 +1747,10 @@ exit 0
         "0009_run_receipts",
         "0010_work_item_machine_id",
         "0011_work_item_gate_deaths",
+        "0012_workflow_run_provenance",
       ]);
       const version = store["db"].query("PRAGMA user_version").get() as { user_version: number };
-      // 0011 is additive (gate_deaths counter) and deliberately does NOT bump
+      // 0011/0012 are additive and deliberately do NOT bump
       // the schema user_version — older v8 binaries keep opening this database.
       expect(version.user_version).toBe(8);
     } finally {
@@ -2227,6 +2235,97 @@ exit 0
       expect(second.sequence).toBe(2);
       expect(third.sequence).toBe(3);
       expect(store.listWorkflowEvents(run.id).map((event) => event.sequence)).toEqual([1, 2, 3]);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("binds idempotent workflow runs to immutable definitions and creates contracts atomically", () => {
+    const store = new Store(":memory:");
+    try {
+      const workflow = store.createWorkflow({
+        name: "immutable-idempotent-workflow",
+        steps: ["worker-one", "worker-two"].map((id) => ({
+          id,
+          target: {
+            type: "agent" as const,
+            provider: "codewith" as const,
+            prompt: `perform scoped work for ${id}`,
+            allowlist: { commands: ["git"], safetyReason: "scoped workflow test" },
+          },
+        })),
+      });
+      const first = store.createWorkflowRun({ workflow, idempotencyKey: "same-definition" });
+      const retry = store.createWorkflowRun({ workflow, idempotencyKey: "same-definition" });
+      expect(retry.id).toBe(first.id);
+      expect(store.listWorkflowEvents(first.id).filter((event) =>
+        event.eventType === "agent_session_contract"
+      )).toHaveLength(2);
+
+      const changed = {
+        ...workflow,
+        steps: [{
+          ...workflow.steps[0]!,
+          target: { ...workflow.steps[0]!.target, prompt: "changed after creation" },
+        }],
+      };
+      expect(() => store.createWorkflowRun({
+        workflow: changed,
+        idempotencyKey: "same-definition",
+      })).toThrow(WorkflowRunDefinitionConflictError);
+
+      const internal = store as unknown as { db: Database };
+      const atomicCounts = () => internal.db.query<{
+        run_count: number;
+        step_count: number;
+        event_count: number;
+      }, []>(`
+        SELECT
+          (SELECT COUNT(*) FROM workflow_runs) AS run_count,
+          (SELECT COUNT(*) FROM workflow_step_runs) AS step_count,
+          (SELECT COUNT(*) FROM workflow_events) AS event_count
+      `).get();
+      const beforeFailedCreate = atomicCounts();
+      expect(() => store.createWorkflowRun({
+        workflow,
+        idempotencyKey: "rolls-back",
+        beforeInitialWorkflowEventPersist: (event) => {
+          if (event.stepId === "worker-two") throw new Error("injected second contract append failure");
+        },
+      })).toThrow("injected second contract append failure");
+      expect(atomicCounts()).toEqual(beforeFailedCreate);
+      expect(store.listWorkflowRuns({ workflowId: workflow.id }).some((run) =>
+        run.idempotencyKey === "rolls-back"
+      )).toBe(false);
+
+      internal.db.query("UPDATE workflow_runs SET workflow_definition_hash = NULL WHERE id = ?").run(first.id);
+      expect(() => store.createWorkflowRun({
+        workflow,
+        idempotencyKey: "same-definition",
+      })).toThrow(LegacyWorkflowRunProvenanceError);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("atomically rejects duplicate agent session contracts for one workflow step", () => {
+    const store = new Store(":memory:");
+    try {
+      const workflow = store.createWorkflow({
+        name: "unique-agent-contract-workflow",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const run = store.createWorkflowRun({ workflow });
+      store.appendWorkflowEvent(run.id, "agent_session_contract", "worker", { version: 1 });
+      expect(() => store.appendWorkflowEvent(
+        run.id,
+        "agent_session_contract",
+        "worker",
+        { version: 1 },
+      )).toThrow(DuplicateWorkflowEventError);
+      expect(store.listWorkflowEvents(run.id).filter((event) =>
+        event.eventType === "agent_session_contract" && event.stepId === "worker"
+      )).toHaveLength(1);
     } finally {
       store.close();
     }

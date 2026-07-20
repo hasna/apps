@@ -31,8 +31,131 @@ export class AmbiguousNameError extends CodedError {
   }
 }
 
+export type AgentExtraArgsValidationReason =
+  | "not_array"
+  | "invalid_array"
+  | "invalid_item"
+  | "option_not_allowed";
+
+/**
+ * Deliberately public, bounded validation metadata. API boundaries may expose
+ * this object, but must never expose the accompanying Error.message.
+ */
+export interface PublicValidationDetails {
+  code: "agent_extra_args_invalid";
+  reason: AgentExtraArgsValidationReason;
+  path: string;
+  index?: number;
+  option?: string;
+}
+
+const AGENT_EXTRA_ARGS_VALIDATION_REASONS: ReadonlySet<string> = new Set([
+  "not_array",
+  "invalid_array",
+  "invalid_item",
+  "option_not_allowed",
+]);
+const PUBLIC_VALIDATION_PATH = /^[A-Za-z][A-Za-z0-9_-]*(?:(?:\[\d+\])|(?:\.[A-Za-z][A-Za-z0-9_-]*))*$/;
+const PUBLIC_VALIDATION_OPTION = /^(?:--[A-Za-z0-9][A-Za-z0-9-]{0,63}|-[A-Za-z0-9])$/;
+
+export function publicValidationDetails(value: unknown): Readonly<PublicValidationDetails> | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  let code: unknown;
+  let reason: unknown;
+  let path: unknown;
+  let index: unknown;
+  let option: unknown;
+  try {
+    const candidate = value as Record<string, unknown>;
+    // Capture every allowed primitive exactly once. Validation and projection
+    // below use only these locals, never caller-controlled getters again.
+    code = candidate.code;
+    reason = candidate.reason;
+    path = candidate.path;
+    index = candidate.index;
+    option = candidate.option;
+  } catch {
+    return undefined;
+  }
+  if (
+    code !== "agent_extra_args_invalid" ||
+    typeof reason !== "string" ||
+    !AGENT_EXTRA_ARGS_VALIDATION_REASONS.has(reason) ||
+    typeof path !== "string" ||
+    path.length > 512 ||
+    !PUBLIC_VALIDATION_PATH.test(path) ||
+    (index !== undefined && (typeof index !== "number" || !Number.isSafeInteger(index) || index < 0)) ||
+    (option !== undefined && (typeof option !== "string" || !PUBLIC_VALIDATION_OPTION.test(option)))
+  ) {
+    return undefined;
+  }
+  const indexedReason = reason === "invalid_item" || reason === "option_not_allowed";
+  if (indexedReason !== (index !== undefined)) return undefined;
+  if (index === undefined) {
+    if (!path.endsWith(".extraArgs")) return undefined;
+  } else if (!path.endsWith(`.extraArgs[${index}]`)) {
+    return undefined;
+  }
+  if (option !== undefined && reason !== "option_not_allowed") return undefined;
+  return Object.freeze({
+    code,
+    reason: reason as AgentExtraArgsValidationReason,
+    path,
+    ...(index === undefined ? {} : { index: index as number }),
+    ...(option === undefined ? {} : { option: option as string }),
+  });
+}
+
 export class ValidationError extends CodedError {
-  constructor(message: string) {
+  declare readonly publicDetails?: Readonly<PublicValidationDetails>;
+
+  constructor(message: string, publicDetails?: PublicValidationDetails) {
     super("VALIDATION_ERROR", message);
+    // Treat even internal callers as untrusted at the public API boundary:
+    // project only the closed, validated field set and silently hide anything
+    // malformed instead of ever echoing Error.message or arbitrary metadata.
+    const projected = publicValidationDetails(publicDetails);
+    Object.defineProperty(this, "publicDetails", {
+      configurable: false,
+      enumerable: false,
+      value: projected,
+      writable: false,
+    });
+  }
+}
+
+/** Safely capture and re-project even forged/subclass validation errors. */
+export function validationErrorPublicDetails(error: ValidationError): Readonly<PublicValidationDetails> | undefined {
+  try {
+    return publicValidationDetails(error.publicDetails);
+  } catch {
+    return undefined;
+  }
+}
+
+export class DuplicateWorkflowEventError extends CodedError {
+  constructor(workflowRunId: string, eventType: string, stepId?: string) {
+    super(
+      "DUPLICATE_WORKFLOW_EVENT",
+      `workflow event already exists: run=${workflowRunId} type=${eventType} step=${stepId ?? "-"}`,
+    );
+  }
+}
+
+export class LegacyWorkflowRunProvenanceError extends CodedError {
+  constructor(workflowRunId: string) {
+    super(
+      "WORKFLOW_RUN_PROVENANCE_MISSING",
+      `workflow run idempotency provenance is missing: ${workflowRunId}; legacy runs must be restarted with a new idempotency key`,
+    );
+  }
+}
+
+export class WorkflowRunDefinitionConflictError extends CodedError {
+  constructor(workflowRunId: string) {
+    super(
+      "WORKFLOW_RUN_DEFINITION_CONFLICT",
+      `workflow run idempotency definition conflict: ${workflowRunId}; the creating workflow definition differs`,
+    );
   }
 }

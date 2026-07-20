@@ -63,6 +63,20 @@ export interface ImportInput { "workflows"?: Array<Record<string, unknown>>; "lo
 
 export interface ImportResponse { "ok": boolean; "imported": { "workflows": number; "loops": number; "runs": number }; "skippedRunning": number }
 
+export interface AgentSessionContract { "version": 1; "provider": "claude" | "cursor" | "codewith" | "codex" | "aicopilot" | "opencode"; "model"?: string; "cwd"?: string; "permissionMode": "default" | "plan" | "auto" | "bypass"; "sandbox": "read-only" | "workspace-write" | "danger-full-access" | "enabled" | "disabled" | "provider-default"; "manualBreakGlass": boolean; "routing"?: { "projectPath"?: string; "projectGroup"?: string; "taskId"?: string; "eventId"?: string; "eventType"?: string; "eventSource"?: string; "role"?: "triage" | "planner" | "worker" | "verifier" }; "timeoutMs": number | null; "restrictions": { "tools"?: Array<string>; "commands"?: Array<string>; "enforcement": "metadata_only"; "providerEnforced": false }; "safetyReason"?: string }
+
+export interface AgentSessionContractEventInput { "claimToken": string; "eventType": "agent_session_contract"; "stepId": string; "payload": AgentSessionContract }
+
+export interface GenericWorkflowEvent { "id": string; "workflowRunId": string; "sequence": number; "eventType": "created" | "workflow_archived" | "todos_workflow_pointers_synced" | "todos_workflow_pointers_sync_failed" | "step_started" | "step_progress" | "recovered" | "step_pending" | "step_running" | "step_succeeded" | "step_failed" | "step_timed_out" | "step_skipped" | "step_cancelled" | "succeeded" | "failed" | "timed_out" | "cancelled"; "stepId"?: string; "payload"?: Record<string, unknown>; "createdAt": string }
+
+export interface AgentSessionContractWorkflowEvent { "id": string; "workflowRunId": string; "sequence": number; "eventType": "agent_session_contract"; "stepId": string; "payload": AgentSessionContract; "createdAt": string }
+
+export type WorkflowEvent = AgentSessionContractWorkflowEvent | GenericWorkflowEvent;
+
+export interface WorkflowEventResponse { "ok": boolean; "event": WorkflowEvent }
+
+export interface WorkflowEventListResponse { "ok": boolean; "events": Array<WorkflowEvent> }
+
 export interface CountResponse { "ok": boolean; "count": number }
 
 export interface LoopsClientOptions {
@@ -540,6 +554,15 @@ export class LoopsClient {
       });
     }
 
+    /** Validate a legacy runner-authored agent session contract */
+    async runsWorkflowRunsEvents(id: string, workflowRunId: string, body: AgentSessionContractEventInput, init?: RequestInit): Promise<WorkflowEventResponse> {
+      return this.request("POST", `/v1/runs/${encodeURIComponent(String(id))}/workflow-runs/${encodeURIComponent(String(workflowRunId))}/events`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** runs.workflowRuns.finalize */
     async runsWorkflowRunsFinalize(id: string, workflowRunId: string, body: Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("POST", `/v1/runs/${encodeURIComponent(String(id))}/workflow-runs/${encodeURIComponent(String(workflowRunId))}/finalize`, {
@@ -648,7 +671,7 @@ export class LoopsClient {
     }
 
     /** workflowRuns.events */
-    async workflowRunsEvents(id: string, init?: RequestInit): Promise<Record<string, unknown>> {
+    async workflowRunsEvents(id: string, init?: RequestInit): Promise<WorkflowEventListResponse> {
       return this.request("GET", `/v1/workflow-runs/${encodeURIComponent(String(id))}/events`, {
         body: undefined,
         query: undefined,

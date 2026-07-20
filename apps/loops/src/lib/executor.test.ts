@@ -3,8 +3,9 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
+import type { AgentTarget } from "../types.js";
 import { Store } from "./store.js";
-import { defaultAgentIdleTimeoutMs, executeLoop, isStaleWorktreeRegistration, preflightTarget, type SpawnedProcessInfo } from "./executor.js";
+import { defaultAgentIdleTimeoutMs, executeLoop, executeTarget, isStaleWorktreeRegistration, preflightTarget, type SpawnedProcessInfo } from "./executor.js";
 import { openGate, waitUntil } from "../test-helpers.js";
 
 function gateWaitScript(gate: string): string {
@@ -209,6 +210,73 @@ describe("executeLoop", () => {
       });
       expect(result.status).toBe("succeeded");
       expect(result.stdout).toContain("agent-done");
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("exports the auditable advisory session contract without claiming enforcement", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-agent-session-contract-"));
+    const bin = join(root, "bin");
+    mkdirSync(bin, { recursive: true });
+    const claude = join(bin, "claude");
+    writeFileSync(
+      claude,
+      [
+        "#!/usr/bin/env bash",
+        "printf 'contract=%s\\n' \"$LOOPS_AGENT_SESSION_CONTRACT\"",
+        "printf 'enforcement=%s\\n' \"$LOOPS_AGENT_ALLOWLIST_ENFORCEMENT\"",
+        "printf 'reason=%s\\n' \"$LOOPS_AGENT_ALLOWLIST_SAFETY_REASON\"",
+        "cat >/dev/null",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(claude, 0o755);
+    try {
+      const loop = store.createLoop({
+        name: "auditable-agent-contract",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "agent",
+          provider: "claude",
+          prompt: "work",
+          cwd: root,
+          routing: { taskId: "task-123" },
+          allowlist: {
+            tools: ["functions.exec_command"],
+            commands: ["git", "bun"],
+            enforcement: "metadata_only",
+            safetyReason: "isolated repository maintenance",
+          },
+        },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, {
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+      });
+      expect(result.status).toBe("succeeded");
+      expect(result.stdout).toContain("enforcement=metadata_only");
+      expect(result.stdout).toContain("reason=isolated repository maintenance");
+      const contractLine = result.stdout.split(/\r?\n/).find((line) => line.startsWith("contract="));
+      expect(contractLine).toBeTruthy();
+      const contract = JSON.parse(contractLine!.slice("contract=".length));
+      expect(contract).toMatchObject({
+        version: 1,
+        provider: "claude",
+        cwd: root,
+        sandbox: "provider-default",
+        manualBreakGlass: false,
+        restrictions: {
+          tools: ["functions.exec_command"],
+          commands: ["git", "bun"],
+          enforcement: "metadata_only",
+          providerEnforced: false,
+        },
+        safetyReason: "isolated repository maintenance",
+      });
     } finally {
       store.close();
       rmSync(root, { recursive: true, force: true });
@@ -707,6 +775,152 @@ describe("executeLoop", () => {
         expect(result.stdout).not.toContain(wtPath);
       } finally {
         store.close();
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test("local auto worktree fallback reuses one validated extra-args snapshot", async () => {
+      const root = mkdtempSync(join(tmpdir(), "loops-worktree-local-extra-args-snapshot-"));
+      const notRepo = join(root, "not-a-repo");
+      mkdirSync(notRepo, { recursive: true });
+      const bin = join(root, "bin");
+      mkdirSync(bin, { recursive: true });
+      const fake = join(bin, "claude");
+      writeFileSync(
+        fake,
+        [
+          "#!/usr/bin/env bash",
+          "pwd",
+          "printf 'env-contract:%s\\n' \"${LOOPS_AGENT_SESSION_CONTRACT:-}\"",
+          "printf 'stdin:'",
+          "cat",
+        ].join("\n"),
+      );
+      chmodSync(fake, 0o755);
+      const wtPath = join(root, "worktrees", "repo", "run-1");
+      let extraArgsReads = 0;
+      const target: AgentTarget = {
+        type: "agent",
+        provider: "claude",
+        prompt: "work",
+        configIsolation: "safe",
+        allowlist: { safetyReason: "verify local fallback contract cwd" },
+        cwd: wtPath,
+        timeoutMs: 30_000,
+        worktree: {
+          mode: "auto",
+          enabled: true,
+          originalCwd: notRepo,
+          cwd: wtPath,
+          repoRoot: notRepo,
+          path: wtPath,
+          branch: "openloops/exec-test",
+        },
+      };
+      Object.defineProperty(target, "extraArgs", {
+        configurable: true,
+        enumerable: true,
+        get() {
+          extraArgsReads += 1;
+          return [];
+        },
+      });
+
+      try {
+        const result = await executeTarget(target, {}, {
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+        });
+        expect(result.status).toBe("succeeded");
+        expect(result.stdout.split(/\r?\n/, 1)[0]).toBe(realpathSync(notRepo));
+        const envContract = result.stdout.split(/\r?\n/).find((line) => line.startsWith("env-contract:"));
+        const stdin = result.stdout.slice(result.stdout.indexOf("stdin:"));
+        expect(envContract).toContain(`\"cwd\":\"${notRepo}\"`);
+        expect(envContract).not.toContain(wtPath);
+        expect(stdin).toContain(`"cwd":${JSON.stringify(notRepo)}`);
+        expect(stdin).not.toContain(wtPath);
+        expect(extraArgsReads).toBe(1);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test("remote auto worktree fallback reuses one validated extra-args snapshot", async () => {
+      const root = mkdtempSync(join(tmpdir(), "loops-worktree-remote-extra-args-snapshot-"));
+      const notRepo = join(root, "not-a-repo");
+      mkdirSync(notRepo, { recursive: true });
+      const home = join(root, "home");
+      const binDir = join(home, ".local", "bin");
+      mkdirSync(binDir, { recursive: true });
+      const fake = join(binDir, "codex");
+      writeFileSync(
+        fake,
+        [
+          "#!/usr/bin/env bash",
+          "printf '%s\\n' \"$@\"",
+          "printf 'env-contract:%s\\n' \"${LOOPS_AGENT_SESSION_CONTRACT:-}\"",
+          "printf 'stdin:'",
+          "cat",
+        ].join("\n"),
+      );
+      chmodSync(fake, 0o755);
+      const mktempLog = join(root, "mktemp.log");
+      const fakeMktemp = join(binDir, "mktemp");
+      writeFileSync(
+        fakeMktemp,
+        [
+          "#!/usr/bin/env bash",
+          `printf 'mktemp\\n' >> ${JSON.stringify(mktempLog)}`,
+          'exec /usr/bin/mktemp "$@"',
+        ].join("\n"),
+      );
+      chmodSync(fakeMktemp, 0o755);
+      const wtPath = join(root, "worktrees", "repo", "run-1");
+      let extraArgsReads = 0;
+      const target: AgentTarget = {
+        type: "agent",
+        provider: "codex",
+        prompt: "work",
+        configIsolation: "safe",
+        allowlist: { safetyReason: "verify remote fallback contract cwd" },
+        cwd: wtPath,
+        timeoutMs: 30_000,
+        worktree: {
+          mode: "auto",
+          enabled: true,
+          originalCwd: notRepo,
+          cwd: wtPath,
+          repoRoot: notRepo,
+          path: wtPath,
+          branch: "openloops/exec-test",
+        },
+      };
+      Object.defineProperty(target, "extraArgs", {
+        configurable: true,
+        enumerable: true,
+        get() {
+          extraArgsReads += 1;
+          return [];
+        },
+      });
+
+      try {
+        const result = await executeTarget(target, {}, {
+          ...remoteHooks,
+          machine: { id: "remote-test", local: false, route: "ssh" },
+          env: { HOME: home, PATH: "/usr/bin:/bin" },
+        });
+        expect(result.status).toBe("succeeded");
+        expect(result.stderr).toContain("worktree preparation failed (mode=auto)");
+        expect(result.stdout).toContain(`--cd\n${notRepo}`);
+        const envContract = result.stdout.split(/\r?\n/).find((line) => line.startsWith("env-contract:"));
+        const stdin = result.stdout.slice(result.stdout.indexOf("stdin:"));
+        expect(envContract).toContain(`\"cwd\":\"${notRepo}\"`);
+        expect(envContract).not.toContain(wtPath);
+        expect(stdin).toContain(`"cwd":${JSON.stringify(notRepo)}`);
+        expect(stdin).not.toContain(wtPath);
+        expect(readFileSync(mktempLog, "utf8").trim().split(/\r?\n/)).toEqual(["mktemp"]);
+        expect(extraArgsReads).toBe(1);
+      } finally {
         rmSync(root, { recursive: true, force: true });
       }
     });

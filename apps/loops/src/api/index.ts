@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
+import { isDeepStrictEqual } from "node:util";
 import type {
   CreateLoopInput,
   CreateWorkflowInvocationInput,
@@ -9,14 +10,26 @@ import type {
   LoopStatus,
   RunStatus,
   UpsertWorkflowWorkItemInput,
+  StoredWorkflowEvent,
   WorkflowRunStatus,
   WorkflowSpec,
+  WorkflowStep,
   WorkflowStepRunStatus,
   WorkflowWorkItemStatus,
   WriteRunReceiptInput,
 } from "../types.js";
 import type { GoalStatus } from "../lib/goal/types.js";
-import { LoopArchivedError, LoopNotFoundError, ValidationError } from "../lib/errors.js";
+import {
+  DuplicateWorkflowEventError,
+  LegacyWorkflowRunProvenanceError,
+  LoopArchivedError,
+  LoopNotFoundError,
+  ValidationError,
+  validationErrorPublicDetails,
+  WorkflowRunDefinitionConflictError,
+} from "../lib/errors.js";
+import { validateAgentTarget, workflowStepAgentSessionContract } from "../lib/agent-adapter.js";
+import type { AgentSessionContract } from "../types.js";
 import {
   publicGoal,
   publicGoalRun,
@@ -306,6 +319,19 @@ function safeImportedLoop(loop: Loop, opts: { preserveLoopScheduling: boolean })
   };
 }
 
+function validateImportedAgentTargets(workflows: WorkflowSpec[], loops: Loop[]): void {
+  for (const [workflowIndex, workflow] of workflows.entries()) {
+    for (const [stepIndex, step] of workflow.steps.entries()) {
+      if (step.target.type === "agent") {
+        validateAgentTarget(step.target, `workflows[${workflowIndex}].steps[${stepIndex}].target`);
+      }
+    }
+  }
+  for (const [loopIndex, loop] of loops.entries()) {
+    if (loop.target.type === "agent") validateAgentTarget(loop.target, `loops[${loopIndex}].target`);
+  }
+}
+
 /**
  * Bulk id-preserving import for a local->self-hosted backfill.
  *
@@ -327,6 +353,7 @@ async function handleImportRequest(ctx: V1RequestContext, segments: string[]): P
   const workflows = Array.isArray(body.workflows) ? body.workflows : [];
   const loops = Array.isArray(body.loops) ? body.loops : [];
   const runs = Array.isArray(body.runs) ? body.runs : [];
+  validateImportedAgentTargets(workflows, loops);
   const preserveWorkflowActivation = body.preserveWorkflowActivation === true;
   const preserveLoopScheduling = body.preserveLoopScheduling === true;
   const imported = { workflows: 0, loops: 0, runs: 0 };
@@ -371,6 +398,10 @@ async function handleLoopsRequest(ctx: V1RequestContext, segments: string[]): Pr
   }
   if (segments.length === 0 && ctx.request.method === "POST") {
     const body = await readJsonBody<CreateLoopInput>(ctx.request, ctx.bodyLimitBytes);
+    const target: unknown = body && typeof body === "object" ? (body as { target?: unknown }).target : undefined;
+    if (target && typeof target === "object" && !Array.isArray(target) && (target as { type?: unknown }).type === "agent") {
+      validateAgentTarget(target, "target");
+    }
     const loop = await storage.createLoop(body);
     return ok({ loop: publicLoop(loop) }, { status: 201 });
   }
@@ -683,6 +714,61 @@ async function requireClaimedWorkflowRun(
   return { ok: true, workflowRun };
 }
 
+function contractPayload(contract: AgentSessionContract): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(contract)) as Record<string, unknown>;
+}
+
+function deriveWorkflowStepAgentSessionContract(step: WorkflowStep): AgentSessionContract | undefined {
+  try {
+    return workflowStepAgentSessionContract(step);
+  } catch {
+    // Stored workflows created before this contract existed are untrusted input.
+    // Do not leak their target details; require an explicit workflow rewrite.
+    throw apiError("stored_workflow_agent_contract_invalid", 409);
+  }
+}
+
+function validateStoredWorkflowAgentContracts(workflow: WorkflowSpec): void {
+  for (const step of workflow.steps) {
+    if (step.target.type === "agent") deriveWorkflowStepAgentSessionContract(step);
+  }
+}
+
+const WORKFLOW_EVENT_SCAN_LIMIT = 2_147_483_647;
+
+function validateExistingAgentSessionContractEvents(
+  workflow: WorkflowSpec,
+  events: StoredWorkflowEvent[],
+  permittedMissingStepId?: string,
+) {
+  const contractEvents = events.filter((event) => event.eventType === "agent_session_contract");
+  const workflowStepIds = new Set(workflow.steps.map((step) => step.id));
+  if (contractEvents.some((event) => !event.stepId || !workflowStepIds.has(event.stepId))) {
+    throw apiError("agent_session_contract_fabricated", 409);
+  }
+  for (const step of workflow.steps) {
+    const existing = contractEvents.filter((event) => event.stepId === step.id);
+    if (step.target.type !== "agent") {
+      if (existing.length > 0) throw apiError("agent_session_contract_non_agent_step", 409);
+      continue;
+    }
+    const expected = deriveWorkflowStepAgentSessionContract(step);
+    if (!expected) {
+      if (existing.length > 0) throw apiError("agent_session_contract_fabricated", 409);
+      continue;
+    }
+    if (existing.length === 0) {
+      if (step.id === permittedMissingStepId) continue;
+      throw apiError("agent_session_contract_missing", 409);
+    }
+    if (existing.length > 1) throw apiError("agent_session_contract_duplicate", 409);
+    if (!isDeepStrictEqual(existing[0]!.payload, contractPayload(expected))) {
+      throw apiError("agent_session_contract_stored_mismatch", 409);
+    }
+  }
+  return contractEvents;
+}
+
 async function handleRunWorkflowExecutionRequest(ctx: V1RequestContext, runId: string, segments: string[]): Promise<Response> {
   const storage = requireStorage(ctx.storage);
   if (ctx.request.method === "POST" && segments.length === 0) {
@@ -693,6 +779,7 @@ async function handleRunWorkflowExecutionRequest(ctx: V1RequestContext, runId: s
     if (authorized.loop.target.type !== "workflow") return fail("loop_not_workflow", 409);
     const workflow = await storage.getWorkflow(authorized.loop.target.workflowId);
     if (!workflow) return fail("workflow_not_found", 404);
+    validateStoredWorkflowAgentContracts(workflow);
     const idempotencyKey = optionalString(body.idempotencyKey);
     const scheduledFor = optionalIsoString(body.scheduledFor) ?? authorized.run.scheduledFor;
     const workflowRun = await storage.createWorkflowRun({
@@ -702,6 +789,10 @@ async function handleRunWorkflowExecutionRequest(ctx: V1RequestContext, runId: s
       scheduledFor,
       idempotencyKey,
     });
+    validateExistingAgentSessionContractEvents(
+      workflow,
+      await storage.listWorkflowEvents(workflowRun.id, WORKFLOW_EVENT_SCAN_LIMIT),
+    );
     return ok({ workflowRun });
   }
 
@@ -723,6 +814,48 @@ async function handleRunWorkflowExecutionRequest(ctx: V1RequestContext, runId: s
   if (segments.length === 2 && segments[1] === "recover") {
     const recovered = await storage.recoverWorkflowRun(workflowRunId, optionalText(body.reason));
     return ok({ workflowRun: recovered.run, recoveredSteps: recovered.recoveredSteps });
+  }
+  if (segments.length === 2 && segments[1] === "events") {
+    const eventType = requiredString(body.eventType, "eventType");
+    if (eventType !== "agent_session_contract") throw apiError("event_type_not_allowed", 422);
+    const stepId = requiredString(body.stepId, "stepId");
+    const step = await storage.getWorkflowStepRun(workflowRunId, stepId);
+    if (!step) return fail("workflow_step_not_found", 404);
+    const workflow = await storage.getWorkflow(scopedRun.workflowRun.workflowId);
+    if (!workflow) return fail("workflow_not_found", 404);
+    const workflowStep = workflow.steps.find((candidate) => candidate.id === stepId);
+    if (!workflowStep) return fail("workflow_step_not_found", 404);
+    if (workflowStep.target.type !== "agent") throw apiError("agent_session_contract_non_agent_step", 422);
+    const expected = deriveWorkflowStepAgentSessionContract(workflowStep);
+    if (!expected) throw apiError("agent_session_contract_not_required", 422);
+    const supplied = objectRecord(body.payload);
+    if (!isDeepStrictEqual(supplied, contractPayload(expected))) {
+      throw apiError("agent_session_contract_mismatch", 409);
+    }
+    const existingContracts = validateExistingAgentSessionContractEvents(
+      workflow,
+      await storage.listWorkflowEvents(workflowRunId, WORKFLOW_EVENT_SCAN_LIMIT),
+      stepId,
+    );
+    const duplicates = existingContracts.filter((event) =>
+      event.eventType === "agent_session_contract" && event.stepId === stepId
+    );
+    if (duplicates.length > 0) throw apiError("agent_session_contract_duplicate", 409);
+    try {
+      return ok({
+        event: await storage.appendWorkflowEvent(
+          workflowRunId,
+          eventType,
+          stepId,
+          contractPayload(expected),
+        ),
+      });
+    } catch (error) {
+      if (error instanceof DuplicateWorkflowEventError) {
+        throw apiError("agent_session_contract_duplicate", 409);
+      }
+      throw error;
+    }
   }
   if (segments.length === 2 && segments[1] === "finalize") {
     const status = optionalEnum<WorkflowRunStatus>(
@@ -1345,7 +1478,12 @@ function apiError(code: string, status: number): PublicApiError {
 function errorResponse(error: unknown): Response {
   if (error instanceof LoopNotFoundError) return fail("loop_not_found", 404);
   if (error instanceof LoopArchivedError) return fail("loop_archived", 409);
-  if (error instanceof ValidationError) return fail("validation_failed", 422);
+  if (error instanceof ValidationError) {
+    const details = validationErrorPublicDetails(error);
+    return fail("validation_failed", 422, details ? { details } : undefined);
+  }
+  if (error instanceof LegacyWorkflowRunProvenanceError) return fail("workflow_run_provenance_missing", 409);
+  if (error instanceof WorkflowRunDefinitionConflictError) return fail("workflow_run_definition_conflict", 409);
   if (error instanceof PublicApiError) return fail(error.code, error.status);
   return fail("internal_error", 500);
 }

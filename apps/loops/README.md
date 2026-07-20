@@ -266,6 +266,32 @@ loops create agent opencode-smoke \
   --prompt "Reply with exactly OK."
 ```
 
+Direct agent loops can persist an auditable session contract:
+
+```bash
+loops create agent repo-check \
+  --provider codewith \
+  --every 15m \
+  --cwd /path/to/repo \
+  --sandbox workspace-write \
+  --prompt "Check the repo and report concrete failures." \
+  --allow-tool functions.exec_command \
+  --allow-command git,bun \
+  --safety-reason "isolated repository status inspection"
+```
+
+Tool and command lists are advisory metadata, not provider-enforced policy.
+OpenLoops stores the reason with the direct loop target, adds an explicit
+advisory contract to provider stdin, and exports `LOOPS_AGENT_SESSION_CONTRACT`.
+A direct agent loop has no workflow run, so it does not create a workflow event.
+Agent steps inside workflows that carry an audit contract additionally receive
+one server-derived `agent_session_contract` event per step and workflow run.
+
+Codewith/Codex `danger-full-access`, Cursor `sandbox=disabled`, and provider
+bypass modes (Claude, Cursor, AI Copilot, and OpenCode) require both a non-empty
+safety reason and `--manual-break-glass`. A reason cannot replace explicit
+operator approval.
+
 For `codewith` and `aicopilot` account isolation, register matching OpenAccounts tools first if they are not built in on the machine:
 
 ```bash
@@ -610,6 +636,8 @@ arguments, and implicit Codewith/Codex full-access defaults. If a custom
 Codewith/Codex template uses `permissionMode: "bypass"`, it must also set
 `sandbox` to `workspace-write` or `read-only`. Use built-in templates with
 explicit break-glass handling for emergency workflows that need full access.
+Claude, Cursor, AI Copilot, and OpenCode bypass modes always require explicit
+break-glass plus a non-empty safety reason.
 
 For event-driven task automation, `loops routes create todos-task` reads a
 Hasna event envelope from stdin or `HASNA_EVENT_JSON`, records a
@@ -727,9 +755,9 @@ Use `--dry-run` to inspect the rendered invocation, work item, workflow, and
 loop input without storing anything.
 
 Generated worker/verifier workflows fail closed when `sandbox=danger-full-access`
-is requested without `manualBreakGlass=true`. Use `workspace-write` for
-unattended task/event routes. Full access is an explicit manual emergency path,
-not a default automation mode.
+is requested without both `manualBreakGlass=true` and a non-empty
+`safetyReason`. Use `workspace-write` for unattended task/event routes. Full
+access is an explicit manual emergency path, not a default automation mode.
 
 When a sandboxed Codewith/Codex worker must update app stores outside the repo
 worktree, pass those stores explicitly with `--add-dir` or template `addDirs`.
@@ -1077,7 +1105,7 @@ On Linux this writes a user systemd service. On macOS it writes a LaunchAgent pl
 The adapters intentionally use provider command surfaces instead of pretending every agent has one SDK:
 
 - Claude uses `claude -p --output-format json` and safe-mode/local setting sources by default.
-- Codewith runs non-interactive `codewith --ask-for-approval never exec --json` sessions by default. exec starts a fresh session per invocation, avoiding the multi-megabyte rollout history that `codewith agent start` reloaded every turn (which drove `context_length_exceeded` silent no-ops), and it keeps network egress for gh/git — the `workspace-write` sandbox opts back into `sandbox_workspace_write.network_access`. Codewith exec is remote-capable like codex. OpenLoops rejects Codewith `extraArgs` that try to force `exec`, `--ephemeral`, `--json`, or other exec launch flags that the adapter already manages.
+- Codewith runs non-interactive `codewith --ask-for-approval never exec --json` sessions by default. exec starts a fresh session per invocation, avoiding the multi-megabyte rollout history that `codewith agent start` reloaded every turn (which drove `context_length_exceeded` silent no-ops), and it keeps network egress for gh/git — the `workspace-write` sandbox opts back into `sandbox_workspace_write.network_access`. Codewith exec is remote-capable like codex.
 - AI Copilot and OpenCode use `run --format json --pure`. OpenCode requires an explicit provider/model id because ambient OpenCode config is machine-specific.
 - Cursor is CLI-first for now via the standalone `agent -p` binary. OpenLoops no longer falls back to `cursor agent`; install the standalone Cursor Agent CLI so preflight and scheduled runs use the same executable.
 - Codex uses `codex --ask-for-approval never exec --json --ephemeral --skip-git-repo-check`, with `--add-dir` for explicit extra writable directories where supported.
@@ -1085,9 +1113,32 @@ The adapters intentionally use provider command surfaces instead of pretending e
 - When `--account` or a step `account` is set, OpenLoops resolves `accounts env <profile> --tool <tool>` before spawning the target, strips inherited tool home/API-key variables, and applies the selected profile only to that process. Missing account profiles fail before the provider binary receives the prompt.
 - `--auth-profile` and step `authProfile` are provider-native auth selectors. They currently apply to Codewith and are passed to Codewith as `--auth-profile <name>` on the `exec` invocation; they do not call OpenAccounts.
 - `--sandbox` maps to provider-native sandbox flags. Codewith/Codex accept `read-only`, `workspace-write`, or `danger-full-access`; Cursor accepts `enabled` or `disabled`.
+- `--allow-tool` and `--allow-command` declare advisory, metadata-only
+  restrictions and require `--safety-reason`. The exact contract is persisted
+  and emitted for audit, but OpenLoops does not claim provider-side enforcement.
+  Relaxed sandboxes and native provider bypass modes also require explicit
+  `--manual-break-glass`.
 - `--permission-mode` maps `plan`, `auto`, and `bypass` where the provider supports it. Claude uses native permission modes, Cursor maps bypass to `--force`, and OpenCode/AICopilot map bypass to `--dangerously-skip-permissions`.
+- `extraArgs` is fail-closed: every provider currently rejects non-empty
+  passthrough arguments, including unknown options, positional subcommands,
+  split values, `--option=value`, and attached short-option forms. Configure
+  execution, output, permissions, sandboxing, model, cwd, and other supported
+  behavior through the modeled agent-target fields. A passthrough option must
+  be explicitly reviewed and added to the provider allowlist before use.
+  Legacy persisted targets are not silently accepted or rewritten: execution
+  fails validation until `extraArgs` is removed and replaced with modeled
+  fields. API and migration imports reject those targets instead of stripping
+  the arguments; update the source record and retry the import.
 - `--variant` is provider-specific reasoning/model effort. Claude maps it to `--effort`, Codewith/Codex map it to `model_reasoning_effort`, and OpenCode/AICopilot pass `--variant`.
 - Daemon and scheduled runs prepend common user executable directories such as `~/.local/bin` and `~/.bun/bin` before resolving provider CLIs.
+
+For hosted workflow runs, the control plane derives any required agent session
+contract from the stored workflow step and persists it before execution. Reusing an
+older workflow run backfills a missing valid contract idempotently. Stored
+pre-contract workflows with unsafe/invalid agent options, mismatched stored
+contracts, duplicate contracts, command-step contracts, and client-fabricated
+contracts fail closed. Direct agent loops continue to expose their contract
+through prompt/environment metadata only.
 
 For production loops that can mutate repos, use disposable worktrees (`--worktree-mode required` / `worktreeMode=required`) and explicit prompts that name allowed write scope. Worktrees are executor-enforced: when a target carries worktree metadata, the executor prepares and enters the git worktree before spawning the child process, records the worktree it entered, and with `mode=required` fails the run closed instead of falling back to the original checkout when preparation fails. Existing managed worktrees are reused only after top-level and git-common-dir checks; a clean detached or stale-branch checkout may be reattached to the expected generated branch, while dirty or unsafe mismatches fail with cleanup evidence. Remote machine runs with a required worktree apply the same checks on the remote side before the target executes.
 

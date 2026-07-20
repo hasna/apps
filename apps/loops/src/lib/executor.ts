@@ -7,6 +7,7 @@ import type { LanguageModel } from "ai";
 import type {
   AccountRef,
   AgentProvider,
+  AgentSessionContract,
   AgentTarget,
   AgentWorktreeSpec,
   CommandTarget,
@@ -18,7 +19,7 @@ import type {
   PersistGuardOptions,
 } from "../types.js";
 import { accountToolForProvider, resolveAccountEnv, resolveAccountEnvSync } from "./accounts.js";
-import { BoundedOutputBuffer, killProcessGroup, providerAdapter, spawnCapture } from "./agent-adapter.js";
+import { agentSessionContract, BoundedOutputBuffer, killProcessGroup, providerAdapter, spawnCapture, type AgentInvocation } from "./agent-adapter.js";
 import { commandNotFoundMessage, executableExists, normalizeExecutionPath } from "./env.js";
 import { nowIso } from "./ids.js";
 import { refreshLoopMachine, resolveMachineCommand } from "./machines.js";
@@ -112,9 +113,13 @@ interface CommandSpec {
   allowlist?: {
     tools?: string[];
     commands?: string[];
+    safetyReason?: string;
   };
+  sessionContract?: AgentSessionContract;
   agentProvider?: AgentProvider;
   worktree?: AgentWorktreeSpec;
+  /** Rebuild cwd-dependent provider argv/prompt from the original validated extraArgs snapshot. */
+  invocationForCwd?: (cwd: string) => AgentInvocation;
 }
 
 interface MachineCommandPlan {
@@ -304,11 +309,13 @@ function metadataEnv(metadata: ExecutionMetadata): Record<string, string> {
   return env;
 }
 
-function allowlistEnv(allowlist: CommandSpec["allowlist"]): Record<string, string> {
+function allowlistEnv(allowlist: CommandSpec["allowlist"], contract?: AgentSessionContract): Record<string, string> {
   const env: Record<string, string> = {};
   if (allowlist?.tools?.length) env.LOOPS_AGENT_ALLOWED_TOOLS = allowlist.tools.join(",");
   if (allowlist?.commands?.length) env.LOOPS_AGENT_ALLOWED_COMMANDS = allowlist.commands.join(",");
-  if (allowlist?.tools?.length || allowlist?.commands?.length) env.LOOPS_AGENT_ALLOWLIST_ENFORCEMENT = "metadata_only";
+  if (allowlist?.tools?.length || allowlist?.commands?.length || allowlist?.safetyReason) env.LOOPS_AGENT_ALLOWLIST_ENFORCEMENT = "metadata_only";
+  if (allowlist?.safetyReason) env.LOOPS_AGENT_ALLOWLIST_SAFETY_REASON = allowlist.safetyReason;
+  if (contract) env.LOOPS_AGENT_SESSION_CONTRACT = JSON.stringify(contract);
   return env;
 }
 
@@ -347,7 +354,8 @@ function commandSpec(target: ExecutableTarget, opts: ExecuteOptions): CommandSpe
     assertCodewithAuthProfileSupported(agentTarget.authProfile);
   }
   const adapter = providerAdapter(agentTarget.provider);
-  const invocation = adapter.buildInvocation(agentTarget);
+  const preparedInvocation = adapter.prepareInvocation(agentTarget);
+  const invocation = preparedInvocation.invocation;
   return {
     command: invocation.command,
     args: invocation.args,
@@ -362,8 +370,10 @@ function commandSpec(target: ExecutableTarget, opts: ExecuteOptions): CommandSpe
     preflightAnyOf: invocation.preflightAnyOf,
     stdin: invocation.stdin,
     allowlist: agentTarget.allowlist,
+    sessionContract: agentSessionContract(agentTarget),
     agentProvider: agentTarget.provider,
     worktree: agentTarget.worktree,
+    invocationForCwd: preparedInvocation.forCwd,
   };
 }
 
@@ -379,7 +389,7 @@ function composeExecutionEnv(
     Object.assign(env, accountEnv);
   }
   Object.assign(env, spec.env ?? {});
-  Object.assign(env, allowlistEnv(spec.allowlist));
+  Object.assign(env, allowlistEnv(spec.allowlist, spec.sessionContract));
   env.PATH = normalizeExecutionPath(env);
   env.SHLVL ||= "1";
   Object.assign(env, metadataEnv(metadata));
@@ -418,12 +428,12 @@ function commandForShell(spec: CommandSpec): string {
   return [spec.command, ...spec.args.map(shellQuote)].join(" ");
 }
 
-function hereDoc(value: string): string[] {
+function hereDoc(value: string, destinationVariable = "__OPENLOOPS_STDIN"): string[] {
   let delimiter = `__OPENLOOPS_STDIN_${randomBytes(8).toString("hex").toUpperCase()}__`;
   while (value.split(/\r?\n/).includes(delimiter)) {
     delimiter = `__OPENLOOPS_STDIN_${randomBytes(8).toString("hex").toUpperCase()}__`;
   }
-  return [`cat > "$__OPENLOOPS_STDIN" <<'${delimiter}'`, value, delimiter];
+  return [`cat > "$${destinationVariable}" <<'${delimiter}'`, value, delimiter];
 }
 
 function remoteBootstrapLines(
@@ -465,7 +475,7 @@ function remoteBootstrapLines(
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
     lines.push(`export ${key}=${shellQuote(value)}`);
   }
-  for (const [key, value] of Object.entries(allowlistEnv(spec.allowlist))) {
+  for (const [key, value] of Object.entries(allowlistEnv(spec.allowlist, spec.sessionContract))) {
     lines.push(`export ${key}=${shellQuote(value)}`);
   }
   return lines;
@@ -584,28 +594,48 @@ function remoteScript(spec: CommandSpec, metadata: ExecutionMetadata, fallbackSp
   // machine and fails closed when preparation fails; mode=auto falls back to
   // the original checkout using the rebuilt fallback invocation.
   const lines = remoteBootstrapLines(spec, metadata, { worktree: true });
+  const hasAutoFallback = Boolean(spec.worktree?.enabled && spec.worktree.mode === "auto" && fallbackSpec);
 
-  let stdinRedirect = "";
-  if (spec.stdin !== undefined) {
+  let primaryStdinRedirect = "";
+  if (hasAutoFallback) {
+    if (spec.stdin !== undefined || fallbackSpec?.stdin !== undefined) {
+      lines.push('__OPENLOOPS_STDIN=""', 'trap \'rm -f "$__OPENLOOPS_STDIN"\' EXIT');
+    }
+  } else if (spec.stdin !== undefined) {
     lines.push('__OPENLOOPS_STDIN="$(mktemp -t openloops-stdin.XXXXXX)"', 'trap \'rm -f "$__OPENLOOPS_STDIN"\' EXIT');
     lines.push(...hereDoc(spec.stdin));
-    stdinRedirect = ' < "$__OPENLOOPS_STDIN"';
+    primaryStdinRedirect = ' < "$__OPENLOOPS_STDIN"';
   }
 
-  const invocationFor = (invocationSpec: CommandSpec): string =>
+  const invocationFor = (invocationSpec: CommandSpec, stdinRedirect: string): string =>
     invocationSpec.shell
       ? `sh -c ${shellQuote(commandForShell(invocationSpec))}${stdinRedirect}`
       : `${[invocationSpec.command, ...invocationSpec.args].map(shellQuote).join(" ")}${stdinRedirect}`;
-  if (spec.worktree?.enabled && spec.worktree.mode === "auto" && fallbackSpec) {
+  const sessionContractLine = (invocationSpec: CommandSpec): string =>
+    invocationSpec.sessionContract
+      ? `export LOOPS_AGENT_SESSION_CONTRACT=${shellQuote(JSON.stringify(invocationSpec.sessionContract))}`
+      : "unset LOOPS_AGENT_SESSION_CONTRACT";
+  const fallbackBranchLines = (invocationSpec: CommandSpec): string[] => {
+    const branchLines: string[] = [];
+    let stdinRedirect = "";
+    if (invocationSpec.stdin !== undefined) {
+      branchLines.push('__OPENLOOPS_STDIN="$(mktemp -t openloops-stdin.XXXXXX)"');
+      branchLines.push(...hereDoc(invocationSpec.stdin));
+      stdinRedirect = ' < "$__OPENLOOPS_STDIN"';
+    }
+    branchLines.push(sessionContractLine(invocationSpec), invocationFor(invocationSpec, stdinRedirect));
+    return branchLines;
+  };
+  if (hasAutoFallback && fallbackSpec) {
     lines.push(
       'if [ "${__OPENLOOPS_WORKTREE_OK:-0}" = 1 ]; then',
-      `  ${invocationFor(spec)}`,
+      ...fallbackBranchLines(spec),
       "else",
-      `  ${invocationFor(fallbackSpec)}`,
+      ...fallbackBranchLines(fallbackSpec),
       "fi",
     );
   } else {
-    lines.push(invocationFor(spec));
+    lines.push(invocationFor(spec, primaryStdinRedirect));
   }
   return `${lines.join("\n")}\n`;
 }
@@ -931,17 +961,21 @@ async function enterWorktree(
  * (`--cd`/`--cwd`/`--dir`), and codewith durable agents rebuild their
  * start/control args from the recorded target.
  */
-function worktreeFallbackSpec(target: ExecutableTarget, opts: ExecuteOptions, fallbackCwd: string): CommandSpec | undefined {
-  if (target.type !== "agent") return undefined;
-  const agentTarget = target as AgentTarget;
-  const fallbackTarget: AgentTarget = {
-    ...agentTarget,
+function worktreeFallbackSpec(spec: CommandSpec, fallbackCwd: string): CommandSpec | undefined {
+  const invocation = spec.invocationForCwd?.(fallbackCwd);
+  if (!invocation) return undefined;
+  return {
+    ...spec,
+    command: invocation.command,
+    args: invocation.args,
     cwd: fallbackCwd,
-    worktree: agentTarget.worktree
-      ? { ...agentTarget.worktree, enabled: false, cwd: fallbackCwd, reason: "auto worktree preparation failed" }
+    preflightAnyOf: invocation.preflightAnyOf,
+    stdin: invocation.stdin,
+    sessionContract: spec.sessionContract ? { ...spec.sessionContract, cwd: fallbackCwd } : undefined,
+    worktree: spec.worktree
+      ? { ...spec.worktree, enabled: false, cwd: fallbackCwd, reason: "auto worktree preparation failed" }
       : undefined,
   };
-  return commandSpec(fallbackTarget, opts);
 }
 
 function preflightRemoteSpec(
@@ -1113,7 +1147,7 @@ export async function executeTarget(
     // cwd into argv), so the remote script carries both and picks at runtime.
     const remoteFallbackSpec =
       spec.worktree?.enabled && spec.worktree.mode === "auto"
-        ? worktreeFallbackSpec(target, opts, spec.worktree.originalCwd)
+        ? worktreeFallbackSpec(spec, spec.worktree.originalCwd)
         : undefined;
     return executeRemoteSpec(spec, machine, metadata, opts, remoteFallbackSpec);
   }
@@ -1141,7 +1175,11 @@ export async function executeTarget(
   const worktreeEntry = await enterWorktree(spec, opts, env, startedAt);
   if (worktreeEntry?.failure) return worktreeEntry.failure;
   if (worktreeEntry?.fallbackCwd) {
-    spec = worktreeFallbackSpec(target, opts, worktreeEntry.fallbackCwd) ?? spec;
+    spec = worktreeFallbackSpec(spec, worktreeEntry.fallbackCwd) ?? spec;
+    // executionEnv was composed from the primary worktree contract before
+    // preparation. Refresh the generated agent metadata after the spec swap
+    // without repeating account/credential resolution.
+    Object.assign(env, allowlistEnv(spec.allowlist, spec.sessionContract));
   }
 
   const child = spawn(spec.command, spec.args, {

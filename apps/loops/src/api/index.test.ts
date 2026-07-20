@@ -2,11 +2,13 @@ import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { createSqliteLoopStorage } from "../lib/storage/sqlite.js";
 import type { LoopStorageContract } from "../lib/storage/contract.js";
 import type { TenantAuthContext } from "../lib/auth/tenant-auth.js";
+import { publicValidationDetails, ValidationError, type PublicValidationDetails } from "../lib/errors.js";
 import type { LoopsApiServerOptions } from "./index.js";
-import type { Loop, WorkflowSpec } from "../types.js";
+import type { Loop, LoopRun, WorkflowSpec } from "../types.js";
 
 const apiPath = join(dirname(fileURLToPath(import.meta.url)), "index.ts");
 const jsonHeaders = { "content-type": "application/json" };
@@ -64,6 +66,56 @@ describe("loops-api foundation", () => {
     expect(status.status.deploymentMode).toBe("self_hosted");
     expect(JSON.stringify(status)).not.toContain("dataDir");
     expect(JSON.stringify(status)).not.toContain("dbPath");
+  });
+
+  test("OpenAPI documents actionable but bounded validation failures for create and import", async () => {
+    const mod = await import("./index.js");
+    const document = mod.openApiDocument() as {
+      paths: Record<string, { post?: { responses?: Record<string, { content?: { "application/json"?: { schema?: { $ref?: string } } } }> } }>;
+      components: { schemas: Record<string, unknown> };
+    };
+    for (const path of ["/v1/loops", "/v1/import"]) {
+      expect(document.paths[path]?.post?.responses?.["422"]?.content?.["application/json"]?.schema?.$ref)
+        .toBe("#/components/schemas/ValidationFailureResponse");
+    }
+    expect(document.components.schemas.ValidationFailureResponse).toMatchObject({
+      type: "object",
+      required: ["ok", "error"],
+      properties: {
+        details: { $ref: "#/components/schemas/PublicValidationDetails" },
+      },
+    });
+    expect(document.components.schemas.PublicValidationDetails).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      required: ["code", "reason", "path"],
+      properties: {
+        code: { const: "agent_extra_args_invalid" },
+        reason: { enum: ["not_array", "invalid_array", "invalid_item", "option_not_allowed"] },
+        path: { type: "string" },
+        index: { type: "integer", minimum: 0 },
+        option: {
+          type: "string",
+          pattern: "^(?:--[A-Za-z0-9][A-Za-z0-9-]{0,63}|-[A-Za-z0-9])$",
+        },
+      },
+    });
+    expect(document.components.schemas.CustomWorkflowEvent).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      required: ["id", "workflowRunId", "sequence", "eventKind", "eventType", "createdAt"],
+      properties: {
+        eventKind: { type: "string", enum: ["custom"] },
+        eventType: { type: "string", minLength: 1 },
+      },
+    });
+    expect(document.components.schemas.WorkflowEvent).toMatchObject({
+      oneOf: [
+        { $ref: "#/components/schemas/AgentSessionContractWorkflowEvent" },
+        { $ref: "#/components/schemas/GenericWorkflowEvent" },
+        { $ref: "#/components/schemas/CustomWorkflowEvent" },
+      ],
+    });
   });
 
   test("status command JSON uses the service envelope", () => {
@@ -271,6 +323,246 @@ describe("loops-api foundation", () => {
     }
   });
 
+  test("generic validation errors without public details remain non-leaky", async () => {
+    const mod = await import("./index.js");
+    const storage = {
+      listLoops: async () => { throw new ValidationError("private validation context: bearer super-secret"); },
+    } as unknown as LoopStorageContract;
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+
+    try {
+      const response = await fetch(apiUrl(server, "/v1/loops"));
+      expect(response.status).toBe(422);
+      expect(await response.json()).toEqual({ ok: false, error: "validation_failed" });
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("public validation details are an exact bounded projection", async () => {
+    const mod = await import("./index.js");
+    const details = {
+      code: "agent_extra_args_invalid",
+      reason: "option_not_allowed",
+      path: "target.extraArgs[0]",
+      index: 0,
+      option: "--durable",
+      privateValue: "bearer super-secret",
+    } as PublicValidationDetails & { privateValue: string };
+    const storage = {
+      listLoops: async () => { throw new ValidationError("private validation context", details); },
+    } as unknown as LoopStorageContract;
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+
+    try {
+      const response = await fetch(apiUrl(server, "/v1/loops"));
+      expect(response.status).toBe(422);
+      const body = await response.json();
+      expect(body).toEqual({
+        ok: false,
+        error: "validation_failed",
+        details: {
+          code: "agent_extra_args_invalid",
+          reason: "option_not_allowed",
+          path: "target.extraArgs[0]",
+          index: 0,
+          option: "--durable",
+        },
+      });
+      expect(JSON.stringify(body)).not.toContain("super-secret");
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("validation details snapshot each getter once and cannot be replaced or mutated", () => {
+    const expected = {
+      code: "agent_extra_args_invalid",
+      reason: "option_not_allowed",
+      path: "target.extraArgs[0]",
+      index: 0,
+      option: "--durable",
+    } as const;
+    const changed = {
+      code: "private_unvalidated_code",
+      reason: "private_unvalidated_reason",
+      path: "privateUnvalidatedPath",
+      index: 99,
+      option: "--private-unvalidated-option",
+    } as const;
+    const reads = { code: 0, reason: 0, path: 0, index: 0, option: 0 };
+    const details = {} as PublicValidationDetails;
+    for (const key of Object.keys(expected) as (keyof typeof expected)[]) {
+      Object.defineProperty(details, key, {
+        enumerable: true,
+        get() {
+          reads[key] += 1;
+          return reads[key] === 1 ? expected[key] : changed[key];
+        },
+      });
+    }
+    const error = new ValidationError("private validation context", details);
+
+    expect(reads).toEqual({ code: 1, reason: 1, path: 1, index: 1, option: 1 });
+    expect(error.publicDetails).toEqual(expected);
+    expect(Object.getOwnPropertyDescriptor(error, "publicDetails")).toMatchObject({
+      configurable: false,
+      writable: false,
+    });
+    expect(() => {
+      (error as { publicDetails?: unknown }).publicDetails = {
+        code: "agent_extra_args_invalid",
+        reason: "not_array",
+        path: "privateSecret",
+        privateValue: "bearer super-secret",
+      };
+    }).toThrow();
+    expect(() => {
+      Object.defineProperty(error, "publicDetails", { value: undefined });
+    }).toThrow();
+    expect(() => {
+      (error.publicDetails as { path: string }).path = "privateSecret";
+    }).toThrow();
+  });
+
+  test("throwing validation-detail getters fail closed without exposing metadata", () => {
+    const details = {} as PublicValidationDetails;
+    Object.defineProperty(details, "code", {
+      get() {
+        throw new Error("bearer super-secret");
+      },
+    });
+    const error = new ValidationError("private validation context", details);
+    expect(error.publicDetails).toBeUndefined();
+  });
+
+  test("public validation detail projection rejects producer-impossible relationships", () => {
+    const impossible = [
+      {
+        code: "agent_extra_args_invalid",
+        reason: "invalid_item",
+        path: "target.extraArgs[0]",
+        index: 0,
+        option: "--private",
+      },
+      {
+        code: "agent_extra_args_invalid",
+        reason: "option_not_allowed",
+        path: "target.extraArgs[9]",
+        index: 0,
+        option: "--private",
+      },
+      {
+        code: "agent_extra_args_invalid",
+        reason: "not_array",
+        path: "target.extraArgs[9]",
+      },
+      {
+        code: "agent_extra_args_invalid",
+        reason: "not_array",
+        path: "privatePath",
+      },
+    ];
+    for (const details of impossible) {
+      expect(publicValidationDetails(details)).toBeUndefined();
+    }
+  });
+
+  test("API re-projects forged validation details through the bounded public schema", async () => {
+    const mod = await import("./index.js");
+    const forged = Object.create(ValidationError.prototype) as ValidationError;
+    Object.defineProperty(forged, "publicDetails", {
+      value: {
+        code: "agent_extra_args_invalid",
+        reason: "option_not_allowed",
+        path: "target.extraArgs[0]",
+        index: 0,
+        option: "--durable",
+        privateValue: "bearer super-secret",
+      },
+    });
+    const storage = {
+      listLoops: async () => { throw forged; },
+    } as unknown as LoopStorageContract;
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+
+    try {
+      const response = await fetch(apiUrl(server, "/v1/loops"));
+      expect(response.status).toBe(422);
+      const body = await response.json();
+      expect(body).toEqual({
+        ok: false,
+        error: "validation_failed",
+        details: {
+          code: "agent_extra_args_invalid",
+          reason: "option_not_allowed",
+          path: "target.extraArgs[0]",
+          index: 0,
+          option: "--durable",
+        },
+      });
+      expect(JSON.stringify(body)).not.toContain("super-secret");
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("API hides throwing own or inherited public-details getters", async () => {
+    const mod = await import("./index.js");
+    for (const inherited of [false, true]) {
+      const forgedPrototype = inherited ? Object.create(ValidationError.prototype) : ValidationError.prototype;
+      const forged = Object.create(forgedPrototype) as ValidationError;
+      Object.defineProperty(inherited ? forgedPrototype : forged, "publicDetails", {
+        configurable: true,
+        get() {
+          throw new Error("private-public-details-getter-sentinel");
+        },
+      });
+      const storage = {
+        listLoops: async () => { throw forged; },
+      } as unknown as LoopStorageContract;
+      const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+
+      try {
+        const response = await fetch(apiUrl(server, "/v1/loops"));
+        expect(response.status).toBe(422);
+        expect(response.headers.get("content-type")).toContain("application/json");
+        const body = await response.text();
+        expect(JSON.parse(body)).toEqual({ ok: false, error: "validation_failed" });
+        expect(body).not.toContain("private-public-details-getter-sentinel");
+        expect(body).not.toContain(import.meta.dir);
+      } finally {
+        server.stop(true);
+      }
+    }
+  });
+
+  test("API hides forged validation details with impossible field relationships", async () => {
+    const mod = await import("./index.js");
+    const forged = Object.create(ValidationError.prototype) as ValidationError;
+    Object.defineProperty(forged, "publicDetails", {
+      value: {
+        code: "agent_extra_args_invalid",
+        reason: "invalid_item",
+        path: "target.extraArgs[0]",
+        index: 0,
+        option: "--private",
+      },
+    });
+    const storage = {
+      listLoops: async () => { throw forged; },
+    } as unknown as LoopStorageContract;
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+
+    try {
+      const response = await fetch(apiUrl(server, "/v1/loops"));
+      expect(response.status).toBe(422);
+      expect(await response.json()).toEqual({ ok: false, error: "validation_failed" });
+    } finally {
+      server.stop(true);
+    }
+  });
+
   test("api command failures use stable logs without provider details", async () => {
     const mod = await import("./index.js");
     const logged: string[] = [];
@@ -357,6 +649,173 @@ describe("loops-api foundation", () => {
       const deleteResponse = await fetch(apiUrl(server, `/v1/loops/${created.loop.id}`), { method: "DELETE" });
       expect(deleteResponse.status).toBe(200);
       expect(await deleteResponse.json()).toMatchObject({ ok: true, deleted: true });
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("POST /v1/loops rejects invalid agent extraArgs as 422 without persistence", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+
+    try {
+      for (const [name, extraArgs, details] of [
+        ["not-array", "private-value", {
+          code: "agent_extra_args_invalid",
+          reason: "not_array",
+          path: "target.extraArgs",
+        }],
+        ["unknown-option", ["--durable=private-value", "true"], {
+          code: "agent_extra_args_invalid",
+          reason: "option_not_allowed",
+          path: "target.extraArgs[0]",
+          index: 0,
+          option: "--durable",
+        }],
+        ["malformed-entry", [null, "--dangerously-bypass-hook-trust"], {
+          code: "agent_extra_args_invalid",
+          reason: "invalid_item",
+          path: "target.extraArgs[0]",
+          index: 0,
+        }],
+      ] as const) {
+        const response = await fetch(apiUrl(server, "/v1/loops"), {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify({
+            name: `invalid-extra-args-${name}`,
+            schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+            target: {
+              type: "agent",
+              provider: "codewith",
+              prompt: "do not execute",
+              extraArgs,
+            },
+          }),
+        });
+        expect(response.status).toBe(422);
+        const body = await response.json();
+        expect(body).toEqual({ ok: false, error: "validation_failed", details });
+        expect(JSON.stringify(body)).not.toContain("private-value");
+      }
+      expect(await storage.countLoops()).toBe(0);
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("POST /v1/import rejects legacy agent extraArgs instead of persisting or stripping them", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+    const legacyLoop = {
+      id: "loop-import-legacy-extra-args",
+      name: "legacy-extra-args",
+      status: "paused",
+      schedule: { type: "once", at: "2026-01-01T00:00:00.000Z" },
+      target: {
+        type: "agent",
+        provider: "codewith",
+        prompt: "do not execute",
+        extraArgs: ["--durable", "true"],
+      },
+      catchUp: "latest",
+      catchUpLimit: 50,
+      overlap: "skip",
+      maxAttempts: 1,
+      retryDelayMs: 60_000,
+      leaseMs: 1_800_000,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+
+    try {
+      const response = await fetch(apiUrl(server, "/v1/import"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ loops: [legacyLoop] }),
+      });
+      expect(response.status).toBe(422);
+      expect(await response.json()).toEqual({
+        ok: false,
+        error: "validation_failed",
+        details: {
+          code: "agent_extra_args_invalid",
+          reason: "option_not_allowed",
+          path: "loops[0].target.extraArgs[0]",
+          index: 0,
+          option: "--durable",
+        },
+      });
+      expect(await storage.getLoop(legacyLoop.id)).toBeUndefined();
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("POST /v1/import rejects malformed agent addDirs and preserves valid arrays", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+    const importedLoop = {
+      id: "loop-import-agent-add-dirs",
+      name: "imported-agent-add-dirs",
+      status: "paused",
+      schedule: { type: "once", at: "2026-01-01T00:00:00.000Z" },
+      target: {
+        type: "agent",
+        provider: "codewith",
+        prompt: "do not execute",
+        addDirs: ["/tmp/allowed"],
+      },
+      catchUp: "latest",
+      catchUpLimit: 50,
+      overlap: "skip",
+      maxAttempts: 1,
+      retryDelayMs: 60_000,
+      leaseMs: 1_800_000,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+
+    try {
+      for (const addDirs of [
+        "/",
+        ["/tmp/allowed", null],
+        ["/"],
+        ["//"],
+        ["/."],
+        ["/tmp/.."],
+        ["C:\\"],
+        ["C:/tmp/.."],
+      ] as const) {
+        const response = await fetch(apiUrl(server, "/v1/import"), {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify({
+            loops: [{ ...importedLoop, target: { ...importedLoop.target, addDirs } }],
+          }),
+        });
+        expect(response.status).toBe(422);
+        expect(await response.json()).toEqual({ ok: false, error: "validation_failed" });
+        expect(await storage.getLoop(importedLoop.id)).toBeUndefined();
+      }
+
+      const validResponse = await fetch(apiUrl(server, "/v1/import"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ loops: [importedLoop] }),
+      });
+      expect(validResponse.status).toBe(200);
+      expect((await storage.getLoop(importedLoop.id))?.target).toMatchObject({
+        type: "agent",
+        provider: "codewith",
+        addDirs: ["/tmp/allowed"],
+      });
     } finally {
       server.stop(true);
       await storage.close();
@@ -1211,7 +1670,19 @@ describe("loops-api foundation", () => {
     try {
       const workflow = await storage.createWorkflow({
         name: "api-workflow-claim-execute",
-        steps: [{ id: "step", target: { type: "command", command: "printf workflow-ok", shell: true } }],
+        steps: [
+          { id: "command", target: { type: "command", command: "printf workflow-ok", shell: true } },
+          {
+            id: "contract-agent",
+            target: {
+              type: "agent",
+              provider: "codewith",
+              prompt: "perform scoped work",
+              allowlist: { commands: ["git"], safetyReason: "isolated API contract test" },
+            },
+          },
+          { id: "default-agent", target: { type: "agent", provider: "claude", prompt: "perform default work" } },
+        ],
       });
       const loop = await storage.createLoop(
         {
@@ -1232,7 +1703,7 @@ describe("loops-api foundation", () => {
         claims: Array<{
           claimToken: string;
           loop: { id: string; target: { type: string; workflowId?: string } };
-          run: { id: string; status: string };
+          run: LoopRun;
           workflow?: WorkflowSpec;
         }>;
       };
@@ -1240,24 +1711,82 @@ describe("loops-api foundation", () => {
       expect(claimed.claims[0]).toMatchObject({
         loop: { id: loop.id, target: { type: "workflow", workflowId: workflow.id } },
         run: { status: "running" },
-        workflow: { id: workflow.id, steps: [{ id: "step", target: { type: "command", command: "printf workflow-ok" } }] },
+        workflow: { id: workflow.id, steps: [{ id: "command" }, { id: "contract-agent" }, { id: "default-agent" }] },
       });
       expect(claimed.claims[0]!.claimToken).toBeString();
       expect(await storage.listRuns({ loopId: loop.id })).toHaveLength(1);
+
+      const idempotencyKey = `${claimed.claims[0]!.run.id}:workflow:${workflow.id}`;
+      const preChangeWorkflowRun = await storage.createWorkflowRun({
+        workflow,
+        loop,
+        loopRun: claimed.claims[0]!.run,
+        idempotencyKey,
+      });
+      expect((await storage.listWorkflowEvents(preChangeWorkflowRun.id)).filter((event) =>
+        event.eventType === "agent_session_contract"
+      )).toHaveLength(1);
 
       const createWorkflowRun = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs`), {
         method: "POST",
         headers: jsonHeaders,
         body: JSON.stringify({
           claimToken: claimed.claims[0]!.claimToken,
-          idempotencyKey: `${claimed.claims[0]!.run.id}:workflow:${workflow.id}`,
+          idempotencyKey,
         }),
       });
       expect(createWorkflowRun.status).toBe(200);
       const created = (await createWorkflowRun.json()) as { workflowRun: { id: string; loopRunId: string; workflowId: string; status: string } };
       expect(created.workflowRun).toMatchObject({ loopRunId: claimed.claims[0]!.run.id, workflowId: workflow.id, status: "running" });
+      expect(created.workflowRun.id).toBe(preChangeWorkflowRun.id);
 
-      const staleStart = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs/${created.workflowRun.id}/steps/step/start`), {
+      const internal = storage.store as unknown as { db: Database };
+      const eventsBeforeProvenanceFailures = await storage.listWorkflowEvents(created.workflowRun.id);
+      const runCountBeforeProvenanceFailures = (await storage.listWorkflowRuns({ workflowId: workflow.id })).length;
+      const changedSteps = workflow.steps.map((step) =>
+        step.id === "contract-agent" && step.target.type === "agent"
+          ? { ...step, target: { ...step.target, prompt: "changed after the idempotent run was created" } }
+          : step
+      );
+      internal.db.query("UPDATE workflow_specs SET steps_json = ? WHERE id = ?")
+        .run(JSON.stringify(changedSteps), workflow.id);
+      const changedDefinition = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken: claimed.claims[0]!.claimToken,
+          idempotencyKey,
+        }),
+      });
+      expect(changedDefinition.status).toBe(409);
+      expect(await changedDefinition.json()).toMatchObject({ ok: false, error: "workflow_run_definition_conflict" });
+      expect((await storage.listWorkflowRuns({ workflowId: workflow.id })).length).toBe(runCountBeforeProvenanceFailures);
+      expect(await storage.listWorkflowEvents(created.workflowRun.id)).toEqual(eventsBeforeProvenanceFailures);
+
+      internal.db.query("UPDATE workflow_specs SET steps_json = ? WHERE id = ?")
+        .run(JSON.stringify(workflow.steps), workflow.id);
+      const provenance = internal.db.query<{ workflow_definition_hash: string }, [string]>(
+        "SELECT workflow_definition_hash FROM workflow_runs WHERE id = ?",
+      ).get(created.workflowRun.id);
+      expect(provenance?.workflow_definition_hash).toBeString();
+      internal.db.query("UPDATE workflow_runs SET workflow_definition_hash = NULL WHERE id = ?")
+        .run(created.workflowRun.id);
+      const legacyProvenance = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken: claimed.claims[0]!.claimToken,
+          idempotencyKey,
+        }),
+      });
+      expect(legacyProvenance.status).toBe(409);
+      expect(await legacyProvenance.json()).toMatchObject({ ok: false, error: "workflow_run_provenance_missing" });
+      expect((await storage.listWorkflowRuns({ workflowId: workflow.id })).length).toBe(runCountBeforeProvenanceFailures);
+      expect(await storage.listWorkflowEvents(created.workflowRun.id)).toEqual(eventsBeforeProvenanceFailures);
+      internal.db.query("UPDATE workflow_runs SET workflow_definition_hash = ? WHERE id = ?")
+        .run(provenance!.workflow_definition_hash, created.workflowRun.id);
+
+      const staleStart = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs/${created.workflowRun.id}/steps/command/start`), {
         method: "POST",
         headers: jsonHeaders,
         body: JSON.stringify({ claimToken: "wrong-token" }),
@@ -1265,13 +1794,200 @@ describe("loops-api foundation", () => {
       expect(staleStart.status).toBe(409);
       expect(await staleStart.json()).toMatchObject({ ok: false, error: "stale_claim" });
 
-      const start = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs/${created.workflowRun.id}/steps/step/start`), {
+      const start = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs/${created.workflowRun.id}/steps/command/start`), {
         method: "POST",
         headers: jsonHeaders,
         body: JSON.stringify({ claimToken: claimed.claims[0]!.claimToken }),
       });
       expect(start.status).toBe(200);
-      expect(await start.json()).toMatchObject({ step: { stepId: "step", status: "running" } });
+      expect(await start.json()).toMatchObject({ step: { stepId: "command", status: "running" } });
+
+      const contractPayload = {
+        version: 1,
+        provider: "codewith",
+        permissionMode: "default",
+        sandbox: "workspace-write",
+        manualBreakGlass: false,
+        timeoutMs: null,
+        restrictions: { commands: ["git"], enforcement: "metadata_only", providerEnforced: false },
+        safetyReason: "isolated API contract test",
+      };
+      const derivedContracts = (await storage.listWorkflowEvents(created.workflowRun.id)).filter((event) =>
+        event.eventType === "agent_session_contract"
+      );
+      expect(derivedContracts).toHaveLength(1);
+      expect(derivedContracts[0]).toMatchObject({ stepId: "contract-agent", payload: contractPayload });
+
+      const mismatchContract = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs/${created.workflowRun.id}/events`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken: claimed.claims[0]!.claimToken,
+          eventType: "agent_session_contract",
+          stepId: "contract-agent",
+          payload: { ...contractPayload, sandbox: "danger-full-access" },
+        }),
+      });
+      expect(mismatchContract.status).toBe(409);
+      expect(await mismatchContract.json()).toMatchObject({ ok: false, error: "agent_session_contract_mismatch" });
+
+      const duplicateContract = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs/${created.workflowRun.id}/events`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken: claimed.claims[0]!.claimToken,
+          eventType: "agent_session_contract",
+          stepId: "contract-agent",
+          payload: contractPayload,
+        }),
+      });
+      expect(duplicateContract.status).toBe(409);
+      expect(await duplicateContract.json()).toMatchObject({ ok: false, error: "agent_session_contract_duplicate" });
+
+      const commandContract = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs/${created.workflowRun.id}/events`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken: claimed.claims[0]!.claimToken,
+          eventType: "agent_session_contract",
+          stepId: "command",
+          payload: contractPayload,
+        }),
+      });
+      expect(commandContract.status).toBe(422);
+      expect(await commandContract.json()).toMatchObject({ ok: false, error: "agent_session_contract_non_agent_step" });
+
+      const fabricatedContract = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs/${created.workflowRun.id}/events`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken: claimed.claims[0]!.claimToken,
+          eventType: "agent_session_contract",
+          stepId: "default-agent",
+          payload: contractPayload,
+        }),
+      });
+      expect(fabricatedContract.status).toBe(422);
+      expect(await fabricatedContract.json()).toMatchObject({ ok: false, error: "agent_session_contract_not_required" });
+
+      const arbitraryEvent = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs/${created.workflowRun.id}/events`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken: claimed.claims[0]!.claimToken,
+          eventType: "fabricated_security_verdict",
+          stepId: "contract-agent",
+          payload: {},
+        }),
+      });
+      expect(arbitraryEvent.status).toBe(422);
+      expect(await arbitraryEvent.json()).toMatchObject({ ok: false, error: "event_type_not_allowed" });
+
+      for (const [suffix, stepId] of [["unknown", "unknown-step"], ["missing", undefined]] as const) {
+        const corruptKey = `${idempotencyKey}:${suffix}`;
+        const corruptRun = await storage.createWorkflowRun({
+          workflow,
+          loop,
+          loopRun: claimed.claims[0]!.run,
+          idempotencyKey: corruptKey,
+        });
+        await storage.appendWorkflowEvent(
+          corruptRun.id,
+          "agent_session_contract",
+          stepId,
+          contractPayload,
+        );
+        const corruptBackfill = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs`), {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify({
+            claimToken: claimed.claims[0]!.claimToken,
+            idempotencyKey: corruptKey,
+          }),
+        });
+        expect(corruptBackfill.status).toBe(409);
+        expect(await corruptBackfill.json()).toMatchObject({ ok: false, error: "agent_session_contract_fabricated" });
+      }
+
+      const concurrentKey = `${idempotencyKey}:concurrent`;
+      const concurrentRun = await storage.createWorkflowRun({
+        workflow,
+        loop,
+        loopRun: claimed.claims[0]!.run,
+        idempotencyKey: concurrentKey,
+      });
+      const concurrentCreate = () => fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken: claimed.claims[0]!.claimToken,
+          idempotencyKey: concurrentKey,
+        }),
+      });
+      const concurrentResponses = await Promise.all([concurrentCreate(), concurrentCreate()]);
+      expect(concurrentResponses.map((response) => response.status)).toEqual([200, 200]);
+      expect((await storage.listWorkflowEvents(concurrentRun.id)).filter((event) =>
+        event.eventType === "agent_session_contract" && event.stepId === "contract-agent"
+      )).toHaveLength(1);
+
+      internal.db.query(
+        "DELETE FROM workflow_events WHERE workflow_run_id = ? AND event_type = 'agent_session_contract' AND step_id = ?",
+      ).run(created.workflowRun.id, "contract-agent");
+      const missingContract = await fetch(apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken: claimed.claims[0]!.claimToken,
+          idempotencyKey,
+        }),
+      });
+      expect(missingContract.status).toBe(409);
+      expect(await missingContract.json()).toMatchObject({ ok: false, error: "agent_session_contract_missing" });
+      expect((await storage.listWorkflowEvents(created.workflowRun.id)).filter((event) =>
+        event.eventType === "agent_session_contract" && event.stepId === "contract-agent"
+      )).toHaveLength(0);
+
+      const restoreMissingContract = () => fetch(
+        apiUrl(server, `/v1/runs/${claimed.claims[0]!.run.id}/workflow-runs/${created.workflowRun.id}/events`),
+        {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify({
+            claimToken: claimed.claims[0]!.claimToken,
+            eventType: "agent_session_contract",
+            stepId: "contract-agent",
+            payload: contractPayload,
+          }),
+        },
+      );
+      const restoredContract = await restoreMissingContract();
+      expect(restoredContract.status).toBe(200);
+      expect(await restoredContract.json()).toMatchObject({
+        event: {
+          eventType: "agent_session_contract",
+          stepId: "contract-agent",
+          payload: contractPayload,
+        },
+      });
+      expect((await storage.listWorkflowEvents(created.workflowRun.id)).filter((event) =>
+        event.eventType === "agent_session_contract" && event.stepId === "contract-agent"
+      )).toHaveLength(1);
+
+      const repeatedRestore = await restoreMissingContract();
+      expect(repeatedRestore.status).toBe(409);
+      expect(await repeatedRestore.json()).toMatchObject({ ok: false, error: "agent_session_contract_duplicate" });
+      expect((await storage.listWorkflowEvents(created.workflowRun.id)).filter((event) =>
+        event.eventType === "agent_session_contract" && event.stepId === "contract-agent"
+      )).toHaveLength(1);
+
+      internal.db.query(
+        "DELETE FROM workflow_events WHERE workflow_run_id = ? AND event_type = 'agent_session_contract' AND step_id = ?",
+      ).run(created.workflowRun.id, "contract-agent");
+      const concurrentRestores = await Promise.all([restoreMissingContract(), restoreMissingContract()]);
+      expect(concurrentRestores.map((response) => response.status).sort()).toEqual([200, 409]);
+      expect((await storage.listWorkflowEvents(created.workflowRun.id)).filter((event) =>
+        event.eventType === "agent_session_contract" && event.stepId === "contract-agent"
+      )).toHaveLength(1);
     } finally {
       server.stop(true);
       await storage.close();

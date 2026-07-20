@@ -137,6 +137,8 @@ async function postJson(fetchImpl: typeof fetch, config: { apiUrl: string; token
 }
 
 class RunnerWorkflowApiStore implements WorkflowExecutionStore {
+  readonly serverDerivedAgentSessionContracts = true;
+
   constructor(
     private readonly fetchImpl: typeof fetch,
     private readonly config: { apiUrl: string; token?: string },
@@ -240,6 +242,15 @@ class RunnerWorkflowApiStore implements WorkflowExecutionStore {
     progress: { stdout?: string; stderr?: string; payload?: Record<string, unknown> },
   ): Promise<WorkflowStepRun> {
     return (await this.post(this.stepPath(workflowRunId, stepId, "progress"), progress)).step as WorkflowStepRun;
+  }
+
+  async appendWorkflowEvent(
+    workflowRunId: string,
+    eventType: string,
+    stepId?: string,
+    payload?: Record<string, unknown>,
+  ): Promise<unknown> {
+    return (await this.post(this.workflowRunPath(workflowRunId, "/events"), { eventType, stepId, payload })).event;
   }
 
   async skipWorkflowStepRun(workflowRunId: string, stepId: string, reason: string): Promise<WorkflowStepRun> {

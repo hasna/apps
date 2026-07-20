@@ -37,6 +37,11 @@
       "checksum": "sha256:95ac3c0dfeef6f6e6d4bd8b92473d19aabae0c83ebc3b1f4409d84fc0bbfa11c"
     },
     {
+      "id": "0011_workflow_run_provenance",
+      "file": "0011_workflow_run_provenance.sql",
+      "checksum": "sha256:5011c78d0d2cbf3fbcc601ce2bdea4a39cdde21cb9df931ca5c9c1dc3cd7e5b6"
+    },
+    {
       "id": "0008_tenant_prepare",
       "file": "0008_tenant_prepare.sql",
       "checksum": "sha256:76924f61f71fa2e7d3fb7773ff372200e26d0b3e48a5d05585adaeeca8f30043"

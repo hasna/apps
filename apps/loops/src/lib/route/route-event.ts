@@ -783,7 +783,9 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
   }
   const providerRouting = resolveProviderRouting(data, metadata, opts);
   const provider = providerRouting.provider;
-  const permissionMode = permissionModeFromOpts({ permissionMode: opts.permissionMode ?? "bypass" }, provider);
+  const permissionMode = permissionModeFromOpts({
+    permissionMode: opts.permissionMode ?? (["codewith", "codex"].includes(provider) ? "bypass" : "default"),
+  }, provider);
   const sandbox = sandboxFromOpts({ sandbox: opts.sandbox }, provider);
   const authProfile = providerAuthProfileFromOpts({ authProfile: providerRouting.authProfile }, provider);
   const templateId = todosTaskRouteTemplateId(opts);
@@ -815,6 +817,7 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
     verifierIdleTimeoutMs: idleTimeoutDuration(opts.verifierIdleTimeout, "--verifier-idle-timeout"),
     permissionMode,
     sandbox,
+    safetyReason: opts.safetyReason,
     manualBreakGlass: Boolean(opts.manualBreakGlass),
     worktreeMode: (opts.worktreeMode ?? "auto") as AgentWorktreeMode,
     worktreeRoot: opts.worktreeRoot,
@@ -862,6 +865,7 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
       projectGroup,
       worktreePolicy: (opts.worktreeMode ?? "auto") as AgentWorktreeMode,
       permissions: permissionMode,
+      safetyReason: opts.safetyReason,
       manualBreakGlass: Boolean(opts.manualBreakGlass),
       prHandoff: templateId === TASK_LIFECYCLE_TEMPLATE_ID ? Boolean(opts.prHandoff) : false,
       accountPolicy: providerRouting.authProfilePool?.length || providerRouting.accountPool?.length ? "pool" : hasExplicitRoleAccount ? "role-explicit" : "single",
@@ -936,7 +940,9 @@ export function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOpti
   const idempotencyKey = `generic-event:${event.source}:${event.type}:${event.id}`;
   const providerRouting = resolveProviderRouting(data, metadata, opts);
   const provider = providerRouting.provider;
-  const permissionMode = permissionModeFromOpts({ permissionMode: opts.permissionMode ?? "bypass" }, provider);
+  const permissionMode = permissionModeFromOpts({
+    permissionMode: opts.permissionMode ?? (["codewith", "codex"].includes(provider) ? "bypass" : "default"),
+  }, provider);
   const sandbox = sandboxFromOpts({ sandbox: opts.sandbox }, provider);
   const authProfile = providerAuthProfileFromOpts({ authProfile: providerRouting.authProfile }, provider);
   const workflowContext = {
@@ -971,6 +977,7 @@ export function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOpti
     verifierIdleTimeoutMs: idleTimeoutDuration(opts.verifierIdleTimeout, "--verifier-idle-timeout"),
     permissionMode,
     sandbox,
+    safetyReason: opts.safetyReason,
     manualBreakGlass: Boolean(opts.manualBreakGlass),
     worktreeMode: (opts.worktreeMode ?? "auto") as AgentWorktreeMode,
     worktreeRoot: opts.worktreeRoot,
@@ -1000,6 +1007,7 @@ export function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOpti
       projectGroup,
       worktreePolicy: (opts.worktreeMode ?? "auto") as AgentWorktreeMode,
       permissions: permissionMode,
+      safetyReason: opts.safetyReason,
       manualBreakGlass: Boolean(opts.manualBreakGlass),
       accountPolicy: providerRouting.authProfilePool?.length || providerRouting.accountPool?.length ? "pool" : hasExplicitRoleAccount ? "role-explicit" : "single",
       providerRouting: providerRoutingPublic(providerRouting),
