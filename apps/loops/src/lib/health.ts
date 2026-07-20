@@ -244,14 +244,44 @@ function safeHost(value: string | undefined): string | undefined {
   return /^[a-z0-9.-]+$/i.test(host) ? host.toLowerCase() : undefined;
 }
 
+const HOST_AND_PORT_PATTERN = /^[a-z0-9.-]+(?::[0-9]+)?$/i;
+const HOST_LABEL_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+function isValidDnsHost(host: string): boolean {
+  return host.length <= 253 && host.split(".").every((label) => HOST_LABEL_PATTERN.test(label));
+}
+
 function isCursorHost(host: string | undefined): boolean {
-  return host === "cursor.sh" || Boolean(host?.endsWith(".cursor.sh"));
+  if (!host || !isValidDnsHost(host)) return false;
+  return host === "cursor.sh" || host.endsWith(".cursor.sh");
+}
+
+function hostFromReferenceToken(rawToken: string): string | undefined {
+  const token = rawToken
+    .replace(/^[([{<"'`]+/, "")
+    .replace(/[)\]}>,"'`;]+$/, "");
+  if (!token) return undefined;
+
+  if (/^https?:\/\//i.test(token)) {
+    if (token.includes("\\")) return undefined;
+    const authority = token.slice(token.indexOf("//") + 2).split(/[/?#]/, 1)[0] ?? "";
+    if (!HOST_AND_PORT_PATTERN.test(authority)) return undefined;
+    try {
+      return safeHost(new URL(token).hostname);
+    } catch {
+      return undefined;
+    }
+  }
+
+  return HOST_AND_PORT_PATTERN.test(token) ? safeHost(token) : undefined;
 }
 
 function cursorHostFromText(rawText: string): string | undefined {
-  const match = /\b(?:https?:\/\/)?([a-z0-9.-]*cursor\.sh)\b/i.exec(rawText);
-  const host = safeHost(match?.[1]);
-  return isCursorHost(host) ? host : undefined;
+  for (const token of rawText.split(/\s+/)) {
+    const host = hostFromReferenceToken(token);
+    if (isCursorHost(host)) return host;
+  }
+  return undefined;
 }
 
 function providerUnavailableSummary(rawText: string): string | undefined {

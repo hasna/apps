@@ -81,6 +81,52 @@ describe("loop health classification", () => {
     expect(signal?.fingerprint).toMatch(/^[a-f0-9]{16}$/);
   });
 
+  test("recognizes exact and valid subdomain Cursor hosts for provider capacity", () => {
+    const cases = [
+      ["https://cursor.sh", "cursor.sh"],
+      ["HTTPS://API2.CURSOR.SH/v1/agents", "api2.cursor.sh"],
+      ["agentn.global.api5.cursor.sh:443", "agentn.global.api5.cursor.sh"],
+    ];
+
+    for (const [reference, expectedHost] of cases) {
+      const signal = classifyRunFailure(run({
+        stderr: `Connection lost to ${reference}\nRetriableError: [resource_exhausted] Error`,
+      }));
+
+      expect(signal?.classification).toBe("provider_capacity");
+      expect(signal?.evidence.summary).toBe(`provider capacity exhausted: resource_exhausted ${expectedHost}`);
+    }
+  });
+
+  test("rejects hostile and malformed Cursor-like references for provider capacity", () => {
+    const references = [
+      "https://api.cursor.sh.evil.example",
+      "https://cursor.sh.evil.example/path",
+      "https://evilcursor.sh",
+      "https://cursor-sh.example",
+      "https://api.cursor.sh.",
+      "https://api..cursor.sh",
+      "https://-api.cursor.sh",
+      "https://api-.cursor.sh",
+      `https://${"a".repeat(64)}.cursor.sh`,
+      "https://api.cursor.sh@evil.example",
+      "https://evil.example/api.cursor.sh",
+      "https://api.cursor.sh%2eevil.example",
+      "https://%63ursor.sh",
+      "https://api\u3002cursor.sh",
+      "https://api.cursor.sh\\@evil.example",
+    ];
+
+    for (const reference of references) {
+      const signal = classifyRunFailure(run({
+        stderr: `Connection lost to ${reference}\nRetriableError: [resource_exhausted] Error`,
+      }));
+
+      expect(signal?.classification).toBe("unknown");
+      expect(signal?.evidence.summary).toBeUndefined();
+    }
+  });
+
   test("does not broaden provider-unavailable classification to unrelated failures", () => {
     const cases: Array<[RunFailureClassification, Partial<LoopRun>]> = [
       ["auth", { stderr: "Error: unauthorized invalid token" }],
