@@ -7,15 +7,16 @@
 //
 // This module makes the client actually talk to the cloud. Given an app name and
 // the environment it decides whether reads AND writes should be routed to the
-// app's cloud HTTP API (`<API_URL>/v1`, default `https://<app>.hasna.xyz/v1`)
-// with the API key, or fall through to the local store.
+// app's cloud HTTP API (`<API_URL>/v1`, e.g. `https://<app>.<your-deployment-domain>/v1`)
+// with the API key, or fall through to the local store. There is no built-in
+// hostname default — the API URL must be configured explicitly (see below).
 //
 // THE CLIENT-FLIP CONTRACT (env vars). For app `<NAME>` = envToken(name):
 //
 //   Mode:
 //     HASNA_<NAME>_STORAGE_MODE = local | self_hosted | cloud
 //   API base URL (`/v1` is appended automatically):
-//     HASNA_<NAME>_API_URL = https://<app>.hasna.xyz
+//     HASNA_<NAME>_API_URL = https://<app>.<your-deployment-domain>
 //   API key (bearer / x-api-key):
 //     HASNA_<NAME>_API_KEY = hasna_<app>_...
 //
