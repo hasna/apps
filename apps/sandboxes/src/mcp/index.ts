@@ -1,0 +1,321 @@
+#!/usr/bin/env bun
+/**
+ * `sandboxes-mcp` — Model Context Protocol (stdio) server exposing disposable
+ * sandbox lifecycle tools over the managed E2B/Daytona adapters (and the local
+ * simulator). Tool names mirror the previous sandbox-manager MCP so existing
+ * `mcp__sandboxes__*` client configs keep working. Every tool resolves a
+ * provider-neutral SandboxBackend; credentials are never returned to clients.
+ */
+import { readdirSync, readFileSync, statSync } from "node:fs"
+import { join, relative } from "node:path"
+import { Server } from "@modelcontextprotocol/sdk/server/index.js"
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
+import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js"
+import { isSandboxProvider, resolveBackend, SANDBOX_PROVIDERS, type SecretsReader } from "../runtime/resolve"
+import type { SandboxBackend, SandboxProvider } from "../runtime/types"
+
+export const MCP_VERSION = "1.0.0"
+
+export interface McpDeps {
+  resolve?: (provider: SandboxProvider) => Promise<SandboxBackend>
+  env?: NodeJS.ProcessEnv
+  home?: string
+  secretsReader?: SecretsReader
+}
+
+type Json = Record<string, unknown>
+type ToolHandler = (args: Json, backend: SandboxBackend) => Promise<unknown>
+
+interface ToolDef {
+  name: string
+  description: string
+  inputSchema: Json
+  handler: ToolHandler
+}
+
+const providerProp = { type: "string", enum: [...SANDBOX_PROVIDERS], description: "provider (default local)" }
+const idProp = { type: "string", description: "sandbox id" }
+
+function str(args: Json, key: string): string {
+  const value = args[key]
+  if (typeof value !== "string" || value.length === 0) throw new Error(`missing required string '${key}'`)
+  return value
+}
+
+function argvFrom(args: Json): string[] {
+  const command = args.command
+  if (Array.isArray(command)) return command.map((c) => String(c))
+  if (typeof command === "string") return ["sh", "-c", command]
+  throw new Error("missing required 'command' (string or string[])")
+}
+
+export const SANDBOX_TOOLS: ToolDef[] = [
+  {
+    name: "create_sandbox",
+    description: "Create a new sandbox",
+    inputSchema: {
+      type: "object",
+      properties: {
+        provider: providerProp,
+        template: { type: "string", description: "template / image alias" },
+        timeout_ms: { type: "number", description: "auto-expire after N ms" },
+        metadata: { type: "object", additionalProperties: { type: "string" } },
+      },
+    },
+    handler: async (args, backend) =>
+      backend.create({
+        ...(typeof args.template === "string" ? { template: args.template } : {}),
+        ...(typeof args.timeout_ms === "number" ? { timeout_ms: args.timeout_ms } : {}),
+        ...(args.metadata && typeof args.metadata === "object" ? { metadata: args.metadata as Record<string, string> } : {}),
+      }),
+  },
+  {
+    name: "list_sandboxes",
+    description: "List sandboxes",
+    inputSchema: { type: "object", properties: { provider: providerProp } },
+    handler: async (_args, backend) => backend.list(),
+  },
+  {
+    name: "get_sandbox",
+    description: "Get sandbox details by ID",
+    inputSchema: { type: "object", properties: { provider: providerProp, sandbox_id: idProp }, required: ["sandbox_id"] },
+    handler: async (args, backend) => backend.get(str(args, "sandbox_id")),
+  },
+  {
+    name: "delete_sandbox",
+    description: "Delete a sandbox",
+    inputSchema: { type: "object", properties: { provider: providerProp, sandbox_id: idProp }, required: ["sandbox_id"] },
+    handler: async (args, backend) => {
+      await backend.destroy(str(args, "sandbox_id"))
+      return { deleted: true, sandbox_id: args.sandbox_id }
+    },
+  },
+  {
+    name: "stop_sandbox",
+    description: "Stop a running sandbox",
+    inputSchema: { type: "object", properties: { provider: providerProp, sandbox_id: idProp }, required: ["sandbox_id"] },
+    handler: async (args, backend) => backend.stop(str(args, "sandbox_id")),
+  },
+  {
+    name: "keep_alive",
+    description: "Extend sandbox lifetime",
+    inputSchema: {
+      type: "object",
+      properties: { provider: providerProp, sandbox_id: idProp, timeout_ms: { type: "number" } },
+      required: ["sandbox_id", "timeout_ms"],
+    },
+    handler: async (args, backend) => backend.keepAlive(str(args, "sandbox_id"), Number(args.timeout_ms)),
+  },
+  {
+    name: "exec_command",
+    description: "Execute a command in a sandbox",
+    inputSchema: {
+      type: "object",
+      properties: {
+        provider: providerProp,
+        sandbox_id: idProp,
+        command: { description: "command string or argv array" },
+        cwd: { type: "string" },
+        timeout_ms: { type: "number" },
+      },
+      required: ["sandbox_id", "command"],
+    },
+    handler: async (args, backend) =>
+      backend.exec(str(args, "sandbox_id"), argvFrom(args), {
+        ...(typeof args.cwd === "string" ? { cwd: args.cwd } : {}),
+        ...(typeof args.timeout_ms === "number" ? { timeout_ms: args.timeout_ms } : {}),
+      }),
+  },
+  {
+    name: "read_file",
+    description: "Read a file from a sandbox",
+    inputSchema: {
+      type: "object",
+      properties: { provider: providerProp, sandbox_id: idProp, path: { type: "string" } },
+      required: ["sandbox_id", "path"],
+    },
+    handler: async (args, backend) => {
+      const bytes = await backend.readFile(str(args, "sandbox_id"), str(args, "path"))
+      return { path: args.path, content: new TextDecoder().decode(bytes), content_base64: Buffer.from(bytes).toString("base64") }
+    },
+  },
+  {
+    name: "write_file",
+    description: "Write a file to a sandbox",
+    inputSchema: {
+      type: "object",
+      properties: {
+        provider: providerProp,
+        sandbox_id: idProp,
+        path: { type: "string" },
+        content: { type: "string", description: "UTF-8 content" },
+        content_base64: { type: "string", description: "base64-encoded content" },
+      },
+      required: ["sandbox_id", "path"],
+    },
+    handler: async (args, backend) => {
+      const bytes =
+        typeof args.content_base64 === "string"
+          ? new Uint8Array(Buffer.from(args.content_base64, "base64"))
+          : new TextEncoder().encode(typeof args.content === "string" ? args.content : "")
+      return backend.writeFile(str(args, "sandbox_id"), str(args, "path"), bytes)
+    },
+  },
+  {
+    name: "list_files",
+    description: "List files in a sandbox directory",
+    inputSchema: {
+      type: "object",
+      properties: { provider: providerProp, sandbox_id: idProp, path: { type: "string" } },
+      required: ["sandbox_id"],
+    },
+    handler: async (args, backend) => backend.listFiles(str(args, "sandbox_id"), typeof args.path === "string" ? args.path : "/workspace"),
+  },
+  {
+    name: "get_logs",
+    description: "Get sandbox event logs",
+    inputSchema: { type: "object", properties: { provider: providerProp, sandbox_id: idProp }, required: ["sandbox_id"] },
+    handler: async (args, backend) => backend.getLogs(str(args, "sandbox_id")),
+  },
+  {
+    name: "expose_port",
+    description: "Forward a sandbox port and get a public URL",
+    inputSchema: {
+      type: "object",
+      properties: { provider: providerProp, sandbox_id: idProp, port: { type: "number" } },
+      required: ["sandbox_id", "port"],
+    },
+    handler: async (args, backend) => backend.exposePort(str(args, "sandbox_id"), Number(args.port)),
+  },
+  {
+    name: "list_exposed_ports",
+    description: "List all forwarded ports for a sandbox",
+    inputSchema: { type: "object", properties: { provider: providerProp, sandbox_id: idProp }, required: ["sandbox_id"] },
+    handler: async (args, backend) => backend.listExposedPorts(str(args, "sandbox_id")),
+  },
+  {
+    name: "snapshot_sandbox",
+    description: "Capture sandbox filesystem state as a snapshot",
+    inputSchema: { type: "object", properties: { provider: providerProp, sandbox_id: idProp }, required: ["sandbox_id"] },
+    handler: async (args, backend) => backend.snapshot(str(args, "sandbox_id")),
+  },
+  {
+    name: "upload_dir",
+    description: "Upload a local directory into a sandbox",
+    inputSchema: {
+      type: "object",
+      properties: {
+        provider: providerProp,
+        sandbox_id: idProp,
+        local_dir: { type: "string", description: "local directory to upload" },
+        dest: { type: "string", description: "destination directory in the sandbox (default /workspace)" },
+      },
+      required: ["sandbox_id", "local_dir"],
+    },
+    handler: async (args, backend) => {
+      const id = str(args, "sandbox_id")
+      const localDir = str(args, "local_dir")
+      const dest = typeof args.dest === "string" ? args.dest : "/workspace"
+      const uploaded: string[] = []
+      const walk = (dir: string): void => {
+        for (const entry of readdirSync(dir)) {
+          const full = join(dir, entry)
+          if (statSync(full).isDirectory()) walk(full)
+          else uploaded.push(full)
+        }
+      }
+      walk(localDir)
+      for (const full of uploaded) {
+        const rel = relative(localDir, full)
+        await backend.writeFile(id, `${dest.replace(/\/$/u, "")}/${rel}`, new Uint8Array(readFileSync(full)))
+      }
+      return { uploaded: uploaded.length, dest }
+    },
+  },
+  {
+    name: "run_agent",
+    description: "Run an agent command inside a sandbox (thin exec wrapper)",
+    inputSchema: {
+      type: "object",
+      properties: {
+        provider: providerProp,
+        sandbox_id: idProp,
+        agent: { type: "string", description: "agent executable (default: agent)" },
+        prompt: { type: "string", description: "prompt / task" },
+        args: { type: "array", items: { type: "string" } },
+      },
+      required: ["sandbox_id", "prompt"],
+    },
+    handler: async (args, backend) => {
+      const agent = typeof args.agent === "string" ? args.agent : "agent"
+      const extra = Array.isArray(args.args) ? args.args.map((a) => String(a)) : []
+      return backend.exec(str(args, "sandbox_id"), [agent, ...extra, str(args, "prompt")])
+    },
+  },
+  {
+    name: "version",
+    description: "Get server version and available providers",
+    inputSchema: { type: "object", properties: {} },
+    handler: async () => ({ name: "@hasna/sandboxes", server: "sandboxes-mcp", version: MCP_VERSION, providers: SANDBOX_PROVIDERS }),
+  },
+  {
+    name: "health",
+    description: "Health check",
+    inputSchema: { type: "object", properties: {} },
+    handler: async () => ({ status: "ok", version: MCP_VERSION }),
+  },
+]
+
+export function createSandboxesMcpServer(deps: McpDeps = {}): Server {
+  const server = new Server({ name: "sandboxes-mcp", version: MCP_VERSION }, { capabilities: { tools: {} } })
+  const resolve =
+    deps.resolve ??
+    ((provider: SandboxProvider): Promise<SandboxBackend> =>
+      resolveBackend(provider, {
+        ...(deps.env === undefined ? {} : { env: deps.env }),
+        ...(deps.home === undefined ? {} : { home: deps.home }),
+        ...(deps.secretsReader === undefined ? {} : { secretsReader: deps.secretsReader }),
+      }))
+
+  const byName = new Map(SANDBOX_TOOLS.map((tool) => [tool.name, tool]))
+
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: SANDBOX_TOOLS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
+  }))
+
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const tool = byName.get(request.params.name)
+    if (tool === undefined) {
+      return { content: [{ type: "text", text: JSON.stringify({ error: `unknown tool: ${request.params.name}` }) }], isError: true }
+    }
+    const args = (request.params.arguments ?? {}) as Json
+    const providerRaw = typeof args.provider === "string" ? args.provider : "local"
+    if (!isSandboxProvider(providerRaw)) {
+      return { content: [{ type: "text", text: JSON.stringify({ error: `unknown provider: ${providerRaw}` }) }], isError: true }
+    }
+    let backend: SandboxBackend | undefined
+    try {
+      backend = await resolve(providerRaw)
+      const result = await tool.handler(args, backend)
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] }
+    } catch (error) {
+      return {
+        content: [{ type: "text", text: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }) }],
+        isError: true,
+      }
+    } finally {
+      await backend?.close()
+    }
+  })
+
+  return server
+}
+
+if (import.meta.main) {
+  const server = createSandboxesMcpServer()
+  const transport = new StdioServerTransport()
+  server.connect(transport).catch((error: unknown) => {
+    process.stderr.write(`fatal: ${error instanceof Error ? error.message : String(error)}\n`)
+    process.exit(1)
+  })
+}
