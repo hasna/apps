@@ -5,10 +5,11 @@
  * environment or the `secrets` vault and is passed straight to the SDK — it is
  * never logged or persisted here.
  *
- * NOTE: This path requires a real E2B_API_KEY and network access; it is not
- * exercised by the hermetic suite. Behaviour is mapped to the documented E2B
- * high-level API but should be smoke-tested against a live account before relying
- * on it in production.
+ * NOTE: The live paths require a real E2B_API_KEY and network access. The
+ * request/response *mapping* (including getLogs and the typed listExposedPorts
+ * unsupported result) is covered hermetically against a faked `e2b` module, but
+ * end-to-end behaviour should still be smoke-tested against a live account before
+ * relying on it in production.
  */
 import { shellJoin } from "./shell"
 import {
@@ -67,17 +68,60 @@ interface E2bStatic {
   getInfo(id: string, opts: Record<string, unknown>): Promise<E2bInfo>
 }
 
+/**
+ * Shape of a structured E2B sandbox log entry as returned by the documented,
+ * versioned `GET /v2/sandboxes/{sandboxID}/logs` endpoint
+ * (openapi `SandboxLogEntry`). E2B ships no high-level `Sandbox.getLogs()`, so we
+ * drive this endpoint through the SDK's own typed `ApiClient` (built on
+ * openapi-fetch) to return real logs instead of a stub.
+ */
+interface E2bLogEntry {
+  level?: string
+  message?: string
+  timestamp?: string
+  fields?: Record<string, string>
+}
+interface E2bLogsResult {
+  data?: { logs?: E2bLogEntry[] }
+  error?: unknown
+  response?: { status?: number }
+}
+interface E2bApiClient {
+  api: {
+    GET(
+      path: "/v2/sandboxes/{sandboxID}/logs",
+      init: { params: { path: { sandboxID: string }; query?: Record<string, unknown> } },
+    ): Promise<E2bLogsResult>
+  }
+}
+type E2bApiClientCtor = new (config: unknown, opts?: { requireApiKey?: boolean }) => E2bApiClient
+type E2bConnectionConfigCtor = new (opts: { apiKey?: string }) => unknown
+
+interface E2bModule {
+  Sandbox: E2bStatic
+  ApiClient?: E2bApiClientCtor
+  ConnectionConfig?: E2bConnectionConfigCtor
+}
+
 export interface E2bBackendConfig {
   apiKey: string
 }
 
-async function loadSandbox(): Promise<E2bStatic> {
+async function loadE2b(): Promise<E2bModule> {
   try {
-    const mod = (await import("e2b")) as unknown as { Sandbox: E2bStatic }
-    return mod.Sandbox
+    return (await import("e2b")) as unknown as E2bModule
   } catch (cause) {
     throw new LiveProviderUnavailableError(`failed to load the e2b SDK: ${String(cause)}`)
   }
+}
+
+async function loadSandbox(): Promise<E2bStatic> {
+  return (await loadE2b()).Sandbox
+}
+
+/** Map E2B's LogLevel ("debug"|"info"|"warn"|"error") onto our neutral levels. */
+function normalizeLogLevel(level: string | undefined): LogEntry["level"] {
+  return level === "warn" || level === "error" ? level : "info"
 }
 
 export function createE2bBackend(config: E2bBackendConfig): SandboxBackend {
@@ -163,8 +207,40 @@ export function createE2bBackend(config: E2bBackendConfig): SandboxBackend {
         finished: true,
       }
     },
-    async getLogs(_id: string): Promise<LogEntry[]> {
-      return []
+    /**
+     * Real sandbox logs via the documented, versioned E2B REST endpoint
+     * `GET /v2/sandboxes/{sandboxID}/logs`, driven through the SDK's own typed
+     * `ApiClient`. E2B ships no high-level `Sandbox.getLogs()`; when this SDK build
+     * predates `ApiClient`/`ConnectionConfig` we raise a typed
+     * live-provider-unavailable error rather than silently returning [].
+     */
+    async getLogs(id: string): Promise<LogEntry[]> {
+      const mod = await loadE2b()
+      if (typeof mod.ApiClient !== "function" || typeof mod.ConnectionConfig !== "function") {
+        throw new LiveProviderUnavailableError(
+          "e2b SDK build does not expose ApiClient/ConnectionConfig; cannot read sandbox logs",
+        )
+      }
+      const client = new mod.ApiClient(new mod.ConnectionConfig({ apiKey: config.apiKey }))
+      const res = await client.api.GET("/v2/sandboxes/{sandboxID}/logs", {
+        params: { path: { sandboxID: id } },
+      })
+      // Fail closed: only a 2xx response that actually carried a body is a
+      // success. Any error, non-2xx status, or missing body raises a typed error
+      // rather than falling through to a misleading empty log list.
+      const status = res.response?.status
+      const ok = status !== undefined && status >= 200 && status < 300
+      if (!ok || (res.error !== undefined && res.error !== null) || res.data === undefined) {
+        throw new LiveProviderUnavailableError(
+          `e2b logs request for ${id} failed (status ${status ?? "unknown"})`,
+        )
+      }
+      return (res.data.logs ?? []).map((entry) => ({
+        ts: entry.timestamp ?? new Date().toISOString(),
+        level: normalizeLogLevel(entry.level),
+        event: "sandbox",
+        message: entry.message ?? "",
+      }))
     },
     async writeFile(id: string, path: string, content: Uint8Array): Promise<WriteReceipt> {
       const Sandbox = await loadSandbox()
@@ -195,8 +271,16 @@ export function createE2bBackend(config: E2bBackendConfig): SandboxBackend {
       const host = sandbox.getHost(port)
       return { port, url: host.startsWith("http") ? host : `https://${host}` }
     },
+    /**
+     * E2B has no port-enumeration API: every sandbox port is reachable on demand
+     * via getHost()/expose-port, so the provider keeps no server-side list of
+     * "exposed" ports to return. We surface a clear typed unsupported result
+     * instead of a misleading empty list.
+     */
     async listExposedPorts(_id: string): Promise<ExposedPort[]> {
-      return []
+      throw new LiveProviderUnavailableError(
+        "e2b does not expose a port-enumeration API; use expose-port to obtain a URL for a specific port (every sandbox port is reachable on demand via getHost)",
+      )
     },
     async snapshot(id: string): Promise<SnapshotRecord> {
       const Sandbox = await loadSandbox()
