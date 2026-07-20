@@ -1,7 +1,7 @@
 // App-level cloud storage resolver.
 //
 // The fleet flip writes exactly two vars per app on a self_hosted machine:
-//   HASNA_<APP>_API_URL   = https://<app>.hasna.xyz
+//   HASNA_<APP>_API_URL   = https://<app>.<your-deployment-domain>
 //   HASNA_<APP>_API_KEY   = <bearer key>
 // (no STORAGE_MODE / DSN — the raw database URL is never shipped to clients).
 //

@@ -922,6 +922,25 @@ describe("provider adapter contracts", () => {
     }
   });
 
+  test("rejects malformed addDirs before building provider arguments and preserves valid arrays", () => {
+    expect(() => providerAdapter("codewith").buildInvocation(baseTarget({
+      provider: "codewith",
+      addDirs: "/" as unknown as string[],
+    }))).toThrow("codewith.addDirs must be an array");
+    expect(() => providerAdapter("codex").buildInvocation(baseTarget({
+      provider: "codex",
+      addDirs: ["/tmp/allowed", null] as unknown as string[],
+    }))).toThrow("codex.addDirs[1] must be a non-empty string");
+
+    const invocation = providerAdapter("codewith").buildInvocation(baseTarget({
+      provider: "codewith",
+      addDirs: ["/tmp/allowed", "/tmp/also-allowed"],
+    }));
+    expect(invocation.args.filter((arg) => arg === "--add-dir")).toHaveLength(2);
+    expect(invocation.args).toContain("/tmp/allowed");
+    expect(invocation.args).toContain("/tmp/also-allowed");
+  });
+
   test("rejects own or inherited custom extra-args iterators before any provider spawn", async () => {
     const binDir = mkdtempSync(join(tmpdir(), "loops-extra-args-iterator-"));
     for (const executable of ["claude", "agent", "codewith", "codex", "aicopilot", "opencode"]) {

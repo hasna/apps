@@ -757,6 +757,62 @@ describe("loops-api foundation", () => {
     }
   });
 
+  test("POST /v1/import rejects malformed agent addDirs and preserves valid arrays", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+    const importedLoop = {
+      id: "loop-import-agent-add-dirs",
+      name: "imported-agent-add-dirs",
+      status: "paused",
+      schedule: { type: "once", at: "2026-01-01T00:00:00.000Z" },
+      target: {
+        type: "agent",
+        provider: "codewith",
+        prompt: "do not execute",
+        addDirs: ["/tmp/allowed"],
+      },
+      catchUp: "latest",
+      catchUpLimit: 50,
+      overlap: "skip",
+      maxAttempts: 1,
+      retryDelayMs: 60_000,
+      leaseMs: 1_800_000,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+
+    try {
+      for (const addDirs of ["/", ["/tmp/allowed", null]] as const) {
+        const response = await fetch(apiUrl(server, "/v1/import"), {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify({
+            loops: [{ ...importedLoop, target: { ...importedLoop.target, addDirs } }],
+          }),
+        });
+        expect(response.status).toBe(422);
+        expect(await response.json()).toEqual({ ok: false, error: "validation_failed" });
+        expect(await storage.getLoop(importedLoop.id)).toBeUndefined();
+      }
+
+      const validResponse = await fetch(apiUrl(server, "/v1/import"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ loops: [importedLoop] }),
+      });
+      expect(validResponse.status).toBe(200);
+      expect((await storage.getLoop(importedLoop.id))?.target).toMatchObject({
+        type: "agent",
+        provider: "codewith",
+        addDirs: ["/tmp/allowed"],
+      });
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
   test("POST /v1/import upserts id-preserving rows, pauses imported loops by default, is idempotent, and skips running runs", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");

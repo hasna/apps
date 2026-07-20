@@ -174,7 +174,35 @@ function validatedExtraArgsSnapshot(target: AgentTarget, label: string): readonl
   return Object.freeze(snapshot);
 }
 
-function validateAgentOptions(target: AgentTarget, label: string, capabilities: ProviderCapabilities): readonly string[] {
+function validatedAddDirsSnapshot(value: unknown, label: string): readonly string[] {
+  if (value === undefined) return Object.freeze([]);
+  if (!Array.isArray(value)) throw new ValidationError(`${label} must be an array`);
+  const snapshot: string[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    let directory: unknown;
+    try {
+      if (!Object.prototype.hasOwnProperty.call(value, index)) {
+        throw new ValidationError(`${label}[${index}] must be a non-empty string`);
+      }
+      directory = value[index];
+    } catch (error) {
+      if (error instanceof ValidationError) throw error;
+      throw new ValidationError(`${label}[${index}] must be a non-empty string`);
+    }
+    if (typeof directory !== "string" || directory.trim() === "") {
+      throw new ValidationError(`${label}[${index}] must be a non-empty string`);
+    }
+    snapshot.push(directory.trim());
+  }
+  return Object.freeze(snapshot);
+}
+
+interface ValidatedAgentOptions {
+  extraArgs: readonly string[];
+  addDirs: readonly string[];
+}
+
+function validateAgentOptions(target: AgentTarget, label: string, capabilities: ProviderCapabilities): ValidatedAgentOptions {
   const provider = target.provider;
   if (typeof target.prompt !== "string" || target.prompt.trim() === "") {
     throw new ValidationError(`${label}.prompt must be a non-empty string`);
@@ -203,7 +231,8 @@ function validateAgentOptions(target: AgentTarget, label: string, capabilities: 
     throw new ValidationError(`${label}.agent is not supported for provider codewith`);
   }
   const extraArgs = validatedExtraArgsSnapshot(target, label);
-  if (target.addDirs?.length && !["codewith", "codex"].includes(provider)) {
+  const addDirs = validatedAddDirsSnapshot(target.addDirs, `${label}.addDirs`);
+  if (addDirs.length && !["codewith", "codex"].includes(provider)) {
     throw new ValidationError(`${label}.addDirs is currently supported only for provider codewith or codex`);
   }
   if (target.permissionMode !== undefined) {
@@ -250,7 +279,7 @@ function validateAgentOptions(target: AgentTarget, label: string, capabilities: 
   if (relaxed && !safetyReason) {
     throw new ValidationError(`${label}.allowlist.safetyReason is required when ${relaxedOption}`);
   }
-  return extraArgs;
+  return { extraArgs, addDirs };
 }
 
 function codewithLikeSandbox(target: AgentTarget): AgentSandbox {
@@ -334,9 +363,10 @@ function promptWithAgentSessionContract(target: AgentTarget, cwd: string | undef
 
 function buildAgentInvocation(
   target: AgentTarget,
-  extraArgs: readonly string[],
+  options: ValidatedAgentOptions,
   cwd: string | undefined = target.cwd,
 ): AgentInvocation {
+  const { extraArgs, addDirs } = options;
   const isolation = target.configIsolation ?? "safe";
   const permissionMode = target.permissionMode ?? "default";
   const prompt = promptWithAgentSessionContract(target, cwd);
@@ -393,7 +423,7 @@ function buildAgentInvocation(
       if (sandbox === "workspace-write") args.push("-c", "sandbox_workspace_write.network_access=true");
       args.push("--ask-for-approval", "never", "exec", "--json", "--ephemeral", "--sandbox", sandbox, "--skip-git-repo-check");
       if (cwd) args.push("--cd", cwd);
-      for (const dir of target.addDirs ?? []) args.push("--add-dir", dir);
+      for (const dir of addDirs) args.push("--add-dir", dir);
       if (target.model) args.push("--model", target.model);
       args.push(...extraArgs);
       // exec reads instructions from stdin when no positional prompt is given,
@@ -405,7 +435,7 @@ function buildAgentInvocation(
       args.push("--ask-for-approval", "never", "exec", "--json", "--ephemeral", "--sandbox", codewithLikeSandbox(target), "--skip-git-repo-check");
       if (isolation === "safe") args.push("--ignore-rules");
       if (cwd) args.push("--cd", cwd);
-      for (const dir of target.addDirs ?? []) args.push("--add-dir", dir);
+      for (const dir of addDirs) args.push("--add-dir", dir);
       if (target.model) args.push("--model", target.model);
       args.push(...extraArgs);
       return { command: "codex", args, stdin: prompt };
@@ -427,11 +457,11 @@ function buildAgentInvocation(
 
 function adapterFor(provider: AgentProvider, capabilities: ProviderCapabilities): ProviderAdapter {
   const prepareInvocation = (target: AgentTarget): PreparedAgentInvocation => {
-    const extraArgs = validateAgentOptions(target, provider, capabilities);
+    const options = validateAgentOptions(target, provider, capabilities);
     return {
-      invocation: buildAgentInvocation(target, extraArgs),
+      invocation: buildAgentInvocation(target, options),
       forCwd(cwd: string): AgentInvocation {
-        return buildAgentInvocation(target, extraArgs, cwd);
+        return buildAgentInvocation(target, options, cwd);
       },
     };
   };
