@@ -23,7 +23,15 @@ import {
 import {
   createPlan, listPlans, getPlan, updatePlan, deletePlan,
 } from "../../db/plans.js";
-import { getTodosCloudClient, cloudTaskAction, cloudUpdateTask, cloudAddComment } from "../../cli/cloud-router.js";
+import {
+  getTodosCloudClient,
+  cloudTaskAction,
+  cloudUpdateTask,
+  cloudAddComment,
+  cloudGetTask,
+  cloudResolveProjectRef,
+  cloudResolveTaskListRef,
+} from "../../cli/cloud-router.js";
 import {
   addComment, listComments, updateComment, deleteComment,
 } from "../../db/comments.js";
@@ -1258,6 +1266,59 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
           const resolvedId = resolveId(task_id);
           const resolvedAssignee = resolveId(new_assignee, "agents");
           const task = updateWithOptionalVersion(resolvedId, { assigned_to: resolvedAssignee }, version);
+          return { content: [{ type: "text" as const, text: formatTask(task) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("move_task")) {
+    server.tool(
+      "move_task",
+      "Re-parent a task to another project and/or task list, preserving its id and history. " +
+        "A task list is project-scoped, so moving to a new project detaches the old list unless to_list is given.",
+      {
+        task_id: z.string().describe("Task ID"),
+        to_project: z.string().optional().describe("Destination project ID, slug, or path"),
+        to_list: z.string().optional().describe("Destination task list (UUID, or slug resolved in the destination project)"),
+        clear_list: z.boolean().optional().describe("Detach from its task list (set task_list_id to null)"),
+        version: z.number().optional().describe("Expected version for optimistic locking"),
+      },
+      async ({ task_id, to_project, to_list, clear_list, version }) => {
+        try {
+          if (!to_project && !to_list && !clear_list) {
+            throw new Error("Nothing to move: pass to_project, to_list, or clear_list.");
+          }
+          if (to_list && clear_list) {
+            throw new Error("Use either to_list or clear_list, not both.");
+          }
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const current = await cloudGetTask(cloud, task_id);
+            if (!current) throw new Error(`Task not found: ${task_id}`);
+            const targetProjectId = to_project ? await cloudResolveProjectRef(cloud, to_project) : undefined;
+            const scope = targetProjectId ?? current.project_id ?? undefined;
+            const patch: Record<string, unknown> = {};
+            if (targetProjectId !== undefined) patch.project_id = targetProjectId;
+            if (to_list) patch.task_list_id = await cloudResolveTaskListRef(cloud, to_list, scope);
+            else if (clear_list) patch.task_list_id = null;
+            else if (targetProjectId && targetProjectId !== current.project_id) patch.task_list_id = null;
+            if (version !== undefined) patch.version = version;
+            const task = await cloudUpdateTask(cloud, task_id, patch);
+            return { content: [{ type: "text" as const, text: formatTask(task) }] };
+          }
+          const resolvedId = resolveId(task_id);
+          const current = getTask(resolvedId);
+          if (!current) throw new Error(`Task not found: ${task_id}`);
+          const targetProjectId = to_project ? resolveId(to_project, "projects") : undefined;
+          const updates: Record<string, unknown> = {};
+          if (targetProjectId !== undefined) updates.project_id = targetProjectId;
+          if (to_list) updates.task_list_id = resolveId(to_list, "task_lists");
+          else if (clear_list) updates.task_list_id = null;
+          else if (targetProjectId && targetProjectId !== current.project_id) updates.task_list_id = null;
+          const task = updateWithOptionalVersion(resolvedId, updates, version);
           return { content: [{ type: "text" as const, text: formatTask(task) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };

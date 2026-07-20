@@ -17,6 +17,8 @@ import {
   cloudGetTask,
   cloudUpdateTask,
   cloudDeleteTask,
+  cloudResolveProjectRef,
+  cloudResolveTaskListRef,
 } from "../../cli/cloud-router.js";
 
 interface TaskCrudContext {
@@ -313,6 +315,19 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
             if (patch.assigned_to === "") patch.assigned_to = null;
             if (estimate !== undefined) patch.estimated_minutes = estimate;
             if (deadline !== undefined) patch.due_at = deadline;
+            // Re-parent refs must resolve to canonical UUIDs before they hit the
+            // /v1 authority; a task list is resolved inside the destination project.
+            if (typeof patch.project_id === "string" && patch.project_id) {
+              patch.project_id = await cloudResolveProjectRef(cloud, patch.project_id);
+            }
+            if (typeof patch.task_list_id === "string" && patch.task_list_id) {
+              let scope = typeof patch.project_id === "string" ? patch.project_id : undefined;
+              if (!scope) {
+                const current = await cloudGetTask(cloud, task_id);
+                scope = current?.project_id ?? undefined;
+              }
+              patch.task_list_id = await cloudResolveTaskListRef(cloud, patch.task_list_id, scope);
+            }
             if (version !== undefined) patch.version = version;
             const updated = await cloudUpdateTask(cloud, task_id, patch);
             return { content: [{ type: "text" as const, text: mutationTaskResponse(updated) }] };
