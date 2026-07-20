@@ -16,6 +16,8 @@ import type { TodosStorageAdapter } from "../storage/interfaces.js";
 import {
   ensurePostgresScopedSlugUniqueIndexes,
   postgresTodosCommentCursorIndexSql,
+  postgresTodosTaskShortIdIndexSql,
+  postgresTodosTaskObjectIdIndexSql,
   postgresTodosSyncSchemaSql,
 } from "../storage/postgres-sync.js";
 import {
@@ -150,6 +152,22 @@ export async function ensureCloudSchema(): Promise<void> {
  */
 export async function ensureCloudCommentCursorIndex(): Promise<void> {
   await getClient().query(postgresTodosCommentCursorIndexSql());
+}
+
+/**
+ * Optional latency index for case-insensitive short_id resolution. CONCURRENTLY,
+ * outside a transaction — a deployment migration, not request-path schema work.
+ */
+export async function ensureCloudTaskShortIdIndex(): Promise<void> {
+  await getClient().query(postgresTodosTaskShortIdIndexSql());
+}
+
+/**
+ * Optional byte-order index for the id-prefix branch of short-reference
+ * resolution. CONCURRENTLY, outside a transaction — a deployment migration.
+ */
+export async function ensureCloudTaskObjectIdIndex(): Promise<void> {
+  await getClient().query(postgresTodosTaskObjectIdIndexSql());
 }
 
 /** Audit duplicates, then establish project/task-list slug invariants concurrently. */
