@@ -53,7 +53,7 @@ export async function runAccountsCli(argv: readonly string[]): Promise<number> {
       return 0;
     }
     if (command === "version" || parsed.flags.version === true) {
-      output(jsonRequested, "version", { package: "@hasna/accounts", version: PACKAGE_VERSION });
+      output(jsonRequested, "version", { package: "@hasna/capacity", version: PACKAGE_VERSION });
       return 0;
     }
     if (command === "validate") return await validateCommand(positionals, parsed.flags, jsonRequested);
@@ -279,12 +279,12 @@ function output(json: boolean, command: string, data: unknown): void {
 
 function usageText(): string {
   return [
-    "accounts validate <file|-> [--json]",
-    "accounts probe-native <request-file> <snapshot-file> --owner <principal> [--json]",
-    "accounts doctor [--json]",
-    "accounts list <accounts|entitlements|capacity-pools|access-methods|auth-capsules|credential-bindings> [--json]",
-    "accounts get <noun> <uuidv7> [--json]",
-    "accounts eligibility <access-method-uuidv7> --operation <id> --model <id> --data-classification <id> [--json]",
+    "capacity validate <file|-> [--json]",
+    "capacity probe-native <request-file> <snapshot-file> --owner <principal> [--json]",
+    "capacity doctor [--json]",
+    "capacity list <accounts|entitlements|capacity-pools|access-methods|auth-capsules|credential-bindings> [--json]",
+    "capacity get <noun> <uuidv7> [--json]",
+    "capacity eligibility <access-method-uuidv7> --operation <id> --model <id> --data-classification <id> [--json]",
   ].join("\n");
 }
 

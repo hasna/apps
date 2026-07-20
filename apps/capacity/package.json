@@ -1,9 +1,13 @@
 {
-  "name": "@hasna/accounts",
-  "version": "1.0.0-dev.0",
+  "name": "@hasna/capacity",
+  "version": "0.1.0",
   "description": "Fail-closed provider account capacity metadata for local and self-hosted Hasna deployments",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/capacity.git"
+  },
   "sideEffects": false,
   "exports": {
     ".": {
@@ -16,7 +20,7 @@
     }
   },
   "bin": {
-    "accounts": "./dist/cli.js"
+    "capacity": "./dist/cli.js"
   },
   "files": [
     "dist",

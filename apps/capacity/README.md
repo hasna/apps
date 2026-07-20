@@ -1,4 +1,4 @@
-# @hasna/accounts
+# @hasna/capacity
 
 > **WIP CHECKPOINT — NO-GO.** This branch is preserved for local review only.
 > The Accounts V1 successor contract is not independently approved or pinned,
@@ -57,11 +57,11 @@ Self-hosted connections require `sslmode=verify-full`.
 ## Local CLI
 
 ```sh
-HASNA_ACCOUNTS_DEPLOYMENT=local accounts doctor --json
-accounts validate ./record.json --json
-HASNA_ACCOUNTS_DEPLOYMENT=local accounts list access-methods --json
-HASNA_ACCOUNTS_DEPLOYMENT=local accounts get access-methods <uuidv7> --json
-HASNA_ACCOUNTS_DEPLOYMENT=local accounts eligibility <account-lane-uuidv7> \
+HASNA_ACCOUNTS_DEPLOYMENT=local capacity doctor --json
+capacity validate ./record.json --json
+HASNA_ACCOUNTS_DEPLOYMENT=local capacity list access-methods --json
+HASNA_ACCOUNTS_DEPLOYMENT=local capacity get access-methods <uuidv7> --json
+HASNA_ACCOUNTS_DEPLOYMENT=local capacity eligibility <account-lane-uuidv7> \
   --operation responses.create \
   --model model.example \
   --data-classification internal \
