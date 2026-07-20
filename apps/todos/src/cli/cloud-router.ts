@@ -398,269 +398,41 @@ export async function cloudListTasks(client: HasnaStorageClient, filter: TaskFil
   return Array.isArray(envelope?.tasks) ? envelope!.tasks : res.items;
 }
 
-interface CloudTaskPage {
-  tasks: Task[];
-  count: number;
-  total: number | undefined;
-}
-
-async function cloudListTaskPage(client: HasnaStorageClient, filter: TaskFilter): Promise<CloudTaskPage> {
-  const res = await requiredRemoteRoute(client, "/v1/tasks", () =>
-    client.list<Task>("tasks", { query: toListQuery(filter) }));
-  const envelope = res.raw as { tasks?: Task[]; count?: number; total?: number } | undefined;
-  if (envelope && Object.prototype.hasOwnProperty.call(envelope, "tasks") && !Array.isArray(envelope.tasks)) {
-    throw new Error("REMOTE_API_INCOMPATIBLE: /v1/tasks returned a malformed tasks page; local SQLite fallback is disabled");
-  }
-  const tasks = Array.isArray(envelope?.tasks) ? envelope.tasks : res.items;
-  if (!Array.isArray(tasks) || tasks.some((task) => !task || typeof task !== "object" || typeof task.id !== "string" || !task.id)) {
-    throw new Error("REMOTE_API_INCOMPATIBLE: /v1/tasks returned a malformed tasks page; local SQLite fallback is disabled");
-  }
-  const count = typeof envelope?.count === "number" ? envelope.count : tasks.length;
-  if (!Number.isSafeInteger(count) || count < 0 || count !== tasks.length) {
-    throw new Error("REMOTE_API_INCOMPATIBLE: /v1/tasks returned an invalid count; local SQLite fallback is disabled");
-  }
-  if (envelope?.total !== undefined && (!Number.isSafeInteger(envelope.total) || envelope.total < 0 || envelope.total < count)) {
-    throw new Error("REMOTE_API_INCOMPATIBLE: /v1/tasks returned an invalid total; local SQLite fallback is disabled");
-  }
-  return { tasks, count, total: envelope?.total };
-}
-
-class RemoteTaskReferenceSnapshotError extends Error {}
-
-async function cloudTasksAllCount(client: HasnaStorageClient): Promise<number> {
-  const stats = await cloudGetStats(client);
-  if (!Number.isSafeInteger(stats.tasks_all) || (stats.tasks_all as number) < 0) {
-    throw new RemoteTaskReferenceSnapshotError(
-      "REMOTE_API_INCOMPATIBLE: /v1/stats must return a non-negative integer tasks_all for short task references",
-    );
-  }
-  return stats.tasks_all as number;
-}
-
-interface CloudTaskScope {
-  tasks: Task[];
-  total: number | undefined;
-}
-
-async function cloudPaginateTaskScope(
-  client: HasnaStorageClient,
-  filter: TaskFilter,
-  maximumTotal: number,
-): Promise<CloudTaskScope> {
-  const pageSize = 500;
-  const tasks: Task[] = [];
-  const ids = new Set<string>();
-  let reportedTotal: number | undefined;
-  let totalPresence: boolean | undefined;
-  for (let offset = 0; ;) {
-    let page: CloudTaskPage;
-    try {
-      page = await cloudListTaskPage(client, { ...filter, limit: pageSize, offset });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (!message.startsWith("REMOTE_API_INCOMPATIBLE") && !message.startsWith("REMOTE_API_CHANGED_DURING_PAGINATION")) {
-        throw error;
-      }
-      throw new RemoteTaskReferenceSnapshotError(message, { cause: error });
-    }
-    const pageHasTotal = page.total !== undefined;
-    if (totalPresence !== undefined && totalPresence !== pageHasTotal) {
-      throw new RemoteTaskReferenceSnapshotError(
-        "REMOTE_API_INCOMPATIBLE: /v1/tasks changed total support during pagination",
-      );
-    }
-    totalPresence = pageHasTotal;
-    if (page.total !== undefined && reportedTotal !== undefined && page.total !== reportedTotal) {
-      throw new RemoteTaskReferenceSnapshotError(
-        "REMOTE_API_CHANGED_DURING_PAGINATION: /v1/tasks total changed during pagination",
-      );
-    }
-    if (page.total !== undefined) reportedTotal = page.total;
-    if (tasks.length + page.tasks.length > maximumTotal || (reportedTotal !== undefined && tasks.length + page.tasks.length > reportedTotal)) {
-      throw new RemoteTaskReferenceSnapshotError(
-        "REMOTE_API_INCOMPATIBLE: /v1/tasks pagination exceeded total; local SQLite fallback is disabled",
-      );
-    }
-    for (const task of page.tasks) {
-      if (ids.has(task.id)) {
-        throw new RemoteTaskReferenceSnapshotError(
-          "REMOTE_API_INCOMPATIBLE: /v1/tasks pagination returned a duplicate task id",
-        );
-      }
-      ids.add(task.id);
-      tasks.push(task);
-    }
-    if (reportedTotal !== undefined && tasks.length === reportedTotal) break;
-    if (reportedTotal !== undefined && page.tasks.length === 0) {
-      throw new RemoteTaskReferenceSnapshotError(
-        "REMOTE_API_INCOMPATIBLE: /v1/tasks pagination ended before total; local SQLite fallback is disabled",
-      );
-    }
-    if (reportedTotal === undefined && page.tasks.length < pageSize) break;
-    offset += page.tasks.length;
-  }
-  return { tasks, total: reportedTotal };
-}
-
-function taskParentId(task: Task): string | null {
-  return typeof task.parent_id === "string" && task.parent_id ? task.parent_id : null;
-}
-
-function assertCompleteTaskHierarchy(tasks: readonly Task[]): void {
-  const byId = new Map(tasks.map((task) => [task.id, task]));
-  for (const task of tasks) {
-    const visited = new Set<string>([task.id]);
-    let parentId = taskParentId(task);
-    while (parentId) {
-      if (visited.has(parentId)) {
-        throw new RemoteTaskReferenceSnapshotError(
-          "REMOTE_API_INCOMPATIBLE: /v1/tasks returned a cyclic task hierarchy",
-        );
-      }
-      visited.add(parentId);
-      const parent = byId.get(parentId);
-      if (!parent) {
-        throw new RemoteTaskReferenceSnapshotError(
-          "REMOTE_API_INCOMPATIBLE: /v1/tasks returned an orphaned task hierarchy",
-        );
-      }
-      parentId = taskParentId(parent);
-    }
-  }
-}
-
-async function cloudListTaskHierarchyForResolution(
-  client: HasnaStorageClient,
-  expectedTotal: number,
-): Promise<Task[]> {
-  const roots = await cloudPaginateTaskScope(client, {}, expectedTotal);
-  for (const root of roots.tasks) {
-    if (taskParentId(root) !== null) {
-      throw new RemoteTaskReferenceSnapshotError(
-        "REMOTE_API_INCOMPATIBLE: default /v1/tasks returned a non-root task",
-      );
-    }
-  }
-
-  const tasks = [...roots.tasks];
-  const seen = new Set(tasks.map((task) => task.id));
-  const queue = roots.tasks.map((task) => ({ task, ancestors: new Set<string>([task.id]) }));
-  for (let index = 0; index < queue.length; index += 1) {
-    const current = queue[index]!;
-    const children = await cloudPaginateTaskScope(client, { parent_id: current.task.id }, expectedTotal);
-    for (const child of children.tasks) {
-      if (taskParentId(child) !== current.task.id) {
-        throw new RemoteTaskReferenceSnapshotError(
-          "REMOTE_API_INCOMPATIBLE: /v1/tasks parent filter returned an orphaned task",
-        );
-      }
-      if (current.ancestors.has(child.id)) {
-        throw new RemoteTaskReferenceSnapshotError(
-          "REMOTE_API_INCOMPATIBLE: /v1/tasks returned a cyclic task hierarchy",
-        );
-      }
-      if (seen.has(child.id)) {
-        throw new RemoteTaskReferenceSnapshotError(
-          "REMOTE_API_INCOMPATIBLE: /v1/tasks hierarchy returned a duplicate task id",
-        );
-      }
-      seen.add(child.id);
-      tasks.push(child);
-      if (tasks.length > expectedTotal) {
-        throw new RemoteTaskReferenceSnapshotError(
-          "REMOTE_API_INCOMPATIBLE: /v1/tasks hierarchy exceeded /v1/stats tasks_all",
-        );
-      }
-      queue.push({ task: child, ancestors: new Set([...current.ancestors, child.id]) });
-    }
-  }
-  if (tasks.length !== expectedTotal) {
-    throw new RemoteTaskReferenceSnapshotError(
-      "REMOTE_API_INCOMPATIBLE: /v1/tasks hierarchy did not account for every /v1/stats tasks_all row",
-    );
-  }
-  assertCompleteTaskHierarchy(tasks);
-  return tasks;
-}
-
-async function cloudListAllTasksForResolution(client: HasnaStorageClient, expectedTotal: number): Promise<Task[]> {
-  const inclusive = await cloudPaginateTaskScope(client, { include_subtasks: true }, expectedTotal);
-  if (inclusive.tasks.length === expectedTotal && (inclusive.total === undefined || inclusive.total === expectedTotal)) {
-    assertCompleteTaskHierarchy(inclusive.tasks);
-    return inclusive.tasks;
-  }
-  return cloudListTaskHierarchyForResolution(client, expectedTotal);
-}
-
-async function resolveTaskRefSnapshot(client: HasnaStorageClient, ref: string, input: string): Promise<string> {
-  const beforeTotal = await cloudTasksAllCount(client);
-  let tasks: Task[];
-  try {
-    tasks = await cloudListAllTasksForResolution(client, beforeTotal);
-  } catch (error) {
-    const afterFailureTotal = await cloudTasksAllCount(client);
-    if (afterFailureTotal !== beforeTotal) {
-      throw new RemoteTaskReferenceSnapshotError("REMOTE_API_CHANGED_DURING_PAGINATION: tasks_all changed during task resolution", { cause: error });
-    }
-    throw error;
-  }
-  const exactShort = tasks.filter((task) => task.short_id?.toLowerCase() === input);
-  const prefixes = exactShort.length === 0
-    ? tasks.filter((task) => task.id.toLowerCase().startsWith(input))
-    : [];
-  const matches = exactShort.length > 0 ? exactShort : prefixes;
-  if (matches.length > 1) {
-    const afterTotal = await cloudTasksAllCount(client);
-    if (afterTotal !== beforeTotal) {
-      throw new RemoteTaskReferenceSnapshotError("REMOTE_API_CHANGED_DURING_PAGINATION: tasks_all changed during task resolution");
-    }
-    throw new Error(`Task reference is ambiguous: "${ref}"`);
-  }
-  if (matches.length === 0) {
-    const afterTotal = await cloudTasksAllCount(client);
-    if (afterTotal !== beforeTotal) {
-      throw new RemoteTaskReferenceSnapshotError("REMOTE_API_CHANGED_DURING_PAGINATION: tasks_all changed during task resolution");
-    }
-    throw new Error(`Task not found: ${ref}`);
-  }
-
-  const candidate = matches[0]!;
-  const finalTask = await cloudGetTask(client, candidate.id);
-  const finalMatches = finalTask?.id === candidate.id && (
-    exactShort.length === 1
-      ? finalTask.short_id?.toLowerCase() === input
-      : finalTask.id.toLowerCase().startsWith(input)
-  );
-  if (!finalMatches) {
-    throw new RemoteTaskReferenceSnapshotError("REMOTE_API_CHANGED_DURING_PAGINATION: resolved task no longer matches the short reference");
-  }
-  const afterTotal = await cloudTasksAllCount(client);
-  if (afterTotal !== beforeTotal) {
-    throw new RemoteTaskReferenceSnapshotError("REMOTE_API_CHANGED_DURING_PAGINATION: tasks_all changed during task resolution");
-  }
-  return candidate.id;
-}
-
-/** Resolve an exact UUID, exact short id, or unique UUID prefix using /v1 only. */
+/**
+ * Resolve an exact UUID, an exact short id, or a unique task-id prefix to a
+ * canonical task UUID over `/v1` in a SINGLE bounded request. Full UUIDs
+ * short-circuit with no round trip. Every other reference is resolved
+ * SERVER-SIDE via `GET /v1/tasks/:ref` (an indexed short_id / id-prefix lookup),
+ * so the CLI never pages the entire task set to expand a short reference — the
+ * O(all-tasks) client-side download that hung on large shared datasets. A 409
+ * from the authority means the prefix is ambiguous; a miss means the task is
+ * absent (or the authority predates short-reference resolution, in which case
+ * deploy the current `@hasna/todos` `/v1` server). No local fallback is used.
+ */
 export async function cloudResolveTaskRef(client: HasnaStorageClient, ref: string): Promise<string> {
   const input = ref.trim().toLowerCase();
   if (!input) throw new Error("Task reference must not be empty");
   if (UUID_RE.test(input)) return input;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      return await resolveTaskRefSnapshot(client, ref, input);
-    } catch (error) {
-      if (!(error instanceof RemoteTaskReferenceSnapshotError)) throw error;
-      if (attempt === 1) {
-        throw new Error(
-          `REMOTE_TASK_REFERENCE_UNSAFE: could not prove a stable complete task set for "${ref}"; ` +
-            "retry with the full task UUID; no local fallback was attempted",
-          { cause: error },
-        );
-      }
-    }
+
+  let task: Task | null;
+  try {
+    task = await cloudGetTask(client, input);
+  } catch (error) {
+    const status = error && typeof error === "object" ? (error as { status?: unknown }).status : undefined;
+    if (status === 409) throw new Error(`Task reference is ambiguous: "${ref}"`);
+    throw error;
   }
-  throw new Error(`REMOTE_TASK_REFERENCE_UNSAFE: use the full task UUID for "${ref}"`);
+
+  // Defend against a server returning an unrelated task: the resolved task must
+  // actually carry the requested short_id or start with the requested id prefix.
+  if (
+    task &&
+    typeof task.id === "string" &&
+    (task.short_id?.toLowerCase() === input || task.id.toLowerCase().startsWith(input))
+  ) {
+    return task.id;
+  }
+  throw new Error(`Task not found: ${ref}`);
 }
 
 /** Fetch one task by id (`GET /v1/tasks/:id`); `null` on 404. */

@@ -718,7 +718,20 @@ export async function handleV1Request(
         return error(404, `unknown task action: ${action}`);
       }
       if (method === "GET") {
-        const task = await store.tasks.get(id);
+        let task = await store.tasks.get(id);
+        // Bounded server-side resolution of a non-UUID reference (exact short_id or
+        // a unique task-id prefix). Without this the CLI paged every task over HTTP
+        // to expand a short ref, which hung on large shared datasets. resolveRef is
+        // a single indexed lookup; it is only consulted when the exact-id get misses.
+        if (!task && typeof store.tasks.resolveRef === "function") {
+          try {
+            task = await store.tasks.resolveRef(id);
+          } catch (e) {
+            const msg = (e as Error).message || "";
+            if (/ambiguous/i.test(msg)) return error(409, msg);
+            throw e;
+          }
+        }
         return task ? json({ task }) : error(404, "task not found");
       }
       if (method === "PATCH" || method === "PUT") {

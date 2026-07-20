@@ -112,6 +112,7 @@ export function createPostgresTodosStorageAdapter(
     tasks: {
       create: (input, context) => createTask(input, store, context),
       get: (id) => store.get<Task>("tasks", id),
+      resolveRef: (ref) => store.resolveTaskRef(ref),
       list: (filter = {}) => store.listTasks(filter),
       count: (filter = {}) => store.countTasks(filter),
       update: (id, input) => updateTask(id, input, store),
@@ -401,6 +402,73 @@ class PostgresJsonRecordStore {
     const result = await this.options.client.query<{ payload: unknown }>(sql, [this.service, "tasks", fingerprint]);
     const row = result.rows[0];
     return row ? payloadRecord<Task>(row.payload) : null;
+  }
+
+  /**
+   * Resolve a non-UUID task reference (exact `short_id`, or a unique `object_id`
+   * prefix) to the single matching task, or null. Throws when a prefix is
+   * ambiguous. Both branches are BOUNDED single queries (`LIMIT 2`): the prefix
+   * branch is a byte-order (COLLATE "C") range served by the optional
+   * `_task_object_id_c_idx`; the short_id branch is a case-insensitive lookup
+   * served by the optional `_task_short_id_idx`. This replaces the CLI's previous
+   * O(all-tasks) client-side download that paged every task over HTTP just to
+   * expand a short reference.
+   */
+  async resolveTaskRef(ref: string): Promise<Task | null> {
+    await this.ensureSchema();
+    // Case-insensitive, matching the CLI's historical resolution: task ids/object_ids
+    // are stored lower-case, short_ids upper-case. Normalizing to lower-case lets a
+    // lower-cased id prefix and an upper-cased short_id both resolve.
+    const raw = ref.trim().toLowerCase();
+    if (!raw) return null;
+
+    // id-prefix: a half-open range so it can ride a btree index with bound params
+    // (unlike LIKE 'x%', which needs a literal). The upper bound is the prefix with
+    // its final code unit incremented, so the comparison MUST use byte order
+    // (COLLATE "C") to agree with that arithmetic — under a locale collation (e.g.
+    // RDS-default en_US.utf8) ':' sorts before '9', which would drop every ref
+    // ending in '9'. object_id is stored lower-case, so a lower-cased short_id
+    // (non-hex leading char) never falls in a UUID range and correctly drops
+    // through to the short_id lookup below. The optional `_task_object_id_c_idx`
+    // (COLLATE "C") keeps this bounded at scale.
+    //
+    // Guard a pathological final code unit (U+FFFF): incrementing it wraps to
+    // U+0000, so the upper bound would collapse below the prefix and yield an empty
+    // range. Such a ref cannot be a lower-case task-id prefix anyway, so skip the
+    // range and let it resolve (or not) through the short_id lookup.
+    const lastCode = raw.charCodeAt(raw.length - 1);
+    if (lastCode < 0xffff) {
+      const upper = raw.slice(0, -1) + String.fromCharCode(lastCode + 1);
+      const prefixResult = await this.options.client.query<{ payload: unknown }>(
+        `/* todos:resolve-task-ref-prefix */ SELECT payload FROM ${this.tableName}
+          WHERE service = $1 AND object_type = 'tasks' AND deleted_at IS NULL
+            AND object_id COLLATE "C" >= $2 AND object_id COLLATE "C" < $3
+          LIMIT 2`,
+        [this.service, raw, upper],
+      );
+      if (prefixResult.rows.length > 1) {
+        throw new Error(`Task reference is ambiguous: "${ref}"`);
+      }
+      if (prefixResult.rows.length === 1) {
+        return payloadRecord<Task>(prefixResult.rows[0]!.payload);
+      }
+    }
+
+    const shortIdResult = await this.options.client.query<{ payload: unknown }>(
+      `/* todos:resolve-task-ref-short-id */ SELECT payload FROM ${this.tableName}
+        WHERE service = $1 AND object_type = 'tasks' AND deleted_at IS NULL
+          AND LOWER(payload->>'short_id') = $2
+        LIMIT 2`,
+      [this.service, raw],
+    );
+    if (shortIdResult.rows.length > 1) {
+      throw new Error(`Task reference is ambiguous: "${ref}"`);
+    }
+    if (shortIdResult.rows.length === 1) {
+      return payloadRecord<Task>(shortIdResult.rows[0]!.payload);
+    }
+
+    return null;
   }
 
   async countTasks(filter: TaskFilter): Promise<number> {

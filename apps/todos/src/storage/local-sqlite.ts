@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import type { Task } from "../types/index.js";
 import {
   createTask,
   getTask,
@@ -71,6 +72,42 @@ export interface CreateLocalSqliteTodosStorageAdapterOptions {
   db?: Database;
 }
 
+const TASK_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Bounded resolution of a non-UUID task reference (exact `short_id`, or a unique
+ * task-`id` prefix) to its full task. Mirrors {@link resolvePartialId} matching
+ * order (id-prefix first, then short_id) but distinguishes ambiguity from
+ * not-found so the caller can surface a 409 rather than a silent 404. Every query
+ * is `LIMIT 2` and hits the `tasks` primary key / `short_id`, so it never scans
+ * the whole table.
+ */
+function resolveTaskRefLocal(db: Database, ref: string): Task | null {
+  // Case-insensitive, matching the CLI's historical resolution: ids are stored
+  // lower-case, short_ids upper-case.
+  const raw = ref.trim().toLowerCase();
+  if (!raw) return null;
+  if (TASK_UUID_RE.test(raw)) return getTask(raw, db);
+
+  const prefixRows = db
+    .query("SELECT id FROM tasks WHERE LOWER(id) LIKE ? ESCAPE '\\' LIMIT 2")
+    .all(`${raw.replace(/[\\%_]/g, (c) => `\\${c}`)}%`) as { id: string }[];
+  if (prefixRows.length > 1) {
+    throw new Error(`Task reference is ambiguous: "${ref}"`);
+  }
+  if (prefixRows.length === 1) return getTask(prefixRows[0]!.id, db);
+
+  const shortIdRows = db
+    .query("SELECT id FROM tasks WHERE LOWER(short_id) = ? LIMIT 2")
+    .all(raw) as { id: string }[];
+  if (shortIdRows.length > 1) {
+    throw new Error(`Task reference is ambiguous: "${ref}"`);
+  }
+  if (shortIdRows.length === 1) return getTask(shortIdRows[0]!.id, db);
+
+  return null;
+}
+
 export function createLocalSqliteTodosStorageAdapter(
   options: CreateLocalSqliteTodosStorageAdapterOptions = {},
 ): TodosStorageAdapter {
@@ -89,6 +126,7 @@ export function createLocalSqliteTodosStorageAdapter(
     tasks: {
       create: (input) => createTask(input, database()),
       get: (id) => getTask(id, database()),
+      resolveRef: (ref) => resolveTaskRefLocal(database(), ref),
       list: (filter = {}) => listTasks(filter, database()),
       count: (filter = {}) => countTasks(filter, database()),
       update: (id, input) => updateTask(id, input, database()),

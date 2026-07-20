@@ -118,8 +118,15 @@ describe("cloud task detail comments", () => {
         if (url.pathname === "/v1/stats" && request.method === "GET") {
           return Response.json({ tasks_all: 1 });
         }
-        if (url.pathname === `/v1/tasks/${TASK_ID}` && request.method === "GET") {
-          return Response.json({ task: taskFixture() });
+        // Fixed /v1 server resolves an exact id OR a unique id prefix (the printed
+        // short reference) server-side, so the CLI never pages the task set.
+        const taskGetMatch = url.pathname.match(/^\/v1\/tasks\/([^/]+)$/);
+        if (taskGetMatch && request.method === "GET") {
+          const ref = decodeURIComponent(taskGetMatch[1]!).toLowerCase();
+          if (ref === TASK_ID.toLowerCase() || TASK_ID.toLowerCase().startsWith(ref)) {
+            return Response.json({ task: taskFixture() });
+          }
+          return Response.json({ error: "task not found" }, { status: 404 });
         }
         if (url.pathname === `/v1/tasks/${TASK_ID}/start` && request.method === "POST") {
           return Response.json({ task: taskFixture({ status: "in_progress", locked_by: body?.agent_id ?? null }) });
@@ -157,17 +164,13 @@ describe("cloud task detail comments", () => {
       const commented = await runCli(["comment", shortId, "started from printed prefix"], root, baseUrl, alternateDb);
       expect(commented).toMatchObject({ exitCode: 0, stderr: "" });
 
+      // Short references now resolve in ONE bounded server-side GET each (no
+      // /v1/stats snapshot, no full /v1/tasks page) — see cloud-router resolveRef.
       expect(requests.map((request) => `${request.method} ${request.path}`)).toEqual([
         "POST /v1/tasks",
-        "GET /v1/stats",
-        "GET /v1/tasks",
-        `GET /v1/tasks/${TASK_ID}`,
-        "GET /v1/stats",
+        `GET /v1/tasks/${shortId}`,
         `POST /v1/tasks/${TASK_ID}/start`,
-        "GET /v1/stats",
-        "GET /v1/tasks",
-        `GET /v1/tasks/${TASK_ID}`,
-        "GET /v1/stats",
+        `GET /v1/tasks/${shortId}`,
         `POST /v1/tasks/${TASK_ID}/comments`,
       ]);
       expect(comments).toHaveLength(1);
