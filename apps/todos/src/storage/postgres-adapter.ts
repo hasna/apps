@@ -987,7 +987,10 @@ async function updateTask(id: string, input: UpdateTaskInput, store: PostgresJso
     tags: input.tags ?? existing.tags,
     metadata: input.metadata ?? existing.metadata,
     requires_approval: input.requires_approval ?? existing.requires_approval,
-    task_list_id: input.task_list_id ?? existing.task_list_id,
+    // `??` would coalesce an explicit `null` (detach) back to the existing list,
+    // making a task un-detachable and re-parenting leave a dangling cross-project
+    // reference. Only fall back when the field is absent from the patch.
+    task_list_id: input.task_list_id !== undefined ? input.task_list_id : existing.task_list_id,
   };
   await store.upsert("tasks", task);
   return task;

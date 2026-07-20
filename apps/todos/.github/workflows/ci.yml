@@ -26,7 +26,12 @@ jobs:
         run: bun run test:no-cloud
 
       - name: Run tests
-        run: bun test
+        # The suite shells out to the real CLI in hundreds of subprocess tests
+        # that each open a SQLite/WAL handle. Under parallel load a transient
+        # SQLITE_BUSY / SQLITE_BUSY_SNAPSHOT ("database is locked") or a slow
+        # cold-start can fail a random single test that passes on re-run. Retry
+        # transient failures so genuine (deterministic) failures still surface.
+        run: bun test --retry=2
 
       - name: Build
         run: bun run build

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { getDatabase, closeDatabase, resetDatabase, resolvePartialId } from "../db/database.js";
 import { addDependency, createTask, getTask, listTasks, completeTask, startTask } from "../db/tasks.js";
 import { createProject } from "../db/projects.js";
+import { createTaskList } from "../db/task-lists.js";
 import { createPlan } from "../db/plans.js";
 import { addComment, listComments } from "../db/comments.js";
 import { addTaskRunArtifact, addTaskRunCommand, addTaskRunEvent, finishTaskRun, startTaskRun } from "../db/task-runs.js";
@@ -2652,5 +2653,46 @@ describe("Recurring task operations", () => {
     const latest = getLatestHandoff("brutus", undefined, db);
     expect(latest).not.toBeNull();
     expect(latest.summary).toBe("Second");
+  });
+});
+
+describe("move_task MCP tool", () => {
+  it("re-parents a task to another project and its task list, keeping its id", async () => {
+    const projectA = createProject({ name: "Project A", path: "/repos/mcp-move-a" }, db);
+    const projectB = createProject({ name: "Project B", path: "/repos/mcp-move-b" }, db);
+    const listA = createTaskList({ name: "List A", slug: "list-a", project_id: projectA.id }, db);
+    const listB = createTaskList({ name: "List B", slug: "list-b", project_id: projectB.id }, db);
+    const task = createTask({ title: "Portable", project_id: projectA.id, task_list_id: listA.id }, db);
+
+    const tools = captureTools(registerTaskProjectTools);
+    const result = await callCapturedTool(tools, "move_task", {
+      task_id: task.id,
+      to_project: projectB.id,
+      to_list: listB.id,
+    });
+    expect(result.content[0]!.text).toContain(task.id.slice(0, 8));
+
+    const moved = getTask(task.id, db)!;
+    expect(moved.id).toBe(task.id);
+    expect(moved.project_id).toBe(projectB.id);
+    expect(moved.task_list_id).toBe(listB.id);
+
+    // Gone from A, present in B.
+    expect(listTasks({ project_id: projectA.id }, db).map((t) => t.id)).not.toContain(task.id);
+    expect(listTasks({ project_id: projectB.id }, db).map((t) => t.id)).toContain(task.id);
+  });
+
+  it("detaches the old project-scoped list when moving projects without a new list", async () => {
+    const projectA = createProject({ name: "Detach A", path: "/repos/mcp-detach-a" }, db);
+    const projectB = createProject({ name: "Detach B", path: "/repos/mcp-detach-b" }, db);
+    const listA = createTaskList({ name: "Only A", slug: "only-a", project_id: projectA.id }, db);
+    const task = createTask({ title: "Detachable", project_id: projectA.id, task_list_id: listA.id }, db);
+
+    const tools = captureTools(registerTaskProjectTools);
+    await callCapturedTool(tools, "move_task", { task_id: task.id, to_project: projectB.id });
+
+    const moved = getTask(task.id, db)!;
+    expect(moved.project_id).toBe(projectB.id);
+    expect(moved.task_list_id).toBeNull();
   });
 });

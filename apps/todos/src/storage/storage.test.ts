@@ -198,6 +198,21 @@ describe("storage adapter contracts", () => {
     expect(await adapter.sync.getTasksChangedSince("1970-01-01T00:00:00.000Z", { project_id: project.id })).toEqual([
       expect.objectContaining({ id: task.id }),
     ]);
+
+    // Re-parent to another project and detach the source list. An explicit
+    // `task_list_id: null` must clear the list (guards the cross-project move +
+    // the postgres `?? existing` coalesce regression) while preserving the id.
+    const projectB = await adapter.projects.create({ name: "Storage Boundary B", path: "/tmp/storage-boundary-b" });
+    const reparented = await adapter.tasks.update(task.id, {
+      version: updated.version,
+      project_id: projectB.id,
+      task_list_id: null,
+    });
+    expect(reparented.id).toBe(task.id);
+    expect(reparented.project_id).toBe(projectB.id);
+    expect(reparented.task_list_id).toBeNull();
+    expect((await adapter.tasks.list({ project_id: project.id })).map((t) => t.id)).not.toContain(task.id);
+    expect((await adapter.tasks.list({ project_id: projectB.id })).map((t) => t.id)).toContain(task.id);
   });
 
   test("runs local adapter transactions against the same SQLite database", async () => {

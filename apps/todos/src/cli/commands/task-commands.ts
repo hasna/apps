@@ -227,6 +227,65 @@ function resolveTaskListRef(ref: string, projectId: string | null): { id: string
   return { error: `Could not resolve task list "${ref}" to a UUID${projectId ? " within the task's project" : ""}. Pass an exact task-list UUID.` };
 }
 
+interface ReparentOptions {
+  projectRef?: string;
+  listRef?: string;
+  clearList?: boolean;
+}
+
+/** The subset of an update patch that re-parents a task. */
+interface ReparentPatch {
+  project_id?: string;
+  task_list_id?: string | null;
+}
+
+/**
+ * Compute the {project_id, task_list_id} patch that re-parents a task against the
+ * remote /v1 authority. A `--to-list` reference is resolved inside the *target*
+ * project (not the task's current one) so a cross-project move can name a list
+ * that lives in the destination. Because task lists are project-scoped, changing
+ * the project detaches the task from its old list unless a new one is named.
+ */
+async function computeCloudReparent(
+  cloud: NonNullable<ReturnType<typeof getTodosCloudClient>>,
+  current: { project_id: string | null },
+  opts: ReparentOptions,
+): Promise<ReparentPatch> {
+  const targetProjectId = opts.projectRef ? await cloudResolveProjectRef(cloud, opts.projectRef) : undefined;
+  const scope = targetProjectId ?? current.project_id ?? undefined;
+  let taskListId: string | null | undefined;
+  if (opts.listRef) taskListId = await cloudResolveTaskListRef(cloud, opts.listRef, scope);
+  else if (opts.clearList) taskListId = null;
+  else if (targetProjectId && targetProjectId !== current.project_id) taskListId = null;
+  const patch: ReparentPatch = {};
+  if (targetProjectId !== undefined) patch.project_id = targetProjectId;
+  if (taskListId !== undefined) patch.task_list_id = taskListId;
+  return patch;
+}
+
+/** Local-SQLite equivalent of {@link computeCloudReparent}. */
+function computeLocalReparent(current: { project_id: string | null }, opts: ReparentOptions): ReparentPatch {
+  const targetProjectId = opts.projectRef ? resolveProjectIdOrSlug(opts.projectRef) : undefined;
+  const scope = targetProjectId ?? current.project_id ?? null;
+  let taskListId: string | null | undefined;
+  if (opts.listRef) {
+    const resolved = resolveTaskListRef(opts.listRef, scope);
+    if ("error" in resolved) {
+      console.error(chalk.red(resolved.error));
+      process.exit(1);
+    }
+    taskListId = resolved.id;
+  } else if (opts.clearList) {
+    taskListId = null;
+  } else if (targetProjectId && targetProjectId !== current.project_id) {
+    taskListId = null;
+  }
+  const patch: ReparentPatch = {};
+  if (targetProjectId !== undefined) patch.project_id = targetProjectId;
+  if (taskListId !== undefined) patch.task_list_id = taskListId;
+  return patch;
+}
+
 export function registerTaskCommands(program: Command) {
   // add
   program
@@ -1066,6 +1125,7 @@ export function registerTaskCommands(program: Command) {
     .option("--list <id>", "Move to a task list (UUID authoritative; project-scoped slug accepted)")
     .option("--task-list <id>", "Move to a task list (alias for --list)")
     .option("--clear-list", "Detach from its task list (reset task_list_id to null)")
+    .option("--project <id>", "Re-parent the task to another project (by ID, slug, or path); see also `todos move`")
     .option("--working-dir <path>", "Repair the task's working_dir to a specific path (routing metadata)")
     .option("--clear-working-dir", "Reset the task's working_dir to null (undo path for routing repairs)")
     .option("--plan <id>", "Move to a plan")
@@ -1105,11 +1165,11 @@ export function registerTaskCommands(program: Command) {
           if (!current) throw new Error(`Task not found: ${id}`);
           const plan = opts.plan ? await cloudResolvePlan(cloud, opts.plan, current.project_id ?? undefined) : null;
           if (opts.plan && !plan) throw new Error(`Plan not found: ${opts.plan}`);
-          const taskListId = opts.list
-            ? await cloudResolveTaskListRef(cloud, opts.list, current.project_id ?? undefined)
-            : opts.clearList
-              ? null
-              : undefined;
+          const reparent = await computeCloudReparent(cloud, current, {
+            projectRef: opts.project || globalOpts.project,
+            listRef: opts.list,
+            clearList: opts.clearList,
+          });
           task = await cloudUpdateTask(cloud, currentId, {
             title: opts.title,
             description: opts.description,
@@ -1118,7 +1178,7 @@ export function registerTaskCommands(program: Command) {
             assigned_to: opts.assign,
             tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
             plan_id: plan?.id ?? (opts.clearPlan ? null : undefined),
-            task_list_id: taskListId,
+            ...reparent,
             working_dir: opts.workingDir ? resolve(opts.workingDir) : opts.clearWorkingDir ? null : undefined,
             estimated_minutes: opts.estimated !== undefined ? parseIntOption(opts.estimated, "--estimated") : undefined,
             sla_minutes: opts.slaMinutes !== undefined || opts.sla !== undefined ? parseIntOption(opts.slaMinutes ?? opts.sla, "--sla-minutes") : undefined,
@@ -1144,14 +1204,11 @@ export function registerTaskCommands(program: Command) {
         console.error(chalk.red(`Task not found: ${id}`));
         process.exit(1);
       }
-      const taskListId = opts.list ? (() => {
-        const resolved = resolveTaskListRef(opts.list, current.project_id);
-        if ("error" in resolved) {
-          console.error(chalk.red(resolved.error));
-          process.exit(1);
-        }
-        return resolved.id;
-      })() : opts.clearList ? null : undefined;
+      const reparent = computeLocalReparent(current, {
+        projectRef: opts.project || globalOpts.project,
+        listRef: opts.list,
+        clearList: opts.clearList,
+      });
       const planId = opts.plan ? resolvePlanId(opts.plan) : opts.clearPlan ? null : undefined;
 
       let task;
@@ -1165,7 +1222,7 @@ export function registerTaskCommands(program: Command) {
           assigned_to: opts.assign,
           tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
           plan_id: planId,
-          task_list_id: taskListId,
+          ...reparent,
           working_dir: opts.workingDir ? resolve(opts.workingDir) : opts.clearWorkingDir ? null : undefined,
           estimated_minutes: opts.estimated !== undefined ? parseIntOption(opts.estimated, "--estimated") : undefined,
           sla_minutes: opts.slaMinutes !== undefined || opts.sla !== undefined ? parseIntOption(opts.slaMinutes ?? opts.sla, "--sla-minutes") : undefined,
@@ -1181,6 +1238,79 @@ export function registerTaskCommands(program: Command) {
         output(task, true);
       } else {
         console.log(chalk.green("Task updated:"));
+        console.log(formatTaskLine(task));
+      }
+    });
+
+  // move — re-parent a task to another project/task-list while preserving its id + history
+  program
+    .command("move <id>")
+    .description("Move a task to another project and/or task list (keeps its id and history)")
+    .option("--to-project <id>", "Destination project (by ID, slug, or path)")
+    .option("--to-list <id>", "Destination task list (UUID authoritative; slug resolved in the destination project)")
+    .option("--clear-list", "Detach from its task list (reset task_list_id to null)")
+    .action(async (id: string, opts) => {
+      const globalOpts = program.opts();
+      // `--to-project` is primary; fall back to the global `--project` so
+      // `todos move <id> --project <ref>` also works.
+      const projectRef: string | undefined = opts.toProject ?? globalOpts.project;
+      const listRef: string | undefined = opts.toList;
+      if (!projectRef && !listRef && !opts.clearList) {
+        handleError(new Error("Nothing to move: pass --to-project, --to-list, or --clear-list."));
+      }
+      if (listRef && opts.clearList) {
+        handleError(new Error("Use either --to-list or --clear-list, not both."));
+      }
+
+      const cloud = getTodosCloudClient();
+      if (cloud) {
+        let task;
+        try {
+          const currentId = await resolveTaskIdForCommand(id, cloud);
+          const current = await cloudGetTask(cloud, currentId);
+          if (!current) throw new Error(`Task not found: ${id}`);
+          const reparent = await computeCloudReparent(cloud, current, {
+            projectRef,
+            listRef,
+            clearList: opts.clearList,
+          });
+          if (reparent.project_id === undefined && reparent.task_list_id === undefined) {
+            throw new Error("Nothing to move: the task is already in the requested project/list.");
+          }
+          task = await cloudUpdateTask(cloud, currentId, reparent as Record<string, unknown>);
+        } catch (e) {
+          handleError(e);
+        }
+        if (globalOpts.json) {
+          output(task, true);
+        } else {
+          console.log(chalk.green("Task moved:"));
+          console.log(formatTaskLine(task));
+        }
+        return;
+      }
+
+      const resolvedId = resolveTaskId(id);
+      const current = getTask(resolvedId);
+      if (!current) {
+        console.error(chalk.red(`Task not found: ${id}`));
+        process.exit(1);
+      }
+      const reparent = computeLocalReparent(current, { projectRef, listRef, clearList: opts.clearList });
+      if (reparent.project_id === undefined && reparent.task_list_id === undefined) {
+        console.error(chalk.red("Nothing to move: the task is already in the requested project/list."));
+        process.exit(1);
+      }
+      let task;
+      try {
+        task = updateTask(resolvedId, { version: current.version, ...reparent });
+      } catch (e) {
+        handleError(e);
+      }
+      if (globalOpts.json) {
+        output(task, true);
+      } else {
+        console.log(chalk.green("Task moved:"));
         console.log(formatTaskLine(task));
       }
     });

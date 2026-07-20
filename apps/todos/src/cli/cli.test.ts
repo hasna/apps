@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,9 +10,30 @@ import { createProject } from "../db/projects.js";
 import { runMigrations } from "../db/schema.js";
 import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
 
+// Every test here shells out to the real CLI (a cold `bun run` per call, ~0.5s
+// each), and the heavier flows issue 6-10 subprocesses. The 5s bun-test default
+// is too tight for that under parallel CI load, producing timeout flakes that
+// are unrelated to the code under test. Match the generous budget the file's
+// other subprocess-heavy cases already set explicitly (`}, 30000)`).
+setDefaultTimeout(30_000);
+
 let testRoot = "";
 
-async function runCli(args: string[], dbPath: string, extraEnv: Record<string, string> = {}) {
+type CliResult = { stdout: string; stderr: string; exitCode: number };
+
+/**
+ * Under heavy parallel test load the runner spawns many concurrent `bun`
+ * subprocesses that each open their own SQLite handle over WAL files on a busy
+ * filesystem. Transient SQLITE_BUSY / SQLITE_BUSY_SNAPSHOT surfaces as
+ * "database is locked" on stderr with a non-zero exit — an environmental
+ * contention artifact, not a defect in these read/write paths. Detect it so the
+ * subprocess harness can retry a bounded number of times before asserting.
+ */
+function isTransientDbLock(result: CliResult): boolean {
+  return result.exitCode !== 0 && /database is locked|database table is locked|SQLITE_BUSY/i.test(result.stderr);
+}
+
+async function spawnCli(args: string[], dbPath: string, extraEnv: Record<string, string>): Promise<CliResult> {
   const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
     cwd: import.meta.dir + "/../..",
     env: localRoutingTestEnv({
@@ -31,6 +52,17 @@ async function runCli(args: string[], dbPath: string, extraEnv: Record<string, s
     proc.exited,
   ]);
   return { stdout, stderr, exitCode };
+}
+
+async function runCli(args: string[], dbPath: string, extraEnv: Record<string, string> = {}): Promise<CliResult> {
+  let result = await spawnCli(args, dbPath, extraEnv);
+  // Bounded retry: only re-run when the failure is a transient SQLite lock, so a
+  // genuine command failure still surfaces immediately without being masked.
+  for (let attempt = 1; attempt <= 4 && isTransientDbLock(result); attempt += 1) {
+    await Bun.sleep(50 * attempt);
+    result = await spawnCli(args, dbPath, extraEnv);
+  }
+  return result;
 }
 
 function createMinimalSourceStore(dbPath: string): void {

@@ -23,7 +23,7 @@ const REGISTERED_CANONICAL_COMMANDS = [
   "find-commit", "find-ref", "findings", "focus", "handoff", "health", "heartbeat", "history",
   "hook", "hooks", "import", "inbox", "init", "inspect", "interactive", "issues",
   "knowledge", "link-commit", "link-ref", "list", "lists", "lock", "log", "machines",
-  "manual", "mcp", "mine", "next", "notifications", "onboarding", "org", "overdue",
+  "manual", "mcp", "mine", "move", "next", "notifications", "onboarding", "org", "overdue",
   "pin", "plans", "policies", "priorities", "project-bootstrap", "project-panel", "project-rename", "projects",
   "projects-path", "ready", "recap", "record-verification", "redaction", "redistribute", "references", "release",
   "release-compat", "release-notes", "reliability", "remove", "report", "report-failure", "reports", "retention",
@@ -65,7 +65,7 @@ const DIAGNOSTIC_COMMANDS = new Set(["help", "manual", "completions", "completio
 const REMOTE_COMMANDS = new Set([
   "active", "add", "agent", "agents", "approve", "bulk", "claim", "comment", "count", "delete", "deps",
   "doctor", "done", "find-commit", "find-ref", "health", "heartbeat", "history", "init", "inspect", "link-commit",
-  "link-ref", "list", "lists", "lock", "log-progress", "next", "plans", "project-rename", "projects", "recap",
+  "link-ref", "list", "lists", "lock", "log-progress", "move", "next", "plans", "project-rename", "projects", "recap",
   "record-verification", "release", "remove", "show", "standup", "start", "status", "task", "task-lists", "timeline",
   "tl", "unlock", "update",
 ]);

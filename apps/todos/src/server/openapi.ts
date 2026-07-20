@@ -126,6 +126,8 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             status: { type: "string" },
             priority: { type: "string" },
             assigned_to: { type: "string" },
+            project_id: { type: "string", nullable: true },
+            task_list_id: { type: "string", nullable: true },
             version: { type: "number" },
           },
         },

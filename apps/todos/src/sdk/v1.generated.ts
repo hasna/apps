@@ -16,7 +16,7 @@ export interface Plan { "id": string; "slug": string | null; "project_id"?: stri
 
 export interface CreateTaskInput { "title": string; "description"?: string; "status"?: string; "priority"?: string; "project_id"?: string; "assigned_to"?: string; "agent_id"?: string; "tags"?: Array<string> }
 
-export interface UpdateTaskInput { "title"?: string; "description"?: string; "status"?: string; "priority"?: string; "assigned_to"?: string; "version"?: number }
+export interface UpdateTaskInput { "title"?: string; "description"?: string; "status"?: string; "priority"?: string; "assigned_to"?: string; "project_id"?: string | null; "task_list_id"?: string | null; "version"?: number }
 
 export interface CompleteTaskInput { "agent_id"?: string; "attachment_ids"?: Array<string>; "files_changed"?: Array<string>; "test_results"?: string; "commit_hash"?: string; "notes"?: string; "confidence"?: number }
 

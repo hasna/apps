@@ -62,6 +62,7 @@ export function registerTaskMetaTools(server: McpServer, ctx: TaskMetaContext) {
             complete_task: "complete_task — Mark task completed. Params: task_id, confidence, completed_at, version",
             cancel_task: "cancel_task — Cancel a task. Params: task_id, version",
             reassign_task: "reassign_task — Change task assignee. Params: task_id, new_assignee, version",
+            move_task: "move_task — Re-parent a task to another project and/or task list (keeps its id and history). Params: task_id (required), to_project, to_list, clear_list, version",
             reschedule_task: "reschedule_task — Update deadline. Params: task_id, deadline, version",
             prioritize_task: "prioritize_task — Set priority. Params: task_id, priority, version",
             search_tasks: "search_tasks — Full-text search. Params: query, project_id, status, limit",
