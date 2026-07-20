@@ -1060,6 +1060,234 @@
     }
   },
   {
+    "name": "loops_receipt_read",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Run id."
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "loops_receipt_write",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "loop_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "OpenLoops loop id. Optional when run_id references an existing loop run."
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Scheduler-neutral run id. Existing values are updated idempotently."
+        },
+        "machine": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": {}
+            }
+          ],
+          "description": "Machine id/name or machine metadata object."
+        },
+        "repo": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Repository path or owner/repo string. Defaults from the loop target cwd when possible."
+        },
+        "task_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Task ids associated with this run."
+        },
+        "knowledge_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Knowledge record ids associated with this run."
+        },
+        "digest_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable digest id. Computed from normalized receipt content when omitted."
+        },
+        "started_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Run start timestamp."
+        },
+        "finished_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Run finish timestamp."
+        },
+        "status": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Run status."
+        },
+        "exit_code": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Process exit code."
+        },
+        "summary": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "text": {
+                      "type": "string",
+                      "description": "Short human summary. It is scrubbed and bounded before storage."
+                    },
+                    "stdout_bytes": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "Original stdout byte count."
+                    },
+                    "stderr_bytes": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "Original stderr byte count."
+                    },
+                    "stdout_excerpt": {
+                      "type": "string",
+                      "description": "Bounded stdout excerpt. Raw unbounded stdout is never required."
+                    },
+                    "stderr_excerpt": {
+                      "type": "string",
+                      "description": "Bounded stderr excerpt. Raw unbounded stderr is never required."
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "Bounded error excerpt."
+                    },
+                    "duration_ms": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "Run duration in milliseconds."
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Bounded structured summary; may be a string shorthand."
+        },
+        "evidence_paths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Bounded paths to durable evidence artifacts."
+        },
+        "stdout": {
+          "type": "string",
+          "description": "Optional raw stdout to summarize and bound before storage."
+        },
+        "stderr": {
+          "type": "string",
+          "description": "Optional raw stderr to summarize and bound before storage."
+        },
+        "error": {
+          "type": "string",
+          "description": "Optional raw error text to summarize and bound before storage."
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Run duration in milliseconds."
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "loops_receipts_list",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "loop_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Filter by loop_id."
+        },
+        "repo": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Filter by repo."
+        },
+        "task_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Filter by task id."
+        },
+        "knowledge_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Filter by knowledge id."
+        },
+        "status": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Filter by receipt status."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "description": "Maximum entries to return (1-500)."
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
     "name": "loops_resume",
     "inputSchema": {
       "type": "object",

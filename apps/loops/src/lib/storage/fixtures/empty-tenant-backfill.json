@@ -1,0 +1,17 @@
+{
+  "schema": "open-loops.tenant-backfill/v1",
+  "tenants": [
+    { "id": "tenant-a", "slug": "tenant-a", "name": "Tenant A", "status": "active" },
+    { "id": "tenant-b", "slug": "tenant-b", "name": "Tenant B", "status": "active" }
+  ],
+  "principals": [
+    { "id": "principal-a", "kind": "human", "displayName": "Principal A", "status": "active" },
+    { "id": "principal-b", "kind": "human", "displayName": "Principal B", "status": "active" }
+  ],
+  "memberships": [
+    { "tenantId": "tenant-a", "principalId": "principal-a", "status": "active", "roles": ["admin"] },
+    { "tenantId": "tenant-b", "principalId": "principal-b", "status": "active", "roles": ["admin"] }
+  ],
+  "keyBindings": [],
+  "rowAssignments": []
+}

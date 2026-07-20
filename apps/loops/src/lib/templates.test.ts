@@ -13,6 +13,7 @@ import {
   KNOWLEDGE_REFRESH_TEMPLATE_ID,
   PR_REVIEW_TEMPLATE_ID,
   REPORT_ONLY_TEMPLATE_ID,
+  ROUTING_REMEDIATION_TEMPLATE_ID,
   SCHEDULED_AUDIT_TEMPLATE_ID,
   TASK_LIFECYCLE_TEMPLATE_ID,
   TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID,
@@ -262,6 +263,53 @@ describe("prompt fragment composition", () => {
     expect(disabledVerifier.prompt).toContain("The verifier idle watchdog is disabled for this workflow");
     expect(disabledVerifier.idleTimeoutMs).toBeUndefined();
   });
+
+  test("routing-remediation prompt and preflight enforce safe CLI-only repairs", () => {
+    const workflow = renderLoopTemplate(ROUTING_REMEDIATION_TEMPLATE_ID, {
+      projectPath: repoPath,
+      todosProjectPath: "/srv/todos",
+      dryRun: "false",
+      shard: "0/6",
+      limit: "10",
+      maxRepairs: "3",
+      idempotencyKey: "routing-health:open-loops:shard0",
+      worktreeRoot,
+    });
+    expect(workflow.steps.map((step) => step.id)).toEqual(["routing-doctor-preflight", "worker", "verifier"]);
+    const preflight = stepById(workflow, "routing-doctor-preflight") as WorkflowStepInput & { blockedExitCodes?: number[] };
+    expect(preflight.target.type).toBe("command");
+    expect(preflight.target.type === "command" ? preflight.target.cwd : undefined).toBe(repoPath);
+    expect(preflight.blockedExitCodes).toEqual([12]);
+    const preflightCommand = commandOf(preflight);
+    expect(preflightCommand).toContain("OPENLOOPS_ROUTING_REMEDIATION_MAX_REPAIRS='3'");
+    expect(preflightCommand).toContain("OPENLOOPS_ROUTING_REMEDIATION_SCOPE_ARGS='[");
+    expect(preflightCommand).toContain("\"--shard\",\"0/6\"");
+    expect(preflightCommand).toContain("allowedSafeFields = new Set(['working_dir', 'task_list_id'])");
+    expect(preflightCommand).toContain("__missing_safe_field__");
+    expect(preflightCommand).toContain("process.exit(12);");
+
+    const worker = agentTargetOf(stepById(workflow, "worker"));
+    expect(worker.prompt).toContain("Dry-run/preflight mode: false");
+    expect(worker.prompt).toContain("todos --project /srv/todos doctor routing --json --apply --undo-record");
+    expect(worker.prompt).toContain("Never edit the Todos SQLite database");
+    expect(worker.prompt).toContain("safe_auto");
+    expect(worker.prompt).toContain("blocker_cross_repo");
+    expect(worker.prompt).toContain("from-kai,routing-health");
+    expect(worker.prompt).toContain("old value, new value, repair command, source doctor run, undo record, and route-state recheck result");
+    expect(worker.prompt).toContain("routing-health:blocker:<source-task-id>:<finding-category>");
+
+    const verifier = agentTargetOf(stepById(workflow, "verifier"));
+    expect(verifier.prompt).toContain("Confirm safe_auto repairs were limited to working_dir and task_list_id");
+    expect(verifier.prompt).toContain("If dry-run mode was rendered, verify that no apply/repair mutation occurred");
+
+    const dryRunWorkflow = renderLoopTemplate(ROUTING_REMEDIATION_TEMPLATE_ID, {
+      projectPath: repoPath,
+      todosProjectPath: "/srv/todos",
+      idempotencyKey: "routing-health:open-loops:dry-run",
+      worktreeRoot,
+    });
+    expect(agentTargetOf(stepById(dryRunWorkflow, "worker")).prompt).toContain("This workflow was rendered with dryRun=true. Do not run the apply command");
+  });
 });
 
 describe("executor-native worktree specs", () => {
@@ -399,10 +447,16 @@ describe("permission and break-glass fail-closed rendering", () => {
       projectPath: plainPath,
       sandbox: "danger-full-access",
       manualBreakGlass: "true",
+      safetyReason: "operator-approved isolated emergency repair",
     });
     const target = agentTargetOf(stepById(workflow, "worker"));
     expect(target.sandbox).toBe("danger-full-access");
-    expect(target.allowlist).toEqual({ enforcement: "metadata_only", commands: ["manual-break-glass"] });
+    expect(target.manualBreakGlass).toBe(true);
+    expect(target.allowlist).toEqual({
+      enforcement: "metadata_only",
+      commands: ["manual-break-glass"],
+      safetyReason: "operator-approved isolated emergency repair",
+    });
   });
 
   test("codewith/codex default to workspace-write sandbox with bypass permission mode", () => {
@@ -411,6 +465,21 @@ describe("permission and break-glass fail-closed rendering", () => {
     expect(target.sandbox).toBe("workspace-write");
     expect(target.permissionMode).toBe("bypass");
     expect(target.configIsolation).toBe("safe");
+  });
+
+  test("native providers default generated workflows to provider-managed permissions", () => {
+    const inputs = [
+      { provider: "claude" },
+      { provider: "cursor" },
+      { provider: "aicopilot" },
+      { provider: "opencode", model: "openrouter/test/model" },
+    ] as const;
+    for (const input of inputs) {
+      const workflow = renderTodosTaskWorkerVerifierWorkflow({ taskId: "t", projectPath: plainPath, ...input });
+      const target = agentTargetOf(stepById(workflow, "worker"));
+      expect(target.permissionMode).toBe("default");
+      expect(target.manualBreakGlass).toBeUndefined();
+    }
   });
 
   test("native auth profiles are rejected for non-codewith providers", () => {
@@ -641,6 +710,10 @@ describe("pr-handoff no-artifact / direct-PR path", () => {
     expect(command).not.toMatch(/^\s*exit\b/m);
     // No-artifact branch detects the worker-opened PR by head branch...
     expect(command).toContain("'pr', 'list', '--head', branch, '--state', 'open'");
+    // GitHub-dependent handoff work must preflight git network before push/PR operations.
+    expect(command).toContain("'ls-remote', '--heads'");
+    expect(command).toContain("github preflight failed before push/PR");
+    expect(command).toContain("github preflight failed before PR lookup");
     // ...and records the same done marker the artifact path records.
     expect(command).toContain("openloops:pr-handoff=done task=${taskId} pr=${pr.url}");
     // Artifact (codewith-style) path is preserved unchanged.
@@ -758,6 +831,213 @@ describe("pr-handoff no-artifact / direct-PR path", () => {
       expect(result.status).toBe(0);
       const captured = existsSync(cap) ? readFileSync(cap, "utf8") : "";
       expect(captured).not.toContain("openloops:pr-handoff=done");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(bin, { recursive: true, force: true });
+      rmSync(wt, { recursive: true, force: true });
+    }
+  });
+
+  test("no-artifact path queues bounded handoff when GitHub preflight fails before PR lookup", () => {
+    const home = mkdtempSync(join(tmpdir(), "loops-prh-home-"));
+    const bin = mkdtempSync(join(tmpdir(), "loops-prh-bin-"));
+    const wt = mkdtempSync(join(tmpdir(), "loops-prh-wt-"));
+    try {
+      writeFileSync(join(home, ".bash_logout"), "false\n");
+      const git = join(bin, "git");
+      writeFileSync(
+        git,
+        [
+          "#!/usr/bin/env bash",
+          "args=\"$*\"",
+          "if [[ \"$args\" == *\" rev-parse HEAD\"* ]]; then printf '%s\\n' abc123; exit 0; fi",
+          "if [[ \"$args\" == *\" remote get-url origin\"* ]]; then printf '%s\\n' https://token:secret@github.com/acme/repo.git; exit 0; fi",
+          "if [[ \"$args\" == *\" ls-remote --heads origin feat/direct-pr\"* ]]; then printf '%s\\n' 'fatal: unable to access https://token:secret@github.com/acme/repo.git/: Could not resolve host: github.com' >&2; exit 128; fi",
+          "printf 'unexpected git args: %s\\n' \"$*\" >&2",
+          "exit 64",
+        ].join("\n"),
+      );
+      chmodSync(git, 0o755);
+      const gh = join(bin, "gh");
+      writeFileSync(gh, "#!/usr/bin/env bash\nprintf 'gh should not run after failed preflight\\n' >&2\nexit 65\n");
+      chmodSync(gh, 0o755);
+      const cap = join(bin, "todos.cap");
+      const todos = join(bin, "todos");
+      writeFileSync(todos, ["#!/usr/bin/env bash", `printf '%s\\0' "$@" >> ${JSON.stringify(cap)}`, "exit 0"].join("\n"));
+      chmodSync(todos, 0o755);
+
+      const command = prHandoffCommand({
+        artifactPath: join(wt, ".openloops", "pr-handoff", "missing.json"),
+        taskId: "task-network-pr",
+        todosProjectPath: wt,
+        worktreeCwd: wt,
+        worktreeRoot: wt,
+        expectedBranch: "feat/direct-pr",
+      });
+      const env = {
+        HOME: home,
+        PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
+        OPENLOOPS_PR_HANDOFF_GH_BIN: gh,
+        OPENLOOPS_PR_HANDOFF_TODOS_BIN: todos,
+        OPENLOOPS_PR_HANDOFF_GIT_BIN: git,
+      };
+      const result = spawnSync("bash", ["-lc", command], { env, cwd: wt, encoding: "utf8" });
+      expect(result.status).toBe(0);
+      const captured = existsSync(cap) ? readFileSync(cap, "utf8") : "";
+      expect(captured).toContain("task\u0000upsert");
+      expect(captured).toContain("openloops:pr-handoff:task-network-pr:feat/direct-pr:abc123");
+      expect(captured).toContain("github preflight failed before PR lookup");
+      expect(captured).toContain("https://github.com/acme/repo.git");
+      expect(captured).not.toContain("token:secret");
+      expect(captured).not.toContain("secret@github.com");
+      expect(captured).toContain("openloops:pr-handoff=pending");
+      expect(result.stderr).not.toContain("gh should not run");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(bin, { recursive: true, force: true });
+      rmSync(wt, { recursive: true, force: true });
+    }
+  });
+
+  test("artifact path queues bounded handoff when GitHub preflight fails before push", () => {
+    const home = mkdtempSync(join(tmpdir(), "loops-prh-home-"));
+    const bin = mkdtempSync(join(tmpdir(), "loops-prh-bin-"));
+    const wt = mkdtempSync(join(tmpdir(), "loops-prh-wt-"));
+    try {
+      writeFileSync(join(home, ".bash_logout"), "false\n");
+      const artifactPath = join(wt, ".openloops", "pr-handoff", "task-artifact-pr.json");
+      mkdirSync(dirname(artifactPath), { recursive: true });
+      writeFileSync(
+        artifactPath,
+        JSON.stringify({
+          taskId: "task-artifact-pr",
+          worktreePath: wt,
+          branch: "feat/artifact-pr",
+          base: "main",
+          commit: "abc123",
+          remote: "origin",
+          remoteUrl: "https://token:secret@github.com/acme/repo.git",
+          validation: "unit tests passed",
+          error: "fatal: unable to access https://token:secret@github.com/acme/repo.git/: Could not resolve host: github.com",
+        }),
+      );
+      const git = join(bin, "git");
+      writeFileSync(
+        git,
+        [
+          "#!/usr/bin/env bash",
+          "args=\"$*\"",
+          `if [[ "$args" == *" rev-parse --show-toplevel"* ]]; then printf '%s\\n' ${JSON.stringify(wt)}; exit 0; fi`,
+          "if [[ \"$args\" == *\" branch --show-current\"* ]]; then printf '%s\\n' feat/artifact-pr; exit 0; fi",
+          "if [[ \"$args\" == *\" rev-parse --verify abc123\"* ]]; then printf '%s\\n' abc123; exit 0; fi",
+          "if [[ \"$args\" == *\" merge-base --is-ancestor abc123 HEAD\"* ]]; then exit 0; fi",
+          "if [[ \"$args\" == *\" ls-remote --heads origin main\"* ]]; then printf '%s\\n' 'fatal: unable to access https://token:secret@github.com/acme/repo.git/: Could not resolve host: github.com' >&2; exit 128; fi",
+          "printf 'unexpected git args: %s\\n' \"$*\" >&2",
+          "exit 64",
+        ].join("\n"),
+      );
+      chmodSync(git, 0o755);
+      const gh = join(bin, "gh");
+      writeFileSync(gh, "#!/usr/bin/env bash\nprintf 'gh should not run after failed artifact preflight\\n' >&2\nexit 65\n");
+      chmodSync(gh, 0o755);
+      const cap = join(bin, "todos.cap");
+      const todos = join(bin, "todos");
+      writeFileSync(todos, ["#!/usr/bin/env bash", `printf '%s\\0' "$@" >> ${JSON.stringify(cap)}`, "exit 0"].join("\n"));
+      chmodSync(todos, 0o755);
+
+      const command = prHandoffCommand({
+        artifactPath,
+        taskId: "task-artifact-pr",
+        todosProjectPath: wt,
+        worktreeCwd: wt,
+        worktreeRoot: wt,
+        expectedBranch: "feat/artifact-pr",
+      });
+      const env = {
+        HOME: home,
+        PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
+        OPENLOOPS_PR_HANDOFF_GH_BIN: gh,
+        OPENLOOPS_PR_HANDOFF_TODOS_BIN: todos,
+        OPENLOOPS_PR_HANDOFF_GIT_BIN: git,
+      };
+      const result = spawnSync("bash", ["-lc", command], { env, cwd: wt, encoding: "utf8" });
+      expect(result.status).toBe(0);
+      const captured = existsSync(cap) ? readFileSync(cap, "utf8") : "";
+      expect(captured).toContain("task\u0000upsert");
+      expect(captured).toContain("openloops:pr-handoff:task-artifact-pr:feat/artifact-pr:abc123");
+      expect(captured).toContain("github preflight failed before push/PR");
+      expect(captured).toContain("https://github.com/acme/repo.git");
+      expect(captured).not.toContain("token:secret");
+      expect(captured).not.toContain("secret@github.com");
+      expect(captured).toContain("openloops:pr-handoff=pending");
+      expect(result.stderr).not.toContain("gh should not run");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(bin, { recursive: true, force: true });
+      rmSync(wt, { recursive: true, force: true });
+    }
+  });
+
+  test("no-artifact path does not mark pending when the bounded handoff task upsert fails", () => {
+    const home = mkdtempSync(join(tmpdir(), "loops-prh-home-"));
+    const bin = mkdtempSync(join(tmpdir(), "loops-prh-bin-"));
+    const wt = mkdtempSync(join(tmpdir(), "loops-prh-wt-"));
+    try {
+      writeFileSync(join(home, ".bash_logout"), "false\n");
+      const git = join(bin, "git");
+      writeFileSync(
+        git,
+        [
+          "#!/usr/bin/env bash",
+          "args=\"$*\"",
+          "if [[ \"$args\" == *\" rev-parse HEAD\"* ]]; then printf '%s\\n' def456; exit 0; fi",
+          "if [[ \"$args\" == *\" remote get-url origin\"* ]]; then printf '%s\\n' https://github.com/acme/repo.git; exit 0; fi",
+          "if [[ \"$args\" == *\" ls-remote --heads origin feat/direct-pr\"* ]]; then printf '%s\\n' 'fatal: unable to access https://github.com/acme/repo.git/: Could not resolve host: github.com' >&2; exit 128; fi",
+          "printf 'unexpected git args: %s\\n' \"$*\" >&2",
+          "exit 64",
+        ].join("\n"),
+      );
+      chmodSync(git, 0o755);
+      const gh = join(bin, "gh");
+      writeFileSync(gh, "#!/usr/bin/env bash\nprintf 'gh should not run after failed preflight\\n' >&2\nexit 65\n");
+      chmodSync(gh, 0o755);
+      const cap = join(bin, "todos.cap");
+      const todos = join(bin, "todos");
+      writeFileSync(
+        todos,
+        [
+          "#!/usr/bin/env bash",
+          `printf '%s\\0' "$@" >> ${JSON.stringify(cap)}`,
+          "if [[ \"$*\" == *\" task upsert \"* ]]; then printf 'upsert failed\\n' >&2; exit 47; fi",
+          "exit 0",
+        ].join("\n"),
+      );
+      chmodSync(todos, 0o755);
+
+      const command = prHandoffCommand({
+        artifactPath: join(wt, ".openloops", "pr-handoff", "missing.json"),
+        taskId: "task-upsert-fails",
+        todosProjectPath: wt,
+        worktreeCwd: wt,
+        worktreeRoot: wt,
+        expectedBranch: "feat/direct-pr",
+      });
+      const env = {
+        HOME: home,
+        PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
+        OPENLOOPS_PR_HANDOFF_GH_BIN: gh,
+        OPENLOOPS_PR_HANDOFF_TODOS_BIN: todos,
+        OPENLOOPS_PR_HANDOFF_GIT_BIN: git,
+      };
+      const result = spawnSync("bash", ["-lc", command], { env, cwd: wt, encoding: "utf8" });
+      expect(result.status).toBe(0);
+      expect(result.stderr).toContain("todos task upsert failed");
+      const captured = existsSync(cap) ? readFileSync(cap, "utf8") : "";
+      expect(captured).toContain("task\u0000upsert");
+      expect(captured).toContain("openloops:pr-handoff=failed");
+      expect(captured).toContain("reason=todos-upsert-failed");
+      expect(captured).not.toContain("openloops:pr-handoff=pending");
+      expect(result.stderr).not.toContain("gh should not run");
     } finally {
       rmSync(home, { recursive: true, force: true });
       rmSync(bin, { recursive: true, force: true });

@@ -14,8 +14,12 @@ export type LoopStorageMethodName =
   | "archiveLoop"
   | "unarchiveLoop"
   | "deleteLoop"
+  | "upsertMigrationLoop"
+  | "upsertMigrationRun"
+  | "upsertMigrationWorkflow"
   | "createWorkflow"
   | "getWorkflow"
+  | "requireWorkflow"
   | "listWorkflows"
   | "countWorkflows"
   | "archiveWorkflow"
@@ -29,6 +33,8 @@ export type LoopStorageMethodName =
   | "admitWorkflowWorkItem"
   | "createGoal"
   | "getGoal"
+  | "requireGoal"
+  | "findGoalByContext"
   | "listGoals"
   | "createGoalPlanNodes"
   | "listGoalPlanNodes"
@@ -38,12 +44,17 @@ export type LoopStorageMethodName =
   | "listGoalRuns"
   | "createWorkflowRun"
   | "getWorkflowRun"
+  | "requireWorkflowRun"
   | "listWorkflowRuns"
   | "listWorkflowStepRuns"
   | "getWorkflowStepRun"
+  | "isWorkflowRunTerminal"
   | "startWorkflowStepRun"
+  | "markWorkflowStepPid"
+  | "recordWorkflowStepProgress"
   | "recoverWorkflowRun"
   | "finalizeWorkflowStepRun"
+  | "skipWorkflowStepRun"
   | "finalizeWorkflowRun"
   | "appendWorkflowEvent"
   | "listWorkflowEvents"
@@ -55,6 +66,9 @@ export type LoopStorageMethodName =
   | "finalizeRun"
   | "heartbeatRunLease"
   | "listRuns"
+  | "writeRunReceipt"
+  | "getRunReceipt"
+  | "listRunReceipts"
   | "recoverExpiredRunLeases"
   | "recoverExpiredRunLeasesDetailed"
   | "countLoops"
@@ -85,8 +99,12 @@ export interface LoopStorageContract extends Record<LoopStorageMethodName, (...a
   archiveLoop: AsyncStoreMethod<"archiveLoop">;
   unarchiveLoop: AsyncStoreMethod<"unarchiveLoop">;
   deleteLoop: AsyncStoreMethod<"deleteLoop">;
+  upsertMigrationLoop: AsyncStoreMethod<"upsertMigrationLoop">;
+  upsertMigrationRun: AsyncStoreMethod<"upsertMigrationRun">;
+  upsertMigrationWorkflow: AsyncStoreMethod<"upsertMigrationWorkflow">;
   createWorkflow: AsyncStoreMethod<"createWorkflow">;
   getWorkflow: AsyncStoreMethod<"getWorkflow">;
+  requireWorkflow: AsyncStoreMethod<"requireWorkflow">;
   listWorkflows: AsyncStoreMethod<"listWorkflows">;
   countWorkflows: AsyncStoreMethod<"countWorkflows">;
   archiveWorkflow: AsyncStoreMethod<"archiveWorkflow">;
@@ -100,6 +118,8 @@ export interface LoopStorageContract extends Record<LoopStorageMethodName, (...a
   admitWorkflowWorkItem: AsyncStoreMethod<"admitWorkflowWorkItem">;
   createGoal: AsyncStoreMethod<"createGoal">;
   getGoal: AsyncStoreMethod<"getGoal">;
+  requireGoal: AsyncStoreMethod<"requireGoal">;
+  findGoalByContext: AsyncStoreMethod<"findGoalByContext">;
   listGoals: AsyncStoreMethod<"listGoals">;
   createGoalPlanNodes: AsyncStoreMethod<"createGoalPlanNodes">;
   listGoalPlanNodes: AsyncStoreMethod<"listGoalPlanNodes">;
@@ -109,12 +129,17 @@ export interface LoopStorageContract extends Record<LoopStorageMethodName, (...a
   listGoalRuns: AsyncStoreMethod<"listGoalRuns">;
   createWorkflowRun: AsyncStoreMethod<"createWorkflowRun">;
   getWorkflowRun: AsyncStoreMethod<"getWorkflowRun">;
+  requireWorkflowRun: AsyncStoreMethod<"requireWorkflowRun">;
   listWorkflowRuns: AsyncStoreMethod<"listWorkflowRuns">;
   listWorkflowStepRuns: AsyncStoreMethod<"listWorkflowStepRuns">;
   getWorkflowStepRun: AsyncStoreMethod<"getWorkflowStepRun">;
+  isWorkflowRunTerminal: AsyncStoreMethod<"isWorkflowRunTerminal">;
   startWorkflowStepRun: AsyncStoreMethod<"startWorkflowStepRun">;
+  markWorkflowStepPid: AsyncStoreMethod<"markWorkflowStepPid">;
+  recordWorkflowStepProgress: AsyncStoreMethod<"recordWorkflowStepProgress">;
   recoverWorkflowRun: AsyncStoreMethod<"recoverWorkflowRun">;
   finalizeWorkflowStepRun: AsyncStoreMethod<"finalizeWorkflowStepRun">;
+  skipWorkflowStepRun: AsyncStoreMethod<"skipWorkflowStepRun">;
   finalizeWorkflowRun: AsyncStoreMethod<"finalizeWorkflowRun">;
   appendWorkflowEvent: AsyncStoreMethod<"appendWorkflowEvent">;
   listWorkflowEvents: AsyncStoreMethod<"listWorkflowEvents">;
@@ -126,6 +151,9 @@ export interface LoopStorageContract extends Record<LoopStorageMethodName, (...a
   finalizeRun: AsyncStoreMethod<"finalizeRun">;
   heartbeatRunLease: AsyncStoreMethod<"heartbeatRunLease">;
   listRuns: AsyncStoreMethod<"listRuns">;
+  writeRunReceipt: AsyncStoreMethod<"writeRunReceipt">;
+  getRunReceipt: AsyncStoreMethod<"getRunReceipt">;
+  listRunReceipts: AsyncStoreMethod<"listRunReceipts">;
   recoverExpiredRunLeases: AsyncStoreMethod<"recoverExpiredRunLeases">;
   recoverExpiredRunLeasesDetailed: AsyncStoreMethod<"recoverExpiredRunLeasesDetailed">;
   countLoops: AsyncStoreMethod<"countLoops">;
@@ -165,7 +193,7 @@ export interface SchemaMigrationStorage {
   readonly backend: LoopStorageBackend;
   readonly migrations: readonly StorageMigration[];
   listAppliedMigrations(): Promise<AppliedStorageMigration[]>;
-  migrate(opts?: { dryRun?: boolean }): Promise<StorageMigrationResult>;
+  migrate(opts?: { dryRun?: boolean; through?: string }): Promise<StorageMigrationResult>;
   close(): Promise<void>;
 }
 

@@ -3,6 +3,9 @@
 export interface TodosTaskRouteOptions {
   eventFile?: string;
   eventJson?: string;
+  policy?: string;
+  preset?: string;
+  routePolicyEvidence?: string;
   template?: string;
   provider?: string;
   providerRule?: string[];
@@ -27,6 +30,7 @@ export interface TodosTaskRouteOptions {
   verifierIdleTimeout?: string;
   permissionMode?: string;
   sandbox?: string;
+  safetyReason?: string;
   manualBreakGlass?: boolean;
   projectPath?: string;
   projectGroup?: string;
@@ -34,6 +38,9 @@ export interface TodosTaskRouteOptions {
   maxActivePerProject?: string;
   maxActivePerProjectGroup?: string;
   maxActiveScope?: string;
+  providerActiveCap?: string;
+  codewithActiveCap?: string;
+  providerAdmissionCheck?: boolean;
   maxPerProfile?: string;
   worktreeMode?: string;
   worktreeRoot?: string;
@@ -86,6 +93,8 @@ export interface TodosDrainOptions extends TodosTaskRouteOptions {
   limit?: string;
   scanLimit?: string;
   maxDispatch?: string;
+  launchGate?: string;
+  launchGateBlocker?: string[];
   evidenceDir?: string;
   compact?: boolean;
 }

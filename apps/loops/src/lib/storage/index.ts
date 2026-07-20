@@ -19,7 +19,6 @@ export type { PostgresQueryExecutor } from "./postgres.js";
 export {
   PostgresLoopStorage,
   createPostgresLoopStorage,
-  NotImplementedError,
 } from "./postgres-loop-storage.js";
 export {
   POSTGRES_MIGRATION_LEDGER_TABLE,

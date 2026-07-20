@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { resolve } from "node:path";
 import type { EventEnvelope } from "@hasna/events";
 import type {
@@ -13,9 +14,10 @@ import type {
   WorkflowWorkItem,
   WorkflowWorkItemStatus,
 } from "../../types.js";
-import { Store } from "../store.js";
+import { GATE_DEATH_CEILING, Store } from "../store.js";
 import { ValidationError } from "../errors.js";
 import { publicLoop, publicWorkflow, publicWorkflowInvocation, publicWorkflowWorkItem } from "../format.js";
+import { listOpenMachines } from "../machines.js";
 import {
   renderEventWorkerVerifierWorkflow,
   renderTaskLifecycleWorkflow,
@@ -25,6 +27,7 @@ import {
 } from "../templates.js";
 import type { AgentWorkflowRole } from "../template-kit.js";
 import { eventData, eventMetadata, slugSegment, stableSuffix, stringField, taskEventField, taskEventRecords, taskEventTags, taskRouteEligibility } from "./fields.js";
+import { routePolicyEvidenceFromOptions } from "./policies.js";
 import { normalizeWorkflowForStorage, preflightStoredWorkflow, workflowSpecForPreflight } from "./gates.js";
 import { idleTimeoutDuration, listFromRepeatedOpts, nonNegativeInteger, timeoutDuration } from "./parse.js";
 import { assignPoolAuthProfiles, type PoolAuthProfileAssignment } from "./profile-pool.js";
@@ -37,6 +40,13 @@ import {
   roleAccountFromOpts,
   sandboxFromOpts,
 } from "./provider.js";
+import {
+  checkProviderAdmission,
+  providerAdmissionDryRunPreview,
+  providerAdmissionPlanFromOpts,
+  providerAdmissionPlanWithAuthProfiles,
+  type ProviderAdmissionPlan,
+} from "./provider-admission.js";
 import {
   hasThrottleLimits,
   normalizeRoutePath,
@@ -163,6 +173,19 @@ function todosTaskRouteRedispatchBackoffMs(attempts: number): number {
 }
 
 /**
+ * Decision returned by {@link reactivateStaleTodosTaskWorkItem}:
+ * - `readmit`  → the terminal item was requeued; dispatch a fresh run.
+ * - `dead-letter` → the redispatch cap was reached; the item was transitioned
+ *   to `dead_letter` (visible + counted) and the route dedupes this tick.
+ * - `dedupe`   → keep deduping (in-flight, inside backoff, or already
+ *   dead-lettered) without re-dispatching or re-escalating.
+ */
+type StaleTodosTaskReactivation =
+  | { kind: "readmit"; item: WorkflowWorkItem }
+  | { kind: "dead-letter"; item: WorkflowWorkItem }
+  | { kind: "dedupe" };
+
+/**
  * The todos-task drain only ever presents tasks that are still actionable
  * (pending + route opt-in). So when a *terminal* work item's task keeps
  * reappearing, the prior run finished (workflow `succeeded`/`failed`/`dead_letter`)
@@ -171,25 +194,47 @@ function todosTaskRouteRedispatchBackoffMs(attempts: number): number {
  * Re-admit it instead — bounded by a redispatch cap and a per-attempt backoff so
  * a task that can never complete does not spin a worker on every drain tick.
  * In-flight items (`admitted`/`running`) and items still inside their backoff
- * window keep deduping. Returns the requeued (`queued`) item when it should be
- * re-admitted, otherwise `undefined` (keep deduping).
+ * window keep deduping.
+ *
+ * When the cap is hit we do NOT silently keep deduping forever (the "black
+ * hole": `considered=N created=0` with no signal). Instead the item is
+ * dead-lettered once — a visible terminal state the drain report counts — so an
+ * operator sees it and can `loops routes requeue` (which resets attempts) to
+ * retry. Non-productive finishes (gate deaths / tempfails) never reach the cap
+ * because {@link Store.finalizeWorkflowRun} refunds their attempt.
  */
 function reactivateStaleTodosTaskWorkItem(
   store: Store,
   routeKey: string,
   item: WorkflowWorkItem,
   now: number = Date.now(),
-): WorkflowWorkItem | undefined {
-  if (routeKey !== "todos-task") return undefined;
-  if (!REACTIVATABLE_TERMINAL_STATUSES.has(item.status)) return undefined;
-  if (item.attempts >= MAX_TODOS_TASK_ROUTE_REDISPATCHES) return undefined;
+): StaleTodosTaskReactivation {
+  if (routeKey !== "todos-task") return { kind: "dedupe" };
+  if (!REACTIVATABLE_TERMINAL_STATUSES.has(item.status)) return { kind: "dedupe" };
+  // An item parked at the gate-death ceiling stays dead-lettered until an
+  // operator requeues it (which resets the streak): its attempts were refunded
+  // (typically ~0), so without this guard the bounded re-admission below would
+  // requeue it straight back into the same deterministic infrastructure fault.
+  if (item.status === "dead_letter" && item.gateDeaths >= GATE_DEATH_CEILING) {
+    return { kind: "dedupe" };
+  }
+  if (item.attempts >= MAX_TODOS_TASK_ROUTE_REDISPATCHES) {
+    if (item.status === "dead_letter") return { kind: "dedupe" };
+    const deadLettered = store.deadLetterWorkflowWorkItem(item.id, {
+      reason:
+        `redispatch cap reached (${item.attempts}/${MAX_TODOS_TASK_ROUTE_REDISPATCHES}): todos task still actionable but ` +
+        `${item.attempts} runs finished without closing it; dead-lettered. Fix the task or 'loops routes requeue' to retry (resets attempts).`,
+    });
+    return { kind: "dead-letter", item: deadLettered };
+  }
   const finishedAt = Date.parse(item.updatedAt);
   if (Number.isFinite(finishedAt) && now - finishedAt < todosTaskRouteRedispatchBackoffMs(item.attempts)) {
-    return undefined;
+    return { kind: "dedupe" };
   }
-  return store.requeueWorkflowWorkItem(item.id, {
+  const requeued = store.requeueWorkflowWorkItem(item.id, {
     reason: `re-admitted from ${item.status}: todos task still actionable after prior run (attempt ${item.attempts + 1}/${MAX_TODOS_TASK_ROUTE_REDISPATCHES})`,
   });
+  return { kind: "readmit", item: requeued };
 }
 
 function findRouteWorkItemByKeys(store: Store, routeKey: "todos-task" | "generic-event", idempotencyKeys: string[]): WorkflowWorkItem | undefined {
@@ -261,6 +306,7 @@ interface RouteEventPlan {
   /** codewith auth-profile pool context for least-loaded selection + the
    *  --max-per-profile guard, resolved once the store is live. */
   poolRouting?: PoolRoutingPlan;
+  providerAdmission?: ProviderAdmissionPlan;
   subjectRef: string;
   loopName: string;
   loopDescription: string;
@@ -297,6 +343,21 @@ function resolveRouteScope(opts: TodosTaskRouteOptions, routeKey: string): strin
   return opts.maxActiveScope?.trim() || process.env.LOOPS_LOOP_NAME?.trim() || routeKey || undefined;
 }
 
+function currentRouteMachineId(): string {
+  const explicit = stringField(process.env.LOOPS_MACHINE_ID) ??
+    stringField(process.env.HASNA_MACHINE_ID) ??
+    stringField(process.env.MACHINE_ID);
+  if (explicit) return explicit;
+  try {
+    const local = listOpenMachines().find((machine) => machine.local)?.id;
+    if (local) return local;
+  } catch {
+    // OpenMachines is optional in local development; hostname still gives
+    // deterministic reservation evidence without making routing depend on it.
+  }
+  return hostname();
+}
+
 /**
  * Build the least-loaded pool context for a rendered workflow. Active only for
  * codewith with a pool of 2+ and NO per-role auth-profile pins (explicit pins
@@ -331,16 +392,37 @@ function buildPoolRoutingPlan(
   return { pool, seed, maxPerProfile: maxPerProfile > 0 ? maxPerProfile : undefined, rolesByStepId };
 }
 
+function nonEmptyStrings(values: Array<string | undefined>): string[] | undefined {
+  const entries = values.map((entry) => entry?.trim()).filter((entry): entry is string => Boolean(entry));
+  return entries.length ? entries : undefined;
+}
+
+function codewithAuthProfilesFromWorkflow(workflow: CreateWorkflowInput): Array<string | undefined> | undefined {
+  const profiles: Array<string | undefined> = [];
+  for (const step of workflow.steps) {
+    const target = step.target;
+    if (target.type !== "agent" || target.provider !== "codewith") continue;
+    profiles.push(target.authProfile);
+  }
+  return profiles.length ? profiles : undefined;
+}
+
 function dedupedRoutePrint(
   plan: Pick<RouteEventPlan, "event" | "idempotencyKey" | "dedupeValueExtras">,
   outcome: { existingItem: WorkflowWorkItem; existingLoop?: ReturnType<Store["getLoop"]>; existingWorkflow?: WorkflowSpec; invocation?: Parameters<typeof publicWorkflowInvocation>[0] },
 ): TodosTaskRoutePrint {
+  // A dedupe against a dead_letter item is the redispatch-cap black hole made
+  // visible: surface it explicitly so drain reports can count it and stop the
+  // "created=0, no signal" silence. (Terminal-but-under-cap items still just
+  // dedupe until their backoff elapses and they re-admit.)
+  const deadLettered = outcome.existingItem.status === "dead_letter";
   return {
     kind: "deduped",
     value: {
       deduped: true,
       idempotencyKey: plan.idempotencyKey,
       dedupedBy: "work-item",
+      ...(deadLettered ? { deadLettered: true, reason: outcome.existingItem.lastReason } : {}),
       event: plan.event,
       ...plan.dedupeValueExtras,
       invocation: outcome.invocation ? publicWorkflowInvocation(outcome.invocation) : undefined,
@@ -348,7 +430,9 @@ function dedupedRoutePrint(
       workflow: outcome.existingWorkflow ? publicWorkflow(outcome.existingWorkflow) : undefined,
       loop: outcome.existingLoop ? publicLoop(outcome.existingLoop) : undefined,
     },
-    human: `deduped existing work item ${outcome.existingItem.id} for event=${plan.event.id} idempotency=${plan.idempotencyKey}`,
+    human: deadLettered
+      ? `dead-lettered work item ${outcome.existingItem.id} (redispatch cap reached) for event=${plan.event.id} idempotency=${plan.idempotencyKey}`
+      : `deduped existing work item ${outcome.existingItem.id} for event=${plan.event.id} idempotency=${plan.idempotencyKey}`,
   };
 }
 
@@ -369,6 +453,7 @@ function routeEvent(plan: RouteEventPlan): TodosTaskRoutePrint {
     subjectRef: plan.subjectRef,
     projectKey: plan.routeProjectPath,
     projectGroup: plan.projectGroup,
+    machineId: currentRouteMachineId(),
     routeScope: plan.routeScope,
     priority: 0,
     status: "queued" as const,
@@ -385,8 +470,15 @@ function routeEvent(plan: RouteEventPlan): TodosTaskRoutePrint {
   };
   if (opts.dryRun) {
     const throttle = hasThrottleLimits(plan.throttleLimits)
-      ? routeThrottleDryRunPreview({ projectPath: plan.routeProjectPath, projectGroup: plan.projectGroup, limits: plan.throttleLimits })
+      ? routeThrottleDryRunPreview({
+          projectPath: plan.routeProjectPath,
+          projectGroup: plan.projectGroup,
+          limits: plan.throttleLimits,
+        })
       : undefined;
+    const providerAdmission = providerAdmissionDryRunPreview(
+      providerAdmissionPlanWithAuthProfiles(plan.providerAdmission, codewithAuthProfilesFromWorkflow(workflowBody) ?? []),
+    );
     const preflight = opts.preflight
       ? preflightStoredWorkflow(workflowSpecForPreflight(workflowBody, "event-preflight"), plan.workflowContext, {})
       : undefined;
@@ -402,6 +494,7 @@ function routeEvent(plan: RouteEventPlan): TodosTaskRoutePrint {
         workflow: workflowBody,
         loop: loopInput,
         throttle,
+        providerAdmission,
         sandboxPreflight,
         preflight,
       },
@@ -416,46 +509,57 @@ function routeEvent(plan: RouteEventPlan): TodosTaskRoutePrint {
       ? preflightStoredWorkflow(workflowPreflightSpec, plan.workflowContext, {})
       : undefined;
     let poolAssignment: PoolAuthProfileAssignment | undefined;
+    if (plan.poolRouting) {
+      const loadCounts = store.countRunningWorkflowStepsByAuthProfile();
+      poolAssignment = assignPoolAuthProfiles({
+        pool: plan.poolRouting.pool,
+        seed: plan.poolRouting.seed,
+        loadCounts,
+        maxPerProfile: plan.poolRouting.maxPerProfile,
+        roles: Object.values(plan.poolRouting.rolesByStepId),
+      });
+    }
+    if (poolAssignment && !poolAssignment.deferred) {
+      for (const step of workflowBody.steps) {
+        const role = plan.poolRouting?.rolesByStepId[step.id];
+        const chosen = role ? poolAssignment.profiles[role] : undefined;
+        if (chosen && step.target.type === "agent") step.target.authProfile = chosen;
+      }
+    }
+    const workflowProfiles = codewithAuthProfilesFromWorkflow(workflowBody);
+    const providerAdmissionPlan = workflowProfiles
+      ? providerAdmissionPlanWithAuthProfiles(plan.providerAdmission, workflowProfiles)
+      : plan.providerAdmission;
+    const providerAdmission = poolAssignment?.deferred ? undefined : checkProviderAdmission(providerAdmissionPlan);
     const outcome = store.writeTransaction(() => {
       const invocation = store.createWorkflowInvocation(plan.invocationInput);
       const existingItem = findRouteWorkItemByKeys(store, plan.routeKey, dedupeKeys);
       if (existingItem) {
         // A terminal work item whose todos task is still actionable is re-admitted
         // (bounded) rather than deduped forever; the requeue drops it back to
-        // `queued` so the upsert/admit path below re-dispatches a fresh run.
-        if (!reactivateStaleTodosTaskWorkItem(store, plan.routeKey, existingItem)) {
-          const existingLoop = existingItem.loopId ? store.getLoop(existingItem.loopId) : undefined;
-          const existingWorkflow = existingItem.workflowId ? store.getWorkflow(existingItem.workflowId) : undefined;
-          return { kind: "deduped" as const, existingItem, existingLoop, existingWorkflow, invocation };
+        // `queued` so the upsert/admit path below re-dispatches a fresh run. At
+        // the cap it is dead-lettered (visible) instead of silently deduped.
+        const reactivation = reactivateStaleTodosTaskWorkItem(store, plan.routeKey, existingItem);
+        if (reactivation.kind !== "readmit") {
+          const dedupeItem = reactivation.kind === "dead-letter" ? reactivation.item : existingItem;
+          const existingLoop = dedupeItem.loopId ? store.getLoop(dedupeItem.loopId) : undefined;
+          const existingWorkflow = dedupeItem.workflowId ? store.getWorkflow(dedupeItem.workflowId) : undefined;
+          return { kind: "deduped" as const, existingItem: dedupeItem, existingLoop, existingWorkflow, invocation };
         }
       }
       const throttle = hasThrottleLimits(plan.throttleLimits)
-        ? routeThrottleDecision(store, {
+          ? routeThrottleDecision(store, {
             projectPath: plan.routeProjectPath,
             projectGroup: plan.projectGroup,
             routeScope: plan.routeScope,
             limits: plan.throttleLimits,
           })
         : undefined;
-      // Least-loaded auth-profile pool selection + max-per-profile guard. Read
-      // the live per-account running load and either spread this route's steps
-      // to the least-loaded accounts or defer when every pool member is
-      // saturated. Runs after the active-workflow throttle so the store-side
-      // caps still bind first.
-      if (plan.poolRouting) {
-        const loadCounts = store.countRunningWorkflowStepsByAuthProfile();
-        poolAssignment = assignPoolAuthProfiles({
-          pool: plan.poolRouting.pool,
-          seed: plan.poolRouting.seed,
-          loadCounts,
-          maxPerProfile: plan.poolRouting.maxPerProfile,
-          roles: Object.values(plan.poolRouting.rolesByStepId),
-        });
-      }
       const activeThrottled = Boolean(throttle && !throttle.allowed);
       const poolDeferred = Boolean(poolAssignment?.deferred);
-      const deferred = activeThrottled || poolDeferred;
-      const deferReason = activeThrottled ? throttle!.reason : poolAssignment?.reason;
+      const providerDeferred = Boolean(providerAdmission && !providerAdmission.allowed);
+      const deferred = activeThrottled || poolDeferred || providerDeferred;
+      const deferReason = activeThrottled ? throttle!.reason : poolDeferred ? poolAssignment?.reason : providerAdmission?.reason;
       const effectiveThrottle: RouteThrottleDecision | undefined = activeThrottled
         ? throttle
         : poolDeferred
@@ -482,16 +586,14 @@ function routeEvent(plan: RouteEventPlan): TodosTaskRoutePrint {
           }
         : undefined;
       const refreshedInvocation = store.refreshWorkflowInvocationForWorkItem(workItem.id, plan.invocationInput);
-      if (deferred) return { kind: "throttled" as const, invocation: refreshedInvocation, workItem, throttle: effectiveThrottle! };
-      // Rewrite the codewith auth profile of each pooled agent step to its
-      // least-loaded assignment before the workflow is persisted, so the stored
-      // step targets (and their recorded account_profile) reflect the spread.
-      if (poolAssignment && !poolAssignment.deferred) {
-        for (const step of workflowBody.steps) {
-          const role = plan.poolRouting?.rolesByStepId[step.id];
-          const chosen = role ? poolAssignment.profiles[role] : undefined;
-          if (chosen && step.target.type === "agent") step.target.authProfile = chosen;
-        }
+      if (deferred) {
+        return {
+          kind: "throttled" as const,
+          invocation: refreshedInvocation,
+          workItem,
+          reason: deferReason,
+          throttle: effectiveThrottle,
+        };
       }
       const workflow = routeWorkflowForStorage(store, workflowBody);
       const loop = store.createLoop({
@@ -525,7 +627,7 @@ function routeEvent(plan: RouteEventPlan): TodosTaskRoutePrint {
         value: {
           skipped: true,
           queuedAtSource: true,
-          reason: outcome.throttle.reason,
+          reason: outcome.reason,
           idempotencyKey,
           event,
           ...plan.valueExtras,
@@ -534,8 +636,10 @@ function routeEvent(plan: RouteEventPlan): TodosTaskRoutePrint {
           throttle: outcome.throttle,
           workflow: workflowBody,
           loop: loopInput,
+          providerAdmission,
+          fatal: providerAdmission?.fatal === true ? true : undefined,
         },
-        human: `skipped ${plan.humanSubject}: ${outcome.throttle.reason}`,
+        human: `skipped ${plan.humanSubject}: ${outcome.reason}`,
       };
     }
     return {
@@ -551,6 +655,7 @@ function routeEvent(plan: RouteEventPlan): TodosTaskRoutePrint {
         loop: publicLoop(outcome.loop),
         requeue: outcome.requeue,
         throttle: outcome.throttle,
+        providerAdmission,
         // Per-role codewith account attribution: which subscription account each
         // pooled step was spread to (least-loaded selection). Surfaced so drain
         // reports show account_profile populated and the spread is auditable.
@@ -583,6 +688,7 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
   const taskTitle = taskEventField(data, ["title", "task_title", "taskTitle"]);
   const taskDescription = taskEventField(data, ["description", "body"]);
   const sourceTodosProjectPath = opts.sourceTodosProjectPath?.trim();
+  const explicitProjectPath = opts.projectPath?.trim();
   const dataProjectPath = taskEventField(data, [
     "route_project_path",
     "routeProjectPath",
@@ -601,9 +707,9 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
     "cwd",
   ]);
   const projectPath =
+    explicitProjectPath ??
     dataProjectPath ??
     metadataProjectPath ??
-    opts.projectPath ??
     process.cwd();
   const routeProjectPath = normalizeRoutePath(projectPath) ?? resolve(projectPath);
   const projectGroup = routeProjectGroup(opts.projectGroup, data, metadata);
@@ -636,14 +742,17 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
       if (existingItem) {
         // Re-admit a terminal work item whose task is still actionable instead of
         // deduping it away forever; requeue drops it to `queued` so the full
-        // creation path below dispatches a fresh run. Otherwise dedupe as before.
-        if (!reactivateStaleTodosTaskWorkItem(store, "todos-task", existingItem)) {
-          const existingLoop = existingItem.loopId ? store.getLoop(existingItem.loopId) : undefined;
-          const existingWorkflow = existingItem.workflowId ? store.getWorkflow(existingItem.workflowId) : undefined;
-          const existingInvocation = store.getWorkflowInvocation(existingItem.invocationId);
+        // creation path below dispatches a fresh run. At the cap it is
+        // dead-lettered (visible) rather than silently deduped forever.
+        const reactivation = reactivateStaleTodosTaskWorkItem(store, "todos-task", existingItem);
+        if (reactivation.kind !== "readmit") {
+          const dedupeItem = reactivation.kind === "dead-letter" ? reactivation.item : existingItem;
+          const existingLoop = dedupeItem.loopId ? store.getLoop(dedupeItem.loopId) : undefined;
+          const existingWorkflow = dedupeItem.workflowId ? store.getWorkflow(dedupeItem.workflowId) : undefined;
+          const existingInvocation = store.getWorkflowInvocation(dedupeItem.invocationId);
           return dedupedRoutePrint(
             { event, idempotencyKey, dedupeValueExtras: {} },
-            { existingItem, existingLoop, existingWorkflow, invocation: existingInvocation },
+            { existingItem: dedupeItem, existingLoop, existingWorkflow, invocation: existingInvocation },
           );
         }
       }
@@ -674,7 +783,9 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
   }
   const providerRouting = resolveProviderRouting(data, metadata, opts);
   const provider = providerRouting.provider;
-  const permissionMode = permissionModeFromOpts({ permissionMode: opts.permissionMode ?? "bypass" }, provider);
+  const permissionMode = permissionModeFromOpts({
+    permissionMode: opts.permissionMode ?? (["codewith", "codex"].includes(provider) ? "bypass" : "default"),
+  }, provider);
   const sandbox = sandboxFromOpts({ sandbox: opts.sandbox }, provider);
   const authProfile = providerAuthProfileFromOpts({ authProfile: providerRouting.authProfile }, provider);
   const templateId = todosTaskRouteTemplateId(opts);
@@ -706,6 +817,7 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
     verifierIdleTimeoutMs: idleTimeoutDuration(opts.verifierIdleTimeout, "--verifier-idle-timeout"),
     permissionMode,
     sandbox,
+    safetyReason: opts.safetyReason,
     manualBreakGlass: Boolean(opts.manualBreakGlass),
     worktreeMode: (opts.worktreeMode ?? "auto") as AgentWorktreeMode,
     worktreeRoot: opts.worktreeRoot,
@@ -729,6 +841,7 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
     `Task-triggered ${templateId} workflow for ${taskTitle ?? taskId} from ${event.source}/${event.type}; ` +
     `idempotency=${idempotencyKey}; event=${event.id}; project=${projectPath}; projectGroup=${projectGroup ?? "-"}`;
   workflowBody = normalizeWorkflowForStorage(workflowBody, workflowContext);
+  const routePolicy = routePolicyEvidenceFromOptions(opts);
   const hasExplicitRoleAccount =
     Boolean(opts.triageAuthProfile || opts.plannerAuthProfile || opts.workerAuthProfile || opts.verifierAuthProfile) ||
     Boolean(opts.triageAccount || opts.plannerAccount || opts.workerAccount || opts.verifierAccount);
@@ -752,11 +865,17 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
       projectGroup,
       worktreePolicy: (opts.worktreeMode ?? "auto") as AgentWorktreeMode,
       permissions: permissionMode,
+      safetyReason: opts.safetyReason,
       manualBreakGlass: Boolean(opts.manualBreakGlass),
       prHandoff: templateId === TASK_LIFECYCLE_TEMPLATE_ID ? Boolean(opts.prHandoff) : false,
       accountPolicy: providerRouting.authProfilePool?.length || providerRouting.accountPool?.length ? "pool" : hasExplicitRoleAccount ? "role-explicit" : "single",
       providerRouting: providerRoutingPublic(providerRouting),
       prReviewRouting: prReviewRouting.required ? prReviewRouting : undefined,
+      routePolicy,
+      routeThrottle: {
+        maxActiveScope: throttleLimits.maxActiveScope,
+        maxPerProfile: throttleLimits.maxPerProfile,
+      },
       concurrencyGroup: projectGroup ?? routeProjectPath,
     },
     outputPolicy: {
@@ -777,6 +896,16 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
     projectGroup,
     routeScope: resolveRouteScope(opts, "todos-task"),
     poolRouting: buildPoolRoutingPlan(opts, provider, providerRouting.authProfilePool, workflowBody, taskId),
+    providerAdmission: providerAdmissionPlanFromOpts(opts, {
+      provider,
+      authProfile,
+      authProfiles: nonEmptyStrings([
+        opts.triageAuthProfile,
+        opts.plannerAuthProfile,
+        opts.workerAuthProfile,
+        opts.verifierAuthProfile,
+      ]) ?? providerRouting.authProfilePool,
+    }),
     subjectRef: taskId,
     loopName,
     loopDescription: `Run ${workflowBody.name} once for task ${taskId}; idempotency=${idempotencyKey}; event=${event.id}`,
@@ -786,6 +915,7 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
     valueExtras: {
       providerRouting: providerRoutingPublic(providerRouting),
       prReviewRouting: prReviewRouting.required ? prReviewRouting : undefined,
+      routePolicy,
     },
     dedupeValueExtras: {},
   });
@@ -810,7 +940,9 @@ export function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOpti
   const idempotencyKey = `generic-event:${event.source}:${event.type}:${event.id}`;
   const providerRouting = resolveProviderRouting(data, metadata, opts);
   const provider = providerRouting.provider;
-  const permissionMode = permissionModeFromOpts({ permissionMode: opts.permissionMode ?? "bypass" }, provider);
+  const permissionMode = permissionModeFromOpts({
+    permissionMode: opts.permissionMode ?? (["codewith", "codex"].includes(provider) ? "bypass" : "default"),
+  }, provider);
   const sandbox = sandboxFromOpts({ sandbox: opts.sandbox }, provider);
   const authProfile = providerAuthProfileFromOpts({ authProfile: providerRouting.authProfile }, provider);
   const workflowContext = {
@@ -845,6 +977,7 @@ export function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOpti
     verifierIdleTimeoutMs: idleTimeoutDuration(opts.verifierIdleTimeout, "--verifier-idle-timeout"),
     permissionMode,
     sandbox,
+    safetyReason: opts.safetyReason,
     manualBreakGlass: Boolean(opts.manualBreakGlass),
     worktreeMode: (opts.worktreeMode ?? "auto") as AgentWorktreeMode,
     worktreeRoot: opts.worktreeRoot,
@@ -874,9 +1007,14 @@ export function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOpti
       projectGroup,
       worktreePolicy: (opts.worktreeMode ?? "auto") as AgentWorktreeMode,
       permissions: permissionMode,
+      safetyReason: opts.safetyReason,
       manualBreakGlass: Boolean(opts.manualBreakGlass),
       accountPolicy: providerRouting.authProfilePool?.length || providerRouting.accountPool?.length ? "pool" : hasExplicitRoleAccount ? "role-explicit" : "single",
       providerRouting: providerRoutingPublic(providerRouting),
+      routeThrottle: {
+        maxActiveScope: throttleLimits.maxActiveScope,
+        maxPerProfile: throttleLimits.maxPerProfile,
+      },
       concurrencyGroup: projectGroup ?? routeProjectPath,
     },
     outputPolicy: {
@@ -897,6 +1035,11 @@ export function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOpti
     projectGroup,
     routeScope: resolveRouteScope(opts, "generic-event"),
     poolRouting: buildPoolRoutingPlan(opts, provider, providerRouting.authProfilePool, workflowBody, `${event.source}:${event.type}:${event.id}`),
+    providerAdmission: providerAdmissionPlanFromOpts(opts, {
+      provider,
+      authProfile,
+      authProfiles: nonEmptyStrings([opts.workerAuthProfile, opts.verifierAuthProfile]) ?? providerRouting.authProfilePool,
+    }),
     subjectRef: stringField(event.subject) ?? event.id,
     loopName,
     loopDescription: `Run ${workflowBody.name} once for event ${event.id}; idempotency=${idempotencyKey}`,

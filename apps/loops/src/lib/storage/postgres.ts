@@ -2,14 +2,19 @@ import type {
   AppliedStorageMigration,
   SchemaMigrationStorage,
   StorageMigration,
+  StorageMigrationPlanItem,
   StorageMigrationResult,
 } from "./contract.js";
-import { POSTGRES_MIGRATION_LEDGER_TABLE, POSTGRES_STORAGE_MIGRATIONS } from "./postgres-schema.js";
+import {
+  POSTGRES_MIGRATION_ADVISORY_LOCK_SQL,
+  POSTGRES_MIGRATION_LEDGER_TABLE,
+  POSTGRES_STORAGE_MIGRATIONS,
+} from "./postgres-schema.js";
 
 export interface PostgresQueryExecutor {
   query<T extends Record<string, unknown>>(sql: string, params?: readonly unknown[]): Promise<T[]>;
   execute(sql: string, params?: readonly unknown[]): Promise<void>;
-  transaction?<T>(fn: () => Promise<T>): Promise<T>;
+  transaction?<T>(fn: (executor: PostgresQueryExecutor) => Promise<T>): Promise<T>;
   close?(): Promise<void> | void;
 }
 
@@ -35,35 +40,31 @@ export class PostgresStorage implements SchemaMigrationStorage {
     return this.readAppliedMigrations();
   }
 
-  async migrate(opts: { dryRun?: boolean } = {}): Promise<StorageMigrationResult> {
+  async migrate(opts: { dryRun?: boolean; through?: string } = {}): Promise<StorageMigrationResult> {
     const dryRun = opts.dryRun === true;
-    if (!dryRun) await this.ensureLedger();
-    const applied = dryRun ? await this.tryReadAppliedMigrations() : await this.readAppliedMigrations();
-    const knownMigrationIds = new Set(this.migrations.map((migration) => migration.id));
-    for (const row of applied) {
-      if (!knownMigrationIds.has(row.id)) {
-        throw new Error(`Postgres migration ${row.id} is not recognized by this binary`);
-      }
-    }
-    const appliedById = new Map(applied.map((row) => [row.id, row]));
-    const plan = this.migrations.map((migration) => ({
-      migration,
-      state: appliedById.has(migration.id) ? "already_applied" as const : "pending" as const,
-    }));
+    const throughIndex = opts.through === undefined
+      ? this.migrations.length - 1
+      : this.migrations.findIndex((migration) => migration.id === opts.through);
+    if (throughIndex < 0) throw new Error(`Unknown Postgres migration target ${opts.through}`);
 
-    for (const migration of this.migrations) {
-      const existing = appliedById.get(migration.id);
-      if (existing && existing.checksum !== migration.checksum) {
-        throw new Error(`Postgres migration checksum mismatch for ${migration.id}`);
-      }
+    if (dryRun) {
+      const applied = await this.tryReadAppliedMigrations();
+      const plan = this.buildPlan(applied);
+      return { backend: this.backend, dryRun, applied, plan };
     }
-    if (dryRun) return { backend: this.backend, dryRun, applied, plan };
 
-    const run = async () => {
-      for (const item of plan) {
+    await this.ensureLedger();
+    let plan: StorageMigrationPlanItem[] = [];
+
+    const run = async (executor: PostgresQueryExecutor = this.executor) => {
+      await executor.query(POSTGRES_MIGRATION_ADVISORY_LOCK_SQL);
+      const lockedApplied = await this.readAppliedMigrations(executor);
+      plan = this.buildPlan(lockedApplied);
+      for (const [index, item] of plan.entries()) {
+        if (index > throughIndex) break;
         if (item.state === "already_applied") continue;
-        await this.executor.execute(item.migration.sql);
-        await this.executor.execute(
+        await executor.execute(item.migration.sql);
+        await executor.execute(
           `INSERT INTO ${POSTGRES_MIGRATION_LEDGER_TABLE} (id, checksum, applied_at) VALUES ($1, $2, NOW())`,
           [item.migration.id, item.migration.checksum],
         );
@@ -94,8 +95,10 @@ CREATE TABLE IF NOT EXISTS ${POSTGRES_MIGRATION_LEDGER_TABLE} (
     `);
   }
 
-  private async readAppliedMigrations(): Promise<AppliedStorageMigration[]> {
-    const rows = await this.executor.query<MigrationLedgerRow>(
+  private async readAppliedMigrations(
+    executor: PostgresQueryExecutor = this.executor,
+  ): Promise<AppliedStorageMigration[]> {
+    const rows = await executor.query<MigrationLedgerRow>(
       `SELECT id, checksum, applied_at FROM ${POSTGRES_MIGRATION_LEDGER_TABLE} ORDER BY id ASC`,
     );
     return rows.map((row) => ({
@@ -112,6 +115,26 @@ CREATE TABLE IF NOT EXISTS ${POSTGRES_MIGRATION_LEDGER_TABLE} (
       if (isMissingLedgerError(error)) return [];
       throw error;
     }
+  }
+
+  private buildPlan(applied: AppliedStorageMigration[]): StorageMigrationPlanItem[] {
+    const knownMigrationIds = new Set(this.migrations.map((migration) => migration.id));
+    for (const row of applied) {
+      if (!knownMigrationIds.has(row.id)) {
+        throw new Error(`Postgres migration ${row.id} is not recognized by this binary`);
+      }
+    }
+    const appliedById = new Map(applied.map((row) => [row.id, row]));
+    for (const migration of this.migrations) {
+      const existing = appliedById.get(migration.id);
+      if (existing && existing.checksum !== migration.checksum) {
+        throw new Error(`Postgres migration checksum mismatch for ${migration.id}`);
+      }
+    }
+    return this.migrations.map((migration) => ({
+      migration,
+      state: appliedById.has(migration.id) ? "already_applied" : "pending",
+    }));
   }
 }
 

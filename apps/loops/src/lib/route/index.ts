@@ -40,6 +40,15 @@ export {
   SUPPORTED_AGENT_PROVIDERS,
   type ProviderRoutingDecision,
 } from "./provider.js";
+export {
+  checkProviderAdmission,
+  parseCodewithAdmissionDiagnostics,
+  providerActiveCapFromOpts,
+  providerAdmissionPlanFromOpts,
+  type CodewithAdmissionDiagnostics,
+  type ProviderAdmissionDecision,
+  type ProviderAdmissionPlan,
+} from "./provider-admission.js";
 export { prReviewRoutingDecision, type PrReviewRoutingDecision } from "./pr-review.js";
 export {
   hasThrottleLimits,
@@ -70,3 +79,15 @@ export {
 } from "./route-tasks.js";
 export { defaultLoopsProject, ensureTodosTaskList, runLocalCommand, runLocalCommandWithStdoutFile } from "./todos-cli.js";
 export { addAgentRoutingOptions, addRouteEventOptions, addTodosDrainOptions, routeDrainArgs, type AgentRoutingOptionConfig } from "./options.js";
+export {
+  applyRoutePolicyToDrainOptions,
+  applyRoutePolicyToScheduleOptions,
+  getRoutePolicy,
+  listRoutePolicies,
+  renderRoutePolicy,
+  routePolicyEvidenceFromOptions,
+  validateRoutePolicy,
+  type RoutePolicyDefinition,
+  type RoutePolicyId,
+  type RoutePolicyRender,
+} from "./policies.js";

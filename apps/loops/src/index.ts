@@ -54,6 +54,7 @@ export type {
   AgentProvider,
   AgentRoutingSpec,
   AgentSandbox,
+  AgentSessionContract,
   AgentTarget,
   AgentTargetBase,
   AgentWorktreeMode,
@@ -67,8 +68,14 @@ export type {
   RuntimePreflightPolicy,
   WorkflowTarget,
   // workflows
+  AgentSessionContractWorkflowEvent,
   CreateWorkflowInput,
+  CustomWorkflowEvent,
+  GenericWorkflowEvent,
+  PublicWorkflowEvent,
   WorkflowEvent,
+  WorkflowEventBase,
+  WorkflowLifecycleEventType,
   WorkflowRun,
   WorkflowRunStatus,
   WorkflowSpec,
@@ -199,7 +206,6 @@ export {
   exportLoopsMigrationBundle,
   migrationHash,
   publicMigrationBundle,
-  registerSelfHostedRunner,
   selfHostedControlPlaneSummary,
   validateLoopsMigrationBundle,
 } from "./lib/migration.js";
@@ -254,7 +260,5 @@ export type {
   LoopsMigrationPlanRow,
   LoopsMigrationPlanSummary,
   LoopsMigrationResource,
-  RunnerRegistrationOptions,
-  RunnerRegistrationResult,
   SelfHostedPlanOptions,
 } from "./lib/migration.js";

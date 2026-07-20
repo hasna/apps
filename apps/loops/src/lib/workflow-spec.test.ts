@@ -52,6 +52,8 @@ describe("workflow goal spec validation", () => {
             prompt: "do the task",
             permissionMode: "bypass",
             sandbox: "danger-full-access",
+            manualBreakGlass: true,
+            allowlist: { safetyReason: "operator-approved full access for this isolated test" },
             variant: "low",
           },
         },
@@ -70,6 +72,69 @@ describe("workflow goal spec validation", () => {
 
     expect(workflow.steps[0]?.target.type).toBe("agent");
     expect(workflow.steps[1]?.target.type).toBe("agent");
+  });
+
+  test("requires auditable reasons for declared restrictions and break-glass for relaxed sandboxes", () => {
+    expect(() =>
+      workflowBodyFromJson({
+        name: "missing-restriction-reason",
+        steps: [{
+          id: "worker",
+          target: {
+            type: "agent",
+            provider: "codewith",
+            prompt: "do scoped work",
+            sandbox: "workspace-write",
+            allowlist: { tools: ["functions.exec_command"], commands: ["git", "bun"] },
+          },
+        }],
+      }),
+    ).toThrow("allowlist.safetyReason");
+
+    expect(() =>
+      workflowBodyFromJson({
+        name: "missing-break-glass",
+        steps: [{
+          id: "worker",
+          target: {
+            type: "agent",
+            provider: "codewith",
+            prompt: "do risky work",
+            sandbox: "danger-full-access",
+            allowlist: { safetyReason: "operator approved the isolated scope" },
+          },
+        }],
+      }),
+    ).toThrow("manualBreakGlass=true");
+
+    const workflow = workflowBodyFromJson({
+      name: "auditable-agent-contract",
+      steps: [{
+        id: "worker",
+        target: {
+          type: "agent",
+          provider: "cursor",
+          prompt: "do scoped work",
+          cwd: "/tmp/repo",
+          sandbox: "disabled",
+          manualBreakGlass: true,
+          allowlist: {
+            tools: [" functions.exec_command "],
+            commands: [" git ", "bun"],
+            safetyReason: "  isolated worktree requires local provider access  ",
+          },
+        },
+      }],
+    });
+    const target = workflow.steps[0]?.target;
+    if (!target || target.type !== "agent") throw new Error("expected agent target");
+    expect(target.manualBreakGlass).toBe(true);
+    expect(target.allowlist).toEqual({
+      tools: ["functions.exec_command"],
+      commands: ["git", "bun"],
+      enforcement: "metadata_only",
+      safetyReason: "isolated worktree requires local provider access",
+    });
   });
 
   test("accepts explicit unlimited timeoutMs on targets and steps", () => {

@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
-import type { AgentPromptSource, AgentTarget, CreateWorkflowInput, ExecutableTarget, GoalSpec, WorkflowSpec, WorkflowStep } from "../types.js";
+import type { AgentAllowlistSpec, AgentPromptSource, AgentTarget, CreateWorkflowInput, ExecutableTarget, GoalSpec, WorkflowSpec, WorkflowStep } from "../types.js";
 import { AGENT_PROVIDERS, providerAdapter } from "./agent-adapter.js";
+import { ValidationError } from "./errors.js";
 import { GOAL_OBJECTIVE_MAX_CHARS } from "./goal/types.js";
 
 export type WorkflowSpecBody = Pick<WorkflowSpec, "name" | "description" | "version" | "steps">;
@@ -40,14 +41,34 @@ function optionalBoolean(value: unknown, label: string): boolean | undefined {
 
 function optionalStringArray(value: unknown, label: string): string[] | undefined {
   if (value === undefined) return undefined;
-  if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
-  const values = value
-    .map((entry, index) => {
-      assertString(entry, `${label}[${index}]`);
-      return entry.trim();
-    })
-    .filter(Boolean);
+  if (!Array.isArray(value)) throw new ValidationError(`${label} must be an array`);
+  const values: string[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.prototype.hasOwnProperty.call(value, index) || typeof value[index] !== "string" || value[index].trim() === "") {
+      throw new ValidationError(`${label}[${index}] must be a non-empty string`);
+    }
+    values.push(value[index].trim());
+  }
   return values.length ? values : undefined;
+}
+
+function normalizeAllowlist(value: unknown, label: string): AgentAllowlistSpec | undefined {
+  if (value === undefined) return undefined;
+  assertObject(value, label);
+  const tools = optionalStringArray(value.tools, `${label}.tools`);
+  const commands = optionalStringArray(value.commands, `${label}.commands`);
+  const safetyReason = value.safetyReason === undefined ? undefined : (() => {
+    assertString(value.safetyReason, `${label}.safetyReason`);
+    return value.safetyReason.trim();
+  })();
+  if (value.enforcement !== undefined && value.enforcement !== "metadata_only") {
+    throw new Error(`${label}.enforcement must be metadata_only`);
+  }
+  if ((tools?.length || commands?.length) && !safetyReason) {
+    throw new Error(`${label}.safetyReason is required when tool or command restrictions are declared`);
+  }
+  if (!tools?.length && !commands?.length && !safetyReason) return undefined;
+  return { tools, commands, enforcement: "metadata_only", safetyReason };
 }
 
 function optionalAccountRef(value: unknown, label: string) {
@@ -141,20 +162,14 @@ function validateTarget(value: unknown, label: string, opts: WorkflowNormalizeOp
     optionalPositiveInteger(value.idleTimeoutMs, `${label}.idleTimeoutMs`);
     const extraArgs = optionalStringArray(value.extraArgs, `${label}.extraArgs`);
     optionalStringArray(value.addDirs, `${label}.addDirs`);
+    const allowlist = normalizeAllowlist(value.allowlist, `${label}.allowlist`);
+    const manualBreakGlass = optionalBoolean(value.manualBreakGlass, `${label}.manualBreakGlass`);
     // Provider-specific option rules live in the shared provider adapters so the
     // creation-time and execution-time error strings cannot drift apart.
     providerAdapter(value.provider as AgentTarget["provider"]).validate(
-      { ...value, extraArgs, ...promptFields } as unknown as AgentTarget,
+      { ...value, extraArgs, allowlist, manualBreakGlass, ...promptFields } as unknown as AgentTarget,
       label,
     );
-    if (value.allowlist !== undefined) {
-      assertObject(value.allowlist, `${label}.allowlist`);
-      optionalStringArray(value.allowlist.tools, `${label}.allowlist.tools`);
-      optionalStringArray(value.allowlist.commands, `${label}.allowlist.commands`);
-      if (value.allowlist.enforcement !== undefined && value.allowlist.enforcement !== "metadata_only") {
-        throw new Error(`${label}.allowlist.enforcement must be metadata_only`);
-      }
-    }
     if (value.worktree !== undefined) {
       assertObject(value.worktree, `${label}.worktree`);
       assertString(value.worktree.mode, `${label}.worktree.mode`);
@@ -178,8 +193,10 @@ function validateTarget(value: unknown, label: string, opts: WorkflowNormalizeOp
       if (value.routing.eventType !== undefined) assertString(value.routing.eventType, `${label}.routing.eventType`);
       if (value.routing.eventSource !== undefined) assertString(value.routing.eventSource, `${label}.routing.eventSource`);
     }
-    const target: Record<string, unknown> = { ...value, extraArgs };
+    const target: Record<string, unknown> = { ...value, extraArgs, allowlist, manualBreakGlass };
     if (!extraArgs) delete target.extraArgs;
+    if (!allowlist) delete target.allowlist;
+    if (manualBreakGlass === undefined) delete target.manualBreakGlass;
     delete target.promptFile;
     delete target.promptSource;
     return { ...target, ...promptFields } as unknown as ExecutableTarget;

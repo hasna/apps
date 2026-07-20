@@ -27,11 +27,8 @@ export interface LoopModeResolution {
 
 export interface LoopControlPlaneConfig {
   apiUrl?: string;
-  cloudApiUrl?: string;
   databaseUrlPresent: boolean;
-  apiAuthTokenPresent: boolean;
-  cloudAuthTokenPresent: boolean;
-  authTokenPresent: boolean;
+  apiKeyPresent: boolean;
 }
 
 export interface LoopDeploymentStatus {
@@ -49,7 +46,7 @@ export interface LoopDeploymentStatus {
     configured: boolean;
     apiUrl?: string;
     databaseUrlPresent: boolean;
-    authTokenPresent: boolean;
+    apiKeyPresent: boolean;
   };
   runner: {
     required: boolean;
@@ -82,13 +79,10 @@ export interface LoopSchedulerStateStatus {
   };
 }
 
-const MODE_ENV_KEYS = ["LOOPS_MODE", "HASNA_LOOPS_MODE"] as const;
-const API_URL_ENV_KEYS = ["LOOPS_API_URL", "HASNA_LOOPS_API_URL"] as const;
-const CLOUD_API_URL_ENV_KEYS = ["LOOPS_CLOUD_API_URL", "HASNA_LOOPS_CLOUD_API_URL"] as const;
-const DATABASE_URL_ENV_KEYS = ["LOOPS_DATABASE_URL", "HASNA_LOOPS_DATABASE_URL"] as const;
-const API_TOKEN_ENV_KEYS = ["LOOPS_API_TOKEN", "HASNA_LOOPS_API_TOKEN"] as const;
-const CLOUD_TOKEN_ENV_KEYS = ["LOOPS_CLOUD_TOKEN", "HASNA_LOOPS_CLOUD_TOKEN"] as const;
-const TOKEN_ENV_KEYS = [...API_TOKEN_ENV_KEYS, ...CLOUD_TOKEN_ENV_KEYS] as const;
+const MODE_ENV_KEYS = ["HASNA_LOOPS_STORAGE_MODE"] as const;
+const API_URL_ENV_KEYS = ["HASNA_LOOPS_API_URL"] as const;
+const DATABASE_URL_ENV_KEYS = ["HASNA_LOOPS_DATABASE_URL"] as const;
+const API_KEY_ENV_KEYS = ["HASNA_LOOPS_API_KEY"] as const;
 
 type Env = Record<string, string | undefined>;
 
@@ -101,10 +95,10 @@ function envValue(env: Env, keys: readonly string[]): { key: string; value: stri
 }
 
 export function normalizeLoopDeploymentMode(value: string): LoopDeploymentMode {
-  const normalized = value.trim().toLowerCase().replace(/-/g, "_");
+  const normalized = value.trim();
   if (normalized === "local") return "local";
-  if (normalized === "self_hosted" || normalized === "selfhosted") return "self_hosted";
-  if (normalized === "cloud" || normalized === "saas") return "cloud";
+  if (normalized === "self_hosted") return "self_hosted";
+  if (normalized === "cloud") return "cloud";
   throw new Error(`unsupported OpenLoops deployment mode "${value}"; expected local, self_hosted, or cloud`);
 }
 
@@ -116,9 +110,6 @@ export function resolveLoopDeploymentMode(env: Env = process.env): LoopModeResol
       source: explicitMode.key,
     };
   }
-
-  const cloudApiUrl = envValue(env, CLOUD_API_URL_ENV_KEYS);
-  if (cloudApiUrl) return { deploymentMode: "cloud", source: cloudApiUrl.key };
 
   const apiUrl = envValue(env, API_URL_ENV_KEYS);
   if (apiUrl) return { deploymentMode: "self_hosted", source: apiUrl.key };
@@ -132,11 +123,8 @@ export function resolveLoopDeploymentMode(env: Env = process.env): LoopModeResol
 export function loopControlPlaneConfig(env: Env = process.env): LoopControlPlaneConfig {
   return {
     apiUrl: envValue(env, API_URL_ENV_KEYS)?.value,
-    cloudApiUrl: envValue(env, CLOUD_API_URL_ENV_KEYS)?.value,
     databaseUrlPresent: Boolean(envValue(env, DATABASE_URL_ENV_KEYS)),
-    apiAuthTokenPresent: Boolean(envValue(env, API_TOKEN_ENV_KEYS)),
-    cloudAuthTokenPresent: Boolean(envValue(env, CLOUD_TOKEN_ENV_KEYS)),
-    authTokenPresent: Boolean(envValue(env, TOKEN_ENV_KEYS)),
+    apiKeyPresent: Boolean(envValue(env, API_KEY_ENV_KEYS)),
   };
 }
 
@@ -160,7 +148,7 @@ function remoteSchedulerBackendForMode(
   config: LoopControlPlaneConfig,
 ): LoopRemoteSchedulerBackend {
   if (mode === "local") return "none";
-  if (mode === "cloud") return config.cloudApiUrl ? "hosted_control_plane_contract" : "unconfigured";
+  if (mode === "cloud") return config.apiUrl ? "hosted_control_plane_contract" : "unconfigured";
   if (config.databaseUrlPresent) return "postgres_contract";
   if (config.apiUrl) return "api_control_plane_contract";
   return "unconfigured";
@@ -216,37 +204,33 @@ export function buildDeploymentStatus(
   const active = resolveLoopDeploymentMode(env);
   const deploymentMode = opts.perspective ?? active.deploymentMode;
   const config = loopControlPlaneConfig(env);
-  const rawApiUrl = deploymentMode === "cloud" ? config.cloudApiUrl : config.apiUrl;
-  const apiUrl = displayControlPlaneUrl(rawApiUrl);
+  const apiUrl = displayControlPlaneUrl(config.apiUrl);
   const controlPlaneKind = deploymentMode === "local" ? "none" : deploymentMode;
   const deploymentAuthTokenPresent =
     deploymentMode === "cloud"
-      ? config.cloudAuthTokenPresent
+      ? config.apiKeyPresent
       : deploymentMode === "self_hosted"
-        ? config.apiAuthTokenPresent
+        ? config.apiKeyPresent
         : false;
   const controlPlaneConfigured =
     deploymentMode === "local"
       ? false
       : deploymentMode === "self_hosted"
         ? Boolean(config.apiUrl || config.databaseUrlPresent)
-        : Boolean(config.cloudApiUrl && deploymentAuthTokenPresent);
+        : Boolean(config.apiUrl && deploymentAuthTokenPresent);
   const warnings: string[] = [];
 
   if (deploymentMode === "self_hosted" && !controlPlaneConfigured) {
-    warnings.push("self_hosted mode needs LOOPS_API_URL or LOOPS_DATABASE_URL before it can become authoritative");
+    warnings.push("self_hosted mode needs HASNA_LOOPS_API_URL or HASNA_LOOPS_DATABASE_URL before it can become authoritative");
   }
   if (deploymentMode === "self_hosted" && config.databaseUrlPresent && !config.apiUrl) {
-    warnings.push("LOOPS_DATABASE_URL selects the self_hosted storage contract; loops-runner still needs LOOPS_API_URL to claim remote work");
+    warnings.push("HASNA_LOOPS_DATABASE_URL selects the self_hosted storage contract; loops-runner still needs HASNA_LOOPS_API_URL to claim remote work");
   }
-  if (deploymentMode === "cloud" && config.apiUrl && !config.cloudApiUrl) {
-    warnings.push("LOOPS_API_URL selects self_hosted; cloud mode uses LOOPS_CLOUD_API_URL");
+  if (deploymentMode === "cloud" && !config.apiUrl) {
+    warnings.push("cloud mode needs HASNA_LOOPS_API_URL before it can become ready");
   }
-  if (deploymentMode === "cloud" && !config.cloudApiUrl) {
-    warnings.push("cloud mode is a public contract until LOOPS_CLOUD_API_URL is configured");
-  }
-  if (deploymentMode === "cloud" && config.cloudApiUrl && !deploymentAuthTokenPresent) {
-    warnings.push("cloud mode needs LOOPS_CLOUD_TOKEN or HASNA_LOOPS_CLOUD_TOKEN before it can become ready");
+  if (deploymentMode === "cloud" && config.apiUrl && !deploymentAuthTokenPresent) {
+    warnings.push("cloud mode needs HASNA_LOOPS_API_KEY before it can become ready");
   }
   if (opts.perspective && opts.perspective !== active.deploymentMode) {
     warnings.push(`active deployment mode is ${active.deploymentMode}; this is the ${opts.perspective} perspective`);
@@ -267,7 +251,7 @@ export function buildDeploymentStatus(
       configured: controlPlaneConfigured,
       apiUrl,
       databaseUrlPresent: config.databaseUrlPresent,
-      authTokenPresent: deploymentAuthTokenPresent,
+      apiKeyPresent: deploymentAuthTokenPresent,
     },
     runner: {
       required: deploymentMode !== "local",

@@ -1,11 +1,11 @@
 // Live Postgres executor for the loops storage backend.
 //
-// Adapts the vendored @hasna/contracts storage kit (`createQueryClient` over a
+// Adapts the generated @hasna/contracts storage kit (`createQueryClient` over a
 // `pg.Pool`) to the `PostgresQueryExecutor` contract consumed by
-// `PostgresStorage`. PURE REMOTE (Amendment A1): a pool is only ever built when
-// a cloud database URL is present; there is no local/hybrid Postgres path.
+// `PostgresStorage`. A pool is only ever built when a self-hosted database URL
+// is present; there is no local/hybrid Postgres path.
 
-import type { PoolQueryClient } from "../../generated/storage-kit/query.js";
+import type { PoolQueryClient, TypedQueryClient } from "../../generated/storage-kit/query.js";
 import { createPgPool } from "../../generated/storage-kit/pool.js";
 import { createQueryClient } from "../../generated/storage-kit/query.js";
 import type { PostgresQueryExecutor } from "./postgres.js";
@@ -19,12 +19,11 @@ export interface PgExecutorOptions {
 }
 
 /**
- * `PostgresQueryExecutor` backed by a live `pg.Pool` via the vendored kit.
+ * `PostgresQueryExecutor` backed by a live `pg.Pool` via the generated kit.
  *
- * Transaction support is intentionally omitted: `PostgresStorage.migrate`
- * treats DDL as idempotent (`CREATE ... IF NOT EXISTS` + a checksum ledger), so
- * a pooled sequential apply is correct and avoids binding every inner
- * `execute` to a single dedicated client.
+ * Transactions bind every statement to one dedicated pool client. This is
+ * required both for atomic migration+ledger writes and request-scoped RLS
+ * settings established with `SET LOCAL`.
  */
 export class PgPoolExecutor implements PostgresQueryExecutor {
   private readonly client: PoolQueryClient;
@@ -59,7 +58,43 @@ export class PgPoolExecutor implements PostgresQueryExecutor {
     await this.client.execute(sql, params);
   }
 
+  async transaction<T>(fn: (executor: PostgresQueryExecutor) => Promise<T>): Promise<T> {
+    return this.client.transaction((client) => fn(queryExecutor(client)));
+  }
+
+  async withRequestContext<T>(
+    context: { tenantId: string; principalId: string; requestId: string },
+    fn: (client: PoolQueryClient) => Promise<T>,
+  ): Promise<T> {
+    return this.client.transaction(async (client) => {
+      await client.execute("SET LOCAL ROLE open_loops_runtime");
+      await client.execute("SET LOCAL search_path = pg_catalog, public");
+      await client.get(
+        `SELECT
+          set_config('open_loops.tenant_id', $1, true),
+          set_config('open_loops.principal_id', $2, true),
+          set_config('open_loops.request_id', $3, true)`,
+        [context.tenantId, context.principalId, context.requestId],
+      );
+      const scoped: PoolQueryClient = {
+        ...client,
+        pool: this.client.pool,
+        transaction: (nested) => nested(client),
+        close: async () => {},
+      };
+      return fn(scoped);
+    });
+  }
+
   async close(): Promise<void> {
     await this.client.close();
   }
+}
+
+function queryExecutor(client: TypedQueryClient): PostgresQueryExecutor {
+  return {
+    query: <T extends Record<string, unknown>>(sql: string, params?: readonly unknown[]) =>
+      client.many<T>(sql, params),
+    execute: (sql: string, params?: readonly unknown[]) => client.execute(sql, params),
+  };
 }

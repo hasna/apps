@@ -12,7 +12,13 @@ const cliPath = join(dirname(fileURLToPath(import.meta.url)), "index.ts");
 
 function runCli(dataDir: string, args: string[]) {
   return spawnSync(process.execPath, [cliPath, ...args], {
-    env: { ...process.env, LOOPS_DATA_DIR: dataDir },
+    env: {
+      ...process.env,
+      LOOPS_DATA_DIR: dataDir,
+      HASNA_LOOPS_STORAGE_MODE: "local",
+      HASNA_LOOPS_API_URL: "",
+      HASNA_LOOPS_API_KEY: "",
+    },
     encoding: "utf8",
   });
 }

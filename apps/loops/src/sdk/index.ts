@@ -1,4 +1,15 @@
-import type { CreateLoopInput, Goal, GoalRun, Loop, LoopRun, LoopStatus, OpenAutomationsRuntimeBinding, RunStatus } from "../types.js";
+import type {
+  CreateLoopInput,
+  Goal,
+  GoalRun,
+  Loop,
+  LoopRun,
+  LoopStatus,
+  OpenAutomationsRuntimeBinding,
+  RunReceipt,
+  RunStatus,
+  WriteRunReceiptInput,
+} from "../types.js";
 import { daemonStatus } from "../daemon/control.js";
 import { runDoctor, type DoctorReport } from "../lib/doctor.js";
 import { LoopNotFoundError } from "../lib/errors.js";
@@ -18,6 +29,7 @@ import {
 import { computeNextAfter } from "../lib/recurrence.js";
 import { runLoopNow, tick } from "../lib/scheduler.js";
 import { Store } from "../lib/store.js";
+import { LocalStore, getStore, type LoopStore } from "../lib/store/index.js";
 export { runGoal } from "../lib/goal/runner.js";
 export {
   LOOPS_MIGRATION_SCHEMA,
@@ -26,7 +38,6 @@ export {
   buildSelfHostedMigrationPlan,
   exportLoopsMigrationBundle,
   migrationHash,
-  registerSelfHostedRunner,
   validateLoopsMigrationBundle,
 } from "../lib/migration.js";
 export type {
@@ -39,12 +50,18 @@ export type {
   LoopsMigrationPlanRow,
   LoopsMigrationPlanSummary,
   LoopsMigrationResource,
-  RunnerRegistrationOptions,
-  RunnerRegistrationResult,
   SelfHostedPlanOptions,
 } from "../lib/migration.js";
 
 export interface LoopsClientOptions {
+  /**
+   * Inject an on-box sqlite {@link Store} (mainly for tests and in-process local
+   * runtimes). When provided, both data and local-runtime operations run against
+   * it. When omitted, the data store is resolved from the client-flip env via
+   * {@link getStore} — the local sqlite store OR the hosted `/v1` API when
+   * HASNA_LOOPS_API_URL/HASNA_LOOPS_API_KEY (or HASNA_LOOPS_STORAGE_MODE) select
+   * it — so every data method routes through the one Store abstraction.
+   */
   store?: Store;
   /**
    * Claim owner id for inline runs. Keep the `<surface>:<pid>` shape (see
@@ -69,22 +86,53 @@ export interface ListRunsFilters {
   limit?: number;
 }
 
+export interface ListRunReceiptsFilters {
+  loopId?: string;
+  repo?: string;
+  taskId?: string;
+  knowledgeId?: string;
+  status?: string;
+  limit?: number;
+}
+
 export class LoopsClient {
-  readonly store: Store;
+  /**
+   * The resolved data store: an on-box {@link LocalStore} (sqlite) or the hosted
+   * {@link ApiStore} (`/v1` + bearer key). EVERY data method routes through here,
+   * so nothing silently touches the on-box island while flipped to the cloud API.
+   */
+  readonly store: LoopStore;
   private readonly ownStore: boolean;
   private readonly runnerId: string;
 
   constructor(opts: LoopsClientOptions = {}) {
-    this.store = opts.store ?? new Store();
+    this.store = opts.store ? new LocalStore(opts.store) : getStore();
     this.ownStore = !opts.store;
     this.runnerId = opts.runnerId ?? `sdk:${process.pid}`;
   }
 
-  create(input: CreateLoopInput): Loop {
+  /**
+   * The raw on-box sqlite {@link Store} for local-runtime operations that cannot
+   * route over HTTP — the scheduler (tick / inline run-now), migration
+   * export/import, and local diagnostics (doctor/health). These act on THIS
+   * machine's runtime and database, so they fail loudly instead of silently
+   * hitting the on-box island when the client is flipped to the hosted API.
+   */
+  private localRuntime(operation: string): Store {
+    if (this.store.transport !== "local") {
+      throw new Error(
+        `loops SDK ${operation} operates on this machine's local runtime and is not available while flipped to the hosted OpenLoops API. ` +
+          `Unset HASNA_LOOPS_API_URL/HASNA_LOOPS_API_KEY (or set HASNA_LOOPS_STORAGE_MODE=local) to run it here.`,
+      );
+    }
+    return (this.store as LocalStore).raw;
+  }
+
+  create(input: CreateLoopInput): Promise<Loop> {
     return this.store.createLoop(input);
   }
 
-  list(filters: ListLoopsFilters = {}): Loop[] {
+  list(filters: ListLoopsFilters = {}): Promise<Loop[]> {
     return this.store.listLoops({
       status: filters.status,
       limit: filters.limit,
@@ -93,7 +141,7 @@ export class LoopsClient {
     });
   }
 
-  get(idOrName: string): Loop {
+  get(idOrName: string): Promise<Loop> {
     return this.store.requireLoop(idOrName);
   }
 
@@ -101,12 +149,13 @@ export class LoopsClient {
   // throws a coded LoopArchivedError, so all surfaces share one behavior.
   // These mutation paths use requireUniqueLoop so an ambiguous name errors
   // instead of silently mutating the newest same-named loop.
-  pause(idOrName: string): Loop {
-    return this.store.updateLoop(this.store.requireUniqueLoop(idOrName).id, { status: "paused" });
+  async pause(idOrName: string): Promise<Loop> {
+    const loop = await this.store.requireUniqueLoop(idOrName);
+    return this.store.updateLoop(loop.id, { status: "paused" });
   }
 
-  resume(idOrName: string): Loop {
-    const loop = this.store.requireUniqueLoop(idOrName);
+  async resume(idOrName: string): Promise<Loop> {
+    const loop = await this.store.requireUniqueLoop(idOrName);
     // A stopped loop has next_run_at NULL; dueLoops requires it IS NOT NULL, so
     // resuming without recomputing leaves the loop active but permanently
     // dormant. Recompute the next slot from now when it is missing.
@@ -118,30 +167,32 @@ export class LoopsClient {
     return this.store.updateLoop(loop.id, { status: "active", nextRunAt });
   }
 
-  stop(idOrName: string): Loop {
-    return this.store.updateLoop(this.store.requireUniqueLoop(idOrName).id, { status: "stopped", nextRunAt: undefined });
+  async stop(idOrName: string): Promise<Loop> {
+    const loop = await this.store.requireUniqueLoop(idOrName);
+    return this.store.updateLoop(loop.id, { status: "stopped", nextRunAt: undefined });
   }
 
-  archive(idOrName: string): Loop {
+  archive(idOrName: string): Promise<Loop> {
     return this.store.archiveLoop(idOrName);
   }
 
-  unarchive(idOrName: string): Loop {
+  unarchive(idOrName: string): Promise<Loop> {
     return this.store.unarchiveLoop(idOrName);
   }
 
-  delete(idOrName: string): boolean {
-    return this.store.deleteLoop(this.store.requireUniqueLoop(idOrName).id);
+  async delete(idOrName: string): Promise<boolean> {
+    const loop = await this.store.requireUniqueLoop(idOrName);
+    return this.store.deleteLoop(loop.id);
   }
 
-  runs(idOrName?: string, filters: ListRunsFilters = {}): LoopRun[] {
+  async runs(idOrName?: string, filters: ListRunsFilters = {}): Promise<LoopRun[]> {
     // Lenient by design (v0.3.x compat): consumers poll runs for loops that
     // another process may have deleted, so an unknown/stale id returns []
     // instead of throwing LoopNotFoundError like get()/pause()/resume() do.
     let loopId: string | undefined;
     if (idOrName) {
       try {
-        loopId = this.get(idOrName).id;
+        loopId = (await this.get(idOrName)).id;
       } catch (error) {
         if (error instanceof LoopNotFoundError) return [];
         throw error;
@@ -150,57 +201,79 @@ export class LoopsClient {
     return this.store.listRuns({ loopId, status: filters.status, limit: filters.limit });
   }
 
-  doctor(): DoctorReport {
-    return runDoctor(this.store);
+  writeReceipt(input: WriteRunReceiptInput): Promise<RunReceipt> {
+    return this.store.writeRunReceipt(input);
   }
 
-  health(opts: { includeArchived?: boolean; includeInactive?: boolean; limit?: number } = {}): LoopsHealthReport {
-    return buildHealthReport(this.store, opts);
+  receipt(runId: string): Promise<RunReceipt | undefined> {
+    return this.store.getRunReceipt(runId);
   }
 
-  healthScan(opts: Omit<BuildHealthScanOptions, "doctor" | "daemon" | "selfHeals"> & { doctor?: boolean; daemon?: boolean } = {}): LoopsHealthScan {
-    return buildHealthScan(this.store, {
-      ...opts,
-      doctor: opts.doctor ? runDoctor(this.store) : undefined,
-      daemon: opts.daemon ? daemonStatus(this.store) : undefined,
-    });
+  receipts(filters: ListRunReceiptsFilters = {}): Promise<RunReceipt[]> {
+    return this.store.listRunReceipts(filters);
   }
 
-  goal(idOrName: string): { goal?: Goal; runs: GoalRun[] } {
-    const goal = this.store.getGoal(idOrName) ?? this.store.findGoalByLoop(idOrName) ?? this.store.findGoalByRunId(idOrName);
+  async goal(idOrName: string): Promise<{ goal?: Goal; runs: GoalRun[] }> {
+    const goal =
+      (await this.store.getGoal(idOrName)) ??
+      (await this.store.findGoalByLoop(idOrName)) ??
+      (await this.store.findGoalByRunId(idOrName));
     return {
       goal,
-      runs: goal ? this.store.listGoalRuns({ goalId: goal.goalId }) : [],
+      runs: goal ? await this.store.listGoalRuns({ goalId: goal.goalId }) : [],
     };
   }
 
+  // ── Local-runtime helpers (on-box sqlite + scheduler only) ───────────────────
+  // doctor/health/tick/run-now/migration act on this machine's runtime and are
+  // meaningless over the hosted API, so they route through localRuntime() which
+  // fails loudly in cloud mode rather than touching a local island.
+
+  doctor(): DoctorReport {
+    return runDoctor(this.localRuntime("doctor()"));
+  }
+
+  health(opts: { includeArchived?: boolean; includeInactive?: boolean; limit?: number } = {}): LoopsHealthReport {
+    return buildHealthReport(this.localRuntime("health()"), opts);
+  }
+
+  healthScan(opts: Omit<BuildHealthScanOptions, "doctor" | "daemon" | "selfHeals"> & { doctor?: boolean; daemon?: boolean } = {}): LoopsHealthScan {
+    const store = this.localRuntime("healthScan()");
+    return buildHealthScan(store, {
+      ...opts,
+      doctor: opts.doctor ? runDoctor(store) : undefined,
+      daemon: opts.daemon ? daemonStatus(store) : undefined,
+    });
+  }
+
   async tick(): Promise<Awaited<ReturnType<typeof tick>>> {
-    return tick({ store: this.store, runnerId: this.runnerId });
+    return tick({ store: this.localRuntime("tick()"), runnerId: this.runnerId });
   }
 
   async runNow(idOrName: string): Promise<LoopRun> {
-    const result = await runLoopNow({ store: this.store, idOrName: this.store.requireUniqueLoop(idOrName).id, runnerId: this.runnerId });
+    const store = this.localRuntime("runNow()");
+    const result = await runLoopNow({ store, idOrName: store.requireUniqueLoop(idOrName).id, runnerId: this.runnerId });
     return result.run;
   }
 
   exportBundle(opts: ExportLoopsMigrationOptions = {}): LoopsMigrationBundle {
-    return exportLoopsMigrationBundle(this.store, opts);
+    return exportLoopsMigrationBundle(this.localRuntime("exportBundle()"), opts);
   }
 
   planImport(bundle: LoopsMigrationBundle, opts: ImportLoopsMigrationOptions = {}): LoopsMigrationPlan {
-    return buildImportMigrationPlan(this.store, bundle, opts);
+    return buildImportMigrationPlan(this.localRuntime("planImport()"), bundle, opts);
   }
 
   importBundle(bundle: LoopsMigrationBundle, opts: ImportLoopsMigrationOptions = {}): ApplyLoopsMigrationResult {
-    return applyImportMigrationBundle(this.store, bundle, opts);
+    return applyImportMigrationBundle(this.localRuntime("importBundle()"), bundle, opts);
   }
 
   planSelfHostedMigration(opts: Omit<SelfHostedPlanOptions, "operation"> & { operation?: SelfHostedPlanOptions["operation"] } = {}): Promise<LoopsMigrationPlan> {
-    return buildSelfHostedMigrationPlan(this.store, { ...opts, operation: opts.operation ?? "self-hosted-migrate" });
+    return buildSelfHostedMigrationPlan(this.localRuntime("planSelfHostedMigration()"), { ...opts, operation: opts.operation ?? "self-hosted-migrate" });
   }
 
-  close(): void {
-    if (this.ownStore) this.store.close();
+  async close(): Promise<void> {
+    if (this.ownStore) await this.store.close();
   }
 }
 
