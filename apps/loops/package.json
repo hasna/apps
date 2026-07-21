@@ -8,6 +8,7 @@
   "bin": {
     "loops": "dist/cli/index.js",
     "loops-daemon": "dist/daemon/index.js",
+    "loops-api": "dist/api/index.js",
     "loops-serve": "dist/serve/index.js",
     "loops-runner": "dist/runner/index.js",
     "loops-mcp": "dist/mcp/index.js"

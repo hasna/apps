@@ -26,9 +26,7 @@
       "mcpBin": "loops-mcp",
       "authMode": "api-key",
       "deploymentModes": [
-        "local",
-        "self-hosted",
-        "cloud"
+        "self-hosted"
       ],
       "health": {
         "method": "GET",
@@ -70,14 +68,22 @@
   "storage": {
     "mode": "local",
     "envPrefix": "HASNA_LOOPS_",
-    "databaseUrlSecretRef": "hasna/oss/loops/database-url",
     "sqlitePath": "~/.hasna/loops/loops.db"
   },
   "metadata": {
-    "storage": {
-      "runtimeDatabaseUrlSecretRef": "hasna/oss/loops/runtime-database-url",
-      "authDatabaseUrlSecretRef": "hasna/oss/loops/auth-database-url",
-      "migratorDatabaseUrlSecretRef": "hasna/oss/loops/migrator-database-url"
+    "conformance": {
+      "binCompatibilityWaivers": [
+        {
+          "checkId": "bins_match_package",
+          "failureDetail": "in package.json but undeclared: loops-api",
+          "bin": "loops-api",
+          "packageTarget": "dist/api/index.js",
+          "exportPath": "./api",
+          "exportImport": "./dist/api/index.js",
+          "exportTypes": "./dist/api/index.d.ts",
+          "reason": "Retain the published loops-api compatibility binary and the matching package export while the 0.5.2 checker has no first-class per-repo bin waiver."
+        }
+      ]
     },
     "service": {
       "port": 8787,
@@ -88,6 +94,27 @@
       "apiVersion": "v1",
       "auth": "api-key",
       "signingSecretSecretRef": "hasna/oss/loops/api-key-signing-secret",
+      "deploymentModeMapping": {
+        "contract": "self-hosted",
+        "runtime": "self_hosted"
+      },
+      "databaseDsnBindings": [
+        {
+          "purpose": "runtime",
+          "environmentVariable": "HASNA_LOOPS_DATABASE_URL",
+          "secretRef": "hasna/oss/loops/runtime-database-url"
+        },
+        {
+          "purpose": "auth",
+          "environmentVariable": "HASNA_LOOPS_AUTH_DATABASE_URL",
+          "secretRef": "hasna/oss/loops/auth-database-url"
+        },
+        {
+          "purpose": "migrator",
+          "environmentVariable": "HASNA_LOOPS_MIGRATOR_DATABASE_URL",
+          "secretRef": "hasna/oss/loops/migrator-database-url"
+        }
+      ],
       "aws": {
         "minimumDesiredCount": 2,
         "minimumAvailabilityZones": 2,

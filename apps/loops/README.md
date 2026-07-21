@@ -5,7 +5,7 @@ Loops is a local CLI and daemon for persistent loops and workflows: scheduled or
 Naming: the product is **Loops**, published on npm as
 [`@hasna/loops`](https://www.npmjs.com/package/@hasna/loops) and developed in the
 [`hasna/loops`](https://github.com/hasna/loops) repository. The installed
-binaries are `loops`, `loops-daemon`, `loops-serve`,
+binaries are `loops`, `loops-daemon`, `loops-api`, `loops-serve`,
 `loops-runner`, and `loops-mcp`.
 
 Loops is the **runtime, scheduler, and workflow engine** for automations —
@@ -75,6 +75,7 @@ loops export --file ./loops-export.json
 loops import ./loops-export.json
 loops import ./loops-export.json --apply
 loops cloud status
+loops-api status
 loops-serve version
 HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --dry-run
 loops-serve db-credentials reconcile
@@ -125,7 +126,7 @@ reconciler fails before publishing app credentials.
 ## Install
 
 **Loops requires the [Bun](https://bun.sh) runtime (`bun >= 1.0`).** The
-`loops`, `loops-daemon`, `loops-serve`, `loops-runner`, and
+`loops`, `loops-daemon`, `loops-api`, `loops-serve`, `loops-runner`, and
 `loops-mcp` binaries run with a `#!/usr/bin/env bun` shebang, so Bun must be on
 `PATH` even when the package is installed with npm. Node.js is not a supported
 runtime.
