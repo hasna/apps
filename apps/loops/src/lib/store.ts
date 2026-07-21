@@ -40,6 +40,7 @@ import {
   LegacyWorkflowRunProvenanceError,
   LoopArchivedError,
   LoopNotFoundError,
+  RunFinalizationConflictError,
   ValidationError,
   WorkflowRunDefinitionConflictError,
 } from "./errors.js";
@@ -63,6 +64,8 @@ import {
 } from "./run-artifacts.js";
 import { normalizeRunReceipt } from "./run-receipts.js";
 import { normalizeLoopLabels } from "./labels.js";
+import { assertLoopStatus } from "./loop-status.js";
+import { normalizeRunCompletion } from "./run-completion.js";
 import { runLocalCommand, todosMutationSummary } from "./route/todos-cli.js";
 
 interface DaemonLeaseFence {
@@ -1747,6 +1750,7 @@ export class Store {
     opts: DaemonLeaseFence = {},
   ): Loop {
     const updated = (opts.now ?? new Date()).toISOString();
+    if ("status" in patch && patch.status !== undefined) assertLoopStatus(patch.status);
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const current = this.getLoop(id);
@@ -4215,26 +4219,34 @@ export class Store {
       Partial<Pick<LoopRun, "exitCode" | "error" | "pid">>,
     opts: { claimedBy?: string; now?: Date; daemonLeaseId?: string; claimToken?: string } = {},
   ): LoopRun {
-    const finishedAt = patch.finishedAt ?? nowIso();
     const error = patch.error === undefined ? undefined : scrubSecrets(patch.error);
-    const params = {
-      $id: id,
-      $status: patch.status,
-      $finished: finishedAt,
-      $pid: patch.pid ?? null,
-      $exitCode: patch.exitCode ?? null,
-      $durationMs: patch.durationMs ?? null,
-      $stdout: persistedRunOutput(patch.stdout),
-      $stderr: persistedRunOutput(patch.stderr),
-      $error: error ?? null,
-      $updated: finishedAt,
-      $claimedBy: opts.claimedBy ?? null,
-      $claimToken: opts.claimToken ?? null,
-      $now: (opts.now ?? new Date()).toISOString(),
-      $daemonLeaseId: opts.daemonLeaseId ?? null,
-    };
+    const serverNow = opts.now ?? new Date();
     // The status update and the work-item/workflow cascade must land together.
     return this.transact(() => {
+      const current = this.getRun(id);
+      if (!current) throw new Error(`run not found after finalize: ${id}`);
+      const completion = normalizeRunCompletion({
+        startedAt: current.startedAt ?? current.createdAt,
+        requestedFinishedAt: patch.finishedAt,
+        requestedDurationMs: patch.durationMs,
+        serverNow,
+      });
+      const params = {
+        $id: id,
+        $status: patch.status,
+        $finished: completion.finishedAt,
+        $pid: patch.pid ?? null,
+        $exitCode: patch.exitCode ?? null,
+        $durationMs: completion.durationMs ?? null,
+        $stdout: persistedRunOutput(patch.stdout),
+        $stderr: persistedRunOutput(patch.stderr),
+        $error: error ?? null,
+        $updated: completion.updatedAt,
+        $claimedBy: opts.claimedBy ?? null,
+        $claimToken: opts.claimToken ?? null,
+        $now: completion.updatedAt,
+        $daemonLeaseId: opts.daemonLeaseId ?? null,
+      };
       const res = opts.claimedBy
         ? this.db
             .query(
@@ -4260,9 +4272,14 @@ export class Store {
             .run(params);
       const run = this.getRun(id);
       if (!run) throw new Error(`run not found after finalize: ${id}`);
-      if (opts.claimedBy && res.changes !== 1) return run;
+      if (opts.claimedBy && res.changes !== 1) {
+        throw new RunFinalizationConflictError(
+          run.status === "running" ? "stale_claim" : "run_not_running",
+          id,
+        );
+      }
       if (res.changes === 1) {
-        this.setWorkflowWorkItemsForLoopRun(run, error, finishedAt);
+        this.setWorkflowWorkItemsForLoopRun(run, error, completion.updatedAt);
         const loop = this.getLoop(run.loopId);
         const itemStatus = workItemStatusForLoopRun(run.status, run.attempt, loop?.maxAttempts);
         if (loop?.target.type === "workflow" && itemStatus && itemStatus !== "admitted") {
@@ -4271,7 +4288,7 @@ export class Store {
             workflowId: loop.target.workflowId,
             loopId: loop.id,
             workItemId,
-            updated: finishedAt,
+            updated: completion.updatedAt,
           });
         }
       }

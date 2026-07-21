@@ -360,6 +360,16 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "The supplied loop status is not one of the canonical runtime states",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidLoopStatusResponse"
+                }
+              }
+            }
           }
         },
         "x-authorization-operation": "loops.update",
@@ -1518,6 +1528,7 @@
       "post": {
         "operationId": "runsFinalize",
         "summary": "runs.finalize",
+        "description": "Finalize a claimed run. The control-plane receipt time is authoritative for scheduling and updatedAt. A supplied finishedAt is retained only after clamping it between the run start and receipt time; when durationMs is omitted it is derived from the receipt time.",
         "responses": {
           "200": {
             "description": "Successful response",
@@ -1560,7 +1571,49 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "additionalProperties": true,
+                "properties": {
+                  "claimToken": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "succeeded",
+                      "failed",
+                      "timed_out"
+                    ]
+                  },
+                  "finishedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "Optional runner evidence timestamp; normalized into [startedAt, server receipt time] before persistence."
+                  },
+                  "durationMs": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Optional runner-reported duration. When omitted, the server derives elapsed time from startedAt to receipt time."
+                  },
+                  "stdout": {
+                    "type": "string"
+                  },
+                  "stderr": {
+                    "type": "string"
+                  },
+                  "error": {
+                    "type": "string"
+                  },
+                  "exitCode": {
+                    "type": "integer"
+                  },
+                  "pid": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "claimToken",
+                  "status"
+                ]
               }
             }
           }
@@ -3359,6 +3412,24 @@
           "error"
         ]
       },
+      "InvalidLoopStatusResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "type": "string",
+            "const": "invalid_loop_status"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ]
+      },
       "AmbiguousNameResponse": {
         "type": "object",
         "additionalProperties": false,
@@ -3423,7 +3494,13 @@
             "maxItems": 32
           },
           "status": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "active",
+              "paused",
+              "stopped",
+              "expired"
+            ]
           },
           "schedule": {
             "type": "object",

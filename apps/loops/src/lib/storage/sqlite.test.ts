@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { AmbiguousNameError } from "../errors.js";
+import { AmbiguousNameError, RunFinalizationConflictError } from "../errors.js";
 import { SqliteLoopStorage, createSqliteLoopStorage } from "./sqlite.js";
 
 describe("SqliteLoopStorage", () => {
@@ -31,19 +31,21 @@ describe("SqliteLoopStorage", () => {
           claimToken: first!.claimToken,
         }),
       ).toMatchObject({ id: first!.run.id, status: "running" });
-      expect(
-        await storage.finalizeRun(
-          first!.run.id,
-          {
-            status: "failed",
-            finishedAt: "2026-01-01T00:00:00.500Z",
-            durationMs: 500,
-            stdout: "",
-            stderr: "",
-          },
-          { claimedBy: "runner-a", claimToken: "wrong", now: new Date("2026-01-01T00:00:00.200Z") },
-        ),
-      ).toMatchObject({ id: first!.run.id, status: "running" });
+      await expect(storage.finalizeRun(
+        first!.run.id,
+        {
+          status: "failed",
+          finishedAt: "2026-01-01T00:00:00.500Z",
+          durationMs: 500,
+          stdout: "",
+          stderr: "",
+        },
+        { claimedBy: "runner-a", claimToken: "wrong", now: new Date("2026-01-01T00:00:00.200Z") },
+      )).rejects.toMatchObject({
+        reason: "stale_claim",
+        code: "RUN_FINALIZATION_CONFLICT",
+      } satisfies Partial<RunFinalizationConflictError>);
+      expect(await storage.getRun(first!.run.id)).toMatchObject({ id: first!.run.id, status: "running" });
 
       const finalized = await storage.finalizeRun(first!.run.id, {
         status: "succeeded",

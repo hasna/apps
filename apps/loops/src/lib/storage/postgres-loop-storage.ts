@@ -72,6 +72,7 @@ import {
   LegacyWorkflowRunProvenanceError,
   LoopArchivedError,
   LoopNotFoundError,
+  RunFinalizationConflictError,
   ValidationError,
   WorkflowRunDefinitionConflictError,
 } from "../errors.js";
@@ -101,6 +102,8 @@ import type {
 } from "../../types.js";
 import { normalizeRunReceipt } from "../run-receipts.js";
 import { normalizeLoopLabels } from "../labels.js";
+import { assertLoopStatus } from "../loop-status.js";
+import { normalizeRunCompletion } from "../run-completion.js";
 import type { PoolQueryClient, TypedQueryClient } from "../../generated/storage-kit/query.js";
 import type { LoopStorageContract, LoopStorageMethodName } from "./contract.js";
 
@@ -447,6 +450,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
 
   async updateLoop(...args: M<"updateLoop">["args"]): Promise<M<"updateLoop">["result"]> {
     const [id, patch, opts = {}] = args;
+    if ("status" in patch && patch.status !== undefined) assertLoopStatus(patch.status);
     const updated = (opts.now ?? new Date()).toISOString();
     return this.client.transaction(async (c) => {
       const current = await this.loadLoop(c, id);
@@ -962,25 +966,33 @@ export class PostgresLoopStorage implements LoopStorageContract {
 
   async finalizeRun(...args: M<"finalizeRun">["args"]): Promise<M<"finalizeRun">["result"]> {
     const [id, patch, opts = {}] = args;
-    const finishedAt = patch.finishedAt ?? nowIso();
     const error = patch.error === undefined ? undefined : persistedRunOutput(patch.error) ?? undefined;
-    const nowStr = (opts.now ?? new Date()).toISOString();
+    const serverNow = opts.now ?? new Date();
     return this.client.transaction(async (c) => {
+      const current = await this.loadRun(c, id);
+      if (!current) throw new Error(`run not found after finalize: ${id}`);
+      const completion = normalizeRunCompletion({
+        startedAt: current.startedAt ?? current.createdAt,
+        requestedFinishedAt: patch.finishedAt,
+        requestedDurationMs: patch.durationMs,
+        serverNow,
+      });
+      const nowStr = completion.updatedAt;
       let res;
       if (opts.claimedBy) {
         res = await c.query(
           `UPDATE loop_runs SET status=$2, finished_at=$3, claim_token=NULL, lease_expires_at=NULL, pid=$4, exit_code=$5,
-           duration_ms=$6, stdout=$7, stderr=$8, error=$9, updated_at=$3
+           duration_ms=$6, stdout=$7, stderr=$8, error=$9, updated_at=$14
            WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 AND status='running' AND claimed_by=$10 AND lease_expires_at > $11
              AND ($12::text IS NULL OR claim_token=$12)
              AND ($13::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$13 AND expires_at > $11))`,
           [
             id,
             patch.status,
-            finishedAt,
+            completion.finishedAt,
             patch.pid ?? null,
             patch.exitCode ?? null,
-            patch.durationMs ?? null,
+            completion.durationMs ?? null,
             persistedRunOutput(patch.stdout),
             persistedRunOutput(patch.stderr),
             error ?? null,
@@ -988,31 +1000,38 @@ export class PostgresLoopStorage implements LoopStorageContract {
             nowStr,
             opts.claimToken ?? null,
             opts.daemonLeaseId ?? null,
+            completion.updatedAt,
           ],
         );
       } else {
         res = await c.query(
           `UPDATE loop_runs SET status=$2, finished_at=$3, claim_token=NULL, lease_expires_at=NULL, pid=$4, exit_code=$5,
-           duration_ms=$6, stdout=$7, stderr=$8, error=$9, updated_at=$3
+           duration_ms=$6, stdout=$7, stderr=$8, error=$9, updated_at=$10
            WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 AND status='running'`,
           [
             id,
             patch.status,
-            finishedAt,
+            completion.finishedAt,
             patch.pid ?? null,
             patch.exitCode ?? null,
-            patch.durationMs ?? null,
+            completion.durationMs ?? null,
             persistedRunOutput(patch.stdout),
             persistedRunOutput(patch.stderr),
             error ?? null,
+            completion.updatedAt,
           ],
         );
       }
       const run = await this.loadRun(c, id);
       if (!run) throw new Error(`run not found after finalize: ${id}`);
-      if (opts.claimedBy && res.rowCount !== 1) return run;
+      if (opts.claimedBy && res.rowCount !== 1) {
+        throw new RunFinalizationConflictError(
+          run.status === "running" ? "stale_claim" : "run_not_running",
+          id,
+        );
+      }
       if (res.rowCount === 1) {
-        await this.cascadeWorkItemsForLoopRun(c, run, error, finishedAt);
+        await this.cascadeWorkItemsForLoopRun(c, run, error, completion.updatedAt);
       }
       return run;
     });
