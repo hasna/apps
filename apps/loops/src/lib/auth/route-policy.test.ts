@@ -27,6 +27,20 @@ describe("route authorization inventory", () => {
     expect(write.roles).not.toContain("worker");
   });
 
+  test("limits operator workflow recovery to write-scoped operator principals", () => {
+    expect(routePolicy("POST", "/v1/workflow-runs/workflow-run-id/recover")).toMatchObject({
+      operationId: "workflowRuns.recover",
+      scopes: ["loops:write"],
+      roles: ["admin", "operator", "service"],
+      tokenKinds: ["api_key", "service"],
+      risk: "write",
+    });
+    const policy = routePolicy("POST", "/v1/workflow-runs/workflow-run-id/recover")!;
+    expect(policy.roles).not.toContain("member");
+    expect(policy.roles).not.toContain("worker");
+    expect(policy.tokenKinds).not.toContain("machine");
+  });
+
   test("fails closed for unregistered methods and non-v1 routes", () => {
     expect(routePolicy("PUT", "/v1/loops/id")).toBeUndefined();
     expect(routePolicy("POST", "/v1/future-admin-action")).toBeUndefined();

@@ -33,7 +33,6 @@ import { Store } from "../store.js";
 import {
   GATE_DEATH_CEILING,
   classifyNonProductiveStepFailure,
-  isLiveStepProcess,
   persistedJson,
   persistedRunOutput,
   persistedWorkflowEventPayload,
@@ -75,6 +74,7 @@ import {
   RunFinalizationConflictError,
   ValidationError,
   WorkflowRunDefinitionConflictError,
+  WorkflowRunStepOwnershipUnverifiableError,
 } from "../errors.js";
 import { genId, nowIso } from "../ids.js";
 import { initialNextRun } from "../recurrence.js";
@@ -2326,18 +2326,21 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const scrubbedReason = scrubbedOrNull(reason) ?? "";
     return this.client.transaction(async (c) => {
       const now = nowIso();
+      const runRow = await c.get<WorkflowRunRow>(
+        "SELECT * FROM workflow_runs WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 FOR UPDATE",
+        [workflowRunId],
+      );
+      if (!runRow) throw new Error(`workflow run not found: ${workflowRunId}`);
       const rows = await c.many<WorkflowStepRunRow>(
-        "SELECT * FROM workflow_step_runs WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id=$1 AND status='running' ORDER BY sequence ASC",
+        `SELECT * FROM workflow_step_runs
+         WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id=$1 AND status='running'
+         ORDER BY sequence ASC
+         FOR UPDATE`,
         [workflowRunId],
       );
       const before = rows.map(rowToWorkflowStepRun);
-      const live = before.filter((step) => step.pid !== undefined && isLiveStepProcess(step.pid, step.startedAt));
-      if (live.length > 0) {
-        throw new Error(
-          `cannot recover workflow run while step processes are still alive: ${live
-            .map((step) => `${step.stepId} pid=${step.pid}`)
-            .join(", ")}`,
-        );
+      if (before.some((step) => step.pid !== undefined)) {
+        throw new WorkflowRunStepOwnershipUnverifiableError();
       }
       await c.execute(
         `UPDATE workflow_step_runs
@@ -2352,11 +2355,6 @@ export class PostgresLoopStorage implements LoopStorageContract {
           recoveredSteps: before.map((step) => step.stepId),
         });
       }
-      const runRow = await c.get<WorkflowRunRow>(
-        "SELECT * FROM workflow_runs WHERE tenant_id = open_loops_current_tenant_id() AND id=$1",
-        [workflowRunId],
-      );
-      if (!runRow) throw new Error(`workflow run not found: ${workflowRunId}`);
       const stepRows = await c.many<WorkflowStepRunRow>(
         "SELECT * FROM workflow_step_runs WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id=$1 ORDER BY sequence ASC",
         [workflowRunId],

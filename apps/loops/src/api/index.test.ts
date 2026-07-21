@@ -6,8 +6,14 @@ import { Database } from "bun:sqlite";
 import { createSqliteLoopStorage } from "../lib/storage/sqlite.js";
 import type { LoopStorageContract } from "../lib/storage/contract.js";
 import type { TenantAuthContext } from "../lib/auth/tenant-auth.js";
-import { publicValidationDetails, ValidationError, type PublicValidationDetails } from "../lib/errors.js";
+import {
+  publicValidationDetails,
+  ValidationError,
+  WorkflowRunStepOwnershipUnverifiableError,
+  type PublicValidationDetails,
+} from "../lib/errors.js";
 import { packageVersion } from "../lib/version.js";
+import { LoopsClient as HttpLoopsClient } from "../sdk/http.js";
 import type { LoopsApiServerOptions } from "./index.js";
 import type { Loop, LoopRun, WorkflowSpec } from "../types.js";
 
@@ -152,6 +158,15 @@ describe("loops-api foundation", () => {
       .toBe("#/components/schemas/AmbiguousNameResponse");
     expect(document.paths["/v1/loops/{id}"]?.patch?.responses?.["422"]?.content?.["application/json"]?.schema?.$ref)
       .toBe("#/components/schemas/InvalidLoopStatusResponse");
+    const recoveryResponses = document.paths["/v1/workflow-runs/{id}/recover"]?.post?.responses;
+    expect(recoveryResponses?.["400"]?.content?.["application/json"]?.schema?.$ref)
+      .toBe("#/components/schemas/InvalidJsonResponse");
+    expect(recoveryResponses?.["409"]?.content?.["application/json"]?.schema?.$ref)
+      .toBe("#/components/schemas/WorkflowRecoveryConflictResponse");
+    expect(recoveryResponses?.["415"]?.content?.["application/json"]?.schema?.$ref)
+      .toBe("#/components/schemas/UnsupportedMediaTypeResponse");
+    expect(recoveryResponses?.["422"]?.content?.["application/json"]?.schema?.$ref)
+      .toBe("#/components/schemas/InvalidWorkflowRecoveryBodyResponse");
     expect(document.components.schemas.Loop).toMatchObject({
       properties: {
         status: { type: "string", enum: ["active", "paused", "stopped", "expired"] },
@@ -187,6 +202,202 @@ describe("loops-api foundation", () => {
         { $ref: "#/components/schemas/CustomWorkflowEvent" },
       ],
     });
+  });
+
+  test("operator workflow recovery is bounded, idempotent, sanitized, and preserves ownership fences", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+    const secret = ["gh", "p_AbCdEf0123456789AbCdEf0123456789"].join("");
+    try {
+      const workflow = await storage.createWorkflow({
+        name: "operator-recovery",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const workflowRun = await storage.createWorkflowRun({ workflow });
+      await storage.startWorkflowStepRun(workflowRun.id, "worker");
+
+      const recover = () => fetch(apiUrl(server, `/v1/workflow-runs/${workflowRun.id}/recover`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ reason: `operator retry after ${secret}` }),
+      });
+      const first = await recover();
+      expect(first.status).toBe(200);
+      expect(await first.json()).toMatchObject({
+        ok: true,
+        workflowRun: { id: workflowRun.id },
+        recoveredSteps: [{ workflowRunId: workflowRun.id, stepId: "worker", status: "pending" }],
+      });
+      expect((await storage.getWorkflowStepRun(workflowRun.id, "worker"))?.error).toBe("operator retry after [SCRUBBED]");
+      expect((await storage.listWorkflowEvents(workflowRun.id)).filter((event) => event.eventType === "recovered")).toHaveLength(1);
+
+      const second = await recover();
+      expect(second.status).toBe(200);
+      expect(await second.json()).toMatchObject({ ok: true, recoveredSteps: [] });
+      expect((await storage.listWorkflowEvents(workflowRun.id)).filter((event) => event.eventType === "recovered")).toHaveLength(1);
+
+      const noBodyRun = await storage.createWorkflowRun({ workflow });
+      await storage.startWorkflowStepRun(noBodyRun.id, "worker");
+      const client = new HttpLoopsClient({ baseUrl: apiUrl(server, "") });
+      await expect(client.workflowRunsRecover(noBodyRun.id)).resolves.toMatchObject({
+        ok: true,
+        recoveredSteps: [{ workflowRunId: noBodyRun.id, stepId: "worker", status: "pending" }],
+      });
+
+      for (const invalidBody of [
+        null,
+        [],
+        "reason",
+        42,
+        { reason: 42 },
+        { reason: null },
+        { reason: "allowed", extra: true },
+      ]) {
+        const invalid = await fetch(apiUrl(server, `/v1/workflow-runs/${workflowRun.id}/recover`), {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify(invalidBody),
+        });
+        expect(invalid.status).toBe(422);
+        expect(await invalid.json()).toEqual({ ok: false, error: "invalid_workflow_recovery_body" });
+      }
+
+      const invalidJson = await fetch(apiUrl(server, `/v1/workflow-runs/${workflowRun.id}/recover`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: "{",
+      });
+      expect(invalidJson.status).toBe(400);
+      expect(await invalidJson.json()).toEqual({ ok: false, error: "invalid_json" });
+
+      const missingContentType = await fetch(apiUrl(server, `/v1/workflow-runs/${workflowRun.id}/recover`), {
+        method: "POST",
+        body: "{}",
+      });
+      expect(missingContentType.status).toBe(415);
+
+      const missing = await fetch(apiUrl(server, "/v1/workflow-runs/missing/recover"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: "{}",
+      });
+      expect(missing.status).toBe(404);
+      expect(await missing.json()).toEqual({ ok: false, error: "workflow_run_not_found" });
+
+      const liveProcess = Bun.spawn(["sleep", "10"], {
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+      try {
+        const liveRun = await storage.createWorkflowRun({ workflow });
+        await storage.startWorkflowStepRun(liveRun.id, "worker");
+        await storage.markWorkflowStepPid(liveRun.id, "worker", liveProcess.pid);
+        const live = await fetch(apiUrl(server, `/v1/workflow-runs/${liveRun.id}/recover`), {
+          method: "POST",
+        });
+        expect(live.status).toBe(409);
+        const liveBody = JSON.stringify(await live.json());
+        expect(liveBody).toBe('{"ok":false,"error":"workflow_run_has_live_steps"}');
+        expect(liveBody).not.toContain(String(liveProcess.pid));
+      } finally {
+        liveProcess.kill();
+        await liveProcess.exited;
+      }
+
+      const deadPidRun = await storage.createWorkflowRun({ workflow });
+      await storage.startWorkflowStepRun(deadPidRun.id, "worker");
+      await storage.markWorkflowStepPid(deadPidRun.id, "worker", 2_147_483_647);
+      const deadPid = await fetch(apiUrl(server, `/v1/workflow-runs/${deadPidRun.id}/recover`), {
+        method: "POST",
+      });
+      expect(deadPid.status).toBe(200);
+
+      const remotePidRun = await storage.createWorkflowRun({ workflow });
+      await storage.startWorkflowStepRun(remotePidRun.id, "worker");
+      await storage.markWorkflowStepPid(remotePidRun.id, "worker", 2_147_483_647);
+      const remoteStorage = new Proxy(storage, {
+        get(target, property) {
+          if (property === "backend") return "postgres";
+          if (property === "supportsRemoteRunners") return true;
+          if (property === "recoverWorkflowRun") {
+            return async (...args: Parameters<typeof target.recoverWorkflowRun>) => {
+              const steps = await target.listWorkflowStepRuns(args[0]);
+              if (steps.some((step) => step.status === "running" && step.pid !== undefined)) {
+                throw new WorkflowRunStepOwnershipUnverifiableError();
+              }
+              return target.recoverWorkflowRun(...args);
+            };
+          }
+          const value = Reflect.get(target, property, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      }) as LoopStorageContract;
+      const remoteServer = createTestServer(mod, {
+        host: "127.0.0.1",
+        port: 0,
+        storage: remoteStorage,
+      });
+      try {
+        const remotePid = await fetch(apiUrl(remoteServer, `/v1/workflow-runs/${remotePidRun.id}/recover`), {
+          method: "POST",
+        });
+        expect(remotePid.status).toBe(409);
+        expect(await remotePid.json()).toEqual({
+          ok: false,
+          error: "workflow_run_step_ownership_unverifiable",
+        });
+        expect((await storage.getWorkflowStepRun(remotePidRun.id, "worker"))?.status).toBe("running");
+      } finally {
+        remoteServer.stop(true);
+      }
+
+      const nestedNow = new Date("2026-01-01T00:00:00.000Z");
+      const nestedLoop = await storage.createLoop({
+        name: "nested-runner-recovery",
+        schedule: { type: "once", at: nestedNow.toISOString() },
+        target: { type: "workflow", workflowId: workflow.id },
+        leaseMs: 60_000,
+      }, nestedNow);
+      const nestedClaim = await storage.claimRun(nestedLoop, nestedNow.toISOString(), "runner-nested", nestedNow);
+      const nestedWorkflowRun = await storage.createWorkflowRun({
+        workflow,
+        loop: nestedLoop,
+        loopRun: nestedClaim!.run,
+      });
+      await storage.startWorkflowStepRun(nestedWorkflowRun.id, "worker");
+      await storage.markWorkflowStepPid(nestedWorkflowRun.id, "worker", 2_147_483_647);
+      const nestedServer = createTestServer(
+        mod,
+        {
+          host: "127.0.0.1",
+          port: 0,
+          storage: remoteStorage,
+          now: () => nestedNow,
+        },
+        runnerPrincipal("runner-nested"),
+      );
+      try {
+        const nested = await fetch(
+          apiUrl(nestedServer, `/v1/runs/${nestedClaim!.run.id}/workflow-runs/${nestedWorkflowRun.id}/recover`),
+          {
+            method: "POST",
+            headers: jsonHeaders,
+            body: JSON.stringify({ claimToken: nestedClaim!.claimToken }),
+          },
+        );
+        expect(nested.status).toBe(409);
+        expect(await nested.json()).toEqual({
+          ok: false,
+          error: "workflow_run_step_ownership_unverifiable",
+        });
+      } finally {
+        nestedServer.stop(true);
+      }
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
   });
 
   test("status command JSON uses the service envelope", () => {

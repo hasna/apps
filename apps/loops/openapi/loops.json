@@ -2393,6 +2393,116 @@
         ]
       }
     },
+    "/v1/workflow-runs/{id}/recover": {
+      "post": {
+        "operationId": "workflowRunsRecover",
+        "summary": "workflowRuns.recover",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Recovered workflow run and steps",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Workflow run not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidJsonResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Workflow step process is live or its remote ownership cannot be verified",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowRecoveryConflictResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Supplied request body is not JSON",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnsupportedMediaTypeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Recovery request body is not a closed reason-only object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidWorkflowRecoveryBodyResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "workflowRuns.recover",
+        "x-required-scopes": [
+          "loops:write"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "write",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
     "/v1/work-items/{id}": {
       "get": {
         "operationId": "workItemsGet",
@@ -3441,6 +3551,81 @@
           "error": {
             "type": "string",
             "const": "ambiguous_name"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ]
+      },
+      "InvalidJsonResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "type": "string",
+            "const": "invalid_json"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ]
+      },
+      "UnsupportedMediaTypeResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "type": "string",
+            "const": "unsupported_media_type"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ]
+      },
+      "InvalidWorkflowRecoveryBodyResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "type": "string",
+            "const": "invalid_workflow_recovery_body"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ]
+      },
+      "WorkflowRecoveryConflictResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "type": "string",
+            "enum": [
+              "workflow_run_has_live_steps",
+              "workflow_run_step_ownership_unverifiable"
+            ]
           }
         },
         "required": [

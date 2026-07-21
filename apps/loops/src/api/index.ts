@@ -29,6 +29,8 @@ import {
   ValidationError,
   validationErrorPublicDetails,
   WorkflowRunDefinitionConflictError,
+  WorkflowRunHasLiveStepsError,
+  WorkflowRunStepOwnershipUnverifiableError,
 } from "../lib/errors.js";
 import { validateAgentTarget, workflowStepAgentSessionContract } from "../lib/agent-adapter.js";
 import type { AgentSessionContract } from "../types.js";
@@ -548,6 +550,16 @@ async function handleWorkflowRunsRequest(ctx: V1RequestContext, segments: string
     const run = await storage.getWorkflowRun(id);
     if (!run) return fail("workflow_run_not_found", 404);
     return ok({ workflowRun: publicWorkflowRun(run) });
+  }
+  if (segments.length === 2 && segments[1] === "recover" && ctx.request.method === "POST") {
+    const run = await storage.getWorkflowRun(id);
+    if (!run) return fail("workflow_run_not_found", 404);
+    const body = await readWorkflowRecoveryBody(ctx.request, ctx.bodyLimitBytes);
+    const recovered = await storage.recoverWorkflowRun(id, body.reason);
+    return ok({
+      workflowRun: publicWorkflowRun(recovered.run),
+      recoveredSteps: recovered.recoveredSteps.map((step) => publicWorkflowStepRun(step)),
+    });
   }
   if (segments.length === 2 && segments[1] === "steps" && ctx.request.method === "GET") {
     const steps = await storage.listWorkflowStepRuns(id);
@@ -1379,6 +1391,25 @@ async function readJsonBody<T>(request: Request, limitBytes: number): Promise<T>
   }
 }
 
+async function readWorkflowRecoveryBody(
+  request: Request,
+  limitBytes: number,
+): Promise<{ reason?: string }> {
+  if (request.body === null) return {};
+  const body = await readJsonBody<unknown>(request, limitBytes);
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw apiError("invalid_workflow_recovery_body", 422);
+  }
+  const record = body as Record<string, unknown>;
+  if (
+    Object.keys(record).some((key) => key !== "reason") ||
+    (record.reason !== undefined && typeof record.reason !== "string")
+  ) {
+    throw apiError("invalid_workflow_recovery_body", 422);
+  }
+  return record.reason === undefined ? {} : { reason: record.reason };
+}
+
 function isJsonContentType(contentType: string): boolean {
   const mediaType = contentType.split(";")[0]?.trim().toLowerCase();
   return mediaType === "application/json" || Boolean(mediaType?.endsWith("+json"));
@@ -1552,6 +1583,10 @@ function errorResponse(error: unknown): Response {
   }
   if (error instanceof LegacyWorkflowRunProvenanceError) return fail("workflow_run_provenance_missing", 409);
   if (error instanceof WorkflowRunDefinitionConflictError) return fail("workflow_run_definition_conflict", 409);
+  if (error instanceof WorkflowRunHasLiveStepsError) return fail("workflow_run_has_live_steps", 409);
+  if (error instanceof WorkflowRunStepOwnershipUnverifiableError) {
+    return fail("workflow_run_step_ownership_unverifiable", 409);
+  }
   if (error instanceof PublicApiError) return fail(error.code, error.status);
   return fail("internal_error", 500);
 }

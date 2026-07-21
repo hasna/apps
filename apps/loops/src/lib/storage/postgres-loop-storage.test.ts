@@ -21,6 +21,7 @@ import {
   RunFinalizationConflictError,
   ValidationError,
   WorkflowRunDefinitionConflictError,
+  WorkflowRunStepOwnershipUnverifiableError,
 } from "../errors.js";
 import { assertTenantEnforcementBootstrap, assertTenantEnforcementBootstrapIfPending, isSafeServiceConnection } from "../../serve/index.js";
 import type { CreateLoopInput, Loop, LoopRun, WorkflowSpec } from "../../types.js";
@@ -1697,6 +1698,115 @@ suite("PostgresLoopStorage (live)", () => {
     const goalRun = (await storage.listGoalRuns({ goalId: goal.goalId }))[0]!;
     expect((goalRun.evidence as { note: string }).note).toBe('saw export DB_PASSWORD="[SCRUBBED]" in output');
     expect(JSON.stringify(goalRun.rawResponse)).not.toContain(QUOTED_SECRET);
+  });
+
+  test("serializes concurrent workflow recovery and records one recovered event", async () => {
+    const workflow = await storage.createWorkflow({
+      name: "pg-concurrent-workflow-recovery",
+      steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+    });
+    const run = await storage.createWorkflowRun({ workflow });
+    await storage.startWorkflowStepRun(run.id, "worker");
+    const peerExecutor = PgPoolExecutor.fromConnectionString({
+      connectionString: isolatedUrl({ username: RUNTIME_LOGIN, password: RUNTIME_PASSWORD }),
+      applicationName: "loops-pgstore-workflow-recovery-peer",
+    });
+    const peer = new PostgresLoopStorage(peerExecutor.queryClient, {
+      tenantId: "tenant-test",
+      principalId: "principal-test",
+      requestId: "workflow-recovery-peer",
+    });
+    try {
+      const results = await Promise.all([
+        storage.recoverWorkflowRun(run.id, "first operator"),
+        peer.recoverWorkflowRun(run.id, "second operator"),
+      ]);
+      expect(results.map((result) => result.recoveredSteps.length).sort()).toEqual([0, 1]);
+      expect((await storage.listWorkflowEvents(run.id)).filter((event) => event.eventType === "recovered")).toHaveLength(1);
+    } finally {
+      await peerExecutor.close();
+    }
+  });
+
+  test("rejects persisted workflow-step PIDs inside recovery without mutation", async () => {
+    for (const context of ["operator", "nested"] as const) {
+      const workflow = await storage.createWorkflow({
+        name: `pg-${context}-pid-fenced-recovery`,
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const run = await storage.createWorkflowRun({ workflow });
+      await storage.startWorkflowStepRun(run.id, "worker");
+      await storage.markWorkflowStepPid(run.id, "worker", 2_147_483_647);
+      const beforeStep = await storage.getWorkflowStepRun(run.id, "worker");
+      const beforeEvents = await storage.listWorkflowEvents(run.id);
+
+      await expect(storage.recoverWorkflowRun(run.id, `${context} recovery`))
+        .rejects.toBeInstanceOf(WorkflowRunStepOwnershipUnverifiableError);
+
+      expect(await storage.getWorkflowStepRun(run.id, "worker")).toEqual(beforeStep);
+      expect(await storage.listWorkflowEvents(run.id)).toEqual(beforeEvents);
+    }
+  });
+
+  test("fences PID writes after recovery and serializes the PID-write recovery race", async () => {
+    const workflow = await storage.createWorkflow({
+      name: "pg-pid-write-recovery-race",
+      steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+    });
+
+    const recoveredFirst = await storage.createWorkflowRun({ workflow });
+    await storage.startWorkflowStepRun(recoveredFirst.id, "worker");
+    await storage.recoverWorkflowRun(recoveredFirst.id, "recover before pid write");
+    const postRecoveryPidWrite = await storage.markWorkflowStepPid(recoveredFirst.id, "worker", 2_147_483_646);
+    expect(postRecoveryPidWrite).toMatchObject({
+      status: "pending",
+      pid: undefined,
+    });
+    expect(await storage.getWorkflowStepRun(recoveredFirst.id, "worker")).toMatchObject({
+      status: "pending",
+      pid: undefined,
+    });
+
+    const peerExecutor = PgPoolExecutor.fromConnectionString({
+      connectionString: isolatedUrl({ username: RUNTIME_LOGIN, password: RUNTIME_PASSWORD }),
+      applicationName: "loops-pgstore-pid-recovery-race-peer",
+    });
+    const peer = new PostgresLoopStorage(peerExecutor.queryClient, {
+      tenantId: "tenant-test",
+      principalId: "principal-test",
+      requestId: "pid-recovery-race-peer",
+    });
+    try {
+      for (let iteration = 0; iteration < 8; iteration += 1) {
+        const run = await storage.createWorkflowRun({
+          workflow,
+          idempotencyKey: `pid-recovery-race-${iteration}`,
+        });
+        await storage.startWorkflowStepRun(run.id, "worker");
+        const beforeEvents = await storage.listWorkflowEvents(run.id);
+        const [recovery, pidWrite] = await Promise.allSettled([
+          storage.recoverWorkflowRun(run.id, "concurrent recovery"),
+          peer.markWorkflowStepPid(run.id, "worker", 2_147_483_000 + iteration),
+        ]);
+        expect(pidWrite.status).toBe("fulfilled");
+        const step = await storage.getWorkflowStepRun(run.id, "worker");
+        const recoveredEvents = (await storage.listWorkflowEvents(run.id))
+          .filter((event) => event.eventType === "recovered");
+        if (recovery.status === "fulfilled") {
+          expect(step).toMatchObject({ status: "pending", pid: undefined });
+          expect(recoveredEvents).toHaveLength(1);
+        } else {
+          expect(recovery.reason).toBeInstanceOf(WorkflowRunStepOwnershipUnverifiableError);
+          expect(step).toMatchObject({
+            status: "running",
+            pid: 2_147_483_000 + iteration,
+          });
+          expect(await storage.listWorkflowEvents(run.id)).toEqual(beforeEvents);
+        }
+      }
+    } finally {
+      await peerExecutor.close();
+    }
   });
 
   test("expired workflow leases append failed workflow events on Postgres", async () => {

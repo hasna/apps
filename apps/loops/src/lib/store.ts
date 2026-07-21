@@ -43,6 +43,7 @@ import {
   RunFinalizationConflictError,
   ValidationError,
   WorkflowRunDefinitionConflictError,
+  WorkflowRunHasLiveStepsError,
 } from "./errors.js";
 import { genId, nowIso } from "./ids.js";
 import { dbPath } from "./paths.js";
@@ -3623,11 +3624,7 @@ export class Store {
       const before = this.listWorkflowStepRuns(workflowRunId).filter((step) => step.status === "running");
       const live = before.filter((step) => step.pid !== undefined && isLiveStepProcess(step.pid, step.startedAt));
       if (live.length > 0) {
-        throw new Error(
-          `cannot recover workflow run while step processes are still alive: ${live
-            .map((step) => `${step.stepId} pid=${step.pid}`)
-            .join(", ")}`,
-        );
+        throw new WorkflowRunHasLiveStepsError();
       }
       this.db
         .query(

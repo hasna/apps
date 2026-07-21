@@ -170,3 +170,21 @@ export class WorkflowRunDefinitionConflictError extends CodedError {
     );
   }
 }
+
+export class WorkflowRunHasLiveStepsError extends CodedError {
+  constructor() {
+    super(
+      "WORKFLOW_RUN_HAS_LIVE_STEPS",
+      "workflow run cannot be recovered while step processes are still alive",
+    );
+  }
+}
+
+export class WorkflowRunStepOwnershipUnverifiableError extends CodedError {
+  constructor() {
+    super(
+      "WORKFLOW_RUN_STEP_OWNERSHIP_UNVERIFIABLE",
+      "workflow run cannot be recovered while a remotely owned step still carries process identity",
+    );
+  }
+}
