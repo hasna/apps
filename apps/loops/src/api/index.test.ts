@@ -1330,9 +1330,128 @@ describe("loops-api foundation", () => {
         expect(await response.json()).toEqual({ ok: false, error: "invalid_loop_status" });
         expect(await storage.getLoop(loop.id)).toEqual(before);
       }
+
+      for (const body of [null, 7, "invalid", true, []]) {
+        const response = await fetch(apiUrl(server, `/v1/loops/${loop.id}`), {
+          method: "PATCH",
+          headers: jsonHeaders,
+          body: JSON.stringify(body),
+        });
+        expect(response.status).toBe(422);
+        expect(await response.json()).toEqual({ ok: false, error: "invalid_object" });
+        expect(await storage.getLoop(loop.id)).toEqual(before);
+      }
     } finally {
       server.stop(true);
       await storage.close();
+    }
+  });
+
+  test("only one concurrent runner finalization advances fixed-delay success and retry schedules", async () => {
+    const mod = await import("./index.js");
+    const serverNow = new Date("2026-01-01T00:00:10.000Z");
+    const startedAt = new Date("2026-01-01T00:00:05.000Z");
+
+    for (const scenario of [
+      {
+        name: "success",
+        status: "succeeded" as const,
+        input: {
+          schedule: { type: "interval" as const, everyMs: 60_000, anchor: "fixed_delay" as const },
+          target: { type: "command" as const, command: "true" },
+        },
+        expectedNextRunAt: "2026-01-01T00:01:10.000Z",
+        expectedRetryScheduledFor: undefined,
+      },
+      {
+        name: "retry",
+        status: "failed" as const,
+        input: {
+          schedule: { type: "interval" as const, everyMs: 60_000, anchor: "fixed_delay" as const },
+          target: { type: "command" as const, command: "false" },
+          maxAttempts: 2,
+          retryDelayMs: 5_000,
+        },
+        expectedNextRunAt: "2026-01-01T00:00:15.000Z",
+        expectedRetryScheduledFor: "2026-01-01T00:00:00.000Z",
+      },
+    ]) {
+      const baseStorage = createSqliteLoopStorage(":memory:");
+      const loop = await baseStorage.createLoop({
+        name: `api-finalize-race-${scenario.name}`,
+        ...scenario.input,
+      }, new Date("2025-12-31T00:00:00Z"));
+      const claim = await baseStorage.claimRun(
+        loop,
+        "2026-01-01T00:00:00.000Z",
+        "runner-race",
+        startedAt,
+      );
+      expect(claim).toBeTruthy();
+
+      let runningReads = 0;
+      let advancementWrites = 0;
+      let releaseReads = () => {};
+      const bothRead = new Promise<void>((resolve) => {
+        releaseReads = resolve;
+      });
+      const storage = new Proxy(baseStorage, {
+        get(target, property) {
+          if (property === "getRun") {
+            return async (runId: string) => {
+              const run = await target.getRun(runId);
+              if (runId === claim!.run.id && run?.status === "running" && runningReads < 2) {
+                runningReads += 1;
+                if (runningReads === 2) releaseReads();
+                await bothRead;
+              }
+              return run;
+            };
+          }
+          if (property === "updateLoop") {
+            return async (...args: Parameters<typeof target.updateLoop>) => {
+              advancementWrites += 1;
+              return target.updateLoop(...args);
+            };
+          }
+          const value = Reflect.get(target, property, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      }) as LoopStorageContract;
+      const server = createTestServer(
+        mod,
+        { host: "127.0.0.1", port: 0, storage, now: () => serverNow },
+        runnerPrincipal("runner-race"),
+      );
+
+      try {
+        const finalize = () => fetch(apiUrl(server, `/v1/runs/${claim!.run.id}/finalize`), {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify({
+            claimToken: claim!.claimToken,
+            status: scenario.status,
+            stdout: "",
+            stderr: "",
+          }),
+        });
+        const responses = await Promise.all([finalize(), finalize()]);
+        expect(responses.map((response) => response.status).sort()).toEqual([200, 409]);
+        const bodies = await Promise.all(responses.map((response) => response.json()));
+        expect(bodies.filter((body) => body.ok === true)).toHaveLength(1);
+        expect(bodies.filter((body) => body.error === "run_not_running")).toHaveLength(1);
+        expect(advancementWrites).toBe(1);
+        expect(await baseStorage.getLoop(loop.id)).toMatchObject({
+          status: "active",
+          nextRunAt: scenario.expectedNextRunAt,
+          ...(scenario.expectedRetryScheduledFor === undefined
+            ? { retryScheduledFor: undefined }
+            : { retryScheduledFor: scenario.expectedRetryScheduledFor }),
+        });
+      } finally {
+        server.stop(true);
+        await baseStorage.close();
+      }
     }
   });
 

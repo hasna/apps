@@ -18,6 +18,7 @@ import {
   AmbiguousNameError,
   DuplicateWorkflowEventError,
   LegacyWorkflowRunProvenanceError,
+  RunFinalizationConflictError,
   ValidationError,
   WorkflowRunDefinitionConflictError,
 } from "../errors.js";
@@ -1088,6 +1089,66 @@ suite("PostgresLoopStorage (live)", () => {
         durationMs: 5_000,
         updatedAt: serverNow.toISOString(),
       });
+    }
+  });
+
+  test("two PostgreSQL connections expose exactly one fenced finalization transition", async () => {
+    const peerExecutor = PgPoolExecutor.fromConnectionString({
+      connectionString: isolatedUrl({ username: RUNTIME_LOGIN, password: RUNTIME_PASSWORD }),
+      applicationName: "loops-pgstore-finalize-race-peer",
+    });
+    const peerStorage = new PostgresLoopStorage(peerExecutor.queryClient, {
+      tenantId: "tenant-test",
+      principalId: "principal-test",
+      requestId: "finalize-race-peer",
+    });
+    try {
+      const now = new Date("2026-07-06T10:30:10.000Z");
+      const loop = await storage.createLoop(loopInput("pg-finalize-race", {
+        leaseMs: 60_000,
+        schedule: { type: "interval", everyMs: 60_000, anchor: "fixed_delay" },
+      }));
+      const claim = await storage.claimRun(
+        loop,
+        "2026-07-06T10:30:00.000Z",
+        "runner-race",
+        new Date("2026-07-06T10:30:05.000Z"),
+      );
+      expect(claim).toBeTruthy();
+      const patch = {
+        status: "succeeded" as const,
+        finishedAt: now.toISOString(),
+        durationMs: 5_000,
+        stdout: "",
+        stderr: "",
+      };
+      const results = await Promise.allSettled([
+        storage.finalizeRun(claim!.run.id, patch, {
+          claimedBy: "runner-race",
+          claimToken: claim!.claimToken,
+          now,
+        }),
+        peerStorage.finalizeRun(claim!.run.id, patch, {
+          claimedBy: "runner-race",
+          claimToken: claim!.claimToken,
+          now,
+        }),
+      ]);
+      expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+      const rejected = results.find((result) => result.status === "rejected");
+      expect(rejected).toMatchObject({
+        status: "rejected",
+        reason: expect.any(RunFinalizationConflictError),
+      });
+      if (rejected?.status === "rejected") {
+        expect(rejected.reason).toMatchObject({ reason: "run_not_running" });
+      }
+      expect(await storage.getRun(claim!.run.id)).toMatchObject({
+        status: "succeeded",
+        finishedAt: now.toISOString(),
+      });
+    } finally {
+      await peerExecutor.close();
     }
   });
 

@@ -40,6 +40,7 @@ import {
   LegacyWorkflowRunProvenanceError,
   LoopArchivedError,
   LoopNotFoundError,
+  RunFinalizationConflictError,
   ValidationError,
   WorkflowRunDefinitionConflictError,
 } from "./errors.js";
@@ -4271,7 +4272,12 @@ export class Store {
             .run(params);
       const run = this.getRun(id);
       if (!run) throw new Error(`run not found after finalize: ${id}`);
-      if (opts.claimedBy && res.changes !== 1) return run;
+      if (opts.claimedBy && res.changes !== 1) {
+        throw new RunFinalizationConflictError(
+          run.status === "running" ? "stale_claim" : "run_not_running",
+          id,
+        );
+      }
       if (res.changes === 1) {
         this.setWorkflowWorkItemsForLoopRun(run, error, completion.updatedAt);
         const loop = this.getLoop(run.loopId);

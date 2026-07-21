@@ -72,6 +72,7 @@ import {
   LegacyWorkflowRunProvenanceError,
   LoopArchivedError,
   LoopNotFoundError,
+  RunFinalizationConflictError,
   ValidationError,
   WorkflowRunDefinitionConflictError,
 } from "../errors.js";
@@ -1023,7 +1024,12 @@ export class PostgresLoopStorage implements LoopStorageContract {
       }
       const run = await this.loadRun(c, id);
       if (!run) throw new Error(`run not found after finalize: ${id}`);
-      if (opts.claimedBy && res.rowCount !== 1) return run;
+      if (opts.claimedBy && res.rowCount !== 1) {
+        throw new RunFinalizationConflictError(
+          run.status === "running" ? "stale_claim" : "run_not_running",
+          id,
+        );
+      }
       if (res.rowCount === 1) {
         await this.cascadeWorkItemsForLoopRun(c, run, error, completion.updatedAt);
       }

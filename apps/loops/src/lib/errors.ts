@@ -25,6 +25,17 @@ export class LoopArchivedError extends CodedError {
   }
 }
 
+export type RunFinalizationConflictReason = "stale_claim" | "run_not_running";
+
+export class RunFinalizationConflictError extends CodedError {
+  constructor(
+    readonly reason: RunFinalizationConflictReason,
+    runId: string,
+  ) {
+    super("RUN_FINALIZATION_CONFLICT", `run finalization lost its transition: ${runId} (${reason})`);
+  }
+}
+
 export class AmbiguousNameError extends CodedError {
   constructor(name: string) {
     super("AMBIGUOUS_NAME", `ambiguous loop name: ${name}; use a loop id`);

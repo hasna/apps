@@ -25,6 +25,7 @@ import {
   LegacyWorkflowRunProvenanceError,
   LoopArchivedError,
   LoopNotFoundError,
+  RunFinalizationConflictError,
   ValidationError,
   validationErrorPublicDetails,
   WorkflowRunDefinitionConflictError,
@@ -455,10 +456,15 @@ async function handleLoopsRequest(ctx: V1RequestContext, segments: string[]): Pr
     return ok({ loop: publicLoop(loop) });
   }
   if (segments.length === 1 && ctx.request.method === "PATCH") {
-    const body = await readJsonBody<Partial<{ status: LoopStatus; labels: unknown; nextRunAt: string | null; retryScheduledFor: string | null; expiresAt: string | null }>>(
-      ctx.request,
-      ctx.bodyLimitBytes,
-    );
+    const body = requiredObjectRecord(
+      await readJsonBody<unknown>(ctx.request, ctx.bodyLimitBytes),
+    ) as Partial<{
+      status: LoopStatus;
+      labels: unknown;
+      nextRunAt: string | null;
+      retryScheduledFor: string | null;
+      expiresAt: string | null;
+    }>;
     // Only forward keys the caller actually sent. Store.updateLoop merges
     // {...current, ...patch}, so a present-but-undefined key overrides the
     // current value: emitting all four keys unconditionally wiped omitted
@@ -1506,6 +1512,11 @@ function objectRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function requiredObjectRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw apiError("invalid_object", 422);
+  return value as Record<string, unknown>;
+}
+
 function optionalBoolean(value: string | null): boolean | undefined {
   if (value == null || value === "") return undefined;
   if (["1", "true", "yes"].includes(value.toLowerCase())) return true;
@@ -1534,6 +1545,7 @@ function errorResponse(error: unknown): Response {
   if (error instanceof LoopNotFoundError) return fail("loop_not_found", 404);
   if (error instanceof LoopArchivedError) return fail("loop_archived", 409);
   if (error instanceof AmbiguousNameError) return fail("ambiguous_name", 409);
+  if (error instanceof RunFinalizationConflictError) return fail(error.reason, 409);
   if (error instanceof ValidationError) {
     const details = validationErrorPublicDetails(error);
     return fail("validation_failed", 422, details ? { details } : undefined);

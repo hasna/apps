@@ -9,6 +9,7 @@ import {
   LegacyWorkflowRunProvenanceError,
   LoopArchivedError,
   LoopNotFoundError,
+  RunFinalizationConflictError,
   ValidationError,
   WorkflowRunDefinitionConflictError,
 } from "./errors.js";
@@ -1463,7 +1464,7 @@ exit 0
       const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"));
       expect(claim).toBeDefined();
       expect(store.heartbeatRunLease(claim!.run.id, "runner", 1_000, new Date("2026-01-01T00:00:01Z"))).toBeUndefined();
-      const final = store.finalizeRun(
+      expect(() => store.finalizeRun(
         claim!.run.id,
         {
           status: "succeeded",
@@ -1473,9 +1474,11 @@ exit 0
           stderr: "",
         },
         { claimedBy: "runner", now: new Date("2026-01-01T00:00:01Z") },
-      );
-      expect(final.status).toBe("running");
-      expect(final.stdout).toBeUndefined();
+      )).toThrow(RunFinalizationConflictError);
+      expect(store.getRun(claim!.run.id)).toMatchObject({
+        status: "running",
+        stdout: undefined,
+      });
     } finally {
       store.close();
     }
@@ -1547,7 +1550,7 @@ exit 0
       expect(claim).toBeDefined();
 
       store.releaseDaemonLease("daemon");
-      const final = store.finalizeRun(
+      expect(() => store.finalizeRun(
         claim!.run.id,
         {
           status: "succeeded",
@@ -1557,10 +1560,12 @@ exit 0
           stderr: "",
         },
         { claimedBy: "runner", daemonLeaseId: "daemon", now: new Date("2026-01-01T00:00:01Z") },
-      );
-      expect(final.status).toBe("running");
-      expect(final.stdout).toBeUndefined();
-      expect(final.finishedAt).toBeUndefined();
+      )).toThrow(RunFinalizationConflictError);
+      expect(store.getRun(claim!.run.id)).toMatchObject({
+        status: "running",
+        stdout: undefined,
+        finishedAt: undefined,
+      });
     } finally {
       store.close();
     }
@@ -1696,7 +1701,7 @@ exit 0
       const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"));
       expect(claim).toBeDefined();
       store.recoverExpiredRunLeases(new Date("2026-01-01T00:00:01Z"));
-      const final = store.finalizeRun(
+      expect(() => store.finalizeRun(
         claim!.run.id,
         {
           status: "succeeded",
@@ -1706,9 +1711,11 @@ exit 0
           stderr: "",
         },
         { claimedBy: "runner", now: new Date("2026-01-01T00:00:02Z") },
-      );
-      expect(final.status).toBe("abandoned");
-      expect(final.stdout).toBeUndefined();
+      )).toThrow(RunFinalizationConflictError);
+      expect(store.getRun(claim!.run.id)).toMatchObject({
+        status: "abandoned",
+        stdout: undefined,
+      });
     } finally {
       store.close();
     }
@@ -2790,6 +2797,52 @@ exit 0
 
       expect(after.status).toBe("succeeded");
       expect(after.stdout).toBe("real");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("fenced finalizeRun exposes a lost transition instead of returning a terminal row", () => {
+    const store = new Store(":memory:");
+    try {
+      const now = new Date("2026-01-01T00:00:01.000Z");
+      const loop = store.createLoop(
+        {
+          name: "fenced-finalize-conflict",
+          schedule: { type: "interval", everyMs: 60_000, anchor: "fixed_delay" },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"));
+      expect(claim).toBeDefined();
+      const patch = {
+        status: "succeeded" as const,
+        finishedAt: now.toISOString(),
+        durationMs: 1_000,
+        stdout: "",
+        stderr: "",
+      };
+      store.finalizeRun(claim!.run.id, patch, {
+        claimedBy: "runner",
+        claimToken: claim!.claimToken,
+        now,
+      });
+
+      expect(() => store.finalizeRun(claim!.run.id, patch, {
+        claimedBy: "runner",
+        claimToken: claim!.claimToken,
+        now,
+      })).toThrow(RunFinalizationConflictError);
+      try {
+        store.finalizeRun(claim!.run.id, patch, {
+          claimedBy: "runner",
+          claimToken: claim!.claimToken,
+          now,
+        });
+      } catch (error) {
+        expect(error).toMatchObject({ reason: "run_not_running" });
+      }
     } finally {
       store.close();
     }
