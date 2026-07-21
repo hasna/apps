@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Loops",
-    "version": "0.4.28",
+    "version": "0.4.29",
     "description": "Loops self-hosted multi-tenant control-plane HTTP API. All non-probe operations require a tenant-bound API key with the declared scope, role, and token kind."
   },
   "servers": [

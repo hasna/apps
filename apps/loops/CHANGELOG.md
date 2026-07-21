@@ -5,6 +5,79 @@ documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
 unless noted.
 
+## 0.4.29 (2026-07-21)
+
+This source release gives the post-`npm/loops/v0.4.28` code line a new,
+unambiguous package, OpenAPI, and generated HTTP SDK identity.
+
+### Added
+
+- **Tenant-bound authentication and PostgreSQL row isolation:** migrations
+  `0008_tenant_prepare`, `0009_tenant_backfill`, and
+  `0010_tenant_enforce` add tenant/principal/membership/API-key state, require
+  an explicit complete tenant assignment before enforcement, and install the
+  closed-world owner/migrator/runtime/authenticator role model with
+  tenant-scoped privileges and RLS. The API now validates tenant-bound keys,
+  roles, scopes, and token kinds and emits structured denial evidence.
+- **Tenant migration operations:** encrypted tenant-backfill delivery,
+  provider credential reconciliation, PostgreSQL 16 bootstrap membership
+  gates, and protected shared-database transfer tooling now support rehearsed,
+  auditable cutovers without command overrides or unverified TLS targets.
+- **Runner and workflow execution:** long-running runner readiness and workflow
+  execution are implemented, with operator recovery, replayable advancement,
+  workflow-definition provenance in `0011_workflow_run_provenance`, and loop
+  labels in `0012_loop_labels`.
+
+### Changed
+
+- **Product identity:** user-facing product and documentation naming is now
+  **Loops**, while published compatibility identifiers and paths such as
+  the legacy uppercase environment-variable namespace, `open_loops`,
+  `.openloops`, `openloops`, `runtimeOwner`, MCP identifiers, project slugs,
+  and the `loops-api` compatibility binary/waiver remain stable.
+- **Runtime and supply chain:** the runtime image now uses pinned Bun Alpine
+  packages, runs the runner as non-root, pins CI actions, adds a protected ECR
+  candidate workflow, and fails closed on high-severity or malformed scan
+  results. Packed artifacts are checked for private-host leakage, branding
+  regressions, storage-kit drift, and contract conformance.
+- **Public contracts:** the OpenAPI document and generated HTTP SDK cover the
+  expanded tenant, runner, workflow, recovery, labels, count, archive, and
+  operational surfaces. MCP output is bounded, and public or persisted
+  workflow output is scrubbed before truncation.
+
+### Fixed
+
+- **Agent boundaries:** Codewith auth profiles are resolved from exact
+  JSON-first inventory, unusable or malformed profiles and extra arguments
+  fail closed, session creation is atomic, root agent directories are rejected,
+  route agent allowlists propagate correctly, and Cursor provider/retry
+  handling no longer weakens trust boundaries.
+- **API and claim safety:** tenant error compatibility is preserved while
+  runner endpoints, route admission, loop updates, runner clocks, local claims,
+  recovery snapshots, and persisted workflow/session contracts reject
+  ambiguous, stale, or cross-boundary state.
+- **Archive and finalization:** ambiguous archive names fail closed and resolve
+  against target state; PostgreSQL finalization conflicts are enforced
+  directly; SQLite generated-route finalization matches PostgreSQL behavior;
+  and public CLI errors and pagination avoid leaking unsafe context.
+- **Recovery and advancement:** workflow recovery ownership is fenced,
+  advancement is unified across schedulers, replay is idempotent, successor and
+  completion parity gaps are closed, and recovery cannot double-claim local
+  work or regenerate already-finalized routes.
+- **Security boundaries:** private and encoded infrastructure hostnames are
+  removed from publishable output, encoded separator bypasses are rejected,
+  trusted contracts and legacy events are validated, and the shared transfer
+  gate accepts only verified TLS DSNs.
+
+### Upgrade warning
+
+- **`0010_tenant_enforce` is a rollback boundary.** After this migration is
+  applied, the immutable published `0.4.28` image cannot pass readiness because
+  it does not contain the `0008`-`0010` tenant migration lineage. Do not roll
+  the binary back in place. Recovery requires rolling forward to `0.4.29` or a
+  later compatible image, or restoring the rehearsed pre-cutover database
+  target before starting the older image.
+
 ## 0.4.26
 
 ### Fixed
