@@ -256,6 +256,9 @@ export function advanceLoop(
       finishedAt,
       succeeded,
       deferredRetry: current ? store.nextRetryableRun(current.id, current.maxAttempts) : undefined,
+      retryIntentRun: current?.retryScheduledFor
+        ? store.getRunBySlot(current.id, current.retryScheduledFor)
+        : undefined,
       recentRuns: current ? store.listRuns({ loopId: current.id, limit: Math.max(threshold * 4, 50) }) : [],
       retryRandom,
       circuitBreakerThreshold: threshold,

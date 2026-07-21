@@ -459,7 +459,7 @@ describe("scheduler", () => {
       expect(store.getRunBySlot(loop.id, firstSlot)?.status).toBe("succeeded");
       expect(store.getRunBySlot(loop.id, firstSlot)?.attempt).toBe(2);
       expect(store.getLoop(loop.id)?.retryScheduledFor).toBe(secondSlot);
-      expect(store.getLoop(loop.id)?.nextRunAt).toBe("2026-01-01T00:00:20.000Z");
+      expect(store.getLoop(loop.id)?.nextRunAt).toBe("2026-01-01T00:00:15.000Z");
 
       await tick({
         store,

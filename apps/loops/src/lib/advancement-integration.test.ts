@@ -6,7 +6,7 @@ import { Store } from "./store.js";
 const noJitter = (): number => 0.5;
 
 describe("loop advancement storage and scheduler integration", () => {
-  test("reverse-order finalization preserves the earliest owed retry without cursor regression", () => {
+  test("reverse-order retryable failures select the globally earliest owed retry", () => {
     const store = new Store(":memory:");
     try {
       const loop = store.createLoop(
@@ -32,14 +32,18 @@ describe("loop advancement storage and scheduler integration", () => {
         "runner",
         new Date("2026-01-01T00:01:01.000Z"),
       )!;
-      const newerSuccess = store.finalizeRun(newer.run.id, {
-        status: "succeeded",
+      const newerFailure = store.finalizeRun(newer.run.id, {
+        status: "failed",
         finishedAt: "2026-01-01T00:01:10.000Z",
         stdout: "",
         stderr: "",
+        error: "newer retry",
       });
-      advanceLoop(store, loop, newerSuccess, new Date("2026-01-01T00:01:10.000Z"), true, { random: noJitter });
-      expect(store.getLoop(loop.id)?.nextRunAt).toBe("2026-01-01T00:02:00.000Z");
+      advanceLoop(store, loop, newerFailure, new Date("2026-01-01T00:01:10.000Z"), false, { random: noJitter });
+      expect(store.getLoop(loop.id)).toMatchObject({
+        nextRunAt: "2026-01-01T00:01:11.000Z",
+        retryScheduledFor: newer.run.scheduledFor,
+      });
 
       const olderFailure = store.finalizeRun(older.run.id, {
         status: "failed",
@@ -51,7 +55,7 @@ describe("loop advancement storage and scheduler integration", () => {
       advanceLoop(store, loop, olderFailure, new Date("2026-01-01T00:01:11.000Z"), false, { random: noJitter });
       expect(store.getLoop(loop.id)).toMatchObject({
         status: "active",
-        nextRunAt: "2026-01-01T00:02:00.000Z",
+        nextRunAt: "2026-01-01T00:01:12.000Z",
         retryScheduledFor: older.run.scheduledFor,
       });
       expect(store.nextRetryableRun(loop.id, loop.maxAttempts)?.scheduledFor).toBe(older.run.scheduledFor);

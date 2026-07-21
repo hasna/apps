@@ -26,6 +26,7 @@ import {
 import { assertTenantEnforcementBootstrap, assertTenantEnforcementBootstrapIfPending, isSafeServiceConnection } from "../../serve/index.js";
 import type { CreateLoopInput, Loop, LoopRun, WorkflowSpec, WorkflowStepRun } from "../../types.js";
 import { waitUntil } from "../../test-helpers.js";
+import { planLoopAdvancement } from "../advancement.js";
 
 const j = (...parts: string[]): string => parts.join("");
 const GH_PAT = j("ghp", "_AbCdEf0123456789AbCdEf0123456789");
@@ -1299,6 +1300,53 @@ suite("PostgresLoopStorage (live)", () => {
     expect(result.abandoned.length).toBe(1);
     expect(result.abandoned[0]!.status).toBe("abandoned");
     expect(result.deferred.length).toBe(0);
+  });
+
+  test("maintenance recovery with reverse lease order advances the globally earliest retry slot", async () => {
+    const loop = await storage.createLoop(loopInput("recover-reverse-order", {
+      overlap: "allow",
+      maxAttempts: 3,
+      retryDelayMs: 1_000,
+      leaseMs: 1_000,
+    }), new Date("2026-07-06T12:00:00.000Z"));
+    const newer = await storage.claimRun(
+      loop,
+      "2026-07-06T12:01:00.000Z",
+      "runner-newer",
+      new Date("2026-07-06T12:00:00.000Z"),
+    );
+    const older = await storage.claimRun(
+      loop,
+      "2026-07-06T12:00:00.000Z",
+      "runner-older",
+      new Date("2026-07-06T12:00:00.250Z"),
+    );
+    const recovered = await storage.recoverExpiredRunLeasesDetailed(
+      new Date("2026-07-06T12:00:02.000Z"),
+    );
+    expect(recovered.abandoned.map((run) => run.id)).toEqual([newer!.run.id, older!.run.id]);
+    const earliest = await storage.nextRetryableRun(loop.id, loop.maxAttempts);
+    expect(earliest?.scheduledFor).toBe(older!.run.scheduledFor);
+
+    const current = await storage.getLoop(loop.id);
+    const plan = planLoopAdvancement({
+      current,
+      run: recovered.abandoned[0]!,
+      finishedAt: new Date(recovered.abandoned[0]!.updatedAt),
+      succeeded: false,
+      deferredRetry: earliest,
+      retryRandom: 0.5,
+    });
+    expect(plan).toMatchObject({
+      kind: "update",
+      reason: "deferred_retry",
+      patch: { retryScheduledFor: older!.run.scheduledFor },
+    });
+    if (plan.kind !== "update") throw new Error(`unexpected advancement plan: ${plan.kind}`);
+    await storage.advanceLoopIfCurrent(loop.id, current!, plan.patch);
+    expect(await storage.getLoop(loop.id)).toMatchObject({
+      retryScheduledFor: older!.run.scheduledFor,
+    });
   });
 
   test("daemon lease acquire/heartbeat/release/get", async () => {

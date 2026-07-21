@@ -4740,7 +4740,6 @@ export class Store {
             loopRunId: row.id,
           });
           this.setWorkflowWorkItemsForWorkflowRun(workflowRow.id, "failed", "parent loop run lease expired before completion", finished);
-          this.maybeArchiveTerminalGeneratedRouteWorkflow(workflowRow.id, finished);
         }
         const loop = this.getLoop(row.loop_id);
         const itemStatus = workItemStatusForLoopRun("abandoned", row.attempt, loop?.maxAttempts);
@@ -4753,11 +4752,13 @@ export class Store {
             : "run lease expired before completion";
           this.setWorkflowWorkItemsForLoop(row.loop_id, itemStatus, reason, finished, statuses);
           if (loop?.target.type === "workflow" && itemStatus !== "admitted") {
+            const workflowId = loop.target.workflowId;
             const workItemId = loop.target.input?.workflowWorkItemId ?? loop.target.input?.workItemId;
             this.maybeArchiveGeneratedRouteWorkflow({
-              workflowId: loop.target.workflowId,
+              workflowId,
               loopId: loop.id,
               workItemId,
+              workflowRunId: workflowRows.find((workflowRow) => workflowRow.workflow_id === workflowId)?.id,
               updated: finished,
             });
           }

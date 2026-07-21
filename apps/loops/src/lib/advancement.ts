@@ -132,6 +132,7 @@ export function planLoopAdvancement(input: {
   finishedAt: Date;
   succeeded: boolean;
   deferredRetry?: LoopRun;
+  retryIntentRun?: LoopRun;
   recentRuns?: readonly LoopRun[];
   retryRandom?: number;
   circuitBreakerThreshold?: CircuitBreakerThreshold;
@@ -141,6 +142,35 @@ export function planLoopAdvancement(input: {
   if (!current) return { kind: "none", reason: "missing" };
   if (current.archivedAt) return { kind: "none", reason: "archived" };
   if (current.status !== "active") return { kind: "none", reason: "inactive" };
+
+  if (input.deferredRetry) {
+    const deferredRetry = input.deferredRetry;
+    if (
+      current.retryScheduledFor &&
+      new Date(current.retryScheduledFor).getTime() < new Date(deferredRetry.scheduledFor).getTime() &&
+      input.retryIntentRun?.status === "running"
+    ) {
+      return { kind: "none", reason: "stale" };
+    }
+    if (retryTimingWasAppliedForAttempt(current, deferredRetry)) {
+      return { kind: "none", reason: "already_applied" };
+    }
+    const retryAt = nextAfterRetry(
+      current,
+      deferredRetry,
+      deferredRetry.id === run.id ? finishedAt : new Date(deferredRetry.updatedAt),
+      input.retryRandom,
+    );
+    return {
+      kind: "update",
+      reason: deferredRetry.id === run.id ? "retry" : "deferred_retry",
+      patch: {
+        status: "active",
+        nextRunAt: withoutCursorRegression(current, retryAt),
+        retryScheduledFor: deferredRetry.scheduledFor,
+      },
+    };
+  }
 
   if (!succeeded && run.attempt < current.maxAttempts) {
     if (current.retryScheduledFor && current.retryScheduledFor !== run.scheduledFor) {
@@ -166,19 +196,6 @@ export function planLoopAdvancement(input: {
   }
 
   if (isStaleFinalization(current, run)) return { kind: "none", reason: "stale" };
-
-  if (input.deferredRetry) {
-    const retryAt = nextAfterRetry(current, input.deferredRetry, finishedAt, input.retryRandom);
-    return {
-      kind: "update",
-      reason: "deferred_retry",
-      patch: {
-        status: "active",
-        nextRunAt: withoutCursorRegression(current, retryAt),
-        retryScheduledFor: input.deferredRetry.scheduledFor,
-      },
-    };
-  }
 
   if (!succeeded) {
     const threshold = resolveBreakerThreshold(current, input.circuitBreakerThreshold);

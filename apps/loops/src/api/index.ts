@@ -332,13 +332,15 @@ async function handleV1Request(ctx: V1RequestContext): Promise<Response> {
     }
     const storage = requireStorage(ctx.storage);
     const recovered = await storage.recoverExpiredRunLeasesDetailed(ctx.now());
-    await advanceRecoveredRuns(storage, recovered.abandoned, {
+    const advancementCandidates = await recoveryAdvancementCandidates(storage, recovered.abandoned);
+    const advancementDeferred = await advanceRecoveredRuns(storage, advancementCandidates, {
       random: ctx.random,
       circuitBreakerThreshold: ctx.circuitBreakerThreshold,
     });
     return ok({
       abandoned: recovered.abandoned.map((run) => publicRun(run, false, { redactError: true })),
       deferred: recovered.deferred.map((run) => publicRun(run, false, { redactError: true })),
+      advancementDeferred: advancementDeferred.map((run) => publicRun(run, false, { redactError: true })),
     });
   }
   return fail("not_found", 404);
@@ -724,15 +726,20 @@ async function handleRunsRequest(ctx: V1RequestContext, segments: string[]): Pro
       return fail("run_claim_owner_mismatch", 403);
     }
     const recovered = await storage.recoverExpiredRunLeasesDetailed(now, { runId: id, limit: 1, scanLimit: 1 });
-    const abandoned = recovered.abandoned;
+    const abandoned = recovered.abandoned.length > 0
+      ? recovered.abandoned
+      : isRecoveredLeaseRun(target)
+        ? [target]
+        : [];
     const deferred = recovered.deferred;
-    await advanceRecoveredRuns(storage, abandoned, {
+    const advancementDeferred = await advanceRecoveredRuns(storage, abandoned, {
       random: ctx.random,
       circuitBreakerThreshold: ctx.circuitBreakerThreshold,
     });
     return ok({
       abandoned: abandoned.map((run) => publicRun(run, false, { redactError: true })),
       deferred: deferred.map((run) => publicRun(run, false, { redactError: true })),
+      advancementDeferred: advancementDeferred.map((run) => publicRun(run, false, { redactError: true })),
     });
   }
 
@@ -1365,7 +1372,7 @@ async function finalizeRun(
           storage,
           loop,
           existing,
-          new Date(existing.finishedAt ?? now),
+          new Date(existing.updatedAt),
           existing.status === "succeeded",
           advancement,
         );
@@ -1417,7 +1424,7 @@ async function finalizeRun(
     storage,
     loop,
     finalized,
-    new Date(finalized.finishedAt ?? now),
+    new Date(finalized.updatedAt),
     finalized.status === "succeeded",
     advancement,
   );
@@ -1453,6 +1460,9 @@ async function advanceLoopAfterRun(
       deferredRetry: current
         ? await storage.nextRetryableRun(current.id, current.maxAttempts)
         : undefined,
+      retryIntentRun: current?.retryScheduledFor
+        ? await storage.getRunBySlot(current.id, current.retryScheduledFor)
+        : undefined,
       recentRuns: current
         ? await storage.listRuns({ loopId: current.id, limit: Math.max(threshold * 4, 50) })
         : [],
@@ -1474,6 +1484,27 @@ async function advanceLoopAfterRun(
   }
 }
 
+const RECOVERED_LEASE_ERROR = "run lease expired before completion";
+
+function isRecoveredLeaseRun(run: LoopRun): boolean {
+  return run.status === "abandoned" && run.error === RECOVERED_LEASE_ERROR;
+}
+
+async function recoveryAdvancementCandidates(
+  storage: LoopStorageContract,
+  newlyRecovered: readonly LoopRun[],
+): Promise<LoopRun[]> {
+  const candidates = new Map<string, LoopRun>();
+  for (const run of newlyRecovered) candidates.set(run.id, run);
+  for (const run of await storage.listRuns({ status: "abandoned", limit: 1_000 })) {
+    if (isRecoveredLeaseRun(run)) candidates.set(run.id, run);
+  }
+  return [...candidates.values()].sort((a, b) =>
+    a.updatedAt.localeCompare(b.updatedAt) ||
+    a.scheduledFor.localeCompare(b.scheduledFor) ||
+    a.id.localeCompare(b.id));
+}
+
 async function advanceRecoveredRuns(
   storage: LoopStorageContract,
   runs: readonly LoopRun[],
@@ -1481,19 +1512,30 @@ async function advanceRecoveredRuns(
     random: () => number;
     circuitBreakerThreshold?: CircuitBreakerThreshold;
   },
-): Promise<void> {
+): Promise<LoopRun[]> {
+  const deferred: LoopRun[] = [];
+  const unexpected: unknown[] = [];
   for (const run of runs) {
     const loop = await storage.getLoop(run.loopId);
     if (!loop) continue;
-    await advanceLoopAfterRun(
-      storage,
-      loop,
-      run,
-      new Date(run.finishedAt ?? run.updatedAt),
-      false,
-      opts,
-    );
+    try {
+      await advanceLoopAfterRun(
+        storage,
+        loop,
+        run,
+        new Date(run.updatedAt),
+        false,
+        opts,
+      );
+    } catch (error) {
+      if (error instanceof LoopAdvancementConflictError) deferred.push(run);
+      else unexpected.push(error);
+    }
   }
+  if (unexpected.length > 0) {
+    throw new AggregateError(unexpected, `recovery advancement failed for ${unexpected.length} run(s)`);
+  }
+  return deferred;
 }
 
 function runnerLeaseMs(leaseMs: number): number {

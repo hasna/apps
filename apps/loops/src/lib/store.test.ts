@@ -1316,6 +1316,64 @@ exit 0
     }
   });
 
+  test("keeps generated route workflows active when expired lease recovery is retryable", () => {
+    const store = new Store(":memory:");
+    try {
+      const invocation = store.createWorkflowInvocation({
+        templateId: "todos-task-worker-verifier",
+        sourceRef: { kind: "event", id: "evt-lease-route-retry", dedupeKey: "todos-task:lease-route-retry" },
+        subjectRef: { kind: "task", id: "lease-route-retry", path: "/tmp/open-loops" },
+        intent: "route",
+        scope: { projectPath: "/tmp/open-loops" },
+      });
+      const workItem = store.upsertWorkflowWorkItem({
+        routeKey: "todos-task",
+        idempotencyKey: "todos-task:lease-route-retry",
+        invocationId: invocation.id,
+        sourceType: "task.created",
+        sourceRef: "evt-lease-route-retry",
+        subjectRef: "lease-route-retry",
+        projectKey: "/tmp/open-loops",
+      });
+      const workflow = store.createWorkflow({
+        name: "lease-route-retry-workflow",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const loop = store.createLoop(
+        {
+          name: "lease-route-retry-loop",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: {
+            type: "workflow",
+            workflowId: workflow.id,
+            input: {
+              workflowInvocationId: invocation.id,
+              workflowWorkItemId: workItem.id,
+            },
+          },
+          leaseMs: 10,
+          maxAttempts: 2,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      store.admitWorkflowWorkItem(workItem.id, { workflowId: workflow.id, loopId: loop.id });
+      const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"));
+      expect(claim).toBeDefined();
+      const workflowRun = store.createWorkflowRun({ workflow, loop, loopRun: claim!.run });
+
+      const recovered = store.recoverExpiredRunLeases(new Date("2026-01-01T00:00:01Z"));
+
+      expect(recovered).toHaveLength(1);
+      expect(store.getWorkflowRun(workflowRun.id)?.status).toBe("failed");
+      expect(store.getWorkflowWorkItem(workItem.id)?.status).toBe("admitted");
+      expect(store.getWorkflow(workflow.id)?.status).toBe("active");
+      expect(store.listWorkflowEvents(workflowRun.id).map((event) => event.eventType))
+        .not.toContain("workflow_archived");
+    } finally {
+      store.close();
+    }
+  });
+
   test("recovers expired run leases in bounded batches", () => {
     const store = new Store(":memory:");
     try {
