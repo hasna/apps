@@ -310,7 +310,7 @@ suite("PostgresLoopStorage (live)", () => {
     `);
     if (inventory?.database_count !== 1 || inventory.open_loops_role_count !== 0) {
       throw new Error(
-        "LOOPS_TEST_DATABASE_URL must point at an exclusive disposable PostgreSQL cluster with no OpenLoops roles",
+        "LOOPS_TEST_DATABASE_URL must point at an exclusive disposable PostgreSQL cluster with no Loops roles",
       );
     }
     missingRoleBootstrap = await exercisePg16BootstrapMemberships("missing");
@@ -811,7 +811,7 @@ suite("PostgresLoopStorage (live)", () => {
     expect(serviceLoginBootstrap.failureStage).toBe("preflight");
     expect(serviceLoginBootstrap.errorMessage).toContain("must run before runtime/authenticator service login memberships");
     expect(loginRoleBootstrap.failureStage).toBe("preflight");
-    expect(loginRoleBootstrap.errorMessage).toContain("reserved OpenLoops database role open_loops_runtime is LOGIN");
+    expect(loginRoleBootstrap.errorMessage).toContain("reserved Loops database role open_loops_runtime is LOGIN");
     expect(thirdPartyMembershipBootstrap.failureStage).toBe("preflight");
     expect(thirdPartyMembershipBootstrap.errorMessage).toContain("unsafe privileged role membership open_loops_owner");
     expect(crossDatabaseBootstrap.failureStage).toBe("preflight");

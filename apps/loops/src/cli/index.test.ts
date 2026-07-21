@@ -9474,7 +9474,7 @@ describe("local-only guards under a cloud-flipped client", () => {
     HASNA_LOOPS_API_URL: "https://loops.example.test",
     HASNA_LOOPS_API_KEY: "do-not-print-this-key",
   } as const;
-  const FLIP_MESSAGE = "not available while flipped to the hosted OpenLoops API";
+  const FLIP_MESSAGE = "not available while flipped to the hosted Loops API";
 
   test("route admission, drain, live UI, run-now, and tick fail loudly when flipped", () => {
     const dataDir = freshDataDir("loops-cli-cloud-guard-");

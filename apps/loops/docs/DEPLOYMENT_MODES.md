@@ -1,11 +1,11 @@
-# OpenLoops Deployment Modes
+# Loops Deployment Modes
 
-OpenLoops supports one active source of truth at a time. The public package
+Loops supports one active source of truth at a time. The public package
 defines the mode vocabulary, local cache behavior, API shape, and runner
 contract. Hosted multi-tenant operation is implemented outside this public
 package.
 
-Deployment modes describe **where the OpenLoops runtime stores and executes**
+Deployment modes describe **where the Loops runtime stores and executes**
 loops and workflows (`local` SQLite, `self_hosted` control plane, or `cloud`
 contract). They are runtime placement concerns, not the automation product
 surface — specs, queues, approvals, and audit for product automations remain in
@@ -39,11 +39,11 @@ surfaces only.
 `HASNA_LOOPS_STORAGE_MODE` may be set to `local`, `self_hosted`, or
 `cloud`. Other spellings and legacy mode names are rejected.
 
-When no explicit mode is set, OpenLoops resolves the mode from configuration:
+When no explicit mode is set, Loops resolves the mode from configuration:
 
 1. `HASNA_LOOPS_API_URL` or
    `HASNA_LOOPS_DATABASE_URL` selects `self_hosted`.
-2. Otherwise OpenLoops uses `local`.
+2. Otherwise Loops uses `local`.
 
 Both non-local modes use the canonical `HASNA_LOOPS_API_URL`; an explicit
 `HASNA_LOOPS_STORAGE_MODE=cloud` distinguishes hosted cloud from self-hosted.

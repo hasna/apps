@@ -1225,7 +1225,7 @@
         "loop_id": {
           "type": "string",
           "minLength": 1,
-          "description": "OpenLoops loop id. Optional when run_id references an existing loop run."
+          "description": "Loops loop id. Optional when run_id references an existing loop run."
         },
         "run_id": {
           "type": "string",

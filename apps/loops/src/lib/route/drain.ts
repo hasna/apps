@@ -492,7 +492,7 @@ function isSkippableDrainRouteError(message: string): boolean {
 function markInvalidDrainTaskNonRouteable(sourceTodosProject: string, task: TodosReadyTask, reason: string): Record<string, unknown> {
   const taskId = taskField(task, ["id", "task_id", "taskId"]);
   if (!taskId) return { attempted: false, reason: "task id missing" };
-  const comment = `OpenLoops route blocked for task ${taskId}: ${reason}. Added no-auto and removed auto:route so route drains do not repeatedly route this task until its project path is fixed.`;
+  const comment = `Loops route blocked for task ${taskId}: ${reason}. Added no-auto and removed auto:route so route drains do not repeatedly route this task until its project path is fixed.`;
   const commentResult = runLocalCommand("todos", ["--project", sourceTodosProject, "comment", taskId, comment], { timeoutMs: 30_000 });
   const tagResult = runLocalCommand("todos", ["--project", sourceTodosProject, "tag", taskId, "no-auto"], { timeoutMs: 30_000 });
   const untagResult = runLocalCommand("todos", ["--project", sourceTodosProject, "untag", taskId, "auto:route"], { timeoutMs: 30_000 });
@@ -527,12 +527,12 @@ function closeFreshnessSkippedTask(sourceTodosProject: string, task: TodosReadyT
   const taskId = taskField(task, ["id", "task_id", "taskId"]);
   if (!taskId) return { attempted: false, reason: "task id missing" };
   const comment =
-    `OpenLoops freshness gate closed this task: ${reason}. The referenced PR is already merged/closed, so the ` +
+    `Loops freshness gate closed this task: ${reason}. The referenced PR is already merged/closed, so the ` +
     `merge/review route will not dispatch a worker. Marked done and removed auto:route/route:enabled so drains stop re-skipping it.`;
   const commentResult = runLocalCommand("todos", ["--project", sourceTodosProject, "comment", taskId, comment], { timeoutMs: 30_000 });
   const doneResult = runLocalCommand(
     "todos",
-    ["--project", sourceTodosProject, "done", taskId, "--notes", "PR already merged/closed; closed by OpenLoops freshness gate"],
+    ["--project", sourceTodosProject, "done", taskId, "--notes", "PR already merged/closed; closed by Loops freshness gate"],
     { timeoutMs: 30_000 },
   );
   const untagAutoRoute = runLocalCommand("todos", ["--project", sourceTodosProject, "untag", taskId, "auto:route"], { timeoutMs: 30_000 });

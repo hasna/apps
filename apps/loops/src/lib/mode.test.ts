@@ -54,7 +54,7 @@ describe("deployment mode contract", () => {
   test("accepts only canonical deployment mode spellings", () => {
     expect(normalizeLoopDeploymentMode("self_hosted")).toBe("self_hosted");
     for (const legacy of ["self-hosted", "selfhosted", "remote", "hybrid", "saas"]) {
-      expect(() => normalizeLoopDeploymentMode(legacy)).toThrow("unsupported OpenLoops deployment mode");
+      expect(() => normalizeLoopDeploymentMode(legacy)).toThrow("unsupported Loops deployment mode");
     }
     expect(resolveLoopDeploymentMode({ HASNA_LOOPS_STORAGE_MODE: "self_hosted" })).toEqual({
       deploymentMode: "self_hosted",

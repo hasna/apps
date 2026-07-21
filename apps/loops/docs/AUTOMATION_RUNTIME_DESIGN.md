@@ -1,10 +1,10 @@
 # Automation Runtime Design
 
-OpenLoops can execute workflow work that external automation systems have
+Loops can execute workflow work that external automation systems have
 already materialized, but it must not become the automation product surface.
 `@hasna/automations` and `@hasna/actions` own automation specs, trigger
 materialization, queue state, approvals, DLQ/replay, idempotency, and audit
-evidence. OpenLoops owns workflow invocation, admission, execution, run
+evidence. Loops owns workflow invocation, admission, execution, run
 manifests, and provider routing once work is explicitly handed off.
 
 For operator-facing ownership tables, handoff path examples, and anti-patterns,
@@ -12,7 +12,7 @@ see [Runtime Boundary](./RUNTIME_BOUNDARY.md).
 
 ## Planned Workflow Upsert SDK
 
-External compilers should not write OpenLoops SQLite rows directly. The stable
+External compilers should not write Loops SQLite rows directly. The stable
 contract should be an idempotent CLI/SDK upsert that accepts a fully rendered
 one-shot workflow loop request and returns durable refs.
 
@@ -63,7 +63,7 @@ type WorkflowUpsertResult = {
 Required semantics:
 
 - `mode="dry-run"` validates, canonicalizes, hashes, and returns the same JSON
-  shape without mutating OpenLoops state.
+  shape without mutating Loops state.
 - `mode="preflight"` additionally checks provider binaries, machine routing,
   accounts/auth profiles, prompt files, and workflow target compatibility before
   commit.
@@ -81,8 +81,8 @@ Required semantics:
 
 `@hasna/actions` now exposes typed action contracts: `ActionManifest`,
 `ActionInvocation`, `ActionRun`, `ActionRunStatus`, `ActionQueueStatus`,
-`ActionAuditEvent`, `EvidenceRef`, and `ActionDeadLetter`. A future OpenLoops
-action binding must reuse those contracts instead of adding an OpenLoops-owned
+`ActionAuditEvent`, `EvidenceRef`, and `ActionDeadLetter`. A future Loops
+action binding must reuse those contracts instead of adding a Loops-owned
 action status, action queue, or idempotency dialect.
 
 The binding should be a workflow-admission descriptor, not a direct executor in
@@ -124,14 +124,14 @@ The planned implementation path is:
    support, idempotency requirement, guardrails, audit fields, evidence fields,
    and rollback policy using `@hasna/actions`.
 2. The action owner passes only a normalized `ActionTargetBindingRequest` or
-   `WorkflowUpsertRequest` to OpenLoops. Large inputs, private prompts, secret
+   `WorkflowUpsertRequest` to Loops. Large inputs, private prompts, secret
    values, and mutable action state stay in the action store or a referenced
    artifact.
-3. OpenLoops admits a one-shot workflow loop through the planned upsert
+3. Loops admits a one-shot workflow loop through the planned upsert
    contract, records workflow/run/manifests refs, and reports those refs back to
    the action owner.
 4. The action owner records `ActionAuditEvent` and `EvidenceRef` entries that
-   include the returned OpenLoops refs. OpenLoops may store source refs for
+   include the returned Loops refs. Loops may store source refs for
    lookup, but `@hasna/actions` remains the source of truth for action runs and
    queue state.
 
@@ -160,36 +160,36 @@ const request: WorkflowUpsertRequest = {
 };
 ```
 
-`specHash` must be computed from the canonical OpenLoops workflow request plus
+`specHash` must be computed from the canonical Loops workflow request plus
 the stable action contract identity: action id, manifest version, idempotency
 key or invocation id, selected executor binding kind/ref, route policy, and
 execution policy. It must not include raw secret values, raw credentials, or
 unredacted prompt bodies. If `@hasna/actions` later publishes its own manifest
-hash, OpenLoops should include that hash instead of re-hashing action internals.
+hash, Loops should include that hash instead of re-hashing action internals.
 
 `WorkflowUpsertResult` keeps its existing semantics:
 
 - `idempotencyKey` is the action-owned idempotency key selected above.
-- `specHash` identifies the exact OpenLoops workflow admission request and
+- `specHash` identifies the exact Loops workflow admission request and
   action contract identity that produced it.
 - `refs.workflowId`, `refs.loopId`, `refs.invocationId`, `refs.workItemId`,
-  `refs.runId`, and `refs.manifestPath` are OpenLoops refs that the action
+  `refs.runId`, and `refs.manifestPath` are Loops refs that the action
   owner can store as `EvidenceRef` or audit event data.
-- `action="created" | "updated" | "reused" | "rejected"` describes OpenLoops
+- `action="created" | "updated" | "reused" | "rejected"` describes Loops
   materialization only. It is not an action run status.
 - Action run fields such as `status`, `dedupedFromRunId`, `evidence`, `events`,
   and `error` remain on `ActionRun`.
 
 ### Status Translation
 
-OpenLoops should translate its workflow and work-item state into action-owned
+Loops should translate its workflow and work-item state into action-owned
 status updates without persisting a new action status enum.
 
 Recommended initial translation:
 
 - An accepted dry-run/preflight maps to an `ActionRun` that remains
   `planned`, `previewed`, or `awaiting_approval` according to
-  `@hasna/actions`; OpenLoops only returns preflight details.
+  `@hasna/actions`; Loops only returns preflight details.
 - A scheduled workflow maps to action queue status `queued` or
   `waiting_approval`, depending on action-owned approval gates.
 - A claimed/running workflow maps to action queue status `claimed` and action
@@ -202,8 +202,8 @@ Recommended initial translation:
 - Operator cancellation maps to action queue status `cancelled` and action run
   status `cancelled`.
 
-These mappings are adapter behavior. OpenLoops should expose its own workflow
-statuses for OpenLoops APIs and should call or return enough refs for
+These mappings are adapter behavior. Loops should expose its own workflow
+statuses for Loops APIs and should call or return enough refs for
 `@hasna/actions` to update `ActionRun`, `ActionQueueStatus`, audit events, and
 dead-letter records.
 
@@ -212,19 +212,19 @@ dead-letter records.
 Failure handling must flow through action-owned APIs:
 
 - Provider, worktree, account, policy, and command failures are classified by
-  OpenLoops and returned as redacted workflow error evidence.
+  Loops and returned as redacted workflow error evidence.
 - The action owner turns those failures into `ActionError`,
   `ActionDeadLetter`, `ActionAuditEvent`, and `EvidenceRef` records.
 - Replay starts from an action-owned replay decision and a new action-owned
-  idempotency key. OpenLoops then receives a new upsert request whose
+  idempotency key. Loops then receives a new upsert request whose
   `source.dedupeKey` and `idempotencyKey` are the replay keys.
-- OpenLoops DLQ commands may mirror or inspect linked workflow failures, but
+- Loops DLQ commands may mirror or inspect linked workflow failures, but
   they must not fabricate action queue entries or mark an action replayable on
   their own.
 
 ### Mode And Dispatch Examples
 
-Dry-run without OpenLoops mutation:
+Dry-run without Loops mutation:
 
 ```bash
 actions run deploy.manifest.json \
@@ -282,9 +282,9 @@ loops workflows upsert-one-shot deploy-workflow.json \
 
 ### Non-Goals
 
-- Do not let `@hasna/actions` write OpenLoops SQLite/Postgres rows directly.
-- Do not duplicate the action queue in OpenLoops.
-- Do not materialize triggers in OpenLoops; action and automation owners decide
+- Do not let `@hasna/actions` write Loops SQLite/Postgres rows directly.
+- Do not duplicate the action queue in Loops.
+- Do not materialize triggers in Loops; action and automation owners decide
   when a concrete invocation exists.
 - Do not store secret values, unredacted prompts, credentials, or private
   action input payloads in workflow specs, prompts, manifests, task comments,
@@ -421,7 +421,7 @@ Required check domains:
   result.
 - `connector`: ask the owning action/connector system whether the connector
   credential handle exists, is scoped for the source action, and is usable; do
-  not make OpenLoops the connector credential store.
+  not make Loops the connector credential store.
 - `permissions`: reject unsafe `permissionMode="bypass"`, unsafe
   `configIsolation="none"`, mutable command targets without an explicit policy,
   or missing approval evidence when strict automation requires it.
@@ -463,7 +463,7 @@ worktrees for repo mutation, missing prompt files, and machine route mismatch.
 ## Planned Compact Evidence API
 
 Every public surface should expose the same compact evidence shape so callers
-can hand results across `@hasna/actions`, `@hasna/automations`, OpenLoops route
+can hand results across `@hasna/actions`, `@hasna/automations`, Loops route
 drains, MCP tools, and CLI scripts without scraping SQLite or leaking secrets.
 
 ```ts
@@ -515,7 +515,7 @@ Persistence and output rules:
   work item, and owning external action/automation refs through public APIs.
 - Failed preflight evidence should be persistable when a commit attempt is
   rejected, but pure `dry-run`/`preflight` calls should return it directly
-  without creating OpenLoops database rows.
+  without creating Loops database rows.
 - Redaction happens before persistence and before API return. Tests should
   exercise both flat secret-looking text and nested JSON evidence values.
 
@@ -548,7 +548,7 @@ secret-safe without depending on ambient shell state.
 `execution.mode="strict"` means:
 
 - Do not inherit full `process.env`. Start from a minimal runtime environment:
-  `PATH`, `HOME`, `TMPDIR`, locale keys, OpenLoops metadata keys, and tool
+  `PATH`, `HOME`, `TMPDIR`, locale keys, Loops metadata keys, and tool
   config dirs explicitly produced by account/secret resolution.
 - Pass only named `envAllowlist` values and `secretRefs`; never embed secret
   values in workflow specs, prompts, metadata, manifests, or task comments.
@@ -600,7 +600,7 @@ enforcement surface is missing.
 
 ## Planned DLQ And Replay
 
-OpenLoops already models terminal route work items and has a manual
+Loops already models terminal route work items and has a manual
 `routes requeue` command. The automation runtime contract needs a stricter DLQ
 layer for exhausted side-effecting work, because external action systems need to
 distinguish "failed attempt", "dead until operator action", and "resolved".
@@ -615,7 +615,7 @@ Route work items should keep these meanings:
   as unsafe to retry without operator action.
 - `cancelled`: an operator or owner intentionally stopped the work.
 - `succeeded`: the work completed and remains deduped history.
-- `resolved`: planned external DLQ state for `@hasna/actions`; OpenLoops can
+- `resolved`: planned external DLQ state for `@hasna/actions`; Loops can
   mirror it as `dead_letter` plus a resolution event until a first-class status
   is added.
 
@@ -648,7 +648,7 @@ provider code; it only records why the DLQ entry no longer needs execution.
 - Replay of side-effecting work should default to `mode=preflight`; promotion
   to `mode=commit` is a separate operator/API decision unless the owning
   `@hasna/actions` policy marks the action safely replayable.
-- If `@hasna/actions` owns the queue, OpenLoops calls the action replay API and
+- If `@hasna/actions` owns the queue, Loops calls the action replay API and
   stores the returned action/run refs instead of fabricating queue state.
 
 ### Dead-Letter Classification

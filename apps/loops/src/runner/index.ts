@@ -29,7 +29,7 @@ const MAX_CONSECUTIVE_HEARTBEAT_FAILURES = 3;
 
 program
   .name("loops-runner")
-  .description("OpenLoops control-plane runner")
+  .description("Loops control-plane runner")
   .version(packageVersion())
   .option("-j, --json", "print JSON");
 

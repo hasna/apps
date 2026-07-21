@@ -435,7 +435,7 @@ function recommendedFindingTask(finding: Omit<HealthScanFinding, "recommendedTas
   const tags = ["bug", "openloops", "loops", "loop-health", finding.kind];
   if (finding.classification) tags.push(finding.classification);
   const description = [
-    `OpenLoops health scan found a ${finding.kind} issue.`,
+    `Loops health scan found a ${finding.kind} issue.`,
     finding.loop ? `Loop: ${finding.loop.name} (${finding.loop.id})` : undefined,
     finding.run ? `Run: ${finding.run.id}` : undefined,
     finding.classification ? `Classification: ${finding.classification}` : undefined,
@@ -488,7 +488,7 @@ function daemonFinding(daemon: DaemonStatus): HealthScanFinding | undefined {
     kind: "daemon",
     severity,
     fingerprint: `openloops:health-scan:daemon:${daemon.stale ? "stale" : "not-running"}`,
-    title: "OpenLoops daemon health issue",
+    title: "Loops daemon health issue",
     message: reason,
   };
   return {
@@ -512,7 +512,7 @@ function doctorFinding(check: DoctorCheck, loop: Loop | undefined, route: LoopEx
     kind,
     severity,
     fingerprint,
-    title: kind === "preflight" && loop ? `OpenLoops preflight issue - ${loop.name}` : `OpenLoops doctor issue - ${check.id}`,
+    title: kind === "preflight" && loop ? `Loops preflight issue - ${loop.name}` : `Loops doctor issue - ${check.id}`,
     message: [check.status, check.message, check.detail].filter(Boolean).join(" "),
     loop: loop ? shortLoop(loop) : undefined,
     route,
@@ -533,7 +533,7 @@ function latestRunFinding(expectation: LoopExpectationResult): HealthScanFinding
     kind: "latest-run",
     severity,
     fingerprint: expectation.recommendedTask?.dedupeKey ?? `openloops:${expectation.loop.id}:${failure.fingerprint}`,
-    title: expectation.recommendedTask?.title ?? `OpenLoops latest run failed - ${expectation.loop.name}`,
+    title: expectation.recommendedTask?.title ?? `Loops latest run failed - ${expectation.loop.name}`,
     message: expectation.check.message,
     loop: expectation.loop,
     run: expectation.latestRun,
@@ -556,7 +556,7 @@ function staleRunningFinding(loop: Loop, expectation: LoopExpectationResult, now
     kind: "stale-running",
     severity: "critical",
     fingerprint,
-    title: `OpenLoops stale running run - ${loop.name}`,
+    title: `Loops stale running run - ${loop.name}`,
     message,
     loop: shortLoop(loop),
     run,
@@ -583,7 +583,7 @@ function timestampDir(root: string, generatedAt: string): string {
 
 function healthScanMarkdown(scan: LoopsHealthScan): string {
   return [
-    "# OpenLoops Health Scan",
+    "# Loops Health Scan",
     "",
     `- status: ${scan.status}`,
     `- generated_at: ${scan.generatedAt}`,
@@ -840,9 +840,9 @@ function providerRetryMessage(classification: RunFailureClassification): string 
 }
 
 function recommendedTask(loop: Loop, run: LoopRun, failure: RunFailureSignal, route: LoopExpectationResult["route"]): RecommendedTaskUpsert {
-  const title = `BUG: open-loops loop failure - ${loop.name}`;
+  const title = `BUG: Loops loop failure - ${loop.name}`;
   const description = [
-    `OpenLoops expectation failed for loop ${loop.name} (${loop.id}).`,
+    `Loops expectation failed for loop ${loop.name} (${loop.id}).`,
     `Run: ${run.id}`,
     `Status: ${run.status}`,
     `Classification: ${failure.classification}`,

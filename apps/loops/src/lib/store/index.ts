@@ -1,4 +1,4 @@
-// ── The OpenLoops client Store abstraction ───────────────────────────────────
+// ── The Loops client Store abstraction ───────────────────────────────────
 //
 // ONE interface, TWO transports. Every CLI command (and MCP tool / SDK caller)
 // that reads or writes loop DATA goes through `LoopStore`. There are exactly two
@@ -61,7 +61,7 @@ export type StoreTransport = "local" | "cloud-http";
 export class CloudUnsupportedError extends Error {
   constructor(operation: string) {
     super(
-      `operation not supported over the hosted OpenLoops API: ${operation}. ` +
+      `operation not supported over the hosted Loops API: ${operation}. ` +
         `Run it on a machine using local storage, or unset HASNA_LOOPS_API_URL/HASNA_LOOPS_API_KEY.`,
     );
     this.name = "CloudUnsupportedError";
@@ -69,7 +69,7 @@ export class CloudUnsupportedError extends Error {
 }
 
 /**
- * The single data interface for the OpenLoops client. Both {@link LocalStore}
+ * The single data interface for the Loops client. Both {@link LocalStore}
  * and {@link ApiStore} implement it; callers hold a `LoopStore` and never know
  * (or branch on) which one. Every method is async so the two transports share
  * one surface.

@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "id": "wks_80xyi2gvkuol",
+  "id": "wks_mro5dkdfek58",
   "slug": "open-loops",
-  "name": "open-loops",
+  "name": "Loops",
   "kind": "open-source",
   "root_id": "root_28xtmiu5mi8j",
   "recipe_id": null,
@@ -16,8 +16,10 @@
   "integrations": {
     "github_repo": "hasna/loops",
     "github_url": "https://github.com/hasna/loops",
-    "todos_project_id": "4790febf",
-    "todos_task_list_id": "todos-open-loops"
+    "todos_project_id": "7868cd2e-5a43-47dd-bed7-5e519af58cc6",
+    "todos_task_list_id": "6ea28cf0-4e30-474a-b393-48a6a1813c65",
+    "mementos_project_id": "b5b34111-0052-462e-80f7-c84cd864c122",
+    "conversations_channel": "loops"
   },
   "generated_at": "2026-06-19T10:55:05.102Z"
 }

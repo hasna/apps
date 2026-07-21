@@ -57,7 +57,7 @@ describe("shared database transfer", () => {
     expect(service).not.toContain("sslmode=require");
   });
 
-  test("pins the logical dump to the OpenLoops allowlist and never snapshots the shared cluster", () => {
+  test("pins the logical dump to the Loops allowlist and never snapshots the shared cluster", () => {
     const command = pgDumpCommand("/tmp/private/openloops-allowlist.dump");
     expect(command).toContain("--format=custom");
     expect(command).toContain("--data-only");

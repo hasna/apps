@@ -1,6 +1,6 @@
-# OpenLoops
+# Loops
 
-OpenLoops is a local CLI and daemon for persistent loops and workflows: scheduled or recurring work that survives process restarts and records every run.
+Loops is a local CLI and daemon for persistent loops and workflows: scheduled or recurring work that survives process restarts and records every run.
 
 It supports deterministic command loops, JSON-defined workflows, and guarded CLI adapters for headless coding agents:
 
@@ -13,7 +13,7 @@ It supports deterministic command loops, JSON-defined workflows, and guarded CLI
 
 ## Deployment Modes
 
-OpenLoops defaults to `local`, where SQLite in `LOOPS_DATA_DIR` is
+Loops defaults to `local`, where SQLite in `LOOPS_DATA_DIR` is
 authoritative and `loops-daemon` executes scheduled work. The package also
 defines `self_hosted` and `cloud` contracts for non-local control planes:
 
@@ -109,7 +109,7 @@ self-hosted control-plane host.
 
 ## Install
 
-**OpenLoops requires the [Bun](https://bun.sh) runtime (`bun >= 1.0`).** The
+**Loops requires the [Bun](https://bun.sh) runtime (`bun >= 1.0`).** The
 installed binaries are `loops`, `loops-daemon`, `loops-api`, `loops-serve`,
 `loops-runner`, and `loops-mcp`; each uses a `#!/usr/bin/env bun` shebang.
 
@@ -143,7 +143,7 @@ The CLI stores state in `~/.hasna/loops` by default. Set `LOOPS_DATA_DIR` to iso
 
 ## MCP Server
 
-OpenLoops ships a stdio MCP server for safe loop and workflow inspection from
+Loops ships a stdio MCP server for safe loop and workflow inspection from
 MCP-capable agents:
 
 ```bash
@@ -218,7 +218,7 @@ preflight first request `codewith profile list --json` and match the requested
 name exactly against the root `data` or `profiles` inventory. That inventory is
 authoritative: `usable: false` rejects a profile, legacy entries without
 `usable` remain usable, and `currentProfile` does not add inventory membership.
-OpenLoops falls back to the human-readable table, including active `*` rows,
+Loops falls back to the human-readable table, including active `*` rows,
 only when JSON mode is unsupported or its inventory is structurally
 unavailable. Embedded NUL bytes, missing profiles, and non-fallback
 profile-list failures fail closed.
@@ -323,7 +323,7 @@ loops labels clear repo-status
 ```
 
 Run an OpenCode loop with an explicit provider/model. OpenCode reads
-`~/.config/opencode/config.json` when no model is supplied, so OpenLoops rejects
+`~/.config/opencode/config.json` when no model is supplied, so Loops rejects
 OpenCode agent targets without `--model` instead of inheriting a stale or
 machine-specific default.
 
@@ -410,7 +410,7 @@ from the workflow JSON file's directory:
 }
 ```
 
-OpenLoops stores the resolved prompt text for execution and records
+Loops stores the resolved prompt text for execution and records
 `promptSource` metadata with the absolute file path. Public CLI output from
 `show`, `list`, `workflows list`, `workflows show`, `workflows validate`,
 `workflows create`, and `templates render` redacts prompt bodies by default
@@ -499,8 +499,8 @@ for those. Set `"blockedExitCodes": []` on a gate-named step to opt out.
 
 ## Templates And Task Events
 
-OpenLoops is the runtime/scheduler/workflow engine for these flows — not the
-automation domain model. Todos-task routes are OpenLoops-native admission; they
+Loops is the runtime/scheduler/workflow engine for these flows — not the
+automation domain model. Todos-task routes are Loops-native admission; they
 do not replace the OpenAutomations product queue. See
 [Runtime Boundary](./RUNTIME_BOUNDARY.md) for ownership split and external
 compiler handoff paths (`@hasna/automations` claim-queue,
@@ -559,7 +559,7 @@ loops templates render routing-remediation \
   --var idempotencyKey=routing-health:repo:shard0
 ```
 
-Custom reusable workflow templates live under the OpenLoops app data directory:
+Custom reusable workflow templates live under the Loops app data directory:
 `~/.hasna/loops/templates` by default, or `$LOOPS_DATA_DIR/templates` when
 `LOOPS_DATA_DIR` is set. Store templates as declarative JSON files; listing,
 showing, and rendering templates never executes workflow steps or mutates the
@@ -681,7 +681,7 @@ inspection expose the exact checkout.
 Before a worker starts, worktree preparation verifies that any existing
 managed path is a real git worktree with the same top-level checkout and the
 same git common directory as the source repo. If the checkout is on a detached
-HEAD or unexpected branch, OpenLoops only reattaches it to the expected
+HEAD or unexpected branch, Loops only reattaches it to the expected
 generated branch when the worktree is clean. Dirty worktrees, symlinked paths,
 non-worktree paths, different common dirs, and unrecoverable branch switches
 fail closed with cleanup evidence (`worktreeMode=required`) instead of
@@ -802,12 +802,12 @@ cat task-created-event.json | loops routes create todos-task \
   --max-active 12
 ```
 
-The limits count active admitted/running OpenLoops work items once per workflow.
+The limits count active admitted/running Loops work items once per workflow.
 `--max-active-per-project` gates new work for the same project path,
 `--max-active-per-project-group` shares a pool across related projects such as
 `oss`, and `--max-active` is the global routed-workflow cap. Project matching
 uses the canonical git top-level path when available, so repo subdirectories
-share the same project cap. A throttled event records a deferred OpenLoops
+share the same project cap. A throttled event records a deferred Loops
 admission work item with JSON evidence instead of creating another worker loop.
 Route flags or an expanded named policy are authoritative ceilings. Positive
 integer task/event fields (`max_active`, `max_active_per_project`, and
@@ -883,7 +883,7 @@ The `pilot` policy uses `sandbox=danger-full-access` and is treated as a paused
 manual break-glass lane; applying it requires the operator to pass
 `--manual-break-glass` explicitly.
 
-When a workflow run starts from an admitted work item, OpenLoops writes a
+When a workflow run starts from an admitted work item, Loops writes a
 manifest under:
 
 ```text
@@ -931,9 +931,9 @@ every candidate, so a drain can safely run every few minutes as a deterministic
 command loop: it fills only available capacity, writes compact JSON evidence
 when requested, and leaves excess ready tasks in todos for a later drain pass.
 Use `--dry-run` to preview candidates and rendered workflows without mutating
-OpenLoops state.
+Loops state.
 
-The route throttle flags count OpenLoops routed workflow work items, not the
+The route throttle flags count Loops routed workflow work items, not the
 live background-agent slots inside a provider. For Codewith drains, add
 `--provider-active-cap <n>` (or `--codewith-active-cap <n>`) so each candidate
 checks `codewith agent diagnostics --json` before workflow-loop creation and
@@ -973,7 +973,7 @@ in with the `auto:route` tag, `route_enabled=true`, or
 `automation.allowed=true` should be routed. Keep repo-mutating worker/verifier
 runs on a Codewith account pool with `--worktree-mode required`. Do not dispatch
 or paste task prompts into tmux panes. Use max-active throttles and
-`--max-dispatch` to bound OpenLoops agent fan-out, and use
+`--max-dispatch` to bound Loops agent fan-out, and use
 `--provider-active-cap` plus `--provider-admission-check` to bound live Codewith
 background-agent admission. Write compact evidence into a bounded reports
 directory so operators can audit each drain without unbounded stdout or loop
@@ -983,7 +983,7 @@ correctly do no work.
 
 Generated task/event route workflow specs are lifecycle-managed. After a
 generated one-shot route workflow run reaches `succeeded`, `failed`,
-`timed_out`, or `cancelled`, OpenLoops archives the generated workflow spec while
+`timed_out`, or `cancelled`, Loops archives the generated workflow spec while
 preserving workflow run, step, event, manifest, loop, invocation, and work-item
 history.
 
@@ -1001,10 +1001,10 @@ cat event.json | loops routes create generic \
 ```
 
 This is the intended deterministic-to-agentic path: a producer creates a todos
-task, `@hasna/events` delivers `task.created`, OpenLoops records the invocation
-and admission item, OpenLoops creates a worker/verifier workflow when admitted,
+task, `@hasna/events` delivers `task.created`, Loops records the invocation
+and admission item, Loops creates a worker/verifier workflow when admitted,
 and the workflow updates todos with evidence. Use account pools so worker and
-verifier steps do not burn the same profile; OpenLoops picks deterministically
+verifier steps do not burn the same profile; Loops picks deterministically
 and uses a different verifier profile when the pool has at least two entries.
 Use `--dry-run` to inspect the rendered invocation, work item, workflow, and
 loop input without storing anything, including the worktree path and branch for
@@ -1038,7 +1038,7 @@ mutation-gated `loops_receipt_write`. The SDK exposes `writeReceipt`,
 
 ## Transcript-Driven Loops
 
-OpenLoops can turn long-form media or meeting transcripts into recurring workflow work when paired with `iapp-transcriber`. The template at `docs/workflows/transcript-feedback-to-loops.json` transcribes an authorized media URL, asks an agent to extract recurring loop candidates, authors workflow specs, and validates generated workflows before scheduling. Copy it into the target repo, replace `/path/to/repo` with that repo's absolute path, and provide `TRANSCRIBER_SOURCE_URL` through the runner environment or a private, uncommitted workflow copy before storing or scheduling it. Do not commit private or signed media URLs.
+Loops can turn long-form media or meeting transcripts into recurring workflow work when paired with `iapp-transcriber`. The template at `docs/workflows/transcript-feedback-to-loops.json` transcribes an authorized media URL, asks an agent to extract recurring loop candidates, authors workflow specs, and validates generated workflows before scheduling. Copy it into the target repo, replace `/path/to/repo` with that repo's absolute path, and provide `TRANSCRIBER_SOURCE_URL` through the runner environment or a private, uncommitted workflow copy before storing or scheduling it. Do not commit private or signed media URLs.
 
 ```bash
 loops workflows validate /path/to/repo/.openloops/transcript-feedback-to-loops.json --preflight
@@ -1078,7 +1078,7 @@ loops expectations <loop-id-or-name> --json
 
 The JSON contains the expectation result, bounded error/stdout/stderr evidence,
 a stable failure fingerprint, route metadata, and recommended task fields.
-OpenLoops does not mutate Todos from `health`, `expectations`, or read-only
+Loops does not mutate Todos from `health`, `expectations`, or read-only
 `health scan`. To turn failed expectations or scan findings into deduped tasks,
 use an explicit mutating command:
 
@@ -1127,7 +1127,7 @@ Failure classifications are: `rate_limit`, `auth`, `model_not_found`,
 
 ## Hygiene
 
-OpenLoops includes deterministic hygiene checks for replacing local maintenance
+Loops includes deterministic hygiene checks for replacing local maintenance
 scripts with package commands:
 
 ```bash
@@ -1181,7 +1181,7 @@ Archived loops are hidden from the default `loops list`, excluded from daemon sc
 
 `loops run-now` reports the manual run source:
 
-- `source=ad_hoc`: the loop was not due yet, so OpenLoops created a one-off manual slot. This is a single immediate attempt and does not schedule retries or consume the future scheduled slot.
+- `source=ad_hoc`: the loop was not due yet, so Loops created a one-off manual slot. This is a single immediate attempt and does not schedule retries or consume the future scheduled slot.
 - `source=due_slot`: the persisted scheduled slot was already due, so the manual run claims that slot and advances or retries the loop using normal scheduler rules.
 - `source=retry_slot`: the loop was waiting on a failed slot retry, so the manual run claims that retry slot and advances the loop using normal retry rules.
 
@@ -1232,15 +1232,15 @@ The adapters intentionally use provider command surfaces instead of pretending e
 - Claude uses `claude -p --output-format json` and safe-mode/local setting sources by default.
 - Codewith runs non-interactive `codewith --ask-for-approval never exec --json` sessions by default. exec starts a fresh session per invocation, avoiding the multi-megabyte rollout history that `codewith agent start` reloaded every turn (which drove `context_length_exceeded` silent no-ops), and it keeps network egress for gh/git — the `workspace-write` sandbox opts back into `sandbox_workspace_write.network_access`. Codewith exec is remote-capable like codex.
 - AI Copilot and OpenCode use `run --format json --pure`. OpenCode requires an explicit provider/model id because ambient OpenCode config is machine-specific.
-- Cursor is CLI-first for now via the standalone `agent -p` binary. OpenLoops no longer falls back to `cursor agent`; install the standalone Cursor Agent CLI so preflight and scheduled runs use the same executable.
+- Cursor is CLI-first for now via the standalone `agent -p` binary. Loops no longer falls back to `cursor agent`; install the standalone Cursor Agent CLI so preflight and scheduled runs use the same executable.
 - Codex uses `codex --ask-for-approval never exec --json --ephemeral --skip-git-repo-check`, with `--add-dir` for explicit extra writable directories where supported.
 - Agent prompts are sent through child stdin instead of argv where the provider supports stdin, including Codewith `exec` (which reads instructions from stdin when no positional prompt is given), so the prompt never lands on argv.
-- When `--account` or a step `account` is set, OpenLoops resolves `accounts env <profile> --tool <tool>` before spawning the target, strips inherited tool home/API-key variables, and applies the selected profile only to that process. Missing account profiles fail before the provider binary receives the prompt.
+- When `--account` or a step `account` is set, Loops resolves `accounts env <profile> --tool <tool>` before spawning the target, strips inherited tool home/API-key variables, and applies the selected profile only to that process. Missing account profiles fail before the provider binary receives the prompt.
 - `--auth-profile` and step `authProfile` are provider-native Codewith selectors passed as `--auth-profile <name>` on the `exec` invocation; they do not call OpenAccounts. Local and remote preflight share the JSON-first, exact-name contract described above, use human-table parsing only as a compatibility fallback, and fail closed for unusable or missing profiles, NUL-containing names, and non-fallback list failures.
 - `--sandbox` maps to provider-native sandbox flags. Codewith/Codex accept `read-only`, `workspace-write`, or `danger-full-access`; Cursor accepts `enabled` or `disabled`.
 - `--allow-tool` and `--allow-command` declare advisory, metadata-only
   restrictions and require `--safety-reason`. The exact contract is persisted
-  and emitted for audit, but OpenLoops does not claim provider-side enforcement.
+  and emitted for audit, but Loops does not claim provider-side enforcement.
   Relaxed sandboxes and native provider bypass modes also require explicit
   `--manual-break-glass`.
 - `--permission-mode` maps `plan`, `auto`, and `bypass` where the provider supports it. Claude uses native permission modes, Cursor maps bypass to `--force`, and OpenCode/AICopilot map bypass to `--dangerously-skip-permissions`.

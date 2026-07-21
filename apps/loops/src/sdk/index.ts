@@ -124,7 +124,7 @@ export class LoopsClient {
   private localRuntime(operation: string): Store {
     if (this.store.transport !== "local") {
       throw new Error(
-        `loops SDK ${operation} operates on this machine's local runtime and is not available while flipped to the hosted OpenLoops API. ` +
+        `loops SDK ${operation} operates on this machine's local runtime and is not available while flipped to the hosted Loops API. ` +
           `Unset HASNA_LOOPS_API_URL/HASNA_LOOPS_API_KEY (or set HASNA_LOOPS_STORAGE_MODE=local) to run it here.`,
       );
     }
@@ -322,19 +322,19 @@ export function openAutomationsRuntimeBinding(
       envelopeCommand: "automations webhooks event",
       handlerCommand: "loops routes create generic",
       pipeExample: "automations --json webhooks event <route> --body-json '<json>' | loops --json routes create generic",
-      boundary: "Use only for explicit event-envelope workflow handoff. OpenAutomations still owns deterministic automation materialization and queue state; OpenLoops owns workflow invocation.",
+      boundary: "Use only for explicit event-envelope workflow handoff. OpenAutomations still owns deterministic automation materialization and queue state; Loops owns workflow invocation.",
     },
     requiredEnvironment: ["HASNA_AUTOMATIONS_DIR"],
     guarantees: [
       "OpenAutomations owns automation specs, run materialization, queue state, DLQ, replay, idempotency, and approvals.",
-      "OpenLoops may execute claimed actions through explicit command or SDK handoff only.",
-      "OpenLoops may consume exported event envelopes only through explicit routes create commands.",
+      "Loops may execute claimed actions through explicit command or SDK handoff only.",
+      "Loops may consume exported event envelopes only through explicit routes create commands.",
       "Workers must complete or fail actions by action id and runner id so OpenAutomations can enforce queue leases.",
     ],
     nonGoals: [
-      "OpenLoops must not become the OpenAutomations product surface.",
-      "OpenLoops must not store automation specs or replace the OpenAutomations queue.",
-      "OpenLoops must not infer automation trigger semantics from event transport alone.",
+      "Loops must not become the OpenAutomations product surface.",
+      "Loops must not store automation specs or replace the OpenAutomations queue.",
+      "Loops must not infer automation trigger semantics from event transport alone.",
     ],
   };
   return {

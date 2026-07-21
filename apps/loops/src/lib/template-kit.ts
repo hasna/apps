@@ -79,7 +79,7 @@ function workerVerifierAgentVariables(opts: { addDirs: boolean; branchNoun: stri
     { name: "safetyReason", description: "Auditable reason required for advisory restrictions or relaxed sandbox access." },
     { name: "manualBreakGlass", default: "false", description: "Allow explicit danger-full-access in a generated workflow. Intended for manual emergency use only." },
     { name: "worktreeMode", default: "auto", description: "Worktree isolation mode: auto, required, off, or main." },
-    { name: "worktreeRoot", default: "~/.hasna/loops/worktrees", description: "Base directory for OpenLoops-managed git worktrees." },
+    { name: "worktreeRoot", default: "~/.hasna/loops/worktrees", description: "Base directory for Loops-managed git worktrees." },
     { name: "worktreeBranchPrefix", default: "openloops", description: `Branch prefix for generated ${opts.branchNoun} worktree branches.` },
     agentTimeoutVariable(),
     verifierIdleTimeoutVariable(),
@@ -308,10 +308,10 @@ export const EVENT_REVIEW_FOCUS = "correctness, regressions, security, missing e
 export type BuiltinFlow = "task" | "lifecycle" | "event" | "bounded";
 
 const FLOW_FRAGMENTS: Record<BuiltinFlow, { noun: string; description: string }> = {
-  task: { noun: "agent", description: "a task-triggered OpenLoops workflow" },
-  lifecycle: { noun: "step", description: "a full task-triggered OpenLoops lifecycle" },
-  event: { noun: "agent", description: "an event-triggered OpenLoops workflow" },
-  bounded: { noun: "step", description: "a bounded OpenLoops agent workflow" },
+  task: { noun: "agent", description: "a task-triggered Loops workflow" },
+  lifecycle: { noun: "step", description: "a full task-triggered Loops lifecycle" },
+  event: { noun: "agent", description: "an event-triggered Loops workflow" },
+  bounded: { noun: "step", description: "a bounded Loops agent workflow" },
 };
 
 export function roleFragment(role: string, flow: BuiltinFlow): string {
@@ -353,7 +353,7 @@ export function verifierRuntimeGuidance(input: { verifierIdleTimeoutMs?: number 
   return [
     "Verifier runtime contract:",
     idleTimeout
-      ? `- OpenLoops will mark this verifier timed_out after ${idleTimeout}ms without stdout/stderr. Emit a concise heartbeat/progress line before long checks.`
+      ? `- Loops will mark this verifier timed_out after ${idleTimeout}ms without stdout/stderr. Emit a concise heartbeat/progress line before long checks.`
       : "- The verifier idle watchdog is disabled for this workflow; still emit concise progress before long checks.",
     "- Keep final evidence compact: summarize changed files, validation commands/results, findings, and the task decision instead of pasting bulky logs.",
     "- If validation cannot finish, record a clear blocked/failed task comment with the last completed check and the next concrete action.",
@@ -394,7 +394,7 @@ export function todosExactCommandsFragment(todosProjectPath: string, taskId: str
 export function worktreePrompt(plan: AgentWorktreeSpec): string {
   if (plan.enabled) {
     return [
-      "OpenLoops worktree policy:",
+      "Loops worktree policy:",
       "- Use the isolated git worktree as the only writeable repository checkout for this task/event.",
       `- Worktree cwd: ${plan.cwd}`,
       `- Worktree root: ${plan.path}`,
@@ -405,7 +405,7 @@ export function worktreePrompt(plan: AgentWorktreeSpec): string {
     ].join("\n");
   }
   return [
-    "OpenLoops worktree policy:",
+    "Loops worktree policy:",
     `- Worktree mode ${plan.mode} did not select an isolated worktree: ${plan.reason ?? "not enabled"}.`,
     `- Cwd: ${plan.cwd}`,
     "- Do not create ad hoc worktrees unless the task itself explicitly requires one.",
@@ -730,7 +730,7 @@ const PR_HANDOFF_SCRIPT = [
   "const prUrl = stringField('prUrl', 'pullRequestUrl');",
   "const title = stringField('title', 'prTitle') || `PR handoff for ${taskId}`;",
   "const body = stringField('body', 'prBody') || [",
-  "  `OpenLoops PR handoff for task ${taskId}.`,",
+  "  `Loops PR handoff for task ${taskId}.`,",
   "  `Commit: ${commit || 'unknown'}`,",
   "  `Branch: ${branch || 'unknown'}`,",
   "  artifact.validation ? `Validation: ${artifact.validation}` : undefined,",
@@ -755,7 +755,7 @@ const PR_HANDOFF_SCRIPT = [
   "const upsertTask = (why) => {",
   "  const safeWhy = scrubUrlCredentials(why);",
   "  const description = [",
-  "    `OpenLoops could not complete network PR handoff for original task ${taskId}.`,",
+  "    `Loops could not complete network PR handoff for original task ${taskId}.`,",
   "    `Reason: ${safeWhy}`,",
   "    `Fingerprint: ${fingerprint}`,",
   "    `Repository: ${repoDisplay || 'unknown'}`,",
@@ -882,7 +882,7 @@ const PR_HANDOFF_NO_ARTIFACT_SCRIPT = [
   "  const repoTag = `repo:${repoTagSource.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'unknown'}`;",
   "  const metadata = { route_enabled: true, source: 'openloops.pr-handoff', original_task_id: taskId, repo: displayRemoteUrl || '', branch: branch || '', commit: commit || '', fingerprint, automation: { allowed: true, mode: 'auto' }, no_tmux_dispatch: true };",
   "  const description = [",
-  "    `OpenLoops could not complete no-artifact PR handoff for original task ${taskId}.`,",
+  "    `Loops could not complete no-artifact PR handoff for original task ${taskId}.`,",
   "    `Reason: ${safeWhy}`,",
   "    `Fingerprint: ${fingerprint}`,",
   "    `Repository: ${displayRemoteUrl || 'unknown'}`,",

@@ -758,8 +758,8 @@ function remotePreflightFailureMessage(machineId: string, detail: string): strin
   if (/Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED|Offending .*key in .*known_hosts/i.test(normalized)) {
     return [
       `remote preflight failed on ${machineId}: SSH host key verification failed.`,
-      `Verify ${machineId}'s host identity and repair SSH known_hosts/trust material outside OpenLoops;`,
-      "OpenLoops will not disable host-key checking or modify known_hosts automatically.",
+      `Verify ${machineId}'s host identity and repair SSH known_hosts/trust material outside Loops;`,
+      "Loops will not disable host-key checking or modify known_hosts automatically.",
       normalized ? `Transport detail: ${normalized}` : "",
     ]
       .filter(Boolean)

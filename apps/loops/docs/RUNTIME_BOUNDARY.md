@@ -1,6 +1,6 @@
-# OpenLoops Runtime Boundary
+# Loops Runtime Boundary
 
-OpenLoops is the **runtime, scheduler, and workflow engine** for automations.
+Loops is the **runtime, scheduler, and workflow engine** for automations.
 It executes work that external systems have already materialized or explicitly
 handed off. It is **not** the automation domain model: specs, triggers, queue
 ownership, approvals, DLQ/replay, idempotency, and audit evidence live in
@@ -14,15 +14,15 @@ deployment-mode vocabulary (local vs self-hosted vs cloud), see
 
 ## Ownership Split
 
-| Concern | Owner | OpenLoops role |
+| Concern | Owner | Loops role |
 | --- | --- | --- |
-| Automation specs and trigger materialization | `@hasna/automations` | None — do not store specs in OpenLoops |
+| Automation specs and trigger materialization | `@hasna/automations` | None — do not store specs in Loops |
 | Product automation action queues, leases, DLQ, replay, idempotency, approvals, audit | `@hasna/automations` | Execute claimed actions; complete/fail by action id + runner id |
 | Action compilation and action-target rendering | `@hasna/actions` | Accept planned upsert handoff; do not write SQLite rows directly |
-| Scheduler, daemon, loop/workflow storage | OpenLoops | Authoritative in `local` mode |
-| Workflow invocation, admission, execution, run manifests | OpenLoops | After explicit handoff or todos-task route admission |
-| Provider routing, worktrees, run artifacts | OpenLoops | Bounded by route and template policy |
-| Todos-task route drains (`auto:route`, `route_enabled`, `automation.allowed`) | OpenLoops-native | Opt-in task/event routing — **not** OpenAutomations queue replacement |
+| Scheduler, daemon, loop/workflow storage | Loops | Authoritative in `local` mode |
+| Workflow invocation, admission, execution, run manifests | Loops | After explicit handoff or todos-task route admission |
+| Provider routing, worktrees, run artifacts | Loops | Bounded by route and template policy |
+| Todos-task route drains (`auto:route`, `route_enabled`, `automation.allowed`) | Loops-native | Opt-in task/event routing — **not** OpenAutomations queue replacement |
 
 The SDK exposes the canonical boundary strings via `openAutomationsRuntimeBinding()`:
 
@@ -41,37 +41,37 @@ console.log(binding.nonGoals);
 
 - OpenAutomations owns automation specs, run materialization, queue state, DLQ,
   replay, idempotency, and approvals.
-- OpenLoops may execute claimed actions through explicit command or SDK handoff
+- Loops may execute claimed actions through explicit command or SDK handoff
   only.
-- OpenLoops may consume exported event envelopes only through explicit
+- Loops may consume exported event envelopes only through explicit
   `loops routes create` commands.
 - Workers must complete or fail actions by action id and runner id so
   OpenAutomations can enforce queue leases.
 
 **Non-goals (summary):**
 
-- OpenLoops must not become the OpenAutomations product surface.
-- OpenLoops must not store automation specs or replace the OpenAutomations queue.
-- OpenLoops must not infer automation trigger semantics from event transport
+- Loops must not become the OpenAutomations product surface.
+- Loops must not store automation specs or replace the OpenAutomations queue.
+- Loops must not infer automation trigger semantics from event transport
   alone.
 
 ## External Compiler Handoff Paths
 
 External compilers (`@hasna/automations`, `@hasna/actions`, event routers)
-materialize automation intent in their own stores. OpenLoops receives **rendered
+materialize automation intent in their own stores. Loops receives **rendered
 work** through one of the paths below. Do not bypass these boundaries by writing
-OpenLoops SQLite rows from another package.
+Loops SQLite rows from another package.
 
 ### 1. OpenAutomations claim-queue (implemented)
 
-OpenAutomations owns the action queue. An OpenLoops worker claims work, runs the
+OpenAutomations owns the action queue. A Loops worker claims work, runs the
 rendered target, and reports completion back to OpenAutomations.
 
 ```bash
 # Worker claims from the OpenAutomations queue
 automations queue claim --runner open-loops:<worker-id>
 
-# After OpenLoops executes the handed-off command/workflow:
+# After Loops executes the handed-off command/workflow:
 automations queue complete <action-id> --runner open-loops:<worker-id>
 # or on failure:
 automations queue fail <action-id> --runner open-loops:<worker-id> \
@@ -131,7 +131,7 @@ loops workflows upsert-one-shot ./workflow.json \
   --json
 ```
 
-OpenLoops returns durable refs (`workflowId`, `loopId`, `runId`, `manifestPath`)
+Loops returns durable refs (`workflowId`, `loopId`, `runId`, `manifestPath`)
 so `@hasna/actions` can inspect, cancel, or replay without querying SQLite.
 Full semantics (idempotency on `idempotencyKey` + `specHash`, redaction,
 strict-mode policy) are specified in the design doc — not duplicated here.
@@ -139,7 +139,7 @@ strict-mode policy) are specified in the design doc — not duplicated here.
 ### 3. Event envelope handoff (implemented, explicit only)
 
 For workflows that should run from a normalized event envelope — **without**
-OpenAutomations materializing automation specs inside OpenLoops — pipe an
+OpenAutomations materializing automation specs inside Loops — pipe an
 exported envelope into the generic route:
 
 ```bash
@@ -147,9 +147,9 @@ automations --json webhooks event <route> --body-json '<json>' \
   | loops --json routes create generic
 ```
 
-This is **not** automation materialization in OpenLoops. OpenAutomations still
+This is **not** automation materialization in Loops. OpenAutomations still
 owns deterministic automation specs, webhook normalization, queue state,
-approvals, DLQ, and replay. OpenLoops owns agent workflow invocation after the
+approvals, DLQ, and replay. Loops owns agent workflow invocation after the
 operator routes the envelope to `loops routes create generic`.
 
 ```ts
@@ -158,9 +158,9 @@ console.log(eventHandoff.handlerCommand); // "loops routes create generic"
 console.log(eventHandoff.boundary);
 ```
 
-## OpenLoops-Native Path: Todos-Task Routes
+## Loops-Native Path: Todos-Task Routes
 
-Todos-task routing is an **OpenLoops-native** admission path. It is separate from
+Todos-task routing is an **Loops-native** admission path. It is separate from
 the OpenAutomations product queue:
 
 ```bash
@@ -170,7 +170,7 @@ cat task-created-event.json | loops routes create todos-task \
 ```
 
 Tasks must opt in (`auto:route`, `route_enabled=true`, or
-`automation.allowed=true`). OpenLoops admits deduped one-shot workflow loops,
+`automation.allowed=true`). Loops admits deduped one-shot workflow loops,
 drains them on a schedule, and writes run manifests under
 `.hasna/loops/runs/<project-slug>/<subject-key>/<run-id>/`.
 
@@ -186,10 +186,10 @@ provider rules, and drain examples.
 
 Do **not**:
 
-- Store automation specs in OpenLoops loop/workflow rows.
+- Store automation specs in Loops loop/workflow rows.
 - Infer automation triggers from event transport alone.
 - Replace the OpenAutomations queue with loop/workflow rows.
-- Write OpenLoops SQLite directly from `@hasna/actions` or `@hasna/automations`.
+- Write Loops SQLite directly from `@hasna/actions` or `@hasna/automations`.
 - Dispatch or paste task prompts into tmux panes from route drains (use headless
   workflow templates instead).
 

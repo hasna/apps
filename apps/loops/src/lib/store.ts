@@ -1013,12 +1013,12 @@ export class Store {
         .get();
       if (!floorRow) {
         throw new Error(
-          `loops database schema version ${userVersion} is newer than this binary supports (${SCHEMA_USER_VERSION}) and carries no compatibility floor; upgrade open-loops before opening this database`,
+          `loops database schema version ${userVersion} is newer than this binary supports (${SCHEMA_USER_VERSION}) and carries no compatibility floor; upgrade Loops before opening this database`,
         );
       }
       if (SCHEMA_USER_VERSION < floorRow.min_compatible_user_version) {
         throw new Error(
-          `loops database schema version ${userVersion} requires a binary with schema support >= ${floorRow.min_compatible_user_version} (this binary supports ${SCHEMA_USER_VERSION}); upgrade open-loops before opening this database`,
+          `loops database schema version ${userVersion} requires a binary with schema support >= ${floorRow.min_compatible_user_version} (this binary supports ${SCHEMA_USER_VERSION}); upgrade Loops before opening this database`,
         );
       }
       // Soft-open: everything beyond this binary's knowledge is declared

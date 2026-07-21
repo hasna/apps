@@ -1,8 +1,8 @@
 # Transcript-Driven Loop Patterns
 
-This guide turns long-form transcripts, meeting recordings, interviews, and product feedback videos into durable OpenLoops work. It pairs `iapp-transcriber` for media ingestion with OpenLoops workflows for recurring review, implementation, and verification.
+This guide turns long-form transcripts, meeting recordings, interviews, and product feedback videos into durable Loops work. It pairs `iapp-transcriber` for media ingestion with Loops workflows for recurring review, implementation, and verification.
 
-The pattern came from reviewing a Claude Code fireside chat transcript. The useful operational takeaway was not just "use agents more"; it was that recurring agents need narrow scope, evidence, review gates, and clear ROI. In OpenLoops terms, that means using workflows and goals to move from transcript insight to scheduled loop safely.
+The pattern came from reviewing a Claude Code fireside chat transcript. The useful operational takeaway was not just "use agents more"; it was that recurring agents need narrow scope, evidence, review gates, and clear ROI. In Loops terms, that means using workflows and goals to move from transcript insight to scheduled loop safely.
 
 ## Baseline Workflow
 
@@ -20,7 +20,7 @@ The transcribe step writes `.openloops/transcripts/latest-transcript.json`. The 
 
 The workflow includes non-shell `check-transcriber` and `check-loops` command steps so `loops workflows validate --preflight` can catch those missing CLIs. Shell command bodies, provider credentials, and media access are still checked by the transcriber step at runtime.
 
-The ingestion template intentionally does not wrap the whole workflow in an OpenLoops goal. Goal wrappers execute the underlying target for each ready goal-plan node, which is useful for implementation workflows but too surprising for media ingestion. Use goals in the generated follow-up workflows after the transcript has been converted into a concrete backlog.
+The ingestion template intentionally does not wrap the whole workflow in a Loops goal. Goal wrappers execute the underlying target for each ready goal-plan node, which is useful for implementation workflows but too surprising for media ingestion. Use goals in the generated follow-up workflows after the transcript has been converted into a concrete backlog.
 
 Schedule the workflow only after a manual run produces useful backlog items:
 

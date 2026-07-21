@@ -9,7 +9,7 @@ publish packages, edit Bun release-age exclusions, migrate consumers, or change
 runtime code.
 
 Current-status correction (2026-07-20): the cross-repo observations below
-remain the 2026-07-07 inventory. OpenLoops state normalization landed through
+remain the 2026-07-07 inventory. Loops state normalization landed through
 PR #81 at commit `0acb5e79` and merge commit `6d1e9536`. The current strict
 storage kit is version `0.5.2`, established through PR #93 at commit
 `1456b852`, and its validation command is `bun run check:contracts`. PR #84 is
@@ -31,7 +31,7 @@ human package-boundary decision.
 
 Recommended first automation slice:
 
-1. Treat OpenLoops normalization as complete: version `0.5.1` state
+1. Treat Loops normalization as complete: version `0.5.1` state
    normalization landed through PR #81 at commit `0acb5e79` and merge commit
    `6d1e9536`; the current strict storage kit is version `0.5.2`, established
    through PR #93 at commit `1456b852`. Validate it with
@@ -337,7 +337,7 @@ package. Do not create a separate logging package without deciding whether
 ### 1. `@hasna/storage-kit`
 
 Status: highest-confidence candidate; package publish/name needs human
-approval. OpenLoops normalization is complete: version `0.5.1` state
+approval. Loops normalization is complete: version `0.5.1` state
 normalization landed through PR #81 at commit `0acb5e79` and merge commit
 `6d1e9536`, and the current strict storage kit is version `0.5.2`, established
 through PR #93 at commit `1456b852`. PR #84 is not current normalization
@@ -383,10 +383,10 @@ Migration order:
 
 Validation:
 
-- For the current OpenLoops checkout: `bun run check:contracts`.
+- For the current Loops checkout: `bun run check:contracts`.
 - Per consumer: `bun run typecheck`, targeted storage tests, and package
   boundary/no-cloud tests where present.
-- For OpenLoops: `bun run typecheck`, `bun test src/lib/storage/*.test.ts`,
+- For Loops: `bun run typecheck`, `bun test src/lib/storage/*.test.ts`,
   `bun run test:boundary`, and `bun run check:contracts`.
 
 Blockers:
@@ -520,7 +520,7 @@ Blockers:
 
 Ready for automation now:
 
-- OpenLoops generated storage-kit normalization is complete. Version `0.5.1`
+- Loops generated storage-kit normalization is complete. Version `0.5.1`
   state normalization landed through PR #81 at commit `0acb5e79` and merge
   commit `6d1e9536`; PR #93 commit `1456b852` established the current strict
   version `0.5.2`. PR #84 is not current normalization evidence and has its own
@@ -537,14 +537,14 @@ Not ready yet:
 
 - Logging/redaction centralization.
 - Retention cleanup centralization.
-- OpenLoops route-event migration.
+- Loops route-event migration.
 - Broad local path/runtime extraction.
 
 ## Follow-Up Todo Plan
 
 Created follow-up task:
 
-1. OpenLoops storage-kit normalization.
+1. Loops storage-kit normalization.
    Task: `2b166a36-1e7c-4882-be7f-610c4f478d39`
    Fingerprint: `open-loops:p5:shared-kit:storage-kit:open-loops-normalize`
    Dependency: this inventory task.
@@ -561,7 +561,7 @@ Recommended follow-up tasks that were not created in this worker step:
    Dependency: storage-kit normalization evidence.
    Status: human approval required; do not auto-route until approved.
 
-3. Events compatibility inventory for OpenLoops route aliases.
+3. Events compatibility inventory for Loops route aliases.
    Fingerprint: `open-loops:p5:shared-kit:events:open-loops-compat`
    Dependency: this inventory task and current `@hasna/events` behavior.
    Status: automation-ready as a report/test inventory only; implementation

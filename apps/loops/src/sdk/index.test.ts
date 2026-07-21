@@ -71,7 +71,7 @@ describe("loops sdk", () => {
     expect(binding.guarantees.join(" ")).toContain("OpenAutomations owns automation specs");
     expect(binding.guarantees.join(" ")).toContain("exported event envelopes");
     expect(binding.nonGoals.join(" ")).toContain("must not become the OpenAutomations product surface");
-    expect(binding.eventHandoff.boundary).toContain("OpenLoops owns workflow invocation");
+    expect(binding.eventHandoff.boundary).toContain("Loops owns workflow invocation");
   });
 
   test("lists loops and runs with filters and exposes doctor/health reports", async () => {

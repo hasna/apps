@@ -362,7 +362,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           {
-            echo "## OpenLoops ECR candidate"
+            echo "## Loops ECR candidate"
             echo
             echo "- source SHA: \`${SAFE_SOURCE_SHA:-invalid}\`"
             echo "- immutable tag: \`${CANDIDATE_TAG:-not-created}\`"

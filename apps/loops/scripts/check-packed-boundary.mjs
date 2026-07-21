@@ -52,7 +52,7 @@ try {
     packageRoot,
   ]);
   process.stdout.write(scan.stdout);
-  console.log("OpenLoops packed artifact boundary scan passed");
+  console.log("Loops packed artifact boundary scan passed");
 } finally {
   rmSync(tempRoot, { recursive: true, force: true });
 }

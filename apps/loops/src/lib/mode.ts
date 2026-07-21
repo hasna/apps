@@ -99,7 +99,7 @@ export function normalizeLoopDeploymentMode(value: string): LoopDeploymentMode {
   if (normalized === "local") return "local";
   if (normalized === "self_hosted") return "self_hosted";
   if (normalized === "cloud") return "cloud";
-  throw new Error(`unsupported OpenLoops deployment mode "${value}"; expected local, self_hosted, or cloud`);
+  throw new Error(`unsupported Loops deployment mode "${value}"; expected local, self_hosted, or cloud`);
 }
 
 export function resolveLoopDeploymentMode(env: Env = process.env): LoopModeResolution {
