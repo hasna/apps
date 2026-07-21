@@ -7,6 +7,7 @@ const REPOSITORY_ROOT = join(import.meta.dir, "..", "..");
 const DIST_ROOT = join(REPOSITORY_ROOT, "dist");
 const TEMP_ROOT = mkdtempSync(join(tmpdir(), "capacity-package-artifact-"));
 const EXTRACT_ROOT = join(TEMP_ROOT, "extracted");
+const PACKAGE_LIFECYCLE_TIMEOUT_MS = 30_000;
 
 interface CommandResult {
   readonly stdout: string;
@@ -137,7 +138,7 @@ beforeAll(async () => {
   expect(await archive.extract(EXTRACT_ROOT)).toBe(pack.entryCount);
   packedCliPath = join(EXTRACT_ROOT, "package", "dist", "cli.js");
   expect(existsSync(packedCliPath)).toBe(true);
-});
+}, { timeout: PACKAGE_LIFECYCLE_TIMEOUT_MS });
 
 afterAll(() => {
   rmSync(DIST_ROOT, { recursive: true, force: true });
