@@ -18,6 +18,7 @@ import {
   AmbiguousNameError,
   DuplicateWorkflowEventError,
   LegacyWorkflowRunProvenanceError,
+  ValidationError,
   WorkflowRunDefinitionConflictError,
 } from "../errors.js";
 import { assertTenantEnforcementBootstrap, assertTenantEnforcementBootstrapIfPending, isSafeServiceConnection } from "../../serve/index.js";
@@ -912,6 +913,26 @@ suite("PostgresLoopStorage (live)", () => {
     expect(await storage.getLoop(loop.id)).toBeUndefined();
   });
 
+  test("updateLoop rejects erased invalid statuses before any PostgreSQL mutation", async () => {
+    const loop = await storage.createLoop(loopInput("pg-status-boundary", {
+      labels: ["original"],
+      schedule: { type: "once", at: "2027-01-01T00:00:00Z" },
+    }));
+    const before = await storage.getLoop(loop.id);
+    for (const status of ["poisoned", null, 7, {}, ""]) {
+      await expect(storage.updateLoop(loop.id, {
+        status,
+        labels: ["mutated"],
+        nextRunAt: "2099-01-01T00:00:00.000Z",
+      } as unknown as Parameters<typeof storage.updateLoop>[1])).rejects.toBeInstanceOf(ValidationError);
+      expect(await storage.getLoop(loop.id)).toEqual(before);
+    }
+
+    for (const status of ["active", "paused", "stopped", "expired"] as const) {
+      expect((await storage.updateLoop(loop.id, { status })).status).toBe(status);
+    }
+  });
+
   test("archive and unarchive fail closed on ambiguous names while ids stay exact", async () => {
     const first = await storage.createLoop(loopInput("pg-archive-ambiguous"));
     const second = await storage.createLoop(loopInput("pg-archive-ambiguous"));
@@ -1038,6 +1059,36 @@ suite("PostgresLoopStorage (live)", () => {
     const runs = await storage.listRuns({ loopId: loop.id });
     expect(runs.length).toBe(1);
     expect((await storage.getRunBySlot(loop.id, slot))?.id).toBe(claim!.run.id);
+  });
+
+  test("finalizeRun bounds runner timestamps and uses PostgreSQL server receipt time for omitted duration", async () => {
+    const serverNow = new Date("2026-07-06T10:00:10.000Z");
+    const startedAt = new Date("2026-07-06T10:00:05.000Z");
+    for (const [name, requestedFinishedAt, expectedFinishedAt] of [
+      ["future", "2099-01-01T00:00:00.000Z", serverNow.toISOString()],
+      ["past", "2000-01-01T00:00:00.000Z", startedAt.toISOString()],
+      ["omitted", undefined, serverNow.toISOString()],
+    ] as const) {
+      const loop = await storage.createLoop(loopInput(`pg-completion-${name}`, { leaseMs: 60_000 }));
+      const claim = await storage.claimRun(loop, `2026-07-06T10:0${name.length}:00.000Z`, "runner-clock", startedAt);
+      expect(claim).toBeTruthy();
+      const finalized = await storage.finalizeRun(
+        claim!.run.id,
+        {
+          status: "succeeded",
+          ...(requestedFinishedAt === undefined ? {} : { finishedAt: requestedFinishedAt }),
+          stdout: "",
+          stderr: "",
+        } as unknown as Parameters<typeof storage.finalizeRun>[1],
+        { claimedBy: "runner-clock", claimToken: claim!.claimToken, now: serverNow },
+      );
+      expect(finalized).toMatchObject({
+        status: "succeeded",
+        finishedAt: expectedFinishedAt,
+        durationMs: 5_000,
+        updatedAt: serverNow.toISOString(),
+      });
+    }
   });
 
   test("createSkippedRun is idempotent per slot", async () => {

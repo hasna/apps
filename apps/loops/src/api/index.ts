@@ -51,6 +51,8 @@ import {
 } from "../lib/mode.js";
 import { computeNextAfter, dueSlots } from "../lib/recurrence.js";
 import { normalizeLoopLabels } from "../lib/labels.js";
+import { isLoopStatus, LOOP_STATUSES } from "../lib/loop-status.js";
+import { normalizeRunCompletion } from "../lib/run-completion.js";
 import { scrubSecretsDeep } from "../lib/redact.js";
 import type { LoopStorageContract } from "../lib/storage/contract.js";
 import { routePolicy, type RoutePolicy } from "../lib/auth/route-policy.js";
@@ -413,7 +415,7 @@ async function handleLoopsRequest(ctx: V1RequestContext, segments: string[]): Pr
   const storage = requireStorage(ctx.storage);
   if (segments.length === 0 && ctx.request.method === "GET") {
     const loops = await storage.listLoops({
-      status: optionalEnum<LoopStatus>(ctx.url.searchParams.get("status"), ["active", "paused", "stopped", "expired"]),
+      status: optionalEnum<LoopStatus>(ctx.url.searchParams.get("status"), LOOP_STATUSES),
       labels: labelsFromSearchParams(ctx.url.searchParams),
       limit: optionalLimit(ctx.url.searchParams.get("limit")),
       offset: optionalOffset(ctx.url.searchParams.get("offset")),
@@ -437,7 +439,7 @@ async function handleLoopsRequest(ctx: V1RequestContext, segments: string[]): Pr
   // with no offset, so counting a large backfilled table needs this).
   if (segments.length === 1 && segments[0] === "count" && ctx.request.method === "GET") {
     const count = await storage.countLoops(
-      optionalEnum<LoopStatus>(ctx.url.searchParams.get("status"), ["active", "paused", "stopped", "expired"]),
+      optionalEnum<LoopStatus>(ctx.url.searchParams.get("status"), LOOP_STATUSES),
       {
         includeArchived: optionalBoolean(ctx.url.searchParams.get("includeArchived")),
         archived: optionalBoolean(ctx.url.searchParams.get("archived")),
@@ -463,7 +465,10 @@ async function handleLoopsRequest(ctx: V1RequestContext, segments: string[]): Pr
     // schedule fields (and set status=NULL -> NOT NULL 500). A key set to
     // JSON null is an explicit clear (mapped to undefined -> merged to null).
     const patch: Partial<{ status: LoopStatus; labels: string[]; nextRunAt: string; retryScheduledFor: string; expiresAt: string }> = {};
-    if ("status" in body && body.status !== undefined) patch.status = body.status;
+    if ("status" in body) {
+      if (!isLoopStatus(body.status)) throw apiError("invalid_loop_status", 422);
+      patch.status = body.status;
+    }
     if ("labels" in body) patch.labels = normalizedLabels(body.labels);
     if ("nextRunAt" in body) patch.nextRunAt = body.nextRunAt === null ? undefined : body.nextRunAt;
     if ("retryScheduledFor" in body) patch.retryScheduledFor = body.retryScheduledFor === null ? undefined : body.retryScheduledFor;
@@ -1285,15 +1290,18 @@ async function finalizeRun(storage: LoopStorageContract, principalId: string, ru
   if (existing.claimedBy !== principalId) return fail("runner_identity_mismatch", 403);
   const loop = await storage.getLoop(existing.loopId);
   if (!loop) return fail("loop_not_found", 404);
-  const finishedAt = optionalIsoString(body.finishedAt) ?? new Date().toISOString();
-  const durationMs = optionalPositiveInteger(body.durationMs, 0, Number.MAX_SAFE_INTEGER)
-    ?? Math.max(0, new Date(finishedAt).getTime() - new Date(existing.startedAt ?? existing.createdAt).getTime());
+  const completion = normalizeRunCompletion({
+    startedAt: existing.startedAt ?? existing.createdAt,
+    requestedFinishedAt: optionalIsoString(body.finishedAt),
+    requestedDurationMs: optionalPositiveInteger(body.durationMs, 0, Number.MAX_SAFE_INTEGER),
+    serverNow: now,
+  });
   const finalized = await storage.finalizeRun(
     runId,
     {
       status,
-      finishedAt,
-      durationMs,
+      finishedAt: completion.finishedAt,
+      durationMs: completion.durationMs,
       stdout: optionalText(body.stdout) ?? "",
       stderr: optionalText(body.stderr) ?? "",
       error: optionalText(body.error),
@@ -1303,7 +1311,7 @@ async function finalizeRun(storage: LoopStorageContract, principalId: string, ru
     { claimedBy: existing.claimedBy, claimToken, now },
   );
   if (finalized.status === "running") return fail("stale_claim", 409);
-  await advanceLoopAfterRun(storage, loop, finalized, new Date(finalized.finishedAt ?? finishedAt), finalized.status === "succeeded");
+  await advanceLoopAfterRun(storage, loop, finalized, now, finalized.status === "succeeded");
   return ok({ run: publicRun(finalized, false, { redactError: true }) });
 }
 

@@ -114,7 +114,10 @@ describe("loops-api foundation", () => {
   test("OpenAPI documents actionable but bounded validation failures for create and import", async () => {
     const mod = await import("./index.js");
     const document = mod.openApiDocument() as {
-      paths: Record<string, { post?: { responses?: Record<string, { content?: { "application/json"?: { schema?: { $ref?: string } } } }> } }>;
+      paths: Record<string, {
+        post?: { responses?: Record<string, { content?: { "application/json"?: { schema?: { $ref?: string } } } }> };
+        patch?: { responses?: Record<string, { content?: { "application/json"?: { schema?: { $ref?: string } } } }> };
+      }>;
       components: { schemas: Record<string, unknown> };
     };
     for (const path of ["/v1/loops", "/v1/import"]) {
@@ -147,6 +150,18 @@ describe("loops-api foundation", () => {
       .toBe("#/components/schemas/AmbiguousNameResponse");
     expect(document.paths["/v1/loops/{id}/unarchive"]?.post?.responses?.["409"]?.content?.["application/json"]?.schema?.$ref)
       .toBe("#/components/schemas/AmbiguousNameResponse");
+    expect(document.paths["/v1/loops/{id}"]?.patch?.responses?.["422"]?.content?.["application/json"]?.schema?.$ref)
+      .toBe("#/components/schemas/InvalidLoopStatusResponse");
+    expect(document.components.schemas.Loop).toMatchObject({
+      properties: {
+        status: { type: "string", enum: ["active", "paused", "stopped", "expired"] },
+      },
+    });
+    expect(document.components.schemas.UpdateLoopInput).toMatchObject({
+      properties: {
+        status: { type: "string", enum: ["active", "paused", "stopped", "expired"] },
+      },
+    });
     expect(document.components.schemas.AmbiguousNameResponse).toMatchObject({
       type: "object",
       additionalProperties: false,
@@ -1281,6 +1296,140 @@ describe("loops-api foundation", () => {
       const cleared = (await clearResponse.json()) as { loop: { status: string; nextRunAt?: string } };
       expect(cleared.loop.status).toBe("paused");
       expect(cleared.loop.nextRunAt).toBeUndefined();
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("PATCH rejects every invalid loop status atomically with a stable 422", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+
+    try {
+      const loop = await storage.createLoop({
+        name: "api-status-boundary",
+        labels: ["original"],
+        schedule: { type: "once", at: "2027-01-01T00:00:00Z" },
+        target: { type: "command", command: "true" },
+      }, new Date("2026-01-01T00:00:00Z"));
+      const before = await storage.getLoop(loop.id);
+
+      for (const status of ["poisoned", null, 7, {}, ""]) {
+        const response = await fetch(apiUrl(server, `/v1/loops/${loop.id}`), {
+          method: "PATCH",
+          headers: jsonHeaders,
+          body: JSON.stringify({
+            status,
+            labels: ["mutated"],
+            nextRunAt: "2099-01-01T00:00:00.000Z",
+          }),
+        });
+        expect(response.status).toBe(422);
+        expect(await response.json()).toEqual({ ok: false, error: "invalid_loop_status" });
+        expect(await storage.getLoop(loop.id)).toEqual(before);
+      }
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("runner finalization bounds evidence and advances success/retry schedules from server time", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const serverNow = new Date("2026-01-01T00:00:10.000Z");
+    const startedAt = new Date("2026-01-01T00:00:05.000Z");
+    const server = createTestServer(
+      mod,
+      { host: "127.0.0.1", port: 0, storage, now: () => serverNow },
+      runnerPrincipal("runner-clock"),
+    );
+
+    try {
+      for (const [name, requestedFinishedAt, expectedFinishedAt] of [
+        ["future", "2099-01-01T00:00:00.000Z", serverNow.toISOString()],
+        ["past", "2000-01-01T00:00:00.000Z", startedAt.toISOString()],
+        ["omitted", undefined, serverNow.toISOString()],
+      ] as const) {
+        const loop = await storage.createLoop({
+          name: `api-completion-${name}`,
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+        }, new Date("2025-12-31T00:00:00Z"));
+        const claim = await storage.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner-clock", startedAt);
+        expect(claim).toBeTruthy();
+
+        if (name === "future") {
+          for (const invalidFinishedAt of ["not-a-date", 123]) {
+            const invalid = await fetch(apiUrl(server, `/v1/runs/${claim!.run.id}/finalize`), {
+              method: "POST",
+              headers: jsonHeaders,
+              body: JSON.stringify({
+                claimToken: claim!.claimToken,
+                status: "succeeded",
+                finishedAt: invalidFinishedAt,
+                stdout: "",
+                stderr: "",
+              }),
+            });
+            expect(invalid.status).toBe(422);
+            expect((await storage.getRun(claim!.run.id))?.status).toBe("running");
+          }
+        }
+
+        const response = await fetch(apiUrl(server, `/v1/runs/${claim!.run.id}/finalize`), {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify({
+            claimToken: claim!.claimToken,
+            status: "succeeded",
+            ...(requestedFinishedAt === undefined ? {} : { finishedAt: requestedFinishedAt }),
+            stdout: "",
+            stderr: "",
+          }),
+        });
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({
+          ok: true,
+          run: {
+            status: "succeeded",
+            finishedAt: expectedFinishedAt,
+            durationMs: 5_000,
+          },
+        });
+        expect(await storage.getLoop(loop.id)).toMatchObject({
+          status: "active",
+          nextRunAt: "2026-01-01T00:01:00.000Z",
+        });
+      }
+
+      const retryLoop = await storage.createLoop({
+        name: "api-completion-retry",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "false" },
+        maxAttempts: 2,
+        retryDelayMs: 5_000,
+      }, new Date("2025-12-31T00:00:00Z"));
+      const retryClaim = await storage.claimRun(retryLoop, "2026-01-01T00:00:00.000Z", "runner-clock", startedAt);
+      const retryResponse = await fetch(apiUrl(server, `/v1/runs/${retryClaim!.run.id}/finalize`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken: retryClaim!.claimToken,
+          status: "failed",
+          finishedAt: "2099-01-01T00:00:00.000Z",
+          stdout: "",
+          stderr: "",
+        }),
+      });
+      expect(retryResponse.status).toBe(200);
+      expect(await storage.getLoop(retryLoop.id)).toMatchObject({
+        status: "active",
+        nextRunAt: "2026-01-01T00:00:15.000Z",
+        retryScheduledFor: "2026-01-01T00:00:00.000Z",
+      });
     } finally {
       server.stop(true);
       await storage.close();

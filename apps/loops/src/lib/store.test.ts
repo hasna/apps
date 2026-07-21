@@ -9,6 +9,7 @@ import {
   LegacyWorkflowRunProvenanceError,
   LoopArchivedError,
   LoopNotFoundError,
+  ValidationError,
   WorkflowRunDefinitionConflictError,
 } from "./errors.js";
 import { Store } from "./store.js";
@@ -61,6 +62,38 @@ describe("Store", () => {
         "browser-loop",
         "maintenance-loop",
       ]);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("updateLoop rejects erased invalid statuses atomically and accepts every canonical status", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "status-boundary",
+          labels: ["original"],
+          schedule: { type: "once", at: "2027-01-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2026-01-01T00:00:00Z"),
+      );
+      const before = store.getLoop(loop.id);
+      for (const status of ["poisoned", null, 7, {}, ""]) {
+        expect(() =>
+          store.updateLoop(loop.id, {
+            status,
+            labels: ["mutated"],
+            nextRunAt: "2099-01-01T00:00:00.000Z",
+          } as unknown as Parameters<Store["updateLoop"]>[1])
+        ).toThrow(ValidationError);
+        expect(store.getLoop(loop.id)).toEqual(before);
+      }
+
+      for (const status of ["active", "paused", "stopped", "expired"] as const) {
+        expect(store.updateLoop(loop.id, { status }).status).toBe(status);
+      }
     } finally {
       store.close();
     }
@@ -340,6 +373,72 @@ describe("Store", () => {
       );
       const storedSmall = store.getRun(finishedSmall.id)!;
       expect(storedSmall.stdout).toBe("all good");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("finalizeRun bounds runner timestamps and derives omitted duration from the server clock", () => {
+    const store = new Store(":memory:");
+    try {
+      const serverNow = new Date("2026-01-01T00:00:10.000Z");
+      const startedAt = new Date("2026-01-01T00:00:05.000Z");
+      for (const [name, requestedFinishedAt, expectedFinishedAt] of [
+        ["future", "2099-01-01T00:00:00.000Z", serverNow.toISOString()],
+        ["past", "2000-01-01T00:00:00.000Z", startedAt.toISOString()],
+        ["omitted", undefined, serverNow.toISOString()],
+      ] as const) {
+        const loop = store.createLoop(
+          {
+            name: `completion-${name}`,
+            schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+            target: { type: "command", command: "true" },
+          },
+          new Date("2025-12-31T00:00:00Z"),
+        );
+        const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", startedAt);
+        expect(claim).toBeDefined();
+        const finalized = store.finalizeRun(
+          claim!.run.id,
+          {
+            status: "succeeded",
+            ...(requestedFinishedAt === undefined ? {} : { finishedAt: requestedFinishedAt }),
+            stdout: "",
+            stderr: "",
+          } as unknown as Parameters<Store["finalizeRun"]>[1],
+          { claimedBy: "runner", claimToken: claim!.claimToken, now: serverNow },
+        );
+        expect(finalized).toMatchObject({
+          status: "succeeded",
+          finishedAt: expectedFinishedAt,
+          durationMs: 5_000,
+          updatedAt: serverNow.toISOString(),
+        });
+      }
+
+      const invalidLoop = store.createLoop(
+        {
+          name: "completion-invalid",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      const invalidClaim = store.claimRun(invalidLoop, "2026-01-01T00:00:00.000Z", "runner", startedAt);
+      for (const invalidPatch of [
+        { finishedAt: "not-a-date" },
+        { finishedAt: 123 },
+        { durationMs: -1 },
+      ]) {
+        expect(() =>
+          store.finalizeRun(
+            invalidClaim!.run.id,
+            { status: "succeeded", ...invalidPatch, stdout: "", stderr: "" } as unknown as Parameters<Store["finalizeRun"]>[1],
+            { claimedBy: "runner", claimToken: invalidClaim!.claimToken, now: serverNow },
+          )
+        ).toThrow(ValidationError);
+      }
+      expect(store.getRun(invalidClaim!.run.id)?.status).toBe("running");
     } finally {
       store.close();
     }

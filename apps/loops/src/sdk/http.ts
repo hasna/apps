@@ -7,11 +7,13 @@ export interface PublicValidationDetails { "code": string; "reason": "not_array"
 
 export interface ValidationFailureResponse { "ok": boolean; "error": string; "details"?: PublicValidationDetails }
 
+export interface InvalidLoopStatusResponse { "ok": boolean; "error": string }
+
 export interface AmbiguousNameResponse { "ok": boolean; "error": string }
 
 export interface Foundation { "status": string; "version": string; "mode": string; "service"?: string; "detail"?: string }
 
-export interface Loop { "id": string; "name": string; "description"?: string | null; "labels": Array<string>; "status": string; "schedule"?: Record<string, unknown>; "target"?: Record<string, unknown>; "nextRunAt"?: string | null; "createdAt"?: string; "updatedAt"?: string }
+export interface Loop { "id": string; "name": string; "description"?: string | null; "labels": Array<string>; "status": "active" | "paused" | "stopped" | "expired"; "schedule"?: Record<string, unknown>; "target"?: Record<string, unknown>; "nextRunAt"?: string | null; "createdAt"?: string; "updatedAt"?: string }
 
 export interface CreateLoopInput { "name": string; "description"?: string; "labels"?: Array<string>; "schedule": Record<string, unknown>; "target": Record<string, unknown> }
 
@@ -455,7 +457,7 @@ export class LoopsClient {
     }
 
     /** runs.finalize */
-    async runsFinalize(id: string, body: Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
+    async runsFinalize(id: string, body: { "claimToken": string; "status": "succeeded" | "failed" | "timed_out"; "finishedAt"?: string; "durationMs"?: number; "stdout"?: string; "stderr"?: string; "error"?: string; "exitCode"?: number; "pid"?: number }, init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("POST", `/v1/runs/${encodeURIComponent(String(id))}/finalize`, {
         body,
         query: undefined,
