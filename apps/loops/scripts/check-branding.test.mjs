@@ -15,6 +15,12 @@ describe("Loops branding guard", () => {
       "openloops is a scheduler",
       "Open Loops is a scheduler",
       "open-loops product",
+      "Powered by openloops.",
+      "Use openloops for scheduling.",
+      "The open-loops experience is ready.",
+      "Built with openloops.",
+      "openloops-powered automation.",
+      "Modeled on open-loops' storage ledger.",
       "[open-loops] WARN delayed run",
       "\\nOpenLoops worktree policy:",
     ];

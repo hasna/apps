@@ -811,7 +811,7 @@ suite("PostgresLoopStorage (live)", () => {
     expect(serviceLoginBootstrap.failureStage).toBe("preflight");
     expect(serviceLoginBootstrap.errorMessage).toContain("must run before runtime/authenticator service login memberships");
     expect(loginRoleBootstrap.failureStage).toBe("preflight");
-    expect(loginRoleBootstrap.errorMessage).toContain("reserved Loops database role open_loops_runtime is LOGIN");
+    expect(loginRoleBootstrap.errorMessage).toContain("reserved OpenLoops database role open_loops_runtime is LOGIN");
     expect(thirdPartyMembershipBootstrap.failureStage).toBe("preflight");
     expect(thirdPartyMembershipBootstrap.errorMessage).toContain("unsafe privileged role membership open_loops_owner");
     expect(crossDatabaseBootstrap.failureStage).toBe("preflight");

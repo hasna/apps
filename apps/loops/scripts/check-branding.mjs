@@ -6,8 +6,13 @@ const scannerFiles = new Set([
   "scripts/check-branding.mjs",
   "scripts/check-branding.test.mjs",
 ]);
-const preservedFiles = new Set([
-  "migrations/0010_tenant_enforce.sql",
+const tenantEnforcementLegacyLines = new Set([
+  `      RAISE EXCEPTION 'reserved ${legacyBrand} database role % is LOGIN; detach or replace that credential with provider authority before tenant enforcement',`,
+  `    RAISE EXCEPTION 'reserved ${legacyBrand} role % has a dependency in database %; use a dedicated cluster or remove the cross-database dependency before tenant enforcement',`,
+  `    RAISE EXCEPTION 'reserved ${legacyBrand} role % owns database %; role names must be exclusive to the dedicated ${legacyBrand} cluster',`,
+  `    RAISE EXCEPTION 'tenant enforcement bootstrap login must be distinct from ${legacyBrand} database roles';`,
+  `    RAISE EXCEPTION 'tenant enforcement did not normalize ${legacyBrand} database roles';`,
+  `    RAISE EXCEPTION 'tenant enforcement left unexpected function privileges outside the ${legacyBrand} auth surface';`,
 ]);
 const preservedLines = new Map([
   ["CHANGELOG.md", new Set([
@@ -16,22 +21,28 @@ const preservedLines = new Map([
     `- 0.3.3 (2026-06-20) fix: harden ${legacyBrand} daemon ownership and redaction`,
     `- feat: build ${legacyBrand} CLI daemon`,
   ])],
-  ["src/lib/storage/postgres-schema.ts", new Set([
-    `      RAISE EXCEPTION 'reserved ${legacyBrand} database role % is LOGIN; detach or replace that credential with provider authority before tenant enforcement',`,
-    `    RAISE EXCEPTION 'reserved ${legacyBrand} role % has a dependency in database %; use a dedicated cluster or remove the cross-database dependency before tenant enforcement',`,
-    `    RAISE EXCEPTION 'reserved ${legacyBrand} role % owns database %; role names must be exclusive to the dedicated ${legacyBrand} cluster',`,
-    `    RAISE EXCEPTION 'tenant enforcement bootstrap login must be distinct from ${legacyBrand} database roles';`,
-    `    RAISE EXCEPTION 'tenant enforcement did not normalize ${legacyBrand} database roles';`,
-    `    RAISE EXCEPTION 'tenant enforcement left unexpected function privileges outside the ${legacyBrand} auth surface';`,
-  ])],
+  ["migrations/0010_tenant_enforce.sql", tenantEnforcementLegacyLines],
+  ["src/lib/storage/postgres-schema.ts", tenantEnforcementLegacyLines],
   ["src/serve/index.test.ts", new Set([
     `    expect(statements[roleCreate]).toContain("reserved ${legacyBrand} database role % is LOGIN");`,
   ])],
+  ["src/serve/index.ts", new Set([
+    `      error.message.startsWith("reserved ${legacyBrand} database role") ||`,
+    `      error.message.startsWith("reserved ${legacyBrand} role") ||`,
+    `  if (message.startsWith("reserved ${legacyBrand} database role")) {`,
+    `  if (message.startsWith("reserved ${legacyBrand} role")) {`,
+  ])],
+  ["src/lib/storage/postgres-loop-storage.test.ts", new Set([
+    `    expect(loginRoleBootstrap.errorMessage).toContain("reserved ${legacyBrand} database role open_loops_runtime is LOGIN");`,
+  ])],
 ]);
 
-const productNoun = "(?:app|product|brand|runtime|scheduler|daemon|cli|api|mcp|service|control[- ]plane|workflow(?:s)?|loop(?:s)?|package|tool|engine)";
+const lowerBrand = "(?:openloops|open-loops)";
+const productNoun = "(?:app|product|brand|runtime|scheduler|daemon|cli|api|mcp|service|control[- ]plane|workflow(?:s)?|loop(?:s)?|package|tool|engine|experience)";
 const productVerb = "(?:is|are|can|has|supports|ships|owns|must|may|will|does|records|executes|requires)";
-const lowerDisplayContext = new RegExp(`\\b(?:openloops|open-loops)\\s+(?:${productNoun}|${productVerb})\\b`, "i");
+const lowerDisplayContext = new RegExp(`\\b${lowerBrand}\\s+(?:${productNoun}|${productVerb})\\b`, "i");
+const lowerDisplayLead = new RegExp(`\\b(?:powered\\s+by|built\\s+with|use|using|choose|try)\\s+${lowerBrand}\\b`, "i");
+const lowerDisplaySuffix = new RegExp(`\\b${lowerBrand}(?:['’]s?|-(?:powered|based|managed|native))`, "i");
 
 export function legacyBrandReason(line) {
   if (/OpenLoops/.test(line)) return "legacy-camel-brand";
@@ -43,6 +54,8 @@ export function legacyBrandReason(line) {
   if (/\[(?:openloops|open-loops)\]/i.test(line)) return "legacy-log-brand";
   if (/\bBUG:\s+(?:openloops|open-loops)\b/i.test(line)) return "legacy-task-brand";
   if (/\b(?:upgrade|install|launch|start|stop|restart)\s+(?:openloops|open-loops)\b/i.test(line)) return "legacy-action-brand";
+  if (lowerDisplayLead.test(line)) return "legacy-leading-context-brand";
+  if (lowerDisplaySuffix.test(line)) return "legacy-possessive-or-suffix-brand";
   if (lowerDisplayContext.test(line)) return "legacy-context-brand";
   return undefined;
 }
@@ -54,7 +67,7 @@ export function scanTrackedFiles(cwd = process.cwd()) {
   const violations = [];
 
   for (const file of trackedFiles) {
-    if (scannerFiles.has(file) || preservedFiles.has(file)) continue;
+    if (scannerFiles.has(file)) continue;
 
     const contents = readFileSync(`${cwd}/${file}`);
     const lines = contents.toString("utf8").split("\n");
