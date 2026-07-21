@@ -43,7 +43,11 @@ import {
   publicWorkflowStepRun,
   publicWorkflowWorkItem,
 } from "../lib/format.js";
-import { buildDeploymentStatus, deploymentStatusLine } from "../lib/mode.js";
+import {
+  buildDeploymentStatus,
+  deploymentStatusLine,
+  resolveLoopDeploymentMode,
+} from "../lib/mode.js";
 import { computeNextAfter, dueSlots } from "../lib/recurrence.js";
 import { normalizeLoopLabels } from "../lib/labels.js";
 import { scrubSecretsDeep } from "../lib/redact.js";
@@ -136,14 +140,34 @@ export interface LoopsApiServerOptions {
   }>;
 }
 
-/** Deployment mode for the foundation probes ({ status, version, mode }). */
+/** Deployment mode for the general foundation envelopes. */
 function foundationMode(): string {
   return buildDeploymentStatus({}).activeDeploymentMode;
 }
 
 /** Shared { status, version, mode } envelope for /health, /ready, /version. */
-function foundationEnvelope(status: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
-  return { status, version: packageVersion(), mode: foundationMode(), service: "loops", ...extra };
+function foundationEnvelope(
+  status: string,
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    status,
+    version: packageVersion(),
+    mode: foundationMode(),
+    service: "loops",
+    ...extra,
+  };
+}
+
+export function contractHealthResponse(
+  env: Record<string, string | undefined> = process.env,
+): { status: "ok"; version: string; mode: "local" | "cloud" } {
+  const runtimeMode = resolveLoopDeploymentMode(env).deploymentMode;
+  return {
+    status: "ok",
+    version: packageVersion(),
+    mode: runtimeMode === "local" ? "local" : "cloud",
+  };
 }
 
 const PUBLIC_READINESS_CODES = new Set([
@@ -182,7 +206,7 @@ export function createLoopsApiServer(opts: LoopsApiServerOptions = {}) {
       const url = new URL(request.url);
       // ── Open foundation probes ({ status, version, mode }) ───────────────
       if (request.method === "GET" && (url.pathname === "/health" || url.pathname === "/healthz")) {
-        return Response.json(foundationEnvelope("ok"));
+        return Response.json(contractHealthResponse());
       }
       if (request.method === "GET" && (url.pathname === "/version" || url.pathname === "/v1/version")) {
         return Response.json(foundationEnvelope("ok"));

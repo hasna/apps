@@ -7,6 +7,7 @@ import { createSqliteLoopStorage } from "../lib/storage/sqlite.js";
 import type { LoopStorageContract } from "../lib/storage/contract.js";
 import type { TenantAuthContext } from "../lib/auth/tenant-auth.js";
 import { publicValidationDetails, ValidationError, type PublicValidationDetails } from "../lib/errors.js";
+import { packageVersion } from "../lib/version.js";
 import type { LoopsApiServerOptions } from "./index.js";
 import type { Loop, LoopRun, WorkflowSpec } from "../types.js";
 
@@ -66,6 +67,48 @@ describe("loops-api foundation", () => {
     expect(status.status.deploymentMode).toBe("self_hosted");
     expect(JSON.stringify(status)).not.toContain("dataDir");
     expect(JSON.stringify(status)).not.toContain("dbPath");
+  });
+
+  test("health uses the strict contracts shape and maps self_hosted runtime to cloud storage mode", async () => {
+    const mod = await import("./index.js");
+    const previousMode = process.env.HASNA_LOOPS_STORAGE_MODE;
+    const mutableBun = Bun as unknown as { serve: typeof Bun.serve };
+    const originalServe = mutableBun.serve;
+    let fetchHandler: ((request: Request) => Response | Promise<Response>) | undefined;
+    process.env.HASNA_LOOPS_STORAGE_MODE = "self_hosted";
+    mutableBun.serve = ((options: {
+      fetch(request: Request): Response | Promise<Response>;
+    }) => {
+      fetchHandler = options.fetch;
+      return { port: 0, stop: () => {} } as unknown as ReturnType<typeof Bun.serve>;
+    }) as typeof Bun.serve;
+    try {
+      mod.createLoopsApiServer({
+        host: "127.0.0.1",
+        port: 0,
+        authenticator: {
+          authenticate: async () => {
+            throw new Error("health must not authenticate");
+          },
+        },
+        withTenantStorage: async () => {
+          throw new Error("health must not access tenant storage");
+        },
+      });
+      if (!fetchHandler) throw new Error("test server did not expose its fetch handler");
+      const response = await fetchHandler(
+        new Request("http://loops.test/health"),
+      );
+      expect(await response.json()).toEqual({
+        status: "ok",
+        version: packageVersion(),
+        mode: "cloud",
+      });
+    } finally {
+      mutableBun.serve = originalServe;
+      if (previousMode === undefined) delete process.env.HASNA_LOOPS_STORAGE_MODE;
+      else process.env.HASNA_LOOPS_STORAGE_MODE = previousMode;
+    }
   });
 
   test("OpenAPI documents actionable but bounded validation failures for create and import", async () => {

@@ -17,7 +17,7 @@ surface — specs, queues, approvals, and audit for product automations remain i
 | Mode | Source of truth | Local storage role | Executor |
 | --- | --- | --- | --- |
 | `local` | SQLite in `LOOPS_DATA_DIR` | Authoritative | `loops-daemon` |
-| `self_hosted` | Hasna-owned AWS/RDS control plane served by `loops-serve`/`loops-api` | Cache and offline spool | `loops-runner` foundation |
+| `self_hosted` | Hasna-owned AWS/RDS control plane served by `loops-serve` using the embeddable `loops-api` contract | Cache and offline spool | `loops-runner` foundation |
 | `cloud` | A configured hosted control plane contract | Cache and offline spool | `loops-runner` foundation |
 
 `local` remains the default. It must keep working without network access,
