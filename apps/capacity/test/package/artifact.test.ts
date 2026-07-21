@@ -8,6 +8,7 @@ const DIST_ROOT = join(REPOSITORY_ROOT, "dist");
 const TEMP_ROOT = mkdtempSync(join(tmpdir(), "capacity-package-artifact-"));
 const NPM_PACK_ROOT = join(TEMP_ROOT, "npm-pack");
 const NPM_EXTRACT_ROOT = join(TEMP_ROOT, "npm-extracted");
+const BUN_IGNORED_PACK_ROOT = join(TEMP_ROOT, "bun-ignored-pack");
 const BUN_PACK_ROOT = join(TEMP_ROOT, "bun-pack");
 const BUN_EXTRACT_ROOT = join(TEMP_ROOT, "bun-extracted");
 const COMMAND_TIMEOUT_MS = 25_000;
@@ -48,6 +49,9 @@ const BunArchive = (
 let pack: PackResult;
 let ignoredScriptsPack: PackResult;
 let packedCliPath: string;
+let npmArchiveFiles: Map<string, Blob>;
+let bunIgnoredArchivePaths: readonly string[];
+let bunArchiveFiles: Map<string, Blob>;
 let bunArchivePaths: readonly string[];
 let bunPackedCliPath: string;
 let bunPackedCliMode: string;
@@ -109,7 +113,13 @@ function parsePackResults(stdout: string): readonly PackResult[] {
 
 beforeAll(async () => {
   chmodSync(TEMP_ROOT, 0o700);
-  for (const directory of [NPM_PACK_ROOT, NPM_EXTRACT_ROOT, BUN_PACK_ROOT, BUN_EXTRACT_ROOT]) {
+  for (const directory of [
+    NPM_PACK_ROOT,
+    NPM_EXTRACT_ROOT,
+    BUN_IGNORED_PACK_ROOT,
+    BUN_PACK_ROOT,
+    BUN_EXTRACT_ROOT,
+  ]) {
     mkdirSync(directory, { mode: 0o700 });
   }
 
@@ -135,6 +145,25 @@ beforeAll(async () => {
   ignoredScriptsPack = ignoredScriptsMetadata;
   expect(existsSync(DIST_ROOT)).toBe(false);
 
+  const bunIgnored = await run([
+    process.execPath,
+    "pm",
+    "pack",
+    "--ignore-scripts",
+    "--destination",
+    BUN_IGNORED_PACK_ROOT,
+  ]);
+  requireSuccess(bunIgnored, "ignore-scripts Bun pack");
+  const bunIgnoredArchive = new BunArchive(
+    Bun.gunzipSync(
+      await Bun.file(join(BUN_IGNORED_PACK_ROOT, "hasna-capacity-0.1.1.tgz")).bytes(),
+    ),
+  );
+  bunIgnoredArchivePaths = [...(await bunIgnoredArchive.files()).keys()]
+    .map((path) => path.replace(/^package\//, ""))
+    .sort();
+  expect(existsSync(DIST_ROOT)).toBe(false);
+
   const packed = await run([
     npm,
     "pack",
@@ -151,10 +180,10 @@ beforeAll(async () => {
 
   const archiveBytes = Bun.gunzipSync(await Bun.file(join(NPM_PACK_ROOT, pack.filename)).bytes());
   const archive = new BunArchive(archiveBytes);
-  const archiveFiles = await archive.files();
-  expect(archiveFiles.size).toBe(pack.entryCount);
+  npmArchiveFiles = await archive.files();
+  expect(npmArchiveFiles.size).toBe(pack.entryCount);
 
-  const manifestFile = archiveFiles.get("package/package.json");
+  const manifestFile = npmArchiveFiles.get("package/package.json");
   if (manifestFile === undefined) throw new Error("packed package.json is missing");
   const manifest = (await manifestFile.json()) as Record<string, unknown>;
   expect(manifest).toMatchObject({
@@ -197,7 +226,7 @@ beforeAll(async () => {
   if (packedCliMode === undefined) throw new Error("Bun-packed CLI tar mode is missing");
   bunPackedCliMode = packedCliMode;
   const bunArchive = new BunArchive(bunArchiveBytes);
-  const bunArchiveFiles = await bunArchive.files();
+  bunArchiveFiles = await bunArchive.files();
   bunArchivePaths = [...bunArchiveFiles.keys()]
     .map((path) => path.replace(/^package\//, ""))
     .sort();
@@ -219,6 +248,7 @@ afterAll(() => {
 describe("packed capacity CLI", () => {
   test("requires the package lifecycle to produce build artifacts", () => {
     expect(ignoredScriptsPack.files.map(({ path }) => path)).not.toContain("dist/cli.js");
+    expect(bunIgnoredArchivePaths).not.toContain("dist/cli.js");
   });
 
   test("contains the exact package identity and file contract", () => {
@@ -238,11 +268,18 @@ describe("packed capacity CLI", () => {
     expect(pack.files.find(({ path }) => path === "dist/cli.js")).toMatchObject({ mode: 0o755 });
   });
 
-  test("keeps npm and Bun package artifacts equivalent", async () => {
+  test("keeps npm and Bun package payload contracts aligned", async () => {
     const npmArchivePaths = pack.files.map(({ path }) => path).sort();
     expect(bunArchivePaths).toEqual(npmArchivePaths);
     expect(bunPackedCliMode).toBe("-rwxr-xr-x");
-    expect(await Bun.file(bunPackedCliPath).bytes()).toEqual(await Bun.file(packedCliPath).bytes());
+    for (const path of npmArchivePaths) {
+      const npmFile = npmArchiveFiles.get(`package/${path}`);
+      const bunFile = bunArchiveFiles.get(`package/${path}`);
+      if (npmFile === undefined || bunFile === undefined) {
+        throw new Error(`Packed payload is missing from one archive: ${path}`);
+      }
+      expect(await bunFile.bytes()).toEqual(await npmFile.bytes());
+    }
   });
 
   test("reports the version from the extracted package binary", async () => {
