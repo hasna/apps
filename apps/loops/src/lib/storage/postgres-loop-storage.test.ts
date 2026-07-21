@@ -1302,6 +1302,272 @@ suite("PostgresLoopStorage (live)", () => {
     expect(result.deferred.length).toBe(0);
   });
 
+  test("paginates recovered lease rows by a stable tenant-scoped keyset snapshot", async () => {
+    const loop = await storage.createLoop(loopInput("recovered-keyset-pages"));
+    for (let index = 0; index < 3; index += 1) {
+      await storage.upsertMigrationRun({
+        id: `recovered-keyset-run-${index}`,
+        loopId: loop.id,
+        loopName: loop.name,
+        scheduledFor: new Date(Date.parse("2026-07-06T12:00:00.000Z") + index).toISOString(),
+        attempt: 1,
+        status: "abandoned",
+        finishedAt: "2026-07-06T12:01:00.000Z",
+        error: "run lease expired before completion",
+        createdAt: "2026-07-06T12:00:00.000Z",
+        updatedAt: "2026-07-06T12:01:00.000Z",
+      });
+    }
+    const first = await storage.listRecoveredLeaseRunsPage({ limit: 2 });
+    expect(first.runs.map((run) => run.id)).toEqual([
+      "recovered-keyset-run-0",
+      "recovered-keyset-run-1",
+    ]);
+    const second = await storage.listRecoveredLeaseRunsPage({
+      limit: 2,
+      after: first.nextCursor,
+      snapshotEnd: first.snapshotEnd,
+    });
+    expect(second.runs.map((run) => run.id)).toEqual(["recovered-keyset-run-2"]);
+  });
+
+  test("archives a generated one-shot workflow exactly once after workflow finalization", async () => {
+    const invocation = await storage.createWorkflowInvocation({
+      templateId: "task-lifecycle",
+      sourceRef: { kind: "event", id: "pg-finalize-route", dedupeKey: "todos-task:pg-finalize-route" },
+      subjectRef: { kind: "task", id: "pg-finalize-route", path: "/tmp/loops" },
+      intent: "route",
+      scope: { projectPath: "/tmp/loops" },
+    });
+    const item = await storage.upsertWorkflowWorkItem({
+      routeKey: "todos-task",
+      idempotencyKey: "todos-task:pg-finalize-route",
+      invocationId: invocation.id,
+      sourceType: "task.created",
+      sourceRef: "pg-finalize-route",
+      subjectRef: "pg-finalize-route",
+    });
+    const workflow = await storage.createWorkflow({
+      name: "pg-finalize-generated-route",
+      steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+    });
+    const loop = await storage.createLoop(loopInput("pg-finalize-generated-route-loop", {
+      schedule: { type: "once", at: "2026-07-06T12:00:00.000Z" },
+      target: {
+        type: "workflow",
+        workflowId: workflow.id,
+        input: { workflowInvocationId: invocation.id, workflowWorkItemId: item.id },
+      },
+    }));
+    await storage.admitWorkflowWorkItem(item.id, { workflowId: workflow.id, loopId: loop.id });
+    const run = await storage.createWorkflowRun({ workflow, loop, scheduledFor: "2026-07-06T12:00:00.000Z" });
+
+    await Promise.all([
+      storage.finalizeWorkflowRun(run.id, "succeeded"),
+      storage.finalizeWorkflowRun(run.id, "succeeded"),
+    ]);
+
+    expect((await storage.getWorkflow(workflow.id))?.status).toBe("archived");
+    expect((await storage.getWorkflowWorkItem(item.id))?.status).toBe("succeeded");
+    expect((await storage.listWorkflowEvents(run.id))
+      .filter((event) => event.eventType === "workflow_archived")).toHaveLength(1);
+  });
+
+  test("parent finalization preserves retryable routes and archives exhausted generated routes without lock inversion", async () => {
+    const makeRoute = async (suffix: string, maxAttempts: number, templateId = "task-lifecycle") => {
+      const invocation = await storage.createWorkflowInvocation({
+        templateId,
+        sourceRef: { kind: "event", id: `pg-parent-${suffix}`, dedupeKey: `todos-task:pg-parent-${suffix}` },
+        subjectRef: { kind: "task", id: `pg-parent-${suffix}`, path: "/tmp/loops" },
+        intent: "route",
+        scope: { projectPath: "/tmp/loops" },
+      });
+      const item = await storage.upsertWorkflowWorkItem({
+        routeKey: "todos-task",
+        idempotencyKey: `todos-task:pg-parent-${suffix}`,
+        invocationId: invocation.id,
+        sourceType: "task.created",
+        sourceRef: `pg-parent-${suffix}`,
+        subjectRef: `pg-parent-${suffix}`,
+      });
+      const workflow = await storage.createWorkflow({
+        name: `pg-parent-generated-${suffix}`,
+        steps: [{ id: "worker", target: { type: "command", command: "false" } }],
+      });
+      const loop = await storage.createLoop(loopInput(`pg-parent-generated-loop-${suffix}`, {
+        schedule: { type: "once", at: "2026-07-06T12:00:00.000Z" },
+        target: {
+          type: "workflow",
+          workflowId: workflow.id,
+          input: { workflowInvocationId: invocation.id, workflowWorkItemId: item.id },
+        },
+        maxAttempts,
+        leaseMs: 60_000,
+      }), new Date("2026-07-06T11:59:00.000Z"));
+      await storage.admitWorkflowWorkItem(item.id, { workflowId: workflow.id, loopId: loop.id });
+      const claim = await storage.claimRun(
+        loop,
+        "2026-07-06T12:00:00.000Z",
+        `runner-parent-${suffix}`,
+        new Date("2026-07-06T12:00:00.000Z"),
+      );
+      const workflowRun = await storage.createWorkflowRun({ workflow, loop, loopRun: claim!.run });
+      return { item, workflow, claim: claim!, workflowRun };
+    };
+    const finalizeParent = (fixture: Awaited<ReturnType<typeof makeRoute>>) => storage.finalizeRun(
+      fixture.claim.run.id,
+      {
+        status: "failed",
+        finishedAt: "2026-07-06T12:00:01.000Z",
+        durationMs: 1_000,
+        stdout: "",
+        stderr: "",
+        error: "parent failed",
+      },
+      {
+        claimedBy: fixture.claim.run.claimedBy,
+        claimToken: fixture.claim.claimToken,
+        now: new Date("2026-07-06T12:00:01.000Z"),
+      },
+    );
+    const markWorkflowTerminal = (runId: string) => runtimeExecutor.withRequestContext(
+      { tenantId: "tenant-test", principalId: "principal-test", requestId: `parent-terminal-${runId}` },
+      (client) => client.execute(
+        `UPDATE workflow_runs SET status='failed', finished_at=$2, updated_at=$2
+         WHERE id=$1`,
+        [runId, "2026-07-06T12:00:00.500Z"],
+      ),
+    );
+
+    const retryable = await makeRoute("retryable", 2);
+    await storage.finalizeWorkflowRun(retryable.workflowRun.id, "failed", {
+      finishedAt: "2026-07-06T12:00:00.500Z",
+      error: "retryable workflow failed",
+    });
+    expect((await storage.getWorkflowWorkItem(retryable.item.id))?.status).toBe("admitted");
+    expect((await storage.getWorkflow(retryable.workflow.id))?.status).toBe("active");
+    await finalizeParent(retryable);
+    expect((await storage.getWorkflowWorkItem(retryable.item.id))?.status).toBe("admitted");
+    expect((await storage.getWorkflow(retryable.workflow.id))?.status).toBe("active");
+    expect((await storage.listWorkflowEvents(retryable.workflowRun.id))
+      .filter((event) => event.eventType === "workflow_archived")).toHaveLength(0);
+
+    const exhausted = await makeRoute("exhausted", 1);
+    await Promise.all([
+      finalizeParent(exhausted),
+      storage.finalizeWorkflowRun(exhausted.workflowRun.id, "failed", {
+        finishedAt: "2026-07-06T12:00:00.500Z",
+        error: "workflow failed",
+      }),
+    ]);
+    expect((await storage.getWorkflowWorkItem(exhausted.item.id))?.status).toBe("failed");
+    expect((await storage.getWorkflow(exhausted.workflow.id))?.status).toBe("archived");
+    expect((await storage.listWorkflowEvents(exhausted.workflowRun.id))
+      .filter((event) => event.eventType === "workflow_archived")).toHaveLength(1);
+
+    const nearMiss = await makeRoute("near-miss", 1, "manual-workflow");
+    await markWorkflowTerminal(nearMiss.workflowRun.id);
+    await finalizeParent(nearMiss);
+    expect((await storage.getWorkflow(nearMiss.workflow.id))?.status).toBe("active");
+    expect((await storage.listWorkflowEvents(nearMiss.workflowRun.id))
+      .filter((event) => event.eventType === "workflow_archived")).toHaveLength(0);
+
+    const preflight = await makeRoute("preflight", 1);
+    await runtimeExecutor.withRequestContext(
+      { tenantId: "tenant-test", principalId: "principal-test", requestId: "parent-preflight-no-run" },
+      (client) => client.execute(
+        "DELETE FROM workflow_runs WHERE tenant_id = open_loops_current_tenant_id() AND id=$1",
+        [preflight.workflowRun.id],
+      ),
+    );
+    const preflightFinalizations = await Promise.allSettled([
+      finalizeParent(preflight),
+      finalizeParent(preflight),
+    ]);
+    expect(preflightFinalizations.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(preflightFinalizations.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect((await storage.getWorkflowWorkItem(preflight.item.id))?.status).toBe("failed");
+    expect((await storage.getWorkflow(preflight.workflow.id))?.status).toBe("archived");
+    const preflightRuns = await storage.listWorkflowRuns({
+      workflowId: preflight.workflow.id,
+      loopRunId: preflight.claim.run.id,
+    });
+    expect(preflightRuns).toHaveLength(1);
+    expect(preflightRuns[0]?.id).toBe(`preflight-archive:${preflight.claim.run.id}`);
+    expect(preflightRuns[0]?.status).toBe("failed");
+    expect(preflightRuns[0]?.startedAt).toBeUndefined();
+    expect(preflightRuns[0]?.durationMs).toBeUndefined();
+    expect(preflightRuns[0]?.error).toBe(
+      "workflow preflight failed before workflow execution; synthetic archival event owner",
+    );
+    expect(await storage.listWorkflowStepRuns(preflightRuns[0]!.id)).toHaveLength(0);
+    expect((await storage.listWorkflowEvents(preflightRuns[0]!.id))
+      .filter((event) => event.eventType === "workflow_archived")).toHaveLength(1);
+  });
+
+  test("keeps retryable generated recovery active and archives exhausted recovery once", async () => {
+    const makeRoute = async (suffix: string, maxAttempts: number) => {
+      const invocation = await storage.createWorkflowInvocation({
+        templateId: "todos-task-worker-verifier",
+        sourceRef: { kind: "event", id: `pg-recover-${suffix}`, dedupeKey: `todos-task:pg-recover-${suffix}` },
+        subjectRef: { kind: "task", id: `pg-recover-${suffix}`, path: "/tmp/loops" },
+        intent: "route",
+        scope: { projectPath: "/tmp/loops" },
+      });
+      const item = await storage.upsertWorkflowWorkItem({
+        routeKey: "todos-task",
+        idempotencyKey: `todos-task:pg-recover-${suffix}`,
+        invocationId: invocation.id,
+        sourceType: "task.created",
+        sourceRef: `pg-recover-${suffix}`,
+        subjectRef: `pg-recover-${suffix}`,
+      });
+      const workflow = await storage.createWorkflow({
+        name: `pg-recover-generated-${suffix}`,
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const loop = await storage.createLoop(loopInput(`pg-recover-generated-loop-${suffix}`, {
+        schedule: { type: "once", at: "2026-07-06T12:00:00.000Z" },
+        target: {
+          type: "workflow",
+          workflowId: workflow.id,
+          input: { workflowInvocationId: invocation.id, workflowWorkItemId: item.id },
+        },
+        maxAttempts,
+        leaseMs: 1,
+      }), new Date("2026-07-06T11:59:00.000Z"));
+      await storage.admitWorkflowWorkItem(item.id, { workflowId: workflow.id, loopId: loop.id });
+      const claim = await storage.claimRun(
+        loop,
+        "2026-07-06T12:00:00.000Z",
+        `runner-${suffix}`,
+        new Date("2026-07-06T12:00:00.000Z"),
+      );
+      const workflowRun = await storage.createWorkflowRun({ workflow, loop, loopRun: claim!.run });
+      return { item, workflow, workflowRun };
+    };
+    const retryable = await makeRoute("retryable", 2);
+    const exhausted = await makeRoute("exhausted", 1);
+
+    const recoveries = await Promise.all([
+      storage.recoverExpiredRunLeasesDetailed(new Date("2026-07-06T12:00:01.000Z")),
+      storage.recoverExpiredRunLeasesDetailed(new Date("2026-07-06T12:00:01.000Z")),
+    ]);
+    expect(recoveries.flatMap((result) => result.abandoned)).toHaveLength(2);
+    expect((await storage.getWorkflowWorkItem(retryable.item.id))?.status).toBe("admitted");
+    expect((await storage.getWorkflow(retryable.workflow.id))?.status).toBe("active");
+    expect((await storage.listWorkflowEvents(retryable.workflowRun.id))
+      .filter((event) => event.eventType === "workflow_archived")).toHaveLength(0);
+    expect((await storage.getWorkflowWorkItem(exhausted.item.id))?.status).toBe("failed");
+    expect((await storage.getWorkflow(exhausted.workflow.id))?.status).toBe("archived");
+    expect((await storage.listWorkflowEvents(exhausted.workflowRun.id))
+      .filter((event) => event.eventType === "workflow_archived")).toHaveLength(1);
+
+    expect((await storage.recoverExpiredRunLeasesDetailed(new Date("2026-07-06T12:00:02.000Z"))).abandoned).toHaveLength(0);
+    expect((await storage.listWorkflowEvents(exhausted.workflowRun.id))
+      .filter((event) => event.eventType === "workflow_archived")).toHaveLength(1);
+  });
+
   test("maintenance recovery with reverse lease order advances the globally earliest retry slot", async () => {
     const loop = await storage.createLoop(loopInput("recover-reverse-order", {
       overlap: "allow",

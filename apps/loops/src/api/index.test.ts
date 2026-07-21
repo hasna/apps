@@ -3060,7 +3060,11 @@ describe("loops-api foundation", () => {
       },
       runnerPrincipal("runner-other"),
     );
-    const finalize = (server: { port?: number }, status: "succeeded" | "failed") => fetch(
+    const finalize = (
+      server: { port?: number },
+      status: "succeeded" | "failed",
+      overrides: Record<string, unknown> = {},
+    ) => fetch(
       apiUrl(server, `/v1/runs/${claim!.run.id}/finalize`),
       {
         method: "POST",
@@ -3071,6 +3075,7 @@ describe("loops-api foundation", () => {
           stdout: "",
           stderr: "",
           ...(status === "failed" ? { error: "retry me" } : {}),
+          ...overrides,
         }),
       },
     );
@@ -3081,6 +3086,10 @@ describe("loops-api foundation", () => {
 
       expect((await finalize(intruder, "failed")).status).toBe(409);
       expect((await finalize(owner, "succeeded")).status).toBe(409);
+      expect((await finalize(owner, "failed", { claimToken: "stale-attempt-token" })).status).toBe(409);
+      expect((await finalize(owner, "failed", { finishedAt: "not-a-date" })).status).toBe(422);
+      expect((await finalize(owner, "failed", { durationMs: -1 })).status).toBe(422);
+      expect((await finalize(owner, "failed", { stdout: 42 })).status).toBe(422);
       expect((await baseStorage.getLoop(loop.id))?.nextRunAt).toBe("2026-01-01T00:00:00.000Z");
 
       expect((await finalize(owner, "failed")).status).toBe(200);
@@ -3403,4 +3412,64 @@ describe("loops-api foundation", () => {
       await baseStorage.close();
     }
   });
+
+  test("maintenance recovery drains more than 1000 stable abandoned rows without starving the oldest loop", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const slot = "2026-01-01T00:00:00.000Z";
+    const receipt = "2026-01-01T00:00:10.000Z";
+    const total = 1_001;
+    for (let index = 0; index < total; index += 1) {
+      const createdAt = new Date(Date.parse(slot) + index).toISOString();
+      const loop: Loop = {
+        id: `paging-loop-${String(index).padStart(4, "0")}`,
+        name: `paging-loop-${String(index).padStart(4, "0")}`,
+        labels: [],
+        status: "active",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "false" },
+        nextRunAt: slot,
+        catchUp: "latest",
+        catchUpLimit: 1,
+        overlap: "skip",
+        maxAttempts: 1,
+        retryDelayMs: 1_000,
+        leaseMs: 60_000,
+        createdAt,
+        updatedAt: createdAt,
+      };
+      const run: LoopRun = {
+        id: `paging-run-${String(index).padStart(4, "0")}`,
+        loopId: loop.id,
+        loopName: loop.name,
+        scheduledFor: slot,
+        attempt: 1,
+        status: "abandoned",
+        finishedAt: receipt,
+        error: "run lease expired before completion",
+        createdAt,
+        updatedAt: receipt,
+      };
+      await storage.upsertMigrationLoop(loop);
+      await storage.upsertMigrationRun(run);
+    }
+    const server = createTestServer(mod, {
+      host: "127.0.0.1",
+      port: 0,
+      storage,
+      now: () => new Date("2026-01-01T00:00:20.000Z"),
+      random: () => 0.5,
+    });
+    try {
+      const response = await fetch(apiUrl(server, "/v1/leases/recover"), { method: "POST" });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ advancementDeferred: [] });
+      const loops = await storage.listLoops({ includeArchived: true, limit: total });
+      expect(loops).toHaveLength(total);
+      expect(loops.every((loop) => loop.nextRunAt === "2026-01-01T00:01:00.000Z")).toBe(true);
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  }, 60_000);
 });

@@ -332,8 +332,7 @@ async function handleV1Request(ctx: V1RequestContext): Promise<Response> {
     }
     const storage = requireStorage(ctx.storage);
     const recovered = await storage.recoverExpiredRunLeasesDetailed(ctx.now());
-    const advancementCandidates = await recoveryAdvancementCandidates(storage, recovered.abandoned);
-    const advancementDeferred = await advanceRecoveredRuns(storage, advancementCandidates, {
+    const advancementDeferred = await advanceRecoveredLeaseRunPages(storage, {
       random: ctx.random,
       circuitBreakerThreshold: ctx.circuitBreakerThreshold,
     });
@@ -1358,6 +1357,13 @@ async function finalizeRun(
     ["succeeded", "failed", "timed_out"],
   );
   if (!status) throw apiError("status_required", 422);
+  const requestedFinishedAt = optionalIsoString(body.finishedAt);
+  const requestedDurationMs = optionalPositiveInteger(body.durationMs, 0, Number.MAX_SAFE_INTEGER);
+  const stdout = optionalText(body.stdout) ?? "";
+  const stderr = optionalText(body.stderr) ?? "";
+  const error = optionalText(body.error);
+  const exitCode = optionalInteger(body.exitCode);
+  const pid = optionalInteger(body.pid);
   const existing = await storage.getRun(runId);
   if (!existing) return fail("run_not_found", 404);
   if (existing.status !== "running" || !existing.claimedBy) {
@@ -1366,6 +1372,25 @@ async function finalizeRun(
       existing.status === status &&
       ["succeeded", "failed", "timed_out"].includes(existing.status)
     ) {
+      try {
+        await storage.finalizeRun(
+          runId,
+          {
+            status,
+            finishedAt: requestedFinishedAt,
+            durationMs: requestedDurationMs,
+            stdout,
+            stderr,
+            error,
+            exitCode,
+            pid,
+          },
+          { claimedBy: existing.claimedBy, claimToken, now },
+        );
+      } catch (replayError) {
+        if (!(replayError instanceof RunFinalizationConflictError)) throw replayError;
+        if (replayError.reason === "stale_claim") return fail("stale_claim", 409);
+      }
       const loop = await storage.getLoop(existing.loopId);
       if (loop) {
         await advanceLoopAfterRun(
@@ -1386,8 +1411,8 @@ async function finalizeRun(
   if (!loop) return fail("loop_not_found", 404);
   const completion = normalizeRunCompletion({
     startedAt: existing.startedAt ?? existing.createdAt,
-    requestedFinishedAt: optionalIsoString(body.finishedAt),
-    requestedDurationMs: optionalPositiveInteger(body.durationMs, 0, Number.MAX_SAFE_INTEGER),
+    requestedFinishedAt,
+    requestedDurationMs,
     serverNow: now,
   });
   let finalized: LoopRun;
@@ -1398,16 +1423,17 @@ async function finalizeRun(
         status,
         finishedAt: completion.finishedAt,
         durationMs: completion.durationMs,
-        stdout: optionalText(body.stdout) ?? "",
-        stderr: optionalText(body.stderr) ?? "",
-        error: optionalText(body.error),
-        exitCode: optionalInteger(body.exitCode),
-        pid: optionalInteger(body.pid),
+        stdout,
+        stderr,
+        error,
+        exitCode,
+        pid,
       },
       { claimedBy: existing.claimedBy, claimToken, now },
     );
   } catch (error) {
     if (!(error instanceof RunFinalizationConflictError)) throw error;
+    if (error.reason === "stale_claim") return fail("stale_claim", 409);
     const terminal = await storage.getRun(runId);
     if (
       !terminal ||
@@ -1490,19 +1516,41 @@ function isRecoveredLeaseRun(run: LoopRun): boolean {
   return run.status === "abandoned" && run.error === RECOVERED_LEASE_ERROR;
 }
 
-async function recoveryAdvancementCandidates(
+async function advanceRecoveredLeaseRunPages(
   storage: LoopStorageContract,
-  newlyRecovered: readonly LoopRun[],
+  opts: {
+    random: () => number;
+    circuitBreakerThreshold?: CircuitBreakerThreshold;
+  },
 ): Promise<LoopRun[]> {
-  const candidates = new Map<string, LoopRun>();
-  for (const run of newlyRecovered) candidates.set(run.id, run);
-  for (const run of await storage.listRuns({ status: "abandoned", limit: 1_000 })) {
-    if (isRecoveredLeaseRun(run)) candidates.set(run.id, run);
+  const advancementDeferred: LoopRun[] = [];
+  let after: Awaited<ReturnType<LoopStorageContract["listRecoveredLeaseRunsPage"]>>["nextCursor"];
+  let snapshotEnd: Awaited<ReturnType<LoopStorageContract["listRecoveredLeaseRunsPage"]>>["snapshotEnd"];
+  for (;;) {
+    const page = await storage.listRecoveredLeaseRunsPage({ after, snapshotEnd, limit: MAX_PAGE_LIMIT });
+    snapshotEnd = page.snapshotEnd;
+    if (page.runs.length === 0) break;
+    advancementDeferred.push(...await advanceRecoveredRuns(storage, page.runs, opts));
+    if (!page.nextCursor) break;
+    if (
+      after &&
+      page.nextCursor.updatedAt === after.updatedAt &&
+      page.nextCursor.scheduledFor === after.scheduledFor &&
+      page.nextCursor.id === after.id
+    ) {
+      throw new Error("recovered lease replay cursor did not advance");
+    }
+    after = page.nextCursor;
+    if (
+      snapshotEnd &&
+      after.updatedAt === snapshotEnd.updatedAt &&
+      after.scheduledFor === snapshotEnd.scheduledFor &&
+      after.id === snapshotEnd.id
+    ) {
+      break;
+    }
   }
-  return [...candidates.values()].sort((a, b) =>
-    a.updatedAt.localeCompare(b.updatedAt) ||
-    a.scheduledFor.localeCompare(b.scheduledFor) ||
-    a.id.localeCompare(b.id));
+  return advancementDeferred;
 }
 
 async function advanceRecoveredRuns(

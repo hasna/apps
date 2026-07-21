@@ -89,6 +89,7 @@ export class SqliteLoopStorage implements LoopStorageContract {
   finalizeRun(...args: StoreMethod<"finalizeRun">["args"]) { return this.call("finalizeRun", ...args); }
   heartbeatRunLease(...args: StoreMethod<"heartbeatRunLease">["args"]) { return this.call("heartbeatRunLease", ...args); }
   listRuns(...args: StoreMethod<"listRuns">["args"]) { return this.call("listRuns", ...args); }
+  listRecoveredLeaseRunsPage(...args: StoreMethod<"listRecoveredLeaseRunsPage">["args"]) { return this.call("listRecoveredLeaseRunsPage", ...args); }
   writeRunReceipt(...args: StoreMethod<"writeRunReceipt">["args"]) { return this.call("writeRunReceipt", ...args); }
   getRunReceipt(...args: StoreMethod<"getRunReceipt">["args"]) { return this.call("getRunReceipt", ...args); }
   listRunReceipts(...args: StoreMethod<"listRunReceipts">["args"]) { return this.call("listRunReceipts", ...args); }

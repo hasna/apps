@@ -259,7 +259,7 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
       store,
       claim.loop,
       finalRun,
-      new Date(finalRun.finishedAt ?? new Date()),
+      new Date(finalRun.updatedAt),
       finalRun.status === "succeeded",
       { daemonLeaseId: leaseId },
     );

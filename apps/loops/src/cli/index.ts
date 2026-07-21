@@ -2555,7 +2555,7 @@ program
       if (!claim) throw new Error("could not claim manual run");
       const run = await executeClaimedRun({ store, runnerId, loop: claim.loop, run: claim.run });
       if (shouldAdvance) {
-        advanceLoop(store, claim.loop, run, new Date(run.finishedAt ?? new Date()), run.status === "succeeded");
+        advanceLoop(store, claim.loop, run, new Date(run.updatedAt), run.status === "succeeded");
       }
       const value = { ...publicRun(run, opts.showOutput), runNow: { source, advancesLoop: shouldAdvance } };
       print(value, `${run.id} ${run.status} source=${source} slot=${run.scheduledFor}`);

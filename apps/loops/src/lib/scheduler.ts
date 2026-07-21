@@ -188,7 +188,7 @@ export async function runLoopNow(deps: RunLoopNowDeps): Promise<RunLoopNowResult
     execute: deps.execute,
   });
   if (shouldAdvance) {
-    advanceLoop(store, claim.loop, run, new Date(run.finishedAt ?? new Date()), run.status === "succeeded");
+    advanceLoop(store, claim.loop, run, new Date(run.updatedAt), run.status === "succeeded");
   }
   return { mode: "inline", loop: claim.loop, run, source, advancedLoop: shouldAdvance };
 }
@@ -316,7 +316,7 @@ export async function executeClaimedRun(deps: {
     }, {
       claimedBy: deps.runnerId,
       daemonLeaseId: deps.daemonLeaseId,
-      now: deps.now?.() ?? new Date(finalResult.finishedAt),
+      now: deps.now?.() ?? new Date(),
     });
   } catch (err) {
     deps.onError?.(deps.loop, err);
@@ -380,7 +380,7 @@ function repairWedgedTerminalSlot(deps: SchedulerDeps, loop: Loop, scheduledFor:
       deps.store,
       loop,
       existing,
-      new Date(existing.finishedAt ?? now),
+      new Date(existing.updatedAt),
       existing.status === "succeeded",
       advanceOptions(deps),
     );
@@ -405,7 +405,7 @@ async function runSlot(deps: SchedulerDeps, loop: Loop, scheduledFor: string): P
       if (deps.daemonLeaseId && isDaemonLeaseLost(error)) return undefined;
       throw error;
     }
-    advanceLoop(deps.store, loop, skipped, now, true, advanceOptions(deps));
+    advanceLoop(deps.store, loop, skipped, new Date(skipped.updatedAt), true, advanceOptions(deps));
     deps.onRun?.(skipped);
     return skipped;
   }
@@ -439,7 +439,7 @@ async function runSlot(deps: SchedulerDeps, loop: Loop, scheduledFor: string): P
     deps.store,
     claim.loop,
     finalRun,
-    new Date(finalRun.finishedAt ?? new Date()),
+    new Date(finalRun.updatedAt),
     finalRun.status === "succeeded",
     advanceOptions(deps),
   );
@@ -461,7 +461,7 @@ function claimSlot(deps: SchedulerDeps, loop: Loop, scheduledFor: string): Claim
       if (deps.daemonLeaseId && isDaemonLeaseLost(error)) return undefined;
       throw error;
     }
-    advanceLoop(deps.store, loop, skipped, now, true, advanceOptions(deps));
+    advanceLoop(deps.store, loop, skipped, new Date(skipped.updatedAt), true, advanceOptions(deps));
     deps.onRun?.(skipped);
     return skipped;
   }
@@ -507,13 +507,13 @@ function recoverAndExpire(deps: SchedulerDeps, now: Date): { recovered: LoopRun[
       .filter((run) => run.attempt < loop.maxAttempts)
       .sort((a, b) => new Date(a.scheduledFor).getTime() - new Date(b.scheduledFor).getTime())[0];
     if (retryable) {
-      advanceLoop(deps.store, loop, retryable, new Date(retryable.finishedAt ?? now), false, advanceOptions(deps));
+      advanceLoop(deps.store, loop, retryable, new Date(retryable.updatedAt), false, advanceOptions(deps));
       continue;
     }
     for (const run of runs) {
       const current = deps.store.getLoop(run.loopId);
       if (current) {
-        advanceLoop(deps.store, current, run, new Date(run.finishedAt ?? now), false, advanceOptions(deps));
+        advanceLoop(deps.store, current, run, new Date(run.updatedAt), false, advanceOptions(deps));
       }
     }
   }

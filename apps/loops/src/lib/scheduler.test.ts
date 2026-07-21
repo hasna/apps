@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ExecutorResult, Loop, LoopRun } from "../types.js";
+import { planLoopAdvancement } from "./advancement.js";
 import { buildHealthReport } from "./health.js";
 import {
   advanceLoop,
@@ -172,6 +173,47 @@ describe("scheduler", () => {
       expect(run?.attempt).toBe(2);
       expect(run?.status).toBe("succeeded");
       expect(store.getLoop(loop.id)?.status).toBe("stopped");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("anchors local retry timing to the persisted receipt time, not executor finishedAt", async () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "local-receipt-time-retry",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "false" },
+          maxAttempts: 2,
+          retryDelayMs: 1_000,
+        },
+        new Date("2026-01-01T00:00:00.000Z"),
+      );
+      store.updateLoop(loop.id, { nextRunAt: "2026-01-01T00:00:00.000Z" });
+
+      let clockReads = 0;
+      await tick({
+        store,
+        runnerId: "local-receipt-runner",
+        now: () => {
+          clockReads += 1;
+          return new Date(clockReads < 3
+            ? "2026-01-01T00:00:01.000Z"
+            : "2026-01-01T00:00:10.000Z");
+        },
+        random: noJitter,
+        execute: async () => result("failed", "2026-01-01T00:00:02.000Z"),
+      });
+
+      const failed = store.listRuns({ loopId: loop.id })[0]!;
+      expect(failed.finishedAt).toBe("2026-01-01T00:00:02.000Z");
+      expect(failed.updatedAt).toBe("2026-01-01T00:00:10.000Z");
+      expect(store.getLoop(loop.id)).toMatchObject({
+        retryScheduledFor: failed.scheduledFor,
+        nextRunAt: "2026-01-01T00:00:11.000Z",
+      });
     } finally {
       store.close();
     }
@@ -524,6 +566,7 @@ describe("scheduler", () => {
         runnerId: "manual",
         loop: claim!.loop,
         run: claim!.run,
+        now: () => now,
         execute: async () => result("succeeded", "2026-01-02T00:00:00.000Z"),
       });
       expect(manual.status).toBe("succeeded");
@@ -609,6 +652,53 @@ describe("scheduler", () => {
     } finally {
       store.close();
     }
+  });
+
+  test("a stale earlier-attempt replay anchors the reused run row to the latest persisted receipt", () => {
+    const scheduledFor = "2026-01-01T00:00:00.000Z";
+    const current = loopFixture({
+      schedule: { type: "interval", everyMs: 60_000 },
+      maxAttempts: 3,
+      nextRunAt: "2026-01-01T00:00:11.000Z",
+      retryScheduledFor: scheduledFor,
+    });
+    const staleAttempt = runFixture({
+      id: "same-run-row",
+      scheduledFor,
+      attempt: 1,
+      startedAt: "2026-01-01T00:00:01.000Z",
+      updatedAt: "2026-01-01T00:00:10.000Z",
+    });
+    const latestAttempt = runFixture({
+      id: "same-run-row",
+      scheduledFor,
+      attempt: 2,
+      startedAt: "2026-01-01T00:00:11.000Z",
+      updatedAt: "2026-01-01T00:00:20.000Z",
+    });
+    const input = {
+      current,
+      run: staleAttempt,
+      finishedAt: new Date(staleAttempt.updatedAt),
+      succeeded: false,
+      deferredRetry: latestAttempt,
+      retryRandom: 0.5,
+      circuitBreakerThreshold: 0,
+    } as const;
+
+    expect(planLoopAdvancement(input)).toEqual({
+      kind: "update",
+      reason: "deferred_retry",
+      patch: {
+        status: "active",
+        nextRunAt: "2026-01-01T00:00:22.000Z",
+        retryScheduledFor: scheduledFor,
+      },
+    });
+    expect(planLoopAdvancement({
+      ...input,
+      current: { ...current, nextRunAt: "2026-01-01T00:00:22.000Z" },
+    })).toEqual({ kind: "none", reason: "already_applied" });
   });
 
   test("circuit breaker pauses a loop after consecutive final failures and manual resume clears it", async () => {

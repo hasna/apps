@@ -155,15 +155,16 @@ export function planLoopAdvancement(input: {
     if (retryTimingWasAppliedForAttempt(current, deferredRetry)) {
       return { kind: "none", reason: "already_applied" };
     }
+    const sameAttempt = deferredRetry.id === run.id && deferredRetry.attempt === run.attempt;
     const retryAt = nextAfterRetry(
       current,
       deferredRetry,
-      deferredRetry.id === run.id ? finishedAt : new Date(deferredRetry.updatedAt),
+      sameAttempt ? finishedAt : new Date(deferredRetry.updatedAt),
       input.retryRandom,
     );
     return {
       kind: "update",
-      reason: deferredRetry.id === run.id ? "retry" : "deferred_retry",
+      reason: sameAttempt ? "retry" : "deferred_retry",
       patch: {
         status: "active",
         nextRunAt: withoutCursorRegression(current, retryAt),

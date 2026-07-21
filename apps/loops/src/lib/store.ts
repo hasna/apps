@@ -115,9 +115,15 @@ const SCHEMA_USER_VERSION = 8;
 const BREAKING_SCHEMA_FLOOR = 7;
 const TERMINAL_RUN_STATUSES = ["succeeded", "failed", "timed_out", "abandoned", "skipped"] as const;
 const PRUNE_BATCH_SIZE = 400;
-const GENERATED_ROUTE_TEMPLATE_IDS = new Set(["todos-task-worker-verifier", "task-lifecycle", "event-worker-verifier"]);
-const GENERATED_ROUTE_KEYS = new Set(["todos-task", "generic-event"]);
+export const GENERATED_ROUTE_TEMPLATE_IDS = new Set(["todos-task-worker-verifier", "task-lifecycle", "event-worker-verifier"]);
+export const GENERATED_ROUTE_KEYS = new Set(["todos-task", "generic-event"]);
 const TASK_LIFECYCLE_TEMPLATE_ID = "task-lifecycle";
+
+export function isGeneratedRouteTemplate(routeKey: string, templateId: string): boolean {
+  return routeKey === "todos-task"
+    ? templateId === "todos-task-worker-verifier" || templateId === TASK_LIFECYCLE_TEMPLATE_ID
+    : routeKey === "generic-event" && templateId === "event-worker-verifier";
+}
 
 export interface LoopRow {
   id: string;
@@ -749,6 +755,18 @@ export interface RecoverExpiredRunLeasesResult {
   abandoned: LoopRun[];
   /** Runs whose lease expired while their process (group) is still alive; lease deferred. */
   deferred: LoopRun[];
+}
+
+export interface RecoveredLeaseRunCursor {
+  updatedAt: string;
+  scheduledFor: string;
+  id: string;
+}
+
+export interface RecoveredLeaseRunPage {
+  runs: LoopRun[];
+  snapshotEnd?: RecoveredLeaseRunCursor;
+  nextCursor?: RecoveredLeaseRunCursor;
 }
 
 export interface PruneHistoryOptions {
@@ -2434,13 +2452,12 @@ export class Store {
     const workItem = this.getWorkflowWorkItem(args.workItemId);
     if (!workItem || !GENERATED_ROUTE_KEYS.has(workItem.routeKey)) return undefined;
     const invocation = this.getWorkflowInvocation(workItem.invocationId);
-    if (!invocation?.templateId || !GENERATED_ROUTE_TEMPLATE_IDS.has(invocation.templateId)) return undefined;
+    if (!invocation?.templateId || !isGeneratedRouteTemplate(workItem.routeKey, invocation.templateId)) return undefined;
     const loop = this.getLoop(args.loopId);
     if (!loop || loop.schedule.type !== "once" || loop.target.type !== "workflow" || loop.target.workflowId !== args.workflowId) return undefined;
     const input = loop.target.input ?? {};
-    if (input.workflowWorkItemId && input.workflowWorkItemId !== workItem.id) return undefined;
-    if (input.workflowInvocationId && input.workflowInvocationId !== invocation.id) return undefined;
-    if (workItem.workflowId && workItem.workflowId !== args.workflowId) return undefined;
+    if (input.workflowWorkItemId !== workItem.id || input.workflowInvocationId !== invocation.id) return undefined;
+    if (workItem.loopId !== loop.id || workItem.workflowId !== args.workflowId) return undefined;
     const workflow = this.getWorkflow(args.workflowId);
     if (!workflow) return undefined;
     return { workflow, loop, workItem, invocation };
@@ -4432,7 +4449,7 @@ export class Store {
       const res = opts.claimedBy
         ? this.db
             .query(
-              `UPDATE loop_runs SET status=$status, finished_at=$finished, claim_token=NULL, lease_expires_at=NULL, pid=$pid, exit_code=$exitCode,
+              `UPDATE loop_runs SET status=$status, finished_at=$finished, lease_expires_at=NULL, pid=$pid, exit_code=$exitCode,
                duration_ms=$durationMs, stdout=$stdout, stderr=$stderr, error=$error, updated_at=$updated
                WHERE id=$id AND status='running' AND claimed_by=$claimedBy AND lease_expires_at > $now
                  AND ($claimToken IS NULL OR claim_token=$claimToken)
@@ -4447,16 +4464,19 @@ export class Store {
               // WHERE id=$id could resurrect an already-terminal run or clobber a
               // run another owner has since re-claimed to 'running'. Only finalize
               // a run that is still running.
-              `UPDATE loop_runs SET status=$status, finished_at=$finished, claim_token=NULL, lease_expires_at=NULL, pid=$pid, exit_code=$exitCode,
+              `UPDATE loop_runs SET status=$status, finished_at=$finished, lease_expires_at=NULL, pid=$pid, exit_code=$exitCode,
                duration_ms=$durationMs, stdout=$stdout, stderr=$stderr, error=$error, updated_at=$updated
                WHERE id=$id AND status='running'`,
             )
             .run(params);
-      const run = this.getRun(id);
-      if (!run) throw new Error(`run not found after finalize: ${id}`);
+      const runRow = this.db.query<RunRow, [string]>("SELECT * FROM loop_runs WHERE id = ?").get(id);
+      const run = runRow ? rowToRun(runRow) : undefined;
+      if (!run || !runRow) throw new Error(`run not found after finalize: ${id}`);
       if (opts.claimedBy && res.changes !== 1) {
         throw new RunFinalizationConflictError(
-          run.status === "running" ? "stale_claim" : "run_not_running",
+          opts.claimToken !== undefined && runRow.claim_token !== opts.claimToken
+            ? "stale_claim"
+            : run.status === "running" ? "stale_claim" : "run_not_running",
           id,
         );
       }
@@ -4533,6 +4553,53 @@ export class Store {
       )
       .all(...params, limit, offset);
     return rows.map(rowToRun);
+  }
+
+  listRecoveredLeaseRunsPage(opts: {
+    after?: RecoveredLeaseRunCursor;
+    snapshotEnd?: RecoveredLeaseRunCursor;
+    limit?: number;
+  } = {}): RecoveredLeaseRunPage {
+    const limit = Math.max(1, Math.min(1_000, Math.floor(opts.limit ?? 1_000)));
+    const snapshotEnd = opts.snapshotEnd ?? (() => {
+      const row = this.db
+        .query<RunRow, []>(
+          `SELECT * FROM loop_runs
+           WHERE status='abandoned' AND error='run lease expired before completion'
+           ORDER BY updated_at DESC, scheduled_for DESC, id DESC LIMIT 1`,
+        )
+        .get();
+      return row
+        ? { updatedAt: row.updated_at, scheduledFor: row.scheduled_for, id: row.id }
+        : undefined;
+    })();
+    if (!snapshotEnd) return { runs: [] };
+    const after = opts.after;
+    const rows = this.db
+      .query<RunRow, [string | null, string | null, string | null, string | null, string, string, string, number]>(
+        `SELECT * FROM loop_runs
+         WHERE status='abandoned' AND error='run lease expired before completion'
+           AND (? IS NULL OR (updated_at, scheduled_for, id) > (?, ?, ?))
+           AND (updated_at, scheduled_for, id) <= (?, ?, ?)
+         ORDER BY updated_at ASC, scheduled_for ASC, id ASC LIMIT ?`,
+      )
+      .all(
+        after?.updatedAt ?? null,
+        after?.updatedAt ?? null,
+        after?.scheduledFor ?? null,
+        after?.id ?? null,
+        snapshotEnd.updatedAt,
+        snapshotEnd.scheduledFor,
+        snapshotEnd.id,
+        limit,
+      );
+    const runs = rows.map(rowToRun);
+    const last = runs.at(-1);
+    return {
+      runs,
+      snapshotEnd,
+      ...(last ? { nextCursor: { updatedAt: last.updatedAt, scheduledFor: last.scheduledFor, id: last.id } } : {}),
+    };
   }
 
   writeRunReceipt(input: WriteRunReceiptInput, opts: { now?: Date } = {}): RunReceipt {
