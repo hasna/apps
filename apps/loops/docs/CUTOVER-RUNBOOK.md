@@ -45,10 +45,10 @@ Before step 1, satisfy and preserve evidence for these hard gates:
 - For the shared `apps` to dedicated `loops` database transfer lane, use only
   the selective logical transfer in `docs/SHARED-DATABASE-TRANSFER.md`. Do not
   snapshot-restore the shared cluster or shared database into the dedicated
-  OpenLoops target. The protected workflow may start only the fixed
+  Loops target. The protected workflow may start only the fixed
   `bun dist/serve/index.js shared-to-dedicated-transfer` ECS command, with DSNs
   supplied by ECS task secrets.
-- Use a dedicated OpenLoops PostgreSQL cluster, not only a dedicated database.
+- Use a dedicated Loops PostgreSQL cluster, not only a dedicated database.
   PostgreSQL roles are cluster-global: inventory every database, role
   membership, database owner, and `pg_shdepend` row for the four reserved
   `open_loops_*` roles. The enforcement preflight fails if a reserved role owns
@@ -69,14 +69,14 @@ Before step 1, satisfy and preserve evidence for these hard gates:
 
 1. Provision the four NOLOGIN database roles and the separate enforcement
    login. Tenant enforcement must run through a
-   provider-level bootstrap administrator against a dedicated OpenLoops
+   provider-level bootstrap administrator against a dedicated Loops
    database owned by that bootstrap login (or use a true superuser). Do not run enforcement in a database shared with another
    application: migration `0010` normalizes ACLs across every non-system
    schema, table, sequence, and function in the current database. `CREATEROLE`, control of the
    `public` schema, and the ability to `SET ROLE` to `open_loops_owner` and
    `open_loops_migrator` are minimum requirements. With PostgreSQL 16's default
    `createrole_self_grant=''`, a non-superuser must use four pre-provisioned,
-   already-normalized OpenLoops roles and must have only direct owner/migrator
+   already-normalized Loops roles and must have only direct owner/migrator
    memberships with `ADMIN FALSE`, `INHERIT TRUE`, and `SET TRUE`. It must not
    be a member of the runtime or authenticator roles. No LOGIN role may inherit
    runtime or authenticator yet; attach service credentials only after `0010`
@@ -163,7 +163,7 @@ Before step 1, satisfy and preserve evidence for these hard gates:
 12. Verify an authenticated `/v1` read/write smoke against a throwaway loop and
    a claim/finalize smoke if a runner API URL is configured.
 13. Record package version, git SHA, image tag and digest, database migration
-   plan/result, evidence that the target database is dedicated to OpenLoops,
+   plan/result, evidence that the target database is dedicated to Loops,
    redacted API URL, health/readiness responses, capacity-provider strategy,
    desired/running task counts, alarm action ARNs/names, log retention/KMS
    identifiers, rotation status, and rollback handle.

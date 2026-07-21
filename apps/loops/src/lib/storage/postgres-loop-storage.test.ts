@@ -310,7 +310,7 @@ suite("PostgresLoopStorage (live)", () => {
     `);
     if (inventory?.database_count !== 1 || inventory.open_loops_role_count !== 0) {
       throw new Error(
-        "LOOPS_TEST_DATABASE_URL must point at an exclusive disposable PostgreSQL cluster with no OpenLoops roles",
+        "LOOPS_TEST_DATABASE_URL must point at an exclusive disposable PostgreSQL cluster with no Loops roles",
       );
     }
     missingRoleBootstrap = await exercisePg16BootstrapMemberships("missing");

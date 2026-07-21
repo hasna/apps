@@ -68,7 +68,7 @@ export function installStartup(
     writeFileSync(
       path,
       `[Unit]
-Description=Hasna OpenLoops daemon
+Description=Hasna Loops daemon
 After=basic.target
 
 [Service]

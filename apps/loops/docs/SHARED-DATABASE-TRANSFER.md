@@ -5,7 +5,7 @@ against live AWS or any live database without an approved maintenance window,
 fresh recovery evidence, and the protected GitHub environment approval.
 
 This transfer is intentionally selective. The source is the shared RDS database
-`apps`; the target is the dedicated OpenLoops database `loops`. Never snapshot
+`apps`; the target is the dedicated Loops database `loops`. Never snapshot
 restore the shared cluster or shared database into the target.
 
 ## Fixed Command
@@ -33,7 +33,7 @@ The archive directory is removed in `finally` after success or failure.
 ## Sequence
 
 1. Verify PostgreSQL 16 client binaries: `pg_dump`, `pg_restore`, and `psql`.
-2. Verify source migration ledger checksums for OpenLoops migrations
+2. Verify source migration ledger checksums for Loops migrations
    `0001_core_runtime` through `0007_work_item_gate_deaths`.
 3. Verify source quiescence: no active loop runs, workflow runs, workflow step
    runs, runner leases, or leased/running work items.
@@ -42,7 +42,7 @@ The archive directory is removed in `finally` after success or failure.
 5. Verify the target ledger is exactly migrations `0001` through `0007` and no
    later row is present.
 6. Use `pg_dump --format=custom --data-only --no-owner --no-privileges` for the
-   exact OpenLoops table allowlist:
+   exact Loops table allowlist:
 
 ```text
 loops

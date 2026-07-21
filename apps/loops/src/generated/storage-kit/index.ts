@@ -9,7 +9,7 @@
 // to cloud Postgres. There is NO sync engine, NO cache-as-mode, and NO merge
 // logic anywhere in this kit.
 //
-// CI verifies manifest hashes and the OpenLoops strict-mode policy with
+// CI verifies manifest hashes and the Loops strict-mode policy with
 // `bun run check:contracts`. Regenerate the base with `bunx @hasna/contracts
 // vendor-kit`, then reapply the strict-mode policy before committing.
 

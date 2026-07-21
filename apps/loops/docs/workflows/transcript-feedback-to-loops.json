@@ -1,6 +1,6 @@
 {
   "name": "transcript-feedback-to-loops",
-  "description": "Turn an authorized media transcript into a reviewable backlog of recurring OpenLoops workflows.",
+  "description": "Turn an authorized media transcript into a reviewable backlog of recurring Loops workflows.",
   "version": 1,
   "steps": [
     {
@@ -49,7 +49,7 @@
         "provider": "codewith",
         "cwd": "/path/to/repo",
         "timeoutMs": null,
-        "prompt": "Read .openloops/transcripts/latest-transcript.json and create or update docs/loop-backlog.md. Extract only recurring work that is useful enough to schedule through OpenLoops. For each candidate include cadence, target provider, allowed write scope, expected artifacts, verification command, stop condition, and the specific transcript insight that justifies it. Prefer loops for code review/security, customer feedback triage, maintenance PRs, CI optimization, knowledge capture, and workflow hygiene."
+        "prompt": "Read .openloops/transcripts/latest-transcript.json and create or update docs/loop-backlog.md. Extract only recurring work that is useful enough to schedule through Loops. For each candidate include cadence, target provider, allowed write scope, expected artifacts, verification command, stop condition, and the specific transcript insight that justifies it. Prefer loops for code review/security, customer feedback triage, maintenance PRs, CI optimization, knowledge capture, and workflow hygiene."
       }
     },
     {

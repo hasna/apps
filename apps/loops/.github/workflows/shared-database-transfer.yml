@@ -163,7 +163,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           {
-            echo "## OpenLoops shared database transfer"
+            echo "## Loops shared database transfer"
             echo
             echo "- task ARN: \`${{ steps.run-task.outputs.task_arn || 'not-started' }}\`"
             echo "- command: \`bun dist/serve/index.js shared-to-dedicated-transfer\`"

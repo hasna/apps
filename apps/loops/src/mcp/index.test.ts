@@ -58,7 +58,7 @@ async function connectMcp(
   return { client, transport };
 }
 
-describe("open-loops MCP server", () => {
+describe("Loops MCP server", () => {
   const roots: string[] = [];
 
   afterEach(() => {

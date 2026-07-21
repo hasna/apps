@@ -349,7 +349,7 @@ describe("provider database credential reconciliation", () => {
     expect(randomRequests).toEqual([48]);
   });
 
-  test("provider bootstrap only normalizes OpenLoops memberships on the provider session user", () => {
+  test("provider bootstrap only normalizes Loops memberships on the provider session user", () => {
     expect(PROVIDER_BOOTSTRAP_MEMBERSHIPS_SQL).toContain("member.rolname=session_user");
     expect(PROVIDER_BOOTSTRAP_MEMBERSHIPS_SQL).toContain("AND granted.rolname IN");
     expect(PROVIDER_BOOTSTRAP_MEMBERSHIPS_SQL).toContain("'open_loops_owner', 'open_loops_migrator'");

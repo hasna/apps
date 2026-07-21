@@ -1,7 +1,7 @@
 // @generated from openapi/loops.json by scripts/gen-sdk.ts — DO NOT EDIT.
 // Regenerate: bun run scripts/gen-sdk.ts
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: OpenLoops 0.4.28
+// Source: Loops 0.4.28
 
 export interface PublicValidationDetails { "code": string; "reason": "not_array" | "invalid_array" | "invalid_item" | "option_not_allowed"; "path": string; "index"?: number; "option"?: string }
 

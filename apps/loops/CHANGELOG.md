@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to OpenLoops (npm `@hasna/loops`, repo `hasna/loops`) are
+All notable changes to Loops (npm `@hasna/loops`, repo `hasna/loops`) are
 documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
 unless noted.

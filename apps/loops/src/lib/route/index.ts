@@ -1,6 +1,6 @@
 /**
  * Route engine: turns Hasna events, todos ready queues, and health/hygiene
- * findings into deduped, throttled OpenLoops workflow loops and todos tasks.
+ * findings into deduped, throttled Loops workflow loops and todos tasks.
  * Extracted from the CLI so commands stay thin and the SDK/daemon can reuse it.
  */
 export * from "./types.js";

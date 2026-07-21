@@ -1495,8 +1495,8 @@ describe("executeLoop", () => {
 
     expect(message).toContain("remote preflight failed on station02: SSH host key verification failed.");
     expect(message).toContain("Verify station02's host identity");
-    expect(message).toContain("repair SSH known_hosts/trust material outside OpenLoops");
-    expect(message).toContain("OpenLoops will not disable host-key checking or modify known_hosts automatically.");
+    expect(message).toContain("repair SSH known_hosts/trust material outside Loops");
+    expect(message).toContain("Loops will not disable host-key checking or modify known_hosts automatically.");
     expect(message).toContain("Transport detail: Host key verification failed.");
     expect(message).not.toContain("StrictHostKeyChecking=no");
     expect(message).not.toContain("UserKnownHostsFile=/dev/null");

@@ -1,14 +1,14 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "OpenLoops",
+    "title": "Loops",
     "version": "0.4.28",
-    "description": "OpenLoops self-hosted multi-tenant control-plane HTTP API. All non-probe operations require a tenant-bound API key with the declared scope, role, and token kind."
+    "description": "Loops self-hosted multi-tenant control-plane HTTP API. All non-probe operations require a tenant-bound API key with the declared scope, role, and token kind."
   },
   "servers": [
     {
       "url": "https://your-deployment.example",
-      "description": "Replace with your self-hosted OpenLoops deployment's base URL."
+      "description": "Replace with your self-hosted Loops deployment's base URL."
     }
   ],
   "paths": {

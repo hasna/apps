@@ -53,7 +53,7 @@ const emittedScheduleWarnings = new Set<string>();
 function warnOnce(key: string, message: string): void {
   if (emittedScheduleWarnings.has(key)) return;
   emittedScheduleWarnings.add(key);
-  console.warn(`[open-loops] WARN ${message}`);
+  console.warn(`[loops] WARN ${message}`);
 }
 
 export function parseCron(expr: string): ParsedCron {

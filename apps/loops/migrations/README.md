@@ -24,7 +24,7 @@ HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve tenant-backfill --input ./tena
 HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --enforce-tenancy
 ```
 
-The target must be a dedicated OpenLoops database owned by the bootstrap login
+The target must be a dedicated Loops database owned by the bootstrap login
 (or administered by a true superuser), not a database shared with
 another application. Migration `0010` removes unexpected privileges from any
 explicit grantee across every non-system schema, table, sequence, and function
@@ -35,7 +35,7 @@ The four `open_loops_*` roles are cluster-global reserved names. Before
 enforcement, inventory their memberships, database ownership, and
 `pg_shdepend` records across the whole PostgreSQL cluster. They must be NOLOGIN,
 must not own another database, and must have no cross-database dependencies.
-Use a dedicated OpenLoops cluster; a dedicated database alone is insufficient.
+Use a dedicated Loops cluster; a dedicated database alone is insufficient.
 At minimum it must own the database, control the `public` schema, have
 `CREATEROLE`, and be able to `SET ROLE` to `open_loops_owner` and
 `open_loops_migrator`. PostgreSQL 16's default `createrole_self_grant=''`
@@ -91,7 +91,7 @@ schema bootstrap path exists.
 
 The protected shared-to-dedicated transfer initializes the target ledger through
 `0007_work_item_gate_deaths`, verifies those exact checksums, logically restores
-only the OpenLoops table allowlist, then applies `0008_tenant_prepare` so a
+only the Loops table allowlist, then applies `0008_tenant_prepare` so a
 filtered `COPY` can load only `api_keys` rows where `app = 'loops'`. It stops
 before tenant backfill and enforcement. The follow-up sequence remains:
 

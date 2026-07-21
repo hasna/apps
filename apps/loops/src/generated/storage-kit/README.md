@@ -1,8 +1,8 @@
 # Vendored Hasna storage kit
 
-**Generated with OpenLoops strict-mode policy.** This directory is stamped into
+**Generated with Loops strict-mode policy.** This directory is stamped into
 the repo by [`@hasna/contracts`](https://github.com/hasna/contracts), then kept
-under the OpenLoops rule that deprecated storage-mode aliases are not accepted.
+under the Loops rule that deprecated storage-mode aliases are not accepted.
 
 - Regenerate: `bunx @hasna/contracts vendor-kit`
 - Verify (CI): `bun run check:contracts` — verifies manifest hashes, kit
@@ -30,7 +30,7 @@ mode there is no Postgres pool at all; SQLite is authoritative.
 ## TLS
 
 `tls.ts` is intentionally stricter than libpq `sslmode=require` because
-OpenLoops cloud Postgres is production infrastructure:
+Loops cloud Postgres is production infrastructure:
 
 - `require` — encrypt **and** verify against a CA bundle
 - `verify-ca` / `verify-full` — encrypt **and** verify against a CA bundle

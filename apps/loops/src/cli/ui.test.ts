@@ -80,7 +80,7 @@ describe("loops ui", () => {
         color: false,
         refreshMs: 2_000,
       });
-      expect(frame).toContain("OpenLoops live loops");
+      expect(frame).toContain("Loops live loops");
       expect(frame).toContain("ACTIVE-RUNS");
       expect(frame).toContain("repo-open-loops-worker");
       expect(frame).toContain("codewith");
@@ -106,7 +106,7 @@ describe("loops ui", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-ui-nontty-"));
     const result = runCli(dataDir, ["ui"]);
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("OpenLoops UI requires a TTY terminal.");
+    expect(result.stderr).toContain("Loops UI requires a TTY terminal.");
     expect(result.stderr).toContain("loops list");
   });
 

@@ -69,7 +69,7 @@ const MIN_RUNNER_LEASE_MS = 1_000;
 
 program
   .name("loops-api")
-  .description("OpenLoops self-hosted control-plane API foundation")
+  .description("Loops self-hosted control-plane API foundation")
   .version(packageVersion())
   .option("-j, --json", "print JSON");
 

@@ -217,7 +217,7 @@ async function withStore<T>(fn: (store: LoopStore) => Promise<T>): Promise<T> {
 function assertLocalOnlyCommand(command: string): void {
   if (isCloudStore()) {
     throw new ValidationError(
-      `'loops ${command}' operates on this machine's local runtime and is not available while flipped to the hosted OpenLoops API. ` +
+      `'loops ${command}' operates on this machine's local runtime and is not available while flipped to the hosted Loops API. ` +
         `Unset HASNA_LOOPS_API_URL/HASNA_LOOPS_API_KEY (or set HASNA_LOOPS_STORAGE_MODE=local) to run it here.`,
     );
   }
@@ -410,9 +410,9 @@ function targetLabel(target: LoopTarget): string {
 
 function defaultLoopDescription(name: string, schedule: ScheduleSpec, target: LoopTarget): string {
   return [
-    `Why: keep ${name} running as an OpenLoops scheduled automation.`,
+    `Why: keep ${name} running as a Loops scheduled automation.`,
     `How: ${targetLabel(target)} on cadence ${scheduleLabel(schedule)}.`,
-    "Outcome: record each run, status, retries, and evidence in OpenLoops for operator review.",
+    "Outcome: record each run, status, retries, and evidence in Loops for operator review.",
   ].join(" ");
 }
 
@@ -736,11 +736,11 @@ const goal = program.command("goal").description("inspect goal runs");
 
 program
   .command("mode")
-  .description("show the active OpenLoops deployment mode")
+  .description("show the active Loops deployment mode")
   .option("--json", "print JSON")
   .action(runAction(deploymentStatusCommand()));
 
-const selfHosted = program.command("self-hosted").description("inspect the self-hosted OpenLoops contract");
+const selfHosted = program.command("self-hosted").description("inspect the self-hosted Loops contract");
 selfHosted
   .command("status")
   .option("--json", "print JSON")
@@ -748,7 +748,7 @@ selfHosted
 
 program
   .command("export")
-  .description("export a local OpenLoops migration bundle")
+  .description("export a local Loops migration bundle")
   .requiredOption("--file <path>", "write bundle JSON to this path")
   .option("--dry-run", "preview the bundle without writing the file")
   .option("--no-runs", "omit loop run history from the bundle")
@@ -780,7 +780,7 @@ program
 
 program
   .command("import <file>")
-  .description("preview or apply a local OpenLoops migration bundle")
+  .description("preview or apply a local Loops migration bundle")
   .option("--apply", "apply the import; default is a dry-run preview")
   .option("--replace", "update existing rows whose ids match but hashes differ")
   .option("--no-runs", "ignore loop run history in the bundle")
@@ -903,7 +903,7 @@ selfHosted
   .option("--json", "print JSON")
   .action(selfHostedMigrationCommand("self-hosted-pull"));
 
-const cloud = program.command("cloud").description("inspect the hosted OpenLoops contract");
+const cloud = program.command("cloud").description("inspect the hosted Loops contract");
 cloud
   .command("status")
   .option("--json", "print JSON")
@@ -972,7 +972,7 @@ function printWorkflowListWarning(args: { shown: number; total: number; status?:
 templates
   .command("list")
   .alias("ls")
-  .description("list OpenLoops templates")
+  .description("list Loops templates")
   .option("--source <source>", "template source: all, builtin, or custom", "all")
   .action(runAction((opts) => {
     const values = listLoopTemplates({ source: templateSource(opts.source) });
@@ -1815,7 +1815,7 @@ program
     // flipped to the cloud API. Fail loudly instead of rendering the wrong store.
     assertLocalOnlyCommand("ui");
     if (!process.stdin.isTTY || !process.stdout.isTTY) {
-      console.error("OpenLoops UI requires a TTY terminal.");
+      console.error("Loops UI requires a TTY terminal.");
       console.error("Use `loops list`, `loops runs`, or `loops daemon status` non-interactively.");
       process.exitCode = 1;
       return;
@@ -1980,7 +1980,7 @@ const health = program
 
 health
   .command("scan")
-  .description("scan OpenLoops health, write bounded reports, and optionally upsert deduped todos findings")
+  .description("scan Loops health, write bounded reports, and optionally upsert deduped todos findings")
   .option("--include <statuses>", "comma-separated loop statuses to inventory: active,paused,stopped,expired,all", "active,paused")
   .option("--limit <n>", "maximum loops to inspect", "200")
   .option("--max-findings <n>", "maximum findings to include in output", "100")
@@ -2085,7 +2085,7 @@ health
           taskList: {
             slug: opts.taskList,
             name: "Loop Error Self Heal",
-            description: "Deduped OpenLoops health scan findings for daemon, doctor, preflight, latest-run, and stale-running issues.",
+            description: "Deduped Loops health scan findings for daemon, doctor, preflight, latest-run, and stale-running issues.",
           },
           cursorKey: routeCursorKey(
             "health",
@@ -2154,7 +2154,7 @@ health
         taskList: {
           slug: opts.taskList,
           name: "Loop Error Self Heal",
-          description: "Deduped OpenLoops health expectation failures routed by loops health route-tasks.",
+          description: "Deduped Loops health expectation failures routed by loops health route-tasks.",
         },
         cursorKey: routeCursorKey("health", [opts.project, opts.taskList, opts.limit, Boolean(opts.includeInactive)], {
           autoRoute: Boolean(opts.autoRoute),
@@ -2203,7 +2203,7 @@ health
     }
   }));
 
-const hygiene = program.command("hygiene").description("deterministic OpenLoops hygiene checks and safe repairs");
+const hygiene = program.command("hygiene").description("deterministic Loops hygiene checks and safe repairs");
 
 hygiene
   .command("names")
@@ -2330,8 +2330,8 @@ hygiene
         project: opts.project,
         taskList: {
           slug: opts.taskList,
-          name: "OpenLoops Hygiene",
-          description: "Deduped OpenLoops hygiene findings routed by loops hygiene route-tasks.",
+          name: "Loops Hygiene",
+          description: "Deduped Loops hygiene findings routed by loops hygiene route-tasks.",
         },
         cursorKey: routeCursorKey("hygiene", [opts.project, opts.taskList, checks, opts.limit, Boolean(opts.includeInactive), opts.scriptsDir ?? ""], {
           autoRoute: Boolean(opts.autoRoute),
@@ -2510,7 +2510,7 @@ program.command("tick").description("run one scheduler tick").action(runAction(a
   }
 }));
 
-program.command("doctor").description("check local OpenLoops runtime dependencies and state").action(runAction(() => {
+program.command("doctor").description("check local Loops runtime dependencies and state").action(runAction(() => {
   assertLocalOnlyCommand("doctor");
   const store = new Store();
   try {

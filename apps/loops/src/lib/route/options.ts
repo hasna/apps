@@ -208,7 +208,7 @@ const AGENT_ROUTING_OPTION_SPECS: RouteOptionSpec[] = [
     description: "for codewith auth-profile pools, spread dispatch to the least-loaded account and defer when every pool member already has this many running steps (default 2 for pools of 2+; 0 disables the guard)",
   },
   { flags: "--worktree-mode <mode>", key: "worktreeMode", kind: "value", description: "worktree isolation mode: auto, required, off, or main", defaultValue: "auto" },
-  { flags: "--worktree-root <path>", key: "worktreeRoot", kind: "value", description: "base directory for OpenLoops-managed git worktrees" },
+  { flags: "--worktree-root <path>", key: "worktreeRoot", kind: "value", description: "base directory for Loops-managed git worktrees" },
   { flags: "--worktree-branch-prefix <prefix>", key: "worktreeBranchPrefix", kind: "value", description: "branch prefix for generated worktrees", defaultValue: "openloops" },
   {
     flags: "--pr-handoff",

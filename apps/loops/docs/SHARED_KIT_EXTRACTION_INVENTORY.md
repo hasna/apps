@@ -623,3 +623,9 @@ For logging/redaction:
   redaction packages.
 - No consumer migration should be routed until the package boundary and package
   source of truth are approved.
+
+## Naming Note (2026-07-21)
+
+The current product display name is **Loops**. The dated inventory above retains
+its historical naming as provenance, and compatibility identifiers remain
+unchanged.

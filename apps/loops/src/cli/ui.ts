@@ -120,7 +120,7 @@ export function renderLoopUiFrame(snapshot: LoopUiSnapshot, opts: RenderLoopUiFr
   ].join(" | ");
 
   const lines = [
-    paint(`OpenLoops`, `${BOLD}${CYAN}`, color) + paint(" live loops", DIM, color),
+    paint(`Loops`, `${BOLD}${CYAN}`, color) + paint(" live loops", DIM, color),
     paint(fitLine(statLine, columns), DIM, color),
     "",
     paint(tableHeader(widths, compact), `${BOLD}${CYAN}`, color),

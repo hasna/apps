@@ -85,7 +85,7 @@ const runReceiptSummarySchema = z.object({
   duration_ms: z.number().int().min(0).optional().describe("Run duration in milliseconds."),
 });
 const runReceiptInputSchema = {
-  loop_id: z.string().min(1).optional().describe("OpenLoops loop id. Optional when run_id references an existing loop run."),
+  loop_id: z.string().min(1).optional().describe("Loops loop id. Optional when run_id references an existing loop run."),
   run_id: z.string().min(1).describe("Scheduler-neutral run id. Existing values are updated idempotently."),
   machine: z.union([z.string().min(1), z.record(z.string(), z.unknown())]).optional().describe("Machine id/name or machine metadata object."),
   repo: z.string().min(1).optional().describe("Repository path or owner/repo string. Defaults from the loop target cwd when possible."),
@@ -274,7 +274,7 @@ async function withStore<T>(fn: (store: LoopStore) => T | Promise<T>): Promise<T
 async function withLocalStore<T>(operation: string, fn: (store: Store) => T | Promise<T>): Promise<T> {
   if (isCloudStore()) {
     throw new Error(
-      `'${operation}' inspects this machine's local OpenLoops runtime and is not available while flipped to the hosted OpenLoops API. ` +
+      `'${operation}' inspects this machine's local Loops runtime and is not available while flipped to the hosted Loops API. ` +
         `Unset HASNA_LOOPS_API_URL/HASNA_LOOPS_API_KEY (or set HASNA_LOOPS_STORAGE_MODE=local) to run it here.`,
     );
   }
@@ -363,9 +363,9 @@ function targetLabel(target: LoopTarget): string {
 
 function defaultLoopDescription(name: string, schedule: ScheduleSpec, target: LoopTarget): string {
   return [
-    `Why: keep ${name} running as an OpenLoops scheduled automation.`,
+    `Why: keep ${name} running as a Loops scheduled automation.`,
     `How: ${targetLabel(target)} on cadence ${scheduleLabel(schedule)}.`,
-    "Outcome: record each run, status, retries, and evidence in OpenLoops for operator review.",
+    "Outcome: record each run, status, retries, and evidence in Loops for operator review.",
   ].join(" ");
 }
 
@@ -439,7 +439,7 @@ function parseWorkflowInput(input: { workflow?: Record<string, unknown>; workflo
 const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
   {
     name: "loops_list",
-    description: "List local OpenLoops loops.",
+    description: "List local Loops loops.",
     readOnly: true,
     annotations: READ_ONLY_ANNOTATIONS,
     inputSchema: {
@@ -573,7 +573,7 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
   },
   {
     name: "loops_doctor",
-    description: "Run OpenLoops runtime diagnostics.",
+    description: "Run Loops runtime diagnostics.",
     readOnly: true,
     annotations: READ_ONLY_ANNOTATIONS,
     inputSchema: {},
@@ -581,7 +581,7 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
   },
   {
     name: "loops_health",
-    description: "Build the OpenLoops health report: per-loop expectations, failure classifications, and recommended follow-up tasks.",
+    description: "Build the Loops health report: per-loop expectations, failure classifications, and recommended follow-up tasks.",
     readOnly: true,
     annotations: READ_ONLY_ANNOTATIONS,
     inputSchema: {
@@ -594,7 +594,7 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
   },
   {
     name: "loops_health_scan",
-    description: "Build a read-only OpenLoops health scan with bounded daemon, doctor/preflight, latest-run, and stale-running findings.",
+    description: "Build a read-only Loops health scan with bounded daemon, doctor/preflight, latest-run, and stale-running findings.",
     readOnly: true,
     annotations: READ_ONLY_ANNOTATIONS,
     inputSchema: {
@@ -656,7 +656,7 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
   {
     name: "loops_workflows_list",
     aliases: ["workflows_list"],
-    description: "List stored OpenLoops workflow specs.",
+    description: "List stored Loops workflow specs.",
     readOnly: true,
     annotations: READ_ONLY_ANNOTATIONS,
     inputSchema: {
@@ -1026,8 +1026,8 @@ export function createLoopsMcpServer(): McpServer {
     "open-loops-runtime",
     "loops://runtime",
     {
-      title: "OpenLoops Runtime",
-      description: "Current OpenLoops package version and data directory.",
+      title: "Loops Runtime",
+      description: "Current Loops package version and data directory.",
       mimeType: "application/json",
     },
     async () => ({
@@ -1045,8 +1045,8 @@ export function createLoopsMcpServer(): McpServer {
     "open-loops-tools",
     "loops://tools",
     {
-      title: "OpenLoops MCP Tools",
-      description: "Static metadata for the OpenLoops MCP tool surface.",
+      title: "Loops MCP Tools",
+      description: "Static metadata for the Loops MCP tool surface.",
       mimeType: "application/json",
     },
     async () => ({

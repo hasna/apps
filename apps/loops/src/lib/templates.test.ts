@@ -110,7 +110,7 @@ describe("prompt fragment composition", () => {
   const verifierPrompt = agentTargetOf(stepById(workflow, "verifier")).prompt;
 
   test("worker prompt composes goal header, worktree policy, and exact todos commands in order", () => {
-    expect(workerPrompt.startsWith("/goal Complete todos task task-1200 in REPO_PLACEHOLDER.\n\nYou are the worker agent for a task-triggered OpenLoops workflow.")).toBe(true);
+    expect(workerPrompt.startsWith("/goal Complete todos task task-1200 in REPO_PLACEHOLDER.\n\nYou are the worker agent for a task-triggered Loops workflow.")).toBe(true);
     const lines = workerPrompt.split("\n");
     const stanzaStart = lines.indexOf("Use these exact todos commands so worktree cwd inference cannot attach to the wrong project:");
     expect(stanzaStart).toBeGreaterThan(0);
@@ -133,7 +133,7 @@ describe("prompt fragment composition", () => {
   });
 
   test("disabled worktree policy prose explains the mode instead of listing worktree paths", () => {
-    expect(workerPrompt).toContain("OpenLoops worktree policy:");
+    expect(workerPrompt).toContain("Loops worktree policy:");
     expect(workerPrompt).toContain("- Worktree mode off did not select an isolated worktree: worktree mode disabled.");
     expect(workerPrompt).not.toContain("- Worktree root:");
   });
@@ -164,10 +164,10 @@ describe("prompt fragment composition", () => {
     for (const prompt of [triage, planner, worker, verifier]) {
       expect(prompt).not.toContain("/goal ");
       expect(prompt).toContain("You are the ");
-      expect(prompt).toContain("step for a full task-triggered OpenLoops lifecycle.");
+      expect(prompt).toContain("step for a full task-triggered Loops lifecycle.");
     }
-    expect(worker.startsWith("Objective: Complete todos task task-1200 according to the planner evidence.\nYou are the worker step for a full task-triggered OpenLoops lifecycle.")).toBe(true);
-    expect(verifier.startsWith("Objective: Verify todos task task-1200 after the full lifecycle worker step.\nYou are the verifier step for a full task-triggered OpenLoops lifecycle.")).toBe(true);
+    expect(worker.startsWith("Objective: Complete todos task task-1200 according to the planner evidence.\nYou are the worker step for a full task-triggered Loops lifecycle.")).toBe(true);
+    expect(verifier.startsWith("Objective: Verify todos task task-1200 after the full lifecycle worker step.\nYou are the verifier step for a full task-triggered Loops lifecycle.")).toBe(true);
   });
 
   test("lifecycle gate-stop fragment carries per-stage deltas", () => {
@@ -271,7 +271,7 @@ describe("prompt fragment composition", () => {
   test("verifier runtime guidance reflects the idle watchdog configuration", () => {
     const defaults = renderTodosTaskWorkerVerifierWorkflow({ taskId: "t", projectPath: plainPath });
     const defaultVerifier = agentTargetOf(stepById(defaults, "verifier"));
-    expect(defaultVerifier.prompt).toContain("OpenLoops will mark this verifier timed_out after 900000ms without stdout/stderr.");
+    expect(defaultVerifier.prompt).toContain("Loops will mark this verifier timed_out after 900000ms without stdout/stderr.");
     expect(defaultVerifier.idleTimeoutMs).toBe(900000);
 
     const disabled = renderLoopTemplate(TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID, {

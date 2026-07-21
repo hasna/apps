@@ -835,7 +835,7 @@ export async function assertTenantEnforcementBootstrapIfPending(
     if (!isPostgresInsufficientPrivilege(error)) throw error;
     await assertTenantEnforcementBootstrap(client);
     throw new Error(
-      "tenant enforcement migration ledger remains unreadable after the authority probe; reassign the ledger and all legacy OpenLoops objects to a role the bootstrap login can SET before retrying",
+      "tenant enforcement migration ledger remains unreadable after the authority probe; reassign the ledger and all legacy Loops objects to a role the bootstrap login can SET before retrying",
     );
   }
   if (preview.plan.some((item) =>
@@ -914,7 +914,7 @@ async function runServe(opts: { host: string; port: number }): Promise<void> {
 const program = new Command();
 program
   .name("loops-serve")
-  .description("OpenLoops self-hosted HTTP control-plane (RDS-direct, API-key auth)")
+  .description("Loops self-hosted HTTP control-plane (RDS-direct, API-key auth)")
   .version(packageVersion());
 
 program
@@ -1066,7 +1066,7 @@ export function classifyTenantEnforcementGate(
   if (message.startsWith("reserved OpenLoops role")) {
     return {
       gate: "cross_database_role_dependency",
-      action: "remove the cross-database dependency or use an isolated OpenLoops cluster",
+      action: "remove the cross-database dependency or use an isolated Loops cluster",
     };
   }
   if (message.startsWith("unsafe privileged role membership")) {
@@ -1096,7 +1096,7 @@ export function classifyTenantEnforcementGate(
   if (message.startsWith("tenant enforcement migration ledger remains unreadable")) {
     return {
       gate: "migration_ledger_ownership",
-      action: "reassign the ledger and legacy OpenLoops objects to a role the bootstrap login can SET",
+      action: "reassign the ledger and legacy Loops objects to a role the bootstrap login can SET",
     };
   }
   const authorityStage = message.match(

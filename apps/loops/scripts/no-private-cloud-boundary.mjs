@@ -171,4 +171,4 @@ if (findings.length) {
   process.exit(1);
 }
 
-console.log("OpenLoops private cloud boundary scan passed");
+console.log("Loops private cloud boundary scan passed");
