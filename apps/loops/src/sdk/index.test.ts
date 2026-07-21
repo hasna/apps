@@ -33,8 +33,10 @@ describe("loops sdk", () => {
 
   test("generated HTTP client exposes pagination and output query params", async () => {
     const urls: string[] = [];
-    const fetchImpl = async (input: string | URL) => {
+    const requests: RequestInit[] = [];
+    const fetchImpl = async (input: string | URL, init?: RequestInit) => {
       urls.push(String(input));
+      requests.push(init ?? {});
       return Response.json({ ok: true, runs: [] });
     };
     const client = new HttpLoopsClient({ baseUrl: "http://127.0.0.1:8787", fetch: fetchImpl as typeof fetch });
@@ -42,6 +44,9 @@ describe("loops sdk", () => {
     await client.listLoops({ limit: 10, offset: 20, includeArchived: true, labels: ["browserplan", "nightly"] });
     await client.listRuns({ limit: 5, offset: 15, showOutput: true, labels: ["browserplan"] });
     await client.getRun("run-1", { showOutput: true });
+    await client.workflowRunsRecover("workflow-1", { reason: "operator retry" });
+    await client.workflowRunsRecover("workflow-2");
+    await client.runsWorkflowRunsRecover("run-1", "workflow-1", { claimToken: "claim-token" });
 
     expect(urls[0]).toBe(
       "http://127.0.0.1:8787/v1/loops?limit=10&offset=20&includeArchived=true&labels=browserplan%2Cnightly",
@@ -50,6 +55,11 @@ describe("loops sdk", () => {
       "http://127.0.0.1:8787/v1/runs?limit=5&offset=15&showOutput=true&labels=browserplan",
     );
     expect(urls[2]).toBe("http://127.0.0.1:8787/v1/runs/run-1?showOutput=true");
+    expect(urls[3]).toBe("http://127.0.0.1:8787/v1/workflow-runs/workflow-1/recover");
+    expect(urls[4]).toBe("http://127.0.0.1:8787/v1/workflow-runs/workflow-2/recover");
+    expect(requests[4]?.body).toBeUndefined();
+    expect(new Headers(requests[4]?.headers).has("content-type")).toBe(false);
+    expect(urls[5]).toBe("http://127.0.0.1:8787/v1/runs/run-1/workflow-runs/workflow-1/recover");
   });
 
   test("describes the OpenAutomations runtime handoff without claiming product ownership", () => {

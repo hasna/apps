@@ -75,6 +75,7 @@ export const ROUTE_POLICIES: readonly RoutePolicy[] = Object.freeze([
   policy("workflows.archive", "POST", "/v1/workflows/{id}/archive", /^\/v1\/workflows\/[^/]+\/archive$/, ["loops:write"], WRITE_ROLES, ["api_key", "service"], "write"),
   policy("workflowRuns.list", "GET", "/v1/workflow-runs", /^\/v1\/workflow-runs$/, ["loops:read"], READ_ROLES, ["api_key", "service"], "read"),
   policy("workflowRuns.get", "GET", "/v1/workflow-runs/{id}", /^\/v1\/workflow-runs\/[^/]+$/, ["loops:read"], READ_ROLES, ["api_key", "service"], "read"),
+  policy("workflowRuns.recover", "POST", "/v1/workflow-runs/{id}/recover", /^\/v1\/workflow-runs\/[^/]+\/recover$/, ["loops:write"], ADMIN_ROLES, ["api_key", "service"], "write"),
   policy("workflowRuns.steps", "GET", "/v1/workflow-runs/{id}/steps", /^\/v1\/workflow-runs\/[^/]+\/steps$/, ["loops:read"], READ_ROLES, ["api_key", "service"], "read"),
   policy("workflowRuns.events", "GET", "/v1/workflow-runs/{id}/events", /^\/v1\/workflow-runs\/[^/]+\/events$/, ["loops:read"], READ_ROLES, ["api_key", "service"], "read"),
   policy("workItems.list", "GET", "/v1/work-items", /^\/v1\/work-items$/, ["loops:read"], READ_ROLES, ["api_key", "service"], "read"),

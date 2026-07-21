@@ -104,6 +104,37 @@ describe("LocalStore public workflow events", () => {
       await store.close();
     }
   });
+
+  test("recovers workflow steps through the operator endpoint instead of the runner-scoped route", async () => {
+    const storage = createSqliteLoopStorage(":memory:");
+    const principal = {
+      tenantId: "tenant-test", principalId: "principal-test", requestId: "request-test",
+      kid: "kid-test", agent: "principal-test", scopes: ["loops:*"],
+      roles: ["operator" as const], tokenKind: "api_key" as const,
+      claims: { v: 1, kid: "kid-test", app: "loops", agent: "principal-test", scopes: ["loops:*"], iat: 1, exp: null },
+    };
+    const server = createLoopsApiServer({
+      host: "127.0.0.1", port: 0,
+      authenticator: { authenticate: async () => ({ ok: true as const, status: 200 as const, principal }) },
+      withTenantStorage: (_principal, fn) => fn(storage),
+    });
+    try {
+      const workflow = await storage.createWorkflow(WORKFLOW_INPUT);
+      const run = await storage.createWorkflowRun({ workflow });
+      await storage.startWorkflowStepRun(run.id, "s1");
+      const store = apiStoreForServer((server as { port: number }).port);
+
+      const recovered = await store.recoverWorkflowRun(run.id, "operator retry");
+      expect(recovered.run.id).toBe(run.id);
+      expect(recovered.recoveredSteps).toMatchObject([
+        { workflowRunId: run.id, stepId: "s1", status: "pending" },
+      ]);
+      await store.close();
+    } finally {
+      server.stop?.(true);
+      await storage.close();
+    }
+  });
 });
 
 describe("ApiStore end-to-end against the real /v1 server", () => {

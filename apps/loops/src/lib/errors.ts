@@ -170,3 +170,30 @@ export class WorkflowRunDefinitionConflictError extends CodedError {
     );
   }
 }
+
+export class WorkflowRunHasLiveStepsError extends CodedError {
+  constructor() {
+    super(
+      "WORKFLOW_RUN_HAS_LIVE_STEPS",
+      "workflow run cannot be recovered while step processes are still alive",
+    );
+  }
+}
+
+export class WorkflowRunStepOwnershipUnverifiableError extends CodedError {
+  constructor() {
+    super(
+      "WORKFLOW_RUN_STEP_OWNERSHIP_UNVERIFIABLE",
+      "workflow run recovery ownership could not be verified",
+    );
+  }
+}
+
+export class WorkflowRunNotRunningError extends CodedError {
+  constructor() {
+    super(
+      "WORKFLOW_RUN_NOT_RUNNING",
+      "workflow run can only be recovered while it is running",
+    );
+  }
+}

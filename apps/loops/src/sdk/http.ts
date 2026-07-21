@@ -11,6 +11,14 @@ export interface InvalidLoopStatusResponse { "ok": boolean; "error": string }
 
 export interface AmbiguousNameResponse { "ok": boolean; "error": string }
 
+export interface InvalidJsonResponse { "ok": boolean; "error": string }
+
+export interface UnsupportedMediaTypeResponse { "ok": boolean; "error": string }
+
+export interface InvalidWorkflowRecoveryBodyResponse { "ok": boolean; "error": string }
+
+export interface WorkflowRecoveryConflictResponse { "ok": boolean; "error": "workflow_run_has_live_steps" | "workflow_run_step_ownership_unverifiable" | "workflow_run_not_running" }
+
 export interface Foundation { "status": string; "version": string; "mode": string; "service"?: string; "detail"?: string }
 
 export interface Loop { "id": string; "name": string; "description"?: string | null; "labels": Array<string>; "status": "active" | "paused" | "stopped" | "expired"; "schedule"?: Record<string, unknown>; "target"?: Record<string, unknown>; "nextRunAt"?: string | null; "createdAt"?: string; "updatedAt"?: string }
@@ -684,6 +692,15 @@ export class LoopsClient {
     async workflowRunsEvents(id: string, init?: RequestInit): Promise<WorkflowEventListResponse> {
       return this.request("GET", `/v1/workflow-runs/${encodeURIComponent(String(id))}/events`, {
         body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** workflowRuns.recover */
+    async workflowRunsRecover(id: string, body?: { "reason"?: string }, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/workflow-runs/${encodeURIComponent(String(id))}/recover`, {
+        body,
         query: undefined,
         init,
       });
