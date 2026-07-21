@@ -119,6 +119,7 @@ import {
   type TodosDrainOptions,
   type TodosTaskRouteOptions,
 } from "../lib/route/index.js";
+import { sanitizeCliErrorContext } from "./safe-error-context.js";
 
 const program = new Command();
 
@@ -163,14 +164,16 @@ function reportCliError(error: unknown): void {
   process.exitCode = 1;
   if (error instanceof GateError) {
     if (isJson()) {
+      const safeContext = sanitizeCliErrorContext(error.context);
       print({
+        ...safeContext,
         ok: false,
         created: false,
         [error.gate]: {
           ok: false,
+          code: error.code,
           error: safeMessage,
         },
-        ...error.context,
       });
       return;
     }
@@ -210,22 +213,64 @@ async function withStore<T>(fn: (store: LoopStore) => Promise<T>): Promise<T> {
 
 type LoopListOptions = NonNullable<Parameters<LoopStore["listLoops"]>[0]>;
 const CLI_LOOP_LIST_PAGE_SIZE = 200;
+const CLI_LOOP_LIST_MAX_PAGES = 1_000;
+const CLI_LOOP_LIST_MAX_ITEMS = 100_000;
+
+function loopListPaginationError(reason: string): CodedError {
+  return new CodedError("LOOP_LIST_PAGINATION_FAILED", `loop list pagination failed: ${reason}`);
+}
 
 async function listAllLoops(
   store: LoopStore,
   opts: Omit<LoopListOptions, "limit" | "offset"> = {},
 ): Promise<Loop[]> {
   const loops: Loop[] = [];
+  const seenIds = new Set<string>();
   let offset = 0;
+  let pageCount = 0;
+  let previousPageIds: string[] | undefined;
   while (true) {
+    if (pageCount >= CLI_LOOP_LIST_MAX_PAGES) {
+      throw loopListPaginationError(`exceeded the ${CLI_LOOP_LIST_MAX_PAGES}-page safety ceiling`);
+    }
     const page = await store.listLoops({
       ...opts,
       limit: CLI_LOOP_LIST_PAGE_SIZE,
       offset,
     });
-    loops.push(...page);
+    pageCount += 1;
+    if (page.length === 0) return loops;
+
+    const pageIds = page.map((loop) => loop.id);
+    if (
+      previousPageIds?.length === pageIds.length &&
+      pageIds.every((id, index) => id === previousPageIds![index])
+    ) {
+      throw loopListPaginationError("the backend repeated a page");
+    }
+
+    let newIds = 0;
+    for (const loop of page) {
+      if (typeof loop.id !== "string" || loop.id.length === 0) {
+        throw loopListPaginationError("the backend returned a loop without a usable id");
+      }
+      if (seenIds.has(loop.id)) continue;
+      seenIds.add(loop.id);
+      loops.push(loop);
+      newIds += 1;
+      if (loops.length > CLI_LOOP_LIST_MAX_ITEMS) {
+        throw loopListPaginationError(`exceeded the ${CLI_LOOP_LIST_MAX_ITEMS}-item safety ceiling`);
+      }
+    }
+    if (newIds === 0) throw loopListPaginationError("a page contained no new loop ids");
     if (page.length < CLI_LOOP_LIST_PAGE_SIZE) return loops;
-    offset += page.length;
+
+    const nextOffset = offset + page.length;
+    if (!Number.isSafeInteger(nextOffset) || nextOffset <= offset) {
+      throw loopListPaginationError("the backend did not advance the page offset");
+    }
+    previousPageIds = pageIds;
+    offset = nextOffset;
   }
 }
 

@@ -401,7 +401,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
     // (archived included) matching the name so callers can detect ambiguity.
     if (opts.name != null) {
       const rows = await this.client.many<LoopRow>(
-        "SELECT * FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND name = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+        "SELECT * FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND name = $1 ORDER BY created_at DESC, id DESC LIMIT $2 OFFSET $3",
         [opts.name, limit, offset],
       );
       return rows.map(rowToLoop);
@@ -417,7 +417,9 @@ export class PostgresLoopStorage implements LoopStorageContract {
     if (opts.archived) filters.push("archived_at IS NOT NULL");
     else if (!opts.includeArchived) filters.push("archived_at IS NULL");
     for (const label of labels) filters.push(`labels_json @> ${bind(JSON.stringify([label]))}::jsonb`);
-    const order = opts.archived ? "archived_at DESC" : "status ASC, next_run_at ASC";
+    const order = opts.archived
+      ? "archived_at DESC, id DESC"
+      : "status ASC, next_run_at ASC, id ASC";
     const limitParam = bind(limit);
     const offsetParam = bind(offset);
     const rows = await this.client.many<LoopRow>(
