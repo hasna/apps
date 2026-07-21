@@ -30,6 +30,8 @@ export class SqliteLoopStorage implements LoopStorageContract {
   listLoops(...args: StoreMethod<"listLoops">["args"]) { return this.call("listLoops", ...args); }
   dueLoops(...args: StoreMethod<"dueLoops">["args"]) { return this.call("dueLoops", ...args); }
   updateLoop(...args: StoreMethod<"updateLoop">["args"]) { return this.call("updateLoop", ...args); }
+  advanceLoopIfCurrent(...args: StoreMethod<"advanceLoopIfCurrent">["args"]) { return this.call("advanceLoopIfCurrent", ...args); }
+  tripCircuitBreakerIfCurrent(...args: StoreMethod<"tripCircuitBreakerIfCurrent">["args"]) { return this.call("tripCircuitBreakerIfCurrent", ...args); }
   renameLoop(...args: StoreMethod<"renameLoop">["args"]) { return this.call("renameLoop", ...args); }
   archiveLoop(...args: StoreMethod<"archiveLoop">["args"]) { return this.call("archiveLoop", ...args); }
   unarchiveLoop(...args: StoreMethod<"unarchiveLoop">["args"]) { return this.call("unarchiveLoop", ...args); }
@@ -82,10 +84,12 @@ export class SqliteLoopStorage implements LoopStorageContract {
   createSkippedRun(...args: StoreMethod<"createSkippedRun">["args"]) { return this.call("createSkippedRun", ...args); }
   getRun(...args: StoreMethod<"getRun">["args"]) { return this.call("getRun", ...args); }
   getRunBySlot(...args: StoreMethod<"getRunBySlot">["args"]) { return this.call("getRunBySlot", ...args); }
+  nextRetryableRun(...args: StoreMethod<"nextRetryableRun">["args"]) { return this.call("nextRetryableRun", ...args); }
   claimRun(...args: StoreMethod<"claimRun">["args"]) { return this.call("claimRun", ...args); }
   finalizeRun(...args: StoreMethod<"finalizeRun">["args"]) { return this.call("finalizeRun", ...args); }
   heartbeatRunLease(...args: StoreMethod<"heartbeatRunLease">["args"]) { return this.call("heartbeatRunLease", ...args); }
   listRuns(...args: StoreMethod<"listRuns">["args"]) { return this.call("listRuns", ...args); }
+  listRecoveredLeaseRunsPage(...args: StoreMethod<"listRecoveredLeaseRunsPage">["args"]) { return this.call("listRecoveredLeaseRunsPage", ...args); }
   writeRunReceipt(...args: StoreMethod<"writeRunReceipt">["args"]) { return this.call("writeRunReceipt", ...args); }
   getRunReceipt(...args: StoreMethod<"getRunReceipt">["args"]) { return this.call("getRunReceipt", ...args); }
   listRunReceipts(...args: StoreMethod<"listRunReceipts">["args"]) { return this.call("listRunReceipts", ...args); }

@@ -1540,6 +1540,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "The runner claim is stale, the run is no longer running, or both bounded loop-advancement attempts lost a concurrent scheduling transition",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunFinalizeConflictResponse"
+                }
+              }
+            }
           }
         },
         "x-authorization-operation": "runs.finalize",
@@ -3626,6 +3636,28 @@
               "workflow_run_has_live_steps",
               "workflow_run_step_ownership_unverifiable",
               "workflow_run_not_running"
+            ]
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ]
+      },
+      "RunFinalizeConflictResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "type": "string",
+            "enum": [
+              "stale_claim",
+              "run_not_running",
+              "loop_advancement_conflict"
             ]
           }
         },

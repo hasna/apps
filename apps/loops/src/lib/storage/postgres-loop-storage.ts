@@ -28,12 +28,15 @@ import type {
   PruneHistorySummary,
   RecordGoalEventInput,
   RecoverExpiredRunLeasesResult,
+  RecoveredLeaseRunPage,
   WorkflowRecoveryContext,
 } from "../store.js";
 import { Store } from "../store.js";
 import {
   GATE_DEATH_CEILING,
+  GENERATED_ROUTE_KEYS,
   classifyNonProductiveStepFailure,
+  isGeneratedRouteTemplate,
   persistedJson,
   persistedRunOutput,
   persistedWorkflowEventPayload,
@@ -93,6 +96,7 @@ import type {
   LoopRun,
   LoopStatus,
   LoopTarget,
+  RecoveredLeaseRunSnapshotEntry,
   RunReceipt,
   UpsertWorkflowWorkItemInput,
   WorkflowRun,
@@ -152,6 +156,18 @@ interface DaemonLeaseFence {
   daemonLeaseId?: string;
   now?: Date;
   claimToken?: string;
+  recoveredRun?: RecoveredLeaseRunSnapshotEntry;
+}
+
+function matchesRecoveredLeaseSnapshot(row: RunRow | null | undefined, expected: RecoveredLeaseRunSnapshotEntry): boolean {
+  return Boolean(
+    row &&
+    row.status === "abandoned" &&
+    row.error === "run lease expired before completion" &&
+    row.attempt === expected.attempt &&
+    row.updated_at === expected.updatedAt &&
+    row.scheduled_for === expected.scheduledFor
+  );
 }
 
 export interface TenantStorageContext {
@@ -316,7 +332,147 @@ export class PostgresLoopStorage implements LoopStorageContract {
           ? `attempt failed; retry pending: ${reason}`
           : "attempt failed; retry pending"
         : reason;
+    const workflowRun = loop?.target.type === "workflow" && status !== "admitted"
+      ? await c.get<WorkflowRunRow>(
+          `SELECT * FROM workflow_runs
+           WHERE tenant_id = open_loops_current_tenant_id() AND loop_run_id=$1 AND workflow_id=$2
+           ORDER BY created_at DESC, id DESC LIMIT 1 FOR UPDATE`,
+          [run.id, loop.target.workflowId],
+        )
+      : undefined;
     await this.setWorkItemsForLoop(c, run.loopId, status, nextReason, updated, statuses);
+    if (loop?.target.type === "workflow" && status !== "admitted") {
+      const workItemId = loop.target.input?.workflowWorkItemId ?? loop.target.input?.workItemId;
+      await this.maybeArchiveGeneratedRouteWorkflow(c, {
+        workflowId: loop.target.workflowId,
+        loopId: loop.id,
+        loopRunId: run.id,
+        workItemId,
+        workflowRunId: workflowRun?.id,
+        updated,
+      });
+    }
+  }
+
+  private async maybeArchiveGeneratedRouteWorkflow(
+    c: TypedQueryClient,
+    args: {
+      workflowId: string;
+      loopId?: string;
+      loopRunId?: string;
+      workItemId?: string;
+      workflowRunId?: string;
+      workflowRunStatus?: WorkflowRunStatus;
+      updated: string;
+    },
+  ): Promise<void> {
+    if (!args.loopId || !args.workItemId) return;
+    const workItemRow = await c.get<WorkflowWorkItemRow>(
+      "SELECT * FROM workflow_work_items WHERE tenant_id = open_loops_current_tenant_id() AND id=$1",
+      [args.workItemId],
+    );
+    if (!workItemRow || !GENERATED_ROUTE_KEYS.has(workItemRow.route_key)) return;
+    const invocationRow = await c.get<WorkflowInvocationRow>(
+      "SELECT * FROM workflow_invocations WHERE tenant_id = open_loops_current_tenant_id() AND id=$1",
+      [workItemRow.invocation_id],
+    );
+    if (!invocationRow?.template_id || !isGeneratedRouteTemplate(workItemRow.route_key, invocationRow.template_id)) return;
+    const loopRow = await c.get<LoopRow>(
+      "SELECT * FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND id=$1",
+      [args.loopId],
+    );
+    if (!loopRow) return;
+    const loop = rowToLoop(loopRow);
+    if (loop.schedule.type !== "once" || loop.target.type !== "workflow" || loop.target.workflowId !== args.workflowId) return;
+    if (
+      args.loopRunId
+      && (args.workflowRunStatus === "failed" || args.workflowRunStatus === "timed_out")
+    ) {
+      const loopRunRow = await c.get<RunRow>(
+        "SELECT * FROM loop_runs WHERE tenant_id = open_loops_current_tenant_id() AND id=$1",
+        [args.loopRunId],
+      );
+      if (loopRunRow && loopRunRow.attempt < loop.maxAttempts) return;
+    }
+    const input = loop.target.input ?? {};
+    if (input.workflowWorkItemId !== workItemRow.id || input.workflowInvocationId !== invocationRow.id) return;
+    if (workItemRow.loop_id !== loop.id || workItemRow.workflow_id !== args.workflowId) return;
+    const workflowRow = await c.get<WorkflowRow>(
+      "SELECT * FROM workflow_specs WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 FOR UPDATE",
+      [args.workflowId],
+    );
+    if (!workflowRow || workflowRow.status !== "active") return;
+    let workflowRunId = args.workflowRunId;
+    if (!workflowRunId) {
+      if (!args.loopRunId || workItemRow.workflow_run_id) return;
+      const loopRunRow = await c.get<RunRow>(
+        "SELECT * FROM loop_runs WHERE tenant_id = open_loops_current_tenant_id() AND id=$1",
+        [args.loopRunId],
+      );
+      if (!loopRunRow || loopRunRow.status === "running") return;
+      workflowRunId = `preflight-archive:${loopRunRow.id}`;
+      await c.execute(
+        `INSERT INTO workflow_runs (id, workflow_id, workflow_name, loop_id, loop_run_id, invocation_id, work_item_id,
+          scheduled_for, idempotency_key, workflow_definition_hash, manifest_path, status, started_at, finished_at,
+          duration_ms, error, created_at, updated_at, tenant_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NULL,$9,NULL,'failed',NULL,$10,NULL,$11,$10,$10,open_loops_current_tenant_id())
+         ON CONFLICT DO NOTHING`,
+        [
+          workflowRunId,
+          args.workflowId,
+          workflowRow.name,
+          loop.id,
+          loopRunRow.id,
+          invocationRow.id,
+          workItemRow.id,
+          loopRunRow.scheduled_for,
+          workflowDefinitionHash(rowToWorkflow(workflowRow)),
+          args.updated,
+          "workflow preflight failed before workflow execution; synthetic archival event owner",
+        ],
+      );
+      const archivalOwner = await c.get<WorkflowRunRow>(
+        "SELECT * FROM workflow_runs WHERE tenant_id = open_loops_current_tenant_id() AND id=$1",
+        [workflowRunId],
+      );
+      if (
+        !archivalOwner
+        || archivalOwner.workflow_id !== args.workflowId
+        || archivalOwner.loop_id !== loop.id
+        || archivalOwner.loop_run_id !== loopRunRow.id
+        || archivalOwner.invocation_id !== invocationRow.id
+        || archivalOwner.work_item_id !== workItemRow.id
+        || archivalOwner.status !== "failed"
+        || archivalOwner.started_at !== null
+        || archivalOwner.duration_ms !== null
+      ) return;
+      await c.execute(
+        `UPDATE workflow_work_items SET workflow_run_id=$2, updated_at=$3
+         WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 AND workflow_run_id IS NULL`,
+        [workItemRow.id, workflowRunId, args.updated],
+      );
+    }
+    const nonTerminal = await c.get<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM workflow_runs
+       WHERE tenant_id = open_loops_current_tenant_id() AND workflow_id=$1
+         AND status NOT IN ('succeeded','failed','timed_out','cancelled')`,
+      [args.workflowId],
+    );
+    if ((nonTerminal?.count ?? 0) > 0) return;
+    const archived = await c.query(
+      `UPDATE workflow_specs SET status='archived', updated_at=$2
+       WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 AND status='active'`,
+      [args.workflowId, args.updated],
+    );
+    if (archived.rowCount === 1) {
+      await this.appendWorkflowEventWithClient(c, workflowRunId, "workflow_archived", undefined, {
+        workflowId: args.workflowId,
+        loopId: loop.id,
+        workItemId: workItemRow.id,
+        routeKey: workItemRow.route_key,
+        reason: "terminal generated one-shot route workflow",
+      });
+    }
   }
 
   // ---------------------------------------------------------------- loops CRUD
@@ -497,6 +653,135 @@ export class PostgresLoopStorage implements LoopStorageContract {
       const after = await this.loadLoop(c, id);
       if (!after) throw new Error(`loop not found after update: ${id}`);
       return after;
+    });
+  }
+
+  async advanceLoopIfCurrent(...args: M<"advanceLoopIfCurrent">["args"]): Promise<M<"advanceLoopIfCurrent">["result"]> {
+    const [id, expected, patch, opts = {}] = args;
+    if ("status" in patch && patch.status !== undefined) assertLoopStatus(patch.status);
+    const updated = (opts.now ?? new Date()).toISOString();
+    return this.client.transaction(async (c) => {
+      if (opts.recoveredRun) {
+        const recovered = await c.get<RunRow>(
+          "SELECT * FROM loop_runs WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 FOR UPDATE",
+          [opts.recoveredRun.id],
+        );
+        if (!matchesRecoveredLeaseSnapshot(recovered, opts.recoveredRun)) return undefined;
+      }
+      const current = await this.loadLoop(c, id);
+      if (!current || current.archivedAt) return undefined;
+      const merged: Loop = { ...current, ...patch, updatedAt: updated };
+      const res = await c.query(
+        `UPDATE loops SET status=$1, next_run_at=$2, retry_scheduled_for=$3, updated_at=$4
+         WHERE tenant_id = open_loops_current_tenant_id() AND id=$5
+           AND archived_at IS NULL
+           AND status=$6
+           AND next_run_at IS NOT DISTINCT FROM $7::timestamptz
+           AND retry_scheduled_for IS NOT DISTINCT FROM $8::timestamptz
+           AND ($9::text IS NULL OR EXISTS (
+             SELECT 1 FROM daemon_lease
+             WHERE tenant_id = open_loops_current_tenant_id() AND id=$9 AND expires_at > $10
+           ))`,
+        [
+          merged.status,
+          merged.nextRunAt ?? null,
+          merged.retryScheduledFor ?? null,
+          updated,
+          id,
+          expected.status,
+          expected.nextRunAt ?? null,
+          expected.retryScheduledFor ?? null,
+          opts.daemonLeaseId ?? null,
+          updated,
+        ],
+      );
+      if (res.rowCount !== 1) return undefined;
+      if (patch.status && patch.status !== "active") {
+        const status: WorkflowWorkItemStatus = patch.status === "paused" ? "deferred" : "cancelled";
+        await this.setWorkItemsForLoop(c, id, status, `loop ${patch.status}`, updated);
+      }
+      return this.loadLoop(c, id);
+    });
+  }
+
+  async tripCircuitBreakerIfCurrent(...args: M<"tripCircuitBreakerIfCurrent">["args"]): Promise<M<"tripCircuitBreakerIfCurrent">["result"]> {
+    const [id, expected, patch, marker, opts = {}] = args;
+    if ("status" in patch && patch.status !== undefined) assertLoopStatus(patch.status);
+    const updated = (opts.now ?? new Date()).toISOString();
+    const scrubbedReason = scrubbedOrNull(marker.reason) ?? "";
+    return this.client.transaction(async (c) => {
+      if (opts.recoveredRun) {
+        const recovered = await c.get<RunRow>(
+          "SELECT * FROM loop_runs WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 FOR UPDATE",
+          [opts.recoveredRun.id],
+        );
+        if (!matchesRecoveredLeaseSnapshot(recovered, opts.recoveredRun)) return undefined;
+      }
+      const currentRow = await c.get<LoopRow>(
+        "SELECT * FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 FOR UPDATE",
+        [id],
+      );
+      const current = currentRow ? rowToLoop(currentRow) : undefined;
+      if (
+        !current ||
+        current.archivedAt ||
+        current.status !== expected.status ||
+        current.nextRunAt !== expected.nextRunAt ||
+        current.retryScheduledFor !== expected.retryScheduledFor
+      ) {
+        return undefined;
+      }
+      const merged: Loop = { ...current, ...patch, updatedAt: updated };
+      const res = await c.query(
+        `UPDATE loops SET status=$1, next_run_at=$2, retry_scheduled_for=$3, updated_at=$4
+         WHERE tenant_id = open_loops_current_tenant_id() AND id=$5
+           AND archived_at IS NULL
+           AND status=$6
+           AND next_run_at IS NOT DISTINCT FROM $7::timestamptz
+           AND retry_scheduled_for IS NOT DISTINCT FROM $8::timestamptz
+           AND ($9::text IS NULL OR EXISTS (
+             SELECT 1 FROM daemon_lease
+             WHERE tenant_id = open_loops_current_tenant_id() AND id=$9 AND expires_at > $10
+           ))`,
+        [
+          merged.status,
+          merged.nextRunAt ?? null,
+          merged.retryScheduledFor ?? null,
+          updated,
+          id,
+          expected.status,
+          expected.nextRunAt ?? null,
+          expected.retryScheduledFor ?? null,
+          opts.daemonLeaseId ?? null,
+          updated,
+        ],
+      );
+      if (res.rowCount !== 1) return undefined;
+
+      let markerAtMs = new Date(marker.scheduledFor).getTime();
+      let markerRun: LoopRun | undefined;
+      for (let probe = 0; probe < 1_000 && !markerRun; probe += 1) {
+        const scheduledFor = new Date(markerAtMs).toISOString();
+        const markerId = genId();
+        const inserted = await c.get<{ id: string }>(
+          `INSERT INTO loop_runs (id, loop_id, loop_name, scheduled_for, attempt, status, started_at, finished_at,
+            claimed_by, lease_expires_at, pid, exit_code, duration_ms, stdout, stderr, error, created_at, updated_at, tenant_id)
+           VALUES ($1,$2,$3,$4,1,'skipped',NULL,$5,NULL,NULL,NULL,NULL,NULL,NULL,NULL,$6,$5,$5,open_loops_current_tenant_id())
+           ON CONFLICT (tenant_id, loop_id, scheduled_for) DO NOTHING
+           RETURNING id`,
+          [markerId, current.id, current.name, scheduledFor, updated, scrubbedReason],
+        );
+        if (inserted) markerRun = await this.loadRun(c, inserted.id);
+        markerAtMs += 1;
+      }
+      if (!markerRun) throw new Error(`circuit breaker marker slot unavailable: ${id}`);
+      if (patch.status && patch.status !== "active") {
+        const status: WorkflowWorkItemStatus = patch.status === "paused" ? "deferred" : "cancelled";
+        await this.setWorkItemsForLoop(c, id, status, `loop ${patch.status}`, updated);
+      }
+      const loop = await this.loadLoop(c, id);
+      if (!loop) throw new Error(`circuit breaker loop missing after update: ${id}`);
+      return { loop, marker: markerRun };
     });
   }
 
@@ -889,6 +1174,23 @@ export class PostgresLoopStorage implements LoopStorageContract {
     return this.loadRunBySlot(this.client, args[0], args[1]);
   }
 
+  async nextRetryableRun(...args: M<"nextRetryableRun">["args"]): Promise<M<"nextRetryableRun">["result"]> {
+    const [loopId, maxAttempts, afterScheduledFor] = args;
+    const params: unknown[] = [loopId, maxAttempts];
+    const afterClause = afterScheduledFor ? " AND scheduled_for > $3" : "";
+    if (afterScheduledFor) params.push(afterScheduledFor);
+    const row = await this.client.get<RunRow>(
+      `SELECT * FROM loop_runs
+       WHERE tenant_id = open_loops_current_tenant_id()
+         AND loop_id = $1
+         AND status IN ('failed', 'timed_out', 'abandoned')
+         AND attempt < $2${afterClause}
+       ORDER BY scheduled_for ASC, id ASC LIMIT 1`,
+      params,
+    );
+    return row ? rowToRun(row) : undefined;
+  }
+
   /**
    * Claim a specific loop slot for a runner.
    *
@@ -992,10 +1294,10 @@ export class PostgresLoopStorage implements LoopStorageContract {
       let res;
       if (opts.claimedBy) {
         res = await c.query(
-          `UPDATE loop_runs SET status=$2, finished_at=$3, claim_token=NULL, lease_expires_at=NULL, pid=$4, exit_code=$5,
+          `UPDATE loop_runs SET status=$2, finished_at=$3, lease_expires_at=NULL, pid=$4, exit_code=$5,
            duration_ms=$6, stdout=$7, stderr=$8, error=$9, updated_at=$14
            WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 AND status='running' AND claimed_by=$10 AND lease_expires_at > $11
-             AND ($12::text IS NULL OR claim_token=$12)
+             AND claim_token=$12
              AND ($13::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$13 AND expires_at > $11))`,
           [
             id,
@@ -1016,7 +1318,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
         );
       } else {
         res = await c.query(
-          `UPDATE loop_runs SET status=$2, finished_at=$3, claim_token=NULL, lease_expires_at=NULL, pid=$4, exit_code=$5,
+          `UPDATE loop_runs SET status=$2, finished_at=$3, lease_expires_at=NULL, pid=$4, exit_code=$5,
            duration_ms=$6, stdout=$7, stderr=$8, error=$9, updated_at=$10
            WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 AND status='running'`,
           [
@@ -1033,11 +1335,17 @@ export class PostgresLoopStorage implements LoopStorageContract {
           ],
         );
       }
-      const run = await this.loadRun(c, id);
-      if (!run) throw new Error(`run not found after finalize: ${id}`);
+      const runRow = await c.get<RunRow>(
+        "SELECT * FROM loop_runs WHERE tenant_id = open_loops_current_tenant_id() AND id = $1",
+        [id],
+      );
+      const run = runRow ? rowToRun(runRow) : undefined;
+      if (!run || !runRow) throw new Error(`run not found after finalize: ${id}`);
       if (opts.claimedBy && res.rowCount !== 1) {
         throw new RunFinalizationConflictError(
-          run.status === "running" ? "stale_claim" : "run_not_running",
+          opts.claimToken === undefined || runRow.claim_token !== opts.claimToken
+            ? "stale_claim"
+            : run.status === "running" ? "stale_claim" : "run_not_running",
           id,
         );
       }
@@ -1055,7 +1363,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const res = await this.client.query(
       `UPDATE loop_runs SET lease_expires_at=$2, updated_at=$3
        WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 AND status='running' AND claimed_by=$4 AND lease_expires_at > $5
-         AND ($6::text IS NULL OR claim_token=$6)
+         AND claim_token=$6
          AND ($7::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$7 AND expires_at > $5))`,
       [id, expiresAt, nowStr, claimedBy, nowStr, opts.claimToken ?? null, opts.daemonLeaseId ?? null],
     );
@@ -1069,8 +1377,18 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const res = await this.client.query(
       `UPDATE loop_runs SET pid=$2, pgid=$3, process_started_at=$4, updated_at=$5
        WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 AND status='running'
-         AND ($6::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$6 AND expires_at > $7))`,
-      [runId, info.pid, info.pgid ?? null, info.processStartedAt ?? now, now, opts.daemonLeaseId ?? null, now],
+         AND claim_token=$6
+         AND ($7::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$7 AND expires_at > $8))`,
+      [
+        runId,
+        info.pid,
+        info.pgid ?? null,
+        info.processStartedAt ?? now,
+        now,
+        opts.claimToken ?? null,
+        opts.daemonLeaseId ?? null,
+        now,
+      ],
     );
     if (res.rowCount !== 1) return undefined;
     return this.getRun(runId);
@@ -1098,10 +1416,54 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const limitParam = bind(limit);
     const offsetParam = bind(offset);
     const rows = await this.client.many<RunRow>(
-      `SELECT loop_runs.* FROM loop_runs${join} WHERE loop_runs.tenant_id = open_loops_current_tenant_id()${filters.length ? ` AND ${filters.join(" AND ")}` : ""} ORDER BY loop_runs.created_at DESC LIMIT ${limitParam} OFFSET ${offsetParam}`,
+      `SELECT loop_runs.* FROM loop_runs${join} WHERE loop_runs.tenant_id = open_loops_current_tenant_id()${filters.length ? ` AND ${filters.join(" AND ")}` : ""} ORDER BY loop_runs.created_at DESC, loop_runs.id DESC LIMIT ${limitParam} OFFSET ${offsetParam}`,
       params,
     );
     return rows.map(rowToRun);
+  }
+
+  async listRecoveredLeaseRunsPage(
+    ...args: M<"listRecoveredLeaseRunsPage">["args"]
+  ): Promise<RecoveredLeaseRunPage> {
+    const opts = args[0] ?? {};
+    const limit = Math.max(1, Math.min(1_000, Math.floor(opts.limit ?? 1_000)));
+    const snapshot: RecoveredLeaseRunSnapshotEntry[] = opts.snapshot ?? await this.client.many<Pick<RunRow, "id" | "updated_at" | "scheduled_for" | "attempt">>(
+      `SELECT id, updated_at, scheduled_for, attempt FROM loop_runs
+       WHERE tenant_id = open_loops_current_tenant_id()
+         AND status='abandoned' AND error='run lease expired before completion'
+       ORDER BY updated_at ASC, scheduled_for ASC, id ASC`,
+      [],
+    ).then((rows) => rows.map((row) => ({
+      id: row.id,
+      updatedAt: row.updated_at,
+      scheduledFor: row.scheduled_for,
+      attempt: row.attempt,
+    })));
+    const offset = Math.max(0, Math.min(snapshot.length, Math.floor(opts.offset ?? 0)));
+    const selected = snapshot.slice(offset, offset + limit);
+    const rows = selected.length === 0
+      ? []
+      : await this.client.many<RunRow>(
+          `SELECT * FROM loop_runs
+           WHERE tenant_id = open_loops_current_tenant_id() AND id = ANY($1::text[])`,
+          [selected.map((entry) => entry.id)],
+        );
+    const rowsById = new Map(rows.map((row) => [row.id, row]));
+    const snapshotById = new Map(selected.map((entry) => [entry.id, entry]));
+    const runs = selected
+      .map((entry) => rowsById.get(entry.id))
+      .filter((row): row is RunRow => {
+        if (!row) return false;
+        const entry = snapshotById.get(row.id);
+        return Boolean(entry && matchesRecoveredLeaseSnapshot(row, entry));
+      })
+      .map(rowToRun);
+    const nextOffset = offset + selected.length;
+    return {
+      runs,
+      snapshot,
+      ...(nextOffset < snapshot.length ? { nextOffset } : {}),
+    };
   }
 
   async writeRunReceipt(...args: M<"writeRunReceipt">["args"]): Promise<M<"writeRunReceipt">["result"]> {
@@ -1218,9 +1580,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
    * Recover expired run leases. Divergence from sqlite (documented): the remote
    * backend cannot inspect local process liveness, so an expired lease is always
    * abandoned (never "deferred because the local process is still alive"). The
-   * `deferred` array is therefore always empty here. The generated-route
-   * workflow archival side effect is not ported (route automation is a TIER 2
-   * path); the core guarantee — no run stays `running` past its lease — holds.
+   * `deferred` array is therefore always empty here.
    */
   async recoverExpiredRunLeasesDetailed(
     ...args: M<"recoverExpiredRunLeasesDetailed">["args"]
@@ -1292,6 +1652,18 @@ export class PostgresLoopStorage implements LoopStorageContract {
               ? "run lease expired before completion; retry pending"
               : "run lease expired before completion";
           await this.setWorkItemsForLoop(c, row.loop_id, itemStatus, reason, finished, statuses);
+          if (loop?.target.type === "workflow" && itemStatus !== "admitted") {
+            const workflowId = loop.target.workflowId;
+            const workItemId = loop.target.input?.workflowWorkItemId ?? loop.target.input?.workItemId;
+            await this.maybeArchiveGeneratedRouteWorkflow(c, {
+              workflowId,
+              loopId: loop.id,
+              loopRunId: row.id,
+              workItemId,
+              workflowRunId: workflowRows.find((workflowRow) => workflowRow.workflow_id === workflowId)?.id,
+              updated: finished,
+            });
+          }
         }
         return this.loadRun(c, row.id);
       });
@@ -2556,6 +2928,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
     return this.client.transaction(async (c) => {
       const now = (opts.now ?? new Date(finishedAt)).toISOString();
       const error = patch.error === undefined ? undefined : scrubbedOrNull(patch.error) ?? undefined;
+      const currentRun = await this.lockWorkflowRun(c, workflowRunId);
       const res = await c.query(
         `UPDATE workflow_runs SET status=$2, finished_at=$3, duration_ms=$4, error=$5, updated_at=$6
          WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 AND status NOT IN ('succeeded', 'failed', 'timed_out', 'cancelled')
@@ -2567,10 +2940,39 @@ export class PostgresLoopStorage implements LoopStorageContract {
       const changed = res.rowCount === 1;
       if (changed) {
         await this.appendWorkflowEventWithClient(c, workflowRunId, status, undefined, { error });
-        const itemStatus: WorkflowWorkItemStatus =
+        let itemStatus: WorkflowWorkItemStatus =
           status === "succeeded" ? "succeeded" : status === "cancelled" ? "cancelled" : "failed";
-        await this.setWorkflowWorkItemsForWorkflowRun(c, workflowRunId, itemStatus, error, finishedAt);
+        if (
+          itemStatus === "failed"
+          && currentRun.loop_id
+          && currentRun.loop_run_id
+        ) {
+          const [loopRow, loopRunRow] = await Promise.all([
+            c.get<LoopRow>(
+              "SELECT * FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND id=$1",
+              [currentRun.loop_id],
+            ),
+            c.get<RunRow>(
+              "SELECT * FROM loop_runs WHERE tenant_id = open_loops_current_tenant_id() AND id=$1",
+              [currentRun.loop_run_id],
+            ),
+          ]);
+          if (loopRow && loopRunRow && loopRunRow.attempt < loopRow.max_attempts) itemStatus = "admitted";
+        }
+        const itemReason = itemStatus === "admitted"
+          ? error ? `attempt failed; retry pending: ${error}` : "attempt failed; retry pending"
+          : error;
+        await this.setWorkflowWorkItemsForWorkflowRun(c, workflowRunId, itemStatus, itemReason, finishedAt);
         if (itemStatus === "failed") await this.demoteNonProductiveWorkItems(c, workflowRunId, finishedAt);
+        await this.maybeArchiveGeneratedRouteWorkflow(c, {
+          workflowId: currentRun.workflow_id,
+          loopId: currentRun.loop_id ?? undefined,
+          loopRunId: currentRun.loop_run_id ?? undefined,
+          workItemId: currentRun.work_item_id ?? undefined,
+          workflowRunId,
+          workflowRunStatus: status,
+          updated: finishedAt,
+        });
       }
       const run = await c.get<WorkflowRunRow>(
         "SELECT * FROM workflow_runs WHERE tenant_id = open_loops_current_tenant_id() AND id = $1",

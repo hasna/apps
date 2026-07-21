@@ -8,6 +8,7 @@ import type {
   Loop,
   LoopRun,
   LoopStatus,
+  RecoveredLeaseRunSnapshotEntry,
   RunStatus,
   UpsertWorkflowWorkItemInput,
   StoredWorkflowEvent,
@@ -23,6 +24,7 @@ import {
   AmbiguousNameError,
   DuplicateWorkflowEventError,
   LegacyWorkflowRunProvenanceError,
+  LoopAdvancementConflictError,
   LoopArchivedError,
   LoopNotFoundError,
   RunFinalizationConflictError,
@@ -53,7 +55,13 @@ import {
   deploymentStatusLine,
   resolveLoopDeploymentMode,
 } from "../lib/mode.js";
-import { computeNextAfter, dueSlots } from "../lib/recurrence.js";
+import { dueSlots } from "../lib/recurrence.js";
+import {
+  loopAdvancementPatchMatchesCurrent,
+  planLoopAdvancement,
+  resolveBreakerThreshold,
+  type CircuitBreakerThreshold,
+} from "../lib/advancement.js";
 import { normalizeLoopLabels } from "../lib/labels.js";
 import { isLoopStatus, LOOP_STATUSES } from "../lib/loop-status.js";
 import { normalizeRunCompletion } from "../lib/run-completion.js";
@@ -125,6 +133,8 @@ export interface LoopsApiServerOptions {
   evidenceLimitBytes?: number;
   importLimitBytes?: number;
   now?: () => Date;
+  random?: () => number;
+  circuitBreakerThreshold?: CircuitBreakerThreshold;
   /**
    * API-key verifier (from `@hasna/contracts/auth`). When present, every
    * request outside the open foundation probes (`/health`, `/ready`,
@@ -269,6 +279,8 @@ export function createLoopsApiServer(opts: LoopsApiServerOptions = {}) {
           evidenceLimitBytes: opts.evidenceLimitBytes ?? DEFAULT_EVIDENCE_LIMIT_BYTES,
           importLimitBytes: opts.importLimitBytes ?? DEFAULT_IMPORT_LIMIT_BYTES,
           now: opts.now ?? (() => new Date()),
+          random: opts.random ?? Math.random,
+          circuitBreakerThreshold: opts.circuitBreakerThreshold,
         });
       try {
         return await withTenantStorage(principal, (storage) => execute(storage));
@@ -290,6 +302,8 @@ interface V1RequestContext {
   evidenceLimitBytes: number;
   importLimitBytes: number;
   now: () => Date;
+  random: () => number;
+  circuitBreakerThreshold?: CircuitBreakerThreshold;
 }
 
 type RunnerGoalInput = Parameters<LoopStorageContract["createGoal"]>[0];
@@ -319,9 +333,14 @@ async function handleV1Request(ctx: V1RequestContext): Promise<Response> {
     }
     const storage = requireStorage(ctx.storage);
     const recovered = await storage.recoverExpiredRunLeasesDetailed(ctx.now());
+    const advancementDeferred = await advanceRecoveredLeaseRunPages(storage, {
+      random: ctx.random,
+      circuitBreakerThreshold: ctx.circuitBreakerThreshold,
+    });
     return ok({
       abandoned: recovered.abandoned.map((run) => publicRun(run, false, { redactError: true })),
       deferred: recovered.deferred.map((run) => publicRun(run, false, { redactError: true })),
+      advancementDeferred: advancementDeferred.map((run) => publicRun(run, false, { redactError: true })),
     });
   }
   return fail("not_found", 404);
@@ -683,7 +702,19 @@ async function handleRunsRequest(ctx: V1RequestContext, segments: string[]): Pro
     const action = segments[1];
     const now = ctx.now();
     if (action === "heartbeat") return heartbeatRun(storage, ctx.auth.principalId, id, await readJsonBody<Record<string, unknown>>(ctx.request, ctx.bodyLimitBytes), now);
-    if (action === "finalize") return finalizeRun(storage, ctx.auth.principalId, id, await readJsonBody<Record<string, unknown>>(ctx.request, ctx.bodyLimitBytes), now);
+    if (action === "finalize") {
+      return finalizeRun(
+        storage,
+        ctx.auth.principalId,
+        id,
+        await readJsonBody<Record<string, unknown>>(ctx.request, ctx.bodyLimitBytes),
+        now,
+        {
+          random: ctx.random,
+          circuitBreakerThreshold: ctx.circuitBreakerThreshold,
+        },
+      );
+    }
     return acceptRunEvidence(storage, ctx.auth.principalId, id, await readJsonBody<Record<string, unknown>>(ctx.request, ctx.evidenceLimitBytes), now);
   }
   if (segments.length === 2 && id && segments[1] === "recover" && ctx.request.method === "POST") {
@@ -695,15 +726,20 @@ async function handleRunsRequest(ctx: V1RequestContext, segments: string[]): Pro
       return fail("run_claim_owner_mismatch", 403);
     }
     const recovered = await storage.recoverExpiredRunLeasesDetailed(now, { runId: id, limit: 1, scanLimit: 1 });
-    const abandoned = recovered.abandoned;
+    const abandoned = recovered.abandoned.length > 0
+      ? recovered.abandoned
+      : isRecoveredLeaseRun(target)
+        ? [target]
+        : [];
     const deferred = recovered.deferred;
-    for (const run of abandoned) {
-      const loop = await storage.getLoop(run.loopId);
-      if (loop) await advanceLoopAfterRun(storage, loop, run, new Date(run.finishedAt ?? now), false);
-    }
+    const advancementDeferred = await advanceRecoveredRuns(storage, abandoned, {
+      random: ctx.random,
+      circuitBreakerThreshold: ctx.circuitBreakerThreshold,
+    });
     return ok({
       abandoned: abandoned.map((run) => publicRun(run, false, { redactError: true })),
       deferred: deferred.map((run) => publicRun(run, false, { redactError: true })),
+      advancementDeferred: advancementDeferred.map((run) => publicRun(run, false, { redactError: true })),
     });
   }
 
@@ -1305,41 +1341,120 @@ async function heartbeatRun(storage: LoopStorageContract, principalId: string, r
   return ok({ run: publicRun(heartbeat, false, { redactError: true }) });
 }
 
-async function finalizeRun(storage: LoopStorageContract, principalId: string, runId: string, body: Record<string, unknown>, now: Date): Promise<Response> {
+async function finalizeRun(
+  storage: LoopStorageContract,
+  principalId: string,
+  runId: string,
+  body: Record<string, unknown>,
+  now: Date,
+  advancement: {
+    random: () => number;
+    circuitBreakerThreshold?: CircuitBreakerThreshold;
+  },
+): Promise<Response> {
   const claimToken = requiredString(body.claimToken, "claimToken");
   const status = optionalEnum<"succeeded" | "failed" | "timed_out">(
     optionalString(body.status) ?? null,
     ["succeeded", "failed", "timed_out"],
   );
   if (!status) throw apiError("status_required", 422);
+  const requestedFinishedAt = optionalIsoString(body.finishedAt);
+  const requestedDurationMs = optionalPositiveInteger(body.durationMs, 0, Number.MAX_SAFE_INTEGER);
+  const stdout = optionalText(body.stdout) ?? "";
+  const stderr = optionalText(body.stderr) ?? "";
+  const error = optionalText(body.error);
+  const exitCode = optionalInteger(body.exitCode);
+  const pid = optionalInteger(body.pid);
   const existing = await storage.getRun(runId);
   if (!existing) return fail("run_not_found", 404);
-  if (existing.status !== "running" || !existing.claimedBy) return fail("run_not_running", 409);
+  if (existing.status !== "running" || !existing.claimedBy) {
+    if (
+      existing.claimedBy === principalId &&
+      existing.status === status &&
+      ["succeeded", "failed", "timed_out"].includes(existing.status)
+    ) {
+      try {
+        await storage.finalizeRun(
+          runId,
+          {
+            status,
+            finishedAt: requestedFinishedAt,
+            durationMs: requestedDurationMs,
+            stdout,
+            stderr,
+            error,
+            exitCode,
+            pid,
+          },
+          { claimedBy: existing.claimedBy, claimToken, now },
+        );
+      } catch (replayError) {
+        if (!(replayError instanceof RunFinalizationConflictError)) throw replayError;
+        if (replayError.reason === "stale_claim") return fail("stale_claim", 409);
+      }
+      const loop = await storage.getLoop(existing.loopId);
+      if (loop) {
+        await advanceLoopAfterRun(
+          storage,
+          loop,
+          existing,
+          new Date(existing.updatedAt),
+          existing.status === "succeeded",
+          advancement,
+        );
+      }
+      return ok({ run: publicRun(existing, false, { redactError: true }) });
+    }
+    return fail("run_not_running", 409);
+  }
   if (existing.claimedBy !== principalId) return fail("runner_identity_mismatch", 403);
   const loop = await storage.getLoop(existing.loopId);
   if (!loop) return fail("loop_not_found", 404);
   const completion = normalizeRunCompletion({
     startedAt: existing.startedAt ?? existing.createdAt,
-    requestedFinishedAt: optionalIsoString(body.finishedAt),
-    requestedDurationMs: optionalPositiveInteger(body.durationMs, 0, Number.MAX_SAFE_INTEGER),
+    requestedFinishedAt,
+    requestedDurationMs,
     serverNow: now,
   });
-  const finalized = await storage.finalizeRun(
-    runId,
-    {
-      status,
-      finishedAt: completion.finishedAt,
-      durationMs: completion.durationMs,
-      stdout: optionalText(body.stdout) ?? "",
-      stderr: optionalText(body.stderr) ?? "",
-      error: optionalText(body.error),
-      exitCode: optionalInteger(body.exitCode),
-      pid: optionalInteger(body.pid),
-    },
-    { claimedBy: existing.claimedBy, claimToken, now },
-  );
+  let finalized: LoopRun;
+  try {
+    finalized = await storage.finalizeRun(
+      runId,
+      {
+        status,
+        finishedAt: completion.finishedAt,
+        durationMs: completion.durationMs,
+        stdout,
+        stderr,
+        error,
+        exitCode,
+        pid,
+      },
+      { claimedBy: existing.claimedBy, claimToken, now },
+    );
+  } catch (error) {
+    if (!(error instanceof RunFinalizationConflictError)) throw error;
+    if (error.reason === "stale_claim") return fail("stale_claim", 409);
+    const terminal = await storage.getRun(runId);
+    if (
+      !terminal ||
+      terminal.claimedBy !== principalId ||
+      terminal.status !== status ||
+      !["succeeded", "failed", "timed_out"].includes(terminal.status)
+    ) {
+      throw error;
+    }
+    finalized = terminal;
+  }
   if (finalized.status === "running") return fail("stale_claim", 409);
-  await advanceLoopAfterRun(storage, loop, finalized, now, finalized.status === "succeeded");
+  await advanceLoopAfterRun(
+    storage,
+    loop,
+    finalized,
+    new Date(finalized.updatedAt),
+    finalized.status === "succeeded",
+    advancement,
+  );
   return ok({ run: publicRun(finalized, false, { redactError: true }) });
 }
 
@@ -1355,30 +1470,138 @@ async function advanceLoopAfterRun(
   run: Awaited<ReturnType<LoopStorageContract["getRun"]>> & {},
   finishedAt: Date,
   succeeded: boolean,
+  opts: {
+    random: () => number;
+    circuitBreakerThreshold?: CircuitBreakerThreshold;
+    recoveredRun?: RecoveredLeaseRunSnapshotEntry;
+  },
 ): Promise<void> {
-  if (run.status === "running") return;
-  const current = await storage.getLoop(loop.id);
-  if (!current || current.status !== "active" || current.archivedAt) return;
-  if (current.retryScheduledFor && current.retryScheduledFor !== run.scheduledFor) return;
-  if (!succeeded && run.attempt < current.maxAttempts) {
-    await storage.updateLoop(current.id, {
-      status: "active",
-      nextRunAt: new Date(finishedAt.getTime() + retryDelayMs(current, run)).toISOString(),
-      retryScheduledFor: run.scheduledFor,
+  const retryRandom = opts.random();
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const current = await storage.getLoop(loop.id);
+    const threshold = current ? resolveBreakerThreshold(current, opts.circuitBreakerThreshold) : 0;
+    const plan = planLoopAdvancement({
+      current,
+      run,
+      finishedAt,
+      succeeded,
+      deferredRetry: current
+        ? await storage.nextRetryableRun(current.id, current.maxAttempts)
+        : undefined,
+      retryIntentRun: current?.retryScheduledFor
+        ? await storage.getRunBySlot(current.id, current.retryScheduledFor)
+        : undefined,
+      recentRuns: current
+        ? await storage.listRuns({ loopId: current.id, limit: Math.max(threshold * 4, 50) })
+        : [],
+      retryRandom,
+      circuitBreakerThreshold: threshold,
     });
-    return;
+    if (plan.kind === "none") return;
+    if (loopAdvancementPatchMatchesCurrent(current!, plan.patch)) return;
+    const applied = plan.kind === "circuit_breaker"
+      ? await storage.tripCircuitBreakerIfCurrent(
+        current!.id,
+        current!,
+        plan.patch,
+        { scheduledFor: plan.markerScheduledFor, reason: plan.reason },
+        { recoveredRun: opts.recoveredRun },
+      )
+      : await storage.advanceLoopIfCurrent(current!.id, current!, plan.patch, {
+        recoveredRun: opts.recoveredRun,
+      });
+    if (applied) return;
+    if (opts.recoveredRun) {
+      const latest = await storage.getRun(opts.recoveredRun.id);
+      if (!matchesRecoveredLeaseSnapshot(latest, opts.recoveredRun)) return;
+    }
+    if (attempt === 1) throw new LoopAdvancementConflictError(loop.id, run.id);
   }
-  const nextRunAt = computeNextAfter(current.schedule, new Date(run.scheduledFor), finishedAt);
-  await storage.updateLoop(current.id, {
-    status: nextRunAt ? "active" : "stopped",
-    nextRunAt,
-    retryScheduledFor: undefined,
-  });
 }
 
-function retryDelayMs(loop: Awaited<ReturnType<LoopStorageContract["getLoop"]>> & {}, run: Awaited<ReturnType<LoopStorageContract["getRun"]>> & {}): number {
-  const growth = 2 ** Math.min(Math.max(1, run.attempt) - 1, 20);
-  return Math.min(6 * 60 * 60_000, loop.retryDelayMs * growth);
+const RECOVERED_LEASE_ERROR = "run lease expired before completion";
+
+function isRecoveredLeaseRun(run: LoopRun): boolean {
+  return run.status === "abandoned" && run.error === RECOVERED_LEASE_ERROR;
+}
+
+function recoveredLeaseSnapshotEntry(run: LoopRun): RecoveredLeaseRunSnapshotEntry {
+  return {
+    id: run.id,
+    attempt: run.attempt,
+    updatedAt: run.updatedAt,
+    scheduledFor: run.scheduledFor,
+  };
+}
+
+function matchesRecoveredLeaseSnapshot(
+  run: LoopRun | undefined,
+  expected: RecoveredLeaseRunSnapshotEntry,
+): run is LoopRun {
+  return Boolean(
+    run &&
+    isRecoveredLeaseRun(run) &&
+    run.attempt === expected.attempt &&
+    run.updatedAt === expected.updatedAt &&
+    run.scheduledFor === expected.scheduledFor
+  );
+}
+
+async function advanceRecoveredLeaseRunPages(
+  storage: LoopStorageContract,
+  opts: {
+    random: () => number;
+    circuitBreakerThreshold?: CircuitBreakerThreshold;
+  },
+): Promise<LoopRun[]> {
+  const advancementDeferred: LoopRun[] = [];
+  let snapshot: Awaited<ReturnType<LoopStorageContract["listRecoveredLeaseRunsPage"]>>["snapshot"];
+  let offset = 0;
+  for (;;) {
+    const page = await storage.listRecoveredLeaseRunsPage({ snapshot, offset, limit: MAX_PAGE_LIMIT });
+    snapshot = page.snapshot;
+    advancementDeferred.push(...await advanceRecoveredRuns(storage, page.runs, opts));
+    if (page.nextOffset === undefined) break;
+    if (page.nextOffset <= offset) throw new Error("recovered lease replay offset did not advance");
+    offset = page.nextOffset;
+  }
+  return advancementDeferred;
+}
+
+async function advanceRecoveredRuns(
+  storage: LoopStorageContract,
+  runs: readonly LoopRun[],
+  opts: {
+    random: () => number;
+    circuitBreakerThreshold?: CircuitBreakerThreshold;
+  },
+): Promise<LoopRun[]> {
+  const deferred: LoopRun[] = [];
+  const unexpected: unknown[] = [];
+  for (const staleRun of runs) {
+    const expected = recoveredLeaseSnapshotEntry(staleRun);
+    const run = await storage.getRun(staleRun.id);
+    if (!matchesRecoveredLeaseSnapshot(run, expected)) continue;
+    const loop = await storage.getLoop(run.loopId);
+    if (!loop) continue;
+    try {
+      await advanceLoopAfterRun(
+        storage,
+        loop,
+        run,
+        new Date(run.updatedAt),
+        false,
+        { ...opts, recoveredRun: expected },
+      );
+    } catch (error) {
+      if (error instanceof LoopAdvancementConflictError) deferred.push(run);
+      else unexpected.push(error);
+    }
+  }
+  if (unexpected.length > 0) {
+    throw new AggregateError(unexpected, `recovery advancement failed for ${unexpected.length} run(s)`);
+  }
+  return deferred;
 }
 
 function runnerLeaseMs(leaseMs: number): number {
@@ -1585,6 +1808,7 @@ function apiError(code: string, status: number): PublicApiError {
 function errorResponse(error: unknown): Response {
   if (error instanceof LoopNotFoundError) return fail("loop_not_found", 404);
   if (error instanceof LoopArchivedError) return fail("loop_archived", 409);
+  if (error instanceof LoopAdvancementConflictError) return fail("loop_advancement_conflict", 409);
   if (error instanceof AmbiguousNameError) return fail("ambiguous_name", 409);
   if (error instanceof RunFinalizationConflictError) return fail(error.reason, 409);
   if (error instanceof ValidationError) {

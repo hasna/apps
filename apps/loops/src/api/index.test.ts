@@ -121,6 +121,7 @@ describe("loops-api foundation", () => {
     const mod = await import("./index.js");
     const document = mod.openApiDocument() as {
       paths: Record<string, {
+        get?: { responses?: Record<string, { content?: { "application/json"?: { schema?: { $ref?: string } } } }> };
         post?: { responses?: Record<string, { content?: { "application/json"?: { schema?: { $ref?: string } } } }> };
         patch?: { responses?: Record<string, { content?: { "application/json"?: { schema?: { $ref?: string } } } }> };
       }>;
@@ -167,6 +168,23 @@ describe("loops-api foundation", () => {
       .toBe("#/components/schemas/UnsupportedMediaTypeResponse");
     expect(recoveryResponses?.["422"]?.content?.["application/json"]?.schema?.$ref)
       .toBe("#/components/schemas/InvalidWorkflowRecoveryBodyResponse");
+    const finalizeResponses = document.paths["/v1/runs/{id}/finalize"]?.post?.responses;
+    expect(finalizeResponses?.["409"]?.content?.["application/json"]?.schema?.$ref)
+      .toBe("#/components/schemas/RunFinalizeConflictResponse");
+    expect(document.paths["/v1/runs/{id}/recover"]?.post?.responses?.["409"]).toBeUndefined();
+    expect(document.paths["/v1/leases/recover"]?.post?.responses?.["409"]).toBeUndefined();
+    expect(document.paths["/status"]?.get?.responses?.["409"]).toBeUndefined();
+    expect(document.paths["/v1/status"]?.get?.responses?.["409"]).toBeUndefined();
+    expect(document.components.schemas.RunFinalizeConflictResponse).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      required: ["ok", "error"],
+      properties: {
+        error: {
+          enum: ["stale_claim", "run_not_running", "loop_advancement_conflict"],
+        },
+      },
+    });
     expect(document.components.schemas.Loop).toMatchObject({
       properties: {
         status: { type: "string", enum: ["active", "paused", "stopped", "expired"] },
@@ -1667,10 +1685,11 @@ describe("loops-api foundation", () => {
               return run;
             };
           }
-          if (property === "updateLoop") {
-            return async (...args: Parameters<typeof target.updateLoop>) => {
-              advancementWrites += 1;
-              return target.updateLoop(...args);
+          if (property === "advanceLoopIfCurrent") {
+            return async (...args: Parameters<typeof target.advanceLoopIfCurrent>) => {
+              const result = await target.advanceLoopIfCurrent(...args);
+              if (result) advancementWrites += 1;
+              return result;
             };
           }
           const value = Reflect.get(target, property, target);
@@ -1679,7 +1698,7 @@ describe("loops-api foundation", () => {
       }) as LoopStorageContract;
       const server = createTestServer(
         mod,
-        { host: "127.0.0.1", port: 0, storage, now: () => serverNow },
+        { host: "127.0.0.1", port: 0, storage, now: () => serverNow, random: () => 0.5 },
         runnerPrincipal("runner-race"),
       );
 
@@ -1695,10 +1714,9 @@ describe("loops-api foundation", () => {
           }),
         });
         const responses = await Promise.all([finalize(), finalize()]);
-        expect(responses.map((response) => response.status).sort()).toEqual([200, 409]);
+        expect(responses.map((response) => response.status).sort()).toEqual([200, 200]);
         const bodies = await Promise.all(responses.map((response) => response.json()));
-        expect(bodies.filter((body) => body.ok === true)).toHaveLength(1);
-        expect(bodies.filter((body) => body.error === "run_not_running")).toHaveLength(1);
+        expect(bodies.filter((body) => body.ok === true)).toHaveLength(2);
         expect(advancementWrites).toBe(1);
         expect(await baseStorage.getLoop(loop.id)).toMatchObject({
           status: "active",
@@ -1721,7 +1739,7 @@ describe("loops-api foundation", () => {
     const startedAt = new Date("2026-01-01T00:00:05.000Z");
     const server = createTestServer(
       mod,
-      { host: "127.0.0.1", port: 0, storage, now: () => serverNow },
+      { host: "127.0.0.1", port: 0, storage, now: () => serverNow, random: () => 0.5 },
       runnerPrincipal("runner-clock"),
     );
 
@@ -2919,4 +2937,639 @@ describe("loops-api foundation", () => {
       await storage.close();
     }
   });
+
+  test("failed finalize and replay derive retry timing from persisted server receipt time", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    let randomSample = 0;
+    const server = createTestServer(
+      mod,
+      {
+        host: "127.0.0.1",
+        port: 0,
+        storage,
+        now: () => new Date("2026-01-01T00:00:10.000Z"),
+        random: () => randomSample,
+      },
+      runnerPrincipal("runner-replay"),
+    );
+    try {
+      const loop = await storage.createLoop({
+        name: "api-terminal-failed-replay",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "false" },
+        maxAttempts: 2,
+        retryDelayMs: 1_000,
+      }, new Date("2026-01-01T00:00:00.000Z"));
+      await storage.updateLoop(loop.id, { nextRunAt: "2026-01-01T00:00:00.000Z" });
+      const claim = await storage.claimRun(
+        loop,
+        "2026-01-01T00:00:00.000Z",
+        "runner-replay",
+        new Date("2026-01-01T00:00:01.000Z"),
+      );
+      const finalize = () => fetch(apiUrl(server, `/v1/runs/${claim!.run.id}/finalize`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken: claim!.claimToken,
+          status: "failed",
+          finishedAt: "2026-01-01T00:00:02.000Z",
+          stdout: "",
+          stderr: "",
+          error: "retry me",
+        }),
+      });
+
+      expect((await finalize()).status).toBe(200);
+      expect((await storage.getRun(claim!.run.id))?.startedAt).toBe("2026-01-01T00:00:01.000Z");
+      expect((await storage.getRun(claim!.run.id))?.finishedAt).toBe("2026-01-01T00:00:02.000Z");
+      expect((await storage.getRun(claim!.run.id))?.updatedAt).toBe("2026-01-01T00:00:10.000Z");
+      expect(await storage.getLoop(loop.id)).toMatchObject({
+        status: "active",
+        nextRunAt: "2026-01-01T00:00:10.500Z",
+        retryScheduledFor: claim!.run.scheduledFor,
+      });
+
+      randomSample = 0.999999;
+      expect((await finalize()).status).toBe(200);
+      expect((await storage.getRun(claim!.run.id))?.startedAt).toBe("2026-01-01T00:00:01.000Z");
+      expect(await storage.getLoop(loop.id)).toMatchObject({
+        status: "active",
+        nextRunAt: "2026-01-01T00:00:10.500Z",
+        retryScheduledFor: claim!.run.scheduledFor,
+      });
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("only the same principal and status can replay a terminal finalize to repair missing advancement", async () => {
+    const mod = await import("./index.js");
+    const baseStorage = createSqliteLoopStorage(":memory:");
+    const loop = await baseStorage.createLoop({
+      name: "api-terminal-repair-guard",
+      schedule: { type: "interval", everyMs: 60_000 },
+      target: { type: "command", command: "false" },
+      maxAttempts: 2,
+      retryDelayMs: 1_000,
+    }, new Date("2026-01-01T00:00:00.000Z"));
+    await baseStorage.updateLoop(loop.id, { nextRunAt: "2026-01-01T00:00:00.000Z" });
+    const claim = await baseStorage.claimRun(
+      loop,
+      "2026-01-01T00:00:00.000Z",
+      "runner-repair",
+      new Date("2026-01-01T00:00:01.000Z"),
+    );
+    let failAdvancement = true;
+    const storage = new Proxy(baseStorage, {
+      get(target, property) {
+        if (property === "advanceLoopIfCurrent") {
+          return async (...args: Parameters<typeof target.advanceLoopIfCurrent>) => {
+            if (failAdvancement) {
+              failAdvancement = false;
+              throw new Error("transient advancement failure");
+            }
+            return target.advanceLoopIfCurrent(...args);
+          };
+        }
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as LoopStorageContract;
+    const owner = createTestServer(
+      mod,
+      {
+        host: "127.0.0.1",
+        port: 0,
+        storage,
+        now: () => new Date("2026-01-01T00:00:10.000Z"),
+        random: () => 0.5,
+      },
+      runnerPrincipal("runner-repair"),
+    );
+    const intruder = createTestServer(
+      mod,
+      {
+        host: "127.0.0.1",
+        port: 0,
+        storage,
+        now: () => new Date("2026-01-01T00:00:10.000Z"),
+        random: () => 0.5,
+      },
+      runnerPrincipal("runner-other"),
+    );
+    const finalize = (
+      server: { port?: number },
+      status: "succeeded" | "failed",
+      overrides: Record<string, unknown> = {},
+    ) => fetch(
+      apiUrl(server, `/v1/runs/${claim!.run.id}/finalize`),
+      {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken: claim!.claimToken,
+          status,
+          stdout: "",
+          stderr: "",
+          ...(status === "failed" ? { error: "retry me" } : {}),
+          ...overrides,
+        }),
+      },
+    );
+    try {
+      expect((await finalize(owner, "failed")).status).toBe(500);
+      expect((await baseStorage.getRun(claim!.run.id))?.status).toBe("failed");
+      expect((await baseStorage.getLoop(loop.id))?.nextRunAt).toBe("2026-01-01T00:00:00.000Z");
+
+      expect((await finalize(intruder, "failed")).status).toBe(409);
+      expect((await finalize(owner, "succeeded")).status).toBe(409);
+      expect((await finalize(owner, "failed", { claimToken: "stale-attempt-token" })).status).toBe(409);
+      expect((await finalize(owner, "failed", { finishedAt: "not-a-date" })).status).toBe(422);
+      expect((await finalize(owner, "failed", { durationMs: -1 })).status).toBe(422);
+      expect((await finalize(owner, "failed", { stdout: 42 })).status).toBe(422);
+      expect((await baseStorage.getLoop(loop.id))?.nextRunAt).toBe("2026-01-01T00:00:00.000Z");
+
+      expect((await finalize(owner, "failed")).status).toBe(200);
+      expect(await baseStorage.getLoop(loop.id)).toMatchObject({
+        status: "active",
+        nextRunAt: "2026-01-01T00:00:11.000Z",
+        retryScheduledFor: claim!.run.scheduledFor,
+      });
+    } finally {
+      intruder.stop(true);
+      owner.stop(true);
+      await baseStorage.close();
+    }
+  });
+
+  test("runner finalize returns a stable 409 after two CAS losses and repairs on replay", async () => {
+    const mod = await import("./index.js");
+    const baseStorage = createSqliteLoopStorage(":memory:");
+    const loop = await baseStorage.createLoop({
+      name: "api-advancement-double-cas-loss",
+      schedule: { type: "interval", everyMs: 60_000 },
+      target: { type: "command", command: "true" },
+    }, new Date("2026-01-01T00:00:00.000Z"));
+    await baseStorage.updateLoop(loop.id, { nextRunAt: "2026-01-01T00:01:00.000Z" });
+    const claim = await baseStorage.claimRun(
+      loop,
+      "2026-01-01T00:01:00.000Z",
+      "runner-double-cas",
+      new Date("2026-01-01T00:01:01.000Z"),
+    );
+    let lossesRemaining = 2;
+    const storage = new Proxy(baseStorage, {
+      get(target, property) {
+        if (property === "advanceLoopIfCurrent") {
+          return async (...args: Parameters<typeof target.advanceLoopIfCurrent>) => {
+            if (lossesRemaining > 0) {
+              lossesRemaining -= 1;
+              return undefined;
+            }
+            return target.advanceLoopIfCurrent(...args);
+          };
+        }
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as LoopStorageContract;
+    const server = createTestServer(
+      mod,
+      {
+        host: "127.0.0.1",
+        port: 0,
+        storage,
+        now: () => new Date("2026-01-01T00:01:10.000Z"),
+      },
+      runnerPrincipal("runner-double-cas"),
+    );
+    const finalize = () => fetch(apiUrl(server, `/v1/runs/${claim!.run.id}/finalize`), {
+      method: "POST",
+      headers: jsonHeaders,
+      body: JSON.stringify({
+        claimToken: claim!.claimToken,
+        status: "succeeded",
+        stdout: "",
+        stderr: "",
+      }),
+    });
+    try {
+      const conflicted = await finalize();
+      expect(conflicted.status).toBe(409);
+      expect(await conflicted.json()).toEqual({ ok: false, error: "loop_advancement_conflict" });
+      expect((await baseStorage.getRun(claim!.run.id))?.status).toBe("succeeded");
+      expect((await baseStorage.getLoop(loop.id))?.nextRunAt).toBe("2026-01-01T00:01:00.000Z");
+
+      expect((await finalize()).status).toBe(200);
+      expect(await baseStorage.getLoop(loop.id)).toMatchObject({
+        status: "active",
+        nextRunAt: "2026-01-01T00:02:00.000Z",
+      });
+    } finally {
+      server.stop(true);
+      await baseStorage.close();
+    }
+  });
+
+  test("reverse-order API failures select the globally earliest owed retry", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    let now = new Date("2026-01-01T00:01:10.000Z");
+    const server = createTestServer(
+      mod,
+      { host: "127.0.0.1", port: 0, storage, now: () => now, random: () => 0.5 },
+      runnerPrincipal("runner-reverse"),
+    );
+    try {
+      const loop = await storage.createLoop({
+        name: "api-reverse-order-retry",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "false" },
+        overlap: "allow",
+        maxAttempts: 2,
+        retryDelayMs: 1_000,
+      }, new Date("2026-01-01T00:00:00.000Z"));
+      const older = await storage.claimRun(
+        loop,
+        "2026-01-01T00:00:00.000Z",
+        "runner-reverse",
+        new Date("2026-01-01T00:00:01.000Z"),
+      );
+      const newer = await storage.claimRun(
+        loop,
+        "2026-01-01T00:01:00.000Z",
+        "runner-reverse",
+        new Date("2026-01-01T00:01:01.000Z"),
+      );
+      const finalize = (claim: NonNullable<typeof newer>) => fetch(
+        apiUrl(server, `/v1/runs/${claim.run.id}/finalize`),
+        {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify({
+            claimToken: claim.claimToken,
+            status: "failed",
+            stdout: "",
+            stderr: "",
+            error: "retry me",
+          }),
+        },
+      );
+
+      expect((await finalize(newer!)).status).toBe(200);
+      expect(await storage.getLoop(loop.id)).toMatchObject({
+        retryScheduledFor: newer!.run.scheduledFor,
+      });
+      now = new Date("2026-01-01T00:01:11.000Z");
+      expect((await finalize(older!)).status).toBe(200);
+      expect(await storage.getLoop(loop.id)).toMatchObject({
+        retryScheduledFor: older!.run.scheduledFor,
+      });
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("single-run recovery replays an already-abandoned workflow parent after advancement conflict", async () => {
+    const mod = await import("./index.js");
+    const baseStorage = createSqliteLoopStorage(":memory:");
+    const claimedAt = new Date("2026-01-01T00:00:00.000Z");
+    const recoveredAt = new Date("2026-01-01T00:00:02.000Z");
+    const workflow = await baseStorage.createWorkflow({
+      name: "recover-parent-workflow",
+      steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+    });
+    const loop = await baseStorage.createLoop({
+      name: "recover-single-replay",
+      schedule: { type: "interval", everyMs: 60_000 },
+      target: { type: "workflow", workflowId: workflow.id },
+      maxAttempts: 2,
+      retryDelayMs: 1_000,
+      leaseMs: 1_000,
+    }, claimedAt);
+    await baseStorage.updateLoop(loop.id, { nextRunAt: claimedAt.toISOString() });
+    const claim = await baseStorage.claimRun(loop, claimedAt.toISOString(), "runner-single", claimedAt);
+    const workflowRun = await baseStorage.createWorkflowRun({
+      workflow,
+      loop,
+      loopRun: claim!.run,
+    });
+    await baseStorage.startWorkflowStepRun(workflowRun.id, "worker");
+    let lossesRemaining = 2;
+    const storage = new Proxy(baseStorage, {
+      get(target, property) {
+        if (property === "advanceLoopIfCurrent") {
+          return async (...args: Parameters<typeof target.advanceLoopIfCurrent>) => {
+            if (args[0] === loop.id && lossesRemaining > 0) {
+              lossesRemaining -= 1;
+              return undefined;
+            }
+            return target.advanceLoopIfCurrent(...args);
+          };
+        }
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as LoopStorageContract;
+    const server = createTestServer(
+      mod,
+      { host: "127.0.0.1", port: 0, storage, now: () => recoveredAt, random: () => 0.5 },
+      runnerPrincipal("runner-single"),
+    );
+    try {
+      const recover = () => fetch(apiUrl(server, `/v1/runs/${claim!.run.id}/recover`), { method: "POST" });
+      const conflicted = await recover();
+      expect(conflicted.status).toBe(200);
+      expect(conflicted.status).not.toBe(409);
+      expect(await conflicted.json()).toMatchObject({
+        advancementDeferred: [{ id: claim!.run.id, status: "abandoned" }],
+      });
+      expect(await baseStorage.getRun(claim!.run.id)).toMatchObject({ status: "abandoned" });
+      expect(await baseStorage.getWorkflowRun(workflowRun.id)).toMatchObject({ status: "failed" });
+      expect(await baseStorage.getWorkflowStepRun(workflowRun.id, "worker")).toMatchObject({ status: "skipped" });
+      expect((await baseStorage.getLoop(loop.id))?.nextRunAt).toBe(claimedAt.toISOString());
+
+      const repaired = await Promise.all([recover(), recover()]);
+      expect(repaired.map((response) => response.status)).toEqual([200, 200]);
+      for (const response of repaired) {
+        expect(await response.json()).toMatchObject({ advancementDeferred: [] });
+      }
+      expect(await baseStorage.getLoop(loop.id)).toMatchObject({
+        status: "active",
+        nextRunAt: "2026-01-01T00:00:03.000Z",
+        retryScheduledFor: claim!.run.scheduledFor,
+      });
+      expect((await baseStorage.listWorkflowEvents(workflowRun.id))
+        .filter((event) => event.eventType === "failed")).toHaveLength(1);
+    } finally {
+      server.stop(true);
+      await baseStorage.close();
+    }
+  });
+
+  test("maintenance recovery continues after one advancement conflict and repairs it on replay", async () => {
+    const mod = await import("./index.js");
+    const baseStorage = createSqliteLoopStorage(":memory:");
+    const recoveredAt = new Date("2026-01-01T00:00:03.000Z");
+    const makeLoop = async (name: string, maxAttempts = 2) => {
+      const loop = await baseStorage.createLoop({
+        name,
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "false" },
+        overlap: "allow",
+        maxAttempts,
+        retryDelayMs: 1_000,
+        leaseMs: 1_000,
+      }, new Date("2026-01-01T00:00:00.000Z"));
+      await baseStorage.updateLoop(loop.id, { nextRunAt: "2026-01-01T00:00:00.000Z" });
+      return loop;
+    };
+    const conflictedLoop = await makeLoop("recover-maintenance-conflict");
+    const conflicted = await baseStorage.claimRun(
+      conflictedLoop,
+      "2026-01-01T00:00:00.000Z",
+      "runner-conflict",
+      new Date("2026-01-01T00:00:00.000Z"),
+    );
+    const reverseLoop = await makeLoop("recover-maintenance-reverse");
+    const reverseNewer = await baseStorage.claimRun(
+      reverseLoop,
+      "2026-01-01T00:01:00.000Z",
+      "runner-reverse-newer",
+      new Date("2026-01-01T00:00:00.100Z"),
+    );
+    const reverseOlder = await baseStorage.claimRun(
+      reverseLoop,
+      "2026-01-01T00:00:00.000Z",
+      "runner-reverse-older",
+      new Date("2026-01-01T00:00:00.200Z"),
+    );
+    const exhaustedLoop = await makeLoop("recover-maintenance-exhausted", 1);
+    const exhausted = await baseStorage.claimRun(
+      exhaustedLoop,
+      "2026-01-01T00:00:00.000Z",
+      "runner-exhausted",
+      new Date("2026-01-01T00:00:00.300Z"),
+    );
+    let lossesRemaining = 2;
+    const storage = new Proxy(baseStorage, {
+      get(target, property) {
+        if (property === "advanceLoopIfCurrent") {
+          return async (...args: Parameters<typeof target.advanceLoopIfCurrent>) => {
+            if (args[0] === conflictedLoop.id && lossesRemaining > 0) {
+              lossesRemaining -= 1;
+              return undefined;
+            }
+            return target.advanceLoopIfCurrent(...args);
+          };
+        }
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as LoopStorageContract;
+    const server = createTestServer(mod, {
+      host: "127.0.0.1",
+      port: 0,
+      storage,
+      now: () => recoveredAt,
+      random: () => 0.5,
+    });
+    try {
+      const recover = () => fetch(apiUrl(server, "/v1/leases/recover"), { method: "POST" });
+      const first = await recover();
+      expect(first.status).toBe(200);
+      expect(first.status).not.toBe(409);
+      expect(await first.json()).toMatchObject({
+        advancementDeferred: [{ id: conflicted!.run.id, status: "abandoned" }],
+      });
+      expect(await baseStorage.getRun(conflicted!.run.id)).toMatchObject({ status: "abandoned" });
+      expect(await baseStorage.getRun(reverseNewer!.run.id)).toMatchObject({ status: "abandoned" });
+      expect(await baseStorage.getRun(reverseOlder!.run.id)).toMatchObject({ status: "abandoned" });
+      expect(await baseStorage.getRun(exhausted!.run.id)).toMatchObject({ status: "abandoned" });
+      expect((await baseStorage.getLoop(conflictedLoop.id))?.nextRunAt).toBe("2026-01-01T00:00:00.000Z");
+      expect(await baseStorage.getLoop(reverseLoop.id)).toMatchObject({
+        retryScheduledFor: reverseOlder!.run.scheduledFor,
+      });
+      expect(await baseStorage.getLoop(exhaustedLoop.id)).toMatchObject({
+        status: "active",
+        nextRunAt: "2026-01-01T00:01:00.000Z",
+      });
+
+      const repaired = await recover();
+      expect(repaired.status).toBe(200);
+      expect(await repaired.json()).toMatchObject({ advancementDeferred: [] });
+      expect(await baseStorage.getLoop(conflictedLoop.id)).toMatchObject({
+        status: "active",
+        nextRunAt: "2026-01-01T00:00:04.000Z",
+        retryScheduledFor: conflicted!.run.scheduledFor,
+      });
+    } finally {
+      server.stop(true);
+      await baseStorage.close();
+    }
+  });
+
+  test("maintenance recovery skips a stale abandoned page row reclaimed by a newer attempt", async () => {
+    const mod = await import("./index.js");
+    const baseStorage = createSqliteLoopStorage(":memory:");
+    const slot = "2026-01-01T00:01:00.000Z";
+    const staleRecoveryReceipt = "2026-01-01T00:01:02.000Z";
+    const loop = await baseStorage.createLoop({
+      name: "recover-stale-page-reclaim",
+      schedule: { type: "interval", everyMs: 60_000 },
+      target: { type: "command", command: "false" },
+      maxAttempts: 3,
+      retryDelayMs: 1_000,
+      leaseMs: 60_000,
+    }, new Date(slot));
+    await baseStorage.updateLoop(loop.id, { nextRunAt: slot });
+    await baseStorage.upsertMigrationRun({
+      id: "recover-stale-page-run",
+      loopId: loop.id,
+      loopName: loop.name,
+      scheduledFor: slot,
+      attempt: 1,
+      status: "abandoned",
+      finishedAt: staleRecoveryReceipt,
+      claimedBy: "runner-reclaim",
+      error: "run lease expired before completion",
+      createdAt: slot,
+      updatedAt: staleRecoveryReceipt,
+    });
+    let reclaimed: Awaited<ReturnType<typeof baseStorage.claimRun>>;
+    let injected = false;
+    const storage = new Proxy(baseStorage, {
+      get(target, property) {
+        if (property === "listRecoveredLeaseRunsPage") {
+          return async (...args: Parameters<typeof target.listRecoveredLeaseRunsPage>) => {
+            const page = await target.listRecoveredLeaseRunsPage(...args);
+            if (!injected && page.runs.some((run) => run.id === "recover-stale-page-run")) {
+              injected = true;
+              reclaimed = await target.claimRun(
+                loop,
+                slot,
+                "runner-reclaim",
+                new Date("2026-01-01T00:01:01.100Z"),
+              );
+              expect(reclaimed?.run).toMatchObject({
+                id: "recover-stale-page-run",
+                status: "running",
+                attempt: 2,
+                startedAt: "2026-01-01T00:01:01.100Z",
+              });
+            }
+            return page;
+          };
+        }
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as LoopStorageContract;
+    let now = new Date(staleRecoveryReceipt);
+    const maintenanceServer = createTestServer(
+      mod,
+      { host: "127.0.0.1", port: 0, storage, now: () => now, random: () => 0.5 },
+    );
+    const runnerServer = createTestServer(
+      mod,
+      { host: "127.0.0.1", port: 0, storage, now: () => now, random: () => 0.5 },
+      runnerPrincipal("runner-reclaim"),
+    );
+    try {
+      const recovery = await fetch(apiUrl(maintenanceServer, "/v1/leases/recover"), { method: "POST" });
+      expect(recovery.status).toBe(200);
+      expect(injected).toBe(true);
+      expect(await recovery.json()).toMatchObject({ advancementDeferred: [] });
+      expect(await baseStorage.getLoop(loop.id)).toMatchObject({
+        nextRunAt: slot,
+        retryScheduledFor: undefined,
+      });
+
+      now = new Date("2026-01-01T00:01:10.000Z");
+      const finalized = await fetch(apiUrl(runnerServer, `/v1/runs/${reclaimed!.run.id}/finalize`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken: reclaimed!.claimToken,
+          status: "failed",
+          stdout: "",
+          stderr: "",
+          error: "attempt two failed",
+        }),
+      });
+      expect(finalized.status).toBe(200);
+      expect(await baseStorage.getLoop(loop.id)).toMatchObject({
+        nextRunAt: "2026-01-01T00:01:12.000Z",
+        retryScheduledFor: slot,
+      });
+    } finally {
+      runnerServer.stop(true);
+      maintenanceServer.stop(true);
+      await baseStorage.close();
+    }
+  });
+
+  test("maintenance recovery drains more than 1000 stable abandoned rows without starving the oldest loop", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const slot = "2026-01-01T00:00:00.000Z";
+    const receipt = "2026-01-01T00:00:10.000Z";
+    const total = 1_001;
+    for (let index = 0; index < total; index += 1) {
+      const createdAt = new Date(Date.parse(slot) + index).toISOString();
+      const loop: Loop = {
+        id: `paging-loop-${String(index).padStart(4, "0")}`,
+        name: `paging-loop-${String(index).padStart(4, "0")}`,
+        labels: [],
+        status: "active",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "false" },
+        nextRunAt: slot,
+        catchUp: "latest",
+        catchUpLimit: 1,
+        overlap: "skip",
+        maxAttempts: 1,
+        retryDelayMs: 1_000,
+        leaseMs: 60_000,
+        createdAt,
+        updatedAt: createdAt,
+      };
+      const run: LoopRun = {
+        id: `paging-run-${String(index).padStart(4, "0")}`,
+        loopId: loop.id,
+        loopName: loop.name,
+        scheduledFor: slot,
+        attempt: 1,
+        status: "abandoned",
+        finishedAt: receipt,
+        error: "run lease expired before completion",
+        createdAt,
+        updatedAt: receipt,
+      };
+      await storage.upsertMigrationLoop(loop);
+      await storage.upsertMigrationRun(run);
+    }
+    const server = createTestServer(mod, {
+      host: "127.0.0.1",
+      port: 0,
+      storage,
+      now: () => new Date("2026-01-01T00:00:20.000Z"),
+      random: () => 0.5,
+    });
+    try {
+      const response = await fetch(apiUrl(server, "/v1/leases/recover"), { method: "POST" });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ advancementDeferred: [] });
+      const loops = await storage.listLoops({ includeArchived: true, limit: total });
+      expect(loops).toHaveLength(total);
+      expect(loops.every((loop) => loop.nextRunAt === "2026-01-01T00:01:00.000Z")).toBe(true);
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  }, 60_000);
 });

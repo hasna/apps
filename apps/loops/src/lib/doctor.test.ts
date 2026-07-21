@@ -99,7 +99,7 @@ describe("doctor", () => {
       store.finalizeRun(
         claim!.run.id,
         { status: "failed", finishedAt: "2026-01-01T00:00:01.000Z", durationMs: 1_000, stdout: "", stderr: "boom" },
-        { claimedBy: "test", now: new Date("2026-01-01T00:00:01Z") },
+        { claimedBy: "test", claimToken: claim!.claimToken, now: new Date("2026-01-01T00:00:01Z") },
       );
       const report = runDoctor(store);
       expect(check(report, "loop-runs")?.status).toBe("warn");

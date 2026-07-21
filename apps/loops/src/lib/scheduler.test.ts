@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ExecutorResult, Loop, LoopRun } from "../types.js";
+import { planLoopAdvancement } from "./advancement.js";
+import { RunFinalizationConflictError } from "./errors.js";
 import { buildHealthReport } from "./health.js";
 import {
   advanceLoop,
@@ -177,6 +179,47 @@ describe("scheduler", () => {
     }
   });
 
+  test("anchors local retry timing to the persisted receipt time, not executor finishedAt", async () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "local-receipt-time-retry",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "false" },
+          maxAttempts: 2,
+          retryDelayMs: 1_000,
+        },
+        new Date("2026-01-01T00:00:00.000Z"),
+      );
+      store.updateLoop(loop.id, { nextRunAt: "2026-01-01T00:00:00.000Z" });
+
+      let clockReads = 0;
+      await tick({
+        store,
+        runnerId: "local-receipt-runner",
+        now: () => {
+          clockReads += 1;
+          return new Date(clockReads < 3
+            ? "2026-01-01T00:00:01.000Z"
+            : "2026-01-01T00:00:10.000Z");
+        },
+        random: noJitter,
+        execute: async () => result("failed", "2026-01-01T00:00:02.000Z"),
+      });
+
+      const failed = store.listRuns({ loopId: loop.id })[0]!;
+      expect(failed.finishedAt).toBe("2026-01-01T00:00:02.000Z");
+      expect(failed.updatedAt).toBe("2026-01-01T00:00:10.000Z");
+      expect(store.getLoop(loop.id)).toMatchObject({
+        retryScheduledFor: failed.scheduledFor,
+        nextRunAt: "2026-01-01T00:00:11.000Z",
+      });
+    } finally {
+      store.close();
+    }
+  });
+
   test("advances interval loops after abandoned run recovery", async () => {
     const store = new Store(":memory:");
     try {
@@ -200,6 +243,47 @@ describe("scheduler", () => {
       expect(out.recovered).toHaveLength(1);
       expect(store.getLoop(loop.id)?.nextRunAt).not.toBe(firstSlot);
       expect(store.getRunBySlot(loop.id, firstSlot)?.status).toBe("abandoned");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("same-runner reclaim fences stale scheduler execution by exact claim token", async () => {
+    const store = new Store(":memory:");
+    try {
+      const claimedAt = new Date("2026-01-01T00:00:00.000Z");
+      const loop = store.createLoop({
+        name: "scheduler-same-runner-reclaim",
+        schedule: { type: "once", at: claimedAt.toISOString() },
+        target: { type: "command", command: "true" },
+        leaseMs: 10,
+      }, claimedAt);
+      const first = store.claimRun(loop, claimedAt.toISOString(), "same-runner", claimedAt);
+      const second = store.claimRun(loop, claimedAt.toISOString(), "same-runner", new Date("2026-01-01T00:00:00.020Z"));
+      expect(first?.claimToken).toBeString();
+      expect(second?.claimToken).toBeString();
+      expect(second?.claimToken).not.toBe(first?.claimToken);
+
+      await expect(executeClaimedRun({
+        store,
+        runnerId: "same-runner",
+        claimToken: first!.claimToken,
+        loop: first!.loop,
+        run: first!.run,
+        now: () => new Date("2026-01-01T00:00:00.021Z"),
+        execute: async () => result("succeeded", "2026-01-01T00:00:00.021Z"),
+      })).rejects.toBeInstanceOf(RunFinalizationConflictError);
+      expect(store.getRun(second!.run.id)).toMatchObject({ status: "running", startedAt: second!.run.startedAt });
+
+      expect(await executeClaimedRun({
+        store,
+        runnerId: "same-runner",
+        claimToken: second!.claimToken,
+        loop: second!.loop,
+        run: second!.run,
+        now: () => new Date("2026-01-01T00:00:00.022Z"),
+        execute: async () => result("succeeded", "2026-01-01T00:00:00.022Z"),
+      })).toMatchObject({ status: "succeeded" });
     } finally {
       store.close();
     }
@@ -392,7 +476,11 @@ describe("scheduler", () => {
           stderr: "",
           error: "first failed",
         },
-        { claimedBy: "runner", now: new Date("2026-01-01T00:00:02.100Z") },
+        {
+          claimedBy: "runner",
+          claimToken: secondAttemptOne!.claimToken,
+          now: new Date("2026-01-01T00:00:02.100Z"),
+        },
       );
       expect(store.claimRun(loop, secondSlot, "runner", new Date("2026-01-01T00:00:02.200Z"))?.run.attempt).toBe(2);
 
@@ -459,7 +547,7 @@ describe("scheduler", () => {
       expect(store.getRunBySlot(loop.id, firstSlot)?.status).toBe("succeeded");
       expect(store.getRunBySlot(loop.id, firstSlot)?.attempt).toBe(2);
       expect(store.getLoop(loop.id)?.retryScheduledFor).toBe(secondSlot);
-      expect(store.getLoop(loop.id)?.nextRunAt).toBe("2026-01-01T00:00:20.000Z");
+      expect(store.getLoop(loop.id)?.nextRunAt).toBe("2026-01-01T00:00:15.000Z");
 
       await tick({
         store,
@@ -522,8 +610,10 @@ describe("scheduler", () => {
       const manual = await executeClaimedRun({
         store,
         runnerId: "manual",
+        claimToken: claim!.claimToken,
         loop: claim!.loop,
         run: claim!.run,
+        now: () => now,
         execute: async () => result("succeeded", "2026-01-02T00:00:00.000Z"),
       });
       expect(manual.status).toBe("succeeded");
@@ -609,6 +699,53 @@ describe("scheduler", () => {
     } finally {
       store.close();
     }
+  });
+
+  test("a stale earlier-attempt replay anchors the reused run row to the latest persisted receipt", () => {
+    const scheduledFor = "2026-01-01T00:00:00.000Z";
+    const current = loopFixture({
+      schedule: { type: "interval", everyMs: 60_000 },
+      maxAttempts: 3,
+      nextRunAt: "2026-01-01T00:00:11.000Z",
+      retryScheduledFor: scheduledFor,
+    });
+    const staleAttempt = runFixture({
+      id: "same-run-row",
+      scheduledFor,
+      attempt: 1,
+      startedAt: "2026-01-01T00:00:01.000Z",
+      updatedAt: "2026-01-01T00:00:10.000Z",
+    });
+    const latestAttempt = runFixture({
+      id: "same-run-row",
+      scheduledFor,
+      attempt: 2,
+      startedAt: "2026-01-01T00:00:11.000Z",
+      updatedAt: "2026-01-01T00:00:20.000Z",
+    });
+    const input = {
+      current,
+      run: staleAttempt,
+      finishedAt: new Date(staleAttempt.updatedAt),
+      succeeded: false,
+      deferredRetry: latestAttempt,
+      retryRandom: 0.5,
+      circuitBreakerThreshold: 0,
+    } as const;
+
+    expect(planLoopAdvancement(input)).toEqual({
+      kind: "update",
+      reason: "deferred_retry",
+      patch: {
+        status: "active",
+        nextRunAt: "2026-01-01T00:00:22.000Z",
+        retryScheduledFor: scheduledFor,
+      },
+    });
+    expect(planLoopAdvancement({
+      ...input,
+      current: { ...current, nextRunAt: "2026-01-01T00:00:22.000Z" },
+    })).toEqual({ kind: "none", reason: "already_applied" });
   });
 
   test("circuit breaker pauses a loop after consecutive final failures and manual resume clears it", async () => {
@@ -701,6 +838,7 @@ describe("scheduler", () => {
           const final = await executeClaimedRun({
             store,
             runnerId: "test",
+            claimToken: claim.claimToken,
             loop: claim.loop,
             run: claim.run,
             now: () => now,
@@ -809,7 +947,11 @@ describe("scheduler", () => {
       store.finalizeRun(
         claim!.run.id,
         { status: "succeeded", finishedAt: "2026-01-01T00:00:01.000Z", durationMs: 1_000, stdout: "ok", stderr: "" },
-        { claimedBy: "host:1:lease", now: new Date("2026-01-01T00:00:01Z") },
+        {
+          claimedBy: "host:1:lease",
+          claimToken: claim!.claimToken,
+          now: new Date("2026-01-01T00:00:01Z"),
+        },
       );
       // Wedged: loop still active with nextRunAt pinned to the terminal slot, and
       // a fresh claim on that slot yields nothing.
@@ -849,7 +991,11 @@ describe("scheduler", () => {
       store.finalizeRun(
         claim!.run.id,
         { status: "succeeded", finishedAt, durationMs: 1_000, stdout: "ok", stderr: "" },
-        { claimedBy: "host:1:lease", now: new Date(finishedAt) },
+        {
+          claimedBy: "host:1:lease",
+          claimToken: claim!.claimToken,
+          now: new Date(finishedAt),
+        },
       );
       expect(store.getLoop(loop.id)?.nextRunAt).toBe(slot);
 

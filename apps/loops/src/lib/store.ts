@@ -18,6 +18,7 @@ import type {
   LoopRun,
   LoopStatus,
   LoopTarget,
+  RecoveredLeaseRunSnapshotEntry,
   RunReceipt,
   RunReceiptMachine,
   RunStatus,
@@ -74,6 +75,7 @@ interface DaemonLeaseFence {
   daemonLeaseId?: string;
   now?: Date;
   claimToken?: string;
+  recoveredRun?: RecoveredLeaseRunSnapshotEntry;
 }
 
 export interface WorkflowRecoveryContext {
@@ -82,6 +84,13 @@ export interface WorkflowRecoveryContext {
   loopRunId?: string;
   claimedBy?: string;
   claimToken?: string;
+}
+
+export type LoopSchedulingState = Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor">;
+
+export interface CircuitBreakerTransitionResult {
+  loop: Loop;
+  marker: LoopRun;
 }
 
 const DEFAULT_RECOVERY_BATCH_LIMIT = 100;
@@ -108,9 +117,15 @@ const SCHEMA_USER_VERSION = 8;
 const BREAKING_SCHEMA_FLOOR = 7;
 const TERMINAL_RUN_STATUSES = ["succeeded", "failed", "timed_out", "abandoned", "skipped"] as const;
 const PRUNE_BATCH_SIZE = 400;
-const GENERATED_ROUTE_TEMPLATE_IDS = new Set(["todos-task-worker-verifier", "task-lifecycle", "event-worker-verifier"]);
-const GENERATED_ROUTE_KEYS = new Set(["todos-task", "generic-event"]);
+export const GENERATED_ROUTE_TEMPLATE_IDS = new Set(["todos-task-worker-verifier", "task-lifecycle", "event-worker-verifier"]);
+export const GENERATED_ROUTE_KEYS = new Set(["todos-task", "generic-event"]);
 const TASK_LIFECYCLE_TEMPLATE_ID = "task-lifecycle";
+
+export function isGeneratedRouteTemplate(routeKey: string, templateId: string): boolean {
+  return routeKey === "todos-task"
+    ? templateId === "todos-task-worker-verifier" || templateId === TASK_LIFECYCLE_TEMPLATE_ID
+    : routeKey === "generic-event" && templateId === "event-worker-verifier";
+}
 
 export interface LoopRow {
   id: string;
@@ -693,7 +708,7 @@ export function rowToLease(row: LeaseRow): DaemonLease {
 export interface ClaimRunResult {
   run: LoopRun;
   loop: Loop;
-  claimToken?: string;
+  claimToken: string;
 }
 
 export interface CreateWorkflowRunInput {
@@ -742,6 +757,12 @@ export interface RecoverExpiredRunLeasesResult {
   abandoned: LoopRun[];
   /** Runs whose lease expired while their process (group) is still alive; lease deferred. */
   deferred: LoopRun[];
+}
+
+export interface RecoveredLeaseRunPage {
+  runs: LoopRun[];
+  snapshot?: RecoveredLeaseRunSnapshotEntry[];
+  nextOffset?: number;
 }
 
 export interface PruneHistoryOptions {
@@ -1813,6 +1834,197 @@ export class Store {
     return after;
   }
 
+  advanceLoopIfCurrent(
+    id: string,
+    expected: LoopSchedulingState,
+    patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor">>,
+    opts: DaemonLeaseFence = {},
+  ): Loop | undefined {
+    const updated = (opts.now ?? new Date()).toISOString();
+    if ("status" in patch && patch.status !== undefined) assertLoopStatus(patch.status);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const current = this.getLoop(id);
+      if (!current || current.archivedAt) {
+        this.db.exec("COMMIT");
+        return undefined;
+      }
+      if (
+        current.status !== expected.status ||
+        current.nextRunAt !== expected.nextRunAt ||
+        current.retryScheduledFor !== expected.retryScheduledFor
+      ) {
+        this.db.exec("COMMIT");
+        return undefined;
+      }
+      if (opts.recoveredRun) {
+        const run = this.getRun(opts.recoveredRun.id);
+        if (
+          !run ||
+          run.status !== "abandoned" ||
+          run.error !== "run lease expired before completion" ||
+          run.attempt !== opts.recoveredRun.attempt ||
+          run.updatedAt !== opts.recoveredRun.updatedAt ||
+          run.scheduledFor !== opts.recoveredRun.scheduledFor
+        ) {
+          this.db.exec("COMMIT");
+          return undefined;
+        }
+      }
+      const merged: Loop = { ...current, ...patch, updatedAt: updated };
+      const res = this.db
+        .query(
+          `UPDATE loops SET status=$status, next_run_at=$nextRun, retry_scheduled_for=$retrySlot, updated_at=$updated
+           WHERE id=$id
+             AND archived_at IS NULL
+             AND status=$expectedStatus
+             AND next_run_at IS $expectedNextRun
+             AND retry_scheduled_for IS $expectedRetrySlot
+             AND ($daemonLeaseId IS NULL OR EXISTS (
+               SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
+             ))`,
+        )
+        .run({
+          $id: id,
+          $status: merged.status,
+          $nextRun: merged.nextRunAt ?? null,
+          $retrySlot: merged.retryScheduledFor ?? null,
+          $updated: updated,
+          $expectedStatus: expected.status,
+          $expectedNextRun: expected.nextRunAt ?? null,
+          $expectedRetrySlot: expected.retryScheduledFor ?? null,
+          $daemonLeaseId: opts.daemonLeaseId ?? null,
+          $now: updated,
+        });
+      if (res.changes !== 1) {
+        this.db.exec("COMMIT");
+        return undefined;
+      }
+      if (patch.status && patch.status !== "active") {
+        const status: WorkflowWorkItemStatus = patch.status === "paused" ? "deferred" : "cancelled";
+        this.setWorkflowWorkItemsForLoop(id, status, `loop ${patch.status}`, updated);
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        /* transaction may already be closed */
+      }
+      throw error;
+    }
+    return this.getLoop(id);
+  }
+
+  tripCircuitBreakerIfCurrent(
+    id: string,
+    expected: LoopSchedulingState,
+    patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor">>,
+    marker: { scheduledFor: string; reason: string },
+    opts: DaemonLeaseFence = {},
+  ): CircuitBreakerTransitionResult | undefined {
+    const updated = (opts.now ?? new Date()).toISOString();
+    const scrubbedReason = scrubbedOrNull(marker.reason) ?? "";
+    if ("status" in patch && patch.status !== undefined) assertLoopStatus(patch.status);
+    this.db.exec("BEGIN IMMEDIATE");
+    let markerScheduledFor = marker.scheduledFor;
+    try {
+      const current = this.getLoop(id);
+      if (
+        !current ||
+        current.archivedAt ||
+        current.status !== expected.status ||
+        current.nextRunAt !== expected.nextRunAt ||
+        current.retryScheduledFor !== expected.retryScheduledFor
+      ) {
+        this.db.exec("COMMIT");
+        return undefined;
+      }
+      if (opts.recoveredRun) {
+        const run = this.getRun(opts.recoveredRun.id);
+        if (
+          !run ||
+          run.status !== "abandoned" ||
+          run.error !== "run lease expired before completion" ||
+          run.attempt !== opts.recoveredRun.attempt ||
+          run.updatedAt !== opts.recoveredRun.updatedAt ||
+          run.scheduledFor !== opts.recoveredRun.scheduledFor
+        ) {
+          this.db.exec("COMMIT");
+          return undefined;
+        }
+      }
+      const merged: Loop = { ...current, ...patch, updatedAt: updated };
+      const res = this.db
+        .query(
+          `UPDATE loops SET status=$status, next_run_at=$nextRun, retry_scheduled_for=$retrySlot, updated_at=$updated
+           WHERE id=$id
+             AND archived_at IS NULL
+             AND status=$expectedStatus
+             AND next_run_at IS $expectedNextRun
+             AND retry_scheduled_for IS $expectedRetrySlot
+             AND ($daemonLeaseId IS NULL OR EXISTS (
+               SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
+             ))`,
+        )
+        .run({
+          $id: id,
+          $status: merged.status,
+          $nextRun: merged.nextRunAt ?? null,
+          $retrySlot: merged.retryScheduledFor ?? null,
+          $updated: updated,
+          $expectedStatus: expected.status,
+          $expectedNextRun: expected.nextRunAt ?? null,
+          $expectedRetrySlot: expected.retryScheduledFor ?? null,
+          $daemonLeaseId: opts.daemonLeaseId ?? null,
+          $now: updated,
+        });
+      if (res.changes !== 1) {
+        this.db.exec("COMMIT");
+        return undefined;
+      }
+      let markerAtMs = new Date(markerScheduledFor).getTime();
+      for (let probe = 0; probe < 1_000 && this.getRunBySlot(id, new Date(markerAtMs).toISOString()); probe += 1) {
+        markerAtMs += 1;
+      }
+      markerScheduledFor = new Date(markerAtMs).toISOString();
+      const markerId = genId();
+      this.db
+        .query(
+          `INSERT INTO loop_runs (id, loop_id, loop_name, scheduled_for, attempt, status, started_at, finished_at,
+            claimed_by, lease_expires_at, pid, exit_code, duration_ms, stdout, stderr, error, created_at, updated_at)
+           VALUES ($id, $loopId, $loopName, $scheduledFor, 1, 'skipped', NULL, $finished, NULL, NULL, NULL, NULL, NULL,
+            NULL, NULL, $error, $created, $updated)`,
+        )
+        .run({
+          $id: markerId,
+          $loopId: current.id,
+          $loopName: current.name,
+          $scheduledFor: markerScheduledFor,
+          $finished: updated,
+          $error: scrubbedReason,
+          $created: updated,
+          $updated: updated,
+        });
+      if (patch.status && patch.status !== "active") {
+        const status: WorkflowWorkItemStatus = patch.status === "paused" ? "deferred" : "cancelled";
+        this.setWorkflowWorkItemsForLoop(id, status, `loop ${patch.status}`, updated);
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        /* transaction may already be closed */
+      }
+      throw error;
+    }
+    const loop = this.getLoop(id);
+    const createdMarker = this.getRunBySlot(id, markerScheduledFor);
+    if (!loop || !createdMarker) throw new Error(`circuit breaker transition missing committed rows: ${id}`);
+    return { loop, marker: createdMarker };
+  }
+
   private activeLoopReferenceCount(workflowId: string): number {
     const rows = this.db.query<{ target_json: string }, []>("SELECT target_json FROM loops WHERE archived_at IS NULL").all();
     let count = 0;
@@ -2264,23 +2476,100 @@ export class Store {
     const workItem = this.getWorkflowWorkItem(args.workItemId);
     if (!workItem || !GENERATED_ROUTE_KEYS.has(workItem.routeKey)) return undefined;
     const invocation = this.getWorkflowInvocation(workItem.invocationId);
-    if (!invocation?.templateId || !GENERATED_ROUTE_TEMPLATE_IDS.has(invocation.templateId)) return undefined;
+    if (!invocation?.templateId || !isGeneratedRouteTemplate(workItem.routeKey, invocation.templateId)) return undefined;
     const loop = this.getLoop(args.loopId);
     if (!loop || loop.schedule.type !== "once" || loop.target.type !== "workflow" || loop.target.workflowId !== args.workflowId) return undefined;
     const input = loop.target.input ?? {};
-    if (input.workflowWorkItemId && input.workflowWorkItemId !== workItem.id) return undefined;
-    if (input.workflowInvocationId && input.workflowInvocationId !== invocation.id) return undefined;
-    if (workItem.workflowId && workItem.workflowId !== args.workflowId) return undefined;
+    if (input.workflowWorkItemId !== workItem.id || input.workflowInvocationId !== invocation.id) return undefined;
+    if (workItem.loopId !== loop.id || workItem.workflowId !== args.workflowId) return undefined;
     const workflow = this.getWorkflow(args.workflowId);
     if (!workflow) return undefined;
     return { workflow, loop, workItem, invocation };
   }
 
-  private maybeArchiveGeneratedRouteWorkflow(args: { workflowId: string; loopId?: string; workItemId?: string; workflowRunId?: string; updated: string }): void {
+  private maybeArchiveGeneratedRouteWorkflow(args: {
+    workflowId: string;
+    loopId?: string;
+    loopRunId?: string;
+    workItemId?: string;
+    workflowRunId?: string;
+    workflowRunStatus?: WorkflowRunStatus;
+    updated: string;
+  }): void {
     const context = this.generatedRouteArchiveContext(args);
     if (!context) return;
-    const { workflow, loop, workItem } = context;
+    const { workflow, loop, workItem, invocation } = context;
     if (!workflow || workflow.status !== "active") return;
+    if (
+      args.loopRunId
+      && (args.workflowRunStatus === "failed" || args.workflowRunStatus === "timed_out")
+    ) {
+      const loopRun = this.getRun(args.loopRunId);
+      if (
+        loopRun?.status === "running"
+        && workItem.status === "admitted"
+        && workItem.workflowRunId === args.workflowRunId
+      ) return;
+      if (loopRun && loopRun.attempt < loop.maxAttempts) return;
+    }
+    let workflowRunId = args.workflowRunId;
+    if (!workflowRunId) {
+      if (!args.loopRunId || workItem.workflowRunId) return;
+      const loopRun = this.getRun(args.loopRunId);
+      if (!loopRun || loopRun.status === "running") return;
+      workflowRunId = `preflight-archive:${loopRun.id}`;
+      const definitionHash = workflowDefinitionHash(workflow);
+      const syntheticError = "workflow preflight failed before workflow execution; synthetic archival event owner";
+      this.db
+        .query(
+          `INSERT OR IGNORE INTO workflow_runs (id, workflow_id, workflow_name, loop_id, loop_run_id, invocation_id,
+            work_item_id, scheduled_for, idempotency_key, workflow_definition_hash, manifest_path, status, started_at,
+            finished_at, duration_ms, error, created_at, updated_at)
+           VALUES ($id, $workflowId, $workflowName, $loopId, $loopRunId, $invocationId, $workItemId, $scheduledFor,
+            NULL, $workflowDefinitionHash, NULL, 'failed', NULL, $finished, NULL, $error, $created, $updated)`,
+        )
+        .run({
+          $id: workflowRunId,
+          $workflowId: workflow.id,
+          $workflowName: workflow.name,
+          $loopId: loop.id,
+          $loopRunId: loopRun.id,
+          $invocationId: invocation.id,
+          $workItemId: workItem.id,
+          $scheduledFor: loopRun.scheduledFor,
+          $workflowDefinitionHash: definitionHash,
+          $finished: args.updated,
+          $error: syntheticError,
+          $created: args.updated,
+          $updated: args.updated,
+        });
+      const archivalOwner = this.db
+        .query<WorkflowRunRow, [string]>("SELECT * FROM workflow_runs WHERE id = ?")
+        .get(workflowRunId);
+      if (
+        !archivalOwner
+        || archivalOwner.workflow_id !== workflow.id
+        || archivalOwner.workflow_name !== workflow.name
+        || archivalOwner.loop_id !== loop.id
+        || archivalOwner.loop_run_id !== loopRun.id
+        || archivalOwner.invocation_id !== invocation.id
+        || archivalOwner.work_item_id !== workItem.id
+        || archivalOwner.scheduled_for !== loopRun.scheduledFor
+        || archivalOwner.idempotency_key !== null
+        || archivalOwner.workflow_definition_hash !== definitionHash
+        || archivalOwner.manifest_path !== null
+        || archivalOwner.status !== "failed"
+        || archivalOwner.started_at !== null
+        || archivalOwner.finished_at !== args.updated
+        || archivalOwner.duration_ms !== null
+        || archivalOwner.error !== syntheticError
+        || archivalOwner.created_at !== args.updated
+        || archivalOwner.updated_at !== args.updated
+      ) return;
+      this.db
+        .query("UPDATE workflow_work_items SET workflow_run_id=?, updated_at=? WHERE id=? AND workflow_run_id IS NULL")
+        .run(workflowRunId, args.updated, workItem.id);
+    }
     const nonTerminal = this.db
       .query<{ count: number }, [string]>(
         `SELECT COUNT(*) AS count FROM workflow_runs
@@ -2291,8 +2580,8 @@ export class Store {
     const res = this.db
       .query("UPDATE workflow_specs SET status='archived', updated_at=? WHERE id=? AND status='active'")
       .run(args.updated, args.workflowId);
-    if (res.changes === 1 && args.workflowRunId) {
-      this.appendWorkflowEvent(args.workflowRunId, "workflow_archived", undefined, {
+    if (res.changes === 1) {
+      this.appendWorkflowEvent(workflowRunId, "workflow_archived", undefined, {
         workflowId: args.workflowId,
         loopId: loop.id,
         workItemId: workItem.id,
@@ -2308,8 +2597,10 @@ export class Store {
     this.maybeArchiveGeneratedRouteWorkflow({
       workflowId: run.workflowId,
       loopId: run.loopId,
+      loopRunId: run.loopRunId,
       workItemId: run.workItemId,
       workflowRunId,
+      workflowRunStatus: run.status,
       updated,
     });
   }
@@ -3766,6 +4057,9 @@ export class Store {
     let changed = false;
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      const currentRun = this.db
+        .query<WorkflowRunRow, [string]>("SELECT * FROM workflow_runs WHERE id = ?")
+        .get(workflowRunId);
       const res = this.db
         .query(
           `UPDATE workflow_runs SET status=$status, finished_at=$finished, duration_ms=$durationMs, error=$error, updated_at=$updated
@@ -3787,13 +4081,44 @@ export class Store {
       changed = res.changes === 1;
       if (changed) this.appendWorkflowEvent(workflowRunId, status, undefined, { error });
       if (changed) {
-        const itemStatus: WorkflowWorkItemStatus =
+        let itemStatus: WorkflowWorkItemStatus =
           status === "succeeded" ? "succeeded" : status === "cancelled" ? "cancelled" : "failed";
-        this.setWorkflowWorkItemsForWorkflowRun(workflowRunId, itemStatus, error, finishedAt);
+        let preserveActiveParentRetry = false;
+        if (
+          itemStatus === "failed"
+          && currentRun?.loop_id
+          && currentRun.loop_run_id
+        ) {
+          const loop = this.getLoop(currentRun.loop_id);
+          const loopRun = this.getRun(currentRun.loop_run_id);
+          const workItem = currentRun.work_item_id
+            ? this.getWorkflowWorkItem(currentRun.work_item_id)
+            : undefined;
+          preserveActiveParentRetry = Boolean(
+            loop
+            && loopRun?.status === "running"
+            && workItem?.status === "admitted"
+            && workItem.workflowRunId === workflowRunId
+            && this.generatedRouteArchiveContext({
+              workflowId: currentRun.workflow_id,
+              loopId: currentRun.loop_id,
+              workItemId: currentRun.work_item_id ?? undefined,
+            }),
+          );
+          if (loop && loopRun && loopRun.attempt < loop.maxAttempts) itemStatus = "admitted";
+        }
+        const itemReason = itemStatus === "admitted"
+          ? error ? `attempt failed; retry pending: ${error}` : "attempt failed; retry pending"
+          : error;
+        if (!preserveActiveParentRetry) {
+          this.setWorkflowWorkItemsForWorkflowRun(workflowRunId, itemStatus, itemReason, finishedAt);
+        }
         // A run that finished non-productively (a tempfail retry-signal, or a
         // gate death before the worker ran) must not burn the redispatch cap:
         // refund the attempt, and for a tempfail make the item requeueable now.
-        if (itemStatus === "failed") this.demoteNonProductiveWorkItems(workflowRunId, finishedAt);
+        if (itemStatus === "failed" && !preserveActiveParentRetry) {
+          this.demoteNonProductiveWorkItems(workflowRunId, finishedAt);
+        }
         this.maybeArchiveTerminalGeneratedRouteWorkflow(workflowRunId, finishedAt);
       }
       this.db.exec("COMMIT");
@@ -3945,6 +4270,7 @@ export class Store {
           .query(
             `UPDATE loop_runs SET pid=$pid, process_started_at=$processStartedAt, updated_at=$updated
              WHERE id=$id AND status='running' AND claimed_by=$claimedBy
+               AND claim_token=$claimToken
                AND ($daemonLeaseId IS NULL OR EXISTS (
                  SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
                ))`,
@@ -3955,6 +4281,7 @@ export class Store {
             $processStartedAt: processStartedAt,
             $updated: now,
             $claimedBy: claimedBy,
+            $claimToken: opts.claimToken ?? null,
             $daemonLeaseId: opts.daemonLeaseId ?? null,
             $now: now,
           })
@@ -3987,7 +4314,7 @@ export class Store {
     const res = this.db
       .query(
         `UPDATE loop_runs SET pid=$pid, pgid=$pgid, process_started_at=$processStartedAt, updated_at=$updated
-         WHERE id=$id AND status='running'
+         WHERE id=$id AND status='running' AND claim_token=$claimToken
            AND ($daemonLeaseId IS NULL OR EXISTS (
              SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
            ))`,
@@ -4000,6 +4327,7 @@ export class Store {
         // match what the kernel reports later or recovery/reaping distrusts it.
         $processStartedAt: info.processStartedAt ?? isoProcessStart(info.pid) ?? now,
         $updated: now,
+        $claimToken: opts.claimToken ?? null,
         $daemonLeaseId: opts.daemonLeaseId ?? null,
         $now: now,
       });
@@ -4089,14 +4417,14 @@ export class Store {
           .query<RunRow, [string, string, number]>(
             `SELECT * FROM loop_runs
              WHERE loop_id = ? AND scheduled_for > ? AND status IN ('failed', 'timed_out', 'abandoned') AND attempt < ?
-             ORDER BY scheduled_for ASC LIMIT 1`,
+             ORDER BY scheduled_for ASC, id ASC LIMIT 1`,
           )
           .get(loopId, afterScheduledFor, maxAttempts)
       : this.db
           .query<RunRow, [string, number]>(
             `SELECT * FROM loop_runs
              WHERE loop_id = ? AND status IN ('failed', 'timed_out', 'abandoned') AND attempt < ?
-             ORDER BY scheduled_for ASC LIMIT 1`,
+             ORDER BY scheduled_for ASC, id ASC LIMIT 1`,
           )
           .get(loopId, maxAttempts);
     return row ? rowToRun(row) : undefined;
@@ -4262,10 +4590,10 @@ export class Store {
       const res = opts.claimedBy
         ? this.db
             .query(
-              `UPDATE loop_runs SET status=$status, finished_at=$finished, claim_token=NULL, lease_expires_at=NULL, pid=$pid, exit_code=$exitCode,
+              `UPDATE loop_runs SET status=$status, finished_at=$finished, lease_expires_at=NULL, pid=$pid, exit_code=$exitCode,
                duration_ms=$durationMs, stdout=$stdout, stderr=$stderr, error=$error, updated_at=$updated
                WHERE id=$id AND status='running' AND claimed_by=$claimedBy AND lease_expires_at > $now
-                 AND ($claimToken IS NULL OR claim_token=$claimToken)
+                 AND claim_token=$claimToken
                  AND ($daemonLeaseId IS NULL OR EXISTS (
                    SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
                  ))`,
@@ -4277,16 +4605,19 @@ export class Store {
               // WHERE id=$id could resurrect an already-terminal run or clobber a
               // run another owner has since re-claimed to 'running'. Only finalize
               // a run that is still running.
-              `UPDATE loop_runs SET status=$status, finished_at=$finished, claim_token=NULL, lease_expires_at=NULL, pid=$pid, exit_code=$exitCode,
+              `UPDATE loop_runs SET status=$status, finished_at=$finished, lease_expires_at=NULL, pid=$pid, exit_code=$exitCode,
                duration_ms=$durationMs, stdout=$stdout, stderr=$stderr, error=$error, updated_at=$updated
                WHERE id=$id AND status='running'`,
             )
             .run(params);
-      const run = this.getRun(id);
-      if (!run) throw new Error(`run not found after finalize: ${id}`);
+      const runRow = this.db.query<RunRow, [string]>("SELECT * FROM loop_runs WHERE id = ?").get(id);
+      const run = runRow ? rowToRun(runRow) : undefined;
+      if (!run || !runRow) throw new Error(`run not found after finalize: ${id}`);
       if (opts.claimedBy && res.changes !== 1) {
         throw new RunFinalizationConflictError(
-          run.status === "running" ? "stale_claim" : "run_not_running",
+          opts.claimToken === undefined || runRow.claim_token !== opts.claimToken
+            ? "stale_claim"
+            : run.status === "running" ? "stale_claim" : "run_not_running",
           id,
         );
       }
@@ -4296,10 +4627,19 @@ export class Store {
         const itemStatus = workItemStatusForLoopRun(run.status, run.attempt, loop?.maxAttempts);
         if (loop?.target.type === "workflow" && itemStatus && itemStatus !== "admitted") {
           const workItemId = loop.target.input?.workflowWorkItemId ?? loop.target.input?.workItemId;
+          const workflowRun = this.db
+            .query<WorkflowRunRow, [string, string]>(
+              `SELECT * FROM workflow_runs
+               WHERE loop_run_id = ? AND workflow_id = ?
+               ORDER BY created_at DESC, id DESC LIMIT 1`,
+            )
+            .get(run.id, loop.target.workflowId);
           this.maybeArchiveGeneratedRouteWorkflow({
             workflowId: loop.target.workflowId,
             loopId: loop.id,
+            loopRunId: run.id,
             workItemId,
+            workflowRunId: workflowRun?.id,
             updated: completion.updatedAt,
           });
         }
@@ -4320,7 +4660,7 @@ export class Store {
       .query(
         `UPDATE loop_runs SET lease_expires_at=$expires, updated_at=$updated
          WHERE id=$id AND status='running' AND claimed_by=$claimedBy AND lease_expires_at > $now
-           AND ($claimToken IS NULL OR claim_token=$claimToken)
+           AND claim_token=$claimToken
            AND ($daemonLeaseId IS NULL OR EXISTS (
              SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
            ))`,
@@ -4359,10 +4699,63 @@ export class Store {
     const join = labels.length ? " JOIN loops AS label_loops ON label_loops.id = loop_runs.loop_id" : "";
     const rows = this.db
       .query<RunRow, Array<string | number>>(
-        `SELECT loop_runs.* FROM loop_runs${join}${where.length ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY loop_runs.created_at DESC LIMIT ? OFFSET ?`,
+        `SELECT loop_runs.* FROM loop_runs${join}${where.length ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY loop_runs.created_at DESC, loop_runs.id DESC LIMIT ? OFFSET ?`,
       )
       .all(...params, limit, offset);
     return rows.map(rowToRun);
+  }
+
+  listRecoveredLeaseRunsPage(opts: {
+    snapshot?: RecoveredLeaseRunSnapshotEntry[];
+    offset?: number;
+    limit?: number;
+  } = {}): RecoveredLeaseRunPage {
+    const limit = Math.max(1, Math.min(1_000, Math.floor(opts.limit ?? 1_000)));
+    const snapshot = opts.snapshot ?? this.db
+      .query<Pick<RunRow, "id" | "updated_at" | "scheduled_for" | "attempt">, []>(
+        `SELECT id, updated_at, scheduled_for, attempt FROM loop_runs
+         WHERE status='abandoned' AND error='run lease expired before completion'
+         ORDER BY updated_at ASC, scheduled_for ASC, id ASC`,
+      )
+      .all()
+      .map((row) => ({
+        id: row.id,
+        updatedAt: row.updated_at,
+        scheduledFor: row.scheduled_for,
+        attempt: row.attempt,
+      }));
+    const offset = Math.max(0, Math.min(snapshot.length, Math.floor(opts.offset ?? 0)));
+    const selected = snapshot.slice(offset, offset + limit);
+    const rows = selected.length === 0
+      ? []
+      : this.db
+          .query<RunRow, string[]>(
+            `SELECT * FROM loop_runs WHERE id IN (${selected.map(() => "?").join(",")})`,
+          )
+          .all(...selected.map((entry) => entry.id));
+    const rowsById = new Map(rows.map((row) => [row.id, row]));
+    const snapshotById = new Map(selected.map((entry) => [entry.id, entry]));
+    const runs = selected
+      .map((entry) => rowsById.get(entry.id))
+      .filter((row): row is RunRow => {
+        if (!row) return false;
+        const entry = snapshotById.get(row.id);
+        return Boolean(
+          entry &&
+          row.status === "abandoned" &&
+          row.error === "run lease expired before completion" &&
+          row.attempt === entry.attempt &&
+          row.updated_at === entry.updatedAt &&
+          row.scheduled_for === entry.scheduledFor
+        );
+      })
+      .map(rowToRun);
+    const nextOffset = offset + selected.length;
+    return {
+      runs,
+      snapshot,
+      ...(nextOffset < snapshot.length ? { nextOffset } : {}),
+    };
   }
 
   writeRunReceipt(input: WriteRunReceiptInput, opts: { now?: Date } = {}): RunReceipt {
@@ -4570,7 +4963,6 @@ export class Store {
             loopRunId: row.id,
           });
           this.setWorkflowWorkItemsForWorkflowRun(workflowRow.id, "failed", "parent loop run lease expired before completion", finished);
-          this.maybeArchiveTerminalGeneratedRouteWorkflow(workflowRow.id, finished);
         }
         const loop = this.getLoop(row.loop_id);
         const itemStatus = workItemStatusForLoopRun("abandoned", row.attempt, loop?.maxAttempts);
@@ -4583,11 +4975,14 @@ export class Store {
             : "run lease expired before completion";
           this.setWorkflowWorkItemsForLoop(row.loop_id, itemStatus, reason, finished, statuses);
           if (loop?.target.type === "workflow" && itemStatus !== "admitted") {
+            const workflowId = loop.target.workflowId;
             const workItemId = loop.target.input?.workflowWorkItemId ?? loop.target.input?.workItemId;
             this.maybeArchiveGeneratedRouteWorkflow({
-              workflowId: loop.target.workflowId,
+              workflowId,
               loopId: loop.id,
+              loopRunId: row.id,
               workItemId,
+              workflowRunId: workflowRows.find((workflowRow) => workflowRow.workflow_id === workflowId)?.id,
               updated: finished,
             });
           }

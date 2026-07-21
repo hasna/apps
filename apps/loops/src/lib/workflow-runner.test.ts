@@ -847,7 +847,7 @@ describe("workflow runner", () => {
       const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "crashed", new Date("2026-01-01T00:00:00Z"));
       expect(claim).toBeDefined();
       const executing = executeLoopTarget(store, loop, claim!.run, {
-        onSpawn: (pid) => store.markRunPid(claim!.run.id, pid, "crashed"),
+        onSpawn: (pid) => store.markRunPid(claim!.run.id, pid, "crashed", { claimToken: claim!.claimToken }),
       });
       await waitUntil(() => store.getRun(claim!.run.id)?.pid !== undefined, { label: "run pid recorded" });
       expect(store.getRun(claim!.run.id)?.pid).toBeDefined();

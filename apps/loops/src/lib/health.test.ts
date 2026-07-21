@@ -369,6 +369,7 @@ describe("loop health classification", () => {
         exitCode: 1,
       }, {
         claimedBy: "test",
+        claimToken: claim!.claimToken,
         now: new Date("2026-01-01T00:00:01Z"),
       });
 
@@ -409,6 +410,7 @@ describe("loop health classification", () => {
         exitCode: 1,
       }, {
         claimedBy: "test",
+        claimToken: claim!.claimToken,
         now: new Date("2026-01-01T00:00:01Z"),
       });
       store.updateLoop(loop.id, { retryScheduledFor: scheduledFor, nextRunAt: "2026-01-01T00:00:04.000Z" });
@@ -448,6 +450,7 @@ describe("loop health classification", () => {
         exitCode: 1,
       }, {
         claimedBy: "test",
+        claimToken: claim!.claimToken,
         now: new Date("2026-01-01T00:00:01Z"),
       });
 

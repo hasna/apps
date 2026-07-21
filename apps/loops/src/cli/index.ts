@@ -41,7 +41,7 @@ import { computeNextAfter, parseDuration } from "../lib/recurrence.js";
 import { Store } from "../lib/store.js";
 import { getStore, isCloudStore, type LoopStore } from "../lib/store/index.js";
 import { executeWorkflow, preflightWorkflow } from "../lib/workflow-runner.js";
-import { advanceLoop, executeClaimedRun, manualRunScheduledFor, manualRunSource, shouldAdvanceManualRun, tick } from "../lib/scheduler.js";
+import { runLoopNow, tick } from "../lib/scheduler.js";
 import { daemonStatus, stopDaemon } from "../daemon/control.js";
 import { runDaemon, startDaemon } from "../daemon/daemon.js";
 import { enableStartup, installStartup } from "../daemon/install.js";
@@ -2537,28 +2537,14 @@ program
     try {
       const loop = store.requireUniqueLoop(idOrName);
       if (loop.archivedAt) throw new Error(`loop is archived; run 'loops unarchive ${idOrName}' before running it`);
-      const runnerId = `manual:${process.pid}`;
-      const now = new Date();
-      let scheduledFor = manualRunScheduledFor(loop, now);
-      let source = manualRunSource(loop, scheduledFor, now);
-      let shouldAdvance = shouldAdvanceManualRun(loop, scheduledFor, now);
-      let claim = store.claimRun(loop, scheduledFor, runnerId, now);
-      if (!claim && shouldAdvance) {
-        const existing = store.getRunBySlot(loop.id, scheduledFor);
-        if (existing && existing.status !== "running") {
-          scheduledFor = now.toISOString();
-          source = "ad_hoc";
-          shouldAdvance = false;
-          claim = store.claimRun(loop, scheduledFor, runnerId, now);
-        }
-      }
-      if (!claim) throw new Error("could not claim manual run");
-      const run = await executeClaimedRun({ store, runnerId, loop: claim.loop, run: claim.run });
-      if (shouldAdvance) {
-        advanceLoop(store, claim.loop, run, new Date(run.finishedAt ?? new Date()), run.status === "succeeded");
-      }
-      const value = { ...publicRun(run, opts.showOutput), runNow: { source, advancesLoop: shouldAdvance } };
-      print(value, `${run.id} ${run.status} source=${source} slot=${run.scheduledFor}`);
+      const result = await runLoopNow({
+        store,
+        idOrName: loop.id,
+        runnerId: `manual:${process.pid}`,
+      });
+      const run = result.run;
+      const value = { ...publicRun(run, opts.showOutput), runNow: { source: result.source, advancesLoop: result.advancedLoop } };
+      print(value, `${run.id} ${run.status} source=${result.source} slot=${run.scheduledFor}`);
       if (!isJson() && opts.showOutput) printTextOutput(run);
       if (run.status !== "succeeded") process.exitCode = 1;
     } finally {

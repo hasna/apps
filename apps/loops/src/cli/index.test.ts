@@ -390,7 +390,7 @@ describe("loops CLI", () => {
           stdout: "migrated",
           stderr: "",
         },
-        { claimedBy: "seed", now: new Date("2026-01-01T00:00:01Z") },
+        { claimedBy: "seed", claimToken: claim!.claimToken, now: new Date("2026-01-01T00:00:01Z") },
       );
       workflowId = workflow.id;
       loopId = loop.id;
@@ -728,7 +728,7 @@ describe("loops CLI", () => {
           stdout: "seed",
           stderr: "",
         },
-        { claimedBy: "seed", now: new Date("2026-01-01T00:00:01Z") },
+        { claimedBy: "seed", claimToken: claim!.claimToken, now: new Date("2026-01-01T00:00:01Z") },
       );
     } finally {
       store.close();
@@ -2224,7 +2224,7 @@ describe("loops CLI", () => {
           error: "429 too many requests fake-project-error-secret",
           exitCode: 1,
         },
-        { claimedBy: "seed", now: new Date("2026-01-01T00:00:00.500Z") },
+        { claimedBy: "seed", claimToken: claim!.claimToken, now: new Date("2026-01-01T00:00:00.500Z") },
       );
     } finally {
       store.close();
@@ -2316,7 +2316,7 @@ describe("loops CLI", () => {
           stderr: "",
           exitCode: 0,
         },
-        { claimedBy: "seed", now: new Date("2026-01-01T00:00:00.500Z") },
+        { claimedBy: "seed", claimToken: claim!.claimToken, now: new Date("2026-01-01T00:00:00.500Z") },
       );
     } finally {
       store.close();
@@ -2349,7 +2349,7 @@ describe("loops CLI", () => {
           stderr: "",
           exitCode: 0,
         },
-        { claimedBy: "seed", now: new Date("2026-01-01T00:01:00.500Z") },
+        { claimedBy: "seed", claimToken: claim!.claimToken, now: new Date("2026-01-01T00:01:00.500Z") },
       );
     } finally {
       laterStore.close();
@@ -2408,7 +2408,7 @@ describe("loops CLI", () => {
           stderr: "",
           exitCode: 0,
         },
-        { claimedBy: "seed", now: new Date("2026-01-01T00:00:00.500Z") },
+        { claimedBy: "seed", claimToken: claim!.claimToken, now: new Date("2026-01-01T00:00:00.500Z") },
       );
     } finally {
       store.close();
@@ -2452,7 +2452,7 @@ describe("loops CLI", () => {
           stderr: "",
           exitCode: 0,
         },
-        { claimedBy: "seed", now: new Date("2026-01-01T00:00:00.500Z") },
+        { claimedBy: "seed", claimToken: claim!.claimToken, now: new Date("2026-01-01T00:00:00.500Z") },
       );
     } finally {
       store.close();
@@ -2496,7 +2496,7 @@ describe("loops CLI", () => {
             error: "runtime preflight failed",
             exitCode: 1,
           },
-          { claimedBy: "seed", now: new Date("2026-01-01T00:00:00.500Z") },
+          { claimedBy: "seed", claimToken: claim!.claimToken, now: new Date("2026-01-01T00:00:00.500Z") },
         );
       }
     } finally {
@@ -2558,7 +2558,7 @@ describe("loops CLI", () => {
           error: "response_format json schema error",
           exitCode: 1,
         },
-        { claimedBy: "seed", now: new Date("2026-01-01T00:00:00.500Z") },
+        { claimedBy: "seed", claimToken: claim!.claimToken, now: new Date("2026-01-01T00:00:00.500Z") },
       );
     } finally {
       store.close();
@@ -2670,7 +2670,7 @@ describe("loops CLI", () => {
           error: "429 too many requests",
           exitCode: 1,
         },
-        { claimedBy: "seed", now: new Date("2026-01-01T00:00:00.500Z") },
+        { claimedBy: "seed", claimToken: claim!.claimToken, now: new Date("2026-01-01T00:00:00.500Z") },
       );
     } finally {
       store.close();
@@ -2754,7 +2754,7 @@ describe("loops CLI", () => {
             error: "429 too many requests",
             exitCode: 1,
           },
-          { claimedBy: "seed", now: new Date("2026-01-01T00:00:00.500Z") },
+          { claimedBy: "seed", claimToken: claim!.claimToken, now: new Date("2026-01-01T00:00:00.500Z") },
         );
       }
     } finally {

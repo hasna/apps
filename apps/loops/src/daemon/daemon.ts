@@ -225,6 +225,7 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
     const finalRun = await executeClaimedRun({
       store,
       runnerId,
+      claimToken: claim.claimToken,
       loop: claim.loop,
       run: claim.run,
       daemonLeaseId: leaseId,
@@ -236,10 +237,16 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
           daemonLeaseId: leaseId,
           onSpawn: (pid) => {
             ensureLease();
-            store.markRunPid(run.id, pid, runnerId, { daemonLeaseId: leaseId });
+            store.markRunPid(run.id, pid, runnerId, {
+              daemonLeaseId: leaseId,
+              claimToken: claim.claimToken,
+            });
           },
           onSpawnProcess: (info) => {
-            store.recordRunProcess(run.id, info, { daemonLeaseId: leaseId });
+            store.recordRunProcess(run.id, info, {
+              daemonLeaseId: leaseId,
+              claimToken: claim.claimToken,
+            });
           },
         })),
       finalizeResult: (result) => {
@@ -259,7 +266,7 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
       store,
       claim.loop,
       finalRun,
-      new Date(finalRun.finishedAt ?? new Date()),
+      new Date(finalRun.updatedAt),
       finalRun.status === "succeeded",
       { daemonLeaseId: leaseId },
     );

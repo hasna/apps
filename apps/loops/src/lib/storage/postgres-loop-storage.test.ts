@@ -26,6 +26,7 @@ import {
 import { assertTenantEnforcementBootstrap, assertTenantEnforcementBootstrapIfPending, isSafeServiceConnection } from "../../serve/index.js";
 import type { CreateLoopInput, Loop, LoopRun, WorkflowSpec, WorkflowStepRun } from "../../types.js";
 import { waitUntil } from "../../test-helpers.js";
+import { planLoopAdvancement } from "../advancement.js";
 
 const j = (...parts: string[]): string => parts.join("");
 const GH_PAT = j("ghp", "_AbCdEf0123456789AbCdEf0123456789");
@@ -1043,7 +1044,7 @@ suite("PostgresLoopStorage (live)", () => {
     const second = await storage.claimRun(loop, slot, "runner-2");
     expect(second).toBeUndefined();
 
-    const rec = await storage.recordRunProcess(claim!.run.id, { pid: 4242 });
+    const rec = await storage.recordRunProcess(claim!.run.id, { pid: 4242 }, { claimToken: token });
     expect(rec?.pid).toBe(4242);
 
     const hb = await storage.heartbeatRunLease(claim!.run.id, "runner-1", 60_000, new Date(), { claimToken: token });
@@ -1061,6 +1062,70 @@ suite("PostgresLoopStorage (live)", () => {
     const runs = await storage.listRuns({ loopId: loop.id });
     expect(runs.length).toBe(1);
     expect((await storage.getRunBySlot(loop.id, slot))?.id).toBe(claim!.run.id);
+  });
+
+  test("same-runner reclaim fences stale and tokenless PostgreSQL work", async () => {
+    const claimedAt = new Date("2026-07-06T10:10:00.000Z");
+    const loop = await storage.createLoop(loopInput("pg-same-runner-reclaim", { leaseMs: 10 }));
+    const first = await storage.claimRun(loop, claimedAt.toISOString(), "runner-same", claimedAt);
+    const second = await storage.claimRun(
+      loop,
+      claimedAt.toISOString(),
+      "runner-same",
+      new Date("2026-07-06T10:10:00.020Z"),
+    );
+    expect(first?.claimToken).toBeString();
+    expect(second?.claimToken).toBeString();
+    expect(second?.claimToken).not.toBe(first?.claimToken);
+
+    expect(await storage.recordRunProcess(second!.run.id, { pid: 4242 })).toBeUndefined();
+    expect(await storage.recordRunProcess(second!.run.id, { pid: 4242 }, { claimToken: first!.claimToken })).toBeUndefined();
+    expect(await storage.recordRunProcess(second!.run.id, { pid: 4242 }, { claimToken: second!.claimToken })).toMatchObject({
+      id: second!.run.id,
+      pid: 4242,
+    });
+    expect(await storage.heartbeatRunLease(
+      second!.run.id,
+      "runner-same",
+      60_000,
+      new Date("2026-07-06T10:10:00.021Z"),
+    )).toBeUndefined();
+    expect(await storage.heartbeatRunLease(
+      second!.run.id,
+      "runner-same",
+      60_000,
+      new Date("2026-07-06T10:10:00.021Z"),
+      { claimToken: first!.claimToken },
+    )).toBeUndefined();
+    expect(await storage.heartbeatRunLease(
+      second!.run.id,
+      "runner-same",
+      60_000,
+      new Date("2026-07-06T10:10:00.021Z"),
+      { claimToken: second!.claimToken },
+    )).toMatchObject({ status: "running" });
+
+    const patch = {
+      status: "succeeded" as const,
+      finishedAt: "2026-07-06T10:10:00.030Z",
+      durationMs: 10,
+      stdout: "",
+      stderr: "",
+    };
+    await expect(storage.finalizeRun(second!.run.id, patch, {
+      claimedBy: "runner-same",
+      now: new Date("2026-07-06T10:10:00.030Z"),
+    })).rejects.toMatchObject({ reason: "stale_claim" });
+    await expect(storage.finalizeRun(second!.run.id, patch, {
+      claimedBy: "runner-same",
+      claimToken: first!.claimToken,
+      now: new Date("2026-07-06T10:10:00.030Z"),
+    })).rejects.toMatchObject({ reason: "stale_claim" });
+    expect(await storage.finalizeRun(second!.run.id, patch, {
+      claimedBy: "runner-same",
+      claimToken: second!.claimToken,
+      now: new Date("2026-07-06T10:10:00.030Z"),
+    })).toMatchObject({ status: "succeeded" });
   });
 
   test("finalizeRun bounds runner timestamps and uses PostgreSQL server receipt time for omitted duration", async () => {
@@ -1151,6 +1216,135 @@ suite("PostgresLoopStorage (live)", () => {
     }
   });
 
+  test("two PostgreSQL connections trip one circuit breaker and create one marker", async () => {
+    const peerExecutor = PgPoolExecutor.fromConnectionString({
+      connectionString: isolatedUrl({ username: RUNTIME_LOGIN, password: RUNTIME_PASSWORD }),
+      applicationName: "loops-pgstore-breaker-race-peer",
+    });
+    const peerStorage = new PostgresLoopStorage(peerExecutor.queryClient, {
+      tenantId: "tenant-test",
+      principalId: "principal-test",
+      requestId: "breaker-race-peer",
+    });
+    try {
+      const now = new Date("2026-07-06T10:45:10.000Z");
+      const nextRunAt = "2026-07-06T10:45:00.000Z";
+      const loop = await storage.createLoop(loopInput("pg-breaker-race"));
+      const current = await storage.updateLoop(loop.id, { nextRunAt }, { now });
+      const expected = {
+        status: current.status,
+        nextRunAt: current.nextRunAt,
+        retryScheduledFor: current.retryScheduledFor,
+      };
+      const args = [
+        loop.id,
+        expected,
+        { status: "paused" as const, nextRunAt: undefined, retryScheduledFor: undefined },
+        { scheduledFor: nextRunAt, reason: "circuit breaker threshold reached" },
+        { now },
+      ] as const;
+      const results = await Promise.all([
+        storage.tripCircuitBreakerIfCurrent(...args),
+        peerStorage.tripCircuitBreakerIfCurrent(...args),
+      ]);
+      expect(results.filter(Boolean)).toHaveLength(1);
+      expect(await storage.getLoop(loop.id)).toMatchObject({
+        status: "paused",
+        nextRunAt: undefined,
+        retryScheduledFor: undefined,
+      });
+      const runs = await storage.listRuns({ loopId: loop.id });
+      expect(runs).toHaveLength(1);
+      expect(runs[0]).toMatchObject({
+        status: "skipped",
+        scheduledFor: nextRunAt,
+        error: "circuit breaker threshold reached",
+      });
+    } finally {
+      await peerExecutor.close();
+    }
+  });
+
+  test("PostgreSQL circuit breaker rolls back the loop update when no marker slot is available", async () => {
+    const now = new Date("2026-07-06T10:50:10.000Z");
+    const nextRunAt = "2026-07-06T10:50:00.000Z";
+    const loop = await storage.createLoop(loopInput("pg-breaker-rollback"));
+    const current = await storage.updateLoop(loop.id, { nextRunAt }, { now });
+    await executor.queryClient.execute(
+      `INSERT INTO loop_runs (
+         tenant_id, id, loop_id, loop_name, scheduled_for, attempt, status,
+         started_at, finished_at, claimed_by, lease_expires_at, pid, exit_code,
+         duration_ms, stdout, stderr, error, created_at, updated_at
+       )
+       SELECT 'tenant-test',
+              'breaker-occupied-' || slot::text,
+              $1,
+              $2,
+              $3::timestamptz + slot * interval '1 millisecond',
+              1,
+              'skipped',
+              NULL,
+              $4,
+              NULL,
+              NULL,
+              NULL,
+              NULL,
+              NULL,
+              NULL,
+              NULL,
+              'occupied',
+              $4,
+              $4
+         FROM generate_series(0, 999) AS slot`,
+      [loop.id, loop.name, nextRunAt, now.toISOString()],
+    );
+    await expect(storage.tripCircuitBreakerIfCurrent(
+      loop.id,
+      {
+        status: current.status,
+        nextRunAt: current.nextRunAt,
+        retryScheduledFor: current.retryScheduledFor,
+      },
+      { status: "paused", nextRunAt: undefined, retryScheduledFor: undefined },
+      { scheduledFor: nextRunAt, reason: "must roll back" },
+      { now },
+    )).rejects.toThrow("circuit breaker marker slot unavailable");
+    expect(await storage.getLoop(loop.id)).toMatchObject({
+      status: current.status,
+      nextRunAt,
+      retryScheduledFor: current.retryScheduledFor,
+    });
+    expect(await storage.countRuns()).toBe(1_000);
+  });
+
+  test("nextRetryableRun returns the globally earliest retryable slot deterministically", async () => {
+    const loop = await storage.createLoop(loopInput("pg-retry-order", { maxAttempts: 3 }));
+    const later = "2026-07-06T11:10:00.000Z";
+    const earlier = "2026-07-06T11:00:00.000Z";
+    for (const [slot, runner] of [[later, "runner-later"], [earlier, "runner-earlier"]] as const) {
+      const startedAt = new Date(new Date(slot).getTime() + 1_000);
+      const claim = await storage.claimRun(loop, slot, runner, startedAt);
+      expect(claim).toBeTruthy();
+      await storage.finalizeRun(
+        claim!.run.id,
+        {
+          status: "failed",
+          finishedAt: new Date(startedAt.getTime() + 1_000).toISOString(),
+          stdout: "",
+          stderr: "",
+          error: "retry me",
+        },
+        {
+          claimedBy: runner,
+          claimToken: claim!.claimToken,
+          now: new Date(startedAt.getTime() + 1_000),
+        },
+      );
+    }
+    expect((await storage.nextRetryableRun(loop.id, 3))?.scheduledFor).toBe(earlier);
+    expect((await storage.nextRetryableRun(loop.id, 3, earlier))?.scheduledFor).toBe(later);
+  });
+
   test("createSkippedRun is idempotent per slot", async () => {
     const loop = await storage.createLoop(loopInput("skip"));
     const slot = "2026-07-06T11:00:00.000Z";
@@ -1170,6 +1364,391 @@ suite("PostgresLoopStorage (live)", () => {
     expect(result.abandoned.length).toBe(1);
     expect(result.abandoned[0]!.status).toBe("abandoned");
     expect(result.deferred.length).toBe(0);
+  });
+
+  test("paginates an immutable tenant-scoped recovered-row snapshot", async () => {
+    for (const id of ["a", "z"]) {
+      const loop = await storage.createLoop(loopInput(`recovered-keyset-pages-${id}`));
+      await storage.upsertMigrationRun({
+        id: `recovered-keyset-run-${id}`,
+        loopId: loop.id,
+        loopName: loop.name,
+        scheduledFor: "2026-07-06T12:00:00.000Z",
+        attempt: 1,
+        status: "abandoned",
+        finishedAt: "2026-07-06T12:01:00.000Z",
+        error: "run lease expired before completion",
+        createdAt: "2026-07-06T12:00:00.000Z",
+        updatedAt: "2026-07-06T12:01:00.000Z",
+      });
+    }
+    const middleLoop = await storage.createLoop(loopInput("recovered-keyset-pages-m"));
+    const middle = {
+      id: "recovered-keyset-run-m",
+      loopId: middleLoop.id,
+      loopName: middleLoop.name,
+      scheduledFor: "2026-07-06T12:00:00.000Z",
+      attempt: 1,
+      status: "failed" as const,
+      finishedAt: "2026-07-06T12:01:00.000Z",
+      error: "not recovered yet",
+      createdAt: "2026-07-06T12:00:00.000Z",
+      updatedAt: "2026-07-06T12:01:00.000Z",
+    };
+    await storage.upsertMigrationRun(middle);
+    const first = await storage.listRecoveredLeaseRunsPage({ limit: 1 });
+    expect(first.runs.map((run) => run.id)).toEqual(["recovered-keyset-run-a"]);
+    expect(first.snapshot?.map((entry) => entry.id)).toEqual([
+      "recovered-keyset-run-a",
+      "recovered-keyset-run-z",
+    ]);
+    expect(first.nextOffset).toBe(1);
+
+    await storage.upsertMigrationRun({
+      ...middle,
+      status: "abandoned",
+      finishedAt: "2026-07-06T12:01:00.000Z",
+      error: "run lease expired before completion",
+      updatedAt: "2026-07-06T12:01:00.000Z",
+    }, { replace: true });
+    const insertedLoop = await storage.createLoop(loopInput("recovered-keyset-pages-n"));
+    await storage.upsertMigrationRun({
+      id: "recovered-keyset-run-n",
+      loopId: insertedLoop.id,
+      loopName: insertedLoop.name,
+      scheduledFor: "2026-07-06T12:00:00.000Z",
+      attempt: 1,
+      status: "abandoned",
+      finishedAt: "2026-07-06T12:01:00.000Z",
+      error: "run lease expired before completion",
+      createdAt: "2026-07-06T12:00:00.000Z",
+      updatedAt: "2026-07-06T12:01:00.000Z",
+    });
+    const second = await storage.listRecoveredLeaseRunsPage({
+      limit: 1,
+      snapshot: first.snapshot,
+      offset: first.nextOffset,
+    });
+    expect(second.runs.map((run) => run.id)).toEqual(["recovered-keyset-run-z"]);
+    expect(second.runs.map((run) => run.id)).not.toContain("recovered-keyset-run-m");
+    expect(second.runs.map((run) => run.id)).not.toContain("recovered-keyset-run-n");
+    expect(second.nextOffset).toBeUndefined();
+  });
+
+  test("drains more than 1000 immutable recovered snapshot members", async () => {
+    const loop = await storage.createLoop(loopInput("recovered-snapshot-1001"));
+    const total = 1_001;
+    for (let index = 0; index < total; index += 1) {
+      const scheduledFor = new Date(Date.parse("2026-07-06T12:00:00.000Z") + index).toISOString();
+      await storage.upsertMigrationRun({
+        id: `recovered-snapshot-1001-${String(index).padStart(4, "0")}`,
+        loopId: loop.id,
+        loopName: loop.name,
+        scheduledFor,
+        attempt: 1,
+        status: "abandoned",
+        finishedAt: "2026-07-06T12:02:00.000Z",
+        error: "run lease expired before completion",
+        createdAt: scheduledFor,
+        updatedAt: "2026-07-06T12:02:00.000Z",
+      });
+    }
+    const first = await storage.listRecoveredLeaseRunsPage({ limit: 1_000 });
+    expect(first.runs).toHaveLength(1_000);
+    expect(first.snapshot).toHaveLength(total);
+    expect(first.nextOffset).toBe(1_000);
+    const second = await storage.listRecoveredLeaseRunsPage({
+      limit: 1_000,
+      snapshot: first.snapshot,
+      offset: first.nextOffset,
+    });
+    expect(second.runs).toHaveLength(1);
+    expect(second.nextOffset).toBeUndefined();
+    expect(new Set([...first.runs, ...second.runs].map((run) => run.id)).size).toBe(total);
+  }, 60_000);
+
+  test("archives a generated one-shot workflow exactly once after workflow finalization", async () => {
+    const invocation = await storage.createWorkflowInvocation({
+      templateId: "task-lifecycle",
+      sourceRef: { kind: "event", id: "pg-finalize-route", dedupeKey: "todos-task:pg-finalize-route" },
+      subjectRef: { kind: "task", id: "pg-finalize-route", path: "/tmp/loops" },
+      intent: "route",
+      scope: { projectPath: "/tmp/loops" },
+    });
+    const item = await storage.upsertWorkflowWorkItem({
+      routeKey: "todos-task",
+      idempotencyKey: "todos-task:pg-finalize-route",
+      invocationId: invocation.id,
+      sourceType: "task.created",
+      sourceRef: "pg-finalize-route",
+      subjectRef: "pg-finalize-route",
+    });
+    const workflow = await storage.createWorkflow({
+      name: "pg-finalize-generated-route",
+      steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+    });
+    const loop = await storage.createLoop(loopInput("pg-finalize-generated-route-loop", {
+      schedule: { type: "once", at: "2026-07-06T12:00:00.000Z" },
+      target: {
+        type: "workflow",
+        workflowId: workflow.id,
+        input: { workflowInvocationId: invocation.id, workflowWorkItemId: item.id },
+      },
+    }));
+    await storage.admitWorkflowWorkItem(item.id, { workflowId: workflow.id, loopId: loop.id });
+    const run = await storage.createWorkflowRun({ workflow, loop, scheduledFor: "2026-07-06T12:00:00.000Z" });
+
+    await Promise.all([
+      storage.finalizeWorkflowRun(run.id, "succeeded"),
+      storage.finalizeWorkflowRun(run.id, "succeeded"),
+    ]);
+
+    expect((await storage.getWorkflow(workflow.id))?.status).toBe("archived");
+    expect((await storage.getWorkflowWorkItem(item.id))?.status).toBe("succeeded");
+    expect((await storage.listWorkflowEvents(run.id))
+      .filter((event) => event.eventType === "workflow_archived")).toHaveLength(1);
+  });
+
+  test("parent finalization preserves retryable routes and archives exhausted generated routes without lock inversion", async () => {
+    const makeRoute = async (suffix: string, maxAttempts: number, templateId = "task-lifecycle") => {
+      const invocation = await storage.createWorkflowInvocation({
+        templateId,
+        sourceRef: { kind: "event", id: `pg-parent-${suffix}`, dedupeKey: `todos-task:pg-parent-${suffix}` },
+        subjectRef: { kind: "task", id: `pg-parent-${suffix}`, path: "/tmp/loops" },
+        intent: "route",
+        scope: { projectPath: "/tmp/loops" },
+      });
+      const item = await storage.upsertWorkflowWorkItem({
+        routeKey: "todos-task",
+        idempotencyKey: `todos-task:pg-parent-${suffix}`,
+        invocationId: invocation.id,
+        sourceType: "task.created",
+        sourceRef: `pg-parent-${suffix}`,
+        subjectRef: `pg-parent-${suffix}`,
+      });
+      const workflow = await storage.createWorkflow({
+        name: `pg-parent-generated-${suffix}`,
+        steps: [{ id: "worker", target: { type: "command", command: "false" } }],
+      });
+      const loop = await storage.createLoop(loopInput(`pg-parent-generated-loop-${suffix}`, {
+        schedule: { type: "once", at: "2026-07-06T12:00:00.000Z" },
+        target: {
+          type: "workflow",
+          workflowId: workflow.id,
+          input: { workflowInvocationId: invocation.id, workflowWorkItemId: item.id },
+        },
+        maxAttempts,
+        leaseMs: 60_000,
+      }), new Date("2026-07-06T11:59:00.000Z"));
+      await storage.admitWorkflowWorkItem(item.id, { workflowId: workflow.id, loopId: loop.id });
+      const claim = await storage.claimRun(
+        loop,
+        "2026-07-06T12:00:00.000Z",
+        `runner-parent-${suffix}`,
+        new Date("2026-07-06T12:00:00.000Z"),
+      );
+      const workflowRun = await storage.createWorkflowRun({ workflow, loop, loopRun: claim!.run });
+      return { item, workflow, claim: claim!, workflowRun };
+    };
+    const finalizeParent = (fixture: Awaited<ReturnType<typeof makeRoute>>) => storage.finalizeRun(
+      fixture.claim.run.id,
+      {
+        status: "failed",
+        finishedAt: "2026-07-06T12:00:01.000Z",
+        durationMs: 1_000,
+        stdout: "",
+        stderr: "",
+        error: "parent failed",
+      },
+      {
+        claimedBy: fixture.claim.run.claimedBy,
+        claimToken: fixture.claim.claimToken,
+        now: new Date("2026-07-06T12:00:01.000Z"),
+      },
+    );
+    const markWorkflowTerminal = (runId: string) => runtimeExecutor.withRequestContext(
+      { tenantId: "tenant-test", principalId: "principal-test", requestId: `parent-terminal-${runId}` },
+      (client) => client.execute(
+        `UPDATE workflow_runs SET status='failed', finished_at=$2, updated_at=$2
+         WHERE id=$1`,
+        [runId, "2026-07-06T12:00:00.500Z"],
+      ),
+    );
+
+    const retryable = await makeRoute("retryable", 2);
+    await storage.finalizeWorkflowRun(retryable.workflowRun.id, "failed", {
+      finishedAt: "2026-07-06T12:00:00.500Z",
+      error: "retryable workflow failed",
+    });
+    expect((await storage.getWorkflowWorkItem(retryable.item.id))?.status).toBe("admitted");
+    expect((await storage.getWorkflow(retryable.workflow.id))?.status).toBe("active");
+    await finalizeParent(retryable);
+    expect((await storage.getWorkflowWorkItem(retryable.item.id))?.status).toBe("admitted");
+    expect((await storage.getWorkflow(retryable.workflow.id))?.status).toBe("active");
+    expect((await storage.listWorkflowEvents(retryable.workflowRun.id))
+      .filter((event) => event.eventType === "workflow_archived")).toHaveLength(0);
+
+    const exhausted = await makeRoute("exhausted", 1);
+    await Promise.all([
+      finalizeParent(exhausted),
+      storage.finalizeWorkflowRun(exhausted.workflowRun.id, "failed", {
+        finishedAt: "2026-07-06T12:00:00.500Z",
+        error: "workflow failed",
+      }),
+    ]);
+    expect((await storage.getWorkflowWorkItem(exhausted.item.id))?.status).toBe("failed");
+    expect((await storage.getWorkflow(exhausted.workflow.id))?.status).toBe("archived");
+    expect((await storage.listWorkflowEvents(exhausted.workflowRun.id))
+      .filter((event) => event.eventType === "workflow_archived")).toHaveLength(1);
+
+    const nearMiss = await makeRoute("near-miss", 1, "manual-workflow");
+    await markWorkflowTerminal(nearMiss.workflowRun.id);
+    await finalizeParent(nearMiss);
+    expect((await storage.getWorkflow(nearMiss.workflow.id))?.status).toBe("active");
+    expect((await storage.listWorkflowEvents(nearMiss.workflowRun.id))
+      .filter((event) => event.eventType === "workflow_archived")).toHaveLength(0);
+
+    const preflight = await makeRoute("preflight", 1);
+    await runtimeExecutor.withRequestContext(
+      { tenantId: "tenant-test", principalId: "principal-test", requestId: "parent-preflight-no-run" },
+      (client) => client.execute(
+        "DELETE FROM workflow_runs WHERE tenant_id = open_loops_current_tenant_id() AND id=$1",
+        [preflight.workflowRun.id],
+      ),
+    );
+    const preflightFinalizations = await Promise.allSettled([
+      finalizeParent(preflight),
+      finalizeParent(preflight),
+    ]);
+    expect(preflightFinalizations.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(preflightFinalizations.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect((await storage.getWorkflowWorkItem(preflight.item.id))?.status).toBe("failed");
+    expect((await storage.getWorkflow(preflight.workflow.id))?.status).toBe("archived");
+    const preflightRuns = await storage.listWorkflowRuns({
+      workflowId: preflight.workflow.id,
+      loopRunId: preflight.claim.run.id,
+    });
+    expect(preflightRuns).toHaveLength(1);
+    expect(preflightRuns[0]?.id).toBe(`preflight-archive:${preflight.claim.run.id}`);
+    expect(preflightRuns[0]?.status).toBe("failed");
+    expect(preflightRuns[0]?.startedAt).toBeUndefined();
+    expect(preflightRuns[0]?.durationMs).toBeUndefined();
+    expect(preflightRuns[0]?.error).toBe(
+      "workflow preflight failed before workflow execution; synthetic archival event owner",
+    );
+    expect(await storage.listWorkflowStepRuns(preflightRuns[0]!.id)).toHaveLength(0);
+    expect((await storage.listWorkflowEvents(preflightRuns[0]!.id))
+      .filter((event) => event.eventType === "workflow_archived")).toHaveLength(1);
+  });
+
+  test("keeps retryable generated recovery active and archives exhausted recovery once", async () => {
+    const makeRoute = async (suffix: string, maxAttempts: number) => {
+      const invocation = await storage.createWorkflowInvocation({
+        templateId: "todos-task-worker-verifier",
+        sourceRef: { kind: "event", id: `pg-recover-${suffix}`, dedupeKey: `todos-task:pg-recover-${suffix}` },
+        subjectRef: { kind: "task", id: `pg-recover-${suffix}`, path: "/tmp/loops" },
+        intent: "route",
+        scope: { projectPath: "/tmp/loops" },
+      });
+      const item = await storage.upsertWorkflowWorkItem({
+        routeKey: "todos-task",
+        idempotencyKey: `todos-task:pg-recover-${suffix}`,
+        invocationId: invocation.id,
+        sourceType: "task.created",
+        sourceRef: `pg-recover-${suffix}`,
+        subjectRef: `pg-recover-${suffix}`,
+      });
+      const workflow = await storage.createWorkflow({
+        name: `pg-recover-generated-${suffix}`,
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const loop = await storage.createLoop(loopInput(`pg-recover-generated-loop-${suffix}`, {
+        schedule: { type: "once", at: "2026-07-06T12:00:00.000Z" },
+        target: {
+          type: "workflow",
+          workflowId: workflow.id,
+          input: { workflowInvocationId: invocation.id, workflowWorkItemId: item.id },
+        },
+        maxAttempts,
+        leaseMs: 1,
+      }), new Date("2026-07-06T11:59:00.000Z"));
+      await storage.admitWorkflowWorkItem(item.id, { workflowId: workflow.id, loopId: loop.id });
+      const claim = await storage.claimRun(
+        loop,
+        "2026-07-06T12:00:00.000Z",
+        `runner-${suffix}`,
+        new Date("2026-07-06T12:00:00.000Z"),
+      );
+      const workflowRun = await storage.createWorkflowRun({ workflow, loop, loopRun: claim!.run });
+      return { item, workflow, workflowRun };
+    };
+    const retryable = await makeRoute("retryable", 2);
+    const exhausted = await makeRoute("exhausted", 1);
+
+    const recoveries = await Promise.all([
+      storage.recoverExpiredRunLeasesDetailed(new Date("2026-07-06T12:00:01.000Z")),
+      storage.recoverExpiredRunLeasesDetailed(new Date("2026-07-06T12:00:01.000Z")),
+    ]);
+    expect(recoveries.flatMap((result) => result.abandoned)).toHaveLength(2);
+    expect((await storage.getWorkflowWorkItem(retryable.item.id))?.status).toBe("admitted");
+    expect((await storage.getWorkflow(retryable.workflow.id))?.status).toBe("active");
+    expect((await storage.listWorkflowEvents(retryable.workflowRun.id))
+      .filter((event) => event.eventType === "workflow_archived")).toHaveLength(0);
+    expect((await storage.getWorkflowWorkItem(exhausted.item.id))?.status).toBe("failed");
+    expect((await storage.getWorkflow(exhausted.workflow.id))?.status).toBe("archived");
+    expect((await storage.listWorkflowEvents(exhausted.workflowRun.id))
+      .filter((event) => event.eventType === "workflow_archived")).toHaveLength(1);
+
+    expect((await storage.recoverExpiredRunLeasesDetailed(new Date("2026-07-06T12:00:02.000Z"))).abandoned).toHaveLength(0);
+    expect((await storage.listWorkflowEvents(exhausted.workflowRun.id))
+      .filter((event) => event.eventType === "workflow_archived")).toHaveLength(1);
+  });
+
+  test("maintenance recovery with reverse lease order advances the globally earliest retry slot", async () => {
+    const loop = await storage.createLoop(loopInput("recover-reverse-order", {
+      overlap: "allow",
+      maxAttempts: 3,
+      retryDelayMs: 1_000,
+      leaseMs: 1_000,
+    }), new Date("2026-07-06T12:00:00.000Z"));
+    const newer = await storage.claimRun(
+      loop,
+      "2026-07-06T12:01:00.000Z",
+      "runner-newer",
+      new Date("2026-07-06T12:00:00.000Z"),
+    );
+    const older = await storage.claimRun(
+      loop,
+      "2026-07-06T12:00:00.000Z",
+      "runner-older",
+      new Date("2026-07-06T12:00:00.250Z"),
+    );
+    const recovered = await storage.recoverExpiredRunLeasesDetailed(
+      new Date("2026-07-06T12:00:02.000Z"),
+    );
+    expect(recovered.abandoned.map((run) => run.id)).toEqual([newer!.run.id, older!.run.id]);
+    const earliest = await storage.nextRetryableRun(loop.id, loop.maxAttempts);
+    expect(earliest?.scheduledFor).toBe(older!.run.scheduledFor);
+
+    const current = await storage.getLoop(loop.id);
+    const plan = planLoopAdvancement({
+      current,
+      run: recovered.abandoned[0]!,
+      finishedAt: new Date(recovered.abandoned[0]!.updatedAt),
+      succeeded: false,
+      deferredRetry: earliest,
+      retryRandom: 0.5,
+    });
+    expect(plan).toMatchObject({
+      kind: "update",
+      reason: "deferred_retry",
+      patch: { retryScheduledFor: older!.run.scheduledFor },
+    });
+    if (plan.kind !== "update") throw new Error(`unexpected advancement plan: ${plan.kind}`);
+    await storage.advanceLoopIfCurrent(loop.id, current!, plan.patch);
+    expect(await storage.getLoop(loop.id)).toMatchObject({
+      retryScheduledFor: older!.run.scheduledFor,
+    });
   });
 
   test("daemon lease acquire/heartbeat/release/get", async () => {
@@ -2199,6 +2778,102 @@ suite("PostgresLoopStorage (live)", () => {
         "INSERT INTO audit_events(tenant_id,id,actor,action,subject_type,subject_id,metadata_json,created_at) VALUES ('tenant-test','forged','x','auth.allow','api_request','x','{}',now())",
       ),
     )).rejects.toMatchObject({ code: "42501" });
+  });
+
+  test("advancement CAS and circuit-breaker markers remain tenant-scoped for identical loop ids", async () => {
+    await executor.queryClient.execute(
+      `INSERT INTO tenants(id, slug, name, status)
+       VALUES ('tenant-advancement', 'tenant-advancement', 'Tenant Advancement', 'active')
+       ON CONFLICT DO NOTHING;
+       INSERT INTO tenant_memberships(tenant_id, principal_id, status)
+       VALUES ('tenant-advancement', 'principal-test', 'active')
+       ON CONFLICT DO NOTHING;
+       INSERT INTO tenant_membership_roles(tenant_id, principal_id, role)
+       VALUES ('tenant-advancement', 'principal-test', 'service')
+       ON CONFLICT DO NOTHING;`,
+    );
+    const other = new PostgresLoopStorage(runtimeExecutor.queryClient, {
+      tenantId: "tenant-advancement",
+      principalId: "principal-test",
+      requestId: "tenant-advancement-request",
+    });
+    const createdAt = "2026-07-06T12:30:00.000Z";
+    const loopId = "tenant-shared-advancement-loop";
+    await storage.upsertMigrationLoop({
+      id: loopId,
+      name: "tenant-a-advancement",
+      status: "active",
+      schedule: { type: "interval", everyMs: 60_000 },
+      target: { type: "command", command: "true" },
+      catchUp: "latest",
+      catchUpLimit: 50,
+      overlap: "skip",
+      maxAttempts: 3,
+      retryDelayMs: 1_000,
+      leaseMs: 60_000,
+      nextRunAt: "2030-01-01T00:00:00.000Z",
+      createdAt,
+      updatedAt: createdAt,
+    } as Loop);
+    await other.upsertMigrationLoop({
+      id: loopId,
+      name: "tenant-b-advancement",
+      status: "active",
+      schedule: { type: "interval", everyMs: 60_000 },
+      target: { type: "command", command: "true" },
+      catchUp: "latest",
+      catchUpLimit: 50,
+      overlap: "skip",
+      maxAttempts: 3,
+      retryDelayMs: 1_000,
+      leaseMs: 60_000,
+      nextRunAt: "2040-01-01T00:00:00.000Z",
+      createdAt,
+      updatedAt: createdAt,
+    } as Loop);
+
+    const tenantA = await storage.getLoop(loopId);
+    expect(tenantA).toBeTruthy();
+    expect(await storage.advanceLoopIfCurrent(
+      loopId,
+      {
+        status: tenantA!.status,
+        nextRunAt: tenantA!.nextRunAt,
+        retryScheduledFor: tenantA!.retryScheduledFor,
+      },
+      { nextRunAt: "2031-01-01T00:00:00.000Z" },
+      { now: new Date("2026-07-06T12:31:00.000Z") },
+    )).toMatchObject({ nextRunAt: "2031-01-01T00:00:00.000Z" });
+    expect(await other.getLoop(loopId)).toMatchObject({
+      status: "active",
+      nextRunAt: "2040-01-01T00:00:00.000Z",
+    });
+
+    const tenantB = await other.getLoop(loopId);
+    expect(tenantB).toBeTruthy();
+    expect(await other.tripCircuitBreakerIfCurrent(
+      loopId,
+      {
+        status: tenantB!.status,
+        nextRunAt: tenantB!.nextRunAt,
+        retryScheduledFor: tenantB!.retryScheduledFor,
+      },
+      { status: "paused", nextRunAt: undefined, retryScheduledFor: undefined },
+      {
+        scheduledFor: "2040-01-01T00:00:00.000Z",
+        reason: "tenant-b circuit breaker",
+      },
+      { now: new Date("2026-07-06T12:32:00.000Z") },
+    )).toMatchObject({
+      loop: { status: "paused" },
+      marker: { status: "skipped", error: "tenant-b circuit breaker" },
+    });
+    expect(await storage.getLoop(loopId)).toMatchObject({
+      status: "active",
+      nextRunAt: "2031-01-01T00:00:00.000Z",
+    });
+    expect(await storage.listRuns({ loopId })).toHaveLength(0);
+    expect(await other.listRuns({ loopId })).toHaveLength(1);
   });
 
   test("request transactions do not leak tenant context and roll back failures", async () => {
