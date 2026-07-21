@@ -1670,7 +1670,7 @@ export class Store {
     // ambiguity, mirroring findLoopByName plus the resolveLoop resolution path.
     if (opts.name != null) {
       const rows = this.db
-        .query<LoopRow, [string, number, number]>("SELECT * FROM loops WHERE name = ? ORDER BY created_at DESC LIMIT ? OFFSET ?")
+        .query<LoopRow, [string, number, number]>("SELECT * FROM loops WHERE name = ? ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?")
         .all(opts.name, limit, offset);
       return this.withLatestRunSummaries(rows.map(rowToLoop));
     }
@@ -1687,7 +1687,9 @@ export class Store {
       where.push("EXISTS (SELECT 1 FROM json_each(loops.labels_json) WHERE value = ?)");
       params.push(label);
     }
-    const order = opts.archived ? "loops.archived_at DESC" : "loops.status ASC, loops.next_run_at ASC";
+    const order = opts.archived
+      ? "loops.archived_at DESC, loops.id DESC"
+      : "loops.status ASC, loops.next_run_at ASC, loops.id ASC";
     const rows = this.db
       .query<LoopRow, Array<string | number>>(
         `SELECT loops.* FROM loops${where.length ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY ${order} LIMIT ? OFFSET ?`,

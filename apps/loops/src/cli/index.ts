@@ -119,6 +119,7 @@ import {
   type TodosDrainOptions,
   type TodosTaskRouteOptions,
 } from "../lib/route/index.js";
+import { sanitizeCliErrorContext } from "./safe-error-context.js";
 
 const program = new Command();
 
@@ -159,27 +160,30 @@ function compactHealthScanOutput(scan: unknown): unknown {
  */
 function reportCliError(error: unknown): void {
   const message = error instanceof Error ? error.message : String(error);
+  const safeMessage = redact(message, error instanceof GateError ? 320 : 640) ?? "";
   process.exitCode = 1;
   if (error instanceof GateError) {
     if (isJson()) {
+      const safeContext = sanitizeCliErrorContext(error.context);
       print({
+        ...safeContext,
         ok: false,
         created: false,
         [error.gate]: {
           ok: false,
-          error: redact(message, 320),
+          code: error.code,
+          error: safeMessage,
         },
-        ...error.context,
       });
       return;
     }
-    console.error(`error: ${message}`);
+    console.error(`error: ${safeMessage}`);
     return;
   }
   if (isJson()) {
-    print({ ok: false, error: { code: error instanceof CodedError ? error.code : "ERROR", message: redact(message, 640) } });
+    print({ ok: false, error: { code: error instanceof CodedError ? error.code : "ERROR", message: safeMessage } });
   }
-  console.error(`error: ${message}`);
+  console.error(`error: ${safeMessage}`);
 }
 
 function runAction<Args extends unknown[]>(fn: (...args: Args) => void | Promise<void>): (...args: Args) => Promise<void> {
@@ -204,6 +208,69 @@ async function withStore<T>(fn: (store: LoopStore) => Promise<T>): Promise<T> {
     return await fn(store);
   } finally {
     await store.close();
+  }
+}
+
+type LoopListOptions = NonNullable<Parameters<LoopStore["listLoops"]>[0]>;
+const CLI_LOOP_LIST_PAGE_SIZE = 200;
+const CLI_LOOP_LIST_MAX_PAGES = 1_000;
+const CLI_LOOP_LIST_MAX_ITEMS = 100_000;
+
+function loopListPaginationError(reason: string): CodedError {
+  return new CodedError("LOOP_LIST_PAGINATION_FAILED", `loop list pagination failed: ${reason}`);
+}
+
+async function listAllLoops(
+  store: LoopStore,
+  opts: Omit<LoopListOptions, "limit" | "offset"> = {},
+): Promise<Loop[]> {
+  const loops: Loop[] = [];
+  const seenIds = new Set<string>();
+  let offset = 0;
+  let pageCount = 0;
+  let previousPageIds: string[] | undefined;
+  while (true) {
+    if (pageCount >= CLI_LOOP_LIST_MAX_PAGES) {
+      throw loopListPaginationError(`exceeded the ${CLI_LOOP_LIST_MAX_PAGES}-page safety ceiling`);
+    }
+    const page = await store.listLoops({
+      ...opts,
+      limit: CLI_LOOP_LIST_PAGE_SIZE,
+      offset,
+    });
+    pageCount += 1;
+    if (page.length === 0) return loops;
+
+    const pageIds = page.map((loop) => loop.id);
+    if (
+      previousPageIds?.length === pageIds.length &&
+      pageIds.every((id, index) => id === previousPageIds![index])
+    ) {
+      throw loopListPaginationError("the backend repeated a page");
+    }
+
+    let newIds = 0;
+    for (const loop of page) {
+      if (typeof loop.id !== "string" || loop.id.length === 0) {
+        throw loopListPaginationError("the backend returned a loop without a usable id");
+      }
+      if (seenIds.has(loop.id)) continue;
+      seenIds.add(loop.id);
+      loops.push(loop);
+      newIds += 1;
+      if (loops.length > CLI_LOOP_LIST_MAX_ITEMS) {
+        throw loopListPaginationError(`exceeded the ${CLI_LOOP_LIST_MAX_ITEMS}-item safety ceiling`);
+      }
+    }
+    if (newIds === 0) throw loopListPaginationError("a page contained no new loop ids");
+    if (page.length < CLI_LOOP_LIST_PAGE_SIZE) return loops;
+
+    const nextOffset = offset + page.length;
+    if (!Number.isSafeInteger(nextOffset) || nextOffset <= offset) {
+      throw loopListPaginationError("the backend did not advance the page offset");
+    }
+    previousPageIds = pageIds;
+    offset = nextOffset;
   }
 }
 
@@ -1786,7 +1853,7 @@ program
   .action(runAction(async (opts) => {
     if (opts.archived && opts.all) throw new ValidationError("use either --archived or --all, not both");
     const loops = await withStore((store) =>
-      store.listLoops({
+      listAllLoops(store, {
         status: opts.status,
         labels: normalizeLoopLabels(opts.label),
         archived: opts.archived,
@@ -2655,6 +2722,7 @@ daemon.command("start").description("start the daemon in the background").action
 }));
 
 daemon.command("stop").description("stop the background daemon").action(runAction(async () => {
+  assertLocalOnlyCommand("daemon stop");
   const result = await stopDaemon();
   print(result, result.stopped ? `stopped pid=${result.pid}` : "not running");
 }));
@@ -2674,6 +2742,7 @@ daemon
   .description("write a systemd user service or launchd plist")
   .option("--enable", "also enable/start the user service when supported")
   .action(runAction((opts) => {
+    assertLocalOnlyCommand("daemon install");
     const result = installStartup(process.argv[1] ?? "loops");
     if (opts.enable) result.enableResults = enableStartup(result);
     const enableText = result.enableResults
@@ -2690,6 +2759,7 @@ daemon
   // otherwise reject it as an unknown option.
   .option("--tail <n>", "alias for --lines")
   .action(runAction((opts) => {
+    assertLocalOnlyCommand("daemon logs");
     const path = daemonLogPath();
     if (!existsSync(path)) {
       console.log("");

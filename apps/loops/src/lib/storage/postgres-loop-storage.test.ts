@@ -879,6 +879,20 @@ suite("PostgresLoopStorage (live)", () => {
     expect(due.map((l) => l.id)).toContain(a.id);
   });
 
+  test("listLoops uses id as a total-order tie-breaker across pages", async () => {
+    const from = new Date("2030-01-01T00:00:00.000Z");
+    const loops = await Promise.all(
+      ["zeta", "alpha", "middle"].map((name) =>
+        storage.createLoop(loopInput(name, {
+          schedule: { type: "once", at: from.toISOString() },
+        }), from)
+      ),
+    );
+    const expected = loops.map((loop) => loop.id).toSorted();
+    expect((await storage.listLoops({ limit: 2, offset: 0 })).map((loop) => loop.id)).toEqual(expected.slice(0, 2));
+    expect((await storage.listLoops({ limit: 2, offset: 2 })).map((loop) => loop.id)).toEqual(expected.slice(2));
+  });
+
   test("updateLoop enforces archive freeze + rename/archive/unarchive/delete", async () => {
     const loop = await storage.createLoop(loopInput("mut"));
     const paused = await storage.updateLoop(loop.id, { status: "paused" });
