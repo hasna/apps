@@ -41,6 +41,7 @@ const BunArchive = (
 ).Archive;
 
 let pack: PackResult;
+let ignoredScriptsPack: PackResult;
 let packedCliPath: string;
 
 async function run(command: readonly string[]): Promise<CommandResult> {
@@ -70,6 +71,11 @@ function requireSuccess(result: CommandResult, operation: string): void {
   }
 }
 
+function parsePackResults(stdout: string): readonly PackResult[] {
+  const jsonStart = stdout.lastIndexOf("\n[\n");
+  return JSON.parse(jsonStart === -1 ? stdout : stdout.slice(jsonStart + 1)) as readonly PackResult[];
+}
+
 beforeAll(async () => {
   chmodSync(TEMP_ROOT, 0o700);
   mkdirSync(EXTRACT_ROOT, { mode: 0o700 });
@@ -77,11 +83,25 @@ beforeAll(async () => {
   rmSync(DIST_ROOT, { recursive: true, force: true });
   expect(existsSync(DIST_ROOT)).toBe(false);
 
-  const build = await run([process.execPath, "run", "build"]);
-  requireSuccess(build, "clean-dist build");
-
   const npm = Bun.which("npm");
   if (npm === null) throw new Error("npm is required for the package artifact test");
+  const ignoredScripts = await run([
+    npm,
+    "pack",
+    ".",
+    "--dry-run",
+    "--json",
+    "--ignore-scripts",
+    "--offline",
+  ]);
+  requireSuccess(ignoredScripts, "ignore-scripts npm pack");
+  const [ignoredScriptsMetadata] = parsePackResults(ignoredScripts.stdout);
+  if (ignoredScriptsMetadata === undefined) {
+    throw new Error("ignore-scripts npm pack returned no artifact metadata");
+  }
+  ignoredScriptsPack = ignoredScriptsMetadata;
+  expect(existsSync(DIST_ROOT)).toBe(false);
+
   const packed = await run([
     npm,
     "pack",
@@ -89,11 +109,10 @@ beforeAll(async () => {
     "--pack-destination",
     TEMP_ROOT,
     "--json",
-    "--ignore-scripts",
     "--offline",
   ]);
   requireSuccess(packed, "local npm pack");
-  const [packedMetadata] = JSON.parse(packed.stdout) as readonly PackResult[];
+  const [packedMetadata] = parsePackResults(packed.stdout);
   if (packedMetadata === undefined) throw new Error("npm pack returned no artifact metadata");
   pack = packedMetadata;
 
@@ -126,6 +145,10 @@ afterAll(() => {
 });
 
 describe("packed capacity CLI", () => {
+  test("requires the package lifecycle to produce build artifacts", () => {
+    expect(ignoredScriptsPack.files.map(({ path }) => path)).not.toContain("dist/cli.js");
+  });
+
   test("contains the exact package identity and file contract", () => {
     expect(pack).toMatchObject({
       id: "@hasna/capacity@0.1.1",
