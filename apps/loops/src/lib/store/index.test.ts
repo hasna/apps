@@ -196,6 +196,67 @@ describe("ApiStore end-to-end against the real /v1 server", () => {
     }
   });
 
+  test("ApiStore archive and unarchive preserve unique-name semantics over HTTP", async () => {
+    const storage = createSqliteLoopStorage(":memory:");
+    const principal = {
+      tenantId: "tenant-test", principalId: "principal-test", requestId: "request-test",
+      kid: "kid-test", agent: "principal-test", scopes: ["loops:*"],
+      roles: ["admin" as const], tokenKind: "api_key" as const,
+      claims: { v: 1, kid: "kid-test", app: "loops", agent: "principal-test", scopes: ["loops:*"], iat: 1, exp: null },
+    };
+    const server = createLoopsApiServer({
+      host: "127.0.0.1", port: 0,
+      authenticator: { authenticate: async () => ({ ok: true as const, status: 200 as const, principal }) },
+      withTenantStorage: (_principal, fn) => fn(storage),
+    });
+    try {
+      const store = apiStoreForServer((server as { port: number }).port);
+      const first = await store.createLoop({ ...LOOP_INPUT, name: "api-store-archive-dupe" });
+      const second = await store.createLoop({ ...LOOP_INPUT, name: "api-store-archive-dupe" });
+
+      await expect(store.archiveLoop("api-store-archive-dupe")).rejects.toThrow("ambiguous loop name");
+      expect((await storage.getLoop(first.id))?.archivedAt).toBeUndefined();
+      expect((await storage.getLoop(second.id))?.archivedAt).toBeUndefined();
+
+      expect((await store.archiveLoop(first.id)).id).toBe(first.id);
+      expect((await store.archiveLoop("api-store-archive-dupe")).id).toBe(second.id);
+      await expect(store.unarchiveLoop("api-store-archive-dupe")).rejects.toThrow("ambiguous loop name");
+      expect((await storage.getLoop(first.id))?.archivedAt).toBeString();
+      expect((await storage.getLoop(second.id))?.archivedAt).toBeString();
+
+      expect((await store.unarchiveLoop(first.id)).id).toBe(first.id);
+      expect((await storage.getLoop(first.id))?.archivedAt).toBeUndefined();
+      expect((await storage.getLoop(second.id))?.archivedAt).toBeString();
+      expect((await store.unarchiveLoop("api-store-archive-dupe")).id).toBe(second.id);
+      expect((await storage.getLoop(second.id))?.archivedAt).toBeUndefined();
+      await store.close();
+    } finally {
+      server.stop?.(true);
+      await storage.close();
+    }
+  });
+
+  test("ApiStore sends the original id-or-name directly to archive mutations", async () => {
+    const posts: string[] = [];
+    const transport = {
+      get: async () => {
+        throw new Error("archive mutations must not pre-resolve with GET");
+      },
+      post: async (path: string) => {
+        posts.push(path);
+        return { loop: { id: "server-selected", name: "mixed/name" } };
+      },
+    } as unknown as HasnaStorageClient["transport"];
+    const store = new ApiStore({ transport } as HasnaStorageClient, "https://loops.example.test/v1");
+
+    expect((await store.archiveLoop("mixed/name")).id).toBe("server-selected");
+    expect((await store.unarchiveLoop("mixed/name")).id).toBe("server-selected");
+    expect(posts).toEqual([
+      "/loops/mixed%2Fname/archive",
+      "/loops/mixed%2Fname/unarchive",
+    ]);
+  });
+
   test("unsupported mutations fail loudly instead of silently hitting local sqlite", async () => {
     const store = apiStoreForServer(1);
     await expect(store.cancelWorkflowRun("wr_x")).rejects.toBeInstanceOf(CloudUnsupportedError);

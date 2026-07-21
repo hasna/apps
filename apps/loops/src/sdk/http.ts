@@ -7,6 +7,8 @@ export interface PublicValidationDetails { "code": string; "reason": "not_array"
 
 export interface ValidationFailureResponse { "ok": boolean; "error": string; "details"?: PublicValidationDetails }
 
+export interface AmbiguousNameResponse { "ok": boolean; "error": string }
+
 export interface Foundation { "status": string; "version": string; "mode": string; "service"?: string; "detail"?: string }
 
 export interface Loop { "id": string; "name": string; "description"?: string | null; "labels": Array<string>; "status": string; "schedule"?: Record<string, unknown>; "target"?: Record<string, unknown>; "nextRunAt"?: string | null; "createdAt"?: string; "updatedAt"?: string }
@@ -344,7 +346,7 @@ export class LoopsClient {
       });
     }
 
-    /** Archive a loop */
+    /** Archive a loop by id or name */
     async archiveLoop(id: string, init?: RequestInit): Promise<LoopResponse> {
       return this.request("POST", `/v1/loops/${encodeURIComponent(String(id))}/archive`, {
         body: undefined,
@@ -362,7 +364,7 @@ export class LoopsClient {
       });
     }
 
-    /** Unarchive a loop */
+    /** Unarchive a loop by id or name */
     async unarchiveLoop(id: string, init?: RequestInit): Promise<LoopResponse> {
       return this.request("POST", `/v1/loops/${encodeURIComponent(String(id))}/unarchive`, {
         body: undefined,

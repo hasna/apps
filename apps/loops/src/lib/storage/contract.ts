@@ -7,6 +7,7 @@ export type LoopStorageMethodName =
   | "getLoop"
   | "findLoopByName"
   | "requireLoop"
+  | "requireUniqueLoop"
   | "listLoops"
   | "dueLoops"
   | "updateLoop"
@@ -92,6 +93,7 @@ export interface LoopStorageContract extends Record<LoopStorageMethodName, (...a
   getLoop: AsyncStoreMethod<"getLoop">;
   findLoopByName: AsyncStoreMethod<"findLoopByName">;
   requireLoop: AsyncStoreMethod<"requireLoop">;
+  requireUniqueLoop: AsyncStoreMethod<"requireUniqueLoop">;
   listLoops: AsyncStoreMethod<"listLoops">;
   dueLoops: AsyncStoreMethod<"dueLoops">;
   updateLoop: AsyncStoreMethod<"updateLoop">;

@@ -15,12 +15,14 @@ import { PgPoolExecutor } from "./pg-executor.js";
 import { PostgresStorage } from "./postgres.js";
 import { PostgresLoopStorage } from "./postgres-loop-storage.js";
 import {
+  AmbiguousNameError,
   DuplicateWorkflowEventError,
   LegacyWorkflowRunProvenanceError,
   WorkflowRunDefinitionConflictError,
 } from "../errors.js";
 import { assertTenantEnforcementBootstrap, assertTenantEnforcementBootstrapIfPending, isSafeServiceConnection } from "../../serve/index.js";
 import type { CreateLoopInput, Loop, LoopRun, WorkflowSpec } from "../../types.js";
+import { waitUntil } from "../../test-helpers.js";
 
 const j = (...parts: string[]): string => parts.join("");
 const GH_PAT = j("ghp", "_AbCdEf0123456789AbCdEf0123456789");
@@ -894,6 +896,102 @@ suite("PostgresLoopStorage (live)", () => {
 
     expect(await storage.deleteLoop(loop.id)).toBe(true);
     expect(await storage.getLoop(loop.id)).toBeUndefined();
+  });
+
+  test("archive and unarchive fail closed on ambiguous names while ids stay exact", async () => {
+    const first = await storage.createLoop(loopInput("pg-archive-ambiguous"));
+    const second = await storage.createLoop(loopInput("pg-archive-ambiguous"));
+
+    await expect(storage.requireUniqueLoop("pg-archive-ambiguous")).rejects.toBeInstanceOf(AmbiguousNameError);
+    await expect(storage.archiveLoop("pg-archive-ambiguous")).rejects.toBeInstanceOf(AmbiguousNameError);
+    expect((await storage.getLoop(first.id))?.archivedAt).toBeUndefined();
+    expect((await storage.getLoop(second.id))?.archivedAt).toBeUndefined();
+
+    expect((await storage.archiveLoop(first.id)).id).toBe(first.id);
+    expect((await storage.archiveLoop("pg-archive-ambiguous")).id).toBe(second.id);
+    await expect(storage.unarchiveLoop("pg-archive-ambiguous")).rejects.toBeInstanceOf(AmbiguousNameError);
+    expect((await storage.getLoop(first.id))?.archivedAt).toBeString();
+    expect((await storage.getLoop(second.id))?.archivedAt).toBeString();
+
+    expect((await storage.unarchiveLoop(first.id)).id).toBe(first.id);
+    expect((await storage.getLoop(first.id))?.archivedAt).toBeUndefined();
+    expect((await storage.getLoop(second.id))?.archivedAt).toBeString();
+    expect((await storage.unarchiveLoop("pg-archive-ambiguous")).id).toBe(second.id);
+    expect((await storage.getLoop(second.id))?.archivedAt).toBeUndefined();
+  });
+
+  test("name archive waits for a concurrent create before resolving candidates", async () => {
+    const name = "pg-archive-create-race";
+    await storage.createLoop(loopInput(name));
+    const writerExecutor = PgPoolExecutor.fromConnectionString({
+      connectionString: isolatedUrl({ username: RUNTIME_LOGIN, password: RUNTIME_PASSWORD }),
+      applicationName: "loops-pgstore-archive-create-writer",
+    });
+    let insertedResolve!: () => void;
+    const inserted = new Promise<void>((resolve) => {
+      insertedResolve = resolve;
+    });
+    let releaseWriter!: () => void;
+    const writerGate = new Promise<void>((resolve) => {
+      releaseWriter = resolve;
+    });
+    const writer = writerExecutor.withRequestContext(
+      { tenantId: "tenant-test", principalId: "principal-test", requestId: "archive-create-writer" },
+      async (client) => {
+        const now = new Date().toISOString();
+        await client.execute(
+          `INSERT INTO loops (
+             id, name, description, labels_json, status, schedule_json, target_json,
+             next_run_at, catch_up, catch_up_limit, overlap, max_attempts,
+             retry_delay_ms, lease_ms, created_at, updated_at, tenant_id
+           ) VALUES (
+             $1, $2, NULL, '[]'::jsonb, 'active',
+             '{"type":"interval","everyMs":60000}'::jsonb,
+             '{"type":"command","command":"true"}'::jsonb,
+             $3, 'latest', 50, 'skip', 1, 60000, 1800000,
+             $3, $3, open_loops_current_tenant_id()
+           )`,
+          [`loop_race_${Date.now()}`, name, now],
+        );
+        insertedResolve();
+        await writerGate;
+      },
+    );
+
+    let archive: Promise<Loop> | undefined;
+    try {
+      await inserted;
+      archive = storage.archiveLoop(name);
+      void archive.catch(() => {});
+      try {
+        await waitUntil(async () => {
+          const row = await executor.queryClient.get<{ waiting: boolean }>(`
+            SELECT EXISTS (
+              SELECT 1
+                FROM pg_locks lock
+                JOIN pg_class relation ON relation.oid=lock.relation
+                JOIN pg_namespace namespace ON namespace.oid=relation.relnamespace
+               WHERE namespace.nspname='public'
+                 AND relation.relname='loops'
+                 AND lock.mode='ShareRowExclusiveLock'
+                 AND lock.granted=false
+            ) AS waiting
+          `);
+          return row?.waiting;
+        }, { label: "archive name resolution waits for concurrent loops writer" });
+      } finally {
+        releaseWriter();
+      }
+
+      await writer;
+      await expect(archive).rejects.toBeInstanceOf(AmbiguousNameError);
+      expect((await storage.listLoops({ name, includeArchived: true }))).toHaveLength(2);
+    } finally {
+      releaseWriter();
+      await writer.catch(() => {});
+      await archive?.catch(() => {});
+      await writerExecutor.close();
+    }
   });
 
   test("run lifecycle: claim -> record -> heartbeat -> finalize", async () => {

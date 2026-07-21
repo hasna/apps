@@ -200,6 +200,37 @@ describe("loops sdk", () => {
     }
   });
 
+  test("archive and unarchive reject ambiguous names without mutating either loop", async () => {
+    const store = new Store(":memory:");
+    const client = new LoopsClient({ store, runnerId: "manual" });
+    try {
+      const spec = {
+        schedule: { type: "interval" as const, everyMs: 60_000 },
+        target: { type: "command" as const, command: "true" },
+      };
+      const first = await client.create({ name: "sdk-archive-dupe", ...spec });
+      const second = await client.create({ name: "sdk-archive-dupe", ...spec });
+
+      await expect(client.archive("sdk-archive-dupe")).rejects.toThrow("ambiguous loop name");
+      expect(store.getLoop(first.id)?.archivedAt).toBeUndefined();
+      expect(store.getLoop(second.id)?.archivedAt).toBeUndefined();
+
+      expect((await client.archive(first.id)).id).toBe(first.id);
+      expect((await client.archive("sdk-archive-dupe")).id).toBe(second.id);
+      await expect(client.unarchive("sdk-archive-dupe")).rejects.toThrow("ambiguous loop name");
+      expect(store.getLoop(first.id)?.archivedAt).toBeString();
+      expect(store.getLoop(second.id)?.archivedAt).toBeString();
+
+      expect((await client.unarchive(first.id)).id).toBe(first.id);
+      expect(store.getLoop(first.id)?.archivedAt).toBeUndefined();
+      expect(store.getLoop(second.id)?.archivedAt).toBeString();
+      expect((await client.unarchive("sdk-archive-dupe")).id).toBe(second.id);
+      expect(store.getLoop(second.id)?.archivedAt).toBeUndefined();
+    } finally {
+      await client.close();
+    }
+  });
+
   test("exports, plans, and imports migration bundles through the client", async () => {
     const sourceStore = new Store(":memory:");
     const targetStore = new Store(":memory:");

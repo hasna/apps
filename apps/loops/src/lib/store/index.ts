@@ -45,6 +45,7 @@ import { AmbiguousNameError, LoopNotFoundError } from "../errors.js";
 import { publicWorkflowEvent } from "../workflow-events.js";
 import { resolveCloudStorage } from "../cloud/resolve.js";
 import type { HasnaStorageClient } from "../cloud/storage.js";
+import { HasnaHttpError } from "../cloud/transport.js";
 import type { Env } from "../cloud/mode.js";
 import { Store } from "../store.js";
 import type { PruneHistoryOptions, PruneHistorySummary } from "../store.js";
@@ -433,12 +434,30 @@ export class ApiStore implements LoopStore {
     return pickObject<Loop>(await this.t.post(`/loops/${encodeURIComponent(id)}/rename`, { name }), "loop")!;
   }
   async archiveLoop(idOrName: string): Promise<Loop> {
-    const loop = await this.requireLoop(idOrName);
-    return pickObject<Loop>(await this.t.post(`/loops/${encodeURIComponent(loop.id)}/archive`), "loop")!;
+    return this.mutateArchiveState(idOrName, "archive");
   }
   async unarchiveLoop(idOrName: string): Promise<Loop> {
-    const loop = await this.requireLoop(idOrName);
-    return pickObject<Loop>(await this.t.post(`/loops/${encodeURIComponent(loop.id)}/unarchive`), "loop")!;
+    return this.mutateArchiveState(idOrName, "unarchive");
+  }
+  private async mutateArchiveState(idOrName: string, operation: "archive" | "unarchive"): Promise<Loop> {
+    try {
+      return pickObject<Loop>(
+        await this.t.post(`/loops/${encodeURIComponent(idOrName)}/${operation}`),
+        "loop",
+      )!;
+    } catch (error) {
+      const code =
+        error instanceof HasnaHttpError && error.body && typeof error.body === "object"
+          ? (error.body as { error?: unknown }).error
+          : undefined;
+      if (error instanceof HasnaHttpError && error.status === 409 && code === "ambiguous_name") {
+        throw new AmbiguousNameError(idOrName);
+      }
+      if (error instanceof HasnaHttpError && error.status === 404 && code === "loop_not_found") {
+        throw new LoopNotFoundError(idOrName);
+      }
+      throw error;
+    }
   }
   async deleteLoop(idOrName: string): Promise<boolean> {
     const loop = await this.resolveLoop(idOrName);
