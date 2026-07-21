@@ -14,6 +14,7 @@ import {
   WorkflowRunDefinitionConflictError,
 } from "./errors.js";
 import { Store } from "./store.js";
+import { workflowDefinitionHash } from "./workflow-provenance.js";
 
 // Credential fixtures assembled at runtime so the literal token shapes never
 // appear contiguously in source (avoids tripping source secret scanners such as
@@ -836,6 +837,255 @@ exit 0
 
       expect(store.getWorkflow(workflow.id)?.status).toBe("archived");
       expect(store.listWorkflowEvents(run.id).map((event) => event.eventType)).toContain("workflow_archived");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("matches generated-route retry and preflight archival semantics across SQLite finalizers", async () => {
+    const store = new Store(":memory:");
+    const scheduledFor = "2026-01-01T00:00:00.000Z";
+    try {
+      const makeRoute = (
+        suffix: string,
+        maxAttempts: number,
+        templateId = "task-lifecycle",
+      ) => {
+        const invocation = store.createWorkflowInvocation({
+          templateId,
+          sourceRef: {
+            kind: "event",
+            id: `sqlite-parent-${suffix}`,
+            dedupeKey: `todos-task:sqlite-parent-${suffix}`,
+          },
+          subjectRef: { kind: "task", id: `sqlite-parent-${suffix}`, path: "/tmp/loops" },
+          intent: "route",
+          scope: { projectPath: "/tmp/loops" },
+        });
+        const workItem = store.upsertWorkflowWorkItem({
+          routeKey: "todos-task",
+          idempotencyKey: `todos-task:sqlite-parent-${suffix}`,
+          invocationId: invocation.id,
+          sourceType: "task.created",
+          sourceRef: `sqlite-parent-${suffix}`,
+          subjectRef: `sqlite-parent-${suffix}`,
+        });
+        const workflow = store.createWorkflow({
+          name: `sqlite-parent-generated-${suffix}`,
+          steps: [{ id: "worker", target: { type: "command", command: "false" } }],
+        });
+        const loop = store.createLoop({
+          name: `sqlite-parent-generated-loop-${suffix}`,
+          schedule: { type: "once", at: scheduledFor },
+          target: {
+            type: "workflow",
+            workflowId: workflow.id,
+            input: {
+              workflowInvocationId: invocation.id,
+              workflowWorkItemId: workItem.id,
+            },
+          },
+          maxAttempts,
+          leaseMs: 60_000,
+        }, new Date("2025-12-31T23:59:00.000Z"));
+        store.admitWorkflowWorkItem(workItem.id, { workflowId: workflow.id, loopId: loop.id });
+        const claim = store.claimRun(
+          loop,
+          scheduledFor,
+          `runner-parent-${suffix}`,
+          new Date(scheduledFor),
+        );
+        expect(claim).toBeDefined();
+        return { invocation, workItem, workflow, loop, claim: claim! };
+      };
+      const finalizeParent = (
+        fixture: ReturnType<typeof makeRoute>,
+        finishedAt = "2026-01-01T00:00:01.000Z",
+      ) => store.finalizeRun(
+        fixture.claim.run.id,
+        {
+          status: "failed",
+          finishedAt,
+          durationMs: 1_000,
+          stdout: "",
+          stderr: "",
+          error: "parent failed",
+        },
+        {
+          claimedBy: fixture.claim.run.claimedBy,
+          claimToken: fixture.claim.claimToken,
+          now: new Date(finishedAt),
+        },
+      );
+
+      const retryable = makeRoute("retryable-attempt-one-of-two", 2);
+      const retryableFirstRun = store.createWorkflowRun({
+        workflow: retryable.workflow,
+        loop: retryable.loop,
+        loopRun: retryable.claim.run,
+      });
+      store.finalizeWorkflowRun(retryableFirstRun.id, "failed", {
+        finishedAt: "2026-01-01T00:00:00.500Z",
+        error: "attempt one failed",
+      });
+      expect(store.getWorkflowWorkItem(retryable.workItem.id)).toMatchObject({
+        status: "admitted",
+        lastReason: "attempt failed; retry pending: attempt one failed",
+      });
+      expect(store.getWorkflow(retryable.workflow.id)?.status).toBe("active");
+      expect(store.listWorkflowEvents(retryableFirstRun.id)
+        .filter((event) => event.eventType === "workflow_archived")).toHaveLength(0);
+      finalizeParent(retryable);
+      const secondClaim = store.claimRun(
+        retryable.loop,
+        scheduledFor,
+        "runner-parent-retryable-attempt-one-of-two-2",
+        new Date("2026-01-01T00:00:02.000Z"),
+      );
+      expect(secondClaim?.run.attempt).toBe(2);
+      const retryableSecondRun = store.createWorkflowRun({
+        workflow: retryable.workflow,
+        loop: retryable.loop,
+        loopRun: secondClaim!.run,
+      });
+      store.finalizeWorkflowRun(retryableSecondRun.id, "timed_out", {
+        finishedAt: "2026-01-01T00:00:02.500Z",
+        error: "attempt two timed out",
+      });
+      expect(store.getWorkflowWorkItem(retryable.workItem.id)).toMatchObject({
+        status: "failed",
+        lastReason: "attempt two timed out",
+      });
+      expect(store.getWorkflow(retryable.workflow.id)?.status).toBe("archived");
+      expect(store.listWorkflowEvents(retryableSecondRun.id)
+        .filter((event) => event.eventType === "workflow_archived")).toHaveLength(1);
+
+      const lateAttempt = makeRoute("late-attempt-one", 2);
+      const lateAttemptFirstRun = store.createWorkflowRun({
+        workflow: lateAttempt.workflow,
+        loop: lateAttempt.loop,
+        loopRun: lateAttempt.claim.run,
+      });
+      finalizeParent(lateAttempt);
+      const lateAttemptSecondClaim = store.claimRun(
+        lateAttempt.loop,
+        scheduledFor,
+        "runner-parent-late-attempt-one-2",
+        new Date("2026-01-01T00:00:02.000Z"),
+      );
+      expect(lateAttemptSecondClaim?.run).toMatchObject({ attempt: 2, status: "running" });
+      expect(store.getWorkflowWorkItem(lateAttempt.workItem.id)).toMatchObject({
+        status: "admitted",
+        workflowRunId: lateAttemptFirstRun.id,
+      });
+      store.finalizeWorkflowRun(lateAttemptFirstRun.id, "failed", {
+        finishedAt: "2026-01-01T00:00:02.100Z",
+        error: "late attempt one failure",
+      });
+      expect(store.getWorkflowRun(lateAttemptFirstRun.id)?.status).toBe("failed");
+      expect(store.getWorkflowWorkItem(lateAttempt.workItem.id)).toMatchObject({
+        status: "admitted",
+        workflowRunId: lateAttemptFirstRun.id,
+        lastReason: "attempt failed; retry pending: parent failed",
+      });
+      expect(store.getWorkflow(lateAttempt.workflow.id)?.status).toBe("active");
+      expect(store.listWorkflowEvents(lateAttemptFirstRun.id)
+        .filter((event) => event.eventType === "workflow_archived")).toHaveLength(0);
+      const lateAttemptSecondRun = store.createWorkflowRun({
+        workflow: lateAttempt.workflow,
+        loop: lateAttempt.loop,
+        loopRun: lateAttemptSecondClaim!.run,
+      });
+      store.finalizeWorkflowRun(lateAttemptSecondRun.id, "failed", {
+        finishedAt: "2026-01-01T00:00:02.500Z",
+        error: "attempt two failed",
+      });
+      expect(store.getWorkflowWorkItem(lateAttempt.workItem.id)?.status).toBe("failed");
+      expect(store.getWorkflow(lateAttempt.workflow.id)?.status).toBe("archived");
+      expect(store.listWorkflowEvents(lateAttemptSecondRun.id)
+        .filter((event) => event.eventType === "workflow_archived")).toHaveLength(1);
+
+      const exhausted = makeRoute("exhausted", 1);
+      const exhaustedRun = store.createWorkflowRun({
+        workflow: exhausted.workflow,
+        loop: exhausted.loop,
+        loopRun: exhausted.claim.run,
+      });
+      store.finalizeWorkflowRun(exhaustedRun.id, "failed", {
+        finishedAt: "2026-01-01T00:00:00.500Z",
+        error: "final attempt failed",
+      });
+      expect(store.getWorkflowWorkItem(exhausted.workItem.id)?.status).toBe("failed");
+      expect(store.getWorkflow(exhausted.workflow.id)?.status).toBe("archived");
+      expect(store.listWorkflowEvents(exhaustedRun.id)
+        .filter((event) => event.eventType === "workflow_archived")).toHaveLength(1);
+      store.finalizeWorkflowRun(exhaustedRun.id, "failed", {
+        finishedAt: "2026-01-01T00:00:00.500Z",
+        error: "final attempt failed",
+      });
+      expect(store.listWorkflowEvents(exhaustedRun.id)
+        .filter((event) => event.eventType === "workflow_archived")).toHaveLength(1);
+
+      const parentExisting = makeRoute("parent-existing-run", 1);
+      const parentExistingRun = store.createWorkflowRun({
+        workflow: parentExisting.workflow,
+        loop: parentExisting.loop,
+        loopRun: parentExisting.claim.run,
+      });
+      store["db"]
+        .query("UPDATE workflow_runs SET status='failed', finished_at=?, updated_at=? WHERE id=?")
+        .run("2026-01-01T00:00:00.500Z", "2026-01-01T00:00:00.500Z", parentExistingRun.id);
+      finalizeParent(parentExisting);
+      expect(store.getWorkflowWorkItem(parentExisting.workItem.id)?.status).toBe("failed");
+      expect(store.getWorkflow(parentExisting.workflow.id)?.status).toBe("archived");
+      expect(store.listWorkflowEvents(parentExistingRun.id)
+        .filter((event) => event.eventType === "workflow_archived")).toHaveLength(1);
+
+      const nearMiss = makeRoute("near-miss", 1, "manual-workflow");
+      finalizeParent(nearMiss);
+      expect(store.getWorkflow(nearMiss.workflow.id)?.status).toBe("active");
+      expect(store.getWorkflowWorkItem(nearMiss.workItem.id)?.workflowRunId).toBeUndefined();
+      expect(store.getWorkflowRun(`preflight-archive:${nearMiss.claim.run.id}`)).toBeUndefined();
+
+      const preflight = makeRoute("preflight", 1);
+      const preflightResults = await Promise.allSettled([
+        Promise.resolve().then(() => finalizeParent(preflight)),
+        Promise.resolve().then(() => finalizeParent(preflight)),
+      ]);
+      expect(preflightResults.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+      expect(preflightResults.filter((result) => result.status === "rejected")).toHaveLength(1);
+      expect(store.getWorkflowWorkItem(preflight.workItem.id)?.status).toBe("failed");
+      expect(store.getWorkflow(preflight.workflow.id)?.status).toBe("archived");
+      const ownerId = `preflight-archive:${preflight.claim.run.id}`;
+      const owner = store.getWorkflowRun(ownerId);
+      expect(owner).toMatchObject({
+        id: ownerId,
+        workflowId: preflight.workflow.id,
+        workflowName: preflight.workflow.name,
+        loopId: preflight.loop.id,
+        loopRunId: preflight.claim.run.id,
+        invocationId: preflight.invocation.id,
+        workItemId: preflight.workItem.id,
+        scheduledFor,
+        status: "failed",
+        finishedAt: "2026-01-01T00:00:01.000Z",
+        error: "workflow preflight failed before workflow execution; synthetic archival event owner",
+        createdAt: "2026-01-01T00:00:01.000Z",
+        updatedAt: "2026-01-01T00:00:01.000Z",
+      });
+      expect(owner?.startedAt).toBeUndefined();
+      expect(owner?.durationMs).toBeUndefined();
+      expect(owner?.manifestPath).toBeUndefined();
+      expect(owner?.idempotencyKey).toBeUndefined();
+      expect(store.listWorkflowStepRuns(ownerId)).toHaveLength(0);
+      expect(store.getWorkflowWorkItem(preflight.workItem.id)?.workflowRunId).toBe(ownerId);
+      const ownerRow = store["db"]
+        .query<{ workflow_definition_hash: string | null }, [string]>(
+          "SELECT workflow_definition_hash FROM workflow_runs WHERE id = ?",
+        )
+        .get(ownerId);
+      expect(ownerRow?.workflow_definition_hash).toBe(workflowDefinitionHash(preflight.workflow));
+      expect(store.listWorkflowEvents(ownerId).map((event) => event.eventType)).toEqual(["workflow_archived"]);
     } finally {
       store.close();
     }

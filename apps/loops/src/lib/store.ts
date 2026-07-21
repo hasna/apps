@@ -2487,11 +2487,89 @@ export class Store {
     return { workflow, loop, workItem, invocation };
   }
 
-  private maybeArchiveGeneratedRouteWorkflow(args: { workflowId: string; loopId?: string; workItemId?: string; workflowRunId?: string; updated: string }): void {
+  private maybeArchiveGeneratedRouteWorkflow(args: {
+    workflowId: string;
+    loopId?: string;
+    loopRunId?: string;
+    workItemId?: string;
+    workflowRunId?: string;
+    workflowRunStatus?: WorkflowRunStatus;
+    updated: string;
+  }): void {
     const context = this.generatedRouteArchiveContext(args);
     if (!context) return;
-    const { workflow, loop, workItem } = context;
+    const { workflow, loop, workItem, invocation } = context;
     if (!workflow || workflow.status !== "active") return;
+    if (
+      args.loopRunId
+      && (args.workflowRunStatus === "failed" || args.workflowRunStatus === "timed_out")
+    ) {
+      const loopRun = this.getRun(args.loopRunId);
+      if (
+        loopRun?.status === "running"
+        && workItem.status === "admitted"
+        && workItem.workflowRunId === args.workflowRunId
+      ) return;
+      if (loopRun && loopRun.attempt < loop.maxAttempts) return;
+    }
+    let workflowRunId = args.workflowRunId;
+    if (!workflowRunId) {
+      if (!args.loopRunId || workItem.workflowRunId) return;
+      const loopRun = this.getRun(args.loopRunId);
+      if (!loopRun || loopRun.status === "running") return;
+      workflowRunId = `preflight-archive:${loopRun.id}`;
+      const definitionHash = workflowDefinitionHash(workflow);
+      const syntheticError = "workflow preflight failed before workflow execution; synthetic archival event owner";
+      this.db
+        .query(
+          `INSERT OR IGNORE INTO workflow_runs (id, workflow_id, workflow_name, loop_id, loop_run_id, invocation_id,
+            work_item_id, scheduled_for, idempotency_key, workflow_definition_hash, manifest_path, status, started_at,
+            finished_at, duration_ms, error, created_at, updated_at)
+           VALUES ($id, $workflowId, $workflowName, $loopId, $loopRunId, $invocationId, $workItemId, $scheduledFor,
+            NULL, $workflowDefinitionHash, NULL, 'failed', NULL, $finished, NULL, $error, $created, $updated)`,
+        )
+        .run({
+          $id: workflowRunId,
+          $workflowId: workflow.id,
+          $workflowName: workflow.name,
+          $loopId: loop.id,
+          $loopRunId: loopRun.id,
+          $invocationId: invocation.id,
+          $workItemId: workItem.id,
+          $scheduledFor: loopRun.scheduledFor,
+          $workflowDefinitionHash: definitionHash,
+          $finished: args.updated,
+          $error: syntheticError,
+          $created: args.updated,
+          $updated: args.updated,
+        });
+      const archivalOwner = this.db
+        .query<WorkflowRunRow, [string]>("SELECT * FROM workflow_runs WHERE id = ?")
+        .get(workflowRunId);
+      if (
+        !archivalOwner
+        || archivalOwner.workflow_id !== workflow.id
+        || archivalOwner.workflow_name !== workflow.name
+        || archivalOwner.loop_id !== loop.id
+        || archivalOwner.loop_run_id !== loopRun.id
+        || archivalOwner.invocation_id !== invocation.id
+        || archivalOwner.work_item_id !== workItem.id
+        || archivalOwner.scheduled_for !== loopRun.scheduledFor
+        || archivalOwner.idempotency_key !== null
+        || archivalOwner.workflow_definition_hash !== definitionHash
+        || archivalOwner.manifest_path !== null
+        || archivalOwner.status !== "failed"
+        || archivalOwner.started_at !== null
+        || archivalOwner.finished_at !== args.updated
+        || archivalOwner.duration_ms !== null
+        || archivalOwner.error !== syntheticError
+        || archivalOwner.created_at !== args.updated
+        || archivalOwner.updated_at !== args.updated
+      ) return;
+      this.db
+        .query("UPDATE workflow_work_items SET workflow_run_id=?, updated_at=? WHERE id=? AND workflow_run_id IS NULL")
+        .run(workflowRunId, args.updated, workItem.id);
+    }
     const nonTerminal = this.db
       .query<{ count: number }, [string]>(
         `SELECT COUNT(*) AS count FROM workflow_runs
@@ -2502,8 +2580,8 @@ export class Store {
     const res = this.db
       .query("UPDATE workflow_specs SET status='archived', updated_at=? WHERE id=? AND status='active'")
       .run(args.updated, args.workflowId);
-    if (res.changes === 1 && args.workflowRunId) {
-      this.appendWorkflowEvent(args.workflowRunId, "workflow_archived", undefined, {
+    if (res.changes === 1) {
+      this.appendWorkflowEvent(workflowRunId, "workflow_archived", undefined, {
         workflowId: args.workflowId,
         loopId: loop.id,
         workItemId: workItem.id,
@@ -2519,8 +2597,10 @@ export class Store {
     this.maybeArchiveGeneratedRouteWorkflow({
       workflowId: run.workflowId,
       loopId: run.loopId,
+      loopRunId: run.loopRunId,
       workItemId: run.workItemId,
       workflowRunId,
+      workflowRunStatus: run.status,
       updated,
     });
   }
@@ -3977,6 +4057,9 @@ export class Store {
     let changed = false;
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      const currentRun = this.db
+        .query<WorkflowRunRow, [string]>("SELECT * FROM workflow_runs WHERE id = ?")
+        .get(workflowRunId);
       const res = this.db
         .query(
           `UPDATE workflow_runs SET status=$status, finished_at=$finished, duration_ms=$durationMs, error=$error, updated_at=$updated
@@ -3998,13 +4081,44 @@ export class Store {
       changed = res.changes === 1;
       if (changed) this.appendWorkflowEvent(workflowRunId, status, undefined, { error });
       if (changed) {
-        const itemStatus: WorkflowWorkItemStatus =
+        let itemStatus: WorkflowWorkItemStatus =
           status === "succeeded" ? "succeeded" : status === "cancelled" ? "cancelled" : "failed";
-        this.setWorkflowWorkItemsForWorkflowRun(workflowRunId, itemStatus, error, finishedAt);
+        let preserveActiveParentRetry = false;
+        if (
+          itemStatus === "failed"
+          && currentRun?.loop_id
+          && currentRun.loop_run_id
+        ) {
+          const loop = this.getLoop(currentRun.loop_id);
+          const loopRun = this.getRun(currentRun.loop_run_id);
+          const workItem = currentRun.work_item_id
+            ? this.getWorkflowWorkItem(currentRun.work_item_id)
+            : undefined;
+          preserveActiveParentRetry = Boolean(
+            loop
+            && loopRun?.status === "running"
+            && workItem?.status === "admitted"
+            && workItem.workflowRunId === workflowRunId
+            && this.generatedRouteArchiveContext({
+              workflowId: currentRun.workflow_id,
+              loopId: currentRun.loop_id,
+              workItemId: currentRun.work_item_id ?? undefined,
+            }),
+          );
+          if (loop && loopRun && loopRun.attempt < loop.maxAttempts) itemStatus = "admitted";
+        }
+        const itemReason = itemStatus === "admitted"
+          ? error ? `attempt failed; retry pending: ${error}` : "attempt failed; retry pending"
+          : error;
+        if (!preserveActiveParentRetry) {
+          this.setWorkflowWorkItemsForWorkflowRun(workflowRunId, itemStatus, itemReason, finishedAt);
+        }
         // A run that finished non-productively (a tempfail retry-signal, or a
         // gate death before the worker ran) must not burn the redispatch cap:
         // refund the attempt, and for a tempfail make the item requeueable now.
-        if (itemStatus === "failed") this.demoteNonProductiveWorkItems(workflowRunId, finishedAt);
+        if (itemStatus === "failed" && !preserveActiveParentRetry) {
+          this.demoteNonProductiveWorkItems(workflowRunId, finishedAt);
+        }
         this.maybeArchiveTerminalGeneratedRouteWorkflow(workflowRunId, finishedAt);
       }
       this.db.exec("COMMIT");
@@ -4513,10 +4627,19 @@ export class Store {
         const itemStatus = workItemStatusForLoopRun(run.status, run.attempt, loop?.maxAttempts);
         if (loop?.target.type === "workflow" && itemStatus && itemStatus !== "admitted") {
           const workItemId = loop.target.input?.workflowWorkItemId ?? loop.target.input?.workItemId;
+          const workflowRun = this.db
+            .query<WorkflowRunRow, [string, string]>(
+              `SELECT * FROM workflow_runs
+               WHERE loop_run_id = ? AND workflow_id = ?
+               ORDER BY created_at DESC, id DESC LIMIT 1`,
+            )
+            .get(run.id, loop.target.workflowId);
           this.maybeArchiveGeneratedRouteWorkflow({
             workflowId: loop.target.workflowId,
             loopId: loop.id,
+            loopRunId: run.id,
             workItemId,
+            workflowRunId: workflowRun?.id,
             updated: completion.updatedAt,
           });
         }
@@ -4857,6 +4980,7 @@ export class Store {
             this.maybeArchiveGeneratedRouteWorkflow({
               workflowId,
               loopId: loop.id,
+              loopRunId: row.id,
               workItemId,
               workflowRunId: workflowRows.find((workflowRow) => workflowRow.workflow_id === workflowId)?.id,
               updated: finished,
