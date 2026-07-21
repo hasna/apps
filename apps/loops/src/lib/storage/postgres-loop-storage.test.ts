@@ -1136,12 +1136,10 @@ suite("PostgresLoopStorage (live)", () => {
       ]);
       expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
       const rejected = results.find((result) => result.status === "rejected");
-      expect(rejected).toMatchObject({
-        status: "rejected",
-        reason: expect.any(RunFinalizationConflictError),
-      });
+      expect(rejected?.status).toBe("rejected");
       if (rejected?.status === "rejected") {
-        expect(rejected.reason).toMatchObject({ reason: "run_not_running" });
+        expect(rejected.reason).toBeInstanceOf(RunFinalizationConflictError);
+        expect(rejected.reason.reason).toBe("run_not_running");
       }
       expect(await storage.getRun(claim!.run.id)).toMatchObject({
         status: "succeeded",
