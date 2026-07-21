@@ -107,13 +107,13 @@ beforeAll(async () => {
   const manifest = (await manifestFile.json()) as Record<string, unknown>;
   expect(manifest).toMatchObject({
     name: "@hasna/capacity",
-    version: "0.1.0",
+    version: "0.1.1",
     repository: {
       type: "git",
       url: "git+https://github.com/hasna/capacity.git",
     },
-    bin: { capacity: "./dist/cli.js" },
   });
+  expect(manifest.bin).toEqual({ capacity: "dist/cli.js" });
 
   expect(await archive.extract(EXTRACT_ROOT)).toBe(pack.entryCount);
   packedCliPath = join(EXTRACT_ROOT, "package", "dist", "cli.js");
@@ -128,9 +128,9 @@ afterAll(() => {
 describe("packed capacity CLI", () => {
   test("contains the exact package identity and file contract", () => {
     expect(pack).toMatchObject({
-      id: "@hasna/capacity@0.1.0",
+      id: "@hasna/capacity@0.1.1",
       name: "@hasna/capacity",
-      version: "0.1.0",
+      version: "0.1.1",
     });
 
     const paths = pack.files.map(({ path }) => path);
@@ -142,9 +142,9 @@ describe("packed capacity CLI", () => {
   });
 
   test("reports the version from the extracted package binary", async () => {
-    const humanOutput = '{"package":"@hasna/capacity","version":"0.1.0"}\n';
+    const humanOutput = '{"package":"@hasna/capacity","version":"0.1.1"}\n';
     const jsonOutput =
-      '{"command":"version","data":{"package":"@hasna/capacity","version":"0.1.0"},"schemaVersion":"accounts.cli.v1"}\n';
+      '{"command":"version","data":{"package":"@hasna/capacity","version":"0.1.1"},"schemaVersion":"accounts.cli.v1"}\n';
 
     for (const args of [["--version"], ["version"]]) {
       expect(await run([process.execPath, packedCliPath, ...args])).toEqual({
