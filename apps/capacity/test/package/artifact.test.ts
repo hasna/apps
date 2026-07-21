@@ -6,7 +6,11 @@ import { join } from "node:path";
 const REPOSITORY_ROOT = join(import.meta.dir, "..", "..");
 const DIST_ROOT = join(REPOSITORY_ROOT, "dist");
 const TEMP_ROOT = mkdtempSync(join(tmpdir(), "capacity-package-artifact-"));
-const EXTRACT_ROOT = join(TEMP_ROOT, "extracted");
+const NPM_PACK_ROOT = join(TEMP_ROOT, "npm-pack");
+const NPM_EXTRACT_ROOT = join(TEMP_ROOT, "npm-extracted");
+const BUN_PACK_ROOT = join(TEMP_ROOT, "bun-pack");
+const BUN_EXTRACT_ROOT = join(TEMP_ROOT, "bun-extracted");
+const COMMAND_TIMEOUT_MS = 25_000;
 const PACKAGE_LIFECYCLE_TIMEOUT_MS = 30_000;
 
 interface CommandResult {
@@ -44,6 +48,9 @@ const BunArchive = (
 let pack: PackResult;
 let ignoredScriptsPack: PackResult;
 let packedCliPath: string;
+let bunArchivePaths: readonly string[];
+let bunPackedCliPath: string;
+let bunPackedCliMode: string;
 
 async function run(command: readonly string[]): Promise<CommandResult> {
   const child = Bun.spawn([...command], {
@@ -57,6 +64,7 @@ async function run(command: readonly string[]): Promise<CommandResult> {
     },
     stdout: "pipe",
     stderr: "pipe",
+    timeout: COMMAND_TIMEOUT_MS,
   });
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(child.stdout).text(),
@@ -73,13 +81,37 @@ function requireSuccess(result: CommandResult, operation: string): void {
 }
 
 function parsePackResults(stdout: string): readonly PackResult[] {
-  const jsonStart = stdout.lastIndexOf("\n[\n");
-  return JSON.parse(jsonStart === -1 ? stdout : stdout.slice(jsonStart + 1)) as readonly PackResult[];
+  for (let searchEnd = stdout.length; searchEnd > 0;) {
+    const jsonStart = stdout.lastIndexOf("[", searchEnd - 1);
+    if (jsonStart === -1) break;
+    try {
+      const candidate = JSON.parse(stdout.slice(jsonStart)) as unknown;
+      if (
+        Array.isArray(candidate) &&
+        candidate.every(
+          (item) =>
+            typeof item === "object" &&
+            item !== null &&
+            "filename" in item &&
+            "files" in item &&
+            Array.isArray(item.files),
+        )
+      ) {
+        return candidate as readonly PackResult[];
+      }
+    } catch {
+      // Lifecycle output may contain unrelated brackets before npm's final JSON payload.
+    }
+    searchEnd = jsonStart;
+  }
+  throw new Error("npm pack returned no parseable artifact metadata");
 }
 
 beforeAll(async () => {
   chmodSync(TEMP_ROOT, 0o700);
-  mkdirSync(EXTRACT_ROOT, { mode: 0o700 });
+  for (const directory of [NPM_PACK_ROOT, NPM_EXTRACT_ROOT, BUN_PACK_ROOT, BUN_EXTRACT_ROOT]) {
+    mkdirSync(directory, { mode: 0o700 });
+  }
 
   rmSync(DIST_ROOT, { recursive: true, force: true });
   expect(existsSync(DIST_ROOT)).toBe(false);
@@ -108,7 +140,7 @@ beforeAll(async () => {
     "pack",
     ".",
     "--pack-destination",
-    TEMP_ROOT,
+    NPM_PACK_ROOT,
     "--json",
     "--offline",
   ]);
@@ -117,7 +149,7 @@ beforeAll(async () => {
   if (packedMetadata === undefined) throw new Error("npm pack returned no artifact metadata");
   pack = packedMetadata;
 
-  const archiveBytes = Bun.gunzipSync(await Bun.file(join(TEMP_ROOT, pack.filename)).bytes());
+  const archiveBytes = Bun.gunzipSync(await Bun.file(join(NPM_PACK_ROOT, pack.filename)).bytes());
   const archive = new BunArchive(archiveBytes);
   const archiveFiles = await archive.files();
   expect(archiveFiles.size).toBe(pack.entryCount);
@@ -135,9 +167,48 @@ beforeAll(async () => {
   });
   expect(manifest.bin).toEqual({ capacity: "dist/cli.js" });
 
-  expect(await archive.extract(EXTRACT_ROOT)).toBe(pack.entryCount);
-  packedCliPath = join(EXTRACT_ROOT, "package", "dist", "cli.js");
+  expect(await archive.extract(NPM_EXTRACT_ROOT)).toBe(pack.entryCount);
+  packedCliPath = join(NPM_EXTRACT_ROOT, "package", "dist", "cli.js");
   expect(existsSync(packedCliPath)).toBe(true);
+
+  rmSync(DIST_ROOT, { recursive: true, force: true });
+  expect(existsSync(DIST_ROOT)).toBe(false);
+  const bunPacked = await run([
+    process.execPath,
+    "pm",
+    "pack",
+    "--destination",
+    BUN_PACK_ROOT,
+  ]);
+  requireSuccess(bunPacked, "clean-dist Bun pack");
+  const bunArchiveBytes = Bun.gunzipSync(
+    await Bun.file(join(BUN_PACK_ROOT, "hasna-capacity-0.1.1.tgz")).bytes(),
+  );
+  const tar = Bun.which("tar");
+  if (tar === null) throw new Error("tar is required for the package artifact test");
+  const bunCliHeader = await run([
+    tar,
+    "-tvzf",
+    join(BUN_PACK_ROOT, "hasna-capacity-0.1.1.tgz"),
+    "package/dist/cli.js",
+  ]);
+  requireSuccess(bunCliHeader, "Bun-packed CLI tar header");
+  const [packedCliMode] = bunCliHeader.stdout.trim().split(/\s+/, 1);
+  if (packedCliMode === undefined) throw new Error("Bun-packed CLI tar mode is missing");
+  bunPackedCliMode = packedCliMode;
+  const bunArchive = new BunArchive(bunArchiveBytes);
+  const bunArchiveFiles = await bunArchive.files();
+  bunArchivePaths = [...bunArchiveFiles.keys()]
+    .map((path) => path.replace(/^package\//, ""))
+    .sort();
+  const bunManifestFile = bunArchiveFiles.get("package/package.json");
+  if (bunManifestFile === undefined) throw new Error("Bun-packed package.json is missing");
+  const bunManifest = (await bunManifestFile.json()) as Record<string, unknown>;
+  expect(bunManifest).toMatchObject({ name: "@hasna/capacity", version: "0.1.1" });
+  expect(bunManifest.bin).toEqual({ capacity: "dist/cli.js" });
+  expect(await bunArchive.extract(BUN_EXTRACT_ROOT)).toBe(bunArchiveFiles.size);
+  bunPackedCliPath = join(BUN_EXTRACT_ROOT, "package", "dist", "cli.js");
+  expect(existsSync(bunPackedCliPath)).toBe(true);
 }, { timeout: PACKAGE_LIFECYCLE_TIMEOUT_MS });
 
 afterAll(() => {
@@ -160,9 +231,18 @@ describe("packed capacity CLI", () => {
     const paths = pack.files.map(({ path }) => path);
     expect(pack.entryCount).toBe(pack.files.length);
     expect(paths).toContain("package.json");
+    expect(paths).toContain("dist/index.js");
+    expect(paths).toContain("dist/index.d.ts");
     expect(paths.some((path) => path.startsWith("test/") || path.startsWith("tests/"))).toBe(false);
     expect(paths.some((path) => path.startsWith("src/"))).toBe(false);
     expect(pack.files.find(({ path }) => path === "dist/cli.js")).toMatchObject({ mode: 0o755 });
+  });
+
+  test("keeps npm and Bun package artifacts equivalent", async () => {
+    const npmArchivePaths = pack.files.map(({ path }) => path).sort();
+    expect(bunArchivePaths).toEqual(npmArchivePaths);
+    expect(bunPackedCliMode).toBe("-rwxr-xr-x");
+    expect(await Bun.file(bunPackedCliPath).bytes()).toEqual(await Bun.file(packedCliPath).bytes());
   });
 
   test("reports the version from the extracted package binary", async () => {
@@ -172,6 +252,13 @@ describe("packed capacity CLI", () => {
 
     for (const args of [["--version"], ["version"]]) {
       expect(await run([process.execPath, packedCliPath, ...args])).toEqual({
+        stdout: humanOutput,
+        stderr: "",
+        exitCode: 0,
+      });
+    }
+    for (const cliPath of [packedCliPath, bunPackedCliPath]) {
+      expect(await run([cliPath, "--version"])).toEqual({
         stdout: humanOutput,
         stderr: "",
         exitCode: 0,
