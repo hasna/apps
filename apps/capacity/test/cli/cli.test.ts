@@ -54,10 +54,54 @@ function localEnvironment(): Record<string, string> {
 }
 
 describe("accounts CLI", () => {
-  test("reports matching development package version", async () => {
-    const result = await runCli(["version", "--json"]);
-    expect(result.exitCode).toBe(0);
-    expect(JSON.parse(result.stdout).data.version).toBe(PACKAGE_VERSION);
+  test("reports the package version through the version command", async () => {
+    const human = await runCli(["version"]);
+    expect(human).toEqual({
+      stdout: `${canonicalJson({ package: "@hasna/capacity", version: PACKAGE_VERSION })}\n`,
+      stderr: "",
+      exitCode: 0,
+    });
+
+    const json = await runCli(["version", "--json"]);
+    expect(json).toEqual({
+      stdout: `${canonicalJson({
+        schemaVersion: "accounts.cli.v1",
+        command: "version",
+        data: { package: "@hasna/capacity", version: PACKAGE_VERSION },
+      })}\n`,
+      stderr: "",
+      exitCode: 0,
+    });
+  });
+
+  test("reports the package version through the --version flag", async () => {
+    const human = await runCli(["--version"]);
+    expect(human).toEqual({
+      stdout: `${canonicalJson({ package: "@hasna/capacity", version: PACKAGE_VERSION })}\n`,
+      stderr: "",
+      exitCode: 0,
+    });
+
+    const json = await runCli(["--version", "--json"]);
+    expect(json).toEqual({
+      stdout: `${canonicalJson({
+        schemaVersion: "accounts.cli.v1",
+        command: "version",
+        data: { package: "@hasna/capacity", version: PACKAGE_VERSION },
+      })}\n`,
+      stderr: "",
+      exitCode: 0,
+    });
+  });
+
+  test("prints help for no command and --help", async () => {
+    const noCommand = await runCli([]);
+    const help = await runCli(["--help"]);
+    expect(noCommand).toEqual(help);
+    expect(noCommand.exitCode).toBe(0);
+    expect(noCommand.stderr).toBe("");
+    expect(noCommand.stdout).toContain("capacity validate <file|-> [--json]");
+    expect(noCommand.stdout).not.toContain(PACKAGE_VERSION);
   });
 
   test("doctor and list emit deterministic versioned JSON", async () => {

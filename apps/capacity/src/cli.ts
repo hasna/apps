@@ -48,12 +48,16 @@ export async function runAccountsCli(argv: readonly string[]): Promise<number> {
   try {
     const parsed = parseArguments(argv);
     const [command, ...positionals] = parsed.positionals;
-    if (command === undefined || command === "help" || parsed.flags.help === true) {
+    if (command === "help" || parsed.flags.help === true) {
       output(jsonRequested, "help", { usage: usageText() });
       return 0;
     }
     if (command === "version" || parsed.flags.version === true) {
       output(jsonRequested, "version", { package: "@hasna/capacity", version: PACKAGE_VERSION });
+      return 0;
+    }
+    if (command === undefined) {
+      output(jsonRequested, "help", { usage: usageText() });
       return 0;
     }
     if (command === "validate") return await validateCommand(positionals, parsed.flags, jsonRequested);
