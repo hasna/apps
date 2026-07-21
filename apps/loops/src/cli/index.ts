@@ -159,6 +159,7 @@ function compactHealthScanOutput(scan: unknown): unknown {
  */
 function reportCliError(error: unknown): void {
   const message = error instanceof Error ? error.message : String(error);
+  const safeMessage = redact(message, error instanceof GateError ? 320 : 640) ?? "";
   process.exitCode = 1;
   if (error instanceof GateError) {
     if (isJson()) {
@@ -167,19 +168,19 @@ function reportCliError(error: unknown): void {
         created: false,
         [error.gate]: {
           ok: false,
-          error: redact(message, 320),
+          error: safeMessage,
         },
         ...error.context,
       });
       return;
     }
-    console.error(`error: ${message}`);
+    console.error(`error: ${safeMessage}`);
     return;
   }
   if (isJson()) {
-    print({ ok: false, error: { code: error instanceof CodedError ? error.code : "ERROR", message: redact(message, 640) } });
+    print({ ok: false, error: { code: error instanceof CodedError ? error.code : "ERROR", message: safeMessage } });
   }
-  console.error(`error: ${message}`);
+  console.error(`error: ${safeMessage}`);
 }
 
 function runAction<Args extends unknown[]>(fn: (...args: Args) => void | Promise<void>): (...args: Args) => Promise<void> {
@@ -204,6 +205,27 @@ async function withStore<T>(fn: (store: LoopStore) => Promise<T>): Promise<T> {
     return await fn(store);
   } finally {
     await store.close();
+  }
+}
+
+type LoopListOptions = NonNullable<Parameters<LoopStore["listLoops"]>[0]>;
+const CLI_LOOP_LIST_PAGE_SIZE = 200;
+
+async function listAllLoops(
+  store: LoopStore,
+  opts: Omit<LoopListOptions, "limit" | "offset"> = {},
+): Promise<Loop[]> {
+  const loops: Loop[] = [];
+  let offset = 0;
+  while (true) {
+    const page = await store.listLoops({
+      ...opts,
+      limit: CLI_LOOP_LIST_PAGE_SIZE,
+      offset,
+    });
+    loops.push(...page);
+    if (page.length < CLI_LOOP_LIST_PAGE_SIZE) return loops;
+    offset += page.length;
   }
 }
 
@@ -1786,7 +1808,7 @@ program
   .action(runAction(async (opts) => {
     if (opts.archived && opts.all) throw new ValidationError("use either --archived or --all, not both");
     const loops = await withStore((store) =>
-      store.listLoops({
+      listAllLoops(store, {
         status: opts.status,
         labels: normalizeLoopLabels(opts.label),
         archived: opts.archived,
@@ -2655,6 +2677,7 @@ daemon.command("start").description("start the daemon in the background").action
 }));
 
 daemon.command("stop").description("stop the background daemon").action(runAction(async () => {
+  assertLocalOnlyCommand("daemon stop");
   const result = await stopDaemon();
   print(result, result.stopped ? `stopped pid=${result.pid}` : "not running");
 }));
@@ -2674,6 +2697,7 @@ daemon
   .description("write a systemd user service or launchd plist")
   .option("--enable", "also enable/start the user service when supported")
   .action(runAction((opts) => {
+    assertLocalOnlyCommand("daemon install");
     const result = installStartup(process.argv[1] ?? "loops");
     if (opts.enable) result.enableResults = enableStartup(result);
     const enableText = result.enableResults
@@ -2690,6 +2714,7 @@ daemon
   // otherwise reject it as an unknown option.
   .option("--tail <n>", "alias for --lines")
   .action(runAction((opts) => {
+    assertLocalOnlyCommand("daemon logs");
     const path = daemonLogPath();
     if (!existsSync(path)) {
       console.log("");
