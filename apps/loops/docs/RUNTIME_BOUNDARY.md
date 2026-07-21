@@ -160,7 +160,7 @@ console.log(eventHandoff.boundary);
 
 ## Loops-Native Path: Todos-Task Routes
 
-Todos-task routing is an **Loops-native** admission path. It is separate from
+Todos-task routing is a **Loops-native** admission path. It is separate from
 the OpenAutomations product queue:
 
 ```bash

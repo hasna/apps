@@ -2,10 +2,11 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
 const legacyBrand = ["Open", "Loops"].join("");
-const scannerFiles = new Set([
-  "scripts/check-branding.mjs",
-  "scripts/check-branding.test.mjs",
-]);
+const legacyTitleBrand = ["Open", "loops"].join("");
+const legacyUpperBrand = ["OPEN", "LOOPS"].join("");
+const legacySpacedBrand = ["open", "loops"].join(" ");
+const lowerLegacySolid = ["open", "loops"].join("");
+const lowerLegacyHyphenated = ["open", "loops"].join("-");
 const tenantEnforcementLegacyLines = new Set([
   `      RAISE EXCEPTION 'reserved ${legacyBrand} database role % is LOGIN; detach or replace that credential with provider authority before tenant enforcement',`,
   `    RAISE EXCEPTION 'reserved ${legacyBrand} role % has a dependency in database %; use a dedicated cluster or remove the cross-database dependency before tenant enforcement',`,
@@ -14,6 +15,17 @@ const tenantEnforcementLegacyLines = new Set([
   `    RAISE EXCEPTION 'tenant enforcement did not normalize ${legacyBrand} database roles';`,
   `    RAISE EXCEPTION 'tenant enforcement left unexpected function privileges outside the ${legacyBrand} auth surface';`,
 ]);
+const sharedKitHistoricalLines = new Set([
+  `remain the 2026-07-07 inventory. ${legacyBrand} state normalization landed through`,
+  `1. Treat ${legacyBrand} normalization as complete: version \`0.5.1\` state`,
+  `approval. ${legacyBrand} normalization is complete: version \`0.5.1\` state`,
+  `- For the current ${legacyBrand} checkout: \`bun run check:contracts\`.`,
+  `- For ${legacyBrand}: \`bun run typecheck\`, \`bun test src/lib/storage/*.test.ts\`,`,
+  `- ${legacyBrand} generated storage-kit normalization is complete. Version \`0.5.1\``,
+  `- ${legacyBrand} route-event migration.`,
+  `1. ${legacyBrand} storage-kit normalization.`,
+  `3. Events compatibility inventory for ${legacyBrand} route aliases.`,
+]);
 const preservedLines = new Map([
   ["CHANGELOG.md", new Set([
     `  \`no such column: claim_token\` on machines that already had active ${legacyBrand}`,
@@ -21,6 +33,7 @@ const preservedLines = new Map([
     `- 0.3.3 (2026-06-20) fix: harden ${legacyBrand} daemon ownership and redaction`,
     `- feat: build ${legacyBrand} CLI daemon`,
   ])],
+  ["docs/SHARED_KIT_EXTRACTION_INVENTORY.md", sharedKitHistoricalLines],
   ["migrations/0010_tenant_enforce.sql", tenantEnforcementLegacyLines],
   ["src/lib/storage/postgres-schema.ts", tenantEnforcementLegacyLines],
   ["src/serve/index.test.ts", new Set([
@@ -37,20 +50,25 @@ const preservedLines = new Map([
   ])],
 ]);
 
-const lowerBrand = "(?:openloops|open-loops)";
-const productNoun = "(?:app|product|brand|runtime|scheduler|daemon|cli|api|mcp|service|control[- ]plane|workflow(?:s)?|loop(?:s)?|package|tool|engine|experience)";
+const lowerBrand = `(?:${lowerLegacySolid}|${lowerLegacyHyphenated})`;
+const productNoun = "(?:app|product|project|brand|runtime|scheduler|daemon|cli|api|mcp|service|control[- ]plane|workflow(?:s)?|loop(?:s)?|package|tool|engine|experience|documentation)";
 const productVerb = "(?:is|are|can|has|supports|ships|owns|must|may|will|does|records|executes|requires)";
 const lowerDisplayContext = new RegExp(`\\b${lowerBrand}\\s+(?:${productNoun}|${productVerb})\\b`, "i");
-const lowerDisplayLead = new RegExp(`\\b(?:powered\\s+by|built\\s+with|use|using|choose|try)\\s+${lowerBrand}\\b`, "i");
+const lowerDisplayLead = new RegExp(`\\b(?:powered\\s+by|built\\s+with|use|using|choose|try|welcome\\s+to|read\\s+the)\\s+${lowerBrand}\\b`, "i");
 const lowerDisplaySuffix = new RegExp(`\\b${lowerBrand}(?:['’]s?|-(?:powered|based|managed|native))`, "i");
+const legacyCamelPattern = new RegExp(legacyBrand);
+const legacyTitlePattern = new RegExp(`\\b${legacyTitleBrand}\\b`);
+const legacyUpperPattern = new RegExp(`\\b${legacyUpperBrand}\\b`);
+const legacySpacedPattern = new RegExp(`\\b${legacySpacedBrand}\\b`, "i");
+const legacyHeadingPattern = new RegExp(`^\\s*#{1,6}\\s+(?:about\\s+)?${lowerBrand}\\b`, "i");
 
 export function legacyBrandReason(line) {
-  if (/OpenLoops/.test(line)) return "legacy-camel-brand";
-  if (/\bOpenloops\b/.test(line)) return "legacy-title-brand";
-  if (/\bOPENLOOPS\b/.test(line)) return "legacy-uppercase-brand";
+  if (legacyCamelPattern.test(line)) return "legacy-camel-brand";
+  if (legacyTitlePattern.test(line)) return "legacy-title-brand";
+  if (legacyUpperPattern.test(line)) return "legacy-uppercase-brand";
   if (/\bOpen[ -]Loops\b/.test(line)) return "legacy-separated-brand";
-  if (/\bopen loops\b/i.test(line)) return "legacy-spaced-brand";
-  if (/^\s*#{1,6}\s+open-?loops\b/i.test(line)) return "legacy-heading-brand";
+  if (legacySpacedPattern.test(line)) return "legacy-spaced-brand";
+  if (legacyHeadingPattern.test(line)) return "legacy-heading-brand";
   if (/\[(?:openloops|open-loops)\]/i.test(line)) return "legacy-log-brand";
   if (/\bBUG:\s+(?:openloops|open-loops)\b/i.test(line)) return "legacy-task-brand";
   if (/\b(?:upgrade|install|launch|start|stop|restart)\s+(?:openloops|open-loops)\b/i.test(line)) return "legacy-action-brand";
@@ -67,8 +85,6 @@ export function scanTrackedFiles(cwd = process.cwd()) {
   const violations = [];
 
   for (const file of trackedFiles) {
-    if (scannerFiles.has(file)) continue;
-
     const contents = readFileSync(`${cwd}/${file}`);
     const lines = contents.toString("utf8").split("\n");
     for (const [index, line] of lines.entries()) {
