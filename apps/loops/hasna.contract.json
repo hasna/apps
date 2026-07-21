@@ -1,4 +1,5 @@
 {
+  "$schema": "./node_modules/@hasna/contracts/dist/hasna.contract.schema.json",
   "schema": "hasna.service_contract.v1",
   "name": "loops",
   "class": "service",
@@ -12,16 +13,72 @@
     "loops-daemon",
     "loops-runner"
   ],
+  "deploymentModes": [
+    "local",
+    "self-hosted",
+    "cloud"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "http",
+      "status": "supported",
+      "bin": "loops-serve",
+      "mcpBin": "loops-mcp",
+      "authMode": "api-key",
+      "deploymentModes": [
+        "local",
+        "self-hosted",
+        "cloud"
+      ],
+      "health": {
+        "method": "GET",
+        "path": "/health",
+        "public": true
+      },
+      "readiness": {
+        "method": "GET",
+        "path": "/ready",
+        "public": true
+      },
+      "version": {
+        "method": "GET",
+        "path": "/version",
+        "public": true
+      },
+      "apiBasePath": "/v1",
+      "openApiPath": "/openapi.json",
+      "readinessGates": [
+        {
+          "id": "api-key-auth-negative",
+          "kind": "auth",
+          "required": true,
+          "command": "bun test src/api/index.test.ts src/lib/auth/tenant-auth.test.ts",
+          "status": "passed",
+          "summary": "Protected /v1 routes fail closed without valid tenant-bound API-key authorization."
+        },
+        {
+          "id": "control-plane-readiness",
+          "kind": "readiness",
+          "required": true,
+          "command": "bun test src/api/index.test.ts src/serve/index.test.ts",
+          "status": "passed",
+          "summary": "Public readiness reports stable storage, auth, and migration codes without credential details."
+        }
+      ]
+    }
+  ],
   "storage": {
     "mode": "local",
     "envPrefix": "HASNA_LOOPS_",
-    "databaseUrlSecretRef": "hasna/oss/loops/runtime-database-url",
-    "runtimeDatabaseUrlSecretRef": "hasna/oss/loops/runtime-database-url",
-    "authDatabaseUrlSecretRef": "hasna/oss/loops/auth-database-url",
-    "migratorDatabaseUrlSecretRef": "hasna/oss/loops/migrator-database-url",
+    "databaseUrlSecretRef": "hasna/oss/loops/database-url",
     "sqlitePath": "~/.hasna/loops/loops.db"
   },
   "metadata": {
+    "storage": {
+      "runtimeDatabaseUrlSecretRef": "hasna/oss/loops/runtime-database-url",
+      "authDatabaseUrlSecretRef": "hasna/oss/loops/auth-database-url",
+      "migratorDatabaseUrlSecretRef": "hasna/oss/loops/migrator-database-url"
+    },
     "service": {
       "port": 8787,
       "healthPath": "/health",
