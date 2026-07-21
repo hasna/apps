@@ -84,6 +84,13 @@ export interface WorkflowRecoveryContext {
   claimToken?: string;
 }
 
+export type LoopSchedulingState = Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor">;
+
+export interface CircuitBreakerTransitionResult {
+  loop: Loop;
+  marker: LoopRun;
+}
+
 const DEFAULT_RECOVERY_BATCH_LIMIT = 100;
 const DEFAULT_RECOVERY_SCAN_MULTIPLIER = 5;
 const LIVE_EXPIRED_RUN_GRACE_MS = 60_000;
@@ -1811,6 +1818,169 @@ export class Store {
     const after = this.getLoop(id);
     if (!after) throw new Error(`loop not found after update: ${id}`);
     return after;
+  }
+
+  advanceLoopIfCurrent(
+    id: string,
+    expected: LoopSchedulingState,
+    patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor">>,
+    opts: DaemonLeaseFence = {},
+  ): Loop | undefined {
+    const updated = (opts.now ?? new Date()).toISOString();
+    if ("status" in patch && patch.status !== undefined) assertLoopStatus(patch.status);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const current = this.getLoop(id);
+      if (!current || current.archivedAt) {
+        this.db.exec("COMMIT");
+        return undefined;
+      }
+      if (
+        current.status !== expected.status ||
+        current.nextRunAt !== expected.nextRunAt ||
+        current.retryScheduledFor !== expected.retryScheduledFor
+      ) {
+        this.db.exec("COMMIT");
+        return undefined;
+      }
+      const merged: Loop = { ...current, ...patch, updatedAt: updated };
+      const res = this.db
+        .query(
+          `UPDATE loops SET status=$status, next_run_at=$nextRun, retry_scheduled_for=$retrySlot, updated_at=$updated
+           WHERE id=$id
+             AND archived_at IS NULL
+             AND status=$expectedStatus
+             AND next_run_at IS $expectedNextRun
+             AND retry_scheduled_for IS $expectedRetrySlot
+             AND ($daemonLeaseId IS NULL OR EXISTS (
+               SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
+             ))`,
+        )
+        .run({
+          $id: id,
+          $status: merged.status,
+          $nextRun: merged.nextRunAt ?? null,
+          $retrySlot: merged.retryScheduledFor ?? null,
+          $updated: updated,
+          $expectedStatus: expected.status,
+          $expectedNextRun: expected.nextRunAt ?? null,
+          $expectedRetrySlot: expected.retryScheduledFor ?? null,
+          $daemonLeaseId: opts.daemonLeaseId ?? null,
+          $now: updated,
+        });
+      if (res.changes !== 1) {
+        this.db.exec("COMMIT");
+        return undefined;
+      }
+      if (patch.status && patch.status !== "active") {
+        const status: WorkflowWorkItemStatus = patch.status === "paused" ? "deferred" : "cancelled";
+        this.setWorkflowWorkItemsForLoop(id, status, `loop ${patch.status}`, updated);
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        /* transaction may already be closed */
+      }
+      throw error;
+    }
+    return this.getLoop(id);
+  }
+
+  tripCircuitBreakerIfCurrent(
+    id: string,
+    expected: LoopSchedulingState,
+    patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor">>,
+    marker: { scheduledFor: string; reason: string },
+    opts: DaemonLeaseFence = {},
+  ): CircuitBreakerTransitionResult | undefined {
+    const updated = (opts.now ?? new Date()).toISOString();
+    const scrubbedReason = scrubbedOrNull(marker.reason) ?? "";
+    if ("status" in patch && patch.status !== undefined) assertLoopStatus(patch.status);
+    this.db.exec("BEGIN IMMEDIATE");
+    let markerScheduledFor = marker.scheduledFor;
+    try {
+      const current = this.getLoop(id);
+      if (
+        !current ||
+        current.archivedAt ||
+        current.status !== expected.status ||
+        current.nextRunAt !== expected.nextRunAt ||
+        current.retryScheduledFor !== expected.retryScheduledFor
+      ) {
+        this.db.exec("COMMIT");
+        return undefined;
+      }
+      const merged: Loop = { ...current, ...patch, updatedAt: updated };
+      const res = this.db
+        .query(
+          `UPDATE loops SET status=$status, next_run_at=$nextRun, retry_scheduled_for=$retrySlot, updated_at=$updated
+           WHERE id=$id
+             AND archived_at IS NULL
+             AND status=$expectedStatus
+             AND next_run_at IS $expectedNextRun
+             AND retry_scheduled_for IS $expectedRetrySlot
+             AND ($daemonLeaseId IS NULL OR EXISTS (
+               SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
+             ))`,
+        )
+        .run({
+          $id: id,
+          $status: merged.status,
+          $nextRun: merged.nextRunAt ?? null,
+          $retrySlot: merged.retryScheduledFor ?? null,
+          $updated: updated,
+          $expectedStatus: expected.status,
+          $expectedNextRun: expected.nextRunAt ?? null,
+          $expectedRetrySlot: expected.retryScheduledFor ?? null,
+          $daemonLeaseId: opts.daemonLeaseId ?? null,
+          $now: updated,
+        });
+      if (res.changes !== 1) {
+        this.db.exec("COMMIT");
+        return undefined;
+      }
+      let markerAtMs = new Date(markerScheduledFor).getTime();
+      for (let probe = 0; probe < 1_000 && this.getRunBySlot(id, new Date(markerAtMs).toISOString()); probe += 1) {
+        markerAtMs += 1;
+      }
+      markerScheduledFor = new Date(markerAtMs).toISOString();
+      const markerId = genId();
+      this.db
+        .query(
+          `INSERT INTO loop_runs (id, loop_id, loop_name, scheduled_for, attempt, status, started_at, finished_at,
+            claimed_by, lease_expires_at, pid, exit_code, duration_ms, stdout, stderr, error, created_at, updated_at)
+           VALUES ($id, $loopId, $loopName, $scheduledFor, 1, 'skipped', NULL, $finished, NULL, NULL, NULL, NULL, NULL,
+            NULL, NULL, $error, $created, $updated)`,
+        )
+        .run({
+          $id: markerId,
+          $loopId: current.id,
+          $loopName: current.name,
+          $scheduledFor: markerScheduledFor,
+          $finished: updated,
+          $error: scrubbedReason,
+          $created: updated,
+          $updated: updated,
+        });
+      if (patch.status && patch.status !== "active") {
+        const status: WorkflowWorkItemStatus = patch.status === "paused" ? "deferred" : "cancelled";
+        this.setWorkflowWorkItemsForLoop(id, status, `loop ${patch.status}`, updated);
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        /* transaction may already be closed */
+      }
+      throw error;
+    }
+    const loop = this.getLoop(id);
+    const createdMarker = this.getRunBySlot(id, markerScheduledFor);
+    if (!loop || !createdMarker) throw new Error(`circuit breaker transition missing committed rows: ${id}`);
+    return { loop, marker: createdMarker };
   }
 
   private activeLoopReferenceCount(workflowId: string): number {
@@ -4089,14 +4259,14 @@ export class Store {
           .query<RunRow, [string, string, number]>(
             `SELECT * FROM loop_runs
              WHERE loop_id = ? AND scheduled_for > ? AND status IN ('failed', 'timed_out', 'abandoned') AND attempt < ?
-             ORDER BY scheduled_for ASC LIMIT 1`,
+             ORDER BY scheduled_for ASC, id ASC LIMIT 1`,
           )
           .get(loopId, afterScheduledFor, maxAttempts)
       : this.db
           .query<RunRow, [string, number]>(
             `SELECT * FROM loop_runs
              WHERE loop_id = ? AND status IN ('failed', 'timed_out', 'abandoned') AND attempt < ?
-             ORDER BY scheduled_for ASC LIMIT 1`,
+             ORDER BY scheduled_for ASC, id ASC LIMIT 1`,
           )
           .get(loopId, maxAttempts);
     return row ? rowToRun(row) : undefined;
@@ -4359,7 +4529,7 @@ export class Store {
     const join = labels.length ? " JOIN loops AS label_loops ON label_loops.id = loop_runs.loop_id" : "";
     const rows = this.db
       .query<RunRow, Array<string | number>>(
-        `SELECT loop_runs.* FROM loop_runs${join}${where.length ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY loop_runs.created_at DESC LIMIT ? OFFSET ?`,
+        `SELECT loop_runs.* FROM loop_runs${join}${where.length ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY loop_runs.created_at DESC, loop_runs.id DESC LIMIT ? OFFSET ?`,
       )
       .all(...params, limit, offset);
     return rows.map(rowToRun);

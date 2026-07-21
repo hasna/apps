@@ -500,6 +500,121 @@ export class PostgresLoopStorage implements LoopStorageContract {
     });
   }
 
+  async advanceLoopIfCurrent(...args: M<"advanceLoopIfCurrent">["args"]): Promise<M<"advanceLoopIfCurrent">["result"]> {
+    const [id, expected, patch, opts = {}] = args;
+    if ("status" in patch && patch.status !== undefined) assertLoopStatus(patch.status);
+    const updated = (opts.now ?? new Date()).toISOString();
+    return this.client.transaction(async (c) => {
+      const current = await this.loadLoop(c, id);
+      if (!current || current.archivedAt) return undefined;
+      const merged: Loop = { ...current, ...patch, updatedAt: updated };
+      const res = await c.query(
+        `UPDATE loops SET status=$1, next_run_at=$2, retry_scheduled_for=$3, updated_at=$4
+         WHERE tenant_id = open_loops_current_tenant_id() AND id=$5
+           AND archived_at IS NULL
+           AND status=$6
+           AND next_run_at IS NOT DISTINCT FROM $7::timestamptz
+           AND retry_scheduled_for IS NOT DISTINCT FROM $8::timestamptz
+           AND ($9::text IS NULL OR EXISTS (
+             SELECT 1 FROM daemon_lease
+             WHERE tenant_id = open_loops_current_tenant_id() AND id=$9 AND expires_at > $10
+           ))`,
+        [
+          merged.status,
+          merged.nextRunAt ?? null,
+          merged.retryScheduledFor ?? null,
+          updated,
+          id,
+          expected.status,
+          expected.nextRunAt ?? null,
+          expected.retryScheduledFor ?? null,
+          opts.daemonLeaseId ?? null,
+          updated,
+        ],
+      );
+      if (res.rowCount !== 1) return undefined;
+      if (patch.status && patch.status !== "active") {
+        const status: WorkflowWorkItemStatus = patch.status === "paused" ? "deferred" : "cancelled";
+        await this.setWorkItemsForLoop(c, id, status, `loop ${patch.status}`, updated);
+      }
+      return this.loadLoop(c, id);
+    });
+  }
+
+  async tripCircuitBreakerIfCurrent(...args: M<"tripCircuitBreakerIfCurrent">["args"]): Promise<M<"tripCircuitBreakerIfCurrent">["result"]> {
+    const [id, expected, patch, marker, opts = {}] = args;
+    if ("status" in patch && patch.status !== undefined) assertLoopStatus(patch.status);
+    const updated = (opts.now ?? new Date()).toISOString();
+    const scrubbedReason = scrubbedOrNull(marker.reason) ?? "";
+    return this.client.transaction(async (c) => {
+      const currentRow = await c.get<LoopRow>(
+        "SELECT * FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 FOR UPDATE",
+        [id],
+      );
+      const current = currentRow ? rowToLoop(currentRow) : undefined;
+      if (
+        !current ||
+        current.archivedAt ||
+        current.status !== expected.status ||
+        current.nextRunAt !== expected.nextRunAt ||
+        current.retryScheduledFor !== expected.retryScheduledFor
+      ) {
+        return undefined;
+      }
+      const merged: Loop = { ...current, ...patch, updatedAt: updated };
+      const res = await c.query(
+        `UPDATE loops SET status=$1, next_run_at=$2, retry_scheduled_for=$3, updated_at=$4
+         WHERE tenant_id = open_loops_current_tenant_id() AND id=$5
+           AND archived_at IS NULL
+           AND status=$6
+           AND next_run_at IS NOT DISTINCT FROM $7::timestamptz
+           AND retry_scheduled_for IS NOT DISTINCT FROM $8::timestamptz
+           AND ($9::text IS NULL OR EXISTS (
+             SELECT 1 FROM daemon_lease
+             WHERE tenant_id = open_loops_current_tenant_id() AND id=$9 AND expires_at > $10
+           ))`,
+        [
+          merged.status,
+          merged.nextRunAt ?? null,
+          merged.retryScheduledFor ?? null,
+          updated,
+          id,
+          expected.status,
+          expected.nextRunAt ?? null,
+          expected.retryScheduledFor ?? null,
+          opts.daemonLeaseId ?? null,
+          updated,
+        ],
+      );
+      if (res.rowCount !== 1) return undefined;
+
+      let markerAtMs = new Date(marker.scheduledFor).getTime();
+      let markerRun: LoopRun | undefined;
+      for (let probe = 0; probe < 1_000 && !markerRun; probe += 1) {
+        const scheduledFor = new Date(markerAtMs).toISOString();
+        const markerId = genId();
+        const inserted = await c.get<{ id: string }>(
+          `INSERT INTO loop_runs (id, loop_id, loop_name, scheduled_for, attempt, status, started_at, finished_at,
+            claimed_by, lease_expires_at, pid, exit_code, duration_ms, stdout, stderr, error, created_at, updated_at, tenant_id)
+           VALUES ($1,$2,$3,$4,1,'skipped',NULL,$5,NULL,NULL,NULL,NULL,NULL,NULL,NULL,$6,$5,$5,open_loops_current_tenant_id())
+           ON CONFLICT (tenant_id, loop_id, scheduled_for) DO NOTHING
+           RETURNING id`,
+          [markerId, current.id, current.name, scheduledFor, updated, scrubbedReason],
+        );
+        if (inserted) markerRun = await this.loadRun(c, inserted.id);
+        markerAtMs += 1;
+      }
+      if (!markerRun) throw new Error(`circuit breaker marker slot unavailable: ${id}`);
+      if (patch.status && patch.status !== "active") {
+        const status: WorkflowWorkItemStatus = patch.status === "paused" ? "deferred" : "cancelled";
+        await this.setWorkItemsForLoop(c, id, status, `loop ${patch.status}`, updated);
+      }
+      const loop = await this.loadLoop(c, id);
+      if (!loop) throw new Error(`circuit breaker loop missing after update: ${id}`);
+      return { loop, marker: markerRun };
+    });
+  }
+
   async renameLoop(...args: M<"renameLoop">["args"]): Promise<M<"renameLoop">["result"]> {
     const [id, name, opts = {}] = args;
     const current = await this.getLoop(id);
@@ -889,6 +1004,23 @@ export class PostgresLoopStorage implements LoopStorageContract {
     return this.loadRunBySlot(this.client, args[0], args[1]);
   }
 
+  async nextRetryableRun(...args: M<"nextRetryableRun">["args"]): Promise<M<"nextRetryableRun">["result"]> {
+    const [loopId, maxAttempts, afterScheduledFor] = args;
+    const params: unknown[] = [loopId, maxAttempts];
+    const afterClause = afterScheduledFor ? " AND scheduled_for > $3" : "";
+    if (afterScheduledFor) params.push(afterScheduledFor);
+    const row = await this.client.get<RunRow>(
+      `SELECT * FROM loop_runs
+       WHERE tenant_id = open_loops_current_tenant_id()
+         AND loop_id = $1
+         AND status IN ('failed', 'timed_out', 'abandoned')
+         AND attempt < $2${afterClause}
+       ORDER BY scheduled_for ASC, id ASC LIMIT 1`,
+      params,
+    );
+    return row ? rowToRun(row) : undefined;
+  }
+
   /**
    * Claim a specific loop slot for a runner.
    *
@@ -1098,7 +1230,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const limitParam = bind(limit);
     const offsetParam = bind(offset);
     const rows = await this.client.many<RunRow>(
-      `SELECT loop_runs.* FROM loop_runs${join} WHERE loop_runs.tenant_id = open_loops_current_tenant_id()${filters.length ? ` AND ${filters.join(" AND ")}` : ""} ORDER BY loop_runs.created_at DESC LIMIT ${limitParam} OFFSET ${offsetParam}`,
+      `SELECT loop_runs.* FROM loop_runs${join} WHERE loop_runs.tenant_id = open_loops_current_tenant_id()${filters.length ? ` AND ${filters.join(" AND ")}` : ""} ORDER BY loop_runs.created_at DESC, loop_runs.id DESC LIMIT ${limitParam} OFFSET ${offsetParam}`,
       params,
     );
     return rows.map(rowToRun);

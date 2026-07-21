@@ -25,6 +25,15 @@ export class LoopArchivedError extends CodedError {
   }
 }
 
+export class LoopAdvancementConflictError extends CodedError {
+  constructor(loopId: string, runId: string) {
+    super(
+      "LOOP_ADVANCEMENT_CONFLICT",
+      `loop advancement conflict after bounded retry: loop=${loopId} run=${runId}`,
+    );
+  }
+}
+
 export type RunFinalizationConflictReason = "stale_claim" | "run_not_running";
 
 export class RunFinalizationConflictError extends CodedError {

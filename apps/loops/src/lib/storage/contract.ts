@@ -11,6 +11,8 @@ export type LoopStorageMethodName =
   | "listLoops"
   | "dueLoops"
   | "updateLoop"
+  | "advanceLoopIfCurrent"
+  | "tripCircuitBreakerIfCurrent"
   | "renameLoop"
   | "archiveLoop"
   | "unarchiveLoop"
@@ -63,6 +65,7 @@ export type LoopStorageMethodName =
   | "createSkippedRun"
   | "getRun"
   | "getRunBySlot"
+  | "nextRetryableRun"
   | "claimRun"
   | "finalizeRun"
   | "heartbeatRunLease"
@@ -97,6 +100,8 @@ export interface LoopStorageContract extends Record<LoopStorageMethodName, (...a
   listLoops: AsyncStoreMethod<"listLoops">;
   dueLoops: AsyncStoreMethod<"dueLoops">;
   updateLoop: AsyncStoreMethod<"updateLoop">;
+  advanceLoopIfCurrent: AsyncStoreMethod<"advanceLoopIfCurrent">;
+  tripCircuitBreakerIfCurrent: AsyncStoreMethod<"tripCircuitBreakerIfCurrent">;
   renameLoop: AsyncStoreMethod<"renameLoop">;
   archiveLoop: AsyncStoreMethod<"archiveLoop">;
   unarchiveLoop: AsyncStoreMethod<"unarchiveLoop">;
@@ -149,6 +154,7 @@ export interface LoopStorageContract extends Record<LoopStorageMethodName, (...a
   createSkippedRun: AsyncStoreMethod<"createSkippedRun">;
   getRun: AsyncStoreMethod<"getRun">;
   getRunBySlot: AsyncStoreMethod<"getRunBySlot">;
+  nextRetryableRun: AsyncStoreMethod<"nextRetryableRun">;
   claimRun: AsyncStoreMethod<"claimRun">;
   finalizeRun: AsyncStoreMethod<"finalizeRun">;
   heartbeatRunLease: AsyncStoreMethod<"heartbeatRunLease">;

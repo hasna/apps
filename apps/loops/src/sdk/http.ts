@@ -19,6 +19,8 @@ export interface InvalidWorkflowRecoveryBodyResponse { "ok": boolean; "error": s
 
 export interface WorkflowRecoveryConflictResponse { "ok": boolean; "error": "workflow_run_has_live_steps" | "workflow_run_step_ownership_unverifiable" | "workflow_run_not_running" }
 
+export interface RunFinalizeConflictResponse { "ok": boolean; "error": "stale_claim" | "run_not_running" | "loop_advancement_conflict" }
+
 export interface Foundation { "status": string; "version": string; "mode": string; "service"?: string; "detail"?: string }
 
 export interface Loop { "id": string; "name": string; "description"?: string | null; "labels": Array<string>; "status": "active" | "paused" | "stopped" | "expired"; "schedule"?: Record<string, unknown>; "target"?: Record<string, unknown>; "nextRunAt"?: string | null; "createdAt"?: string; "updatedAt"?: string }

@@ -1151,6 +1151,135 @@ suite("PostgresLoopStorage (live)", () => {
     }
   });
 
+  test("two PostgreSQL connections trip one circuit breaker and create one marker", async () => {
+    const peerExecutor = PgPoolExecutor.fromConnectionString({
+      connectionString: isolatedUrl({ username: RUNTIME_LOGIN, password: RUNTIME_PASSWORD }),
+      applicationName: "loops-pgstore-breaker-race-peer",
+    });
+    const peerStorage = new PostgresLoopStorage(peerExecutor.queryClient, {
+      tenantId: "tenant-test",
+      principalId: "principal-test",
+      requestId: "breaker-race-peer",
+    });
+    try {
+      const now = new Date("2026-07-06T10:45:10.000Z");
+      const nextRunAt = "2026-07-06T10:45:00.000Z";
+      const loop = await storage.createLoop(loopInput("pg-breaker-race"));
+      const current = await storage.updateLoop(loop.id, { nextRunAt }, { now });
+      const expected = {
+        status: current.status,
+        nextRunAt: current.nextRunAt,
+        retryScheduledFor: current.retryScheduledFor,
+      };
+      const args = [
+        loop.id,
+        expected,
+        { status: "paused" as const, nextRunAt: undefined, retryScheduledFor: undefined },
+        { scheduledFor: nextRunAt, reason: "circuit breaker threshold reached" },
+        { now },
+      ] as const;
+      const results = await Promise.all([
+        storage.tripCircuitBreakerIfCurrent(...args),
+        peerStorage.tripCircuitBreakerIfCurrent(...args),
+      ]);
+      expect(results.filter(Boolean)).toHaveLength(1);
+      expect(await storage.getLoop(loop.id)).toMatchObject({
+        status: "paused",
+        nextRunAt: undefined,
+        retryScheduledFor: undefined,
+      });
+      const runs = await storage.listRuns({ loopId: loop.id });
+      expect(runs).toHaveLength(1);
+      expect(runs[0]).toMatchObject({
+        status: "skipped",
+        scheduledFor: nextRunAt,
+        error: "circuit breaker threshold reached",
+      });
+    } finally {
+      await peerExecutor.close();
+    }
+  });
+
+  test("PostgreSQL circuit breaker rolls back the loop update when no marker slot is available", async () => {
+    const now = new Date("2026-07-06T10:50:10.000Z");
+    const nextRunAt = "2026-07-06T10:50:00.000Z";
+    const loop = await storage.createLoop(loopInput("pg-breaker-rollback"));
+    const current = await storage.updateLoop(loop.id, { nextRunAt }, { now });
+    await executor.queryClient.execute(
+      `INSERT INTO loop_runs (
+         tenant_id, id, loop_id, loop_name, scheduled_for, attempt, status,
+         started_at, finished_at, claimed_by, lease_expires_at, pid, exit_code,
+         duration_ms, stdout, stderr, error, created_at, updated_at
+       )
+       SELECT 'tenant-test',
+              'breaker-occupied-' || slot::text,
+              $1,
+              $2,
+              $3::timestamptz + slot * interval '1 millisecond',
+              1,
+              'skipped',
+              NULL,
+              $4,
+              NULL,
+              NULL,
+              NULL,
+              NULL,
+              NULL,
+              NULL,
+              NULL,
+              'occupied',
+              $4,
+              $4
+         FROM generate_series(0, 999) AS slot`,
+      [loop.id, loop.name, nextRunAt, now.toISOString()],
+    );
+    await expect(storage.tripCircuitBreakerIfCurrent(
+      loop.id,
+      {
+        status: current.status,
+        nextRunAt: current.nextRunAt,
+        retryScheduledFor: current.retryScheduledFor,
+      },
+      { status: "paused", nextRunAt: undefined, retryScheduledFor: undefined },
+      { scheduledFor: nextRunAt, reason: "must roll back" },
+      { now },
+    )).rejects.toThrow("circuit breaker marker slot unavailable");
+    expect(await storage.getLoop(loop.id)).toMatchObject({
+      status: current.status,
+      nextRunAt,
+      retryScheduledFor: current.retryScheduledFor,
+    });
+    expect(await storage.countRuns()).toBe(1_000);
+  });
+
+  test("nextRetryableRun returns the globally earliest retryable slot deterministically", async () => {
+    const loop = await storage.createLoop(loopInput("pg-retry-order", { maxAttempts: 3 }));
+    const later = "2026-07-06T11:10:00.000Z";
+    const earlier = "2026-07-06T11:00:00.000Z";
+    for (const [slot, runner] of [[later, "runner-later"], [earlier, "runner-earlier"]] as const) {
+      const startedAt = new Date(new Date(slot).getTime() + 1_000);
+      const claim = await storage.claimRun(loop, slot, runner, startedAt);
+      expect(claim).toBeTruthy();
+      await storage.finalizeRun(
+        claim!.run.id,
+        {
+          status: "failed",
+          finishedAt: new Date(startedAt.getTime() + 1_000).toISOString(),
+          stdout: "",
+          stderr: "",
+          error: "retry me",
+        },
+        {
+          claimedBy: runner,
+          claimToken: claim!.claimToken,
+          now: new Date(startedAt.getTime() + 1_000),
+        },
+      );
+    }
+    expect((await storage.nextRetryableRun(loop.id, 3))?.scheduledFor).toBe(earlier);
+    expect((await storage.nextRetryableRun(loop.id, 3, earlier))?.scheduledFor).toBe(later);
+  });
+
   test("createSkippedRun is idempotent per slot", async () => {
     const loop = await storage.createLoop(loopInput("skip"));
     const slot = "2026-07-06T11:00:00.000Z";
@@ -2199,6 +2328,102 @@ suite("PostgresLoopStorage (live)", () => {
         "INSERT INTO audit_events(tenant_id,id,actor,action,subject_type,subject_id,metadata_json,created_at) VALUES ('tenant-test','forged','x','auth.allow','api_request','x','{}',now())",
       ),
     )).rejects.toMatchObject({ code: "42501" });
+  });
+
+  test("advancement CAS and circuit-breaker markers remain tenant-scoped for identical loop ids", async () => {
+    await executor.queryClient.execute(
+      `INSERT INTO tenants(id, slug, name, status)
+       VALUES ('tenant-advancement', 'tenant-advancement', 'Tenant Advancement', 'active')
+       ON CONFLICT DO NOTHING;
+       INSERT INTO tenant_memberships(tenant_id, principal_id, status)
+       VALUES ('tenant-advancement', 'principal-test', 'active')
+       ON CONFLICT DO NOTHING;
+       INSERT INTO tenant_membership_roles(tenant_id, principal_id, role)
+       VALUES ('tenant-advancement', 'principal-test', 'service')
+       ON CONFLICT DO NOTHING;`,
+    );
+    const other = new PostgresLoopStorage(runtimeExecutor.queryClient, {
+      tenantId: "tenant-advancement",
+      principalId: "principal-test",
+      requestId: "tenant-advancement-request",
+    });
+    const createdAt = "2026-07-06T12:30:00.000Z";
+    const loopId = "tenant-shared-advancement-loop";
+    await storage.upsertMigrationLoop({
+      id: loopId,
+      name: "tenant-a-advancement",
+      status: "active",
+      schedule: { type: "interval", everyMs: 60_000 },
+      target: { type: "command", command: "true" },
+      catchUp: "latest",
+      catchUpLimit: 50,
+      overlap: "skip",
+      maxAttempts: 3,
+      retryDelayMs: 1_000,
+      leaseMs: 60_000,
+      nextRunAt: "2030-01-01T00:00:00.000Z",
+      createdAt,
+      updatedAt: createdAt,
+    } as Loop);
+    await other.upsertMigrationLoop({
+      id: loopId,
+      name: "tenant-b-advancement",
+      status: "active",
+      schedule: { type: "interval", everyMs: 60_000 },
+      target: { type: "command", command: "true" },
+      catchUp: "latest",
+      catchUpLimit: 50,
+      overlap: "skip",
+      maxAttempts: 3,
+      retryDelayMs: 1_000,
+      leaseMs: 60_000,
+      nextRunAt: "2040-01-01T00:00:00.000Z",
+      createdAt,
+      updatedAt: createdAt,
+    } as Loop);
+
+    const tenantA = await storage.getLoop(loopId);
+    expect(tenantA).toBeTruthy();
+    expect(await storage.advanceLoopIfCurrent(
+      loopId,
+      {
+        status: tenantA!.status,
+        nextRunAt: tenantA!.nextRunAt,
+        retryScheduledFor: tenantA!.retryScheduledFor,
+      },
+      { nextRunAt: "2031-01-01T00:00:00.000Z" },
+      { now: new Date("2026-07-06T12:31:00.000Z") },
+    )).toMatchObject({ nextRunAt: "2031-01-01T00:00:00.000Z" });
+    expect(await other.getLoop(loopId)).toMatchObject({
+      status: "active",
+      nextRunAt: "2040-01-01T00:00:00.000Z",
+    });
+
+    const tenantB = await other.getLoop(loopId);
+    expect(tenantB).toBeTruthy();
+    expect(await other.tripCircuitBreakerIfCurrent(
+      loopId,
+      {
+        status: tenantB!.status,
+        nextRunAt: tenantB!.nextRunAt,
+        retryScheduledFor: tenantB!.retryScheduledFor,
+      },
+      { status: "paused", nextRunAt: undefined, retryScheduledFor: undefined },
+      {
+        scheduledFor: "2040-01-01T00:00:00.000Z",
+        reason: "tenant-b circuit breaker",
+      },
+      { now: new Date("2026-07-06T12:32:00.000Z") },
+    )).toMatchObject({
+      loop: { status: "paused" },
+      marker: { status: "skipped", error: "tenant-b circuit breaker" },
+    });
+    expect(await storage.getLoop(loopId)).toMatchObject({
+      status: "active",
+      nextRunAt: "2031-01-01T00:00:00.000Z",
+    });
+    expect(await storage.listRuns({ loopId })).toHaveLength(0);
+    expect(await other.listRuns({ loopId })).toHaveLength(1);
   });
 
   test("request transactions do not leak tenant context and roll back failures", async () => {
