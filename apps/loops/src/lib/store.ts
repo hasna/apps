@@ -44,6 +44,7 @@ import {
   ValidationError,
   WorkflowRunDefinitionConflictError,
   WorkflowRunHasLiveStepsError,
+  WorkflowRunNotRunningError,
 } from "./errors.js";
 import { genId, nowIso } from "./ids.js";
 import { dbPath } from "./paths.js";
@@ -72,6 +73,14 @@ import { runLocalCommand, todosMutationSummary } from "./route/todos-cli.js";
 interface DaemonLeaseFence {
   daemonLeaseId?: string;
   now?: Date;
+  claimToken?: string;
+}
+
+export interface WorkflowRecoveryContext {
+  mode?: "internal" | "operator" | "runner";
+  now?: Date;
+  loopRunId?: string;
+  claimedBy?: string;
   claimToken?: string;
 }
 
@@ -3614,13 +3623,19 @@ export class Store {
     return run;
   }
 
-  recoverWorkflowRun(workflowRunId: string, reason = "workflow run recovered for retry"): {
+  recoverWorkflowRun(
+    workflowRunId: string,
+    reason = "workflow run recovered for retry",
+    _context: WorkflowRecoveryContext = {},
+  ): {
     run: WorkflowRun;
     recoveredSteps: WorkflowStepRun[];
   } {
     const scrubbedReason = scrubbedOrNull(reason) ?? "";
     return this.transact(() => {
       const now = nowIso();
+      const run = this.requireWorkflowRun(workflowRunId);
+      if (run.status !== "running") throw new WorkflowRunNotRunningError();
       const before = this.listWorkflowStepRuns(workflowRunId).filter((step) => step.status === "running");
       const live = before.filter((step) => step.pid !== undefined && isLiveStepProcess(step.pid, step.startedAt));
       if (live.length > 0) {
@@ -3641,7 +3656,7 @@ export class Store {
         });
       }
       return {
-        run: this.requireWorkflowRun(workflowRunId),
+        run,
         recoveredSteps: before.map((step) => this.getWorkflowStepRun(workflowRunId, step.stepId)).filter(Boolean) as WorkflowStepRun[],
       };
     });

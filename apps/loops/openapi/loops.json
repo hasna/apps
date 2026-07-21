@@ -2447,7 +2447,7 @@
             }
           },
           "409": {
-            "description": "Workflow step process is live or its remote ownership cannot be verified",
+            "description": "Workflow run is not running, a step process is live, or remote ownership cannot be verified",
             "content": {
               "application/json": {
                 "schema": {
@@ -3624,7 +3624,8 @@
             "type": "string",
             "enum": [
               "workflow_run_has_live_steps",
-              "workflow_run_step_ownership_unverifiable"
+              "workflow_run_step_ownership_unverifiable",
+              "workflow_run_not_running"
             ]
           }
         },

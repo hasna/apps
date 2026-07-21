@@ -30,6 +30,7 @@ import {
   validationErrorPublicDetails,
   WorkflowRunDefinitionConflictError,
   WorkflowRunHasLiveStepsError,
+  WorkflowRunNotRunningError,
   WorkflowRunStepOwnershipUnverifiableError,
 } from "../lib/errors.js";
 import { validateAgentTarget, workflowStepAgentSessionContract } from "../lib/agent-adapter.js";
@@ -555,7 +556,10 @@ async function handleWorkflowRunsRequest(ctx: V1RequestContext, segments: string
     const run = await storage.getWorkflowRun(id);
     if (!run) return fail("workflow_run_not_found", 404);
     const body = await readWorkflowRecoveryBody(ctx.request, ctx.bodyLimitBytes);
-    const recovered = await storage.recoverWorkflowRun(id, body.reason);
+    const recovered = await storage.recoverWorkflowRun(id, body.reason, {
+      mode: "operator",
+      now: ctx.now(),
+    });
     return ok({
       workflowRun: publicWorkflowRun(recovered.run),
       recoveredSteps: recovered.recoveredSteps.map((step) => publicWorkflowStepRun(step)),
@@ -865,7 +869,13 @@ async function handleRunWorkflowExecutionRequest(ctx: V1RequestContext, runId: s
     return ok({ steps: await storage.listWorkflowStepRuns(workflowRunId) });
   }
   if (segments.length === 2 && segments[1] === "recover") {
-    const recovered = await storage.recoverWorkflowRun(workflowRunId, optionalText(body.reason));
+    const recovered = await storage.recoverWorkflowRun(workflowRunId, optionalText(body.reason), {
+      mode: "runner",
+      now: ctx.now(),
+      loopRunId: runId,
+      claimedBy: ctx.auth.principalId,
+      claimToken,
+    });
     return ok({ workflowRun: recovered.run, recoveredSteps: recovered.recoveredSteps });
   }
   if (segments.length === 2 && segments[1] === "events") {
@@ -1584,6 +1594,7 @@ function errorResponse(error: unknown): Response {
   if (error instanceof LegacyWorkflowRunProvenanceError) return fail("workflow_run_provenance_missing", 409);
   if (error instanceof WorkflowRunDefinitionConflictError) return fail("workflow_run_definition_conflict", 409);
   if (error instanceof WorkflowRunHasLiveStepsError) return fail("workflow_run_has_live_steps", 409);
+  if (error instanceof WorkflowRunNotRunningError) return fail("workflow_run_not_running", 409);
   if (error instanceof WorkflowRunStepOwnershipUnverifiableError) {
     return fail("workflow_run_step_ownership_unverifiable", 409);
   }

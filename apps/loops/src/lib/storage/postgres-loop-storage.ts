@@ -28,6 +28,7 @@ import type {
   PruneHistorySummary,
   RecordGoalEventInput,
   RecoverExpiredRunLeasesResult,
+  WorkflowRecoveryContext,
 } from "../store.js";
 import { Store } from "../store.js";
 import {
@@ -74,6 +75,7 @@ import {
   RunFinalizationConflictError,
   ValidationError,
   WorkflowRunDefinitionConflictError,
+  WorkflowRunNotRunningError,
   WorkflowRunStepOwnershipUnverifiableError,
 } from "../errors.js";
 import { genId, nowIso } from "../ids.js";
@@ -229,6 +231,15 @@ export class PostgresLoopStorage implements LoopStorageContract {
       [opts.daemonLeaseId, now],
     );
     if (!row) throw new Error("daemon lease lost");
+  }
+
+  private async lockWorkflowRun(c: TypedQueryClient, workflowRunId: string): Promise<WorkflowRunRow> {
+    const row = await c.get<WorkflowRunRow>(
+      "SELECT * FROM workflow_runs WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 FOR UPDATE",
+      [workflowRunId],
+    );
+    if (!row) throw new Error(`workflow run not found: ${workflowRunId}`);
+    return row;
   }
 
   private async loadLoop(c: TypedQueryClient, id: string): Promise<Loop | undefined> {
@@ -2242,6 +2253,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const [workflowRunId, stepId, opts = {}] = args;
     const now = (opts.now ?? new Date()).toISOString();
     return this.client.transaction(async (c) => {
+      await this.lockWorkflowRun(c, workflowRunId);
       const res = await c.query(
         `UPDATE workflow_step_runs
          SET status='running', started_at=$3, finished_at=NULL, exit_code=NULL, duration_ms=NULL,
@@ -2274,23 +2286,31 @@ export class PostgresLoopStorage implements LoopStorageContract {
   async markWorkflowStepPid(...args: M<"markWorkflowStepPid">["args"]): Promise<M<"markWorkflowStepPid">["result"]> {
     const [workflowRunId, stepId, pid, opts = {}] = args;
     const now = (opts.now ?? new Date()).toISOString();
-    await this.client.execute(
-      `UPDATE workflow_step_runs SET pid=$3, updated_at=$4
-       WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id=$1 AND step_id=$2 AND status='running'
-         AND ($5::text IS NULL OR EXISTS (
-           SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$5 AND expires_at > $6
-         ))`,
-      [workflowRunId, stepId, pid, now, opts.daemonLeaseId ?? null, now],
-    );
-    const run = await this.getWorkflowStepRun(workflowRunId, stepId);
-    if (!run) throw new Error(`workflow step run not found after pid update: ${workflowRunId}/${stepId}`);
-    return run;
+    return this.client.transaction(async (c) => {
+      await this.lockWorkflowRun(c, workflowRunId);
+      await c.execute(
+        `UPDATE workflow_step_runs SET pid=$3, updated_at=$4
+         WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id=$1 AND step_id=$2 AND status='running'
+           AND ($5::text IS NULL OR EXISTS (
+             SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$5 AND expires_at > $6
+           ))`,
+        [workflowRunId, stepId, pid, now, opts.daemonLeaseId ?? null, now],
+      );
+      const row = await c.get<WorkflowStepRunRow>(
+        "SELECT * FROM workflow_step_runs WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id=$1 AND step_id=$2",
+        [workflowRunId, stepId],
+      );
+      const run = row ? rowToWorkflowStepRun(row) : undefined;
+      if (!run) throw new Error(`workflow step run not found after pid update: ${workflowRunId}/${stepId}`);
+      return run;
+    });
   }
 
   async recordWorkflowStepProgress(...args: M<"recordWorkflowStepProgress">["args"]): Promise<M<"recordWorkflowStepProgress">["result"]> {
     const [workflowRunId, stepId, progress, opts = {}] = args;
     const now = (opts.now ?? new Date()).toISOString();
     return this.client.transaction(async (c) => {
+      await this.lockWorkflowRun(c, workflowRunId);
       const res = await c.query(
         `UPDATE workflow_step_runs
          SET stdout=COALESCE($3, stdout),
@@ -2322,19 +2342,46 @@ export class PostgresLoopStorage implements LoopStorageContract {
   }
 
   async recoverWorkflowRun(...args: M<"recoverWorkflowRun">["args"]): Promise<M<"recoverWorkflowRun">["result"]> {
-    const [workflowRunId, reason = "workflow run recovered for retry"] = args;
+    const [
+      workflowRunId,
+      reason = "workflow run recovered for retry",
+      context = {},
+    ] = args as [string, string?, WorkflowRecoveryContext?];
     const scrubbedReason = scrubbedOrNull(reason) ?? "";
     return this.client.transaction(async (c) => {
-      const now = nowIso();
-      const runRow = await c.get<WorkflowRunRow>(
-        "SELECT * FROM workflow_runs WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 FOR UPDATE",
+      const now = (context.now ?? new Date()).toISOString();
+      const visibleRun = await c.get<WorkflowRunRow>(
+        "SELECT * FROM workflow_runs WHERE tenant_id = open_loops_current_tenant_id() AND id=$1",
         [workflowRunId],
       );
-      if (!runRow) throw new Error(`workflow run not found: ${workflowRunId}`);
+      if (!visibleRun) throw new Error(`workflow run not found: ${workflowRunId}`);
+      const parentLoopRun = visibleRun.loop_run_id
+        ? await c.get<RunRow>(
+            "SELECT * FROM loop_runs WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 FOR UPDATE",
+            [visibleRun.loop_run_id],
+          )
+        : undefined;
+      const runRow = await this.lockWorkflowRun(c, workflowRunId);
+      if (runRow.status !== "running") throw new WorkflowRunNotRunningError();
+      if (context.mode === "operator" && parentLoopRun?.status === "running") {
+        throw new WorkflowRunStepOwnershipUnverifiableError();
+      }
+      if (context.mode === "runner") {
+        const claimIsCurrent =
+          parentLoopRun != null &&
+          runRow.loop_run_id === context.loopRunId &&
+          parentLoopRun.id === context.loopRunId &&
+          parentLoopRun.status === "running" &&
+          parentLoopRun.claimed_by === context.claimedBy &&
+          parentLoopRun.claim_token === context.claimToken &&
+          typeof parentLoopRun.lease_expires_at === "string" &&
+          parentLoopRun.lease_expires_at > now;
+        if (!claimIsCurrent) throw new WorkflowRunStepOwnershipUnverifiableError();
+      }
       const rows = await c.many<WorkflowStepRunRow>(
         `SELECT * FROM workflow_step_runs
          WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id=$1 AND status='running'
-         ORDER BY sequence ASC
+         ORDER BY sequence ASC, id ASC
          FOR UPDATE`,
         [workflowRunId],
       );
@@ -2371,6 +2418,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
     return this.client.transaction(async (c) => {
       const now = (opts.now ?? new Date(finishedAt)).toISOString();
       const error = patch.error === undefined ? undefined : scrubbedOrNull(patch.error) ?? undefined;
+      await this.lockWorkflowRun(c, workflowRunId);
       const res = await c.query(
         `UPDATE workflow_step_runs SET status=$3, finished_at=$4, exit_code=$5, duration_ms=$6,
           pid=NULL, stdout=$7, stderr=$8, error=$9, updated_at=$10
@@ -2414,6 +2462,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const now = (opts.now ?? new Date()).toISOString();
     const scrubbedReason = scrubbedOrNull(reason) ?? "";
     return this.client.transaction(async (c) => {
+      await this.lockWorkflowRun(c, workflowRunId);
       const res = await c.query(
         `UPDATE workflow_step_runs SET status='skipped', finished_at=$3, pid=NULL, error=$4, updated_at=$5
          WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id=$1 AND step_id=$2 AND status IN ('pending', 'running')

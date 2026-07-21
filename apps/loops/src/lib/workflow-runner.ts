@@ -5,7 +5,7 @@ import { iterationPrompt } from "./goal/prompts.js";
 import { runGoal } from "./goal/runner.js";
 import { nowIso } from "./ids.js";
 import { BLOCKED_STEP_ERROR_PREFIX, isBlockedStepRun, workflowRunEnvelope } from "./run-envelope.js";
-import type { CreateWorkflowRunInput } from "./store.js";
+import type { CreateWorkflowRunInput, WorkflowRecoveryContext } from "./store.js";
 import { workflowExecutionOrder } from "./workflow-spec.js";
 import type { GoalRunnerStore } from "./goal/runner.js";
 
@@ -36,6 +36,7 @@ export interface WorkflowExecutionStore extends GoalRunnerStore {
   recoverWorkflowRun(
     workflowRunId: string,
     reason?: string,
+    context?: WorkflowRecoveryContext,
   ): MaybePromise<{ run: WorkflowRun; recoveredSteps: WorkflowStepRun[] }>;
   finalizeWorkflowStepRun(
     workflowRunId: string,

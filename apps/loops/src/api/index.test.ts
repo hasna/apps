@@ -186,6 +186,17 @@ describe("loops-api foundation", () => {
         error: { type: "string", const: "ambiguous_name" },
       },
     });
+    expect(document.components.schemas.WorkflowRecoveryConflictResponse).toMatchObject({
+      properties: {
+        error: {
+          enum: [
+            "workflow_run_has_live_steps",
+            "workflow_run_step_ownership_unverifiable",
+            "workflow_run_not_running",
+          ],
+        },
+      },
+    });
     expect(document.components.schemas.CustomWorkflowEvent).toMatchObject({
       type: "object",
       additionalProperties: false,
@@ -284,6 +295,43 @@ describe("loops-api foundation", () => {
       });
       expect(missing.status).toBe(404);
       expect(await missing.json()).toEqual({ ok: false, error: "workflow_run_not_found" });
+
+      const terminalRun = await storage.createWorkflowRun({ workflow });
+      await storage.startWorkflowStepRun(terminalRun.id, "worker");
+      const racingStorage = new Proxy(storage, {
+        get(target, property) {
+          if (property === "recoverWorkflowRun") {
+            return async (...args: Parameters<typeof target.recoverWorkflowRun>) => {
+              await target.finalizeWorkflowRun(terminalRun.id, "failed", {
+                error: "finalized immediately before recovery",
+              });
+              return target.recoverWorkflowRun(...args);
+            };
+          }
+          const value = Reflect.get(target, property, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      }) as LoopStorageContract;
+      const racingServer = createTestServer(mod, {
+        host: "127.0.0.1",
+        port: 0,
+        storage: racingStorage,
+      });
+      try {
+        const terminal = await fetch(apiUrl(racingServer, `/v1/workflow-runs/${terminalRun.id}/recover`), {
+          method: "POST",
+        });
+        expect(terminal.status).toBe(409);
+        expect(await terminal.json()).toEqual({
+          ok: false,
+          error: "workflow_run_not_running",
+        });
+        expect(await storage.getWorkflowStepRun(terminalRun.id, "worker")).toMatchObject({
+          status: "running",
+        });
+      } finally {
+        racingServer.stop(true);
+      }
 
       const liveProcess = Bun.spawn(["sleep", "10"], {
         stdout: "ignore",

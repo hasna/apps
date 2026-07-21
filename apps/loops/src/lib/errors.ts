@@ -184,7 +184,16 @@ export class WorkflowRunStepOwnershipUnverifiableError extends CodedError {
   constructor() {
     super(
       "WORKFLOW_RUN_STEP_OWNERSHIP_UNVERIFIABLE",
-      "workflow run cannot be recovered while a remotely owned step still carries process identity",
+      "workflow run recovery ownership could not be verified",
+    );
+  }
+}
+
+export class WorkflowRunNotRunningError extends CodedError {
+  constructor() {
+    super(
+      "WORKFLOW_RUN_NOT_RUNNING",
+      "workflow run can only be recovered while it is running",
     );
   }
 }

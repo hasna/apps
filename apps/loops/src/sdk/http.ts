@@ -17,7 +17,7 @@ export interface UnsupportedMediaTypeResponse { "ok": boolean; "error": string }
 
 export interface InvalidWorkflowRecoveryBodyResponse { "ok": boolean; "error": string }
 
-export interface WorkflowRecoveryConflictResponse { "ok": boolean; "error": "workflow_run_has_live_steps" | "workflow_run_step_ownership_unverifiable" }
+export interface WorkflowRecoveryConflictResponse { "ok": boolean; "error": "workflow_run_has_live_steps" | "workflow_run_step_ownership_unverifiable" | "workflow_run_not_running" }
 
 export interface Foundation { "status": string; "version": string; "mode": string; "service"?: string; "detail"?: string }
 
