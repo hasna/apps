@@ -513,7 +513,13 @@ describe("Loops MCP server", () => {
       expect(
         (textPayload(await client.callTool({
           name: "loops_unarchive",
-          arguments: { idOrName: seeded.secondId },
+          arguments: { idOrName: seeded.firstId },
+        })) as { loop: { id: string } }).loop.id,
+      ).toBe(seeded.firstId);
+      expect(
+        (textPayload(await client.callTool({
+          name: "loops_unarchive",
+          arguments: { idOrName: seeded.name },
         })) as { loop: { id: string } }).loop.id,
       ).toBe(seeded.secondId);
     } finally {

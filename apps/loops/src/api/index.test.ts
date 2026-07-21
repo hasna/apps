@@ -712,6 +712,11 @@ describe("loops-api foundation", () => {
       expect(((await unarchiveFirst.json()) as { loop: { id: string } }).loop.id).toBe(first.id);
       expect((await storage.getLoop(first.id))?.archivedAt).toBeUndefined();
       expect((await storage.getLoop(second.id))?.archivedAt).toBeString();
+
+      const unarchiveSoleArchived = await fetch(apiUrl(server, `/v1/loops/${input.name}/unarchive`), { method: "POST" });
+      expect(unarchiveSoleArchived.status).toBe(200);
+      expect(((await unarchiveSoleArchived.json()) as { loop: { id: string } }).loop.id).toBe(second.id);
+      expect((await storage.getLoop(second.id))?.archivedAt).toBeUndefined();
     } finally {
       server.stop(true);
       await storage.close();

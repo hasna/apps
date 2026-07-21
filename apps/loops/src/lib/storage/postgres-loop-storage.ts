@@ -503,7 +503,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
   async archiveLoop(...args: M<"archiveLoop">["args"]): Promise<M<"archiveLoop">["result"]> {
     const idOrName = args[0];
     return this.client.transaction(async (c) => {
-      const loop = await this.requireUniqueLoopIn(c, idOrName);
+      const loop = await this.requireArchiveMutationLoopIn(c, idOrName, "archive");
       if (loop.archivedAt) return loop;
       const updated = nowIso();
       const archivedStatus: LoopStatus = loop.status === "active" ? "paused" : loop.status;
@@ -521,7 +521,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
   async unarchiveLoop(...args: M<"unarchiveLoop">["args"]): Promise<M<"unarchiveLoop">["result"]> {
     const idOrName = args[0];
     return this.client.transaction(async (c) => {
-      const loop = await this.requireUniqueLoopIn(c, idOrName);
+      const loop = await this.requireArchiveMutationLoopIn(c, idOrName, "unarchive");
       if (!loop.archivedAt) return loop;
       const updated = nowIso();
       const restoredStatus = loop.archivedFromStatus ?? loop.status;
@@ -572,6 +572,45 @@ export class PostgresLoopStorage implements LoopStorageContract {
     );
     if (active.length !== 1) throw new AmbiguousNameError(idOrName);
     return rowToLoop(active[0]!);
+  }
+
+  private async requireArchiveMutationLoopIn(
+    c: TypedQueryClient,
+    idOrName: string,
+    operation: "archive" | "unarchive",
+  ): Promise<Loop> {
+    const byId = await this.loadLoop(c, idOrName);
+    if (byId) return byId;
+
+    // Name resolution and mutation must form one serializable critical section.
+    // SHARE ROW EXCLUSIVE conflicts with the ROW EXCLUSIVE lock taken by
+    // concurrent INSERT/UPDATE writers, so create/rename cannot commit a new
+    // namesake between this lookup and the archive-state update. Exact-id paths
+    // intentionally avoid this rare-operation table lock.
+    await c.execute("LOCK TABLE loops IN SHARE ROW EXCLUSIVE MODE");
+    const exactAfterLock = await this.loadLoop(c, idOrName);
+    if (exactAfterLock) return exactAfterLock;
+
+    const eligibleWhere = operation === "archive" ? "archived_at IS NULL" : "archived_at IS NOT NULL";
+    const eligible = await c.many<LoopRow>(
+      `SELECT * FROM loops
+       WHERE tenant_id = open_loops_current_tenant_id() AND name = $1 AND ${eligibleWhere}
+       ORDER BY created_at DESC LIMIT 2`,
+      [idOrName],
+    );
+    if (eligible.length > 1) throw new AmbiguousNameError(idOrName);
+    if (eligible.length === 1) return rowToLoop(eligible[0]!);
+
+    const alreadyWhere = operation === "archive" ? "archived_at IS NOT NULL" : "archived_at IS NULL";
+    const already = await c.many<LoopRow>(
+      `SELECT * FROM loops
+       WHERE tenant_id = open_loops_current_tenant_id() AND name = $1 AND ${alreadyWhere}
+       ORDER BY created_at DESC LIMIT 2`,
+      [idOrName],
+    );
+    if (already.length === 0) throw new LoopNotFoundError(idOrName);
+    if (already.length > 1) throw new AmbiguousNameError(idOrName);
+    return rowToLoop(already[0]!);
   }
 
   async countLoops(...args: M<"countLoops">["args"]): Promise<M<"countLoops">["result"]> {

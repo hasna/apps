@@ -227,11 +227,34 @@ describe("ApiStore end-to-end against the real /v1 server", () => {
       expect((await store.unarchiveLoop(first.id)).id).toBe(first.id);
       expect((await storage.getLoop(first.id))?.archivedAt).toBeUndefined();
       expect((await storage.getLoop(second.id))?.archivedAt).toBeString();
+      expect((await store.unarchiveLoop("api-store-archive-dupe")).id).toBe(second.id);
+      expect((await storage.getLoop(second.id))?.archivedAt).toBeUndefined();
       await store.close();
     } finally {
       server.stop?.(true);
       await storage.close();
     }
+  });
+
+  test("ApiStore sends the original id-or-name directly to archive mutations", async () => {
+    const posts: string[] = [];
+    const transport = {
+      get: async () => {
+        throw new Error("archive mutations must not pre-resolve with GET");
+      },
+      post: async (path: string) => {
+        posts.push(path);
+        return { loop: { id: "server-selected", name: "mixed/name" } };
+      },
+    } as unknown as HasnaStorageClient["transport"];
+    const store = new ApiStore({ transport } as HasnaStorageClient, "https://loops.example.test/v1");
+
+    expect((await store.archiveLoop("mixed/name")).id).toBe("server-selected");
+    expect((await store.unarchiveLoop("mixed/name")).id).toBe("server-selected");
+    expect(posts).toEqual([
+      "/loops/mixed%2Fname/archive",
+      "/loops/mixed%2Fname/unarchive",
+    ]);
   });
 
   test("unsupported mutations fail loudly instead of silently hitting local sqlite", async () => {

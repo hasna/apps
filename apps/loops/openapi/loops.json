@@ -422,12 +422,13 @@
     "/v1/loops/{id}/archive": {
       "post": {
         "operationId": "archiveLoop",
-        "summary": "Archive a loop",
+        "summary": "Archive a loop by id or name",
         "parameters": [
           {
             "name": "id",
             "in": "path",
             "required": true,
+            "description": "Exact loop id, or a name that uniquely selects an active unarchived loop. Exact ids are idempotent when already archived.",
             "schema": {
               "type": "string"
             }
@@ -475,12 +476,13 @@
     "/v1/loops/{id}/unarchive": {
       "post": {
         "operationId": "unarchiveLoop",
-        "summary": "Unarchive a loop",
+        "summary": "Unarchive a loop by id or name",
         "parameters": [
           {
             "name": "id",
             "in": "path",
             "required": true,
+            "description": "Exact loop id, or a name that uniquely selects an archived loop. Exact ids are idempotent when already active.",
             "schema": {
               "type": "string"
             }

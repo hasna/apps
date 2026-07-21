@@ -1630,6 +1630,32 @@ export class Store {
     return rowToLoop(active[0]!);
   }
 
+  private requireArchiveMutationLoop(idOrName: string, operation: "archive" | "unarchive"): Loop {
+    const byId = this.getLoop(idOrName);
+    if (byId) return byId;
+    const eligibleWhere = operation === "archive" ? "archived_at IS NULL" : "archived_at IS NOT NULL";
+    const eligible = this.db
+      .query<LoopRow, [string]>(
+        `SELECT * FROM loops WHERE name = ? AND ${eligibleWhere} ORDER BY created_at DESC LIMIT 2`,
+      )
+      .all(idOrName);
+    if (eligible.length > 1) throw new AmbiguousNameError(idOrName);
+    if (eligible.length === 1) return rowToLoop(eligible[0]!);
+
+    // Preserve idempotence for a uniquely named loop already in the requested
+    // state. Multiple same-state rows still fail closed because a name cannot
+    // identify which exact row the caller previously targeted.
+    const alreadyWhere = operation === "archive" ? "archived_at IS NOT NULL" : "archived_at IS NULL";
+    const already = this.db
+      .query<LoopRow, [string]>(
+        `SELECT * FROM loops WHERE name = ? AND ${alreadyWhere} ORDER BY created_at DESC LIMIT 2`,
+      )
+      .all(idOrName);
+    if (already.length === 0) throw new LoopNotFoundError(idOrName);
+    if (already.length > 1) throw new AmbiguousNameError(idOrName);
+    return rowToLoop(already[0]!);
+  }
+
   requireLoop(idOrName: string): Loop {
     return this.getLoop(idOrName) ?? this.findLoopByName(idOrName) ?? (() => {
       throw new LoopNotFoundError(idOrName);
@@ -2058,7 +2084,7 @@ export class Store {
 
   archiveLoop(idOrName: string): Loop {
     return this.transact(() => {
-      const loop = this.requireUniqueLoop(idOrName);
+      const loop = this.requireArchiveMutationLoop(idOrName, "archive");
       if (loop.archivedAt) return loop;
       const updated = nowIso();
       const archivedStatus: LoopStatus = loop.status === "active" ? "paused" : loop.status;
@@ -2084,7 +2110,7 @@ export class Store {
 
   unarchiveLoop(idOrName: string): Loop {
     return this.transact(() => {
-      const loop = this.requireUniqueLoop(idOrName);
+      const loop = this.requireArchiveMutationLoop(idOrName, "unarchive");
       if (!loop.archivedAt) return loop;
       const updated = nowIso();
       const restoredStatus = loop.archivedFromStatus ?? loop.status;

@@ -1822,6 +1822,17 @@ exit 0
       expect(store.unarchiveLoop(first.id).id).toBe(first.id);
       expect(store.getLoop(first.id)?.archivedAt).toBeUndefined();
       expect(store.getLoop(second.id)?.archivedAt).toBeString();
+      // Reviewer reproduction: the active namesake must not mask the sole
+      // archived candidate during operation-specific unarchive resolution.
+      expect(store.unarchiveLoop(input.name).id).toBe(second.id);
+      expect(store.getLoop(first.id)?.archivedAt).toBeUndefined();
+      expect(store.getLoop(second.id)?.archivedAt).toBeUndefined();
+
+      // Exact ids remain idempotent even when same-named rows exist.
+      expect(store.unarchiveLoop(first.id).id).toBe(first.id);
+      expect(store.archiveLoop(second.id).id).toBe(second.id);
+      const archivedAt = store.getLoop(second.id)?.archivedAt;
+      expect(store.archiveLoop(second.id).archivedAt).toBe(archivedAt);
     } finally {
       store.close();
     }

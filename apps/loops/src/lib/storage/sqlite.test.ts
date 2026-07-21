@@ -82,8 +82,10 @@ describe("SqliteLoopStorage", () => {
       expect((await storage.getLoop(first.id))?.archivedAt).toBeString();
       expect((await storage.getLoop(second.id))?.archivedAt).toBeString();
 
-      expect((await storage.unarchiveLoop(second.id)).id).toBe(second.id);
-      expect((await storage.getLoop(first.id))?.archivedAt).toBeString();
+      expect((await storage.unarchiveLoop(first.id)).id).toBe(first.id);
+      expect((await storage.getLoop(first.id))?.archivedAt).toBeUndefined();
+      expect((await storage.getLoop(second.id))?.archivedAt).toBeString();
+      expect((await storage.unarchiveLoop(input.name)).id).toBe(second.id);
       expect((await storage.getLoop(second.id))?.archivedAt).toBeUndefined();
     } finally {
       await storage.close();

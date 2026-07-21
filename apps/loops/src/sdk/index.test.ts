@@ -221,8 +221,10 @@ describe("loops sdk", () => {
       expect(store.getLoop(first.id)?.archivedAt).toBeString();
       expect(store.getLoop(second.id)?.archivedAt).toBeString();
 
-      expect((await client.unarchive(second.id)).id).toBe(second.id);
-      expect(store.getLoop(first.id)?.archivedAt).toBeString();
+      expect((await client.unarchive(first.id)).id).toBe(first.id);
+      expect(store.getLoop(first.id)?.archivedAt).toBeUndefined();
+      expect(store.getLoop(second.id)?.archivedAt).toBeString();
+      expect((await client.unarchive("sdk-archive-dupe")).id).toBe(second.id);
       expect(store.getLoop(second.id)?.archivedAt).toBeUndefined();
     } finally {
       await client.close();

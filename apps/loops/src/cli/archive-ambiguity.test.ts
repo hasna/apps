@@ -54,11 +54,17 @@ describe("loops CLI archive ambiguity", () => {
       expect(afterAmbiguousUnarchive.getLoop(second.id)?.archivedAt).toBeString();
       afterAmbiguousUnarchive.close();
 
-      expect(runCli(dataDir, ["unarchive", second.id]).status).toBe(0);
+      expect(runCli(dataDir, ["unarchive", first.id]).status).toBe(0);
       const afterExactUnarchive = new Store(join(dataDir, "loops.db"));
-      expect(afterExactUnarchive.getLoop(first.id)?.archivedAt).toBeString();
-      expect(afterExactUnarchive.getLoop(second.id)?.archivedAt).toBeUndefined();
+      expect(afterExactUnarchive.getLoop(first.id)?.archivedAt).toBeUndefined();
+      expect(afterExactUnarchive.getLoop(second.id)?.archivedAt).toBeString();
       afterExactUnarchive.close();
+
+      expect(runCli(dataDir, ["unarchive", input.name]).status).toBe(0);
+      const afterMixedStateUnarchive = new Store(join(dataDir, "loops.db"));
+      expect(afterMixedStateUnarchive.getLoop(first.id)?.archivedAt).toBeUndefined();
+      expect(afterMixedStateUnarchive.getLoop(second.id)?.archivedAt).toBeUndefined();
+      afterMixedStateUnarchive.close();
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }
