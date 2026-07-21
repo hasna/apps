@@ -67,6 +67,7 @@ import {
   type WorkflowWorkItemRow,
 } from "../store.js";
 import {
+  AmbiguousNameError,
   DuplicateWorkflowEventError,
   LegacyWorkflowRunProvenanceError,
   LoopArchivedError,
@@ -393,6 +394,10 @@ export class PostgresLoopStorage implements LoopStorageContract {
     return found;
   }
 
+  async requireUniqueLoop(...args: M<"requireUniqueLoop">["args"]): Promise<M<"requireUniqueLoop">["result"]> {
+    return this.requireUniqueLoopIn(this.client, args[0]);
+  }
+
   async listLoops(...args: M<"listLoops">["args"]): Promise<M<"listLoops">["result"]> {
     const opts = args[0] ?? {};
     const limit = opts.limit ?? 200;
@@ -498,7 +503,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
   async archiveLoop(...args: M<"archiveLoop">["args"]): Promise<M<"archiveLoop">["result"]> {
     const idOrName = args[0];
     return this.client.transaction(async (c) => {
-      const loop = await this.requireLoopIn(c, idOrName);
+      const loop = await this.requireUniqueLoopIn(c, idOrName);
       if (loop.archivedAt) return loop;
       const updated = nowIso();
       const archivedStatus: LoopStatus = loop.status === "active" ? "paused" : loop.status;
@@ -515,17 +520,19 @@ export class PostgresLoopStorage implements LoopStorageContract {
 
   async unarchiveLoop(...args: M<"unarchiveLoop">["args"]): Promise<M<"unarchiveLoop">["result"]> {
     const idOrName = args[0];
-    const loop = await this.requireLoop(idOrName);
-    if (!loop.archivedAt) return loop;
-    const updated = nowIso();
-    const restoredStatus = loop.archivedFromStatus ?? loop.status;
-    await this.client.execute(
-      `UPDATE loops SET status=$1, archived_at=NULL, archived_from_status=NULL, updated_at=$2 WHERE tenant_id = open_loops_current_tenant_id() AND id=$3`,
-      [restoredStatus, updated, loop.id],
-    );
-    const unarchived = await this.getLoop(loop.id);
-    if (!unarchived) throw new Error(`loop not found after unarchive: ${loop.id}`);
-    return unarchived;
+    return this.client.transaction(async (c) => {
+      const loop = await this.requireUniqueLoopIn(c, idOrName);
+      if (!loop.archivedAt) return loop;
+      const updated = nowIso();
+      const restoredStatus = loop.archivedFromStatus ?? loop.status;
+      await c.execute(
+        `UPDATE loops SET status=$1, archived_at=NULL, archived_from_status=NULL, updated_at=$2 WHERE tenant_id = open_loops_current_tenant_id() AND id=$3`,
+        [restoredStatus, updated, loop.id],
+      );
+      const unarchived = await this.loadLoop(c, loop.id);
+      if (!unarchived) throw new Error(`loop not found after unarchive: ${loop.id}`);
+      return unarchived;
+    });
   }
 
   async deleteLoop(...args: M<"deleteLoop">["args"]): Promise<M<"deleteLoop">["result"]> {
@@ -548,6 +555,23 @@ export class PostgresLoopStorage implements LoopStorageContract {
     );
     if (!row) throw new LoopNotFoundError(idOrName);
     return rowToLoop(row);
+  }
+
+  private async requireUniqueLoopIn(c: TypedQueryClient, idOrName: string): Promise<Loop> {
+    const byId = await this.loadLoop(c, idOrName);
+    if (byId) return byId;
+    const rows = await c.many<LoopRow>(
+      "SELECT * FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND name = $1 ORDER BY created_at DESC LIMIT 2",
+      [idOrName],
+    );
+    if (rows.length === 0) throw new LoopNotFoundError(idOrName);
+    if (rows.length === 1) return rowToLoop(rows[0]!);
+    const active = await c.many<LoopRow>(
+      "SELECT * FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND name = $1 AND archived_at IS NULL ORDER BY created_at DESC LIMIT 2",
+      [idOrName],
+    );
+    if (active.length !== 1) throw new AmbiguousNameError(idOrName);
+    return rowToLoop(active[0]!);
   }
 
   async countLoops(...args: M<"countLoops">["args"]): Promise<M<"countLoops">["result"]> {

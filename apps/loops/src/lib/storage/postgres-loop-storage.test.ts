@@ -15,6 +15,7 @@ import { PgPoolExecutor } from "./pg-executor.js";
 import { PostgresStorage } from "./postgres.js";
 import { PostgresLoopStorage } from "./postgres-loop-storage.js";
 import {
+  AmbiguousNameError,
   DuplicateWorkflowEventError,
   LegacyWorkflowRunProvenanceError,
   WorkflowRunDefinitionConflictError,
@@ -894,6 +895,26 @@ suite("PostgresLoopStorage (live)", () => {
 
     expect(await storage.deleteLoop(loop.id)).toBe(true);
     expect(await storage.getLoop(loop.id)).toBeUndefined();
+  });
+
+  test("archive and unarchive fail closed on ambiguous names while ids stay exact", async () => {
+    const first = await storage.createLoop(loopInput("pg-archive-ambiguous"));
+    const second = await storage.createLoop(loopInput("pg-archive-ambiguous"));
+
+    await expect(storage.requireUniqueLoop("pg-archive-ambiguous")).rejects.toBeInstanceOf(AmbiguousNameError);
+    await expect(storage.archiveLoop("pg-archive-ambiguous")).rejects.toBeInstanceOf(AmbiguousNameError);
+    expect((await storage.getLoop(first.id))?.archivedAt).toBeUndefined();
+    expect((await storage.getLoop(second.id))?.archivedAt).toBeUndefined();
+
+    expect((await storage.archiveLoop(first.id)).id).toBe(first.id);
+    expect((await storage.archiveLoop("pg-archive-ambiguous")).id).toBe(second.id);
+    await expect(storage.unarchiveLoop("pg-archive-ambiguous")).rejects.toBeInstanceOf(AmbiguousNameError);
+    expect((await storage.getLoop(first.id))?.archivedAt).toBeString();
+    expect((await storage.getLoop(second.id))?.archivedAt).toBeString();
+
+    expect((await storage.unarchiveLoop(first.id)).id).toBe(first.id);
+    expect((await storage.getLoop(first.id))?.archivedAt).toBeUndefined();
+    expect((await storage.getLoop(second.id))?.archivedAt).toBeString();
   });
 
   test("run lifecycle: claim -> record -> heartbeat -> finalize", async () => {

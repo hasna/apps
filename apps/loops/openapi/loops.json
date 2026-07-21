@@ -443,6 +443,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "ambiguous loop name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AmbiguousNameResponse"
+                }
+              }
+            }
           }
         },
         "x-authorization-operation": "loops.archive",
@@ -483,6 +493,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/LoopResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ambiguous loop name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AmbiguousNameResponse"
                 }
               }
             }
@@ -3330,6 +3350,24 @@
           },
           "details": {
             "$ref": "#/components/schemas/PublicValidationDetails"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ]
+      },
+      "AmbiguousNameResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "type": "string",
+            "const": "ambiguous_name"
           }
         },
         "required": [

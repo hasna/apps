@@ -444,6 +444,84 @@ describe("Loops MCP server", () => {
     }
   });
 
+  test("archive and unarchive fail closed on ambiguous names while ids stay exact", async () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-mcp-archive-ambiguity-"));
+    roots.push(root);
+    const seeded = withLoopDataDir(root, () => {
+      const store = new Store();
+      try {
+        const input = {
+          name: "mcp-archive-dupe",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" } as const,
+          target: { type: "command", command: "true" } as const,
+        };
+        const first = store.createLoop(input, new Date("2025-12-31T00:00:00Z"));
+        const second = store.createLoop(input, new Date("2025-12-31T00:00:01Z"));
+        return { firstId: first.id, secondId: second.id, name: input.name };
+      } finally {
+        store.close();
+      }
+    });
+
+    const { client, transport } = await connectMcp(root, { LOOPS_MCP_ALLOW_MUTATIONS: "true" });
+    try {
+      const ambiguousArchive = await client.callTool({
+        name: "loops_archive",
+        arguments: { idOrName: seeded.name },
+      });
+      expect(ambiguousArchive.isError).toBe(true);
+      expect(textPayload(ambiguousArchive)).toMatchObject({ error: { code: "AMBIGUOUS_NAME" } });
+      withLoopDataDir(root, () => {
+        const store = new Store();
+        try {
+          expect(store.getLoop(seeded.firstId)?.archivedAt).toBeUndefined();
+          expect(store.getLoop(seeded.secondId)?.archivedAt).toBeUndefined();
+        } finally {
+          store.close();
+        }
+      });
+
+      expect(
+        (textPayload(await client.callTool({
+          name: "loops_archive",
+          arguments: { idOrName: seeded.firstId },
+        })) as { loop: { id: string } }).loop.id,
+      ).toBe(seeded.firstId);
+      expect(
+        (textPayload(await client.callTool({
+          name: "loops_archive",
+          arguments: { idOrName: seeded.name },
+        })) as { loop: { id: string } }).loop.id,
+      ).toBe(seeded.secondId);
+
+      const ambiguousUnarchive = await client.callTool({
+        name: "loops_unarchive",
+        arguments: { idOrName: seeded.name },
+      });
+      expect(ambiguousUnarchive.isError).toBe(true);
+      expect(textPayload(ambiguousUnarchive)).toMatchObject({ error: { code: "AMBIGUOUS_NAME" } });
+      withLoopDataDir(root, () => {
+        const store = new Store();
+        try {
+          expect(store.getLoop(seeded.firstId)?.archivedAt).toBeString();
+          expect(store.getLoop(seeded.secondId)?.archivedAt).toBeString();
+        } finally {
+          store.close();
+        }
+      });
+
+      expect(
+        (textPayload(await client.callTool({
+          name: "loops_unarchive",
+          arguments: { idOrName: seeded.secondId },
+        })) as { loop: { id: string } }).loop.id,
+      ).toBe(seeded.secondId);
+    } finally {
+      await client.close();
+      await transport.close();
+    }
+  });
+
   test("executes guarded mutation tools when explicitly enabled", async () => {
     const root = mkdtempSync(join(tmpdir(), "loops-mcp-mutations-"));
     roots.push(root);

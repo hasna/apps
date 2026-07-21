@@ -2058,7 +2058,7 @@ export class Store {
 
   archiveLoop(idOrName: string): Loop {
     return this.transact(() => {
-      const loop = this.requireLoop(idOrName);
+      const loop = this.requireUniqueLoop(idOrName);
       if (loop.archivedAt) return loop;
       const updated = nowIso();
       const archivedStatus: LoopStatus = loop.status === "active" ? "paused" : loop.status;
@@ -2083,24 +2083,26 @@ export class Store {
   }
 
   unarchiveLoop(idOrName: string): Loop {
-    const loop = this.requireLoop(idOrName);
-    if (!loop.archivedAt) return loop;
-    const updated = nowIso();
-    const restoredStatus = loop.archivedFromStatus ?? loop.status;
-    this.db
-      .query(
-        `UPDATE loops
-         SET status=$status, archived_at=NULL, archived_from_status=NULL, updated_at=$updated
-         WHERE id=$id`,
-      )
-      .run({
-        $id: loop.id,
-        $status: restoredStatus,
-        $updated: updated,
-      });
-    const unarchived = this.getLoop(loop.id);
-    if (!unarchived) throw new Error(`loop not found after unarchive: ${loop.id}`);
-    return unarchived;
+    return this.transact(() => {
+      const loop = this.requireUniqueLoop(idOrName);
+      if (!loop.archivedAt) return loop;
+      const updated = nowIso();
+      const restoredStatus = loop.archivedFromStatus ?? loop.status;
+      this.db
+        .query(
+          `UPDATE loops
+           SET status=$status, archived_at=NULL, archived_from_status=NULL, updated_at=$updated
+           WHERE id=$id`,
+        )
+        .run({
+          $id: loop.id,
+          $status: restoredStatus,
+          $updated: updated,
+        });
+      const unarchived = this.getLoop(loop.id);
+      if (!unarchived) throw new Error(`loop not found after unarchive: ${loop.id}`);
+      return unarchived;
+    });
   }
 
   deleteLoop(idOrName: string): boolean {

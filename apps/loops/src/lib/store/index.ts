@@ -433,11 +433,11 @@ export class ApiStore implements LoopStore {
     return pickObject<Loop>(await this.t.post(`/loops/${encodeURIComponent(id)}/rename`, { name }), "loop")!;
   }
   async archiveLoop(idOrName: string): Promise<Loop> {
-    const loop = await this.requireLoop(idOrName);
+    const loop = await this.requireUniqueLoop(idOrName);
     return pickObject<Loop>(await this.t.post(`/loops/${encodeURIComponent(loop.id)}/archive`), "loop")!;
   }
   async unarchiveLoop(idOrName: string): Promise<Loop> {
-    const loop = await this.requireLoop(idOrName);
+    const loop = await this.requireUniqueLoop(idOrName);
     return pickObject<Loop>(await this.t.post(`/loops/${encodeURIComponent(loop.id)}/unarchive`), "loop")!;
   }
   async deleteLoop(idOrName: string): Promise<boolean> {

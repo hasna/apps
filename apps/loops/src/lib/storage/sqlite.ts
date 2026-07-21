@@ -26,6 +26,7 @@ export class SqliteLoopStorage implements LoopStorageContract {
   getLoop(...args: StoreMethod<"getLoop">["args"]) { return this.call("getLoop", ...args); }
   findLoopByName(...args: StoreMethod<"findLoopByName">["args"]) { return this.call("findLoopByName", ...args); }
   requireLoop(...args: StoreMethod<"requireLoop">["args"]) { return this.call("requireLoop", ...args); }
+  requireUniqueLoop(...args: StoreMethod<"requireUniqueLoop">["args"]) { return this.call("requireUniqueLoop", ...args); }
   listLoops(...args: StoreMethod<"listLoops">["args"]) { return this.call("listLoops", ...args); }
   dueLoops(...args: StoreMethod<"dueLoops">["args"]) { return this.call("dueLoops", ...args); }
   updateLoop(...args: StoreMethod<"updateLoop">["args"]) { return this.call("updateLoop", ...args); }

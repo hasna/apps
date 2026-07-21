@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { AmbiguousNameError } from "../errors.js";
 import { SqliteLoopStorage, createSqliteLoopStorage } from "./sqlite.js";
 
 describe("SqliteLoopStorage", () => {
@@ -54,6 +55,36 @@ describe("SqliteLoopStorage", () => {
       }, { claimedBy: "runner-a", claimToken: first!.claimToken, now: new Date("2026-01-01T00:00:00.200Z") });
       expect(finalized?.status).toBe("succeeded");
       expect(await storage.countRuns("succeeded")).toBe(1);
+    } finally {
+      await storage.close();
+    }
+  });
+
+  test("delegates unique archive resolution without mutating ambiguous rows", async () => {
+    const storage = createSqliteLoopStorage(":memory:");
+    try {
+      const input = {
+        name: "sqlite-archive-ambiguous",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" } as const,
+        target: { type: "command", command: "true" } as const,
+      };
+      const first = await storage.createLoop(input, new Date("2025-12-31T00:00:00Z"));
+      const second = await storage.createLoop(input, new Date("2025-12-31T00:00:01Z"));
+
+      await expect(storage.requireUniqueLoop(input.name)).rejects.toBeInstanceOf(AmbiguousNameError);
+      await expect(storage.archiveLoop(input.name)).rejects.toBeInstanceOf(AmbiguousNameError);
+      expect((await storage.getLoop(first.id))?.archivedAt).toBeUndefined();
+      expect((await storage.getLoop(second.id))?.archivedAt).toBeUndefined();
+
+      expect((await storage.archiveLoop(first.id)).id).toBe(first.id);
+      expect((await storage.archiveLoop(input.name)).id).toBe(second.id);
+      await expect(storage.unarchiveLoop(input.name)).rejects.toBeInstanceOf(AmbiguousNameError);
+      expect((await storage.getLoop(first.id))?.archivedAt).toBeString();
+      expect((await storage.getLoop(second.id))?.archivedAt).toBeString();
+
+      expect((await storage.unarchiveLoop(second.id)).id).toBe(second.id);
+      expect((await storage.getLoop(first.id))?.archivedAt).toBeString();
+      expect((await storage.getLoop(second.id))?.archivedAt).toBeUndefined();
     } finally {
       await storage.close();
     }

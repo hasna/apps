@@ -20,6 +20,7 @@ import type {
 } from "../types.js";
 import type { GoalStatus } from "../lib/goal/types.js";
 import {
+  AmbiguousNameError,
   DuplicateWorkflowEventError,
   LegacyWorkflowRunProvenanceError,
   LoopArchivedError,
@@ -1500,6 +1501,7 @@ function apiError(code: string, status: number): PublicApiError {
 function errorResponse(error: unknown): Response {
   if (error instanceof LoopNotFoundError) return fail("loop_not_found", 404);
   if (error instanceof LoopArchivedError) return fail("loop_archived", 409);
+  if (error instanceof AmbiguousNameError) return fail("ambiguous_name", 409);
   if (error instanceof ValidationError) {
     const details = validationErrorPublicDetails(error);
     return fail("validation_failed", 422, details ? { details } : undefined);

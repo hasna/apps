@@ -1795,6 +1795,38 @@ exit 0
     }
   });
 
+  test("archive and unarchive fail closed on ambiguous names while ids stay exact", () => {
+    const store = new Store(":memory:");
+    try {
+      const input = {
+        name: "archive-ambiguous",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" } as const,
+        target: { type: "command", command: "true" } as const,
+      };
+      const first = store.createLoop(input, new Date("2025-12-31T00:00:00Z"));
+      const second = store.createLoop(input, new Date("2025-12-31T00:00:01Z"));
+
+      expect(() => store.archiveLoop(input.name)).toThrow(AmbiguousNameError);
+      expect(store.getLoop(first.id)?.archivedAt).toBeUndefined();
+      expect(store.getLoop(second.id)?.archivedAt).toBeUndefined();
+
+      expect(store.archiveLoop(first.id).id).toBe(first.id);
+      expect(store.archiveLoop(input.name).id).toBe(second.id);
+      expect(store.getLoop(first.id)?.archivedAt).toBeString();
+      expect(store.getLoop(second.id)?.archivedAt).toBeString();
+
+      expect(() => store.unarchiveLoop(input.name)).toThrow(AmbiguousNameError);
+      expect(store.getLoop(first.id)?.archivedAt).toBeString();
+      expect(store.getLoop(second.id)?.archivedAt).toBeString();
+
+      expect(store.unarchiveLoop(first.id).id).toBe(first.id);
+      expect(store.getLoop(first.id)?.archivedAt).toBeUndefined();
+      expect(store.getLoop(second.id)?.archivedAt).toBeString();
+    } finally {
+      store.close();
+    }
+  });
+
   test("rejects mutations of archived loops until they are unarchived", () => {
     const store = new Store(":memory:");
     try {

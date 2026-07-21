@@ -100,6 +100,19 @@ describe("loops-api foundation", () => {
         },
       },
     });
+    expect(document.paths["/v1/loops/{id}/archive"]?.post?.responses?.["409"]?.content?.["application/json"]?.schema?.$ref)
+      .toBe("#/components/schemas/AmbiguousNameResponse");
+    expect(document.paths["/v1/loops/{id}/unarchive"]?.post?.responses?.["409"]?.content?.["application/json"]?.schema?.$ref)
+      .toBe("#/components/schemas/AmbiguousNameResponse");
+    expect(document.components.schemas.AmbiguousNameResponse).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      required: ["ok", "error"],
+      properties: {
+        ok: { type: "boolean", const: false },
+        error: { type: "string", const: "ambiguous_name" },
+      },
+    });
     expect(document.components.schemas.CustomWorkflowEvent).toMatchObject({
       type: "object",
       additionalProperties: false,
@@ -655,6 +668,50 @@ describe("loops-api foundation", () => {
       const deleteResponse = await fetch(apiUrl(server, `/v1/loops/${created.loop.id}`), { method: "DELETE" });
       expect(deleteResponse.status).toBe(200);
       expect(await deleteResponse.json()).toMatchObject({ ok: true, deleted: true });
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("archive and unarchive return stable 409s for ambiguous names without mutating rows", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const input = {
+      name: "api-archive-ambiguous",
+      schedule: { type: "once", at: "2026-01-01T00:00:00Z" } as const,
+      target: { type: "command", command: "true" } as const,
+    };
+    const first = await storage.createLoop(input, new Date("2025-12-31T00:00:00Z"));
+    const second = await storage.createLoop(input, new Date("2025-12-31T00:00:01Z"));
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+
+    try {
+      const ambiguousArchive = await fetch(apiUrl(server, `/v1/loops/${input.name}/archive`), { method: "POST" });
+      expect(ambiguousArchive.status).toBe(409);
+      expect(await ambiguousArchive.json()).toEqual({ ok: false, error: "ambiguous_name" });
+      expect((await storage.getLoop(first.id))?.archivedAt).toBeUndefined();
+      expect((await storage.getLoop(second.id))?.archivedAt).toBeUndefined();
+
+      const archiveFirst = await fetch(apiUrl(server, `/v1/loops/${first.id}/archive`), { method: "POST" });
+      expect(archiveFirst.status).toBe(200);
+      expect(((await archiveFirst.json()) as { loop: { id: string } }).loop.id).toBe(first.id);
+
+      const archiveSoleActive = await fetch(apiUrl(server, `/v1/loops/${input.name}/archive`), { method: "POST" });
+      expect(archiveSoleActive.status).toBe(200);
+      expect(((await archiveSoleActive.json()) as { loop: { id: string } }).loop.id).toBe(second.id);
+
+      const ambiguousUnarchive = await fetch(apiUrl(server, `/v1/loops/${input.name}/unarchive`), { method: "POST" });
+      expect(ambiguousUnarchive.status).toBe(409);
+      expect(await ambiguousUnarchive.json()).toEqual({ ok: false, error: "ambiguous_name" });
+      expect((await storage.getLoop(first.id))?.archivedAt).toBeString();
+      expect((await storage.getLoop(second.id))?.archivedAt).toBeString();
+
+      const unarchiveFirst = await fetch(apiUrl(server, `/v1/loops/${first.id}/unarchive`), { method: "POST" });
+      expect(unarchiveFirst.status).toBe(200);
+      expect(((await unarchiveFirst.json()) as { loop: { id: string } }).loop.id).toBe(first.id);
+      expect((await storage.getLoop(first.id))?.archivedAt).toBeUndefined();
+      expect((await storage.getLoop(second.id))?.archivedAt).toBeString();
     } finally {
       server.stop(true);
       await storage.close();
