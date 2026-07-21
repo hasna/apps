@@ -495,7 +495,7 @@ describe("daemon", () => {
         const runnerId = `${owner}:${process.pid}`;
         const claim = store.claimRun(loop, new Date().toISOString(), runnerId);
         expect(claim).toBeDefined();
-        store.markRunPid(claim!.run.id, children[index]!.pid!, runnerId);
+        store.markRunPid(claim!.run.id, children[index]!.pid!, runnerId, { claimToken: claim!.claimToken });
         return claim!;
       });
       await Bun.sleep(30);

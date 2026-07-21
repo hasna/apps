@@ -18,6 +18,7 @@ import type {
   LoopRun,
   LoopStatus,
   LoopTarget,
+  RecoveredLeaseRunSnapshotEntry,
   RunReceipt,
   RunReceiptMachine,
   RunStatus,
@@ -74,6 +75,7 @@ interface DaemonLeaseFence {
   daemonLeaseId?: string;
   now?: Date;
   claimToken?: string;
+  recoveredRun?: RecoveredLeaseRunSnapshotEntry;
 }
 
 export interface WorkflowRecoveryContext {
@@ -706,7 +708,7 @@ export function rowToLease(row: LeaseRow): DaemonLease {
 export interface ClaimRunResult {
   run: LoopRun;
   loop: Loop;
-  claimToken?: string;
+  claimToken: string;
 }
 
 export interface CreateWorkflowRunInput {
@@ -757,16 +759,10 @@ export interface RecoverExpiredRunLeasesResult {
   deferred: LoopRun[];
 }
 
-export interface RecoveredLeaseRunCursor {
-  updatedAt: string;
-  scheduledFor: string;
-  id: string;
-}
-
 export interface RecoveredLeaseRunPage {
   runs: LoopRun[];
-  snapshotEnd?: RecoveredLeaseRunCursor;
-  nextCursor?: RecoveredLeaseRunCursor;
+  snapshot?: RecoveredLeaseRunSnapshotEntry[];
+  nextOffset?: number;
 }
 
 export interface PruneHistoryOptions {
@@ -1861,6 +1857,20 @@ export class Store {
         this.db.exec("COMMIT");
         return undefined;
       }
+      if (opts.recoveredRun) {
+        const run = this.getRun(opts.recoveredRun.id);
+        if (
+          !run ||
+          run.status !== "abandoned" ||
+          run.error !== "run lease expired before completion" ||
+          run.attempt !== opts.recoveredRun.attempt ||
+          run.updatedAt !== opts.recoveredRun.updatedAt ||
+          run.scheduledFor !== opts.recoveredRun.scheduledFor
+        ) {
+          this.db.exec("COMMIT");
+          return undefined;
+        }
+      }
       const merged: Loop = { ...current, ...patch, updatedAt: updated };
       const res = this.db
         .query(
@@ -1929,6 +1939,20 @@ export class Store {
       ) {
         this.db.exec("COMMIT");
         return undefined;
+      }
+      if (opts.recoveredRun) {
+        const run = this.getRun(opts.recoveredRun.id);
+        if (
+          !run ||
+          run.status !== "abandoned" ||
+          run.error !== "run lease expired before completion" ||
+          run.attempt !== opts.recoveredRun.attempt ||
+          run.updatedAt !== opts.recoveredRun.updatedAt ||
+          run.scheduledFor !== opts.recoveredRun.scheduledFor
+        ) {
+          this.db.exec("COMMIT");
+          return undefined;
+        }
       }
       const merged: Loop = { ...current, ...patch, updatedAt: updated };
       const res = this.db
@@ -4132,6 +4156,7 @@ export class Store {
           .query(
             `UPDATE loop_runs SET pid=$pid, process_started_at=$processStartedAt, updated_at=$updated
              WHERE id=$id AND status='running' AND claimed_by=$claimedBy
+               AND claim_token=$claimToken
                AND ($daemonLeaseId IS NULL OR EXISTS (
                  SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
                ))`,
@@ -4142,6 +4167,7 @@ export class Store {
             $processStartedAt: processStartedAt,
             $updated: now,
             $claimedBy: claimedBy,
+            $claimToken: opts.claimToken ?? null,
             $daemonLeaseId: opts.daemonLeaseId ?? null,
             $now: now,
           })
@@ -4174,7 +4200,7 @@ export class Store {
     const res = this.db
       .query(
         `UPDATE loop_runs SET pid=$pid, pgid=$pgid, process_started_at=$processStartedAt, updated_at=$updated
-         WHERE id=$id AND status='running'
+         WHERE id=$id AND status='running' AND claim_token=$claimToken
            AND ($daemonLeaseId IS NULL OR EXISTS (
              SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
            ))`,
@@ -4187,6 +4213,7 @@ export class Store {
         // match what the kernel reports later or recovery/reaping distrusts it.
         $processStartedAt: info.processStartedAt ?? isoProcessStart(info.pid) ?? now,
         $updated: now,
+        $claimToken: opts.claimToken ?? null,
         $daemonLeaseId: opts.daemonLeaseId ?? null,
         $now: now,
       });
@@ -4452,7 +4479,7 @@ export class Store {
               `UPDATE loop_runs SET status=$status, finished_at=$finished, lease_expires_at=NULL, pid=$pid, exit_code=$exitCode,
                duration_ms=$durationMs, stdout=$stdout, stderr=$stderr, error=$error, updated_at=$updated
                WHERE id=$id AND status='running' AND claimed_by=$claimedBy AND lease_expires_at > $now
-                 AND ($claimToken IS NULL OR claim_token=$claimToken)
+                 AND claim_token=$claimToken
                  AND ($daemonLeaseId IS NULL OR EXISTS (
                    SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
                  ))`,
@@ -4474,7 +4501,7 @@ export class Store {
       if (!run || !runRow) throw new Error(`run not found after finalize: ${id}`);
       if (opts.claimedBy && res.changes !== 1) {
         throw new RunFinalizationConflictError(
-          opts.claimToken !== undefined && runRow.claim_token !== opts.claimToken
+          opts.claimToken === undefined || runRow.claim_token !== opts.claimToken
             ? "stale_claim"
             : run.status === "running" ? "stale_claim" : "run_not_running",
           id,
@@ -4510,7 +4537,7 @@ export class Store {
       .query(
         `UPDATE loop_runs SET lease_expires_at=$expires, updated_at=$updated
          WHERE id=$id AND status='running' AND claimed_by=$claimedBy AND lease_expires_at > $now
-           AND ($claimToken IS NULL OR claim_token=$claimToken)
+           AND claim_token=$claimToken
            AND ($daemonLeaseId IS NULL OR EXISTS (
              SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
            ))`,
@@ -4556,49 +4583,55 @@ export class Store {
   }
 
   listRecoveredLeaseRunsPage(opts: {
-    after?: RecoveredLeaseRunCursor;
-    snapshotEnd?: RecoveredLeaseRunCursor;
+    snapshot?: RecoveredLeaseRunSnapshotEntry[];
+    offset?: number;
     limit?: number;
   } = {}): RecoveredLeaseRunPage {
     const limit = Math.max(1, Math.min(1_000, Math.floor(opts.limit ?? 1_000)));
-    const snapshotEnd = opts.snapshotEnd ?? (() => {
-      const row = this.db
-        .query<RunRow, []>(
-          `SELECT * FROM loop_runs
-           WHERE status='abandoned' AND error='run lease expired before completion'
-           ORDER BY updated_at DESC, scheduled_for DESC, id DESC LIMIT 1`,
-        )
-        .get();
-      return row
-        ? { updatedAt: row.updated_at, scheduledFor: row.scheduled_for, id: row.id }
-        : undefined;
-    })();
-    if (!snapshotEnd) return { runs: [] };
-    const after = opts.after;
-    const rows = this.db
-      .query<RunRow, [string | null, string | null, string | null, string | null, string, string, string, number]>(
-        `SELECT * FROM loop_runs
+    const snapshot = opts.snapshot ?? this.db
+      .query<Pick<RunRow, "id" | "updated_at" | "scheduled_for" | "attempt">, []>(
+        `SELECT id, updated_at, scheduled_for, attempt FROM loop_runs
          WHERE status='abandoned' AND error='run lease expired before completion'
-           AND (? IS NULL OR (updated_at, scheduled_for, id) > (?, ?, ?))
-           AND (updated_at, scheduled_for, id) <= (?, ?, ?)
-         ORDER BY updated_at ASC, scheduled_for ASC, id ASC LIMIT ?`,
+         ORDER BY updated_at ASC, scheduled_for ASC, id ASC`,
       )
-      .all(
-        after?.updatedAt ?? null,
-        after?.updatedAt ?? null,
-        after?.scheduledFor ?? null,
-        after?.id ?? null,
-        snapshotEnd.updatedAt,
-        snapshotEnd.scheduledFor,
-        snapshotEnd.id,
-        limit,
-      );
-    const runs = rows.map(rowToRun);
-    const last = runs.at(-1);
+      .all()
+      .map((row) => ({
+        id: row.id,
+        updatedAt: row.updated_at,
+        scheduledFor: row.scheduled_for,
+        attempt: row.attempt,
+      }));
+    const offset = Math.max(0, Math.min(snapshot.length, Math.floor(opts.offset ?? 0)));
+    const selected = snapshot.slice(offset, offset + limit);
+    const rows = selected.length === 0
+      ? []
+      : this.db
+          .query<RunRow, string[]>(
+            `SELECT * FROM loop_runs WHERE id IN (${selected.map(() => "?").join(",")})`,
+          )
+          .all(...selected.map((entry) => entry.id));
+    const rowsById = new Map(rows.map((row) => [row.id, row]));
+    const snapshotById = new Map(selected.map((entry) => [entry.id, entry]));
+    const runs = selected
+      .map((entry) => rowsById.get(entry.id))
+      .filter((row): row is RunRow => {
+        if (!row) return false;
+        const entry = snapshotById.get(row.id);
+        return Boolean(
+          entry &&
+          row.status === "abandoned" &&
+          row.error === "run lease expired before completion" &&
+          row.attempt === entry.attempt &&
+          row.updated_at === entry.updatedAt &&
+          row.scheduled_for === entry.scheduledFor
+        );
+      })
+      .map(rowToRun);
+    const nextOffset = offset + selected.length;
     return {
       runs,
-      snapshotEnd,
-      ...(last ? { nextCursor: { updatedAt: last.updatedAt, scheduledFor: last.scheduledFor, id: last.id } } : {}),
+      snapshot,
+      ...(nextOffset < snapshot.length ? { nextOffset } : {}),
     };
   }
 

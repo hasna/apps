@@ -3413,6 +3413,106 @@ describe("loops-api foundation", () => {
     }
   });
 
+  test("maintenance recovery skips a stale abandoned page row reclaimed by a newer attempt", async () => {
+    const mod = await import("./index.js");
+    const baseStorage = createSqliteLoopStorage(":memory:");
+    const slot = "2026-01-01T00:01:00.000Z";
+    const staleRecoveryReceipt = "2026-01-01T00:01:02.000Z";
+    const loop = await baseStorage.createLoop({
+      name: "recover-stale-page-reclaim",
+      schedule: { type: "interval", everyMs: 60_000 },
+      target: { type: "command", command: "false" },
+      maxAttempts: 3,
+      retryDelayMs: 1_000,
+      leaseMs: 60_000,
+    }, new Date(slot));
+    await baseStorage.updateLoop(loop.id, { nextRunAt: slot });
+    await baseStorage.upsertMigrationRun({
+      id: "recover-stale-page-run",
+      loopId: loop.id,
+      loopName: loop.name,
+      scheduledFor: slot,
+      attempt: 1,
+      status: "abandoned",
+      finishedAt: staleRecoveryReceipt,
+      claimedBy: "runner-reclaim",
+      error: "run lease expired before completion",
+      createdAt: slot,
+      updatedAt: staleRecoveryReceipt,
+    });
+    let reclaimed: Awaited<ReturnType<typeof baseStorage.claimRun>>;
+    let injected = false;
+    const storage = new Proxy(baseStorage, {
+      get(target, property) {
+        if (property === "listRecoveredLeaseRunsPage") {
+          return async (...args: Parameters<typeof target.listRecoveredLeaseRunsPage>) => {
+            const page = await target.listRecoveredLeaseRunsPage(...args);
+            if (!injected && page.runs.some((run) => run.id === "recover-stale-page-run")) {
+              injected = true;
+              reclaimed = await target.claimRun(
+                loop,
+                slot,
+                "runner-reclaim",
+                new Date("2026-01-01T00:01:01.100Z"),
+              );
+              expect(reclaimed?.run).toMatchObject({
+                id: "recover-stale-page-run",
+                status: "running",
+                attempt: 2,
+                startedAt: "2026-01-01T00:01:01.100Z",
+              });
+            }
+            return page;
+          };
+        }
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as LoopStorageContract;
+    let now = new Date(staleRecoveryReceipt);
+    const maintenanceServer = createTestServer(
+      mod,
+      { host: "127.0.0.1", port: 0, storage, now: () => now, random: () => 0.5 },
+    );
+    const runnerServer = createTestServer(
+      mod,
+      { host: "127.0.0.1", port: 0, storage, now: () => now, random: () => 0.5 },
+      runnerPrincipal("runner-reclaim"),
+    );
+    try {
+      const recovery = await fetch(apiUrl(maintenanceServer, "/v1/leases/recover"), { method: "POST" });
+      expect(recovery.status).toBe(200);
+      expect(injected).toBe(true);
+      expect(await recovery.json()).toMatchObject({ advancementDeferred: [] });
+      expect(await baseStorage.getLoop(loop.id)).toMatchObject({
+        nextRunAt: slot,
+        retryScheduledFor: undefined,
+      });
+
+      now = new Date("2026-01-01T00:01:10.000Z");
+      const finalized = await fetch(apiUrl(runnerServer, `/v1/runs/${reclaimed!.run.id}/finalize`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          claimToken: reclaimed!.claimToken,
+          status: "failed",
+          stdout: "",
+          stderr: "",
+          error: "attempt two failed",
+        }),
+      });
+      expect(finalized.status).toBe(200);
+      expect(await baseStorage.getLoop(loop.id)).toMatchObject({
+        nextRunAt: "2026-01-01T00:01:12.000Z",
+        retryScheduledFor: slot,
+      });
+    } finally {
+      runnerServer.stop(true);
+      maintenanceServer.stop(true);
+      await baseStorage.close();
+    }
+  });
+
   test("maintenance recovery drains more than 1000 stable abandoned rows without starving the oldest loop", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");

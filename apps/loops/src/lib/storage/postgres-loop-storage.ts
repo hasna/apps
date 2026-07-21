@@ -96,6 +96,7 @@ import type {
   LoopRun,
   LoopStatus,
   LoopTarget,
+  RecoveredLeaseRunSnapshotEntry,
   RunReceipt,
   UpsertWorkflowWorkItemInput,
   WorkflowRun,
@@ -155,6 +156,18 @@ interface DaemonLeaseFence {
   daemonLeaseId?: string;
   now?: Date;
   claimToken?: string;
+  recoveredRun?: RecoveredLeaseRunSnapshotEntry;
+}
+
+function matchesRecoveredLeaseSnapshot(row: RunRow | null | undefined, expected: RecoveredLeaseRunSnapshotEntry): boolean {
+  return Boolean(
+    row &&
+    row.status === "abandoned" &&
+    row.error === "run lease expired before completion" &&
+    row.attempt === expected.attempt &&
+    row.updated_at === expected.updatedAt &&
+    row.scheduled_for === expected.scheduledFor
+  );
 }
 
 export interface TenantStorageContext {
@@ -648,6 +661,13 @@ export class PostgresLoopStorage implements LoopStorageContract {
     if ("status" in patch && patch.status !== undefined) assertLoopStatus(patch.status);
     const updated = (opts.now ?? new Date()).toISOString();
     return this.client.transaction(async (c) => {
+      if (opts.recoveredRun) {
+        const recovered = await c.get<RunRow>(
+          "SELECT * FROM loop_runs WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 FOR UPDATE",
+          [opts.recoveredRun.id],
+        );
+        if (!matchesRecoveredLeaseSnapshot(recovered, opts.recoveredRun)) return undefined;
+      }
       const current = await this.loadLoop(c, id);
       if (!current || current.archivedAt) return undefined;
       const merged: Loop = { ...current, ...patch, updatedAt: updated };
@@ -690,6 +710,13 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const updated = (opts.now ?? new Date()).toISOString();
     const scrubbedReason = scrubbedOrNull(marker.reason) ?? "";
     return this.client.transaction(async (c) => {
+      if (opts.recoveredRun) {
+        const recovered = await c.get<RunRow>(
+          "SELECT * FROM loop_runs WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 FOR UPDATE",
+          [opts.recoveredRun.id],
+        );
+        if (!matchesRecoveredLeaseSnapshot(recovered, opts.recoveredRun)) return undefined;
+      }
       const currentRow = await c.get<LoopRow>(
         "SELECT * FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 FOR UPDATE",
         [id],
@@ -1270,7 +1297,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
           `UPDATE loop_runs SET status=$2, finished_at=$3, lease_expires_at=NULL, pid=$4, exit_code=$5,
            duration_ms=$6, stdout=$7, stderr=$8, error=$9, updated_at=$14
            WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 AND status='running' AND claimed_by=$10 AND lease_expires_at > $11
-             AND ($12::text IS NULL OR claim_token=$12)
+             AND claim_token=$12
              AND ($13::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$13 AND expires_at > $11))`,
           [
             id,
@@ -1316,7 +1343,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
       if (!run || !runRow) throw new Error(`run not found after finalize: ${id}`);
       if (opts.claimedBy && res.rowCount !== 1) {
         throw new RunFinalizationConflictError(
-          opts.claimToken !== undefined && runRow.claim_token !== opts.claimToken
+          opts.claimToken === undefined || runRow.claim_token !== opts.claimToken
             ? "stale_claim"
             : run.status === "running" ? "stale_claim" : "run_not_running",
           id,
@@ -1336,7 +1363,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const res = await this.client.query(
       `UPDATE loop_runs SET lease_expires_at=$2, updated_at=$3
        WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 AND status='running' AND claimed_by=$4 AND lease_expires_at > $5
-         AND ($6::text IS NULL OR claim_token=$6)
+         AND claim_token=$6
          AND ($7::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$7 AND expires_at > $5))`,
       [id, expiresAt, nowStr, claimedBy, nowStr, opts.claimToken ?? null, opts.daemonLeaseId ?? null],
     );
@@ -1350,8 +1377,18 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const res = await this.client.query(
       `UPDATE loop_runs SET pid=$2, pgid=$3, process_started_at=$4, updated_at=$5
        WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 AND status='running'
-         AND ($6::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$6 AND expires_at > $7))`,
-      [runId, info.pid, info.pgid ?? null, info.processStartedAt ?? now, now, opts.daemonLeaseId ?? null, now],
+         AND claim_token=$6
+         AND ($7::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$7 AND expires_at > $8))`,
+      [
+        runId,
+        info.pid,
+        info.pgid ?? null,
+        info.processStartedAt ?? now,
+        now,
+        opts.claimToken ?? null,
+        opts.daemonLeaseId ?? null,
+        now,
+      ],
     );
     if (res.rowCount !== 1) return undefined;
     return this.getRun(runId);
@@ -1390,40 +1427,42 @@ export class PostgresLoopStorage implements LoopStorageContract {
   ): Promise<RecoveredLeaseRunPage> {
     const opts = args[0] ?? {};
     const limit = Math.max(1, Math.min(1_000, Math.floor(opts.limit ?? 1_000)));
-    const resolvedEnd = opts.snapshotEnd ?? await this.client.get<RunRow>(
-      `SELECT * FROM loop_runs
+    const snapshot: RecoveredLeaseRunSnapshotEntry[] = opts.snapshot ?? await this.client.many<Pick<RunRow, "id" | "updated_at" | "scheduled_for" | "attempt">>(
+      `SELECT id, updated_at, scheduled_for, attempt FROM loop_runs
        WHERE tenant_id = open_loops_current_tenant_id()
          AND status='abandoned' AND error='run lease expired before completion'
-       ORDER BY updated_at DESC, scheduled_for DESC, id DESC LIMIT 1`,
+       ORDER BY updated_at ASC, scheduled_for ASC, id ASC`,
       [],
-    ).then((row) => row
-      ? { updatedAt: row.updated_at, scheduledFor: row.scheduled_for, id: row.id }
-      : undefined);
-    if (!resolvedEnd) return { runs: [] };
-    const after = opts.after;
-    const rows = await this.client.many<RunRow>(
-      `SELECT * FROM loop_runs
-       WHERE tenant_id = open_loops_current_tenant_id()
-         AND status='abandoned' AND error='run lease expired before completion'
-         AND ($1::timestamptz IS NULL OR (updated_at, scheduled_for, id) > ($1::timestamptz, $2::timestamptz, $3::text))
-         AND (updated_at, scheduled_for, id) <= ($4::timestamptz, $5::timestamptz, $6::text)
-       ORDER BY updated_at ASC, scheduled_for ASC, id ASC LIMIT $7`,
-      [
-        after?.updatedAt ?? null,
-        after?.scheduledFor ?? null,
-        after?.id ?? null,
-        resolvedEnd.updatedAt,
-        resolvedEnd.scheduledFor,
-        resolvedEnd.id,
-        limit,
-      ],
-    );
-    const runs = rows.map(rowToRun);
-    const last = runs.at(-1);
+    ).then((rows) => rows.map((row) => ({
+      id: row.id,
+      updatedAt: row.updated_at,
+      scheduledFor: row.scheduled_for,
+      attempt: row.attempt,
+    })));
+    const offset = Math.max(0, Math.min(snapshot.length, Math.floor(opts.offset ?? 0)));
+    const selected = snapshot.slice(offset, offset + limit);
+    const rows = selected.length === 0
+      ? []
+      : await this.client.many<RunRow>(
+          `SELECT * FROM loop_runs
+           WHERE tenant_id = open_loops_current_tenant_id() AND id = ANY($1::text[])`,
+          [selected.map((entry) => entry.id)],
+        );
+    const rowsById = new Map(rows.map((row) => [row.id, row]));
+    const snapshotById = new Map(selected.map((entry) => [entry.id, entry]));
+    const runs = selected
+      .map((entry) => rowsById.get(entry.id))
+      .filter((row): row is RunRow => {
+        if (!row) return false;
+        const entry = snapshotById.get(row.id);
+        return Boolean(entry && matchesRecoveredLeaseSnapshot(row, entry));
+      })
+      .map(rowToRun);
+    const nextOffset = offset + selected.length;
     return {
       runs,
-      snapshotEnd: resolvedEnd,
-      ...(last ? { nextCursor: { updatedAt: last.updatedAt, scheduledFor: last.scheduledFor, id: last.id } } : {}),
+      snapshot,
+      ...(nextOffset < snapshot.length ? { nextOffset } : {}),
     };
   }
 

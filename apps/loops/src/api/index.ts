@@ -8,6 +8,7 @@ import type {
   Loop,
   LoopRun,
   LoopStatus,
+  RecoveredLeaseRunSnapshotEntry,
   RunStatus,
   UpsertWorkflowWorkItemInput,
   StoredWorkflowEvent,
@@ -1472,6 +1473,7 @@ async function advanceLoopAfterRun(
   opts: {
     random: () => number;
     circuitBreakerThreshold?: CircuitBreakerThreshold;
+    recoveredRun?: RecoveredLeaseRunSnapshotEntry;
   },
 ): Promise<void> {
   const retryRandom = opts.random();
@@ -1503,9 +1505,16 @@ async function advanceLoopAfterRun(
         current!,
         plan.patch,
         { scheduledFor: plan.markerScheduledFor, reason: plan.reason },
+        { recoveredRun: opts.recoveredRun },
       )
-      : await storage.advanceLoopIfCurrent(current!.id, current!, plan.patch);
+      : await storage.advanceLoopIfCurrent(current!.id, current!, plan.patch, {
+        recoveredRun: opts.recoveredRun,
+      });
     if (applied) return;
+    if (opts.recoveredRun) {
+      const latest = await storage.getRun(opts.recoveredRun.id);
+      if (!matchesRecoveredLeaseSnapshot(latest, opts.recoveredRun)) return;
+    }
     if (attempt === 1) throw new LoopAdvancementConflictError(loop.id, run.id);
   }
 }
@@ -1516,6 +1525,28 @@ function isRecoveredLeaseRun(run: LoopRun): boolean {
   return run.status === "abandoned" && run.error === RECOVERED_LEASE_ERROR;
 }
 
+function recoveredLeaseSnapshotEntry(run: LoopRun): RecoveredLeaseRunSnapshotEntry {
+  return {
+    id: run.id,
+    attempt: run.attempt,
+    updatedAt: run.updatedAt,
+    scheduledFor: run.scheduledFor,
+  };
+}
+
+function matchesRecoveredLeaseSnapshot(
+  run: LoopRun | undefined,
+  expected: RecoveredLeaseRunSnapshotEntry,
+): run is LoopRun {
+  return Boolean(
+    run &&
+    isRecoveredLeaseRun(run) &&
+    run.attempt === expected.attempt &&
+    run.updatedAt === expected.updatedAt &&
+    run.scheduledFor === expected.scheduledFor
+  );
+}
+
 async function advanceRecoveredLeaseRunPages(
   storage: LoopStorageContract,
   opts: {
@@ -1524,31 +1555,15 @@ async function advanceRecoveredLeaseRunPages(
   },
 ): Promise<LoopRun[]> {
   const advancementDeferred: LoopRun[] = [];
-  let after: Awaited<ReturnType<LoopStorageContract["listRecoveredLeaseRunsPage"]>>["nextCursor"];
-  let snapshotEnd: Awaited<ReturnType<LoopStorageContract["listRecoveredLeaseRunsPage"]>>["snapshotEnd"];
+  let snapshot: Awaited<ReturnType<LoopStorageContract["listRecoveredLeaseRunsPage"]>>["snapshot"];
+  let offset = 0;
   for (;;) {
-    const page = await storage.listRecoveredLeaseRunsPage({ after, snapshotEnd, limit: MAX_PAGE_LIMIT });
-    snapshotEnd = page.snapshotEnd;
-    if (page.runs.length === 0) break;
+    const page = await storage.listRecoveredLeaseRunsPage({ snapshot, offset, limit: MAX_PAGE_LIMIT });
+    snapshot = page.snapshot;
     advancementDeferred.push(...await advanceRecoveredRuns(storage, page.runs, opts));
-    if (!page.nextCursor) break;
-    if (
-      after &&
-      page.nextCursor.updatedAt === after.updatedAt &&
-      page.nextCursor.scheduledFor === after.scheduledFor &&
-      page.nextCursor.id === after.id
-    ) {
-      throw new Error("recovered lease replay cursor did not advance");
-    }
-    after = page.nextCursor;
-    if (
-      snapshotEnd &&
-      after.updatedAt === snapshotEnd.updatedAt &&
-      after.scheduledFor === snapshotEnd.scheduledFor &&
-      after.id === snapshotEnd.id
-    ) {
-      break;
-    }
+    if (page.nextOffset === undefined) break;
+    if (page.nextOffset <= offset) throw new Error("recovered lease replay offset did not advance");
+    offset = page.nextOffset;
   }
   return advancementDeferred;
 }
@@ -1563,7 +1578,10 @@ async function advanceRecoveredRuns(
 ): Promise<LoopRun[]> {
   const deferred: LoopRun[] = [];
   const unexpected: unknown[] = [];
-  for (const run of runs) {
+  for (const staleRun of runs) {
+    const expected = recoveredLeaseSnapshotEntry(staleRun);
+    const run = await storage.getRun(staleRun.id);
+    if (!matchesRecoveredLeaseSnapshot(run, expected)) continue;
     const loop = await storage.getLoop(run.loopId);
     if (!loop) continue;
     try {
@@ -1573,7 +1591,7 @@ async function advanceRecoveredRuns(
         run,
         new Date(run.updatedAt),
         false,
-        opts,
+        { ...opts, recoveredRun: expected },
       );
     } catch (error) {
       if (error instanceof LoopAdvancementConflictError) deferred.push(run);

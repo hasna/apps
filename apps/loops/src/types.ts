@@ -23,6 +23,13 @@ export type RunStatus =
   | "abandoned"
   | "skipped";
 
+export interface RecoveredLeaseRunSnapshotEntry {
+  updatedAt: string;
+  scheduledFor: string;
+  id: string;
+  attempt: number;
+}
+
 export type CatchUpPolicy = "none" | "latest" | "all";
 
 export type OverlapPolicy = "skip" | "allow";

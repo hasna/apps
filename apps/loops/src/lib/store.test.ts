@@ -349,7 +349,7 @@ describe("Store", () => {
       const finishedBig = store.finalizeRun(
         bigClaim!.run.id,
         { status: "succeeded", finishedAt: "2026-01-01T00:00:01.000Z", durationMs: 1_000, stdout: huge, stderr: huge },
-        { claimedBy: "runner", now: new Date("2026-01-01T00:00:00.500Z") },
+        { claimedBy: "runner", claimToken: bigClaim!.claimToken, now: new Date("2026-01-01T00:00:00.500Z") },
       );
       const storedBig = store.getRun(finishedBig.id)!;
       expect(storedBig.stdout!.length).toBeLessThan(huge.length);
@@ -370,7 +370,7 @@ describe("Store", () => {
       const finishedSmall = store.finalizeRun(
         smallClaim!.run.id,
         { status: "succeeded", finishedAt: "2026-01-02T00:00:01.000Z", durationMs: 1_000, stdout: "all good", stderr: "" },
-        { claimedBy: "runner", now: new Date("2026-01-02T00:00:00.500Z") },
+        { claimedBy: "runner", claimToken: smallClaim!.claimToken, now: new Date("2026-01-02T00:00:00.500Z") },
       );
       const storedSmall = store.getRun(finishedSmall.id)!;
       expect(storedSmall.stdout).toBe("all good");
@@ -952,7 +952,7 @@ exit 0
           stderr: "",
           error: "runtime preflight failed before workflow run creation",
         },
-        { claimedBy: "runner", now: new Date("2026-01-01T00:00:00.500Z") },
+        { claimedBy: "runner", claimToken: claim!.claimToken, now: new Date("2026-01-01T00:00:00.500Z") },
       );
 
       expect(store.getWorkflowWorkItem(workItem.id)?.status).toBe("failed");
@@ -991,8 +991,9 @@ exit 0
         target: { type: "workflow", workflowId: workflow.id },
       });
       const admitted = store.admitWorkflowWorkItem(workItem.id, { workflowId: workflow.id, loopId: loop.id });
+      const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"))!;
       store.finalizeRun(
-        store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"))!.run.id,
+        claim.run.id,
         {
           status: "failed",
           finishedAt: "2026-01-01T00:00:01.000Z",
@@ -1001,7 +1002,7 @@ exit 0
           stderr: "",
           error: "first attempt failed",
         },
-        { claimedBy: "runner", now: new Date("2026-01-01T00:00:00.500Z") },
+        { claimedBy: "runner", claimToken: claim.claimToken, now: new Date("2026-01-01T00:00:00.500Z") },
       );
       expect(store.getWorkflowWorkItem(admitted.id)?.status).toBe("failed");
 
@@ -1211,7 +1212,7 @@ exit 0
           stdout: "seed",
           stderr: "",
         },
-        { claimedBy: "seed", now: new Date("2026-01-01T00:00:01Z") },
+        { claimedBy: "seed", claimToken: claim!.claimToken, now: new Date("2026-01-01T00:00:01Z") },
       );
 
       const archived = store.archiveLoop(loop.id);
@@ -1418,8 +1419,8 @@ exit 0
       const claims = loops.map((loop) =>
         store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"))!,
       );
-      store.markRunPid(claims[0]!.run.id, process.pid, "runner");
-      store.markRunPid(claims[1]!.run.id, process.pid, "runner");
+      store.markRunPid(claims[0]!.run.id, process.pid, "runner", { claimToken: claims[0]!.claimToken });
+      store.markRunPid(claims[1]!.run.id, process.pid, "runner", { claimToken: claims[1]!.claimToken });
 
       const recovered = store.recoverExpiredRunLeases(new Date("2026-01-01T00:00:01Z"), { limit: 1, scanLimit: 3 });
       expect(recovered).toHaveLength(1);
@@ -2350,13 +2351,13 @@ exit 0
         pid: DEAD_PID,
         pgid: DEAD_PID,
         processStartedAt: "2026-01-01T00:00:00.000Z",
-      });
+      }, { claimToken: dead!.claimToken });
       expect(recordedDead?.pid).toBe(DEAD_PID);
       expect(recordedDead?.pgid).toBe(DEAD_PID);
       expect(recordedDead?.processStartedAt).toBe("2026-01-01T00:00:00.000Z");
 
       const alive = store.claimRun(loop, "2026-01-01T00:01:00.000Z", "runner", new Date("2026-01-01T00:01:00Z"));
-      store.recordRunProcess(alive!.run.id, { pid: process.pid, pgid: process.pid });
+      store.recordRunProcess(alive!.run.id, { pid: process.pid, pgid: process.pid }, { claimToken: alive!.claimToken });
 
       const result = store.recoverExpiredRunLeasesDetailed(new Date("2026-01-01T00:02:00Z"));
       expect(result.abandoned.map((run) => run.id)).toEqual([dead!.run.id]);
@@ -2392,7 +2393,7 @@ exit 0
         pid: process.pid,
         pgid: process.pid,
         processStartedAt: new Date(Date.now() - 24 * 60 * 60 * 1_000).toISOString(),
-      });
+      }, { claimToken: recycled!.claimToken });
       const result = store.recoverExpiredRunLeasesDetailed(new Date("2026-01-01T00:02:00Z"));
       expect(result.abandoned.map((run) => run.id)).toEqual([recycled!.run.id]);
       expect(result.deferred).toEqual([]);
@@ -2405,14 +2406,14 @@ exit 0
         pid: process.pid,
         pgid: process.pid,
         processStartedAt: new Date(Date.now() - 24 * 60 * 60 * 1_000).toISOString(),
-      });
+      }, { claimToken: stale!.claimToken });
       const takeover = store.claimRun(loop, "2026-01-01T00:10:00.000Z", "runner-b", new Date("2026-01-01T00:11:00Z"));
       expect(takeover).toBeDefined();
       expect(takeover?.run.claimedBy).toBe("runner-b");
 
       // A matching fingerprint keeps blocking the takeover while deferring.
       const genuine = store.claimRun(loop, "2026-01-01T00:20:00.000Z", "runner-c", new Date("2026-01-01T00:20:00Z"));
-      store.recordRunProcess(genuine!.run.id, { pid: process.pid, pgid: process.pid });
+      store.recordRunProcess(genuine!.run.id, { pid: process.pid, pgid: process.pid }, { claimToken: genuine!.claimToken });
       expect(store.claimRun(loop, "2026-01-01T00:20:00.000Z", "runner-d", new Date("2026-01-01T00:21:00Z"))).toBeUndefined();
       const deferredResult = store.recoverExpiredRunLeasesDetailed(new Date("2026-01-01T00:22:00Z"));
       expect(deferredResult.deferred.map((run) => run.id)).toEqual([genuine!.run.id]);
@@ -2433,7 +2434,7 @@ exit 0
         new Date("2025-12-31T00:00:00Z"),
       );
       const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"));
-      const marked = store.markRunPid(claim!.run.id, process.pid, "runner");
+      const marked = store.markRunPid(claim!.run.id, process.pid, "runner", { claimToken: claim!.claimToken });
       expect(marked?.pid).toBe(process.pid);
       // The fingerprint is required so recovery and the daemon reaper can
       // verify pid identity later (fail-closed against pid recycling).
@@ -2841,7 +2842,7 @@ exit 0
       store.finalizeRun(
         claim!.run.id,
         { status: "succeeded", finishedAt: "2026-01-01T00:00:01.000Z", durationMs: 1_000, stdout: "real", stderr: "" },
-        { claimedBy: "runner", now: new Date("2026-01-01T00:00:01Z") },
+        { claimedBy: "runner", claimToken: claim!.claimToken, now: new Date("2026-01-01T00:00:01Z") },
       );
       expect(store.getRun(claim!.run.id)?.status).toBe("succeeded");
 

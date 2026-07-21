@@ -461,7 +461,7 @@ describe("loops sdk", () => {
           stdout: "seed",
           stderr: "",
         },
-        { claimedBy: "seed", now: new Date("2026-01-01T00:00:01Z") },
+        { claimedBy: "seed", claimToken: claim!.claimToken, now: new Date("2026-01-01T00:00:01Z") },
       );
 
       const run = await client.runNow(loop.id);

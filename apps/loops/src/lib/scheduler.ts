@@ -49,6 +49,7 @@ export interface TickResult {
 export interface ClaimedLoopRun {
   loop: Loop;
   run: LoopRun;
+  claimToken: string;
 }
 
 export interface ClaimDueRunsResult extends TickResult {
@@ -182,6 +183,7 @@ export async function runLoopNow(deps: RunLoopNowDeps): Promise<RunLoopNowResult
   const run = await executeClaimedRun({
     store,
     runnerId,
+    claimToken: claim.claimToken,
     loop: claim.loop,
     run: claim.run,
     now: deps.now,
@@ -278,6 +280,7 @@ export function advanceLoop(
 export async function executeClaimedRun(deps: {
   store: Store;
   runnerId: string;
+  claimToken: string;
   loop: Loop;
   run: LoopRun;
   now?: () => Date;
@@ -292,6 +295,7 @@ export async function executeClaimedRun(deps: {
   heartbeat = setInterval(() => {
     deps.store.heartbeatRunLease(deps.run.id, deps.runnerId, deps.loop.leaseMs, new Date(), {
       daemonLeaseId: deps.daemonLeaseId,
+      claimToken: deps.claimToken,
     });
   }, heartbeatEveryMs);
   heartbeat.unref();
@@ -300,7 +304,10 @@ export async function executeClaimedRun(deps: {
     const result = await (deps.execute ?? ((loop, run) =>
       executeLoopTarget(deps.store, loop, run, {
         daemonLeaseId: deps.daemonLeaseId,
-        onSpawn: (pid) => deps.store.markRunPid(run.id, pid, deps.runnerId, { daemonLeaseId: deps.daemonLeaseId }),
+        onSpawn: (pid) => deps.store.markRunPid(run.id, pid, deps.runnerId, {
+          daemonLeaseId: deps.daemonLeaseId,
+          claimToken: deps.claimToken,
+        }),
       })))(deps.loop, deps.run);
     const finalResult = deps.finalizeResult?.(result, deps.loop, deps.run) ?? result;
     deps.beforeFinalize?.(deps.loop, deps.run);
@@ -315,6 +322,7 @@ export async function executeClaimedRun(deps: {
       pid: finalResult.pid,
     }, {
       claimedBy: deps.runnerId,
+      claimToken: deps.claimToken,
       daemonLeaseId: deps.daemonLeaseId,
       now: deps.now?.() ?? new Date(),
     });
@@ -335,6 +343,7 @@ export async function executeClaimedRun(deps: {
       error: err instanceof Error ? err.message : String(err),
     }, {
       claimedBy: deps.runnerId,
+      claimToken: deps.claimToken,
       daemonLeaseId: deps.daemonLeaseId,
       now: deps.now?.() ?? finishedAt,
     });
@@ -427,6 +436,7 @@ async function runSlot(deps: SchedulerDeps, loop: Loop, scheduledFor: string): P
   const finalRun = await executeClaimedRun({
     store: deps.store,
     runnerId: deps.runnerId,
+    claimToken: claim.claimToken,
     loop: claim.loop,
     run: claim.run,
     now: deps.now,

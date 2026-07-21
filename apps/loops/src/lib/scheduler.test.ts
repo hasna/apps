@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ExecutorResult, Loop, LoopRun } from "../types.js";
 import { planLoopAdvancement } from "./advancement.js";
+import { RunFinalizationConflictError } from "./errors.js";
 import { buildHealthReport } from "./health.js";
 import {
   advanceLoop,
@@ -247,6 +248,47 @@ describe("scheduler", () => {
     }
   });
 
+  test("same-runner reclaim fences stale scheduler execution by exact claim token", async () => {
+    const store = new Store(":memory:");
+    try {
+      const claimedAt = new Date("2026-01-01T00:00:00.000Z");
+      const loop = store.createLoop({
+        name: "scheduler-same-runner-reclaim",
+        schedule: { type: "once", at: claimedAt.toISOString() },
+        target: { type: "command", command: "true" },
+        leaseMs: 10,
+      }, claimedAt);
+      const first = store.claimRun(loop, claimedAt.toISOString(), "same-runner", claimedAt);
+      const second = store.claimRun(loop, claimedAt.toISOString(), "same-runner", new Date("2026-01-01T00:00:00.020Z"));
+      expect(first?.claimToken).toBeString();
+      expect(second?.claimToken).toBeString();
+      expect(second?.claimToken).not.toBe(first?.claimToken);
+
+      await expect(executeClaimedRun({
+        store,
+        runnerId: "same-runner",
+        claimToken: first!.claimToken,
+        loop: first!.loop,
+        run: first!.run,
+        now: () => new Date("2026-01-01T00:00:00.021Z"),
+        execute: async () => result("succeeded", "2026-01-01T00:00:00.021Z"),
+      })).rejects.toBeInstanceOf(RunFinalizationConflictError);
+      expect(store.getRun(second!.run.id)).toMatchObject({ status: "running", startedAt: second!.run.startedAt });
+
+      expect(await executeClaimedRun({
+        store,
+        runnerId: "same-runner",
+        claimToken: second!.claimToken,
+        loop: second!.loop,
+        run: second!.run,
+        now: () => new Date("2026-01-01T00:00:00.022Z"),
+        execute: async () => result("succeeded", "2026-01-01T00:00:00.022Z"),
+      })).toMatchObject({ status: "succeeded" });
+    } finally {
+      store.close();
+    }
+  });
+
   test("stale daemon tick cannot recover expired runs or advance loop cursor after database lease loss", async () => {
     const store = new Store(":memory:");
     try {
@@ -434,7 +476,11 @@ describe("scheduler", () => {
           stderr: "",
           error: "first failed",
         },
-        { claimedBy: "runner", now: new Date("2026-01-01T00:00:02.100Z") },
+        {
+          claimedBy: "runner",
+          claimToken: secondAttemptOne!.claimToken,
+          now: new Date("2026-01-01T00:00:02.100Z"),
+        },
       );
       expect(store.claimRun(loop, secondSlot, "runner", new Date("2026-01-01T00:00:02.200Z"))?.run.attempt).toBe(2);
 
@@ -564,6 +610,7 @@ describe("scheduler", () => {
       const manual = await executeClaimedRun({
         store,
         runnerId: "manual",
+        claimToken: claim!.claimToken,
         loop: claim!.loop,
         run: claim!.run,
         now: () => now,
@@ -791,6 +838,7 @@ describe("scheduler", () => {
           const final = await executeClaimedRun({
             store,
             runnerId: "test",
+            claimToken: claim.claimToken,
             loop: claim.loop,
             run: claim.run,
             now: () => now,
@@ -899,7 +947,11 @@ describe("scheduler", () => {
       store.finalizeRun(
         claim!.run.id,
         { status: "succeeded", finishedAt: "2026-01-01T00:00:01.000Z", durationMs: 1_000, stdout: "ok", stderr: "" },
-        { claimedBy: "host:1:lease", now: new Date("2026-01-01T00:00:01Z") },
+        {
+          claimedBy: "host:1:lease",
+          claimToken: claim!.claimToken,
+          now: new Date("2026-01-01T00:00:01Z"),
+        },
       );
       // Wedged: loop still active with nextRunAt pinned to the terminal slot, and
       // a fresh claim on that slot yields nothing.
@@ -939,7 +991,11 @@ describe("scheduler", () => {
       store.finalizeRun(
         claim!.run.id,
         { status: "succeeded", finishedAt, durationMs: 1_000, stdout: "ok", stderr: "" },
-        { claimedBy: "host:1:lease", now: new Date(finishedAt) },
+        {
+          claimedBy: "host:1:lease",
+          claimToken: claim!.claimToken,
+          now: new Date(finishedAt),
+        },
       );
       expect(store.getLoop(loop.id)?.nextRunAt).toBe(slot);
 

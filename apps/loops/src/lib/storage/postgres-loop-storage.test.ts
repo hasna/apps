@@ -1044,7 +1044,7 @@ suite("PostgresLoopStorage (live)", () => {
     const second = await storage.claimRun(loop, slot, "runner-2");
     expect(second).toBeUndefined();
 
-    const rec = await storage.recordRunProcess(claim!.run.id, { pid: 4242 });
+    const rec = await storage.recordRunProcess(claim!.run.id, { pid: 4242 }, { claimToken: token });
     expect(rec?.pid).toBe(4242);
 
     const hb = await storage.heartbeatRunLease(claim!.run.id, "runner-1", 60_000, new Date(), { claimToken: token });
@@ -1062,6 +1062,70 @@ suite("PostgresLoopStorage (live)", () => {
     const runs = await storage.listRuns({ loopId: loop.id });
     expect(runs.length).toBe(1);
     expect((await storage.getRunBySlot(loop.id, slot))?.id).toBe(claim!.run.id);
+  });
+
+  test("same-runner reclaim fences stale and tokenless PostgreSQL work", async () => {
+    const claimedAt = new Date("2026-07-06T10:10:00.000Z");
+    const loop = await storage.createLoop(loopInput("pg-same-runner-reclaim", { leaseMs: 10 }));
+    const first = await storage.claimRun(loop, claimedAt.toISOString(), "runner-same", claimedAt);
+    const second = await storage.claimRun(
+      loop,
+      claimedAt.toISOString(),
+      "runner-same",
+      new Date("2026-07-06T10:10:00.020Z"),
+    );
+    expect(first?.claimToken).toBeString();
+    expect(second?.claimToken).toBeString();
+    expect(second?.claimToken).not.toBe(first?.claimToken);
+
+    expect(await storage.recordRunProcess(second!.run.id, { pid: 4242 })).toBeUndefined();
+    expect(await storage.recordRunProcess(second!.run.id, { pid: 4242 }, { claimToken: first!.claimToken })).toBeUndefined();
+    expect(await storage.recordRunProcess(second!.run.id, { pid: 4242 }, { claimToken: second!.claimToken })).toMatchObject({
+      id: second!.run.id,
+      pid: 4242,
+    });
+    expect(await storage.heartbeatRunLease(
+      second!.run.id,
+      "runner-same",
+      60_000,
+      new Date("2026-07-06T10:10:00.021Z"),
+    )).toBeUndefined();
+    expect(await storage.heartbeatRunLease(
+      second!.run.id,
+      "runner-same",
+      60_000,
+      new Date("2026-07-06T10:10:00.021Z"),
+      { claimToken: first!.claimToken },
+    )).toBeUndefined();
+    expect(await storage.heartbeatRunLease(
+      second!.run.id,
+      "runner-same",
+      60_000,
+      new Date("2026-07-06T10:10:00.021Z"),
+      { claimToken: second!.claimToken },
+    )).toMatchObject({ status: "running" });
+
+    const patch = {
+      status: "succeeded" as const,
+      finishedAt: "2026-07-06T10:10:00.030Z",
+      durationMs: 10,
+      stdout: "",
+      stderr: "",
+    };
+    await expect(storage.finalizeRun(second!.run.id, patch, {
+      claimedBy: "runner-same",
+      now: new Date("2026-07-06T10:10:00.030Z"),
+    })).rejects.toMatchObject({ reason: "stale_claim" });
+    await expect(storage.finalizeRun(second!.run.id, patch, {
+      claimedBy: "runner-same",
+      claimToken: first!.claimToken,
+      now: new Date("2026-07-06T10:10:00.030Z"),
+    })).rejects.toMatchObject({ reason: "stale_claim" });
+    expect(await storage.finalizeRun(second!.run.id, patch, {
+      claimedBy: "runner-same",
+      claimToken: second!.claimToken,
+      now: new Date("2026-07-06T10:10:00.030Z"),
+    })).toMatchObject({ status: "succeeded" });
   });
 
   test("finalizeRun bounds runner timestamps and uses PostgreSQL server receipt time for omitted duration", async () => {
@@ -1302,14 +1366,14 @@ suite("PostgresLoopStorage (live)", () => {
     expect(result.deferred.length).toBe(0);
   });
 
-  test("paginates recovered lease rows by a stable tenant-scoped keyset snapshot", async () => {
-    const loop = await storage.createLoop(loopInput("recovered-keyset-pages"));
-    for (let index = 0; index < 3; index += 1) {
+  test("paginates an immutable tenant-scoped recovered-row snapshot", async () => {
+    for (const id of ["a", "z"]) {
+      const loop = await storage.createLoop(loopInput(`recovered-keyset-pages-${id}`));
       await storage.upsertMigrationRun({
-        id: `recovered-keyset-run-${index}`,
+        id: `recovered-keyset-run-${id}`,
         loopId: loop.id,
         loopName: loop.name,
-        scheduledFor: new Date(Date.parse("2026-07-06T12:00:00.000Z") + index).toISOString(),
+        scheduledFor: "2026-07-06T12:00:00.000Z",
         attempt: 1,
         status: "abandoned",
         finishedAt: "2026-07-06T12:01:00.000Z",
@@ -1318,18 +1382,90 @@ suite("PostgresLoopStorage (live)", () => {
         updatedAt: "2026-07-06T12:01:00.000Z",
       });
     }
-    const first = await storage.listRecoveredLeaseRunsPage({ limit: 2 });
-    expect(first.runs.map((run) => run.id)).toEqual([
-      "recovered-keyset-run-0",
-      "recovered-keyset-run-1",
+    const middleLoop = await storage.createLoop(loopInput("recovered-keyset-pages-m"));
+    const middle = {
+      id: "recovered-keyset-run-m",
+      loopId: middleLoop.id,
+      loopName: middleLoop.name,
+      scheduledFor: "2026-07-06T12:00:00.000Z",
+      attempt: 1,
+      status: "failed" as const,
+      finishedAt: "2026-07-06T12:01:00.000Z",
+      error: "not recovered yet",
+      createdAt: "2026-07-06T12:00:00.000Z",
+      updatedAt: "2026-07-06T12:01:00.000Z",
+    };
+    await storage.upsertMigrationRun(middle);
+    const first = await storage.listRecoveredLeaseRunsPage({ limit: 1 });
+    expect(first.runs.map((run) => run.id)).toEqual(["recovered-keyset-run-a"]);
+    expect(first.snapshot?.map((entry) => entry.id)).toEqual([
+      "recovered-keyset-run-a",
+      "recovered-keyset-run-z",
     ]);
-    const second = await storage.listRecoveredLeaseRunsPage({
-      limit: 2,
-      after: first.nextCursor,
-      snapshotEnd: first.snapshotEnd,
+    expect(first.nextOffset).toBe(1);
+
+    await storage.upsertMigrationRun({
+      ...middle,
+      status: "abandoned",
+      finishedAt: "2026-07-06T12:01:00.000Z",
+      error: "run lease expired before completion",
+      updatedAt: "2026-07-06T12:01:00.000Z",
+    }, { replace: true });
+    const insertedLoop = await storage.createLoop(loopInput("recovered-keyset-pages-n"));
+    await storage.upsertMigrationRun({
+      id: "recovered-keyset-run-n",
+      loopId: insertedLoop.id,
+      loopName: insertedLoop.name,
+      scheduledFor: "2026-07-06T12:00:00.000Z",
+      attempt: 1,
+      status: "abandoned",
+      finishedAt: "2026-07-06T12:01:00.000Z",
+      error: "run lease expired before completion",
+      createdAt: "2026-07-06T12:00:00.000Z",
+      updatedAt: "2026-07-06T12:01:00.000Z",
     });
-    expect(second.runs.map((run) => run.id)).toEqual(["recovered-keyset-run-2"]);
+    const second = await storage.listRecoveredLeaseRunsPage({
+      limit: 1,
+      snapshot: first.snapshot,
+      offset: first.nextOffset,
+    });
+    expect(second.runs.map((run) => run.id)).toEqual(["recovered-keyset-run-z"]);
+    expect(second.runs.map((run) => run.id)).not.toContain("recovered-keyset-run-m");
+    expect(second.runs.map((run) => run.id)).not.toContain("recovered-keyset-run-n");
+    expect(second.nextOffset).toBeUndefined();
   });
+
+  test("drains more than 1000 immutable recovered snapshot members", async () => {
+    const loop = await storage.createLoop(loopInput("recovered-snapshot-1001"));
+    const total = 1_001;
+    for (let index = 0; index < total; index += 1) {
+      const scheduledFor = new Date(Date.parse("2026-07-06T12:00:00.000Z") + index).toISOString();
+      await storage.upsertMigrationRun({
+        id: `recovered-snapshot-1001-${String(index).padStart(4, "0")}`,
+        loopId: loop.id,
+        loopName: loop.name,
+        scheduledFor,
+        attempt: 1,
+        status: "abandoned",
+        finishedAt: "2026-07-06T12:02:00.000Z",
+        error: "run lease expired before completion",
+        createdAt: scheduledFor,
+        updatedAt: "2026-07-06T12:02:00.000Z",
+      });
+    }
+    const first = await storage.listRecoveredLeaseRunsPage({ limit: 1_000 });
+    expect(first.runs).toHaveLength(1_000);
+    expect(first.snapshot).toHaveLength(total);
+    expect(first.nextOffset).toBe(1_000);
+    const second = await storage.listRecoveredLeaseRunsPage({
+      limit: 1_000,
+      snapshot: first.snapshot,
+      offset: first.nextOffset,
+    });
+    expect(second.runs).toHaveLength(1);
+    expect(second.nextOffset).toBeUndefined();
+    expect(new Set([...first.runs, ...second.runs].map((run) => run.id)).size).toBe(total);
+  }, 60_000);
 
   test("archives a generated one-shot workflow exactly once after workflow finalization", async () => {
     const invocation = await storage.createWorkflowInvocation({
