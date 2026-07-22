@@ -18,6 +18,8 @@ import type {
   TaskHistory,
   TaskList,
   TaskTemplate,
+  TemplateTask,
+  TemplateTaskInput,
   TemplateWithTasks,
   UpdatePlanInput,
   UpdateProjectInput,
@@ -65,7 +67,7 @@ import {
   validateSnapshotRoutingRecords,
 } from "../lib/slugs.js";
 
-type RemoteObjectType = TodosPostgresSyncRecordType | "comments" | "dependencies" | "verifications" | "commits" | "refs";
+type RemoteObjectType = TodosPostgresSyncRecordType | "comments" | "dependencies" | "verifications" | "commits" | "refs" | "template_tasks";
 
 export interface CreatePostgresTodosStorageAdapterOptions {
   client: TodosPostgresQueryClient;
@@ -193,10 +195,14 @@ export function createPostgresTodosStorageAdapter(
       get: (id) => store.get<TaskTemplate>("templates", id),
       list: async () => (await store.list<TaskTemplate>("templates")).sort((a, b) => a.name.localeCompare(b.name)),
       update: (id, input) => updateTemplate(id, input, store),
-      delete: (id, context) => store.delete("templates", id, context),
+      delete: (id, context) => deleteTemplate(id, store, context),
       getWithTasks: async (id) => {
         const template = await store.get<TaskTemplate>("templates", id);
-        return template ? { ...template, tasks: [] } satisfies TemplateWithTasks : null;
+        if (!template) return null;
+        const tasks = (await store.list<TemplateTask>("template_tasks"))
+          .filter((task) => task.template_id === id)
+          .sort((left, right) => left.position - right.position || left.id.localeCompare(right.id));
+        return { ...template, tasks } satisfies TemplateWithTasks;
       },
     },
     audit: {
@@ -1544,7 +1550,7 @@ async function updateTaskList(id: string, input: UpdateTaskListInput, store: Pos
 
 async function createTemplate(input: CreateTemplateInput, store: PostgresJsonRecordStore, context?: TodosStorageContext): Promise<TaskTemplate> {
   const timestamp = new Date().toISOString();
-  return store.upsert("templates", {
+  const template = await store.upsert("templates", {
     id: randomUUID(),
     name: input.name,
     title_pattern: input.title_pattern,
@@ -1560,6 +1566,50 @@ async function createTemplate(input: CreateTemplateInput, store: PostgresJsonRec
     machine_id: store.machineId(context),
     synced_at: null,
   }, context);
+  await replaceTemplateTasks(template.id, input.tasks ?? [], store, context);
+  return template;
+}
+
+async function replaceTemplateTasks(
+  templateId: string,
+  inputs: TemplateTaskInput[],
+  store: PostgresJsonRecordStore,
+  context?: TodosStorageContext,
+): Promise<void> {
+  const existing = (await store.list<TemplateTask>("template_tasks"))
+    .filter((task) => task.template_id === templateId);
+  for (const task of existing) await store.delete("template_tasks", task.id, context);
+  const timestamp = new Date().toISOString();
+  for (const [position, input] of inputs.entries()) {
+    await store.upsert("template_tasks", {
+      id: randomUUID(),
+      template_id: templateId,
+      position,
+      title_pattern: input.title_pattern,
+      description: input.description ?? null,
+      priority: input.priority ?? "medium",
+      tags: input.tags ?? [],
+      task_type: input.task_type ?? null,
+      condition: input.condition ?? null,
+      include_template_id: input.include_template_id ?? null,
+      depends_on_positions: input.depends_on ?? [],
+      metadata: input.metadata ?? {},
+      created_at: timestamp,
+    }, context);
+  }
+}
+
+async function deleteTemplate(
+  id: string,
+  store: PostgresJsonRecordStore,
+  context?: TodosStorageContext,
+): Promise<boolean> {
+  const existing = await store.get<TaskTemplate>("templates", id);
+  if (!existing) return false;
+  const tasks = (await store.list<TemplateTask>("template_tasks"))
+    .filter((task) => task.template_id === id);
+  for (const task of tasks) await store.delete("template_tasks", task.id, context);
+  return store.delete("templates", id, context);
 }
 
 async function updateTemplate(id: string, input: UpdateTemplateInput, store: PostgresJsonRecordStore): Promise<TaskTemplate | null> {

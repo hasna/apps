@@ -831,6 +831,30 @@ describe("storage adapter contracts", () => {
     expect(postgres.calls.some((call) => call.values?.includes("spark01"))).toBe(true);
   });
 
+  test("preserves ordered checklist steps in the direct pure remote Postgres template store", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client: postgres.client });
+    const template = await adapter.templates.create({
+      name: "Monthly accounting",
+      title_pattern: "Monthly accounting {month}",
+      tasks: [
+        { title_pattern: "Collect statements {month}" },
+        { title_pattern: "Reconcile {month}", depends_on: [0] },
+      ],
+    });
+
+    expect(await adapter.templates.getWithTasks(template.id)).toMatchObject({
+      id: template.id,
+      tasks: [
+        { position: 0, depends_on_positions: [] },
+        { position: 1, depends_on_positions: [0] },
+      ],
+    });
+    expect(await adapter.templates.delete(template.id)).toBe(true);
+    expect(await adapter.templates.getWithTasks(template.id)).toBeNull();
+    expect(postgres.calls.some((call) => call.values?.includes("template_tasks"))).toBe(true);
+  });
+
   test("renames a Postgres project and canonical list with one atomic idempotent statement", async () => {
     const postgres = createMemoryPostgresClient();
     const adapter = createPostgresTodosStorageAdapter({ client: postgres.client, sourceMachineId: "spark01" });

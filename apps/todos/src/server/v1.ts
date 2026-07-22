@@ -8,7 +8,7 @@
  * over the core storage lib — there are NO stubs; unimplemented routes 404.
  */
 import { LockError, ProjectNotFoundError, ResourceConflictError } from "../types/index.js";
-import type { CreatePlanInput, CreateProjectInput, CreateTaskInput, CreateTaskListInput, RenameProjectInput, TaskComment, UpdateTaskInput, UpdateTaskListInput } from "../types/index.js";
+import type { CreatePlanInput, CreateProjectInput, CreateTaskInput, CreateTaskListInput, CreateTemplateInput, RenameProjectInput, TaskComment, TemplateTaskInput, UpdateTaskInput, UpdateTaskListInput } from "../types/index.js";
 import type { TodosStorageContext, TodosStorageSnapshot, TodosTaskCompletionOptions } from "../storage/interfaces.js";
 import { getCloudStorageAdapter, getCloudVerifier, ensureCloudSchema } from "./cloud.js";
 import { redactEvidenceText } from "../lib/redaction.js";
@@ -148,6 +148,58 @@ function validatePlanCreate(value: unknown):
       ...(typeof body.status === "string" ? { status: body.status as CreatePlanInput["status"] } : {}),
     },
   };
+}
+
+function validateTemplateTask(value: unknown): TemplateTaskInput | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const body = value as Record<string, unknown>;
+  const allowed = new Set(["title_pattern", "description", "priority", "tags", "task_type", "condition", "include_template_id", "depends_on", "metadata"]);
+  if (Object.keys(body).some((key) => !allowed.has(key))) return null;
+  if (typeof body.title_pattern !== "string" || !body.title_pattern.trim()) return null;
+  if (body.description !== undefined && typeof body.description !== "string") return null;
+  if (body.priority !== undefined && (typeof body.priority !== "string" || !["low", "medium", "high", "critical"].includes(body.priority))) return null;
+  if (body.tags !== undefined && (!Array.isArray(body.tags) || body.tags.some((tag) => typeof tag !== "string" || !tag.trim()))) return null;
+  for (const field of ["task_type", "condition", "include_template_id"] as const) {
+    if (body[field] !== undefined && (typeof body[field] !== "string" || !body[field].trim())) return null;
+  }
+  if (body.depends_on !== undefined && (!Array.isArray(body.depends_on) || body.depends_on.some((position) => !Number.isSafeInteger(position) || position < 0))) return null;
+  if (body.metadata !== undefined && (!body.metadata || typeof body.metadata !== "object" || Array.isArray(body.metadata))) return null;
+  return body as unknown as TemplateTaskInput;
+}
+
+function validateTemplateCreate(value: unknown):
+  | { ok: true; input: CreateTemplateInput }
+  | { ok: false; message: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, message: "template body must be an object" };
+  const body = value as Record<string, unknown>;
+  const allowed = new Set(["name", "title_pattern", "description", "priority", "tags", "variables", "project_id", "plan_id", "metadata", "tasks"]);
+  const unknown = Object.keys(body).find((key) => !allowed.has(key));
+  if (unknown) return { ok: false, message: `unknown template field: ${unknown}` };
+  if (typeof body.name !== "string" || !body.name.trim()) return { ok: false, message: "name must be a non-empty string" };
+  if (typeof body.title_pattern !== "string" || !body.title_pattern.trim()) return { ok: false, message: "title_pattern must be a non-empty string" };
+  if (body.description !== undefined && typeof body.description !== "string") return { ok: false, message: "description must be a string" };
+  if (body.priority !== undefined && (typeof body.priority !== "string" || !["low", "medium", "high", "critical"].includes(body.priority))) return { ok: false, message: "priority must be low, medium, high, or critical" };
+  if (body.tags !== undefined && (!Array.isArray(body.tags) || body.tags.some((tag) => typeof tag !== "string" || !tag.trim()))) return { ok: false, message: "tags must be an array of non-empty strings" };
+  if (body.variables !== undefined && (!Array.isArray(body.variables) || body.variables.some((variable) => !variable || typeof variable !== "object" || Array.isArray(variable) ||
+    typeof (variable as Record<string, unknown>).name !== "string" || !(variable as Record<string, unknown>).name ||
+    typeof (variable as Record<string, unknown>).required !== "boolean" ||
+    ((variable as Record<string, unknown>).default !== undefined && typeof (variable as Record<string, unknown>).default !== "string") ||
+    ((variable as Record<string, unknown>).description !== undefined && typeof (variable as Record<string, unknown>).description !== "string")))) {
+    return { ok: false, message: "variables must be valid template variable objects" };
+  }
+  for (const field of ["project_id", "plan_id"] as const) {
+    if (body[field] !== undefined && (typeof body[field] !== "string" || !body[field].trim())) return { ok: false, message: `${field} must be a non-empty string` };
+  }
+  if (body.metadata !== undefined && (!body.metadata || typeof body.metadata !== "object" || Array.isArray(body.metadata))) return { ok: false, message: "metadata must be an object" };
+  const tasks = body.tasks === undefined ? [] : Array.isArray(body.tasks) ? body.tasks.map(validateTemplateTask) : null;
+  if (tasks === null || tasks.some((task) => task === null)) return { ok: false, message: "tasks must be valid template task objects" };
+  const taskInputs = tasks as TemplateTaskInput[];
+  for (const [position, task] of taskInputs.entries()) {
+    if ((task.depends_on ?? []).some((dependency) => dependency >= position)) {
+      return { ok: false, message: "template task dependencies must reference earlier task positions" };
+    }
+  }
+  return { ok: true, input: { ...body, tasks: taskInputs } as CreateTemplateInput };
 }
 
 async function readJson<T>(req: Request): Promise<T | null> {
@@ -882,6 +934,32 @@ export async function handleV1Request(
         return json({ deleted: true, id });
       }
       if (id) return error(405, `method ${method} not allowed on /v1/plans/:id`);
+    }
+
+    // ── /v1/templates ──
+    if (resource === "templates") {
+      if (!id && method === "GET") {
+        const projectId = url.searchParams.get("project_id");
+        const templates = (await store.templates.list()).filter((template) => projectId === null || template.project_id === projectId);
+        return json({ templates, count: templates.length });
+      }
+      if (!id && method === "POST") {
+        const body = await readJson<unknown>(req);
+        const validated = validateTemplateCreate(body);
+        if (!validated.ok) return error(400, validated.message);
+        const template = await store.templates.create(validated.input, contextFromPrincipal(principal));
+        return json({ template: await store.templates.getWithTasks(template.id) }, 201);
+      }
+      if (!id) return error(405, `method ${method} not allowed on /v1/templates`);
+      if (method === "GET") {
+        const template = await store.templates.getWithTasks(id);
+        return template ? json({ template }) : error(404, "template not found");
+      }
+      if (method === "DELETE") {
+        const deleted = await store.templates.delete(id, contextFromPrincipal(principal));
+        return deleted ? json({ deleted: true, id }) : error(404, "template not found");
+      }
+      return error(405, `method ${method} not allowed on /v1/templates/:id`);
     }
 
     // ── /v1/agents ──

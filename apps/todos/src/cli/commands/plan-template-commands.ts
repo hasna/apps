@@ -16,8 +16,10 @@ import { formatTaskLine, autoProject, handleError, output } from "../helpers.js"
 import {
   getTodosCloudClient,
   cloudCreatePlan,
+  cloudCreateTemplate,
   cloudDeletePlan,
   cloudListPlans,
+  cloudListTemplates,
   cloudListTasks,
   cloudResolvePlan,
   cloudResolveProjectRef,
@@ -298,6 +300,34 @@ export function registerPlanTemplateCommands(program: Command) {
     .option("--var <vars...>", "Variable substitutions: key=value (e.g. --var feature=login)")
     .action(async (opts) => {
       const globalOpts = program.opts();
+      const cloud = getTodosCloudClient();
+      if (cloud) {
+        try {
+          const projectId = globalOpts.project ? await cloudResolveProjectRef(cloud, globalOpts.project) : undefined;
+          if (opts.add) {
+            if (!opts.title) { console.error(chalk.red("--title is required with --add")); process.exit(1); }
+            const template = await cloudCreateTemplate(cloud, {
+              name: opts.add,
+              title_pattern: opts.title,
+              description: opts.description,
+              priority: opts.priority || "medium",
+              tags: opts.tags ? opts.tags.split(",").map((tag: string) => tag.trim()).filter(Boolean) : [],
+              project_id: projectId,
+            });
+            if (globalOpts.json) { output(template, true); }
+            else { console.log(chalk.green(`Template created: ${template.id.slice(0, 8)} | ${template.name} | "${template.title_pattern}"`)); }
+            return;
+          }
+          const templates = await cloudListTemplates(cloud, projectId);
+          if (globalOpts.json) { output(templates, true); return; }
+          if (templates.length === 0) { console.log(chalk.dim("No templates.")); return; }
+          console.log(chalk.bold(`${templates.length} template(s):\n`));
+          for (const template of templates) {
+            console.log(`  ${chalk.dim(template.id.slice(0, 8))} ${chalk.bold(template.name)} ${chalk.cyan(`"${template.title_pattern}"`)} ${chalk.yellow(template.priority)}`);
+          }
+        } catch (error) { handleError(error); }
+        return;
+      }
       const {
         createTemplate,
         getTemplateWithTasks,
@@ -535,14 +565,16 @@ export function registerPlanTemplateCommands(program: Command) {
     .option("--file <path>", "Path to template JSON file (alternative to positional arg)")
     .action(async (file: string | undefined, opts: { file?: string }) => {
       const globalOpts = program.opts();
-      const { importTemplate } = await import("../../db/templates.js");
       const { readFileSync } = await import("node:fs");
       try {
         const filePath = file || opts.file;
         if (!filePath) { console.error(chalk.red("Provide a file path: todos template-import <file> or --file <path>")); process.exit(1); }
         const content = readFileSync(filePath, "utf-8");
         const json = JSON.parse(content);
-        const template = importTemplate(json);
+        const cloud = getTodosCloudClient();
+        const template = cloud
+          ? await cloudCreateTemplate(cloud, json)
+          : (await import("../../db/templates.js")).importTemplate(json);
         if (globalOpts.json) { output(template, true); }
         else { console.log(chalk.green(`Template imported: ${template.id.slice(0, 8)} | ${template.name} | "${template.title_pattern}"`)); }
       } catch (e) { handleError(e); }

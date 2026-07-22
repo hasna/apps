@@ -9,7 +9,7 @@
  */
 import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
 import { resolve as resolvePath } from "node:path";
-import type { Agent, CreatePlanInput, CreateTaskListInput, Plan, Project, RegisterAgentInput, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList, UpdatePlanInput, UpdateTaskListInput } from "../types/index.js";
+import type { Agent, CreatePlanInput, CreateTaskListInput, CreateTemplateInput, Plan, Project, RegisterAgentInput, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList, TaskTemplate, TemplateWithTasks, UpdatePlanInput, UpdateTaskListInput } from "../types/index.js";
 import { redactEvidenceText } from "../lib/redaction.js";
 
 type Env = Record<string, string | undefined>;
@@ -455,6 +455,48 @@ export async function cloudUpdateTask(client: HasnaStorageClient, id: string, pa
 export async function cloudDeleteTask(client: HasnaStorageClient, id: string): Promise<boolean> {
   try {
     await client.transport.del(`/tasks/${encodeURIComponent(id)}`);
+    return true;
+  } catch (error) {
+    if (error && typeof error === "object" && (error as { status?: unknown }).status === 404) return false;
+    throw error;
+  }
+}
+
+function unwrapTemplate(raw: unknown): TemplateWithTasks {
+  if (raw && typeof raw === "object" && "template" in (raw as Record<string, unknown>)) {
+    return (raw as { template: TemplateWithTasks }).template;
+  }
+  return raw as TemplateWithTasks;
+}
+
+/** List reusable templates from the authenticated cloud authority. */
+export async function cloudListTemplates(client: HasnaStorageClient, projectId?: string): Promise<TaskTemplate[]> {
+  const result = await requiredRemoteRoute(client, "/v1/templates", () =>
+    client.list<TaskTemplate>("templates", { query: projectId ? { project_id: projectId } : undefined }));
+  const envelope = result.raw as { templates?: TaskTemplate[] } | undefined;
+  return Array.isArray(envelope?.templates) ? envelope.templates : result.items;
+}
+
+/** Create a reusable template, including its ordered checklist steps, remotely. */
+export async function cloudCreateTemplate(client: HasnaStorageClient, input: CreateTemplateInput): Promise<TemplateWithTasks> {
+  return unwrapTemplate(await requiredRemoteRoute(client, "/v1/templates", () =>
+    client.create<unknown>("templates", input)));
+}
+
+/** Fetch a reusable template with its ordered checklist steps; null on 404. */
+export async function cloudGetTemplate(client: HasnaStorageClient, id: string): Promise<TemplateWithTasks | null> {
+  try {
+    return unwrapTemplate(await client.get<unknown>("templates", id));
+  } catch (error) {
+    if (error && typeof error === "object" && (error as { status?: unknown }).status === 404) return null;
+    throw error;
+  }
+}
+
+/** Delete a reusable template remotely; no local fallback. */
+export async function cloudDeleteTemplate(client: HasnaStorageClient, id: string): Promise<boolean> {
+  try {
+    await client.transport.del(`/templates/${encodeURIComponent(id)}`);
     return true;
   } catch (error) {
     if (error && typeof error === "object" && (error as { status?: unknown }).status === 404) return false;
