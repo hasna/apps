@@ -24,14 +24,9 @@ concurrency:
   group: ecr-candidate-${{ inputs.source_sha }}
   cancel-in-progress: false
 
-permissions:
-  contents: read
-  id-token: write
+permissions: {}
 
 env:
-  AWS_REGION: ${{ vars.AWS_REGION }}
-  AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
-  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
   SOURCE_TRACK: ${{ inputs.source_track }}
   SOURCE_SHA: ${{ inputs.source_sha }}
   CONFIRMATION: ${{ inputs.confirmation }}
@@ -40,11 +35,13 @@ env:
   SOURCE_CONTRACTS_JSON: '{"main":{"ref":"refs/heads/main","expectedSha":null,"expectedPackageVersion":null},"maint/0.4.28":{"ref":"refs/heads/maint/0.4.28","expectedSha":"361d351445c256e397dbeb654f112facb7c572ca","expectedPackageVersion":"0.4.28-offsite.1"}}'
 
 jobs:
-  build-scan-push:
-    name: Build, scan, and push immutable candidate
+  build_scan:
+    name: Build and scan immutable candidate
     runs-on: ubuntu-24.04-arm
-    environment: ecr-candidate
     timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: none
     steps:
       - name: Validate dispatch and configuration
         id: preflight
@@ -60,23 +57,6 @@ jobs:
             echo "confirmation must exactly match: push <full-sha>" >&2
             exit 1
           fi
-          if [[ -z "${AWS_REGION}" || -z "${AWS_ROLE_ARN}" || -z "${ECR_REPOSITORY}" ]]; then
-            echo "AWS_REGION, AWS_ROLE_ARN, and ECR_REPOSITORY repository variables are required" >&2
-            exit 1
-          fi
-          if [[ ! "${AWS_REGION}" =~ ^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$ ]]; then
-            echo "AWS_REGION has an invalid format" >&2
-            exit 1
-          fi
-          if [[ ! "${AWS_ROLE_ARN}" =~ ^arn:(aws|aws-us-gov|aws-cn):iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+$ ]]; then
-            echo "AWS_ROLE_ARN has an invalid format" >&2
-            exit 1
-          fi
-          if [[ ! "${ECR_REPOSITORY}" =~ ^[a-z0-9]+([._/-][a-z0-9]+)*$ ]]; then
-            echo "ECR_REPOSITORY has an invalid format" >&2
-            exit 1
-          fi
-
           if ! source_contract="$(jq -cer --arg source_track "${SOURCE_TRACK}" \
             '.[$source_track] // error("unsupported source_track")' \
             <<<"${SOURCE_CONTRACTS_JSON}")"; then
@@ -200,20 +180,39 @@ jobs:
         run: |
           set -Eeuo pipefail
           if ! jq -e \
-            --arg expected_artifact_name "openloops-candidate:${SOURCE_SHA}" \
+            --arg expected_image_tag "openloops-candidate:${SOURCE_SHA}" \
             --arg expected_image_id "${LOCAL_IMAGE_ID}" '
             type == "object"
             and (.SchemaVersion == 2)
             and (.Trivy | type == "object")
             and (.Trivy.Version == "0.70.0")
-            and (.ArtifactName == $expected_artifact_name)
+            and (.ArtifactName == $expected_image_id)
             and (.ArtifactType == "container_image")
             and (.Metadata | type == "object")
             and (.Metadata.ImageID == $expected_image_id)
+            and (.Metadata.Reference == $expected_image_tag)
+            and (.Metadata.RepoTags | type == "array" and index($expected_image_tag) != null)
+            and (.Metadata.ImageConfig | type == "object")
+            and (.Metadata.ImageConfig.architecture == "arm64")
+            and (.Metadata.ImageConfig.os == "linux")
             and (.Results | type == "array" and length > 0)
+            and any(.Results[]; .Class == "os-pkgs")
+            and any(.Results[]; .Class == "lang-pkgs")
             and all(.Results[];
               type == "object"
               and (.Target | type == "string" and length > 0)
+              and (.Class == "os-pkgs" or .Class == "lang-pkgs")
+              and (.Type | type == "string" and length > 0)
+              and (.Packages | type == "array" and length > 0)
+              and all(.Packages[];
+                type == "object"
+                and (.ID | type == "string" and length > 0)
+                and (.Name | type == "string" and length > 0)
+                and (.Version | type == "string" and length > 0)
+                and (.Identifier | type == "object")
+                and (.Identifier.PURL | type == "string" and length > 0)
+                and (.Identifier.UID | type == "string" and length > 0)
+              )
               and (.Vulnerabilities == null or (.Vulnerabilities | type == "array"))
               and all(.Vulnerabilities[]?;
                 type == "object" and (.Severity == "CRITICAL" or .Severity == "HIGH")
@@ -243,6 +242,441 @@ jobs:
           scanners: vuln
           vuln-type: os,library
           exit-code: "0"
+
+      - name: Enforce SBOM identity gate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if ! jq -e \
+            --arg expected_image_tag "openloops-candidate:${SOURCE_SHA}" \
+            --arg expected_image_id "${LOCAL_IMAGE_ID}" '
+            type == "object"
+            and (.bomFormat == "CycloneDX")
+            and (.specVersion == "1.6")
+            and (.version == 1)
+            and (.metadata | type == "object")
+            and (.metadata.component | type == "object")
+            and (.metadata.component.type == "container")
+            and (.metadata.component.name == $expected_image_id)
+            and (.metadata.component.properties | type == "array")
+            and any(.metadata.component.properties[];
+              .name == "aquasecurity:trivy:ImageID" and .value == $expected_image_id
+            )
+            and any(.metadata.component.properties[];
+              .name == "aquasecurity:trivy:Reference" and .value == $expected_image_tag
+            )
+            and any(.metadata.component.properties[];
+              .name == "aquasecurity:trivy:RepoTag" and .value == $expected_image_tag
+            )
+            and any(.metadata.component.properties[];
+              .name == "aquasecurity:trivy:SchemaVersion" and .value == "2"
+            )
+            and (.components | type == "array" and length > 0)
+            and any(.components[]; .type == "operating-system")
+            and any(.components[]; .type == "library")
+            and all(.components[];
+              type == "object"
+              and (.type == "operating-system" or .type == "library")
+              and (.name | type == "string" and length > 0)
+              and (.version | type == "string" and length > 0)
+              and (if .type == "library" then (.purl | type == "string" and length > 0) else true end)
+            )
+          ' openloops-candidate.sbom.cdx.json >/dev/null; then
+            echo "CycloneDX SBOM is empty, malformed, or bound to a different image" >&2
+            exit 1
+          fi
+
+      - name: Package scanned image and hash-bound evidence
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          local_image_tag="openloops-candidate:${SOURCE_SHA}"
+          inspected_image_id="$(docker image inspect --format '{{.Id}}' "${local_image_tag}")"
+          inspected_architecture="$(docker image inspect --format '{{.Architecture}}' "${local_image_tag}")"
+          inspected_os="$(docker image inspect --format '{{.Os}}' "${local_image_tag}")"
+          inspected_revision="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${local_image_tag}")"
+          inspected_source="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.source"}}' "${local_image_tag}")"
+          if [[ "${inspected_image_id}" != "${LOCAL_IMAGE_ID}" || "${inspected_architecture}" != "arm64" || "${inspected_os}" != "linux" ]]; then
+            echo "built image identity or ARM64 platform changed after scanning" >&2
+            exit 1
+          fi
+          if [[ "${inspected_revision}" != "${SOURCE_SHA}" || "${inspected_source}" != "https://github.com/${GITHUB_REPOSITORY}" ]]; then
+            echo "built image source labels do not match the verified commit" >&2
+            exit 1
+          fi
+
+          docker save --output candidate-image.tar "${local_image_tag}"
+          image_archive_sha256="$(sha256sum candidate-image.tar | awk '{print $1}')"
+          trivy_sha256="$(sha256sum trivy-local.json | awk '{print $1}')"
+          sbom_sha256="$(sha256sum openloops-candidate.sbom.cdx.json | awk '{print $1}')"
+
+          jq -n \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            --arg source_track "${SAFE_SOURCE_TRACK}" \
+            --arg source_ref "${SAFE_SOURCE_REF}" \
+            --arg source_sha "${SOURCE_SHA}" \
+            --arg package_version "${VERIFIED_PACKAGE_VERSION}" \
+            --arg image_tag "${local_image_tag}" \
+            --arg image_id "${LOCAL_IMAGE_ID}" \
+            --arg image_archive_sha256 "${image_archive_sha256}" \
+            --arg trivy_sha256 "${trivy_sha256}" \
+            --arg sbom_sha256 "${sbom_sha256}" \
+            --argjson critical "${LOCAL_CRITICAL}" \
+            --argjson high "${LOCAL_HIGH}" '
+            {
+              schemaVersion: 1,
+              repository: $repository,
+              sourceTrack: $source_track,
+              sourceRef: $source_ref,
+              sourceSha: $source_sha,
+              packageVersion: (if $package_version == "" then null else $package_version end),
+              image: {
+                localTag: $image_tag,
+                localImageId: $image_id,
+                platform: {os: "linux", architecture: "arm64"},
+                archivePath: "candidate-image.tar",
+                archiveSha256: $image_archive_sha256
+              },
+              evidence: {
+                trivy: {
+                  path: "trivy-local.json",
+                  sha256: $trivy_sha256,
+                  schemaVersion: 2,
+                  version: "0.70.0",
+                  critical: $critical,
+                  high: $high
+                },
+                sbom: {
+                  path: "openloops-candidate.sbom.cdx.json",
+                  sha256: $sbom_sha256,
+                  format: "CycloneDX",
+                  specVersion: "1.6"
+                }
+              }
+            }
+          ' > candidate-transfer-manifest.json
+
+          sha256sum \
+            candidate-image.tar \
+            trivy-local.json \
+            openloops-candidate.sbom.cdx.json \
+            > candidate-transfer-payload.sha256
+          sha256sum \
+            candidate-transfer-manifest.json \
+            candidate-transfer-payload.sha256 \
+            > candidate-transfer-envelope.sha256
+
+      - name: Upload scanned candidate transfer
+        id: transfer-upload
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ecr-candidate-transfer-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            candidate-image.tar
+            trivy-local.json
+            openloops-candidate.sbom.cdx.json
+            candidate-transfer-manifest.json
+            candidate-transfer-payload.sha256
+            candidate-transfer-envelope.sha256
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 30
+
+  push_verify:
+    name: Verify and push immutable candidate
+    needs: build_scan
+    runs-on: ubuntu-24.04-arm
+    environment: ecr-candidate
+    timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: none
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+      ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+    steps:
+      - name: Download scanned candidate transfer
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ecr-candidate-transfer-${{ github.run_id }}-${{ github.run_attempt }}
+          path: candidate-transfer
+
+      - name: Validate privileged configuration
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          if [[ ! "${SOURCE_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "source_sha must be a full lowercase 40-character commit SHA" >&2
+            exit 1
+          fi
+          if [[ "${CONFIRMATION}" != "push ${SOURCE_SHA}" ]]; then
+            echo "confirmation must exactly match: push <full-sha>" >&2
+            exit 1
+          fi
+          if [[ -z "${AWS_REGION}" || -z "${AWS_ROLE_ARN}" || -z "${ECR_REPOSITORY}" ]]; then
+            echo "AWS_REGION, AWS_ROLE_ARN, and ECR_REPOSITORY repository variables are required" >&2
+            exit 1
+          fi
+          if [[ ! "${AWS_REGION}" =~ ^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$ ]]; then
+            echo "AWS_REGION has an invalid format" >&2
+            exit 1
+          fi
+          if [[ ! "${AWS_ROLE_ARN}" =~ ^arn:(aws|aws-us-gov|aws-cn):iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+$ ]]; then
+            echo "AWS_ROLE_ARN has an invalid format" >&2
+            exit 1
+          fi
+          if [[ ! "${ECR_REPOSITORY}" =~ ^[a-z0-9]+([._/-][a-z0-9]+)*$ ]]; then
+            echo "ECR_REPOSITORY has an invalid format" >&2
+            exit 1
+          fi
+
+          if ! source_contract="$(jq -cer --arg source_track "${SOURCE_TRACK}" \
+            '.[$source_track] // error("unsupported source_track")' \
+            <<<"${SOURCE_CONTRACTS_JSON}")"; then
+            echo "source_track is not permitted" >&2
+            exit 1
+          fi
+          if ! source_ref="$(jq -er \
+            '.ref | select(type == "string" and test("^refs/heads/[A-Za-z0-9][A-Za-z0-9._/-]*$"))' \
+            <<<"${source_contract}")"; then
+            echo "source contract has an invalid branch ref" >&2
+            exit 1
+          fi
+          if ! expected_package_version="$(jq -er \
+            '.expectedPackageVersion | if . == null then "" elif type == "string" and length > 0 then . else error("invalid expectedPackageVersion") end' \
+            <<<"${source_contract}")"; then
+            echo "source contract has an invalid expected package version" >&2
+            exit 1
+          fi
+          if ! expected_source_sha="$(jq -er \
+            '.expectedSha | if . == null then "" elif type == "string" and test("^[0-9a-f]{40}$") then . else error("invalid expectedSha") end' \
+            <<<"${source_contract}")"; then
+            echo "source contract has an invalid expected source SHA" >&2
+            exit 1
+          fi
+          if [[ -n "${expected_source_sha}" && "${SOURCE_SHA}" != "${expected_source_sha}" ]]; then
+            echo "source_sha does not match the exact approved maintenance merge" >&2
+            exit 1
+          fi
+
+          short_sha="${SOURCE_SHA:0:12}"
+          candidate_tag="candidate-${short_sha}-${SOURCE_SHA}"
+          printf 'SAFE_SOURCE_TRACK=%s\n' "${SOURCE_TRACK}" >> "${GITHUB_ENV}"
+          printf 'SAFE_SOURCE_REF=%s\n' "${source_ref}" >> "${GITHUB_ENV}"
+          printf 'EXPECTED_PACKAGE_VERSION=%s\n' "${expected_package_version}" >> "${GITHUB_ENV}"
+          printf 'SAFE_SOURCE_SHA=%s\n' "${SOURCE_SHA}" >> "${GITHUB_ENV}"
+          printf 'SHORT_SHA=%s\n' "${short_sha}" >> "${GITHUB_ENV}"
+          printf 'CANDIDATE_TAG=%s\n' "${candidate_tag}" >> "${GITHUB_ENV}"
+
+      - name: Verify transferred image, scan, and SBOM evidence
+        working-directory: candidate-transfer
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          required_files=(
+            candidate-image.tar
+            trivy-local.json
+            openloops-candidate.sbom.cdx.json
+            candidate-transfer-manifest.json
+            candidate-transfer-payload.sha256
+            candidate-transfer-envelope.sha256
+          )
+          if [[ "$(find . -mindepth 1 -maxdepth 1 -type f | wc -l)" != "${#required_files[@]}" ]] \
+            || [[ -n "$(find . -mindepth 1 -maxdepth 1 ! -type f -print -quit)" ]]; then
+            echo "candidate transfer must contain exactly the expected regular files" >&2
+            exit 1
+          fi
+          for required_file in "${required_files[@]}"; do
+            if [[ ! -f "${required_file}" ]]; then
+              echo "candidate transfer is missing ${required_file}" >&2
+              exit 1
+            fi
+          done
+
+          if [[ "$(wc -l < candidate-transfer-envelope.sha256)" != "2" ]] \
+            || [[ "$(wc -l < candidate-transfer-payload.sha256)" != "3" ]]; then
+            echo "candidate transfer checksum manifests have an unexpected shape" >&2
+            exit 1
+          fi
+          for checksum_entry in candidate-transfer-manifest.json candidate-transfer-payload.sha256; do
+            if [[ "$(awk -v file="${checksum_entry}" '$2 == file && length($1) == 64 && $1 !~ /[^0-9a-f]/ { count++ } END { print count + 0 }' candidate-transfer-envelope.sha256)" != "1" ]]; then
+              echo "candidate transfer envelope does not bind ${checksum_entry} exactly once" >&2
+              exit 1
+            fi
+          done
+          for checksum_entry in candidate-image.tar trivy-local.json openloops-candidate.sbom.cdx.json; do
+            if [[ "$(awk -v file="${checksum_entry}" '$2 == file && length($1) == 64 && $1 !~ /[^0-9a-f]/ { count++ } END { print count + 0 }' candidate-transfer-payload.sha256)" != "1" ]]; then
+              echo "candidate transfer payload does not bind ${checksum_entry} exactly once" >&2
+              exit 1
+            fi
+          done
+          sha256sum --check --strict candidate-transfer-envelope.sha256
+          sha256sum --check --strict candidate-transfer-payload.sha256
+
+          image_archive_sha256="$(sha256sum candidate-image.tar | awk '{print $1}')"
+          trivy_sha256="$(sha256sum trivy-local.json | awk '{print $1}')"
+          sbom_sha256="$(sha256sum openloops-candidate.sbom.cdx.json | awk '{print $1}')"
+          expected_image_tag="openloops-candidate:${SOURCE_SHA}"
+          if ! jq -e \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            --arg source_track "${SAFE_SOURCE_TRACK}" \
+            --arg source_ref "${SAFE_SOURCE_REF}" \
+            --arg source_sha "${SOURCE_SHA}" \
+            --arg package_version "${EXPECTED_PACKAGE_VERSION}" \
+            --arg image_tag "${expected_image_tag}" \
+            --arg image_archive_sha256 "${image_archive_sha256}" \
+            --arg trivy_sha256 "${trivy_sha256}" \
+            --arg sbom_sha256 "${sbom_sha256}" '
+            type == "object"
+            and (.schemaVersion == 1)
+            and (.repository == $repository)
+            and (.sourceTrack == $source_track)
+            and (.sourceRef == $source_ref)
+            and (.sourceSha == $source_sha)
+            and (.packageVersion == (if $package_version == "" then null else $package_version end))
+            and (.image | type == "object")
+            and (.image.localTag == $image_tag)
+            and (.image.localImageId | type == "string" and test("^sha256:[0-9a-f]{64}$"))
+            and (.image.platform == {os: "linux", architecture: "arm64"})
+            and (.image.archivePath == "candidate-image.tar")
+            and (.image.archiveSha256 == $image_archive_sha256)
+            and (.evidence | type == "object")
+            and (.evidence.trivy == {
+              path: "trivy-local.json",
+              sha256: $trivy_sha256,
+              schemaVersion: 2,
+              version: "0.70.0",
+              critical: 0,
+              high: 0
+            })
+            and (.evidence.sbom == {
+              path: "openloops-candidate.sbom.cdx.json",
+              sha256: $sbom_sha256,
+              format: "CycloneDX",
+              specVersion: "1.6"
+            })
+          ' candidate-transfer-manifest.json >/dev/null; then
+            echo "candidate transfer manifest does not match this dispatch or its checksums" >&2
+            exit 1
+          fi
+          transferred_image_id="$(jq -er '.image.localImageId' candidate-transfer-manifest.json)"
+
+          if ! jq -e \
+            --arg expected_image_tag "${expected_image_tag}" \
+            --arg expected_image_id "${transferred_image_id}" '
+            type == "object"
+            and (.SchemaVersion == 2)
+            and (.Trivy | type == "object")
+            and (.Trivy.Version == "0.70.0")
+            and (.ArtifactName == $expected_image_id)
+            and (.ArtifactType == "container_image")
+            and (.Metadata | type == "object")
+            and (.Metadata.ImageID == $expected_image_id)
+            and (.Metadata.Reference == $expected_image_tag)
+            and (.Metadata.RepoTags | type == "array" and index($expected_image_tag) != null)
+            and (.Metadata.ImageConfig | type == "object")
+            and (.Metadata.ImageConfig.architecture == "arm64")
+            and (.Metadata.ImageConfig.os == "linux")
+            and (.Results | type == "array" and length > 0)
+            and any(.Results[]; .Class == "os-pkgs")
+            and any(.Results[]; .Class == "lang-pkgs")
+            and all(.Results[];
+              type == "object"
+              and (.Target | type == "string" and length > 0)
+              and (.Class == "os-pkgs" or .Class == "lang-pkgs")
+              and (.Type | type == "string" and length > 0)
+              and (.Packages | type == "array" and length > 0)
+              and all(.Packages[];
+                type == "object"
+                and (.ID | type == "string" and length > 0)
+                and (.Name | type == "string" and length > 0)
+                and (.Version | type == "string" and length > 0)
+                and (.Identifier | type == "object")
+                and (.Identifier.PURL | type == "string" and length > 0)
+                and (.Identifier.UID | type == "string" and length > 0)
+              )
+              and (.Vulnerabilities == null or (.Vulnerabilities | type == "array"))
+              and all(.Vulnerabilities[]?;
+                type == "object" and (.Severity == "CRITICAL" or .Severity == "HIGH")
+              )
+            )
+          ' trivy-local.json >/dev/null; then
+            echo "transferred Trivy evidence is malformed or bound to a different image" >&2
+            exit 1
+          fi
+          critical="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' trivy-local.json)"
+          high="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' trivy-local.json)"
+          if (( critical > 0 || high > 0 )); then
+            echo "transferred Trivy evidence contains critical/high findings" >&2
+            exit 1
+          fi
+
+          if ! jq -e \
+            --arg expected_image_tag "${expected_image_tag}" \
+            --arg expected_image_id "${transferred_image_id}" '
+            type == "object"
+            and (.bomFormat == "CycloneDX")
+            and (.specVersion == "1.6")
+            and (.version == 1)
+            and (.metadata | type == "object")
+            and (.metadata.component | type == "object")
+            and (.metadata.component.type == "container")
+            and (.metadata.component.name == $expected_image_id)
+            and (.metadata.component.properties | type == "array")
+            and any(.metadata.component.properties[];
+              .name == "aquasecurity:trivy:ImageID" and .value == $expected_image_id
+            )
+            and any(.metadata.component.properties[];
+              .name == "aquasecurity:trivy:Reference" and .value == $expected_image_tag
+            )
+            and any(.metadata.component.properties[];
+              .name == "aquasecurity:trivy:RepoTag" and .value == $expected_image_tag
+            )
+            and any(.metadata.component.properties[];
+              .name == "aquasecurity:trivy:SchemaVersion" and .value == "2"
+            )
+            and (.components | type == "array" and length > 0)
+            and any(.components[]; .type == "operating-system")
+            and any(.components[]; .type == "library")
+            and all(.components[];
+              type == "object"
+              and (.type == "operating-system" or .type == "library")
+              and (.name | type == "string" and length > 0)
+              and (.version | type == "string" and length > 0)
+              and (if .type == "library" then (.purl | type == "string" and length > 0) else true end)
+            )
+          ' openloops-candidate.sbom.cdx.json >/dev/null; then
+            echo "transferred CycloneDX SBOM is malformed or bound to a different image" >&2
+            exit 1
+          fi
+
+          docker load --input candidate-image.tar
+          loaded_image_id="$(docker image inspect --format '{{.Id}}' "${expected_image_tag}")"
+          loaded_architecture="$(docker image inspect --format '{{.Architecture}}' "${expected_image_tag}")"
+          loaded_os="$(docker image inspect --format '{{.Os}}' "${expected_image_tag}")"
+          loaded_revision="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${expected_image_tag}")"
+          loaded_source="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.source"}}' "${expected_image_tag}")"
+          if [[ "${loaded_image_id}" != "${transferred_image_id}" || "${loaded_architecture}" != "arm64" || "${loaded_os}" != "linux" ]]; then
+            echo "transferred image identity does not match scanned evidence" >&2
+            exit 1
+          fi
+          if [[ "${loaded_revision}" != "${SOURCE_SHA}" || "${loaded_source}" != "https://github.com/${GITHUB_REPOSITORY}" ]]; then
+            echo "transferred image source labels do not match this dispatch" >&2
+            exit 1
+          fi
+
+          verified_package_version="$(jq -r '.packageVersion // ""' candidate-transfer-manifest.json)"
+          printf 'LOCAL_IMAGE_ID=%s\n' "${loaded_image_id}" >> "${GITHUB_ENV}"
+          printf 'IMAGE_ARCHIVE_SHA256=%s\n' "${image_archive_sha256}" >> "${GITHUB_ENV}"
+          printf 'TRIVY_SHA256=%s\n' "${trivy_sha256}" >> "${GITHUB_ENV}"
+          printf 'SBOM_SHA256=%s\n' "${sbom_sha256}" >> "${GITHUB_ENV}"
+          printf 'VERIFIED_PACKAGE_VERSION=%s\n' "${verified_package_version}" >> "${GITHUB_ENV}"
+          printf 'LOCAL_CRITICAL=%s\n' "${critical}" >> "${GITHUB_ENV}"
+          printf 'LOCAL_HIGH=%s\n' "${high}" >> "${GITHUB_ENV}"
 
       - name: Configure AWS credentials with OIDC
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
@@ -314,6 +748,7 @@ jobs:
             exit 1
           fi
           printf 'digest=%s\n' "${remote_digest}" >> "${GITHUB_OUTPUT}"
+          printf 'IMAGE_URI=%s\n' "${image_uri}" >> "${GITHUB_ENV}"
           printf 'REMOTE_DIGEST=%s\n' "${remote_digest}" >> "${GITHUB_ENV}"
 
       - name: Wait for ECR vulnerability scan
@@ -411,13 +846,13 @@ jobs:
             --arg source_ref "${SAFE_SOURCE_REF}" \
             --arg source_sha "${SOURCE_SHA}" \
             --arg package_version "${VERIFIED_PACKAGE_VERSION}" \
-            --arg candidate_tag "${CANDIDATE_TAG}" \
+            --arg image_uri "${IMAGE_URI}" \
             --arg digest "${REMOTE_DIGEST#sha256:}" \
             --arg run_id "${GITHUB_RUN_ID}" \
             --arg run_attempt "${GITHUB_RUN_ATTEMPT}" \
             '{
               "_type": "https://in-toto.io/Statement/v1",
-              subject: [{name: ($repository + ":" + $candidate_tag), digest: {sha256: $digest}}],
+              subject: [{name: $image_uri, digest: {sha256: $digest}}],
               predicateType: "https://slsa.dev/provenance/v1",
               predicate: {
                 buildDefinition: {
@@ -448,10 +883,13 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: ecr-candidate-${{ github.run_id }}
+          name: ecr-candidate-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            trivy-local.json
-            openloops-candidate.sbom.cdx.json
+            candidate-transfer/trivy-local.json
+            candidate-transfer/openloops-candidate.sbom.cdx.json
+            candidate-transfer/candidate-transfer-manifest.json
+            candidate-transfer/candidate-transfer-payload.sha256
+            candidate-transfer/candidate-transfer-envelope.sha256
             openloops-candidate.provenance.json
             ecr-scan-counts.json
           if-no-files-found: warn

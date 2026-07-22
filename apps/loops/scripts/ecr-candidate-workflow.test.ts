@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
@@ -8,7 +8,7 @@ const workflow = readFileSync(workflowPath, "utf8");
 const severities = ["CRITICAL", "HIGH"] as const;
 const localSourceSha = "a".repeat(40);
 const localImageId = `sha256:${"b".repeat(64)}`;
-const localArtifactName = `openloops-candidate:${localSourceSha}`;
+const localImageTag = `openloops-candidate:${localSourceSha}`;
 const sourceContractsJson = workflow.match(/^  SOURCE_CONTRACTS_JSON: '([^']+)'$/m)?.[1];
 
 if (!sourceContractsJson) {
@@ -24,6 +24,14 @@ function position(fragment: string): number {
   const index = workflow.indexOf(fragment);
   expect(index).toBeGreaterThanOrEqual(0);
   return index;
+}
+
+function jobBlock(jobId: string): string {
+  const start = workflow.indexOf(`  ${jobId}:\n`);
+  expect(start).toBeGreaterThanOrEqual(0);
+  const rest = workflow.slice(start + 1);
+  const nextJob = rest.search(/^  [a-zA-Z_][a-zA-Z0-9_-]*:\n/m);
+  return nextJob === -1 ? workflow.slice(start) : workflow.slice(start, start + 1 + nextJob);
 }
 
 function severityCountFilter(severity: (typeof severities)[number]): string {
@@ -65,6 +73,8 @@ function stepScript(name: string): string {
 const preflightScript = stepScript("Validate dispatch and configuration");
 const verifySourceScript = stepScript("Verify exact commit against permitted source");
 const localScanScript = stepScript("Enforce local vulnerability gate");
+const packageTransferScript = stepScript("Package scanned image and hash-bound evidence");
+const verifyTransferScript = stepScript("Verify transferred image, scan, and SBOM evidence");
 
 function runShell(script: string, cwd: string, env: Record<string, string>) {
   return Bun.spawnSync({
@@ -228,15 +238,15 @@ function cleanLocalTrivyReport() {
     ReportID: "017b7d41-e09f-7000-80ea-000000000001",
     CreatedAt: "2026-07-22T12:34:56Z",
     ArtifactID: `sha256:${"d".repeat(64)}`,
-    ArtifactName: localArtifactName,
+    ArtifactName: localImageId,
     ArtifactType: "container_image",
     Metadata: {
       Size: 123456789,
-      OS: { Family: "debian", Name: "12.11" },
+      OS: { Family: "alpine", Name: "3.22.4" },
       ImageID: localImageId,
       DiffIDs: [layerId],
-      RepoTags: [localArtifactName],
-      Reference: localArtifactName,
+      RepoTags: [localImageTag],
+      Reference: localImageTag,
       ImageConfig: {
         architecture: "arm64",
         os: "linux",
@@ -245,18 +255,151 @@ function cleanLocalTrivyReport() {
     },
     Results: [
       {
-        Target: `${localArtifactName} (debian 12.11)`,
+        Target: `${localImageId} (alpine 3.22.4)`,
         Class: "os-pkgs",
-        Type: "debian",
+        Type: "alpine",
+        Packages: [{
+          ID: "alpine-baselayout@3.7.0-r0",
+          Name: "alpine-baselayout",
+          Identifier: {
+            PURL: "pkg:apk/alpine/alpine-baselayout@3.7.0-r0?arch=aarch64&distro=3.22.4",
+            UID: "80538c6754a60b00",
+          },
+          Version: "3.7.0-r0",
+        }],
       },
       {
-        Target: "/app/bun.lock",
+        Target: "Node.js",
         Class: "lang-pkgs",
-        Type: "bun",
-        Vulnerabilities: [],
+        Type: "node-pkg",
+        Packages: [{
+          ID: "@ai-sdk/gateway@3.0.130",
+          Name: "@ai-sdk/gateway",
+          Identifier: {
+            PURL: "pkg:npm/%40ai-sdk/gateway@3.0.130",
+            UID: "94bf07f24de0f708",
+          },
+          Version: "3.0.130",
+        }],
+        Vulnerabilities: null,
       },
     ],
   };
+}
+
+function cleanLocalSbom() {
+  return {
+    bomFormat: "CycloneDX",
+    specVersion: "1.6",
+    version: 1,
+    serialNumber: "urn:uuid:017b7d41-e09f-7000-80ea-000000000002",
+    metadata: {
+      timestamp: "2026-07-22T12:34:56Z",
+      component: {
+        "bom-ref": "fixture-container",
+        type: "container",
+        name: localImageId,
+        properties: [
+          { name: "aquasecurity:trivy:ImageID", value: localImageId },
+          { name: "aquasecurity:trivy:Reference", value: localImageTag },
+          { name: "aquasecurity:trivy:RepoTag", value: localImageTag },
+          { name: "aquasecurity:trivy:SchemaVersion", value: "2" },
+        ],
+      },
+    },
+    components: [
+      { type: "operating-system", name: "alpine", version: "3.22.4" },
+      {
+        type: "library",
+        name: "@ai-sdk/gateway",
+        version: "3.0.130",
+        purl: "pkg:npm/%40ai-sdk/gateway@3.0.130",
+      },
+    ],
+  };
+}
+
+function writeFakeDocker(binDir: string): void {
+  const dockerPath = join(binDir, "docker");
+  writeFileSync(dockerPath, [
+    "#!/usr/bin/env bash",
+    "set -Eeuo pipefail",
+    "case \"${1:-}\" in",
+    "  image)",
+    "    [[ \"${2:-}\" == \"inspect\" && \"${3:-}\" == \"--format\" ]]",
+    "    format=\"${4:-}\"",
+    "    case \"${format}\" in",
+    "      '{{.Id}}') printf '%s\\n' \"${FAKE_LOADED_IMAGE_ID:-${FAKE_IMAGE_ID}}\" ;;",
+    "      '{{.Architecture}}') printf '%s\\n' arm64 ;;",
+    "      '{{.Os}}') printf '%s\\n' linux ;;",
+    "      *org.opencontainers.image.revision*) printf '%s\\n' \"${FAKE_SOURCE_SHA}\" ;;",
+    "      *org.opencontainers.image.source*) printf 'https://github.com/%s\\n' \"${FAKE_REPOSITORY}\" ;;",
+    "      *) printf 'unsupported inspect format: %s\\n' \"${format}\" >&2; exit 64 ;;",
+    "    esac",
+    "    ;;",
+    "  save)",
+    "    [[ \"${2:-}\" == \"--output\" && -n \"${3:-}\" ]]",
+    "    printf 'fake-oci-image:%s:%s\\n' \"${FAKE_IMAGE_ID}\" \"${FAKE_SOURCE_SHA}\" > \"${3}\"",
+    "    ;;",
+    "  load)",
+    "    [[ \"${2:-}\" == \"--input\" && -s \"${3:-}\" ]]",
+    "    printf 'Loaded fake image\\n'",
+    "    ;;",
+    "  *)",
+    "    printf 'unsupported fake docker command: %s\\n' \"${1:-}\" >&2",
+    "    exit 64",
+    "    ;;",
+    "esac",
+    "",
+  ].join("\n"));
+  chmodSync(dockerPath, 0o755);
+}
+
+function prepareTransferFixture(
+  report: unknown = cleanLocalTrivyReport(),
+  sbom: unknown = cleanLocalSbom(),
+) {
+  const root = mkdtempSync(join(tmpdir(), "loops-ecr-transfer-"));
+  const transferDir = join(root, "candidate-transfer");
+  const binDir = join(root, "bin");
+  mkdirSync(transferDir);
+  mkdirSync(binDir);
+  writeFakeDocker(binDir);
+  writeFileSync(join(transferDir, "trivy-local.json"), `${JSON.stringify(report)}\n`);
+  writeFileSync(join(transferDir, "openloops-candidate.sbom.cdx.json"), `${JSON.stringify(sbom)}\n`);
+  const env = {
+    PATH: `${binDir}:${process.env.PATH ?? ""}`,
+    GITHUB_REPOSITORY: "hasna/loops",
+    SOURCE_SHA: localSourceSha,
+    SAFE_SOURCE_TRACK: "maint/0.4.28",
+    SAFE_SOURCE_REF: "refs/heads/maint/0.4.28",
+    VERIFIED_PACKAGE_VERSION: "0.4.28-offsite.1",
+    LOCAL_IMAGE_ID: localImageId,
+    LOCAL_CRITICAL: "0",
+    LOCAL_HIGH: "0",
+    FAKE_IMAGE_ID: localImageId,
+    FAKE_SOURCE_SHA: localSourceSha,
+    FAKE_REPOSITORY: "hasna/loops",
+  };
+  const packaged = runShell(packageTransferScript, transferDir, env);
+  if (packaged.exitCode !== 0) {
+    throw new Error(`transfer fixture packaging failed: ${packaged.stderr.toString()}`);
+  }
+  return { root, transferDir, env };
+}
+
+function runTransferVerification(
+  fixture: ReturnType<typeof prepareTransferFixture>,
+  env: Record<string, string> = {},
+) {
+  return runShell(verifyTransferScript, fixture.transferDir, {
+    ...fixture.env,
+    SAFE_SOURCE_TRACK: "maint/0.4.28",
+    SAFE_SOURCE_REF: "refs/heads/maint/0.4.28",
+    EXPECTED_PACKAGE_VERSION: "0.4.28-offsite.1",
+    GITHUB_ENV: join(fixture.root, "github-env"),
+    ...env,
+  });
 }
 
 describe("ECR candidate workflow contract", () => {
@@ -469,7 +612,9 @@ describe("ECR candidate workflow contract", () => {
     const cleanReport = cleanLocalTrivyReport();
     for (const report of [
       { Results: [{ Target: "fixture", Vulnerabilities: null }] },
-      { ...cleanReport, ArtifactName: `other-candidate:${localSourceSha}` },
+      { ...cleanReport, ArtifactName: `sha256:${"e".repeat(64)}` },
+      { ...cleanReport, Metadata: { ...cleanReport.Metadata, Reference: `other-candidate:${localSourceSha}` } },
+      { ...cleanReport, Metadata: { ...cleanReport.Metadata, RepoTags: [`other-candidate:${localSourceSha}`] } },
       {
         ...cleanReport,
         Metadata: { ...cleanReport.Metadata, ImageID: `sha256:${"e".repeat(64)}` },
@@ -482,6 +627,27 @@ describe("ECR candidate workflow contract", () => {
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
+    }
+  });
+
+  test("rejects a bound outer envelope whose result rows have no package identity", () => {
+    const cleanReport = cleanLocalTrivyReport();
+    const { root, result } = runLocalScan({
+      ...cleanReport,
+      // This is the outer shape accepted by the previous gate. The rows are
+      // deliberately shaped like Trivy classes while carrying no package
+      // identity, which must fail closed even with the right tag and image ID.
+      ArtifactName: localImageTag,
+      Results: [
+        { Target: "unrelated-os-target", Class: "os-pkgs", Type: "alpine", Vulnerabilities: null },
+        { Target: "unrelated-language-target", Class: "lang-pkgs", Type: "node-pkg", Vulnerabilities: [] },
+      ],
+    });
+    try {
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr.toString()).toContain("local Trivy report is empty or malformed");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
@@ -507,11 +673,11 @@ describe("ECR candidate workflow contract", () => {
       ...cleanReport,
       Results: [
         {
-          Target: `${localArtifactName} (debian 12.11)`,
+          ...cleanReport.Results[0],
           Class: "os-pkgs",
-          Type: "debian",
           Vulnerabilities: [{ Severity: "HIGH" }],
         },
+        cleanReport.Results[1],
       ],
     });
     try {
@@ -522,12 +688,133 @@ describe("ECR candidate workflow contract", () => {
     }
   });
 
-  test("uses a protected ARM64 job and minimum OIDC permissions", () => {
-    expect(workflow).toContain("runs-on: ubuntu-24.04-arm");
-    expect(workflow).toContain("environment: ecr-candidate");
-    expect(workflow).toMatch(/permissions:\n  contents: read\n  id-token: write/);
+  test("isolates the unprivileged ARM64 build and scan from the protected OIDC job", () => {
+    const buildJob = jobBlock("build_scan");
+    const pushJob = jobBlock("push_verify");
+    expect(workflow).toMatch(/^permissions: \{\}$/m);
+    expect(buildJob).toContain("runs-on: ubuntu-24.04-arm");
+    expect(buildJob).toMatch(/permissions:\n      contents: read\n      id-token: none/);
+    expect(buildJob).not.toContain("id-token: write");
+    expect(buildJob).not.toContain("environment: ecr-candidate");
+    expect(buildJob).not.toContain("Configure AWS credentials with OIDC");
+    expect(pushJob).toContain("needs: build_scan");
+    expect(pushJob).toContain("runs-on: ubuntu-24.04-arm");
+    expect(pushJob).toContain("environment: ecr-candidate");
+    expect(pushJob).toMatch(/permissions:\n      actions: read\n      contents: none\n      id-token: write/);
+    expect(pushJob).toContain("Configure AWS credentials with OIDC");
     expect(workflow).not.toMatch(/packages:\s*write/);
     expect(workflow).not.toMatch(/security-events:\s*write/);
+  });
+
+  test("transfers and re-verifies the exact scanned image and hash-bound evidence before OIDC exchange", () => {
+    const buildJob = jobBlock("build_scan");
+    const pushJob = jobBlock("push_verify");
+    expect(buildJob).toContain("docker save");
+    expect(buildJob).toContain("candidate-image.tar");
+    expect(buildJob).toContain("candidate-transfer-manifest.json");
+    expect(buildJob).toContain("candidate-transfer-payload.sha256");
+    expect(buildJob).toContain("candidate-transfer-envelope.sha256");
+    expect(buildJob).toContain("actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02");
+    expect(pushJob).toContain("actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093");
+    expect(pushJob).toContain("sha256sum --check --strict candidate-transfer-envelope.sha256");
+    expect(pushJob).toContain("sha256sum --check --strict candidate-transfer-payload.sha256");
+    expect(pushJob).toContain("docker load --input candidate-image.tar");
+    expect(pushJob).toContain("transferred image identity does not match scanned evidence");
+    expect(position("Verify transferred image, scan, and SBOM evidence")).toBeLessThan(
+      position("Configure AWS credentials with OIDC"),
+    );
+  });
+
+  test("accepts a hash-bound transfer of the exact scanned ARM64 image and evidence", () => {
+    const fixture = prepareTransferFixture();
+    try {
+      const result = runTransferVerification(fixture);
+      expect(result.exitCode).toBe(0);
+      const githubEnv = readFileSync(join(fixture.root, "github-env"), "utf8");
+      expect(githubEnv).toContain(`LOCAL_IMAGE_ID=${localImageId}`);
+      expect(githubEnv).toContain("VERIFIED_PACKAGE_VERSION=0.4.28-offsite.1");
+      expect(githubEnv).toContain("LOCAL_CRITICAL=0");
+      expect(githubEnv).toContain("LOCAL_HIGH=0");
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a transferred payload whose signed hash no longer matches", () => {
+    const fixture = prepareTransferFixture();
+    try {
+      writeFileSync(join(fixture.transferDir, "trivy-local.json"), "{}\n");
+      const result = runTransferVerification(fixture);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr.toString()).toContain("computed checksum did NOT match");
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects rehashed transfer evidence with skeletal Trivy result rows", () => {
+    const cleanReport = cleanLocalTrivyReport();
+    const fixture = prepareTransferFixture({
+      ...cleanReport,
+      Results: [
+        { Target: "unrelated-os-target", Class: "os-pkgs", Type: "alpine", Vulnerabilities: null },
+        { Target: "unrelated-language-target", Class: "lang-pkgs", Type: "node-pkg", Vulnerabilities: [] },
+      ],
+    });
+    try {
+      const result = runTransferVerification(fixture);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr.toString()).toContain("transferred Trivy evidence is malformed");
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects rehashed transfer evidence whose SBOM names a different image", () => {
+    const sbom = cleanLocalSbom();
+    sbom.metadata.component.name = `sha256:${"e".repeat(64)}`;
+    const fixture = prepareTransferFixture(cleanLocalTrivyReport(), sbom);
+    try {
+      const result = runTransferVerification(fixture);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr.toString()).toContain("transferred CycloneDX SBOM is malformed");
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a rehashed transfer manifest for a different source SHA", () => {
+    const fixture = prepareTransferFixture();
+    try {
+      const manifestPath = join(fixture.transferDir, "candidate-transfer-manifest.json");
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
+      manifest.sourceSha = "c".repeat(40);
+      writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`);
+      const rehash = runShell(
+        "sha256sum candidate-transfer-manifest.json candidate-transfer-payload.sha256 > candidate-transfer-envelope.sha256",
+        fixture.transferDir,
+        {},
+      );
+      expect(rehash.exitCode).toBe(0);
+      const result = runTransferVerification(fixture);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr.toString()).toContain("candidate transfer manifest does not match this dispatch");
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a loaded image ID that differs from the scanned archive identity", () => {
+    const fixture = prepareTransferFixture();
+    try {
+      const result = runTransferVerification(fixture, {
+        FAKE_LOADED_IMAGE_ID: `sha256:${"e".repeat(64)}`,
+      });
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr.toString()).toContain("transferred image identity does not match scanned evidence");
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
   });
 
   test("fails closed on repository configuration", () => {
@@ -620,6 +907,41 @@ describe("ECR candidate workflow contract", () => {
     expect(workflow).toContain("ECS/latest mutation: \\`none\\`");
   });
 
+  test("binds provenance to the exact pushed ECR image URI", () => {
+    const pushScript = stepScript("Push scanned immutable candidate");
+    const provenanceScript = stepScript("Generate source provenance statement");
+    expect(pushScript).toContain(`printf 'IMAGE_URI=%s\\n' "${"${image_uri}"}" >> "${"${GITHUB_ENV}"}"`);
+    expect(provenanceScript).toContain('--arg image_uri "${IMAGE_URI}"');
+    expect(provenanceScript).toContain("subject: [{name: $image_uri, digest: {sha256: $digest}}]");
+    expect(provenanceScript).not.toContain("name: ($repository + \"\:\" + $candidate_tag)");
+  });
+
+  test("keeps every inline Bash step syntactically valid", () => {
+    for (const stepName of [
+      "Validate dispatch and configuration",
+      "Verify exact commit against permitted source",
+      "Build native ARM64 runner image",
+      "Enforce local vulnerability gate",
+      "Enforce SBOM identity gate",
+      "Package scanned image and hash-bound evidence",
+      "Validate privileged configuration",
+      "Verify transferred image, scan, and SBOM evidence",
+      "Verify immutable scan-on-push repository",
+      "Push scanned immutable candidate",
+      "Wait for ECR vulnerability scan",
+      "Generate source provenance statement",
+      "Publish candidate summary",
+    ]) {
+      const result = Bun.spawnSync({
+        cmd: ["bash", "-n"],
+        stdin: Buffer.from(stepScript(stepName)),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(result.exitCode, `${stepName}: ${result.stderr.toString()}`).toBe(0);
+    }
+  });
+
   test("pins every third-party action to an approved commit SHA", () => {
     const uses = [...workflow.matchAll(/^\s*uses:\s*([^\s#]+)(?:\s+#.*)?$/gm)].map((match) => match[1]);
     expect(uses).toEqual([
@@ -627,6 +949,8 @@ describe("ECR candidate workflow contract", () => {
       "docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f",
       "aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25",
       "aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25",
+      "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+      "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093",
       "aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a",
       "aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64",
       "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
