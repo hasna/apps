@@ -18,7 +18,7 @@ COPY package.json bun.lock tsconfig.json ./
 COPY --from=deps /app/node_modules ./node_modules
 COPY src ./src
 COPY scripts ./scripts
-RUN bun run build:server
+RUN bun build src/server/index.ts --outdir dist/server --target bun
 
 FROM scratch AS runner
 WORKDIR /app
@@ -44,8 +44,7 @@ ENV PATH=/usr/local/bin \
     CONTACTS_HOST=0.0.0.0 \
     HOST=0.0.0.0 \
     PORT=19428
-COPY package.json bun.lock ./
-COPY --from=deps /app/node_modules ./node_modules
+COPY package.json ./package.json
 COPY --from=build /app/dist ./dist
 EXPOSE 19428
 # Fail-closed: contacts-serve /v1 refuses to serve without a cloud DSN + signing
