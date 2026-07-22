@@ -884,10 +884,17 @@ class ApiStore implements Store {
     const res = await this.client.list<{ tags?: unknown[] }>("tags");
     return pick<unknown[]>(res, "tags") ?? [];
   }
-  async getTagByName(): Promise<never> { return unavailable("getTagByName"); }
+  async getTagByName(name: string) {
+    const res = await this.client.list<{ tags?: unknown[] }>("tags", { query: { name } });
+    return (pick<unknown[]>(res, "tags") ?? [])[0] ?? null;
+  }
   async deleteTag(id: string) { await this.client.delete("tags", id); }
-  async addTagToContact(): Promise<never> { return unavailable("addTagToContact"); }
-  async removeTagFromContact(): Promise<never> { return unavailable("removeTagFromContact"); }
+  async addTagToContact(contactId: string, tagId: string) {
+    await this.client.transport.put(`/contacts/${this.enc(contactId)}/tags/${this.enc(tagId)}`);
+  }
+  async removeTagFromContact(contactId: string, tagId: string) {
+    await this.del(`/contacts/${this.enc(contactId)}/tags/${this.enc(tagId)}`);
+  }
   async addTagToCompany(): Promise<never> { return unavailable("addTagToCompany"); }
   async removeTagFromCompany(): Promise<never> { return unavailable("removeTagFromCompany"); }
 
