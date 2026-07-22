@@ -56,4 +56,4 @@ EXPOSE 19428
 USER 65532:65532
 # Fail-closed: contacts-serve /v1 refuses to serve without a cloud DSN + signing
 # secret (503), and /ready reports DB reachability — no silent stub.
-CMD ["/usr/local/bin/bun", "dist/server/index.js"]
+CMD ["/usr/local/bin/bun", "--no-install", "dist/server/cloud-index.js"]

@@ -42,9 +42,11 @@ const allBundles: BundleSpec[] = [
 const standaloneServer = process.argv.includes("--standalone-server");
 const serverOnly = standaloneServer || process.argv.includes("--server-only");
 
-const bundles = serverOnly
-  ? allBundles.filter(({ outdir }) => outdir === "dist/server")
-  : allBundles;
+const bundles = standaloneServer
+  ? [{ entrypoint: "src/server/cloud-index.ts", outdir: "dist/server" }]
+  : serverOnly
+    ? allBundles.filter(({ outdir }) => outdir === "dist/server")
+    : allBundles;
 
 for (const bundle of bundles) {
   const result = await Bun.build({
