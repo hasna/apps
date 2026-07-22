@@ -10,6 +10,7 @@ import {
   deletePlan,
 } from "../../db/plans.js";
 import { createTask } from "../../db/tasks.js";
+import type { TemplatePreview } from "../../db/templates.js";
 import type { Plan, Task, TemplateWithTasks } from "../../types/index.js";
 import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
 import {
@@ -45,6 +46,91 @@ interface RemoteTemplateOverrides {
   title?: string;
   description?: string;
   priority?: TemplateWithTasks["priority"];
+}
+
+/**
+ * Keep cloud preview output byte-for-byte compatible with the canonical local
+ * preview contract. Preview intentionally shows only the template's direct
+ * checklist steps; execution handles included templates separately.
+ */
+function previewRemoteTemplate(
+  template: TemplateWithTasks,
+  variables?: Record<string, string>,
+): TemplatePreview {
+  const resolved = resolveTemplateVariables(template.variables ?? [], variables);
+  const renderDescription = (value: string | null) => {
+    if (!value) return null;
+    return substituteTemplateVariables(value, resolved) || null;
+  };
+
+  if (template.tasks.length === 0) {
+    return {
+      template_id: template.id,
+      template_name: template.name,
+      description: template.description,
+      variables: template.variables,
+      resolved_variables: resolved,
+      tasks: [{
+        position: 0,
+        title: substituteTemplateVariables(template.title_pattern, resolved),
+        description: renderDescription(template.description),
+        priority: template.priority,
+        tags: template.tags,
+        task_type: null,
+        depends_on_positions: [],
+      }],
+    };
+  }
+
+  return {
+    template_id: template.id,
+    template_name: template.name,
+    description: template.description,
+    variables: template.variables,
+    resolved_variables: resolved,
+    tasks: template.tasks
+      .filter((step) => !step.condition || evaluateTemplateCondition(step.condition, resolved))
+      .map((step) => ({
+        position: step.position,
+        title: substituteTemplateVariables(step.title_pattern, resolved),
+        description: renderDescription(step.description),
+        priority: step.priority,
+        tags: step.tags,
+        task_type: step.task_type,
+        depends_on_positions: step.depends_on_positions,
+      })),
+  };
+}
+
+/**
+ * /v1/templates/:id returns the complete template, including ordered checklist
+ * steps. Strip storage-only fields so cloud exports round-trip through the
+ * canonical template-import contract just like local exports.
+ */
+function exportRemoteTemplate(template: TemplateWithTasks) {
+  return {
+    name: template.name,
+    title_pattern: template.title_pattern,
+    description: template.description,
+    priority: template.priority,
+    tags: template.tags,
+    variables: template.variables,
+    project_id: template.project_id,
+    plan_id: template.plan_id,
+    metadata: template.metadata,
+    tasks: template.tasks.map((step) => ({
+      position: step.position,
+      title_pattern: step.title_pattern,
+      description: step.description,
+      priority: step.priority,
+      tags: step.tags,
+      task_type: step.task_type,
+      condition: step.condition,
+      include_template_id: step.include_template_id,
+      depends_on_positions: step.depends_on_positions,
+      metadata: step.metadata,
+    })),
+  };
 }
 
 /**
@@ -675,7 +761,6 @@ export function registerPlanTemplateCommands(program: Command) {
     .option("--var <vars...>", "Variable substitution in key=value format (e.g. --var name=invoices)")
     .action(async (id: string, opts: { var?: string[] }) => {
       const globalOpts = program.opts();
-      const { previewTemplate } = await import("../../db/templates.js");
 
       const variables: Record<string, string> = {};
       if (opts.var) {
@@ -687,19 +772,33 @@ export function registerPlanTemplateCommands(program: Command) {
       }
 
       try {
-        const preview = previewTemplate(id, Object.keys(variables).length > 0 ? variables : undefined);
-        if (globalOpts.json) { output(preview, true); return; }
-
-        console.log(chalk.bold(`Preview: ${preview.template_name} (${preview.tasks.length} tasks)`));
-        if (preview.description) console.log(chalk.dim(`  ${preview.description}`));
-        if (preview.variables.length > 0) {
-          console.log(chalk.dim(`  Variables: ${preview.variables.map((v: any) => `${v.name}${v.required ? '*' : ''}${v.default ? `=${v.default}` : ''}`).join(', ')}`));
+        const cloud = getTodosCloudClient();
+        let result: TemplatePreview;
+        if (cloud) {
+          const template = await cloudGetTemplate(cloud, id);
+          if (!template) {
+            console.error(chalk.red("Template not found."));
+            process.exit(1);
+          }
+          result = previewRemoteTemplate(template, Object.keys(variables).length > 0 ? variables : undefined);
+        } else {
+          result = (await import("../../db/templates.js")).previewTemplate(
+            id,
+            Object.keys(variables).length > 0 ? variables : undefined,
+          );
         }
-        if (Object.keys(preview.resolved_variables).length > 0) {
-          console.log(chalk.dim(`  Resolved: ${Object.entries(preview.resolved_variables).map(([k, v]) => `${k}=${v}`).join(', ')}`));
+        if (globalOpts.json) { output(result, true); return; }
+
+        console.log(chalk.bold(`Preview: ${result.template_name} (${result.tasks.length} tasks)`));
+        if (result.description) console.log(chalk.dim(`  ${result.description}`));
+        if (result.variables.length > 0) {
+          console.log(chalk.dim(`  Variables: ${result.variables.map((v: any) => `${v.name}${v.required ? '*' : ''}${v.default ? `=${v.default}` : ''}`).join(', ')}`));
+        }
+        if (Object.keys(result.resolved_variables).length > 0) {
+          console.log(chalk.dim(`  Resolved: ${Object.entries(result.resolved_variables).map(([k, v]) => `${k}=${v}`).join(', ')}`));
         }
         console.log();
-        for (const t of preview.tasks) {
+        for (const t of result.tasks) {
           const deps = t.depends_on_positions.length > 0 ? chalk.dim(` (after: ${t.depends_on_positions.join(", ")})`) : "";
           console.log(`  ${chalk.dim(`[${t.position}]`)} ${chalk.yellow(t.priority)} | ${t.title}${deps}`);
         }
@@ -712,9 +811,18 @@ export function registerPlanTemplateCommands(program: Command) {
     .alias("templates-export")
     .description("Export a template as JSON to stdout")
     .action(async (id: string) => {
-      const { exportTemplate } = await import("../../db/templates.js");
       try {
-        const json = exportTemplate(id);
+        const cloud = getTodosCloudClient();
+        const template = cloud
+          ? await cloudGetTemplate(cloud, id)
+          : null;
+        if (cloud && !template) {
+          console.error(chalk.red("Template not found."));
+          process.exit(1);
+        }
+        const json = cloud
+          ? exportRemoteTemplate(template!)
+          : (await import("../../db/templates.js")).exportTemplate(id);
         console.log(JSON.stringify(json, null, 2));
       } catch (e) { handleError(e); }
     });
