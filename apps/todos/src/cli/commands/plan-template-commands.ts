@@ -48,6 +48,10 @@ interface RemoteTemplateOverrides {
   priority?: TemplateWithTasks["priority"];
 }
 
+function normalizeTemplateDescription(value: string | null | undefined): string | null {
+  return value || null;
+}
+
 /**
  * Keep cloud preview output byte-for-byte compatible with the canonical local
  * preview contract. Preview intentionally shows only the template's direct
@@ -67,7 +71,7 @@ function previewRemoteTemplate(
     return {
       template_id: template.id,
       template_name: template.name,
-      description: template.description,
+      description: normalizeTemplateDescription(template.description),
       variables: template.variables,
       resolved_variables: resolved,
       tasks: [{
@@ -85,7 +89,7 @@ function previewRemoteTemplate(
   return {
     template_id: template.id,
     template_name: template.name,
-    description: template.description,
+    description: normalizeTemplateDescription(template.description),
     variables: template.variables,
     resolved_variables: resolved,
     tasks: template.tasks
@@ -111,7 +115,7 @@ function exportRemoteTemplate(template: TemplateWithTasks) {
   return {
     name: template.name,
     title_pattern: template.title_pattern,
-    description: template.description,
+    description: normalizeTemplateDescription(template.description),
     priority: template.priority,
     tags: template.tags,
     variables: template.variables,
@@ -121,7 +125,7 @@ function exportRemoteTemplate(template: TemplateWithTasks) {
     tasks: template.tasks.map((step) => ({
       position: step.position,
       title_pattern: step.title_pattern,
-      description: step.description,
+      description: normalizeTemplateDescription(step.description),
       priority: step.priority,
       tags: step.tags,
       task_type: step.task_type,

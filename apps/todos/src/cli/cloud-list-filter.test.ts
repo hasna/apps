@@ -768,7 +768,7 @@ describe("cloud CLI task-list filtering", () => {
             id: "template-preview",
             name: "Monthly accounting",
             title_pattern: "Monthly accounting {period}",
-            description: "Canonical preview",
+            description: "",
             priority: "medium",
             tags: ["accounting"],
             variables: [
@@ -799,7 +799,7 @@ describe("cloud CLI task-list filtering", () => {
       expect(JSON.parse(result.stdout)).toEqual({
         template_id: "template-preview",
         template_name: "Monthly accounting",
-        description: "Canonical preview",
+        description: null,
         variables: [
           { name: "period", required: false, default: "2026-07" },
           { name: "include_receipts", required: false, default: "false" },
@@ -848,7 +848,7 @@ describe("cloud CLI task-list filtering", () => {
             id: "template-export",
             name: "Monthly accounting",
             title_pattern: "Monthly accounting {period}",
-            description: null,
+            description: "",
             priority: "high",
             tags: ["accounting"],
             variables: [{ name: "period", required: true }],
@@ -859,7 +859,7 @@ describe("cloud CLI task-list filtering", () => {
               id: "step-1",
               position: 0,
               title_pattern: "Collect statements {period}",
-              description: null,
+              description: "",
               priority: "high",
               tags: ["bank"],
               task_type: "collection",
