@@ -328,6 +328,7 @@ export function normalizeImportSnapshot(raw: unknown): TodosStorageSnapshot {
     agents: arr(body["agents"]),
     taskLists: arr(body["taskLists"]),
     templates: arr(body["templates"]),
+    templateTasks: arr(body["templateTasks"]),
     auditHistory: arr(body["auditHistory"]),
     tombstones: arr(body["tombstones"]),
   };
@@ -343,6 +344,7 @@ export function countSnapshotRecords(s: TodosStorageSnapshot): number {
     s.agents.length +
     s.taskLists.length +
     s.templates.length +
+    s.templateTasks.length +
     s.auditHistory.length +
     (s.tombstones?.length ?? 0)
   );

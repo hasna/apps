@@ -637,7 +637,7 @@ describe("cloud CLI task-list filtering", () => {
         if (url.pathname === "/v1/templates/template-parent" && request.method === "GET") {
           return Response.json({ template: {
             id: "template-parent", name: "Parent", title_pattern: "Parent", description: null,
-            priority: "medium", tags: [], version: 1, project_id: PROJECT_ID, plan_id: null, metadata: {},
+            priority: "medium", tags: [], version: 1, project_id: PROJECT_ID, plan_id: "plan-parent", metadata: {},
             variables: [
               { name: "month", required: false, default: "May" },
               { name: "company", required: true },
@@ -647,7 +647,8 @@ describe("cloud CLI task-list filtering", () => {
               { id: "step-statements", position: 0, title_pattern: "Statements {company} {month}", description: null, priority: "medium", tags: [], task_type: null, condition: null, include_template_id: null, depends_on_positions: [], metadata: {} },
               { id: "step-receipts", position: 1, title_pattern: "Receipts", description: null, priority: "medium", tags: [], task_type: null, condition: "{include_receipts}", include_template_id: null, depends_on_positions: [], metadata: {} },
               { id: "step-include", position: 2, title_pattern: "ignored", description: null, priority: "medium", tags: [], task_type: null, condition: null, include_template_id: "template-child", depends_on_positions: [], metadata: {} },
-              { id: "step-reconcile", position: 3, title_pattern: "Reconcile {month}", description: null, priority: "high", tags: [], task_type: "reconciliation", condition: null, include_template_id: null, depends_on_positions: [0, 2], metadata: { source: "template" } },
+              { id: "step-include-again", position: 3, title_pattern: "ignored", description: null, priority: "medium", tags: [], task_type: null, condition: null, include_template_id: "template-child", depends_on_positions: [], metadata: {} },
+              { id: "step-reconcile", position: 4, title_pattern: "Reconcile {month}", description: null, priority: "high", tags: [], task_type: "reconciliation", condition: null, include_template_id: null, depends_on_positions: [0, 2, 3], metadata: { source: "template" } },
             ],
           } });
         }
@@ -662,7 +663,7 @@ describe("cloud CLI task-list filtering", () => {
           taskNumber += 1;
           return Response.json({ task: { id: `task-${taskNumber}`, ...(body ?? {}), status: "pending" } }, { status: 201 });
         }
-        if (url.pathname === "/v1/tasks/task-3/dependencies" && request.method === "POST") return Response.json({ dependency: body }, { status: 201 });
+        if (url.pathname === "/v1/tasks/task-4/dependencies" && request.method === "POST") return Response.json({ dependency: body }, { status: 201 });
         return Response.json({ error: "not found" }, { status: 404 });
       },
     });
@@ -686,13 +687,15 @@ describe("cloud CLI task-list filtering", () => {
       expect(result).toMatchObject({ exitCode: 0, stderr: "" });
       const taskBodies = requests.filter((entry) => entry.method === "POST" && entry.path === "/v1/tasks").map((entry) => entry.body);
       expect(taskBodies).toEqual([
-        expect.objectContaining({ title: "Statements Beep May", project_id: PROJECT_ID }),
+        expect.objectContaining({ title: "Statements Beep May", project_id: PROJECT_ID, plan_id: "plan-parent" }),
         expect.objectContaining({ title: "Invoice Beep May", project_id: PROJECT_ID }),
-        expect.objectContaining({ title: "Reconcile May", task_type: "reconciliation", metadata: { source: "template" } }),
+        expect.objectContaining({ title: "Invoice Beep May", project_id: PROJECT_ID }),
+        expect.objectContaining({ title: "Reconcile May", plan_id: "plan-parent", task_type: "reconciliation", metadata: { source: "template" } }),
       ]);
       expect(requests).toEqual(expect.arrayContaining([
-        expect.objectContaining({ method: "POST", path: "/v1/tasks/task-3/dependencies", body: { depends_on: "task-1" } }),
-        expect.objectContaining({ method: "POST", path: "/v1/tasks/task-3/dependencies", body: { depends_on: "task-2" } }),
+        expect.objectContaining({ method: "POST", path: "/v1/tasks/task-4/dependencies", body: { depends_on: "task-1" } }),
+        expect.objectContaining({ method: "POST", path: "/v1/tasks/task-4/dependencies", body: { depends_on: "task-2" } }),
+        expect.objectContaining({ method: "POST", path: "/v1/tasks/task-4/dependencies", body: { depends_on: "task-3" } }),
       ]));
       expect(existsSync(join(root, "todos.db"))).toBe(false);
     } finally {

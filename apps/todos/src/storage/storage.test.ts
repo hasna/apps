@@ -855,6 +855,36 @@ describe("storage adapter contracts", () => {
     expect(postgres.calls.some((call) => call.values?.includes("template_tasks"))).toBe(true);
   });
 
+  test("round-trips remote template checklist steps through snapshots", async () => {
+    const sourcePostgres = createMemoryPostgresClient();
+    const source = createPostgresTodosStorageAdapter({ client: sourcePostgres.client });
+    const template = await source.templates.create({
+      name: "Snapshot checklist",
+      title_pattern: "Monthly accounting {month}",
+      tasks: [
+        { title_pattern: "Collect statements {month}" },
+        { title_pattern: "Reconcile {month}", depends_on: [0] },
+      ],
+    });
+    const snapshot = await source.sync.exportSnapshot!();
+    expect(snapshot.templateTasks).toHaveLength(2);
+    expect(snapshot.templateTasks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ template_id: template.id, position: 0, depends_on_positions: [] }),
+      expect.objectContaining({ template_id: template.id, position: 1, depends_on_positions: [0] }),
+    ]));
+
+    const targetPostgres = createMemoryPostgresClient();
+    const target = createPostgresTodosStorageAdapter({ client: targetPostgres.client });
+    expect((await target.sync.importSnapshot!(snapshot)).errors).toEqual([]);
+    expect(await target.templates.getWithTasks(template.id)).toMatchObject({
+      id: template.id,
+      tasks: [
+        { position: 0, depends_on_positions: [] },
+        { position: 1, depends_on_positions: [0] },
+      ],
+    });
+  });
+
   test("does not leave a parent template behind when an atomic checklist insert fails", async () => {
     const postgres = createMemoryPostgresClient();
     const adapter = createPostgresTodosStorageAdapter({

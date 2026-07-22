@@ -20,6 +20,7 @@ export type TodosPostgresSyncRecordType =
   | "agents"
   | "task_lists"
   | "templates"
+  | "template_tasks"
   | "audit_history";
 
 export interface TodosPostgresQueryResult<T = Record<string, unknown>> {
@@ -450,6 +451,7 @@ function snapshotEntries(snapshot: TodosStorageSnapshot): Array<{
     ...snapshot.agents.map((payload) => entry("agents", payload as unknown as Record<string, unknown>, snapshot.exportedAt)),
     ...snapshot.taskLists.map((payload) => entry("task_lists", payload as unknown as Record<string, unknown>, snapshot.exportedAt)),
     ...snapshot.templates.map((payload) => entry("templates", payload as unknown as Record<string, unknown>, snapshot.exportedAt)),
+    ...(snapshot.templateTasks ?? []).map((payload) => entry("template_tasks", payload as unknown as Record<string, unknown>, snapshot.exportedAt)),
     ...snapshot.auditHistory.map((payload) => entry("audit_history", payload as unknown as Record<string, unknown>, snapshot.exportedAt)),
     ...(snapshot.tombstones ?? []).map((tombstone) => ({
       type: tombstone.object_type,
@@ -502,6 +504,7 @@ function rowsToSnapshot(rows: TodosPostgresSyncRecordRow[]): TodosStorageSnapsho
     agents: [],
     taskLists: [],
     templates: [],
+    templateTasks: [],
     auditHistory: [],
     tombstones: [],
   };
@@ -532,6 +535,7 @@ function rowsToSnapshot(rows: TodosPostgresSyncRecordRow[]): TodosStorageSnapsho
     else if (row.object_type === "agents") snapshot.agents.push(payload as unknown as TodosStorageSnapshot["agents"][number]);
     else if (row.object_type === "task_lists") snapshot.taskLists.push(payload as unknown as TodosStorageSnapshot["taskLists"][number]);
     else if (row.object_type === "templates") snapshot.templates.push(payload as unknown as TodosStorageSnapshot["templates"][number]);
+    else if (row.object_type === "template_tasks") snapshot.templateTasks.push(payload as unknown as TodosStorageSnapshot["templateTasks"][number]);
     else if (row.object_type === "audit_history") snapshot.auditHistory.push(payload as unknown as TaskHistory);
   }
   return snapshot;

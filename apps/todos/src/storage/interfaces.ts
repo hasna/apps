@@ -18,6 +18,7 @@ import type {
   TaskHistory,
   TaskList,
   TaskTemplate,
+  TemplateTask,
   TemplateWithTasks,
   UpdatePlanInput,
   UpdateProjectInput,
@@ -361,12 +362,13 @@ export interface TodosStorageSnapshot {
   agents: Agent[];
   taskLists: TaskList[];
   templates: TaskTemplate[];
+  templateTasks: TemplateTask[];
   auditHistory: TaskHistory[];
   tombstones?: TodosStorageTombstone[];
 }
 
 export interface TodosStorageTombstone {
-  object_type: "tasks" | "projects" | "project_machine_paths" | "plans" | "agents" | "task_lists" | "templates" | "audit_history";
+  object_type: "tasks" | "projects" | "project_machine_paths" | "plans" | "agents" | "task_lists" | "templates" | "template_tasks" | "audit_history";
   object_id: string;
   deleted_at: string;
   updated_at: string;

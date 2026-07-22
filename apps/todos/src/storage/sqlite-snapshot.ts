@@ -6,7 +6,7 @@ import { listPlans } from "../db/plans.js";
 import { listProjects } from "../db/projects.js";
 import { listTaskLists } from "../db/task-lists.js";
 import { listTasks, replaceTaskTags } from "../db/tasks.js";
-import { listTemplates } from "../db/templates.js";
+import { getTemplateTasks, listTemplates } from "../db/templates.js";
 import {
   getStorageTombstone,
   listStorageTombstones,
@@ -52,6 +52,11 @@ const TEMPLATE_COLUMNS = [
   "project_id", "plan_id", "metadata", "version", "created_at", "machine_id", "synced_at",
 ] as const;
 
+const TEMPLATE_TASK_COLUMNS = [
+  "id", "template_id", "position", "title_pattern", "description", "priority", "tags",
+  "task_type", "condition", "include_template_id", "depends_on_positions", "metadata", "created_at",
+] as const;
+
 const TASK_COLUMNS = [
   "id", "short_id", "project_id", "parent_id", "plan_id", "task_list_id", "title",
   "description", "status", "priority", "agent_id", "assigned_to", "session_id",
@@ -71,7 +76,7 @@ const AUDIT_COLUMNS = [
   "created_at", "machine_id",
 ] as const;
 
-const JSON_COLUMNS = new Set(["tags", "metadata", "permissions", "capabilities", "variables"]);
+const JSON_COLUMNS = new Set(["tags", "metadata", "permissions", "capabilities", "variables", "depends_on_positions"]);
 const BOOLEAN_COLUMNS = new Set(["requires_approval"]);
 
 export function exportSqliteTodosStorageSnapshot(db?: Database): TodosStorageSnapshot {
@@ -86,6 +91,7 @@ export function exportSqliteTodosStorageSnapshot(db?: Database): TodosStorageSna
     agents: listAgents({ include_archived: true }, d),
     taskLists: listTaskLists(undefined, d),
     templates: listTemplates(d),
+    templateTasks: listTemplates(d).flatMap((template) => getTemplateTasks(template.id, d)),
     auditHistory: getRecentActivity(Number.MAX_SAFE_INTEGER, d),
     tombstones: listStorageTombstones(d),
   };
@@ -157,6 +163,7 @@ export function importSqliteTodosStorageSnapshot(
   applyRows("task_lists", "task_lists", TASK_LIST_COLUMNS, snapshot.taskLists, "updated_at");
   applyRows("plans", "plans", PLAN_COLUMNS, snapshot.plans, "updated_at");
   applyRows("templates", "task_templates", TEMPLATE_COLUMNS, snapshot.templates);
+  applyRows("template_tasks", "template_tasks", TEMPLATE_TASK_COLUMNS, snapshot.templateTasks ?? []);
   applyRows("tasks", "tasks", TASK_COLUMNS, sortedTasks(snapshot.tasks), "updated_at", (row, changed) => {
     if (changed && Array.isArray(row["tags"]) && typeof row["id"] === "string") {
       replaceTaskTags(row["id"], row["tags"].filter((tag): tag is string => typeof tag === "string"), d);
@@ -275,6 +282,7 @@ function tableForTombstone(objectType: TodosStorageTombstone["object_type"]): st
   if (objectType === "agents") return "agents";
   if (objectType === "task_lists") return "task_lists";
   if (objectType === "templates") return "task_templates";
+  if (objectType === "template_tasks") return "template_tasks";
   return "task_history";
 }
 

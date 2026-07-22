@@ -770,6 +770,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
                     agents: { type: "array", items: { type: "object" } },
                     taskLists: { type: "array", items: { type: "object" } },
                     templates: { type: "array", items: { type: "object" } },
+                    templateTasks: { type: "array", items: { $ref: "#/components/schemas/TemplateTask" } },
                     auditHistory: { type: "array", items: { type: "object" } },
                     tombstones: { type: "array", items: { type: "object" } },
                   },

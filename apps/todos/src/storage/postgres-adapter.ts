@@ -1736,6 +1736,7 @@ async function exportSnapshot(store: PostgresJsonRecordStore): Promise<TodosStor
     agents: await store.list<Agent>("agents"),
     taskLists: await store.list<TaskList>("task_lists"),
     templates: await store.list<TaskTemplate>("templates"),
+    templateTasks: await store.list<TemplateTask>("template_tasks"),
     auditHistory: await store.list<TaskHistory>("audit_history"),
     tombstones: await store.listTombstones(),
   };
@@ -1771,6 +1772,7 @@ async function importSnapshot(
     ...snapshot.agents.map((row) => ["agents", row] as const),
     ...snapshot.taskLists.map((row) => ["task_lists", row] as const),
     ...snapshot.templates.map((row) => ["templates", row] as const),
+    ...(snapshot.templateTasks ?? []).map((row) => ["template_tasks", row] as const),
     ...snapshot.auditHistory.map((row) => ["audit_history", row] as const),
   ];
   for (const [type, row] of entries) {

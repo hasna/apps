@@ -94,6 +94,14 @@ export function deleteTemplate(id: string, db?: Database): boolean {
     payload: template as unknown as Record<string, unknown>,
     version: template.version,
   }, d);
+  for (const task of getTemplateTasks(resolved, d)) {
+    recordStorageTombstone({
+      object_type: "template_tasks",
+      object_id: task.id,
+      payload: task as unknown as Record<string, unknown>,
+      version: 1,
+    }, d);
+  }
   // CASCADE will delete associated template_tasks and template_versions
   return d.run("DELETE FROM task_templates WHERE id = ?", [resolved]).changes > 0;
 }

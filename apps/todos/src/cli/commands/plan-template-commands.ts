@@ -66,13 +66,14 @@ async function createRemoteTemplateTasks(
     throw new Error(`Circular template reference detected: ${template.id}`);
   }
   visited.add(template.id);
+  try {
 
-  const resolved = resolveTemplateVariables(template.variables ?? [], variables);
-  const render = (value: string | null | undefined) =>
-    value === null || value === undefined ? value : substituteTemplateVariables(value, resolved);
+    const resolved = resolveTemplateVariables(template.variables ?? [], variables);
+    const render = (value: string | null | undefined) =>
+      value === null || value === undefined ? value : substituteTemplateVariables(value, resolved);
 
-  if (template.tasks.length === 0) {
-    const task = await cloudCreateTask(cloud, {
+    if (template.tasks.length === 0) {
+      const task = await cloudCreateTask(cloud, {
       title: render(overrides?.title || template.title_pattern),
       ...(render(overrides?.description ?? template.description) ? { description: render(overrides?.description ?? template.description) } : {}),
       priority: overrides?.priority ?? template.priority,
@@ -82,14 +83,14 @@ async function createRemoteTemplateTasks(
       ...(agentId ? { agent_id: agentId } : {}),
       ...(Object.keys(template.metadata ?? {}).length > 0 ? { metadata: template.metadata } : {}),
     });
-    return { tasks: [task] };
-  }
+      return { tasks: [task] };
+    }
 
-  const created: Task[] = [];
-  const positionToTaskId = new Map<number, string>();
-  const skippedPositions = new Set<number>();
+    const created: Task[] = [];
+    const positionToTaskId = new Map<number, string>();
+    const skippedPositions = new Set<number>();
 
-  for (const step of template.tasks) {
+    for (const step of template.tasks) {
     // Keep local ordering: an include takes precedence over a step condition.
     if (step.include_template_id) {
       const included = await cloudGetTemplate(cloud, step.include_template_id);
@@ -111,14 +112,15 @@ async function createRemoteTemplateTasks(
       tags: step.tags,
       ...(step.task_type ? { task_type: step.task_type } : {}),
       ...(projectId ? { project_id: projectId } : {}),
+      ...(template.plan_id ? { plan_id: template.plan_id } : {}),
       ...(agentId ? { agent_id: agentId } : {}),
       ...(Object.keys(step.metadata ?? {}).length > 0 ? { metadata: step.metadata } : {}),
     });
     created.push(task);
     positionToTaskId.set(step.position, task.id);
-  }
+    }
 
-  for (const step of template.tasks) {
+    for (const step of template.tasks) {
     if (skippedPositions.has(step.position) || step.include_template_id) continue;
     const taskId = positionToTaskId.get(step.position);
     if (!taskId) continue;
@@ -127,8 +129,11 @@ async function createRemoteTemplateTasks(
       const dependencyId = positionToTaskId.get(dependencyPosition);
       if (dependencyId) await cloudAddDependency(cloud, taskId, dependencyId);
     }
+    }
+    return { tasks: created };
+  } finally {
+    visited.delete(template.id);
   }
-  return { tasks: created };
 }
 
 function resolvePlanCliRef(ref: string, projectId: string | undefined): string {
