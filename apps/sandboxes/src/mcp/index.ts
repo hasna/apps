@@ -14,6 +14,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import { startMcpHttpServer } from "@hasna/mcp-harness/node"
 import { isSandboxProvider, resolveBackend, SANDBOX_PROVIDERS, type SecretsReader } from "../runtime/resolve"
 import type { SandboxBackend, SandboxProvider } from "../runtime/types"
+import { resolvePackageVersion } from "../version"
 
 /** HTTP port the fleet daemon (systemd `hasna-sandboxes-mcp.service`) expects. */
 export const DEFAULT_MCP_HTTP_PORT = 8875
@@ -52,18 +53,10 @@ export function resolveMcpHttpPort(argv: readonly string[], env: NodeJS.ProcessE
   return DEFAULT_MCP_HTTP_PORT
 }
 
-function resolvePackageVersion(): string {
-  try {
-    const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { version?: unknown }
-    return typeof pkg.version === "string" ? pkg.version : "0.0.0"
-  } catch {
-    return "0.0.0"
-  }
-}
-
 // Reported as `serverInfo.version` in the MCP `initialize` handshake and by the
-// `version`/`health` tools; sourced from package.json so it never drifts.
-export const MCP_VERSION = resolvePackageVersion()
+// `version`/`health` tools; sourced from package.json (shared with the CLI via
+// ../version) so it never drifts.
+export const MCP_VERSION = resolvePackageVersion(import.meta.url)
 
 export interface McpDeps {
   resolve?: (provider: SandboxProvider) => Promise<SandboxBackend>

@@ -157,10 +157,29 @@ export function createDaytonaBackend(config: DaytonaBackendConfig): SandboxBacke
     async listFiles(id: string, path: string): Promise<FileEntry[]> {
       const daytona = await client()
       const sandbox = await daytona.get(id)
-      const response = await run(sandbox, ["sh", "-c", `ls -1 ${shellJoin([path])}`])
+      const base = path.replace(/\/+$/u, "") || "/"
+      // One line per entry: "<d|f> <base64(path)>". Base64 keeps the wire format
+      // newline-delimited while staying robust to any bytes in filenames (an
+      // `ls -1` split-on-newline would fabricate phantom entries), and the
+      // `[ -d ]` probe reports real directory entries instead of hardcoding
+      // everything as a file (matching the e2b backend's dir/file distinction).
+      const script =
+        `find ${shellJoin([base])} -mindepth 1 -maxdepth 1 -exec sh -c '` +
+        `for f do if [ -d "$f" ]; then t=d; else t=f; fi; ` +
+        `printf "%s %s\\n" "$t" "$(printf %s "$f" | base64 | tr -d "\\n")"; done' list-entries {} +`
+      const response = await run(sandbox, ["sh", "-c", script])
       const out = (response.artifacts?.stdout ?? response.result ?? "").trim()
       if (out.length === 0) return []
-      return out.split("\n").map((name) => ({ path: `${path.replace(/\/$/u, "")}/${name}`, type: "file", size: null }))
+      return out
+        .split("\n")
+        .flatMap((line): FileEntry[] => {
+          const space = line.indexOf(" ")
+          if (space === -1) return []
+          const entryPath = Buffer.from(line.slice(space + 1), "base64").toString("utf8")
+          if (entryPath.length === 0) return []
+          return [{ path: entryPath, type: line.slice(0, space) === "d" ? "dir" : "file", size: null }]
+        })
+        .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
     },
     async exposePort(id: string, port: number): Promise<ExposedPort> {
       const daytona = await client()

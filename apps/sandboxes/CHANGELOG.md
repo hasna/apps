@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **`sandboxes --version` reports the real package version.** The CLI hardcoded
+  `CLI_VERSION = "1.0.0"` and drifted from every release; both bins now resolve
+  their version from `package.json` through a shared `src/version.ts` helper
+  (the MCP already did, privately), with regression tests asserting CLI and MCP
+  both match `package.json`.
+- **Daytona `list_files` reports directories as `dir` and survives hostile
+  filenames.** The backend ran `ls -1` and hardcoded every entry as
+  `type: "file"` (directories misreported, unlike the E2B backend) and split on
+  newlines (a filename containing a newline became phantom entries). Listing now
+  uses a `find -mindepth 1 -maxdepth 1` probe that emits one
+  `<d|f> <base64(path)>` record per entry, so types are real and any byte in a
+  filename round-trips. Hidden entries are now included, matching `find`
+  semantics. Added hermetic coverage that executes the generated wire command
+  with a real shell.
+
 ## 1.0.2
 
 ### Fixed

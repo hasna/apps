@@ -9,8 +9,11 @@ import { Command, CommanderError } from "commander"
 import { readFileSync } from "node:fs"
 import { resolveBackend, isSandboxProvider, SANDBOX_PROVIDERS, type SecretsReader } from "../runtime/resolve"
 import type { SandboxBackend, SandboxProvider } from "../runtime/types"
+import { resolvePackageVersion } from "../version"
 
-export const CLI_VERSION = "1.0.0"
+// Sourced from package.json (same as the MCP's serverInfo.version) so
+// `sandboxes --version` can never drift from the published release.
+export const CLI_VERSION = resolvePackageVersion(import.meta.url)
 
 export interface CliDeps {
   env?: NodeJS.ProcessEnv

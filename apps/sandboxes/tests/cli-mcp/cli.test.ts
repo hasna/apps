@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { runCli, type CliDeps } from "../../src/cli/index"
@@ -40,10 +40,13 @@ async function createSandbox(): Promise<string> {
 }
 
 describe("sandboxes CLI", () => {
-  test("--version prints version", async () => {
+  test("--version prints the package.json version (single source of truth, no drift)", async () => {
+    // Regression: CLI_VERSION used to be a hardcoded "1.0.0" literal that
+    // drifted from every release; it must always equal package.json's version.
+    const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { version: string }
     const res = await cli(["--version"])
     expect(res.code).toBe(0)
-    expect(res.out).toContain("1.0.0")
+    expect(res.out.trim()).toBe(pkg.version)
   })
 
   test("create + get + list + destroy", async () => {

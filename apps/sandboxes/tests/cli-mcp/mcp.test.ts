@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
@@ -122,6 +122,9 @@ describe("sandboxes-mcp server", () => {
     const client = await connect()
     const version = payload(await client.callTool({ name: "version", arguments: {} })) as { version: string; providers: string[] }
     expect(version.version).toBe(MCP_VERSION)
+    // MCP and CLI must both report package.json's version — one source of truth.
+    const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { version: string }
+    expect(version.version).toBe(pkg.version)
     expect(version.providers).toContain("local")
     const health = payload(await client.callTool({ name: "health", arguments: {} })) as { status: string }
     expect(health.status).toBe("ok")
