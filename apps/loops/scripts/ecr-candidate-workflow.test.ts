@@ -845,6 +845,8 @@ describe("ECR candidate workflow contract", () => {
     expect(downloadStep).toContain(
       "artifact-ids: ${{ needs.build_scan.outputs.transfer_artifact_id }}",
     );
+    expect(downloadStep).toContain("merge-multiple: true");
+    expect(downloadStep).toContain("path: candidate-transfer");
     expect(downloadStep).not.toContain("github.run_attempt");
     expect(downloadStep).not.toMatch(/^\s+name: ecr-candidate-transfer-/m);
   });
