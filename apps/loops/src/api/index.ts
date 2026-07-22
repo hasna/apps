@@ -715,7 +715,6 @@ async function claimRuns(
     if (claims.length >= opts.maxClaims) break;
     if (!runnerMatchesLoop(loop.machine, runner)) continue;
     if (loop.target.type === "workflow") continue;
-    if (loop.overlap === "skip" && (await storage.listRuns({ loopId: loop.id, status: "running", limit: 1 })).length > 0) continue;
     for (const slot of dueSlots(loop, opts.now).slots) {
       if (claims.length >= opts.maxClaims) break;
       const claim = await storage.claimRun(loop, slot, runner.id, opts.now);

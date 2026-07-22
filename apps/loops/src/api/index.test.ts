@@ -968,6 +968,68 @@ describe("loops-api foundation", () => {
     }
   });
 
+  test("runner claim reclaims an expired overlap-skip lease through the API", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    let now = new Date("2026-01-01T00:00:05Z");
+    const server = mod.createLoopsApiServer({
+      host: "127.0.0.1",
+      port: 0,
+      storage,
+      now: () => now,
+    });
+
+    try {
+      const loop = await storage.createLoop(
+        {
+          name: "api-skip-expired-reclaim-loop",
+          schedule: { type: "interval", everyMs: 1_000 },
+          target: { type: "command", command: "true" },
+          catchUp: "all",
+          catchUpLimit: 3,
+          overlap: "skip",
+          leaseMs: 1_000,
+        },
+        new Date("2026-01-01T00:00:00Z"),
+      );
+
+      const first = await fetch(apiUrl(server, "/v1/runners/claim"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ runnerId: "runner-a", maxClaims: 1 }),
+      });
+      expect(first.status).toBe(200);
+      const firstClaimed = (await first.json()) as {
+        claims: Array<{ claimToken?: string; loop: { id: string }; run: { id: string; status: string } }>;
+      };
+      expect(firstClaimed.claims).toHaveLength(1);
+      expect(firstClaimed.claims[0]).toMatchObject({ loop: { id: loop.id }, run: { status: "running" } });
+      const originalToken = firstClaimed.claims[0]!.claimToken;
+
+      now = new Date("2026-01-01T00:00:07Z");
+      const reclaimed = await fetch(apiUrl(server, "/v1/runners/claim"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ runnerId: "runner-a", maxClaims: 1 }),
+      });
+      expect(reclaimed.status).toBe(200);
+      const reclaimedClaimed = (await reclaimed.json()) as {
+        claims: Array<{ claimToken?: string; loop: { id: string }; run: { id: string; status: string } }>;
+      };
+      expect(reclaimedClaimed.claims).toHaveLength(1);
+      expect(reclaimedClaimed.claims[0]).toMatchObject({
+        loop: { id: loop.id },
+        run: { id: firstClaimed.claims[0]!.run.id, status: "running" },
+      });
+      expect(reclaimedClaimed.claims[0]!.claimToken).toBeTruthy();
+      expect(reclaimedClaimed.claims[0]!.claimToken).not.toBe(originalToken);
+      expect(await storage.listRuns({ loopId: loop.id, status: "running" })).toHaveLength(1);
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
   test("GET /v1/loops paginates with offset, clamps oversized limit, and filters by name", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
