@@ -7,6 +7,7 @@ import { getPackageVersion } from "../lib/package-version.js";
 
 const contactSchema = {
   type: "object",
+  required: ["tags"],
   properties: {
     id: { type: "string" },
     first_name: { type: "string" },

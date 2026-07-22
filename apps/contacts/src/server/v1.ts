@@ -16,7 +16,7 @@ import type {
   UpdateTagInput,
 } from "../types/index.js";
 import { getCloudClient, getCloudVerifier, ensureCloudSchemaBestEffort, CONTACTS_APP_SLUG } from "./cloud.js";
-import { getContactsPgStore } from "./pg-store.js";
+import { getContactsPgStore, type ContactListFilter } from "./pg-store.js";
 
 const JSON_HEADERS = { "Content-Type": "application/json" } as const;
 
@@ -36,6 +36,18 @@ async function readJson<T>(req: Request): Promise<T | null> {
   } catch {
     return null;
   }
+}
+
+/** Convert the public contact-list query surface into a typed cloud-store filter. */
+export function contactListFilterFromUrl(url: URL): ContactListFilter {
+  return {
+    ...(url.searchParams.get("company_id") ? { company_id: url.searchParams.get("company_id")! } : {}),
+    ...(url.searchParams.get("status") ? { status: url.searchParams.get("status")! } : {}),
+    ...(url.searchParams.get("tag_id") ? { tag_id: url.searchParams.get("tag_id")! } : {}),
+    ...(url.searchParams.get("q") ? { q: url.searchParams.get("q")! } : {}),
+    ...(url.searchParams.get("limit") ? { limit: Number(url.searchParams.get("limit")) } : {}),
+    ...(url.searchParams.get("offset") ? { offset: Number(url.searchParams.get("offset")) } : {}),
+  };
 }
 
 /**
@@ -131,14 +143,7 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
     if (resource === "contacts") {
       if (!id) {
         if (method === "GET") {
-          const result = await store.listContacts({
-            ...(url.searchParams.get("company_id") ? { company_id: url.searchParams.get("company_id")! } : {}),
-            ...(url.searchParams.get("status") ? { status: url.searchParams.get("status")! } : {}),
-            ...(url.searchParams.get("tag_id") ? { tag_id: url.searchParams.get("tag_id")! } : {}),
-            ...(url.searchParams.get("q") ? { q: url.searchParams.get("q")! } : {}),
-            ...(url.searchParams.get("limit") ? { limit: Number(url.searchParams.get("limit")) } : {}),
-            ...(url.searchParams.get("offset") ? { offset: Number(url.searchParams.get("offset")) } : {}),
-          });
+          const result = await store.listContacts(contactListFilterFromUrl(url));
           return json(result);
         }
         if (method === "POST") {

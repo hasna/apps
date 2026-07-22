@@ -30,6 +30,7 @@ describe("buildV1OpenApiDocument", () => {
       type: "array",
       items: { $ref: "#/components/schemas/Tag" },
     });
+    expect(doc.components.schemas.Contact.required).toContain("tags");
     expect(doc.paths["/v1/contacts/{contact_id}/tags/{tag_id}"].put.operationId).toBe("addTagToContact");
     expect(doc.paths["/v1/contacts/{contact_id}/tags/{tag_id}"].delete.operationId).toBe("removeTagFromContact");
   });
