@@ -24,6 +24,7 @@
     "dist",
     "dashboard/dist",
     "migrations",
+    "patches",
     "hasna.contract.json",
     "LICENSE",
     "README.md"

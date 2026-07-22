@@ -11,7 +11,8 @@ WORKDIR /app
 COPY package.json bun.lock ./
 COPY patches ./patches
 COPY dashboard/package.json ./dashboard/package.json
-RUN bun install --frozen-lockfile --ignore-scripts
+RUN bun install --frozen-lockfile --ignore-scripts \
+    && install -d -m 700 -o 65532 -g 65532 /runtime-home
 
 FROM --platform=linux/arm64 ${BUN_IMAGE} AS build
 WORKDIR /app
@@ -36,7 +37,9 @@ COPY --from=deps /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificat
 # Amazon RDS global CA bundle so TLS to the shared RDS succeeds even for
 # verify-full-capable clients.
 COPY docker/rds-global-bundle.pem /etc/ssl/certs/rds-global-bundle.pem
+COPY --from=deps --chown=65532:65532 /runtime-home /home/nonroot
 ENV PATH=/usr/local/bin \
+    HOME=/home/nonroot \
     NODE_ENV=production \
     HASNA_CONTACTS_STORAGE_MODE=cloud \
     NODE_EXTRA_CA_CERTS=/etc/ssl/certs/rds-global-bundle.pem \
@@ -48,6 +51,9 @@ ENV PATH=/usr/local/bin \
 COPY package.json ./package.json
 COPY --from=build /app/dist ./dist
 EXPOSE 19428
+# The server only needs the unprivileged high port and read-only application
+# files; use the conventional numeric non-root identity supported by scratch.
+USER 65532:65532
 # Fail-closed: contacts-serve /v1 refuses to serve without a cloud DSN + signing
 # secret (503), and /ready reports DB reachability — no silent stub.
 CMD ["/usr/local/bin/bun", "dist/server/index.js"]
