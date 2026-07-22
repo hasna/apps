@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
@@ -73,8 +73,11 @@ function stepScript(name: string): string {
 const preflightScript = stepScript("Validate dispatch and configuration");
 const verifySourceScript = stepScript("Verify exact commit against permitted source");
 const localScanScript = stepScript("Enforce local vulnerability gate");
+const sbomIdentityScript = stepScript("Enforce SBOM identity gate");
 const packageTransferScript = stepScript("Package scanned image and hash-bound evidence");
 const verifyTransferScript = stepScript("Verify transferred image, scan, and SBOM evidence");
+const repositoryGateScript = stepScript("Verify immutable scan-on-push repository");
+const pushCandidateScript = stepScript("Push or resume scanned immutable candidate");
 
 function runShell(script: string, cwd: string, env: Record<string, string>) {
   return Bun.spawnSync({
@@ -238,7 +241,7 @@ function cleanLocalTrivyReport() {
     ReportID: "017b7d41-e09f-7000-80ea-000000000001",
     CreatedAt: "2026-07-22T12:34:56Z",
     ArtifactID: `sha256:${"d".repeat(64)}`,
-    ArtifactName: localImageId,
+    ArtifactName: localImageTag,
     ArtifactType: "container_image",
     Metadata: {
       Size: 123456789,
@@ -298,7 +301,7 @@ function cleanLocalSbom() {
       component: {
         "bom-ref": "fixture-container",
         type: "container",
-        name: localImageId,
+        name: localImageTag,
         properties: [
           { name: "aquasecurity:trivy:ImageID", value: localImageId },
           { name: "aquasecurity:trivy:Reference", value: localImageTag },
@@ -324,6 +327,7 @@ function writeFakeDocker(binDir: string): void {
   writeFileSync(dockerPath, [
     "#!/usr/bin/env bash",
     "set -Eeuo pipefail",
+    "if [[ -n \"${FAKE_DOCKER_LOG:-}\" ]]; then printf '%s\\n' \"$*\" >> \"${FAKE_DOCKER_LOG}\"; fi",
     "case \"${1:-}\" in",
     "  image)",
     "    [[ \"${2:-}\" == \"inspect\" && \"${3:-}\" == \"--format\" ]]",
@@ -345,6 +349,8 @@ function writeFakeDocker(binDir: string): void {
     "    [[ \"${2:-}\" == \"--input\" && -s \"${3:-}\" ]]",
     "    printf 'Loaded fake image\\n'",
     "    ;;",
+    "  pull|tag|push)",
+    "    ;;",
     "  *)",
     "    printf 'unsupported fake docker command: %s\\n' \"${1:-}\" >&2",
     "    exit 64",
@@ -353,6 +359,34 @@ function writeFakeDocker(binDir: string): void {
     "",
   ].join("\n"));
   chmodSync(dockerPath, 0o755);
+}
+
+function runExistingCandidateResume(loadedImageId: string = localImageId) {
+  const root = mkdtempSync(join(tmpdir(), "loops-ecr-resume-"));
+  const binDir = join(root, "bin");
+  const dockerLog = join(root, "docker.log");
+  const githubOutput = join(root, "github-output");
+  const githubEnv = join(root, "github-env");
+  const existingRemoteDigest = `sha256:${"d".repeat(64)}`;
+  mkdirSync(binDir);
+  writeFakeDocker(binDir);
+  const result = runShell(pushCandidateScript, root, {
+    PATH: `${binDir}:${process.env.PATH ?? ""}`,
+    SOURCE_SHA: localSourceSha,
+    ECR_REPOSITORY: "loops",
+    CANDIDATE_TAG: `candidate-${localSourceSha.slice(0, 12)}-${localSourceSha}`,
+    ECR_REGISTRY: "123456789012.dkr.ecr.eu-central-1.amazonaws.com",
+    LOCAL_IMAGE_ID: localImageId,
+    EXISTING_REMOTE_DIGEST: existingRemoteDigest,
+    GITHUB_OUTPUT: githubOutput,
+    GITHUB_ENV: githubEnv,
+    FAKE_IMAGE_ID: localImageId,
+    FAKE_LOADED_IMAGE_ID: loadedImageId,
+    FAKE_SOURCE_SHA: localSourceSha,
+    FAKE_REPOSITORY: "hasna/loops",
+    FAKE_DOCKER_LOG: dockerLog,
+  });
+  return { root, result, dockerLog, githubOutput, githubEnv, existingRemoteDigest };
 }
 
 function prepareTransferFixture(
@@ -657,6 +691,13 @@ describe("ECR candidate workflow contract", () => {
       position("- name: Enforce local vulnerability gate"),
     );
     expect(localReportStep).toContain("version: v0.70.0");
+    expect(localReportStep).toContain("image-ref: openloops-candidate:${{ inputs.source_sha }}");
+    expect(localReportStep).toContain("list-all-pkgs: true");
+    expect(localScanScript).toContain(".ArtifactName == $expected_image_tag");
+    expect(sbomIdentityScript).toContain(".metadata.component.name == $expected_image_tag");
+    expect(verifyTransferScript).toContain(".ArtifactName == $expected_image_tag");
+    expect(verifyTransferScript).toContain(".metadata.component.name == $expected_image_tag");
+    expect(localScanScript).toContain('.Packages | type == "array" and length > 0');
     const { root, result } = runLocalScan(cleanLocalTrivyReport());
     try {
       expect(result.exitCode).toBe(0);
@@ -664,6 +705,59 @@ describe("ECR candidate workflow contract", () => {
       expect(readFileSync(join(root, "env"), "utf8")).toContain("LOCAL_HIGH=0");
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("isolates both Trivy actions from candidate policy and cache files", () => {
+    const localReportStep = workflow.slice(
+      position("- name: Generate local vulnerability report"),
+      position("- name: Enforce local vulnerability gate"),
+    );
+    const sbomStep = workflow.slice(
+      position("- name: Generate CycloneDX SBOM"),
+      position("- name: Enforce SBOM identity gate"),
+    );
+    for (const actionStep of [localReportStep, sbomStep]) {
+      expect(actionStep).toContain("trivy-config: ${{ runner.temp }}/openloops-trivy-policy/trivy.yaml");
+      expect(actionStep).toContain("trivyignores: ${{ runner.temp }}/openloops-trivy-policy/trivy.ignore");
+      expect(actionStep).toContain("cache-dir: ${{ runner.temp }}/openloops-trivy-cache");
+      expect(actionStep).toContain("cache: false");
+      expect(actionStep).not.toContain("github.workspace");
+    }
+    expect(workflow).toContain("- name: Prepare trusted Trivy policy");
+    expect(workflow).toContain("rm -f -- trivyignores");
+    expect(workflow).toContain("printf '{}\\n' > \"${trusted_policy_dir}/trivy.yaml\"");
+    expect(workflow).toContain(": > \"${trusted_policy_dir}/trivy.ignore\"");
+  });
+
+  test("installs the exact hash-verified Trivy ARM64 binary before both scan actions", () => {
+    const installScript = stepScript("Install verified Trivy CLI");
+    const localReportStep = workflow.slice(
+      position("- name: Generate local vulnerability report"),
+      position("- name: Enforce local vulnerability gate"),
+    );
+    const sbomStep = workflow.slice(
+      position("- name: Generate CycloneDX SBOM"),
+      position("- name: Enforce SBOM identity gate"),
+    );
+    expect(position("Install verified Trivy CLI")).toBeLessThan(
+      position("Generate local vulnerability report"),
+    );
+    expect(installScript).toContain(
+      "https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-ARM64.tar.gz",
+    );
+    expect(workflow).toContain(
+      "TRIVY_ARCHIVE_SHA256: 2f6bb988b553a1bbac6bdd1ce890f5e412439564e17522b88a4541b4f364fc8d",
+    );
+    expect(workflow).toContain(
+      "TRIVY_BINARY_SHA256: 5bf6066f08c972e0575660eaeb87b4f1bac0e527076dcbf88184bc9baa353f65",
+    );
+    expect(installScript).toContain("sha256sum --check --strict -");
+    expect(installScript).toContain('"${trivy_binary}" --version');
+    expect(installScript).toContain('>> "${GITHUB_PATH}"');
+    for (const actionStep of [localReportStep, sbomStep]) {
+      expect(actionStep).toContain("version: v0.70.0");
+      expect(actionStep).toContain("skip-setup-trivy: true");
     }
   });
 
@@ -718,11 +812,41 @@ describe("ECR candidate workflow contract", () => {
     expect(pushJob).toContain("actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093");
     expect(pushJob).toContain("sha256sum --check --strict candidate-transfer-envelope.sha256");
     expect(pushJob).toContain("sha256sum --check --strict candidate-transfer-payload.sha256");
+    expect(pushJob).toContain("transfer_entries=(./*)");
+    expect(pushJob).not.toContain("find . -mindepth");
     expect(pushJob).toContain("docker load --input candidate-image.tar");
     expect(pushJob).toContain("transferred image identity does not match scanned evidence");
     expect(position("Verify transferred image, scan, and SBOM evidence")).toBeLessThan(
       position("Configure AWS credentials with OIDC"),
     );
+  });
+
+  test("downloads the immutable transfer by preserved artifact ID across failed-job reruns", () => {
+    const buildJob = jobBlock("build_scan");
+    const pushJob = jobBlock("push_verify");
+    const artifactReferenceScript = stepScript("Validate scanned transfer artifact reference");
+    const downloadStep = pushJob.slice(
+      pushJob.indexOf("- name: Download scanned candidate transfer"),
+      pushJob.indexOf("- name: Validate privileged configuration"),
+    );
+    expect(buildJob).toContain(
+      "transfer_artifact_id: ${{ steps.transfer-upload.outputs.artifact-id }}",
+    );
+    expect(buildJob).toContain(
+      "transfer_artifact_digest: ${{ steps.transfer-upload.outputs.artifact-digest }}",
+    );
+    expect(buildJob).toContain(
+      "name: ecr-candidate-transfer-${{ github.run_id }}-${{ github.run_attempt }}",
+    );
+    expect(artifactReferenceScript).toContain('"${TRANSFER_ARTIFACT_ID}" =~ ^[1-9][0-9]*$');
+    expect(artifactReferenceScript).toContain(
+      '"${TRANSFER_ARTIFACT_DIGEST}" =~ ^[0-9a-f]{64}$',
+    );
+    expect(downloadStep).toContain(
+      "artifact-ids: ${{ needs.build_scan.outputs.transfer_artifact_id }}",
+    );
+    expect(downloadStep).not.toContain("github.run_attempt");
+    expect(downloadStep).not.toMatch(/^\s+name: ecr-candidate-transfer-/m);
   });
 
   test("accepts a hash-bound transfer of the exact scanned ARM64 image and evidence", () => {
@@ -735,6 +859,32 @@ describe("ECR candidate workflow contract", () => {
       expect(githubEnv).toContain("VERIFIED_PACKAGE_VERSION=0.4.28-offsite.1");
       expect(githubEnv).toContain("LOCAL_CRITICAL=0");
       expect(githubEnv).toContain("LOCAL_HIGH=0");
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects unexpected hidden transfer entries", () => {
+    const fixture = prepareTransferFixture();
+    try {
+      writeFileSync(join(fixture.transferDir, ".unexpected"), "unexpected\n");
+      const result = runTransferVerification(fixture);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr.toString()).toContain("candidate transfer must contain exactly the expected regular files");
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a symlink substituted for required transfer evidence", () => {
+    const fixture = prepareTransferFixture();
+    try {
+      const trivyPath = join(fixture.transferDir, "trivy-local.json");
+      rmSync(trivyPath);
+      symlinkSync("openloops-candidate.sbom.cdx.json", trivyPath);
+      const result = runTransferVerification(fixture);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr.toString()).toContain("candidate transfer must contain exactly the expected regular files");
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
     }
@@ -823,13 +973,79 @@ describe("ECR candidate workflow contract", () => {
     }
     expect(workflow).toContain("ECR repository must enforce IMMUTABLE tags");
     expect(workflow).toContain("ECR repository must enable scan-on-push");
-    expect(workflow).toContain("candidate tag already exists; refusing to overwrite");
+    expect(repositoryGateScript).toContain("EXISTING_REMOTE_DIGEST");
+    expect(repositoryGateScript).toContain("images[].imageId.imageDigest");
+    expect(repositoryGateScript).toContain("failures[].failureCode");
+    expect(repositoryGateScript).toContain('.failures[0] == "ImageNotFound"');
+    expect(repositoryGateScript).toContain('test("^sha256:[0-9a-f]{64}$")');
+    expect(repositoryGateScript).not.toContain("refusing to overwrite");
+  });
+
+  test("resumes an existing immutable candidate only when it is the exact scanned image", () => {
+    const resumed = runExistingCandidateResume();
+    try {
+      expect(resumed.result.exitCode).toBe(0);
+      const dockerLog = readFileSync(resumed.dockerLog, "utf8");
+      expect(dockerLog).toContain(`pull 123456789012.dkr.ecr.eu-central-1.amazonaws.com/loops@${resumed.existingRemoteDigest}`);
+      expect(dockerLog).not.toMatch(/^tag /m);
+      expect(dockerLog).not.toMatch(/^push /m);
+      expect(readFileSync(resumed.githubOutput, "utf8")).toContain(`digest=${resumed.existingRemoteDigest}`);
+      const githubEnv = readFileSync(resumed.githubEnv, "utf8");
+      expect(githubEnv).toContain(`REMOTE_DIGEST=${resumed.existingRemoteDigest}`);
+      expect(githubEnv).toContain(
+        `IMAGE_URI=123456789012.dkr.ecr.eu-central-1.amazonaws.com/loops:candidate-${localSourceSha.slice(0, 12)}-${localSourceSha}`,
+      );
+    } finally {
+      rmSync(resumed.root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects an existing immutable tag for a different image without mutation", () => {
+    const resumed = runExistingCandidateResume(`sha256:${"e".repeat(64)}`);
+    try {
+      expect(resumed.result.exitCode).not.toBe(0);
+      expect(resumed.result.stderr.toString()).toContain(
+        "existing candidate tag is bound to a different image",
+      );
+      const dockerLog = readFileSync(resumed.dockerLog, "utf8");
+      expect(dockerLog).toContain(`pull 123456789012.dkr.ecr.eu-central-1.amazonaws.com/loops@${resumed.existingRemoteDigest}`);
+      expect(dockerLog).not.toMatch(/^tag /m);
+      expect(dockerLog).not.toMatch(/^push /m);
+    } finally {
+      rmSync(resumed.root, { recursive: true, force: true });
+    }
+  });
+
+  test("continues scan, provenance, and evidence publication after push or resume", () => {
+    const pushOrResume = position("Push or resume scanned immutable candidate");
+    const remoteScan = position("Wait for ECR vulnerability scan");
+    const provenance = position("Generate source provenance statement");
+    const evidence = position("Upload candidate evidence");
+    expect(pushOrResume).toBeLessThan(remoteScan);
+    expect(remoteScan).toBeLessThan(provenance);
+    expect(provenance).toBeLessThan(evidence);
+    expect(pushCandidateScript).toContain('if [[ -n "${EXISTING_REMOTE_DIGEST}" ]]');
+    expect(pushCandidateScript).toContain('resumed_image_id="$(docker image inspect');
+    expect(pushCandidateScript).toContain('"${resumed_image_id}" != "${LOCAL_IMAGE_ID}"');
+  });
+
+  test("uses BSD-portable numeric checksum-manifest line counts", () => {
+    expect(verifyTransferScript).toContain(
+      "envelope_line_count=\"$(awk 'END { print NR }' candidate-transfer-envelope.sha256)\"",
+    );
+    expect(verifyTransferScript).toContain(
+      "payload_line_count=\"$(awk 'END { print NR }' candidate-transfer-payload.sha256)\"",
+    );
+    expect(verifyTransferScript).toContain(
+      "(( envelope_line_count != 2 || payload_line_count != 3 ))",
+    );
+    expect(verifyTransferScript).not.toContain("wc -l");
   });
 
   test("scans before pushing and polls the exact digest to a completed ECR scan", () => {
     const localScan = position("Enforce local vulnerability gate");
     const login = position("Log in to Amazon ECR");
-    const push = position("Push scanned immutable candidate");
+    const push = position("Push or resume scanned immutable candidate");
     const scanStepStart = position("- name: Wait for ECR vulnerability scan");
     const scanStepEnd = position("- name: Generate source provenance statement");
     const scanStep = workflow.slice(scanStepStart, scanStepEnd);
@@ -908,7 +1124,7 @@ describe("ECR candidate workflow contract", () => {
   });
 
   test("binds provenance to the exact pushed ECR image URI", () => {
-    const pushScript = stepScript("Push scanned immutable candidate");
+    const pushScript = stepScript("Push or resume scanned immutable candidate");
     const provenanceScript = stepScript("Generate source provenance statement");
     expect(pushScript).toContain(`printf 'IMAGE_URI=%s\\n' "${"${image_uri}"}" >> "${"${GITHUB_ENV}"}"`);
     expect(provenanceScript).toContain('--arg image_uri "${IMAGE_URI}"');
@@ -921,13 +1137,15 @@ describe("ECR candidate workflow contract", () => {
       "Validate dispatch and configuration",
       "Verify exact commit against permitted source",
       "Build native ARM64 runner image",
+      "Install verified Trivy CLI",
       "Enforce local vulnerability gate",
       "Enforce SBOM identity gate",
       "Package scanned image and hash-bound evidence",
+      "Validate scanned transfer artifact reference",
       "Validate privileged configuration",
       "Verify transferred image, scan, and SBOM evidence",
       "Verify immutable scan-on-push repository",
-      "Push scanned immutable candidate",
+      "Push or resume scanned immutable candidate",
       "Wait for ECR vulnerability scan",
       "Generate source provenance statement",
       "Publish candidate summary",

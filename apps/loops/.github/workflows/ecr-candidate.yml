@@ -39,6 +39,9 @@ jobs:
     name: Build and scan immutable candidate
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
+    outputs:
+      transfer_artifact_id: ${{ steps.transfer-upload.outputs.artifact-id }}
+      transfer_artifact_digest: ${{ steps.transfer-upload.outputs.artifact-digest }}
     permissions:
       contents: read
       id-token: none
@@ -161,10 +164,56 @@ jobs:
           fi
           printf 'LOCAL_IMAGE_ID=%s\n' "${local_image_id}" >> "${GITHUB_ENV}"
 
+      - name: Install verified Trivy CLI
+        shell: bash
+        env:
+          TRIVY_ARCHIVE_SHA256: 2f6bb988b553a1bbac6bdd1ce890f5e412439564e17522b88a4541b4f364fc8d
+          TRIVY_BINARY_SHA256: 5bf6066f08c972e0575660eaeb87b4f1bac0e527076dcbf88184bc9baa353f65
+        run: |
+          set -Eeuo pipefail
+          trusted_trivy_root="${RUNNER_TEMP}/openloops-trivy-v0.70.0"
+          trusted_trivy_bin="${trusted_trivy_root}/bin"
+          trivy_archive="${trusted_trivy_root}/trivy_0.70.0_Linux-ARM64.tar.gz"
+          trivy_binary="${trusted_trivy_bin}/trivy"
+          mkdir -p "${trusted_trivy_bin}"
+          curl \
+            --fail \
+            --location \
+            --proto '=https' \
+            --tlsv1.2 \
+            --retry 3 \
+            --output "${trivy_archive}" \
+            https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-ARM64.tar.gz
+          printf '%s  %s\n' "${TRIVY_ARCHIVE_SHA256}" "${trivy_archive}" | sha256sum --check --strict -
+          tar \
+            --extract \
+            --gzip \
+            --file "${trivy_archive}" \
+            --directory "${trusted_trivy_bin}" \
+            --no-same-owner \
+            --no-same-permissions \
+            trivy
+          printf '%s  %s\n' "${TRIVY_BINARY_SHA256}" "${trivy_binary}" | sha256sum --check --strict -
+          chmod 0555 "${trivy_binary}"
+          "${trivy_binary}" --version
+          printf '%s\n' "${trusted_trivy_bin}" >> "${GITHUB_PATH}"
+
+      - name: Prepare trusted Trivy policy
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          trusted_policy_dir="${RUNNER_TEMP}/openloops-trivy-policy"
+          rm -f -- trivyignores
+          mkdir -p "${trusted_policy_dir}" "${RUNNER_TEMP}/openloops-trivy-cache"
+          printf '{}\n' > "${trusted_policy_dir}/trivy.yaml"
+          : > "${trusted_policy_dir}/trivy.ignore"
+          chmod 0444 "${trusted_policy_dir}/trivy.yaml" "${trusted_policy_dir}/trivy.ignore"
+
       - name: Generate local vulnerability report
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           version: v0.70.0
+          skip-setup-trivy: true
           image-ref: openloops-candidate:${{ inputs.source_sha }}
           format: json
           output: trivy-local.json
@@ -172,6 +221,11 @@ jobs:
           vuln-type: os,library
           severity: CRITICAL,HIGH
           ignore-unfixed: false
+          list-all-pkgs: true
+          trivy-config: ${{ runner.temp }}/openloops-trivy-policy/trivy.yaml
+          trivyignores: ${{ runner.temp }}/openloops-trivy-policy/trivy.ignore
+          cache-dir: ${{ runner.temp }}/openloops-trivy-cache
+          cache: false
           exit-code: "0"
 
       - name: Enforce local vulnerability gate
@@ -186,7 +240,7 @@ jobs:
             and (.SchemaVersion == 2)
             and (.Trivy | type == "object")
             and (.Trivy.Version == "0.70.0")
-            and (.ArtifactName == $expected_image_id)
+            and (.ArtifactName == $expected_image_tag)
             and (.ArtifactType == "container_image")
             and (.Metadata | type == "object")
             and (.Metadata.ImageID == $expected_image_id)
@@ -236,11 +290,17 @@ jobs:
       - name: Generate CycloneDX SBOM
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          version: v0.70.0
+          skip-setup-trivy: true
           image-ref: openloops-candidate:${{ inputs.source_sha }}
           format: cyclonedx
           output: openloops-candidate.sbom.cdx.json
           scanners: vuln
           vuln-type: os,library
+          trivy-config: ${{ runner.temp }}/openloops-trivy-policy/trivy.yaml
+          trivyignores: ${{ runner.temp }}/openloops-trivy-policy/trivy.ignore
+          cache-dir: ${{ runner.temp }}/openloops-trivy-cache
+          cache: false
           exit-code: "0"
 
       - name: Enforce SBOM identity gate
@@ -257,7 +317,7 @@ jobs:
             and (.metadata | type == "object")
             and (.metadata.component | type == "object")
             and (.metadata.component.type == "container")
-            and (.metadata.component.name == $expected_image_id)
+            and (.metadata.component.name == $expected_image_tag)
             and (.metadata.component.properties | type == "array")
             and any(.metadata.component.properties[];
               .name == "aquasecurity:trivy:ImageID" and .value == $expected_image_id
@@ -398,10 +458,26 @@ jobs:
       AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
       ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
     steps:
+      - name: Validate scanned transfer artifact reference
+        env:
+          TRANSFER_ARTIFACT_ID: ${{ needs.build_scan.outputs.transfer_artifact_id }}
+          TRANSFER_ARTIFACT_DIGEST: ${{ needs.build_scan.outputs.transfer_artifact_digest }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ ! "${TRANSFER_ARTIFACT_ID}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "build job did not provide a valid immutable transfer artifact ID" >&2
+            exit 1
+          fi
+          if [[ ! "${TRANSFER_ARTIFACT_DIGEST}" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "build job did not provide a valid transfer artifact digest" >&2
+            exit 1
+          fi
+
       - name: Download scanned candidate transfer
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: ecr-candidate-transfer-${{ github.run_id }}-${{ github.run_attempt }}
+          artifact-ids: ${{ needs.build_scan.outputs.transfer_artifact_id }}
           path: candidate-transfer
 
       - name: Validate privileged configuration
@@ -485,20 +561,29 @@ jobs:
             candidate-transfer-payload.sha256
             candidate-transfer-envelope.sha256
           )
-          if [[ "$(find . -mindepth 1 -maxdepth 1 -type f | wc -l)" != "${#required_files[@]}" ]] \
-            || [[ -n "$(find . -mindepth 1 -maxdepth 1 ! -type f -print -quit)" ]]; then
+          shopt -s nullglob dotglob
+          transfer_entries=(./*)
+          shopt -u nullglob dotglob
+          if (( ${#transfer_entries[@]} != ${#required_files[@]} )); then
             echo "candidate transfer must contain exactly the expected regular files" >&2
             exit 1
           fi
+          for transfer_entry in "${transfer_entries[@]}"; do
+            if [[ ! -f "${transfer_entry}" || -L "${transfer_entry}" ]]; then
+              echo "candidate transfer must contain exactly the expected regular files" >&2
+              exit 1
+            fi
+          done
           for required_file in "${required_files[@]}"; do
-            if [[ ! -f "${required_file}" ]]; then
+            if [[ ! -f "${required_file}" || -L "${required_file}" ]]; then
               echo "candidate transfer is missing ${required_file}" >&2
               exit 1
             fi
           done
 
-          if [[ "$(wc -l < candidate-transfer-envelope.sha256)" != "2" ]] \
-            || [[ "$(wc -l < candidate-transfer-payload.sha256)" != "3" ]]; then
+          envelope_line_count="$(awk 'END { print NR }' candidate-transfer-envelope.sha256)"
+          payload_line_count="$(awk 'END { print NR }' candidate-transfer-payload.sha256)"
+          if (( envelope_line_count != 2 || payload_line_count != 3 )); then
             echo "candidate transfer checksum manifests have an unexpected shape" >&2
             exit 1
           fi
@@ -572,7 +657,7 @@ jobs:
             and (.SchemaVersion == 2)
             and (.Trivy | type == "object")
             and (.Trivy.Version == "0.70.0")
-            and (.ArtifactName == $expected_image_id)
+            and (.ArtifactName == $expected_image_tag)
             and (.ArtifactType == "container_image")
             and (.Metadata | type == "object")
             and (.Metadata.ImageID == $expected_image_id)
@@ -625,7 +710,7 @@ jobs:
             and (.metadata | type == "object")
             and (.metadata.component | type == "object")
             and (.metadata.component.type == "container")
-            and (.metadata.component.name == $expected_image_id)
+            and (.metadata.component.name == $expected_image_tag)
             and (.metadata.component.properties | type == "array")
             and any(.metadata.component.properties[];
               .name == "aquasecurity:trivy:ImageID" and .value == $expected_image_id
@@ -704,15 +789,32 @@ jobs:
             echo "ECR repository must enable scan-on-push" >&2
             exit 1
           fi
-          existing="$(aws ecr batch-get-image \
+          existing_response="$(aws ecr batch-get-image \
             --repository-name "${ECR_REPOSITORY}" \
             --image-ids imageTag="${CANDIDATE_TAG}" \
-            --query 'length(images)' \
-            --output text)"
-          if [[ "${existing}" != "0" ]]; then
-            echo "candidate tag already exists; refusing to overwrite" >&2
+            --query '{digests: images[].imageId.imageDigest,failures: failures[].failureCode}' \
+            --output json)"
+          if ! existing_remote_digest="$(jq -er '
+            if type != "object"
+              or (.digests | type) != "array"
+              or (.failures | type) != "array" then
+              error("malformed batch-get-image response")
+            elif (.digests | length) == 0
+              and ((.failures | length) == 0
+                or ((.failures | length) == 1 and .failures[0] == "ImageNotFound")) then
+              ""
+            elif (.digests | length) == 1
+              and (.failures | length) == 0
+              and (.digests[0] | type == "string" and test("^sha256:[0-9a-f]{64}$")) then
+              .digests[0]
+            else
+              error("candidate tag returned multiple or malformed digests")
+            end
+          ' <<<"${existing_response}")"; then
+            echo "ECR returned malformed existing candidate metadata" >&2
             exit 1
           fi
+          printf 'EXISTING_REMOTE_DIGEST=%s\n' "${existing_remote_digest}" >> "${GITHUB_ENV}"
 
       - name: Log in to Amazon ECR
         id: ecr-login
@@ -720,7 +822,7 @@ jobs:
         with:
           mask-password: true
 
-      - name: Push scanned immutable candidate
+      - name: Push or resume scanned immutable candidate
         id: push
         env:
           ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
@@ -728,21 +830,37 @@ jobs:
         run: |
           set -Eeuo pipefail
           image_uri="${ECR_REGISTRY}/${ECR_REPOSITORY}:${CANDIDATE_TAG}"
-          docker tag "openloops-candidate:${SOURCE_SHA}" "${image_uri}"
-          docker push "${image_uri}"
-
           remote_digest=""
-          for attempt in {1..12}; do
-            remote_digest="$(aws ecr describe-images \
-              --repository-name "${ECR_REPOSITORY}" \
-              --image-ids imageTag="${CANDIDATE_TAG}" \
-              --query 'imageDetails[0].imageDigest' \
-              --output text 2>/dev/null || true)"
-            if [[ "${remote_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-              break
+          if [[ -n "${EXISTING_REMOTE_DIGEST}" ]]; then
+            if [[ ! "${EXISTING_REMOTE_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "existing candidate digest is malformed" >&2
+              exit 1
             fi
-            sleep 5
-          done
+            remote_ref="${ECR_REGISTRY}/${ECR_REPOSITORY}@${EXISTING_REMOTE_DIGEST}"
+            docker pull "${remote_ref}"
+            resumed_image_id="$(docker image inspect --format '{{.Id}}' "${remote_ref}")"
+            if [[ "${resumed_image_id}" != "${LOCAL_IMAGE_ID}" ]]; then
+              echo "existing candidate tag is bound to a different image; refusing mutation" >&2
+              exit 1
+            fi
+            remote_digest="${EXISTING_REMOTE_DIGEST}"
+            echo "resuming verification for the exact existing immutable candidate"
+          else
+            docker tag "openloops-candidate:${SOURCE_SHA}" "${image_uri}"
+            docker push "${image_uri}"
+
+            for attempt in {1..12}; do
+              remote_digest="$(aws ecr describe-images \
+                --repository-name "${ECR_REPOSITORY}" \
+                --image-ids imageTag="${CANDIDATE_TAG}" \
+                --query 'imageDetails[0].imageDigest' \
+                --output text 2>/dev/null || true)"
+              if [[ "${remote_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                break
+              fi
+              sleep 5
+            done
+          fi
           if [[ ! "${remote_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "ECR did not return a valid digest" >&2
             exit 1
