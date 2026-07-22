@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildServer } from "./index.js";
+import { resetStoreCache } from "../store/index.js";
 
 const envNames = [
   "HOME",
@@ -14,6 +15,8 @@ const envNames = [
   "CONTACTS_POSTGRES_URL",
   "HASNA_CONTACTS_DATABASE_URL",
   "CONTACTS_DATABASE_URL",
+  "HASNA_CONTACTS_API_URL",
+  "HASNA_CONTACTS_API_KEY",
 ] as const;
 
 const originalEnv = new Map(envNames.map((name) => [name, process.env[name]]));
@@ -30,6 +33,9 @@ function isolateEnv(): void {
   delete process.env["CONTACTS_POSTGRES_URL"];
   delete process.env["HASNA_CONTACTS_DATABASE_URL"];
   delete process.env["CONTACTS_DATABASE_URL"];
+  delete process.env["HASNA_CONTACTS_API_URL"];
+  delete process.env["HASNA_CONTACTS_API_KEY"];
+  resetStoreCache();
 }
 
 function restoreEnv(): void {
@@ -38,6 +44,7 @@ function restoreEnv(): void {
     if (value === undefined) delete process.env[name];
     else process.env[name] = value;
   }
+  resetStoreCache();
 }
 
 function textPayload(result: { content: Array<{ text: string }> }) {
