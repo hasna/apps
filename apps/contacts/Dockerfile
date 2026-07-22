@@ -20,12 +20,23 @@ COPY src ./src
 COPY scripts ./scripts
 RUN bun run build:server
 
-FROM --platform=linux/arm64 ${BUN_IMAGE} AS runner
+FROM scratch AS runner
 WORKDIR /app
+# Minimal ARM64 runtime: Bun is not dynamically linked to OpenSSL. Copy only
+# its musl/C++ runtime libraries and public CA roots instead of Alpine's package
+# manager and unused OpenSSL libraries.
+COPY --from=deps /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=deps /lib/ld-musl-aarch64.so.1 /lib/ld-musl-aarch64.so.1
+COPY --from=deps /lib/libc.musl-aarch64.so.1 /lib/libc.musl-aarch64.so.1
+COPY --from=deps /usr/lib/libgcc_s.so.1 /usr/lib/libgcc_s.so.1
+COPY --from=deps /usr/lib/libstdc++.so.6 /usr/lib/libstdc++.so.6
+COPY --from=deps /usr/lib/libstdc++.so.6.0.33 /usr/lib/libstdc++.so.6.0.33
+COPY --from=deps /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 # Amazon RDS global CA bundle so TLS to the shared RDS succeeds even for
 # verify-full-capable clients.
 COPY docker/rds-global-bundle.pem /etc/ssl/certs/rds-global-bundle.pem
-ENV NODE_ENV=production \
+ENV PATH=/usr/local/bin \
+    NODE_ENV=production \
     HASNA_CONTACTS_STORAGE_MODE=cloud \
     NODE_EXTRA_CA_CERTS=/etc/ssl/certs/rds-global-bundle.pem \
     PGSSLROOTCERT=/etc/ssl/certs/rds-global-bundle.pem \
@@ -39,4 +50,4 @@ COPY --from=build /app/dist ./dist
 EXPOSE 19428
 # Fail-closed: contacts-serve /v1 refuses to serve without a cloud DSN + signing
 # secret (503), and /ready reports DB reachability — no silent stub.
-CMD ["bun", "dist/server/index.js"]
+CMD ["/usr/local/bin/bun", "dist/server/index.js"]
