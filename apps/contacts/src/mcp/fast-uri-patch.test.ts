@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import fastUri from "fast-uri";
+import fastUri from "../../vendor/fast-uri/index.js";
 
-describe("patched fast-uri authority parsing", () => {
+describe("bundled fast-uri authority parsing", () => {
   test("rejects literal authority backslashes without rejecting encoded data", () => {
     expect(fastUri.parse("https://attacker.example\\@allowed.example").error).toBe(
       "URI authority must not contain a literal backslash.",
