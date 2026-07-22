@@ -41,6 +41,12 @@ interface RemoteTemplateApplication {
   tasks: Task[];
 }
 
+interface RemoteTemplateOverrides {
+  title?: string;
+  description?: string;
+  priority?: TemplateWithTasks["priority"];
+}
+
 /**
  * Apply the reusable-template contract through the self-hosted API without
  * opening local storage. This deliberately shares the variable and condition
@@ -53,6 +59,7 @@ async function createRemoteTemplateTasks(
   projectId: string | undefined,
   variables: Record<string, string>,
   agentId: string | undefined,
+  overrides?: RemoteTemplateOverrides,
   visited = new Set<string>(),
 ): Promise<RemoteTemplateApplication> {
   if (visited.has(template.id)) {
@@ -66,12 +73,14 @@ async function createRemoteTemplateTasks(
 
   if (template.tasks.length === 0) {
     const task = await cloudCreateTask(cloud, {
-      title: render(template.title_pattern),
-      ...(render(template.description) ? { description: render(template.description) } : {}),
-      priority: template.priority,
+      title: render(overrides?.title || template.title_pattern),
+      ...(render(overrides?.description ?? template.description) ? { description: render(overrides?.description ?? template.description) } : {}),
+      priority: overrides?.priority ?? template.priority,
       tags: template.tags,
       ...(projectId ? { project_id: projectId } : {}),
+      ...(template.plan_id ? { plan_id: template.plan_id } : {}),
       ...(agentId ? { agent_id: agentId } : {}),
+      ...(Object.keys(template.metadata ?? {}).length > 0 ? { metadata: template.metadata } : {}),
     });
     return { tasks: [task] };
   }
@@ -85,7 +94,7 @@ async function createRemoteTemplateTasks(
     if (step.include_template_id) {
       const included = await cloudGetTemplate(cloud, step.include_template_id);
       if (!included) throw new Error(`Included template not found: ${step.include_template_id}`);
-      const result = await createRemoteTemplateTasks(cloud, included, projectId, resolved, agentId, visited);
+      const result = await createRemoteTemplateTasks(cloud, included, projectId, resolved, agentId, undefined, visited);
       created.push(...result.tasks);
       if (result.tasks.length > 0) positionToTaskId.set(step.position, result.tasks[0]!.id);
       else skippedPositions.add(step.position);
@@ -453,6 +462,11 @@ export function registerPlanTemplateCommands(program: Command) {
               targetProjectId,
               variables,
               globalOpts.agent,
+              {
+                title: opts.title,
+                description: opts.description,
+                priority: opts.priority,
+              },
             );
             if (globalOpts.json) { output(created, true); }
             else {

@@ -699,4 +699,55 @@ describe("cloud CLI task-list filtering", () => {
       server.stop(true);
     }
   });
+
+  test("applies zero-step template defaults and CLI overrides through cloud HTTP", async () => {
+    const requests: Array<{ method: string; path: string; body?: Record<string, unknown> }> = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        const body = request.method === "POST" ? await request.json() as Record<string, unknown> : undefined;
+        requests.push({ method: request.method, path: url.pathname, body });
+        if (url.pathname === "/v1/templates/template-single" && request.method === "GET") {
+          return Response.json({ template: {
+            id: "template-single", name: "Single", title_pattern: "Original {month}", description: "Original description", priority: "medium", tags: ["accounting"],
+            variables: [{ name: "month", required: false, default: "May" }], version: 1, project_id: PROJECT_ID, plan_id: "plan-1", metadata: { source: "monthly-template" }, tasks: [],
+          } });
+        }
+        if (url.pathname === "/v1/tasks" && request.method === "POST") {
+          return Response.json({ task: { id: "task-single", ...(body ?? {}), status: "pending" } }, { status: 201 });
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-template-single-"));
+    tempRoots.push(root);
+    try {
+      const result = await runCli(
+        ["--json", "templates", "--use", "template-single", "--title", "Close {month}", "--description", "Closing {month}", "--priority", "critical"],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+      expect(requests).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          method: "POST",
+          path: "/v1/tasks",
+          body: {
+            title: "Close May",
+            description: "Closing May",
+            priority: "critical",
+            tags: ["accounting"],
+            project_id: PROJECT_ID,
+            plan_id: "plan-1",
+            metadata: { source: "monthly-template" },
+          },
+        }),
+      ]));
+      expect(existsSync(join(root, "todos.db"))).toBe(false);
+    } finally {
+      server.stop(true);
+    }
+  });
 });
