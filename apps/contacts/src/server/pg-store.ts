@@ -264,7 +264,7 @@ export class ContactsPgStore {
     return (await this.attachTags([mapContact(row)]))[0]!;
   }
 
-  async createContact(input: CreateContactInput): Promise<Contact> {
+  async createContact(input: CreateContactInput): Promise<Contact & { tags: Tag[] }> {
     const id = uuid();
     const display =
       input.display_name?.trim() ||
@@ -305,10 +305,13 @@ export class ContactsPgStore {
         input.timezone ?? null,
       ],
     );
-    return mapContact(row as ContactRow);
+    // The public v1 Contact schema requires a safe membership readback on every
+    // contact response. A newly created contact has no memberships, but still
+    // returns the stable `tags: []` shape rather than omitting the field.
+    return (await this.attachTags([mapContact(row as ContactRow)]))[0]!;
   }
 
-  async updateContact(id: string, input: UpdateContactInput): Promise<Contact | null> {
+  async updateContact(id: string, input: UpdateContactInput): Promise<(Contact & { tags: Tag[] }) | null> {
     const allowed: Record<string, unknown> = {};
     const columns = [
       "first_name", "last_name", "display_name", "nickname", "avatar_url", "notes", "birthday",
@@ -332,7 +335,7 @@ export class ContactsPgStore {
       `UPDATE contacts SET ${sets.join(", ")} WHERE id = $1 RETURNING *`,
       [id, ...keys.map((k) => allowed[k])],
     );
-    return row ? mapContact(row) : null;
+    return row ? (await this.attachTags([mapContact(row)]))[0]! : null;
   }
 
   async deleteContact(id: string): Promise<boolean> {

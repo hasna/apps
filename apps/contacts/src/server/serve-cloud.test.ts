@@ -3,6 +3,7 @@ import { buildV1OpenApiDocument } from "./openapi.js";
 import { resolveCloudDatabaseUrl, resolveSigningSecret, isCloudModeEnabled, CONTACTS_APP_SLUG } from "./cloud.js";
 import { ContactsPgStore } from "./pg-store.js";
 import { contactListFilterFromUrl } from "./v1.js";
+import { PG_MIGRATIONS } from "../db/pg-migrations.js";
 import type { PoolQueryClient } from "../generated/storage-kit/query.js";
 
 // ── OpenAPI document is the SDK source of truth ──
@@ -166,6 +167,7 @@ function taggedContactShim(options: { contacts?: Record<string, unknown>[]; tags
     async get<T>(sql: string, params?: readonly unknown[]) {
       record(sql, params);
       if (sql.includes("COUNT(*)")) return { count: String(contacts.length) } as T;
+      if (sql.includes("INSERT INTO contacts") || sql.startsWith("UPDATE contacts")) return (contacts[0] ?? null) as T | null;
       if (sql.includes("FROM contacts WHERE id")) return (contacts[0] ?? null) as T;
       return null;
     },
@@ -199,6 +201,18 @@ describe("ContactsPgStore", () => {
     // the derived display_name landed in the INSERT params
     expect(calls[0]!.sql).toContain("INSERT INTO contacts");
     expect(calls[0]!.params).toContain("Ada Lovelace");
+  });
+
+  test("createContact returns the advertised empty tags membership shape", async () => {
+    const { client, calls } = taggedContactShim({ tags: [] });
+    const store = new ContactsPgStore(client);
+
+    const contact = await store.createContact({ first_name: "Ada", last_name: "Lovelace" });
+
+    expect({ contact }).toEqual(expect.objectContaining({
+      contact: expect.objectContaining({ tags: [] }),
+    }));
+    expect(calls.some((call) => call.sql.includes("SELECT ct.contact_id, t.*"))).toBe(true);
   });
 
   test("listContacts builds a tsquery filter and parameterizes limit/offset", async () => {
@@ -271,6 +285,21 @@ describe("ContactsPgStore", () => {
     }));
   });
 
+  test("updateContact preserves and returns tag memberships", async () => {
+    const { client, calls } = taggedContactShim();
+    const store = new ContactsPgStore(client);
+
+    const contact = await store.updateContact("contact-1", { job_title: "Programmer" });
+
+    expect({ contact }).toEqual(expect.objectContaining({
+      contact: expect.objectContaining({
+        id: "contact-1",
+        tags: [expect.objectContaining({ id: "tag-1", name: "monthly accounting" })],
+      }),
+    }));
+    expect(calls.find((call) => call.sql.startsWith("UPDATE contacts"))?.params).toEqual(["contact-1", "Programmer"]);
+  });
+
   test("listContacts applies tag_id to data and count queries and returns tags", async () => {
     const { client, calls } = taggedContactShim();
     const store = new ContactsPgStore(client);
@@ -304,5 +333,14 @@ describe("ContactsPgStore", () => {
 
     expect(await store.listContacts({ tag_id: "tag-1" })).toEqual({ contacts: [], count: 0 });
     expect(calls.some((call) => call.sql.includes("SELECT ct.contact_id, t.*"))).toBe(false);
+  });
+
+  test("defines the forward tag-first index required by filtered count and pagination", () => {
+    const tagFilterMigration = PG_MIGRATIONS.at(-1)!;
+
+    expect(tagFilterMigration).toContain(
+      "CREATE INDEX IF NOT EXISTS idx_contact_tags_tag_contact ON contact_tags(tag_id, contact_id)",
+    );
+    expect(tagFilterMigration).toContain("INSERT INTO _migrations (version) VALUES (13)");
   });
 });

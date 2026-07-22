@@ -2,9 +2,9 @@
 // Regenerate: bun run scripts/generate-sdk.ts
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Contacts V1 API 0.6.32
+// Source: Contacts V1 API 0.6.34
 
-export interface Contact { "id"?: string; "first_name"?: string; "last_name"?: string; "display_name"?: string; "nickname"?: string | null; "company_id"?: string | null; "job_title"?: string | null; "notes"?: string | null; "source"?: string; "status"?: string; "sensitivity"?: string; "archived"?: boolean; "priority"?: number; "created_at"?: string; "updated_at"?: string }
+export interface Contact { "id"?: string; "first_name"?: string; "last_name"?: string; "display_name"?: string; "nickname"?: string | null; "company_id"?: string | null; "job_title"?: string | null; "notes"?: string | null; "source"?: string; "status"?: string; "sensitivity"?: string; "archived"?: boolean; "priority"?: number; "tags": Array<Tag>; "created_at"?: string; "updated_at"?: string }
 
 export interface Company { "id"?: string; "name"?: string; "domain"?: string | null; "industry"?: string | null; "size"?: string | null; "founded_year"?: number | null; "notes"?: string | null; "is_owned_entity"?: boolean; "created_at"?: string; "updated_at"?: string }
 
@@ -123,7 +123,7 @@ export class ContactsV1Client {
     }
 
     /** List contacts */
-    async listContacts(query?: { "q"?: string; "company_id"?: string; "status"?: string; "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<{ "contacts"?: Array<Contact>; "count"?: number }> {
+    async listContacts(query?: { "q"?: string; "company_id"?: string; "status"?: string; "tag_id"?: string; "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<{ "contacts"?: Array<Contact>; "count"?: number }> {
       return this.request("GET", `/v1/contacts`, {
         body: undefined,
         query,
