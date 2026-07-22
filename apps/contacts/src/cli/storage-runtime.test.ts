@@ -10,6 +10,8 @@ const remoteEnv = [
   "CONTACTS_POSTGRES_URL",
   "HASNA_CONTACTS_DATABASE_URL",
   "CONTACTS_DATABASE_URL",
+  "HASNA_CONTACTS_API_URL",
+  "HASNA_CONTACTS_API_KEY",
 ] as const;
 
 let tempHome: string | null = null;

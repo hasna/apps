@@ -7,6 +7,7 @@ import { getPackageVersion } from "../lib/package-version.js";
 
 const contactSchema = {
   type: "object",
+  required: ["tags"],
   properties: {
     id: { type: "string" },
     first_name: { type: "string" },
@@ -21,6 +22,7 @@ const contactSchema = {
     sensitivity: { type: "string" },
     archived: { type: "boolean" },
     priority: { type: "number" },
+    tags: { type: "array", items: { $ref: "#/components/schemas/Tag" } },
     created_at: { type: "string" },
     updated_at: { type: "string" },
   },
@@ -158,6 +160,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             { name: "q", in: "query", schema: { type: "string" } },
             { name: "company_id", in: "query", schema: { type: "string" } },
             { name: "status", in: "query", schema: { type: "string" } },
+            { name: "tag_id", in: "query", schema: { type: "string" } },
             { name: "limit", in: "query", schema: { type: "number" } },
             { name: "offset", in: "query", schema: { type: "number" } },
           ],

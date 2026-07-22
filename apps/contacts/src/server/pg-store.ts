@@ -191,6 +191,7 @@ export interface ContactListFilter {
   offset?: number;
   company_id?: string;
   status?: string;
+  tag_id?: string;
   q?: string;
 }
 
@@ -205,8 +206,25 @@ export interface CompanyListFilter {
 export class ContactsPgStore {
   constructor(private readonly client: PoolQueryClient) {}
 
+  /** Attach cloud tag memberships in one query for contact read responses. */
+  private async attachTags(contacts: Contact[]): Promise<Array<Contact & { tags: Tag[] }>> {
+    const tagsByContactId = new Map<string, Tag[]>(contacts.map((contact) => [contact.id, []]));
+    if (contacts.length === 0) return [];
+
+    const rows = await this.client.many<TagRow & { contact_id: string }>(
+      `SELECT ct.contact_id, t.*
+       FROM contact_tags ct
+       JOIN tags t ON t.id = ct.tag_id
+       WHERE ct.contact_id = ANY($1::text[])
+       ORDER BY t.name ASC`,
+      [contacts.map((contact) => contact.id)],
+    );
+    for (const row of rows) tagsByContactId.get(row.contact_id)?.push(mapTag(row));
+    return contacts.map((contact) => ({ ...contact, tags: tagsByContactId.get(contact.id) ?? [] }));
+  }
+
   // ---- contacts ----
-  async listContacts(filter: ContactListFilter = {}): Promise<{ contacts: Contact[]; count: number }> {
+  async listContacts(filter: ContactListFilter = {}): Promise<{ contacts: Array<Contact & { tags: Tag[] }>; count: number }> {
     const limit = Math.min(Math.max(filter.limit ?? 50, 1), 500);
     const offset = Math.max(filter.offset ?? 0, 0);
     const where: string[] = [];
@@ -218,6 +236,10 @@ export class ContactsPgStore {
     if (filter.status) {
       params.push(filter.status);
       where.push(`status = $${params.length}`);
+    }
+    if (filter.tag_id) {
+      params.push(filter.tag_id);
+      where.push(`EXISTS (SELECT 1 FROM contact_tags ct WHERE ct.contact_id = contacts.id AND ct.tag_id = $${params.length})`);
     }
     if (filter.q) {
       params.push(filter.q);
@@ -233,15 +255,16 @@ export class ContactsPgStore {
       `SELECT * FROM contacts ${whereSql} ORDER BY display_name ASC LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params,
     );
-    return { contacts: rows.map(mapContact), count: Number(countRow?.count ?? rows.length) };
+    return { contacts: await this.attachTags(rows.map(mapContact)), count: Number(countRow?.count ?? rows.length) };
   }
 
-  async getContact(id: string): Promise<Contact | null> {
+  async getContact(id: string): Promise<(Contact & { tags: Tag[] }) | null> {
     const row = await this.client.get<ContactRow>(`SELECT * FROM contacts WHERE id = $1`, [id]);
-    return row ? mapContact(row) : null;
+    if (!row) return null;
+    return (await this.attachTags([mapContact(row)]))[0]!;
   }
 
-  async createContact(input: CreateContactInput): Promise<Contact> {
+  async createContact(input: CreateContactInput): Promise<Contact & { tags: Tag[] }> {
     const id = uuid();
     const display =
       input.display_name?.trim() ||
@@ -282,10 +305,13 @@ export class ContactsPgStore {
         input.timezone ?? null,
       ],
     );
-    return mapContact(row as ContactRow);
+    // The public v1 Contact schema requires a safe membership readback on every
+    // contact response. A newly created contact has no memberships, but still
+    // returns the stable `tags: []` shape rather than omitting the field.
+    return (await this.attachTags([mapContact(row as ContactRow)]))[0]!;
   }
 
-  async updateContact(id: string, input: UpdateContactInput): Promise<Contact | null> {
+  async updateContact(id: string, input: UpdateContactInput): Promise<(Contact & { tags: Tag[] }) | null> {
     const allowed: Record<string, unknown> = {};
     const columns = [
       "first_name", "last_name", "display_name", "nickname", "avatar_url", "notes", "birthday",
@@ -309,7 +335,7 @@ export class ContactsPgStore {
       `UPDATE contacts SET ${sets.join(", ")} WHERE id = $1 RETURNING *`,
       [id, ...keys.map((k) => allowed[k])],
     );
-    return row ? mapContact(row) : null;
+    return row ? (await this.attachTags([mapContact(row)]))[0]! : null;
   }
 
   async deleteContact(id: string): Promise<boolean> {
