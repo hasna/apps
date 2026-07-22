@@ -36,9 +36,12 @@ export function resolveSigningSecret(env: NodeJS.ProcessEnv = process.env): stri
   );
 }
 
-/** True when this process is configured to serve the cloud `/v1` API. */
+/** True when this process is configured to serve the cloud `/v1` API.
+ * Explicit remote mode remains cloud even when its DSN is missing so readiness
+ * fails closed instead of presenting the process as a healthy local server. */
 export function isCloudModeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(resolveCloudDatabaseUrl(env));
+  const mode = env.HASNA_CONTACTS_STORAGE_MODE || env.CONTACTS_STORAGE_MODE;
+  return Boolean(resolveCloudDatabaseUrl(env)) || mode === "cloud" || mode === "self_hosted";
 }
 
 let cachedClient: PoolQueryClient | null = null;

@@ -1,6 +1,6 @@
 {
   "name": "@hasna/contacts",
-  "version": "0.6.32",
+  "version": "0.6.33",
   "description": "Contact management for AI coding agents — CLI + MCP + Web",
   "type": "module",
   "main": "dist/index.js",
@@ -88,5 +88,11 @@
     "@types/pg": "^8.11.11",
     "@types/react": "^18.3.18",
     "typescript": "^5.7.3"
+  },
+  "overrides": {
+    "fast-uri": "3.1.3"
+  },
+  "patchedDependencies": {
+    "fast-uri@3.1.3": "patches/fast-uri@3.1.3.patch"
   }
 }

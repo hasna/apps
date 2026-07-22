@@ -9,6 +9,7 @@ ARG BUN_IMAGE=oven/bun:1.3.14-alpine@sha256:3c9ab1a521c82144dff537125695017a0480
 FROM --platform=linux/arm64 ${BUN_IMAGE} AS deps
 WORKDIR /app
 COPY package.json bun.lock ./
+COPY patches ./patches
 COPY dashboard/package.json ./dashboard/package.json
 RUN bun install --frozen-lockfile --ignore-scripts
 

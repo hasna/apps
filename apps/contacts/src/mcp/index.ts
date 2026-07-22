@@ -40,12 +40,13 @@ async function main() {
   console.error("Contacts MCP server running on stdio");
 }
 
-const isDirectRun =
-  import.meta.url === `file://${process.argv[1]}` ||
-  process.argv[1]?.endsWith("mcp/index.ts") ||
-  process.argv[1]?.endsWith("mcp/index.js");
+export function isDirectMcpEntry(entry = process.argv[1]): boolean {
+  if (!entry) return false;
+  const normalized = entry.replaceAll("\\", "/");
+  return normalized.endsWith("/mcp/index.ts") || normalized.endsWith("/mcp/index.js");
+}
 
-if (isDirectRun) {
+if (isDirectMcpEntry()) {
   main().catch((err) => {
     console.error("Fatal error:", err);
     process.exit(1);
