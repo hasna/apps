@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { buildV1OpenApiDocument } from "./openapi.js";
-import { TodosV1Client } from "../sdk/v1.generated.js";
+import { TodosV1Client, type CreateTemplateInput } from "../sdk/v1.generated.js";
 
 describe("task comments OpenAPI contract", () => {
   test("documents bounded cursor reads and comment writes", () => {
@@ -120,6 +120,53 @@ describe("task list and completion OpenAPI contract", () => {
     expect(new URL(calls[0]!).searchParams.toString()).toBe(
       "status=pending&priority=high&project_id=project&parent_id=parent&include_subtasks=true&plan_id=plan&task_list_id=list&assigned_to=assignee&agent_id=agent&limit=1&offset=6",
     );
+  });
+});
+
+describe("reusable template OpenAPI contract", () => {
+  test("models the canonical template-export shape and generated SDK create request exactly", async () => {
+    const document = buildV1OpenApiDocument("test");
+    const schema = document.components.schemas.CreateTemplateInput;
+    expect(schema.properties).toMatchObject({
+      description: { type: "string", nullable: true },
+      project_id: { type: "string", nullable: true },
+      plan_id: { type: "string", nullable: true },
+      tasks: { type: "array", items: { $ref: "#/components/schemas/CreateTemplateTaskInput" } },
+    });
+
+    const canonicalExport: CreateTemplateInput = {
+      name: "Monthly accounting",
+      title_pattern: "Monthly accounting {month}",
+      description: null,
+      priority: "medium",
+      tags: ["accounting"],
+      variables: [],
+      project_id: null,
+      plan_id: null,
+      metadata: {},
+      tasks: [{
+        position: 0,
+        title_pattern: "Collect statements {month}",
+        description: null,
+        priority: "high",
+        tags: [],
+        task_type: null,
+        condition: null,
+        include_template_id: null,
+        depends_on_positions: [],
+        metadata: {},
+      }],
+    };
+    const calls: Array<{ url: string; body?: string }> = [];
+    const client = new TodosV1Client({
+      baseUrl: "https://todos.test",
+      fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        calls.push({ url: String(input), body: init?.body as string | undefined });
+        return Response.json({ template: { id: "template-1" } }, { status: 201 });
+      }) as typeof fetch,
+    });
+    await client.createTemplate(canonicalExport);
+    expect(calls).toEqual([{ url: "https://todos.test/v1/templates", body: JSON.stringify(canonicalExport) }]);
   });
 });
 

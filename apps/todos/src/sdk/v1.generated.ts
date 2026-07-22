@@ -18,7 +18,11 @@ export interface Template { "id": string; "name": string; "title_pattern": strin
 
 export interface TemplateTask { "id": string; "template_id": string; "position": number; "title_pattern": string; "description"?: string | null; "priority": "low" | "medium" | "high" | "critical"; "tags": Array<string>; "task_type"?: string | null; "condition"?: string | null; "include_template_id"?: string | null; "depends_on_positions": Array<number>; "metadata": Record<string, unknown>; "created_at": string }
 
-export interface CreateTaskInput { "title": string; "description"?: string; "status"?: string; "priority"?: string; "project_id"?: string; "assigned_to"?: string; "agent_id"?: string; "tags"?: Array<string> }
+export interface TemplateVariable { "name": string; "required": boolean; "default"?: string; "description"?: string }
+
+export interface CreateTemplateTaskInput { "position"?: number; "title_pattern": string; "description"?: string | null; "priority"?: "low" | "medium" | "high" | "critical"; "tags"?: Array<string>; "task_type"?: string | null; "condition"?: string | null; "include_template_id"?: string | null; "depends_on"?: Array<number>; "depends_on_positions"?: Array<number>; "metadata"?: Record<string, unknown> }
+
+export interface CreateTaskInput { "title": string; "description"?: string | null; "status"?: string; "priority"?: string; "project_id"?: string; "assigned_to"?: string; "agent_id"?: string; "tags"?: Array<string> }
 
 export interface UpdateTaskInput { "title"?: string; "description"?: string; "status"?: string; "priority"?: string; "assigned_to"?: string; "project_id"?: string | null; "task_list_id"?: string | null; "version"?: number }
 
@@ -42,7 +46,7 @@ export interface CreatePlanInput { "name": string; "slug"?: string; "description
 
 export interface UpdatePlanInput { "name"?: string; "slug"?: string; "description"?: string; "task_list_id"?: string; "agent_id"?: string; "status"?: "active" | "completed" | "archived" }
 
-export interface CreateTemplateInput { "name": string; "title_pattern": string; "description"?: string; "priority"?: "low" | "medium" | "high" | "critical"; "tags"?: Array<string>; "variables"?: Array<Record<string, unknown>>; "project_id"?: string; "plan_id"?: string; "metadata"?: Record<string, unknown>; "tasks"?: Array<Record<string, unknown>> }
+export interface CreateTemplateInput { "name": string; "title_pattern": string; "description"?: string | null; "priority"?: "low" | "medium" | "high" | "critical"; "tags"?: Array<string>; "variables"?: Array<TemplateVariable>; "project_id"?: string | null; "plan_id"?: string | null; "metadata"?: Record<string, unknown>; "tasks"?: Array<CreateTemplateTaskInput> }
 
 export interface UpdateTemplateInput { "name"?: string; "title_pattern"?: string; "description"?: string | null; "priority"?: "low" | "medium" | "high" | "critical"; "tags"?: Array<string>; "variables"?: Array<Record<string, unknown>>; "project_id"?: string | null; "plan_id"?: string | null; "metadata"?: Record<string, unknown> }
 

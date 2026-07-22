@@ -260,6 +260,17 @@ describe("/v1 reusable template cloud parity", () => {
     const updated = await request(`/v1/templates/${body.template.id}`, "PATCH", { priority: "high" });
     expect(updated?.status).toBe(200);
     expect(await updated!.json()).toMatchObject({ template: { priority: "high" } });
+
+    const patchProject = await store.projects.create({ name: "Patch project", path: "/tmp/patch-project" });
+    const patchPlan = await store.plans.create({ name: "Patch plan", project_id: patchProject.id });
+    const patchable = await store.templates.create({
+      name: "Clearable", title_pattern: "Clearable", description: "obsolete", project_id: patchProject.id, plan_id: patchPlan.id,
+    });
+    const cleared = await request(`/v1/templates/${patchable.id}`, "PATCH", {
+      description: null, project_id: null, plan_id: null,
+    });
+    expect(cleared?.status).toBe(200);
+    expect(await cleared!.json()).toMatchObject({ template: { description: null, project_id: null, plan_id: null } });
   });
 });
 

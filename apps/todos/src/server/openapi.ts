@@ -124,6 +124,38 @@ const templateSchema = {
   },
 } as const;
 
+const templateVariableSchema = {
+  type: "object",
+  required: ["name", "required"],
+  properties: {
+    name: { type: "string" },
+    required: { type: "boolean" },
+    default: { type: "string" },
+    description: { type: "string" },
+  },
+} as const;
+
+const createTemplateTaskInputSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["title_pattern"],
+  properties: {
+    // position and depends_on_positions are emitted by template-export;
+    // depends_on remains the concise authoring form accepted by the API.
+    position: { type: "integer", minimum: 0 },
+    title_pattern: { type: "string", minLength: 1 },
+    description: { type: "string", nullable: true },
+    priority: { type: "string", enum: ["low", "medium", "high", "critical"] },
+    tags: { type: "array", items: { type: "string", minLength: 1 } },
+    task_type: { type: "string", nullable: true },
+    condition: { type: "string", nullable: true },
+    include_template_id: { type: "string", nullable: true },
+    depends_on: { type: "array", items: { type: "integer", minimum: 0 } },
+    depends_on_positions: { type: "array", items: { type: "integer", minimum: 0 } },
+    metadata: { type: "object", additionalProperties: true },
+  },
+} as const;
+
 export function buildV1OpenApiDocument(version = getPackageVersion()) {
   return {
     openapi: "3.1.0",
@@ -146,12 +178,14 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
         Plan: planSchema,
         Template: templateSchema,
         TemplateTask: templateTaskSchema,
+        TemplateVariable: templateVariableSchema,
+        CreateTemplateTaskInput: createTemplateTaskInputSchema,
         CreateTaskInput: {
           type: "object",
           required: ["title"],
           properties: {
             title: { type: "string" },
-            description: { type: "string" },
+            description: { type: "string", nullable: true },
             status: { type: "string" },
             priority: { type: "string" },
             project_id: { type: "string" },
@@ -294,14 +328,14 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           properties: {
             name: { type: "string", minLength: 1 },
             title_pattern: { type: "string", minLength: 1 },
-            description: { type: "string" },
+            description: { type: "string", nullable: true },
             priority: { type: "string", enum: ["low", "medium", "high", "critical"] },
             tags: { type: "array", items: { type: "string", minLength: 1 } },
-            variables: { type: "array", items: { type: "object" } },
-            project_id: { type: "string", minLength: 1 },
-            plan_id: { type: "string", minLength: 1 },
+            variables: { type: "array", items: { $ref: "#/components/schemas/TemplateVariable" } },
+            project_id: { type: "string", minLength: 1, nullable: true },
+            plan_id: { type: "string", minLength: 1, nullable: true },
             metadata: { type: "object", additionalProperties: true },
-            tasks: { type: "array", items: { type: "object" } },
+            tasks: { type: "array", items: { $ref: "#/components/schemas/CreateTemplateTaskInput" } },
           },
         },
         UpdateTemplateInput: {

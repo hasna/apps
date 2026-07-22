@@ -246,6 +246,12 @@ function validateTemplatePatch(value: unknown):
     ...(body.name !== undefined ? { name: validated.input.name } : {}),
     ...(body.title_pattern !== undefined ? { title_pattern: validated.input.title_pattern } : {}),
     ...patch,
+    // Preserve an explicitly requested clear. Create validation intentionally
+    // normalizes optional nulls away, but PATCH must distinguish null from an
+    // omitted field or it would acknowledge a clear while retaining stale data.
+    ...(body.description === null ? { description: null } : {}),
+    ...(body.project_id === null ? { project_id: null } : {}),
+    ...(body.plan_id === null ? { plan_id: null } : {}),
   } };
 }
 
