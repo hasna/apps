@@ -623,4 +623,80 @@ describe("cloud CLI task-list filtering", () => {
       server.stop(true);
     }
   });
+
+  test("applies remote template variable defaults, conditions, and composition without local storage", async () => {
+    const requests: Array<{ method: string; path: string; body?: Record<string, unknown> }> = [];
+    let taskNumber = 0;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        const body = request.method === "POST" ? await request.json() as Record<string, unknown> : undefined;
+        requests.push({ method: request.method, path: url.pathname, body });
+        if (url.pathname === "/v1/templates/template-parent" && request.method === "GET") {
+          return Response.json({ template: {
+            id: "template-parent", name: "Parent", title_pattern: "Parent", description: null,
+            priority: "medium", tags: [], version: 1, project_id: PROJECT_ID, plan_id: null, metadata: {},
+            variables: [
+              { name: "month", required: false, default: "May" },
+              { name: "company", required: true },
+              { name: "include_receipts", required: false, default: "false" },
+            ],
+            tasks: [
+              { id: "step-statements", position: 0, title_pattern: "Statements {company} {month}", description: null, priority: "medium", tags: [], task_type: null, condition: null, include_template_id: null, depends_on_positions: [], metadata: {} },
+              { id: "step-receipts", position: 1, title_pattern: "Receipts", description: null, priority: "medium", tags: [], task_type: null, condition: "{include_receipts}", include_template_id: null, depends_on_positions: [], metadata: {} },
+              { id: "step-include", position: 2, title_pattern: "ignored", description: null, priority: "medium", tags: [], task_type: null, condition: null, include_template_id: "template-child", depends_on_positions: [], metadata: {} },
+              { id: "step-reconcile", position: 3, title_pattern: "Reconcile {month}", description: null, priority: "high", tags: [], task_type: "reconciliation", condition: null, include_template_id: null, depends_on_positions: [0, 2], metadata: { source: "template" } },
+            ],
+          } });
+        }
+        if (url.pathname === "/v1/templates/template-child" && request.method === "GET") {
+          return Response.json({ template: {
+            id: "template-child", name: "Child", title_pattern: "Child", description: null,
+            priority: "medium", tags: [], variables: [{ name: "company", required: true }], version: 1, project_id: null, plan_id: null, metadata: {},
+            tasks: [{ id: "step-invoice", position: 0, title_pattern: "Invoice {company} {month}", description: null, priority: "medium", tags: [], task_type: null, condition: null, include_template_id: null, depends_on_positions: [], metadata: {} }],
+          } });
+        }
+        if (url.pathname === "/v1/tasks" && request.method === "POST") {
+          taskNumber += 1;
+          return Response.json({ task: { id: `task-${taskNumber}`, ...(body ?? {}), status: "pending" } }, { status: 201 });
+        }
+        if (url.pathname === "/v1/tasks/task-3/dependencies" && request.method === "POST") return Response.json({ dependency: body }, { status: 201 });
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-template-semantics-"));
+    tempRoots.push(root);
+    try {
+      const missingRequired = await runCli(
+        ["--json", "templates", "--use", "template-parent"],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(missingRequired.exitCode).not.toBe(0);
+      expect(missingRequired.stderr).toContain("Missing required template variable(s): company");
+      expect(requests.filter((entry) => entry.method === "POST" && entry.path === "/v1/tasks")).toHaveLength(0);
+      requests.length = 0;
+      const result = await runCli(
+        ["--json", "templates", "--use", "template-parent", "--var", "company=Beep"],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+      const taskBodies = requests.filter((entry) => entry.method === "POST" && entry.path === "/v1/tasks").map((entry) => entry.body);
+      expect(taskBodies).toEqual([
+        expect.objectContaining({ title: "Statements Beep May", project_id: PROJECT_ID }),
+        expect.objectContaining({ title: "Invoice Beep May", project_id: PROJECT_ID }),
+        expect.objectContaining({ title: "Reconcile May", task_type: "reconciliation", metadata: { source: "template" } }),
+      ]);
+      expect(requests).toEqual(expect.arrayContaining([
+        expect.objectContaining({ method: "POST", path: "/v1/tasks/task-3/dependencies", body: { depends_on: "task-1" } }),
+        expect.objectContaining({ method: "POST", path: "/v1/tasks/task-3/dependencies", body: { depends_on: "task-2" } }),
+      ]));
+      expect(existsSync(join(root, "todos.db"))).toBe(false);
+    } finally {
+      server.stop(true);
+    }
+  });
 });

@@ -10,7 +10,13 @@ import {
   deletePlan,
 } from "../../db/plans.js";
 import { createTask } from "../../db/tasks.js";
-import type { Plan } from "../../types/index.js";
+import type { Plan, Task, TemplateWithTasks } from "../../types/index.js";
+import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
+import {
+  evaluateTemplateCondition,
+  resolveTemplateVariables,
+  substituteTemplateVariables,
+} from "../../lib/template-semantics.js";
 import { inspectPlanArtifact, readPlanArtifact, writePlanArtifact } from "../../lib/plan-artifacts.js";
 import { formatTaskLine, autoProject, handleError, output } from "../helpers.js";
 import {
@@ -30,6 +36,91 @@ import {
   cloudUpdateTemplate,
   cloudUpdatePlan,
 } from "../cloud-router.js";
+
+interface RemoteTemplateApplication {
+  tasks: Task[];
+}
+
+/**
+ * Apply the reusable-template contract through the self-hosted API without
+ * opening local storage. This deliberately shares the variable and condition
+ * language with the SQLite implementation while resolving included templates
+ * through authenticated cloud reads.
+ */
+async function createRemoteTemplateTasks(
+  cloud: HasnaStorageClient,
+  template: TemplateWithTasks,
+  projectId: string | undefined,
+  variables: Record<string, string>,
+  agentId: string | undefined,
+  visited = new Set<string>(),
+): Promise<RemoteTemplateApplication> {
+  if (visited.has(template.id)) {
+    throw new Error(`Circular template reference detected: ${template.id}`);
+  }
+  visited.add(template.id);
+
+  const resolved = resolveTemplateVariables(template.variables ?? [], variables);
+  const render = (value: string | null | undefined) =>
+    value === null || value === undefined ? value : substituteTemplateVariables(value, resolved);
+
+  if (template.tasks.length === 0) {
+    const task = await cloudCreateTask(cloud, {
+      title: render(template.title_pattern),
+      ...(render(template.description) ? { description: render(template.description) } : {}),
+      priority: template.priority,
+      tags: template.tags,
+      ...(projectId ? { project_id: projectId } : {}),
+      ...(agentId ? { agent_id: agentId } : {}),
+    });
+    return { tasks: [task] };
+  }
+
+  const created: Task[] = [];
+  const positionToTaskId = new Map<number, string>();
+  const skippedPositions = new Set<number>();
+
+  for (const step of template.tasks) {
+    // Keep local ordering: an include takes precedence over a step condition.
+    if (step.include_template_id) {
+      const included = await cloudGetTemplate(cloud, step.include_template_id);
+      if (!included) throw new Error(`Included template not found: ${step.include_template_id}`);
+      const result = await createRemoteTemplateTasks(cloud, included, projectId, resolved, agentId, visited);
+      created.push(...result.tasks);
+      if (result.tasks.length > 0) positionToTaskId.set(step.position, result.tasks[0]!.id);
+      else skippedPositions.add(step.position);
+      continue;
+    }
+    if (step.condition && !evaluateTemplateCondition(step.condition, resolved)) {
+      skippedPositions.add(step.position);
+      continue;
+    }
+    const task = await cloudCreateTask(cloud, {
+      title: render(step.title_pattern),
+      ...(render(step.description) ? { description: render(step.description) } : {}),
+      priority: step.priority,
+      tags: step.tags,
+      ...(step.task_type ? { task_type: step.task_type } : {}),
+      ...(projectId ? { project_id: projectId } : {}),
+      ...(agentId ? { agent_id: agentId } : {}),
+      ...(Object.keys(step.metadata ?? {}).length > 0 ? { metadata: step.metadata } : {}),
+    });
+    created.push(task);
+    positionToTaskId.set(step.position, task.id);
+  }
+
+  for (const step of template.tasks) {
+    if (skippedPositions.has(step.position) || step.include_template_id) continue;
+    const taskId = positionToTaskId.get(step.position);
+    if (!taskId) continue;
+    for (const dependencyPosition of step.depends_on_positions) {
+      if (skippedPositions.has(dependencyPosition)) continue;
+      const dependencyId = positionToTaskId.get(dependencyPosition);
+      if (dependencyId) await cloudAddDependency(cloud, taskId, dependencyId);
+    }
+  }
+  return { tasks: created };
+}
 
 function resolvePlanCliRef(ref: string, projectId: string | undefined): string {
   const db = getDatabase();
@@ -355,35 +446,14 @@ export function registerPlanTemplateCommands(program: Command) {
             }
             const template = await cloudGetTemplate(cloud, opts.use);
             if (!template) { console.error(chalk.red("Template not found.")); process.exit(1); }
-            const render = (value: string | null | undefined) => value?.replace(/\{([^}]+)\}/g, (_match, key: string) => variables[key] ?? _match);
             const targetProjectId = template.project_id ?? projectId;
-            const created = [] as Awaited<ReturnType<typeof cloudCreateTask>>[];
-            if (template.tasks.length > 0) {
-              for (const step of template.tasks) {
-                created.push(await cloudCreateTask(cloud, {
-                  title: render(step.title_pattern),
-                  ...(render(step.description) ? { description: render(step.description) } : {}),
-                  priority: step.priority,
-                  tags: step.tags,
-                  ...(targetProjectId ? { project_id: targetProjectId } : {}),
-                  ...(globalOpts.agent ? { agent_id: globalOpts.agent } : {}),
-                }));
-              }
-              for (const [position, step] of template.tasks.entries()) {
-                for (const dependency of step.depends_on_positions) {
-                  await cloudAddDependency(cloud, created[position]!.id, created[dependency]!.id);
-                }
-              }
-            } else {
-              created.push(await cloudCreateTask(cloud, {
-                title: render(template.title_pattern),
-                ...(render(template.description) ? { description: render(template.description) } : {}),
-                priority: template.priority,
-                tags: template.tags,
-                ...(targetProjectId ? { project_id: targetProjectId } : {}),
-                ...(globalOpts.agent ? { agent_id: globalOpts.agent } : {}),
-              }));
-            }
+            const { tasks: created } = await createRemoteTemplateTasks(
+              cloud,
+              template,
+              targetProjectId,
+              variables,
+              globalOpts.agent,
+            );
             if (globalOpts.json) { output(created, true); }
             else {
               console.log(chalk.green(`${created.length} task(s) created from template:`));
