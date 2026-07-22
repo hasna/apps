@@ -39,7 +39,10 @@ const allBundles: BundleSpec[] = [
   },
 ];
 
-const bundles = process.argv.includes("--server-only")
+const standaloneServer = process.argv.includes("--standalone-server");
+const serverOnly = standaloneServer || process.argv.includes("--server-only");
+
+const bundles = serverOnly
   ? allBundles.filter(({ outdir }) => outdir === "dist/server")
   : allBundles;
 
@@ -48,7 +51,7 @@ for (const bundle of bundles) {
     entrypoints: [bundle.entrypoint],
     outdir: bundle.outdir,
     target: "bun",
-    external: bundle.external,
+    external: standaloneServer ? undefined : bundle.external,
     plugins: [secureFastUriPlugin],
   });
 

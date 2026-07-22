@@ -20,7 +20,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY src ./src
 COPY scripts ./scripts
 COPY vendor ./vendor
-RUN bun run scripts/build-bundles.ts --server-only
+RUN bun run scripts/build-bundles.ts --standalone-server
 
 FROM scratch AS runner
 WORKDIR /app
