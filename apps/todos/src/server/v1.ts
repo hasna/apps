@@ -8,8 +8,8 @@
  * over the core storage lib — there are NO stubs; unimplemented routes 404.
  */
 import { LockError, ProjectNotFoundError, ResourceConflictError } from "../types/index.js";
-import type { CreatePlanInput, CreateProjectInput, CreateTaskInput, CreateTaskListInput, RenameProjectInput, TaskComment, UpdateTaskInput, UpdateTaskListInput } from "../types/index.js";
-import type { TodosStorageContext, TodosStorageSnapshot, TodosTaskCompletionOptions } from "../storage/interfaces.js";
+import type { CreatePlanInput, CreateProjectInput, CreateTaskInput, CreateTaskListInput, CreateTemplateInput, RenameProjectInput, TaskComment, TemplateTaskInput, UpdateTaskInput, UpdateTaskListInput } from "../types/index.js";
+import type { TodosStorageContext, TodosStorageSnapshot, TodosTaskCompletionOptions, UpdateTemplateInput } from "../storage/interfaces.js";
 import { getCloudStorageAdapter, getCloudVerifier, ensureCloudSchema } from "./cloud.js";
 import { redactEvidenceText } from "../lib/redaction.js";
 import { isCanonicalSlug, normalizeSlug } from "../lib/slugs.js";
@@ -150,6 +150,111 @@ function validatePlanCreate(value: unknown):
   };
 }
 
+function validateTemplateTask(value: unknown): TemplateTaskInput | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const body = value as Record<string, unknown>;
+  const allowed = new Set(["position", "title_pattern", "description", "priority", "tags", "task_type", "condition", "include_template_id", "depends_on", "depends_on_positions", "metadata"]);
+  if (Object.keys(body).some((key) => !allowed.has(key))) return null;
+  if (typeof body.title_pattern !== "string" || !body.title_pattern.trim()) return null;
+  if (body.position !== undefined && (typeof body.position !== "number" || !Number.isSafeInteger(body.position) || body.position < 0)) return null;
+  if (body.description !== undefined && body.description !== null && typeof body.description !== "string") return null;
+  if (body.priority !== undefined && (typeof body.priority !== "string" || !["low", "medium", "high", "critical"].includes(body.priority))) return null;
+  if (body.tags !== undefined && (!Array.isArray(body.tags) || body.tags.some((tag) => typeof tag !== "string" || !tag.trim()))) return null;
+  for (const field of ["task_type", "condition", "include_template_id"] as const) {
+    if (body[field] !== undefined && body[field] !== null && (typeof body[field] !== "string" || !body[field].trim())) return null;
+  }
+  if (body.depends_on !== undefined && body.depends_on_positions !== undefined) return null;
+  const dependencies = body.depends_on ?? body.depends_on_positions;
+  if (dependencies !== undefined && (!Array.isArray(dependencies) || dependencies.some((position) => !Number.isSafeInteger(position) || position < 0))) return null;
+  if (body.metadata !== undefined && (!body.metadata || typeof body.metadata !== "object" || Array.isArray(body.metadata))) return null;
+  return {
+    title_pattern: body.title_pattern,
+    ...(typeof body.description === "string" ? { description: body.description } : {}),
+    ...(typeof body.priority === "string" ? { priority: body.priority as TemplateTaskInput["priority"] } : {}),
+    ...(Array.isArray(body.tags) ? { tags: body.tags as string[] } : {}),
+    ...(typeof body.task_type === "string" ? { task_type: body.task_type } : {}),
+    ...(typeof body.condition === "string" ? { condition: body.condition } : {}),
+    ...(typeof body.include_template_id === "string" ? { include_template_id: body.include_template_id } : {}),
+    ...(Array.isArray(dependencies) ? { depends_on: dependencies as number[] } : {}),
+    ...(body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata) ? { metadata: body.metadata as Record<string, unknown> } : {}),
+  };
+}
+
+function validateTemplateCreate(value: unknown):
+  | { ok: true; input: CreateTemplateInput }
+  | { ok: false; message: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, message: "template body must be an object" };
+  const body = value as Record<string, unknown>;
+  const allowed = new Set(["name", "title_pattern", "description", "priority", "tags", "variables", "project_id", "plan_id", "metadata", "tasks"]);
+  const unknown = Object.keys(body).find((key) => !allowed.has(key));
+  if (unknown) return { ok: false, message: `unknown template field: ${unknown}` };
+  if (typeof body.name !== "string" || !body.name.trim()) return { ok: false, message: "name must be a non-empty string" };
+  if (typeof body.title_pattern !== "string" || !body.title_pattern.trim()) return { ok: false, message: "title_pattern must be a non-empty string" };
+  if (body.description !== undefined && body.description !== null && typeof body.description !== "string") return { ok: false, message: "description must be a string or null" };
+  if (body.priority !== undefined && (typeof body.priority !== "string" || !["low", "medium", "high", "critical"].includes(body.priority))) return { ok: false, message: "priority must be low, medium, high, or critical" };
+  if (body.tags !== undefined && (!Array.isArray(body.tags) || body.tags.some((tag) => typeof tag !== "string" || !tag.trim()))) return { ok: false, message: "tags must be an array of non-empty strings" };
+  if (body.variables !== undefined && (!Array.isArray(body.variables) || body.variables.some((variable) => !variable || typeof variable !== "object" || Array.isArray(variable) ||
+    typeof (variable as Record<string, unknown>).name !== "string" || !(variable as Record<string, unknown>).name ||
+    typeof (variable as Record<string, unknown>).required !== "boolean" ||
+    ((variable as Record<string, unknown>).default !== undefined && typeof (variable as Record<string, unknown>).default !== "string") ||
+    ((variable as Record<string, unknown>).description !== undefined && typeof (variable as Record<string, unknown>).description !== "string")))) {
+    return { ok: false, message: "variables must be valid template variable objects" };
+  }
+  for (const field of ["project_id", "plan_id"] as const) {
+    if (body[field] !== undefined && body[field] !== null && (typeof body[field] !== "string" || !body[field].trim())) return { ok: false, message: `${field} must be a non-empty string or null` };
+  }
+  if (body.metadata !== undefined && (!body.metadata || typeof body.metadata !== "object" || Array.isArray(body.metadata))) return { ok: false, message: "metadata must be an object" };
+  const tasks = body.tasks === undefined ? [] : Array.isArray(body.tasks) ? body.tasks.map(validateTemplateTask) : null;
+  if (tasks === null || tasks.some((task) => task === null)) return { ok: false, message: "tasks must be valid template task objects" };
+  const taskInputs = tasks as TemplateTaskInput[];
+  for (const [position, task] of taskInputs.entries()) {
+    if ((task.depends_on ?? []).some((dependency) => dependency >= position)) {
+      return { ok: false, message: "template task dependencies must reference earlier task positions" };
+    }
+  }
+  return {
+    ok: true,
+    input: {
+      name: body.name,
+      title_pattern: body.title_pattern,
+      ...(typeof body.description === "string" ? { description: body.description } : {}),
+      ...(typeof body.priority === "string" ? { priority: body.priority as CreateTemplateInput["priority"] } : {}),
+      ...(Array.isArray(body.tags) ? { tags: body.tags as string[] } : {}),
+      ...(Array.isArray(body.variables) ? { variables: body.variables as CreateTemplateInput["variables"] } : {}),
+      ...(typeof body.project_id === "string" ? { project_id: body.project_id } : {}),
+      ...(typeof body.plan_id === "string" ? { plan_id: body.plan_id } : {}),
+      ...(body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata) ? { metadata: body.metadata as Record<string, unknown> } : {}),
+      tasks: taskInputs,
+    },
+  };
+}
+
+function validateTemplatePatch(value: unknown):
+  | { ok: true; patch: UpdateTemplateInput }
+  | { ok: false; message: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, message: "template patch must be an object" };
+  const body = value as Record<string, unknown>;
+  const allowed = new Set(["name", "title_pattern", "description", "priority", "tags", "variables", "project_id", "plan_id", "metadata"]);
+  const unknown = Object.keys(body).find((key) => !allowed.has(key));
+  if (unknown) return { ok: false, message: `unknown template field: ${unknown}` };
+  if (Object.keys(body).length === 0) return { ok: false, message: "template patch must not be empty" };
+  const templateLike = { name: body.name ?? "template", title_pattern: body.title_pattern ?? "template", ...body };
+  const validated = validateTemplateCreate(templateLike);
+  if (!validated.ok) return validated;
+  const { name: _name, title_pattern: _title, tasks: _tasks, ...patch } = validated.input;
+  return { ok: true, patch: {
+    ...(body.name !== undefined ? { name: validated.input.name } : {}),
+    ...(body.title_pattern !== undefined ? { title_pattern: validated.input.title_pattern } : {}),
+    ...patch,
+    // Preserve an explicitly requested clear. Create validation intentionally
+    // normalizes optional nulls away, but PATCH must distinguish null from an
+    // omitted field or it would acknowledge a clear while retaining stale data.
+    ...(body.description === null ? { description: null } : {}),
+    ...(body.project_id === null ? { project_id: null } : {}),
+    ...(body.plan_id === null ? { plan_id: null } : {}),
+  } };
+}
+
 async function readJson<T>(req: Request): Promise<T | null> {
   try {
     const text = await req.text();
@@ -223,6 +328,7 @@ export function normalizeImportSnapshot(raw: unknown): TodosStorageSnapshot {
     agents: arr(body["agents"]),
     taskLists: arr(body["taskLists"]),
     templates: arr(body["templates"]),
+    templateTasks: arr(body["templateTasks"]),
     auditHistory: arr(body["auditHistory"]),
     tombstones: arr(body["tombstones"]),
   };
@@ -238,6 +344,7 @@ export function countSnapshotRecords(s: TodosStorageSnapshot): number {
     s.agents.length +
     s.taskLists.length +
     s.templates.length +
+    s.templateTasks.length +
     s.auditHistory.length +
     (s.tombstones?.length ?? 0)
   );
@@ -882,6 +989,39 @@ export async function handleV1Request(
         return json({ deleted: true, id });
       }
       if (id) return error(405, `method ${method} not allowed on /v1/plans/:id`);
+    }
+
+    // ── /v1/templates ──
+    if (resource === "templates") {
+      if (!id && method === "GET") {
+        const projectId = url.searchParams.get("project_id");
+        const templates = (await store.templates.list()).filter((template) => projectId === null || template.project_id === projectId);
+        return json({ templates, count: templates.length });
+      }
+      if (!id && method === "POST") {
+        const body = await readJson<unknown>(req);
+        const validated = validateTemplateCreate(body);
+        if (!validated.ok) return error(400, validated.message);
+        const template = await store.templates.create(validated.input, contextFromPrincipal(principal));
+        return json({ template: await store.templates.getWithTasks(template.id) }, 201);
+      }
+      if (!id) return error(405, `method ${method} not allowed on /v1/templates`);
+      if (method === "GET") {
+        const template = await store.templates.getWithTasks(id);
+        return template ? json({ template }) : error(404, "template not found");
+      }
+      if (method === "PATCH" || method === "PUT") {
+        const body = await readJson<unknown>(req);
+        const validated = validateTemplatePatch(body);
+        if (!validated.ok) return error(400, validated.message);
+        const template = await store.templates.update(id, validated.patch, contextFromPrincipal(principal));
+        return template ? json({ template: await store.templates.getWithTasks(id) }) : error(404, "template not found");
+      }
+      if (method === "DELETE") {
+        const deleted = await store.templates.delete(id, contextFromPrincipal(principal));
+        return deleted ? json({ deleted: true, id }) : error(404, "template not found");
+      }
+      return error(405, `method ${method} not allowed on /v1/templates/:id`);
     }
 
     // ── /v1/agents ──

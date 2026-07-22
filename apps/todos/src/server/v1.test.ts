@@ -189,6 +189,91 @@ describe("/v1 plan cloud parity", () => {
   });
 });
 
+describe("/v1 reusable template cloud parity", () => {
+  test("creates, scopes, reads, and deletes an imported checklist without losing its steps", async () => {
+    const project = await store.projects.create({ name: "Ro Accounting", path: "/tmp/ro-accounting" });
+    const created = await request("/v1/templates", "POST", {
+      name: "Monthly accounting",
+      title_pattern: "Monthly accounting {month}",
+      project_id: project.id,
+      tags: ["accounting"],
+      tasks: [
+        { title_pattern: "Collect statements {month}" },
+        { title_pattern: "Reconcile {month}", depends_on: [0], priority: "high" },
+      ],
+    });
+    expect(created?.status).toBe(201);
+    const createdBody = await created!.json() as { template: { id: string; tasks: Array<{ position: number; depends_on_positions: number[] }> } };
+    expect(createdBody.template.tasks).toEqual([
+      expect.objectContaining({ position: 0, depends_on_positions: [] }),
+      expect.objectContaining({ position: 1, depends_on_positions: [0] }),
+    ]);
+
+    const listed = await request(`/v1/templates?project_id=${project.id}`);
+    expect(await listed!.json()).toMatchObject({ count: 1, templates: [expect.objectContaining({ id: createdBody.template.id })] });
+    const read = await request(`/v1/templates/${createdBody.template.id}`);
+    expect(await read!.json()).toMatchObject({ template: { id: createdBody.template.id, tasks: [expect.anything(), expect.anything()] } });
+
+    expect((await request(`/v1/templates/${createdBody.template.id}`, "DELETE"))?.status).toBe(200);
+    expect((await request(`/v1/templates/${createdBody.template.id}`))?.status).toBe(404);
+  });
+
+  test("rejects forward checklist dependencies before any remote mutation", async () => {
+    const response = await request("/v1/templates", "POST", {
+      name: "Invalid",
+      title_pattern: "Invalid",
+      tasks: [{ title_pattern: "Later", depends_on: [0] }],
+    });
+    expect(response?.status).toBe(400);
+    expect(await response!.json()).toMatchObject({ error: expect.stringMatching(/earlier task positions/) });
+    expect((await store.templates.list()).length).toBe(0);
+  });
+
+  test("accepts the canonical template-export shape for remote import and supports lifecycle metadata updates", async () => {
+    const imported = await request("/v1/templates", "POST", {
+      name: "Exported monthly accounting",
+      title_pattern: "Monthly accounting {month}",
+      description: null,
+      priority: "medium",
+      tags: ["accounting"],
+      variables: [],
+      project_id: null,
+      plan_id: null,
+      metadata: {},
+      tasks: [{
+        position: 0,
+        title_pattern: "Collect statements {month}",
+        description: null,
+        priority: "high",
+        tags: [],
+        task_type: null,
+        condition: null,
+        include_template_id: null,
+        depends_on_positions: [],
+        metadata: {},
+      }],
+    });
+    expect(imported?.status).toBe(201);
+    const body = await imported!.json() as { template: { id: string; description: null; project_id: null; tasks: Array<{ depends_on_positions: number[] }> } };
+    expect(body.template).toMatchObject({ description: null, project_id: null, tasks: [{ depends_on_positions: [] }] });
+
+    const updated = await request(`/v1/templates/${body.template.id}`, "PATCH", { priority: "high" });
+    expect(updated?.status).toBe(200);
+    expect(await updated!.json()).toMatchObject({ template: { priority: "high" } });
+
+    const patchProject = await store.projects.create({ name: "Patch project", path: "/tmp/patch-project" });
+    const patchPlan = await store.plans.create({ name: "Patch plan", project_id: patchProject.id });
+    const patchable = await store.templates.create({
+      name: "Clearable", title_pattern: "Clearable", description: "obsolete", project_id: patchProject.id, plan_id: patchPlan.id,
+    });
+    const cleared = await request(`/v1/templates/${patchable.id}`, "PATCH", {
+      description: null, project_id: null, plan_id: null,
+    });
+    expect(cleared?.status).toBe(200);
+    expect(await cleared!.json()).toMatchObject({ template: { description: null, project_id: null, plan_id: null } });
+  });
+});
+
 describe("/v1 project mutation", () => {
   test("create preserves explicit canonical routing fields while patch cannot mutate them", async () => {
     const explicit = await request("/v1/projects", "POST", {

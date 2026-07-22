@@ -10,19 +10,131 @@ import {
   deletePlan,
 } from "../../db/plans.js";
 import { createTask } from "../../db/tasks.js";
-import type { Plan } from "../../types/index.js";
+import type { Plan, Task, TemplateWithTasks } from "../../types/index.js";
+import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
+import {
+  evaluateTemplateCondition,
+  resolveTemplateVariables,
+  substituteTemplateVariables,
+} from "../../lib/template-semantics.js";
 import { inspectPlanArtifact, readPlanArtifact, writePlanArtifact } from "../../lib/plan-artifacts.js";
 import { formatTaskLine, autoProject, handleError, output } from "../helpers.js";
 import {
   getTodosCloudClient,
   cloudCreatePlan,
+  cloudCreateTask,
+  cloudCreateTemplate,
+  cloudAddDependency,
+  cloudDeleteTemplate,
+  cloudGetTemplate,
   cloudDeletePlan,
   cloudListPlans,
+  cloudListTemplates,
   cloudListTasks,
   cloudResolvePlan,
   cloudResolveProjectRef,
+  cloudUpdateTemplate,
   cloudUpdatePlan,
 } from "../cloud-router.js";
+
+interface RemoteTemplateApplication {
+  tasks: Task[];
+}
+
+interface RemoteTemplateOverrides {
+  title?: string;
+  description?: string;
+  priority?: TemplateWithTasks["priority"];
+}
+
+/**
+ * Apply the reusable-template contract through the self-hosted API without
+ * opening local storage. This deliberately shares the variable and condition
+ * language with the SQLite implementation while resolving included templates
+ * through authenticated cloud reads.
+ */
+async function createRemoteTemplateTasks(
+  cloud: HasnaStorageClient,
+  template: TemplateWithTasks,
+  projectId: string | undefined,
+  variables: Record<string, string>,
+  agentId: string | undefined,
+  overrides?: RemoteTemplateOverrides,
+  visited = new Set<string>(),
+): Promise<RemoteTemplateApplication> {
+  if (visited.has(template.id)) {
+    throw new Error(`Circular template reference detected: ${template.id}`);
+  }
+  visited.add(template.id);
+  try {
+
+    const resolved = resolveTemplateVariables(template.variables ?? [], variables);
+    const render = (value: string | null | undefined) =>
+      value === null || value === undefined ? value : substituteTemplateVariables(value, resolved);
+
+    if (template.tasks.length === 0) {
+      const task = await cloudCreateTask(cloud, {
+      title: render(overrides?.title || template.title_pattern),
+      ...(render(overrides?.description ?? template.description) ? { description: render(overrides?.description ?? template.description) } : {}),
+      priority: overrides?.priority ?? template.priority,
+      tags: template.tags,
+      ...(projectId ? { project_id: projectId } : {}),
+      ...(template.plan_id ? { plan_id: template.plan_id } : {}),
+      ...(agentId ? { agent_id: agentId } : {}),
+      ...(Object.keys(template.metadata ?? {}).length > 0 ? { metadata: template.metadata } : {}),
+    });
+      return { tasks: [task] };
+    }
+
+    const created: Task[] = [];
+    const positionToTaskId = new Map<number, string>();
+    const skippedPositions = new Set<number>();
+
+    for (const step of template.tasks) {
+    // Keep local ordering: an include takes precedence over a step condition.
+    if (step.include_template_id) {
+      const included = await cloudGetTemplate(cloud, step.include_template_id);
+      if (!included) throw new Error(`Included template not found: ${step.include_template_id}`);
+      const result = await createRemoteTemplateTasks(cloud, included, projectId, resolved, agentId, undefined, visited);
+      created.push(...result.tasks);
+      if (result.tasks.length > 0) positionToTaskId.set(step.position, result.tasks[0]!.id);
+      else skippedPositions.add(step.position);
+      continue;
+    }
+    if (step.condition && !evaluateTemplateCondition(step.condition, resolved)) {
+      skippedPositions.add(step.position);
+      continue;
+    }
+    const task = await cloudCreateTask(cloud, {
+      title: render(step.title_pattern),
+      ...(render(step.description) ? { description: render(step.description) } : {}),
+      priority: step.priority,
+      tags: step.tags,
+      ...(step.task_type ? { task_type: step.task_type } : {}),
+      ...(projectId ? { project_id: projectId } : {}),
+      ...(template.plan_id ? { plan_id: template.plan_id } : {}),
+      ...(agentId ? { agent_id: agentId } : {}),
+      ...(Object.keys(step.metadata ?? {}).length > 0 ? { metadata: step.metadata } : {}),
+    });
+    created.push(task);
+    positionToTaskId.set(step.position, task.id);
+    }
+
+    for (const step of template.tasks) {
+    if (skippedPositions.has(step.position) || step.include_template_id) continue;
+    const taskId = positionToTaskId.get(step.position);
+    if (!taskId) continue;
+    for (const dependencyPosition of step.depends_on_positions) {
+      if (skippedPositions.has(dependencyPosition)) continue;
+      const dependencyId = positionToTaskId.get(dependencyPosition);
+      if (dependencyId) await cloudAddDependency(cloud, taskId, dependencyId);
+    }
+    }
+    return { tasks: created };
+  } finally {
+    visited.delete(template.id);
+  }
+}
 
 function resolvePlanCliRef(ref: string, projectId: string | undefined): string {
   const db = getDatabase();
@@ -298,6 +410,86 @@ export function registerPlanTemplateCommands(program: Command) {
     .option("--var <vars...>", "Variable substitutions: key=value (e.g. --var feature=login)")
     .action(async (opts) => {
       const globalOpts = program.opts();
+      const cloud = getTodosCloudClient();
+      if (cloud) {
+        try {
+          const projectId = globalOpts.project ? await cloudResolveProjectRef(cloud, globalOpts.project) : undefined;
+          if (opts.add) {
+            if (!opts.title) { console.error(chalk.red("--title is required with --add")); process.exit(1); }
+            const template = await cloudCreateTemplate(cloud, {
+              name: opts.add,
+              title_pattern: opts.title,
+              description: opts.description,
+              priority: opts.priority || "medium",
+              tags: opts.tags ? opts.tags.split(",").map((tag: string) => tag.trim()).filter(Boolean) : [],
+              project_id: projectId,
+            });
+            if (globalOpts.json) { output(template, true); }
+            else { console.log(chalk.green(`Template created: ${template.id.slice(0, 8)} | ${template.name} | "${template.title_pattern}"`)); }
+            return;
+          }
+          if (opts.delete) {
+            const deleted = await cloudDeleteTemplate(cloud, opts.delete);
+            if (globalOpts.json) { output({ deleted }, true); }
+            else if (deleted) { console.log(chalk.green("Template deleted.")); }
+            else { console.error(chalk.red("Template not found.")); process.exit(1); }
+            return;
+          }
+          if (opts.update) {
+            const updates: Record<string, unknown> = {};
+            if (opts.title) updates.title_pattern = opts.title;
+            if (opts.description) updates.description = opts.description;
+            if (opts.priority) updates.priority = opts.priority;
+            if (opts.tags) updates.tags = opts.tags.split(",").map((tag: string) => tag.trim()).filter(Boolean);
+            if (Object.keys(updates).length === 0) {
+              console.error(chalk.red("Provide --title, --description, --priority, or --tags with --update"));
+              process.exit(1);
+            }
+            const updated = await cloudUpdateTemplate(cloud, opts.update, updates);
+            if (!updated) { console.error(chalk.red("Template not found.")); process.exit(1); }
+            if (globalOpts.json) { output(updated, true); }
+            else { console.log(chalk.green(`Template updated: ${updated.id.slice(0, 8)} | ${updated.name} | "${updated.title_pattern}"`)); }
+            return;
+          }
+          if (opts.use) {
+            const variables: Record<string, string> = {};
+            for (const value of (opts.var ?? []) as string[]) {
+              const separator = value.indexOf("=");
+              if (separator === -1) { console.error(chalk.red(`Invalid variable format: ${value} (expected key=value)`)); process.exit(1); }
+              variables[value.slice(0, separator)] = value.slice(separator + 1);
+            }
+            const template = await cloudGetTemplate(cloud, opts.use);
+            if (!template) { console.error(chalk.red("Template not found.")); process.exit(1); }
+            const targetProjectId = template.project_id ?? projectId;
+            const { tasks: created } = await createRemoteTemplateTasks(
+              cloud,
+              template,
+              targetProjectId,
+              variables,
+              globalOpts.agent,
+              {
+                title: opts.title,
+                description: opts.description,
+                priority: opts.priority,
+              },
+            );
+            if (globalOpts.json) { output(created, true); }
+            else {
+              console.log(chalk.green(`${created.length} task(s) created from template:`));
+              for (const task of created) console.log(formatTaskLine(task));
+            }
+            return;
+          }
+          const templates = await cloudListTemplates(cloud, projectId);
+          if (globalOpts.json) { output(templates, true); return; }
+          if (templates.length === 0) { console.log(chalk.dim("No templates.")); return; }
+          console.log(chalk.bold(`${templates.length} template(s):\n`));
+          for (const template of templates) {
+            console.log(`  ${chalk.dim(template.id.slice(0, 8))} ${chalk.bold(template.name)} ${chalk.cyan(`"${template.title_pattern}"`)} ${chalk.yellow(template.priority)}`);
+          }
+        } catch (error) { handleError(error); }
+        return;
+      }
       const {
         createTemplate,
         getTemplateWithTasks,
@@ -535,14 +727,16 @@ export function registerPlanTemplateCommands(program: Command) {
     .option("--file <path>", "Path to template JSON file (alternative to positional arg)")
     .action(async (file: string | undefined, opts: { file?: string }) => {
       const globalOpts = program.opts();
-      const { importTemplate } = await import("../../db/templates.js");
       const { readFileSync } = await import("node:fs");
       try {
         const filePath = file || opts.file;
         if (!filePath) { console.error(chalk.red("Provide a file path: todos template-import <file> or --file <path>")); process.exit(1); }
         const content = readFileSync(filePath, "utf-8");
         const json = JSON.parse(content);
-        const template = importTemplate(json);
+        const cloud = getTodosCloudClient();
+        const template = cloud
+          ? await cloudCreateTemplate(cloud, json)
+          : (await import("../../db/templates.js")).importTemplate(json);
         if (globalOpts.json) { output(template, true); }
         else { console.log(chalk.green(`Template imported: ${template.id.slice(0, 8)} | ${template.name} | "${template.title_pattern}"`)); }
       } catch (e) { handleError(e); }

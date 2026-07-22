@@ -3,6 +3,11 @@ import type { TaskTemplate, CreateTemplateInput, CreateTaskInput, TemplateTask, 
 import { getDatabase, now, uuid, resolvePartialId } from "./database.js";
 import { createTask, addDependency } from "./tasks.js";
 import { currentStorageMachineId, recordStorageTombstone } from "./storage-tombstones.js";
+import {
+  evaluateTemplateCondition,
+  resolveTemplateVariables,
+  substituteTemplateVariables,
+} from "../lib/template-semantics.js";
 
 export interface UpdateTemplateInput {
   name?: string;
@@ -89,6 +94,14 @@ export function deleteTemplate(id: string, db?: Database): boolean {
     payload: template as unknown as Record<string, unknown>,
     version: template.version,
   }, d);
+  for (const task of getTemplateTasks(resolved, d)) {
+    recordStorageTombstone({
+      object_type: "template_tasks",
+      object_id: task.id,
+      payload: task as unknown as Record<string, unknown>,
+      version: 1,
+    }, d);
+  }
   // CASCADE will delete associated template_tasks and template_versions
   return d.run("DELETE FROM task_templates WHERE id = ?", [resolved]).changes > 0;
 }
@@ -231,44 +244,7 @@ export function getTemplateTasks(templateId: string, db?: Database): TemplateTas
  *   - "!{var}" -- falsy (doesn't exist, empty, or "false")
  */
 export function evaluateCondition(condition: string, variables: Record<string, string>): boolean {
-  if (!condition || condition.trim() === "") return true;
-
-  const trimmed = condition.trim();
-
-  // Equality check: {var} == value
-  const eqMatch = trimmed.match(/^\{([^}]+)\}\s*==\s*(.+)$/);
-  if (eqMatch) {
-    const varName = eqMatch[1]!;
-    const expected = eqMatch[2]!.trim();
-    return (variables[varName] ?? "") === expected;
-  }
-
-  // Inequality check: {var} != value
-  const neqMatch = trimmed.match(/^\{([^}]+)\}\s*!=\s*(.+)$/);
-  if (neqMatch) {
-    const varName = neqMatch[1]!;
-    const expected = neqMatch[2]!.trim();
-    return (variables[varName] ?? "") !== expected;
-  }
-
-  // Falsy check: !{var}
-  const falsyMatch = trimmed.match(/^!\{([^}]+)\}$/);
-  if (falsyMatch) {
-    const varName = falsyMatch[1]!;
-    const val = variables[varName];
-    return !val || val === "" || val === "false";
-  }
-
-  // Truthy check: {var}
-  const truthyMatch = trimmed.match(/^\{([^}]+)\}$/);
-  if (truthyMatch) {
-    const varName = truthyMatch[1]!;
-    const val = variables[varName];
-    return !!val && val !== "" && val !== "false";
-  }
-
-  // Unknown condition format, default to true
-  return true;
+  return evaluateTemplateCondition(condition, variables);
 }
 
 // === Feature 2: Export/Import ===
@@ -392,36 +368,14 @@ export function resolveVariables(
   templateVars: TemplateVariable[],
   provided?: Record<string, string>,
 ): Record<string, string> {
-  const merged: Record<string, string> = { ...provided };
-
-  for (const v of templateVars) {
-    if (merged[v.name] === undefined && v.default !== undefined) {
-      merged[v.name] = v.default;
-    }
-  }
-
-  const missing: string[] = [];
-  for (const v of templateVars) {
-    if (v.required && merged[v.name] === undefined) {
-      missing.push(v.name);
-    }
-  }
-  if (missing.length > 0) {
-    throw new Error(`Missing required template variable(s): ${missing.join(", ")}`);
-  }
-
-  return merged;
+  return resolveTemplateVariables(templateVars, provided);
 }
 
 /**
  * Apply variable substitution to a string, replacing {key} placeholders.
  */
 function substituteVars(text: string, variables: Record<string, string>): string {
-  let result = text;
-  for (const [key, val] of Object.entries(variables)) {
-    result = result.replace(new RegExp(`\\{${key}\\}`, "g"), val);
-  }
-  return result;
+  return substituteTemplateVariables(text, variables);
 }
 
 /**

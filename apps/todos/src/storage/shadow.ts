@@ -37,6 +37,7 @@ type ShadowSnapshotKey =
   | "agents"
   | "taskLists"
   | "templates"
+  | "templateTasks"
   | "auditHistory";
 
 const SNAPSHOT_TO_OBJECT_TYPE: Record<ShadowSnapshotKey, TodosPostgresSyncRecordType> = {
@@ -46,6 +47,7 @@ const SNAPSHOT_TO_OBJECT_TYPE: Record<ShadowSnapshotKey, TodosPostgresSyncRecord
   agents: "agents",
   taskLists: "task_lists",
   templates: "templates",
+  templateTasks: "template_tasks",
   auditHistory: "audit_history",
 };
 
@@ -321,6 +323,7 @@ function emptySnapshot(): TodosStorageSnapshot {
     agents: [],
     taskLists: [],
     templates: [],
+    templateTasks: [],
     auditHistory: [],
     tombstones: [],
   };

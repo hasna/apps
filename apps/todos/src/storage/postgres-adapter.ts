@@ -18,6 +18,8 @@ import type {
   TaskHistory,
   TaskList,
   TaskTemplate,
+  TemplateTask,
+  TemplateTaskInput,
   TemplateWithTasks,
   UpdatePlanInput,
   UpdateProjectInput,
@@ -65,7 +67,7 @@ import {
   validateSnapshotRoutingRecords,
 } from "../lib/slugs.js";
 
-type RemoteObjectType = TodosPostgresSyncRecordType | "comments" | "dependencies" | "verifications" | "commits" | "refs";
+type RemoteObjectType = TodosPostgresSyncRecordType | "comments" | "dependencies" | "verifications" | "commits" | "refs" | "template_tasks";
 
 export interface CreatePostgresTodosStorageAdapterOptions {
   client: TodosPostgresQueryClient;
@@ -193,10 +195,14 @@ export function createPostgresTodosStorageAdapter(
       get: (id) => store.get<TaskTemplate>("templates", id),
       list: async () => (await store.list<TaskTemplate>("templates")).sort((a, b) => a.name.localeCompare(b.name)),
       update: (id, input) => updateTemplate(id, input, store),
-      delete: (id, context) => store.delete("templates", id, context),
+      delete: (id, context) => deleteTemplate(id, store, context),
       getWithTasks: async (id) => {
         const template = await store.get<TaskTemplate>("templates", id);
-        return template ? { ...template, tasks: [] } satisfies TemplateWithTasks : null;
+        if (!template) return null;
+        const tasks = (await store.list<TemplateTask>("template_tasks"))
+          .filter((task) => task.template_id === id)
+          .sort((left, right) => left.position - right.position || left.id.localeCompare(right.id));
+        return { ...template, tasks } satisfies TemplateWithTasks;
       },
     },
     audit: {
@@ -580,6 +586,75 @@ class PostgresJsonRecordStore {
       if (current) return current;
     }
     return value;
+  }
+
+  /**
+   * Create a template and all of its ordered checklist steps in one SQL statement.
+   * This is deliberately not composed from `upsert` calls: a server crash or a
+   * rejected child write must never expose a half-created reusable checklist.
+   */
+  async createTemplateWithTasks(
+    template: TaskTemplate,
+    tasks: TemplateTask[],
+    context: TodosStorageContext = {},
+  ): Promise<void> {
+    await this.ensureSchema();
+    const records = [
+      { object_type: "templates", object_id: template.id, payload: template, updated_at: template.created_at, version: template.version },
+      ...tasks.map((task) => ({ object_type: "template_tasks", object_id: task.id, payload: task, updated_at: task.created_at, version: 1 })),
+    ];
+    const result = await this.options.client.query<{ object_type: string; object_id: string }>(
+      `/* todos:create-template-with-tasks-atomic */ WITH input AS (
+         SELECT value->>'object_type' AS object_type,
+           value->>'object_id' AS object_id,
+           value->'payload' AS payload,
+           value->>'updated_at' AS updated_at,
+           COALESCE((value->>'version')::integer, 1) AS version
+         FROM jsonb_array_elements($2::jsonb) AS value
+       ) INSERT INTO ${this.tableName} (
+         service, object_type, object_id, payload, updated_at,
+         deleted_at, source_machine_id, version
+       ) SELECT $1, object_type, object_id, payload, updated_at::timestamptz,
+         NULL, $3, version
+       FROM input
+       ON CONFLICT (service, object_type, object_id) DO UPDATE SET
+         payload = EXCLUDED.payload,
+         updated_at = EXCLUDED.updated_at,
+         deleted_at = NULL,
+         source_machine_id = EXCLUDED.source_machine_id,
+         version = EXCLUDED.version
+       WHERE ${this.tableName}.updated_at IS NULL
+          OR ${this.tableName}.updated_at < EXCLUDED.updated_at
+          OR (${this.tableName}.updated_at = EXCLUDED.updated_at
+              AND COALESCE(${this.tableName}.version, 0) <= COALESCE(EXCLUDED.version, 0))
+       RETURNING object_type, object_id`,
+      [this.service, jsonbParam(records), this.machineId(context)],
+    );
+    if (result.rows.length !== records.length) {
+      throw new Error("Template checklist write was rejected before completion; no partial template was committed");
+    }
+  }
+
+  /** Tombstone a template and every checklist step in one atomic statement. */
+  async deleteTemplateWithTasks(id: string, context: TodosStorageContext = {}): Promise<boolean> {
+    await this.ensureSchema();
+    const timestamp = new Date().toISOString();
+    const result = await this.options.client.query<{ object_type: string }>(
+      `/* todos:delete-template-with-tasks-atomic */ WITH target AS (
+         SELECT 1 FROM ${this.tableName}
+         WHERE service = $1 AND object_type = 'templates' AND object_id = $2 AND deleted_at IS NULL
+       ) UPDATE ${this.tableName} AS record SET
+         deleted_at = $3::timestamptz,
+         updated_at = $3::timestamptz,
+         source_machine_id = COALESCE($4, record.source_machine_id),
+         version = COALESCE(record.version, 0) + 1
+       WHERE record.service = $1 AND record.deleted_at IS NULL AND EXISTS (SELECT 1 FROM target)
+         AND (record.object_type = 'templates' AND record.object_id = $2
+           OR record.object_type = 'template_tasks' AND record.payload->>'template_id' = $2)
+       RETURNING record.object_type`,
+      [this.service, id, timestamp, this.machineId(context)],
+    );
+    return result.rows.some((row) => row.object_type === "templates");
   }
 
   async completeTask(
@@ -1544,7 +1619,7 @@ async function updateTaskList(id: string, input: UpdateTaskListInput, store: Pos
 
 async function createTemplate(input: CreateTemplateInput, store: PostgresJsonRecordStore, context?: TodosStorageContext): Promise<TaskTemplate> {
   const timestamp = new Date().toISOString();
-  return store.upsert("templates", {
+  const template: TaskTemplate = {
     id: randomUUID(),
     name: input.name,
     title_pattern: input.title_pattern,
@@ -1559,7 +1634,40 @@ async function createTemplate(input: CreateTemplateInput, store: PostgresJsonRec
     created_at: timestamp,
     machine_id: store.machineId(context),
     synced_at: null,
-  }, context);
+  };
+  const tasks = buildTemplateTasks(template.id, input.tasks ?? [], timestamp);
+  await store.createTemplateWithTasks(template, tasks, context);
+  return template;
+}
+
+function buildTemplateTasks(
+  templateId: string,
+  inputs: TemplateTaskInput[],
+  timestamp: string,
+): TemplateTask[] {
+  return inputs.map((input, position) => ({
+      id: randomUUID(),
+      template_id: templateId,
+      position,
+      title_pattern: input.title_pattern,
+      description: input.description ?? null,
+      priority: input.priority ?? "medium",
+      tags: input.tags ?? [],
+      task_type: input.task_type ?? null,
+      condition: input.condition ?? null,
+      include_template_id: input.include_template_id ?? null,
+      depends_on_positions: input.depends_on ?? [],
+      metadata: input.metadata ?? {},
+      created_at: timestamp,
+    }));
+}
+
+async function deleteTemplate(
+  id: string,
+  store: PostgresJsonRecordStore,
+  context?: TodosStorageContext,
+): Promise<boolean> {
+  return store.deleteTemplateWithTasks(id, context);
 }
 
 async function updateTemplate(id: string, input: UpdateTemplateInput, store: PostgresJsonRecordStore): Promise<TaskTemplate | null> {
@@ -1628,6 +1736,7 @@ async function exportSnapshot(store: PostgresJsonRecordStore): Promise<TodosStor
     agents: await store.list<Agent>("agents"),
     taskLists: await store.list<TaskList>("task_lists"),
     templates: await store.list<TaskTemplate>("templates"),
+    templateTasks: await store.list<TemplateTask>("template_tasks"),
     auditHistory: await store.list<TaskHistory>("audit_history"),
     tombstones: await store.listTombstones(),
   };
@@ -1663,6 +1772,7 @@ async function importSnapshot(
     ...snapshot.agents.map((row) => ["agents", row] as const),
     ...snapshot.taskLists.map((row) => ["task_lists", row] as const),
     ...snapshot.templates.map((row) => ["templates", row] as const),
+    ...(snapshot.templateTasks ?? []).map((row) => ["template_tasks", row] as const),
     ...snapshot.auditHistory.map((row) => ["audit_history", row] as const),
   ];
   for (const [type, row] of entries) {

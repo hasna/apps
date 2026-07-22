@@ -67,7 +67,7 @@ const REMOTE_COMMANDS = new Set([
   "doctor", "done", "find-commit", "find-ref", "health", "heartbeat", "history", "init", "inspect", "link-commit",
   "link-ref", "list", "lists", "lock", "log-progress", "move", "next", "plans", "project-rename", "projects", "recap",
   "record-verification", "release", "remove", "show", "standup", "start", "status", "task", "task-lists", "timeline",
-  "tl", "unlock", "update",
+  "template-import", "templates", "tl", "unlock", "update",
 ]);
 
 const COMMAND_CAPABILITY_MATRIX = new Map<string, TodosCliCommandOwner>();

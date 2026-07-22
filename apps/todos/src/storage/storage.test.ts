@@ -831,6 +831,78 @@ describe("storage adapter contracts", () => {
     expect(postgres.calls.some((call) => call.values?.includes("spark01"))).toBe(true);
   });
 
+  test("preserves ordered checklist steps in the direct pure remote Postgres template store", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client: postgres.client });
+    const template = await adapter.templates.create({
+      name: "Monthly accounting",
+      title_pattern: "Monthly accounting {month}",
+      tasks: [
+        { title_pattern: "Collect statements {month}" },
+        { title_pattern: "Reconcile {month}", depends_on: [0] },
+      ],
+    });
+
+    expect(await adapter.templates.getWithTasks(template.id)).toMatchObject({
+      id: template.id,
+      tasks: [
+        { position: 0, depends_on_positions: [] },
+        { position: 1, depends_on_positions: [0] },
+      ],
+    });
+    expect(await adapter.templates.delete(template.id)).toBe(true);
+    expect(await adapter.templates.getWithTasks(template.id)).toBeNull();
+    expect(postgres.calls.some((call) => call.values?.includes("template_tasks"))).toBe(true);
+  });
+
+  test("round-trips remote template checklist steps through snapshots", async () => {
+    const sourcePostgres = createMemoryPostgresClient();
+    const source = createPostgresTodosStorageAdapter({ client: sourcePostgres.client });
+    const template = await source.templates.create({
+      name: "Snapshot checklist",
+      title_pattern: "Monthly accounting {month}",
+      tasks: [
+        { title_pattern: "Collect statements {month}" },
+        { title_pattern: "Reconcile {month}", depends_on: [0] },
+      ],
+    });
+    const snapshot = await source.sync.exportSnapshot!();
+    expect(snapshot.templateTasks).toHaveLength(2);
+    expect(snapshot.templateTasks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ template_id: template.id, position: 0, depends_on_positions: [] }),
+      expect.objectContaining({ template_id: template.id, position: 1, depends_on_positions: [0] }),
+    ]));
+
+    const targetPostgres = createMemoryPostgresClient();
+    const target = createPostgresTodosStorageAdapter({ client: targetPostgres.client });
+    expect((await target.sync.importSnapshot!(snapshot)).errors).toEqual([]);
+    expect(await target.templates.getWithTasks(template.id)).toMatchObject({
+      id: template.id,
+      tasks: [
+        { position: 0, depends_on_positions: [] },
+        { position: 1, depends_on_positions: [0] },
+      ],
+    });
+  });
+
+  test("does not leave a parent template behind when an atomic checklist insert fails", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({
+      client: {
+        async query<T = Record<string, unknown>>(sql: string, values?: readonly unknown[]) {
+          if (sql.includes("todos:create-template-with-tasks-atomic")) throw new Error("injected template batch failure");
+          return postgres.client.query<T>(sql, values);
+        },
+      },
+    });
+    await expect(adapter.templates.create({
+      name: "Failure-safe checklist",
+      title_pattern: "Failure-safe {month}",
+      tasks: [{ title_pattern: "step" }],
+    })).rejects.toThrow("injected template batch failure");
+    expect(await adapter.templates.list()).toEqual([]);
+  });
+
   test("renames a Postgres project and canonical list with one atomic idempotent statement", async () => {
     const postgres = createMemoryPostgresClient();
     const adapter = createPostgresTodosStorageAdapter({ client: postgres.client, sourceMachineId: "spark01" });
@@ -2384,6 +2456,43 @@ function createMemoryPostgresClient(): {
           projectRow.version = (projectRow.version ?? 0) + 1;
         }
         return { rows: [{ found: true, project_conflict: false, task_list_conflict: false, project, task_lists_updated: updated }] as T[] };
+      }
+
+      if (sql.includes("todos:create-template-with-tasks-atomic")) {
+        const [service, rawRecords] = values;
+        const input = parseJsonb(rawRecords) as Array<{ object_type: string; object_id: string; payload: unknown; updated_at: string; version: number }>;
+        for (const record of input) {
+          rows.set(recordKey(service, record.object_type, record.object_id), {
+            service: String(service),
+            objectType: record.object_type,
+            objectId: record.object_id,
+            payload: record.payload,
+            updatedAt: record.updated_at,
+            deletedAt: null,
+            version: record.version,
+          });
+        }
+        return { rows: input.map((record) => ({ object_type: record.object_type, object_id: record.object_id })) as T[] };
+      }
+
+      if (sql.includes("todos:delete-template-with-tasks-atomic")) {
+        const [service, templateId, timestamp] = values;
+        const template = rows.get(recordKey(service, "templates", templateId));
+        if (!template || template.deletedAt) return { rows: [] as T[] };
+        const deleted: Array<{ object_type: string }> = [];
+        for (const row of rows.values()) {
+          const payload = row.payload as Record<string, unknown>;
+          const target = row.service === service && !row.deletedAt && (
+            (row.objectType === "templates" && row.objectId === templateId) ||
+            (row.objectType === "template_tasks" && payload["template_id"] === templateId)
+          );
+          if (!target) continue;
+          row.deletedAt = String(timestamp);
+          row.updatedAt = String(timestamp);
+          row.version = (row.version ?? 0) + 1;
+          deleted.push({ object_type: row.objectType });
+        }
+        return { rows: deleted as T[] };
       }
 
       if (sql.includes("INSERT INTO todos_sync_records")) {

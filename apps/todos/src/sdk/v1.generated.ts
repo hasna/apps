@@ -2,7 +2,7 @@
 // Regenerate: bun run scripts/generate-sdk.ts
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Todos V1 API 0.11.92
+// Source: Todos V1 API 0.11.94
 
 export interface Task { "id"?: string; "title"?: string; "description"?: string; "status"?: string; "priority"?: string; "project_id"?: string | null; "assigned_to"?: string | null; "agent_id"?: string | null; "tags"?: Array<string>; "version"?: number; "created_at"?: string; "updated_at"?: string }
 
@@ -14,7 +14,15 @@ export interface TaskComment { "id": string; "task_id": string; "agent_id": stri
 
 export interface Plan { "id": string; "slug": string | null; "project_id"?: string | null; "task_list_id"?: string | null; "agent_id"?: string | null; "name": string; "description"?: string | null; "status": "active" | "completed" | "archived"; "created_at": string; "updated_at": string }
 
-export interface CreateTaskInput { "title": string; "description"?: string; "status"?: string; "priority"?: string; "project_id"?: string; "assigned_to"?: string; "agent_id"?: string; "tags"?: Array<string> }
+export interface Template { "id": string; "name": string; "title_pattern": string; "description"?: string | null; "priority": "low" | "medium" | "high" | "critical"; "tags": Array<string>; "variables": Array<{ "name"?: string; "required"?: boolean; "default"?: string; "description"?: string }>; "version": number; "project_id"?: string | null; "plan_id"?: string | null; "metadata": Record<string, unknown>; "created_at": string; "tasks"?: Array<TemplateTask> }
+
+export interface TemplateTask { "id": string; "template_id": string; "position": number; "title_pattern": string; "description"?: string | null; "priority": "low" | "medium" | "high" | "critical"; "tags": Array<string>; "task_type"?: string | null; "condition"?: string | null; "include_template_id"?: string | null; "depends_on_positions": Array<number>; "metadata": Record<string, unknown>; "created_at": string }
+
+export interface TemplateVariable { "name": string; "required": boolean; "default"?: string; "description"?: string }
+
+export interface CreateTemplateTaskInput { "position"?: number; "title_pattern": string; "description"?: string | null; "priority"?: "low" | "medium" | "high" | "critical"; "tags"?: Array<string>; "task_type"?: string | null; "condition"?: string | null; "include_template_id"?: string | null; "depends_on"?: Array<number>; "depends_on_positions"?: Array<number>; "metadata"?: Record<string, unknown> }
+
+export interface CreateTaskInput { "title": string; "description"?: string | null; "status"?: string; "priority"?: string; "project_id"?: string; "assigned_to"?: string; "agent_id"?: string; "tags"?: Array<string> }
 
 export interface UpdateTaskInput { "title"?: string; "description"?: string; "status"?: string; "priority"?: string; "assigned_to"?: string; "project_id"?: string | null; "task_list_id"?: string | null; "version"?: number }
 
@@ -37,6 +45,10 @@ export interface CreateTaskCommentInput { "content": string; "agent_id"?: string
 export interface CreatePlanInput { "name": string; "slug"?: string; "description"?: string; "project_id"?: string; "task_list_id"?: string; "agent_id"?: string; "status"?: "active" | "completed" | "archived" }
 
 export interface UpdatePlanInput { "name"?: string; "slug"?: string; "description"?: string; "task_list_id"?: string; "agent_id"?: string; "status"?: "active" | "completed" | "archived" }
+
+export interface CreateTemplateInput { "name": string; "title_pattern": string; "description"?: string | null; "priority"?: "low" | "medium" | "high" | "critical"; "tags"?: Array<string>; "variables"?: Array<TemplateVariable>; "project_id"?: string | null; "plan_id"?: string | null; "metadata"?: Record<string, unknown>; "tasks"?: Array<CreateTemplateTaskInput> }
+
+export interface UpdateTemplateInput { "name"?: string; "title_pattern"?: string; "description"?: string | null; "priority"?: "low" | "medium" | "high" | "critical"; "tags"?: Array<string>; "variables"?: Array<Record<string, unknown>>; "project_id"?: string | null; "plan_id"?: string | null; "metadata"?: Record<string, unknown> }
 
 export interface TodosV1ClientOptions {
   /** Base URL, e.g. process.env.APP_API_URL. */
@@ -94,7 +106,7 @@ export class TodosV1Client {
   }
 
     /** Bulk-ingest a full or partial snapshot (idempotent upsert by id) */
-    async importSnapshot(body: { "exportedAt"?: string; "source"?: string; "tasks"?: Array<Task>; "projects"?: Array<Project>; "projectMachinePaths"?: Array<Record<string, unknown>>; "plans"?: Array<Record<string, unknown>>; "agents"?: Array<Record<string, unknown>>; "taskLists"?: Array<Record<string, unknown>>; "templates"?: Array<Record<string, unknown>>; "auditHistory"?: Array<Record<string, unknown>>; "tombstones"?: Array<Record<string, unknown>> }, init?: RequestInit): Promise<{ "received"?: number; "result"?: { "inserted"?: number; "updated"?: number; "deleted"?: number; "skipped"?: number; "errors"?: Array<string> } }> {
+    async importSnapshot(body: { "exportedAt"?: string; "source"?: string; "tasks"?: Array<Task>; "projects"?: Array<Project>; "projectMachinePaths"?: Array<Record<string, unknown>>; "plans"?: Array<Record<string, unknown>>; "agents"?: Array<Record<string, unknown>>; "taskLists"?: Array<Record<string, unknown>>; "templates"?: Array<Record<string, unknown>>; "templateTasks"?: Array<TemplateTask>; "auditHistory"?: Array<Record<string, unknown>>; "tombstones"?: Array<Record<string, unknown>> }, init?: RequestInit): Promise<{ "received"?: number; "result"?: { "inserted"?: number; "updated"?: number; "deleted"?: number; "skipped"?: number; "errors"?: Array<string> } }> {
       return this.request("POST", `/v1/import`, {
         body,
         query: undefined,
@@ -331,6 +343,51 @@ export class TodosV1Client {
     async startTask(id: string, init?: RequestInit): Promise<{ "task"?: Task }> {
       return this.request("POST", `/v1/tasks/${encodeURIComponent(String(id))}/start`, {
         body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** List reusable task templates */
+    async listTemplates(query?: { "project_id"?: string }, init?: RequestInit): Promise<{ "templates"?: Array<Template>; "count"?: number }> {
+      return this.request("GET", `/v1/templates`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Create a reusable task template */
+    async createTemplate(body: CreateTemplateInput, init?: RequestInit): Promise<{ "template"?: Template }> {
+      return this.request("POST", `/v1/templates`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Get one reusable task template with its checklist steps */
+    async getTemplate(id: string, init?: RequestInit): Promise<{ "template"?: Template }> {
+      return this.request("GET", `/v1/templates/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Delete a reusable task template and its checklist steps */
+    async deleteTemplate(id: string, init?: RequestInit): Promise<{ "deleted"?: boolean; "id"?: string }> {
+      return this.request("DELETE", `/v1/templates/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Update reusable template metadata and defaults */
+    async updateTemplate(id: string, body: UpdateTemplateInput, init?: RequestInit): Promise<{ "template"?: Template }> {
+      return this.request("PATCH", `/v1/templates/${encodeURIComponent(String(id))}`, {
+        body,
         query: undefined,
         init,
       });

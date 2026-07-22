@@ -84,6 +84,78 @@ const planSchema = {
   },
 } as const;
 
+const templateTaskSchema = {
+  type: "object",
+  required: ["id", "template_id", "position", "title_pattern", "priority", "tags", "depends_on_positions", "metadata", "created_at"],
+  properties: {
+    id: { type: "string" },
+    template_id: { type: "string" },
+    position: { type: "integer", minimum: 0 },
+    title_pattern: { type: "string" },
+    description: { type: "string", nullable: true },
+    priority: { type: "string", enum: ["low", "medium", "high", "critical"] },
+    tags: { type: "array", items: { type: "string" } },
+    task_type: { type: "string", nullable: true },
+    condition: { type: "string", nullable: true },
+    include_template_id: { type: "string", nullable: true },
+    depends_on_positions: { type: "array", items: { type: "integer", minimum: 0 } },
+    metadata: { type: "object", additionalProperties: true },
+    created_at: { type: "string", format: "date-time" },
+  },
+} as const;
+
+const templateSchema = {
+  type: "object",
+  required: ["id", "name", "title_pattern", "priority", "tags", "variables", "version", "metadata", "created_at"],
+  properties: {
+    id: { type: "string" },
+    name: { type: "string" },
+    title_pattern: { type: "string" },
+    description: { type: "string", nullable: true },
+    priority: { type: "string", enum: ["low", "medium", "high", "critical"] },
+    tags: { type: "array", items: { type: "string" } },
+    variables: { type: "array", items: { type: "object", properties: { name: { type: "string" }, required: { type: "boolean" }, default: { type: "string" }, description: { type: "string" } } } },
+    version: { type: "integer", minimum: 1 },
+    project_id: { type: "string", nullable: true },
+    plan_id: { type: "string", nullable: true },
+    metadata: { type: "object", additionalProperties: true },
+    created_at: { type: "string", format: "date-time" },
+    tasks: { type: "array", items: { $ref: "#/components/schemas/TemplateTask" } },
+  },
+} as const;
+
+const templateVariableSchema = {
+  type: "object",
+  required: ["name", "required"],
+  properties: {
+    name: { type: "string" },
+    required: { type: "boolean" },
+    default: { type: "string" },
+    description: { type: "string" },
+  },
+} as const;
+
+const createTemplateTaskInputSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["title_pattern"],
+  properties: {
+    // position and depends_on_positions are emitted by template-export;
+    // depends_on remains the concise authoring form accepted by the API.
+    position: { type: "integer", minimum: 0 },
+    title_pattern: { type: "string", minLength: 1 },
+    description: { type: "string", nullable: true },
+    priority: { type: "string", enum: ["low", "medium", "high", "critical"] },
+    tags: { type: "array", items: { type: "string", minLength: 1 } },
+    task_type: { type: "string", nullable: true },
+    condition: { type: "string", nullable: true },
+    include_template_id: { type: "string", nullable: true },
+    depends_on: { type: "array", items: { type: "integer", minimum: 0 } },
+    depends_on_positions: { type: "array", items: { type: "integer", minimum: 0 } },
+    metadata: { type: "object", additionalProperties: true },
+  },
+} as const;
+
 export function buildV1OpenApiDocument(version = getPackageVersion()) {
   return {
     openapi: "3.1.0",
@@ -104,12 +176,16 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
         TaskList: taskListSchema,
         TaskComment: taskCommentSchema,
         Plan: planSchema,
+        Template: templateSchema,
+        TemplateTask: templateTaskSchema,
+        TemplateVariable: templateVariableSchema,
+        CreateTemplateTaskInput: createTemplateTaskInputSchema,
         CreateTaskInput: {
           type: "object",
           required: ["title"],
           properties: {
             title: { type: "string" },
-            description: { type: "string" },
+            description: { type: "string", nullable: true },
             status: { type: "string" },
             priority: { type: "string" },
             project_id: { type: "string" },
@@ -243,6 +319,39 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             task_list_id: { type: "string", minLength: 1 },
             agent_id: { type: "string", minLength: 1 },
             status: { type: "string", enum: ["active", "completed", "archived"] },
+          },
+        },
+        CreateTemplateInput: {
+          type: "object",
+          additionalProperties: false,
+          required: ["name", "title_pattern"],
+          properties: {
+            name: { type: "string", minLength: 1 },
+            title_pattern: { type: "string", minLength: 1 },
+            description: { type: "string", nullable: true },
+            priority: { type: "string", enum: ["low", "medium", "high", "critical"] },
+            tags: { type: "array", items: { type: "string", minLength: 1 } },
+            variables: { type: "array", items: { $ref: "#/components/schemas/TemplateVariable" } },
+            project_id: { type: "string", minLength: 1, nullable: true },
+            plan_id: { type: "string", minLength: 1, nullable: true },
+            metadata: { type: "object", additionalProperties: true },
+            tasks: { type: "array", items: { $ref: "#/components/schemas/CreateTemplateTaskInput" } },
+          },
+        },
+        UpdateTemplateInput: {
+          type: "object",
+          additionalProperties: false,
+          minProperties: 1,
+          properties: {
+            name: { type: "string", minLength: 1 },
+            title_pattern: { type: "string", minLength: 1 },
+            description: { type: "string", nullable: true },
+            priority: { type: "string", enum: ["low", "medium", "high", "critical"] },
+            tags: { type: "array", items: { type: "string", minLength: 1 } },
+            variables: { type: "array", items: { type: "object" } },
+            project_id: { type: "string", nullable: true },
+            plan_id: { type: "string", nullable: true },
+            metadata: { type: "object", additionalProperties: true },
           },
         },
       },
@@ -548,6 +657,41 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { deleted: { type: "boolean" }, id: { type: "string" } } } } } } },
         },
       },
+      "/v1/templates": {
+        get: {
+          operationId: "listTemplates",
+          summary: "List reusable task templates",
+          parameters: [{ name: "project_id", in: "query", schema: { type: "string" } }],
+          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { templates: { type: "array", items: { $ref: "#/components/schemas/Template" } }, count: { type: "number" } } } } } } },
+        },
+        post: {
+          operationId: "createTemplate",
+          summary: "Create a reusable task template",
+          requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/CreateTemplateInput" } } } },
+          responses: { "201": { content: { "application/json": { schema: { type: "object", properties: { template: { $ref: "#/components/schemas/Template" } } } } } } },
+        },
+      },
+      "/v1/templates/{id}": {
+        get: {
+          operationId: "getTemplate",
+          summary: "Get one reusable task template with its checklist steps",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { template: { $ref: "#/components/schemas/Template" } } } } } } },
+        },
+        patch: {
+          operationId: "updateTemplate",
+          summary: "Update reusable template metadata and defaults",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/UpdateTemplateInput" } } } },
+          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { template: { $ref: "#/components/schemas/Template" } } } } } } },
+        },
+        delete: {
+          operationId: "deleteTemplate",
+          summary: "Delete a reusable task template and its checklist steps",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { deleted: { type: "boolean" }, id: { type: "string" } } } } } } },
+        },
+      },
       "/v1/task-lists": {
         get: {
           operationId: "listTaskLists",
@@ -626,6 +770,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
                     agents: { type: "array", items: { type: "object" } },
                     taskLists: { type: "array", items: { type: "object" } },
                     templates: { type: "array", items: { type: "object" } },
+                    templateTasks: { type: "array", items: { $ref: "#/components/schemas/TemplateTask" } },
                     auditHistory: { type: "array", items: { type: "object" } },
                     tombstones: { type: "array", items: { type: "object" } },
                   },
