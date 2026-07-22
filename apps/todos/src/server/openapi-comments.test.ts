@@ -123,6 +123,39 @@ describe("task list and completion OpenAPI contract", () => {
   });
 });
 
+describe("snapshot OpenAPI contract", () => {
+  test("generated SDK accepts and sends typed template checklist snapshot rows", async () => {
+    const snapshot: Parameters<TodosV1Client["importSnapshot"]>[0] = {
+      source: "postgres",
+      templateTasks: [{
+        id: "template-task-1",
+        template_id: "template-1",
+        position: 0,
+        title_pattern: "Collect statements {month}",
+        description: null,
+        priority: "medium",
+        tags: [],
+        task_type: null,
+        condition: null,
+        include_template_id: null,
+        depends_on_positions: [],
+        metadata: {},
+        created_at: "2026-07-22T00:00:00.000Z",
+      }],
+    };
+    const calls: Array<{ url: string; body?: string }> = [];
+    const client = new TodosV1Client({
+      baseUrl: "https://todos.test",
+      fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        calls.push({ url: String(input), body: init?.body as string | undefined });
+        return Response.json({ received: 1, result: { inserted: 1, updated: 0, errors: [] } });
+      }) as typeof fetch,
+    });
+    await client.importSnapshot(snapshot);
+    expect(calls).toEqual([{ url: "https://todos.test/v1/import", body: JSON.stringify(snapshot) }]);
+  });
+});
+
 describe("reusable template OpenAPI contract", () => {
   test("models the canonical template-export shape and generated SDK create request exactly", async () => {
     const document = buildV1OpenApiDocument("test");

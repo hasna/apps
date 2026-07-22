@@ -106,7 +106,7 @@ export class TodosV1Client {
   }
 
     /** Bulk-ingest a full or partial snapshot (idempotent upsert by id) */
-    async importSnapshot(body: { "exportedAt"?: string; "source"?: string; "tasks"?: Array<Task>; "projects"?: Array<Project>; "projectMachinePaths"?: Array<Record<string, unknown>>; "plans"?: Array<Record<string, unknown>>; "agents"?: Array<Record<string, unknown>>; "taskLists"?: Array<Record<string, unknown>>; "templates"?: Array<Record<string, unknown>>; "auditHistory"?: Array<Record<string, unknown>>; "tombstones"?: Array<Record<string, unknown>> }, init?: RequestInit): Promise<{ "received"?: number; "result"?: { "inserted"?: number; "updated"?: number; "deleted"?: number; "skipped"?: number; "errors"?: Array<string> } }> {
+    async importSnapshot(body: { "exportedAt"?: string; "source"?: string; "tasks"?: Array<Task>; "projects"?: Array<Project>; "projectMachinePaths"?: Array<Record<string, unknown>>; "plans"?: Array<Record<string, unknown>>; "agents"?: Array<Record<string, unknown>>; "taskLists"?: Array<Record<string, unknown>>; "templates"?: Array<Record<string, unknown>>; "templateTasks"?: Array<TemplateTask>; "auditHistory"?: Array<Record<string, unknown>>; "tombstones"?: Array<Record<string, unknown>> }, init?: RequestInit): Promise<{ "received"?: number; "result"?: { "inserted"?: number; "updated"?: number; "deleted"?: number; "skipped"?: number; "errors"?: Array<string> } }> {
       return this.request("POST", `/v1/import`, {
         body,
         query: undefined,
