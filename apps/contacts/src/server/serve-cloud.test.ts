@@ -14,6 +14,14 @@ describe("buildV1OpenApiDocument", () => {
     for (const p of ["/v1/contacts", "/v1/contacts/{id}", "/v1/companies", "/v1/tags", "/v1/stats"]) {
       expect(doc.paths).toHaveProperty(p);
     }
+    expect(doc.paths).toHaveProperty("/v1/contacts/{contact_id}/tags/{tag_id}");
+    expect(doc.paths["/v1/tags"].get.parameters).toContainEqual({
+      name: "name",
+      in: "query",
+      schema: { type: "string" },
+    });
+    expect(doc.paths["/v1/contacts/{contact_id}/tags/{tag_id}"].put.operationId).toBe("addTagToContact");
+    expect(doc.paths["/v1/contacts/{contact_id}/tags/{tag_id}"].delete.operationId).toBe("removeTagFromContact");
   });
 
   test("requires api-key security", () => {
@@ -137,5 +145,32 @@ describe("ContactsPgStore", () => {
     await store.updateContact("c1", {});
     // should SELECT, never UPDATE, when there are no changed columns
     expect(calls.every((c) => !c.sql.startsWith("UPDATE"))).toBe(true);
+  });
+
+  test("looks up tags by exact name with a parameterized query", async () => {
+    const now = "2026-07-22T00:00:00.000Z";
+    const { client, calls } = shim([{ id: "tag-1", name: "monthly accounting", color: "#6366f1", description: null, created_at: now }]);
+    const store = new ContactsPgStore(client);
+
+    expect(await store.getTagByName("monthly accounting")).toMatchObject({
+      id: "tag-1",
+      name: "monthly accounting",
+    });
+    expect(calls[0]).toEqual({
+      sql: "SELECT * FROM tags WHERE name = $1",
+      params: ["monthly accounting"],
+    });
+  });
+
+  test("attaches a tag idempotently without a local database fallback", async () => {
+    const { client, calls } = shim([]);
+    const store = new ContactsPgStore(client);
+
+    await store.addTagToContact("contact-1", "tag-1");
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.sql).toContain("INSERT INTO contact_tags (contact_id, tag_id)");
+    expect(calls[0]!.sql).toContain("ON CONFLICT (contact_id, tag_id) DO NOTHING");
+    expect(calls[0]!.params).toEqual(["contact-1", "tag-1"]);
   });
 });

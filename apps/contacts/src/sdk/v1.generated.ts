@@ -2,7 +2,7 @@
 // Regenerate: bun run scripts/generate-sdk.ts
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Contacts V1 API 0.6.23
+// Source: Contacts V1 API 0.6.32
 
 export interface Contact { "id"?: string; "first_name"?: string; "last_name"?: string; "display_name"?: string; "nickname"?: string | null; "company_id"?: string | null; "job_title"?: string | null; "notes"?: string | null; "source"?: string; "status"?: string; "sensitivity"?: string; "archived"?: boolean; "priority"?: number; "created_at"?: string; "updated_at"?: string }
 
@@ -140,6 +140,24 @@ export class ContactsV1Client {
       });
     }
 
+    /** Attach a tag to a contact idempotently */
+    async addTagToContact(contactId: string, tagId: string, init?: RequestInit): Promise<{ "attached"?: boolean; "contact_id"?: string; "tag_id"?: string }> {
+      return this.request("PUT", `/v1/contacts/${encodeURIComponent(String(contactId))}/tags/${encodeURIComponent(String(tagId))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Remove a tag from a contact */
+    async removeTagFromContact(contactId: string, tagId: string, init?: RequestInit): Promise<{ "removed"?: boolean; "contact_id"?: string; "tag_id"?: string }> {
+      return this.request("DELETE", `/v1/contacts/${encodeURIComponent(String(contactId))}/tags/${encodeURIComponent(String(tagId))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Get a contact by id */
     async getContact(id: string, init?: RequestInit): Promise<{ "contact"?: Contact }> {
       return this.request("GET", `/v1/contacts/${encodeURIComponent(String(id))}`, {
@@ -177,10 +195,10 @@ export class ContactsV1Client {
     }
 
     /** List tags */
-    async listTags(init?: RequestInit): Promise<{ "tags"?: Array<Tag>; "count"?: number }> {
+    async listTags(query?: { "name"?: string }, init?: RequestInit): Promise<{ "tags"?: Array<Tag>; "count"?: number }> {
       return this.request("GET", `/v1/tags`, {
         body: undefined,
-        query: undefined,
+        query,
         init,
       });
     }

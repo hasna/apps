@@ -411,6 +411,11 @@ export class ContactsPgStore {
     return row ? mapTag(row) : null;
   }
 
+  async getTagByName(name: string): Promise<Tag | null> {
+    const row = await this.client.get<TagRow>(`SELECT * FROM tags WHERE name = $1`, [name]);
+    return row ? mapTag(row) : null;
+  }
+
   async createTag(input: CreateTagInput): Promise<Tag> {
     const id = uuid();
     const row = await this.client.get<TagRow>(
@@ -439,6 +444,22 @@ export class ContactsPgStore {
 
   async deleteTag(id: string): Promise<boolean> {
     const result = await this.client.query(`DELETE FROM tags WHERE id = $1`, [id]);
+    return result.rowCount > 0;
+  }
+
+  async addTagToContact(contactId: string, tagId: string): Promise<void> {
+    await this.client.execute(
+      `INSERT INTO contact_tags (contact_id, tag_id) VALUES ($1, $2)
+       ON CONFLICT (contact_id, tag_id) DO NOTHING`,
+      [contactId, tagId],
+    );
+  }
+
+  async removeTagFromContact(contactId: string, tagId: string): Promise<boolean> {
+    const result = await this.client.query(
+      `DELETE FROM contact_tags WHERE contact_id = $1 AND tag_id = $2`,
+      [contactId, tagId],
+    );
     return result.rowCount > 0;
   }
 

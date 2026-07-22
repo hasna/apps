@@ -268,6 +268,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
         get: {
           operationId: "listTags",
           summary: "List tags",
+          parameters: [{ name: "name", in: "query", schema: { type: "string" } }],
           responses: objResponse({
             tags: { type: "array", items: { $ref: "#/components/schemas/Tag" } },
             count: { type: "number" },
@@ -313,6 +314,34 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           summary: "Delete a tag",
           parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
           responses: objResponse({ deleted: { type: "boolean" }, id: { type: "string" } }),
+        },
+      },
+      "/v1/contacts/{contact_id}/tags/{tag_id}": {
+        put: {
+          operationId: "addTagToContact",
+          summary: "Attach a tag to a contact idempotently",
+          parameters: [
+            { name: "contact_id", in: "path", required: true, schema: { type: "string" } },
+            { name: "tag_id", in: "path", required: true, schema: { type: "string" } },
+          ],
+          responses: objResponse({
+            attached: { type: "boolean" },
+            contact_id: { type: "string" },
+            tag_id: { type: "string" },
+          }),
+        },
+        delete: {
+          operationId: "removeTagFromContact",
+          summary: "Remove a tag from a contact",
+          parameters: [
+            { name: "contact_id", in: "path", required: true, schema: { type: "string" } },
+            { name: "tag_id", in: "path", required: true, schema: { type: "string" } },
+          ],
+          responses: objResponse({
+            removed: { type: "boolean" },
+            contact_id: { type: "string" },
+            tag_id: { type: "string" },
+          }),
         },
       },
       "/v1/stats": {

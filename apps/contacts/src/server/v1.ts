@@ -68,7 +68,12 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
   await ensureCloudSchemaBestEffort();
   const store = getContactsPgStore(getCloudClient());
 
-  const segments = path.split("/").filter(Boolean); // ["v1", resource, id?, sub?]
+  let segments: string[];
+  try {
+    segments = path.split("/").filter(Boolean).map((segment) => decodeURIComponent(segment)); // ["v1", resource, id?, sub?]
+  } catch {
+    return error(400, "invalid URL path encoding");
+  }
   const resource = segments[1];
   const id = segments[2];
   const sub = segments[3];
@@ -81,6 +86,19 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
   try {
     // ── /v1/contacts/:id/<sub> — per-contact derived reads ──
     if (resource === "contacts" && id && sub) {
+      if (sub === "tags") {
+        const tagId = segments[4];
+        if (!tagId) return error(400, "tag id required");
+        if (method === "PUT") {
+          await store.addTagToContact(id, tagId);
+          return json({ attached: true, contact_id: id, tag_id: tagId });
+        }
+        if (method === "DELETE") {
+          const removed = await store.removeTagFromContact(id, tagId);
+          return json({ removed, contact_id: id, tag_id: tagId });
+        }
+        return error(405, `method ${method} not allowed on /v1/contacts/:contact_id/tags/:tag_id`);
+      }
       if (method === "GET" && sub === "timeline") return json({ timeline: await store.getContactTimeline(id, qn("limit") ?? 50) });
       if (method === "GET" && sub === "brief") return json({ brief: await store.getContactBrief(id, qp("context")) });
       if (method === "GET" && sub === "brief-text") return json({ text: await store.generateBrief(id) });
@@ -189,7 +207,9 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
     if (resource === "tags") {
       if (!id) {
         if (method === "GET") {
-          const tags = await store.listTags();
+          const name = url.searchParams.get("name");
+          const tag = name !== null ? await store.getTagByName(name) : null;
+          const tags = name !== null ? (tag ? [tag] : []) : await store.listTags();
           return json({ tags, count: tags.length });
         }
         if (method === "POST") {
