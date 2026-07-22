@@ -1,11 +1,10 @@
 import { SqliteAdapter } from "./sqlite-adapter.js";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { chmodSync, existsSync, mkdirSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { getDbPath } from "./paths.js";
 
-function ensurePrivateDir(dir: string): void {
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  chmodSync(dir, 0o700);
-}
+// Re-export the pure path helpers so existing importers keep working.
+export { getDataDir, getDbPath } from "./paths.js";
 
 function ensureCreatedPrivateDir(dir: string): void {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -16,37 +15,6 @@ function protectDatabaseArtifacts(dbPath: string): void {
   for (const artifact of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
     if (existsSync(artifact)) chmodSync(artifact, 0o600);
   }
-}
-
-export function getDataDir(): string {
-  const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
-  const hasnaDir = join(home, ".hasna");
-  const newDir = join(home, ".hasna", "contacts");
-  const oldDir = join(home, ".contacts");
-
-  // Auto-migrate old dir to new location
-  if (existsSync(oldDir) && !existsSync(newDir)) {
-    ensurePrivateDir(hasnaDir);
-    ensurePrivateDir(newDir);
-    for (const file of readdirSync(oldDir)) {
-      const oldPath = join(oldDir, file);
-      if (statSync(oldPath).isFile()) {
-        const newPath = join(newDir, file);
-        copyFileSync(oldPath, newPath);
-        chmodSync(newPath, 0o600);
-      }
-    }
-  }
-
-  ensurePrivateDir(hasnaDir);
-  ensurePrivateDir(newDir);
-  return newDir;
-}
-
-export function getDbPath(): string {
-  if (process.env["HASNA_CONTACTS_DB_PATH"]) return process.env["HASNA_CONTACTS_DB_PATH"];
-  if (process.env["CONTACTS_DB_PATH"]) return process.env["CONTACTS_DB_PATH"];
-  return join(getDataDir(), "contacts.db");
 }
 
 function ensureDir(filePath: string): void {

@@ -1,44 +1,14 @@
 import type { Command } from "commander";
 import chalk from "chalk";
-import {
-  createContact,
-  getContact,
-  updateContact,
-  deleteContact,
-  listContacts,
-  searchContacts,
-  listRecentContacts,
-} from "../../db/contacts.js";
-import {
-  createCompany,
-  getCompany,
-  listCompanies,
-} from "../../db/companies.js";
-import {
-  createTag,
-  listTags,
-} from "../../db/tags.js";
-import {
-  createGroup,
-  getGroup,
-  listGroups,
-  addContactToGroup,
-  removeContactFromGroup,
-  listContactsInGroup,
-} from "../../db/groups.js";
-import { getDatabase, getDbPath, getDataDir, resetDatabase } from "../../db/database.js";
+import { getStore } from "../../store/index.js";
+import { getDbPath, getDataDir } from "../../db/paths.js";
 import { importContacts } from "../../lib/import.js";
 import { exportContacts } from "../../lib/export.js";
-import { findEmailDuplicates, findNameDuplicates } from "../../lib/dedup.js";
 import { readConfig } from "../../lib/config.js";
-import type {
-  CreateContactInput,
-  Group,
-} from "../../types/index.js";
+import type { CreateContactInput, Group } from "../../types/index.js";
 import { readFileSync, writeFileSync, existsSync, copyFileSync, statSync, mkdirSync, readdirSync, chmodSync } from "fs";
 import { extname, join } from "path";
 import { renderTable, formatContact, promptUser as prompt, confirmUser as confirm } from "../utils.js";
-import { getContactsCloud } from "../../cloud/store.js";
 
 function collect(val: string, prev: string[]): string[] {
   return [...prev, val];
@@ -73,11 +43,27 @@ program
     note?: string;
     website?: string;
   }) => {
+    const store = getStore();
+
     // Non-interactive path: if --first/--last or --display provided, skip prompts
     if (opts.first || opts.last || opts.display) {
       const firstName = opts.first ?? "";
       const lastName = opts.last ?? "";
       const displayName = opts.display ?? (`${firstName} ${lastName}`.trim() || "Unnamed Contact");
+
+      // Resolve tag names to ids up-front so contact creation is a single
+      // Store call (works identically in local + self_hosted; no post-hoc
+      // inline SQL and no per-command mode branching).
+      let tagIds: string[] | undefined;
+      if (opts.tag.length > 0) {
+        const allTags = (await store.listTags()) as Array<{ id: string; name: string }>;
+        tagIds = [];
+        for (const tagName of opts.tag) {
+          const tag = allTags.find((t) => t.name === tagName);
+          if (tag) tagIds.push(tag.id);
+          else console.log(chalk.yellow(`  ! Tag not found: ${tagName} (skipped)`));
+        }
+      }
 
       const input: CreateContactInput = {
         display_name: displayName,
@@ -89,30 +75,10 @@ program
         company_id: opts.company || undefined,
         emails: opts.email ? [{ address: opts.email, type: "work", is_primary: true }] : undefined,
         phones: opts.phone ? [{ number: opts.phone, type: "mobile", is_primary: true }] : undefined,
+        tag_ids: tagIds && tagIds.length > 0 ? tagIds : undefined,
       };
 
-      const cloud = getContactsCloud();
-      const contact = cloud ? await cloud.createContact(input as unknown as Record<string, unknown>) : createContact(input);
-
-      // Apply tags by name if provided (local store only; cloud tag linking is
-      // managed via the tags API separately).
-      if (opts.tag.length > 0) {
-        if (cloud) {
-          console.log(chalk.yellow(`  ! Tag linking is not applied in self_hosted mode (skipped)`));
-        } else {
-          const db = getDatabase();
-          const allTags = listTags();
-          for (const tagName of opts.tag) {
-            const tag = allTags.find(t => t.name === tagName);
-            if (tag) {
-              db.run(`INSERT OR IGNORE INTO contact_tags (contact_id, tag_id) VALUES (?, ?)`, [contact.id, tag.id]);
-            } else {
-              console.log(chalk.yellow(`  ! Tag not found: ${tagName} (skipped)`));
-            }
-          }
-        }
-      }
-
+      const contact = await store.createContact(input);
       console.log(chalk.green(`\n✓ Contact created: ${contact.display_name} (${contact.id})\n`));
       return;
     }
@@ -143,8 +109,7 @@ program
       phones: phoneStr ? [{ number: phoneStr, type: "mobile", is_primary: true }] : undefined,
     };
 
-    const cloud = getContactsCloud();
-    const contact = cloud ? await cloud.createContact(input as unknown as Record<string, unknown>) : createContact(input);
+    const contact = await store.createContact(input);
     console.log(chalk.green(`\n✓ Contact created: ${contact.display_name} (${contact.id})\n`));
   });
 
@@ -162,22 +127,16 @@ program
   .option("--order-dir <dir>", "Sort direction: asc|desc", "asc")
   .option("-j, --json", "Output JSON")
   .action(async (opts: { tag?: string; company?: string; includeRestricted?: boolean; limit: string; offset: string; orderBy: string; orderDir: string; json?: boolean }) => {
-    const cloud = getContactsCloud();
-    const result = cloud
-      ? await cloud.listContacts({
-          company_id: opts.company,
-          limit: parseInt(opts.limit, 10),
-          offset: parseInt(opts.offset, 10),
-        })
-      : listContacts({
-          tag_id: opts.tag,
-          company_id: opts.company,
-          include_restricted: opts.includeRestricted,
-          limit: parseInt(opts.limit, 10),
-          offset: parseInt(opts.offset, 10),
-          order_by: opts.orderBy as "display_name" | "created_at" | "updated_at" | "last_contacted_at" | "follow_up_at",
-          order_dir: opts.orderDir === "desc" ? "desc" : "asc",
-        });
+    const store = getStore();
+    const result = await store.listContacts({
+      tag_id: opts.tag,
+      company_id: opts.company,
+      include_restricted: opts.includeRestricted,
+      limit: parseInt(opts.limit, 10),
+      offset: parseInt(opts.offset, 10),
+      order_by: opts.orderBy as "display_name" | "created_at" | "updated_at" | "last_contacted_at" | "follow_up_at",
+      order_dir: opts.orderDir === "desc" ? "desc" : "asc",
+    });
 
     if (opts.json) {
       console.log(JSON.stringify(result, null, 2));
@@ -208,8 +167,12 @@ program
   .command("show <id>")
   .description("Show full contact details")
   .action(async (id: string) => {
-    const cloud = getContactsCloud();
-    const contact = cloud ? await cloud.getContact(id) : getContact(id);
+    const store = getStore();
+    const contact = await store.getContact(id);
+    if (!contact) {
+      console.error(chalk.red(`\nContact not found: ${id}\n`));
+      process.exit(1);
+    }
     formatContact(contact);
   });
 
@@ -236,48 +199,33 @@ program
     note?: string;
     website?: string;
   }) => {
-    const cloud = getContactsCloud();
-    const contact = cloud ? await cloud.getContact(id) : getContact(id);
+    const store = getStore();
+    const contact = await store.getContact(id);
+    if (!contact) {
+      console.error(chalk.red(`\nContact not found: ${id}\n`));
+      process.exit(1);
+    }
 
     // Non-interactive path: flags provided
     const hasFlags = opts.first || opts.last || opts.display || opts.email ||
       opts.phone || opts.title || opts.note || opts.website;
 
     if (hasFlags) {
-      const updates: Record<string, string> = {};
+      const updates: Record<string, unknown> = {};
       if (opts.first !== undefined) updates.first_name = opts.first;
       if (opts.last !== undefined) updates.last_name = opts.last;
       if (opts.display !== undefined) updates.display_name = opts.display;
       if (opts.title !== undefined) updates.job_title = opts.title;
       if (opts.note !== undefined) updates.notes = opts.note;
       if (opts.website !== undefined) updates.website = opts.website;
+      // New email/phone travel with the update through the same Store path
+      // (emails_add / phones_add), so there is no separate inline-SQL write.
+      if (opts.email) updates.emails_add = [{ address: opts.email, type: "work" }];
+      if (opts.phone) updates.phones_add = [{ number: opts.phone, type: "mobile" }];
 
-      if (cloud) {
-        const updated = await cloud.updateContact(id, updates);
-        if (opts.email || opts.phone) {
-          console.log(chalk.yellow(`  ! Email/phone editing is not applied in self_hosted mode (skipped)`));
-        }
-        console.log(chalk.green(`\n✓ Contact updated: ${updated.display_name}\n`));
-        formatContact(await cloud.getContact(id));
-        return;
-      }
-
-      const updated = updateContact(id, updates);
-
-      // Add new email/phone if provided
-      if (opts.email) {
-        const db = getDatabase();
-        const { uuid } = await import("../../db/database.js");
-        db.run(`INSERT INTO emails (id, contact_id, company_id, address, type, is_primary) VALUES (?, ?, NULL, ?, 'work', 0)`, [uuid(), id, opts.email]);
-      }
-      if (opts.phone) {
-        const db = getDatabase();
-        const { uuid } = await import("../../db/database.js");
-        db.run(`INSERT INTO phones (id, contact_id, company_id, number, country_code, type, is_primary) VALUES (?, ?, NULL, ?, NULL, 'mobile', 0)`, [uuid(), id, opts.phone]);
-      }
-
+      const updated = await store.updateContact(id, updates);
       console.log(chalk.green(`\n✓ Contact updated: ${updated.display_name}\n`));
-      formatContact(getContact(id));
+      formatContact(updated);
       return;
     }
 
@@ -305,7 +253,7 @@ program
       return;
     }
 
-    const updated = updateContact(id, updates);
+    const updated = await store.updateContact(id, updates);
     console.log(chalk.green(`\n✓ Contact updated: ${updated.display_name}\n`));
   });
 
@@ -316,8 +264,12 @@ program
   .description("Delete a contact")
   .option("-f, --force", "Skip confirmation")
   .action(async (id: string, opts: { force?: boolean }) => {
-    const cloud = getContactsCloud();
-    const contact = cloud ? await cloud.getContact(id) : getContact(id);
+    const store = getStore();
+    const contact = await store.getContact(id);
+    if (!contact) {
+      console.error(chalk.red(`\nContact not found: ${id}\n`));
+      process.exit(1);
+    }
 
     if (!opts.force) {
       const ok = await confirm(`Delete ${chalk.bold(contact.display_name)}?`);
@@ -327,8 +279,7 @@ program
       }
     }
 
-    if (cloud) await cloud.deleteContact(id);
-    else deleteContact(id);
+    await store.deleteContact(id);
     console.log(chalk.green(`\n✓ Contact deleted: ${contact.display_name}\n`));
   });
 
@@ -338,8 +289,8 @@ program
   .command("search <query>")
   .description("Search contacts")
   .action(async (query: string) => {
-    const cloud = getContactsCloud();
-    const contacts = cloud ? await cloud.searchContacts(query) : searchContacts(query);
+    const store = getStore();
+    const contacts = await store.searchContacts(query);
 
     if (contacts.length === 0) {
       console.log(chalk.gray(`\nNo contacts found for: "${query}"\n`));
@@ -369,8 +320,9 @@ const companiesCmd = program
   .option("--order-by <field>", "Sort field: name|created_at|updated_at", "name")
   .option("--order-dir <dir>", "Sort direction: asc|desc", "asc")
   .option("-j, --json", "Output JSON")
-  .action((opts: { limit: string; offset: string; orderBy: string; orderDir: string; json?: boolean }) => {
-    const result = listCompanies({
+  .action(async (opts: { limit: string; offset: string; orderBy: string; orderDir: string; json?: boolean }) => {
+    const store = getStore();
+    const result = await store.listCompanies({
       limit: parseInt(opts.limit, 10),
       offset: parseInt(opts.offset, 10),
       order_by: opts.orderBy as "name" | "created_at" | "updated_at",
@@ -407,6 +359,7 @@ companiesCmd
   .option("--description <desc>", "Description")
   .option("--notes <notes>", "Notes")
   .action(async (opts: { name?: string; domain?: string; industry?: string; size?: string; description?: string; notes?: string }) => {
+    const store = getStore();
     let name = opts.name;
     let domain = opts.domain;
     let industry = opts.industry;
@@ -426,14 +379,14 @@ companiesCmd
       description = description ?? await prompt("Description:");
     }
 
-    const company = createCompany({
+    const company = await store.createCompany({
       name,
       domain: domain || undefined,
       industry: industry || undefined,
       size: size || undefined,
       description: description || undefined,
       notes: opts.notes || undefined,
-    });
+    }) as { name: string; id: string };
 
     console.log(chalk.green(`\n✓ Company created: ${company.name} (${company.id})\n`));
   });
@@ -441,8 +394,12 @@ companiesCmd
 companiesCmd
   .command("show <id>")
   .description("Show company details")
-  .action((id: string) => {
-    const company = getCompany(id);
+  .action(async (id: string) => {
+    const store = getStore();
+    const company = await store.getCompany(id) as {
+      name: string; id: string; domain?: string; industry?: string; size?: string;
+      description?: string; founded_year?: number; employee_count: number;
+    } | null;
     if (!company) {
       console.error(chalk.red(`\nCompany not found: ${id}\n`));
       process.exit(1);
@@ -464,8 +421,9 @@ companiesCmd
 const tagsCmd = program
   .command("tags")
   .description("Manage tags")
-  .action(() => {
-    const tags = listTags();
+  .action(async () => {
+    const store = getStore();
+    const tags = (await store.listTags()) as Array<{ name: string; color?: string; description?: string }>;
     if (tags.length === 0) {
       console.log(chalk.gray("\nNo tags found.\n"));
       return;
@@ -485,6 +443,7 @@ tagsCmd
   .option("--color <hex>", "Color hex (e.g. #FF5733)")
   .option("--description <desc>", "Description")
   .action(async (opts: { name?: string; color?: string; description?: string }) => {
+    const store = getStore();
     let name = opts.name;
     let color = opts.color;
     let description = opts.description;
@@ -500,11 +459,11 @@ tagsCmd
       description = description ?? await prompt("Description (optional):");
     }
 
-    const tag = createTag({
+    const tag = await store.createTag({
       name,
       color: color || undefined,
       description: description || undefined,
-    });
+    }) as { name: string; id: string };
 
     console.log(chalk.green(`\n✓ Tag created: #${tag.name} (${tag.id})\n`));
   });
@@ -515,6 +474,7 @@ program
   .command("import <file>")
   .description("Import contacts from CSV, vCard (.vcf), or JSON file")
   .action(async (file: string) => {
+    const store = getStore();
     if (!existsSync(file)) {
       console.error(chalk.red(`\nFile not found: ${file}\n`));
       process.exit(1);
@@ -542,7 +502,7 @@ program
 
     for (const input of inputs) {
       try {
-        createContact(input);
+        await store.createContact(input);
         created++;
       } catch (err) {
         errors++;
@@ -567,13 +527,14 @@ program
   .option("--format <fmt>", "Export format: csv, vcf, json", "json")
   .option("--output <file>", "Output file (default: stdout)")
   .action(async (opts: { format: string; output?: string }) => {
+    const store = getStore();
     const format = opts.format as "csv" | "vcf" | "json";
     if (!["csv", "vcf", "json"].includes(format)) {
       console.error(chalk.red(`\nInvalid format: ${format}. Use csv, vcf, or json\n`));
       process.exit(1);
     }
 
-    const { contacts } = listContacts({ limit: 100000 });
+    const { contacts } = await store.listContacts({ limit: 100000 });
     const output = await exportContacts(format, contacts);
 
     if (opts.output) {
@@ -658,9 +619,10 @@ program
   .description("Show recently added or modified contacts")
   .option("-l, --limit <n>", "Number to show", "10")
   .option("-j, --json", "Output JSON")
-  .action((opts: { limit: string; json?: boolean }) => {
+  .action(async (opts: { limit: string; json?: boolean }) => {
+    const store = getStore();
     const limit = parseInt(opts.limit, 10);
-    const contacts = listRecentContacts(limit);
+    const contacts = await store.listRecentContacts(limit);
 
     if (opts.json) {
       console.log(JSON.stringify({ contacts, total: contacts.length }, null, 2));
@@ -690,11 +652,11 @@ program
 program
   .command("dupe")
   .description("Find potential duplicate contacts")
-  .action(() => {
-    const db = getDatabase();
+  .action(async () => {
+    const store = getStore();
 
-    const emailDupes = findEmailDuplicates(db);
-    const nameDupes = findNameDuplicates(db);
+    const emailDupes = await store.findEmailDuplicates();
+    const nameDupes = await store.findNameDuplicates();
 
     let total = 0;
 
@@ -704,8 +666,8 @@ program
         console.log(`  ${chalk.cyan(group.email)}`);
         for (const cid of group.contact_ids) {
           try {
-            const c = getContact(cid);
-            console.log(`    ${chalk.gray(cid)}  ${c.display_name}`);
+            const c = await store.getContact(cid);
+            console.log(`    ${chalk.gray(cid)}  ${c?.display_name ?? "(not found)"}`);
           } catch {
             console.log(`    ${chalk.gray(cid)}  (not found)`);
           }
@@ -719,9 +681,9 @@ program
       console.log(chalk.bold.yellow("Similar Names:\n"));
       for (const pair of nameDupes) {
         try {
-          const a = getContact(pair.contact_ids[0]);
-          const b = getContact(pair.contact_ids[1]);
-          console.log(`  ${chalk.magenta(a.display_name)}  ↔  ${chalk.magenta(b.display_name)}  ${chalk.gray(`(distance: ${pair.similarity})`)}`);
+          const a = await store.getContact(pair.contact_ids[0]);
+          const b = await store.getContact(pair.contact_ids[1]);
+          console.log(`  ${chalk.magenta(a?.display_name ?? "?")}  ↔  ${chalk.magenta(b?.display_name ?? "?")}  ${chalk.gray(`(distance: ${pair.similarity})`)}`);
           console.log(`    ${chalk.gray(pair.contact_ids[0])}  vs  ${chalk.gray(pair.contact_ids[1])}`);
           console.log();
           total++;
@@ -745,8 +707,13 @@ program
   .description("Log a contact interaction (sets last_contacted_at)")
   .option("--note <text>", "Note to append")
   .option("--date <YYYY-MM-DD>", "Date of contact (default: today)")
-  .action((id: string, opts: { note?: string; date?: string }) => {
-    const contact = getContact(id);
+  .action(async (id: string, opts: { note?: string; date?: string }) => {
+    const store = getStore();
+    const contact = await store.getContact(id);
+    if (!contact) {
+      console.error(chalk.red(`\nContact not found: ${id}\n`));
+      process.exit(1);
+    }
     const date = opts.date ?? new Date().toISOString().slice(0, 10);
 
     const updates: Record<string, string> = {
@@ -759,7 +726,7 @@ program
       updates.notes = `${existing}${separator}[${date}] ${opts.note}`;
     }
 
-    const updated = updateContact(id, updates);
+    const updated = await store.updateContact(id, updates);
     console.log(chalk.green(`\n✓ Logged contact with ${updated.display_name} on ${date}\n`));
     if (opts.note) {
       console.log(chalk.gray(`  Note: ${opts.note}\n`));
@@ -771,9 +738,9 @@ program
 const groupsCmd = program
   .command("groups")
   .description("Manage contact groups")
-  .action(() => {
-    const db = getDatabase();
-    const groups = listGroups(db);
+  .action(async () => {
+    const store = getStore();
+    const groups = (await store.listGroups()) as Group[];
     if (groups.length === 0) {
       console.log(chalk.gray("\nNo groups found.\n"));
       return;
@@ -795,7 +762,7 @@ groupsCmd
   .option("--name <name>", "Group name (required)")
   .option("--description <desc>", "Description")
   .action(async (opts: { name?: string; description?: string }) => {
-    const db = getDatabase();
+    const store = getStore();
     let name = opts.name;
     if (!name) {
       name = await prompt("Group name (required):");
@@ -804,16 +771,16 @@ groupsCmd
         process.exit(1);
       }
     }
-    const group = createGroup(db, { name, description: opts.description });
+    const group = (await store.createGroup({ name, description: opts.description })) as { name: string; id: string };
     console.log(chalk.green(`\n✓ Group created: ${group.name} (${group.id})\n`));
   });
 
 groupsCmd
   .command("show <id>")
   .description("Show group details with members")
-  .action((id: string) => {
-    const db = getDatabase();
-    const group = getGroup(db, id);
+  .action(async (id: string) => {
+    const store = getStore();
+    const group = (await store.getGroup(id)) as { name: string; id: string; description?: string } | null;
     if (!group) {
       console.error(chalk.red(`\nGroup not found: ${id}\n`));
       process.exit(1);
@@ -823,7 +790,7 @@ groupsCmd
     console.log(chalk.gray(`  ID: ${group.id}`));
     console.log();
 
-    const memberIds = listContactsInGroup(db, id);
+    const memberIds = await store.listContactsInGroup(id);
     if (memberIds.length === 0) {
       console.log(chalk.gray("  No members.\n"));
       return;
@@ -832,8 +799,8 @@ groupsCmd
     console.log(chalk.yellow(`  Members (${memberIds.length}):\n`));
     for (const cid of memberIds) {
       try {
-        const c = getContact(cid);
-        console.log(`    ${chalk.bold(c.display_name)}  ${chalk.gray(cid)}`);
+        const c = await store.getContact(cid);
+        console.log(`    ${chalk.bold(c?.display_name ?? "(not found)")}  ${chalk.gray(cid)}`);
       } catch {
         console.log(`    ${chalk.gray(cid)}  (not found)`);
       }
@@ -844,31 +811,31 @@ groupsCmd
 groupsCmd
   .command("add-member <group-id> <contact-id>")
   .description("Add a contact to a group")
-  .action((groupId: string, contactId: string) => {
-    const db = getDatabase();
-    const group = getGroup(db, groupId);
+  .action(async (groupId: string, contactId: string) => {
+    const store = getStore();
+    const group = (await store.getGroup(groupId)) as { name: string } | null;
     if (!group) {
       console.error(chalk.red(`\nGroup not found: ${groupId}\n`));
       process.exit(1);
     }
-    const contact = getContact(contactId);
-    addContactToGroup(db, contactId, groupId);
-    console.log(chalk.green(`\n✓ Added ${contact.display_name} to group ${group.name}\n`));
+    const contact = await store.getContact(contactId);
+    await store.addContactToGroup(contactId, groupId);
+    console.log(chalk.green(`\n✓ Added ${contact?.display_name ?? contactId} to group ${group.name}\n`));
   });
 
 groupsCmd
   .command("remove-member <group-id> <contact-id>")
   .description("Remove a contact from a group")
-  .action((groupId: string, contactId: string) => {
-    const db = getDatabase();
-    const group = getGroup(db, groupId);
+  .action(async (groupId: string, contactId: string) => {
+    const store = getStore();
+    const group = (await store.getGroup(groupId)) as { name: string } | null;
     if (!group) {
       console.error(chalk.red(`\nGroup not found: ${groupId}\n`));
       process.exit(1);
     }
-    const contact = getContact(contactId);
-    removeContactFromGroup(db, contactId, groupId);
-    console.log(chalk.green(`\n✓ Removed ${contact.display_name} from group ${group.name}\n`));
+    const contact = await store.getContact(contactId);
+    await store.removeContactFromGroup(contactId, groupId);
+    console.log(chalk.green(`\n✓ Removed ${contact?.display_name ?? contactId} from group ${group.name}\n`));
   });
 
 // ─── contacts init ────────────────────────────────────────────────────────────
@@ -876,7 +843,8 @@ groupsCmd
 program
   .command("init")
   .description("Show setup info, stats, and configuration")
-  .action(() => {
+  .action(async () => {
+    const store = getStore();
     const dbPath = getDbPath();
     const config = readConfig();
 
@@ -885,15 +853,11 @@ program
     console.log();
 
     try {
-      const db = getDatabase();
-      const contactCount = (db.query("SELECT COUNT(*) as n FROM contacts").get() as { n: number }).n;
-      const companyCount = (db.query("SELECT COUNT(*) as n FROM companies").get() as { n: number }).n;
-      const tagCount = (db.query("SELECT COUNT(*) as n FROM tags").get() as { n: number }).n;
-
+      const s = await store.stats();
       console.log(chalk.bold("  Stats:"));
-      console.log(`    ${chalk.cyan(String(contactCount))} contacts`);
-      console.log(`    ${chalk.cyan(String(companyCount))} companies`);
-      console.log(`    ${chalk.cyan(String(tagCount))} tags`);
+      console.log(`    ${chalk.cyan(String(s.contacts))} contacts`);
+      console.log(`    ${chalk.cyan(String(s.companies))} companies`);
+      console.log(`    ${chalk.cyan(String(s.tags))} tags`);
     } catch {
       console.log(chalk.gray("  (Database not yet initialized)"));
     }
@@ -913,10 +877,11 @@ program
 
 program
   .command("backup")
-  .description("Backup the contacts database")
+  .description("Backup the contacts database (local mode only)")
   .option("--output <path>", "Output path")
   .option("--list", "List existing backups")
-  .action((opts: { output?: string; list?: boolean }) => {
+  .action(async (opts: { output?: string; list?: boolean }) => {
+    const store = getStore();
     const backupDir = join(getDataDir(), "backups");
 
     if (opts.list) {
@@ -951,9 +916,9 @@ program
 
     mkdirSync(backupDir, { recursive: true, mode: 0o700 });
     chmodSync(backupDir, 0o700);
-    const db = getDatabase();
-    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-    resetDatabase();
+    // Checkpoint + release the SQLite handle through the Store (local transport
+    // only; in self_hosted mode this throws — the cloud DB is backed up server-side).
+    await store.flushForBackup();
 
     const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
     const dest = opts.output || join(backupDir, `contacts-${ts}.db`);

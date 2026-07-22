@@ -55,7 +55,7 @@ afterEach(() => {
 });
 
 describe("contacts storage MCP runtime", () => {
-  test("storage status reports local-first remote configuration state", async () => {
+  test("storage status reports local transport when no client-flip env is set", async () => {
     isolateEnv();
     const server = buildServer();
     const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<any> }> })._registeredTools;
@@ -63,23 +63,43 @@ describe("contacts storage MCP runtime", () => {
     const result = await tools["contacts_storage_status"]!.handler({});
     const payload = textPayload(result);
 
-    expect(payload.mode).toBe("local-first");
+    expect(payload.transport.transport).toBe("local");
+    expect(payload.transport.mode).toBe("local");
     expect(payload.local.mode).toBe("local");
-    expect(payload.remote.configured).toBe(false);
-    expect(payload.remote.env).toContain("HASNA_CONTACTS_POSTGRES_URL");
   });
 
-  test("storage push and cloud alias fail closed when remote URL is missing", async () => {
+  test("no client-side Postgres-DSN sync tools are registered", async () => {
     isolateEnv();
     const server = buildServer();
-    const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<any> }> })._registeredTools;
+    const tools = (server as unknown as { _registeredTools: Record<string, unknown> })._registeredTools;
 
-    const storageResult = await tools["contacts_storage_push"]!.handler({ tables: "contacts" });
-    const cloudResult = await tools["contacts_cloud_push"]!.handler({ tables: "contacts" });
+    for (const removed of [
+      "contacts_storage_push",
+      "contacts_storage_pull",
+      "contacts_storage_sync",
+      "contacts_cloud_push",
+      "contacts_cloud_pull",
+      "contacts_cloud_sync",
+    ]) {
+      expect(tools[removed]).toBeUndefined();
+    }
+  });
 
-    expect(storageResult.isError).toBe(true);
-    expect(cloudResult.isError).toBe(true);
-    expect(textContent(storageResult)).toContain("Missing contacts remote database URL");
-    expect(textContent(cloudResult)).toContain("Missing contacts remote database URL");
+  test("cloud status reports cloud-http transport without leaking the API key", async () => {
+    isolateEnv();
+    process.env["HASNA_CONTACTS_API_URL"] = "https://contacts.hasna.xyz";
+    process.env["HASNA_CONTACTS_API_KEY"] = "test-key-not-a-real-secret";
+    try {
+      const server = buildServer();
+      const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<any> }> })._registeredTools;
+      const result = await tools["contacts_cloud_status"]!.handler({});
+      const payload = textPayload(result);
+      expect(payload.transport.transport).toBe("cloud-http");
+      expect(payload.transport.api_key_present).toBe(true);
+      expect(textContent(result)).not.toContain("test-key-not-a-real-secret");
+    } finally {
+      delete process.env["HASNA_CONTACTS_API_URL"];
+      delete process.env["HASNA_CONTACTS_API_KEY"];
+    }
   });
 });

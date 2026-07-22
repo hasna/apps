@@ -55,46 +55,39 @@ afterEach(() => {
 });
 
 describe("contacts storage CLI runtime", () => {
-  test("reports local-first storage and unconfigured repo-owned remote sync", () => {
+  test("reports local transport when no client-flip env is set", () => {
     const result = runContacts(["storage", "status", "--json"]);
 
     expect(result.exitCode).toBe(0);
     const status = parseStdout(result);
-    expect(status.mode).toBe("local-first");
+    expect(status.transport.transport).toBe("local");
+    expect(status.transport.mode).toBe("local");
+    expect(status.transport.api_key_present).toBe(false);
     expect(status.local.mode).toBe("local");
-    expect(status.remote.configured).toBe(false);
-    expect(status.remote.env).toContain("HASNA_CONTACTS_POSTGRES_URL");
   });
 
-  test("storage push fails closed with a JSON missing-remote error", () => {
-    const result = runContacts(["storage", "push", "--tables", "contacts", "--json"]);
-
-    expect(result.exitCode).toBe(1);
-    const payload = parseStdout(result);
-    expect(payload.ok).toBe(false);
-    expect(payload.mode).toBe("local-first");
-    expect(payload.error).toContain("Missing contacts remote database URL");
+  test("does NOT expose any client-side Postgres DSN sync command", () => {
+    // The forbidden DSN sync path (storage/cloud push|pull|sync) must be gone.
+    const push = runContacts(["storage", "push", "--tables", "contacts", "--json"]);
+    expect(push.exitCode).not.toBe(0);
+    const cloudPush = runContacts(["cloud", "push", "--tables", "contacts", "--json"]);
+    expect(cloudPush.exitCode).not.toBe(0);
   });
 
-  test("cloud push compatibility alias uses the same repo-owned missing-remote path", () => {
-    const result = runContacts(["cloud", "push", "--tables", "contacts", "--json"]);
-
-    expect(result.exitCode).toBe(1);
-    const payload = parseStdout(result);
-    expect(payload.ok).toBe(false);
-    expect(payload.error).toContain("Missing contacts remote database URL");
-  });
-
-  test("cloud status human output reports configured remote sync when an env URL is present", () => {
+  test("cloud status reports cloud-http transport when API_URL + API_KEY are set (no DSN)", () => {
     const env = testEnv();
-    env["HASNA_CONTACTS_POSTGRES_URL"] = "postgres://user:pass@db.example.com:5432/contacts";
+    env["HASNA_CONTACTS_API_URL"] = "https://contacts.hasna.xyz";
+    env["HASNA_CONTACTS_API_KEY"] = "test-key-not-a-real-secret";
 
-    const result = runContacts(["cloud", "status"], env);
+    const result = runContacts(["cloud", "status", "--json"], env);
 
     expect(result.exitCode).toBe(0);
-    const output = stdoutText(result);
-    expect(output).toContain("Remote sync: configured");
-    expect(output).not.toContain("Remote sync: not configured");
+    const status = parseStdout(result);
+    expect(status.transport.transport).toBe("cloud-http");
+    expect(status.transport.mode).toBe("cloud");
+    expect(status.transport.api_key_present).toBe(true);
+    // The API key value must NEVER be echoed back.
+    expect(JSON.stringify(status)).not.toContain("test-key-not-a-real-secret");
   });
 
   test("backup checkpoints current SQLite data and writes an owner-only file", () => {

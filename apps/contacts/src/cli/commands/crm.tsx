@@ -1,45 +1,12 @@
 import type { Command } from "commander";
 import chalk from "chalk";
-import {
-  getContact,
-  listContacts,
-  searchContacts,
-} from "../../db/contacts.js";
-import {
-  createCompany,
-  getCompany,
-  listCompanies,
-} from "../../db/companies.js";
-import {
-  createCompanyRelationship,
-  listCompanyRelationships,
-} from "../../db/relationships.js";
+import { getStore } from "../../store/index.js";
 import type {
   CompanyRelationshipType,
   ContactTask,
   ApplicationType,
   ApplicationStatus,
 } from "../../types/index.js";
-import {
-  logVendorCommunication,
-  listVendorCommunications,
-  listMissingInvoices,
-  listPendingFollowUps,
-} from "../../db/vendor-comms.js";
-import {
-  createContactTask,
-  listContactTasks,
-  updateContactTask,
-  listOverdueTasks,
-} from "../../db/contact-tasks.js";
-import {
-  createApplication,
-  listApplications,
-  listFollowUpDue as getFollowUpDueApplications,
-} from "../../db/applications.js";
-import { listOrgMembersForContact } from "../../db/org-members.js";
-import { createContact } from "../../db/contacts.js";
-import { getDatabase } from "../../db/database.js";
 import { renderTable, promptUser as prompt } from "../utils.js";
 
 function collect(val: string, prev: string[]): string[] {
@@ -79,10 +46,10 @@ const entities = program.command('entities').description('Manage your owned lega
 entities
   .command('list')
   .description('List all owned legal entities')
-  .action(() => {
-    const db = getDatabase();
-    const result = listCompanies({ limit: 200 }, db);
-    const owned = result.companies.filter((c: { is_owned_entity: boolean }) => c.is_owned_entity);
+  .action(async () => {
+    const store = getStore();
+    const result = await store.listCompanies({ limit: 200 });
+    const owned = (result.companies as Array<{ is_owned_entity: boolean; name: string; entity_type?: string | null; industry?: string | null; description?: string | null }>).filter((c) => c.is_owned_entity);
     if (!owned.length) {
       console.log(chalk.yellow('No owned entities found. Add one with: contacts companies add'));
       return;
@@ -90,7 +57,7 @@ entities
     console.log();
     renderTable(
       ['Name', 'Type', 'Industry', 'Description'],
-      owned.map((e: { name: string; entity_type?: string | null; industry?: string | null; description?: string | null }) => ({
+      owned.map((e) => ({
         Name: e.name,
         Type: e.entity_type || 'operating',
         Industry: e.industry || '',
@@ -103,9 +70,9 @@ entities
 entities
   .command('show <id>')
   .description('Show entity with full team')
-  .action((id: string) => {
-    const db = getDatabase();
-    const company = getCompany(id);
+  .action(async (id: string) => {
+    const store = getStore();
+    const company = await store.getCompany(id) as { id: string; name: string; industry?: string | null; description?: string | null } | null;
     if (!company) {
       console.error(chalk.red(`\nEntity not found: ${id}\n`));
       process.exit(1);
@@ -117,27 +84,26 @@ entities
     console.log(chalk.gray(`  ID: ${company.id}`));
     console.log();
 
-    const team = listCompanyRelationships({ company_id: id }, db);
+    const team = await store.listCompanyRelationships({ company_id: id }) as Array<{ contact_id: string; relationship_type: string; is_primary: boolean; status: string }>;
     if (team.length === 0) {
       console.log(chalk.gray('  No team members assigned.\n'));
       return;
     }
     console.log(chalk.yellow(`  Team (${team.length}):\n`));
-    const rows = team.map((r: { contact_id: string; relationship_type: string; is_primary: boolean; status: string }) => {
+    const rows = [];
+    for (const r of team) {
       let name = r.contact_id;
       try {
-        const c = getContact(r.contact_id);
-        name = c.display_name;
-      } catch {
-        // contact not found
-      }
-      return {
+        const c = await store.getContact(r.contact_id);
+        if (c) name = c.display_name;
+      } catch { /* contact not found */ }
+      rows.push({
         Contact: name,
         Role: r.relationship_type,
         Primary: r.is_primary ? 'yes' : '',
         Status: r.status,
-      };
-    });
+      });
+    }
     renderTable(['Contact', 'Role', 'Primary', 'Status'], rows);
     console.log();
   });
@@ -147,54 +113,57 @@ entities
   .description('Link a contact to an entity with a role')
   .option('--role <role>', 'Role (tax_preparer|bank_manager|attorney|registered_agent|accountant|payroll_provider|insurance_broker|advisor|other)', 'other')
   .option('--primary', 'Mark as primary contact for this role')
-  .action((entityId: string, contactId: string, opts: { role?: string; primary?: boolean }) => {
-    const db = getDatabase();
-    const contact = getContact(contactId);
-    const company = getCompany(entityId);
+  .action(async (entityId: string, contactId: string, opts: { role?: string; primary?: boolean }) => {
+    const store = getStore();
+    const contact = await store.getContact(contactId);
+    if (!contact) {
+      console.error(chalk.red(`\nContact not found: ${contactId}\n`));
+      process.exit(1);
+    }
+    const company = await store.getCompany(entityId) as { name: string } | null;
     if (!company) {
       console.error(chalk.red(`\nEntity not found: ${entityId}\n`));
       process.exit(1);
     }
-    const rel = createCompanyRelationship({
+    const rel = await store.createCompanyRelationship({
       contact_id: contactId,
       company_id: entityId,
       relationship_type: (opts.role || 'other') as CompanyRelationshipType,
       is_primary: opts.primary || false,
-    }, db);
+    }) as { relationship_type: string };
     console.log(chalk.green(`\n✓ Linked ${contact.display_name} to ${company.name} as ${rel.relationship_type}\n`));
   });
 
 entities
   .command('team <id>')
   .description('Show full team matrix for an entity')
-  .action((id: string) => {
-    const db = getDatabase();
-    const company = getCompany(id);
+  .action(async (id: string) => {
+    const store = getStore();
+    const company = await store.getCompany(id) as { name: string } | null;
     if (!company) {
       console.error(chalk.red(`\nEntity not found: ${id}\n`));
       process.exit(1);
     }
-    const team = listCompanyRelationships({ company_id: id }, db);
+    const team = await store.listCompanyRelationships({ company_id: id }) as Array<{ contact_id: string; relationship_type: string; is_primary: boolean; status: string }>;
     if (team.length === 0) {
       console.log(chalk.yellow(`\nNo team members for ${company.name}.\n`));
       return;
     }
     console.log('\n' + chalk.bold(`Team: ${company.name}`) + '\n');
-    const rows = team.map((r: { contact_id: string; relationship_type: string; is_primary: boolean; status: string }) => {
+    const rows = [];
+    for (const r of team) {
       let name = r.contact_id;
       try {
-        const c = getContact(r.contact_id);
-        name = c.display_name;
-      } catch {
-        // not found
-      }
-      return {
+        const c = await store.getContact(r.contact_id);
+        if (c) name = c.display_name;
+      } catch { /* not found */ }
+      rows.push({
         Contact: name,
         Role: r.relationship_type,
         Primary: r.is_primary ? 'yes' : '',
         Status: r.status,
-      };
-    });
+      });
+    }
     renderTable(['Contact', 'Role', 'Primary', 'Status'], rows);
     console.log();
   });
@@ -204,12 +173,16 @@ entities
 program
   .command('workload <id>')
   .description('Show workload summary for a contact')
-  .action((id: string) => {
-    const db = getDatabase();
-    const contact = getContact(id);
-    const companyRels = listCompanyRelationships({ contact_id: id }, db);
-    const overdue = listOverdueTasks(db).filter((t: { contact_id: string }) => t.contact_id === id);
-    const orgMemberships = listOrgMembersForContact(id, db);
+  .action(async (id: string) => {
+    const store = getStore();
+    const contact = await store.getContact(id);
+    if (!contact) {
+      console.error(chalk.red(`\nContact not found: ${id}\n`));
+      process.exit(1);
+    }
+    const companyRels = await store.listCompanyRelationships({ contact_id: id }) as Array<{ relationship_type: string; notes?: string | null }>;
+    const overdue = (await store.listOverdueTasks() as Array<{ contact_id: string }>).filter((t) => t.contact_id === id);
+    const orgMemberships = await store.listOrgMembersForContact(id);
 
     console.log(chalk.bold(`\n${contact.display_name}`));
     if (contact.job_title) console.log(chalk.gray(`  ${contact.job_title}`));
@@ -259,7 +232,7 @@ vendor
   .option('--status <status>', 'Status: sent|awaiting_response|responded|no_response|resolved', 'sent')
   .option('--contact <id>', 'Contact ID (optional)')
   .option('--direction <dir>', 'Direction: inbound|outbound', 'outbound')
-  .action((companyId: string, opts: {
+  .action(async (companyId: string, opts: {
     type?: string;
     subject?: string;
     body?: string;
@@ -271,35 +244,35 @@ vendor
     contact?: string;
     direction?: string;
   }) => {
-    const db = getDatabase();
-    const company = getCompany(companyId);
+    const store = getStore();
+    const company = await store.getCompany(companyId) as { name: string } | null;
     if (!company) {
       console.error(chalk.red(`\nCompany not found: ${companyId}\n`));
       process.exit(1);
     }
-    const comm = logVendorCommunication({
+    const comm = await store.logVendorCommunication({
       company_id: companyId,
       contact_id: opts.contact,
       comm_date: new Date().toISOString().slice(0, 10),
-      type: (opts.type || 'email') as Parameters<typeof logVendorCommunication>[0]['type'],
-      direction: (opts.direction || 'outbound') as Parameters<typeof logVendorCommunication>[0]['direction'],
+      type: (opts.type || 'email') as never,
+      direction: (opts.direction || 'outbound') as never,
       subject: opts.subject,
       body: opts.body,
-      status: (opts.status || 'sent') as Parameters<typeof logVendorCommunication>[0]['status'],
+      status: (opts.status || 'sent') as never,
       invoice_amount: opts.amount ? parseFloat(opts.amount) : undefined,
       invoice_currency: opts.currency,
       invoice_ref: opts.ref,
       follow_up_date: opts.followUp,
-    }, db);
+    }) as { type: string; id: string };
     console.log(chalk.green(`\n✓ Logged ${comm.type} communication with ${company.name} (${comm.id})\n`));
   });
 
 vendor
   .command('missing-invoices')
   .description('Show all invoice requests with no response')
-  .action(() => {
-    const db = getDatabase();
-    const missing = listMissingInvoices(db);
+  .action(async () => {
+    const store = getStore();
+    const missing = await store.listMissingInvoices() as Array<{ company_id: string; comm_date: string; subject?: string | null; status: string }>;
     if (!missing.length) {
       console.log(chalk.green('\nNo missing invoices.\n'));
       return;
@@ -307,7 +280,7 @@ vendor
     console.log(chalk.yellow(`\n${missing.length} missing invoice(s):\n`));
     renderTable(
       ['Company', 'Date', 'Subject', 'Status'],
-      missing.map((m: { company_id: string; comm_date: string; subject?: string | null; status: string }) => ({
+      missing.map((m) => ({
         Company: m.company_id,
         Date: m.comm_date,
         Subject: m.subject || '',
@@ -320,9 +293,9 @@ vendor
 vendor
   .command('pending-followups')
   .description('Show vendor follow-ups due today or overdue')
-  .action(() => {
-    const db = getDatabase();
-    const pending = listPendingFollowUps(db);
+  .action(async () => {
+    const store = getStore();
+    const pending = await store.listPendingFollowUps() as Array<{ company_id: string; type: string; follow_up_date?: string | null; subject?: string | null }>;
     if (!pending.length) {
       console.log(chalk.green('\nNo pending follow-ups.\n'));
       return;
@@ -330,7 +303,7 @@ vendor
     console.log(chalk.yellow(`\n${pending.length} pending follow-up(s):\n`));
     renderTable(
       ['Company', 'Type', 'Follow-up', 'Subject'],
-      pending.map((p: { company_id: string; type: string; follow_up_date?: string | null; subject?: string | null }) => ({
+      pending.map((p) => ({
         Company: p.company_id,
         Type: p.type,
         'Follow-up': p.follow_up_date || '',
@@ -343,14 +316,14 @@ vendor
 vendor
   .command('history <company-id>')
   .description('Show vendor communication history for a company')
-  .action((id: string) => {
-    const db = getDatabase();
-    const company = getCompany(id);
+  .action(async (id: string) => {
+    const store = getStore();
+    const company = await store.getCompany(id) as { name: string } | null;
     if (!company) {
       console.error(chalk.red(`\nCompany not found: ${id}\n`));
       process.exit(1);
     }
-    const comms = listVendorCommunications(id, {}, db);
+    const comms = await store.listVendorCommunications(id, {}) as Array<{ comm_date: string; type: string; direction: string; subject?: string | null; status: string }>;
     if (!comms.length) {
       console.log(chalk.gray(`\nNo communications logged for ${company.name}.\n`));
       return;
@@ -358,7 +331,7 @@ vendor
     console.log(chalk.bold(`\nCommunications: ${company.name} (${comms.length})\n`));
     renderTable(
       ['Date', 'Type', 'Direction', 'Subject', 'Status'],
-      comms.map((c: { comm_date: string; type: string; direction: string; subject?: string | null; status: string }) => ({
+      comms.map((c) => ({
         Date: c.comm_date,
         Type: c.type,
         Direction: c.direction,
@@ -390,7 +363,7 @@ taskCmd
     entity?: string;
     escalate: string[];
   }) => {
-    const db = getDatabase();
+    const store = getStore();
     let contactId = opts.contact;
     let title = opts.title;
     if (!contactId) {
@@ -409,15 +382,16 @@ taskCmd
         method: 'email' as const,
       };
     });
-    const contact = getContact(contactId);
-    const task = createContactTask({
+    const contact = await store.getContact(contactId);
+    if (!contact) { console.error(chalk.red(`\nContact not found: ${contactId}\n`)); process.exit(1); }
+    const task = await store.createContactTask({
       title,
       contact_id: contactId,
       deadline: opts.deadline,
       priority: (opts.priority || 'medium') as ContactTask['priority'],
       entity_id: opts.entity,
       escalation_rules: escalationRules.length ? escalationRules : undefined,
-    }, db);
+    }) as { title: string; id: string };
     console.log(chalk.green(`\n✓ Task created for ${contact.display_name}: ${task.title} (${task.id})\n`));
   });
 
@@ -426,46 +400,45 @@ taskCmd
   .description('List contact tasks')
   .option('--overdue', 'Show only overdue tasks')
   .option('--status <s>', 'Filter by status')
-  .action((contactId: string | undefined, opts: { overdue?: boolean; status?: string }) => {
-    const db = getDatabase();
-    let tasks;
+  .action(async (contactId: string | undefined, opts: { overdue?: boolean; status?: string }) => {
+    const store = getStore();
+    let tasks: Array<{ title: string; contact_id: string; priority: string; status: string; deadline?: string | null }>;
     if (opts.overdue) {
-      tasks = listOverdueTasks(db);
-      if (contactId) tasks = tasks.filter((t: { contact_id: string }) => t.contact_id === contactId);
+      tasks = await store.listOverdueTasks() as typeof tasks;
+      if (contactId) tasks = tasks.filter((t) => t.contact_id === contactId);
     } else {
-      tasks = listContactTasks({
+      tasks = await store.listContactTasks({
         contact_id: contactId,
         status: opts.status as ContactTask['status'],
-      }, db);
+      }) as typeof tasks;
     }
     if (!tasks.length) {
       console.log(chalk.gray('\nNo tasks found.\n'));
       return;
     }
     console.log();
-    renderTable(
-      ['Title', 'Contact', 'Priority', 'Status', 'Deadline'],
-      tasks.map((t: { title: string; contact_id: string; priority: string; status: string; deadline?: string | null }) => {
-        let contactName = t.contact_id;
-        try { contactName = getContact(t.contact_id).display_name; } catch { /* not found */ }
-        return {
-          Title: t.title,
-          Contact: contactName,
-          Priority: t.priority,
-          Status: t.status,
-          Deadline: t.deadline ? t.deadline.slice(0, 10) : '',
-        };
-      })
-    );
+    const rows = [];
+    for (const t of tasks) {
+      let contactName = t.contact_id;
+      try { const c = await store.getContact(t.contact_id); if (c) contactName = c.display_name; } catch { /* not found */ }
+      rows.push({
+        Title: t.title,
+        Contact: contactName,
+        Priority: t.priority,
+        Status: t.status,
+        Deadline: t.deadline ? t.deadline.slice(0, 10) : '',
+      });
+    }
+    renderTable(['Title', 'Contact', 'Priority', 'Status', 'Deadline'], rows);
     console.log(chalk.gray(`\n${tasks.length} task(s)\n`));
   });
 
 taskCmd
   .command('done <id>')
   .description('Mark a contact task as completed')
-  .action((id: string) => {
-    const db = getDatabase();
-    const updated = updateContactTask(id, { status: 'completed' }, db);
+  .action(async (id: string) => {
+    const store = getStore();
+    const updated = await store.updateContactTask(id, { status: 'completed' }) as { title: string };
     console.log(chalk.green(`\n✓ Task completed: ${updated.title}\n`));
   });
 
@@ -478,12 +451,12 @@ appsCmd
   .description('List applications')
   .option('--status <s>', 'Filter by status')
   .option('--type <t>', 'Filter by type')
-  .action((opts: { status?: string; type?: string }) => {
-    const db = getDatabase();
-    const apps = listApplications({
+  .action(async (opts: { status?: string; type?: string }) => {
+    const store = getStore();
+    const apps = await store.listApplications({
       status: opts.status as ApplicationStatus | undefined,
       type: opts.type as ApplicationType | undefined,
-    }, db);
+    }) as Array<{ program_name: string; type: string; status: string; value_usd?: number | null; follow_up_date?: string | null }>;
     if (!apps.length) {
       console.log(chalk.gray('\nNo applications found.\n'));
       return;
@@ -491,7 +464,7 @@ appsCmd
     console.log();
     renderTable(
       ['Program', 'Type', 'Status', 'Value', 'Follow-up'],
-      apps.map((a: { program_name: string; type: string; status: string; value_usd?: number | null; follow_up_date?: string | null }) => ({
+      apps.map((a) => ({
         Program: a.program_name,
         Type: a.type,
         Status: a.status,
@@ -525,13 +498,13 @@ appsCmd
     method?: string;
     url?: string;
   }) => {
-    const db = getDatabase();
+    const store = getStore();
     let name = opts.name;
     if (!name) {
       name = await prompt('Program name (required):');
       if (!name) { console.error(chalk.red('Program name is required.')); process.exit(1); }
     }
-    const app = createApplication({
+    const app = await store.createApplication({
       program_name: name,
       type: (opts.type || 'other') as ApplicationType,
       value_usd: opts.value ? parseFloat(opts.value) : undefined,
@@ -541,16 +514,16 @@ appsCmd
       primary_contact_id: opts.contact,
       method: opts.method as "email" | "form" | "typeform" | "hubspot" | "manual" | "browser" | "feathery" | "other" | undefined,
       form_url: opts.url,
-    }, db);
+    }) as { program_name: string; id: string };
     console.log(chalk.green(`\n✓ Application created: ${app.program_name} (${app.id})\n`));
   });
 
 appsCmd
   .command('followup')
   .description('Show applications with follow-up due')
-  .action(() => {
-    const db = getDatabase();
-    const apps = getFollowUpDueApplications(db);
+  .action(async () => {
+    const store = getStore();
+    const apps = await store.listFollowUpDueApplications() as Array<{ program_name: string; type: string; status: string; follow_up_date?: string | null }>;
     if (!apps.length) {
       console.log(chalk.green('\nNo follow-ups due.\n'));
       return;
@@ -558,7 +531,7 @@ appsCmd
     console.log(chalk.yellow(`\n${apps.length} application(s) need follow-up:\n`));
     renderTable(
       ['Program', 'Type', 'Status', 'Follow-up'],
-      apps.map((a: { program_name: string; type: string; status: string; follow_up_date?: string | null }) => ({
+      apps.map((a) => ({
         Program: a.program_name,
         Type: a.type,
         Status: a.status,
@@ -576,42 +549,76 @@ program
   .option('--demo', 'Seed demo data (professional services example)')
   .option('--clear', 'Clear existing demo data first')
   .action(async (opts: { demo?: boolean; clear?: boolean }) => {
+    const store = getStore();
+
+    if (opts.clear) {
+      // Delete only the known demo records (matched by the exact names/emails
+      // this command seeds) so real data is never touched. Deleting a company
+      // or contact cascades its relationships.
+      const demoCompanyNames = [
+        'KPMG Romania', 'Escalon Services', 'Revision Legal PLLC', 'RAW Financial',
+        'Silicon Valley Bank', 'Hasna, Inc.', 'Beep Media International LLC', 'Hasna Global SRL',
+      ];
+      const demoContactEmails = [
+        'alinaturlea@kpmg.com', 'lsipos@kpmg.com', 'elizabeth.robles@escalon.services',
+        'drew@revisionlegal.com', 'DYang@svb.com',
+      ];
+      let removedCompanies = 0;
+      let removedContacts = 0;
+      const { companies } = await store.listCompanies({ limit: 500 }) as { companies: Array<{ id: string; name: string }> };
+      for (const c of companies) {
+        if (demoCompanyNames.includes(c.name)) {
+          await store.deleteCompany(c.id);
+          removedCompanies++;
+        }
+      }
+      for (const email of demoContactEmails) {
+        const contact = await store.getContactByEmail(email) as { id: string } | null;
+        if (contact) {
+          await store.deleteContact(contact.id);
+          removedContacts++;
+        }
+      }
+      console.log(chalk.green(`✓ Cleared demo data: ${removedCompanies} companies, ${removedContacts} contacts`));
+      if (!opts.demo) return;
+    }
+
     if (!opts.demo) {
-      console.log('Use --demo flag to seed demo data');
+      console.log('Use --demo flag to seed demo data (add --clear to remove previously seeded demo data)');
       return;
     }
-    const db = getDatabase();
     console.log(chalk.cyan('Seeding demo contacts...'));
 
+    type Co = { id: string; name: string };
     // Create vendor companies
-    const kpmg = createCompany({ name: 'KPMG Romania', industry: 'Accounting', description: 'Romanian accounting, tax, and payroll firm' }, db);
-    const escalon = createCompany({ name: 'Escalon Services', industry: 'Tax & Finance', description: 'US tax preparation for multi-entity businesses', domain: 'escalon.services' }, db);
-    const revisionLegal = createCompany({ name: 'Revision Legal PLLC', industry: 'Legal', description: 'Trademark and IP law firm', domain: 'revisionlegal.com' }, db);
-    createCompany({ name: 'RAW Financial', industry: 'Tax & Finance', description: 'US tax preparation for dissolution entities' }, db);
-    const svb = createCompany({ name: 'Silicon Valley Bank', industry: 'Banking', domain: 'svb.com' }, db);
+    const kpmg = await store.createCompany({ name: 'KPMG Romania', industry: 'Accounting', description: 'Romanian accounting, tax, and payroll firm' }) as Co;
+    const escalon = await store.createCompany({ name: 'Escalon Services', industry: 'Tax & Finance', description: 'US tax preparation for multi-entity businesses', domain: 'escalon.services' }) as Co;
+    const revisionLegal = await store.createCompany({ name: 'Revision Legal PLLC', industry: 'Legal', description: 'Trademark and IP law firm', domain: 'revisionlegal.com' }) as Co;
+    await store.createCompany({ name: 'RAW Financial', industry: 'Tax & Finance', description: 'US tax preparation for dissolution entities' });
+    const svb = await store.createCompany({ name: 'Silicon Valley Bank', industry: 'Banking', domain: 'svb.com' }) as Co;
 
     // Create owned entities
-    const hasnaInc = createCompany({ name: 'Hasna, Inc.', is_owned_entity: true, entity_type: 'operating', industry: 'AI/Software', description: 'Primary US operating entity (C-Corp, Delaware)' }, db);
-    const beepMedia = createCompany({ name: 'Beep Media International LLC', is_owned_entity: true, entity_type: 'operating', industry: 'Media/Technology' }, db);
-    createCompany({ name: 'Hasna Global SRL', is_owned_entity: true, entity_type: 'operating', industry: 'AI/Software', description: 'Romanian operating entity' }, db);
+    const hasnaInc = await store.createCompany({ name: 'Hasna, Inc.', is_owned_entity: true, entity_type: 'operating', industry: 'AI/Software', description: 'Primary US operating entity (C-Corp, Delaware)' }) as Co;
+    const beepMedia = await store.createCompany({ name: 'Beep Media International LLC', is_owned_entity: true, entity_type: 'operating', industry: 'Media/Technology' }) as Co;
+    await store.createCompany({ name: 'Hasna Global SRL', is_owned_entity: true, entity_type: 'operating', industry: 'AI/Software', description: 'Romanian operating entity' });
 
     // Create contacts
-    const alina = createContact({ display_name: 'Alina Turlea', first_name: 'Alina', last_name: 'Turlea', job_title: 'Tax Consultant', emails: [{ address: 'alinaturlea@kpmg.com', type: 'work', is_primary: true }], source: 'manual' });
-    const lucia = createContact({ display_name: 'Lucia Grecu', first_name: 'Lucia', last_name: 'Grecu', job_title: 'Compliance & Billing', emails: [{ address: 'lsipos@kpmg.com', type: 'work', is_primary: true }], source: 'manual' });
-    const elizabeth = createContact({ display_name: 'Elizabeth Robles', first_name: 'Elizabeth', last_name: 'Robles', job_title: 'Tax Manager', emails: [{ address: 'elizabeth.robles@escalon.services', type: 'work', is_primary: true }], source: 'manual' });
-    const drew = createContact({ display_name: 'Andrew Jurgensen', first_name: 'Andrew', last_name: 'Jurgensen', job_title: 'Partner', emails: [{ address: 'drew@revisionlegal.com', type: 'work', is_primary: true }], source: 'manual' });
-    const donna = createContact({ display_name: 'Donna Yang', first_name: 'Donna', last_name: 'Yang', job_title: 'Relationship Manager', emails: [{ address: 'DYang@svb.com', type: 'work', is_primary: true }], source: 'manual' });
+    const alina = await store.createContact({ display_name: 'Alina Turlea', first_name: 'Alina', last_name: 'Turlea', job_title: 'Tax Consultant', emails: [{ address: 'alinaturlea@kpmg.com', type: 'work', is_primary: true }], source: 'manual' });
+    const lucia = await store.createContact({ display_name: 'Lucia Grecu', first_name: 'Lucia', last_name: 'Grecu', job_title: 'Compliance & Billing', emails: [{ address: 'lsipos@kpmg.com', type: 'work', is_primary: true }], source: 'manual' });
+    const elizabeth = await store.createContact({ display_name: 'Elizabeth Robles', first_name: 'Elizabeth', last_name: 'Robles', job_title: 'Tax Manager', emails: [{ address: 'elizabeth.robles@escalon.services', type: 'work', is_primary: true }], source: 'manual' });
+    const drew = await store.createContact({ display_name: 'Andrew Jurgensen', first_name: 'Andrew', last_name: 'Jurgensen', job_title: 'Partner', emails: [{ address: 'drew@revisionlegal.com', type: 'work', is_primary: true }], source: 'manual' });
+    const donna = await store.createContact({ display_name: 'Donna Yang', first_name: 'Donna', last_name: 'Yang', job_title: 'Relationship Manager', emails: [{ address: 'DYang@svb.com', type: 'work', is_primary: true }], source: 'manual' });
 
     // Link contacts to companies
-    createCompanyRelationship({ contact_id: alina.id, company_id: kpmg.id, relationship_type: 'vendor', is_primary: true }, db);
-    createCompanyRelationship({ contact_id: lucia.id, company_id: kpmg.id, relationship_type: 'vendor' }, db);
-    createCompanyRelationship({ contact_id: elizabeth.id, company_id: escalon.id, relationship_type: 'vendor', is_primary: true }, db);
-    createCompanyRelationship({ contact_id: drew.id, company_id: revisionLegal.id, relationship_type: 'vendor', is_primary: true }, db);
-    createCompanyRelationship({ contact_id: donna.id, company_id: svb.id, relationship_type: 'vendor', is_primary: true }, db);
+    await store.createCompanyRelationship({ contact_id: alina.id, company_id: kpmg.id, relationship_type: 'vendor', is_primary: true });
+    await store.createCompanyRelationship({ contact_id: lucia.id, company_id: kpmg.id, relationship_type: 'vendor' });
+    await store.createCompanyRelationship({ contact_id: elizabeth.id, company_id: escalon.id, relationship_type: 'vendor', is_primary: true });
+    await store.createCompanyRelationship({ contact_id: drew.id, company_id: revisionLegal.id, relationship_type: 'vendor', is_primary: true });
+    await store.createCompanyRelationship({ contact_id: donna.id, company_id: svb.id, relationship_type: 'vendor', is_primary: true });
 
     // Link contacts to owned entities
-    createCompanyRelationship({ contact_id: alina.id, company_id: hasnaInc.id, relationship_type: 'vendor', is_primary: true }, db);
-    createCompanyRelationship({ contact_id: alina.id, company_id: beepMedia.id, relationship_type: 'vendor', is_primary: true }, db);
+    await store.createCompanyRelationship({ contact_id: alina.id, company_id: hasnaInc.id, relationship_type: 'vendor', is_primary: true });
+    await store.createCompanyRelationship({ contact_id: alina.id, company_id: beepMedia.id, relationship_type: 'vendor', is_primary: true });
 
     // Use the contacts (avoid unused variable warnings)
     void [lucia, elizabeth, drew, donna];
@@ -627,9 +634,7 @@ program
   .command('brief <id>')
   .description('Generate pre-meeting briefing for a contact')
   .action(async (id: string) => {
-    const { generateBrief } = await import('../../lib/brief.js');
-    const db = getDatabase();
-    const brief = generateBrief(id, db);
+    const brief = await getStore().generateBrief(id);
     console.log(brief);
   });
 
@@ -641,9 +646,7 @@ program
   .option('-d, --days <n>', 'Days threshold', '30')
   .option('-j, --json', 'Output JSON')
   .action(async (opts: { days: string; json?: boolean }) => {
-    const { listColdContacts } = await import('../../db/contacts.js');
-    const db = getDatabase();
-    const contacts = listColdContacts(parseInt(opts.days, 10), db);
+    const contacts = await getStore().listColdContacts(parseInt(opts.days, 10)) as Array<{ display_name: string; company?: { name: string } | null; last_contacted_at?: string | null; days_cold?: number | null }>;
     if (opts.json) {
       console.log(JSON.stringify({ contacts, total: contacts.length, threshold_days: parseInt(opts.days, 10) }, null, 2));
       return;
@@ -653,7 +656,7 @@ program
       return;
     }
     console.log();
-    const rows = contacts.map((c: { display_name: string; company?: { name: string } | null; last_contacted_at?: string | null; days_cold?: number | null }) => {
+    const rows = contacts.map((c) => {
       const daysCold = c.days_cold ?? null;
       const lastContact = c.last_contacted_at ? c.last_contacted_at.slice(0, 10) : 'never';
       const dayStr = daysCold === null ? chalk.red('never') : daysCold > 60 ? chalk.red(String(daysCold) + 'd') : chalk.yellow(String(daysCold) + 'd');
@@ -676,9 +679,7 @@ program
   .option('-j, --json', 'Output JSON')
   .description('Show upcoming follow-ups, birthdays, and deadlines')
   .action(async (opts: { days: string; json?: boolean }) => {
-    const { getUpcomingItems } = await import('../../lib/upcoming.js');
-    const db = getDatabase();
-    const items = getUpcomingItems(parseInt(opts.days, 10), db);
+    const items = await getStore().getUpcomingItems(parseInt(opts.days, 10)) as Array<{ type?: string; urgency?: string; date?: string; title?: string }>;
     if (opts.json) {
       console.log(JSON.stringify({ items, total: items.length, window_days: parseInt(opts.days, 10) }, null, 2));
       return;
@@ -710,9 +711,27 @@ program
   .description('Network health dashboard')
   .option('-j, --json', 'Output JSON')
   .action(async (opts: { json?: boolean }) => {
-    const { getNetworkStats } = await import('../../lib/stats.js');
-    const db = getDatabase();
-    const s = getNetworkStats(db);
+    const store = getStore();
+    // The full dashboard aggregates cold/tasks/deals/applications, which only the
+    // on-box (local) store computes. In self_hosted/cloud mode the /v1 API exposes
+    // basic counts only, so degrade to a network-size summary from store.stats()
+    // (real cloud counts) rather than crashing or reading local — never split-brain.
+    let s: Awaited<ReturnType<typeof store.getNetworkStats>>;
+    try {
+      s = await store.getNetworkStats();
+    } catch (err) {
+      if (!(err instanceof Error && err.name === 'ApiUnavailableError')) throw err;
+      const basic = await store.stats();
+      if (opts.json) {
+        console.log(JSON.stringify({ total_contacts: basic.contacts, total_companies: basic.companies, total_tags: basic.tags, total_groups: basic.groups, extended_metrics: 'unavailable_in_self_hosted_mode' }, null, 2));
+        return;
+      }
+      console.log(chalk.bold.blue('\n━━━ Network Health Dashboard ━━━\n'));
+      console.log(chalk.bold('  Network Size:'));
+      console.log(`    ${chalk.cyan(String(basic.contacts))} contacts   ${chalk.cyan(String(basic.companies))} companies   ${chalk.cyan(String(basic.tags))} tags   ${chalk.cyan(String(basic.groups))} groups`);
+      console.log(chalk.gray('\n  (Cold/tasks/deals/pipeline metrics are computed on-box and are not\n   available in self_hosted mode — run in local mode for the full dashboard.)\n'));
+      return;
+    }
     if (opts.json) {
       console.log(JSON.stringify(s, null, 2));
       return;
@@ -748,9 +767,7 @@ program
   .description('Score contacts for data completeness')
   .option('-l, --limit <n>', 'Number to show', '20')
   .action(async (opts: { limit: string }) => {
-    const { listContactAudit } = await import('../../lib/audit.js');
-    const db = getDatabase();
-    const results = (await listContactAudit(db)).slice(0, parseInt(opts.limit, 10));
+    const results = (await getStore().listContactAudit()).slice(0, parseInt(opts.limit, 10));
     if (!results.length) {
       console.log(chalk.gray('\nNo contacts found.\n'));
       return;
@@ -777,17 +794,16 @@ dealsCmd
   .description('List deals')
   .option('--stage <s>', 'Filter by stage')
   .action(async (opts: { stage?: string }) => {
-    const { listDeals } = await import('../../db/deals.js');
-    const db = getDatabase();
-    const deals = listDeals({ stage: opts.stage as import('../../types/index.js').DealStage | undefined }, db);
-    if (!(deals as unknown[]).length) {
+    const store = getStore();
+    const deals = await store.listDeals({ stage: opts.stage as import('../../types/index.js').DealStage | undefined }) as Array<{ title: string; stage: string; value_usd?: number | null; close_date?: string | null; contact_id?: string | null }>;
+    if (!deals.length) {
       console.log(chalk.gray('\nNo deals found.\n'));
       return;
     }
     console.log();
     renderTable(
       ['Title', 'Stage', 'Value', 'Close Date', 'Contact'],
-      (deals as Array<{ title: string; stage: string; value_usd?: number | null; close_date?: string | null; contact_id?: string | null }>).map(d => ({
+      deals.map(d => ({
         Title: d.title,
         Stage: d.stage,
         Value: d.value_usd ? '$' + d.value_usd.toLocaleString() : '',
@@ -795,28 +811,32 @@ dealsCmd
         Contact: d.contact_id ?? '',
       }))
     );
-    console.log(chalk.gray(`\n${(deals as unknown[]).length} deal(s)\n`));
+    console.log(chalk.gray(`\n${deals.length} deal(s)\n`));
   });
 
 dealsCmd
   .command('add')
   .description('Add a new deal')
   .option('--title <title>', 'Deal title (required)')
-  .option('--stage <stage>', 'Stage: prospecting|qualified|proposal|negotiation|won|lost', 'prospecting')
+  .option('--stage <stage>', 'Stage: lead|qualified|proposal|negotiation|won|lost|cancelled', 'lead')
   .option('--value <usd>', 'Value in USD')
   .option('--contact <id>', 'Contact ID')
   .option('--company <id>', 'Company ID')
   .option('--close-date <date>', 'Expected close date (YYYY-MM-DD)')
   .option('--notes <text>', 'Notes')
   .action(async (opts: { title?: string; stage?: string; value?: string; contact?: string; company?: string; closeDate?: string; notes?: string }) => {
-    const { createDeal } = await import('../../db/deals.js');
-    const db = getDatabase();
+    const store = getStore();
     let title = opts.title;
     if (!title) {
       title = await prompt('Deal title (required):');
       if (!title) { console.error(chalk.red('Title is required.')); process.exit(1); }
     }
-    const deal = createDeal({
+    const validStages = ['lead', 'qualified', 'proposal', 'negotiation', 'won', 'lost', 'cancelled'];
+    if (opts.stage && !validStages.includes(opts.stage)) {
+      console.error(chalk.red(`Invalid stage '${opts.stage}'. Valid stages: ${validStages.join(', ')}`));
+      process.exit(1);
+    }
+    const deal = await store.createDeal({
       title,
       stage: opts.stage as import('../../types/index.js').DealStage | undefined,
       value_usd: opts.value ? parseFloat(opts.value) : undefined,
@@ -824,17 +844,16 @@ dealsCmd
       company_id: opts.company,
       close_date: opts.closeDate,
       notes: opts.notes,
-    }, db);
-    console.log(chalk.green(`\n✓ Deal created: ${(deal as { title: string }).title} (${(deal as { id: string }).id})\n`));
+    }) as { title: string; id: string };
+    console.log(chalk.green(`\n✓ Deal created: ${deal.title} (${deal.id})\n`));
   });
 
 dealsCmd
   .command('show <id>')
   .description('Show deal details')
   .action(async (id: string) => {
-    const { getDeal } = await import('../../db/deals.js');
-    const db = getDatabase();
-    const deal = getDeal(id, db) as unknown as Record<string, unknown>;
+    const deal = await getStore().getDeal(id) as Record<string, unknown> | null;
+    if (!deal) { console.error(chalk.red(`\nDeal not found: ${id}\n`)); process.exit(1); }
     console.log();
     for (const [k, v] of Object.entries(deal)) {
       if (v !== null && v !== undefined) console.log(`  ${chalk.gray(k.padEnd(15))} ${v}`);
@@ -846,20 +865,16 @@ dealsCmd
   .command('won <id>')
   .description('Mark a deal as won')
   .action(async (id: string) => {
-    const { updateDeal } = await import('../../db/deals.js');
-    const db = getDatabase();
-    const deal = updateDeal(id, { stage: 'won' }, db) as { title: string };
-    console.log(chalk.green(`\n✓ Deal won: ${deal.title}\n`));
+    const deal = await getStore().updateDeal(id, { stage: 'won' }) as { title: string } | null;
+    console.log(chalk.green(`\n✓ Deal won: ${deal?.title ?? id}\n`));
   });
 
 dealsCmd
   .command('lost <id>')
   .description('Mark a deal as lost')
   .action(async (id: string) => {
-    const { updateDeal } = await import('../../db/deals.js');
-    const db = getDatabase();
-    const deal = updateDeal(id, { stage: 'lost' }, db) as { title: string };
-    console.log(chalk.yellow(`\nDeal lost: ${deal.title}\n`));
+    const deal = await getStore().updateDeal(id, { stage: 'lost' }) as { title: string } | null;
+    console.log(chalk.yellow(`\nDeal lost: ${deal?.title ?? id}\n`));
   });
 
 // ─── contacts events ──────────────────────────────────────────────────────────
@@ -877,15 +892,14 @@ eventsCmd
   .option('--notes <text>', 'Notes')
   .option('--outcome <text>', 'Outcome')
   .action(async (opts: { title?: string; type?: string; date?: string; contact: string[]; duration?: string; notes?: string; outcome?: string }) => {
-    const { logEvent } = await import('../../db/events.js');
-    const db = getDatabase();
+    const store = getStore();
     let title = opts.title;
     if (!title) {
       title = await prompt('Event title (required):');
       if (!title) { console.error(chalk.red('Title is required.')); process.exit(1); }
     }
     const eventDate = opts.date ?? new Date().toISOString().slice(0, 10);
-    const event = logEvent({
+    const event = await store.logEvent({
       title,
       type: opts.type as import('../../types/index.js').EventType | undefined,
       event_date: eventDate,
@@ -893,17 +907,15 @@ eventsCmd
       contact_ids: opts.contact.length ? opts.contact : undefined,
       notes: opts.notes,
       outcome: opts.outcome,
-    }, db);
-    console.log(chalk.green(`\n✓ Event logged: ${(event as { title: string }).title} on ${eventDate}\n`));
+    }) as { title: string };
+    console.log(chalk.green(`\n✓ Event logged: ${event.title} on ${eventDate}\n`));
   });
 
 eventsCmd
   .command('list [contact-id]')
   .description('List events, optionally for a specific contact')
   .action(async (contactId: string | undefined) => {
-    const { listEvents } = await import('../../db/events.js');
-    const db = getDatabase();
-    const events = listEvents({ contact_id: contactId }, db) as Array<{ title: string; type: string; event_date: string; duration_min?: number | null; notes?: string | null }>;
+    const events = await getStore().listEvents({ contact_id: contactId }) as Array<{ title: string; type: string; event_date: string; duration_min?: number | null; notes?: string | null }>;
     if (!events.length) {
       console.log(chalk.gray('\nNo events found.\n'));
       return;
@@ -928,15 +940,14 @@ program
   .description('Full chronological activity history for a contact')
   .option('--limit <n>', 'Items to show', '20')
   .action(async (id: string, opts: { limit: string }) => {
-    const { getContactTimeline } = await import('../../lib/timeline.js');
-    const db = getDatabase();
-    const items = getContactTimeline(id, parseInt(opts.limit, 10), db);
+    const store = getStore();
+    const items = await store.getContactTimeline(id, parseInt(opts.limit, 10));
     if (!items.length) {
       console.log(chalk.gray('\nNo timeline items found.\n'));
       return;
     }
-    const contact = getContact(id);
-    console.log(chalk.bold(`\nTimeline: ${contact.display_name}\n`));
+    const contact = await store.getContact(id);
+    console.log(chalk.bold(`\nTimeline: ${contact?.display_name ?? id}\n`));
     const iconMap: Record<string, string> = {
       note: '📝',
       event: '📅',
@@ -958,7 +969,8 @@ program
   .command('enrich <id>')
   .description('Auto-fill missing contact data via web search (requires EXA_API_KEY)')
   .action(async (id: string) => {
-    const contact = getContact(id);
+    const contact = await getStore().getContact(id);
+    if (!contact) { console.error(chalk.red(`\nContact not found: ${id}\n`)); process.exit(1); }
     const exaKey = process.env['EXA_API_KEY'];
     if (!exaKey) {
       console.error(chalk.red('\nSet EXA_API_KEY environment variable to use enrichment.\n'));
