@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -532,6 +532,93 @@ describe("cloud CLI task-list filtering", () => {
       expect(result.stderr).toContain(expectedError);
       expect(taskListRequests).toBe(0);
       expect(taskRequests).toBe(0);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("imports a canonical exported checklist through cloud HTTP and never opens local storage", async () => {
+    const requests: Array<{ method: string; path: string; body?: unknown }> = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        const body = request.method === "POST" ? await request.json() : undefined;
+        requests.push({ method: request.method, path: url.pathname, body });
+        if (url.pathname === "/v1/templates" && request.method === "POST") {
+          return Response.json({ template: { id: "template-1", ...(body as object), tasks: [] } }, { status: 201 });
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-template-import-"));
+    tempRoots.push(root);
+    const exportPath = join(root, "monthly-accounting.json");
+    writeFileSync(exportPath, JSON.stringify({
+      name: "Monthly accounting",
+      title_pattern: "Monthly accounting {month}",
+      description: null,
+      priority: "medium",
+      tags: ["accounting"],
+      variables: [],
+      project_id: null,
+      plan_id: null,
+      metadata: {},
+      tasks: [{ position: 0, title_pattern: "Collect statements", description: null, priority: "high", tags: [], task_type: null, condition: null, include_template_id: null, depends_on_positions: [], metadata: {} }],
+    }));
+    try {
+      const result = await runCli(["--json", "template-import", exportPath], root, `http://127.0.0.1:${server.port}`);
+      expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+      expect(requests).toEqual([expect.objectContaining({ method: "POST", path: "/v1/templates", body: expect.objectContaining({ description: null, tasks: [expect.objectContaining({ position: 0, depends_on_positions: [] })] }) })]);
+      expect(existsSync(join(root, "todos.db"))).toBe(false);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("uses and deletes a reusable checklist through cloud HTTP without a local fallback", async () => {
+    const requests: Array<{ method: string; path: string; body?: unknown }> = [];
+    let taskNumber = 0;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        const body = request.method === "POST" ? await request.json() : undefined;
+        requests.push({ method: request.method, path: url.pathname, body });
+        if (url.pathname === "/v1/templates/template-1" && request.method === "GET") {
+          return Response.json({ template: {
+            id: "template-1", name: "Monthly", title_pattern: "Monthly {month}", description: null,
+            priority: "medium", tags: ["accounting"], variables: [], version: 1, project_id: PROJECT_ID, plan_id: null, metadata: {},
+            tasks: [
+              { id: "step-1", position: 0, title_pattern: "Collect {month}", description: null, priority: "medium", tags: [], depends_on_positions: [] },
+              { id: "step-2", position: 1, title_pattern: "Reconcile {month}", description: null, priority: "high", tags: [], depends_on_positions: [0] },
+            ],
+          } });
+        }
+        if (url.pathname === "/v1/tasks" && request.method === "POST") {
+          taskNumber += 1;
+          return Response.json({ task: { id: `task-${taskNumber}`, ...(body as object), status: "pending" } }, { status: 201 });
+        }
+        if (url.pathname === "/v1/tasks/task-2/dependencies" && request.method === "POST") return Response.json({ dependency: { task_id: "task-2", depends_on: "task-1" } }, { status: 201 });
+        if (url.pathname === "/v1/templates/template-1" && request.method === "DELETE") return Response.json({ deleted: true });
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-template-use-"));
+    tempRoots.push(root);
+    try {
+      const baseUrl = `http://127.0.0.1:${server.port}`;
+      expect(await runCli(["--json", "templates", "--use", "template-1", "--var", "month=May"], root, baseUrl)).toMatchObject({ exitCode: 0, stderr: "" });
+      expect(await runCli(["--json", "templates", "--delete", "template-1"], root, baseUrl)).toMatchObject({ exitCode: 0, stderr: "" });
+      expect(requests).toEqual(expect.arrayContaining([
+        expect.objectContaining({ method: "POST", path: "/v1/tasks", body: expect.objectContaining({ title: "Collect May", project_id: PROJECT_ID }) }),
+        expect.objectContaining({ method: "POST", path: "/v1/tasks", body: expect.objectContaining({ title: "Reconcile May", project_id: PROJECT_ID }) }),
+        expect.objectContaining({ method: "POST", path: "/v1/tasks/task-2/dependencies", body: { depends_on: "task-1" } }),
+        expect.objectContaining({ method: "DELETE", path: "/v1/templates/template-1" }),
+      ]));
+      expect(existsSync(join(root, "todos.db"))).toBe(false);
     } finally {
       server.stop(true);
     }

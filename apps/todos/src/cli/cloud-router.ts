@@ -10,6 +10,7 @@
 import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
 import { resolve as resolvePath } from "node:path";
 import type { Agent, CreatePlanInput, CreateTaskListInput, CreateTemplateInput, Plan, Project, RegisterAgentInput, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList, TaskTemplate, TemplateWithTasks, UpdatePlanInput, UpdateTaskListInput } from "../types/index.js";
+import type { UpdateTemplateInput } from "../storage/interfaces.js";
 import { redactEvidenceText } from "../lib/redaction.js";
 
 type Env = Record<string, string | undefined>;
@@ -487,6 +488,20 @@ export async function cloudCreateTemplate(client: HasnaStorageClient, input: Cre
 export async function cloudGetTemplate(client: HasnaStorageClient, id: string): Promise<TemplateWithTasks | null> {
   try {
     return unwrapTemplate(await client.get<unknown>("templates", id));
+  } catch (error) {
+    if (error && typeof error === "object" && (error as { status?: unknown }).status === 404) return null;
+    throw error;
+  }
+}
+
+/** Update one reusable template remotely; checklist-step changes require a fresh import. */
+export async function cloudUpdateTemplate(
+  client: HasnaStorageClient,
+  id: string,
+  patch: UpdateTemplateInput,
+): Promise<TemplateWithTasks | null> {
+  try {
+    return unwrapTemplate(await client.update<unknown>("templates", id, patch));
   } catch (error) {
     if (error && typeof error === "object" && (error as { status?: unknown }).status === 404) return null;
     throw error;

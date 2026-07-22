@@ -16,13 +16,18 @@ import { formatTaskLine, autoProject, handleError, output } from "../helpers.js"
 import {
   getTodosCloudClient,
   cloudCreatePlan,
+  cloudCreateTask,
   cloudCreateTemplate,
+  cloudAddDependency,
+  cloudDeleteTemplate,
+  cloudGetTemplate,
   cloudDeletePlan,
   cloudListPlans,
   cloudListTemplates,
   cloudListTasks,
   cloudResolvePlan,
   cloudResolveProjectRef,
+  cloudUpdateTemplate,
   cloudUpdatePlan,
 } from "../cloud-router.js";
 
@@ -316,6 +321,74 @@ export function registerPlanTemplateCommands(program: Command) {
             });
             if (globalOpts.json) { output(template, true); }
             else { console.log(chalk.green(`Template created: ${template.id.slice(0, 8)} | ${template.name} | "${template.title_pattern}"`)); }
+            return;
+          }
+          if (opts.delete) {
+            const deleted = await cloudDeleteTemplate(cloud, opts.delete);
+            if (globalOpts.json) { output({ deleted }, true); }
+            else if (deleted) { console.log(chalk.green("Template deleted.")); }
+            else { console.error(chalk.red("Template not found.")); process.exit(1); }
+            return;
+          }
+          if (opts.update) {
+            const updates: Record<string, unknown> = {};
+            if (opts.title) updates.title_pattern = opts.title;
+            if (opts.description) updates.description = opts.description;
+            if (opts.priority) updates.priority = opts.priority;
+            if (opts.tags) updates.tags = opts.tags.split(",").map((tag: string) => tag.trim()).filter(Boolean);
+            if (Object.keys(updates).length === 0) {
+              console.error(chalk.red("Provide --title, --description, --priority, or --tags with --update"));
+              process.exit(1);
+            }
+            const updated = await cloudUpdateTemplate(cloud, opts.update, updates);
+            if (!updated) { console.error(chalk.red("Template not found.")); process.exit(1); }
+            if (globalOpts.json) { output(updated, true); }
+            else { console.log(chalk.green(`Template updated: ${updated.id.slice(0, 8)} | ${updated.name} | "${updated.title_pattern}"`)); }
+            return;
+          }
+          if (opts.use) {
+            const variables: Record<string, string> = {};
+            for (const value of (opts.var ?? []) as string[]) {
+              const separator = value.indexOf("=");
+              if (separator === -1) { console.error(chalk.red(`Invalid variable format: ${value} (expected key=value)`)); process.exit(1); }
+              variables[value.slice(0, separator)] = value.slice(separator + 1);
+            }
+            const template = await cloudGetTemplate(cloud, opts.use);
+            if (!template) { console.error(chalk.red("Template not found.")); process.exit(1); }
+            const render = (value: string | null | undefined) => value?.replace(/\{([^}]+)\}/g, (_match, key: string) => variables[key] ?? _match);
+            const targetProjectId = template.project_id ?? projectId;
+            const created = [] as Awaited<ReturnType<typeof cloudCreateTask>>[];
+            if (template.tasks.length > 0) {
+              for (const step of template.tasks) {
+                created.push(await cloudCreateTask(cloud, {
+                  title: render(step.title_pattern),
+                  ...(render(step.description) ? { description: render(step.description) } : {}),
+                  priority: step.priority,
+                  tags: step.tags,
+                  ...(targetProjectId ? { project_id: targetProjectId } : {}),
+                  ...(globalOpts.agent ? { agent_id: globalOpts.agent } : {}),
+                }));
+              }
+              for (const [position, step] of template.tasks.entries()) {
+                for (const dependency of step.depends_on_positions) {
+                  await cloudAddDependency(cloud, created[position]!.id, created[dependency]!.id);
+                }
+              }
+            } else {
+              created.push(await cloudCreateTask(cloud, {
+                title: render(template.title_pattern),
+                ...(render(template.description) ? { description: render(template.description) } : {}),
+                priority: template.priority,
+                tags: template.tags,
+                ...(targetProjectId ? { project_id: targetProjectId } : {}),
+                ...(globalOpts.agent ? { agent_id: globalOpts.agent } : {}),
+              }));
+            }
+            if (globalOpts.json) { output(created, true); }
+            else {
+              console.log(chalk.green(`${created.length} task(s) created from template:`));
+              for (const task of created) console.log(formatTaskLine(task));
+            }
             return;
           }
           const templates = await cloudListTemplates(cloud, projectId);

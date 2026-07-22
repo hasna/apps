@@ -208,8 +208,6 @@ function commandSupportsRemote(invocation: ParsedInvocation): boolean {
       return Boolean(action && ["done", "complete", "start", "delete"].includes(action)) &&
         !hasOption(args, "--plan") && !hasOption(args, "--clear-plan");
     }
-    case "templates":
-      return !hasOption(args, "--delete") && !hasOption(args, "--update") && !hasOption(args, "--use");
     default:
       return true;
   }

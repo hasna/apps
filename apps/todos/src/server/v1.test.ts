@@ -228,6 +228,39 @@ describe("/v1 reusable template cloud parity", () => {
     expect(await response!.json()).toMatchObject({ error: expect.stringMatching(/earlier task positions/) });
     expect((await store.templates.list()).length).toBe(0);
   });
+
+  test("accepts the canonical template-export shape for remote import and supports lifecycle metadata updates", async () => {
+    const imported = await request("/v1/templates", "POST", {
+      name: "Exported monthly accounting",
+      title_pattern: "Monthly accounting {month}",
+      description: null,
+      priority: "medium",
+      tags: ["accounting"],
+      variables: [],
+      project_id: null,
+      plan_id: null,
+      metadata: {},
+      tasks: [{
+        position: 0,
+        title_pattern: "Collect statements {month}",
+        description: null,
+        priority: "high",
+        tags: [],
+        task_type: null,
+        condition: null,
+        include_template_id: null,
+        depends_on_positions: [],
+        metadata: {},
+      }],
+    });
+    expect(imported?.status).toBe(201);
+    const body = await imported!.json() as { template: { id: string; description: null; project_id: null; tasks: Array<{ depends_on_positions: number[] }> } };
+    expect(body.template).toMatchObject({ description: null, project_id: null, tasks: [{ depends_on_positions: [] }] });
+
+    const updated = await request(`/v1/templates/${body.template.id}`, "PATCH", { priority: "high" });
+    expect(updated?.status).toBe(200);
+    expect(await updated!.json()).toMatchObject({ template: { priority: "high" } });
+  });
 });
 
 describe("/v1 project mutation", () => {

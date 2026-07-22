@@ -44,6 +44,8 @@ export interface UpdatePlanInput { "name"?: string; "slug"?: string; "descriptio
 
 export interface CreateTemplateInput { "name": string; "title_pattern": string; "description"?: string; "priority"?: "low" | "medium" | "high" | "critical"; "tags"?: Array<string>; "variables"?: Array<Record<string, unknown>>; "project_id"?: string; "plan_id"?: string; "metadata"?: Record<string, unknown>; "tasks"?: Array<Record<string, unknown>> }
 
+export interface UpdateTemplateInput { "name"?: string; "title_pattern"?: string; "description"?: string | null; "priority"?: "low" | "medium" | "high" | "critical"; "tags"?: Array<string>; "variables"?: Array<Record<string, unknown>>; "project_id"?: string | null; "plan_id"?: string | null; "metadata"?: Record<string, unknown> }
+
 export interface TodosV1ClientOptions {
   /** Base URL, e.g. process.env.APP_API_URL. */
   baseUrl: string;
@@ -373,6 +375,15 @@ export class TodosV1Client {
     async deleteTemplate(id: string, init?: RequestInit): Promise<{ "deleted"?: boolean; "id"?: string }> {
       return this.request("DELETE", `/v1/templates/${encodeURIComponent(String(id))}`, {
         body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Update reusable template metadata and defaults */
+    async updateTemplate(id: string, body: UpdateTemplateInput, init?: RequestInit): Promise<{ "template"?: Template }> {
+      return this.request("PATCH", `/v1/templates/${encodeURIComponent(String(id))}`, {
+        body,
         query: undefined,
         init,
       });

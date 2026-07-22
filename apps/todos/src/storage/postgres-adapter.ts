@@ -588,6 +588,75 @@ class PostgresJsonRecordStore {
     return value;
   }
 
+  /**
+   * Create a template and all of its ordered checklist steps in one SQL statement.
+   * This is deliberately not composed from `upsert` calls: a server crash or a
+   * rejected child write must never expose a half-created reusable checklist.
+   */
+  async createTemplateWithTasks(
+    template: TaskTemplate,
+    tasks: TemplateTask[],
+    context: TodosStorageContext = {},
+  ): Promise<void> {
+    await this.ensureSchema();
+    const records = [
+      { object_type: "templates", object_id: template.id, payload: template, updated_at: template.created_at, version: template.version },
+      ...tasks.map((task) => ({ object_type: "template_tasks", object_id: task.id, payload: task, updated_at: task.created_at, version: 1 })),
+    ];
+    const result = await this.options.client.query<{ object_type: string; object_id: string }>(
+      `/* todos:create-template-with-tasks-atomic */ WITH input AS (
+         SELECT value->>'object_type' AS object_type,
+           value->>'object_id' AS object_id,
+           value->'payload' AS payload,
+           value->>'updated_at' AS updated_at,
+           COALESCE((value->>'version')::integer, 1) AS version
+         FROM jsonb_array_elements($2::jsonb) AS value
+       ) INSERT INTO ${this.tableName} (
+         service, object_type, object_id, payload, updated_at,
+         deleted_at, source_machine_id, version
+       ) SELECT $1, object_type, object_id, payload, updated_at::timestamptz,
+         NULL, $3, version
+       FROM input
+       ON CONFLICT (service, object_type, object_id) DO UPDATE SET
+         payload = EXCLUDED.payload,
+         updated_at = EXCLUDED.updated_at,
+         deleted_at = NULL,
+         source_machine_id = EXCLUDED.source_machine_id,
+         version = EXCLUDED.version
+       WHERE ${this.tableName}.updated_at IS NULL
+          OR ${this.tableName}.updated_at < EXCLUDED.updated_at
+          OR (${this.tableName}.updated_at = EXCLUDED.updated_at
+              AND COALESCE(${this.tableName}.version, 0) <= COALESCE(EXCLUDED.version, 0))
+       RETURNING object_type, object_id`,
+      [this.service, jsonbParam(records), this.machineId(context)],
+    );
+    if (result.rows.length !== records.length) {
+      throw new Error("Template checklist write was rejected before completion; no partial template was committed");
+    }
+  }
+
+  /** Tombstone a template and every checklist step in one atomic statement. */
+  async deleteTemplateWithTasks(id: string, context: TodosStorageContext = {}): Promise<boolean> {
+    await this.ensureSchema();
+    const timestamp = new Date().toISOString();
+    const result = await this.options.client.query<{ object_type: string }>(
+      `/* todos:delete-template-with-tasks-atomic */ WITH target AS (
+         SELECT 1 FROM ${this.tableName}
+         WHERE service = $1 AND object_type = 'templates' AND object_id = $2 AND deleted_at IS NULL
+       ) UPDATE ${this.tableName} AS record SET
+         deleted_at = $3::timestamptz,
+         updated_at = $3::timestamptz,
+         source_machine_id = COALESCE($4, record.source_machine_id),
+         version = COALESCE(record.version, 0) + 1
+       WHERE record.service = $1 AND record.deleted_at IS NULL AND EXISTS (SELECT 1 FROM target)
+         AND (record.object_type = 'templates' AND record.object_id = $2
+           OR record.object_type = 'template_tasks' AND record.payload->>'template_id' = $2)
+       RETURNING record.object_type`,
+      [this.service, id, timestamp, this.machineId(context)],
+    );
+    return result.rows.some((row) => row.object_type === "templates");
+  }
+
   async completeTask(
     id: string,
     agentId: string | undefined,
@@ -1550,7 +1619,7 @@ async function updateTaskList(id: string, input: UpdateTaskListInput, store: Pos
 
 async function createTemplate(input: CreateTemplateInput, store: PostgresJsonRecordStore, context?: TodosStorageContext): Promise<TaskTemplate> {
   const timestamp = new Date().toISOString();
-  const template = await store.upsert("templates", {
+  const template: TaskTemplate = {
     id: randomUUID(),
     name: input.name,
     title_pattern: input.title_pattern,
@@ -1565,23 +1634,18 @@ async function createTemplate(input: CreateTemplateInput, store: PostgresJsonRec
     created_at: timestamp,
     machine_id: store.machineId(context),
     synced_at: null,
-  }, context);
-  await replaceTemplateTasks(template.id, input.tasks ?? [], store, context);
+  };
+  const tasks = buildTemplateTasks(template.id, input.tasks ?? [], timestamp);
+  await store.createTemplateWithTasks(template, tasks, context);
   return template;
 }
 
-async function replaceTemplateTasks(
+function buildTemplateTasks(
   templateId: string,
   inputs: TemplateTaskInput[],
-  store: PostgresJsonRecordStore,
-  context?: TodosStorageContext,
-): Promise<void> {
-  const existing = (await store.list<TemplateTask>("template_tasks"))
-    .filter((task) => task.template_id === templateId);
-  for (const task of existing) await store.delete("template_tasks", task.id, context);
-  const timestamp = new Date().toISOString();
-  for (const [position, input] of inputs.entries()) {
-    await store.upsert("template_tasks", {
+  timestamp: string,
+): TemplateTask[] {
+  return inputs.map((input, position) => ({
       id: randomUUID(),
       template_id: templateId,
       position,
@@ -1595,8 +1659,7 @@ async function replaceTemplateTasks(
       depends_on_positions: input.depends_on ?? [],
       metadata: input.metadata ?? {},
       created_at: timestamp,
-    }, context);
-  }
+    }));
 }
 
 async function deleteTemplate(
@@ -1604,12 +1667,7 @@ async function deleteTemplate(
   store: PostgresJsonRecordStore,
   context?: TodosStorageContext,
 ): Promise<boolean> {
-  const existing = await store.get<TaskTemplate>("templates", id);
-  if (!existing) return false;
-  const tasks = (await store.list<TemplateTask>("template_tasks"))
-    .filter((task) => task.template_id === id);
-  for (const task of tasks) await store.delete("template_tasks", task.id, context);
-  return store.delete("templates", id, context);
+  return store.deleteTemplateWithTasks(id, context);
 }
 
 async function updateTemplate(id: string, input: UpdateTemplateInput, store: PostgresJsonRecordStore): Promise<TaskTemplate | null> {
