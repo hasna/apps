@@ -753,4 +753,177 @@ describe("cloud CLI task-list filtering", () => {
       server.stop(true);
     }
   });
+
+  test("previews a cloud template through HTTP with canonical variables and no local fallback", async () => {
+    const requests: Array<{ method: string; path: string; body?: unknown }> = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        const body = request.method === "POST" ? await request.json() : undefined;
+        requests.push({ method: request.method, path: url.pathname, body });
+        if (url.pathname === "/v1/templates/template-preview" && request.method === "GET") {
+          return Response.json({ template: {
+            id: "template-preview",
+            name: "Monthly accounting",
+            title_pattern: "Monthly accounting {period}",
+            description: "",
+            priority: "medium",
+            tags: ["accounting"],
+            variables: [
+              { name: "period", required: false, default: "2026-07" },
+              { name: "include_receipts", required: false, default: "false" },
+            ],
+            project_id: PROJECT_ID,
+            plan_id: "plan-1",
+            metadata: { source: "fixture" },
+            tasks: [
+              { id: "step-1", position: 0, title_pattern: "Collect {period}", description: "Statements {period}", priority: "high", tags: ["bank"], task_type: "collection", condition: null, include_template_id: null, depends_on_positions: [], metadata: {} },
+              { id: "step-2", position: 1, title_pattern: "Receipts {period}", description: "", priority: "medium", tags: [], task_type: null, condition: "{include_receipts}", include_template_id: null, depends_on_positions: [0], metadata: {} },
+            ],
+          } });
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-template-preview-"));
+    tempRoots.push(root);
+    try {
+      const result = await runCli(
+        ["--json", "template-preview", "template-preview", "--var", "period=2026-08"],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+      expect(JSON.parse(result.stdout)).toEqual({
+        template_id: "template-preview",
+        template_name: "Monthly accounting",
+        description: null,
+        variables: [
+          { name: "period", required: false, default: "2026-07" },
+          { name: "include_receipts", required: false, default: "false" },
+        ],
+        resolved_variables: { period: "2026-08", include_receipts: "false" },
+        tasks: [{
+          position: 0,
+          title: "Collect 2026-08",
+          description: "Statements 2026-08",
+          priority: "high",
+          tags: ["bank"],
+          task_type: "collection",
+          depends_on_positions: [],
+        }],
+      });
+      const includeReceipts = await runCli(
+        ["--json", "template-preview", "template-preview", "--var", "period=2026-08", "--var", "include_receipts=true"],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(includeReceipts).toMatchObject({ exitCode: 0, stderr: "" });
+      expect(JSON.parse(includeReceipts.stdout).tasks).toEqual(expect.arrayContaining([
+        expect.objectContaining({ position: 1, description: null }),
+      ]));
+      expect(requests).toEqual([
+        { method: "GET", path: "/v1/templates/template-preview" },
+        { method: "GET", path: "/v1/templates/template-preview" },
+      ]);
+      expect(existsSync(join(root, "todos.db"))).toBe(false);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("exports a cloud template through HTTP in the canonical import shape with no local fallback", async () => {
+    const requests: Array<{ method: string; path: string; body?: unknown }> = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        const body = request.method === "POST" ? await request.json() : undefined;
+        requests.push({ method: request.method, path: url.pathname, body });
+        if (url.pathname === "/v1/templates/template-export" && request.method === "GET") {
+          return Response.json({ template: {
+            id: "template-export",
+            name: "Monthly accounting",
+            title_pattern: "Monthly accounting {period}",
+            description: "",
+            priority: "high",
+            tags: ["accounting"],
+            variables: [{ name: "period", required: true }],
+            project_id: PROJECT_ID,
+            plan_id: "plan-1",
+            metadata: { source: "fixture" },
+            tasks: [{
+              id: "step-1",
+              position: 0,
+              title_pattern: "Collect statements {period}",
+              description: "",
+              priority: "high",
+              tags: ["bank"],
+              task_type: "collection",
+              condition: null,
+              include_template_id: null,
+              depends_on_positions: [],
+              metadata: { evidence: "required" },
+            }],
+          } });
+        }
+        if (url.pathname === "/v1/templates" && request.method === "POST") {
+          return Response.json({ template: { id: "template-imported", ...(body as object), tasks: [] } }, { status: 201 });
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-template-export-"));
+    tempRoots.push(root);
+    try {
+      const result = await runCli(
+        ["template-export", "template-export"],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+      const exported = JSON.parse(result.stdout);
+      expect(exported).toEqual({
+        name: "Monthly accounting",
+        title_pattern: "Monthly accounting {period}",
+        description: null,
+        priority: "high",
+        tags: ["accounting"],
+        variables: [{ name: "period", required: true }],
+        project_id: PROJECT_ID,
+        plan_id: "plan-1",
+        metadata: { source: "fixture" },
+        tasks: [{
+          position: 0,
+          title_pattern: "Collect statements {period}",
+          description: null,
+          priority: "high",
+          tags: ["bank"],
+          task_type: "collection",
+          condition: null,
+          include_template_id: null,
+          depends_on_positions: [],
+          metadata: { evidence: "required" },
+        }],
+      });
+      const exportPath = join(root, "monthly-accounting.json");
+      writeFileSync(exportPath, JSON.stringify(exported));
+      const imported = await runCli(
+        ["--json", "template-import", exportPath],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(imported).toMatchObject({ exitCode: 0, stderr: "" });
+      expect(requests).toEqual([
+        { method: "GET", path: "/v1/templates/template-export" },
+        { method: "POST", path: "/v1/templates", body: exported },
+      ]);
+      expect(existsSync(join(root, "todos.db"))).toBe(false);
+    } finally {
+      server.stop(true);
+    }
+  });
 });
