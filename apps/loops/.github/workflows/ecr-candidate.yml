@@ -3,8 +3,16 @@ name: ECR candidate
 on:
   workflow_dispatch:
     inputs:
+      source_track:
+        description: Permitted source lineage for the exact candidate commit
+        required: true
+        default: main
+        type: choice
+        options:
+          - main
+          - maint/0.4.28
       source_sha:
-        description: Full lowercase commit SHA reachable from origin/main
+        description: Full lowercase commit SHA reachable from the selected source lineage
         required: true
         type: string
       confirmation:
@@ -24,8 +32,12 @@ env:
   AWS_REGION: ${{ vars.AWS_REGION }}
   AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
   ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+  SOURCE_TRACK: ${{ inputs.source_track }}
   SOURCE_SHA: ${{ inputs.source_sha }}
   CONFIRMATION: ${{ inputs.confirmation }}
+  # The emergency maintenance track is pinned to its reviewed merge. Main
+  # intentionally keeps its existing reviewed-ancestor behavior.
+  SOURCE_CONTRACTS_JSON: '{"main":{"ref":"refs/heads/main","expectedSha":null,"expectedPackageVersion":null},"maint/0.4.28":{"ref":"refs/heads/maint/0.4.28","expectedSha":"361d351445c256e397dbeb654f112facb7c572ca","expectedPackageVersion":"0.4.28-offsite.1"}}'
 
 jobs:
   build-scan-push:
@@ -65,10 +77,44 @@ jobs:
             exit 1
           fi
 
+          if ! source_contract="$(jq -cer --arg source_track "${SOURCE_TRACK}" \
+            '.[$source_track] // error("unsupported source_track")' \
+            <<<"${SOURCE_CONTRACTS_JSON}")"; then
+            echo "source_track is not permitted" >&2
+            exit 1
+          fi
+          if ! source_ref="$(jq -er \
+            '.ref | select(type == "string" and test("^refs/heads/[A-Za-z0-9][A-Za-z0-9._/-]*$"))' \
+            <<<"${source_contract}")"; then
+            echo "source contract has an invalid branch ref" >&2
+            exit 1
+          fi
+          if ! expected_package_version="$(jq -er \
+            '.expectedPackageVersion | if . == null then "" elif type == "string" and length > 0 then . else error("invalid expectedPackageVersion") end' \
+            <<<"${source_contract}")"; then
+            echo "source contract has an invalid expected package version" >&2
+            exit 1
+          fi
+          if ! expected_source_sha="$(jq -er \
+            '.expectedSha | if . == null then "" elif type == "string" and test("^[0-9a-f]{40}$") then . else error("invalid expectedSha") end' \
+            <<<"${source_contract}")"; then
+            echo "source contract has an invalid expected source SHA" >&2
+            exit 1
+          fi
+          source_branch="${source_ref#refs/heads/}"
+          source_remote_ref="refs/remotes/origin/${source_branch}"
+
           short_sha="${SOURCE_SHA:0:12}"
           candidate_tag="candidate-${short_sha}-${SOURCE_SHA}"
+          printf 'source_track=%s\n' "${SOURCE_TRACK}" >> "${GITHUB_OUTPUT}"
+          printf 'source_ref=%s\n' "${source_ref}" >> "${GITHUB_OUTPUT}"
           printf 'short_sha=%s\n' "${short_sha}" >> "${GITHUB_OUTPUT}"
           printf 'candidate_tag=%s\n' "${candidate_tag}" >> "${GITHUB_OUTPUT}"
+          printf 'SAFE_SOURCE_TRACK=%s\n' "${SOURCE_TRACK}" >> "${GITHUB_ENV}"
+          printf 'SAFE_SOURCE_REF=%s\n' "${source_ref}" >> "${GITHUB_ENV}"
+          printf 'SAFE_SOURCE_REMOTE_REF=%s\n' "${source_remote_ref}" >> "${GITHUB_ENV}"
+          printf 'EXPECTED_SOURCE_SHA=%s\n' "${expected_source_sha}" >> "${GITHUB_ENV}"
+          printf 'EXPECTED_PACKAGE_VERSION=%s\n' "${expected_package_version}" >> "${GITHUB_ENV}"
           printf 'SAFE_SOURCE_SHA=%s\n' "${SOURCE_SHA}" >> "${GITHUB_ENV}"
           printf 'SHORT_SHA=%s\n' "${short_sha}" >> "${GITHUB_ENV}"
           printf 'CANDIDATE_TAG=%s\n' "${candidate_tag}" >> "${GITHUB_ENV}"
@@ -80,13 +126,37 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify exact commit is on main
+      - name: Verify exact commit against permitted source
         shell: bash
         run: |
           set -Eeuo pipefail
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          test "$(git rev-parse HEAD)" = "${SOURCE_SHA}"
-          git merge-base --is-ancestor "${SOURCE_SHA}^{commit}" refs/remotes/origin/main
+          git fetch --no-tags origin "+${SAFE_SOURCE_REF}:${SAFE_SOURCE_REMOTE_REF}"
+          actual_sha="$(git rev-parse --verify HEAD^{commit})"
+          if [[ "${actual_sha}" != "${SOURCE_SHA}" ]]; then
+            echo "checked out commit does not exactly match source_sha" >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "${SOURCE_SHA}^{commit}" "${SAFE_SOURCE_REMOTE_REF}^{commit}"; then
+            echo "source_sha is not reachable from the permitted source ref" >&2
+            exit 1
+          fi
+          if [[ -n "${EXPECTED_SOURCE_SHA}" && "${SOURCE_SHA}" != "${EXPECTED_SOURCE_SHA}" ]]; then
+            echo "source_sha does not match the exact approved maintenance merge" >&2
+            exit 1
+          fi
+          verified_package_version=""
+          if [[ -n "${EXPECTED_PACKAGE_VERSION}" ]]; then
+            if ! package_version="$(jq -er '.version | strings | select(length > 0)' package.json)"; then
+              echo "package.json must contain a non-empty string version" >&2
+              exit 1
+            fi
+            if [[ "${package_version}" != "${EXPECTED_PACKAGE_VERSION}" ]]; then
+              echo "source package version does not match the selected maintenance contract" >&2
+              exit 1
+            fi
+            verified_package_version="${EXPECTED_PACKAGE_VERSION}"
+          fi
+          printf 'VERIFIED_PACKAGE_VERSION=%s\n' "${verified_package_version}" >> "${GITHUB_ENV}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -128,6 +198,20 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          if ! jq -e '
+            type == "object"
+            and (.Results | type == "array" and length > 0)
+            and all(.Results[];
+              type == "object"
+              and (.Vulnerabilities == null or (.Vulnerabilities | type == "array"))
+              and all(.Vulnerabilities[]?;
+                type == "object" and (.Severity == "CRITICAL" or .Severity == "HIGH")
+              )
+            )
+          ' trivy-local.json >/dev/null; then
+            echo "local Trivy report is empty or malformed" >&2
+            exit 1
+          fi
           critical="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' trivy-local.json)"
           high="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' trivy-local.json)"
           printf 'critical=%s\n' "${critical}" >> "${GITHUB_OUTPUT}"
@@ -312,7 +396,10 @@ jobs:
           set -Eeuo pipefail
           jq -n \
             --arg repository "${GITHUB_REPOSITORY}" \
+            --arg source_track "${SAFE_SOURCE_TRACK}" \
+            --arg source_ref "${SAFE_SOURCE_REF}" \
             --arg source_sha "${SOURCE_SHA}" \
+            --arg package_version "${VERIFIED_PACKAGE_VERSION}" \
             --arg candidate_tag "${CANDIDATE_TAG}" \
             --arg digest "${REMOTE_DIGEST#sha256:}" \
             --arg run_id "${GITHUB_RUN_ID}" \
@@ -325,7 +412,10 @@ jobs:
                 buildDefinition: {
                   buildType: "https://github.com/hasna/loops/.github/workflows/ecr-candidate.yml",
                   externalParameters: {
+                    sourceTrack: $source_track,
+                    sourceRef: $source_ref,
                     sourceSha: $source_sha,
+                    packageVersion: (if $package_version == "" then null else $package_version end),
                     dockerfile: "Dockerfile",
                     target: "runner",
                     platform: "linux/arm64"
@@ -364,7 +454,10 @@ jobs:
           {
             echo "## Loops ECR candidate"
             echo
+            echo "- source track: \`${SAFE_SOURCE_TRACK:-invalid}\`"
+            echo "- permitted source ref: \`${SAFE_SOURCE_REF:-invalid}\`"
             echo "- source SHA: \`${SAFE_SOURCE_SHA:-invalid}\`"
+            echo "- package version contract: \`${VERIFIED_PACKAGE_VERSION:-not-enforced}\`"
             echo "- immutable tag: \`${CANDIDATE_TAG:-not-created}\`"
             echo "- digest: \`${REMOTE_DIGEST:-not-pushed}\`"
             echo "- local Trivy critical/high: \`${LOCAL_CRITICAL:-not-run}/${LOCAL_HIGH:-not-run}\`"
