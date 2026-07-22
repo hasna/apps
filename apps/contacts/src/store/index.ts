@@ -886,7 +886,8 @@ class ApiStore implements Store {
   }
   async getTagByName(name: string) {
     const res = await this.client.list<{ tags?: unknown[] }>("tags", { query: { name } });
-    return (pick<unknown[]>(res, "tags") ?? [])[0] ?? null;
+    const tags = pick<Array<{ name?: unknown }>>(res, "tags") ?? [];
+    return tags.find((tag) => tag?.name === name) ?? null;
   }
   async deleteTag(id: string) { await this.client.delete("tags", id); }
   async addTagToContact(contactId: string, tagId: string) {

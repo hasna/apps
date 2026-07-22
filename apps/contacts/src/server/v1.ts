@@ -68,7 +68,12 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
   await ensureCloudSchemaBestEffort();
   const store = getContactsPgStore(getCloudClient());
 
-  const segments = path.split("/").filter(Boolean).map((segment) => decodeURIComponent(segment)); // ["v1", resource, id?, sub?]
+  let segments: string[];
+  try {
+    segments = path.split("/").filter(Boolean).map((segment) => decodeURIComponent(segment)); // ["v1", resource, id?, sub?]
+  } catch {
+    return error(400, "invalid URL path encoding");
+  }
   const resource = segments[1];
   const id = segments[2];
   const sub = segments[3];
@@ -203,8 +208,8 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
       if (!id) {
         if (method === "GET") {
           const name = url.searchParams.get("name");
-          const tag = name ? await store.getTagByName(name) : null;
-          const tags = name ? (tag ? [tag] : []) : await store.listTags();
+          const tag = name !== null ? await store.getTagByName(name) : null;
+          const tags = name !== null ? (tag ? [tag] : []) : await store.listTags();
           return json({ tags, count: tags.length });
         }
         if (method === "POST") {

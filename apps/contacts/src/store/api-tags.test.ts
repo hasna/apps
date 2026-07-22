@@ -63,4 +63,26 @@ describe("ApiStore contact tag operations", () => {
       },
     ]);
   });
+
+  test("rejects an unfiltered legacy response instead of attaching the wrong tag", async () => {
+    globalThis.fetch = (async (_input: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({
+      tags: [
+        { id: "wrong-tag", name: "another workflow", color: "#dc2626" },
+        { id: "tag-1", name: "monthly accounting", color: "#6366f1" },
+      ],
+      count: 2,
+    }), { status: 200 })) as typeof fetch;
+
+    const store = getStore({
+      HASNA_CONTACTS_STORAGE_MODE: "self_hosted",
+      HASNA_CONTACTS_API_URL: "https://contacts.hasna.xyz",
+      HASNA_CONTACTS_API_KEY: "test-api-key",
+    });
+
+    expect(await store.getTagByName("monthly accounting")).toMatchObject({
+      id: "tag-1",
+      name: "monthly accounting",
+    });
+    expect(await store.getTagByName("missing tag")).toBeNull();
+  });
 });
