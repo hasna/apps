@@ -10,6 +10,7 @@ import {
   POSTGRES_MIGRATION_LEDGER_TABLE,
   POSTGRES_STORAGE_MIGRATIONS,
 } from "./postgres-schema.js";
+import { hasProtectedPostgresMigrationAuthority } from "./postgres-protected-migration.js";
 
 export interface PostgresQueryExecutor {
   query<T extends Record<string, unknown>>(sql: string, params?: readonly unknown[]): Promise<T[]>;
@@ -46,6 +47,18 @@ export class PostgresStorage implements SchemaMigrationStorage {
       ? this.migrations.length - 1
       : this.migrations.findIndex((migration) => migration.id === opts.through);
     if (throughIndex < 0) throw new Error(`Unknown Postgres migration target ${opts.through}`);
+    const protectedMigration = this.migrations
+      .slice(0, throughIndex + 1)
+      .find((migration) => migration.rollingDeploy?.kind === "canonical_identity_aliases");
+    if (
+      !dryRun &&
+      protectedMigration &&
+      !hasProtectedPostgresMigrationAuthority(this)
+    ) {
+      throw new Error(
+        `protected Postgres migration ${protectedMigration.id} requires the internal canonical identity cutover route`,
+      );
+    }
 
     if (dryRun) {
       const applied = await this.tryReadAppliedMigrations();

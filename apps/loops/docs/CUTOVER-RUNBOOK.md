@@ -176,7 +176,10 @@ Before step 1, satisfy and preserve evidence for these hard gates:
     The command itself takes the advisory lock, pins `search_path` to the public
     application schema, verifies exact migrator authority and the prior
     ledger/checksums, and refuses every partial object or unexpected
-    canonical-name overload/routine before it can record 0013. Verify the exact
+    canonical-name overload/routine before it can record 0013. Do not call the
+    root-exported `PostgresStorage.migrate()` API to cross this boundary: raw
+    default and explicit-through applies fail closed at 0013, while dry-run
+    remains available for plan inspection. Verify the exact
     0013 checksum, canonical catalog state, ledger row/checksum parity, and
     `/ready` again. From this point onward, never point the preceding binary at
     this database. If recorded-0013 aliases later drift, use only

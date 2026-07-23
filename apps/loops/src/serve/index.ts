@@ -14,6 +14,7 @@ import type { PoolQueryClient, TypedQueryClient } from "../generated/storage-kit
 import { PgPoolExecutor } from "../lib/storage/pg-executor.js";
 import { PostgresStorage } from "../lib/storage/postgres.js";
 import type { PostgresQueryExecutor } from "../lib/storage/postgres.js";
+import { withProtectedPostgresMigrationAuthority } from "../lib/storage/postgres-protected-migration.js";
 import type {
   StorageMigration,
   StorageMigrationResult,
@@ -769,7 +770,10 @@ export async function migrateCanonicalIdentityAliases(
         );
       }
       if (opts.dryRun) return preview;
-      const result = await schema.migrate({ through: identityMigration.id });
+      const result = await withProtectedPostgresMigrationAuthority(
+        schema,
+        () => schema.migrate({ through: identityMigration.id }),
+      );
       if (!await isCanonicalIdentityAliasStateSafe(transactionClient, identityMigration)) {
         throw new Error("identity alias migration postcondition failed");
       }
@@ -783,7 +787,10 @@ export async function migrateCanonicalIdentityAliases(
     }
     if (opts.dryRun) return preview;
 
-    const result = await schema.migrate({ through: identityMigration.id });
+    const result = await withProtectedPostgresMigrationAuthority(
+      schema,
+      () => schema.migrate({ through: identityMigration.id }),
+    );
     if (!await isCanonicalIdentityAliasStateSafe(transactionClient, identityMigration)) {
       throw new Error("identity alias migration postcondition failed");
     }

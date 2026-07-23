@@ -58,6 +58,14 @@ runners stop `--enforce-tenancy` at `0010_tenant_enforce`; they can cross 0013
 only with the explicit `--identity-aliases` phase, which delegates to the same
 guarded cutover as `loops-serve migrate`.
 
+The root-exported `PostgresStorage` migration API enforces the same boundary.
+Its non-dry default apply and any explicit `through` target at or beyond the
+metadata-designated identity migration fail before schema or ledger writes.
+Dry-run remains available for planning, explicit targets through the last
+ordinary migration retain their existing behavior, and custom migration arrays
+without a protected boundary remain supported. The authority that crosses 0013
+is package-internal and is not exported from the root or storage subpaths.
+
 The `--identity-aliases` command owns this boundary independently; it does not
 trust a prior readiness probe. Under the migration advisory lock and one
 transaction it fixes `search_path` to `public, pg_catalog, pg_temp`, verifies the exact

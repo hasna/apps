@@ -358,12 +358,15 @@ async function exercisePg16BootstrapMemberships(
         applicationName: "loops-pg16-bootstrap-concurrent-peer",
       });
       try {
-        await Promise.all([schema.migrate(), new PostgresStorage(peer).migrate()]);
+        await Promise.all([
+          schema.migrate({ through: "0010_tenant_enforce" }),
+          new PostgresStorage(peer).migrate({ through: "0010_tenant_enforce" }),
+        ]);
       } finally {
         await peer.close();
       }
     } else {
-      await schema.migrate();
+      await schema.migrate({ through: "0010_tenant_enforce" });
     }
     const setting = await probe.queryClient.get<{ createrole_self_grant: string }>(
       "SELECT current_setting('createrole_self_grant') AS createrole_self_grant",
@@ -621,7 +624,7 @@ suite("PostgresLoopStorage (live)", () => {
       REVOKE open_loops_owner FROM ${CROSS_ROLE_LOGIN};
     `);
     try {
-      await schema.migrate();
+      await schema.migrate({ through: "0010_tenant_enforce" });
     } catch (error) {
       ownedObjectRejected = error instanceof Error && error.message.includes("owns database objects");
     }
@@ -631,7 +634,7 @@ suite("PostgresLoopStorage (live)", () => {
       GRANT open_loops_runtime TO ${ADMIN_LOGIN} WITH ADMIN OPTION;
     `);
     try {
-      await schema.migrate();
+      await schema.migrate({ through: "0010_tenant_enforce" });
     } catch (error) {
       unsafeServiceLoginRejected = error instanceof Error && error.message.includes("unsafe service login membership");
     }
@@ -1448,7 +1451,7 @@ suite("PostgresLoopStorage (live)", () => {
       )).toEqual({ tenant_id: "legacy-tenant" });
     });
 
-    const rerun = await schema.migrate();
+    const rerun = await migrateCanonicalIdentityAliases(executor.queryClient);
     expect(rerun.applied.at(-1)?.id).toBe("0013_loops_identity_aliases");
     expect(rerun.plan.every((item) => item.state === "already_applied")).toBe(true);
   });

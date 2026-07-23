@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import * as rootExports from "../../index.js";
+import * as storageExports from "./index.js";
+import * as postgresExports from "./postgres.js";
 import { PostgresStorage } from "./postgres.js";
 import {
   POSTGRES_MIGRATION_ADVISORY_LOCK_SQL,
@@ -6,6 +9,7 @@ import {
   POSTGRES_STORAGE_MIGRATIONS,
   checksumStorageSql,
 } from "./postgres-schema.js";
+import { withProtectedPostgresMigrationAuthority } from "./postgres-protected-migration.js";
 import type { PostgresQueryExecutor } from "./postgres.js";
 
 class FakePostgresExecutor implements PostgresQueryExecutor {
@@ -141,19 +145,35 @@ describe("Postgres storage migrations", () => {
     expect(dryRun.plan.every((item) => item.state === "pending")).toBe(true);
     expect(executor.executed).toHaveLength(0);
 
-    const result = await storage.migrate();
+    const result = await storage.migrate({ through: "0010_tenant_enforce" });
     expect(result.dryRun).toBe(false);
-    expect(result.applied.map((migration) => migration.id)).toEqual(POSTGRES_STORAGE_MIGRATIONS.map((migration) => migration.id));
+    expect(result.applied.map((migration) => migration.id)).toEqual(
+      POSTGRES_STORAGE_MIGRATIONS.slice(0, -1).map((migration) => migration.id),
+    );
     expect(executor.executed[0]?.sql).toContain(POSTGRES_MIGRATION_LEDGER_TABLE);
-    expect(executor.executed.filter((entry) => entry.sql.startsWith("INSERT INTO"))).toHaveLength(POSTGRES_STORAGE_MIGRATIONS.length);
+    expect(executor.executed.filter((entry) => entry.sql.startsWith("INSERT INTO"))).toHaveLength(
+      POSTGRES_STORAGE_MIGRATIONS.length - 1,
+    );
     expect(executor.queried[1]).toBe(POSTGRES_MIGRATION_ADVISORY_LOCK_SQL);
     expect(executor.queried[2]).toContain(POSTGRES_MIGRATION_LEDGER_TABLE);
 
-    const second = await storage.migrate();
-    expect(second.plan.every((item) => item.state === "already_applied")).toBe(true);
+    const second = await storage.migrate({ through: "0010_tenant_enforce" });
+    expect(second.plan.slice(0, -1).every((item) => item.state === "already_applied")).toBe(true);
+    expect(second.plan.at(-1)?.state).toBe("pending");
   });
 
-  test("upgrades an existing tenant-enforced ledger additively and reruns idempotently", async () => {
+  test("public migration apply cannot cross the protected identity boundary by default", async () => {
+    const executor = new FakePostgresExecutor();
+    const storage = new PostgresStorage(executor);
+
+    await expect(storage.migrate()).rejects.toThrow(
+      "protected Postgres migration 0013_loops_identity_aliases",
+    );
+    expect(executor.executed).toHaveLength(0);
+    expect(executor.ledger).toHaveLength(0);
+  });
+
+  test("public migration apply cannot explicitly target the protected identity boundary", async () => {
     const executor = new FakePostgresExecutor();
     executor.ledger = POSTGRES_STORAGE_MIGRATIONS.slice(0, -1).map((migration) => ({
       id: migration.id,
@@ -162,7 +182,34 @@ describe("Postgres storage migrations", () => {
     }));
     const storage = new PostgresStorage(executor);
 
-    const result = await storage.migrate();
+    await expect(
+      storage.migrate({ through: "0013_loops_identity_aliases" }),
+    ).rejects.toThrow("protected Postgres migration 0013_loops_identity_aliases");
+    expect(executor.executed).toHaveLength(0);
+    expect(executor.ledger).toHaveLength(POSTGRES_STORAGE_MIGRATIONS.length - 1);
+  });
+
+  test("protected migration authority is absent from every public package module", () => {
+    for (const publicModule of [rootExports, storageExports, postgresExports]) {
+      expect("withProtectedPostgresMigrationAuthority" in publicModule).toBe(false);
+      expect("hasProtectedPostgresMigrationAuthority" in publicModule).toBe(false);
+    }
+    expect(Object.getOwnPropertySymbols(PostgresStorage.prototype)).toEqual([]);
+  });
+
+  test("internal protected capability upgrades an existing ledger and reruns idempotently", async () => {
+    const executor = new FakePostgresExecutor();
+    executor.ledger = POSTGRES_STORAGE_MIGRATIONS.slice(0, -1).map((migration) => ({
+      id: migration.id,
+      checksum: migration.checksum,
+      applied_at: "2026-01-01T00:00:00.000Z",
+    }));
+    const storage = new PostgresStorage(executor);
+
+    const result = await withProtectedPostgresMigrationAuthority(
+      storage,
+      () => storage.migrate({ through: "0013_loops_identity_aliases" }),
+    );
     expect(result.applied.at(-1)?.id).toBe("0013_loops_identity_aliases");
     expect(result.plan.filter((item) => item.state === "pending").map((item) => item.migration.id))
       .toEqual(["0013_loops_identity_aliases"]);
@@ -171,9 +218,45 @@ describe("Postgres storage migrations", () => {
     expect(migrationSql?.sql).toContain("FROM public.open_loops_schema_migrations");
     expect(migrationSql?.sql).toContain("current_setting('open_loops.tenant_id', true)");
 
-    const rerun = await storage.migrate();
+    const rerun = await withProtectedPostgresMigrationAuthority(
+      storage,
+      () => storage.migrate({ through: "0013_loops_identity_aliases" }),
+    );
     expect(rerun.applied).toHaveLength(POSTGRES_STORAGE_MIGRATIONS.length);
     expect(rerun.plan.every((item) => item.state === "already_applied")).toBe(true);
+  });
+
+  test("internal protected authority is revoked after a failed operation", async () => {
+    const executor = new FakePostgresExecutor();
+    const storage = new PostgresStorage(executor);
+
+    await expect(
+      withProtectedPostgresMigrationAuthority(storage, async () => {
+        throw new Error("injected protected route failure");
+      }),
+    ).rejects.toThrow("injected protected route failure");
+    await expect(
+      storage.migrate({ through: "0013_loops_identity_aliases" }),
+    ).rejects.toThrow("protected Postgres migration 0013_loops_identity_aliases");
+    expect(executor.executed).toHaveLength(0);
+  });
+
+  test("custom migration arrays without a protected boundary retain default apply behavior", async () => {
+    const executor = new FakePostgresExecutor();
+    const sql = "CREATE TABLE custom_probe(id TEXT PRIMARY KEY)";
+    const migrations = [
+      {
+        id: "0001_custom_probe",
+        sql,
+        checksum: checksumStorageSql(sql),
+      },
+    ];
+    const storage = new PostgresStorage(executor, migrations);
+
+    const result = await storage.migrate();
+
+    expect(result.applied.map((migration) => migration.id)).toEqual(["0001_custom_probe"]);
+    expect(executor.executed.some((entry) => entry.sql === sql)).toBe(true);
   });
 
   test("dry-run reads the ledger and reports already-applied migrations", async () => {
@@ -265,7 +348,9 @@ describe("Postgres storage migrations", () => {
     const storage = new PostgresStorage(executor);
 
     await expect(storage.migrate({ dryRun: true })).rejects.toThrow("not recognized by this binary");
-    await expect(storage.migrate()).rejects.toThrow("not recognized by this binary");
+    await expect(storage.migrate({ through: "0010_tenant_enforce" })).rejects.toThrow(
+      "not recognized by this binary",
+    );
   });
 
   test("fails closed when an applied migration checksum changes", async () => {
@@ -279,6 +364,8 @@ describe("Postgres storage migrations", () => {
     ];
     const storage = new PostgresStorage(executor);
 
-    await expect(storage.migrate()).rejects.toThrow("Postgres migration checksum mismatch");
+    await expect(storage.migrate({ through: "0010_tenant_enforce" })).rejects.toThrow(
+      "Postgres migration checksum mismatch",
+    );
   });
 });
