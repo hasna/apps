@@ -16,6 +16,7 @@ import type { Database } from "../../lib/db.js";
 export interface AgentToolDependencies {
   database?: Database;
   resolveIdentity?: typeof resolveIdentity;
+  resolveClaudeSessionId?: () => string | null;
   setSessionAgent?: typeof setSessionAgent;
   setClaudeSessionId?: typeof setClaudeSessionId;
   updateCachedAutoName?: typeof updateCachedAutoName;
@@ -29,6 +30,8 @@ export function registerAgentTools(
 ): void {
   const database = dependencies.database;
   const resolveAgentIdentity = dependencies.resolveIdentity ?? resolveIdentity;
+  const resolveClaudeSessionId = dependencies.resolveClaudeSessionId
+    ?? (() => process.env.CONVERSATIONS_SESSION_ID || null);
   const rememberSessionAgent = dependencies.setSessionAgent ?? setSessionAgent;
   const rememberClaudeSessionId = dependencies.setClaudeSessionId ?? setClaudeSessionId;
   const rememberAutoName = dependencies.updateCachedAutoName ?? updateCachedAutoName;
@@ -48,7 +51,7 @@ export function registerAgentTools(
     const name = nameParam || agent_name || agent_id;
     if (!name) return { content: [{ type: "text", text: "Error: name is required" }], isError: true };
     // Auto-detect session_id from environment (set by agent-claude MCP subprocess)
-    const claudeSid = process.env.CONVERSATIONS_SESSION_ID || null;
+    const claudeSid = resolveClaudeSessionId();
     const session_id = manualSid || claudeSid || `${name}-${Date.now()}`;
     try {
       const result = registerAgent(name, session_id, role, project_id, database);

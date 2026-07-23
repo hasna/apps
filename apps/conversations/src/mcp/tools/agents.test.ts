@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import { describe, test, expect, beforeAll, afterAll, mock } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -16,6 +16,11 @@ describe("agent MCP tools", () => {
   let database: Database;
   let agentFocus: Map<string, { project_id: string | null }>;
   let sessionAgent: string | null;
+  const setSessionAgentSpy = mock((agent: string) => {
+    sessionAgent = agent;
+  });
+  const setClaudeSessionIdSpy = mock((_sessionId: string) => {});
+  const updateCachedAutoNameSpy = mock((_newName: string) => {});
   const getAgentFocus = (agentId: string) => agentFocus.get(agentId)?.project_id ?? null;
 
   beforeAll(async () => {
@@ -27,11 +32,10 @@ describe("agent MCP tools", () => {
     registerAgentTools(server, agentFocus, getAgentFocus, {
       database,
       resolveIdentity: (explicit) => explicit?.trim() || "test-auto-agent",
-      setSessionAgent: (agent) => {
-        sessionAgent = agent;
-      },
-      setClaudeSessionId: () => {},
-      updateCachedAutoName: () => {},
+      resolveClaudeSessionId: () => "test-claude-session",
+      setSessionAgent: setSessionAgentSpy,
+      setClaudeSessionId: setClaudeSessionIdSpy,
+      updateCachedAutoName: updateCachedAutoNameSpy,
     });
 
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -55,11 +59,18 @@ describe("agent MCP tools", () => {
 
   describe("register_agent", () => {
     test("registers agent with name and auto-detects session_id", async () => {
+      setSessionAgentSpy.mockClear();
+      setClaudeSessionIdSpy.mockClear();
       const result = parseResult(await client.callTool({
         name: "register_agent",
         arguments: { name: "test-reg-agent" },
       }) as any) as any;
       expect(result.agent.agent).toBe("test-reg-agent");
+      expect(result.agent.session_id).toBe("test-claude-session");
+      expect(setSessionAgentSpy).toHaveBeenCalledTimes(1);
+      expect(setSessionAgentSpy).toHaveBeenCalledWith("test-reg-agent");
+      expect(setClaudeSessionIdSpy).toHaveBeenCalledTimes(1);
+      expect(setClaudeSessionIdSpy).toHaveBeenCalledWith("test-claude-session");
     });
 
     test("accepts agent_name alias", async () => {
@@ -218,6 +229,20 @@ describe("agent MCP tools", () => {
         arguments: { from: "test-rename-empty", new_name: "" },
       });
       expect((result as any).isError).toBe(true);
+    });
+
+    test("updates the injected auto-name cache for an implicit identity", async () => {
+      updateCachedAutoNameSpy.mockClear();
+      await client.callTool({ name: "heartbeat", arguments: {} });
+      const result = parseResult(await client.callTool({
+        name: "rename_agent",
+        arguments: { new_name: "test-auto-agent-renamed" },
+      }) as any) as any;
+      expect(result.renamed).toBe(true);
+      expect(result.old_name).toBe("test-auto-agent");
+      expect(result.new_name).toBe("test-auto-agent-renamed");
+      expect(updateCachedAutoNameSpy).toHaveBeenCalledTimes(1);
+      expect(updateCachedAutoNameSpy).toHaveBeenCalledWith("test-auto-agent-renamed");
     });
   });
 
