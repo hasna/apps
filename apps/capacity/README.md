@@ -43,6 +43,26 @@ bun run typecheck
 bun run build
 ```
 
+## Install the CLI artifact
+
+Bun blocks dependency lifecycle scripts unless a package is explicitly trusted.
+The supported Bun install paths therefore use `--trust` so the package can
+normalize the effective executable target to owner-writable mode `0755`:
+
+```sh
+bun add --trust @hasna/capacity
+bun add --global --trust @hasna/capacity
+```
+
+An npm install runs the same permission-hardening lifecycle automatically:
+
+```sh
+npm install --global @hasna/capacity
+```
+
+The package remains a Bun CLI; an npm-based install still requires Bun on
+`PATH`.
+
 The live PostgreSQL conformance test is opt-in and expects an empty disposable
 database:
 

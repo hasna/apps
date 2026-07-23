@@ -1,5 +1,13 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -11,13 +19,22 @@ const NPM_EXTRACT_ROOT = join(TEMP_ROOT, "npm-extracted");
 const BUN_IGNORED_PACK_ROOT = join(TEMP_ROOT, "bun-ignored-pack");
 const BUN_PACK_ROOT = join(TEMP_ROOT, "bun-pack");
 const BUN_EXTRACT_ROOT = join(TEMP_ROOT, "bun-extracted");
+const NPM_INSTALL_ROOT = join(TEMP_ROOT, "npm-install");
+const BUN_LOCAL_INSTALL_ROOT = join(TEMP_ROOT, "bun-local-install");
+const BUN_GLOBAL_INSTALL_ROOT = join(TEMP_ROOT, "bun-global-install");
+const INSTALL_HOME_ROOT = join(TEMP_ROOT, "install-home");
 const COMMAND_TIMEOUT_MS = 25_000;
-const PACKAGE_LIFECYCLE_TIMEOUT_MS = 30_000;
+const PACKAGE_LIFECYCLE_TIMEOUT_MS = 60_000;
 
 interface CommandResult {
   readonly stdout: string;
   readonly stderr: string;
   readonly exitCode: number;
+}
+
+interface RunOptions {
+  readonly cwd?: string;
+  readonly env?: Readonly<Record<string, string | undefined>>;
 }
 
 interface PackedFile {
@@ -55,16 +72,26 @@ let bunArchiveFiles: Map<string, Blob>;
 let bunArchivePaths: readonly string[];
 let bunPackedCliPath: string;
 let bunPackedCliMode: string;
+let npmInstalledCliPath: string;
+let npmInstalledCliTarget: string;
+let bunLocalInstalledCliPath: string;
+let bunLocalInstalledCliTarget: string;
+let bunGlobalInstalledCliPath: string;
+let bunGlobalInstalledCliTarget: string;
 
-async function run(command: readonly string[]): Promise<CommandResult> {
+async function run(
+  command: readonly string[],
+  { cwd = REPOSITORY_ROOT, env = {} }: RunOptions = {},
+): Promise<CommandResult> {
   const child = Bun.spawn([...command], {
-    cwd: REPOSITORY_ROOT,
+    cwd,
     env: {
       HOME: Bun.env.HOME,
       PATH: Bun.env.PATH,
       npm_config_audit: "false",
       npm_config_fund: "false",
       npm_config_offline: "true",
+      ...env,
     },
     stdout: "pipe",
     stderr: "pipe",
@@ -76,6 +103,18 @@ async function run(command: readonly string[]): Promise<CommandResult> {
     child.exited,
   ]);
   return { stdout, stderr, exitCode };
+}
+
+async function runWithGroupWritableUmask(
+  command: readonly string[],
+  options: RunOptions,
+): Promise<CommandResult> {
+  const shell = Bun.which("sh");
+  if (shell === null) throw new Error("sh is required for the package install permission test");
+  return run(
+    [shell, "-c", 'umask 0002; exec "$@"', "capacity-package-install", ...command],
+    options,
+  );
 }
 
 function requireSuccess(result: CommandResult, operation: string): void {
@@ -119,6 +158,10 @@ beforeAll(async () => {
     BUN_IGNORED_PACK_ROOT,
     BUN_PACK_ROOT,
     BUN_EXTRACT_ROOT,
+    NPM_INSTALL_ROOT,
+    BUN_LOCAL_INSTALL_ROOT,
+    BUN_GLOBAL_INSTALL_ROOT,
+    INSTALL_HOME_ROOT,
   ]) {
     mkdirSync(directory, { mode: 0o700 });
   }
@@ -238,6 +281,58 @@ beforeAll(async () => {
   expect(await bunArchive.extract(BUN_EXTRACT_ROOT)).toBe(bunArchiveFiles.size);
   bunPackedCliPath = join(BUN_EXTRACT_ROOT, "package", "dist", "cli.js");
   expect(existsSync(bunPackedCliPath)).toBe(true);
+
+  const npmArchivePath = join(NPM_PACK_ROOT, pack.filename);
+  const bunArchivePath = join(BUN_PACK_ROOT, "hasna-capacity-0.1.1.tgz");
+  const installManifest = `${JSON.stringify(
+    { name: "capacity-package-install-regression", private: true },
+    null,
+    2,
+  )}\n`;
+  await Promise.all([
+    Bun.write(join(NPM_INSTALL_ROOT, "package.json"), installManifest),
+    Bun.write(join(BUN_LOCAL_INSTALL_ROOT, "package.json"), installManifest),
+    Bun.write(join(BUN_GLOBAL_INSTALL_ROOT, "package.json"), installManifest),
+  ]);
+
+  const npmInstalled = await runWithGroupWritableUmask(
+    [npm, "install", npmArchivePath, "--offline", "--no-audit", "--no-fund"],
+    {
+      cwd: NPM_INSTALL_ROOT,
+      env: {
+        HOME: INSTALL_HOME_ROOT,
+        npm_config_cache: join(INSTALL_HOME_ROOT, "npm-cache"),
+      },
+    },
+  );
+  requireSuccess(npmInstalled, "disposable npm install");
+  npmInstalledCliPath = join(NPM_INSTALL_ROOT, "node_modules", ".bin", "capacity");
+  npmInstalledCliTarget = realpathSync(npmInstalledCliPath);
+
+  const bunLocalInstalled = await runWithGroupWritableUmask(
+    [process.execPath, "add", "--trust", bunArchivePath, "--offline"],
+    {
+      cwd: BUN_LOCAL_INSTALL_ROOT,
+      env: { HOME: INSTALL_HOME_ROOT },
+    },
+  );
+  requireSuccess(bunLocalInstalled, "disposable Bun local install");
+  bunLocalInstalledCliPath = join(BUN_LOCAL_INSTALL_ROOT, "node_modules", ".bin", "capacity");
+  bunLocalInstalledCliTarget = realpathSync(bunLocalInstalledCliPath);
+
+  const bunGlobalInstalled = await runWithGroupWritableUmask(
+    [process.execPath, "add", "--global", "--trust", bunArchivePath, "--offline"],
+    {
+      cwd: BUN_GLOBAL_INSTALL_ROOT,
+      env: {
+        BUN_INSTALL: BUN_GLOBAL_INSTALL_ROOT,
+        HOME: INSTALL_HOME_ROOT,
+      },
+    },
+  );
+  requireSuccess(bunGlobalInstalled, "disposable Bun global install");
+  bunGlobalInstalledCliPath = join(BUN_GLOBAL_INSTALL_ROOT, "bin", "capacity");
+  bunGlobalInstalledCliTarget = realpathSync(bunGlobalInstalledCliPath);
 }, { timeout: PACKAGE_LIFECYCLE_TIMEOUT_MS });
 
 afterAll(() => {
@@ -279,6 +374,32 @@ describe("packed capacity CLI", () => {
         throw new Error(`Packed payload is missing from one archive: ${path}`);
       }
       expect(await bunFile.bytes()).toEqual(await npmFile.bytes());
+    }
+  });
+
+  test("hardens effective installed CLI targets against group and world writes", async () => {
+    for (const path of [
+      npmInstalledCliPath,
+      npmInstalledCliTarget,
+      bunLocalInstalledCliPath,
+      bunLocalInstalledCliTarget,
+      bunGlobalInstalledCliPath,
+      bunGlobalInstalledCliTarget,
+    ]) {
+      expect(statSync(path).mode & 0o022).toBe(0);
+    }
+
+    const expected = {
+      stdout: '{"package":"@hasna/capacity","version":"0.1.1"}\n',
+      stderr: "",
+      exitCode: 0,
+    };
+    for (const path of [
+      npmInstalledCliPath,
+      bunLocalInstalledCliPath,
+      bunGlobalInstalledCliPath,
+    ]) {
+      expect(await run([path, "--version"])).toEqual(expected);
     }
   });
 
