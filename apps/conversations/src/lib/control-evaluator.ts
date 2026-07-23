@@ -293,6 +293,7 @@ function evaluateControlsV1Unsafe(input: ControlEvaluationInputV1): ControlEvalu
   const valid: ValidObservation[] = [];
   let rejectedEventCount = 0;
   let uncertainObservationCount = 0;
+  let excludedFutureObservationCount = 0;
 
   for (const rawObservation of observationArray.values) {
     const observation = readDataRecord(rawObservation);
@@ -325,7 +326,7 @@ function evaluateControlsV1Unsafe(input: ControlEvaluationInputV1): ControlEvalu
     const ingressAt = controlTimestampMsV1(validation.trusted_envelope.server_time)!;
     if (eventIssuedAt > evaluationTime || ingressAt > evaluationTime) {
       rejectedEventCount += 1;
-      uncertainObservationCount += 1;
+      excludedFutureObservationCount += 1;
       diagnostics.push({
         code: "observation_from_future",
         event_id: validation.event.event_id,
@@ -457,7 +458,7 @@ function evaluateControlsV1Unsafe(input: ControlEvaluationInputV1): ControlEvalu
       rejectedEventCount,
     );
   }
-  if (rejectedEventCount > 0) {
+  if (rejectedEventCount > excludedFutureObservationCount) {
     return result(
       "indeterminate",
       "observe_only",

@@ -404,12 +404,38 @@ describe("observe-only control evaluator", () => {
     historical.config.evaluation_time = "2026-07-22T12:00:00.000Z";
 
     expect(evaluateControlsV1(historical)).toMatchObject({
-      decision: "indeterminate",
+      decision: "allow",
       enforced: false,
       active_control_ids: [],
       accepted_event_count: 0,
       rejected_event_count: 1,
       diagnostics: [{ code: "observation_from_future", event_id: freeze.event_id, control_id: freeze.control_id }],
+    });
+
+    const futureUnfreeze = unfreezeFor(freeze, {
+      issued_at: "2026-07-23T13:00:00.000Z",
+      expires_at: "2026-07-24T13:00:00.000Z",
+    });
+    const historicalActive = input([
+      observation(freeze),
+      observation(futureUnfreeze, {
+        trusted_envelope: trustedEnvelope(futureUnfreeze, {
+          server_time: "2026-07-23T13:00:01.000Z",
+        }),
+      }),
+    ]);
+    const activeResult = evaluateControlsV1(historicalActive);
+    expect(activeResult).toMatchObject({
+      decision: "hold",
+      enforced: false,
+      active_control_ids: [freeze.control_id],
+      accepted_event_count: 1,
+      rejected_event_count: 1,
+    });
+    expect(activeResult.diagnostics).toContainEqual({
+      code: "observation_from_future",
+      event_id: futureUnfreeze.event_id,
+      control_id: freeze.control_id,
     });
   });
 

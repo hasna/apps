@@ -92,7 +92,9 @@ event issue time, lifecycle version, and event ID. Backend return order does not
 change the result. The backend snapshot and each observation are closed runtime
 objects; an unknown backend status, accessor, sparse array, or extra backend key
 returns `indeterminate`. Observations issued or ingressed after the requested
-evaluation time are excluded as future evidence.
+evaluation time are excluded as future evidence. They remain counted and
+diagnosed as rejected observations for audit, but cannot change the historical
+`allow` or `hold` decision.
 
 - An exact replay is idempotent.
 - A different event at the same control/lifecycle version is rejected.
