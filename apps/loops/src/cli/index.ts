@@ -2393,14 +2393,19 @@ hygiene
         limit: positiveInteger(opts.limit, "--limit") ?? 1000,
         scriptsDir: opts.scriptsDir,
       });
+      const defaultTaskList = opts.taskList === "loops-hygiene";
+      // The old slug is a persisted list/cursor identity, not product output.
+      // Reuse it when present and retain the old cursor key across the rename.
+      const cursorTaskList = defaultTaskList ? "openloops-hygiene" : opts.taskList;
       const result = upsertRouteTasks({
         project: opts.project,
         taskList: {
           slug: opts.taskList,
           name: "Loops Hygiene",
           description: "Deduped Loops hygiene findings routed by loops hygiene route-tasks.",
+          legacySlugs: defaultTaskList ? ["openloops-hygiene"] : undefined,
         },
-        cursorKey: routeCursorKey("hygiene", [opts.project, opts.taskList, checks, opts.limit, Boolean(opts.includeInactive), opts.scriptsDir ?? ""], {
+        cursorKey: routeCursorKey("hygiene", [opts.project, cursorTaskList, checks, opts.limit, Boolean(opts.includeInactive), opts.scriptsDir ?? ""], {
           autoRoute: Boolean(opts.autoRoute),
           routeProjectPath: opts.routeProjectPath,
         }),

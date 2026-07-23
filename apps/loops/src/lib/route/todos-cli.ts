@@ -69,11 +69,25 @@ export function runLocalCommandWithStdoutFile(
   }
 }
 
-export function ensureTodosTaskList(project: string, slug: string, name: string, description: string): string {
+export function ensureTodosTaskList(
+  project: string,
+  slug: string,
+  name: string,
+  description: string,
+  legacySlugs: string[] = [],
+): string {
+  const resolve = (): Array<{ id: string; slug: string }> => {
+    const list = runLocalCommand("todos", ["--project", project, "--json", "task-lists"]);
+    if (!list.ok) throw new Error(list.stderr || list.error || "failed to list todos task lists");
+    return JSON.parse(list.stdout || "[]") as Array<{ id: string; slug: string }>;
+  };
+  const existing = resolve();
+  const existingMatch = existing.find((entry) => entry.slug === slug)
+    ?? legacySlugs.map((legacySlug) => existing.find((entry) => entry.slug === legacySlug)).find(Boolean);
+  if (existingMatch) return existingMatch.id;
+
   runLocalCommand("todos", ["--project", project, "task-lists", "--add", name, "--slug", slug, "-d", description]);
-  const list = runLocalCommand("todos", ["--project", project, "--json", "task-lists"]);
-  if (!list.ok) throw new Error(list.stderr || list.error || "failed to list todos task lists");
-  const values = JSON.parse(list.stdout || "[]") as Array<{ id: string; slug: string }>;
+  const values = resolve();
   const found = values.find((entry) => entry.slug === slug);
   if (!found) throw new Error(`todos task list not found after ensure: ${slug}`);
   return found.id;

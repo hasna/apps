@@ -739,7 +739,8 @@ const PR_HANDOFF_SCRIPT = [
   "  artifact.validation ? `Validation: ${artifact.validation}` : undefined,",
   "  artifactError ? `Worker network error: ${artifactError}` : undefined,",
   "].filter(Boolean).join('\\n\\n');",
-  "const fingerprint = stringField('fingerprint') || `loops:pr-handoff:${taskId}:${branch || 'missing-branch'}:${commit || 'missing-commit'}`;",
+  // Stable persisted Todos dedupe identity; comments and metadata are canonical.
+  "const fingerprint = stringField('fingerprint') || `openloops:pr-handoff:${taskId}:${branch || 'missing-branch'}:${commit || 'missing-commit'}`;",
   "const repoTagSource = (repoDisplay || repoPath).split(/[/:]/).filter(Boolean).at(-1) || 'unknown';",
   "const repoTag = `repo:${repoTagSource.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'unknown'}`;",
   "const metadata = {",
@@ -880,7 +881,7 @@ const PR_HANDOFF_NO_ARTIFACT_SCRIPT = [
   "const upsertTask = (why, branch, commit, remoteUrl) => {",
   "  const safeWhy = scrubUrlCredentials(why);",
   "  const displayRemoteUrl = scrubUrlCredentials(remoteUrl);",
-  "  const fingerprint = `loops:pr-handoff:${taskId}:${branch || 'missing-branch'}:${commit || 'missing-commit'}`;",
+  "  const fingerprint = `openloops:pr-handoff:${taskId}:${branch || 'missing-branch'}:${commit || 'missing-commit'}`;",
   "  const repoTagSource = String(displayRemoteUrl || worktree).split(/[/:]/).filter(Boolean).at(-1) || 'unknown';",
   "  const repoTag = `repo:${repoTagSource.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'unknown'}`;",
   "  const metadata = { route_enabled: true, source: 'loops.pr-handoff', original_task_id: taskId, repo: displayRemoteUrl || '', branch: branch || '', commit: commit || '', fingerprint, automation: { allowed: true, mode: 'auto' }, no_tmux_dispatch: true };",

@@ -329,6 +329,24 @@ describe("prompt fragment composition", () => {
       worktreeRoot,
     });
     expect(agentTargetOf(stepById(dryRunWorkflow, "worker")).prompt).toContain("This workflow was rendered with dryRun=true. Do not run the apply command");
+
+    const preRenameIdempotencyKey = `routing-health:${["open", "loops"].join("-")}:shard0`;
+    const preRenameWorkflow = renderLoopTemplate(ROUTING_REMEDIATION_TEMPLATE_ID, {
+      projectPath: repoPath,
+      todosProjectPath: "/srv/todos",
+      idempotencyKey: preRenameIdempotencyKey,
+      worktreeRoot,
+    });
+    expect(commandOf(stepById(preRenameWorkflow, "routing-doctor-preflight")))
+      .toContain(`LOOPS_ROUTING_REMEDIATION_IDEMPOTENCY_KEY='${preRenameIdempotencyKey}'`);
+    expect(agentTargetOf(stepById(preRenameWorkflow, "worker")).prompt)
+      .toContain(`Idempotency key: ${preRenameIdempotencyKey}`);
+    expect(renderLoopTemplate(ROUTING_REMEDIATION_TEMPLATE_ID, {
+      projectPath: repoPath,
+      todosProjectPath: "/srv/todos",
+      idempotencyKey: preRenameIdempotencyKey,
+      worktreeRoot,
+    }).name).toBe(preRenameWorkflow.name);
   });
 });
 
@@ -937,7 +955,8 @@ describe("pr-handoff no-artifact / direct-PR path", () => {
       expect(result.status).toBe(0);
       const captured = existsSync(cap) ? readFileSync(cap, "utf8") : "";
       expect(captured).toContain("task\u0000upsert");
-      expect(captured).toContain("loops:pr-handoff:task-network-pr:feat/direct-pr:abc123");
+      expect(captured).toContain("openloops:pr-handoff:task-network-pr:feat/direct-pr:abc123");
+      expect(captured).toContain("\"source\":\"loops.pr-handoff\"");
       expect(captured).toContain("github preflight failed before PR lookup");
       expect(captured).toContain("https://github.com/acme/repo.git");
       expect(captured).not.toContain("token:secret");
@@ -1016,7 +1035,8 @@ describe("pr-handoff no-artifact / direct-PR path", () => {
       expect(result.status).toBe(0);
       const captured = existsSync(cap) ? readFileSync(cap, "utf8") : "";
       expect(captured).toContain("task\u0000upsert");
-      expect(captured).toContain("loops:pr-handoff:task-artifact-pr:feat/artifact-pr:abc123");
+      expect(captured).toContain("openloops:pr-handoff:task-artifact-pr:feat/artifact-pr:abc123");
+      expect(captured).toContain("\"source\":\"loops.pr-handoff\"");
       expect(captured).toContain("github preflight failed before push/PR");
       expect(captured).toContain("https://github.com/acme/repo.git");
       expect(captured).not.toContain("token:secret");

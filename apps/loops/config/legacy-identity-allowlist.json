@@ -33,7 +33,7 @@
     },
     {
       "path": "docs/IDENTITY-MIGRATION.md",
-      "tokens": { "open-loops": 3, "openloops": 2, "open_loops": 4 },
+      "tokens": { "open-loops": 3, "openloops": 4, "open_loops": 4 },
       "reason": "This is the explicit compatibility and removal ledger.",
       "removalCondition": "Reduce each entry as its documented compatibility boundary retires; retain historical ledger facts."
     },
@@ -92,10 +92,16 @@
       "removalCondition": "Remove after the owner-approved domain and deployment cutover proves the alias is gone."
     },
     {
-      "path": "src/cli/index.test.ts",
+      "path": "src/cli/index.ts",
       "tokens": { "openloops": 2 },
-      "reason": "Compatibility tests prove old lifecycle markers and artifact paths remain readable.",
-      "removalCondition": "Delete with the corresponding compatibility readers after active task/worktree migration."
+      "reason": "The canonical hygiene default reuses an existing task-list and route-cursor identity to prevent duplicate work.",
+      "removalCondition": "Remove after all hygiene task lists and route cursors are atomically migrated and old-slug inventory remains zero for one major release."
+    },
+    {
+      "path": "src/cli/index.test.ts",
+      "tokens": { "openloops": 10 },
+      "reason": "Compatibility tests prove old lifecycle markers, artifact paths, task-list identity, cursor identity, and persisted fingerprints remain safe.",
+      "removalCondition": "Delete with the corresponding compatibility readers after active task, worktree, task-list, cursor, and fingerprint migration."
     },
     {
       "path": "src/index.ts",
@@ -111,9 +117,21 @@
     },
     {
       "path": "src/lib/__snapshots__/templates.test.ts.snap",
-      "tokens": { "openloops": 6 },
+      "tokens": { "openloops": 8 },
       "reason": "Snapshots include bounded lifecycle-marker fallback code rendered into workflows.",
       "removalCondition": "Regenerate without the fallback after active routed tasks and persisted workflows migrate."
+    },
+    {
+      "path": "src/lib/health.test.ts",
+      "tokens": { "openloops": 2 },
+      "reason": "Regression assertions prove health findings retain stable machine dedupe IDs while product-facing tags use Loops.",
+      "removalCondition": "Update only after existing health tasks are atomically backfilled and old/new keys resolve to one record."
+    },
+    {
+      "path": "src/lib/health.ts",
+      "tokens": { "openloops": 5 },
+      "reason": "Health task fingerprints are persisted machine dedupe identities and must not change during a display-name migration.",
+      "removalCondition": "Change only after every existing health task is atomically backfilled and duplicate prevention is proven."
     },
     {
       "path": "src/lib/migration.test.ts",
@@ -128,6 +146,24 @@
       "removalCondition": "Remove after one major-release cycle with no legacy bundle import evidence."
     },
     {
+      "path": "src/lib/route/route-tasks.ts",
+      "tokens": { "openloops": 3 },
+      "reason": "Hygiene task fingerprints are persisted machine dedupe identities while task titles, tags, and metadata use Loops.",
+      "removalCondition": "Change only after every existing hygiene task is atomically backfilled and duplicate prevention is proven."
+    },
+    {
+      "path": "src/lib/store.test.ts",
+      "tokens": { "openloops": 1 },
+      "reason": "Regression assertion proves lifecycle audit events keep one stable producer identity.",
+      "removalCondition": "Update with the lifecycle actor only after persisted audit history is migrated."
+    },
+    {
+      "path": "src/lib/store.ts",
+      "tokens": { "openloops": 1 },
+      "reason": "The lifecycle actor is a persisted audit identity rather than product display branding.",
+      "removalCondition": "Change only after lifecycle audit history is migrated without splitting one producer into two identities."
+    },
+    {
       "path": "src/lib/storage/pg-executor.ts",
       "tokens": { "open_loops": 4 },
       "reason": "Writes legacy request settings alongside canonical settings for old database policies.",
@@ -135,7 +171,7 @@
     },
     {
       "path": "src/lib/storage/postgres-loop-storage.test.ts",
-      "tokens": { "OpenLoops": 1, "open_loops": 241 },
+      "tokens": { "OpenLoops": 1, "open_loops": 257 },
       "reason": "Fresh and upgrade tests exercise released roles, functions, settings, and immutable bootstrap error text.",
       "removalCondition": "Reduce only as later additive migrations retire each compatibility surface."
     },
@@ -189,9 +225,15 @@
     },
     {
       "path": "src/lib/template-kit.ts",
-      "tokens": { "openloops": 4 },
-      "reason": "Rendered lifecycle gates accept markers already recorded on active tasks.",
-      "removalCondition": "Remove after active routed tasks and persisted workflows have canonical markers, no earlier than the next major release."
+      "tokens": { "openloops": 6 },
+      "reason": "Rendered lifecycle gates read old markers and PR handoff retains its persisted task-dedupe identity.",
+      "removalCondition": "Remove marker readers after active workflow migration; change the fingerprint only after an atomic Todos backfill proves no duplicates."
+    },
+    {
+      "path": "src/lib/templates.test.ts",
+      "tokens": { "openloops": 2 },
+      "reason": "Regression assertions prove PR-handoff dedupe identity remains stable while metadata sources and comments use Loops.",
+      "removalCondition": "Update only after PR-handoff tasks are atomically backfilled and old/new keys resolve to one record."
     },
     {
       "path": "src/sdk/index.test.ts",
@@ -213,7 +255,7 @@
     },
     {
       "path": "src/serve/index.ts",
-      "tokens": { "OpenLoops": 4, "open_loops": 81 },
+      "tokens": { "OpenLoops": 4, "open_loops": 111 },
       "reason": "Validates immutable bootstrap errors, provider capability roles, and bounded legacy function privileges.",
       "removalCondition": "Retain immutable error recognition; remove role/function aliases after provider and client cutovers."
     },

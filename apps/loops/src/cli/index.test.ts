@@ -1153,6 +1153,9 @@ describe("loops CLI", () => {
     expect(value.findings).toBe(2);
     expect(value.actions.map((action: { check: string }) => action.check).sort()).toEqual(["duplicates", "scripts"]);
     expect(value.actions.every((action: { action: string }) => action.action === "would-upsert")).toBe(true);
+    expect(value.actions.every((action: { fingerprint: string }) => action.fingerprint.startsWith("openloops:hygiene:"))).toBe(true);
+    expect(value.actions.every((action: { metadata: { source?: string } }) => action.metadata.source === "loops.hygiene.route-tasks")).toBe(true);
+    expect(value.actions.every((action: { tags: string[] }) => !action.tags.includes("openloops"))).toBe(true);
     expect(value.actions.every((action: { metadata: { no_tmux_dispatch?: boolean } }) => action.metadata.no_tmux_dispatch === true)).toBe(true);
     expect(value.actions.every((action: { tags: string[] }) => action.tags.includes("auto:route"))).toBe(true);
     expect(value.actions.every((action: { metadata: { route_enabled?: boolean; automation?: { allowed?: boolean } } }) => action.metadata.route_enabled === true && action.metadata.automation?.allowed === true)).toBe(true);
@@ -1196,6 +1199,73 @@ describe("loops CLI", () => {
     const next = JSON.parse(nextBatch.stdout);
     expect(next.actions[0].fingerprint).not.toBe(first.actions[0].fingerprint);
     expect(next.routing.previousFingerprint).toBe(first.actions[0].fingerprint);
+  });
+
+  test("hygiene route-tasks reuses the persisted pre-rename list and cursor identity", () => {
+    const dataDir = freshDataDir("loops-cli-hygiene-legacy-list-");
+    const binDir = join(dataDir, "bin");
+    const argLog = join(dataDir, "todos-args.log");
+    mkdirSync(binDir, { recursive: true });
+    const todos = join(binDir, "todos");
+    writeFileSync(
+      todos,
+      [
+        "#!/usr/bin/env bash",
+        "printf '%s\\n' \"$*\" >> \"$TODOS_ARG_LOG\"",
+        "if [[ \"$*\" == *\"task-lists --add\"* ]]; then exit 91; fi",
+        "if [[ \"$*\" == *\"--json task-lists\"* ]]; then",
+        "  printf '[{\"id\":\"legacy-hygiene-list\",\"slug\":\"openloops-hygiene\"}]\\n'",
+        "  exit 0",
+        "fi",
+        "if [[ \"$*\" == *\"task upsert\"* ]]; then printf '{\"task\":{\"id\":\"task-1\"}}\\n'; exit 0; fi",
+        "exit 0",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todos, 0o755);
+    expect(runCli(dataDir, [
+      "create",
+      "command",
+      "ops:codewith:account001:loop-health-slo",
+      "--at",
+      futureAt(),
+      "--cmd",
+      "true",
+    ]).status).toBe(0);
+
+    const routed = runCli(
+      dataDir,
+      ["--json", "hygiene", "route-tasks", "--checks", "names", "--max-actions", "1", "--project", join(dataDir, "todos-project")],
+      undefined,
+      { PATH: `${binDir}:/usr/bin:/bin`, TODOS_ARG_LOG: argLog },
+    );
+
+    expect(routed.status).toBe(0);
+    const value = JSON.parse(routed.stdout);
+    expect(value.actions[0].fingerprint).toStartWith("openloops:hygiene:names:");
+    expect(value.actions[0].task).toEqual({ task: { id: "task-1" } });
+    const log = readFileSync(argLog, "utf8");
+    expect(log).not.toContain("task-lists --add");
+    expect(log).toContain("--list legacy-hygiene-list");
+    expect(log).toContain("--tags loops,hygiene,name-hygiene");
+    expect(log).toContain("\"source\":\"loops.hygiene.route-tasks\"");
+
+    const legacyCursor = runCli(dataDir, [
+      "--json",
+      "hygiene",
+      "route-tasks",
+      "--checks",
+      "names",
+      "--max-actions",
+      "1",
+      "--task-list",
+      "openloops-hygiene",
+      "--project",
+      join(dataDir, "todos-project"),
+      "--dry-run",
+    ]);
+    expect(legacyCursor.status).toBe(0);
+    expect(JSON.parse(legacyCursor.stdout).routing.key).toBe(value.routing.key);
   });
 
   test("hygiene route-tasks skips auto-route metadata for findings without cwd or explicit route project", () => {
@@ -2593,8 +2663,11 @@ describe("loops CLI", () => {
       action: "would-upsert",
       priority: "medium",
     });
+    expect(value.actions[0].fingerprint).toStartWith("openloops:");
+    expect(value.actions[0].tags).not.toContain("openloops");
     expect(value.actions[0].tags).toContain("auto:route");
     expect(value.actions[0].metadata).toMatchObject({
+      source: "loops.health.route-tasks",
       classification: "schema_response_format",
       route_enabled: true,
       project_path: "/tmp/repo",
@@ -5461,7 +5534,7 @@ describe("loops CLI", () => {
     expect(callLog).toContain("git -C");
     expect(callLog).toContain("push origin 0123456789abcdef0123456789abcdef01234567:refs/heads/loops/pr-handoff-test");
     expect(callLog).toContain("todos --project");
-    expect(callLog).toContain("task upsert --fingerprint loops:pr-handoff:task-routes-pr-handoff-0001:loops/pr-handoff-test:0123456789abcdef0123456789abcdef01234567");
+    expect(callLog).toContain("task upsert --fingerprint openloops:pr-handoff:task-routes-pr-handoff-0001:loops/pr-handoff-test:0123456789abcdef0123456789abcdef01234567");
     expect(callLog).toContain("auto:route,pr-handoff,github,network,repo:loops");
     expect(callLog).toContain("comment task-routes-pr-handoff-0001 loops:pr-handoff=pending");
 

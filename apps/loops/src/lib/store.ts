@@ -2649,7 +2649,8 @@ export class Store {
       "--state",
       "succeeded",
       "--actor",
-      "loops:task-lifecycle",
+      // Stable audit actor identity; keep one lifecycle producer history.
+      "openloops:task-lifecycle",
     ]);
     this.appendWorkflowEvent(workflowRunId, result.ok ? "todos_workflow_pointers_synced" : "todos_workflow_pointers_sync_failed", undefined, {
       projectPath: context.projectPath,

@@ -8,9 +8,10 @@ The canonical identities are:
 - CLI and MCP server: `loops`
 - Coordination channel: `#loops`
 
-New output must use those identities. Legacy identifiers are accepted only at
-bounded read or migration boundaries; they are never the default for newly
-created state.
+New product-facing output must use those identities. Legacy identifiers are
+accepted only at bounded read or migration boundaries, or retained as
+non-display persisted dedupe identities when changing them would duplicate
+existing work.
 
 ## Compatibility ledger
 
@@ -20,7 +21,10 @@ created state.
 | Migration bundles | Export `loops.migration/v1`. | Import accepts `open-loops.migration/v1` and verifies its hash before use. | Remove after one full major-release cycle with no legacy import evidence. |
 | Tenant-backfill bundles | Documentation and fixtures use `loops.tenant-backfill/v1`. | The parser accepts `open-loops.tenant-backfill/v1`. | Remove only after every tenant cutover bundle has been regenerated and archived with the canonical schema. |
 | Lifecycle markers | New comments emit `loops:triage=*`, `loops:planner=*`, and `loops:pr-handoff=*`. | Gate readers accept the corresponding `openloops:*` markers from existing tasks. | Remove after all active routed tasks and persisted workflow plans have canonical markers, no earlier than the next major release. |
+| Todos fingerprints and lifecycle actor | Titles, descriptions, tags, comments, and metadata sources emit Loops. | Health, hygiene, PR-handoff, and task-lifecycle machine identifiers retain their established `openloops:*` values so an upgrade updates one task/audit history instead of creating a second record. | Change only after all matching Todos tasks and audit records are backfilled atomically, old and new fingerprints are proven to resolve to one record, and one major release has elapsed. |
+| Hygiene task list and cursor | The CLI default and newly created list slug are `loops-hygiene`. | When `openloops-hygiene` already exists it is reused, and the default route cursor keeps the established list identity. | Remove after the list and every route cursor have been migrated together and no supported installation reports the old slug for one major release. |
 | Worktree artifacts | New artifacts live under `.loops/`. | PR handoff reads the equivalent `.openloops/` path only when the canonical path is absent. | Remove after active task worktrees have been migrated or expired and one major release has elapsed. |
+| Workflow correlation and generated schemas | New agent-contract, routing-remediation, source metadata, actor-facing comments, and artifact output use Loops identities. | Caller-supplied idempotency keys are never rewritten; already persisted workflow definitions keep their exact commands, schemas, branches, and evidence paths. | Retire stored pre-rename workflow definitions through normal completion/expiry; never rewrite active history solely for branding. |
 | PostgreSQL tenant context | Migration 0013 makes `loops_current_tenant_id()` available for a later client cutover. | This release writes both `loops.*` and `open_loops.*` request settings but keeps runtime SQL, defaults, and RLS policies on `open_loops_current_tenant_id()` so the same binary works before and after 0013. The canonical reader falls back to the legacy tenant setting. | Move runtime SQL, defaults, and policies only after all supported clients write canonical settings; remove the fallback after every live policy uses the canonical function. |
 | PostgreSQL auth functions | Migration 0013 makes `loops_authenticate_key` and `loops_append_auth_audit` available for a later client cutover. | This release continues calling the released functions. Canonical wrappers delegate to them and are not the runtime default yet. | Move service calls and provider grants together; remove old functions only after all supported service binaries use the canonical wrappers. |
 | PostgreSQL migration ledger | Migration 0013 exposes `loops_schema_migrations` as the canonical inspection and future-client read surface. | This release keeps migration, bootstrap, and transfer reads on the physical `open_loops_schema_migrations` table so it also supports a pre-0013 database. The view preserves rows, timestamps, and checksums exactly. | A physical-table cutover requires a transactional copy, bidirectional row/checksum equality, fresh-install and existing-upgrade proof, and every supported binary reading the canonical table. |
@@ -51,6 +55,13 @@ maintenance window and reconcile all writes made after that backup. Never
 delete the canonical aliases or remove only the
 `0013_loops_identity_aliases` ledger row; doing so would make a
 checksum-guarded database claim an applied migration while missing its objects.
+
+Runtime readiness follows the same boundary. Before the physical ledger records
+`0013_loops_identity_aliases`, canonical aliases are optional. Once that row is
+present, readiness fails closed unless the canonical ledger view, tenant
+reader, update guard and trigger, auth wrappers, owners, function security,
+ACLs, definitions, trigger state, and bidirectional ledger row/checksum parity
+all match the migration contract.
 
 ## Historical provenance
 

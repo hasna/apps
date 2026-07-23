@@ -715,7 +715,7 @@ exit 0
       expect(args).toContain(`--run ${successRun.id}`);
       expect(args).toContain(`--manifest ${successRun.manifestPath}`);
       expect(args).toContain("--state succeeded");
-      expect(args).toContain("--actor loops:task-lifecycle");
+      expect(args).toContain("--actor openloops:task-lifecycle");
       expect(args).not.toContain(cancelledRun.id);
       expect(store.listWorkflowEvents(successRun.id).map((event) => event.eventType)).toContain("todos_workflow_pointers_synced");
     } finally {

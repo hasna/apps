@@ -14,6 +14,7 @@ import pg from "pg";
 import { PgPoolExecutor } from "./pg-executor.js";
 import { PostgresStorage } from "./postgres.js";
 import { PostgresLoopStorage } from "./postgres-loop-storage.js";
+import { POSTGRES_STORAGE_MIGRATIONS } from "./postgres-schema.js";
 import {
   AmbiguousNameError,
   DuplicateWorkflowEventError,
@@ -23,7 +24,12 @@ import {
   WorkflowRunDefinitionConflictError,
   WorkflowRunStepOwnershipUnverifiableError,
 } from "../errors.js";
-import { assertTenantEnforcementBootstrap, assertTenantEnforcementBootstrapIfPending, isSafeServiceConnection } from "../../serve/index.js";
+import {
+  assertTenantEnforcementBootstrap,
+  assertTenantEnforcementBootstrapIfPending,
+  isCanonicalIdentityAliasStateSafe,
+  isSafeServiceConnection,
+} from "../../serve/index.js";
 import type { CreateLoopInput, Loop, LoopRun, WorkflowSpec, WorkflowStepRun } from "../../types.js";
 import { waitUntil } from "../../test-helpers.js";
 import { planLoopAdvancement } from "../advancement.js";
@@ -302,6 +308,7 @@ suite("PostgresLoopStorage (live)", () => {
   let preIdentityAuthenticatorReady = false;
   let preIdentityStorageReadable = false;
   let preIdentityAliasesAbsent = false;
+  let preIdentityCanonicalAliasesSafe = false;
   let postIdentityLegacyPolicyPreserved = false;
   let postIdentityGuardsCoexist = false;
   let missingRoleBootstrap: BootstrapMembershipRegression;
@@ -452,6 +459,9 @@ suite("PostgresLoopStorage (live)", () => {
       preIdentityAuthenticatorReady = await isSafeServiceConnection(
         preIdentityAuthenticator.queryClient,
         "open_loops_authenticator",
+      );
+      preIdentityCanonicalAliasesSafe = await isCanonicalIdentityAliasStateSafe(
+        preIdentityRuntime.queryClient,
       );
       const preIdentityStorage = new PostgresLoopStorage(preIdentityRuntime.queryClient, {
         tenantId: "tenant-test",
@@ -910,6 +920,7 @@ suite("PostgresLoopStorage (live)", () => {
     expect(preIdentityAuthenticatorReady).toBe(true);
     expect(preIdentityStorageReadable).toBe(true);
     expect(preIdentityAliasesAbsent).toBe(true);
+    expect(preIdentityCanonicalAliasesSafe).toBe(true);
     const ledger = await executor.queryClient.get<{
       equal: boolean;
       canonical_count: number;
@@ -950,6 +961,176 @@ suite("PostgresLoopStorage (live)", () => {
     const rerun = await schema.migrate();
     expect(rerun.applied.at(-1)?.id).toBe("0013_loops_identity_aliases");
     expect(rerun.plan.every((item) => item.state === "already_applied")).toBe(true);
+  });
+
+  test("a recorded identity migration fails readiness on every missing or tampered canonical alias", async () => {
+    const identityMigration = POSTGRES_STORAGE_MIGRATIONS.find(
+      (migration) => migration.id === "0013_loops_identity_aliases",
+    );
+    expect(identityMigration).toBeDefined();
+    // This test is independently runnable even when Bun filters out the
+    // earlier adversarial readiness test that normally clears this fixture.
+    await executor.queryClient.execute(`
+      REVOKE ALL ON evil.loops FROM open_loops_runtime;
+      REVOKE ALL ON SCHEMA evil FROM open_loops_runtime
+    `);
+    expect(await isCanonicalIdentityAliasStateSafe(runtimeExecutor.queryClient)).toBe(true);
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(true);
+
+    const hostileMutations = [
+      {
+        name: "missing ledger view",
+        sql: "DROP VIEW public.loops_schema_migrations",
+      },
+      {
+        name: "ledger view owner drift",
+        sql: "ALTER VIEW public.loops_schema_migrations OWNER TO open_loops_owner",
+      },
+      {
+        name: "ledger view required privilege revoked",
+        sql: "REVOKE SELECT ON public.loops_schema_migrations FROM open_loops_runtime",
+      },
+      {
+        name: "ledger view privilege widened",
+        sql: "GRANT SELECT ON public.loops_schema_migrations TO open_loops_authenticator",
+      },
+      {
+        name: "ledger view row and checksum parity narrowed",
+        sql: `
+          CREATE OR REPLACE VIEW public.loops_schema_migrations AS
+          SELECT id, checksum, applied_at
+            FROM public.open_loops_schema_migrations
+           WHERE id <> '0013_loops_identity_aliases'
+        `,
+      },
+      {
+        name: "missing tenant reader",
+        // PostgreSQL correctly prevents dropping this function while tenant
+        // policies depend on it. Renaming preserves those dependencies while
+        // removing the canonical alias that readiness must require.
+        sql: "ALTER FUNCTION public.loops_current_tenant_id() RENAME TO loops_current_tenant_id_missing",
+        repairSql:
+          "ALTER FUNCTION public.loops_current_tenant_id_missing() RENAME TO loops_current_tenant_id",
+      },
+      {
+        name: "tenant reader owner drift",
+        sql: `ALTER FUNCTION public.loops_current_tenant_id() OWNER TO ${HOSTILE_FUNCTION_OWNER}`,
+      },
+      {
+        name: "tenant reader security drift",
+        sql: "ALTER FUNCTION public.loops_current_tenant_id() SECURITY DEFINER",
+      },
+      {
+        name: "tenant reader body drift",
+        sql: `
+          CREATE OR REPLACE FUNCTION public.loops_current_tenant_id() RETURNS TEXT
+          LANGUAGE sql STABLE PARALLEL SAFE SET search_path = pg_catalog
+          RETURN 'hostile-tenant'
+        `,
+      },
+      {
+        name: "tenant reader required privilege revoked",
+        sql: "REVOKE EXECUTE ON FUNCTION public.loops_current_tenant_id() FROM open_loops_runtime",
+      },
+      {
+        name: "tenant reader privilege widened",
+        sql: "GRANT EXECUTE ON FUNCTION public.loops_current_tenant_id() TO open_loops_authenticator",
+      },
+      {
+        name: "missing canonical update guard function and trigger",
+        sql: "DROP FUNCTION public.loops_reject_runtime_tenant_update() CASCADE",
+      },
+      {
+        name: "canonical update guard owner drift",
+        sql: `ALTER FUNCTION public.loops_reject_runtime_tenant_update() OWNER TO ${HOSTILE_FUNCTION_OWNER}`,
+      },
+      {
+        name: "canonical update guard body drift",
+        sql: `
+          CREATE OR REPLACE FUNCTION public.loops_reject_runtime_tenant_update()
+          RETURNS TRIGGER
+          LANGUAGE plpgsql SECURITY INVOKER SET search_path = pg_catalog
+          AS $$ BEGIN RETURN NEW; END; $$
+        `,
+      },
+      {
+        name: "canonical update guard privilege widened",
+        sql: "GRANT EXECUTE ON FUNCTION public.loops_reject_runtime_tenant_update() TO open_loops_runtime",
+      },
+      {
+        name: "canonical update trigger disabled",
+        sql: "ALTER TABLE public.tenants DISABLE TRIGGER loops_reject_runtime_tenant_update",
+      },
+      {
+        name: "canonical update trigger redirected",
+        sql: `
+          DROP TRIGGER loops_reject_runtime_tenant_update ON public.tenants;
+          CREATE TRIGGER loops_reject_runtime_tenant_update
+          BEFORE UPDATE ON public.tenants
+          FOR EACH ROW
+          EXECUTE FUNCTION public.open_loops_reject_runtime_tenant_update()
+        `,
+      },
+      {
+        name: "missing canonical authentication wrapper",
+        sql: "DROP FUNCTION public.loops_authenticate_key(TEXT, TEXT)",
+      },
+      {
+        name: "canonical authentication wrapper owner drift",
+        sql: `ALTER FUNCTION public.loops_authenticate_key(TEXT, TEXT) OWNER TO ${HOSTILE_FUNCTION_OWNER}`,
+      },
+      {
+        name: "canonical authentication wrapper security drift",
+        sql: "ALTER FUNCTION public.loops_authenticate_key(TEXT, TEXT) SECURITY INVOKER",
+      },
+      {
+        name: "canonical authentication wrapper required privilege revoked",
+        sql: "REVOKE EXECUTE ON FUNCTION public.loops_authenticate_key(TEXT, TEXT) FROM open_loops_authenticator",
+      },
+      {
+        name: "canonical authentication wrapper privilege widened",
+        sql: "GRANT EXECUTE ON FUNCTION public.loops_authenticate_key(TEXT, TEXT) TO open_loops_runtime",
+      },
+      {
+        name: "missing canonical audit wrapper",
+        sql: "DROP FUNCTION public.loops_append_auth_audit(TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, JSONB)",
+      },
+      {
+        name: "canonical audit wrapper owner drift",
+        sql: `ALTER FUNCTION public.loops_append_auth_audit(TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, JSONB) OWNER TO ${HOSTILE_FUNCTION_OWNER}`,
+      },
+      {
+        name: "canonical audit wrapper security drift",
+        sql: "ALTER FUNCTION public.loops_append_auth_audit(TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, JSONB) SECURITY INVOKER",
+      },
+      {
+        name: "canonical audit wrapper required privilege revoked",
+        sql: "REVOKE EXECUTE ON FUNCTION public.loops_append_auth_audit(TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, JSONB) FROM open_loops_authenticator",
+      },
+      {
+        name: "canonical audit wrapper privilege widened",
+        sql: "GRANT EXECUTE ON FUNCTION public.loops_append_auth_audit(TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, JSONB) TO open_loops_runtime",
+      },
+    ];
+
+    for (const mutation of hostileMutations) {
+      await executor.queryClient.execute(mutation.sql);
+      try {
+        expect({
+          mutation: mutation.name,
+          safe: await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime"),
+        }).toEqual({ mutation: mutation.name, safe: false });
+      } finally {
+        if (mutation.repairSql) {
+          await executor.queryClient.execute(mutation.repairSql);
+        }
+        await executor.queryClient.execute(identityMigration!.sql);
+      }
+      expect({
+        mutation: mutation.name,
+        safe: await isCanonicalIdentityAliasStateSafe(runtimeExecutor.queryClient),
+      }).toEqual({ mutation: mutation.name, safe: true });
+    }
   });
 
   test("PostgreSQL 16 bootstrap rejects implicit/unsafe memberships and accepts exact provider grants", () => {

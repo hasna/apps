@@ -72,6 +72,7 @@ function defaultPort(): number {
 
 type ServiceDatabaseRole = "open_loops_runtime" | "open_loops_authenticator";
 const TENANT_ENFORCEMENT_MIGRATION_ID = "0010_tenant_enforce";
+const LOOPS_IDENTITY_MIGRATION_ID = "0013_loops_identity_aliases";
 export type ServeReadinessFailureCode =
   | "storage_unreachable"
   | "migration_checksum_mismatch";
@@ -83,10 +84,310 @@ export function classifyMigrationReadinessError(error: unknown): ServeReadinessF
     : "storage_unreachable";
 }
 
+interface CanonicalIdentityFunctionState {
+  name: string;
+  args: string;
+  result: string;
+  owner: string;
+  language: string;
+  security_definer: boolean;
+  volatility: string;
+  parallel: string;
+  kind: string;
+  returns_set: boolean;
+  is_strict: boolean;
+  is_leakproof: boolean;
+  config: string[] | null;
+  source: string;
+  definition: string;
+  acl: string[];
+}
+
+interface CanonicalIdentityFunctionExpectation {
+  args: string;
+  result: string;
+  owner: "open_loops_owner";
+  language: "sql" | "plpgsql";
+  securityDefiner: boolean;
+  volatility: "s" | "v";
+  parallel: "s" | "u";
+  returnsSet: boolean;
+  source?: string;
+  definitionFragment?: string;
+  acl: string[];
+}
+
+function normalizedCatalogSql(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+const CANONICAL_IDENTITY_FUNCTIONS: Readonly<Record<string, CanonicalIdentityFunctionExpectation>> =
+  Object.freeze({
+    loops_current_tenant_id: {
+      args: "",
+      result: "text",
+      owner: "open_loops_owner",
+      language: "sql",
+      securityDefiner: false,
+      volatility: "s",
+      parallel: "s",
+      returnsSet: false,
+      definitionFragment:
+        "RETURN COALESCE(NULLIF(current_setting('loops.tenant_id'::text, true), ''::text), NULLIF(current_setting('open_loops.tenant_id'::text, true), ''::text))",
+      acl: [
+        "open_loops_owner:EXECUTE:f",
+        "open_loops_runtime:EXECUTE:f",
+      ],
+    },
+    loops_reject_runtime_tenant_update: {
+      args: "",
+      result: "trigger",
+      owner: "open_loops_owner",
+      language: "plpgsql",
+      securityDefiner: false,
+      volatility: "v",
+      parallel: "u",
+      returnsSet: false,
+      source: `
+        BEGIN
+          IF pg_has_role(current_user, 'open_loops_runtime', 'USAGE') THEN
+            RAISE EXCEPTION 'runtime role cannot update tenants' USING ERRCODE = '42501';
+          END IF;
+          RETURN NEW;
+        END;
+      `,
+      acl: ["open_loops_owner:EXECUTE:f"],
+    },
+    loops_authenticate_key: {
+      args: "p_kid text, p_token_hash text",
+      result:
+        "TABLE(kid text, app text, agent text, scopes jsonb, token_hash text, issued_at timestamp with time zone, expires_at timestamp with time zone, revoked_at timestamp with time zone, disabled_at timestamp with time zone, tenant_id text, tenant_status text, principal_id text, principal_status text, membership_status text, token_kind text, roles text[])",
+      owner: "open_loops_owner",
+      language: "sql",
+      securityDefiner: true,
+      volatility: "v",
+      parallel: "u",
+      returnsSet: true,
+      source: "SELECT * FROM public.open_loops_authenticate_key(p_kid, p_token_hash);",
+      acl: [
+        "open_loops_authenticator:EXECUTE:f",
+        "open_loops_owner:EXECUTE:f",
+      ],
+    },
+    loops_append_auth_audit: {
+      args:
+        "p_id text, p_kid text, p_token_hash text, p_request_id text, p_operation_id text, p_decision text, p_deny_reason text, p_metadata jsonb",
+      result: "void",
+      owner: "open_loops_owner",
+      language: "sql",
+      securityDefiner: true,
+      volatility: "v",
+      parallel: "u",
+      returnsSet: false,
+      source: `
+        SELECT public.open_loops_append_auth_audit(
+          p_id, p_kid, p_token_hash, p_request_id,
+          p_operation_id, p_decision, p_deny_reason, p_metadata
+        );
+      `,
+      acl: [
+        "open_loops_authenticator:EXECUTE:f",
+        "open_loops_owner:EXECUTE:f",
+      ],
+    },
+  });
+
+function sameCatalogValues(actual: readonly string[] | null, expected: readonly string[]): boolean {
+  if (!actual || actual.length !== expected.length) return false;
+  return [...actual].sort().every((value, index) => value === [...expected].sort()[index]);
+}
+
+/**
+ * Migration 0013 is a forward-only identity boundary. Before its physical
+ * ledger row exists, none of the canonical aliases are required. Once the row
+ * exists, every alias is part of readiness and catalog drift fails closed.
+ */
+export async function isCanonicalIdentityAliasStateSafe(client: TypedQueryClient): Promise<boolean> {
+  const ledger = await client.get<{ identity_recorded: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1
+         FROM public.open_loops_schema_migrations
+        WHERE id=$1
+     ) AS identity_recorded`,
+    [LOOPS_IDENTITY_MIGRATION_ID],
+  );
+  if (!ledger?.identity_recorded) return true;
+
+  const view = await client.get<{
+    owner: string;
+    kind: string;
+    options: string[] | null;
+    definition: string;
+    columns: string[];
+    acl: string[];
+    trigger_count: number;
+    trigger_definition: string | null;
+    trigger_enabled: string | null;
+  }>(`
+    SELECT pg_get_userbyid(canonical.relowner) AS owner,
+           canonical.relkind AS kind,
+           canonical.reloptions AS options,
+           pg_get_viewdef(canonical.oid, true) AS definition,
+           ARRAY(
+             SELECT attribute.attname || ':' || format_type(attribute.atttypid, attribute.atttypmod)
+               FROM pg_attribute attribute
+              WHERE attribute.attrelid=canonical.oid
+                AND attribute.attnum > 0
+                AND NOT attribute.attisdropped
+              ORDER BY attribute.attnum
+           ) AS columns,
+           ARRAY(
+             SELECT concat(
+               CASE WHEN acl.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(acl.grantee) END,
+               ':', acl.privilege_type, ':', acl.is_grantable
+             )
+               FROM aclexplode(COALESCE(canonical.relacl, acldefault('r', canonical.relowner))) acl
+              ORDER BY 1
+           ) AS acl,
+           (
+             SELECT count(*)::int
+               FROM pg_trigger trigger
+              WHERE trigger.tgrelid='public.tenants'::regclass
+                AND trigger.tgname='loops_reject_runtime_tenant_update'
+                AND NOT trigger.tgisinternal
+           ) AS trigger_count,
+           (
+             SELECT pg_get_triggerdef(trigger.oid, true)
+               FROM pg_trigger trigger
+              WHERE trigger.tgrelid='public.tenants'::regclass
+                AND trigger.tgname='loops_reject_runtime_tenant_update'
+                AND NOT trigger.tgisinternal
+           ) AS trigger_definition,
+           (
+             SELECT trigger.tgenabled::text
+               FROM pg_trigger trigger
+              WHERE trigger.tgrelid='public.tenants'::regclass
+                AND trigger.tgname='loops_reject_runtime_tenant_update'
+                AND NOT trigger.tgisinternal
+           ) AS trigger_enabled
+      FROM pg_class canonical
+     WHERE canonical.oid=to_regclass('public.loops_schema_migrations')
+  `);
+  if (
+    !view ||
+    view.owner !== "open_loops_migrator" ||
+    view.kind !== "v" ||
+    (view.options?.length ?? 0) !== 0 ||
+    normalizedCatalogSql(view.definition) !==
+      "SELECT id, checksum, applied_at FROM open_loops_schema_migrations;" ||
+    !sameCatalogValues(view.columns, [
+      "id:text",
+      "checksum:text",
+      "applied_at:timestamp with time zone",
+    ]) ||
+    !sameCatalogValues(view.acl, [
+      "open_loops_migrator:DELETE:f",
+      "open_loops_migrator:INSERT:f",
+      "open_loops_migrator:REFERENCES:f",
+      "open_loops_migrator:SELECT:f",
+      "open_loops_migrator:TRIGGER:f",
+      "open_loops_migrator:TRUNCATE:f",
+      "open_loops_migrator:UPDATE:f",
+      "open_loops_runtime:SELECT:f",
+    ]) ||
+    view.trigger_count !== 1 ||
+    view.trigger_enabled !== "O" ||
+    normalizedCatalogSql(view.trigger_definition ?? "") !==
+      "CREATE TRIGGER loops_reject_runtime_tenant_update BEFORE UPDATE ON tenants FOR EACH ROW EXECUTE FUNCTION loops_reject_runtime_tenant_update()"
+  ) {
+    return false;
+  }
+
+  const functions = await client.many<CanonicalIdentityFunctionState>(`
+    SELECT proc.proname AS name,
+           pg_get_function_identity_arguments(proc.oid) AS args,
+           pg_get_function_result(proc.oid) AS result,
+           pg_get_userbyid(proc.proowner) AS owner,
+           language.lanname AS language,
+           proc.prosecdef AS security_definer,
+           proc.provolatile AS volatility,
+           proc.proparallel AS parallel,
+           proc.prokind AS kind,
+           proc.proretset AS returns_set,
+           proc.proisstrict AS is_strict,
+           proc.proleakproof AS is_leakproof,
+           proc.proconfig AS config,
+           proc.prosrc AS source,
+           pg_get_functiondef(proc.oid) AS definition,
+           ARRAY(
+             SELECT concat(
+               CASE WHEN acl.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(acl.grantee) END,
+               ':', acl.privilege_type, ':', acl.is_grantable
+             )
+               FROM aclexplode(COALESCE(proc.proacl, acldefault('f', proc.proowner))) acl
+              ORDER BY 1
+           ) AS acl
+      FROM pg_proc proc
+      JOIN pg_language language ON language.oid=proc.prolang
+     WHERE proc.oid IN (
+       to_regprocedure('public.loops_current_tenant_id()'),
+       to_regprocedure('public.loops_reject_runtime_tenant_update()'),
+       to_regprocedure('public.loops_authenticate_key(text,text)'),
+       to_regprocedure('public.loops_append_auth_audit(text,text,text,text,text,text,text,jsonb)')
+     )
+     ORDER BY proc.proname
+  `);
+  if (functions.length !== Object.keys(CANONICAL_IDENTITY_FUNCTIONS).length) return false;
+  for (const state of functions) {
+    const expected = CANONICAL_IDENTITY_FUNCTIONS[state.name];
+    if (
+      !expected ||
+      state.args !== expected.args ||
+      state.result !== expected.result ||
+      state.owner !== expected.owner ||
+      state.language !== expected.language ||
+      state.security_definer !== expected.securityDefiner ||
+      state.volatility !== expected.volatility ||
+      state.parallel !== expected.parallel ||
+      state.kind !== "f" ||
+      state.returns_set !== expected.returnsSet ||
+      state.is_strict ||
+      state.is_leakproof ||
+      !sameCatalogValues(state.config, ["search_path=pg_catalog"]) ||
+      !sameCatalogValues(state.acl, expected.acl) ||
+      (expected.source !== undefined &&
+        normalizedCatalogSql(state.source) !== normalizedCatalogSql(expected.source)) ||
+      (expected.definitionFragment !== undefined &&
+        !normalizedCatalogSql(state.definition).includes(expected.definitionFragment))
+    ) {
+      return false;
+    }
+  }
+
+  const parity = await client.get<{ rows_and_checksums_equal: boolean }>(`
+    SELECT NOT EXISTS (
+      (SELECT id, checksum, applied_at FROM public.open_loops_schema_migrations
+       EXCEPT
+       SELECT id, checksum, applied_at FROM public.loops_schema_migrations)
+      UNION ALL
+      (SELECT id, checksum, applied_at FROM public.loops_schema_migrations
+       EXCEPT
+       SELECT id, checksum, applied_at FROM public.open_loops_schema_migrations)
+    ) AS rows_and_checksums_equal
+  `);
+  return parity?.rows_and_checksums_equal === true;
+}
+
 export async function isSafeServiceConnection(
   client: TypedQueryClient,
   expectedRole: ServiceDatabaseRole,
 ): Promise<boolean> {
+  if (
+    expectedRole === "open_loops_runtime" &&
+    !await isCanonicalIdentityAliasStateSafe(client)
+  ) {
+    return false;
+  }
   const forbiddenRole = expectedRole === "open_loops_runtime"
     ? "open_loops_authenticator"
     : "open_loops_runtime";

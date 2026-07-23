@@ -109,7 +109,7 @@ export interface RouteTaskSpec {
 
 export interface UpsertRouteTasksOptions {
   project: string;
-  taskList: { slug: string; name: string; description: string };
+  taskList: { slug: string; name: string; description: string; legacySlugs?: string[] };
   cursorKey: string;
   maxActions: number;
   dryRun?: boolean;
@@ -132,7 +132,13 @@ export function upsertRouteTasks(opts: UpsertRouteTasksOptions): UpsertRouteTask
   const selection = selectRouteItems(opts.tasks, opts.maxActions, opts.cursorKey, (task) => task.fingerprint);
   const listId = opts.dryRun
     ? undefined
-    : ensureTodosTaskList(opts.project, opts.taskList.slug, opts.taskList.name, opts.taskList.description);
+    : ensureTodosTaskList(
+      opts.project,
+      opts.taskList.slug,
+      opts.taskList.name,
+      opts.taskList.description,
+      opts.taskList.legacySlugs,
+    );
   const actions = selection.selected.map((task) => {
     const routeTask = taskAutoRoute(task.tags, task.metadata, {
       autoRoute: Boolean(opts.autoRoute),
@@ -232,7 +238,9 @@ export function buildHygieneRouteTasks(
     const report = buildNameHygieneReport(store, { includeInactive: opts.includeInactive, limit });
     checked.names = report.checked;
     for (const change of report.changes.filter((entry) => entry.changed)) {
-      const fingerprint = `loops:hygiene:names:${change.id}:${stableHash([change.oldName, change.newName])}`;
+      // Stable machine identity: changing this prefix would duplicate the
+      // pre-rename Todos task instead of updating it.
+      const fingerprint = `openloops:hygiene:names:${change.id}:${stableHash([change.oldName, change.newName])}`;
       tasks.push({
         check: "names",
         title: `Loops hygiene: rename loop ${change.oldName}`,
@@ -270,7 +278,7 @@ export function buildHygieneRouteTasks(
     checked.duplicates = report.checked;
     for (const group of report.groups) {
       const loopIds = group.loops.map((loop) => loop.id).sort();
-      const fingerprint = `loops:hygiene:duplicates:${stableHash([group.key, loopIds])}`;
+      const fingerprint = `openloops:hygiene:duplicates:${stableHash([group.key, loopIds])}`;
       tasks.push({
         check: "duplicates",
         title: `Loops hygiene: duplicate/overlapping loops - ${group.baseName}`,
@@ -309,7 +317,7 @@ export function buildHygieneRouteTasks(
     const report = buildScriptInventoryReport(store, { includeInactive: opts.includeInactive, limit, scriptsDir: opts.scriptsDir });
     checked.scripts = report.checked;
     for (const loop of report.loops) {
-      const fingerprint = `loops:hygiene:scripts:${loop.id}:${stableHash([loop.command])}`;
+      const fingerprint = `openloops:hygiene:scripts:${loop.id}:${stableHash([loop.command])}`;
       tasks.push({
         check: "scripts",
         title: `Loops hygiene: replace script-backed loop ${loop.name}`,

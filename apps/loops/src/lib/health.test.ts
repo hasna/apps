@@ -252,7 +252,10 @@ describe("loop health classification", () => {
         loop: { id: stale.id, name: "stale-running" },
       });
       expect(scan.findings[0]?.fingerprint).toContain(stale.id);
+      expect(scan.findings[0]?.fingerprint).toStartWith("openloops:health-scan:stale-running:");
       expect(scan.findings[0]?.recommendedTask?.dedupeKey).toBe(scan.findings[0]?.fingerprint);
+      expect(scan.findings[0]?.recommendedTask?.tags).toContain("loops");
+      expect(scan.findings[0]?.recommendedTask?.tags).not.toContain("openloops");
     } finally {
       store.close();
     }
