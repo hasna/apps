@@ -1,6 +1,6 @@
 -- @generated mirror of POSTGRES_STORAGE_MIGRATIONS["0013_loops_identity_aliases"] — DO NOT EDIT.
 -- Source of truth: src/lib/storage/postgres-schema.ts
--- Runner: loops-serve migrate  (checksum: sha256:01286e430aecdd1caad2ade1f3ca36abd9dd51695959333ed88253feab48a725)
+-- Runner: loops-serve migrate  (checksum: sha256:9e73cf54d084709bf08f4a74dc1d5900a647cd574acb958503e5b50b8122e792)
 
 GRANT USAGE, CREATE ON SCHEMA public TO open_loops_owner, open_loops_migrator;
 
@@ -10,12 +10,15 @@ SELECT id, checksum, applied_at
 ALTER VIEW public.loops_schema_migrations OWNER TO open_loops_migrator;
 REVOKE ALL ON TABLE public.loops_schema_migrations
   FROM PUBLIC, open_loops_owner, open_loops_runtime, open_loops_authenticator;
+REVOKE ALL PRIVILEGES (id, checksum, applied_at)
+  ON TABLE public.loops_schema_migrations
+  FROM PUBLIC, open_loops_owner, open_loops_runtime, open_loops_authenticator;
 GRANT SELECT ON TABLE public.loops_schema_migrations TO open_loops_runtime;
 COMMENT ON VIEW public.loops_schema_migrations IS
   'Canonical Loops migration ledger view over the released open_loops_schema_migrations checksum authority.';
 
 CREATE OR REPLACE FUNCTION public.loops_current_tenant_id() RETURNS TEXT
-LANGUAGE sql STABLE PARALLEL SAFE SET search_path = pg_catalog
+LANGUAGE sql STABLE PARALLEL SAFE COST 100 SET search_path = pg_catalog
 RETURN COALESCE(
   NULLIF(pg_catalog.current_setting('loops.tenant_id', true), ''),
   NULLIF(pg_catalog.current_setting('open_loops.tenant_id', true), '')
@@ -30,7 +33,7 @@ COMMENT ON FUNCTION public.loops_current_tenant_id() IS
 
 CREATE OR REPLACE FUNCTION public.loops_reject_runtime_tenant_update()
 RETURNS TRIGGER
-LANGUAGE plpgsql SECURITY INVOKER SET search_path = pg_catalog
+LANGUAGE plpgsql SECURITY INVOKER COST 100 SET search_path = pg_catalog
 AS $$
 BEGIN
   IF pg_has_role(current_user, 'open_loops_runtime', 'USAGE') THEN
@@ -55,7 +58,7 @@ RETURNS TABLE (
   tenant_id TEXT, tenant_status TEXT, principal_id TEXT, principal_status TEXT,
   membership_status TEXT, token_kind TEXT, roles TEXT[]
 )
-LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog
+LANGUAGE sql SECURITY DEFINER COST 100 ROWS 1000 SET search_path = pg_catalog
 AS $$
   SELECT * FROM public.open_loops_authenticate_key(p_kid, p_token_hash);
 $$;
@@ -69,7 +72,7 @@ CREATE OR REPLACE FUNCTION public.loops_append_auth_audit(
   p_id TEXT, p_kid TEXT, p_token_hash TEXT, p_request_id TEXT,
   p_operation_id TEXT, p_decision TEXT, p_deny_reason TEXT, p_metadata JSONB
 ) RETURNS VOID
-LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog
+LANGUAGE sql SECURITY DEFINER COST 100 SET search_path = pg_catalog
 AS $$
   SELECT public.open_loops_append_auth_audit(
     p_id, p_kid, p_token_hash, p_request_id,

@@ -51,7 +51,7 @@
     },
     {
       "path": "migrations/0013_loops_identity_aliases.sql",
-      "tokens": { "open_loops": 35 },
+      "tokens": { "open_loops": 38 },
       "reason": "Additive migration aliases canonical objects to released ledger, function, setting, and role surfaces.",
       "removalCondition": "Retire aliases only through a later migration after all compatibility gates in docs/IDENTITY-MIGRATION.md pass."
     },
@@ -171,7 +171,7 @@
     },
     {
       "path": "src/lib/storage/postgres-loop-storage.test.ts",
-      "tokens": { "OpenLoops": 1, "open_loops": 266 },
+      "tokens": { "OpenLoops": 1, "open_loops": 267 },
       "reason": "Fresh and upgrade tests exercise released roles, functions, settings, and immutable bootstrap error text.",
       "removalCondition": "Reduce only as later additive migrations retire each compatibility surface."
     },
@@ -183,7 +183,7 @@
     },
     {
       "path": "src/lib/storage/postgres-schema.ts",
-      "tokens": { "OpenLoops": 7, "open_loops": 234 },
+      "tokens": { "OpenLoops": 7, "open_loops": 252 },
       "reason": "Contains immutable released migration source plus the additive canonical compatibility migration.",
       "removalCondition": "Never rewrite released migration source; retire aliases only through later checksum-pinned migrations."
     },
@@ -255,7 +255,7 @@
     },
     {
       "path": "src/serve/index.ts",
-      "tokens": { "OpenLoops": 4, "open_loops": 117 },
+      "tokens": { "OpenLoops": 4, "open_loops": 101 },
       "reason": "Validates immutable bootstrap errors, provider capability roles, and bounded legacy function privileges.",
       "removalCondition": "Retain immutable error recognition; remove role/function aliases after provider and client cutovers."
     },

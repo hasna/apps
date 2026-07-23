@@ -11,6 +11,7 @@ import {
   logServeCommandFailure,
   program,
   resolveServeMigrationTarget,
+  runGuardedPostgresMigrations,
 } from "./index.js";
 
 function bootstrapClient(role: {
@@ -359,6 +360,60 @@ describe("loops-serve database bootstrap", () => {
       checksumDrift,
       [earlierMigration, identityMigration],
     )).toThrow("ledger and immutable migration plan");
+  });
+
+  test("the shared runner stops tenant enforcement before the identity boundary", async () => {
+    const migrations = [
+      {
+        id: "0010_tenant_enforce",
+        sql: "SELECT 1",
+        checksum: "sha256:tenant",
+      },
+      {
+        id: "0013_loops_identity_aliases",
+        sql: "SELECT 1",
+        checksum: "sha256:identity",
+        rollingDeploy: {
+          kind: "canonical_identity_aliases" as const,
+          allowAsSolePending: true as const,
+          preApplyCatalogState: "aliases_absent" as const,
+          postApplyCatalogState: "aliases_exact" as const,
+          repair: "transactional_reapply" as const,
+        },
+      },
+    ];
+    const calls: Array<{ dryRun?: boolean; through?: string }> = [];
+    const result = {
+      backend: "postgres" as const,
+      dryRun: false,
+      applied: [{
+        id: migrations[0]!.id,
+        checksum: migrations[0]!.checksum,
+        appliedAt: "2026-07-23T00:00:00.000Z",
+      }],
+      plan: [
+        { migration: migrations[0]!, state: "already_applied" as const },
+        { migration: migrations[1]!, state: "pending" as const },
+      ],
+    };
+    const schema = {
+      migrations,
+      migrate: async (opts: { dryRun?: boolean; through?: string } = {}) => {
+        calls.push(opts);
+        return { ...result, dryRun: opts.dryRun === true };
+      },
+    } as unknown as PostgresStorage;
+
+    await runGuardedPostgresMigrations(
+      bootstrapClient(null),
+      schema,
+      { enforceTenancy: true },
+    );
+
+    expect(calls).toEqual([
+      { dryRun: true },
+      { dryRun: false, through: "0010_tenant_enforce" },
+    ]);
   });
 
   test("exposes a fixed no-option shared database transfer command", () => {

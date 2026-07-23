@@ -52,6 +52,12 @@ the sole pending migration. Then run
 rollback to the preceding release is supported only before the 0013 ledger row
 is recorded.
 
+Every production migration entrypoint uses the same phase gate. The standalone
+`scripts/db-migrate.ts` and loopback-only `scripts/db-migrate-tunnel.ts`
+runners stop `--enforce-tenancy` at `0010_tenant_enforce`; they can cross 0013
+only with the explicit `--identity-aliases` phase, which delegates to the same
+guarded cutover as `loops-serve migrate`.
+
 The `--identity-aliases` command owns this boundary independently; it does not
 trust a prior readiness probe. Under the migration advisory lock and one
 transaction it fixes `search_path` to `public, pg_catalog, pg_temp`, verifies the exact
@@ -81,9 +87,10 @@ unexpected signature or routine kind under any canonical routine name. Once
 0013 is recorded, readiness fails closed unless the complete canonical
 routine-name set contains only the expected signatures and the canonical
 ledger view, tenant reader, update guard and trigger, auth wrappers, owners,
-function security, ACLs, definitions, trigger state, and bidirectional ledger
-row/checksum parity all match the migration contract. Any other pending
-migration remains a hard readiness failure.
+function security, relation and column ACLs, definitions, exact routine planner
+metadata, trigger state, and bidirectional ledger row/checksum parity all match
+the migration contract. Any other pending migration remains a hard readiness
+failure.
 
 Recorded-0013 catalog drift has one supported repair route:
 `loops-serve identity-catalog-repair`. The command accepts no operator-supplied

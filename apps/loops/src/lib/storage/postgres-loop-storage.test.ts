@@ -197,6 +197,20 @@ async function identityCatalogSnapshot(
             'kind', relation.relkind,
             'owner', pg_get_userbyid(relation.relowner),
             'acl', COALESCE(relation.relacl::text, ''),
+            'column_acl', COALESCE((
+              SELECT jsonb_agg(
+                jsonb_build_object(
+                  'column', attribute.attname,
+                  'acl', attribute.attacl::text
+                )
+                ORDER BY attribute.attnum
+              )
+                FROM pg_attribute attribute
+               WHERE attribute.attrelid=relation.oid
+                 AND attribute.attnum > 0
+                 AND NOT attribute.attisdropped
+                 AND attribute.attacl IS NOT NULL
+            ), '[]'::jsonb),
             'comment', obj_description(relation.oid, 'pg_class'),
             'definition', CASE
               WHEN relation.relkind IN ('v', 'm') THEN pg_get_viewdef(relation.oid, false)
@@ -226,6 +240,9 @@ async function identityCatalogSnapshot(
             'returns_set', routine.proretset,
             'strict', routine.proisstrict,
             'leakproof', routine.proleakproof,
+            'cost', routine.procost,
+            'rows', routine.prorows,
+            'support', routine.prosupport,
             'config', routine.proconfig,
             'source', routine.prosrc,
             'acl', COALESCE(routine.proacl::text, ''),
@@ -1464,6 +1481,10 @@ suite("PostgresLoopStorage (live)", () => {
         sql: "GRANT SELECT ON public.loops_schema_migrations TO open_loops_authenticator",
       },
       {
+        name: "ledger view column privilege widened",
+        sql: "GRANT SELECT(id) ON public.loops_schema_migrations TO open_loops_authenticator",
+      },
+      {
         name: "ledger view row and checksum parity narrowed",
         sql: `
           CREATE OR REPLACE VIEW public.loops_schema_migrations AS
@@ -1479,6 +1500,10 @@ suite("PostgresLoopStorage (live)", () => {
       {
         name: "tenant reader security drift",
         sql: "ALTER FUNCTION public.loops_current_tenant_id() SECURITY DEFINER",
+      },
+      {
+        name: "tenant reader planner cost drift",
+        sql: "ALTER FUNCTION public.loops_current_tenant_id() COST 999",
       },
       {
         name: "tenant reader body drift",

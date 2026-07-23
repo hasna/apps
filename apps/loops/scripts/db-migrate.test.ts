@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { logMigrationFailure } from "./db-migrate.js";
 
 describe("db migration script logging", () => {
@@ -14,6 +15,15 @@ describe("db migration script logging", () => {
       expect(logged).toEqual([JSON.stringify({ evt: "loops_migrate_failed", errorType: "error" })]);
     } finally {
       console.error = originalError;
+    }
+  });
+
+  test("every standalone migration runner delegates cutover phases to the shared guarded executor", () => {
+    for (const script of ["db-migrate.ts", "db-migrate-tunnel.ts"]) {
+      const source = readFileSync(new URL(script, import.meta.url), "utf8");
+      expect(source).toContain("runGuardedPostgresMigrations");
+      expect(source).not.toContain("schema.migrate({");
+      expect(source).not.toContain("enforceTenancy ? undefined");
     }
   });
 });

@@ -10,6 +10,114 @@ export const POSTGRES_CANONICAL_MIGRATION_LEDGER_VIEW = "loops_schema_migrations
 export const POSTGRES_MIGRATION_ADVISORY_LOCK_SQL =
   "SELECT pg_advisory_xact_lock(1330466384, 1280262987)";
 
+/**
+ * Exact pg_proc contract for the canonical identity aliases. Keep this beside
+ * the migration SQL: readiness and protected repair consume these definitions
+ * instead of maintaining a second catalog contract in the serve layer.
+ */
+export const POSTGRES_CANONICAL_IDENTITY_ROUTINES = Object.freeze({
+  loops_current_tenant_id: {
+    args: "",
+    result: "text",
+    owner: "open_loops_owner",
+    language: "sql",
+    securityDefiner: false,
+    volatility: "s",
+    parallel: "s",
+    kind: "f",
+    returnsSet: false,
+    strict: false,
+    leakproof: false,
+    cost: 100,
+    rows: 0,
+    support: null,
+    config: ["search_path=pg_catalog"],
+    definitionFragment:
+      "RETURN COALESCE(NULLIF(current_setting('loops.tenant_id'::text, true), ''::text), NULLIF(current_setting('open_loops.tenant_id'::text, true), ''::text))",
+    acl: [
+      "open_loops_owner:EXECUTE:f",
+      "open_loops_runtime:EXECUTE:f",
+    ],
+  },
+  loops_reject_runtime_tenant_update: {
+    args: "",
+    result: "trigger",
+    owner: "open_loops_owner",
+    language: "plpgsql",
+    securityDefiner: false,
+    volatility: "v",
+    parallel: "u",
+    kind: "f",
+    returnsSet: false,
+    strict: false,
+    leakproof: false,
+    cost: 100,
+    rows: 0,
+    support: null,
+    config: ["search_path=pg_catalog"],
+    source: `
+      BEGIN
+        IF pg_has_role(current_user, 'open_loops_runtime', 'USAGE') THEN
+          RAISE EXCEPTION 'runtime role cannot update tenants' USING ERRCODE = '42501';
+        END IF;
+        RETURN NEW;
+      END;
+    `,
+    acl: ["open_loops_owner:EXECUTE:f"],
+  },
+  loops_authenticate_key: {
+    args: "p_kid text, p_token_hash text",
+    result:
+      "TABLE(kid text, app text, agent text, scopes jsonb, token_hash text, issued_at timestamp with time zone, expires_at timestamp with time zone, revoked_at timestamp with time zone, disabled_at timestamp with time zone, tenant_id text, tenant_status text, principal_id text, principal_status text, membership_status text, token_kind text, roles text[])",
+    owner: "open_loops_owner",
+    language: "sql",
+    securityDefiner: true,
+    volatility: "v",
+    parallel: "u",
+    kind: "f",
+    returnsSet: true,
+    strict: false,
+    leakproof: false,
+    cost: 100,
+    rows: 1000,
+    support: null,
+    config: ["search_path=pg_catalog"],
+    source: "SELECT * FROM public.open_loops_authenticate_key(p_kid, p_token_hash);",
+    acl: [
+      "open_loops_authenticator:EXECUTE:f",
+      "open_loops_owner:EXECUTE:f",
+    ],
+  },
+  loops_append_auth_audit: {
+    args:
+      "p_id text, p_kid text, p_token_hash text, p_request_id text, p_operation_id text, p_decision text, p_deny_reason text, p_metadata jsonb",
+    result: "void",
+    owner: "open_loops_owner",
+    language: "sql",
+    securityDefiner: true,
+    volatility: "v",
+    parallel: "u",
+    kind: "f",
+    returnsSet: false,
+    strict: false,
+    leakproof: false,
+    cost: 100,
+    rows: 0,
+    support: null,
+    config: ["search_path=pg_catalog"],
+    source: `
+      SELECT public.open_loops_append_auth_audit(
+        p_id, p_kid, p_token_hash, p_request_id,
+        p_operation_id, p_decision, p_deny_reason, p_metadata
+      );
+    `,
+    acl: [
+      "open_loops_authenticator:EXECUTE:f",
+      "open_loops_owner:EXECUTE:f",
+    ],
+  },
+} as const);
+
 export function checksumStorageSql(sql: string): string {
   const normalized = sql.trim().replace(/\r\n/g, "\n");
   return `sha256:${createHash("sha256").update(normalized).digest("hex")}`;
@@ -1751,12 +1859,15 @@ SELECT id, checksum, applied_at
 ALTER VIEW public.loops_schema_migrations OWNER TO open_loops_migrator;
 REVOKE ALL ON TABLE public.loops_schema_migrations
   FROM PUBLIC, open_loops_owner, open_loops_runtime, open_loops_authenticator;
+REVOKE ALL PRIVILEGES (id, checksum, applied_at)
+  ON TABLE public.loops_schema_migrations
+  FROM PUBLIC, open_loops_owner, open_loops_runtime, open_loops_authenticator;
 GRANT SELECT ON TABLE public.loops_schema_migrations TO open_loops_runtime;
 COMMENT ON VIEW public.loops_schema_migrations IS
   'Canonical Loops migration ledger view over the released open_loops_schema_migrations checksum authority.';
 
 CREATE OR REPLACE FUNCTION public.loops_current_tenant_id() RETURNS TEXT
-LANGUAGE sql STABLE PARALLEL SAFE SET search_path = pg_catalog
+LANGUAGE sql STABLE PARALLEL SAFE COST 100 SET search_path = pg_catalog
 RETURN COALESCE(
   NULLIF(pg_catalog.current_setting('loops.tenant_id', true), ''),
   NULLIF(pg_catalog.current_setting('open_loops.tenant_id', true), '')
@@ -1771,7 +1882,7 @@ COMMENT ON FUNCTION public.loops_current_tenant_id() IS
 
 CREATE OR REPLACE FUNCTION public.loops_reject_runtime_tenant_update()
 RETURNS TRIGGER
-LANGUAGE plpgsql SECURITY INVOKER SET search_path = pg_catalog
+LANGUAGE plpgsql SECURITY INVOKER COST 100 SET search_path = pg_catalog
 AS $$
 BEGIN
   IF pg_has_role(current_user, 'open_loops_runtime', 'USAGE') THEN
@@ -1796,7 +1907,7 @@ RETURNS TABLE (
   tenant_id TEXT, tenant_status TEXT, principal_id TEXT, principal_status TEXT,
   membership_status TEXT, token_kind TEXT, roles TEXT[]
 )
-LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog
+LANGUAGE sql SECURITY DEFINER COST 100 ROWS 1000 SET search_path = pg_catalog
 AS $$
   SELECT * FROM public.open_loops_authenticate_key(p_kid, p_token_hash);
 $$;
@@ -1810,7 +1921,7 @@ CREATE OR REPLACE FUNCTION public.loops_append_auth_audit(
   p_id TEXT, p_kid TEXT, p_token_hash TEXT, p_request_id TEXT,
   p_operation_id TEXT, p_decision TEXT, p_deny_reason TEXT, p_metadata JSONB
 ) RETURNS VOID
-LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog
+LANGUAGE sql SECURITY DEFINER COST 100 SET search_path = pg_catalog
 AS $$
   SELECT public.open_loops_append_auth_audit(
     p_id, p_kid, p_token_hash, p_request_id,

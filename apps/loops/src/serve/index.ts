@@ -22,6 +22,7 @@ import { createPostgresLoopStorage } from "../lib/storage/postgres-loop-storage.
 import { runSharedToDedicatedTransfer } from "../lib/storage/shared-database-transfer.js";
 import {
   POSTGRES_MIGRATION_ADVISORY_LOCK_SQL,
+  POSTGRES_CANONICAL_IDENTITY_ROUTINES,
   POSTGRES_MIGRATION_LEDGER_TABLE,
   POSTGRES_STORAGE_MIGRATIONS,
   POSTGRES_TENANT_BOOTSTRAP_MEMBERSHIPS_SQL,
@@ -123,102 +124,40 @@ interface CanonicalIdentityFunctionState {
   config: string[] | null;
   source: string;
   definition: string;
+  cost: number;
+  rows: number;
+  support: string | null;
   acl: string[];
 }
 
 interface CanonicalIdentityFunctionExpectation {
   args: string;
   result: string;
-  owner: "open_loops_owner";
-  language: "sql" | "plpgsql";
+  owner: string;
+  language: string;
   securityDefiner: boolean;
-  volatility: "s" | "v";
-  parallel: "s" | "u";
+  volatility: string;
+  parallel: string;
+  kind: string;
   returnsSet: boolean;
+  strict: boolean;
+  leakproof: boolean;
+  cost: number;
+  rows: number;
+  support: string | null;
+  config: readonly string[];
   source?: string;
   definitionFragment?: string;
-  acl: string[];
+  acl: readonly string[];
 }
 
 function normalizedCatalogSql(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
-const CANONICAL_IDENTITY_FUNCTIONS: Readonly<Record<string, CanonicalIdentityFunctionExpectation>> =
-  Object.freeze({
-    loops_current_tenant_id: {
-      args: "",
-      result: "text",
-      owner: "open_loops_owner",
-      language: "sql",
-      securityDefiner: false,
-      volatility: "s",
-      parallel: "s",
-      returnsSet: false,
-      definitionFragment:
-        "RETURN COALESCE(NULLIF(current_setting('loops.tenant_id'::text, true), ''::text), NULLIF(current_setting('open_loops.tenant_id'::text, true), ''::text))",
-      acl: [
-        "open_loops_owner:EXECUTE:f",
-        "open_loops_runtime:EXECUTE:f",
-      ],
-    },
-    loops_reject_runtime_tenant_update: {
-      args: "",
-      result: "trigger",
-      owner: "open_loops_owner",
-      language: "plpgsql",
-      securityDefiner: false,
-      volatility: "v",
-      parallel: "u",
-      returnsSet: false,
-      source: `
-        BEGIN
-          IF pg_has_role(current_user, 'open_loops_runtime', 'USAGE') THEN
-            RAISE EXCEPTION 'runtime role cannot update tenants' USING ERRCODE = '42501';
-          END IF;
-          RETURN NEW;
-        END;
-      `,
-      acl: ["open_loops_owner:EXECUTE:f"],
-    },
-    loops_authenticate_key: {
-      args: "p_kid text, p_token_hash text",
-      result:
-        "TABLE(kid text, app text, agent text, scopes jsonb, token_hash text, issued_at timestamp with time zone, expires_at timestamp with time zone, revoked_at timestamp with time zone, disabled_at timestamp with time zone, tenant_id text, tenant_status text, principal_id text, principal_status text, membership_status text, token_kind text, roles text[])",
-      owner: "open_loops_owner",
-      language: "sql",
-      securityDefiner: true,
-      volatility: "v",
-      parallel: "u",
-      returnsSet: true,
-      source: "SELECT * FROM public.open_loops_authenticate_key(p_kid, p_token_hash);",
-      acl: [
-        "open_loops_authenticator:EXECUTE:f",
-        "open_loops_owner:EXECUTE:f",
-      ],
-    },
-    loops_append_auth_audit: {
-      args:
-        "p_id text, p_kid text, p_token_hash text, p_request_id text, p_operation_id text, p_decision text, p_deny_reason text, p_metadata jsonb",
-      result: "void",
-      owner: "open_loops_owner",
-      language: "sql",
-      securityDefiner: true,
-      volatility: "v",
-      parallel: "u",
-      returnsSet: false,
-      source: `
-        SELECT public.open_loops_append_auth_audit(
-          p_id, p_kid, p_token_hash, p_request_id,
-          p_operation_id, p_decision, p_deny_reason, p_metadata
-        );
-      `,
-      acl: [
-        "open_loops_authenticator:EXECUTE:f",
-        "open_loops_owner:EXECUTE:f",
-      ],
-    },
-  });
+const CANONICAL_IDENTITY_FUNCTIONS: Readonly<
+  Record<string, CanonicalIdentityFunctionExpectation>
+> = POSTGRES_CANONICAL_IDENTITY_ROUTINES;
 const CANONICAL_IDENTITY_ROUTINE_NAMES = Object.freeze(
   Object.keys(CANONICAL_IDENTITY_FUNCTIONS),
 );
@@ -255,6 +194,7 @@ export async function isCanonicalIdentityAliasStateSafe(
     definition: string;
     columns: string[];
     acl: string[];
+    column_acl: string[];
     trigger_count: number;
     trigger_definition: string | null;
     trigger_enabled: string | null;
@@ -279,6 +219,19 @@ export async function isCanonicalIdentityAliasStateSafe(
                FROM aclexplode(COALESCE(canonical.relacl, acldefault('r', canonical.relowner))) acl
               ORDER BY 1
            ) AS acl,
+           ARRAY(
+             SELECT concat(
+               attribute.attname, ':',
+               CASE WHEN acl.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(acl.grantee) END,
+               ':', acl.privilege_type, ':', acl.is_grantable
+             )
+               FROM pg_attribute attribute
+               CROSS JOIN LATERAL aclexplode(attribute.attacl) acl
+              WHERE attribute.attrelid=canonical.oid
+                AND attribute.attnum > 0
+                AND NOT attribute.attisdropped
+              ORDER BY 1
+           ) AS column_acl,
            (
              SELECT count(*)::int
                FROM pg_trigger trigger
@@ -325,6 +278,7 @@ export async function isCanonicalIdentityAliasStateSafe(
       "open_loops_migrator:UPDATE:f",
       "open_loops_runtime:SELECT:f",
     ]) ||
+    !sameCatalogValues(view.column_acl, []) ||
     view.trigger_count !== 1 ||
     view.trigger_enabled !== "O" ||
     normalizedCatalogSql(view.trigger_definition ?? "") !==
@@ -348,6 +302,9 @@ export async function isCanonicalIdentityAliasStateSafe(
            proc.proleakproof AS is_leakproof,
            proc.proconfig AS config,
            proc.prosrc AS source,
+           proc.procost::float8 AS cost,
+           proc.prorows::float8 AS rows,
+           CASE WHEN proc.prosupport=0 THEN NULL ELSE proc.prosupport::regproc::text END AS support,
            CASE
              WHEN proc.prokind IN ('f', 'p') THEN pg_get_functiondef(proc.oid)
              ELSE ''
@@ -379,11 +336,14 @@ export async function isCanonicalIdentityAliasStateSafe(
       state.security_definer !== expected.securityDefiner ||
       state.volatility !== expected.volatility ||
       state.parallel !== expected.parallel ||
-      state.kind !== "f" ||
+      state.kind !== expected.kind ||
       state.returns_set !== expected.returnsSet ||
-      state.is_strict ||
-      state.is_leakproof ||
-      !sameCatalogValues(state.config, ["search_path=pg_catalog"]) ||
+      state.is_strict !== expected.strict ||
+      state.is_leakproof !== expected.leakproof ||
+      state.cost !== expected.cost ||
+      state.rows !== expected.rows ||
+      state.support !== expected.support ||
+      !sameCatalogValues(state.config, expected.config) ||
       !sameCatalogValues(state.acl, expected.acl) ||
       (expected.source !== undefined &&
         normalizedCatalogSql(state.source) !== normalizedCatalogSql(expected.source)) ||
@@ -665,6 +625,37 @@ export function resolveServeMigrationTarget(
   if (opts.identityAliases) return resolveCanonicalIdentityMigration(migrations).id;
   if (opts.enforceTenancy) return TENANT_ENFORCEMENT_MIGRATION_ID;
   return "0008_tenant_prepare";
+}
+
+/**
+ * One migration phase gate shared by every production runner. Ordinary prepare
+ * and tenant-enforcement phases stop before the forward-only identity boundary;
+ * crossing that boundary is explicit and always uses its advisory-locked
+ * catalog/authority preflight.
+ */
+export async function runGuardedPostgresMigrations(
+  client: PoolQueryClient,
+  schema: PostgresStorage,
+  opts: {
+    dryRun?: boolean;
+    enforceTenancy?: boolean;
+    identityAliases?: boolean;
+  } = {},
+): Promise<StorageMigrationResult> {
+  const through = resolveServeMigrationTarget(opts, schema.migrations);
+  if (opts.enforceTenancy) {
+    await assertTenantEnforcementBootstrapIfPending(client, schema);
+  }
+  if (opts.identityAliases) {
+    return migrateCanonicalIdentityAliases(client, {
+      dryRun: Boolean(opts.dryRun),
+      migrations: schema.migrations,
+    });
+  }
+  return schema.migrate({
+    dryRun: Boolean(opts.dryRun),
+    through,
+  });
 }
 
 export function assertIdentityAliasesAreSolePending(
@@ -1033,7 +1024,7 @@ export async function isSafeServiceConnection(
                  WHERE namespace.nspname NOT IN ('pg_catalog', 'information_schema')
                    AND namespace.nspname NOT LIKE 'pg_toast%'
                    AND namespace.nspname NOT LIKE 'pg_temp_%'
-                   AND object.relkind IN ('r', 'p')
+                   AND object.relkind IN ('r', 'p', 'v', 'm', 'f')
                    AND attribute.attnum > 0
                    AND NOT attribute.attisdropped
                    AND acl.privilege_type IS NOT NULL
@@ -1049,7 +1040,7 @@ export async function isSafeServiceConnection(
                  WHERE namespace.nspname NOT IN ('pg_catalog', 'information_schema')
                    AND namespace.nspname NOT LIKE 'pg_toast%'
                    AND namespace.nspname NOT LIKE 'pg_temp_%'
-                   AND object.relkind IN ('r', 'p')
+                   AND object.relkind IN ('r', 'p', 'v', 'm', 'f')
                    AND attribute.attnum > 0
                    AND NOT attribute.attisdropped
                    AND acl.privilege_type IS NOT NULL
@@ -1701,23 +1692,10 @@ program
     enforceTenancy?: boolean;
     identityAliases?: boolean;
   }) => {
-    const through = resolveServeMigrationTarget(opts);
     const executor = buildExecutor("loops-migrate", "migrator");
     try {
       const schema = new PostgresStorage(executor);
-      if (opts.enforceTenancy) await assertTenantEnforcementBootstrapIfPending(executor.queryClient, schema);
-      let result: StorageMigrationResult;
-      if (opts.identityAliases) {
-        result = await migrateCanonicalIdentityAliases(executor.queryClient, {
-          dryRun: Boolean(opts.dryRun),
-          migrations: schema.migrations,
-        });
-      } else {
-        result = await schema.migrate({
-          dryRun: Boolean(opts.dryRun),
-          through,
-        });
-      }
+      const result = await runGuardedPostgresMigrations(executor.queryClient, schema, opts);
       const pending = result.plan.filter((p) => p.state === "pending").map((p) => p.migration.id);
       console.log(JSON.stringify({ evt: "migrate", dryRun: result.dryRun, applied: result.applied.map((a) => a.id), pending }));
     } finally {

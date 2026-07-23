@@ -9,7 +9,7 @@
 //
 import { PgPoolExecutor } from "../src/lib/storage/pg-executor.js";
 import { PostgresStorage } from "../src/lib/storage/postgres.js";
-import { assertTenantEnforcementBootstrapIfPending } from "../src/serve/index.js";
+import { runGuardedPostgresMigrations } from "../src/serve/index.js";
 
 function resolveDsn(): string {
   const dsn = process.env.HASNA_LOOPS_MIGRATOR_DATABASE_URL?.trim();
@@ -22,6 +22,7 @@ function resolveDsn(): string {
 export async function runMigrations(dsn = resolveDsn()): Promise<void> {
   const dryRun = process.argv.includes("--dry-run");
   const enforceTenancy = process.argv.includes("--enforce-tenancy");
+  const identityAliases = process.argv.includes("--identity-aliases");
   const executor = PgPoolExecutor.fromConnectionString({
     connectionString: dsn,
     applicationName: "loops-migrate",
@@ -29,10 +30,10 @@ export async function runMigrations(dsn = resolveDsn()): Promise<void> {
   });
   try {
     const schema = new PostgresStorage(executor);
-    if (enforceTenancy) await assertTenantEnforcementBootstrapIfPending(executor.queryClient, schema);
-    const result = await schema.migrate({
+    const result = await runGuardedPostgresMigrations(executor.queryClient, schema, {
       dryRun,
-      through: enforceTenancy ? undefined : "0008_tenant_prepare",
+      enforceTenancy,
+      identityAliases,
     });
     const pending = result.plan.filter((p) => p.state === "pending").map((p) => p.migration.id);
     console.log(
@@ -41,6 +42,7 @@ export async function runMigrations(dsn = resolveDsn()): Promise<void> {
         backend: result.backend,
         dryRun: result.dryRun,
         enforceTenancy,
+        identityAliases,
         applied: result.applied.map((a) => a.id),
         pending,
       }),

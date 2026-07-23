@@ -108,7 +108,7 @@ describe("Postgres storage migrations", () => {
       "0008_tenant_prepare": "sha256:76924f61f71fa2e7d3fb7773ff372200e26d0b3e48a5d05585adaeeca8f30043",
       "0009_tenant_backfill": "sha256:7bfd222e503736ec0bc2811f8a31d3e57820a0fa1106795e09fd26a5cf966f2c",
       "0010_tenant_enforce": "sha256:f923c70c2960e0372b4c01c5f01d9432fa0c76b24921c616dc149fa191409053",
-      "0013_loops_identity_aliases": "sha256:01286e430aecdd1caad2ade1f3ca36abd9dd51695959333ed88253feab48a725",
+      "0013_loops_identity_aliases": "sha256:9e73cf54d084709bf08f4a74dc1d5900a647cd574acb958503e5b50b8122e792",
     };
     for (const migration of POSTGRES_STORAGE_MIGRATIONS) {
       expect(`${migration.id} ${migration.checksum}`).toBe(`${migration.id} ${pinned[migration.id]}`);
