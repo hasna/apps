@@ -46,8 +46,10 @@ bun run build
 ## Install the CLI artifact
 
 Bun blocks dependency lifecycle scripts unless a package is explicitly trusted.
-The supported Bun install paths therefore use `--trust` so the package can
-normalize the effective executable target to owner-writable mode `0755`:
+An ordinary Bun install is therefore fail-closed: if the blocked lifecycle
+leaves the effective executable target writable by group or world, `capacity`
+refuses to run. Trusting the package during installation lets the packaged
+no-symlink-follow hardener normalize the executable target to mode `0755`:
 
 ```sh
 bun add --trust @hasna/capacity

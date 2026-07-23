@@ -22,9 +22,11 @@ const BUN_EXTRACT_ROOT = join(TEMP_ROOT, "bun-extracted");
 const NPM_INSTALL_ROOT = join(TEMP_ROOT, "npm-install");
 const BUN_LOCAL_INSTALL_ROOT = join(TEMP_ROOT, "bun-local-install");
 const BUN_GLOBAL_INSTALL_ROOT = join(TEMP_ROOT, "bun-global-install");
+const BUN_LOCAL_NO_TRUST_INSTALL_ROOT = join(TEMP_ROOT, "bun-local-no-trust-install");
+const BUN_GLOBAL_NO_TRUST_INSTALL_ROOT = join(TEMP_ROOT, "bun-global-no-trust-install");
 const INSTALL_HOME_ROOT = join(TEMP_ROOT, "install-home");
 const COMMAND_TIMEOUT_MS = 25_000;
-const PACKAGE_LIFECYCLE_TIMEOUT_MS = 60_000;
+const PACKAGE_LIFECYCLE_TIMEOUT_MS = 90_000;
 
 interface CommandResult {
   readonly stdout: string;
@@ -78,6 +80,10 @@ let bunLocalInstalledCliPath: string;
 let bunLocalInstalledCliTarget: string;
 let bunGlobalInstalledCliPath: string;
 let bunGlobalInstalledCliTarget: string;
+let bunLocalNoTrustCliPath: string;
+let bunLocalNoTrustCliTarget: string;
+let bunGlobalNoTrustCliPath: string;
+let bunGlobalNoTrustCliTarget: string;
 
 async function run(
   command: readonly string[],
@@ -161,6 +167,8 @@ beforeAll(async () => {
     NPM_INSTALL_ROOT,
     BUN_LOCAL_INSTALL_ROOT,
     BUN_GLOBAL_INSTALL_ROOT,
+    BUN_LOCAL_NO_TRUST_INSTALL_ROOT,
+    BUN_GLOBAL_NO_TRUST_INSTALL_ROOT,
     INSTALL_HOME_ROOT,
   ]) {
     mkdirSync(directory, { mode: 0o700 });
@@ -242,6 +250,7 @@ beforeAll(async () => {
   expect(await archive.extract(NPM_EXTRACT_ROOT)).toBe(pack.entryCount);
   packedCliPath = join(NPM_EXTRACT_ROOT, "package", "dist", "cli.js");
   expect(existsSync(packedCliPath)).toBe(true);
+  chmodSync(packedCliPath, 0o755);
 
   rmSync(DIST_ROOT, { recursive: true, force: true });
   expect(existsSync(DIST_ROOT)).toBe(false);
@@ -281,6 +290,7 @@ beforeAll(async () => {
   expect(await bunArchive.extract(BUN_EXTRACT_ROOT)).toBe(bunArchiveFiles.size);
   bunPackedCliPath = join(BUN_EXTRACT_ROOT, "package", "dist", "cli.js");
   expect(existsSync(bunPackedCliPath)).toBe(true);
+  chmodSync(bunPackedCliPath, 0o755);
 
   const npmArchivePath = join(NPM_PACK_ROOT, pack.filename);
   const bunArchivePath = join(BUN_PACK_ROOT, "hasna-capacity-0.1.1.tgz");
@@ -293,6 +303,8 @@ beforeAll(async () => {
     Bun.write(join(NPM_INSTALL_ROOT, "package.json"), installManifest),
     Bun.write(join(BUN_LOCAL_INSTALL_ROOT, "package.json"), installManifest),
     Bun.write(join(BUN_GLOBAL_INSTALL_ROOT, "package.json"), installManifest),
+    Bun.write(join(BUN_LOCAL_NO_TRUST_INSTALL_ROOT, "package.json"), installManifest),
+    Bun.write(join(BUN_GLOBAL_NO_TRUST_INSTALL_ROOT, "package.json"), installManifest),
   ]);
 
   const npmInstalled = await runWithGroupWritableUmask(
@@ -333,6 +345,36 @@ beforeAll(async () => {
   requireSuccess(bunGlobalInstalled, "disposable Bun global install");
   bunGlobalInstalledCliPath = join(BUN_GLOBAL_INSTALL_ROOT, "bin", "capacity");
   bunGlobalInstalledCliTarget = realpathSync(bunGlobalInstalledCliPath);
+
+  const bunLocalNoTrustInstalled = await runWithGroupWritableUmask(
+    [process.execPath, "add", bunArchivePath, "--offline"],
+    {
+      cwd: BUN_LOCAL_NO_TRUST_INSTALL_ROOT,
+      env: { HOME: INSTALL_HOME_ROOT },
+    },
+  );
+  requireSuccess(bunLocalNoTrustInstalled, "disposable no-trust Bun local install");
+  bunLocalNoTrustCliPath = join(
+    BUN_LOCAL_NO_TRUST_INSTALL_ROOT,
+    "node_modules",
+    ".bin",
+    "capacity",
+  );
+  bunLocalNoTrustCliTarget = realpathSync(bunLocalNoTrustCliPath);
+
+  const bunGlobalNoTrustInstalled = await runWithGroupWritableUmask(
+    [process.execPath, "add", "--global", bunArchivePath, "--offline"],
+    {
+      cwd: BUN_GLOBAL_NO_TRUST_INSTALL_ROOT,
+      env: {
+        BUN_INSTALL: BUN_GLOBAL_NO_TRUST_INSTALL_ROOT,
+        HOME: INSTALL_HOME_ROOT,
+      },
+    },
+  );
+  requireSuccess(bunGlobalNoTrustInstalled, "disposable no-trust Bun global install");
+  bunGlobalNoTrustCliPath = join(BUN_GLOBAL_NO_TRUST_INSTALL_ROOT, "bin", "capacity");
+  bunGlobalNoTrustCliTarget = realpathSync(bunGlobalNoTrustCliPath);
 }, { timeout: PACKAGE_LIFECYCLE_TIMEOUT_MS });
 
 afterAll(() => {
@@ -400,6 +442,22 @@ describe("packed capacity CLI", () => {
       bunGlobalInstalledCliPath,
     ]) {
       expect(await run([path, "--version"])).toEqual(expected);
+    }
+  });
+
+  test("fails closed when default Bun installs block lifecycle hardening", async () => {
+    for (const [entry, target] of [
+      [bunLocalNoTrustCliPath, bunLocalNoTrustCliTarget],
+      [bunGlobalNoTrustCliPath, bunGlobalNoTrustCliTarget],
+    ] as const) {
+      expect(statSync(entry).mode & 0o022).not.toBe(0);
+      expect(statSync(target).mode & 0o022).not.toBe(0);
+
+      const result = await run([entry, "--version"]);
+      expect(result.exitCode).toBe(126);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("SECURITY_POLICY_DENIED");
+      expect(result.stderr).toContain("writable by group or world");
     }
   });
 
