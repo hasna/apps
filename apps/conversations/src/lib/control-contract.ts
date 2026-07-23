@@ -101,6 +101,7 @@ export type ControlValidationResult =
   | {
       status: "valid";
       event: ControlEventV1;
+      trusted_envelope: TrustedControlEnvelopeV1;
       canonical_event: string;
       canonical_payload: string;
       diagnostics: ControlValidationDiagnostic[];
@@ -153,6 +154,7 @@ const TRUSTED_ENVELOPE_KEYS = [
   "server_time",
   "blocking",
 ] as const;
+const VALIDATION_CONTEXT_KEYS = ["trusted_envelope", "activation_timestamp"] as const;
 
 const SECRET_PATTERNS = [
   /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/i,
@@ -166,6 +168,73 @@ const SECRET_PATTERNS = [
 
 function invalidCanonicalJson(): never {
   throw new TypeError("invalid canonical JSON value");
+}
+
+function snapshotCanonicalValue(value: unknown): unknown {
+  let nodeCount = 0;
+  const ancestors = new WeakSet<object>();
+
+  function snapshot(node: unknown, depth: number): unknown {
+    nodeCount += 1;
+    if (depth > MAX_CANONICAL_DEPTH || nodeCount > MAX_CANONICAL_NODES) {
+      return invalidCanonicalJson();
+    }
+    if (node === null || typeof node === "boolean" || typeof node === "string") return node;
+    if (typeof node === "number") {
+      if (!Number.isFinite(node)) return invalidCanonicalJson();
+      return Object.is(node, -0) ? 0 : node;
+    }
+    if (typeof node !== "object") return invalidCanonicalJson();
+    if (ancestors.has(node)) return invalidCanonicalJson();
+
+    const prototype = Object.getPrototypeOf(node);
+    const keys = Reflect.ownKeys(node);
+    if (keys.length > MAX_CANONICAL_NODES + 1 || keys.some((key) => typeof key === "symbol")) {
+      return invalidCanonicalJson();
+    }
+    ancestors.add(node);
+    try {
+      if (Array.isArray(node)) {
+        if (prototype !== Array.prototype) return invalidCanonicalJson();
+        const lengthDescriptor = Object.getOwnPropertyDescriptor(node, "length");
+        if (
+          !lengthDescriptor ||
+          !("value" in lengthDescriptor) ||
+          lengthDescriptor.enumerable ||
+          !Number.isSafeInteger(lengthDescriptor.value) ||
+          lengthDescriptor.value < 0 ||
+          lengthDescriptor.value > MAX_CANONICAL_NODES
+        ) {
+          return invalidCanonicalJson();
+        }
+        const length = lengthDescriptor.value as number;
+        if (keys.length !== length + 1 || !keys.includes("length")) return invalidCanonicalJson();
+
+        const result: unknown[] = [];
+        for (let index = 0; index < length; index++) {
+          const key = String(index);
+          if (!keys.includes(key)) return invalidCanonicalJson();
+          const descriptor = Object.getOwnPropertyDescriptor(node, key);
+          if (!descriptor?.enumerable || !("value" in descriptor)) return invalidCanonicalJson();
+          result.push(snapshot(descriptor.value, depth + 1));
+        }
+        return result;
+      }
+
+      if (prototype !== Object.prototype && prototype !== null) return invalidCanonicalJson();
+      const result = Object.create(null) as Record<string, unknown>;
+      for (const key of keys as string[]) {
+        const descriptor = Object.getOwnPropertyDescriptor(node, key);
+        if (!descriptor?.enumerable || !("value" in descriptor)) return invalidCanonicalJson();
+        result[key] = snapshot(descriptor.value, depth + 1);
+      }
+      return result;
+    } finally {
+      ancestors.delete(node);
+    }
+  }
+
+  return snapshot(value, 0);
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -207,6 +276,7 @@ function readArrayValues(value: unknown): unknown[] | null {
 }
 
 export function canonicalJson(value: unknown): string {
+  const stableValue = snapshotCanonicalValue(value);
   let nodeCount = 0;
 
   function visit(node: unknown, depth: number): string {
@@ -234,7 +304,7 @@ export function canonicalJson(value: unknown): string {
     return `{${entries.join(",")}}`;
   }
 
-  const canonical = visit(value, 0);
+  const canonical = visit(stableValue, 0);
   if (Buffer.byteLength(canonical, "utf8") > MAX_CONTROL_EVENT_BYTES) return invalidCanonicalJson();
   return canonical;
 }
@@ -375,9 +445,10 @@ function eventPayload(event: ControlEventV1): ControlEventPayloadV1 {
 }
 
 function safePayload(value: ControlEventPayloadV1): ControlEventPayloadV1 {
-  const error = intrinsicPayloadError(value);
+  const stableValue = snapshotCanonicalValue(value);
+  const error = intrinsicPayloadError(stableValue);
   if (error) throw new TypeError(`invalid control event payload: ${error}`);
-  return value;
+  return stableValue as ControlEventPayloadV1;
 }
 
 export function deriveControlEventId(payload: ControlEventPayloadV1): string {
@@ -401,21 +472,19 @@ function validateControlMetadataV1Unsafe(
   metadata: unknown,
   context: ControlValidationContextV1,
 ): ControlValidationResult {
-  if (!isPlainRecord(metadata)) {
+  if (metadata === null || typeof metadata !== "object" || Array.isArray(metadata)) {
     return { status: "absent", diagnostics: [{ code: "no_control_metadata" }] };
   }
-  if (!hasDataPropertiesOnly(metadata)) {
-    return Object.hasOwn(metadata, CONTROL_METADATA_KEY)
-      ? { status: "invalid", diagnostics: [{ code: "malformed_control_metadata" }] }
-      : { status: "absent", diagnostics: [{ code: "no_control_metadata" }] };
+  const metadataPrototype = Object.getPrototypeOf(metadata);
+  if (metadataPrototype !== Object.prototype && metadataPrototype !== null) {
+    return { status: "absent", diagnostics: [{ code: "no_control_metadata" }] };
   }
-
   const descriptor = Object.getOwnPropertyDescriptor(metadata, CONTROL_METADATA_KEY);
   if (!descriptor) return { status: "absent", diagnostics: [{ code: "no_control_metadata" }] };
-  if (!("value" in descriptor)) {
+  if (!descriptor?.enumerable || !("value" in descriptor)) {
     return { status: "invalid", diagnostics: [{ code: "malformed_control_metadata" }] };
   }
-  const candidate = descriptor.value;
+  const candidate = snapshotCanonicalValue(descriptor.value);
   if (!isPlainRecord(candidate) || !hasDataPropertiesOnly(candidate)) {
     return { status: "invalid", diagnostics: [{ code: "malformed_control_metadata" }] };
   }
@@ -429,10 +498,14 @@ function validateControlMetadataV1Unsafe(
     return { status: "invalid", diagnostics: [{ code: "secret_shaped_value" }] };
   }
 
-  if (!hasExactKeys(context.trusted_envelope, TRUSTED_ENVELOPE_KEYS)) {
+  const stableContext = snapshotCanonicalValue(context);
+  if (!hasExactKeys(stableContext, VALIDATION_CONTEXT_KEYS)) {
     return { status: "invalid", diagnostics: [{ code: "invalid_trusted_envelope" }] };
   }
-  const trusted = context.trusted_envelope;
+  if (!hasExactKeys(stableContext.trusted_envelope, TRUSTED_ENVELOPE_KEYS)) {
+    return { status: "invalid", diagnostics: [{ code: "invalid_trusted_envelope" }] };
+  }
+  const trusted = stableContext.trusted_envelope;
   if (containsSecretShapedValue(trusted)) {
     return { status: "invalid", diagnostics: [{ code: "secret_shaped_value" }] };
   }
@@ -441,7 +514,8 @@ function validateControlMetadataV1Unsafe(
     !isToken(trusted.tenant) ||
     !isToken(trusted.authority_domain) ||
     !isToken(trusted.policy_version) ||
-    !CONTROL_SURFACES.includes(trusted.permitted_surface) ||
+    typeof trusted.permitted_surface !== "string" ||
+    !CONTROL_SURFACES.includes(trusted.permitted_surface as ControlSurfaceV1) ||
     typeof trusted.blocking !== "boolean" ||
     parseTimestamp(trusted.server_time) === null
   ) {
@@ -455,7 +529,7 @@ function validateControlMetadataV1Unsafe(
     return { status: "invalid", diagnostics: [{ code: "invalid_event_id" }] };
   }
 
-  const activationTime = parseTimestamp(context.activation_timestamp);
+  const activationTime = parseTimestamp(stableContext.activation_timestamp);
   const issuedAt = parseTimestamp(candidate.issued_at)!;
   const expiresAt = parseTimestamp(candidate.expires_at)!;
   const serverTime = parseTimestamp(trusted.server_time)!;
@@ -516,9 +590,19 @@ function validateControlMetadataV1Unsafe(
             fingerprint: (candidate.unfreeze_of as ControlReferenceV1).fingerprint,
           },
   };
+  const trustedEnvelope: TrustedControlEnvelopeV1 = {
+    authenticated_principal: trusted.authenticated_principal as string,
+    tenant: trusted.tenant as string,
+    authority_domain: trusted.authority_domain as string,
+    permitted_surface: trusted.permitted_surface as ControlSurfaceV1,
+    policy_version: trusted.policy_version as string,
+    server_time: trusted.server_time as string,
+    blocking: trusted.blocking as boolean,
+  };
   return {
     status: "valid",
     event,
+    trusted_envelope: trustedEnvelope,
     canonical_event: canonicalJson(event),
     canonical_payload: canonicalJson(payload),
     diagnostics: [],

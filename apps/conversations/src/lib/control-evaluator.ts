@@ -79,18 +79,60 @@ interface LifecycleState {
 
 const CONFIG_KEYS = ["mode", "validator_version", "activation_timestamp", "evaluation_time"] as const;
 const TARGET_KEYS = ["tenant", "authority_domain", "scope", "operation", "resource"] as const;
+const INPUT_KEYS = ["config", "target", "backend"] as const;
+const AVAILABLE_BACKEND_KEYS = ["status", "observations"] as const;
+const UNAVAILABLE_BACKEND_KEYS = ["status"] as const;
+const OBSERVATION_KEYS = ["content", "metadata", "trusted_envelope"] as const;
 
-function hasExactDataKeys(value: unknown, expected: readonly string[]): value is Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+function readDataRecord(value: unknown): Record<string, unknown> | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
   const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) return false;
-  if (Object.getOwnPropertySymbols(value).length > 0) return false;
-  const keys = Object.keys(value);
-  if (keys.length !== expected.length || !expected.every((key) => Object.hasOwn(value, key))) return false;
-  return keys.every((key) => {
+  if (prototype !== Object.prototype && prototype !== null) return null;
+  const keys = Reflect.ownKeys(value);
+  if (keys.length > 32 || keys.some((key) => typeof key === "symbol")) return null;
+  const result = Object.create(null) as Record<string, unknown>;
+  for (const key of keys as string[]) {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    return Boolean(descriptor?.enumerable && "value" in descriptor);
-  });
+    if (!descriptor?.enumerable || !("value" in descriptor)) return null;
+    result[key] = descriptor.value;
+  }
+  return result;
+}
+
+function hasExactRecordKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const keys = Object.keys(value);
+  return keys.length === expected.length && expected.every((key) => Object.hasOwn(value, key));
+}
+
+function readObservationArray(
+  value: unknown,
+): { status: "valid"; values: unknown[] } | { status: "too_many" } | { status: "invalid" } {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return { status: "invalid" };
+  const keys = Reflect.ownKeys(value);
+  if (keys.some((key) => typeof key === "symbol")) return { status: "invalid" };
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+  if (
+    !lengthDescriptor ||
+    !("value" in lengthDescriptor) ||
+    lengthDescriptor.enumerable ||
+    !Number.isSafeInteger(lengthDescriptor.value) ||
+    lengthDescriptor.value < 0
+  ) {
+    return { status: "invalid" };
+  }
+  const length = lengthDescriptor.value as number;
+  if (length > MAX_CONTROL_OBSERVATIONS) return { status: "too_many" };
+  if (keys.length !== length + 1 || !keys.includes("length")) return { status: "invalid" };
+
+  const values: unknown[] = [];
+  for (let index = 0; index < length; index++) {
+    const key = String(index);
+    if (!keys.includes(key)) return { status: "invalid" };
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor?.enumerable || !("value" in descriptor)) return { status: "invalid" };
+    values.push(descriptor.value);
+  }
+  return { status: "valid", values };
 }
 
 function result(
@@ -101,6 +143,11 @@ function result(
   acceptedEventCount = 0,
   rejectedEventCount = 0,
 ): ControlEvaluationResultV1 {
+  const sortedDiagnostics = [...diagnostics].sort((left, right) => {
+    const leftKey = `${left.code}\u0000${left.event_id ?? ""}\u0000${left.control_id ?? ""}`;
+    const rightKey = `${right.code}\u0000${right.event_id ?? ""}\u0000${right.control_id ?? ""}`;
+    return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+  });
   return {
     decision,
     mode,
@@ -108,7 +155,7 @@ function result(
     active_control_ids: [...activeControlIds].sort(),
     accepted_event_count: acceptedEventCount,
     rejected_event_count: rejectedEventCount,
-    diagnostics,
+    diagnostics: sortedDiagnostics,
   };
 }
 
@@ -182,57 +229,114 @@ function compareObservations(left: ValidObservation, right: ValidObservation): n
 }
 
 function evaluateControlsV1Unsafe(input: ControlEvaluationInputV1): ControlEvaluationResultV1 {
-  if (!hasExactDataKeys(input.config, CONFIG_KEYS)) {
+  const stableInput = readDataRecord(input);
+  if (!stableInput || !hasExactRecordKeys(stableInput, INPUT_KEYS)) {
     return result("indeterminate", "observe_only", [{ code: "invalid_evaluator_input" }]);
   }
-  if (input.config.mode === "off") {
+  const config = readDataRecord(stableInput.config);
+  if (!config || !hasExactRecordKeys(config, CONFIG_KEYS)) {
+    return result("indeterminate", "observe_only", [{ code: "invalid_evaluator_input" }]);
+  }
+  if (config.mode === "off") {
     return result("allow", "off", [{ code: "validator_disabled" }]);
   }
-  if (input.config.mode !== "observe_only") {
+  if (config.mode !== "observe_only") {
     return result("indeterminate", "observe_only", [{ code: "unsupported_evaluator_mode" }]);
   }
-  if (input.config.validator_version !== CONTROL_VALIDATOR_VERSION) {
+  if (config.validator_version !== CONTROL_VALIDATOR_VERSION) {
     return result("indeterminate", "observe_only", [{ code: "unsupported_validator_version" }]);
   }
 
-  if (!hasExactDataKeys(input.target, TARGET_KEYS)) {
+  const targetRecord = readDataRecord(stableInput.target);
+  if (!targetRecord || !hasExactRecordKeys(targetRecord, TARGET_KEYS)) {
     return result("indeterminate", "observe_only", [{ code: "invalid_evaluator_input" }]);
   }
 
-  const activationTime = controlTimestampMsV1(input.config.activation_timestamp);
-  const evaluationTime = controlTimestampMsV1(input.config.evaluation_time);
-  if (activationTime === null || evaluationTime === null || evaluationTime < activationTime || !isValidTarget(input.target)) {
+  const activationTime = controlTimestampMsV1(config.activation_timestamp);
+  const evaluationTime = controlTimestampMsV1(config.evaluation_time);
+  let stableScope: unknown;
+  try {
+    stableScope = JSON.parse(canonicalJson(targetRecord.scope));
+  } catch {
     return result("indeterminate", "observe_only", [{ code: "invalid_evaluator_input" }]);
   }
-  if (input.backend.status === "unavailable") {
+  const target: ControlEvaluationTargetV1 = {
+    tenant: targetRecord.tenant as string,
+    authority_domain: targetRecord.authority_domain as string,
+    scope: stableScope as ControlScopeV1,
+    operation: targetRecord.operation as string,
+    resource: targetRecord.resource as string,
+  };
+  if (activationTime === null || evaluationTime === null || evaluationTime < activationTime || !isValidTarget(target)) {
+    return result("indeterminate", "observe_only", [{ code: "invalid_evaluator_input" }]);
+  }
+
+  const backend = readDataRecord(stableInput.backend);
+  if (!backend) {
+    return result("indeterminate", "observe_only", [{ code: "invalid_backend_snapshot" }]);
+  }
+  if (backend.status === "unavailable" && hasExactRecordKeys(backend, UNAVAILABLE_BACKEND_KEYS)) {
     return result("indeterminate", "observe_only", [{ code: "backend_unavailable" }]);
   }
-  if (input.backend.observations.length > MAX_CONTROL_OBSERVATIONS) {
+  if (backend.status !== "available" || !hasExactRecordKeys(backend, AVAILABLE_BACKEND_KEYS)) {
+    return result("indeterminate", "observe_only", [{ code: "invalid_backend_snapshot" }]);
+  }
+  const observationArray = readObservationArray(backend.observations);
+  if (observationArray.status === "too_many") {
     return result("indeterminate", "observe_only", [{ code: "observation_limit_exceeded" }]);
+  }
+  if (observationArray.status === "invalid") {
+    return result("indeterminate", "observe_only", [{ code: "invalid_backend_snapshot" }]);
   }
 
   const diagnostics: ControlEvaluationDiagnostic[] = [];
   const valid: ValidObservation[] = [];
   let rejectedEventCount = 0;
+  let uncertainObservationCount = 0;
 
-  for (const observation of input.backend.observations) {
+  for (const rawObservation of observationArray.values) {
+    const observation = readDataRecord(rawObservation);
+    if (
+      !observation ||
+      !hasExactRecordKeys(observation, OBSERVATION_KEYS) ||
+      (observation.content !== null && typeof observation.content !== "string")
+    ) {
+      rejectedEventCount += 1;
+      uncertainObservationCount += 1;
+      diagnostics.push({ code: "invalid_observation" });
+      continue;
+    }
     const validation = validateControlMetadataV1(observation.metadata, {
-      trusted_envelope: observation.trusted_envelope,
-      activation_timestamp: input.config.activation_timestamp,
+      trusted_envelope: observation.trusted_envelope as TrustedControlEnvelopeV1,
+      activation_timestamp: config.activation_timestamp as string,
     });
     if (validation.status === "absent") {
-      if (observation.trusted_envelope.blocking === true) diagnostics.push({ code: "ordinary_blocker_ignored" });
+      const trusted = readDataRecord(observation.trusted_envelope);
+      if (trusted?.blocking === true) diagnostics.push({ code: "ordinary_blocker_ignored" });
       continue;
     }
     if (validation.status === "invalid") {
       rejectedEventCount += 1;
+      uncertainObservationCount += 1;
       diagnostics.push({ code: validation.diagnostics[0]?.code ?? "invalid_control_metadata" });
+      continue;
+    }
+    const eventIssuedAt = controlTimestampMsV1(validation.event.issued_at)!;
+    const ingressAt = controlTimestampMsV1(validation.trusted_envelope.server_time)!;
+    if (eventIssuedAt > evaluationTime || ingressAt > evaluationTime) {
+      rejectedEventCount += 1;
+      uncertainObservationCount += 1;
+      diagnostics.push({
+        code: "observation_from_future",
+        event_id: validation.event.event_id,
+        control_id: validation.event.control_id,
+      });
       continue;
     }
     valid.push({
       event: validation.event,
       canonical_event: validation.canonical_event,
-      trusted_envelope: observation.trusted_envelope,
+      trusted_envelope: validation.trusted_envelope,
     });
   }
 
@@ -302,7 +406,8 @@ function evaluateControlsV1Unsafe(input: ControlEvaluationInputV1): ControlEvalu
     if (
       releaseIssuedAt <= freezeIssuedAt ||
       releaseIngressAt <= freezeIngressAt ||
-      releaseIssuedAt >= freezeExpiresAt
+      releaseIssuedAt >= freezeExpiresAt ||
+      releaseIngressAt >= freezeExpiresAt
     ) {
       rejectedEventCount += 1;
       diagnostics.push({ code: "stale_or_reordered_unfreeze", event_id: event.event_id, control_id: event.control_id });
@@ -326,11 +431,23 @@ function evaluateControlsV1Unsafe(input: ControlEvaluationInputV1): ControlEvalu
       });
       continue;
     }
-    if (appliesToTarget(lifecycle.freeze.event, input.target)) applicableControls.push(controlId);
+    if (appliesToTarget(lifecycle.freeze.event, target)) applicableControls.push(controlId);
   }
 
+  for (const controlId of [...applicableControls].sort()) {
+    diagnostics.push({ code: "active_control", control_id: controlId });
+  }
+  if (uncertainObservationCount > 0) {
+    return result(
+      "indeterminate",
+      "observe_only",
+      diagnostics,
+      applicableControls,
+      acceptedEventCount,
+      rejectedEventCount,
+    );
+  }
   if (applicableControls.length > 0) {
-    for (const controlId of [...applicableControls].sort()) diagnostics.push({ code: "active_control", control_id: controlId });
     return result(
       "hold",
       "observe_only",

@@ -138,7 +138,7 @@ describe("hasna.control/v1 canonical contract", () => {
     const operations = [...event.affected_operations] as string[] & { extra?: string };
     operations.extra = "not-json-array-data";
     expect(invalidCode(metadata({ ...event, affected_operations: operations }))).toBe(
-      "invalid_sorted_unique_array",
+      "malformed_control_metadata",
     );
   });
 
@@ -167,6 +167,56 @@ describe("hasna.control/v1 canonical contract", () => {
       status: "invalid",
       diagnostics: [{ code: "malformed_control_metadata" }],
     });
+  });
+
+  test("snapshots proxy-backed event and trusted-envelope fields before hashing or use", () => {
+    const event = createControlEventV1(freezePayload());
+    const alternateControlId = "223e4567-e89b-42d3-a456-426614174000";
+    let eventPropertyReads = 0;
+    let eventDescriptorReads = 0;
+    const unstableEvent = new Proxy(event, {
+      getOwnPropertyDescriptor(target, property) {
+        const descriptor = Reflect.getOwnPropertyDescriptor(target, property);
+        if (property !== "control_id" || !descriptor || !("value" in descriptor)) return descriptor;
+        eventDescriptorReads += 1;
+        return {
+          ...descriptor,
+          value: eventDescriptorReads === 1 ? target.control_id : alternateControlId,
+        };
+      },
+      get(target, property, receiver) {
+        if (property === "control_id") {
+          eventPropertyReads += 1;
+          return eventPropertyReads <= 2 ? target.control_id : alternateControlId;
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    let trustedPropertyReads = 0;
+    const trusted = trustedEnvelope();
+    const unstableTrusted = new Proxy(trusted, {
+      get(target, property, receiver) {
+        if (property === "server_time") {
+          trustedPropertyReads += 1;
+          return trustedPropertyReads <= 2 ? target.server_time : "2026-07-22T00:00:00.000Z";
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    const result = validateControlMetadataV1(
+      metadata(unstableEvent),
+      context(unstableTrusted),
+    );
+    expect(result.status).toBe("valid");
+    if (result.status !== "valid") throw new Error("expected valid snapshotted event");
+    expect(result.event.control_id).toBe(CONTROL_ID);
+    expect(result.event.event_id).toBe(deriveControlEventId(freezePayload()));
+    expect(result.trusted_envelope).toEqual(trusted);
+    expect(eventPropertyReads).toBe(0);
+    expect(eventDescriptorReads).toBe(1);
+    expect(trustedPropertyReads).toBe(0);
   });
 
   test("rejects unsupported versions, enums, UUIDs, fingerprints, and token grammars", () => {

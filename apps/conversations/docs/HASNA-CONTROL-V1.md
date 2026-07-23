@@ -40,7 +40,9 @@ in canonical lexical order; the validator never silently normalizes authority.
 Canonical JSON recursively sorts object keys, preserves validated array order,
 normalizes negative zero to zero, and rejects non-finite numbers, sparse or
 augmented arrays, accessors, non-plain objects, excessive nesting, and values
-larger than the contract bound. The event ID is:
+larger than the contract bound. Proxy-backed input is copied from data-property
+descriptors into a plain snapshot before validation or hashing, so later reads
+cannot change the identity or trusted time. The event ID is:
 
 ```text
 sha256(utf8(canonical_json(event_without_event_id)))
@@ -87,7 +89,10 @@ enabled.
 
 The evaluator processes validated observations by trusted ingress time, then
 event issue time, lifecycle version, and event ID. Backend return order does not
-change the result.
+change the result. The backend snapshot and each observation are closed runtime
+objects; an unknown backend status, accessor, sparse array, or extra backend key
+returns `indeterminate`. Observations issued or ingressed after the requested
+evaluation time are excluded as future evidence.
 
 - An exact replay is idempotent.
 - A different event at the same control/lifecycle version is rejected.
@@ -106,7 +111,10 @@ The result is `allow`, `hold`, or `indeterminate`, always with
 `enforced: false`. `hold` is an observation for an applicable active freeze,
 not an enforcement action. Malformed candidates, unsupported versions, invalid
 evaluator input, or backend failure return `indeterminate` without inventing a
-global hold. Independent safety containment remains outside this contract.
+global hold. If malformed evidence is mixed with a known active control, the
+result remains `indeterminate` while retaining that control ID as diagnostic
+state; uncertainty is not disguised as a definitive hold. Independent safety
+containment remains outside this contract.
 
 Literal or malformed `FREEZE`, `UNFREEZE`, and `BLOCKED` text is never read by
 the evaluator. The legacy compatibility vectors are in

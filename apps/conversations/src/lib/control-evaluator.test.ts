@@ -266,6 +266,27 @@ describe("observe-only control evaluator", () => {
     expect(concurrentResult.diagnostics.map((item) => item.code)).toContain("stale_or_reordered_unfreeze");
   });
 
+  test("rejects a release observed after the referenced freeze expired", () => {
+    const freeze = createControlEventV1(freezePayload());
+    const unfreeze = unfreezeFor(freeze);
+    const candidate = input([
+      observation(freeze),
+      observation(unfreeze, {
+        trusted_envelope: trustedEnvelope(unfreeze, {
+          server_time: "2026-07-24T00:00:00.001Z",
+        }),
+      }),
+    ]);
+    candidate.config.evaluation_time = "2026-07-24T00:30:00.000Z";
+
+    const result = evaluateControlsV1(candidate);
+    expect(result.decision).toBe("indeterminate");
+    expect(result.accepted_event_count).toBe(1);
+    expect(result.rejected_event_count).toBe(1);
+    expect(result.diagnostics.map((item) => item.code)).toContain("stale_or_reordered_unfreeze");
+    expect(result.diagnostics.map((item) => item.code)).toContain("freeze_expired");
+  });
+
   test("keeps overlapping controls independent and releases only the exact control", () => {
     const first = createControlEventV1(
       freezePayload({ scope: { kind: "project", ids: ["project:a", "project:b"] } }),
@@ -352,6 +373,44 @@ describe("observe-only control evaluator", () => {
       active_control_ids: [],
       diagnostics: [{ code: "observation_limit_exceeded" }],
     });
+
+    const malformedStatus = input([observation(createControlEventV1(freezePayload()))]);
+    malformedStatus.backend = {
+      status: "degraded",
+      observations: (malformedStatus.backend as { status: "available"; observations: readonly ControlObservationV1[] }).observations,
+    } as unknown as ControlEvaluationInputV1["backend"];
+    expect(evaluateControlsV1(malformedStatus)).toMatchObject({
+      decision: "indeterminate",
+      enforced: false,
+      active_control_ids: [],
+      diagnostics: [{ code: "invalid_backend_snapshot" }],
+    });
+
+    const augmentedBackend = input([]) as ControlEvaluationInputV1 & {
+      backend: ControlEvaluationInputV1["backend"] & { extra?: boolean };
+    };
+    augmentedBackend.backend.extra = true;
+    expect(evaluateControlsV1(augmentedBackend)).toMatchObject({
+      decision: "indeterminate",
+      enforced: false,
+      active_control_ids: [],
+      diagnostics: [{ code: "invalid_backend_snapshot" }],
+    });
+  });
+
+  test("rejects observations later than the requested evaluation time", () => {
+    const freeze = createControlEventV1(freezePayload());
+    const historical = input([observation(freeze)]);
+    historical.config.evaluation_time = "2026-07-22T12:00:00.000Z";
+
+    expect(evaluateControlsV1(historical)).toMatchObject({
+      decision: "indeterminate",
+      enforced: false,
+      active_control_ids: [],
+      accepted_event_count: 0,
+      rejected_event_count: 1,
+      diagnostics: [{ code: "observation_from_future", event_id: freeze.event_id, control_id: freeze.control_id }],
+    });
   });
 
   test("supports rollback by switching observe-only evaluation off", () => {
@@ -394,6 +453,24 @@ describe("observe-only control evaluator", () => {
       active_control_ids: [],
       rejected_event_count: 1,
     });
+
+    const freeze = createControlEventV1(freezePayload());
+    const mixed = input([
+      observation(freeze),
+      ...(malformed.backend as { status: "available"; observations: readonly ControlObservationV1[] }).observations,
+    ]);
+    expect(evaluateControlsV1(mixed)).toMatchObject({
+      decision: "indeterminate",
+      enforced: false,
+      active_control_ids: [freeze.control_id],
+      accepted_event_count: 1,
+      rejected_event_count: 1,
+    });
+    const mixedReverse = input([
+      ...(malformed.backend as { status: "available"; observations: readonly ControlObservationV1[] }).observations,
+      observation(freeze),
+    ]);
+    expect(evaluateControlsV1(mixedReverse)).toEqual(evaluateControlsV1(mixed));
 
     const ambiguousTarget = input([]) as ControlEvaluationInputV1 & {
       target: ControlEvaluationInputV1["target"] & { global?: boolean };
