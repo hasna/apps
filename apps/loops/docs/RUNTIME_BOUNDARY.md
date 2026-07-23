@@ -32,7 +32,7 @@ import { openAutomationsRuntimeBinding } from "@hasna/loops";
 const binding = openAutomationsRuntimeBinding();
 // binding.handoff === "claim-queue"
 // binding.queueOwner === "open-automations"
-// binding.runtimeOwner === "open-loops"
+// binding.runtimeOwner === "@hasna/loops"
 console.log(binding.guarantees);
 console.log(binding.nonGoals);
 ```
@@ -69,12 +69,12 @@ rendered target, and reports completion back to OpenAutomations.
 
 ```bash
 # Worker claims from the OpenAutomations queue
-automations queue claim --runner open-loops:<worker-id>
+automations queue claim --runner loops:<worker-id>
 
 # After Loops executes the handed-off command/workflow:
-automations queue complete <action-id> --runner open-loops:<worker-id>
+automations queue complete <action-id> --runner loops:<worker-id>
 # or on failure:
-automations queue fail <action-id> --runner open-loops:<worker-id> \
+automations queue fail <action-id> --runner loops:<worker-id> \
   --code <code> --message <message>
 ```
 

@@ -10,7 +10,7 @@ services:
       POSTGRES_PASSWORD: loops-bootstrap
       POSTGRES_DB: loops
     volumes:
-      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/10-open-loops-roles.sql:ro
+      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/10-loops-roles.sql:ro
     ports:
       - "5433:5432"
     healthcheck:

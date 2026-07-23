@@ -259,7 +259,7 @@ export async function isSafeServiceConnection(
                        'workflow_invocations', 'workflow_work_items', 'workflow_step_runs',
                        'workflow_events', 'goals', 'goal_plan_nodes', 'goal_runs',
                        'runner_machines', 'runner_leases', 'run_receipts',
-                       'open_loops_schema_migrations'
+                       'open_loops_schema_migrations', 'loops_schema_migrations'
                      ])
                    )
                    AND NOT (
@@ -357,7 +357,10 @@ export async function isSafeServiceConnection(
               SELECT 1
                 FROM pg_proc function
                WHERE (
-                 function.oid='public.open_loops_current_tenant_id()'::regprocedure
+                 function.oid = ANY(ARRAY[
+                   to_regprocedure('public.loops_current_tenant_id()'),
+                   'public.open_loops_current_tenant_id()'::regprocedure
+                 ])
                  AND $1='open_loops_runtime'
                  AND (
                    pg_get_userbyid(function.proowner)<>'open_loops_owner'
@@ -368,6 +371,8 @@ export async function isSafeServiceConnection(
                  )
                ) OR (
                  function.oid = ANY(ARRAY[
+                   to_regprocedure('public.loops_authenticate_key(text,text)'),
+                   to_regprocedure('public.loops_append_auth_audit(text,text,text,text,text,text,text,jsonb)'),
                    'public.open_loops_authenticate_key(text,text)'::regprocedure,
                    'public.open_loops_append_auth_audit(text,text,text,text,text,text,text,jsonb)'::regprocedure
                  ])
@@ -391,10 +396,15 @@ export async function isSafeServiceConnection(
                    namespace.nspname='public'
                    AND (
                      ($1='open_loops_runtime'
-                       AND function.oid='public.open_loops_current_tenant_id()'::regprocedure)
+                       AND function.oid = ANY(ARRAY[
+                         to_regprocedure('public.loops_current_tenant_id()'),
+                         'public.open_loops_current_tenant_id()'::regprocedure
+                       ]))
                      OR
                      ($1='open_loops_authenticator'
                        AND function.oid = ANY(ARRAY[
+                         to_regprocedure('public.loops_authenticate_key(text,text)'),
+                         to_regprocedure('public.loops_append_auth_audit(text,text,text,text,text,text,text,jsonb)'),
                          'public.open_loops_authenticate_key(text,text)'::regprocedure,
                          'public.open_loops_append_auth_audit(text,text,text,text,text,text,text,jsonb)'::regprocedure
                        ]))
@@ -424,6 +434,14 @@ export async function isSafeServiceConnection(
                 'public.open_loops_schema_migrations',
                 'SELECT WITH GRANT OPTION'
               )
+              AND (
+                to_regclass('public.loops_schema_migrations') IS NULL
+                OR NOT has_table_privilege(
+                  session_user,
+                  to_regclass('public.loops_schema_migrations'),
+                  'SELECT WITH GRANT OPTION'
+                )
+              )
               AND NOT has_table_privilege(
                 session_user,
                 'public.tenants',
@@ -444,6 +462,30 @@ export async function isSafeServiceConnection(
                 'public.tenants',
                 'id',
                 'UPDATE WITH GRANT OPTION'
+              )
+              AND (
+                to_regprocedure('public.loops_current_tenant_id()') IS NULL
+                OR NOT has_function_privilege(
+                  session_user,
+                  to_regprocedure('public.loops_current_tenant_id()'),
+                  'EXECUTE WITH GRANT OPTION'
+                )
+              )
+              AND (
+                to_regprocedure('public.loops_authenticate_key(text,text)') IS NULL
+                OR NOT has_function_privilege(
+                  session_user,
+                  to_regprocedure('public.loops_authenticate_key(text,text)'),
+                  'EXECUTE WITH GRANT OPTION'
+                )
+              )
+              AND (
+                to_regprocedure('public.loops_append_auth_audit(text,text,text,text,text,text,text,jsonb)') IS NULL
+                OR NOT has_function_privilege(
+                  session_user,
+                  to_regprocedure('public.loops_append_auth_audit(text,text,text,text,text,text,text,jsonb)'),
+                  'EXECUTE WITH GRANT OPTION'
+                )
               )
               AND NOT has_function_privilege(
                 session_user,
@@ -526,14 +568,21 @@ export async function isTenantRlsInvariantSafe(client: TypedQueryClient): Promis
         LEFT JOIN pg_class class ON class.oid = format('public.%I', protected.table_name)::regclass
     ),
     tenant_update_guard AS (
-      SELECT 1
+      SELECT
+        COUNT(*) FILTER (
+          WHERE trigger.tgname = 'open_loops_reject_runtime_tenant_update'
+            AND proc.oid = 'public.open_loops_reject_runtime_tenant_update()'::regprocedure
+        ) = 1 AS legacy_safe,
+        to_regprocedure('public.loops_reject_runtime_tenant_update()') IS NULL
+          OR COUNT(*) FILTER (
+            WHERE trigger.tgname = 'loops_reject_runtime_tenant_update'
+              AND proc.oid = to_regprocedure('public.loops_reject_runtime_tenant_update()')
+          ) = 1 AS canonical_safe
         FROM pg_trigger trigger
         JOIN pg_proc proc ON proc.oid = trigger.tgfoid
        WHERE trigger.tgrelid = 'public.tenants'::regclass
-         AND trigger.tgname = 'open_loops_reject_runtime_tenant_update'
          AND NOT trigger.tgisinternal
          AND trigger.tgenabled = 'O'
-         AND proc.oid = 'public.open_loops_reject_runtime_tenant_update()'::regprocedure
          AND pg_get_userbyid(proc.proowner) = 'open_loops_owner'
          AND NOT proc.prosecdef
          AND COALESCE(proc.proconfig, ARRAY[]::text[]) @> ARRAY['search_path=pg_catalog']
@@ -578,10 +627,14 @@ export async function isTenantRlsInvariantSafe(client: TypedQueryClient): Promis
           OR actual.roles <> expected.roles
           OR NOT CASE expected.qualifier
             WHEN 'tenant_id' THEN actual.qualifier = ANY(ARRAY[
+              '(tenant_id = loops_current_tenant_id())',
+              '(tenant_id = public.loops_current_tenant_id())',
               '(tenant_id = open_loops_current_tenant_id())',
               '(tenant_id = public.open_loops_current_tenant_id())'
             ])
             WHEN 'id' THEN actual.qualifier = ANY(ARRAY[
+              '(id = loops_current_tenant_id())',
+              '(id = public.loops_current_tenant_id())',
               '(id = open_loops_current_tenant_id())',
               '(id = public.open_loops_current_tenant_id())'
             ])
@@ -590,10 +643,14 @@ export async function isTenantRlsInvariantSafe(client: TypedQueryClient): Promis
           END
           OR NOT CASE expected.check_expr
             WHEN 'tenant_id' THEN actual.check_expr = ANY(ARRAY[
+              '(tenant_id = loops_current_tenant_id())',
+              '(tenant_id = public.loops_current_tenant_id())',
               '(tenant_id = open_loops_current_tenant_id())',
               '(tenant_id = public.open_loops_current_tenant_id())'
             ])
             WHEN 'id' THEN actual.check_expr = ANY(ARRAY[
+              '(id = loops_current_tenant_id())',
+              '(id = public.loops_current_tenant_id())',
               '(id = open_loops_current_tenant_id())',
               '(id = public.open_loops_current_tenant_id())'
             ])
@@ -612,7 +669,10 @@ export async function isTenantRlsInvariantSafe(client: TypedQueryClient): Promis
     SELECT NOT EXISTS (SELECT 1 FROM bad_table)
        AND NOT EXISTS (SELECT 1 FROM missing_or_bad)
        AND NOT EXISTS (SELECT 1 FROM unexpected)
-       AND EXISTS (SELECT 1 FROM tenant_update_guard) AS safe`,
+       AND COALESCE(
+         (SELECT legacy_safe AND canonical_safe FROM tenant_update_guard),
+         false
+       ) AS safe`,
   );
   return row?.safe === true;
 }
@@ -643,6 +703,9 @@ export async function assertTenantEnforcementBootstrap(client: PoolQueryClient):
               SELECT 1
                 FROM pg_proc helper
                WHERE helper.oid = ANY(ARRAY[
+                 to_regprocedure('public.loops_current_tenant_id()'),
+                 to_regprocedure('public.loops_authenticate_key(text,text)'),
+                 to_regprocedure('public.loops_append_auth_audit(text,text,text,text,text,text,text,jsonb)'),
                  to_regprocedure('public.open_loops_current_tenant_id()'),
                  to_regprocedure('public.open_loops_authenticate_key(text,text)'),
                  to_regprocedure('public.open_loops_append_auth_audit(text,text,text,text,text,text,text,jsonb)')

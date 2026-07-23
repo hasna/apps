@@ -9,14 +9,22 @@ import { scrubSecretsDeep } from "./redact.js";
 import type { Store, StoreMigrationChecks } from "./store.js";
 import { packageVersion } from "./version.js";
 
-export const LOOPS_MIGRATION_SCHEMA = "open-loops.migration/v1";
-export const LOOPS_SELF_HOSTED_PUSH_MANIFEST_SCHEMA = "open-loops.self-hosted-push-manifest/v1";
+export const LOOPS_MIGRATION_SCHEMA = "loops.migration/v1";
+/** @deprecated Read-only compatibility for bundles exported before the Loops rename. */
+export const LEGACY_OPEN_LOOPS_MIGRATION_SCHEMA = "open-loops.migration/v1";
+export const LOOPS_SELF_HOSTED_PUSH_MANIFEST_SCHEMA = "loops.self-hosted-push-manifest/v1";
+/** @deprecated Manifests are output-only; retain this value for downstream migration tooling until the next major release. */
+export const LEGACY_OPEN_LOOPS_SELF_HOSTED_PUSH_MANIFEST_SCHEMA = "open-loops.self-hosted-push-manifest/v1";
+
+export type LoopsMigrationBundleSchema =
+  | typeof LOOPS_MIGRATION_SCHEMA
+  | typeof LEGACY_OPEN_LOOPS_MIGRATION_SCHEMA;
 
 export type LoopsMigrationResource = "workflow" | "loop" | "run" | "remote";
 export type LoopsMigrationAction = "insert" | "update" | "skip" | "conflict" | "blocked";
 
 export interface LoopsMigrationBundle {
-  schema: typeof LOOPS_MIGRATION_SCHEMA;
+  schema: LoopsMigrationBundleSchema;
   packageVersion: string;
   exportedAt: string;
   source: {
@@ -227,7 +235,9 @@ export function exportLoopsMigrationBundle(store: Store, opts: ExportLoopsMigrat
 export function validateLoopsMigrationBundle(value: unknown): LoopsMigrationBundle {
   if (!value || typeof value !== "object") throw new ValidationError("migration bundle must be a JSON object");
   const bundle = value as Partial<LoopsMigrationBundle>;
-  if (bundle.schema !== LOOPS_MIGRATION_SCHEMA) throw new ValidationError(`unsupported migration bundle schema: ${String(bundle.schema)}`);
+  if (bundle.schema !== LOOPS_MIGRATION_SCHEMA && bundle.schema !== LEGACY_OPEN_LOOPS_MIGRATION_SCHEMA) {
+    throw new ValidationError(`unsupported migration bundle schema: ${String(bundle.schema)}`);
+  }
   if (!bundle.data || !Array.isArray(bundle.data.workflows) || !Array.isArray(bundle.data.loops) || !Array.isArray(bundle.data.runs)) {
     throw new ValidationError("migration bundle data must include workflows, loops, and runs arrays");
   }

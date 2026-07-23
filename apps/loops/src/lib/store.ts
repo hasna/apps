@@ -1003,7 +1003,7 @@ export class Store {
   constructor(path?: string) {
     const file = path ?? dbPath();
     if (file !== ":memory:") ensurePrivateStorePath(file);
-    this.rootDir = file === ":memory:" ? mkdtempSync(join(tmpdir(), "open-loops-store-")) : dirname(file);
+    this.rootDir = file === ":memory:" ? mkdtempSync(join(tmpdir(), "loops-store-")) : dirname(file);
     if (file === ":memory:") this.memoryRootDir = this.rootDir;
     this.db = new Database(file);
     this.db.exec("PRAGMA foreign_keys = ON;");
@@ -2649,7 +2649,7 @@ export class Store {
       "--state",
       "succeeded",
       "--actor",
-      "openloops:task-lifecycle",
+      "loops:task-lifecycle",
     ]);
     this.appendWorkflowEvent(workflowRunId, result.ok ? "todos_workflow_pointers_synced" : "todos_workflow_pointers_sync_failed", undefined, {
       projectPath: context.projectPath,

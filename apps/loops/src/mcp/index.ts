@@ -1018,12 +1018,12 @@ function toolCallback(tool: LoopsMcpToolRegistration) {
 
 export function createLoopsMcpServer(): McpServer {
   const server = new McpServer({
-    name: "open-loops",
+    name: "loops",
     version: packageVersion(),
   });
 
   server.registerResource(
-    "open-loops-runtime",
+    "loops-runtime",
     "loops://runtime",
     {
       title: "Loops Runtime",
@@ -1042,7 +1042,7 @@ export function createLoopsMcpServer(): McpServer {
   );
 
   server.registerResource(
-    "open-loops-tools",
+    "loops-tools",
     "loops://tools",
     {
       title: "Loops MCP Tools",

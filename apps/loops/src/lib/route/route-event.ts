@@ -824,7 +824,7 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
     manualBreakGlass: Boolean(opts.manualBreakGlass),
     worktreeMode: (opts.worktreeMode ?? "auto") as AgentWorktreeMode,
     worktreeRoot: opts.worktreeRoot,
-    worktreeBranchPrefix: opts.worktreeBranchPrefix ?? "openloops",
+    worktreeBranchPrefix: opts.worktreeBranchPrefix ?? "loops",
     routeScope,
     routeThrottleLimits: throttleLimits,
     prHandoff: templateId === TASK_LIFECYCLE_TEMPLATE_ID ? Boolean(opts.prHandoff) : false,
@@ -996,7 +996,7 @@ export function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOpti
     manualBreakGlass: Boolean(opts.manualBreakGlass),
     worktreeMode: (opts.worktreeMode ?? "auto") as AgentWorktreeMode,
     worktreeRoot: opts.worktreeRoot,
-    worktreeBranchPrefix: opts.worktreeBranchPrefix ?? "openloops",
+    worktreeBranchPrefix: opts.worktreeBranchPrefix ?? "loops",
     routeScope,
     routeThrottleLimits: throttleLimits,
   });

@@ -16,20 +16,20 @@ async function fakeCodewith(
   const fake = join(binDir, "codewith");
   // `codewith exec --json` streams JSONL events to stdout and exits 0 on success.
   const execStdout = opts.execStdout ?? '{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}';
-  const execStdoutDelimiter = "__OPENLOOPS_FAKE_CODEWITH_EXEC_STDOUT__";
+  const execStdoutDelimiter = "__LOOPS_FAKE_CODEWITH_EXEC_STDOUT__";
   await Bun.write(
     fake,
     [
       "#!/usr/bin/env bash",
-      "printf '%s\\0' \"$@\" >> \"$OPENLOOPS_FAKE_CODEWITH_INVOCATIONS\"",
-      "printf '\\n' >> \"$OPENLOOPS_FAKE_CODEWITH_INVOCATIONS\"",
+      "printf '%s\\0' \"$@\" >> \"$LOOPS_FAKE_CODEWITH_INVOCATIONS\"",
+      "printf '\\n' >> \"$LOOPS_FAKE_CODEWITH_INVOCATIONS\"",
       "if [[ \"${1:-}\" == \"profile\" && \"${2:-}\" == \"list\" ]]; then",
       `  printf ${JSON.stringify(opts.profiles ?? "NAME ACCOUNT PROVIDER MODE PLAN\\naccount001 - ChatGPT chatgpt Pro\\n")}`,
       "  exit 0",
       "fi",
       "if [[ \" $* \" == *\" exec \"* ]]; then",
       // Optional stall (no output) so the generic idle watchdog can reap it.
-      "  if [[ -n \"${OPENLOOPS_FAKE_CODEWITH_SLEEP:-}\" ]]; then sleep \"$OPENLOOPS_FAKE_CODEWITH_SLEEP\"; fi",
+      "  if [[ -n \"${LOOPS_FAKE_CODEWITH_SLEEP:-}\" ]]; then sleep \"$LOOPS_FAKE_CODEWITH_SLEEP\"; fi",
       `  cat <<'${execStdoutDelimiter}'`,
       execStdout.endsWith("\n") ? execStdout.slice(0, -1) : execStdout,
       execStdoutDelimiter,
@@ -156,7 +156,7 @@ describe("agent adapters", () => {
       const claim = store.claimRun(loop, new Date().toISOString(), "test");
       expect(claim).toBeDefined();
       const result = await executeLoop(loop, claim!.run, {
-        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, OPENLOOPS_FAKE_CODEWITH_INVOCATIONS: invocationsFile },
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, LOOPS_FAKE_CODEWITH_INVOCATIONS: invocationsFile },
       });
       expect(result.status).toBe("succeeded");
       const invocations = codewithInvocations(invocationsFile);
@@ -229,7 +229,7 @@ describe("agent adapters", () => {
       const claim = store.claimRun(loop, new Date().toISOString(), "test");
       expect(claim).toBeDefined();
       const result = await executeLoop(loop, claim!.run, {
-        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, OPENLOOPS_FAKE_CODEWITH_INVOCATIONS: invocationsFile },
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, LOOPS_FAKE_CODEWITH_INVOCATIONS: invocationsFile },
       });
       expect(result.status).toBe("succeeded");
       expect(result.exitCode).toBe(7);
@@ -271,7 +271,7 @@ describe("agent adapters", () => {
       const claim = store.claimRun(loop, new Date().toISOString(), "test");
       expect(claim).toBeDefined();
       const result = await executeLoop(loop, claim!.run, {
-        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, OPENLOOPS_FAKE_CODEWITH_INVOCATIONS: invocationsFile },
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, LOOPS_FAKE_CODEWITH_INVOCATIONS: invocationsFile },
       });
       expect(result.status).toBe("failed");
       expect(result.exitCode).toBe(7);
@@ -303,7 +303,7 @@ describe("agent adapters", () => {
       const claim = store.claimRun(loop, new Date().toISOString(), "test");
       expect(claim).toBeDefined();
       const result = await executeLoop(loop, claim!.run, {
-        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, OPENLOOPS_FAKE_CODEWITH_INVOCATIONS: invocationsFile },
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, LOOPS_FAKE_CODEWITH_INVOCATIONS: invocationsFile },
       });
       expect(result.status).toBe("succeeded");
       const invocations = codewithInvocations(invocationsFile);
@@ -343,7 +343,7 @@ describe("agent adapters", () => {
       const claim = store.claimRun(loop, new Date().toISOString(), "test");
       expect(claim).toBeDefined();
       const result = await executeLoop(loop, claim!.run, {
-        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, OPENLOOPS_FAKE_CODEWITH_INVOCATIONS: invocationsFile },
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, LOOPS_FAKE_CODEWITH_INVOCATIONS: invocationsFile },
       });
       expect(result.status).toBe("succeeded");
       const args = codewithInvocations(invocationsFile).find((entry) => entry.includes("exec"))!;
@@ -596,9 +596,9 @@ describe("agent adapters", () => {
         env: {
           ...process.env,
           PATH: `${binDir}:${process.env.PATH}`,
-          OPENLOOPS_FAKE_CODEWITH_INVOCATIONS: invocationsFile,
+          LOOPS_FAKE_CODEWITH_INVOCATIONS: invocationsFile,
           // exec sleeps with no output; the generic watchdog must reap it.
-          OPENLOOPS_FAKE_CODEWITH_SLEEP: "5",
+          LOOPS_FAKE_CODEWITH_SLEEP: "5",
         },
       });
       expect(result.status).toBe("timed_out");
@@ -651,8 +651,8 @@ describe("agent adapters", () => {
 });
 
 describe("provider adapter contracts", () => {
-  const trustedContractBegin = "<<<OPENLOOPS_TRUSTED_AGENT_SESSION_CONTRACT_V1>>>";
-  const trustedContractEnd = "<<<END_OPENLOOPS_TRUSTED_AGENT_SESSION_CONTRACT_V1>>>";
+  const trustedContractBegin = "<<<LOOPS_TRUSTED_AGENT_SESSION_CONTRACT_V1>>>";
+  const trustedContractEnd = "<<<END_LOOPS_TRUSTED_AGENT_SESSION_CONTRACT_V1>>>";
   const baseTarget = (overrides: Partial<AgentTarget> & Pick<AgentTarget, "provider">): AgentTarget =>
     ({ type: "agent", prompt: "say ok", ...overrides }) as AgentTarget;
 
@@ -746,7 +746,7 @@ describe("provider adapter contracts", () => {
 
     const invocation = providerAdapter("codewith").buildInvocation(target);
     const envelope = trustedContractEnvelope(invocation.stdin);
-    expect(envelope.source).toBe("openloops-server");
+    expect(envelope.source).toBe("loops-server");
     expect(envelope.authority).toBe("final-server-appended-block");
     expect(envelope.contract.restrictions).toMatchObject({
       commands: ["git", "bun"],
@@ -779,7 +779,7 @@ describe("provider adapter contracts", () => {
     expect(invocation.stdin).toBeString();
     expect(invocation.stdin!).toStartWith(`${callerPrompt}\n\n${trustedContractBegin}\n`);
     const envelope = trustedContractEnvelope(invocation.stdin);
-    expect(envelope.source).toBe("openloops-server");
+    expect(envelope.source).toBe("loops-server");
     expect(envelope.authority).toBe("final-server-appended-block");
     expect(envelope.contract.restrictions).toEqual({
       commands: ["git status"],
@@ -1118,7 +1118,7 @@ describe("provider adapter contracts", () => {
   });
 
   test("spawnCapture reports missing executables as errors", async () => {
-    const result = await spawnCapture("openloops-definitely-missing-binary", [], { timeoutMs: 1_000 });
+    const result = await spawnCapture("loops-definitely-missing-binary", [], { timeoutMs: 1_000 });
     expect(result.status).toBe(null);
     expect(result.error).toBeDefined();
   });

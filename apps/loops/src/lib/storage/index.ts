@@ -21,6 +21,7 @@ export {
   createPostgresLoopStorage,
 } from "./postgres-loop-storage.js";
 export {
+  POSTGRES_CANONICAL_MIGRATION_LEDGER_VIEW,
   POSTGRES_MIGRATION_LEDGER_TABLE,
   POSTGRES_STORAGE_MIGRATIONS,
   checksumStorageSql,

@@ -4,9 +4,9 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { listOpenMachines, refreshLoopMachine, resolveLoopMachine } from "./machines.js";
 
-const LOCAL_ID = "openloops-test-local-a71";
-const REMOTE_ID = "openloops-test-remote-b82";
-const REMOTE_HOSTNAME = "openloops-test-remote-host";
+const LOCAL_ID = "loops-test-local-a71";
+const REMOTE_ID = "loops-test-remote-b82";
+const REMOTE_HOSTNAME = "loops-test-remote-host";
 
 describe("machines", () => {
   let root: string;
@@ -30,7 +30,7 @@ describe("machines", () => {
             hostname: REMOTE_HOSTNAME,
             platform: "linux",
             workspacePath: "/workspace/remote",
-            sshAddress: "tester@openloops-remote.example",
+            sshAddress: "tester@loops-remote.example",
             tags: ["test"],
           },
         ],
@@ -83,8 +83,8 @@ describe("machines", () => {
   });
 
   test("resolveLoopMachine throws a routable error for unknown machines", () => {
-    expect(() => resolveLoopMachine("openloops-test-missing-zz9")).toThrow(
-      "OpenMachines route not found for machine: openloops-test-missing-zz9",
+    expect(() => resolveLoopMachine("loops-test-missing-zz9")).toThrow(
+      "OpenMachines route not found for machine: loops-test-missing-zz9",
     );
   });
 

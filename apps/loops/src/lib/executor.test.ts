@@ -26,7 +26,7 @@ function guardedLoginExitCommand(missingPath: string): string {
 }
 
 function writeFakeCodewithProfileList(fake: string, output: string, exitCode = 0): void {
-  const delimiter = "__OPENLOOPS_FAKE_CODEWITH_PROFILE_LIST__";
+  const delimiter = "__LOOPS_FAKE_CODEWITH_PROFILE_LIST__";
   writeFileSync(
     fake,
     [
@@ -45,7 +45,7 @@ function writeFakeCodewithProfileList(fake: string, output: string, exitCode = 0
 }
 
 function writeFakeCodewithJsonFailureThenProfileList(fake: string, output: string): void {
-  const delimiter = "__OPENLOOPS_FAKE_CODEWITH_PROFILE_LIST__";
+  const delimiter = "__LOOPS_FAKE_CODEWITH_PROFILE_LIST__";
   writeFileSync(
     fake,
     [
@@ -73,8 +73,8 @@ function writeFakeCodewithJsonThenProfileList(
   tableOutput: string,
   invocationLog?: string,
 ): void {
-  const jsonDelimiter = "__OPENLOOPS_FAKE_CODEWITH_JSON_PROFILE_LIST__";
-  const tableDelimiter = "__OPENLOOPS_FAKE_CODEWITH_TABLE_PROFILE_LIST__";
+  const jsonDelimiter = "__LOOPS_FAKE_CODEWITH_JSON_PROFILE_LIST__";
+  const tableDelimiter = "__LOOPS_FAKE_CODEWITH_TABLE_PROFILE_LIST__";
   writeFileSync(
     fake,
     [
@@ -470,7 +470,7 @@ describe("executeLoop", () => {
               repoRoot: repo,
               root: join(root, "worktrees"),
               path: wtPath,
-              branch: "openloops/exec-test",
+              branch: "loops/exec-test",
             },
           },
         });
@@ -481,7 +481,7 @@ describe("executeLoop", () => {
         });
         expect(result.status).toBe("succeeded");
         expect(result.stdout.trim()).toBe(realpathSync(wtPath));
-        expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("openloops/exec-test");
+        expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("loops/exec-test");
 
         const again = await executeLoop(loop, claim!.run, {
           env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
@@ -497,7 +497,7 @@ describe("executeLoop", () => {
         });
         expect(recovered.status).toBe("succeeded");
         expect(recovered.stdout.trim()).toBe(realpathSync(wtPath));
-        expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("openloops/exec-test");
+        expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("loops/exec-test");
 
         writeFileSync(join(wtPath, "detached-marker.txt"), "preserve detached head\n");
         execFileSync("git", ["-C", wtPath, "-c", "user.email=test@example.com", "-c", "user.name=test", "add", "detached-marker.txt"], {
@@ -508,13 +508,13 @@ describe("executeLoop", () => {
         });
         const detachedHead = execFileSync("git", ["-C", wtPath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
         execFileSync("git", ["-C", wtPath, "checkout", "--detach"], { stdio: "ignore" });
-        execFileSync("git", ["-C", repo, "branch", "-D", "openloops/exec-test"], { stdio: "ignore" });
+        execFileSync("git", ["-C", repo, "branch", "-D", "loops/exec-test"], { stdio: "ignore" });
 
         const recreated = await executeLoop(loop, claim!.run, {
           env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
         });
         expect(recreated.status).toBe("succeeded");
-        expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("openloops/exec-test");
+        expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("loops/exec-test");
         expect(execFileSync("git", ["-C", wtPath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim()).toBe(detachedHead);
         expect(readFileSync(join(wtPath, "detached-marker.txt"), "utf8")).toBe("preserve detached head\n");
       } finally {
@@ -545,7 +545,7 @@ describe("executeLoop", () => {
         // branch), then delete its directory, leaving the `.git/worktrees/<name>`
         // entry git refuses to overwrite ("missing but already registered
         // worktree") while the branch stays checked-out to the missing path.
-        execFileSync("git", ["-C", repo, "worktree", "add", "-b", "openloops/stale-test", wtPath], { stdio: "ignore" });
+        execFileSync("git", ["-C", repo, "worktree", "add", "-b", "loops/stale-test", wtPath], { stdio: "ignore" });
         rmSync(wtPath, { recursive: true, force: true });
         expect(existsSync(wtPath)).toBe(false);
 
@@ -567,7 +567,7 @@ describe("executeLoop", () => {
               repoRoot: repo,
               root: join(root, "worktrees"),
               path: wtPath,
-              branch: "openloops/stale-test",
+              branch: "loops/stale-test",
             },
           },
         });
@@ -614,7 +614,7 @@ describe("executeLoop", () => {
               cwd: wtPath,
               repoRoot: notRepo,
               path: wtPath,
-              branch: "openloops/exec-test",
+              branch: "loops/exec-test",
             },
           },
         });
@@ -661,7 +661,7 @@ describe("executeLoop", () => {
               // Not a git repository: native preparation must fail closed.
               repoRoot: root,
               path: wtPath,
-              branch: "openloops/exec-test",
+              branch: "loops/exec-test",
             },
           },
           machine: { id: "remote-test", local: false, route: "ssh" },
@@ -712,7 +712,7 @@ describe("executeLoop", () => {
               repoRoot: repo,
               root: join(root, "worktrees"),
               path: wtPath,
-              branch: "openloops/exec-test",
+              branch: "loops/exec-test",
             },
           },
           machine: { id: "remote-test", local: false, route: "ssh" },
@@ -725,7 +725,7 @@ describe("executeLoop", () => {
         });
         expect(result.status).toBe("succeeded");
         expect(result.stdout.trim()).toBe(wtPath);
-        expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("openloops/exec-test");
+        expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("loops/exec-test");
 
         // Second run recovers a clean detached worktree before entering it.
         execFileSync("git", ["-C", wtPath, "checkout", "--detach"], { stdio: "ignore" });
@@ -735,7 +735,7 @@ describe("executeLoop", () => {
         });
         expect(again.status).toBe("succeeded");
         expect(again.stdout.trim()).toBe(wtPath);
-        expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("openloops/exec-test");
+        expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("loops/exec-test");
 
         writeFileSync(join(wtPath, "detached-marker.txt"), "preserve remote detached head\n");
         execFileSync("git", ["-C", wtPath, "-c", "user.email=test@example.com", "-c", "user.name=test", "add", "detached-marker.txt"], {
@@ -746,14 +746,14 @@ describe("executeLoop", () => {
         });
         const detachedHead = execFileSync("git", ["-C", wtPath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
         execFileSync("git", ["-C", wtPath, "checkout", "--detach"], { stdio: "ignore" });
-        execFileSync("git", ["-C", repo, "branch", "-D", "openloops/exec-test"], { stdio: "ignore" });
+        execFileSync("git", ["-C", repo, "branch", "-D", "loops/exec-test"], { stdio: "ignore" });
 
         const recreated = await executeLoop(loop, claim!.run, {
           ...remoteHooks,
           env: { HOME: home, PATH: "/usr/bin:/bin" },
         });
         expect(recreated.status).toBe("succeeded");
-        expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("openloops/exec-test");
+        expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("loops/exec-test");
         expect(execFileSync("git", ["-C", wtPath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim()).toBe(detachedHead);
         expect(readFileSync(join(wtPath, "detached-marker.txt"), "utf8")).toBe("preserve remote detached head\n");
       } finally {
@@ -792,7 +792,7 @@ describe("executeLoop", () => {
               cwd: wtPath,
               repoRoot: notRepo,
               path: wtPath,
-              branch: "openloops/exec-test",
+              branch: "loops/exec-test",
             },
           },
           machine: { id: "remote-test", local: false, route: "ssh" },
@@ -848,7 +848,7 @@ describe("executeLoop", () => {
           cwd: wtPath,
           repoRoot: notRepo,
           path: wtPath,
-          branch: "openloops/exec-test",
+          branch: "loops/exec-test",
         },
       };
       Object.defineProperty(target, "extraArgs", {
@@ -925,7 +925,7 @@ describe("executeLoop", () => {
           cwd: wtPath,
           repoRoot: notRepo,
           path: wtPath,
-          branch: "openloops/exec-test",
+          branch: "loops/exec-test",
         },
       };
       Object.defineProperty(target, "extraArgs", {
@@ -985,7 +985,7 @@ describe("executeLoop", () => {
               cwd: wtPath,
               repoRoot: notRepo,
               path: wtPath,
-              branch: "openloops/exec-test",
+              branch: "loops/exec-test",
             },
           },
         });
@@ -1033,7 +1033,7 @@ describe("executeLoop", () => {
               cwd: wtPath,
               repoRoot: notRepo,
               path: wtPath,
-              branch: "openloops/exec-test",
+              branch: "loops/exec-test",
             },
           },
         });
@@ -1090,7 +1090,7 @@ describe("executeLoop", () => {
               cwd: wtPath,
               repoRoot: notRepo,
               path: wtPath,
-              branch: "openloops/exec-test",
+              branch: "loops/exec-test",
             },
           },
         });

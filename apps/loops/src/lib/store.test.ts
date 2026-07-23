@@ -453,7 +453,7 @@ describe("Store", () => {
         {
           name: "receipt-loop",
           schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
-          target: { type: "command", command: "true", cwd: "/workspace/open-loops" },
+          target: { type: "command", command: "true", cwd: "/workspace/loops" },
           machine: { id: "spark01" },
         },
         new Date("2025-12-31T00:00:00Z"),
@@ -484,7 +484,7 @@ describe("Store", () => {
       expect(first).toMatchObject({
         loop_id: loop.id,
         run_id: run.id,
-        repo: "/workspace/open-loops",
+        repo: "/workspace/loops",
         task_ids: ["task-1"],
         knowledge_ids: ["knowledge-1"],
         status: "succeeded",
@@ -502,7 +502,7 @@ describe("Store", () => {
         {
           run_id: run.id,
           loop_id: loop.id,
-          repo: "/workspace/open-loops",
+          repo: "/workspace/loops",
           task_ids: ["task-2"],
           status: "failed",
           exit_code: 12,
@@ -517,7 +517,7 @@ describe("Store", () => {
       expect(store.getRunReceipt(run.id)?.task_ids).toEqual(["task-2"]);
       expect(store.listRunReceipts({ taskId: "task-2" }).map((receipt) => receipt.run_id)).toEqual([run.id]);
       expect(store.listRunReceipts({ knowledgeId: "knowledge-1" })).toEqual([]);
-      expect(store.listRunReceipts({ repo: "/workspace/open-loops", status: "failed" })).toHaveLength(1);
+      expect(store.listRunReceipts({ repo: "/workspace/loops", status: "failed" })).toHaveLength(1);
     } finally {
       store.close();
     }
@@ -569,9 +569,9 @@ describe("Store", () => {
       const invocation = store.createWorkflowInvocation({
         templateId: "todos-task-worker-verifier",
         sourceRef: { kind: "event", id: "evt-1", dedupeKey: "todos-task:task-1:task.created" },
-        subjectRef: { kind: "task", id: "task-1", path: "/tmp/open-loops" },
+        subjectRef: { kind: "task", id: "task-1", path: "/tmp/loops" },
         intent: "route",
-        scope: { projectPath: "/tmp/open-loops", worktreePolicy: "required" },
+        scope: { projectPath: "/tmp/loops", worktreePolicy: "required" },
         outputPolicy: { report: "always", createTask: "on_failure" },
       });
       const workItem = store.upsertWorkflowWorkItem({
@@ -581,12 +581,12 @@ describe("Store", () => {
         sourceType: "task.created",
         sourceRef: "evt-1",
         subjectRef: "task-1",
-        projectKey: "/tmp/open-loops",
+        projectKey: "/tmp/loops",
         machineId: "spark-test",
       });
       expect(workItem.status).toBe("queued");
       expect(workItem.machineId).toBe("spark-test");
-      expect(store.countActiveWorkflowWorkItems({ projectKey: "/tmp/open-loops" })).toEqual({ global: 0, project: 0 });
+      expect(store.countActiveWorkflowWorkItems({ projectKey: "/tmp/loops" })).toEqual({ global: 0, project: 0 });
 
       const workflow = store.createWorkflow({
         name: "route-task-1",
@@ -606,13 +606,13 @@ describe("Store", () => {
       });
       const admitted = store.admitWorkflowWorkItem(workItem.id, { workflowId: workflow.id, loopId: loop.id });
       expect(admitted.status).toBe("admitted");
-      expect(store.countActiveWorkflowWorkItems({ projectKey: "/tmp/open-loops" })).toEqual({ global: 1, project: 1 });
+      expect(store.countActiveWorkflowWorkItems({ projectKey: "/tmp/loops" })).toEqual({ global: 1, project: 1 });
 
       const run = store.createWorkflowRun({ workflow, loop, scheduledFor: "2026-01-01T00:00:00.000Z" });
       expect(run.invocationId).toBe(invocation.id);
       expect(run.workItemId).toBe(workItem.id);
       expect(run.manifestPath).toBeDefined();
-      expect(run.manifestPath).toContain("/runs/open-loops/task-task-1-");
+      expect(run.manifestPath).toContain("/runs/loops/task-task-1-");
       expect(existsSync(run.manifestPath!)).toBe(true);
       const manifest = JSON.parse(readFileSync(run.manifestPath!, "utf8"));
       expect(manifest.workflowInvocation.id).toBe(invocation.id);
@@ -622,7 +622,7 @@ describe("Store", () => {
       store.finalizeWorkflowRun(run.id, "succeeded");
       expect(store.getWorkflowWorkItem(workItem.id)?.status).toBe("succeeded");
       expect(store.getWorkflowWorkItem(workItem.id)?.machineId).toBe("spark-test");
-      expect(store.countActiveWorkflowWorkItems({ projectKey: "/tmp/open-loops" })).toEqual({ global: 0, project: 0 });
+      expect(store.countActiveWorkflowWorkItems({ projectKey: "/tmp/loops" })).toEqual({ global: 0, project: 0 });
       expect(store.getWorkflow(workflow.id)?.status).toBe("archived");
       expect(store.listWorkflowRuns({ workflowId: workflow.id })).toHaveLength(1);
       expect(store.listWorkflowEvents(run.id).map((event) => event.eventType)).toContain("workflow_archived");
@@ -653,9 +653,9 @@ exit 0
       const invocation = store.createWorkflowInvocation({
         templateId: "task-lifecycle",
         sourceRef: { kind: "event", id: "evt-task-1", dedupeKey: "todos-task:task-1:task.created" },
-        subjectRef: { kind: "task", id: "task-1", path: "/tmp/open-loops" },
+        subjectRef: { kind: "task", id: "task-1", path: "/tmp/loops" },
         intent: "route",
-        scope: { projectPath: "/tmp/open-loops", worktreePolicy: "required" },
+        scope: { projectPath: "/tmp/loops", worktreePolicy: "required" },
       });
       const workItem = store.upsertWorkflowWorkItem({
         routeKey: "todos-task",
@@ -664,7 +664,7 @@ exit 0
         sourceType: "task.created",
         sourceRef: "evt-task-1",
         subjectRef: "task-1",
-        projectKey: "/tmp/open-loops",
+        projectKey: "/tmp/loops",
       });
       const cancelledWorkflow = store.createWorkflow({
         name: "route-task-1-cancelled",
@@ -710,12 +710,12 @@ exit 0
       store.finalizeWorkflowRun(successRun.id, "succeeded");
 
       const args = readFileSync(todosLog, "utf8").trim();
-      expect(args).toContain("--project /tmp/open-loops task workflow-pointers task-1 --clear");
+      expect(args).toContain("--project /tmp/loops task workflow-pointers task-1 --clear");
       expect(args).toContain(`--invocation ${invocation.id}`);
       expect(args).toContain(`--run ${successRun.id}`);
       expect(args).toContain(`--manifest ${successRun.manifestPath}`);
       expect(args).toContain("--state succeeded");
-      expect(args).toContain("--actor openloops:task-lifecycle");
+      expect(args).toContain("--actor loops:task-lifecycle");
       expect(args).not.toContain(cancelledRun.id);
       expect(store.listWorkflowEvents(successRun.id).map((event) => event.eventType)).toContain("todos_workflow_pointers_synced");
     } finally {
@@ -733,9 +733,9 @@ exit 0
     try {
       const invocation = store.createWorkflowInvocation({
         sourceRef: { kind: "event", id: "evt-reusable-route", dedupeKey: "todos-task:reusable-route" },
-        subjectRef: { kind: "task", id: "reusable-route", path: "/tmp/open-loops" },
+        subjectRef: { kind: "task", id: "reusable-route", path: "/tmp/loops" },
         intent: "route",
-        scope: { projectPath: "/tmp/open-loops" },
+        scope: { projectPath: "/tmp/loops" },
       });
       const workItem = store.upsertWorkflowWorkItem({
         routeKey: "todos-task",
@@ -744,7 +744,7 @@ exit 0
         sourceType: "task.created",
         sourceRef: "evt-reusable-route",
         subjectRef: "reusable-route",
-        projectKey: "/tmp/open-loops",
+        projectKey: "/tmp/loops",
       });
       const workflow = store.createWorkflow({
         name: "reusable-route-shaped-workflow",
@@ -801,9 +801,9 @@ exit 0
       const invocation = store.createWorkflowInvocation({
         templateId: "task-lifecycle",
         sourceRef: { kind: "event", id: "evt-task-lifecycle-route", dedupeKey: "todos-task:task-lifecycle-route" },
-        subjectRef: { kind: "task", id: "task-lifecycle-route", path: "/tmp/open-loops" },
+        subjectRef: { kind: "task", id: "task-lifecycle-route", path: "/tmp/loops" },
         intent: "route",
-        scope: { projectPath: "/tmp/open-loops" },
+        scope: { projectPath: "/tmp/loops" },
       });
       const workItem = store.upsertWorkflowWorkItem({
         routeKey: "todos-task",
@@ -812,7 +812,7 @@ exit 0
         sourceType: "task.created",
         sourceRef: "evt-task-lifecycle-route",
         subjectRef: "task-lifecycle-route",
-        projectKey: "/tmp/open-loops",
+        projectKey: "/tmp/loops",
       });
       const workflow = store.createWorkflow({
         name: "task-lifecycle-route-workflow",
@@ -1157,9 +1157,9 @@ exit 0
       const invocation = store.createWorkflowInvocation({
         templateId: "todos-task-worker-verifier",
         sourceRef: { kind: "event", id: "evt-preflight-fail", dedupeKey: "todos-task:preflight-fail:task.created" },
-        subjectRef: { kind: "task", id: "preflight-fail", path: "/tmp/open-loops" },
+        subjectRef: { kind: "task", id: "preflight-fail", path: "/tmp/loops" },
         intent: "route",
-        scope: { projectPath: "/tmp/open-loops" },
+        scope: { projectPath: "/tmp/loops" },
       });
       const workItem = store.upsertWorkflowWorkItem({
         routeKey: "todos-task",
@@ -1168,7 +1168,7 @@ exit 0
         sourceType: "task.created",
         sourceRef: "evt-preflight-fail",
         subjectRef: "preflight-fail",
-        projectKey: "/tmp/open-loops",
+        projectKey: "/tmp/loops",
       });
       const workflow = store.createWorkflow({
         name: "preflight-fail-workflow",
@@ -1188,7 +1188,7 @@ exit 0
         maxAttempts: 1,
       });
       store.admitWorkflowWorkItem(workItem.id, { workflowId: workflow.id, loopId: loop.id });
-      expect(store.countActiveWorkflowWorkItems({ projectKey: "/tmp/open-loops" }).project).toBe(1);
+      expect(store.countActiveWorkflowWorkItems({ projectKey: "/tmp/loops" }).project).toBe(1);
 
       const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"));
       expect(claim).toBeDefined();
@@ -1206,7 +1206,7 @@ exit 0
       );
 
       expect(store.getWorkflowWorkItem(workItem.id)?.status).toBe("failed");
-      expect(store.countActiveWorkflowWorkItems({ projectKey: "/tmp/open-loops" }).project).toBe(0);
+      expect(store.countActiveWorkflowWorkItems({ projectKey: "/tmp/loops" }).project).toBe(0);
       expect(store.getWorkflow(workflow.id)?.status).toBe("archived");
     } finally {
       store.close();
@@ -1218,9 +1218,9 @@ exit 0
     try {
       const firstInvocation = store.createWorkflowInvocation({
         sourceRef: { kind: "event", id: "evt-terminal-a", dedupeKey: "todos-task:terminal:task.created" },
-        subjectRef: { kind: "task", id: "terminal", path: "/tmp/open-loops" },
+        subjectRef: { kind: "task", id: "terminal", path: "/tmp/loops" },
         intent: "route",
-        scope: { projectPath: "/tmp/open-loops" },
+        scope: { projectPath: "/tmp/loops" },
       });
       const workItem = store.upsertWorkflowWorkItem({
         routeKey: "todos-task",
@@ -1229,7 +1229,7 @@ exit 0
         sourceType: "task.created",
         sourceRef: "evt-terminal-a",
         subjectRef: "terminal",
-        projectKey: "/tmp/open-loops",
+        projectKey: "/tmp/loops",
       });
       const workflow = store.createWorkflow({
         name: "terminal-replay-workflow",
@@ -1258,9 +1258,9 @@ exit 0
 
       const secondInvocation = store.createWorkflowInvocation({
         sourceRef: { kind: "event", id: "evt-terminal-b", dedupeKey: "todos-task:terminal:task.created" },
-        subjectRef: { kind: "task", id: "terminal", path: "/tmp/open-loops" },
+        subjectRef: { kind: "task", id: "terminal", path: "/tmp/loops" },
         intent: "route",
-        scope: { projectPath: "/tmp/open-loops" },
+        scope: { projectPath: "/tmp/loops" },
       });
       const directReplay = store.upsertWorkflowWorkItem({
         routeKey: "todos-task",
@@ -1269,7 +1269,7 @@ exit 0
         sourceType: "task.created",
         sourceRef: "evt-terminal-b",
         subjectRef: "terminal",
-        projectKey: "/tmp/open-loops",
+        projectKey: "/tmp/loops",
       });
 
       expect(directReplay.id).toBe(workItem.id);
@@ -1277,9 +1277,9 @@ exit 0
       expect(directReplay.loopId).toBe(loop.id);
       expect(() => store.refreshWorkflowInvocationForWorkItem(directReplay.id, {
         sourceRef: { kind: "event", id: "evt-terminal-b", dedupeKey: "todos-task:terminal:task.created" },
-        subjectRef: { kind: "task", id: "terminal", path: "/tmp/open-loops" },
+        subjectRef: { kind: "task", id: "terminal", path: "/tmp/loops" },
         intent: "route",
-        scope: { projectPath: "/tmp/open-loops" },
+        scope: { projectPath: "/tmp/loops" },
       })).toThrow("not refreshable");
 
       const requeued = store.requeueWorkflowWorkItem(workItem.id, { reason: "fixed failing route" });
@@ -1294,7 +1294,7 @@ exit 0
         sourceType: "task.created",
         sourceRef: "evt-terminal-b",
         subjectRef: "terminal",
-        projectKey: "/tmp/open-loops",
+        projectKey: "/tmp/loops",
       });
 
       expect(replayed.id).toBe(workItem.id);
@@ -1304,9 +1304,9 @@ exit 0
       expect(replayed.workflowRunId).toBeUndefined();
       store.refreshWorkflowInvocationForWorkItem(replayed.id, {
         sourceRef: { kind: "event", id: "evt-terminal-b", dedupeKey: "todos-task:terminal:task.created" },
-        subjectRef: { kind: "task", id: "terminal", path: "/tmp/open-loops" },
+        subjectRef: { kind: "task", id: "terminal", path: "/tmp/loops" },
         intent: "route",
-        scope: { projectPath: "/tmp/open-loops" },
+        scope: { projectPath: "/tmp/loops" },
       });
       const nextLoop = store.createLoop({
         name: "terminal-replay-loop-b",
@@ -1516,9 +1516,9 @@ exit 0
       const invocation = store.createWorkflowInvocation({
         templateId: "todos-task-worker-verifier",
         sourceRef: { kind: "event", id: "evt-lease-route", dedupeKey: "todos-task:lease-route" },
-        subjectRef: { kind: "task", id: "lease-route", path: "/tmp/open-loops" },
+        subjectRef: { kind: "task", id: "lease-route", path: "/tmp/loops" },
         intent: "route",
-        scope: { projectPath: "/tmp/open-loops" },
+        scope: { projectPath: "/tmp/loops" },
       });
       const workItem = store.upsertWorkflowWorkItem({
         routeKey: "todos-task",
@@ -1527,7 +1527,7 @@ exit 0
         sourceType: "task.created",
         sourceRef: "evt-lease-route",
         subjectRef: "lease-route",
-        projectKey: "/tmp/open-loops",
+        projectKey: "/tmp/loops",
       });
       const workflow = store.createWorkflow({
         name: "lease-route-workflow",
@@ -1573,9 +1573,9 @@ exit 0
       const invocation = store.createWorkflowInvocation({
         templateId: "todos-task-worker-verifier",
         sourceRef: { kind: "event", id: "evt-lease-route-retry", dedupeKey: "todos-task:lease-route-retry" },
-        subjectRef: { kind: "task", id: "lease-route-retry", path: "/tmp/open-loops" },
+        subjectRef: { kind: "task", id: "lease-route-retry", path: "/tmp/loops" },
         intent: "route",
-        scope: { projectPath: "/tmp/open-loops" },
+        scope: { projectPath: "/tmp/loops" },
       });
       const workItem = store.upsertWorkflowWorkItem({
         routeKey: "todos-task",
@@ -1584,7 +1584,7 @@ exit 0
         sourceType: "task.created",
         sourceRef: "evt-lease-route-retry",
         subjectRef: "lease-route-retry",
-        projectKey: "/tmp/open-loops",
+        projectKey: "/tmp/loops",
       });
       const workflow = store.createWorkflow({
         name: "lease-route-retry-workflow",
@@ -1893,9 +1893,9 @@ exit 0
       ).toBe("daemon");
       const invocation = store.createWorkflowInvocation({
         sourceRef: { kind: "event", id: "evt-loop-fence", dedupeKey: "todos-task:loop-fence" },
-        subjectRef: { kind: "task", id: "loop-fence", path: "/tmp/open-loops" },
+        subjectRef: { kind: "task", id: "loop-fence", path: "/tmp/loops" },
         intent: "route",
-        scope: { projectPath: "/tmp/open-loops" },
+        scope: { projectPath: "/tmp/loops" },
       });
       const workItem = store.upsertWorkflowWorkItem({
         routeKey: "todos-task",
@@ -1904,7 +1904,7 @@ exit 0
         sourceType: "task.created",
         sourceRef: "evt-loop-fence",
         subjectRef: "loop-fence",
-        projectKey: "/tmp/open-loops",
+        projectKey: "/tmp/loops",
       });
       const workflow = store.createWorkflow({
         name: "loop-fence-workflow",
@@ -3167,9 +3167,9 @@ exit 0
     });
     const run = store.createWorkflowRun({ workflow });
     const manifestPath = run.manifestPath!;
-    expect(manifestPath).toContain("open-loops-store-");
-    // Derive the mkdtemp root (…/open-loops-store-XXXXXX) from the manifest path.
-    const marker = manifestPath.indexOf("open-loops-store-");
+    expect(manifestPath).toContain("loops-store-");
+    // Derive the mkdtemp root (…/loops-store-XXXXXX) from the manifest path.
+    const marker = manifestPath.indexOf("loops-store-");
     const tempRoot = manifestPath.slice(0, manifestPath.indexOf("/", marker));
     expect(existsSync(tempRoot)).toBe(true);
 

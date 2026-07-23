@@ -34,7 +34,7 @@ describe("loops ui", () => {
     try {
       const loop = store.createLoop(
         {
-          name: "repo-open-loops-worker",
+          name: "repo-loops-worker",
           schedule: { type: "interval", everyMs: 5 * 60_000 },
           target: { type: "agent", provider: "codewith", prompt: "inspect the repo" },
         },
@@ -62,7 +62,7 @@ describe("loops ui", () => {
       );
 
       const snapshot = buildLoopUiSnapshot(store, { now: new Date("2026-07-06T10:04:00.000Z") });
-      const worker = snapshot.rows.find((row) => row.name === "repo-open-loops-worker");
+      const worker = snapshot.rows.find((row) => row.name === "repo-loops-worker");
       expect(worker).toMatchObject({
         status: "active",
         cadence: "every:5m",
@@ -82,7 +82,7 @@ describe("loops ui", () => {
       });
       expect(frame).toContain("Loops live loops");
       expect(frame).toContain("ACTIVE-RUNS");
-      expect(frame).toContain("repo-open-loops-worker");
+      expect(frame).toContain("repo-loops-worker");
       expect(frame).toContain("codewith");
       expect(frame).toContain("every:5m");
       expect(frame).toContain("running");

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       confirmation:
-        description: Type "transfer openloops shared source" to run the protected ECS task
+        description: Type "transfer loops shared source" to run the protected ECS task
         required: true
         type: string
 
@@ -36,8 +36,8 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          if [[ "${CONFIRMATION}" != "transfer openloops shared source" ]]; then
-            echo "confirmation must exactly match: transfer openloops shared source" >&2
+          if [[ "${CONFIRMATION}" != "transfer loops shared source" ]]; then
+            echo "confirmation must exactly match: transfer loops shared source" >&2
             exit 1
           fi
           for name in AWS_REGION AWS_ROLE_ARN ECS_CLUSTER_ARN ECS_TASK_DEFINITION_ARN ECS_SUBNET_IDS ECS_SECURITY_GROUP_IDS; do
@@ -52,7 +52,7 @@ jobs:
         with:
           aws-region: ${{ vars.AWS_REGION }}
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          role-session-name: openloops-db-transfer-${{ github.run_id }}
+          role-session-name: loops-db-transfer-${{ github.run_id }}
           role-duration-seconds: 3600
           mask-aws-account-id: true
           unset-current-credentials: true

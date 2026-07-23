@@ -1,7 +1,12 @@
 import { createHash } from "node:crypto";
 import type { PoolQueryClient } from "../../generated/storage-kit/query.js";
 
-const BUNDLE_SCHEMA = "open-loops.tenant-backfill/v1";
+export const TENANT_BACKFILL_BUNDLE_SCHEMA = "loops.tenant-backfill/v1";
+/** @deprecated Accepted only for bundles prepared before the Loops rename. */
+export const LEGACY_OPEN_LOOPS_TENANT_BACKFILL_BUNDLE_SCHEMA = "open-loops.tenant-backfill/v1";
+export type TenantBackfillBundleSchema =
+  | typeof TENANT_BACKFILL_BUNDLE_SCHEMA
+  | typeof LEGACY_OPEN_LOOPS_TENANT_BACKFILL_BUNDLE_SCHEMA;
 const ROLES = new Set(["admin", "operator", "member", "readonly", "service", "worker"]);
 const TOKEN_KINDS = new Set(["api_key", "service", "machine"]);
 const TABLES = new Set([
@@ -12,7 +17,7 @@ const TABLES = new Set([
 ]);
 
 export interface TenantBackfillBundle {
-  schema: typeof BUNDLE_SCHEMA;
+  schema: TenantBackfillBundleSchema;
   tenants: Array<{ id: string; slug: string; name: string; status: "active" | "suspended" }>;
   principals: Array<{ id: string; kind: "human" | "service" | "machine"; displayName: string; status: "active" | "suspended" }>;
   memberships: Array<{ tenantId: string; principalId: string; status: "active" | "suspended"; roles: string[] }>;
@@ -28,7 +33,14 @@ function requiredText(value: unknown, path: string): string {
 export function parseTenantBackfillBundle(value: unknown): TenantBackfillBundle {
   if (!value || typeof value !== "object") throw new Error("tenant backfill bundle must be an object");
   const bundle = value as Record<string, unknown>;
-  if (bundle.schema !== BUNDLE_SCHEMA) throw new Error(`tenant backfill schema must be ${BUNDLE_SCHEMA}`);
+  if (
+    bundle.schema !== TENANT_BACKFILL_BUNDLE_SCHEMA
+    && bundle.schema !== LEGACY_OPEN_LOOPS_TENANT_BACKFILL_BUNDLE_SCHEMA
+  ) {
+    throw new Error(
+      `tenant backfill schema must be ${TENANT_BACKFILL_BUNDLE_SCHEMA} (legacy ${LEGACY_OPEN_LOOPS_TENANT_BACKFILL_BUNDLE_SCHEMA} is accepted during migration)`,
+    );
+  }
   for (const field of ["tenants", "principals", "memberships", "keyBindings", "rowAssignments"]) {
     if (!Array.isArray(bundle[field])) throw new Error(`${field} must be an array`);
   }

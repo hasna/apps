@@ -5,6 +5,19 @@ documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
 unless noted.
 
+## Unreleased
+
+### Changed
+
+- **Canonical identity:** current SDK, MCP, workflow, CLI, artifact, schema,
+  test, CI, container, and documentation output now uses `Loops`, `loops`, or
+  `@hasna/loops` as appropriate.
+- **Bounded migration compatibility:** legacy persisted inputs remain readable
+  behind an exact counted allowlist with documented removal conditions.
+  PostgreSQL migration `0013_loops_identity_aliases` adds canonical functions,
+  settings, policies, trigger names, and a ledger view without rewriting the
+  released physical checksum authority.
+
 ## 0.4.29 (2026-07-21)
 
 This source release gives the post-`npm/loops/v0.4.28` code line a new,

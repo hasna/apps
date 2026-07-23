@@ -244,7 +244,7 @@ loops routes schedule todos-task platform-drain \
   --tags auto:route \
   --launch-gate "pa19-controlled-launch" \
   --launch-gate-blocker "/path/to/open-codewith::2d9d931b" \
-  --launch-gate-blocker "/path/to/open-loops::816e99db" \
+  --launch-gate-blocker "/path/to/loops::816e99db" \
   --worktree-mode required
 ```
 
@@ -781,8 +781,8 @@ resolved in the intended Todos store, the workflow fails before repo-mutating
 agent work starts.
 The lifecycle template inserts deterministic gate steps after triage and after
 planning. If either agent marks the task blocked, omits its contextual
-`openloops:triage=go task=<id> event=<event-id>` /
-`openloops:planner=go task=<id> event=<event-id>` marker comment, or the task
+`loops:triage=go task=<id> event=<event-id>` /
+`loops:planner=go task=<id> event=<event-id>` marker comment, or the task
 is marked blocked/completed/done/cancelled/failed/archived/no-auto/manual/
 approval-required, the next agent step is not started.
 Use `--triage-auth-profile`, `--planner-auth-profile`,
@@ -1041,8 +1041,8 @@ mutation-gated `loops_receipt_write`. The SDK exposes `writeReceipt`,
 Loops can turn long-form media or meeting transcripts into recurring workflow work when paired with `iapp-transcriber`. The template at `docs/workflows/transcript-feedback-to-loops.json` transcribes an authorized media URL, asks an agent to extract recurring loop candidates, authors workflow specs, and validates generated workflows before scheduling. Copy it into the target repo, replace `/path/to/repo` with that repo's absolute path, and provide `TRANSCRIBER_SOURCE_URL` through the runner environment or a private, uncommitted workflow copy before storing or scheduling it. Do not commit private or signed media URLs.
 
 ```bash
-loops workflows validate /path/to/repo/.openloops/transcript-feedback-to-loops.json --preflight
-loops workflows create /path/to/repo/.openloops/transcript-feedback-to-loops.json
+loops workflows validate /path/to/repo/.loops/transcript-feedback-to-loops.json --preflight
+loops workflows create /path/to/repo/.loops/transcript-feedback-to-loops.json
 loops workflows run transcript-feedback-to-loops --show-output
 ```
 

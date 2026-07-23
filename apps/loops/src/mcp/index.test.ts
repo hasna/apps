@@ -53,7 +53,7 @@ async function connectMcp(
     env: cleanEnv({ LOOPS_DATA_DIR: dataDir, MCP_STDIO: "1", ...env }),
     stderr: "pipe",
   });
-  const client = new Client({ name: "open-loops-mcp-test", version: "0.0.0" });
+  const client = new Client({ name: "loops-mcp-test", version: "0.0.0" });
   await client.connect(transport);
   return { client, transport };
 }
@@ -116,7 +116,7 @@ describe("Loops MCP server", () => {
           loop_id: loop.id,
           run_id: "mcp-run-receipt",
           machine: "spark01",
-          repo: "/workspace/open-loops",
+          repo: "/workspace/loops",
           task_ids: ["task-mcp"],
           status: "succeeded",
           summary: "mcp receipt",
@@ -569,7 +569,7 @@ describe("Loops MCP server", () => {
             loop_id: seeded.loopId,
             run_id: "mcp-written-receipt",
             machine: "spark01",
-            repo: "/workspace/open-loops",
+            repo: "/workspace/loops",
             task_ids: ["task-written"],
             status: "succeeded",
             summary: "written over MCP",

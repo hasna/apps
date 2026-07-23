@@ -141,7 +141,7 @@ describe("doctor", () => {
       const broken = store.createLoop({
         name: "doctor-missing-binary",
         schedule: { type: "interval", everyMs: 60_000 },
-        target: { type: "command", command: "openloops-definitely-missing-binary" },
+        target: { type: "command", command: "loops-definitely-missing-binary" },
       });
       const healthy = store.createLoop({
         name: "doctor-healthy",
@@ -166,7 +166,7 @@ describe("doctor", () => {
         name: "doctor-workflow",
         steps: [
           { id: "fine", target: { type: "command", command: "printf ok", shell: true } },
-          { id: "broken", dependsOn: ["fine"], target: { type: "command", command: "openloops-definitely-missing-binary" } },
+          { id: "broken", dependsOn: ["fine"], target: { type: "command", command: "loops-definitely-missing-binary" } },
         ],
       });
       const loop = store.createLoop({
@@ -177,7 +177,7 @@ describe("doctor", () => {
       const report = runDoctor(store);
       const preflight = check(report, `loop:${loop.id}:preflight`);
       expect(preflight?.status).toBe("fail");
-      expect(preflight?.detail).toContain("openloops-definitely-missing-binary");
+      expect(preflight?.detail).toContain("loops-definitely-missing-binary");
       expect(report.ok).toBe(false);
     } finally {
       store.close();

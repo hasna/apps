@@ -54,6 +54,8 @@ Before step 1, satisfy and preserve evidence for these hard gates:
   `open_loops_*` roles. The enforcement preflight fails if a reserved role owns
   another database or has a cross-database dependency. No reserved role may be
   `LOGIN`; the command fails closed instead of silently detaching a credential.
+  These are retained provider capability identifiers; see
+  `docs/IDENTITY-MIGRATION.md` for their external cutover and removal gate.
 - Prove recovery before mutation. Confirm PITR is inside its retention window,
   identify the exact pre-cutover recovery point, and complete an isolated
   restore rehearsal from that point. Record the recovery point, restored

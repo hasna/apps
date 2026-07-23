@@ -2,7 +2,11 @@ import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import type { AppliedStorageMigration } from "./contract.js";
-import { POSTGRES_STORAGE_MIGRATIONS } from "./postgres-schema.js";
+import {
+  POSTGRES_CANONICAL_MIGRATION_LEDGER_VIEW,
+  POSTGRES_MIGRATION_LEDGER_TABLE,
+  POSTGRES_STORAGE_MIGRATIONS,
+} from "./postgres-schema.js";
 import {
   assertExactLedger,
   buildPgServiceFile,
@@ -32,33 +36,33 @@ function ledgerRows(through: string): AppliedStorageMigration[] {
 describe("shared database transfer", () => {
   test("builds a private pg service file so DSNs do not appear in pg command argv", () => {
     const service = buildPgServiceFile(sourceDsn, targetDsn);
-    expect(service).toContain("[openloops_transfer_source]");
+    expect(service).toContain("[loops_transfer_source]");
     expect(service).toContain("dbname=apps");
     expect(service).toContain("password=source-secret");
-    expect(service).toContain("[openloops_transfer_target]");
+    expect(service).toContain("[loops_transfer_target]");
     expect(service).toContain("dbname=loops");
     expect(service).toContain("password=target-secret");
     expect(service.match(/^sslmode=verify-full$/gm)).toHaveLength(2);
 
-    const dump = pgDumpCommand("/tmp/private/openloops-allowlist.dump");
-    const restore = pgRestoreCommand("/tmp/private/openloops-allowlist.dump");
-    expect(dump).toContain("--dbname=service=openloops_transfer_source");
-    expect(restore).toContain("--dbname=service=openloops_transfer_target");
+    const dump = pgDumpCommand("/tmp/private/loops-allowlist.dump");
+    const restore = pgRestoreCommand("/tmp/private/loops-allowlist.dump");
+    expect(dump).toContain("--dbname=service=loops_transfer_source");
+    expect(restore).toContain("--dbname=service=loops_transfer_target");
     expect(dump.join(" ")).not.toContain("source-secret");
     expect(restore.join(" ")).not.toContain("target-secret");
   });
 
   test("accepts canonical provider credential URLs with verified TLS", () => {
     const service = buildPgServiceFile(canonicalSourceDsn, canonicalTargetDsn);
-    expect(service).toContain("[openloops_transfer_source]");
-    expect(service).toContain("[openloops_transfer_target]");
+    expect(service).toContain("[loops_transfer_source]");
+    expect(service).toContain("[loops_transfer_target]");
     expect(service.match(/^sslmode=verify-full$/gm)).toHaveLength(2);
     expect(service).not.toContain("sslmode=disable");
     expect(service).not.toContain("sslmode=require");
   });
 
   test("pins the logical dump to the Loops allowlist and never snapshots the shared cluster", () => {
-    const command = pgDumpCommand("/tmp/private/openloops-allowlist.dump");
+    const command = pgDumpCommand("/tmp/private/loops-allowlist.dump");
     expect(command).toContain("--format=custom");
     expect(command).toContain("--data-only");
     expect(command).toContain("--no-owner");
@@ -101,7 +105,7 @@ describe("shared database transfer", () => {
       if (command[0] === "pg_restore") return { exitCode: 0, stdout: "", stderr: "" };
       const sql = command[command.length - 1]!;
       if (sql.includes("pg_class")) return { exitCode: 0, stdout: "[]\n", stderr: "" };
-      if (sql.includes("FROM public.open_loops_schema_migrations")) {
+      if (sql.includes(`FROM public.${POSTGRES_MIGRATION_LEDGER_TABLE}`)) {
         return { exitCode: 0, stdout: `${JSON.stringify(ledgerRows("0010_tenant_enforce"))}\n`, stderr: "" };
       }
       if (sql.includes("active_count")) return { exitCode: 0, stdout: "[]\n", stderr: "" };
@@ -156,6 +160,12 @@ describe("shared database transfer", () => {
     expect(evidence.unexpectedTargetObjects).toEqual([]);
     expect(commands.some(({ command }) => command[0] === "pg_dump")).toBe(true);
     expect(commands.some(({ command }) => command[0] === "pg_restore")).toBe(true);
+    const executedSql = commands
+      .filter(({ command }) => command[0] === "psql")
+      .map(({ command }) => command.at(-1) ?? "")
+      .join("\n");
+    expect(executedSql).toContain(`FROM public.${POSTGRES_MIGRATION_LEDGER_TABLE}`);
+    expect(executedSql).not.toContain(`FROM public.${POSTGRES_CANONICAL_MIGRATION_LEDGER_VIEW}`);
     expect(commands.flatMap(({ command }) => command).join(" ")).not.toContain("source-secret");
     expect(commands.flatMap(({ command }) => command).join(" ")).not.toContain("target-secret");
   });

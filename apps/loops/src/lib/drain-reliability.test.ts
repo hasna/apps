@@ -93,9 +93,9 @@ describe("Store drain-reliability state machine", () => {
     const invocation = store.createWorkflowInvocation({
       templateId: "task-lifecycle",
       sourceRef: { kind: "event", id: `evt-${taskId}-${seq}`, dedupeKey: `todos-task:${taskId}` },
-      subjectRef: { kind: "task", id: taskId, path: "/tmp/open-loops" },
+      subjectRef: { kind: "task", id: taskId, path: "/tmp/loops" },
       intent: "route",
-      scope: { projectPath: "/tmp/open-loops" },
+      scope: { projectPath: "/tmp/loops" },
       outputPolicy: { report: "always", createTask: "on_failure" },
     });
     const workItem = store.upsertWorkflowWorkItem({
@@ -105,7 +105,7 @@ describe("Store drain-reliability state machine", () => {
       sourceType: "task.created",
       sourceRef: `evt-${taskId}-${seq}`,
       subjectRef: taskId,
-      projectKey: "/tmp/open-loops",
+      projectKey: "/tmp/loops",
     });
     const workflow = store.createWorkflow({
       name: `route-${taskId}-${seq++}`,

@@ -53,7 +53,7 @@ describe("loops-runner", () => {
     const previousDatabaseUrl = process.env.HASNA_LOOPS_DATABASE_URL;
     const previousApiUrl = process.env.HASNA_LOOPS_API_URL;
     process.env.HASNA_LOOPS_STORAGE_MODE = "self_hosted";
-    process.env.HASNA_LOOPS_DATABASE_URL = "postgres://loops.example.test/openloops";
+    process.env.HASNA_LOOPS_DATABASE_URL = "postgres://loops.example.test/loops";
     delete process.env.HASNA_LOOPS_API_URL;
 
     try {

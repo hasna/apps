@@ -51,6 +51,7 @@ describe("Postgres storage migrations", () => {
       "0008_tenant_prepare",
       "0009_tenant_backfill",
       "0010_tenant_enforce",
+      "0013_loops_identity_aliases",
     ]);
     for (const migration of POSTGRES_STORAGE_MIGRATIONS) {
       expect(migration.checksum).toBe(checksumStorageSql(migration.sql));
@@ -66,6 +67,8 @@ describe("Postgres storage migrations", () => {
     expect(combined).toContain("idx_runner_leases_active_loop_run");
     expect(combined).toContain("CREATE TABLE IF NOT EXISTS audit_events");
     expect(combined).toContain("CREATE TABLE IF NOT EXISTS run_receipts");
+    expect(combined).toContain("CREATE OR REPLACE VIEW public.loops_schema_migrations");
+    expect(combined).toContain("CREATE OR REPLACE FUNCTION public.loops_current_tenant_id()");
   });
 
   test("released migration SQL is immutable — pinned checksums never change", () => {
@@ -93,6 +96,7 @@ describe("Postgres storage migrations", () => {
       "0008_tenant_prepare": "sha256:76924f61f71fa2e7d3fb7773ff372200e26d0b3e48a5d05585adaeeca8f30043",
       "0009_tenant_backfill": "sha256:7bfd222e503736ec0bc2811f8a31d3e57820a0fa1106795e09fd26a5cf966f2c",
       "0010_tenant_enforce": "sha256:f923c70c2960e0372b4c01c5f01d9432fa0c76b24921c616dc149fa191409053",
+      "0013_loops_identity_aliases": "sha256:01286e430aecdd1caad2ade1f3ca36abd9dd51695959333ed88253feab48a725",
     };
     for (const migration of POSTGRES_STORAGE_MIGRATIONS) {
       expect(`${migration.id} ${migration.checksum}`).toBe(`${migration.id} ${pinned[migration.id]}`);
@@ -135,6 +139,29 @@ describe("Postgres storage migrations", () => {
 
     const second = await storage.migrate();
     expect(second.plan.every((item) => item.state === "already_applied")).toBe(true);
+  });
+
+  test("upgrades an existing tenant-enforced ledger additively and reruns idempotently", async () => {
+    const executor = new FakePostgresExecutor();
+    executor.ledger = POSTGRES_STORAGE_MIGRATIONS.slice(0, -1).map((migration) => ({
+      id: migration.id,
+      checksum: migration.checksum,
+      applied_at: "2026-01-01T00:00:00.000Z",
+    }));
+    const storage = new PostgresStorage(executor);
+
+    const result = await storage.migrate();
+    expect(result.applied.at(-1)?.id).toBe("0013_loops_identity_aliases");
+    expect(result.plan.filter((item) => item.state === "pending").map((item) => item.migration.id))
+      .toEqual(["0013_loops_identity_aliases"]);
+    const migrationSql = executor.executed.find((entry) =>
+      entry.sql.includes("CREATE OR REPLACE VIEW public.loops_schema_migrations"));
+    expect(migrationSql?.sql).toContain("FROM public.open_loops_schema_migrations");
+    expect(migrationSql?.sql).toContain("current_setting('open_loops.tenant_id', true)");
+
+    const rerun = await storage.migrate();
+    expect(rerun.applied).toHaveLength(POSTGRES_STORAGE_MIGRATIONS.length);
+    expect(rerun.plan.every((item) => item.state === "already_applied")).toBe(true);
   });
 
   test("dry-run reads the ledger and reports already-applied migrations", async () => {

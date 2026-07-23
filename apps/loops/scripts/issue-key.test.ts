@@ -12,7 +12,7 @@ afterEach(() => {
 });
 
 function tokenPath(label: string): string {
-  const path = `/dev/shm/open-loops-key-${process.pid}-${Date.now()}-${label}`;
+  const path = `/dev/shm/loops-key-${process.pid}-${Date.now()}-${label}`;
   paths.push(path);
   return path;
 }
@@ -27,7 +27,7 @@ describe("issue-key token output", () => {
   });
 
   shmTest("rejects paths outside /dev/shm and existing symlinks", () => {
-    expect(() => writeTokenFile("/tmp/open-loops-key", "secret-token")).toThrow("direct child of /dev/shm");
+    expect(() => writeTokenFile("/tmp/loops-key", "secret-token")).toThrow("direct child of /dev/shm");
     const target = tokenPath("target");
     const link = tokenPath("link");
     writeTokenFile(target, "target-token");

@@ -40,14 +40,14 @@ describe("taskRouteEligibility route opt-in", () => {
         task: {
           id: "task-open-events-payload",
           title: "Route nested task payload",
-          project_path: "/tmp/open-loops",
+          project_path: "/tmp/loops",
         },
       },
     };
 
     expect(taskEventField(data, ["id", "taskId"])).toBe("task-open-events-payload");
     expect(taskEventField(data, ["title"])).toBe("Route nested task payload");
-    expect(taskEventField(data, ["project_path", "projectPath"])).toBe("/tmp/open-loops");
+    expect(taskEventField(data, ["project_path", "projectPath"])).toBe("/tmp/loops");
   });
 
   test("honors nested OpenTodos metadata opt-in and manual gates", () => {

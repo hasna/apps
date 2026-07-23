@@ -23,7 +23,7 @@ interface WireTool {
 async function listWireTools(): Promise<WireTool[]> {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const server = createLoopsMcpServer();
-  const client = new Client({ name: "open-loops-golden-test", version: "0.0.0" });
+  const client = new Client({ name: "loops-golden-test", version: "0.0.0" });
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   try {
     const listed = await client.listTools();

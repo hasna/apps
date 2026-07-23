@@ -251,7 +251,7 @@ describe("loops CLI", () => {
       loop_id: "loop-cli",
       run_id: "run-cli",
       machine: "spark01",
-      repo: "/workspace/open-loops",
+      repo: "/workspace/loops",
       task_ids: ["task-cli"],
       knowledge_ids: ["knowledge-cli"],
       started_at: "2026-01-01T00:00:00Z",
@@ -1142,7 +1142,7 @@ describe("loops CLI", () => {
       "10",
       "--auto-route",
       "--route-project-path",
-      "/tmp/openloops-fallback",
+      "/tmp/loops-fallback",
       "--evidence-dir",
       evidenceDir,
     ]);
@@ -1156,7 +1156,7 @@ describe("loops CLI", () => {
     expect(value.actions.every((action: { metadata: { no_tmux_dispatch?: boolean } }) => action.metadata.no_tmux_dispatch === true)).toBe(true);
     expect(value.actions.every((action: { tags: string[] }) => action.tags.includes("auto:route"))).toBe(true);
     expect(value.actions.every((action: { metadata: { route_enabled?: boolean; automation?: { allowed?: boolean } } }) => action.metadata.route_enabled === true && action.metadata.automation?.allowed === true)).toBe(true);
-    expect(value.actions.find((action: { check: string }) => action.check === "scripts").metadata.project_path).toBe("/tmp/openloops-fallback");
+    expect(value.actions.find((action: { check: string }) => action.check === "scripts").metadata.project_path).toBe("/tmp/loops-fallback");
     expect(value.evidencePath).toContain(evidenceDir);
     expect(existsSync(value.evidencePath)).toBe(true);
     expect(JSON.parse(readFileSync(value.evidencePath, "utf8")).findings).toBe(2);
@@ -1237,7 +1237,7 @@ describe("loops CLI", () => {
       route_enabled: false,
       project_path: null,
       working_dir: null,
-      automation: { allowed: false, source: "openloops.hygiene.route-tasks" },
+      automation: { allowed: false, source: "loops.hygiene.route-tasks" },
       no_tmux_dispatch: true,
     });
   });
@@ -1777,7 +1777,7 @@ describe("loops CLI", () => {
       "--at",
       futureAt(),
       "--cmd",
-      "openloops-definitely-missing-binary",
+      "loops-definitely-missing-binary",
       "--no-shell",
     ]);
     expect(create.status).toBe(0);
@@ -1798,7 +1798,7 @@ describe("loops CLI", () => {
       "--at",
       futureAt(),
       "--cmd",
-      "openloops-definitely-missing-binary",
+      "loops-definitely-missing-binary",
       "--no-shell",
       "--preflight",
     ]);
@@ -1842,7 +1842,7 @@ describe("loops CLI", () => {
       "--at",
       futureAt(),
       "--cmd",
-      "openloops-definitely-missing-binary",
+      "loops-definitely-missing-binary",
       "--no-shell",
       "--preflight",
     ]);
@@ -2003,7 +2003,7 @@ describe("loops CLI", () => {
       steps: [
         {
           id: "missing-command",
-          target: { type: "command", command: "openloops-definitely-missing-binary" },
+          target: { type: "command", command: "loops-definitely-missing-binary" },
         },
       ],
     });
@@ -2146,7 +2146,7 @@ describe("loops CLI", () => {
       steps: [
         {
           id: "missing-command",
-          target: { type: "command", command: "openloops-definitely-missing-binary" },
+          target: { type: "command", command: "loops-definitely-missing-binary" },
         },
       ],
     });
@@ -2598,7 +2598,7 @@ describe("loops CLI", () => {
       classification: "schema_response_format",
       route_enabled: true,
       project_path: "/tmp/repo",
-      automation: { allowed: true, source: "openloops.health.route-tasks" },
+      automation: { allowed: true, source: "loops.health.route-tasks" },
       no_tmux_dispatch: true,
     });
     expect(value.evidencePath).toContain(evidenceDir);
@@ -2686,7 +2686,7 @@ describe("loops CLI", () => {
     expect(result.status).toBe(0);
     const log = readFileSync(argLog, "utf8");
     expect(log).toContain("WORKING_DIR=/tmp/repo");
-    expect(log).toContain("TAGS=bug,openloops,loops,loop-health,rate_limit,auto:route");
+    expect(log).toContain("TAGS=bug,loops,loop-health,rate_limit,auto:route");
   });
 
   test("runtime preflight failures are finalized and routed as preflight health tasks", () => {
@@ -2699,7 +2699,7 @@ describe("loops CLI", () => {
       "--at",
       futureAt(),
       "--cmd",
-      "definitely-missing-openloops-runtime-preflight-binary",
+      "definitely-missing-loops-runtime-preflight-binary",
       "--no-shell",
       "--preflight-each-run",
     ]);
@@ -3087,14 +3087,14 @@ describe("loops CLI", () => {
       "--var",
       "shard=0/6",
       "--var",
-      "idempotencyKey=routing-health:open-loops:shard0",
+      "idempotencyKey=routing-health:loops:shard0",
     ]);
     expect(routingRemediation.status).toBe(0);
     const routingWorkflow = JSON.parse(routingRemediation.stdout);
     expect(routingWorkflow.name).toContain("routing-remediation");
     expect(routingWorkflow.steps.map((step: { id: string }) => step.id)).toEqual(["routing-doctor-preflight", "worker", "verifier"]);
     expect(routingWorkflow.steps[0].target.type).toBe("command");
-    expect(routingWorkflow.steps[0].target.args.join("\n")).toContain("OPENLOOPS_ROUTING_REMEDIATION_MAX_REPAIRS='2'");
+    expect(routingWorkflow.steps[0].target.args.join("\n")).toContain("LOOPS_ROUTING_REMEDIATION_MAX_REPAIRS='2'");
     expect(routingWorkflow.steps[0].target.args.join("\n")).toContain("\"--shard\",\"0/6\"");
     expect(routingWorkflow.steps[0].blockedExitCodes).toEqual([12]);
     expect(routingWorkflow.steps[1].target.prompt).toContain("[redacted");
@@ -3576,7 +3576,7 @@ describe("loops CLI", () => {
     expect(testPath(workflow.steps[1].target.worktree.originalCwd)).toBe(testPath(repo));
     expect(testPath(workflow.steps[1].target.worktree.repoRoot)).toBe(testPath(repo));
     expect(testPaths(workflow.steps[1].target.addDirs)).toEqual(testPaths([join(dataDir, "todos-store"), join(repo, ".git")]));
-    expect(workflow.steps[1].target.worktree.branch).toContain("openloops/");
+    expect(workflow.steps[1].target.worktree.branch).toContain("loops/");
     expect(workflow.steps[2].target.cwd).toBe(workflow.steps[1].target.cwd);
     expect(workflow.steps[1].target.prompt).toContain("[redacted");
     expect(render.stdout).not.toContain("Use the isolated git worktree");
@@ -3618,7 +3618,7 @@ describe("loops CLI", () => {
     const env = { PATH: `${bin}:${process.env.PATH ?? ""}` };
     const worktreeRoot = join(dataDir, "worktrees");
     const wtPath = join(worktreeRoot, "repo", "cli-worktree-test");
-    const branch = "openloops/cli-worktree-test";
+    const branch = "loops/cli-worktree-test";
     const file = worktreeWorkflowFile(dataDir, repo, {
       mode: "required",
       enabled: true,
@@ -3655,7 +3655,7 @@ describe("loops CLI", () => {
     const env = { PATH: `${bin}:${process.env.PATH ?? ""}` };
     const worktreeRoot = join(dataDir, "worktrees");
     const wtPath = join(worktreeRoot, "repo", "cli-worktree-branch");
-    const branch = "openloops/cli-worktree-branch";
+    const branch = "loops/cli-worktree-branch";
     const file = worktreeWorkflowFile(dataDir, repo, {
       mode: "required",
       enabled: true,
@@ -3670,7 +3670,7 @@ describe("loops CLI", () => {
 
     const first = runCli(dataDir, ["--json", "workflows", "run", "cli-worktree-exec"], undefined, env);
     expect(first.status).toBe(0);
-    git(wtPath, ["checkout", "-b", "unexpected-openloops-branch"]);
+    git(wtPath, ["checkout", "-b", "unexpected-loops-branch"]);
 
     const second = runCli(dataDir, ["--json", "workflows", "run", "cli-worktree-exec", "--show-output"], undefined, env);
     expect(second.status).toBe(0);
@@ -3689,7 +3689,7 @@ describe("loops CLI", () => {
     const env = { PATH: `${bin}:${process.env.PATH ?? ""}` };
     const worktreeRoot = join(dataDir, "worktrees");
     const wtPath = join(worktreeRoot, "repo", "cli-worktree-dirty-branch");
-    const branch = "openloops/cli-worktree-dirty-branch";
+    const branch = "loops/cli-worktree-dirty-branch";
     const file = worktreeWorkflowFile(dataDir, repo, {
       mode: "required",
       enabled: true,
@@ -3704,7 +3704,7 @@ describe("loops CLI", () => {
 
     const first = runCli(dataDir, ["--json", "workflows", "run", "cli-worktree-exec"], undefined, env);
     expect(first.status).toBe(0);
-    git(wtPath, ["checkout", "-b", "unexpected-openloops-dirty-branch"]);
+    git(wtPath, ["checkout", "-b", "unexpected-loops-dirty-branch"]);
     writeFileSync(join(wtPath, "untracked-dirty.txt"), "do not overwrite\n");
 
     const second = runCli(dataDir, ["--json", "workflows", "run", "cli-worktree-exec", "--show-output"], undefined, env);
@@ -3716,7 +3716,7 @@ describe("loops CLI", () => {
     try {
       const stepError = store.listWorkflowStepRuns(value.workflowRun.id)[0]?.error ?? "";
       expect(stepError).toContain("worktree preparation failed (mode=required)");
-      expect(stepError).toContain("unexpected-openloops-dirty-branch");
+      expect(stepError).toContain("unexpected-loops-dirty-branch");
       expect(stepError).toContain(`expected ${branch}`);
       expect(stepError).toContain("has local changes");
     } finally {
@@ -3762,7 +3762,7 @@ describe("loops CLI", () => {
       "--var",
       "taskId=task-required-worktree",
       "--var",
-      "projectPath=/tmp/not-a-real-openloops-repo",
+      "projectPath=/tmp/not-a-real-loops-repo",
       "--var",
       "worktreeMode=required",
     ]);
@@ -3855,7 +3855,7 @@ describe("loops CLI", () => {
       "--var",
       "prompt=Inspect only recent commits and queue tasks for gaps.",
       "--var",
-      "projectPath=/tmp/open-loops",
+      "projectPath=/tmp/loops",
       "--var",
       "provider=codewith",
       "--var",
@@ -4036,7 +4036,7 @@ describe("loops CLI", () => {
         status: "pending",
         working_dir: repo,
         project_path: repo,
-        tags: ["auto:route", "repo:open-loops", "task-lifecycle"],
+        tags: ["auto:route", "repo:loops", "task-lifecycle"],
         metadata: {
           route_enabled: true,
           automation: { allowed: true, mode: "auto" },
@@ -4384,7 +4384,7 @@ describe("loops CLI", () => {
       data: {
         id: "task-provider-fallback",
         title: "Route backend task with fallback",
-        working_dir: "/tmp/open-loops",
+        working_dir: "/tmp/loops",
         tags: ["auto:route"],
       },
       metadata: {
@@ -4803,7 +4803,7 @@ describe("loops CLI", () => {
       data: {
         id: "task-pr-review-required",
         title: "Approve blocked PR",
-        working_dir: "/tmp/open-loops",
+        working_dir: "/tmp/loops",
         tags: ["auto:route"],
         pr_state: "OPEN",
         description: [
@@ -4936,7 +4936,7 @@ describe("loops CLI", () => {
       data: {
         id: "task-stale-policy-0001",
         title: "Refresh generated route policy",
-        working_dir: "/tmp/open-loops",
+        working_dir: "/tmp/loops",
         tags: ["auto:route"],
       },
       timestamp: new Date().toISOString(),
@@ -4998,7 +4998,7 @@ describe("loops CLI", () => {
       data: {
         id: "task-routes-list-0001",
         title: "Expose route state",
-        working_dir: "/tmp/open-loops",
+        working_dir: "/tmp/loops",
         tags: ["auto:route"],
       },
       timestamp: new Date().toISOString(),
@@ -5038,7 +5038,7 @@ describe("loops CLI", () => {
       data: {
         id: "task-routes-lifecycle-0001",
         title: "Route from routes command",
-        working_dir: "/tmp/open-loops",
+        working_dir: "/tmp/loops",
         tags: ["auto:route"],
       },
       timestamp: new Date().toISOString(),
@@ -5161,8 +5161,8 @@ describe("loops CLI", () => {
     expect(stepsById.worker.dependsOn).toEqual(["planner-gate"]);
     expect(stepsById["triage-gate"].target.type).toBe("command");
     expect(stepsById["triage-gate"].target.args.join("\n")).toContain("--json inspect");
-    expect(stepsById["triage-gate"].target.args.join("\n")).toContain("openloops:triage=go task=task-routes-task-lifecycle-0001 event=evt-routes-task-lifecycle-0001");
-    expect(stepsById["planner-gate"].target.args.join("\n")).toContain("openloops:planner=go task=task-routes-task-lifecycle-0001 event=evt-routes-task-lifecycle-0001");
+    expect(stepsById["triage-gate"].target.args.join("\n")).toContain("loops:triage=go task=task-routes-task-lifecycle-0001 event=evt-routes-task-lifecycle-0001");
+    expect(stepsById["planner-gate"].target.args.join("\n")).toContain("loops:planner=go task=task-routes-task-lifecycle-0001 event=evt-routes-task-lifecycle-0001");
     expect(stepsById["triage-gate"].target.args.join("\n")).toContain("task lifecycle ${stage} gate blocked");
     expect(stepsById["planner-gate"].target.args.join("\n")).toContain("task lifecycle ${stage} gate blocked");
     expect(previewValue.workflow.description).toContain("task-lifecycle");
@@ -5184,12 +5184,16 @@ describe("loops CLI", () => {
       id: "task-routes-task-lifecycle-0001",
       status: "pending",
       tags: ["auto:route"],
-      comments: [{ content: "openloops:triage=go task=task-routes-task-lifecycle-0001 event=evt-routes-task-lifecycle-0001\neligible" }],
+      comments: [{ content: "loops:triage=go task=task-routes-task-lifecycle-0001 event=evt-routes-task-lifecycle-0001\neligible" }],
     };
     expect(runGate("triage-gate", baseTask).status).toBe(0);
     expect(runGate("triage-gate", {
       ...baseTask,
-      comments: [{ content: "not adding openloops:triage=go task=task-routes-task-lifecycle-0001 event=evt-routes-task-lifecycle-0001" }],
+      comments: [{ content: "openloops:triage=go task=task-routes-task-lifecycle-0001 event=evt-routes-task-lifecycle-0001\nlegacy eligible" }],
+    }).status).toBe(0);
+    expect(runGate("triage-gate", {
+      ...baseTask,
+      comments: [{ content: "not adding loops:triage=go task=task-routes-task-lifecycle-0001 event=evt-routes-task-lifecycle-0001" }],
     }).status).not.toBe(0);
     expect(runGate("triage-gate", {
       ...baseTask,
@@ -5210,13 +5214,13 @@ describe("loops CLI", () => {
     expect(runGate("triage-gate", {
       ...baseTask,
       comments: [
-        { content: "openloops:triage=go task=task-routes-task-lifecycle-0001 event=evt-routes-task-lifecycle-0001\nold", created_at: "2026-01-01T00:00:00.000Z" },
-        { content: "openloops:triage=blocked task=task-routes-task-lifecycle-0001 event=evt-routes-task-lifecycle-0001\nnew", created_at: "2026-01-01T00:01:00.000Z" },
+        { content: "loops:triage=go task=task-routes-task-lifecycle-0001 event=evt-routes-task-lifecycle-0001\nold", created_at: "2026-01-01T00:00:00.000Z" },
+        { content: "loops:triage=blocked task=task-routes-task-lifecycle-0001 event=evt-routes-task-lifecycle-0001\nnew", created_at: "2026-01-01T00:01:00.000Z" },
       ],
     }).status).not.toBe(0);
     expect(runGate("planner-gate", {
       ...baseTask,
-      comments: [{ content: "openloops:planner=go task=task-routes-task-lifecycle-0001 event=evt-routes-task-lifecycle-0001\nplan" }],
+      comments: [{ content: "loops:planner=go task=task-routes-task-lifecycle-0001 event=evt-routes-task-lifecycle-0001\nplan" }],
     }).status).toBe(0);
 
     const invalid = runCli(dataDir, [
@@ -5362,9 +5366,9 @@ describe("loops CLI", () => {
     const stepsById = Object.fromEntries(value.workflow.steps.map((step: { id: string }) => [step.id, step])) as Record<string, any>;
     expect(stepsById["pr-handoff"].dependsOn).toEqual(["worker"]);
     expect(stepsById.verifier.dependsOn).toEqual(["pr-handoff"]);
-    expect(stepsById.worker.target.prompt).toContain(".openloops/pr-handoff/task-routes-pr-handoff-0001.json");
+    expect(stepsById.worker.target.prompt).toContain(".loops/pr-handoff/task-routes-pr-handoff-0001.json");
     const command = stepsById["pr-handoff"].target.args[1];
-    expect(command).toContain("openloops:pr-handoff:");
+    expect(command).toContain("loops:pr-handoff:");
     expect(command).toContain("const result = todos(");
     expect(command).toContain("'task'");
 
@@ -5384,7 +5388,7 @@ describe("loops CLI", () => {
       );
     }
     expect(noArtifactHandoff.stdout).toContain("no PR handoff artifact at");
-    expect(noArtifactHandoff.stdout).toContain(".openloops/pr-handoff/task-routes-pr-handoff-0001.json");
+    expect(noArtifactHandoff.stdout).toContain(".loops/pr-handoff/task-routes-pr-handoff-0001.json");
     expect(noArtifactHandoff.stderr).toBe("");
 
     const artifactDir = join(repo, ".openloops", "pr-handoff");
@@ -5392,8 +5396,8 @@ describe("loops CLI", () => {
     writeFileSync(join(artifactDir, "task-routes-pr-handoff-0001.json"), JSON.stringify({
       taskId: "task-routes-pr-handoff-0001",
       worktreePath: repo,
-      githubRepo: "hasna/open-loops",
-      branch: "openloops/pr-handoff-test",
+      githubRepo: "hasna/loops",
+      branch: "loops/pr-handoff-test",
       base: "main",
       remote: "origin",
       commit: "0123456789abcdef0123456789abcdef01234567",
@@ -5407,9 +5411,9 @@ describe("loops CLI", () => {
       join(fakeBin, "git"),
       [
         "#!/usr/bin/env bash",
-        "printf 'git %s\\n' \"$*\" >> \"$OPENLOOPS_TEST_CALLS\"",
+        "printf 'git %s\\n' \"$*\" >> \"$LOOPS_TEST_CALLS\"",
         "if [[ \"$1\" == \"-C\" && \"$3\" == \"rev-parse\" && \"$4\" == \"--show-toplevel\" ]]; then printf '%s\\n' \"$2\"; exit 0; fi",
-        "if [[ \"$1\" == \"-C\" && \"$3\" == \"branch\" && \"$4\" == \"--show-current\" ]]; then printf 'openloops/pr-handoff-test\\n'; exit 0; fi",
+        "if [[ \"$1\" == \"-C\" && \"$3\" == \"branch\" && \"$4\" == \"--show-current\" ]]; then printf 'loops/pr-handoff-test\\n'; exit 0; fi",
         "if [[ \"$1\" == \"-C\" && \"$3\" == \"rev-parse\" && \"$4\" == \"--verify\" ]]; then printf '0123456789abcdef0123456789abcdef01234567\\n'; exit 0; fi",
         "if [[ \"$1\" == \"-C\" && \"$3\" == \"merge-base\" ]]; then exit 0; fi",
         "if [[ \"$3\" == \"push\" ]]; then printf 'network blocked' >&2; exit 128; fi",
@@ -5421,7 +5425,7 @@ describe("loops CLI", () => {
       join(fakeBin, "todos"),
       [
         "#!/usr/bin/env bash",
-        "printf 'todos %s\\n' \"$*\" >> \"$OPENLOOPS_TEST_CALLS\"",
+        "printf 'todos %s\\n' \"$*\" >> \"$LOOPS_TEST_CALLS\"",
         "exit 0",
         "",
       ].join("\n"),
@@ -5430,8 +5434,8 @@ describe("loops CLI", () => {
       join(fakeBin, "gh"),
       [
         "#!/usr/bin/env bash",
-        "printf 'gh %s\\n' \"$*\" >> \"$OPENLOOPS_TEST_CALLS\"",
-        "if [[ \"$1\" == \"pr\" && \"$2\" == \"view\" ]]; then printf 'https://github.com/hasna/open-loops/pull/9\\nopenloops/pr-handoff-test\\n'; exit 0; fi",
+        "printf 'gh %s\\n' \"$*\" >> \"$LOOPS_TEST_CALLS\"",
+        "if [[ \"$1\" == \"pr\" && \"$2\" == \"view\" ]]; then printf 'https://github.com/hasna/loops/pull/9\\nloops/pr-handoff-test\\n'; exit 0; fi",
         "exit 1",
         "",
       ].join("\n"),
@@ -5445,9 +5449,9 @@ describe("loops CLI", () => {
       env: {
         ...process.env,
         PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
-        OPENLOOPS_TEST_CALLS: calls,
-        OPENLOOPS_PR_HANDOFF_GIT_BIN: join(fakeBin, "git"),
-        OPENLOOPS_PR_HANDOFF_TODOS_BIN: join(fakeBin, "todos"),
+        LOOPS_TEST_CALLS: calls,
+        LOOPS_PR_HANDOFF_GIT_BIN: join(fakeBin, "git"),
+        LOOPS_PR_HANDOFF_TODOS_BIN: join(fakeBin, "todos"),
       },
       encoding: "utf8",
     });
@@ -5455,17 +5459,17 @@ describe("loops CLI", () => {
     expect(handoff.stdout).toContain("queued PR handoff task");
     const callLog = readFileSync(calls, "utf8");
     expect(callLog).toContain("git -C");
-    expect(callLog).toContain("push origin 0123456789abcdef0123456789abcdef01234567:refs/heads/openloops/pr-handoff-test");
+    expect(callLog).toContain("push origin 0123456789abcdef0123456789abcdef01234567:refs/heads/loops/pr-handoff-test");
     expect(callLog).toContain("todos --project");
-    expect(callLog).toContain("task upsert --fingerprint openloops:pr-handoff:task-routes-pr-handoff-0001:openloops/pr-handoff-test:0123456789abcdef0123456789abcdef01234567");
-    expect(callLog).toContain("auto:route,pr-handoff,github,network,repo:open-loops");
-    expect(callLog).toContain("comment task-routes-pr-handoff-0001 openloops:pr-handoff=pending");
+    expect(callLog).toContain("task upsert --fingerprint loops:pr-handoff:task-routes-pr-handoff-0001:loops/pr-handoff-test:0123456789abcdef0123456789abcdef01234567");
+    expect(callLog).toContain("auto:route,pr-handoff,github,network,repo:loops");
+    expect(callLog).toContain("comment task-routes-pr-handoff-0001 loops:pr-handoff=pending");
 
     writeFileSync(calls, "");
     writeFileSync(join(artifactDir, "task-routes-pr-handoff-0001.json"), JSON.stringify({
       taskId: "task-routes-pr-handoff-0001",
       worktreePath: repo,
-      githubRepo: "hasna/open-loops",
+      githubRepo: "hasna/loops",
       branch: "untrusted/branch",
       base: "main",
       remote: "origin",
@@ -5477,16 +5481,16 @@ describe("loops CLI", () => {
       env: {
         ...process.env,
         PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
-        OPENLOOPS_TEST_CALLS: calls,
-        OPENLOOPS_PR_HANDOFF_GIT_BIN: join(fakeBin, "git"),
-        OPENLOOPS_PR_HANDOFF_TODOS_BIN: join(fakeBin, "todos"),
+        LOOPS_TEST_CALLS: calls,
+        LOOPS_PR_HANDOFF_GIT_BIN: join(fakeBin, "git"),
+        LOOPS_PR_HANDOFF_TODOS_BIN: join(fakeBin, "todos"),
       },
       encoding: "utf8",
     });
     expect(invalidHandoff.status).toBe(0);
     expect(invalidHandoff.stderr).toContain("invalid PR handoff artifact");
     const invalidCallLog = readFileSync(calls, "utf8");
-    expect(invalidCallLog).toContain("comment task-routes-pr-handoff-0001 openloops:pr-handoff=invalid");
+    expect(invalidCallLog).toContain("comment task-routes-pr-handoff-0001 loops:pr-handoff=invalid");
     expect(invalidCallLog).not.toContain("task upsert");
     expect(invalidCallLog).not.toContain("auto:route");
 
@@ -5494,12 +5498,12 @@ describe("loops CLI", () => {
     writeFileSync(join(artifactDir, "task-routes-pr-handoff-0001.json"), JSON.stringify({
       taskId: "task-routes-pr-handoff-0001",
       worktreePath: repo,
-      githubRepo: "hasna/open-loops",
-      branch: "openloops/pr-handoff-test",
+      githubRepo: "hasna/loops",
+      branch: "loops/pr-handoff-test",
       base: "main",
       remote: "origin",
       commit: "0123456789abcdef0123456789abcdef01234567",
-      prUrl: "https://github.com/hasna/open-loops/pull/9",
+      prUrl: "https://github.com/hasna/loops/pull/9",
       validation: "bun test passed",
     }));
     const verifiedHandoff = spawnSync("bash", ["-lc", command], {
@@ -5507,18 +5511,18 @@ describe("loops CLI", () => {
       env: {
         ...process.env,
         PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
-        OPENLOOPS_TEST_CALLS: calls,
-        OPENLOOPS_PR_HANDOFF_GIT_BIN: join(fakeBin, "git"),
-        OPENLOOPS_PR_HANDOFF_GH_BIN: join(fakeBin, "gh"),
-        OPENLOOPS_PR_HANDOFF_TODOS_BIN: join(fakeBin, "todos"),
+        LOOPS_TEST_CALLS: calls,
+        LOOPS_PR_HANDOFF_GIT_BIN: join(fakeBin, "git"),
+        LOOPS_PR_HANDOFF_GH_BIN: join(fakeBin, "gh"),
+        LOOPS_PR_HANDOFF_TODOS_BIN: join(fakeBin, "todos"),
       },
       encoding: "utf8",
     });
     expect(verifiedHandoff.status).toBe(0);
     expect(verifiedHandoff.stdout).toContain("PR handoff already complete");
     const verifiedCallLog = readFileSync(calls, "utf8");
-    expect(verifiedCallLog).toContain("gh pr view https://github.com/hasna/open-loops/pull/9");
-    expect(verifiedCallLog).toContain("comment task-routes-pr-handoff-0001 openloops:pr-handoff=done");
+    expect(verifiedCallLog).toContain("gh pr view https://github.com/hasna/loops/pull/9");
+    expect(verifiedCallLog).toContain("comment task-routes-pr-handoff-0001 loops:pr-handoff=done");
     expect(verifiedCallLog).not.toContain("push origin");
   });
 
@@ -5599,7 +5603,7 @@ describe("loops CLI", () => {
       data: {
         id: "task-routes-allowlists-0001",
         title: "Route with bounded agent access",
-        working_dir: "/tmp/open-loops",
+        working_dir: "/tmp/loops",
         tags: ["auto:route"],
       },
       timestamp: new Date().toISOString(),
@@ -5722,7 +5726,7 @@ describe("loops CLI", () => {
       "--launch-gate-blocker",
       "/tmp/open-codewith::2d9d931b",
       "--launch-gate-blocker",
-      "/tmp/open-loops::816e99db,/tmp/open-loops::f30153fd",
+      "/tmp/loops::816e99db,/tmp/loops::f30153fd",
       "--max-dispatch",
       "3",
     ]);
@@ -5730,8 +5734,8 @@ describe("loops CLI", () => {
     const loop = JSON.parse(scheduled.stdout);
     expect(loop.target.args).toEqual(expect.arrayContaining(["--launch-gate", "pa19-controlled-launch"]));
     expect(loop.target.args).toEqual(expect.arrayContaining(["--launch-gate-blocker", "/tmp/open-codewith::2d9d931b"]));
-    expect(loop.target.args).toEqual(expect.arrayContaining(["--launch-gate-blocker", "/tmp/open-loops::816e99db"]));
-    expect(loop.target.args).toEqual(expect.arrayContaining(["--launch-gate-blocker", "/tmp/open-loops::f30153fd"]));
+    expect(loop.target.args).toEqual(expect.arrayContaining(["--launch-gate-blocker", "/tmp/loops::816e99db"]));
+    expect(loop.target.args).toEqual(expect.arrayContaining(["--launch-gate-blocker", "/tmp/loops::f30153fd"]));
     expect(loop.target.args).toEqual(expect.arrayContaining(["--max-dispatch", "3"]));
   });
 
@@ -5901,7 +5905,7 @@ describe("loops CLI", () => {
       data: {
         id: "task-route-profile-throttle-0001",
         title: "Route with profile throttle evidence",
-        working_dir: "/tmp/open-loops",
+        working_dir: "/tmp/loops",
         tags: ["auto:route"],
       },
       timestamp: new Date().toISOString(),
@@ -6055,7 +6059,7 @@ describe("loops CLI", () => {
       data: {
         id: "task-routes-unsafe-existing-0001",
         title: "Unsafe existing route workflow",
-        working_dir: "/tmp/open-loops",
+        working_dir: "/tmp/loops",
         tags: ["auto:route"],
       },
       timestamp: new Date().toISOString(),
@@ -6448,13 +6452,13 @@ describe("loops CLI", () => {
       "--worktree-mode",
       "required",
       "--project-path",
-      "/tmp/not-a-real-openloops-required-repo",
+      "/tmp/not-a-real-loops-required-repo",
     ], JSON.stringify({
       ...event,
       id: "evt-dedupe-before-render-0002",
       data: {
         ...event.data,
-        working_dir: "/tmp/not-a-real-openloops-required-repo",
+        working_dir: "/tmp/not-a-real-loops-required-repo",
       },
     }));
 
@@ -7253,14 +7257,14 @@ describe("loops CLI", () => {
         id: "task-drain-no-auto",
         title: "No auto task",
         status: "pending",
-        working_dir: "/tmp/not-a-real-openloops-required-repo",
+        working_dir: "/tmp/not-a-real-loops-required-repo",
         tags: ["auto:route", "no-auto"],
       },
       {
         id: "task-drain-blocked-tag",
         title: "Blocked tag task",
         status: "pending",
-        working_dir: "/tmp/not-a-real-openloops-required-repo",
+        working_dir: "/tmp/not-a-real-loops-required-repo",
         tags: ["auto:route", "blocked"],
       },
     ];
@@ -8184,7 +8188,7 @@ describe("loops CLI", () => {
     try {
       const staleWorkflow = store.createWorkflow({
         name: previewValue.workflow.name,
-        steps: [{ id: "stale", target: { type: "command", command: "openloops-definitely-missing-binary" } }],
+        steps: [{ id: "stale", target: { type: "command", command: "loops-definitely-missing-binary" } }],
       });
       staleWorkflowId = staleWorkflow.id;
     } finally {
@@ -9325,7 +9329,7 @@ describe("loops CLI", () => {
       data: {
         id: "task-routes-create-dry-0001",
         title: "Preview via routes create --dry-run",
-        working_dir: "/tmp/open-loops",
+        working_dir: "/tmp/loops",
         tags: ["auto:route"],
       },
       timestamp: new Date().toISOString(),
@@ -9363,7 +9367,7 @@ describe("loops CLI", () => {
       data: {
         id: "task-pr-handoff-flag-0001",
         title: "Route with PR handoff",
-        working_dir: "/tmp/open-loops",
+        working_dir: "/tmp/loops",
         tags: ["auto:route"],
       },
       timestamp: new Date().toISOString(),
@@ -9399,7 +9403,7 @@ describe("loops CLI", () => {
       "--var",
       "taskId=task-create-template-1",
       "--var",
-      "projectPath=/tmp/open-loops",
+      "projectPath=/tmp/loops",
       "--var",
       "sandbox=workspace-write",
     ]);

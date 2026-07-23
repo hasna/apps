@@ -138,7 +138,7 @@ describe("deployment mode contract", () => {
   });
 
   test("detects self-hosted Postgres scheduler contract without implying runner API readiness", () => {
-    const status = buildDeploymentStatus({ env: { HASNA_LOOPS_DATABASE_URL: "postgres://loops.example.test/openloops" } });
+    const status = buildDeploymentStatus({ env: { HASNA_LOOPS_DATABASE_URL: "postgres://loops.example.test/loops" } });
 
     expect(status.deploymentMode).toBe("self_hosted");
     expect(status.controlPlane.configured).toBe(true);

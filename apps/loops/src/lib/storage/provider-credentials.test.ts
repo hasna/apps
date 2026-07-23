@@ -18,15 +18,15 @@ type Stage = "AWSCURRENT" | "AWSPENDING";
 
 const options: ProviderCredentialOptions = {
   region: "us-east-1",
-  credentialsRelativeUri: "/v2/credentials/open-loops-task",
-  masterSecretArn: "arn:aws:secretsmanager:us-east-1:123456789012:secret:open-loops/master-AbCd12",
-  migratorSecretArn: "arn:aws:secretsmanager:us-east-1:123456789012:secret:open-loops/migrator-AbCd12",
-  runtimeSecretArn: "arn:aws:secretsmanager:us-east-1:123456789012:secret:open-loops/runtime-AbCd12",
-  authenticatorSecretArn: "arn:aws:secretsmanager:us-east-1:123456789012:secret:open-loops/authenticator-AbCd12",
-  expectedInstanceId: "open-loops-prod",
-  expectedEndpoint: "open-loops-prod.abcdefghijkl.us-east-1.rds.amazonaws.com",
+  credentialsRelativeUri: "/v2/credentials/loops-task",
+  masterSecretArn: "arn:aws:secretsmanager:us-east-1:123456789012:secret:loops/master-AbCd12",
+  migratorSecretArn: "arn:aws:secretsmanager:us-east-1:123456789012:secret:loops/migrator-AbCd12",
+  runtimeSecretArn: "arn:aws:secretsmanager:us-east-1:123456789012:secret:loops/runtime-AbCd12",
+  authenticatorSecretArn: "arn:aws:secretsmanager:us-east-1:123456789012:secret:loops/authenticator-AbCd12",
+  expectedInstanceId: "loops-prod",
+  expectedEndpoint: "loops-prod.abcdefghijkl.us-east-1.rds.amazonaws.com",
   expectedPort: 5432,
-  expectedDatabase: "open_loops",
+  expectedDatabase: "loops",
   expectedMasterUsername: "postgres_admin",
 };
 
@@ -196,7 +196,7 @@ describe("provider database credential reconciliation", () => {
     expect(() => resolveProviderCredentialOptions({
       ...env,
       HASNA_LOOPS_RUNTIME_DATABASE_URL_SECRET_ARN:
-        "arn:aws:secretsmanager:us-west-2:123456789012:secret:open-loops/runtime-AbCd12",
+        "arn:aws:secretsmanager:us-west-2:123456789012:secret:loops/runtime-AbCd12",
     })).toThrow("database credential configuration is invalid");
   });
 

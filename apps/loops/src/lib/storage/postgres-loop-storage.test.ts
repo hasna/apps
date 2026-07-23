@@ -298,6 +298,12 @@ suite("PostgresLoopStorage (live)", () => {
   let unsafeServiceLoginRejected = false;
   let bridgeMembershipRemoved = false;
   let adminMembershipRemoved = false;
+  let preIdentityRuntimeReady = false;
+  let preIdentityAuthenticatorReady = false;
+  let preIdentityStorageReadable = false;
+  let preIdentityAliasesAbsent = false;
+  let postIdentityLegacyPolicyPreserved = false;
+  let postIdentityGuardsCoexist = false;
   let missingRoleBootstrap: BootstrapMembershipRegression;
   let preexistingRoleBootstrap: BootstrapMembershipRegression;
   let unsafeRoleBootstrap: BootstrapMembershipRegression;
@@ -389,10 +395,6 @@ suite("PostgresLoopStorage (live)", () => {
       GRANT EXECUTE ON FUNCTION public.open_loops_authenticate_key(TEXT, TEXT) TO open_loops_runtime;
       GRANT EXECUTE ON FUNCTION public.open_loops_append_auth_audit(TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, JSONB)
         TO open_loops_runtime;
-      CREATE FUNCTION public.open_loops_current_tenant_id() RETURNS TEXT
-        LANGUAGE sql STABLE AS 'SELECT ''hostile-tenant''::TEXT';
-      ALTER FUNCTION public.open_loops_current_tenant_id() OWNER TO ${HOSTILE_FUNCTION_OWNER};
-      GRANT EXECUTE ON FUNCTION public.open_loops_current_tenant_id() TO PUBLIC, open_loops_authenticator;
       ALTER TABLE loops ENABLE ROW LEVEL SECURITY;
       CREATE POLICY preexisting_allow_all ON loops USING (true) WITH CHECK (true);
       CREATE SCHEMA residual_acl;
@@ -433,7 +435,96 @@ suite("PostgresLoopStorage (live)", () => {
       REVOKE open_loops_runtime FROM ${UNSAFE_LOGIN}, ${CROSS_ROLE_LOGIN}, ${ADMIN_LOGIN};
       REVOKE open_loops_owner FROM ${CROSS_ROLE_LOGIN};
     `);
+    await schema.migrate({ through: "0010_tenant_enforce" });
+    const preIdentityRuntime = PgPoolExecutor.fromConnectionString({
+      connectionString: isolatedUrl({ username: RUNTIME_LOGIN, password: RUNTIME_PASSWORD }),
+      applicationName: "loops-pre-identity-runtime-test",
+    });
+    const preIdentityAuthenticator = PgPoolExecutor.fromConnectionString({
+      connectionString: isolatedUrl({ username: AUTH_LOGIN, password: AUTH_PASSWORD }),
+      applicationName: "loops-pre-identity-auth-test",
+    });
+    try {
+      preIdentityRuntimeReady = await isSafeServiceConnection(
+        preIdentityRuntime.queryClient,
+        "open_loops_runtime",
+      );
+      preIdentityAuthenticatorReady = await isSafeServiceConnection(
+        preIdentityAuthenticator.queryClient,
+        "open_loops_authenticator",
+      );
+      const preIdentityStorage = new PostgresLoopStorage(preIdentityRuntime.queryClient, {
+        tenantId: "tenant-test",
+        principalId: "principal-test",
+        requestId: "pre-identity-read",
+      });
+      preIdentityStorageReadable = Array.isArray(await preIdentityStorage.listLoops());
+      const preIdentityAliases = await executor.queryClient.get<{
+        view_absent: boolean;
+        tenant_function_absent: boolean;
+        auth_function_absent: boolean;
+        audit_function_absent: boolean;
+      }>(`
+        SELECT
+          to_regclass('public.loops_schema_migrations') IS NULL AS view_absent,
+          to_regprocedure('public.loops_current_tenant_id()') IS NULL AS tenant_function_absent,
+          to_regprocedure('public.loops_authenticate_key(text,text)') IS NULL AS auth_function_absent,
+          to_regprocedure('public.loops_append_auth_audit(text,text,text,text,text,text,text,jsonb)') IS NULL AS audit_function_absent
+      `);
+      preIdentityAliasesAbsent = Boolean(
+        preIdentityAliases?.view_absent &&
+        preIdentityAliases.tenant_function_absent &&
+        preIdentityAliases.auth_function_absent &&
+        preIdentityAliases.audit_function_absent
+      );
+    } finally {
+      await preIdentityAuthenticator.close();
+      await preIdentityRuntime.close();
+    }
+    await executor.queryClient.execute(`
+      CREATE FUNCTION public.loops_current_tenant_id() RETURNS TEXT
+        LANGUAGE sql STABLE AS 'SELECT ''hostile-tenant''::TEXT';
+      ALTER FUNCTION public.loops_current_tenant_id() OWNER TO ${HOSTILE_FUNCTION_OWNER};
+      GRANT EXECUTE ON FUNCTION public.loops_current_tenant_id() TO PUBLIC, open_loops_authenticator;
+    `);
     await schema.migrate();
+    const identityTransition = await executor.queryClient.get<{
+      policy_qualifier: string;
+      default_expression: string;
+      guards_coexist: boolean;
+    }>(`
+      SELECT
+        (
+          SELECT pg_get_expr(policy.polqual, policy.polrelid)
+            FROM pg_policy policy
+           WHERE policy.polrelid = 'public.loops'::regclass
+             AND policy.polname = 'tenant_isolation'
+        ) AS policy_qualifier,
+        (
+          SELECT pg_get_expr(attribute_default.adbin, attribute_default.adrelid)
+            FROM pg_attrdef attribute_default
+            JOIN pg_attribute attribute
+              ON attribute.attrelid = attribute_default.adrelid
+             AND attribute.attnum = attribute_default.adnum
+           WHERE attribute_default.adrelid = 'public.loops'::regclass
+             AND attribute.attname = 'tenant_id'
+        ) AS default_expression,
+        (
+          SELECT COUNT(*) = 2
+            FROM pg_trigger trigger
+           WHERE trigger.tgrelid = 'public.tenants'::regclass
+             AND trigger.tgname IN (
+               'open_loops_reject_runtime_tenant_update',
+               'loops_reject_runtime_tenant_update'
+             )
+             AND NOT trigger.tgisinternal
+        ) AS guards_coexist
+    `);
+    postIdentityLegacyPolicyPreserved = Boolean(
+      identityTransition?.policy_qualifier.includes("open_loops_current_tenant_id") &&
+      identityTransition.default_expression.includes("open_loops_current_tenant_id"),
+    );
+    postIdentityGuardsCoexist = identityTransition?.guards_coexist === true;
     const unsafeMembership = await executor.queryClient.get(
       `SELECT 1 FROM pg_auth_members membership
         JOIN pg_roles granted ON granted.oid=membership.roleid
@@ -611,10 +702,15 @@ suite("PostgresLoopStorage (live)", () => {
       { tenantId: "tenant-test", principalId: "principal-test", requestId: "tenant-update-denied" },
       (client) => client.execute("UPDATE tenants SET name='Runtime Mutated' WHERE id='tenant-test'"),
     )).rejects.toMatchObject({ code: "42501" });
+    // During the phased boundary, a canonical-only setting cannot see rows
+    // through the retained legacy RLS policy and therefore cannot mutate them.
     await expect(runtimeExecutor.queryClient.transaction(async (client) => {
-      await client.get("SELECT set_config('open_loops.tenant_id', $1, true)", ["tenant-test"]);
+      await client.get("SELECT set_config('loops.tenant_id', $1, true)", ["tenant-test"]);
       await client.execute("UPDATE tenants SET name='Raw Runtime Mutated' WHERE id='tenant-test'");
-    })).rejects.toMatchObject({ code: "42501" });
+    })).resolves.toBeUndefined();
+    expect(await executor.queryClient.get<{ name: string }>(
+      "SELECT name FROM tenants WHERE id='tenant-test'",
+    )).toEqual({ name: "Tenant Test" });
     expect(await executor.queryClient.get<{ inherited: boolean }>(
       "SELECT pg_has_role('open_loops_runtime', $1, 'MEMBER') AS inherited", [EXTRA_SERVICE_ROLE],
     )).toEqual({ inherited: false });
@@ -645,21 +741,21 @@ suite("PostgresLoopStorage (live)", () => {
       [RUNTIME_LOGIN, AUTH_LOGIN],
     )).toEqual({ runtime_temp: false, auth_temp: false });
     expect(await executor.queryClient.get<{ owner: string }>(
-      "SELECT pg_get_userbyid(proowner) AS owner FROM pg_proc WHERE oid='public.open_loops_current_tenant_id()'::regprocedure",
+      "SELECT pg_get_userbyid(proowner) AS owner FROM pg_proc WHERE oid='public.loops_current_tenant_id()'::regprocedure",
     )).toEqual({ owner: "open_loops_owner" });
     expect(await executor.queryClient.get<{ auth_execute: boolean; public_execute: boolean }>(
-      `SELECT has_function_privilege($1, 'public.open_loops_current_tenant_id()', 'EXECUTE') AS auth_execute,
+      `SELECT has_function_privilege($1, 'public.loops_current_tenant_id()', 'EXECUTE') AS auth_execute,
               NOT EXISTS (
                 SELECT 1 FROM aclexplode(COALESCE(proc.proacl, acldefault('f', proc.proowner))) acl
                  WHERE acl.grantee = 0 AND acl.privilege_type = 'EXECUTE'
               ) AS public_execute
          FROM pg_proc proc
-        WHERE proc.oid='public.open_loops_current_tenant_id()'::regprocedure`,
+        WHERE proc.oid='public.loops_current_tenant_id()'::regprocedure`,
       [AUTH_LOGIN],
     )).toEqual({ auth_execute: false, public_execute: true });
     expect(await executor.queryClient.get<{ runtime_execute: boolean; role_execute: boolean; runtime_member: boolean; runtime_inherit: boolean }>(
-      `SELECT has_function_privilege($1, 'public.open_loops_current_tenant_id()', 'EXECUTE') AS runtime_execute,
-              has_function_privilege('open_loops_runtime', 'public.open_loops_current_tenant_id()', 'EXECUTE') AS role_execute,
+      `SELECT has_function_privilege($1, 'public.loops_current_tenant_id()', 'EXECUTE') AS runtime_execute,
+              has_function_privilege('open_loops_runtime', 'public.loops_current_tenant_id()', 'EXECUTE') AS role_execute,
               pg_has_role($1, 'open_loops_runtime', 'MEMBER') AS runtime_member,
               (SELECT rolinherit FROM pg_roles WHERE rolname=$1) AS runtime_inherit`,
       [RUNTIME_LOGIN],
@@ -687,8 +783,8 @@ suite("PostgresLoopStorage (live)", () => {
     expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(false);
     await executor.queryClient.execute(`
       CREATE POLICY tenant_isolation ON loops
-      USING (tenant_id = public.open_loops_current_tenant_id())
-      WITH CHECK (tenant_id = public.open_loops_current_tenant_id())
+      USING (tenant_id = public.loops_current_tenant_id())
+      WITH CHECK (tenant_id = public.loops_current_tenant_id())
     `);
     expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(true);
     await executor.queryClient.execute(`CREATE POLICY preexisting_allow_all ON loops USING (true) WITH CHECK (true)`);
@@ -724,14 +820,14 @@ suite("PostgresLoopStorage (live)", () => {
     await admin(`REVOKE open_loops_runtime FROM ${DRIFT_DATABASE_LOGIN}; DROP OWNED BY ${DRIFT_DATABASE_LOGIN}; DROP ROLE ${DRIFT_DATABASE_LOGIN}`);
     expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(true);
     expect(await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")).toBe(true);
-    await executor.queryClient.execute(`ALTER FUNCTION public.open_loops_current_tenant_id() OWNER TO open_loops_runtime`);
+    await executor.queryClient.execute(`ALTER FUNCTION public.loops_current_tenant_id() OWNER TO open_loops_runtime`);
     expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(false);
-    await executor.queryClient.execute(`ALTER FUNCTION public.open_loops_current_tenant_id() OWNER TO open_loops_owner`);
-    await executor.queryClient.execute(`GRANT EXECUTE ON FUNCTION public.open_loops_current_tenant_id() TO open_loops_runtime`);
+    await executor.queryClient.execute(`ALTER FUNCTION public.loops_current_tenant_id() OWNER TO open_loops_owner`);
+    await executor.queryClient.execute(`GRANT EXECUTE ON FUNCTION public.loops_current_tenant_id() TO open_loops_runtime`);
     expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(true);
-    await executor.queryClient.execute(`ALTER FUNCTION public.open_loops_current_tenant_id() SECURITY DEFINER`);
+    await executor.queryClient.execute(`ALTER FUNCTION public.loops_current_tenant_id() SECURITY DEFINER`);
     expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(false);
-    await executor.queryClient.execute(`ALTER FUNCTION public.open_loops_current_tenant_id() SECURITY INVOKER`);
+    await executor.queryClient.execute(`ALTER FUNCTION public.loops_current_tenant_id() SECURITY INVOKER`);
     expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(true);
     await executor.queryClient.execute(`ALTER FUNCTION public.open_loops_authenticate_key(TEXT, TEXT) OWNER TO open_loops_authenticator`);
     expect(await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")).toBe(false);
@@ -807,6 +903,53 @@ suite("PostgresLoopStorage (live)", () => {
     expect(await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")).toBe(false);
     await executor.queryClient.execute(`GRANT EXECUTE ON FUNCTION open_loops_authenticate_key(TEXT, TEXT) TO open_loops_authenticator`);
     expect(await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")).toBe(true);
+  });
+
+  test("canonical identity aliases preserve the released ledger and upgrade reruns are idempotent", async () => {
+    expect(preIdentityRuntimeReady).toBe(true);
+    expect(preIdentityAuthenticatorReady).toBe(true);
+    expect(preIdentityStorageReadable).toBe(true);
+    expect(preIdentityAliasesAbsent).toBe(true);
+    const ledger = await executor.queryClient.get<{
+      equal: boolean;
+      canonical_count: number;
+      physical_count: number;
+      identity_recorded: boolean;
+    }>(`
+      SELECT
+        NOT EXISTS (
+          (SELECT id, checksum, applied_at FROM public.open_loops_schema_migrations
+           EXCEPT
+           SELECT id, checksum, applied_at FROM public.loops_schema_migrations)
+          UNION ALL
+          (SELECT id, checksum, applied_at FROM public.loops_schema_migrations
+           EXCEPT
+           SELECT id, checksum, applied_at FROM public.open_loops_schema_migrations)
+        ) AS equal,
+        (SELECT count(*)::int FROM public.loops_schema_migrations) AS canonical_count,
+        (SELECT count(*)::int FROM public.open_loops_schema_migrations) AS physical_count,
+        EXISTS (
+          SELECT 1 FROM public.open_loops_schema_migrations
+           WHERE id = '0013_loops_identity_aliases'
+        ) AS identity_recorded
+    `);
+    expect(ledger?.equal).toBe(true);
+    expect(ledger?.canonical_count).toBe(ledger?.physical_count);
+    expect(ledger?.identity_recorded).toBe(true);
+
+    expect(postIdentityLegacyPolicyPreserved).toBe(true);
+    expect(postIdentityGuardsCoexist).toBe(true);
+
+    await executor.queryClient.transaction(async (client) => {
+      await client.get("SELECT set_config('open_loops.tenant_id', $1, true)", ["legacy-tenant"]);
+      expect(await client.get<{ tenant_id: string }>(
+        "SELECT public.loops_current_tenant_id() AS tenant_id",
+      )).toEqual({ tenant_id: "legacy-tenant" });
+    });
+
+    const rerun = await schema.migrate();
+    expect(rerun.applied.at(-1)?.id).toBe("0013_loops_identity_aliases");
+    expect(rerun.plan.every((item) => item.state === "already_applied")).toBe(true);
   });
 
   test("PostgreSQL 16 bootstrap rejects implicit/unsafe memberships and accepts exact provider grants", () => {
@@ -987,7 +1130,7 @@ suite("PostgresLoopStorage (live)", () => {
              '{"type":"interval","everyMs":60000}'::jsonb,
              '{"type":"command","command":"true"}'::jsonb,
              $3, 'latest', 50, 'skip', 1, 60000, 1800000,
-             $3, $3, open_loops_current_tenant_id()
+             $3, $3, loops_current_tenant_id()
            )`,
           [`loop_race_${Date.now()}`, name, now],
         );
@@ -1612,7 +1755,7 @@ suite("PostgresLoopStorage (live)", () => {
     await runtimeExecutor.withRequestContext(
       { tenantId: "tenant-test", principalId: "principal-test", requestId: "parent-preflight-no-run" },
       (client) => client.execute(
-        "DELETE FROM workflow_runs WHERE tenant_id = open_loops_current_tenant_id() AND id=$1",
+        "DELETE FROM workflow_runs WHERE tenant_id = loops_current_tenant_id() AND id=$1",
         [preflight.workflowRun.id],
       ),
     );
@@ -2208,9 +2351,9 @@ suite("PostgresLoopStorage (live)", () => {
         event_count: number;
       }>(`
         SELECT
-          (SELECT COUNT(*)::int FROM workflow_runs WHERE tenant_id = open_loops_current_tenant_id()) AS run_count,
-          (SELECT COUNT(*)::int FROM workflow_step_runs WHERE tenant_id = open_loops_current_tenant_id()) AS step_count,
-          (SELECT COUNT(*)::int FROM workflow_events WHERE tenant_id = open_loops_current_tenant_id()) AS event_count
+          (SELECT COUNT(*)::int FROM workflow_runs WHERE tenant_id = loops_current_tenant_id()) AS run_count,
+          (SELECT COUNT(*)::int FROM workflow_step_runs WHERE tenant_id = loops_current_tenant_id()) AS step_count,
+          (SELECT COUNT(*)::int FROM workflow_events WHERE tenant_id = loops_current_tenant_id()) AS event_count
       `),
     );
     const beforeFailedCreate = await atomicCounts();
@@ -2400,9 +2543,9 @@ suite("PostgresLoopStorage (live)", () => {
       try {
         await blocker.query("BEGIN");
         await blocker.query("SET LOCAL ROLE open_loops_runtime");
-        await blocker.query("SELECT set_config('open_loops.tenant_id', $1, true)", ["tenant-test"]);
+        await blocker.query("SELECT set_config('loops.tenant_id', $1, true)", ["tenant-test"]);
         await blocker.query(
-          "SELECT id FROM workflow_runs WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 FOR UPDATE",
+          "SELECT id FROM workflow_runs WHERE tenant_id = loops_current_tenant_id() AND id=$1 FOR UPDATE",
           [run.id],
         );
 
@@ -2413,7 +2556,7 @@ suite("PostgresLoopStorage (live)", () => {
 
         await expect(blocker.query(
           `SELECT id FROM workflow_step_runs
-           WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id=$1 AND step_id='worker'
+           WHERE tenant_id = loops_current_tenant_id() AND workflow_run_id=$1 AND step_id='worker'
            FOR UPDATE`,
           [run.id],
         )).resolves.toBeDefined();

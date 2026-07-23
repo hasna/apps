@@ -126,6 +126,7 @@ export type {
 // ---------------------------------------------------------------------------
 export { Store } from "./lib/store.js";
 export {
+  POSTGRES_CANONICAL_MIGRATION_LEDGER_VIEW,
   POSTGRES_MIGRATION_LEDGER_TABLE,
   POSTGRES_STORAGE_MIGRATIONS,
   PostgresStorage,
@@ -199,7 +200,10 @@ export {
 } from "./lib/templates.js";
 export { buildDuplicateOverlapReport, buildNameHygieneReport, buildScriptInventoryReport } from "./lib/hygiene.js";
 export {
+  LEGACY_OPEN_LOOPS_MIGRATION_SCHEMA,
+  LEGACY_OPEN_LOOPS_SELF_HOSTED_PUSH_MANIFEST_SCHEMA,
   LOOPS_MIGRATION_SCHEMA,
+  LOOPS_SELF_HOSTED_PUSH_MANIFEST_SCHEMA,
   applyImportMigrationBundle,
   buildImportMigrationPlan,
   buildSelfHostedMigrationPlan,
@@ -209,6 +213,7 @@ export {
   selfHostedControlPlaneSummary,
   validateLoopsMigrationBundle,
 } from "./lib/migration.js";
+export type { LoopsMigrationBundleSchema } from "./lib/migration.js";
 export { runGoal } from "./lib/goal/runner.js";
 export { resolveGoalModel } from "./lib/goal/model-factory.js";
 export { isTerminal as isGoalTerminal, readyNodeKeys, rollupSummary } from "./lib/goal/status.js";

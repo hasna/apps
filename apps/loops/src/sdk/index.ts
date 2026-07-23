@@ -33,7 +33,10 @@ import { LocalStore, getStore, type LoopStore } from "../lib/store/index.js";
 import { mergeLoopLabels, normalizeLoopLabels, removeLoopLabels } from "../lib/labels.js";
 export { runGoal } from "../lib/goal/runner.js";
 export {
+  LEGACY_OPEN_LOOPS_MIGRATION_SCHEMA,
+  LEGACY_OPEN_LOOPS_SELF_HOSTED_PUSH_MANIFEST_SCHEMA,
   LOOPS_MIGRATION_SCHEMA,
+  LOOPS_SELF_HOSTED_PUSH_MANIFEST_SCHEMA,
   applyImportMigrationBundle,
   buildImportMigrationPlan,
   buildSelfHostedMigrationPlan,
@@ -47,6 +50,7 @@ export type {
   ImportLoopsMigrationOptions,
   LoopsMigrationAction,
   LoopsMigrationBundle,
+  LoopsMigrationBundleSchema,
   LoopsMigrationPlan,
   LoopsMigrationPlanRow,
   LoopsMigrationPlanSummary,
@@ -313,7 +317,7 @@ export function openAutomationsRuntimeBinding(
     role: "runtime",
     handoff: "claim-queue",
     queueOwner: "open-automations",
-    runtimeOwner: "open-loops",
+    runtimeOwner: "@hasna/loops",
     statusCommand: "automations status",
     claimCommand: "automations queue claim",
     completeCommand: "automations queue complete",

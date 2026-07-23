@@ -69,7 +69,7 @@ describe("loops sdk", () => {
       role: "runtime",
       handoff: "claim-queue",
       queueOwner: "open-automations",
-      runtimeOwner: "open-loops",
+      runtimeOwner: "@hasna/loops",
       claimCommand: "automations queue claim",
       completeCommand: "automations queue complete",
       failCommand: "automations queue fail",
@@ -82,6 +82,8 @@ describe("loops sdk", () => {
     expect(binding.guarantees.join(" ")).toContain("exported event envelopes");
     expect(binding.nonGoals.join(" ")).toContain("must not become the OpenAutomations product surface");
     expect(binding.eventHandoff.boundary).toContain("Loops owns workflow invocation");
+    // Persisted pre-rename bindings remain readable during the compatibility window.
+    expect(openAutomationsRuntimeBinding({ runtimeOwner: "open-loops" }).runtimeOwner).toBe("open-loops");
   });
 
   test("lists loops and runs with filters and exposes doctor/health reports", async () => {
@@ -422,7 +424,7 @@ describe("loops sdk", () => {
         loop_id: "loop-sdk",
         run_id: "run-sdk",
         machine: "spark01",
-        repo: "/workspace/open-loops",
+        repo: "/workspace/loops",
         task_ids: ["task-sdk"],
         knowledge_ids: ["knowledge-sdk"],
         status: "succeeded",

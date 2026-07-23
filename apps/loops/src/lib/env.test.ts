@@ -46,20 +46,20 @@ describe("env", () => {
     const root = mkdtempSync(join(tmpdir(), "loops-env-exec-"));
     const bin = join(root, "bin");
     mkdirSync(bin, { recursive: true });
-    const runnable = join(bin, "openloops-env-runnable");
+    const runnable = join(bin, "loops-env-runnable");
     writeFileSync(runnable, "#!/bin/sh\nexit 0\n");
     chmodSync(runnable, 0o755);
-    const plainFile = join(bin, "openloops-env-plain");
+    const plainFile = join(bin, "loops-env-plain");
     writeFileSync(plainFile, "not executable\n");
     chmodSync(plainFile, 0o644);
     try {
       const env = { PATH: `${bin}${delimiter}/usr/bin` };
-      expect(executableExists("openloops-env-runnable", env)).toBe(true);
-      expect(executableExists("openloops-env-plain", env)).toBe(false);
-      expect(executableExists("openloops-env-missing", env)).toBe(false);
+      expect(executableExists("loops-env-runnable", env)).toBe(true);
+      expect(executableExists("loops-env-plain", env)).toBe(false);
+      expect(executableExists("loops-env-missing", env)).toBe(false);
       expect(executableExists(runnable, { PATH: "" })).toBe(true);
       expect(executableExists(plainFile, { PATH: "" })).toBe(false);
-      expect(executableExists("openloops-env-runnable", { PATH: "" })).toBe(false);
+      expect(executableExists("loops-env-runnable", { PATH: "" })).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

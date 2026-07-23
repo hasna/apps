@@ -4,6 +4,13 @@ Date: 2026-07-07
 
 Task: `8fd378e0-909c-4d13-8c7d-16b950591c2f`
 
+Current identity correction (2026-07-23): the canonical product, repository,
+package, CLI, and channel identities are now `Loops`, `hasna/loops`,
+`@hasna/loops`, `loops`, and `#loops`. Older names below are retained only as
+dated provenance for this 2026-07-07 report; they are not current naming
+guidance. The tracked project slug and primary checkout path remain unchanged
+until the coordinated workspace cutover and must move atomically there.
+
 This is a report-only inventory for the P5 shared-kits workstream. It does not
 publish packages, edit Bun release-age exclusions, migrate consumers, or change
 runtime code.

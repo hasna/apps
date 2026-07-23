@@ -9,14 +9,14 @@ The pattern came from reviewing a Claude Code fireside chat transcript. The usef
 Start with the checked-in workflow template. Copy it into the target repo, replace `/path/to/repo` with that repo's absolute path, and provide `TRANSCRIBER_SOURCE_URL` through the runner environment or a private, uncommitted workflow copy before storing or scheduling it. Do not commit private or signed media URLs.
 
 ```bash
-mkdir -p /path/to/repo/.openloops
-cp /path/to/open-loops/docs/workflows/transcript-feedback-to-loops.json /path/to/repo/.openloops/transcript-feedback-to-loops.json
-loops workflows validate /path/to/repo/.openloops/transcript-feedback-to-loops.json --preflight
-loops workflows create /path/to/repo/.openloops/transcript-feedback-to-loops.json
+mkdir -p /path/to/repo/.loops
+cp /path/to/loops/docs/workflows/transcript-feedback-to-loops.json /path/to/repo/.loops/transcript-feedback-to-loops.json
+loops workflows validate /path/to/repo/.loops/transcript-feedback-to-loops.json --preflight
+loops workflows create /path/to/repo/.loops/transcript-feedback-to-loops.json
 loops workflows run transcript-feedback-to-loops --show-output
 ```
 
-The transcribe step writes `.openloops/transcripts/latest-transcript.json`. The transcript path is fixed so later agent steps read the same artifact the command step produced. Edit the copied workflow if you need a different artifact path. Set `TRANSCRIBER_PROVIDER` in the `transcribe-media` target env to choose another provider. For multi-speaker recordings, update the transcriber command to request diarization when the selected provider supports it. If no recurring loop candidates are generated, the validation step exits successfully after recording that there is nothing to validate.
+The transcribe step writes `.loops/transcripts/latest-transcript.json`. The transcript path is fixed so later agent steps read the same artifact the command step produced. Edit the copied workflow if you need a different artifact path. Set `TRANSCRIBER_PROVIDER` in the `transcribe-media` target env to choose another provider. For multi-speaker recordings, update the transcriber command to request diarization when the selected provider supports it. If no recurring loop candidates are generated, the validation step exits successfully after recording that there is nothing to validate.
 
 The workflow includes non-shell `check-transcriber` and `check-loops` command steps so `loops workflows validate --preflight` can catch those missing CLIs. Shell command bodies, provider credentials, and media access are still checked by the transcriber step at runtime.
 

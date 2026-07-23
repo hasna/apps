@@ -27,7 +27,7 @@ HASNA_LOOPS_TRANSFER_TARGET_DATABASE_URL
 The source DSN must point at database `apps`. The target DSN must point at
 database `loops`. The command converts both DSNs into a private `pg_service.conf`
 inside a mode `0700` ephemeral directory so PostgreSQL client argv contains only
-`service=openloops_transfer_source` and `service=openloops_transfer_target`.
+`service=loops_transfer_source` and `service=loops_transfer_target`.
 The archive directory is removed in `finally` after success or failure.
 
 ## Sequence

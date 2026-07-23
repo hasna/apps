@@ -209,7 +209,7 @@ const AGENT_ROUTING_OPTION_SPECS: RouteOptionSpec[] = [
   },
   { flags: "--worktree-mode <mode>", key: "worktreeMode", kind: "value", description: "worktree isolation mode: auto, required, off, or main", defaultValue: "auto" },
   { flags: "--worktree-root <path>", key: "worktreeRoot", kind: "value", description: "base directory for Loops-managed git worktrees" },
-  { flags: "--worktree-branch-prefix <prefix>", key: "worktreeBranchPrefix", kind: "value", description: "branch prefix for generated worktrees", defaultValue: "openloops" },
+  { flags: "--worktree-branch-prefix <prefix>", key: "worktreeBranchPrefix", kind: "value", description: "branch prefix for generated worktrees", defaultValue: "loops" },
   {
     flags: "--pr-handoff",
     key: "prHandoff",

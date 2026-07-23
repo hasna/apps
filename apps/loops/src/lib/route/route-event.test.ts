@@ -113,31 +113,31 @@ function withFakeCodewith(dataDir: string, diagnostics: unknown, opts: { status?
     codewith,
     [
       "#!/usr/bin/env bash",
-      "printf '%s\\n' \"$*\" >> \"$OPENLOOPS_TEST_CODEWITH_CALLS\"",
-      "if [[ \"${OPENLOOPS_TEST_CODEWITH_STATUS:-0}\" != \"0\" ]]; then",
+      "printf '%s\\n' \"$*\" >> \"$LOOPS_TEST_CODEWITH_CALLS\"",
+      "if [[ \"${LOOPS_TEST_CODEWITH_STATUS:-0}\" != \"0\" ]]; then",
       "  printf 'diagnostics unavailable\\n' >&2",
-      "  exit \"$OPENLOOPS_TEST_CODEWITH_STATUS\"",
+      "  exit \"$LOOPS_TEST_CODEWITH_STATUS\"",
       "fi",
-      "printf '%s' \"$OPENLOOPS_TEST_CODEWITH_DIAGNOSTICS\"",
+      "printf '%s' \"$LOOPS_TEST_CODEWITH_DIAGNOSTICS\"",
       "",
     ].join("\n"),
   );
   chmodSync(codewith, 0o755);
   const oldPath = process.env.PATH;
-  const oldDiagnostics = process.env.OPENLOOPS_TEST_CODEWITH_DIAGNOSTICS;
-  const oldCalls = process.env.OPENLOOPS_TEST_CODEWITH_CALLS;
-  const oldStatus = process.env.OPENLOOPS_TEST_CODEWITH_STATUS;
+  const oldDiagnostics = process.env.LOOPS_TEST_CODEWITH_DIAGNOSTICS;
+  const oldCalls = process.env.LOOPS_TEST_CODEWITH_CALLS;
+  const oldStatus = process.env.LOOPS_TEST_CODEWITH_STATUS;
   process.env.PATH = `${binDir}:${process.env.PATH ?? ""}`;
-  process.env.OPENLOOPS_TEST_CODEWITH_DIAGNOSTICS = typeof diagnostics === "string" ? diagnostics : JSON.stringify(diagnostics);
-  process.env.OPENLOOPS_TEST_CODEWITH_CALLS = calls;
-  process.env.OPENLOOPS_TEST_CODEWITH_STATUS = String(opts.status ?? 0);
+  process.env.LOOPS_TEST_CODEWITH_DIAGNOSTICS = typeof diagnostics === "string" ? diagnostics : JSON.stringify(diagnostics);
+  process.env.LOOPS_TEST_CODEWITH_CALLS = calls;
+  process.env.LOOPS_TEST_CODEWITH_STATUS = String(opts.status ?? 0);
   return {
     calls,
     restore: () => {
       restoreEnv("PATH", oldPath);
-      restoreEnv("OPENLOOPS_TEST_CODEWITH_DIAGNOSTICS", oldDiagnostics);
-      restoreEnv("OPENLOOPS_TEST_CODEWITH_CALLS", oldCalls);
-      restoreEnv("OPENLOOPS_TEST_CODEWITH_STATUS", oldStatus);
+      restoreEnv("LOOPS_TEST_CODEWITH_DIAGNOSTICS", oldDiagnostics);
+      restoreEnv("LOOPS_TEST_CODEWITH_CALLS", oldCalls);
+      restoreEnv("LOOPS_TEST_CODEWITH_STATUS", oldStatus);
     },
   };
 }
@@ -748,7 +748,7 @@ describe("routeTodosTaskEvent provider-native admission", () => {
       codewith,
       [
         "#!/usr/bin/env bash",
-        "printf '%s\\n' \"$*\" >> \"$OPENLOOPS_TEST_CODEWITH_CALLS\"",
+        "printf '%s\\n' \"$*\" >> \"$LOOPS_TEST_CODEWITH_CALLS\"",
         "if [[ \"$*\" == *\"--auth-profile acctA\"* ]]; then",
         "  printf '%s' '{\"activeRunCount\":6,\"maxActiveRunsPerUser\":8,\"availableActiveRunSlots\":2}'",
         "  exit 0",
@@ -763,12 +763,12 @@ describe("routeTodosTaskEvent provider-native admission", () => {
     );
     chmodSync(codewith, 0o755);
     const oldPath = process.env.PATH;
-    const oldCalls = process.env.OPENLOOPS_TEST_CODEWITH_CALLS;
+    const oldCalls = process.env.LOOPS_TEST_CODEWITH_CALLS;
     process.env.PATH = `${binDir}:${process.env.PATH ?? ""}`;
-    process.env.OPENLOOPS_TEST_CODEWITH_CALLS = calls;
+    process.env.LOOPS_TEST_CODEWITH_CALLS = calls;
     restoreCodewith = () => {
       restoreEnv("PATH", oldPath);
-      restoreEnv("OPENLOOPS_TEST_CODEWITH_CALLS", oldCalls);
+      restoreEnv("LOOPS_TEST_CODEWITH_CALLS", oldCalls);
     };
 
     const result = routeTodosTaskEvent(plainTaskEvent("provider-multi-fatal"), {

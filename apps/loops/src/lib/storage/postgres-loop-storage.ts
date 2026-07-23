@@ -192,6 +192,9 @@ function bindTenantClient(client: PoolQueryClient, context: TenantStorageContext
       await transactionClient.execute("SET LOCAL search_path = pg_catalog, public");
       await transactionClient.get(
         `SELECT
+          set_config('loops.tenant_id', $1, true),
+          set_config('loops.principal_id', $2, true),
+          set_config('loops.request_id', $3, true),
           set_config('open_loops.tenant_id', $1, true),
           set_config('open_loops.principal_id', $2, true),
           set_config('open_loops.request_id', $3, true)`,

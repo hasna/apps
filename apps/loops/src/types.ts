@@ -89,7 +89,11 @@ export interface OpenAutomationsRuntimeBinding {
   role: "runtime";
   handoff: "claim-queue";
   queueOwner: "open-automations";
-  runtimeOwner: "open-loops";
+  /**
+   * New bindings use the canonical package identity. The legacy value remains
+   * accepted only while persisted pre-rename bindings are upgraded.
+   */
+  runtimeOwner: "@hasna/loops" | "open-loops";
   statusCommand: "automations status";
   claimCommand: "automations queue claim";
   completeCommand: "automations queue complete";

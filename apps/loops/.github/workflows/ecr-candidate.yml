@@ -102,9 +102,9 @@ jobs:
             --load \
             --label "org.opencontainers.image.revision=${SOURCE_SHA}" \
             --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
-            --tag "openloops-candidate:${SOURCE_SHA}" \
+            --tag "loops-candidate:${SOURCE_SHA}" \
             .
-          local_image_id="$(docker image inspect --format '{{.Id}}' "openloops-candidate:${SOURCE_SHA}")"
+          local_image_id="$(docker image inspect --format '{{.Id}}' "loops-candidate:${SOURCE_SHA}")"
           if [[ ! "${local_image_id}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "built image did not produce a valid local image id" >&2
             exit 1
@@ -114,7 +114,7 @@ jobs:
       - name: Generate local vulnerability report
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: openloops-candidate:${{ inputs.source_sha }}
+          image-ref: loops-candidate:${{ inputs.source_sha }}
           format: json
           output: trivy-local.json
           scanners: vuln
@@ -142,9 +142,9 @@ jobs:
       - name: Generate CycloneDX SBOM
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: openloops-candidate:${{ inputs.source_sha }}
+          image-ref: loops-candidate:${{ inputs.source_sha }}
           format: cyclonedx
-          output: openloops-candidate.sbom.cdx.json
+          output: loops-candidate.sbom.cdx.json
           scanners: vuln
           vuln-type: os,library
           exit-code: "0"
@@ -154,7 +154,7 @@ jobs:
         with:
           aws-region: ${{ vars.AWS_REGION }}
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          role-session-name: openloops-ecr-${{ github.run_id }}
+          role-session-name: loops-ecr-${{ github.run_id }}
           role-duration-seconds: 1800
           mask-aws-account-id: true
           unset-current-credentials: true
@@ -199,7 +199,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           image_uri="${ECR_REGISTRY}/${ECR_REPOSITORY}:${CANDIDATE_TAG}"
-          docker tag "openloops-candidate:${SOURCE_SHA}" "${image_uri}"
+          docker tag "loops-candidate:${SOURCE_SHA}" "${image_uri}"
           docker push "${image_uri}"
 
           remote_digest=""
@@ -341,7 +341,7 @@ jobs:
                   metadata: {invocationId: ($run_id + ":" + $run_attempt)}
                 }
               }
-            }' > openloops-candidate.provenance.json
+            }' > loops-candidate.provenance.json
 
       - name: Upload candidate evidence
         if: ${{ always() }}
@@ -350,8 +350,8 @@ jobs:
           name: ecr-candidate-${{ github.run_id }}
           path: |
             trivy-local.json
-            openloops-candidate.sbom.cdx.json
-            openloops-candidate.provenance.json
+            loops-candidate.sbom.cdx.json
+            loops-candidate.provenance.json
             ecr-scan-counts.json
           if-no-files-found: warn
           retention-days: 30

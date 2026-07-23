@@ -132,8 +132,8 @@ describe("ECR candidate workflow contract", () => {
     expect(workflow).toContain('candidate_tag="candidate-${short_sha}-${SOURCE_SHA}"');
     expect(workflow).not.toMatch(/docker (?:tag|push)[^\n]*:latest/);
     expect(workflow).not.toMatch(/aws\s+ecs\b/);
-    expect(workflow).toContain("openloops-candidate.sbom.cdx.json");
-    expect(workflow).toContain("openloops-candidate.provenance.json");
+    expect(workflow).toContain("loops-candidate.sbom.cdx.json");
+    expect(workflow).toContain("loops-candidate.provenance.json");
     expect(workflow).toContain("ecr-scan-counts.json");
     expect(workflow).toContain("ECS/latest mutation: \\`none\\`");
   });

@@ -123,6 +123,10 @@ without memberships until migration `0010_tenant_enforce` has landed. After
 If PostgreSQL 16 implicit creator memberships cannot be normalized, the
 reconciler fails before publishing app credentials.
 
+Those role names are retained provider capability identifiers, not current
+product branding. Their bounded compatibility and provider-owned removal gate
+are documented in [`docs/IDENTITY-MIGRATION.md`](docs/IDENTITY-MIGRATION.md).
+
 ## Install
 
 **Loops requires the [Bun](https://bun.sh) runtime (`bun >= 1.0`).** The
@@ -755,8 +759,8 @@ resolved in the intended Todos store, the workflow fails before repo-mutating
 agent work starts.
 The lifecycle template adds deterministic gates after triage and planning. If
 either step marks the task blocked, omits its contextual
-`openloops:triage=go task=<id> event=<event-id>` /
-`openloops:planner=go task=<id> event=<event-id>` marker comment, or the task
+`loops:triage=go task=<id> event=<event-id>` /
+`loops:planner=go task=<id> event=<event-id>` marker comment, or the task
 is blocked/completed/done/cancelled/failed/archived/no-auto/manual/
 approval-required, the worker step is not started. Use
 `--triage-auth-profile`, `--planner-auth-profile`, `--worker-auth-profile`, and
@@ -863,7 +867,7 @@ loops routes schedule todos-task oss-task-route-drain \
   --max-per-profile 2 \
   --launch-gate "pa19-controlled-launch" \
   --launch-gate-blocker "$HOME/workspace/example/opensource/open-codewith::2d9d931b" \
-  --launch-gate-blocker "$HOME/workspace/example/opensource/open-loops::816e99db" \
+  --launch-gate-blocker "$HOME/workspace/example/opensource/loops::816e99db" \
   --worktree-mode required \
   --evidence-dir "$HOME/.hasna/loops/reports/oss-task-route-drain" \
   --compact
@@ -943,8 +947,8 @@ const binding = openAutomationsRuntimeBinding();
 ```
 
 ```bash
-automations queue claim --runner open-loops:<worker-id>
-automations queue complete <action-id> --runner open-loops:<worker-id>
+automations queue claim --runner loops:<worker-id>
+automations queue complete <action-id> --runner loops:<worker-id>
 ```
 
 For explicit event workflow routing, OpenAutomations can export the normalized
@@ -1001,8 +1005,8 @@ work.
 Loops can turn long-form media or meeting transcripts into recurring workflow work when paired with `iapp-transcriber`. The template at `docs/workflows/transcript-feedback-to-loops.json` transcribes an authorized media URL, asks an agent to extract recurring loop candidates, authors workflow specs, and validates generated workflows before scheduling. Copy it into the target repo, replace `/path/to/repo` with that repo's absolute path, and provide `TRANSCRIBER_SOURCE_URL` through the runner environment or a private, uncommitted workflow copy before storing or scheduling it. Do not commit private or signed media URLs.
 
 ```bash
-loops workflows validate /path/to/repo/.openloops/transcript-feedback-to-loops.json --preflight
-loops workflows create /path/to/repo/.openloops/transcript-feedback-to-loops.json
+loops workflows validate /path/to/repo/.loops/transcript-feedback-to-loops.json --preflight
+loops workflows create /path/to/repo/.loops/transcript-feedback-to-loops.json
 loops workflows run transcript-feedback-to-loops --show-output
 ```
 
@@ -1038,7 +1042,7 @@ loops health route-tasks --project ~/.hasna/loops --task-list loop-error-self-he
 loops hygiene names --json
 loops hygiene duplicates --json
 loops hygiene scripts --json
-loops hygiene route-tasks --checks duplicates,scripts --project ~/.hasna/loops --task-list openloops-hygiene
+loops hygiene route-tasks --checks duplicates,scripts --project ~/.hasna/loops --task-list loops-hygiene
 ```
 
 `health` and `expectations` classify latest-run failures with stable

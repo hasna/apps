@@ -3,7 +3,11 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { legacyBrandReason, scanTrackedFiles } from "./check-branding.mjs";
+import {
+  legacyBrandReason,
+  scanTrackedFiles,
+  scanTrackedIdentityTokens,
+} from "./check-branding.mjs";
 
 describe("Loops branding guard", () => {
   const legacyCamelBrand = ["Open", "Loops"].join("");
@@ -85,6 +89,35 @@ describe("Loops branding guard", () => {
       expect(scanTrackedFiles(repo)).toEqual([
         "scripts/check-branding.mjs:1:legacy-leading-context-brand",
       ]);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("allows only counted legacy identities with a reason and removal condition", () => {
+    const repo = mkdtempSync(join(tmpdir(), "loops-identity-policy-"));
+    try {
+      execFileSync("git", ["init", "-q"], { cwd: repo });
+      writeFileSync(join(repo, "compatibility.ts"), `const legacy = "${lowerLegacyHyphenated}.migration/v1";\n`);
+      execFileSync("git", ["add", "compatibility.ts"], { cwd: repo });
+      const manifest = {
+        schema: "loops.legacy-identity-allowlist/v1",
+        entries: [{
+          path: "compatibility.ts",
+          tokens: { [lowerLegacyHyphenated]: 1 },
+          reason: "read bundles emitted before the rename",
+          removalCondition: "remove after the next major release",
+        }],
+      };
+
+      expect(scanTrackedIdentityTokens(repo, manifest)).toEqual([]);
+      writeFileSync(
+        join(repo, "compatibility.ts"),
+        `const legacy = "${lowerLegacyHyphenated}.migration/v1";\nconst accidental = "${lowerLegacySolid}:new";\n`,
+      );
+      expect(scanTrackedIdentityTokens(repo, manifest)).toContain(
+        `compatibility.ts:${lowerLegacySolid}:unapproved-legacy-identity:1`,
+      );
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }

@@ -453,10 +453,10 @@ function commandForShell(spec: CommandSpec): string {
   return [spec.command, ...spec.args.map(shellQuote)].join(" ");
 }
 
-function hereDoc(value: string, destinationVariable = "__OPENLOOPS_STDIN"): string[] {
-  let delimiter = `__OPENLOOPS_STDIN_${randomBytes(8).toString("hex").toUpperCase()}__`;
+function hereDoc(value: string, destinationVariable = "__LOOPS_STDIN"): string[] {
+  let delimiter = `__LOOPS_STDIN_${randomBytes(8).toString("hex").toUpperCase()}__`;
   while (value.split(/\r?\n/).includes(delimiter)) {
-    delimiter = `__OPENLOOPS_STDIN_${randomBytes(8).toString("hex").toUpperCase()}__`;
+    delimiter = `__LOOPS_STDIN_${randomBytes(8).toString("hex").toUpperCase()}__`;
   }
   return [`cat > "$${destinationVariable}" <<'${delimiter}'`, value, delimiter];
 }
@@ -519,14 +519,14 @@ function remoteWorktreePrepareLines(worktree: AgentWorktreeSpec): string[] {
   const { repoRoot, path, branch } = worktree;
   if (!repoRoot || !path || !branch) {
     return [
-      "__openloops_prepare_worktree() {",
+      "__loops_prepare_worktree() {",
       `  echo ${shellQuote("worktree preparation requires repoRoot, path, and branch metadata")} >&2`,
       "  return 1",
       "}",
     ];
   }
   return [
-    "__openloops_prepare_worktree() {",
+    "__loops_prepare_worktree() {",
     `  local repo=${shellQuote(repoRoot)} path=${shellQuote(path)} branch=${shellQuote(branch)}`,
     "  local top expected_common actual_common current status recovered",
     '  if [ -L "$path" ]; then echo "refusing symlinked worktree path $path" >&2; return 1; fi',
@@ -555,7 +555,7 @@ function remoteWorktreePrepareLines(worktree: AgentWorktreeSpec): string[] {
     '  git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "worktree repoRoot is not a git repository: $repo" >&2; return 1; }',
     '  mkdir -p "$(dirname "$path")" || return 1',
     "  # Preparation chatter goes to stderr so run stdout stays the agent's.",
-    "  __openloops_worktree_add() {",
+    "  __loops_worktree_add() {",
     '    if git -C "$repo" show-ref --verify --quiet "refs/heads/$branch"; then',
     '      git -C "$repo" worktree add "$path" "$branch"',
     "    else",
@@ -563,7 +563,7 @@ function remoteWorktreePrepareLines(worktree: AgentWorktreeSpec): string[] {
     "    fi",
     "  }",
     "  local __ol_add_out",
-    '  if __ol_add_out="$(__openloops_worktree_add 2>&1)"; then',
+    '  if __ol_add_out="$(__loops_worktree_add 2>&1)"; then',
     '    if [ -n "$__ol_add_out" ]; then printf "%s\\n" "$__ol_add_out" >&2; fi',
     "    return 0",
     "  fi",
@@ -574,7 +574,7 @@ function remoteWorktreePrepareLines(worktree: AgentWorktreeSpec): string[] {
     '  case "$__ol_add_out" in',
     '    *"missing but already registered worktree"*)',
     '      git -C "$repo" worktree prune 1>&2 || true',
-    '      __openloops_worktree_add 1>&2 || return 1',
+    '      __loops_worktree_add 1>&2 || return 1',
     "      return 0",
     "      ;;",
     "  esac",
@@ -586,28 +586,28 @@ function remoteWorktreePrepareLines(worktree: AgentWorktreeSpec): string[] {
 /**
  * Enters the prepared worktree, mirroring {@link enterWorktree}: required mode
  * fails closed, auto mode falls back to the original checkout and records the
- * outcome in __OPENLOOPS_WORKTREE_OK so {@link remoteScript} can run the
+ * outcome in __LOOPS_WORKTREE_OK so {@link remoteScript} can run the
  * fallback invocation (providers bake cwd into argv via --cd/--cwd/--dir).
  */
 function remoteWorktreeEnterLines(worktree: AgentWorktreeSpec, cwd: string | undefined): string[] {
   const workdir = cwd ?? worktree.cwd;
   if (worktree.mode === "required") {
     return [
-      "if ! __openloops_prepare_worktree; then",
+      "if ! __loops_prepare_worktree; then",
       `  echo ${shellQuote("worktree preparation failed (mode=required)")} >&2`,
       "  exit 1",
       "fi",
-      "__OPENLOOPS_WORKTREE_OK=1",
+      "__LOOPS_WORKTREE_OK=1",
       `cd ${shellQuote(workdir)}`,
     ];
   }
   return [
-    "if __openloops_prepare_worktree; then",
-    "  __OPENLOOPS_WORKTREE_OK=1",
+    "if __loops_prepare_worktree; then",
+    "  __LOOPS_WORKTREE_OK=1",
     `  cd ${shellQuote(workdir)}`,
     "else",
     `  echo ${shellQuote(`worktree preparation failed (mode=${worktree.mode}); falling back to ${worktree.originalCwd}`)} >&2`,
-    "  __OPENLOOPS_WORKTREE_OK=0",
+    "  __LOOPS_WORKTREE_OK=0",
     `  cd ${shellQuote(worktree.originalCwd)}`,
     "fi",
   ];
@@ -624,12 +624,12 @@ function remoteScript(spec: CommandSpec, metadata: ExecutionMetadata, fallbackSp
   let primaryStdinRedirect = "";
   if (hasAutoFallback) {
     if (spec.stdin !== undefined || fallbackSpec?.stdin !== undefined) {
-      lines.push('__OPENLOOPS_STDIN=""', 'trap \'rm -f "$__OPENLOOPS_STDIN"\' EXIT');
+      lines.push('__LOOPS_STDIN=""', 'trap \'rm -f "$__LOOPS_STDIN"\' EXIT');
     }
   } else if (spec.stdin !== undefined) {
-    lines.push('__OPENLOOPS_STDIN="$(mktemp -t openloops-stdin.XXXXXX)"', 'trap \'rm -f "$__OPENLOOPS_STDIN"\' EXIT');
+    lines.push('__LOOPS_STDIN="$(mktemp -t loops-stdin.XXXXXX)"', 'trap \'rm -f "$__LOOPS_STDIN"\' EXIT');
     lines.push(...hereDoc(spec.stdin));
-    primaryStdinRedirect = ' < "$__OPENLOOPS_STDIN"';
+    primaryStdinRedirect = ' < "$__LOOPS_STDIN"';
   }
 
   const invocationFor = (invocationSpec: CommandSpec, stdinRedirect: string): string =>
@@ -644,16 +644,16 @@ function remoteScript(spec: CommandSpec, metadata: ExecutionMetadata, fallbackSp
     const branchLines: string[] = [];
     let stdinRedirect = "";
     if (invocationSpec.stdin !== undefined) {
-      branchLines.push('__OPENLOOPS_STDIN="$(mktemp -t openloops-stdin.XXXXXX)"');
+      branchLines.push('__LOOPS_STDIN="$(mktemp -t loops-stdin.XXXXXX)"');
       branchLines.push(...hereDoc(invocationSpec.stdin));
-      stdinRedirect = ' < "$__OPENLOOPS_STDIN"';
+      stdinRedirect = ' < "$__LOOPS_STDIN"';
     }
     branchLines.push(sessionContractLine(invocationSpec), invocationFor(invocationSpec, stdinRedirect));
     return branchLines;
   };
   if (hasAutoFallback && fallbackSpec) {
     lines.push(
-      'if [ "${__OPENLOOPS_WORKTREE_OK:-0}" = 1 ]; then',
+      'if [ "${__LOOPS_WORKTREE_OK:-0}" = 1 ]; then',
       ...fallbackBranchLines(spec),
       "else",
       ...fallbackBranchLines(fallbackSpec),
@@ -682,56 +682,56 @@ function remotePreflightScript(spec: CommandSpec, metadata: ExecutionMetadata): 
   if (spec.nativeAuthProfile?.provider === "codewith") {
     const profileForError = codewithProfileForError(spec.nativeAuthProfile.profile);
     lines.push(
-      `__OPENLOOPS_CODEWITH_PROFILE=${shellQuote(spec.nativeAuthProfile.profile)}`,
-      "export __OPENLOOPS_CODEWITH_PROFILE",
-      "__openloops_codewith_table_contains() {",
-      `  printf '%s\\n' "$__OPENLOOPS_CODEWITH_PROFILES" | awk '{ line = $0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", line); if (line == "" || line == "No auth profiles saved.") next; split(line, cols, /[[:space:]]+/); candidate = (cols[1] == "*" ? cols[2] : cols[1]); if (candidate == "NAME" && (cols[2] == "ACCOUNT" || cols[3] == "ACCOUNT")) next; if (candidate == ENVIRON["__OPENLOOPS_CODEWITH_PROFILE"]) found = 1 } END { exit(found ? 0 : 1) }'`,
+      `__LOOPS_CODEWITH_PROFILE=${shellQuote(spec.nativeAuthProfile.profile)}`,
+      "export __LOOPS_CODEWITH_PROFILE",
+      "__loops_codewith_table_contains() {",
+      `  printf '%s\\n' "$__LOOPS_CODEWITH_PROFILES" | awk '{ line = $0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", line); if (line == "" || line == "No auth profiles saved.") next; split(line, cols, /[[:space:]]+/); candidate = (cols[1] == "*" ? cols[2] : cols[1]); if (candidate == "NAME" && (cols[2] == "ACCOUNT" || cols[3] == "ACCOUNT")) next; if (candidate == ENVIRON["__LOOPS_CODEWITH_PROFILE"]) found = 1 } END { exit(found ? 0 : 1) }'`,
       "}",
-      "__openloops_codewith_json_profile_state() {",
-      `  printf '%s\\n' "$__OPENLOOPS_CODEWITH_PROFILES" | awk 'BEGIN { RS = "\\0" } { json = $0; gsub(/[\\r\\n]/, " ", json); if (json !~ /^[[:space:]]*\\{/ || json !~ /\\}[[:space:]]*$/) exit 2; gsub(/"(data|profiles)"[[:space:]]*:[[:space:]]*\\[/, "\\n&", json); section_count = split(json, sections, /\\n/); for (section_index = 1; section_index <= section_count; section_index++) { section = sections[section_index]; if (section !~ /^"(data|profiles)"[[:space:]]*:[[:space:]]*\\[/) continue; has_inventory = 1; sub(/^"(data|profiles)"[[:space:]]*:[[:space:]]*\\[/, "", section); sub(/\\].*$/, "", section); gsub(/\\}[[:space:]]*,[[:space:]]*\\{/, "}\\n{", section); entry_count = split(section, entries, /\\n/); for (entry_index = 1; entry_index <= entry_count; entry_index++) { entry = entries[entry_index]; if (entry !~ /"name"[[:space:]]*:[[:space:]]*"/) continue; name = entry; sub(/^.*"name"[[:space:]]*:[[:space:]]*"/, "", name); sub(/".*$/, "", name); if (name != ENVIRON["__OPENLOOPS_CODEWITH_PROFILE"]) continue; if (entry ~ /"usable"[[:space:]]*:[[:space:]]*false/) exit 3; found = 1 } } if (!has_inventory) exit 2; exit(found ? 0 : 4) }'`,
+      "__loops_codewith_json_profile_state() {",
+      `  printf '%s\\n' "$__LOOPS_CODEWITH_PROFILES" | awk 'BEGIN { RS = "\\0" } { json = $0; gsub(/[\\r\\n]/, " ", json); if (json !~ /^[[:space:]]*\\{/ || json !~ /\\}[[:space:]]*$/) exit 2; gsub(/"(data|profiles)"[[:space:]]*:[[:space:]]*\\[/, "\\n&", json); section_count = split(json, sections, /\\n/); for (section_index = 1; section_index <= section_count; section_index++) { section = sections[section_index]; if (section !~ /^"(data|profiles)"[[:space:]]*:[[:space:]]*\\[/) continue; has_inventory = 1; sub(/^"(data|profiles)"[[:space:]]*:[[:space:]]*\\[/, "", section); sub(/\\].*$/, "", section); gsub(/\\}[[:space:]]*,[[:space:]]*\\{/, "}\\n{", section); entry_count = split(section, entries, /\\n/); for (entry_index = 1; entry_index <= entry_count; entry_index++) { entry = entries[entry_index]; if (entry !~ /"name"[[:space:]]*:[[:space:]]*"/) continue; name = entry; sub(/^.*"name"[[:space:]]*:[[:space:]]*"/, "", name); sub(/".*$/, "", name); if (name != ENVIRON["__LOOPS_CODEWITH_PROFILE"]) continue; if (entry ~ /"usable"[[:space:]]*:[[:space:]]*false/) exit 3; found = 1 } } if (!has_inventory) exit 2; exit(found ? 0 : 4) }'`,
       "}",
-      "__OPENLOOPS_CODEWITH_JSON_ERROR=\"$(mktemp -t openloops-codewith-profile.XXXXXX)\" || {",
+      "__LOOPS_CODEWITH_JSON_ERROR=\"$(mktemp -t loops-codewith-profile.XXXXXX)\" || {",
       `  printf '%s\\n' ${shellQuote("codewith auth profile preflight failed")} >&2`,
       "  exit 1",
       "}",
-      `if __OPENLOOPS_CODEWITH_PROFILES="$(${shellQuote(spec.command)} profile list --json 2>"$__OPENLOOPS_CODEWITH_JSON_ERROR")"; then`,
-      "  if __openloops_codewith_json_profile_state; then",
-      "    __OPENLOOPS_CODEWITH_JSON_STATE=0",
+      `if __LOOPS_CODEWITH_PROFILES="$(${shellQuote(spec.command)} profile list --json 2>"$__LOOPS_CODEWITH_JSON_ERROR")"; then`,
+      "  if __loops_codewith_json_profile_state; then",
+      "    __LOOPS_CODEWITH_JSON_STATE=0",
       "  else",
-      "    __OPENLOOPS_CODEWITH_JSON_STATE=$?",
+      "    __LOOPS_CODEWITH_JSON_STATE=$?",
       "  fi",
-      "  if [ \"$__OPENLOOPS_CODEWITH_JSON_STATE\" -eq 0 ]; then",
-      "    rm -f \"$__OPENLOOPS_CODEWITH_JSON_ERROR\"",
+      "  if [ \"$__LOOPS_CODEWITH_JSON_STATE\" -eq 0 ]; then",
+      "    rm -f \"$__LOOPS_CODEWITH_JSON_ERROR\"",
       "    :",
-      "  elif [ \"$__OPENLOOPS_CODEWITH_JSON_STATE\" -eq 2 ]; then",
-      "    __OPENLOOPS_CODEWITH_FALLBACK=1",
-      "  elif [ \"$__OPENLOOPS_CODEWITH_JSON_STATE\" -eq 3 ]; then",
-      "    rm -f \"$__OPENLOOPS_CODEWITH_JSON_ERROR\"",
+      "  elif [ \"$__LOOPS_CODEWITH_JSON_STATE\" -eq 2 ]; then",
+      "    __LOOPS_CODEWITH_FALLBACK=1",
+      "  elif [ \"$__LOOPS_CODEWITH_JSON_STATE\" -eq 3 ]; then",
+      "    rm -f \"$__LOOPS_CODEWITH_JSON_ERROR\"",
       `    printf '%s\\n' ${shellQuote(`codewith auth profile preflight failed: profile is unusable: ${profileForError}`)} >&2`,
       "    exit 1",
       "  else",
-      "    rm -f \"$__OPENLOOPS_CODEWITH_JSON_ERROR\"",
+      "    rm -f \"$__LOOPS_CODEWITH_JSON_ERROR\"",
       `    printf '%s\\n' ${shellQuote(`codewith auth profile not found: ${profileForError}`)} >&2`,
       "    exit 1",
       "  fi",
       "else",
-      "  __OPENLOOPS_CODEWITH_JSON_STATUS=$?",
-      "  __OPENLOOPS_CODEWITH_JSON_DETAIL=\"$(cat \"$__OPENLOOPS_CODEWITH_JSON_ERROR\")\"",
-      "  if { [ \"$__OPENLOOPS_CODEWITH_JSON_STATUS\" -eq 2 ] || [ \"$__OPENLOOPS_CODEWITH_JSON_STATUS\" -eq 64 ]; } && printf '%s\\n' \"$__OPENLOOPS_CODEWITH_JSON_DETAIL\" | grep -Eiq -- '(--json.*(unknown|unsupported|unrecognized|unexpected|invalid)|(unknown|unsupported|unrecognized|unexpected|invalid).*(argument|option).*--json)'; then",
-      "    __OPENLOOPS_CODEWITH_FALLBACK=1",
+      "  __LOOPS_CODEWITH_JSON_STATUS=$?",
+      "  __LOOPS_CODEWITH_JSON_DETAIL=\"$(cat \"$__LOOPS_CODEWITH_JSON_ERROR\")\"",
+      "  if { [ \"$__LOOPS_CODEWITH_JSON_STATUS\" -eq 2 ] || [ \"$__LOOPS_CODEWITH_JSON_STATUS\" -eq 64 ]; } && printf '%s\\n' \"$__LOOPS_CODEWITH_JSON_DETAIL\" | grep -Eiq -- '(--json.*(unknown|unsupported|unrecognized|unexpected|invalid)|(unknown|unsupported|unrecognized|unexpected|invalid).*(argument|option).*--json)'; then",
+      "    __LOOPS_CODEWITH_FALLBACK=1",
       "  else",
-      "    rm -f \"$__OPENLOOPS_CODEWITH_JSON_ERROR\"",
+      "    rm -f \"$__LOOPS_CODEWITH_JSON_ERROR\"",
       `    printf '%s\\n' ${shellQuote("codewith auth profile preflight failed")} >&2`,
       "    exit 1",
       "  fi",
       "fi",
-      "rm -f \"$__OPENLOOPS_CODEWITH_JSON_ERROR\"",
-      "if [ \"${__OPENLOOPS_CODEWITH_FALLBACK:-0}\" -eq 1 ]; then",
-      `  __OPENLOOPS_CODEWITH_PROFILES="$(${shellQuote(spec.command)} profile list)" || {`,
+      "rm -f \"$__LOOPS_CODEWITH_JSON_ERROR\"",
+      "if [ \"${__LOOPS_CODEWITH_FALLBACK:-0}\" -eq 1 ]; then",
+      `  __LOOPS_CODEWITH_PROFILES="$(${shellQuote(spec.command)} profile list)" || {`,
       `    printf '%s\\n' ${shellQuote("codewith auth profile preflight failed")} >&2`,
       "    exit 1",
       "  }",
-      "  if ! __openloops_codewith_table_contains; then",
+      "  if ! __loops_codewith_table_contains; then",
       `    printf '%s\\n' ${shellQuote(`codewith auth profile not found: ${profileForError}`)} >&2`,
       "    exit 1",
       "  fi",

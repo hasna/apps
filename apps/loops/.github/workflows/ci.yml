@@ -92,14 +92,14 @@ jobs:
           target: runner
           platforms: linux/arm64
           load: true
-          tags: openloops-ci:${{ github.sha }}
+          tags: loops-ci:${{ github.sha }}
           provenance: false
           sbom: false
 
       - name: Scan runner image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
         with:
-          image-ref: openloops-ci:${{ github.sha }}
+          image-ref: loops-ci:${{ github.sha }}
           vuln-type: os,library
           severity: CRITICAL,HIGH
           ignore-unfixed: true

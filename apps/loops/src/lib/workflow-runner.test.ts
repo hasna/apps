@@ -270,7 +270,7 @@ describe("workflow runner", () => {
     try {
       const workflow = store.createWorkflow({
         name: "runtime-preflight-workflow",
-        steps: [{ id: "missing", target: { type: "command", command: "openloops-definitely-missing-binary" } }],
+        steps: [{ id: "missing", target: { type: "command", command: "loops-definitely-missing-binary" } }],
       });
       const loop = store.createLoop({
         name: "runtime-preflight-loop",
@@ -1253,7 +1253,7 @@ describe("pr-handoff direct-PR integration", () => {
       chmodSync(todos, 0o755);
 
       const prHandoff = prHandoffCommand({
-        artifactPath: join(wt, ".openloops", "pr-handoff", "missing.json"),
+        artifactPath: join(wt, ".loops", "pr-handoff", "missing.json"),
         taskId: "task-int-direct-pr",
         todosProjectPath: wt,
         worktreeCwd: wt,
@@ -1279,9 +1279,9 @@ describe("pr-handoff direct-PR integration", () => {
       const env = {
         HOME: home,
         PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
-        OPENLOOPS_PR_HANDOFF_GH_BIN: gh,
-        OPENLOOPS_PR_HANDOFF_TODOS_BIN: todos,
-        OPENLOOPS_PR_HANDOFF_GIT_BIN: "git",
+        LOOPS_PR_HANDOFF_GH_BIN: gh,
+        LOOPS_PR_HANDOFF_TODOS_BIN: todos,
+        LOOPS_PR_HANDOFF_GIT_BIN: "git",
       };
       // Canary documents that this env reproduces the corruption for explicit exit.
       const canary = spawnSync("bash", ["-lc", "set -e; printf x; exit 0"], { env, encoding: "utf8" });
@@ -1301,7 +1301,7 @@ describe("pr-handoff direct-PR integration", () => {
       expect(result.status).toBe("succeeded");
       // The worker-opened PR was detected and recorded as the handoff result.
       const captured = existsSync(cap) ? readFileSync(cap, "utf8") : "";
-      expect(captured).toContain("openloops:pr-handoff=done");
+      expect(captured).toContain("loops:pr-handoff=done");
       expect(captured).toContain("pr=https://github.com/acme/repo/pull/11");
       // On corruption-reproducing envs (canary === 1) the pre-fix explicit exit 0
       // would have failed pr-handoff and skipped the verifier.

@@ -11,7 +11,9 @@ import {
   type TenantBackfillS3Client,
 } from "./tenant-backfill-s3.js";
 import {
+  LEGACY_OPEN_LOOPS_TENANT_BACKFILL_BUNDLE_SCHEMA,
   loadTenantBackfillBundle,
+  parseTenantBackfillBundle,
   type TenantBackfillBundle,
 } from "./tenant-backfill.js";
 
@@ -26,13 +28,21 @@ const CREDENTIALS = {
 };
 
 const bundle: TenantBackfillBundle = {
-  schema: "open-loops.tenant-backfill/v1",
+  schema: "loops.tenant-backfill/v1",
   tenants: [{ id: "tenant-private-id", slug: "tenant-private-slug", name: "Private Tenant", status: "active" }],
   principals: [{ id: "principal-private-id", kind: "service", displayName: "Private Principal", status: "active" }],
   memberships: [{ tenantId: "tenant-private-id", principalId: "principal-private-id", status: "active", roles: ["service"] }],
   keyBindings: [{ kid: "private-key-id", tenantId: "tenant-private-id", principalId: "principal-private-id", tokenKind: "service" }],
   rowAssignments: [{ table: "loops", rowId: "private-row-id", tenantId: "tenant-private-id" }],
 };
+
+test("tenant backfill uses the canonical schema while accepting legacy approved bundles", () => {
+  expect(bundle.schema).toBe("loops.tenant-backfill/v1");
+  expect(parseTenantBackfillBundle({
+    ...bundle,
+    schema: LEGACY_OPEN_LOOPS_TENANT_BACKFILL_BUNDLE_SCHEMA,
+  }).schema).toBe(LEGACY_OPEN_LOOPS_TENANT_BACKFILL_BUNDLE_SCHEMA);
+});
 
 function approvedObject(bytes: Uint8Array): { key: string; size: number } {
   const digest = createHash("sha256").update(bytes).digest("hex");

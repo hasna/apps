@@ -61,6 +61,20 @@ const legacyTitlePattern = new RegExp(`\\b${legacyTitleBrand}\\b`);
 const legacyUpperPattern = new RegExp(`\\b${legacyUpperBrand}\\b`);
 const legacySpacedPattern = new RegExp(`\\b${legacySpacedBrand}\\b`, "i");
 const legacyHeadingPattern = new RegExp(`^\\s*#{1,6}\\s+(?:about\\s+)?${lowerBrand}\\b`, "i");
+const legacyIdentityTokens = Object.freeze([
+  legacyBrand,
+  lowerLegacyHyphenated,
+  lowerLegacySolid,
+  legacyUpperBrand,
+  ["open", "loops"].join("_"),
+  ["OPEN", "LOOPS"].join("_"),
+  ["Open", "Loops"].join(" "),
+]);
+const identityPolicyFiles = new Set([
+  "config/legacy-identity-allowlist.json",
+  "scripts/check-branding.mjs",
+  "scripts/check-branding.test.mjs",
+]);
 
 export function legacyBrandReason(line) {
   if (legacyCamelPattern.test(line)) return "legacy-camel-brand";
@@ -85,6 +99,7 @@ export function scanTrackedFiles(cwd = process.cwd()) {
   const violations = [];
 
   for (const file of trackedFiles) {
+    if (file === "config/legacy-identity-allowlist.json") continue;
     const contents = readFileSync(`${cwd}/${file}`);
     const lines = contents.toString("utf8").split("\n");
     for (const [index, line] of lines.entries()) {
@@ -97,8 +112,101 @@ export function scanTrackedFiles(cwd = process.cwd()) {
   return violations;
 }
 
+function countToken(contents, token) {
+  let count = 0;
+  let offset = 0;
+  while ((offset = contents.indexOf(token, offset)) !== -1) {
+    count += 1;
+    offset += token.length;
+  }
+  return count;
+}
+
+function matchesIdentityEntry(entry, file) {
+  if (typeof entry.path === "string") return entry.path === file;
+  if (typeof entry.pathPrefix === "string") return file.startsWith(entry.pathPrefix);
+  return false;
+}
+
+export function scanTrackedIdentityTokens(cwd = process.cwd(), suppliedManifest) {
+  const manifest = suppliedManifest
+    ?? JSON.parse(readFileSync(`${cwd}/config/legacy-identity-allowlist.json`, "utf8"));
+  if (manifest.schema !== "loops.legacy-identity-allowlist/v1") {
+    return ["config/legacy-identity-allowlist.json:invalid-schema"];
+  }
+  const entries = Array.isArray(manifest.entries) ? manifest.entries : [];
+  const violations = [];
+  const totals = new Map();
+  const matchedFiles = new Map(entries.map((entry, index) => [index, 0]));
+
+  for (const [index, entry] of entries.entries()) {
+    if (
+      !entry
+      || typeof entry !== "object"
+      || (!entry.path && !entry.pathPrefix)
+      || typeof entry.reason !== "string"
+      || entry.reason.trim().length === 0
+      || typeof entry.removalCondition !== "string"
+      || entry.removalCondition.trim().length === 0
+      || !entry.tokens
+      || typeof entry.tokens !== "object"
+    ) {
+      violations.push(`config/legacy-identity-allowlist.json:entry-${index}:invalid-policy`);
+    }
+  }
+
+  const trackedFiles = execFileSync("git", ["ls-files", "-z"], { cwd, encoding: "utf8" })
+    .split("\0")
+    .filter(Boolean);
+  for (const file of trackedFiles) {
+    if (identityPolicyFiles.has(file)) continue;
+    const contents = readFileSync(`${cwd}/${file}`).toString("utf8");
+    const matching = entries
+      .map((entry, index) => ({ entry, index }))
+      .filter(({ entry }) => matchesIdentityEntry(entry, file));
+    if (matching.length > 1) {
+      violations.push(`${file}:overlapping-identity-policy`);
+      continue;
+    }
+    if (matching.length === 1) {
+      matchedFiles.set(matching[0].index, (matchedFiles.get(matching[0].index) ?? 0) + 1);
+    }
+    for (const token of legacyIdentityTokens) {
+      const count = countToken(contents, token);
+      if (count === 0) continue;
+      if (matching.length === 0 || matching[0].entry.tokens[token] === undefined) {
+        violations.push(`${file}:${token}:unapproved-legacy-identity:${count}`);
+        continue;
+      }
+      const key = `${matching[0].index}\0${token}`;
+      totals.set(key, (totals.get(key) ?? 0) + count);
+    }
+  }
+
+  for (const [index, entry] of entries.entries()) {
+    if ((matchedFiles.get(index) ?? 0) === 0) {
+      violations.push(`config/legacy-identity-allowlist.json:entry-${index}:unmatched-target`);
+    }
+    for (const [token, expected] of Object.entries(entry.tokens ?? {})) {
+      if (!legacyIdentityTokens.includes(token) || !Number.isInteger(expected) || expected < 1) {
+        violations.push(`config/legacy-identity-allowlist.json:entry-${index}:${token}:invalid-count`);
+        continue;
+      }
+      const actual = totals.get(`${index}\0${token}`) ?? 0;
+      if (actual !== expected) {
+        violations.push(`config/legacy-identity-allowlist.json:entry-${index}:${token}:expected-${expected}:actual-${actual}`);
+      }
+    }
+  }
+
+  return violations;
+}
+
 if (import.meta.main) {
-  const violations = scanTrackedFiles();
+  const violations = [
+    ...scanTrackedFiles(),
+    ...scanTrackedIdentityTokens(),
+  ];
   if (violations.length > 0) {
     console.error(`Legacy product branding found outside preserved compatibility/provenance surfaces:\n${violations.join("\n")}`);
     process.exit(1);

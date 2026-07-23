@@ -2131,7 +2131,7 @@ health
                 classification: finding.classification,
               },
               metadata: {
-                source: "openloops.health.scan",
+                source: "loops.health.scan",
                 kind: finding.kind,
                 severity: finding.severity,
                 loop_id: finding.loop?.id,
@@ -2163,7 +2163,7 @@ health
           dryRun: Boolean(opts.dryRun),
           autoRoute: Boolean(opts.autoRoute),
           routeProjectPath: opts.routeProjectPath,
-          source: "openloops.health.scan",
+          source: "loops.health.scan",
           evidence: { kind: "health-scan-route-tasks", dir: opts.evidenceDir ?? opts.reportDir },
           summary: {
             status: scan.status,
@@ -2231,7 +2231,7 @@ health
         dryRun: Boolean(opts.dryRun),
         autoRoute: Boolean(opts.autoRoute),
         routeProjectPath: opts.routeProjectPath,
-        source: "openloops.health.route-tasks",
+        source: "loops.health.route-tasks",
         evidence: { kind: "health-route-tasks", dir: opts.evidenceDir },
         summary: { inspected: report.summary.loops, failures: failures.length },
         tasks: failures.map((expectation) => {
@@ -2243,7 +2243,7 @@ health
             tags: task.tags,
             fingerprint: task.dedupeKey,
             metadata: {
-              source: "openloops.health.route-tasks",
+              source: "loops.health.route-tasks",
               loop_id: expectation.loop.id,
               loop_name: expectation.loop.name,
               run_id: expectation.latestRun?.id,
@@ -2373,7 +2373,7 @@ hygiene
   .description("upsert deduped todos tasks for hygiene findings")
   .option("--checks <list>", "comma-separated hygiene checks: names,duplicates,scripts,all", "all")
   .option("--project <path>", "todos project path", defaultLoopsProject())
-  .option("--task-list <slug>", "todos task-list slug", "openloops-hygiene")
+  .option("--task-list <slug>", "todos task-list slug", "loops-hygiene")
   .option("--limit <n>", "maximum loops to inspect", "1000")
   .option("--max-actions <n>", "maximum todos tasks to upsert", "10")
   .option("--scripts-dir <path>", "script directory to detect for script inventory")
@@ -2408,7 +2408,7 @@ hygiene
         dryRun: Boolean(opts.dryRun),
         autoRoute: Boolean(opts.autoRoute),
         routeProjectPath: opts.routeProjectPath,
-        source: "openloops.hygiene.route-tasks",
+        source: "loops.hygiene.route-tasks",
         evidence: { kind: "hygiene-route-tasks", dir: opts.evidenceDir },
         summary: { checks, checked: route.checked, findings: route.findings },
         tasks: route.tasks.map((task) => ({

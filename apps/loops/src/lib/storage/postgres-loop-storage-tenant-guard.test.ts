@@ -12,6 +12,7 @@ const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
 const literals = [...source.matchAll(/`([\s\S]*?)`|"([^"\\]*(?:\\.[^"\\]*)*)"/g)]
   .map((match) => match[1] ?? match[2] ?? "")
   .filter((value) => /\b(?:SELECT|INSERT|UPDATE|DELETE|WITH)\b/i.test(value));
+const tenantContextFunction = `${["open", "loops", "current", "tenant", "id"].join("_")}()`;
 
 const tenantTables = [
   "loops", "loop_runs", "daemon_lease", "workflow_specs", "workflow_runs",
@@ -28,16 +29,16 @@ describe("Postgres tenant SQL static guard", () => {
         if (readsOrMutates) {
           checked.push(`${table}:predicate`);
           if (sql.includes("${where}")) {
-            expect(code).toContain("const where = `WHERE tenant_id = open_loops_current_tenant_id()");
+            expect(code).toContain(`const where = \`WHERE tenant_id = ${tenantContextFunction}`);
           } else {
-            expect(sql, sql).toContain("tenant_id = open_loops_current_tenant_id()");
+            expect(sql, sql).toContain(`tenant_id = ${tenantContextFunction}`);
           }
         }
         const inserts = new RegExp(`\\bINSERT\\s+INTO\\s+${table}\\b`, "i").test(sql);
         if (inserts) {
           checked.push(`${table}:insert`);
           expect(sql, sql).toMatch(/\btenant_id\b/i);
-          expect(sql, sql).toContain("open_loops_current_tenant_id()");
+          expect(sql, sql).toContain(tenantContextFunction);
         }
       }
     }

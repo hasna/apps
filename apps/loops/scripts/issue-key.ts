@@ -73,7 +73,10 @@ async function main(): Promise<void> {
     try {
       await client.transaction(async (tx) => {
         await tx.execute("SET LOCAL ROLE open_loops_owner");
-        await tx.get("SELECT set_config('open_loops.tenant_id', $1, true)", [tenantId]);
+        await tx.get(
+          "SELECT set_config('loops.tenant_id', $1, true), set_config('open_loops.tenant_id', $1, true)",
+          [tenantId],
+        );
         const membership = await tx.get(
           "SELECT 1 FROM tenant_memberships WHERE tenant_id=$1 AND principal_id=$2 AND status='active'",
           [tenantId, principalId],

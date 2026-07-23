@@ -148,7 +148,7 @@ describe("prompt fragment composition", () => {
     expect(prompt).toContain("- Use the isolated git worktree as the only writeable repository checkout for this task/event.");
     expect(prompt).toContain(`- Original checkout: ${repoPath}`);
     expect(prompt).toContain("- Worktree root: ");
-    expect(prompt).toContain("- Branch: openloops/repo/task-1200-");
+    expect(prompt).toContain("- Branch: loops/repo/task-1200-");
   });
 
   test("lifecycle prompts use bounded step headers instead of native goals", () => {
@@ -181,8 +181,8 @@ describe("prompt fragment composition", () => {
     const planner = agentTargetOf(stepById(lifecycle, "planner")).prompt;
     expect(triage).toContain("The deterministic triage gate will stop later steps unless the latest triage marker is the exact go marker");
     expect(planner).toContain("The deterministic planner gate will stop the worker unless the latest planner marker is the exact go marker");
-    expect(triage).toContain("openloops:triage=go task=task-1200 event=evt-9");
-    expect(planner).toContain("openloops:planner=blocked task=task-1200 event=evt-9");
+    expect(triage).toContain("loops:triage=go task=task-1200 event=evt-9");
+    expect(planner).toContain("loops:planner=blocked task=task-1200 event=evt-9");
   });
 
   test("route admission context is visible in lifecycle prompts", () => {
@@ -243,10 +243,10 @@ describe("prompt fragment composition", () => {
     const planner = agentTargetOf(stepById(lifecycle, "planner")).prompt;
     const worker = agentTargetOf(stepById(lifecycle, "worker")).prompt;
     const verifier = agentTargetOf(stepById(lifecycle, "verifier")).prompt;
-    const triageGoCommand = 'todos --project /srv/todos comment task-1200 "openloops:triage=go task=task-1200 event=evt-9\n<task-specific triage evidence>"';
-    const triageBlockedCommand = 'todos --project /srv/todos comment task-1200 "openloops:triage=blocked task=task-1200 event=evt-9\n<task-specific triage evidence>"';
-    const plannerGoCommand = 'todos --project /srv/todos comment task-1200 "openloops:planner=go task=task-1200 event=evt-9\n<task-specific plan/evidence>"';
-    const plannerBlockedCommand = 'todos --project /srv/todos comment task-1200 "openloops:planner=blocked task=task-1200 event=evt-9\n<task-specific plan/evidence>"';
+    const triageGoCommand = 'todos --project /srv/todos comment task-1200 "loops:triage=go task=task-1200 event=evt-9\n<task-specific triage evidence>"';
+    const triageBlockedCommand = 'todos --project /srv/todos comment task-1200 "loops:triage=blocked task=task-1200 event=evt-9\n<task-specific triage evidence>"';
+    const plannerGoCommand = 'todos --project /srv/todos comment task-1200 "loops:planner=go task=task-1200 event=evt-9\n<task-specific plan/evidence>"';
+    const plannerBlockedCommand = 'todos --project /srv/todos comment task-1200 "loops:planner=blocked task=task-1200 event=evt-9\n<task-specific plan/evidence>"';
 
     for (const prompt of [triage, planner, worker, verifier]) {
       expect(prompt).toContain("Use concrete task-specific text in lifecycle comments.");
@@ -256,11 +256,11 @@ describe("prompt fragment composition", () => {
       expect(prompt).not.toContain("<verification evidence or blocker>");
     }
 
-    expect(triage).toContain("first line is exactly: openloops:triage=go task=task-1200 event=evt-9");
+    expect(triage).toContain("first line is exactly: loops:triage=go task=task-1200 event=evt-9");
     expect(triage).toContain("Do not run a separate generic evidence comment before the marker");
     expect(triage).toContain(triageGoCommand);
     expect(triage).toContain(triageBlockedCommand);
-    expect(planner).toContain("first line is exactly: openloops:planner=go task=task-1200 event=evt-9");
+    expect(planner).toContain("first line is exactly: loops:planner=go task=task-1200 event=evt-9");
     expect(planner).toContain("Do not run a separate generic evidence comment before the marker");
     expect(planner).toContain(plannerGoCommand);
     expect(planner).toContain(plannerBlockedCommand);
@@ -292,7 +292,7 @@ describe("prompt fragment composition", () => {
       shard: "0/6",
       limit: "10",
       maxRepairs: "3",
-      idempotencyKey: "routing-health:open-loops:shard0",
+      idempotencyKey: "routing-health:loops:shard0",
       worktreeRoot,
     });
     expect(workflow.steps.map((step) => step.id)).toEqual(["routing-doctor-preflight", "worker", "verifier"]);
@@ -301,8 +301,8 @@ describe("prompt fragment composition", () => {
     expect(preflight.target.type === "command" ? preflight.target.cwd : undefined).toBe(repoPath);
     expect(preflight.blockedExitCodes).toEqual([12]);
     const preflightCommand = commandOf(preflight);
-    expect(preflightCommand).toContain("OPENLOOPS_ROUTING_REMEDIATION_MAX_REPAIRS='3'");
-    expect(preflightCommand).toContain("OPENLOOPS_ROUTING_REMEDIATION_SCOPE_ARGS='[");
+    expect(preflightCommand).toContain("LOOPS_ROUTING_REMEDIATION_MAX_REPAIRS='3'");
+    expect(preflightCommand).toContain("LOOPS_ROUTING_REMEDIATION_SCOPE_ARGS='[");
     expect(preflightCommand).toContain("\"--shard\",\"0/6\"");
     expect(preflightCommand).toContain("allowedSafeFields = new Set(['working_dir', 'task_list_id'])");
     expect(preflightCommand).toContain("__missing_safe_field__");
@@ -325,7 +325,7 @@ describe("prompt fragment composition", () => {
     const dryRunWorkflow = renderLoopTemplate(ROUTING_REMEDIATION_TEMPLATE_ID, {
       projectPath: repoPath,
       todosProjectPath: "/srv/todos",
-      idempotencyKey: "routing-health:open-loops:dry-run",
+      idempotencyKey: "routing-health:loops:dry-run",
       worktreeRoot,
     });
     expect(agentTargetOf(stepById(dryRunWorkflow, "worker")).prompt).toContain("This workflow was rendered with dryRun=true. Do not run the apply command");
@@ -352,7 +352,7 @@ describe("executor-native worktree specs", () => {
       // The executor's native preparation requires repoRoot, path, and branch.
       expect(worktree?.repoRoot).toBe(resolvedRepoRoot);
       expect(worktree?.path?.startsWith(join(worktreeRoot, "repo"))).toBe(true);
-      expect(worktree?.branch?.startsWith("openloops/repo/")).toBe(true);
+      expect(worktree?.branch?.startsWith("loops/repo/")).toBe(true);
       expect(worktree?.originalCwd).toBe(repoPath);
       expect(agentTargetOf(step).cwd).toBe(worktree?.cwd);
     }
@@ -416,8 +416,8 @@ describe("gate steps", () => {
     const workflow = renderTaskLifecycleWorkflow({ taskId: "task-1200", projectPath: repoPath, worktreeRoot });
     const command = commandOf(stepById(workflow, "triage-gate"));
     expect(command).toContain("process.exit(12);");
-    expect(command).toContain('const goMarker = "openloops:triage=go task=task-1200";');
-    expect(command).toContain('const blockedMarker = "openloops:triage=blocked task=task-1200";');
+    expect(command).toContain('const goMarker = "loops:triage=go task=task-1200";');
+    expect(command).toContain('const blockedMarker = "loops:triage=blocked task=task-1200";');
     expect(command).toContain("bun - <<'BUN'");
   });
 
@@ -432,9 +432,9 @@ describe("gate steps", () => {
     const command = commandOf(step);
     expect(step.dependsOn).toEqual(["worker"]);
     expect(step.timeoutMs).toBe(120000);
-    expect(command).toContain("export OPENLOOPS_PR_HANDOFF_TASK_ID='task-1200'");
-    expect(command).toContain("export OPENLOOPS_PR_HANDOFF_ARTIFACT=");
-    expect(command).toContain("process.env.OPENLOOPS_PR_HANDOFF_EXPECTED_BRANCH");
+    expect(command).toContain("export LOOPS_PR_HANDOFF_TASK_ID='task-1200'");
+    expect(command).toContain("export LOOPS_PR_HANDOFF_ARTIFACT=");
+    expect(command).toContain("process.env.LOOPS_PR_HANDOFF_EXPECTED_BRANCH");
   });
 });
 
@@ -767,7 +767,7 @@ describe("pr-handoff no-artifact / direct-PR path", () => {
     expect(command).toContain("github preflight failed before push/PR");
     expect(command).toContain("github preflight failed before PR lookup");
     // ...and records the same done marker the artifact path records.
-    expect(command).toContain("openloops:pr-handoff=done task=${taskId} pr=${pr.url}");
+    expect(command).toContain("loops:pr-handoff=done task=${taskId} pr=${pr.url}");
     // Artifact (codewith-style) path is preserved unchanged.
     expect(command).toContain("bun - <<'BUN'");
   });
@@ -808,7 +808,7 @@ describe("pr-handoff no-artifact / direct-PR path", () => {
       chmodSync(todos, 0o755);
 
       const command = prHandoffCommand({
-        artifactPath: join(wt, ".openloops", "pr-handoff", "missing.json"),
+        artifactPath: join(wt, ".loops", "pr-handoff", "missing.json"),
         taskId: "task-direct-pr",
         todosProjectPath: wt,
         worktreeCwd: wt,
@@ -819,9 +819,9 @@ describe("pr-handoff no-artifact / direct-PR path", () => {
       const env = {
         HOME: home,
         PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
-        OPENLOOPS_PR_HANDOFF_GH_BIN: gh,
-        OPENLOOPS_PR_HANDOFF_TODOS_BIN: todos,
-        OPENLOOPS_PR_HANDOFF_GIT_BIN: "git",
+        LOOPS_PR_HANDOFF_GH_BIN: gh,
+        LOOPS_PR_HANDOFF_TODOS_BIN: todos,
+        LOOPS_PR_HANDOFF_GIT_BIN: "git",
       };
       // Canary: confirm this env reproduces the login-shell exit-code corruption
       // for an explicit `exit 0` (so the assertions below are neutralization-provable).
@@ -831,7 +831,7 @@ describe("pr-handoff no-artifact / direct-PR path", () => {
       expect(result.status).toBe(0);
       expect(result.stdout).toContain("no PR handoff artifact at");
       const captured = existsSync(cap) ? readFileSync(cap, "utf8") : "";
-      expect(captured).toContain("openloops:pr-handoff=done");
+      expect(captured).toContain("loops:pr-handoff=done");
       expect(captured).toContain("pr=https://github.com/acme/repo/pull/7");
       expect(captured).toContain("branch=feat/direct-pr");
       // On envs that reproduce the corruption (canary === 1) the pre-fix explicit
@@ -865,7 +865,7 @@ describe("pr-handoff no-artifact / direct-PR path", () => {
       chmodSync(todos, 0o755);
 
       const command = prHandoffCommand({
-        artifactPath: join(wt, ".openloops", "pr-handoff", "missing.json"),
+        artifactPath: join(wt, ".loops", "pr-handoff", "missing.json"),
         taskId: "task-no-pr",
         todosProjectPath: wt,
         worktreeCwd: wt,
@@ -875,14 +875,14 @@ describe("pr-handoff no-artifact / direct-PR path", () => {
       const env = {
         HOME: home,
         PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
-        OPENLOOPS_PR_HANDOFF_GH_BIN: gh,
-        OPENLOOPS_PR_HANDOFF_TODOS_BIN: todos,
-        OPENLOOPS_PR_HANDOFF_GIT_BIN: "git",
+        LOOPS_PR_HANDOFF_GH_BIN: gh,
+        LOOPS_PR_HANDOFF_TODOS_BIN: todos,
+        LOOPS_PR_HANDOFF_GIT_BIN: "git",
       };
       const result = spawnSync("bash", ["-lc", command], { env, cwd: wt, encoding: "utf8" });
       expect(result.status).toBe(0);
       const captured = existsSync(cap) ? readFileSync(cap, "utf8") : "";
-      expect(captured).not.toContain("openloops:pr-handoff=done");
+      expect(captured).not.toContain("loops:pr-handoff=done");
     } finally {
       rmSync(home, { recursive: true, force: true });
       rmSync(bin, { recursive: true, force: true });
@@ -919,7 +919,7 @@ describe("pr-handoff no-artifact / direct-PR path", () => {
       chmodSync(todos, 0o755);
 
       const command = prHandoffCommand({
-        artifactPath: join(wt, ".openloops", "pr-handoff", "missing.json"),
+        artifactPath: join(wt, ".loops", "pr-handoff", "missing.json"),
         taskId: "task-network-pr",
         todosProjectPath: wt,
         worktreeCwd: wt,
@@ -929,20 +929,20 @@ describe("pr-handoff no-artifact / direct-PR path", () => {
       const env = {
         HOME: home,
         PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
-        OPENLOOPS_PR_HANDOFF_GH_BIN: gh,
-        OPENLOOPS_PR_HANDOFF_TODOS_BIN: todos,
-        OPENLOOPS_PR_HANDOFF_GIT_BIN: git,
+        LOOPS_PR_HANDOFF_GH_BIN: gh,
+        LOOPS_PR_HANDOFF_TODOS_BIN: todos,
+        LOOPS_PR_HANDOFF_GIT_BIN: git,
       };
       const result = spawnSync("bash", ["-lc", command], { env, cwd: wt, encoding: "utf8" });
       expect(result.status).toBe(0);
       const captured = existsSync(cap) ? readFileSync(cap, "utf8") : "";
       expect(captured).toContain("task\u0000upsert");
-      expect(captured).toContain("openloops:pr-handoff:task-network-pr:feat/direct-pr:abc123");
+      expect(captured).toContain("loops:pr-handoff:task-network-pr:feat/direct-pr:abc123");
       expect(captured).toContain("github preflight failed before PR lookup");
       expect(captured).toContain("https://github.com/acme/repo.git");
       expect(captured).not.toContain("token:secret");
       expect(captured).not.toContain("secret@github.com");
-      expect(captured).toContain("openloops:pr-handoff=pending");
+      expect(captured).toContain("loops:pr-handoff=pending");
       expect(result.stderr).not.toContain("gh should not run");
     } finally {
       rmSync(home, { recursive: true, force: true });
@@ -957,7 +957,7 @@ describe("pr-handoff no-artifact / direct-PR path", () => {
     const wt = mkdtempSync(join(tmpdir(), "loops-prh-wt-"));
     try {
       writeFileSync(join(home, ".bash_logout"), "false\n");
-      const artifactPath = join(wt, ".openloops", "pr-handoff", "task-artifact-pr.json");
+      const artifactPath = join(wt, ".loops", "pr-handoff", "task-artifact-pr.json");
       mkdirSync(dirname(artifactPath), { recursive: true });
       writeFileSync(
         artifactPath,
@@ -1008,20 +1008,20 @@ describe("pr-handoff no-artifact / direct-PR path", () => {
       const env = {
         HOME: home,
         PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
-        OPENLOOPS_PR_HANDOFF_GH_BIN: gh,
-        OPENLOOPS_PR_HANDOFF_TODOS_BIN: todos,
-        OPENLOOPS_PR_HANDOFF_GIT_BIN: git,
+        LOOPS_PR_HANDOFF_GH_BIN: gh,
+        LOOPS_PR_HANDOFF_TODOS_BIN: todos,
+        LOOPS_PR_HANDOFF_GIT_BIN: git,
       };
       const result = spawnSync("bash", ["-lc", command], { env, cwd: wt, encoding: "utf8" });
       expect(result.status).toBe(0);
       const captured = existsSync(cap) ? readFileSync(cap, "utf8") : "";
       expect(captured).toContain("task\u0000upsert");
-      expect(captured).toContain("openloops:pr-handoff:task-artifact-pr:feat/artifact-pr:abc123");
+      expect(captured).toContain("loops:pr-handoff:task-artifact-pr:feat/artifact-pr:abc123");
       expect(captured).toContain("github preflight failed before push/PR");
       expect(captured).toContain("https://github.com/acme/repo.git");
       expect(captured).not.toContain("token:secret");
       expect(captured).not.toContain("secret@github.com");
-      expect(captured).toContain("openloops:pr-handoff=pending");
+      expect(captured).toContain("loops:pr-handoff=pending");
       expect(result.stderr).not.toContain("gh should not run");
     } finally {
       rmSync(home, { recursive: true, force: true });
@@ -1067,7 +1067,7 @@ describe("pr-handoff no-artifact / direct-PR path", () => {
       chmodSync(todos, 0o755);
 
       const command = prHandoffCommand({
-        artifactPath: join(wt, ".openloops", "pr-handoff", "missing.json"),
+        artifactPath: join(wt, ".loops", "pr-handoff", "missing.json"),
         taskId: "task-upsert-fails",
         todosProjectPath: wt,
         worktreeCwd: wt,
@@ -1077,18 +1077,18 @@ describe("pr-handoff no-artifact / direct-PR path", () => {
       const env = {
         HOME: home,
         PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
-        OPENLOOPS_PR_HANDOFF_GH_BIN: gh,
-        OPENLOOPS_PR_HANDOFF_TODOS_BIN: todos,
-        OPENLOOPS_PR_HANDOFF_GIT_BIN: git,
+        LOOPS_PR_HANDOFF_GH_BIN: gh,
+        LOOPS_PR_HANDOFF_TODOS_BIN: todos,
+        LOOPS_PR_HANDOFF_GIT_BIN: git,
       };
       const result = spawnSync("bash", ["-lc", command], { env, cwd: wt, encoding: "utf8" });
       expect(result.status).toBe(0);
       expect(result.stderr).toContain("todos task upsert failed");
       const captured = existsSync(cap) ? readFileSync(cap, "utf8") : "";
       expect(captured).toContain("task\u0000upsert");
-      expect(captured).toContain("openloops:pr-handoff=failed");
+      expect(captured).toContain("loops:pr-handoff=failed");
       expect(captured).toContain("reason=todos-upsert-failed");
-      expect(captured).not.toContain("openloops:pr-handoff=pending");
+      expect(captured).not.toContain("loops:pr-handoff=pending");
       expect(result.stderr).not.toContain("gh should not run");
     } finally {
       rmSync(home, { recursive: true, force: true });

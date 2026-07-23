@@ -67,7 +67,7 @@ export interface LoopExpectationResult {
   latestRun?: LoopRun;
   failure?: RunFailureSignal;
   route: {
-    source: "openloops";
+    source: "loops";
     kind: "loop_expectation";
     loopId: string;
     loopName: string;
@@ -234,7 +234,7 @@ function stableFingerprint(parts: string[]): string {
 }
 
 function stableScanFingerprint(parts: string[]): string {
-  return `openloops:health-scan:${stableFingerprint(parts)}`;
+  return `loops:health-scan:${stableFingerprint(parts)}`;
 }
 
 function safeHost(value: string | undefined): string | undefined {
@@ -432,7 +432,7 @@ function priorityForSeverity(severity: HealthScanFindingSeverity): RecommendedTa
 }
 
 function recommendedFindingTask(finding: Omit<HealthScanFinding, "recommendedTask">, route: LoopExpectationResult["route"] | undefined): RecommendedTaskUpsert {
-  const tags = ["bug", "openloops", "loops", "loop-health", finding.kind];
+  const tags = ["bug", "loops", "loop-health", finding.kind];
   if (finding.classification) tags.push(finding.classification);
   const description = [
     `Loops health scan found a ${finding.kind} issue.`,
@@ -471,7 +471,7 @@ function recommendedFindingTask(finding: Omit<HealthScanFinding, "recommendedTas
         priority: priorityForSeverity(finding.severity),
         tags,
         dedupeKey: finding.fingerprint,
-        routeSource: route?.source ?? "openloops",
+        routeSource: route?.source ?? "loops",
         routeKind: route?.kind ?? "health_scan",
         routeLoopId: finding.loop?.id ?? "",
         routeLoopName: finding.loop?.name ?? "",
@@ -487,7 +487,7 @@ function daemonFinding(daemon: DaemonStatus): HealthScanFinding | undefined {
   const finding: Omit<HealthScanFinding, "recommendedTask"> = {
     kind: "daemon",
     severity,
-    fingerprint: `openloops:health-scan:daemon:${daemon.stale ? "stale" : "not-running"}`,
+    fingerprint: `loops:health-scan:daemon:${daemon.stale ? "stale" : "not-running"}`,
     title: "Loops daemon health issue",
     message: reason,
   };
@@ -532,7 +532,7 @@ function latestRunFinding(expectation: LoopExpectationResult): HealthScanFinding
   return {
     kind: "latest-run",
     severity,
-    fingerprint: expectation.recommendedTask?.dedupeKey ?? `openloops:${expectation.loop.id}:${failure.fingerprint}`,
+    fingerprint: expectation.recommendedTask?.dedupeKey ?? `loops:${expectation.loop.id}:${failure.fingerprint}`,
     title: expectation.recommendedTask?.title ?? `Loops latest run failed - ${expectation.loop.name}`,
     message: expectation.check.message,
     loop: expectation.loop,
@@ -550,7 +550,7 @@ function staleRunningFinding(loop: Loop, expectation: LoopExpectationResult, now
   const threshold = Math.max(loop.leaseMs, staleRunningMs, MIN_STALE_RUNNING_MS);
   const age = ageMs(run, now);
   if (age <= threshold) return undefined;
-  const fingerprint = `openloops:health-scan:stale-running:${loop.id}:${run.id}`;
+  const fingerprint = `loops:health-scan:stale-running:${loop.id}:${run.id}`;
   const message = `active loop latest run is still running after ${age}ms (threshold ${threshold}ms)`;
   const finding: Omit<HealthScanFinding, "recommendedTask"> = {
     kind: "stale-running",
@@ -793,7 +793,7 @@ function detectRouteFunctionalFailure(store: Store, loop: Loop, run: LoopRun): R
 function targetRoute(loop: Loop): LoopExpectationResult["route"] {
   if (loop.target.type === "agent") {
     return {
-      source: "openloops",
+      source: "loops",
       kind: "loop_expectation",
       loopId: loop.id,
       loopName: loop.name,
@@ -803,7 +803,7 @@ function targetRoute(loop: Loop): LoopExpectationResult["route"] {
   }
   if (loop.target.type === "command") {
     return {
-      source: "openloops",
+      source: "loops",
       kind: "loop_expectation",
       loopId: loop.id,
       loopName: loop.name,
@@ -811,7 +811,7 @@ function targetRoute(loop: Loop): LoopExpectationResult["route"] {
     };
   }
   return {
-    source: "openloops",
+    source: "loops",
     kind: "loop_expectation",
     loopId: loop.id,
     loopName: loop.name,
@@ -854,10 +854,10 @@ function recommendedTask(loop: Loop, run: LoopRun, failure: RunFailureSignal, ro
     failure.evidence.error ? `Error:\n${failure.evidence.error}` : undefined,
     failure.evidence.stderr ? `Stderr:\n${failure.evidence.stderr}` : undefined,
   ].filter(Boolean).join("\n\n");
-  const dedupeKey = `openloops:${loop.id}:${failure.fingerprint}`;
+  const dedupeKey = `loops:${loop.id}:${failure.fingerprint}`;
   // "loops" is the tag control-room consumers query on; without it the
   // auto-filed failure tasks had no consumer. Keep the legacy tags too.
-  const tags = ["bug", "openloops", "loops", "loop-health", failure.classification];
+  const tags = ["bug", "loops", "loop-health", failure.classification];
   const priority = isHighPriorityFailure(failure.classification) ? "high" : "medium";
   return {
     title,

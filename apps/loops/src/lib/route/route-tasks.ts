@@ -232,7 +232,7 @@ export function buildHygieneRouteTasks(
     const report = buildNameHygieneReport(store, { includeInactive: opts.includeInactive, limit });
     checked.names = report.checked;
     for (const change of report.changes.filter((entry) => entry.changed)) {
-      const fingerprint = `openloops:hygiene:names:${change.id}:${stableHash([change.oldName, change.newName])}`;
+      const fingerprint = `loops:hygiene:names:${change.id}:${stableHash([change.oldName, change.newName])}`;
       tasks.push({
         check: "names",
         title: `Loops hygiene: rename loop ${change.oldName}`,
@@ -249,10 +249,10 @@ export function buildHygieneRouteTasks(
           "- Do not dispatch work by tmux.",
         ].join("\n"),
         priority: "low",
-        tags: ["openloops", "hygiene", "name-hygiene"],
+        tags: ["loops", "hygiene", "name-hygiene"],
         fingerprint,
         metadata: {
-          source: "openloops.hygiene.route-tasks",
+          source: "loops.hygiene.route-tasks",
           check: "names",
           loop_id: change.id,
           old_name: change.oldName,
@@ -270,7 +270,7 @@ export function buildHygieneRouteTasks(
     checked.duplicates = report.checked;
     for (const group of report.groups) {
       const loopIds = group.loops.map((loop) => loop.id).sort();
-      const fingerprint = `openloops:hygiene:duplicates:${stableHash([group.key, loopIds])}`;
+      const fingerprint = `loops:hygiene:duplicates:${stableHash([group.key, loopIds])}`;
       tasks.push({
         check: "duplicates",
         title: `Loops hygiene: duplicate/overlapping loops - ${group.baseName}`,
@@ -290,10 +290,10 @@ export function buildHygieneRouteTasks(
           "- Do not dispatch work by tmux.",
         ].filter(Boolean).join("\n"),
         priority: group.loops.some((loop) => loop.status === "active") ? "medium" : "low",
-        tags: ["openloops", "hygiene", "duplicate-overlap"],
+        tags: ["loops", "hygiene", "duplicate-overlap"],
         fingerprint,
         metadata: {
-          source: "openloops.hygiene.route-tasks",
+          source: "loops.hygiene.route-tasks",
           check: "duplicates",
           base_name: group.baseName,
           cwd: group.cwd,
@@ -309,7 +309,7 @@ export function buildHygieneRouteTasks(
     const report = buildScriptInventoryReport(store, { includeInactive: opts.includeInactive, limit, scriptsDir: opts.scriptsDir });
     checked.scripts = report.checked;
     for (const loop of report.loops) {
-      const fingerprint = `openloops:hygiene:scripts:${loop.id}:${stableHash([loop.command])}`;
+      const fingerprint = `loops:hygiene:scripts:${loop.id}:${stableHash([loop.command])}`;
       tasks.push({
         check: "scripts",
         title: `Loops hygiene: replace script-backed loop ${loop.name}`,
@@ -328,10 +328,10 @@ export function buildHygieneRouteTasks(
           "- Do not dispatch work by tmux.",
         ].filter(Boolean).join("\n"),
         priority: loop.status === "active" ? "medium" : "low",
-        tags: ["openloops", "hygiene", "script-backed-loop"],
+        tags: ["loops", "hygiene", "script-backed-loop"],
         fingerprint,
         metadata: {
-          source: "openloops.hygiene.route-tasks",
+          source: "loops.hygiene.route-tasks",
           check: "scripts",
           loop_id: loop.id,
           loop_name: loop.name,

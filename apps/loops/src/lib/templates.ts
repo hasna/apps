@@ -408,7 +408,7 @@ function worktreePlan(input: AgentWorkflowTemplateBaseInput, seed: string): Work
   const cwd = relativeCwd && !relativeCwd.startsWith("..") && !isAbsolute(relativeCwd)
     ? join(worktreePath, relativeCwd)
     : worktreePath;
-  const branchPrefix = (input.worktreeBranchPrefix?.trim() || "openloops").replace(/^\/+|\/+$/g, "") || "openloops";
+  const branchPrefix = (input.worktreeBranchPrefix?.trim() || "loops").replace(/^\/+|\/+$/g, "") || "loops";
   const branch = `${branchPrefix}/${repoSlug}/${seedSlug}`;
   return {
     mode,
@@ -618,7 +618,7 @@ function lifecycleGateStep(opts: LifecycleGateStepOptions): GateWorkflowStep {
 }
 
 function prHandoffArtifactPath(plan: WorktreePlan, taskId: string): string {
-  return join(plan.cwd, ".openloops", "pr-handoff", `${slugSegment(taskId, "task")}.json`);
+  return join(plan.cwd, ".loops", "pr-handoff", `${slugSegment(taskId, "task")}.json`);
 }
 
 function prHandoffStep(input: TodosTaskWorkflowTemplateInput, plan: WorktreePlan, todosProjectPath: string): WorkflowStep {
@@ -850,7 +850,7 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
     prHandoffGuidance,
   ].join("\n");
   const gateMarker = (stage: LifecycleGateStage, state: "go" | "blocked"): string =>
-    `openloops:${stage}=${state} task=${input.taskId}${input.eventId ? ` event=${input.eventId}` : ""}`;
+    `loops:${stage}=${state} task=${input.taskId}${input.eventId ? ` event=${input.eventId}` : ""}`;
   const blockTaskCommand = `todos --project ${todosProjectPath} update ${input.taskId} --status blocked`;
   const markerCommentCommand = (stage: LifecycleGateStage, state: "go" | "blocked", evidencePlaceholder: string): string =>
     `todos --project ${todosProjectPath} comment ${input.taskId} "${gateMarker(stage, state)}\n<${evidencePlaceholder}>"`;
@@ -1001,7 +1001,7 @@ export function renderRoutingRemediationWorkflow(input: RoutingRemediationWorkfl
   if (!Number.isInteger(maxRepairs) || maxRepairs < 0) throw new Error("maxRepairs must be a non-negative integer");
   const dryRun = input.dryRun ?? true;
   const plan = worktreePlan(input, idempotencyKey);
-  const evidenceDir = input.evidenceDir ?? join(input.projectPath, ".openloops", "routing-remediation");
+  const evidenceDir = input.evidenceDir ?? join(input.projectPath, ".loops", "routing-remediation");
   const undoDir = input.undoDir ?? evidenceDir;
   const doctorOutputPath = join(evidenceDir, `routing-doctor-${runId}.json`);
   const preflightOutputPath = join(evidenceDir, `routing-remediation-preflight-${runId}.json`);

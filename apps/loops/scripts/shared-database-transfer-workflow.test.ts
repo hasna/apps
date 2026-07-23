@@ -12,7 +12,7 @@ describe("shared database transfer workflow contract", () => {
     expect(workflow).toMatch(/permissions:\n  contents: read\n  id-token: write/);
     expect(workflow).toContain("runs-on: ubuntu-24.04-arm");
     expect(workflow).toContain("cancel-in-progress: false");
-    expect(workflow).toContain('if [[ "${CONFIRMATION}" != "transfer openloops shared source" ]]');
+    expect(workflow).toContain('if [[ "${CONFIRMATION}" != "transfer loops shared source" ]]');
     expect(workflow).toContain("aws-actions/configure-aws-credentials@");
     expect(workflow).toContain("role-to-assume: ${{ vars.AWS_ROLE_ARN }}");
   });

@@ -100,7 +100,10 @@ assert(noauth.status === 401, `unauth /v1 -> ${noauth.status} (expected 401)`);
 const minted = await mintApiKey({ app: "loops", agent: principalId, scopes: ["loops:*"], signingSecret });
 await migratorClient.transaction(async (tx) => {
   await tx.execute("SET LOCAL ROLE open_loops_owner");
-  await tx.get("SELECT set_config('open_loops.tenant_id', $1, true)", [tenantId]);
+  await tx.get(
+    "SELECT set_config('loops.tenant_id', $1, true), set_config('open_loops.tenant_id', $1, true)",
+    [tenantId],
+  );
   await tx.execute(
     `INSERT INTO api_keys(kid, app, agent, scopes, token_hash, issued_at, expires_at, created_by,
        tenant_id, principal_id, token_kind)
@@ -134,7 +137,10 @@ assert(deleted.deleted === true, "deleteLoop");
 // Revocation takes effect
 await migratorClient.transaction(async (tx) => {
   await tx.execute("SET LOCAL ROLE open_loops_owner");
-  await tx.get("SELECT set_config('open_loops.tenant_id', $1, true)", [tenantId]);
+  await tx.get(
+    "SELECT set_config('loops.tenant_id', $1, true), set_config('open_loops.tenant_id', $1, true)",
+    [tenantId],
+  );
   await tx.execute("UPDATE api_keys SET revoked_at=now(), revoked_reason='smoke-cleanup' WHERE tenant_id=$1 AND kid=$2", [tenantId, minted.kid]);
 });
 const afterRevoke = await fetch(`${base}/v1/loops`, { headers: { "x-api-key": minted.token } });

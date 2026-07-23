@@ -5,7 +5,10 @@ import { join } from "node:path";
 import type { AppliedStorageMigration } from "./contract.js";
 import { PgPoolExecutor } from "./pg-executor.js";
 import { PostgresStorage } from "./postgres.js";
-import { POSTGRES_STORAGE_MIGRATIONS } from "./postgres-schema.js";
+import {
+  POSTGRES_MIGRATION_LEDGER_TABLE,
+  POSTGRES_STORAGE_MIGRATIONS,
+} from "./postgres-schema.js";
 
 export const SHARED_TRANSFER_SOURCE_DSN_ENV = "HASNA_LOOPS_TRANSFER_SOURCE_DATABASE_URL";
 export const SHARED_TRANSFER_TARGET_DSN_ENV = "HASNA_LOOPS_TRANSFER_TARGET_DATABASE_URL";
@@ -120,13 +123,13 @@ export interface TransferHash {
 }
 
 export interface TransferEvidence {
-  schema: "open-loops.shared-to-dedicated-transfer/v1";
+  schema: "loops.shared-to-dedicated-transfer/v1";
   executedAt: string;
   command: readonly string[];
   source: { database: typeof SHARED_TRANSFER_SOURCE_DATABASE };
   target: { database: typeof SHARED_TRANSFER_TARGET_DATABASE };
   archive: {
-    file: "openloops-allowlist.dump";
+    file: "loops-allowlist.dump";
     sha256: string;
     cleaned: boolean;
   };
@@ -171,10 +174,10 @@ export async function runSharedToDedicatedTransfer(opts: SharedTransferOptions =
 
   const runner = opts.runner ?? defaultCommandRunner;
   const migrateTargetThrough = opts.migrateTargetThrough ?? defaultMigrateTargetThrough;
-  const archiveDir = mkdtempSync(join(tmpdir(), "openloops-transfer-"));
+  const archiveDir = mkdtempSync(join(tmpdir(), "loops-transfer-"));
   chmodSync(archiveDir, 0o700);
   const serviceFile = join(archiveDir, "pg_service.conf");
-  const archivePath = join(archiveDir, "openloops-allowlist.dump");
+  const archivePath = join(archiveDir, "loops-allowlist.dump");
   let evidence: TransferEvidence | undefined;
 
   try {
@@ -184,14 +187,14 @@ export async function runSharedToDedicatedTransfer(opts: SharedTransferOptions =
 
     await verifyPgClientVersions(runner, pgEnv);
     const sourceLedger = assertLedgerContainsExpected(
-      await readLedgerRows(runner, pgEnv, "openloops_transfer_source"),
+      await readLedgerRows(runner, pgEnv, "loops_transfer_source"),
       SHARED_TRANSFER_TARGET_BASE_THROUGH,
       "source",
     );
     const sourceQuiescence = await readJsonRows<{ check_name: string; active_count: string | number }>(
       runner,
       pgEnv,
-      "openloops_transfer_source",
+      "loops_transfer_source",
       quiescenceSql(),
     );
     const active = sourceQuiescence.filter((row) => Number(row.active_count) !== 0);
@@ -202,14 +205,14 @@ export async function runSharedToDedicatedTransfer(opts: SharedTransferOptions =
       SHARED_TRANSFER_TARGET_BASE_THROUGH,
       "target",
     );
-    const sourceCounts = await readCounts(runner, pgEnv, "openloops_transfer_source", true);
-    const sourceHashes = await readTableHashes(runner, pgEnv, "openloops_transfer_source", true);
+    const sourceCounts = await readCounts(runner, pgEnv, "loops_transfer_source", true);
+    const sourceHashes = await readTableHashes(runner, pgEnv, "loops_transfer_source", true);
 
     await runChecked(runner, pgDumpCommand(archivePath), { env: pgEnv });
     const archiveSha256 = sha256File(archivePath);
     await runChecked(runner, pgRestoreCommand(archivePath), { env: pgEnv });
-    const targetBaseCounts = await readCounts(runner, pgEnv, "openloops_transfer_target", false);
-    const targetBaseHashes = await readTableHashes(runner, pgEnv, "openloops_transfer_target", false);
+    const targetBaseCounts = await readCounts(runner, pgEnv, "loops_transfer_target", false);
+    const targetBaseHashes = await readTableHashes(runner, pgEnv, "loops_transfer_target", false);
     assertCountsMatch(
       sourceCounts.filter((row) => row.table_name !== "api_keys"),
       targetBaseCounts,
@@ -226,29 +229,29 @@ export async function runSharedToDedicatedTransfer(opts: SharedTransferOptions =
       SHARED_TRANSFER_TARGET_PREPARE_THROUGH,
       "target",
     );
-    const apiKeysCsv = await runChecked(runner, psqlCopyApiKeysCommand("openloops_transfer_source"), { env: pgEnv });
+    const apiKeysCsv = await runChecked(runner, psqlCopyApiKeysCommand("loops_transfer_source"), { env: pgEnv });
     const apiKeyRows = countCsvRows(apiKeysCsv.stdout);
-    await runChecked(runner, psqlCopyApiKeysInCommand("openloops_transfer_target"), {
+    await runChecked(runner, psqlCopyApiKeysInCommand("loops_transfer_target"), {
       env: pgEnv,
       input: apiKeysCsv.stdout,
     });
 
-    const targetCounts = await readCounts(runner, pgEnv, "openloops_transfer_target", true);
+    const targetCounts = await readCounts(runner, pgEnv, "loops_transfer_target", true);
     assertCountsMatch(sourceCounts.filter((row) => row.table_name === "api_keys"), targetCounts.filter((row) => row.table_name === "api_keys"), "api_keys");
-    const targetApiKeyHash = await readApiKeysHash(runner, pgEnv, "openloops_transfer_target");
+    const targetApiKeyHash = await readApiKeysHash(runner, pgEnv, "loops_transfer_target");
     assertHashesMatch(sourceHashes.filter((row) => row.table === "api_keys"), [targetApiKeyHash], "api_keys");
     const targetHashes = [...targetBaseHashes, targetApiKeyHash];
-    const nonLoopRows = await readScalarNumber(runner, pgEnv, "openloops_transfer_target", nonLoopApiKeysSql());
+    const nonLoopRows = await readScalarNumber(runner, pgEnv, "loops_transfer_target", nonLoopApiKeysSql());
     const orphanChecks = await readJsonRows<{ check_name: string; orphan_count: string | number }>(
       runner,
       pgEnv,
-      "openloops_transfer_target",
+      "loops_transfer_target",
       orphanSql(),
     );
     const unexpectedTargetObjects = await readJsonRows<{ object_name: string; object_kind: string }>(
       runner,
       pgEnv,
-      "openloops_transfer_target",
+      "loops_transfer_target",
       unexpectedTargetObjectsSql(),
     );
 
@@ -260,12 +263,12 @@ export async function runSharedToDedicatedTransfer(opts: SharedTransferOptions =
     }
 
     evidence = {
-      schema: "open-loops.shared-to-dedicated-transfer/v1",
+      schema: "loops.shared-to-dedicated-transfer/v1",
       executedAt: (opts.now ?? (() => new Date()))().toISOString(),
       command: SHARED_TRANSFER_FIXED_COMMAND,
       source: { database: SHARED_TRANSFER_SOURCE_DATABASE },
       target: { database: SHARED_TRANSFER_TARGET_DATABASE },
-      archive: { file: "openloops-allowlist.dump", sha256: archiveSha256, cleaned: false },
+      archive: { file: "loops-allowlist.dump", sha256: archiveSha256, cleaned: false },
       ledgers: {
         sourceContains0001Through0007: sourceLedger,
         targetExact0001Through0007: targetBaseLedger,
@@ -297,10 +300,10 @@ export async function runSharedToDedicatedTransfer(opts: SharedTransferOptions =
 
 export function buildPgServiceFile(sourceDsn: string, targetDsn: string): string {
   return [
-    "[openloops_transfer_source]",
+    "[loops_transfer_source]",
     ...dsnToServiceLines(sourceDsn),
     "",
-    "[openloops_transfer_target]",
+    "[loops_transfer_target]",
     ...dsnToServiceLines(targetDsn),
     "",
   ].join("\n");
@@ -353,7 +356,7 @@ export function assertLedgerContainsExpected(
 export function pgDumpCommand(archivePath: string): readonly string[] {
   return [
     "pg_dump",
-    "--dbname=service=openloops_transfer_source",
+    "--dbname=service=loops_transfer_source",
     "--format=custom",
     "--data-only",
     "--no-owner",
@@ -366,7 +369,7 @@ export function pgDumpCommand(archivePath: string): readonly string[] {
 export function pgRestoreCommand(archivePath: string): readonly string[] {
   return [
     "pg_restore",
-    "--dbname=service=openloops_transfer_target",
+    "--dbname=service=loops_transfer_target",
     "--data-only",
     "--no-owner",
     "--no-privileges",
@@ -376,7 +379,7 @@ export function pgRestoreCommand(archivePath: string): readonly string[] {
   ];
 }
 
-function psqlCommand(service: "openloops_transfer_source" | "openloops_transfer_target", sql: string): readonly string[] {
+function psqlCommand(service: "loops_transfer_source" | "loops_transfer_target", sql: string): readonly string[] {
   return [
     "psql",
     "--no-psqlrc",
@@ -390,14 +393,14 @@ function psqlCommand(service: "openloops_transfer_source" | "openloops_transfer_
   ];
 }
 
-function psqlCopyApiKeysCommand(service: "openloops_transfer_source"): readonly string[] {
+function psqlCopyApiKeysCommand(service: "loops_transfer_source"): readonly string[] {
   return psqlCommand(
     service,
     `COPY (SELECT ${SHARED_TRANSFER_API_KEY_COLUMNS.map(quoteIdent).join(", ")} FROM public.api_keys WHERE app = 'loops' ORDER BY kid) TO STDOUT WITH (FORMAT csv, NULL '\\N')`,
   );
 }
 
-function psqlCopyApiKeysInCommand(service: "openloops_transfer_target"): readonly string[] {
+function psqlCopyApiKeysInCommand(service: "loops_transfer_target"): readonly string[] {
   return psqlCommand(
     service,
     `COPY public.api_keys (${SHARED_TRANSFER_API_KEY_COLUMNS.map(quoteIdent).join(", ")}) FROM STDIN WITH (FORMAT csv, NULL '\\N')`,
@@ -406,7 +409,7 @@ function psqlCopyApiKeysInCommand(service: "openloops_transfer_target"): readonl
 
 function ledgerSql(): string {
   return jsonRowsSql(
-    `SELECT id, checksum, applied_at AS "appliedAt" FROM public.open_loops_schema_migrations ORDER BY id`,
+    `SELECT id, checksum, applied_at AS "appliedAt" FROM public.${POSTGRES_MIGRATION_LEDGER_TABLE} ORDER BY id`,
   );
 }
 
@@ -512,7 +515,7 @@ async function verifyPgClientVersions(runner: CommandRunner, env: Record<string,
 async function readLedgerRows(
   runner: CommandRunner,
   env: Record<string, string>,
-  service: "openloops_transfer_source" | "openloops_transfer_target",
+  service: "loops_transfer_source" | "loops_transfer_target",
 ): Promise<AppliedStorageMigration[]> {
   return readJsonRows<AppliedStorageMigration>(runner, env, service, ledgerSql());
 }
@@ -520,7 +523,7 @@ async function readLedgerRows(
 async function readCounts(
   runner: CommandRunner,
   env: Record<string, string>,
-  service: "openloops_transfer_source" | "openloops_transfer_target",
+  service: "loops_transfer_source" | "loops_transfer_target",
   includeApiKeys: boolean,
 ): Promise<TransferCount[]> {
   return readJsonRows<TransferCount>(runner, env, service, countsSql(includeApiKeys));
@@ -529,7 +532,7 @@ async function readCounts(
 async function readTableHashes(
   runner: CommandRunner,
   env: Record<string, string>,
-  service: "openloops_transfer_source" | "openloops_transfer_target",
+  service: "loops_transfer_source" | "loops_transfer_target",
   includeApiKeys: boolean,
 ): Promise<TransferHash[]> {
   const hashes: TransferHash[] = [];
@@ -547,7 +550,7 @@ async function readTableHashes(
 async function readApiKeysHash(
   runner: CommandRunner,
   env: Record<string, string>,
-  service: "openloops_transfer_source" | "openloops_transfer_target",
+  service: "loops_transfer_source" | "loops_transfer_target",
 ): Promise<TransferHash> {
   const result = await runChecked(runner, psqlCommand(service, apiKeysHashSql()), { env });
   return { table: "api_keys", sha256: sha256Text(result.stdout) };
@@ -556,7 +559,7 @@ async function readApiKeysHash(
 async function readJsonRows<T>(
   runner: CommandRunner,
   env: Record<string, string>,
-  service: "openloops_transfer_source" | "openloops_transfer_target",
+  service: "loops_transfer_source" | "loops_transfer_target",
   sql: string,
 ): Promise<T[]> {
   const result = await runChecked(runner, psqlCommand(service, sql), { env });
@@ -566,7 +569,7 @@ async function readJsonRows<T>(
 async function readScalarNumber(
   runner: CommandRunner,
   env: Record<string, string>,
-  service: "openloops_transfer_source" | "openloops_transfer_target",
+  service: "loops_transfer_source" | "loops_transfer_target",
   sql: string,
 ): Promise<number> {
   const result = await runChecked(runner, psqlCommand(service, sql), { env });
@@ -618,7 +621,7 @@ function buildPgEnv(env: NodeJS.ProcessEnv, serviceFile: string): Record<string,
     PATH: env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
     PGSERVICEFILE: serviceFile,
     PGCONNECT_TIMEOUT: env.PGCONNECT_TIMEOUT ?? "10",
-    PGAPPNAME: "openloops-shared-to-dedicated-transfer",
+    PGAPPNAME: "loops-shared-to-dedicated-transfer",
   };
   for (const name of ["PGSSLROOTCERT", "SSL_CERT_FILE", "SSL_CERT_DIR"]) {
     const value = env[name]?.trim();

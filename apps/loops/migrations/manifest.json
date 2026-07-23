@@ -60,6 +60,11 @@
       "id": "0010_tenant_enforce",
       "file": "0010_tenant_enforce.sql",
       "checksum": "sha256:f923c70c2960e0372b4c01c5f01d9432fa0c76b24921c616dc149fa191409053"
+    },
+    {
+      "id": "0013_loops_identity_aliases",
+      "file": "0013_loops_identity_aliases.sql",
+      "checksum": "sha256:01286e430aecdd1caad2ade1f3ca36abd9dd51695959333ed88253feab48a725"
     }
   ]
 }

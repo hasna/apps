@@ -1921,7 +1921,7 @@ describe("loops-api foundation", () => {
           loop_id: "loop-api",
           run_id: "run-api",
           machine: "spark01",
-          repo: "/workspace/open-loops",
+          repo: "/workspace/loops",
           task_ids: ["task-api"],
           knowledge_ids: ["knowledge-api"],
           status: "succeeded",

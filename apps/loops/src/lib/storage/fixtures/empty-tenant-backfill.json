@@ -1,5 +1,5 @@
 {
-  "schema": "open-loops.tenant-backfill/v1",
+  "schema": "loops.tenant-backfill/v1",
   "tenants": [
     { "id": "tenant-a", "slug": "tenant-a", "name": "Tenant A", "status": "active" },
     { "id": "tenant-b", "slug": "tenant-b", "name": "Tenant B", "status": "active" }
