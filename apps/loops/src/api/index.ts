@@ -153,7 +153,8 @@ export interface LoopsApiServerOptions {
   readyCheck?: () => Promise<{
     ready: boolean;
     code?: "storage_unconfigured" | "storage_unreachable" | "auth_unreachable" | "unsafe_database_role" |
-      "pending_migrations" | "unknown_migrations" | "migration_checksum_mismatch";
+      "unsafe_identity_catalog" | "pending_migrations" | "unknown_migrations" |
+      "migration_checksum_mismatch";
   }>;
 }
 
@@ -192,6 +193,7 @@ const PUBLIC_READINESS_CODES = new Set([
   "storage_unreachable",
   "auth_unreachable",
   "unsafe_database_role",
+  "unsafe_identity_catalog",
   "pending_migrations",
   "unknown_migrations",
   "migration_checksum_mismatch",

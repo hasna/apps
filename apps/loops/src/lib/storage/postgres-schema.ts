@@ -15,8 +15,17 @@ export function checksumStorageSql(sql: string): string {
   return `sha256:${createHash("sha256").update(normalized).digest("hex")}`;
 }
 
-function migration(id: string, sql: string): StorageMigration {
-  return Object.freeze({ id, sql: sql.trim(), checksum: checksumStorageSql(sql) });
+function migration(
+  id: string,
+  sql: string,
+  rollingDeploy?: StorageMigration["rollingDeploy"],
+): StorageMigration {
+  return Object.freeze({
+    id,
+    sql: sql.trim(),
+    checksum: checksumStorageSql(sql),
+    ...(rollingDeploy ? { rollingDeploy: Object.freeze(rollingDeploy) } : {}),
+  });
 }
 
 export const POSTGRES_TENANT_BOOTSTRAP_ROLES_SQL = `
@@ -1859,5 +1868,12 @@ $loops_identity_postconditions$;
 REVOKE CREATE ON SCHEMA public FROM open_loops_owner, open_loops_migrator;
 GRANT USAGE ON SCHEMA public TO open_loops_owner, open_loops_migrator;
     `,
+    {
+      kind: "canonical_identity_aliases",
+      allowAsSolePending: true,
+      preApplyCatalogState: "aliases_absent",
+      postApplyCatalogState: "aliases_exact",
+      repair: "transactional_reapply",
+    },
   ),
 ]);

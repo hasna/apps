@@ -11,10 +11,13 @@
 
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import pg from "pg";
+import type { PoolQueryClient } from "../../generated/storage-kit/query.js";
 import { PgPoolExecutor } from "./pg-executor.js";
 import { PostgresStorage } from "./postgres.js";
 import { PostgresLoopStorage } from "./postgres-loop-storage.js";
-import { POSTGRES_STORAGE_MIGRATIONS } from "./postgres-schema.js";
+import { POSTGRES_STORAGE_MIGRATIONS, checksumStorageSql } from "./postgres-schema.js";
+import { createLoopsApiServer } from "../../api/index.js";
+import type { LoopStorageContract } from "./contract.js";
 import {
   AmbiguousNameError,
   DuplicateWorkflowEventError,
@@ -27,8 +30,11 @@ import {
 import {
   assertTenantEnforcementBootstrap,
   assertTenantEnforcementBootstrapIfPending,
+  createServeReadinessCheck,
   isCanonicalIdentityAliasStateSafe,
   isSafeServiceConnection,
+  repairCanonicalIdentityCatalog,
+  type IdentityCatalogRepairReceipt,
 } from "../../serve/index.js";
 import type { CreateLoopInput, Loop, LoopRun, WorkflowSpec, WorkflowStepRun } from "../../types.js";
 import { waitUntil } from "../../test-helpers.js";
@@ -104,6 +110,45 @@ async function adminQuery<T extends Record<string, unknown>>(sql: string): Promi
     return (await client.query<T>(sql)).rows;
   } finally {
     await client.end();
+  }
+}
+
+type ReadinessProbe = {
+  status: number;
+  body: {
+    status?: string;
+    code?: string;
+  };
+};
+
+async function requestActualReadiness(
+  schema: PostgresStorage,
+  runtimeClient: PoolQueryClient,
+  authClient: PoolQueryClient,
+): Promise<ReadinessProbe> {
+  const server = createLoopsApiServer({
+    host: "127.0.0.1",
+    port: 0,
+    authenticator: {
+      authenticate: async () => ({
+        ok: false as const,
+        status: 401 as const,
+        reason: "not_used_by_foundation_probe",
+        message: "not used by foundation probe",
+        requestId: "readiness-foundation-probe",
+      }),
+    },
+    withTenantStorage: (_principal, fn) => fn({} as LoopStorageContract),
+    readyCheck: createServeReadinessCheck({ schema, runtimeClient, authClient }),
+  });
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.port}/ready`);
+    return {
+      status: response.status,
+      body: await response.json() as ReadinessProbe["body"],
+    };
+  } finally {
+    server.stop(true);
   }
 }
 
@@ -309,6 +354,15 @@ suite("PostgresLoopStorage (live)", () => {
   let preIdentityStorageReadable = false;
   let preIdentityAliasesAbsent = false;
   let preIdentityCanonicalAliasesSafe = false;
+  let safePreIdentityReadiness: ReadinessProbe;
+  let unsafePreIdentityReadiness: ReadinessProbe;
+  let exactPostIdentityReadiness: ReadinessProbe;
+  let driftedPostIdentityReadiness: ReadinessProbe;
+  let repairedPostIdentityReadiness: ReadinessProbe;
+  let futurePendingReadiness: ReadinessProbe;
+  let unauthorizedRepairRejected = false;
+  let firstRepairReceipt: IdentityCatalogRepairReceipt;
+  let idempotentRepairReceipt: IdentityCatalogRepairReceipt;
   let postIdentityLegacyPolicyPreserved = false;
   let postIdentityGuardsCoexist = false;
   let missingRoleBootstrap: BootstrapMembershipRegression;
@@ -452,6 +506,12 @@ suite("PostgresLoopStorage (live)", () => {
       applicationName: "loops-pre-identity-auth-test",
     });
     try {
+      const runtimeSchema = new PostgresStorage(preIdentityRuntime);
+      safePreIdentityReadiness = await requestActualReadiness(
+        runtimeSchema,
+        preIdentityRuntime.queryClient,
+        preIdentityAuthenticator.queryClient,
+      );
       preIdentityRuntimeReady = await isSafeServiceConnection(
         preIdentityRuntime.queryClient,
         "open_loops_runtime",
@@ -487,17 +547,70 @@ suite("PostgresLoopStorage (live)", () => {
         preIdentityAliases.auth_function_absent &&
         preIdentityAliases.audit_function_absent
       );
+      await executor.queryClient.execute(`
+        CREATE FUNCTION public.loops_current_tenant_id() RETURNS TEXT
+          LANGUAGE sql STABLE AS 'SELECT ''hostile-tenant''::TEXT';
+        ALTER FUNCTION public.loops_current_tenant_id() OWNER TO ${HOSTILE_FUNCTION_OWNER};
+        GRANT EXECUTE ON FUNCTION public.loops_current_tenant_id() TO PUBLIC, open_loops_authenticator;
+      `);
+      unsafePreIdentityReadiness = await requestActualReadiness(
+        runtimeSchema,
+        preIdentityRuntime.queryClient,
+        preIdentityAuthenticator.queryClient,
+      );
+
+      await schema.migrate();
+      exactPostIdentityReadiness = await requestActualReadiness(
+        runtimeSchema,
+        preIdentityRuntime.queryClient,
+        preIdentityAuthenticator.queryClient,
+      );
+      await executor.queryClient.execute(
+        "REVOKE SELECT ON public.loops_schema_migrations FROM open_loops_runtime",
+      );
+      driftedPostIdentityReadiness = await requestActualReadiness(
+        runtimeSchema,
+        preIdentityRuntime.queryClient,
+        preIdentityAuthenticator.queryClient,
+      );
+      try {
+        await repairCanonicalIdentityCatalog(preIdentityRuntime.queryClient, "repair-unauthorized");
+      } catch (error) {
+        unauthorizedRepairRejected = error instanceof Error &&
+          error.message.includes("exact owner/migrator SET authority");
+      }
+      firstRepairReceipt = await repairCanonicalIdentityCatalog(
+        executor.queryClient,
+        "repair-first",
+      );
+      repairedPostIdentityReadiness = await requestActualReadiness(
+        runtimeSchema,
+        preIdentityRuntime.queryClient,
+        preIdentityAuthenticator.queryClient,
+      );
+      idempotentRepairReceipt = await repairCanonicalIdentityCatalog(
+        executor.queryClient,
+        "repair-idempotent",
+      );
+
+      const futureSql = "SELECT 1";
+      const schemaWithAnotherPendingMigration = new PostgresStorage(preIdentityRuntime, [
+        ...POSTGRES_STORAGE_MIGRATIONS,
+        {
+          id: "0014_test_future",
+          sql: futureSql,
+          checksum: checksumStorageSql(futureSql),
+        },
+      ]);
+      futurePendingReadiness = await requestActualReadiness(
+        schemaWithAnotherPendingMigration,
+        preIdentityRuntime.queryClient,
+        preIdentityAuthenticator.queryClient,
+      );
     } finally {
       await preIdentityAuthenticator.close();
       await preIdentityRuntime.close();
     }
-    await executor.queryClient.execute(`
-      CREATE FUNCTION public.loops_current_tenant_id() RETURNS TEXT
-        LANGUAGE sql STABLE AS 'SELECT ''hostile-tenant''::TEXT';
-      ALTER FUNCTION public.loops_current_tenant_id() OWNER TO ${HOSTILE_FUNCTION_OWNER};
-      GRANT EXECUTE ON FUNCTION public.loops_current_tenant_id() TO PUBLIC, open_loops_authenticator;
-    `);
-    await schema.migrate();
     const identityTransition = await executor.queryClient.get<{
       policy_qualifier: string;
       default_expression: string;
@@ -921,6 +1034,55 @@ suite("PostgresLoopStorage (live)", () => {
     expect(preIdentityStorageReadable).toBe(true);
     expect(preIdentityAliasesAbsent).toBe(true);
     expect(preIdentityCanonicalAliasesSafe).toBe(true);
+    expect(safePreIdentityReadiness).toEqual({
+      status: 200,
+      body: expect.objectContaining({ status: "ready" }),
+    });
+    expect(unsafePreIdentityReadiness).toEqual({
+      status: 503,
+      body: expect.objectContaining({
+        status: "not_ready",
+        code: "unsafe_identity_catalog",
+      }),
+    });
+    expect(exactPostIdentityReadiness).toEqual({
+      status: 200,
+      body: expect.objectContaining({ status: "ready" }),
+    });
+    expect(driftedPostIdentityReadiness).toEqual({
+      status: 503,
+      body: expect.objectContaining({
+        status: "not_ready",
+        code: "unsafe_identity_catalog",
+      }),
+    });
+    expect(repairedPostIdentityReadiness).toEqual({
+      status: 200,
+      body: expect.objectContaining({ status: "ready" }),
+    });
+    expect(futurePendingReadiness).toEqual({
+      status: 503,
+      body: expect.objectContaining({
+        status: "not_ready",
+        code: "pending_migrations",
+      }),
+    });
+    expect(unauthorizedRepairRejected).toBe(true);
+    expect(firstRepairReceipt).toMatchObject({
+      requestId: "repair-first",
+      migrationId: "0013_loops_identity_aliases",
+      outcome: "repaired",
+    });
+    expect(firstRepairReceipt.migrationChecksum).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(firstRepairReceipt.actor).toBeTruthy();
+    expect(firstRepairReceipt.completedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(idempotentRepairReceipt).toMatchObject({
+      requestId: "repair-idempotent",
+      migrationId: "0013_loops_identity_aliases",
+      migrationChecksum: firstRepairReceipt.migrationChecksum,
+      actor: firstRepairReceipt.actor,
+      outcome: "already_safe",
+    });
     const ledger = await executor.queryClient.get<{
       equal: boolean;
       canonical_count: number;
@@ -964,10 +1126,6 @@ suite("PostgresLoopStorage (live)", () => {
   });
 
   test("a recorded identity migration fails readiness on every missing or tampered canonical alias", async () => {
-    const identityMigration = POSTGRES_STORAGE_MIGRATIONS.find(
-      (migration) => migration.id === "0013_loops_identity_aliases",
-    );
-    expect(identityMigration).toBeDefined();
     // This test is independently runnable even when Bun filters out the
     // earlier adversarial readiness test that normally clears this fixture.
     await executor.queryClient.execute(`
@@ -1002,15 +1160,6 @@ suite("PostgresLoopStorage (live)", () => {
             FROM public.open_loops_schema_migrations
            WHERE id <> '0013_loops_identity_aliases'
         `,
-      },
-      {
-        name: "missing tenant reader",
-        // PostgreSQL correctly prevents dropping this function while tenant
-        // policies depend on it. Renaming preserves those dependencies while
-        // removing the canonical alias that readiness must require.
-        sql: "ALTER FUNCTION public.loops_current_tenant_id() RENAME TO loops_current_tenant_id_missing",
-        repairSql:
-          "ALTER FUNCTION public.loops_current_tenant_id_missing() RENAME TO loops_current_tenant_id",
       },
       {
         name: "tenant reader owner drift",
@@ -1121,16 +1270,57 @@ suite("PostgresLoopStorage (live)", () => {
           safe: await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime"),
         }).toEqual({ mutation: mutation.name, safe: false });
       } finally {
-        if (mutation.repairSql) {
-          await executor.queryClient.execute(mutation.repairSql);
-        }
-        await executor.queryClient.execute(identityMigration!.sql);
+        const receipt = await repairCanonicalIdentityCatalog(
+          executor.queryClient,
+          `repair-${mutation.name.replaceAll(" ", "-")}`,
+        );
+        expect(receipt.outcome).toBe("repaired");
       }
       expect({
         mutation: mutation.name,
         safe: await isCanonicalIdentityAliasStateSafe(runtimeExecutor.queryClient),
       }).toEqual({ mutation: mutation.name, safe: true });
     }
+  });
+
+  test("identity catalog repair rolls back partial work on an unrecoverable relation collision", async () => {
+    const schemaAcl = async () => executor.queryClient.many<{ privilege: string }>(`
+      SELECT concat(
+        CASE WHEN acl.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(acl.grantee) END,
+        ':', acl.privilege_type, ':', acl.is_grantable
+      ) AS privilege
+        FROM pg_namespace namespace
+        CROSS JOIN LATERAL aclexplode(
+          COALESCE(namespace.nspacl, acldefault('n', namespace.nspowner))
+        ) acl
+       WHERE namespace.nspname='public'
+       ORDER BY 1
+    `);
+    await executor.queryClient.execute(`
+      DROP VIEW public.loops_schema_migrations;
+      CREATE TABLE public.loops_schema_migrations (
+        id TEXT PRIMARY KEY,
+        checksum TEXT NOT NULL,
+        applied_at TIMESTAMPTZ NOT NULL
+      )
+    `);
+    const beforeAcl = await schemaAcl();
+    await expect(
+      repairCanonicalIdentityCatalog(executor.queryClient, "repair-collision"),
+    ).rejects.toThrow();
+    expect(await schemaAcl()).toEqual(beforeAcl);
+    expect(await executor.queryClient.get<{ kind: string }>(`
+      SELECT relkind AS kind
+        FROM pg_class
+       WHERE oid='public.loops_schema_migrations'::regclass
+    `)).toEqual({ kind: "r" });
+
+    await executor.queryClient.execute("DROP TABLE public.loops_schema_migrations");
+    expect((await repairCanonicalIdentityCatalog(
+      executor.queryClient,
+      "repair-after-collision",
+    )).outcome).toBe("repaired");
+    expect(await isCanonicalIdentityAliasStateSafe(runtimeExecutor.queryClient)).toBe(true);
   });
 
   test("PostgreSQL 16 bootstrap rejects implicit/unsafe memberships and accepts exact provider grants", () => {

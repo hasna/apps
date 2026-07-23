@@ -45,9 +45,12 @@ both tenant-update guards remain installed.
 The migration is intentionally forward-only at the application-binary layer.
 The immediately preceding binary does not recognize the 0013 ledger row, and
 its closed-world service-role probe does not allow the new view and function
-grants. Therefore deploy and verify the Loops-compatible binary before applying
-0013. A binary rollback to the preceding release is supported only before the
-migration is applied.
+grants. Apply tenant enforcement only through `0010_tenant_enforce`, deploy the
+Loops-compatible binary, and verify its real `/ready` endpoint while 0013 is
+the sole pending migration. Then run
+`loops-serve migrate --identity-aliases` and verify `/ready` again. A binary
+rollback to the preceding release is supported only before the 0013 ledger row
+is recorded.
 
 After 0013 is recorded, recover by rolling forward to a compatible build. If a
 database restore is unavoidable, restore a validated pre-0013 backup under a
@@ -56,12 +59,30 @@ delete the canonical aliases or remove only the
 `0013_loops_identity_aliases` ledger row; doing so would make a
 checksum-guarded database claim an applied migration while missing its objects.
 
-Runtime readiness follows the same boundary. Before the physical ledger records
-`0013_loops_identity_aliases`, canonical aliases are optional. Once that row is
-present, readiness fails closed unless the canonical ledger view, tenant
+Runtime readiness follows the same boundary. It permits pre-0013 service only
+when `0013_loops_identity_aliases` is the sole pending migration, every earlier
+known migration has an exact ledger checksum, there are no unknown ledger rows,
+and the canonical view, functions, and trigger are all absent. A partial,
+pre-created, or poisoned canonical namespace fails closed. Once 0013 is
+recorded, readiness fails closed unless the canonical ledger view, tenant
 reader, update guard and trigger, auth wrappers, owners, function security,
 ACLs, definitions, trigger state, and bidirectional ledger row/checksum parity
-all match the migration contract.
+all match the migration contract. Any other pending migration remains a hard
+readiness failure.
+
+Recorded-0013 catalog drift has one supported repair route:
+`loops-serve identity-catalog-repair`. The command accepts no operator-supplied
+SQL or object names. It requires the dedicated database owner or a true
+superuser with exact `SET` authority for `open_loops_owner` and
+`open_loops_migrator`, rejects runtime/authenticator role membership, verifies
+the complete migration ledger and 0013 checksum, takes the migration advisory
+lock, reapplies only the immutable metadata-designated 0013 SQL, and verifies
+the exact catalog postcondition in one transaction. A failed postcondition or
+object collision rolls the entire transaction back. A repeated successful run
+is a no-op and emits a value-free receipt containing the request ID, migration
+ID/checksum, database actor, outcome, and completion time for the protected
+runtime audit log. Never repair drift by deleting a ledger row or pasting raw
+migration SQL around the runner.
 
 ## Historical provenance
 

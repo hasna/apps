@@ -179,6 +179,17 @@ export interface StorageMigration {
   readonly id: string;
   readonly checksum: string;
   readonly sql: string;
+  /**
+   * A narrowly scoped rolling-deploy contract owned by the migration itself.
+   * Ordinary migrations omit this metadata and remain hard readiness gates.
+   */
+  readonly rollingDeploy?: {
+    readonly kind: "canonical_identity_aliases";
+    readonly allowAsSolePending: true;
+    readonly preApplyCatalogState: "aliases_absent";
+    readonly postApplyCatalogState: "aliases_exact";
+    readonly repair: "transactional_reapply";
+  };
 }
 
 export interface AppliedStorageMigration {

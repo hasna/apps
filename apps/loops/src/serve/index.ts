@@ -6,17 +6,24 @@
 // serve process. Storage is the generated @hasna/contracts kit pool wrapping the
 // real `PostgresLoopStorage` backend. Every authenticated request gets one
 // dedicated transaction with tenant RLS context.
+import { randomUUID } from "node:crypto";
 import { Command } from "commander";
 import { createLoopsApiServer } from "../api/index.js";
 import { TenantApiAuthenticator } from "../lib/auth/tenant-auth.js";
 import type { PoolQueryClient, TypedQueryClient } from "../generated/storage-kit/query.js";
 import { PgPoolExecutor } from "../lib/storage/pg-executor.js";
 import { PostgresStorage } from "../lib/storage/postgres.js";
+import type { PostgresQueryExecutor } from "../lib/storage/postgres.js";
+import type {
+  StorageMigration,
+  StorageMigrationResult,
+} from "../lib/storage/contract.js";
 import { createPostgresLoopStorage } from "../lib/storage/postgres-loop-storage.js";
 import { runSharedToDedicatedTransfer } from "../lib/storage/shared-database-transfer.js";
 import {
   POSTGRES_MIGRATION_ADVISORY_LOCK_SQL,
   POSTGRES_MIGRATION_LEDGER_TABLE,
+  POSTGRES_STORAGE_MIGRATIONS,
   POSTGRES_TENANT_BOOTSTRAP_MEMBERSHIPS_SQL,
   POSTGRES_TENANT_BOOTSTRAP_ROLES_SQL,
   POSTGRES_TENANT_CLUSTER_ROLE_EXCLUSIVITY_SQL,
@@ -72,16 +79,32 @@ function defaultPort(): number {
 
 type ServiceDatabaseRole = "open_loops_runtime" | "open_loops_authenticator";
 const TENANT_ENFORCEMENT_MIGRATION_ID = "0010_tenant_enforce";
-const LOOPS_IDENTITY_MIGRATION_ID = "0013_loops_identity_aliases";
 export type ServeReadinessFailureCode =
   | "storage_unreachable"
-  | "migration_checksum_mismatch";
+  | "migration_checksum_mismatch"
+  | "unknown_migrations";
 
 export function classifyMigrationReadinessError(error: unknown): ServeReadinessFailureCode {
   const message = error instanceof Error ? error.message : String(error);
-  return message.includes("Postgres migration checksum mismatch")
-    ? "migration_checksum_mismatch"
-    : "storage_unreachable";
+  if (message.includes("Postgres migration checksum mismatch")) {
+    return "migration_checksum_mismatch";
+  }
+  if (message.includes("is not recognized by this binary")) {
+    return "unknown_migrations";
+  }
+  return "storage_unreachable";
+}
+
+function resolveCanonicalIdentityMigration(
+  migrations: readonly StorageMigration[] = POSTGRES_STORAGE_MIGRATIONS,
+): StorageMigration {
+  const matches = migrations.filter((migration) =>
+    migration.rollingDeploy?.kind === "canonical_identity_aliases"
+  );
+  if (matches.length !== 1) {
+    throw new Error("Postgres migration metadata must define exactly one canonical identity boundary");
+  }
+  return matches[0]!;
 }
 
 interface CanonicalIdentityFunctionState {
@@ -203,18 +226,22 @@ function sameCatalogValues(actual: readonly string[] | null, expected: readonly 
 }
 
 /**
- * Migration 0013 is a forward-only identity boundary. Before its physical
- * ledger row exists, none of the canonical aliases are required. Once the row
- * exists, every alias is part of readiness and catalog drift fails closed.
+ * The metadata-designated identity migration is a forward-only boundary.
+ * Before its physical ledger row exists this check leaves compatibility to the
+ * explicit pre-apply catalog guard. Once recorded, every alias is part of
+ * readiness and catalog drift fails closed.
  */
-export async function isCanonicalIdentityAliasStateSafe(client: TypedQueryClient): Promise<boolean> {
+export async function isCanonicalIdentityAliasStateSafe(
+  client: TypedQueryClient,
+  migration: StorageMigration = resolveCanonicalIdentityMigration(),
+): Promise<boolean> {
   const ledger = await client.get<{ identity_recorded: boolean }>(
     `SELECT EXISTS (
        SELECT 1
          FROM public.open_loops_schema_migrations
         WHERE id=$1
      ) AS identity_recorded`,
-    [LOOPS_IDENTITY_MIGRATION_ID],
+    [migration.id],
   );
   if (!ledger?.identity_recorded) return true;
 
@@ -376,6 +403,265 @@ export async function isCanonicalIdentityAliasStateSafe(client: TypedQueryClient
     ) AS rows_and_checksums_equal
   `);
   return parity?.rows_and_checksums_equal === true;
+}
+
+/**
+ * A compatible binary may start before the forward-only identity migration
+ * only when the canonical namespace is wholly untouched. Any partial or
+ * pre-created object is ambiguous and keeps readiness closed until a protected
+ * migration/repair run reconciles it.
+ */
+export async function isCanonicalIdentityPreApplyStateSafe(
+  client: TypedQueryClient,
+): Promise<boolean> {
+  const state = await client.get<{ aliases_absent: boolean }>(`
+    SELECT
+      to_regclass('public.loops_schema_migrations') IS NULL
+      AND to_regprocedure('public.loops_current_tenant_id()') IS NULL
+      AND to_regprocedure('public.loops_reject_runtime_tenant_update()') IS NULL
+      AND to_regprocedure('public.loops_authenticate_key(text,text)') IS NULL
+      AND to_regprocedure(
+        'public.loops_append_auth_audit(text,text,text,text,text,text,text,jsonb)'
+      ) IS NULL
+      AND NOT EXISTS (
+        SELECT 1
+          FROM pg_trigger trigger
+         WHERE trigger.tgrelid='public.tenants'::regclass
+           AND trigger.tgname='loops_reject_runtime_tenant_update'
+           AND NOT trigger.tgisinternal
+      ) AS aliases_absent
+  `);
+  return state?.aliases_absent === true;
+}
+
+export interface IdentityCatalogRepairReceipt {
+  requestId: string;
+  migrationId: string;
+  migrationChecksum: string;
+  actor: string;
+  outcome: "already_safe" | "repaired";
+  completedAt: string;
+}
+
+function queryExecutor(client: TypedQueryClient): PostgresQueryExecutor {
+  return {
+    query: <T extends Record<string, unknown>>(sql: string, params?: readonly unknown[]) =>
+      client.many<T>(sql, params),
+    execute: (sql: string, params?: readonly unknown[]) => client.execute(sql, params),
+  };
+}
+
+/**
+ * Reconcile recorded identity-catalog drift through the same immutable SQL
+ * owned by the migration metadata. The advisory lock, authority/ledger
+ * preflight, mutation, postcondition, and receipt timestamp share one
+ * transaction; any failure rolls the catalog changes back.
+ */
+export async function repairCanonicalIdentityCatalog(
+  client: PoolQueryClient,
+  requestId: string = randomUUID(),
+): Promise<IdentityCatalogRepairReceipt> {
+  const migration = resolveCanonicalIdentityMigration();
+  if (migration.rollingDeploy?.repair !== "transactional_reapply") {
+    throw new Error("canonical identity migration does not authorize catalog repair");
+  }
+  return client.transaction(async (transactionClient) => {
+    await transactionClient.get(POSTGRES_MIGRATION_ADVISORY_LOCK_SQL);
+    const schema = new PostgresStorage(queryExecutor(transactionClient));
+    const preview = await schema.migrate({ dryRun: true });
+    const pending = preview.plan.filter((item) => item.state === "pending");
+    if (pending.length > 0) {
+      throw new Error(
+        "identity catalog repair requires the metadata-designated migration to be recorded with an exact checksum",
+      );
+    }
+
+    const authority = await transactionClient.get<{
+      actor: string;
+      superuser: boolean;
+      owns_database: boolean;
+      owner_settable: boolean;
+      migrator_settable: boolean;
+      runtime_member: boolean;
+      authenticator_member: boolean;
+      ledger_owner: string;
+      completed_at: string | Date;
+    }>(`
+      SELECT session_user AS actor,
+             role.rolsuper AS superuser,
+             database.datdba=role.oid AS owns_database,
+             pg_has_role(session_user, 'open_loops_owner', 'SET') AS owner_settable,
+             pg_has_role(session_user, 'open_loops_migrator', 'SET') AS migrator_settable,
+             EXISTS (
+               WITH RECURSIVE memberships(roleid) AS (
+                 SELECT direct.roleid
+                   FROM pg_auth_members direct
+                  WHERE direct.member=role.oid
+                 UNION
+                 SELECT inherited.roleid
+                   FROM pg_auth_members inherited
+                   JOIN memberships parent ON inherited.member=parent.roleid
+               )
+               SELECT 1
+                 FROM memberships
+                 JOIN pg_roles granted ON granted.oid=memberships.roleid
+                WHERE granted.rolname='open_loops_runtime'
+             ) AS runtime_member,
+             EXISTS (
+               WITH RECURSIVE memberships(roleid) AS (
+                 SELECT direct.roleid
+                   FROM pg_auth_members direct
+                  WHERE direct.member=role.oid
+                 UNION
+                 SELECT inherited.roleid
+                   FROM pg_auth_members inherited
+                   JOIN memberships parent ON inherited.member=parent.roleid
+               )
+               SELECT 1
+                 FROM memberships
+                 JOIN pg_roles granted ON granted.oid=memberships.roleid
+                WHERE granted.rolname='open_loops_authenticator'
+             ) AS authenticator_member,
+             pg_get_userbyid(ledger.relowner) AS ledger_owner,
+             clock_timestamp() AS completed_at
+        FROM pg_roles role
+        JOIN pg_database database
+          ON database.datname=current_database()
+        JOIN pg_class ledger
+          ON ledger.oid='public.open_loops_schema_migrations'::regclass
+       WHERE role.rolname=session_user
+    `);
+    if (
+      !authority ||
+      (!authority.superuser && !authority.owns_database) ||
+      !authority.owner_settable ||
+      !authority.migrator_settable ||
+      authority.runtime_member ||
+      authority.authenticator_member ||
+      authority.ledger_owner !== "open_loops_migrator"
+    ) {
+      throw new Error(
+        "identity catalog repair requires the dedicated database owner or superuser with exact owner/migrator SET authority and no service-role membership",
+      );
+    }
+
+    const alreadySafe = await isCanonicalIdentityAliasStateSafe(transactionClient, migration);
+    if (!alreadySafe) {
+      await transactionClient.execute(migration.sql);
+      if (!await isCanonicalIdentityAliasStateSafe(transactionClient, migration)) {
+        throw new Error("identity catalog repair postcondition failed");
+      }
+    }
+    const completed = await transactionClient.get<{ completed_at: string | Date }>(
+      "SELECT clock_timestamp() AS completed_at",
+    );
+    const completedAt = completed?.completed_at instanceof Date
+      ? completed.completed_at.toISOString()
+      : String(completed?.completed_at ?? authority.completed_at);
+    return {
+      requestId,
+      migrationId: migration.id,
+      migrationChecksum: migration.checksum,
+      actor: authority.actor,
+      outcome: alreadySafe ? "already_safe" : "repaired",
+      completedAt,
+    };
+  });
+}
+
+export type ServeReadyCheckResult = {
+  ready: boolean;
+  code?: "storage_unreachable" | "auth_unreachable" | "unsafe_database_role" |
+    "unsafe_identity_catalog" | "pending_migrations" | "unknown_migrations" |
+    "migration_checksum_mismatch";
+};
+
+/**
+ * Exact readiness callback used by the production `/ready` route and live
+ * integration tests. Ordinary pending migrations remain hard gates; only the
+ * metadata-designated rolling identity boundary may be sole-pending.
+ */
+export function createServeReadinessCheck(deps: {
+  schema: PostgresStorage;
+  runtimeClient: TypedQueryClient;
+  authClient: TypedQueryClient;
+}): () => Promise<ServeReadyCheckResult> {
+  return async () => {
+    let preview;
+    try {
+      preview = await deps.schema.migrate({ dryRun: true });
+    } catch (error) {
+      return { ready: false, code: classifyMigrationReadinessError(error) };
+    }
+
+    const known = new Set(deps.schema.migrations.map((migration) => migration.id));
+    const unknown = preview.applied.filter((applied) => !known.has(applied.id));
+    if (unknown.length > 0) return { ready: false, code: "unknown_migrations" };
+    const pending = preview.plan.filter((item) => item.state === "pending");
+    const rolling = pending.length === 1 ? pending[0]?.migration.rollingDeploy : undefined;
+    if (pending.length > 0 && !(
+      rolling?.kind === "canonical_identity_aliases" &&
+      rolling.allowAsSolePending &&
+      rolling.preApplyCatalogState === "aliases_absent" &&
+      await isCanonicalIdentityPreApplyStateSafe(deps.runtimeClient)
+    )) {
+      return {
+        ready: false,
+        code: rolling?.kind === "canonical_identity_aliases"
+          ? "unsafe_identity_catalog"
+          : "pending_migrations",
+      };
+    }
+
+    if (pending.length === 0) {
+      const identityMigration = resolveCanonicalIdentityMigration(deps.schema.migrations);
+      if (!await isCanonicalIdentityAliasStateSafe(deps.runtimeClient, identityMigration)) {
+        return { ready: false, code: "unsafe_identity_catalog" };
+      }
+    }
+    try {
+      if (!await isSafeServiceConnection(deps.runtimeClient, "open_loops_runtime")) {
+        return { ready: false, code: "unsafe_database_role" };
+      }
+    } catch {
+      return { ready: false, code: "storage_unreachable" };
+    }
+    try {
+      if (!await isSafeServiceConnection(deps.authClient, "open_loops_authenticator")) {
+        return { ready: false, code: "unsafe_database_role" };
+      }
+    } catch {
+      return { ready: false, code: "auth_unreachable" };
+    }
+    return { ready: true };
+  };
+}
+
+export function resolveServeMigrationTarget(
+  opts: { enforceTenancy?: boolean; identityAliases?: boolean },
+  migrations: readonly StorageMigration[] = POSTGRES_STORAGE_MIGRATIONS,
+): string {
+  if (opts.enforceTenancy && opts.identityAliases) {
+    throw new Error("--enforce-tenancy and --identity-aliases are separate ordered migration phases");
+  }
+  if (opts.identityAliases) return resolveCanonicalIdentityMigration(migrations).id;
+  if (opts.enforceTenancy) return TENANT_ENFORCEMENT_MIGRATION_ID;
+  return "0008_tenant_prepare";
+}
+
+export function assertIdentityAliasesAreSolePending(
+  preview: StorageMigrationResult,
+  migrations: readonly StorageMigration[] = POSTGRES_STORAGE_MIGRATIONS,
+): void {
+  const identityMigration = resolveCanonicalIdentityMigration(migrations);
+  const pending = preview.plan
+    .filter((item) => item.state === "pending")
+    .map((item) => item.migration.id);
+  if (pending.some((id) => id !== identityMigration.id)) {
+    throw new Error(
+      "identity aliases may be applied only after every earlier known migration is recorded with an exact checksum",
+    );
+  }
 }
 
 export async function isSafeServiceConnection(
@@ -1235,34 +1521,11 @@ async function runServe(opts: { host: string; port: number }): Promise<void> {
       withTenantStorage: (principal, fn) =>
         executor.withRequestContext(principal, (transactionClient) =>
           fn(createPostgresLoopStorage(transactionClient, principal, { contextAlreadyBound: true }))),
-      readyCheck: async () => {
-        try {
-          const result = await schema.migrate({ dryRun: true });
-          const applied = result.applied;
-          const known = new Set(schema.migrations.map((m) => m.id));
-          const missing = schema.migrations.filter((m) => !applied.some((a) => a.id === m.id)).map((m) => m.id);
-          const unknown = applied.filter((a) => !known.has(a.id)).map((a) => a.id);
-          if (missing.length) return { ready: false, code: "pending_migrations" };
-          if (unknown.length) return { ready: false, code: "unknown_migrations" };
-        } catch (error) {
-          return { ready: false, code: classifyMigrationReadinessError(error) };
-        }
-        try {
-          if (!await isSafeServiceConnection(executor.queryClient, "open_loops_runtime")) {
-            return { ready: false, code: "unsafe_database_role" };
-          }
-        } catch {
-          return { ready: false, code: "storage_unreachable" };
-        }
-        try {
-          if (!await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")) {
-            return { ready: false, code: "unsafe_database_role" };
-          }
-        } catch {
-          return { ready: false, code: "auth_unreachable" };
-        }
-        return { ready: true };
-      },
+      readyCheck: createServeReadinessCheck({
+        schema,
+        runtimeClient: executor.queryClient,
+        authClient: authExecutor.queryClient,
+      }),
     });
     console.log(
       JSON.stringify({
@@ -1293,17 +1556,57 @@ program
   .description("prepare tenant schema, or explicitly enforce a loaded tenant mapping")
   .option("--dry-run", "preview the migration plan without applying")
   .option("--enforce-tenancy", "apply the explicit backfill and hard tenant/RLS enforcement")
-  .action(async (opts: { dryRun?: boolean; enforceTenancy?: boolean }) => {
+  .option(
+    "--identity-aliases",
+    "apply the forward-only canonical identity aliases after a compatible binary is ready",
+  )
+  .action(async (opts: {
+    dryRun?: boolean;
+    enforceTenancy?: boolean;
+    identityAliases?: boolean;
+  }) => {
+    const through = resolveServeMigrationTarget(opts);
     const executor = buildExecutor("loops-migrate", "migrator");
     try {
       const schema = new PostgresStorage(executor);
       if (opts.enforceTenancy) await assertTenantEnforcementBootstrapIfPending(executor.queryClient, schema);
-      const result = await schema.migrate({
-        dryRun: Boolean(opts.dryRun),
-        through: opts.enforceTenancy ? undefined : "0008_tenant_prepare",
-      });
+      let result: StorageMigrationResult;
+      if (opts.identityAliases) {
+        const preview = await schema.migrate({ dryRun: true });
+        assertIdentityAliasesAreSolePending(preview, schema.migrations);
+        result = opts.dryRun
+          ? preview
+          : await schema.migrate({ through });
+      } else {
+        result = await schema.migrate({
+          dryRun: Boolean(opts.dryRun),
+          through,
+        });
+      }
       const pending = result.plan.filter((p) => p.state === "pending").map((p) => p.migration.id);
       console.log(JSON.stringify({ evt: "migrate", dryRun: result.dryRun, applied: result.applied.map((a) => a.id), pending }));
+    } finally {
+      await executor.close();
+    }
+  });
+
+program
+  .command("identity-catalog-repair")
+  .description("transactionally repair recorded Loops identity aliases with exact migrator authority")
+  .action(async () => {
+    const requestId = randomUUID();
+    const executor = buildExecutor("loops-identity-catalog-repair", "migrator");
+    try {
+      const receipt = await repairCanonicalIdentityCatalog(executor.queryClient, requestId);
+      console.log(JSON.stringify({ evt: "loops_identity_catalog_repair", ...receipt }));
+    } catch (error) {
+      console.error(JSON.stringify({
+        evt: "loops_identity_catalog_repair",
+        requestId,
+        outcome: "failed",
+        errorType: error instanceof Error ? "error" : typeof error,
+      }));
+      throw error;
     } finally {
       await executor.close();
     }
@@ -1380,6 +1683,7 @@ if (import.meta.main) {
   const known = new Set([
     "serve",
     "migrate",
+    "identity-catalog-repair",
     "tenant-backfill",
     "tenant-backfill-s3",
     "db-credentials",

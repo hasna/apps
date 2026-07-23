@@ -32,11 +32,16 @@ docker compose run --rm loops-migrate
 docker compose up --build loops-serve
 curl -fsS http://127.0.0.1:8787/health
 curl -fsS http://127.0.0.1:8787/ready
+docker compose run --rm loops-migrate \
+  bun dist/serve/index.js migrate --identity-aliases
+curl -fsS http://127.0.0.1:8787/ready
 curl -fsS http://127.0.0.1:8787/openapi.json
 ```
 
 `loops-serve` always requires `HASNA_LOOPS_API_SIGNING_KEY`. There is no
-loopback authentication bypass.
+loopback authentication bypass. The first readiness probe proves the compatible
+binary can operate with 0013 as the sole pending migration; the second proves
+the forward-only identity aliases after their ledger row is recorded.
 
 ## AWS Self-Hosted Gates
 
@@ -117,18 +122,19 @@ Before step 1, satisfy and preserve evidence for these hard gates:
    approver, and bounded command result—never bundle contents or credentials.
 4. Enforce tenant keys, composite foreign keys, and forced RLS with
    `HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --enforce-tenancy`.
+   This ordered phase stops at `0010_tenant_enforce`; it does not apply the
+   forward-only identity aliases.
    After this succeeds, have provider automation attach the runtime and
    authenticator logins to their matching roles; do not reuse the enforcement
    login for either service.
    Keep the write plane quiesced while validating migration-ledger ownership,
-   exact role memberships, forced RLS, runtime/authenticator connection safety,
-   and `/ready`. If any gate fails, keep the service stopped and use the
-   rehearsed recovery procedure; do not continue from a partially understood
-   state.
-5. Build and deploy an image from this repository's pinned Bun base-image
-   digest. The runner image must pass the CI high/critical vulnerability scan
-   and must not replace the locked `@hasna/contracts` package with a vendored
-   overlay.
+   exact role memberships, forced RLS, and runtime/authenticator connection
+   safety. If any gate fails, keep the service stopped and use the rehearsed
+   recovery procedure; do not continue from a partially understood state.
+5. Build and deploy the Loops-compatible image from this repository's pinned
+   Bun base-image digest before applying 0013. The runner image must pass the CI
+   high/critical vulnerability scan and must not replace the locked
+   `@hasna/contracts` package with a vendored overlay.
 6. Configure the ECS service before traffic is shifted:
    - desired count at least `2`;
    - tasks spread across at least two private subnets/AZs;
@@ -160,11 +166,21 @@ Before step 1, satisfy and preserve evidence for these hard gates:
 10. Start `loops-serve` with `HASNA_LOOPS_STORAGE_MODE=self_hosted`, separate
    `HASNA_LOOPS_DATABASE_URL` and `HASNA_LOOPS_AUTH_DATABASE_URL` logins, and the API signing secret from the approved
    vault item. The signing key must be at least 16 bytes. Do not log or copy the
-   secret value into task evidence.
-11. Verify `/health`, `/ready`, `/version`, and `/openapi.json`.
-12. Verify an authenticated `/v1` read/write smoke against a throwaway loop and
+   secret value into task evidence. Keep production traffic unshifted and the
+   write plane quiesced through the post-0013 readiness proof.
+11. Verify `/health`, `/ready`, `/version`, and `/openapi.json` while
+    `0013_loops_identity_aliases` is the sole pending migration. Any other
+    pending migration or any partial canonical alias must keep `/ready` at 503.
+12. Apply the forward-only identity boundary with exactly one migrator:
+    `HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --identity-aliases`.
+    Verify the exact 0013 checksum, canonical catalog state, ledger
+    row/checksum parity, and `/ready` again. From this point onward, never point
+    the preceding binary at this database. If recorded-0013 aliases later
+    drift, use only `loops-serve identity-catalog-repair`; capture its bounded
+    receipt and keep traffic closed until `/ready` is green.
+13. Verify an authenticated `/v1` read/write smoke against a throwaway loop and
    a claim/finalize smoke if a runner API URL is configured.
-13. Record package version, git SHA, image tag and digest, database migration
+14. Record package version, git SHA, image tag and digest, database migration
    plan/result, evidence that the target database is dedicated to Loops,
    redacted API URL, health/readiness responses, capacity-provider strategy,
    desired/running task counts, alarm action ARNs/names, log retention/KMS
@@ -201,6 +217,13 @@ expected row counts, then prove the previous image's `/ready`, authenticated
 loop CRUD, runner claim/finalize, and
 `loops self-hosted push --dry-run --no-runs`. Never attempt an in-place reverse
 migration or overwrite the enforced database during rollback.
+
+After `0013_loops_identity_aliases` is recorded, the preceding binary is not a
+rollback target. Roll forward with a compatible build, use the protected
+identity-catalog repair route for repairable drift, or restore a validated
+pre-0013 recovery point to a separate target under the rehearsed restore
+procedure. Never delete only the 0013 ledger row or partially remove its
+aliases.
 Local scheduled execution remains on SQLite unless operators explicitly
 configure a runner/control-plane cutover, so removing `HASNA_LOOPS_API_URL` and
 `HASNA_LOOPS_DATABASE_URL` returns the standalone CLI/daemon perspective to

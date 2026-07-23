@@ -33,7 +33,7 @@
     },
     {
       "path": "docs/IDENTITY-MIGRATION.md",
-      "tokens": { "open-loops": 3, "openloops": 4, "open_loops": 4 },
+      "tokens": { "open-loops": 3, "openloops": 4, "open_loops": 6 },
       "reason": "This is the explicit compatibility and removal ledger.",
       "removalCondition": "Reduce each entry as its documented compatibility boundary retires; retain historical ledger facts."
     },
@@ -171,7 +171,7 @@
     },
     {
       "path": "src/lib/storage/postgres-loop-storage.test.ts",
-      "tokens": { "OpenLoops": 1, "open_loops": 257 },
+      "tokens": { "OpenLoops": 1, "open_loops": 258 },
       "reason": "Fresh and upgrade tests exercise released roles, functions, settings, and immutable bootstrap error text.",
       "removalCondition": "Reduce only as later additive migrations retire each compatibility surface."
     },
@@ -255,7 +255,7 @@
     },
     {
       "path": "src/serve/index.ts",
-      "tokens": { "OpenLoops": 4, "open_loops": 111 },
+      "tokens": { "OpenLoops": 4, "open_loops": 117 },
       "reason": "Validates immutable bootstrap errors, provider capability roles, and bounded legacy function privileges.",
       "removalCondition": "Retain immutable error recognition; remove role/function aliases after provider and client cutovers."
     },

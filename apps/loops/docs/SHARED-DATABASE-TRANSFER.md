@@ -82,7 +82,10 @@ SELECT kid, app, agent, scopes, token_hash, issued_at, expires_at, revoked_at,
     objects across schemas, tables, functions, sequences, and views.
 11. Stop after producing evidence. The next approved sequence is:
     `loops-serve tenant-backfill-s3`, then
-    `loops-serve migrate --enforce-tenancy`.
+    `loops-serve migrate --enforce-tenancy`, then deploy and verify the
+    compatible binary with 0013 sole-pending, then
+    `loops-serve migrate --identity-aliases` as specified in
+    `docs/CUTOVER-RUNBOOK.md`.
 
 ## Protected Workflow
 

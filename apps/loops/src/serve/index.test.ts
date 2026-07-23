@@ -3,12 +3,14 @@ import type { QueryResultRow } from "pg";
 import type { PoolQueryClient, TypedQueryClient } from "../generated/storage-kit/query.js";
 import type { PostgresStorage } from "../lib/storage/postgres.js";
 import {
+  assertIdentityAliasesAreSolePending,
   assertTenantEnforcementBootstrap,
   assertTenantEnforcementBootstrapIfPending,
   classifyMigrationReadinessError,
   classifyTenantEnforcementGate,
   logServeCommandFailure,
   program,
+  resolveServeMigrationTarget,
 } from "./index.js";
 
 function bootstrapClient(role: {
@@ -191,6 +193,8 @@ describe("loops-serve database bootstrap", () => {
   test("classifies migration checksum drift as an explicit readiness failure", () => {
     expect(classifyMigrationReadinessError(new Error("Postgres migration checksum mismatch for 0003_remote_runners_and_audit")))
       .toBe("migration_checksum_mismatch");
+    expect(classifyMigrationReadinessError(new Error("Postgres migration 0014_unknown is not recognized by this binary")))
+      .toBe("unknown_migrations");
     expect(classifyMigrationReadinessError(new Error("connect ECONNREFUSED")))
       .toBe("storage_unreachable");
   });
@@ -254,6 +258,62 @@ describe("loops-serve database bootstrap", () => {
     const reconcile = dbCredentials!.commands.find((command) => command.name() === "reconcile");
     expect(reconcile).toBeDefined();
     expect(reconcile!.options).toHaveLength(0);
+  });
+
+  test("exposes ordered identity migration and a fixed no-option catalog repair route", () => {
+    const migrate = program.commands.find((command) => command.name() === "migrate");
+    expect(migrate).toBeDefined();
+    expect(migrate!.options.map((option) => option.flags)).toContain("--identity-aliases");
+
+    const repair = program.commands.find((command) => command.name() === "identity-catalog-repair");
+    expect(repair).toBeDefined();
+    expect(repair!.options).toHaveLength(0);
+    expect(resolveServeMigrationTarget({})).toBe("0008_tenant_prepare");
+    expect(resolveServeMigrationTarget({ enforceTenancy: true })).toBe("0010_tenant_enforce");
+    expect(resolveServeMigrationTarget({ identityAliases: true })).toBe("0013_loops_identity_aliases");
+    expect(() => resolveServeMigrationTarget({
+      enforceTenancy: true,
+      identityAliases: true,
+    })).toThrow("separate ordered migration phases");
+
+    const identityMigration = {
+      id: "0013_loops_identity_aliases",
+      sql: "SELECT 1",
+      checksum: "sha256:test",
+      rollingDeploy: {
+        kind: "canonical_identity_aliases" as const,
+        allowAsSolePending: true as const,
+        preApplyCatalogState: "aliases_absent" as const,
+        postApplyCatalogState: "aliases_exact" as const,
+        repair: "transactional_reapply" as const,
+      },
+    };
+    const earlierMigration = {
+      id: "0010_tenant_enforce",
+      sql: "SELECT 1",
+      checksum: "sha256:earlier",
+    };
+    const result = (pending: string[]) => ({
+      backend: "postgres" as const,
+      dryRun: true,
+      applied: [],
+      plan: [earlierMigration, identityMigration].map((migration) => ({
+        migration,
+        state: pending.includes(migration.id) ? "pending" as const : "already_applied" as const,
+      })),
+    });
+    expect(() => assertIdentityAliasesAreSolePending(
+      result(["0013_loops_identity_aliases"]),
+      [earlierMigration, identityMigration],
+    )).not.toThrow();
+    expect(() => assertIdentityAliasesAreSolePending(
+      result([]),
+      [earlierMigration, identityMigration],
+    )).not.toThrow();
+    expect(() => assertIdentityAliasesAreSolePending(
+      result(["0010_tenant_enforce", "0013_loops_identity_aliases"]),
+      [earlierMigration, identityMigration],
+    )).toThrow("only after every earlier known migration");
   });
 
   test("exposes a fixed no-option shared database transfer command", () => {

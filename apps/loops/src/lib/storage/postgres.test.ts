@@ -57,6 +57,18 @@ describe("Postgres storage migrations", () => {
       expect(migration.checksum).toBe(checksumStorageSql(migration.sql));
       expect(migration.checksum).toMatch(/^sha256:[a-f0-9]{64}$/);
     }
+    expect(POSTGRES_STORAGE_MIGRATIONS.filter((migration) => migration.rollingDeploy)).toEqual([
+      expect.objectContaining({
+        id: "0013_loops_identity_aliases",
+        rollingDeploy: {
+          kind: "canonical_identity_aliases",
+          allowAsSolePending: true,
+          preApplyCatalogState: "aliases_absent",
+          postApplyCatalogState: "aliases_exact",
+          repair: "transactional_reapply",
+        },
+      }),
+    ]);
     const combined = POSTGRES_STORAGE_MIGRATIONS.map((migration) => migration.sql).join("\n");
     expect(combined).toContain("CREATE TABLE IF NOT EXISTS loops");
     expect(combined).toContain("CREATE TABLE IF NOT EXISTS loop_runs");

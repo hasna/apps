@@ -599,6 +599,28 @@ describe("loops-api foundation", () => {
     }
   });
 
+  test("public readiness preserves the stable unsafe identity catalog code", async () => {
+    const mod = await import("./index.js");
+    const server = createTestServer(mod, {
+      host: "127.0.0.1",
+      port: 0,
+      readyCheck: async () => ({
+        ready: false,
+        code: "unsafe_identity_catalog",
+      }),
+    });
+    try {
+      const response = await fetch(apiUrl(server, "/ready"));
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({
+        status: "not_ready",
+        code: "unsafe_identity_catalog",
+      });
+    } finally {
+      server.stop(true);
+    }
+  });
+
   test("authentication backend failures return a stable 503 without credential details", async () => {
     const mod = await import("./index.js");
     const server = mod.createLoopsApiServer({

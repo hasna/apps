@@ -1,7 +1,8 @@
 # Local development stack for the @hasna/loops self-hosted service.
 # HASNA_LOOPS_STORAGE_MODE=self_hosted is the service deployment contract.
-#   docker compose run --rm loops-migrate   # apply schema first
+#   docker compose run --rm loops-migrate   # apply through tenant enforcement
 #   docker compose up --build loops-serve
+#   docker compose run --rm loops-migrate bun dist/serve/index.js migrate --identity-aliases
 services:
   postgres:
     image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
