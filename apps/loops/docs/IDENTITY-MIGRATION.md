@@ -52,6 +52,19 @@ the sole pending migration. Then run
 rollback to the preceding release is supported only before the 0013 ledger row
 is recorded.
 
+The `--identity-aliases` command owns this boundary independently; it does not
+trust a prior readiness probe. Under the migration advisory lock and one
+transaction it fixes `search_path` to `public, pg_catalog, pg_temp`, verifies the exact
+known ledger and checksums, and places `pg_temp` last so temporary relations cannot
+shadow the ledger or tenant table, requires 0013 to be the sole pending migration,
+requires the dedicated database owner or superuser with exact owner/migrator
+`SET` authority and no service-role membership, and proves the canonical
+catalog is wholly absent before writing. A partial alias, a pre-created
+relation or trigger, or any function, procedure, aggregate, window routine, or
+overload carrying one of the canonical routine names refuses the transition
+without changing the ledger or catalog. The command verifies the same exact
+catalog postcondition before committing.
+
 After 0013 is recorded, recover by rolling forward to a compatible build. If a
 database restore is unavoidable, restore a validated pre-0013 backup under a
 maintenance window and reconcile all writes made after that backup. Never
@@ -63,12 +76,14 @@ Runtime readiness follows the same boundary. It permits pre-0013 service only
 when `0013_loops_identity_aliases` is the sole pending migration, every earlier
 known migration has an exact ledger checksum, there are no unknown ledger rows,
 and the canonical view, functions, and trigger are all absent. A partial,
-pre-created, or poisoned canonical namespace fails closed. Once 0013 is
-recorded, readiness fails closed unless the canonical ledger view, tenant
-reader, update guard and trigger, auth wrappers, owners, function security,
-ACLs, definitions, trigger state, and bidirectional ledger row/checksum parity
-all match the migration contract. Any other pending migration remains a hard
-readiness failure.
+pre-created, or poisoned canonical namespace fails closed, including an
+unexpected signature or routine kind under any canonical routine name. Once
+0013 is recorded, readiness fails closed unless the complete canonical
+routine-name set contains only the expected signatures and the canonical
+ledger view, tenant reader, update guard and trigger, auth wrappers, owners,
+function security, ACLs, definitions, trigger state, and bidirectional ledger
+row/checksum parity all match the migration contract. Any other pending
+migration remains a hard readiness failure.
 
 Recorded-0013 catalog drift has one supported repair route:
 `loops-serve identity-catalog-repair`. The command accepts no operator-supplied
@@ -78,11 +93,13 @@ superuser with exact `SET` authority for `open_loops_owner` and
 the complete migration ledger and 0013 checksum, takes the migration advisory
 lock, reapplies only the immutable metadata-designated 0013 SQL, and verifies
 the exact catalog postcondition in one transaction. A failed postcondition or
-object collision rolls the entire transaction back. A repeated successful run
-is a no-op and emits a value-free receipt containing the request ID, migration
-ID/checksum, database actor, outcome, and completion time for the protected
-runtime audit log. Never repair drift by deleting a ledger row or pasting raw
-migration SQL around the runner.
+object collision—including an unexpected canonical-name overload or
+procedure—rolls the entire transaction back; the repair route never drops an
+unrecognized routine. Remove the collision through its owning, audited change,
+then rerun repair. A repeated successful run is a no-op and emits a value-free
+receipt containing the request ID, migration ID/checksum, database actor,
+outcome, and completion time for the protected runtime audit log. Never repair
+drift by deleting a ledger row or pasting raw migration SQL around the runner.
 
 ## Historical provenance
 

@@ -171,7 +171,7 @@
     },
     {
       "path": "src/lib/storage/postgres-loop-storage.test.ts",
-      "tokens": { "OpenLoops": 1, "open_loops": 258 },
+      "tokens": { "OpenLoops": 1, "open_loops": 266 },
       "reason": "Fresh and upgrade tests exercise released roles, functions, settings, and immutable bootstrap error text.",
       "removalCondition": "Reduce only as later additive migrations retire each compatibility surface."
     },

@@ -11,7 +11,7 @@
 
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import pg from "pg";
-import type { PoolQueryClient } from "../../generated/storage-kit/query.js";
+import type { PoolQueryClient, TypedQueryClient } from "../../generated/storage-kit/query.js";
 import { PgPoolExecutor } from "./pg-executor.js";
 import { PostgresStorage } from "./postgres.js";
 import { PostgresLoopStorage } from "./postgres-loop-storage.js";
@@ -32,7 +32,9 @@ import {
   assertTenantEnforcementBootstrapIfPending,
   createServeReadinessCheck,
   isCanonicalIdentityAliasStateSafe,
+  isCanonicalIdentityPreApplyStateSafe,
   isSafeServiceConnection,
+  migrateCanonicalIdentityAliases,
   repairCanonicalIdentityCatalog,
   type IdentityCatalogRepairReceipt,
 } from "../../serve/index.js";
@@ -150,6 +152,117 @@ async function requestActualReadiness(
   } finally {
     server.stop(true);
   }
+}
+
+type IdentityCatalogSnapshot = {
+  ledger: unknown;
+  schemas: unknown;
+  relations: unknown;
+  routines: unknown;
+  triggers: unknown;
+};
+
+async function identityCatalogSnapshot(
+  client: TypedQueryClient,
+): Promise<IdentityCatalogSnapshot> {
+  const snapshot = await client.get<IdentityCatalogSnapshot>(`
+    SELECT
+      COALESCE((
+        SELECT jsonb_agg(
+          jsonb_build_object(
+            'id', ledger.id,
+            'checksum', ledger.checksum,
+            'applied_at', ledger.applied_at
+          )
+          ORDER BY ledger.id
+        )
+          FROM public.open_loops_schema_migrations ledger
+      ), '[]'::jsonb) AS ledger,
+      COALESCE((
+        SELECT jsonb_agg(
+          jsonb_build_object(
+            'oid', namespace.oid::text,
+            'owner', pg_get_userbyid(namespace.nspowner),
+            'acl', COALESCE(namespace.nspacl::text, '')
+          )
+          ORDER BY namespace.oid
+        )
+          FROM pg_namespace namespace
+         WHERE namespace.nspname='public'
+      ), '[]'::jsonb) AS schemas,
+      COALESCE((
+        SELECT jsonb_agg(
+          jsonb_build_object(
+            'oid', relation.oid::text,
+            'kind', relation.relkind,
+            'owner', pg_get_userbyid(relation.relowner),
+            'acl', COALESCE(relation.relacl::text, ''),
+            'comment', obj_description(relation.oid, 'pg_class'),
+            'definition', CASE
+              WHEN relation.relkind IN ('v', 'm') THEN pg_get_viewdef(relation.oid, false)
+              ELSE ''
+            END
+          )
+          ORDER BY relation.oid
+        )
+          FROM pg_class relation
+          JOIN pg_namespace namespace ON namespace.oid=relation.relnamespace
+         WHERE namespace.nspname='public'
+           AND relation.relname='loops_schema_migrations'
+      ), '[]'::jsonb) AS relations,
+      COALESCE((
+        SELECT jsonb_agg(
+          jsonb_build_object(
+            'oid', routine.oid::text,
+            'name', routine.proname,
+            'kind', routine.prokind,
+            'args', pg_get_function_identity_arguments(routine.oid),
+            'result', pg_get_function_result(routine.oid),
+            'owner', pg_get_userbyid(routine.proowner),
+            'language', language.lanname,
+            'security_definer', routine.prosecdef,
+            'volatility', routine.provolatile,
+            'parallel', routine.proparallel,
+            'returns_set', routine.proretset,
+            'strict', routine.proisstrict,
+            'leakproof', routine.proleakproof,
+            'config', routine.proconfig,
+            'source', routine.prosrc,
+            'acl', COALESCE(routine.proacl::text, ''),
+            'comment', obj_description(routine.oid, 'pg_proc')
+          )
+          ORDER BY routine.proname, routine.prokind,
+                   pg_get_function_identity_arguments(routine.oid)
+        )
+          FROM pg_proc routine
+          JOIN pg_namespace namespace ON namespace.oid=routine.pronamespace
+          JOIN pg_language language ON language.oid=routine.prolang
+         WHERE namespace.nspname='public'
+           AND routine.proname=ANY(ARRAY[
+             'loops_current_tenant_id',
+             'loops_reject_runtime_tenant_update',
+             'loops_authenticate_key',
+             'loops_append_auth_audit'
+           ])
+      ), '[]'::jsonb) AS routines,
+      COALESCE((
+        SELECT jsonb_agg(
+          jsonb_build_object(
+            'oid', trigger.oid::text,
+            'table', trigger.tgrelid::regclass::text,
+            'function', trigger.tgfoid::regprocedure::text,
+            'enabled', trigger.tgenabled,
+            'definition', pg_get_triggerdef(trigger.oid, false)
+          )
+          ORDER BY trigger.oid
+        )
+          FROM pg_trigger trigger
+         WHERE trigger.tgname='loops_reject_runtime_tenant_update'
+           AND NOT trigger.tgisinternal
+      ), '[]'::jsonb) AS triggers
+  `);
+  if (!snapshot) throw new Error("identity catalog snapshot query returned no row");
+  return snapshot;
 }
 
 async function exercisePg16BootstrapMemberships(
@@ -354,6 +467,19 @@ suite("PostgresLoopStorage (live)", () => {
   let preIdentityStorageReadable = false;
   let preIdentityAliasesAbsent = false;
   let preIdentityCanonicalAliasesSafe = false;
+  let hostileOverloadPreApplySafe = true;
+  let hostileRoutinePreApplySafe = true;
+  let hostileOverloadMigrationRejected = false;
+  let hostileOverloadRefusalMutationFree = false;
+  let hostileRoutineMigrationRejected = false;
+  let hostileRoutineRefusalMutationFree = false;
+  let hostilePartialMigrationRejected = false;
+  let hostilePartialRefusalMutationFree = false;
+  let unauthorizedIdentityMigrationRejected = false;
+  let unauthorizedIdentityRefusalMutationFree = false;
+  let identityDryRunMutationFree = false;
+  let identitySearchPathPoisonIgnored = false;
+  let hostileOverloadPreIdentityReadiness: ReadinessProbe;
   let safePreIdentityReadiness: ReadinessProbe;
   let unsafePreIdentityReadiness: ReadinessProbe;
   let exactPostIdentityReadiness: ReadinessProbe;
@@ -547,6 +673,61 @@ suite("PostgresLoopStorage (live)", () => {
         preIdentityAliases.auth_function_absent &&
         preIdentityAliases.audit_function_absent
       );
+      const unauthorizedIdentityBefore = await identityCatalogSnapshot(executor.queryClient);
+      try {
+        await migrateCanonicalIdentityAliases(preIdentityRuntime.queryClient);
+      } catch (error) {
+        unauthorizedIdentityMigrationRejected = error instanceof Error &&
+          error.message.includes("exact owner/migrator SET authority");
+      }
+      unauthorizedIdentityRefusalMutationFree = JSON.stringify(
+        await identityCatalogSnapshot(executor.queryClient),
+      ) === JSON.stringify(unauthorizedIdentityBefore);
+      await executor.queryClient.execute(`
+        CREATE FUNCTION public.loops_current_tenant_id(p_tenant TEXT) RETURNS TEXT
+          LANGUAGE sql STABLE AS 'SELECT p_tenant';
+      `);
+      hostileOverloadPreApplySafe = await isCanonicalIdentityPreApplyStateSafe(
+        preIdentityRuntime.queryClient,
+      );
+      const hostileOverloadBefore = await identityCatalogSnapshot(executor.queryClient);
+      try {
+        await migrateCanonicalIdentityAliases(executor.queryClient);
+      } catch (error) {
+        hostileOverloadMigrationRejected = error instanceof Error &&
+          error.message.includes("wholly absent canonical catalog");
+      }
+      hostileOverloadRefusalMutationFree = JSON.stringify(
+        await identityCatalogSnapshot(executor.queryClient),
+      ) === JSON.stringify(hostileOverloadBefore);
+      hostileOverloadPreIdentityReadiness = await requestActualReadiness(
+        runtimeSchema,
+        preIdentityRuntime.queryClient,
+        preIdentityAuthenticator.queryClient,
+      );
+      await executor.queryClient.execute(
+        "DROP FUNCTION public.loops_current_tenant_id(TEXT)",
+      );
+      await executor.queryClient.execute(`
+        CREATE PROCEDURE public.loops_append_auth_audit(IN p_probe INTEGER)
+          LANGUAGE plpgsql AS $$ BEGIN NULL; END $$;
+      `);
+      hostileRoutinePreApplySafe = await isCanonicalIdentityPreApplyStateSafe(
+        preIdentityRuntime.queryClient,
+      );
+      const hostileRoutineBefore = await identityCatalogSnapshot(executor.queryClient);
+      try {
+        await migrateCanonicalIdentityAliases(executor.queryClient);
+      } catch (error) {
+        hostileRoutineMigrationRejected = error instanceof Error &&
+          error.message.includes("wholly absent canonical catalog");
+      }
+      hostileRoutineRefusalMutationFree = JSON.stringify(
+        await identityCatalogSnapshot(executor.queryClient),
+      ) === JSON.stringify(hostileRoutineBefore);
+      await executor.queryClient.execute(
+        "DROP PROCEDURE public.loops_append_auth_audit(INTEGER)",
+      );
       await executor.queryClient.execute(`
         CREATE FUNCTION public.loops_current_tenant_id() RETURNS TEXT
           LANGUAGE sql STABLE AS 'SELECT ''hostile-tenant''::TEXT';
@@ -558,8 +739,119 @@ suite("PostgresLoopStorage (live)", () => {
         preIdentityRuntime.queryClient,
         preIdentityAuthenticator.queryClient,
       );
+      const hostilePartialBefore = await identityCatalogSnapshot(executor.queryClient);
+      try {
+        await migrateCanonicalIdentityAliases(executor.queryClient);
+      } catch (error) {
+        hostilePartialMigrationRejected = error instanceof Error &&
+          error.message.includes("wholly absent canonical catalog");
+      }
+      hostilePartialRefusalMutationFree = JSON.stringify(
+        await identityCatalogSnapshot(executor.queryClient),
+      ) === JSON.stringify(hostilePartialBefore);
+      await executor.queryClient.execute(
+        "DROP FUNCTION public.loops_current_tenant_id()",
+      );
 
-      await schema.migrate();
+      await executor.queryClient.execute(`
+        CREATE SCHEMA identity_poison;
+        CREATE TABLE identity_poison.open_loops_schema_migrations (
+          id TEXT PRIMARY KEY,
+          checksum TEXT NOT NULL,
+          applied_at TIMESTAMPTZ NOT NULL
+        );
+        CREATE TABLE identity_poison.tenants(id TEXT PRIMARY KEY);
+      `);
+      const poisonedSearchPathUrl = new URL(isolatedUrl());
+      poisonedSearchPathUrl.searchParams.set(
+        "options",
+        "-csearch_path=identity_poison,public",
+      );
+      const poisonedSearchPathExecutor = PgPoolExecutor.fromConnectionString({
+        connectionString: poisonedSearchPathUrl.toString(),
+        applicationName: "loops-identity-search-path-regression",
+        max: 1,
+      });
+      let temporarySearchPathTargets: {
+        ledger_count: number;
+        trigger_count: number;
+      } | null = null;
+      try {
+        await poisonedSearchPathExecutor.queryClient.execute(`
+          CREATE TEMP TABLE open_loops_schema_migrations (
+            id TEXT PRIMARY KEY,
+            checksum TEXT NOT NULL,
+            applied_at TIMESTAMPTZ NOT NULL
+          );
+          CREATE TEMP TABLE tenants(id TEXT PRIMARY KEY);
+        `);
+        const identityDryRunBefore = await identityCatalogSnapshot(executor.queryClient);
+        const identityDryRun = await migrateCanonicalIdentityAliases(
+          poisonedSearchPathExecutor.queryClient,
+          { dryRun: true },
+        );
+        identityDryRunMutationFree =
+          identityDryRun.plan.filter((item) => item.state === "pending").length === 1 &&
+          identityDryRun.plan.find((item) =>
+            item.migration.id === "0013_loops_identity_aliases"
+          )?.state === "pending" &&
+          JSON.stringify(await identityCatalogSnapshot(executor.queryClient)) ===
+          JSON.stringify(identityDryRunBefore);
+        await migrateCanonicalIdentityAliases(poisonedSearchPathExecutor.queryClient);
+        temporarySearchPathTargets = await poisonedSearchPathExecutor.queryClient.get<{
+          ledger_count: number;
+          trigger_count: number;
+        }>(`
+          SELECT
+            (SELECT count(*)::int FROM pg_temp.open_loops_schema_migrations) AS ledger_count,
+            (
+              SELECT count(*)::int
+                FROM pg_trigger trigger
+               WHERE trigger.tgrelid='pg_temp.tenants'::regclass
+                 AND trigger.tgname='loops_reject_runtime_tenant_update'
+                 AND NOT trigger.tgisinternal
+            ) AS trigger_count
+        `);
+      } finally {
+        await poisonedSearchPathExecutor.close();
+      }
+      const searchPathTargets = await executor.queryClient.get<{
+        public_trigger_count: number;
+        poison_trigger_count: number;
+        poison_ledger_count: number;
+        identity_recorded: boolean;
+      }>(`
+        SELECT
+          (
+            SELECT count(*)::int
+              FROM pg_trigger trigger
+             WHERE trigger.tgrelid='public.tenants'::regclass
+               AND trigger.tgname='loops_reject_runtime_tenant_update'
+               AND NOT trigger.tgisinternal
+          ) AS public_trigger_count,
+          (
+            SELECT count(*)::int
+              FROM pg_trigger trigger
+             WHERE trigger.tgrelid='identity_poison.tenants'::regclass
+               AND trigger.tgname='loops_reject_runtime_tenant_update'
+               AND NOT trigger.tgisinternal
+          ) AS poison_trigger_count,
+          (SELECT count(*)::int FROM identity_poison.open_loops_schema_migrations)
+            AS poison_ledger_count,
+          EXISTS (
+            SELECT 1
+              FROM public.open_loops_schema_migrations
+             WHERE id='0013_loops_identity_aliases'
+          ) AS identity_recorded
+      `);
+      identitySearchPathPoisonIgnored =
+        searchPathTargets?.public_trigger_count === 1 &&
+        searchPathTargets.poison_trigger_count === 0 &&
+        searchPathTargets.poison_ledger_count === 0 &&
+        searchPathTargets.identity_recorded &&
+        temporarySearchPathTargets?.ledger_count === 0 &&
+        temporarySearchPathTargets.trigger_count === 0;
+      await executor.queryClient.execute("DROP SCHEMA identity_poison CASCADE");
       exactPostIdentityReadiness = await requestActualReadiness(
         runtimeSchema,
         preIdentityRuntime.queryClient,
@@ -1034,9 +1326,28 @@ suite("PostgresLoopStorage (live)", () => {
     expect(preIdentityStorageReadable).toBe(true);
     expect(preIdentityAliasesAbsent).toBe(true);
     expect(preIdentityCanonicalAliasesSafe).toBe(true);
+    expect(hostileOverloadPreApplySafe).toBe(false);
+    expect(hostileRoutinePreApplySafe).toBe(false);
+    expect(hostileOverloadMigrationRejected).toBe(true);
+    expect(hostileOverloadRefusalMutationFree).toBe(true);
+    expect(hostileRoutineMigrationRejected).toBe(true);
+    expect(hostileRoutineRefusalMutationFree).toBe(true);
+    expect(hostilePartialMigrationRejected).toBe(true);
+    expect(hostilePartialRefusalMutationFree).toBe(true);
+    expect(unauthorizedIdentityMigrationRejected).toBe(true);
+    expect(unauthorizedIdentityRefusalMutationFree).toBe(true);
+    expect(identityDryRunMutationFree).toBe(true);
+    expect(identitySearchPathPoisonIgnored).toBe(true);
     expect(safePreIdentityReadiness).toEqual({
       status: 200,
       body: expect.objectContaining({ status: "ready" }),
+    });
+    expect(hostileOverloadPreIdentityReadiness).toEqual({
+      status: 503,
+      body: expect.objectContaining({
+        status: "not_ready",
+        code: "unsafe_identity_catalog",
+      }),
     });
     expect(unsafePreIdentityReadiness).toEqual({
       status: 503,
@@ -1280,6 +1591,75 @@ suite("PostgresLoopStorage (live)", () => {
         mutation: mutation.name,
         safe: await isCanonicalIdentityAliasStateSafe(runtimeExecutor.queryClient),
       }).toEqual({ mutation: mutation.name, safe: true });
+    }
+  });
+
+  test("unexpected canonical-name overloads and procedures remain fail-closed through repair and cleanup", async () => {
+    // Keep this test independently runnable when Bun filters out the preceding
+    // service-role test that normally clears the intentionally hostile schema.
+    await executor.queryClient.execute(`
+      REVOKE ALL ON evil.loops FROM open_loops_runtime;
+      REVOKE ALL ON SCHEMA evil FROM open_loops_runtime
+    `);
+    const hostileRoutines = [
+      {
+        name: "function overload",
+        create: `
+          CREATE FUNCTION public.loops_current_tenant_id(p_tenant TEXT) RETURNS TEXT
+            LANGUAGE sql STABLE AS 'SELECT p_tenant'
+        `,
+        drop: "DROP FUNCTION public.loops_current_tenant_id(TEXT)",
+      },
+      {
+        name: "procedure overload",
+        create: `
+          CREATE PROCEDURE public.loops_append_auth_audit(IN p_probe INTEGER)
+            LANGUAGE plpgsql AS $$ BEGIN NULL; END $$
+        `,
+        drop: "DROP PROCEDURE public.loops_append_auth_audit(INTEGER)",
+      },
+    ];
+
+    for (const hostile of hostileRoutines) {
+      await executor.queryClient.execute(hostile.create);
+      const poisoned = await identityCatalogSnapshot(executor.queryClient);
+      expect({
+        routine: hostile.name,
+        safe: await isCanonicalIdentityAliasStateSafe(runtimeExecutor.queryClient),
+      }).toEqual({ routine: hostile.name, safe: false });
+      expect(await requestActualReadiness(
+        schema,
+        runtimeExecutor.queryClient,
+        authExecutor.queryClient,
+      )).toEqual({
+        status: 503,
+        body: expect.objectContaining({
+          status: "not_ready",
+          code: "unsafe_identity_catalog",
+        }),
+      });
+      await expect(
+        repairCanonicalIdentityCatalog(
+          executor.queryClient,
+          `repair-unexpected-${hostile.name.replaceAll(" ", "-")}`,
+        ),
+      ).rejects.toThrow("postcondition failed");
+      expect(await identityCatalogSnapshot(executor.queryClient)).toEqual(poisoned);
+
+      await executor.queryClient.execute(hostile.drop);
+      expect(await isCanonicalIdentityAliasStateSafe(runtimeExecutor.queryClient)).toBe(true);
+      expect(await requestActualReadiness(
+        schema,
+        runtimeExecutor.queryClient,
+        authExecutor.queryClient,
+      )).toEqual({
+        status: 200,
+        body: expect.objectContaining({ status: "ready" }),
+      });
+      expect((await repairCanonicalIdentityCatalog(
+        executor.queryClient,
+        `repair-after-${hostile.name.replaceAll(" ", "-")}`,
+      )).outcome).toBe("already_safe");
     }
   });
 

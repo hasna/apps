@@ -293,15 +293,24 @@ describe("loops-serve database bootstrap", () => {
       sql: "SELECT 1",
       checksum: "sha256:earlier",
     };
-    const result = (pending: string[]) => ({
-      backend: "postgres" as const,
-      dryRun: true,
-      applied: [],
-      plan: [earlierMigration, identityMigration].map((migration) => ({
+    const result = (pending: string[]) => {
+      const plan = [earlierMigration, identityMigration].map((migration) => ({
         migration,
         state: pending.includes(migration.id) ? "pending" as const : "already_applied" as const,
-      })),
-    });
+      }));
+      return {
+        backend: "postgres" as const,
+        dryRun: true,
+        applied: plan
+          .filter((item) => item.state === "already_applied")
+          .map((item) => ({
+            id: item.migration.id,
+            checksum: item.migration.checksum,
+            appliedAt: "2026-07-23T00:00:00.000Z",
+          })),
+        plan,
+      };
+    };
     expect(() => assertIdentityAliasesAreSolePending(
       result(["0013_loops_identity_aliases"]),
       [earlierMigration, identityMigration],
@@ -314,6 +323,42 @@ describe("loops-serve database bootstrap", () => {
       result(["0010_tenant_enforce", "0013_loops_identity_aliases"]),
       [earlierMigration, identityMigration],
     )).toThrow("only after every earlier known migration");
+    const futureMigration = {
+      id: "0014_future",
+      sql: "SELECT 1",
+      checksum: "sha256:future",
+    };
+    expect(() => assertIdentityAliasesAreSolePending({
+      backend: "postgres",
+      dryRun: true,
+      applied: [
+        {
+          id: earlierMigration.id,
+          checksum: earlierMigration.checksum,
+          appliedAt: "2026-07-23T00:00:00.000Z",
+        },
+        {
+          id: futureMigration.id,
+          checksum: futureMigration.checksum,
+          appliedAt: "2026-07-23T00:00:01.000Z",
+        },
+      ],
+      plan: [
+        { migration: earlierMigration, state: "already_applied" },
+        { migration: identityMigration, state: "pending" },
+        { migration: futureMigration, state: "already_applied" },
+      ],
+    }, [earlierMigration, identityMigration, futureMigration]))
+      .toThrow("exact prior migration ledger");
+    const checksumDrift = result(["0013_loops_identity_aliases"]);
+    checksumDrift.applied[0] = {
+      ...checksumDrift.applied[0]!,
+      checksum: "sha256:tampered",
+    };
+    expect(() => assertIdentityAliasesAreSolePending(
+      checksumDrift,
+      [earlierMigration, identityMigration],
+    )).toThrow("ledger and immutable migration plan");
   });
 
   test("exposes a fixed no-option shared database transfer command", () => {

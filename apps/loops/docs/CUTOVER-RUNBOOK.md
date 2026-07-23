@@ -173,11 +173,17 @@ Before step 1, satisfy and preserve evidence for these hard gates:
     pending migration or any partial canonical alias must keep `/ready` at 503.
 12. Apply the forward-only identity boundary with exactly one migrator:
     `HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --identity-aliases`.
-    Verify the exact 0013 checksum, canonical catalog state, ledger
-    row/checksum parity, and `/ready` again. From this point onward, never point
-    the preceding binary at this database. If recorded-0013 aliases later
-    drift, use only `loops-serve identity-catalog-repair`; capture its bounded
-    receipt and keep traffic closed until `/ready` is green.
+    The command itself takes the advisory lock, pins `search_path` to the public
+    application schema, verifies exact migrator authority and the prior
+    ledger/checksums, and refuses every partial object or unexpected
+    canonical-name overload/routine before it can record 0013. Verify the exact
+    0013 checksum, canonical catalog state, ledger row/checksum parity, and
+    `/ready` again. From this point onward, never point the preceding binary at
+    this database. If recorded-0013 aliases later drift, use only
+    `loops-serve identity-catalog-repair`; an unexpected overload or procedure
+    remains a fail-closed collision that the repair command will not delete.
+    Capture its bounded receipt and keep traffic closed until `/ready` is
+    green.
 13. Verify an authenticated `/v1` read/write smoke against a throwaway loop and
    a claim/finalize smoke if a runner API URL is configured.
 14. Record package version, git SHA, image tag and digest, database migration

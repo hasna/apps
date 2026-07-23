@@ -110,7 +110,7 @@ function resolveCanonicalIdentityMigration(
 interface CanonicalIdentityFunctionState {
   name: string;
   args: string;
-  result: string;
+  result: string | null;
   owner: string;
   language: string;
   security_definer: boolean;
@@ -219,6 +219,9 @@ const CANONICAL_IDENTITY_FUNCTIONS: Readonly<Record<string, CanonicalIdentityFun
       ],
     },
   });
+const CANONICAL_IDENTITY_ROUTINE_NAMES = Object.freeze(
+  Object.keys(CANONICAL_IDENTITY_FUNCTIONS),
+);
 
 function sameCatalogValues(actual: readonly string[] | null, expected: readonly string[]): boolean {
   if (!actual || actual.length !== expected.length) return false;
@@ -345,7 +348,10 @@ export async function isCanonicalIdentityAliasStateSafe(
            proc.proleakproof AS is_leakproof,
            proc.proconfig AS config,
            proc.prosrc AS source,
-           pg_get_functiondef(proc.oid) AS definition,
+           CASE
+             WHEN proc.prokind IN ('f', 'p') THEN pg_get_functiondef(proc.oid)
+             ELSE ''
+           END AS definition,
            ARRAY(
              SELECT concat(
                CASE WHEN acl.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(acl.grantee) END,
@@ -355,15 +361,12 @@ export async function isCanonicalIdentityAliasStateSafe(
               ORDER BY 1
            ) AS acl
       FROM pg_proc proc
+      JOIN pg_namespace namespace ON namespace.oid=proc.pronamespace
       JOIN pg_language language ON language.oid=proc.prolang
-     WHERE proc.oid IN (
-       to_regprocedure('public.loops_current_tenant_id()'),
-       to_regprocedure('public.loops_reject_runtime_tenant_update()'),
-       to_regprocedure('public.loops_authenticate_key(text,text)'),
-       to_regprocedure('public.loops_append_auth_audit(text,text,text,text,text,text,text,jsonb)')
-     )
-     ORDER BY proc.proname
-  `);
+     WHERE namespace.nspname='public'
+       AND proc.proname=ANY($1::text[])
+     ORDER BY proc.proname, proc.prokind, pg_get_function_identity_arguments(proc.oid)
+  `, [CANONICAL_IDENTITY_ROUTINE_NAMES]);
   if (functions.length !== Object.keys(CANONICAL_IDENTITY_FUNCTIONS).length) return false;
   for (const state of functions) {
     const expected = CANONICAL_IDENTITY_FUNCTIONS[state.name];
@@ -417,12 +420,13 @@ export async function isCanonicalIdentityPreApplyStateSafe(
   const state = await client.get<{ aliases_absent: boolean }>(`
     SELECT
       to_regclass('public.loops_schema_migrations') IS NULL
-      AND to_regprocedure('public.loops_current_tenant_id()') IS NULL
-      AND to_regprocedure('public.loops_reject_runtime_tenant_update()') IS NULL
-      AND to_regprocedure('public.loops_authenticate_key(text,text)') IS NULL
-      AND to_regprocedure(
-        'public.loops_append_auth_audit(text,text,text,text,text,text,text,jsonb)'
-      ) IS NULL
+      AND NOT EXISTS (
+        SELECT 1
+          FROM pg_proc proc
+          JOIN pg_namespace namespace ON namespace.oid=proc.pronamespace
+         WHERE namespace.nspname='public'
+           AND proc.proname=ANY($1::text[])
+      )
       AND NOT EXISTS (
         SELECT 1
           FROM pg_trigger trigger
@@ -430,7 +434,7 @@ export async function isCanonicalIdentityPreApplyStateSafe(
            AND trigger.tgname='loops_reject_runtime_tenant_update'
            AND NOT trigger.tgisinternal
       ) AS aliases_absent
-  `);
+  `, [CANONICAL_IDENTITY_ROUTINE_NAMES]);
   return state?.aliases_absent === true;
 }
 
@@ -451,6 +455,83 @@ function queryExecutor(client: TypedQueryClient): PostgresQueryExecutor {
   };
 }
 
+interface CanonicalIdentityMigratorAuthority {
+  actor: string;
+  superuser: boolean;
+  owns_database: boolean;
+  owner_settable: boolean;
+  migrator_settable: boolean;
+  runtime_member: boolean;
+  authenticator_member: boolean;
+  ledger_owner: string;
+  completed_at: string | Date;
+}
+
+async function requireCanonicalIdentityMigratorAuthority(
+  client: TypedQueryClient,
+  operation: "apply" | "repair",
+): Promise<CanonicalIdentityMigratorAuthority> {
+  const authority = await client.get<CanonicalIdentityMigratorAuthority>(`
+    SELECT session_user AS actor,
+           role.rolsuper AS superuser,
+           database.datdba=role.oid AS owns_database,
+           pg_has_role(session_user, 'open_loops_owner', 'SET') AS owner_settable,
+           pg_has_role(session_user, 'open_loops_migrator', 'SET') AS migrator_settable,
+           EXISTS (
+             WITH RECURSIVE memberships(roleid) AS (
+               SELECT direct.roleid
+                 FROM pg_auth_members direct
+                WHERE direct.member=role.oid
+               UNION
+               SELECT inherited.roleid
+                 FROM pg_auth_members inherited
+                 JOIN memberships parent ON inherited.member=parent.roleid
+             )
+             SELECT 1
+               FROM memberships
+               JOIN pg_roles granted ON granted.oid=memberships.roleid
+              WHERE granted.rolname='open_loops_runtime'
+           ) AS runtime_member,
+           EXISTS (
+             WITH RECURSIVE memberships(roleid) AS (
+               SELECT direct.roleid
+                 FROM pg_auth_members direct
+                WHERE direct.member=role.oid
+               UNION
+               SELECT inherited.roleid
+                 FROM pg_auth_members inherited
+                 JOIN memberships parent ON inherited.member=parent.roleid
+             )
+             SELECT 1
+               FROM memberships
+               JOIN pg_roles granted ON granted.oid=memberships.roleid
+              WHERE granted.rolname='open_loops_authenticator'
+           ) AS authenticator_member,
+           pg_get_userbyid(ledger.relowner) AS ledger_owner,
+           clock_timestamp() AS completed_at
+      FROM pg_roles role
+      JOIN pg_database database
+        ON database.datname=current_database()
+      JOIN pg_class ledger
+        ON ledger.oid='public.open_loops_schema_migrations'::regclass
+     WHERE role.rolname=session_user
+  `);
+  if (
+    !authority ||
+    (!authority.superuser && !authority.owns_database) ||
+    !authority.owner_settable ||
+    !authority.migrator_settable ||
+    authority.runtime_member ||
+    authority.authenticator_member ||
+    authority.ledger_owner !== "open_loops_migrator"
+  ) {
+    throw new Error(
+      `identity catalog ${operation} requires the dedicated database owner or superuser with exact owner/migrator SET authority and no service-role membership`,
+    );
+  }
+  return authority;
+}
+
 /**
  * Reconcile recorded identity-catalog drift through the same immutable SQL
  * owned by the migration metadata. The advisory lock, authority/ledger
@@ -467,6 +548,7 @@ export async function repairCanonicalIdentityCatalog(
   }
   return client.transaction(async (transactionClient) => {
     await transactionClient.get(POSTGRES_MIGRATION_ADVISORY_LOCK_SQL);
+    await transactionClient.execute("SET LOCAL search_path = public, pg_catalog, pg_temp");
     const schema = new PostgresStorage(queryExecutor(transactionClient));
     const preview = await schema.migrate({ dryRun: true });
     const pending = preview.plan.filter((item) => item.state === "pending");
@@ -476,74 +558,10 @@ export async function repairCanonicalIdentityCatalog(
       );
     }
 
-    const authority = await transactionClient.get<{
-      actor: string;
-      superuser: boolean;
-      owns_database: boolean;
-      owner_settable: boolean;
-      migrator_settable: boolean;
-      runtime_member: boolean;
-      authenticator_member: boolean;
-      ledger_owner: string;
-      completed_at: string | Date;
-    }>(`
-      SELECT session_user AS actor,
-             role.rolsuper AS superuser,
-             database.datdba=role.oid AS owns_database,
-             pg_has_role(session_user, 'open_loops_owner', 'SET') AS owner_settable,
-             pg_has_role(session_user, 'open_loops_migrator', 'SET') AS migrator_settable,
-             EXISTS (
-               WITH RECURSIVE memberships(roleid) AS (
-                 SELECT direct.roleid
-                   FROM pg_auth_members direct
-                  WHERE direct.member=role.oid
-                 UNION
-                 SELECT inherited.roleid
-                   FROM pg_auth_members inherited
-                   JOIN memberships parent ON inherited.member=parent.roleid
-               )
-               SELECT 1
-                 FROM memberships
-                 JOIN pg_roles granted ON granted.oid=memberships.roleid
-                WHERE granted.rolname='open_loops_runtime'
-             ) AS runtime_member,
-             EXISTS (
-               WITH RECURSIVE memberships(roleid) AS (
-                 SELECT direct.roleid
-                   FROM pg_auth_members direct
-                  WHERE direct.member=role.oid
-                 UNION
-                 SELECT inherited.roleid
-                   FROM pg_auth_members inherited
-                   JOIN memberships parent ON inherited.member=parent.roleid
-               )
-               SELECT 1
-                 FROM memberships
-                 JOIN pg_roles granted ON granted.oid=memberships.roleid
-                WHERE granted.rolname='open_loops_authenticator'
-             ) AS authenticator_member,
-             pg_get_userbyid(ledger.relowner) AS ledger_owner,
-             clock_timestamp() AS completed_at
-        FROM pg_roles role
-        JOIN pg_database database
-          ON database.datname=current_database()
-        JOIN pg_class ledger
-          ON ledger.oid='public.open_loops_schema_migrations'::regclass
-       WHERE role.rolname=session_user
-    `);
-    if (
-      !authority ||
-      (!authority.superuser && !authority.owns_database) ||
-      !authority.owner_settable ||
-      !authority.migrator_settable ||
-      authority.runtime_member ||
-      authority.authenticator_member ||
-      authority.ledger_owner !== "open_loops_migrator"
-    ) {
-      throw new Error(
-        "identity catalog repair requires the dedicated database owner or superuser with exact owner/migrator SET authority and no service-role membership",
-      );
-    }
+    const authority = await requireCanonicalIdentityMigratorAuthority(
+      transactionClient,
+      "repair",
+    );
 
     const alreadySafe = await isCanonicalIdentityAliasStateSafe(transactionClient, migration);
     if (!alreadySafe) {
@@ -654,14 +672,132 @@ export function assertIdentityAliasesAreSolePending(
   migrations: readonly StorageMigration[] = POSTGRES_STORAGE_MIGRATIONS,
 ): void {
   const identityMigration = resolveCanonicalIdentityMigration(migrations);
-  const pending = preview.plan
-    .filter((item) => item.state === "pending")
-    .map((item) => item.migration.id);
-  if (pending.some((id) => id !== identityMigration.id)) {
+  const migrationIds = migrations.map((migration) => migration.id);
+  if (new Set(migrationIds).size !== migrationIds.length) {
+    throw new Error("identity alias migration metadata contains duplicate migration ids");
+  }
+  if (
+    preview.plan.length !== migrations.length ||
+    preview.plan.some((item, index) =>
+      item.migration.id !== migrations[index]?.id ||
+      item.migration.checksum !== migrations[index]?.checksum
+    )
+  ) {
+    throw new Error("identity alias migration plan does not match immutable migration metadata");
+  }
+
+  const appliedById = new Map<string, string>();
+  for (const applied of preview.applied) {
+    if (appliedById.has(applied.id)) {
+      throw new Error("identity alias migration ledger contains duplicate migration ids");
+    }
+    if (!migrationIds.includes(applied.id)) {
+      throw new Error("identity alias migration ledger contains an unknown migration id");
+    }
+    appliedById.set(applied.id, applied.checksum);
+  }
+  for (const item of preview.plan) {
+    const appliedChecksum = appliedById.get(item.migration.id);
+    if (
+      (item.state === "already_applied") !== (appliedChecksum !== undefined) ||
+      (appliedChecksum !== undefined && appliedChecksum !== item.migration.checksum)
+    ) {
+      throw new Error(
+        "identity alias migration ledger and immutable migration plan do not agree",
+      );
+    }
+  }
+
+  const pending = preview.plan.filter((item) => item.state === "pending");
+  if (
+    pending.length > 0 &&
+    (pending.length !== 1 || pending[0]?.migration.id !== identityMigration.id)
+  ) {
     throw new Error(
       "identity aliases may be applied only after every earlier known migration is recorded with an exact checksum",
     );
   }
+
+  if (pending.length === 1) {
+    const identityIndex = migrations.findIndex((migration) => migration.id === identityMigration.id);
+    const expectedApplied = migrations.slice(0, identityIndex).map((migration) => migration.id);
+    if (
+      appliedById.size !== expectedApplied.length ||
+      expectedApplied.some((id) => !appliedById.has(id))
+    ) {
+      throw new Error(
+        "identity aliases require the exact prior migration ledger with no out-of-order rows",
+      );
+    }
+  }
+}
+
+/**
+ * Cross the forward-only identity boundary under one advisory-locked
+ * transaction. The command owns its pre-apply catalog, migration-plan,
+ * authority, and postcondition checks; it never relies on `/ready` having run
+ * first.
+ */
+export async function migrateCanonicalIdentityAliases(
+  client: PoolQueryClient,
+  opts: {
+    dryRun?: boolean;
+    migrations?: readonly StorageMigration[];
+  } = {},
+): Promise<StorageMigrationResult> {
+  const migrations = opts.migrations ?? POSTGRES_STORAGE_MIGRATIONS;
+  const identityMigration = resolveCanonicalIdentityMigration(migrations);
+  const rolling = identityMigration.rollingDeploy;
+  if (
+    rolling?.allowAsSolePending !== true ||
+    rolling.preApplyCatalogState !== "aliases_absent" ||
+    rolling.postApplyCatalogState !== "aliases_exact"
+  ) {
+    throw new Error("canonical identity migration metadata does not define the exact cutover contract");
+  }
+
+  return client.transaction(async (transactionClient) => {
+    await transactionClient.get(POSTGRES_MIGRATION_ADVISORY_LOCK_SQL);
+    await transactionClient.execute("SET LOCAL search_path = public, pg_catalog, pg_temp");
+    const schema = new PostgresStorage(queryExecutor(transactionClient), migrations);
+    const preview = await schema.migrate({ dryRun: true });
+    assertIdentityAliasesAreSolePending(preview, migrations);
+    await requireCanonicalIdentityMigratorAuthority(transactionClient, "apply");
+
+    const identityPlan = preview.plan.find((item) =>
+      item.migration.id === identityMigration.id
+    );
+    if (!identityPlan) {
+      throw new Error("canonical identity migration is missing from the immutable migration plan");
+    }
+
+    if (identityPlan.state === "already_applied") {
+      if (!await isCanonicalIdentityAliasStateSafe(transactionClient, identityMigration)) {
+        throw new Error(
+          "recorded identity aliases are not exact; use the protected identity-catalog-repair route",
+        );
+      }
+      if (opts.dryRun) return preview;
+      const result = await schema.migrate({ through: identityMigration.id });
+      if (!await isCanonicalIdentityAliasStateSafe(transactionClient, identityMigration)) {
+        throw new Error("identity alias migration postcondition failed");
+      }
+      return result;
+    }
+
+    if (!await isCanonicalIdentityPreApplyStateSafe(transactionClient)) {
+      throw new Error(
+        "identity aliases require a wholly absent canonical catalog before the ledger boundary",
+      );
+    }
+    if (opts.dryRun) return preview;
+
+    const result = await schema.migrate({ through: identityMigration.id });
+    if (!await isCanonicalIdentityAliasStateSafe(transactionClient, identityMigration)) {
+      throw new Error("identity alias migration postcondition failed");
+    }
+    return result;
+  });
 }
 
 export async function isSafeServiceConnection(
@@ -1572,11 +1708,10 @@ program
       if (opts.enforceTenancy) await assertTenantEnforcementBootstrapIfPending(executor.queryClient, schema);
       let result: StorageMigrationResult;
       if (opts.identityAliases) {
-        const preview = await schema.migrate({ dryRun: true });
-        assertIdentityAliasesAreSolePending(preview, schema.migrations);
-        result = opts.dryRun
-          ? preview
-          : await schema.migrate({ through });
+        result = await migrateCanonicalIdentityAliases(executor.queryClient, {
+          dryRun: Boolean(opts.dryRun),
+          migrations: schema.migrations,
+        });
       } else {
         result = await schema.migrate({
           dryRun: Boolean(opts.dryRun),
