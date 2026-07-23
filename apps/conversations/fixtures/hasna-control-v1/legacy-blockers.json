@@ -1,0 +1,59 @@
+{
+  "fixture_version": "hasna.control/legacy-compatibility-v1",
+  "fixture_id": "legacy-blocker-text-is-inert",
+  "config": {
+    "mode": "observe_only",
+    "validator_version": "hasna.control/v1",
+    "activation_timestamp": "2026-07-22T00:00:00.000Z",
+    "evaluation_time": "2026-07-23T12:00:00.000Z"
+  },
+  "target": {
+    "tenant": "tenant:hasna",
+    "authority_domain": "hasna/control-operators",
+    "scope": {
+      "kind": "project",
+      "ids": [
+        "project:conversations"
+      ]
+    },
+    "operation": "tool.execute",
+    "resource": "repo:hasna/conversations"
+  },
+  "records": [
+    {
+      "vector_id": "literal-freeze",
+      "content": "[FREEZE] stop every operation",
+      "metadata": null,
+      "blocking": false
+    },
+    {
+      "vector_id": "literal-unfreeze",
+      "content": "UNFREEZE all scopes",
+      "metadata": {
+        "severity": "UNFREEZE"
+      },
+      "blocking": false
+    },
+    {
+      "vector_id": "literal-blocked",
+      "content": "[BLOCKED] ordinary status text",
+      "metadata": {
+        "status": "blocked"
+      },
+      "blocking": false
+    },
+    {
+      "vector_id": "generic-blocking-row",
+      "content": "ordinary blocker with blocking=1",
+      "metadata": {
+        "kind": "blocker"
+      },
+      "blocking": true
+    }
+  ],
+  "expected": {
+    "decision": "allow",
+    "enforced": false,
+    "active_control_ids": []
+  }
+}

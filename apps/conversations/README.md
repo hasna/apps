@@ -100,6 +100,16 @@ messages should update read state.
 Channel names are normalized to stable human-readable ids. For example,
 `#Engineering Updates` is stored as `engineering-updates`.
 
+## Observe-only control validation
+
+The repository includes a pure, versioned `hasna.control/v1` metadata validator
+and lifecycle evaluator. It computes `allow`, `hold`, or `indeterminate` with
+`enforced: false`; it does not create controls, change storage, or block tools.
+Message content—including literal `FREEZE`, `UNFREEZE`, and `BLOCKED` text—has
+no control semantics. See [the contract](docs/HASNA-CONTROL-V1.md),
+[threat model](docs/HASNA-CONTROL-V1-THREAT-MODEL.md), and portable fixtures in
+`fixtures/hasna-control-v1/`.
+
 The `conversations-hook` binary is still installed for hook integrations:
 
 ```bash

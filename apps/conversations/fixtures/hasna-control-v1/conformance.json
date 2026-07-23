@@ -1,0 +1,121 @@
+{
+  "fixture_version": "hasna.control/conformance-v1",
+  "fixture_id": "project-freeze-unfreeze",
+  "expected": {
+    "freeze_event_id": "sha256:41a6e7b5480d20fd587b3170ee6615bd509e6fc4411f5ce15f612b0bc4328547",
+    "unfreeze_event_id": "sha256:0b5500cd5f2c29b65badf330b612100baa44052cf8c607fb39ee6414c19eb6f3",
+    "canonical_event_sequence_sha256": "sha256:0cffbec5ba8980dd9b2fd27e0c52b472f285dd7da8efc910a28351141c1d0b31",
+    "decision": "allow",
+    "enforced": false
+  },
+  "config": {
+    "mode": "observe_only",
+    "validator_version": "hasna.control/v1",
+    "activation_timestamp": "2026-07-22T00:00:00.000Z",
+    "evaluation_time": "2026-07-23T12:00:00.000Z"
+  },
+  "target": {
+    "tenant": "tenant:hasna",
+    "authority_domain": "hasna/control-operators",
+    "scope": {
+      "kind": "project",
+      "ids": [
+        "project:conversations"
+      ]
+    },
+    "operation": "tool.execute",
+    "resource": "repo:hasna/conversations"
+  },
+  "observations": [
+    {
+      "content": "[FREEZE] text is inert; metadata is authoritative",
+      "metadata": {
+        "hasna.control": {
+          "version": "hasna.control/v1",
+          "control_id": "123e4567-e89b-42d3-a456-426614174000",
+          "lifecycle_version": 1,
+          "state": "freeze",
+          "fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "tenant": "tenant:hasna",
+          "authority_domain": "hasna/control-operators",
+          "policy_version": "1.0.1",
+          "publisher": "agent:security-operator",
+          "surface": "announcements",
+          "scope": {
+            "kind": "project",
+            "ids": [
+              "project:conversations"
+            ]
+          },
+          "affected_operations": [
+            "tool.execute",
+            "workflow.dispatch"
+          ],
+          "affected_resources": [
+            "repo:hasna/conversations"
+          ],
+          "issued_at": "2026-07-23T00:00:00.000Z",
+          "expires_at": "2026-07-24T00:00:00.000Z",
+          "unfreeze_of": null,
+          "event_id": "sha256:41a6e7b5480d20fd587b3170ee6615bd509e6fc4411f5ce15f612b0bc4328547"
+        }
+      },
+      "trusted_envelope": {
+        "authenticated_principal": "agent:security-operator",
+        "tenant": "tenant:hasna",
+        "authority_domain": "hasna/control-operators",
+        "permitted_surface": "announcements",
+        "policy_version": "1.0.1",
+        "server_time": "2026-07-23T00:00:01.000Z",
+        "blocking": true
+      }
+    },
+    {
+      "content": "UNFREEZE text is inert; exact metadata reference releases",
+      "metadata": {
+        "hasna.control": {
+          "version": "hasna.control/v1",
+          "control_id": "123e4567-e89b-42d3-a456-426614174000",
+          "lifecycle_version": 2,
+          "state": "unfreeze",
+          "fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "tenant": "tenant:hasna",
+          "authority_domain": "hasna/control-operators",
+          "policy_version": "1.0.1",
+          "publisher": "agent:security-operator",
+          "surface": "announcements",
+          "scope": {
+            "kind": "project",
+            "ids": [
+              "project:conversations"
+            ]
+          },
+          "affected_operations": [
+            "tool.execute",
+            "workflow.dispatch"
+          ],
+          "affected_resources": [
+            "repo:hasna/conversations"
+          ],
+          "issued_at": "2026-07-23T01:00:00.000Z",
+          "expires_at": "2026-07-24T01:00:00.000Z",
+          "unfreeze_of": {
+            "event_id": "sha256:41a6e7b5480d20fd587b3170ee6615bd509e6fc4411f5ce15f612b0bc4328547",
+            "control_id": "123e4567-e89b-42d3-a456-426614174000",
+            "fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "event_id": "sha256:0b5500cd5f2c29b65badf330b612100baa44052cf8c607fb39ee6414c19eb6f3"
+        }
+      },
+      "trusted_envelope": {
+        "authenticated_principal": "agent:security-operator",
+        "tenant": "tenant:hasna",
+        "authority_domain": "hasna/control-operators",
+        "permitted_surface": "announcements",
+        "policy_version": "1.0.1",
+        "server_time": "2026-07-23T01:00:01.000Z",
+        "blocking": false
+      }
+    }
+  ]
+}
