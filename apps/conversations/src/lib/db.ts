@@ -610,13 +610,10 @@ function dropMessagesFts(db: Database): void {
   safeExec(db, "DROP TABLE IF EXISTS messages_fts");
 }
 
-export function getDb(): Database {
-  if (db) return db;
-
-  const dbPath = getDbPath();
+export function openDatabase(dbPath: string): Database {
   mkdirSync(dirname(dbPath), { recursive: true });
 
-  db = new ConversationsDatabase(dbPath);
+  const db = new ConversationsDatabase(dbPath);
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA busy_timeout = 5000");
 
@@ -1078,6 +1075,12 @@ export function getDb(): Database {
     `);
   }
 
+  return db;
+}
+
+export function getDb(): Database {
+  if (db) return db;
+  db = openDatabase(getDbPath());
   return db;
 }
 

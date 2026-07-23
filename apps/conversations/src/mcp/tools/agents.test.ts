@@ -1,29 +1,38 @@
-import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from "bun:test";
+import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerAgentTools } from "./agents";
-import { closeDb } from "../../lib/db";
-import { resolveIdentity, _resetAutoName } from "../../lib/identity";
+import { openDatabase } from "../../lib/db";
+import type { Database } from "../../lib/db";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
-const TEST_DB = join(tmpdir(), `conversations-test-agents-mcp-${Date.now()}.db`);
+const TEST_DB = join(tmpdir(), `conversations-test-agents-mcp-${process.pid}-${crypto.randomUUID()}.db`);
 
 describe("agent MCP tools", () => {
   let client: Client;
+  let database: Database;
   let agentFocus: Map<string, { project_id: string | null }>;
+  let sessionAgent: string | null;
   const getAgentFocus = (agentId: string) => agentFocus.get(agentId)?.project_id ?? null;
 
   beforeAll(async () => {
-    process.env.CONVERSATIONS_DB_PATH = TEST_DB;
-    delete process.env.CONVERSATIONS_AGENT_ID;
-    closeDb();
+    database = openDatabase(TEST_DB);
 
     const server = new McpServer({ name: "test-agents-mcp", version: "0.0.1" });
     agentFocus = new Map();
-    registerAgentTools(server, agentFocus, getAgentFocus);
+    sessionAgent = null;
+    registerAgentTools(server, agentFocus, getAgentFocus, {
+      database,
+      resolveIdentity: (explicit) => explicit?.trim() || "test-auto-agent",
+      setSessionAgent: (agent) => {
+        sessionAgent = agent;
+      },
+      setClaudeSessionId: () => {},
+      updateCachedAutoName: () => {},
+    });
 
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     client = new Client({ name: "test-client", version: "1.0.0" });
@@ -32,8 +41,7 @@ describe("agent MCP tools", () => {
   });
 
   afterAll(async () => {
-    delete process.env.CONVERSATIONS_DB_PATH;
-    closeDb();
+    database.close();
     try { unlinkSync(TEST_DB); } catch {}
     try { unlinkSync(TEST_DB + "-wal"); } catch {}
     try { unlinkSync(TEST_DB + "-shm"); } catch {}
@@ -96,6 +104,7 @@ describe("agent MCP tools", () => {
       }) as any) as any;
       expect(result.agent).toBe("heartbeat-explicit");
       expect(result.heartbeat).toBe(true);
+      expect(sessionAgent).toBe("heartbeat-explicit");
     });
 
     test("heartbeat with name alias", async () => {
@@ -285,15 +294,18 @@ describe("agent MCP tools", () => {
     });
 
     test("returns blocking messages when they exist", async () => {
-      // Send a blocking message to our agent
-      const { sendMessage: sendMsg } = await import("../../lib/messages");
-      sendMsg({
-        from: "blocker-sender",
-        to: "blocker-target",
-        content: "BLOCK: fix this now",
-        priority: "urgent",
-        blocking: true,
-      });
+      database.prepare(`
+        INSERT INTO messages (uuid, session_id, from_agent, to_agent, content, priority, blocking)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        crypto.randomUUID().replace(/-/g, ""),
+        "blocker-sender-blocker-target",
+        "blocker-sender",
+        "blocker-target",
+        "BLOCK: fix this now",
+        "urgent",
+        1,
+      );
 
       const result = parseResult(await client.callTool({
         name: "get_blockers",

@@ -1,4 +1,5 @@
 import { getDb } from "./db.js";
+import type { Database } from "./db.js";
 import type { AgentPresence, AgentConflictError, RegisterAgentResult } from "../types.js";
 
 const ONLINE_THRESHOLD_SECONDS = 60;
@@ -83,9 +84,10 @@ export function registerAgent(
   name: string,
   sessionId: string,
   role?: string,
-  projectId?: string
+  projectId?: string,
+  database: Database = getDb(),
 ): RegisterAgentResult | AgentConflictError {
-  const db = getDb();
+  const db = database;
   const normalizedName = normalizeAgentName(name);
 
   // BEGIN IMMEDIATE acquires write lock at start — eliminates TOCTOU race
@@ -170,8 +172,9 @@ export function heartbeat(
   metadata?: Record<string, unknown>,
   sessionId?: string,
   projectId?: string | null,
+  database: Database = getDb(),
 ): void {
-  const db = getDb();
+  const db = database;
   const metadataJson = metadata ? JSON.stringify(metadata) : null;
   const resolvedStatus = status || "online";
   const normalizedAgent = normalizeAgentName(agent);
@@ -217,15 +220,18 @@ export function heartbeat(
   });
 }
 
-export function getPresence(agent: string): AgentPresence | null {
-  const db = getDb();
+export function getPresence(agent: string, database: Database = getDb()): AgentPresence | null {
+  const db = database;
   const normalizedAgent = normalizeAgentName(agent);
   const row = getPresenceByAgent(db, normalizedAgent);
   return row ? parsePresence(row) : null;
 }
 
-export function listAgents(opts?: { online_only?: boolean }): AgentPresence[] {
-  const db = getDb();
+export function listAgents(
+  opts?: { online_only?: boolean },
+  database: Database = getDb(),
+): AgentPresence[] {
+  const db = database;
 
   let query = "SELECT * FROM agent_presence";
 
@@ -239,15 +245,19 @@ export function listAgents(opts?: { online_only?: boolean }): AgentPresence[] {
   return rows.map(parsePresence);
 }
 
-export function removePresence(agent: string): boolean {
-  const db = getDb();
+export function removePresence(agent: string, database: Database = getDb()): boolean {
+  const db = database;
   const normalizedAgent = normalizeAgentName(agent);
   const result = db.prepare("DELETE FROM agent_presence WHERE LOWER(agent) = ?").run(normalizedAgent);
   return result.changes > 0;
 }
 
-export function renameAgent(oldName: string, newName: string): boolean {
-  const db = getDb();
+export function renameAgent(
+  oldName: string,
+  newName: string,
+  database: Database = getDb(),
+): boolean {
+  const db = database;
   const normalizedOld = normalizeAgentName(oldName);
   const normalizedNew = normalizeAgentName(newName);
 
@@ -261,14 +271,18 @@ export function renameAgent(oldName: string, newName: string): boolean {
   return true;
 }
 
-export function setPresenceProject(agent: string, projectId: string | null): void {
-  const db = getDb();
+export function setPresenceProject(
+  agent: string,
+  projectId: string | null,
+  database: Database = getDb(),
+): void {
+  const db = database;
   const normalizedAgent = normalizeAgentName(agent);
   const desiredProjectId = toStoredProjectId(projectId);
   const latest = getPresenceByAgent(db, normalizedAgent);
 
   if (!latest) {
-    heartbeat(normalizedAgent, "online", undefined, undefined, projectId);
+    heartbeat(normalizedAgent, "online", undefined, undefined, projectId, db);
     return;
   }
 

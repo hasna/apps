@@ -1,4 +1,5 @@
 import { getDb, getDataDir } from "./db.js";
+import type { Database } from "./db.js";
 import type { Message, Attachment, SendMessageOptions, ReadMessagesOptions, SearchMessagesOptions, SearchResult } from "../types.js";
 import { createHash, randomUUID } from "crypto";
 import { mkdirSync, copyFileSync, statSync, existsSync, realpathSync } from "fs";
@@ -955,8 +956,12 @@ export function getPinnedMessages(opts?: { channel?: string; session_id?: string
   return rows.map(parseMessage);
 }
 
-export function getUnreadBlockers(agent: string, opts?: { limit?: number; offset?: number }): Message[] {
-  const db = getDb();
+export function getUnreadBlockers(
+  agent: string,
+  opts?: { limit?: number; offset?: number },
+  database: Database = getDb(),
+): Message[] {
+  const db = database;
   const safeLimit = Number.isFinite(opts?.limit) && (opts!.limit as number) > 0
     ? Math.floor(opts!.limit as number)
     : 0;

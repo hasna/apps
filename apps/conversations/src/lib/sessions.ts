@@ -1,4 +1,5 @@
 import { getDb } from "./db.js";
+import type { Database } from "./db.js";
 import type { Session } from "../types.js";
 
 export interface SessionActivity {
@@ -85,8 +86,11 @@ export function getSession(sessionId: string): Session | null {
 /**
  * Get activity metrics for a session — velocity, engagement, trending status.
  */
-export function getSessionActivity(sessionId: string): SessionActivity | null {
-  const db = getDb();
+export function getSessionActivity(
+  sessionId: string,
+  database: Database = getDb(),
+): SessionActivity | null {
+  const db = database;
 
   const exists = db.prepare("SELECT 1 FROM messages WHERE session_id = ? LIMIT 1").get(sessionId);
   if (!exists) return null;

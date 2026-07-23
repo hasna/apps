@@ -11,12 +11,27 @@ import { setSessionAgent, setClaudeSessionId } from "../channel.js";
 import { getSessionActivity } from "../../lib/sessions.js";
 import { getUnreadBlockers } from "../../lib/messages.js";
 import { compactQueriedMessages, compactWindowedAgents, jsonText, resolveMcpWindow } from "../compact.js";
+import type { Database } from "../../lib/db.js";
+
+export interface AgentToolDependencies {
+  database?: Database;
+  resolveIdentity?: typeof resolveIdentity;
+  setSessionAgent?: typeof setSessionAgent;
+  setClaudeSessionId?: typeof setClaudeSessionId;
+  updateCachedAutoName?: typeof updateCachedAutoName;
+}
 
 export function registerAgentTools(
   server: McpServer,
   agentFocus: Map<string, { project_id: string | null }>,
   getAgentFocus: (agentId: string) => string | null,
+  dependencies: AgentToolDependencies = {},
 ): void {
+  const database = dependencies.database;
+  const resolveAgentIdentity = dependencies.resolveIdentity ?? resolveIdentity;
+  const rememberSessionAgent = dependencies.setSessionAgent ?? setSessionAgent;
+  const rememberClaudeSessionId = dependencies.setClaudeSessionId ?? setClaudeSessionId;
+  const rememberAutoName = dependencies.updateCachedAutoName ?? updateCachedAutoName;
 
   server.registerTool("register_agent", {
     description: "Register an agent. Just provide the name — session_id is auto-detected.",
@@ -36,9 +51,9 @@ export function registerAgentTools(
     const claudeSid = process.env.CONVERSATIONS_SESSION_ID || null;
     const session_id = manualSid || claudeSid || `${name}-${Date.now()}`;
     try {
-      const result = registerAgent(name, session_id, role, project_id);
-      setSessionAgent(name); // Bridge now knows who we are
-      if (claudeSid) setClaudeSessionId(claudeSid); // Track for channel bridge polling
+      const result = registerAgent(name, session_id, role, project_id, database);
+      rememberSessionAgent(name); // Bridge now knows who we are
+      if (claudeSid) rememberClaudeSessionId(claudeSid); // Track for channel bridge polling
       return {
         content: [{ type: "text", text: JSON.stringify(result) }],
       };
@@ -63,9 +78,9 @@ export function registerAgentTools(
     },
   }, async (args: Record<string, any>) => {
     const { from: fromParam, name: nameParam, agent_name, status } = args;
-    const agent = resolveIdentity(fromParam || nameParam || agent_name);
-    heartbeat(agent, status);
-    setSessionAgent(agent); // Bridge now knows who we are
+    const agent = resolveAgentIdentity(fromParam || nameParam || agent_name);
+    heartbeat(agent, status, undefined, undefined, undefined, database);
+    rememberSessionAgent(agent); // Bridge now knows who we are
 
     return {
       content: [{ type: "text", text: JSON.stringify({ agent, status: status || "online", heartbeat: true }) }],
@@ -82,7 +97,7 @@ export function registerAgentTools(
     },
   }, async (args: Record<string, any>) => {
     const { online_only } = args;
-    const agents = listAgents({ online_only });
+    const agents = listAgents({ online_only }, database);
 
     return {
       content: [{ type: "text", text: jsonText(args.verbose ? agents : compactWindowedAgents(agents, args)) }],
@@ -97,10 +112,9 @@ export function registerAgentTools(
     },
   }, async (args: Record<string, any>) => {
     const { from: fromParam, agent: targetAgent } = args;
-    const self = resolveIdentity(fromParam);
-    const agent = targetAgent?.trim() || self;
+    const agent = targetAgent?.trim() || resolveAgentIdentity(fromParam);
 
-    const removed = removePresence(agent);
+    const removed = removePresence(agent, database);
     if (!removed) {
       return {
         content: [{ type: "text", text: `agent "${agent}" not found` }],
@@ -121,7 +135,7 @@ export function registerAgentTools(
     },
   }, async (args: Record<string, any>) => {
     const { from: fromParam, new_name } = args;
-    const oldName = resolveIdentity(fromParam);
+    const oldName = resolveAgentIdentity(fromParam);
     const newName = new_name.trim();
 
     if (!newName) {
@@ -132,7 +146,7 @@ export function registerAgentTools(
     }
 
     try {
-      const renamed = renameAgent(oldName, newName);
+      const renamed = renameAgent(oldName, newName, database);
       if (!renamed) {
         return {
           content: [{ type: "text", text: `agent "${oldName}" not found` }],
@@ -142,7 +156,7 @@ export function registerAgentTools(
 
       // Update cached identity so subsequent calls resolve to the new name
       if (!fromParam) {
-        updateCachedAutoName(newName);
+        rememberAutoName(newName);
       }
 
       return {
@@ -164,11 +178,11 @@ export function registerAgentTools(
     },
   }, async (args: Record<string, any>) => {
     const { project_id, from: fromParam } = args;
-    const agent = resolveIdentity(fromParam);
+    const agent = resolveAgentIdentity(fromParam);
     agentFocus.set(agent, { project_id });
 
     // Also persist to DB
-    setPresenceProject(agent, project_id);
+    setPresenceProject(agent, project_id, database);
 
     return {
       content: [{ type: "text", text: JSON.stringify({ agent, focused: true, project_id }) }],
@@ -181,9 +195,9 @@ export function registerAgentTools(
       from: z.string().optional(),
     },
   }, async (args: Record<string, any>) => {
-    const agent = resolveIdentity(args.from);
+    const agent = resolveAgentIdentity(args.from);
     const sessionFocus = agentFocus.get(agent) ?? null;
-    const presence = getPresence(agent);
+    const presence = getPresence(agent, database);
     const effective = getAgentFocus(agent);
 
     return {
@@ -205,11 +219,11 @@ export function registerAgentTools(
       from: z.string().optional(),
     },
   }, async (args: Record<string, any>) => {
-    const agent = resolveIdentity(args.from);
+    const agent = resolveAgentIdentity(args.from);
     agentFocus.delete(agent);
 
     // Clear from DB too
-    setPresenceProject(agent, null);
+    setPresenceProject(agent, null, database);
 
     return {
       content: [{ type: "text", text: JSON.stringify({ agent, focused: false, project_id: null }) }],
@@ -222,7 +236,7 @@ export function registerAgentTools(
       session_id: z.string(),
     },
   }, async (args: Record<string, any>) => {
-    const activity = getSessionActivity(args.session_id);
+    const activity = getSessionActivity(args.session_id, database);
     if (!activity) {
       return { content: [{ type: "text", text: `session "${args.session_id}" not found` }], isError: true };
     }
@@ -239,11 +253,12 @@ export function registerAgentTools(
     },
   }, async (args: Record<string, any>) => {
     const { from: fromParam } = args;
-    const agent = resolveIdentity(fromParam);
+    const agent = resolveAgentIdentity(fromParam);
     const window = resolveMcpWindow(args);
     const blockers = getUnreadBlockers(
       agent,
       args.verbose ? undefined : { limit: window.limit + 1, offset: window.offset },
+      database,
     );
 
     return {
