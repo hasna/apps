@@ -84,6 +84,13 @@ freeze requires `blocking: true`; an unfreeze requires `blocking: false`.
 Generic rows with `blocking=1` remain ordinary blockers and do not become
 controls.
 
+For historical evaluation, the evaluator first validates and snapshots this
+bounded envelope without consulting control metadata. A valid `server_time`
+after `evaluation_time` classifies the row as audit-only
+`observation_from_future`; the evaluator does not parse, scan, or derive
+identifiers from that row's untrusted content or metadata. An invalid envelope
+remains indeterminate evidence. Metadata cannot self-claim an ingress time.
+
 The evaluator configuration also supplies an activation timestamp. Both the
 event issue time and trusted ingress time must be at or after activation, so a
 preseeded metadata row cannot become authoritative after the validator is
@@ -98,7 +105,9 @@ objects; an unknown backend status, accessor, sparse array, or extra backend key
 returns `indeterminate`. Observations issued or ingressed after the requested
 evaluation time are excluded as future evidence. They remain counted and
 diagnosed as rejected observations for audit, but cannot change the historical
-`allow` or `hold` decision.
+`allow` or `hold` decision. Future-ingress diagnostics intentionally omit event
+and control IDs because those values would require traversing decision-neutral,
+untrusted metadata.
 
 - An exact replay is idempotent.
 - A different event at the same control/lifecycle version is rejected.

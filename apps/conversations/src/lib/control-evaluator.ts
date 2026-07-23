@@ -5,6 +5,7 @@ import {
   isControlScopeV1,
   isControlTokenV1,
   validateControlMetadataV1,
+  validateTrustedControlEnvelopeV1,
   type ControlEventV1,
   type ControlScopeV1,
   type TrustedControlEnvelopeV1,
@@ -84,6 +85,33 @@ const INPUT_KEYS = ["config", "target", "backend"] as const;
 const AVAILABLE_BACKEND_KEYS = ["status", "observations"] as const;
 const UNAVAILABLE_BACKEND_KEYS = ["status"] as const;
 const OBSERVATION_KEYS = ["content", "metadata", "trusted_envelope"] as const;
+
+function readTrustedEnvelopeFromObservation(
+  value: unknown,
+): { status: "valid"; trusted_envelope: unknown } | { status: "invalid" } {
+  if (value === null || typeof value !== "object" || Array.isArray(value) || utilTypes.isProxy(value)) {
+    return { status: "invalid" };
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return { status: "invalid" };
+
+  const keys: string[] = [];
+  for (const key in value) {
+    if (!Object.hasOwn(value, key) || keys.length >= OBSERVATION_KEYS.length) {
+      return { status: "invalid" };
+    }
+    keys.push(key);
+  }
+  if (
+    keys.length !== OBSERVATION_KEYS.length ||
+    !OBSERVATION_KEYS.every((key) => keys.includes(key))
+  ) {
+    return { status: "invalid" };
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(value, "trusted_envelope");
+  if (!descriptor?.enumerable || !("value" in descriptor)) return { status: "invalid" };
+  return { status: "valid", trusted_envelope: descriptor.value };
+}
 
 function readDataRecord(value: unknown): Record<string, unknown> | null {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
@@ -308,24 +336,49 @@ function evaluateControlsV1Unsafe(input: ControlEvaluationInputV1): ControlEvalu
   let excludedFutureObservationCount = 0;
 
   for (const rawObservation of observationArray.values) {
+    const observationEnvelope = readTrustedEnvelopeFromObservation(rawObservation);
+    if (observationEnvelope.status === "invalid") {
+      rejectedEventCount += 1;
+      uncertainObservationCount += 1;
+      diagnostics.push({ code: "invalid_observation" });
+      continue;
+    }
+
+    const trustedValidation = validateTrustedControlEnvelopeV1(observationEnvelope.trusted_envelope);
+    if (trustedValidation.status === "invalid") {
+      rejectedEventCount += 1;
+      uncertainObservationCount += 1;
+      diagnostics.push({ code: trustedValidation.diagnostics[0]?.code ?? "invalid_trusted_envelope" });
+      continue;
+    }
+    const trustedEnvelope = trustedValidation.trusted_envelope;
+    const ingressAt = controlTimestampMsV1(trustedEnvelope.server_time)!;
+    if (ingressAt > evaluationTime) {
+      rejectedEventCount += 1;
+      excludedFutureObservationCount += 1;
+      diagnostics.push({ code: "observation_from_future" });
+      continue;
+    }
+
     const observation = readDataRecord(rawObservation);
-    if (
-      !observation ||
-      !hasExactRecordKeys(observation, OBSERVATION_KEYS) ||
-      (observation.content !== null && typeof observation.content !== "string")
-    ) {
+    if (!observation || !hasExactRecordKeys(observation, OBSERVATION_KEYS)) {
+      rejectedEventCount += 1;
+      uncertainObservationCount += 1;
+      diagnostics.push({ code: "invalid_observation" });
+      continue;
+    }
+    if (observation.content !== null && typeof observation.content !== "string") {
       rejectedEventCount += 1;
       uncertainObservationCount += 1;
       diagnostics.push({ code: "invalid_observation" });
       continue;
     }
     const validation = validateControlMetadataV1(observation.metadata, {
-      trusted_envelope: observation.trusted_envelope as TrustedControlEnvelopeV1,
+      trusted_envelope: trustedEnvelope,
       activation_timestamp: config.activation_timestamp as string,
     });
     if (validation.status === "absent") {
-      const trusted = readDataRecord(observation.trusted_envelope);
-      if (trusted?.blocking === true) diagnostics.push({ code: "ordinary_blocker_ignored" });
+      if (trustedEnvelope.blocking) diagnostics.push({ code: "ordinary_blocker_ignored" });
       continue;
     }
     if (validation.status === "invalid") {
@@ -335,8 +388,7 @@ function evaluateControlsV1Unsafe(input: ControlEvaluationInputV1): ControlEvalu
       continue;
     }
     const eventIssuedAt = controlTimestampMsV1(validation.event.issued_at)!;
-    const ingressAt = controlTimestampMsV1(validation.trusted_envelope.server_time)!;
-    if (eventIssuedAt > evaluationTime || ingressAt > evaluationTime) {
+    if (eventIssuedAt > evaluationTime) {
       rejectedEventCount += 1;
       excludedFutureObservationCount += 1;
       diagnostics.push({

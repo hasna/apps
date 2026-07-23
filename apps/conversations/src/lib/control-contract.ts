@@ -108,6 +108,17 @@ export type ControlValidationResult =
       diagnostics: ControlValidationDiagnostic[];
     };
 
+export type TrustedControlEnvelopeValidationResultV1 =
+  | {
+      status: "invalid";
+      diagnostics: ControlValidationDiagnostic[];
+    }
+  | {
+      status: "valid";
+      trusted_envelope: TrustedControlEnvelopeV1;
+      diagnostics: ControlValidationDiagnostic[];
+    };
+
 export interface ControlValidationContextV1 {
   trusted_envelope: TrustedControlEnvelopeV1;
   activation_timestamp: string;
@@ -494,6 +505,61 @@ export function controlMetadataV1(event: ControlEventV1): Record<string, unknown
   return { [CONTROL_METADATA_KEY]: event };
 }
 
+function validateTrustedControlEnvelopeV1Unsafe(
+  value: unknown,
+): TrustedControlEnvelopeValidationResultV1 {
+  if (!isPlainRecord(value)) {
+    return { status: "invalid", diagnostics: [{ code: "invalid_trusted_envelope" }] };
+  }
+  const entries = readBoundedOwnDataEntries(value, TRUSTED_ENVELOPE_KEYS.length);
+  if (!entries || entries.length !== TRUSTED_ENVELOPE_KEYS.length) {
+    return { status: "invalid", diagnostics: [{ code: "invalid_trusted_envelope" }] };
+  }
+  const trusted = Object.create(null) as Record<string, unknown>;
+  for (const entry of entries) trusted[entry.key] = entry.value;
+  if (!hasExactKeys(trusted, TRUSTED_ENVELOPE_KEYS)) {
+    return { status: "invalid", diagnostics: [{ code: "invalid_trusted_envelope" }] };
+  }
+  if (containsSecretShapedValue(trusted)) {
+    return { status: "invalid", diagnostics: [{ code: "secret_shaped_value" }] };
+  }
+  if (
+    !isToken(trusted.authenticated_principal) ||
+    !isToken(trusted.tenant) ||
+    !isToken(trusted.authority_domain) ||
+    !isToken(trusted.policy_version) ||
+    typeof trusted.permitted_surface !== "string" ||
+    !CONTROL_SURFACES.includes(trusted.permitted_surface as ControlSurfaceV1) ||
+    typeof trusted.blocking !== "boolean" ||
+    parseTimestamp(trusted.server_time) === null
+  ) {
+    return { status: "invalid", diagnostics: [{ code: "invalid_trusted_envelope" }] };
+  }
+  return {
+    status: "valid",
+    trusted_envelope: {
+      authenticated_principal: trusted.authenticated_principal,
+      tenant: trusted.tenant,
+      authority_domain: trusted.authority_domain,
+      permitted_surface: trusted.permitted_surface as ControlSurfaceV1,
+      policy_version: trusted.policy_version,
+      server_time: trusted.server_time as string,
+      blocking: trusted.blocking,
+    },
+    diagnostics: [],
+  };
+}
+
+export function validateTrustedControlEnvelopeV1(
+  value: unknown,
+): TrustedControlEnvelopeValidationResultV1 {
+  try {
+    return validateTrustedControlEnvelopeV1Unsafe(value);
+  } catch {
+    return { status: "invalid", diagnostics: [{ code: "invalid_trusted_envelope" }] };
+  }
+}
+
 function validateControlMetadataV1Unsafe(
   metadata: unknown,
   context: ControlValidationContextV1,
@@ -531,25 +597,11 @@ function validateControlMetadataV1Unsafe(
   if (!hasExactKeys(stableContext, VALIDATION_CONTEXT_KEYS)) {
     return { status: "invalid", diagnostics: [{ code: "invalid_trusted_envelope" }] };
   }
-  if (!hasExactKeys(stableContext.trusted_envelope, TRUSTED_ENVELOPE_KEYS)) {
-    return { status: "invalid", diagnostics: [{ code: "invalid_trusted_envelope" }] };
+  const trustedValidation = validateTrustedControlEnvelopeV1(stableContext.trusted_envelope);
+  if (trustedValidation.status === "invalid") {
+    return trustedValidation;
   }
-  const trusted = stableContext.trusted_envelope;
-  if (containsSecretShapedValue(trusted)) {
-    return { status: "invalid", diagnostics: [{ code: "secret_shaped_value" }] };
-  }
-  if (
-    !isToken(trusted.authenticated_principal) ||
-    !isToken(trusted.tenant) ||
-    !isToken(trusted.authority_domain) ||
-    !isToken(trusted.policy_version) ||
-    typeof trusted.permitted_surface !== "string" ||
-    !CONTROL_SURFACES.includes(trusted.permitted_surface as ControlSurfaceV1) ||
-    typeof trusted.blocking !== "boolean" ||
-    parseTimestamp(trusted.server_time) === null
-  ) {
-    return { status: "invalid", diagnostics: [{ code: "invalid_trusted_envelope" }] };
-  }
+  const trusted = trustedValidation.trusted_envelope;
 
   const payload = eventPayload(candidate as unknown as ControlEventV1);
   const intrinsicError = intrinsicPayloadError(payload);
@@ -620,13 +672,7 @@ function validateControlMetadataV1Unsafe(
           },
   };
   const trustedEnvelope: TrustedControlEnvelopeV1 = {
-    authenticated_principal: trusted.authenticated_principal as string,
-    tenant: trusted.tenant as string,
-    authority_domain: trusted.authority_domain as string,
-    permitted_surface: trusted.permitted_surface as ControlSurfaceV1,
-    policy_version: trusted.policy_version as string,
-    server_time: trusted.server_time as string,
-    blocking: trusted.blocking as boolean,
+    ...trusted,
   };
   return {
     status: "valid",

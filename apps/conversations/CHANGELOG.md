@@ -16,6 +16,7 @@ All notable changes to this project will be documented in this file.
 - Digest payloads include `digest_id`, `message_ids`, `next_cursor`, bounded snippets, and byte length metadata so agents can continue without replaying long channels.
 
 ### Changed
+- Historical control evaluation now validates trusted ingress envelopes before touching untrusted payloads, so every valid future-ingress row is audit-only and cannot turn an earlier `allow` or `hold` into `indeterminate`.
 - `digest` is non-destructive by default. Use `--unread` to restrict to unread messages and `--mark-read --from <agent>` when the returned digest should update read state.
 
 ## [0.3.0] - 2026-06-24

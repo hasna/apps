@@ -458,7 +458,208 @@ describe("observe-only control evaluator", () => {
     });
   });
 
-  test("rejects observations later than the requested evaluation time", () => {
+  test("keeps malformed future-only observations audit-only without changing historical allow", () => {
+    const event = createControlEventV1(freezePayload());
+    const futureMalformed: ControlObservationV1 = {
+      content: "future malformed metadata",
+      metadata: {
+        [CONTROL_METADATA_KEY]: {
+          version: CONTROL_CONTRACT_VERSION,
+          server_time: "2026-07-22T00:00:00.000Z",
+        },
+      },
+      trusted_envelope: trustedEnvelope(event, {
+        server_time: "2026-07-23T13:00:00.000Z",
+      }),
+    };
+
+    expect(evaluateControlsV1(input([futureMalformed]))).toEqual({
+      decision: "allow",
+      mode: "observe_only",
+      enforced: false,
+      active_control_ids: [],
+      accepted_event_count: 0,
+      rejected_event_count: 1,
+      diagnostics: [{ code: "observation_from_future" }],
+    });
+  });
+
+  test("keeps an active historical freeze held when malformed future evidence exists", () => {
+    const freeze = createControlEventV1(freezePayload());
+    const futureMalformed: ControlObservationV1 = {
+      content: null,
+      metadata: { [CONTROL_METADATA_KEY]: { version: CONTROL_CONTRACT_VERSION } },
+      trusted_envelope: trustedEnvelope(freeze, {
+        server_time: "2026-07-23T13:00:00.000Z",
+      }),
+    };
+    const result = evaluateControlsV1(
+      input([observation(freeze), futureMalformed]),
+    );
+
+    expect(result).toMatchObject({
+      decision: "hold",
+      enforced: false,
+      active_control_ids: [freeze.control_id],
+      accepted_event_count: 1,
+      rejected_event_count: 1,
+    });
+    expect(result.diagnostics).toContainEqual({ code: "observation_from_future" });
+    expect(result.diagnostics).not.toContainEqual({ code: "unexpected_keys" });
+  });
+
+  test("classifies future ingress before parsing hostile or secret-shaped payloads", () => {
+    const event = createControlEventV1(freezePayload());
+    const futureEnvelope = trustedEnvelope(event, {
+      server_time: "2026-07-23T13:00:00.000Z",
+    });
+    let proxyTrapCalls = 0;
+    const hostileProxy = new Proxy({}, {
+      getPrototypeOf() {
+        proxyTrapCalls += 1;
+        throw new Error("future payload must not be parsed");
+      },
+      ownKeys() {
+        proxyTrapCalls += 1;
+        throw new Error("future payload must not be enumerated");
+      },
+      getOwnPropertyDescriptor() {
+        proxyTrapCalls += 1;
+        throw new Error("future payload descriptors must not be read");
+      },
+    });
+    let getterCalls = 0;
+    const accessorMetadata = {} as Record<string, unknown>;
+    Object.defineProperty(accessorMetadata, CONTROL_METADATA_KEY, {
+      enumerable: true,
+      get() {
+        getterCalls += 1;
+        throw new Error("future payload getter must not run");
+      },
+    });
+    const oversizedMetadata = Object.fromEntries(
+      Array.from({ length: 1_025 }, (_, index) => [`field_${index}`, index]),
+    );
+    const secretLike = ["AK", "IA", "ABCDEFGHIJKLMNOP"].join("");
+    const payloads: unknown[] = [
+      hostileProxy,
+      accessorMetadata,
+      oversizedMetadata,
+      controlMetadataV1({ ...event, publisher: "a".repeat(129) }),
+      controlMetadataV1({ ...event, publisher: secretLike }),
+      controlMetadataV1({ ...event, server_time: "2026-07-22T00:00:00.000Z" } as unknown as ControlEventV1),
+    ];
+
+    let observationGetterCalls = 0;
+    const accessorObservation = {
+      content: null,
+      trusted_envelope: futureEnvelope,
+    } as unknown as ControlObservationV1;
+    Object.defineProperty(accessorObservation, "metadata", {
+      enumerable: true,
+      get() {
+        observationGetterCalls += 1;
+        throw new Error("future observation payload getter must not run");
+      },
+    });
+
+    const futureObservations = [
+      ...payloads.map((metadata) => ({ content: null, metadata, trusted_envelope: futureEnvelope })),
+      accessorObservation,
+    ];
+    for (const candidate of futureObservations) {
+      expect(
+        evaluateControlsV1(input([candidate])),
+      ).toEqual({
+        decision: "allow",
+        mode: "observe_only",
+        enforced: false,
+        active_control_ids: [],
+        accepted_event_count: 0,
+        rejected_event_count: 1,
+        diagnostics: [{ code: "observation_from_future" }],
+      });
+    }
+    expect(proxyTrapCalls).toBe(0);
+    expect(getterCalls).toBe(0);
+    expect(observationGetterCalls).toBe(0);
+  });
+
+  test("validates trusted envelopes safely before future classification", () => {
+    const event = createControlEventV1(freezePayload());
+    const baseEnvelope = trustedEnvelope(event, {
+      server_time: "2026-07-23T13:00:00.000Z",
+    });
+    let envelopeTrapCalls = 0;
+    const proxyEnvelope = new Proxy(baseEnvelope, {
+      getPrototypeOf() {
+        envelopeTrapCalls += 1;
+        throw new Error("trusted envelope proxy trap must not run");
+      },
+      ownKeys() {
+        envelopeTrapCalls += 1;
+        throw new Error("trusted envelope proxy must not be enumerated");
+      },
+    });
+    let getterCalls = 0;
+    const getterEnvelope = { ...baseEnvelope } as Record<string, unknown>;
+    Object.defineProperty(getterEnvelope, "server_time", {
+      enumerable: true,
+      get() {
+        getterCalls += 1;
+        throw new Error("trusted envelope getter must not run");
+      },
+    });
+    const oversizedEnvelope = {
+      ...baseEnvelope,
+      ...Object.fromEntries(
+        Array.from({ length: 1_025 }, (_, index) => [`extra_${index}`, index]),
+      ),
+    };
+    const secretLike = ["AK", "IA", "ABCDEFGHIJKLMNOP"].join("");
+    const cases: Array<{ envelope: unknown; code: string }> = [
+      { envelope: proxyEnvelope, code: "invalid_trusted_envelope" },
+      { envelope: getterEnvelope, code: "invalid_trusted_envelope" },
+      { envelope: oversizedEnvelope, code: "invalid_trusted_envelope" },
+      {
+        envelope: { ...baseEnvelope, server_time: "2026-07-23T13:00:00Z" },
+        code: "invalid_trusted_envelope",
+      },
+      {
+        envelope: { ...baseEnvelope, authenticated_principal: "a".repeat(129) },
+        code: "invalid_trusted_envelope",
+      },
+      {
+        envelope: { ...baseEnvelope, authenticated_principal: secretLike },
+        code: "secret_shaped_value",
+      },
+    ];
+
+    for (const candidate of cases) {
+      const result = evaluateControlsV1(
+        input([
+          {
+            content: null,
+            metadata: controlMetadataV1(event),
+            trusted_envelope: candidate.envelope as TrustedControlEnvelopeV1,
+          },
+        ]),
+      );
+      expect(result).toMatchObject({
+        decision: "indeterminate",
+        enforced: false,
+        active_control_ids: [],
+        accepted_event_count: 0,
+        rejected_event_count: 1,
+        diagnostics: [{ code: candidate.code }],
+      });
+      expect(JSON.stringify(result)).not.toContain(secretLike);
+    }
+    expect(envelopeTrapCalls).toBe(0);
+    expect(getterCalls).toBe(0);
+  });
+
+  test("keeps valid future rows decision-neutral", () => {
     const freeze = createControlEventV1(freezePayload());
     const historical = input([observation(freeze)]);
     historical.config.evaluation_time = "2026-07-22T12:00:00.000Z";
@@ -469,7 +670,7 @@ describe("observe-only control evaluator", () => {
       active_control_ids: [],
       accepted_event_count: 0,
       rejected_event_count: 1,
-      diagnostics: [{ code: "observation_from_future", event_id: freeze.event_id, control_id: freeze.control_id }],
+      diagnostics: [{ code: "observation_from_future" }],
     });
 
     const futureUnfreeze = unfreezeFor(freeze, {
@@ -492,11 +693,7 @@ describe("observe-only control evaluator", () => {
       accepted_event_count: 1,
       rejected_event_count: 1,
     });
-    expect(activeResult.diagnostics).toContainEqual({
-      code: "observation_from_future",
-      event_id: futureUnfreeze.event_id,
-      control_id: freeze.control_id,
-    });
+    expect(activeResult.diagnostics).toContainEqual({ code: "observation_from_future" });
   });
 
   test("supports rollback by switching observe-only evaluation off", () => {
