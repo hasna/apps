@@ -15,7 +15,11 @@ import type { PoolQueryClient, TypedQueryClient } from "../../generated/storage-
 import { PgPoolExecutor } from "./pg-executor.js";
 import { PostgresStorage } from "./postgres.js";
 import { PostgresLoopStorage } from "./postgres-loop-storage.js";
-import { POSTGRES_STORAGE_MIGRATIONS, checksumStorageSql } from "./postgres-schema.js";
+import {
+  POSTGRES_MIGRATION_ADVISORY_LOCK_SQL,
+  POSTGRES_STORAGE_MIGRATIONS,
+  checksumStorageSql,
+} from "./postgres-schema.js";
 import { createLoopsApiServer } from "../../api/index.js";
 import type { LoopStorageContract } from "./contract.js";
 import {
@@ -1338,6 +1342,51 @@ suite("PostgresLoopStorage (live)", () => {
     expect(await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")).toBe(false);
     await executor.queryClient.execute(`GRANT EXECUTE ON FUNCTION open_loops_authenticate_key(TEXT, TEXT) TO open_loops_authenticator`);
     expect(await isSafeServiceConnection(authExecutor.queryClient, "open_loops_authenticator")).toBe(true);
+  });
+
+  test("migration advisory locking cannot resolve to a public-schema shadow", async () => {
+    const lockProbe = await executor.queryClient.transaction(async (transaction) => {
+      await transaction.execute(`
+        CREATE TEMP TABLE migration_advisory_lock_shadow_probe (
+          invocation_count INTEGER NOT NULL
+        ) ON COMMIT DROP;
+        INSERT INTO migration_advisory_lock_shadow_probe(invocation_count) VALUES (0);
+        CREATE FUNCTION public.pg_advisory_xact_lock(INTEGER, INTEGER)
+        RETURNS VOID
+        LANGUAGE plpgsql
+        AS $shadow$
+        BEGIN
+          UPDATE pg_temp.migration_advisory_lock_shadow_probe
+             SET invocation_count = invocation_count + 1;
+        END
+        $shadow$;
+      `);
+      try {
+        await transaction.execute("SET LOCAL search_path = public, pg_catalog, pg_temp");
+        await transaction.get(POSTGRES_MIGRATION_ADVISORY_LOCK_SQL);
+        return transaction.get<{
+          shadow_invocations: number;
+          advisory_locks: number;
+        }>(`
+          SELECT
+            (SELECT invocation_count
+               FROM pg_temp.migration_advisory_lock_shadow_probe) AS shadow_invocations,
+            (SELECT count(*)::int
+               FROM pg_catalog.pg_locks
+              WHERE locktype='advisory'
+                AND pid=pg_catalog.pg_backend_pid()) AS advisory_locks
+        `);
+      } finally {
+        await transaction.execute(
+          "DROP FUNCTION IF EXISTS public.pg_advisory_xact_lock(INTEGER, INTEGER)",
+        );
+      }
+    });
+
+    expect(lockProbe).toEqual({
+      shadow_invocations: 0,
+      advisory_locks: 1,
+    });
   });
 
   test("canonical identity aliases preserve the released ledger and upgrade reruns are idempotent", async () => {

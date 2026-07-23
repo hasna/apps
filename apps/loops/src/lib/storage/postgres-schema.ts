@@ -8,7 +8,7 @@ import type { StorageMigration } from "./contract.js";
 export const POSTGRES_MIGRATION_LEDGER_TABLE = "open_loops_schema_migrations";
 export const POSTGRES_CANONICAL_MIGRATION_LEDGER_VIEW = "loops_schema_migrations";
 export const POSTGRES_MIGRATION_ADVISORY_LOCK_SQL =
-  "SELECT pg_advisory_xact_lock(1330466384, 1280262987)";
+  "SELECT pg_catalog.pg_advisory_xact_lock(1330466384, 1280262987)";
 
 /**
  * Exact pg_proc contract for the canonical identity aliases. Keep this beside
