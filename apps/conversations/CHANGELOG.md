@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 ## Unreleased
 
 ### Added
-- Added the repository-internal, observe-only `hasna.control/v1` metadata validator/evaluator, portable conformance and legacy-blocker fixtures, and a test-linked threat model. Runtime inputs are descriptor-snapshotted against proxy TOCTOU, historical evaluation excludes future observations, and malformed backend or mixed evidence remains indeterminate. This slice adds no schema, ingress, live hook, or enforcement.
+- Added the repository-internal, observe-only `hasna.control/v1` metadata validator/evaluator, portable conformance and legacy-blocker fixtures, and a test-linked threat model. Proxy-backed inputs are rejected before traps, ordinary inputs are descriptor-snapshotted within pre-enumeration and pre-scan bounds, historical evaluation excludes future observations, and malformed backend or mixed evidence remains indeterminate. This slice adds no schema, ingress, live hook, or enforcement.
 - **Self-hosted HTTP API surface (`conversations-serve`)**: a pure-remote (Amendment A1) service that reads/writes the app's cloud Postgres directly via the vendored `@hasna/contracts` storage kit. Exposes `GET /health`, `/ready`, `/version` (`{status,version,mode}`) and a versioned `/v1` API (messages, channels, projects, agent presence) guarded by `@hasna/contracts` API-key auth (`conversations:read` / `conversations:write` scopes). `GET /v1/openapi.json` serves the OpenAPI document.
 - **Generated typed SDK** under the `@hasna/conversations/sdk` export, generated from the serve OpenAPI (`bun run sdk:generate`).
 - **Migration runner** (`src/server/migrate.ts`) that applies the app schema + `api_keys` table via the owner role (idempotent; never clobbers data).

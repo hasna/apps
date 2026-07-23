@@ -39,10 +39,14 @@ in canonical lexical order; the validator never silently normalizes authority.
 
 Canonical JSON recursively sorts object keys, preserves validated array order,
 normalizes negative zero to zero, and rejects non-finite numbers, sparse or
-augmented arrays, accessors, non-plain objects, excessive nesting, and values
-larger than the contract bound. Proxy-backed input is copied from data-property
-descriptors into a plain snapshot before validation or hashing, so later reads
-cannot change the identity or trusted time. The event ID is:
+JSON-augmented arrays, accessors, proxy-backed or non-plain objects, excessive
+nesting, and values larger than the contract bound. Container length and string
+length are checked before key enumeration or secret-shape scanning. Accepted
+ordinary input is copied from data-property descriptors into a plain snapshot
+before validation or hashing, so later mutation cannot change identity or
+trusted time. Exact-key checks cover enumerable own string keys—the only keys
+that can cross the JSON metadata carrier; symbols and non-enumerable properties
+are ignored and never influence validation or hashing. The event ID is:
 
 ```text
 sha256(utf8(canonical_json(event_without_event_id)))

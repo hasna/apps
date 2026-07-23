@@ -9,6 +9,7 @@ import {
   type ControlScopeV1,
   type TrustedControlEnvelopeV1,
 } from "./control-contract.js";
+import { types as utilTypes } from "node:util";
 
 export type ControlDecision = "allow" | "hold" | "indeterminate";
 
@@ -86,12 +87,15 @@ const OBSERVATION_KEYS = ["content", "metadata", "trusted_envelope"] as const;
 
 function readDataRecord(value: unknown): Record<string, unknown> | null {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  if (utilTypes.isProxy(value)) return null;
   const prototype = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) return null;
-  const keys = Reflect.ownKeys(value);
-  if (keys.length > 32 || keys.some((key) => typeof key === "symbol")) return null;
   const result = Object.create(null) as Record<string, unknown>;
-  for (const key of keys as string[]) {
+  let keyCount = 0;
+  for (const key in value) {
+    if (!Object.hasOwn(value, key)) return null;
+    keyCount += 1;
+    if (keyCount > 32) return null;
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     if (!descriptor?.enumerable || !("value" in descriptor)) return null;
     result[key] = descriptor.value;
@@ -107,9 +111,8 @@ function hasExactRecordKeys(value: Record<string, unknown>, expected: readonly s
 function readObservationArray(
   value: unknown,
 ): { status: "valid"; values: unknown[] } | { status: "too_many" } | { status: "invalid" } {
-  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return { status: "invalid" };
-  const keys = Reflect.ownKeys(value);
-  if (keys.some((key) => typeof key === "symbol")) return { status: "invalid" };
+  if (!Array.isArray(value) || utilTypes.isProxy(value)) return { status: "invalid" };
+  if (Object.getPrototypeOf(value) !== Array.prototype) return { status: "invalid" };
   const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
   if (
     !lengthDescriptor ||
@@ -122,16 +125,25 @@ function readObservationArray(
   }
   const length = lengthDescriptor.value as number;
   if (length > MAX_CONTROL_OBSERVATIONS) return { status: "too_many" };
-  if (keys.length !== length + 1 || !keys.includes("length")) return { status: "invalid" };
 
   const values: unknown[] = [];
   for (let index = 0; index < length; index++) {
     const key = String(index);
-    if (!keys.includes(key)) return { status: "invalid" };
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     if (!descriptor?.enumerable || !("value" in descriptor)) return { status: "invalid" };
     values.push(descriptor.value);
   }
+  let enumerableCount = 0;
+  for (const key in value) {
+    if (!Object.hasOwn(value, key)) return { status: "invalid" };
+    enumerableCount += 1;
+    if (enumerableCount > length) return { status: "invalid" };
+    const index = Number(key);
+    if (!Number.isSafeInteger(index) || index < 0 || index >= length || String(index) !== key) {
+      return { status: "invalid" };
+    }
+  }
+  if (enumerableCount !== length) return { status: "invalid" };
   return { status: "valid", values };
 }
 

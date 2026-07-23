@@ -374,6 +374,35 @@ describe("observe-only control evaluator", () => {
       diagnostics: [{ code: "observation_limit_exceeded" }],
     });
 
+    let ownKeysCalled = false;
+    const oversizedObservations = new Proxy(
+      new Array(MAX_CONTROL_OBSERVATIONS + 1),
+      {
+        getPrototypeOf() {
+          ownKeysCalled = true;
+          throw new Error("must reject before prototype access");
+        },
+        ownKeys() {
+          ownKeysCalled = true;
+          throw new Error("must not enumerate an over-limit backend array");
+        },
+      },
+    );
+    const boundedBeforeEnumeration = input([]);
+    (
+      boundedBeforeEnumeration.backend as {
+        status: "available";
+        observations: readonly ControlObservationV1[];
+      }
+    ).observations = oversizedObservations as readonly ControlObservationV1[];
+    expect(evaluateControlsV1(boundedBeforeEnumeration)).toMatchObject({
+      decision: "indeterminate",
+      enforced: false,
+      active_control_ids: [],
+      diagnostics: [{ code: "invalid_backend_snapshot" }],
+    });
+    expect(ownKeysCalled).toBe(false);
+
     const malformedStatus = input([observation(createControlEventV1(freezePayload()))]);
     malformedStatus.backend = {
       status: "degraded",

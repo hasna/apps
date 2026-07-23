@@ -95,6 +95,28 @@ describe("hasna.control/v1 canonical contract", () => {
     expect(() => canonicalJson(sparse)).toThrow("invalid canonical JSON value");
   });
 
+  test("rejects hostile containers before unbounded key enumeration", () => {
+    let ownKeysCalled = false;
+    const oversizedArray = new Proxy(new Array(1_025), {
+      ownKeys() {
+        ownKeysCalled = true;
+        throw new Error("must not enumerate an over-limit container");
+      },
+    });
+
+    expect(() => canonicalJson(oversizedArray)).toThrow("invalid canonical JSON value");
+    expect(ownKeysCalled).toBe(false);
+
+    const hostileRecord = new Proxy({}, {
+      ownKeys() {
+        ownKeysCalled = true;
+        throw new Error("must not enumerate a proxy-backed record");
+      },
+    });
+    expect(() => canonicalJson(hostileRecord)).toThrow("invalid canonical JSON value");
+    expect(ownKeysCalled).toBe(false);
+  });
+
   test("derives a stable event id from the canonical payload and verifies it", () => {
     const payload = freezePayload();
     const event = createControlEventV1(payload);
@@ -158,8 +180,10 @@ describe("hasna.control/v1 canonical contract", () => {
     });
     expect(accessed).toBe(false);
 
+    let hostileTrapCalls = 0;
     const hostile = new Proxy({}, {
       getPrototypeOf() {
+        hostileTrapCalls += 1;
         throw new Error("hostile trap");
       },
     });
@@ -167,56 +191,42 @@ describe("hasna.control/v1 canonical contract", () => {
       status: "invalid",
       diagnostics: [{ code: "malformed_control_metadata" }],
     });
+    expect(hostileTrapCalls).toBe(0);
   });
 
-  test("snapshots proxy-backed event and trusted-envelope fields before hashing or use", () => {
+  test("rejects proxy-backed event and trusted-envelope records without invoking traps", () => {
     const event = createControlEventV1(freezePayload());
-    const alternateControlId = "223e4567-e89b-42d3-a456-426614174000";
-    let eventPropertyReads = 0;
-    let eventDescriptorReads = 0;
-    const unstableEvent = new Proxy(event, {
-      getOwnPropertyDescriptor(target, property) {
-        const descriptor = Reflect.getOwnPropertyDescriptor(target, property);
-        if (property !== "control_id" || !descriptor || !("value" in descriptor)) return descriptor;
-        eventDescriptorReads += 1;
-        return {
-          ...descriptor,
-          value: eventDescriptorReads === 1 ? target.control_id : alternateControlId,
-        };
+    let trapCalls = 0;
+    const hostileHandler: ProxyHandler<object> = {
+      getPrototypeOf() {
+        trapCalls += 1;
+        throw new Error("must reject before prototype access");
       },
-      get(target, property, receiver) {
-        if (property === "control_id") {
-          eventPropertyReads += 1;
-          return eventPropertyReads <= 2 ? target.control_id : alternateControlId;
-        }
-        return Reflect.get(target, property, receiver);
+      ownKeys() {
+        trapCalls += 1;
+        throw new Error("must reject before key enumeration");
       },
+      getOwnPropertyDescriptor() {
+        trapCalls += 1;
+        throw new Error("must reject before descriptor access");
+      },
+    };
+
+    const proxiedEvent = new Proxy(event, hostileHandler as ProxyHandler<ControlEventV1>);
+    expect(validateControlMetadataV1(metadata(proxiedEvent), context())).toEqual({
+      status: "invalid",
+      diagnostics: [{ code: "malformed_control_metadata" }],
     });
 
-    let trustedPropertyReads = 0;
-    const trusted = trustedEnvelope();
-    const unstableTrusted = new Proxy(trusted, {
-      get(target, property, receiver) {
-        if (property === "server_time") {
-          trustedPropertyReads += 1;
-          return trustedPropertyReads <= 2 ? target.server_time : "2026-07-22T00:00:00.000Z";
-        }
-        return Reflect.get(target, property, receiver);
-      },
-    });
-
-    const result = validateControlMetadataV1(
-      metadata(unstableEvent),
-      context(unstableTrusted),
+    const proxiedTrusted = new Proxy(
+      trustedEnvelope(),
+      hostileHandler as ProxyHandler<TrustedControlEnvelopeV1>,
     );
-    expect(result.status).toBe("valid");
-    if (result.status !== "valid") throw new Error("expected valid snapshotted event");
-    expect(result.event.control_id).toBe(CONTROL_ID);
-    expect(result.event.event_id).toBe(deriveControlEventId(freezePayload()));
-    expect(result.trusted_envelope).toEqual(trusted);
-    expect(eventPropertyReads).toBe(0);
-    expect(eventDescriptorReads).toBe(1);
-    expect(trustedPropertyReads).toBe(0);
+    expect(validateControlMetadataV1(controlMetadataV1(event), context(proxiedTrusted))).toEqual({
+      status: "invalid",
+      diagnostics: [{ code: "malformed_control_metadata" }],
+    });
+    expect(trapCalls).toBe(0);
   });
 
   test("rejects unsupported versions, enums, UUIDs, fingerprints, and token grammars", () => {
@@ -399,5 +409,10 @@ describe("hasna.control/v1 canonical contract", () => {
     );
     expect(trustedResult).toEqual({ status: "invalid", diagnostics: [{ code: "secret_shaped_value" }] });
     expect(JSON.stringify(trustedResult)).not.toContain(secretLike);
+
+    const oversizedSecretLike = `${"a".repeat(1_024)} ${secretLike}`;
+    expect(
+      invalidCode(metadata(withMutation(event, { publisher: oversizedSecretLike }))),
+    ).toBe("invalid_field");
   });
 });

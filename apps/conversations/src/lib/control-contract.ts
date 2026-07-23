@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { types as utilTypes } from "node:util";
 
 export const CONTROL_CONTRACT_VERSION = "hasna.control/v1" as const;
 export const CONTROL_METADATA_KEY = "hasna.control" as const;
@@ -170,6 +171,24 @@ function invalidCanonicalJson(): never {
   throw new TypeError("invalid canonical JSON value");
 }
 
+interface DataEntry {
+  key: string;
+  value: unknown;
+}
+
+function readBoundedOwnDataEntries(value: object, maxKeys: number): DataEntry[] | null {
+  if (utilTypes.isProxy(value) || !Number.isSafeInteger(maxKeys) || maxKeys < 0) return null;
+  const entries: DataEntry[] = [];
+  for (const key in value) {
+    if (!Object.hasOwn(value, key)) return null;
+    if (entries.length >= maxKeys) return null;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor?.enumerable || !("value" in descriptor)) return null;
+    entries.push({ key, value: descriptor.value });
+  }
+  return entries;
+}
+
 function snapshotCanonicalValue(value: unknown): unknown {
   let nodeCount = 0;
   const ancestors = new WeakSet<object>();
@@ -179,54 +198,36 @@ function snapshotCanonicalValue(value: unknown): unknown {
     if (depth > MAX_CANONICAL_DEPTH || nodeCount > MAX_CANONICAL_NODES) {
       return invalidCanonicalJson();
     }
-    if (node === null || typeof node === "boolean" || typeof node === "string") return node;
+    if (node === null || typeof node === "boolean") return node;
+    if (typeof node === "string") {
+      if (node.length > MAX_CONTROL_EVENT_BYTES) return invalidCanonicalJson();
+      return node;
+    }
     if (typeof node === "number") {
       if (!Number.isFinite(node)) return invalidCanonicalJson();
       return Object.is(node, -0) ? 0 : node;
     }
     if (typeof node !== "object") return invalidCanonicalJson();
     if (ancestors.has(node)) return invalidCanonicalJson();
+    if (utilTypes.isProxy(node)) return invalidCanonicalJson();
 
     const prototype = Object.getPrototypeOf(node);
-    const keys = Reflect.ownKeys(node);
-    if (keys.length > MAX_CANONICAL_NODES + 1 || keys.some((key) => typeof key === "symbol")) {
-      return invalidCanonicalJson();
-    }
     ancestors.add(node);
     try {
       if (Array.isArray(node)) {
         if (prototype !== Array.prototype) return invalidCanonicalJson();
-        const lengthDescriptor = Object.getOwnPropertyDescriptor(node, "length");
-        if (
-          !lengthDescriptor ||
-          !("value" in lengthDescriptor) ||
-          lengthDescriptor.enumerable ||
-          !Number.isSafeInteger(lengthDescriptor.value) ||
-          lengthDescriptor.value < 0 ||
-          lengthDescriptor.value > MAX_CANONICAL_NODES
-        ) {
-          return invalidCanonicalJson();
-        }
-        const length = lengthDescriptor.value as number;
-        if (keys.length !== length + 1 || !keys.includes("length")) return invalidCanonicalJson();
-
-        const result: unknown[] = [];
-        for (let index = 0; index < length; index++) {
-          const key = String(index);
-          if (!keys.includes(key)) return invalidCanonicalJson();
-          const descriptor = Object.getOwnPropertyDescriptor(node, key);
-          if (!descriptor?.enumerable || !("value" in descriptor)) return invalidCanonicalJson();
-          result.push(snapshot(descriptor.value, depth + 1));
-        }
-        return result;
+        const remainingNodes = MAX_CANONICAL_NODES - nodeCount;
+        const items = readArrayValues(node, remainingNodes);
+        if (!items) return invalidCanonicalJson();
+        return items.map((item) => snapshot(item, depth + 1));
       }
 
       if (prototype !== Object.prototype && prototype !== null) return invalidCanonicalJson();
+      const entries = readBoundedOwnDataEntries(node, MAX_CANONICAL_NODES - nodeCount);
+      if (!entries) return invalidCanonicalJson();
       const result = Object.create(null) as Record<string, unknown>;
-      for (const key of keys as string[]) {
-        const descriptor = Object.getOwnPropertyDescriptor(node, key);
-        if (!descriptor?.enumerable || !("value" in descriptor)) return invalidCanonicalJson();
-        result[key] = snapshot(descriptor.value, depth + 1);
+      for (const entry of entries) {
+        result[entry.key] = snapshot(entry.value, depth + 1);
       }
       return result;
     } finally {
@@ -239,39 +240,57 @@ function snapshotCanonicalValue(value: unknown): unknown {
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  if (utilTypes.isProxy(value)) return false;
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
 }
 
 function hasDataPropertiesOnly(value: Record<string, unknown>): boolean {
-  const names = Object.getOwnPropertyNames(value);
-  if (Object.getOwnPropertySymbols(value).length > 0) return false;
-  return names.every((name) => {
-    const descriptor = Object.getOwnPropertyDescriptor(value, name);
-    return Boolean(descriptor?.enumerable && "value" in descriptor);
-  });
+  return readBoundedOwnDataEntries(value, MAX_CANONICAL_NODES) !== null;
 }
 
 function hasExactKeys(value: unknown, expected: readonly string[]): value is Record<string, unknown> {
-  if (!isPlainRecord(value) || !hasDataPropertiesOnly(value)) return false;
-  const keys = Object.keys(value);
-  return keys.length === expected.length && expected.every((key) => Object.hasOwn(value, key));
+  if (!isPlainRecord(value)) return false;
+  const entries = readBoundedOwnDataEntries(value, expected.length);
+  if (!entries || entries.length !== expected.length) return false;
+  const keys = new Set(entries.map((entry) => entry.key));
+  return expected.every((key) => keys.has(key));
 }
 
 function compareCanonicalStrings(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function readArrayValues(value: unknown): unknown[] | null {
-  if (!Array.isArray(value) || Object.getOwnPropertySymbols(value).length > 0) return null;
-  const names = Object.getOwnPropertyNames(value);
-  if (names.length !== value.length + 1 || !names.includes("length")) return null;
+function readArrayValues(value: unknown, maxItems = MAX_CANONICAL_NODES): unknown[] | null {
+  if (!Array.isArray(value) || utilTypes.isProxy(value)) return null;
+  if (Object.getPrototypeOf(value) !== Array.prototype) return null;
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+  if (
+    !lengthDescriptor ||
+    !("value" in lengthDescriptor) ||
+    lengthDescriptor.enumerable ||
+    !Number.isSafeInteger(lengthDescriptor.value) ||
+    lengthDescriptor.value < 0 ||
+    lengthDescriptor.value > maxItems
+  ) {
+    return null;
+  }
+  const length = lengthDescriptor.value as number;
   const items: unknown[] = [];
-  for (let index = 0; index < value.length; index++) {
+  for (let index = 0; index < length; index++) {
     const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
     if (!descriptor?.enumerable || !("value" in descriptor)) return null;
     items.push(descriptor.value);
   }
+  let enumerableCount = 0;
+  for (const key in value) {
+    if (!Object.hasOwn(value, key)) return null;
+    enumerableCount += 1;
+    if (enumerableCount > length) return null;
+    const index = Number(key);
+    if (!Number.isSafeInteger(index) || index < 0 || index >= length || String(index) !== key) return null;
+  }
+  if (enumerableCount !== length) return null;
   return items;
 }
 
@@ -293,15 +312,18 @@ export function canonicalJson(value: unknown): string {
       return JSON.stringify(Object.is(node, -0) ? 0 : node);
     }
     if (Array.isArray(node)) {
-      const items = readArrayValues(node);
-      if (!items || items.length > MAX_CANONICAL_NODES) return invalidCanonicalJson();
+      const items = readArrayValues(node, MAX_CANONICAL_NODES - nodeCount);
+      if (!items) return invalidCanonicalJson();
       return `[${items.map((item) => visit(item, depth + 1)).join(",")}]`;
     }
-    if (!isPlainRecord(node) || !hasDataPropertiesOnly(node)) return invalidCanonicalJson();
+    if (!isPlainRecord(node)) return invalidCanonicalJson();
 
-    const keys = Object.keys(node).sort(compareCanonicalStrings);
-    const entries = keys.map((key) => `${JSON.stringify(key)}:${visit(node[key], depth + 1)}`);
-    return `{${entries.join(",")}}`;
+    const entries = readBoundedOwnDataEntries(node, MAX_CANONICAL_NODES - nodeCount);
+    if (!entries) return invalidCanonicalJson();
+    entries.sort((left, right) => compareCanonicalStrings(left.key, right.key));
+    return `{${entries
+      .map((entry) => `${JSON.stringify(entry.key)}:${visit(entry.value, depth + 1)}`)
+      .join(",")}}`;
   }
 
   const canonical = visit(stableValue, 0);
@@ -311,13 +333,17 @@ export function canonicalJson(value: unknown): string {
 
 function containsSecretShapedValue(value: unknown, depth = 0): boolean {
   if (depth > MAX_CANONICAL_DEPTH) return false;
-  if (typeof value === "string") return SECRET_PATTERNS.some((pattern) => pattern.test(value));
+  if (typeof value === "string") {
+    if (value.length > MAX_CONTROL_STRING_LENGTH) return false;
+    return SECRET_PATTERNS.some((pattern) => pattern.test(value));
+  }
   if (Array.isArray(value)) {
-    const items = readArrayValues(value);
+    const items = readArrayValues(value, MAX_CONTROL_ARRAY_ITEMS);
     return items ? items.some((item) => containsSecretShapedValue(item, depth + 1)) : false;
   }
-  if (!isPlainRecord(value) || !hasDataPropertiesOnly(value)) return false;
-  return Object.values(value).some((item) => containsSecretShapedValue(item, depth + 1));
+  if (!isPlainRecord(value)) return false;
+  const entries = readBoundedOwnDataEntries(value, MAX_CANONICAL_NODES);
+  return entries ? entries.some((entry) => containsSecretShapedValue(entry.value, depth + 1)) : false;
 }
 
 function isToken(value: unknown): value is string {
@@ -329,15 +355,15 @@ export function isControlTokenV1(value: unknown): value is string {
 }
 
 function isEventId(value: unknown): value is string {
-  return typeof value === "string" && EVENT_ID_PATTERN.test(value);
+  return typeof value === "string" && value.length === 71 && EVENT_ID_PATTERN.test(value);
 }
 
 function isUuid(value: unknown): value is string {
-  return typeof value === "string" && UUID_PATTERN.test(value);
+  return typeof value === "string" && value.length === 36 && UUID_PATTERN.test(value);
 }
 
 function parseTimestamp(value: unknown): number | null {
-  if (typeof value !== "string" || !TIMESTAMP_PATTERN.test(value)) return null;
+  if (typeof value !== "string" || value.length !== 24 || !TIMESTAMP_PATTERN.test(value)) return null;
   const timestamp = Date.parse(value);
   if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString() !== value) return null;
   return timestamp;
@@ -348,8 +374,8 @@ export function controlTimestampMsV1(value: unknown): number | null {
 }
 
 function isSortedUniqueTokenArray(value: unknown): value is string[] {
-  const items = readArrayValues(value);
-  if (!items || items.length === 0 || items.length > MAX_CONTROL_ARRAY_ITEMS) return false;
+  const items = readArrayValues(value, MAX_CONTROL_ARRAY_ITEMS);
+  if (!items || items.length === 0) return false;
   let previous: string | undefined;
   for (const item of items) {
     if (!isToken(item)) return false;
@@ -474,6 +500,9 @@ function validateControlMetadataV1Unsafe(
 ): ControlValidationResult {
   if (metadata === null || typeof metadata !== "object" || Array.isArray(metadata)) {
     return { status: "absent", diagnostics: [{ code: "no_control_metadata" }] };
+  }
+  if (utilTypes.isProxy(metadata)) {
+    return { status: "invalid", diagnostics: [{ code: "malformed_control_metadata" }] };
   }
   const metadataPrototype = Object.getPrototypeOf(metadata);
   if (metadataPrototype !== Object.prototype && metadataPrototype !== null) {
