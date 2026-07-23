@@ -1,10 +1,8 @@
 #!/usr/bin/env bun
 
 import { randomUUID } from "node:crypto";
-import { closeSync, constants, fstatSync, openSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import {
   AccountsError,
@@ -30,8 +28,6 @@ import {
 } from "./index";
 
 const CLI_SCHEMA_VERSION = "accounts.cli.v1" as const;
-const CLI_INSTALL_SECURITY_FAILURE =
-  "SECURITY_POLICY_DENIED: Refusing to run @hasna/capacity because its CLI artifact is writable by group or world or cannot be verified as a regular non-symlink file";
 
 const NOUNS: Readonly<Record<string, EntityKind>> = {
   accounts: "account",
@@ -296,41 +292,7 @@ function usageText(): string {
   ].join("\n");
 }
 
-function installedCliArtifactIsSafe(): boolean {
-  const sourceEntrypoint = new URL("../src/cli.ts", import.meta.url).href;
-  if (import.meta.url === sourceEntrypoint) return true;
-  if (process.platform === "win32") return true;
-
-  let descriptor: number;
-  try {
-    const noFollow = constants.O_NOFOLLOW ?? 0;
-    descriptor = openSync(fileURLToPath(import.meta.url), constants.O_RDONLY | noFollow);
-  } catch {
-    return false;
-  }
-
-  let safe = false;
-  try {
-    const status = fstatSync(descriptor);
-    safe = status.isFile() && (status.mode & 0o022) === 0;
-  } catch {
-    safe = false;
-  }
-
-  try {
-    closeSync(descriptor);
-  } catch {
-    return false;
-  }
-  return safe;
-}
-
 if (import.meta.main) {
-  if (!installedCliArtifactIsSafe()) {
-    Bun.stderr.write(`${CLI_INSTALL_SECURITY_FAILURE}\n`);
-    process.exitCode = 126;
-  } else {
-    const code = await runAccountsCli(Bun.argv.slice(2));
-    process.exitCode = code;
-  }
+  const code = await runAccountsCli(Bun.argv.slice(2));
+  process.exitCode = code;
 }

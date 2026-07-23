@@ -47,9 +47,11 @@ bun run build
 
 Bun blocks dependency lifecycle scripts unless a package is explicitly trusted.
 An ordinary Bun install is therefore fail-closed: if the blocked lifecycle
-leaves the effective executable target writable by group or world, `capacity`
-refuses to run. Trusting the package during installation lets the packaged
-no-symlink-follow hardener normalize the executable target to mode `0755`:
+leaves `dist/cli.js` writable by group or world, `capacity` refuses to run. The
+packaged launcher opens that payload without following symlinks, verifies the
+open descriptor is a regular file with an acceptable mode, and evaluates only
+the bytes read from that descriptor. Trusting the package during installation
+lets the lifecycle hardener normalize both launcher and payload to mode `0755`:
 
 ```sh
 bun add --trust @hasna/capacity

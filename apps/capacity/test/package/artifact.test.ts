@@ -5,11 +5,14 @@ import {
   mkdirSync,
   mkdtempSync,
   realpathSync,
+  readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 const REPOSITORY_ROOT = join(import.meta.dir, "..", "..");
 const DIST_ROOT = join(REPOSITORY_ROOT, "dist");
@@ -76,14 +79,19 @@ let bunPackedCliPath: string;
 let bunPackedCliMode: string;
 let npmInstalledCliPath: string;
 let npmInstalledCliTarget: string;
+let npmInstalledPayloadPath: string;
 let bunLocalInstalledCliPath: string;
 let bunLocalInstalledCliTarget: string;
+let bunLocalInstalledPayloadPath: string;
 let bunGlobalInstalledCliPath: string;
 let bunGlobalInstalledCliTarget: string;
+let bunGlobalInstalledPayloadPath: string;
 let bunLocalNoTrustCliPath: string;
 let bunLocalNoTrustCliTarget: string;
+let bunLocalNoTrustPayloadPath: string;
 let bunGlobalNoTrustCliPath: string;
 let bunGlobalNoTrustCliTarget: string;
+let bunGlobalNoTrustPayloadPath: string;
 
 async function run(
   command: readonly string[],
@@ -245,7 +253,7 @@ beforeAll(async () => {
       url: "git+https://github.com/hasna/capacity.git",
     },
   });
-  expect(manifest.bin).toEqual({ capacity: "dist/cli.js" });
+  expect(manifest.bin).toEqual({ capacity: "scripts/capacity-launcher.mjs" });
 
   expect(await archive.extract(NPM_EXTRACT_ROOT)).toBe(pack.entryCount);
   packedCliPath = join(NPM_EXTRACT_ROOT, "package", "dist", "cli.js");
@@ -286,7 +294,7 @@ beforeAll(async () => {
   if (bunManifestFile === undefined) throw new Error("Bun-packed package.json is missing");
   const bunManifest = (await bunManifestFile.json()) as Record<string, unknown>;
   expect(bunManifest).toMatchObject({ name: "@hasna/capacity", version: "0.1.1" });
-  expect(bunManifest.bin).toEqual({ capacity: "dist/cli.js" });
+  expect(bunManifest.bin).toEqual({ capacity: "scripts/capacity-launcher.mjs" });
   expect(await bunArchive.extract(BUN_EXTRACT_ROOT)).toBe(bunArchiveFiles.size);
   bunPackedCliPath = join(BUN_EXTRACT_ROOT, "package", "dist", "cli.js");
   expect(existsSync(bunPackedCliPath)).toBe(true);
@@ -320,6 +328,7 @@ beforeAll(async () => {
   requireSuccess(npmInstalled, "disposable npm install");
   npmInstalledCliPath = join(NPM_INSTALL_ROOT, "node_modules", ".bin", "capacity");
   npmInstalledCliTarget = realpathSync(npmInstalledCliPath);
+  npmInstalledPayloadPath = realpathSync(join(dirname(npmInstalledCliTarget), "..", "dist", "cli.js"));
 
   const bunLocalInstalled = await runWithGroupWritableUmask(
     [process.execPath, "add", "--trust", bunArchivePath, "--offline"],
@@ -331,6 +340,9 @@ beforeAll(async () => {
   requireSuccess(bunLocalInstalled, "disposable Bun local install");
   bunLocalInstalledCliPath = join(BUN_LOCAL_INSTALL_ROOT, "node_modules", ".bin", "capacity");
   bunLocalInstalledCliTarget = realpathSync(bunLocalInstalledCliPath);
+  bunLocalInstalledPayloadPath = realpathSync(
+    join(dirname(bunLocalInstalledCliTarget), "..", "dist", "cli.js"),
+  );
 
   const bunGlobalInstalled = await runWithGroupWritableUmask(
     [process.execPath, "add", "--global", "--trust", bunArchivePath, "--offline"],
@@ -345,6 +357,9 @@ beforeAll(async () => {
   requireSuccess(bunGlobalInstalled, "disposable Bun global install");
   bunGlobalInstalledCliPath = join(BUN_GLOBAL_INSTALL_ROOT, "bin", "capacity");
   bunGlobalInstalledCliTarget = realpathSync(bunGlobalInstalledCliPath);
+  bunGlobalInstalledPayloadPath = realpathSync(
+    join(dirname(bunGlobalInstalledCliTarget), "..", "dist", "cli.js"),
+  );
 
   const bunLocalNoTrustInstalled = await runWithGroupWritableUmask(
     [process.execPath, "add", bunArchivePath, "--offline"],
@@ -361,6 +376,9 @@ beforeAll(async () => {
     "capacity",
   );
   bunLocalNoTrustCliTarget = realpathSync(bunLocalNoTrustCliPath);
+  bunLocalNoTrustPayloadPath = realpathSync(
+    join(dirname(bunLocalNoTrustCliTarget), "..", "dist", "cli.js"),
+  );
 
   const bunGlobalNoTrustInstalled = await runWithGroupWritableUmask(
     [process.execPath, "add", "--global", bunArchivePath, "--offline"],
@@ -375,6 +393,9 @@ beforeAll(async () => {
   requireSuccess(bunGlobalNoTrustInstalled, "disposable no-trust Bun global install");
   bunGlobalNoTrustCliPath = join(BUN_GLOBAL_NO_TRUST_INSTALL_ROOT, "bin", "capacity");
   bunGlobalNoTrustCliTarget = realpathSync(bunGlobalNoTrustCliPath);
+  bunGlobalNoTrustPayloadPath = realpathSync(
+    join(dirname(bunGlobalNoTrustCliTarget), "..", "dist", "cli.js"),
+  );
 }, { timeout: PACKAGE_LIFECYCLE_TIMEOUT_MS });
 
 afterAll(() => {
@@ -400,9 +421,13 @@ describe("packed capacity CLI", () => {
     expect(paths).toContain("package.json");
     expect(paths).toContain("dist/index.js");
     expect(paths).toContain("dist/index.d.ts");
+    expect(paths).toContain("scripts/capacity-launcher.mjs");
     expect(paths.some((path) => path.startsWith("test/") || path.startsWith("tests/"))).toBe(false);
     expect(paths.some((path) => path.startsWith("src/"))).toBe(false);
     expect(pack.files.find(({ path }) => path === "dist/cli.js")).toMatchObject({ mode: 0o755 });
+    expect(pack.files.find(({ path }) => path === "scripts/capacity-launcher.mjs")).toMatchObject({
+      mode: 0o755,
+    });
   });
 
   test("keeps npm and Bun package payload contracts aligned", async () => {
@@ -423,10 +448,13 @@ describe("packed capacity CLI", () => {
     for (const path of [
       npmInstalledCliPath,
       npmInstalledCliTarget,
+      npmInstalledPayloadPath,
       bunLocalInstalledCliPath,
       bunLocalInstalledCliTarget,
+      bunLocalInstalledPayloadPath,
       bunGlobalInstalledCliPath,
       bunGlobalInstalledCliTarget,
+      bunGlobalInstalledPayloadPath,
     ]) {
       expect(statSync(path).mode & 0o022).toBe(0);
     }
@@ -446,12 +474,13 @@ describe("packed capacity CLI", () => {
   });
 
   test("fails closed when default Bun installs block lifecycle hardening", async () => {
-    for (const [entry, target] of [
-      [bunLocalNoTrustCliPath, bunLocalNoTrustCliTarget],
-      [bunGlobalNoTrustCliPath, bunGlobalNoTrustCliTarget],
+    for (const [entry, target, payload] of [
+      [bunLocalNoTrustCliPath, bunLocalNoTrustCliTarget, bunLocalNoTrustPayloadPath],
+      [bunGlobalNoTrustCliPath, bunGlobalNoTrustCliTarget, bunGlobalNoTrustPayloadPath],
     ] as const) {
       expect(statSync(entry).mode & 0o022).not.toBe(0);
       expect(statSync(target).mode & 0o022).not.toBe(0);
+      expect(statSync(payload).mode & 0o022).not.toBe(0);
 
       const result = await run([entry, "--version"]);
       expect(result.exitCode).toBe(126);
@@ -459,6 +488,54 @@ describe("packed capacity CLI", () => {
       expect(result.stderr).toContain("SECURITY_POLICY_DENIED");
       expect(result.stderr).toContain("writable by group or world");
     }
+  });
+
+  test("validates the installed target before evaluating any CLI module statement", async () => {
+    const sentinelPath = join(TEMP_ROOT, "cli-evaluation-sentinel");
+    const original = readFileSync(bunLocalNoTrustPayloadPath, "utf8");
+    const [shebang, ...body] = original.split("\n");
+    writeFileSync(
+      bunLocalNoTrustPayloadPath,
+      [
+        shebang,
+        'if (Bun.env.CAPACITY_TEST_SENTINEL !== undefined) await Bun.write(Bun.env.CAPACITY_TEST_SENTINEL, "evaluated");',
+        ...body,
+      ].join("\n"),
+      { mode: 0o775 },
+    );
+    chmodSync(bunLocalNoTrustPayloadPath, 0o775);
+
+    const result = await run([bunLocalNoTrustCliPath, "--version"], {
+      env: { CAPACITY_TEST_SENTINEL: sentinelPath },
+    });
+    expect(result.exitCode).toBe(126);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("SECURITY_POLICY_DENIED");
+    expect(existsSync(sentinelPath)).toBe(false);
+  });
+
+  test("rejects a symlink replacement before evaluating its target", async () => {
+    const sentinelPath = join(TEMP_ROOT, "symlink-evaluation-sentinel");
+    const replacementPath = join(TEMP_ROOT, "replacement-cli.mjs");
+    writeFileSync(
+      replacementPath,
+      [
+        'if (Bun.env.CAPACITY_TEST_SENTINEL !== undefined) await Bun.write(Bun.env.CAPACITY_TEST_SENTINEL, "evaluated");',
+        "export async function runAccountsCli() { return 0; }",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    chmodSync(replacementPath, 0o755);
+    rmSync(bunGlobalNoTrustPayloadPath);
+    symlinkSync(replacementPath, bunGlobalNoTrustPayloadPath);
+
+    const result = await run([bunGlobalNoTrustCliPath, "--version"], {
+      env: { CAPACITY_TEST_SENTINEL: sentinelPath },
+    });
+    expect(result.exitCode).toBe(126);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("SECURITY_POLICY_DENIED");
+    expect(existsSync(sentinelPath)).toBe(false);
   });
 
   test("reports the version from the extracted package binary", async () => {

@@ -9,6 +9,7 @@ import {
 import { fileURLToPath } from "node:url";
 
 const cliPath = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
+const launcherPath = fileURLToPath(new URL("./capacity-launcher.mjs", import.meta.url));
 const sourceCliPath = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 const scriptPath = fileURLToPath(import.meta.url);
 
@@ -37,5 +38,6 @@ if (process.platform !== "win32") {
   };
 
   hardenRegularFile(cliPath, 0o755, "The installed @hasna/capacity CLI artifact");
+  hardenRegularFile(launcherPath, 0o755, "The @hasna/capacity CLI launcher");
   hardenRegularFile(scriptPath, 0o644, "The @hasna/capacity permission hardener");
 }

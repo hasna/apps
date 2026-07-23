@@ -20,10 +20,11 @@
     }
   },
   "bin": {
-    "capacity": "dist/cli.js"
+    "capacity": "scripts/capacity-launcher.mjs"
   },
   "files": [
     "dist",
+    "scripts/capacity-launcher.mjs",
     "scripts/harden-cli-permissions.mjs",
     "README.md",
     "LICENSE"
