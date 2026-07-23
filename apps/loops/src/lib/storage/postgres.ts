@@ -10,7 +10,10 @@ import {
   POSTGRES_MIGRATION_LEDGER_TABLE,
   POSTGRES_STORAGE_MIGRATIONS,
 } from "./postgres-schema.js";
-import { hasProtectedPostgresMigrationAuthority } from "./postgres-protected-migration.js";
+import {
+  hasProtectedPostgresMigrationAuthority,
+  isProtectedPostgresMigration,
+} from "./postgres-protected-migration.js";
 
 export interface PostgresQueryExecutor {
   query<T extends Record<string, unknown>>(sql: string, params?: readonly unknown[]): Promise<T[]>;
@@ -49,7 +52,7 @@ export class PostgresStorage implements SchemaMigrationStorage {
     if (throughIndex < 0) throw new Error(`Unknown Postgres migration target ${opts.through}`);
     const protectedMigration = this.migrations
       .slice(0, throughIndex + 1)
-      .find((migration) => migration.rollingDeploy?.kind === "canonical_identity_aliases");
+      .find(isProtectedPostgresMigration);
     if (
       !dryRun &&
       protectedMigration &&

@@ -1,3 +1,6 @@
+import type { StorageMigration } from "./contract.js";
+import { POSTGRES_STORAGE_MIGRATIONS } from "./postgres-schema.js";
+
 /**
  * Internal capability scope for the protected forward-only PostgreSQL
  * migration route. This module is intentionally absent from every package
@@ -5,6 +8,25 @@
  * storage instance.
  */
 const authorityDepth = new WeakMap<object, number>();
+
+const protectedMigrationSignatures = Object.freeze(
+  POSTGRES_STORAGE_MIGRATIONS
+    .filter((migration) => migration.rollingDeploy?.kind === "canonical_identity_aliases")
+    .map((migration) => Object.freeze({
+      id: migration.id,
+      checksum: migration.checksum,
+    })),
+);
+
+export function isProtectedPostgresMigration(
+  migration: Pick<StorageMigration, "id" | "checksum">,
+): boolean {
+  return protectedMigrationSignatures.some(
+    (signature) =>
+      signature.id === migration.id
+      && signature.checksum === migration.checksum,
+  );
+}
 
 export async function withProtectedPostgresMigrationAuthority<T>(
   storage: object,

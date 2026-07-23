@@ -189,10 +189,34 @@ describe("Postgres storage migrations", () => {
     expect(executor.ledger).toHaveLength(POSTGRES_STORAGE_MIGRATIONS.length - 1);
   });
 
+  test("stripped canonical migration metadata cannot bypass the protected identity boundary", async () => {
+    const migrations = POSTGRES_STORAGE_MIGRATIONS.map(({ id, sql, checksum }) => ({
+      id,
+      sql,
+      checksum,
+    }));
+
+    for (const through of [undefined, "0013_loops_identity_aliases"] as const) {
+      const executor = new FakePostgresExecutor();
+      const storage = new PostgresStorage(executor, migrations);
+      const operation = through === undefined
+        ? storage.migrate()
+        : storage.migrate({ through });
+
+      await expect(operation).rejects.toThrow(
+        "protected Postgres migration 0013_loops_identity_aliases",
+      );
+      expect(executor.queried).toHaveLength(0);
+      expect(executor.executed).toHaveLength(0);
+      expect(executor.ledger).toHaveLength(0);
+    }
+  });
+
   test("protected migration authority is absent from every public package module", () => {
     for (const publicModule of [rootExports, storageExports, postgresExports]) {
       expect("withProtectedPostgresMigrationAuthority" in publicModule).toBe(false);
       expect("hasProtectedPostgresMigrationAuthority" in publicModule).toBe(false);
+      expect("isProtectedPostgresMigration" in publicModule).toBe(false);
     }
     expect(Object.getOwnPropertySymbols(PostgresStorage.prototype)).toEqual([]);
   });
@@ -256,6 +280,33 @@ describe("Postgres storage migrations", () => {
     const result = await storage.migrate();
 
     expect(result.applied.map((migration) => migration.id)).toEqual(["0001_custom_probe"]);
+    expect(executor.executed.some((entry) => entry.sql === sql)).toBe(true);
+  });
+
+  test("custom migrations with protected metadata but an unrelated checksum retain default apply behavior", async () => {
+    const executor = new FakePostgresExecutor();
+    const sql = "CREATE TABLE custom_identity_probe(id TEXT PRIMARY KEY)";
+    const migrations = [
+      {
+        id: "0013_loops_identity_aliases",
+        sql,
+        checksum: checksumStorageSql(sql),
+        rollingDeploy: {
+          kind: "canonical_identity_aliases",
+          allowAsSolePending: true,
+          preApplyCatalogState: "aliases_absent",
+          postApplyCatalogState: "aliases_exact",
+          repair: "transactional_reapply",
+        },
+      },
+    ] as const;
+    const storage = new PostgresStorage(executor, migrations);
+
+    const result = await storage.migrate();
+
+    expect(result.applied.map((migration) => migration.id)).toEqual([
+      "0013_loops_identity_aliases",
+    ]);
     expect(executor.executed.some((entry) => entry.sql === sql)).toBe(true);
   });
 
