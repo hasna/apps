@@ -212,6 +212,37 @@ describe("observe-only control evaluator", () => {
     expect(result.diagnostics.map((item) => item.code)).toContain("conflicting_duplicate");
   });
 
+  test("treats control-id reuse across scopes as a conflicting lifecycle, never a sibling control", () => {
+    const first = createControlEventV1(
+      freezePayload({ scope: { kind: "project", ids: ["project:a"] } }),
+    );
+    const reusedId = createControlEventV1(
+      freezePayload({
+        fingerprint: `sha256:${"b".repeat(64)}`,
+        scope: { kind: "project", ids: ["project:b"] },
+        issued_at: "2026-07-23T00:01:00.000Z",
+        expires_at: "2026-07-24T00:01:00.000Z",
+      }),
+    );
+    const releaseFirst = unfreezeFor(first, { scope: first.scope });
+    const result = evaluateControlsV1(
+      withTarget(
+        input([observation(first), observation(reusedId), observation(releaseFirst)]),
+        { scope: { kind: "project", ids: ["project:b"] } },
+      ),
+    );
+
+    expect(result).toMatchObject({
+      decision: "indeterminate",
+      enforced: false,
+      active_control_ids: [],
+      accepted_event_count: 2,
+      rejected_event_count: 1,
+    });
+    expect(result.diagnostics.map((item) => item.code)).toContain("conflicting_duplicate");
+    expect(result.diagnostics.map((item) => item.code)).toContain("control_released");
+  });
+
   test("bad release references and mismatched context never clear the active freeze", () => {
     const freeze = createControlEventV1(freezePayload());
     const wrongReference = unfreezeFor(freeze, {
