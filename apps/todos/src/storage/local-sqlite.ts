@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
-import type { Task } from "../types/index.js";
+import type { Task, TaskFilter } from "../types/index.js";
+import { searchTasks } from "../lib/search.js";
 import {
   createTask,
   getTask,
@@ -108,6 +109,59 @@ function resolveTaskRefLocal(db: Database, ref: string): Task | null {
   return null;
 }
 
+function isSearchQuery(filter: TaskFilter): boolean {
+  const q = filter.query?.trim();
+  return !!q && q !== "*";
+}
+
+/**
+ * TaskFilter fields the FTS `searchTasks` path does not itself constrain but the
+ * Postgres adapter's buildTaskFilterSql does. Applied in JS after the FTS match
+ * so a SQLite-backed `/v1/tasks?q=` behaves like the Postgres one (e.g. subtasks
+ * excluded by default).
+ */
+function matchesExtraFilters(task: Task, filter: TaskFilter): boolean {
+  if (filter.ids && !filter.ids.includes(task.id)) return false;
+  if (filter.parent_id !== undefined && (task.parent_id ?? null) !== filter.parent_id) return false;
+  if (filter.plan_id !== undefined && task.plan_id !== filter.plan_id) return false;
+  if (filter.session_id !== undefined && task.session_id !== filter.session_id) return false;
+  if (filter.has_recurrence !== undefined && Boolean(task.recurrence_rule) !== filter.has_recurrence) return false;
+  if (filter.task_type !== undefined) {
+    const allowed = Array.isArray(filter.task_type) ? filter.task_type : [filter.task_type];
+    if (!allowed.includes(task.task_type ?? "")) return false;
+  }
+  if (filter.tags?.length) {
+    const taskTags = new Set(task.tags ?? []);
+    if (!filter.tags.every((tag) => taskTags.has(tag))) return false;
+  }
+  // include_subtasks defaults to false: exclude tasks that have a parent, unless
+  // a parent_id filter is explicitly targeting children.
+  if (filter.include_subtasks !== true && filter.parent_id === undefined && task.parent_id) return false;
+  return true;
+}
+
+/**
+ * Route a free-text `filter.query` through the local FTS5 search (searchTasks),
+ * then apply the remaining TaskFilter constraints, so the storage abstraction's
+ * `tasks.list` honors search on SQLite exactly as the Postgres adapter does.
+ * Without a query, defers to the plain indexed listTasks.
+ */
+function listTasksMaybeSearch(filter: TaskFilter, db: Database): Task[] {
+  if (!isSearchQuery(filter)) return listTasks(filter, db);
+  const matched = searchTasks({
+    query: filter.query,
+    project_id: filter.project_id,
+    task_list_id: filter.task_list_id,
+    status: filter.status,
+    priority: filter.priority,
+    assigned_to: filter.assigned_to,
+    agent_id: filter.agent_id,
+  }, undefined, undefined, db).filter((task) => matchesExtraFilters(task, filter));
+  const offset = filter.offset && filter.offset > 0 ? Math.trunc(filter.offset) : 0;
+  if (filter.limit !== undefined && filter.limit >= 0) return matched.slice(offset, offset + filter.limit);
+  return offset ? matched.slice(offset) : matched;
+}
+
 export function createLocalSqliteTodosStorageAdapter(
   options: CreateLocalSqliteTodosStorageAdapterOptions = {},
 ): TodosStorageAdapter {
@@ -127,8 +181,11 @@ export function createLocalSqliteTodosStorageAdapter(
       create: (input) => createTask(input, database()),
       get: (id) => getTask(id, database()),
       resolveRef: (ref) => resolveTaskRefLocal(database(), ref),
-      list: (filter = {}) => listTasks(filter, database()),
-      count: (filter = {}) => countTasks(filter, database()),
+      list: (filter = {}) => listTasksMaybeSearch(filter, database()),
+      count: (filter = {}) =>
+        isSearchQuery(filter)
+          ? listTasksMaybeSearch({ ...filter, limit: undefined, offset: undefined }, database()).length
+          : countTasks(filter, database()),
       update: (id, input) => updateTask(id, input, database()),
       unlock: (id, agentId) => {
         unlockTask(id, agentId, database());

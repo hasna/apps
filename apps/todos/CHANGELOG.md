@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - `migrations/0006_task_fulltext_search.sql`: a weighted (`title`>`description`>`tags`) `tsvector` generated column on `todos_sync_records`, a GIN index for ranked full-text search, and a `pg_trgm` trigram GIN index for typo/fuzzy matching, all diacritics-insensitive via an immutable `unaccent` wrapper. Idempotent with automatic backfill; mirrored into `postgresTodosSyncSchemaSql` so fresh cloud bootstraps get it too.
-- `TaskFilter.query` full-text field. The Postgres adapter emits a `websearch_to_tsquery` predicate (AND-by-default, quoted phrases, punctuation-tolerant) with a single-term `pg_trgm` word-similarity fuzzy fallback, ranked by `ts_rank_cd`. Exposed over `GET /v1/tasks?q=`; the `todos search` CLI routes through it under a self-hosted authority.
+- `TaskFilter.query` full-text field, honored by BOTH storage adapters so `GET /v1/tasks?q=` searches whether the server is Postgres- or SQLite-backed. The Postgres adapter emits a `websearch_to_tsquery` predicate (AND-by-default, quoted phrases, punctuation-tolerant) with a single-term `pg_trgm` word-similarity fuzzy fallback, ranked by `ts_rank_cd`; the local SQLite adapter routes the query through the FTS5 `searchTasks` path and applies the remaining filters. Exposed over `GET /v1/tasks?q=`; the `todos search` CLI routes through it under a self-hosted authority.
 
 ## [0.11.92] - 2026-07-18
 
