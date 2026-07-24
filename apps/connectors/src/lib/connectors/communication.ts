@@ -430,6 +430,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["email", "delivery", "marketing", "api"],
   },
   {
+    name: "smtp2go",
+    displayName: "SMTP2GO",
+    description: "Email delivery API and SMTP relay",
+    category: "Communication",
+    tags: ["email", "smtp", "api"],
+  },
+  {
     name: "mandrill",
     displayName: "Mandrill",
     description: "Transactional email API by Mailchimp",
