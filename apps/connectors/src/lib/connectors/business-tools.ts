@@ -878,6 +878,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["e-signature", "contracts", "digital", "documents", "legal"],
   },
   {
+    name: "smartrecruiters",
+    displayName: "SmartRecruiters",
+    description: "Applicant tracking system for jobs, candidates, and postings",
+    category: "Business Tools",
+    tags: ["hr", "recruiting", "ats"],
+  },
+  {
     name: "smartsuite",
     displayName: "SmartSuite",
     description: "Work management platform for projects, tasks, and workflows",
