@@ -2,7 +2,7 @@
 // Runs discovered specs through the repo's own Playwright install,
 // captures results and maps them onto the existing Run/Result model.
 
-import { execSync } from "child_process";
+import { execSync, spawnSync } from "child_process";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import { createRun, updateRun, createResult, updateResult, createScenario, listScenarios } from "../store/index.js";
@@ -96,37 +96,43 @@ function runPlaywright(
 ): { exitCode: number | null; stdout: string; stderr: string; durationMs: number } {
   const cmd = resolvePlaywrightCmd(repoPath);
   const args = buildPlaywrightArgs(specFiles, extraArgs);
+  // Run without a shell (shell: false) and pass argv as an array so that
+  // spec file paths / extra args (which can be influenced by repo contents,
+  // e.g. crafted filenames) can never be interpreted as shell metacharacters.
+  const command = cmd[0]!;
+  const spawnArgs = [...cmd.slice(1), ...args];
 
   const startTime = Date.now();
 
-  try {
-    // Use --reporter=line for terminal output, also get JSON via --reporter=json
-    const result = execSync(`${cmd.join(" ")} ${args.join(" ")}`, {
-      cwd: workingDir,
-      encoding: "utf-8",
-      timeout: timeoutMs,
-      maxBuffer: 50 * 1024 * 1024, // 50MB
-      env: { ...process.env, CI: "1" },
-    }).toString();
+  // Use --reporter=line for terminal output, also get JSON via --reporter=json
+  const result = spawnSync(command, spawnArgs, {
+    cwd: workingDir,
+    encoding: "utf-8",
+    timeout: timeoutMs,
+    maxBuffer: 50 * 1024 * 1024, // 50MB
+    env: { ...process.env, CI: "1" },
+    shell: false,
+  });
 
-    return {
-      exitCode: 0,
-      stdout: result,
-      stderr: "",
-      durationMs: Date.now() - startTime,
-    };
-  } catch (err: any) {
-    const stdout = err.stdout?.toString() ?? "";
-    const stderr = err.stderr?.toString() ?? "";
-    const exitCode = err.status ?? err.code ?? -1;
+  const stdout = result.stdout?.toString() ?? "";
+  const stderr = result.stderr?.toString() ?? "";
 
+  if (result.error) {
+    // spawn failed outright (e.g. binary not found, timeout kill)
     return {
-      exitCode: typeof exitCode === "number" ? exitCode : -1,
+      exitCode: typeof result.status === "number" ? result.status : null,
       stdout,
-      stderr,
+      stderr: stderr || result.error.message,
       durationMs: Date.now() - startTime,
     };
   }
+
+  return {
+    exitCode: typeof result.status === "number" ? result.status : null,
+    stdout,
+    stderr,
+    durationMs: Date.now() - startTime,
+  };
 }
 
 function parsePlaywrightJsonOutput(stdout: string, _stderr: string): RepoRunSpecResult["testResults"] {
