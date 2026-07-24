@@ -1,0 +1,52 @@
+{
+  "name": "@hasna/connect-zymbly",
+  "version": "0.0.1",
+  "description": "Zymbly aircraft maintenance API connector for work orders, parts search, maintenance notes, and raw API calls",
+  "type": "module",
+  "bin": {
+    "connect-zymbly": "./bin/index.js"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/cli/index.ts --outdir ./bin --target bun",
+    "dev": "bun run ./src/cli/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "prepublishOnly": "bun run build"
+  },
+  "keywords": [
+    "zymbly",
+    "aircraft",
+    "maintenance",
+    "cmms",
+    "work-orders",
+    "aviation",
+    "connector",
+    "cli",
+    "typescript",
+    "bun"
+  ],
+  "author": "Hasna",
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "commander": "^12.1.0"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/open-connectors.git"
+  }
+}

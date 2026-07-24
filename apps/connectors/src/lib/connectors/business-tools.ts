@@ -1360,4 +1360,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Business Tools",
     tags: ["hr", "employees", "zoho"],
   },
+  {
+    name: "zymbly",
+    displayName: "Zymbly",
+    description: "Aircraft maintenance and CMMS platform for work orders, parts, and maintenance notes",
+    category: "Business Tools",
+    tags: ["maintenance", "aircraft", "work-orders", "cmms"],
+  },
 ];
