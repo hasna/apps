@@ -271,7 +271,7 @@ Commands:
   paths                        Show resolved workspace/store paths
   setup                        Configure local, hosted, or canonical example S3 mode
   auth login|whoami|logout     Manage hosted API credentials
-  storage status|validate|repair-artifact-keys|migrate-legacy-path|import-legacy
+  storage status|validate|repair-artifact-keys|migrate-legacy-path|merge-legacy-path|import-legacy
                                Inspect, migrate, or repair local/S3 artifact storage metadata
   machines topology|preflight  Inspect optional machine topology/sync readiness
   sync status|doctor|snapshot|conflicts
@@ -400,7 +400,7 @@ function printCommandHelp(command: string): void {
   if (command === 'paths') { console.log('Usage: knowledge paths [--scope local|global|project] [--verbose] [--json]'); return; }
   if (command === 'setup') { console.log('Usage: knowledge setup --mode local|hosted [--api-url https://...] [--canonical-example] [--scope local|global|project] [--json]'); return; }
   if (command === 'auth') { console.log('Usage: knowledge auth login|whoami|logout [--api-key <key>] [--email <email>] [--org <slug>] [--api-url https://...] [--scope local|global|project] [--json]'); return; }
-  if (command === 'storage') { console.log('Usage: knowledge storage status|validate|repair-artifact-keys|migrate-legacy-path [--approve-write --approved-by <name>] [--scope local|global|project] [--json]\n       knowledge storage import-legacy [--dry-run] [--scope global] [--json]'); return; }
+  if (command === 'storage') { console.log('Usage: knowledge storage status|validate|repair-artifact-keys|migrate-legacy-path|merge-legacy-path [--approve-write --approved-by <name>] [--scope local|global|project] [--json]\n       knowledge storage import-legacy [--dry-run] [--scope global] [--json]'); return; }
   if (command === 'machines') { console.log('Usage: knowledge machines topology [--no-tailscale] | preflight [machine] [--workspace <repo>] [--scope local|global|project] [--verbose] [--json]'); return; }
   if (command === 'sync') { console.log('Usage: knowledge sync status|doctor|readiness|snapshot|machines|conflicts [show|propose|resolve] [id] | dry-run|pull|push|sync|export|import [--peer-workspace <path>] [--machine <ssh-alias>] [--tables <names>] [--dry-run] [--limit <n>] [--approve-write] [--approved-by <name>] [--strategy <name>] [--mode deterministic|ai] [--model <alias|provider:model>] [--fake] [--no-tailscale] [--scope local|global|project] [--verbose] [--json]\n\nRemote machine sync resolves peer paths through @hasna/machines when --peer-workspace is omitted.'); return; }
   if (command === 'db') { console.log('Usage: knowledge db init|stats|storage status [--scope local|global|project] [--json]'); return; }
@@ -804,6 +804,15 @@ async function run(argv: string[]): Promise<void> {
       if (!migration.ok && !flags.json) process.exitCode = 1;
       return;
     }
+    if (storageAction === 'merge-legacy-path' || storageAction === 'merge-legacy' || storageAction === 'merge-path') {
+      const merge = service.mergeLegacyPath({
+        approveWrite: flags.approveWrite,
+        approvedBy: flags.approvedBy,
+      });
+      output(merge, flags.json);
+      if (!merge.ok && !flags.json) process.exitCode = 1;
+      return;
+    }
   }
   const storePathOverridden = Boolean(flags.store);
   let storePath = flags.store;
@@ -950,7 +959,16 @@ async function run(argv: string[]): Promise<void> {
       if (!migration.ok && !flags.json) process.exitCode = 1;
       return;
     }
-    throw new Error("Invalid storage action. Use 'status', 'validate', 'repair-artifact-keys', 'migrate-legacy-path', or 'import-legacy'.");
+    if (action === 'merge-legacy-path' || action === 'merge-legacy' || action === 'merge-path') {
+      const merge = service.mergeLegacyPath({
+        approveWrite: flags.approveWrite,
+        approvedBy: flags.approvedBy,
+      });
+      output(merge, flags.json);
+      if (!merge.ok && !flags.json) process.exitCode = 1;
+      return;
+    }
+    throw new Error("Invalid storage action. Use 'status', 'validate', 'repair-artifact-keys', 'migrate-legacy-path', 'merge-legacy-path', or 'import-legacy'.");
   }
 
   if (command === 'machines') {

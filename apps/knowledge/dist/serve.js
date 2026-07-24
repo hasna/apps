@@ -780,9 +780,20 @@ function knowledgeRegistryContract(input) {
 }
 
 // src/store.ts
-import { chmodSync as chmodSync2, readFileSync as readFileSync3, writeFileSync as writeFileSync2, existsSync as existsSync2, renameSync, unlinkSync } from "fs";
+import {
+  chmodSync as chmodSync2,
+  closeSync,
+  existsSync as existsSync2,
+  fsyncSync,
+  lstatSync,
+  openSync,
+  readFileSync as readFileSync3,
+  renameSync,
+  unlinkSync,
+  writeFileSync as writeFileSync2
+} from "fs";
 import { randomUUID } from "crypto";
-import { join as join2 } from "path";
+import { basename, dirname as dirname2, join as join2 } from "path";
 
 // src/workspace.ts
 import { chmodSync, existsSync, mkdirSync, readFileSync as readFileSync2, writeFileSync } from "fs";
@@ -973,9 +984,8 @@ function ensureStore(path) {
   }
   if (!existsSync2(path)) {
     ensureParentDir(path);
-    writeFileSync2(path, `${JSON.stringify({ items: [] }, null, 2)}
-`, { mode: 384 });
-    chmodSync2(path, 384);
+    writeFileAtomic(path, `${JSON.stringify({ items: [] }, null, 2)}
+`);
   }
 }
 function timestampForPath(now) {
@@ -1119,26 +1129,151 @@ function loadStoreIfExists(path) {
 function lockPath(path) {
   return `${path}.lock`;
 }
-var heldLockPaths = new Set;
-function acquireLock(lockPath2, ownerId) {
-  const maxWait = 5000;
-  const interval = 50;
-  const start = Date.now();
-  while (Date.now() - start < maxWait) {
-    try {
-      if (!existsSync2(lockPath2)) {
-        writeFileSync2(lockPath2, JSON.stringify({ owner: ownerId, ts: Date.now() }), { mode: 384 });
-        return;
-      }
-      const lock = JSON.parse(readFileSync3(lockPath2, "utf8"));
-      if (Date.now() - lock.ts > 1e4) {
-        unlinkSync(lockPath2);
-      }
-    } catch {}
-    const start2 = Date.now();
-    while (Date.now() - start2 < interval) {}
+var LOCK_MAX_WAIT_MS = 1e4;
+var LOCK_RETRY_MS = 25;
+var LOCK_STALE_MS = 120000;
+var SLEEP_BUFFER = new Int32Array(new SharedArrayBuffer(4));
+function errCode(error) {
+  return typeof error === "object" && error !== null && "code" in error ? String(error.code) : undefined;
+}
+function syncParentDir(path) {
+  let fd = null;
+  try {
+    fd = openSync(dirname2(path), "r");
+    fsyncSync(fd);
+  } catch {} finally {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {}
+    }
   }
-  throw new Error(`Could not acquire lock on ${lockPath2} after ${maxWait}ms`);
+}
+var heldLockPaths = new Set;
+function writeFileAtomic(path, contents) {
+  ensureParentDir(path);
+  const tmp = join2(dirname2(path), `.${basename(path)}.tmp.${randomUUID()}`);
+  let fd = null;
+  try {
+    fd = openSync(tmp, "wx", 384);
+    writeFileSync2(fd, contents);
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = null;
+    renameSync(tmp, path);
+    try {
+      chmodSync2(path, 384);
+    } catch {}
+    syncParentDir(path);
+  } catch (error) {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {}
+    }
+    try {
+      unlinkSync(tmp);
+    } catch {}
+    throw error;
+  }
+}
+function sleepSync(ms) {
+  Atomics.wait(SLEEP_BUFFER, 0, 0, ms);
+}
+function processIsAlive(pid) {
+  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0)
+    return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return errCode(error) !== "ESRCH";
+  }
+}
+function lockIsStale(path, now) {
+  try {
+    const raw = readFileSync3(path, "utf8");
+    const lock = JSON.parse(raw);
+    if (typeof lock.ts === "number") {
+      return now - lock.ts > LOCK_STALE_MS && !processIsAlive(lock.pid);
+    }
+  } catch {}
+  try {
+    return now - lstatSync(path).mtimeMs > LOCK_STALE_MS;
+  } catch {
+    return false;
+  }
+}
+function moveStaleLock(path) {
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+  const stalePath = `${path}.stale.${stamp}.${randomUUID()}`;
+  try {
+    renameSync(path, stalePath);
+  } catch (error) {
+    if (errCode(error) !== "ENOENT")
+      throw error;
+    return;
+  }
+}
+function breakStaleLock(lockPath2) {
+  const owner = randomUUID();
+  const breakerPath = `${lockPath2}.breaker`;
+  const start = Date.now();
+  while (Date.now() - start < LOCK_MAX_WAIT_MS) {
+    if (tryAcquireLock(breakerPath, owner)) {
+      try {
+        if (lockIsStale(lockPath2, Date.now())) {
+          moveStaleLock(lockPath2);
+        }
+      } finally {
+        releaseLock(breakerPath, owner);
+      }
+      return;
+    }
+    sleepSync(LOCK_RETRY_MS);
+  }
+  throw new Error(`Could not acquire stale-lock breaker on ${breakerPath} after ${LOCK_MAX_WAIT_MS}ms`);
+}
+function tryAcquireLock(path, ownerId) {
+  let fd = null;
+  let created = false;
+  try {
+    fd = openSync(path, "wx", 384);
+    created = true;
+    writeFileSync2(fd, `${JSON.stringify({ owner: ownerId, pid: process.pid, ts: Date.now() })}
+`);
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = null;
+    syncParentDir(path);
+    return true;
+  } catch (error) {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {}
+    }
+    if (created) {
+      try {
+        unlinkSync(path);
+      } catch {}
+    }
+    if (errCode(error) === "EEXIST")
+      return false;
+    throw error;
+  }
+}
+function acquireLock(lockPath2, ownerId) {
+  const start = Date.now();
+  while (Date.now() - start < LOCK_MAX_WAIT_MS) {
+    if (tryAcquireLock(lockPath2, ownerId))
+      return;
+    if (lockIsStale(lockPath2, Date.now())) {
+      breakStaleLock(lockPath2);
+    }
+    sleepSync(LOCK_RETRY_MS);
+  }
+  throw new Error(`Could not acquire lock on ${lockPath2} after ${LOCK_MAX_WAIT_MS}ms`);
 }
 function releaseLock(lockPath2, ownerId) {
   try {
@@ -1160,10 +1295,8 @@ function loadStore(path) {
   return parsed;
 }
 function saveStore(path, store) {
-  const tmp = `${path}.tmp.${randomUUID()}`;
-  writeFileSync2(tmp, JSON.stringify(store, null, 2), { mode: 384 });
-  renameSync(tmp, path);
-  chmodSync2(path, 384);
+  writeFileAtomic(path, `${JSON.stringify(store, null, 2)}
+`);
 }
 function withLock(path, fn, options = {}) {
   const owner = randomUUID();

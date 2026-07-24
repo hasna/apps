@@ -21,6 +21,10 @@ function writeWindowsCmdShim(bin: string, name: string): void {
   ].join('\r\n'));
 }
 
+function normalizeDarwinPath(path: string): string {
+  return path.replace(/^\/private(?=\/var\/)/, '');
+}
+
 function writeFakeSshJs(bin: string): void {
   writeFileSync(join(bin, 'ssh.js'), [
     '#!/usr/bin/env bun',
@@ -267,7 +271,7 @@ describe('public knowledge sdk', () => {
     const client = createKnowledgeClient({ scope: 'project', cwd: dir });
 
     const paths = client.paths();
-    expect(paths.home).toBe(join(dir, '.hasna', 'knowledge'));
+    expect(normalizeDarwinPath(paths.home)).toBe(normalizeDarwinPath(join(dir, '.hasna', 'knowledge')));
     expect(paths.exists).toBe(false);
     expect(paths.knowledge_db_exists).toBe(false);
     expect(existsSync(join(dir, '.hasna', 'knowledge'))).toBe(false);
@@ -302,7 +306,7 @@ describe('public knowledge sdk', () => {
     expect(EXAMPLE_KNOWLEDGE_CANONICAL.source_owner).toBe('open-files');
 
     const paths = client.paths();
-    expect(paths.home).toBe(join(dir, '.hasna', 'knowledge'));
+    expect(normalizeDarwinPath(paths.home)).toBe(normalizeDarwinPath(join(dir, '.hasna', 'knowledge')));
     expect(paths.config.storage.type).toBe('local');
 
     const setup = client.setup({ mode: 'hosted', canonicalExample: true });

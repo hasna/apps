@@ -15,6 +15,7 @@ import {
 import { dirname, join, relative } from 'node:path';
 import type { KnowledgeWorkspace } from './workspace';
 import { defaultKnowledgeConfig, workspaceForHome } from './workspace';
+import { saveStore, withLock, type KnowledgeItem, type Store } from './store';
 
 export interface WorkspaceTreeSummary {
   path: string;
@@ -53,6 +54,55 @@ export interface KnowledgeLegacyWorkspaceMigrationResult {
   checks: Record<string, boolean>;
   warnings: string[];
   message: string;
+}
+
+export interface KnowledgeLegacyWorkspaceMergeStats {
+  current_items: number;
+  legacy_items: number;
+  duplicate_ids_identical: number;
+  duplicate_ids_conflicting: number;
+  short_id_conflicts: number;
+  stranded_items: number;
+  merged_items: number;
+  expected_total_items: number;
+  final_items: number | null;
+}
+
+export interface KnowledgeLegacyWorkspaceMergeConflict {
+  type: 'id_conflict' | 'short_id_conflict';
+  id: string;
+  legacy_id?: string;
+  current_id?: string;
+  legacy_title?: string;
+  current_title?: string;
+}
+
+export interface KnowledgeLegacyWorkspaceMergeResult {
+  ok: boolean;
+  dry_run: boolean;
+  approval_required: boolean;
+  scope: string;
+  current_home: string;
+  legacy_home: string;
+  backup_home: string | null;
+  legacy_before: WorkspaceTreeSummary;
+  current_before: WorkspaceTreeSummary;
+  backup_after: WorkspaceTreeSummary | null;
+  current_after: WorkspaceTreeSummary | null;
+  merge: KnowledgeLegacyWorkspaceMergeStats;
+  conflicts: KnowledgeLegacyWorkspaceMergeConflict[];
+  checks: Record<string, boolean>;
+  warnings: string[];
+  message: string;
+}
+
+export interface KnowledgeLegacyWorkspaceMergeOptions {
+  scope: string;
+  current: KnowledgeWorkspace;
+  legacy: KnowledgeWorkspace;
+  approveWrite?: boolean;
+  approvedBy?: string;
+  now?: Date;
 }
 
 export interface KnowledgeLegacyWorkspaceMigrationOptions {
@@ -120,11 +170,15 @@ function sqliteSummary(path: string): WorkspaceTreeSummary['sqlite'] {
   }
 }
 
-export function summarizeWorkspaceTree(workspace: KnowledgeWorkspace): WorkspaceTreeSummary {
+export function summarizeWorkspaceTree(
+  workspace: KnowledgeWorkspace,
+  options: { includeSqlite?: boolean } = {},
+): WorkspaceTreeSummary {
   const files = walkFiles(workspace.home);
   const treeHash = hashFiles(workspace.home, files);
   const artifactFiles = walkFiles(workspace.artifactsDir);
   const artifactHash = hashFiles(workspace.artifactsDir, artifactFiles);
+  const sqliteExists = existsSync(workspace.knowledgeDbPath);
   return {
     path: workspace.home,
     exists: existsSync(workspace.home),
@@ -132,7 +186,9 @@ export function summarizeWorkspaceTree(workspace: KnowledgeWorkspace): Workspace
     total_bytes: treeHash.bytes,
     tree_sha256: treeHash.sha256,
     json_items: jsonItemCount(workspace.jsonStorePath),
-    sqlite: sqliteSummary(workspace.knowledgeDbPath),
+    sqlite: options.includeSqlite === false
+      ? { exists: sqliteExists, integrity_check: null, table_counts: {} }
+      : sqliteSummary(workspace.knowledgeDbPath),
     artifacts: {
       exists: existsSync(workspace.artifactsDir),
       file_count: artifactFiles.length,
@@ -170,6 +226,324 @@ function summariesMatch(left: WorkspaceTreeSummary, right: WorkspaceTreeSummary)
 
 function migrationTimestamp(now: Date): string {
   return now.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => `${JSON.stringify(key)}:${stableJson(entry)}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function itemSignature(item: KnowledgeItem): string {
+  return stableJson(item);
+}
+
+function itemShortId(item: KnowledgeItem): string | null {
+  return typeof item.short_id === 'string' && item.short_id.trim().length > 0 ? item.short_id : null;
+}
+
+function readMergeStore(path: string): Store {
+  if (!existsSync(path)) return { items: [] };
+  const parsed = JSON.parse(readFileSync(path, 'utf8')) as Store;
+  if (!parsed || !Array.isArray(parsed.items)) {
+    throw new Error(`Invalid knowledge JSON store shape at ${path}`);
+  }
+  return { items: parsed.items };
+}
+
+function mergeStats(
+  currentStore: Store,
+  legacyStore: Store,
+): {
+  stats: KnowledgeLegacyWorkspaceMergeStats;
+  conflicts: KnowledgeLegacyWorkspaceMergeConflict[];
+  mergedStore: Store;
+} {
+  const currentById = new Map(currentStore.items.map((item) => [item.id, item]));
+  const reservedKeys = new Map<string, { item: KnowledgeItem; keyKind: 'id' | 'short_id'; source: 'current' | 'legacy' }>();
+  for (const item of currentStore.items) {
+    const existingId = reservedKeys.get(item.id);
+    if (existingId && existingId.item.id !== item.id) {
+      // Existing canonical ambiguity is reported below when legacy collides with it.
+    }
+    reservedKeys.set(item.id, { item, keyKind: 'id', source: 'current' });
+    const shortId = itemShortId(item);
+    if (shortId && !reservedKeys.has(shortId)) {
+      reservedKeys.set(shortId, { item, keyKind: 'short_id', source: 'current' });
+    }
+  }
+
+  const conflicts: KnowledgeLegacyWorkspaceMergeConflict[] = [];
+  let duplicateIdsIdentical = 0;
+  let duplicateIdsConflicting = 0;
+  let shortIdConflicts = 0;
+  const stranded: KnowledgeItem[] = [];
+
+  for (const legacyItem of legacyStore.items) {
+    const currentItem = currentById.get(legacyItem.id);
+    if (currentItem) {
+      if (itemSignature(currentItem) === itemSignature(legacyItem)) {
+        duplicateIdsIdentical += 1;
+      } else {
+        duplicateIdsConflicting += 1;
+        conflicts.push({
+          type: 'id_conflict',
+          id: legacyItem.id,
+          legacy_title: legacyItem.title,
+          current_title: currentItem.title,
+        });
+      }
+      continue;
+    }
+
+    const keys = [
+      { key: legacyItem.id, keyKind: 'id' as const },
+      ...(itemShortId(legacyItem) ? [{ key: itemShortId(legacyItem)!, keyKind: 'short_id' as const }] : []),
+    ];
+    let itemHasConflict = false;
+    for (const { key, keyKind } of keys) {
+      const existing = reservedKeys.get(key);
+      if (!existing) continue;
+      if (keyKind === 'id' && existing.keyKind === 'id') {
+        duplicateIdsConflicting += 1;
+        conflicts.push({
+          type: 'id_conflict',
+          id: key,
+          legacy_id: legacyItem.id,
+          current_id: existing.item.id,
+          legacy_title: legacyItem.title,
+          current_title: existing.item.title,
+        });
+      } else {
+        shortIdConflicts += 1;
+        conflicts.push({
+          type: 'short_id_conflict',
+          id: key,
+          legacy_id: legacyItem.id,
+          current_id: existing.item.id,
+          legacy_title: legacyItem.title,
+          current_title: existing.item.title,
+        });
+      }
+      itemHasConflict = true;
+    }
+    if (itemHasConflict) {
+      continue;
+    }
+
+    stranded.push(legacyItem);
+    for (const { key, keyKind } of keys) {
+      reservedKeys.set(key, { item: legacyItem, keyKind, source: 'legacy' });
+    }
+  }
+
+  const mergedStore = { items: [...currentStore.items, ...stranded] };
+  return {
+    stats: {
+      current_items: currentStore.items.length,
+      legacy_items: legacyStore.items.length,
+      duplicate_ids_identical: duplicateIdsIdentical,
+      duplicate_ids_conflicting: duplicateIdsConflicting,
+      short_id_conflicts: shortIdConflicts,
+      stranded_items: stranded.length,
+      merged_items: conflicts.length === 0 ? stranded.length : 0,
+      expected_total_items: currentStore.items.length + stranded.length,
+      final_items: null,
+    },
+    conflicts,
+    mergedStore,
+  };
+}
+
+function withStoreLocks<T>(paths: string[], fn: () => T): T {
+  const uniquePaths = [...new Set(paths)].sort();
+  const run = (index: number): T => {
+    if (index >= uniquePaths.length) return fn();
+    return withLock(uniquePaths[index]!, () => run(index + 1), { createParent: true });
+  };
+  return run(0);
+}
+
+export function mergeLegacyKnowledgeWorkspace(
+  options: KnowledgeLegacyWorkspaceMergeOptions,
+): KnowledgeLegacyWorkspaceMergeResult {
+  const now = options.now ?? new Date();
+  const dryRun = options.approveWrite !== true;
+  const legacyBefore = summarizeWorkspaceTree(options.legacy);
+  const currentBefore = summarizeWorkspaceTree(options.current);
+  const checks = {
+    legacy_exists: legacyBefore.exists,
+    legacy_store_exists: existsSync(options.legacy.jsonStorePath),
+    current_store_exists: existsSync(options.current.jsonStorePath),
+    approval_present: options.approveWrite === true && Boolean(options.approvedBy),
+    legacy_backup_written: false,
+    no_conflicts: false,
+    final_count_matches_expected: false,
+  };
+  const warnings: string[] = [];
+
+  if (!legacyBefore.exists || !checks.legacy_store_exists) {
+    return {
+      ok: true,
+      dry_run: dryRun,
+      approval_required: false,
+      scope: options.scope,
+      current_home: options.current.home,
+      legacy_home: options.legacy.home,
+      backup_home: null,
+      legacy_before: legacyBefore,
+      current_before: currentBefore,
+      backup_after: null,
+      current_after: currentBefore,
+      merge: {
+        current_items: readMergeStore(options.current.jsonStorePath).items.length,
+        legacy_items: 0,
+        duplicate_ids_identical: 0,
+        duplicate_ids_conflicting: 0,
+        short_id_conflicts: 0,
+        stranded_items: 0,
+        merged_items: 0,
+        expected_total_items: readMergeStore(options.current.jsonStorePath).items.length,
+        final_items: currentBefore.json_items,
+      },
+      conflicts: [],
+      checks: {
+        ...checks,
+        no_conflicts: true,
+        final_count_matches_expected: true,
+      },
+      warnings,
+      message: `No legacy knowledge JSON store found at ${options.legacy.jsonStorePath}`,
+    };
+  }
+
+  const currentStore = readMergeStore(options.current.jsonStorePath);
+  const legacyStore = readMergeStore(options.legacy.jsonStorePath);
+  const planned = mergeStats(currentStore, legacyStore);
+  checks.no_conflicts = planned.conflicts.length === 0;
+  if (planned.conflicts.length > 0) warnings.push('merge_conflicts_detected');
+  if (!checks.approval_present) warnings.push('write_approval_required');
+
+  if (dryRun || !checks.approval_present || planned.conflicts.length > 0) {
+    return {
+      ok: planned.conflicts.length === 0,
+      dry_run: true,
+      approval_required: !checks.approval_present,
+      scope: options.scope,
+      current_home: options.current.home,
+      legacy_home: options.legacy.home,
+      backup_home: `${options.legacy.home}.merge-backup-${migrationTimestamp(now)}`,
+      legacy_before: legacyBefore,
+      current_before: currentBefore,
+      backup_after: null,
+      current_after: null,
+      merge: planned.stats,
+      conflicts: planned.conflicts,
+      checks,
+      warnings,
+      message: planned.conflicts.length === 0
+        ? `Dry run: would merge ${planned.stats.stranded_items} legacy item(s) into ${options.current.jsonStorePath}`
+        : `Refusing legacy merge with ${planned.conflicts.length} conflict(s)`,
+    };
+  }
+
+  return withStoreLocks([options.current.jsonStorePath, options.legacy.jsonStorePath], () => {
+    const lockedCurrentStore = readMergeStore(options.current.jsonStorePath);
+    const lockedLegacyStore = readMergeStore(options.legacy.jsonStorePath);
+    const lockedPlan = mergeStats(lockedCurrentStore, lockedLegacyStore);
+    checks.no_conflicts = lockedPlan.conflicts.length === 0;
+    if (lockedPlan.conflicts.length > 0) {
+      return {
+        ok: false,
+        dry_run: true,
+        approval_required: false,
+        scope: options.scope,
+        current_home: options.current.home,
+        legacy_home: options.legacy.home,
+        backup_home: null,
+        legacy_before: summarizeWorkspaceTree(options.legacy),
+        current_before: summarizeWorkspaceTree(options.current),
+        backup_after: null,
+        current_after: null,
+        merge: lockedPlan.stats,
+        conflicts: lockedPlan.conflicts,
+        checks,
+        warnings: [...warnings, 'merge_conflicts_detected_after_lock'],
+        message: `Refusing legacy merge with ${lockedPlan.conflicts.length} conflict(s)`,
+      };
+    }
+
+    if (lockedPlan.stats.stranded_items === 0) {
+      lockedPlan.stats.final_items = lockedCurrentStore.items.length;
+      checks.final_count_matches_expected = lockedCurrentStore.items.length === lockedPlan.stats.expected_total_items;
+      return {
+        ok: checks.no_conflicts && checks.final_count_matches_expected,
+        dry_run: false,
+        approval_required: false,
+        scope: options.scope,
+        current_home: options.current.home,
+        legacy_home: options.legacy.home,
+        backup_home: null,
+        legacy_before: summarizeWorkspaceTree(options.legacy),
+        current_before: summarizeWorkspaceTree(options.current),
+        backup_after: null,
+        current_after: summarizeWorkspaceTree(options.current),
+        merge: lockedPlan.stats,
+        conflicts: [],
+        checks,
+        warnings,
+        message: `Legacy merge already up to date for ${options.current.jsonStorePath}`,
+      };
+    }
+
+    const backupHome = `${options.legacy.home}.merge-backup-${migrationTimestamp(now)}`;
+    mkdirSync(dirname(backupHome), { recursive: true });
+    cpSync(options.legacy.home, backupHome, {
+      recursive: true,
+      force: false,
+      errorOnExist: true,
+      preserveTimestamps: true,
+    });
+    const backupWorkspace = workspaceForHome(backupHome);
+    const backupAfter = summarizeWorkspaceTree(backupWorkspace);
+    checks.legacy_backup_written = summariesMatch(summarizeWorkspaceTree(options.legacy), backupAfter);
+    if (!checks.legacy_backup_written) {
+      throw new Error(`Legacy knowledge merge backup verification failed: ${backupHome}`);
+    }
+
+    saveStore(options.current.jsonStorePath, lockedPlan.mergedStore);
+    const finalStore = readMergeStore(options.current.jsonStorePath);
+    lockedPlan.stats.final_items = finalStore.items.length;
+    checks.final_count_matches_expected = finalStore.items.length === lockedPlan.stats.expected_total_items;
+    const currentAfter = summarizeWorkspaceTree(options.current);
+    const ok = checks.legacy_backup_written && checks.no_conflicts && checks.final_count_matches_expected;
+
+    return {
+      ok,
+      dry_run: false,
+      approval_required: false,
+      scope: options.scope,
+      current_home: options.current.home,
+      legacy_home: options.legacy.home,
+      backup_home: backupHome,
+      legacy_before: legacyBefore,
+      current_before: currentBefore,
+      backup_after: backupAfter,
+      current_after: currentAfter,
+      merge: lockedPlan.stats,
+      conflicts: [],
+      checks,
+      warnings,
+      message: ok
+        ? `Merged ${lockedPlan.stats.merged_items} legacy item(s) into ${options.current.jsonStorePath}`
+        : `Merged legacy knowledge store, but verification failed for ${options.current.jsonStorePath}`,
+    };
+  });
 }
 
 function sleepSync(milliseconds: number): void {
@@ -272,9 +646,12 @@ export function migrateLegacyKnowledgeWorkspace(
 ): KnowledgeLegacyWorkspaceMigrationResult {
   const now = options.now ?? new Date();
   const dryRun = options.approveWrite !== true;
-  const legacyBefore = summarizeWorkspaceTree(options.legacy);
   const currentBefore = summarizeWorkspaceTree(options.current);
   const currentIsDefaultScaffold = isDefaultScaffold(options.current, currentBefore);
+  const willMutateLegacy = options.approveWrite === true
+    && Boolean(options.approvedBy)
+    && (!currentBefore.exists || currentIsDefaultScaffold);
+  const legacyBefore = summarizeWorkspaceTree(options.legacy, { includeSqlite: !willMutateLegacy });
   const checks = {
     legacy_exists: legacyBefore.exists,
     current_absent_or_default_scaffold: !currentBefore.exists || currentIsDefaultScaffold,
@@ -370,8 +747,8 @@ export function migrateLegacyKnowledgeWorkspace(
   });
   chmodOwnerOnlyTree(backupHome);
   const backupWorkspace = workspaceForHome(backupHome);
-  const backupAfter = summarizeWorkspaceTree(backupWorkspace);
-  checks.backup_matches_legacy = summariesMatch(legacyBefore, backupAfter);
+  const backupSnapshot = summarizeWorkspaceTree(backupWorkspace, { includeSqlite: false });
+  checks.backup_matches_legacy = summariesMatch(legacyBefore, backupSnapshot);
   if (!checks.backup_matches_legacy) {
     throw new Error(`Legacy knowledge backup verification failed: ${backupHome}`);
   }
@@ -380,8 +757,11 @@ export function migrateLegacyKnowledgeWorkspace(
     rmSync(options.current.home, { recursive: true, force: true });
   }
   moveWorkspace(options.legacy.home, options.current.home);
+  const currentSnapshot = summarizeWorkspaceTree(options.current, { includeSqlite: false });
+  checks.migrated_matches_backup = summariesMatch(backupSnapshot, currentSnapshot);
+  const backupAfter = summarizeWorkspaceTree(backupWorkspace);
   const currentAfter = summarizeWorkspaceTree(options.current);
-  checks.migrated_matches_backup = summariesMatch(backupAfter, currentAfter);
+  const legacyBeforeOutput = { ...backupAfter, path: options.legacy.home };
 
   mkdirSync(options.legacy.home, { recursive: true });
   const tombstonePath = join(options.legacy.home, 'TOMBSTONE.md');
@@ -403,7 +783,7 @@ export function migrateLegacyKnowledgeWorkspace(
     approved_by: options.approvedBy,
     new_path: options.current.home,
     backup_path: backupHome,
-    legacy_before: legacyBefore,
+    legacy_before: legacyBeforeOutput,
     backup_after: backupAfter,
     current_after: currentAfter,
   }, null, 2)}\n`, { mode: 0o600 });
@@ -420,7 +800,7 @@ export function migrateLegacyKnowledgeWorkspace(
     legacy_home: options.legacy.home,
     backup_home: backupHome,
     tombstone_path: tombstonePath,
-    legacy_before: legacyBefore,
+    legacy_before: legacyBeforeOutput,
     current_before: currentBefore,
     backup_after: backupAfter,
     current_after: currentAfter,

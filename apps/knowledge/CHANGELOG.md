@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.2.91
+
+Harden the local JSON item-store against lock corruption and add a sanctioned
+recovery path for merging a legacy app-folder workspace into a populated
+canonical workspace. Composes with the safe legacy global-store import (0.2.90):
+`withLock` remains reentrant and the hardened lock replaces the previous
+check-then-write acquisition used by that import.
+
+- Replace the check-then-write JSON store lock with exclusive `open(..., 'wx')`
+  creation, owner metadata (owner-only release), PID-aware conservative
+  stale-lock quarantine (stale locks are renamed aside, not blindly deleted,
+  behind a dedicated breaker lock), non-busy `Atomics.wait` retry sleep, and
+  fsynced temp-file writes with atomic rename (`writeFileAtomic`).
+- Add `knowledge storage merge-legacy-path` (CLI + service + SDK): dry-run by
+  default with current/legacy/duplicate/stranded/conflict/expected/final item
+  counts, refuses conflicting duplicate IDs or `short_id` collisions, snapshots
+  the legacy workspace before writing, merges only non-conflicting legacy items
+  under a lock, and is idempotent on rerun.
+- Avoid opening SQLite (WAL locks) while summarizing a workspace that is about to
+  be moved during `migrate-legacy-path`.
+
 ## 0.2.90
 
 Knowledge private-ref lint/redaction hardening (rescoped from PR #18, originally

@@ -71,6 +71,7 @@ export {
   type KnowledgeInventoryLegacyItem,
   type KnowledgeInventoryOptions as KnowledgeServiceInventoryOptions,
   type KnowledgeInventoryResult,
+  type KnowledgeLegacyPathMergeResult,
   type KnowledgeLegacyPathMigrationResult,
   type KnowledgeOpenFilesBoundaryStatus,
   type KnowledgePathsResult,

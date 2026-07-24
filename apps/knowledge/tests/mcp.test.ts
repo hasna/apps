@@ -25,8 +25,12 @@ function makeTempDir(prefix: string): string {
   return dir;
 }
 
+function normalizeDarwinPath(path: string): string {
+  return path.replace(/^\/private(?=\/var\/)/, '');
+}
+
 function expectedProjectKnowledgeHome(projectDir: string): string {
-  return join(realpathSync(projectDir), '.hasna', 'knowledge');
+  return normalizeDarwinPath(join(realpathSync(projectDir), '.hasna', 'knowledge'));
 }
 
 function writeWindowsCmdShim(bin: string, name: string): void {
@@ -794,7 +798,7 @@ describe('knowledge MCP', () => {
         arguments: { scope: 'project' },
       }));
       expect(appWikiInit.scope).toBe('project');
-      expect(appWikiInit.workspace_home).toBe(expectedProjectKnowledgeHome(dir));
+      expect(normalizeDarwinPath(appWikiInit.workspace_home)).toBe(expectedProjectKnowledgeHome(dir));
 
       const appWikiNote = parseToolJson(await client.callTool({
         name: 'knowledge_app_wiki_note_add',

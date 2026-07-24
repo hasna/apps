@@ -83,8 +83,12 @@ function expectSameExistingPath(actual: string, expected: string): void {
   expect(realpathSync(actual)).toBe(realpathSync(expected));
 }
 
+function normalizeDarwinPath(path: string): string {
+  return path.replace(/^\/private(?=\/var\/)/, '');
+}
+
 function expectedProjectKnowledgeHome(projectDir: string): string {
-  return join(realpathSync(projectDir), '.hasna', 'knowledge');
+  return normalizeDarwinPath(join(realpathSync(projectDir), '.hasna', 'knowledge'));
 }
 
 function createSchema7KnowledgeDb(dbPath: string): void {
@@ -691,7 +695,7 @@ describe('knowledge cli', () => {
     const paths = runCli(['paths', '--scope', 'project', '--json'], dir);
     expect(paths.exitCode).toBe(0);
     const pathsOut = JSON.parse(new TextDecoder().decode(paths.stdout));
-    expect(pathsOut.home).toBe(expectedProjectKnowledgeHome(dir));
+    expect(normalizeDarwinPath(pathsOut.home)).toBe(expectedProjectKnowledgeHome(dir));
     expect(pathsOut.exists).toBe(false);
     expect(pathsOut.config_exists).toBe(false);
     expect(pathsOut.json_store_exists).toBe(false);
@@ -755,7 +759,7 @@ describe('knowledge cli', () => {
     expect(panel.exitCode).toBe(0);
     const panelOut = JSON.parse(new TextDecoder().decode(panel.stdout));
     expect(panelOut.schema).toBe('hasna.project_panel.v1');
-    expect(panelOut.metadata.home).toBe(expectedProjectKnowledgeHome(dir));
+    expect(normalizeDarwinPath(panelOut.metadata.home)).toBe(expectedProjectKnowledgeHome(dir));
     expect(panelOut.metadata.json_store_exists).toBe(false);
     expect(existsSync(join(dir, '.hasna', 'knowledge'))).toBe(false);
 
@@ -1197,6 +1201,299 @@ describe('knowledge cli', () => {
     expect(existsSync(join(legacyHome, 'TOMBSTONE.md'))).toBe(false);
   });
 
+  test('storage merge safely imports legacy app-folder items into populated canonical store', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-workspace-merge-'));
+    const legacyHome = join(dir, '.hasna', 'apps', 'knowledge');
+    const currentHome = join(dir, '.hasna', 'knowledge');
+    mkdirSync(legacyHome, { recursive: true });
+    mkdirSync(currentHome, { recursive: true });
+    writeFileSync(join(legacyHome, 'db.json'), JSON.stringify({
+      items: [
+        {
+          id: 'k_duplicate',
+          title: 'Duplicate item',
+          content: 'same payload',
+          url: null,
+          tags: ['shared'],
+          metadata: { source: 'legacy' },
+          archived: false,
+          created_at: '2026-06-28T00:00:00.000Z',
+          updated_at: '2026-06-28T00:00:00.000Z',
+        },
+        {
+          id: 'k_stranded',
+          short_id: 'stranded',
+          title: 'Stranded item',
+          content: 'preserve this exact object',
+          url: 'https://example.com/stranded',
+          tags: ['legacy'],
+          metadata: { source: 'legacy', nested: { value: true } },
+          archived: true,
+          created_at: '2026-06-27T00:00:00.000Z',
+          updated_at: '2026-06-27T00:01:00.000Z',
+        },
+      ],
+    }, null, 2));
+    writeFileSync(join(currentHome, 'db.json'), JSON.stringify({
+      items: [
+        {
+          id: 'k_current',
+          title: 'Current item',
+          content: 'current payload',
+          url: null,
+          tags: [],
+          created_at: '2026-06-29T00:00:00.000Z',
+          updated_at: '2026-06-29T00:00:00.000Z',
+        },
+        {
+          id: 'k_duplicate',
+          title: 'Duplicate item',
+          content: 'same payload',
+          url: null,
+          tags: ['shared'],
+          metadata: { source: 'legacy' },
+          archived: false,
+          created_at: '2026-06-28T00:00:00.000Z',
+          updated_at: '2026-06-28T00:00:00.000Z',
+        },
+      ],
+    }, null, 2));
+
+    const preview = runCli(['storage', 'merge-legacy-path', '--scope', 'project', '--json'], dir);
+    expect(preview.exitCode).toBe(0);
+    const previewOut = JSON.parse(new TextDecoder().decode(preview.stdout));
+    expect(previewOut.dry_run).toBe(true);
+    expect(previewOut.approval_required).toBe(true);
+    expect(previewOut.merge).toMatchObject({
+      current_items: 2,
+      legacy_items: 2,
+      duplicate_ids_identical: 1,
+      stranded_items: 1,
+      expected_total_items: 3,
+    });
+    expect(previewOut.conflicts).toEqual([]);
+
+    const applied = runCli([
+      'storage',
+      'merge-legacy-path',
+      '--scope',
+      'project',
+      '--approve-write',
+      '--approved-by',
+      'cli-test',
+      '--json',
+    ], dir);
+    expect(applied.exitCode).toBe(0);
+    const appliedOut = JSON.parse(new TextDecoder().decode(applied.stdout));
+    expect(appliedOut.ok).toBe(true);
+    expect(appliedOut.dry_run).toBe(false);
+    expect(appliedOut.merge).toMatchObject({
+      merged_items: 1,
+      expected_total_items: 3,
+      final_items: 3,
+    });
+    expect(appliedOut.checks).toMatchObject({
+      legacy_backup_written: true,
+      no_conflicts: true,
+      final_count_matches_expected: true,
+    });
+    expect(existsSync(join(appliedOut.backup_home, 'db.json'))).toBe(true);
+
+    const merged = JSON.parse(readFileSync(join(currentHome, 'db.json'), 'utf8')) as {
+      items: Array<{ id: string; archived?: boolean; metadata?: Record<string, unknown> }>;
+    };
+    expect(merged.items.map((item) => item.id).sort()).toEqual(['k_current', 'k_duplicate', 'k_stranded']);
+    expect(merged.items.find((item) => item.id === 'k_stranded')).toMatchObject({
+      archived: true,
+      metadata: { source: 'legacy', nested: { value: true } },
+    });
+
+    const rerun = runCli([
+      'storage',
+      'merge-legacy-path',
+      '--scope',
+      'project',
+      '--approve-write',
+      '--approved-by',
+      'cli-test',
+      '--json',
+    ], dir);
+    expect(rerun.exitCode).toBe(0);
+    const rerunOut = JSON.parse(new TextDecoder().decode(rerun.stdout));
+    expect(rerunOut.merge).toMatchObject({
+      stranded_items: 0,
+      merged_items: 0,
+      final_items: 3,
+    });
+  });
+
+  test('storage merge refuses conflicting duplicate IDs', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-workspace-merge-conflict-'));
+    const legacyHome = join(dir, '.hasna', 'apps', 'knowledge');
+    const currentHome = join(dir, '.hasna', 'knowledge');
+    mkdirSync(legacyHome, { recursive: true });
+    mkdirSync(currentHome, { recursive: true });
+    const baseItem = {
+      id: 'k_conflict',
+      title: 'Conflict item',
+      url: null,
+      tags: [],
+      created_at: '2026-06-28T00:00:00.000Z',
+      updated_at: '2026-06-28T00:00:00.000Z',
+    };
+    writeFileSync(join(legacyHome, 'db.json'), JSON.stringify({
+      items: [{ ...baseItem, content: 'legacy content' }],
+    }, null, 2));
+    writeFileSync(join(currentHome, 'db.json'), JSON.stringify({
+      items: [{ ...baseItem, content: 'current content' }],
+    }, null, 2));
+
+    const result = runCli([
+      'storage',
+      'merge-legacy-path',
+      '--scope',
+      'project',
+      '--approve-write',
+      '--approved-by',
+      'cli-test',
+      '--json',
+    ], dir);
+    expect(result.exitCode).toBe(0);
+    const out = JSON.parse(new TextDecoder().decode(result.stdout));
+    expect(out.ok).toBe(false);
+    expect(out.dry_run).toBe(true);
+    expect(out.merge.duplicate_ids_conflicting).toBe(1);
+    expect(out.conflicts).toEqual([expect.objectContaining({ type: 'id_conflict', id: 'k_conflict' })]);
+    expect(existsSync(join(currentHome, 'db.json'))).toBe(true);
+    expect(existsSync(join(legacyHome, 'db.json'))).toBe(true);
+  });
+
+  test('storage merge refuses id and short_id namespace collisions', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-workspace-merge-namespace-conflict-'));
+    const legacyHome = join(dir, '.hasna', 'apps', 'knowledge');
+    const currentHome = join(dir, '.hasna', 'knowledge');
+    mkdirSync(legacyHome, { recursive: true });
+    mkdirSync(currentHome, { recursive: true });
+    writeFileSync(join(currentHome, 'db.json'), JSON.stringify({
+      items: [
+        {
+          id: 'k_current_short_owner',
+          short_id: 'legacy_id_hits_current_short',
+          title: 'Current short owner',
+          content: 'current',
+          url: null,
+          tags: [],
+          created_at: '2026-06-28T00:00:00.000Z',
+          updated_at: '2026-06-28T00:00:00.000Z',
+        },
+        {
+          id: 'current_id_hits_legacy_short',
+          title: 'Current id owner',
+          content: 'current',
+          url: null,
+          tags: [],
+          created_at: '2026-06-28T00:00:00.000Z',
+          updated_at: '2026-06-28T00:00:00.000Z',
+        },
+      ],
+    }, null, 2));
+    writeFileSync(join(legacyHome, 'db.json'), JSON.stringify({
+      items: [
+        {
+          id: 'legacy_id_hits_current_short',
+          title: 'Legacy id collision',
+          content: 'legacy',
+          url: null,
+          tags: [],
+          created_at: '2026-06-28T00:00:00.000Z',
+          updated_at: '2026-06-28T00:00:00.000Z',
+        },
+        {
+          id: 'k_legacy_short_owner',
+          short_id: 'current_id_hits_legacy_short',
+          title: 'Legacy short collision',
+          content: 'legacy',
+          url: null,
+          tags: [],
+          created_at: '2026-06-28T00:00:00.000Z',
+          updated_at: '2026-06-28T00:00:00.000Z',
+        },
+      ],
+    }, null, 2));
+
+    const result = runCli(['storage', 'merge-legacy-path', '--scope', 'project', '--json'], dir);
+    expect(result.exitCode).toBe(0);
+    const out = JSON.parse(new TextDecoder().decode(result.stdout));
+    expect(out.ok).toBe(false);
+    expect(out.merge.short_id_conflicts).toBe(2);
+    expect(out.conflicts).toEqual([
+      expect.objectContaining({ type: 'short_id_conflict', id: 'legacy_id_hits_current_short' }),
+      expect.objectContaining({ type: 'short_id_conflict', id: 'current_id_hits_legacy_short' }),
+    ]);
+  });
+
+  test('storage merge refuses duplicate lookup keys inside legacy store', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-workspace-merge-legacy-duplicates-'));
+    const legacyHome = join(dir, '.hasna', 'apps', 'knowledge');
+    const currentHome = join(dir, '.hasna', 'knowledge');
+    mkdirSync(legacyHome, { recursive: true });
+    mkdirSync(currentHome, { recursive: true });
+    writeFileSync(join(currentHome, 'db.json'), JSON.stringify({ items: [] }, null, 2));
+    writeFileSync(join(legacyHome, 'db.json'), JSON.stringify({
+      items: [
+        {
+          id: 'k_duplicate_legacy',
+          title: 'Legacy first duplicate id',
+          content: 'legacy',
+          url: null,
+          tags: [],
+          created_at: '2026-06-28T00:00:00.000Z',
+          updated_at: '2026-06-28T00:00:00.000Z',
+        },
+        {
+          id: 'k_duplicate_legacy',
+          title: 'Legacy second duplicate id',
+          content: 'legacy changed',
+          url: null,
+          tags: [],
+          created_at: '2026-06-28T00:00:00.000Z',
+          updated_at: '2026-06-28T00:00:00.000Z',
+        },
+        {
+          id: 'k_legacy_short_a',
+          short_id: 'shared_short',
+          title: 'Legacy first duplicate short',
+          content: 'legacy',
+          url: null,
+          tags: [],
+          created_at: '2026-06-28T00:00:00.000Z',
+          updated_at: '2026-06-28T00:00:00.000Z',
+        },
+        {
+          id: 'k_legacy_short_b',
+          short_id: 'shared_short',
+          title: 'Legacy second duplicate short',
+          content: 'legacy',
+          url: null,
+          tags: [],
+          created_at: '2026-06-28T00:00:00.000Z',
+          updated_at: '2026-06-28T00:00:00.000Z',
+        },
+      ],
+    }, null, 2));
+
+    const result = runCli(['storage', 'merge-legacy-path', '--scope', 'project', '--json'], dir);
+    expect(result.exitCode).toBe(0);
+    const out = JSON.parse(new TextDecoder().decode(result.stdout));
+    expect(out.ok).toBe(false);
+    expect(out.merge.duplicate_ids_conflicting).toBe(1);
+    expect(out.merge.short_id_conflicts).toBe(1);
+    expect(out.conflicts).toEqual([
+      expect.objectContaining({ type: 'id_conflict', id: 'k_duplicate_legacy' }),
+      expect.objectContaining({ type: 'short_id_conflict', id: 'shared_short' }),
+    ]);
+  });
+
   test('default status/path terminal output is compact with detail hints', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-compact-status-'));
 
@@ -1238,7 +1535,7 @@ describe('knowledge cli', () => {
     expect(out.adapter.package).toBe('@hasna/machines');
     expect(typeof out.adapter.available).toBe('boolean');
     expect(out.knowledge.app_path).toBe(join('.hasna', 'knowledge'));
-    expect(out.knowledge.workspace_home).toBe(expectedProjectKnowledgeHome(dir));
+    expect(normalizeDarwinPath(out.knowledge.workspace_home)).toBe(expectedProjectKnowledgeHome(dir));
     expect(existsSync(join(dir, '.hasna', 'knowledge'))).toBe(false);
     expect(out.machines.length).toBeGreaterThanOrEqual(1);
     expect(out.machines.some((machine: any) => machine.local)).toBe(true);

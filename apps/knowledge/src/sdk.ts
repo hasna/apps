@@ -92,6 +92,7 @@ export interface KnowledgeClient {
     readonly status: () => ReturnType<KnowledgeService['storageContract']>;
     readonly validate: () => ReturnType<KnowledgeService['validateStorage']>;
     readonly migrateLegacyPath: (options?: Parameters<KnowledgeService['migrateLegacyPath']>[0]) => ReturnType<KnowledgeService['migrateLegacyPath']>;
+    readonly mergeLegacyPath: (options?: Parameters<KnowledgeService['mergeLegacyPath']>[0]) => ReturnType<KnowledgeService['mergeLegacyPath']>;
     readonly artifactStore: () => ReturnType<KnowledgeService['artifactStore']>;
   };
   readonly sync: {
@@ -188,6 +189,7 @@ export function createKnowledgeClient(options: KnowledgeClientOptions = {}): Kno
       status: () => service.storageContract(),
       validate: () => service.validateStorage(),
       migrateLegacyPath: (input = {}) => service.migrateLegacyPath(input),
+      mergeLegacyPath: (input = {}) => service.mergeLegacyPath(input),
       artifactStore: () => service.artifactStore(),
     },
     sync: {
