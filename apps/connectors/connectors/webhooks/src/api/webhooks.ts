@@ -9,7 +9,7 @@ import type {
   WebhookSendResult,
   WebhooksConfig,
 } from '../types';
-import { validatePublicHttpUrl } from '../utils/url';
+import { validatePublicHttpUrlForRequest, type DnsLookupFn } from '../utils/url';
 
 type FetchFn = typeof fetch;
 
@@ -17,19 +17,21 @@ export class WebhooksClient {
   private readonly defaultUrl?: string;
   private readonly signingSecret?: string;
   private readonly fetchFn: FetchFn;
+  private readonly dnsLookup?: DnsLookupFn;
 
-  constructor(config: WebhooksConfig = {}, fetchFn: FetchFn = fetch) {
+  constructor(config: WebhooksConfig = {}, fetchFn: FetchFn = fetch, dnsLookup?: DnsLookupFn) {
     this.defaultUrl = config.defaultUrl;
     this.signingSecret = config.signingSecret;
     this.fetchFn = fetchFn;
+    this.dnsLookup = dnsLookup;
   }
 
-  private resolveUrl(url?: string): string {
+  private async resolveUrl(url?: string): Promise<string> {
     const targetUrl = url ?? this.defaultUrl;
     if (!targetUrl) {
       throw new Error('Webhook URL is required. Pass url or set a default URL in config.');
     }
-    return validatePublicHttpUrl(targetUrl, 'Webhook URL');
+    return validatePublicHttpUrlForRequest(targetUrl, 'Webhook URL', this.dnsLookup);
   }
 
   private buildSignedHeaders(
@@ -58,7 +60,7 @@ export class WebhooksClient {
     body: unknown,
     headers: Record<string, string> = {},
   ): Promise<{ response: Response; url: string }> {
-    const targetUrl = this.resolveUrl(url);
+    const targetUrl = await this.resolveUrl(url);
     const payload = typeof body === 'string' ? body : JSON.stringify(body);
     const finalHeaders = this.buildSignedHeaders(payload, headers);
 
@@ -66,6 +68,7 @@ export class WebhooksClient {
       method: 'POST',
       headers: finalHeaders,
       body: payload,
+      redirect: 'manual',
     });
 
     return { response, url: targetUrl };

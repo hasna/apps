@@ -16,4 +16,11 @@ export {
   getConfigDir,
   getBaseConfigDir,
 } from './utils/config';
-export { validatePublicHttpUrl, isPrivateIp, WebhookUrlError } from './utils/url';
+export {
+  validatePublicHttpUrl,
+  validatePublicHttpUrlForRequest,
+  isPrivateIp,
+  WebhookUrlError,
+  type DnsLookupAddress,
+  type DnsLookupFn,
+} from './utils/url';
