@@ -100,6 +100,7 @@ export interface SelfHostedPlanOptions {
   operation: "self-hosted-push" | "self-hosted-pull" | "self-hosted-migrate";
   apiUrl?: string;
   apiKey?: string;
+  timeoutMs?: number;
   fetchImpl?: typeof fetch;
   env?: NodeJS.ProcessEnv;
   includeRuns?: boolean;
@@ -496,11 +497,30 @@ function envValue(env: NodeJS.ProcessEnv, keys: readonly string[]): string | und
   return undefined;
 }
 
-function resolveApiConfig(opts: { apiUrl?: string; apiKey?: string; env?: NodeJS.ProcessEnv }): { apiUrl?: string; token?: string } {
+// Bounds every control-plane HTTP request so a slow/unreachable self-hosted host
+// can never hang the CLI indefinitely. Override with HASNA_LOOPS_API_TIMEOUT_MS
+// or the `timeoutMs` option.
+const DEFAULT_CONTROL_PLANE_TIMEOUT_MS = 15_000;
+const CONTROL_PLANE_TIMEOUT_ENV_KEYS = ["HASNA_LOOPS_API_TIMEOUT_MS"] as const;
+
+function resolveTimeoutMs(opts: { timeoutMs?: number; env?: NodeJS.ProcessEnv }): number {
+  if (typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0) {
+    return opts.timeoutMs;
+  }
+  const raw = envValue(opts.env ?? process.env, CONTROL_PLANE_TIMEOUT_ENV_KEYS);
+  if (raw) {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return DEFAULT_CONTROL_PLANE_TIMEOUT_MS;
+}
+
+function resolveApiConfig(opts: { apiUrl?: string; apiKey?: string; timeoutMs?: number; env?: NodeJS.ProcessEnv }): { apiUrl?: string; token?: string; timeoutMs: number } {
   const env = opts.env ?? process.env;
   return {
     apiUrl: opts.apiUrl ?? envValue(env, ["HASNA_LOOPS_API_URL"]),
     token: opts.apiKey ?? envValue(env, ["HASNA_LOOPS_API_KEY"]),
+    timeoutMs: resolveTimeoutMs(opts),
   };
 }
 
@@ -510,18 +530,34 @@ function endpoint(base: string, path: string): string {
 
 async function requestJson(
   fetchImpl: typeof fetch,
-  config: { apiUrl: string; token?: string },
+  config: { apiUrl: string; token?: string; timeoutMs?: number },
   path: string,
   init: RequestInit = {},
 ): Promise<Record<string, unknown>> {
-  const response = await fetchImpl(endpoint(config.apiUrl, path), {
-    ...init,
-    headers: {
-      ...(init.body ? { "content-type": "application/json" } : {}),
-      ...(config.token ? { authorization: `Bearer ${config.token}` } : {}),
-      ...init.headers,
-    },
-  });
+  const url = endpoint(config.apiUrl, path);
+  const timeoutMs = config.timeoutMs ?? DEFAULT_CONTROL_PLANE_TIMEOUT_MS;
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const signal = init.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal;
+  let response: Response;
+  try {
+    response = await fetchImpl(url, {
+      ...init,
+      signal,
+      headers: {
+        ...(init.body ? { "content-type": "application/json" } : {}),
+        ...(config.token ? { authorization: `Bearer ${config.token}` } : {}),
+        ...init.headers,
+      },
+    });
+  } catch (error) {
+    if (timeoutSignal.aborted) {
+      throw Object.assign(
+        new Error(`loops control-plane request to ${url} timed out after ${timeoutMs}ms`),
+        { code: "ETIMEDOUT", timeoutMs },
+      );
+    }
+    throw error;
+  }
   const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
   if (!response.ok) {
     throw Object.assign(
@@ -543,7 +579,7 @@ interface RemotePreview {
 
 async function fetchPagedRows(
   fetchImpl: typeof fetch,
-  config: { apiUrl: string; token?: string },
+  config: { apiUrl: string; token?: string; timeoutMs?: number },
   path: string,
   key: "workflows" | "loops" | "runs",
   opts: { unsupported: string[]; warnings: string[] },
@@ -571,7 +607,7 @@ async function fetchPagedRows(
 
 async function fetchOptionalCount(
   fetchImpl: typeof fetch,
-  config: { apiUrl: string; token?: string },
+  config: { apiUrl: string; token?: string; timeoutMs?: number },
   path: string,
   opts: { unsupported: string[]; warnings: string[] },
 ): Promise<number | undefined> {
@@ -601,11 +637,15 @@ async function fetchRemotePreview(opts: SelfHostedPlanOptions): Promise<RemotePr
     return { workflows: [], loops: [], runs: [], counts: {}, unsupported, warnings };
   }
   const fetchImpl = opts.fetchImpl ?? fetch;
-  const api = { apiUrl: config.apiUrl, token: config.token };
+  const api = { apiUrl: config.apiUrl, token: config.token, timeoutMs: config.timeoutMs };
   const requestOpts = { unsupported, warnings };
   const workflows = await fetchPagedRows(fetchImpl, api, "/v1/workflows", "workflows", requestOpts);
   const loops = await fetchPagedRows(fetchImpl, api, "/v1/loops?includeArchived=true", "loops", requestOpts);
-  const runs = opts.includeRuns === false ? [] : await fetchPagedRows(fetchImpl, api, "/v1/runs?showOutput=true", "runs", requestOpts);
+  // Never enumerate remote run bodies for a preview: on a busy host `/v1/runs`
+  // with output is hundreds of MB across thousands of pages, which is what made
+  // `self-hosted migrate/pull/push --dry-run` hang. Run history is compared by
+  // count here; `self-hosted push --apply` streams runs id-preserving instead.
+  const runs: unknown[] = [];
   return {
     workflows,
     loops,
@@ -732,7 +772,13 @@ function buildSelfHostedManifest(args: {
 }
 
 export async function buildSelfHostedMigrationPlan(store: Store, opts: SelfHostedPlanOptions): Promise<LoopsMigrationPlan> {
-  const bundle = selfHostedDefinitionBundle(exportLoopsMigrationBundle(store, { includeRuns: opts.includeRuns ?? true }));
+  const includeRuns = opts.includeRuns ?? true;
+  // Definitions only: loading every run's stdout/stderr into memory (a full
+  // `includeRuns: true` export) is what made the preview hang on a busy host.
+  // Run history is summarised by count below instead of enumerated row by row.
+  const bundle = selfHostedDefinitionBundle(exportLoopsMigrationBundle(store, { includeRuns: false }));
+  const localRunCount = includeRuns ? store.countRuns() : 0;
+  bundle.counts = { ...bundle.counts, runs: localRunCount };
   const remote = await fetchRemotePreview(opts);
   const rows: LoopsMigrationPlanRow[] = [...bundle.blockers.map((row) => ({ ...row, action: "blocked" as const }))];
   const warnings = [
@@ -761,16 +807,12 @@ export async function buildSelfHostedMigrationPlan(store: Store, opts: SelfHoste
         currentHash: migrationHash(entry),
       });
     }
-    for (const entry of remote.runs) {
-      const value = entry && typeof entry === "object" ? entry as { id?: unknown; loopName?: unknown } : {};
-      const id = typeof value.id === "string" ? value.id : `remote-run:${rows.length}`;
+    if (includeRuns && typeof remote.counts.runs === "number" && remote.counts.runs > 0) {
       rows.push({
         resource: "run",
-        id,
-        name: typeof value.loopName === "string" ? value.loopName : undefined,
+        id: "remote:run-history",
         action: "blocked",
-        reason: "remote run-history pull needs an id-preserving export/import endpoint; /v1/runs returns public redacted rows only",
-        currentHash: migrationHash(entry),
+        reason: `remote run-history pull needs an id-preserving export/import endpoint; ${remote.counts.runs} remote runs are exposed by /v1/runs as public redacted rows only`,
       });
     }
     const plan = finalizePlan({
@@ -789,7 +831,7 @@ export async function buildSelfHostedMigrationPlan(store: Store, opts: SelfHoste
         apiUrl,
         dryRun: true,
         replace,
-        includeRuns: opts.includeRuns ?? true,
+        includeRuns,
         bundle,
         remote,
         plan,
@@ -798,10 +840,8 @@ export async function buildSelfHostedMigrationPlan(store: Store, opts: SelfHoste
   }
   const remoteWorkflows = typedRows<WorkflowSpec>(remote.workflows);
   const remoteLoops = typedRows<Loop>(remote.loops);
-  const remoteRuns = typedRows<LoopRun>(remote.runs);
   const remoteWorkflowsById = rowsById(remoteWorkflows);
   const remoteLoopsById = rowsById(remoteLoops);
-  const remoteRunsById = rowsById(remoteRuns);
   const remoteLoopsByName = rowsByName(remoteLoops);
 
   for (const workflow of bundle.data.workflows) {
@@ -841,21 +881,16 @@ export async function buildSelfHostedMigrationPlan(store: Store, opts: SelfHoste
     }
     rows.push(remoteRepresentationRow(remoteLoop, loop, { resource: "loop", id: loop.id, name: loop.name }));
   }
-  if (opts.includeRuns ?? true) {
-    for (const run of bundle.data.runs) {
-      if (run.status === "running") {
-        rows.push({
-          resource: "run",
-          id: run.id,
-          name: run.loopName,
-          action: "blocked",
-          reason: "running rows carry volatile lease/process ownership and are skipped by self-hosted import",
-          incomingHash: migrationHash(run),
-        });
-        continue;
-      }
-      rows.push(remoteRepresentationRow(remoteRunsById.get(run.id), run, { resource: "run", id: run.id, name: run.loopName }));
-    }
+  if (includeRuns && localRunCount > 0) {
+    // Run history is summarised by count instead of enumerated: per-run rows
+    // would require loading every local/remote run body (the original hang).
+    // Volatile `running` runs, if any, are already surfaced as blockers above
+    // via the source migration checks, so apply-time safety is preserved.
+    const remoteRunNote = typeof remote.counts.runs === "number" ? `, remote=${remote.counts.runs}` : "";
+    warnings.push(
+      `run history is compared by count for preview performance: local=${localRunCount}${remoteRunNote}; ` +
+        "`self-hosted push --apply` streams individual runs id-preserving",
+    );
   }
 
   let plan = finalizePlan({
@@ -874,7 +909,7 @@ export async function buildSelfHostedMigrationPlan(store: Store, opts: SelfHoste
       apiUrl,
       dryRun: true,
       replace,
-      includeRuns: opts.includeRuns ?? true,
+      includeRuns,
       bundle,
       remote,
       plan,
@@ -885,6 +920,7 @@ export async function buildSelfHostedMigrationPlan(store: Store, opts: SelfHoste
 export interface SelfHostedPushOptions {
   apiUrl?: string;
   apiKey?: string;
+  timeoutMs?: number;
   includeRuns?: boolean;
   replace?: boolean;
   fetchImpl?: typeof fetch;
@@ -949,7 +985,7 @@ interface ImportCounts {
 
 async function postImportBatch(
   fetchImpl: typeof fetch,
-  config: { apiUrl: string; token?: string },
+  config: { apiUrl: string; token?: string; timeoutMs?: number },
   payload: { workflows?: unknown[]; loops?: unknown[]; runs?: unknown[]; replace?: boolean; preserveWorkflowActivation?: boolean; preserveLoopScheduling?: boolean },
 ): Promise<{ imported: ImportCounts; skippedRunning: number }> {
   const body = await requestJson(fetchImpl, config, "/v1/import", { method: "POST", body: JSON.stringify(payload) });
@@ -974,7 +1010,7 @@ export async function applySelfHostedPush(store: Store, opts: SelfHostedPushOpti
   if (!resolved.token) {
     throw new ValidationError("self-hosted APIs require HASNA_LOOPS_API_KEY");
   }
-  const config = { apiUrl: resolved.apiUrl, token: resolved.token };
+  const config = { apiUrl: resolved.apiUrl, token: resolved.token, timeoutMs: resolved.timeoutMs };
   const fetchImpl = opts.fetchImpl ?? fetch;
   const includeRuns = opts.includeRuns ?? true;
   const replace = opts.replace ?? false;

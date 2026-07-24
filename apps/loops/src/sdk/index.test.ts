@@ -393,8 +393,11 @@ describe("loops sdk", () => {
     try {
       const fetchImpl = async (input: string | URL | Request) => {
         const url = String(input);
+        // Previews compare run history by count (never enumerate run bodies), so
+        // a full /v1/runs page must not be requested; only /v1/runs/count is.
         if (url.includes("/v1/runs")) {
-          return Response.json({ ok: true, runs: [{ id: "remote-run-1", loopName: "remote-loop", status: "succeeded" }] });
+          expect(url).toContain("/v1/runs/count");
+          return Response.json({ ok: true, count: 7 });
         }
         return Response.json({ ok: true, loops: [{ id: "remote-loop-1", name: "remote-loop" }] });
       };
@@ -407,7 +410,7 @@ describe("loops sdk", () => {
       expect(pull.importable).toBe(false);
       expect(pull.rows).toEqual(expect.arrayContaining([
         expect.objectContaining({ resource: "loop", id: "remote-loop-1", action: "blocked" }),
-        expect.objectContaining({ resource: "run", id: "remote-run-1", action: "blocked" }),
+        expect.objectContaining({ resource: "run", id: "remote:run-history", action: "blocked" }),
       ]));
     } finally {
       pullClient.close();
