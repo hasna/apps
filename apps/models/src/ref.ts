@@ -76,5 +76,7 @@ export function encodeRepoId(repoId: string): string {
 }
 
 export function safePathSegment(value: string): string {
-  return value.replace(/[^a-zA-Z0-9._-]+/g, "__").replace(/^_+|_+$/g, "") || "unnamed";
+  const sanitized = value.replace(/[^a-zA-Z0-9._-]+/g, "__").replace(/^_+|_+$/g, "");
+  if (!sanitized || sanitized === "." || sanitized === "..") return "unnamed";
+  return sanitized;
 }

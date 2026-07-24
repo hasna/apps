@@ -1,5 +1,5 @@
-import { createWriteStream, mkdirSync, renameSync, statSync, unlinkSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { createWriteStream, lstatSync, mkdirSync, renameSync, statSync, unlinkSync } from "node:fs";
+import { dirname, isAbsolute, join, parse, resolve, sep } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
 import { randomUUID } from "node:crypto";
@@ -87,18 +87,84 @@ function detectFormat(path: string): string | null {
 }
 
 function safeDestinationPath(root: string, filePath: string): string {
+  if (filePath.includes("\0")) throw new Error(`Unsafe remote file path: ${filePath}`);
+  if (filePath.includes("\\")) throw new Error(`Unsafe remote file path: ${filePath}`);
   if (isAbsolute(filePath)) throw new Error(`Unsafe remote file path: ${filePath}`);
   if (/^[a-zA-Z]:[\\/]/.test(filePath)) throw new Error(`Unsafe remote file path: ${filePath}`);
-  const segments = filePath.split(/[\\/]+/);
-  if (segments.some((segment) => segment === ".." || segment === "")) {
+  const segments = filePath.split("/");
+  if (segments.some((segment) => segment === ".." || segment === "." || segment === "")) {
     throw new Error(`Unsafe remote file path: ${filePath}`);
   }
   const resolvedRoot = resolve(root);
   const destination = resolve(resolvedRoot, ...segments);
-  if (destination !== resolvedRoot && !destination.startsWith(`${resolvedRoot}${sep}`)) {
+  if (destination === resolvedRoot) {
+    throw new Error(`Unsafe remote file path: ${filePath}`);
+  }
+  if (!destination.startsWith(`${resolvedRoot}${sep}`)) {
     throw new Error(`Remote file path escapes install root: ${filePath}`);
   }
   return destination;
+}
+
+function isNotFoundError(error: unknown): boolean {
+  return error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
+}
+
+function assertSafeExistingParentPath(root: string, filePath: string): void {
+  const segments = filePath.split("/");
+  let current = resolve(root);
+  for (const segment of segments.slice(0, -1)) {
+    current = resolve(current, segment);
+    try {
+      const stats = lstatSync(current);
+      if (stats.isSymbolicLink()) {
+        throw new Error(`Remote file path traverses symlink inside install root: ${filePath}`);
+      }
+      if (!stats.isDirectory()) {
+        throw new Error(`Remote file path parent is not a directory: ${filePath}`);
+      }
+    } catch (error) {
+      if (isNotFoundError(error)) return;
+      throw error;
+    }
+  }
+}
+
+function assertSafeInstallRoot(root: string): void {
+  const resolvedRoot = resolve(root);
+  const parsed = parse(resolvedRoot);
+  let current = parsed.root;
+  for (const segment of resolvedRoot.slice(parsed.root.length).split(sep).filter(Boolean)) {
+    current = join(current, segment);
+    try {
+      if (lstatSync(current).isSymbolicLink()) {
+        if (current === resolvedRoot) {
+          throw new Error(`Install root cannot be a symlink: ${root}`);
+        }
+        throw new Error(`Install root cannot contain symlink components: ${root}`);
+      }
+    } catch (error) {
+      if (isNotFoundError(error)) return;
+      throw error;
+    }
+  }
+}
+
+function validateDestinationPaths(root: string, files: RemoteFileEntry[]): string[] {
+  assertSafeInstallRoot(root);
+  const destinations: string[] = [];
+  const seen = new Map<string, string>();
+  for (const file of files) {
+    const destination = safeDestinationPath(root, file.path);
+    assertSafeExistingParentPath(root, file.path);
+    const previousPath = seen.get(destination);
+    if (previousPath) {
+      throw new Error(`Remote file paths resolve to the same destination: ${previousPath}, ${file.path}`);
+    }
+    seen.set(destination, file.path);
+    destinations.push(destination);
+  }
+  return destinations;
 }
 
 function normalizeEntry(raw: Record<string, unknown>, kind: EntityKind, fallbackRevision = "main"): CatalogEntry {
@@ -251,10 +317,6 @@ export async function createDownloadPlan(input: {
   const files = (await listHuggingFaceFiles(input.ref))
     .filter((file) => include.length === 0 || matchAny(file.path, include))
     .filter((file) => exclude.length === 0 || !matchAny(file.path, exclude));
-  const knownBytes = files.reduce((sum, file) => sum + (file.size ?? 0), 0);
-  const unknownSizeFiles = files.filter((file) => file.size == null).map((file) => file.path);
-  const totalBytes = unknownSizeFiles.length > 0 ? null : knownBytes;
-  const maxBytes = input.maxBytes ?? null;
   const destinationRoot = input.destinationRoot ?? join(
     getInstallRoot(),
     input.ref.provider,
@@ -262,6 +324,11 @@ export async function createDownloadPlan(input: {
     safePathSegment(input.ref.repoId),
     safePathSegment(input.ref.revision),
   );
+  validateDestinationPaths(destinationRoot, files);
+  const knownBytes = files.reduce((sum, file) => sum + (file.size ?? 0), 0);
+  const unknownSizeFiles = files.filter((file) => file.size == null).map((file) => file.path);
+  const totalBytes = unknownSizeFiles.length > 0 ? null : knownBytes;
+  const maxBytes = input.maxBytes ?? null;
   return {
     ref: input.ref,
     files,
@@ -280,16 +347,21 @@ export async function downloadPlannedFiles(plan: DownloadPlan): Promise<Array<{ 
   if (plan.maxBytes != null && plan.unknownSizeFiles.length > 0) {
     throw new Error(`Download plan has unknown-size files under a byte cap: ${plan.unknownSizeFiles.join(", ")}`);
   }
+  const destinations = validateDestinationPaths(plan.destinationRoot, plan.files);
   const downloaded: Array<{ path: string; bytes: number; destination: string }> = [];
-  for (const file of plan.files) {
-    const destination = safeDestinationPath(plan.destinationRoot, file.path);
+  for (const [index, file] of plan.files.entries()) {
+    const destination = destinations[index];
     const tempDestination = `${destination}.partial-${randomUUID()}`;
-    mkdirSync(dirname(destination), { recursive: true });
-    const response = await fetch(file.downloadUrl, { headers: headers(), redirect: "follow" });
+    const response = await fetch(fileDownloadUrl(plan.ref, file.path), { headers: headers(), redirect: "follow" });
     if (!response.ok || !response.body) {
       const text = await response.text().catch(() => "");
       throw new Error(`Failed to download ${file.path}: ${response.status} ${response.statusText} ${text.slice(0, 200)}`);
     }
+    assertSafeInstallRoot(plan.destinationRoot);
+    assertSafeExistingParentPath(plan.destinationRoot, file.path);
+    mkdirSync(dirname(destination), { recursive: true });
+    assertSafeInstallRoot(plan.destinationRoot);
+    assertSafeExistingParentPath(plan.destinationRoot, file.path);
     try {
       await pipeline(Readable.fromWeb(response.body as never), createWriteStream(tempDestination));
       const bytes = statSync(tempDestination).size;
