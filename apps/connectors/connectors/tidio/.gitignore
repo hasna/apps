@@ -12,6 +12,7 @@ bin/*.js
 
 # Secrets
 .secrets/
+.npmrc
 
 # IDE
 .idea/

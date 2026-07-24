@@ -1,10 +1,11 @@
 import type { TidioConfig } from '../types';
 import { parseTidioError } from '../types';
 
-const DEFAULT_BASE_URL = 'https://api.tidio.co/v1';
+export const DEFAULT_BASE_URL = 'https://api.tidio.com/';
+export const TIDIO_ACCEPT_HEADER = 'application/json; version=1';
 
 export interface RequestOptions {
-  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   params?: Record<string, string | number | boolean | undefined>;
   body?: Record<string, unknown> | unknown[] | string | null;
   headers?: Record<string, string>;
@@ -12,19 +13,24 @@ export interface RequestOptions {
 }
 
 export class TidioClient {
-  private readonly apiKey: string;
+  private readonly clientId: string;
+  private readonly clientSecret: string;
   private readonly baseUrl: string;
 
   constructor(config: TidioConfig) {
-    if (!config.apiKey) {
-      throw new Error('API key is required');
+    if (!config.clientId) {
+      throw new Error('Client ID is required');
     }
-    this.apiKey = config.apiKey;
+    if (!config.clientSecret) {
+      throw new Error('Client secret is required');
+    }
+    this.clientId = config.clientId;
+    this.clientSecret = config.clientSecret;
     this.baseUrl = config.baseUrl || DEFAULT_BASE_URL;
   }
 
   private buildUrl(path: string, params?: Record<string, string | number | boolean | undefined>): string {
-    const url = new URL(`${this.baseUrl}${path}`);
+    const url = new URL(path.replace(/^\//, ''), this.baseUrl);
 
     if (params) {
       Object.entries(params).forEach(([key, value]) => {
@@ -54,12 +60,13 @@ export class TidioClient {
     const url = this.buildUrl(path, params);
 
     const requestHeaders: Record<string, string> = {
-      'X-Tidio-Openapi-Key': this.apiKey,
-      'Accept': 'application/json',
+      'Accept': TIDIO_ACCEPT_HEADER,
+      'X-Tidio-Openapi-Client-Id': this.clientId,
+      'X-Tidio-Openapi-Client-Secret': this.clientSecret,
       ...headers,
     };
 
-    if (body !== undefined && body !== null && ['POST', 'PATCH'].includes(method)) {
+    if (body !== undefined && body !== null && ['POST', 'PUT', 'PATCH'].includes(method)) {
       requestHeaders['Content-Type'] = 'application/json';
     }
 
@@ -68,7 +75,7 @@ export class TidioClient {
       headers: requestHeaders,
     };
 
-    if (body !== undefined && body !== null && ['POST', 'PATCH'].includes(method)) {
+    if (body !== undefined && body !== null && ['POST', 'PUT', 'PATCH'].includes(method)) {
       fetchOptions.body = typeof body === 'string' ? body : JSON.stringify(body);
     }
 
@@ -76,7 +83,7 @@ export class TidioClient {
       const response = await fetch(url, fetchOptions);
 
       if (response.status === 204) {
-        return {} as T;
+        return undefined as T;
       }
 
       let data: unknown;
@@ -122,6 +129,10 @@ export class TidioClient {
     return this.request<T>(path, { method: 'POST', body: body as Record<string, unknown>, params });
   }
 
+  async put<T>(path: string, body?: Record<string, unknown> | object, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
+    return this.request<T>(path, { method: 'PUT', body: body as Record<string, unknown>, params });
+  }
+
   async patch<T>(path: string, body?: Record<string, unknown> | object, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
     return this.request<T>(path, { method: 'PATCH', body: body as Record<string, unknown>, params });
   }
@@ -130,9 +141,9 @@ export class TidioClient {
     return this.request<T>(path, { method: 'DELETE', params });
   }
 
-  getApiKeyPreview(): string {
-    if (this.apiKey.length > 10) {
-      return `${this.apiKey.substring(0, 6)}...${this.apiKey.substring(this.apiKey.length - 4)}`;
+  getClientIdPreview(): string {
+    if (this.clientId.length > 10) {
+      return `${this.clientId.substring(0, 6)}...${this.clientId.substring(this.clientId.length - 4)}`;
     }
     return '***';
   }

@@ -1,12 +1,12 @@
 // Tidio Connector
-// Live chat support, contacts, conversations, and operators
+// Contacts, contact messages, departments, operators, project, tickets, products, and Lyro.
 
 export { Tidio, TidioClient } from './api';
 export * from './types';
 
 export {
-  getApiKey,
-  setApiKey,
+  getClientCredentials,
+  setClientCredentials,
   getCurrentProfile,
   setCurrentProfile,
   listProfiles,
@@ -16,5 +16,7 @@ export {
   saveProfile,
   clearConfig,
   getConfigDir,
+  getProfilesDir,
   getActiveProfileName,
+  validateProfileName,
 } from './utils/config';

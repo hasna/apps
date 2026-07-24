@@ -1,7 +1,7 @@
 {
   "name": "@hasna/connect-tidio",
   "version": "0.0.1",
-  "description": "Tidio connector - Live chat support, contacts, conversations, and operators",
+  "description": "Tidio OpenAPI connector - contacts, contact messages, departments, operators, project, tickets, products, and Lyro",
   "type": "module",
   "bin": {
     "connect-tidio": "./bin/index.js"
@@ -25,6 +25,8 @@
     "live-chat",
     "support",
     "messaging",
+    "tickets",
+    "lyro",
     "connector",
     "cli",
     "typescript",
@@ -45,6 +47,6 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/connect-tidio.git"
+    "url": "git+https://github.com/hasna/connectors.git"
   }
 }
