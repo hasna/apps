@@ -479,6 +479,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["crypto", "analytics", "ai", "investment", "blockchain"],
   },
   {
+    name: "trustpilot-business",
+    displayName: "Trustpilot Business",
+    description: "Review platform",
+    category: "Commerce & Finance",
+    tags: ["reviews", "reputation", "commerce"],
+  },
+  {
     name: "toket",
     displayName: "Toket",
     description: "NFT and digital collectible platform for creating and managing token-based experiences",
