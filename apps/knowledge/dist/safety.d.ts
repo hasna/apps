@@ -1,4 +1,4 @@
-import type { Database } from 'bun:sqlite';
+import type { KnowledgeDatabase as Database } from './knowledge-db';
 import type { KnowledgeConfig, KnowledgeWorkspace } from './workspace';
 export type SafetyDecision = 'allow' | 'deny' | 'requires_approval';
 export interface SafetyPolicy {
@@ -37,7 +37,7 @@ export interface RedactionResult {
 }
 export declare function resolveSafetyPolicy(config: KnowledgeConfig, workspace: KnowledgeWorkspace): SafetyPolicy;
 export declare function assertWriteAllowed(targetPath: string, policy: SafetyPolicy): void;
-export declare function assertS3ReadAllowed(uri: string, policy: SafetyPolicy): void;
+export declare function assertS3ReadAllowed(_uri: string, _policy: SafetyPolicy): never;
 export declare function assertWebSearchAllowed(policy: SafetyPolicy): void;
 export declare function redactSecrets(text: string, policy?: Pick<SafetyPolicy, 'redaction'>): RedactionResult;
 export declare function auditId(input: SafetyAuditInput): string;

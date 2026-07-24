@@ -1,5 +1,6 @@
 import type { KnowledgeConfig } from './workspace';
 import { type SafetyPolicy } from './safety';
+type OutboxObject = Record<string, unknown>;
 export interface OutboxConsumeOptions {
     dbPath: string;
     input: string;
@@ -22,4 +23,6 @@ export interface OutboxConsumeResult {
     permission_updates: number;
     vector_entries_deleted: number;
 }
+export declare function mergeOutboxMetadata(existing: string | null | undefined, patch: OutboxObject): string;
 export declare function consumeOpenFilesOutbox(options: OutboxConsumeOptions): Promise<OutboxConsumeResult>;
+export {};

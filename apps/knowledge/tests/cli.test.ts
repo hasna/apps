@@ -4,7 +4,7 @@
  * Licensed under the Apache License, Version 2.0
  */
 import { describe, expect, test } from 'bun:test';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { delimiter, join, dirname, resolve } from 'node:path';
@@ -12,9 +12,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { migrateKnowledgeDb, openKnowledgeDb } from '../src/knowledge-db';
 import { createKnowledgeService } from '../src/service';
 import { parseSourceRef } from '../src/source-ref';
-import { recordStorageObjects } from '../src/storage-contract';
 import { recordKnowledgeSyncConflict } from '../src/sync';
 import { defaultKnowledgeConfig, writeKnowledgeConfig } from '../src/workspace';
+import { sanitizedLocalTestEnv } from './helpers/sanitized-env';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI = join(__dirname, '..', 'src', 'cli.ts');
@@ -24,19 +24,19 @@ const packageJson = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'
   bin: Record<string, string>;
 };
 
-function runCli(args: string[], cwd?: string, env?: Record<string, string>) {
+function runCli(args: string[], cwd?: string, env?: Record<string, string | undefined>) {
   return Bun.spawnSync(['bun', CLI, ...args], {
     cwd,
-    env: env ? { ...process.env, ...env } : undefined,
+    env: sanitizedLocalTestEnv(env),
     stdout: 'pipe',
     stderr: 'pipe'
   });
 }
 
-function runCliWithInput(args: string[], input: string, cwd?: string, env?: Record<string, string>) {
+function runCliWithInput(args: string[], input: string, cwd?: string, env?: Record<string, string | undefined>) {
   const result = spawnSync('bun', [CLI, ...args], {
     cwd,
-    env: env ? { ...process.env, ...env } : undefined,
+    env: sanitizedLocalTestEnv(env),
     input,
     maxBuffer: 64 * 1024 * 1024,
   });
@@ -47,7 +47,7 @@ function runCliWithInput(args: string[], input: string, cwd?: string, env?: Reco
   };
 }
 
-function runKnowledgeBin(args: string[], cwd?: string, env?: Record<string, string>) {
+function runKnowledgeBin(args: string[], cwd?: string, env?: Record<string, string | undefined>) {
   const dir = mkdtempSync(join(tmpdir(), 'knowledge-bin-'));
   const wrapper = join(dir, 'knowledge');
   writeFileSync(wrapper, [
@@ -61,20 +61,48 @@ function runKnowledgeBin(args: string[], cwd?: string, env?: Record<string, stri
   ].join('\n'));
   return Bun.spawnSync(['bun', wrapper, ...args], {
     cwd,
-    env: env ? { ...process.env, ...env } : undefined,
+    env: sanitizedLocalTestEnv(env),
     stdout: 'pipe',
     stderr: 'pipe',
   });
 }
 
-function runBuiltKnowledgeBin(args: string[], cwd?: string, env?: Record<string, string>) {
+function runBuiltKnowledgeBin(args: string[], cwd?: string, env?: Record<string, string | undefined>) {
   const builtCli = join(__dirname, '..', packageJson.bin.knowledge);
   return Bun.spawnSync(['bun', builtCli, ...args], {
     cwd,
-    env: env ? { ...process.env, ...env } : undefined,
+    env: sanitizedLocalTestEnv(env),
     stdout: 'pipe',
     stderr: 'pipe',
   });
+}
+
+function expectCliContained(result: ReturnType<typeof runCli>): void {
+  expect(result.exitCode).toBe(1);
+  const stderr = new TextDecoder().decode(result.stderr).trim();
+  const payload = JSON.parse(stderr.split('\n').at(-1) ?? '{}') as {
+    code?: string;
+    status?: number;
+  };
+  expect(payload).toMatchObject({
+    code: 'KNOWLEDGE_HOSTED_CONTAINED',
+    status: 503,
+  });
+}
+
+function expectCliStageAContainment(result: ReturnType<typeof runCli>): void {
+  expect(result.exitCode).toBe(1);
+  const stderr = new TextDecoder().decode(result.stderr).trim();
+  const payload = JSON.parse(stderr.split('\n').at(-1) ?? '{}') as {
+    code?: string;
+    status?: number;
+  };
+  expect(payload.status).toBe(503);
+  expect([
+    'KNOWLEDGE_HOSTED_CONTAINED',
+    'KNOWLEDGE_RUNTIME_INTENT_INVALID',
+    'KNOWLEDGE_CONFIG_INVALID',
+  ]).toContain(payload.code);
 }
 
 function expectSameExistingPath(actual: string, expected: string): void {
@@ -83,6 +111,24 @@ function expectSameExistingPath(actual: string, expected: string): void {
 
 function expectedProjectKnowledgeHome(projectDir: string): string {
   return join(realpathSync(projectDir), '.hasna', 'knowledge');
+}
+
+function configurePersistedS3(cwd: string) {
+  const service = createKnowledgeService({ scope: 'project', cwd });
+  const workspace = service.ensureWorkspace();
+  const config = defaultKnowledgeConfig();
+  config.mode = 'local';
+  config.storage = {
+    type: 's3',
+    artifacts_root: 'artifacts',
+    s3: {
+      bucket: 'synthetic-stage-a-bucket',
+      prefix: 'org/project/knowledge',
+      region: 'us-east-1',
+    },
+  };
+  writeFileSync(workspace.configPath, `${JSON.stringify(config)}\n`);
+  return workspace;
 }
 
 function createSchema7KnowledgeDb(dbPath: string): void {
@@ -351,11 +397,12 @@ describe('knowledge cli', () => {
     expect(out).toContain(packageJson.version);
   });
 
-  test('package exposes only knowledge CLI bins', () => {
+  test('package exposes all four knowledge CLI bins', () => {
     expect(packageJson.bin).toEqual({
       knowledge: 'bin/knowledge.js',
       'knowledge-mcp': 'bin/knowledge-mcp.js',
       'knowledge-serve': 'bin/knowledge-serve.js',
+      'knowledge-migrate': 'bin/knowledge-migrate.js',
     });
     expect(packageJson.bin['open-knowledge']).toBeUndefined();
     expect(packageJson.bin['open-knowledge-mcp']).toBeUndefined();
@@ -380,14 +427,14 @@ describe('knowledge cli', () => {
     expect(addB.exitCode).toBe(0);
     const addBOut = JSON.parse(new TextDecoder().decode(addB.stdout));
 
-    const list = runCli(['ls', '--store', store, '--json', '-p', '1', '-l', '10', '--sort', 'title']);
+    const list = runCli(['ls', '--store', store, '--allow-global', '--json', '-p', '1', '-l', '10', '--sort', 'title']);
     expect(list.exitCode).toBe(0);
     const listOut = JSON.parse(new TextDecoder().decode(list.stdout));
     expect(listOut.total).toBe(2);
     expect(listOut.total_pages).toBe(1);
     expect(listOut.items[0].title).toBe('TitleA');
 
-    const get = runCli(['get', '--id', addAOut.item.id, '--store', store, '--json']);
+    const get = runCli(['get', '--id', addAOut.item.id, '--store', store, '--allow-global', '--json']);
     expect(get.exitCode).toBe(0);
     const getOut = JSON.parse(new TextDecoder().decode(get.stdout));
     expect(getOut.item.content).toBe('BodyA');
@@ -404,9 +451,9 @@ describe('knowledge cli', () => {
 
     const archive = runCli(['archive', '--id', getOut.item.id, '--store', store, '--json']);
     expect(archive.exitCode).toBe(0);
-    const archivedList = runCli(['list', '--store', store, '--json']);
+    const archivedList = runCli(['list', '--store', store, '--allow-global', '--json']);
     expect(JSON.parse(new TextDecoder().decode(archivedList.stdout)).total).toBe(1);
-    const onlyArchived = runCli(['list', '--store', store, '--archived', '--json']);
+    const onlyArchived = runCli(['list', '--store', store, '--allow-global', '--archived', '--json']);
     expect(JSON.parse(new TextDecoder().decode(onlyArchived.stdout)).total).toBe(1);
 
     const restore = runCli(['restore', '--id', getOut.item.id, '--store', store, '--json']);
@@ -456,7 +503,7 @@ describe('knowledge cli', () => {
     const add = runCli([
       'add',
       'Hasna OSS boundary',
-      'local-first hosted wrapper open actions guardrails open orgs token=sk-testsecretkeyvalue1234567890',
+      'local-first hosted wrapper open actions guardrails open orgs token=synthetic-secret-value',
       '--scope',
       'global',
       '--json',
@@ -467,7 +514,7 @@ describe('knowledge cli', () => {
     const update = runCli(['update', '--id', addOut.item.id, '--tag', 'opensource', '--scope', 'global', '--json'], undefined, env);
     expect(update.exitCode).toBe(0);
 
-    const list = runCli(['list', '--tag', 'opensource', '--scope', 'global', '--json'], undefined, env);
+    const list = runCli(['list', '--tag', 'opensource', '--scope', 'global', '--allow-global', '--json'], undefined, env);
     expect(list.exitCode).toBe(0);
     expect(JSON.parse(new TextDecoder().decode(list.stdout)).total).toBe(1);
 
@@ -477,7 +524,7 @@ describe('knowledge cli', () => {
     expect(inventoryOut.summary.legacy_items).toBe(1);
     expect(inventoryOut.summary.chunks).toBe(0);
 
-    const search = runCli(['search', 'Hasna OSS boundary', '--scope', 'global', '--json'], undefined, env);
+    const search = runCli(['search', 'Hasna OSS boundary', '--scope', 'global', '--allow-global', '--json'], undefined, env);
     expect(search.exitCode).toBe(0);
     const searchOut = JSON.parse(new TextDecoder().decode(search.stdout));
     expect(searchOut.counts.keyword_results).toBe(1);
@@ -494,6 +541,7 @@ describe('knowledge cli', () => {
       '--context',
       '--scope',
       'global',
+      '--allow-global',
       '--json',
     ], undefined, env);
     expect(context.exitCode).toBe(0);
@@ -541,7 +589,7 @@ describe('knowledge cli', () => {
       HASNA_KNOWLEDGE_AUTH_DIR: join(home, 'auth'),
     };
 
-    const search = runCli(['search', 'tokenxyz', '--scope', 'global', '--json'], undefined, env);
+    const search = runCli(['search', 'tokenxyz', '--scope', 'global', '--allow-global', '--json'], undefined, env);
     expect(search.exitCode).toBe(0);
     const searchOut = JSON.parse(new TextDecoder().decode(search.stdout));
     expect(searchOut.results[0]).toMatchObject({
@@ -711,7 +759,7 @@ describe('knowledge cli', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-workspace-migrate-'));
     const legacyHome = join(dir, '.hasna', 'apps', 'knowledge');
     const currentHome = join(dir, '.hasna', 'knowledge');
-    mkdirSync(join(legacyHome, 'artifacts'), { recursive: true });
+    mkdirSync(join(legacyHome, 'artifacts'), { recursive: true, mode: 0o700 });
     writeFileSync(join(legacyHome, 'db.json'), JSON.stringify({
       items: [{
         id: 'k_legacy_path',
@@ -911,273 +959,36 @@ describe('knowledge cli', () => {
     expect(out.open_files.raw_source_bytes_owned_by).toBe('open-files');
   });
 
-  test('sync doctor reports S3 generated artifact manifest readiness without raw source bytes', () => {
+  test('sync doctor contains persisted S3 before SQLite or AWS access', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-sync-doctor-s3-'));
-    const service = createKnowledgeService({ scope: 'project', cwd: dir });
-    const workspace = service.ensureWorkspace();
-    const config = defaultKnowledgeConfig();
-    config.mode = 'hosted';
-    config.storage = {
-      type: 's3',
-      artifacts_root: 'artifacts',
-      s3: {
-        bucket: 'knowledge-bucket',
-        prefix: 'org/project/knowledge',
-        region: 'us-east-1',
-        server_side_encryption: 'AES256',
-      },
-    };
-    writeKnowledgeConfig(workspace.configPath, config);
-    service.initDb();
-
-    const opened = openKnowledgeDb(workspace.knowledgeDbPath);
-    try {
-      recordStorageObjects(opened, [{
-        uri: 's3://knowledge-bucket/org/project/knowledge/wiki/README.md',
-        key: 'wiki/README.md',
-        kind: 'wiki_page',
-        content_type: 'text/markdown',
-        hash: 'sha256:readme',
-        size_bytes: 128,
-        modified_at: '2026-06-09T00:00:00.000Z',
-        metadata: { provenance: { generated_from: 'test', artifact_key: 'wiki/README.md' } },
-      }], new Date('2026-06-09T00:00:00.000Z'));
-    } finally {
-      opened.close();
-    }
+    const workspace = configurePersistedS3(dir);
 
     const result = runCli(['sync', 'doctor', '--scope', 'project', '--json'], dir);
 
-    expect(result.exitCode).toBe(0);
-    const out = JSON.parse(new TextDecoder().decode(result.stdout));
-    expect(out.storage.artifact_manifest).toMatchObject({
-      ok: true,
-      read_only: true,
-      storage_type: 's3',
-      artifact_uri_prefix: 's3://knowledge-bucket/org/project/knowledge/',
-      artifacts: {
-        total: 1,
-        with_hash: 1,
-        missing_hash: 0,
-        with_size: 1,
-        missing_size: 0,
-        total_size_bytes: 128,
-      },
-      modified_time: {
-        with_modified_at: 1,
-        missing_modified_at: 0,
-        invalid_modified_at: 0,
-      },
-      provenance: {
-        with_provenance: 1,
-        missing_provenance: 0,
-        with_artifact_key: 1,
-        missing_artifact_key: 0,
-        artifact_key_mismatches: 0,
-        generated_from: [{ value: 'test', count: 1 }],
-      },
-      uri_prefix: {
-        matching: 1,
-        mismatched: 0,
-      },
-      keys: {
-        with_key: 1,
-        missing_key: 0,
-        prefixed_with_storage_prefix: 0,
-      },
-      sync_manifest: {
-        copied_by_sync: true,
-        generated_artifacts_only: true,
-        includes_raw_source_bytes: false,
-        hash_algorithm: 'sha256',
-        portable_keys: true,
-        tracks_modified_time: true,
-        preserves_provenance: true,
-      },
-      raw_payload_sentinel_hits: 0,
-    });
-    expect(out.storage.artifact_manifest.s3).toMatchObject({
-      bucket: 'knowledge-bucket',
-      prefix: 'org/project/knowledge',
-      region: 'us-east-1',
-      server_side_encryption: 'AES256',
-    });
-    expect(out.warnings).not.toContain('artifact_manifest_raw_payload_sentinels:1');
+    expectCliStageAContainment(result);
+    expect(existsSync(workspace.knowledgeDbPath)).toBe(false);
   });
 
-  test('sync doctor flags legacy S3 artifact keys and raw payload sentinels', () => {
+  test('sync doctor repeatedly contains persisted S3 without creating local state', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-sync-doctor-s3-legacy-'));
-    const service = createKnowledgeService({ scope: 'project', cwd: dir });
-    const workspace = service.ensureWorkspace();
-    const config = defaultKnowledgeConfig();
-    config.mode = 'hosted';
-    config.storage = {
-      type: 's3',
-      artifacts_root: 'artifacts',
-      s3: {
-        bucket: 'knowledge-bucket',
-        prefix: 'org/project/knowledge',
-        region: 'us-east-1',
-      },
-    };
-    writeKnowledgeConfig(workspace.configPath, config);
-    service.initDb();
+    const workspace = configurePersistedS3(dir);
 
-    const opened = openKnowledgeDb(workspace.knowledgeDbPath);
-    try {
-      recordStorageObjects(opened, [{
-        uri: 's3://knowledge-bucket/org/project/knowledge/wiki/legacy.md',
-        key: 'org/project/knowledge/wiki/legacy.md',
-        kind: 'wiki_page',
-        content_type: 'text/markdown',
-        hash: 'sha256:legacy',
-        size_bytes: 256,
-        metadata: {
-          artifact_modified_at: 'not-a-date',
-          provenance: { generated_from: 'legacy-s3', artifact_key: 'wiki/not-legacy.md' },
-          raw_content: 'legacy raw payload should not be in storage object metadata',
-        },
-      }], new Date('2026-06-09T00:00:00.000Z'));
-    } finally {
-      opened.close();
-    }
+    const first = runCli(['sync', 'doctor', '--scope', 'project', '--json'], dir);
+    const second = runCli(['sync', 'doctor', '--scope', 'project', '--json'], dir);
 
-    const result = runCli(['sync', 'doctor', '--scope', 'project', '--json'], dir);
-
-    expect(result.exitCode).toBe(0);
-    const out = JSON.parse(new TextDecoder().decode(result.stdout));
-    expect(out.ok).toBe(false);
-    expect(out.storage.artifact_manifest).toMatchObject({
-      ok: false,
-      raw_payload_sentinel_hits: 1,
-      modified_time: {
-        with_modified_at: 0,
-        invalid_modified_at: 1,
-      },
-      provenance: {
-        with_provenance: 1,
-        artifact_key_mismatches: 1,
-      },
-      keys: {
-        prefixed_with_storage_prefix: 1,
-        prefixed_examples: ['org/project/knowledge/wiki/legacy.md'],
-      },
-      sync_manifest: {
-        includes_raw_source_bytes: false,
-        portable_keys: false,
-      },
-    });
-    expect(out.storage.artifact_manifest.warnings).toContain('artifact_manifest_s3_key_contains_storage_prefix:1');
-    expect(out.storage.artifact_manifest.warnings).toContain('artifact_manifest_invalid_modified_at:1');
-    expect(out.storage.artifact_manifest.warnings).toContain('artifact_manifest_provenance_key_mismatch:1');
-    expect(out.storage.artifact_manifest.warnings).toContain('artifact_manifest_raw_payload_sentinels:1');
-    expect(out.warnings).toContain('artifact_manifest_s3_key_contains_storage_prefix:1');
-    expect(out.warnings).toContain('artifact_manifest_raw_payload_sentinels:1');
+    expectCliStageAContainment(first);
+    expectCliStageAContainment(second);
+    expect(existsSync(workspace.knowledgeDbPath)).toBe(false);
   });
 
-  test('storage repair-artifact-keys previews and repairs legacy S3 keys with approval', () => {
+  test('storage repair-artifact-keys contains persisted S3 before SQLite or AWS access', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-storage-repair-s3-'));
-    const service = createKnowledgeService({ scope: 'project', cwd: dir });
-    const workspace = service.ensureWorkspace();
-    const config = defaultKnowledgeConfig();
-    config.mode = 'hosted';
-    config.storage = {
-      type: 's3',
-      artifacts_root: 'artifacts',
-      s3: {
-        bucket: 'knowledge-bucket',
-        prefix: 'org/project/knowledge',
-        region: 'us-east-1',
-      },
-    };
-    writeKnowledgeConfig(workspace.configPath, config);
-    service.initDb();
-
-    const opened = openKnowledgeDb(workspace.knowledgeDbPath);
-    try {
-      recordStorageObjects(opened, [{
-        uri: 's3://knowledge-bucket/org/project/knowledge/wiki/legacy.md',
-        key: 'org/project/knowledge/wiki/legacy.md',
-        kind: 'wiki_page',
-        content_type: 'text/markdown',
-        hash: 'sha256:legacy',
-        size_bytes: 256,
-        modified_at: '2026-06-09T00:00:00.000Z',
-        metadata: { provenance: { generated_from: 'legacy-s3', artifact_key: 'wiki/legacy.md' } },
-      }], new Date('2026-06-09T00:00:00.000Z'));
-    } finally {
-      opened.close();
-    }
+    const workspace = configurePersistedS3(dir);
 
     const preview = runCli(['storage', 'repair-artifact-keys', '--scope', 'project', '--json'], dir);
-    expect(preview.exitCode).toBe(0);
-    const previewOut = JSON.parse(new TextDecoder().decode(preview.stdout));
-    expect(previewOut).toMatchObject({
-      ok: false,
-      dry_run: true,
-      approval_required: true,
-      repaired: 0,
-      storage_prefix: 'org/project/knowledge/',
-      candidates: [{
-        current_key: 'org/project/knowledge/wiki/legacy.md',
-        repaired_key: 'wiki/legacy.md',
-      }],
-    });
 
-    const explicitDryRun = runCli([
-      'storage',
-      'repair-artifact-keys',
-      '--scope',
-      'project',
-      '--dry-run',
-      '--approve-write',
-      '--approved-by',
-      'test-reviewer',
-      '--json',
-    ], dir);
-    const explicitDryRunOut = JSON.parse(new TextDecoder().decode(explicitDryRun.stdout));
-    expect(explicitDryRunOut).toMatchObject({
-      ok: true,
-      dry_run: true,
-      approval_required: false,
-      repaired: 0,
-    });
-
-    const approved = runCli([
-      'storage',
-      'repair-artifact-keys',
-      '--scope',
-      'project',
-      '--approve-write',
-      '--approved-by',
-      'test-reviewer',
-      '--json',
-    ], dir);
-    expect(approved.exitCode).toBe(0);
-    const approvedOut = JSON.parse(new TextDecoder().decode(approved.stdout));
-    expect(approvedOut).toMatchObject({
-      ok: true,
-      dry_run: false,
-      approval_required: false,
-      repaired: 1,
-    });
-    expect(approvedOut.audit_event_id).toStartWith('audit_');
-
-    const repairedDb = openKnowledgeDb(workspace.knowledgeDbPath);
-    try {
-      const row = repairedDb.query<{ metadata_json: string }, []>('SELECT metadata_json FROM storage_objects').get();
-      expect(JSON.parse(row?.metadata_json ?? '{}').key).toBe('wiki/legacy.md');
-      const audit = repairedDb.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM audit_events WHERE action = 'storage.artifact_manifest.repair_keys'").get();
-      expect(audit?.n).toBe(1);
-    } finally {
-      repairedDb.close();
-    }
-
-    const doctor = runCli(['sync', 'doctor', '--scope', 'project', '--json'], dir);
-    const doctorOut = JSON.parse(new TextDecoder().decode(doctor.stdout));
-    expect(doctorOut.ok).toBe(true);
-    expect(doctorOut.storage.artifact_manifest.keys.prefixed_with_storage_prefix).toBe(0);
-    expect(doctorOut.storage.artifact_manifest.warnings).not.toContain('artifact_manifest_s3_key_contains_storage_prefix:1');
+    expectCliStageAContainment(preview);
+    expect(existsSync(workspace.knowledgeDbPath)).toBe(false);
   });
 
   test('global list does not migrate legacy .open-knowledge data on read', () => {
@@ -1198,7 +1009,7 @@ describe('knowledge cli', () => {
       }],
     }, null, 2)}\n`);
 
-    const list = runCli(['list', '--json'], undefined, isolatedHomeEnv(home));
+    const list = runCli(['list', '--allow-global', '--json'], undefined, isolatedHomeEnv(home));
     expect(list.exitCode).toBe(0);
     const listOut = JSON.parse(new TextDecoder().decode(list.stdout));
     expect(listOut.total).toBe(0);
@@ -1206,78 +1017,49 @@ describe('knowledge cli', () => {
     expect(existsSync(join(home, '.hasna', 'knowledge', 'db.json'))).toBe(false);
   });
 
-  test('setup, auth, and remote commands expose hosted-aware JSON contracts', () => {
+  test('setup, auth, and remote hosted commands are contained before workspace or auth I/O', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-hosted-cli-'));
     const authDir = join(dir, 'auth');
-    const env = { HASNA_KNOWLEDGE_AUTH_DIR: authDir };
-
-    const setup = runCli(['setup', '--mode', 'hosted', '--api-url', 'https://knowledge.example.com/api/v1', '--scope', 'project', '--json'], dir, env);
-    expect(setup.exitCode).toBe(0);
-    const setupOut = JSON.parse(new TextDecoder().decode(setup.stdout));
-    expect(setupOut.mode).toBe('hosted');
-    expect(setupOut.api_url).toBe('https://knowledge.example.com');
-    expect(setupOut.storage_type).toBe('local');
-
-    const storage = runCli(['storage', 'status', '--scope', 'project', '--json'], dir, env);
-    expect(storage.exitCode).toBe(0);
-    const storageOut = JSON.parse(new TextDecoder().decode(storage.stdout));
-    expect(storageOut.hosted.enabled).toBe(true);
-    expect(storageOut.hosted.api_url).toBe('https://knowledge.example.com');
-    expect(storageOut.canonical_example.active).toBe(false);
-
-    const before = runCli(['auth', 'whoami', '--scope', 'project', '--json'], dir, env);
-    expect(before.exitCode).toBe(0);
-    expect(JSON.parse(new TextDecoder().decode(before.stdout)).authenticated).toBe(false);
-
-    const login = runCli(['auth', 'login', '--api-key', 'kh_cli', '--email', 'agent@example.com', '--org', 'hasna', '--scope', 'project', '--json'], dir, env);
-    expect(login.exitCode).toBe(0);
-    const loginOut = JSON.parse(new TextDecoder().decode(login.stdout));
-    expect(loginOut.authenticated).toBe(true);
-    expect(loginOut.email).toBe('agent@example.com');
-    expect(existsSync(join(authDir, 'auth.json'))).toBe(true);
-
-    const remote = runCli(['remote', 'status', '--scope', 'project', '--json'], dir, env);
-    expect(remote.exitCode).toBe(0);
-    const remoteOut = JSON.parse(new TextDecoder().decode(remote.stdout));
-    expect(remoteOut.client_ready).toBe(true);
-    expect(remoteOut.capabilities).toContain('s3-generated-artifacts');
-
-    const contracts = runCli(['remote', 'contracts', '--scope', 'project', '--json'], dir, env);
-    expect(contracts.exitCode).toBe(0);
-    const contractsOut = JSON.parse(new TextDecoder().decode(contracts.stdout));
-    expect(contractsOut.contract.source_contract.owner).toBe('open-files');
-    expect(contractsOut.contract.endpoints.ask).toBe('/api/v1/knowledge/ask');
-
-    const logout = runCli(['auth', 'logout', '--scope', 'project', '--json'], dir, env);
-    expect(logout.exitCode).toBe(0);
-    expect(JSON.parse(new TextDecoder().decode(logout.stdout)).removed).toBe(true);
+    const env = {
+      HASNA_KNOWLEDGE_AUTH_DIR: authDir,
+      HASNA_KNOWLEDGE_STORAGE_MODE: 'hosted',
+    };
+    const commands = [
+      ['setup', '--mode', 'hosted', '--api-url', 'https://knowledge.invalid.test/api/v1', '--scope', 'project', '--json'],
+      ['auth', 'whoami', '--scope', 'project', '--json'],
+      ['auth', 'login', '--api-key', 'synthetic-stage-a-key', '--scope', 'project', '--json'],
+      ['auth', 'logout', '--scope', 'project', '--json'],
+      ['remote', 'status', '--scope', 'project', '--json'],
+      ['remote', 'contracts', '--scope', 'project', '--json'],
+    ];
+    for (const command of commands) expectCliContained(runCli(command, dir, env));
+    expect(existsSync(join(dir, '.hasna'))).toBe(false);
+    expect(existsSync(authDir)).toBe(false);
   });
 
-  test('setup can opt into canonical example S3 artifact storage', () => {
+  test('hosted canonical-example setup is contained before S3 or workspace construction', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-canonical-storage-cli-'));
+    const authDir = join(dir, 'auth');
+    const setup = runCli(
+      ['setup', '--mode', 'hosted', '--canonical-example', '--scope', 'project', '--json'],
+      dir,
+      {
+        HASNA_KNOWLEDGE_AUTH_DIR: authDir,
+        HASNA_KNOWLEDGE_STORAGE_MODE: 'hosted',
+      },
+    );
+    expectCliContained(setup);
+    expect(existsSync(join(dir, '.hasna'))).toBe(false);
+    expect(existsSync(authDir)).toBe(false);
+  });
 
-    const setup = runCli(['setup', '--mode', 'hosted', '--canonical-example', '--scope', 'project', '--json'], dir);
+  test('local setup remains available through the CLI', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-local-setup-cli-'));
+    const setup = runCli(['setup', '--mode', 'local', '--scope', 'project', '--json'], dir);
     expect(setup.exitCode).toBe(0);
-    const setupOut = JSON.parse(new TextDecoder().decode(setup.stdout));
-    expect(setupOut.storage_type).toBe('s3');
-    expect(setupOut.artifact_uri_prefix).toBe('s3://example-knowledge-prod/.hasna/knowledge/');
-    expect(setupOut.canonical_example.active).toBe(true);
-
-    const storage = runCli(['storage', 'status', '--scope', 'project', '--json'], dir);
-    expect(storage.exitCode).toBe(0);
-    const storageOut = JSON.parse(new TextDecoder().decode(storage.stdout));
-    expect(storageOut.artifact_store.s3).toMatchObject({
-      bucket: 'example-knowledge-prod',
-      prefix: '.hasna/knowledge',
-      region: 'us-east-1',
-      profile: 'example-infra',
-    });
-    expect(storageOut.canonical_example.secrets).toMatchObject({
-      env: 'example/knowledge/prod/env',
-      aws: 'example/knowledge/prod/aws',
-      s3: 'example/knowledge/prod/s3',
-      future_rds: 'example/knowledge/prod/rds',
-    });
+    const output = JSON.parse(new TextDecoder().decode(setup.stdout));
+    expect(output.mode).toBe('local');
+    expect(existsSync(join(dir, '.hasna', 'knowledge', 'config.json'))).toBe(true);
   });
 
   test('db init and stats create project knowledge.db', () => {
@@ -1790,6 +1572,24 @@ describe('knowledge cli', () => {
     expect(statsAfterOut.audit_events).toBeGreaterThanOrEqual(4);
   });
 
+  test('ingest manifest contains remote refs before creating a project workspace', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-ingest-cli-remote-containment-'));
+    try {
+      const result = runCli([
+        'ingest',
+        'manifest',
+        's3://synthetic-bucket/manifest.jsonl',
+        '--scope',
+        'project',
+        '--json',
+      ], dir);
+      expectCliContained(result);
+      expect(existsSync(join(dir, '.hasna'))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('ingest source imports a read-only file ref into project knowledge.db', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-ingest-source-cli-'));
     const source = join(dir, 'source.md');
@@ -2085,19 +1885,22 @@ describe('knowledge cli', () => {
     expect(lintOut.issues.some((issue: any) => issue.type === 'missing_citation')).toBe(false);
   });
 
-  test('web search command returns and files provider sources in fake mode', () => {
+  test('web search fake and file modes are unconditionally contained before local state', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-web-cli-'));
 
-    const web = runCli(['web', 'search', 'company', 'wiki', 'policy', '--scope', 'project', '--provider', 'openai', '--model', 'openai:gpt-5-mini', '--fake', '--file-results', '--limit', '2', '--json'], dir);
-    expect(web.exitCode).toBe(0);
-    const webOut = JSON.parse(new TextDecoder().decode(web.stdout));
-    expect(webOut.sources).toHaveLength(2);
-    expect(webOut.filed_sources).toBe(2);
+    const web = runCli(['web', 'search', 'company', 'wiki', 'policy', '--scope', 'project', '--provider', 'openai', '--model', 'openai:gpt-5-mini', '--fake', '--limit', '2', '--json'], dir);
+    expectCliContained(web);
+    expect(existsSync(join(dir, '.hasna'))).toBe(false);
 
     const search = runCli(['search', 'provider', 'web', 'search', 'fixture', '--scope', 'project', '--json'], dir);
     expect(search.exitCode).toBe(0);
     const searchOut = JSON.parse(new TextDecoder().decode(search.stdout));
-    expect(searchOut.results.some((entry: any) => entry.source?.kind === 'web')).toBe(true);
+    expect(searchOut.results.some((entry: any) => entry.source?.kind === 'web')).toBe(false);
+
+    const containedDir = mkdtempSync(join(tmpdir(), 'ok-web-file-contained-cli-'));
+    const contained = runCli(['web', 'search', 'synthetic', '--scope', 'project', '--fake', '--file-results', '--json'], containedDir);
+    expectCliContained(contained);
+    expect(existsSync(join(containedDir, '.hasna'))).toBe(false);
   });
 
   test('safety commands expose policy, approvals, redaction, audit, and S3 denial', () => {
@@ -2126,7 +1929,7 @@ describe('knowledge cli', () => {
     const checkAfterOut = JSON.parse(new TextDecoder().decode(checkAfter.stdout));
     expect(checkAfterOut.decision).toBe('allow');
 
-    const redact = runCli(['safety', 'redact', 'token=sk-testsecretkeyvalue1234567890', '--scope', 'project', '--json'], dir);
+    const redact = runCli(['safety', 'redact', 'token=synthetic-secret-value', '--scope', 'project', '--json'], dir);
     expect(redact.exitCode).toBe(0);
     const redactOut = JSON.parse(new TextDecoder().decode(redact.stdout));
     expect(redactOut.text).toBe('[REDACTED:secret_assignment]');
@@ -2139,10 +1942,10 @@ describe('knowledge cli', () => {
 
     const denied = runCli(['ingest', 'manifest', 's3://not-allowed/manifest.jsonl', '--scope', 'project', '--json'], dir);
     expect(denied.exitCode).toBe(1);
-    expect(new TextDecoder().decode(denied.stderr)).toContain('Safety policy denied S3 read');
+    expect(new TextDecoder().decode(denied.stderr)).toContain('KNOWLEDGE_HOSTED_CONTAINED');
   });
 
-  test('providers commands expose model aliases and credential checks', () => {
+  test('providers commands expose model metadata while credential checks remain contained', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-providers-cli-'));
     const env = { OPENAI_API_KEY: '', ANTHROPIC_API_KEY: '', DEEPSEEK_API_KEY: '' };
 
@@ -2163,7 +1966,7 @@ describe('knowledge cli', () => {
 
     const missing = runCli(['providers', 'check', 'default', '--scope', 'project', '--json'], dir, env);
     expect(missing.exitCode).toBe(1);
-    expect(new TextDecoder().decode(missing.stderr)).toContain('Missing OPENAI_API_KEY');
+    expect(new TextDecoder().decode(missing.stderr)).toContain('KNOWLEDGE_HOSTED_CONTAINED');
   });
 
   test('wiki init creates scalable wiki artifacts', () => {

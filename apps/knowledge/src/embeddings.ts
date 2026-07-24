@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
-import type { Database } from 'bun:sqlite';
+import type { KnowledgeDatabase as Database } from './knowledge-db';
 import { migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
 import { assertProviderCredentials, parseModelRef, providerSettings, type AiProviderId } from './providers';
 import { sourceProvenance, type KnowledgeProvenance } from './provenance';
 import type { KnowledgeConfig } from './workspace';
+import { parseBoundedJsonData } from './input-limits';
 
 export interface EmbeddingRuntimeOptions {
   config?: KnowledgeConfig;
@@ -127,9 +128,10 @@ function stableId(prefix: string, value: string): string {
 function parseJsonObject(value: string | null | undefined): Record<string, unknown> {
   if (!value) return {};
   try {
-    const parsed = JSON.parse(value);
+    const parsed = parseBoundedJsonData<unknown>(value, 'Persisted embedding metadata');
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
-  } catch {
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
     return {};
   }
 }

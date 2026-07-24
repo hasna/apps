@@ -1,13 +1,24 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
-import { basename } from 'node:path';
-import type { Database } from 'bun:sqlite';
+import { basename, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import type { KnowledgeDatabase as Database } from './knowledge-db';
 import { migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
+import { readAnchoredRegularFileSnapshot } from './anchored-fs';
+import {
+  MAX_INGEST_BATCH_ITEMS,
+  MAX_INGEST_BODY_BYTES,
+  assertBoundedJsonText,
+  cloneBoundedDataGraph,
+  hardLimit,
+} from './input-limits';
+import {
+  assertClassifiedSourceReference,
+  assertContainedSourceDataGraph,
+} from './public-guard';
 import { parseSourceRef, type SourceRef } from './source-ref';
 import { sourceProvenance, withProvenance } from './provenance';
 import type { KnowledgeConfig } from './workspace';
 import {
-  assertS3ReadAllowed,
   assertWriteAllowed,
   recordAuditEvent,
   recordRedactionFindings,
@@ -59,9 +70,11 @@ export interface ManifestIngestResult {
 
 export type ManifestObject = Record<string, unknown>;
 
-const DEFAULT_MAX_MANIFEST_INPUT_BYTES = 20 * 1024 * 1024;
-const DEFAULT_MAX_MANIFEST_ITEMS = 10_000;
+const DEFAULT_MAX_MANIFEST_INPUT_BYTES = MAX_INGEST_BODY_BYTES;
+const DEFAULT_MAX_MANIFEST_ITEMS = MAX_INGEST_BATCH_ITEMS;
 const DEFAULT_MANIFEST_PREVIEW_ITEMS = 10;
+export const MAX_NORMALIZED_MANIFEST_ITEM_BYTES = 1_048_576;
+export const MAX_NORMALIZED_MANIFEST_AGGREGATE_BYTES = MAX_INGEST_BODY_BYTES;
 
 interface NormalizedManifestItem {
   raw: ManifestObject;
@@ -249,6 +262,35 @@ function normalizeManifestItem(item: ManifestObject, now: string): NormalizedMan
   };
 }
 
+/** Exact post-normalization UTF-8 JSON size used by internal boundary tests. */
+export function normalizedManifestItemUtf8Bytes(
+  item: ManifestObject,
+  now = '2000-01-01T00:00:00.000Z',
+): number {
+  return Buffer.byteLength(JSON.stringify(normalizeManifestItem(item, now)), 'utf8');
+}
+
+function assertNormalizedManifestBounds(items: readonly NormalizedManifestItem[]): void {
+  // Count the exact UTF-8 JSON array representation without materializing a
+  // second aggregate string. Brackets and separators are one byte each.
+  let aggregateBytes = 2;
+  for (let index = 0; index < items.length; index += 1) {
+    const itemBytes = Buffer.byteLength(JSON.stringify(items[index]), 'utf8');
+    if (itemBytes > MAX_NORMALIZED_MANIFEST_ITEM_BYTES) {
+      throw new Error(
+        `Normalized manifest item ${index} exceeds the ${MAX_NORMALIZED_MANIFEST_ITEM_BYTES} byte hard limit.`,
+      );
+    }
+    const addedBytes = itemBytes + (index === 0 ? 0 : 1);
+    if (aggregateBytes > MAX_NORMALIZED_MANIFEST_AGGREGATE_BYTES - addedBytes) {
+      throw new Error(
+        `Normalized manifest aggregate exceeds the ${MAX_NORMALIZED_MANIFEST_AGGREGATE_BYTES} byte hard limit.`,
+      );
+    }
+    aggregateBytes += addedBytes;
+  }
+}
+
 function parseManifestText(text: string): ManifestObject[] {
   const trimmed = text.trim();
   if (!trimmed) return [];
@@ -294,44 +336,26 @@ function parseManifestText(text: string): ManifestObject[] {
   });
 }
 
-async function readS3Text(uri: string, config?: KnowledgeConfig, safetyPolicy?: SafetyPolicy): Promise<string> {
-  const parsed = new URL(uri);
-  const bucket = parsed.hostname;
-  const key = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
-  if (!bucket || !key) throw new Error(`Invalid S3 manifest URI: ${uri}`);
-  if (safetyPolicy) assertS3ReadAllowed(uri, safetyPolicy);
-  const [{ S3Client, GetObjectCommand }, { fromIni }] = await Promise.all([
-    import('@aws-sdk/client-s3'),
-    import('@aws-sdk/credential-providers'),
-  ]);
-  const s3Config = config?.storage.type === 's3' && config.storage.s3?.bucket === bucket ? config.storage.s3 : undefined;
-  const client = new S3Client({
-    region: s3Config?.region,
-    credentials: s3Config?.profile ? fromIni({ profile: s3Config.profile }) : undefined,
-    maxAttempts: s3Config?.max_attempts,
-  });
-  const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
-  if (!response.Body) return '';
-  return await response.Body.transformToString();
-}
-
 async function readManifestInput(
   input: string,
-  config?: KnowledgeConfig,
-  safetyPolicy?: SafetyPolicy,
   maxInputBytes = DEFAULT_MAX_MANIFEST_INPUT_BYTES,
+  maxItems = DEFAULT_MAX_MANIFEST_ITEMS,
 ): Promise<string> {
-  const text = input.startsWith('s3://')
-    ? await readS3Text(input, config, safetyPolicy)
-    : (() => {
-        if (!existsSync(input)) throw new Error(`Manifest not found: ${input}`);
-        return readFileSync(input, 'utf8');
-      })();
-  const bytes = Buffer.byteLength(text);
-  if (bytes > maxInputBytes) {
-    throw new Error(`Manifest input is too large: ${bytes} bytes exceeds ${maxInputBytes} byte limit.`);
+  const limit = hardLimit(
+    maxInputBytes,
+    DEFAULT_MAX_MANIFEST_INPUT_BYTES,
+    MAX_INGEST_BODY_BYTES,
+    'maxInputBytes',
+  );
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(input)?.[1]?.toLowerCase();
+  if (scheme && scheme !== 'file') {
+    assertClassifiedSourceReference(input);
   }
-  return text;
+  const path = scheme === 'file' ? fileURLToPath(input) : resolve(input);
+  const snapshot = readAnchoredRegularFileSnapshot(path, limit);
+  if (!snapshot) throw new Error(`Manifest not found: ${path}`);
+  assertBoundedJsonText(snapshot.content, maxItems, maxItems);
+  return snapshot.content;
 }
 
 interface TextChunk {
@@ -346,7 +370,13 @@ function chunkText(text: string, maxChars: number, overlapChars: number): TextCh
   if (!normalized.trim()) return [];
   const chunks: TextChunk[] = [];
   let start = 0;
+  let iterations = 0;
   while (start < normalized.length) {
+    if (++iterations > MAX_INGEST_BATCH_ITEMS) {
+      throw new Error(
+        `Manifest chunking exceeds the ${MAX_INGEST_BATCH_ITEMS} iteration hard limit.`,
+      );
+    }
     const hardEnd = Math.min(normalized.length, start + maxChars);
     let end = hardEnd;
     if (hardEnd < normalized.length) {
@@ -365,7 +395,11 @@ function chunkText(text: string, maxChars: number, overlapChars: number): TextCh
       });
     }
     if (end >= normalized.length) break;
-    start = Math.max(0, end - overlapChars);
+    const nextStart = end - overlapChars;
+    if (!Number.isSafeInteger(nextStart) || nextStart <= start) {
+      throw new Error('Manifest chunking failed to make monotonic progress.');
+    }
+    start = nextStart;
   }
   return chunks;
 }
@@ -510,14 +544,17 @@ function insertChunks(db: Database, sourceRevisionId: string, item: NormalizedMa
 
 export async function ingestOpenFilesManifest(options: ManifestIngestOptions): Promise<ManifestIngestResult> {
   const now = options.now ?? new Date();
+  const maxItems = hardLimit(options.maxItems, DEFAULT_MAX_MANIFEST_ITEMS, MAX_INGEST_BATCH_ITEMS, 'maxItems');
   if (options.safetyPolicy) assertWriteAllowed(options.dbPath, options.safetyPolicy);
-  migrateKnowledgeDb(options.dbPath);
-  const text = await readManifestInput(options.input, options.config, options.safetyPolicy, options.maxInputBytes);
-  const items = parseManifestText(text);
-  const maxItems = options.maxItems ?? DEFAULT_MAX_MANIFEST_ITEMS;
+  const text = await readManifestInput(options.input, options.maxInputBytes, maxItems);
+  const items = cloneBoundedDataGraph(parseManifestText(text), {
+    label: 'Manifest data',
+    maxBytes: MAX_INGEST_BODY_BYTES,
+  });
   if (items.length > maxItems) {
     throw new Error(`Manifest contains too many items: ${items.length} exceeds ${maxItems} item limit.`);
   }
+  assertContainedSourceDataGraph(items);
   return ingestOpenFilesManifestItems({
     dbPath: options.dbPath,
     items,
@@ -532,14 +569,31 @@ export async function ingestOpenFilesManifest(options: ManifestIngestOptions): P
 
 export async function ingestOpenFilesManifestItems(options: ManifestItemsIngestOptions): Promise<ManifestIngestResult> {
   const now = (options.now ?? new Date()).toISOString();
-  const maxChunkChars = options.maxChunkChars ?? 4000;
-  const chunkOverlapChars = options.chunkOverlapChars ?? 200;
-  const maxItems = options.maxItems ?? DEFAULT_MAX_MANIFEST_ITEMS;
+  const maxChunkChars = hardLimit(
+    options.maxChunkChars,
+    4000,
+    MAX_INGEST_BODY_BYTES,
+    'maxChunkChars',
+  );
+  const chunkOverlapChars = hardLimit(
+    options.chunkOverlapChars,
+    200,
+    MAX_INGEST_BODY_BYTES,
+    'chunkOverlapChars',
+  );
+  const maxItems = hardLimit(options.maxItems, DEFAULT_MAX_MANIFEST_ITEMS, MAX_INGEST_BATCH_ITEMS, 'maxItems');
   if (maxChunkChars < 500) throw new Error('maxChunkChars must be at least 500.');
   if (chunkOverlapChars < 0 || chunkOverlapChars >= maxChunkChars) throw new Error('chunkOverlapChars must be less than maxChunkChars.');
-  if (options.items.length > maxItems) {
-    throw new Error(`Manifest contains too many items: ${options.items.length} exceeds ${maxItems} item limit.`);
+  const items = cloneBoundedDataGraph(options.items, {
+    label: 'Manifest items',
+    maxBytes: MAX_INGEST_BODY_BYTES,
+  });
+  if (items.length > maxItems) {
+    throw new Error(`Manifest contains too many items: ${items.length} exceeds ${maxItems} item limit.`);
   }
+  assertContainedSourceDataGraph(items);
+  const normalizedItems = items.map((raw) => normalizeManifestItem(raw, now));
+  assertNormalizedManifestBounds(normalizedItems);
 
   if (options.safetyPolicy) assertWriteAllowed(options.dbPath, options.safetyPolicy);
   migrateKnowledgeDb(options.dbPath);
@@ -558,11 +612,10 @@ export async function ingestOpenFilesManifestItems(options: ManifestItemsIngestO
         action: options.readAction ?? (options.sourceLabel.startsWith('s3://') ? 's3_manifest_read' : 'local_manifest_read'),
         target_uri: options.sourceLabel,
         decision: 'allow',
-        metadata: { items: options.items.length, read_only: true },
+        metadata: { items: items.length, read_only: true },
         created_at: now,
       });
-      for (const raw of options.items) {
-        const item = normalizeManifestItem(raw, now);
+      for (const item of normalizedItems) {
         if (preview.length < DEFAULT_MANIFEST_PREVIEW_ITEMS) {
           preview.push({
             source_ref: item.sourceRef,
@@ -587,13 +640,13 @@ export async function ingestOpenFilesManifestItems(options: ManifestItemsIngestO
         action: 'knowledge_manifest_ingest',
         target_uri: options.dbPath,
         decision: 'allow',
-        metadata: { items: options.items.length, sources: seenSources.size, revisions: seenRevisions.size, chunks_inserted: chunksInserted, redactions },
+        metadata: { items: items.length, sources: seenSources.size, revisions: seenRevisions.size, chunks_inserted: chunksInserted, redactions },
         created_at: now,
       });
       return {
         path: options.sourceLabel,
         db_path: options.dbPath,
-        items_seen: options.items.length,
+        items_seen: items.length,
         sources_upserted: seenSources.size,
         revisions_upserted: seenRevisions.size,
         chunks_inserted: chunksInserted,

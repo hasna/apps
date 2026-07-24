@@ -4,7 +4,6 @@ import {
   languageModelFor,
   normalizeAiSdkUsage,
   parseModelRef,
-  recordProviderUsage,
   resolveModelRef,
   type NormalizedProviderUsage,
 } from './providers';
@@ -126,11 +125,21 @@ function addConflictRunEvent(options: {
 function recordUsage(dbPath: string, runId: string, usage: NormalizedProviderUsage, now: string): void {
   const db = openKnowledgeDb(dbPath);
   try {
-    recordProviderUsage(db, {
-      ...usage,
-      run_id: runId,
-      created_at: now,
-    });
+    db.run(
+      `INSERT INTO provider_usage (id, run_id, provider, model, input_tokens, output_tokens, cost_usd, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        `usage_${randomUUID()}`,
+        runId,
+        usage.provider,
+        usage.model,
+        usage.input_tokens,
+        usage.output_tokens,
+        usage.cost_usd,
+        JSON.stringify(usage.metadata),
+        now,
+      ],
+    );
   } finally {
     db.close();
   }

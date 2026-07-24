@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
-import { languageModelFor, normalizeAiSdkUsage, parseModelRef, recordProviderUsage, resolveModelRef } from './providers';
+import { languageModelFor, normalizeAiSdkUsage, parseModelRef, resolveModelRef } from './providers';
 import { retrieveKnowledgeContext, type KnowledgeContextPack, type RetrievalOptions } from './retrieval';
 import type { KnowledgeConfig } from './workspace';
 
@@ -189,16 +189,21 @@ function updateRun(dbPath: string, input: {
 function recordUsage(dbPath: string, runId: string, usage: KnowledgePromptResult['usage'], provider: string, model: string, now: string, metadata: Record<string, unknown> = {}): void {
   const db = openKnowledgeDb(dbPath);
   try {
-    recordProviderUsage(db, {
-      run_id: runId,
-      provider,
-      model,
-      input_tokens: usage.input_tokens,
-      output_tokens: usage.output_tokens,
-      cost_usd: usage.cost_usd,
-      metadata,
-      created_at: now,
-    });
+    db.run(
+      `INSERT INTO provider_usage (id, run_id, provider, model, input_tokens, output_tokens, cost_usd, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        `usage_${randomUUID()}`,
+        runId,
+        provider,
+        model,
+        usage.input_tokens,
+        usage.output_tokens,
+        usage.cost_usd,
+        JSON.stringify(metadata),
+        now,
+      ],
+    );
   } finally {
     db.close();
   }

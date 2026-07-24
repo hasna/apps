@@ -3,8 +3,11 @@ import {
   KnowledgeService,
   type KnowledgeServiceOptions,
 } from './service.js';
+import { assertPublicInvocation, safePublicProperty } from './public-guard.js';
 
-export type KnowledgeClientOptions = KnowledgeServiceOptions;
+export interface KnowledgeClientOptions extends KnowledgeServiceOptions {
+  allowGlobal?: boolean;
+}
 export type KnowledgeSetupOptions = Parameters<KnowledgeService['setup']>[0];
 export type KnowledgeAuthInput = Parameters<KnowledgeService['saveAuth']>[0];
 export type KnowledgeAskOptions = Omit<Parameters<KnowledgeService['runPrompt']>[0], 'prompt'>;
@@ -143,7 +146,18 @@ export interface KnowledgeClient {
 }
 
 export function createKnowledgeClient(options: KnowledgeClientOptions = {}): KnowledgeClient {
-  const service = createKnowledgeService(options);
+  // Ambient Stage-A authority must be resolved before inspecting caller-owned
+  // scope or allowGlobal properties. The explicit global read grant is then
+  // enforced before workspace or store construction.
+  assertPublicInvocation([], { surface: 'sdk' });
+  const requestedScope = safePublicProperty(options, 'scope', 'sdk') ?? 'global';
+  if (requestedScope === 'global') assertExplicitOwnAllowGlobal(options);
+  assertPublicInvocation([options], { surface: 'sdk' });
+  const { allowGlobal, ...serviceOptions } = options;
+  const service = createKnowledgeService(serviceOptions);
+  const withReadAuthority = <T extends { allowGlobal?: boolean } | undefined>(input: T): T => (
+    withDefaultAllowGlobal(input, allowGlobal, () => { service.modelRegistry(); })
+  );
 
   return {
     unstable_service: service,
@@ -192,17 +206,17 @@ export function createKnowledgeClient(options: KnowledgeClientOptions = {}): Kno
     },
     appWiki: {
       paths: () => service.paths(),
-      init: (input = {}) => service.initAppWiki(input),
+      init: (input = {}) => service.initAppWiki(withReadAuthority(input)),
       notes: {
-        add: (input) => service.addAppWikiNote(input),
-        list: (input = {}) => service.listAppWikiNotes(input),
-        get: (id, input = {}) => service.getAppWikiNote(id, input),
+        add: (input) => service.addAppWikiNote(withReadAuthority(input)),
+        list: (input = {}) => service.listAppWikiNotes(withReadAuthority(input)),
+        get: (id, input = {}) => service.getAppWikiNote(id, withReadAuthority(input)),
       },
       sources: {
-        add: (input) => service.addAppWikiSourceRef(input),
+        add: (input) => service.addAppWikiSourceRef(withReadAuthority(input)),
       },
-      search: (input) => service.searchAppWiki(input),
-      query: (input) => service.queryAppWiki(input),
+      search: (input) => service.searchAppWiki(withReadAuthority(input)),
+      query: (input) => service.queryAppWiki(withReadAuthority(input)),
     },
     ingest: {
       manifest: (input) => service.ingestManifest(input),
@@ -227,14 +241,22 @@ export function createKnowledgeClient(options: KnowledgeClientOptions = {}): Kno
       index: (input = {}) => service.indexEmbeddings(input),
       search: (input) => service.semanticSearch(input),
     },
-    search: (input) => service.search(input),
-    retrieveContext: (input) => service.retrieveContext(input),
+    search: (input) => service.search(withReadAuthority(input)),
+    retrieveContext: (input) => service.retrieveContext(withReadAuthority(input)),
     contextPack: (input) => service.contextPack(input),
     context: {
       pack: (input) => service.contextPack(input),
     },
-    ask: (prompt, input = {}) => service.runPrompt({ ...input, prompt }),
-    build: (prompt, input = {}) => service.runPrompt({ ...input, prompt }),
+    ask: (prompt, input = {}) => {
+      assertPublicInvocation([], { surface: 'sdk' });
+      service.modelRegistry();
+      return service.runPrompt({ ...input, prompt });
+    },
+    build: (prompt, input = {}) => {
+      assertPublicInvocation([], { surface: 'sdk' });
+      service.modelRegistry();
+      return service.runPrompt({ ...input, prompt });
+    },
     web: {
       search: (input) => service.webSearch(input),
     },
@@ -243,40 +265,73 @@ export function createKnowledgeClient(options: KnowledgeClientOptions = {}): Kno
 
 export const createKnowledgeSdk = createKnowledgeClient;
 
+function assertExplicitOwnAllowGlobal(options: unknown): asserts options is { allowGlobal: true } {
+  if (!options || typeof options !== 'object') {
+    throw new Error('Global wiki access requires an explicit own allowGlobal=true data property.');
+  }
+  let descriptor: PropertyDescriptor | undefined;
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(options, 'allowGlobal');
+  } catch {
+    throw new Error('Global wiki access requires an explicit own allowGlobal=true data property.');
+  }
+  if (!descriptor || !('value' in descriptor) || descriptor.value !== true) {
+    throw new Error('Global wiki access requires an explicit own allowGlobal=true data property.');
+  }
+}
+
 function withDefaultAllowGlobal<T extends { allowGlobal?: boolean } | undefined>(
   input: T,
   allowGlobal: boolean | undefined,
+  assertAuthority: () => void,
 ): T {
+  assertPublicInvocation([input], { surface: 'sdk' });
+  assertAuthority();
   if (allowGlobal !== true) return input;
-  return { ...(input ?? {}), allowGlobal: input?.allowGlobal ?? true } as T;
+  if (input && typeof input === 'object') {
+    const descriptor = Object.getOwnPropertyDescriptor(input, 'allowGlobal');
+    if (descriptor && 'value' in descriptor) return input;
+  }
+  return { ...(input ?? {}), allowGlobal: true } as T;
 }
 
 export function createAppWikiScope(options: KnowledgeAppWikiScopeOptions = {}): KnowledgeAppWikiSdk {
+  assertPublicInvocation([], { surface: 'sdk' });
+  assertPublicInvocation([options], { surface: 'sdk' });
   const { allowGlobal, ...clientOptions } = options;
+  if (clientOptions.scope === 'global') assertExplicitOwnAllowGlobal(options);
   const client = createKnowledgeClient({
     ...clientOptions,
     scope: clientOptions.scope ?? 'project',
+    ...(allowGlobal === true ? { allowGlobal: true } : {}),
   });
+  const withAuthority = <T extends { allowGlobal?: boolean } | undefined>(input: T): T => (
+    withDefaultAllowGlobal(input, allowGlobal, () => { client.providers.models(); })
+  );
   return {
     paths: () => client.appWiki.paths(),
-    init: (input = {}) => client.appWiki.init(withDefaultAllowGlobal(input, allowGlobal)),
+    init: (input = {}) => client.appWiki.init(withAuthority(input)),
     notes: {
-      add: (input) => client.appWiki.notes.add(withDefaultAllowGlobal(input, allowGlobal)),
-      list: (input = {}) => client.appWiki.notes.list(input),
-      get: (id, input = {}) => client.appWiki.notes.get(id, input),
+      add: (input) => client.appWiki.notes.add(withAuthority(input)),
+      list: (input = {}) => client.appWiki.notes.list(withAuthority(input)),
+      get: (id, input = {}) => client.appWiki.notes.get(id, withAuthority(input)),
     },
     sources: {
-      add: (input) => client.appWiki.sources.add(withDefaultAllowGlobal(input, allowGlobal)),
+      add: (input) => client.appWiki.sources.add(withAuthority(input)),
     },
-    search: (input) => client.appWiki.search(input),
-    query: (input) => client.appWiki.query(input),
+    search: (input) => client.appWiki.search(withAuthority(input)),
+    query: (input) => client.appWiki.query(withAuthority(input)),
   };
 }
 
 export function openProjectWiki(options: Omit<KnowledgeAppWikiScopeOptions, 'scope' | 'allowGlobal'> = {}): KnowledgeAppWikiSdk {
+  assertPublicInvocation([options], { surface: 'sdk' });
   return createAppWikiScope({ ...options, scope: 'project' });
 }
 
 export function openGlobalWiki(options: Omit<KnowledgeAppWikiScopeOptions, 'scope'> & { allowGlobal: true }): KnowledgeAppWikiSdk {
+  assertPublicInvocation([], { surface: 'sdk' });
+  assertExplicitOwnAllowGlobal(options);
+  assertPublicInvocation([options], { surface: 'sdk' });
   return createAppWikiScope({ ...options, scope: 'global', allowGlobal: true });
 }

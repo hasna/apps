@@ -16,1415 +16,1814 @@ var __export = (target, all) => {
 var __esm = (fn, res) => () => (fn && (res = fn(fn = 0)), res);
 var __require = import.meta.require;
 
-// src/serve.ts
-import { readFileSync as readFileSync5 } from "fs";
-
-// node_modules/@hasna/contracts/dist/auth/index.js
-import { createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
-var API_KEY_TOKEN_VERSION = 1;
-var API_KEY_NAMESPACE = "hasna";
-var TOKEN_PATTERN = /^hasna_([a-z][a-z0-9-]*)_([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/;
-var DEFAULT_API_KEY_TTL_SECONDS = 90 * 24 * 60 * 60;
-function toBuffer(secret) {
-  return typeof secret === "string" ? Buffer.from(secret, "utf8") : secret;
-}
-function hmac(signingSecret, message) {
-  return createHmac("sha256", toBuffer(signingSecret)).update(message, "utf8").digest();
-}
-function apiKeyPrefix(app) {
-  return `${API_KEY_NAMESPACE}_${app}_`;
-}
-function parseApiKey(token) {
-  if (typeof token !== "string")
-    return null;
-  const match = TOKEN_PATTERN.exec(token);
-  if (!match)
-    return null;
-  const [, app, body, sig] = match;
-  if (!app || !body || !sig)
-    return null;
-  let claims;
-  try {
-    claims = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
-  } catch {
-    return null;
-  }
-  if (typeof claims !== "object" || claims === null || typeof claims.kid !== "string" || typeof claims.app !== "string" || !Array.isArray(claims.scopes)) {
-    return null;
-  }
-  return { app, body, sig, claims };
-}
-function verifyApiKeyToken(token, options) {
-  const parsed = parseApiKey(token);
-  if (!parsed) {
-    return { ok: false, reason: "malformed", message: "Token is malformed." };
-  }
-  const { app, body, sig, claims } = parsed;
-  if (claims.v !== API_KEY_TOKEN_VERSION) {
-    return { ok: false, reason: "unsupported_version", message: `Unsupported token version ${claims.v}.` };
-  }
-  if (claims.app !== app) {
-    return { ok: false, reason: "app_mismatch", message: "Token prefix app does not match claims." };
-  }
-  if (options.expectedApp !== undefined && app !== options.expectedApp) {
-    return { ok: false, reason: "app_mismatch", message: `Token is for app '${app}', expected '${options.expectedApp}'.` };
-  }
-  const expected = hmac(options.signingSecret, `${apiKeyPrefix(app)}${body}`);
-  let provided;
-  try {
-    provided = Buffer.from(sig, "base64url");
-  } catch {
-    return { ok: false, reason: "bad_signature", message: "Signature is not valid base64url." };
-  }
-  if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
-    return { ok: false, reason: "bad_signature", message: "Signature verification failed." };
-  }
-  const now = Math.floor((options.nowMs ?? Date.now()) / 1000);
-  const leeway = options.leewaySeconds ?? 0;
-  if (typeof claims.iat === "number" && now + leeway < claims.iat) {
-    return { ok: false, reason: "not_yet_valid", message: "Token is not yet valid." };
-  }
-  if (claims.exp !== null && typeof claims.exp === "number" && now - leeway >= claims.exp) {
-    return { ok: false, reason: "expired", message: "Token has expired." };
-  }
-  if (options.requiredScopes && options.requiredScopes.length > 0) {
-    const granted = claims.scopes;
-    const satisfies = (required) => granted.some((g) => {
-      if (g === "*")
-        return true;
-      const gi = g.indexOf(":");
-      const ri = required.indexOf(":");
-      if (gi < 0 || ri < 0)
-        return false;
-      const gApp = g.slice(0, gi);
-      const gAction = g.slice(gi + 1);
-      const rApp = required.slice(0, ri);
-      const rAction = required.slice(ri + 1);
-      return (gApp === "*" || gApp === rApp) && (gAction === "*" || gAction === rAction);
-    });
-    for (const required of options.requiredScopes) {
-      if (!satisfies(required)) {
-        return { ok: false, reason: "insufficient_scope", message: `Missing required scope '${required}'.` };
-      }
-    }
-  }
-  return { ok: true, claims, kid: claims.kid, app };
-}
-var DEFAULT_API_KEYS_TABLE = "api_keys";
-function createTableSql(table) {
-  return `CREATE TABLE IF NOT EXISTS ${table} (
-    kid TEXT PRIMARY KEY,
-    app TEXT NOT NULL,
-    agent TEXT,
-    scopes JSONB NOT NULL,
-    token_hash TEXT NOT NULL UNIQUE,
-    issued_at TIMESTAMPTZ NOT NULL,
-    expires_at TIMESTAMPTZ,
-    revoked_at TIMESTAMPTZ,
-    revoked_reason TEXT,
-    last_used_at TIMESTAMPTZ,
-    created_by TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-  )`;
-}
-function apiKeyMigrations(table = DEFAULT_API_KEYS_TABLE) {
-  return [
-    { id: `hasna_auth_0001_${table}`, sql: createTableSql(table) },
-    {
-      id: `hasna_auth_0002_${table}_indexes`,
-      sql: `CREATE INDEX IF NOT EXISTS ${table}_app_idx ON ${table} (app);
-            CREATE INDEX IF NOT EXISTS ${table}_token_hash_idx ON ${table} (token_hash);`
-    }
-  ];
-}
-function toIso(value) {
-  if (value === null || value === undefined)
-    return null;
-  if (value instanceof Date)
-    return value.toISOString();
-  return new Date(String(value)).toISOString();
-}
-function parseScopes(value) {
-  if (Array.isArray(value))
-    return value.map((v) => String(v));
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value);
-      return Array.isArray(parsed) ? parsed.map((v) => String(v)) : [];
-    } catch {
-      return [];
-    }
-  }
-  return [];
-}
-function rowToRecord(row) {
-  return {
-    kid: String(row.kid),
-    app: String(row.app),
-    agent: row.agent === null || row.agent === undefined ? null : String(row.agent),
-    scopes: parseScopes(row.scopes),
-    tokenHash: String(row.token_hash),
-    issuedAt: toIso(row.issued_at) ?? new Date(0).toISOString(),
-    expiresAt: toIso(row.expires_at),
-    revokedAt: toIso(row.revoked_at),
-    revokedReason: row.revoked_reason === null || row.revoked_reason === undefined ? null : String(row.revoked_reason),
-    lastUsedAt: toIso(row.last_used_at),
-    createdBy: row.created_by === null || row.created_by === undefined ? null : String(row.created_by)
-  };
-}
-
-class ApiKeyStore {
-  client;
-  table;
-  constructor(client, options = {}) {
-    this.client = client;
-    this.table = options.table ?? DEFAULT_API_KEYS_TABLE;
-    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(this.table)) {
-      throw new Error(`Invalid api-keys table name '${this.table}'.`);
-    }
-  }
-  migrations() {
-    return apiKeyMigrations(this.table);
-  }
-  async ensureSchema() {
-    for (const migration of this.migrations()) {
-      await this.client.execute(migration.sql);
-    }
-  }
-  async insert(input) {
-    await this.client.execute(`INSERT INTO ${this.table}
-         (kid, app, agent, scopes, token_hash, issued_at, expires_at, created_by)
-       VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)`, [
-      input.kid,
-      input.app,
-      input.agent ?? null,
-      JSON.stringify(input.scopes),
-      input.tokenHash,
-      input.issuedAt.toISOString(),
-      input.expiresAt ? input.expiresAt.toISOString() : null,
-      input.createdBy ?? null
-    ]);
-  }
-  async insertMinted(minted, createdBy) {
-    const claims = minted.claims;
-    await this.insert({
-      kid: minted.kid,
-      app: claims.app,
-      agent: claims.agent ?? null,
-      scopes: claims.scopes,
-      tokenHash: minted.tokenHash,
-      issuedAt: new Date(claims.iat * 1000),
-      expiresAt: claims.exp === null ? null : new Date(claims.exp * 1000),
-      createdBy: createdBy ?? null
-    });
-  }
-  async findByKid(kid) {
-    const row = await this.client.get(`SELECT * FROM ${this.table} WHERE kid = $1`, [kid]);
-    return row ? rowToRecord(row) : null;
-  }
-  async findByTokenHash(tokenHash) {
-    const row = await this.client.get(`SELECT * FROM ${this.table} WHERE token_hash = $1`, [tokenHash]);
-    return row ? rowToRecord(row) : null;
-  }
-  isRevoked = async (kid) => {
-    const row = await this.client.get(`SELECT revoked_at FROM ${this.table} WHERE kid = $1`, [kid]);
-    if (!row)
-      return false;
-    return row.revoked_at !== null && row.revoked_at !== undefined;
-  };
-  async status(kid, nowMs = Date.now()) {
-    const record = await this.findByKid(kid);
-    if (!record)
-      return "unknown";
-    if (record.revokedAt)
-      return "revoked";
-    if (record.expiresAt && new Date(record.expiresAt).getTime() <= nowMs)
-      return "expired";
-    return "active";
-  }
-  statusChecker() {
-    return async (kid) => {
-      const status = await this.status(kid);
-      return status !== "active";
-    };
-  }
-  async revoke(kid, reason, atMs = Date.now()) {
-    const row = await this.client.get(`UPDATE ${this.table}
-          SET revoked_at = COALESCE(revoked_at, $2), revoked_reason = COALESCE(revoked_reason, $3)
-        WHERE kid = $1
-      RETURNING kid`, [kid, new Date(atMs).toISOString(), reason ?? null]);
-    return row !== null;
-  }
-  async touchLastUsed(kid, atMs = Date.now()) {
-    await this.client.execute(`UPDATE ${this.table} SET last_used_at = $2 WHERE kid = $1`, [
-      kid,
-      new Date(atMs).toISOString()
-    ]);
-  }
-  async list(options = {}) {
-    const clauses = [];
-    const params = [];
-    if (options.app) {
-      params.push(options.app);
-      clauses.push(`app = $${params.length}`);
-    }
-    if (!options.includeRevoked) {
-      clauses.push("revoked_at IS NULL");
-    }
-    const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
-    const rows = await this.client.many(`SELECT * FROM ${this.table} ${where} ORDER BY issued_at DESC`);
-    return rows.map(rowToRecord);
-  }
-  async revokedKids() {
-    const rows = await this.client.many(`SELECT kid FROM ${this.table} WHERE revoked_at IS NOT NULL`);
-    return rows.map((row) => String(row.kid));
-  }
-}
-function readHeader(source, name) {
-  const lower = name.toLowerCase();
-  if (typeof source === "function") {
-    return source(name) ?? source(lower) ?? null;
-  }
-  if (typeof Headers !== "undefined" && source instanceof Headers) {
-    return source.get(name);
-  }
-  const record = source;
-  const value = record[name] ?? record[lower] ?? record[name.toUpperCase()];
-  if (Array.isArray(value))
-    return value[0] ?? null;
-  return value ?? null;
-}
-function extractToken(source, headerName = "x-api-key", scheme = "Bearer") {
-  const direct = readHeader(source, headerName);
-  if (direct && direct.trim().length > 0)
-    return direct.trim();
-  const authz = readHeader(source, "authorization");
-  if (authz) {
-    const prefix = `${scheme} `;
-    if (authz.toLowerCase().startsWith(prefix.toLowerCase())) {
-      const token = authz.slice(prefix.length).trim();
-      if (token.length > 0)
-        return token;
-    }
-  }
-  return null;
-}
-function verifyApiKey(options) {
-  if (!options.app)
-    throw new Error("verifyApiKey requires an 'app' slug.");
-  if (!options.signingSecret) {
-    throw new Error("verifyApiKey requires a 'signingSecret'. Set it from HASNA_<APP>_API_SIGNING_KEY.");
-  }
-  const headerName = options.headerName ?? "x-api-key";
-  const scheme = options.scheme ?? "Bearer";
-  const clock = options.nowMs ?? (() => Date.now());
-  async function emit(event) {
-    if (!options.audit)
-      return;
-    try {
-      await options.audit(event);
-    } catch {}
-  }
-  async function authenticate(headers, context = {}) {
-    const method = context.method ?? null;
-    const path = context.path ?? null;
-    const requiredScopes = [...options.requiredScopes ?? [], ...context.requiredScopes ?? []];
-    const at = new Date(clock()).toISOString();
-    const token = extractToken(headers, headerName, scheme);
-    if (!token) {
-      const decision = {
-        ok: false,
-        status: 401,
-        reason: "missing_token",
-        message: `Missing API key. Send it as '${headerName}: <key>' or 'Authorization: ${scheme} <key>'.`
-      };
-      await emit({ outcome: "deny", app: options.app, kid: null, reason: "missing_token", scopesRequired: requiredScopes, method, path, status: 401, at });
-      return decision;
-    }
-    const verified = verifyApiKeyToken(token, {
-      signingSecret: options.signingSecret,
-      expectedApp: options.app,
-      nowMs: clock(),
-      ...options.leewaySeconds !== undefined ? { leewaySeconds: options.leewaySeconds } : {},
-      requiredScopes
-    });
-    if (!verified.ok) {
-      const status = verified.reason === "insufficient_scope" ? 403 : 401;
-      await emit({ outcome: "deny", app: options.app, kid: null, reason: verified.reason, scopesRequired: requiredScopes, method, path, status, at });
-      return { ok: false, status, reason: verified.reason, message: verified.message };
-    }
-    if (options.isRevoked) {
-      const revoked = await options.isRevoked(verified.kid);
-      if (revoked) {
-        await emit({ outcome: "deny", app: options.app, kid: verified.kid, reason: "revoked", scopesRequired: requiredScopes, method, path, status: 401, at });
-        return { ok: false, status: 401, reason: "revoked", message: "API key has been revoked." };
-      }
-    }
-    const principal = {
-      kid: verified.kid,
-      app: verified.app,
-      scopes: verified.claims.scopes,
-      agent: verified.claims.agent ?? null,
-      claims: verified.claims
-    };
-    await emit({ outcome: "allow", app: options.app, kid: verified.kid, reason: null, scopesRequired: requiredScopes, method, path, status: 200, at });
-    return { ok: true, status: 200, principal };
-  }
-  return { authenticate, app: options.app };
-}
-
-// src/generated/storage-kit/mode.ts
-var DEPRECATED_STORAGE_MODE_ALIASES = [
-  "remote",
-  "hybrid",
-  "self_hosted"
-];
-function normalizeStorageMode(value) {
-  const normalized = value.trim().toLowerCase().replace(/-/g, "_");
-  if (normalized === "local")
-    return { mode: "local", deprecatedAlias: null };
-  if (normalized === "cloud")
-    return { mode: "cloud", deprecatedAlias: null };
-  if (DEPRECATED_STORAGE_MODE_ALIASES.includes(normalized)) {
-    return { mode: "cloud", deprecatedAlias: normalized };
-  }
-  throw new Error(`Unknown storage mode: ${value}. Use local or cloud.`);
-}
-function envToken(name) {
-  return name.toUpperCase().replace(/-/g, "_");
-}
-function storageEnvKeys(name) {
-  const token = envToken(name);
-  return {
-    modeKeys: [`HASNA_${token}_STORAGE_MODE`, `${token}_STORAGE_MODE`],
-    databaseUrlKeys: [`HASNA_${token}_DATABASE_URL`, `${token}_DATABASE_URL`]
-  };
-}
-function firstEnv(env, keys) {
-  for (const key of keys) {
-    const value = env[key]?.trim();
-    if (value)
-      return { key, value };
-  }
-  return null;
-}
-function resolveStorageMode(name, env = process.env) {
-  const { modeKeys, databaseUrlKeys } = storageEnvKeys(name);
-  const dbHit = firstEnv(env, databaseUrlKeys);
-  const databaseUrlPresent = Boolean(dbHit);
-  const databaseUrlSource = dbHit ? dbHit.key : null;
-  const modeHit = firstEnv(env, modeKeys);
-  if (!modeHit) {
-    return {
-      mode: "local",
-      source: "default",
-      deprecatedAlias: null,
-      databaseUrlPresent,
-      databaseUrlSource,
-      warning: null
-    };
-  }
-  const { mode, deprecatedAlias } = normalizeStorageMode(modeHit.value);
-  const warnings = [];
-  if (deprecatedAlias) {
-    warnings.push(`Deprecated storage mode '${deprecatedAlias}' from ${modeHit.key} is treated as 'cloud'. Set ${modeKeys[0]}=cloud instead.`);
-  }
-  if (mode === "cloud" && !databaseUrlPresent) {
-    warnings.push(`cloud mode needs ${databaseUrlKeys[0]} (PURE REMOTE: reads and writes go to cloud Postgres).`);
-  }
-  if (modeHit.key !== modeKeys[0]) {
-    warnings.push(`Using alias env ${modeHit.key}; the canonical key is ${modeKeys[0]}.`);
-  }
-  return {
-    mode,
-    source: modeHit.key,
-    deprecatedAlias,
-    databaseUrlPresent,
-    databaseUrlSource,
-    warning: warnings.length > 0 ? warnings.join(" ") : null
-  };
-}
-function resolveDatabaseUrl(name, env = process.env) {
-  const { databaseUrlKeys } = storageEnvKeys(name);
-  const hit = firstEnv(env, databaseUrlKeys);
-  return hit ? hit.value : null;
-}
-// src/generated/storage-kit/tls.ts
-import { readFileSync } from "fs";
-function sslModeFromConnectionString(connectionString) {
-  const queryStart = connectionString.indexOf("?");
-  const params = new URLSearchParams(queryStart === -1 ? "" : connectionString.slice(queryStart + 1));
-  const sslmode = params.get("sslmode")?.trim().toLowerCase();
-  if (sslmode) {
-    switch (sslmode) {
-      case "disable":
-      case "prefer":
-      case "require":
-      case "verify-ca":
-      case "verify-full":
-        return sslmode;
-      case "allow":
-        return "prefer";
-      default:
-        throw new Error(`Unknown sslmode '${sslmode}' in connection string.`);
-    }
-  }
-  const ssl = params.get("ssl")?.trim().toLowerCase();
-  if (ssl && ["1", "true", "yes", "on", "require"].includes(ssl))
-    return "require";
-  return "disable";
-}
-function loadCaBundle(options) {
-  const env = options.env ?? process.env;
-  if (options.ca && options.ca.trim())
-    return options.ca;
-  const path = options.caCertPath ?? env.PGSSLROOTCERT ?? env.NODE_EXTRA_CA_CERTS;
-  if (path && path.trim())
-    return readFileSync(path.trim(), "utf8");
-  return null;
-}
-function resolveTlsConfig(connectionString, options = {}) {
-  const mode = sslModeFromConnectionString(connectionString);
-  if (mode === "disable") {
-    return;
-  }
-  const ca = loadCaBundle(options);
-  if (mode === "prefer" || mode === "require") {
-    return ca ? { rejectUnauthorized: false, ca } : { rejectUnauthorized: false };
-  }
-  if (!ca) {
-    throw new Error(`sslmode=${mode} requires a CA bundle. Set PGSSLROOTCERT (or pass caCertPath/ca) to the ` + `Amazon RDS global bundle: https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem`);
-  }
-  return { rejectUnauthorized: true, ca };
-}
-// src/generated/storage-kit/query.ts
-function wrapExecutor(executor) {
-  return {
-    async query(sql, params) {
-      const result = await executor.query(sql, params);
-      return { rows: result.rows, rowCount: result.rowCount ?? result.rows.length };
-    },
-    async many(sql, params) {
-      const result = await executor.query(sql, params);
-      return result.rows;
-    },
-    async get(sql, params) {
-      const result = await executor.query(sql, params);
-      return result.rows[0] ?? null;
-    },
-    async one(sql, params) {
-      const result = await executor.query(sql, params);
-      if (result.rows.length !== 1) {
-        throw new Error(`Expected exactly one row, got ${result.rows.length}.`);
-      }
-      return result.rows[0];
-    },
-    async execute(sql, params) {
-      await executor.query(sql, params);
-    }
-  };
-}
-function createQueryClient(pool) {
-  const base = wrapExecutor(pool);
-  return {
-    ...base,
-    pool,
-    async transaction(fn) {
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        const result = await fn(wrapExecutor(client));
-        await client.query("COMMIT");
-        return result;
-      } catch (error) {
-        try {
-          await client.query("ROLLBACK");
-        } catch {}
-        throw error;
-      } finally {
-        client.release();
-      }
-    },
-    async close() {
-      await pool.end();
-    }
-  };
-}
-// src/generated/storage-kit/pool.ts
-import pg from "pg";
-function createPgPool(options) {
-  const ssl = resolveTlsConfig(options.connectionString, {
-    ...options.ca !== undefined ? { ca: options.ca } : {},
-    ...options.caCertPath !== undefined ? { caCertPath: options.caCertPath } : {},
-    ...options.env !== undefined ? { env: options.env } : {}
-  });
-  const config = { connectionString: options.connectionString };
-  if (ssl !== undefined)
-    config.ssl = ssl;
-  if (options.max !== undefined)
-    config.max = options.max;
-  if (options.idleTimeoutMillis !== undefined)
-    config.idleTimeoutMillis = options.idleTimeoutMillis;
-  if (options.connectionTimeoutMillis !== undefined)
-    config.connectionTimeoutMillis = options.connectionTimeoutMillis;
-  if (options.applicationName !== undefined)
-    config.application_name = options.applicationName;
-  return new pg.Pool(config);
-}
-function createCloudPoolFromEnv(appName, options = {}) {
-  const env = options.env ?? process.env;
-  const resolution = resolveStorageMode(appName, env);
-  if (resolution.mode !== "cloud") {
-    throw new Error(`createCloudPoolFromEnv requires ${appName} storage mode 'cloud', got '${resolution.mode}'. ` + `Set HASNA_${appName.toUpperCase().replace(/-/g, "_")}_STORAGE_MODE=cloud.`);
-  }
-  const connectionString = resolveDatabaseUrl(appName, env);
-  if (!connectionString) {
-    throw new Error(`cloud mode for ${appName} needs a database URL. Set ` + `HASNA_${appName.toUpperCase().replace(/-/g, "_")}_DATABASE_URL.`);
-  }
-  const pool = createPgPool({
-    connectionString,
-    ...options.ca !== undefined ? { ca: options.ca } : {},
-    ...options.caCertPath !== undefined ? { caCertPath: options.caCertPath } : {},
-    env,
-    ...options.max !== undefined ? { max: options.max } : {},
-    ...options.idleTimeoutMillis !== undefined ? { idleTimeoutMillis: options.idleTimeoutMillis } : {},
-    ...options.connectionTimeoutMillis !== undefined ? { connectionTimeoutMillis: options.connectionTimeoutMillis } : {},
-    ...options.applicationName !== undefined ? { applicationName: options.applicationName } : {}
-  });
-  return {
-    client: createQueryClient(pool),
-    connectionSource: resolution.databaseUrlSource ?? "unknown"
-  };
-}
-// src/generated/storage-kit/migrations.ts
-import { createHash as createHash2 } from "crypto";
-var DEFAULT_MIGRATION_LEDGER_TABLE = "schema_migrations";
-function checksumSql(sql) {
-  const normalized = sql.trim().replace(/\r\n/g, `
-`);
-  return `sha256:${createHash2("sha256").update(normalized).digest("hex")}`;
-}
-function defineMigration(id, sql) {
-  return Object.freeze({ id, sql: sql.trim(), checksum: checksumSql(sql) });
-}
-function hasTransaction(client) {
-  return typeof client.transaction === "function";
-}
-
-class MigrationLedger {
-  client;
-  migrations;
-  ledgerTable;
-  constructor(client, migrations, options = {}) {
-    this.client = client;
-    this.migrations = migrations;
-    this.ledgerTable = options.ledgerTable ?? DEFAULT_MIGRATION_LEDGER_TABLE;
-    const seen = new Set;
-    for (const migration of migrations) {
-      if (seen.has(migration.id))
-        throw new Error(`Duplicate migration id: ${migration.id}`);
-      seen.add(migration.id);
-    }
-  }
-  async ensureLedger() {
-    await this.client.execute(`CREATE TABLE IF NOT EXISTS ${this.ledgerTable} (
-         id TEXT PRIMARY KEY,
-         checksum TEXT NOT NULL,
-         applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
-       )`);
-  }
-  async listApplied() {
-    await this.ensureLedger();
-    return this.readApplied();
-  }
-  async readApplied() {
-    const rows = await this.client.many(`SELECT id, checksum, applied_at FROM ${this.ledgerTable} ORDER BY id ASC`);
-    return rows.map((row) => ({
-      id: row.id,
-      checksum: row.checksum,
-      appliedAt: row.applied_at instanceof Date ? row.applied_at.toISOString() : String(row.applied_at)
-    }));
-  }
-  buildPlan(applied) {
-    const known = new Set(this.migrations.map((m) => m.id));
-    for (const row of applied) {
-      if (!known.has(row.id)) {
-        throw new Error(`Applied migration '${row.id}' is not recognized by this build (downgrade?).`);
-      }
-    }
-    const appliedById = new Map(applied.map((row) => [row.id, row]));
-    for (const migration of this.migrations) {
-      const existing = appliedById.get(migration.id);
-      if (existing && existing.checksum !== migration.checksum) {
-        throw new Error(`Migration checksum mismatch for '${migration.id}': the SQL changed after it was applied.`);
-      }
-    }
-    return this.migrations.map((migration) => ({
-      migration,
-      state: appliedById.has(migration.id) ? "already_applied" : "pending"
-    }));
-  }
-  async migrate(opts = {}) {
-    const dryRun = opts.dryRun === true;
-    await this.ensureLedger();
-    const applied = await this.readApplied();
-    const plan = this.buildPlan(applied);
-    if (dryRun)
-      return { dryRun, applied, plan };
-    for (const item of plan) {
-      if (item.state === "already_applied")
-        continue;
-      await this.applyPendingMigration(item.migration);
-    }
-    return { dryRun, applied: await this.readApplied(), plan };
-  }
-  async applyPendingMigration(migration) {
-    const apply = async (client) => {
-      await client.execute(migration.sql);
-      await client.execute(`INSERT INTO ${this.ledgerTable} (id, checksum, applied_at) VALUES ($1, $2, now())`, [migration.id, migration.checksum]);
-    };
-    if (hasTransaction(this.client)) {
-      await this.client.transaction(apply);
-      return;
-    }
-    await this.client.execute("BEGIN");
-    try {
-      await apply(this.client);
-      await this.client.execute("COMMIT");
-    } catch (error) {
-      try {
-        await this.client.execute("ROLLBACK");
-      } catch {}
-      throw error;
-    }
-  }
-}
-function createMigrationLedger(client, migrations, options = {}) {
-  return new MigrationLedger(client, migrations, options);
-}
-// src/generated/storage-kit/health.ts
-async function checkHealth(client) {
-  const start = Date.now();
-  try {
-    await client.get("SELECT 1 AS ok");
-    return { ok: true, latencyMs: Date.now() - start };
-  } catch (error) {
-    return {
-      ok: false,
-      latencyMs: Date.now() - start,
-      error: error instanceof Error ? error.message : String(error)
-    };
-  }
-}
-async function checkReady(client, migrations, options = {}) {
-  const start = Date.now();
-  try {
-    const ledger = new MigrationLedger(client, migrations, options);
-    const result = await ledger.migrate({ dryRun: true });
-    const pending = result.plan.filter((item) => item.state === "pending").map((item) => item.migration.id);
-    return { ok: pending.length === 0, latencyMs: Date.now() - start, pendingMigrations: pending };
-  } catch (error) {
-    return {
-      ok: false,
-      latencyMs: Date.now() - start,
-      pendingMigrations: [],
-      error: error instanceof Error ? error.message : String(error)
-    };
-  }
-}
-
-// src/generated/storage-kit/index.ts
-var KIT_VERSION = "0.4.0";
-
-// src/db/remote-storage.ts
-var KNOWLEDGE_APP_NAME = "knowledge";
-function translatePlaceholders(sql) {
-  let index = 0;
-  return sql.replace(/\?/g, () => `$${++index}`);
-}
-function normalizeParams(params) {
-  const flat = params.length === 1 && Array.isArray(params[0]) ? params[0] : params;
-  return flat.map((value) => value === undefined ? null : value);
-}
-
-class PgAdapterAsync {
-  client;
-  constructor(connectionString) {
-    const pool2 = createPgPool({
-      connectionString,
-      applicationName: "@hasna/knowledge"
-    });
-    this.client = createQueryClient(pool2);
-  }
-  get pool() {
-    return this.client.pool;
-  }
-  async run(sql, ...params) {
-    const result = await this.client.query(translatePlaceholders(sql), normalizeParams(params));
-    return { changes: result.rowCount };
-  }
-  async all(sql, ...params) {
-    const result = await this.client.query(translatePlaceholders(sql), normalizeParams(params));
-    return result.rows;
-  }
-  async get(sql, ...params) {
-    return this.client.get(translatePlaceholders(sql), normalizeParams(params));
-  }
-  async close() {
-    await this.client.close();
-  }
-}
-function createKnowledgeCloudClient() {
-  return createCloudPoolFromEnv(KNOWLEDGE_APP_NAME, { applicationName: "@hasna/knowledge" }).client;
-}
-
-// src/auth.ts
-import { existsSync, mkdirSync, readFileSync as readFileSync2, unlinkSync, writeFileSync } from "fs";
-import { homedir } from "os";
-import { dirname, join } from "path";
-var DEFAULT_KNOWLEDGE_API_URL = "https://knowledge.hasna.xyz";
-function normalizeKnowledgeApiOrigin(apiUrl) {
-  const url = new URL(apiUrl);
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error("Knowledge API URL must use http or https.");
-  }
-  const pathname = url.pathname.replace(/\/+$/, "");
-  if (pathname === "/api" || pathname === "/api/v1") {
-    url.pathname = "/";
-  } else if (pathname.endsWith("/api/v1")) {
-    url.pathname = pathname.slice(0, -"/api/v1".length) || "/";
-  } else if (pathname.endsWith("/api")) {
-    url.pathname = pathname.slice(0, -"/api".length) || "/";
-  }
-  return url.toString().replace(/\/+$/, "");
-}
-function knowledgeAuthPath(env = process.env) {
-  if (env.HASNA_KNOWLEDGE_AUTH_PATH)
-    return env.HASNA_KNOWLEDGE_AUTH_PATH;
-  const root = env.HASNA_KNOWLEDGE_AUTH_DIR ?? join(homedir(), ".hasna", "knowledge");
-  return join(root, "auth.json");
-}
-function resolveKnowledgeApiUrl(config, env = process.env) {
-  return normalizeKnowledgeApiOrigin(env.KNOWLEDGE_API_URL ?? config?.hosted?.api_url ?? DEFAULT_KNOWLEDGE_API_URL);
-}
-function getKnowledgeAuth(env = process.env) {
-  try {
-    const path = knowledgeAuthPath(env);
-    if (!existsSync(path))
-      return null;
-    const parsed = JSON.parse(readFileSync2(path, "utf8"));
-    return typeof parsed.api_key === "string" && parsed.api_key.length > 0 ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-function saveKnowledgeAuth(auth, env = process.env) {
-  const path = knowledgeAuthPath(env);
-  const stored = {
-    ...auth,
-    api_url: auth.api_url ? normalizeKnowledgeApiOrigin(auth.api_url) : undefined,
-    created_at: auth.created_at ?? new Date().toISOString()
-  };
-  mkdirSync(dirname(path), { recursive: true, mode: 448 });
-  writeFileSync(path, `${JSON.stringify(stored, null, 2)}
-`, { mode: 384 });
-  return stored;
-}
-function clearKnowledgeAuth(env = process.env) {
-  try {
-    unlinkSync(knowledgeAuthPath(env));
-    return true;
-  } catch {
-    return false;
-  }
-}
-function getKnowledgeApiKey(env = process.env) {
-  if (env.KNOWLEDGE_API_KEY)
-    return { apiKey: env.KNOWLEDGE_API_KEY, source: "env" };
-  if (env.HASNA_KNOWLEDGE_API_KEY)
-    return { apiKey: env.HASNA_KNOWLEDGE_API_KEY, source: "env" };
-  const auth = getKnowledgeAuth(env);
-  return auth?.api_key ? { apiKey: auth.api_key, source: "file" } : { apiKey: null, source: "none" };
-}
-function knowledgeAuthStatus(config, env = process.env) {
-  const auth = getKnowledgeAuth(env);
-  const key = getKnowledgeApiKey(env);
-  const apiUrl = env.KNOWLEDGE_API_URL ? resolveKnowledgeApiUrl(config, env) : auth?.api_url ? normalizeKnowledgeApiOrigin(auth.api_url) : resolveKnowledgeApiUrl(config, env);
-  return {
-    authenticated: Boolean(key.apiKey),
-    source: key.source,
-    api_url: apiUrl,
-    auth_path: knowledgeAuthPath(env),
-    email: key.source === "file" ? auth?.email ?? null : null,
-    org_id: key.source === "file" ? auth?.org_id ?? null : null,
-    org_slug: key.source === "file" ? auth?.org_slug ?? null : null,
-    user_id: key.source === "file" ? auth?.user_id ?? null : null,
-    api_key_present: Boolean(key.apiKey)
-  };
-}
-
-// src/remote-client.ts
-var REMOTE_KNOWLEDGE_CONTRACT_VERSION = 1;
-function isRecord(value) {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-function stringValue(record, key) {
-  const value = record[key];
-  return typeof value === "string" ? value : undefined;
-}
-function numberValue(record, key) {
-  const value = record[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-function arrayValue(record, key) {
-  const value = record[key];
-  return Array.isArray(value) ? value : undefined;
-}
-function normalizeRemoteKnowledgeRunContract(payload, fallback) {
-  const record = isRecord(payload) ? payload : {};
-  return {
-    contract_version: REMOTE_KNOWLEDGE_CONTRACT_VERSION,
-    id: stringValue(record, "id") ?? fallback?.id,
-    type: stringValue(record, "type") ?? fallback?.type,
-    status: stringValue(record, "status") ?? fallback?.status,
-    query: stringValue(record, "query") ?? fallback?.query,
-    prompt: stringValue(record, "prompt") ?? fallback?.prompt,
-    output_preview: Object.prototype.hasOwnProperty.call(record, "output_preview") ? record.output_preview : fallback?.output_preview,
-    citations: arrayValue(record, "citations") ?? fallback?.citations,
-    artifacts: arrayValue(record, "artifacts") ?? fallback?.artifacts,
-    usage: isRecord(record.usage) ? record.usage : fallback?.usage,
-    created_at: stringValue(record, "created_at") ?? fallback?.created_at,
-    started_at: stringValue(record, "started_at") ?? fallback?.started_at,
-    completed_at: stringValue(record, "completed_at") ?? fallback?.completed_at,
-    duration_ms: numberValue(record, "duration_ms") ?? fallback?.duration_ms,
-    error_code: stringValue(record, "error_code") ?? fallback?.error_code,
-    error_message: stringValue(record, "error_message") ?? fallback?.error_message,
-    error: stringValue(record, "error") ?? fallback?.error,
-    details: Object.prototype.hasOwnProperty.call(record, "details") ? record.details : fallback?.details
-  };
-}
-function knowledgeRegistryContract(input) {
-  return {
-    contract_version: REMOTE_KNOWLEDGE_CONTRACT_VERSION,
-    service: "open-knowledge",
-    mode: input.mode,
-    capabilities: [
-      "registry",
-      "search",
-      "ask",
-      "build",
-      "sync",
-      "status",
-      "logs",
-      "artifacts",
-      "open-files-source-refs",
-      "s3-generated-artifacts"
-    ],
-    endpoints: {
-      registry: "/api/v1/knowledge/registry",
-      search: "/api/v1/knowledge/search",
-      ask: "/api/v1/knowledge/ask",
-      build: "/api/v1/knowledge/build",
-      sync: "/api/v1/knowledge/sync",
-      run_status: "/api/v1/knowledge/runs/{run_id}",
-      run_logs: "/api/v1/knowledge/runs/{run_id}/logs",
-      run_artifacts: "/api/v1/knowledge/runs/{run_id}/artifacts"
-    },
-    source_contract: {
-      owner: "open-files",
-      preferred_ref: "open-files",
-      allowed_schemes: input.sourceSchemes,
-      raw_source_bytes_stored_in_open_knowledge: false
-    },
-    artifact_contract: {
-      storage_type: input.storageType,
-      uri_prefix: input.artifactUriPrefix,
-      generated_only: true
-    }
-  };
-}
-
-class RemoteKnowledgeClient {
-  apiKey;
-  apiUrl;
-  constructor(apiKey, apiUrl) {
-    this.apiKey = apiKey;
-    this.apiUrl = apiUrl;
-  }
-  static fromConfig(config, env = process.env) {
-    const key = getKnowledgeApiKey(env);
-    if (!key.apiKey)
-      return null;
-    return new RemoteKnowledgeClient(key.apiKey, resolveKnowledgeApiUrl(config, env));
-  }
-  async request(path, options = {}) {
-    return fetch(`${this.apiUrl}${path}`, {
-      ...options,
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        "Content-Type": "application/json",
-        ...options.headers
-      }
-    });
-  }
-  async registry() {
-    const response = await this.request("/api/v1/knowledge/registry");
-    return response.json();
-  }
-  async search(request) {
-    const response = await this.request("/api/v1/knowledge/search", {
-      method: "POST",
-      body: JSON.stringify(request)
-    });
-    return normalizeRemoteKnowledgeRunContract(await response.json(), { type: "search", query: request.query });
-  }
-  async ask(request) {
-    const response = await this.request("/api/v1/knowledge/ask", {
-      method: "POST",
-      body: JSON.stringify(request)
-    });
-    return normalizeRemoteKnowledgeRunContract(await response.json(), { type: "ask", prompt: request.prompt });
-  }
-  async build(request) {
-    const response = await this.request("/api/v1/knowledge/build", {
-      method: "POST",
-      body: JSON.stringify(request)
-    });
-    return normalizeRemoteKnowledgeRunContract(await response.json(), { type: "build", prompt: request.prompt });
-  }
-  async sync(request = {}) {
-    const response = await this.request("/api/v1/knowledge/sync", {
-      method: "POST",
-      body: JSON.stringify(request)
-    });
-    return normalizeRemoteKnowledgeRunContract(await response.json(), { type: "sync" });
-  }
-  async runStatus(runId) {
-    const response = await this.request(`/api/v1/knowledge/runs/${encodeURIComponent(runId)}`);
-    if (!response.ok)
-      return null;
-    return normalizeRemoteKnowledgeRunContract(await response.json(), { id: runId, type: "status" });
-  }
-  async runLogs(runId) {
-    const response = await this.request(`/api/v1/knowledge/runs/${encodeURIComponent(runId)}/logs`);
-    if (!response.ok)
-      return [];
-    const payload = await response.json();
-    return Array.isArray(payload) ? payload : [];
-  }
-  async runArtifacts(runId) {
-    const response = await this.request(`/api/v1/knowledge/runs/${encodeURIComponent(runId)}/artifacts`);
-    if (!response.ok)
-      return [];
-    const payload = await response.json();
-    return Array.isArray(payload) ? payload : [];
-  }
-}
-
-// src/store.ts
-import { readFileSync as readFileSync4, writeFileSync as writeFileSync3, existsSync as existsSync3, renameSync, unlinkSync as unlinkSync2 } from "fs";
+// src/anchored-fs.ts
+import {
+  closeSync,
+  constants,
+  existsSync,
+  fchmodSync,
+  fstatSync,
+  fsyncSync,
+  linkSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  opendirSync,
+  readSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync
+} from "fs";
 import { randomUUID } from "crypto";
-
-// src/workspace.ts
-import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync3, writeFileSync as writeFileSync2 } from "fs";
-import { homedir as homedir2 } from "os";
-import { dirname as dirname2, join as join2, resolve } from "path";
-var HASNA_KNOWLEDGE_APP_PATH = join2(".hasna", "knowledge");
-var LEGACY_HASNA_KNOWLEDGE_APP_PATH = join2(".hasna", "apps", "knowledge");
-var EXAMPLE_KNOWLEDGE_CANONICAL = {
-  division: "xyz",
-  app_type: "opensource",
-  app: "knowledge",
-  env: "prod",
-  local_path: HASNA_KNOWLEDGE_APP_PATH,
-  s3: {
-    bucket: "example-knowledge-prod",
-    region: "us-east-1",
-    profile: "example-infra",
-    prefix: ".hasna/knowledge",
-    server_side_encryption: "AES256"
-  },
-  secrets: {
-    env: "example/knowledge/prod/env",
-    aws: "example/knowledge/prod/aws",
-    s3: "example/knowledge/prod/s3",
-    rds: null,
-    future_rds: "example/knowledge/prod/rds"
-  },
-  source_owner: "open-files",
-  evidence_doc: "docs/canonical-secrets-bootstrap-2026-06-08.md"
-};
-function canonicalExampleKnowledgeStorage() {
-  return {
-    type: "s3",
-    artifacts_root: "artifacts",
-    s3: {
-      bucket: EXAMPLE_KNOWLEDGE_CANONICAL.s3.bucket,
-      prefix: EXAMPLE_KNOWLEDGE_CANONICAL.s3.prefix,
-      region: EXAMPLE_KNOWLEDGE_CANONICAL.s3.region,
-      profile: EXAMPLE_KNOWLEDGE_CANONICAL.s3.profile,
-      server_side_encryption: EXAMPLE_KNOWLEDGE_CANONICAL.s3.server_side_encryption
-    }
-  };
+import { basename, dirname, isAbsolute, normalize, resolve, sep } from "path";
+function fail(detail) {
+  throw new AnchoredFilesystemError(detail);
 }
-function legacyGlobalStorePath() {
-  return join2(homedir2(), ".open-knowledge", "db.json");
+function errno(error) {
+  return error?.code;
 }
-function globalKnowledgeHome() {
-  return join2(homedir2(), ".hasna", "knowledge");
-}
-function projectKnowledgeHome(cwd = process.cwd()) {
-  return resolve(cwd, HASNA_KNOWLEDGE_APP_PATH);
-}
-function legacyGlobalKnowledgeHome() {
-  return join2(homedir2(), LEGACY_HASNA_KNOWLEDGE_APP_PATH);
-}
-function legacyProjectKnowledgeHome(cwd = process.cwd()) {
-  return resolve(cwd, LEGACY_HASNA_KNOWLEDGE_APP_PATH);
-}
-function resolveLegacyScopedWorkspace(scope, cwd = process.cwd()) {
-  if (scope === "project" || scope === "local") {
-    return workspaceForHome(legacyProjectKnowledgeHome(cwd));
-  }
-  return workspaceForHome(legacyGlobalKnowledgeHome());
-}
-function workspaceForHome(home) {
-  return {
-    home,
-    configPath: join2(home, "config.json"),
-    jsonStorePath: join2(home, "db.json"),
-    knowledgeDbPath: join2(home, "knowledge.db"),
-    artifactsDir: join2(home, "artifacts"),
-    cacheDir: join2(home, "cache"),
-    exportsDir: join2(home, "exports"),
-    indexesDir: join2(home, "indexes"),
-    logsDir: join2(home, "logs"),
-    runsDir: join2(home, "runs"),
-    schemasDir: join2(home, "schemas"),
-    wikiDir: join2(home, "wiki")
-  };
-}
-function defaultKnowledgeConfig() {
-  return {
-    version: 1,
-    mode: "local",
-    hosted: {
-      api_url: "https://knowledge.hasna.xyz"
-    },
-    storage: {
-      type: "local",
-      artifacts_root: "artifacts"
-    },
-    sources: {
-      preferred_ref: "open-files",
-      allowed_schemes: ["open-files", "s3", "file", "https", "http"]
-    },
-    providers: {
-      default_model: "openai:gpt-5.2",
-      aliases: {
-        fast: "openai:gpt-5-mini",
-        reasoning: "anthropic:claude-opus-4-6",
-        sonnet: "anthropic:claude-sonnet-4-6",
-        deepseek: "deepseek:deepseek-chat",
-        "deepseek-reasoning": "deepseek:deepseek-reasoner"
-      },
-      openai: {
-        api_key_env: "OPENAI_API_KEY",
-        default_model: "gpt-5.2"
-      },
-      anthropic: {
-        api_key_env: "ANTHROPIC_API_KEY",
-        default_model: "claude-sonnet-4-6"
-      },
-      deepseek: {
-        api_key_env: "DEEPSEEK_API_KEY",
-        default_model: "deepseek-chat"
-      }
-    },
-    embeddings: {
-      default_model: "openai:text-embedding-3-small",
-      dimensions: 1536,
-      batch_size: 64,
-      max_parallel_calls: 4
-    },
-    safety: {
-      network: {
-        web_search_enabled: false,
-        s3_reads_enabled: false,
-        allowed_s3_buckets: []
-      },
-      redaction: {
-        enabled: true
-      },
-      approvals: {
-        generated_writes_require_approval: true
-      }
-    }
-  };
-}
-function ensureKnowledgeWorkspace(home) {
-  const workspace = workspaceForHome(home);
-  mkdirSync2(workspace.home, { recursive: true });
-  for (const dir of [
-    workspace.artifactsDir,
-    workspace.cacheDir,
-    workspace.exportsDir,
-    workspace.indexesDir,
-    workspace.logsDir,
-    workspace.runsDir,
-    workspace.schemasDir,
-    workspace.wikiDir
-  ]) {
-    mkdirSync2(dir, { recursive: true });
-  }
-  if (!existsSync2(workspace.configPath)) {
-    writeFileSync2(workspace.configPath, `${JSON.stringify(defaultKnowledgeConfig(), null, 2)}
-`);
-  }
-  return workspace;
-}
-function resolveScopedWorkspace(scope, cwd = process.cwd()) {
-  if (scope === "project" || scope === "local") {
-    return workspaceForHome(projectKnowledgeHome(cwd));
-  }
-  return workspaceForHome(globalKnowledgeHome());
-}
-function ensureParentDir(path) {
-  mkdirSync2(dirname2(path), { recursive: true });
-}
-function readKnowledgeConfig(path) {
-  const raw = readFileSync3(path, "utf8");
-  return JSON.parse(raw);
-}
-function writeKnowledgeConfig(path, config) {
-  ensureParentDir(path);
-  writeFileSync2(path, `${JSON.stringify(config, null, 2)}
-`);
-}
-
-// src/store.ts
-function defaultStorePath() {
-  return workspaceForHome(globalKnowledgeHome()).jsonStorePath;
-}
-function ensureStore(path) {
-  if (!existsSync3(path)) {
-    ensureParentDir(path);
-    if (path === defaultStorePath() && existsSync3(legacyGlobalStorePath())) {
-      writeFileSync3(path, readFileSync4(legacyGlobalStorePath(), "utf8"));
-    } else {
-      writeFileSync3(path, JSON.stringify({ items: [] }, null, 2));
-    }
+function assertAnchoredFilesystemPlatform(platform = process.platform) {
+  if (platform !== "linux" && platform !== "darwin") {
+    fail(`directory-FD anchoring is unsupported on ${platform}; local filesystem access is disabled`);
   }
 }
-function loadStoreIfExists(path) {
-  if (!existsSync3(path))
-    return { exists: false, items: [] };
-  const raw = readFileSync4(path, "utf8");
-  const parsed = JSON.parse(raw);
-  if (!parsed || !Array.isArray(parsed.items)) {
-    return { exists: true, items: [] };
+function fdBase() {
+  assertAnchoredFilesystemPlatform();
+  if (typeof constants.O_NOFOLLOW !== "number" || typeof constants.O_DIRECTORY !== "number") {
+    return fail("directory-FD anchoring is unavailable on this platform");
   }
-  return { exists: true, items: parsed.items };
+  if (existsSync("/proc/self/fd"))
+    return "/proc/self/fd";
+  if (existsSync("/dev/fd"))
+    return "/dev/fd";
+  return fail("directory-FD anchoring is unavailable on this platform");
 }
-function lockPath(path) {
-  return `${path}.lock`;
+function fireTestHook(event, detail) {
+  anchoredFsTestHook?.(event, detail);
 }
-function acquireLock(lockPath2, ownerId) {
-  const maxWait = 5000;
-  const interval = 50;
-  const start = Date.now();
-  while (Date.now() - start < maxWait) {
-    try {
-      if (!existsSync3(lockPath2)) {
-        writeFileSync3(lockPath2, JSON.stringify({ owner: ownerId, ts: Date.now() }));
-        return;
-      }
-      const lock = JSON.parse(readFileSync4(lockPath2, "utf8"));
-      if (Date.now() - lock.ts > 1e4) {
-        unlinkSync2(lockPath2);
-      }
-    } catch {}
-    const start2 = Date.now();
-    while (Date.now() - start2 < interval) {}
+function fdPath(fd, name) {
+  const base = `${fdBase()}/${fd}`;
+  return name === undefined ? base : `${base}/${name}`;
+}
+function identity(stat) {
+  return { dev: stat.dev, ino: stat.ino, mode: stat.mode & 511 };
+}
+function sameIdentity(left, right) {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+function sameIdentityAndMode(left, right) {
+  return sameIdentity(left, right) && left.mode === right.mode;
+}
+function assertDirectoryStat(stat, detail) {
+  if (!stat.isDirectory() || stat.isSymbolicLink())
+    fail(detail);
+}
+function assertRegularStat(stat, detail) {
+  if (!stat.isFile() || stat.isSymbolicLink())
+    fail(detail);
+}
+function absoluteSegments(path) {
+  if (!isAbsolute(path) || normalize(path) !== path || resolve(path) !== path) {
+    return fail("anchored path must be absolute and traversal-free");
   }
-  throw new Error(`Could not acquire lock on ${lockPath2} after ${maxWait}ms`);
+  return path.split(sep).filter(Boolean);
 }
-function releaseLock(lockPath2, ownerId) {
+function relativeSegments(path) {
+  if (!path || isAbsolute(path) || path.includes("\x00")) {
+    return fail("anchored relative path is invalid");
+  }
+  const segments = path.replace(/\\/g, "/").split("/");
+  if (segments.some((part) => !part || part === "." || part === "..")) {
+    return fail("anchored relative path contains an unsafe component");
+  }
+  return segments;
+}
+function openDirectoryPath(path, create, mode = 448) {
+  assertAnchoredFilesystemPlatform();
+  const segments = absoluteSegments(path);
+  let current;
   try {
-    if (existsSync3(lockPath2)) {
-      const lock = JSON.parse(readFileSync4(lockPath2, "utf8"));
-      if (lock.owner === ownerId) {
-        unlinkSync2(lockPath2);
+    current = openSync("/", DIRECTORY_FLAGS);
+    for (const segment of segments) {
+      const child = fdPath(current, segment);
+      if (create) {
+        try {
+          mkdirSync(child, { mode });
+        } catch (error) {
+          if (errno(error) !== "EEXIST")
+            throw error;
+        }
       }
+      let next;
+      try {
+        next = openSync(child, DIRECTORY_FLAGS);
+      } catch (error) {
+        if (errno(error) === "ENOENT")
+          throw error;
+        return fail("directory component could not be opened without following links");
+      }
+      assertDirectoryStat(fstatSync(next), "opened path component is not a directory");
+      closeSync(current);
+      current = next;
     }
+    const result = current;
+    current = undefined;
+    return result;
+  } finally {
+    if (current !== undefined)
+      closeSync(current);
+  }
+}
+function pathDirectoryIdentity(path) {
+  let fd;
+  try {
+    fd = openDirectoryPath(path, false);
+    return identity(fstatSync(fd));
+  } catch (error) {
+    if (errno(error) === "ENOENT")
+      return;
+    throw error;
+  } finally {
+    if (fd !== undefined)
+      closeSync(fd);
+  }
+}
+function assertDirectoryName(path, expected) {
+  const current = pathDirectoryIdentity(path);
+  if (!current || !sameIdentityAndMode(current, expected)) {
+    fail("anchored directory identity or confidentiality mode changed during the operation");
+  }
+}
+function assertExactMode(stat, expectedMode, detail) {
+  if ((stat.mode & 511) !== expectedMode)
+    fail(detail);
+}
+function assertArtifactFileStat(stat, detail) {
+  assertRegularStat(stat, detail);
+  if (stat.nlink !== 1)
+    fail("artifact file has multiple hard links");
+  assertExactMode(stat, 384, "artifact file confidentiality mode must be exactly 0600");
+}
+function lstatChild(fd, name) {
+  try {
+    return lstatSync(fdPath(fd, name));
+  } catch (error) {
+    if (errno(error) === "ENOENT")
+      return;
+    throw error;
+  }
+}
+function openChildDirectory(parentFd, name, create) {
+  const child = fdPath(parentFd, name);
+  if (create) {
+    try {
+      mkdirSync(child, { mode: 448 });
+    } catch (error) {
+      if (errno(error) !== "EEXIST")
+        throw error;
+    }
+  }
+  fireTestHook("artifact-before-component-open", name);
+  try {
+    const fd = openSync(child, DIRECTORY_FLAGS);
+    const opened = fstatSync(fd);
+    assertDirectoryStat(opened, "artifact path component is not a directory");
+    assertExactMode(opened, 448, "artifact directory confidentiality mode must be exactly 0700");
+    return fd;
+  } catch (error) {
+    if (error instanceof AnchoredFilesystemError || errno(error) === "ENOENT")
+      throw error;
+    return fail("artifact path component could not be opened without following links");
+  }
+}
+function openRelativeParent(rootFd, parts, create) {
+  let current = openSync(fdPath(rootFd, "."), DIRECTORY_FLAGS);
+  try {
+    for (const part of parts) {
+      const next = openChildDirectory(current, part, create);
+      closeSync(current);
+      current = next;
+    }
+    const result = current;
+    current = -1;
+    return result;
+  } finally {
+    if (current >= 0)
+      closeSync(current);
+  }
+}
+function openVerifiedRegular(parentFd, name, flags) {
+  const before = lstatChild(parentFd, name);
+  if (!before) {
+    const missing = new Error(`ENOENT: no such file, open '${name}'`);
+    missing.code = "ENOENT";
+    throw missing;
+  }
+  assertRegularStat(before, "anchored file must be a non-symlink regular file");
+  let fd;
+  try {
+    fd = openSync(fdPath(parentFd, name), flags | constants.O_NOFOLLOW);
+    const opened = fstatSync(fd);
+    assertRegularStat(opened, "opened file must be regular");
+    const named = lstatChild(parentFd, name);
+    if (!named || !sameIdentity(identity(opened), identity(named))) {
+      fail("file identity changed while it was opened");
+    }
+    const result = fd;
+    fd = undefined;
+    return result;
+  } catch (error) {
+    if (error instanceof AnchoredFilesystemError || errno(error) === "ENOENT")
+      throw error;
+    return fail("file could not be opened without following links");
+  } finally {
+    if (fd !== undefined)
+      closeSync(fd);
+  }
+}
+function createTemporary(parentFd, mode) {
+  const name = `.knowledge-tmp-${process.pid}-${randomUUID()}`;
+  const fd = openSync(fdPath(parentFd, name), constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, mode);
+  fchmodSync(fd, mode);
+  return { fd, name };
+}
+function readExactFileDescriptor(fd, size) {
+  const buffer = Buffer.alloc(size + 1);
+  let bytesRead = 0;
+  while (bytesRead < buffer.length) {
+    const count = readSync(fd, buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+    if (count === 0)
+      break;
+    bytesRead += count;
+  }
+  if (bytesRead !== size)
+    fail("installed file content size changed during final verification");
+  return buffer.subarray(0, bytesRead);
+}
+function verifyInstalledTemporary(parentFd, name, temporaryFd, expectedBody, expectedMode, expectedLinks) {
+  const temporary = fstatSync(temporaryFd);
+  assertRegularStat(temporary, "temporary install inode is not a regular file");
+  assertExactMode(temporary, expectedMode, "temporary install mode changed");
+  if (temporary.nlink !== expectedLinks)
+    fail("temporary install hard-link count changed");
+  const expected = typeof expectedBody === "string" ? Buffer.from(expectedBody) : Buffer.from(expectedBody);
+  if (temporary.size !== expected.byteLength)
+    fail("temporary install size changed");
+  let finalFd;
+  try {
+    finalFd = openVerifiedRegular(parentFd, name, FILE_READ_FLAGS);
+    const opened = fstatSync(finalFd);
+    const named = lstatChild(parentFd, name);
+    if (!named || !opened.isFile() || opened.isSymbolicLink() || !named.isFile() || named.isSymbolicLink() || opened.nlink !== expectedLinks || named.nlink !== expectedLinks || !sameIdentity(identity(temporary), identity(opened)) || !sameIdentity(identity(temporary), identity(named)) || (opened.mode & 511) !== expectedMode || (named.mode & 511) !== expectedMode || opened.size !== expected.byteLength || named.size !== expected.byteLength) {
+      fail("installed file identity, type, mode, or size does not match the intended temporary inode");
+    }
+    const actual = readExactFileDescriptor(finalFd, opened.size);
+    const after = fstatSync(finalFd);
+    if (!actual.equals(expected) || !sameIdentity(identity(opened), identity(after)) || after.size !== opened.size || after.nlink !== expectedLinks) {
+      fail("installed file content does not match the intended temporary inode");
+    }
+    return named;
+  } finally {
+    if (finalFd !== undefined)
+      closeSync(finalFd);
+  }
+}
+function rollbackTemporaryInstall(parentFd, target, temporaryFd, backup) {
+  const temporary = fstatSync(temporaryFd);
+  const current = lstatChild(parentFd, target);
+  if (current && sameIdentity(identity(current), identity(temporary))) {
+    try {
+      unlinkSync(fdPath(parentFd, target));
+    } catch {}
+  } else if (current && backup) {
+    const conflict = `.knowledge-conflict-${process.pid}-${randomUUID()}`;
+    try {
+      renameSync(fdPath(parentFd, target), fdPath(parentFd, conflict));
+    } catch {
+      return;
+    }
+  }
+  if (backup)
+    restoreRegularBackup(parentFd, backup, target);
+}
+function restoreRegularBackup(parentFd, backup, target) {
+  if (!lstatChild(parentFd, backup) || lstatChild(parentFd, target))
+    return;
+  try {
+    linkSync(fdPath(parentFd, backup), fdPath(parentFd, target));
+    unlinkSync(fdPath(parentFd, backup));
   } catch {}
 }
-function saveStore(path, store) {
-  const tmp = `${path}.tmp.${randomUUID()}`;
-  writeFileSync3(tmp, JSON.stringify(store, null, 2));
-  renameSync(tmp, path);
-}
-function withLock(path, fn, options = {}) {
-  const owner = randomUUID();
-  const lpath = lockPath(path);
-  if (options.createParent)
-    ensureParentDir(lpath);
-  acquireLock(lpath, owner);
+function ensureAnchoredDirectory(path, mode = 448) {
+  let fd;
   try {
-    return fn();
+    fd = openDirectoryPath(path, true, mode);
+    const opened = fstatSync(fd);
+    assertDirectoryStat(opened, "anchored path is not a directory");
+    assertExactMode(opened, mode, `anchored directory confidentiality mode must be exactly ${mode.toString(8)}`);
+    return identity(opened);
   } finally {
-    releaseLock(lpath, owner);
+    if (fd !== undefined)
+      closeSync(fd);
   }
 }
-function makeId() {
-  return `k_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+
+class AnchoredDirectoryHandle {
+  path;
+  identity;
+  fd;
+  constructor(path) {
+    this.path = path;
+    this.fd = openDirectoryPath(path, false);
+    const opened = fstatSync(this.fd);
+    assertDirectoryStat(opened, "anchored parent handle is not a directory");
+    this.identity = Object.freeze(identity(opened));
+    assertDirectoryName(path, this.identity);
+  }
+  descriptor() {
+    if (this.fd === undefined)
+      fail("anchored parent handle is closed");
+    return this.fd;
+  }
+  safeName(name) {
+    const parts = relativeSegments(name);
+    if (parts.length !== 1)
+      fail("anchored child name must contain exactly one safe component");
+    return parts[0];
+  }
+  child(name) {
+    return fdPath(this.descriptor(), this.safeName(name));
+  }
+  verifyDescriptor() {
+    const descriptor = this.descriptor();
+    const stat = fstatSync(descriptor);
+    assertDirectoryStat(stat, "anchored parent descriptor is no longer a directory");
+    const opened = identity(stat);
+    if (!sameIdentityAndMode(opened, this.identity))
+      fail("anchored parent descriptor identity changed");
+  }
+  verify() {
+    this.verifyDescriptor();
+    assertDirectoryName(this.path, this.identity);
+  }
+  lstat(name) {
+    return lstatChild(this.descriptor(), this.safeName(name));
+  }
+  open(name, flags, mode) {
+    const safeName = this.safeName(name);
+    return openSync(fdPath(this.descriptor(), safeName), flags | constants.O_NOFOLLOW, mode);
+  }
+  link(source, target) {
+    linkSync(this.child(source), this.child(target));
+  }
+  rename(source, target) {
+    renameSync(this.child(source), this.child(target));
+  }
+  unlink(name) {
+    unlinkSync(this.child(name));
+  }
+  sync() {
+    fsyncSync(this.descriptor());
+  }
+  close() {
+    if (this.fd === undefined)
+      return;
+    closeSync(this.fd);
+    this.fd = undefined;
+  }
 }
-function makeShortId(id) {
-  return id.replace(/^k_/, "").slice(0, 12);
+function mutableFileSnapshot(stat) {
+  return Object.freeze({
+    dev: stat.dev,
+    ino: stat.ino,
+    mode: stat.mode & 511,
+    size: stat.size,
+    nlink: stat.nlink,
+    mtimeMs: stat.mtimeMs,
+    ctimeMs: stat.ctimeMs
+  });
+}
+function sameMutableFileSnapshot(left, right) {
+  return left.dev === right.dev && left.ino === right.ino && left.mode === right.mode && left.size === right.size && left.nlink === right.nlink && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
 }
 
+class AnchoredMutableFileHandle {
+  parent;
+  name;
+  descriptorPath;
+  initial;
+  fd;
+  constructor(parent, name, fd) {
+    this.parent = parent;
+    this.name = name;
+    this.fd = fd;
+    this.descriptorPath = fdPath(fd);
+    this.initial = this.verifyIdentity();
+  }
+  descriptor() {
+    if (this.fd === undefined)
+      fail("anchored file handle is closed");
+    return this.fd;
+  }
+  snapshot() {
+    return mutableFileSnapshot(fstatSync(this.descriptor()));
+  }
+  verifyIdentity() {
+    this.parent.verify();
+    const opened = fstatSync(this.descriptor());
+    const named = this.parent.lstat(this.name);
+    if (!opened.isFile() || opened.isSymbolicLink() || opened.nlink !== 1 || !named || !named.isFile() || named.isSymbolicLink() || named.nlink !== 1 || opened.dev !== named.dev || opened.ino !== named.ino || (opened.mode & 511) !== (named.mode & 511)) {
+      fail("anchored database identity must remain one canonical regular file");
+    }
+    return mutableFileSnapshot(opened);
+  }
+  verifyUnchanged(expected) {
+    const current = this.verifyIdentity();
+    if (!sameMutableFileSnapshot(current, expected)) {
+      fail("anchored database identity or contents changed before the next operation");
+    }
+    return current;
+  }
+  close() {
+    if (this.fd !== undefined) {
+      closeSync(this.fd);
+      this.fd = undefined;
+    }
+    this.parent.close();
+  }
+}
+function openAnchoredMutableRegularFile(path, options = {}) {
+  const parent = new AnchoredDirectoryHandle(dirname(path));
+  const name = basename(path);
+  let fd;
+  try {
+    const existing = parent.lstat(name);
+    if (existing) {
+      assertRegularStat(existing, "anchored database target must be a non-symlink regular file");
+      if (existing.nlink !== 1)
+        fail("anchored database target must not have hard links");
+      fd = parent.open(name, constants.O_RDWR);
+    } else {
+      if (options.create !== true) {
+        const missing = new Error(`ENOENT: no such file, open '${name}'`);
+        missing.code = "ENOENT";
+        throw missing;
+      }
+      fd = parent.open(name, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL, options.mode ?? 384);
+      fchmodSync(fd, options.mode ?? 384);
+      fsyncSync(fd);
+      parent.sync();
+    }
+    const handle = new AnchoredMutableFileHandle(parent, name, fd);
+    fd = undefined;
+    return handle;
+  } catch (error) {
+    if (fd !== undefined)
+      closeSync(fd);
+    parent.close();
+    throw error;
+  }
+}
+function readAnchoredRegularFileSnapshot(path, maxBytes = MAX_ANCHORED_CONFIG_BYTES) {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > MAX_ANCHORED_ARTIFACT_BYTES) {
+    return fail("anchored regular file byte limit is invalid");
+  }
+  const parent = dirname(path);
+  let parentFd;
+  let fileFd;
+  try {
+    try {
+      parentFd = openDirectoryPath(parent, false);
+    } catch (error) {
+      if (errno(error) === "ENOENT")
+        return;
+      throw error;
+    }
+    const parentIdentity = identity(fstatSync(parentFd));
+    if (!lstatChild(parentFd, basename(path)))
+      return;
+    fileFd = openVerifiedRegular(parentFd, basename(path), FILE_READ_FLAGS);
+    const opened = fstatSync(fileFd);
+    if (opened.size > maxBytes)
+      fail(`anchored regular file exceeds the ${maxBytes} byte hard limit`);
+    fireTestHook("snapshot-before-read", path);
+    const buffer = Buffer.alloc(opened.size + 1);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      const count = readSync(fileFd, buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+      if (count === 0)
+        break;
+      bytesRead += count;
+    }
+    fireTestHook("snapshot-after-read", path);
+    if (bytesRead > maxBytes) {
+      fail(`anchored regular file exceeds the ${maxBytes} byte hard limit`);
+    }
+    const after = fstatSync(fileFd);
+    const named = lstatChild(parentFd, basename(path));
+    if (bytesRead !== opened.size || opened.nlink !== 1 || after.nlink !== 1 || !named || !named.isFile() || named.isSymbolicLink() || named.nlink !== 1 || !sameIdentity(identity(opened), identity(after)) || !sameIdentity(identity(opened), identity(named)) || named.mode !== opened.mode || after.size !== opened.size || named.size !== opened.size || after.mtimeMs !== opened.mtimeMs || after.ctimeMs !== opened.ctimeMs || named.mtimeMs !== opened.mtimeMs || named.ctimeMs !== opened.ctimeMs) {
+      fail("anchored regular file identity or contents changed during the bounded snapshot read");
+    }
+    const content = buffer.subarray(0, bytesRead).toString("utf8");
+    assertDirectoryName(parent, parentIdentity);
+    return { content, identity: identity(opened) };
+  } finally {
+    if (fileFd !== undefined)
+      closeSync(fileFd);
+    if (parentFd !== undefined)
+      closeSync(parentFd);
+  }
+}
+function writeAnchoredRegularFile(path, body, mode = 384) {
+  const parent = dirname(path);
+  ensureAnchoredDirectory(parent);
+  let parentFd;
+  let temporaryFd;
+  let temporary = "";
+  let backup = "";
+  let targetLinked = false;
+  let installed = false;
+  try {
+    parentFd = openDirectoryPath(parent, false);
+    const parentIdentity = identity(fstatSync(parentFd));
+    const current = lstatChild(parentFd, basename(path));
+    if (current)
+      assertRegularStat(current, "replacement target must be a regular file");
+    ({ fd: temporaryFd, name: temporary } = createTemporary(parentFd, mode));
+    writeFileSync(temporaryFd, body);
+    fsyncSync(temporaryFd);
+    fireTestHook("config-before-parent-check", path);
+    assertDirectoryName(parent, parentIdentity);
+    if (current) {
+      backup = `.knowledge-backup-${process.pid}-${randomUUID()}`;
+      fireTestHook("config-before-target-move", path);
+      renameSync(fdPath(parentFd, basename(path)), fdPath(parentFd, backup));
+      const moved = lstatChild(parentFd, backup);
+      if (!moved || !sameIdentity(identity(current), identity(moved))) {
+        restoreRegularBackup(parentFd, backup, basename(path));
+        fail("replacement target identity changed before commit");
+      }
+    }
+    try {
+      linkSync(fdPath(parentFd, temporary), fdPath(parentFd, basename(path)));
+      targetLinked = true;
+    } catch {
+      if (backup)
+        restoreRegularBackup(parentFd, backup, basename(path));
+      fail("replacement target changed before no-clobber install");
+    }
+    fireTestHook("config-before-final-verify", path);
+    verifyInstalledTemporary(parentFd, basename(path), temporaryFd, body, mode, 2);
+    unlinkSync(fdPath(parentFd, temporary));
+    temporary = "";
+    verifyInstalledTemporary(parentFd, basename(path), temporaryFd, body, mode, 1);
+    if (backup) {
+      unlinkSync(fdPath(parentFd, backup));
+      backup = "";
+    }
+    fsyncSync(parentFd);
+    const written = verifyInstalledTemporary(parentFd, basename(path), temporaryFd, body, mode, 1);
+    assertDirectoryName(parent, parentIdentity);
+    installed = true;
+  } finally {
+    if (parentFd !== undefined) {
+      if (!installed && targetLinked && temporaryFd !== undefined) {
+        rollbackTemporaryInstall(parentFd, basename(path), temporaryFd, backup);
+        backup = "";
+      }
+      if (temporary && lstatChild(parentFd, temporary))
+        unlinkSync(fdPath(parentFd, temporary));
+      if (!installed && backup)
+        restoreRegularBackup(parentFd, backup, basename(path));
+      if (temporaryFd !== undefined)
+        closeSync(temporaryFd);
+      closeSync(parentFd);
+    } else if (temporaryFd !== undefined) {
+      closeSync(temporaryFd);
+    }
+  }
+}
+
+class AnchoredArtifactDirectory {
+  path;
+  expected;
+  constructor(path) {
+    this.path = path;
+    this.expected = ensureAnchoredDirectory(path);
+  }
+  openRoot() {
+    const fd = openDirectoryPath(this.path, false);
+    const opened = identity(fstatSync(fd));
+    if (!sameIdentityAndMode(opened, this.expected) || opened.mode !== 448) {
+      closeSync(fd);
+      return fail("artifact root identity or confidentiality mode changed");
+    }
+    assertDirectoryName(this.path, this.expected);
+    return fd;
+  }
+  put(relativePath, body) {
+    const bodyBytes = typeof body === "string" ? Buffer.byteLength(body) : body.byteLength;
+    if (bodyBytes > MAX_ANCHORED_ARTIFACT_BYTES) {
+      fail(`artifact body exceeds ${MAX_ANCHORED_ARTIFACT_BYTES} bytes`);
+    }
+    const parts = relativeSegments(relativePath);
+    const name = parts.pop();
+    let rootFd;
+    let parentFd;
+    let fileFd;
+    let temporary = "";
+    let backup = "";
+    let targetLinked = false;
+    let installed = false;
+    try {
+      rootFd = this.openRoot();
+      parentFd = openRelativeParent(rootFd, parts, true);
+      const current = lstatChild(parentFd, name);
+      if (current)
+        assertRegularStat(current, "artifact target must be a regular file");
+      const created = createTemporary(parentFd, 384);
+      fileFd = created.fd;
+      temporary = created.name;
+      writeFileSync(fileFd, body);
+      fsyncSync(fileFd);
+      assertDirectoryName(this.path, this.expected);
+      if (current) {
+        backup = `.knowledge-backup-${process.pid}-${randomUUID()}`;
+        renameSync(fdPath(parentFd, name), fdPath(parentFd, backup));
+        const moved = lstatChild(parentFd, backup);
+        if (!moved || !sameIdentity(identity(current), identity(moved))) {
+          restoreRegularBackup(parentFd, backup, name);
+          fail("artifact target identity changed before replacement");
+        }
+      }
+      try {
+        linkSync(fdPath(parentFd, temporary), fdPath(parentFd, name));
+        targetLinked = true;
+      } catch {
+        if (backup)
+          restoreRegularBackup(parentFd, backup, name);
+        fail("artifact target changed before no-clobber install");
+      }
+      fireTestHook("artifact-before-final-verify", relativePath);
+      verifyInstalledTemporary(parentFd, name, fileFd, body, 384, 2);
+      unlinkSync(fdPath(parentFd, temporary));
+      temporary = "";
+      verifyInstalledTemporary(parentFd, name, fileFd, body, 384, 1);
+      if (backup) {
+        unlinkSync(fdPath(parentFd, backup));
+        backup = "";
+      }
+      fsyncSync(parentFd);
+      const written = verifyInstalledTemporary(parentFd, name, fileFd, body, 384, 1);
+      assertDirectoryName(this.path, this.expected);
+      installed = true;
+      return { modifiedAt: written.mtime };
+    } finally {
+      if (parentFd !== undefined) {
+        if (!installed && targetLinked && fileFd !== undefined) {
+          rollbackTemporaryInstall(parentFd, name, fileFd, backup);
+          backup = "";
+        }
+        if (temporary && lstatChild(parentFd, temporary))
+          unlinkSync(fdPath(parentFd, temporary));
+        if (!installed && backup)
+          restoreRegularBackup(parentFd, backup, name);
+        if (fileFd !== undefined)
+          closeSync(fileFd);
+        closeSync(parentFd);
+      } else if (fileFd !== undefined) {
+        closeSync(fileFd);
+      }
+      if (rootFd !== undefined)
+        closeSync(rootFd);
+    }
+  }
+  read(relativePath) {
+    const parts = relativeSegments(relativePath);
+    const name = parts.pop();
+    let rootFd;
+    let parentFd;
+    let fileFd;
+    try {
+      rootFd = this.openRoot();
+      parentFd = openRelativeParent(rootFd, parts, false);
+      fileFd = openVerifiedRegular(parentFd, name, FILE_READ_FLAGS);
+      const opened = fstatSync(fileFd);
+      assertArtifactFileStat(opened, "artifact read target is not a regular file");
+      if (opened.size > MAX_ANCHORED_ARTIFACT_BYTES) {
+        fail(`artifact body exceeds ${MAX_ANCHORED_ARTIFACT_BYTES} bytes`);
+      }
+      fireTestHook("artifact-before-read", relativePath);
+      const buffer = Buffer.alloc(opened.size + 1);
+      let bytesRead = 0;
+      while (bytesRead < buffer.length) {
+        const count = readSync(fileFd, buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+        if (count === 0)
+          break;
+        bytesRead += count;
+      }
+      if (bytesRead > MAX_ANCHORED_ARTIFACT_BYTES) {
+        fail(`artifact body exceeds ${MAX_ANCHORED_ARTIFACT_BYTES} bytes`);
+      }
+      const after = fstatSync(fileFd);
+      assertArtifactFileStat(after, "artifact read target changed during the read");
+      if (bytesRead !== opened.size || after.size !== opened.size || after.mtimeMs !== opened.mtimeMs || after.ctimeMs !== opened.ctimeMs) {
+        fail("artifact read target changed during the bounded read");
+      }
+      const named = lstatChild(parentFd, name);
+      if (!named)
+        fail("artifact read target disappeared during the bounded read");
+      assertArtifactFileStat(named, "artifact read target changed during the bounded read");
+      if (!sameIdentity(identity(opened), identity(named)) || named.size !== opened.size || named.mtimeMs !== opened.mtimeMs || named.ctimeMs !== opened.ctimeMs) {
+        fail("artifact read target identity changed during the bounded read");
+      }
+      const output = buffer.subarray(0, bytesRead).toString("utf8");
+      if (Buffer.byteLength(output, "utf8") > MAX_ANCHORED_ARTIFACT_BYTES) {
+        fail(`artifact body exceeds ${MAX_ANCHORED_ARTIFACT_BYTES} encoded bytes`);
+      }
+      assertDirectoryName(this.path, this.expected);
+      return output;
+    } finally {
+      if (fileFd !== undefined)
+        closeSync(fileFd);
+      if (parentFd !== undefined)
+        closeSync(parentFd);
+      if (rootFd !== undefined)
+        closeSync(rootFd);
+    }
+  }
+  exists(relativePath) {
+    const parts = relativeSegments(relativePath);
+    const name = parts.pop();
+    let rootFd;
+    let parentFd;
+    let fileFd;
+    try {
+      rootFd = this.openRoot();
+      try {
+        parentFd = openRelativeParent(rootFd, parts, false);
+      } catch (error) {
+        if (errno(error) === "ENOENT")
+          return false;
+        throw error;
+      }
+      if (!lstatChild(parentFd, name))
+        return false;
+      fileFd = openVerifiedRegular(parentFd, name, FILE_READ_FLAGS);
+      assertArtifactFileStat(fstatSync(fileFd), "artifact exists target is not a regular file");
+      assertDirectoryName(this.path, this.expected);
+      return true;
+    } finally {
+      if (fileFd !== undefined)
+        closeSync(fileFd);
+      if (parentFd !== undefined)
+        closeSync(parentFd);
+      if (rootFd !== undefined)
+        closeSync(rootFd);
+    }
+  }
+  delete(relativePath) {
+    const parts = relativeSegments(relativePath);
+    const name = parts.pop();
+    let rootFd;
+    let parentFd;
+    let quarantine = "";
+    try {
+      rootFd = this.openRoot();
+      try {
+        parentFd = openRelativeParent(rootFd, parts, false);
+      } catch (error) {
+        if (errno(error) === "ENOENT")
+          return;
+        throw error;
+      }
+      const current = lstatChild(parentFd, name);
+      if (!current)
+        return;
+      assertArtifactFileStat(current, "artifact delete target must be a regular file");
+      quarantine = `.knowledge-delete-${process.pid}-${randomUUID()}`;
+      renameSync(fdPath(parentFd, name), fdPath(parentFd, quarantine));
+      const moved = lstatChild(parentFd, quarantine);
+      if (!moved || moved.nlink !== 1 || !sameIdentity(identity(current), identity(moved))) {
+        restoreRegularBackup(parentFd, quarantine, name);
+        fail("artifact delete target identity changed");
+      }
+      unlinkSync(fdPath(parentFd, quarantine));
+      quarantine = "";
+      fsyncSync(parentFd);
+      assertDirectoryName(this.path, this.expected);
+    } finally {
+      if (parentFd !== undefined) {
+        if (quarantine)
+          restoreRegularBackup(parentFd, quarantine, name);
+        closeSync(parentFd);
+      }
+      if (rootFd !== undefined)
+        closeSync(rootFd);
+    }
+  }
+  list(prefix = "") {
+    const prefixParts = prefix ? relativeSegments(prefix) : [];
+    let rootFd;
+    let startFd;
+    try {
+      rootFd = this.openRoot();
+      try {
+        startFd = openRelativeParent(rootFd, prefixParts, false);
+      } catch (error) {
+        if (errno(error) === "ENOENT")
+          return [];
+        throw error;
+      }
+      const output = [];
+      let visited = 0;
+      const visit = (directoryFd, pathParts) => {
+        const entries = [];
+        const directory = opendirSync(fdPath(directoryFd));
+        try {
+          for (;; ) {
+            const entry = directory.readSync();
+            if (!entry)
+              break;
+            if (++visited > MAX_ANCHORED_ARTIFACT_NODES) {
+              fail(`artifact tree exceeds ${MAX_ANCHORED_ARTIFACT_NODES} nodes`);
+            }
+            entries.push(entry.name);
+          }
+        } finally {
+          directory.closeSync();
+        }
+        for (const entry of entries.sort()) {
+          const stat = lstatChild(directoryFd, entry);
+          if (!stat)
+            fail("artifact entry changed while listing");
+          if (stat.isSymbolicLink())
+            fail("artifact list encountered a symlink");
+          if (stat.isDirectory()) {
+            const childFd = openChildDirectory(directoryFd, entry, false);
+            try {
+              visit(childFd, [...pathParts, entry]);
+            } finally {
+              closeSync(childFd);
+            }
+          } else if (stat.isFile()) {
+            const fileFd = openVerifiedRegular(directoryFd, entry, FILE_READ_FLAGS);
+            try {
+              assertArtifactFileStat(fstatSync(fileFd), "artifact list encountered a non-regular file");
+            } catch (error) {
+              closeSync(fileFd);
+              throw error;
+            }
+            closeSync(fileFd);
+            output.push([...pathParts, entry].join("/"));
+          } else {
+            fail("artifact list encountered a non-regular entry");
+          }
+        }
+      };
+      visit(startFd, prefixParts);
+      assertDirectoryName(this.path, this.expected);
+      return output;
+    } finally {
+      if (startFd !== undefined)
+        closeSync(startFd);
+      if (rootFd !== undefined)
+        closeSync(rootFd);
+    }
+  }
+}
+var AnchoredFilesystemError, DIRECTORY_FLAGS, FILE_READ_FLAGS, MAX_ANCHORED_CONFIG_BYTES = 1048576, MAX_ANCHORED_ARTIFACT_BYTES = 8388608, MAX_ANCHORED_ARTIFACT_NODES = 4096, ANCHORED_FILESYSTEM_SUPPORT, anchoredFsTestHook;
+var init_anchored_fs = __esm(() => {
+  AnchoredFilesystemError = class AnchoredFilesystemError extends Error {
+    name = "AnchoredFilesystemError";
+  };
+  DIRECTORY_FLAGS = constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW;
+  FILE_READ_FLAGS = constants.O_RDONLY | constants.O_NOFOLLOW;
+  ANCHORED_FILESYSTEM_SUPPORT = Object.freeze({
+    supportedPlatforms: ["linux", "darwin"],
+    unsupportedBehavior: "fail-closed-before-filesystem-io"
+  });
+});
+
+// src/input-limits.ts
+import { isProxy } from "util/types";
+function cloneBoundedDataGraph(value, options = {}) {
+  const label = options.label === "Provider response" ? "Provider response" : options.label === "Stored data" ? "Stored data" : "Input";
+  const maxBytes = options.maxBytes ?? MAX_INGEST_BODY_BYTES;
+  if (!Number.isInteger(maxBytes) || maxBytes < 0 || maxBytes > MAX_INGEST_BODY_BYTES) {
+    throw new Error(`${label} byte limit must be between 0 and ${MAX_INGEST_BODY_BYTES}.`);
+  }
+  const active = new WeakSet;
+  const clones = new WeakMap;
+  const completedExpansionBytes = new WeakMap;
+  let nodes = 0;
+  let properties = 0;
+  const boundedAdd = (left, right) => {
+    const total = left + right;
+    if (total > maxBytes) {
+      throw new Error(`${label} exceeds the ${maxBytes} byte hard limit.`);
+    }
+    return total;
+  };
+  const primitiveBytes = (entry) => {
+    const serialized = JSON.stringify(entry);
+    if (serialized === undefined) {
+      throw new Error(`${label} contains unsupported non-data values.`);
+    }
+    const bytes = Buffer.byteLength(serialized);
+    if (bytes > maxBytes) {
+      throw new Error(`${label} exceeds the ${maxBytes} byte hard limit.`);
+    }
+    return bytes;
+  };
+  const clone = (entry, depth) => {
+    if (entry === undefined) {
+      throw new Error(`${label} contains undefined, which is not JSON data.`);
+    }
+    if (entry === null || typeof entry === "boolean") {
+      return {
+        value: entry,
+        expansionBytes: primitiveBytes(entry)
+      };
+    }
+    if (typeof entry === "string") {
+      return { value: entry, expansionBytes: primitiveBytes(entry) };
+    }
+    if (typeof entry === "number") {
+      if (!Number.isFinite(entry))
+        throw new Error(`${label} contains a non-finite number.`);
+      return { value: entry, expansionBytes: primitiveBytes(entry) };
+    }
+    if (typeof entry !== "object") {
+      throw new Error(`${label} contains unsupported non-data values.`);
+    }
+    if (isProxy(entry))
+      throw new Error(`${label} proxy inputs are unsupported.`);
+    if (active.has(entry))
+      throw new Error(`${label} cyclic graphs are unsupported.`);
+    const existing = clones.get(entry);
+    if (existing) {
+      const expansionBytes2 = completedExpansionBytes.get(entry);
+      if (expansionBytes2 === undefined) {
+        throw new Error(`${label} cyclic graphs are unsupported.`);
+      }
+      return { value: existing, expansionBytes: expansionBytes2 };
+    }
+    if (++nodes > MAX_JSON_NODES) {
+      throw new Error(`${label} exceeds the ${MAX_JSON_NODES} node hard limit.`);
+    }
+    if (depth > MAX_JSON_DEPTH) {
+      throw new Error(`${label} exceeds the ${MAX_JSON_DEPTH} level depth hard limit.`);
+    }
+    const array = Array.isArray(entry);
+    const prototype = Object.getPrototypeOf(entry);
+    if (array && prototype !== Array.prototype || !array && prototype !== Object.prototype && prototype !== null) {
+      throw new Error(`${label} custom prototypes are unsupported.`);
+    }
+    if (array && entry.length > MAX_INGEST_BATCH_ITEMS) {
+      throw new Error(`${label} array exceeds the ${MAX_INGEST_BATCH_ITEMS} item hard limit.`);
+    }
+    let keys;
+    try {
+      keys = Reflect.ownKeys(entry);
+    } catch {
+      throw new Error(`${label} properties could not be enumerated safely.`);
+    }
+    let dataKeys;
+    if (array) {
+      const expectedKeys = new Set(["length"]);
+      for (let index = 0;index < entry.length; index += 1) {
+        expectedKeys.add(String(index));
+      }
+      for (let index = 0;index < entry.length; index += 1) {
+        if (!keys.includes(String(index))) {
+          throw new Error(`${label} sparse arrays are unsupported.`);
+        }
+      }
+      if (keys.length !== expectedKeys.size || keys.some((key) => typeof key !== "string" || !expectedKeys.has(key))) {
+        throw new Error(`${label} array own keys must be exactly canonical dense indexes and length.`);
+      }
+      let lengthDescriptor;
+      try {
+        lengthDescriptor = Object.getOwnPropertyDescriptor(entry, "length");
+      } catch {
+        throw new Error(`${label} property descriptors could not be inspected safely.`);
+      }
+      if (!lengthDescriptor || !("value" in lengthDescriptor) || lengthDescriptor.value !== entry.length || lengthDescriptor.writable !== true || lengthDescriptor.enumerable !== false || lengthDescriptor.configurable !== false) {
+        throw new Error(`${label} array length descriptor is noncanonical.`);
+      }
+      for (let index = 0;index < entry.length; index += 1) {
+        let descriptor;
+        try {
+          descriptor = Object.getOwnPropertyDescriptor(entry, String(index));
+        } catch {
+          throw new Error(`${label} property descriptors could not be inspected safely.`);
+        }
+        if (!descriptor)
+          throw new Error(`${label} sparse arrays are unsupported.`);
+        if (!("value" in descriptor))
+          throw new Error(`${label} accessor properties are unsupported.`);
+        if (descriptor.enumerable !== true || descriptor.writable !== true || descriptor.configurable !== true) {
+          throw new Error(`${label} array index descriptor is noncanonical.`);
+        }
+      }
+      dataKeys = Array.from({ length: entry.length }, (_, index) => String(index));
+    } else {
+      dataKeys = keys;
+    }
+    if (!array && dataKeys.length > MAX_JSON_OBJECT_PROPERTIES) {
+      throw new Error(`${label} object exceeds the ${MAX_JSON_OBJECT_PROPERTIES} property hard limit.`);
+    }
+    properties += dataKeys.length;
+    if (properties > MAX_JSON_PROPERTIES) {
+      throw new Error(`${label} exceeds the ${MAX_JSON_PROPERTIES} property hard limit.`);
+    }
+    const target = array ? new Array(entry.length) : Object.create(null);
+    clones.set(entry, target);
+    active.add(entry);
+    let expansionBytes = 2;
+    for (const key of dataKeys) {
+      if (typeof key !== "string")
+        throw new Error(`${label} symbol properties are unsupported.`);
+      if (DANGEROUS_DATA_KEYS.has(key)) {
+        throw new Error(`${label} contains a dangerous key.`);
+      }
+      if (Buffer.byteLength(key) > MAX_JSON_KEY_BYTES) {
+        throw new Error(`${label} exceeds the ${MAX_JSON_KEY_BYTES} key byte hard limit.`);
+      }
+      let descriptor;
+      try {
+        descriptor = Object.getOwnPropertyDescriptor(entry, key);
+      } catch {
+        throw new Error(`${label} property descriptors could not be inspected safely.`);
+      }
+      if (!descriptor || !("value" in descriptor)) {
+        throw new Error(`${label} accessor properties are unsupported.`);
+      }
+      if (!array && descriptor.enumerable !== true) {
+        throw new Error(`${label} non-enumerable object properties are unsupported.`);
+      }
+      const cloned = clone(descriptor.value, depth + 1);
+      const separatorBytes = expansionBytes === 2 ? 0 : 1;
+      expansionBytes = boundedAdd(expansionBytes, separatorBytes);
+      if (!array) {
+        expansionBytes = boundedAdd(expansionBytes, Buffer.byteLength(JSON.stringify(key)) + 1);
+      }
+      expansionBytes = boundedAdd(expansionBytes, cloned.expansionBytes);
+      Object.defineProperty(target, array ? Number(key) : key, {
+        value: cloned.value,
+        enumerable: true,
+        writable: true,
+        configurable: true
+      });
+    }
+    active.delete(entry);
+    completedExpansionBytes.set(entry, expansionBytes);
+    return { value: target, expansionBytes };
+  };
+  return clone(value, 0).value;
+}
+function hardLimit(requested, fallback, maximum, label) {
+  const value = requested ?? fallback;
+  if (!Number.isInteger(value) || value < 0 || value > maximum) {
+    throw new Error(`${label} must be an integer between 0 and ${maximum}.`);
+  }
+  return value;
+}
+function assertBoundedJsonText(text, maxArrayItems = MAX_INGEST_BATCH_ITEMS, maxTopLevelValues = maxArrayItems) {
+  const bytes = Buffer.byteLength(text);
+  if (bytes > MAX_INGEST_BODY_BYTES) {
+    throw new Error(`Input exceeds the ${MAX_INGEST_BODY_BYTES} byte hard limit.`);
+  }
+  let inString = false;
+  let escaped = false;
+  let depth = 0;
+  let structural = 0;
+  let properties = 0;
+  let nodes = 0;
+  let topLevelValues = 0;
+  const frames = [];
+  let topLevelValueActive = false;
+  const markArrayValue = () => {
+    const frame = frames.at(-1);
+    if (frame?.kind !== "array" || !frame.expectsValue)
+      return;
+    frame.expectsValue = false;
+    if (++frame.items > maxArrayItems) {
+      throw new Error(`Input array exceeds the ${maxArrayItems} item hard limit.`);
+    }
+  };
+  for (let index = 0;index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaped)
+        escaped = false;
+      else if (char === "\\")
+        escaped = true;
+      else if (char === '"')
+        inString = false;
+      continue;
+    }
+    if (/\s/.test(char))
+      continue;
+    if (depth === 0 && !topLevelValueActive) {
+      topLevelValueActive = true;
+      if (++topLevelValues > maxTopLevelValues) {
+        throw new Error(`Input exceeds the ${maxTopLevelValues} top-level item hard limit.`);
+      }
+    }
+    if (char === '"') {
+      markArrayValue();
+      inString = true;
+      continue;
+    }
+    if (char === "{" || char === "[") {
+      markArrayValue();
+      structural += 1;
+      depth += 1;
+      if (++nodes > MAX_JSON_NODES) {
+        throw new Error(`Input exceeds the ${MAX_JSON_NODES} node hard limit.`);
+      }
+      if (depth > MAX_JSON_DEPTH)
+        throw new Error(`Input exceeds the ${MAX_JSON_DEPTH} level JSON depth limit.`);
+      frames.push(char === "[" ? { kind: "array", items: 0, expectsValue: true } : { kind: "object", properties: 0 });
+    } else if (char === "}" || char === "]") {
+      frames.pop();
+      depth -= 1;
+      if (depth === 0)
+        topLevelValueActive = false;
+    } else if (char === "," || char === ":") {
+      structural += 1;
+      const frame = frames.at(-1);
+      if (char === "," && frame?.kind === "array")
+        frame.expectsValue = true;
+      if (char === ":" && frame?.kind === "object") {
+        if (++frame.properties > MAX_JSON_OBJECT_PROPERTIES) {
+          throw new Error(`Input object exceeds the ${MAX_JSON_OBJECT_PROPERTIES} property hard limit.`);
+        }
+        if (++properties > MAX_JSON_PROPERTIES) {
+          throw new Error(`Input exceeds the ${MAX_JSON_PROPERTIES} property hard limit.`);
+        }
+      }
+    } else {
+      markArrayValue();
+    }
+    if (structural > MAX_JSON_STRUCTURAL_TOKENS) {
+      throw new Error(`Input exceeds the ${MAX_JSON_STRUCTURAL_TOKENS} structural-token hard limit.`);
+    }
+  }
+}
+function parseBoundedJsonData(text, label = "Persisted JSON", maxArrayItems = MAX_INGEST_BATCH_ITEMS, maxTopLevelValues = 1) {
+  assertBoundedJsonText(text, maxArrayItems, maxTopLevelValues);
+  return cloneBoundedDataGraph(JSON.parse(text), {
+    label,
+    maxBytes: MAX_INGEST_BODY_BYTES
+  });
+}
+var MAX_INGEST_BODY_BYTES = 8388608, MAX_INGEST_BATCH_ITEMS = 4096, MAX_JSON_STRUCTURAL_TOKENS = 65536, MAX_JSON_PROPERTIES = 32768, MAX_JSON_DEPTH = 64, MAX_JSON_OBJECT_PROPERTIES = 256, MAX_JSON_NODES = 4096, MAX_JSON_KEY_BYTES = 16384, DANGEROUS_DATA_KEYS;
+var init_input_limits = __esm(() => {
+  DANGEROUS_DATA_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+});
+
+// src/runtime-role.ts
+import { existsSync as existsSync2, readFileSync } from "fs";
+import { isProxy as isProxy2 } from "util/types";
+function configGraphIssue(root) {
+  const seen = new WeakSet;
+  const pending = [root];
+  let nodes = 0;
+  let properties = 0;
+  let bytes = 0;
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (typeof value === "string") {
+      bytes += Buffer.byteLength(value);
+      if (bytes > MAX_CONFIG_BYTES)
+        return "config exceeds the aggregate byte limit";
+      continue;
+    }
+    if (!value || typeof value !== "object")
+      continue;
+    if (isProxy2(value))
+      return "config proxy inputs are unsupported";
+    if (seen.has(value))
+      continue;
+    let prototype;
+    try {
+      prototype = Object.getPrototypeOf(value);
+    } catch {
+      return "config prototype could not be inspected safely";
+    }
+    if (Array.isArray(value) && prototype !== Array.prototype || !Array.isArray(value) && prototype !== Object.prototype && prototype !== null) {
+      return "config custom prototypes are unsupported";
+    }
+    if (++nodes > MAX_CONFIG_NODES)
+      return "config exceeds the aggregate node limit";
+    seen.add(value);
+    if (Array.isArray(value) && value.length > MAX_CONFIG_ARRAY_ITEMS) {
+      return "config array exceeds the aggregate item limit";
+    }
+    let keys;
+    try {
+      keys = Reflect.ownKeys(value);
+    } catch {
+      return "config properties could not be enumerated safely";
+    }
+    properties += keys.length;
+    if (properties > MAX_CONFIG_PROPERTIES)
+      return "config exceeds the aggregate property limit";
+    for (const key of keys) {
+      let descriptor;
+      try {
+        descriptor = Object.getOwnPropertyDescriptor(value, key);
+      } catch {
+        return "config property descriptors could not be inspected safely";
+      }
+      if (!descriptor || !("value" in descriptor))
+        return "config accessor properties are unsupported";
+      pending.push(descriptor.value);
+    }
+  }
+  return null;
+}
+function configRecord(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
+}
+function safeRelativePath(value) {
+  if (typeof value !== "string" || !value.trim() || value.includes("\x00") || value.startsWith("/") || value.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(value)) {
+    return false;
+  }
+  const segments = value.replace(/\\/g, "/").split("/");
+  return segments.every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+}
+function optionalStringIssue(record, key, label, allowEmpty = false) {
+  const value = record[key];
+  if (value === undefined)
+    return null;
+  if (typeof value !== "string" || !allowEmpty && !value.trim()) {
+    return `${label} must be ${allowEmpty ? "a string" : "a non-empty string"} when present`;
+  }
+  return null;
+}
+function optionalBooleanIssue(record, key, label) {
+  const value = record[key];
+  return value === undefined || typeof value === "boolean" ? null : `${label} must be a boolean when present`;
+}
+function optionalPositiveIntegerIssue(record, key, label) {
+  const value = record[key];
+  return value === undefined || typeof value === "number" && Number.isInteger(value) && value > 0 ? null : `${label} must be a positive integer when present`;
+}
+function knowledgeConfigValidationIssue(value) {
+  let cloned;
+  try {
+    cloned = cloneBoundedDataGraph(value, {
+      label: "config",
+      maxBytes: MAX_CONFIG_BYTES
+    });
+  } catch (error) {
+    return error instanceof Error ? error.message : "config could not be cloned safely";
+  }
+  const graphIssue = configGraphIssue(cloned);
+  if (graphIssue)
+    return graphIssue;
+  const config = configRecord(cloned);
+  if (!config)
+    return "config root must be an object";
+  if (config.version !== 1)
+    return "config version must be 1";
+  if (config.mode !== "local" && config.mode !== "hosted") {
+    return "config mode must be exactly local or hosted";
+  }
+  const storage = configRecord(config.storage);
+  if (!storage)
+    return "config storage must be an object";
+  if (storage.type !== "local" && storage.type !== "s3") {
+    return "config storage.type must be local or s3";
+  }
+  if (config.mode === "local" && storage.type === "s3") {
+    return "config mode local must not select S3 storage";
+  }
+  if (!safeRelativePath(storage.artifacts_root)) {
+    return "config storage.artifacts_root must be a safe relative path";
+  }
+  if (storage.type === "s3") {
+    const s3 = configRecord(storage.s3);
+    if (!s3 || typeof s3.bucket !== "string" || !s3.bucket.trim()) {
+      return "config S3 storage requires a non-empty bucket";
+    }
+  }
+  if (storage.type === "local" && storage.s3 !== undefined) {
+    return "config local storage must not include storage.s3";
+  }
+  if (storage.s3 !== undefined) {
+    const s3 = configRecord(storage.s3);
+    if (!s3)
+      return "config storage.s3 must be an object when present";
+    for (const [key, label, allowEmpty] of [
+      ["bucket", "config storage.s3.bucket", false],
+      ["prefix", "config storage.s3.prefix", true],
+      ["region", "config storage.s3.region", false],
+      ["profile", "config storage.s3.profile", false],
+      ["kms_key_id", "config storage.s3.kms_key_id", false]
+    ]) {
+      const issue = optionalStringIssue(s3, key, label, allowEmpty);
+      if (issue)
+        return issue;
+    }
+    const attemptsIssue = optionalPositiveIntegerIssue(s3, "max_attempts", "config storage.s3.max_attempts");
+    if (attemptsIssue)
+      return attemptsIssue;
+    if (s3.server_side_encryption !== undefined && s3.server_side_encryption !== "AES256" && s3.server_side_encryption !== "aws:kms") {
+      return "config storage.s3.server_side_encryption must be AES256 or aws:kms when present";
+    }
+  }
+  const sources = configRecord(config.sources);
+  if (!sources || sources.preferred_ref !== "open-files") {
+    return "config sources.preferred_ref must be open-files";
+  }
+  if (!Array.isArray(sources.allowed_schemes) || sources.allowed_schemes.some((entry) => typeof entry !== "string" || !entry.trim())) {
+    return "config sources.allowed_schemes must be an array of non-empty strings";
+  }
+  for (const key of ["hosted", "embeddings", "providers", "safety"]) {
+    if (config[key] !== undefined && !configRecord(config[key])) {
+      return `config ${key} must be an object when present`;
+    }
+  }
+  const hosted = configRecord(config.hosted);
+  if (hosted?.api_url !== undefined && (typeof hosted.api_url !== "string" || !hosted.api_url.trim())) {
+    return "config hosted.api_url must be a non-empty string when present";
+  }
+  const embeddings = configRecord(config.embeddings);
+  if (embeddings) {
+    const modelIssue = optionalStringIssue(embeddings, "default_model", "config embeddings.default_model");
+    if (modelIssue)
+      return modelIssue;
+    for (const key of ["dimensions", "batch_size", "max_parallel_calls"]) {
+      const issue = optionalPositiveIntegerIssue(embeddings, key, `config embeddings.${key}`);
+      if (issue)
+        return issue;
+    }
+  }
+  const providers = configRecord(config.providers);
+  if (providers) {
+    const modelIssue = optionalStringIssue(providers, "default_model", "config providers.default_model");
+    if (modelIssue)
+      return modelIssue;
+    if (providers.aliases !== undefined) {
+      const aliases = configRecord(providers.aliases);
+      if (!aliases || Object.entries(aliases).some(([key, value2]) => !key.trim() || typeof value2 !== "string" || !value2.trim())) {
+        return "config providers.aliases must map non-empty names to non-empty strings";
+      }
+    }
+    for (const providerName of ["openai", "anthropic", "deepseek"]) {
+      if (providers[providerName] === undefined)
+        continue;
+      const provider = configRecord(providers[providerName]);
+      if (!provider)
+        return `config providers.${providerName} must be an object when present`;
+      for (const key of ["api_key_env", "base_url", "default_model"]) {
+        const issue = optionalStringIssue(provider, key, `config providers.${providerName}.${key}`);
+        if (issue)
+          return issue;
+      }
+    }
+  }
+  const safety = configRecord(config.safety);
+  if (safety) {
+    if (safety.network !== undefined) {
+      const network = configRecord(safety.network);
+      if (!network)
+        return "config safety.network must be an object when present";
+      for (const key of ["web_search_enabled", "s3_reads_enabled"]) {
+        const issue = optionalBooleanIssue(network, key, `config safety.network.${key}`);
+        if (issue)
+          return issue;
+      }
+      if (network.allowed_s3_buckets !== undefined && (!Array.isArray(network.allowed_s3_buckets) || network.allowed_s3_buckets.some((entry) => typeof entry !== "string" || !entry.trim()))) {
+        return "config safety.network.allowed_s3_buckets must be an array of non-empty strings";
+      }
+    }
+    if (safety.redaction !== undefined) {
+      const redaction = configRecord(safety.redaction);
+      if (!redaction)
+        return "config safety.redaction must be an object when present";
+      const issue = optionalBooleanIssue(redaction, "enabled", "config safety.redaction.enabled");
+      if (issue)
+        return issue;
+    }
+    if (safety.approvals !== undefined) {
+      const approvals = configRecord(safety.approvals);
+      if (!approvals)
+        return "config safety.approvals must be an object when present";
+      const issue = optionalBooleanIssue(approvals, "generated_writes_require_approval", "config safety.approvals.generated_writes_require_approval");
+      if (issue)
+        return issue;
+    }
+  }
+  return null;
+}
+function configContainmentError(detail, surface = "public-api") {
+  return new KnowledgeContainmentError("KNOWLEDGE_CONFIG_INVALID", 503, "invalid", surface, `${detail}; no Knowledge write or data-plane I/O was attempted`);
+}
+function assertValidKnowledgeConfig(value, surface = "public-api") {
+  const issue = knowledgeConfigValidationIssue(value);
+  if (issue)
+    throw configContainmentError(issue, surface);
+}
+function readRegularConfigTextNoFollow(path) {
+  try {
+    return readAnchoredRegularFileSnapshot(path, MAX_CONFIG_BYTES)?.content;
+  } catch (error) {
+    if (error instanceof AnchoredFilesystemError) {
+      throw configContainmentError(error.message);
+    }
+    throw configContainmentError("config could not be opened through its anchored directory");
+  }
+}
+function readValidatedKnowledgeConfig(configPath, fs = roleFs) {
+  let raw;
+  if (fs === roleFs) {
+    raw = readRegularConfigTextNoFollow(configPath);
+  } else {
+    if (!fs.existsSync(configPath))
+      return;
+    raw = fs.readFileSync(configPath, "utf8");
+  }
+  if (raw === undefined)
+    return;
+  if (Buffer.byteLength(raw) > MAX_CONFIG_BYTES) {
+    throw configContainmentError(`config exceeds the ${MAX_CONFIG_BYTES} byte hard limit`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw configContainmentError("config JSON is malformed");
+  }
+  assertValidKnowledgeConfig(parsed);
+  return parsed;
+}
+function normalizeMode(value) {
+  const normalized = value.trim().toLowerCase().replace(/-/g, "_");
+  if (normalized === "local" || normalized === "offline" || normalized === "standalone" || normalized === "desktop")
+    return "local";
+  if (normalized === "cloud" || normalized === "hosted" || normalized === "hosted_client" || normalized === "hosted_server" || normalized === "self_hosted" || normalized === "remote" || normalized === "hybrid")
+    return "hosted";
+  return null;
+}
+function normalizeBooleanMode(value) {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on")
+    return "hosted";
+  if (normalized === "false" || normalized === "0" || normalized === "no" || normalized === "off")
+    return "local";
+  return null;
+}
+function environmentLayers(supplied) {
+  const ambient = process.env;
+  if (!supplied || supplied === ambient)
+    return [{ name: "ambient", env: ambient }];
+  return [
+    { name: "ambient", env: ambient },
+    { name: "supplied", env: supplied }
+  ];
+}
+function safeEnvironmentValue(layer, key, addIssue) {
+  try {
+    let owner = layer.env;
+    let raw;
+    while (owner) {
+      if (isProxy2(owner)) {
+        addIssue(`unreadable-env:${layer.name}:${key}`);
+        return;
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(owner, key);
+      if (descriptor) {
+        if (!("value" in descriptor)) {
+          addIssue(`unreadable-env:${layer.name}:${key}`);
+          return;
+        }
+        raw = descriptor.value;
+        break;
+      }
+      owner = Object.getPrototypeOf(owner);
+    }
+    if (raw === undefined || raw === null || raw === "")
+      return;
+    if (typeof raw !== "string") {
+      addIssue(`non-string-env:${layer.name}:${key}`);
+      return;
+    }
+    return raw.trim() || undefined;
+  } catch {
+    addIssue(`unreadable-env:${layer.name}:${key}`);
+    return;
+  }
+}
+function environmentSignals(layers, keys, addIssue) {
+  const entries = [];
+  for (const layer of layers) {
+    for (const key of keys) {
+      const value = safeEnvironmentValue(layer, key, addIssue);
+      if (value)
+        entries.push({ source: `${layer.name}:${key}`, value });
+    }
+  }
+  return entries;
+}
+function distinctSignalValues(entries) {
+  return new Set(entries.map(({ value }) => value)).size;
+}
+function resolveKnowledgeRuntimeRole(intent = {}) {
+  const layers = environmentLayers(intent.env);
+  const surface = intent.surface ?? "public-api";
+  const signals = [];
+  const issues = [];
+  const modeSignals = [];
+  const addIssue = (issue) => {
+    if (!issues.includes(issue))
+      issues.push(issue);
+  };
+  const collectMode = (source, value, normalize2 = normalizeMode) => {
+    const trimmed = value?.trim();
+    if (!trimmed)
+      return;
+    signals.push(source);
+    const mode = normalize2(trimmed);
+    if (!mode)
+      addIssue(`unknown-mode:${source}`);
+    else
+      modeSignals.push({ source, mode });
+  };
+  collectMode("explicit-mode", intent.explicitMode);
+  collectMode("config-mode", intent.configMode);
+  for (const layer of layers) {
+    for (const key of MODE_KEYS) {
+      collectMode(`${layer.name}:${key}`, safeEnvironmentValue(layer, key, addIssue));
+    }
+    for (const key of ROLE_KEYS) {
+      collectMode(`${layer.name}:${key}`, safeEnvironmentValue(layer, key, addIssue));
+    }
+    for (const key of HOSTED_BOOLEAN_KEYS) {
+      collectMode(`${layer.name}:${key}`, safeEnvironmentValue(layer, key, addIssue), normalizeBooleanMode);
+    }
+  }
+  const apiUrls = environmentSignals(layers, API_URL_KEYS, addIssue);
+  const apiKeys = environmentSignals(layers, API_KEY_KEYS, addIssue);
+  const databaseUrls = environmentSignals(layers, DATABASE_URL_KEYS, addIssue);
+  signals.push(...apiUrls.map(({ source }) => source), ...apiKeys.map(({ source }) => source), ...databaseUrls.map(({ source }) => source));
+  if (distinctSignalValues(apiUrls) > 1)
+    addIssue("conflicting-api-url-aliases");
+  if (distinctSignalValues(apiKeys) > 1)
+    addIssue("conflicting-api-key-aliases");
+  if (distinctSignalValues(databaseUrls) > 1)
+    addIssue("conflicting-database-url-aliases");
+  for (const layer of layers) {
+    const layerUrls = environmentSignals([layer], API_URL_KEYS, addIssue);
+    const layerKeys = environmentSignals([layer], API_KEY_KEYS, addIssue);
+    if (layerUrls.length > 0 !== layerKeys.length > 0)
+      addIssue(`partial-http-intent:${layer.name}`);
+  }
+  const distinctModes = new Set(modeSignals.map(({ mode }) => mode));
+  if (distinctModes.size > 1)
+    addIssue("conflicting-modes");
+  const explicitLocal = modeSignals.some(({ mode }) => mode === "local");
+  const explicitHosted = modeSignals.some(({ mode }) => mode === "hosted");
+  const activeHostedSignal = apiUrls.length > 0 || apiKeys.length > 0 || databaseUrls.length > 0 || Boolean(intent.hostedRequested);
+  const hasApiUrl = apiUrls.length > 0;
+  const hasApiKey = apiKeys.length > 0;
+  if (hasApiUrl !== hasApiKey)
+    addIssue("partial-http-intent");
+  if (!explicitHosted && databaseUrls.length > 0)
+    addIssue("database-url-without-hosted-mode");
+  if (explicitLocal && activeHostedSignal)
+    addIssue("local-hosted-conflict");
+  const surfaceIsServer = surface === "server";
+  const surfaceIsOperator = surface === "operator-migration";
+  if (surfaceIsServer && explicitLocal)
+    addIssue("server-local-conflict");
+  if (surfaceIsOperator)
+    addIssue("operator-capability-required");
+  const hosted = explicitHosted || Boolean(intent.hostedRequested) || hasApiUrl && hasApiKey || surfaceIsServer;
+  if (hosted && intent.localStoreOverride)
+    addIssue("hosted-local-store-conflict");
+  if (issues.length > 0) {
+    return { role: "invalid", surface, source: "invalid", signals, issues };
+  }
+  if (hosted) {
+    return {
+      role: surfaceIsServer ? "hosted-server" : "hosted-client",
+      surface,
+      source: explicitHosted ? "mode" : intent.hostedRequested ? "operation" : surfaceIsServer ? "surface" : "http-config",
+      signals,
+      issues
+    };
+  }
+  return {
+    role: "local",
+    surface,
+    source: explicitLocal ? "mode" : "legacy-default",
+    signals,
+    issues
+  };
+}
+function assertKnowledgeLocalRuntimeWithConfig(intent, readConfigMode) {
+  return assertKnowledgeLocalRuntime(resolveKnowledgeRuntimeRoleWithConfig(intent, readConfigMode));
+}
+function resolveKnowledgeRuntimeRoleWithConfig(intent, readConfigMode) {
+  const preliminary = resolveKnowledgeRuntimeRole(intent);
+  if (preliminary.role !== "local")
+    return preliminary;
+  return resolveKnowledgeRuntimeRole({ ...intent, configMode: readConfigMode() });
+}
+function assertKnowledgeLocalRuntimeForConfigPath(intent, configPath, fs = roleFs, required = false) {
+  return assertKnowledgeLocalRuntimeWithConfig(intent, () => readKnowledgeConfiguredMode(configPath, fs, required));
+}
+function containmentErrorFor(resolution) {
+  if (resolution.role === "invalid") {
+    if (resolution.issues.includes("unknown-mode:config-mode")) {
+      return configContainmentError("persisted or supplied config is structurally invalid", resolution.surface);
+    }
+    return new KnowledgeContainmentError("KNOWLEDGE_RUNTIME_INTENT_INVALID", 503, resolution.role, resolution.surface, "runtime intent is incomplete, unknown, or conflicting; no Knowledge I/O was attempted");
+  }
+  if (resolution.role === "operator-migration") {
+    return new KnowledgeContainmentError("KNOWLEDGE_OPERATOR_REQUIRED", 503, resolution.role, resolution.surface, "operator-only operation is unavailable through this public boundary");
+  }
+  return new KnowledgeContainmentError("KNOWLEDGE_HOSTED_CONTAINED", 503, resolution.role, resolution.surface, "hosted Knowledge access is disabled until trusted project authority is available");
+}
+function assertKnowledgeLocalRuntime(intentOrResolution = {}) {
+  const resolution = "role" in intentOrResolution ? intentOrResolution : resolveKnowledgeRuntimeRole(intentOrResolution);
+  if (resolution.role !== "local")
+    throw containmentErrorFor(resolution);
+  return resolution;
+}
+function readKnowledgeConfiguredMode(configPath, fs = roleFs, required = false) {
+  try {
+    const parsed = readValidatedKnowledgeConfig(configPath, fs);
+    if (!parsed)
+      return required ? INVALID_CONFIG_MODE : undefined;
+    return configuredModeFromValidatedConfig(parsed);
+  } catch {
+    return INVALID_CONFIG_MODE;
+  }
+}
+function configuredModeFromValidatedConfig(parsed) {
+  const storage = parsed.storage;
+  return parsed.mode === "hosted" || storage.type === "s3" ? "hosted" : "local";
+}
+function authorityContainmentError(authority, surface = "server") {
+  if (!authority || authority.trust === "missing" || authority.trust === "untrusted") {
+    return new KnowledgeContainmentError("KNOWLEDGE_AUTHORITY_UNAVAILABLE", 503, "hosted-server", surface, "trusted tenant and project authority is unavailable");
+  }
+  if (authority.projectGrants.length === 0) {
+    return new KnowledgeContainmentError("KNOWLEDGE_PROJECT_FORBIDDEN", 403, "hosted-server", surface, "the trusted principal has no Knowledge project grant");
+  }
+  return new KnowledgeContainmentError("KNOWLEDGE_POSITIVE_AUTHORITY_DISABLED", 503, "hosted-server", surface, "positive hosted access is intentionally disabled during Stage A");
+}
+var roleFs, INVALID_CONFIG_MODE = "__invalid_config__", MAX_CONFIG_ARRAY_ITEMS = 4096, MAX_CONFIG_PROPERTIES = 4096, MAX_CONFIG_NODES = 2048, MAX_CONFIG_BYTES = 1048576, MODE_KEYS, ROLE_KEYS, HOSTED_BOOLEAN_KEYS, API_URL_KEYS, API_KEY_KEYS, DATABASE_URL_KEYS, MAX_KNOWLEDGE_DIAGNOSTIC_BYTES = 384, CONTAINMENT_MESSAGES, KnowledgeContainmentError;
+var init_runtime_role = __esm(() => {
+  init_anchored_fs();
+  init_input_limits();
+  roleFs = {
+    existsSync: existsSync2,
+    readFileSync
+  };
+  MODE_KEYS = [
+    "HASNA_KNOWLEDGE_STORAGE_MODE",
+    "KNOWLEDGE_STORAGE_MODE",
+    "HASNA_KNOWLEDGE_MODE",
+    "KNOWLEDGE_MODE"
+  ];
+  ROLE_KEYS = [
+    "CODEWITH_RUNTIME_ROLE",
+    "CODEWITH_EXECUTION_ROLE",
+    "CODEWITH_AGENT_ROLE",
+    "CODEWITH_ROLE",
+    "KNOWLEDGE_RUNTIME_ROLE",
+    "KNOWLEDGE_EXECUTION_ROLE",
+    "KNOWLEDGE_AGENT_ROLE",
+    "KNOWLEDGE_ROLE"
+  ];
+  HOSTED_BOOLEAN_KEYS = [
+    "CODEWITH_HOSTED",
+    "KNOWLEDGE_HOSTED"
+  ];
+  API_URL_KEYS = [
+    "HASNA_KNOWLEDGE_API_URL",
+    "HASNA_KNOWLEDGE_API_BASE_URL",
+    "KNOWLEDGE_API_URL",
+    "KNOWLEDGE_API_BASE_URL",
+    "OPEN_KNOWLEDGE_API_URL"
+  ];
+  API_KEY_KEYS = [
+    "HASNA_KNOWLEDGE_API_KEY",
+    "KNOWLEDGE_API_KEY",
+    "OPEN_KNOWLEDGE_API_KEY"
+  ];
+  DATABASE_URL_KEYS = [
+    "HASNA_KNOWLEDGE_DATABASE_URL",
+    "KNOWLEDGE_DATABASE_URL",
+    "HASNA_KNOWLEDGE_DATABASE_URL_OWNER"
+  ];
+  CONTAINMENT_MESSAGES = {
+    KNOWLEDGE_RUNTIME_INTENT_INVALID: "runtime intent was rejected before Knowledge I/O",
+    KNOWLEDGE_CONFIG_INVALID: "configuration was rejected before Knowledge I/O",
+    KNOWLEDGE_HOSTED_CONTAINED: "hosted capability is unavailable during Stage A",
+    KNOWLEDGE_AUTHORITY_UNAVAILABLE: "trusted authority is unavailable during Stage A",
+    KNOWLEDGE_PROJECT_FORBIDDEN: "project authority denied Knowledge access",
+    KNOWLEDGE_POSITIVE_AUTHORITY_DISABLED: "positive hosted authority is disabled during Stage A",
+    KNOWLEDGE_OPERATOR_REQUIRED: "operator capability is required for this operation"
+  };
+  KnowledgeContainmentError = class KnowledgeContainmentError extends Error {
+    code;
+    status;
+    role;
+    surface;
+    name = "KnowledgeContainmentError";
+    constructor(code, status, role, surface, _detail) {
+      const message = `${code}: ${CONTAINMENT_MESSAGES[code]}`;
+      super(Buffer.byteLength(message) <= MAX_KNOWLEDGE_DIAGNOSTIC_BYTES ? message : `${code}: contained`);
+      this.code = code;
+      this.status = status;
+      this.role = role;
+      this.surface = surface;
+    }
+    toJSON() {
+      const payload = {
+        ok: false,
+        code: this.code,
+        status: this.status,
+        role: this.role,
+        surface: this.surface,
+        message: this.message
+      };
+      if (Buffer.byteLength(JSON.stringify(payload)) > MAX_KNOWLEDGE_DIAGNOSTIC_BYTES) {
+        return { ...payload, message: `${this.code}: contained` };
+      }
+      return payload;
+    }
+  };
+});
+
 // src/serve.ts
+init_runtime_role();
+import { readFileSync as readFileSync2 } from "fs";
 var KNOWLEDGE_SERVE_APP = "knowledge";
-function normalizeCloudDatabaseUrl(env = process.env) {
-  const key = "HASNA_KNOWLEDGE_DATABASE_URL";
-  const url = env[key] ?? env.KNOWLEDGE_DATABASE_URL;
-  if (!url)
-    return url;
-  const lower = url.toLowerCase();
-  const needsCompat = (lower.includes("sslmode=require") || lower.includes("sslmode=prefer")) && !lower.includes("uselibpqcompat");
-  if (!needsCompat)
-    return url;
-  const updated = url.includes("?") ? `${url}&uselibpqcompat=true` : `${url}?uselibpqcompat=true`;
-  env[key] = updated;
-  return updated;
+function normalizeCloudDatabaseUrl() {
+  return;
 }
 function resolveVersion() {
   if (process.env.HASNA_KNOWLEDGE_VERSION)
     return process.env.HASNA_KNOWLEDGE_VERSION;
   try {
     const url = new URL("../package.json", import.meta.url);
-    const pkg = JSON.parse(readFileSync5(url, "utf8"));
+    const pkg = JSON.parse(readFileSync2(url, "utf8"));
     return pkg.version ?? "0.0.0";
   } catch {
     return process.env.npm_package_version ?? "0.0.0";
   }
 }
-function resolveSigningSecret(env = process.env) {
-  const secret = env.HASNA_KNOWLEDGE_API_SIGNING_KEY ?? env.API_KEY_SIGNING_SECRET ?? env.HASNA_API_SIGNING_KEY;
-  if (!secret) {
-    throw new Error("knowledge-serve requires an API signing secret: set HASNA_KNOWLEDGE_API_SIGNING_KEY " + "(or API_KEY_SIGNING_SECRET / HASNA_API_SIGNING_KEY).");
-  }
-  return secret;
-}
-function rowToItem(row) {
-  const parseJson = (value, fallback) => {
-    if (value == null)
-      return fallback;
-    if (typeof value === "string") {
-      try {
-        return JSON.parse(value);
-      } catch {
-        return fallback;
-      }
-    }
-    return value;
-  };
-  return {
-    id: String(row.id),
-    short_id: row.short_id ?? null,
-    title: String(row.title ?? ""),
-    content: String(row.content ?? ""),
-    url: row.url ?? null,
-    tags: parseJson(row.tags, []),
-    metadata: parseJson(row.metadata, {}),
-    archived: Boolean(row.archived),
-    created_at: String(row.created_at),
-    updated_at: String(row.updated_at)
-  };
+function containedNoteRepo() {
+  throw authorityContainmentError(undefined, "server");
 }
 
 class NoteRepo {
-  client;
   constructor(client) {
-    this.client = client;
+    Object.defineProperty(this, "client", {
+      value: undefined,
+      enumerable: true,
+      configurable: true,
+      writable: true
+    });
   }
   async create(input) {
-    if (!input.title || typeof input.title !== "string") {
-      throw new HttpError(400, "title is required");
-    }
-    const id = makeId();
-    const now = new Date().toISOString();
-    const row = await this.client.get(`INSERT INTO knowledge_items (id, short_id, title, content, url, tags, metadata, archived, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,FALSE,$8,$9)
-       RETURNING *`, [
-      id,
-      makeShortId(id),
-      input.title,
-      input.content ?? "",
-      input.url ?? null,
-      JSON.stringify(input.tags ?? []),
-      JSON.stringify(input.metadata ?? {}),
-      now,
-      now
-    ]);
-    return rowToItem(row);
+    return containedNoteRepo();
   }
-  async list(options = {}) {
-    const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
-    const offset = Math.max(options.offset ?? 0, 0);
-    const where = [];
-    const params = [];
-    if (!options.includeArchived)
-      where.push("archived = FALSE");
-    if (options.search) {
-      params.push(`%${options.search}%`);
-      where.push(`(title ILIKE $${params.length} OR content ILIKE $${params.length})`);
-    }
-    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
-    const totalRow = await this.client.get(`SELECT count(*)::text AS count FROM knowledge_items ${whereSql}`, params);
-    const rows = await this.client.many(`SELECT * FROM knowledge_items ${whereSql} ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`, params);
-    return { items: rows.map(rowToItem), total: Number(totalRow?.count ?? 0) };
+  async list() {
+    return containedNoteRepo();
   }
   async get(idOrShort) {
-    const row = await this.client.get(`SELECT * FROM knowledge_items WHERE id = $1 OR short_id = $1 LIMIT 1`, [idOrShort]);
-    return row ? rowToItem(row) : null;
+    return containedNoteRepo();
   }
   async update(idOrShort, patch) {
-    const existing = await this.get(idOrShort);
-    if (!existing)
-      return null;
-    const sets = [];
-    const params = [];
-    const push = (col, val, cast = "") => {
-      params.push(val);
-      sets.push(`${col} = $${params.length}${cast}`);
-    };
-    if (patch.title !== undefined)
-      push("title", patch.title);
-    if (patch.content !== undefined)
-      push("content", patch.content);
-    if (patch.url !== undefined)
-      push("url", patch.url);
-    if (patch.tags !== undefined)
-      push("tags", JSON.stringify(patch.tags), "::jsonb");
-    if (patch.metadata !== undefined)
-      push("metadata", JSON.stringify(patch.metadata), "::jsonb");
-    if (patch.archived !== undefined)
-      push("archived", patch.archived);
-    push("updated_at", new Date().toISOString());
-    params.push(existing.id);
-    const row = await this.client.get(`UPDATE knowledge_items SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING *`, params);
-    return row ? rowToItem(row) : null;
+    return containedNoteRepo();
   }
   async delete(idOrShort) {
-    const existing = await this.get(idOrShort);
-    if (!existing)
-      return false;
-    await this.client.execute(`DELETE FROM knowledge_items WHERE id = $1`, [existing.id]);
-    return true;
+    return containedNoteRepo();
   }
 }
 function knowledgeOpenApi(version) {
+  const containmentResponseRefs = {
+    "403": { $ref: "#/components/responses/KnowledgeProjectForbidden" },
+    "503": { $ref: "#/components/responses/KnowledgeUnavailable" }
+  };
+  const stageAOperation = {
+    description: "Disabled during Stage A. Project-authority containment is evaluated before authentication; future positive authority is explicitly deferred.",
+    deprecated: true,
+    security: [],
+    "x-knowledge-stage-a-containment": "pre-auth",
+    "x-knowledge-operation-enabled": false
+  };
   const noteSchema = {
     type: "object",
     properties: {
@@ -1465,7 +1864,11 @@ function knowledgeOpenApi(version) {
   };
   return {
     openapi: "3.0.3",
-    info: { title: "Knowledge", version, description: "@hasna/knowledge self-hosted HTTP API" },
+    info: {
+      title: "Knowledge",
+      version,
+      description: "@hasna/knowledge Stage-A contained HTTP API; data operations fail before authentication or datastore access."
+    },
     components: {
       securitySchemes: { apiKey: { type: "apiKey", in: "header", name: "x-api-key" } },
       schemas: {
@@ -1479,13 +1882,47 @@ function knowledgeOpenApi(version) {
             total: { type: "integer" }
           },
           required: ["items", "total"]
+        },
+        KnowledgeContainmentResponse: {
+          type: "object",
+          properties: {
+            ok: { type: "boolean", enum: [false] },
+            code: {
+              type: "string",
+              enum: [
+                "KNOWLEDGE_AUTHORITY_UNAVAILABLE",
+                "KNOWLEDGE_PROJECT_FORBIDDEN",
+                "KNOWLEDGE_POSITIVE_AUTHORITY_DISABLED"
+              ]
+            },
+            status: { type: "integer", enum: [403, 503] },
+            role: { type: "string", enum: ["hosted-server"] },
+            surface: { type: "string", enum: ["server"] },
+            message: { type: "string" }
+          },
+          required: ["ok", "code", "status", "role", "surface", "message"]
+        }
+      },
+      responses: {
+        KnowledgeProjectForbidden: {
+          description: "Trusted server-side authority has zero Knowledge project grants; evaluated before authentication.",
+          content: {
+            "application/json": { schema: { $ref: "#/components/schemas/KnowledgeContainmentResponse" } }
+          }
+        },
+        KnowledgeUnavailable: {
+          description: "Authority is missing or untrusted, or positive hosted authority remains disabled; evaluated before authentication.",
+          content: {
+            "application/json": { schema: { $ref: "#/components/schemas/KnowledgeContainmentResponse" } }
+          }
         }
       }
     },
-    security: [{ apiKey: [] }],
+    security: [],
     paths: {
       "/v1/notes": {
         get: {
+          ...stageAOperation,
           operationId: "listNotes",
           summary: "List knowledge items",
           parameters: [
@@ -1494,10 +1931,11 @@ function knowledgeOpenApi(version) {
             { name: "search", in: "query", schema: { type: "string" } }
           ],
           responses: {
-            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/NoteList" } } } }
+            ...containmentResponseRefs
           }
         },
         post: {
+          ...stageAOperation,
           operationId: "createNote",
           summary: "Create a knowledge item",
           requestBody: {
@@ -1505,20 +1943,22 @@ function knowledgeOpenApi(version) {
             content: { "application/json": { schema: { $ref: "#/components/schemas/NoteInput" } } }
           },
           responses: {
-            "201": { content: { "application/json": { schema: { $ref: "#/components/schemas/Note" } } } }
+            ...containmentResponseRefs
           }
         }
       },
       "/v1/notes/{id}": {
         get: {
+          ...stageAOperation,
           operationId: "getNote",
           summary: "Fetch a knowledge item",
           parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
           responses: {
-            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/Note" } } } }
+            ...containmentResponseRefs
           }
         },
         patch: {
+          ...stageAOperation,
           operationId: "updateNote",
           summary: "Update a knowledge item",
           parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
@@ -1527,22 +1967,26 @@ function knowledgeOpenApi(version) {
             content: { "application/json": { schema: { $ref: "#/components/schemas/NotePatch" } } }
           },
           responses: {
-            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/Note" } } } }
+            ...containmentResponseRefs
           }
         },
         delete: {
+          ...stageAOperation,
           operationId: "deleteNote",
           summary: "Delete a knowledge item",
           parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-          responses: { "204": {} }
+          responses: {
+            ...containmentResponseRefs
+          }
         }
       },
       "/v1/registry": {
         get: {
+          ...stageAOperation,
           operationId: "getRegistry",
           summary: "Knowledge registry contract",
           responses: {
-            "200": { content: { "application/json": { schema: { type: "object", additionalProperties: true } } } }
+            ...containmentResponseRefs
           }
         }
       }
@@ -1564,91 +2008,36 @@ function json(body, status = 200) {
   });
 }
 function createServeHandler(deps) {
-  const repo = new NoteRepo(deps.client);
-  const mode2 = "cloud";
-  const authOrThrow = async (req, requiredScopes) => {
-    const url = new URL(req.url);
-    const decision = await deps.verifier.authenticate(req.headers, {
-      method: req.method,
-      path: url.pathname,
-      requiredScopes
-    });
-    if (decision.ok === false) {
-      throw new HttpError(decision.status, decision.message);
-    }
-    deps.store.touchLastUsed(decision.principal.kid).catch(() => {});
-    return decision.principal;
-  };
+  const internalDeps = deps;
+  const mode = "contained";
   return async (req) => {
     const url = new URL(req.url);
     const path = url.pathname.replace(/\/+$/, "") || "/";
     const method = req.method.toUpperCase();
     try {
       if (path === "/health" && method === "GET") {
-        return json({ status: "ok", version: deps.version, mode: mode2 });
+        return json({ status: "ok", version: deps.version, mode });
       }
       if (path === "/version" && method === "GET") {
-        return json({ status: "ok", version: deps.version, mode: mode2 });
+        return json({ status: "ok", version: deps.version, mode });
       }
       if (path === "/ready" && method === "GET") {
-        try {
-          await deps.client.query("SELECT 1");
-          return json({ status: "ready", version: deps.version, mode: mode2 });
-        } catch {
-          return json({ status: "unavailable", version: deps.version, mode: mode2 }, 503);
-        }
+        const error = authorityContainmentError(internalDeps.authority, "server");
+        const { status: httpStatus, ...containment } = error.toJSON();
+        return json({
+          status: "unavailable",
+          http_status: httpStatus,
+          version: deps.version,
+          mode,
+          ...containment
+        }, 503);
       }
       if (path === "/openapi.json" && method === "GET") {
         return json(knowledgeOpenApi(deps.version));
       }
-      if (path === "/v1/registry" && method === "GET") {
-        await authOrThrow(req, ["knowledge:read"]);
-        return json(knowledgeRegistryContract({
-          mode: "hosted",
-          sourceSchemes: ["open-files", "s3", "web", "file"],
-          storageType: "s3",
-          artifactUriPrefix: process.env.HASNA_KNOWLEDGE_S3_PREFIX ?? null
-        }));
-      }
-      if (path === "/v1/notes") {
-        if (method === "GET") {
-          await authOrThrow(req, ["knowledge:read"]);
-          const result = await repo.list({
-            limit: url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : undefined,
-            offset: url.searchParams.has("offset") ? Number(url.searchParams.get("offset")) : undefined,
-            search: url.searchParams.get("search") ?? undefined,
-            includeArchived: url.searchParams.get("includeArchived") === "true"
-          });
-          return json(result);
-        }
-        if (method === "POST") {
-          await authOrThrow(req, ["knowledge:write"]);
-          const body = await req.json().catch(() => ({}));
-          const item = await repo.create(body);
-          return json(item, 201);
-        }
-        return json({ error: "method_not_allowed" }, 405);
-      }
-      const noteMatch = path.match(/^\/v1\/notes\/([^/]+)$/);
-      if (noteMatch) {
-        const id = decodeURIComponent(noteMatch[1]);
-        if (method === "GET") {
-          await authOrThrow(req, ["knowledge:read"]);
-          const item = await repo.get(id);
-          return item ? json(item) : json({ error: "not_found" }, 404);
-        }
-        if (method === "PATCH") {
-          await authOrThrow(req, ["knowledge:write"]);
-          const body = await req.json().catch(() => ({}));
-          const item = await repo.update(id, body);
-          return item ? json(item) : json({ error: "not_found" }, 404);
-        }
-        if (method === "DELETE") {
-          await authOrThrow(req, ["knowledge:write"]);
-          const ok = await repo.delete(id);
-          return ok ? new Response(null, { status: 204 }) : json({ error: "not_found" }, 404);
-        }
-        return json({ error: "method_not_allowed" }, 405);
+      if (path === "/v1/registry" || path === "/v1/notes" || path.startsWith("/v1/notes/")) {
+        const error = authorityContainmentError(internalDeps.authority, "server");
+        return json(error.toJSON(), error.status);
       }
       return json({ error: "not_found", path }, 404);
     } catch (error) {
@@ -1662,36 +2051,28 @@ function createServeHandler(deps) {
   };
 }
 async function startKnowledgeServe(options = {}) {
+  const runtimeOptions = options;
   const env = options.env ?? process.env;
   const port = options.port ?? Number(env.PORT ?? env.HASNA_KNOWLEDGE_SERVE_PORT ?? 8080);
   const hostname = options.hostname ?? env.HOST ?? "0.0.0.0";
-  const version = resolveVersion();
-  normalizeCloudDatabaseUrl(env);
-  const client = createKnowledgeCloudClient();
-  const store = new ApiKeyStore(client);
-  const verifier = verifyApiKey({
-    app: KNOWLEDGE_SERVE_APP,
-    signingSecret: resolveSigningSecret(env),
-    isRevoked: store.isRevoked,
-    audit: (e) => {
-      if (e.outcome === "deny") {
-        console.warn(`[knowledge-serve] auth deny kid=${e.kid ?? "-"} reason=${e.reason} ${e.method} ${e.path}`);
-      }
-    }
+  const version = runtimeOptions.version ?? resolveVersion();
+  const handler = createServeHandler({
+    client: undefined,
+    verifier: undefined,
+    store: undefined,
+    version
   });
-  const handler = createServeHandler({ client, verifier, store, version });
   const BunGlobal = globalThis.Bun;
   if (!BunGlobal?.serve) {
     throw new Error("knowledge-serve requires the Bun runtime (Bun.serve unavailable).");
   }
   const server = BunGlobal.serve({ port, hostname, fetch: handler });
-  console.log(`[knowledge-serve] listening on http://${hostname}:${server.port} (mode=cloud, version=${version})`);
+  console.log(`[knowledge-serve] listening on http://${hostname}:${server.port} (mode=contained, version=${version})`);
   return {
     port: server.port,
     hostname,
     stop: async () => {
       server.stop();
-      await client.close();
     }
   };
 }

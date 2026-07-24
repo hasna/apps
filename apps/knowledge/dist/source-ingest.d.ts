@@ -1,6 +1,6 @@
 import { type ManifestIngestResult } from './manifest-ingest';
 import type { KnowledgeConfig } from './workspace';
-import { type SafetyPolicy } from './safety';
+import type { SafetyPolicy } from './safety';
 export interface SourceIngestOptions {
     dbPath: string;
     sourceRef: string;

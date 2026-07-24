@@ -117,35 +117,24 @@ when successful and command-specific fields such as:
 - Prefer `open-files://` refs for durable company sources.
 - Keep raw source bytes in `open-files`; do not import them as generated wiki
   artifacts.
-- Enable S3 reads only for allowed buckets:
+- Stage A ingests manifests only from anchored local files. S3 settings and
+  `s3://` refs are compatibility metadata; environment variables, safety
+  fields, and caller options cannot enable an S3 read. Copying remote content
+  into the knowledge workspace is not a supported workaround: keep raw bytes
+  in `open-files` and pass a bounded local manifest containing derived text.
 
-```bash
-HASNA_KNOWLEDGE_ALLOW_S3_READS=1 \
-HASNA_KNOWLEDGE_ALLOWED_S3_BUCKETS=my-bucket \
-knowledge ingest manifest s3://my-bucket/path/manifest.jsonl \
-  --scope project \
-  --json
-```
-
-- Enable web search only when current external context is required:
-
-```bash
-HASNA_KNOWLEDGE_WEB_SEARCH=1 \
-knowledge web search "current policy source" --provider openai --json
-```
+- Treat web-search commands and options as metadata-only compatibility during
+  Stage A. Execution, including fake mode, always returns typed containment;
+  provider configuration and environment settings cannot enable it. Use
+  `knowledge web --help` to inspect the retained command shape without opening
+  a workspace or provider.
 
 - Use `--approve-write` only when a generated wiki artifact should be durable.
 
 ## Hosted Migration
 
-Hosted mode should not change local migration semantics. It only records a
-remote API boundary:
-
-```bash
-knowledge setup --mode hosted --api-url https://knowledge.hasna.xyz --scope project --json
-knowledge remote contracts --scope project --json
-```
-
-A SaaS wrapper can later sync generated artifacts, run jobs, enforce tenant ACLs,
-and store artifacts in S3, but the local package remains usable without a hosted
-account.
+Hosted migration is deferred beyond Stage A. Retained hosted options, remote
+commands, and S3 fields describe compatibility contracts only and return typed
+containment; they do not construct a client, read a provider, or change local
+migration semantics. A future SaaS wrapper may own artifact sync, jobs, tenant
+ACLs, and object storage outside this package.

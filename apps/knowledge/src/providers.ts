@@ -1,6 +1,6 @@
-import { randomUUID } from 'node:crypto';
-import type { Database } from 'bun:sqlite';
+import type { KnowledgeDatabase as Database } from './knowledge-db';
 import type { KnowledgeConfig } from './workspace';
+import { KnowledgeContainmentError } from './runtime-role';
 
 export type AiProviderId = 'openai' | 'anthropic' | 'deepseek';
 
@@ -201,46 +201,37 @@ export function providerStatus(config?: KnowledgeConfig, env: Record<string, str
   };
 }
 
-export function assertProviderCredentials(provider: AiProviderId, config?: KnowledgeConfig, env: Record<string, string | undefined> = process.env): ProviderCredentialStatus {
-  const status = providerCredentialStatus(config, env).find((entry) => entry.provider === provider);
-  if (!status) throw new Error(`Unsupported AI provider: ${provider}`);
-  if (!status.configured) throw new Error(`Missing ${status.api_key_env} for ${provider}. Set the env var to use this provider.`);
-  return status;
+export function assertProviderCredentials(
+  provider: AiProviderId,
+  config?: KnowledgeConfig,
+  env?: Record<string, string | undefined>,
+): ProviderCredentialStatus;
+export function assertProviderCredentials(provider: AiProviderId): ProviderCredentialStatus {
+  return containedProvider();
 }
 
-async function defaultFactory(provider: AiProviderId): Promise<ProviderFactory> {
-  if (provider === 'openai') {
-    const { createOpenAI } = await import('@ai-sdk/openai');
-    return createOpenAI as ProviderFactory;
-  }
-  if (provider === 'anthropic') {
-    const { createAnthropic } = await import('@ai-sdk/anthropic');
-    return createAnthropic as ProviderFactory;
-  }
-  const { createDeepSeek } = await import('@ai-sdk/deepseek');
-  return createDeepSeek as ProviderFactory;
+function containedProvider(): never {
+  throw new KnowledgeContainmentError(
+    'KNOWLEDGE_HOSTED_CONTAINED', 503, 'hosted-client', 'public-api',
+    'provider construction is unavailable during Stage A',
+  );
 }
 
-export async function createAiSdkProviderRegistry(options: AiProviderRuntimeOptions = {}) {
-  const { createProviderRegistry } = await import('ai');
-  const env = options.env ?? process.env;
-  const providers: Record<string, unknown> = {};
-  for (const provider of Object.keys(DEFAULT_PROVIDER_SETTINGS) as AiProviderId[]) {
-    const settings = providerSettings(options.config, provider);
-    const apiKey = env[settings.api_key_env];
-    if (!apiKey) continue;
-    const factory = options.factories?.[provider] ?? await defaultFactory(provider);
-    providers[provider] = factory({ apiKey, baseURL: settings.base_url });
-  }
-  return createProviderRegistry(providers as never);
+export function createAiSdkProviderRegistry(
+  options?: AiProviderRuntimeOptions,
+): Promise<import('ai').ProviderRegistryProvider<never, ':'>>;
+export async function createAiSdkProviderRegistry(): Promise<import('ai').ProviderRegistryProvider<never, ':'>> {
+  return containedProvider();
 }
 
-export async function languageModelFor(aliasOrRef: string, options: AiProviderRuntimeOptions = {}) {
-  const modelRef = resolveModelRef(aliasOrRef, options.config);
-  const parsed = parseModelRef(modelRef);
-  assertProviderCredentials(parsed.provider, options.config, options.env);
-  const registry = await createAiSdkProviderRegistry(options);
-  return registry.languageModel(modelRef as `${string}:${string}`);
+export function languageModelFor(
+  aliasOrRef: string,
+  options?: AiProviderRuntimeOptions,
+): Promise<import('@ai-sdk/provider').LanguageModelV3>;
+export async function languageModelFor(
+  aliasOrRef: string,
+): Promise<import('@ai-sdk/provider').LanguageModelV3> {
+  return containedProvider();
 }
 
 function usageNumber(usage: Record<string, unknown>, keys: string[]): number {
@@ -272,37 +263,13 @@ export function normalizeAiSdkUsage(input: {
   };
 }
 
-export function recordProviderUsage(db: Database, input: NormalizedProviderUsage & { run_id?: string | null; created_at?: string }): string {
-  const id = `usage_${randomUUID()}`;
-  db.run(
-    `INSERT INTO provider_usage (id, run_id, provider, model, input_tokens, output_tokens, cost_usd, metadata_json, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      id,
-      input.run_id ?? null,
-      input.provider,
-      input.model,
-      input.input_tokens,
-      input.output_tokens,
-      input.cost_usd,
-      JSON.stringify(input.metadata),
-      input.created_at ?? new Date().toISOString(),
-    ],
-  );
-  return id;
+export function recordProviderUsage(
+  db: Database,
+  input: NormalizedProviderUsage & { run_id?: string | null; created_at?: string },
+): string {
+  return containedProvider();
 }
 
 export function createDeterministicFakeProvider(provider: AiProviderId): ProviderFactory {
-  return () => ({
-    languageModel: (modelId: string) => ({
-      provider,
-      modelId,
-      specificationVersion: 'v3',
-    }),
-    chat: (modelId: string) => ({
-      provider,
-      modelId,
-      specificationVersion: 'v3',
-    }),
-  });
+  return containedProvider();
 }

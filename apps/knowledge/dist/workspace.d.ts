@@ -1,5 +1,11 @@
 export declare const HASNA_KNOWLEDGE_APP_PATH: string;
 export declare const LEGACY_HASNA_KNOWLEDGE_APP_PATH: string;
+export type CanonicalKnowledgeScope = 'global' | 'local' | 'project';
+/**
+ * Validate the public scope domain without trimming, folding, normalizing, or
+ * accepting aliases. `undefined` is the sole default-global representation.
+ */
+export declare function canonicalKnowledgeScope(scope: unknown, defaultScope?: CanonicalKnowledgeScope): CanonicalKnowledgeScope;
 export interface KnowledgeWorkspace {
     home: string;
     configPath: string;
@@ -14,6 +20,14 @@ export interface KnowledgeWorkspace {
     schemasDir: string;
     wikiDir: string;
 }
+export interface TrustedKnowledgeWorkspaceIdentity {
+    readonly scope: CanonicalKnowledgeScope | null;
+    readonly projectRoot: string | null;
+    readonly home: string;
+    readonly key: string;
+}
+export declare function trustedKnowledgeWorkspaceIdentity(workspace: KnowledgeWorkspace): TrustedKnowledgeWorkspaceIdentity;
+export declare function assertKnowledgeWorkspaceScope(workspace: KnowledgeWorkspace, scope: CanonicalKnowledgeScope): TrustedKnowledgeWorkspaceIdentity;
 export interface KnowledgeConfig {
     version: 1;
     mode: 'local' | 'hosted';
@@ -109,6 +123,7 @@ export declare function resolveLegacyScopedWorkspace(scope: string | undefined, 
 export declare function workspaceForHome(home: string): KnowledgeWorkspace;
 export declare function defaultKnowledgeConfig(): KnowledgeConfig;
 export declare function ensureKnowledgeWorkspace(home: string): KnowledgeWorkspace;
+export declare function ensureTrustedKnowledgeWorkspace(workspace: KnowledgeWorkspace): KnowledgeWorkspace;
 export declare function resolveScopedWorkspace(scope: string | undefined, cwd?: string): KnowledgeWorkspace;
 export declare function ensureParentDir(path: string): void;
 export declare function readKnowledgeConfig(path: string): KnowledgeConfig;

@@ -2,21 +2,47 @@
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import pkg from '../package.json' with { type: 'json' };
 import { migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db.ts';
 import { defaultStorePath, loadStore, saveStore, makeId, withLock } from './store.ts';
 import { parseSourceRef } from './source-ref.ts';
+import { assertContainedSourceGraph } from './public-guard.ts';
 import { createKnowledgeService } from './service.ts';
+import { readAnchoredRegularFileSnapshot } from './anchored-fs.ts';
 import {
-  getStorageStatus as getDatabaseStorageStatus,
-  storagePull as databaseStoragePull,
-  storagePush as databaseStoragePush,
-  storageSync as databaseStorageSync,
-} from './storage.ts';
+  MAX_INGEST_BATCH_ITEMS,
+  MAX_INGEST_BODY_BYTES,
+  assertBoundedJsonText,
+  cloneBoundedDataGraph,
+} from './input-limits.ts';
+import { resolveScopedWorkspace } from './workspace.ts';
+import {
+  KnowledgeContainmentError,
+  containmentErrorFor,
+  readKnowledgeConfiguredMode,
+  resolveKnowledgeRuntimeRoleWithConfig,
+} from './runtime-role.ts';
 
 const storePathField = z.string().optional().describe('Path to the JSON store file');
 const scopeField = z.enum(['local', 'global', 'project']).optional().describe('Workspace scope');
+const allowGlobalReadField = z.boolean().optional().describe(
+  'Required as an explicit own true value for global-scope list/get/search/query reads',
+);
+
+function assertExplicitMcpGlobalRead(input, defaultScope = 'global') {
+  if ((input?.scope ?? defaultScope) !== 'global') return;
+  let descriptor;
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(input, 'allow_global');
+  } catch {
+    throw new Error('Global knowledge reads require an explicit own allow_global=true data property.');
+  }
+  if (!descriptor || !('value' in descriptor) || descriptor.value !== true) {
+    throw new Error('Global knowledge reads require an explicit own allow_global=true data property.');
+  }
+}
 
 function jsonText(data) {
   return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
@@ -87,6 +113,46 @@ function parseJsonObject(value) {
   }
 }
 
+function boundedMcpRecord(value, label) {
+  const bounded = cloneBoundedDataGraph(value, {
+    label,
+    maxBytes: MAX_INGEST_BODY_BYTES,
+  });
+  if (!bounded || typeof bounded !== 'object' || Array.isArray(bounded)) {
+    throw new Error(`${label} must be an object.`);
+  }
+  return bounded;
+}
+
+function boundedKnowledgeItems(value, label) {
+  if (!Array.isArray(value)) throw new Error(`${label} must be an array.`);
+  if (value.length > MAX_INGEST_BATCH_ITEMS) {
+    throw new Error(`${label} exceeds the ${MAX_INGEST_BATCH_ITEMS} item hard limit.`);
+  }
+  for (const [index, item] of value.entries()) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new Error(`${label}[${index}] must be an object.`);
+    }
+    for (const field of ['title', 'content']) {
+      if (typeof item[field] !== 'string') throw new Error(`${label}[${index}].${field} must be a string.`);
+    }
+    if (item.id !== undefined && typeof item.id !== 'string') {
+      throw new Error(`${label}[${index}].id must be a string when present.`);
+    }
+    if (item.tags !== undefined && (
+      !Array.isArray(item.tags) || item.tags.some((tag) => typeof tag !== 'string')
+    )) {
+      throw new Error(`${label}[${index}].tags must contain only strings.`);
+    }
+    if (item.metadata !== undefined && (
+      !item.metadata || typeof item.metadata !== 'object' || Array.isArray(item.metadata)
+    )) {
+      throw new Error(`${label}[${index}].metadata must be an object when present.`);
+    }
+  }
+  return value;
+}
+
 function jsonResource(uri, data) {
   return {
     contents: [{
@@ -97,8 +163,55 @@ function jsonResource(uri, data) {
   };
 }
 
-function registerTool(server, name, title, description, inputSchema, handler) {
-  server.registerTool(name, { title, description, inputSchema }, handler);
+const runtimeIntentByServer = new WeakMap();
+
+function containmentForServer(server) {
+  const intent = runtimeIntentByServer.get(server);
+  if (!intent) {
+    return containmentErrorFor({
+      role: 'invalid',
+      surface: 'mcp-stdio',
+      source: 'missing-runtime-context',
+      signals: [],
+      issues: ['missing-runtime-context'],
+    });
+  }
+  const resolution = resolveKnowledgeRuntimeRoleWithConfig({
+    surface: intent.surface,
+    env: intent.env,
+  }, () => readKnowledgeConfiguredMode(
+    resolveScopedWorkspace(intent.scope, intent.cwd).configPath,
+  ));
+  if (resolution.role === 'local') return null;
+  return containmentErrorFor(resolution);
+}
+
+function registerTool(server, name, title, description, inputSchema, handler, settings) {
+  server.registerTool(name, { title, description, inputSchema }, async (...args) => {
+    if (settings?.unconditionalContainment === true) {
+      const error = new KnowledgeContainmentError(
+        'KNOWLEDGE_HOSTED_CONTAINED',
+        503,
+        'hosted-client',
+        'mcp-stdio',
+        'provider web search is unavailable through the Stage-A public package',
+      );
+      return { ...jsonText(error.toJSON()), isError: true };
+    }
+    const error = containmentForServer(server);
+    if (error) return { ...jsonText(error.toJSON()), isError: true };
+    if (settings?.sourceGraph === true) {
+      try {
+        assertContainedSourceGraph(args[0], 'mcp-stdio');
+      } catch (error) {
+        if (error && typeof error.toJSON === 'function') {
+          return { ...jsonText(error.toJSON()), isError: true };
+        }
+        return errorText(error instanceof Error ? error.message : String(error));
+      }
+    }
+    return handler(...args);
+  });
 }
 
 function registerJsonResource(server, name, uri, title, description, read) {
@@ -106,15 +219,27 @@ function registerJsonResource(server, name, uri, title, description, read) {
     title,
     description,
     mimeType: 'application/json',
-  }, async (resourceUri) => jsonResource(resourceUri, await read(resourceUri)));
+  }, async (resourceUri) => {
+    const error = containmentForServer(server);
+    return jsonResource(resourceUri, error ? error.toJSON() : await read(resourceUri));
+  });
 }
 
 function registerJsonTemplate(server, name, template, title, description, list, read) {
-  server.registerResource(name, new ResourceTemplate(template, { list }), {
+  server.registerResource(name, new ResourceTemplate(template, {
+    list: async (...args) => {
+      const error = containmentForServer(server);
+      if (error) return { resources: [], _meta: { containment: error.toJSON() } };
+      return list(...args);
+    },
+  }), {
     title,
     description,
     mimeType: 'application/json',
-  }, async (resourceUri, variables) => jsonResource(resourceUri, await read(resourceUri, variables)));
+  }, async (resourceUri, variables) => {
+    const error = containmentForServer(server);
+    return jsonResource(resourceUri, error ? error.toJSON() : await read(resourceUri, variables));
+  });
 }
 
 function projectService() {
@@ -733,11 +858,24 @@ function registerKnowledgeResources(server) {
   );
 }
 
-export function buildServer() {
+export function buildServer(options = {}) {
+  const runtimeIntent = {
+    surface: options.surface ?? 'mcp-stdio',
+    env: options.env,
+    scope: options.scope ?? 'project',
+    cwd: options.cwd,
+  };
+  resolveKnowledgeRuntimeRoleWithConfig({
+    surface: runtimeIntent.surface,
+    env: runtimeIntent.env,
+  }, () => readKnowledgeConfiguredMode(
+    resolveScopedWorkspace(runtimeIntent.scope, runtimeIntent.cwd).configPath,
+  ));
   const server = new McpServer({
     name: 'knowledge',
     version: pkg.version,
   });
+  runtimeIntentByServer.set(server, runtimeIntent);
 
   registerKnowledgeResources(server);
 
@@ -765,7 +903,7 @@ export function buildServer() {
     }
   });
 
-  registerTool(server, 'ok_storage_status', 'Knowledge storage status', 'Inspect local/S3 artifact storage, source ownership, and scalability contract', {
+  registerTool(server, 'ok_storage_status', 'Knowledge storage status', 'Inspect local artifact storage and contained S3 compatibility metadata', {
     scope: scopeField,
   }, async ({ scope }) => {
     const service = createKnowledgeService({ scope });
@@ -809,7 +947,7 @@ export function buildServer() {
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }
-  });
+  }, { sourceGraph: true });
 
   registerTool(server, 'knowledge_app_wiki_source_add', 'Add app wiki source ref', 'Ingest a read-only source ref into the scoped app/project wiki catalog', {
     scope: scopeField,
@@ -827,19 +965,22 @@ export function buildServer() {
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }
-  });
+  }, { sourceGraph: true });
 
   registerTool(server, 'knowledge_app_wiki_search', 'Search app wiki scope', 'Search scoped app/project wiki notes, source refs, and catalog evidence', {
     scope: scopeField,
+    allow_global: allowGlobalReadField,
     query: z.string().describe('Search query'),
     limit: z.number().optional().describe('Maximum results'),
     semantic: z.boolean().optional().describe('Include vector semantic results'),
     model: z.string().optional().describe('Embedding model ref'),
     dimensions: z.number().optional().describe('Embedding dimensions for deterministic fake mode'),
     fake: z.boolean().optional().describe('Use deterministic fake embeddings'),
-  }, async ({ scope, query, limit, semantic, model, dimensions, fake }) => {
-    const service = createKnowledgeService({ scope: scope ?? 'project' });
+  }, async (input) => {
     try {
+      assertExplicitMcpGlobalRead(input, 'project');
+      const { scope, query, limit, semantic, model, dimensions, fake, allow_global } = input;
+      const service = createKnowledgeService({ scope: scope ?? 'project' });
       return jsonText({ ok: true, ...await service.searchAppWiki({
         query,
         limit,
@@ -847,6 +988,7 @@ export function buildServer() {
         modelRef: model,
         dimensions,
         fake,
+        allowGlobal: allow_global,
       }) });
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
@@ -855,15 +997,18 @@ export function buildServer() {
 
   registerTool(server, 'knowledge_app_wiki_query', 'Query app wiki scope', 'Return a reranked citation context pack from scoped app/project wiki notes, source refs, and catalog evidence', {
     scope: scopeField,
+    allow_global: allowGlobalReadField,
     query: z.string().describe('Search query or prompt'),
     limit: z.number().optional().describe('Maximum context results'),
     semantic: z.boolean().optional().describe('Include vector semantic results'),
     model: z.string().optional().describe('Embedding model ref'),
     dimensions: z.number().optional().describe('Embedding dimensions for deterministic fake mode'),
     fake: z.boolean().optional().describe('Use deterministic fake embeddings'),
-  }, async ({ scope, query, limit, semantic, model, dimensions, fake }) => {
-    const service = createKnowledgeService({ scope: scope ?? 'project' });
+  }, async (input) => {
     try {
+      assertExplicitMcpGlobalRead(input, 'project');
+      const { scope, query, limit, semantic, model, dimensions, fake, allow_global } = input;
+      const service = createKnowledgeService({ scope: scope ?? 'project' });
       return jsonText({ ok: true, ...await service.queryAppWiki({
         query,
         limit,
@@ -871,6 +1016,7 @@ export function buildServer() {
         modelRef: model,
         dimensions,
         fake,
+        allowGlobal: allow_global,
       }) });
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
@@ -1077,46 +1223,50 @@ export function buildServer() {
     scope: scopeField,
   }, async ({ scope }) => {
     try {
-      return jsonText(getDatabaseStorageStatus({ scope }));
+      const { getStorageStatus } = await import('./storage.ts');
+      return jsonText(getStorageStatus({ scope }));
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }
   });
 
-  registerTool(server, 'storage_push', 'Push knowledge database storage', 'Push local knowledge.db catalog rows to storage PostgreSQL', {
+  registerTool(server, 'storage_push', 'Push knowledge database storage', 'Contained Stage-A compatibility name; performs no DSN resolution, PostgreSQL connection, or push', {
     scope: scopeField,
     tables: z.array(z.string()).optional().describe('Optional knowledge.db tables to push'),
   }, async ({ scope, tables }) => {
     try {
-      return jsonText(await databaseStoragePush({ scope, tables }));
+      const { storagePush } = await import('./storage.ts');
+      return jsonText(await storagePush({ scope, tables }));
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }
   });
 
-  registerTool(server, 'storage_pull', 'Pull knowledge database storage', 'Pull knowledge.db catalog rows from storage PostgreSQL to local SQLite', {
+  registerTool(server, 'storage_pull', 'Pull knowledge database storage', 'Contained Stage-A compatibility name; performs no DSN resolution, PostgreSQL connection, or pull', {
     scope: scopeField,
     tables: z.array(z.string()).optional().describe('Optional knowledge.db tables to pull'),
   }, async ({ scope, tables }) => {
     try {
-      return jsonText(await databaseStoragePull({ scope, tables }));
+      const { storagePull } = await import('./storage.ts');
+      return jsonText(await storagePull({ scope, tables }));
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }
   });
 
-  registerTool(server, 'storage_sync', 'Sync knowledge database storage', 'Bidirectional knowledge.db sync: pull then push', {
+  registerTool(server, 'storage_sync', 'Sync knowledge database storage', 'Contained Stage-A compatibility name; performs no database sync', {
     scope: scopeField,
     tables: z.array(z.string()).optional().describe('Optional knowledge.db tables to sync'),
   }, async ({ scope, tables }) => {
     try {
-      return jsonText(await databaseStorageSync({ scope, tables }));
+      const { storageSync } = await import('./storage.ts');
+      return jsonText(await storageSync({ scope, tables }));
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }
   });
 
-  registerTool(server, 'ok_parse_source_ref', 'Parse source reference', 'Parse and validate an open-files, S3, file, or web source ref', {
+  registerTool(server, 'ok_parse_source_ref', 'Parse source reference', 'Parse source-ref metadata; Stage A remote execution remains contained', {
     uri: z.string().describe('Source reference URI'),
   }, async ({ uri }) => {
     try {
@@ -1142,7 +1292,7 @@ export function buildServer() {
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }
-  });
+  }, { sourceGraph: true });
 
   registerTool(server, 'ok_provider_status', 'AI provider status', 'Inspect configured AI SDK providers, model aliases, and BYOK credential availability', {
     scope: scopeField,
@@ -1242,16 +1392,19 @@ export function buildServer() {
 
   registerTool(server, 'ok_search', 'Hybrid knowledge search', 'Search source chunks, generated wiki pages, sharded indexes, and optional semantic vectors', {
     scope: scopeField,
+    allow_global: allowGlobalReadField,
     query: z.string().describe('Search query'),
     limit: z.number().optional().describe('Maximum results'),
     semantic: z.boolean().optional().describe('Include vector semantic results'),
     model: z.string().optional().describe('Embedding model ref, default openai:text-embedding-3-small'),
     dimensions: z.number().optional().describe('Embedding dimensions for deterministic fake mode'),
     fake: z.boolean().optional().describe('Use deterministic fake embeddings for local tests'),
-  }, async ({ scope, query, limit, semantic, model, dimensions, fake }) => {
-    const service = createKnowledgeService({ scope });
+  }, async (input) => {
     try {
-      return jsonText({ ok: true, ...await service.search({ query, limit, semantic, modelRef: model, dimensions, fake }) });
+      assertExplicitMcpGlobalRead(input);
+      const { scope, query, limit, semantic, model, dimensions, fake, allow_global } = input;
+      const service = createKnowledgeService({ scope });
+      return jsonText({ ok: true, ...await service.search({ query, limit, semantic, modelRef: model, dimensions, fake, allowGlobal: allow_global }) });
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }
@@ -1259,16 +1412,19 @@ export function buildServer() {
 
   registerTool(server, 'knowledge_search', 'Knowledge context search', 'Return a reranked citation context pack for agent prompts', {
     scope: scopeField,
+    allow_global: allowGlobalReadField,
     query: z.string().describe('Search query or prompt'),
     limit: z.number().optional().describe('Maximum context results'),
     semantic: z.boolean().optional().describe('Include vector semantic results'),
     model: z.string().optional().describe('Embedding model ref, default openai:text-embedding-3-small'),
     dimensions: z.number().optional().describe('Embedding dimensions for deterministic fake mode'),
     fake: z.boolean().optional().describe('Use deterministic fake embeddings for local tests'),
-  }, async ({ scope, query, limit, semantic, model, dimensions, fake }) => {
-    const service = createKnowledgeService({ scope });
+  }, async (input) => {
     try {
-      return jsonText({ ok: true, ...await service.retrieveContext({ query, limit, semantic, modelRef: model, dimensions, fake }) });
+      assertExplicitMcpGlobalRead(input);
+      const { scope, query, limit, semantic, model, dimensions, fake, allow_global } = input;
+      const service = createKnowledgeService({ scope });
+      return jsonText({ ok: true, ...await service.retrieveContext({ query, limit, semantic, modelRef: model, dimensions, fake, allowGlobal: allow_global }) });
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }
@@ -1354,10 +1510,10 @@ export function buildServer() {
     }
   });
 
-  registerTool(server, 'knowledge_ingest', 'Ingest knowledge source', 'Ingest an open-files/S3/file/web source ref or open-files manifest into the derived knowledge catalog', {
+  registerTool(server, 'knowledge_ingest', 'Ingest knowledge source', 'Ingest an anchored local file URI or bounded local open-files manifest; stored and remote refs are contained', {
     scope: scopeField,
-    source_ref: z.string().optional().describe('Source reference URI to ingest, e.g. open-files://file/<id>/revision/<rev>'),
-    manifest: z.string().optional().describe('Manifest file path or s3:// URI to ingest'),
+    source_ref: z.string().optional().describe('Anchored local file URI to ingest; remote and stored-source schemes are contained'),
+    manifest: z.string().optional().describe('Bounded local manifest file path to ingest'),
     purpose: z.string().optional().describe('Read-only purpose label, default knowledge_answer'),
   }, async ({ scope, source_ref, manifest, purpose }) => {
     if (!source_ref && !manifest) return errorText('Missing input. Provide source_ref or manifest.');
@@ -1371,7 +1527,7 @@ export function buildServer() {
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }
-  });
+  }, { sourceGraph: true });
 
   registerTool(server, 'knowledge_build', 'Build knowledge answer', 'Run the knowledge prompt flow and optionally file the cited answer into generated wiki artifacts after approval', {
     scope: scopeField,
@@ -1407,23 +1563,16 @@ export function buildServer() {
     }
   });
 
-  registerTool(server, 'knowledge_web_search', 'Knowledge web search', 'Run safety-gated provider-native web search and optionally file snippets as web source refs', {
+  registerTool(server, 'knowledge_web_search', 'Knowledge web search', 'Base-compatible web-search metadata; execution, including fake mode, is unavailable during Stage A', {
     scope: scopeField,
     query: z.string().describe('Web search query'),
     limit: z.number().optional().describe('Maximum sources'),
     provider: z.enum(['openai', 'anthropic', 'deepseek']).optional().describe('Provider override'),
     model: z.string().optional().describe('Model alias/ref'),
     domains: z.array(z.string()).optional().describe('Allowed domains'),
-    fake: z.boolean().optional().describe('Use deterministic fake web results'),
-    file_results: z.boolean().optional().describe('File web snippets as web source refs'),
-  }, async ({ scope, query, limit, provider, model, domains, fake, file_results }) => {
-    const service = createKnowledgeService({ scope });
-    try {
-      return jsonText({ ok: true, ...await service.webSearch({ query, limit, provider, modelRef: model, domains, fake, fileResults: file_results }) });
-    } catch (error) {
-      return errorText(error instanceof Error ? error.message : String(error));
-    }
-  });
+    fake: z.boolean().optional().describe('Compatibility flag; execution remains unavailable during Stage A'),
+    file_results: z.boolean().optional().describe('Compatibility flag; execution remains unavailable during Stage A'),
+  }, async () => errorText('KNOWLEDGE_HOSTED_CONTAINED'), { unconditionalContainment: true });
 
   registerTool(server, 'knowledge_lint', 'Lint knowledge wiki', 'Check generated wiki pages for missing citations, stale citations, duplicates, or source issues', {
     scope: scopeField,
@@ -1453,7 +1602,7 @@ export function buildServer() {
     }
   });
 
-  registerTool(server, 'knowledge_storage', 'Knowledge storage contract', 'Inspect local/S3 artifact storage, source ownership, and hosted/SaaS boundary metadata', {
+  registerTool(server, 'knowledge_storage', 'Knowledge storage contract', 'Inspect local artifact storage plus contained S3 and hosted compatibility metadata', {
     scope: scopeField,
   }, async ({ scope }) => {
     const service = createKnowledgeService({ scope });
@@ -1483,25 +1632,18 @@ export function buildServer() {
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }
-  });
+  }, { sourceGraph: true });
 
-  registerTool(server, 'ok_web_search', 'Provider web search', 'Run safety-gated provider-native web search and return citations/sources', {
+  registerTool(server, 'ok_web_search', 'Provider web search', 'Base-compatible web-search metadata; execution, including fake mode, is unavailable during Stage A', {
     scope: scopeField,
     query: z.string().describe('Web search query'),
     limit: z.number().optional().describe('Maximum sources'),
     provider: z.enum(['openai', 'anthropic', 'deepseek']).optional().describe('Provider override'),
     model: z.string().optional().describe('Model alias/ref'),
     domains: z.array(z.string()).optional().describe('Allowed domains'),
-    fake: z.boolean().optional().describe('Use deterministic fake web results'),
-    file_results: z.boolean().optional().describe('File web snippets as web source refs'),
-  }, async ({ scope, query, limit, provider, model, domains, fake, file_results }) => {
-    const service = createKnowledgeService({ scope });
-    try {
-      return jsonText({ ok: true, ...await service.webSearch({ query, limit, provider, modelRef: model, domains, fake, fileResults: file_results }) });
-    } catch (error) {
-      return errorText(error instanceof Error ? error.message : String(error));
-    }
-  });
+    fake: z.boolean().optional().describe('Compatibility flag; execution remains unavailable during Stage A'),
+    file_results: z.boolean().optional().describe('Compatibility flag; execution remains unavailable during Stage A'),
+  }, async () => errorText('KNOWLEDGE_HOSTED_CONTAINED'), { unconditionalContainment: true });
 
   registerTool(server, 'ok_add', 'Add a knowledge item', 'Add a new item to the knowledge store', {
     title: z.string().describe('Item title'),
@@ -1532,7 +1674,7 @@ export function buildServer() {
       return entry;
     });
     return jsonText({ ok: true, item, message: `Added ${item.id}` });
-  });
+  }, { sourceGraph: true });
 
   registerTool(server, 'ok_list', 'List knowledge items', 'List items with pagination, search, tag filtering, and sorting', {
     search: z.string().optional().describe('Search text for title/content'),
@@ -1544,45 +1686,59 @@ export function buildServer() {
     desc: z.boolean().optional().describe('Sort descending'),
     store_path: storePathField,
     scope: scopeField,
-  }, async ({ search, tag, include_archived, page, limit, sort, desc, store_path, scope }) => {
-    const storePath = resolveStorePath(store_path, scope);
-    return readStoreLocked(storePath, (db) => {
-      const q = search ? search.toLowerCase() : '';
-      const requiredTags = (tag ?? []).map((entry) => entry.toLowerCase());
-      let items = activeItems(db.items, include_archived);
-      if (q) items = items.filter((item) => item.title.toLowerCase().includes(q) || item.content.toLowerCase().includes(q));
-      if (requiredTags.length > 0) {
-        items = items.filter((item) => {
-          const itemTags = (item.tags ?? []).map((entry) => entry.toLowerCase());
-          return requiredTags.every((entry) => itemTags.includes(entry));
+    allow_global: allowGlobalReadField,
+  }, async (input) => {
+    try {
+      assertExplicitMcpGlobalRead(input);
+      const { search, tag, include_archived, page, limit, sort, desc, store_path, scope } = input;
+      const storePath = resolveStorePath(store_path, scope);
+      return readStoreLocked(storePath, (db) => {
+        const q = search ? search.toLowerCase() : '';
+        const requiredTags = (tag ?? []).map((entry) => entry.toLowerCase());
+        let items = activeItems(db.items, include_archived);
+        if (q) items = items.filter((item) => item.title.toLowerCase().includes(q) || item.content.toLowerCase().includes(q));
+        if (requiredTags.length > 0) {
+          items = items.filter((item) => {
+            const itemTags = (item.tags ?? []).map((entry) => entry.toLowerCase());
+            return requiredTags.every((entry) => itemTags.includes(entry));
+          });
+        }
+        const p = page && page > 0 ? page : 1;
+        const l = limit && limit > 0 ? limit : 20;
+        const sorted = sortItems(items, sort ?? 'created', desc ?? false);
+        const start = (p - 1) * l;
+        const rows = sorted.slice(start, start + l);
+        return jsonText({
+          ok: true,
+          page: p,
+          limit: l,
+          total: sorted.length,
+          total_pages: Math.max(1, Math.ceil(sorted.length / l)),
+          items: rows,
         });
-      }
-      const p = page && page > 0 ? page : 1;
-      const l = limit && limit > 0 ? limit : 20;
-      const sorted = sortItems(items, sort ?? 'created', desc ?? false);
-      const start = (p - 1) * l;
-      const rows = sorted.slice(start, start + l);
-      return jsonText({
-        ok: true,
-        page: p,
-        limit: l,
-        total: sorted.length,
-        total_pages: Math.max(1, Math.ceil(sorted.length / l)),
-        items: rows,
       });
-    });
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
   });
 
   registerTool(server, 'ok_get', 'Get a knowledge item', 'Retrieve a single item by ID or short ID', {
     id: z.string().describe('Item ID or short ID'),
     store_path: storePathField,
     scope: scopeField,
-  }, async ({ id, store_path, scope }) => {
-    const storePath = resolveStorePath(store_path, scope);
-    return readStoreLocked(storePath, (db) => {
-      const item = findItem(db, id);
-      return item ? jsonText({ ok: true, item }) : errorText(`Item not found: ${id}`);
-    });
+    allow_global: allowGlobalReadField,
+  }, async (input) => {
+    try {
+      assertExplicitMcpGlobalRead(input);
+      const { id, store_path, scope } = input;
+      const storePath = resolveStorePath(store_path, scope);
+      return readStoreLocked(storePath, (db) => {
+        const item = findItem(db, id);
+        return item ? jsonText({ ok: true, item }) : errorText(`Item not found: ${id}`);
+      });
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
   });
 
   registerTool(server, 'ok_update', 'Update a knowledge item', 'Update title, content, URL, tags, or metadata', {
@@ -1608,7 +1764,7 @@ export function buildServer() {
       return item;
     });
     return result ? jsonText({ ok: true, item: result }) : errorText(`Item not found: ${id}`);
-  });
+  }, { sourceGraph: true });
 
   registerTool(server, 'ok_delete', 'Delete a knowledge item', 'Permanently delete an item by ID. Requires confirm=true.', {
     id: z.string().describe('Item ID or short ID'),
@@ -1695,7 +1851,7 @@ export function buildServer() {
       return entry;
     });
     return item ? jsonText({ ok: true, item }) : errorText('New item requires both title and content.');
-  });
+  }, { sourceGraph: true });
 
   registerTool(server, 'ok_untag', 'Remove tags from a knowledge item', 'Remove specific tags from an item', {
     id: z.string(),
@@ -1825,68 +1981,87 @@ export function buildServer() {
     file: z.string().describe('Path to exported JSON file'),
     store_path: storePathField,
     scope: scopeField,
-  }, async ({ file, store_path, scope }) => {
-    if (!existsSync(file)) return errorText(`File not found: ${file}`);
-    const imported = JSON.parse(readFileSync(file, 'utf8'));
-    if (!imported || !Array.isArray(imported.items)) return errorText('Invalid import file: expected {"items": [...]}');
-    const storePath = resolveStorePath(store_path, scope);
-    const result = writeStoreLocked(storePath, (db) => {
-      const existingIds = new Set(db.items.map((item) => item.id));
-      let added = 0;
-      for (const item of imported.items) {
-        if (!existingIds.has(item.id)) {
-          db.items.push(item);
-          existingIds.add(item.id);
-          added += 1;
+  }, async (input) => {
+    try {
+      const boundedInput = boundedMcpRecord(input, 'MCP import input');
+      if (typeof boundedInput.file !== 'string') throw new Error('MCP import file must be a string.');
+      const snapshot = readAnchoredRegularFileSnapshot(
+        resolve(boundedInput.file),
+        MAX_INGEST_BODY_BYTES,
+      );
+      if (!snapshot) return errorText(`File not found: ${boundedInput.file}`);
+      assertBoundedJsonText(snapshot.content, MAX_INGEST_BATCH_ITEMS, 1);
+      const imported = boundedMcpRecord(JSON.parse(snapshot.content), 'MCP import payload');
+      const items = boundedKnowledgeItems(imported.items, 'MCP import items');
+      assertContainedSourceGraph(items, 'mcp-stdio');
+      const storePath = resolveStorePath(boundedInput.store_path, boundedInput.scope);
+      const result = writeStoreLocked(storePath, (db) => {
+        const existingIds = new Set(db.items.map((item) => item.id));
+        let added = 0;
+        for (const item of items) {
+          if (!existingIds.has(item.id)) {
+            db.items.push(item);
+            existingIds.add(item.id);
+            added += 1;
+          }
         }
-      }
-      return { added, skipped: imported.items.length - added };
-    });
-    return jsonText({ ok: true, ...result });
+        return { added, skipped: items.length - added };
+      });
+      return jsonText({ ok: true, ...result });
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
   });
 
   registerTool(server, 'ok_batch', 'Batch add knowledge items', 'Add multiple items at once', {
     items: z.array(z.object({
-      id: z.string().optional(),
-      title: z.string(),
-      content: z.string(),
-      tags: z.array(z.string()).optional(),
+      id: z.string().max(MAX_INGEST_BODY_BYTES).optional(),
+      title: z.string().max(MAX_INGEST_BODY_BYTES),
+      content: z.string().max(MAX_INGEST_BODY_BYTES),
+      tags: z.array(z.string().max(MAX_INGEST_BODY_BYTES)).max(MAX_INGEST_BATCH_ITEMS).optional(),
       metadata: z.record(z.string(), z.unknown()).optional(),
-      created_at: z.string().optional(),
-      updated_at: z.string().optional(),
-    })),
+      created_at: z.string().max(MAX_INGEST_BODY_BYTES).optional(),
+      updated_at: z.string().max(MAX_INGEST_BODY_BYTES).optional(),
+    })).max(MAX_INGEST_BATCH_ITEMS),
     store_path: storePathField,
     scope: scopeField,
-  }, async ({ items, store_path, scope }) => {
-    const storePath = resolveStorePath(store_path, scope);
-    const result = writeStoreLocked(storePath, (db) => {
-      const existingIds = new Set(db.items.map((item) => item.id));
-      let added = 0;
-      let skipped = 0;
-      const now = new Date().toISOString();
-      for (const entry of items) {
-        if (entry.id && existingIds.has(entry.id)) {
-          skipped += 1;
-          continue;
+  }, async (input) => {
+    try {
+      const boundedInput = boundedMcpRecord(input, 'MCP batch input');
+      const items = boundedKnowledgeItems(boundedInput.items, 'MCP batch items');
+      assertContainedSourceGraph(items, 'mcp-stdio');
+      const storePath = resolveStorePath(boundedInput.store_path, boundedInput.scope);
+      const result = writeStoreLocked(storePath, (db) => {
+        const existingIds = new Set(db.items.map((item) => item.id));
+        let added = 0;
+        let skipped = 0;
+        const now = new Date().toISOString();
+        for (const entry of items) {
+          if (entry.id && existingIds.has(entry.id)) {
+            skipped += 1;
+            continue;
+          }
+          const id = entry.id ?? makeId();
+          db.items.push({
+            id,
+            short_id: shortIdFor(id),
+            title: entry.title,
+            content: entry.content,
+            tags: entry.tags ?? [],
+            metadata: entry.metadata ?? {},
+            archived: false,
+            created_at: entry.created_at ?? now,
+            updated_at: entry.updated_at ?? now,
+          });
+          existingIds.add(id);
+          added += 1;
         }
-        const id = entry.id ?? makeId();
-        db.items.push({
-          id,
-          short_id: shortIdFor(id),
-          title: entry.title,
-          content: entry.content,
-          tags: entry.tags ?? [],
-          metadata: entry.metadata ?? {},
-          archived: false,
-          created_at: entry.created_at ?? now,
-          updated_at: entry.updated_at ?? now,
-        });
-        existingIds.add(id);
-        added += 1;
-      }
-      return { added, skipped };
-    });
-    return jsonText({ ok: true, ...result });
+        return { added, skipped };
+      });
+      return jsonText({ ok: true, ...result });
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
   });
 
   return server;
@@ -1912,7 +2087,7 @@ export async function main() {
   const { isHttpMode, resolveMcpHttpPort, startMcpHttpServer } = await import('./mcp-http.js');
 
   if (isHttpMode()) {
-    const handle = await startMcpHttpServer(buildServer, {
+    const handle = await startMcpHttpServer(() => buildServer({ surface: 'mcp-http' }), {
       port: resolveMcpHttpPort(),
     });
     process.on('SIGINT', () => void handle.close().finally(() => process.exit(0)));
@@ -1920,7 +2095,7 @@ export async function main() {
     return;
   }
 
-  const server = buildServer();
+  const server = buildServer({ surface: 'mcp-stdio' });
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('knowledge MCP server running on stdio');

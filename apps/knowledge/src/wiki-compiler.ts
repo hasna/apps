@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type { Database } from 'bun:sqlite';
+import type { KnowledgeDatabase as Database } from './knowledge-db';
 import type { ArtifactStore, ArtifactWrite } from './artifact-store';
 import { hashArtifactBody, recordStorageObjects, type GeneratedStorageObject } from './storage-contract';
 import { migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
 import { generatedArtifactProvenance } from './provenance';
 import type { KnowledgeContextPack } from './retrieval';
+import { parseBoundedJsonData } from './input-limits';
 
 export interface WikiCompileOptions {
   dbPath: string;
@@ -131,9 +132,10 @@ function estimateTokenCount(text: string): number {
 function parseJsonObject(value: string | null | undefined): Record<string, unknown> {
   if (!value) return {};
   try {
-    const parsed = JSON.parse(value);
+    const parsed = parseBoundedJsonData<unknown>(value, 'Persisted wiki metadata');
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
-  } catch {
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
     return {};
   }
 }

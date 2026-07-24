@@ -1,16 +1,20 @@
-import type { Database } from 'bun:sqlite';
-import { existsSync, readFileSync } from 'node:fs';
+import type { KnowledgeDatabase as Database } from './knowledge-db';
+import { resolve } from 'node:path';
+import { readAnchoredRegularFileSnapshot } from './anchored-fs';
 import { migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
 import { searchVectorIndex, type EmbeddingRuntimeOptions } from './embeddings';
 import { sourceProvenance, type GeneratedArtifactProvenance, type KnowledgeProvenance } from './provenance';
 import type { KnowledgeItem } from './store';
 import type { KnowledgeConfig } from './workspace';
+import { MAX_INGEST_BODY_BYTES, parseBoundedJsonData } from './input-limits';
 
 export type SearchResultKind = 'source_chunk' | 'wiki_chunk' | 'legacy_item' | 'wiki_page' | 'knowledge_index';
 export type SearchProvenance = KnowledgeProvenance | GeneratedArtifactProvenance;
 
 export interface HybridSearchOptions extends EmbeddingRuntimeOptions {
   dbPath: string;
+  scope?: 'local' | 'global' | 'project';
+  allowGlobal?: boolean;
   legacyStorePath?: string;
   query: string;
   limit?: number;
@@ -118,9 +122,10 @@ interface IndexRow {
 function parseJsonObject(value: string | null | undefined): Record<string, unknown> {
   if (!value) return {};
   try {
-    const parsed = JSON.parse(value);
+    const parsed = parseBoundedJsonData<unknown>(value, 'Persisted search metadata');
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
-  } catch {
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
     return {};
   }
 }
@@ -285,9 +290,14 @@ function selectKnowledgeIndexes(db: Database, terms: string[], limit: number): I
 }
 
 function readLegacyItems(path?: string): KnowledgeItem[] {
-  if (!path || !existsSync(path)) return [];
+  if (!path) return [];
+  const snapshot = readAnchoredRegularFileSnapshot(resolve(path), MAX_INGEST_BODY_BYTES);
+  if (!snapshot) return [];
   try {
-    const parsed = JSON.parse(readFileSync(path, 'utf8')) as { items?: unknown };
+    const parsed = parseBoundedJsonData<{ items?: unknown }>(
+      snapshot.content,
+      'Persisted legacy knowledge store',
+    );
     if (!parsed || !Array.isArray(parsed.items)) return [];
     return parsed.items.filter((item): item is KnowledgeItem => {
       return Boolean(
@@ -298,7 +308,8 @@ function readLegacyItems(path?: string): KnowledgeItem[] {
         && typeof (item as KnowledgeItem).content === 'string',
       );
     });
-  } catch {
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
     return [];
   }
 }
@@ -314,12 +325,12 @@ function legacyItemHaystack(item: KnowledgeItem): string {
   ].filter((value): value is string => typeof value === 'string' && value.length > 0).join(' ').toLowerCase();
 }
 
-function selectLegacyItems(path: string | undefined, terms: string[], limit: number): Array<{
+function selectLegacyItems(items: readonly KnowledgeItem[], terms: string[], limit: number): Array<{
   item: KnowledgeItem;
   score: number;
 }> {
   if (terms.length === 0) return [];
-  return readLegacyItems(path)
+  return items
     .filter((item) => item.archived !== true)
     .map((item) => ({ item, haystack: legacyItemHaystack(item) }))
     .filter(({ haystack }) => terms.some((term) => haystack.includes(term)))
@@ -492,6 +503,7 @@ export async function hybridSearch(options: HybridSearchOptions): Promise<Hybrid
   let catalogCount = 0;
   let semanticCount = 0;
   const merged = new Map<string, HybridSearchEntry>();
+  const legacyItems = readLegacyItems(options.legacyStorePath);
 
   migrateKnowledgeDb(options.dbPath);
   const db = openKnowledgeDb(options.dbPath);
@@ -502,7 +514,7 @@ export async function hybridSearch(options: HybridSearchOptions): Promise<Hybrid
 
     const wikiRows = selectWikiPages(db, terms, Math.max(limit, 10));
     const indexRows = selectKnowledgeIndexes(db, terms, Math.max(limit, 10));
-    const legacyRows = selectLegacyItems(options.legacyStorePath, terms, Math.max(limit, 10));
+    const legacyRows = selectLegacyItems(legacyItems, terms, Math.max(limit, 10));
     catalogCount = wikiRows.length + indexRows.length;
     keywordCount += legacyRows.length;
     legacyRows.forEach(({ item, score }) => mergeResult(merged, legacyItemResult(item, score)));
@@ -592,7 +604,11 @@ export async function hybridSearchLegacyStore(options: Omit<HybridSearchOptions,
   const terms = queryTerms(query);
   const semanticEnabled = options.semantic === true || options.fake === true || Boolean(options.modelRef);
   const merged = new Map<string, HybridSearchEntry>();
-  const legacyRows = selectLegacyItems(options.legacyStorePath, terms, Math.max(limit, 10));
+  const legacyRows = selectLegacyItems(
+    readLegacyItems(options.legacyStorePath),
+    terms,
+    Math.max(limit, 10),
+  );
   legacyRows.forEach(({ item, score }) => mergeResult(merged, legacyItemResult(item, score)));
   const warnings = ['knowledge_db_missing'];
   if (semanticEnabled) warnings.push('semantic_search_skipped_knowledge_db_missing');

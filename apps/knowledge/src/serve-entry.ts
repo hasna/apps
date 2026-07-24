@@ -2,11 +2,10 @@
 /**
  * @hasna/knowledge — knowledge-serve entrypoint.
  *
- * Boots the HTTP API (PURE REMOTE / Amendment A1). Requires cloud-mode env:
- *   HASNA_KNOWLEDGE_STORAGE_MODE=cloud
- *   HASNA_KNOWLEDGE_DATABASE_URL=postgres://...      (never logged)
- *   HASNA_KNOWLEDGE_API_SIGNING_KEY=...              (or API_KEY_SIGNING_SECRET)
- *   PORT=8080                                         (optional; default 8080)
+ * Stage A boots only public liveness/version/OpenAPI metadata. `/ready` and
+ * every data route return typed 403/503 containment before auth, Postgres,
+ * schema, provider, or remote transport construction. Cloud credentials and
+ * database URLs do not enable hosted access. `PORT` remains optional (8080).
  */
 import { startKnowledgeServe } from './serve.js';
 
