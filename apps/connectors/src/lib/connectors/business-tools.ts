@@ -976,6 +976,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["resource management", "time tracking", "scheduling", "agencies", "teams"],
   },
   {
+    name: "tettra",
+    displayName: "Tettra",
+    description: "Team knowledge base",
+    category: "Business Tools",
+    tags: ["knowledge-base", "wiki", "documentation", "productivity"],
+  },
+  {
     name: "teamup",
     displayName: "Teamup",
     description: "Shared calendar and scheduling platform for teams and organizations",
