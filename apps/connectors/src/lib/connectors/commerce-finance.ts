@@ -465,6 +465,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["shopping cart", "ecommerce", "affiliate", "digital products", "checkout"],
   },
   {
+    name: "tipalti",
+    displayName: "Tipalti",
+    description: "Global payments platform",
+    category: "Commerce & Finance",
+    tags: ["payments", "payees", "ap"],
+  },
+  {
     name: "tokenmetrics",
     displayName: "Token Metrics",
     description: "AI-powered crypto analytics and investment research platform",
