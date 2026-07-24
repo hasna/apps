@@ -1053,6 +1053,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ai", "agents", "memory", "workflows"],
   },
   {
+    name: "weights-biases",
+    displayName: "Weights & Biases",
+    description: "ML experiment tracking (runs, events, search)",
+    category: "AI & ML",
+    tags: ["ai", "ml", "wandb", "experiment-tracking"],
+  },
+  {
     name: "wavelineextract",
     displayName: "Waveline Extract",
     description: "Document data extraction and parsing",
