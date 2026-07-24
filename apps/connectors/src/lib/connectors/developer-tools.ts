@@ -101,6 +101,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["database", "auth", "postgres"],
   },
   {
+    name: "sucuri-api-platform",
+    displayName: "Sucuri API Platform",
+    description: "Sucuri API Platform resources and events",
+    category: "Developer Tools",
+    tags: ["security", "waf", "api-platform", "sucuri"],
+  },
+  {
     name: "mongodb",
     displayName: "MongoDB",
     description: "Document database and Atlas",
