@@ -247,6 +247,11 @@ HASNA_KNOWLEDGE_WEB_SEARCH=1 knowledge web search "latest AI SDK web search" --p
 - [Hosted wrapper responsibilities](docs/architecture/hosted-wrapper-responsibilities.md):
   what a future SaaS layer owns outside the OSS package.
 
+Only the public guides linked above are included in the npm package. Internal
+evidence, topology notes, and secret-bootstrap runbooks must stay out of the
+package docs allowlist; run `npm run release:pack:check` before publishing to
+validate the packed contents.
+
 ## Commands
 
 ### add

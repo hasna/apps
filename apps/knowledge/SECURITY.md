@@ -133,6 +133,11 @@ RDS passwords, billing state, or privileged cloud role credentials. Those belong
 to the hosted wrapper described in
 `docs/architecture/hosted-wrapper-responsibilities.md`.
 
+The public npm package ships an explicit docs allowlist instead of the entire
+`docs/` tree. Keep internal evidence, account/path topology, and secret-bootstrap
+runbooks out of that allowlist, then run `npm run release:pack:check` to verify
+the dry-run package manifest before publishing.
+
 ## Secret Redaction
 
 The local redactor catches common API keys, AWS access key ids, private key

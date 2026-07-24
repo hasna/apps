@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.89
+
+Harden public npm package contents so internal docs never ship. The published
+package previously included the entire `docs/` and `scripts/` trees via broad
+`files` entries, which packed `docs/canonical-secrets-bootstrap-2026-06-08.md`
+(internal secret-path topology and account references) into the public tarball.
+
+- Replace the broad `docs` and `scripts` entries in `package.json` `files` with an
+  explicit allowlist of public guides and dev scripts; the internal
+  secrets-bootstrap runbook is now excluded from the package.
+- Add `scripts/validate-public-package.mjs` (`npm run release:pack:check`), a
+  fail-closed check that diffs `npm pack --dry-run` against the allowlist and
+  rejects any unreviewed or forbidden docs/scripts path. Wired into
+  `prepublishOnly`.
+- Add `tests/package-release.test.ts` (`bun run test:package`) asserting the
+  allowlist and the packed manifest.
+- Document the allowlist policy in `README.md` and `SECURITY.md`.
+
 ## 0.2.88
 
 Security/hygiene: stop shipping the internal infra host `knowledge.hasna.xyz` as the
