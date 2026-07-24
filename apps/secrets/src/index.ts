@@ -47,16 +47,16 @@ Commands:
   set <key> <value> [--type <type>] [--label <label>] [--ttl <ttl>]
   get <key>
   delete <key>               (aliases: remove, rm, uninstall)
-  items list [kind]           list structured vault items
-  items search <query>        search structured vault item metadata
+  items list [kind] [--json]  list structured vault items
+  items search <query> [--json]  search structured vault item metadata
   items get <id> [--show]     show a structured vault item; redacted unless --show is passed
   items delete <id>           delete a structured vault item
   items add-login --title <title> --url <url> --username <user> --password <pass>
   items add-address --title <title> [--name <name>] [--line1 <line>] [--city <city>]
   import-env                 import ~/.secrets/ .env files into vault [--dir <path>] [--push] [--dry-run] [--overwrite]
   export-env                 export vault secrets to ~/.secrets/ .env files [--dir <path>] [--force] [--dry-run]
-  list [namespace]
-  search <query>
+  list [namespace] [--json]
+  search <query> [--json]
   export [--show|--plaintext] [--pretty]  export redacted compact JSON by default
   scan workspace [path] [--limit <n>] [--max-bytes <n>] [--max-files <n>] [--max-scan-bytes <n>] [--timeout-ms <n>] [--pretty]
   scan history [path] [--limit <n>] [--max-commits <n>] [--timeout-ms <n>] [--pretty]
@@ -66,12 +66,12 @@ Commands:
   import <json-file>
   status                      show metadata-only secret reference health
   gc                          prune expired secrets
-  audit [key]                 show audit log
+  audit [key] [--json]        show audit log
   path                        show vault db path
   events                      emit, list, and replay Hasna events
   webhooks                    manage Hasna event webhook subscriptions
 
-  users list [--type human|agent]
+  users list [--type human|agent] [--json]
   users register <id> <name> [--type human|agent]
   users delete <id>
 
@@ -474,6 +474,10 @@ switch (command) {
   case "list": {
     const [namespace] = positional;
     const entries = await listSecretMetadata(namespace);
+    if ("json" in flags) {
+      console.log(JSON.stringify(entries, null, 2));
+      break;
+    }
     if (entries.length === 0) {
       console.log(namespace ? `No secrets in namespace: ${namespace}` : "Vault is empty.");
     } else {
@@ -487,6 +491,10 @@ switch (command) {
     const [query] = positional;
     if (!query) { console.error("Usage: secrets search <query>"); process.exit(1); }
     const results = await searchSecretMetadata(query);
+    if ("json" in flags) {
+      console.log(JSON.stringify(results, null, 2));
+      break;
+    }
     if (results.length === 0) { console.log(`No results for: ${query}`); }
     else {
       for (const e of results) console.log(formatEntry(e));
@@ -665,6 +673,10 @@ switch (command) {
     const [key] = positional;
     const limit = flags.limit ? parseInt(flags.limit) : 50;
     const entries = await getAuditLog(key, limit);
+    if ("json" in flags) {
+      console.log(JSON.stringify(entries, null, 2));
+      break;
+    }
     if (entries.length === 0) { console.log("No audit entries."); }
     else {
       for (const e of entries) {
@@ -685,6 +697,10 @@ switch (command) {
     switch (sub) {
       case "list": {
         const users = await listUsers(uFlags.type as any);
+        if ("json" in flags) {
+          console.log(JSON.stringify(users, null, 2));
+          break;
+        }
         if (users.length === 0) { console.log("No users registered."); }
         else {
           for (const u of users) {
@@ -726,6 +742,10 @@ switch (command) {
           process.exit(1);
         }
         const items = await listVaultItemMetadata(kind);
+        if ("json" in flags) {
+          console.log(JSON.stringify(items, null, 2));
+          break;
+        }
         if (items.length === 0) {
           console.log(kind ? `No ${kind} vault items.` : "No structured vault items.");
         } else {
@@ -739,6 +759,10 @@ switch (command) {
         const query = idOrKind;
         if (!query) { console.error("Usage: secrets items search <query>"); process.exit(1); }
         const items = await searchVaultItemMetadata(query);
+        if ("json" in flags) {
+          console.log(JSON.stringify(items, null, 2));
+          break;
+        }
         if (items.length === 0) {
           console.log(`No vault items for: ${query}`);
         } else {
