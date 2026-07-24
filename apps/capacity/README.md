@@ -43,6 +43,30 @@ bun run typecheck
 bun run build
 ```
 
+## Install the CLI artifact
+
+Bun blocks dependency lifecycle scripts unless a package is explicitly trusted.
+An ordinary Bun install is therefore fail-closed: if the blocked lifecycle
+leaves `dist/cli.js` writable by group or world, `capacity` refuses to run. The
+packaged launcher opens that payload without following symlinks, verifies the
+open descriptor is a regular file with an acceptable mode, and evaluates only
+the bytes read from that descriptor. Trusting the package during installation
+lets the lifecycle hardener normalize both launcher and payload to mode `0755`:
+
+```sh
+bun add --trust @hasna/capacity
+bun add --global --trust @hasna/capacity
+```
+
+An npm install runs the same permission-hardening lifecycle automatically:
+
+```sh
+npm install --global @hasna/capacity
+```
+
+The package remains a Bun CLI; an npm-based install still requires Bun on
+`PATH`.
+
 The live PostgreSQL conformance test is opt-in and expects an empty disposable
 database:
 

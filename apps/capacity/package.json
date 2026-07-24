@@ -1,6 +1,6 @@
 {
   "name": "@hasna/capacity",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Fail-closed provider account capacity metadata for local and self-hosted Hasna deployments",
   "type": "module",
   "license": "MIT",
@@ -20,10 +20,12 @@
     }
   },
   "bin": {
-    "capacity": "./dist/cli.js"
+    "capacity": "scripts/capacity-launcher.mjs"
   },
   "files": [
     "dist",
+    "scripts/capacity-launcher.mjs",
+    "scripts/harden-cli-permissions.mjs",
     "README.md",
     "LICENSE"
   ],
@@ -31,7 +33,10 @@
     "build": "rm -rf dist && bun run build:js && bun run build:types",
     "build:js": "bun build src/index.ts --outdir dist --target bun --format esm && bun build src/cli.ts --outfile dist/cli.js --target bun --format esm",
     "build:types": "tsc -p tsconfig.build.json",
+    "postinstall": "bun scripts/harden-cli-permissions.mjs",
+    "prepack": "bun run build",
     "test": "bun test",
+    "test:package": "bun test test/package/artifact.test.ts",
     "test:unit": "bun test test/unit",
     "test:storage": "bun test test/storage",
     "typecheck": "tsc --noEmit"
