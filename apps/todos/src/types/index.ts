@@ -225,6 +225,7 @@ export type AgentStatus = "active" | "archived";
 export interface Agent {
   id: string; // 8-char short UUID
   name: string;
+  identity_id?: string | null; // immutable canonical authority; labels never populate this field
   description: string | null;
   role: string | null;
   title: string | null; // job title: "Senior Engineer", "QA Lead", etc.
@@ -239,6 +240,8 @@ export interface Agent {
   last_seen_at: string;
   session_id: string | null; // bound session — used to detect name conflicts
   working_dir: string | null;
+  project_id?: string | null; // structured identity-projection metadata
+  runtime_instance_id?: string | null; // external runtime actor instance; not a lease/fence owner
   active_project_id: string | null; // project this agent's session is locked to
   machine_id?: string | null;
   synced_at?: string | null;
@@ -247,6 +250,7 @@ export interface Agent {
 export interface AgentRow {
   id: string;
   name: string;
+  identity_id?: string | null;
   description: string | null;
   role: string | null;
   title: string | null;
@@ -261,6 +265,8 @@ export interface AgentRow {
   last_seen_at: string;
   session_id: string | null;
   working_dir: string | null;
+  project_id?: string | null;
+  runtime_instance_id?: string | null;
   active_project_id: string | null;
   machine_id?: string | null;
   synced_at?: string | null;
@@ -268,6 +274,7 @@ export interface AgentRow {
 
 export interface RegisterAgentInput {
   name: string;
+  identity_id?: string;
   description?: string;
   role?: string;
   title?: string;
@@ -279,9 +286,92 @@ export interface RegisterAgentInput {
   org_id?: string;
   metadata?: Record<string, unknown>;
   session_id?: string;
+  runtime_instance_id?: string;
   working_dir?: string;
   project_id?: string;
   force?: boolean; // skip active-agent check and force takeover
+}
+
+export type IdentityMappingBasis = "authoritative" | "imported" | "candidate" | "name_similarity";
+export type IdentityMappingStatus = "active" | "retired" | "quarantined" | "revoked";
+export type IdentityReadPreference = "canonical_first" | "legacy_first" | "canonical_only" | "legacy_only";
+export type IdentityResolutionTrust = "authoritative" | "non_authoritative" | "denied";
+export type IdentityMappingLifecycleAction =
+  | "create"
+  | "unchanged"
+  | "promote"
+  | "correct"
+  | "retire"
+  | "quarantine"
+  | "blocked";
+
+export interface IdentitySourceLineage {
+  source_authority: string;
+  source_tenant_id: string;
+  source_namespace: string;
+  source_entity_type: string;
+  source_record_id: string;
+}
+
+export interface AgentIdentitySourceMapping extends IdentitySourceLineage {
+  id: string;
+  local_agent_id: string | null;
+  identity_id: string | null;
+  observed_label: string | null;
+  evidence: Record<string, unknown>;
+  mapping_basis: IdentityMappingBasis;
+  status: IdentityMappingStatus;
+  revision: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentIdentityAlias {
+  id: string;
+  local_agent_id: string;
+  label: string;
+  normalized_label: string;
+  alias_kind: "historical" | "candidate";
+  status: "active" | "quarantined" | "revoked";
+  created_at: string;
+}
+
+export interface AgentIdentityMappingInput extends IdentitySourceLineage {
+  local_agent_id?: string | null;
+  identity_id?: string | null;
+  observed_label?: string | null;
+  evidence?: Record<string, unknown>;
+  mapping_basis: IdentityMappingBasis;
+  status?: "active" | "retired";
+}
+
+export interface AgentIdentityResolutionInput {
+  identity_id?: string | null;
+  source?: IdentitySourceLineage | null;
+  local_agent_id?: string | null;
+  alias?: string | null;
+}
+
+export interface AgentIdentityResolution {
+  identity_id: string | null;
+  local_agent_id: string | null;
+  resolved_by: "identity_id" | "source" | "legacy_local_id" | "legacy_alias" | "none";
+  trust: IdentityResolutionTrust;
+}
+
+export interface AgentIdentityMappingOutcome extends AgentIdentityMappingInput {
+  classification: "uniquely_mapped" | "ambiguous" | "unmapped";
+  mapping_id: string | null;
+  previous_mapping_id: string | null;
+  lifecycle_action: IdentityMappingLifecycleAction;
+  reason: string;
+}
+
+export interface AgentIdentityReconciliationReport {
+  dry_run: boolean;
+  uniquely_mapped: AgentIdentityMappingOutcome[];
+  ambiguous: AgentIdentityMappingOutcome[];
+  unmapped: AgentIdentityMappingOutcome[];
 }
 
 export interface AgentConflictError {
@@ -1066,6 +1156,26 @@ export class AgentNotFoundError extends Error {
   constructor(public agentId: string) {
     super(`Agent not found: ${agentId}`);
     this.name = "AgentNotFoundError";
+  }
+}
+
+export class IdentityAliasAmbiguousError extends Error {
+  readonly code = "IDENTITY_ALIAS_AMBIGUOUS" as const;
+  readonly candidates: string[];
+
+  constructor(subject: string, candidates: string[] = []) {
+    super(`Identity alias or source is ambiguous: ${subject}`);
+    this.name = "IdentityAliasAmbiguousError";
+    this.candidates = [...new Set(candidates)].sort();
+  }
+}
+
+export class IdentityIdImmutableError extends Error {
+  readonly code = "IDENTITY_ID_IMMUTABLE" as const;
+
+  constructor(agentId: string) {
+    super(`IDENTITY_ID_IMMUTABLE: canonical identity for agent ${agentId} cannot be replaced`);
+    this.name = "IdentityIdImmutableError";
   }
 }
 

@@ -182,24 +182,25 @@ export function registerAgentCommands(program: Command) {
   program
     .command("agents-normalize")
     .alias("normalize-agents")
-    .description("Rename invalid/generated agent names (agent, agent-1, name-2, two-word names) to safe one-word names")
+    .description("Plan safe replacement labels for invalid/generated agent names (non-mutating: candidates are quarantined, existing names and references are left unchanged)")
     .action(async () => {
       const globalOpts = program.opts();
       try {
         const db = getDatabase();
-        const renamed = normalizeGeneratedAgentNames(db);
+        const planned = normalizeGeneratedAgentNames(db);
         if (globalOpts.json) {
-          output({ renamed, suggestions: suggestAgentNames(listAgents().map((agent) => agent.name)).slice(0, 5) }, true);
+          output({ planned, applied: false, suggestions: suggestAgentNames(listAgents().map((agent) => agent.name)).slice(0, 5) }, true);
           return;
         }
-        if (renamed.length === 0) {
+        if (planned.length === 0) {
           console.log(chalk.green("No invalid or generated agent names found."));
           return;
         }
-        console.log(chalk.green(`Normalized ${renamed.length} agent name(s):`));
-        for (const item of renamed) {
-          console.log(`  ${chalk.cyan(item.id)} ${chalk.red(item.old_name)} ${chalk.dim("->")} ${chalk.bold(item.new_name)} ${chalk.dim(`(${item.reference_updates} reference updates)`)}`);
+        console.log(chalk.yellow(`Planned ${planned.length} candidate rename(s) (quarantined, not applied):`));
+        for (const item of planned) {
+          console.log(`  ${chalk.cyan(item.id)} ${chalk.red(item.old_name)} ${chalk.dim("->")} ${chalk.bold(item.new_name)} ${chalk.dim(`(${item.status}; names left unchanged)`)}`);
         }
+        console.log(chalk.dim("Names remain display-only; applying a candidate requires a separate explicit reconciliation action."));
       } catch (e) {
         handleError(e);
       }

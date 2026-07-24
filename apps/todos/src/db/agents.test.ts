@@ -1,7 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { Database } from "bun:sqlite";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { getDatabase, closeDatabase, resetDatabase } from "./database.js";
 import { registerAgent, isAgentConflict, releaseAgent, autoReleaseStaleAgents, getAgent, getAgentByName, listAgents, updateAgentActivity, updateAgent, deleteAgent, archiveAgent, unarchiveAgent, normalizeGeneratedAgentNames, InvalidAgentNameError } from "./agents.js";
 import { PREFERRED_AGENT_NAMES, suggestAgentNames } from "./agent-names.js";
+import { IdentityAliasAmbiguousError, listAgentAliases } from "./identity-mapping.js";
+import { createTask, getNextTask, listTasks } from "./tasks.js";
+import { getAgentMetrics } from "./agent-metrics.js";
 
 let uniqueNameCounter = 0;
 
@@ -65,6 +72,56 @@ describe("registerAgent", () => {
     expect(() => registerAgent({ name: "valeria-29" })).toThrow(/numbered suffix/);
     expect(() => registerAgent({ name: "two words" })).toThrow(/single word/);
     expect(() => registerAgent({ name: "busy-agent" })).toThrow(/one word/);
+  });
+
+  it("holds an immediate write fence across canonical lookup and insert", () => {
+    closeDatabase();
+    resetDatabase();
+    const root = mkdtempSync(join(tmpdir(), "todos-agent-register-race-"));
+    const path = join(root, "todos.db");
+    const primary = getDatabase(path);
+    const contender = new Database(path);
+    contender.run("PRAGMA busy_timeout = 1");
+    contender.run("PRAGMA foreign_keys = ON");
+    let contenderBlocked = false;
+
+    try {
+      const input = {
+        name: "quintilian",
+        identity_id: "identity-quintilian",
+        get description(): string {
+          try {
+            const createdAt = new Date().toISOString();
+            contender.run(
+              "INSERT INTO agents (id, name, identity_id, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?)",
+              ["racer001", "rivalname", "identity-quintilian", createdAt, createdAt],
+            );
+          } catch (error) {
+            if (error instanceof Error && error.message.includes("database is locked")) {
+              contenderBlocked = true;
+            } else {
+              throw error;
+            }
+          }
+          return "registration race";
+        },
+      };
+
+      const registered = registerAgent(input, primary);
+      if ("conflict" in registered) throw new Error(registered.message);
+
+      expect(contenderBlocked).toBe(true);
+      expect(primary.query(
+        "SELECT id FROM agents WHERE identity_id = ? ORDER BY id",
+      ).all("identity-quintilian")).toEqual([{ id: registered.id }]);
+    } finally {
+      contender.close();
+      closeDatabase();
+      resetDatabase();
+      rmSync(root, { recursive: true, force: true });
+      process.env["TODOS_DB_PATH"] = ":memory:";
+      getDatabase();
+    }
   });
 });
 
@@ -205,7 +262,81 @@ describe("updateAgent", () => {
 });
 
 describe("normalizeGeneratedAgentNames", () => {
-  it("should rename generic generated agents and update name references", () => {
+  it("keeps historical assignments discoverable through task, queue, and metrics entry points without mutation", () => {
+    const db = getDatabase();
+    const timestamp = new Date().toISOString();
+    const agentId = "legacy01";
+    const historicalName = "agent-1";
+    db.run(
+      "INSERT INTO agents (id, name, created_at, last_seen_at) VALUES (?, ?, ?, ?)",
+      [agentId, historicalName, timestamp, timestamp],
+    );
+
+    const assigned = createTask({
+      title: "Historical assignment",
+      priority: "low",
+      assigned_to: historicalName,
+    }, db);
+    createTask({ title: "Unassigned competitor", priority: "critical" }, db);
+    createTask({
+      title: "Historical local-id metric",
+      status: "completed",
+      agent_id: agentId,
+    }, db);
+    const locked = createTask({
+      title: "Historical lock",
+      status: "in_progress",
+      assigned_to: historicalName,
+    }, db);
+    db.run("UPDATE tasks SET locked_by = ?, locked_at = ? WHERE id = ?", [historicalName, timestamp, locked.id]);
+    db.run(
+      "INSERT INTO task_comments (id, task_id, agent_id, content, created_at) VALUES (?, ?, ?, ?, ?)",
+      ["legacyc1", assigned.id, historicalName, "Historical progress", timestamp],
+    );
+
+    expect(listTasks({ assigned_to: historicalName }, db).map((task) => task.id)).toContain(assigned.id);
+    expect(getNextTask(historicalName, undefined, db)?.id).toBe(assigned.id);
+    expect(getAgentMetrics(historicalName, {}, db)?.tasks_completed).toBe(1);
+    const agentBefore = db.query("SELECT * FROM agents WHERE id = ?").get(agentId);
+
+    db.exec(`
+      CREATE TEMP TRIGGER reject_agent_name_rewrite
+      BEFORE UPDATE OF name ON agents
+      BEGIN SELECT RAISE(ABORT, 'agents.name mutation is forbidden'); END;
+
+      CREATE TEMP TRIGGER reject_task_reference_rewrite
+      BEFORE UPDATE OF assigned_to, agent_id, locked_by ON tasks
+      BEGIN SELECT RAISE(ABORT, 'historical task reference rewrite is forbidden'); END;
+
+      CREATE TEMP TRIGGER reject_comment_reference_rewrite
+      BEFORE UPDATE OF agent_id ON task_comments
+      BEGIN SELECT RAISE(ABORT, 'historical comment reference rewrite is forbidden'); END;
+    `);
+
+    const changesBefore = (db.query("SELECT total_changes() AS count").get() as { count: number }).count;
+    const planned = normalizeGeneratedAgentNames(db);
+    const changesAfter = (db.query("SELECT total_changes() AS count").get() as { count: number }).count;
+    expect(planned).toHaveLength(1);
+    expect(planned[0]!.old_name).toBe(historicalName);
+    expect(planned[0]!.new_name).not.toBe(historicalName);
+    expect(planned[0]!.applied).toBe(false);
+    expect(planned[0]!.disposition).toBe("candidate");
+    expect(planned[0]!.alias_kind).toBe("candidate");
+    expect(planned[0]!.status).toBe("quarantined");
+    expect(planned[0]!.name_updates).toBe(0);
+    expect(planned[0]!.reference_updates).toBe(0);
+
+    expect(getAgent(agentId, db)?.name).toBe(historicalName);
+    expect(db.query("SELECT * FROM agents WHERE id = ?").get(agentId)).toEqual(agentBefore);
+    expect(changesAfter).toBe(changesBefore);
+    expect(listTasks({ assigned_to: historicalName }, db).map((task) => task.id)).toContain(assigned.id);
+    expect(getNextTask(historicalName, undefined, db)?.id).toBe(assigned.id);
+    expect(getAgentMetrics(historicalName, {}, db)?.tasks_completed).toBe(1);
+    expect(db.query("SELECT locked_by FROM tasks WHERE id = ?").get(locked.id)).toEqual({ locked_by: historicalName });
+    expect(db.query("SELECT agent_id FROM task_comments WHERE id = ?").get("legacyc1")).toEqual({ agent_id: historicalName });
+  });
+
+  it("should retain generated labels without persisting replacement candidates", () => {
     const db = getDatabase();
     const timestamp = new Date().toISOString();
     db.run(
@@ -221,17 +352,27 @@ describe("normalizeGeneratedAgentNames", () => {
       ["comment1", "task0001", "agent-1", "progress", timestamp],
     );
 
-    const renamed = normalizeGeneratedAgentNames(db);
-    expect(renamed).toHaveLength(3);
-    expect(renamed.map((item) => item.old_name)).toEqual(["agent-1", "valeria-29", "busy-agent"]);
-    expect(renamed.every((item) => !item.new_name.match(/-\d+$/))).toBe(true);
+    const planned = normalizeGeneratedAgentNames(db);
+    expect(planned).toHaveLength(3);
+    expect(planned.map((item) => item.old_name)).toEqual(["agent-1", "valeria-29", "busy-agent"]);
+    expect(planned.every((item) => !item.new_name.match(/-\d+$/))).toBe(true);
+    expect(planned.every((item) => item.applied === false)).toBe(true);
+    expect(planned.every((item) => item.disposition === "candidate")).toBe(true);
+    expect(planned.every((item) => item.name_updates === 0)).toBe(true);
 
     const task = db.query("SELECT assigned_to, agent_id, locked_by FROM tasks WHERE id = ?").get("task0001") as { assigned_to: string; agent_id: string; locked_by: string };
     const comment = db.query("SELECT agent_id FROM task_comments WHERE id = ?").get("comment1") as { agent_id: string };
-    expect(task.assigned_to).toBe(renamed[0]!.new_name);
-    expect(comment.agent_id).toBe(renamed[0]!.new_name);
-    expect(task.agent_id).toBe(renamed[1]!.new_name);
-    expect(task.locked_by).toBe(renamed[2]!.new_name);
+    expect(task.assigned_to).toBe("agent-1");
+    expect(comment.agent_id).toBe("agent-1");
+    expect(task.agent_id).toBe("valeria-29");
+    expect(task.locked_by).toBe("busy-agent");
+    expect(planned.every((item) => item.reference_updates === 0)).toBe(true);
+    expect(db.query("SELECT id, name FROM agents ORDER BY id").all()).toEqual([
+      { id: "bad00001", name: "agent-1" },
+      { id: "bad00002", name: "valeria-29" },
+      { id: "bad00003", name: "busy-agent" },
+    ]);
+    expect(db.query("SELECT * FROM agent_identity_aliases").all()).toEqual([]);
   });
 
   it("should use distinct fallback names when the preferred pool is exhausted", () => {
@@ -248,11 +389,29 @@ describe("normalizeGeneratedAgentNames", () => {
       ["bad99999", "agent-1", timestamp, timestamp],
     );
 
-    const renamed = normalizeGeneratedAgentNames(db);
-    expect(renamed).toHaveLength(1);
-    expect(renamed[0]!.old_name).toBe("agent-1");
-    expect(renamed[0]!.new_name).toMatch(/^[a-z]+$/);
-    expect(PREFERRED_AGENT_NAMES).not.toContain(renamed[0]!.new_name as any);
+    const planned = normalizeGeneratedAgentNames(db);
+    expect(planned).toHaveLength(1);
+    expect(planned[0]!.old_name).toBe("agent-1");
+    expect(planned[0]!.new_name).toMatch(/^[a-z]+$/);
+    expect(PREFERRED_AGENT_NAMES).not.toContain(planned[0]!.new_name as any);
+    expect(getAgent("bad99999", db)?.name).toBe("agent-1");
+    expect(listAgentAliases("bad99999", db)).toEqual([]);
+  });
+
+  it("should reuse the same deterministic candidate without writing state", () => {
+    const db = getDatabase();
+    const timestamp = new Date().toISOString();
+    db.run(
+      "INSERT INTO agents (id, name, created_at, last_seen_at) VALUES (?, ?, ?, ?)",
+      ["bad00004", "agent-2", timestamp, timestamp],
+    );
+
+    const first = normalizeGeneratedAgentNames(db);
+    const second = normalizeGeneratedAgentNames(db);
+
+    expect(second).toEqual(first);
+    expect(getAgent("bad00004", db)?.name).toBe("agent-2");
+    expect(listAgentAliases("bad00004", db)).toEqual([]);
   });
 
   it("should not suggest preferred-name suffix variants after exhausting the name pool", () => {
@@ -413,7 +572,7 @@ describe("updateAgent — rename conflict check", () => {
   it("should reject rename to a name held by active agent", () => {
     const agentA = registerAgent({ name: "holdera" }) as any;
     const agentB = registerAgent({ name: "holderb" }) as any;
-    expect(() => updateAgent(agentB.id, { name: "holdera" })).toThrow("Cannot rename");
+    expect(() => updateAgent(agentB.id, { name: "holdera" })).toThrow(IdentityAliasAmbiguousError);
   });
 
   it("should allow rename to a free name", () => {
@@ -422,14 +581,16 @@ describe("updateAgent — rename conflict check", () => {
     expect(updated.name).toBe("totallynewname");
   });
 
-  it("should allow rename to a stale agent's name", () => {
+  it("should reject rename to a stale agent's label without evicting either record", () => {
     const db = getDatabase();
     const holder = registerAgent({ name: "staleholder" }) as any;
     const staleTime = new Date(Date.now() - 31 * 60 * 1000).toISOString();
     db.run("UPDATE agents SET last_seen_at = ? WHERE id = ?", [staleTime, holder.id]);
     const agent = registerAgent({ name: "wantsrename" }) as any;
-    const updated = updateAgent(agent.id, { name: "staleholder" });
-    expect(updated.name).toBe("staleholder");
+    expect(() => updateAgent(agent.id, { name: "staleholder" })).toThrow(IdentityAliasAmbiguousError);
+    expect(getAgent(holder.id)?.name).toBe("staleholder");
+    expect(getAgent(agent.id)?.name).toBe("wantsrename");
+    expect(db.query("SELECT name FROM agents WHERE name LIKE '%__evicted_%'").all()).toEqual([]);
   });
 });
 

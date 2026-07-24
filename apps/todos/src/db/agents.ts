@@ -1,6 +1,8 @@
 import type { Database } from "bun:sqlite";
 import type { Agent, AgentConflictError, AgentRow, AgentStatus, RegisterAgentInput } from "../types/index.js";
+import { IdentityAliasAmbiguousError, IdentityIdImmutableError } from "../types/index.js";
 import { getDatabase, now } from "./database.js";
+import { recordAgentAlias } from "./identity-mapping.js";
 import { currentStorageMachineId } from "./storage-tombstones.js";
 import {
   InvalidAgentNameError,
@@ -43,7 +45,6 @@ export function autoReleaseStaleAgents(db?: Database): number {
  * Active = last_seen_at within the configured stale window.
  */
 export function getAvailableNamesFromPool(pool: string[], db: Database): string[] {
-  autoReleaseStaleAgents(db);
   const cutoff = new Date(Date.now() - getActiveWindowMs()).toISOString();
   const activeNames = new Set(
     (db.query("SELECT name FROM agents WHERE status = 'active' AND last_seen_at > ?").all(cutoff) as { name: string }[])
@@ -61,6 +62,10 @@ function shortUuid(): string {
 function rowToAgent(row: AgentRow): Agent {
   return {
     ...row,
+    identity_id: row.identity_id ?? null,
+    project_id: row.project_id ?? null,
+    runtime_instance_id: row.runtime_instance_id ?? null,
+    machine_id: row.machine_id ?? null,
     permissions: JSON.parse(row.permissions || '["*"]') as string[],
     capabilities: JSON.parse(row.capabilities || "[]") as string[],
     status: (row.status || "active") as AgentStatus,
@@ -82,14 +87,46 @@ function rowToAgent(row: AgentRow): Agent {
  */
 export function registerAgent(input: RegisterAgentInput, db?: Database): Agent | AgentConflictError {
   const d = db || getDatabase();
+  const register = d.transaction(() => registerAgentInCurrentTransaction(input, d));
+  return register.immediate();
+}
+
+function registerAgentInCurrentTransaction(
+  input: RegisterAgentInput,
+  d: Database,
+): Agent | AgentConflictError {
   const machineId = currentStorageMachineId(d);
+  const identityId = input.identity_id === undefined ? null : input.identity_id.trim();
+  if (input.identity_id !== undefined && !identityId) {
+    throw new Error("identity_id must be a non-empty canonical identifier");
+  }
   const existingNames = (d.query("SELECT name FROM agents").all() as { name: string }[]).map((row) => row.name);
   const normalizedName = validateAgentName(input.name, existingNames);
 
   // Pool is advisory for availability, but generated/generic names are blocked globally.
 
-  const existing = getAgentByName(normalizedName, d);
+  const existingByName = getAgentByNameProjection(normalizedName, d);
+  const identityRows = identityId
+    ? (d.query("SELECT id FROM agents WHERE identity_id = ? ORDER BY id").all(identityId) as Array<{ id: string }>)
+    : [];
+  if (identityRows.length > 1) {
+    throw new IdentityAliasAmbiguousError(identityId!, identityRows.map((row) => row.id));
+  }
+  const existingByIdentity = identityRows[0] ? getAgent(identityRows[0].id, d) : null;
+  if (existingByIdentity && existingByName && existingByIdentity.id !== existingByName.id) {
+    throw new IdentityAliasAmbiguousError(normalizedName, [existingByIdentity.id, existingByName.id]);
+  }
+  if (identityId && existingByName && !existingByIdentity && existingByName.identity_id !== identityId) {
+    throw new IdentityAliasAmbiguousError(normalizedName, [existingByName.id]);
+  }
+  const existing = existingByIdentity || existingByName;
   if (existing) {
+    if (existing.identity_id && !identityId) {
+      return buildConflictError(existing, new Date(existing.last_seen_at).getTime(), input.pool, d);
+    }
+    if (identityId && existing.identity_id && identityId !== existing.identity_id) {
+      throw new IdentityIdImmutableError(existing.id);
+    }
     const lastSeenMs = new Date(existing.last_seen_at).getTime();
     const activeWindowMs = getActiveWindowMs();
     const isActive = Date.now() - lastSeenMs < activeWindowMs;
@@ -138,6 +175,14 @@ export function registerAgent(input: RegisterAgentInput, db?: Database): Agent |
       updates.push("active_project_id = ?");
       params.push(input.project_id);
     }
+    if (input.project_id) {
+      updates.push("project_id = ?");
+      params.push(input.project_id);
+    }
+    if (input.runtime_instance_id) {
+      updates.push("runtime_instance_id = ?");
+      params.push(input.runtime_instance_id);
+    }
     if (!existing.machine_id && machineId) {
       updates.push("machine_id = ?");
       params.push(machineId);
@@ -151,14 +196,15 @@ export function registerAgent(input: RegisterAgentInput, db?: Database): Agent |
   const timestamp = now();
 
   d.run(
-    `INSERT INTO agents (id, name, description, role, title, level, permissions, capabilities, reports_to, org_id, metadata, created_at, last_seen_at, session_id, working_dir, active_project_id, machine_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, normalizedName, input.description || null, input.role || "agent",
+    `INSERT INTO agents (id, name, identity_id, description, role, title, level, permissions, capabilities, reports_to, org_id, metadata, created_at, last_seen_at, session_id, working_dir, project_id, runtime_instance_id, active_project_id, machine_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, normalizedName, identityId, input.description || null, input.role || "agent",
      input.title || null, input.level || null,
      JSON.stringify(input.permissions || ["*"]), JSON.stringify(input.capabilities || []),
      input.reports_to || null,
      input.org_id || null, JSON.stringify(input.metadata || {}), timestamp, timestamp,
-     input.session_id || null, input.working_dir || null, input.project_id && input.session_id ? input.project_id : null,
+     input.session_id || null, input.working_dir || null, input.project_id || null, input.runtime_instance_id || null,
+     input.project_id && input.session_id ? input.project_id : null,
      machineId],
   );
 
@@ -212,11 +258,19 @@ export function getAgent(id: string, db?: Database): Agent | null {
   return row ? rowToAgent(row) : null;
 }
 
-export function getAgentByName(name: string, db?: Database): Agent | null {
-  const d = db || getDatabase();
+function getAgentByNameProjection(name: string, d: Database): Agent | null {
   const normalizedName = name.trim().toLowerCase();
   const row = d.query("SELECT * FROM agents WHERE LOWER(name) = ?").get(normalizedName) as AgentRow | null;
   return row ? rowToAgent(row) : null;
+}
+
+/**
+ * Labels are a legacy lookup projection, never canonical authority. A name-only
+ * read may locate the Todos-local actor but cannot disclose or infer identity_id.
+ */
+export function getAgentByName(name: string, db?: Database): Agent | null {
+  const agent = getAgentByNameProjection(name, db || getDatabase());
+  return agent ? { ...agent, identity_id: null } : null;
 }
 
 export function listAgents(opts?: { include_archived?: boolean } | Database, db?: Database): Agent[] {
@@ -229,7 +283,6 @@ export function listAgents(opts?: { include_archived?: boolean } | Database, db?
     includeArchived = (opts as { include_archived?: boolean } | undefined)?.include_archived ?? false;
     d = db || getDatabase();
   }
-  autoReleaseStaleAgents(d);
   if (includeArchived) {
     return (d.query("SELECT * FROM agents ORDER BY name").all() as AgentRow[]).map(rowToAgent);
   }
@@ -252,24 +305,20 @@ export function updateAgent(
 
   const sets: string[] = ["last_seen_at = ?"];
   const params: (string | null)[] = [now()];
+  let historicalLabel: string | null = null;
 
   if (input.name !== undefined) {
     const existingNames = (d.query("SELECT name FROM agents WHERE id != ?").all(id) as { name: string }[]).map((row) => row.name);
     const newName = validateAgentName(input.name, existingNames);
-    // Check if name is held by a different active agent
-    const holder = getAgentByName(newName, d);
-    if (holder && holder.id !== id) {
-      const lastSeenMs = new Date(holder.last_seen_at).getTime();
-      const isActive = Date.now() - lastSeenMs < getActiveWindowMs();
-      if (isActive && holder.status === "active") {
-        throw new Error(`Cannot rename: name "${newName}" is held by active agent ${holder.id} (last seen ${Math.round((Date.now() - lastSeenMs) / 60000)}m ago)`);
+    if (newName !== agent.name) {
+      const holder = getAgentByName(newName, d);
+      if (holder && holder.id !== id) {
+        throw new IdentityAliasAmbiguousError(newName, [holder.id, id]);
       }
-      // Holder is stale or archived — evict by clearing their name to free the UNIQUE constraint
-      const evictedName = `${holder.name}__evicted_${holder.id}`;
-      d.run("UPDATE agents SET name = ? WHERE id = ?", [evictedName, holder.id]);
+      historicalLabel = agent.name;
+      sets.push("name = ?");
+      params.push(newName);
     }
-    sets.push("name = ?");
-    params.push(newName);
   }
   if (input.description !== undefined) {
     sets.push("description = ?");
@@ -309,7 +358,11 @@ export function updateAgent(
   }
 
   params.push(id);
-  d.run(`UPDATE agents SET ${sets.join(", ")} WHERE id = ?`, params);
+  const apply = d.transaction(() => {
+    if (historicalLabel) recordAgentAlias(id, historicalLabel, d);
+    d.run(`UPDATE agents SET ${sets.join(", ")} WHERE id = ?`, params);
+  });
+  apply.immediate();
   return getAgent(id, d)!;
 }
 

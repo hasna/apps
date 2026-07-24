@@ -3,6 +3,8 @@ import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { runMigrations, backfillTaskTags } from "./schema.js";
 import { backfillMachineId } from "./machines.js";
+import { ensureAgentIdentitySchema } from "./identity-mapping.js";
+import { IdentityAliasAmbiguousError } from "../types/index.js";
 
 export const LOCK_EXPIRY_MINUTES = 30;
 
@@ -90,6 +92,7 @@ function openDatabase(path: string): Database {
 
   // Run migrations
   runMigrations(db);
+  ensureAgentIdentitySchema(db);
   backfillTaskTags(db);
   backfillMachineId(db);
 
@@ -233,12 +236,22 @@ export function resolvePartialId(db: Database, table: string, partialId: string)
     if (nameRow) return nameRow.id;
   }
 
-  // For agents table, also try matching on name (case-insensitive). Agent names
-  // are UNIQUE, and MCP tools document assigned_to as "Agent ID or name" — without
-  // this, a name resolves to null and the caller throws UNKNOWN_ERROR.
+  // Agent labels resolve only legacy local IDs. Historical aliases are additive;
+  // candidate aliases remain quarantined, and collisions fail closed. This path
+  // never infers or returns canonical identity_id authority.
   if (table === "agents") {
-    const nameRow = db.query("SELECT id FROM agents WHERE lower(name) = ?").get(partialId.toLowerCase()) as { id: string } | null;
-    if (nameRow) return nameRow.id;
+    const normalized = partialId.trim().toLowerCase();
+    const matches = db.query(`
+      SELECT id FROM agents WHERE lower(name) = ?
+      UNION
+      SELECT local_agent_id AS id FROM agent_identity_aliases
+        WHERE normalized_label = ? AND status = 'active'
+      ORDER BY id
+    `).all(normalized, normalized) as Array<{ id: string }>;
+    if (matches.length === 1) return matches[0]!.id;
+    if (matches.length > 1) {
+      throw new IdentityAliasAmbiguousError(partialId, matches.map((match) => match.id));
+    }
   }
 
   return null;

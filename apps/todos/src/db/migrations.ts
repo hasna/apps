@@ -1227,4 +1227,95 @@ export const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_plans_slug ON plans(slug);
   INSERT OR IGNORE INTO _migrations (id) VALUES (64);
   `,
+  // Migration 65: Additive canonical identity projection and source-lineage evidence.
+  // Runtime Coordination remains the logical owner of leases and fences; these
+  // tables store only a Todos-local actor projection and resolution evidence.
+  `
+  ALTER TABLE agents ADD COLUMN identity_id TEXT;
+  ALTER TABLE agents ADD COLUMN project_id TEXT;
+  ALTER TABLE agents ADD COLUMN runtime_instance_id TEXT;
+
+  CREATE TABLE IF NOT EXISTS agent_identity_source_mappings (
+    id TEXT PRIMARY KEY,
+    local_agent_id TEXT REFERENCES agents(id) ON DELETE RESTRICT,
+    identity_id TEXT,
+    source_authority TEXT NOT NULL CHECK(length(trim(source_authority)) > 0),
+    source_tenant_id TEXT NOT NULL CHECK(length(trim(source_tenant_id)) > 0),
+    source_namespace TEXT NOT NULL CHECK(length(trim(source_namespace)) > 0),
+    source_entity_type TEXT NOT NULL CHECK(length(trim(source_entity_type)) > 0),
+    source_record_id TEXT NOT NULL CHECK(length(trim(source_record_id)) > 0),
+    observed_label TEXT,
+    evidence TEXT NOT NULL DEFAULT '{}',
+    mapping_basis TEXT NOT NULL CHECK(mapping_basis IN ('authoritative', 'imported', 'candidate', 'name_similarity')),
+    status TEXT NOT NULL CHECK(status IN ('active', 'retired', 'quarantined', 'revoked')),
+    revision INTEGER NOT NULL CHECK(revision > 0),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(mapping_basis IN ('authoritative', 'imported') OR status IN ('quarantined', 'revoked')),
+    CHECK(status != 'active' OR (mapping_basis IN ('authoritative', 'imported') AND identity_id IS NOT NULL))
+  );
+  DROP INDEX IF EXISTS idx_agent_identity_source_active_unique;
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_identity_source_revision_unique
+    ON agent_identity_source_mappings (
+      source_authority, source_tenant_id, source_namespace, source_entity_type, source_record_id, revision
+    )
+    WHERE mapping_basis IN ('authoritative', 'imported');
+  CREATE INDEX IF NOT EXISTS idx_agent_identity_source_identity
+    ON agent_identity_source_mappings(identity_id);
+  CREATE INDEX IF NOT EXISTS idx_agent_identity_source_local
+    ON agent_identity_source_mappings(local_agent_id);
+  CREATE TABLE IF NOT EXISTS agent_identity_aliases (
+    id TEXT PRIMARY KEY,
+    local_agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE RESTRICT,
+    label TEXT NOT NULL,
+    normalized_label TEXT NOT NULL,
+    alias_kind TEXT NOT NULL CHECK(alias_kind IN ('historical', 'candidate')),
+    status TEXT NOT NULL CHECK(status IN ('active', 'quarantined', 'revoked')),
+    created_at TEXT NOT NULL,
+    UNIQUE(local_agent_id, normalized_label)
+  );
+  CREATE INDEX IF NOT EXISTS idx_agent_identity_alias_lookup
+    ON agent_identity_aliases(normalized_label, status);
+
+  CREATE TRIGGER IF NOT EXISTS trg_agents_identity_id_immutable
+  BEFORE UPDATE OF identity_id ON agents
+  WHEN OLD.identity_id IS NOT NULL AND OLD.identity_id IS NOT NEW.identity_id
+  BEGIN
+    SELECT RAISE(ABORT, 'IDENTITY_ID_IMMUTABLE');
+  END;
+
+  CREATE TRIGGER IF NOT EXISTS trg_agent_identity_mapping_identity_immutable
+  BEFORE UPDATE OF identity_id ON agent_identity_source_mappings
+  WHEN OLD.identity_id IS NOT NEW.identity_id
+  BEGIN
+    SELECT RAISE(ABORT, 'IDENTITY_ID_IMMUTABLE');
+  END;
+
+  CREATE TRIGGER IF NOT EXISTS trg_agent_identity_mapping_lineage_immutable
+  BEFORE UPDATE OF source_authority, source_tenant_id, source_namespace, source_entity_type, source_record_id
+    ON agent_identity_source_mappings
+  WHEN OLD.source_authority IS NOT NEW.source_authority
+    OR OLD.source_tenant_id IS NOT NEW.source_tenant_id
+    OR OLD.source_namespace IS NOT NEW.source_namespace
+    OR OLD.source_entity_type IS NOT NEW.source_entity_type
+    OR OLD.source_record_id IS NOT NEW.source_record_id
+  BEGIN
+    SELECT RAISE(ABORT, 'IDENTITY_SOURCE_LINEAGE_IMMUTABLE');
+  END;
+
+  CREATE TRIGGER IF NOT EXISTS trg_agent_identity_mapping_history_immutable
+  BEFORE UPDATE OF local_agent_id, observed_label, evidence, mapping_basis, status, revision, created_at
+    ON agent_identity_source_mappings
+  BEGIN
+    SELECT RAISE(ABORT, 'IDENTITY_MAPPING_HISTORY_IMMUTABLE');
+  END;
+
+  CREATE TRIGGER IF NOT EXISTS trg_agent_identity_mapping_history_append_only
+  BEFORE DELETE ON agent_identity_source_mappings
+  BEGIN
+    SELECT RAISE(ABORT, 'IDENTITY_MAPPING_HISTORY_IMMUTABLE');
+  END;
+
+  INSERT OR IGNORE INTO _migrations (id) VALUES (65);
+  `,
 ];
