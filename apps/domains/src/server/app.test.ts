@@ -44,6 +44,10 @@ function fakeDb(): TypedQueryClient {
     if (/count\(\*\).*FROM domains/i.test(s)) {
       return { rows: [{ n: String(domains.length), total: String(domains.length) }], rowCount: 1 };
     }
+    if (/^INSERT INTO alerts/i.test(s)) {
+      const [id, domain_id, type, trigger_days_before, created_at] = params as unknown[];
+      return { rows: [{ id, domain_id, type, trigger_days_before, created_at }], rowCount: 1 };
+    }
     // migration ledger noise (checkReady) — pretend migrated
     if (/CREATE TABLE IF NOT EXISTS schema_migrations/i.test(s)) return { rows: [], rowCount: 0 };
     if (/FROM schema_migrations/i.test(s)) return { rows: [], rowCount: 0 };
@@ -141,6 +145,55 @@ describe("domains-serve app", () => {
       }),
     );
     expect(res.status).toBe(403);
+  });
+
+  // Regression: nested per-domain collection routes (emails/alerts) and the DNS
+  // PATCH route must be WIRED, not fall through to the catch-all 404. A stale
+  // server build lacking these routes returns {error:"Not found"} (the catch-all)
+  // and hard-fails `domain get`, `domain emails`, `alert set/list`, MCP
+  // get_domain/create_alert/list_alerts/update_dns_record in cloud mode.
+  test("per-domain emails route is wired (routed 200, not catch-all 404)", async () => {
+    const { app, token } = appWithKey(["domains:read", "domains:write"]);
+    const h = { "x-api-key": token, "content-type": "application/json" };
+    const created = await app.handle(
+      new Request("http://x/v1/domains", { method: "POST", headers: h, body: JSON.stringify({ name: "emails.dev", registrar: "route53" }) }),
+    );
+    const id = ((await created.json()) as Record<string, unknown>)["id"] as string;
+    const res = await app.handle(new Request(`http://x/v1/domains/${id}/emails`, { headers: h }));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body["emails"]).toEqual([]);
+    expect(body["count"]).toBe(0);
+  });
+
+  test("per-domain alerts route is wired for list + create", async () => {
+    const { app, token } = appWithKey(["domains:read", "domains:write"]);
+    const h = { "x-api-key": token, "content-type": "application/json" };
+    const created = await app.handle(
+      new Request("http://x/v1/domains", { method: "POST", headers: h, body: JSON.stringify({ name: "alerts.dev", registrar: "route53" }) }),
+    );
+    const id = ((await created.json()) as Record<string, unknown>)["id"] as string;
+
+    const list = await app.handle(new Request(`http://x/v1/domains/${id}/alerts`, { headers: h }));
+    expect(list.status).toBe(200);
+    expect(((await list.json()) as Record<string, unknown>)["alerts"]).toEqual([]);
+
+    const set = await app.handle(
+      new Request(`http://x/v1/domains/${id}/alerts`, { method: "POST", headers: h, body: JSON.stringify({ type: "expiry", trigger_days_before: 30 }) }),
+    );
+    expect(set.status).toBe(201);
+    expect(((await set.json()) as Record<string, unknown>)["type"]).toBe("expiry");
+  });
+
+  test("DNS PATCH route is wired (routed 404 body, not catch-all)", async () => {
+    const { app, token } = appWithKey(["domains:read", "domains:write"]);
+    const h = { "x-api-key": token, "content-type": "application/json" };
+    const res = await app.handle(
+      new Request("http://x/v1/dns/does-not-exist", { method: "PATCH", headers: h, body: JSON.stringify({ ttl: 600 }) }),
+    );
+    expect(res.status).toBe(404);
+    // Distinguishes a wired route (record missing) from an absent route (catch-all).
+    expect(((await res.json()) as Record<string, unknown>)["error"]).toBe("dns record not found");
   });
 
   test("a key for another app is rejected", async () => {

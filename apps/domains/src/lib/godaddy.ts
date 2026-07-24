@@ -207,9 +207,9 @@ function mapGoDaddyStatus(
 // ============================================================
 
 export async function syncToLocalDb(dbFns: {
-  getDomainByName: (name: string) => Domain | null;
-  createDomain: (input: CreateDomainInput) => Domain;
-  updateDomain: (id: string, input: UpdateDomainInput) => Domain | null;
+  getDomainByName: (name: string) => Promise<Domain | null>;
+  createDomain: (input: CreateDomainInput) => Promise<Domain>;
+  updateDomain: (id: string, input: UpdateDomainInput) => Promise<Domain | null>;
 }): Promise<GoDaddySyncResult> {
   const result: GoDaddySyncResult = {
     synced: 0,
@@ -237,7 +237,7 @@ export async function syncToLocalDb(dbFns: {
         detail = gd as GoDaddyDomainDetail;
       }
 
-      const existing = dbFns.getDomainByName(gd.domain);
+      const existing = await dbFns.getDomainByName(gd.domain);
 
       const domainData = {
         name: gd.domain,
@@ -256,10 +256,10 @@ export async function syncToLocalDb(dbFns: {
       };
 
       if (existing) {
-        dbFns.updateDomain(existing.id, domainData);
+        await dbFns.updateDomain(existing.id, domainData);
         result.updated++;
       } else {
-        dbFns.createDomain(domainData);
+        await dbFns.createDomain(domainData);
         result.created++;
       }
       result.synced++;

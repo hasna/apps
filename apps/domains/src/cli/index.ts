@@ -26,7 +26,6 @@ const OPTIONAL_GROUPS = [
   "owner",
   "provision",
   "research",
-  "storage",
   "wallet",
 ] as const;
 
@@ -76,10 +75,6 @@ async function registerOptionalCommands(program: Command, groups: Set<OptionalGr
     const { registerProvisionCommand } = await import("./commands/provision.js");
     registerProvisionCommand(program);
   }
-  if (groups.has("storage")) {
-    const { registerStorageCommand } = await import("./commands/storage.js");
-    registerStorageCommand(program);
-  }
   if (groups.has("interactive")) {
     const { registerInteractiveCommand } = await import("./commands/interactive.js");
     registerInteractiveCommand(program);
@@ -105,7 +100,7 @@ function registerOptionalHelp(program: Command): void {
         enabled: Array.from(groups),
         available: [...OPTIONAL_GROUPS],
         enable_all: "DOMAINS_ENABLE_EXTRAS=1 domains <command>",
-        enable_some: "DOMAINS_COMMAND_GROUPS=marketplace,storage domains <command>",
+        enable_some: "DOMAINS_COMMAND_GROUPS=marketplace,owner domains <command>",
       };
       if (opts.json) {
         console.log(JSON.stringify(body, null, 2));
@@ -114,7 +109,7 @@ function registerOptionalHelp(program: Command): void {
       console.log("Optional command groups:");
       for (const group of body.available) console.log(`  ${groups.has(group) ? "✓" : " "} ${group}`);
       console.log("\nEnable all:  DOMAINS_ENABLE_EXTRAS=1 domains <command>");
-      console.log("Enable some: DOMAINS_COMMAND_GROUPS=marketplace,storage domains <command>");
+      console.log("Enable some: DOMAINS_COMMAND_GROUPS=marketplace,owner domains <command>");
     });
 }
 

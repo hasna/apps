@@ -301,9 +301,9 @@ export function createCloudflareProvider(config?: CloudflareConfig): DnsProvider
       for (const zone of zones) {
         try {
           const info = zoneToDomainInfo(zone);
-          const existing = dbFns.getDomainByName(zone.name);
+          const existing = await dbFns.getDomainByName(zone.name);
           if (existing) {
-            dbFns.updateDomain(existing.id, {
+            await dbFns.updateDomain(existing.id, {
               ...(existing.registrar === "Cloudflare DNS" ? { registrar: null } : {}),
               status: existing.status === "discovered" && info.status === "active" ? "active" : existing.status,
               nameservers: zone.nameservers,
@@ -311,7 +311,7 @@ export function createCloudflareProvider(config?: CloudflareConfig): DnsProvider
             });
             updated++;
           } else {
-            dbFns.createDomain({
+            await dbFns.createDomain({
               name: zone.name,
               status: info.status === "active" ? "active" : "discovered",
               auto_renew: false,

@@ -6,26 +6,21 @@ import {
   createDomain,
   getDomainDetails,
   getDomainByName,
+  getDomainByIdentifier,
+  listDomains,
   updateDomain,
+  deleteDomain,
+  searchDomains,
+  getDomainStats,
+  listExpiring,
   markDomainPremium,
   createDomainOffer,
   updateDomainLifecycleStatus,
   listDomainEmailLinks,
   linkDomainEmail,
   recordDomainPurchase,
-  exportPortfolio, checkAllDomains, whoisLookup,
+  exportPortfolio, whoisLookup,
 } from "../../db/domains.js";
-import {
-  createDomain as createDomainRouted,
-  getDomainByIdentifier as getDomainByIdentifierRouted,
-  listDomains as listDomainsRouted,
-  updateDomain as updateDomainRouted,
-  deleteDomain as deleteDomainRouted,
-  searchDomains as searchDomainsRouted,
-  getDomainStats as getDomainStatsRouted,
-  listExpiring as listExpiringRouted,
-  isCloudMode,
-} from "../../db/cloud-store.js";
 import { getAvailableProviders, getRegistrarProvider, getDnsProvider, getDomainInventoryProvider, providerHasInventory, autoDetectRegistrar } from "../../lib/registrar.js";
 import { loadConfig, resolveContact, applyPurchaseProfile } from "../../lib/config.js";
 import { registerDomain, checkAvailability, getRegistrationStatus, createHostedZone, updateNameservers } from "../../lib/route53.js";
@@ -59,8 +54,8 @@ async function createDnsZoneForProvider(domain: string, provider: string): Promi
   throw new Error(`DNS provider '${provider}' is not supported by domain purchase delegation yet`);
 }
 
-function requireDomain(identifier: string) {
-  const details = getDomainDetails(identifier);
+async function requireDomain(identifier: string) {
+  const details = await getDomainDetails(identifier);
   if (!details) {
     console.error(`Domain '${identifier}' not found.`);
     process.exit(1);
@@ -102,8 +97,8 @@ export function registerDomainCommand(program: Command): void {
       };
       const jsonPaging = !opts.all && (opts.limit !== undefined || offset > 0) ? { limit, offset } : {};
       const domains = opts.json
-        ? await listDomainsRouted({ ...filters, ...jsonPaging })
-        : await listDomainsRouted(filters);
+        ? await listDomains({ ...filters, ...jsonPaging })
+        : await listDomains(filters);
 
       if (opts.json) {
         console.log(JSON.stringify({ domains, count: domains.length, limit: limit ?? null, offset }, null, 2));
@@ -131,12 +126,7 @@ export function registerDomainCommand(program: Command): void {
     .description("Get a domain by ID or name")
     .option("-j, --json", "Output JSON")
     .action(async (identifier: string, opts: { json?: boolean }) => {
-      const details = isCloudMode()
-        ? await (async () => {
-            const d = await getDomainByIdentifierRouted(identifier);
-            return d ? { domain: d, offers: [] as never[], emails: [] as never[] } : null;
-          })()
-        : getDomainDetails(identifier);
+      const details = await getDomainDetails(identifier);
       if (!details) { console.error(`Domain '${identifier}' not found.`); process.exit(1); }
       if (opts.json) { console.log(JSON.stringify(details, null, 2)); return; }
       const d = details.domain;
@@ -211,7 +201,7 @@ export function registerDomainCommand(program: Command): void {
       const premiumPrice = parseOptionalNumber(opts.premiumPrice, "--premium-price");
       const standardPrice = parseOptionalNumber(opts.standardPrice, "--standard-price");
       const purchasePrice = parseOptionalNumber(opts.purchasePrice, "--purchase-price");
-      const d = await createDomainRouted({
+      const d = await createDomain({
         name: opts.name, registrar: opts.registrar,
         status: opts.status as (typeof DOMAIN_STATUSES)[number],
         expires_at: opts.expires,
@@ -256,7 +246,7 @@ export function registerDomainCommand(program: Command): void {
       const premiumPrice = parseOptionalNumber(opts.premiumPrice, "--premium-price");
       const standardPrice = parseOptionalNumber(opts.standardPrice, "--standard-price");
       const purchasePrice = parseOptionalNumber(opts.purchasePrice, "--purchase-price");
-      const d = await updateDomainRouted(id, {
+      const d = await updateDomain(id, {
         registrar: opts.registrar,
         status: opts.status as (typeof DOMAIN_STATUSES)[number] | undefined,
         expires_at: opts.expires,
@@ -291,7 +281,7 @@ export function registerDomainCommand(program: Command): void {
         process.exit(1);
       }
 
-      const deleted = await deleteDomainRouted(id);
+      const deleted = await deleteDomain(id);
       if (!deleted) {
         const message = `Domain '${id}' not found.`;
         if (opts.json) {
@@ -321,7 +311,7 @@ export function registerDomainCommand(program: Command): void {
     .option("--verbose", "Show registrar and truncated notes")
     .option("-j, --json", "Output JSON")
     .action(async (query: string, opts: { limit?: string; offset?: string; all?: boolean; verbose?: boolean; json?: boolean }) => {
-      const results = await searchDomainsRouted(query);
+      const results = await searchDomains(query);
       if (opts.json) { console.log(JSON.stringify({ results, count: results.length }, null, 2)); return; }
       let page;
       try {
@@ -348,7 +338,7 @@ export function registerDomainCommand(program: Command): void {
     .option("--all", "Show all matching domains")
     .option("-j, --json", "Output JSON")
     .action(async (opts: { days: string; limit?: string; all?: boolean; json?: boolean }) => {
-      const domains = await listExpiringRouted(parseInt(opts.days));
+      const domains = await listExpiring(parseInt(opts.days));
       if (opts.json) { console.log(JSON.stringify(domains, null, 2)); return; }
       const page = pageItemsOrExit(domains, { limit: opts.limit, all: opts.all });
       if (page.items.length === 0) { console.log(`No domains expiring within ${opts.days} days.`); return; }
@@ -364,7 +354,7 @@ export function registerDomainCommand(program: Command): void {
     .description("Show portfolio statistics")
     .option("-j, --json", "Output JSON")
     .action(async (opts: { json?: boolean }) => {
-      const stats = await getDomainStatsRouted();
+      const stats = await getDomainStats();
       if (opts.json) { console.log(JSON.stringify(stats, null, 2)); return; }
       console.log("Domain Portfolio Stats:");
       for (const [k, v] of Object.entries(stats)) {
@@ -378,9 +368,9 @@ export function registerDomainCommand(program: Command): void {
     .command("whois <name>")
     .description("Run WHOIS lookup and update local DB record")
     .option("-j, --json", "Output JSON")
-    .action((name: string, opts: { json?: boolean }) => {
+    .action(async (name: string, opts: { json?: boolean }) => {
       try {
-        const result = whoisLookup(name);
+        const result = await whoisLookup(name);
         if (opts.json) { console.log(JSON.stringify(result, null, 2)); return; }
         console.log(`\nWHOIS for ${result.domain} [${result.source}]:`);
         console.log(`  Registrar: ${result.registrar ?? "unknown"}`);
@@ -407,8 +397,8 @@ export function registerDomainCommand(program: Command): void {
     .command("export")
     .description("Export all domains as CSV or JSON")
     .option("--format <fmt>", "Format: csv or json", "json")
-    .action((opts: { format: string }) => {
-      const output = exportPortfolio(opts.format as "csv" | "json");
+    .action(async (opts: { format: string }) => {
+      const output = await exportPortfolio(opts.format as "csv" | "json");
       console.log(output);
     });
 
@@ -486,9 +476,9 @@ export function registerDomainCommand(program: Command): void {
 
       for (const result of output) {
         if (result.error) continue;
-        const existing = getDomainByName(result.domain);
+        const existing = await getDomainByName(result.domain);
         if (!existing) continue;
-        updateDomain(existing.id, {
+        await updateDomain(existing.id, {
           is_premium: "is_premium" in result ? Boolean(result.is_premium) : existing.is_premium,
           premium_price: "premium_price" in result ? result.premium_price ?? existing.premium_price : existing.premium_price,
           standard_price: "standard_price" in result ? result.standard_price ?? existing.standard_price : existing.standard_price,
@@ -529,10 +519,10 @@ export function registerDomainCommand(program: Command): void {
     .requiredOption("--ask <price>", "Premium asking price")
     .option("--standard <price>", "Standard registration price")
     .option("-j, --json", "Output JSON")
-    .action((identifier: string, opts: { ask: string; standard?: string; json?: boolean }) => {
+    .action(async (identifier: string, opts: { ask: string; standard?: string; json?: boolean }) => {
       const premiumPrice = parseOptionalNumber(opts.ask, "--ask");
       const standardPrice = parseOptionalNumber(opts.standard, "--standard");
-      const updated = markDomainPremium(identifier, premiumPrice!, standardPrice);
+      const updated = await markDomainPremium(identifier, premiumPrice!, standardPrice);
       if (!updated) { console.error(`Domain '${identifier}' not found.`); process.exit(1); }
       if (opts.json) { console.log(JSON.stringify(updated, null, 2)); return; }
       console.log(`Marked ${updated.name} as premium at ${premiumPrice}`);
@@ -546,9 +536,9 @@ export function registerDomainCommand(program: Command): void {
     .option("--status <status>", `Offer status (${DOMAIN_OFFER_STATUS_HELP})`, "pending")
     .option("--notes <text>", "Negotiation notes")
     .option("-j, --json", "Output JSON")
-    .action((identifier: string, opts: { our?: string; their?: string; status: string; notes?: string; json?: boolean }) => {
-      const details = requireDomain(identifier);
-      const offer = createDomainOffer({
+    .action(async (identifier: string, opts: { our?: string; their?: string; status: string; notes?: string; json?: boolean }) => {
+      const details = await requireDomain(identifier);
+      const offer = await createDomainOffer({
         domain_id: details.domain.id,
         our_offer: parseOptionalNumber(opts.our, "--our"),
         their_ask: parseOptionalNumber(opts.their, "--their"),
@@ -556,7 +546,7 @@ export function registerDomainCommand(program: Command): void {
         notes: opts.notes,
       });
       if (details.domain.status === "discovered" || details.domain.status === "researching" || details.domain.status === "offered") {
-        updateDomainLifecycleStatus(details.domain.id, opts.their || opts.our ? "negotiating" : "offered");
+        await updateDomainLifecycleStatus(details.domain.id, opts.their || opts.our ? "negotiating" : "offered");
       }
       if (opts.json) { console.log(JSON.stringify(offer, null, 2)); return; }
       console.log(`Logged offer for ${details.domain.name}: ${offer.status}`);
@@ -567,8 +557,8 @@ export function registerDomainCommand(program: Command): void {
     .description("Update the lifecycle status of a domain")
     .option("--notes <text>", "Optional note to store with the status change")
     .option("-j, --json", "Output JSON")
-    .action((identifier: string, status: string, opts: { notes?: string; json?: boolean }) => {
-      const updated = updateDomainLifecycleStatus(identifier, status as (typeof DOMAIN_STATUSES)[number], opts.notes);
+    .action(async (identifier: string, status: string, opts: { notes?: string; json?: boolean }) => {
+      const updated = await updateDomainLifecycleStatus(identifier, status as (typeof DOMAIN_STATUSES)[number], opts.notes);
       if (!updated) { console.error(`Domain '${identifier}' not found.`); process.exit(1); }
       if (opts.json) { console.log(JSON.stringify(updated, null, 2)); return; }
       console.log(`Updated ${updated.name} to ${updated.status}`);
@@ -578,9 +568,9 @@ export function registerDomainCommand(program: Command): void {
     .command("emails <identifier>")
     .description("Show email threads linked to a domain")
     .option("-j, --json", "Output JSON")
-    .action((identifier: string, opts: { json?: boolean }) => {
-      const details = requireDomain(identifier);
-      const emails = listDomainEmailLinks(details.domain.id);
+    .action(async (identifier: string, opts: { json?: boolean }) => {
+      const details = await requireDomain(identifier);
+      const emails = await listDomainEmailLinks(details.domain.id);
       if (opts.json) {
         console.log(JSON.stringify({ domain: details.domain.name, emails, count: emails.length }, null, 2));
         return;
@@ -601,9 +591,9 @@ export function registerDomainCommand(program: Command): void {
     .requiredOption("--type <type>", `Link type (${DOMAIN_EMAIL_TYPE_HELP})`)
     .option("--thread-id <threadId>", "Email thread ID")
     .option("-j, --json", "Output JSON")
-    .action((identifier: string, emailId: string, opts: { type: string; threadId?: string; json?: boolean }) => {
-      const details = requireDomain(identifier);
-      const link = linkDomainEmail({
+    .action(async (identifier: string, emailId: string, opts: { type: string; threadId?: string; json?: boolean }) => {
+      const details = await requireDomain(identifier);
+      const link = await linkDomainEmail({
         domain_id: details.domain.id,
         email_id: emailId,
         thread_id: opts.threadId,
@@ -619,7 +609,7 @@ export function registerDomainCommand(program: Command): void {
     .option("--provider <name>", "Override provider")
     .option("--years <n>", "Number of years to renew", "1")
     .action(async (name: string, opts: { provider?: string; years: string }) => {
-      const providerName = opts.provider ?? autoDetectRegistrar(name, getDomainByName) ?? loadConfig().default_registrar;
+      const providerName = opts.provider ?? (await autoDetectRegistrar(name, getDomainByName)) ?? loadConfig().default_registrar;
       if (!providerName) { console.error("Could not detect provider. Use --provider."); process.exit(1); }
       const provider = getRegistrarProvider(providerName);
       const result = await provider.renewDomain(name, parseInt(opts.years, 10));
@@ -666,9 +656,9 @@ export function registerDomainCommand(program: Command): void {
       const recordedPrice = parseOptionalNumber(opts.price, "--price");
       if (recordedPrice !== undefined) {
         const registrarName = opts.registrar ?? opts.provider ?? "manual";
-        const existing = getDomainByName(name);
-        const domainRecord = existing ?? createDomain({ name, status: "discovered" });
-        const purchased = recordDomainPurchase(domainRecord.id, {
+        const existing = await getDomainByName(name);
+        const domainRecord = existing ?? (await createDomain({ name, status: "discovered" }));
+        const purchased = await recordDomainPurchase(domainRecord.id, {
           price: recordedPrice,
           registrar: registrarName,
           expires_at: opts.expires,
@@ -676,7 +666,7 @@ export function registerDomainCommand(program: Command): void {
         });
         if (!purchased) { console.error(`Domain '${name}' not found.`); process.exit(1); }
         if (opts.wait) {
-          updateDomainLifecycleStatus(purchased.id, "active");
+          await updateDomainLifecycleStatus(purchased.id, "active");
         }
         console.log(`Recorded purchase for ${purchased.name} at ${recordedPrice}`);
         return;
@@ -724,7 +714,7 @@ export function registerDomainCommand(program: Command): void {
           });
           if (!reg.success) { console.error(`✗ Registration failed via ${providerName}`); process.exit(1); }
 
-          const existing = getDomainByName(name);
+          const existing = await getDomainByName(name);
           const dbInput = {
             registrar: providerName,
             status: "active" as const,
@@ -735,8 +725,8 @@ export function registerDomainCommand(program: Command): void {
             is_premium: avail.is_premium,
             premium_price: avail.premium_price,
           };
-          if (existing) updateDomain(existing.id, dbInput);
-          else createDomain({ name, ...dbInput });
+          if (existing) await updateDomain(existing.id, dbInput);
+          else await createDomain({ name, ...dbInput });
           console.log(`✓ Registered and added to portfolio`);
           if (reg.orderId) console.log(`  Order: ${reg.orderId}`);
 
@@ -746,8 +736,8 @@ export function registerDomainCommand(program: Command): void {
             } else {
               const zone = await createDnsZoneForProvider(name, dnsProvider);
               const nsUpdate = await provider.updateNameservers(name, zone.nameservers);
-              const existing2 = getDomainByName(name);
-              if (existing2) updateDomain(existing2.id, { nameservers: zone.nameservers });
+              const existing2 = await getDomainByName(name);
+              if (existing2) await updateDomain(existing2.id, { nameservers: zone.nameservers });
               console.log(`✓ ${dnsProvider} zone ${zone.zoneId}; nameservers updated${nsUpdate.operationId ? ` (op ${nsUpdate.operationId})` : ""}`);
             }
           }
@@ -784,9 +774,9 @@ export function registerDomainCommand(program: Command): void {
           console.log(`✓ Registration complete`);
         }
 
-        const existing = getDomainByName(name);
+        const existing = await getDomainByName(name);
         if (existing) {
-          updateDomain(existing.id, {
+          await updateDomain(existing.id, {
             registrar: "AWS Route 53",
             status: "active",
             auto_renew: true,
@@ -795,7 +785,7 @@ export function registerDomainCommand(program: Command): void {
             standard_price: avail.price ? Number(avail.price) : existing.standard_price,
           });
         } else {
-          createDomain({
+          await createDomain({
             name,
             registrar: "AWS Route 53",
             status: "active",
@@ -828,8 +818,8 @@ export function registerDomainCommand(program: Command): void {
                     const nsUpdate = await updateNameservers(name, zone.nameservers);
                     return { zoneId: zone.zoneId, nameservers: zone.nameservers, operationId: nsUpdate.operationId };
                   })();
-              const existing2 = getDomainByName(name);
-              if (existing2) updateDomain(existing2.id, { nameservers: del.nameservers });
+              const existing2 = await getDomainByName(name);
+              if (existing2) await updateDomain(existing2.id, { nameservers: del.nameservers });
               console.log(`✓ ${dnsProvider} zone ${del.zoneId}; nameservers → ${del.nameservers.join(", ")} (op ${del.operationId})`);
             } catch (e) {
               console.error(`⚠ DNS delegation failed (domain is registered): ${e instanceof Error ? e.message : String(e)}`);
@@ -939,10 +929,10 @@ export function registerDomainCommand(program: Command): void {
 
         // 5. Sync to local DB
         process.stdout.write(opts.wait ? "[5/5] Adding to portfolio... " : "[4/4] Adding to portfolio... ");
-        const existing = getDomainByName(name);
+        const existing = await getDomainByName(name);
         const dbInput = { registrar: `AWS Route 53`, status: "active" as const, auto_renew: true, nameservers };
-        if (existing) updateDomain(existing.id, dbInput);
-        else createDomain({ name, ...dbInput });
+        if (existing) await updateDomain(existing.id, dbInput);
+        else await createDomain({ name, ...dbInput });
         console.log("done");
 
         console.log(`\n✓ Setup complete for ${name}`);

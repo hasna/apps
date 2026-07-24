@@ -85,39 +85,58 @@ export {
   type BulkCheckResult,
 } from "./db/domains.js";
 
-export { getDatabase, closeDatabase } from "./db/database.js";
-export { PG_MIGRATIONS } from "./db/pg-migrations.js";
-export { PgAdapterAsync } from "./db/remote-storage.js";
 export {
-  DOMAINS_STORAGE_FALLBACK_ENV,
-  DOMAINS_STORAGE_MODE_ENV,
-  DOMAINS_STORAGE_MODE_FALLBACK_ENV,
-  DOMAINS_STORAGE_ENV,
-  DOMAINS_STORAGE_TABLES,
-  STORAGE_DATABASE_ENV,
-  STORAGE_MODE_ENV,
-  STORAGE_TABLES,
-  getStorageDatabaseEnvName,
-  getStorageDatabaseUrl,
-  getStorageMode,
-  getStoragePg,
-  getStorageStatus,
-  getStorageSyncMetaAll,
-  getSyncMetaAll,
-  resolveTables,
-  runStorageMigrations,
-  storagePull,
-  storagePush,
-  storageSync,
-} from "./db/storage-sync.js";
-export type {
-  StorageMode,
-  StorageStatus,
-  StorageSyncMeta,
-  StorageSyncResult,
-  SyncMeta,
-  SyncResult,
-} from "./db/storage-sync.js";
+  getStore,
+  isCloudStore,
+  LocalStore,
+  ApiStore,
+  type DomainsStore,
+} from "./db/store.js";
+export {
+  createDomainOwner,
+  getDomainOwner,
+  getDomainOwnerByDomain,
+  getDomainOwnerByDomainName,
+  listDomainOwners,
+  updateDomainOwner,
+  deleteDomainOwner,
+  listDomainsWithOwners,
+  extractOwnerFromWhois,
+  linkOwnerToContacts,
+  DOMAIN_OWNER_SOURCES,
+  type DomainOwner,
+  type DomainOwnerSource,
+  type CreateDomainOwnerInput,
+  type DomainWithOwner,
+} from "./db/owners.js";
+export {
+  createHistoryEntry,
+  getHistoryEntry,
+  getHistoryByDomain,
+  getLatestSnapshot,
+  getHistoryByDateRange,
+  getLatestByDomainName,
+  listDomainsWithHistoryChanges,
+  deleteHistoryEntry,
+  deleteHistoryByDomain,
+  HISTORY_TYPES,
+  type DomainHistory,
+  type DomainHistoryType,
+  type CreateHistoryEntryInput,
+} from "./db/history.js";
+export {
+  upsertDomainReputation,
+  getDomainReputation,
+  getDomainReputationByName,
+  updateDomainReputation,
+  listBlacklistedDomains,
+  listHighThreatDomains,
+  deleteDomainReputation,
+  checkDomainReputation,
+  checkDnsBlacklist,
+  type DomainReputation,
+  type CreateReputationInput,
+} from "./db/reputation.js";
 
 // Registrar providers
 export {

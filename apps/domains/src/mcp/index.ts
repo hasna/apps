@@ -4,20 +4,6 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import {
-  createDomain as createDomainRouted,
-  listDomains as listDomainsRouted,
-  updateDomain as updateDomainRouted,
-  deleteDomain as deleteDomainRouted,
-  getDomainByIdentifier as getDomainByIdentifierRouted,
-  searchDomains as searchDomainsRouted,
-  getByRegistrar as getByRegistrarRouted,
-  listExpiring as listExpiringRouted,
-  listSslExpiring as listSslExpiringRouted,
-  getDomainStats as getDomainStatsRouted,
-  countDomains as countDomainsRouted,
-  isCloudMode,
-} from "../db/cloud-store.js";
-import {
   DOMAIN_EMAIL_TYPES,
   DOMAIN_OFFER_STATUSES,
   DOMAIN_STATUSES,
@@ -25,7 +11,15 @@ import {
   getDomain,
   getDomainDetails,
   getDomainByIdentifier,
+  listDomains,
   updateDomain,
+  deleteDomain,
+  searchDomains,
+  getByRegistrar,
+  listExpiring,
+  listSslExpiring,
+  getDomainStats,
+  countDomains,
   markDomainPremium,
   createDomainOffer,
   listDomainOffers,
@@ -89,8 +83,8 @@ import {
   deleteDomainOwner,
   extractOwnerFromWhois,
   listDomainsWithOwners,
-} from "../db/domain-owners.js";
-import { DOMAIN_OWNER_SOURCES } from "../db/domain-owners.js";
+  DOMAIN_OWNER_SOURCES,
+} from "../db/owners.js";
 import {
   checkAvailability as r53CheckAvailability,
   registerDomain as r53RegisterDomain,
@@ -112,10 +106,9 @@ import {
   type RegisteredDomain,
   type Route53Record,
 } from "../lib/route53.js";
-import { registerDomainsStorageTools } from "./storage-tools.js";
 import { applySafeModeToolFilter } from "./tool-filter.js";
 import { formatDate, pageItems, truncateText } from "../lib/compact-output.js";
-import type { DomainOwner, DomainWithOwner } from "../db/domain-owners.js";
+import type { DomainOwner, DomainWithOwner } from "../db/owners.js";
 
 type ListParams = {
   limit?: number;
@@ -366,7 +359,6 @@ const server = new McpServer({
   version: getPackageVersion(),
 });
 applySafeModeToolFilter(server);
-registerDomainsStorageTools(server);
 
 // --- Domains ---
 
@@ -394,7 +386,7 @@ server.registerTool(
     },
   },
   async (params) => {
-    const domain = await createDomainRouted(params);
+    const domain = await createDomain(params);
     return { content: [{ type: "text", text: JSON.stringify(domain, null, 2) }] };
   }
 );
@@ -407,15 +399,7 @@ server.registerTool(
     inputSchema: { id: z.string() },
   },
   async ({ id }) => {
-    // Cloud mode: the API returns the domain only (no offers/emails join), so
-    // shape the response the same way but without the local-only relations.
-    // Local mode keeps the full details join (offers + emails).
-    const details = isCloudMode()
-      ? await (async () => {
-          const domain = await getDomainByIdentifierRouted(id);
-          return domain ? { domain, offers: [] as never[], emails: [] as never[] } : null;
-        })()
-      : getDomainDetails(id);
+    const details = await getDomainDetails(id);
     if (!details) {
       return { content: [{ type: "text", text: `Domain '${id}' not found.` }], isError: true };
     }
@@ -438,7 +422,7 @@ server.registerTool(
   },
   async (params) => {
     const { limit, offset, all, verbose, ...filters } = params;
-    const domains = await listDomainsRouted(filters);
+    const domains = await listDomains(filters);
     return pagedJson("domains", domains, { limit, offset, all, verbose }, compactDomain, "domain(s)", "Set verbose=true or call get_domain for full details.");
   }
 );
@@ -468,7 +452,7 @@ server.registerTool(
     },
   },
   async ({ id, ...input }) => {
-    const domain = await updateDomainRouted(id, input);
+    const domain = await updateDomain(id, input);
     if (!domain) {
       return { content: [{ type: "text", text: `Domain '${id}' not found.` }], isError: true };
     }
@@ -488,7 +472,7 @@ server.registerTool(
     },
   },
   async ({ domain, price, standard_price }) => {
-    const updated = markDomainPremium(domain, price, standard_price);
+    const updated = await markDomainPremium(domain, price, standard_price);
     if (!updated) {
       return { content: [{ type: "text", text: `Domain '${domain}' not found.` }], isError: true };
     }
@@ -510,13 +494,13 @@ server.registerTool(
     },
   },
   async ({ domain, ...input }) => {
-    const existing = getDomainByIdentifier(domain);
+    const existing = await getDomainByIdentifier(domain);
     if (!existing) {
       return { content: [{ type: "text", text: `Domain '${domain}' not found.` }], isError: true };
     }
-    const offer = createDomainOffer({ domain_id: existing.id, ...input });
+    const offer = await createDomainOffer({ domain_id: existing.id, ...input });
     if (existing.status === "discovered" || existing.status === "researching" || existing.status === "offered") {
-      updateDomainLifecycleStatus(existing.id, input.our_offer !== undefined || input.their_ask !== undefined ? "negotiating" : "offered");
+      await updateDomainLifecycleStatus(existing.id, input.our_offer !== undefined || input.their_ask !== undefined ? "negotiating" : "offered");
     }
     return { content: [{ type: "text", text: JSON.stringify(offer, null, 2) }] };
   }
@@ -533,11 +517,11 @@ server.registerTool(
     },
   },
   async ({ domain, ...params }) => {
-    const existing = getDomainByIdentifier(domain);
+    const existing = await getDomainByIdentifier(domain);
     if (!existing) {
       return { content: [{ type: "text", text: `Domain '${domain}' not found.` }], isError: true };
     }
-    const offers = listDomainOffers(existing.id);
+    const offers = await listDomainOffers(existing.id);
     return pagedJson("offers", offers, params, compactOffer, "offer(s)", "Set verbose=true for full offer records.", { domain: existing.name });
   }
 );
@@ -554,7 +538,7 @@ server.registerTool(
     },
   },
   async ({ domain, status, notes }) => {
-    const updated = updateDomainLifecycleStatus(domain, status, notes);
+    const updated = await updateDomainLifecycleStatus(domain, status, notes);
     if (!updated) {
       return { content: [{ type: "text", text: `Domain '${domain}' not found.` }], isError: true };
     }
@@ -579,7 +563,7 @@ server.registerTool(
     },
   },
   async ({ domain, ...input }) => {
-    const updated = recordDomainPurchase(domain, input);
+    const updated = await recordDomainPurchase(domain, input);
     if (!updated) {
       return { content: [{ type: "text", text: `Domain '${domain}' not found.` }], isError: true };
     }
@@ -600,11 +584,11 @@ server.registerTool(
     },
   },
   async ({ domain, email_id, thread_id, type }) => {
-    const existing = getDomainByIdentifier(domain);
+    const existing = await getDomainByIdentifier(domain);
     if (!existing) {
       return { content: [{ type: "text", text: `Domain '${domain}' not found.` }], isError: true };
     }
-    const link = linkDomainEmail({ domain_id: existing.id, email_id, thread_id, type });
+    const link = await linkDomainEmail({ domain_id: existing.id, email_id, thread_id, type });
     return { content: [{ type: "text", text: JSON.stringify(link, null, 2) }] };
   }
 );
@@ -620,11 +604,11 @@ server.registerTool(
     },
   },
   async ({ domain, ...params }) => {
-    const existing = getDomainByIdentifier(domain);
+    const existing = await getDomainByIdentifier(domain);
     if (!existing) {
       return { content: [{ type: "text", text: `Domain '${domain}' not found.` }], isError: true };
     }
-    const emails = listDomainEmailLinks(existing.id);
+    const emails = await listDomainEmailLinks(existing.id);
     return pagedJson("emails", emails, params, compactEmailLink, "email link(s)", "Set verbose=true for full email link records.", { domain: existing.name });
   }
 );
@@ -637,7 +621,7 @@ server.registerTool(
     inputSchema: { id: z.string() },
   },
   async ({ id }) => {
-    const deleted = await deleteDomainRouted(id);
+    const deleted = await deleteDomain(id);
     return { content: [{ type: "text", text: JSON.stringify({ id, deleted }) }] };
   }
 );
@@ -650,7 +634,7 @@ server.registerTool(
     inputSchema: { query: z.string(), ...listControls },
   },
   async ({ query, ...params }) => {
-    const results = await searchDomainsRouted(query);
+    const results = await searchDomains(query);
     return pagedJson("results", results, params, compactDomain, "result(s)", "Set verbose=true or call get_domain for full details.", { query });
   }
 );
@@ -663,7 +647,7 @@ server.registerTool(
     inputSchema: {},
   },
   async () => {
-    const count = await countDomainsRouted();
+    const count = await countDomains();
     return { content: [{ type: "text", text: JSON.stringify({ count }) }] };
   }
 );
@@ -676,7 +660,7 @@ server.registerTool(
     inputSchema: { days: z.number().default(30), ...listControls },
   },
   async ({ days, ...params }) => {
-    const domains = await listExpiringRouted(days);
+    const domains = await listExpiring(days);
     return pagedJson("domains", domains, params, compactDomain, "domain(s)", "Set verbose=true or call get_domain for full details.", { days });
   }
 );
@@ -689,7 +673,7 @@ server.registerTool(
     inputSchema: { days: z.number().default(30), ...listControls },
   },
   async ({ days, ...params }) => {
-    const domains = await listSslExpiringRouted(days);
+    const domains = await listSslExpiring(days);
     return pagedJson("domains", domains, params, compactDomain, "domain(s)", "Set verbose=true or call get_domain for full details.", { days });
   }
 );
@@ -702,7 +686,7 @@ server.registerTool(
     inputSchema: { registrar: z.string(), ...listControls },
   },
   async ({ registrar, ...params }) => {
-    const domains = await getByRegistrarRouted(registrar);
+    const domains = await getByRegistrar(registrar);
     return pagedJson("domains", domains, params, compactDomain, "domain(s)", "Set verbose=true or call get_domain for full details.", { registrar });
   }
 );
@@ -715,7 +699,7 @@ server.registerTool(
     inputSchema: {},
   },
   async () => {
-    const stats = await getDomainStatsRouted();
+    const stats = await getDomainStats();
     return { content: [{ type: "text", text: JSON.stringify(stats, null, 2) }] };
   }
 );
@@ -737,7 +721,7 @@ server.registerTool(
     },
   },
   async (params) => {
-    const record = createDnsRecord(params);
+    const record = await createDnsRecord(params);
     return { content: [{ type: "text", text: JSON.stringify(record, null, 2) }] };
   }
 );
@@ -754,7 +738,7 @@ server.registerTool(
     },
   },
   async ({ domain_id, type, ...params }) => {
-    const records = listDnsRecords(domain_id, type);
+    const records = await listDnsRecords(domain_id, type);
     return pagedJson("records", records, params, compactDnsRecord, "record(s)", "Set verbose=true for full DNS record values.", { domain_id, type });
   }
 );
@@ -774,7 +758,7 @@ server.registerTool(
     },
   },
   async ({ id, ...input }) => {
-    const record = updateDnsRecord(id, input);
+    const record = await updateDnsRecord(id, input);
     if (!record) {
       return { content: [{ type: "text", text: `DNS record '${id}' not found.` }], isError: true };
     }
@@ -790,7 +774,7 @@ server.registerTool(
     inputSchema: { id: z.string() },
   },
   async ({ id }) => {
-    const deleted = deleteDnsRecord(id);
+    const deleted = await deleteDnsRecord(id);
     return { content: [{ type: "text", text: JSON.stringify({ id, deleted }) }] };
   }
 );
@@ -809,7 +793,7 @@ server.registerTool(
     },
   },
   async (params) => {
-    const alert = createAlert(params);
+    const alert = await createAlert(params);
     return { content: [{ type: "text", text: JSON.stringify(alert, null, 2) }] };
   }
 );
@@ -822,7 +806,7 @@ server.registerTool(
     inputSchema: { domain_id: z.string(), ...listControls },
   },
   async ({ domain_id, ...params }) => {
-    const alerts = listAlerts(domain_id);
+    const alerts = await listAlerts(domain_id);
     return pagedJson("alerts", alerts, params, compactAlert, "alert(s)", "Set verbose=true for full alert records.", { domain_id });
   }
 );
@@ -835,7 +819,7 @@ server.registerTool(
     inputSchema: { id: z.string() },
   },
   async ({ id }) => {
-    const deleted = deleteAlert(id);
+    const deleted = await deleteAlert(id);
     return { content: [{ type: "text", text: JSON.stringify({ id, deleted }) }] };
   }
 );
@@ -851,7 +835,7 @@ server.registerTool(
   },
   async ({ domain }) => {
     try {
-      const result = whoisLookup(domain);
+      const result = await whoisLookup(domain);
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     } catch (error: unknown) {
       return {
@@ -876,7 +860,7 @@ server.registerTool(
   },
   async ({ domain, record_type }) => {
     try {
-      const result = checkDnsPropagation(domain, record_type);
+      const result = await checkDnsPropagation(domain, record_type);
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     } catch (error: unknown) {
       return {
@@ -898,7 +882,7 @@ server.registerTool(
   },
   async ({ domain }) => {
     try {
-      const result = checkSsl(domain);
+      const result = await checkSsl(domain);
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     } catch (error: unknown) {
       return {
@@ -919,7 +903,7 @@ server.registerTool(
     inputSchema: { domain_id: z.string().describe("Domain ID") },
   },
   async ({ domain_id }) => {
-    const zone = exportZoneFile(domain_id);
+    const zone = await exportZoneFile(domain_id);
     if (!zone) {
       return { content: [{ type: "text", text: `Domain '${domain_id}' not found.` }], isError: true };
     }
@@ -940,7 +924,7 @@ server.registerTool(
     },
   },
   async ({ domain_id, content }) => {
-    const result = importZoneFile(domain_id, content);
+    const result = await importZoneFile(domain_id, content);
     if (!result) {
       return { content: [{ type: "text", text: `Domain '${domain_id}' not found.` }], isError: true };
     }
@@ -977,7 +961,7 @@ server.registerTool(
     inputSchema: { domain_id: z.string().describe("Domain ID") },
   },
   async ({ domain_id }) => {
-    const result = validateDns(domain_id);
+    const result = await validateDns(domain_id);
     if (!result) {
       return { content: [{ type: "text", text: `Domain '${domain_id}' not found.` }], isError: true };
     }
@@ -997,7 +981,7 @@ server.registerTool(
     },
   },
   async ({ format }) => {
-    const output = exportPortfolio(format);
+    const output = await exportPortfolio(format);
     return { content: [{ type: "text", text: output }] };
   }
 );
@@ -1012,7 +996,7 @@ server.registerTool(
     inputSchema: { ...listControls },
   },
   async (params) => {
-    const results = checkAllDomains();
+    const results = await checkAllDomains();
     return pagedJson("results", results, params, compactBulkCheck, "domain check result(s)", "Set verbose=true for full WHOIS/SSL/DNS validation details.");
   }
 );
@@ -1695,10 +1679,10 @@ server.registerTool(
         delegationOperationId = nsUpdate.operationId;
       }
 
-      const existing = getDomainByName(domain);
+      const existing = await getDomainByName(domain);
       const dbInput = { registrar: "AWS Route 53", status: "active" as const, auto_renew: true, nameservers };
-      if (existing) updateDomain(existing.id, dbInput);
-      else createDomain({ name: domain, ...dbInput });
+      if (existing) await updateDomain(existing.id, dbInput);
+      else await createDomain({ name: domain, ...dbInput });
 
       return {
         content: [
@@ -1816,10 +1800,10 @@ server.registerTool(
   async (params) => {
     const { limit, offset, all, verbose } = params;
     if (params.with_domains) {
-      const results = listDomainsWithOwners();
+      const results = await listDomainsWithOwners();
       return pagedJson("owners", results, { limit, offset, all, verbose }, compactDomainOwner, "owner/domain row(s)", "Set verbose=true for full joined owner fields.");
     }
-    const owners = listDomainOwners({
+    const owners = await listDomainOwners({
       search: params.search,
       source: params.source as (typeof DOMAIN_OWNER_SOURCES)[number] | undefined,
       verified: params.verified_only ? true : undefined,
@@ -1840,14 +1824,14 @@ server.registerTool(
   },
   async ({ identifier, owner_id }) => {
     if (owner_id) {
-      const o = getDomainOwner(owner_id);
+      const o = await getDomainOwner(owner_id);
       if (!o) return { content: [{ type: "text", text: `Owner '${owner_id}' not found.` }], isError: true };
       return { content: [{ type: "text", text: JSON.stringify(o, null, 2) }] };
     }
     if (identifier) {
-      const domain = getDomainByIdentifier(identifier);
+      const domain = await getDomainByIdentifier(identifier);
       if (!domain) return { content: [{ type: "text", text: `Domain '${identifier}' not found.` }], isError: true };
-      const o = getDomainOwnerByDomain(domain.id);
+      const o = await getDomainOwnerByDomain(domain.id);
       if (!o) return { content: [{ type: "text", text: `No owner info for ${domain.name}.` }] };
       return { content: [{ type: "text", text: JSON.stringify(o, null, 2) }] };
     }
@@ -1876,7 +1860,7 @@ server.registerTool(
     if (!params.owner_name && !params.owner_email && !params.owner_organization && !params.contact_id) {
       return { content: [{ type: "text", text: "At least one of owner_name, owner_email, owner_organization, or contact_id is required." }], isError: true };
     }
-    const o = createDomainOwner(params as Parameters<typeof createDomainOwner>[0]);
+    const o = await createDomainOwner(params as Parameters<typeof createDomainOwner>[0]);
     return { content: [{ type: "text", text: JSON.stringify(o, null, 2) }] };
   }
 );
@@ -1898,7 +1882,7 @@ server.registerTool(
     },
   },
   async ({ owner_id, ...rest }) => {
-    const o = updateDomainOwner(owner_id, rest);
+    const o = await updateDomainOwner(owner_id, rest);
     if (!o) return { content: [{ type: "text", text: `Owner '${owner_id}' not found.` }], isError: true };
     return { content: [{ type: "text", text: JSON.stringify(o, null, 2) }] };
   }
@@ -1912,7 +1896,7 @@ server.registerTool(
     inputSchema: { owner_id: z.string() },
   },
   async ({ owner_id }) => {
-    const deleted = deleteDomainOwner(owner_id);
+    const deleted = await deleteDomainOwner(owner_id);
     if (!deleted) return { content: [{ type: "text", text: `Owner '${owner_id}' not found.` }], isError: true };
     return { content: [{ type: "text", text: `Deleted owner ${owner_id}` }] };
   }
@@ -1927,9 +1911,9 @@ server.registerTool(
   },
   async ({ domain_name }) => {
     try {
-      const whois = whoisLookup(domain_name);
+      const whois = await whoisLookup(domain_name);
       if (!whois.raw) return { content: [{ type: "text", text: "WHOIS returned no data." }], isError: true };
-      const o = extractOwnerFromWhois(domain_name, whois.raw);
+      const o = await extractOwnerFromWhois(domain_name, whois.raw);
       if (!o) return { content: [{ type: "text", text: "No owner information found in WHOIS data." }] };
       return { content: [{ type: "text", text: JSON.stringify(o, null, 2) }] };
     } catch (error: unknown) {

@@ -11,14 +11,36 @@ import {
   validateDns,
   getDomain,
   getDomainByName,
-  createDomain,
-  updateDomain,
 } from "../../db/domains.js";
 import { readFileSync, writeFileSync } from "node:fs";
 import { getDnsProvider } from "../../lib/registrar.js";
 import { loadConfig } from "../../lib/config.js";
 import { createDnsPlan, getDnsApplyBlockReason, parseDesiredDnsState, planHasChanges, type DnsPlan } from "../../lib/dns-plan.js";
 import { compactHint, pageItemsOrExit, truncateText } from "../../lib/compact-output.js";
+
+/** Record types the store (local sqlite CHECK + cloud API) accepts on write. */
+export const SUPPORTED_DNS_TYPES = new Set(["A", "AAAA", "CNAME", "MX", "TXT", "NS", "SRV"]);
+
+/**
+ * Split provider-returned records into persistable ones and skipped ones.
+ * Real zones always carry provider-managed records (SOA, and often CAA) whose
+ * types are outside the supported set; persisting them fails the local CHECK
+ * constraint and makes the cloud API return 400. `dns pull` must skip them.
+ */
+export function partitionPullableRecords<T extends { type: string }>(
+  records: T[],
+): { keep: T[]; skipped: Map<string, number> } {
+  const keep: T[] = [];
+  const skipped = new Map<string, number>();
+  for (const r of records) {
+    if (SUPPORTED_DNS_TYPES.has(r.type)) {
+      keep.push(r);
+    } else {
+      skipped.set(r.type, (skipped.get(r.type) ?? 0) + 1);
+    }
+  }
+  return { keep, skipped };
+}
 
 function printDnsPlan(plan: DnsPlan): void {
   console.log(`DNS plan for ${plan.domain}: ${plan.creates} create, ${plan.updates} update, ${plan.deletes} delete, ${plan.unchanged} unchanged`);
@@ -141,8 +163,8 @@ export function registerDnsCommands(program: Command): void {
     .option("--limit <n>", "Limit number of displayed records")
     .option("--all", "Show all matching records")
     .option("--json", "Output as JSON", false)
-    .action((domainId, opts) => {
-      const records = listDnsRecords(domainId, opts.type);
+    .action(async (domainId, opts) => {
+      const records = await listDnsRecords(domainId, opts.type);
 
       if (opts.json) {
         console.log(JSON.stringify(records, null, 2));
@@ -170,8 +192,8 @@ export function registerDnsCommands(program: Command): void {
     .option("--ttl <ttl>", "TTL in seconds", "3600")
     .option("--priority <n>", "Priority (for MX/SRV)")
     .option("--json", "Output as JSON", false)
-    .action((opts) => {
-      const record = createDnsRecord({
+    .action(async (opts) => {
+      const record = await createDnsRecord({
         domain_id: opts.domain,
         type: opts.type,
         name: opts.name,
@@ -197,7 +219,7 @@ export function registerDnsCommands(program: Command): void {
     .option("--ttl <ttl>", "TTL in seconds")
     .option("--priority <n>", "Priority")
     .option("--json", "Output as JSON", false)
-    .action((id, opts) => {
+    .action(async (id, opts) => {
       const input: Record<string, unknown> = {};
       if (opts.type !== undefined) input.type = opts.type;
       if (opts.name !== undefined) input.name = opts.name;
@@ -205,7 +227,7 @@ export function registerDnsCommands(program: Command): void {
       if (opts.ttl !== undefined) input.ttl = parseInt(opts.ttl);
       if (opts.priority !== undefined) input.priority = parseInt(opts.priority);
 
-      const record = updateDnsRecord(id, input);
+      const record = await updateDnsRecord(id, input);
       if (!record) {
         console.error(`DNS record '${id}' not found.`);
         process.exit(1);
@@ -222,8 +244,8 @@ export function registerDnsCommands(program: Command): void {
     .command("remove")
     .description("Remove a DNS record")
     .argument("<id>", "Record ID")
-    .action((id) => {
-      const deleted = deleteDnsRecord(id);
+    .action(async (id) => {
+      const deleted = await deleteDnsRecord(id);
       if (deleted) {
         console.log(`Deleted DNS record ${id}`);
       } else {
@@ -238,9 +260,9 @@ export function registerDnsCommands(program: Command): void {
     .argument("<domain>", "Domain name to check")
     .option("--record <type>", "Record type (A/AAAA/CNAME/MX/TXT/NS)", "A")
     .option("--json", "Output as JSON", false)
-    .action((domain, opts) => {
+    .action(async (domain, opts) => {
       try {
-        const result = checkDnsPropagation(domain, opts.record);
+        const result = await checkDnsPropagation(domain, opts.record);
         if (opts.json) {
           console.log(JSON.stringify(result, null, 2));
         } else {
@@ -263,8 +285,8 @@ export function registerDnsCommands(program: Command): void {
     .description("Export DNS records as BIND zone file")
     .argument("<domain-id>", "Domain ID")
     .option("--output <file>", "Write to file instead of stdout")
-    .action((domainId, opts) => {
-      const zone = exportZoneFile(domainId);
+    .action(async (domainId, opts) => {
+      const zone = await exportZoneFile(domainId);
       if (!zone) {
         console.error(`Domain '${domainId}' not found.`);
         process.exit(1);
@@ -283,7 +305,7 @@ export function registerDnsCommands(program: Command): void {
     .argument("<domain-id>", "Domain ID")
     .requiredOption("--file <path>", "Path to zone file")
     .option("--json", "Output as JSON", false)
-    .action((domainId, opts) => {
+    .action(async (domainId, opts) => {
       let content: string;
       try {
         content = readFileSync(opts.file, "utf-8");
@@ -292,7 +314,7 @@ export function registerDnsCommands(program: Command): void {
         process.exit(1);
       }
 
-      const result = importZoneFile(domainId, content);
+      const result = await importZoneFile(domainId, content);
       if (!result) {
         console.error(`Domain '${domainId}' not found.`);
         process.exit(1);
@@ -345,8 +367,8 @@ export function registerDnsCommands(program: Command): void {
     .description("Validate DNS records for common issues")
     .argument("<domain-id>", "Domain ID")
     .option("--json", "Output as JSON", false)
-    .action((domainId, opts) => {
-      const result = validateDns(domainId);
+    .action(async (domainId, opts) => {
+      const result = await validateDns(domainId);
       if (!result) {
         console.error(`Domain '${domainId}' not found.`);
         process.exit(1);
@@ -379,17 +401,23 @@ export function registerDnsCommands(program: Command): void {
       try {
         const provider = getDnsProvider(providerName);
         const records = await provider.getDnsRecords(domain);
-        const dbDomain = getDomainByName(domain);
+        const dbDomain = await getDomainByName(domain);
         if (!dbDomain) {
           console.error(`Domain '${domain}' not found in local DB. Add it first: domains domain add --name ${domain}`);
           process.exit(1);
         }
+        // Skip provider-managed types (SOA/CAA/…) the store cannot persist.
+        const { keep, skipped } = partitionPullableRecords(records);
         let count = 0;
-        for (const r of records) {
-          createDnsRecord({ domain_id: dbDomain.id, type: r.type as "A" | "AAAA" | "CNAME" | "MX" | "TXT" | "NS" | "SRV", name: r.name, value: r.value, ttl: r.ttl, priority: r.priority });
+        for (const r of keep) {
+          await createDnsRecord({ domain_id: dbDomain.id, type: r.type as "A" | "AAAA" | "CNAME" | "MX" | "TXT" | "NS" | "SRV", name: r.name, value: r.value, ttl: r.ttl, priority: r.priority });
           count++;
         }
         console.log(`✓ Pulled ${count} record(s) from ${providerName} into local DB for ${domain}`);
+        if (skipped.size > 0) {
+          const summary = Array.from(skipped.entries()).map(([t, n]) => `${n} ${t}`).join(", ");
+          console.log(`  Skipped ${summary} record(s) (unsupported/provider-managed type).`);
+        }
       } catch (e) {
         console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);
@@ -405,9 +433,9 @@ export function registerDnsCommands(program: Command): void {
     .action(async (domainId: string, opts: { provider?: string }) => {
       const providerName = opts.provider ?? loadConfig().default_dns ?? "route53";
       try {
-        const records = listDnsRecords(domainId);
+        const records = await listDnsRecords(domainId);
         if (records.length === 0) { console.log("No local DNS records to push."); return; }
-        const dbDomain = getDomain(domainId) ?? (() => { throw new Error(`Domain '${domainId}' not found`); })();
+        const dbDomain = (await getDomain(domainId)) ?? (() => { throw new Error(`Domain '${domainId}' not found`); })();
         const provider = getDnsProvider(providerName);
         await provider.setDnsRecords(dbDomain.name, records.map((r) => ({
           type: r.type, name: r.name, value: r.value, ttl: r.ttl, priority: r.priority ?? undefined,

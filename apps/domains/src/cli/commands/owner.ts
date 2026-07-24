@@ -11,13 +11,12 @@ import {
   type DomainOwnerSource,
   type CreateDomainOwnerInput,
   linkOwnerToContacts,
-} from "../../db/domain-owners.js";
-import { getDomainDetails, getDomainByName, whoisLookup } from "../../db/domains.js";
-import { getDatabase } from "../../db/database.js";
+} from "../../db/owners.js";
+import { getDomainDetails, whoisLookup } from "../../db/domains.js";
 import { compactHint, pageItemsOrExit, truncateText } from "../../lib/compact-output.js";
 
-function requireDomain(identifier: string) {
-  const details = getDomainDetails(identifier);
+async function requireDomain(identifier: string) {
+  const details = await getDomainDetails(identifier);
   if (!details) {
     console.error(`Domain '${identifier}' not found.`);
     process.exit(1);
@@ -41,7 +40,7 @@ export function registerOwnerCommand(program: Command): void {
     .option("--all", "Show all matching owners/domains")
     .option("--verbose", "Show email and phone details")
     .option("-j, --json", "Output JSON")
-    .action((opts: {
+    .action(async (opts: {
       search?: string;
       source?: DomainOwnerSource;
       verifiedOnly?: boolean;
@@ -52,7 +51,7 @@ export function registerOwnerCommand(program: Command): void {
       json?: boolean;
     }) => {
       if (opts.withDomains) {
-        const results = listDomainsWithOwners();
+        const results = await listDomainsWithOwners();
         if (opts.json) { console.log(JSON.stringify({ owners: results, count: results.length }, null, 2)); return; }
         const page = pageItemsOrExit(results, { limit: opts.limit, all: opts.all });
         if (page.items.length === 0) { console.log("No premium domain owners found."); return; }
@@ -66,7 +65,7 @@ export function registerOwnerCommand(program: Command): void {
         return;
       }
 
-      const owners = listDomainOwners({
+      const owners = await listDomainOwners({
         search: opts.search,
         source: opts.source,
         verified: opts.verifiedOnly ? true : undefined,
@@ -91,8 +90,8 @@ export function registerOwnerCommand(program: Command): void {
     .command("get <ownerId>")
     .description("Get owner details by ID")
     .option("-j, --json", "Output JSON")
-    .action((ownerId: string, opts: { json?: boolean }) => {
-      const o = getDomainOwner(ownerId);
+    .action(async (ownerId: string, opts: { json?: boolean }) => {
+      const o = await getDomainOwner(ownerId);
       if (!o) { console.error(`Owner '${ownerId}' not found.`); process.exit(1); }
       if (opts.json) { console.log(JSON.stringify(o, null, 2)); return; }
       console.log(`\nOwner: ${o.owner_name ?? o.owner_email ?? "unknown"}`);
@@ -112,9 +111,9 @@ export function registerOwnerCommand(program: Command): void {
     .command("info <identifier>")
     .description("Show owner info for a specific domain")
     .option("-j, --json", "Output JSON")
-    .action((identifier: string, opts: { json?: boolean }) => {
-      const details = requireDomain(identifier);
-      const o = getDomainOwnerByDomain(details.domain.id);
+    .action(async (identifier: string, opts: { json?: boolean }) => {
+      const details = await requireDomain(identifier);
+      const o = await getDomainOwnerByDomain(details.domain.id);
       if (!o) {
         if (opts.json) { console.log(JSON.stringify({ domain: details.domain.name, owner: null }, null, 2)); return; }
         console.log(`No owner info for ${details.domain.name}.`);
@@ -147,7 +146,7 @@ export function registerOwnerCommand(program: Command): void {
     .option("--verified", "Mark as verified")
     .option("--notes <text>", "Notes")
     .option("-j, --json", "Output JSON")
-    .action((identifier: string, opts: {
+    .action(async (identifier: string, opts: {
       name?: string;
       email?: string;
       phone?: string;
@@ -158,7 +157,7 @@ export function registerOwnerCommand(program: Command): void {
       notes?: string;
       json?: boolean;
     }) => {
-      const details = requireDomain(identifier);
+      const details = await requireDomain(identifier);
 
       if (!opts.name && !opts.email && !opts.organization && !opts.contactId) {
         console.error("At least one of --name, --email, --organization, or --contact-id is required.");
@@ -177,7 +176,7 @@ export function registerOwnerCommand(program: Command): void {
         contact_id: opts.contactId,
       };
 
-      const o = createDomainOwner(input);
+      const o = await createDomainOwner(input);
       if (opts.json) { console.log(JSON.stringify(o, null, 2)); return; }
       console.log(`Added owner for ${details.domain.name}: ${o.owner_name ?? o.owner_email ?? "unknown"}`);
     });
@@ -196,7 +195,7 @@ export function registerOwnerCommand(program: Command): void {
     .option("--unverify", "Unmark as verified")
     .option("--notes <text>", "Notes")
     .option("-j, --json", "Output JSON")
-    .action((ownerId: string, opts: {
+    .action(async (ownerId: string, opts: {
       name?: string;
       email?: string;
       phone?: string;
@@ -207,7 +206,7 @@ export function registerOwnerCommand(program: Command): void {
       notes?: string;
       json?: boolean;
     }) => {
-      const existing = getDomainOwner(ownerId);
+      const existing = await getDomainOwner(ownerId);
       if (!existing) { console.error(`Owner '${ownerId}' not found.`); process.exit(1); }
 
       const update: { owner_name?: string; owner_email?: string; owner_phone?: string; owner_organization?: string; contact_id?: string; verified?: boolean; notes?: string } = {};
@@ -220,7 +219,7 @@ export function registerOwnerCommand(program: Command): void {
       if (opts.unverify) update.verified = false;
       if (opts.notes !== undefined) update.notes = opts.notes;
 
-      const o = updateDomainOwner(ownerId, update);
+      const o = await updateDomainOwner(ownerId, update);
       if (!o) { console.error("Update failed."); process.exit(1); }
       if (opts.json) { console.log(JSON.stringify(o, null, 2)); return; }
       console.log(`Updated owner: ${o.owner_name ?? o.owner_email ?? "unknown"}`);
@@ -232,12 +231,12 @@ export function registerOwnerCommand(program: Command): void {
     .command("delete <ownerId>")
     .description("Delete an owner record")
     .option("-f, --force", "Required confirmation")
-    .action((ownerId: string, opts: { force?: boolean }) => {
+    .action(async (ownerId: string, opts: { force?: boolean }) => {
       if (!opts.force) {
         console.error(`Refusing to delete owner '${ownerId}' without --force.`);
         process.exit(1);
       }
-      const deleted = deleteDomainOwner(ownerId);
+      const deleted = await deleteDomainOwner(ownerId);
       if (!deleted) { console.error(`Owner '${ownerId}' not found.`); process.exit(1); }
       console.log(`Deleted owner ${ownerId}`);
     });
@@ -248,16 +247,16 @@ export function registerOwnerCommand(program: Command): void {
     .command("extract <identifier>")
     .description("Extract owner info from WHOIS lookup")
     .option("-j, --json", "Output JSON")
-    .action((identifier: string, opts: { json?: boolean }) => {
-      const details = requireDomain(identifier);
-      const whois = whoisLookup(details.domain.name);
+    .action(async (identifier: string, opts: { json?: boolean }) => {
+      const details = await requireDomain(identifier);
+      const whois = await whoisLookup(details.domain.name);
 
       if (!whois.raw) {
         console.error("WHOIS returned no data.");
         process.exit(1);
       }
 
-      const o = extractOwnerFromWhois(details.domain.name, whois.raw);
+      const o = await extractOwnerFromWhois(details.domain.name, whois.raw);
       if (!o) {
         console.log("No owner information found in WHOIS data.");
         return;
@@ -279,16 +278,16 @@ export function registerOwnerCommand(program: Command): void {
     .option("--contact-id <id>", "Existing contact ID in open-contacts")
     .option("--auto", "Auto-create contact from owner info")
     .option("-j, --json", "Output JSON")
-    .action((identifier: string, opts: { contactId?: string; auto?: boolean; json?: boolean }) => {
-      const details = requireDomain(identifier);
-      const o = getDomainOwnerByDomain(details.domain.id);
+    .action(async (identifier: string, opts: { contactId?: string; auto?: boolean; json?: boolean }) => {
+      const details = await requireDomain(identifier);
+      const o = await getDomainOwnerByDomain(details.domain.id);
       if (!o) {
         console.error(`No owner record for ${details.domain.name}. Add one first.`);
         process.exit(1);
       }
 
       if (opts.contactId) {
-        const updated = updateDomainOwner(o.id, { contact_id: opts.contactId });
+        const updated = await updateDomainOwner(o.id, { contact_id: opts.contactId });
         if (!updated) { console.error("Link failed."); process.exit(1); }
         if (opts.json) { console.log(JSON.stringify(updated, null, 2)); return; }
         console.log(`Linked ${details.domain.name} to contact ${opts.contactId}`);
@@ -297,9 +296,9 @@ export function registerOwnerCommand(program: Command): void {
 
       if (opts.auto) {
         try {
-          // Dynamically import open-contacts
-          const contacts = require("@hasna/contacts");
-          const contactId = linkOwnerToContacts(details.domain.id, {
+          const contactsPackage = "@hasna/contacts";
+          const contacts = await import(contactsPackage);
+          const contactId = await linkOwnerToContacts(details.domain.id, {
             createContact: (input) => contacts.createContact(input),
             getContactByEmail: (email) => contacts.getContactByEmail(email),
           });
@@ -310,7 +309,15 @@ export function registerOwnerCommand(program: Command): void {
           if (opts.json) { console.log(JSON.stringify({ domain: details.domain.name, contact_id: contactId }, null, 2)); return; }
           console.log(`Created/linked contact ${contactId} for ${details.domain.name}`);
         } catch (e) {
-          console.error(`Failed to link to open-contacts: ${e instanceof Error ? e.message : String(e)}`);
+          const message = e instanceof Error ? e.message : String(e);
+          if (
+            (typeof e === "object" && e !== null && "code" in e && (e as { code?: unknown }).code === "MODULE_NOT_FOUND") ||
+            message.includes("@hasna/contacts")
+          ) {
+            console.error("@hasna/contacts is not installed. Install it alongside @hasna/domains, or pass --contact-id to link an existing contact ID.");
+          } else {
+            console.error(`Failed to link to open-contacts: ${message}`);
+          }
           process.exit(1);
         }
         return;
@@ -326,16 +333,16 @@ export function registerOwnerCommand(program: Command): void {
     .command("whois <identifier>")
     .description("WHOIS lookup and save owner info")
     .option("-j, --json", "Output JSON")
-    .action((identifier: string, opts: { json?: boolean }) => {
-      const details = requireDomain(identifier);
-      const whois = whoisLookup(details.domain.name);
+    .action(async (identifier: string, opts: { json?: boolean }) => {
+      const details = await requireDomain(identifier);
+      const whois = await whoisLookup(details.domain.name);
 
       if (!whois.raw) {
         console.error("WHOIS returned no data.");
         process.exit(1);
       }
 
-      const o = extractOwnerFromWhois(details.domain.name, whois.raw);
+      const o = await extractOwnerFromWhois(details.domain.name, whois.raw);
       if (!o) {
         if (opts.json) { console.log(JSON.stringify({ domain: details.domain.name, owner: null }, null, 2)); return; }
         console.log("No owner information found in WHOIS data.");

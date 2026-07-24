@@ -222,6 +222,12 @@ export function createServeApp(options: ServeAppOptions): ServeApp {
           const record = await repo.getDnsRecord(id);
           return record ? json(record) : json({ error: "dns record not found" }, 404);
         }
+        if (method === "PATCH" || method === "PUT") {
+          const denied = await auth(req, path, ["domains:write"]);
+          if (denied) return denied;
+          const record = await repo.updateDnsRecord(id, await readBody(req));
+          return record ? json(record) : json({ error: "dns record not found" }, 404);
+        }
         if (method === "DELETE") {
           const denied = await auth(req, path, ["domains:write"]);
           if (denied) return denied;
@@ -244,6 +250,221 @@ export function createServeApp(options: ServeAppOptions): ServeApp {
           if (denied) return denied;
           const offer = await repo.createOffer(id, await readBody(req));
           return json(offer, 201);
+        }
+      }
+
+      // ── alerts ────────────────────────────────────────────────────────
+      m = path.match(/^\/v1\/domains\/([^/]+)\/alerts$/);
+      if (m) {
+        const id = decodeURIComponent(m[1]!);
+        if (method === "GET") {
+          const denied = await auth(req, path, ["domains:read"]);
+          if (denied) return denied;
+          const alerts = await repo.listAlerts(id);
+          return json({ alerts, count: alerts.length });
+        }
+        if (method === "POST") {
+          const denied = await auth(req, path, ["domains:write"]);
+          if (denied) return denied;
+          return json(await repo.createAlert(id, await readBody(req)), 201);
+        }
+      }
+      m = path.match(/^\/v1\/alerts\/([^/]+)$/);
+      if (m) {
+        const id = decodeURIComponent(m[1]!);
+        if (method === "GET") {
+          const denied = await auth(req, path, ["domains:read"]);
+          if (denied) return denied;
+          const alert = await repo.getAlert(id);
+          return alert ? json(alert) : json({ error: "alert not found" }, 404);
+        }
+        if (method === "DELETE") {
+          const denied = await auth(req, path, ["domains:write"]);
+          if (denied) return denied;
+          return json({ id, deleted: await repo.deleteAlert(id) });
+        }
+      }
+
+      // ── email links ───────────────────────────────────────────────────
+      m = path.match(/^\/v1\/domains\/([^/]+)\/emails$/);
+      if (m) {
+        const id = decodeURIComponent(m[1]!);
+        if (method === "GET") {
+          const denied = await auth(req, path, ["domains:read"]);
+          if (denied) return denied;
+          const emails = await repo.listEmailLinks(id);
+          return json({ emails, count: emails.length });
+        }
+        if (method === "POST") {
+          const denied = await auth(req, path, ["domains:write"]);
+          if (denied) return denied;
+          return json(await repo.linkEmail(id, await readBody(req)), 201);
+        }
+      }
+      m = path.match(/^\/v1\/emails\/([^/]+)$/);
+      if (m && method === "GET") {
+        const denied = await auth(req, path, ["domains:read"]);
+        if (denied) return denied;
+        const link = await repo.getEmailLink(decodeURIComponent(m[1]!));
+        return link ? json(link) : json({ error: "email link not found" }, 404);
+      }
+
+      // ── offers by id ──────────────────────────────────────────────────
+      m = path.match(/^\/v1\/offers\/([^/]+)$/);
+      if (m && method === "GET") {
+        const denied = await auth(req, path, ["domains:read"]);
+        if (denied) return denied;
+        const offer = await repo.getOffer(decodeURIComponent(m[1]!));
+        return offer ? json(offer) : json({ error: "offer not found" }, 404);
+      }
+
+      // ── owners ────────────────────────────────────────────────────────
+      if (path === "/v1/owners-portfolio" && method === "GET") {
+        const denied = await auth(req, path, ["domains:read"]);
+        if (denied) return denied;
+        const domains = await repo.listDomainsWithOwners();
+        return json({ domains, count: domains.length });
+      }
+      m = path.match(/^\/v1\/domains\/([^/]+)\/owners$/);
+      if (m) {
+        const id = decodeURIComponent(m[1]!);
+        if (method === "GET") {
+          const denied = await auth(req, path, ["domains:read"]);
+          if (denied) return denied;
+          const owners = await repo.listOwnersForDomain(id);
+          return json({ owners, count: owners.length });
+        }
+        if (method === "POST") {
+          const denied = await auth(req, path, ["domains:write"]);
+          if (denied) return denied;
+          return json(await repo.createOwner(id, await readBody(req)), 201);
+        }
+      }
+      if (path === "/v1/owners" && method === "GET") {
+        const denied = await auth(req, path, ["domains:read"]);
+        if (denied) return denied;
+        const owners = await repo.listOwners({
+          search: url.searchParams.get("search") ?? undefined,
+          source: url.searchParams.get("source") ?? undefined,
+          verified: url.searchParams.has("verified") ? url.searchParams.get("verified") === "true" : undefined,
+        });
+        return json({ owners, count: owners.length });
+      }
+      m = path.match(/^\/v1\/owners\/([^/]+)$/);
+      if (m) {
+        const id = decodeURIComponent(m[1]!);
+        if (method === "GET") {
+          const denied = await auth(req, path, ["domains:read"]);
+          if (denied) return denied;
+          const owner = await repo.getOwner(id);
+          return owner ? json(owner) : json({ error: "owner not found" }, 404);
+        }
+        if (method === "PATCH" || method === "PUT") {
+          const denied = await auth(req, path, ["domains:write"]);
+          if (denied) return denied;
+          const owner = await repo.updateOwner(id, await readBody(req));
+          return owner ? json(owner) : json({ error: "owner not found" }, 404);
+        }
+        if (method === "DELETE") {
+          const denied = await auth(req, path, ["domains:write"]);
+          if (denied) return denied;
+          return json({ id, deleted: await repo.deleteOwner(id) });
+        }
+      }
+
+      // ── history ───────────────────────────────────────────────────────
+      if (path === "/v1/history-changes" && method === "GET") {
+        const denied = await auth(req, path, ["domains:read"]);
+        if (denied) return denied;
+        const domains = await repo.listHistoryChanges();
+        return json({ domains, count: domains.length });
+      }
+      if (path === "/v1/history" && method === "GET") {
+        const denied = await auth(req, path, ["domains:read"]);
+        if (denied) return denied;
+        const start = url.searchParams.get("start");
+        const end = url.searchParams.get("end");
+        if (!start || !end) return json({ error: "start and end are required" }, 400);
+        const hist = await repo.listHistoryByDateRange(start, end, url.searchParams.get("domain") ?? undefined);
+        return json({ history: hist, count: hist.length });
+      }
+      m = path.match(/^\/v1\/domains\/([^/]+)\/history$/);
+      if (m) {
+        const id = decodeURIComponent(m[1]!);
+        if (method === "GET") {
+          const denied = await auth(req, path, ["domains:read"]);
+          if (denied) return denied;
+          const hist = await repo.listHistory(id, {
+            type: url.searchParams.get("type") ?? undefined,
+            limit: url.searchParams.get("limit") ? Number(url.searchParams.get("limit")) : undefined,
+          });
+          return json({ history: hist, count: hist.length });
+        }
+        if (method === "POST") {
+          const denied = await auth(req, path, ["domains:write"]);
+          if (denied) return denied;
+          return json(await repo.createHistory(id, await readBody(req)), 201);
+        }
+        if (method === "DELETE") {
+          const denied = await auth(req, path, ["domains:write"]);
+          if (denied) return denied;
+          return json({ id, deleted: await repo.deleteHistoryByDomain(id) });
+        }
+      }
+      m = path.match(/^\/v1\/history\/([^/]+)$/);
+      if (m) {
+        const id = decodeURIComponent(m[1]!);
+        if (method === "GET") {
+          const denied = await auth(req, path, ["domains:read"]);
+          if (denied) return denied;
+          const entry = await repo.getHistory(id);
+          return entry ? json(entry) : json({ error: "history entry not found" }, 404);
+        }
+        if (method === "DELETE") {
+          const denied = await auth(req, path, ["domains:write"]);
+          if (denied) return denied;
+          return json({ id, deleted: await repo.deleteHistory(id) });
+        }
+      }
+
+      // ── reputation ────────────────────────────────────────────────────
+      if (path === "/v1/reputation" && method === "GET") {
+        const denied = await auth(req, path, ["domains:read"]);
+        if (denied) return denied;
+        const reputation = await repo.listReputation({
+          blacklisted: url.searchParams.get("blacklisted") === "true",
+          threshold: url.searchParams.get("threshold") ? Number(url.searchParams.get("threshold")) : undefined,
+        });
+        return json({ reputation, count: reputation.length });
+      }
+      m = path.match(/^\/v1\/domains\/([^/]+)\/reputation$/);
+      if (m) {
+        const id = decodeURIComponent(m[1]!);
+        if (method === "GET") {
+          const denied = await auth(req, path, ["domains:read"]);
+          if (denied) return denied;
+          const rep = await repo.getReputation(id);
+          return rep ? json(rep) : json({ error: "reputation not found" }, 404);
+        }
+        if (method === "PUT" || method === "PATCH") {
+          const denied = await auth(req, path, ["domains:write"]);
+          if (denied) return denied;
+          return json(await repo.upsertReputation(id, await readBody(req)));
+        }
+      }
+      m = path.match(/^\/v1\/reputation\/([^/]+)$/);
+      if (m) {
+        const id = decodeURIComponent(m[1]!);
+        if (method === "PATCH" || method === "PUT") {
+          const denied = await auth(req, path, ["domains:write"]);
+          if (denied) return denied;
+          const rep = await repo.updateReputation(id, await readBody(req));
+          return rep ? json(rep) : json({ error: "reputation not found" }, 404);
+        }
+        if (method === "DELETE") {
+          const denied = await auth(req, path, ["domains:write"]);
+          if (denied) return denied;
+          return json({ id, deleted: await repo.deleteReputation(id) });
         }
       }
 

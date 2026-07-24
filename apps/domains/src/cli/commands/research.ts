@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { researchDomain, answerAboutDomain } from "../../db/domain-research.js";
 import { getDomainDetails } from "../../db/domains.js";
-import { checkDomainReputation, getDomainReputationByName, listBlacklistedDomains, listHighThreatDomains } from "../../db/domain-reputation.js";
+import { checkDomainReputation, listBlacklistedDomains, listHighThreatDomains } from "../../db/reputation.js";
 import { compactHint, pageItemsOrExit, truncateText } from "../../lib/compact-output.js";
 
 export function registerResearchCommand(program: Command): void {
@@ -18,7 +18,7 @@ export function registerResearchCommand(program: Command): void {
     .option("--all", "Show all returned research results")
     .option("-j, --json", "Output JSON")
     .action(async (identifier: string, opts: { limit?: string; all?: boolean; json?: boolean }) => {
-      const domain = getDomainDetails(identifier);
+      const domain = await getDomainDetails(identifier);
       if (!domain) {
         console.error(`Domain '${identifier}' not found.`);
         process.exit(1);
@@ -77,7 +77,7 @@ export function registerResearchCommand(program: Command): void {
     .description("Ask a specific question about a domain using Exa AI")
     .option("-j, --json", "Output JSON")
     .action(async (identifier: string, question: string, opts: { json?: boolean }) => {
-      const domain = getDomainDetails(identifier);
+      const domain = await getDomainDetails(identifier);
       if (!domain) {
         console.error(`Domain '${identifier}' not found.`);
         process.exit(1);
@@ -107,14 +107,14 @@ export function registerResearchCommand(program: Command): void {
     .command("reputation <identifier>")
     .description("Check domain reputation and blacklist status")
     .option("-j, --json", "Output JSON")
-    .action((identifier: string, opts: { json?: boolean }) => {
-      const domain = getDomainDetails(identifier);
+    .action(async (identifier: string, opts: { json?: boolean }) => {
+      const domain = await getDomainDetails(identifier);
       if (!domain) {
         console.error(`Domain '${identifier}' not found.`);
         process.exit(1);
       }
 
-      const { reputation, dnsBlacklist } = checkDomainReputation(domain.domain.name);
+      const { reputation, dnsBlacklist } = await checkDomainReputation(domain.domain.name);
 
       if (opts.json) {
         console.log(JSON.stringify({ domain: domain.domain.name, reputation, dnsBlacklist }, null, 2));
@@ -143,8 +143,8 @@ export function registerResearchCommand(program: Command): void {
     .option("--limit <n>", "Limit number of displayed domains")
     .option("--all", "Show all blacklisted domains")
     .option("-j, --json", "Output JSON")
-    .action((opts: { limit?: string; all?: boolean; json?: boolean }) => {
-      const domains = listBlacklistedDomains();
+    .action(async (opts: { limit?: string; all?: boolean; json?: boolean }) => {
+      const domains = await listBlacklistedDomains();
       if (opts.json) {
         console.log(JSON.stringify({ domains, count: domains.length }, null, 2));
         return;
@@ -170,9 +170,9 @@ export function registerResearchCommand(program: Command): void {
     .option("--limit <n>", "Limit number of displayed domains")
     .option("--all", "Show all matching domains")
     .option("-j, --json", "Output JSON")
-    .action((opts: { threshold?: string; limit?: string; all?: boolean; json?: boolean }) => {
+    .action(async (opts: { threshold?: string; limit?: string; all?: boolean; json?: boolean }) => {
       const threshold = parseInt(opts.threshold ?? "70");
-      const domains = listHighThreatDomains(threshold);
+      const domains = await listHighThreatDomains(threshold);
       if (opts.json) {
         console.log(JSON.stringify({ domains, threshold, count: domains.length }, null, 2));
         return;

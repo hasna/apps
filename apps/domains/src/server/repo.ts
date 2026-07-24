@@ -22,7 +22,15 @@ import type {
   DomainOffer,
   CreateDomainOfferInput,
 } from "../db/domain-records.js";
-import type { DnsRecord, CreateDnsRecordInput } from "../db/dns-records.js";
+import type { DnsRecord, CreateDnsRecordInput, UpdateDnsRecordInput } from "../db/dns-records.js";
+import type { Alert, CreateAlertInput } from "../db/alerts.js";
+import type { DomainEmailLink, CreateDomainEmailLinkInput } from "../db/domain-records.js";
+import { DOMAIN_EMAIL_TYPES } from "../db/domain-records.js";
+import type { DomainOwner, CreateDomainOwnerInput, DomainOwnerSource, DomainWithOwner } from "../db/domain-owners.js";
+import { DOMAIN_OWNER_SOURCES } from "../db/domain-owners.js";
+import type { DomainHistory, CreateHistoryEntryInput, DomainHistoryType } from "../db/domain-history.js";
+import { HISTORY_TYPES } from "../db/domain-history.js";
+import type { DomainReputation, CreateReputationInput } from "../db/domain-reputation.js";
 
 // ── row shapes as returned by Postgres ─────────────────────────────────────
 
@@ -382,5 +390,426 @@ export class DomainsRepo {
       ],
     );
     return row as unknown as DomainOffer;
+  }
+
+  async getOffer(id: string): Promise<DomainOffer | null> {
+    const row = await this.db.get<Record<string, unknown>>("SELECT * FROM domain_offers WHERE id = $1", [id]);
+    return row ? (row as unknown as DomainOffer) : null;
+  }
+
+  // ── dns record update ──────────────────────────────────────────────────────
+
+  async updateDnsRecord(id: string, patch: UpdateDnsRecordInput): Promise<DnsRecord | null> {
+    const existing = await this.getDnsRecord(id);
+    if (!existing) return null;
+    const sets: string[] = [];
+    const params: unknown[] = [];
+    const setCol = (col: string, val: unknown) => {
+      params.push(val);
+      sets.push(`${col} = $${params.length}`);
+    };
+    if (patch.type !== undefined) {
+      if (!DNS_TYPES.includes(patch.type as (typeof DNS_TYPES)[number])) {
+        throw new HttpError(400, `dns record 'type' must be one of ${DNS_TYPES.join(", ")}`);
+      }
+      setCol("type", patch.type);
+    }
+    if (patch.name !== undefined) setCol("name", patch.name);
+    if (patch.value !== undefined) setCol("value", patch.value);
+    if (patch.ttl !== undefined) setCol("ttl", patch.ttl);
+    if (patch.priority !== undefined) setCol("priority", patch.priority ?? null);
+    if (sets.length === 0) return existing;
+    params.push(id);
+    const row = await this.db.get<DnsRecordRowPg>(
+      `UPDATE dns_records SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING *`,
+      params,
+    );
+    return row ? rowToDnsRecord(row) : null;
+  }
+
+  // ── email links ────────────────────────────────────────────────────────────
+
+  async listEmailLinks(domainId: string): Promise<DomainEmailLink[]> {
+    const rows = await this.db.many<Record<string, unknown>>(
+      "SELECT * FROM domain_emails WHERE domain_id = $1 ORDER BY created_at ASC",
+      [domainId],
+    );
+    return rows as unknown as DomainEmailLink[];
+  }
+
+  async getEmailLink(id: string): Promise<DomainEmailLink | null> {
+    const row = await this.db.get<Record<string, unknown>>("SELECT * FROM domain_emails WHERE id = $1", [id]);
+    return row ? (row as unknown as DomainEmailLink) : null;
+  }
+
+  async linkEmail(domainId: string, input: Omit<CreateDomainEmailLinkInput, "domain_id">): Promise<DomainEmailLink> {
+    if (!DOMAIN_EMAIL_TYPES.includes(input.type)) {
+      throw new HttpError(400, `invalid email link type '${input.type}'`);
+    }
+    const domain = await this.getDomain(domainId);
+    if (!domain) throw new HttpError(404, `domain '${domainId}' not found`);
+    const existing = await this.db.get<{ id: string; thread_id: string | null }>(
+      "SELECT id, thread_id FROM domain_emails WHERE domain_id = $1 AND email_id = $2",
+      [domainId, input.email_id],
+    );
+    if (existing) {
+      const row = await this.db.get<Record<string, unknown>>(
+        "UPDATE domain_emails SET thread_id = $1, type = $2 WHERE id = $3 RETURNING *",
+        [input.thread_id ?? existing.thread_id ?? null, input.type, existing.id],
+      );
+      return row as unknown as DomainEmailLink;
+    }
+    const id = crypto.randomUUID();
+    const row = await this.db.get<Record<string, unknown>>(
+      `INSERT INTO domain_emails (id, domain_id, email_id, thread_id, type, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [id, domainId, input.email_id, input.thread_id ?? null, input.type, new Date().toISOString()],
+    );
+    return row as unknown as DomainEmailLink;
+  }
+
+  // ── alerts ─────────────────────────────────────────────────────────────────
+
+  async listAlerts(domainId: string): Promise<Alert[]> {
+    const rows = await this.db.many<Record<string, unknown>>(
+      "SELECT * FROM alerts WHERE domain_id = $1 ORDER BY type, trigger_days_before",
+      [domainId],
+    );
+    return rows as unknown as Alert[];
+  }
+
+  async getAlert(id: string): Promise<Alert | null> {
+    const row = await this.db.get<Record<string, unknown>>("SELECT * FROM alerts WHERE id = $1", [id]);
+    return row ? (row as unknown as Alert) : null;
+  }
+
+  async createAlert(domainId: string, input: Omit<CreateAlertInput, "domain_id">): Promise<Alert> {
+    const domain = await this.getDomain(domainId);
+    if (!domain) throw new HttpError(404, `domain '${domainId}' not found`);
+    if (!["expiry", "ssl_expiry", "dns_change"].includes(input.type)) {
+      throw new HttpError(400, `invalid alert type '${input.type}'`);
+    }
+    const id = crypto.randomUUID();
+    const row = await this.db.get<Record<string, unknown>>(
+      `INSERT INTO alerts (id, domain_id, type, trigger_days_before, created_at)
+       VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+      [id, domainId, input.type, input.trigger_days_before ?? null, new Date().toISOString()],
+    );
+    return row as unknown as Alert;
+  }
+
+  async deleteAlert(id: string): Promise<boolean> {
+    const result = await this.db.query("DELETE FROM alerts WHERE id = $1", [id]);
+    return result.rowCount > 0;
+  }
+
+  // ── owners ─────────────────────────────────────────────────────────────────
+
+  private ownerRow(row: Record<string, unknown>): DomainOwner {
+    return {
+      id: row["id"] as string,
+      domain_id: row["domain_id"] as string,
+      contact_id: (row["contact_id"] as string | null) ?? null,
+      owner_name: (row["owner_name"] as string | null) ?? null,
+      owner_email: (row["owner_email"] as string | null) ?? null,
+      owner_phone: (row["owner_phone"] as string | null) ?? null,
+      owner_organization: (row["owner_organization"] as string | null) ?? null,
+      source: row["source"] as DomainOwnerSource,
+      verified: Boolean(row["verified"]),
+      notes: (row["notes"] as string | null) ?? null,
+      created_at: row["created_at"] as string,
+      updated_at: row["updated_at"] as string,
+    };
+  }
+
+  async listOwnersForDomain(domainId: string): Promise<DomainOwner[]> {
+    const rows = await this.db.many<Record<string, unknown>>(
+      "SELECT * FROM domain_owners WHERE domain_id = $1 ORDER BY created_at DESC",
+      [domainId],
+    );
+    return rows.map((r) => this.ownerRow(r));
+  }
+
+  async listOwners(opts: { search?: string; source?: string; verified?: boolean }): Promise<DomainOwner[]> {
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+    if (opts.search) {
+      params.push(`%${opts.search}%`);
+      const p = `$${params.length}`;
+      clauses.push(`(owner_name ILIKE ${p} OR owner_email ILIKE ${p} OR owner_organization ILIKE ${p} OR notes ILIKE ${p})`);
+    }
+    if (opts.source) {
+      params.push(opts.source);
+      clauses.push(`source = $${params.length}`);
+    }
+    if (opts.verified !== undefined) {
+      params.push(opts.verified);
+      clauses.push(`verified = $${params.length}`);
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    const rows = await this.db.many<Record<string, unknown>>(
+      `SELECT * FROM domain_owners ${where} ORDER BY created_at DESC`,
+      params,
+    );
+    return rows.map((r) => this.ownerRow(r));
+  }
+
+  async getOwner(id: string): Promise<DomainOwner | null> {
+    const row = await this.db.get<Record<string, unknown>>("SELECT * FROM domain_owners WHERE id = $1", [id]);
+    return row ? this.ownerRow(row) : null;
+  }
+
+  async createOwner(domainId: string, input: Omit<CreateDomainOwnerInput, "domain_id">): Promise<DomainOwner> {
+    const domain = await this.getDomain(domainId);
+    if (!domain) throw new HttpError(404, `domain '${domainId}' not found`);
+    const source = input.source ?? "manual";
+    if (!DOMAIN_OWNER_SOURCES.includes(source)) throw new HttpError(400, `invalid owner source '${source}'`);
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const row = await this.db.get<Record<string, unknown>>(
+      `INSERT INTO domain_owners (id, domain_id, contact_id, owner_name, owner_email, owner_phone, owner_organization, source, verified, notes, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+      [
+        id, domainId, input.contact_id ?? null, input.owner_name ?? null, input.owner_email ?? null,
+        input.owner_phone ?? null, input.owner_organization ?? null, source, input.verified ?? false,
+        input.notes ?? null, now, now,
+      ],
+    );
+    return this.ownerRow(row!);
+  }
+
+  async updateOwner(id: string, patch: Partial<CreateDomainOwnerInput>): Promise<DomainOwner | null> {
+    const existing = await this.getOwner(id);
+    if (!existing) return null;
+    const sets: string[] = [];
+    const params: unknown[] = [];
+    const setCol = (col: string, val: unknown) => { params.push(val); sets.push(`${col} = $${params.length}`); };
+    if (patch.contact_id !== undefined) setCol("contact_id", patch.contact_id ?? null);
+    if (patch.owner_name !== undefined) setCol("owner_name", patch.owner_name ?? null);
+    if (patch.owner_email !== undefined) setCol("owner_email", patch.owner_email ?? null);
+    if (patch.owner_phone !== undefined) setCol("owner_phone", patch.owner_phone ?? null);
+    if (patch.owner_organization !== undefined) setCol("owner_organization", patch.owner_organization ?? null);
+    if (patch.source !== undefined) setCol("source", patch.source);
+    if (patch.verified !== undefined) setCol("verified", Boolean(patch.verified));
+    if (patch.notes !== undefined) setCol("notes", patch.notes ?? null);
+    if (sets.length === 0) return existing;
+    setCol("updated_at", new Date().toISOString());
+    params.push(id);
+    const row = await this.db.get<Record<string, unknown>>(
+      `UPDATE domain_owners SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING *`,
+      params,
+    );
+    return row ? this.ownerRow(row) : null;
+  }
+
+  async deleteOwner(id: string): Promise<boolean> {
+    const result = await this.db.query("DELETE FROM domain_owners WHERE id = $1", [id]);
+    return result.rowCount > 0;
+  }
+
+  async listDomainsWithOwners(): Promise<DomainWithOwner[]> {
+    const rows = await this.db.many<Record<string, unknown>>(
+      `SELECT d.name as domain_name, d.status as domain_status, d.is_premium, d.premium_price,
+              o.owner_name, o.owner_email, o.owner_organization, o.contact_id, o.source, o.verified
+         FROM domains d
+         LEFT JOIN domain_owners o ON d.id = o.domain_id
+        WHERE o.id IS NOT NULL OR d.is_premium = true
+           OR d.status IN ('premium_only','not_available','negotiating','offered','researching')
+        ORDER BY d.name`,
+    );
+    return rows.map((r) => ({
+      domain_name: r["domain_name"] as string,
+      domain_status: r["domain_status"] as string,
+      is_premium: Boolean(r["is_premium"]),
+      premium_price: (r["premium_price"] as number | null) ?? null,
+      owner_name: (r["owner_name"] as string | null) ?? null,
+      owner_email: (r["owner_email"] as string | null) ?? null,
+      owner_organization: (r["owner_organization"] as string | null) ?? null,
+      contact_id: (r["contact_id"] as string | null) ?? null,
+      source: (r["source"] as DomainOwnerSource | null) ?? null,
+      verified: Boolean(r["verified"]),
+    }));
+  }
+
+  // ── history ────────────────────────────────────────────────────────────────
+
+  private historyRow(row: Record<string, unknown>): DomainHistory {
+    return {
+      id: row["id"] as string,
+      domain_id: row["domain_id"] as string,
+      snapshot_type: row["snapshot_type"] as DomainHistoryType,
+      raw_data: parseJson<Record<string, unknown>>(row["raw_data"] as string, {}),
+      registrant_name: (row["registrant_name"] as string | null) ?? null,
+      registrant_email: (row["registrant_email"] as string | null) ?? null,
+      registrant_org: (row["registrant_org"] as string | null) ?? null,
+      nameservers: parseJson<string[]>(row["nameservers"] as string, []),
+      registrar: (row["registrar"] as string | null) ?? null,
+      status: (row["status"] as string | null) ?? null,
+      notes: (row["notes"] as string | null) ?? null,
+      created_at: row["created_at"] as string,
+    };
+  }
+
+  async createHistory(domainId: string, input: Omit<CreateHistoryEntryInput, "domain_id">): Promise<DomainHistory> {
+    const domain = await this.getDomain(domainId);
+    if (!domain) throw new HttpError(404, `domain '${domainId}' not found`);
+    if (!HISTORY_TYPES.includes(input.snapshot_type)) throw new HttpError(400, `invalid snapshot_type '${input.snapshot_type}'`);
+    const id = crypto.randomUUID();
+    const row = await this.db.get<Record<string, unknown>>(
+      `INSERT INTO domain_history (id, domain_id, snapshot_type, raw_data, registrant_name, registrant_email, registrant_org, nameservers, registrar, status, notes, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+      [
+        id, domainId, input.snapshot_type, JSON.stringify(input.raw_data ?? {}),
+        input.registrant_name ?? null, input.registrant_email ?? null, input.registrant_org ?? null,
+        JSON.stringify(input.nameservers ?? []), input.registrar ?? null, input.status ?? null,
+        input.notes ?? null, new Date().toISOString(),
+      ],
+    );
+    return this.historyRow(row!);
+  }
+
+  async getHistory(id: string): Promise<DomainHistory | null> {
+    const row = await this.db.get<Record<string, unknown>>("SELECT * FROM domain_history WHERE id = $1", [id]);
+    return row ? this.historyRow(row) : null;
+  }
+
+  async listHistory(domainId: string, opts: { type?: string; limit?: number }): Promise<DomainHistory[]> {
+    const clauses = ["domain_id = $1"];
+    const params: unknown[] = [domainId];
+    if (opts.type) { params.push(opts.type); clauses.push(`snapshot_type = $${params.length}`); }
+    let sql = `SELECT * FROM domain_history WHERE ${clauses.join(" AND ")} ORDER BY created_at DESC`;
+    if (opts.limit) { params.push(Math.min(Math.max(opts.limit, 1), 1000)); sql += ` LIMIT $${params.length}`; }
+    const rows = await this.db.many<Record<string, unknown>>(sql, params);
+    return rows.map((r) => this.historyRow(r));
+  }
+
+  async listHistoryByDateRange(start: string, end: string, domainId?: string): Promise<DomainHistory[]> {
+    const clauses = ["created_at BETWEEN $1 AND $2"];
+    const params: unknown[] = [start, end];
+    if (domainId) { params.push(domainId); clauses.push(`domain_id = $${params.length}`); }
+    const rows = await this.db.many<Record<string, unknown>>(
+      `SELECT * FROM domain_history WHERE ${clauses.join(" AND ")} ORDER BY created_at DESC`,
+      params,
+    );
+    return rows.map((r) => this.historyRow(r));
+  }
+
+  async deleteHistory(id: string): Promise<boolean> {
+    const result = await this.db.query("DELETE FROM domain_history WHERE id = $1", [id]);
+    return result.rowCount > 0;
+  }
+
+  async deleteHistoryByDomain(domainId: string): Promise<boolean> {
+    const result = await this.db.query("DELETE FROM domain_history WHERE domain_id = $1", [domainId]);
+    return result.rowCount > 0;
+  }
+
+  async listHistoryChanges(): Promise<Array<{ domain_id: string; domain_name: string; latest_snapshot_type: string; latest_snapshot_at: string; snapshot_count: number }>> {
+    const rows = await this.db.many<Record<string, unknown>>(
+      `SELECT d.id as domain_id, d.name as domain_name,
+              (SELECT snapshot_type FROM domain_history h2 WHERE h2.domain_id = d.id ORDER BY created_at DESC LIMIT 1) as latest_snapshot_type,
+              MAX(h.created_at) as latest_snapshot_at,
+              COUNT(h.id)::text as snapshot_count
+         FROM domains d JOIN domain_history h ON d.id = h.domain_id
+        GROUP BY d.id ORDER BY latest_snapshot_at DESC`,
+    );
+    return rows.map((r) => ({
+      domain_id: r["domain_id"] as string,
+      domain_name: r["domain_name"] as string,
+      latest_snapshot_type: r["latest_snapshot_type"] as string,
+      latest_snapshot_at: r["latest_snapshot_at"] as string,
+      snapshot_count: parseInt((r["snapshot_count"] as string) ?? "0", 10),
+    }));
+  }
+
+  // ── reputation ───────────────────────────────────────────────────────────
+
+  private reputationRow(row: Record<string, unknown>): DomainReputation {
+    return {
+      id: row["id"] as string,
+      domain_id: row["domain_id"] as string,
+      is_blacklisted: Boolean(row["is_blacklisted"]),
+      blacklist_sources: parseJson<string[]>(row["blacklist_sources"] as string, []),
+      threat_score: (row["threat_score"] as number | null) ?? null,
+      spam_score: (row["spam_score"] as number | null) ?? null,
+      malware_detected: Boolean(row["malware_detected"]),
+      phishing_detected: Boolean(row["phishing_detected"]),
+      reputation_sources: parseJson<string[]>(row["reputation_sources"] as string, []),
+      last_checked_at: (row["last_checked_at"] as string | null) ?? null,
+      notes: (row["notes"] as string | null) ?? null,
+      created_at: row["created_at"] as string,
+      updated_at: row["updated_at"] as string,
+    };
+  }
+
+  async getReputation(domainId: string): Promise<DomainReputation | null> {
+    const row = await this.db.get<Record<string, unknown>>("SELECT * FROM domain_reputation WHERE domain_id = $1", [domainId]);
+    return row ? this.reputationRow(row) : null;
+  }
+
+  async upsertReputation(domainId: string, input: Omit<CreateReputationInput, "domain_id">): Promise<DomainReputation> {
+    const domain = await this.getDomain(domainId);
+    if (!domain) throw new HttpError(404, `domain '${domainId}' not found`);
+    const existing = await this.getReputation(domainId);
+    const now = new Date().toISOString();
+    if (existing) {
+      const sets: string[] = [];
+      const params: unknown[] = [];
+      const setCol = (col: string, val: unknown) => { params.push(val); sets.push(`${col} = $${params.length}`); };
+      if (input.is_blacklisted !== undefined) setCol("is_blacklisted", Boolean(input.is_blacklisted));
+      if (input.blacklist_sources !== undefined) setCol("blacklist_sources", JSON.stringify(input.blacklist_sources));
+      if (input.threat_score !== undefined) setCol("threat_score", input.threat_score);
+      if (input.spam_score !== undefined) setCol("spam_score", input.spam_score);
+      if (input.malware_detected !== undefined) setCol("malware_detected", Boolean(input.malware_detected));
+      if (input.phishing_detected !== undefined) setCol("phishing_detected", Boolean(input.phishing_detected));
+      if (input.reputation_sources !== undefined) setCol("reputation_sources", JSON.stringify(input.reputation_sources));
+      if (input.last_checked_at !== undefined) setCol("last_checked_at", input.last_checked_at);
+      if (input.notes !== undefined) setCol("notes", input.notes);
+      setCol("updated_at", now);
+      params.push(existing.id);
+      const row = await this.db.get<Record<string, unknown>>(
+        `UPDATE domain_reputation SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING *`,
+        params,
+      );
+      return this.reputationRow(row!);
+    }
+    const id = crypto.randomUUID();
+    const row = await this.db.get<Record<string, unknown>>(
+      `INSERT INTO domain_reputation (id, domain_id, is_blacklisted, blacklist_sources, threat_score, spam_score, malware_detected, phishing_detected, reputation_sources, last_checked_at, notes, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+      [
+        id, domainId, input.is_blacklisted ?? false, JSON.stringify(input.blacklist_sources ?? []),
+        input.threat_score ?? null, input.spam_score ?? null, input.malware_detected ?? false,
+        input.phishing_detected ?? false, JSON.stringify(input.reputation_sources ?? []),
+        input.last_checked_at ?? null, input.notes ?? null, now, now,
+      ],
+    );
+    return this.reputationRow(row!);
+  }
+
+  async updateReputation(id: string, patch: Partial<CreateReputationInput>): Promise<DomainReputation | null> {
+    const existing = await this.db.get<Record<string, unknown>>("SELECT * FROM domain_reputation WHERE id = $1", [id]);
+    if (!existing) return null;
+    return this.upsertReputation(existing["domain_id"] as string, patch);
+  }
+
+  async deleteReputation(id: string): Promise<boolean> {
+    const result = await this.db.query("DELETE FROM domain_reputation WHERE id = $1", [id]);
+    return result.rowCount > 0;
+  }
+
+  async listReputation(opts: { blacklisted?: boolean; threshold?: number }): Promise<DomainReputation[]> {
+    if (opts.blacklisted) {
+      const rows = await this.db.many<Record<string, unknown>>(
+        "SELECT * FROM domain_reputation WHERE is_blacklisted = true ORDER BY updated_at DESC",
+      );
+      return rows.map((r) => this.reputationRow(r));
+    }
+    const threshold = opts.threshold ?? 70;
+    const rows = await this.db.many<Record<string, unknown>>(
+      "SELECT * FROM domain_reputation WHERE threat_score >= $1 ORDER BY threat_score DESC",
+      [threshold],
+    );
+    return rows.map((r) => this.reputationRow(r));
   }
 }

@@ -1,13 +1,12 @@
 import type { Command } from "commander";
-import { getDomainOwnerByDomainName } from "../../db/domain-owners.js";
-import { getDomainDetails, getDomainByName } from "../../db/domains.js";
+import { getDomainOwnerByDomainName } from "../../db/owners.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-function requireDomainOwner(identifier: string) {
-  const owner = getDomainOwnerByDomainName(identifier);
+async function requireDomainOwner(identifier: string) {
+  const owner = await getDomainOwnerByDomainName(identifier);
   if (!owner) {
     console.error(`No owner info found for '${identifier}'.`);
     process.exit(1);
@@ -28,7 +27,7 @@ export function registerOutreachCommand(program: Command): void {
     .requiredOption("--message <text>", "SMS message body")
     .option("-j, --json", "Output JSON")
     .action(async (identifier: string, opts: { message: string; json?: boolean }) => {
-      const owner = requireDomainOwner(identifier);
+      const owner = await requireDomainOwner(identifier);
       if (!owner.owner_phone) {
         console.error(`No phone number for '${identifier}'.`);
         process.exit(1);
@@ -64,7 +63,7 @@ export function registerOutreachCommand(program: Command): void {
     .requiredOption("--message <text>", "Message body")
     .option("-j, --json", "Output JSON")
     .action(async (identifier: string, opts: { message: string; json?: boolean }) => {
-      const owner = requireDomainOwner(identifier);
+      const owner = await requireDomainOwner(identifier);
       if (!owner.owner_phone) {
         console.error(`No phone number for '${identifier}'.`);
         process.exit(1);
@@ -102,7 +101,7 @@ export function registerOutreachCommand(program: Command): void {
     .option("--template <name>", "Use a template by name instead of --body")
     .option("-j, --json", "Output JSON")
     .action(async (identifier: string, opts: { subject: string; body: string; template?: string; json?: boolean }) => {
-      const owner = requireDomainOwner(identifier);
+      const owner = await requireDomainOwner(identifier);
       if (!owner.owner_email) {
         console.error(`No email for '${identifier}'.`);
         process.exit(1);

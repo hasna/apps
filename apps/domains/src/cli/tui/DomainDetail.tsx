@@ -1,7 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import type { DomainDetails } from "../../db/domains.js";
-import type { DnsRecord } from "../../db/dns-records.js";
+import type { DnsRecord } from "../../db/domains.js";
 import { STATUS_COLORS, formatDate } from "./format.js";
 
 interface DomainDetailProps {

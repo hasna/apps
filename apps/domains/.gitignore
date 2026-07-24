@@ -9,3 +9,4 @@ dist/
 .hasna/
 .env
 .env.*
+hasna-domains-*.tgz

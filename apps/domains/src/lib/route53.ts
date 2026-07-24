@@ -983,13 +983,13 @@ export function createRoute53Provider(config?: Route53Config): FullProvider {
 
       for (const d of domains) {
         try {
-          const existing = dbFns.getDomainByName(d.domain);
+          const existing = await dbFns.getDomainByName(d.domain);
           if (existing) {
             const existingRoute53 = existing.metadata["route53"] as { source?: string } | undefined;
             const staleDnsOnlyRegistrar = d.registrar !== "AWS Route 53"
               && (existing.registrar === "AWS Route 53 DNS"
                 || (existing.registrar === "AWS Route 53" && existingRoute53?.source === "route53:hosted_zones"));
-            dbFns.updateDomain(existing.id, {
+            await dbFns.updateDomain(existing.id, {
               ...(d.registrar === "AWS Route 53" ? { registrar: "AWS Route 53" } : {}),
               ...(staleDnsOnlyRegistrar ? { registrar: null } : {}),
               expires_at: d.expires || undefined,
@@ -1006,7 +1006,7 @@ export function createRoute53Provider(config?: Route53Config): FullProvider {
             });
             updated++;
           } else {
-            dbFns.createDomain({
+            await dbFns.createDomain({
               name: d.domain,
               ...(d.registrar === "AWS Route 53" ? { registrar: "AWS Route 53" } : {}),
               expires_at: d.expires || undefined,

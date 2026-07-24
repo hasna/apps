@@ -6,8 +6,8 @@ import {
   deleteHistoryEntry,
   deleteHistoryByDomain,
   type DomainHistoryType,
-} from "../../db/domain-history.js";
-import { getDomainDetails, getDomainByName } from "../../db/domains.js";
+} from "../../db/history.js";
+import { getDomainDetails } from "../../db/domains.js";
 import { compactHint, pageItemsOrExit, truncateText } from "../../lib/compact-output.js";
 
 export function registerHistoryCommand(program: Command): void {
@@ -23,14 +23,14 @@ export function registerHistoryCommand(program: Command): void {
     .option("--type <type>", "Filter by type (whois/rdap/dns/ssl/reputation/exa_research)")
     .option("--limit <n>", "Limit results", "20")
     .option("-j, --json", "Output JSON")
-    .action((identifier: string, opts: { type?: string; limit?: string; json?: boolean }) => {
-      const domain = getDomainDetails(identifier);
+    .action(async (identifier: string, opts: { type?: string; limit?: string; json?: boolean }) => {
+      const domain = await getDomainDetails(identifier);
       if (!domain) {
         console.error(`Domain '${identifier}' not found.`);
         process.exit(1);
       }
 
-      const entries = getHistoryByDomain(domain.domain.id, {
+      const entries = await getHistoryByDomain(domain.domain.id, {
         type: opts.type as DomainHistoryType | undefined,
         limit: opts.limit ? parseInt(opts.limit) : undefined,
       });
@@ -60,8 +60,8 @@ export function registerHistoryCommand(program: Command): void {
     .option("--limit <n>", "Limit number of displayed domains")
     .option("--all", "Show all domains with history")
     .option("-j, --json", "Output JSON")
-    .action((opts: { limit?: string; all?: boolean; json?: boolean }) => {
-      const results = listDomainsWithHistoryChanges();
+    .action(async (opts: { limit?: string; all?: boolean; json?: boolean }) => {
+      const results = await listDomainsWithHistoryChanges();
       if (opts.json) {
         console.log(JSON.stringify({ domains: results, count: results.length }, null, 2));
         return;
@@ -90,8 +90,8 @@ export function registerHistoryCommand(program: Command): void {
     .option("--all", "Show all entries in range")
     .option("--verbose", "Show truncated notes and registrar details")
     .option("-j, --json", "Output JSON")
-    .action((opts: { from: string; to: string; domain?: string; limit?: string; all?: boolean; verbose?: boolean; json?: boolean }) => {
-      const entries = getHistoryByDateRange(opts.from, opts.to, opts.domain);
+    .action(async (opts: { from: string; to: string; domain?: string; limit?: string; all?: boolean; verbose?: boolean; json?: boolean }) => {
+      const entries = await getHistoryByDateRange(opts.from, opts.to, opts.domain);
       if (opts.json) {
         console.log(JSON.stringify({ history: entries, count: entries.length }, null, 2));
         return;
@@ -117,12 +117,12 @@ export function registerHistoryCommand(program: Command): void {
     .command("delete <entryId>")
     .description("Delete a history entry")
     .option("-f, --force", "Required confirmation")
-    .action((entryId: string, opts: { force?: boolean }) => {
+    .action(async (entryId: string, opts: { force?: boolean }) => {
       if (!opts.force) {
         console.error(`Refusing to delete history '${entryId}' without --force.`);
         process.exit(1);
       }
-      const deleted = deleteHistoryEntry(entryId);
+      const deleted = await deleteHistoryEntry(entryId);
       if (!deleted) {
         console.error(`History entry '${entryId}' not found.`);
         process.exit(1);
@@ -136,17 +136,17 @@ export function registerHistoryCommand(program: Command): void {
     .command("purge <identifier>")
     .description("Delete all history for a domain")
     .option("-f, --force", "Required confirmation")
-    .action((identifier: string, opts: { force?: boolean }) => {
+    .action(async (identifier: string, opts: { force?: boolean }) => {
       if (!opts.force) {
         console.error(`Refusing to purge history for '${identifier}' without --force.`);
         process.exit(1);
       }
-      const domain = getDomainDetails(identifier);
+      const domain = await getDomainDetails(identifier);
       if (!domain) {
         console.error(`Domain '${identifier}' not found.`);
         process.exit(1);
       }
-      const deleted = deleteHistoryByDomain(domain.domain.id);
+      const deleted = await deleteHistoryByDomain(domain.domain.id);
       if (!deleted) {
         console.error(`No history to purge for ${domain.domain.name}.`);
         process.exit(1);

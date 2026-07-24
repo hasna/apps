@@ -7,7 +7,7 @@
 
 import type { Command } from "commander";
 import { createDomain, getDomainByName, recordDomainPurchase, updateDomain } from "../../db/domains.js";
-import { createHistoryEntry } from "../../db/domain-history.js";
+import { createHistoryEntry } from "../../db/history.js";
 import { compactHint, pageItemsOrExit } from "../../lib/compact-output.js";
 
 export interface WalletCard {
@@ -150,14 +150,14 @@ export function registerWalletCommand(program: Command): void {
         }
 
         // Check domain doesn't already exist
-        const existing = getDomainByName(name);
+        const existing = await getDomainByName(name);
         if (existing) {
           console.error(`Domain '${name}' already exists in portfolio.`);
           process.exit(1);
         }
 
         // Create domain record and record purchase
-        const domain = createDomain({
+        const domain = await createDomain({
           name,
           registrar: opts.registrar,
           status: "active",
@@ -167,13 +167,13 @@ export function registerWalletCommand(program: Command): void {
           premium_price: price > 1000 ? price : undefined,
         });
 
-        recordDomainPurchase(domain.id, {
+        await recordDomainPurchase(domain.id, {
           price,
           registrar: opts.registrar,
           auto_renew: true,
         });
 
-        createHistoryEntry({
+        await createHistoryEntry({
           domain_id: domain.id,
           snapshot_type: "purchase",
           raw_data: { price, currency, card_id: cardId, payment_method: "wallet" },
@@ -202,7 +202,7 @@ export function registerWalletCommand(program: Command): void {
     .option("--json", "Output as JSON", false)
     .action(async (name, opts) => {
       const price = parseFloat(opts.price);
-      const domain = getDomainByName(name);
+      const domain = await getDomainByName(name);
       if (!domain) {
         console.error(`Domain '${name}' not found in portfolio.`);
         process.exit(1);
@@ -233,7 +233,7 @@ export function registerWalletCommand(program: Command): void {
         }
 
         // Record renewal in history
-        createHistoryEntry({
+        await createHistoryEntry({
           domain_id: domain.id,
           snapshot_type: "renewal",
           raw_data: { price, currency: opts.currency, card_id: cardId, payment_method: "wallet" },
@@ -243,7 +243,7 @@ export function registerWalletCommand(program: Command): void {
         // Update expiry if we know the duration
         const expiryDate = new Date();
         expiryDate.setFullYear(expiryDate.getFullYear() + 1);
-        updateDomain(domain.id, {
+        await updateDomain(domain.id, {
           expires_at: expiryDate.toISOString(),
           purchase_price: price,
         });

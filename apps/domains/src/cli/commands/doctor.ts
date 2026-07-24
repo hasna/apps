@@ -39,7 +39,7 @@ export function registerDoctorCommand(program: Command): void {
 
       section("Database");
       try {
-        const count = countDomains();
+        const count = await countDomains();
         ok(`Local DB accessible (${count} domain${count !== 1 ? "s" : ""})`);
       } catch {
         fail("Local DB not accessible", "Check DOMAINS_DB_PATH, DOMAINS_DIR, or the default local data directory");

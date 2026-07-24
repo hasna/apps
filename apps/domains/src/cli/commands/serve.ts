@@ -19,7 +19,7 @@ export function registerServeCommand(program: Command): void {
       const server = Bun.serve({
         port,
         hostname: opts.host,
-        fetch(req) {
+        async fetch(req) {
           const url = new URL(req.url);
           const path = url.pathname;
           const method = req.method;
@@ -42,16 +42,15 @@ export function registerServeCommand(program: Command): void {
             if (method === "GET" && path === "/domains") {
               const search = url.searchParams.get("search") ?? undefined;
               const status = url.searchParams.get("status") as "active" | "expired" | undefined;
-              const domains = listDomains({ search, status });
+              const domains = await listDomains({ search, status });
               return json({ domains, count: domains.length });
             }
 
             // POST /domains
             if (method === "POST" && path === "/domains") {
-              return req.json().then((body: Parameters<typeof createDomain>[0]) => {
-                const domain = createDomain(body);
-                return json(domain, 201);
-              });
+              const body = (await req.json()) as Parameters<typeof createDomain>[0];
+              const domain = await createDomain(body);
+              return json(domain, 201);
             }
 
             // GET /domains/:id
@@ -59,17 +58,16 @@ export function registerServeCommand(program: Command): void {
             if (domainMatch) {
               const id = domainMatch[1]!;
               if (method === "GET") {
-                const domain = getDomain(id);
+                const domain = await getDomain(id);
                 return domain ? json(domain) : notFound();
               }
               if (method === "PUT" || method === "PATCH") {
-                return req.json().then((body: Parameters<typeof updateDomain>[1]) => {
-                  const domain = updateDomain(id, body);
-                  return domain ? json(domain) : notFound();
-                });
+                const body = (await req.json()) as Parameters<typeof updateDomain>[1];
+                const domain = await updateDomain(id, body);
+                return domain ? json(domain) : notFound();
               }
               if (method === "DELETE") {
-                const deleted = deleteDomain(id);
+                const deleted = await deleteDomain(id);
                 return json({ id, deleted });
               }
             }
@@ -79,14 +77,13 @@ export function registerServeCommand(program: Command): void {
             if (dnsMatch) {
               const id = dnsMatch[1]!;
               if (method === "GET") {
-                const records = listDnsRecords(id);
+                const records = await listDnsRecords(id);
                 return json({ records, count: records.length });
               }
               if (method === "POST") {
-                return req.json().then((body: Parameters<typeof createDnsRecord>[0]) => {
-                  const record = createDnsRecord({ ...body, domain_id: id });
-                  return json(record, 201);
-                });
+                const body = (await req.json()) as Omit<Parameters<typeof createDnsRecord>[0], "domain_id">;
+                const record = await createDnsRecord({ ...body, domain_id: id });
+                return json(record, 201);
               }
             }
 

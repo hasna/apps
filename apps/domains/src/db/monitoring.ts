@@ -2,15 +2,16 @@
  * Portfolio export and bulk domain check operations
  */
 
-import { listDomains, type Domain } from "./domain-records.js";
+import { getStore } from "./store.js";
+import type { Domain } from "./domain-records.js";
 import { validateDns, whoisLookup, checkSsl } from "./dns-tools.js";
 
 // ============================================================
 // Portfolio Export
 // ============================================================
 
-export function exportPortfolio(format: "csv" | "json" = "json"): string {
-  const domains = listDomains();
+export async function exportPortfolio(format: "csv" | "json" = "json"): Promise<string> {
+  const domains = await getStore().listDomains();
 
   if (format === "json") {
     return JSON.stringify(
@@ -96,8 +97,8 @@ export interface BulkCheckResult {
   dns_validation?: { valid: boolean; issue_count: number; errors: string[] };
 }
 
-export function checkAllDomains(): BulkCheckResult[] {
-  const domains = listDomains();
+export async function checkAllDomains(): Promise<BulkCheckResult[]> {
+  const domains = await getStore().listDomains();
   const results: BulkCheckResult[] = [];
 
   for (const domain of domains) {
@@ -108,7 +109,7 @@ export function checkAllDomains(): BulkCheckResult[] {
 
     // WHOIS check
     try {
-      const whois = whoisLookup(domain.name);
+      const whois = await whoisLookup(domain.name);
       result.whois = {
         registrar: whois.registrar,
         expires_at: whois.expires_at,
@@ -123,7 +124,7 @@ export function checkAllDomains(): BulkCheckResult[] {
 
     // SSL check
     try {
-      const ssl = checkSsl(domain.name);
+      const ssl = await checkSsl(domain.name);
       result.ssl = {
         issuer: ssl.issuer,
         expires_at: ssl.expires_at,
@@ -138,7 +139,7 @@ export function checkAllDomains(): BulkCheckResult[] {
     }
 
     // DNS validation
-    const validation = validateDns(domain.id);
+    const validation = await validateDns(domain.id);
     if (validation) {
       result.dns_validation = {
         valid: validation.valid,

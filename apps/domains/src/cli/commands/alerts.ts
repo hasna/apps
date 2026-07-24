@@ -17,8 +17,8 @@ export function registerAlertCommands(program: Command): void {
     .requiredOption("--type <type>", "Alert type (expiry/ssl_expiry/dns_change)")
     .option("--days-before <n>", "Trigger N days before")
     .option("--json", "Output as JSON", false)
-    .action((opts) => {
-      const alert = createAlert({
+    .action(async (opts) => {
+      const alert = await createAlert({
         domain_id: opts.domain,
         type: opts.type,
         trigger_days_before: opts.daysBefore ? parseInt(opts.daysBefore) : undefined,
@@ -37,8 +37,8 @@ export function registerAlertCommands(program: Command): void {
     .description("List alerts for a domain")
     .argument("<domain-id>", "Domain ID")
     .option("--json", "Output as JSON", false)
-    .action((domainId, opts) => {
-      const alerts = listAlerts(domainId);
+    .action(async (domainId, opts) => {
+      const alerts = await listAlerts(domainId);
 
       if (opts.json) {
         console.log(JSON.stringify(alerts, null, 2));
@@ -59,8 +59,8 @@ export function registerAlertCommands(program: Command): void {
     .command("remove")
     .description("Remove an alert")
     .argument("<id>", "Alert ID")
-    .action((id) => {
-      const deleted = deleteAlert(id);
+    .action(async (id) => {
+      const deleted = await deleteAlert(id);
       if (deleted) {
         console.log(`Deleted alert ${id}`);
       } else {
