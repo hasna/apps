@@ -556,6 +556,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["logs", "monitoring", "security", "analytics", "siem", "observability"],
   },
   {
+    name: "supadata",
+    displayName: "Supadata",
+    description: "Web scraping, video transcripts, and YouTube metadata API",
+    category: "Data & Analytics",
+    tags: ["scraping", "transcript", "youtube"],
+  },
+  {
     name: "thoughtspot",
     displayName: "ThoughtSpot",
     description: "BI analytics platform for liveboards, search, and insights",

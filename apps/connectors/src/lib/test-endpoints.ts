@@ -274,6 +274,10 @@ export const TEST_ENDPOINTS: Record<string, TestEndpoint> = {
     url: "https://api.triplewhale.com/api/v2/users/api-keys/me",
     headers: (key) => ({ "x-api-key": key }),
   },
+  supadata: {
+    url: "https://api.supadata.ai/v1/me",
+    headers: (key) => ({ "x-api-key": key }),
+  },
 
   // ── Business Tools ───────────────────────────────────────
   notion: {
