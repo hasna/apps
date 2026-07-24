@@ -535,6 +535,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["sms", "text messaging", "bulk sms", "two-way messaging", "notifications"],
   },
   {
+    name: "textsidekick",
+    displayName: "Sidekick",
+    description: "SMS frontline assistant for knowledge-base powered worker messaging and escalations",
+    category: "Communication",
+    tags: ["sms", "frontline", "knowledge-base", "workers", "escalations"],
+  },
+  {
     name: "timelinesai",
     displayName: "TimelinesAI",
     description: "WhatsApp team inbox API for chats, messages, and connected accounts",
