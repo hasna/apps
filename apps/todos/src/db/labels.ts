@@ -43,7 +43,7 @@ function normalizeName(name: string): string {
 }
 
 export function createLabel(input: CreateLabelInput, db?: Database): Label {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const id = uuid();
   const ts = now();
   d.run(
@@ -55,7 +55,7 @@ export function createLabel(input: CreateLabelInput, db?: Database): Label {
 }
 
 export function getLabel(idOrName: string, db?: Database): Label | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   let row = d.query("SELECT * FROM labels WHERE id = ?").get(idOrName) as LabelRow | null;
   if (!row) {
     row = d.query("SELECT * FROM labels WHERE lower(name) = ?").get(normalizeName(idOrName)) as LabelRow | null;
@@ -64,7 +64,7 @@ export function getLabel(idOrName: string, db?: Database): Label | null {
 }
 
 export function listLabels(projectId?: string, db?: Database): Label[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   if (projectId) {
     return (d.query("SELECT * FROM labels WHERE project_id IS NULL OR project_id = ? ORDER BY name").all(projectId) as LabelRow[]).map(rowToLabel);
   }
@@ -72,7 +72,7 @@ export function listLabels(projectId?: string, db?: Database): Label[] {
 }
 
 export function updateLabel(idOrName: string, input: UpdateLabelInput, db?: Database): Label {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const existing = getLabel(idOrName, d);
   if (!existing) throw new Error(`Label not found: ${idOrName}`);
 
@@ -90,7 +90,7 @@ export function updateLabel(idOrName: string, input: UpdateLabelInput, db?: Data
 }
 
 export function deleteLabel(idOrName: string, db?: Database): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const existing = getLabel(idOrName, d);
   if (!existing) return false;
   d.run("DELETE FROM task_labels WHERE label_id = ?", [existing.id]);
@@ -98,7 +98,7 @@ export function deleteLabel(idOrName: string, db?: Database): boolean {
 }
 
 export function assignLabelToTask(taskId: string, labelIdOrName: string, db?: Database): Label {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const label = getLabel(labelIdOrName, d);
   if (!label) throw new Error(`Label not found: ${labelIdOrName}`);
 
@@ -108,7 +108,7 @@ export function assignLabelToTask(taskId: string, labelIdOrName: string, db?: Da
 }
 
 export function removeLabelFromTask(taskId: string, labelIdOrName: string, db?: Database): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const label = getLabel(labelIdOrName, d);
   if (!label) return false;
   d.run("DELETE FROM task_labels WHERE task_id = ? AND label_id = ?", [taskId, label.id]);
@@ -117,7 +117,7 @@ export function removeLabelFromTask(taskId: string, labelIdOrName: string, db?: 
 }
 
 export function getTaskLabels(taskId: string, db?: Database): Label[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const rows = d.query(
     `SELECT l.* FROM labels l
      JOIN task_labels tl ON tl.label_id = l.id

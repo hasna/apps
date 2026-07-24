@@ -919,7 +919,7 @@ async function updateTask(id: string, input: UpdateTaskInput, store: PostgresJso
     tags: input.tags ?? existing.tags,
     metadata: input.metadata ?? existing.metadata,
     requires_approval: input.requires_approval ?? existing.requires_approval,
-    task_list_id: input.task_list_id ?? existing.task_list_id,
+    task_list_id: input.task_list_id === undefined ? existing.task_list_id : input.task_list_id,
   };
   await store.upsert("tasks", task);
   return task;

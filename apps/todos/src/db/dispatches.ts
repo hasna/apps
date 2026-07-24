@@ -25,7 +25,7 @@ function rowToDispatch(row: DispatchRow): Dispatch {
 }
 
 export function createDispatch(input: CreateDispatchInput, db?: Database): Dispatch {
-  const _db = db ?? getDatabase();
+  const _db = getDatabase(db);
   const id = uuid();
   const taskIds = JSON.stringify(input.task_ids ?? []);
 
@@ -51,14 +51,14 @@ export function createDispatch(input: CreateDispatchInput, db?: Database): Dispa
 }
 
 export function getDispatch(id: string, db?: Database): Dispatch {
-  const _db = db ?? getDatabase();
+  const _db = getDatabase(db);
   const row = _db.query("SELECT * FROM dispatches WHERE id = ?").get(id) as DispatchRow | null;
   if (!row) throw new DispatchNotFoundError(id);
   return rowToDispatch(row);
 }
 
 export function listDispatches(filter: ListDispatchesFilter = {}, db?: Database): Dispatch[] {
-  const _db = db ?? getDatabase();
+  const _db = getDatabase(db);
   const conditions: string[] = [];
   const params: unknown[] = [];
 
@@ -80,7 +80,7 @@ export function listDispatches(filter: ListDispatchesFilter = {}, db?: Database)
 }
 
 export function cancelDispatch(id: string, db?: Database): Dispatch {
-  const _db = db ?? getDatabase();
+  const _db = getDatabase(db);
   const existing = getDispatch(id, _db);
 
   if (existing.status === "sent" || existing.status === "cancelled") {
@@ -99,7 +99,7 @@ export function updateDispatchStatus(
   opts: { error?: string; sent_at?: string } = {},
   db?: Database,
 ): void {
-  const _db = db ?? getDatabase();
+  const _db = getDatabase(db);
   _db.run(
     "UPDATE dispatches SET status = ?, error = ?, sent_at = ? WHERE id = ?",
     [status, opts.error ?? null, opts.sent_at ?? null, id],
@@ -110,7 +110,7 @@ export function createDispatchLog(
   log: Omit<DispatchLog, "id" | "created_at">,
   db?: Database,
 ): DispatchLog {
-  const _db = db ?? getDatabase();
+  const _db = getDatabase(db);
   const id = uuid();
   const created_at = now();
 
@@ -124,7 +124,7 @@ export function createDispatchLog(
 }
 
 export function listDispatchLogs(dispatchId: string, db?: Database): DispatchLog[] {
-  const _db = db ?? getDatabase();
+  const _db = getDatabase(db);
   return _db
     .query("SELECT * FROM dispatch_logs WHERE dispatch_id = ? ORDER BY created_at ASC")
     .all(dispatchId) as DispatchLog[];
@@ -132,7 +132,7 @@ export function listDispatchLogs(dispatchId: string, db?: Database): DispatchLog
 
 /** Return all dispatches that are ready to fire (pending + due). */
 export function getDueDispatches(db?: Database): Dispatch[] {
-  const _db = db ?? getDatabase();
+  const _db = getDatabase(db);
   const rows = _db
     .query(
       `SELECT * FROM dispatches

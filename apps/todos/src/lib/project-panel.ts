@@ -113,7 +113,7 @@ function sortActionableTasks(a: Task, b: Task): number {
 }
 
 export function createTodosProjectPanel(projectId: string, options: TodosProjectPanelOptions = {}): ProjectPanel {
-  const db = options.db ?? getDatabase();
+  const db = getDatabase(options.db);
   const limit = clampLimit(options.limit);
   const project = getProject(projectId, db);
   if (!project) {

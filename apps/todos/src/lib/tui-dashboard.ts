@@ -98,7 +98,7 @@ function dependencyRows(projectId: string | undefined, limit: number, db: Databa
 }
 
 export function createTuiDashboardSnapshot(options: CreateTuiDashboardSnapshotOptions = {}, db?: Database): TuiDashboardSnapshot {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const limit = limited(options.limit);
   const filter = projectFilter(options.project_id);
   const counts = TASK_STATUSES.reduce((acc, status) => {

@@ -43,7 +43,7 @@ export function upsertCheckpoint(
   },
   db?: Database,
 ): Checkpoint {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const timestamp = now();
 
   // Find existing checkpoint
@@ -75,7 +75,7 @@ export function upsertCheckpoint(
 }
 
 export function getCheckpoint(taskId: string, step: string, db?: Database): Checkpoint | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query(
     "SELECT * FROM task_checkpoints WHERE task_id = ? AND step = ?",
   ).get(taskId, step);
@@ -83,14 +83,14 @@ export function getCheckpoint(taskId: string, step: string, db?: Database): Chec
 }
 
 export function getTaskCheckpoints(taskId: string, db?: Database): Checkpoint[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return d.query(
     "SELECT * FROM task_checkpoints WHERE task_id = ? ORDER BY created_at ASC",
   ).all(taskId).map(rowToCheckpoint);
 }
 
 export function getTaskHeartbeats(taskId: string, limit = 20, db?: Database): Heartbeat[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return d.query(
     "SELECT * FROM task_heartbeats WHERE task_id = ? ORDER BY created_at DESC LIMIT ?",
   ).all(taskId, limit).map(rowToHeartbeat);
@@ -101,7 +101,7 @@ export function emitHeartbeat(
   opts?: { agent_id?: string; step?: string; message?: string; progress?: number; meta?: Record<string, unknown> },
   db?: Database,
 ): Heartbeat {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const id = uuid();
   const agentId = opts?.agent_id ?? null;
   const step = opts?.step ?? null;
@@ -118,7 +118,7 @@ export function emitHeartbeat(
 }
 
 export function getLastHeartbeat(taskId: string, db?: Database): Heartbeat | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query(
     "SELECT * FROM task_heartbeats WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
   ).get(taskId);
@@ -132,7 +132,7 @@ export function getTaskProgress(taskId: string, db?: Database): {
   pending_steps: number;
   last_heartbeat?: Heartbeat | null;
 } {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const total = d.query(
     "SELECT COUNT(*) as count FROM task_checkpoints WHERE task_id = ?",
   ).get(taskId) as { count: number };

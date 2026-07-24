@@ -12,7 +12,7 @@ export function logTaskChange(
   agentId?: string | null,
   db?: Database,
 ): TaskHistory {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const id = uuid();
   const timestamp = now();
   const machineId = currentStorageMachineId(d);
@@ -41,12 +41,12 @@ export function logTaskChange(
 }
 
 export function getTaskHistory(taskId: string, db?: Database): TaskHistory[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return d.query("SELECT * FROM task_history WHERE task_id = ? ORDER BY created_at DESC").all(taskId) as TaskHistory[];
 }
 
 export function getRecentActivity(limit = 50, db?: Database): TaskHistory[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return d.query("SELECT * FROM task_history ORDER BY created_at DESC LIMIT ?").all(limit) as TaskHistory[];
 }
 
@@ -62,7 +62,7 @@ export interface RecapSummary {
 }
 
 export function getRecap(hours = 8, projectId?: string, db?: Database): RecapSummary {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const since = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
   const staleWindow = new Date(Date.now() - 30 * 60 * 1000).toISOString();
   const pf = projectId ? " AND project_id = ?" : "";

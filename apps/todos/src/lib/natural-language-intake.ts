@@ -227,7 +227,7 @@ export function previewNaturalLanguageIntake(input: NaturalLanguageIntakeInput, 
   }
 
   const dryRun = input.apply !== true;
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const createdProject = !dryRun && project && !input.project_id ? createProject({
     name: project.name,
     path: project.path,

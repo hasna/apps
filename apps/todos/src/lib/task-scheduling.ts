@@ -69,7 +69,7 @@ function dueUrgencyScore(dueAt: string | null, ts: number): number {
 }
 
 export function scheduleTask(taskId: string, input: ScheduleTaskInput, db?: Database): Task {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const task = getTask(taskId, d);
   if (!task) throw new Error(`Task not found: ${taskId}`);
 
@@ -98,7 +98,7 @@ export function scheduleTask(taskId: string, input: ScheduleTaskInput, db?: Data
 }
 
 export function listDelayedStartTasks(db?: Database): Task[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const ts = now();
   return listTasks({ status: "pending", limit: 500 }, d).filter((t) => {
     const start = (t as Task & { scheduled_start_at?: string | null }).scheduled_start_at;
@@ -107,7 +107,7 @@ export function listDelayedStartTasks(db?: Database): Task[] {
 }
 
 export function listReadyScheduledTasks(filters: { project_id?: string } = {}, db?: Database): Task[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const ts = now();
   const tasks = listTasks({ status: "pending", project_id: filters.project_id, limit: 500 }, d);
   return tasks.filter((t) => {
@@ -121,7 +121,7 @@ export function getAgentSafeQueue(
   filters: { project_id?: string; limit?: number } = {},
   db?: Database,
 ): SchedulingQueueItem[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const ts = Date.now();
   const ready = listReadyScheduledTasks({ project_id: filters.project_id }, d);
 
@@ -168,7 +168,7 @@ export function getSchedulingSummary(
   filters?: { project_id?: string },
   db?: Database,
 ): SchedulingSummary {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const todayEnd = new Date();
   todayEnd.setHours(23, 59, 59, 999);
   const todayStart = new Date();

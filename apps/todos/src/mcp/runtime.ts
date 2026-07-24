@@ -1,0 +1,339 @@
+// Heavy MCP runtime. The public index loads this module only after proving an
+// explicit local process role in the dependency-light bootstrap.
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { getAgent, getAgentByName } from "../db/agents.js";
+import { getDatabase, resolvePartialId } from "../db/database.js";
+import { logError } from "../lib/logger.js";
+import {
+  VersionConflictError,
+  TaskNotFoundError,
+  ProjectNotFoundError,
+  LockError,
+  DependencyCycleError,
+  PlanNotFoundError,
+  TaskListNotFoundError,
+  AgentNotFoundError,
+  CompletionGuardError,
+  DispatchNotFoundError,
+} from "../types/index.js";
+import type { Task } from "../types/index.js";
+import { registerDispatchTools } from "./tools/dispatch.js";
+import { registerTaskCrudTools } from "./tools/task-crud.js";
+import { registerTaskProjectTools } from "./tools/task-project-tools.js";
+import { registerTaskWorkflowTools } from "./tools/task-workflow-tools.js";
+import { registerTaskAutoTools } from "./tools/task-auto-tools.js";
+import { registerTaskAdvTools } from "./tools/task-adv-tools.js";
+import { registerTaskMetaTools } from "./tools/task-meta-tools.js";
+import { registerTaskResources } from "./tools/task-resources.js";
+import { registerTaskRelTools } from "./tools/task-rel-tools.js";
+import { registerCodeTools } from "./tools/code-tools.js";
+import { registerMachineTools } from "./tools/machines.js";
+import { registerAgentTools } from "./tools/agents.js";
+import { registerTemplateTools } from "./tools/templates.js";
+import { registerEnvironmentSnapshotTools } from "./tools/environment-snapshots.js";
+import { registerWorkflowPrompts } from "./tools/workflow-prompts.js";
+import { getPackageVersion } from "../lib/package-version.js";
+import { installMcpTokenDiagnostics, shouldRegisterToolForProfile } from "./token-utils.js";
+import {
+  assertTodosLocalStorageRole,
+  TodosHostedStorageUnavailableError,
+  type TodosStorageEnv,
+} from "../storage/config.js";
+
+function getMcpVersion(): string {
+  return getPackageVersion(import.meta.url);
+}
+
+function hasVersionFlag(): boolean {
+  return process.argv.includes("--version") || process.argv.includes("-V");
+}
+
+function hasHelpFlag(): boolean {
+  return process.argv.includes("--help") || process.argv.includes("-h");
+}
+
+function printHelp(): void {
+  console.log(`Usage: todos-mcp [options]
+
+Start the @hasna/todos MCP server.
+
+Options:
+  --stdio          Use stdio transport (default)
+  --http           Use Streamable HTTP transport
+  --port <port>    Use Streamable HTTP on the given port (implies --http)
+  -V, --version    output the version number
+  -h, --help       display help for command
+
+Environment:
+  MCP_STDIO=1                Force stdio transport
+  MCP_HTTP=1                 Use Streamable HTTP transport
+  MCP_HTTP_PORT=<port>       HTTP port when using HTTP transport
+  TODOS_PROFILE=<profile>    Tool profile filter
+  TODOS_TOOL_GROUPS=<list>   Comma-separated tool group filter`);
+}
+
+if (hasVersionFlag()) {
+  console.log(getMcpVersion());
+  process.exit(0);
+}
+
+if (hasHelpFlag()) {
+  printHelp();
+  process.exit(0);
+}
+
+// === PROFILE FILTERING ===
+
+function shouldRegisterTool(name: string): boolean {
+  return shouldRegisterToolForProfile(name);
+}
+
+// === FOCUS MODE ===
+
+interface AgentFocus {
+  agent_id: string;
+  project_id?: string;
+  task_list_id?: string;
+}
+
+const agentFocusMap = new Map<string, AgentFocus>();
+
+function getAgentFocus(agentId: string): AgentFocus | undefined {
+  // Session focus takes priority
+  const sessionFocus = agentFocusMap.get(agentId);
+  if (sessionFocus) return sessionFocus;
+  // Fall back to DB active_project_id
+  try {
+    const agent = getAgentByName(agentId) || getAgent(agentId);
+    if (agent && (agent as any).active_project_id) {
+      return { agent_id: agentId, project_id: (agent as any).active_project_id };
+    }
+  } catch {}
+  return undefined;
+}
+
+export function applyFocus(params: Record<string, any>, agentId?: string): void {
+  if (!agentId) return;
+  if (params.project_id) return; // explicit param takes priority
+  const focus = getAgentFocus(agentId);
+  if (focus?.project_id) {
+    params.project_id = focus.project_id;
+  }
+}
+
+function formatError(error: unknown): string {
+  if (error instanceof VersionConflictError) {
+    return JSON.stringify({ code: VersionConflictError.code, message: error.message, suggestion: VersionConflictError.suggestion });
+  }
+  if (error instanceof TaskNotFoundError) {
+    return JSON.stringify({ code: TaskNotFoundError.code, message: error.message, suggestion: TaskNotFoundError.suggestion });
+  }
+  if (error instanceof ProjectNotFoundError) {
+    return JSON.stringify({ code: ProjectNotFoundError.code, message: error.message, suggestion: ProjectNotFoundError.suggestion });
+  }
+  if (error instanceof PlanNotFoundError) {
+    return JSON.stringify({ code: PlanNotFoundError.code, message: error.message, suggestion: PlanNotFoundError.suggestion });
+  }
+  if (error instanceof TaskListNotFoundError) {
+    return JSON.stringify({ code: TaskListNotFoundError.code, message: error.message, suggestion: TaskListNotFoundError.suggestion });
+  }
+  if (error instanceof LockError) {
+    return JSON.stringify({ code: LockError.code, message: error.message, suggestion: LockError.suggestion });
+  }
+  if (error instanceof AgentNotFoundError) {
+    return JSON.stringify({ code: AgentNotFoundError.code, message: error.message, suggestion: AgentNotFoundError.suggestion });
+  }
+  if (error instanceof DependencyCycleError) {
+    return JSON.stringify({ code: DependencyCycleError.code, message: error.message, suggestion: DependencyCycleError.suggestion });
+  }
+  if (error instanceof CompletionGuardError) {
+    const retry = error.retryAfterSeconds ? { retryAfterSeconds: error.retryAfterSeconds } : {};
+    return JSON.stringify({ code: CompletionGuardError.code, message: error.reason, suggestion: CompletionGuardError.suggestion, ...retry });
+  }
+  if (error instanceof DispatchNotFoundError) {
+    return JSON.stringify({ code: DispatchNotFoundError.code, message: error.message, suggestion: DispatchNotFoundError.suggestion });
+  }
+  if (error instanceof Error) {
+    const msg = error.message;
+    // Wrap SQLite constraint errors with agent-friendly messages
+    if (msg.includes("UNIQUE constraint failed: projects.path")) {
+      const db = getDatabase();
+      const existing = db.prepare("SELECT id, name FROM projects WHERE path = ?").get(msg.match(/'([^']+)'$/)?.[1] ?? "") as any;
+      return JSON.stringify({ code: "DUPLICATE_PROJECT", message: `Project already exists at this path${existing ? ` (id: ${existing.id}, name: ${existing.name})` : ""}. Use list_projects to find it.`, suggestion: "Use list_projects or get_project to retrieve the existing project." });
+    }
+    if (msg.includes("UNIQUE constraint failed: projects.name")) {
+      return JSON.stringify({ code: "DUPLICATE_PROJECT", message: "A project with this name already exists. Use a different name or list_projects to find the existing one.", suggestion: "Use list_projects to see existing projects." });
+    }
+    if (msg.includes("UNIQUE constraint failed")) {
+      const match = msg.match(/UNIQUE constraint failed: (\w+)\.(\w+)/);
+      const table = match?.[1] ?? "unknown";
+      const column = match?.[2] ?? "unknown";
+      return JSON.stringify({ code: "DUPLICATE_ENTRY", message: `Duplicate entry in ${table}.${column}. The record already exists.`, suggestion: `Use the list or get endpoint for ${table} to find the existing record, or use a different value for ${column}.` });
+    }
+    if (msg.includes("FOREIGN KEY constraint failed")) {
+      return JSON.stringify({ code: "REFERENCE_ERROR", message: "Referenced record does not exist. Check that the ID is correct.", suggestion: "Verify the referenced ID exists before creating this record." });
+    }
+    // Sanitize: never expose raw database error messages (may contain schema info)
+    console.error("[mcp] Unhandled error:", msg);
+    logError(`[mcp] Unhandled error: ${msg}`, { service: "mcp" }).catch(() => {});
+    return JSON.stringify({ code: "UNKNOWN_ERROR", message: "An unexpected error occurred. Check server logs for details." });
+  }
+  return JSON.stringify({ code: "UNKNOWN_ERROR", message: "An unexpected error occurred." });
+}
+
+function resolveId(partialId: string, table = "tasks"): string {
+  const db = getDatabase();
+  const id = resolvePartialId(db, table, partialId);
+  if (!id) {
+    // Throw a typed, table-appropriate not-found error so agents can tell a bad
+    // ID apart from a genuine server failure (formatError maps these to
+    // specific codes; a plain Error would be sanitized to UNKNOWN_ERROR).
+    switch (table) {
+      case "tasks": throw new TaskNotFoundError(partialId);
+      case "projects": throw new ProjectNotFoundError(partialId);
+      case "plans": throw new PlanNotFoundError(partialId);
+      case "task_lists": throw new TaskListNotFoundError(partialId);
+      case "agents": throw new AgentNotFoundError(partialId);
+      default: throw new TaskNotFoundError(partialId);
+    }
+  }
+  return id;
+}
+
+/** Compact single-line task summary for mutation responses (create/update/start/complete). */
+function formatTask(task: Task): string {
+  const id = task.short_id || task.id.slice(0, 8);
+  const assigned = task.assigned_to ? ` -> ${task.assigned_to}` : "";
+  const lock = task.locked_by ? ` [locked:${task.locked_by}]` : "";
+  const recur = task.recurrence_rule ? ` [↻]` : "";
+  return `${id} ${task.status.padEnd(11)} ${task.priority.padEnd(8)} ${task.title}${assigned}${lock}${recur}`;
+}
+
+/** Full multi-line task detail for get_task responses. */
+function formatTaskDetail(task: Task, maxDescriptionChars?: number): string {
+  const parts = [
+    `ID: ${task.id}`,
+    `Title: ${task.title}`,
+    `Status: ${task.status}`,
+    `Priority: ${task.priority}`,
+  ];
+  if (task.description) {
+    const desc = maxDescriptionChars && task.description.length > maxDescriptionChars
+      ? task.description.slice(0, maxDescriptionChars) + "…"
+      : task.description;
+    parts.push(`Description: ${desc}`);
+  }
+  if (task.assigned_to) parts.push(`Assigned to: ${task.assigned_to}`);
+  if (task.agent_id) parts.push(`Agent: ${task.agent_id}`);
+  if (task.locked_by) parts.push(`Locked by: ${task.locked_by}`);
+  if (task.parent_id) parts.push(`Parent: ${task.parent_id}`);
+  if (task.project_id) parts.push(`Project: ${task.project_id}`);
+  if (task.plan_id) parts.push(`Plan: ${task.plan_id}`);
+  if (task.due_at) parts.push(`Due: ${task.due_at.slice(0, 10)}`);
+  if (task.tags.length > 0) parts.push(`Tags: ${task.tags.join(", ")}`);
+  if (task.recurrence_rule) parts.push(`Recurrence: ${task.recurrence_rule}`);
+  if (task.recurrence_parent_id) parts.push(`Recurrence parent: ${task.recurrence_parent_id}`);
+  parts.push(`Version: ${task.version}`);
+  parts.push(`Created: ${task.created_at}`);
+  if (task.completed_at) parts.push(`Completed: ${task.completed_at}`);
+  return parts.join("\n");
+}
+
+// === REGISTER ALL TOOLS ===
+
+export interface BuildMcpServerOptions {
+  environment?: TodosStorageEnv;
+}
+
+export function buildServer(options: BuildMcpServerOptions = {}) {
+  // Refuse hosted/ambiguous process roles before registering any datastore tool.
+  assertTodosLocalStorageRole(process.env);
+  let environment: TodosStorageEnv | undefined;
+  try {
+    environment = Reflect.get(options, "environment") as TodosStorageEnv | undefined;
+  } catch {
+    throw new TodosHostedStorageUnavailableError("unreadable_options");
+  }
+  assertTodosLocalStorageRole(environment ?? process.env);
+  const server = new McpServer({
+    name: "todos",
+    version: getMcpVersion(),
+  });
+  installMcpTokenDiagnostics(server);
+
+  // First-wins de-duplication: some tools were split into dedicated files but
+  // left registered in their original big file too. The MCP SDK throws
+  // ("Tool X is already registered") on the second server.tool() call, which
+  // crashed server startup. Gate every registration through this per-build set
+  // so a duplicate is skipped instead of fatal. Scoped per buildServer() call
+  // (HTTP mode builds a server per request), so it never suppresses tools on a
+  // later build.
+  const registeredToolNames = new Set<string>();
+  const shouldRegisterToolOnce = (name: string): boolean => {
+    if (!shouldRegisterTool(name)) return false;
+    if (registeredToolNames.has(name)) return false;
+    registeredToolNames.add(name);
+    return true;
+  };
+
+  const toolContext = {
+    shouldRegisterTool: shouldRegisterToolOnce,
+    resolveId,
+    formatError,
+    formatTask,
+    formatTaskDetail,
+    getAgentFocus,
+  };
+
+  registerTaskCrudTools(server, toolContext);
+registerTaskProjectTools(server, toolContext);
+registerTaskWorkflowTools(server, toolContext);
+registerTaskAutoTools(server, toolContext);
+registerTaskAdvTools(server, toolContext);
+registerTaskMetaTools(server, toolContext);
+registerTaskResources(server, toolContext);
+registerTaskRelTools(server, toolContext);
+registerCodeTools(server, toolContext);
+registerAgentTools(server, { ...toolContext, agentFocusMap });
+registerTemplateTools(server, toolContext);
+registerEnvironmentSnapshotTools(server, toolContext);
+registerWorkflowPrompts(server);
+
+// === MACHINES ===
+
+registerMachineTools(server, { shouldRegisterTool: shouldRegisterToolOnce, formatError });
+
+// === DISPATCH ===
+
+registerDispatchTools(server, { shouldRegisterTool: shouldRegisterToolOnce, resolveId, formatError });
+
+  return server;
+}
+
+// === START SERVER ===
+
+export async function runMcpServer() {
+  const { isHttpMode, resolveHttpPort } = await import("./http.js");
+  // HTTP is opt-in via --http, MCP_HTTP=1, or an explicit --port flag. Everything
+  // else defaults to stdio — that is what MCP clients (Claude/Codex/Gemini) speak
+  // when they spawn the bare `todos-mcp` binary, so stdio must be the default.
+  const portRequested = process.argv.some((arg) => arg === "--port" || arg.startsWith("--port="));
+  if (!isHttpMode() && !portRequested) {
+    const server = buildServer();
+    // Durable dual-write shadow: long-running stdio MCP drains the outbox.
+    try {
+      const { startRuntimeShadowDrain } = await import("../storage/shadow-runtime.js");
+      startRuntimeShadowDrain(getDatabase());
+    } catch { /* shadow disabled or unavailable — local writes stay durable */ }
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    return;
+  }
+
+  // Opt-in shared Streamable HTTP server (one process per MCP, many agents).
+  const { startServer } = await import("../server/serve.js");
+  const port = resolveHttpPort();
+  await startServer(port, { open: false, host: "127.0.0.1" });
+  console.error(`todos MCP HTTP mounted at http://127.0.0.1:${port}/mcp`);
+}

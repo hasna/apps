@@ -66,6 +66,16 @@ describe("createHandoff", () => {
 });
 
 describe("listHandoffs", () => {
+  it("rejects a raw caller-created database before querying it", () => {
+    const raw = new Database(":memory:");
+    try {
+      expect(() => listHandoffs(undefined, 10, raw))
+        .toThrow("UNTRUSTED_SQLITE_PROVENANCE");
+    } finally {
+      raw.close();
+    }
+  });
+
   it("should list handoffs in reverse chronological order", () => {
     createHandoff({ summary: "First", agent_id: "a" }, db);
     createHandoff({ summary: "Second", agent_id: "b" }, db);

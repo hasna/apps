@@ -3,6 +3,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { runMigrations, backfillTaskTags } from "./schema.js";
 import { backfillMachineId } from "./machines.js";
+import { assertTodosLocalStorageRole, type TodosStorageEnv } from "../storage/config.js";
 
 export const LOCK_EXPIRY_MINUTES = 30;
 
@@ -77,30 +78,139 @@ function ensureDir(filePath: string): void {
 
 let _db: Database | null = null;
 let _dbPath: string | null = null;
+let _dbMachineIdBackfilled = false;
 
-function openDatabase(path: string): Database {
+interface DatabaseOpenOptions {
+  backfillMachineId?: boolean;
+}
+
+const constructorOwnedDatabases = new WeakSet<Database>();
+
+export class TodosSqliteProvenanceError extends Error {
+  readonly code = "UNTRUSTED_SQLITE_PROVENANCE";
+
+  constructor() {
+    super("UNTRUSTED_SQLITE_PROVENANCE: SQLite handles must be constructed by the Todos database owner");
+    this.name = "TodosSqliteProvenanceError";
+  }
+}
+
+/**
+ * Database provenance is issued only by this module at construction time.
+ * WeakSet membership cannot be copied onto a proxy or database-shaped object,
+ * and callers cannot add entries after construction.
+ */
+export function isConstructorOwnedSqliteDatabase(value: unknown): value is Database {
+  return typeof value === "object" && value !== null && constructorOwnedDatabases.has(value as Database);
+}
+
+export function assertConstructorOwnedSqliteDatabase(value: unknown): asserts value is Database {
+  if (!isConstructorOwnedSqliteDatabase(value)) throw new TodosSqliteProvenanceError();
+}
+
+function isBunSqliteDatabase(value: unknown): value is Database {
+  if (typeof value !== "object" || value === null) return false;
+  try {
+    return value instanceof Database;
+  } catch {
+    throw new TodosSqliteProvenanceError();
+  }
+}
+
+/**
+ * Reject raw Bun Database capabilities at a generated package boundary before
+ * dispatching to CRUD, snapshot, import/export, report, search, or plan code.
+ * A single descriptor-only options level covers the public `{ db }` and
+ * `{ database }` forms without invoking caller accessors.
+ */
+export function assertPublicSqliteBoundaryArguments(args: readonly unknown[]): void {
+  for (const value of args) {
+    if (isBunSqliteDatabase(value)) {
+      assertConstructorOwnedSqliteDatabase(value);
+      continue;
+    }
+    if (typeof value !== "object" || value === null) continue;
+    for (const key of ["db", "database"] as const) {
+      let descriptor: PropertyDescriptor | undefined;
+      try {
+        descriptor = Reflect.getOwnPropertyDescriptor(value, key);
+      } catch {
+        throw new TodosSqliteProvenanceError();
+      }
+      if (!descriptor) continue;
+      if (!("value" in descriptor) || descriptor.get || descriptor.set) {
+        throw new TodosSqliteProvenanceError();
+      }
+      if (isBunSqliteDatabase(descriptor.value)) {
+        assertConstructorOwnedSqliteDatabase(descriptor.value);
+      }
+    }
+  }
+}
+
+function openDatabase(path: string, options: DatabaseOpenOptions = {}): Database {
   ensureDir(path);
 
   const db = new Database(path);
+  try {
+    // Enable WAL mode for concurrent access
+    db.run("PRAGMA journal_mode = WAL");
+    db.run("PRAGMA busy_timeout = 5000");
+    db.run("PRAGMA foreign_keys = ON");
 
-  // Enable WAL mode for concurrent access
-  db.run("PRAGMA journal_mode = WAL");
-  db.run("PRAGMA busy_timeout = 5000");
-  db.run("PRAGMA foreign_keys = ON");
+    // Run migrations
+    runMigrations(db);
+    backfillTaskTags(db);
+    if (options.backfillMachineId !== false) backfillMachineId(db);
 
-  // Run migrations
-  runMigrations(db);
-  backfillTaskTags(db);
-  backfillMachineId(db);
+    // Durable dual-write shadow (sanctioned Amendment A1 exception): when
+    // HASNA_TODOS_SHADOW=1, install capture triggers so EVERY local write path
+    // (CLI, MCP, serve, raw src/db SQL) enqueues a durable mirror op. This is the
+    // single chokepoint that makes the shadow real without refactoring every
+    // direct-SQL call site onto the storage adapter. Pure SQLite; no network here.
+    maybeInstallShadowCapture(db);
 
-  // Durable dual-write shadow (sanctioned Amendment A1 exception): when
-  // HASNA_TODOS_SHADOW=1, install capture triggers so EVERY local write path
-  // (CLI, MCP, serve, raw src/db SQL) enqueues a durable mirror op. This is the
-  // single chokepoint that makes the shadow real without refactoring every
-  // direct-SQL call site onto the storage adapter. Pure SQLite; no network here.
-  maybeInstallShadowCapture(db);
+    constructorOwnedDatabases.add(db);
+    return db;
+  } catch (error) {
+    try { db.close(); } catch { /* construction already failed */ }
+    throw error;
+  }
+}
 
-  return db;
+/** Internal/test constructor that preserves the same immutable provenance path. */
+export function openLocalSqliteDatabase(
+  path: string,
+  environment: TodosStorageEnv = process.env,
+  options: DatabaseOpenOptions = {},
+): Database {
+  assertTodosLocalStorageRole(process.env);
+  if (environment !== process.env) assertTodosLocalStorageRole(environment);
+  return openDatabase(path, options);
+}
+
+/**
+ * Open an existing SQLite store read-only while retaining constructor
+ * provenance. This is intentionally separate from openDatabase(): source
+ * discovery must never migrate or otherwise rewrite another Todos store.
+ */
+export function openReadonlyLocalSqliteDatabase(
+  path: string,
+  environment: TodosStorageEnv = process.env,
+): Database {
+  assertTodosLocalStorageRole(process.env);
+  if (environment !== process.env) assertTodosLocalStorageRole(environment);
+
+  const db = new Database(path, { readonly: true, create: false });
+  try {
+    db.run("PRAGMA busy_timeout = 5000");
+    db.run("PRAGMA foreign_keys = ON");
+    constructorOwnedDatabases.add(db);
+    return db;
+  } catch (error) {
+    try { db.close(); } catch { /* construction already failed */ }
+    throw error;
+  }
 }
 
 function maybeInstallShadowCapture(db: Database): void {
@@ -118,9 +228,27 @@ function maybeInstallShadowCapture(db: Database): void {
   }
 }
 
-export function getDatabase(dbPath?: string): Database {
+export function getDatabase(
+  dbPath?: string | Database,
+  environment: TodosStorageEnv = process.env,
+  options: DatabaseOpenOptions = {},
+): Database {
+  // Stage A: a hosted, ambiguous, or invalid process role must never fall
+  // through to SQLite, including when a handle was opened before an env flip.
+  assertTodosLocalStorageRole(process.env);
+  if (environment !== process.env) assertTodosLocalStorageRole(environment);
+  if (typeof dbPath === "object" && dbPath !== null) {
+    assertConstructorOwnedSqliteDatabase(dbPath);
+    return dbPath;
+  }
   const path = dbPath || getDbPath();
-  if (_db && _dbPath === path) return _db;
+  if (_db && _dbPath === path) {
+    if (options.backfillMachineId !== false && !_dbMachineIdBackfilled) {
+      backfillMachineId(_db);
+      _dbMachineIdBackfilled = true;
+    }
+    return _db;
+  }
 
   // M11: The resolved path changed (e.g. the process cwd moved to a different
   // project). Do NOT close the previous handle here — other code may still hold
@@ -128,8 +256,9 @@ export function getDatabase(dbPath?: string): Database {
   // closed" errors mid-operation. Open the new handle and repoint the
   // singleton; the previous handle is released via resetDatabase()/
   // closeDatabase() or on process exit.
-  _db = openDatabase(path);
+  _db = openDatabase(path, options);
   _dbPath = path;
+  _dbMachineIdBackfilled = options.backfillMachineId !== false;
   return _db;
 }
 
@@ -138,6 +267,7 @@ export function closeDatabase(): void {
     try { _db.close(); } catch { /* already closed */ }
     _db = null;
     _dbPath = null;
+    _dbMachineIdBackfilled = false;
   }
 }
 
@@ -149,6 +279,7 @@ export function resetDatabase(): void {
   }
   _db = null;
   _dbPath = null;
+  _dbMachineIdBackfilled = false;
 }
 
 export function now(): string {

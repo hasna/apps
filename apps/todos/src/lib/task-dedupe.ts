@@ -262,7 +262,7 @@ function olderFirst(left: Task, right: Task): [Task, Task] {
 }
 
 export function findDuplicateTasks(options: FindDuplicateTasksOptions = {}, db?: Database): DuplicateTaskCandidate[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const threshold = options.threshold ?? DEFAULT_THRESHOLD;
   const fingerprints = listTasks({
     include_archived: Boolean(options.include_archived),
@@ -432,7 +432,7 @@ function mergeTaskDescription(primary: Task, duplicate: Task): string | null {
 }
 
 export function mergeDuplicateTask(input: MergeDuplicateTaskInput, db?: Database): TaskMergeResult {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   if (input.primary_task_id === input.duplicate_task_id) {
     throw new Error("Cannot merge a task into itself");
   }

@@ -44,7 +44,7 @@ export function patrolTasks(
   },
   db?: Database,
 ): PatrolResult {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const stuckMinutes = opts?.stuck_minutes || 60;
   const confidenceThreshold = opts?.confidence_threshold || 0.5;
   const issues: PatrolIssue[] = [];
@@ -166,7 +166,7 @@ export function getReviewQueue(
   opts?: { project_id?: string; limit?: number },
   db?: Database,
 ): Task[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   let sql = `SELECT * FROM tasks WHERE status = 'completed' AND (
     (requires_approval = 1 AND approved_by IS NULL)
     OR (confidence IS NOT NULL AND confidence < 0.5)

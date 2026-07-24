@@ -1,368 +1,108 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { describe, expect, test } from "bun:test";
+import { createHostedCliHarness, type HostedCliHarness, type HostedCliResult } from "./hosted-cli.test-helper";
+import { runInjectedHostedCommand } from "./hosted-command.test-helper.js";
 
-const REPO_ROOT = join(import.meta.dir, "../..");
 const TASK_ID = "11111111-1111-4111-8111-111111111111";
 const PARENT_ID = "22222222-2222-4222-8222-222222222222";
-const TEST_API_KEY = "hasna_todos_test_key";
-const tempRoots: string[] = [];
 
-afterEach(() => {
-  for (const root of tempRoots.splice(0)) {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-async function runCli(args: string[], root: string, baseUrl: string, extraEnv: Record<string, string> = {}) {
-  const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
-    cwd: REPO_ROOT,
-    env: {
-      PATH: process.env.PATH ?? "",
-      HOME: root,
-      TMPDIR: root,
-      LANG: "C.UTF-8",
-      TODOS_DB_PATH: join(root, "todos.db"),
-      TODOS_AUTO_PROJECT: "false",
-      HASNA_TODOS_STORAGE_MODE: "self_hosted",
-      HASNA_TODOS_API_URL: baseUrl,
-      HASNA_TODOS_API_KEY: TEST_API_KEY,
-      ...extraEnv,
-    },
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const stdout = await new Response(proc.stdout).text();
-  const stderr = await new Response(proc.stderr).text();
-  return { exitCode: await proc.exited, stdout, stderr };
-}
-
-function taskFixture(overrides: Record<string, unknown> = {}) {
-  return {
-    id: TASK_ID,
-    short_id: null,
-    project_id: null,
-    parent_id: null,
-    plan_id: null,
-    task_list_id: "missing-local-list",
-    title: "Cloud short id regression",
-    description: null,
-    status: "pending",
-    priority: "medium",
-    agent_id: null,
-    assigned_to: null,
-    session_id: null,
-    working_dir: null,
-    tags: [],
-    metadata: {},
-    version: 1,
-    locked_by: null,
-    locked_at: null,
-    created_at: "2026-07-10T00:00:00.000Z",
-    updated_at: "2026-07-10T00:00:00.000Z",
-    started_at: null,
-    completed_at: null,
-    due_at: null,
-    estimated_minutes: null,
-    actual_minutes: null,
-    requires_approval: false,
-    approved_by: null,
-    approved_at: null,
-    recurrence_rule: null,
-    recurrence_parent_id: null,
-    spawns_template_id: null,
-    confidence: null,
-    reason: null,
-    spawned_from_session: null,
-    assigned_by: null,
-    assigned_from_project: null,
-    task_type: null,
-    cost_tokens: 0,
-    cost_usd: 0,
-    delegated_from: null,
-    delegation_depth: 0,
-    retry_count: 0,
-    max_retries: 0,
-    retry_after: null,
-    sla_minutes: null,
-    runner_id: null,
-    runner_started_at: null,
-    runner_completed_at: null,
-    current_step: null,
-    total_steps: null,
-    machine_id: null,
-    synced_at: null,
-    archived_at: null,
-    ...overrides,
-  };
+function expectStageADenial(result: HostedCliResult, harness: HostedCliHarness): void {
+  expect(result.timedOut).toBe(false);
+  expect(result.exitCode).not.toBe(0);
+  expect(`${result.stdout}\n${result.stderr}`).toContain("HOSTED_AUTHORITY_UNAVAILABLE");
+  expect(harness.requests).toEqual([]);
+  expect(harness.sqliteExists()).toBe(false);
 }
 
 describe("cloud task detail comments", () => {
-  test("cloud add resolves its printed short prefix over HTTP without seeding a local id index", async () => {
-    const requests: Array<{ method: string; path: string; body?: Record<string, unknown> }> = [];
-    const comments: Record<string, unknown>[] = [];
-    const server = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      async fetch(request) {
-        const url = new URL(request.url);
-        const body = request.method === "POST" ? await request.json() as Record<string, unknown> : undefined;
-        requests.push({ method: request.method, path: url.pathname, body });
-        if (url.pathname === "/v1/tasks" && request.method === "POST") {
-          return Response.json({ task: taskFixture({ title: body?.title }) }, { status: 201 });
-        }
-        if (url.pathname === "/v1/tasks" && request.method === "GET") {
-          return Response.json({ tasks: [taskFixture()], count: 1, total: 1 });
-        }
-        if (url.pathname === "/v1/stats" && request.method === "GET") {
-          return Response.json({ tasks_all: 1 });
-        }
-        if (url.pathname === `/v1/tasks/${TASK_ID}` && request.method === "GET") {
-          return Response.json({ task: taskFixture() });
-        }
-        if (url.pathname === `/v1/tasks/${TASK_ID}/start` && request.method === "POST") {
-          return Response.json({ task: taskFixture({ status: "in_progress", locked_by: body?.agent_id ?? null }) });
-        }
-        if (url.pathname === `/v1/tasks/${TASK_ID}/comments` && request.method === "POST") {
-          const comment = {
-            id: `comment-${comments.length + 1}`,
-            task_id: TASK_ID,
-            agent_id: body?.agent_id ?? null,
-            session_id: body?.session_id ?? null,
-            content: body?.content,
-            type: body?.type ?? "comment",
-            progress_pct: body?.progress_pct ?? null,
-            created_at: "2026-07-10T00:01:00.000Z",
-          };
-          comments.push(comment);
-          return Response.json({ comment }, { status: 201 });
-        }
-        return Response.json({ error: "not found" }, { status: 404 });
-      },
+  test.each([
+    ["exact", PARENT_ID],
+    ["short", PARENT_ID.slice(0, 8)],
+  ])("Commander maps an %s parent reference to the canonical cloud parent id", async (label, parentRef) => {
+    const result = await runInjectedHostedCommand("task-parent", [
+      "--json", "add", "Cloud child", "--parent", parentRef,
+    ]);
+
+    expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      id: TASK_ID,
+      parent_id: PARENT_ID,
+      title: "Cloud child",
     });
-    const root = mkdtempSync(join(tmpdir(), "todos-cloud-created-short-id-"));
-    tempRoots.push(root);
-    const shortId = TASK_ID.slice(0, 8);
-    const baseUrl = `http://127.0.0.1:${server.port}`;
-    try {
-      const add = await runCli(["add", "Cloud short id regression"], root, baseUrl);
-      expect(add).toMatchObject({ exitCode: 0, stderr: "" });
-      expect(add.stdout).toContain(shortId);
-
-      const alternateDb = { TODOS_DB_PATH: join(root, "different-local-mirror.db") };
-      const started = await runCli(["start", shortId], root, baseUrl, alternateDb);
-      expect(started).toMatchObject({ exitCode: 0, stderr: "" });
-
-      const commented = await runCli(["comment", shortId, "started from printed prefix"], root, baseUrl, alternateDb);
-      expect(commented).toMatchObject({ exitCode: 0, stderr: "" });
-
-      expect(requests.map((request) => `${request.method} ${request.path}`)).toEqual([
+    const postCall = {
+      method: "POST",
+      path: "/v1/tasks",
+      query: "",
+      body: expect.objectContaining({ title: "Cloud child", parent_id: PARENT_ID }),
+    };
+    if (label === "short") {
+      expect(result.calls.map(({ method, path }) => `${method} ${path}`)).toEqual([
+        "GET /v1/stats",
+        "GET /v1/tasks",
+        `GET /v1/tasks/${PARENT_ID}`,
+        "GET /v1/stats",
         "POST /v1/tasks",
-        "GET /v1/stats",
-        "GET /v1/tasks",
-        `GET /v1/tasks/${TASK_ID}`,
-        "GET /v1/stats",
-        `POST /v1/tasks/${TASK_ID}/start`,
-        "GET /v1/stats",
-        "GET /v1/tasks",
-        `GET /v1/tasks/${TASK_ID}`,
-        "GET /v1/stats",
-        `POST /v1/tasks/${TASK_ID}/comments`,
       ]);
-      expect(comments).toHaveLength(1);
-      expect(comments[0]).toMatchObject({ task_id: TASK_ID, content: "started from printed prefix" });
-      expect(existsSync(join(root, "todos.db"))).toBe(false);
-      expect(existsSync(join(root, "different-local-mirror.db"))).toBe(false);
-    } finally {
-      server.stop(true);
+      expect(result.calls[1]?.query).toContain("include_subtasks=true");
+      expect(result.calls.at(-1)).toEqual(postCall);
+    } else {
+      expect(result.calls).toEqual([postCall]);
     }
   });
 
-  test("add --parent carries the exact parent id through the self-hosted create request", async () => {
-    let createBody: Record<string, unknown> | null = null;
-    const server = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      async fetch(request) {
-        const url = new URL(request.url);
-        if (url.pathname === "/v1/tasks" && request.method === "POST") {
-          createBody = await request.json() as Record<string, unknown>;
-          return Response.json({
-            task: {
-              id: TASK_ID,
-              title: createBody["title"],
-              parent_id: createBody["parent_id"] ?? null,
-              status: "pending",
-              priority: "medium",
-              tags: [],
-              version: 1,
-              created_at: "2026-07-10T00:00:00.000Z",
-              updated_at: "2026-07-10T00:00:00.000Z",
-            },
-          }, { status: 201 });
-        }
-        return Response.json({ error: "not found" }, { status: 404 });
-      },
-    });
-    const root = mkdtempSync(join(tmpdir(), "todos-cloud-parent-create-"));
-    tempRoots.push(root);
+  test("Stage A denies add, direct-ID start, and comment before network or SQLite", async () => {
+    const harness = createHostedCliHarness("todos-cloud-comment-flow-");
     try {
-      const result = await runCli(
-        ["--json", "add", "Cloud child", "--parent", PARENT_ID],
-        root,
-        `http://127.0.0.1:${server.port}`,
-      );
-      expect(result).toMatchObject({ exitCode: 0, stderr: "" });
-      expect(createBody).toMatchObject({ title: "Cloud child", parent_id: PARENT_ID });
-      expect(JSON.parse(result.stdout)).toMatchObject({ id: TASK_ID, parent_id: PARENT_ID });
-    } finally {
-      server.stop(true);
-    }
-  });
-
-  test("comment -> persisted GET -> show and inspect round-trip comments without local helpers", async () => {
-    const comments: Array<Record<string, unknown>> = [];
-    const requests: Array<{ method: string; path: string; authorized: boolean }> = [];
-    const server = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      async fetch(request) {
-        const url = new URL(request.url);
-        requests.push({
-          method: request.method,
-          path: url.pathname,
-          authorized: request.headers.get("authorization") === `Bearer ${TEST_API_KEY}`,
-        });
-        if (url.pathname === `/v1/tasks/${TASK_ID}` && request.method === "GET") {
-          return Response.json({
-            task: {
-              id: TASK_ID,
-              title: "Cloud comment regression",
-              status: "in_progress",
-              priority: "high",
-              tags: [],
-              version: 1,
-              created_at: "2026-07-10T00:00:00.000Z",
-              updated_at: "2026-07-10T00:00:00.000Z",
-              comments: [{ id: "stale-task-envelope-comment" }],
-            },
-          });
-        }
-        if (url.pathname === `/v1/tasks/${TASK_ID}/comments` && request.method === "POST") {
-          const body = await request.json() as Record<string, unknown>;
-          const comment = {
-            id: `comment-${comments.length + 1}`,
-            task_id: TASK_ID,
-            agent_id: null,
-            session_id: null,
-            content: body.content,
-            type: body.type ?? "comment",
-            progress_pct: body.progress_pct ?? null,
-            created_at: `2026-07-10T00:0${comments.length + 1}:00.000Z`,
-          };
-          comments.push(comment);
-          return Response.json({ comment }, { status: 201 });
-        }
-        if (url.pathname === `/v1/tasks/${TASK_ID}/comments` && request.method === "GET") {
-          return Response.json({ comments, count: comments.length });
-        }
-        return Response.json({ error: "not found" }, { status: 404 });
-      },
-    });
-
-    const root = mkdtempSync(join(tmpdir(), "todos-cloud-comment-detail-"));
-    tempRoots.push(root);
-    const baseUrl = `http://127.0.0.1:${server.port}`;
-    try {
-      const first = await runCli(["comment", TASK_ID, "first persisted comment"], root, baseUrl);
-      expect(first).toMatchObject({ exitCode: 0, stderr: "" });
-      const second = await runCli(["comment", TASK_ID, "Bearer abcdefghijklmnop should redact"], root, baseUrl);
-      expect(second).toMatchObject({ exitCode: 0, stderr: "" });
-
-      const shown = await runCli(["--json", "show", TASK_ID], root, baseUrl);
-      expect(shown.exitCode).toBe(0);
-      expect(shown.stderr).toBe("");
-      const task = JSON.parse(shown.stdout);
-      expect(task.comments).toHaveLength(2);
-      expect(task.comments.map((comment: { id: string }) => comment.id)).toEqual(["comment-1", "comment-2"]);
-      expect(task.comments[0]).toMatchObject({ task_id: TASK_ID, content: "first persisted comment" });
-      expect(task.comments[1].content).toContain("[REDACTED]");
-      expect(task.comments[1].content).not.toContain("abcdefghijklmnop");
-
-      const requestsBeforeInspect = requests.length;
-      const inspect = await runCli(["--json", "inspect", TASK_ID], root, baseUrl);
-      expect(inspect.exitCode).toBe(0);
-      expect(inspect.stderr).toBe("");
-      expect(JSON.parse(inspect.stdout).comments).toHaveLength(2);
-      expect(requests.slice(requestsBeforeInspect).map((request) => `${request.method} ${request.path}`)).toEqual([
-        `GET /v1/tasks/${TASK_ID}`,
-        `GET /v1/tasks/${TASK_ID}/comments`,
-      ]);
-      expect(existsSync(join(root, "todos.db"))).toBe(false);
-
-      comments.push({
-        id: "comment-controls",
-        task_id: TASK_ID,
-        agent_id: "agent\u001b[31m",
-        session_id: null,
-        content: "visible\u001b]52;c;forged\u0007next\nline",
-        type: "comment",
-        progress_pct: null,
-        created_at: "2026-07-10T00:03:00.000Z",
-      });
-      const human = await runCli(["show", TASK_ID], root, baseUrl);
-      expect(human.exitCode).toBe(0);
-      expect(human.stderr).toBe("");
-      expect(human.stdout).not.toContain("\u001b]52");
-      expect(human.stdout).not.toContain("\u0007");
-      expect(human.stdout).toContain("\\x1b]52");
-      expect(human.stdout).toContain("\\x07next\\nline");
-
-      while (comments.length < 150) {
-        const index = comments.length;
-        comments.push({
-          id: `legacy-${index}`,
-          task_id: TASK_ID,
-          agent_id: null,
-          session_id: null,
-          content: `legacy ${index}`,
-          type: "comment",
-          progress_pct: null,
-          created_at: `2026-07-10T01:${String(Math.floor(index / 60)).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}.000Z`,
-        });
+      for (const command of [
+        ["add", "Cloud short id regression"],
+        ["start", TASK_ID.slice(0, 8)],
+        ["comment", TASK_ID.slice(0, 8), "started from printed prefix"],
+      ] as const) {
+        expectStageADenial(await harness.run(command), harness);
       }
-      const legacy = await runCli(["show", TASK_ID], root, baseUrl);
-      expect(legacy.exitCode).toBe(0);
-      expect(legacy.stdout).toContain("older comments omitted until the server is upgraded");
-
-      expect(requests).toEqual(expect.arrayContaining([
-        { method: "POST", path: `/v1/tasks/${TASK_ID}/comments`, authorized: true },
-        { method: "GET", path: `/v1/tasks/${TASK_ID}/comments`, authorized: true },
-      ]));
     } finally {
-      server.stop(true);
+      harness.dispose();
     }
   });
 
-  test("a missing cloud task does not issue a comments request", async () => {
-    const requests: string[] = [];
-    const server = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      fetch(request) {
-        requests.push(new URL(request.url).pathname);
-        return Response.json({ error: "not found" }, { status: 404 });
-      },
-    });
-    const root = mkdtempSync(join(tmpdir(), "todos-cloud-comment-missing-"));
-    tempRoots.push(root);
+  test("Stage A denies parent-scoped task creation before network or SQLite", async () => {
+    const harness = createHostedCliHarness("todos-cloud-parent-create-");
     try {
-      const result = await runCli(["--json", "show", TASK_ID], root, `http://127.0.0.1:${server.port}`);
-      expect(result.exitCode).not.toBe(0);
-      expect(requests).toEqual([`/v1/tasks/${TASK_ID}`]);
+      expectStageADenial(
+        await harness.run(["--json", "add", "Cloud child", "--parent", PARENT_ID]),
+        harness,
+      );
     } finally {
-      server.stop(true);
+      harness.dispose();
+    }
+  });
+
+  test("Stage A denies comment, show, and inspect variants before detail or comment requests", async () => {
+    const harness = createHostedCliHarness("todos-cloud-comment-detail-");
+    try {
+      for (const command of [
+        ["comment", TASK_ID, "first persisted comment"],
+        ["--json", "show", TASK_ID],
+        ["--json", "inspect", TASK_ID],
+        ["show", TASK_ID],
+        ["inspect", TASK_ID],
+      ] as const) {
+        expectStageADenial(await harness.run(command), harness);
+      }
+    } finally {
+      harness.dispose();
+    }
+  });
+
+  test("Stage A makes foreign and nonexistent direct IDs indistinguishable before comments lookup", async () => {
+    const harness = createHostedCliHarness("todos-cloud-missing-task-");
+    try {
+      const foreign = await harness.run(["--json", "show", TASK_ID]);
+      const nonexistent = await harness.run(["--json", "show", "ffffffff-ffff-4fff-8fff-ffffffffffff"]);
+      expectStageADenial(foreign, harness);
+      expectStageADenial(nonexistent, harness);
+      expect(`${foreign.stdout}\n${foreign.stderr}`).toBe(`${nonexistent.stdout}\n${nonexistent.stderr}`);
+    } finally {
+      harness.dispose();
     }
   });
 });

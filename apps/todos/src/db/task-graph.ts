@@ -18,7 +18,7 @@ export function addDependency(
   dependsOn: string,
   db?: Database,
 ): void {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
 
   // Verify both tasks exist
   if (!getTask(taskId, d)) throw new TaskNotFoundError(taskId);
@@ -40,7 +40,7 @@ export function removeDependency(
   dependsOn: string,
   db?: Database,
 ): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const result = d.run(
     "DELETE FROM task_dependencies WHERE task_id = ? AND depends_on = ?",
     [taskId, dependsOn],
@@ -52,7 +52,7 @@ export function getTaskDependencies(
   taskId: string,
   db?: Database,
 ): TaskDependency[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return d
     .query("SELECT * FROM task_dependencies WHERE task_id = ?")
     .all(taskId) as TaskDependency[];
@@ -62,7 +62,7 @@ export function getTaskDependents(
   taskId: string,
   db?: Database,
 ): TaskDependency[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return d
     .query("SELECT * FROM task_dependencies WHERE depends_on = ?")
     .all(taskId) as TaskDependency[];
@@ -73,7 +73,7 @@ export function cloneTask(
   overrides?: Partial<CreateTaskInput>,
   db?: Database,
 ): Task {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const source = getTask(taskId, d);
   if (!source) throw new TaskNotFoundError(taskId);
 
@@ -119,7 +119,7 @@ export function getTaskGraph(
   direction: "up" | "down" | "both" = "both",
   db?: Database,
 ): TaskGraph {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const task = getTask(taskId, d);
   if (!task) throw new TaskNotFoundError(taskId);
 
@@ -166,7 +166,7 @@ export function moveTask(
   target: { task_list_id?: string | null; project_id?: string | null; plan_id?: string | null },
   db?: Database,
 ): Task {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const task = getTask(taskId, d);
   if (!task) throw new TaskNotFoundError(taskId);
 

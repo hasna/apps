@@ -187,7 +187,7 @@ export function validateBundle(bundle: unknown): { valid: boolean; errors: strin
 }
 
 export function exportLocalBundle(options: ExportLocalBundleOptions = {}, db?: Database): ImportExportBundle {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const profile = assertExportProfileAllowed(options.profile ?? "redacted");
   const projectId = options.project_id;
   const warnings: string[] = [];
@@ -320,7 +320,7 @@ function compareEntity(
 }
 
 export function previewSync(bundle: ImportExportBundle, strategy: MergeStrategy = "newest_wins", db?: Database): SyncPreview {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const validation = validateBundle(bundle);
   if (!validation.valid) throw new Error(`Invalid bundle: ${validation.errors.join("; ")}`);
 
@@ -466,7 +466,7 @@ function upsertComment(raw: Record<string, unknown>, d: Database): "created" | "
 }
 
 export function importBundle(bundle: ImportExportBundle, options: ImportBundleOptions = {}, db?: Database): ImportResult {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const validation = validateBundle(bundle);
   if (!validation.valid) throw new Error(`Invalid bundle: ${validation.errors.join("; ")}`);
 

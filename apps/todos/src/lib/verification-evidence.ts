@@ -154,7 +154,7 @@ export function createVerificationEvidence(
   input: CreateVerificationEvidenceInput,
   db?: Database,
 ): PortableVerificationEvidence {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const id = uuid();
   const ts = now();
   const artifactIds = [...(input.artifact_ids ?? [])];

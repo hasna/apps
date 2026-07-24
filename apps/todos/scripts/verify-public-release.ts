@@ -1,7 +1,19 @@
 #!/usr/bin/env bun
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -21,18 +33,22 @@ import {
   validateReleaseIndexFlags,
   validateReproducibleArtifactIntegrity,
   validateTrackedWorktreeProof,
-  isPublicReleaseTextSurface,
   validateReleaseProvenanceMetadata,
   validateReleaseRepositoryState,
   validateRootPackageMetadata,
   validateSdkPackageMetadata,
   type PackageJson,
+  type ReleaseCandidateIdentity,
   type ReleaseGateFailure,
   type ReleaseSourceIdentity,
-  type TextFile,
   type TrackedWorktreeProof,
 } from "../src/lib/public-release-gate";
+import { collectPublicTextSurfaces } from "../src/lib/public-release-files";
 import { scanExtractedPackedFiles } from "../src/lib/release-packed-scan";
+import { readPackedRegularFiles, scanPackedArchive } from "../src/lib/public-release-archive";
+
+const MAX_STRUCTURED_JSON_BYTES = 4 * 1024 * 1024;
+const MAX_CAPTURE_BYTES = 8 * 1024 * 1024;
 
 type PackResult = {
   filename: string;
@@ -62,16 +78,20 @@ function main(): void {
   if (repositoryState.status !== 0) {
     failReleaseGate([{ check: "release-worktree-state", message: repositoryState.stderr || "git status failed" }]);
   }
-  const repositoryFailures = validateReleaseRepositoryState(repositoryState.stdout);
-  if (repositoryFailures.length > 0) failReleaseGate(repositoryFailures);
+  if (authority.mode === "publish") {
+    const repositoryFailures = validateReleaseRepositoryState(repositoryState.stdout);
+    if (repositoryFailures.length > 0) failReleaseGate(repositoryFailures);
+  }
 
   const indexFlags = runCapture("git", ["ls-files", "-v"]);
   if (indexFlags.status !== 0) failReleaseGate([{ check: "release-index-flags", message: indexFlags.stderr || "git ls-files -v failed" }]);
   const indexFlagFailures = validateReleaseIndexFlags(indexFlags.stdout);
   if (indexFlagFailures.length > 0) failReleaseGate(indexFlagFailures);
 
-  const trackedProofFailures = verifyTrackedWorktreeAgainstHead();
-  if (trackedProofFailures.length > 0) failReleaseGate(trackedProofFailures);
+  if (authority.mode === "publish") {
+    const trackedProofFailures = verifyTrackedWorktreeAgainstHead();
+    if (trackedProofFailures.length > 0) failReleaseGate(trackedProofFailures);
+  }
 
   const sourceIdentity = readReleaseSourceIdentity();
   if (authority.mode === "publish") {
@@ -102,14 +122,22 @@ function main(): void {
   }
 
   runOrExit("bun", ["run", "build"]);
-  writeReleaseProvenance(packageJson, sourceIdentity, provenanceTimestamp);
+  const candidateIdentity = resolveCandidateIdentity(sourceIdentity.gitCommit);
+  writeReleaseProvenance(packageJson, sourceIdentity, candidateIdentity, provenanceTimestamp);
 
   const postBuildState = runCapture("git", ["status", "--porcelain=v1", "--untracked-files=all"]);
   if (postBuildState.status !== 0) {
     failReleaseGate([{ check: "release-worktree-state", message: postBuildState.stderr || "git status after build failed" }]);
   }
-  const postBuildFailures = validateReleaseRepositoryState(postBuildState.stdout);
-  if (postBuildFailures.length > 0) failReleaseGate(postBuildFailures);
+  if (authority.mode === "publish") {
+    const postBuildFailures = validateReleaseRepositoryState(postBuildState.stdout);
+    if (postBuildFailures.length > 0) failReleaseGate(postBuildFailures);
+  } else if (JSON.stringify(resolveCandidateIdentity(candidateIdentity.candidateBaseRef)) !== JSON.stringify(candidateIdentity)) {
+    failReleaseGate([{
+      check: "provenance-candidate-drift",
+      message: "candidate bytes changed while release provenance was generated",
+    }]);
+  }
 
   const tempDir = mkdtempSync(join(tmpdir(), "todos-release-"));
   let tarballIntegrity = "";
@@ -127,11 +155,24 @@ function main(): void {
     const packedPackageJson = readPackedPackageJson(tarball);
     failures.push(...validatePackedPackageFiles(pack.files.map((file) => `package/${file.path}`), packedPackageJson));
     failures.push(...validatePackedProvenanceMetadata(packedPackageJson, packageJson));
-    failures.push(...validateReleaseProvenanceMetadata(readPackedReleaseProvenance(tarball), packageJson, sourceIdentity));
+    failures.push(...validateReleaseProvenanceMetadata(
+      readPackedReleaseProvenance(tarball),
+      packageJson,
+      sourceIdentity,
+      candidateIdentity,
+    ));
     failures.push(...scanExtractedPackedFiles(pack.files, firstPayloadDir, sourceLogo));
+    failures.push(...scanPackedArchive(tarball));
 
     runOrExit("bun", ["run", "build"]);
-    writeReleaseProvenance(packageJson, sourceIdentity, provenanceTimestamp);
+    const afterSecondBuild = resolveCandidateIdentity(candidateIdentity.candidateBaseRef);
+    if (JSON.stringify(afterSecondBuild) !== JSON.stringify(candidateIdentity)) {
+      failReleaseGate([{
+        check: "provenance-candidate-drift",
+        message: "candidate bytes changed during the deterministic rebuild",
+      }]);
+    }
+    writeReleaseProvenance(packageJson, sourceIdentity, candidateIdentity, provenanceTimestamp);
     const secondPack = npmPack(secondPackDir);
     const secondTarball = join(secondPackDir, secondPack.filename);
     const secondPayloadDir = join(tempDir, "second-payload");
@@ -142,8 +183,22 @@ function main(): void {
     const secondPackedPackageJson = readPackedPackageJson(secondTarball);
     failures.push(...validatePackedPackageFiles(secondPack.files.map((file) => `package/${file.path}`), secondPackedPackageJson));
     failures.push(...validatePackedProvenanceMetadata(secondPackedPackageJson, packageJson));
-    failures.push(...validateReleaseProvenanceMetadata(readPackedReleaseProvenance(secondTarball), packageJson, sourceIdentity));
+    failures.push(...validateReleaseProvenanceMetadata(
+      readPackedReleaseProvenance(secondTarball),
+      packageJson,
+      sourceIdentity,
+      candidateIdentity,
+    ));
     failures.push(...scanExtractedPackedFiles(secondPack.files, secondPayloadDir, sourceLogo));
+    failures.push(...scanPackedArchive(secondTarball));
+
+    const afterPack = resolveCandidateIdentity(candidateIdentity.candidateBaseRef);
+    if (JSON.stringify(afterPack) !== JSON.stringify(candidateIdentity)) {
+      failures.push({
+        check: "provenance-candidate-drift",
+        message: "candidate bytes changed after release provenance was frozen",
+      });
+    }
 
     if (!args.has("--skip-install-smoke")) {
       installSmoke(tarball);
@@ -155,8 +210,13 @@ function main(): void {
   const postPackState = runCapture("git", ["status", "--porcelain=v1", "--untracked-files=all"]);
   if (postPackState.status !== 0) {
     failures.push({ check: "release-worktree-state", message: postPackState.stderr || "git status after pack failed" });
-  } else {
+  } else if (authority.mode === "publish") {
     failures.push(...validateReleaseRepositoryState(postPackState.stdout));
+  } else if (JSON.stringify(resolveCandidateIdentity(candidateIdentity.candidateBaseRef)) !== JSON.stringify(candidateIdentity)) {
+    failures.push({
+      check: "provenance-candidate-drift",
+      message: "candidate bytes changed during packing",
+    });
   }
 
   if (failures.length > 0) failReleaseGate(failures);
@@ -166,6 +226,10 @@ function main(): void {
     git_commit: sourceIdentity.gitCommit,
     git_tree: sourceIdentity.gitTree,
     source_tree_sha256: sourceIdentity.sourceTreeSha256,
+    candidate_base_ref: candidateIdentity.candidateBaseRef,
+    candidate_digest: candidateIdentity.candidateDigest,
+    tracked_binary_diff_sha256: candidateIdentity.trackedBinaryDiffSha256,
+    untracked_path_set_sha256: candidateIdentity.untrackedPathSetSha256,
     tarball_integrity: tarballIntegrity,
     authoritative: authority.authoritative,
     skipped_checks: authority.skipped,
@@ -179,6 +243,7 @@ function main(): void {
 function writeReleaseProvenance(
   packageJson: PackageJson,
   sourceIdentity: ReleaseSourceIdentity,
+  candidateIdentity: ReleaseCandidateIdentity,
   generatedAt: string,
 ): void {
   writeFileSync(
@@ -190,9 +255,29 @@ function writeReleaseProvenance(
       gitCommit: sourceIdentity.gitCommit,
       gitTree: sourceIdentity.gitTree,
       sourceTreeSha256: sourceIdentity.sourceTreeSha256,
+      ...candidateIdentity,
       generatedAt,
     }, null, 2)}\n`,
   );
+}
+
+function resolveCandidateIdentity(baseRef: string): ReleaseCandidateIdentity {
+  const script = join(root, "scripts", "candidate-digest.sh");
+  const runDigest = (mode: "candidate" | "tracked" | "untracked"): string => {
+    const result = runCapture("bash", [script, baseRef, mode]);
+    const digest = result.stdout.trim();
+    if (result.status !== 0 || !/^[0-9a-f]{64}$/.test(digest)) {
+      console.error(result.stderr || `Could not compute ${mode} candidate digest.`);
+      process.exit(result.status || 1);
+    }
+    return digest;
+  };
+  return Object.freeze({
+    candidateBaseRef: baseRef,
+    candidateDigest: runDigest("candidate"),
+    trackedBinaryDiffSha256: runDigest("tracked"),
+    untrackedPathSetSha256: runDigest("untracked"),
+  });
 }
 
 function readReleaseSourceIdentity(): ReleaseSourceIdentity {
@@ -268,7 +353,7 @@ function npmPack(destination: string): PackResult {
     process.exit(result.status || 1);
   }
 
-  const parsed = JSON.parse(result.stdout) as PackResult[];
+  const parsed = parseStructuredJson<PackResult[]>(result.stdout, "npm pack metadata");
   const pack = parsed[0];
   if (!pack?.filename || !Array.isArray(pack.files)) {
     console.error("npm pack did not return package file metadata.");
@@ -357,36 +442,47 @@ function readPackedReleaseProvenance(tarball: string): {
   gitCommit?: string;
   gitTree?: string;
   sourceTreeSha256?: string;
+  candidateBaseRef?: string;
+  candidateDigest?: string;
+  trackedBinaryDiffSha256?: string;
+  untrackedPathSetSha256?: string;
   generatedAt?: string;
 } {
   return readPackedJson(tarball, "package/dist/release-provenance.json");
 }
 
 function readPackedJson<T>(tarball: string, path: string): T {
-  const result = runCapture("tar", ["-xOf", tarball, path]);
-  if (result.status !== 0) {
-    console.error(result.stderr || `Could not read ${path} from packed tarball.`);
-    process.exit(result.status || 1);
-  }
-  return JSON.parse(result.stdout) as T;
-}
-
-function collectPublicTextSurfaces(dir: string): TextFile[] {
-  return readdirSync(dir).flatMap((entry) => {
-    if ([".git", ".codewith", ".hasna", ".takumi", "node_modules", "dist", "coverage", ".tmp"].includes(entry)) return [];
-    const path = join(dir, entry);
-    const stats = statSync(path);
-    if (stats.isDirectory()) return collectPublicTextSurfaces(path);
-    if (!/\.(md|json|ya?ml|sh|ts|tsx)$/.test(path)) return [];
-    if (path.endsWith(".test.ts") || path.endsWith(".test.tsx")) return [];
-    const publicPath = relative(root, path);
-    if (!isPublicReleaseTextSurface(publicPath)) return [];
-    return [{ path: publicPath, text: readFileSync(path, "utf8") }];
-  });
+  const file = readPackedRegularFiles(tarball).find((entry) => entry.path === path);
+  if (!file) throw new Error(`Packed archive is missing ${path}`);
+  return parseStructuredJson<T>(file.bytes, path);
 }
 
 function readJson<T>(path: string): T {
-  return JSON.parse(readFileSync(join(root, path), "utf8")) as T;
+  const absolute = join(root, path);
+  const descriptor = openSync(absolute, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const before = fstatSync(descriptor);
+    if (!before.isFile() || before.size > MAX_STRUCTURED_JSON_BYTES) {
+      throw new Error(`${path} is not a bounded regular JSON file`);
+    }
+    const bytes = readFileSync(descriptor);
+    const after = fstatSync(descriptor);
+    if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || bytes.byteLength !== after.size) {
+      throw new Error(`${path} changed while it was read`);
+    }
+    return parseStructuredJson<T>(bytes, path);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function parseStructuredJson<T>(value: string | Uint8Array, label: string): T {
+  const size = typeof value === "string" ? Buffer.byteLength(value) : value.byteLength;
+  if (size > MAX_STRUCTURED_JSON_BYTES) {
+    throw new Error(`${label} exceeds ${MAX_STRUCTURED_JSON_BYTES} structured JSON bytes`);
+  }
+  const text = typeof value === "string" ? value : new TextDecoder("utf-8", { fatal: true }).decode(value);
+  return JSON.parse(text) as T;
 }
 
 function runOrExit(command: string, commandArgs: string[]): void {
@@ -404,6 +500,7 @@ function runCapture(command: string, commandArgs: string[], env: NodeJS.ProcessE
     cwd: root,
     encoding: "utf8",
     env,
+    maxBuffer: MAX_CAPTURE_BYTES,
   });
   return {
     status: result.status ?? 1,

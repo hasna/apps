@@ -1,9 +1,17 @@
 /**
- * OpenAPI 3.1 document for the versioned `/v1` cloud API. This is the SINGLE
- * source of truth the typed SDK is generated from (see scripts/generate-sdk.ts)
- * and is served live at `GET /openapi.json` and `GET /v1/openapi.json`.
+ * OpenAPI 3.1 documents for the versioned `/v1` cloud API.
+ *
+ * `buildV1OpenApiDocument` is the truthful live Stage-A contract served by the
+ * process. `buildFutureV1OpenApiDocument` preserves the disabled positive
+ * contract used to generate the future SDK without advertising those outcomes
+ * to current callers.
  */
 import { getPackageVersion } from "../lib/package-version.js";
+import {
+  TODOS_STAGE_A_DISPATCH_ORDER,
+  TODOS_STAGE_A_ROUTES,
+  type TodosStageARoute,
+} from "./stage-a-dispatch.js";
 
 const taskSchema = {
   type: "object",
@@ -14,6 +22,7 @@ const taskSchema = {
     status: { type: "string" },
     priority: { type: "string" },
     project_id: { type: "string", nullable: true },
+    task_list_id: { type: "string", nullable: true },
     assigned_to: { type: "string", nullable: true },
     agent_id: { type: "string", nullable: true },
     tags: { type: "array", items: { type: "string" } },
@@ -84,14 +93,14 @@ const planSchema = {
   },
 } as const;
 
-export function buildV1OpenApiDocument(version = getPackageVersion()) {
+export function buildFutureV1OpenApiDocument(version = getPackageVersion()) {
   return {
     openapi: "3.1.0",
     info: {
       title: "Todos V1 API",
       version,
       description:
-        "Versioned cloud API for @hasna/todos (A1 pure-remote). Authenticate with an API key via the `x-api-key` header or `Authorization: Bearer <token>`.",
+        "Future-positive contract (not live; disabled in Stage A). When a later trusted-authority stage enables it, authenticate with an API key via the `x-api-key` header or `Authorization: Bearer <token>`.",
     },
     servers: [{ url: "/" }],
     components: {
@@ -113,6 +122,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             status: { type: "string" },
             priority: { type: "string" },
             project_id: { type: "string" },
+            task_list_id: { type: "string", minLength: 1 },
             assigned_to: { type: "string" },
             agent_id: { type: "string" },
             tags: { type: "array", items: { type: "string" } },
@@ -126,6 +136,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             status: { type: "string" },
             priority: { type: "string" },
             assigned_to: { type: "string" },
+            task_list_id: { type: "string", nullable: true, minLength: 1 },
             version: { type: "number" },
           },
         },
@@ -246,6 +257,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
       },
     },
     security: [{ apiKey: [] }],
+    "x-stage-a-enabled": false,
     paths: {
       "/v1/tasks": {
         get: {
@@ -657,6 +669,202 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           },
         },
       },
+    },
+  };
+}
+
+function stageAOperationId(route: TodosStageARoute): string {
+  const suffix = `${route.method} ${route.path}`
+    .replace(/\{([^}]+)\}/g, " by $1 ")
+    .replace(/[^A-Za-z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .map((part) => part[0]!.toUpperCase() + part.slice(1))
+    .join("");
+  return `todosStageA${suffix}`;
+}
+
+function stageAResponse(route: TodosStageARoute, status: string): Record<string, unknown> {
+  if (status === "400") {
+    const schema = route.family === "v1-dispatch" || route.family === "generic-options"
+      ? { $ref: "#/components/schemas/StageACallerAuthorityRejected" }
+      : {
+          oneOf: [
+            { $ref: "#/components/schemas/StageACallerAuthorityRejected" },
+            { $ref: "#/components/schemas/ErrorEnvelope" },
+          ],
+        };
+    return {
+      description: "Caller authority was rejected, or a local request failed validation.",
+      content: { "application/json": { schema } },
+    };
+  }
+  if (status === "503") {
+    return route.path === "/ready"
+      ? {
+          description: "The process is live but hosted storage authority is unavailable.",
+          content: { "application/json": { schema: { $ref: "#/components/schemas/StageAReadinessUnavailable" } } },
+        }
+      : {
+          description: "Trusted hosted authority is unavailable before datastore or transport dependencies.",
+          content: { "application/json": { schema: { $ref: "#/components/schemas/StageAHostedAuthorityUnavailable" } } },
+        };
+  }
+  if (status === "429") {
+    return {
+      description: "The shared post-containment request rate limit was exceeded.",
+      content: { "application/json": { schema: { $ref: "#/components/schemas/RateLimitExceeded" } } },
+    };
+  }
+  if (status === "202") {
+    return { description: "The MCP JSON-RPC notification was accepted with no response body." };
+  }
+  if (status === "200" || status === "201") {
+    return { description: status === "201" ? "A local resource was created." : "Request completed." };
+  }
+  return {
+    description: "The finite route returned its documented error envelope.",
+    content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } },
+  };
+}
+
+function stageADescription(route: TodosStageARoute): string {
+  if (route.family === "v1-dispatch") {
+    return "Disabled in Stage A. Caller-supplied authority returns 400 and every ordinary request returns 503 before verifier, schema, storage, or cloud imports.";
+  }
+  if (route.family === "generic-options") {
+    return "Finite CORS preflight. It is exempt from the post-containment rate limiter; sensitive hosted paths may still return 400 or 503 at the earlier containment floor.";
+  }
+  if (route.family === "service-probe" || route.family === "openapi-probe") {
+    return "Unauthenticated finite metadata probe evaluated after containment and the shared rate limiter.";
+  }
+  if (route.family === "mcp-runtime") {
+    return "Authorized local MCP transport route. Hosted processes terminate at the Stage A containment floor before MCP imports.";
+  }
+  return "Authorized local REST route. Hosted processes terminate at the Stage A containment floor before local route, authentication, or datastore dependencies.";
+}
+
+/** Build the only OpenAPI contract served while hosted authority is disabled. */
+export function buildV1OpenApiDocument(version = getPackageVersion()) {
+  const paths: Record<string, Record<string, Record<string, unknown>>> = {};
+
+  for (const route of TODOS_STAGE_A_ROUTES) {
+    const parameters = [...route.path.matchAll(/\{([^}]+)\}/g)].map((match) => ({
+      name: match[1]!,
+      in: "path",
+      required: true,
+      schema: { type: "string" },
+    }));
+    const operation: Record<string, unknown> = {
+      operationId: stageAOperationId(route),
+      summary: `${route.method} ${route.path}`,
+      description: stageADescription(route),
+      "x-stage-a-enabled": route.family !== "v1-dispatch",
+      "x-stage-a-dispatch-family": route.family,
+      "x-stage-a-rate-limited": route.family !== "generic-options" && route.family !== "v1-dispatch",
+      "x-stage-a-cors": route.family === "generic-options" || route.path.startsWith("/api/") || route.path === "/mcp",
+      ...(route.family === "local-runtime" || route.family === "mcp-runtime"
+        ? { "x-local-api-key": true }
+        : {}),
+      ...(parameters.length > 0 ? { parameters } : {}),
+      responses: Object.fromEntries(route.statuses.map((status) => [status, stageAResponse(route, status)])),
+    };
+    paths[route.path] ??= {};
+    paths[route.path]![route.method.toLowerCase()] = operation;
+  }
+
+  return {
+    openapi: "3.1.0",
+    info: {
+      title: "Todos V1 API — Stage A containment",
+      version,
+      description:
+        "Stage A fail-closed hosted boundary. There is no authenticated success path: ordinary hosted calls return 503 and caller-forged authority claims return 400 before dependencies, request bodies, or datastore access.",
+    },
+    servers: [{ url: "/" }],
+    components: {
+      schemas: {
+        StageAHostedAuthorityUnavailable: {
+          type: "object",
+          additionalProperties: false,
+          required: ["error", "code", "reason"],
+          properties: {
+            error: { type: "string", const: "hosted_authority_unavailable" },
+            code: { type: "string", const: "HOSTED_AUTHORITY_UNAVAILABLE" },
+            reason: { type: "string", const: "authority_resolver_unavailable" },
+          },
+        },
+        StageACallerAuthorityRejected: {
+          type: "object",
+          additionalProperties: false,
+          required: ["error", "code", "source"],
+          properties: {
+            error: { type: "string", const: "caller_authority_rejected" },
+            code: { type: "string", const: "CALLER_AUTHORITY_REJECTED" },
+            source: { type: "string", enum: ["header", "query"] },
+          },
+        },
+        StageAReadinessUnavailable: {
+          type: "object",
+          additionalProperties: false,
+          required: ["status", "version", "mode", "code", "reason"],
+          properties: {
+            status: { type: "string", const: "unavailable" },
+            version: { type: "string" },
+            mode: { type: "string", const: "remote" },
+            code: { type: "string", const: "HOSTED_AUTHORITY_UNAVAILABLE" },
+            reason: { type: "string", const: "authority_resolver_unavailable" },
+          },
+        },
+        RateLimitExceeded: {
+          type: "object",
+          additionalProperties: false,
+          required: ["error", "retry_after"],
+          properties: {
+            error: { type: "string", const: "Too many requests" },
+            retry_after: { type: "number" },
+          },
+        },
+        ErrorEnvelope: {
+          type: "object",
+          required: ["error"],
+          properties: {
+            error: { type: "string" },
+            code: { type: "string" },
+          },
+          additionalProperties: true,
+        },
+      },
+    },
+    security: [],
+    paths,
+    "x-stage-a-dispatch-order": TODOS_STAGE_A_DISPATCH_ORDER,
+    "x-stage-a-rate-limit": {
+      containment_before_limiter: true,
+      finite_options_exempt: true,
+      probes_may_return_429: true,
+    },
+    "x-stage-a-sensitive-fallbacks": {
+      applies_after_containment: true,
+      api_mcp_unknown_path: { status: 404, family: "sensitive-not-found", no_io: true },
+      api_mcp_unsupported_method: { status: 405, family: "sensitive-method-not-allowed", no_io: true },
+      v1_unknown_or_unsupported: {
+        statuses: [400, 503],
+        family: "hosted-containment",
+        no_io: true,
+        precedes_finite_route_classification: true,
+      },
+    },
+    "x-stage-a-cors": {
+      finite_options_only: true,
+      v1_containment_precedes_cors: true,
+      allowed_methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+      allowed_headers: ["Content-Type", "X-API-Key", "Authorization"],
+    },
+    "x-future-positive-contract": {
+      enabled: false,
+      description:
+        "The future authenticated success schemas are retained by buildFutureV1OpenApiDocument and are not served or enabled in Stage A.",
     },
   };
 }

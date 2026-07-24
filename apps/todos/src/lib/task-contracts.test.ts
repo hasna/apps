@@ -1,6 +1,9 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { addTaskVerification } from "../db/task-commits.js";
-import { getDatabase, resetDatabase } from "../db/database.js";
+import { getDatabase, getDatabasePath, resetDatabase } from "../db/database.js";
 import { createTask, getTask, updateTask } from "../db/tasks.js";
 import {
   checkTaskDoneContract,
@@ -11,11 +14,32 @@ import {
   setTaskContract,
 } from "./task-contracts.js";
 
+const taskContractsRoot = mkdtempSync(join(tmpdir(), "todos-task-contracts-"));
+const taskContractsDb = join(taskContractsRoot, "task-contracts.db");
+const originalPrimaryDb = process.env.HASNA_TODOS_DB_PATH;
+const originalFallbackDb = process.env.TODOS_DB_PATH;
+
 beforeEach(() => {
   resetDatabase();
+  process.env.HASNA_TODOS_DB_PATH = taskContractsDb;
+  process.env.TODOS_DB_PATH = taskContractsDb;
+});
+
+afterAll(() => {
+  resetDatabase();
+  if (originalPrimaryDb === undefined) delete process.env.HASNA_TODOS_DB_PATH;
+  else process.env.HASNA_TODOS_DB_PATH = originalPrimaryDb;
+  if (originalFallbackDb === undefined) delete process.env.TODOS_DB_PATH;
+  else process.env.TODOS_DB_PATH = originalFallbackDb;
+  rmSync(taskContractsRoot, { recursive: true, force: true });
 });
 
 describe("local task contracts and reviews", () => {
+  test("uses only its explicit disposable database", () => {
+    expect(getDatabasePath()).toBe(taskContractsDb);
+    expect(getDatabase()).toBeDefined();
+  });
+
   test("stores acceptance criteria and reports missing done evidence", () => {
     const db = getDatabase();
     const task = createTask({ title: "Ship parser" }, db);

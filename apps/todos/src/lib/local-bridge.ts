@@ -266,7 +266,7 @@ export function createLocalBridgeBundle(
   options: ExportLocalBridgeOptions = {},
   db?: Database,
 ): TodosLocalBridgeBundle {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const taskIds = scopedTaskIds(options.project_id, d);
   const runRows = queryByTaskIds<Record<string, unknown>>(
     d,
@@ -642,7 +642,7 @@ export function importLocalBridgeBundle(
   options: ImportLocalBridgeOptions = {},
   db?: Database,
 ): LocalBridgeImportResult {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const validation = validateLocalBridgeBundle(bundle);
   const inserted = emptyCounts();
   const merged = emptyCounts();

@@ -39,7 +39,13 @@ function resolvePlanCliRef(ref: string, projectId: string | undefined): string {
   process.exit(1);
 }
 
-export function registerPlanTemplateCommands(program: Command) {
+export interface PlanCommandDependencies {
+  /** Test/embedding seam; the shipped runtime omits this and remains Stage-A gated. */
+  getCloudClient?: typeof getTodosCloudClient;
+}
+
+export function registerPlanTemplateCommands(program: Command, dependencies: PlanCommandDependencies = {}) {
+  const getCloudClient = dependencies.getCloudClient ?? getTodosCloudClient;
   // plans
   program
     .command("plans")
@@ -54,7 +60,7 @@ export function registerPlanTemplateCommands(program: Command) {
     .option("--complete <id>", "Mark a plan as completed")
     .action(async (opts) => {
       const globalOpts = program.opts();
-      const cloud = getTodosCloudClient();
+      const cloud = getCloudClient();
       const projectId = cloud
         ? (globalOpts.project ? await cloudResolveProjectRef(cloud, globalOpts.project) : undefined)
         : autoProject(globalOpts);

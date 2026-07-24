@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { closeDatabase, getDatabase, resetDatabase } from "../db/database.js";
+import { closeDatabase, getDatabase, openLocalSqliteDatabase, resetDatabase } from "../db/database.js";
 import { createTask } from "../db/tasks.js";
 import { discoverTaskRouteSources } from "./task-route-sources.js";
 
@@ -35,7 +35,7 @@ function seedStore(
   const dbPath = storePath(repoName);
   mkdirSync(dirname(dbPath), { recursive: true });
   copyFileSync(templateStorePath, dbPath);
-  const db = new Database(dbPath);
+  const db = openLocalSqliteDatabase(dbPath);
   try {
     db.run("PRAGMA foreign_keys = ON");
     const task = createTask({

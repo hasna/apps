@@ -145,7 +145,7 @@ export interface LinkTaskToCommitInput {
 
 /** Link a git commit SHA to a task. Upserts on same task+sha. */
 export function linkTaskToCommit(input: LinkTaskToCommitInput, db?: Database): TaskCommit {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
 
   const existing = d.query("SELECT * FROM task_commits WHERE task_id = ? AND sha = ?").get(input.task_id, input.sha) as TaskCommitRow | null;
 
@@ -217,13 +217,13 @@ export function linkTaskToCommit(input: LinkTaskToCommitInput, db?: Database): T
 
 /** Get all commits linked to a task. */
 export function getTaskCommits(taskId: string, db?: Database): TaskCommit[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return (d.query("SELECT * FROM task_commits WHERE task_id = ? ORDER BY committed_at DESC, created_at DESC").all(taskId) as TaskCommitRow[]).map(rowToCommit);
 }
 
 /** Find which task a commit SHA is linked to. */
 export function findTaskByCommit(sha: string, db?: Database): { task_id: string; commit: TaskCommit } | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query("SELECT * FROM task_commits WHERE sha = ? OR sha LIKE ? LIMIT 1").get(sha, `${sha}%`) as TaskCommitRow | null;
   if (!row) return null;
   return { task_id: row.task_id, commit: rowToCommit(row) };
@@ -231,7 +231,7 @@ export function findTaskByCommit(sha: string, db?: Database): { task_id: string;
 
 /** Remove a commit link. */
 export function unlinkTaskCommit(taskId: string, sha: string, db?: Database): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return d.run("DELETE FROM task_commits WHERE task_id = ? AND (sha = ? OR sha LIKE ?)", [taskId, sha, `${sha}%`]).changes > 0;
 }
 
@@ -246,7 +246,7 @@ export interface LinkTaskGitRefInput {
 
 /** Link a local branch or pull request URL/number to a task. Upserts on task+type+name. */
 export function linkTaskGitRef(input: LinkTaskGitRefInput, db?: Database): TaskGitRef {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const timestamp = now();
   const metadata = JSON.stringify(input.metadata || {});
   const existing = d
@@ -270,14 +270,14 @@ export function linkTaskGitRef(input: LinkTaskGitRefInput, db?: Database): TaskG
 }
 
 export function getTaskGitRefs(taskId: string, db?: Database): TaskGitRef[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return (d
     .query("SELECT * FROM task_git_refs WHERE task_id = ? ORDER BY ref_type, updated_at DESC")
     .all(taskId) as TaskGitRefRow[]).map(rowToGitRef);
 }
 
 export function findTasksByGitRef(ref: string, db?: Database): TaskGitRef[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return (d
     .query("SELECT * FROM task_git_refs WHERE name = ? OR url = ? OR name LIKE ? OR url LIKE ? ORDER BY updated_at DESC")
     .all(ref, ref, `%${ref}%`, `%${ref}%`) as TaskGitRefRow[]).map(rowToGitRef);
@@ -294,7 +294,7 @@ export interface AddTaskVerificationInput {
 }
 
 export function addTaskVerification(input: AddTaskVerificationInput, db?: Database): TaskVerification {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const id = uuid();
   const runAt = input.run_at || now();
   d.run(
@@ -315,14 +315,14 @@ export function addTaskVerification(input: AddTaskVerificationInput, db?: Databa
 }
 
 export function getTaskVerifications(taskId: string, db?: Database): TaskVerification[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return (d
     .query("SELECT * FROM task_verifications WHERE task_id = ? ORDER BY run_at DESC, created_at DESC")
     .all(taskId) as TaskVerificationRow[]).map(rowToVerification);
 }
 
 export function getTaskTraceability(taskId: string, db?: Database): TaskTraceabilityReport {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const commits = getTaskCommits(taskId, d);
   const gitRefs = getTaskGitRefs(taskId, d);
   return {

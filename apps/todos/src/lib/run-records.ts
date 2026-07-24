@@ -137,7 +137,7 @@ function appendTransition(
 }
 
 export function createRunRecord(input: CreateRunRecordInput = {}, db?: Database): RunRecord {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const id = uuid();
   const ts = now();
   const transitions: RunStatusTransition[] = [{ from: null, to: "active", at: ts, note: "run started" }];
@@ -166,13 +166,13 @@ export function createRunRecord(input: CreateRunRecordInput = {}, db?: Database)
 }
 
 export function getRunRecord(id: string, db?: Database): RunRecord | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query("SELECT * FROM run_records WHERE id = ?").get(id) as Record<string, unknown> | null;
   return row ? rowToRunRecord(row) : null;
 }
 
 export function listRunRecords(filter: ListRunRecordsFilter = {}, db?: Database): RunRecord[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const conditions: string[] = ["1=1"];
   const params: unknown[] = [];
 
@@ -206,7 +206,7 @@ export function appendRunCommand(
   options: { exit_code?: number; duration_ms?: number; stdout?: string; stderr?: string } = {},
   db?: Database,
 ): RunRecord {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const record = getRunRecord(id, d);
   if (!record) throw new Error(`Run record not found: ${id}`);
 
@@ -236,7 +236,7 @@ export function appendRunCommand(
 }
 
 export function recordFilesTouched(id: string, paths: string[], db?: Database): RunRecord {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const record = getRunRecord(id, d);
   if (!record) throw new Error(`Run record not found: ${id}`);
 
@@ -253,7 +253,7 @@ export function linkRunVerification(
   ref: Omit<RunVerificationRef, "at"> & { at?: string },
   db?: Database,
 ): RunRecord {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const record = getRunRecord(id, d);
   if (!record) throw new Error(`Run record not found: ${id}`);
 
@@ -266,7 +266,7 @@ export function linkRunVerification(
 }
 
 export function linkRunArtifact(id: string, artifactId: string, db?: Database): RunRecord {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const record = getRunRecord(id, d);
   if (!record) throw new Error(`Run record not found: ${id}`);
 
@@ -279,7 +279,7 @@ export function linkRunArtifact(id: string, artifactId: string, db?: Database): 
 }
 
 export function completeRunRecord(id: string, note?: string, db?: Database): RunRecord {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const record = getRunRecord(id, d);
   if (!record) throw new Error(`Run record not found: ${id}`);
 
@@ -293,7 +293,7 @@ export function completeRunRecord(id: string, note?: string, db?: Database): Run
 }
 
 export function failRunRecord(id: string, error: string, db?: Database): RunRecord {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const record = getRunRecord(id, d);
   if (!record) throw new Error(`Run record not found: ${id}`);
 
@@ -329,7 +329,7 @@ export function exportRunReplay(
   const path = outputPath ?? join(process.cwd(), ".todos", "replays", `${id.slice(0, 8)}.json`);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify(bundle, null, 2));
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   d.run(`UPDATE run_records SET replay_bundle = ?, updated_at = ? WHERE id = ?`, [path, now(), id]);
   return { path, bundle };
 }

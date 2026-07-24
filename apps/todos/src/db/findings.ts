@@ -285,7 +285,7 @@ function sameFinding(left: TaskFinding, right: ReturnType<typeof nextFinding>): 
 }
 
 export function upsertTaskFinding(input: UpsertTaskFindingInput, db?: Database): UpsertTaskFindingResult {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   assertTask(input.task_id, d);
   const timestamp = input.observed_at || now();
   const warnings: string[] = [];
@@ -393,7 +393,7 @@ export function upsertTaskFinding(input: UpsertTaskFindingInput, db?: Database):
 }
 
 export function listTaskFindings(filter: ListTaskFindingsFilter = {}, db?: Database): TaskFinding[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const conditions: string[] = ["1=1"];
   const params: unknown[] = [];
   if (filter.task_id) { conditions.push("task_id = ?"); params.push(filter.task_id); }
@@ -412,7 +412,7 @@ export function listCompactTaskFindings(filter: ListTaskFindingsFilter = {}, db?
 }
 
 export function resolveMissingTaskFindings(input: ResolveMissingFindingsInput, db?: Database): ResolveMissingFindingsResult {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   assertTask(input.task_id, d);
   const timestamp = input.resolved_at || now();
   const status = normalizeResolutionStatus(input.status);

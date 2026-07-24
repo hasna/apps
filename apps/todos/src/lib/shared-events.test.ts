@@ -3,11 +3,9 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Database } from "bun:sqlite";
 import { EventsClient } from "@hasna/events";
-import { closeDatabase, getDatabase, resetDatabase } from "../db/database.js";
+import { closeDatabase, getDatabase, openLocalSqliteDatabase, resetDatabase } from "../db/database.js";
 import { createProject } from "../db/projects.js";
-import { runMigrations } from "../db/schema.js";
 import { createTaskList } from "../db/task-lists.js";
 import { createTask } from "../db/tasks.js";
 import type { Task } from "../types/index.js";
@@ -74,9 +72,7 @@ describe("shared task events", () => {
     const previousHome = process.env["HOME"];
     const previousDbPath = process.env["TODOS_DB_PATH"];
     const isolatedHome = join(tempDir, "explicit-default-home");
-    const explicitDb = new Database(":memory:");
-    explicitDb.run("PRAGMA foreign_keys = ON");
-    runMigrations(explicitDb);
+    const explicitDb = openLocalSqliteDatabase(":memory:");
     try {
       delete process.env["HASNA_EVENTS_DIR"];
       delete process.env["HASNA_EVENTS_HOME"];

@@ -18,7 +18,7 @@ export function acquireLock(
   expiryMs: number = 5 * 60 * 1000,
   db?: Database,
 ): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   cleanExpiredLocks(d);
 
   const existing = d.query(
@@ -56,7 +56,7 @@ export function releaseLock(
   agentId: string,
   db?: Database,
 ): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const result = d.run(
     "DELETE FROM resource_locks WHERE resource_type = ? AND resource_id = ? AND agent_id = ?",
     [resourceType, resourceId, agentId],
@@ -69,7 +69,7 @@ export function checkLock(
   resourceId: string,
   db?: Database,
 ): ResourceLock | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   cleanExpiredLocks(d);
   return d.query(
     "SELECT * FROM resource_locks WHERE resource_type = ? AND resource_id = ?",
@@ -77,7 +77,7 @@ export function checkLock(
 }
 
 export function cleanExpiredLocks(db?: Database): number {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const result = d.run(
     "DELETE FROM resource_locks WHERE expires_at < ?",
     [new Date().toISOString()],

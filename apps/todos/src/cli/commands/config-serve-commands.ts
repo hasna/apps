@@ -6,7 +6,21 @@ import { getDatabase } from "../../db/database.js";
 import { listTasks } from "../../db/tasks.js";
 import { loadConfig } from "../../lib/config.js";
 import { getTodosGlobalDir } from "../../lib/sync-utils.js";
-import { autoProject, output, formatTaskLine, normalizeStatus, resolveTaskId } from "../helpers.js";
+import {
+  assertTodosLocalStorageRole,
+  readStageADataProperty,
+  snapshotTodosStorageEnvironment,
+} from "../../storage/config.js";
+import {
+  autoProject,
+  output,
+  formatTaskLine,
+  normalizeStatus,
+  resolveTaskId,
+  parseOptionalPositiveSafeInteger,
+  parsePositiveSafeInteger,
+  parsePositiveSafeIntegerOr,
+} from "../helpers.js";
 
 export function registerConfigServeCommands(program: Command) {
   // config
@@ -224,7 +238,7 @@ export function registerConfigServeCommands(program: Command) {
   retention
     .command("cleanup")
     .description("Dry-run by default; add --apply and the exact --confirm value to delete local retention data")
-    .requiredOption("--older-than-days <days>", "Prune records older than this many days", (value) => Number.parseInt(value, 10))
+    .requiredOption("--older-than-days <days>", "Prune records older than this many days", (value) => parsePositiveSafeInteger(value, "--older-than-days"))
     .option("--project <id>", "Project ID to scope cleanup")
     .option("--task-status <list>", "Comma-separated task statuses to include")
     .option("--run-status <list>", "Comma-separated run statuses to include")
@@ -682,9 +696,7 @@ export function registerConfigServeCommands(program: Command) {
     .description("Manage local policy packs for task done gates");
 
   function numberOption(value: string | undefined): number | undefined {
-    if (value === undefined) return undefined;
-    const parsed = Number.parseInt(value, 10);
-    return Number.isFinite(parsed) ? parsed : undefined;
+    return parseOptionalPositiveSafeInteger(value);
   }
 
   function policyInput(name: string, root: string | undefined, opts: {
@@ -951,7 +963,7 @@ export function registerConfigServeCommands(program: Command) {
     .option("--sandbox <name>", "Runner sandbox profile used before script execution")
     .option("--env <list>", "Comma-separated KEY=value environment entries for script targets")
     .option("--attempts <number>", "Delivery attempts for socket/script targets", "1")
-    .option("--backoff-ms <number>", "Backoff between retry attempts in milliseconds", "0")
+    .option("--backoff-ms <number>", "Backoff between retry attempts in milliseconds")
     .option("--disabled", "Store hook disabled")
     .action(async (name: string, opts: { event: string; target?: string; file?: string; socket?: string; command?: string; cwd?: string; sandbox?: string; env?: string; attempts?: string; backoffMs?: string; disabled?: boolean }) => {
       const globalOpts = program.opts();
@@ -968,8 +980,10 @@ export function registerConfigServeCommands(program: Command) {
         sandbox: opts.sandbox,
         env: recordOption(opts.env),
         retry: {
-          attempts: Number.parseInt(opts.attempts || "1", 10),
-          backoff_ms: Number.parseInt(opts.backoffMs || "0", 10),
+          attempts: parsePositiveSafeIntegerOr(opts.attempts, 1, "--attempts"),
+          backoff_ms: opts.backoffMs === undefined
+            ? 0
+            : parsePositiveSafeInteger(opts.backoffMs, "--backoff-ms"),
         },
       });
       if (globalOpts.json) { output(hook, true); return; }
@@ -1111,11 +1125,20 @@ export function registerConfigServeCommands(program: Command) {
     .option("--api-key <key>", "Require this API key for /api/* requests")
     .option("--no-open", "Don't open browser automatically")
     .action(async (opts) => {
+      assertTodosLocalStorageRole(process.env);
+      const environment = snapshotTodosStorageEnvironment(process.env);
       const { startServer } = await import("../../server/serve.js");
-      const requestedPort = parseInt(opts.port, 10);
+      const optionPort = readStageADataProperty(opts, "port");
+      const optionOpen = readStageADataProperty(opts, "open");
+      const optionHost = readStageADataProperty(opts, "host");
+      const optionApiKey = readStageADataProperty(opts, "apiKey");
+      const requestedPort = parsePositiveSafeInteger(String(optionPort), "--port");
       let port = requestedPort;
       // Auto-find free port if default is in use
       for (let p = requestedPort; p < requestedPort + 100; p++) {
+        // Authority denial must not be swallowed as an occupied port.
+        assertTodosLocalStorageRole(process.env);
+        assertTodosLocalStorageRole(environment);
         try {
           const s = Bun.serve({ port: p, fetch: () => new Response("") });
           s.stop(true);
@@ -1126,7 +1149,12 @@ export function registerConfigServeCommands(program: Command) {
       if (port !== requestedPort) {
         console.log(`Port ${requestedPort} in use, using ${port}`);
       }
-      await startServer(port, { open: opts.open !== false, host: opts.host, apiKey: opts.apiKey });
+      await startServer(port, {
+        open: optionOpen !== false,
+        host: optionHost as string | undefined,
+        apiKey: optionApiKey as string | undefined,
+        environment,
+      });
     });
 
   // watch
@@ -1138,7 +1166,7 @@ export function registerConfigServeCommands(program: Command) {
     .action(async (opts) => {
       const globalOpts = program.opts();
       const projectId = autoProject(globalOpts);
-      const interval = parseInt(opts.interval, 10) * 1000;
+      const interval = parsePositiveSafeInteger(opts.interval, "--interval") * 1000;
       const statusFilter = opts.status ? opts.status.split(",").map((s: string) => normalizeStatus(s.trim())) : ["pending", "in_progress"];
 
       function render() {
@@ -1196,7 +1224,8 @@ export function registerConfigServeCommands(program: Command) {
     .option("--port <n>", "Server port", "3000")
     .option("--json", "Output raw JSON events")
     .action(async (opts) => {
-      const baseUrl = `http://localhost:${opts.port}`;
+      const port = parsePositiveSafeInteger(opts.port, "--port");
+      const baseUrl = `http://localhost:${port}`;
       const params = new URLSearchParams();
       if (opts.agent) params.set("agent_id", opts.agent);
       if (opts.events) params.set("events", opts.events);
@@ -1341,7 +1370,7 @@ export function registerConfigServeCommands(program: Command) {
           project_id: projectId,
           active_view: view,
           search: opts.search,
-          limit: parseInt(opts.limit, 10),
+          limit: parsePositiveSafeInteger(opts.limit, "--limit"),
         });
         if (opts.json || globalOpts.json || opts.format === "json") {
           output(snapshot, true);
@@ -1353,6 +1382,6 @@ export function registerConfigServeCommands(program: Command) {
       const { render } = await import("ink");
       const React = await import("react");
       const { Dashboard } = await import("../components/Dashboard.js");
-      render(React.createElement(Dashboard, { projectId, refreshMs: parseInt(opts.refresh, 10) }));
+      render(React.createElement(Dashboard, { projectId, refreshMs: parsePositiveSafeInteger(opts.refresh, "--refresh") }));
     });
 }

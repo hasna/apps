@@ -7,9 +7,12 @@ import { closeDatabase, getDatabase, resetDatabase } from "../db/database.js";
 import { setMachineLocalPath } from "../db/projects.js";
 import {
   createLocalSqliteTodosStorageAdapter,
-  type TodosPostgresQueryClient,
 } from "../storage.js";
-import { TodosShadowOutbox, createTodosShadowOutbox } from "./shadow-outbox.js";
+import {
+  TodosShadowOutbox,
+  createTodosShadowOutbox,
+} from "./shadow-outbox.js";
+import type { TodosPostgresQueryClient } from "./postgres-sync.js";
 
 interface MemoryRow {
   service: string;

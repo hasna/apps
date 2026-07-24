@@ -37,7 +37,7 @@ function rowToEdge(row: KgEdgeRow): KgEdge {
  * Idempotent — uses INSERT OR IGNORE with composite unique constraint.
  */
 export function syncKgEdges(db?: Database): { synced: number } {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   let synced = 0;
 
   const tx = d.transaction(() => {
@@ -133,7 +133,7 @@ export function getRelated(
   opts?: { relation_type?: string; entity_type?: string; direction?: "outgoing" | "incoming" | "both"; limit?: number },
   db?: Database,
 ): KgEdge[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const direction = opts?.direction || "both";
   const conditions: string[] = [];
   const params: (string | number)[] = [];
@@ -176,7 +176,7 @@ export function findPath(
   opts?: { max_depth?: number; relation_types?: string[] },
   db?: Database,
 ): KgEdge[][] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const maxDepth = opts?.max_depth || 5;
 
   // BFS in application code for flexibility
@@ -230,7 +230,7 @@ export function getImpactAnalysis(
   opts?: { max_depth?: number; relation_types?: string[] },
   db?: Database,
 ): { entity_id: string; entity_type: string; depth: number; relation: string }[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const maxDepth = opts?.max_depth || 3;
   const results: { entity_id: string; entity_type: string; depth: number; relation: string }[] = [];
   const visited = new Set<string>();
@@ -278,7 +278,7 @@ export function getCriticalPath(
   opts?: { project_id?: string; limit?: number },
   db?: Database,
 ): { task_id: string; blocking_count: number; depth: number }[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
 
   // Get all dependency edges
   let sql = `SELECT source_id, target_id FROM kg_edges WHERE relation_type = 'depends_on'`;
@@ -349,7 +349,7 @@ export function addKgEdge(
   metadata?: Record<string, unknown>,
   db?: Database,
 ): KgEdge {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const id = uuid();
   const timestamp = now();
   d.run(
@@ -369,7 +369,7 @@ export function removeKgEdges(
   relationType?: string,
   db?: Database,
 ): number {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   if (relationType) {
     return d.run(
       "DELETE FROM kg_edges WHERE source_id = ? AND target_id = ? AND relation_type = ?",

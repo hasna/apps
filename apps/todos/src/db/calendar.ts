@@ -155,7 +155,7 @@ function inWindow(event: CalendarEvent, query: CalendarQuery): boolean {
 }
 
 export function createCalendarItem(input: CreateCalendarItemInput, db?: Database): LocalCalendarItem {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const id = uuid();
   const timestamp = now();
   const kind = input.kind || "work_block";
@@ -186,7 +186,7 @@ export function createCalendarItem(input: CreateCalendarItemInput, db?: Database
 }
 
 export function getCalendarItem(id: string, db?: Database): LocalCalendarItem | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const resolved = id.length >= 36
     ? id
     : ((d.query("SELECT id FROM local_calendar_items WHERE id LIKE ?").all(`${id}%`) as { id: string }[]).length === 1
@@ -197,7 +197,7 @@ export function getCalendarItem(id: string, db?: Database): LocalCalendarItem | 
 }
 
 export function listCalendarItems(query: CalendarQuery = {}, db?: Database): LocalCalendarItem[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const conditions: string[] = [];
   const params: SQLQueryBindings[] = [];
   if (query.project_id) { conditions.push("project_id = ?"); params.push(query.project_id); }
@@ -215,7 +215,7 @@ export function listCalendarItems(query: CalendarQuery = {}, db?: Database): Loc
 }
 
 export function listCalendarEvents(query: CalendarQuery = {}, db?: Database): CalendarEvent[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const taskFilter = {
     project_id: query.project_id,
     plan_id: query.plan_id,
@@ -356,7 +356,7 @@ function parseIcsDate(value: string): string {
 }
 
 export function importCalendarIcs(content: string, db?: Database): IcsImportResult {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const unfolded = content.replace(/\r?\n[ \t]/g, "");
   const blocks = unfolded.match(/BEGIN:VEVENT[\s\S]*?END:VEVENT/g) || [];
   const items: LocalCalendarItem[] = [];

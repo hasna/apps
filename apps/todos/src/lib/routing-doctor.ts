@@ -575,7 +575,7 @@ function applySafeRepair(
 }
 
 export function runRoutingDoctor(options: RunRoutingDoctorOptions = {}): RoutingDoctorResult {
-  const db = options.db ?? getDatabase();
+  const db = getDatabase(options.db);
   const dbPath = options.dbPath ?? getDatabasePath();
   const clock = options.now ?? now;
   const generatedAt = clock();

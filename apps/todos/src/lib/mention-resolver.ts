@@ -463,7 +463,7 @@ function resolveUnknown(parsed: ParsedMention, workspace: string, db: Database, 
 
 export function resolveMentions(input: MentionResolverInput, db?: Database): MentionResolutionReport {
   const workspace = normalizeWorkspace(input.workspace);
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const maxSymbolMatches = Math.max(1, Math.min(input.max_symbol_matches ?? 20, 100));
   const references = input.mentions.map((mention) => {
     const parsed = parseMention(mention);

@@ -57,7 +57,7 @@ function hasOwnField(fields: Partial<LocalTaskFields>, key: keyof LocalTaskField
 }
 
 export function getTaskLocalFields(taskId: string, db?: Database): LocalTaskFields {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const task = getTask(taskId, d);
   if (!task) throw new TaskNotFoundError(taskId);
   const fields = metadataFields(task);
@@ -76,7 +76,7 @@ export function setTaskLocalFields(
   input: SetTaskLocalFieldsInput,
   db?: Database,
 ): Task {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const task = getTask(taskId, d);
   if (!task) throw new TaskNotFoundError(taskId);
   const currentFields = getTaskLocalFields(taskId, d);
@@ -109,7 +109,7 @@ export function setTaskLocalFields(
 }
 
 export function queryTasksByLocalFields(query: LocalTaskFieldQuery, db?: Database): Task[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const tasks = listTasks({
     priority: query.priority,
     tags: query.labels,

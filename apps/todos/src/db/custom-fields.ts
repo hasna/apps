@@ -71,7 +71,7 @@ export function createCustomFieldDefinition(input: CreateCustomFieldInput, db?: 
     throw new Error("Enum fields require options");
   }
 
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const id = uuid();
   const ts = now();
   const slug = slugify(input.name);
@@ -99,14 +99,14 @@ export function createCustomFieldDefinition(input: CreateCustomFieldInput, db?: 
 }
 
 export function getCustomFieldDefinition(idOrSlug: string, db?: Database): CustomFieldDefinition | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   let row = d.query("SELECT * FROM custom_field_definitions WHERE id = ?").get(idOrSlug) as FieldDefRow | null;
   if (!row) row = d.query("SELECT * FROM custom_field_definitions WHERE slug = ?").get(slugify(idOrSlug)) as FieldDefRow | null;
   return row ? rowToDef(row) : null;
 }
 
 export function listCustomFieldDefinitions(projectId?: string, db?: Database): CustomFieldDefinition[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const rows = projectId
     ? d.query("SELECT * FROM custom_field_definitions WHERE project_id IS NULL OR project_id = ? ORDER BY sort_order, name").all(projectId) as FieldDefRow[]
     : d.query("SELECT * FROM custom_field_definitions ORDER BY sort_order, name").all() as FieldDefRow[];
@@ -114,7 +114,7 @@ export function listCustomFieldDefinitions(projectId?: string, db?: Database): C
 }
 
 export function deleteCustomFieldDefinition(idOrSlug: string, db?: Database): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const def = getCustomFieldDefinition(idOrSlug, d);
   if (!def) return false;
   d.run("DELETE FROM task_custom_field_values WHERE field_id = ?", [def.id]);
@@ -150,7 +150,7 @@ export function setTaskCustomField(
   value: string | number | boolean | null,
   db?: Database,
 ): TaskCustomFieldValue {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const def = getCustomFieldDefinition(fieldIdOrSlug, d);
   if (!def) throw new Error(`Custom field not found: ${fieldIdOrSlug}`);
 
@@ -178,7 +178,7 @@ export function setTaskCustomField(
 }
 
 export function getTaskCustomFields(taskId: string, db?: Database): TaskCustomFieldValue[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const rows = d.query(
     `SELECT d.*, v.value AS field_value
      FROM custom_field_definitions d
@@ -205,7 +205,7 @@ export function setTaskPriorityMeta(
   input: { priority_score?: number; priority_reason?: string },
   db?: Database,
 ): void {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   if (input.priority_score !== undefined) {
     if (input.priority_score < 0 || input.priority_score > 100) {
       throw new Error("priority_score must be between 0 and 100");
@@ -218,7 +218,7 @@ export function setTaskPriorityMeta(
 }
 
 export function exportTaskFields(taskId: string, db?: Database): Record<string, unknown> {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const task = d.query("SELECT priority, priority_score, priority_reason FROM tasks WHERE id = ?").get(taskId) as {
     priority: string;
     priority_score: number | null;

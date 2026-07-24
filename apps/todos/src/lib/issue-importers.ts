@@ -391,7 +391,7 @@ function issueToCreateTaskInput(
 }
 
 export function previewIssueImport(input: IssueImportInput, db?: Database): IssueImportPreview {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const loaded = loadIssueExportInput(input);
   const source = input.source === "auto" || !input.source ? detectIssueExportSource(loaded.data) : input.source;
   const issues = parseIssueExport(loaded.data, source);
@@ -426,7 +426,7 @@ export function importIssues(
   options: IssueImportOptions = {},
   db?: Database,
 ): IssueImportResult {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const preview = previewIssueImport(input, d);
   const result: IssueImportResult = {
     schema_version: ISSUE_IMPORT_SCHEMA,

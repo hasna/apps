@@ -246,7 +246,7 @@ export function getLocalActivityTimeline(
   options: LocalActivityTimelineOptions = {},
   db?: Database,
 ): LocalActivityTimelinePage {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const order = options.order || "desc";
   const limit = clampLimit(options.limit);
   const offset = Math.max(0, Math.floor(options.offset || 0));

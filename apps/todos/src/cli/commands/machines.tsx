@@ -24,6 +24,7 @@ import {
   updateMachineHeartbeat,
   getMachineTopologyDiagnostics,
 } from "../../db/machines.js";
+import { parsePositiveSafeInteger } from "../../lib/positive-safe-integer.js";
 
 function getOrCreateLocalMachineName(): string {
   return process.env["TODOS_MACHINE_NAME"] || require("node:os").hostname() || "unknown";
@@ -374,9 +375,11 @@ export function registerMachineCommands(program: Command) {
     .option("-j, --json", "Output as JSON")
     .action((opts) => {
       try {
-        const staleMinutes = Number.parseInt(opts.staleMinutes, 10);
-        if (!Number.isFinite(staleMinutes) || staleMinutes < 1) {
-          console.error(chalk.red("Invalid --stale-minutes value. Must be a positive integer."));
+        let staleMinutes: number;
+        try {
+          staleMinutes = parsePositiveSafeInteger(opts.staleMinutes, "--stale-minutes");
+        } catch (error) {
+          console.error(chalk.red(error instanceof Error ? error.message : "--stale-minutes must be a positive integer"));
           process.exit(1);
         }
         const diagnostics = getMachineTopologyDiagnostics({

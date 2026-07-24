@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { closeDatabase } from "../db/database.js";
 import { buildServer } from "./index.js";
 import { healthResponse, isHttpMode, resolveHttpPort } from "./http.js";
@@ -20,6 +21,49 @@ function reserveFreePort(start: number): number {
     }
   }
   throw new Error(`No free port found near ${start}`);
+}
+
+async function initializeMcp(baseUrl: string, id: number): Promise<string> {
+  const response = await fetch(`${baseUrl}/mcp`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-03-26",
+        capabilities: {},
+        clientInfo: { name: `todos-http-test-${id}`, version: "1.0.0" },
+      },
+    }),
+  });
+  expect(response.status).toBe(200);
+  const body = await response.json();
+  return body.result.protocolVersion;
+}
+
+async function sendInitializedNotification(baseUrl: string, protocolVersion: string) {
+  const response = await fetch(`${baseUrl}/mcp`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+      "mcp-protocol-version": protocolVersion,
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      method: "notifications/initialized",
+    }),
+  });
+  return {
+    status: response.status,
+    contentType: response.headers.get("content-type"),
+    body: await response.text(),
+  };
 }
 
 describe("todos MCP HTTP transport", () => {
@@ -125,6 +169,11 @@ describe("todos MCP HTTP transport", () => {
     const initBody = await initRes.json();
     expect(initBody.result.serverInfo.name).toBe("todos");
 
+    expect(await sendInitializedNotification(
+      `http://127.0.0.1:${port}`,
+      initBody.result.protocolVersion,
+    )).toEqual({ status: 202, contentType: null, body: "" });
+
     const toolsRes = await fetch(`http://127.0.0.1:${port}/mcp`, {
       method: "POST",
       headers: {
@@ -143,6 +192,52 @@ describe("todos MCP HTTP transport", () => {
     const toolsBody = await toolsRes.json();
     expect(toolsBody.result.tools.some((tool: { name: string }) => tool.name === "list_tasks")).toBe(true);
   });
+
+  it("source and built MCP transports return identical accepted-notification responses", async () => {
+    const outputRoot = await mkdtemp(join(tmpdir(), "todos-mcp-http-built-"));
+    const builtPort = reserveFreePort(19081);
+    let builtServer: ReturnType<typeof Bun.serve> | undefined;
+    try {
+      const build = Bun.spawnSync([
+        process.execPath,
+        "build",
+        "src/mcp/http.ts",
+        "--outfile",
+        join(outputRoot, "http.js"),
+        "--target",
+        "bun",
+      ], { cwd: join(import.meta.dir, "../.."), stdout: "pipe", stderr: "pipe" });
+      expect(build.exitCode, build.stderr.toString()).toBe(0);
+      const built = await import(`${pathToFileURL(join(outputRoot, "http.js")).href}?built=${Date.now()}`) as {
+        startHttpServer: typeof import("./http.js").startHttpServer;
+      };
+      builtServer = await built.startHttpServer(builtPort, {
+        createServer: buildServer,
+        name: "todos",
+        environment: {
+          ...process.env,
+          HASNA_TODOS_STORAGE_MODE: "local",
+          TODOS_STORAGE_MODE: "local",
+        },
+      });
+
+      const sourceBase = `http://127.0.0.1:${port}`;
+      const builtBase = `http://127.0.0.1:${builtPort}`;
+      const [sourceVersion, builtVersion] = await Promise.all([
+        initializeMcp(sourceBase, 9101),
+        initializeMcp(builtBase, 9102),
+      ]);
+      const [source, bundled] = await Promise.all([
+        sendInitializedNotification(sourceBase, sourceVersion),
+        sendInitializedNotification(builtBase, builtVersion),
+      ]);
+      expect(source).toEqual({ status: 202, contentType: null, body: "" });
+      expect(bundled).toEqual(source);
+    } finally {
+      builtServer?.stop(true);
+      await rm(outputRoot, { recursive: true, force: true });
+    }
+  }, 30_000);
 
   it("serves multiple concurrent MCP clients from one todos-serve process", async () => {
     async function listToolCount(clientId: number): Promise<number> {

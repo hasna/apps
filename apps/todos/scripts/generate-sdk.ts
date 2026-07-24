@@ -1,8 +1,9 @@
 #!/usr/bin/env bun
 /**
- * Generate the typed `/v1` SDK client from the serve OpenAPI document.
+ * Generate the typed `/v1` SDK client from the disabled future-positive
+ * OpenAPI document. The live served document is Stage-A containment only.
  *
- * Source of truth: src/server/openapi.ts (also served at GET /openapi.json).
+ * Source of truth: src/server/openapi.ts (`buildFutureV1OpenApiDocument`).
  * Output: src/sdk/v1.generated.ts — a dependency-free typed fetch client.
  *
  * Usage: bun run scripts/generate-sdk.ts
@@ -11,10 +12,10 @@ import { writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { generateSdkFromOpenApi } from "@hasna/contracts/sdk";
-import { buildV1OpenApiDocument } from "../src/server/openapi.js";
+import { buildFutureV1OpenApiDocument } from "../src/server/openapi.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const spec = buildV1OpenApiDocument();
+const spec = buildFutureV1OpenApiDocument();
 const { code, operations, warnings } = generateSdkFromOpenApi(spec as never, {
   className: "TodosV1Client",
   apiKeyHeader: "x-api-key",

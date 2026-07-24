@@ -406,7 +406,7 @@ export function listLocalReportTypes(): LocalReportType[] {
 }
 
 export function createLocalReport(options: LocalReportOptions = {}, db?: Database): LocalReport {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const limit = limitValue(options.limit);
   const generatedAt = options.generated_at ?? new Date().toISOString();
   const nowIso = options.now ?? generatedAt;

@@ -35,7 +35,7 @@ function assertStartable(task: Task, agentId: string): void {
 }
 
 export function getBlockingDeps(id: string, db?: Database): Task[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const deps = getTaskDependencies(id, d);
   if (deps.length === 0) return [];
   const blocking: Task[] = [];
@@ -51,7 +51,7 @@ export function startTask(
   agentId: string,
   db?: Database,
 ): Task {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const databasePath = databasePathFromDatabase(d);
   const task = getTask(id, d);
   if (!task) throw new TaskNotFoundError(id);
@@ -109,7 +109,7 @@ export function completeTask(
   db?: Database,
   options?: { files_changed?: string[]; test_results?: string; commit_hash?: string; notes?: string; attachment_ids?: string[]; skip_recurrence?: boolean; confidence?: number; completed_at?: string },
 ): Task {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const databasePath = databasePathFromDatabase(d);
   const task = getTask(id, d);
   if (!task) throw new TaskNotFoundError(id);
@@ -283,7 +283,7 @@ export function lockTask(
   agentId: string,
   db?: Database,
 ): LockResult {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const task = getTask(id, d);
   if (!task) throw new TaskNotFoundError(id);
   if (task.status === "completed" || task.status === "cancelled") {
@@ -346,7 +346,7 @@ export function unlockTask(
   agentId?: string,
   db?: Database,
 ): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const task = getTask(id, d);
   if (!task) throw new TaskNotFoundError(id);
 
@@ -375,7 +375,7 @@ export interface TaskLockStatus {
 }
 
 export function getTaskLockStatus(id: string, db?: Database): TaskLockStatus {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const task = getTask(id, d);
   if (!task) throw new TaskNotFoundError(id);
   const expired = isLockExpired(task.locked_at);
@@ -394,7 +394,7 @@ export function claimNextTask(
   filters?: { project_id?: string; task_list_id?: string; plan_id?: string; tags?: string[] },
   db?: Database,
 ): Task | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
 
   // M7: If another process wins the race between getNextTask and startTask,
   // startTask throws ("changed during claim" / LockError). Instead of failing
@@ -426,7 +426,7 @@ export function getNextTask(
   filters?: { project_id?: string; task_list_id?: string; plan_id?: string; tags?: string[] },
   db?: Database,
 ): Task | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   clearExpiredLocks(d);
 
   const conditions: string[] = ["status = 'pending'", "(locked_by IS NULL OR locked_at < ?)"];
@@ -486,7 +486,7 @@ export function getActiveWork(
   filters?: { project_id?: string; task_list_id?: string },
   db?: Database,
 ): ActiveWorkItem[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   clearExpiredLocks(d);
   const conditions: string[] = ["status = 'in_progress'"];
   const params: SQLQueryBindings[] = [];
@@ -509,7 +509,7 @@ export function getTasksChangedSince(
   filters?: { project_id?: string; task_list_id?: string },
   db?: Database,
 ): Task[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const conditions: string[] = ["updated_at > ?"];
   const params: SQLQueryBindings[] = [since];
 
@@ -528,7 +528,7 @@ export function failTask(
   options?: { retry?: boolean; retry_after?: string; error_code?: string },
   db?: Database,
 ): { task: Task; retryTask?: Task } {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const databasePath = databasePathFromDatabase(d);
   const task = getTask(id, d);
   if (!task) throw new TaskNotFoundError(id);
@@ -636,7 +636,7 @@ export function getStaleTasks(
   filters?: { project_id?: string; task_list_id?: string },
   db?: Database,
 ): Task[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const staleMinutes = typeof staleQuery === "number"
     ? staleQuery
     : staleQuery.minutes ?? (staleQuery.hours !== undefined ? staleQuery.hours * 60 : 30);
@@ -671,7 +671,7 @@ export function stealTask(
   opts?: { stale_minutes?: number; project_id?: string; task_list_id?: string },
   db?: Database,
 ): Task | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const databasePath = databasePathFromDatabase(d);
   const staleMinutes = opts?.stale_minutes ?? 30;
   const staleTasks = getStaleTasks(staleMinutes, { project_id: opts?.project_id, task_list_id: opts?.task_list_id }, d);
@@ -710,7 +710,7 @@ export function claimOrSteal(
   filters?: { project_id?: string; task_list_id?: string; plan_id?: string; tags?: string[]; stale_minutes?: number },
   db?: Database,
 ): { task: Task; stolen: boolean } | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const tx = d.transaction(() => {
     // Try normal claim first
     const next = getNextTask(agentId, filters, d);

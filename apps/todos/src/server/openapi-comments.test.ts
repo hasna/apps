@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { buildV1OpenApiDocument } from "./openapi.js";
+import { buildFutureV1OpenApiDocument } from "./openapi.js";
 import { TodosV1Client } from "../sdk/v1.generated.js";
 
 describe("task comments OpenAPI contract", () => {
   test("documents bounded cursor reads and comment writes", () => {
-    const document = buildV1OpenApiDocument("test");
+    const document = buildFutureV1OpenApiDocument("test");
     const path = document.paths["/v1/tasks/{id}/comments"];
 
     expect(path.get.operationId).toBe("listTaskComments");
@@ -64,7 +64,7 @@ describe("task comments OpenAPI contract", () => {
 
 describe("task list and completion OpenAPI contract", () => {
   test("documents exhaustive task pagination, total, filters, and completion evidence", () => {
-    const document = buildV1OpenApiDocument("test");
+    const document = buildFutureV1OpenApiDocument("test");
     const list = document.paths["/v1/tasks"].get;
     expect(list.parameters.map((parameter) => parameter.name)).toEqual([
       "status",
@@ -121,11 +121,38 @@ describe("task list and completion OpenAPI contract", () => {
       "status=pending&priority=high&project_id=project&parent_id=parent&include_subtasks=true&plan_id=plan&task_list_id=list&assigned_to=assignee&agent_id=agent&limit=1&offset=6",
     );
   });
+
+  test("task-list mutation preserves omitted-versus-null semantics through OpenAPI and SDK", async () => {
+    const document = buildFutureV1OpenApiDocument("test");
+    expect(document.components.schemas.Task.properties.task_list_id)
+      .toEqual({ type: "string", nullable: true });
+    expect(document.components.schemas.CreateTaskInput.properties.task_list_id)
+      .toEqual({ type: "string", minLength: 1 });
+    expect(document.components.schemas.UpdateTaskInput.properties.task_list_id)
+      .toEqual({ type: "string", nullable: true, minLength: 1 });
+
+    const bodies: string[] = [];
+    const client = new TodosV1Client({
+      baseUrl: "https://todos.test",
+      fetch: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        bodies.push(String(init?.body));
+        return Response.json({ task: { id: "task-one", title: "Task", task_list_id: null } });
+      }) as typeof fetch,
+    });
+    const clear: Parameters<TodosV1Client["updateTask"]>[1] = { task_list_id: null };
+    const omitted: Parameters<TodosV1Client["updateTask"]>[1] = {};
+    await client.updateTask("task-one", clear);
+    await client.updateTask("task-one", omitted);
+    expect(bodies).toEqual([
+      JSON.stringify({ task_list_id: null }),
+      JSON.stringify({}),
+    ]);
+  });
 });
 
 describe("project mutation OpenAPI contract", () => {
   test("preserves create routing compatibility, closes generic update, and exposes atomic rename", () => {
-    const document = buildV1OpenApiDocument("test");
+    const document = buildFutureV1OpenApiDocument("test");
     const createProperties = document.components.schemas.CreateProjectInput.properties;
     const updateProperties = document.components.schemas.UpdateProjectInput.properties;
 
@@ -138,7 +165,7 @@ describe("project mutation OpenAPI contract", () => {
   });
 
   test("documents non-empty slug-bearing inputs and closed task-list bodies", () => {
-    const schemas = buildV1OpenApiDocument("test").components.schemas;
+    const schemas = buildFutureV1OpenApiDocument("test").components.schemas;
 
     expect(schemas.CreateProjectInput.properties.name.pattern).toBe(".*[A-Za-z0-9].*");
     expect(schemas.RenameProjectInput.properties.new_slug.pattern).toBe(".*[A-Za-z0-9].*");
@@ -150,7 +177,7 @@ describe("project mutation OpenAPI contract", () => {
 
 describe("plan mutation OpenAPI contract", () => {
   test("documents plan create, list, get, update, and delete for SDK generation", () => {
-    const document = buildV1OpenApiDocument();
+    const document = buildFutureV1OpenApiDocument();
     expect(document.paths["/v1/plans"].get.operationId).toBe("listPlans");
     expect(document.paths["/v1/plans"].post.operationId).toBe("createPlan");
     expect(document.paths["/v1/plans/{id}"].get.operationId).toBe("getPlan");

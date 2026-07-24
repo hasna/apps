@@ -72,7 +72,7 @@ export function registerLocalMachine(db?: Database): Machine {
 }
 
 export function getPathOverrides(db?: Database): MachinePathOverride[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const projects = listProjects(d);
   const projectById = new Map(projects.map((p) => [p.id, p]));
   const rows = d.query("SELECT * FROM project_machine_paths ORDER BY project_id, machine_id").all() as Array<{
@@ -96,7 +96,7 @@ export function getPathOverrides(db?: Database): MachinePathOverride[] {
 }
 
 export function getMachineAgentSummaries(db?: Database): MachineAgentSummary[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const staleMinutes = 30;
   const cutoff = Date.now() - staleMinutes * 60 * 1000;
 
@@ -110,7 +110,7 @@ export function getMachineAgentSummaries(db?: Database): MachineAgentSummary[] {
 }
 
 export function buildMachineTopologyReport(db?: Database): MachineTopologyReport {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const local = registerLocalMachine(d);
   const localId = local.id;
   const machines = listMachines(d);
