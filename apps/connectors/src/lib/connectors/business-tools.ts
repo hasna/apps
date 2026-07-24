@@ -1151,6 +1151,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["tasks", "slack", "productivity"],
   },
   {
+    name: "workato",
+    displayName: "Workato",
+    description: "Automation recipes, jobs, connections, and projects",
+    category: "Business Tools",
+    tags: ["automation", "integration", "recipes"],
+  },
+  {
     name: "workboard",
     displayName: "Workboard",
     description: "OKR and strategy execution platform",
