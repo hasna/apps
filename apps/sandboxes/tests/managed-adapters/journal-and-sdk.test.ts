@@ -86,13 +86,26 @@ describe("managed package boundary", () => {
         import: "./dist/index.js",
         default: "./dist/index.js",
       },
+      "./managed": {
+        types: "./dist/types/index.d.ts",
+        import: "./dist/index.js",
+        default: "./dist/index.js",
+      },
+      "./postgres": {
+        types: "./dist/types/postgres.d.ts",
+        import: "./dist/postgres.js",
+        default: "./dist/postgres.js",
+      },
     })
     expect(manifest.files).toEqual([
       "dist/index.js",
+      "dist/postgres.js",
       "dist/cli/index.js",
       "dist/mcp/index.js",
       "dist/adapters/managed/e2b-guest-broker-v1.py",
       "dist/types",
+      "migrations/disposable-task-journal",
+      "migrations/durable-journal-witness",
     ])
     expect(manifest.dependencies?.["@types/ws"]).toBe("8.18.1")
     expect(manifest.scripts?.prepack).toBe("bun run build")

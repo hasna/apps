@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Added
+
+- **Restored the durable native managed-task contract without restoring the
+  removed legacy store.** `@hasna/sandboxes/managed` now provides an explicit
+  stable alias for the V2 disposable-task preparation/authorization lifecycle,
+  while `@hasna/sandboxes/postgres` exposes its narrow durable PostgreSQL
+  journal and independent signed witness. Checked migrations, least-privilege
+  role attestation, idempotent replay, provider-effect transitions, restart
+  recovery, package-consumer types, and disposable PostgreSQL integration
+  harnesses are included. The self-hosted path has no cloud-provider
+  dependency and the authority envelope remains opaque to Sandboxes.
+
 ### Fixed
 
 - **`sandboxes --version` reports the real package version.** The CLI hardcoded
