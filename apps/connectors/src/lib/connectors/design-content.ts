@@ -171,6 +171,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["video", "hosting", "streaming"],
   },
   {
+    name: "wistia",
+    displayName: "Wistia",
+    description: "Video hosting and analytics",
+    category: "Design & Content",
+    tags: ["video", "hosting", "analytics"],
+  },
+  {
     name: "wordpress",
     displayName: "WordPress",
     description: "CMS posts, pages, media, and site management",
