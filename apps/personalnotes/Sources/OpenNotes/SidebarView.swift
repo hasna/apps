@@ -1,7 +1,7 @@
 import OpenNotesCore
 import SwiftUI
 
-/// Narrow purple sidebar: Library / Folders / Labels / Machines. Status filtering is gone
+/// Narrow purple sidebar: Library / Folders / Labels. Status filtering is gone
 /// from here (it lives in the editor's settings popover).
 struct SidebarView: View {
     @ObservedObject var store: NotesStore
@@ -18,7 +18,6 @@ struct SidebarView: View {
                 librarySection
                 foldersSection
                 if !store.allLabels.isEmpty { labelsSection }
-                machinesSection
                 Spacer(minLength: 8)
             }
             .padding(14)
@@ -123,49 +122,6 @@ struct SidebarView: View {
         }
     }
 
-    // MARK: - Machines
-
-    private var machinesSection: some View {
-        section(title: "Machines", trailing: {
-            Button { store.syncFleet() } label: {
-                if case .syncing = store.syncState {
-                    ProgressView().controlSize(.small).tint(.white)
-                } else {
-                    Image(systemName: "arrow.triangle.2.circlepath")
-                        .font(.system(size: 11, weight: .semibold))
-                }
-            }
-            .buttonStyle(.plain)
-            .help("Sync notes across machines")
-        }) {
-            filterRow(.thisMachine, icon: "desktopcomputer", label: "This Machine")
-            filterRow(.allMachines, icon: "rectangle.stack", label: "All Machines")
-            ForEach(otherMachines) { machine in
-                filterRow(.machine(machine.id), icon: "macpro.gen3.server", label: machine.displayName)
-            }
-            if store.visibleMachinesPage.hasMore {
-                Button("View more") { store.loadMoreMachines() }
-                    .font(.caption)
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.white.opacity(0.75))
-                    .padding(.leading, 34)
-                    .padding(.top, 3)
-            }
-            if case .failed(let msg) = store.syncState {
-                Text(msg)
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.6))
-                    .lineLimit(2)
-                    .padding(.leading, 6)
-            }
-        }
-    }
-
-    /// Machines that own notes, excluding the local machine (which has its own row).
-    private var otherMachines: [MachineDisplay] {
-        store.visibleMachinesPage.items.filter { !store.isLocalMachine($0) }
-    }
-
     // MARK: - Building blocks
 
     @ViewBuilder
@@ -194,15 +150,7 @@ struct SidebarView: View {
         let count = store.count(for: target)
         return Button {
             withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
-                if case .machine(let machineID) = target {
-                    store.selectMachine(machineID)
-                } else if target == .thisMachine {
-                    store.selectThisMachine()
-                } else if target == .allMachines {
-                    store.selectAllMachines()
-                } else {
-                    store.filter = target
-                }
+                store.filter = target
             }
         } label: {
             HStack(spacing: 9) {

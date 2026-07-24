@@ -268,7 +268,7 @@ function terminalGoalStatus(text, pendingConfirmation) {
     const status = explicit[1].toLowerCase().replace(/[- ]/g, '_');
     return status === 'needs_input' ? 'needs_input' : status;
   }
-  if (/\b(needs? (user )?input|need you to|please provide|which note|what label|what machine|which machine)\b/.test(value)) return 'needs_input';
+  if (/\b(needs? (user )?input|need you to|please provide|which note|what label)\b/.test(value)) return 'needs_input';
   if (/\b(blocked|cannot continue|not possible|unable to proceed)\b/.test(value)) return 'blocked';
   return 'blocked';
 }
@@ -355,7 +355,6 @@ function noteRef(note) {
     title: note.title || 'Untitled Note',
     labels: Array.isArray(note.labels) ? note.labels : [],
     status: note.status || 'active',
-    machine: note.machine || '',
     updatedAt: note.updatedAt || '',
   };
 }
@@ -381,7 +380,6 @@ function notesFromBody(body) {
     body: String(note.body || note.content || ''),
     labels: Array.isArray(note.labels) ? note.labels.map(String) : [],
     status: String(note.status || 'active'),
-    machine: String(note.machine || ''),
     updatedAt: String(note.updatedAt || ''),
     createdAt: String(note.createdAt || ''),
   })).filter(note => note.id) : [];
@@ -498,7 +496,7 @@ async function handleChat(req, res) {
       : '';
     const instructions =
       'You are Hasna Notes Chat, an agentic local notes assistant. Coordinate internally as Planner, Notes Operator, Label Curator, and Safety Reviewer. ' +
-      'Use tools for note facts and cite note titles/ids. Prefer narrow, reversible operations. Destructive, broad, or cross-machine changes must stay as approval previews unless the host later confirms them. ' +
+      'Use tools for note facts and cite note titles/ids. Prefer narrow, reversible operations. Destructive or broad changes must stay as approval previews unless the host later confirms them. ' +
       'Never claim a write happened when a tool returned requiresConfirmation/dryRun.' +
       selectedNote + labelContext + goalInstructions;
     const agent = new ToolLoopAgent({

@@ -1,12 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { execFile } from 'node:child_process';
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { promisify } from 'node:util';
-
-const execFileAsync = promisify(execFile);
 
 export function dataRoot() {
   return process.env.HASNA_NOTES_ROOT || join(homedir(), '.hasna', 'apps', 'notes');
@@ -22,10 +18,6 @@ function labelsFile(root = dataRoot()) {
 
 function settingsFile(root = dataRoot()) {
   return join(root, 'settings.json');
-}
-
-function machinesManifestFile() {
-  return process.env.HASNA_MACHINES_MANIFEST || join(homedir(), '.hasna', 'machines', 'machines.json');
 }
 
 export const DEFAULT_TRASH_RETENTION_DAYS = 30;
@@ -49,38 +41,8 @@ function parsePositiveInt(value, fallback) {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
 }
 
-function parseBoolean(value) {
-  if (typeof value === 'boolean') return value;
-  if (value == null || value === '') return null;
-  if (/^(true|1|yes|online)$/i.test(String(value))) return true;
-  if (/^(false|0|no|offline)$/i.test(String(value))) return false;
-  return null;
-}
-
 function objectValue(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-}
-
-function pickString(entry, keys, fallback = '') {
-  for (const key of keys) {
-    const value = entry?.[key];
-    if (value != null && String(value).trim()) return String(value).trim();
-  }
-  return fallback;
-}
-
-function pickTimestamp(entry, keys) {
-  for (const key of keys) {
-    const value = entry?.[key];
-    if (!value) continue;
-    const d = new Date(value);
-    if (!Number.isNaN(d.getTime())) return d.toISOString();
-  }
-  return '';
-}
-
-function hasObjectKeys(value) {
-  return value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0;
 }
 
 function paginationFrom(value, fallback = {}) {
@@ -105,24 +67,6 @@ function paginationFrom(value, fallback = {}) {
     next_offset: nextOffset,
     order: p.order || fallback.order || 'updated_at_desc',
   };
-}
-
-function maxISO(values) {
-  let max = '';
-  for (const value of values) {
-    if (!value) continue;
-    const time = Date.parse(value);
-    if (Number.isNaN(time)) continue;
-    if (!max || time > Date.parse(max)) max = new Date(time).toISOString();
-  }
-  return max;
-}
-
-function normalizeCapabilities(value) {
-  if (Array.isArray(value)) return value.map(v => String(v)).filter(Boolean);
-  if (value && typeof value === 'object') return value;
-  if (value == null || value === '') return [];
-  return [String(value)];
 }
 
 function isUUID(value) {
@@ -479,23 +423,14 @@ export function parseNote(raw, fallbackID = randomUUID()) {
     updatedAt: fields.updatedAt || fields.createdAt || new Date().toISOString(),
     author: unquote(fields.author || process.env.USER || 'unknown'),
     agent: unquote(fields.agent || 'hasna-notes-app'),
-    machine: unquote(fields.machine || hostnameFallback()),
     createdByActorType: unquote(fields.createdByActorType || ''),
     createdByName: unquote(fields.createdByName || ''),
-    sourceMachine: unquote(fields.sourceMachine || ''),
-    sourceMachineFriendlyName: unquote(fields.sourceMachineFriendlyName || ''),
-    originMachine: unquote(fields.originMachine || ''),
-    originMachineFriendlyName: unquote(fields.originMachineFriendlyName || ''),
-    targetMachineFriendlyName: unquote(fields.targetMachineFriendlyName || ''),
-    previousMachine: unquote(fields.previousMachine || ''),
     openedFrom: unquote(fields.openedFrom || ''),
     sourceContext: unquote(fields.sourceContext || ''),
     archivedAt: unquote(fields.archivedAt || ''),
     trashedAt: unquote(fields.trashedAt || ''),
-    trashMachine: unquote(fields.trashMachine || ''),
     trashExpiresAt: unquote(fields.trashExpiresAt || ''),
     restoredAt: unquote(fields.restoredAt || ''),
-    movedAt: unquote(fields.movedAt || ''),
     body,
   });
 }
@@ -503,10 +438,8 @@ export function parseNote(raw, fallbackID = randomUUID()) {
 function noteFromFields(fields) {
   const title = fields.title || 'Untitled Note';
   const titleSource = fields.titleSource || (isDefaultTitle(title) ? 'default' : 'manual');
-  const machine = fields.machine || fields.targetMachine || hostnameFallback();
   const actorType = fields.createdByActorType || fields.actorType || process.env.HASNA_NOTES_ACTOR_TYPE || 'human';
   const actorName = fields.createdByName || fields.actorName || process.env.HASNA_NOTES_ACTOR_NAME || fields.author || process.env.USER || 'unknown';
-  const sourceMachine = fields.sourceMachine || process.env.HASNA_NOTES_SOURCE_MACHINE || hostnameFallback();
   return {
     id: isUUID(fields.id) ? String(fields.id).toLowerCase() : randomUUID(),
     title,
@@ -521,29 +454,16 @@ function noteFromFields(fields) {
     updatedAt: fields.updatedAt || new Date().toISOString(),
     author: fields.author || process.env.USER || 'unknown',
     agent: fields.agent || 'hasna-notes-app',
-    machine,
     createdByActorType: actorType,
     createdByName: actorName,
-    sourceMachine,
-    sourceMachineFriendlyName: fields.sourceMachineFriendlyName || process.env.HASNA_NOTES_SOURCE_MACHINE_NAME || '',
-    originMachine: fields.originMachine || machine,
-    originMachineFriendlyName: fields.originMachineFriendlyName || fields.sourceMachineFriendlyName || '',
-    targetMachineFriendlyName: fields.targetMachineFriendlyName || '',
-    previousMachine: fields.previousMachine || '',
     openedFrom: fields.openedFrom || '',
     sourceContext: fields.sourceContext || '',
     archivedAt: fields.archivedAt || '',
     trashedAt: fields.trashedAt || '',
-    trashMachine: fields.trashMachine || '',
     trashExpiresAt: fields.trashExpiresAt || '',
     restoredAt: fields.restoredAt || '',
-    movedAt: fields.movedAt || '',
     body: fields.body || '',
   };
-}
-
-function hostnameFallback() {
-  return process.env.HOSTNAME || 'unknown';
 }
 
 export function serializeNote(note) {
@@ -563,23 +483,14 @@ export function serializeNote(note) {
     `updatedAt: ${n.updatedAt}`,
     `author: ${yamlScalar(n.author)}`,
     `agent: ${yamlScalar(n.agent)}`,
-    `machine: ${yamlScalar(n.machine)}`,
     `createdByActorType: ${yamlScalar(n.createdByActorType)}`,
     `createdByName: ${yamlScalar(n.createdByName)}`,
-    `sourceMachine: ${yamlScalar(n.sourceMachine)}`,
-    `sourceMachineFriendlyName: ${yamlScalar(n.sourceMachineFriendlyName)}`,
-    `originMachine: ${yamlScalar(n.originMachine)}`,
-    `originMachineFriendlyName: ${yamlScalar(n.originMachineFriendlyName)}`,
-    `targetMachineFriendlyName: ${yamlScalar(n.targetMachineFriendlyName)}`,
-    `previousMachine: ${yamlScalar(n.previousMachine)}`,
     `openedFrom: ${yamlScalar(n.openedFrom)}`,
     `sourceContext: ${yamlScalar(n.sourceContext)}`,
     `archivedAt: ${yamlScalar(n.archivedAt)}`,
     `trashedAt: ${yamlScalar(n.trashedAt)}`,
-    `trashMachine: ${yamlScalar(n.trashMachine)}`,
     `trashExpiresAt: ${yamlScalar(n.trashExpiresAt)}`,
     `restoredAt: ${yamlScalar(n.restoredAt)}`,
-    `movedAt: ${yamlScalar(n.movedAt)}`,
     '---',
   ];
   return lines.join('\n') + '\n' + n.body;
@@ -621,7 +532,6 @@ export async function listNotes(opts = {}, root = dataRoot()) {
   const q = String(opts.query || '').toLowerCase();
   const all = (await loadNotes(root)).filter(n => {
     if (opts.label && !n.labels.includes(opts.label)) return false;
-    if (opts.machine && n.machine !== opts.machine) return false;
     if (opts.status && n.status !== opts.status) return false;
     if (!opts.status && !opts.includeArchived && n.status === 'archived') return false;
     if (!opts.status && !opts.includeTrash && n.status === 'trash') return false;
@@ -663,171 +573,6 @@ export async function saveSettings(settings, root = dataRoot()) {
   return next;
 }
 
-function machineFromEntry(entry) {
-  const e = objectValue(entry);
-  const id = pickString(e, ['id', 'slug', 'machineId', 'name', 'hostname']);
-  if (!id) return null;
-  const slug = pickString(e, ['slug'], id);
-  const friendlyName = pickString(e, ['friendlyName', 'displayName', 'label', 'title']);
-  const displayName = friendlyName || pickString(e, ['displayName', 'name'], slug || id);
-  const online = parseBoolean(e.online ?? e.isOnline ?? e.reachable);
-  const status = pickString(e, ['status', 'state', 'availability'], online === true ? 'online' : (online === false ? 'offline' : 'unknown'));
-  const updatedAt = pickTimestamp(e, ['updatedAt', 'lastUpdated', 'modifiedAt']);
-  const lastSeenAt = pickTimestamp(e, ['lastSeenAt', 'lastHeartbeatAt', 'heartbeatAt', 'seenAt']);
-  const syncedAt = pickTimestamp(e, ['syncedAt', 'lastSyncedAt', 'notesSyncedAt']);
-  const recentActivityAt = pickTimestamp(e, ['recentActivityAt', 'lastActivityAt', 'activityAt']);
-  return {
-    id,
-    slug,
-    displayName,
-    friendlyName,
-    sshAddress: pickString(e, ['sshAddress', 'ssh', 'host', 'hostname'], id),
-    platform: pickString(e, ['platform', 'os'], 'unknown'),
-    status,
-    online,
-    source: pickString(e, ['source', 'sourceMachine', 'sourceId']),
-    origin: pickString(e, ['origin', 'originMachine', 'originId']),
-    updatedAt,
-    lastSeenAt,
-    syncedAt,
-    recentActivityAt,
-    capabilities: normalizeCapabilities(e.capabilities),
-    metadata: objectValue(e.metadata),
-    provenance: objectValue(e.provenance),
-    sync: objectValue(e.sync),
-  };
-}
-
-export function parseMachineManifestJSON(raw) {
-  let parsed = raw;
-  if (typeof raw === 'string' || Buffer.isBuffer(raw)) {
-    parsed = JSON.parse(String(raw));
-  }
-  const root = Array.isArray(parsed) ? { machines: parsed } : objectValue(parsed);
-  const entries = Array.isArray(root.machines) ? root.machines
-    : Array.isArray(root.items) ? root.items
-      : Array.isArray(root.data) ? root.data
-        : [];
-  return entries.map(machineFromEntry).filter(Boolean);
-}
-
-async function runMachinesCLI() {
-  const candidates = [
-    process.env.HASNA_MACHINES_CLI,
-    join(homedir(), '.bun', 'bin', 'machines'),
-    '/usr/local/bin/machines',
-    '/opt/homebrew/bin/machines',
-    'machines',
-  ].filter(Boolean);
-  for (const bin of candidates) {
-    try {
-      const { stdout } = await execFileAsync(bin, ['manifest', 'list', '--json'], { timeout: 2500, maxBuffer: 1024 * 1024 });
-      if (stdout && stdout.trim()) return stdout;
-    } catch {}
-  }
-  return null;
-}
-
-export async function loadMachineManifest(opts = {}) {
-  const manifestPath = opts.manifestPath || opts.manifest || machinesManifestFile();
-  const raw = await readFile(manifestPath, 'utf8').catch(() => null);
-  if (raw) {
-    try {
-      const machines = parseMachineManifestJSON(raw);
-      if (machines.length) return machines;
-    } catch {}
-  }
-  if (opts.runCLI === false) return [];
-  const cliRaw = await runMachinesCLI();
-  if (!cliRaw) return [];
-  try { return parseMachineManifestJSON(cliRaw); }
-  catch { return []; }
-}
-
-function machineAliases(machine, idOverride = '') {
-  return new Set([idOverride, machine?.id, machine?.slug].filter(Boolean).map(String));
-}
-
-function noteCountsForMachine(notes, aliases) {
-  const set = aliases instanceof Set ? aliases : new Set([aliases].filter(Boolean).map(String));
-  const mine = notes.filter(n => set.has(n.machine));
-  const active = mine.filter(n => n.status !== 'archived' && n.status !== 'trash');
-  return {
-    noteCount: active.length,
-    activeNoteCount: active.length,
-    archivedNoteCount: mine.filter(n => n.status === 'archived').length,
-    trashNoteCount: mine.filter(n => n.status === 'trash').length,
-    totalNoteCount: mine.length,
-    latestNoteUpdatedAt: maxISO(mine.map(n => n.updatedAt)),
-  };
-}
-
-function machineDetailFrom(machine, notes, idOverride = '') {
-  const id = idOverride || machine?.id || '';
-  const aliases = machineAliases(machine, id);
-  const counts = noteCountsForMachine(notes, aliases);
-  const recentActivityAt = maxISO([
-    machine?.recentActivityAt,
-    machine?.syncedAt,
-    machine?.lastSeenAt,
-    machine?.updatedAt,
-    counts.latestNoteUpdatedAt,
-  ]);
-  return {
-    id,
-    slug: machine?.slug || id,
-    displayName: machine?.displayName || machine?.friendlyName || id,
-    friendlyName: machine?.friendlyName || '',
-    sshAddress: machine?.sshAddress || id,
-    platform: machine?.platform || 'unknown',
-    status: machine?.status || 'unknown',
-    online: machine?.online ?? null,
-    source: machine?.source || (machine ? 'open-machines' : 'notes'),
-    origin: machine?.origin || '',
-    updatedAt: machine?.updatedAt || counts.latestNoteUpdatedAt || '',
-    lastSeenAt: machine?.lastSeenAt || '',
-    syncedAt: machine?.syncedAt || '',
-    recentActivityAt,
-    capabilities: machine?.capabilities ?? [],
-    metadata: machine?.metadata ?? {},
-    provenance: machine?.provenance ?? {},
-    sync: machine?.sync ?? {},
-    ...counts,
-  };
-}
-
-export async function listMachineDetails(opts = {}, root = dataRoot()) {
-  const notes = await loadNotes(root);
-  const byId = new Map();
-  const aliasToId = new Map();
-  for (const machine of await loadMachineManifest(opts)) {
-    const detail = machineDetailFrom(machine, notes);
-    byId.set(detail.id, detail);
-    for (const alias of machineAliases(machine, detail.id)) aliasToId.set(alias, detail.id);
-  }
-  for (const note of notes) {
-    if (!note.machine || aliasToId.has(note.machine) || byId.has(note.machine)) continue;
-    const detail = machineDetailFrom(null, notes, note.machine);
-    byId.set(note.machine, detail);
-    aliasToId.set(note.machine, note.machine);
-  }
-  const local = opts.thisMachine || hostnameFallback();
-  if (local && !aliasToId.has(local) && !byId.has(local)) byId.set(local, machineDetailFrom(null, notes, local));
-  const items = [...byId.values()].sort((a, b) => {
-    const d = Date.parse(b.recentActivityAt || b.updatedAt || 0) - Date.parse(a.recentActivityAt || a.updatedAt || 0);
-    if (d) return d;
-    return String(a.displayName).localeCompare(String(b.displayName));
-  });
-  return { items, total: items.length };
-}
-
-export async function getMachineDetails(id, opts = {}, root = dataRoot()) {
-  const machineId = String(id || '').trim();
-  if (!machineId) throw new Error('machine_required');
-  const page = await listMachineDetails(opts, root);
-  return page.items.find(m => m.id === machineId || m.slug === machineId) || machineDetailFrom(null, await loadNotes(root), machineId);
-}
-
 function addDays(isoOrDate, days) {
   const d = isoOrDate instanceof Date ? isoOrDate : new Date(isoOrDate || Date.now());
   return new Date(d.getTime() + days * 86400000).toISOString();
@@ -842,27 +587,11 @@ async function mutateNote(id, mutate, root = dataRoot()) {
   return note;
 }
 
-export async function moveNoteToMachine(id, targetMachine, opts = {}, root = dataRoot()) {
-  const target = String(targetMachine || '').trim();
-  if (!target) throw new Error('target_machine_required');
-  return mutateNote(id, (note) => {
-    if (!note.originMachine) note.originMachine = note.machine;
-    if (!note.originMachineFriendlyName && note.sourceMachineFriendlyName) {
-      note.originMachineFriendlyName = note.sourceMachineFriendlyName;
-    }
-    note.previousMachine = note.machine;
-    note.machine = target;
-    note.movedAt = new Date().toISOString();
-    if (opts.targetMachineFriendlyName) note.targetMachineFriendlyName = opts.targetMachineFriendlyName;
-  }, root);
-}
-
 export async function archiveNote(id, root = dataRoot()) {
   return mutateNote(id, (note) => {
     note.status = 'archived';
     note.archivedAt = new Date().toISOString();
     note.trashedAt = '';
-    note.trashMachine = '';
     note.trashExpiresAt = '';
   }, root);
 }
@@ -873,7 +602,6 @@ export async function trashNote(id, opts = {}, root = dataRoot()) {
   return mutateNote(id, (note) => {
     note.status = 'trash';
     note.trashedAt = new Date().toISOString();
-    note.trashMachine = opts.trashMachine || note.machine || hostnameFallback();
     note.trashExpiresAt = addDays(note.trashedAt, retentionDays);
   }, root);
 }
@@ -883,7 +611,6 @@ export async function restoreNote(id, root = dataRoot()) {
     note.status = 'active';
     note.archivedAt = '';
     note.trashedAt = '';
-    note.trashMachine = '';
     note.trashExpiresAt = '';
     note.restoredAt = new Date().toISOString();
   }, root);

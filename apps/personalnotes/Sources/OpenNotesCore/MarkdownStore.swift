@@ -145,23 +145,14 @@ public struct MarkdownStore {
         // Back-compat: legacy notes written by the old app carry `open-notes-app`; keep
         // that value verbatim. Notes with no `agent` key fall back to the current name.
         let agent = fields["agent"].flatMap(unquote) ?? Note.appAgent
-        let machine = fields["machine"].flatMap(unquote) ?? Note.currentMachine
         let createdByActorType = fields["createdByActorType"].flatMap(unquote) ?? "human"
         let createdByName = fields["createdByName"].flatMap(unquote) ?? author
-        let sourceMachine = fields["sourceMachine"].flatMap(unquote) ?? machine
-        let sourceMachineFriendlyName = fields["sourceMachineFriendlyName"].flatMap(unquote) ?? ""
-        let originMachine = fields["originMachine"].flatMap(unquote) ?? machine
-        let originMachineFriendlyName = fields["originMachineFriendlyName"].flatMap(unquote) ?? sourceMachineFriendlyName
-        let targetMachineFriendlyName = fields["targetMachineFriendlyName"].flatMap(unquote) ?? ""
-        let previousMachine = fields["previousMachine"].flatMap(unquote) ?? ""
         let openedFrom = fields["openedFrom"].flatMap(unquote) ?? ""
         let sourceContext = fields["sourceContext"].flatMap(unquote) ?? ""
         let archivedAt = fields["archivedAt"].flatMap(unquote).flatMap(optionalDate)
         let trashedAt = fields["trashedAt"].flatMap(unquote).flatMap(optionalDate)
-        let trashMachine = fields["trashMachine"].flatMap(unquote) ?? ""
         let trashExpiresAt = fields["trashExpiresAt"].flatMap(unquote).flatMap(optionalDate)
         let restoredAt = fields["restoredAt"].flatMap(unquote).flatMap(optionalDate)
-        let movedAt = fields["movedAt"].flatMap(unquote).flatMap(optionalDate)
 
         return Note(
             id: id, title: title, labels: labels, status: status, folder: folder,
@@ -169,14 +160,11 @@ public struct MarkdownStore {
             titleLocked: titleLocked, titleSource: titleSource,
             titleContentFingerprint: titleContentFingerprint,
             createdAt: createdAt, updatedAt: updatedAt,
-            author: author, agent: agent, machine: machine,
+            author: author, agent: agent,
             createdByActorType: createdByActorType, createdByName: createdByName,
-            sourceMachine: sourceMachine, sourceMachineFriendlyName: sourceMachineFriendlyName,
-            originMachine: originMachine, originMachineFriendlyName: originMachineFriendlyName,
-            targetMachineFriendlyName: targetMachineFriendlyName, previousMachine: previousMachine,
             openedFrom: openedFrom, sourceContext: sourceContext,
-            archivedAt: archivedAt, trashedAt: trashedAt, trashMachine: trashMachine,
-            trashExpiresAt: trashExpiresAt, restoredAt: restoredAt, movedAt: movedAt,
+            archivedAt: archivedAt, trashedAt: trashedAt,
+            trashExpiresAt: trashExpiresAt, restoredAt: restoredAt,
             body: body
         )
     }
@@ -311,7 +299,7 @@ public struct MarkdownStore {
         lines.append("labels: [\(note.labels.map(yamlScalar).joined(separator: ", "))]")
         lines.append("status: \(note.status.rawValue)")
         // Key order is fixed: id, title, labels, status, folder, content format, title metadata,
-        // createdAt, updatedAt, author, agent, machine. `folder` is always emitted.
+        // createdAt, updatedAt, author, agent. `folder` is always emitted.
         lines.append("folder: \(yamlScalar(note.folder))")
         lines.append("contentFormat: markdown")
         lines.append("titleLocked: \(note.titleLocked ? "true" : "false")")
@@ -321,23 +309,14 @@ public struct MarkdownStore {
         lines.append("updatedAt: \(iso8601(note.updatedAt))")
         lines.append("author: \(yamlScalar(note.author))")
         lines.append("agent: \(yamlScalar(note.agent))")
-        lines.append("machine: \(yamlScalar(note.machine))")
         lines.append("createdByActorType: \(yamlScalar(note.createdByActorType))")
         lines.append("createdByName: \(yamlScalar(note.createdByName))")
-        lines.append("sourceMachine: \(yamlScalar(note.sourceMachine))")
-        lines.append("sourceMachineFriendlyName: \(yamlScalar(note.sourceMachineFriendlyName))")
-        lines.append("originMachine: \(yamlScalar(note.originMachine))")
-        lines.append("originMachineFriendlyName: \(yamlScalar(note.originMachineFriendlyName))")
-        lines.append("targetMachineFriendlyName: \(yamlScalar(note.targetMachineFriendlyName))")
-        lines.append("previousMachine: \(yamlScalar(note.previousMachine))")
         lines.append("openedFrom: \(yamlScalar(note.openedFrom))")
         lines.append("sourceContext: \(yamlScalar(note.sourceContext))")
         lines.append("archivedAt: \(yamlScalar(note.archivedAt.map(iso8601) ?? ""))")
         lines.append("trashedAt: \(yamlScalar(note.trashedAt.map(iso8601) ?? ""))")
-        lines.append("trashMachine: \(yamlScalar(note.trashMachine))")
         lines.append("trashExpiresAt: \(yamlScalar(note.trashExpiresAt.map(iso8601) ?? ""))")
         lines.append("restoredAt: \(yamlScalar(note.restoredAt.map(iso8601) ?? ""))")
-        lines.append("movedAt: \(yamlScalar(note.movedAt.map(iso8601) ?? ""))")
         lines.append("---")
         // Closing delimiter followed by a single newline, then the body verbatim.
         // Do NOT append a trailing terminator: the body must round-trip byte-for-byte

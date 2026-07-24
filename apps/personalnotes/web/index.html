@@ -46,11 +46,6 @@
           <div class="nav-section">Notes</div>
           <div class="notes-list" id="notes-list"><!-- populated by app.js --></div>
           <div class="notes-empty-side" id="notes-empty-side" hidden>No notes</div>
-
-          <!-- Machines -->
-          <div class="nav-section">Machines</div>
-          <div class="machines-list" id="machines-list"><!-- populated by app.js --></div>
-          <button class="view-more view-more-side" id="machines-more" type="button" hidden>View more</button>
         </nav>
 
         <button class="sidebar-settings" id="open-settings" type="button"><svg class="ico" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="2.6" stroke="currentColor" stroke-width="1.3"/><path d="M10 2.6l1 .2.4 1.7a6 6 0 011.6.9l1.7-.6.9 1.5-1.3 1.2a6 6 0 010 1.8l1.3 1.2-.9 1.5-1.7-.6a6 6 0 01-1.6.9L11 17.2l-1 .2-1-.2-.4-1.7a6 6 0 01-1.6-.9l-1.7.6-.9-1.5 1.3-1.2a6 6 0 010-1.8L3.7 9.5l.9-1.5 1.7.6a6 6 0 011.6-.9L8.3 6l1-.2z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>Settings</button>
@@ -156,8 +151,6 @@
         <!-- ============ EDITOR ============ -->
         <section class="editor" id="editor" hidden>
           <div class="editor-meta" id="editor-meta">
-            <span class="em-machine" id="em-machine"></span>
-            <span class="em-dot">·</span>
             <span class="em-updated" id="em-updated"></span>
             <span class="em-tags" id="em-tags"></span>
             <span class="em-spacer"></span>
@@ -200,7 +193,6 @@
 
         <div class="set-group">Settings</div>
         <a class="set-item active" data-tab="appearance" href="#settings/appearance"><svg class="ico" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="3" stroke="currentColor" stroke-width="1.3"/><path d="M9 2v2M9 14v2M2 9h2M14 9h2M4 4l1.4 1.4M12.6 12.6L14 14M14 4l-1.4 1.4M5.4 12.6L4 14" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>Appearance</a>
-        <a class="set-item" data-tab="machines" href="#settings/machines"><svg class="ico" viewBox="0 0 18 18" fill="none"><rect x="2.4" y="3.2" width="13.2" height="9" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M6.6 15h4.8M9 12.2V15" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>Machines</a>
         <a class="set-item" data-tab="about" href="#settings/about"><svg class="ico" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="6.5" stroke="currentColor" stroke-width="1.3"/><path d="M9 8v4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><circle cx="9" cy="5.6" r="0.9" fill="currentColor"/></svg>About</a>
       </aside>
 
@@ -235,16 +227,6 @@
           </div>
         </section>
 
-        <!-- MACHINES -->
-        <section class="set-page" data-tab="machines">
-          <div class="set-page-inner">
-            <h1 class="set-title">Machines</h1>
-            <div class="set-sec-sub">Every machine your notes have synced across. The newest activity shows first.</div>
-            <div class="machines-page" id="machines-page"><!-- populated by app.js --></div>
-            <div class="np-empty" id="machines-page-empty" hidden>No machines yet</div>
-          </div>
-        </section>
-
         <!-- ABOUT -->
         <section class="set-page" data-tab="about">
           <div class="set-page-inner">
@@ -259,14 +241,11 @@
                 <div class="set-row-text"><div class="srt-name">Notes folder</div><div class="srt-desc" id="about-folder">~/.hasna/apps/notes/notes/</div></div>
               </div>
               <div class="set-row">
-                <div class="set-row-text"><div class="srt-name">This machine</div><div class="srt-desc" id="about-machine">—</div></div>
-              </div>
-              <div class="set-row">
-                <div class="set-row-text"><div class="srt-name">Notes on this machine</div><div class="srt-desc">Markdown files with YAML frontmatter, one per note</div></div>
+                <div class="set-row-text"><div class="srt-name">Notes</div><div class="srt-desc">Markdown files with YAML frontmatter, one per note</div></div>
                 <span class="set-version" id="about-count">0</span>
               </div>
             </div>
-            <div class="about-foot">Plain-text Markdown notes, synced across your machines. The files on disk are the source of truth.</div>
+            <div class="about-foot">Plain-text Markdown notes. The files on disk are the source of truth.</div>
           </div>
         </section>
       </main>
@@ -293,7 +272,6 @@
     <div class="ctx-menu" id="ctx-menu" hidden role="menu">
       <button class="ctx-item" data-act="rename" role="menuitem">Rename</button>
       <button class="ctx-item" data-act="duplicate" role="menuitem">Duplicate</button>
-      <button class="ctx-item" data-act="move" role="menuitem">Move to machine</button>
       <button class="ctx-item" data-act="archive" role="menuitem">Archive</button>
       <button class="ctx-item" data-act="restore" role="menuitem">Restore</button>
       <button class="ctx-item" data-act="copy" role="menuitem">Copy text</button>

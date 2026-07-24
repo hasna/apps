@@ -201,7 +201,6 @@ private struct NoteSettingsPopover: View {
             Divider()
             HStack(spacing: 12) {
                 Label(note.author, systemImage: "person")
-                Label(note.machine, systemImage: "desktopcomputer")
             }
             .font(.caption2)
             .foregroundStyle(.tertiary)

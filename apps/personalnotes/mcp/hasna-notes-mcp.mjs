@@ -8,15 +8,12 @@ import {
   deleteLabelEverywhere,
   deleteNote,
   generateTitle,
-  getMachineDetails,
   getNote,
-  listMachineDetails,
   listNotes,
   loadLabelList,
   loadNotes,
   loadSettings,
   markdownPlainText,
-  moveNoteToMachine,
   normalizeLabels,
   purgeExpiredTrash,
   renameLabel,
@@ -45,7 +42,6 @@ const tools = [
         limit: { type: 'number', default: 10 },
         offset: { type: 'number', default: 0 },
         label: { type: 'string' },
-        machine: { type: 'string' },
         status: { type: 'string' },
         includeTrash: { type: 'boolean' },
         includeArchived: { type: 'boolean' },
@@ -69,9 +65,6 @@ const tools = [
         labels: { type: 'array', items: { type: 'string' } },
         actorType: { type: 'string', enum: ['human', 'agent', 'system'] },
         actorName: { type: 'string' },
-        targetMachine: { type: 'string' },
-        sourceMachine: { type: 'string' },
-        sourceMachineFriendlyName: { type: 'string' },
         openedFrom: { type: 'string' },
         sourceContext: { type: 'string' },
       },
@@ -86,20 +79,10 @@ const tools = [
         id: { type: 'string' },
         permanent: { type: 'boolean' },
         retentionDays: { type: 'number' },
-        trashMachine: { type: 'string' },
         confirm: { type: 'boolean' },
         dryRun: { type: 'boolean' },
       },
       required: ['id'],
-    },
-  },
-  {
-    name: 'notes_move_to_machine',
-    description: 'Move a note to another owning machine while preserving origin metadata.',
-    inputSchema: {
-      type: 'object',
-      properties: { id: { type: 'string' }, machine: { type: 'string' }, machineName: { type: 'string' } },
-      required: ['id', 'machine'],
     },
   },
   {
@@ -109,13 +92,12 @@ const tools = [
   },
   {
     name: 'notes_trash',
-    description: 'Move a note to per-machine Trash.',
+    description: 'Move a note to Trash.',
     inputSchema: {
       type: 'object',
       properties: {
         id: { type: 'string' },
         retentionDays: { type: 'number' },
-        trashMachine: { type: 'string' },
         confirm: { type: 'boolean' },
         dryRun: { type: 'boolean' },
       },
@@ -150,20 +132,6 @@ const tools = [
     name: 'settings_set_trash_retention',
     description: 'Set Trash retention in days.',
     inputSchema: { type: 'object', properties: { days: { type: 'number' } }, required: ['days'] },
-  },
-  {
-    name: 'machines_list',
-    description: 'List machine details for the notes app, combining open-machines manifest fields with notes-derived fallback data.',
-    inputSchema: { type: 'object', properties: {} },
-  },
-  {
-    name: 'machines_details',
-    description: 'Fetch details for one machine by id or slug.',
-    inputSchema: {
-      type: 'object',
-      properties: { id: { type: 'string' } },
-      required: ['id'],
-    },
   },
   {
     name: 'markdown_commands',
@@ -436,12 +404,8 @@ async function callTool(name, args) {
       title: title || 'Untitled Note',
       body: String(args.body || ''),
       labels: normalizeLabels(args.labels || []),
-      machine: args.targetMachine,
       createdByActorType: args.actorType || 'agent',
       createdByName: args.actorName || process.env.HASNA_NOTES_ACTOR_NAME || 'agent',
-      sourceMachine: args.sourceMachine,
-      sourceMachineFriendlyName: args.sourceMachineFriendlyName,
-      originMachine: args.originMachine || args.targetMachine,
       openedFrom: args.openedFrom || '',
       sourceContext: args.sourceContext || '',
       titleLocked: !!title,
@@ -462,14 +426,9 @@ async function callTool(name, args) {
     } else {
       const preview = { id: note.id, title: note.title, fromStatus: note.status, toStatus: 'trash', permanent: false };
       if (args.dryRun || !args.confirm) return textResult(destructivePreview('notes_delete', args, preview));
-      return textResult(await trashNote(note.id, { retentionDays: args.retentionDays, trashMachine: args.trashMachine }));
+      return textResult(await trashNote(note.id, { retentionDays: args.retentionDays }));
     }
     return textResult({ ok: true });
-  }
-  if (name === 'notes_move_to_machine') {
-    return textResult(await moveNoteToMachine(requireArg(args, 'id'), requireArg(args, 'machine'), {
-      targetMachineFriendlyName: args.machineName,
-    }));
   }
   if (name === 'notes_archive') return textResult(await archiveNote(requireArg(args, 'id')));
   if (name === 'notes_trash') {
@@ -478,10 +437,7 @@ async function callTool(name, args) {
     if (note.status === 'trash') return textResult(note);
     const preview = { id: note.id, title: note.title, fromStatus: note.status, toStatus: 'trash', permanent: false };
     if (args.dryRun || !args.confirm) return textResult(destructivePreview('notes_trash', args, preview));
-    return textResult(await trashNote(note.id, {
-      retentionDays: args.retentionDays,
-      trashMachine: args.trashMachine,
-    }));
+    return textResult(await trashNote(note.id, { retentionDays: args.retentionDays }));
   }
   if (name === 'notes_restore') return textResult(await restoreNote(requireArg(args, 'id')));
   if (name === 'notes_purge') {
@@ -506,8 +462,6 @@ async function callTool(name, args) {
   }
   if (name === 'settings_get') return textResult(await loadSettings());
   if (name === 'settings_set_trash_retention') return textResult(await saveSettings({ trashRetentionDays: requireArg(args, 'days') }));
-  if (name === 'machines_list') return textResult(await listMachineDetails());
-  if (name === 'machines_details') return textResult(await getMachineDetails(requireArg(args, 'id')));
   if (name === 'markdown_commands') return textResult({ commands: MARKDOWN_COMMANDS });
   if (name === 'markdown_render') {
     const markdown = await markdownFromArgs(args);

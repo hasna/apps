@@ -1,16 +1,16 @@
 // Screenshot harness for the Hasna Notes web UI.
 // Renders each screen at retina scale and writes PNGs for visual review.
 //
-// The notes app is data-driven and (mostly) hash-free: selection, machine-filter and
+// The notes app is data-driven and (mostly) hash-free: selection, label-filter and
 // settings are driven by clicks, not URL hashes — so this harness DRIVES the UI the
-// way a user would (click a note, click a machine row, click the gear) and screenshots
+// way a user would (click a note, click a label, click the gear) and screenshots
 // the result. It uses the in-browser SAMPLE data (no native __BOOT__).
 //
 // Usage:
 //   PLAYWRIGHT_BROWSERS_PATH=/home/hasna/.cache/ms-playwright \
 //   node tools/shoot.mjs [screen ...]
 //
-// Screens: notes, machines, settings, native (body.native top-inset check).
+// Screens: notes, settings, native (body.native top-inset check).
 // With no args it shoots them all. Output: tools/shots/<screen>.png
 import playwright from '/home/hasna/.bun/install/global/node_modules/playwright/index.js'
 const { chromium } = playwright
@@ -28,12 +28,12 @@ const VIEWPORT = { width: 1280, height: 816 }
 const SCALE = 2
 
 const SCREENS = [
-  'notes', 'machines', 'settings', 'native', 'home', 'home-noai', 'ctxmenu', 'compact',
+  'notes', 'settings', 'native', 'home', 'home-noai', 'ctxmenu', 'compact',
   // UI/UX polish-pass screens:
   'sidebar', 'home-copy', 'recording', 'recording-paused', 'editor-recording',
   'settings-recording', 'transcript',
-  // Notes page (full list) + Machines under Settings + inline record-in-pill:
-  'noteslist', 'machines-settings', 'qn-record', 'qn-typing',
+  // Notes page (full list) + inline record-in-pill:
+  'noteslist', 'qn-record', 'qn-typing',
   // Dark-theme verification + sidebar overflow (thin scrollbar near the edge):
   'dark-home', 'dark-recording', 'sidebar-scroll',
 ]
@@ -75,30 +75,27 @@ async function fakeRecording(page, { paused = false, transcript = null } = {}) {
   }, { paused, transcript })
 }
 
-// A boot payload with many notes/machines so list overflow → scrollbar is visible and the
+// A boot payload with many notes so list overflow → scrollbar is visible and the
 // "View more" affordance appears.
 async function manyNotesBoot(page) {
   await page.addInitScript(() => {
     const now = Date.now()
     const iso = (ms) => new Date(ms).toISOString()
-    const labels = ['welcome', 'docs', 'release', 'meeting', 'sync', 'ideas', 'todo']
-    const machines = []
-    for (let i = 0; i < 14; i++) machines.push({ id: 'machine' + String(i).padStart(3, '0') })
+    const labels = ['welcome', 'docs', 'release', 'meeting', 'ideas', 'todo']
     const notes = []
     for (let i = 0; i < 22; i++) {
       notes.push({
         id: 'n-' + i,
-        title: ['Release checklist', 'Meeting notes — fleet sync', 'Ideas for the roadmap',
+        title: ['Release checklist', 'Meeting notes', 'Ideas for the roadmap',
           'Welcome to Hasna Notes', 'Quarterly planning thoughts', 'Bug triage list'][i % 6] + ' ' + (i + 1),
         body: 'Some note body content number ' + i + ' with a few words to preview.',
         labels: [labels[i % labels.length]],
         status: 'active', folder: '',
-        machine: machines[i % machines.length].id,
         updatedAt: iso(now - i * 1000 * 60 * 47),
         createdAt: iso(now - i * 1000 * 60 * 60),
       })
     }
-    window.__BOOT__ = { thisMachine: 'machine000', machines, notes }
+    window.__BOOT__ = { notes }
     window.__AI__ = { port: 8765, available: true }
   })
 }
@@ -154,14 +151,6 @@ for (const s of screens) {
     await page.waitForTimeout(150)
     await shoot(page, 'notes')
     await ctx.close()
-  } else if (s === 'machines') {
-    const { ctx, page } = await freshPage()
-    // Click a specific machine row (machine001) to filter the notes list.
-    const m = page.locator('.machine-row[data-machine="machine001"]')
-    if (await m.count()) await m.click()
-    await page.waitForTimeout(150)
-    await shoot(page, 'machines')
-    await ctx.close()
   } else if (s === 'settings') {
     const { ctx, page } = await freshPage()
     await page.locator('#open-settings').click()
@@ -178,18 +167,6 @@ for (const s of screens) {
     await page.locator('#home-all-notes').click()
     await page.waitForTimeout(200)
     await shoot(page, 'noteslist')
-    await ctx.close()
-  } else if (s === 'machines-settings') {
-    // The fuller Machines list living under Settings → Machines.
-    const ctx = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: SCALE })
-    const page = await ctx.newPage()
-    await manyNotesBoot(page)
-    await page.goto(indexURL, { waitUntil: 'networkidle' })
-    await page.waitForTimeout(200)
-    await page.locator('#open-settings').click()
-    await page.locator('.set-item[data-tab="machines"]').click()
-    await page.waitForTimeout(200)
-    await shoot(page, 'machines-settings')
     await ctx.close()
   } else if (s === 'qn-record') {
     // Quick-note pill idle: the embedded purple "Record" control.
@@ -215,7 +192,7 @@ for (const s of screens) {
     await shoot(page, 'dark-recording')
     await ctx.close()
   } else if (s === 'sidebar-scroll') {
-    // Many notes/machines so the sidebar nav overflows → the thin scrollbar shows near
+    // Many notes so the sidebar nav overflows → the thin scrollbar shows near
     // the sidebar's right edge. Force a scroll so the bar is rendered.
     const ctx = await browser.newContext({ viewport: { width: 1280, height: 560 }, deviceScaleFactor: SCALE })
     const page = await ctx.newPage()
@@ -274,8 +251,8 @@ for (const s of screens) {
     await shoot(page, 'compact')
     await ctx.close()
   } else if (s === 'sidebar') {
-    // Many notes + machines: Labels section near top, note rows with subtle age, machines
-    // ≤10 + View more, settings icon size, thin/light scrollbar near the right edge.
+    // Many notes: Labels section near top, note rows with subtle age,
+    // View more, settings icon size, thin/light scrollbar near the right edge.
     const ctx = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: SCALE })
     const page = await ctx.newPage()
     await manyNotesBoot(page)

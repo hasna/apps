@@ -7,7 +7,6 @@ import {
   listNotes,
   loadNotes,
   markdownPlainText,
-  moveNoteToMachine,
   normalizeLabels,
   renameLabel,
   restoreNote,
@@ -35,7 +34,6 @@ export const CHAT_TOOL_SCHEMAS = [
     offset: { type: 'number', default: 0 },
     query: { type: 'string' },
     label: { type: 'string' },
-    machine: { type: 'string' },
     status: { type: 'string' },
     includeArchived: { type: 'boolean' },
     includeTrash: { type: 'boolean' },
@@ -52,7 +50,6 @@ export const CHAT_TOOL_SCHEMAS = [
     title: { type: 'string' },
     body: { type: 'string' },
     labels: { type: 'array', items: { type: 'string' } },
-    targetMachine: { type: 'string' },
   }, { mutates: true }),
   toolSchema('update_note', 'Replace title, body, labels, folder, or status for one note. Requires confirmation.', {
     id: { type: 'string' },
@@ -77,11 +74,6 @@ export const CHAT_TOOL_SCHEMAS = [
   toolSchema('archive_note', 'Archive one note. Requires confirmation.', { id: { type: 'string' } }, { required: ['id'], mutates: true, requiresConfirmation: true }),
   toolSchema('trash_note', 'Move one note to Trash. Requires confirmation.', { id: { type: 'string' } }, { required: ['id'], mutates: true, requiresConfirmation: true }),
   toolSchema('restore_note', 'Restore one archived or trashed note. Requires confirmation.', { id: { type: 'string' } }, { required: ['id'], mutates: true, requiresConfirmation: true }),
-  toolSchema('move_note', 'Move one note to another machine while preserving origin metadata. Requires confirmation.', {
-    id: { type: 'string' },
-    machine: { type: 'string' },
-    machineName: { type: 'string' },
-  }, { required: ['id', 'machine'], mutates: true, requiresConfirmation: true }),
   toolSchema('list_labels', 'List all known labels, including empty persisted labels.', {}, { readOnly: true }),
   toolSchema('create_label', 'Create an empty label without assigning it to a note.', {
     name: { type: 'string' },
@@ -159,7 +151,6 @@ export function noteReference(note) {
     createdAt: note.createdAt || '',
     labels: note.labels || [],
     status: note.status || 'active',
-    machine: note.machine || '',
   };
 }
 
@@ -173,11 +164,6 @@ export function noteInfo(note) {
     createdByActorType: note.createdByActorType || 'human',
     createdAt: note.createdAt || '',
     updatedAt: note.updatedAt || '',
-    sourceMachine: note.sourceMachine || '',
-    sourceMachineFriendlyName: note.sourceMachineFriendlyName || '',
-    originMachine: note.originMachine || note.machine || '',
-    originMachineFriendlyName: note.originMachineFriendlyName || '',
-    currentMachine: note.machine || '',
     openedFrom: note.openedFrom || '',
     sourceContext: note.sourceContext || '',
   };
@@ -262,8 +248,6 @@ function sourceContext(options) {
     actorName: options.actorName || process.env.HASNA_NOTES_ACTOR_NAME || 'Hasna Notes Agent',
     openedFrom: options.openedFrom || 'agent',
     sourceContext: options.sourceContext || 'hasna-notes-agent',
-    sourceMachine: options.sourceMachine || process.env.HASNA_NOTES_SOURCE_MACHINE,
-    sourceMachineFriendlyName: options.sourceMachineFriendlyName || process.env.HASNA_NOTES_SOURCE_MACHINE_NAME,
   };
 }
 
@@ -319,7 +303,6 @@ export async function executeNotesAgentTool(toolName, args = {}, options = {}) {
       return dryRunResult(name, args, {
         title,
         labels,
-        targetMachine: args.targetMachine || '',
         bodyPreview: String(args.body || '').slice(0, 240),
         provenance: sourceContext(options),
       });
@@ -328,15 +311,12 @@ export async function executeNotesAgentTool(toolName, args = {}, options = {}) {
       title,
       body: String(args.body || ''),
       labels,
-      machine: args.targetMachine,
       createdAt: now,
       updatedAt: now,
       createdByActorType: sourceContext(options).actorType,
       createdByName: sourceContext(options).actorName,
       openedFrom: sourceContext(options).openedFrom,
       sourceContext: sourceContext(options).sourceContext,
-      sourceMachine: sourceContext(options).sourceMachine,
-      sourceMachineFriendlyName: sourceContext(options).sourceMachineFriendlyName,
       titleLocked: !!String(args.title || '').trim(),
       titleSource: String(args.title || '').trim() ? 'manual' : 'default',
     }, root);
@@ -424,22 +404,6 @@ export async function executeNotesAgentTool(toolName, args = {}, options = {}) {
         : name === 'trash_note'
           ? await trashNote(note.id, {}, root)
           : await restoreNote(note.id, root);
-      return { note: changed, sources: [noteReference(changed)] };
-    });
-  }
-
-  if (name === 'move_note') {
-    const note = await getNote(requireArg(args, 'id'), root);
-    if (!note) throw new Error('note_not_found');
-    const machine = String(requireArg(args, 'machine')).trim();
-    return withPreview(name, args, options, async () => ({
-      id: note.id,
-      title: note.title,
-      fromMachine: note.machine || '',
-      toMachine: machine,
-      machineName: args.machineName || '',
-    }), async () => {
-      const changed = await moveNoteToMachine(note.id, machine, { targetMachineFriendlyName: args.machineName }, root);
       return { note: changed, sources: [noteReference(changed)] };
     });
   }
@@ -540,8 +504,6 @@ export async function executeNotesAgentTool(toolName, args = {}, options = {}) {
         createdByName: sourceContext(options).actorName,
         openedFrom: sourceContext(options).openedFrom,
         sourceContext: sourceContext(options).sourceContext,
-        sourceMachine: sourceContext(options).sourceMachine,
-        sourceMachineFriendlyName: sourceContext(options).sourceMachineFriendlyName,
         titleLocked: true,
         titleSource: 'manual',
       }, root);
@@ -626,7 +588,7 @@ function goalNeedsInput(result) {
 
 function goalTerminalFromText(text) {
   const t = String(text || '').toLowerCase();
-  if (/\b(needs? (user )?input|need you to|please provide|which note|what label|what machine|which machine)\b/.test(t)) {
+  if (/\b(needs? (user )?input|need you to|please provide|which note|what label)\b/.test(t)) {
     return 'needs_input';
   }
   if (/\b(blocked|cannot continue|not possible|unable to proceed)\b/.test(t)) return 'blocked';
@@ -708,7 +670,7 @@ export async function runNotesGoal(objective, options = {}) {
       call.result &&
       !call.result.requiresConfirmation &&
       !call.result.dryRun &&
-      ['create_note', 'update_note', 'append_note', 'label_note', 'unlabel_note', 'archive_note', 'trash_note', 'restore_note', 'move_note', 'create_label', 'update_label', 'delete_label', 'consolidate_notes'].includes(call.name)
+      ['create_note', 'update_note', 'append_note', 'label_note', 'unlabel_note', 'archive_note', 'trash_note', 'restore_note', 'create_label', 'update_label', 'delete_label', 'consolidate_notes'].includes(call.name)
     ));
     const readOnlyComplete = index > 0 || /\b(summarize|summary|search|find|list|read|show|info|metadata|provenance|related|similar)\b/i.test(cleanObjective);
     if (mutatingSuccess || readOnlyComplete) {
@@ -798,7 +760,6 @@ export async function runNotesAgent(prompt, options = {}) {
       `${info.title} (${info.id})`,
       `Created by ${info.createdBy} (${info.createdByActorType})`,
       info.createdAt ? `Created ${info.createdAt}` : '',
-      info.currentMachine ? `Machine ${info.currentMachine}` : '',
       info.openedFrom ? `Opened from ${info.openedFrom}` : '',
     ].filter(Boolean).join('\n');
   } else if (/\b(read|open|show|get)\b/.test(lower) && id) {
@@ -837,11 +798,6 @@ export async function runNotesAgent(prompt, options = {}) {
   } else if (/\brestore\b/.test(lower) && id) {
     result = await runTool('restore_note', { id, confirm: wantsConfirm }, { ...options, confirmWrites: wantsConfirm }, toolCalls);
     answer = result.requiresConfirmation ? `Restore preview ready for ${id}.` : `Restored "${result.note.title}".`;
-  } else if (/\bmove\b/.test(lower) && id) {
-    const machine = options.machine || options.targetMachine || /\b(?:to|machine)\s+([A-Za-z0-9._-]+)\b/i.exec(text)?.[1]?.trim();
-    if (!machine) throw new Error('machine_required');
-    result = await runTool('move_note', { id, machine, machineName: options.machineName, confirm: wantsConfirm }, { ...options, confirmWrites: wantsConfirm }, toolCalls);
-    answer = result.requiresConfirmation ? `Move preview ready for ${id}.` : `Moved "${result.note.title}" to ${machine}.`;
   } else {
     result = await runTool(query ? 'search_notes' : 'list_notes', query ? { query, limit: options.limit || 10 } : { limit: options.limit || 10 }, options, toolCalls);
     answer = result.items.length

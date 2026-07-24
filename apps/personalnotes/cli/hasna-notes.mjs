@@ -11,15 +11,12 @@ import {
   deleteLabelEverywhere,
   deleteNote,
   generateTitle,
-  getMachineDetails,
   getNote,
-  listMachineDetails,
   listNotes,
   loadLabelList,
   loadNotes,
   loadSettings,
   markdownPlainText,
-  moveNoteToMachine,
   normalizeLabels,
   purgeExpiredTrash,
   renameLabel,
@@ -42,18 +39,15 @@ function usage() {
   return `Hasna Notes CLI
 
 Usage:
-  hasna-notes list [--json] [--limit 10] [--offset 0] [--label name] [--machine id] [--query text]
+  hasna-notes list [--json] [--limit 10] [--offset 0] [--label name] [--query text]
   hasna-notes get <id> [--json]
-  hasna-notes create [--title text] [--body text | --body-file path] [--label name ...] [--actor-type agent] [--actor-name name] [--target-machine id] [--opened-from text] [--json]
+  hasna-notes create [--title text] [--body text | --body-file path] [--label name ...] [--actor-type agent] [--actor-name name] [--opened-from text] [--json]
   hasna-notes delete <id> [--permanent] [--yes|--force]
   hasna-notes archive <id>
   hasna-notes trash <id> [--retention-days 30] [--yes|--force]
   hasna-notes restore <id>
   hasna-notes purge <id> [--yes|--force]
   hasna-notes cleanup-trash [--yes|--force]
-  hasna-notes move <id> <machine>
-  hasna-notes machines list [--json]
-  hasna-notes machines details <machine> [--json]
   hasna-notes markdown commands [--json]
   hasna-notes markdown render <id> [--json]
   hasna-notes markdown plain-text <id> [--json]
@@ -189,12 +183,6 @@ async function requireDestructiveConfirmation(preview, opts, message) {
   return ok;
 }
 
-function machineSummary(machine) {
-  const status = machine.status || (machine.online === true ? 'online' : 'unknown');
-  const activity = machine.recentActivityAt || machine.updatedAt || 'no-activity';
-  return `${activity}  ${machine.id}  ${machine.displayName || machine.friendlyName || machine.id}  ${status}  ${machine.noteCount || 0} active note(s)`;
-}
-
 async function bodyFromOpts(opts) {
   if (opts['body-file']) return readFile(String(opts['body-file']), 'utf8');
   return String(opts.body || '');
@@ -205,7 +193,6 @@ async function commandList(opts) {
     limit: opts.limit || DEFAULT_LIMIT,
     offset: opts.offset || 0,
     label: Array.isArray(opts.label) ? opts.label[0] : opts.label,
-    machine: opts.machine,
     status: opts.status,
     includeTrash: opts['include-trash'],
     includeArchived: opts['include-archived'],
@@ -236,13 +223,8 @@ async function commandCreate(opts) {
     body: await bodyFromOpts(opts),
     labels: normalizeLabels(opts.label || []),
     status: 'active',
-    machine: opts['target-machine'] || opts.machine,
     createdByActorType: opts['actor-type'] || process.env.HASNA_NOTES_ACTOR_TYPE || 'agent',
     createdByName: opts['actor-name'] || process.env.HASNA_NOTES_ACTOR_NAME || process.env.USER || 'agent',
-    sourceMachine: opts['source-machine'] || process.env.HASNA_NOTES_SOURCE_MACHINE,
-    sourceMachineFriendlyName: opts['source-machine-friendly-name'] || process.env.HASNA_NOTES_SOURCE_MACHINE_NAME,
-    originMachine: opts['origin-machine'] || opts['target-machine'] || opts.machine,
-    originMachineFriendlyName: opts['origin-machine-friendly-name'] || opts['source-machine-friendly-name'],
     openedFrom: opts['opened-from'] || '',
     sourceContext: opts['source-context'] || '',
     titleLocked: !!title,
@@ -294,7 +276,7 @@ async function commandTrash(id, opts) {
   const preview = moveToTrashPreview(note, 'trash');
   const message = `Move note to Trash? "${preview.preview.title}" can be restored from Trash.`;
   if (!(await requireDestructiveConfirmation(preview, opts, message))) return;
-  const trashed = await trashNote(note.id, { retentionDays: opts['retention-days'], trashMachine: opts.machine });
+  const trashed = await trashNote(note.id, { retentionDays: opts['retention-days'] });
   if (opts.json) return jsonOut(trashed);
   lineOut(noteSummary(trashed));
 }
@@ -331,35 +313,6 @@ async function commandCleanupTrash(opts) {
   const result = await purgeExpiredTrash();
   if (opts.json) return jsonOut(result);
   lineOut(`Purged ${result.count} expired note(s)`);
-}
-
-async function commandMove(id, machine, opts) {
-  const note = await moveNoteToMachine(requireArg(id, 'id'), requireArg(machine, 'machine'), {
-    targetMachineFriendlyName: opts['machine-name'],
-  });
-  if (opts.json) return jsonOut(note);
-  lineOut(noteSummary(note));
-}
-
-async function commandMachines(action, args, opts) {
-  if (action === 'list') {
-    const page = await listMachineDetails({ manifestPath: opts.manifest });
-    if (opts.json) return jsonOut(page);
-    for (const machine of page.items) lineOut(machineSummary(machine));
-    return;
-  }
-  if (action === 'details' || action === 'detail' || action === 'get') {
-    const detail = await getMachineDetails(requireArg(args[0], 'machine'), { manifestPath: opts.manifest });
-    if (opts.json) return jsonOut(detail);
-    lineOut(`${detail.displayName || detail.id} (${detail.id})`);
-    lineOut(`status: ${detail.status || 'unknown'}`);
-    lineOut(`online: ${detail.online == null ? 'unknown' : String(detail.online)}`);
-    lineOut(`platform: ${detail.platform || 'unknown'}`);
-    lineOut(`notes: ${detail.noteCount || 0} active / ${detail.totalNoteCount || 0} total`);
-    lineOut(`recentActivityAt: ${detail.recentActivityAt || '(none)'}`);
-    return;
-  }
-  throw new Error('unknown_machines_command');
 }
 
 async function markdownInput(idOrText, opts) {
@@ -544,8 +497,6 @@ async function main() {
   if (cmd === 'restore') return commandRestore(opts._[0], opts);
   if (cmd === 'purge') return commandPurge(opts._[0], opts);
   if (cmd === 'cleanup-trash') return commandCleanupTrash(opts);
-  if (cmd === 'move') return commandMove(opts._[0], opts._[1], opts);
-  if (cmd === 'machines') return commandMachines(opts._[0], opts._.slice(1), opts);
   if (cmd === 'markdown') return commandMarkdown(opts._[0], opts._.slice(1), opts);
   if (cmd === 'settings') return commandSettings(opts._[0], opts._.slice(1), opts);
   if (cmd === 'labels') return commandLabels(opts._[0], opts._.slice(1), opts);

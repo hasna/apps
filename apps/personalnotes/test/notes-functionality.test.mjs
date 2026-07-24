@@ -16,17 +16,13 @@ import {
   deleteLabelEverywhere,
   deleteNote,
   generateTitle,
-  getMachineDetails,
   getNote,
-  listMachineDetails,
   listNotes,
   loadLabelList,
-  parseMachineManifestJSON,
   loadNotes,
   loadSettings,
   markdownPlainText,
   markdownSafeText,
-  moveNoteToMachine,
   purgeExpiredTrash,
   renameLabel,
   restoreNote,
@@ -375,10 +371,16 @@ body
   assert.deepEqual(note.labels, ['old', 'a,b']);
   assert.equal(note.titleLocked, true);
   assert.equal(note.titleSource, 'manual');
+  // Multi-machine is nuked with no backwards compatibility: a legacy note that carried a
+  // `machine:` frontmatter field still parses, but the field is dropped on re-serialize and
+  // never surfaces on the parsed note.
+  assert.equal(note.machine, undefined);
   await saveNote(note, root);
   const raw = await readFile(join(notesDir, `${id}.md`), 'utf8');
   assert.match(raw, /^labels: \[old, "a,b"\]$/m);
   assert.doesNotMatch(raw, /^tags:/m);
+  assert.doesNotMatch(raw, /^machine:/m);
+  assert.doesNotMatch(raw, /Machine/);
 });
 
 test('notes list defaults to latest 10 and paginates', async (t) => {
@@ -539,7 +541,7 @@ test('agent tool schemas expose read write and confirmation safety boundaries', 
   assert.equal(byName.get('create_note').safety.mutates, true);
   assert.equal(byName.get('consolidate_notes').safety.requiresConfirmation, true);
   assert.equal(byName.get('trash_note').safety.requiresConfirmation, true);
-  assert.equal(byName.get('move_note').safety.requiresConfirmation, true);
+  assert.equal(byName.has('move_note'), false);
   assert.equal(byName.get('list_labels').safety.readOnly, true);
   assert.equal(byName.get('create_label').safety.mutates, true);
   assert.equal(byName.get('update_label').safety.requiresConfirmation, true);
@@ -665,14 +667,13 @@ test('agent write tools preview unsafe changes and apply confirmed create append
   assert.match(consolidated.body, /Source One/);
 });
 
-test('agent label move and goal flows use shared safe tools', async (t) => {
+test('agent label and goal flows use shared safe tools', async (t) => {
   const root = await tempRoot(t);
   const note = await saveNote({
     id: uuidFor(225),
     title: 'Goal Source',
     body: 'Alpha goal source body.',
     labels: ['alpha'],
-    machine: 'apple03',
   }, root);
 
   const createdLabel = await executeNotesAgentTool('create_label', { name: 'empty-label' }, { root });
@@ -699,14 +700,8 @@ test('agent label move and goal flows use shared safe tools', async (t) => {
 
   await assignLabel(note.id, 'beta', root);
 
-  const movePreview = await runNotesAgent(`move ${note.id} to apple04`, { root });
-  assert.equal(movePreview.status, 'awaiting_confirmation');
-  assert.equal(movePreview.toolCalls[0].name, 'move_note');
-  assert.equal((await getNote(note.id, root)).machine, 'apple03');
-
-  const moveConfirmed = await runNotesAgent(`move ${note.id} to apple04`, { root, yes: true, confirmWrites: true });
-  assert.equal(moveConfirmed.status, 'complete');
-  assert.equal((await getNote(note.id, root)).machine, 'apple04');
+  // Multi-machine is gone: a note carries no machine field and the agent exposes no move tool.
+  assert.equal((await getNote(note.id, root)).machine, undefined);
 
   const goal = await runNotesGoal('summarize beta notes', { root, maxSteps: 3 });
   assert.equal(goal.mode, 'goal');
@@ -727,12 +722,10 @@ test('web chat bridge emits tool source and confirmation events', async () => {
     windowTarget.addEventListener(name, event => events.push({ name, detail: event.detail }));
   }
   windowTarget.HasnaNotes.hydrate({
-    thisMachine: 'apple03',
     notes: [
-      { id: 'chat-1', title: 'Alpha Plan', body: 'Alpha launch plan and budget.', labels: ['alpha'], status: 'active', machine: 'apple03', updatedAt: '2026-06-23T10:00:00Z', createdAt: '2026-06-23T09:00:00Z' },
-      { id: 'chat-2', title: 'Alpha Followup', body: 'Alpha follow-up checklist.', labels: ['alpha'], status: 'active', machine: 'apple03', updatedAt: '2026-06-22T10:00:00Z', createdAt: '2026-06-22T09:00:00Z' },
+      { id: 'chat-1', title: 'Alpha Plan', body: 'Alpha launch plan and budget.', labels: ['alpha'], status: 'active', updatedAt: '2026-06-23T10:00:00Z', createdAt: '2026-06-23T09:00:00Z' },
+      { id: 'chat-2', title: 'Alpha Followup', body: 'Alpha follow-up checklist.', labels: ['alpha'], status: 'active', updatedAt: '2026-06-22T10:00:00Z', createdAt: '2026-06-22T09:00:00Z' },
     ],
-    machines: [{ id: 'apple03' }, { id: 'apple04', friendlyName: 'Apple 04' }],
   });
 
   const summary = await windowTarget.HasnaNotes.chat.send('summarize alpha notes');
@@ -775,12 +768,9 @@ test('web chat bridge emits tool source and confirmation events', async () => {
   const readUpdated = await windowTarget.HasnaNotes.chat.send('read note', { noteId: 'chat-1' });
   assert.match(readUpdated.text, /Rewritten alpha plan/);
 
-  const movePreview = await windowTarget.HasnaNotes.chat.send('move to apple04', { noteId: 'chat-1' });
-  assert.equal(movePreview.toolCalls[0].name, 'move_note');
-  assert.equal(movePreview.pendingConfirmations.length, 1);
-  const moved = windowTarget.HasnaNotes.chat.approve(movePreview.pendingConfirmations[0].id, true);
-  assert.equal(moved.note.id, 'chat-1');
-  assert.equal(windowTarget.HasnaNotes.notes.info('chat-1').currentMachine, 'apple04');
+  // Multi-machine is gone: no move bridge, no machines surface on the web app.
+  assert.equal(windowTarget.HasnaNotes.notes.moveToMachine, undefined);
+  assert.equal(windowTarget.HasnaNotes.machines, undefined);
 
   const consolidation = await windowTarget.HasnaNotes.chat.send('consolidate alpha notes');
   assert.equal(consolidation.pendingConfirmations.length, 1);
@@ -802,12 +792,10 @@ test('web navigation exposes Chat below New Note and Labels page operations', as
 
   const { windowTarget, document } = loadWebAppWithFakeDOM(app);
   windowTarget.HasnaNotes.hydrate({
-    thisMachine: 'apple03',
     labels: ['empty'],
     notes: [
-      { id: 'labels-1', title: 'Labelled', body: 'Body', labels: ['work'], status: 'active', machine: 'apple03', updatedAt: '2026-06-23T10:00:00Z', createdAt: '2026-06-23T09:00:00Z' },
+      { id: 'labels-1', title: 'Labelled', body: 'Body', labels: ['work'], status: 'active', updatedAt: '2026-06-23T10:00:00Z', createdAt: '2026-06-23T09:00:00Z' },
     ],
-    machines: [{ id: 'apple03' }],
   });
 
   const labelPairs = JSON.parse(JSON.stringify(windowTarget.HasnaNotes.labels.list().map(item => [item.name, item.count])));
@@ -820,18 +808,17 @@ test('web navigation exposes Chat below New Note and Labels page operations', as
   assert.equal(windowTarget.HasnaNotes.labels.list().some(item => item.name === 'project'), false);
 
   const toolNames = windowTarget.HasnaNotes.chat.tools().map(tool => tool.name);
-  for (const name of ['move_note', 'list_labels', 'create_label', 'update_label', 'delete_label']) {
+  for (const name of ['list_labels', 'create_label', 'update_label', 'delete_label']) {
     assert.ok(toolNames.includes(name), `${name} missing from web chat tools`);
   }
+  assert.equal(toolNames.includes('move_note'), false);
 
   windowTarget.HasnaNotes.hydrate({
-    thisMachine: 'apple03',
     labels: [],
     notes: [
-      { id: 'labels-1', title: 'Work Note', body: 'Work body', labels: ['work'], status: 'active', machine: 'apple03', updatedAt: '2026-06-23T10:00:00Z', createdAt: '2026-06-23T09:00:00Z' },
-      { id: 'labels-2', title: 'Personal Note', body: 'Personal body', labels: ['personal'], status: 'active', machine: 'apple03', updatedAt: '2026-06-22T10:00:00Z', createdAt: '2026-06-22T09:00:00Z' },
+      { id: 'labels-1', title: 'Work Note', body: 'Work body', labels: ['work'], status: 'active', updatedAt: '2026-06-23T10:00:00Z', createdAt: '2026-06-23T09:00:00Z' },
+      { id: 'labels-2', title: 'Personal Note', body: 'Personal body', labels: ['personal'], status: 'active', updatedAt: '2026-06-22T10:00:00Z', createdAt: '2026-06-22T09:00:00Z' },
     ],
-    machines: [{ id: 'apple03' }],
   });
   windowTarget.HasnaNotes.labels.select('work', { fullPage: true });
   assert.equal(windowTarget.HasnaNotes.view.state().labelFilter, 'work');
@@ -845,11 +832,9 @@ test('web chat slash goal keeps visible goal state in local fallback', async () 
   const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
   const { windowTarget } = loadWebAppWithFakeDOM(app);
   windowTarget.HasnaNotes.hydrate({
-    thisMachine: 'apple03',
     notes: [
-      { id: 'goal-1', title: 'Alpha Goal', body: 'Alpha goal body.', labels: ['alpha'], status: 'active', machine: 'apple03', updatedAt: '2026-06-23T10:00:00Z', createdAt: '2026-06-23T09:00:00Z' },
+      { id: 'goal-1', title: 'Alpha Goal', body: 'Alpha goal body.', labels: ['alpha'], status: 'active', updatedAt: '2026-06-23T10:00:00Z', createdAt: '2026-06-23T09:00:00Z' },
     ],
-    machines: [{ id: 'apple03' }],
   });
 
   const result = await windowTarget.HasnaNotes.chat.send('/goal summarize alpha notes');
@@ -873,18 +858,15 @@ test('web note action bridge confirms trash and permanent purge', async () => {
   windowTarget.addEventListener('hasna:note-purge', event => events.push({ name: 'purge', detail: event.detail }));
 
   windowTarget.HasnaNotes.hydrate({
-    thisMachine: 'apple03',
     notes: [{
       id: 'bridge-delete',
       title: 'Bridge Delete',
       body: 'Delete confirmation body',
       labels: [],
       status: 'active',
-      machine: 'apple03',
       updatedAt: '2026-06-23T10:00:00Z',
       createdAt: '2026-06-23T09:00:00Z',
     }],
-    machines: [{ id: 'apple03' }],
   });
 
   const cancelledTrash = windowTarget.HasnaNotes.notes.trash('bridge-delete');
@@ -931,20 +913,17 @@ test('web expired Trash cleanup is observable and confirmation-gated', async () 
   windowTarget.addEventListener('hasna:note-purge', event => purges.push(event.detail));
 
   windowTarget.HasnaNotes.hydrate({
-    thisMachine: 'apple03',
     notes: [{
       id: 'expired-trash',
       title: 'Expired Trash',
       body: 'Expired body',
       labels: [],
       status: 'trash',
-      machine: 'apple03',
       trashedAt: '2025-01-01T00:00:00.000Z',
       trashExpiresAt: '2025-02-01T00:00:00.000Z',
       updatedAt: '2025-01-01T00:00:00.000Z',
       createdAt: '2025-01-01T00:00:00.000Z',
     }],
-    machines: [{ id: 'apple03' }],
   });
 
   assert.equal(cleanupReady.length, 1);
@@ -983,7 +962,7 @@ test('labels can be assigned, renamed, listed, and deleted', async (t) => {
   assert.deepEqual(await loadLabelList(root), []);
 });
 
-test('archive trash restore purge retention and move-to-machine preserve metadata', async (t) => {
+test('archive trash restore purge and retention preserve metadata', async (t) => {
   const root = await tempRoot(t);
   const id = uuidFor(120);
   await saveSettings({ trashRetentionDays: 7 }, root);
@@ -991,21 +970,16 @@ test('archive trash restore purge retention and move-to-machine preserve metadat
     id,
     title: 'Agent Added Note',
     body: 'body',
-    machine: 'apple03',
     createdByActorType: 'agent',
     createdByName: 'Codewith',
-    sourceMachine: 'spark02',
-    sourceMachineFriendlyName: 'Spark',
     openedFrom: 'mcp',
     sourceContext: 'ticket-123',
   }, root);
   assert.equal(created.createdByActorType, 'agent');
-  assert.equal(created.originMachine, 'apple03');
-
-  const moved = await moveNoteToMachine(id, 'apple04', { targetMachineFriendlyName: 'Studio' }, root);
-  assert.equal(moved.machine, 'apple04');
-  assert.equal(moved.previousMachine, 'apple03');
-  assert.equal(moved.originMachine, 'apple03');
+  // Multi-machine is nuked: notes carry no machine provenance fields at all.
+  assert.equal(created.machine, undefined);
+  assert.equal(created.sourceMachine, undefined);
+  assert.equal(created.originMachine, undefined);
 
   const archived = await archiveNote(id, root);
   assert.equal(archived.status, 'archived');
@@ -1019,7 +993,7 @@ test('archive trash restore purge retention and move-to-machine preserve metadat
 
   const trashed = await trashNote(id, {}, root);
   assert.equal(trashed.status, 'trash');
-  assert.equal(trashed.trashMachine, 'apple04');
+  assert.equal(trashed.trashMachine, undefined);
   assert.ok(trashed.trashExpiresAt);
   assert.equal((await listNotes({}, root)).total, 0);
   assert.equal((await listNotes({ status: 'trash' }, root)).total, 1);
@@ -1030,82 +1004,6 @@ test('archive trash restore purge retention and move-to-machine preserve metadat
   assert.equal(await getNote(id, root), null);
 
   assert.equal((await loadSettings(root)).trashRetentionDays, 7);
-});
-
-test('machine details combine open-machines fields with notes fallback metadata', async (t) => {
-  const root = await tempRoot(t);
-  const manifest = join(root, 'machines.json');
-  await writeFile(manifest, JSON.stringify({
-    machines: [{
-      id: 'apple03',
-      slug: 'apple-studio',
-      friendlyName: 'Apple Studio',
-      sshAddress: 'apple03.local',
-      platform: 'macos',
-      online: true,
-      status: 'online',
-      source: 'open-machines',
-      origin: 'fleet',
-      lastSeenAt: '2026-06-20T10:00:00Z',
-      syncedAt: '2026-06-20T10:05:00Z',
-      capabilities: ['notes-sync', 'menu-bar'],
-      metadata: { location: 'desk', nested: { rack: 'A' } },
-      provenance: { importedBy: 'test' },
-      sync: { notes: 'ok' },
-    }],
-  }), 'utf8');
-  await saveNote({
-    id: uuidFor(130),
-    title: 'Machine Note',
-    machine: 'apple03',
-    status: 'active',
-    updatedAt: '2026-06-21T10:00:00Z',
-    body: 'body',
-  }, root);
-  await saveNote({
-    id: uuidFor(131),
-    title: 'Archived Machine Note',
-    machine: 'apple03',
-    status: 'archived',
-    updatedAt: '2026-06-22T10:00:00Z',
-    body: 'body',
-  }, root);
-  await saveNote({
-    id: uuidFor(132),
-    title: 'Fallback Note',
-    machine: 'spark02',
-    status: 'active',
-    updatedAt: '2026-06-19T10:00:00Z',
-    body: 'body',
-  }, root);
-  await saveNote({
-    id: uuidFor(133),
-    title: 'Slug Owned Note',
-    machine: 'apple-studio',
-    status: 'active',
-    updatedAt: '2026-06-23T10:00:00Z',
-    body: 'body',
-  }, root);
-
-  assert.equal(parseMachineManifestJSON(await readFile(manifest, 'utf8'))[0].friendlyName, 'Apple Studio');
-  const page = await listMachineDetails({ manifestPath: manifest, runCLI: false, thisMachine: '' }, root);
-  const apple = page.items.find(m => m.id === 'apple03');
-  assert.equal(apple.displayName, 'Apple Studio');
-  assert.equal(apple.online, true);
-  assert.deepEqual(apple.capabilities, ['notes-sync', 'menu-bar']);
-  assert.deepEqual(apple.metadata.nested, { rack: 'A' });
-  assert.deepEqual(apple.provenance, { importedBy: 'test' });
-  assert.deepEqual(apple.sync, { notes: 'ok' });
-  assert.equal(apple.noteCount, 2);
-  assert.equal(apple.archivedNoteCount, 1);
-  assert.equal(apple.totalNoteCount, 3);
-  assert.equal(apple.latestNoteUpdatedAt, '2026-06-23T10:00:00.000Z');
-  assert.equal(page.items.filter(m => m.id === 'apple-studio').length, 0);
-  assert.equal((await getMachineDetails('apple-studio', { manifestPath: manifest, runCLI: false }, root)).id, 'apple03');
-
-  const fallback = await getMachineDetails('spark02', { manifestPath: manifest, runCLI: false }, root);
-  assert.equal(fallback.source, 'notes');
-  assert.equal(fallback.noteCount, 1);
 });
 
 test('title generation is capped to four words for heuristic and sidecar paths', async (t) => {
@@ -1146,14 +1044,15 @@ test('CLI creates, lists, and assigns labels with JSON output', async (t) => {
   const assigned = await runNode(cliPath, ['labels', 'assign', note.id, 'extra', '--json'], env);
   assert.equal(assigned.code, 0, assigned.stderr);
   assert.deepEqual(JSON.parse(assigned.stdout).labels, ['cli', 'extra']);
+  assert.equal(JSON.parse(assigned.stdout).machine, undefined);
 
+  // Multi-machine is nuked: the `move` and `machines` CLI commands no longer exist.
   const moved = await runNode(cliPath, ['move', note.id, 'apple04', '--json'], env);
-  assert.equal(moved.code, 0, moved.stderr);
-  assert.equal(JSON.parse(moved.stdout).machine, 'apple04');
-
+  assert.equal(moved.code, 1);
+  assert.match(moved.stderr, /unknown_command/);
   const machine = await runNode(cliPath, ['machines', 'details', 'apple04', '--json'], env);
-  assert.equal(machine.code, 0, machine.stderr);
-  assert.equal(JSON.parse(machine.stdout).noteCount, 1);
+  assert.equal(machine.code, 1);
+  assert.match(machine.stderr, /unknown_command/);
 
   const render = await runNode(cliPath, ['markdown', 'render', '--text', '# Hi <script>x</script>', '--json'], env);
   assert.equal(render.code, 0, render.stderr);
@@ -1262,7 +1161,6 @@ test('CLI creates, lists, and assigns labels with JSON output', async (t) => {
     title: 'Expired CLI Trash',
     body: 'expired',
     status: 'trash',
-    machine: 'apple03',
     trashedAt: '2025-01-01T00:00:00.000Z',
     trashExpiresAt: '2025-02-01T00:00:00.000Z',
   }, root);
@@ -1334,8 +1232,10 @@ test('MCP server exposes notes and labels tools over stdio framing', async (t) =
 
   const listTools = await client.send(2, 'tools/list', {});
   assert.ok(listTools.result.tools.some(tool => tool.name === 'labels_assign'));
-  assert.ok(listTools.result.tools.some(tool => tool.name === 'notes_move_to_machine'));
-  assert.ok(listTools.result.tools.some(tool => tool.name === 'machines_details'));
+  // Multi-machine is nuked: no move/machines tools are exposed over MCP.
+  assert.equal(listTools.result.tools.some(tool => tool.name === 'notes_move_to_machine'), false);
+  assert.equal(listTools.result.tools.some(tool => tool.name === 'machines_details'), false);
+  assert.equal(listTools.result.tools.some(tool => tool.name === 'machines_list'), false);
   assert.ok(listTools.result.tools.some(tool => tool.name === 'markdown_render'));
   assert.ok(listTools.result.tools.some(tool => tool.name === 'markdown_apply_command'));
   assert.ok(listTools.result.tools.some(tool => tool.name === 'agent_run'));
@@ -1344,12 +1244,13 @@ test('MCP server exposes notes and labels tools over stdio framing', async (t) =
 
   const created = await client.send(3, 'tools/call', {
     name: 'notes_create',
-    arguments: { title: 'MCP Note', body: 'mcp body', labels: ['mcp'], actorType: 'agent', actorName: 'MCP Agent', targetMachine: 'apple03' },
+    arguments: { title: 'MCP Note', body: 'mcp body', labels: ['mcp'], actorType: 'agent', actorName: 'MCP Agent' },
   });
   const note = parseToolText(created);
   assert.equal(note.title, 'MCP Note');
   assert.equal(note.createdByActorType, 'agent');
   assert.equal(note.contentFormat, 'markdown');
+  assert.equal(note.machine, undefined);
 
   const labels = await client.send(4, 'tools/call', { name: 'labels_list', arguments: {} });
   assert.deepEqual(parseToolText(labels).labels, ['mcp']);
@@ -1373,18 +1274,6 @@ test('MCP server exposes notes and labels tools over stdio framing', async (t) =
   assert.equal(sidecarGenerated.provider, 'sidecar');
   assert.equal(sidecarGenerated.title, 'MCP Token Title');
   assert.equal(titleHeaders[0].headers['x-hasna-notes-token'], 'mcp-sidecar-token');
-
-  const moved = await client.send(6, 'tools/call', {
-    name: 'notes_move_to_machine',
-    arguments: { id: note.id, machine: 'apple04' },
-  });
-  assert.equal(parseToolText(moved).machine, 'apple04');
-
-  const machine = await client.send(7, 'tools/call', {
-    name: 'machines_details',
-    arguments: { id: 'apple04' },
-  });
-  assert.equal(parseToolText(machine).noteCount, 1);
 
   const rendered = await client.send(8, 'tools/call', {
     name: 'markdown_render',
@@ -1446,7 +1335,7 @@ test('MCP server exposes notes and labels tools over stdio framing', async (t) =
 
   const trashCreated = await client.send(16, 'tools/call', {
     name: 'notes_create',
-    arguments: { title: 'MCP Trash Target', body: 'trash body', targetMachine: 'apple03' },
+    arguments: { title: 'MCP Trash Target', body: 'trash body' },
   });
   const trashTarget = parseToolText(trashCreated);
 
@@ -1503,7 +1392,6 @@ test('MCP server exposes notes and labels tools over stdio framing', async (t) =
     title: 'Expired MCP Trash',
     body: 'expired',
     status: 'trash',
-    machine: 'apple03',
     trashedAt: '2025-01-01T00:00:00.000Z',
     trashExpiresAt: '2025-02-01T00:00:00.000Z',
   }, root);
@@ -1588,9 +1476,9 @@ test('recording and realtime transcription contracts are exposed to UI/native ho
   assert.match(app, /startRealtimeRecording/);
   assert.match(app, /pauseRecording/);
   assert.match(app, /resumeRecording/);
-  assert.match(app, /machineDetails/);
-  assert.match(app, /requestDetails/);
-  assert.match(app, /hasna:machine-details/);
+  // Multi-machine is nuked from the web app: no machine bridge or events remain.
+  assert.doesNotMatch(app, /machineDetails/);
+  assert.doesNotMatch(app, /hasna:machine-details/);
 
   const sidecar = await readFile(join(repoRoot, 'ai-sidecar', 'server.mjs'), 'utf8');
   assert.match(sidecar, /\/realtime-transcribe/);
@@ -1617,16 +1505,16 @@ test('recording and realtime transcription contracts are exposed to UI/native ho
   assert.match(sidecar, /scribe_v2_realtime/);
   assert.match(app, /finalizeTimer/);
   assert.match(app, /startToken/);
-  assert.match(app, /hasna:note-move/);
+  assert.doesNotMatch(app, /hasna:note-move/);
   assert.match(app, /hasna:note-archive/);
   assert.match(app, /hasna:note-trash/);
-  assert.match(app, /moveToMachine/);
+  assert.doesNotMatch(app, /moveToMachine/);
   assert.match(app, /setTrashRetentionDays/);
   assert.match(app, /postNative\('settings'/);
   assert.match(app, /id="nav-chat"|nav-chat/);
   assert.match(app, /sendSidecarChat/);
   assert.match(app, /X-Hasna-Notes-Token/);
-  assert.match(app, /chatTool\('move_note'/);
+  assert.doesNotMatch(app, /chatTool\('move_note'/);
   assert.match(app, /chatTool\('list_labels'/);
   assert.match(app, /chatTool\('create_label'/);
   assert.match(app, /chatTool\('update_label'/);
@@ -1741,126 +1629,6 @@ test('sidecar approval tool endpoint executes shared note tools without model ac
   });
   assert.equal(confirmed.status, 200);
   assert.equal((await getNote(createdBody.note.id, root)).status, 'trash');
-});
-
-test('web machine selection and move-to-machine jump to destination context', async () => {
-  const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
-  const { windowTarget, document } = loadWebAppWithFakeDOM(app);
-  const machineSelections = [];
-  const moves = [];
-  windowTarget.addEventListener('hasna:machine-select', event => machineSelections.push(event.detail));
-  windowTarget.addEventListener('hasna:note-move', event => moves.push(event.detail));
-
-  windowTarget.HasnaNotes.hydrate({
-    thisMachine: 'apple03',
-    machines: [
-      { id: 'apple03', slug: 'apple-studio', friendlyName: 'Apple Studio' },
-      { id: 'machine001', slug: 'machine-one', friendlyName: 'Machine One', status: 'online' },
-    ],
-    notes: [
-      {
-        id: 'apple-note',
-        title: 'Apple Note',
-        body: 'Local body',
-        labels: [],
-        status: 'active',
-        machine: 'apple03',
-        updatedAt: '2026-06-23T10:00:00Z',
-        createdAt: '2026-06-23T09:00:00Z',
-      },
-      {
-        id: 'machine-latest',
-        title: 'Machine Latest',
-        body: 'Destination body',
-        labels: [],
-        status: 'active',
-        machine: 'machine001',
-        updatedAt: '2026-06-22T10:00:00Z',
-        createdAt: '2026-06-22T09:00:00Z',
-      },
-      {
-        id: 'machine-slug',
-        title: 'Machine Slug',
-        body: 'Slug body',
-        labels: [],
-        status: 'active',
-        machine: 'machine-one',
-        updatedAt: '2026-06-21T10:00:00Z',
-        createdAt: '2026-06-21T09:00:00Z',
-      },
-    ],
-    listDefaults: { limit: 10 },
-  });
-
-  const machinesList = document.getElementById('machines-list');
-  const machineRow = machinesList.children.find(row => row.dataset.machine === 'machine001');
-  assert.ok(machineRow, 'expected machine001 sidebar row to render');
-  machineRow.click();
-
-  let view = windowTarget.HasnaNotes.view.state();
-  assert.equal(view.screen, 'notes');
-  assert.equal(view.machineFilter, 'machine001');
-  assert.equal(view.selectedId, 'machine-latest');
-  assert.deepEqual(view.visibleNoteIds, ['machine-latest', 'machine-slug']);
-  assert.equal(view.selectedMachine.id, 'machine001');
-  assert.equal(machineSelections.at(-1).reason, 'sidebar');
-  assert.equal(machineSelections.at(-1).view.screen, 'notes');
-  assert.equal(document.getElementById('window').getAttribute('data-active-shell'), 'app');
-
-  const moved = windowTarget.HasnaNotes.notes.moveToMachine('apple-note', 'machine-one');
-  assert.equal(moved.machine, 'machine001');
-  view = windowTarget.HasnaNotes.view.state();
-  assert.equal(view.screen, 'notes');
-  assert.equal(view.machineFilter, 'machine001');
-  assert.equal(view.selectedId, 'apple-note');
-  assert.ok(view.visibleNoteIds.includes('apple-note'));
-  assert.equal(machineSelections.at(-1).reason, 'move');
-  assert.equal(moves.at(-1).targetMachine, 'machine001');
-  assert.equal(moves.at(-1).selectedMachine.id, 'machine001');
-  assert.equal(moves.at(-1).selectedNoteId, 'apple-note');
-  assert.equal(moves.at(-1).view.selectedId, 'apple-note');
-
-  const canonicalizedMove = windowTarget.HasnaNotes.notes.moveToMachine('machine-slug', 'machine001');
-  assert.equal(canonicalizedMove.machine, 'machine001');
-  assert.equal(moves.at(-1).targetMachine, 'machine001');
-  assert.equal(moves.at(-1).selectedNoteId, 'machine-slug');
-  assert.equal(windowTarget.HasnaNotes.view.state().selectedId, 'machine-slug');
-
-  machineSelections.length = 0;
-  windowTarget.HasnaNotes.hydrate({
-    thisMachine: 'apple03',
-    machines: [],
-    notes: [{
-      id: 'field-note',
-      title: 'Field Note',
-      body: 'Field body',
-      labels: [],
-      status: 'active',
-      machine: 'field-slug',
-      updatedAt: '2026-06-20T10:00:00Z',
-      createdAt: '2026-06-20T09:00:00Z',
-    }],
-  });
-  windowTarget.HasnaNotes.machines.select('field-slug');
-  assert.equal(windowTarget.HasnaNotes.view.state().machineFilter, 'field-slug');
-  windowTarget.HasnaNotes.machines.receiveDetails({
-    requestId: 'manual',
-    machine: { id: 'field001', slug: 'field-slug', friendlyName: 'Field One' },
-  });
-  view = windowTarget.HasnaNotes.view.state();
-  assert.equal(view.machineFilter, 'field001');
-  assert.equal(view.selectedId, 'field-note');
-  assert.equal(view.selectedMachine.id, 'field001');
-  assert.equal(machineSelections.at(-1).reason, 'details');
-  assert.deepEqual(view.visibleNoteIds, ['field-note']);
-  assert.equal(
-    document.getElementById('machines-list').children.filter(row => row.dataset.machine === 'field001').length,
-    1,
-  );
-  assert.equal(
-    document.getElementById('machines-list').children.filter(row => row.dataset.machine === 'field-slug').length,
-    0,
-  );
 });
 
 test('bounded recording emits error instead of complete when transcription request fails', async () => {

@@ -4,14 +4,14 @@
 // style. Data arrives one of two ways:
 //
 //   1. Native macOS host (WKWebView): the Swift shell injects `window.__BOOT__` at
-//      document-start (notes + machines + this machine's id) read from the on-disk
-//      Markdown store, and later calls `window.HasnaNotes.hydrate(boot)` after any
-//      save/create/delete so the UI re-renders from fresh data. Writes are sent back
-//      to Swift via `window.webkit.messageHandlers.notes.postMessage({action,note})`.
+//      document-start (the notes) read from the on-disk Markdown store, and later calls
+//      `window.HasnaNotes.hydrate(boot)` after any save/create/delete so the UI
+//      re-renders from fresh data. Writes are sent back to Swift via
+//      `window.webkit.messageHandlers.notes.postMessage({action,note})`.
 //
 //   2. Plain browser / Playwright: no `__BOOT__`, so we fall back to a small built-in
-//      SAMPLE (notes across two machines) and keep the model in memory — writes just
-//      mutate the in-memory model + re-render, so the whole UI is testable headless.
+//      SAMPLE and keep the model in memory — writes just mutate the in-memory model +
+//      re-render, so the whole UI is testable headless.
 //
 // No chat/composer/task/diff screens — those are gone. Navigation is hash-free
 // for the editor (selection is in-memory); only Settings uses a hash (#settings) so a
@@ -20,27 +20,22 @@
   'use strict';
 
   // ------------------------------------------------------------------ sample data
-  // Used ONLY in a plain browser (no native __BOOT__). 4 notes across 2 machines.
+  // Used ONLY in a plain browser (no native __BOOT__).
   function sampleBoot() {
     const now = Date.now();
     const iso = ms => new Date(ms).toISOString();
     return {
-      thisMachine: 'apple03',
-      machines: [
-        { id: 'apple03' },
-        { id: 'machine001' },
-      ],
       notes: [
         {
           id: 's-1', title: 'Welcome to Hasna Notes',
-          body: 'Plain-text Markdown notes, synced across your machines.\n\n' +
+          body: 'Plain-text Markdown notes on this account.\n\n' +
             'Every note is a file on disk — the source of truth. Edit the title or ' +
             'body and it saves automatically.\n\n' +
             '- New Note (top of the sidebar) starts a fresh note\n' +
             '- Search filters as you type\n' +
-            '- Machines lets you see notes across the whole fleet',
+            '- Labels group related notes',
           labels: ['welcome', 'docs'], status: 'active', folder: '',
-          machine: 'apple03', updatedAt: iso(now - 1000 * 60 * 8),
+          updatedAt: iso(now - 1000 * 60 * 8),
           createdAt: iso(now - 1000 * 60 * 60 * 26),
         },
         {
@@ -48,22 +43,22 @@
           body: '## Before shipping\n\n1. Run the full test suite\n2. Scan for secrets\n' +
             '3. Bump the patch version\n4. Tag the release\n\nNotes round-trip byte-for-byte.',
           labels: ['release'], status: 'active', folder: '',
-          machine: 'apple03', updatedAt: iso(now - 1000 * 60 * 60 * 5),
+          updatedAt: iso(now - 1000 * 60 * 60 * 5),
           createdAt: iso(now - 1000 * 60 * 60 * 50),
         },
         {
-          id: 's-3', title: 'Meeting notes — fleet sync',
-          body: 'Bidirectional rsync, newest-wins. Each machine ends up with the newest ' +
-            'version of every note. Non-mac and unreachable machines are skipped.',
-          labels: ['meeting', 'sync'], status: 'reviewed', folder: '',
-          machine: 'machine001', updatedAt: iso(now - 1000 * 60 * 60 * 28),
+          id: 's-3', title: 'Meeting notes',
+          body: 'Follow-ups from the planning sync. Every note is Markdown with YAML ' +
+            'frontmatter, one file per note.',
+          labels: ['meeting'], status: 'reviewed', folder: '',
+          updatedAt: iso(now - 1000 * 60 * 60 * 28),
           createdAt: iso(now - 1000 * 60 * 60 * 72),
         },
         {
           id: 's-4', title: 'Ideas',
           body: 'A scratchpad of half-formed thoughts. Markdown all the way down.',
           labels: [], status: 'inbox', folder: '',
-          machine: 'machine001', updatedAt: iso(now - 1000 * 60 * 60 * 96),
+          updatedAt: iso(now - 1000 * 60 * 60 * 96),
           createdAt: iso(now - 1000 * 60 * 60 * 120),
         },
       ],
@@ -75,18 +70,14 @@
   // Default titles that are eligible for AI auto-titling (Feature 6).
   const DEFAULT_TITLES = ['', 'New Note', 'Untitled Note'];
   const state = {
-    notes: [],            // [{id,title,body,labels,status,folder,machine,updatedAt,createdAt}]
+    notes: [],            // [{id,title,body,labels,status,folder,updatedAt,createdAt}]
     labels: [],           // persisted labels from labels.json; note labels are still source for counts
-    machines: [],         // [{id}]
-    thisMachine: 'unknown',
     selectedId: null,     // currently-open note id (or null = empty state)
-    machineFilter: ALL,   // ALL or a machine id
     labelFilter: ALL,     // ALL or a label name (UI-only forward-compatible filter)
     query: '',            // search text
     screen: 'home',       // 'home' | 'chat' | 'labels' | 'notes' | 'noteslist' | 'settings' | 'compact'
     statusFilter: 'active', // active | archived | trash | all
     noteListLimit: 6,     // sidebar Notes list; "View more" opens the full Notes page
-    machineListLimit: 4,  // sidebar Machines list; "View more" opens Settings → Machines
     recentLimit: 3,       // Home recent cards — kept deliberately light (no inline expand)
     settings: { trashRetentionDays: 30 },
     chat: {
@@ -106,7 +97,6 @@
   const titleManuallyEdited = Object.create(null);
   // Per-note auto-title state so we only fire once per default-titled note.
   const autoTitled = Object.create(null);
-  const machineDetailWaiters = Object.create(null);
 
   const native = () =>
     !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.notes);
@@ -204,25 +194,16 @@
     return out;
   }
 
-  function defaultProvenance(machine) {
-    const m = machine || state.thisMachine || 'unknown';
+  function defaultProvenance() {
     return {
       createdByActorType: 'human',
       createdByName: '',
-      sourceMachine: m,
-      sourceMachineFriendlyName: '',
-      originMachine: m,
-      originMachineFriendlyName: '',
-      targetMachineFriendlyName: '',
-      previousMachine: '',
       openedFrom: '',
       sourceContext: '',
       archivedAt: '',
       trashedAt: '',
-      trashMachine: '',
       trashExpiresAt: '',
       restoredAt: '',
-      movedAt: '',
     };
   }
 
@@ -262,7 +243,6 @@
     chatTool('archive_note', 'Archive one note.', false, true),
     chatTool('trash_note', 'Move one note to Trash.', false, true),
     chatTool('restore_note', 'Restore one note.', false, true),
-    chatTool('move_note', 'Move one note to another machine.', false, true),
     chatTool('list_labels', 'List known labels.', true, false),
     chatTool('create_label', 'Create an empty label.', false, false),
     chatTool('update_label', 'Rename a label everywhere.', false, true),
@@ -501,11 +481,10 @@
     return list.slice().sort((a, b) => Date.parse(b.updatedAt || 0) - Date.parse(a.updatedAt || 0));
   }
 
-	  // Notes after machine-filter + label-filter + search, newest first. The list the user sees.
+	  // Notes after label-filter + search, newest first. The list the user sees.
 	  function visibleNotes() {
 	    const q = state.query.trim().toLowerCase();
 	    return sortNotes(state.notes.filter(n => {
-	      if (state.machineFilter !== ALL && !noteMatchesMachine(n, state.machineFilter)) return false;
 	      if (state.labelFilter !== ALL && noteLabels(n).indexOf(state.labelFilter) < 0) return false;
       if (state.statusFilter === 'active' && (n.status === 'archived' || n.status === 'trash')) return false;
       if (state.statusFilter === 'archived' && n.status !== 'archived') return false;
@@ -530,210 +509,10 @@
 
 	  function noteById(id) { return state.notes.find(n => n.id === id) || null; }
 
-	  function noteMatchesMachine(note, machineId) {
-	    if (!note || machineId === ALL) return true;
-	    return machineAliases(machineId).has(note.machine);
-	  }
-
-  function machineCount(id) {
-    return state.notes.filter(n => noteMatchesMachine(n, id) && n.status !== 'trash' && n.status !== 'archived').length;
-  }
-
-  function latestISO(values) {
-    let latest = '';
-    values.forEach(value => {
-      const time = Date.parse(value || 0);
-      if (!Number.isNaN(time) && (!latest || time > Date.parse(latest))) latest = new Date(time).toISOString();
-    });
-    return latest;
-  }
-
-	  function machineAliases(machineOrId) {
-	    const m = typeof machineOrId === 'string' ? machineById(machineOrId) : machineOrId;
-	    return new Set([
-	      typeof machineOrId === 'string' ? machineOrId : '',
-	      m && m.id,
-	      m && m.slug,
-	      m && m.friendlyName,
-	      m && m.displayName,
-	    ].filter(Boolean).map(String));
-	  }
-
-  function machineNoteCounts(machineOrId) {
-    const aliases = machineAliases(machineOrId);
-    const notes = state.notes.filter(n => aliases.has(n.machine));
-    const active = notes.filter(n => n.status !== 'trash' && n.status !== 'archived');
-    return {
-      noteCount: active.length,
-      activeNoteCount: active.length,
-      archivedNoteCount: notes.filter(n => n.status === 'archived').length,
-      trashNoteCount: notes.filter(n => n.status === 'trash').length,
-      totalNoteCount: notes.length,
-      latestNoteUpdatedAt: latestISO(notes.map(n => n.updatedAt)),
-    };
-  }
-
-	  function machineById(id) {
-	    const needle = String(id || '');
-	    return state.machines.find(m =>
-	      m.id === needle ||
-	      m.slug === needle ||
-	      m.friendlyName === needle ||
-	      m.displayName === needle
-	    ) || null;
-	  }
-
-  function machineDetails(id) {
-    const machineId = String(id || '').trim();
-    const source = machineById(machineId) || { id: machineId, slug: machineId, displayName: machineId, source: 'notes' };
-    const counts = machineNoteCounts(source);
-    const recentActivityAt = latestISO([
-      source.recentActivityAt,
-      source.syncedAt,
-      source.lastSeenAt,
-      source.updatedAt,
-      counts.latestNoteUpdatedAt,
-    ]);
-    return Object.assign({}, source, counts, {
-      id: source.id || machineId,
-      slug: source.slug || source.id || machineId,
-      displayName: source.displayName || source.friendlyName || source.id || machineId,
-      friendlyName: source.friendlyName || '',
-      status: source.status || (source.online === true ? 'online' : (source.online === false ? 'offline' : 'unknown')),
-      online: source.online == null ? null : !!source.online,
-      source: source.source || 'notes',
-      origin: source.origin || '',
-      recentActivityAt,
-      capabilities: source.capabilities || [],
-      metadata: source.metadata || {},
-      provenance: source.provenance || {},
-      sync: source.sync || {},
-    });
-  }
-
-  function machineDetailsList() {
-    const ids = new Set(state.machines.map(m => m.id).filter(Boolean));
-    state.notes.forEach(n => {
-      if (!n.machine) return;
-      const existing = machineById(n.machine);
-      ids.add(existing ? existing.id : n.machine);
-    });
-    if (state.thisMachine) ids.add(machineDetails(state.thisMachine).id);
-    return [...ids].map(machineDetails).sort((a, b) => {
-      const d = Date.parse(b.recentActivityAt || b.updatedAt || 0) - Date.parse(a.recentActivityAt || a.updatedAt || 0);
-      if (d) return d;
-      return String(a.displayName).localeCompare(String(b.displayName));
-    });
-  }
-
-  function requestMachineDetails(id) {
-    const fallback = machineDetails(id);
-    const requestId = 'machine-' + Date.now() + '-' + Math.random().toString(36).slice(2);
-    const promise = new Promise(resolve => {
-      machineDetailWaiters[requestId] = resolve;
-      setTimeout(() => {
-        if (!machineDetailWaiters[requestId]) return;
-        delete machineDetailWaiters[requestId];
-        resolve(fallback);
-      }, 1500);
-    });
-    window.dispatchEvent(new CustomEvent('hasna:machine-details-request', { detail: { requestId, machineId: fallback.id, machine: fallback } }));
-    if (native()) {
-      try { window.webkit.messageHandlers.notes.postMessage({ action: 'machineDetails', machine: fallback.id, requestId }); }
-      catch (e) { /* host gone */ }
-    } else {
-      setTimeout(() => receiveMachineDetails({ requestId, machine: fallback }), 0);
-    }
-    return promise;
-  }
-
-	  function receiveMachineDetails(payload) {
-    const p = payload || {};
-    const detail = normalizeMachine(p.machine || p);
-    const incomingAliases = machineAliases(detail);
-    const idx = state.machines.findIndex(m => {
-      const aliases = machineAliases(m);
-      return [...incomingAliases].some(alias => aliases.has(alias));
-    });
-    if (idx >= 0) state.machines[idx] = Object.assign({}, state.machines[idx], detail);
-    else if (detail.id) state.machines.push(detail);
-    const resolved = machineDetails(detail.id);
-    let canonicalizedSelection = false;
-    const resolvedAliases = machineAliases(resolved);
-    if (state.machineFilter !== ALL && resolvedAliases.has(state.machineFilter) && state.machineFilter !== resolved.id) {
-      state.machineFilter = resolved.id;
-      const selected = noteById(state.selectedId);
-      if (!selected || !noteMatchesMachine(selected, resolved.id)) {
-        const v = visibleNotes();
-        state.selectedId = v.length ? v[0].id : null;
-      }
-      canonicalizedSelection = true;
-    }
-    window.dispatchEvent(new CustomEvent('hasna:machine-details', { detail: { requestId: p.requestId || '', machineId: resolved.id, machine: resolved } }));
-    if (canonicalizedSelection) {
-      window.dispatchEvent(new CustomEvent('hasna:machine-select', {
-        detail: {
-          machineId: resolved.id,
-          machine: resolved,
-          selectedNoteId: state.selectedId,
-          reason: 'details',
-          view: viewSnapshot(),
-        },
-      }));
-    }
-    const waiter = p.requestId && machineDetailWaiters[p.requestId];
-    if (waiter) {
-      delete machineDetailWaiters[p.requestId];
-      waiter(resolved);
-    }
-	    if (canonicalizedSelection) render();
-	    else renderMachines();
-	    return resolved;
-	  }
-
 	  function clearSearchInput() {
 	    state.query = '';
 	    const si = $('search-input');
 	    if (si) si.value = '';
-	  }
-
-	  function selectMachine(machineId, opts) {
-	    const options = opts || {};
-	    commitEdit();
-	    const isAll = machineId === ALL;
-	    const detail = isAll ? null : machineDetails(machineId);
-	    const target = isAll ? ALL : (detail.id || String(machineId || '').trim());
-	    if (!isAll && !target) return null;
-
-	    state.machineFilter = target;
-	    state.statusFilter = options.statusFilter || 'active';
-	    state.labelFilter = ALL;
-	    clearSearchInput();
-	    state.noteListLimit = 10;
-	    state.screen = 'notes';
-	    showApp();
-
-	    const preferred = options.noteId ? noteById(options.noteId) : null;
-	    if (preferred && (isAll || noteMatchesMachine(preferred, target))) {
-	      state.selectedId = preferred.id;
-	    } else {
-	      const v = visibleNotes();
-	      state.selectedId = v.length ? v[0].id : null;
-	    }
-
-	    const selectedMachine = isAll ? null : machineDetails(target);
-	    window.dispatchEvent(new CustomEvent('hasna:machine-select', {
-	      detail: {
-	        machineId: target,
-	        machine: selectedMachine,
-	        selectedNoteId: state.selectedId,
-	        reason: options.reason || 'sidebar',
-	        view: viewSnapshot(),
-	      },
-	    }));
-	    if (!isAll) requestMachineDetails(target);
-	    render();
-	    return selectedMachine;
 	  }
 
 	  // ------------------------------------------------------------------ persistence bridge
@@ -802,7 +581,6 @@
   function render() {
     renderLabels();
     renderNotesList();
-    renderMachines();
     renderContent();
     renderSettingsMeta();
     renderHome();
@@ -1022,44 +800,14 @@
       const body = (n.body || n.content || '').replace(/\s+/g, ' ').trim();
       row.appendChild(el('div', 'np-row-title', (n.title && n.title.trim()) || 'Untitled Note'));
       row.appendChild(el('div', 'np-row-sub', body.slice(0, 120) || 'No content'));
-      // Third row: machine + friendly relative time, kept compact and muted.
+      // Third row: friendly relative time, kept compact and muted.
       const meta = el('div', 'np-row-meta');
-      const machine = (n.sourceMachineFriendlyName || n.machine || '').trim();
-      if (machine && machine !== 'unknown') meta.appendChild(el('span', 'np-row-machine', machine));
       const age = relTime(n.updatedAt);
       if (age) meta.appendChild(el('span', 'np-row-age', age));
       row.appendChild(meta);
       row.addEventListener('click', () => selectNote(n.id));
       row.addEventListener('contextmenu', (e) => { e.preventDefault(); openContextMenu(e, n.id); });
       host.appendChild(row);
-    });
-  }
-
-  // ------------------------------------------------------------------ Machines page
-  // The fuller machines list lives under Settings → Machines (kept off the Home page).
-  function renderMachinesPage() {
-    const host = $('machines-page');
-    const emptyEl = $('machines-page-empty');
-    if (!host) return;
-    host.innerHTML = '';
-    const machines = machineDetailsList();
-    if (emptyEl) emptyEl.hidden = machines.length !== 0;
-    machines.forEach(m => {
-      const card = el('div', 'mp-row');
-      const left = el('div', 'mp-left');
-      const name = (m.displayName || m.id || 'Unknown machine').trim();
-      left.appendChild(el('div', 'mp-name', name));
-      const sub = [];
-      if (m.platform) sub.push(m.platform);
-      const seen = m.recentActivityAt || m.latestNoteUpdatedAt || m.updatedAt;
-      if (seen) sub.push('Active ' + relTime(seen));
-      left.appendChild(el('div', 'mp-sub', sub.join(' · ') || 'No recent activity'));
-      card.appendChild(left);
-      const count = Number(m.noteCount || 0);
-      card.appendChild(el('span', 'mp-count', count === 1 ? '1 note' : count + ' notes'));
-      // Clicking a machine filters the sidebar list to it and returns to the app.
-      card.addEventListener('click', () => { selectMachine(m.id, { reason: 'settings' }); showApp(); });
-      host.appendChild(card);
     });
   }
 
@@ -1188,9 +936,7 @@
     if (list.length === 0) {
       if (emptySide) {
         emptySide.hidden = false;
-        emptySide.textContent = state.query.trim()
-          ? 'No matching notes'
-          : (state.machineFilter === ALL ? 'No notes' : 'No notes on this machine');
+        emptySide.textContent = state.query.trim() ? 'No matching notes' : 'No notes';
       }
       return;
     }
@@ -1230,72 +976,6 @@
     }
   }
 
-  function renderMachines() {
-    const host = $('machines-list');
-    if (!host) return;
-    host.innerHTML = '';
-
-    // "All Machines" row first.
-    host.appendChild(machineRow(ALL, 'All Machines', state.notes.filter(n => n.status !== 'trash' && n.status !== 'archived').length, true));
-
-    // One row per machine. Union of manifest machines + machines seen in notes, so a
-    // note from a machine missing from the manifest still gets a row.
-    const machines = machineDisplays();
-    machines.slice(0, state.machineListLimit).forEach(m => host.appendChild(machineRow(m.id, m.displayName, m.noteCount, false, m)));
-    const more = $('machines-more');
-    if (more) more.hidden = machines.length <= state.machineListLimit;
-  }
-
-  function machineDisplays() {
-    return machineDetailsList();
-  }
-
-  function machineRow(id, label, count, isAll, machine) {
-    const row = el('div', 'machine-row');
-    row.dataset.machine = id;
-    if (machine && machine.updatedAt) row.dataset.updatedAt = machine.updatedAt;
-    if (machine && machine.status) row.dataset.status = machine.status;
-    if (machine && machine.online != null) row.dataset.online = String(!!machine.online);
-    if (machine && machine.friendlyName) row.dataset.friendlyName = machine.friendlyName;
-    if (state.machineFilter === id) row.classList.add('active');
-
-    const left = el('div', 'mr-left');
-    const ico = document.createElement('span');
-    ico.className = 'mr-ico';
-    // "All": layered-stack glyph. Single machine: a small desktop/monitor glyph.
-    ico.innerHTML = isAll
-      ? '<svg viewBox="0 0 16 16" fill="none"><path d="M2.5 5.5L8 2.5l5.5 3L8 8.5 2.5 5.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M2.5 8.5L8 11.5l5.5-3" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>'
-      : '<svg viewBox="0 0 16 16" fill="none"><rect x="2.2" y="3" width="11.6" height="8" rx="1.4" stroke="currentColor" stroke-width="1.2"/><path d="M6 13.3h4M8 11v2.3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>';
-    left.appendChild(ico);
-    left.appendChild(el('span', 'mr-name', label));
-    row.appendChild(left);
-	    row.appendChild(el('span', 'mr-count', String(count)));
-
-	    row.addEventListener('click', () => {
-	      selectMachine(id, { reason: 'sidebar' });
-	    });
-    row.addEventListener('dragover', (ev) => {
-      if (id === ALL) return;
-      if (ev.dataTransfer.types.includes('application/x-hasna-note-id') || ev.dataTransfer.types.includes('text/plain')) {
-        ev.preventDefault();
-        ev.dataTransfer.dropEffect = 'move';
-      }
-    });
-    row.addEventListener('drop', (ev) => {
-      if (id === ALL) return;
-      const noteId = ev.dataTransfer.getData('application/x-hasna-note-id') || ev.dataTransfer.getData('text/plain');
-      if (!noteId) return;
-      ev.preventDefault();
-      moveNoteToMachine(noteId, id, machine && machine.friendlyName);
-    });
-    row.addEventListener('contextmenu', () => {
-      if (id === ALL) return;
-      const detail = machineDetails(id);
-      window.dispatchEvent(new CustomEvent('hasna:machine-context', { detail: { machineId: id, machine: detail } }));
-    });
-    return row;
-  }
-
   function renderEditor() {
     const editor = $('editor');
     const empty = $('empty-state');
@@ -1322,7 +1002,7 @@
       if (desc) {
         desc.textContent = state.query.trim()
           ? 'No notes match “' + state.query.trim() + '”.'
-          : 'No notes on this machine yet.';
+          : 'No notes yet.';
       }
     } else {
       // There ARE visible notes but none selected — select the newest and show it.
@@ -1335,11 +1015,10 @@
     const titleEl = $('editor-title');
     const bodyEl = $('editor-body');
     // Only overwrite the field value when it differs, so we don't disturb the caret
-    // while the user is typing (render() can be called from machine-filter clicks etc).
+    // while the user is typing (render() can be called from label-filter clicks etc).
     if (titleEl.value !== note.title) titleEl.value = note.title || '';
     if (bodyEl.value !== note.body) bodyEl.value = note.body || '';
 
-    $('em-machine').textContent = note.machine || state.thisMachine;
     $('em-updated').textContent = 'updated ' + relTime(note.updatedAt);
 
     const tags = $('em-tags');
@@ -1492,23 +1171,15 @@
 	      contentFormat: 'markdown',
 	      labels: n.labels || [], tags: n.labels || [],
       status: n.status || 'active', folder: n.folder || '',
-      machine: n.machine, updatedAt: n.updatedAt, createdAt: n.createdAt,
+      updatedAt: n.updatedAt, createdAt: n.createdAt,
       createdByActorType: n.createdByActorType || 'human',
       createdByName: n.createdByName || '',
-      sourceMachine: n.sourceMachine || n.machine || state.thisMachine,
-      sourceMachineFriendlyName: n.sourceMachineFriendlyName || '',
-      originMachine: n.originMachine || n.machine || state.thisMachine,
-      originMachineFriendlyName: n.originMachineFriendlyName || '',
-      targetMachineFriendlyName: n.targetMachineFriendlyName || '',
-      previousMachine: n.previousMachine || '',
       openedFrom: n.openedFrom || '',
       sourceContext: n.sourceContext || '',
       archivedAt: n.archivedAt || '',
       trashedAt: n.trashedAt || '',
-      trashMachine: n.trashMachine || '',
       trashExpiresAt: n.trashExpiresAt || '',
       restoredAt: n.restoredAt || '',
-      movedAt: n.movedAt || '',
       titleLocked: !!n.titleLocked,
       titleSource: n.titleSource || (isDefaultTitle(n.title) ? 'default' : 'manual'),
       titleContentFingerprint: n.titleContentFingerprint || '',
@@ -1522,16 +1193,12 @@
         : 'local-' + Date.now() + '-' + Math.random().toString(16).slice(2),
       title: '', body: '', labels: [], status: 'active', folder: '',
       contentFormat: 'markdown',
-      machine: state.thisMachine, updatedAt: nowIso, createdAt: nowIso,
-      ...defaultProvenance(state.thisMachine),
+      updatedAt: nowIso, createdAt: nowIso,
+      ...defaultProvenance(),
       titleLocked: false, titleSource: 'default', titleContentFingerprint: '',
     };
     state.notes.push(note);
     state.selectedId = note.id;
-    // New notes always belong to this machine; if the filter would hide it, reset to All.
-    if (state.machineFilter !== ALL && state.machineFilter !== note.machine) {
-      state.machineFilter = ALL;
-    }
     state.labelFilter = ALL;
     state.noteListLimit = 10;
     state.query = '';
@@ -1554,8 +1221,8 @@
         : 'local-' + Date.now() + '-' + Math.random().toString(16).slice(2)),
       title: title || '', body: body || '', labels: noteLabels(extra), status: extra.status || 'active', folder: extra.folder || '',
       contentFormat: 'markdown',
-      machine: extra.machine || state.thisMachine, updatedAt: nowIso, createdAt: nowIso,
-      ...defaultProvenance(state.thisMachine),
+      updatedAt: nowIso, createdAt: nowIso,
+      ...defaultProvenance(),
       ...extra,
       titleLocked: !!(title && title.trim()), titleSource: title && title.trim() ? 'manual' : 'default',
       titleContentFingerprint: '',
@@ -1587,7 +1254,7 @@
   }
 
   // ------------------------------------------------------------------ settings + theme
-  const SETTINGS_TABS = ['appearance', 'machines', 'about'];
+  const SETTINGS_TABS = ['appearance', 'about'];
   const win = $('window');
 
   function showSettings(tab) {
@@ -1600,7 +1267,6 @@
     document.querySelectorAll('.set-page').forEach(p => p.classList.remove('active'));
     const page = document.querySelector('.set-page[data-tab="' + t + '"]');
     if (page) page.classList.add('active');
-    if (t === 'machines') renderMachinesPage();
   }
 
   function showApp() {
@@ -1680,7 +1346,6 @@
   }
 
   function renderSettingsMeta() {
-    const m = $('about-machine'); if (m) m.textContent = state.thisMachine || '—';
     const c = $('about-count'); if (c) c.textContent = String(state.notes.length);
   }
 
@@ -1718,7 +1383,6 @@
     else if (act === 'duplicate') duplicateNote(note);
     else if (act === 'copy') copyNoteText(note);
     else if (act === 'archive') archiveNote(note.id);
-    else if (act === 'move') promptMoveNote(note.id);
     else if (act === 'restore') restoreNote(note.id);
     else if (act === 'delete') deleteNote(note);
   }
@@ -1802,7 +1466,6 @@
     note.status = 'archived';
     note.archivedAt = new Date().toISOString();
     note.trashedAt = '';
-    note.trashMachine = '';
     note.trashExpiresAt = '';
     note.updatedAt = new Date().toISOString();
     postNative('archive', serializeNote(note));
@@ -1816,7 +1479,6 @@
     note.status = 'active';
     note.archivedAt = '';
     note.trashedAt = '';
-    note.trashMachine = '';
     note.trashExpiresAt = '';
     note.restoredAt = new Date().toISOString();
     note.updatedAt = note.restoredAt;
@@ -1830,7 +1492,6 @@
     const now = new Date().toISOString();
     note.status = 'trash';
     note.trashedAt = now;
-    note.trashMachine = note.machine || state.thisMachine;
     note.trashExpiresAt = addDaysISO(now, state.settings.trashRetentionDays);
     note.updatedAt = now;
     postNative('trash', serializeNote(note), { confirmed: !!(options && options.confirmed) });
@@ -1851,42 +1512,7 @@
     render();
   }
 
-		  function moveNoteToMachine(id, machine, friendlyName) {
-		    const note = noteById(id);
-		    const requested = String(machine || '').trim();
-		    if (!note || !requested) return null;
-		    const destination = machineDetails(requested);
-		    const target = destination.id || requested;
-		    const targetMachineFriendlyName = friendlyName || destination.friendlyName || destination.displayName || '';
-		    if (noteMatchesMachine(note, target) && note.machine === target) {
-		      selectMachine(target, { noteId: id, reason: 'move' });
-		      return note;
-		    }
-		    if (!note.originMachine) note.originMachine = note.machine || state.thisMachine;
-		    note.previousMachine = note.machine || '';
-		    note.machine = target;
-	    note.targetMachineFriendlyName = targetMachineFriendlyName;
-	    note.movedAt = new Date().toISOString();
-		    note.updatedAt = note.movedAt;
-		    postNative('move', serializeNote(note));
-		    const selectedMachine = selectMachine(target, { noteId: note.id, reason: 'move' });
-		    dispatchNoteEvent('hasna:note-move', note, {
-		      targetMachine: target,
-		      targetMachineFriendlyName,
-		      selectedMachine,
-		      selectedNoteId: state.selectedId,
-		      view: viewSnapshot(),
-		    });
-		    return note;
-		  }
-
-  function promptMoveNote(id) {
-    const machines = machineDisplays().filter(m => m.id !== ALL);
-    const target = window.prompt('Move to machine', machines[0] ? machines[0].id : state.thisMachine);
-    if (target) moveNoteToMachine(id, target);
-  }
-
-  function dispatchNoteEvent(name, note, extra) {
+		  function dispatchNoteEvent(name, note, extra) {
     window.dispatchEvent(new CustomEvent(name, {
       detail: Object.assign({ note: serializeNote(note), noteId: note.id }, extra || {}),
     }));
@@ -1895,16 +1521,10 @@
   function noteInfo(id) {
     const note = noteById(id);
     if (!note) return null;
-    const bootInfo = note.info || {};
     return {
       createdBy: note.createdByName || note.author || 'Unknown',
       createdByActorType: note.createdByActorType || 'human',
       createdAt: note.createdAt,
-      sourceMachine: note.sourceMachine || note.machine,
-      sourceMachineFriendlyName: note.sourceMachineFriendlyName || bootInfo.sourceMachineFriendlyName || '',
-      originMachine: note.originMachine || note.machine,
-      originMachineFriendlyName: note.originMachineFriendlyName || bootInfo.originMachineFriendlyName || '',
-      currentMachine: note.machine,
       openedFrom: note.openedFrom || '',
       sourceContext: note.sourceContext || '',
     };
@@ -2574,11 +2194,6 @@
   function onOpenLabels(e) { if (e) e.preventDefault(); showLabelsPage(); }
   function onMinimize(e) { if (e) e.preventDefault(); setCompact(true); }
   function onCompactExpand(e) { if (e) e.preventDefault(); setCompact(false); }
-  // "View more" under Machines opens the fuller list in Settings → Machines.
-  function onMachinesMore(e) {
-    if (e) e.preventDefault();
-    showSettings('machines');
-  }
   function onAllNotes(e) { if (e) e.preventDefault(); showNotesPage(); }
   function onChatSubmit(e) {
     if (e) e.preventDefault();
@@ -2688,7 +2303,6 @@
     const recBtn = $('rec-btn'); if (recBtn) recBtn.addEventListener('click', onRecordClick);
     const pillPause = $('rec-pill-pause'); if (pillPause) pillPause.addEventListener('click', onRecPauseToggle);
     const pillStop = $('rec-pill-stop'); if (pillStop) pillStop.addEventListener('click', onRecPillStop);
-    const machinesMore = $('machines-more'); if (machinesMore) machinesMore.addEventListener('click', onMachinesMore);
     const allNotes = $('home-all-notes'); if (allNotes) allNotes.addEventListener('click', onAllNotes);
 
     // Context menu items + global close handlers.
@@ -2730,7 +2344,6 @@
     const recBtn = $('rec-btn'); if (recBtn) recBtn.removeEventListener('click', onRecordClick);
     const pillPause = $('rec-pill-pause'); if (pillPause) pillPause.removeEventListener('click', onRecPauseToggle);
     const pillStop = $('rec-pill-stop'); if (pillStop) pillStop.removeEventListener('click', onRecPillStop);
-    const machinesMore = $('machines-more'); if (machinesMore) machinesMore.removeEventListener('click', onMachinesMore);
     const allNotes = $('home-all-notes'); if (allNotes) allNotes.removeEventListener('click', onAllNotes);
     document.querySelectorAll('.ctx-item[data-act]').forEach(it => it.removeEventListener('click', onCtxAction));
     document.removeEventListener('keydown', onGlobalKeydown);
@@ -2749,16 +2362,11 @@
     const b = boot || {};
     state.notes = Array.isArray(b.notes) ? b.notes.map(normalizeNote) : [];
     state.labels = normalizeLabelList([].concat(Array.isArray(b.labels) ? b.labels : [], state.notes.flatMap(note => note.labels || [])));
-    state.machines = Array.isArray(b.machines)
-      ? b.machines.map(normalizeMachine).filter(m => m.id)
-      : [];
-    state.thisMachine = b.thisMachine || state.thisMachine || 'unknown';
     if (b.settings && Number(b.settings.trashRetentionDays) > 0) {
       state.settings.trashRetentionDays = Number(b.settings.trashRetentionDays);
     }
     const limit = b.listDefaults && Number(b.listDefaults.limit);
     state.noteListLimit = limit > 0 ? limit : 6;
-    state.machineListLimit = 4;
 
     // Keep the open note if it still exists; else newest visible; else null.
     if (!noteById(state.selectedId)) {
@@ -2766,37 +2374,6 @@
       state.selectedId = v.length ? v[0].id : null;
     }
     notifyExpiredTrashReady();
-  }
-
-  function normalizeMachine(m) {
-    if (typeof m === 'string') m = { id: m };
-    m = m || {};
-    return {
-      id: String(m.id || m.slug || ''),
-      slug: m.slug || m.id || '',
-      displayName: m.displayName || m.friendlyName || m.id || m.slug || '',
-      friendlyName: m.friendlyName || '',
-      sshAddress: m.sshAddress || m.ssh || m.host || '',
-      platform: m.platform || m.os || '',
-      status: m.status || (m.online === true ? 'online' : (m.online === false ? 'offline' : 'unknown')),
-      online: m.online == null ? null : !!m.online,
-      source: m.source || '',
-      origin: m.origin || '',
-      updatedAt: m.updatedAt || '',
-      lastSeenAt: m.lastSeenAt || '',
-      syncedAt: m.syncedAt || '',
-      recentActivityAt: m.recentActivityAt || '',
-      noteCount: Number(m.noteCount || 0),
-      activeNoteCount: Number(m.activeNoteCount || m.noteCount || 0),
-      archivedNoteCount: Number(m.archivedNoteCount || 0),
-      trashNoteCount: Number(m.trashNoteCount || 0),
-      totalNoteCount: Number(m.totalNoteCount || m.noteCount || 0),
-      latestNoteUpdatedAt: m.latestNoteUpdatedAt || '',
-      capabilities: m.capabilities || [],
-      metadata: m.metadata || {},
-      provenance: m.provenance || {},
-      sync: m.sync || {},
-    };
   }
 
   function normalizeNote(n) {
@@ -2810,25 +2387,16 @@
       labels: Array.isArray(n.labels) ? n.labels : (Array.isArray(n.tags) ? n.tags : []),
       status: n.status || 'active',
       folder: n.folder || '',
-      machine: n.machine || 'unknown',
       updatedAt: n.updatedAt || new Date().toISOString(),
       createdAt: n.createdAt || n.updatedAt || new Date().toISOString(),
       createdByActorType: n.createdByActorType || 'human',
       createdByName: n.createdByName || '',
-      sourceMachine: n.sourceMachine || n.machine || 'unknown',
-      sourceMachineFriendlyName: n.sourceMachineFriendlyName || '',
-      originMachine: n.originMachine || n.machine || 'unknown',
-      originMachineFriendlyName: n.originMachineFriendlyName || '',
-      targetMachineFriendlyName: n.targetMachineFriendlyName || '',
-      previousMachine: n.previousMachine || '',
       openedFrom: n.openedFrom || '',
       sourceContext: n.sourceContext || '',
       archivedAt: n.archivedAt || '',
       trashedAt: n.trashedAt || '',
-      trashMachine: n.trashMachine || '',
       trashExpiresAt: n.trashExpiresAt || '',
       restoredAt: n.restoredAt || '',
-      movedAt: n.movedAt || '',
       info: n.info || null,
       titleLocked: !!n.titleLocked,
       titleSource: n.titleSource || (isDefaultTitle(n.title) ? 'default' : 'manual'),
@@ -2909,7 +2477,6 @@
       createdAt: note.createdAt || '',
       labels: noteLabels(note),
       status: note.status || 'active',
-      machine: note.machine || '',
     };
   }
 
@@ -2964,12 +2531,6 @@
       oldName: (opts && opts.oldName) || (match && match[1] && match[1].trim()) || '',
       newName: (opts && opts.newName) || (match && match[2] && match[2].trim()) || '',
     };
-  }
-
-  function chatExtractMachine(prompt, opts) {
-    if (opts && (opts.machine || opts.targetMachine)) return String(opts.machine || opts.targetMachine).trim();
-    const match = /\b(?:to|machine)\s+([A-Za-z0-9._-]+)\b/i.exec(String(prompt || ''));
-    return match ? match[1].trim() : '';
   }
 
   function chatExtractUpdate(prompt, opts) {
@@ -3315,7 +2876,6 @@
           info.title + ' (' + info.id + ')',
           'Created by ' + info.createdBy + ' (' + info.createdByActorType + ')',
           info.createdAt ? 'Created ' + info.createdAt : '',
-          info.currentMachine ? 'Machine ' + info.currentMachine : '',
           info.openedFrom ? 'Opened from ' + info.openedFrom : '',
         ].filter(Boolean).join('\n');
         finishChatToolCall(call, { info, sources }, 'result');
@@ -3373,26 +2933,6 @@
         sources = result.sources;
         answer = result.dryRun ? 'Label preview ready for ' + note.id + '.' : 'Added label "' + label + '" to "' + ((note.title && note.title.trim()) || 'Untitled Note') + '".';
         finishChatToolCall(call, result, 'result');
-      } else if (/\bmove\b/.test(lower) && note) {
-        const machine = chatExtractMachine(text, opts);
-        if (!machine) throw new Error('machine_required');
-        const machineName = opts.machineName || '';
-        const call = addChatToolCall('move_note', { id: note.id, machine, machineName, dryRun: !opts.confirm });
-        sources = [chatNoteRef(note)];
-        if (opts.confirm) {
-          const moved = moveNoteToMachine(note.id, machine, machineName);
-          answer = 'Moved "' + ((note.title && note.title.trim()) || 'Untitled Note') + '" to ' + machine + '.';
-          finishChatToolCall(call, { note: chatNoteRef(moved || note), sources: [chatNoteRef(moved || note)] }, 'result');
-        } else {
-          queueChatApproval('move_note', call, { id: note.id, machine, machineName }, {
-            id: note.id,
-            title: note.title,
-            fromMachine: note.machine || '',
-            toMachine: machine,
-            machineName,
-          });
-          answer = 'Move preview ready for ' + note.id + '.';
-        }
       } else if (/\barchive\b/.test(lower) && note) {
         const call = addChatToolCall('archive_note', { id: note.id, dryRun: !opts.confirm });
         sources = [chatNoteRef(note)];
@@ -3460,14 +3000,14 @@
 
   function localGoalTerminalText(text) {
     const value = String(text || '').toLowerCase();
-    if (/\b(needs? (user )?input|need you to|please provide|which note|what label|what machine|which machine)\b/.test(value)) return 'needs_input';
+    if (/\b(needs? (user )?input|need you to|please provide|which note|what label)\b/.test(value)) return 'needs_input';
     if (/\b(blocked|cannot continue|not possible|unable to proceed)\b/.test(value)) return 'blocked';
     return '';
   }
 
   function localGoalComplete(objective, result, stepIndex) {
     const toolCalls = result.toolCalls || [];
-    const mutating = new Set(['create_note', 'update_note', 'append_note', 'label_note', 'unlabel_note', 'archive_note', 'trash_note', 'restore_note', 'move_note', 'create_label', 'update_label', 'delete_label', 'consolidate_notes']);
+    const mutating = new Set(['create_note', 'update_note', 'append_note', 'label_note', 'unlabel_note', 'archive_note', 'trash_note', 'restore_note', 'create_label', 'update_label', 'delete_label', 'consolidate_notes']);
     const mutatingSuccess = toolCalls.some(call => mutating.has(call.name) && call.state === 'result' && !(call.result && (call.result.requiresConfirmation || call.result.dryRun)));
     if (mutatingSuccess) return true;
     const readIntent = /\b(summarize|summary|search|find|list|read|show|info|metadata|provenance|related|similar)\b/i.test(objective);
@@ -3802,8 +3342,6 @@
       render();
     } else if (note && approval.toolName === 'restore_note') {
       restoreNote(note.id);
-    } else if (note && approval.toolName === 'move_note') {
-      moveNoteToMachine(note.id, input.machine, input.machineName);
     }
     if (note) {
       const result = { approved: true, note: chatNoteRef(note), approval };
@@ -3830,12 +3368,10 @@
 	  function viewSnapshot() {
 	    return {
 	      screen: state.screen,
-	      machineFilter: state.machineFilter,
 	      labelFilter: state.labelFilter,
 	      statusFilter: state.statusFilter,
 	      selectedId: state.selectedId,
 	      visibleNoteIds: visibleNotes().map(n => n.id),
-	      selectedMachine: state.machineFilter === ALL ? null : machineDetails(state.machineFilter),
 	    };
 	  }
 
@@ -3892,7 +3428,6 @@
     recCommand: recCommand,
     onTranscript: onTranscript,
 	    notes: {
-	      moveToMachine: moveNoteToMachine,
 	      archive: archiveNote,
 		      trash: trashNoteWithConfirmation,
 		      restore: restoreNote,
@@ -3906,13 +3441,6 @@
         postNative('settings', state.settings);
 	        return Object.assign({}, state.settings);
 	      },
-	    },
-	    machines: {
-	      list: machineDetailsList,
-	      details: machineDetails,
-	      select: selectMachine,
-	      requestDetails: requestMachineDetails,
-	      receiveDetails: receiveMachineDetails,
 	    },
     labels: {
       list: function () { return allLabels(); },

@@ -69,23 +69,14 @@ public struct Note: Identifiable, Equatable {
     public var updatedAt: Date
     public var author: String
     public var agent: String
-    public var machine: String
     public var createdByActorType: String
     public var createdByName: String
-    public var sourceMachine: String
-    public var sourceMachineFriendlyName: String
-    public var originMachine: String
-    public var originMachineFriendlyName: String
-    public var targetMachineFriendlyName: String
-    public var previousMachine: String
     public var openedFrom: String
     public var sourceContext: String
     public var archivedAt: Date?
     public var trashedAt: Date?
-    public var trashMachine: String
     public var trashExpiresAt: Date?
     public var restoredAt: Date?
-    public var movedAt: Date?
     public var body: String
 
     public init(
@@ -102,23 +93,14 @@ public struct Note: Identifiable, Equatable {
         updatedAt: Date = Date(),
         author: String = Note.currentAuthor,
         agent: String = Note.appAgent,
-        machine: String = Note.currentMachine,
         createdByActorType: String = "human",
         createdByName: String = Note.currentAuthor,
-        sourceMachine: String = Note.currentMachine,
-        sourceMachineFriendlyName: String = "",
-        originMachine: String? = nil,
-        originMachineFriendlyName: String = "",
-        targetMachineFriendlyName: String = "",
-        previousMachine: String = "",
         openedFrom: String = "",
         sourceContext: String = "",
         archivedAt: Date? = nil,
         trashedAt: Date? = nil,
-        trashMachine: String = "",
         trashExpiresAt: Date? = nil,
         restoredAt: Date? = nil,
-        movedAt: Date? = nil,
         body: String = ""
     ) {
         self.id = id
@@ -134,23 +116,14 @@ public struct Note: Identifiable, Equatable {
         self.updatedAt = updatedAt
         self.author = author
         self.agent = agent
-        self.machine = machine
         self.createdByActorType = createdByActorType
         self.createdByName = createdByName
-        self.sourceMachine = sourceMachine
-        self.sourceMachineFriendlyName = sourceMachineFriendlyName
-        self.originMachine = originMachine ?? machine
-        self.originMachineFriendlyName = originMachineFriendlyName
-        self.targetMachineFriendlyName = targetMachineFriendlyName
-        self.previousMachine = previousMachine
         self.openedFrom = openedFrom
         self.sourceContext = sourceContext
         self.archivedAt = archivedAt
         self.trashedAt = trashedAt
-        self.trashMachine = trashMachine
         self.trashExpiresAt = trashExpiresAt
         self.restoredAt = restoredAt
-        self.movedAt = movedAt
         self.body = body
     }
 
@@ -168,23 +141,14 @@ public struct Note: Identifiable, Equatable {
         updatedAt: Date = Date(),
         author: String = Note.currentAuthor,
         agent: String = Note.appAgent,
-        machine: String = Note.currentMachine,
         createdByActorType: String = "human",
         createdByName: String = Note.currentAuthor,
-        sourceMachine: String = Note.currentMachine,
-        sourceMachineFriendlyName: String = "",
-        originMachine: String? = nil,
-        originMachineFriendlyName: String = "",
-        targetMachineFriendlyName: String = "",
-        previousMachine: String = "",
         openedFrom: String = "",
         sourceContext: String = "",
         archivedAt: Date? = nil,
         trashedAt: Date? = nil,
-        trashMachine: String = "",
         trashExpiresAt: Date? = nil,
         restoredAt: Date? = nil,
-        movedAt: Date? = nil,
         body: String = ""
     ) {
         self.init(
@@ -201,23 +165,14 @@ public struct Note: Identifiable, Equatable {
             updatedAt: updatedAt,
             author: author,
             agent: agent,
-            machine: machine,
             createdByActorType: createdByActorType,
             createdByName: createdByName,
-            sourceMachine: sourceMachine,
-            sourceMachineFriendlyName: sourceMachineFriendlyName,
-            originMachine: originMachine,
-            originMachineFriendlyName: originMachineFriendlyName,
-            targetMachineFriendlyName: targetMachineFriendlyName,
-            previousMachine: previousMachine,
             openedFrom: openedFrom,
             sourceContext: sourceContext,
             archivedAt: archivedAt,
             trashedAt: trashedAt,
-            trashMachine: trashMachine,
             trashExpiresAt: trashExpiresAt,
             restoredAt: restoredAt,
-            movedAt: movedAt,
             body: body
         )
     }
@@ -239,11 +194,6 @@ public struct Note: Identifiable, Equatable {
 
     public static var currentAuthor: String {
         NSUserName().isEmpty ? "unknown" : NSUserName()
-    }
-
-    public static var currentMachine: String {
-        let name = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
-        return name.isEmpty ? "unknown" : name
     }
 
     public static let defaultTitles: Set<String> = ["", "New Note", "Untitled Note"]

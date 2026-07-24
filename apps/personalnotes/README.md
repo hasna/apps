@@ -10,7 +10,7 @@ with YAML frontmatter, so they stay forward-compatible with the planned
 ## What it is
 
 - A clean, Apple-Notes-style UI: a narrow **purple Liquid-Glass sidebar**
-  (Library / Folders / Labels / Machines) beside ONE continuous **white canvas** —
+  (Library / Folders / Labels) beside ONE continuous **white canvas** —
   a compact header line ("12 notes · Updated 3m ago"), a searchable **note list**,
   and a **rich-text editor** — separated only by subtle hairline dividers, no boxed
   panels.
@@ -22,9 +22,8 @@ with YAML frontmatter, so they stay forward-compatible with the planned
   Chat UI; this repo exposes the state/events/tools.
 - Per-note **status / labels / folder** live behind a subtle settings popover, keeping
   the editor surface clean.
-- **Folders** (persisted to `folders.json`, empty folders survive) and **fleet sync**:
-  bidirectional, newest-wins `rsync`/`ssh` synchronization of the notes directory across
-  the macOS fleet, surfaced in the Machines section.
+- **Folders** (persisted to `folders.json`, empty folders survive). Notes are
+  single-account and single-store — there is no cross-machine sync, pairing, or fleet.
 - Liquid Glass on the sidebar (`.glassEffect`, interactive) over an "infinity purple"
   gradient, with light/dark and reduce-transparency support.
 
@@ -40,7 +39,7 @@ other tool (the future `@hasna/notes` catalog/CLI) can index the same directory.
 - Files without frontmatter are treated as a body with a title derived from the first line.
 - The closing `---` is followed by a single newline and then the body **immediately**
   (no blank separator line); the body is preserved byte-for-byte on round-trip.
-- Scalar fields (title/author/machine) are double-quoted when they contain special
+- Scalar fields (title/author) are double-quoted when they contain special
   characters, with `\\`, `\"`, and `\n` escaped; labels that contain a comma, bracket,
   quote, or surrounding space are double-quoted in the `[...]` list.
 
@@ -61,16 +60,16 @@ createdAt: 2026-06-22T09:00:00Z
 updatedAt: 2026-06-22T09:00:00Z
 author: hasna
 agent: hasna-notes-app  # legacy `open-notes-app` still parses
-machine: Mac
 ---
 The markdown body goes here.
 ```
 
 Frontmatter key order is fixed: `id, title, labels, status, folder,
-contentFormat, title metadata, createdAt, updatedAt, author, agent, machine`,
+contentFormat, title metadata, createdAt, updatedAt, author, agent`,
 followed by provenance and lifecycle fields. Notes written by older versions
-(`tags`, no `folder` key, no `contentFormat` key, `agent: open-notes-app`) still
-parse — unknown/missing keys are tolerated. The user's folder list is persisted separately in
+(`tags`, no `folder` key, no `contentFormat` key, `agent: open-notes-app`, and any
+legacy `machine`/`*Machine` fields) still parse — unknown/missing keys are tolerated
+and legacy machine fields are dropped on the next save. The user's folder list is persisted separately in
 `~/.hasna/apps/notes/folders.json`; labels can also be persisted in
 `~/.hasna/apps/notes/labels.json` so empty labels survive.
 
@@ -92,11 +91,11 @@ node cli/hasna-notes.mjs markdown apply-command bold --text hello --selection-st
 ```
 
 Archive and Trash are first-class note states. Normal Delete moves a note to
-per-machine Trash; deleting a note already in Trash, or calling an explicit purge,
+Trash; deleting a note already in Trash, or calling an explicit purge,
 permanently removes the file. Trash retention defaults to 30 days and is stored in
 `~/.hasna/apps/notes/settings.json`. Notes also carry provenance metadata for
-agent-created notes and synced notes: actor type/name, source machine, origin/current
-machine, previous machine, opened-from/source context, and lifecycle timestamps.
+agent-created notes: actor type/name, opened-from/source context, and lifecycle
+timestamps.
 
 ## Project layout
 
@@ -108,12 +107,11 @@ Sources/OpenNotesCore/              Pure, UI-free logic (a library product)
   RichTextMarkdown.swift            Pure Markdown ↔ rich-text document bridge (tested)
   FolderStore.swift                 folders.json persistence (empty folders survive)
   LabelStore.swift                  labels.json persistence + normalization
-  FleetSync.swift                   Fleet manifest + bidirectional rsync/ssh sync engine
 Sources/OpenNotes/                  SwiftUI app (executable target name kept as OpenNotes)
   OpenNotesApp.swift                @main App entry (hidden title bar, "Hasna Notes")
-  NotesStore.swift                  @MainActor ObservableObject store (+ folders/sync)
+  NotesStore.swift                  @MainActor ObservableObject store (+ folders)
   ContentView.swift                 Purple sidebar + continuous white canvas + header
-  SidebarView.swift                 Library / Folders / Labels / Machines + add-folder + Sync
+  SidebarView.swift                 Library / Folders / Labels + add-folder
   NoteListView.swift                Continuous list, hairline dividers, context menus
   EditorView.swift                  Title + formatting toolbar + settings popover
   RichTextEditor.swift              NSTextView rich editor bridged to Markdown
@@ -159,7 +157,6 @@ node --test test/notes-functionality.test.mjs
 ```bash
 node cli/hasna-notes.mjs list --limit 10
 node cli/hasna-notes.mjs labels assign <note-id> research
-node cli/hasna-notes.mjs move <note-id> apple04
 node cli/hasna-notes.mjs archive <note-id>
 node cli/hasna-notes.mjs delete <note-id>          # moves to Trash
 node cli/hasna-notes.mjs purge <note-id>           # permanent delete
@@ -174,11 +171,9 @@ node mcp/hasna-notes-mcp.mjs
 
 The CLI and MCP both default lists to the latest 10 notes and return pagination
 metadata in JSON/MCP responses. CLI/MCP creation supports agent provenance fields
-such as `actorType`, `actorName`, `sourceMachine`, `targetMachine`, `openedFrom`,
-and `sourceContext`. Machine details are available through `hasna-notes machines
-list`, `hasna-notes machines details <id>`, and MCP `machines_list` /
-`machines_details`; details combine open-machines fields with notes-derived
-fallback counts and activity timestamps.
+such as `actorType`, `actorName`, `openedFrom`, and `sourceContext`. Notes are
+single-account and single-store: there is no cross-machine sync, note "move to
+machine", or fleet/machines listing.
 Markdown helpers are available in MCP as `markdown_commands`, `markdown_render`,
 `markdown_plain_text`, and `markdown_apply_command`.
 

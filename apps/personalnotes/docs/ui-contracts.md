@@ -9,7 +9,6 @@ The native host injects `window.__BOOT__` before `web/app.js` runs and later cal
 
 ```js
 {
-  thisMachine: "apple03",
   listDefaults: { limit: 10 },
   notes: [{
     id: "uuid-or-file-id",
@@ -22,32 +21,18 @@ The native host injects `window.__BOOT__` before `web/app.js` runs and later cal
     tags: ["research"], // compatibility alias only
     status: "active",
     folder: "",
-    machine: "apple03",
     createdByActorType: "agent", // human | agent | system
     createdByName: "Codewith",
-    sourceMachine: "spark02",
-    sourceMachineFriendlyName: "Spark",
-    originMachine: "apple03",
-    originMachineFriendlyName: "Apple Studio",
-    targetMachineFriendlyName: "",
-    previousMachine: "",
     openedFrom: "mcp",
     sourceContext: "ticket-123",
     archivedAt: "",
     trashedAt: "",
-    trashMachine: "",
     trashExpiresAt: "",
     restoredAt: "",
-    movedAt: "",
     info: {
       createdBy: "Codewith",
       createdByActorType: "agent",
       createdAt: "2026-06-22T09:00:00Z",
-      sourceMachine: "spark02",
-      sourceMachineFriendlyName: "Spark",
-      originMachine: "apple03",
-      originMachineFriendlyName: "Apple Studio",
-      currentMachine: "apple03",
       openedFrom: "mcp",
       sourceContext: "ticket-123"
     },
@@ -57,37 +42,16 @@ The native host injects `window.__BOOT__` before `web/app.js` runs and later cal
     titleSource: "default", // default | generated | manual
     titleContentFingerprint: ""
   }],
-	  machines: [{
-	    id: "apple03",
-	    slug: "apple03",
-	    displayName: "Apple Studio",
-	    friendlyName: "Apple Studio",
-	    sshAddress: "apple03.local",
-	    platform: "macos",
-	    status: "online",
-	    online: true,
-	    source: "open-machines",
-	    origin: "fleet",
-	    noteCount: 14,
-	    activeNoteCount: 14,
-	    archivedNoteCount: 1,
-	    trashNoteCount: 0,
-	    totalNoteCount: 15,
-	    latestNoteUpdatedAt: "2026-06-22T09:00:00Z",
-	    lastSeenAt: "2026-06-22T09:00:00Z",
-	    syncedAt: "2026-06-22T09:00:00Z",
-	    recentActivityAt: "2026-06-22T09:00:00Z",
-	    capabilities: ["notes-sync"],
-	    metadata: {},
-	    provenance: {},
-	    sync: {},
-	    updatedAt: "2026-06-22T09:00:00Z"
-	  }],
   settings: {
     trashRetentionDays: 30
   }
 }
 ```
+
+Multi-machine is removed with no backwards compatibility: the boot payload carries
+no `thisMachine`/`machines`, and notes carry no `machine`/`*Machine` fields. Legacy
+notes that still have those frontmatter fields parse, but the fields are ignored and
+dropped on the next save.
 
 Lists should render the latest 10 items by default and expose a "View more" or
 incremental-load affordance by increasing the local limit.
@@ -117,7 +81,7 @@ note.titleLocked = true;
 note.titleSource = "manual";
 ```
 
-Archive, restore, and move are explicit bridge actions. Destructive Trash,
+Archive and restore are explicit bridge actions. Destructive Trash,
 Delete, and purge UI should call `window.HasnaNotes.notes.trash(noteId)` /
 `window.HasnaNotes.notes.purge(noteId)` so the app confirmation is shown first;
 raw WebKit destructive posts are internal persistence traffic and are ignored by
@@ -126,15 +90,13 @@ the native host unless the app layer already confirmed the action.
 ```js
 window.webkit.messageHandlers.notes.postMessage({ action: "archive", note })
 window.webkit.messageHandlers.notes.postMessage({ action: "restore", note })
-window.webkit.messageHandlers.notes.postMessage({ action: "move", note })
 window.HasnaNotes.notes.trash(noteId)
 window.HasnaNotes.notes.purge(noteId)
 ```
 
 Normal Delete should call the Trash path unless `note.status === "trash"`, in
-which case Delete is a permanent purge. Trash is machine-scoped through
-`note.trashMachine`, and retention is controlled by `settings.trashRetentionDays`
-(default `30`).
+which case Delete is a permanent purge. Trash retention is controlled by
+`settings.trashRetentionDays` (default `30`).
 
 ## Markdown And Editor API
 
@@ -229,7 +191,7 @@ Chat state shape:
     state: "call" | "result" | "approval-requested" | "cancelled",
     result: {}
   }],
-  sources: [{ id, title, updatedAt, createdAt, labels, status, machine }],
+  sources: [{ id, title, updatedAt, createdAt, labels, status }],
   pendingConfirmations: [{
     id: "approval-...",
     toolCallId: "tool-1",
@@ -327,7 +289,6 @@ preview unless confirmed; permanent `purge` / `notes_purge` require `--yes` /
 The web runtime exposes note actions for native controls and the visual/UI lane:
 
 ```js
-window.HasnaNotes.notes.moveToMachine(noteId, machineId, friendlyName)
 window.HasnaNotes.notes.archive(noteId)
 window.HasnaNotes.notes.trash(noteId)
 window.HasnaNotes.notes.restore(noteId)
@@ -348,7 +309,6 @@ confirmation before it permanently purges expired Trash items.
 The web layer dispatches:
 
 ```js
-hasna:note-move
 hasna:note-archive
 hasna:note-trash
 hasna:note-restore
@@ -356,81 +316,18 @@ hasna:note-purge
 hasna:trash-cleanup-ready
 ```
 
-All note action event details include `{ noteId, note }`; move events also include
-`targetMachine`, `targetMachineFriendlyName`, `selectedMachine`, `selectedNoteId`,
-and `view`. After a successful move, the web state switches to the destination
-machine and keeps the moved note selected.
+All note action event details include `{ noteId, note }`.
 
 Drag/drop contract:
 
 ```txt
 note rows: draggable, dataTransfer application/x-hasna-note-id=<note id>
-machine rows: accept note ids and call moveToMachine(noteId, machineId)
 ```
 
-## Machine Details API
-
-Machine rows can render from the boot payload immediately. For a right-click
-"View details" flow, use the cached API first and optionally request a native
-refresh:
-
-```js
-window.HasnaNotes.machines.list()
-window.HasnaNotes.machines.details(machineId)
-window.HasnaNotes.machines.select(machineId, { reason, noteId, statusFilter })
-window.HasnaNotes.machines.requestDetails(machineId).then(detail => ...)
-window.HasnaNotes.view.state()
-```
-
-`machines.select(...)` canonicalizes machine aliases (`id`, `slug`,
-`friendlyName`, `displayName`), switches the main view to Notes, clears sidebar
-label/search filters, resets note pagination to the latest 10, selects the
-requested note when supplied, and otherwise selects the newest visible note for
-that machine. It also requests fresh machine details without blocking rendering.
-
-The web layer dispatches:
-
-```js
-window.addEventListener("hasna:machine-context", (event) => event.detail)
-window.addEventListener("hasna:machine-select", (event) => event.detail)
-window.addEventListener("hasna:machine-details-request", (event) => event.detail)
-window.addEventListener("hasna:machine-details", (event) => event.detail)
-```
-
-`hasna:machine-select` detail:
-
-```js
-{
-  machineId: "apple03",
-  machine: machineDetail,
-  selectedNoteId: "note-id-or-null",
-  reason: "sidebar" | "move" | "native" | "api",
-  view: window.HasnaNotes.view.state()
-}
-```
-
-`window.HasnaNotes.view.state()` returns `{ screen, machineFilter, labelFilter,
-statusFilter, selectedId, visibleNoteIds, selectedMachine }`.
-
-Native refresh bridge:
-
-```js
-window.webkit.messageHandlers.notes.postMessage({
-  action: "machineDetails",
-  machine: "apple03",
-  requestId: "machine-..."
-});
-
-window.HasnaNotes.machines.receiveDetails({
-  requestId: "machine-...",
-  machine: machineDetail
-});
-```
-
-Details include open-machines fields when present (`friendlyName`, `slug`/`id`,
-`online`, `status`, `source`, `origin`, sync/recent activity timestamps,
-`capabilities`, `metadata`, `provenance`, `sync`) and notes-derived fallbacks
-(`noteCount`, archive/trash counts, `latestNoteUpdatedAt`).
+`window.HasnaNotes.view.state()` returns `{ screen, labelFilter, statusFilter,
+selectedId, visibleNoteIds }`. There is no machines API, machine filter, or
+machine-details bridge — multi-machine has been removed with no backwards
+compatibility.
 
 Generated titles must set:
 

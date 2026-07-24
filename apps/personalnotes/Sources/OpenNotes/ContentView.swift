@@ -31,12 +31,6 @@ struct ContentView: View {
         }
         .frame(minWidth: 900, minHeight: 600)
         .ignoresSafeArea(.container, edges: .top)
-        .onAppear {
-            // Kick a sync shortly after launch so other machines' notes appear.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                store.syncFleet()
-            }
-        }
     }
 
     /// Purple gradient behind Liquid Glass. Honors reduce-transparency via glassSurface's
@@ -62,13 +56,6 @@ private struct HeaderBar: View {
                 Text("Updated \(updated.relativeDescription)")
             }
             Spacer()
-            if case .syncing = store.syncState {
-                ProgressView().controlSize(.small)
-            } else if case .synced = store.syncState {
-                Label("Synced", systemImage: "checkmark.circle")
-                    .labelStyle(.titleAndIcon)
-                    .foregroundStyle(.secondary)
-            }
             Button {
                 store.createNote()
             } label: {
