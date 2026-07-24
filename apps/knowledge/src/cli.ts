@@ -1659,17 +1659,33 @@ async function run(argv: string[]): Promise<void> {
   throw new Error(`Unknown command: ${positional[0]}.${hint} Run 'knowledge --help' for available commands.`);
 }
 
-if (import.meta.main) {
-  run(process.argv.slice(2)).catch((error) => {
-    const message = error instanceof Error ? error.message : String(error);
-    // Keep the internal stack (which includes the bundled bin path and minified
-    // function names) behind debug logging. Usage/validation and other expected
-    // errors should present a plain message only. Set DEBUG=1 or LOG_LEVEL=debug
-    // to surface the full diagnostic for troubleshooting.
-    log('debug', 'CLI error', { message, stack: error instanceof Error ? error.stack : undefined });
-    console.error(`Error: ${message}`);
-    process.exitCode = 1;
-  });
+/**
+ * Report a fatal CLI error while honoring the --json output contract.
+ *
+ * The human-readable diagnostic is always written to stderr (`Error: <msg>`),
+ * so tooling that reads stderr keeps working regardless of `--json`. When
+ * `--json` is present, a machine-parseable `{ ok: false, error, message }`
+ * object is additionally emitted on stdout (mirroring the `{ ok: true, ... }`
+ * success contract) so that consumers parsing `<cmd> --json` can detect and
+ * read the failure on stdout instead of getting nothing.
+ */
+function emitCliError(error: unknown, argv: string[]): void {
+  const message = error instanceof Error ? error.message : String(error);
+  // Keep the internal stack (which includes the bundled bin path and minified
+  // function names) behind debug logging. Usage/validation and other expected
+  // errors should present a plain message only. Set DEBUG=1 or LOG_LEVEL=debug
+  // to surface the full diagnostic for troubleshooting.
+  log('debug', 'CLI error', { message, stack: error instanceof Error ? error.stack : undefined });
+  console.error(`Error: ${message}`);
+  if (argv.includes('--json')) {
+    output({ ok: false, error: message, message }, true);
+  }
+  process.exitCode = 1;
 }
 
-export { run, parseArgs, suggestCommand, sortItems };
+if (import.meta.main) {
+  const argv = process.argv.slice(2);
+  run(argv).catch((error) => emitCliError(error, argv));
+}
+
+export { run, parseArgs, suggestCommand, sortItems, emitCliError };

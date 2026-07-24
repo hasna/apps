@@ -52,11 +52,9 @@ function runKnowledgeBin(args: string[], cwd?: string, env?: Record<string, stri
   const wrapper = join(dir, 'knowledge');
   writeFileSync(wrapper, [
     '#!/usr/bin/env bun',
-    `import { run } from ${JSON.stringify(pathToFileURL(CLI).href)};`,
-    'run(process.argv.slice(2)).catch((error) => {',
-    '  console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);',
-    '  process.exitCode = 1;',
-    '});',
+    `import { run, emitCliError } from ${JSON.stringify(pathToFileURL(CLI).href)};`,
+    'const argv = process.argv.slice(2);',
+    'run(argv).catch((error) => emitCliError(error, argv));',
     '',
   ].join('\n'));
   return Bun.spawnSync(['bun', wrapper, ...args], {
@@ -464,6 +462,34 @@ describe('knowledge cli', () => {
     const debugErr = new TextDecoder().decode(debug.stderr);
     expect(debugErr).toContain('CLI error');
     expect(debugErr).toContain('"stack"');
+  });
+
+  test('--json error paths emit a machine-parseable object on stdout', () => {
+    // Each of these commands fails; with --json the failure must be readable
+    // on stdout as { ok: false, error }, not only as plaintext on stderr.
+    const cases: string[][] = [
+      ['add', '--json'], // missing required title/content
+      ['providers', 'check', 'nonexistent', '--json'], // unsupported provider
+      ['lits', '--json'], // unknown command
+      ['get', '--json'], // missing required --id
+    ];
+    for (const args of cases) {
+      const result = runCli(args);
+      expect(result.exitCode).toBe(1);
+      const stdout = new TextDecoder().decode(result.stdout).trim();
+      expect(stdout.length).toBeGreaterThan(0);
+      const parsed = JSON.parse(stdout);
+      expect(parsed.ok).toBe(false);
+      expect(typeof parsed.error).toBe('string');
+      expect(parsed.error.length).toBeGreaterThan(0);
+    }
+  });
+
+  test('non-json error paths keep plaintext stderr and empty stdout', () => {
+    const result = runCli(['add']);
+    expect(result.exitCode).toBe(1);
+    expect(new TextDecoder().decode(result.stdout).trim()).toBe('');
+    expect(new TextDecoder().decode(result.stderr)).toContain('Error:');
   });
 
   test('add/list/get/update/archive/restore/untag/delete flow with json and confirmation', () => {
