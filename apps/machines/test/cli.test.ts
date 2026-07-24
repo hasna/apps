@@ -177,6 +177,47 @@ describe("cli command handling", () => {
     }
   });
 
+  test("manifest read subcommands accept -j/--json like the rest of the CLI", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-cli-manifest-json-"));
+    try {
+      const env = {
+        ...process.env,
+        HASNA_MACHINES_MANIFEST_PATH: join(dir, "machines.json"),
+        HASNA_MACHINES_DB_PATH: join(dir, "machines.db"),
+        HASNA_MACHINES_MACHINE_ID: "control",
+        [MUTATION_APPROVAL_FLAG_ENV]: "1",
+      };
+      expect(runCli(["manifest", "init"], env).status).toBe(0);
+
+      // Regression: manifest subcommands used to hard-fail with
+      // "error: unknown option '--json'" before doing any work, breaking
+      // uniform --json tooling. They must now accept the flag and emit JSON.
+      for (const flag of ["--json", "-j"]) {
+        const list = runCli(["manifest", "list", flag], env);
+        expect(list.stderr).toBe("");
+        expect(list.status).toBe(0);
+        expect(Array.isArray(JSON.parse(list.stdout).machines)).toBe(true);
+
+        const validate = runCli(["manifest", "validate", flag], env);
+        expect(validate.stderr).toBe("");
+        expect(validate.status).toBe(0);
+        expect(JSON.parse(validate.stdout)).toHaveProperty("machines");
+
+        const path = runCli(["manifest", "path", flag], env);
+        expect(path.stderr).toBe("");
+        expect(path.status).toBe(0);
+        expect(JSON.parse(path.stdout)).toMatchObject({ manifest_path: env.HASNA_MACHINES_MANIFEST_PATH });
+      }
+
+      // Default (no flag) output for `path` stays plain text.
+      const plainPath = runCli(["manifest", "path"], env);
+      expect(plainPath.status).toBe(0);
+      expect(plainPath.stdout.trim()).toBe(env.HASNA_MACHINES_MANIFEST_PATH);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("manifest friendly-name CLI uses scoped approvals and topology display fallback", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-cli-friendly-name-"));
     try {

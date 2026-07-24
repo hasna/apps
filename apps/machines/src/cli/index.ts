@@ -1303,25 +1303,35 @@ heartbeatCommand
 
 manifestCommand.command("init").description("Create an empty fleet manifest")
   .option("--approval-token <token>", "Scoped mutation approval token")
-  .action((options: { approvalToken?: string }) => {
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { approvalToken?: string; json?: boolean }) => {
     requireCliMutation("manifest_init", options.approvalToken, { resourceId: "manifest:init", args: {} });
-    console.log(manifestInit());
+    const manifestPath = manifestInit();
+    printJsonOrText({ manifest_path: manifestPath }, manifestPath, options.json);
   });
 
-manifestCommand.command("path").description("Print the manifest path").action(() => {
-  console.log(getManifestPath());
-});
+manifestCommand.command("path").description("Print the manifest path")
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { json?: boolean }) => {
+    const manifestPath = getManifestPath();
+    printJsonOrText({ manifest_path: manifestPath }, manifestPath, options.json);
+  });
 
-manifestCommand.command("list").description("Print the fleet manifest").action(() => {
-  console.log(JSON.stringify(manifestList(), null, 2));
-});
+manifestCommand.command("list").description("Print the fleet manifest")
+  .option("-j, --json", "Print JSON output", false)
+  .action(() => {
+    console.log(JSON.stringify(manifestList(), null, 2));
+  });
 
-manifestCommand.command("validate").description("Validate the fleet manifest").action(() => {
-  console.log(JSON.stringify(manifestValidate(), null, 2));
-});
+manifestCommand.command("validate").description("Validate the fleet manifest")
+  .option("-j, --json", "Print JSON output", false)
+  .action(() => {
+    console.log(JSON.stringify(manifestValidate(), null, 2));
+  });
 
 manifestCommand.command("bootstrap").description("Detect and upsert the current machine into the manifest")
   .option("--approval-token <token>", "Scoped mutation approval token")
+  .option("-j, --json", "Print JSON output", false)
   .action((options: { approvalToken?: string }) => {
     requireCliMutation("manifest_bootstrap", options.approvalToken, { resourceId: "manifest:bootstrap", args: {} });
     console.log(JSON.stringify(manifestBootstrapCurrentMachine(), null, 2));
@@ -1331,6 +1341,7 @@ manifestCommand
   .command("get")
   .description("Print a single machine from the manifest")
   .argument("<id>", "Machine identifier")
+  .option("-j, --json", "Print JSON output", false)
   .action((id: string) => {
     const machine = manifestGet(id);
     if (!machine) {
@@ -1405,6 +1416,7 @@ manifestCommand
   .description("Remove a machine from the manifest")
   .argument("<id>", "Machine identifier")
   .option("--approval-token <token>", "Scoped mutation approval token")
+  .option("-j, --json", "Print JSON output", false)
   .action((id: string, options: { approvalToken?: string }) => {
     requireCliMutation("manifest_remove", options.approvalToken, { machineId: id, args: { machine_id: id } });
     console.log(JSON.stringify(manifestRemove(id), null, 2));
@@ -1429,6 +1441,7 @@ manifestCommand
   .option("--metadata <json>", "Machine metadata as JSON")
   .option("--from-stdin", "Read the full MachineManifest JSON from stdin")
   .option("--approval-token <token>", "Scoped mutation approval token")
+  .option("-j, --json", "Print JSON output", false)
   .action((options: Record<string, string | string[] | boolean | undefined>) => {
     const fromStdin = Boolean(options["fromStdin"] || options["from-stdin"]);
     if (fromStdin) {

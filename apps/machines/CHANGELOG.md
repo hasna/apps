@@ -6,6 +6,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- `machines manifest` subcommands (`init`, `path`, `list`, `validate`,
+  `bootstrap`, `get`, `remove`, `add`) now accept the standard `-j/--json`
+  flag instead of hard-failing with `error: unknown option '--json'`, so
+  uniform `--json` tooling no longer breaks on the manifest command group.
+
 ## [0.0.63] - 2026-07-04
 
 ### Added
