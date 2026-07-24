@@ -317,9 +317,53 @@ export async function resolveKernelApiKey(secrets?: KernelSecretsProvider): Prom
   return resolved.value;
 }
 
+const KERNEL_API_KEY_READ_MAX_ATTEMPTS = 3;
+const KERNEL_API_KEY_READ_RETRY_BASE_MS = 200;
+
+/**
+ * Read the Kernel API key from the vault, retrying transient read failures.
+ *
+ * Returns the trimmed key when present, or `undefined` for a *genuine* absence
+ * (the read resolved cleanly with no value). A genuine absence is never retried
+ * — retrying a missing secret is pointless. If every attempt throws, the vault
+ * read is treated as a transient failure and a retryable `KERNEL_API_KEY_READ_FAILED`
+ * error is raised so callers never mistake an unhealthy store for a missing key.
+ */
+async function readKernelKeyFromVault(provider: KernelSecretsProvider): Promise<string | undefined> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= KERNEL_API_KEY_READ_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const value = (await provider.getSecretValue(kernelCredentialVaultRef))?.trim();
+      return value || undefined;
+    } catch (err) {
+      lastError = err;
+      if (attempt < KERNEL_API_KEY_READ_MAX_ATTEMPTS) {
+        await sleep(KERNEL_API_KEY_READ_RETRY_BASE_MS * attempt);
+      }
+    }
+  }
+  throw toRedactedKernelError(
+    lastError,
+    `Failed to read the Kernel API key from @hasna/secrets at '${kernelCredentialVaultRef}' after ${KERNEL_API_KEY_READ_MAX_ATTEMPTS} attempts`,
+    "KERNEL_API_KEY_READ_FAILED",
+  );
+}
+
 async function resolveKernelApiKeyWithSource(secrets?: KernelSecretsProvider): Promise<{ value: string; source: "vault" | "env" }> {
   const provider = secrets ?? await getSecretsProvider();
-  const vaultValue = (await provider.getSecretValue(kernelCredentialVaultRef).catch(() => undefined))?.trim();
+
+  let vaultReadError: BrowserError | undefined;
+  let vaultValue: string | undefined;
+  try {
+    vaultValue = await readKernelKeyFromVault(provider);
+  } catch (err) {
+    // Transient vault read failure (all retries exhausted). Hold onto it so an
+    // explicit env key can still satisfy the request, but never let it masquerade
+    // as a missing key.
+    vaultReadError = err instanceof BrowserError
+      ? err
+      : toRedactedKernelError(err, "Failed to read the Kernel API key from @hasna/secrets", "KERNEL_API_KEY_READ_FAILED");
+  }
   if (vaultValue) return { value: vaultValue, source: "vault" };
 
   const envValue = process.env["KERNEL_API_KEY"]?.trim();
@@ -330,6 +374,10 @@ async function resolveKernelApiKeyWithSource(secrets?: KernelSecretsProvider): P
     }).catch(() => {});
     return { value: envValue, source: "env" };
   }
+
+  // No usable key. Distinguish a transient read failure (retryable) from a genuine
+  // absence so operators are not told the key is missing when it actually exists.
+  if (vaultReadError) throw vaultReadError;
 
   throw new BrowserError(
     `Kernel API key not found. Store it in @hasna/secrets at '${kernelCredentialVaultRef}' or set ${kernelApiEnvName} for this process.`,

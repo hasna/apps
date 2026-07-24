@@ -15,6 +15,7 @@ import {
   listKernelFiles,
   listKernelReplays,
   redactKernelSensitiveText,
+  resolveKernelApiKey,
   runKernelComputerAction,
   setKernelCdpConnectorForTests,
   setKernelClientFactoryForTests,
@@ -23,6 +24,7 @@ import {
   stopKernelReplay,
   type KernelSecretsProvider,
 } from "./kernel.js";
+import { BrowserError } from "../types/index.js";
 
 function secretsProvider(overrides: Partial<KernelSecretsProvider> = {}): KernelSecretsProvider {
   return {
@@ -70,6 +72,7 @@ afterEach(() => {
   delete process.env["BROWSER_DATA_DIR"];
   delete process.env["BROWSER_DB_PATH"];
   delete process.env["BROWSER_ALLOW_STEALTH"];
+  delete process.env["KERNEL_API_KEY"];
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -517,5 +520,81 @@ describe("kernel engine", () => {
     expect(redacted).not.toContain("abc123");
     expect(redacted).not.toContain("jwt=secret");
     expect(redacted).not.toContain(envAssignment);
+  });
+
+  it("surfaces a transient vault read failure as a retryable error, not a missing key", async () => {
+    delete process.env["KERNEL_API_KEY"];
+    let calls = 0;
+    setKernelSecretsProviderForTests(secretsProvider({
+      async getSecretValue() {
+        calls += 1;
+        throw new Error("vault temporarily unavailable");
+      },
+    }));
+
+    let caught: unknown;
+    try {
+      await resolveKernelApiKey();
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(BrowserError);
+    expect((caught as BrowserError).code).toBe("KERNEL_API_KEY_READ_FAILED");
+    expect((caught as BrowserError).retryable).toBe(true);
+    // Retried the transient failure before giving up.
+    expect(calls).toBe(3);
+  });
+
+  it("recovers when a transient vault read failure resolves on retry", async () => {
+    delete process.env["KERNEL_API_KEY"];
+    let calls = 0;
+    setKernelSecretsProviderForTests(secretsProvider({
+      async getSecretValue(key) {
+        calls += 1;
+        if (calls === 1) throw new Error("vault temporarily unavailable");
+        if (key === "hasna/xyz/opensource/browser/prod/kernel_api_key") return "kernel-test-key";
+        return undefined;
+      },
+    }));
+
+    const key = await resolveKernelApiKey();
+    expect(key).toBe("kernel-test-key");
+    expect(calls).toBe(2);
+  });
+
+  it("reports a genuinely missing key without retrying the vault", async () => {
+    delete process.env["KERNEL_API_KEY"];
+    let calls = 0;
+    setKernelSecretsProviderForTests(secretsProvider({
+      async getSecretValue() {
+        calls += 1;
+        return undefined;
+      },
+    }));
+
+    let caught: unknown;
+    try {
+      await resolveKernelApiKey();
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(BrowserError);
+    expect((caught as BrowserError).code).toBe("KERNEL_API_KEY_MISSING");
+    // A genuine absence is not retried.
+    expect(calls).toBe(1);
+  });
+
+  it("uses an explicit env key when the vault read fails transiently", async () => {
+    process.env["KERNEL_API_KEY"] = "env-kernel-key";
+    setKernelSecretsProviderForTests(secretsProvider({
+      async getSecretValue() {
+        throw new Error("vault temporarily unavailable");
+      },
+    }));
+
+    const key = await resolveKernelApiKey();
+    expect(key).toBe("env-kernel-key");
   });
 });
