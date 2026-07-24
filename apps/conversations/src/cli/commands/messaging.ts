@@ -11,6 +11,7 @@ import { previewText } from "../../lib/compact-output.js";
 import { getCliWindow, pageFromQuery, printCompactFooter, queryLimitFor } from "../compact.js";
 import { printMessageEntry } from "../message-output.js";
 import { checkForUpdate } from "../../lib/version-check.js";
+import { emitCliError } from "../cli-error.js";
 import type { DigestResult } from "../../lib/messages.js";
 
 function quoteDigestCommandArg(value: string): string {
@@ -57,16 +58,13 @@ export function registerMessagingCommands(program: Command): void {
         : undefined;
 
       if (!from) {
-        console.error(chalk.red("Sender identity is required."));
-        process.exit(1);
+        emitCliError("Sender identity is required.", opts);
       }
       if (!to && !channel) {
-        console.error(chalk.red("Recipient is required: use --to <agent> or --channel <name>."));
-        process.exit(1);
+        emitCliError("Recipient is required: use --to <agent> or --channel <name>.", opts);
       }
       if (!content.trim()) {
-        console.error(chalk.red("Message content cannot be empty."));
-        process.exit(1);
+        emitCliError("Message content cannot be empty.", opts);
       }
 
       let metadata: Record<string, unknown> | undefined;
@@ -74,8 +72,7 @@ export function registerMessagingCommands(program: Command): void {
         try {
           metadata = JSON.parse(opts.metadata);
         } catch {
-          console.error(chalk.red("Invalid --metadata JSON."));
-          process.exit(1);
+          emitCliError("Invalid --metadata JSON.", opts);
         }
       }
 
@@ -168,14 +165,12 @@ export function registerMessagingCommands(program: Command): void {
     .action(async (idArg, opts) => {
       const id = Number.parseInt(String(idArg), 10);
       if (!Number.isFinite(id) || id <= 0) {
-        console.error(chalk.red("Message ID must be a positive integer."));
-        process.exit(1);
+        emitCliError("Message ID must be a positive integer.", opts);
       }
 
       const msg = await await getStore().getMessageById(id);
       if (!msg) {
-        console.error(chalk.red(`Message #${id} not found.`));
-        process.exit(1);
+        emitCliError(`Message #${id} not found.`, opts);
       }
 
       if (opts.json) {
@@ -212,14 +207,12 @@ export function registerMessagingCommands(program: Command): void {
     .action(async (channelArg, opts) => {
       const channel = typeof channelArg === "string" && channelArg.trim() ? channelArg.trim() : undefined;
       if (!channel && !opts.session && !opts.to) {
-        console.error(chalk.red("Provide a channel name, --session <id>, or --to <agent>."));
-        process.exit(1);
+        emitCliError("Provide a channel name, --session <id>, or --to <agent>.", opts);
       }
 
       const reader = opts.markRead ? resolveIdentity(opts.from).trim() : undefined;
       if (opts.markRead && !reader) {
-        console.error(chalk.red("Reader identity is required for --mark-read."));
-        process.exit(1);
+        emitCliError("Reader identity is required for --mark-read.", opts);
       }
 
       let result;
@@ -237,8 +230,7 @@ export function registerMessagingCommands(program: Command): void {
           reader,
         });
       } catch (error) {
-        console.error(chalk.red(error instanceof Error ? error.message : String(error)));
-        process.exit(1);
+        emitCliError(error instanceof Error ? error.message : String(error), opts);
       }
 
       if (opts.json) {
@@ -282,8 +274,7 @@ export function registerMessagingCommands(program: Command): void {
     .action(async (query, opts) => {
       const q = typeof query === "string" ? query.trim() : "";
       if (!q) {
-        console.error(chalk.red("Search query cannot be empty."));
-        process.exit(1);
+        emitCliError("Search query cannot be empty.", opts);
       }
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
 
@@ -332,8 +323,7 @@ export function registerMessagingCommands(program: Command): void {
       // Parse duration string: 30m, 2h, 1d
       const match = duration.match(/^(\d+)([mhd])$/);
       if (!match) {
-        console.error(chalk.red(`Invalid duration "${duration}". Use format: 30m, 2h, 1d`));
-        process.exit(1);
+        emitCliError(`Invalid duration "${duration}". Use format: 30m, 2h, 1d`, opts);
       }
       const value = parseInt(match[1]);
       const unit = match[2] as "m" | "h" | "d";
@@ -383,19 +373,16 @@ export function registerMessagingCommands(program: Command): void {
     .action(async (message, opts) => {
       const original = await await getStore().getMessageById(opts.to);
       if (!original) {
-        console.error(chalk.red(`Message #${opts.to} not found.`));
-        process.exit(1);
+        emitCliError(`Message #${opts.to} not found.`, opts);
       }
 
       const from = resolveIdentity(opts.from).trim();
       const content = typeof message === "string" ? message : "";
       if (!from) {
-        console.error(chalk.red("Sender identity is required."));
-        process.exit(1);
+        emitCliError("Sender identity is required.", opts);
       }
       if (!content.trim()) {
-        console.error(chalk.red("Reply content cannot be empty."));
-        process.exit(1);
+        emitCliError("Reply content cannot be empty.", opts);
       }
       const channel =
         original.channel ||
@@ -443,8 +430,7 @@ export function registerMessagingCommands(program: Command): void {
       } else if (ids.length > 0) {
         count = await await getStore().markRead(ids.map(Number), agent);
       } else {
-        console.error(chalk.red("Provide message IDs, --all, --session, or --channel flag."));
-        process.exit(1);
+        emitCliError("Provide message IDs, --all, --session, or --channel flag.", opts);
       }
 
       if (opts.json) {
@@ -491,12 +477,10 @@ export function registerMessagingCommands(program: Command): void {
       const agent = resolveIdentity(opts.from).trim();
       const content = typeof newContent === "string" ? newContent : "";
       if (!agent) {
-        console.error(chalk.red("Agent identity is required."));
-        process.exit(1);
+        emitCliError("Agent identity is required.", opts);
       }
       if (!content.trim()) {
-        console.error(chalk.red("New content cannot be empty."));
-        process.exit(1);
+        emitCliError("New content cannot be empty.", opts);
       }
 
       const msg = await await getStore().editMessage(id, agent, content);
@@ -524,8 +508,7 @@ export function registerMessagingCommands(program: Command): void {
     .action(async (id, opts) => {
       const agent = resolveIdentity(opts.from).trim();
       if (!agent) {
-        console.error(chalk.red("Agent identity is required."));
-        process.exit(1);
+        emitCliError("Agent identity is required.", opts);
       }
 
       const result = await await getStore().deleteMessage(id, agent);

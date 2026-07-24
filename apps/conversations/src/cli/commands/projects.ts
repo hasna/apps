@@ -6,6 +6,7 @@ import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { previewText } from "../../lib/compact-output.js";
 import { getCliWindow, pageFromQuery, printCompactFooter, queryLimitFor } from "../compact.js";
+import { emitCliError } from "../cli-error.js";
 
 export function requireDeleteConfirmation(confirmed?: boolean): void {
   if (!confirmed) {
@@ -78,12 +79,10 @@ export function registerProjectCommands(program: Command): void {
       const agent = resolveIdentity(opts.from).trim();
       const projectName = typeof name === "string" ? name.trim() : "";
       if (!agent) {
-        console.error(chalk.red("Creator identity is required."));
-        process.exit(1);
+        emitCliError("Creator identity is required.", opts);
       }
       if (!projectName) {
-        console.error(chalk.red("Project name cannot be empty."));
-        process.exit(1);
+        emitCliError("Project name cannot be empty.", opts);
       }
 
       let tags: string[] | undefined;
@@ -91,8 +90,7 @@ export function registerProjectCommands(program: Command): void {
         try {
           tags = JSON.parse(opts.tags);
         } catch {
-          console.error(chalk.red("Invalid --tags JSON. Expected array of strings."));
-          process.exit(1);
+          emitCliError("Invalid --tags JSON. Expected array of strings.", opts);
         }
       }
 
@@ -112,11 +110,9 @@ export function registerProjectCommands(program: Command): void {
         }
       } catch (e: any) {
         if (e.message?.includes("UNIQUE constraint")) {
-          console.error(chalk.red(`Project "${projectName}" already exists.`));
-          process.exit(1);
+          emitCliError(`Project "${projectName}" already exists.`, opts);
         }
-        console.error(chalk.red(e.message));
-        process.exit(1);
+        emitCliError(e.message, opts);
       }
       closeDb();
     });
@@ -137,8 +133,7 @@ export function registerProjectCommands(program: Command): void {
       try {
         ({ limit, offset } = parseProjectListPagination(opts.limit, opts.offset));
       } catch (e: any) {
-        console.error(chalk.red(e.message));
-        process.exit(1);
+        emitCliError(e.message, opts);
       }
       const cursor = opts.cursor ?? offset;
       const window = getCliWindow({ limit, cursor });
@@ -184,8 +179,7 @@ export function registerProjectCommands(program: Command): void {
       if (!p) p = await getStore().getProjectByName(idOrName);
 
       if (!p) {
-        console.error(chalk.red(`Project "${idOrName}" not found.`));
-        process.exit(1);
+        emitCliError(`Project "${idOrName}" not found.`, opts);
       }
 
       if (opts.json) {
@@ -225,8 +219,7 @@ export function registerProjectCommands(program: Command): void {
         try {
           updates.tags = JSON.parse(opts.tags);
         } catch {
-          console.error(chalk.red("Invalid --tags JSON."));
-          process.exit(1);
+          emitCliError("Invalid --tags JSON.", opts);
         }
       }
 
@@ -241,8 +234,7 @@ export function registerProjectCommands(program: Command): void {
           console.log(chalk.green(`Project "${p.name}" updated.`));
         }
       } catch (e: any) {
-        console.error(chalk.red(e.message));
-        process.exit(1);
+        emitCliError(e.message, opts);
       }
       closeDb();
     });
@@ -260,8 +252,7 @@ export function registerProjectCommands(program: Command): void {
         const resolvedId = isUuid ? id : ((await getStore().getProjectByName(id))?.id ?? id);
         const deleted = await getStore().deleteProject(resolvedId);
         if (!deleted) {
-          console.error(chalk.red(`Project "${id}" not found.`));
-          process.exit(1);
+          throw new Error(`Project "${id}" not found.`);
         }
         if (opts.json) {
           console.log(JSON.stringify({ id, deleted: true }));

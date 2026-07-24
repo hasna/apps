@@ -3,6 +3,7 @@ import { getStore } from "../../lib/store/index.js";
 import chalk from "chalk";
 import { closeDb } from "../../lib/db.js";
 import { normalizeChannelName } from "../../lib/channel-names.js";
+import { emitCliError } from "../cli-error.js";
 
 export function registerReceiptCommands(program: Command): void {
   program
@@ -14,31 +15,26 @@ export function registerReceiptCommands(program: Command): void {
     .action(async (messageId, opts) => {
       const id = Number(typeof messageId === "string" ? messageId.trim() : messageId);
       if (!Number.isInteger(id) || id <= 0) {
-        console.error(chalk.red("Message ID must be a positive integer."));
-        process.exit(1);
+        emitCliError("Message ID must be a positive integer.", opts);
       }
 
       const message = await getStore().getMessageById(id);
       if (!message) {
-        console.error(chalk.red(`Message #${id} not found.`));
-        process.exit(1);
+        emitCliError(`Message #${id} not found.`, opts);
       }
 
       const channelArg = typeof opts.channel === "string" ? opts.channel.trim() : "";
       if (opts.channel !== undefined && !channelArg) {
-        console.error(chalk.red("Channel name cannot be empty."));
-        process.exit(1);
+        emitCliError("Channel name cannot be empty.", opts);
       }
 
       if (channelArg) {
         if (!await getStore().getChannel(channelArg)) {
-          console.error(chalk.red(`Channel #${channelArg} not found.`));
-          process.exit(1);
+          emitCliError(`Channel #${channelArg} not found.`, opts);
         }
         const normalizedChannel = normalizeChannelName(channelArg);
         if (message.channel !== normalizedChannel) {
-          console.error(chalk.red(`Message #${id} does not belong to channel #${normalizedChannel}.`));
-          process.exit(1);
+          emitCliError(`Message #${id} does not belong to channel #${normalizedChannel}.`, opts);
         }
         const status = await getStore().getMessageReadStatus(id, channelArg);
         if (opts.json) {

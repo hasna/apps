@@ -7,6 +7,7 @@ import { windowItems } from "../../lib/compact-output.js";
 import { isCloudStore, cloudApiUrl } from "../../lib/store/index.js";
 import { checkForUpdate } from "../../lib/version-check.js";
 import { getCliWindow, printCompactFooter } from "../compact.js";
+import { emitCliError } from "../cli-error.js";
 
 export function registerAnalyticsCommands(program: Command): void {
   // ---- graph ----
@@ -82,8 +83,7 @@ export function registerAnalyticsCommands(program: Command): void {
     .action(async (target, opts) => {
       const summary = await getStore().getConversationSummary(target);
       if (!summary) {
-        console.error(chalk.red(`No messages found for "${target}"`));
-        process.exit(1);
+        emitCliError(`No messages found for "${target}"`, opts);
       }
 
       if (opts.json) {
@@ -482,7 +482,12 @@ export function registerAnalyticsCommands(program: Command): void {
     .option("-j, --json", "Output as JSON")
     .action(async (id, emoji, opts) => {
       const agent = resolveIdentity(opts.from);
-      const reaction = await getStore().addReaction(id, agent, emoji);
+      let reaction;
+      try {
+        reaction = await getStore().addReaction(id, agent, emoji);
+      } catch (error) {
+        emitCliError(error instanceof Error ? error.message : String(error), opts);
+      }
       if (opts.json) {
         console.log(JSON.stringify(reaction, null, 2));
       } else {
