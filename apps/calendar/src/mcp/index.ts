@@ -12,10 +12,12 @@ import {
 } from "../index.js";
 import { parseHttpArgv, resolveMcpHttpPort } from "./http.js";
 
+const packageJson = await Bun.file(new URL("../../package.json", import.meta.url)).json() as { version: string };
+
 export function buildServer(): McpServer {
   const server = new McpServer({
     name: "open-calendar",
-    version: "0.1.0",
+    version: packageJson.version,
   });
 
   // ── Org tools ────────────────────────────────────────────────────────────────
