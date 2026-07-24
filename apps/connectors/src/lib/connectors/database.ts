@@ -73,6 +73,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["database", "sql", "mysql", "serverless", "distributed"],
   },
   {
+    name: "upstash",
+    displayName: "Upstash",
+    description: "Serverless Redis and Kafka control-plane management via Upstash Developer API",
+    category: "Database",
+    tags: ["redis", "serverless", "kafka", "database"],
+  },
+  {
     name: "timescaledb",
     displayName: "TimescaleDB",
     description: "Time-series SQL database built on PostgreSQL for high-performance analytics",
