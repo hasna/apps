@@ -58,9 +58,11 @@ import {
 } from "../../lib/workflow-states.js";
 import { createLocalReport, renderLocalReportMarkdown } from "../../lib/local-reports.js";
 import type { BoardLane, BoardScope, CalendarEventKind, TaskPriority } from "../../types/index.js";
-import { autoProject, handleError, output, formatTaskLine, resolveTaskId, resolveExplicitProject } from "../helpers.js";
+import { autoProject, handleError, output, formatTaskLine, resolveTaskId, resolveTaskIdForCommand, resolveExplicitProject } from "../helpers.js";
 import {
   getTodosCloudClient,
+  cloudGetTask,
+  cloudUpdateTask,
   cloudGetStats,
   cloudCountTasks,
   cloudListTasks,
@@ -687,8 +689,21 @@ export function registerQueryCommands(program: Command) {
     .command("assign <id> <agent>")
     .description("Assign a task to an agent")
     .option("-j, --json", "Output as JSON")
-    .action((id: string, agent: string, opts) => {
+    .action(async (id: string, agent: string, opts) => {
       const globalOpts = program.opts();
+      // Remote authority routing: PATCH via /v1, mirroring `update --assign`.
+      const cloud = getTodosCloudClient();
+      if (cloud) {
+        try {
+          const currentId = await resolveTaskIdForCommand(id, cloud);
+          const current = await cloudGetTask(cloud, currentId);
+          if (!current) throw new Error(`Task not found: ${id}`);
+          const updated = await cloudUpdateTask(cloud, currentId, { assigned_to: agent });
+          if (opts.json || globalOpts.json) { console.log(JSON.stringify(updated)); return; }
+          console.log(chalk.green(`Assigned to ${agent}: ${formatTaskLine(updated)}`));
+        } catch (e) { handleError(e); }
+        return;
+      }
       const resolvedId = resolveTaskId(id);
       const db = getDatabase();
       const task = getTask(resolvedId, db);
@@ -723,8 +738,22 @@ export function registerQueryCommands(program: Command) {
     .command("tag <id> <tag>")
     .description("Add a tag to a task")
     .option("-j, --json", "Output as JSON")
-    .action((id: string, tag: string, opts) => {
+    .action(async (id: string, tag: string, opts) => {
       const globalOpts = program.opts();
+      // Remote authority routing: read current tags, then PATCH via /v1.
+      const cloud = getTodosCloudClient();
+      if (cloud) {
+        try {
+          const currentId = await resolveTaskIdForCommand(id, cloud);
+          const current = await cloudGetTask(cloud, currentId);
+          if (!current) throw new Error(`Task not found: ${id}`);
+          const newTags = [...new Set([...current.tags, tag])];
+          const updated = await cloudUpdateTask(cloud, currentId, { tags: newTags });
+          if (opts.json || globalOpts.json) { console.log(JSON.stringify(updated)); return; }
+          console.log(chalk.green(`Tagged [${tag}]: ${formatTaskLine(updated)}`));
+        } catch (e) { handleError(e); }
+        return;
+      }
       const resolvedId = resolveTaskId(id);
       const db = getDatabase();
       const task = getTask(resolvedId, db);
@@ -742,8 +771,22 @@ export function registerQueryCommands(program: Command) {
     .command("untag <id> <tag>")
     .description("Remove a tag from a task")
     .option("-j, --json", "Output as JSON")
-    .action((id: string, tag: string, opts) => {
+    .action(async (id: string, tag: string, opts) => {
       const globalOpts = program.opts();
+      // Remote authority routing: read current tags, then PATCH via /v1.
+      const cloud = getTodosCloudClient();
+      if (cloud) {
+        try {
+          const currentId = await resolveTaskIdForCommand(id, cloud);
+          const current = await cloudGetTask(cloud, currentId);
+          if (!current) throw new Error(`Task not found: ${id}`);
+          const newTags = current.tags.filter((t) => t !== tag);
+          const updated = await cloudUpdateTask(cloud, currentId, { tags: newTags });
+          if (opts.json || globalOpts.json) { console.log(JSON.stringify(updated)); return; }
+          console.log(chalk.green(`Untagged [${tag}]: ${formatTaskLine(updated)}`));
+        } catch (e) { handleError(e); }
+        return;
+      }
       const resolvedId = resolveTaskId(id);
       const db = getDatabase();
       const task = getTask(resolvedId, db);

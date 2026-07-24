@@ -248,6 +248,11 @@ describe("remote CLI entrypoint authority boundary", () => {
       ["record-verification", TASK_FIXTURE_ID, "bun test"],
       ["recap"],
       ["standup"],
+      // Dedicated alias mutators must share the same remote capability surface as
+      // their `update --assign`/`update --tags` equivalents (assign-tag-untag bug).
+      ["assign", TASK_FIXTURE_ID, "fixture-agent"],
+      ["tag", TASK_FIXTURE_ID, "fixture-tag"],
+      ["untag", TASK_FIXTURE_ID, "fixture-tag"],
     ]) {
       expect(() => initializeTodosCliAuthority(args, {
         HASNA_TODOS_STORAGE_MODE: "remote",
@@ -1024,6 +1029,9 @@ describe("remote CLI entrypoint authority boundary", () => {
         ["--json", "show", "REMOTE-1"],
         ["--json", "inspect", "REMOTE-1"],
         ["--json", "update", "REMOTE-1", "--title", "Moved task", "--list", LIST_ID, "--plan", PLAN_ID],
+        ["--json", "assign", "REMOTE-1", "fixture-agent"],
+        ["--json", "tag", "REMOTE-1", "urgent"],
+        ["--json", "untag", "REMOTE-1", "urgent"],
         ["--json", "comment", "REMOTE-1", "remote comment"],
         ["--json", "start", "REMOTE-1"],
         ["--json", "done", "REMOTE-1"],
