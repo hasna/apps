@@ -1,6 +1,6 @@
 {
   "name": "@hasna/statusline",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Tiny composable statusline CLI for AI coding agents — pre-built toggleable segments for Claude Code, with a provider model for others",
   "license": "Apache-2.0",
   "type": "module",
