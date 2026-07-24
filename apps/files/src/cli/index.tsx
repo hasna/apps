@@ -53,10 +53,15 @@ const _pkg = _require("../../package.json") as { version: string };
 
 const program = new Command();
 
-const DEFAULT_PROD_FILES_BUCKET = "hasna-xyz-opensource-files-prod";
-const DEFAULT_PROD_FILES_REGION = "us-east-1";
+// SECURITY: this OSS package must never ship a literal internal S3 bucket
+// name or AWS profile. `bootstrap-prod-files` requires an operator-supplied
+// bucket (via --bucket or HASNA_FILES_S3_BUCKET) and defaults the AWS profile
+// to the standard AWS SDK "default" profile — never a Hasna-specific name.
+const DEFAULT_PROD_FILES_BUCKET = process.env.HASNA_FILES_S3_BUCKET ?? "";
+const DEFAULT_PROD_FILES_REGION = process.env.HASNA_FILES_AWS_REGION ?? "us-east-1";
 const DEFAULT_PROD_FILES_PREFIX = "imports/google-drive/live";
 const DEFAULT_PROD_FILES_SOURCE_NAME = "prod-files-drive";
+const DEFAULT_PROD_FILES_AWS_PROFILE = process.env.HASNA_FILES_AWS_PROFILE ?? "default";
 
 /**
  * Refuse a physical, on-box-only command when the client is bound to the cloud
@@ -364,10 +369,10 @@ sources
 sources
   .command("bootstrap-prod-files")
   .alias("bootstrap-prod-emails")
-  .description("Create or update the canonical production S3 source for Google Drive archive sync")
-  .option("--bucket <bucket>", "Production archive bucket", DEFAULT_PROD_FILES_BUCKET)
+  .description("Create or update the canonical S3 source for Google Drive archive sync (requires --bucket or HASNA_FILES_S3_BUCKET; no built-in default)")
+  .option("--bucket <bucket>", "Archive bucket (required; or set HASNA_FILES_S3_BUCKET)", DEFAULT_PROD_FILES_BUCKET)
   .option("--region <region>", "AWS region", DEFAULT_PROD_FILES_REGION)
-  .option("--aws-profile <profile>", "AWS shared config profile", "hasna-xyz-infra")
+  .option("--aws-profile <profile>", "AWS shared config profile", DEFAULT_PROD_FILES_AWS_PROFILE)
   .option("--prefix <prefix>", "S3 key prefix for new Drive imports", DEFAULT_PROD_FILES_PREFIX)
   .option("-n, --name <name>", "Source name", DEFAULT_PROD_FILES_SOURCE_NAME)
   .option("--no-google-drive-default", "Do not set this source as the default Google Drive destination")
@@ -382,10 +387,19 @@ sources
     json?: boolean;
   }) => {
     requireLocalTransport("files sources bootstrap-prod-files");
+    if (!opts.bucket) {
+      console.error(chalk.red("Missing --bucket (or set HASNA_FILES_S3_BUCKET). This package ships no default bucket."));
+      process.exit(1);
+      return;
+    }
     const machine = getCurrentMachine();
     const config: S3Config = { profile: opts.awsProfile };
+    // Generic short aliases a caller may have used for a prior bootstrap run
+    // (not company-identifying); the actual bucket match is intentionally
+    // limited to the resolved --bucket/env value — no internal bucket
+    // literals are hardcoded here.
     const productionNames = new Set([opts.name, DEFAULT_PROD_FILES_SOURCE_NAME, "prod-files", "prod-emails-drive"]);
-    const productionBuckets = new Set([opts.bucket, DEFAULT_PROD_FILES_BUCKET, "hasna-xyz-prod-files", "hasna-xyz-prod-emails", "hasna-prod-files"]);
+    const productionBuckets = new Set([opts.bucket]);
     const allSources = listSources();
     const activeDriveDestinationIds = new Set(
       allSources

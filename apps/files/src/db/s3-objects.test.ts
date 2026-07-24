@@ -41,7 +41,7 @@ describe("S3 object records", () => {
     const source = createSource({
       name: "Canonical files bucket",
       type: "s3",
-      bucket: "hasna-xyz-opensource-files-prod",
+      bucket: "example-files-bucket",
       prefix: "objects/sha256",
       region: "us-east-1",
       machine_id: getCurrentMachine().id,
@@ -49,7 +49,7 @@ describe("S3 object records", () => {
 
     const object = upsertS3ObjectRecord({
       source_id: source.id,
-      bucket: "hasna-xyz-opensource-files-prod",
+      bucket: "example-files-bucket",
       region: "us-east-1",
       object_key: "objects/sha256/ab/cd/abcdef",
       version_id: "3HL4kqtJlcpXroDTDmJ+rmSpXd3dIbrHY",
@@ -67,7 +67,7 @@ describe("S3 object records", () => {
 
     expect(object).toMatchObject({
       source_id: source.id,
-      bucket: "hasna-xyz-opensource-files-prod",
+      bucket: "example-files-bucket",
       object_key: "objects/sha256/ab/cd/abcdef",
       version_id: "3HL4kqtJlcpXroDTDmJ+rmSpXd3dIbrHY",
       etag: "etag-value",
@@ -120,14 +120,14 @@ describe("S3 object records", () => {
     const source = createSource({
       name: "S3 source",
       type: "s3",
-      bucket: "hasna-xyz-opensource-files-prod",
+      bucket: "example-files-bucket",
       prefix: "objects/sha256",
       region: "us-east-1",
       machine_id: machine.id,
     });
     const object = upsertS3ObjectRecord({
       source_id: source.id,
-      bucket: "hasna-xyz-opensource-files-prod",
+      bucket: "example-files-bucket",
       region: "us-east-1",
       object_key: "objects/sha256/ab/cd/abcdef",
       etag: "etag-value",
@@ -156,7 +156,7 @@ describe("S3 object records", () => {
       content_hash_algorithm: "etag",
       content_hash: "etag-value",
       storage_provider: "s3",
-      bucket: "hasna-xyz-opensource-files-prod",
+      bucket: "example-files-bucket",
       object_key: "objects/sha256/ab/cd/abcdef",
     });
     expect(version.source_provenance).toMatchObject({

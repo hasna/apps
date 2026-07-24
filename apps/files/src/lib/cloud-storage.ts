@@ -2,7 +2,7 @@
 //
 // When the client-flip contract resolves to `cloud-http` (mode=self_hosted/cloud
 // AND HASNA_FILES_API_URL + HASNA_FILES_API_KEY are set), the CLI must route its
-// reads and writes to the app's cloud API at `https://files.hasna.xyz/v1` with the
+// reads and writes to the app's cloud API at `https://files.md/v1` with the
 // bearer key — NOT to the local SQLite store, and NEVER to a raw database DSN.
 //
 // This module is the single seam the CLI consults. It returns a ready

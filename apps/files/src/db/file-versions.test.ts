@@ -135,7 +135,7 @@ describe("file versions", () => {
     const destination = createSource({
       name: "Canonical files bucket",
       type: "s3",
-      bucket: "hasna-xyz-opensource-files-prod",
+      bucket: "example-files-bucket",
       prefix: "imports/google-drive/live",
       region: "us-east-1",
       machine_id: machine.id,
@@ -167,9 +167,9 @@ describe("file versions", () => {
       storage_key: "imports/google-drive/live/report.pdf",
       destination_source_id: destination.id,
       s3_key: "google-drive/work/report.pdf",
-      raw_bucket: "hasna-xyz-prod-files",
+      raw_bucket: "example-files-bucket-archive",
       raw_key: "google-drive/work/report.pdf",
-      canonical_bucket: "hasna-xyz-opensource-files-prod",
+      canonical_bucket: "example-files-bucket",
       canonical_key: "objects/sha256/ab/cd/abcdef",
       canonical_sha256: "abcdef",
       promotion_action: "promoted",
@@ -184,13 +184,13 @@ describe("file versions", () => {
       content_hash_algorithm: "sha256",
       content_hash: "abcdef",
       storage_provider: "s3",
-      bucket: "hasna-xyz-opensource-files-prod",
+      bucket: "example-files-bucket",
       region: "us-east-1",
       object_key: "objects/sha256/ab/cd/abcdef",
     });
     expect(canonical.source_provenance).toMatchObject({
       google_drive_file_id: "drive-file-id",
-      raw_bucket: "hasna-xyz-prod-files",
+      raw_bucket: "example-files-bucket-archive",
       promotion_status: "mapped",
     });
     const algorithms = listFileVersions(file.id).map((version) => version.content_hash_algorithm);

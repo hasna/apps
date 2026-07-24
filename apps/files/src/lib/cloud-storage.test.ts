@@ -13,7 +13,7 @@ describe("resolveFilesCloudStorage", () => {
   it("is inactive when mode is local even with API_URL + API_KEY", () => {
     const r = resolveFilesCloudStorage({
       HASNA_FILES_STORAGE_MODE: "local",
-      HASNA_FILES_API_URL: "https://files.hasna.xyz",
+      HASNA_FILES_API_URL: "https://files.md",
       HASNA_FILES_API_KEY: KEY,
     });
     expect(r.active).toBe(false);
@@ -23,7 +23,7 @@ describe("resolveFilesCloudStorage", () => {
     expect(() =>
       resolveFilesCloudStorage({
         HASNA_FILES_STORAGE_MODE: "self_hosted",
-        HASNA_FILES_API_URL: "https://files.hasna.xyz",
+        HASNA_FILES_API_URL: "https://files.md",
       }),
     ).toThrow();
   });
@@ -31,12 +31,12 @@ describe("resolveFilesCloudStorage", () => {
   it("is active and targets <origin>/v1 when mode=self_hosted + API_URL + API_KEY", () => {
     const r = resolveFilesCloudStorage({
       HASNA_FILES_STORAGE_MODE: "self_hosted",
-      HASNA_FILES_API_URL: "https://files.hasna.xyz",
+      HASNA_FILES_API_URL: "https://files.md",
       HASNA_FILES_API_KEY: KEY,
     });
     expect(r.active).toBe(true);
     expect(r.client).not.toBeNull();
-    expect(r.client!.baseUrl).toBe("https://files.hasna.xyz/v1");
+    expect(r.client!.baseUrl).toBe("https://files.md/v1");
     expect(r.client!.name).toBe("files");
   });
 
@@ -64,7 +64,7 @@ describe("resolveFilesCloudStorage", () => {
     const r = resolveFilesCloudStorage(
       {
         HASNA_FILES_STORAGE_MODE: "self_hosted",
-        HASNA_FILES_API_URL: "https://files.hasna.xyz",
+        HASNA_FILES_API_URL: "https://files.md",
         HASNA_FILES_API_KEY: KEY,
       },
       { fetchImpl: fakeFetch },
@@ -78,9 +78,9 @@ describe("resolveFilesCloudStorage", () => {
     await r.client!.delete("sources", "src_2");
 
     expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([
-      "GET https://files.hasna.xyz/v1/sources",
-      "POST https://files.hasna.xyz/v1/sources",
-      "DELETE https://files.hasna.xyz/v1/sources/src_2",
+      "GET https://files.md/v1/sources",
+      "POST https://files.md/v1/sources",
+      "DELETE https://files.md/v1/sources/src_2",
     ]);
     expect(calls.every((c) => c.auth === `Bearer ${KEY}`)).toBe(true);
   });
@@ -100,7 +100,7 @@ describe("resolveFilesCloudStorage", () => {
     const r = resolveFilesCloudStorage(
       {
         HASNA_FILES_STORAGE_MODE: "self_hosted",
-        HASNA_FILES_API_URL: "https://files.hasna.xyz",
+        HASNA_FILES_API_URL: "https://files.md",
         HASNA_FILES_API_KEY: KEY,
       },
       { fetchImpl: fakeFetch },
@@ -116,7 +116,7 @@ describe("resolveFilesCloudStorage", () => {
     expect(calls.length).toBe(1);
     expect(calls[0]!.method).toBe("GET");
     // Base path + all query params must be present on the cloud request.
-    expect(calls[0]!.url).toContain("https://files.hasna.xyz/v1/files");
+    expect(calls[0]!.url).toContain("https://files.md/v1/files");
     expect(calls[0]!.url).toContain("source_id=src_1");
     expect(calls[0]!.url).toContain("ext=txt");
     expect(calls[0]!.url).toContain("limit=50");

@@ -306,7 +306,7 @@ The manifest row is metadata-only:
   "classification": "restricted",
   "storage": {
     "provider": "s3",
-    "bucket": "hasna-xyz-opensource-files-prod",
+    "bucket": "<your-bucket>",
     "key": "private/fleet/manifests/asset_fleet_manifest.json"
   },
   "redaction": {

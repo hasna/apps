@@ -1,6 +1,6 @@
 /**
  * Cloud HTTP transport for {@link FilesStore}. Routes every data-plane call to
- * the self-hosted service at `https://files.hasna.xyz/v1` through the
+ * the self-hosted service at `https://files.md/v1` through the
  * @hasna/contracts storage client (bearer key in the transport only — never a
  * database DSN, never logged). Used identically for `self_hosted` and `cloud`
  * tiers; the only difference is the URL/key, which is a server-side tenancy

@@ -39,32 +39,28 @@ Google Drive sync uses profiles configured through the connectors CLI:
 connectors auth googledrive
 ```
 
-Add or repair the production S3 destination once. This stores the AWS named
-profile on the source and sets it as the default Google Drive destination.
-As of the 2026 storage migration cutover, the default bootstrap points new
-Drive imports at the canonical open-files bucket:
+Add or repair your S3 destination once. This stores the AWS named profile on
+the source and sets it as the default Google Drive destination. This package
+ships no default bucket or AWS profile — set `HASNA_FILES_S3_BUCKET` (and
+optionally `HASNA_FILES_AWS_PROFILE`) or pass `--bucket`/`--aws-profile`
+explicitly:
 
 ```bash
+export HASNA_FILES_S3_BUCKET=<your-bucket>
 files sources bootstrap-prod-files
 files sources add-google-drive --all-profiles --all
 files sources sync-google-drive --dry-run
 files sources sync-google-drive
 ```
 
-The canonical bootstrap destination is
-`s3://hasna-xyz-opensource-files-prod/imports/google-drive/live/<profile>/...`
-using the `hasna-xyz-infra` AWS profile. The previous production default pointed at
-`s3://hasna-xyz-prod-emails/drive/<profile>/...` using the `hasna-xyz-infra`
-AWS profile and remains a legacy compatibility alias only. The full Google
-Drive archive found during the June 2026 audit is under
-`s3://hasna-xyz-prod-files/google-drive/`.
-
-The canonical target bucket for this repo is
-`hasna-xyz-opensource-files-prod`; the verified canonical content-addressed
-archive lives under `objects/sha256/`, while future Drive sync imports should
-land under `imports/google-drive/live/`. Detailed S3, secrets, and RDS
-migration runbooks are operator evidence and are not shipped in the public
-package.
+`bootstrap-prod-files` (aliased `bootstrap-prod-emails`) creates or updates a
+single canonical S3 source at `s3://<bucket>/imports/google-drive/live/<profile>/...`
+and sets it as the default Google Drive destination; new imports land under
+`imports/google-drive/live/`. The `--aws-profile` flag defaults to the
+standard AWS SDK `default` profile (or `HASNA_FILES_AWS_PROFILE` if set) —
+never a hardcoded profile name. Operator-specific bucket names, legacy bucket
+aliases, and migration runbooks are internal evidence and are not shipped in
+the public package.
 
 For a custom S3 destination, pass the shared AWS profile explicitly:
 
@@ -191,15 +187,17 @@ are also disabled by default. Use `OPEN_FILES_REST_ALLOW_<CAPABILITY>=1` or
 
 ## Evidence Vault
 
-`@hasna/files` is also the shared evidence layer for Hasna internal apps. Apps
+`@hasna/files` can also serve as a shared evidence layer for other apps. Apps
 store `file_asset_id` plus domain metadata; this package owns durable storage,
 upload intents, checksum verification, quarantine promotion, signed downloads,
 retention metadata, and access audit.
 
-Production evidence storage defaults to the canonical
-`hasna-xyz-opensource-files-prod` S3 bucket:
+This package ships no default evidence bucket. Configure one via
+`HASNA_FILES_S3_BUCKET` (or `HASNA_FILES_EVIDENCE_BUCKET`) and inspect the
+effective configuration with:
 
 ```bash
+export HASNA_FILES_S3_BUCKET=<your-bucket>
 files evidence configure-prod
 ```
 
@@ -240,7 +238,7 @@ PostgreSQL, migrate object bytes, or replace the local SQLite index.
 ```bash
 export HASNA_FILES_STORAGE_MODE=hybrid
 export HASNA_FILES_DATABASE_URL="$FILES_DATABASE_URL"
-export HASNA_FILES_S3_BUCKET=hasna-xyz-opensource-files-prod
+export HASNA_FILES_S3_BUCKET=<your-bucket>
 export HASNA_FILES_S3_PREFIX=objects
 export HASNA_FILES_AWS_REGION=us-east-1
 export HASNA_FILES_AWS_PROFILE=files-sync

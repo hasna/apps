@@ -187,10 +187,10 @@ describe("knowledge source manifest export", () => {
     const source = createSource({
       name: "S3 manifest source",
       type: "s3",
-      bucket: "hasna-xyz-opensource-files-prod",
+      bucket: "example-files-bucket",
       prefix: "imports/google-drive/live",
       region: "us-east-1",
-      config: { profile: "hasna-xyz-infra" },
+      config: { profile: "test-aws-profile" },
       machine_id: machine.id,
     });
     upsertFile({
@@ -217,12 +217,12 @@ describe("knowledge source manifest export", () => {
       source_path: "imports/google-drive/live/doc.md",
       machine: { machine_id: machine.id },
       s3: {
-        bucket: "hasna-xyz-opensource-files-prod",
+        bucket: "example-files-bucket",
         prefix: "imports/google-drive/live",
         region: "us-east-1",
       },
     });
-    expect(JSON.stringify(item.open_files_root)).not.toContain("hasna-xyz-infra");
+    expect(JSON.stringify(item.open_files_root)).not.toContain("test-aws-profile");
   });
 
   test("exports delta manifests with tombstones and source revision hashes", async () => {
@@ -332,7 +332,7 @@ describe("knowledge source manifest export", () => {
       checksum: "e".repeat(64),
       checksum_algorithm: "sha256",
       storage_provider: "s3",
-      bucket: "hasna-xyz-opensource-files-prod",
+      bucket: "example-files-bucket",
       region: "us-east-1",
       object_key: "evidence/contracts/contract.pdf",
     });
@@ -366,7 +366,7 @@ describe("knowledge source manifest export", () => {
       scan_status: "clean",
       storage: {
         provider: "s3",
-        bucket: "hasna-xyz-opensource-files-prod",
+        bucket: "example-files-bucket",
         key: "evidence/contracts/contract.pdf",
       },
     });
@@ -419,7 +419,7 @@ describe("knowledge source manifest export", () => {
       checksum: "9".repeat(64),
       checksum_algorithm: "sha256",
       storage_provider: "s3",
-      bucket: "hasna-xyz-opensource-files-prod",
+      bucket: "example-files-bucket",
       region: "us-east-1",
       object_key: "private/fleet/manifests/asset_fleet_manifest.json",
       metadata: {
@@ -457,7 +457,7 @@ describe("knowledge source manifest export", () => {
       hash: `sha256:${"9".repeat(64)}`,
       storage: {
         provider: "s3",
-        bucket: "hasna-xyz-opensource-files-prod",
+        bucket: "example-files-bucket",
         key: "private/fleet/manifests/asset_fleet_manifest.json",
       },
       redaction: {

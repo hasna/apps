@@ -13,7 +13,7 @@ type RegisterTool = (
 
 const storageSchema = {
   storage: z.enum(["s3", "local"]).optional().describe("Evidence storage provider"),
-  bucket: z.string().optional().describe("S3 bucket; defaults to hasna-xyz-opensource-files-prod"),
+  bucket: z.string().optional().describe("S3 bucket; defaults to HASNA_FILES_S3_BUCKET env when unset (no built-in default)"),
   region: z.string().optional().describe("S3 region"),
   aws_profile: z.string().optional().describe("AWS named profile"),
   prefix: z.string().optional().describe("Object key prefix"),

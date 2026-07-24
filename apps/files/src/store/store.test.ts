@@ -25,7 +25,7 @@ function fakeTransport(): { transport: HasnaHttpTransport; calls: Call[] } {
     return { items: [], id: "x" } as unknown;
   };
   const transport = {
-    baseUrl: "https://files.hasna.xyz/v1",
+    baseUrl: "https://files.md/v1",
     get: record("GET"),
     post: record("POST"),
     put: record("PUT"),
@@ -43,7 +43,7 @@ describe("resolveStore", () => {
 
   it("returns an ApiStore when API url + key are present", () => {
     const s = resolveStore({
-      HASNA_FILES_API_URL: "https://files.hasna.xyz",
+      HASNA_FILES_API_URL: "https://files.md",
       HASNA_FILES_API_KEY: "k_test",
     });
     expect(s.transport).toBe("api");
@@ -88,7 +88,7 @@ describe("ApiStore route mapping", () => {
     // which used to make every delete claim success; the ApiStore now goes
     // through the raw transport so a 404 is surfaced as `false`.
     const del404: HasnaHttpTransport = {
-      baseUrl: "https://files.hasna.xyz/v1",
+      baseUrl: "https://files.md/v1",
       get: async () => ({}),
       post: async () => ({}),
       put: async () => ({}),

@@ -7,7 +7,7 @@ description: "Operate the open-files Google Drive migration safely. Use when Cod
 
 ## Current Invariants
 
-- Canonical repo bucket: `hasna-xyz-opensource-files-prod`.
+- Canonical repo bucket: configured via `HASNA_FILES_S3_BUCKET` (operator env, not a literal in this repo).
 - Canonical bytes live under `objects/sha256/...`.
 - Google Drive import and legacy sources stay readable until final retirement.
 - Organization is metadata-first: owner, `target_path`, labels, review status, duplicate status, permission metadata.

@@ -63,7 +63,7 @@ describe("context-pack CLI", () => {
       ...process.env,
       HASNA_FILES_DATA_DIR: dataDir,
       HASNA_FILES_DB_PATH: join(dataDir, "files.db"),
-      HASNA_FILES_API_URL: "https://files.hasna.xyz/v1",
+      HASNA_FILES_API_URL: "https://files.md/v1",
       HASNA_FILES_API_KEY: "hf_test_key_not_used_offline",
     };
 

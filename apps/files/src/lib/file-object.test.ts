@@ -19,7 +19,7 @@ beforeEach(async () => {
   testDir = mkdtempSync(join(tmpdir(), "files-object-resolver-"));
   process.env.HASNA_FILES_DATA_DIR = testDir;
   process.env.HASNA_FILES_DB_PATH = join(testDir, "files.db");
-  process.env.HASNA_FILES_AWS_PROFILE = "hasna-xyz-infra";
+  process.env.HASNA_FILES_AWS_PROFILE = "test-aws-profile";
   process.env.HASNA_FILES_AWS_REGION = "us-east-1";
 });
 
@@ -110,9 +110,9 @@ describe("file object resolver", () => {
       storage_type: "s3",
       storage_key: "objects/sha256/ab/cd/abcdef",
       s3_key: "google-drive/test/report.txt",
-      raw_bucket: "hasna-xyz-prod-files",
+      raw_bucket: "example-files-bucket-archive",
       raw_key: "google-drive/test/report.txt",
-      canonical_bucket: "hasna-xyz-opensource-files-prod",
+      canonical_bucket: "example-files-bucket",
       canonical_key: "objects/sha256/ab/cd/abcdef",
       canonical_sha256: "abcdef",
       promotion_action: "promoted",
@@ -124,12 +124,12 @@ describe("file object resolver", () => {
 
     const resolved = resolveFileObject(file.id);
     expect(resolved.storageKind).toBe("google_drive_canonical_s3");
-    expect(resolved.storageSource.bucket).toBe("hasna-xyz-opensource-files-prod");
+    expect(resolved.storageSource.bucket).toBe("example-files-bucket");
     expect(resolved.storageSource.region).toBe("us-east-1");
-    expect(resolved.storageSource.config).toEqual({ profile: "hasna-xyz-infra" });
+    expect(resolved.storageSource.config).toEqual({ profile: "test-aws-profile" });
     expect(resolved.objectKey).toBe("objects/sha256/ab/cd/abcdef");
     expect(resolved.canonical).toMatchObject({
-      bucket: "hasna-xyz-opensource-files-prod",
+      bucket: "example-files-bucket",
       key: "objects/sha256/ab/cd/abcdef",
       sha256: "abcdef",
     });
@@ -139,7 +139,7 @@ describe("file object resolver", () => {
       storage: {
         kind: "google_drive_canonical_s3",
         provider: "s3",
-        bucket: "hasna-xyz-opensource-files-prod",
+        bucket: "example-files-bucket",
         key: "objects/sha256/ab/cd/abcdef",
       },
     });
@@ -156,10 +156,10 @@ describe("file object resolver", () => {
     const legacySource = createSource({
       name: "prod-emails-drive",
       type: "s3",
-      bucket: "hasna-xyz-prod-emails",
+      bucket: "example-files-bucket-legacy-emails",
       prefix: "drive",
       region: "us-west-2",
-      config: { profile: "hasna-xyz-infra" },
+      config: { profile: "test-aws-profile" },
       machine_id: machine.id,
     });
     const file = upsertFile({
@@ -187,9 +187,9 @@ describe("file object resolver", () => {
       storage_type: "s3",
       storage_key: "objects/sha256/12/34/1234",
       s3_key: "google-drive/raw-only-in-legacy-layout.txt",
-      raw_bucket: "hasna-xyz-prod-files",
+      raw_bucket: "example-files-bucket-archive",
       raw_key: "google-drive/raw-only-in-legacy-layout.txt",
-      canonical_bucket: "hasna-xyz-opensource-files-prod",
+      canonical_bucket: "example-files-bucket",
       canonical_key: "objects/sha256/12/34/1234",
       canonical_sha256: "1234",
       promotion_action: "already_present",
@@ -202,7 +202,7 @@ describe("file object resolver", () => {
     const resolved = resolveFileObject(file.id);
     expect(resolved.storageKind).toBe("google_drive_canonical_s3");
     expect(resolved.source.id).toBe(legacySource.id);
-    expect(resolved.storageSource.bucket).toBe("hasna-xyz-opensource-files-prod");
+    expect(resolved.storageSource.bucket).toBe("example-files-bucket");
     expect(resolved.storageSource.region).toBe("us-east-1");
     expect(resolved.objectKey).toBe("objects/sha256/12/34/1234");
   });

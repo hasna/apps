@@ -33,7 +33,7 @@ describe("knowledge sync fixtures", () => {
       expect(item.open_files_root.open_files_root).toMatch(/^open-files:\/\/source\/src_fixture_drive_linux-node-[ab]$/);
       expect(item.open_files_root.evidence_hash).toMatch(/^sha256:[a-f0-9]{64}$/);
       expect(item.open_files_root.s3).toMatchObject({
-        bucket: "hasna-xyz-opensource-files-prod",
+        bucket: "example-files-bucket",
         prefix: "fixtures/knowledge-sync",
         region: "us-east-1",
       });

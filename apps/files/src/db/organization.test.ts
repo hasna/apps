@@ -83,9 +83,9 @@ describe("Drive archive organization queues", () => {
         storage_type: "s3",
         storage_key: `objects/sha256/aa/bb/shared-content-${index}`,
         s3_key: `google-drive/andreihasnacom/my-drive/folder/file-${index}.txt`,
-        raw_bucket: "hasna-xyz-prod-files",
+        raw_bucket: "example-files-bucket-archive",
         raw_key: `google-drive/andreihasnacom/my-drive/folder/file-${index}.txt`,
-        canonical_bucket: "hasna-xyz-opensource-files-prod",
+        canonical_bucket: "example-files-bucket",
         canonical_key: `objects/sha256/aa/bb/shared-content-${index}`,
         canonical_sha256: "a".repeat(64),
         promotion_status: "mapped",
@@ -114,7 +114,7 @@ describe("Drive archive organization queues", () => {
     const reviews = listFileOrganizationReviews({ duplicate_only: true, limit: 10 });
     expect(reviews).toHaveLength(2);
     expect(reviews[0]!.duplicate_group_id?.startsWith("dup_")).toBe(true);
-    expect(reviews[0]!.canonical_bucket).toBe("hasna-xyz-opensource-files-prod");
+    expect(reviews[0]!.canonical_bucket).toBe("example-files-bucket");
     expect(reviews[0]!.acl_review_status).toBe("needs_review");
     expect(reviews[0]!.permission_scope).toBe("private");
     expect(reviews[0]!.permission_risk).toBe("unknown");
@@ -272,9 +272,9 @@ describe("Drive archive organization queues", () => {
         storage_type: "s3",
         storage_key: `objects/sha256/cc/dd/shared-file-${index}`,
         s3_key: `google-drive/andreihasnacom/${topLevel}/folder/file-${index}.pdf`,
-        raw_bucket: "hasna-xyz-prod-files",
+        raw_bucket: "example-files-bucket-archive",
         raw_key: `imports/google-drive/legacy-s3-2026-06-07/raw/andreihasnacom/${topLevel}/folder/file-${index}.pdf`,
-        canonical_bucket: "hasna-xyz-opensource-files-prod",
+        canonical_bucket: "example-files-bucket",
         canonical_key: `objects/sha256/cc/dd/shared-file-${index}`,
         canonical_sha256: `${index}`.repeat(64),
         promotion_status: "mapped",
@@ -389,9 +389,9 @@ describe("Drive archive organization queues", () => {
         storage_type: "s3",
         storage_key: `objects/sha256/ee/ff/my-drive-file-${index}`,
         s3_key: `google-drive/andreihasnacom/my-drive/${drivePath}`,
-        raw_bucket: "hasna-xyz-prod-files",
+        raw_bucket: "example-files-bucket-archive",
         raw_key: `google-drive/andreihasnacom/my-drive/${drivePath}`,
-        canonical_bucket: "hasna-xyz-opensource-files-prod",
+        canonical_bucket: "example-files-bucket",
         canonical_key: `objects/sha256/ee/ff/my-drive-file-${index}`,
         canonical_sha256: `${index}`.repeat(64),
         promotion_status: "mapped",
@@ -569,9 +569,9 @@ describe("Drive archive organization queues", () => {
         storage_type: "s3",
         storage_key: `objects/sha256/policy/${index}`,
         s3_key: row.rawKey,
-        raw_bucket: "hasna-xyz-prod-files",
+        raw_bucket: "example-files-bucket-archive",
         raw_key: row.rawKey,
-        canonical_bucket: "hasna-xyz-opensource-files-prod",
+        canonical_bucket: "example-files-bucket",
         canonical_key: `objects/sha256/policy/${index}`,
         canonical_sha256: row.sha,
         promotion_status: "mapped",

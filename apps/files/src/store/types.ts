@@ -6,7 +6,7 @@
  * behind this one interface:
  *
  *   - {@link LocalStore} — on-box SQLite at ~/.hasna/files/files.db (first-class).
- *   - {@link ApiStore}   — HTTPS `https://files.hasna.xyz/v1` + bearer key.
+ *   - {@link ApiStore}   — HTTPS `https://files.md/v1` + bearer key.
  *
  * `self_hosted` and `cloud` BOTH use the ApiStore (identical client code; only
  * the URL/key differ — that distinction is server-side tenancy, not a client

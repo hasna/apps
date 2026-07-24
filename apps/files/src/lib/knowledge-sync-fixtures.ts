@@ -412,7 +412,7 @@ function fileItem(input: {
       source_path: input.path,
       machine,
       s3: {
-        bucket: "hasna-xyz-opensource-files-prod",
+        bucket: "example-files-bucket",
         prefix: "fixtures/knowledge-sync",
         region: "us-east-1",
       },
@@ -421,7 +421,7 @@ function fileItem(input: {
     storage: {
       provider: "s3",
       source_id: sourceId,
-      bucket: "hasna-xyz-opensource-files-prod",
+      bucket: "example-files-bucket",
       key: `fixtures/knowledge-sync/${input.fileId}/${input.revisionId}`,
       region: "us-east-1",
     },

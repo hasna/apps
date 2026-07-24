@@ -192,7 +192,7 @@ describe("knowledge source resolver", () => {
       checksum: "8".repeat(64),
       checksum_algorithm: "sha256",
       storage_provider: "s3",
-      bucket: "hasna-xyz-opensource-files-prod",
+      bucket: "example-files-bucket",
       region: "us-east-1",
       object_key: "private/fleet/manifests/asset_resolver_fleet.json",
     });
@@ -214,7 +214,7 @@ describe("knowledge source resolver", () => {
       status: "ready",
       storage: {
         provider: "s3",
-        bucket: "hasna-xyz-opensource-files-prod",
+        bucket: "example-files-bucket",
         key: "private/fleet/manifests/asset_resolver_fleet.json",
       },
       content: {

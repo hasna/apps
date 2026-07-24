@@ -15,17 +15,17 @@ export function registerEvidenceCommands(program: Command): void {
 
   evidence
     .command("configure-prod")
-    .description("Show the production evidence storage defaults")
+    .description("Show the effective S3 evidence storage configuration (env-resolved; no OSS default bucket)")
     .option("--json", "Output as JSON")
     .action((opts: { json?: boolean }) => {
-      const storage = getEvidenceStorageOptions({ provider: "s3", bucket: DEFAULT_EVIDENCE_S3_BUCKET });
+      const storage = getEvidenceStorageOptions({ provider: "s3" });
       if (opts.json) {
         console.log(JSON.stringify(storage, null, 2));
         return;
       }
       console.log(chalk.bold("Evidence storage"));
       console.log(`  provider: ${chalk.cyan(storage.provider)}`);
-      console.log(`  bucket:   ${chalk.cyan(storage.bucket)}`);
+      console.log(`  bucket:   ${chalk.cyan(storage.bucket || "(not configured — set HASNA_FILES_S3_BUCKET)")}`);
       console.log(`  region:   ${chalk.cyan(storage.region)}`);
       console.log(`  prefix:   ${chalk.cyan(storage.prefix || "(none)")}`);
       console.log(`  profile:  ${chalk.cyan(storage.profile || "(default chain)")}`);
@@ -319,7 +319,10 @@ interface EvidenceListOptions {
 function storageOptions(opts: EvidenceStorageCliOptions): EvidenceStorageOptions {
   return {
     provider: opts.storage as EvidenceStorageOptions["provider"],
-    bucket: opts.bucket,
+    // Commander always supplies the `--bucket` default string (currently ""
+    // since this package ships no default bucket); treat empty as "unset" so
+    // it still falls through to the HASNA_FILES_S3_BUCKET env chain below.
+    bucket: opts.bucket || undefined,
     region: opts.region,
     profile: opts.awsProfile,
     prefix: opts.prefix,

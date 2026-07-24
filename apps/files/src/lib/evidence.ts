@@ -128,7 +128,12 @@ export interface EvidenceDownloadGrant {
   expires_at: string;
 }
 
-export const DEFAULT_EVIDENCE_S3_BUCKET = "hasna-xyz-opensource-files-prod";
+// SECURITY: this OSS package must never ship a literal internal S3 bucket
+// name. There is no default bucket — operators must configure one via
+// HASNA_FILES_S3_BUCKET / HASNA_FILES_EVIDENCE_BUCKET (env) or an explicit
+// --bucket / `bucket` override; evidence storage calls fail clearly (never
+// silently write to the wrong place) when neither is set.
+export const DEFAULT_EVIDENCE_S3_BUCKET = "";
 export const DEFAULT_EVIDENCE_S3_REGION = "us-east-1";
 
 export function getEvidenceStorageOptions(overrides: EvidenceStorageOptions = {}): Required<EvidenceStorageOptions> {

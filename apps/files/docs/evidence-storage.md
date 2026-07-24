@@ -10,13 +10,10 @@ Apps should store `file_asset_id` plus domain metadata such as `company_id`, `so
 
 ## Production Bucket
 
-`hasna-xyz-opensource-files-prod` is the production bucket for this repo,
-following the Hasna XYZ storage naming pattern. Detailed migration runbooks stay
-in private operator evidence and are not part of the public package.
-
-The old `hasna-files-prod` bucket is legacy only. Keep old buckets readable
-until rollback windows and global legacy retirement gates close, but do not use
-them for new writes.
+This package ships no default bucket name. Operators configure their own
+bucket via `HASNA_FILES_S3_BUCKET` (or `HASNA_FILES_EVIDENCE_BUCKET`); detailed
+migration runbooks and legacy bucket aliases are private operator evidence and
+are not part of the public package.
 
 Current evidence object layout:
 
@@ -45,10 +42,10 @@ Local filesystem storage is allowed for development, tests, offline, and self-ho
 Repo-level object storage aliases are preferred:
 
 ```bash
-HASNA_FILES_S3_BUCKET=hasna-xyz-opensource-files-prod
+HASNA_FILES_S3_BUCKET=<your-bucket>
 HASNA_FILES_S3_PREFIX=objects
 HASNA_FILES_AWS_REGION=us-east-1
-HASNA_FILES_AWS_PROFILE=files-sync
+HASNA_FILES_AWS_PROFILE=<your-aws-profile>
 HASNA_FILES_S3_ENDPOINT=
 HASNA_FILES_S3_FORCE_PATH_STYLE=0
 ```
