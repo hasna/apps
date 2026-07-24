@@ -1,0 +1,94 @@
+{
+  "name": "@hasna/personalnotes",
+  "version": "0.1.0",
+  "description": "PersonalNotes OSS core — multi-tenancy backend: registration/login, sessions and API tokens, per-tenant isolation, and a super-admin plane. SQLite + PostgreSQL storage.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "personalnotes-serve": "dist/server/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./sdk": {
+      "types": "./dist/sdk/index.d.ts",
+      "import": "./dist/sdk/index.js"
+    },
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "import": "./dist/server/index.js"
+    },
+    "./storage": {
+      "types": "./dist/lib/storage/index.d.ts",
+      "import": "./dist/lib/storage/index.js"
+    },
+    "./storage/contract": {
+      "types": "./dist/lib/storage/contract.d.ts",
+      "import": "./dist/lib/storage/contract.js"
+    },
+    "./storage/sqlite": {
+      "types": "./dist/lib/storage/sqlite.d.ts",
+      "import": "./dist/lib/storage/sqlite.js"
+    },
+    "./storage/postgres": {
+      "types": "./dist/lib/storage/postgres.d.ts",
+      "import": "./dist/lib/storage/postgres.js"
+    },
+    "./storage/postgres-schema": {
+      "types": "./dist/lib/storage/postgres-schema.d.ts",
+      "import": "./dist/lib/storage/postgres-schema.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && bun build src/index.ts src/sdk/index.ts src/server/index.ts src/lib/storage/index.ts src/lib/storage/contract.ts src/lib/storage/sqlite.ts src/lib/storage/postgres.ts src/lib/storage/postgres-schema.ts --root src --outdir dist --target bun --packages external && chmod +x dist/server/index.js && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test src",
+    "dev:serve": "bun run src/server/index.ts"
+  },
+  "keywords": [
+    "personalnotes",
+    "notes",
+    "multi-tenancy",
+    "auth",
+    "sessions",
+    "sqlite",
+    "postgres"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/personalnotes.git"
+  },
+  "homepage": "https://github.com/hasna/personalnotes#readme",
+  "bugs": {
+    "url": "https://github.com/hasna/personalnotes/issues"
+  },
+  "author": "Hasna <andrei@hasna.com>",
+  "license": "Apache-2.0",
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "dependencies": {
+    "zod": "^3.25.76"
+  },
+  "optionalDependencies": {
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/pg": "^8.11.10",
+    "typescript": "^5.7.3"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  }
+}
