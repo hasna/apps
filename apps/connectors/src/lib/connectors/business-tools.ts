@@ -1248,4 +1248,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Business Tools",
     tags: ["feedback", "surveys", "cx"],
   },
+  {
+    name: "tito",
+    displayName: "Tito",
+    description: "Event registrations, tickets, releases, and check-in lists",
+    category: "Business Tools",
+    tags: ["events", "ticketing", "registrations"],
+  },
 ];
