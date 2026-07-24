@@ -5,6 +5,17 @@
  */
 
 export const PG_MIGRATIONS: string[] = [
+  // Cost centers — local-first attribution groups for loops, apps, repos, services, and teams
+  `CREATE TABLE IF NOT EXISTS cost_centers (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    name TEXT NOT NULL,
+    repo_path TEXT,
+    labels_json TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+
   // Requests table — individual API calls
   `CREATE TABLE IF NOT EXISTS requests (
     id TEXT PRIMARY KEY,
@@ -22,6 +33,7 @@ export const PG_MIGRATIONS: string[] = [
     timestamp TEXT NOT NULL,
     source_request_id TEXT,
     machine_id TEXT DEFAULT '',
+    cost_center_id TEXT,
     account_key TEXT DEFAULT '',
     account_tool TEXT DEFAULT '',
     account_name TEXT DEFAULT '',
@@ -41,6 +53,7 @@ export const PG_MIGRATIONS: string[] = [
     total_tokens INTEGER DEFAULT 0,
     request_count INTEGER DEFAULT 0,
     machine_id TEXT DEFAULT '',
+    cost_center_id TEXT,
     account_key TEXT DEFAULT '',
     account_tool TEXT DEFAULT '',
     account_name TEXT DEFAULT '',
@@ -63,6 +76,7 @@ export const PG_MIGRATIONS: string[] = [
     id TEXT PRIMARY KEY,
     project_path TEXT,
     agent TEXT,
+    cost_center_id TEXT,
     period TEXT NOT NULL,
     limit_usd REAL NOT NULL,
     alert_at_percent INTEGER DEFAULT 80,
@@ -98,6 +112,7 @@ export const PG_MIGRATIONS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_path)`,
   `CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at)`,
   `CREATE INDEX IF NOT EXISTS idx_sessions_machine ON sessions(machine_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_cost_centers_kind ON cost_centers(kind)`,
 
   // Model pricing table
   `CREATE TABLE IF NOT EXISTS model_pricing (
@@ -194,6 +209,7 @@ export const PG_MIGRATIONS: string[] = [
   `ALTER TABLE requests ADD COLUMN IF NOT EXISTS account_source TEXT DEFAULT ''`,
   `ALTER TABLE requests ADD COLUMN IF NOT EXISTS updated_at TEXT DEFAULT ''`,
   `ALTER TABLE requests ADD COLUMN IF NOT EXISTS synced_at TEXT DEFAULT ''`,
+  `ALTER TABLE requests ADD COLUMN IF NOT EXISTS cost_center_id TEXT`,
   `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS attribution_tag TEXT DEFAULT ''`,
   `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS account_key TEXT DEFAULT ''`,
   `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS account_tool TEXT DEFAULT ''`,
@@ -202,9 +218,15 @@ export const PG_MIGRATIONS: string[] = [
   `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS account_source TEXT DEFAULT ''`,
   `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS updated_at TEXT DEFAULT ''`,
   `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS synced_at TEXT DEFAULT ''`,
+  `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS cost_center_id TEXT`,
+  `ALTER TABLE budgets ADD COLUMN IF NOT EXISTS cost_center_id TEXT`,
+  `ALTER TABLE cost_centers ADD COLUMN IF NOT EXISTS updated_at TEXT DEFAULT ''`,
 
   `CREATE INDEX IF NOT EXISTS idx_usage_agent_date ON usage_snapshots(agent, date)`,
   `CREATE INDEX IF NOT EXISTS idx_savings_date ON savings_daily(date)`,
   `CREATE INDEX IF NOT EXISTS idx_requests_account ON requests(account_key)`,
   `CREATE INDEX IF NOT EXISTS idx_sessions_account ON sessions(account_key)`,
+  `CREATE INDEX IF NOT EXISTS idx_requests_cost_center ON requests(cost_center_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_sessions_cost_center ON sessions(cost_center_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_budgets_cost_center ON budgets(cost_center_id)`,
 ];

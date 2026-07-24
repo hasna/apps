@@ -31,6 +31,7 @@ export interface PeerMergeResult {
 }
 
 const GENERIC_PEER_TABLES = [
+  'cost_centers',
   'usage_snapshots',
   'subscriptions',
   'billing_daily',

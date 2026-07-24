@@ -1,10 +1,10 @@
 import type { SqliteAdapter as Database } from '@hasna/cloud'
-import { upsertRequest, upsertSession, rollupSession, getMachineId } from '../db/database.js'
+import { upsertRequest, upsertSession, rollupSession, getMachineId, upsertCostCenter } from '../db/database.js'
 import { isAgent } from '../lib/agents.js'
-import type { Agent } from '../lib/agents.js'
+import type { CostBasis, CostCenterKind, EconomyAgent } from '../types/index.js'
 
 export interface OtelIngestRow {
-  agent: Agent
+  agent: EconomyAgent
   session_id: string
   model: string
   cost_usd: number
@@ -12,6 +12,19 @@ export interface OtelIngestRow {
   output_tokens: number
   timestamp: string
   source_request_id: string
+  cost_basis?: CostBasis
+  cost_center?: string
+  cost_center_kind?: CostCenterKind
+  cost_center_id?: string
+  attribution_tag?: string
+  project_path?: string
+  project_name?: string
+  repo?: string
+  account_key?: string
+  account_tool?: string
+  account_name?: string
+  account_email?: string
+  account_source?: string
 }
 
 interface OtlpAttribute {
@@ -35,6 +48,110 @@ function attrsMap(attributes: OtlpAttribute[] | undefined): Record<string, strin
     if (v != null) out[a.key] = v
   }
   return out
+}
+
+const COST_CENTER_KINDS: readonly CostCenterKind[] = ['loop', 'app', 'repo', 'service', 'team']
+const PSEUDO_AGENTS: readonly EconomyAgent[] = ['app', 'service', 'repo', 'loop']
+
+function isCostCenterKind(value: string): value is CostCenterKind {
+  return (COST_CENTER_KINDS as readonly string[]).includes(value)
+}
+
+function asString(value: unknown): string | undefined {
+  if (value == null) return undefined
+  const text = String(value).trim()
+  return text ? text : undefined
+}
+
+function firstString(source: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = asString(source[key])
+    if (value) return value
+  }
+  return undefined
+}
+
+function normalizeCostCenterKind(raw: string | undefined): CostCenterKind | undefined {
+  if (!raw) return undefined
+  const value = raw.toLowerCase()
+  return isCostCenterKind(value) ? value : undefined
+}
+
+function normalizeAgent(raw: string | undefined, kind: CostCenterKind | undefined): EconomyAgent {
+  if (raw && isAgent(raw)) return raw
+  if (raw && (PSEUDO_AGENTS as readonly string[]).includes(raw)) return raw as EconomyAgent
+  if (kind && (PSEUDO_AGENTS as readonly string[]).includes(kind)) return kind as EconomyAgent
+  return 'service'
+}
+
+function slug(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'unknown'
+}
+
+function costCenterId(kind: CostCenterKind | undefined, name: string | undefined, explicitId?: string): string | undefined {
+  if (explicitId) return explicitId
+  if (!kind || !name) return undefined
+  return `${kind}:${slug(name)}`
+}
+
+function projectNameFromPath(projectPath: string | undefined): string | undefined {
+  if (!projectPath) return undefined
+  return projectPath.split('/').filter(Boolean).at(-1)
+}
+
+function extractAttribution(source: Record<string, unknown>): Pick<
+  OtelIngestRow,
+  'agent' | 'cost_center' | 'cost_center_kind' | 'cost_center_id' | 'attribution_tag' |
+  'project_path' | 'project_name' | 'repo' | 'account_key' | 'account_tool' |
+  'account_name' | 'account_email' | 'account_source' | 'cost_basis'
+> {
+  const sourceKind = firstString(source, ['source', 'source_kind', 'ai.source'])
+  const rawKind = firstString(source, ['cost_center_kind', 'cost_center.kind', 'economy.cost_center.kind']) ?? sourceKind
+  const costCenterKind = normalizeCostCenterKind(rawKind)
+  const costCenter = firstString(source, [
+    'cost_center',
+    'cost_center_name',
+    'cost_center.name',
+    'economy.cost_center',
+    'service.name',
+    'app',
+    'app.name',
+    'repo',
+    'repository',
+  ])
+  const projectPath = firstString(source, ['project_path', 'project.path', 'repo_path', 'repository.path'])
+  const explicitId = firstString(source, ['cost_center_id', 'cost_center.id', 'economy.cost_center.id'])
+  const costBasisRaw = firstString(source, ['cost_basis', 'economy.cost_basis'])
+  const costBasis = costBasisRaw && ['metered_api', 'subscription_included', 'estimated', 'unknown'].includes(costBasisRaw)
+    ? costBasisRaw as CostBasis
+    : undefined
+
+  return {
+    agent: normalizeAgent(firstString(source, ['agent', 'ai.agent']) ?? sourceKind, costCenterKind),
+    cost_center: costCenter,
+    cost_center_kind: costCenterKind,
+    cost_center_id: costCenterId(costCenterKind, costCenter, explicitId),
+    attribution_tag: firstString(source, ['attribution_tag', 'attribution.tag', 'economy.attribution_tag']),
+    project_path: projectPath,
+    project_name: firstString(source, ['project_name', 'project.name']) ?? projectNameFromPath(projectPath) ?? costCenter,
+    repo: firstString(source, ['repo', 'repository', 'repository.name']),
+    account_key: firstString(source, ['account_key', 'account.key', 'economy.account_key']),
+    account_tool: firstString(source, ['account_tool', 'account.tool', 'economy.account_tool']),
+    account_name: firstString(source, ['account_name', 'account.name', 'economy.account_name']),
+    account_email: firstString(source, ['account_email', 'account.email', 'economy.account_email']),
+    account_source: firstString(source, ['account_source', 'account.source', 'economy.account_source']),
+    cost_basis: costBasis,
+  }
+}
+
+function mergeAttribution<T extends Partial<OtelIngestRow>>(
+  row: T,
+  attribution: Partial<OtelIngestRow>,
+): T {
+  return {
+    ...row,
+    ...Object.fromEntries(Object.entries(attribution).filter(([, value]) => value !== undefined && value !== '')),
+  } as T
 }
 
 function metricKind(body: Record<string, unknown>): 'cost' | 'input_tokens' | 'output_tokens' | null {
@@ -81,14 +198,14 @@ export function parseOtlpMetrics(body: unknown): OtelIngestRow[] {
           if (!dp || typeof dp !== 'object') continue
           const pointAttrs = attrsMap((dp as { attributes?: OtlpAttribute[] }).attributes)
           const merged = { ...resourceAttrs, ...pointAttrs }
-          const agentRaw = String(merged['agent'] ?? merged['ai.agent'] ?? 'unknown')
-          const agent = isAgent(agentRaw) ? agentRaw : 'opencode'
+          const attribution = extractAttribution(merged)
+          const agent = attribution.agent
           const sessionId = String(merged['session_id'] ?? merged['session.id'] ?? 'otel-session')
           const model = String(merged['model'] ?? merged['ai.model'] ?? 'unknown')
           const sourceId = String(merged['request_id'] ?? merged['event.id'] ?? `${sessionId}-${kind}`)
           const key = `${agent}:${sourceId}`
 
-          const row = partial.get(key) ?? {
+          const row = mergeAttribution(partial.get(key) ?? {
             key,
             agent,
             session_id: sessionId,
@@ -98,7 +215,7 @@ export function parseOtlpMetrics(body: unknown): OtelIngestRow[] {
             output_tokens: 0,
             timestamp: new Date().toISOString(),
             source_request_id: sourceId,
-          }
+          }, attribution)
 
           const asDouble = (dp as { asDouble?: number }).asDouble
           const asInt = (dp as { asInt?: string }).asInt
@@ -129,14 +246,26 @@ export function parseOtlpMetrics(body: unknown): OtelIngestRow[] {
       output_tokens: r.output_tokens ?? 0,
       timestamp: r.timestamp!,
       source_request_id: r.source_request_id!,
+      cost_basis: r.cost_basis,
+      cost_center: r.cost_center,
+      cost_center_kind: r.cost_center_kind,
+      cost_center_id: r.cost_center_id,
+      attribution_tag: r.attribution_tag,
+      project_path: r.project_path,
+      project_name: r.project_name,
+      repo: r.repo,
+      account_key: r.account_key,
+      account_tool: r.account_tool,
+      account_name: r.account_name,
+      account_email: r.account_email,
+      account_source: r.account_source,
     }))
 }
 
 export function parseSimpleIngest(body: unknown): OtelIngestRow | null {
   if (!body || typeof body !== 'object') return null
   const b = body as Record<string, unknown>
-  const agentRaw = String(b['agent'] ?? '')
-  if (!isAgent(agentRaw)) return null
+  const attribution = extractAttribution(b)
   const cost = Number(b['cost_usd'] ?? 0)
   const input = Number(b['input_tokens'] ?? 0)
   const output = Number(b['output_tokens'] ?? 0)
@@ -144,7 +273,8 @@ export function parseSimpleIngest(body: unknown): OtelIngestRow | null {
   const sessionId = String(b['session_id'] ?? 'otel-session')
   const sourceId = String(b['request_id'] ?? b['source_request_id'] ?? `${sessionId}-${Date.now()}`)
   return {
-    agent: agentRaw,
+    ...attribution,
+    agent: attribution.agent,
     session_id: sessionId,
     model: String(b['model'] ?? 'unknown'),
     cost_usd: cost,
@@ -155,13 +285,31 @@ export function parseSimpleIngest(body: unknown): OtelIngestRow | null {
   }
 }
 
+function ensureCostCenter(db: Database, row: OtelIngestRow): string | undefined {
+  const id = row.cost_center_id ?? costCenterId(row.cost_center_kind, row.cost_center)
+  if (!id || !row.cost_center_kind || !row.cost_center) return id
+  const labels: Record<string, string> = { source: 'otel' }
+  if (row.repo) labels['repo'] = row.repo
+  upsertCostCenter(db, {
+    id,
+    kind: row.cost_center_kind,
+    name: row.cost_center,
+    repo_path: row.project_path ?? null,
+    labels_json: JSON.stringify(labels),
+    created_at: row.timestamp,
+  })
+  return id
+}
+
 export async function ingestOtelRows(db: Database, rows: OtelIngestRow[]): Promise<{ requests: number; sessions: number }> {
   const machineId = getMachineId()
   const sessions = new Set<string>()
   let requests = 0
 
   for (const row of rows) {
-    const reqId = `otel-${row.agent}-${row.source_request_id}`
+    const costCenterId = ensureCostCenter(db, row)
+    const requestScope = slug(costCenterId ?? row.cost_center ?? row.project_path ?? row.session_id)
+    const reqId = `otel-${row.agent}-${requestScope}-${row.source_request_id}`
     upsertRequest(db, {
       id: reqId,
       agent: row.agent,
@@ -172,26 +320,39 @@ export async function ingestOtelRows(db: Database, rows: OtelIngestRow[]): Promi
       cache_read_tokens: 0,
       cache_create_tokens: 0,
       cost_usd: row.cost_usd,
-      cost_basis: 'estimated',
+      cost_basis: row.cost_basis ?? 'estimated',
       duration_ms: 0,
       timestamp: row.timestamp,
       source_request_id: row.source_request_id,
       machine_id: machineId,
-      attribution_tag: 'otel',
+      cost_center_id: costCenterId ?? null,
+      attribution_tag: row.attribution_tag ?? 'otel',
+      account_key: row.account_key ?? '',
+      account_tool: row.account_tool ?? '',
+      account_name: row.account_name ?? '',
+      account_email: row.account_email ?? '',
+      account_source: row.account_source ?? '',
     })
 
     if (!sessions.has(row.session_id)) {
       upsertSession(db, {
         id: row.session_id,
         agent: row.agent,
-        project_path: '',
-        project_name: '',
+        project_path: row.project_path ?? '',
+        project_name: row.project_name ?? row.repo ?? row.cost_center ?? '',
         started_at: row.timestamp,
         ended_at: null,
         total_cost_usd: 0,
         total_tokens: 0,
         request_count: 0,
         machine_id: machineId,
+        cost_center_id: costCenterId ?? null,
+        attribution_tag: row.attribution_tag ?? 'otel',
+        account_key: row.account_key ?? '',
+        account_tool: row.account_tool ?? '',
+        account_name: row.account_name ?? '',
+        account_email: row.account_email ?? '',
+        account_source: row.account_source ?? '',
       })
       sessions.add(row.session_id)
     }

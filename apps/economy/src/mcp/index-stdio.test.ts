@@ -39,7 +39,7 @@ describe('economy-mcp stdio server', () => {
 
       const tools = await client.listTools(undefined, { timeout: 5_000 })
       const names = new Set(tools.tools.map((tool) => tool.name))
-      for (const expected of ['get_cost_summary', 'get_sessions', 'get_pricing', 'set_budget', 'set_pricing', 'get_billing_summary', 'get_usage', 'get_savings', 'list_subscriptions', 'set_subscription', 'remove_subscription', 'sync', 'describe_tools']) {
+      for (const expected of ['get_cost_summary', 'get_sessions', 'get_pricing', 'get_cost_center_breakdown', 'set_budget', 'set_pricing', 'get_billing_summary', 'get_usage', 'get_savings', 'list_subscriptions', 'set_subscription', 'remove_subscription', 'sync', 'describe_tools']) {
         expect(names.has(expected)).toBe(true)
       }
 
@@ -61,7 +61,7 @@ describe('economy-mcp stdio server', () => {
       expect(pricingText).toContain('storage-h')
 
       const budgetSet = await client.callTool(
-        { name: 'set_budget', arguments: { period: 'weekly', limit_usd: 25, project_path: '/workspace/open-economy', agent: 'codex', alert_at_percent: 70 } },
+        { name: 'set_budget', arguments: { period: 'weekly', limit_usd: 25, project_path: '/workspace/open-economy', agent: 'codex', cost_center_id: 'loop:fleet-evaluator', alert_at_percent: 70 } },
         undefined,
         { timeout: 5_000 },
       )
@@ -75,13 +75,20 @@ describe('economy-mcp stdio server', () => {
         undefined,
         { timeout: 5_000 },
       )
-      expect(budgetStatus.content[0]?.type === 'text' ? budgetStatus.content[0].text : '').toContain('/workspace/open-econ')
+      expect(budgetStatus.content[0]?.type === 'text' ? budgetStatus.content[0].text : '').toContain('loop:fleet-evaluator')
 
       await client.callTool(
         { name: 'remove_budget', arguments: { id: budgetId } },
         undefined,
         { timeout: 5_000 },
       )
+
+      const costCenters = await client.callTool(
+        { name: 'get_cost_center_breakdown', arguments: { kind: 'loop' } },
+        undefined,
+        { timeout: 5_000 },
+      )
+      expect(costCenters.content[0]?.type === 'text' ? costCenters.content[0].text : '').toContain('No cost-center usage yet.')
 
       const subscriptionSet = await client.callTool(
         {
@@ -149,11 +156,12 @@ describe('economy-mcp stdio server', () => {
         { timeout: 5_000 },
       )
       const text = description.content[0]?.type === 'text' ? description.content[0].text : ''
-      expect(text).toContain('sync: sources(all|claude|takumi|codex|gemini|opencode|cursor|pi|hermes)')
+      expect(text).toContain('sync: sources(all|claude|takumi|codex|gemini|opencode|cursor|pi|hermes|loops)')
       expect(text).toContain('get_sessions: agent(claude|takumi|codex|gemini|opencode|cursor|pi|hermes), project(partial), account?(key/name/email)')
       expect(text).toContain('get_billing_summary: period(today|yesterday|week|month|year|all)')
       expect(text).toContain('get_pricing: no params -> model pricing rows')
       expect(text).toContain('set_budget: period(daily|weekly|monthly)')
+      expect(text).toContain('cost_center_id?')
       expect(text).toContain('set_pricing: model, input_per_1m')
       expect(text).toContain('list_subscriptions: no params')
       expect(text).toContain('set_subscription: provider, plan')

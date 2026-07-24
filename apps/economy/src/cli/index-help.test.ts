@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { openDatabase, upsertCostCenter, upsertRequest, upsertSession } from '../db/database.js'
 
 const root = new URL('../../', import.meta.url).pathname.replace(/\/$/, '')
 const tempRoots: string[] = []
@@ -95,6 +96,19 @@ describe('economy CLI help', () => {
     expect(stdout).toContain('--json')
     expect(stderr).toBe('')
   })
+
+  test('documents loops sync and cost-center breakdown flags', async () => {
+    let result = await runCli(['sync', '--help'])
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('--loops')
+
+    result = await runCli(['breakdown', '--help'])
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('cost-center')
+    expect(result.stdout).toContain('loop')
+    expect(result.stdout).toContain('app')
+    expect(result.stdout).toContain('repo')
+  })
 })
 
 describe('economy brains CLI', () => {
@@ -155,6 +169,71 @@ describe('economy CLI mutation validation', () => {
     result = await runCli(['budget', 'set', '--limit', '10', '--agent', 'unknown'])
     expect(result.exitCode).toBe(1)
     expect(result.stderr).toContain('--agent must be one of: claude, takumi, codex, gemini, opencode, cursor, pi, hermes')
+  })
+
+  test('budget set and list support cost-center scope', async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'economy-cli-budget-cost-center-'))
+    tempRoots.push(tempRoot)
+    const dbPath = join(tempRoot, 'economy.db')
+
+    let result = await runCli(['budget', 'set', '--limit', '10', '--cost-center', 'loop:fleet-evaluator'], { HASNA_ECONOMY_DB_PATH: dbPath })
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('loop:fleet-evaluator')
+
+    result = await runCli(['budget', 'list'], { HASNA_ECONOMY_DB_PATH: dbPath })
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('loop:fleet-evaluator')
+  })
+
+  test('breakdown supports cost-center and loop dimensions', async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'economy-cli-breakdown-cost-center-'))
+    tempRoots.push(tempRoot)
+    const dbPath = join(tempRoot, 'economy.db')
+    const db = openDatabase(dbPath, true)
+    upsertCostCenter(db, {
+      id: 'loop:fleet-evaluator',
+      kind: 'loop',
+      name: 'fleet-evaluator',
+      repo_path: null,
+      labels_json: '{}',
+      created_at: new Date().toISOString(),
+    })
+    upsertSession(db, {
+      id: 'loop-session',
+      agent: 'loop',
+      project_path: '',
+      project_name: 'fleet-evaluator',
+      started_at: new Date().toISOString(),
+      ended_at: null,
+      total_cost_usd: 0,
+      total_tokens: 0,
+      request_count: 0,
+      cost_center_id: 'loop:fleet-evaluator',
+    })
+    upsertRequest(db, {
+      id: 'loop-request',
+      agent: 'loop',
+      session_id: 'loop-session',
+      model: 'gpt-5-codex',
+      input_tokens: 50,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      cache_create_tokens: 0,
+      cost_usd: 0.01,
+      duration_ms: 0,
+      timestamp: new Date().toISOString(),
+      source_request_id: 'loop-request',
+      cost_center_id: 'loop:fleet-evaluator',
+    })
+
+    let result = await runCli(['breakdown', '--by', 'cost-center'], { HASNA_ECONOMY_DB_PATH: dbPath })
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('fleet-evaluator')
+    expect(result.stdout).toContain('loop')
+
+    result = await runCli(['breakdown', '--by', 'loop'], { HASNA_ECONOMY_DB_PATH: dbPath })
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('fleet-evaluator')
   })
 
   test('pricing set rejects invalid numeric values', async () => {

@@ -12,7 +12,7 @@ import { maybePullFromCloud, cloudPush, cloudPull, cloudSyncFull, getCloudDataba
 import { mergePeerDatabase } from '../lib/peer-sync.js'
 import { runEconomyFleetSync, writeFleetSyncReport } from '../lib/fleet-sync.js'
 import type { Agent } from '../lib/agents.js'
-import { openDatabase, querySummary, querySessions, queryTopSessions, queryZeroCostTokenizedModels, queryModelBreakdown, queryProjectBreakdown, queryAgentBreakdown, queryAccountBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertProject, deleteProject, getProject, listModelPricing, upsertModelPricing, deleteModelPricing, upsertGoal, deleteGoal, getGoalStatuses, listMachines, getMachineId, listMachineRegistry } from '../db/database.js'
+import { openDatabase, querySummary, querySessions, queryTopSessions, queryZeroCostTokenizedModels, queryModelBreakdown, queryProjectBreakdown, queryAgentBreakdown, queryAccountBreakdown, queryCostCenterBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertProject, deleteProject, getProject, listModelPricing, upsertModelPricing, deleteModelPricing, upsertGoal, deleteGoal, getGoalStatuses, listMachines, getMachineId, listMachineRegistry } from '../db/database.js'
 import { queryBillingSummary } from '../db/database.js'
 import { syncAnthropicBilling, syncOpenAIBilling, syncGeminiBilling } from '../ingest/billing.js'
 import { packageMetadata } from '../lib/package-metadata.js'
@@ -20,7 +20,7 @@ import { ensurePricingSeeded } from '../lib/pricing.js'
 import { randomUUID } from 'crypto'
 import { execSync } from 'child_process'
 import { economyCloudStorage, cloudListItems, cloudObject } from '../lib/cloud-storage.js'
-import type { AccountBreakdown, BudgetStatus, CostSummary, ModelBreakdown, AgentBreakdown, ProjectBreakdown, EconomySession, Period } from '../types/index.js'
+import type { AccountBreakdown, BudgetStatus, CostSummary, ModelBreakdown, AgentBreakdown, ProjectBreakdown, EconomySession, CostCenterKind, Period } from '../types/index.js''
 
 const program = new Command()
 
@@ -31,7 +31,7 @@ program
 
 // ── Auto-sync helper ──────────────────────────────────────────────────────────
 
-async function autoSync(opts: { claude?: boolean; takumi?: boolean; codex?: boolean; gemini?: boolean; opencode?: boolean; cursor?: boolean; pi?: boolean; hermes?: boolean; verbose?: boolean; dedupe?: boolean; cloud?: boolean } = {}): Promise<void> {
+async function autoSync(opts: { claude?: boolean; takumi?: boolean; codex?: boolean; gemini?: boolean; opencode?: boolean; cursor?: boolean; pi?: boolean; hermes?: boolean; loops?: boolean; verbose?: boolean; dedupe?: boolean; cloud?: boolean } = {}): Promise<void> {
   // self_hosted/cloud mode: reads come straight from the cloud API, so there is
   // no local DB to ingest into or pull for. Skip the local sync entirely.
   if (economyCloudStorage().active) return
@@ -282,14 +282,15 @@ program
   .option('--cursor', 'Only ingest Cursor usage')
   .option('--pi', 'Only ingest Pi sessions')
   .option('--hermes', 'Only ingest Hermes sessions')
+  .option('--loops', 'Only ingest OpenLoops orchestration/judge token usage')
   .option('-v, --verbose', 'Verbose output')
   .option('--force', 'Force re-process all files (ignore mtime cache)')
   .option('--backfill-machine', 'Tag existing records that have no machine_id with current hostname')
   .option('--recalculate', 'Recalculate costs for all requests with cost_usd = 0')
-  .action(async (opts: { claude?: boolean; takumi?: boolean; codex?: boolean; gemini?: boolean; opencode?: boolean; cursor?: boolean; pi?: boolean; hermes?: boolean; verbose?: boolean; force?: boolean; backfillMachine?: boolean; recalculate?: boolean }) => {
+  .action(async (opts: { claude?: boolean; takumi?: boolean; codex?: boolean; gemini?: boolean; opencode?: boolean; cursor?: boolean; pi?: boolean; hermes?: boolean; loops?: boolean; verbose?: boolean; force?: boolean; backfillMachine?: boolean; recalculate?: boolean }) => {
     const db = openDatabase()
     ensurePricingSeeded(db)
-    const anySpecific = opts.claude || opts.takumi || opts.codex || opts.gemini || opts.opencode || opts.cursor || opts.pi || opts.hermes
+    const anySpecific = opts.claude || opts.takumi || opts.codex || opts.gemini || opts.opencode || opts.cursor || opts.pi || opts.hermes || opts.loops
     if (!anySpecific || opts.verbose) {
       try {
         const { syncOpenProjectsRegistry } = await import('../lib/open-projects.js')
@@ -300,7 +301,7 @@ program
       }
     }
     if (opts.force) {
-      const ingestSources = [...AGENTS, 'codex-codewith']
+      const ingestSources = [...AGENTS, 'codex-codewith', 'loops']
       db.exec(`DELETE FROM ingest_state WHERE source IN (${ingestSources.map(a => `'${a}'`).join(', ')})`)
       if (opts.verbose) console.log(chalk.dim('Cleared ingest cache'))
     }
@@ -314,6 +315,7 @@ program
       cursor: opts.cursor,
       pi: opts.pi,
       hermes: opts.hermes,
+      loops: opts.loops,
       verbose: opts.verbose,
     })
     console.log(chalk.green(`✓ deduped ${result.deduped}${result.cloudPushed ? ', pushed to cloud' : ''}`))
@@ -480,14 +482,15 @@ program
 
 program
   .command('breakdown')
-  .description('Cost breakdown by model, agent, project, or account')
-  .option('--by <dimension>', 'Dimension: model|agent|project|account', 'model')
+  .description('Cost breakdown by model, agent, project, account, or cost center')
+  .option('--by <dimension>', 'Dimension: model|agent|project|account|cost-center|loop|app|repo', 'model')
   .option('--since <date>', 'Filter since date or relative (e.g. 2026-03-01, 7d, 30d)')
   .action(async (opts: { by?: string; since?: string }) => {
     const cloud = economyCloudStorage()
     const db = cloud.active ? undefined : openDatabase()
     const sinceDate = opts.since ? parseSinceDate(opts.since) : undefined
     console.log()
+    const costCenterKinds = new Set(['loop', 'app', 'repo'] as const)
     if (opts.by === 'project') {
       const rows = cloud.active
         ? await cloudListItems<ProjectBreakdown>(cloud, 'breakdown', { by: 'project', since: sinceDate })
@@ -650,6 +653,24 @@ program
         `).all(sinceDate, sinceDate) as AccountBreakdown[]
         : queryAccountBreakdown(db!)
       printAccountBreakdown(rows)
+    } else if (opts.by === 'cost-center' || costCenterKinds.has(opts.by as 'loop' | 'app' | 'repo')) {
+      const kind = costCenterKinds.has(opts.by as 'loop' | 'app' | 'repo') ? opts.by as CostCenterKind : undefined
+      const rows = queryCostCenterBreakdown(db, 'all', { kind, since: sinceDate })
+      if (rows.length === 0) {
+        console.log(chalk.yellow('No cost-center usage yet. Run `economy sync --loops` or ingest app/service usage with /ingest.'))
+      } else {
+        printTable(
+          ['Kind', 'Cost Center', 'Sessions', 'Requests', 'Tokens', 'Cost'],
+          rows.map(r => [
+            chalk.white(r.kind),
+            chalk.white(r.name),
+            String(r.sessions),
+            String(r.requests),
+            chalk.cyan(fmtTokens(r.total_tokens)),
+            fmt(r.cost_usd),
+          ]),
+        )
+      }
     } else {
       const rows = cloud.active
         ? await cloudListItems<ModelBreakdown>(cloud, 'breakdown', { by: 'model', since: sinceDate })
@@ -738,11 +759,12 @@ budgetCmd
   .command('set')
   .description('Set a budget')
   .option('--project <path>', 'Project path (omit for global)')
+  .option('--cost-center <id>', 'Cost center id (for example loop:fleet-evaluator)')
   .option('--period <period>', 'Period: daily|weekly|monthly', 'monthly')
   .option('--limit <usd>', 'Budget limit in USD')
   .option('--alert <percent>', 'Alert threshold %', '80')
   .option('--agent <agent>', 'Limit to agent (claude|takumi|codex|gemini)')
-  .action(async (opts: { project?: string; period?: string; limit?: string; alert?: string; agent?: string }) => {
+  .action(async (opts: { project?: string; costCenter?: string; period?: string; limit?: string; alert?: string; agent?: string }) => {
     const limitUsd = parsePositiveCliNumber(opts.limit, '--limit')
     const alertAtPercent = parsePositiveCliNumber(opts.alert ?? '80', '--alert')
     if (alertAtPercent > 100) fail('--alert must be between 1 and 100')
@@ -767,13 +789,14 @@ budgetCmd
       id: randomUUID(),
       project_path: opts.project ?? null,
       agent,
+      cost_center_id: opts.costCenter ?? null,
       period,
       limit_usd: limitUsd,
       alert_at_percent: alertAtPercent,
       created_at: now,
       updated_at: now,
     })
-    console.log(chalk.green(`✓ Budget set: ${opts.project ?? 'global'} — ${period} $${limitUsd}`))
+    console.log(chalk.green(`✓ Budget set: ${opts.costCenter ?? opts.project ?? 'global'} — ${period} $${limitUsd}`))
   })
 
 budgetCmd
@@ -793,7 +816,7 @@ budgetCmd
         const status = b.is_over_limit ? chalk.red('OVER') : b.is_over_alert ? chalk.yellow('ALERT') : chalk.green('OK')
         const pctColor = b.is_over_limit ? chalk.red(pct + '%') : b.is_over_alert ? chalk.yellow(pct + '%') : chalk.green(pct + '%')
         return [
-          chalk.white(b.project_path ?? 'global'),
+          chalk.white(b.cost_center_id ?? b.project_path ?? 'global'),
           b.period,
           fmt(b.limit_usd),
           fmt(b.current_spend_usd),

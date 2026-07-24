@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { openDatabase, querySummary, upsertProject, upsertRequest, upsertSession, upsertUsageSnapshot } from '../db/database.js'
+import { getCostCenter, openDatabase, querySummary, upsertCostCenter, upsertProject, upsertRequest, upsertSession, upsertUsageSnapshot } from '../db/database.js'
 import { mergePeerDatabase } from './peer-sync.js'
 import type { EconomyRequest, EconomySession } from '../types/index.js'
 
@@ -166,6 +166,29 @@ describe('mergePeerDatabase', () => {
     })
     expect((target.prepare(`SELECT COUNT(*) as cnt FROM sessions`).get() as { cnt: number }).cnt).toBe(2)
     expect((target.prepare(`SELECT COUNT(*) as cnt FROM requests`).get() as { cnt: number }).cnt).toBe(2)
+    closeDb(target)
+  })
+
+  test('imports cost centers from peer databases', () => {
+    const targetPath = tempPath('target-cost-centers.db')
+    const sourcePath = tempPath('source-cost-centers.db')
+    const target = openDatabase(targetPath, true)
+    const source = openDatabase(sourcePath, true)
+
+    upsertCostCenter(source, {
+      id: 'loop:fleet-evaluator',
+      kind: 'loop',
+      name: 'fleet-evaluator',
+      repo_path: null,
+      labels_json: '{"team":"ops"}',
+      created_at: NOW,
+    })
+    closeDb(source)
+
+    const result = mergePeerDatabase(target, sourcePath)
+
+    expect(result.tables.some(table => table.table === 'cost_centers')).toBe(true)
+    expect(getCostCenter(target, 'loop:fleet-evaluator')?.name).toBe('fleet-evaluator')
     closeDb(target)
   })
 })

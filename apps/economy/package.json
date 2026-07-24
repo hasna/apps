@@ -1,6 +1,6 @@
 {
   "name": "@hasna/economy",
-  "version": "0.2.45",
+  "version": "0.2.46",
   "description": "AI coding cost tracker \u2014 CLI + MCP server + REST API + web dashboard for Claude Code, Codex, Gemini, OpenCode, Cursor, Pi, and Hermes",
   "repository": {
     "type": "git",
