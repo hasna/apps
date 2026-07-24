@@ -1,31 +1,9 @@
 #!/usr/bin/env bun
-import {
-  getUser,
-  setSecret,
-  getSecret,
-  deleteSecret,
-  listSecrets,
-  listSecretMetadata,
-  searchSecretMetadata,
-  setVaultItem,
-  getVaultItem,
-  deleteVaultItem,
-  listVaultItemMetadata,
-  searchVaultItemMetadata,
-  importSecrets,
-  exportSecrets,
-  getAuditLog,
-  pruneExpired,
-  getVaultPath,
-  registerUser,
-  listUsers,
-  deleteUser,
-} from "./store.js";
-import { getDb } from "./db.js";
-import { encrypt, decrypt, isEncrypted, getMasterKey, initKms, getKeyStatus } from "./crypto.js";
+import { getStore } from "./store/index.js";
+import type { Store } from "./store/types.js";
+import { getMasterKey, initKms, getKeyStatus } from "./crypto.js";
 import type { SecretEntry, SecretMetadata, VaultItemKind, VaultItemMetadata, VaultItemPayload } from "./types.js";
 import { getSecretReferenceStatus } from "./status.js";
-import { runEventsCli } from "@hasna/events/cli";
 
 const SECRET_TYPES: SecretEntry["type"][] = ["api_key", "password", "token", "credential", "other"];
 const VAULT_ITEM_KINDS: VaultItemKind[] = [
@@ -85,16 +63,8 @@ Commands:
   aws pull <key>              pull secret from AWS Secrets Manager [--dry-run|--plan]
   aws sync                    bidirectional sync [--dry-run|--plan]
 
-  storage status              show remote storage sync status
-  storage push                push local vault tables to remote Postgres storage
-  storage pull                pull vault tables from remote Postgres storage
-  storage sync                push then pull remote Postgres storage tables
-
   serve                       start local HTTP server for Chrome extension (port 27462)
   serve token                 print the current serve token
-  serve-cloud                 start the cloud HTTP API (PURE REMOTE; == secrets-serve)
-  db migrate                  run cloud Postgres migrations (PURE REMOTE, A1)
-  db status                   show applied/pending cloud migrations
 
   feedback <message>          send feedback [--email <email>] [--category <cat>]
   mcp                         start MCP server (stdio)
@@ -113,7 +83,9 @@ Examples:
   secrets users register my-agent "My Agent" --type agent
   secrets aws configure
   secrets aws sync
-  secrets storage status
+
+Self-hosted (api mode): set HASNA_SECRETS_API_URL + HASNA_SECRETS_API_KEY to route
+all reads/writes to the cloud API. Unset them to fall back to the local vault.
 `);
 }
 
@@ -214,21 +186,16 @@ MCP usage
     set_secret(key, value, type?, label?, ttl?)
     delete_secret(key)
     audit_log(key?, limit?)
-    storage_status()
-    storage_push(tables?)
-    storage_pull(tables?)
-    storage_sync(tables?)
     scan_workspace_exposures(root?, limit?, maxFileBytes?, maxFiles?, maxBytesScanned?, timeoutMs?)
     scan_history_exposures(root?, limit?, maxCommits?, timeoutMs?)
 
-Remote storage sync
-  Configure a Postgres/RDS database URL:
-    export HASNA_SECRETS_DATABASE_URL=postgres://...
+Self-hosted (api mode)
+  Route all reads/writes to the cloud API instead of the local vault:
+    export HASNA_SECRETS_API_URL=https://secrets.hasna.xyz
+    export HASNA_SECRETS_API_KEY=<bearer key from your vault>
 
-  Sync local vault tables:
-    secrets storage push
-    secrets storage pull
-    secrets storage sync
+  Unset both vars to fall back to the local encrypted vault (fully reversible).
+  A raw database URL is NEVER used on the client.
 
 Safety
   list, search, export, and scan commands do not print secret values by default.
@@ -345,12 +312,6 @@ function formatVaultItem(item: VaultItemMetadata): string {
   return `${item.id} [${item.kind}]${favorite} ${item.title}${subtitle}${domains}`;
 }
 
-function parseTableFlags(flags: Record<string, string>): string[] | undefined {
-  const raw = flags.table ?? flags.tables;
-  if (!raw) return undefined;
-  return raw.split(",").map((table) => table.trim()).filter(Boolean);
-}
-
 function parseAwsOptions(flags: Record<string, string>) {
   return {
     dryRun: flags["dry-run"] === "true" || flags.plan === "true",
@@ -396,7 +357,10 @@ async function runSharedEventCli(args: string[]): Promise<boolean> {
     import("@hasna/events/commander"),
   ]);
   const program = new Command().name("secrets");
-  registerEventsCommands(program, { source: "secrets" });
+  // The shared events package renamed its "webhooks" command to "channels";
+  // register it under the "webhooks" name so `secrets webhooks …` (as advertised
+  // in --help) keeps working against event channel subscriptions.
+  registerEventsCommands(program, { source: "secrets", channelsCommandName: "webhooks" });
   await program.parseAsync(["node", "secrets", ...args]);
   return true;
 }
@@ -404,17 +368,37 @@ async function runSharedEventCli(args: string[]): Promise<boolean> {
 if (await runSharedEventCli(args)) process.exit(0);
 const [command, ...rest] = args;
 
-if (command === "events" || command === "webhooks") {
-  await runEventsCli(args, { source: "secrets", programName: "secrets" });
-  process.exit(0);
-}
-
 if (!command || command === "--help" || command === "-h") {
   usage();
   process.exit(0);
 }
 
+// `--help`/`-h` on ANY (sub)command prints usage and exits WITHOUT running the
+// command. Previously these tokens were ignored (or, for `-h`, treated as a
+// positional), so side-effecting subcommands (aws push/pull/sync, mcp install)
+// executed anyway. Scan raw args because `parseArgs` only recognizes `--` flags.
+if (rest.includes("--help") || rest.includes("-h")) {
+  usage();
+  process.exit(0);
+}
+
 const { flags, positional } = parseArgs(rest);
+
+// Resolve the active Store (LocalStore or ApiStore) lazily and once. Only data
+// commands trigger resolution; utility commands (docs/key/mcp install) do not.
+let _store: Store | undefined;
+function store(): Store {
+  if (_store) return _store;
+  try {
+    _store = getStore();
+  } catch (e: any) {
+    // Misconfigured cloud mode (e.g. mode=cloud but no API key). Fail loud with a
+    // clean message instead of silently reading the wrong dataset.
+    console.error(e?.message ?? String(e));
+    process.exit(1);
+  }
+  return _store;
+}
 
 switch (command) {
   case "docs":
@@ -431,14 +415,22 @@ switch (command) {
       console.error(`Invalid type "${type}". Valid: ${SECRET_TYPES.join(", ")}`);
       process.exit(1);
     }
-    // Warn if AGENT_ID is set but agent is not registered — mirrors open-todos pattern
+    // Warn if AGENT_ID is set but agent is not registered — mirrors open-todos
+    // pattern. Best-effort DX only; never let it fail the write (a lookup error
+    // in api mode must not block storing a secret).
     const agentId = process.env["AGENT_ID"];
-    if (agentId && !await getUser(agentId)) {
-      console.warn(`⚠ Warning: AGENT_ID="${agentId}" is set but not registered. Run: secrets users register ${agentId} <name> --type agent`);
+    if (agentId) {
+      try {
+        if (!(await store().getUser(agentId))) {
+          console.warn(`⚠ Warning: AGENT_ID="${agentId}" is set but not registered. Run: secrets users register ${agentId} <name> --type agent`);
+        }
+      } catch {
+        /* ignore: the unregistered-agent hint is advisory */
+      }
     }
     const expiresAt = flags.ttl ? parseTtl(flags.ttl) : undefined;
     try {
-      const entry = await setSecret(key, value, type, flags.label, expiresAt);
+      const entry = await store().setSecret(key, value, type, flags.label, expiresAt);
       console.log(`✓ Stored: ${entry.key} [${entry.type}]${expiresAt ? ` (expires ${new Date(expiresAt).toLocaleDateString()})` : ""}`);
     } catch (e: any) {
       console.error(e.message);
@@ -450,7 +442,7 @@ switch (command) {
   case "get": {
     const [key] = positional;
     if (!key) { console.error("Usage: secrets get <key>"); process.exit(1); }
-    const entry = await getSecret(key);
+    const entry = await store().getSecret(key);
     if (!entry) { console.error(`Not found: ${key}`); process.exit(1); }
     if (process.stdout.isTTY) {
       console.log(formatEntry(entry, true));
@@ -466,14 +458,14 @@ switch (command) {
   case "uninstall": {
     const [key] = positional;
     if (!key) { console.error(`Usage: secrets ${command} <key>`); process.exit(1); }
-    if (!await deleteSecret(key)) { console.error(`Not found: ${key}`); process.exit(1); }
+    if (!await store().deleteSecret(key)) { console.error(`Not found: ${key}`); process.exit(1); }
     console.log(`✓ Deleted: ${key}`);
     break;
   }
 
   case "list": {
     const [namespace] = positional;
-    const entries = await listSecretMetadata(namespace);
+    const entries = await store().listSecretMetadata(namespace);
     if ("json" in flags) {
       console.log(JSON.stringify(entries, null, 2));
       break;
@@ -490,7 +482,7 @@ switch (command) {
   case "search": {
     const [query] = positional;
     if (!query) { console.error("Usage: secrets search <query>"); process.exit(1); }
-    const results = await searchSecretMetadata(query);
+    const results = await store().searchSecretMetadata(query);
     if ("json" in flags) {
       console.log(JSON.stringify(results, null, 2));
       break;
@@ -509,7 +501,7 @@ switch (command) {
       console.error("Usage: secrets export [--show|--plaintext] [--pretty]. Do not combine --redact with plaintext flags.");
       process.exit(1);
     }
-    console.log(formatJson(await exportSecrets(!showPlaintext), flags.pretty === "true"));
+    console.log(formatJson(await store().exportSecrets(!showPlaintext), flags.pretty === "true"));
     break;
   }
 
@@ -640,7 +632,7 @@ switch (command) {
         console.error("Import refused: this looks like a redacted export. Use `secrets export --show` to create a restorable local backup.");
         process.exit(1);
       }
-      const count = await importSecrets(entries as any);
+      const count = await store().importSecrets(entries as any);
       console.log(`✓ Imported ${count} secret(s)`);
     } catch (e: any) {
       console.error(`Import failed: ${e.message}`);
@@ -650,12 +642,13 @@ switch (command) {
   }
 
   case "status": {
-    const status = getSecretReferenceStatus();
+    const status = await getSecretReferenceStatus();
     if ("json" in flags) {
       console.log(JSON.stringify(status, null, 2));
     } else {
       console.log(`secrets ${status.package.version}`);
-      console.log(`dataDir: ${status.dataDir}`);
+      console.log(`mode: ${status.mode}`);
+      console.log(`location: ${status.location}`);
       console.log(`secrets: ${status.counts.secrets}`);
       console.log(`users: ${status.counts.users}`);
       console.log("values: not included");
@@ -664,7 +657,7 @@ switch (command) {
   }
 
   case "gc": {
-    const count = await pruneExpired();
+    const count = await store().pruneExpired();
     console.log(`✓ Pruned ${count} expired secret(s)`);
     break;
   }
@@ -672,7 +665,7 @@ switch (command) {
   case "audit": {
     const [key] = positional;
     const limit = flags.limit ? parseInt(flags.limit) : 50;
-    const entries = await getAuditLog(key, limit);
+    const entries = await store().getAuditLog(key, limit);
     if ("json" in flags) {
       console.log(JSON.stringify(entries, null, 2));
       break;
@@ -687,16 +680,19 @@ switch (command) {
   }
 
   case "path": {
-    console.log(getVaultPath());
+    console.log(store().describe().location);
     break;
   }
 
   case "users": {
-    const [sub, ...userRest] = positional;
-    const { flags: uFlags, positional: uPos } = parseArgs(userRest);
+    // Flags (e.g. --type) are already extracted by the top-level parseArgs into
+    // `flags`; the subcommand args are the remaining positionals. Re-parsing
+    // `userRest` would miss --type entirely (it was consumed above), which is why
+    // `users register/list --type agent` used to silently fall back to "human".
+    const [sub, ...uPos] = positional;
     switch (sub) {
       case "list": {
-        const users = await listUsers(uFlags.type as any);
+        const users = await store().listUsers(flags.type as any);
         if ("json" in flags) {
           console.log(JSON.stringify(users, null, 2));
           break;
@@ -714,14 +710,19 @@ switch (command) {
       case "register": {
         const [id, name] = uPos;
         if (!id || !name) { console.error("Usage: secrets users register <id> <name> [--type human|agent]"); process.exit(1); }
-        const user = await registerUser(id, name, (uFlags.type as any) ?? "human");
+        const type = (flags.type as string) ?? "human";
+        if (type !== "human" && type !== "agent") {
+          console.error(`Invalid type "${type}". Valid: human, agent`);
+          process.exit(1);
+        }
+        const user = await store().registerUser(id, name, type);
         console.log(`✓ Registered: ${user.id} [${user.type}] — ${user.name}`);
         break;
       }
       case "delete": {
         const [id] = uPos;
         if (!id) { console.error("Usage: secrets users delete <id>"); process.exit(1); }
-        if (!await deleteUser(id)) { console.error(`Not found: ${id}`); process.exit(1); }
+        if (!await store().deleteUser(id)) { console.error(`Not found: ${id}`); process.exit(1); }
         console.log(`✓ Deleted user: ${id}`);
         break;
       }
@@ -741,7 +742,7 @@ switch (command) {
           console.error(`Invalid kind "${kind}". Valid: ${VAULT_ITEM_KINDS.join(", ")}`);
           process.exit(1);
         }
-        const items = await listVaultItemMetadata(kind);
+        const items = await store().listVaultItemMetadata(kind);
         if ("json" in flags) {
           console.log(JSON.stringify(items, null, 2));
           break;
@@ -758,7 +759,7 @@ switch (command) {
       case "search": {
         const query = idOrKind;
         if (!query) { console.error("Usage: secrets items search <query>"); process.exit(1); }
-        const items = await searchVaultItemMetadata(query);
+        const items = await store().searchVaultItemMetadata(query);
         if ("json" in flags) {
           console.log(JSON.stringify(items, null, 2));
           break;
@@ -775,7 +776,7 @@ switch (command) {
       case "get": {
         const id = idOrKind;
         if (!id) { console.error("Usage: secrets items get <id> [--show]"); process.exit(1); }
-        const item = await getVaultItem(id);
+        const item = await store().getVaultItem(id);
         if (!item) { console.error(`Not found: ${id}`); process.exit(1); }
         console.log(JSON.stringify({
           ...item,
@@ -789,7 +790,7 @@ switch (command) {
       case "remove": {
         const id = idOrKind;
         if (!id) { console.error(`Usage: secrets items ${sub} <id>`); process.exit(1); }
-        if (!await deleteVaultItem(id)) { console.error(`Not found: ${id}`); process.exit(1); }
+        if (!await store().deleteVaultItem(id)) { console.error(`Not found: ${id}`); process.exit(1); }
         console.log(`✓ Deleted vault item: ${id}`);
         break;
       }
@@ -798,7 +799,7 @@ switch (command) {
         const title = requireFlag(flags, "title", "Usage: secrets items add-login --title <title> --url <url> --username <user> --password <pass>");
         const username = requireFlag(flags, "username", "Usage: secrets items add-login --title <title> --url <url> --username <user> --password <pass>");
         const password = requireFlag(flags, "password", "Usage: secrets items add-login --title <title> --url <url> --username <user> --password <pass>");
-        const item = await setVaultItem({
+        const item = await store().setVaultItem({
           kind: "login",
           title,
           subtitle: username,
@@ -819,7 +820,7 @@ switch (command) {
 
       case "add-address": {
         const title = requireFlag(flags, "title", "Usage: secrets items add-address --title <title> [--name <name>] [--line1 <line>] [--city <city>]");
-        const item = await setVaultItem({
+        const item = await store().setVaultItem({
           kind: "address",
           title,
           subtitle: flags.name ?? flags.email ?? flags.phone,
@@ -848,7 +849,7 @@ switch (command) {
       case "add-note": {
         const title = requireFlag(flags, "title", "Usage: secrets items add-note --title <title> --body <text>");
         const body = requireFlag(flags, "body", "Usage: secrets items add-note --title <title> --body <text>");
-        const item = await setVaultItem({
+        const item = await store().setVaultItem({
           kind: "secure_note",
           title,
           subtitle: flags.subtitle,
@@ -900,7 +901,7 @@ switch (command) {
           if (result) console.log(JSON.stringify(result, null, 2));
           else console.log(`✓ Pushed: ${key}`);
         } else {
-          const entries = await listSecretMetadata();
+          const entries = await store().listSecretMetadata();
           const dryRunActions = [];
           let dryRunResult: any;
           for (const e of entries) {
@@ -949,52 +950,6 @@ switch (command) {
     break;
   }
 
-  case "storage": {
-    const [sub = "status"] = positional;
-    const {
-      getStorageStatus,
-      getStorageSyncMetaAll,
-      storagePull,
-      storagePush,
-      storageSync,
-    } = await import("./storage-sync.js");
-    const tables = parseTableFlags(flags);
-    try {
-      switch (sub) {
-        case "status": {
-          console.log(JSON.stringify({
-            ...getStorageStatus(),
-            sync: getStorageSyncMetaAll(),
-          }, null, 2));
-          break;
-        }
-
-        case "push": {
-          console.log(JSON.stringify(await storagePush({ tables }), null, 2));
-          break;
-        }
-
-        case "pull": {
-          console.log(JSON.stringify(await storagePull({ tables }), null, 2));
-          break;
-        }
-
-        case "sync": {
-          console.log(JSON.stringify(await storageSync({ tables }), null, 2));
-          break;
-        }
-
-        default:
-          console.error(`Unknown storage subcommand: ${sub}`);
-          process.exit(1);
-      }
-    } catch (e: any) {
-      console.error(`Storage ${sub} failed: ${e.message}`);
-      process.exit(1);
-    }
-    break;
-  }
-
   case "serve": {
     const [sub] = positional;
     if (sub === "token") {
@@ -1030,84 +985,6 @@ switch (command) {
         await startMcpServer();
       }
     }
-    break;
-  }
-
-  case "db": {
-    // Cloud (PURE REMOTE, A1) migration runner: secrets db <migrate|status|init>
-    const [sub] = positional;
-    const { runDbCommand } = await import("./server/db-cli.js");
-    await runDbCommand(sub);
-    break;
-  }
-
-  case "serve-cloud": {
-    // Explicit entry to the deployed HTTP API (also available via secrets-serve).
-    const { startCloudServer } = await import("./server/serve.js");
-    await startCloudServer();
-    break;
-  }
-
-  case "import-dot-secrets": {
-    // Bridge: import all *.env files from ~/.secrets/ into the vault
-    const { readdirSync, readFileSync, existsSync } = await import("fs");
-    const { join } = await import("path");
-    const { homedir } = await import("os");
-    const secretsDir = flags.dir ?? join(homedir(), ".secrets");
-    if (!existsSync(secretsDir)) {
-      console.error(`Directory not found: ${secretsDir}`);
-      process.exit(1);
-    }
-
-    // Recursively find *.env files
-    function findEnvFiles(dir: string): string[] {
-      const results: string[] = [];
-      try {
-        for (const entry of readdirSync(dir, { withFileTypes: true })) {
-          const full = join(dir, entry.name);
-          if (entry.isDirectory()) results.push(...findEnvFiles(full));
-          else if (entry.isFile() && entry.name.endsWith(".env")) results.push(full);
-        }
-      } catch { /* skip unreadable dirs */ }
-      return results;
-    }
-
-    // Infer type from key name
-    function inferType(key: string): SecretEntry["type"] {
-      const k = key.toUpperCase();
-      if (k.includes("PASSWORD") || k.includes("PASS") || k.includes("PWD")) return "password";
-      if (k.includes("API_KEY") || k.includes("APIKEY") || k.includes("SECRET_KEY")) return "api_key";
-      if (k.includes("TOKEN") || k.includes("_KEY")) return "token";
-      if (k.includes("CERT") || k.includes("CERTIFICATE")) return "credential";
-      return "other";
-    }
-
-    const envFiles = findEnvFiles(secretsDir);
-    let imported = 0, skipped = 0;
-    for (const file of envFiles) {
-      const content = readFileSync(file, "utf-8");
-      for (const line of content.split("\n")) {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith("#")) continue;
-        const eqIdx = trimmed.indexOf("=");
-        if (eqIdx === -1) continue;
-        const rawKey = trimmed.slice(0, eqIdx).trim();
-        let rawValue = trimmed.slice(eqIdx + 1).trim();
-        if ((rawValue.startsWith('"') && rawValue.endsWith('"')) ||
-            (rawValue.startsWith("'") && rawValue.endsWith("'"))) {
-          rawValue = rawValue.slice(1, -1);
-        }
-        if (!rawKey || !rawValue) continue;
-        const key = rawKey.toLowerCase().replace(/_/g, "-");
-        const type = inferType(rawKey);
-        // Skip if already exists and not overriding
-        if (!flags.overwrite && await getSecret(key)) { skipped++; continue; }
-        await setSecret(key, rawValue, type);
-        imported++;
-      }
-    }
-    console.log(`✓ Imported ${imported} secret(s) from ${envFiles.length} file(s) in ${secretsDir}`);
-    if (skipped > 0) console.log(`  Skipped ${skipped} already-existing key(s) (use --overwrite to replace)`);
     break;
   }
 
@@ -1155,26 +1032,25 @@ switch (command) {
   }
 
   case "encrypt-vault": {
-    // Migrate all plaintext secrets to encrypted
-    const db = getDb();
-    const rows = db.prepare("SELECT key, value FROM secrets").all() as { key: string; value: string }[];
-    let migrated = 0;
-    let alreadyEncrypted = 0;
-    for (const row of rows) {
-      if (isEncrypted(row.value)) {
-        alreadyEncrypted++;
-        continue;
-      }
-      const enc = encrypt(row.value);
-      db.prepare("UPDATE secrets SET value = ?, updated_at = ? WHERE key = ?")
-        .run(enc, new Date().toISOString(), row.key);
-      migrated++;
+    // Migrate all plaintext secrets to encrypted (local vault maintenance).
+    try {
+      const { migrated, alreadyEncrypted } = await store().encryptVault();
+      console.log(`✓ Encrypted ${migrated} secret(s). ${alreadyEncrypted} already encrypted.`);
+    } catch (e: any) {
+      console.error(e.message);
+      process.exit(1);
     }
-    console.log(`✓ Encrypted ${migrated} secret(s). ${alreadyEncrypted} already encrypted.`);
     break;
   }
 
   case "key": {
+    // The `key` family (init, kms setup, status) manages the LOCAL encryption
+    // master key. In api mode the server owns encryption at rest, so these are
+    // meaningless and must not create a local key file. Guard like encrypt-vault.
+    if (store().mode === "api") {
+      console.error("`secrets key` is a local-vault operation; in api mode the server owns encryption at rest.");
+      process.exit(1);
+    }
     const [sub] = positional;
     const { statSync } = await import("fs");
 
@@ -1239,12 +1115,13 @@ switch (command) {
     const [msg, ...restMsg] = positional;
     const message = [msg, ...restMsg.filter(r => !r.startsWith("--"))].join(" ");
     if (!message) { console.error("Usage: secrets feedback <message> [--email <email>] [--category <cat>]"); process.exit(1); }
-    const db = getDb();
-    db.run(
-      "INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)",
-      [message, flags.email || null, flags.category || "general", "0.1.0"]
-    );
-    console.log("✓ Feedback saved. Thank you!");
+    try {
+      await store().sendFeedback(message, flags.email || undefined, flags.category || "general");
+      console.log("✓ Feedback saved. Thank you!");
+    } catch (e: any) {
+      console.error(`Failed to send feedback: ${e?.message ?? String(e)}`);
+      process.exit(1);
+    }
     break;
   }
 

@@ -9,7 +9,10 @@ import {
   setAwsClientFactoryForTests,
   syncAll,
 } from "../src/aws.js";
-import { setSecret } from "../src/store.js";
+import { LocalStore } from "../src/store/index.js";
+
+const _store = new LocalStore();
+const setSecret = _store.setSecret.bind(_store);
 
 let testDir: string;
 
@@ -173,5 +176,40 @@ describe("AWS dry-run planning", () => {
         mutation: "none",
       })
     );
+  });
+});
+
+describe("AWS live sync (non-dry-run)", () => {
+  it("pulls remote secrets that are missing locally", async () => {
+    // Regression guard: getLocalMetadata() is async, so `if (!getLocalMetadata(key))`
+    // (a truthy Promise) silently skipped every pull and killed bidirectional sync.
+    setAwsClientFactoryForTests(() => ({
+      send: async (command: any) => {
+        const name = command?.constructor?.name;
+        if (name === "ListSecretsCommand") {
+          return {
+            SecretList: [
+              { Name: "hasna/xyz/opensource/files/prod/s3" },
+              { Name: "hasna/xyz/opensource/files/prod/rds" },
+            ],
+          };
+        }
+        if (name === "GetSecretValueCommand") {
+          return { SecretString: "remote-value" };
+        }
+        return {};
+      },
+    }));
+
+    await setSecret("hasna/xyz/opensource/files/prod/s3", "local-value", "credential");
+
+    const result = await syncAll({ profile: "hasna-xyz-infra" });
+
+    expect(result.errors).toEqual([]);
+    expect(result.pushed).toEqual(["hasna/xyz/opensource/files/prod/s3"]);
+    expect(result.pulled).toEqual(["hasna/xyz/opensource/files/prod/rds"]);
+
+    const pulled = await _store.getSecret("hasna/xyz/opensource/files/prod/rds");
+    expect(pulled?.value).toBe("remote-value");
   });
 });

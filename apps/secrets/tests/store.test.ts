@@ -3,28 +3,31 @@ import { mkdirSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { getDb, resetDb } from "../src/db.js";
-import {
-  setSecret,
-  getSecret,
-  deleteSecret,
-  listSecrets,
-  listSecretMetadata,
-  searchSecrets,
-  searchSecretMetadata,
-  setVaultItem,
-  getVaultItem,
-  deleteVaultItem,
-  listVaultItemMetadata,
-  searchVaultItemMetadata,
-  matchVaultItemsForUrl,
-  importSecrets,
-  exportSecrets,
-  getAuditLog,
-  pruneExpired,
-  registerUser,
-  listUsers,
-  deleteUser,
-} from "../src/store.js";
+import { LocalStore } from "../src/store/index.js";
+
+// Exercise the LocalStore transport directly. Each method re-resolves the db via
+// getDb(), so a single instance honours the per-test OPEN_SECRETS_DB + resetDb().
+const store = new LocalStore();
+const setSecret = store.setSecret.bind(store);
+const getSecret = store.getSecret.bind(store);
+const deleteSecret = store.deleteSecret.bind(store);
+const listSecrets = store.listSecrets.bind(store);
+const listSecretMetadata = store.listSecretMetadata.bind(store);
+const searchSecrets = store.searchSecrets.bind(store);
+const searchSecretMetadata = store.searchSecretMetadata.bind(store);
+const setVaultItem = store.setVaultItem.bind(store);
+const getVaultItem = store.getVaultItem.bind(store);
+const deleteVaultItem = store.deleteVaultItem.bind(store);
+const listVaultItemMetadata = store.listVaultItemMetadata.bind(store);
+const searchVaultItemMetadata = store.searchVaultItemMetadata.bind(store);
+const matchVaultItemsForUrl = store.matchVaultItemsForUrl.bind(store);
+const importSecrets = store.importSecrets.bind(store);
+const exportSecrets = store.exportSecrets.bind(store);
+const getAuditLog = store.getAuditLog.bind(store);
+const pruneExpired = store.pruneExpired.bind(store);
+const registerUser = store.registerUser.bind(store);
+const listUsers = store.listUsers.bind(store);
+const deleteUser = store.deleteUser.bind(store);
 
 let testDir: string;
 

@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync, writeFileSync, existsSync, mkdirSync, statSync } from "fs";
 import { join, relative, dirname, basename } from "path";
 import { homedir } from "os";
-import { setSecret, listSecrets, getSecret } from "./store.js";
+import { getStore } from "./store/index.js";
 import type { SecretType } from "./types.js";
 
 /**
@@ -199,6 +199,7 @@ export async function importEnv(opts: ImportEnvOptions): Promise<{ imported: num
     throw new Error(`Directory not found: ${secretsRoot}`);
   }
 
+  const store = getStore();
   const envFiles = findEnvFiles(secretsRoot, secretsRoot);
   let imported = 0;
   let skipped = 0;
@@ -218,12 +219,12 @@ export async function importEnv(opts: ImportEnvOptions): Promise<{ imported: num
       }
 
       // Skip if already exists and not overwriting
-      if (!opts.overwrite && await getSecret(vaultKey)) {
+      if (!opts.overwrite && await store.getSecret(vaultKey)) {
         skipped++;
         continue;
       }
 
-      await setSecret(vaultKey, value, type, varName);
+      await store.setSecret(vaultKey, value, type, varName);
       imported++;
       if (opts.push) toPush.push(vaultKey);
     }
@@ -254,7 +255,7 @@ export interface ExportEnvOptions {
 export async function exportEnv(opts: ExportEnvOptions): Promise<{ exported: number; files: number; skippedFiles: number }> {
   const secretsRoot = opts.dir ?? join(homedir(), ".secrets");
 
-  const allSecrets = await listSecrets();
+  const allSecrets = await getStore().listSecrets();
   if (allSecrets.length === 0) {
     throw new Error("Vault is empty — nothing to export.");
   }
