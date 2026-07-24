@@ -25,17 +25,35 @@ genuine parity/behavior tests that fail before and pass after.
   current OR-of-prefixes / no-phrase SQLite behavior so later stages produce a
   reviewable behavior diff.
 
-### Stage 1 — SQLite full-text quality (planned)
+### Stage 1 — SQLite full-text quality
 
-Real query parser (AND default, `"phrase"`, `prefix*`, boolean), bm25 column
-weights favoring title/source_uri, diacritic-insensitive tokenizer.
+- Real query parser in `src/search.ts`: AND-default, `"quoted phrases"`,
+  `prefix*`, explicit `OR`, and `NOT` / leading-`-` negation, replacing the
+  OR-of-prefixes builder. AND-first with OR fallback keeps precise multi-term
+  queries precise while natural-language questions retain recall.
+- bm25 column weights favor `title`/`source_uri` over body.
+- New schema **v9** migration rebuilds `chunks_fts` with the diacritic-folding
+  tokenizer (`porter unicode61 remove_diacritics 2`), backfilled losslessly from
+  the existing stored FTS rows; idempotent and guarded by live-tokenizer
+  inspection.
+- `hybridSearch` gains `offset` pagination with a widened fetch window for
+  stable, non-overlapping pages. Malformed `MATCH` expressions degrade to zero
+  keyword hits instead of throwing.
 
-### Stage 2 — Postgres full-text parity (planned, top priority)
+### Stage 2 — Postgres full-text parity (top-priority correctness fix)
 
-Replace the `ILIKE`-substring + recency-only cloud path with a weighted
-`tsvector` + GIN index and `websearch_to_tsquery` / `ts_rank_cd` ranking so the
-hosted service returns the same results as local instead of near-empty,
-recency-ordered rows.
+- Replaced the `title/content ILIKE '%q%'` + `ORDER BY created_at DESC` cloud
+  path (`NoteRepo.list`) with a weighted `tsvector` generated column
+  (title = A, content = B) + GIN index, queried via `websearch_to_tsquery` and
+  ranked by `ts_rank_cd`. This fixes the "cloud returns nothing" bug where
+  multi-term / word-order-varying queries matched no substring and results were
+  ordered by recency rather than relevance.
+- Postgres migrations are **appended** to `PG_MIGRATIONS` (index-derived ids,
+  never inserted mid-array) and are idempotent.
+- Added an in-process Postgres (`@electric-sql/pglite`, devDependency) parity
+  suite running the real `NoteRepo` against the real migrations, asserting
+  word-order independence, relevance-over-recency, phrase adjacency, and
+  sqlite-vs-pg equivalence over the shared corpus.
 
 ## 0.2.87
 
