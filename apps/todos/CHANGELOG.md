@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.3] - 2026-07-25
+
+### Fixed
+- Remote `show`/`inspect` no longer report empty `dependencies`/`blocked_by` while `deps <id>` lists persisted edges (#58). The `/v1` task row endpoint returns no relation graphs, and the cloud detail assembly hard-coded both arrays to `[]`, so a blocked remote task looked unblocked and `inspect` never printed its `BLOCKED by N unfinished dep(s)` warning. `show`/`inspect` now read `GET /v1/tasks/:id/dependencies` and hydrate each referenced id into a full task row (deduplicated across both directions, bounded concurrency), matching local-mode output. An edge whose target task cannot be read degrades to an explicit `(unavailable task …)` placeholder instead of erasing the readable relations, and a dependency-endpoint failure warns on stderr rather than sinking the whole detail view (a `404`/`501` from a server without the route is silently treated as "no edges").
+
 ## [0.12.2] - 2026-07-25
 
 ### Fixed

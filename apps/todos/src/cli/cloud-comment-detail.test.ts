@@ -298,9 +298,13 @@ describe("cloud task detail comments", () => {
       expect(inspect.exitCode).toBe(0);
       expect(inspect.stderr).toBe("");
       expect(JSON.parse(inspect.stdout).comments).toHaveLength(2);
+      // The dependency read is part of the detail contract (issue #58); this mock
+      // 404s that route, which the CLI treats as "server has no edges" — silently,
+      // so stderr stays clean.
       expect(requests.slice(requestsBeforeInspect).map((request) => `${request.method} ${request.path}`)).toEqual([
         `GET /v1/tasks/${TASK_ID}`,
         `GET /v1/tasks/${TASK_ID}/comments`,
+        `GET /v1/tasks/${TASK_ID}/dependencies`,
       ]);
       expect(existsSync(join(root, "todos.db"))).toBe(false);
 
@@ -417,6 +421,7 @@ describe("cloud task detail comments", () => {
         "GET /v1/tasks?status=in_progress&assigned_to=fleet&limit=1",
         `GET /v1/tasks/${TASK_ID}`,
         `GET /v1/tasks/${TASK_ID}/comments?limit=100`,
+        `GET /v1/tasks/${TASK_ID}/dependencies`,
       ]);
     } finally {
       server.stop(true);

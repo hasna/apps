@@ -1270,6 +1270,136 @@ export async function cloudGetDependencies(client: HasnaStorageClient, id: strin
   return { dependencies: env.dependencies ?? [], blocked_by: env.blocked_by ?? [] };
 }
 
+/**
+ * A remote task's dependency neighbours, hydrated into full task rows so the
+ * detail renderers can print title/status and compute the blocker warning.
+ * `dependencies` are upstream (this task depends on them); `blocked_by` are
+ * downstream (they depend on this task) — same orientation as the local
+ * `getTaskWithRelations`.
+ */
+export interface CloudTaskRelations {
+  dependencies: Task[];
+  blocked_by: Task[];
+}
+
+/** Parallel task-row lookups used while hydrating dependency edges. */
+const RELATION_HYDRATION_CONCURRENCY = 6;
+
+/**
+ * Stand-in row for a dependency edge whose target task cannot be read (deleted,
+ * archived out of the caller's scope, or cross-project). Keeping the edge
+ * visible — instead of dropping it — means a partially-readable graph never
+ * silently erases the relations that ARE readable. `status` stays `pending`
+ * (the union has no `unknown` member) so an unresolved edge is counted as an
+ * unfinished blocker rather than being optimistically treated as done.
+ */
+function unresolvedRelatedTask(id: string): Task {
+  const now = new Date(0).toISOString();
+  return {
+    id,
+    short_id: null,
+    project_id: null,
+    parent_id: null,
+    plan_id: null,
+    task_list_id: null,
+    title: `(unavailable task ${id.slice(0, 8)})`,
+    description: null,
+    status: "pending",
+    priority: "medium",
+    agent_id: null,
+    assigned_to: null,
+    session_id: null,
+    working_dir: null,
+    tags: [],
+    metadata: { unresolved: true },
+    version: 0,
+    locked_by: null,
+    locked_at: null,
+    created_at: now,
+    updated_at: now,
+    started_at: null,
+    completed_at: null,
+    due_at: null,
+    estimated_minutes: null,
+    actual_minutes: null,
+    requires_approval: false,
+    approved_by: null,
+    approved_at: null,
+    recurrence_rule: null,
+    recurrence_parent_id: null,
+    spawns_template_id: null,
+    confidence: null,
+    reason: null,
+    spawned_from_session: null,
+    assigned_by: null,
+    assigned_from_project: null,
+    task_type: null,
+    cost_tokens: 0,
+    cost_usd: 0,
+    delegated_from: null,
+    delegation_depth: 0,
+    retry_count: 0,
+    max_retries: 0,
+    retry_after: null,
+    sla_minutes: null,
+    runner_id: null,
+    runner_started_at: null,
+    runner_completed_at: null,
+    current_step: null,
+    total_steps: null,
+  };
+}
+
+/**
+ * Hydrate a remote task's dependency graph for the detail views.
+ *
+ * The `/v1` task row endpoint deliberately returns no relation graphs, so
+ * `show`/`inspect` used to render `dependencies: []` / `blocked_by: []` even
+ * when `deps <id>` listed persisted edges — hiding that a remote task was
+ * blocked (issue #58). This reads the edges from the dependency endpoint and
+ * resolves each referenced id to a task row (deduplicated across both
+ * directions, bounded concurrency) so remote detail output matches local mode.
+ */
+export async function cloudGetTaskRelations(client: HasnaStorageClient, id: string): Promise<CloudTaskRelations> {
+  const edges = await cloudGetDependencies(client, id);
+  const upstream = dedupe(edges.dependencies.map((edge) => edge.depends_on));
+  const downstream = dedupe(edges.blocked_by.map((edge) => edge.task_id));
+  const wanted = dedupe([...upstream, ...downstream]).filter((ref) => ref !== id);
+  const rows = new Map<string, Task>();
+
+  let cursor = 0;
+  const workers = Array.from(
+    { length: Math.min(RELATION_HYDRATION_CONCURRENCY, wanted.length) },
+    async () => {
+      for (let index = cursor++; index < wanted.length; index = cursor++) {
+        const ref = wanted[index]!;
+        try {
+          const task = await cloudGetTask(client, ref);
+          if (task) rows.set(ref, task);
+        } catch {
+          // A single unreadable neighbour must not fail the whole detail view;
+          // it degrades to the unresolved placeholder below.
+        }
+      }
+    },
+  );
+  await Promise.all(workers);
+
+  const materialize = (ref: string): Task => rows.get(ref) ?? unresolvedRelatedTask(ref);
+  return { dependencies: upstream.map(materialize), blocked_by: downstream.map(materialize) };
+}
+
+function dedupe(ids: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  for (const id of ids) {
+    if (typeof id !== "string" || id.length === 0 || seen.has(id)) continue;
+    seen.add(id);
+    ordered.push(id);
+  }
+  return ordered;
+}
+
 /** Add a dependency edge to a cloud task (`POST /v1/tasks/:id/dependencies`). */
 export async function cloudAddDependency(client: HasnaStorageClient, id: string, dependsOn: string): Promise<TaskDependency> {
   const raw = await client.transport.post<unknown>(`/tasks/${encodeURIComponent(id)}/dependencies`, { depends_on: dependsOn });

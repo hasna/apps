@@ -22,6 +22,7 @@ import {
   cloudListTasks,
   cloudGetTask,
   cloudListComments,
+  cloudGetTaskRelations,
   cloudCreateTask,
   cloudUpdateTask,
   cloudDeleteTask,
@@ -35,6 +36,7 @@ import {
   cloudResolveTaskListRef,
   cloudResolvePlan,
 } from "../cloud-router.js";
+import type { CloudTaskRelations } from "../cloud-router.js";
 import type { TaskPriority, TaskStatus } from "../../types/index.js";
 import {
   formatTaskLine,
@@ -66,6 +68,29 @@ function formatHumanComment(comment: { agent_id?: string | null; created_at: str
     ? chalk.cyan(`[${escapeTerminalControls(comment.agent_id)}] `)
     : "";
   return `    ${agent}${chalk.dim(escapeTerminalControls(comment.created_at))}: ${escapeTerminalControls(comment.content)}`;
+}
+
+/**
+ * Dependency graph for a remote task's detail view.
+ *
+ * `show`/`inspect` must never be sunk by the relation read: a server that
+ * predates the dependency route (404) or a backend that does not implement it
+ * (501) simply has no edges to show, and any other failure degrades to empty
+ * arrays with a warning on stderr rather than losing the whole task.
+ */
+async function cloudDetailRelations(
+  cloud: Parameters<typeof cloudGetTaskRelations>[0],
+  id: string,
+): Promise<CloudTaskRelations> {
+  try {
+    return await cloudGetTaskRelations(cloud, id);
+  } catch (e) {
+    const status = (e as { status?: unknown } | null)?.status;
+    if (status !== 404 && status !== 501) {
+      console.error(chalk.dim(`Warning: could not load task dependencies: ${e instanceof Error ? e.message : String(e)}`));
+    }
+    return { dependencies: [], blocked_by: [] };
+  }
 }
 
 /**
@@ -798,11 +823,16 @@ export function registerTaskCommands(program: Command) {
       if (cloud) {
         const remote = await cloudGetTask(cloud, await resolveTaskIdForCommand(id, cloud));
         const commentPage = remote ? await cloudListComments(cloud, remote.id) : null;
-        // The /v1 API returns the task row without relation graphs; default the
-        // relation arrays so the detail renderer below never touches undefined.
+        // The /v1 API returns the task row without relation graphs, so the
+        // dependency edges are read separately and hydrated into task rows —
+        // otherwise remote detail views claim a task has no dependencies while
+        // `deps <id>` lists them (issue #58).
+        const relations = remote ? await cloudDetailRelations(cloud, remote.id) : null;
         task = remote
           ? {
-              subtasks: [], dependencies: [], blocked_by: [], ...remote, tags: remote.tags ?? [],
+              subtasks: [], ...remote, tags: remote.tags ?? [],
+              dependencies: relations!.dependencies,
+              blocked_by: relations!.blocked_by,
               comments: commentPage!.comments,
               comments_page: {
                 count: commentPage!.count,
@@ -921,11 +951,16 @@ export function registerTaskCommands(program: Command) {
       if (cloud) {
         const remote = await cloudGetTask(cloud, resolvedId);
         const commentPage = remote ? await cloudListComments(cloud, remote.id) : null;
-        // The /v1 API returns the task row without relation graphs; default the
-        // relation arrays so the detail renderer below never touches undefined.
+        // The /v1 API returns the task row without relation graphs, so the
+        // dependency edges are read separately and hydrated into task rows —
+        // otherwise `inspect` never prints the BLOCKED warning for a remote
+        // task whose upstream work is unfinished (issue #58).
+        const relations = remote ? await cloudDetailRelations(cloud, remote.id) : null;
         task = remote
           ? {
-              subtasks: [], dependencies: [], blocked_by: [], checklist: [], ...remote, tags: remote.tags ?? [],
+              subtasks: [], checklist: [], ...remote, tags: remote.tags ?? [],
+              dependencies: relations!.dependencies,
+              blocked_by: relations!.blocked_by,
               comments: commentPage!.comments,
               comments_page: {
                 count: commentPage!.count,
