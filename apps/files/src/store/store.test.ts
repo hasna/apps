@@ -166,6 +166,69 @@ describe("ApiStore route mapping", () => {
     await expect(broken.updateSource("src_1", { name: "x" })).rejects.toThrow();
   });
 
+  it("guards a missing cloud duplicates route with a graceful message (never a raw transport leak)", async () => {
+    // The self-hosted service has no /files/duplicates route yet, so the cloud
+    // transport 404s. `files dupes --json` used to surface the raw
+    // "Hasna cloud request failed: GET /files/duplicates -> 404" leak; the guard
+    // must translate that into a graceful, actionable message instead.
+    const get404: HasnaHttpTransport = {
+      baseUrl: "https://files.hasna.xyz/v1",
+      get: async (path: string) => { throw new HasnaHttpError("GET", path, 404, { error: "not found" }); },
+      post: async () => ({}),
+      put: async () => ({}),
+      patch: async () => ({}),
+      del: async () => ({}),
+    } as unknown as HasnaHttpTransport;
+    const store = new ApiStore(createHasnaStorageClient("files", get404));
+
+    let msg = "";
+    try {
+      await store.findDuplicates();
+    } catch (e) {
+      msg = (e as Error).message;
+    }
+    expect(msg).toMatch(/not available over the cloud \(api\) transport/i);
+    expect(msg).toContain("files dupes");
+    // The raw transport error must NOT leak through.
+    expect(msg).not.toContain("cloud request failed");
+
+    // The guard must also catch the *bundled* HasnaHttpError copy the storage
+    // transport actually throws (different class identity than the one api-store
+    // imports). This models the published tarball: with an `instanceof` check the
+    // 404 would escape and the raw leak would survive. Detection is by public
+    // shape (name + numeric status), so this must still be guarded.
+    class ForeignHasnaHttpError extends Error {
+      readonly status: number;
+      constructor(method: string, path: string, status: number) {
+        super(`Hasna cloud request failed: ${method} ${path} -> ${status}`);
+        this.name = "HasnaHttpError";
+        this.status = status;
+      }
+    }
+    expect(new ForeignHasnaHttpError("GET", "/files/duplicates", 404) instanceof HasnaHttpError).toBe(false);
+    const foreign404: HasnaHttpTransport = {
+      ...get404,
+      get: async (path: string) => { throw new ForeignHasnaHttpError("GET", path, 404); },
+    } as unknown as HasnaHttpTransport;
+    const foreignStore = new ApiStore(createHasnaStorageClient("files", foreign404));
+    let foreignMsg = "";
+    try {
+      await foreignStore.findDuplicates();
+    } catch (e) {
+      foreignMsg = (e as Error).message;
+    }
+    expect(foreignMsg).toMatch(/not available over the cloud \(api\) transport/i);
+    expect(foreignMsg).not.toContain("cloud request failed");
+
+    // A non-404 error still propagates unchanged (never masked by the guard).
+    const get500: HasnaHttpTransport = {
+      ...get404,
+      get: async (path: string) => { throw new HasnaHttpError("GET", path, 500, { error: "boom" }); },
+    } as unknown as HasnaHttpTransport;
+    const broken = new ApiStore(createHasnaStorageClient("files", get500));
+    await expect(broken.findDuplicates()).rejects.toThrow(/cloud request failed/i);
+  });
+
   it("routes agent registry + activity through /v1 (never local sqlite)", async () => {
     const { transport, calls } = fakeTransport();
     const store = new ApiStore(createHasnaStorageClient("files", transport));

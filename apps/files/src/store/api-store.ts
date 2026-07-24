@@ -95,6 +95,32 @@ async function orNull<T>(p: Promise<T>): Promise<T | null> {
 }
 
 /**
+ * Convert a 404 from a cloud data-plane route the self-hosted service does not
+ * (yet) expose into a graceful, actionable guard instead of leaking the raw
+ * transport error ("Hasna cloud request failed: GET <path> -> 404"). A missing
+ * route and a genuinely-absent record both surface as 404 here, so this is only
+ * used for whole-feature routes (not id lookups). Non-404 errors propagate
+ * unchanged so real cloud failures are never masked.
+ *
+ * The 404 is detected via {@link isHttpError} (public shape) rather than
+ * `instanceof HasnaHttpError`: the storage transport bundles its own copy of the
+ * error class, so `instanceof` against the imported copy misses it in the
+ * published tarball and the raw leak would survive.
+ */
+async function orMissingRouteGuard<T>(p: Promise<T>, feature: string, onBoxCommand: string): Promise<T> {
+  try {
+    return await p;
+  } catch (e) {
+    if (isHttpError(e) && e.status === 404) {
+      throw new Error(
+        `${feature} is not available over the cloud (api) transport; the self-hosted service does not expose it yet. Run \`${onBoxCommand}\` on the on-box store.`,
+      );
+    }
+    throw e;
+  }
+}
+
+/**
  * Resolve a DELETE to a truthful boolean: `true` when the server confirmed the
  * removal, `false` on 404 (the record — or the route — was absent). The
  * @hasna/contracts `client.delete` helper *swallows* a 404 and returns void,
@@ -188,7 +214,11 @@ export class ApiStore implements FilesStore {
     return this.http.get<RecentFile[]>("/files/recent", { query: { agent_id: agentId, limit } });
   }
   async findDuplicates(sourceId?: string): Promise<DuplicateGroup[]> {
-    return this.http.get<DuplicateGroup[]>("/files/duplicates", { query: { source_id: sourceId } });
+    return orMissingRouteGuard(
+      this.http.get<DuplicateGroup[]>("/files/duplicates", { query: { source_id: sourceId } }),
+      "Duplicate detection",
+      "files dupes",
+    );
   }
   async getStats(): Promise<Record<string, unknown>> {
     return this.http.get<Record<string, unknown>>("/stats");
