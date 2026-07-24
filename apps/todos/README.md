@@ -719,6 +719,26 @@ workflow is available to MCP clients through `list_template_library`,
 `create_task_from_template`, `preview_template`, `export_template`, and
 `import_template`.
 
+## Moving Tasks Between Plans
+
+Plan assignment is editable after creation, so reorganizing a backlog never
+requires deleting and recreating tasks (which would lose history, comments, and
+assignments):
+
+```bash
+todos add "My task" --plan <plan-id>          # assign at creation
+todos update <task-id> --plan <plan-id>       # move one task to another plan
+todos update <task-id> --clear-plan           # detach from its plan
+todos bulk plan --plan <plan-id> <id> <id>    # move many tasks at once
+todos bulk move-plan --clear-plan <id> <id>   # detach many tasks at once
+todos plans --show <plan-id>                  # verify the plan's task set
+```
+
+Plan references accept a UUID, a plan slug, a plan name, or a unique id prefix.
+An unknown or ambiguous reference exits non-zero before any task is modified.
+All of these run against whichever authority the CLI is configured for: local
+SQLite, or the shared `/v1` dataset under a self-hosted/cloud authority.
+
 ## Local Git Traceability
 
 Tasks can be linked to local git evidence without contacting hosted services:

@@ -201,8 +201,8 @@ describe("remote CLI entrypoint authority boundary", () => {
       ["claim", "fixture-agent", "--stale-minutes", "30"],
       ["claim", "fixture-agent", "--steal-stale"],
       ["status", "--agent", "fixture-agent"],
-      ["bulk", "plan", TASK_FIXTURE_ID, "--plan", "fixture-plan"],
       ["bulk", "unknown", TASK_FIXTURE_ID],
+      ["bulk", "done", TASK_FIXTURE_ID, "--plan", "fixture-plan"],
       ["projects", "--path-prefix", "/tmp", "--deregister", "fixture"],
       ["plans", "--write-artifacts"],
     ]) {
@@ -232,6 +232,11 @@ describe("remote CLI entrypoint authority boundary", () => {
       ["history", TASK_FIXTURE_ID],
       ["approve", TASK_FIXTURE_ID],
       ["bulk", "done", TASK_FIXTURE_ID],
+      // Bulk plan reassignment is serviced remotely (shared plan lookup + PATCH
+      // per task), so it must not fail closed under remote authority.
+      ["bulk", "plan", TASK_FIXTURE_ID, "--plan", "fixture-plan"],
+      ["bulk", "move-plan", TASK_FIXTURE_ID, "--plan", "fixture-plan"],
+      ["bulk", "plan", TASK_FIXTURE_ID, "--clear-plan"],
       ["deps", TASK_FIXTURE_ID, "--needs", OTHER_TASK_FIXTURE_ID],
       // `deps <id>` works remotely, so its presentation-only flags must stay
       // supported too: `--graph`/`--direction` degrade to the same flat edges
@@ -328,8 +333,8 @@ describe("remote CLI entrypoint authority boundary", () => {
         ["claim", "fixture-agent", "--steal-stale"],
         ["--project", "fixture", "claim", "fixture-agent"],
         ["--agent", "fixture", "status"],
-        ["bulk", "plan", TASK_FIXTURE_ID, "--plan", "fixture-plan"],
         ["bulk", "unknown", TASK_FIXTURE_ID],
+        ["bulk", "done", TASK_FIXTURE_ID, "--plan", "fixture-plan"],
         ["projects", "--deregister", "fixture", "--path-prefix", "/tmp"],
         ["plans", "--write-artifacts"],
         ["agents-normalize"],
@@ -822,6 +827,7 @@ describe("remote CLI entrypoint authority boundary", () => {
     const TASK_IDS = [
       "44444444-4444-4444-8444-444444444444",
       "55555555-5555-4555-8555-555555555555",
+      "66666666-6666-4666-8666-666666666666",
     ];
     const now = "2026-07-18T00:00:00.000Z";
     const projects: Array<Record<string, unknown>> = [];
@@ -1077,13 +1083,15 @@ describe("remote CLI entrypoint authority boundary", () => {
         ["--json", "done", "REMOTE-1"],
         ["--project", PROJECT_ID, "--json", "next"],
         ["--json", "claim", "fixture-worker"],
+      ];
+      const teardownInvocations: string[][] = [
         ["--json", "delete", "REMOTE-1"],
         ["--json", "remove", "REMOTE-2"],
         ["--project", PROJECT_ID, "--json", "plans", "--delete", PLAN_ID],
         ["--project", PROJECT_ID, "--json", "lists", "--delete", LIST_ID],
       ];
 
-      for (const invocation of invocations) {
+      const runRemoteOk = async (invocation: string[]): Promise<string> => {
         const result = await runCli(executable, invocation, env, cwd);
         expect({ invocation, exitCode: result.exitCode, stderr: result.stderr }).toEqual({
           invocation,
@@ -1093,6 +1101,48 @@ describe("remote CLI entrypoint authority boundary", () => {
         expect(() => JSON.parse(result.stdout)).not.toThrow();
         expect(recursiveInventory(cwd)).toEqual(before);
         expectNoLocalDatabase(root, localDbPath);
+        return result.stdout;
+      };
+
+      for (const invocation of invocations) {
+        await runRemoteOk(invocation);
+      }
+
+      // `bulk plan|move-plan` must reassign plans through the shared dataset:
+      // the plan ref is resolved remotely (no local sqlite) and each task is
+      // PATCHed, so a bulk move round-trips and an unknown plan fails closed.
+      const bulkTaskId = JSON.parse(
+        await runRemoteOk(["--json", "add", "Bulk plan task", "--project", PROJECT_ID, "--list", LIST_ID]),
+      ).id as string;
+      expect(JSON.parse(await runRemoteOk(["--json", "bulk", "plan", bulkTaskId, "--plan", PLAN_ID])))
+        .toMatchObject({ succeeded: 1, failed: 0 });
+      expect(JSON.parse(await runRemoteOk(["--json", "show", bulkTaskId])).plan_id).toBe(PLAN_ID);
+      expect(JSON.parse(await runRemoteOk(["--json", "bulk", "move-plan", bulkTaskId, "--clear-plan"])))
+        .toMatchObject({ succeeded: 1, failed: 0 });
+      expect(JSON.parse(await runRemoteOk(["--json", "show", bulkTaskId])).plan_id).toBeNull();
+      // A non-UUID plan ref resolves remotely too, scoped by `--project` the
+      // same way `add --plan` scopes it.
+      expect(JSON.parse(await runRemoteOk(
+        ["--project", PROJECT_ID, "--json", "bulk", "plan", bulkTaskId, "--plan", "delivery"],
+      ))).toMatchObject({ succeeded: 1, failed: 0 });
+      expect(JSON.parse(await runRemoteOk(["--json", "show", bulkTaskId])).plan_id).toBe(PLAN_ID);
+
+      const unknownPlan = await runCli(
+        executable,
+        ["--json", "bulk", "plan", bulkTaskId, "--plan", "plan-that-does-not-exist"],
+        env,
+        cwd,
+      );
+      expect(unknownPlan.exitCode).toBe(1);
+      expect(unknownPlan.stderr).not.toContain("REMOTE_COMMAND_UNSUPPORTED");
+      expect(unknownPlan.stderr).toContain("plan-that-does-not-exist");
+      // Fail closed: an unresolvable plan must not have moved (or detached) the task.
+      expect(JSON.parse(await runRemoteOk(["--json", "show", bulkTaskId])).plan_id).toBe(PLAN_ID);
+      expectNoLocalDatabase(root, localDbPath);
+      await runRemoteOk(["--json", "delete", bulkTaskId]);
+
+      for (const invocation of teardownInvocations) {
+        await runRemoteOk(invocation);
       }
 
       expect(requests.some((request) => request.startsWith("GET /v1/projects"))).toBe(true);

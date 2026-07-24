@@ -250,6 +250,11 @@ function commandSupportsRemote(invocation: ParsedInvocation): boolean {
       return true;
     case "bulk": {
       const action = positionalArgs(args)[0];
+      // `bulk plan|move-plan` reassigns tasks through the shared /v1 dataset
+      // (plan ref resolved remotely, then PATCH /v1/tasks/<id>), so it is
+      // serviced remotely. The other actions carry no plan semantics, so the
+      // plan flags stay rejected there rather than being silently ignored.
+      if (action === "plan" || action === "move-plan") return true;
       return Boolean(action && ["done", "complete", "start", "delete"].includes(action)) &&
         !hasOption(args, "--plan") && !hasOption(args, "--clear-plan");
     }

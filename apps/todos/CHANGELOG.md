@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.2] - 2026-07-25
+
+### Fixed
+- `todos bulk plan|move-plan --plan <id>` / `--clear-plan` now works under a remote (`self_hosted`/cloud) authority. Stage A rejected the whole invocation with `REMOTE_COMMAND_UNSUPPORTED` because the bulk handler resolved the plan reference through the local SQLite `resolvePlanId`, which is unavailable in remote mode. The cloud path now resolves the plan against the shared dataset (`cloudResolvePlan`) once, up front, so an unknown plan still fails closed before any task is mutated, and the Stage-A gate admits the two plan actions. Single-task `todos update <id> --plan` was already remote-capable; bulk reassignment is now at parity (#31).
+
 ## [0.12.1] - 2026-07-24
 
 ### Fixed

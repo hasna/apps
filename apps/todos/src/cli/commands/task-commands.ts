@@ -1551,7 +1551,7 @@ export function registerTaskCommands(program: Command) {
   // bulk
   program
     .command("bulk <action> <ids...>")
-    .description("Bulk operation on multiple tasks (done, start, delete, plan)")
+    .description("Bulk operation on multiple tasks (done, start, delete, plan/move-plan)")
     .option("--plan <id>", "Plan ID for the plan/move-plan action")
     .option("--clear-plan", "Remove plan assignment for the plan/move-plan action")
     .action(async (action: string, ids: string[], opts: { plan?: string; clearPlan?: boolean }) => {
@@ -1562,12 +1562,9 @@ export function registerTaskCommands(program: Command) {
       if (isPlanAction && Boolean(opts.plan) === Boolean(opts.clearPlan)) {
         handleError(new Error("Use exactly one of --plan or --clear-plan with bulk plan."));
       }
-      const planId = isPlanAction
-        ? opts.plan ? resolvePlanId(opts.plan) : null
-        : undefined;
       const knownActions = new Set(["done", "complete", "start", "delete", "plan", "move-plan"]);
       if (!knownActions.has(action)) {
-        handleError(new Error(`Unknown action: ${action}. Use: done, start, delete, plan`));
+        handleError(new Error(`Unknown action: ${action}. Use: done, start, delete, plan (alias: move-plan)`));
       }
 
       // self_hosted cloud routing: run each op against the SHARED dataset. The local
@@ -1575,6 +1572,31 @@ export function registerTaskCommands(program: Command) {
       // "Task not found" for valid cloud task ids (while `bulk delete` silently
       // no-op'd), a split-brain read.
       if (cloud) {
+        // Plan refs must resolve against the shared dataset too: the local
+        // `resolvePlanId` reads this machine's sqlite, which is unavailable (and
+        // wrong) under remote authority. Resolve once, up front, so an unknown
+        // plan fails closed before any task is mutated — same contract as the
+        // local path below.
+        let cloudPlanId: string | null | undefined;
+        if (isPlanAction) {
+          if (opts.plan) {
+            try {
+              // Scope a non-UUID plan ref (slug/name) to `--project` when the
+              // caller gave one, exactly like `add --plan`, so the same
+              // reference resolves the same way across commands.
+              const projectScope = globalOpts.project
+                ? await cloudResolveProjectRef(cloud, globalOpts.project)
+                : undefined;
+              const plan = await cloudResolvePlan(cloud, opts.plan, projectScope);
+              if (!plan) throw new Error(`Could not resolve plan ID: ${opts.plan}`);
+              cloudPlanId = plan.id;
+            } catch (e) {
+              handleError(e);
+            }
+          } else {
+            cloudPlanId = null;
+          }
+        }
         for (const rawId of ids) {
           try {
             const resolvedId = await resolveTaskIdForCommand(rawId, cloud);
@@ -1587,7 +1609,7 @@ export function registerTaskCommands(program: Command) {
             } else {
               const current = await cloudGetTask(cloud, resolvedId);
               if (!current) throw new Error(`Task not found: ${rawId}`);
-              await cloudUpdateTask(cloud, resolvedId, { version: current.version, plan_id: planId });
+              await cloudUpdateTask(cloud, resolvedId, { version: current.version, plan_id: cloudPlanId });
             }
             results.push({ id: resolvedId, success: true });
           } catch (e) {
@@ -1606,6 +1628,10 @@ export function registerTaskCommands(program: Command) {
         }
         return;
       }
+
+      const planId = isPlanAction
+        ? opts.plan ? resolvePlanId(opts.plan) : null
+        : undefined;
 
       for (const rawId of ids) {
         try {
@@ -1627,7 +1653,7 @@ export function registerTaskCommands(program: Command) {
             updateTask(resolvedId, { version: current.version, plan_id: planId });
             results.push({ id: resolvedId, success: true });
           } else {
-            handleError(new Error(`Unknown action: ${action}. Use: done, start, delete, plan`));
+            handleError(new Error(`Unknown action: ${action}. Use: done, start, delete, plan (alias: move-plan)`));
           }
         } catch (e) {
           results.push({ id: rawId, success: false, error: e instanceof Error ? e.message : String(e) });
