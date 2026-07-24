@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -15,6 +15,14 @@ async function runCli(args: string[], env: Record<string, string | undefined>): 
     new Response(proc.stderr).text(),
   ]);
   return { exitCode, stdout, stderr };
+}
+
+function isolatedClipEnv(home: string): NodeJS.ProcessEnv {
+  const env = { ...process.env, HASNA_CLIP_HOME: home };
+  delete env["HASNA_CLIP_DB_PATH"];
+  delete env["CLIP_DB_PATH"];
+  delete env["HASNA_CLIP_ARTIFACT_DIR"];
+  return env;
 }
 
 describe("CLI JSON contract", () => {
@@ -132,6 +140,38 @@ describe("CLI JSON contract", () => {
       expect((JSON.parse(showJsonOut) as { shareUrl: string }).shareUrl).toBe(expectedShareUrl);
     } finally {
       rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("requires --yes before uninstalling the local store and config", async () => {
+    const root = mkdtempSync(join(tmpdir(), "clip-cli-uninstall-"));
+    const home = join(root, "home");
+    const sentinel = join(root, "outside.txt");
+    try {
+      writeFileSync(sentinel, "keep");
+      const env = isolatedClipEnv(home);
+
+      const share = await runCli(["share", "text", "hello"], env);
+      expect(share.exitCode).toBe(0);
+
+      const config = await runCli(["config", "set", "baseUrl", "http://127.0.0.1:3741"], env);
+      expect(config.exitCode).toBe(0);
+      expect(existsSync(join(home, "clip.db"))).toBe(true);
+      expect(existsSync(join(home, "config.json"))).toBe(true);
+
+      const refused = await runCli(["uninstall"], env);
+      expect(refused.exitCode).toBe(1);
+      expect((JSON.parse(refused.stdout) as { error: string }).error).toContain("--yes");
+      expect(existsSync(join(home, "clip.db"))).toBe(true);
+      expect(existsSync(join(home, "config.json"))).toBe(true);
+
+      const removed = await runCli(["uninstall", "--yes"], env);
+      expect(removed.exitCode).toBe(0);
+      expect((JSON.parse(removed.stdout) as { removed: boolean; homeDir: string }).removed).toBe(true);
+      expect(existsSync(home)).toBe(false);
+      expect(existsSync(sentinel)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

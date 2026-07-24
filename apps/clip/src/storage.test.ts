@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ClipStore } from "./storage.js";
+import { ClipStore, purgeClipStore } from "./storage.js";
 
 let dir: string;
 
@@ -156,5 +156,91 @@ describe("ClipStore", () => {
     } finally {
       store.close();
     }
+  });
+
+  it("purges the resolved clip home without touching files outside it", () => {
+    const home = join(dir, "clip-home");
+    const outside = join(dir, "outside.txt");
+    mkdirSync(home, { recursive: true });
+    writeFileSync(outside, "keep");
+    writeFileSync(join(home, "config.json"), "{}\n");
+
+    const store = new ClipStore({ homeDir: home });
+    try {
+      const record = store.createBufferClip({
+        buffer: new TextEncoder().encode("artifact"),
+        kind: "file",
+        mimeType: "text/plain",
+      });
+      expect(existsSync(record.artifactPath ?? "")).toBe(true);
+    } finally {
+      store.close();
+    }
+
+    const result = purgeClipStore({ homeDir: home, confirm: true });
+
+    expect(result.removed).toBe(true);
+    expect(result.homeRemoved).toBe(true);
+    expect(result.homeDir).toBe(home);
+    expect(result.configPath).toBe(join(home, "config.json"));
+    expect(existsSync(home)).toBe(false);
+    expect(existsSync(outside)).toBe(true);
+  });
+
+  it("does not recursively remove unrelated files inside a configured home", () => {
+    const home = join(dir, "shared-home");
+    const unrelated = join(home, "notes.txt");
+    mkdirSync(home, { recursive: true });
+    writeFileSync(unrelated, "keep");
+    writeFileSync(join(home, "config.json"), "{}\n");
+
+    const store = new ClipStore({ homeDir: home });
+    try {
+      store.createTextClip({ text: "hello" });
+    } finally {
+      store.close();
+    }
+
+    const result = purgeClipStore({ homeDir: home, confirm: true });
+
+    expect(result.removed).toBe(true);
+    expect(result.homeRemoved).toBe(false);
+    expect(existsSync(join(home, "clip.db"))).toBe(false);
+    expect(existsSync(join(home, "config.json"))).toBe(false);
+    expect(existsSync(unrelated)).toBe(true);
+  });
+
+  it("requires explicit confirmation for direct purge calls", () => {
+    const home = join(dir, "unconfirmed-home");
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, "config.json"), "{}\n");
+
+    expect(() => purgeClipStore({ homeDir: home })).toThrow("explicit confirmation");
+    expect(existsSync(join(home, "config.json"))).toBe(true);
+  });
+
+  it("refuses custom data paths outside the clip home instead of silently skipping them", () => {
+    const home = join(dir, "custom-home");
+    const dbPath = join(dir, "external", "clip.db");
+    const artifactDir = join(dir, "external", "artifacts");
+
+    const store = new ClipStore({ homeDir: home, dbPath, artifactDir });
+    try {
+      const record = store.createBufferClip({
+        buffer: new TextEncoder().encode("artifact"),
+        kind: "file",
+        mimeType: "text/plain",
+      });
+      expect(existsSync(record.artifactPath ?? "")).toBe(true);
+    } finally {
+      store.close();
+    }
+    writeFileSync(join(home, "config.json"), "{}\n");
+
+    expect(() => purgeClipStore({ homeDir: home, dbPath, artifactDir, confirm: true })).toThrow("outside clip home");
+    expect(existsSync(home)).toBe(true);
+    expect(existsSync(dbPath)).toBe(true);
+    expect(existsSync(artifactDir)).toBe(true);
+    expect(existsSync(join(home, "config.json"))).toBe(true);
   });
 });

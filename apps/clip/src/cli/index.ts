@@ -7,6 +7,7 @@ import { readConfig, updateConfig } from "../config.js";
 import { DEFAULT_PORT, resolveConfigPath } from "../paths.js";
 import { renderShareQrCode } from "../qr.js";
 import { ClipClient, createClipClient } from "../sdk.js";
+import { purgeClipStore } from "../storage.js";
 import type { CaptureAnnotation, CaptureMode, ClipboardHistoryRecord, ClipboardKind, ClipClientOptions, ClipRecord } from "../types.js";
 import { startClipServer } from "../server/server.js";
 import { compactRecord } from "../util.js";
@@ -338,6 +339,20 @@ program
     try {
       const deleted = client(command).deleteShare(ref);
       output(command, { deleted, ref }, deleted ? `Deleted ${ref}` : `Not found ${ref}`);
+    } catch (error) {
+      handleError(command, error);
+    }
+  });
+
+program
+  .command("uninstall")
+  .option("--yes", "Confirm removal of the local clip store and config")
+  .description("Remove the local clip store and config")
+  .action((opts: { yes?: boolean }, command: Command) => {
+    try {
+      if (!opts.yes) throw new Error("Refusing to uninstall clip data without --yes. This removes the local clip store and config.");
+      const result = purgeClipStore({ ...globalOptions(command), confirm: true });
+      output(command, result, result.removed ? `Removed clip data at ${result.homeDir}` : `No clip data found at ${result.homeDir}`);
     } catch (error) {
       handleError(command, error);
     }

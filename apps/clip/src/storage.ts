@@ -1,8 +1,8 @@
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { basename, extname, join, resolve, sep } from "node:path";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { basename, extname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { Buffer } from "node:buffer";
-import { ensureClipHome, resolveArtifactDir, resolveDbPath, resolveHomeDir, isInMemoryDb } from "./paths.js";
+import { ensureClipHome, resolveArtifactDir, resolveConfigPath, resolveDbPath, resolveHomeDir, isInMemoryDb, userHome } from "./paths.js";
 import { buildShareUrl } from "./share.js";
 import type { ClipboardHistoryKind, ClipboardHistoryRecord, ClipClientOptions, ClipKind, ClipRecord, ClipStorageStatus, CreateClipMetadata, JsonObject } from "./types.js";
 import { extensionForMime, generateSlug, inferMimeType, normalizeLimit, nowIso, parseJsonObject, sha256, stringifyJsonObject, textMimeType } from "./util.js";
@@ -81,6 +81,19 @@ export interface AddClipboardHistoryInput {
   maxItems?: number;
 }
 
+export interface PurgeClipStoreResult {
+  homeDir: string;
+  dbPath: string;
+  artifactDir: string;
+  configPath: string;
+  removed: boolean;
+  homeRemoved: boolean;
+}
+
+export interface PurgeClipStoreOptions extends ClipClientOptions {
+  confirm?: boolean;
+}
+
 export function ensureSchema(db: Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS clips (
@@ -150,6 +163,68 @@ function countValue(value: unknown): number {
 
 function titleFromPath(path: string): string {
   return basename(path) || "clip";
+}
+
+function assertSafePurgeHome(homeDir: string): void {
+  const target = resolve(homeDir);
+  if (target === parse(target).root) throw new Error("Refusing to purge the filesystem root");
+
+  const home = resolve(userHome());
+  if (target === home) throw new Error("Refusing to purge the user home directory");
+
+  const hasnaRoot = resolve(home, ".hasna");
+  if (target === hasnaRoot) throw new Error("Refusing to purge the whole ~/.hasna directory");
+}
+
+function isChildPath(parent: string, child: string): boolean {
+  const fromParent = relative(resolve(parent), resolve(child));
+  return Boolean(fromParent) && !fromParent.startsWith("..") && !isAbsolute(fromParent);
+}
+
+function removePathIfPresent(path: string, recursive = false): boolean {
+  if (!existsSync(path)) return false;
+  rmSync(path, { recursive, force: true });
+  return true;
+}
+
+function assertPurgeTargetInHome(homeDir: string, targetPath: string, label: string): void {
+  if (!isChildPath(homeDir, targetPath)) throw new Error(`Refusing to purge ${label} outside clip home: ${targetPath}`);
+}
+
+export function purgeClipStore(options: PurgeClipStoreOptions = {}): PurgeClipStoreResult {
+  if (!options.confirm) throw new Error("Refusing to purge clip data without explicit confirmation");
+
+  const homeDir = resolveHomeDir(options);
+  const dbPath = resolveDbPath(options);
+  const artifactDir = resolveArtifactDir(options);
+  const configPath = resolveConfigPath(options);
+
+  assertSafePurgeHome(homeDir);
+  if (!isInMemoryDb(dbPath)) assertPurgeTargetInHome(homeDir, dbPath, "database path");
+  assertPurgeTargetInHome(homeDir, artifactDir, "artifact directory");
+
+  let removed = false;
+  if (existsSync(homeDir)) {
+    const stat = lstatSync(homeDir);
+    if (!stat.isDirectory()) throw new Error(`Clip home is not a directory: ${homeDir}`);
+  }
+
+  if (!isInMemoryDb(dbPath)) {
+    removed = removePathIfPresent(dbPath) || removed;
+    removed = removePathIfPresent(`${dbPath}-wal`) || removed;
+    removed = removePathIfPresent(`${dbPath}-shm`) || removed;
+  }
+  removed = removePathIfPresent(artifactDir, true) || removed;
+  removed = removePathIfPresent(configPath) || removed;
+
+  let homeRemoved = false;
+  if (existsSync(homeDir) && readdirSync(homeDir).length === 0) {
+    rmdirSync(homeDir);
+    removed = true;
+    homeRemoved = true;
+  }
+
+  return { homeDir, dbPath, artifactDir, configPath, removed, homeRemoved };
 }
 
 export class ClipStore {
