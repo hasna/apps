@@ -15,6 +15,7 @@ import { enableConsoleCapture } from "./console.js";
 import { applyStealthPatches } from "./stealth.js";
 import { setupDialogHandler } from "./dialogs.js";
 import { assertBrowserCapability, assertBrowserNavigationAllowed } from "./policy.js";
+import { sqliteTimestampCutoff } from "./security.js";
 
 // ─── In-memory handle store ───────────────────────────────────────────────────
 
@@ -60,7 +61,7 @@ const dbPruneInterval = setInterval(() => {
     try {
       const { getDatabase } = await import("../db/schema.js");
       const db = getDatabase();
-      const cutoff = new Date(Date.now() - DB_RETENTION_HOURS * 3_600_000).toISOString();
+      const cutoff = sqliteTimestampCutoff(DB_RETENTION_HOURS);
       // Prune old network_log and console_log entries for closed sessions
       db.prepare("DELETE FROM network_log WHERE session_id IN (SELECT id FROM sessions WHERE status != 'active') AND timestamp < ?").run(cutoff);
       db.prepare("DELETE FROM console_log WHERE session_id IN (SELECT id FROM sessions WHERE status != 'active') AND timestamp < ?").run(cutoff);
@@ -344,9 +345,9 @@ export async function createSession(opts: SessionOptions = {}): Promise<CreateSe
     // playwright or cdp both use Playwright under the hood — use shared pool
     browser = await pool.acquire(opts.headless ?? true);
     if (opts.storageState) {
-      const { loadStatePath } = await import("./storage-state.js");
-      const statePath = loadStatePath(opts.storageState);
-      if (!statePath) {
+      const { loadState } = await import("./storage-state.js");
+      const state = loadState(opts.storageState);
+      if (!state) {
         // Silently proceeding unauthenticated would make callers believe they
         // are testing a logged-in page when they are not — fail loudly instead.
         throw new BrowserError(
@@ -357,7 +358,7 @@ export async function createSession(opts: SessionOptions = {}): Promise<CreateSe
       const context = await browser.newContext({
         viewport: opts.viewport ?? { width: 1280, height: 720 },
         userAgent: opts.userAgent,
-        storageState: statePath,
+        storageState: state,
       });
       page = await context.newPage();
     } else {

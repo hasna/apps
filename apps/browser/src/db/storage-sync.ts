@@ -1,7 +1,8 @@
 import type { TypedDb } from "../types/db-adapter.js";
-import { getDatabase } from "./schema.js";
+import { getDataDir, getDatabase } from "./schema.js";
 import { PG_MIGRATIONS } from "./pg-migrations.js";
 import { PgAdapterAsync } from "./remote-storage.js";
+import { sanitizeBrowserDbRow } from "../lib/security.js";
 
 export const STORAGE_TABLES = [
   "projects",
@@ -215,7 +216,8 @@ async function pushTable(db: TypedDb, remote: PgAdapterAsync, table: StorageTabl
     result.rowsRead = rows.length;
     if (rows.length === 0) return result;
     const columns = await filterRemoteColumns(remote, table, Object.keys(rows[0]!));
-    result.rowsWritten = await upsertPg(remote, table, columns, rows);
+    const safeRows = rows.map((row) => sanitizeBrowserDbRow(table, row, getDataDir()));
+    result.rowsWritten = await upsertPg(remote, table, columns, safeRows);
   } catch (error) {
     result.errors.push(error instanceof Error ? error.message : String(error));
   }
@@ -230,7 +232,8 @@ async function pullTable(remote: PgAdapterAsync, db: TypedDb, table: StorageTabl
     result.rowsRead = rows.length;
     if (rows.length === 0) return result;
     const columns = filterLocalColumns(db, table, Object.keys(rows[0]!));
-    result.rowsWritten = upsertSqlite(db, table, columns, rows);
+    const safeRows = rows.map((row) => sanitizeBrowserDbRow(table, row, getDataDir()));
+    result.rowsWritten = upsertSqlite(db, table, columns, safeRows);
   } catch (error) {
     result.errors.push(error instanceof Error ? error.message : String(error));
   }

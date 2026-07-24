@@ -2,17 +2,16 @@ import type { Page } from "playwright";
 import { randomUUID } from "node:crypto";
 import {
   existsSync,
-  mkdirSync,
   readdirSync,
   readFileSync,
   statSync,
-  writeFileSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { getDataDir } from "../db/schema.js";
 import { createSession, closeSession, getSession } from "./session.js";
 import { takeScreenshot } from "./screenshot.js";
 import type { BrowserEngine, Session } from "../types/index.js";
+import { ensureOwnerOnlyDir, writeOwnerOnlyFile } from "./security.js";
 import {
   closeKernelSandbox,
   createKernelSandbox,
@@ -172,7 +171,7 @@ interface KernelWorkflowPayload {
 
 export function getWorkflowDir(): string {
   const dir = process.env["BROWSER_WORKFLOW_DIR"] || join(getDataDir(), "workflows");
-  mkdirSync(dir, { recursive: true });
+  ensureOwnerOnlyDir(dir);
   return dir;
 }
 
@@ -182,7 +181,7 @@ export function getWorkflowEvidenceDir(manifest?: WorkflowManifest): string {
     ? isAbsolute(configured) ? configured : join(getWorkflowDir(), configured)
     : join(getWorkflowDir(), "evidence");
   assertPathInsideWorkflowDir(dir, "evidence.dir");
-  mkdirSync(dir, { recursive: true });
+  ensureOwnerOnlyDir(dir);
   return dir;
 }
 
@@ -530,7 +529,7 @@ export async function runWorkflowAction(nameOrPath: string, opts: WorkflowRunOpt
     evidencePath,
     error: error ? redactForWorkflowOutput(error) as string : undefined,
   };
-  writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+  writeOwnerOnlyFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
   return evidence;
 }
 

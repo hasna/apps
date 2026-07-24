@@ -1,7 +1,15 @@
 import type { Page, Cookie } from "playwright";
-import { mkdirSync, existsSync, readdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getDataDir } from "../db/schema.js";
+import {
+  encryptedPathForJson,
+  ensureOwnerOnlyDir,
+  readSecureJsonFile,
+  sanitizeStorageName,
+  writeEncryptedJsonFile,
+  writePlainJsonFile,
+} from "./security.js";
 
 // ─── Profile Types ────────────────────────────────────────────────────────────
 
@@ -25,23 +33,23 @@ export interface ProfileInfo {
 function getProfilesDir(): string {
   const dataDir = getDataDir();
   const dir = join(dataDir, "profiles");
-  mkdirSync(dir, { recursive: true });
+  ensureOwnerOnlyDir(dir);
   return dir;
 }
 
 function getProfileDir(name: string): string {
-  return join(getProfilesDir(), name);
+  return join(getProfilesDir(), sanitizeStorageName(name));
 }
 
 // ─── Profile Management ──────────────────────────────────────────────────────
 
 export async function saveProfile(page: Page, name: string): Promise<ProfileInfo> {
   const dir = getProfileDir(name);
-  mkdirSync(dir, { recursive: true });
+  ensureOwnerOnlyDir(dir);
 
   // Save cookies
   const cookies = await page.context().cookies();
-  writeFileSync(join(dir, "cookies.json"), JSON.stringify(cookies, null, 2));
+  writeEncryptedJsonFile(join(dir, "cookies.json"), cookies, getDataDir());
 
   // Save localStorage
   let localStorage: Record<string, string> = {};
@@ -57,14 +65,14 @@ export async function saveProfile(page: Page, name: string): Promise<ProfileInfo
   } catch {
     // Page may not have a valid origin for localStorage
   }
-  writeFileSync(join(dir, "storage.json"), JSON.stringify(localStorage, null, 2));
+  writeEncryptedJsonFile(join(dir, "storage.json"), localStorage, getDataDir());
 
   const savedAt = new Date().toISOString();
   const url = page.url();
 
   // Save metadata
   const meta = { saved_at: savedAt, url };
-  writeFileSync(join(dir, "meta.json"), JSON.stringify(meta, null, 2));
+  writePlainJsonFile(join(dir, "meta.json"), meta);
 
   return {
     name,
@@ -85,12 +93,19 @@ export function loadProfile(name: string): ProfileData {
   const storagePath = join(dir, "storage.json");
   const metaPath = join(dir, "meta.json");
 
-  const cookies: Cookie[] = existsSync(cookiesPath)
-    ? JSON.parse(readFileSync(cookiesPath, "utf8"))
+  const encryptedCookiesPath = encryptedPathForJson(cookiesPath);
+  const encryptedStoragePath = encryptedPathForJson(storagePath);
+
+  const cookies: Cookie[] = existsSync(encryptedCookiesPath)
+    ? readSecureJsonFile<Cookie[]>(encryptedCookiesPath, getDataDir())
+    : existsSync(cookiesPath)
+    ? readSecureJsonFile<Cookie[]>(cookiesPath, getDataDir())
     : [];
 
-  const localStorage: Record<string, string> = existsSync(storagePath)
-    ? JSON.parse(readFileSync(storagePath, "utf8"))
+  const localStorage: Record<string, string> = existsSync(encryptedStoragePath)
+    ? readSecureJsonFile<Record<string, string>>(encryptedStoragePath, getDataDir())
+    : existsSync(storagePath)
+    ? readSecureJsonFile<Record<string, string>>(storagePath, getDataDir())
     : {};
 
   let savedAt = new Date().toISOString();
@@ -155,13 +170,21 @@ export function listProfiles(): ProfileInfo[] {
         url = meta.url;
       }
       const cookiesPath = join(profileDir, "cookies.json");
-      if (existsSync(cookiesPath)) {
-        const cookies = JSON.parse(readFileSync(cookiesPath, "utf8"));
+      const encryptedCookiesPath = encryptedPathForJson(cookiesPath);
+      if (existsSync(encryptedCookiesPath) || existsSync(cookiesPath)) {
+        const cookies = readSecureJsonFile<unknown[]>(
+          existsSync(encryptedCookiesPath) ? encryptedCookiesPath : cookiesPath,
+          getDataDir(),
+        );
         cookieCount = Array.isArray(cookies) ? cookies.length : 0;
       }
       const storagePath = join(profileDir, "storage.json");
-      if (existsSync(storagePath)) {
-        const storage = JSON.parse(readFileSync(storagePath, "utf8"));
+      const encryptedStoragePath = encryptedPathForJson(storagePath);
+      if (existsSync(encryptedStoragePath) || existsSync(storagePath)) {
+        const storage = readSecureJsonFile<Record<string, unknown>>(
+          existsSync(encryptedStoragePath) ? encryptedStoragePath : storagePath,
+          getDataDir(),
+        );
         storageKeyCount = Object.keys(storage).length;
       }
     } catch {

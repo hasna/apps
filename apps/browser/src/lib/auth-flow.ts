@@ -4,8 +4,10 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { getDatabase } from "../db/schema.js";
+import { getDataDir, getDatabase } from "../db/schema.js";
 import type { Page } from "playwright";
+import { readSecureJsonFile, sanitizeBrowserDbRow } from "./security.js";
+import type { BrowserStorageState } from "./storage-state.js";
 
 export interface AuthFlow {
   id: string;
@@ -22,9 +24,12 @@ export interface AuthFlow {
 export function saveAuthFlow(data: { name: string; domain: string; recordingId?: string; storageStatePath?: string }): AuthFlow {
   const db = getDatabase();
   const id = randomUUID();
+  const sanitized = sanitizeBrowserDbRow("auth_flows", {
+    storage_state_path: data.storageStatePath ?? null,
+  }, getDataDir());
   db.prepare(
     "INSERT OR REPLACE INTO auth_flows (id, name, domain, recording_id, storage_state_path) VALUES (?, ?, ?, ?, ?)"
-  ).run(id, data.name, data.domain, data.recordingId ?? null, data.storageStatePath ?? null);
+  ).run(id, data.name, data.domain, data.recordingId ?? null, sanitized.storage_state_path ?? null);
   return getAuthFlow(id)!;
 }
 
@@ -95,9 +100,8 @@ export async function tryReplayAuth(page: Page, domain: string): Promise<{ repla
   // Method 1: Try storage state first (fastest — just load cookies)
   if (flow.storage_state_path) {
     try {
-      const { existsSync, readFileSync } = await import("node:fs");
-      if (existsSync(flow.storage_state_path)) {
-        const state = JSON.parse(readFileSync(flow.storage_state_path, "utf8"));
+      const state = await loadAuthFlowState(flow.storage_state_path);
+      if (state) {
         // Apply cookies from storage state
         if (state.cookies?.length) {
           await page.context().addCookies(state.cookies);
@@ -124,7 +128,8 @@ export async function tryReplayAuth(page: Page, domain: string): Promise<{ repla
           const { saveStateFromPage } = await import("./storage-state.js");
           const path = await saveStateFromPage(page, flow.name);
           const db = getDatabase();
-          db.prepare("UPDATE auth_flows SET storage_state_path = ?, last_used = datetime('now') WHERE id = ?").run(path, flow.id);
+          const sanitized = sanitizeBrowserDbRow("auth_flows", { storage_state_path: path }, getDataDir());
+          db.prepare("UPDATE auth_flows SET storage_state_path = ?, last_used = datetime('now') WHERE id = ?").run(sanitized.storage_state_path ?? null, flow.id);
         } catch {}
         touchAuthFlow(flow.id);
         return { replayed: true, flow, method: "recording_replay" };
@@ -133,4 +138,15 @@ export async function tryReplayAuth(page: Page, domain: string): Promise<{ repla
   }
 
   return { replayed: false, flow };
+}
+
+async function loadAuthFlowState(ref: string): Promise<BrowserStorageState | null> {
+  if (ref.startsWith("storage-state:")) {
+    const { loadState } = await import("./storage-state.js");
+    return loadState(ref.slice("storage-state:".length));
+  }
+
+  const { existsSync } = await import("node:fs");
+  if (!existsSync(ref)) return null;
+  return readSecureJsonFile<BrowserStorageState>(ref, getDataDir());
 }

@@ -4,9 +4,9 @@
 
 import { randomUUID } from "node:crypto";
 import { getDatabase } from "../db/schema.js";
-import { writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { getDataDir } from "../db/schema.js";
+import { ensureOwnerOnlyDir, sanitizeUrlForPersistence, writeOwnerOnlyFile } from "./security.js";
 
 export interface Dataset {
   id: string;
@@ -24,16 +24,17 @@ export interface Dataset {
 export function saveDataset(data: { name: string; sourceUrl?: string; sourceType?: string; rows: any[]; schema?: Record<string, string> }): Dataset {
   const db = getDatabase();
   const id = randomUUID();
+  const sourceUrl = sanitizeUrlForPersistence(data.sourceUrl) ?? null;
   const existing = db.query<{ id: string }, string>("SELECT id FROM datasets WHERE name = ?").get(data.name);
   if (existing) {
     db.prepare(
       "UPDATE datasets SET data = ?, row_count = ?, source_url = ?, schema = ?, last_refresh = datetime('now'), updated_at = datetime('now') WHERE name = ?"
-    ).run(JSON.stringify(data.rows), data.rows.length, data.sourceUrl ?? null, data.schema ? JSON.stringify(data.schema) : null, data.name);
+    ).run(JSON.stringify(data.rows), data.rows.length, sourceUrl, data.schema ? JSON.stringify(data.schema) : null, data.name);
     return getDataset(existing.id)!;
   }
   db.prepare(
     "INSERT INTO datasets (id, name, source_url, source_type, data, row_count, schema) VALUES (?, ?, ?, ?, ?, ?, ?)"
-  ).run(id, data.name, data.sourceUrl ?? null, data.sourceType ?? "page", JSON.stringify(data.rows), data.rows.length, data.schema ? JSON.stringify(data.schema) : null);
+  ).run(id, data.name, sourceUrl, data.sourceType ?? "page", JSON.stringify(data.rows), data.rows.length, data.schema ? JSON.stringify(data.schema) : null);
   return getDataset(id)!;
 }
 
@@ -67,14 +68,14 @@ export function exportDataset(name: string, format: "json" | "csv"): { path: str
   if (!dataset) throw new Error(`Dataset '${name}' not found`);
 
   const dir = join(getDataDir(), "exports");
-  mkdirSync(dir, { recursive: true });
+  ensureOwnerOnlyDir(dir);
 
   const filename = `${name}.${format}`;
   const path = join(dir, filename);
 
   if (format === "csv") {
     const rows = dataset.data;
-    if (rows.length === 0) { writeFileSync(path, ""); return { path, size: 0 }; }
+    if (rows.length === 0) { writeOwnerOnlyFile(path, ""); return { path, size: 0 }; }
     const headers = Object.keys(rows[0]);
     const csvLines = [headers.join(",")];
     for (const row of rows) {
@@ -84,11 +85,11 @@ export function exportDataset(name: string, format: "json" | "csv"): { path: str
       }).join(","));
     }
     const content = csvLines.join("\n");
-    writeFileSync(path, content);
+    writeOwnerOnlyFile(path, content);
     return { path, size: content.length };
   } else {
     const content = JSON.stringify(dataset.data, null, 2);
-    writeFileSync(path, content);
+    writeOwnerOnlyFile(path, content);
     return { path, size: content.length };
   }
 }

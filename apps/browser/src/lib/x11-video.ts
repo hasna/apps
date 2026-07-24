@@ -1,5 +1,5 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, statSync, unlinkSync } from "node:fs";
+import { existsSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { createRequire } from "node:module";
@@ -13,6 +13,7 @@ import { importFileToDownloads } from "./downloads.js";
 import { resolveVideoRecordingPreset } from "./video-presets.js";
 import type { VideoRecording, VideoRecordingFormat, VideoRecordingOptions, VideoRecordingQuality } from "../types/index.js";
 import { BrowserError } from "../types/index.js";
+import { ensureOwnerOnlyDir, ensureOwnerOnlyFile } from "./security.js";
 
 const require = createRequire(import.meta.url);
 
@@ -96,7 +97,7 @@ function getVideoTempDir(projectId?: string): string {
   const base = join(getDataDir(), "videos");
   const date = new Date().toISOString().split("T")[0];
   const dir = projectId ? join(base, projectId, date) : join(base, date);
-  mkdirSync(dir, { recursive: true });
+  ensureOwnerOnlyDir(dir);
   return dir;
 }
 
@@ -333,6 +334,7 @@ export async function recordX11BrowserVideo(target: string, opts: X11RecordOptio
     if (!existsSync(outputPath)) {
       throw new Error(`ffmpeg did not produce output: ${ffmpegStderr.join("").slice(-1000)}`);
     }
+    ensureOwnerOnlyFile(outputPath);
 
     const finalUrl = page.url() || target;
     const finalTitle = await page.title().catch(() => title);

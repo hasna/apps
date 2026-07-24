@@ -1,7 +1,7 @@
 import type { Browser, BrowserContext, CDPSession, Page, Video } from "playwright";
 import { execFileSync } from "node:child_process";
 import { basename, dirname, join } from "node:path";
-import { existsSync, mkdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { createRequire } from "node:module";
 import { getDataDir } from "../db/schema.js";
 import {
@@ -31,6 +31,7 @@ import type {
 } from "../types/index.js";
 import { BrowserError } from "../types/index.js";
 import { resolveVideoRecordingPreset, type ResolvedVideoPreset } from "./video-presets.js";
+import { ensureOwnerOnlyDir, ensureOwnerOnlyFile, writeOwnerOnlyFile } from "./security.js";
 
 interface ActiveVideoRecording {
   id: string;
@@ -106,7 +107,7 @@ function getVideoTempDir(projectId?: string): string {
   const base = join(getDataDir(), "videos");
   const date = new Date().toISOString().split("T")[0];
   const dir = projectId ? join(base, projectId, date) : join(base, date);
-  mkdirSync(dir, { recursive: true });
+  ensureOwnerOnlyDir(dir);
   return dir;
 }
 
@@ -332,7 +333,7 @@ function appendFrame(active: ActiveVideoRecording, data: Buffer, timeMs = Date.n
   if (!active.frameDir || !active.frames) return;
   const index = active.frameCount ?? 0;
   const file = frameFileName(index);
-  writeFileSync(join(active.frameDir, file), data);
+  writeOwnerOnlyFile(join(active.frameDir, file), data);
   active.frames.push({ file, timeMs });
   active.frameCount = index + 1;
 }
@@ -346,7 +347,7 @@ async function startCdpFrameCapture(active: ActiveVideoRecording): Promise<void>
   active.frameDir = join(getVideoTempDir(active.options.projectId), `${safeName(active.id)}-frames`);
   active.frames = [];
   active.frameCount = 0;
-  mkdirSync(active.frameDir, { recursive: true });
+  ensureOwnerOnlyDir(active.frameDir);
 
   await captureCurrentFrame(active);
   const client = await active.page.context().newCDPSession(active.page);
@@ -377,7 +378,7 @@ function writeFrameConcatFile(active: ActiveVideoRecording, stoppedAt: number): 
   }
   lines.push(`file '${active.frames[active.frames.length - 1].file}'`);
   const concatPath = join(active.frameDir, "frames.txt");
-  writeFileSync(concatPath, `${lines.join("\n")}\n`);
+  writeOwnerOnlyFile(concatPath, `${lines.join("\n")}\n`);
   return concatPath;
 }
 
@@ -872,6 +873,7 @@ export async function stopVideoRecording(
         if (!transcodeSettings) throw new Error(`No transcode settings resolved for ${outputFormat}`);
         transcodeWebm(videoPath, finalVideoPath, transcodeSettings);
       }
+      ensureOwnerOnlyFile(finalVideoPath);
     } else {
       if (outputFormat === "webm") {
         throw new Error("CDP frame capture requires mp4 or mov output");
@@ -886,6 +888,7 @@ export async function stopVideoRecording(
       finalVideoPath = join(getVideoTempDir(), `${recordingName}-${recordingId}.${outputFormat}`);
       rawPath = concatPath;
       transcodeFrames(concatPath, finalVideoPath, transcodeSettings);
+      ensureOwnerOnlyFile(finalVideoPath);
     }
 
     const validation = validateVideoOutput({

@@ -1,17 +1,17 @@
 import type { Page } from "playwright";
 import { join } from "node:path";
-import { mkdirSync } from "node:fs";
 import sharp from "sharp";
 import type { ScreenshotOptions, ScreenshotResult, PDFOptions, PDFResult } from "../types/index.js";
 import { BrowserError } from "../types/index.js";
 import { createEntry } from "../db/gallery.js";
 import { getDataDir } from "../db/schema.js";
+import { ensureOwnerOnlyDir, ensureOwnerOnlyFile, writeOwnerOnlyFile } from "./security.js";
 
 function getScreenshotDir(projectId?: string): string {
   const base = join(getDataDir(), "screenshots");
   const date = new Date().toISOString().split("T")[0];
   const dir = projectId ? join(base, projectId, date) : join(base, date);
-  mkdirSync(dir, { recursive: true });
+  ensureOwnerOnlyDir(dir);
   return dir;
 }
 
@@ -41,7 +41,7 @@ async function generateThumbnail(raw: Buffer, dir: string, stem: string): Promis
     .resize({ width: 200, withoutEnlargement: true })
     .webp({ quality: 70, effort: 3 })
     .toBuffer();
-  await Bun.write(thumbPath, thumbBuffer);
+  writeOwnerOnlyFile(thumbPath, thumbBuffer);
   return { path: thumbPath, base64: thumbBuffer.toString("base64") };
 }
 
@@ -126,7 +126,7 @@ export async function takeScreenshot(
     // Write final file
     const ext = format;
     const screenshotPath = opts?.path ?? join(dir, `${stem}.${ext}`);
-    await Bun.write(screenshotPath, finalBuffer);
+    writeOwnerOnlyFile(screenshotPath, finalBuffer, { ensureParent: opts?.path ? false : true });
 
     // Generate thumbnail (always from raw PNG for best quality)
     let thumbnailPath: string | undefined;
@@ -205,7 +205,7 @@ export async function generatePDF(
     const base = join(getDataDir(), "pdfs");
     const date = new Date().toISOString().split("T")[0];
     const dir = opts?.projectId ? join(base, opts.projectId, date) : join(base, date);
-    mkdirSync(dir, { recursive: true });
+    ensureOwnerOnlyDir(dir);
 
     const timestamp = Date.now();
     const pdfPath = opts?.path ?? join(dir, `${timestamp}.pdf`);
@@ -217,6 +217,7 @@ export async function generatePDF(
       margin: opts?.margin,
       printBackground: opts?.printBackground ?? true,
     });
+    ensureOwnerOnlyFile(pdfPath);
 
     return {
       path: pdfPath,

@@ -745,11 +745,11 @@ daemonCmd
     }
 
     const { spawn } = await import("node:child_process");
-    const { writeFileSync, mkdirSync } = await import("node:fs");
     const { dirname } = await import("node:path");
+    const { ensureOwnerOnlyDir, writeOwnerOnlyFile } = await import("../../lib/security.js");
 
     const pidFile = getDaemonPidFile();
-    mkdirSync(dirname(pidFile), { recursive: true });
+    ensureOwnerOnlyDir(dirname(pidFile));
 
     // Spawn the REST server as a detached background process
     const child = spawn(process.execPath, [import.meta.dir + "/../../server/index.js"], {
@@ -760,7 +760,7 @@ daemonCmd
     child.unref();
 
     if (child.pid) {
-      writeFileSync(pidFile, String(child.pid));
+      writeOwnerOnlyFile(pidFile, String(child.pid));
       // Wait a moment for server to start
       await new Promise(r => setTimeout(r, 1500));
       console.log(chalk.green(`✓ Daemon started`));

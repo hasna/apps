@@ -1,8 +1,8 @@
 import { join } from "node:path";
-import { mkdirSync, existsSync } from "node:fs";
 import { getDataDir } from "../db/schema.js";
 import sharp from "sharp";
 import type { GalleryDiffResult } from "../types/index.js";
+import { ensureOwnerOnlyDir, writeOwnerOnlyFile } from "./security.js";
 
 export async function diffImages(path1: string, path2: string, threshold = 10): Promise<GalleryDiffResult> {
   const img1 = sharp(path1);
@@ -47,14 +47,14 @@ export async function diffImages(path1: string, path2: string, threshold = 10): 
 
   const dataDir = getDataDir();
   const diffDir = join(dataDir, "diffs");
-  mkdirSync(diffDir, { recursive: true });
+  ensureOwnerOnlyDir(diffDir);
   const diffPath = join(diffDir, `diff-${Date.now()}.webp`);
 
   const diffImageBuffer = await sharp(diffBuffer, { raw: { width: w, height: h, channels } })
     .webp({ quality: 85 })
     .toBuffer();
 
-  await Bun.write(diffPath, diffImageBuffer);
+  writeOwnerOnlyFile(diffPath, diffImageBuffer);
 
   return {
     diff_path: diffPath,

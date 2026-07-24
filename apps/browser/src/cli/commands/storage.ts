@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { getDataDir, getDatabase } from "../../db/schema.js";
 import {
   getStorageStatus,
   storagePull,
@@ -7,6 +8,7 @@ import {
   type SyncResult,
 } from "../../db/storage-sync.js";
 import { limited, parseLimit, printListFooter } from "../output.js";
+import { auditBrowserStorageSecurity } from "../../lib/security.js";
 
 function parseTables(value?: string): string[] | undefined {
   if (!value) return undefined;
@@ -105,6 +107,38 @@ export function registerStorageCommands(program: Command): void {
         }
         printResults(result.pull, "pulled");
         printResults(result.push, "pushed");
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exit(1);
+      }
+    });
+
+  storageCmd
+    .command("security")
+    .description("Report or repair local browser storage permissions and redaction drift")
+    .option("--apply", "Apply owner-only modes, encrypt plaintext auth artifacts, sanitize DB rows, and prune expired rows")
+    .option("--retention-hours <hours>", "Retention window for network/console DB rows", (value) => Number.parseInt(value, 10))
+    .option("--json", "Output as JSON")
+    .action((opts: { apply?: boolean; retentionHours?: number; json?: boolean }) => {
+      try {
+        const report = auditBrowserStorageSecurity(getDataDir(), getDatabase(), {
+          apply: opts.apply === true,
+          retentionHours: opts.retentionHours,
+        });
+
+        if (opts.json) {
+          printJson(report);
+          return;
+        }
+
+        console.log(`Applied: ${report.applied ? "yes" : "no"}`);
+        console.log(`Retention hours: ${report.retentionHours}`);
+        for (const [key, value] of Object.entries(report.counts)) {
+          console.log(`${key}: ${value}`);
+        }
+        if (report.warnings.length > 0) {
+          console.log(`Warnings: ${report.warnings.join(", ")}`);
+        }
       } catch (error) {
         console.error(error instanceof Error ? error.message : String(error));
         process.exit(1);

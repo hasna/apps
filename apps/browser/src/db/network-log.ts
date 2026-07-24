@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { getDatabase } from "./schema.js";
+import { getDataDir, getDatabase } from "./schema.js";
 import type { NetworkRequest } from "../types/index.js";
+import { sanitizeBrowserDbRow } from "../lib/security.js";
 
 export function logRequest(data: Omit<NetworkRequest, "id" | "timestamp">): NetworkRequest {
   const db = getDatabase();
   const id = randomUUID();
+  const sanitized = sanitizeBrowserDbRow("network_log", data, getDataDir());
   db.prepare(
     `INSERT INTO network_log (id, session_id, method, url, status_code, request_headers,
      response_headers, request_body, body_size, duration_ms, resource_type)
@@ -13,11 +15,11 @@ export function logRequest(data: Omit<NetworkRequest, "id" | "timestamp">): Netw
     id,
     data.session_id,
     data.method,
-    data.url,
+    sanitized.url ?? data.url,
     data.status_code ?? null,
-    data.request_headers ?? null,
-    data.response_headers ?? null,
-    data.request_body ?? null,
+    sanitized.request_headers ?? null,
+    sanitized.response_headers ?? null,
+    sanitized.request_body ?? null,
     data.body_size ?? null,
     data.duration_ms ?? null,
     data.resource_type ?? null

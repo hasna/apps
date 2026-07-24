@@ -1,13 +1,22 @@
 import { randomUUID } from "node:crypto";
-import { getDatabase } from "./schema.js";
+import { getDataDir, getDatabase } from "./schema.js";
 import type { ConsoleMessage, ConsoleLevel } from "../types/index.js";
+import { sanitizeBrowserDbRow } from "../lib/security.js";
 
 export function logConsoleMessage(data: Omit<ConsoleMessage, "id" | "timestamp">): ConsoleMessage {
   const db = getDatabase();
   const id = randomUUID();
+  const sanitized = sanitizeBrowserDbRow("console_log", data, getDataDir());
   db.prepare(
     "INSERT INTO console_log (id, session_id, level, message, source, line_number) VALUES (?, ?, ?, ?, ?, ?)"
-  ).run(id, data.session_id, data.level, data.message, data.source ?? null, data.line_number ?? null);
+  ).run(
+    id,
+    data.session_id,
+    data.level,
+    sanitized.message ?? data.message,
+    sanitized.source ?? null,
+    data.line_number ?? null,
+  );
   return getConsoleMessage(id)!;
 }
 

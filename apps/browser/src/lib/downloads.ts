@@ -1,13 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { join, basename, extname } from "node:path";
-import { mkdirSync, existsSync, readdirSync, statSync, unlinkSync, copyFileSync, writeFileSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, statSync, unlinkSync, copyFileSync, readFileSync } from "node:fs";
 import type { DownloadedFile } from "../types/index.js";
 import { getDataDir } from "../db/schema.js";
+import { ensureOwnerOnlyDir, ensureOwnerOnlyFile, sanitizeUrlForPersistence, writeOwnerOnlyFile, writePlainJsonFile } from "./security.js";
 
 export function getDownloadsDir(sessionId?: string): string {
   const base = join(getDataDir(), "downloads");
   const dir = sessionId ? join(base, sessionId) : base;
-  mkdirSync(dir, { recursive: true });
+  ensureOwnerOnlyDir(dir);
   return dir;
 }
 
@@ -48,7 +49,7 @@ function writeDownloadMeta(
   const meta: DownloadMeta = {
     id,
     type: opts?.type ?? detectType(originalName),
-    source_url: opts?.sourceUrl,
+    source_url: sanitizeUrlForPersistence(opts?.sourceUrl) ?? undefined,
     session_id: opts?.sessionId,
     created_at: new Date().toISOString(),
     size_bytes: sizeBytes,
@@ -56,7 +57,7 @@ function writeDownloadMeta(
     ...opts?.metadata,
   } as DownloadMeta;
 
-  writeFileSync(metaPath(filePath), JSON.stringify(meta, null, 2));
+  writePlainJsonFile(metaPath(filePath), meta);
   return meta;
 }
 
@@ -67,7 +68,7 @@ export function saveToDownloads(
 ): DownloadedFile {
   const { id, filePath, filename: uniqueName } = uniqueDownloadPath(filename, opts?.sessionId);
 
-  writeFileSync(filePath, buffer);
+  writeOwnerOnlyFile(filePath, buffer);
 
   const meta = writeDownloadMeta(filePath, id, filename, buffer.length, opts);
 
@@ -92,6 +93,7 @@ export function importFileToDownloads(
   const originalName = filename ?? basename(sourcePath);
   const { id, filePath, filename: uniqueName } = uniqueDownloadPath(originalName, opts?.sessionId);
   copyFileSync(sourcePath, filePath);
+  ensureOwnerOnlyFile(filePath);
   const sizeBytes = statSync(filePath).size;
   const meta = writeDownloadMeta(filePath, id, originalName, sizeBytes, opts);
 

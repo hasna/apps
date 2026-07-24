@@ -1,10 +1,11 @@
 import { createHash, randomBytes, randomInt, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getDataDir } from "../db/schema.js";
 import { logEvent } from "../db/timeline.js";
 import { BrowserError, type ConnectedExtensionStatus, type ExtBridgeMessage, type ExtJob, type ExtensionBridgeStatus, type ExtensionPairing, type ExtResult } from "../types/index.js";
 import { allowedDomains, assertBrowserNavigationAllowed } from "./policy.js";
+import { ensureOwnerOnlyDir, writeOwnerOnlyFile } from "./security.js";
 
 const DEFAULT_PAIRING_TTL_MS = 5 * 60_000;
 const MAX_PAIRING_TTL_MS = 15 * 60_000;
@@ -106,8 +107,8 @@ function readTokenRecords(): ExtensionTokenRecord[] {
 
 function writeTokenRecords(records: ExtensionTokenRecord[]): void {
   const file = tokenStorePath();
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, `${JSON.stringify(records, null, 2)}\n`, { mode: 0o600 });
+  ensureOwnerOnlyDir(dirname(file));
+  writeOwnerOnlyFile(file, `${JSON.stringify(records, null, 2)}\n`);
 }
 
 function updateTokenRecord(tokenId: string, patch: Partial<ExtensionTokenRecord>): void {

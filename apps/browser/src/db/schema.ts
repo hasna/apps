@@ -1,9 +1,10 @@
 import { Database } from "bun:sqlite";
 import type { TypedDb } from "../types/db-adapter.js";
 import { join } from "node:path";
-import { mkdirSync, existsSync, readdirSync, copyFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, copyFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
+import { ensureOwnerOnlyDir, ensureOwnerOnlyFile, ensureSqliteArtifactsOwnerOnly, sanitizeBrowserDbRow } from "../lib/security.js";
 
 export interface FeedbackInput {
   service?: string;
@@ -24,7 +25,10 @@ export interface FeedbackEntry {
 }
 
 export function getDataDir(): string {
-  if (process.env["BROWSER_DATA_DIR"]) return process.env["BROWSER_DATA_DIR"];
+  if (process.env["BROWSER_DATA_DIR"]) {
+    ensureOwnerOnlyDir(process.env["BROWSER_DATA_DIR"]);
+    return process.env["BROWSER_DATA_DIR"];
+  }
 
   const home = process.env["HOME"] || process.env["USERPROFILE"] || homedir();
   const newDir = join(home, ".hasna", "browser");
@@ -32,7 +36,7 @@ export function getDataDir(): string {
 
   // Auto-migrate: if old dir exists and new doesn't, copy files over
   if (existsSync(oldDir) && !existsSync(newDir)) {
-    mkdirSync(newDir, { recursive: true });
+    ensureOwnerOnlyDir(newDir);
     try {
       for (const file of readdirSync(oldDir)) {
         const oldPath = join(oldDir, file);
@@ -40,6 +44,7 @@ export function getDataDir(): string {
         try {
           if (statSync(oldPath).isFile()) {
             copyFileSync(oldPath, newPath);
+            ensureOwnerOnlyFile(newPath);
           }
         } catch {
           // Skip files that can't be copied
@@ -50,7 +55,7 @@ export function getDataDir(): string {
     }
   }
 
-  mkdirSync(newDir, { recursive: true });
+  ensureOwnerOnlyDir(newDir);
   return newDir;
 }
 
@@ -63,15 +68,17 @@ export function getDatabase(path?: string): TypedDb {
   if (_db && _dbPath === resolvedPath) return _db;
   if (_db) { try { _db.close(); } catch {} _db = null; }
 
-  mkdirSync(join(resolvedPath, ".."), { recursive: true });
+  ensureSqliteArtifactsOwnerOnly(resolvedPath);
 
   _db = new Database(resolvedPath) as unknown as TypedDb;
   _dbPath = resolvedPath;
+  ensureSqliteArtifactsOwnerOnly(resolvedPath);
   _db.exec("PRAGMA busy_timeout=5000;");
   _db.exec("PRAGMA journal_mode=WAL;");
   _db.exec("PRAGMA foreign_keys=ON;");
 
   runMigrations(_db);
+  ensureSqliteArtifactsOwnerOnly(resolvedPath);
   // Ensure feedback table has `service` column (handle old installs that had different schema)
   try {
     const cols = (_db.query("PRAGMA table_info(feedback)").all() as Array<{ name: string }>).map(c => c.name);
@@ -89,12 +96,16 @@ export function resetDatabase(): void {
 }
 
 export function saveFeedback(input: FeedbackInput, db = getDatabase()): FeedbackEntry {
+  const sanitized = sanitizeBrowserDbRow("feedback", {
+    message: input.message,
+    email: input.email ?? "",
+  }, getDataDir());
   const entry: FeedbackEntry = {
     id: randomUUID(),
     service: input.service ?? "browser",
     version: input.version ?? "",
-    message: input.message,
-    email: input.email ?? "",
+    message: typeof sanitized.message === "string" ? sanitized.message : input.message,
+    email: typeof sanitized.email === "string" ? sanitized.email : input.email ?? "",
     machine_id: input.machineId ?? process.env["HOSTNAME"] ?? "",
     created_at: new Date().toISOString(),
   };

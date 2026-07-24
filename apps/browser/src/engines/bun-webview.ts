@@ -6,8 +6,8 @@
  */
 
 import { join } from "node:path";
-import { mkdirSync } from "node:fs";
 import { getDataDir } from "../db/schema.js";
+import { ensureOwnerOnlyDir, sanitizeStorageName } from "../lib/security.js";
 
 // ─── Availability check ───────────────────────────────────────────────────────
 
@@ -36,8 +36,8 @@ export function isBunWebViewAvailable(): boolean {
 
 function getProfileDir(profileName: string): string {
   const base = getDataDir();
-  const dir = join(base, "profiles", profileName);
-  mkdirSync(dir, { recursive: true });
+  const dir = join(base, "profiles", sanitizeStorageName(profileName));
+  ensureOwnerOnlyDir(dir);
   return dir;
 }
 

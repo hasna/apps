@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { getDatabase } from "./schema.js";
+import { getDataDir, getDatabase } from "./schema.js";
 import type { Session, SessionStatus, BrowserEngine } from "../types/index.js";
 import { SessionNotFoundError } from "../types/index.js";
+import { sanitizeBrowserDbRow } from "../lib/security.js";
 
 export interface CreateSessionData {
   engine: BrowserEngine;
@@ -17,6 +18,10 @@ export interface CreateSessionData {
 export function createSession(data: CreateSessionData): Session {
   const db = getDatabase();
   const id = randomUUID();
+  const sanitized = sanitizeBrowserDbRow("sessions", {
+    start_url: data.startUrl ?? null,
+    browser_live_view_url: data.browserLiveViewUrl ?? null,
+  }, getDataDir());
 
   // Auto-register agent if agent_id is provided but doesn't exist (prevents FK failure)
   if (data.agentId) {
@@ -42,11 +47,11 @@ export function createSession(data: CreateSessionData): Session {
     data.engine,
     data.projectId ?? null,
     data.agentId ?? null,
-    data.startUrl ?? null,
+    sanitized.start_url ?? null,
     name,
     data.remoteSessionId ?? null,
     data.persistenceId ?? null,
-    data.browserLiveViewUrl ?? null,
+    sanitized.browser_live_view_url ?? null,
   );
   return getSession(id);
 }

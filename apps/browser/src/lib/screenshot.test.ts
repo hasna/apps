@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { chromium, type Browser, type Page } from "playwright";
@@ -97,6 +97,29 @@ describe("screenshot compression pipeline", () => {
     const buf = Buffer.from(result.base64, "base64");
     expect(buf.length).toBeGreaterThan(0);
     expect(buf.length).toBe(result.compressed_size_bytes ?? result.size_bytes);
+  });
+
+  it("does not chmod caller-supplied output directories", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "browser-ss-output-"));
+    try {
+      if (process.platform !== "win32") chmodSync(outputDir, 0o755);
+      const outputPath = join(outputDir, "shot.png");
+
+      await takeScreenshot(page, {
+        path: outputPath,
+        format: "png",
+        thumbnail: false,
+        track: false,
+      });
+
+      expect(existsSync(outputPath)).toBe(true);
+      if (process.platform !== "win32") {
+        expect(statSync(outputDir).mode & 0o777).toBe(0o755);
+        expect(statSync(outputPath).mode & 0o777).toBe(0o600);
+      }
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
   });
 
   it("track=true saves to gallery DB", async () => {

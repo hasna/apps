@@ -1,6 +1,7 @@
 import { join } from "node:path";
-import { mkdirSync, copyFileSync } from "node:fs";
+import { copyFileSync } from "node:fs";
 import { getDataDir } from "../db/schema.js";
+import { ensureOwnerOnlyDir, ensureOwnerOnlyFile } from "./security.js";
 
 export interface FilePersistResult {
   id: string;
@@ -33,11 +34,12 @@ export async function persistFile(
   const dataDir = getDataDir();
   const date = new Date().toISOString().split("T")[0];
   const dir = join(dataDir, "persistent", date);
-  mkdirSync(dir, { recursive: true });
+  ensureOwnerOnlyDir(dir);
 
   const filename = localPath.split("/").pop() ?? "file";
   const targetPath = join(dir, filename);
   copyFileSync(localPath, targetPath);
+  ensureOwnerOnlyFile(targetPath);
 
   return {
     id: `local-${Date.now()}`,
