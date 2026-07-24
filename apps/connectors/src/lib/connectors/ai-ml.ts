@@ -1018,6 +1018,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ai", "music", "generation"],
   },
   {
+    name: "ultimate-ai",
+    displayName: "Ultimate AI",
+    description: "Support bot platform (bots, events, search)",
+    category: "AI & ML",
+    tags: ["ai", "chatbot", "support"],
+  },
+  {
     name: "voicit",
     displayName: "Voicit",
     description: "AI meeting transcription and note-taking",
