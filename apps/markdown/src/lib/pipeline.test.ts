@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { parseFromString, validate, compile, run } from "./pipeline";
 import { MockLLMClient } from "./llm-client.js";
-import { mkdirSync, writeFileSync, rmSync } from "fs";
+import { existsSync, mkdirSync, writeFileSync, rmSync } from "fs";
 import { join } from "path";
 
 const TMP = "/tmp/omp-pipeline-test";
@@ -204,5 +204,27 @@ Configure the database connection.`);
     expect(result.success).toBe(true);
     expect(result.cardsExecuted).toBe(2);
     expect(result.cardsTotal).toBe(2);
+  });
+
+  test("rejects tree paths that escape outputDir", async () => {
+    const filePath = join(TMP, "escape.omp.md");
+    const outputDir = join(TMP, "out");
+    writeFileSync(filePath, `# Escape
+
+---
+
+type: tree
+id: structure
+
+../escaped.txt`);
+
+    const result = await run(filePath, {
+      outputDir,
+      dryRun: false,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.errors[0].message).toContain("parent directory traversal");
+    expect(existsSync(join(TMP, "escaped.txt"))).toBe(false);
   });
 });

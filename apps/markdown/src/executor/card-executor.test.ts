@@ -2,6 +2,9 @@ import { describe, test, expect } from "bun:test";
 import { executeCard } from "./card-executor";
 import { MockLLMClient } from "../lib/llm-client.js";
 import type { OmpCard, OmpDocument } from "../types/index.js";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 
 function makeCard(overrides: Partial<OmpCard> = {}): OmpCard {
   return {
@@ -40,6 +43,100 @@ describe("executeCard", () => {
     expect(result.actions.length).toBeGreaterThan(0);
     expect(result.actions.some((a) => a.type === "create-dir")).toBe(true);
     expect(result.actions.some((a) => a.type === "create-file")).toBe(true);
+  });
+
+  test("tree card rejects parent traversal without writing outside output dir", async () => {
+    const root = mkdtempSync(join(tmpdir(), "omp-exec-"));
+    const outputDir = join(root, "out");
+    try {
+      const card = makeCard({
+        type: "tree",
+        id: "structure",
+        body: {
+          raw: "../escaped.txt\nsafe.txt",
+          text: "../escaped.txt\nsafe.txt",
+          tables: [],
+          inlineDirectives: [],
+        },
+      });
+
+      const result = await executeCard(card, makeDoc([card]), undefined, outputDir, false);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("parent directory traversal");
+      expect(existsSync(join(root, "escaped.txt"))).toBe(false);
+      expect(existsSync(join(outputDir, "safe.txt"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("tree card rejects absolute paths", async () => {
+    for (const unsafePath of ["/tmp/escaped.txt", "C:\\tmp\\escaped.txt", "\\\\server\\share\\escaped.txt"]) {
+      const card = makeCard({
+        type: "tree",
+        id: "structure",
+        body: {
+          raw: unsafePath,
+          text: unsafePath,
+          tables: [],
+          inlineDirectives: [],
+        },
+      });
+
+      const result = await executeCard(card, makeDoc([card]), undefined, "/tmp/omp-test-exec", true);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("absolute paths are not allowed");
+    }
+  });
+
+  test("tree card rejects backslash parent traversal", async () => {
+    const card = makeCard({
+      type: "tree",
+      id: "structure",
+      body: {
+        raw: "..\\escaped.txt",
+        text: "..\\escaped.txt",
+        tables: [],
+        inlineDirectives: [],
+      },
+    });
+
+    const result = await executeCard(card, makeDoc([card]), undefined, "/tmp/omp-test-exec", true);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("parent directory traversal");
+  });
+
+  test("tree card rejects symlink escapes beneath output dir", async () => {
+    const root = mkdtempSync(join(tmpdir(), "omp-symlink-"));
+    const outputDir = join(root, "out");
+    const outsideDir = join(root, "outside");
+    try {
+      mkdirSync(outputDir, { recursive: true });
+      mkdirSync(outsideDir, { recursive: true });
+      try {
+        symlinkSync(outsideDir, join(outputDir, "link"), "dir");
+      } catch {
+        return;
+      }
+
+      const card = makeCard({
+        type: "tree",
+        id: "structure",
+        body: {
+          raw: "link/escaped.txt",
+          text: "link/escaped.txt",
+          tables: [],
+          inlineDirectives: [],
+        },
+      });
+
+      const result = await executeCard(card, makeDoc([card]), undefined, outputDir, false);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("symbolic link");
+      expect(existsSync(join(outsideDir, "escaped.txt"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("endpoint card calls LLM with method/path context", async () => {
@@ -126,6 +223,61 @@ describe("executeCard", () => {
     expect(result.success).toBe(true);
     expect(result.llmCalls).toBe(1);
     expect(mock.calls[0].prompt).toContain("admin@test.com");
+  });
+
+  test("functions card rejects unsafe file paths before calling the LLM", async () => {
+    const root = mkdtempSync(join(tmpdir(), "omp-functions-"));
+    try {
+      for (const file of ["../escaped.ts", "..\\escaped.ts", "/tmp/escaped.ts", "C:\\tmp\\escaped.ts"]) {
+        const card = makeCard({
+          type: "functions",
+          id: `functions-${file}`,
+          headers: { file, exports: ["handler"] },
+        });
+        const mock = new MockLLMClient(["// generated code"]);
+
+        const result = await executeCard(card, makeDoc([card]), mock, join(root, "out"), false);
+
+        expect(result.success).toBe(false);
+        expect(result.llmCalls).toBe(0);
+        expect(mock.calls).toHaveLength(0);
+      }
+      expect(existsSync(join(root, "escaped.ts"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("functions card rejects symlink escapes before calling the LLM", async () => {
+    const root = mkdtempSync(join(tmpdir(), "omp-functions-link-"));
+    const outputDir = join(root, "out");
+    const outsideDir = join(root, "outside");
+    try {
+      mkdirSync(outputDir, { recursive: true });
+      mkdirSync(outsideDir, { recursive: true });
+      try {
+        symlinkSync(outsideDir, join(outputDir, "link"), "dir");
+      } catch {
+        return;
+      }
+
+      const card = makeCard({
+        type: "functions",
+        id: "functions-link",
+        headers: { file: "link/escaped.ts", exports: ["handler"] },
+      });
+      const mock = new MockLLMClient(["// generated code"]);
+
+      const result = await executeCard(card, makeDoc([card]), mock, outputDir, false);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("symbolic link");
+      expect(result.llmCalls).toBe(0);
+      expect(mock.calls).toHaveLength(0);
+      expect(existsSync(join(outsideDir, "escaped.ts"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("project card creates directory action", async () => {

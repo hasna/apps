@@ -5,8 +5,8 @@ import { parseHeader } from "./header-parser.js";
 import { parseBody } from "./body-parser.js";
 import { parseDirectives } from "./directive-parser.js";
 import type { OmpCard, OmpImport, OmpPattern } from "../types/index.js";
-import { readFileSync, existsSync } from "fs";
-import { resolve, dirname } from "path";
+import { readFileSync, existsSync, realpathSync } from "fs";
+import { dirname, isAbsolute, relative, resolve } from "path";
 
 export interface ResolvedDocument {
   cards: OmpCard[];
@@ -22,10 +22,13 @@ export interface ResolvedDocument {
 export function resolveImports(
   raw: string,
   filePath: string,
-  visited: Set<string> = new Set()
+  visited: Set<string> = new Set(),
+  rootDir?: string
 ): ResolvedDocument {
-  const absolutePath = resolve(filePath);
+  const sourcePath = resolve(filePath);
+  const absolutePath = realpathIfExists(sourcePath);
   const errors: string[] = [];
+  const importRootDir = rootDir ? resolve(rootDir) : dirname(sourcePath);
 
   // Cycle detection
   if (visited.has(absolutePath)) {
@@ -40,7 +43,7 @@ export function resolveImports(
   const { title, cards: rawCards } = splitCards(raw);
   const allCards: OmpCard[] = [];
   const allPatterns: OmpPattern[] = [];
-  const baseDir = dirname(absolutePath);
+  const baseDir = dirname(sourcePath);
 
   // If the title section looks like a card (has type: or id:), treat it as one
   if (title && hasCardHeaders(title)) {
@@ -55,13 +58,10 @@ export function resolveImports(
     allPatterns.push(...patterns);
     const imports = directives.filter((d) => d.kind === "import") as OmpImport[];
     for (const imp of imports) {
-      const importPath = resolve(baseDir, imp.path);
-      if (!existsSync(importPath)) {
-        errors.push(`Import not found: ${imp.path} (resolved to ${importPath}) at line ${imp.lineNumber}`);
-        continue;
-      }
+      const importPath = resolveImportPath(imp, baseDir, importRootDir, errors);
+      if (!importPath) continue;
       const importedRaw = readFileSync(importPath, "utf-8");
-      const resolved = resolveImports(importedRaw, importPath, new Set(visited));
+      const resolved = resolveImports(importedRaw, importPath, new Set(visited), importRootDir);
       errors.push(...resolved.errors);
       allCards.push(...resolved.cards);
       allPatterns.push(...resolved.patterns);
@@ -78,15 +78,11 @@ export function resolveImports(
     if (imports.length > 0) {
       // Process each import
       for (const imp of imports) {
-        const importPath = resolve(baseDir, imp.path);
-
-        if (!existsSync(importPath)) {
-          errors.push(`Import not found: ${imp.path} (resolved to ${importPath}) at line ${imp.lineNumber}`);
-          continue;
-        }
+        const importPath = resolveImportPath(imp, baseDir, importRootDir, errors);
+        if (!importPath) continue;
 
         const importedRaw = readFileSync(importPath, "utf-8");
-        const resolved = resolveImports(importedRaw, importPath, new Set(visited));
+        const resolved = resolveImports(importedRaw, importPath, new Set(visited), importRootDir);
 
         errors.push(...resolved.errors);
         allCards.push(...resolved.cards);
@@ -119,6 +115,69 @@ export function resolveImports(
  */
 function hasCardHeaders(raw: string): boolean {
   return /^(type|id)\s*:/m.test(raw);
+}
+
+function resolveImportPath(
+  imp: OmpImport,
+  baseDir: string,
+  rootDir: string,
+  errors: string[]
+): string | undefined {
+  const importPath = imp.path.trim();
+
+  if (!importPath) {
+    errors.push(`Invalid import path at line ${imp.lineNumber}: path cannot be empty`);
+    return undefined;
+  }
+
+  if (isAbsoluteLikePath(importPath)) {
+    errors.push(`Invalid import path "${imp.path}" at line ${imp.lineNumber}: absolute imports are not allowed`);
+    return undefined;
+  }
+
+  if (!importPath.startsWith("./") && !importPath.startsWith("../")) {
+    errors.push(`Invalid import path "${imp.path}" at line ${imp.lineNumber}: imports must start with ./ or ../`);
+    return undefined;
+  }
+
+  if (!importPath.endsWith(".omp.md")) {
+    errors.push(`Invalid import path "${imp.path}" at line ${imp.lineNumber}: imports must target .omp.md files`);
+    return undefined;
+  }
+
+  const resolvedPath = resolve(baseDir, importPath);
+  const rootPath = resolve(rootDir);
+  if (!isPathInside(rootPath, resolvedPath)) {
+    errors.push(`Invalid import path "${imp.path}" at line ${imp.lineNumber}: import escapes the allowed boundary ${rootPath}`);
+    return undefined;
+  }
+
+  if (!existsSync(resolvedPath)) {
+    errors.push(`Import not found: ${imp.path} (resolved to ${resolvedPath}) at line ${imp.lineNumber}`);
+    return undefined;
+  }
+
+  const realRootPath = realpathIfExists(rootPath);
+  const realImportPath = realpathSync(resolvedPath);
+  if (!isPathInside(realRootPath, realImportPath)) {
+    errors.push(`Invalid import path "${imp.path}" at line ${imp.lineNumber}: import escapes the allowed boundary ${realRootPath}`);
+    return undefined;
+  }
+
+  return realImportPath;
+}
+
+function realpathIfExists(filePath: string): string {
+  return existsSync(filePath) ? realpathSync(filePath) : filePath;
+}
+
+function isAbsoluteLikePath(filePath: string): boolean {
+  return isAbsolute(filePath) || filePath.startsWith("\\") || /^[A-Za-z]:/.test(filePath);
+}
+
+function isPathInside(basePath: string, targetPath: string): boolean {
+  const rel = relative(basePath, targetPath);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 /**

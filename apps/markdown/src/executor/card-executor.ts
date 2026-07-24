@@ -1,8 +1,8 @@
 // Card Executor — process each card type into file system actions
 
 import type { OmpCard, OmpDocument, LLMClient, CardContext } from "../types/index.js";
-import { mkdirSync, writeFileSync, existsSync } from "fs";
-import { dirname, join } from "path";
+import { mkdirSync, writeFileSync, existsSync, realpathSync } from "fs";
+import { dirname, isAbsolute, relative, resolve } from "path";
 
 export interface ExecutionAction {
   type: "create-file" | "run-command" | "create-dir" | "llm-generate";
@@ -176,6 +176,7 @@ ${card.accepts.length ? `Requirements: ${card.accepts.join("; ")}` : ""}`;
         // Deterministic: extract function signatures, LLM fills bodies
         const file = String(card.headers["file"] ?? "");
         const exports = card.headers["exports"];
+        const fullPath = file ? resolveOutputPath(outputDir, file) : "";
 
         if (llm) {
           const context = buildContext(card, document);
@@ -191,7 +192,6 @@ ${card.accepts.length ? `Requirements: ${card.accepts.join("; ")}` : ""}`;
           llmCalls++;
 
           if (file && !dryRun) {
-            const fullPath = join(outputDir, file);
             mkdirSync(dirname(fullPath), { recursive: true });
             writeFileSync(fullPath, code);
           }
@@ -294,20 +294,80 @@ function parseTree(raw: string, baseDir: string): ExecutionAction[] {
       // Directory
       actions.push({
         type: "create-dir",
-        path: join(baseDir, trimmed),
+        path: resolveOutputPath(baseDir, trimmed),
         description: `Create directory ${trimmed}`,
       });
     } else if (trimmed.includes(".")) {
       // File (has extension)
       actions.push({
         type: "create-file",
-        path: join(baseDir, trimmed),
+        path: resolveOutputPath(baseDir, trimmed),
         description: `Create file ${trimmed}`,
       });
     }
   }
 
   return actions;
+}
+
+/**
+ * Resolve a card-supplied filesystem path under the requested output directory.
+ */
+function resolveOutputPath(baseDir: string, rawPath: string): string {
+  const normalizedPath = rawPath.trim();
+  if (!normalizedPath) {
+    throw new Error("Unsafe output path: path cannot be empty");
+  }
+
+  if (isAbsoluteLikePath(normalizedPath)) {
+    throw new Error(`Unsafe output path "${rawPath}": absolute paths are not allowed`);
+  }
+
+  if (normalizedPath.split(/[\\/]+/).some((part) => part === "..")) {
+    throw new Error(`Unsafe output path "${rawPath}": parent directory traversal is not allowed`);
+  }
+
+  const basePath = resolve(baseDir);
+  const targetPath = resolve(basePath, normalizedPath);
+  if (!isPathInside(basePath, targetPath)) {
+    throw new Error(`Unsafe output path "${rawPath}": path escapes the output directory`);
+  }
+  assertRealPathInsideOutput(basePath, targetPath, rawPath);
+
+  return targetPath;
+}
+
+function assertRealPathInsideOutput(basePath: string, targetPath: string, rawPath: string): void {
+  const baseRealPath = realpathIfExists(basePath);
+  const existingAncestor = nearestExistingAncestor(targetPath, basePath);
+  const ancestorRealPath = realpathIfExists(existingAncestor);
+  const remainingPath = relative(existingAncestor, targetPath);
+  const realTargetPath = remainingPath ? resolve(ancestorRealPath, remainingPath) : ancestorRealPath;
+
+  if (!isPathInside(baseRealPath, realTargetPath)) {
+    throw new Error(`Unsafe output path "${rawPath}": path escapes the output directory through a symbolic link`);
+  }
+}
+
+function nearestExistingAncestor(targetPath: string, basePath: string): string {
+  let current = targetPath;
+  while (current !== basePath && !existsSync(current)) {
+    current = dirname(current);
+  }
+  return existsSync(current) ? current : basePath;
+}
+
+function realpathIfExists(filePath: string): string {
+  return existsSync(filePath) ? realpathSync(filePath) : filePath;
+}
+
+function isAbsoluteLikePath(filePath: string): boolean {
+  return isAbsolute(filePath) || filePath.startsWith("\\") || /^[A-Za-z]:/.test(filePath);
+}
+
+function isPathInside(basePath: string, targetPath: string): boolean {
+  const rel = relative(basePath, targetPath);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 /**

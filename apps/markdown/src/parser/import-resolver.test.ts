@@ -1,9 +1,10 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { resolveImports } from "./import-resolver";
-import { mkdirSync, writeFileSync, rmSync } from "fs";
-import { join } from "path";
+import { mkdirSync, writeFileSync, rmSync, symlinkSync } from "fs";
+import { dirname, join } from "path";
 
 const TMP = "/tmp/omp-test-imports";
+const OUTSIDE = "/tmp/omp-test-imports-outside";
 
 beforeEach(() => {
   mkdirSync(TMP, { recursive: true });
@@ -11,10 +12,13 @@ beforeEach(() => {
 
 afterEach(() => {
   rmSync(TMP, { recursive: true, force: true });
+  rmSync(OUTSIDE, { recursive: true, force: true });
 });
 
 function writeOmp(name: string, content: string) {
-  writeFileSync(join(TMP, name), content);
+  const filePath = join(TMP, name);
+  mkdirSync(dirname(filePath), { recursive: true });
+  writeFileSync(filePath, content);
 }
 
 describe("resolveImports", () => {
@@ -141,6 +145,113 @@ id: b-table
     const result = resolveImports(doc, join(TMP, "main.omp.md"));
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain("Import not found");
+  });
+
+  test("rejects absolute imports", () => {
+    const importedPath = join(TMP, "absolute.omp.md");
+    writeFileSync(importedPath, `type: table
+id: imported`);
+
+    const doc = `# App
+
+---
+
+@import ${importedPath}`;
+
+    const result = resolveImports(doc, join(TMP, "main.omp.md"));
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain("absolute imports are not allowed");
+    expect(result.cards).toHaveLength(0);
+  });
+
+  test("rejects non-.omp.md imports", () => {
+    writeFileSync(join(TMP, "not-omp.txt"), `type: table
+id: imported`);
+
+    const doc = `# App
+
+---
+
+@import ./not-omp.txt`;
+
+    const result = resolveImports(doc, join(TMP, "main.omp.md"));
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain(".omp.md");
+    expect(result.cards).toHaveLength(0);
+  });
+
+  test("rejects imports without explicit relative prefix", () => {
+    writeOmp("schema.omp.md", `type: table
+id: imported`);
+
+    const doc = `# App
+
+---
+
+@import schema.omp.md`;
+
+    const result = resolveImports(doc, join(TMP, "main.omp.md"));
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain("imports must start with ./ or ../");
+    expect(result.cards).toHaveLength(0);
+  });
+
+  test("rejects imports that escape the root document boundary", () => {
+    mkdirSync(OUTSIDE, { recursive: true });
+    writeFileSync(join(OUTSIDE, "shared.omp.md"), `type: table
+id: outside`);
+
+    const doc = `# App
+
+---
+
+@import ../omp-test-imports-outside/shared.omp.md`;
+
+    const result = resolveImports(doc, join(TMP, "main.omp.md"));
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain("escapes the allowed boundary");
+    expect(result.cards).toHaveLength(0);
+  });
+
+  test("rejects symlinked imports that escape the root document boundary", () => {
+    mkdirSync(OUTSIDE, { recursive: true });
+    writeFileSync(join(OUTSIDE, "shared.omp.md"), `type: table
+id: outside`);
+    try {
+      symlinkSync(OUTSIDE, join(TMP, "link"), "dir");
+    } catch {
+      return;
+    }
+
+    const doc = `# App
+
+---
+
+@import ./link/shared.omp.md`;
+
+    const result = resolveImports(doc, join(TMP, "main.omp.md"));
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain("escapes the allowed boundary");
+    expect(result.cards).toHaveLength(0);
+  });
+
+  test("allows nested imports to traverse within the root document boundary", () => {
+    writeOmp("shared/table.omp.md", `type: table
+id: shared-table
+
+Shared table.`);
+
+    writeOmp("features/feature.omp.md", `@import ../shared/table.omp.md`);
+
+    const doc = `# App
+
+---
+
+@import ./features/feature.omp.md`;
+
+    const result = resolveImports(doc, join(TMP, "main.omp.md"));
+    expect(result.errors).toHaveLength(0);
+    expect(result.cards.map((card) => card.id)).toContain("shared-table");
   });
 
   test("collects patterns from imported files", () => {
