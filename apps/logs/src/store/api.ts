@@ -6,7 +6,8 @@
  * The transport used by BOTH `self_hosted` (our AWS) and `cloud` (SaaS) tiers —
  * identical client code; only the resolved URL/key differ (that distinction is
  * server-side tenancy, never a client branch). Every call goes to the app's
- * cloud HTTP API (`https://logs.hasna.xyz/v1/...`) with the bearer key managed
+ * configured cloud HTTP API (the resolved HASNA_LOGS_API_URL, e.g.
+ * `https://logs.your-deployment.example/v1/...`) with the bearer key managed
  * inside the @hasna/contracts transport.
  *
  * The cloud tier is a first-class shared backend: it persists and serves the

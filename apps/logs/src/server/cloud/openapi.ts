@@ -9,7 +9,7 @@
 export interface OpenApiDoc {
   openapi: string;
   info: { title: string; version: string; description?: string };
-  servers?: { url: string }[];
+  servers?: { url: string; description?: string }[];
   security?: Record<string, unknown>[];
   components: Record<string, unknown>;
   paths: Record<string, unknown>;
@@ -31,7 +31,13 @@ export function buildOpenApiDocument(version: string): OpenApiDoc {
         "Cloud API for @hasna/logs — the shared, S3-backed log sink. All /v1 " +
         "routes require a Hasna API key (x-api-key or Authorization: Bearer).",
     },
-    servers: [{ url: "https://logs.hasna.xyz" }],
+    servers: [
+      {
+        url: "https://your-deployment.example",
+        description:
+          "Replace with your self-hosted @hasna/logs deployment's base URL.",
+      },
+    ],
     components: {
       securitySchemes: {
         apiKey: { type: "apiKey", in: "header", name: "x-api-key" },
