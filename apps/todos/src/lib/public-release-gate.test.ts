@@ -373,8 +373,10 @@ describe("public release gate", () => {
 
       const packageJson = JSON.parse(readFileSync(join(payloadDir, "package", "package.json"), "utf8")) as {
         dependencies?: Record<string, string>;
+        version?: string;
       };
       expect(packageJson.dependencies?.["@hasna/contracts"]).toBeTruthy();
+      expect(packageJson.version).toMatch(/^\d+\.\d+\.\d+$/);
       const scanFailures = scanExtractedPackedFiles(
         artifact!.files,
         payloadDir,
@@ -402,7 +404,7 @@ describe("public release gate", () => {
         ["--version"],
         installDir,
         isolatedEnv,
-      ).trim()).toBe("0.11.92");
+      ).trim()).toBe(packageJson.version);
     } finally {
       rmSync(temp, { recursive: true, force: true });
     }

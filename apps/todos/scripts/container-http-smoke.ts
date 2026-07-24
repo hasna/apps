@@ -1,9 +1,16 @@
 #!/usr/bin/env bun
 
+import { isStrictSemver } from "./semver.ts";
+
 const baseUrl = process.env.TODOS_V1_BASE_URL;
 const token = process.env.TODOS_V1_TOKEN;
+const expectedVersion = process.env.TODOS_EXPECTED_VERSION;
 if (!baseUrl) throw new Error("TODOS_V1_BASE_URL is required");
 if (!token) throw new Error("TODOS_V1_TOKEN is required");
+if (!expectedVersion) throw new Error("TODOS_EXPECTED_VERSION is required");
+if (!isStrictSemver(expectedVersion)) {
+  throw new Error("TODOS_EXPECTED_VERSION must be a valid semver version");
+}
 
 const authHeaders = {
   "content-type": "application/json",
@@ -28,8 +35,8 @@ for (const path of ["/health", "/ready"]) {
 }
 const versionResponse = await expectStatus("/version", 200);
 const versionPayload = (await versionResponse.json()) as { version?: string };
-if (versionPayload.version !== "0.11.92") {
-  throw new Error(`/version: expected 0.11.92, got ${versionPayload.version ?? "missing"}`);
+if (versionPayload.version !== expectedVersion) {
+  throw new Error(`/version: expected ${expectedVersion}, got ${versionPayload.version ?? "missing"}`);
 }
 await expectStatus("/v1/tasks", 401);
 
