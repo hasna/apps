@@ -548,4 +548,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Marketing & Sales",
     tags: ["reviews", "ugc", "ecommerce", "marketing"],
   },
+  {
+    name: "zoominfo",
+    displayName: "ZoomInfo",
+    description: "ZoomInfo B2B sales intelligence API for contact and company search, enrichment, lookup, and output field discovery",
+    category: "Marketing & Sales",
+    tags: ["sales-intelligence", "enrichment", "contacts", "companies", "b2b"],
+  },
 ];
