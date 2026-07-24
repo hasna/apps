@@ -63,11 +63,11 @@ export const TODOS_CLI_COMMAND_ALIASES = {
 
 const DIAGNOSTIC_COMMANDS = new Set(["help", "manual", "completions", "completion", "config", "storage"]);
 const REMOTE_COMMANDS = new Set([
-  "active", "add", "agent", "agents", "approve", "bulk", "claim", "comment", "count", "delete", "deps",
+  "active", "add", "agent", "agents", "approve", "assign", "bulk", "claim", "comment", "count", "delete", "deps",
   "doctor", "done", "find-commit", "find-ref", "health", "heartbeat", "history", "init", "inspect", "link-commit",
   "link-ref", "list", "lists", "lock", "log-progress", "move", "next", "plans", "project-rename", "projects", "recap",
-  "record-verification", "release", "remove", "show", "standup", "start", "status", "task", "task-lists", "timeline",
-  "template-export", "template-import", "template-preview", "templates", "tl", "unlock", "update",
+  "record-verification", "release", "remove", "show", "standup", "start", "status", "tag", "task", "task-lists",
+  "template-export", "template-import", "template-preview", "templates", "timeline", "tl", "unlock", "untag", "update",
 ]);
 
 const COMMAND_CAPABILITY_MATRIX = new Map<string, TodosCliCommandOwner>();
