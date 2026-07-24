@@ -878,6 +878,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["project management", "tasks", "workflows", "collaboration", "productivity"],
   },
   {
+    name: "smartsheet",
+    displayName: "Smartsheet",
+    description: "Spreadsheet-based work management, collaboration, and automation",
+    category: "Business Tools",
+    tags: ["spreadsheet", "work-management", "collaboration"],
+  },
+  {
     name: "snapdocs",
     displayName: "Snapdocs",
     description: "Digital closing platform for mortgage and real estate transactions",
