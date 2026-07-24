@@ -4,9 +4,11 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   AutomationsStore,
+  automationRunToWorkRun,
   exampleAutomationSpec,
   listDefaultRuntimeBindings,
   normalizeWebhookRequestToEvent,
+  queuedActionDecisionEnvelopes,
   validateAutomationSpec,
   type AutomationSpec,
   type EventEnvelopeLike,
@@ -61,6 +63,9 @@ export async function runAutomationsCli(argv = Bun.argv.slice(2), options: RunAu
     }
     if (command === "simulate") {
       return runSimulateCommand(parsed);
+    }
+    if (command === "runs") {
+      return runRunsCommand(parsed, options);
     }
     if (command === "dlq") {
       return runDlqCommand(parsed, options);
@@ -301,6 +306,48 @@ function runDlqCommand(parsed: ParsedArgs, options: RunAutomationsCliOptions): n
   }
 }
 
+function runRunsCommand(parsed: ParsedArgs, options: RunAutomationsCliOptions): number {
+  const subcommand = parsed.rest[1];
+  if (!subcommand || subcommand === "--help" || subcommand === "-h") {
+    printRunsHelp(options);
+    return 0;
+  }
+  const args = parsed.rest.slice(2);
+  const contract = takeFlag(args, "--contract");
+  const store = new AutomationsStore();
+  try {
+    if (subcommand === "list") {
+      const runs = store.listRuns();
+      if (!contract) {
+        output(parsed, runs, () => console.log(JSON.stringify(runs, null, 2)));
+        return 0;
+      }
+      const actions = store.listQueuedActions();
+      const contracts = runs.map((run) => automationRunToWorkRun(run, {
+        decisions: queuedActionDecisionEnvelopes(actions.filter((action) => action.automationRunId === run.id)),
+      }));
+      output(parsed, contracts, () => console.log(JSON.stringify(contracts, null, 2)));
+      return 0;
+    }
+    if (subcommand === "show") {
+      const id = args[0];
+      if (!id) throw new Error("runs show requires a run id");
+      const run = store.requireRun(id);
+      if (!contract) {
+        output(parsed, run, () => console.log(JSON.stringify(run, null, 2)));
+        return 0;
+      }
+      const decisions = queuedActionDecisionEnvelopes(store.listQueuedActions().filter((action) => action.automationRunId === run.id));
+      const contractRun = automationRunToWorkRun(run, { decisions });
+      output(parsed, contractRun, () => console.log(JSON.stringify(contractRun, null, 2)));
+      return 0;
+    }
+    throw new Error(`Unknown runs command: ${subcommand}`);
+  } finally {
+    store.close();
+  }
+}
+
 function runQueueCommand(parsed: ParsedArgs, options: RunAutomationsCliOptions): number {
   const subcommand = parsed.rest[1];
   if (!subcommand || subcommand === "--help" || subcommand === "-h") {
@@ -503,6 +550,8 @@ Usage:
   ${name} [--dir <path>] [--json] create <automation.json>
   ${name} [--dir <path>] [--json] list
   ${name} [--dir <path>] [--json] simulate <automation.json> [--event-json <json>] [--persist]
+  ${name} [--dir <path>] [--json] runs list [--contract]
+  ${name} [--dir <path>] [--json] runs show <run-id> [--contract]
   ${name} [--dir <path>] [--json] dlq list
   ${name} [--dir <path>] [--json] dlq replay <action-id>
   ${name} [--dir <path>] [--json] queue claim [--runner <id>]
@@ -562,6 +611,15 @@ function printDlqHelp(options: RunAutomationsCliOptions = {}): void {
 Usage:
   ${name} [--dir <path>] [--json] dlq list
   ${name} [--dir <path>] [--json] dlq replay <action-id>`);
+}
+
+function printRunsHelp(options: RunAutomationsCliOptions = {}): void {
+  const name = programName(options);
+  console.log(`${name} runs
+
+Usage:
+  ${name} [--dir <path>] [--json] runs list [--contract]
+  ${name} [--dir <path>] [--json] runs show <run-id> [--contract]`);
 }
 
 function printQueueHelp(options: RunAutomationsCliOptions = {}): void {

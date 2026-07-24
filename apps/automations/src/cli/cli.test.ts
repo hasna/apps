@@ -191,7 +191,28 @@ describe("automations CLI", () => {
     })]);
     expect(simulate.exitCode).toBe(0);
     const materialized = JSON.parse(simulate.stdout);
+    const runId = materialized[0].run.id;
     const actionId = materialized[0].actions[0].id;
+
+    const runs = await runCli(["runs", "list"]);
+    expect(runs.exitCode).toBe(0);
+    expect(JSON.parse(runs.stdout)[0]).toMatchObject({ id: runId, status: "materialized" });
+
+    const contractRuns = await runCli(["runs", "list", "--contract"]);
+    expect(contractRuns.exitCode).toBe(0);
+    expect(JSON.parse(contractRuns.stdout)[0]).toMatchObject({
+      schema: "hasna.work_run.v1",
+      id: `automation_run_${runId}`,
+      status: "pending",
+      metadata: { originalStatus: "materialized" },
+    });
+
+    const contractRun = await runCli(["runs", "show", runId, "--contract"]);
+    expect(contractRun.exitCode).toBe(0);
+    expect(JSON.parse(contractRun.stdout)).toMatchObject({
+      schema: "hasna.work_run.v1",
+      status: "pending",
+    });
 
     const claim = await runCli(["queue", "claim", "--runner", "cli-test"]);
     expect(claim.exitCode).toBe(0);

@@ -27,6 +27,10 @@
       "types": "./dist/lib/runtime.d.ts",
       "import": "./dist/lib/runtime.js"
     },
+    "./contracts": {
+      "types": "./dist/lib/contracts.d.ts",
+      "import": "./dist/lib/contracts.js"
+    },
     "./cli": {
       "types": "./dist/cli/index.d.ts",
       "import": "./dist/cli/index.js"
@@ -44,9 +48,10 @@
     "CONTRIBUTING.md"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/cli/index.ts src/daemon/index.ts src/index.ts src/types.ts src/lib/store.ts src/lib/paths.ts src/lib/runtime.ts --outdir dist --target bun --packages external && chmod +x dist/cli/index.js dist/daemon/index.js && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
+    "build": "rm -rf dist && bun build src/cli/index.ts src/daemon/index.ts src/index.ts src/types.ts src/lib/store.ts src/lib/paths.ts src/lib/runtime.ts src/lib/contracts.ts --outdir dist --target bun --packages external && chmod +x dist/cli/index.js dist/daemon/index.js && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "contracts:conformance": "contracts conformance examples",
     "prepublishOnly": "bun run test && bun run build"
   },
   "keywords": [
@@ -73,11 +78,14 @@
   },
   "author": "Hasna",
   "license": "Apache-2.0",
+  "dependencies": {
+    "@hasna/contracts": "^0.2.2"
+  },
   "peerDependencies": {
     "@hasna/actions": "^0.1.4"
   },
   "devDependencies": {
-    "@hasna/actions": "file:../open-actions",
+    "@hasna/actions": "^0.1.4",
     "@types/bun": "latest",
     "typescript": "^5.7.3"
   },

@@ -1,0 +1,11 @@
+{
+  "schema": "hasna.work_run.v1",
+  "id": "automation_run_bad_status",
+  "createdAt": "2026-07-07T10:00:00.000Z",
+  "objective": "Invalid automation run status should fail conformance.",
+  "status": "materialized",
+  "actor": {
+    "kind": "service",
+    "id": "service_hasna_automations"
+  }
+}

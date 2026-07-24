@@ -1,0 +1,40 @@
+{
+  "schema": "hasna.work_run.v1",
+  "id": "automation_run_run_example",
+  "createdAt": "2026-07-07T10:00:00.000Z",
+  "updatedAt": "2026-07-07T10:00:05.000Z",
+  "objective": "Automation run run_example for tickets.escalate-critical",
+  "status": "pending",
+  "actor": {
+    "kind": "service",
+    "id": "service_hasna_automations",
+    "name": "@hasna/automations"
+  },
+  "traceId": "tickets.escalate-critical:evt_contract",
+  "resourceRefs": [
+    {
+      "kind": "run",
+      "id": "run_example",
+      "name": "Automation run run_example",
+      "uri": "artifact://automations/runs/run_example",
+      "externalId": "run_example",
+      "sourcePackage": "@hasna/automations"
+    }
+  ],
+  "evidenceRefs": [
+    {
+      "id": "automation_run_receipt_run_example",
+      "kind": "artifact",
+      "uri": "artifact://automations/runs/run_example",
+      "summary": "Automation run receipt for run_example"
+    }
+  ],
+  "metadata": {
+    "sourcePackage": "@hasna/automations",
+    "originalStatus": "materialized",
+    "statusMapping": {
+      "materialized": "pending",
+      "dead": "failed"
+    }
+  }
+}

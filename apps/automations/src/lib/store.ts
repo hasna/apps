@@ -7,13 +7,10 @@ import type {
   ActionDeadLetter,
   ActionError,
   ActionInvocation,
-  ActionQueueApprovalDecision,
-  ActionQueueApprovalGate,
   ActionResult,
   JsonObject,
   JsonValue,
 } from "@hasna/actions";
-import { assertActionQueueStatus, isTerminalActionQueueStatus } from "@hasna/actions";
 import type {
   ActionCompletionOptions,
   ActionFailureOptions,
@@ -37,6 +34,11 @@ import type {
   WebhookSignatureConfig,
 } from "../types.js";
 import { AUTOMATION_SCHEMA_VERSION, AUTOMATION_STATUSES, AUTOMATION_TRIGGER_KINDS, WEBHOOK_ROUTE_STATUSES } from "../types.js";
+import type {
+  ActionQueueApprovalDecision,
+  ActionQueueApprovalGate,
+} from "./action-queue.js";
+import { assertActionQueueStatus, isTerminalActionQueueStatus } from "./action-queue.js";
 import { automationsDataDir, automationsDbPath, ensureAutomationsDataDir } from "./paths.js";
 
 const STORE_SCHEMA_VERSION = 3;

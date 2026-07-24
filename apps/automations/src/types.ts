@@ -2,13 +2,15 @@ import type {
   ActionDeadLetter,
   ActionError,
   ActionInvocation,
-  ActionQueueApprovalGate,
-  ActionQueueApprovalRequirement,
-  ActionQueueStatus,
   ActionResult,
   JsonObject,
   JsonValue,
 } from "@hasna/actions";
+import type {
+  ActionQueueApprovalGate,
+  ActionQueueApprovalRequirement,
+  ActionQueueStatus,
+} from "./lib/action-queue.js";
 
 export const AUTOMATION_SCHEMA_VERSION = "1.0" as const;
 
