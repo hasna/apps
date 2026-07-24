@@ -1,20 +1,68 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ClipStore } from "./storage.js";
 import type { ClipboardCapabilities, ClipboardHistoryKind, ClipboardHistoryRecord, ClipboardKind, ClipClientOptions, ClipRecord, JsonObject } from "./types.js";
-import { commandExists, runCommand, runCommandBytes } from "./capture/tools.js";
+import { commandExists, findWindowsPowerShellCommand, runCommand, runCommandBytes, runWindowsPowerShellScript } from "./capture/tools.js";
 
-const CLIPBOARD_TOOLS = ["pbpaste", "pngpaste", "osascript", "wl-paste", "wl-copy", "xclip"] as const;
+const CLIPBOARD_TOOLS = ["pbpaste", "pngpaste", "osascript", "wl-paste", "wl-copy", "xclip", "powershell.exe", "powershell", "pwsh.exe", "pwsh"] as const;
+
+const WINDOWS_CLIPBOARD_TEXT_SCRIPT = `
+param()
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+Add-Type -AssemblyName System.Windows.Forms
+if ([System.Windows.Forms.Clipboard]::ContainsText()) {
+  [Console]::Out.Write([System.Windows.Forms.Clipboard]::GetText())
+}
+`;
+
+const WINDOWS_CLIPBOARD_IMAGE_SCRIPT = `
+param([string]$OutputPath)
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+if (-not [System.Windows.Forms.Clipboard]::ContainsImage()) {
+  exit 3
+}
+$image = [System.Windows.Forms.Clipboard]::GetImage()
+if ($null -eq $image) {
+  exit 4
+}
+try {
+  $image.Save($OutputPath, [System.Drawing.Imaging.ImageFormat]::Png)
+} finally {
+  $image.Dispose()
+}
+`;
+
+const WINDOWS_CLIPBOARD_FILE_SCRIPT = `
+param()
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+Add-Type -AssemblyName System.Windows.Forms
+if ([System.Windows.Forms.Clipboard]::ContainsFileDropList()) {
+  $files = [System.Windows.Forms.Clipboard]::GetFileDropList()
+  foreach ($file in $files) {
+    if (Test-Path -LiteralPath $file -PathType Leaf) {
+      [Console]::Out.Write($file)
+      break
+    }
+  }
+}
+`;
 
 export function detectClipboardCapabilities(): ClipboardCapabilities {
   const tools = Object.fromEntries(CLIPBOARD_TOOLS.map((tool) => [tool, commandExists(tool)])) as Record<string, boolean>;
+  const windowsClipboard = process.platform === "win32" && findWindowsPowerShellCommand() !== null;
   return {
     platform: process.platform,
     tools,
     supports: {
-      text: Boolean((process.platform === "darwin" && tools["pbpaste"]) || tools["wl-paste"] || tools["xclip"]),
-      image: Boolean(tools["pngpaste"] || tools["wl-paste"] || tools["xclip"]),
-      file: Boolean(tools["wl-paste"]),
+      text: Boolean(windowsClipboard || (process.platform === "darwin" && tools["pbpaste"]) || tools["wl-paste"] || tools["xclip"]),
+      image: Boolean(windowsClipboard || tools["pngpaste"] || tools["wl-paste"] || tools["xclip"]),
+      file: Boolean(windowsClipboard || tools["wl-paste"]),
     },
   };
 }
@@ -32,6 +80,12 @@ interface ClipboardPayload {
 }
 
 async function readClipboardText(): Promise<string | null> {
+  if (process.platform === "win32") {
+    const command = findWindowsPowerShellCommand();
+    if (!command) return null;
+    const result = await runWindowsPowerShellScript(command, WINDOWS_CLIPBOARD_TEXT_SCRIPT);
+    return result.ok && result.stdout.length ? result.stdout : null;
+  }
   if (process.platform === "darwin" && commandExists("pbpaste")) {
     const result = await runCommand("pbpaste");
     return result.ok && result.stdout.length ? result.stdout : null;
@@ -48,6 +102,22 @@ async function readClipboardText(): Promise<string | null> {
 }
 
 async function readClipboardImage(): Promise<{ bytes: Uint8Array; mimeType: string; source: string } | null> {
+  if (process.platform === "win32") {
+    const command = findWindowsPowerShellCommand();
+    if (!command) return null;
+    const dir = mkdtempSync(join(tmpdir(), "clip-clipboard-windows-"));
+    const outputPath = join(dir, "clipboard.png");
+    try {
+      const result = await runWindowsPowerShellScript(command, WINDOWS_CLIPBOARD_IMAGE_SCRIPT, [outputPath]);
+      if (result.ok && existsSync(outputPath)) {
+        const bytes = readFileSync(outputPath);
+        if (bytes.byteLength > 0) return { bytes, mimeType: "image/png", source: `clipboard:${command}` };
+      }
+      return null;
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
   if (commandExists("pngpaste")) {
     const { result, bytes } = await runCommandBytes("pngpaste", ["-"]);
     if (result.ok && bytes.byteLength > 0) return { bytes, mimeType: "image/png", source: "clipboard:pngpaste" };
@@ -81,6 +151,13 @@ function uriListToPath(text: string): string | null {
 }
 
 async function readClipboardFilePath(): Promise<string | null> {
+  if (process.platform === "win32") {
+    const command = findWindowsPowerShellCommand();
+    if (command) {
+      const result = await runWindowsPowerShellScript(command, WINDOWS_CLIPBOARD_FILE_SCRIPT);
+      if (result.ok && result.stdout.trim() && existsSync(result.stdout.trim())) return result.stdout.trim();
+    }
+  }
   if (commandExists("wl-paste")) {
     const result = await runCommand("wl-paste", ["--type", "text/uri-list"]);
     if (result.ok) {
@@ -168,6 +245,9 @@ export async function shareClipboard(
   kind: ClipboardKind = "auto",
   options: ClipClientOptions & { title?: string; baseUrl?: string } = {},
 ): Promise<ClipRecord> {
+  if (process.platform === "win32" && kind !== "auto" && !findWindowsPowerShellCommand()) {
+    throw new Error(`Windows clipboard ${kind} capture requires powershell.exe or pwsh on PATH. Run clip doctor for details.`);
+  }
   const payload = await readClipboardPayload(kind, options.title);
   const store = new ClipStore(options);
   try {

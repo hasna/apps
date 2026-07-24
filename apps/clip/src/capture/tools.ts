@@ -1,4 +1,5 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Buffer } from "node:buffer";
 
@@ -11,19 +12,96 @@ export interface CommandResult {
   ok: boolean;
 }
 
+const WINDOWS_POWERSHELL_COMMANDS = ["powershell.exe", "powershell", "pwsh.exe", "pwsh"] as const;
+
+function isWindowsPlatform(): boolean {
+  return process.platform === "win32";
+}
+
+function pathEnv(): string {
+  return process.env["PATH"] ?? process.env["Path"] ?? process.env["path"] ?? "";
+}
+
+function pathEntries(): string[] {
+  return pathEnv().split(isWindowsPlatform() ? ";" : ":");
+}
+
+function pathext(): string[] {
+  const raw = process.env["PATHEXT"] ?? process.env["PathExt"] ?? process.env["pathext"] ?? ".COM;.EXE;.BAT;.CMD;.PS1";
+  const extensions = raw.split(";").map((extension) => extension.trim()).filter(Boolean);
+  return [...new Set(["", ...extensions, ...extensions.map((extension) => extension.toLowerCase())])];
+}
+
+function hasCommandExtension(command: string): boolean {
+  return /\.[^/\\]+$/.test(command);
+}
+
+function commandCandidates(command: string): string[] {
+  if (!isWindowsPlatform() || hasCommandExtension(command)) return [command];
+  return pathext().map((extension) => `${command}${extension}`);
+}
+
+function isPathLike(command: string): boolean {
+  return command.includes("/") || command.includes("\\");
+}
+
 function resolveCommandPath(command: string): string | null {
-  if (command.includes("/") && existsSync(command)) return command;
-  const path = process.env["PATH"] ?? "";
-  for (const dir of path.split(":")) {
+  if (isPathLike(command)) {
+    for (const candidate of commandCandidates(command)) {
+      if (existsSync(candidate)) return candidate;
+    }
+    return null;
+  }
+  for (const dir of pathEntries()) {
     if (!dir) continue;
-    const candidate = join(dir, command);
-    if (existsSync(candidate)) return candidate;
+    for (const executable of commandCandidates(command)) {
+      const candidate = join(dir, executable);
+      if (existsSync(candidate)) return candidate;
+    }
   }
   return null;
 }
 
 export function commandExists(command: string): boolean {
   return resolveCommandPath(command) !== null;
+}
+
+export function findWindowsPowerShellCommand(): string | null {
+  if (!isWindowsPlatform()) return null;
+  for (const command of WINDOWS_POWERSHELL_COMMANDS) {
+    if (commandExists(command)) return command;
+  }
+  return null;
+}
+
+function windowsPowerShellFileArgs(scriptPath: string, args: string[] = []): string[] {
+  return [
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-Sta",
+    "-File",
+    scriptPath,
+    ...args,
+  ];
+}
+
+export async function runWindowsPowerShellScript(
+  command: string,
+  script: string,
+  args: string[] = [],
+  input?: string | Uint8Array,
+): Promise<CommandResult> {
+  const dir = mkdtempSync(join(tmpdir(), "clip-powershell-"));
+  const scriptPath = join(dir, "script.ps1");
+  writeFileSync(scriptPath, script, "utf8");
+  try {
+    return await runCommand(command, windowsPowerShellFileArgs(scriptPath, args), input);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 async function streamText(stream: ReadableStream<Uint8Array> | null): Promise<string> {
@@ -86,6 +164,23 @@ export async function copyTextToClipboard(text: string): Promise<{ ok: boolean; 
     const result = await runCommand("pbcopy", [], text);
     return result.ok ? { ok: true, command: "pbcopy" } : { ok: false, command: "pbcopy", error: result.stderr };
   }
+  if (process.platform === "win32") {
+    const command = findWindowsPowerShellCommand();
+    if (command) {
+      const script = `
+$ErrorActionPreference = 'Stop'
+$Text = [Console]::In.ReadToEnd()
+if (Get-Command Set-Clipboard -ErrorAction SilentlyContinue) {
+  Set-Clipboard -Value $Text
+} else {
+  Add-Type -AssemblyName System.Windows.Forms
+  [System.Windows.Forms.Clipboard]::SetText($Text)
+}
+`;
+      const result = await runWindowsPowerShellScript(command, script, [], text);
+      return result.ok ? { ok: true, command } : { ok: false, command, error: result.stderr.trim() || result.stdout.trim() };
+    }
+  }
   if (commandExists("wl-copy")) {
     const result = await runCommand("wl-copy", [], text);
     return result.ok ? { ok: true, command: "wl-copy" } : { ok: false, command: "wl-copy", error: result.stderr };
@@ -94,7 +189,7 @@ export async function copyTextToClipboard(text: string): Promise<{ ok: boolean; 
     const result = await runCommand("xclip", ["-selection", "clipboard"], text);
     return result.ok ? { ok: true, command: "xclip" } : { ok: false, command: "xclip", error: result.stderr };
   }
-  return { ok: false, error: "No clipboard copy tool found (pbcopy, wl-copy, or xclip)." };
+  return { ok: false, error: "No clipboard copy tool found (pbcopy, PowerShell, wl-copy, or xclip)." };
 }
 
 export async function openLocalTarget(target: string): Promise<{ ok: boolean; command?: string; error?: string }> {

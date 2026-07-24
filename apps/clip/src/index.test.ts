@@ -39,7 +39,7 @@ describe("public SDK", () => {
       const copied = await client.copyLink(record.slug);
       expect(copied).toMatchObject({
         copied: false,
-        error: "No clipboard copy tool found (pbcopy, wl-copy, or xclip).",
+        error: "No clipboard copy tool found (pbcopy, PowerShell, wl-copy, or xclip).",
       });
       expect(copied.record.shareUrl).toBe(`http://clip.test/s/${record.slug}`);
 

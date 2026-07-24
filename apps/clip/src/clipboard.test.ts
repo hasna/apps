@@ -19,6 +19,51 @@ function overridePlatform(platform: NodeJS.Platform): () => void {
   return () => Object.defineProperty(process, "platform", { configurable: true, value: previous });
 }
 
+async function withPlatform<T>(platform: NodeJS.Platform, callback: () => Promise<T>): Promise<T> {
+  const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+  Object.defineProperty(process, "platform", { value: platform, configurable: true });
+  try {
+    return await callback();
+  } finally {
+    if (descriptor) Object.defineProperty(process, "platform", descriptor);
+  }
+}
+
+function restorePath(previousPath: string | undefined): void {
+  if (previousPath === undefined) {
+    delete process.env["PATH"];
+  } else {
+    process.env["PATH"] = previousPath;
+  }
+}
+
+function writeFakeWindowsClipboard(binDir: string): void {
+  const powershell = join(binDir, "powershell.exe");
+  writeFileSync(powershell, `#!/usr/bin/env bun
+const args = process.argv.slice(2);
+const fileIndex = args.indexOf("-File");
+if (fileIndex < 0) process.exit(6);
+const command = await Bun.file(args[fileIndex + 1]).text();
+const scriptArgs = args.slice(fileIndex + 2);
+if (command.includes("ContainsText")) {
+  process.stdout.write("windows clipboard text");
+  process.exit(0);
+}
+if (command.includes("ContainsImage")) {
+  const outputPath = scriptArgs.find((arg) => arg.endsWith(".png"));
+  if (!outputPath) process.exit(5);
+  await Bun.write(outputPath, "fake-windows-clipboard-image");
+  process.exit(0);
+}
+if (command.includes("ContainsFileDropList")) {
+  process.exit(0);
+}
+process.stderr.write("unexpected PowerShell script");
+process.exit(9);
+`);
+  chmodSync(powershell, 0o755);
+}
+
 describe("clipboard sharing", () => {
   it("reads image bytes from pngpaste when that advertised capability is available", async () => {
     const dir = mkdtempSync(join(tmpdir(), "clip-clipboard-"));
@@ -310,6 +355,101 @@ describe("clipboard sharing", () => {
       await expect(shareClipboard("auto", { dbPath: ":memory:" })).rejects.toThrow("could not be read");
     } finally {
       restoreEnv("PATH", previousPath);
+    }
+  });
+
+  it("reports Windows clipboard capabilities when PowerShell is available", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clip-clipboard-windows-capability-"));
+    const previousPath = process.env["PATH"];
+    try {
+      const binDir = join(dir, "bin");
+      mkdirSync(binDir);
+      writeFakeWindowsClipboard(binDir);
+      process.env["PATH"] = binDir;
+
+      await withPlatform("win32", async () => {
+        const capabilities = detectClipboardCapabilities();
+
+        expect(capabilities.platform).toBe("win32");
+        expect(capabilities.tools["powershell.exe"]).toBe(true);
+        expect(capabilities.supports.text).toBe(true);
+        expect(capabilities.supports.image).toBe(true);
+        expect(capabilities.supports.file).toBe(true);
+      });
+    } finally {
+      restorePath(previousPath);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("shares Windows clipboard text through PowerShell", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clip-clipboard-windows-text-"));
+    const previousPath = process.env["PATH"];
+    try {
+      const binDir = join(dir, "bin");
+      mkdirSync(binDir);
+      writeFakeWindowsClipboard(binDir);
+      process.env["PATH"] = binDir;
+
+      await withPlatform("win32", async () => {
+        const record = await shareClipboard("text", {
+          homeDir: join(dir, "home"),
+          baseUrl: "http://clip.test",
+        });
+
+        expect(record.kind).toBe("text");
+        expect(record.source).toBe("clipboard:text");
+        expect(record.text).toBe("windows clipboard text");
+        expect(record.shareUrl).toStartWith("http://clip.test/s/");
+      });
+    } finally {
+      restorePath(previousPath);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("shares Windows clipboard images through PowerShell", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clip-clipboard-windows-image-"));
+    const previousPath = process.env["PATH"];
+    try {
+      const binDir = join(dir, "bin");
+      mkdirSync(binDir);
+      writeFakeWindowsClipboard(binDir);
+      process.env["PATH"] = binDir;
+
+      await withPlatform("win32", async () => {
+        const record = await shareClipboard("image", {
+          homeDir: join(dir, "home"),
+          baseUrl: "http://clip.test",
+        });
+
+        expect(record.kind).toBe("clipboard-image");
+        expect(record.source).toBe("clipboard:powershell.exe");
+        expect(record.sizeBytes).toBe("fake-windows-clipboard-image".length);
+        expect(record.shareUrl).toStartWith("http://clip.test/s/");
+      });
+    } finally {
+      restorePath(previousPath);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports absent Windows clipboard tools clearly", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clip-clipboard-windows-absent-"));
+    const previousPath = process.env["PATH"];
+    try {
+      process.env["PATH"] = dir;
+
+      await withPlatform("win32", async () => {
+        const capabilities = detectClipboardCapabilities();
+
+        expect(capabilities.supports.text).toBe(false);
+        expect(capabilities.supports.image).toBe(false);
+        await expect(shareClipboard("text", { homeDir: join(dir, "home") })).rejects.toThrow("requires powershell.exe or pwsh");
+      });
+    } finally {
+      restorePath(previousPath);
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });
