@@ -266,4 +266,20 @@ describe("task route state", () => {
     expect(staleState.gates.workflow_pointer_terminal).toBe(true);
     expect(staleState.route_class).toBe("terminal_requeue_needed");
   });
+
+  test("does not dedupe from workflow_state without a run or invocation pointer", () => {
+    const task = createTask({ title: "State only", tags: ["auto:route"] });
+    setTaskWorkflowPointers(task.id, {
+      workflow_state: "working",
+      actor: "route-test",
+    });
+
+    const state = getTaskRouteState(task.id);
+
+    expect(state.eligible).toBe(true);
+    expect(state.evidence.workflow_state).toBe("working");
+    expect(state.gates.workflow_pointer_active).toBe(false);
+    expect(state.gates.workflow_pointer_terminal).toBe(false);
+    expect(state.route_class).toBe("eligible");
+  });
 });

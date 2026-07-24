@@ -249,9 +249,7 @@ export function getTaskRouteState(
 
   const pointers = workflowPointersFromMetadata(task.metadata);
   const workflowState = (pointers.workflow_state ?? "").trim().toLowerCase();
-  const hasWorkflowPointer = Boolean(
-    pointers.current_workflow_invocation_id || pointers.current_run_id || workflowState,
-  );
+  const hasWorkflowPointer = Boolean(pointers.current_workflow_invocation_id || pointers.current_run_id);
   const workflowPointerTerminal = hasWorkflowPointer && TERMINAL_WORKFLOW_STATES.has(workflowState);
   const workflowPointerActive = hasWorkflowPointer && !workflowPointerTerminal;
 

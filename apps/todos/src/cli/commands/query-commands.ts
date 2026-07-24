@@ -1817,7 +1817,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
           return;
         }
         const { getTaskRouteState } = await import("../../lib/task-routing.js");
-        console.log(JSON.stringify(limited.map((task) => ({ ...task, route_state: getTaskRouteState(task, db) }))));
+        console.log(JSON.stringify(limited.map((task) => ({ ...task, route_state: getTaskRouteState(task, db, { verifyProjectRoot: true }) }))));
         return;
       }
       if (limited.length === 0) {

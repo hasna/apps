@@ -278,6 +278,30 @@ describe("task route source discovery", () => {
     expect(result.candidates.map((candidate) => candidate.title)).toEqual(["Alpha root task", "Zeta root task"]);
   });
 
+  it("verifies project roots by default for drain-facing source discovery", () => {
+    const missingRoot = join(root, "missing-working-dir");
+    const store = seedStore("repo-missing-root", {
+      title: "Missing project root",
+      tags: ["auto:route"],
+      metadata: {},
+      workingDir: missingRoot,
+    });
+
+    const verified = discoverTaskRouteSources({ sourceStores: [store] });
+    const [candidate] = verified.candidates;
+
+    expect(candidate?.route_state.eligible).toBe(false);
+    expect(candidate?.route_state.gates.missing_project_root).toBe(true);
+    expect(candidate?.route_state.reasons).toContain("missing_project_root");
+    expect(candidate?.route_state.route_class).toBe("missing_metadata");
+    expect(candidate?.route_state.evidence.project_root_verified).toBe(true);
+    expect(candidate?.route_state.evidence.project_root_exists).toBe(false);
+
+    const unverified = discoverTaskRouteSources({ sourceStores: [store], verifyProjectRoot: false });
+    expect(unverified.candidates[0]?.route_state.eligible).toBe(true);
+    expect(unverified.candidates[0]?.route_state.evidence.project_root_verified).toBe(false);
+  });
+
   it("treats auto:route as authorization but never overrides explicit deny gates", () => {
     const tagOnlyStore = seedStore("repo-auto-intent", {
       title: "Tag intent only",

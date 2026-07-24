@@ -17,6 +17,8 @@ export interface DiscoverTaskRouteSourcesInput {
   include?: string[];
   exclude?: string[];
   limit?: number;
+  /** Defaults true because source discovery is a drain-facing admission surface. */
+  verifyProjectRoot?: boolean;
 }
 
 export type TaskRouteSourceStoreStatus = "ok" | "missing" | "error";
@@ -325,8 +327,8 @@ function discoveryMetadata(metadata: Record<string, unknown>): Record<string, un
   return redactValue(boundedMetadataValue(metadata)) as Record<string, unknown>;
 }
 
-function sourceCandidate(ref: SourceStoreRef, task: Task, db: Database): TaskRouteSourceCandidate {
-  const routeState = getTaskRouteState(task, db);
+function sourceCandidate(ref: SourceStoreRef, task: Task, db: Database, verifyProjectRoot: boolean): TaskRouteSourceCandidate {
+  const routeState = getTaskRouteState(task, db, { verifyProjectRoot });
   const autoRoute = task.tags.includes("auto:route") || task.tags.includes("route:enabled");
   return {
     source_store_id: ref.source_store_id,
@@ -376,6 +378,7 @@ export function discoverTaskRouteSources(input: DiscoverTaskRouteSourcesInput): 
   const sourceRoots = (input.sourceRoots ?? []).map(normalizePath).sort();
   const sourceStores = (input.sourceStores ?? []).map(normalizePath).sort();
   const limit = Number.isFinite(input.limit ?? NaN) && (input.limit ?? 0) >= 0 ? Math.floor(input.limit ?? 0) : null;
+  const verifyProjectRoot = input.verifyProjectRoot !== false;
   const collected = collectStoreRefs(input);
   const stores: TaskRouteSourceStoreResult[] = [];
   const errors: TaskRouteSourceError[] = [...collected.errors];
@@ -393,7 +396,7 @@ export function discoverTaskRouteSources(input: DiscoverTaskRouteSourcesInput): 
       totalCandidateCount += readyTasks.length;
       const remaining = limit === null ? readyTasks.length : Math.max(0, limit - candidates.length);
       const selectedTasks = limit === null ? readyTasks : readyTasks.slice(0, remaining);
-      candidates.push(...selectedTasks.map((task) => sourceCandidate(ref, task, db!)));
+      candidates.push(...selectedTasks.map((task) => sourceCandidate(ref, task, db!, verifyProjectRoot)));
       stores.push({
         ...ref,
         status: "ok",
