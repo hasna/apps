@@ -4,32 +4,54 @@ All notable changes to `@hasna/projects` are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.90]
+
+### Reconciled
+
+- **`main` reconciled with the published npm line.** `main` (0.1.84) had
+  diverged from the deployed `@hasna/projects@0.1.89`: the published
+  `ProjectStore` seam refactor (0.1.85–0.1.89 — unify the registry behind one
+  `ProjectStore` and route all CLI + MCP registry / status / dashboard /
+  GitHub-import / coordination / cloud-api writes and the prompt-agent through
+  the Store to kill split-brain, plus the production Docker prod-deps image fix)
+  was live on npm but never landed on `main`, while a set of `main`-only
+  CLI/UX fixes had never been published. This release merges the published tag
+  into `main`, preserving both histories, so npm and `main` agree again.
+  Overlapping storage/backend/canvas surfaces were reconciled in favour of the
+  published `ProjectStore` seam while keeping the `main`-only behaviour: the
+  canvas `upsert`/`compose` CLI + MCP tools and the `assertLocalOnlyWrite`
+  guard now resolve targets, read data models, record events and inspect the
+  app store through the Store instead of the removed direct-DB / `http/backend`
+  helpers.
+
+### Fixed (previously unpublished on `main`)
+
+- `projects sessions` with no target reports recent project start sessions
+  aggregated across all projects instead of failing with `Project not found`.
+- `projects events record` fails fast with a clear local-only message in
+  api/cloud mode instead of silently writing local sqlite or leaking a raw
+  upstream `404` for `POST /projects/:id/events`.
+- Generic project canvas blocks + canvas geometry hardening, dashboard render
+  manifest imports and linked-canvas surfacing, the dashboard Todos provider
+  link, subcommand `--help`/`-h` routing to commander, shell completion derived
+  from the live CLI surface, and `projects create --dry-run` no-persist
+  semantics in cloud mode.
+
+## [0.1.89]
 
 ### Fixed
 
-- `projects sessions` with no target now reports recent project start sessions
-  aggregated across all projects instead of failing with
-  `Project not found` when the current directory is not a registered project.
-  The `[target]` argument stays optional as documented.
-- `projects events record` now fails fast with a clear
-  `Recording project audit events is a local-only operation and is not available
-  in api/cloud mode.` message when a cloud/self-hosted backend is active, instead
-  of silently persisting the event to the local sqlite store (or leaking a raw
-  upstream `404` for `POST /projects/:id/events`, which the `/v1` API does not
-  expose). Recording custom audit events is a machine-local write; the cloud API
-  serves only `GET /projects/:id/events`. This makes the command consistent with
-  the sibling registry commands' cloud awareness.
-
-### Added
-
-- `listStartedWorkspaceEvents()` DB helper and `buildRecentSessionsPayload()`
-  render builder to surface `started` events across every project in one query.
-
-### Tests
-
-- Added regression coverage for the no-target `projects sessions` CLI path and
-  the cross-project recent-sessions render payload.
+- **Prompt-agent cloud-write split-brain**: in api/cloud mode the LLM
+  prompt-agent (`projects agent "..."` / MCP `projects_agent_prompt`) now
+  routes every shared-registry mutation through the `ProjectStore` (cloud
+  HTTP `<url>/v1`) instead of writing directly to local sqlite. Previously
+  only `projects_create` used the store; `update`, `archive`, `unarchive`,
+  `delete`, `tag`, `untag`, `integration_unlink` and `event_record` wrote to
+  the local island while the project lived in the cloud, and target
+  resolution read local. The per-project local-only sub-resources
+  (`agents_assign`, `locations_add`) now surface the store's
+  `LocalOnlyOperationError` as a clean tool error in cloud mode rather than
+  silently writing local sqlite. Local mode behaviour is unchanged.
 
 ## [0.1.84] - 2026-07-07
 

@@ -19,7 +19,7 @@ import {
   type ProjectCanvas,
 } from "../db/project-store.js";
 import type { JsonObject, Workspace } from "../types/workspace.js";
-import { resolveRegisteredProjectTargetOrThrow } from "./project-resolver.js";
+import { resolveProjectStore } from "../store/project-store.js";
 import {
   buildProjectCanvasPayload,
   validateProjectsRenderSpec,
@@ -74,6 +74,12 @@ export interface BuildProjectDashboardSnapshotOptions {
   generatedAt?: string;
   cwd?: string;
   initialize?: boolean;
+  /**
+   * Already-resolved project. When omitted the target is resolved through the
+   * active Store (local sqlite or the cloud registry) so cloud-only projects
+   * resolve too, instead of always hitting local sqlite.
+   */
+  project?: Workspace;
 }
 
 export interface ProjectDashboardPaths {
@@ -349,10 +355,8 @@ export async function buildProjectDashboardSnapshot(
   target: string | undefined,
   options: BuildProjectDashboardSnapshotOptions = {},
 ): Promise<ProjectSnapshot> {
-  const resolution = resolveRegisteredProjectTargetOrThrow(target, {
-    db: options.db,
-  });
-  const project = resolution.project;
+  const project = options.project
+    ?? (await resolveProjectStore().resolveTarget(target, { db: options.db }));
   const generatedAt = options.generatedAt ?? new Date().toISOString();
   const paths = options.initialize
     ? ensureProjectDashboardStructure(project, generatedAt)
@@ -687,23 +691,22 @@ export async function buildProjectDashboard(
   target: string | undefined,
   options: BuildProjectDashboardSnapshotOptions = {},
 ) {
-  const resolution = resolveRegisteredProjectTargetOrThrow(target, {
-    db: options.db,
-  });
-  const snapshot = await buildProjectDashboardSnapshot(target, options);
-  const manifest = loadProjectDashboardRenderManifest(resolution.project);
-  const linkedCanvases = listExistingProjectCanvases(resolution.project);
-  const render = buildProjectDashboardRender(resolution.project, snapshot, {
+  const project = options.project
+    ?? (await resolveProjectStore().resolveTarget(target, { db: options.db }));
+  const snapshot = await buildProjectDashboardSnapshot(target, { ...options, project });
+  const manifest = loadProjectDashboardRenderManifest(project);
+  const linkedCanvases = listExistingProjectCanvases(project);
+  const render = buildProjectDashboardRender(project, snapshot, {
     imports: manifest?.imports ?? [],
     linkedCanvases,
   });
   return {
-    project: resolution.project,
+    project,
     snapshot,
     render,
     manifest,
     linkedCanvases,
-    paths: projectDashboardPaths(resolution.project),
+    paths: projectDashboardPaths(project),
   };
 }
 

@@ -16,6 +16,7 @@ import {
   isProjectDirectory,
   isProjectPathLike,
   normalizeProjectPath,
+  readProjectMarker,
   resolveRegisteredProjectTarget,
 } from "./project-resolver.js";
 import {
@@ -25,6 +26,7 @@ import {
   type ProjectChannelEnsureResult,
 } from "./project-channel.js";
 import { importWorkspace, planWorkspaceImport, type WorkspaceImportPreview } from "./workspace-import.js";
+import { resolveProjectStore } from "../store/project-store.js";
 import { applyWorkspaceTmux, tmuxProfileToSpec, type WorkspaceTmuxResult, type WorkspaceTmuxWindowSpec } from "./workspace-runtime.js";
 import { attachSession } from "./tmux.js";
 import { buildProjectStartRender, PROJECT_RENDER_SCHEMA_VERSION } from "./project-render.js";
@@ -324,16 +326,59 @@ export async function resolveProjectStartTarget(
   options: Pick<ProjectStartOptions, "register" | "dryRun" | "agentId" | "db" | "importTags" | "importMetadata" | "source" | "auditCommand"> = {},
 ): Promise<{ project: Workspace; resolution: ProjectStartResolution }> {
   const normalizedTarget = target?.trim() || ".";
-  const existing = resolveRegisteredProjectTarget(normalizedTarget, { db: options.db });
-  if (existing) {
-    return {
-      project: existing.project,
-      resolution: {
-        target: existing.target,
-        source: existing.source,
-        registered: true,
-      },
-    };
+  const store = resolveProjectStore();
+
+  // Resolve an already-registered project through the active Store. In api/cloud
+  // mode this resolves the target by id/slug against the shared cloud registry
+  // (so cloud-only projects resolve). In local mode we keep the richer on-disk
+  // path/marker resolution, which is a machine-local convenience that the cloud
+  // registry does not model.
+  if (store.mode === "local") {
+    const existing = resolveRegisteredProjectTarget(normalizedTarget, { db: options.db });
+    if (existing) {
+      return {
+        project: existing.project,
+        resolution: {
+          target: existing.target,
+          source: existing.source,
+          registered: true,
+        },
+      };
+    }
+  } else {
+    const project = await store.getProject(normalizedTarget);
+    if (project) {
+      return {
+        project,
+        resolution: {
+          target: normalizedTarget,
+          source: "id-or-slug",
+          registered: true,
+        },
+      };
+    }
+    // Cloud registry can't resolve by path, but the on-disk marker is a
+    // machine-local pointer to a registered project. Read it and resolve the
+    // referenced id/slug through the Store so `.`/path targets (e.g. running
+    // `projects status` from a project dir) work in api mode too.
+    const markerPath = normalizeProjectPath(normalizedTarget);
+    if (isProjectPathLike(normalizedTarget) || isProjectDirectory(markerPath)) {
+      const marker = readProjectMarker(markerPath);
+      for (const idOrSlug of [marker?.id, marker?.slug]) {
+        if (!idOrSlug) continue;
+        const referenced = await store.getProject(idOrSlug);
+        if (referenced) {
+          return {
+            project: referenced,
+            resolution: {
+              target: normalizedTarget,
+              source: "marker",
+              registered: true,
+            },
+          };
+        }
+      }
+    }
   }
 
   const path = normalizeProjectPath(normalizedTarget);
@@ -343,11 +388,10 @@ export async function resolveProjectStartTarget(
     }
 
     if (options.dryRun) {
-      const preview = planWorkspaceImport(path, {
+      const preview = await planWorkspaceImport(store, path, {
         tags: options.importTags,
         metadata: options.importMetadata,
         agent_id: options.agentId,
-        db: options.db,
       });
       return {
         project: previewToWorkspace(preview),
@@ -355,13 +399,12 @@ export async function resolveProjectStartTarget(
       };
     }
 
-    const imported = await importWorkspace(path, {
+    const imported = await importWorkspace(store, path, {
       tags: options.importTags,
       metadata: options.importMetadata,
       agent_id: options.agentId,
       source: options.source,
       command: options.auditCommand,
-      db: options.db,
     });
     if (imported.workspace) {
       return {
