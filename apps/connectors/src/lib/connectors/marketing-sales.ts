@@ -444,6 +444,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["customer success", "churn", "health score", "crm", "saas"],
   },
   {
+    name: "trustpilot",
+    displayName: "Trustpilot",
+    description: "Customer review and reputation management platform for collecting and responding to reviews",
+    category: "Marketing & Sales",
+    tags: ["reviews", "reputation", "customer-feedback", "invitations"],
+  },
+  {
     name: "unbounce",
     displayName: "Unbounce",
     description: "Landing page builder and conversion optimization",
