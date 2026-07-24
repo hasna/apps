@@ -6,6 +6,7 @@
   "bin": {
     "personalnotes": "bin/personalnotes.mjs",
     "personalnotes-mcp": "bin/personalnotes-mcp.mjs",
+    "personalnotes-serve": "bin/personalnotes-serve.mjs",
     "hasna-notes": "bin/hasna-notes.mjs",
     "hasna-notes-mcp": "bin/hasna-notes-mcp.mjs"
   },
@@ -20,6 +21,12 @@
     "sync",
     "cloud/index.mjs",
     "mcp/personalnotes-mcp.mjs",
+    "server/index.mjs",
+    "server/app.mjs",
+    "server/auth.mjs",
+    "server/db.mjs",
+    "server/http.mjs",
+    "server/notes.mjs",
     "tools/notes-agent.mjs",
     "tools/notes-lib.mjs",
     "README.md",
@@ -42,15 +49,18 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/hasna/open-personalnotes.git"
+    "url": "https://github.com/hasna/notes.git"
   },
   "bugs": {
-    "url": "https://github.com/hasna/open-personalnotes/issues"
+    "url": "https://github.com/hasna/notes/issues"
   },
-  "homepage": "https://github.com/hasna/open-personalnotes#readme",
+  "homepage": "https://github.com/hasna/notes#readme",
   "license": "MIT",
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "hono": "^4.6.0"
   },
   "devDependencies": {
     "@types/bun": "1.2.4"
