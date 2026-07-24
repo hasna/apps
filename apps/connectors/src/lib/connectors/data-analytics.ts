@@ -87,6 +87,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["analytics", "feature-flags"],
   },
   {
+    name: "userflow",
+    displayName: "Userflow",
+    description: "Product onboarding — users, groups, flows, checklists, surveys, features, magic links, webhooks",
+    category: "Data & Analytics",
+    tags: ["onboarding", "product", "analytics"],
+  },
+  {
     name: "clearbit",
     displayName: "Clearbit",
     description: "Business intelligence and data enrichment",
