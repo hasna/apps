@@ -4,7 +4,7 @@
  * we assert the exact method + path + body it emits without a live server.
  */
 import { describe, expect, it } from "bun:test";
-import { createHasnaStorageClient } from "@hasna/contracts/client/storage";
+import { createHasnaStorageClient, resolveStorageClient } from "@hasna/contracts/client/storage";
 import { HasnaHttpError } from "@hasna/contracts/client";
 import type { HasnaHttpTransport } from "@hasna/contracts/client/transport";
 import { ApiStore } from "./api-store.js";
@@ -215,5 +215,66 @@ describe("ApiStore route mapping", () => {
     expect(find("GET", "/evidence/assets/asset_1")).toBeDefined();
     expect(find("GET", "/evidence/assets/asset_1/links")).toBeDefined();
     expect(find("GET", "/evidence/assets/asset_1/access-events")).toBeDefined();
+  });
+});
+
+describe("ApiStore evidence guard (route not deployed)", () => {
+  // Build an ApiStore whose client uses the REAL @hasna/contracts HTTP transport
+  // (via a fake `fetchImpl`), so the thrown error is the transport's own
+  // `HasnaHttpError` — the exact cross-bundle instance the previous tests never
+  // exercised because they hand-constructed the error from the sibling bundle.
+  function storeWithFetch(fetchImpl: (url: string, init?: { method?: string }) => Response): ApiStore {
+    const resolved = resolveStorageClient(
+      "files",
+      { HASNA_FILES_API_URL: "https://files.hasna.xyz", HASNA_FILES_API_KEY: "k_test" },
+      { fetchImpl: fetchImpl as unknown as typeof fetch },
+    );
+    if (resolved.transport !== "cloud-http") throw new Error("expected cloud-http transport");
+    return new ApiStore(resolved.client);
+  }
+
+  const routeMissing = (): Response => new Response(JSON.stringify({ error: "Not found" }), { status: 404 });
+  const NO_LEAK = /Hasna cloud request failed|-> 404|\/evidence\//;
+
+  it("surfaces an actionable guard instead of a raw 404 leak for reads", async () => {
+    const store = storeWithFetch(routeMissing);
+    for (const call of [
+      () => store.listEvidenceAssets({ org_id: "org_1" }),
+      () => store.getEvidenceAsset("asset_0123456789abcdef"),
+      () => store.listEvidenceLinks("asset_0123456789abcdef"),
+      () => store.listEvidenceAccessEvents("asset_0123456789abcdef"),
+    ]) {
+      const err = await call().then(() => null, (e: unknown) => e as Error);
+      expect(err).toBeInstanceOf(Error);
+      expect(err!.message).toContain("Evidence API is not available on this files deployment");
+      expect(err!.message).not.toMatch(NO_LEAK);
+    }
+  });
+
+  it("surfaces the guard for create/verify/link/sign writes too", async () => {
+    const store = storeWithFetch(routeMissing);
+    for (const call of [
+      () => store.createEvidenceUploadIntent({
+        org_id: "org_1", app: "iapp-accounting", kind: "receipt",
+        original_name: "r.pdf", size: 10, checksum: "a".repeat(64),
+      }),
+      () => store.verifyEvidenceAsset("asset_0123456789abcdef"),
+      () => store.signEvidenceDownload({ asset_id: "asset_0123456789abcdef" }),
+      () => store.linkEvidenceAsset({
+        asset_id: "asset_0123456789abcdef", org_id: "org_1", app: "iapp-accounting",
+        source_type: "invoice", source_id: "inv_1", kind: "supporting_document",
+      }),
+    ]) {
+      const err = await call().then(() => null, (e: unknown) => e as Error);
+      expect(err).toBeInstanceOf(Error);
+      expect(err!.message).toContain("Evidence API is not available on this files deployment");
+      expect(err!.message).not.toMatch(NO_LEAK);
+    }
+  });
+
+  it("keeps record-level not-found semantics when the route IS deployed", async () => {
+    // Route present, asset absent: the service answers 404 with a record message.
+    const store = storeWithFetch(() => new Response(JSON.stringify({ error: "Evidence asset not found" }), { status: 404 }));
+    expect(await store.getEvidenceAsset("asset_0123456789abcdef")).toBeNull();
   });
 });

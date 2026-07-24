@@ -15,7 +15,6 @@ import { basename } from "path";
 import { lookup as mimeLookup } from "mime-types";
 import { z } from "zod";
 import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
-import { HasnaHttpError } from "@hasna/contracts/client";
 import { sha256Buffer } from "../lib/hasher.js";
 import type {
   Agent,
@@ -119,12 +118,45 @@ const createEvidenceUploadResultSchema = z.object({
   intent: uploadIntentSchema,
 }).strict();
 
+/** The stable public shape of the transport's `HasnaHttpError`. */
+interface TransportHttpError {
+  status: number;
+  path: string;
+  body: unknown;
+}
+
+/**
+ * Duck-typed recogniser for the storage-client transport's `HasnaHttpError`.
+ *
+ * `HasnaHttpError` is bundled *separately* into `@hasna/contracts/client` and
+ * `@hasna/contracts/client/storage`. The HTTP transport that actually issues
+ * requests (and throws) lives in the `storage` bundle, so the error it raises is
+ * an instance of the `storage` copy of the class — NOT the `client` copy. Any
+ * `error instanceof HasnaHttpError` check against the `client` import is
+ * therefore always `false`, which used to let every 404 (and any other HTTP
+ * error) escape the `orNull`/`deletedOk` guards and leak the raw
+ * `Hasna cloud request failed: <METHOD> <path> -> <status>` message to callers.
+ * Matching on the stable public shape avoids the cross-bundle identity trap.
+ */
+function asHttpError(error: unknown): TransportHttpError | null {
+  if (
+    error !== null &&
+    typeof error === "object" &&
+    (error as { name?: unknown }).name === "HasnaHttpError" &&
+    typeof (error as { status?: unknown }).status === "number"
+  ) {
+    const e = error as { status: number; path?: unknown; body?: unknown };
+    return { status: e.status, path: typeof e.path === "string" ? e.path : "", body: e.body };
+  }
+  return null;
+}
+
 /** Map a 404 from a raw transport route to `null` (matches storage-client get). */
 async function orNull<T>(p: Promise<T>): Promise<T | null> {
   try {
     return await p;
   } catch (e) {
-    if (e instanceof HasnaHttpError && e.status === 404) return null;
+    if (asHttpError(e)?.status === 404) return null;
     throw e;
   }
 }
@@ -141,9 +173,40 @@ async function deletedOk(p: Promise<unknown>): Promise<boolean> {
     await p;
     return true;
   } catch (e) {
-    if (e instanceof HasnaHttpError && e.status === 404) return false;
+    if (asHttpError(e)?.status === 404) return false;
     throw e;
   }
+}
+
+/**
+ * Actionable guard shown when the whole `/evidence` surface 404s because the
+ * deployment's server predates the evidence routes — instead of leaking the raw
+ * transport diagnostic for every evidence subcommand.
+ */
+const EVIDENCE_API_UNAVAILABLE_MESSAGE =
+  "Evidence API is not available on this files deployment: the server does not expose the /evidence routes " +
+  "(it is likely running an older files service). Upgrade the self-hosted files service to a build that serves " +
+  "/v1/evidence, or unset HASNA_FILES_STORAGE_MODE and the HASNA_FILES_API_* credentials to use the on-box store.";
+
+/** Read the `{ error: string }` message the /v1 service returns on failures. */
+function bodyErrorText(body: unknown): string {
+  if (body !== null && typeof body === "object" && typeof (body as { error?: unknown }).error === "string") {
+    return (body as { error: string }).error;
+  }
+  return typeof body === "string" ? body : "";
+}
+
+/**
+ * Distinguish "the `/evidence` route is not deployed" (the router's generic
+ * `Not found` fall-through) from a genuine record-level 404 such as
+ * `Evidence asset not found`, so the guard never masks a real not-found result.
+ */
+function isEvidenceRouteMissing(http: TransportHttpError): boolean {
+  return (
+    http.status === 404 &&
+    /(^|\/)evidence(\/|\?|$)/.test(http.path) &&
+    bodyErrorText(http.body).trim().toLowerCase() === "not found"
+  );
 }
 
 export class ApiStore implements FilesStore {
@@ -383,6 +446,19 @@ export class ApiStore implements FilesStore {
   // Storage (S3 bucket/creds) is owned by the self-hosted service; the `storage`
   // overrides are intentionally NOT forwarded — a thin api client can never
   // redirect the shared vault. Bytes go to the server-signed URL directly.
+
+  /**
+   * Turn a failed evidence transport call into a caller-safe error: an
+   * actionable guard when the whole route surface is missing, otherwise the
+   * existing sanitized transport error. Every evidence method funnels through
+   * this so no subcommand leaks the raw `... -> 404` diagnostic.
+   */
+  private mapEvidenceError(error: unknown): Error {
+    const http = asHttpError(error);
+    if (http && isEvidenceRouteMissing(http)) return new Error(EVIDENCE_API_UNAVAILABLE_MESSAGE);
+    return sanitizeEvidenceTransportError(error);
+  }
+
   async createEvidenceUploadIntent(input: CreateEvidenceUploadInput, _storage?: EvidenceStorageOptions): Promise<EvidenceUploadResult> {
     try {
       if (!isValidRequestedUploadLifetime(input.expires_in_seconds)) {
@@ -392,7 +468,7 @@ export class ApiStore implements FilesStore {
       const raw = await this.http.post<unknown>("/evidence/upload-intents", input);
       return parseCreateEvidenceUploadResult(raw, input, requestStartedAt, Date.now());
     } catch (error) {
-      throw sanitizeEvidenceTransportError(error);
+      throw this.mapEvidenceError(error);
     }
   }
   async uploadEvidenceFile(input: UploadEvidenceFileInput, _storage?: EvidenceStorageOptions): Promise<EvidenceUploadResult> {
@@ -435,7 +511,7 @@ export class ApiStore implements FilesStore {
         },
       });
     } catch (error) {
-      throw sanitizeEvidenceTransportError(error);
+      throw this.mapEvidenceError(error);
     }
   }
   async completeEvidenceUpload(intentId: string, _storage?: EvidenceStorageOptions): Promise<FileAsset> {
@@ -443,42 +519,75 @@ export class ApiStore implements FilesStore {
       const raw = await this.http.post<unknown>(`/evidence/upload-intents/${seg(intentId)}/complete`);
       return parseCompletedEvidenceAsset(raw);
     } catch (error) {
-      throw sanitizeEvidenceTransportError(error);
+      throw this.mapEvidenceError(error);
     }
   }
   async linkEvidenceAsset(input: CreateFileLinkInput): Promise<FileLink> {
     const { asset_id, ...rest } = input;
-    return this.http.post<FileLink>(`/evidence/assets/${seg(asset_id)}/links`, rest);
+    try {
+      return await this.http.post<FileLink>(`/evidence/assets/${seg(asset_id)}/links`, rest);
+    } catch (error) {
+      throw this.mapEvidenceError(error);
+    }
   }
   async signEvidenceDownload(input: SignEvidenceDownloadInput, _storage?: EvidenceStorageOptions): Promise<EvidenceDownloadGrant> {
     const { asset_id, ...rest } = input;
-    return this.http.post<EvidenceDownloadGrant>(`/evidence/assets/${seg(asset_id)}/sign-download`, rest);
+    try {
+      return await this.http.post<EvidenceDownloadGrant>(`/evidence/assets/${seg(asset_id)}/sign-download`, rest);
+    } catch (error) {
+      throw this.mapEvidenceError(error);
+    }
   }
   async verifyEvidenceAsset(assetId: string, _storage?: EvidenceStorageOptions): Promise<EvidenceVerifyResult> {
-    return this.http.post<EvidenceVerifyResult>(`/evidence/assets/${seg(assetId)}/verify`);
+    try {
+      return await this.http.post<EvidenceVerifyResult>(`/evidence/assets/${seg(assetId)}/verify`);
+    } catch (error) {
+      throw this.mapEvidenceError(error);
+    }
   }
   async listEvidenceAssets(opts: ListFileAssetsOptions = {}): Promise<FileAsset[]> {
-    return this.http.get<FileAsset[]>("/evidence/assets", {
-      query: {
-        org_id: opts.org_id,
-        company_id: opts.company_id,
-        app: opts.app,
-        kind: opts.kind,
-        status: opts.status,
-        checksum: opts.checksum,
-        limit: opts.limit,
-        offset: opts.offset,
-      },
-    });
+    try {
+      return await this.http.get<FileAsset[]>("/evidence/assets", {
+        query: {
+          org_id: opts.org_id,
+          company_id: opts.company_id,
+          app: opts.app,
+          kind: opts.kind,
+          status: opts.status,
+          checksum: opts.checksum,
+          limit: opts.limit,
+          offset: opts.offset,
+        },
+      });
+    } catch (error) {
+      throw this.mapEvidenceError(error);
+    }
   }
   async getEvidenceAsset(id: string): Promise<FileAsset | null> {
-    return orNull(this.http.get<FileAsset>(`/evidence/assets/${seg(id)}`));
+    try {
+      return await this.http.get<FileAsset>(`/evidence/assets/${seg(id)}`);
+    } catch (error) {
+      const http = asHttpError(error);
+      // A missing route must surface the guard; a genuine record-level 404
+      // (route present, asset absent) keeps the storage-client `get` semantics.
+      if (http && isEvidenceRouteMissing(http)) throw new Error(EVIDENCE_API_UNAVAILABLE_MESSAGE);
+      if (http?.status === 404) return null;
+      throw this.mapEvidenceError(error);
+    }
   }
   async listEvidenceLinks(assetId: string): Promise<FileLink[]> {
-    return this.http.get<FileLink[]>(`/evidence/assets/${seg(assetId)}/links`);
+    try {
+      return await this.http.get<FileLink[]>(`/evidence/assets/${seg(assetId)}/links`);
+    } catch (error) {
+      throw this.mapEvidenceError(error);
+    }
   }
   async listEvidenceAccessEvents(assetId: string, limit = 50): Promise<FileAccessEvent[]> {
-    return this.http.get<FileAccessEvent[]>(`/evidence/assets/${seg(assetId)}/access-events`, { query: { limit } });
+    try {
+      return await this.http.get<FileAccessEvent[]>(`/evidence/assets/${seg(assetId)}/access-events`, { query: { limit } });
+    } catch (error) {
+      throw this.mapEvidenceError(error);
+    }
   }
 }
 
