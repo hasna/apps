@@ -1,0 +1,60 @@
+{
+  "name": "@hasna/personalnotes",
+  "version": "0.1.0",
+  "description": "Personal Notes OSS core — headless notes engine with dual SQLite + PostgreSQL storage.",
+  "type": "module",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/personalnotes.git"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./storage": {
+      "types": "./dist/lib/storage/index.d.ts",
+      "import": "./dist/lib/storage/index.js"
+    },
+    "./storage/contract": {
+      "types": "./dist/lib/storage/contract.d.ts",
+      "import": "./dist/lib/storage/contract.js"
+    },
+    "./storage/sqlite": {
+      "types": "./dist/lib/storage/sqlite.d.ts",
+      "import": "./dist/lib/storage/sqlite.js"
+    },
+    "./storage/postgres": {
+      "types": "./dist/lib/storage/postgres-note-storage.d.ts",
+      "import": "./dist/lib/storage/postgres-note-storage.js"
+    },
+    "./storage/postgres-schema": {
+      "types": "./dist/lib/storage/postgres-schema.d.ts",
+      "import": "./dist/lib/storage/postgres-schema.js"
+    }
+  },
+  "scripts": {
+    "build": "rm -rf dist && bun build src/index.ts src/lib/storage/index.ts src/lib/storage/contract.ts src/lib/storage/sqlite.ts src/lib/storage/postgres.ts src/lib/storage/postgres-note-storage.ts src/lib/storage/postgres-schema.ts --root src --outdir dist --target bun --packages external --splitting && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test src",
+    "test:pg": "bun test src/lib/storage/postgres-note-storage.test.ts"
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/node": "^22.10.0",
+    "@types/pg": "^8.11.10",
+    "typescript": "^5.7.3"
+  }
+}
