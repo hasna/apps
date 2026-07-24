@@ -216,15 +216,18 @@ describe("MCP Server", () => {
     test("lists all connectors without category", async () => {
       const res = await callMcp("list_connectors", {});
       const data = parseContent(res);
-      expect(Array.isArray(data)).toBe(true);
-      expect(data.length).toBeGreaterThan(50);
+      expect(Array.isArray(data.connectors)).toBe(true);
+      expect(data.connectors.length).toBeLessThanOrEqual(20);
+      expect(data.total).toBeGreaterThan(50);
+      expect(data.nextCursor).toBeTruthy();
+      expect(data.hint).toContain("verbose");
     });
 
     test("filters by category", async () => {
       const res = await callMcp("list_connectors", { category: "AI & ML" });
       const data = parseContent(res);
-      expect(data.length).toBeGreaterThan(0);
-      for (const c of data) {
+      expect(data.connectors.length).toBeGreaterThan(0);
+      for (const c of data.connectors) {
         expect(c.category).toBe("AI & ML");
       }
     });
@@ -243,17 +246,18 @@ describe("MCP Server", () => {
       const data = parseContent(res);
       expect(data.name).toBe("stripe");
       expect(data.overview).toContain("Stripe");
-      expect(data.auth).toContain("Bearer");
+      expect(data.auth.join("\n")).toContain("Bearer");
       expect(Array.isArray(data.envVars)).toBe(true);
       expect(data.envVars.length).toBeGreaterThan(0);
       expect(data.envVars[0]).toHaveProperty("variable");
       expect(data.envVars[0]).toHaveProperty("description");
+      expect(data.hint).toContain("verbose");
     });
 
     test("returns env vars for gmail", async () => {
       const res = await callMcp("connector_docs", { name: "gmail" });
       const data = parseContent(res);
-      expect(data.auth).toContain("OAuth");
+      expect(data.auth.join("\n")).toContain("OAuth");
       expect(data.envVars.some((v: any) => v.variable === "GMAIL_CLIENT_ID")).toBe(true);
     });
 
@@ -361,27 +365,43 @@ describe("MCP Server", () => {
     test("lists Developer Tools category", async () => {
       const res = await callMcp("list_connectors", { category: "Developer Tools" });
       const data = parseContent(res);
-      expect(data.some((c: any) => c.name === "github")).toBe(true);
-      expect(data.every((c: any) => c.category === "Developer Tools")).toBe(true);
+      expect(data.connectors.some((c: any) => c.name === "github")).toBe(true);
+      expect(data.connectors.every((c: any) => c.category === "Developer Tools")).toBe(true);
     });
 
     test("case-insensitive category matching", async () => {
       const res = await callMcp("list_connectors", { category: "ai & ml" });
       const data = parseContent(res);
-      expect(Array.isArray(data)).toBe(true);
-      expect(data.length).toBeGreaterThan(0);
+      expect(Array.isArray(data.connectors)).toBe(true);
+      expect(data.connectors.length).toBeGreaterThan(0);
+    });
+
+    test("supports compact pagination cursor", async () => {
+      const first = parseContent(await callMcp("list_connectors", { limit: 2 }));
+      expect(first.connectors).toHaveLength(2);
+      expect(first.nextCursor).toBe("2");
+
+      const second = parseContent(await callMcp("list_connectors", { limit: 2, cursor: first.nextCursor }));
+      expect(second.connectors).toHaveLength(2);
+      expect(second.connectors[0].name).not.toBe(first.connectors[0].name);
+    });
+
+    test("verbose includes full connector metadata", async () => {
+      const res = await callMcp("list_connectors", { limit: 1, verbose: true });
+      const data = parseContent(res);
+      expect(data.connectors[0]).toHaveProperty("tags");
     });
   });
 
   describe("connector_docs edge cases", () => {
     test("returns cli commands for stripe", async () => {
-      const res = await callMcp("connector_docs", { name: "stripe" });
+      const res = await callMcp("connector_docs", { name: "stripe", verbose: true });
       const data = parseContent(res);
       expect(data.cliCommands).toContain("connect-stripe");
     });
 
     test("returns data storage for github", async () => {
-      const res = await callMcp("connector_docs", { name: "github" });
+      const res = await callMcp("connector_docs", { name: "github", verbose: true });
       const data = parseContent(res);
       expect(data.dataStorage).toContain("~/.hasna/connectors/connect-github");
     });
@@ -776,6 +796,19 @@ describe("MCP Server", () => {
       expect(data.success).toBe(false);
     });
 
+    test("truncates invalid command output unless verbose", async () => {
+      const res = await callMcp("run_connector_operation", {
+        name: "stripe",
+        args: ["zzzznonexistent"],
+        maxOutputChars: 12,
+      });
+      const data = parseContent(res);
+      expect(data.success).toBe(false);
+      expect(data.outputTruncated).toBe(true);
+      expect(data.error).toContain("[truncated");
+      expect(data.hint).toContain("verbose");
+    });
+
     test("passes format option", async () => {
       const res = await callMcp("run_connector_operation", {
         name: "anthropic",
@@ -823,7 +856,8 @@ describe("MCP Server", () => {
     test("returns registered agents array", async () => {
       const res = await callMcp("list_agents", {});
       const data = parseContent(res);
-      expect(Array.isArray(data)).toBe(true);
+      expect(Array.isArray(data.agents)).toBe(true);
+      expect(typeof data.total).toBe("number");
     });
   });
 
@@ -841,7 +875,8 @@ describe("MCP Server", () => {
     test("returns scheduled jobs array", async () => {
       const res = await callMcp("list_jobs", {});
       const data = parseContent(res);
-      expect(Array.isArray(data)).toBe(true);
+      expect(Array.isArray(data.jobs)).toBe(true);
+      expect(typeof data.total).toBe("number");
     });
   });
 
@@ -849,7 +884,8 @@ describe("MCP Server", () => {
     test("returns workflows array", async () => {
       const res = await callMcp("list_workflows", {});
       const data = parseContent(res);
-      expect(Array.isArray(data)).toBe(true);
+      expect(Array.isArray(data.workflows)).toBe(true);
+      expect(typeof data.total).toBe("number");
     });
   });
 

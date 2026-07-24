@@ -44,11 +44,36 @@ Key commands:
 - `connectors run` executes connector commands from the one-product runtime
 - `connectors status` and `connectors doctor` verify setup and auth state
 
+### Compact Output Defaults
+
+CLI output is compact by default so agent terminals do not fill with huge
+catalogs, README sections, credential status tables, or API records.
+
+- `connectors list` shows a compact page. Use `--cursor <n>` or `--offset <n>`
+  for the next page, `--limit <n>` to change page size, `--verbose` for wider
+  rows, `--all --verbose` for the full human catalog, or `--json` for the full
+  machine-readable payload.
+- `connectors docs <name>` shows a summary. Use `--verbose` for full parsed
+  sections, `--essential` for auth/env vars only, `--raw` for raw markdown, or
+  `--json` for structured docs.
+- `connectors status`, `connectors doctor`, `connectors jobs list`,
+  `connectors workflows list`, `connectors whoami`, and dry-run install output
+  page or truncate human rows by default. Use `--verbose`, `show`/`inspect`, or
+  `--json` when full detail is needed.
+- `connectors run` preserves JSON-style command output, but truncates very large
+  human stdout. Use `connectors run --verbose <connector> ...` for full stdout.
+
 ## MCP Server
 
 ```bash
 connectors-mcp
 ```
+
+MCP tools also use compact defaults. `list_connectors`, `list_jobs`,
+`list_workflows`, and `list_agents` return paged objects with `count`, `total`,
+and `nextCursor`; pass `cursor` to continue, `limit` to change page size, and
+`verbose: true` for full records. `connector_docs` and operation discovery
+return summaries unless `verbose: true` or a specific detail path is requested.
 
 ## HTTP mode
 

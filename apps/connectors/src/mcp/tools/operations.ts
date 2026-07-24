@@ -8,6 +8,7 @@ import {
   getConnectorCommandHelp,
   hasConnectorCommandSurface,
 } from "../../lib/runner.js";
+import { DEFAULT_OUTPUT_CHARS, maybeTruncateOutput, normalizeLimit, truncateText } from "../../lib/compact-output.js";
 
 export function registerOperationsTools(server: McpServer, stripped: (text: string) => Promise<{ content: { type: "text"; text: string }[] }>) {
   // --- Tool: list_connector_operations ---
@@ -23,9 +24,11 @@ export function registerOperationsTools(server: McpServer, stripped: (text: stri
           .string()
           .optional()
           .describe("Get detailed help for a specific subcommand (e.g. products, messages)"),
+        verbose: z.boolean().optional().describe("Include full auth status and raw help text."),
+        limit: z.number().optional().describe("Limit operation rows in compact mode."),
       },
     },
-    async ({ name, command }) => {
+    async ({ name, command, verbose, limit }) => {
       const meta = getConnector(name);
       if (!meta) {
         return {
@@ -64,6 +67,37 @@ export function registerOperationsTools(server: McpServer, stripped: (text: stri
 
       const ops = await getConnectorOperations(name);
       const auth = getAuthStatus(name);
+      if (!verbose) {
+        const operationLimit = normalizeLimit(limit, 50);
+        const operations = ops.operations.slice(0, operationLimit).map((operation) => ({
+          name: operation.name,
+          aliases: operation.aliases,
+          usage: operation.usage,
+          summary: truncateText(operation.summary || "", 140),
+          source: operation.source,
+        }));
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  connector: name,
+                  displayName: meta.displayName,
+                  auth: { type: auth.type, configured: auth.configured },
+                  commands: ops.commands,
+                  operations,
+                  totalOperations: ops.operations.length,
+                  hint: `Use list_connector_operations({ name: "${name}", verbose: true }) for full help text, or command="<subcommand>" for one command.`,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
+
       return {
         content: [
           {
@@ -108,9 +142,17 @@ export function registerOperationsTools(server: McpServer, stripped: (text: stri
           .number()
           .optional()
           .describe("Timeout in milliseconds (default: 30000)"),
+        verbose: z
+          .boolean()
+          .optional()
+          .describe("Return full stdout/stderr without output truncation."),
+        maxOutputChars: z
+          .number()
+          .optional()
+          .describe("Maximum output characters when verbose is false (default: 6000)."),
       },
     },
-    async ({ name, args, format, timeout }) => {
+    async ({ name, args, format, timeout, verbose, maxOutputChars }) => {
       const meta = getConnector(name);
       if (!meta) {
         return {
@@ -138,6 +180,11 @@ export function registerOperationsTools(server: McpServer, stripped: (text: stri
       const looksLikeHelp = /Usage:|Commands:|Options:/i.test(combinedOutput);
 
       if (!result.success && !looksLikeHelp) {
+        const output = maybeTruncateOutput(result.stderr || result.stdout, {
+          enabled: !verbose,
+          maxChars: maxOutputChars ?? DEFAULT_OUTPUT_CHARS,
+          hint: "Set verbose=true or maxOutputChars higher for full error output.",
+        });
         return {
           content: [
             {
@@ -146,7 +193,11 @@ export function registerOperationsTools(server: McpServer, stripped: (text: stri
                 {
                   connector: name,
                   success: false,
-                  error: result.stderr || result.stdout,
+                  error: output.text,
+                  outputTruncated: output.truncated,
+                  hint: verbose
+                    ? undefined
+                    : "MCP error output is compact by default. Set verbose=true or maxOutputChars for more output.",
                 },
                 null,
                 2
@@ -165,9 +216,16 @@ export function registerOperationsTools(server: McpServer, stripped: (text: stri
               {
                 connector: name,
                 success: true,
-                output: looksLikeHelp
+                output: maybeTruncateOutput(
+                  looksLikeHelp
                   ? (result.stdout || result.stderr).trim()
                   : result.stdout,
+                  {
+                    enabled: !verbose,
+                    maxChars: maxOutputChars ?? DEFAULT_OUTPUT_CHARS,
+                    hint: "Set verbose=true or maxOutputChars higher for full output.",
+                  }
+                ).text,
               },
               null,
               2

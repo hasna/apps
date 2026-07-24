@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { registerAgent, listAgents, isAgentConflict, heartbeat as dbHeartbeat, setFocus as dbSetFocus } from "../../db/agents.js";
+import { DEFAULT_MCP_LIMIT, normalizeLimit, pageItems, parseCursor } from "../../lib/compact-output.js";
 
 export function registerAgentTools(server: McpServer, stripped: (text: string) => Promise<{ content: { type: "text"; text: string }[] }>) {
   // --- Tool: register_agent ---
@@ -29,12 +30,41 @@ export function registerAgentTools(server: McpServer, stripped: (text: string) =
     "list_agents",
     {
       title: "List Agents",
-      description: "List all registered agents.",
-      inputSchema: {},
+      description: "List registered agents with compact, paged defaults.",
+      inputSchema: {
+        limit: z.number().optional(),
+        cursor: z.string().optional(),
+        verbose: z.boolean().optional(),
+      },
     },
-    async () => {
+    async ({ limit, cursor, verbose }) => {
+      const parsedCursor = parseCursor(cursor);
+      if (parsedCursor.error) {
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: parsedCursor.error }) }], isError: true };
+      }
       const agents = listAgents();
-      return { content: [{ type: "text" as const, text: JSON.stringify(agents, null, 2) }] };
+      const page = pageItems(agents, {
+        offset: parsedCursor.value ?? 0,
+        limit: normalizeLimit(limit, DEFAULT_MCP_LIMIT),
+      });
+      const data = verbose
+        ? page.items
+        : page.items.map((agent) => ({
+            id: agent.id,
+            name: agent.name,
+            role: agent.role,
+            lastSeenAt: agent.last_seen_at,
+            projectId: agent.project_id,
+          }));
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify({
+          agents: data,
+          total: agents.length,
+          count: data.length,
+          nextCursor: page.nextOffset === null ? null : String(page.nextOffset),
+          hint: "Use verbose=true for full agent records.",
+        }, null, 2) }],
+      };
     }
   );
 

@@ -17,6 +17,7 @@ import { readdirSync, statSync } from "fs";
 import { join, relative } from "path";
 import { createInterface } from "readline";
 import { App } from "../components/App.js";
+import { truncateText } from "../../lib/compact-output.js";
 
 export const isTTY = process.stdout.isTTY ?? false;
 
@@ -54,6 +55,7 @@ export function registerCommands(program: Command): void {
     .option("-c, --category <category>", "Install all connectors in a category")
     .option("--preset <preset>", "Install a preset bundle (e.g. ai, fullstack, google)")
     .option("--json", "Output results as JSON", false)
+    .option("-v, --verbose", "Show full dry-run file lists", false)
     .description("Install one or more connectors")
     .action((connectors: string[], options) => {
       // Resolve --category to connector names
@@ -187,9 +189,13 @@ export function registerCommands(program: Command): void {
           console.log(chalk.dim(`    index:    ${a.indexPath}`));
 
           if (a.files && a.files.length > 0) {
+            const visibleFiles = options.verbose ? a.files : a.files.slice(0, 12);
             console.log(chalk.dim(`    packaged runtime files (${a.files.length}):`));
-            for (const f of a.files) {
-              console.log(chalk.dim(`      ${f}`));
+            for (const f of visibleFiles) {
+              console.log(chalk.dim(`      ${truncateText(f, 120)}`));
+            }
+            if (!options.verbose && a.files.length > visibleFiles.length) {
+              console.log(chalk.dim(`      ... ${a.files.length - visibleFiles.length} more files (use --verbose)`));
             }
           }
           console.log();

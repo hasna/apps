@@ -7,14 +7,28 @@ import { getConnectorsHome } from "../../db/database.js";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { getConnectorConfigReadDirs, listConfiguredConnectorNames } from "../../lib/connector-resolver.js";
+import { DEFAULT_COMPACT_LIMIT, pageItems, parseNonNegativeInt, truncateText } from "../../lib/compact-output.js";
 
 export function registerCommands(program: Command): void {
   // Status command — show auth status of installed connectors
   program
     .command("status")
     .option("--json", "Output as JSON", false)
+    .option("--limit <n>", "Limit rows per section in human output")
+    .option("--offset <n>", "Skip first N rows per section in human output")
+    .option("-v, --verbose", "Show all human rows", false)
     .description("Show auth status of all configured connectors (project + global)")
-    .action((options: { json: boolean }) => {
+    .action((options: { json: boolean; limit?: string; offset?: string; verbose: boolean }) => {
+      const parsedLimit = parseNonNegativeInt(options.limit, "--limit");
+      const parsedOffset = parseNonNegativeInt(options.offset, "--offset");
+      if (parsedLimit.error || parsedOffset.error) {
+        const error = parsedLimit.error || parsedOffset.error || "Invalid pagination options";
+        if (options.json) console.log(JSON.stringify({ error }));
+        else console.log(chalk.red(error));
+        process.exit(1);
+        return;
+      }
+
       const installed = getInstalledConnectors();
       const configDir = getConnectorsHome();
       const seen = new Set<string>();
@@ -186,29 +200,46 @@ export function registerCommands(program: Command): void {
       }
 
       console.log(chalk.bold("\nConnector Status\n"));
+      const humanLimit = options.verbose ? undefined : (parsedLimit.value ?? DEFAULT_COMPACT_LIMIT);
+      const humanOffset = parsedOffset.value ?? 0;
 
       // Configured section
       if (configuredList.length > 0) {
-        console.log(chalk.green.bold(`  Configured (${configuredList.length})\n`));
+        const page = pageItems(configuredList, { offset: humanOffset, limit: humanLimit });
+        const title = page.limit === null
+          ? `  Configured (${configuredList.length})`
+          : `  Configured (showing ${page.items.length} of ${configuredList.length})`;
+        console.log(chalk.green.bold(`${title}\n`));
         printHeader();
-        for (const s of configuredList) {
+        for (const s of page.items) {
           printRow(s);
+        }
+        if (page.nextOffset !== null) {
+          console.log(chalk.dim(`  More configured rows: connectors status --offset ${page.nextOffset}`));
         }
         console.log();
       }
 
       // Unconfigured section
       if (unconfiguredList.length > 0) {
-        console.log(chalk.red.bold(`  Unconfigured (${unconfiguredList.length})\n`));
+        const page = pageItems(unconfiguredList, { offset: humanOffset, limit: humanLimit });
+        const title = page.limit === null
+          ? `  Unconfigured (${unconfiguredList.length})`
+          : `  Unconfigured (showing ${page.items.length} of ${unconfiguredList.length})`;
+        console.log(chalk.red.bold(`${title}\n`));
         printHeader();
-        for (const s of unconfiguredList) {
+        for (const s of page.items) {
           printRow(s);
+        }
+        if (page.nextOffset !== null) {
+          console.log(chalk.dim(`  More unconfigured rows: connectors status --offset ${page.nextOffset}`));
         }
         console.log();
       }
 
       // Summary
       console.log(chalk.dim(`  Total: ${allStatuses.length}  |  Configured: ${configuredList.length}  |  Unconfigured: ${unconfiguredList.length}`));
+      console.log(chalk.dim("  More detail: connectors status --verbose | connectors status --json"));
       console.log();
     });
 
@@ -216,8 +247,21 @@ export function registerCommands(program: Command): void {
   program
     .command("doctor")
     .option("--json", "Output as JSON", false)
+    .option("--limit <n>", "Limit rows in human output")
+    .option("--offset <n>", "Skip first N rows in human output")
+    .option("-v, --verbose", "Show all human rows and full suggestions", false)
     .description("Check all installed connectors for issues and output a health report")
-    .action((options: { json: boolean }) => {
+    .action((options: { json: boolean; limit?: string; offset?: string; verbose: boolean }) => {
+      const parsedLimit = parseNonNegativeInt(options.limit, "--limit");
+      const parsedOffset = parseNonNegativeInt(options.offset, "--offset");
+      if (parsedLimit.error || parsedOffset.error) {
+        const error = parsedLimit.error || parsedOffset.error || "Invalid pagination options";
+        if (options.json) console.log(JSON.stringify({ error }));
+        else console.log(chalk.red(error));
+        process.exit(1);
+        return;
+      }
+
       const installed = getInstalledConnectors();
 
       if (installed.length === 0) {
@@ -296,8 +340,12 @@ export function registerCommands(program: Command): void {
       }
 
       console.log(chalk.bold("\nConnector Health Report\n"));
+      const page = pageItems(results, {
+        offset: parsedOffset.value ?? 0,
+        limit: options.verbose ? undefined : (parsedLimit.value ?? DEFAULT_COMPACT_LIMIT),
+      });
 
-      for (const r of results) {
+      for (const r of page.items) {
         let icon: string;
         if (r.level === "healthy") {
           icon = chalk.green("✓");
@@ -316,11 +364,19 @@ export function registerCommands(program: Command): void {
         if (r.issues.length === 0) {
           console.log(`  ${icon} ${nameStr} — ${chalk.green("healthy")}`);
         } else {
-          console.log(`  ${icon} ${nameStr} — ${r.issues.join(", ")}`);
-          for (const suggestion of r.suggestions) {
-            console.log(chalk.dim(`      → ${suggestion}`));
+          console.log(`  ${icon} ${nameStr} — ${truncateText(r.issues.join(", "), options.verbose ? 200 : 120)}`);
+          const suggestions = options.verbose ? r.suggestions : r.suggestions.slice(0, 2);
+          for (const suggestion of suggestions) {
+            console.log(chalk.dim(`      -> ${truncateText(suggestion, options.verbose ? 200 : 120)}`));
+          }
+          if (!options.verbose && r.suggestions.length > suggestions.length) {
+            console.log(chalk.dim(`      ... ${r.suggestions.length - suggestions.length} more suggestion(s)`));
           }
         }
+      }
+
+      if (page.nextOffset !== null) {
+        console.log(chalk.dim(`\n  More rows: connectors doctor --offset ${page.nextOffset}`));
       }
 
       // Summary

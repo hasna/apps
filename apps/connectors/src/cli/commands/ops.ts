@@ -14,6 +14,17 @@ import {
   getOAuthTokenPathsForProfile,
   hasOAuthTokenFileUpdatedSince,
 } from "./auth.js";
+import { maybeTruncateOutput } from "../../lib/compact-output.js";
+
+function argsRequestJson(args: string[]): boolean {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--json") return true;
+    if ((arg === "--format" || arg === "-f") && args[i + 1] === "json") return true;
+    if (arg === "--format=json" || arg === "-f=json") return true;
+  }
+  return false;
+}
 
 export function registerCommands(program: Command): void {
   // ============================================
@@ -89,8 +100,9 @@ export function registerCommands(program: Command): void {
     .argument("<name>", "Connector name (e.g. stripe, gmail)")
     .argument("[args...]", "Command arguments (e.g. products list --limit 5)")
     .option("--timeout <ms>", "Timeout in milliseconds", "30000")
+    .option("-v, --verbose", "Print full command output without truncation", false)
     .passThroughOptions()
-    .action(async (name: string, args: string[], options: { timeout: string }) => {
+    .action(async (name: string, args: string[], options: { timeout: string; verbose: boolean }) => {
       const meta = getConnector(name);
       if (!meta) {
         console.error(chalk.red(`Connector '${name}' not found.`));
@@ -112,7 +124,12 @@ export function registerCommands(program: Command): void {
       const result = await runConnectorCommand(name, args, parseInt(options.timeout));
 
       if (result.stdout) {
-        console.log(result.stdout);
+        const preserveMachineOutput = argsRequestJson(args);
+        const output = maybeTruncateOutput(result.stdout, {
+          enabled: !options.verbose && !preserveMachineOutput,
+          hint: "Use `connectors run --verbose <connector> ...` for full output.",
+        });
+        console.log(output.text);
       }
       if (result.stderr) {
         console.error(result.stderr);

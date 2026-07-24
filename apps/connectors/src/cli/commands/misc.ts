@@ -13,6 +13,7 @@ import {
   getConnectorConfigReadDirs,
   listConfiguredConnectorNames,
 } from "../../lib/connector-resolver.js";
+import { DEFAULT_COMPACT_LIMIT, pageItems, truncateText } from "../../lib/compact-output.js";
 
 export function registerCommands(program: Command): void {
   // Upgrade command — check for and install latest version
@@ -217,8 +218,9 @@ complete -F _connectors connectors`);
   program
     .command("presets")
     .option("--json", "Output as JSON", false)
+    .option("-v, --verbose", "Show every connector in each preset", false)
     .description("List available connector preset bundles")
-    .action((options: { json: boolean }) => {
+    .action((options: { json: boolean; verbose: boolean }) => {
       if (options.json) {
         console.log(JSON.stringify(Object.entries(PRESETS).map(([name, p]) => ({
           name,
@@ -232,18 +234,24 @@ complete -F _connectors connectors`);
       console.log(chalk.bold("\nAvailable presets:\n"));
       for (const [name, preset] of Object.entries(PRESETS)) {
         console.log(`  ${chalk.cyan(name.padEnd(12))} ${preset.description}`);
-        console.log(chalk.dim(`  ${"".padEnd(12)} ${preset.connectors.join(", ")}`));
+        const visible = options.verbose ? preset.connectors : preset.connectors.slice(0, 5);
+        const suffix = !options.verbose && preset.connectors.length > visible.length
+          ? `, ... +${preset.connectors.length - visible.length} more`
+          : "";
+        console.log(chalk.dim(`  ${"".padEnd(12)} ${visible.join(", ")}${suffix}`));
         console.log();
       }
-      console.log(chalk.dim(`  Install with: connectors install --preset <name>\n`));
+      console.log(chalk.dim(`  Install with: connectors install --preset <name>`));
+      console.log(chalk.dim(`  More detail: connectors presets --verbose | connectors presets --json\n`));
     });
 
   // Whoami command — show current setup summary
   program
     .command("whoami")
     .option("--json", "Output as JSON", false)
+    .option("-v, --verbose", "Show all connector rows", false)
     .description("Show current setup: config dir, installed connectors, auth status")
-    .action((options: { json: boolean }) => {
+    .action((options: { json: boolean; verbose: boolean }) => {
       const configDir = getConnectorsHome();
       const installed = getInstalledConnectors();
       const version = "0.3.1";
@@ -324,22 +332,34 @@ complete -F _connectors connectors`);
       const globalConnectors = connectorDetails.filter(c => c.source === "global");
 
       if (projectConnectors.length > 0) {
-        console.log(chalk.bold("\n  Project Connectors:\n"));
+        const page = pageItems(projectConnectors, {
+          limit: options.verbose ? undefined : DEFAULT_COMPACT_LIMIT,
+        });
+        console.log(chalk.bold(`\n  Project Connectors (${page.items.length}/${projectConnectors.length}):\n`));
         const nameWidth = Math.max(10, ...projectConnectors.map(c => c.name.length)) + 2;
-        for (const c of projectConnectors) {
+        for (const c of page.items) {
           const status = c.configured ? chalk.green("✓") : chalk.red("✗");
           const profileLabel = c.profile !== "default" ? chalk.dim(` [${c.profile}]`) : "";
-          console.log(`    ${status} ${chalk.cyan(c.name.padEnd(nameWidth))}${c.authType.padEnd(8)}${profileLabel}`);
+          console.log(`    ${status} ${chalk.cyan(truncateText(c.name, nameWidth - 2).padEnd(nameWidth))}${c.authType.padEnd(8)}${profileLabel}`);
+        }
+        if (page.nextOffset !== null) {
+          console.log(chalk.dim(`    ... ${projectConnectors.length - page.items.length} more (use --verbose)`));
         }
       }
 
       if (globalConnectors.length > 0) {
-        console.log(chalk.bold("\n  Global Connectors") + chalk.dim(" (~/.hasna/connectors)") + chalk.bold(":\n"));
+        const page = pageItems(globalConnectors, {
+          limit: options.verbose ? undefined : DEFAULT_COMPACT_LIMIT,
+        });
+        console.log(chalk.bold(`\n  Global Connectors (${page.items.length}/${globalConnectors.length})`) + chalk.dim(" (~/.hasna/connectors)") + chalk.bold(":\n"));
         const nameWidth = Math.max(10, ...globalConnectors.map(c => c.name.length)) + 2;
-        for (const c of globalConnectors) {
+        for (const c of page.items) {
           const status = c.configured ? chalk.green("✓") : chalk.red("✗");
           const profileLabel = c.profile !== "default" ? chalk.dim(` [${c.profile}]`) : "";
-          console.log(`    ${status} ${chalk.cyan(c.name.padEnd(nameWidth))}${c.authType.padEnd(8)}${profileLabel}`);
+          console.log(`    ${status} ${chalk.cyan(truncateText(c.name, nameWidth - 2).padEnd(nameWidth))}${c.authType.padEnd(8)}${profileLabel}`);
+        }
+        if (page.nextOffset !== null) {
+          console.log(chalk.dim(`    ... ${globalConnectors.length - page.items.length} more (use --verbose)`));
         }
       }
 
@@ -347,7 +367,7 @@ complete -F _connectors connectors`);
         console.log(chalk.dim("\n  No connectors installed or configured."));
       }
 
-      console.log();
+      console.log(chalk.dim("\n  More detail: connectors whoami --verbose | connectors whoami --json\n"));
     });
 
   // Test command — verify API credentials by making a real request

@@ -94,6 +94,9 @@ describe("CLI", () => {
       expect(stdout).toContain("AI & ML");
       expect(stdout).toContain("anthropic");
       expect(stdout).toContain("openai");
+      expect(stdout).toContain("showing");
+      expect(stdout).toContain("More detail");
+      expect(stdout.trim().split("\n").length).toBeLessThan(80);
     });
 
     test("--category filters by category", async () => {
@@ -420,6 +423,14 @@ describe("CLI", () => {
       expect(stdout).toMatch(/\d+\.\d+\.\d+/);
     });
 
+    test("list supports compact cursor pagination", async () => {
+      const { stdout, exitCode } = await run("list --limit 2 --cursor 2");
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain("showing 2");
+      expect(stdout).toContain("xai");
+      expect(stdout).toContain("More detail");
+    });
+
     test("list --installed --json after install", async () => {
       await run("install anthropic figma");
       const { stdout } = await run("list --installed --json");
@@ -449,6 +460,14 @@ describe("CLI", () => {
       expect(page.map((c: { name: string }) => c.name)).toEqual(
         full.slice(2, 7).map((c: { name: string }) => c.name)
       );
+    });
+
+    test("list --json clamps --limit 0 to one result", async () => {
+      const { stdout, exitCode } = await run("list --json --limit 0");
+      expect(exitCode).toBe(0);
+      const page = JSON.parse(stdout);
+      expect(Array.isArray(page)).toBe(true);
+      expect(page).toHaveLength(1);
     });
 
     test("list --json returns error for invalid pagination values", async () => {
@@ -933,6 +952,7 @@ describe("CLI", () => {
       const { stdout, exitCode } = await run("run github config show --format json");
       expect(exitCode).toBe(0);
       expect(stdout).toContain("\"profile\"");
+      expect(stdout).not.toContain("[truncated");
     });
 
     test("runs internal stripe command surface", async () => {

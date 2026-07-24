@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getInstalledConnectors } from "../../lib/installer.js";
 import { getConnectorOperations } from "../../lib/runner.js";
 import { getConnector } from "../../lib/registry.js";
+import { DEFAULT_MCP_LIMIT, normalizeLimit, truncateText } from "../../lib/compact-output.js";
 
 export function registerSearchTools(server: McpServer, stripped: (text: string) => Promise<{ content: { type: "text"; text: string }[] }>) {
   // --- Tool: search_tools ---
@@ -14,11 +15,14 @@ export function registerSearchTools(server: McpServer, stripped: (text: string) 
       inputSchema: {
         query: z.string(),
         installedOnly: z.boolean().optional(),
+        limit: z.number().optional(),
+        verbose: z.boolean().optional(),
       },
     },
-    async ({ query, installedOnly }) => {
+    async ({ query, installedOnly, limit, verbose }) => {
       const installed = installedOnly ? getInstalledConnectors() : null;
       const results: { connector: string; operation: string; description: string }[] = [];
+      const resultLimit = normalizeLimit(limit, DEFAULT_MCP_LIMIT);
 
       const connectors = installed || getInstalledConnectors();
       for (const name of connectors) {
@@ -38,16 +42,24 @@ export function registerSearchTools(server: McpServer, stripped: (text: string) 
               results.push({
                 connector: name,
                 operation: operation.name,
-                description: operation.summary || ops.helpText || "",
+                description: verbose
+                  ? operation.summary || ops.helpText || ""
+                  : truncateText(operation.summary || ops.helpText || "", 160),
               });
+              if (results.length >= resultLimit) break;
             }
           }
+          if (results.length >= resultLimit) break;
         } catch {
           // Skip connectors that fail
         }
       }
 
-      return stripped(JSON.stringify(results, null, 2));
+      return stripped(JSON.stringify({
+        results,
+        count: results.length,
+        hint: "Use limit=<n> for more rows and verbose=true for longer descriptions.",
+      }, null, 2));
     }
   );
 
@@ -60,9 +72,10 @@ export function registerSearchTools(server: McpServer, stripped: (text: string) 
       inputSchema: {
         name: z.string(),
         operation: z.string().optional(),
+        verbose: z.boolean().optional(),
       },
     },
-    async ({ name, operation }) => {
+    async ({ name, operation, verbose }) => {
       const meta = getConnector(name);
       if (!meta) {
         return {
@@ -80,7 +93,23 @@ export function registerSearchTools(server: McpServer, stripped: (text: string) 
       }
 
       const ops = await getConnectorOperations(name);
-      return stripped(JSON.stringify({ connector: name, displayName: meta.displayName, ...ops }, null, 2));
+      if (verbose) {
+        return stripped(JSON.stringify({ connector: name, displayName: meta.displayName, ...ops }, null, 2));
+      }
+      return stripped(JSON.stringify({
+        connector: name,
+        displayName: meta.displayName,
+        commands: ops.commands,
+        operations: ops.operations.map((item) => ({
+          name: item.name,
+          aliases: item.aliases,
+          usage: item.usage,
+          summary: truncateText(item.summary || "", 140),
+          source: item.source,
+        })),
+        totalOperations: ops.operations.length,
+        hint: `Use describe_tools({ name: "${name}", verbose: true }) for full help text.`,
+      }, null, 2));
     }
   );
 }
