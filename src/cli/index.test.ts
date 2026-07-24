@@ -520,31 +520,69 @@ describe("project-first CLI surface", () => {
     }
   });
 
-  test("completion emits project commands", () => {
+  // Parse the top-level command surface advertised by `--help`.
+  // `primary` = canonical command names; `all` = names plus aliases (e.g. show|get).
+  function actualTopLevelCommands(): { primary: Set<string>; all: Set<string> } {
+    const help = text(runProjects(["--help"]).stdout);
+    const start = help.indexOf("Commands:");
+    expect(start).toBeGreaterThanOrEqual(0);
+    // The Commands: block runs until the next blank line / section header.
+    const block = help.slice(start).split("\n\n")[0] ?? "";
+    const primary = new Set<string>();
+    const all = new Set<string>();
+    for (const line of block.split("\n")) {
+      const match = line.match(/^ {2}([a-z][a-z-]*(?:\|[a-z-]+)?)/);
+      if (!match) continue;
+      const tokens = match[1]!.split("|");
+      if (tokens[0] === "help") continue;
+      primary.add(tokens[0]!);
+      for (const token of tokens) all.add(token);
+    }
+    return { primary, all };
+  }
+
+  test("completion command list matches the actual CLI surface", () => {
+    const { primary, all } = actualTopLevelCommands();
+    // Sanity: help parsing found a plausible surface.
+    expect(primary.size).toBeGreaterThan(20);
+
     const result = runProjects(["completion"]);
     const stdout = text(result.stdout);
-
     expect(result.exitCode).toBe(0);
-    expect(stdout).toContain("local commands=\"start status sessions create cleanup-create cleanup-evals import import-github scan-roots sync-roots list show events update tag untag labels label link unlink publish unpublish archive unarchive delete lock locks unlock doctor agent-eval context next why channel handoff runs oss store canvases loops locations");
-    expect(stdout).toContain("storage reports completion");
+
+    const listMatch = stdout.match(/local commands="([^"]+)"/);
+    expect(listMatch).not.toBeNull();
+    const offered = new Set(listMatch![1]!.split(" ").filter(Boolean));
+
+    // No omissions: every real command/alias is offered by bash completion.
+    for (const command of all) {
+      expect(offered.has(command)).toBe(true);
+    }
+    // No stale tokens: every offered token is a real command/alias.
+    for (const token of offered) {
+      expect(all.has(token)).toBe(true);
+    }
+
+    // Regression guard for the specific commands the static list dropped/misnamed.
+    for (const command of ["budgets", "dashboard", "webhooks", "hasna-events", "store"]) {
+      expect(offered.has(command)).toBe(true);
+    }
+    expect(offered.has("storage")).toBe(all.has("storage"));
+
     expect(stdout).toContain("projects list");
     expect(stdout).toContain("project>");
-    expect(stdout).not.toContain(["projects", "workspaces", "list"].join(" "));
     expect(stdout).not.toContain("workspace>");
 
+    // zsh completion is derived from the same live command surface (primary names).
     const zsh = runProjects(["completion", "--shell", "zsh"]);
     const zshStdout = text(zsh.stdout);
     expect(zsh.exitCode).toBe(0);
-    expect(zshStdout).toContain("'scan-roots:Dry-run import plans for configured GitHub roots'");
-    expect(zshStdout).toContain("'sync-roots:Import repositories from configured GitHub roots'");
-    expect(zshStdout).toContain("'context:Emit an agent-priming bundle for a project'");
-    expect(zshStdout).toContain("'runs:Inspect prompt-agent run ledger entries'");
-    expect(zshStdout).toContain("'oss:Open-source workspace routing helpers'");
-    expect(zshStdout).toContain("'store:Inspect, ensure, and migrate canonical project stores'");
-    expect(zshStdout).toContain("'canvases:Manage per-project React Flow canvases'");
-    expect(zshStdout).toContain("'loops:Link projects to OpenLoops SDK loops'");
-    expect(zshStdout).toContain("'labels:Manage project labels'");
-    expect(zshStdout).toContain("'reports:Serve registered project report files'");
+    for (const command of primary) {
+      expect(zshStdout).toContain(`'${command}:`);
+    }
+    for (const command of ["budgets", "dashboard", "webhooks", "hasna-events"]) {
+      expect(zshStdout).toContain(`'${command}:`);
+    }
   });
 
   test("oss matrix CLI emits capped JSON without optional external refs", () => {
