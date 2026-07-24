@@ -8,6 +8,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { ingestOpenFilesManifest } from '../src/manifest-ingest';
 import { createKnowledgeService } from '../src/service';
 import { recordKnowledgeSyncConflict } from '../src/sync';
+import { sanitizedLocalTestEnv } from './helpers/sanitized-env';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MCP = join(__dirname, '..', 'src', 'mcp.js');
@@ -264,14 +265,13 @@ describe('knowledge MCP', () => {
       args: [MCP],
       cwd: dir,
       stderr: 'pipe',
-      env: {
-        ...process.env,
+      env: sanitizedLocalTestEnv({
         PATH: `${fakeBin}${delimiter}${process.env.PATH ?? ''}`,
         ...fakeSshCommandEnv(fakeBin),
         KNOWLEDGE_FAKE_SSH_EXPORT_JSON: JSON.stringify(emptySyncBundle()),
         KNOWLEDGE_FAKE_SSH_IMPORT_JSON: JSON.stringify(emptyImportResult()),
         KNOWLEDGE_FAKE_SSH_TARGET_PATH: targetPath,
-      },
+      }),
     });
     const client = new Client({ name: 'knowledge-test', version: '0.0.0' });
 
@@ -382,13 +382,13 @@ describe('knowledge MCP', () => {
 
       const get = parseToolJson(await client.callTool({
         name: 'ok_get',
-        arguments: { id: add.item.short_id, store_path: store },
+        arguments: { id: add.item.short_id, store_path: store, allow_global: true },
       }));
       expect(get.item.title).toBe('MCP item');
 
       const stableGetItem = parseToolJson(await client.callTool({
         name: 'knowledge_get',
-        arguments: { kind: 'item', id: add.item.short_id, store_path: store },
+        arguments: { scope: 'project', kind: 'item', id: add.item.short_id, store_path: store },
       }));
       expect(stableGetItem.item.title).toBe('MCP item');
 
@@ -753,18 +753,21 @@ describe('knowledge MCP', () => {
       expect(lint.ok).toBeBoolean();
       expect(lint.issue_count).toBeNumber();
 
-      const web = parseToolJson(await client.callTool({
+      const webResult = await client.callTool({
         name: 'ok_web_search',
-        arguments: { scope: 'project', query: 'company wiki policy', provider: 'openai', model: 'openai:gpt-5-mini', fake: true, file_results: true, limit: 1 },
-      }));
-      expect(web.sources).toHaveLength(1);
-      expect(web.filed_sources).toBe(1);
+        arguments: { scope: 'project', query: 'company wiki policy', provider: 'openai', model: 'openai:gpt-5-mini', fake: true, limit: 1 },
+      });
+      const web = parseToolJson(webResult);
+      expect(webResult.isError).toBe(true);
+      expect(web).toMatchObject({ code: 'KNOWLEDGE_HOSTED_CONTAINED', status: 503 });
 
-      const stableWeb = parseToolJson(await client.callTool({
+      const stableWebResult = await client.callTool({
         name: 'knowledge_web_search',
         arguments: { scope: 'project', query: 'company wiki policy', provider: 'openai', model: 'openai:gpt-5-mini', fake: true, limit: 1 },
-      }));
-      expect(stableWeb.sources).toHaveLength(1);
+      });
+      const stableWeb = parseToolJson(stableWebResult);
+      expect(stableWebResult.isError).toBe(true);
+      expect(stableWeb).toMatchObject({ code: 'KNOWLEDGE_HOSTED_CONTAINED', status: 503 });
 
       const openFilesResource = parseResourceJson(await client.readResource({ uri: 'knowledge://project/open-files' }));
       expect(openFilesResource.raw_source_bytes_exposed).toBe(false);

@@ -1,3 +1,5 @@
+/** Stage-A public boundary: pure helpers stay public; executable I/O is guarded. */
+
 export {
   createAppWikiScope,
   createKnowledgeClient,
@@ -24,15 +26,65 @@ export {
   type KnowledgeSyncDoctorOptions,
   type KnowledgeWebSearchOptions,
 } from './sdk.js';
+
+// Pre-Stage-A local executable API, preserved behind a per-operation role gate.
 export {
+  applyKnowledgeSyncBundle,
+  assertAppWikiWriteAllowed,
   buildKnowledgeAgentContextPack,
-  type KnowledgeAgentContextCitation,
-  type KnowledgeAgentContextEvidence,
-  type KnowledgeAgentContextPack,
-  type KnowledgeAgentDuplicateCandidate,
-  type KnowledgeContextPackPurpose,
-  type KnowledgeContextPackSource,
+  compileWikiPage,
+  consumeOpenFilesOutbox,
+  createKnowledgeMachinesAdapter,
+  createKnowledgeSyncBundle,
+  createKnowledgeSyncSnapshot,
+  discoverKnowledgeMachineTopology,
+  embedTexts,
+  embeddingIndexStatus,
+  enqueueMissingEmbeddings,
+  ensureKnowledgeWorkspace,
+  fileAnswerToWiki,
+  getAppWikiNote,
+  lintWiki,
+  getKnowledgeSyncStatus,
+  hybridSearch,
+  importRulesProvenance,
+  indexKnowledgeEmbeddings,
+  ingestAppWikiSourceRef,
+  ingestOpenFilesManifest,
+  ingestOpenFilesManifestItems,
+  ingestSourceRef,
+  initAppWikiScope,
+  listAppWikiNotes,
+  listKnowledgeMachines,
+  listKnowledgeSyncConflicts,
+  preflightKnowledgeMachine,
+  proposeKnowledgeSyncConflictResolutionWithAi,
+  readKnowledgeConfig,
+  recordKnowledgeSyncConflict,
+  refreshEmbeddingIndex,
+  refreshMachineRegistryFromTopology,
+  reindexHealth,
+  resolveKnowledgeMachineRoute,
+  resolveKnowledgeMachineWorkspace,
+  resolveOpenFilesSource,
+  retrieveKnowledgeContext,
+  runKnowledgePrompt,
+  runProviderWebSearch,
+  searchVectorIndex,
+  upsertKnowledgeMachine,
+  writeAppWikiNote,
+  writeKnowledgeConfig,
+} from './public-local-api.js';
+
+export type {
+  KnowledgeAgentContextCitation,
+  KnowledgeAgentContextEvidence,
+  KnowledgeAgentContextPack,
+  KnowledgeAgentDuplicateCandidate,
+  KnowledgeContextPackPurpose,
+  KnowledgeContextPackSource,
 } from './context-pack.js';
+
 export {
   createKnowledgeService,
   KnowledgeService,
@@ -54,51 +106,40 @@ export {
   type KnowledgePeerSyncOptions,
   type KnowledgeRulesProvenanceImportOptions,
   type KnowledgeRulesProvenanceImportResult,
-  type KnowledgeSyncConflictAiProposalServiceOptions,
-  type KnowledgeSyncDoctorResult,
-  type KnowledgeSyncRecommendedCommand,
   type KnowledgeServiceOptions,
   type KnowledgeSetupResult,
   type KnowledgeSyncBundleOptions,
+  type KnowledgeSyncConflictAiProposalServiceOptions,
+  type KnowledgeSyncDoctorResult,
   type KnowledgeSyncImportOptions,
+  type KnowledgeSyncRecommendedCommand,
   type KnowledgeSyncSnapshotOptions,
 } from './service.js';
+
 export {
   createKnowledgeProjectPanel,
   formatKnowledgeProjectPanel,
   type KnowledgeProjectPanelOptions,
 } from './project-panel.js';
-export {
-  assertAppWikiWriteAllowed,
-  getAppWikiNote,
-  ingestAppWikiSourceRef,
-  initAppWikiScope,
-  listAppWikiNotes,
-  writeAppWikiNote,
-  type AppWikiInitOptions,
-  type AppWikiInitResult,
-  type AppWikiNoteGetOptions,
-  type AppWikiNoteGetResult,
-  type AppWikiNoteInput,
-  type AppWikiNoteListOptions,
-  type AppWikiNoteRecord,
-  type AppWikiNoteWriteResult,
-  type AppWikiSourceRefInput,
-  type AppWikiWriteGuardOptions,
+
+export type {
+  AppWikiInitOptions,
+  AppWikiInitResult,
+  AppWikiNoteGetOptions,
+  AppWikiNoteGetResult,
+  AppWikiNoteInput,
+  AppWikiNoteListOptions,
+  AppWikiNoteRecord,
+  AppWikiNoteWriteResult,
+  AppWikiSourceRefInput,
+  AppWikiWriteGuardOptions,
 } from './app-wiki.js';
-export {
-  proposeKnowledgeSyncConflictResolutionWithAi,
-  type KnowledgeSyncConflictAiProposalOptions,
-} from './conflict-agent.js';
+export type { KnowledgeSyncConflictAiProposalOptions } from './conflict-agent.js';
+
 export {
   KNOWLEDGE_MACHINES_ADAPTER_CONTRACT_VERSION,
   KNOWLEDGE_MACHINES_ADAPTER_ENTRYPOINT,
   KNOWLEDGE_MACHINES_ADAPTER_PACKAGE,
-  createKnowledgeMachinesAdapter,
-  discoverKnowledgeMachineTopology,
-  preflightKnowledgeMachine,
-  resolveKnowledgeMachineRoute,
-  resolveKnowledgeMachineWorkspace,
   type KnowledgeMachinesAdapter,
   type KnowledgeMachinesAdapterDefaults,
   type KnowledgeMachinesAdapterImplementation,
@@ -120,6 +161,8 @@ export {
   type KnowledgeMachineRouteHint,
   type KnowledgeMachineRouteOptions,
   type KnowledgeMachineRouteResolution,
+  type KnowledgeMachineTopology,
+  type KnowledgeMachineTopologyOptions,
   type KnowledgeMachineWorkspaceDiagnostic,
   type KnowledgeMachineWorkspaceDiagnosticStatus,
   type KnowledgeMachineWorkspaceOptions,
@@ -127,38 +170,28 @@ export {
   type KnowledgeMachineWorkspaceRepairHint,
   type KnowledgeMachineWorkspaceResolution,
   type KnowledgeMachineWorkspaceSource,
-  type KnowledgeMachineTopology,
-  type KnowledgeMachineTopologyOptions,
 } from './machines.js';
+
 export {
-  KNOWLEDGE_SYNC_SCHEMA_VERSION,
   KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION,
   KNOWLEDGE_SYNC_PROTOCOL_VERSION,
+  KNOWLEDGE_SYNC_SCHEMA_VERSION,
   KNOWLEDGE_SYNC_TABLES,
-  applyKnowledgeSyncBundle,
-  createKnowledgeSyncSnapshot,
-  createKnowledgeSyncBundle,
-  getKnowledgeSyncStatus,
-  listKnowledgeMachines,
-  listKnowledgeSyncConflicts,
-  recordKnowledgeSyncConflict,
-  refreshMachineRegistryFromTopology,
   syncArtifactsFromSnapshot,
   syncTablesFromSnapshot,
-  upsertKnowledgeMachine,
-  type KnowledgeSyncConflictInput,
-  type KnowledgeSyncConflictEvidence,
-  type KnowledgeSyncConflictProposalAgent,
-  type KnowledgeSyncConflictProposalCitation,
-  type KnowledgeSyncConflictProposedPatch,
-  type KnowledgeSyncConflictResolutionProposal,
-  type KnowledgeSyncConflictRow,
   type KnowledgePeerSyncResult,
   type KnowledgeSyncApplyResult,
   type KnowledgeSyncArtifactApplyResult,
   type KnowledgeSyncBundle,
   type KnowledgeSyncBundleArtifact,
   type KnowledgeSyncBundleTable,
+  type KnowledgeSyncConflictEvidence,
+  type KnowledgeSyncConflictInput,
+  type KnowledgeSyncConflictProposalAgent,
+  type KnowledgeSyncConflictProposalCitation,
+  type KnowledgeSyncConflictProposedPatch,
+  type KnowledgeSyncConflictResolutionProposal,
+  type KnowledgeSyncConflictRow,
   type KnowledgeSyncMachineRow,
   type KnowledgeSyncSnapshotResult,
   type KnowledgeSyncSnapshotRow,
@@ -166,29 +199,28 @@ export {
   type KnowledgeSyncTable,
   type KnowledgeSyncTableApplyResult,
 } from './sync.js';
+
 export {
+  EXAMPLE_KNOWLEDGE_CANONICAL,
   HASNA_KNOWLEDGE_APP_PATH,
   LEGACY_HASNA_KNOWLEDGE_APP_PATH,
-  EXAMPLE_KNOWLEDGE_CANONICAL,
   canonicalExampleKnowledgeStorage,
   defaultKnowledgeConfig,
-  ensureKnowledgeWorkspace,
   globalKnowledgeHome,
   legacyGlobalKnowledgeHome,
   legacyProjectKnowledgeHome,
   projectKnowledgeHome,
-  readKnowledgeConfig,
   resolveLegacyScopedWorkspace,
   resolveScopedWorkspace,
   workspaceForHome,
-  writeKnowledgeConfig,
   type KnowledgeConfig,
   type KnowledgeWorkspace,
 } from './workspace.js';
+
 export {
-  createArtifactStore,
   LocalArtifactStore,
   S3ArtifactStore,
+  createArtifactStore,
   normalizeArtifactKey,
   type ArtifactStore,
   type ArtifactWrite,
@@ -204,6 +236,7 @@ export {
   type StorageContract,
   type StorageValidationResult,
 } from './storage-contract.js';
+
 export {
   KNOWLEDGE_STORAGE_ENV,
   KNOWLEDGE_STORAGE_FALLBACK_ENV,
@@ -226,21 +259,20 @@ export {
   storagePull,
   storagePush,
   storageSync,
+  type StorageEnv,
+  type StorageMode,
+  type StorageStatus,
+  type StorageStatusOptions,
+  type StorageSyncOptions,
+  type SyncMeta,
+  type SyncResult,
 } from './storage.js';
-export type {
-  StorageEnv,
-  StorageMode,
-  StorageStatus,
-  StorageStatusOptions,
-  StorageSyncOptions,
-  SyncMeta,
-  SyncResult,
-} from './storage.js';
+
 export {
-  parseSourceRef,
   catalogSourceUriForRef,
-  revisionIdForSourceRef,
   isSupportedSourceRef,
+  parseSourceRef,
+  revisionIdForSourceRef,
   type BaseSourceRef,
   type FileSourceRef,
   type OpenFilesSourceRef,
@@ -249,36 +281,28 @@ export {
   type SourceRefKind,
   type WebSourceRef,
 } from './source-ref.js';
-export {
-  hybridSearch,
-  type HybridSearchEntry,
-  type HybridSearchOptions,
-  type HybridSearchResult,
-  type SearchProvenance,
-  type SearchResultKind,
+
+export type {
+  HybridSearchEntry,
+  HybridSearchOptions,
+  HybridSearchResult,
+  SearchProvenance,
+  SearchResultKind,
 } from './search.js';
-export {
-  retrieveKnowledgeContext,
-  type KnowledgeContextPack,
-  type RetrievalCitation,
-  type RetrievalExcerpt,
-  type RetrievalGraphEvidence,
-  type RetrievalOptions,
-  type RerankedSearchEntry,
+export type {
+  KnowledgeContextPack,
+  RetrievalCitation,
+  RetrievalExcerpt,
+  RetrievalGraphEvidence,
+  RetrievalOptions,
+  RerankedSearchEntry,
 } from './retrieval.js';
-export {
-  runKnowledgePrompt,
-  type KnowledgePromptOptions,
-  type KnowledgePromptResult,
-} from './agent.js';
+export type { KnowledgePromptOptions, KnowledgePromptResult } from './agent.js';
+
 export {
   DEFAULT_EMBEDDING_DIMENSIONS,
   DEFAULT_EMBEDDING_MODEL_REF,
-  embedTexts,
-  embeddingIndexStatus,
-  indexKnowledgeEmbeddings,
   resolveEmbeddingModelRef,
-  searchVectorIndex,
   type EmbeddingIndexOptions,
   type EmbeddingIndexResult,
   type EmbeddingRuntimeOptions,
@@ -288,6 +312,7 @@ export {
   type EmbeddingVectorResult,
   type SemanticSearchResult,
 } from './embeddings.js';
+
 export {
   createAiSdkProviderRegistry,
   languageModelFor,
@@ -307,69 +332,47 @@ export {
   type ProviderCredentialStatus,
   type ProviderStatusResult,
 } from './providers.js';
-export {
-  runProviderWebSearch,
-  type WebSearchOptions,
-  type WebSearchResult,
-  type WebSearchSource,
-} from './web-search.js';
-export {
-  compileWikiPage,
-  fileAnswerToWiki,
-  lintWiki,
-  type WikiAnswerFileOptions,
-  type WikiAnswerFileResult,
-  type WikiCompileOptions,
-  type WikiCompileResult,
-  type WikiLintIssue,
-  type WikiLintResult,
+export type { WebSearchOptions, WebSearchResult, WebSearchSource } from './web-search.js';
+export type {
+  WikiAnswerFileOptions,
+  WikiAnswerFileResult,
+  WikiCompileOptions,
+  WikiCompileResult,
+  WikiLintIssue,
+  WikiLintResult,
 } from './wiki-compiler.js';
-export {
-  ingestOpenFilesManifest,
-  ingestOpenFilesManifestItems,
-  type ManifestIngestOptions,
-  type ManifestIngestResult,
-  type ManifestItemsIngestOptions,
-  type ManifestObject,
+export type {
+  ManifestIngestOptions,
+  ManifestIngestResult,
+  ManifestItemsIngestOptions,
+  ManifestObject,
 } from './manifest-ingest.js';
-export {
-  ingestSourceRef,
-  type SourceIngestOptions,
-  type SourceIngestResult,
-} from './source-ingest.js';
-export {
-  importRulesProvenance,
-  type RulesProvenanceCitation,
-  type RulesProvenanceImportOptions,
-  type RulesProvenanceImportResult,
-  type RulesProvenancePrecedence,
-  type RulesProvenanceRecord,
-  type RulesProvenanceRedactionStatus,
-  type RulesProvenanceSkippedSource,
-  type RulesProvenanceSourceFamily,
+export type { SourceIngestOptions, SourceIngestResult } from './source-ingest.js';
+export type {
+  RulesProvenanceCitation,
+  RulesProvenanceImportOptions,
+  RulesProvenanceImportResult,
+  RulesProvenancePrecedence,
+  RulesProvenanceRecord,
+  RulesProvenanceRedactionStatus,
+  RulesProvenanceSkippedSource,
+  RulesProvenanceSourceFamily,
 } from './rules-provenance.js';
-export {
-  resolveOpenFilesSource,
-  type ResolvedSourceChunk,
-  type ResolvedSourceCitation,
-  type SourceResolveOptions,
-  type SourceResolveResult,
-  type SourceResolverEvidence,
+export type {
+  ResolvedSourceChunk,
+  ResolvedSourceCitation,
+  SourceResolveOptions,
+  SourceResolveResult,
+  SourceResolverEvidence,
 } from './source-resolver.js';
-export {
-  consumeOpenFilesOutbox,
-  type OutboxConsumeOptions,
-  type OutboxConsumeResult,
-} from './outbox-consume.js';
-export {
-  enqueueMissingEmbeddings,
-  refreshEmbeddingIndex,
-  reindexHealth,
-  type ReindexEmbeddingsResult,
-  type ReindexEnqueueResult,
-  type ReindexHealthResult,
-  type ReindexRuntimeOptions,
+export type { OutboxConsumeOptions, OutboxConsumeResult } from './outbox-consume.js';
+export type {
+  ReindexEmbeddingsResult,
+  ReindexEnqueueResult,
+  ReindexHealthResult,
+  ReindexRuntimeOptions,
 } from './reindex.js';
+
 export {
   DEFAULT_KNOWLEDGE_API_URL,
   clearKnowledgeAuth,
@@ -384,26 +387,28 @@ export {
   type KnowledgeAuthStatus,
 } from './auth.js';
 export {
-  KnowledgeApiClient,
   ApiError as KnowledgeApiError,
+  KnowledgeApiClient,
   type KnowledgeApiClientOptions,
   type Note as KnowledgeNote,
   type NoteInput as KnowledgeNoteInput,
-  type NotePatch as KnowledgeNotePatch,
   type NoteList as KnowledgeNoteList,
+  type NotePatch as KnowledgeNotePatch,
 } from './generated/knowledge-api-client.js';
+
 export {
   KNOWLEDGE_SERVE_APP,
-  createServeHandler,
-  startKnowledgeServe,
-  knowledgeOpenApi,
   NoteRepo,
+  createServeHandler,
+  knowledgeOpenApi,
+  startKnowledgeServe,
   type NoteInput as KnowledgeServeNoteInput,
   type NoteListOptions as KnowledgeServeNoteListOptions,
+  type RunningServe as KnowledgeRunningServe,
   type ServeDeps as KnowledgeServeDeps,
   type StartServeOptions as KnowledgeStartServeOptions,
-  type RunningServe as KnowledgeRunningServe,
 } from './serve.js';
+
 export {
   REMOTE_KNOWLEDGE_CONTRACT_VERSION,
   RemoteKnowledgeClient,

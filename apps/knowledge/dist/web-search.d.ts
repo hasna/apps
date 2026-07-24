@@ -1,5 +1,4 @@
-import { type AiProviderId } from './providers';
-import { type SafetyPolicy } from './safety';
+import type { SafetyPolicy } from './safety';
 import type { KnowledgeConfig } from './workspace';
 export interface WebSearchOptions {
     dbPath: string;
@@ -7,7 +6,7 @@ export interface WebSearchOptions {
     config?: KnowledgeConfig;
     safetyPolicy?: SafetyPolicy;
     modelRef?: string;
-    provider?: AiProviderId;
+    provider?: 'openai' | 'anthropic' | 'deepseek';
     limit?: number;
     maxUses?: number;
     domains?: string[];
@@ -37,4 +36,5 @@ export interface WebSearchResult {
     };
     warnings: string[];
 }
+/** Public compatibility entrypoint. It rejects before reading any option. */
 export declare function runProviderWebSearch(options: WebSearchOptions): Promise<WebSearchResult>;

@@ -1,7 +1,27 @@
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join, relative, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, normalize, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import type { KnowledgeConfig, KnowledgeWorkspace } from './workspace';
+import { createHash } from 'node:crypto';
+import {
+  AnchoredArtifactDirectory,
+  AnchoredFilesystemError,
+  readAnchoredRegularFileSnapshot,
+  type AnchoredIdentity,
+} from './anchored-fs';
+import {
+  trustedKnowledgeWorkspaceIdentity,
+  type KnowledgeConfig,
+  type KnowledgeWorkspace,
+  type TrustedKnowledgeWorkspaceIdentity,
+} from './workspace';
+import {
+  assertKnowledgeLocalRuntime,
+  assertKnowledgeLocalRuntimeWithConfig,
+  assertValidKnowledgeConfig,
+  configContainmentError,
+  readKnowledgeConfiguredMode,
+  type KnowledgeRuntimeEnv,
+  type KnowledgeRuntimeSurface,
+} from './runtime-role';
 
 interface S3ClientLike {
   send(command: unknown): Promise<any>;
@@ -29,65 +49,251 @@ export interface ArtifactStore {
   exists(key: string): Promise<boolean>;
 }
 
+interface ArtifactStoreRuntimeBoundary {
+  env?: KnowledgeRuntimeEnv;
+  surface?: KnowledgeRuntimeSurface;
+  readConfigMode?: () => string | undefined;
+  requireConfig?: boolean;
+  /** Explicit normalized absolute path whose inode is the local authority. */
+  configPath?: string;
+}
+
+interface LocalArtifactState {
+  readonly boundary: ArtifactStoreRuntimeBoundary;
+  readonly readConfigMode: (() => string | undefined) | undefined;
+  readonly configPath: string | undefined;
+  readonly configBaseline: ConfigFingerprint | undefined;
+  readonly artifacts: AnchoredArtifactDirectory;
+}
+
+const localArtifactStates = new WeakMap<object, LocalArtifactState>();
+const artifactStoreWorkspaceIdentities = new WeakMap<object, TrustedKnowledgeWorkspaceIdentity>();
+
+function localArtifactState(store: object): LocalArtifactState {
+  const state = localArtifactStates.get(store);
+  if (!state) throw configContainmentError('local artifact authority is unavailable');
+  return state;
+}
+
+export function assertArtifactStoreMatchesWorkspace(
+  store: ArtifactStore,
+  workspace: KnowledgeWorkspace,
+): void {
+  if (!store || typeof store !== 'object') {
+    throw new Error('A trusted artifact store from the owning workspace is required.');
+  }
+  const storeIdentity = artifactStoreWorkspaceIdentities.get(store);
+  const workspaceIdentity = trustedKnowledgeWorkspaceIdentity(workspace);
+  if (
+    !storeIdentity
+    || !Object.isFrozen(store)
+    || storeIdentity.key !== workspaceIdentity.key
+    || storeIdentity.home !== workspaceIdentity.home
+    || storeIdentity.scope !== workspaceIdentity.scope
+    || storeIdentity.projectRoot !== workspaceIdentity.projectRoot
+  ) {
+    throw new Error('Trusted artifact store identity does not match the workspace identity.');
+  }
+}
+
 export function normalizeArtifactKey(key: string): string {
   const raw = key.replace(/\\/g, '/').trim();
   if (!raw || raw.startsWith('/')) {
-    throw new Error(`Invalid artifact key: ${key}`);
+    throw new Error('Invalid artifact key.');
   }
   const segments = raw.split('/').filter(Boolean);
   if (segments.length === 0 || segments.some((segment) => segment === '.' || segment === '..')) {
-    throw new Error(`Invalid artifact key: ${key}`);
+    throw new Error('Invalid artifact key.');
   }
   return segments.join('/');
 }
 
-function assertInside(root: string, target: string): void {
-  const rel = relative(root, target);
-  if (rel.startsWith('..') || rel === '..' || rel.startsWith(`..${sep}`)) {
-    throw new Error(`Artifact path escapes root: ${target}`);
+interface ConfigFingerprint {
+  readonly identity: AnchoredIdentity;
+  readonly hash: string;
+  readonly mode: string;
+}
+
+function readConfigFingerprint(
+  configPath: string,
+  surface: KnowledgeRuntimeSurface,
+): ConfigFingerprint | undefined {
+  try {
+    const snapshot = readAnchoredRegularFileSnapshot(configPath);
+    if (!snapshot) return undefined;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(snapshot.content);
+    } catch {
+      throw configContainmentError('config JSON is malformed', surface);
+    }
+    assertValidKnowledgeConfig(parsed, surface);
+    const config = parsed as { mode: string; storage: { type: string } };
+    return {
+      identity: snapshot.identity,
+      hash: createHash('sha256').update(snapshot.content).digest('hex'),
+      mode: config.storage.type === 's3' ? 'hosted' : config.mode,
+    };
+  } catch (error) {
+    if (error instanceof AnchoredFilesystemError) {
+      throw configContainmentError(`config anchoring failed: ${error.message}`, surface);
+    }
+    throw error;
   }
 }
 
-function s3UserMetadata(metadata: Record<string, unknown> | undefined): Record<string, string> | undefined {
-  if (!metadata) return undefined;
-  const output: Record<string, string> = {};
-  for (const [key, value] of Object.entries(metadata)) {
-    if (typeof value === 'string') output[key] = value;
-    else if (typeof value === 'number' || typeof value === 'boolean') output[key] = String(value);
-  }
-  return Object.keys(output).length > 0 ? output : undefined;
+function sameConfigFingerprint(
+  expected: ConfigFingerprint,
+  current: ConfigFingerprint | undefined,
+): boolean {
+  return Boolean(
+    current
+    && current.identity.dev === expected.identity.dev
+    && current.identity.ino === expected.identity.ino
+    && current.identity.mode === expected.identity.mode
+    && current.hash === expected.hash,
+  );
 }
 
 export class LocalArtifactStore implements ArtifactStore {
+  private readonly root: string;
   readonly type = 'local' as const;
   readonly canRead = true;
   readonly canWrite = true;
 
-  constructor(private readonly root: string) {
-    mkdirSync(root, { recursive: true });
+  constructor(root: string) {
+    assertKnowledgeLocalRuntime({ surface: 'public-api', env: process.env });
+    const boundary = (arguments as unknown as {
+      1?: ArtifactStoreRuntimeBoundary;
+    })[1] ?? {};
+    if (boundary.requireConfig === true && boundary.configPath === undefined) {
+      throw configContainmentError(
+        'local artifact authority requires an explicit trusted config path',
+        boundary.surface ?? 'public-api',
+      );
+    }
+    if (boundary.configPath !== undefined && (
+      !isAbsolute(boundary.configPath)
+      || normalize(boundary.configPath) !== boundary.configPath
+      || resolve(boundary.configPath) !== boundary.configPath
+      || basename(boundary.configPath) !== 'config.json'
+    )) {
+      throw configContainmentError(
+        'local artifact authority config path must be an absolute normalized config.json path',
+        boundary.surface ?? 'public-api',
+      );
+    }
+    this.root = root;
+    const configPath = boundary.configPath ?? (
+      basename(root) === 'artifacts' ? join(dirname(root), 'config.json') : undefined
+    );
+    const intent = {
+      surface: boundary.surface ?? 'public-api',
+      env: boundary.env ?? process.env,
+    } as const;
+    assertKnowledgeLocalRuntime(intent);
+    const configBaseline = configPath
+      ? readConfigFingerprint(configPath, boundary.surface ?? 'public-api')
+      : undefined;
+    if (boundary.requireConfig === true && !configBaseline) {
+      throw configContainmentError(
+        'local artifact authority requires a current trusted config',
+        boundary.surface ?? 'public-api',
+      );
+    }
+    const readConfigMode = boundary.readConfigMode;
+    assertLocalArtifactRuntime({
+      boundary,
+      readConfigMode,
+      configPath,
+      configBaseline,
+      artifacts: undefined as never,
+    });
+    let artifacts: AnchoredArtifactDirectory;
+    try {
+      artifacts = new AnchoredArtifactDirectory(root);
+    } catch (error) {
+      localArtifactFilesystemError(error, boundary);
+    }
+    localArtifactStates.set(this, {
+      boundary,
+      readConfigMode,
+      configPath,
+      configBaseline,
+      artifacts,
+    });
   }
 
   async put(entry: ArtifactWrite): Promise<ArtifactWriteResult> {
+    const state = localArtifactState(this);
+    assertLocalArtifactRuntime(state);
     const key = normalizeArtifactKey(entry.key);
-    const path = join(this.root, key);
-    assertInside(this.root, path);
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, entry.body);
-    return { key, uri: pathToFileURL(path).href, modified_at: statSync(path).mtime.toISOString() };
+    const result = withLocalArtifactAnchor(state, () => state.artifacts.put(key, entry.body));
+    return {
+      key,
+      uri: pathToFileURL(join(this.root, key)).href,
+      modified_at: result.modifiedAt.toISOString(),
+    };
   }
 
   async getText(key: string): Promise<string> {
+    const state = localArtifactState(this);
+    assertLocalArtifactRuntime(state);
     const normalizedKey = normalizeArtifactKey(key);
-    const path = join(this.root, normalizedKey);
-    assertInside(this.root, path);
-    return readFileSync(path, 'utf8');
+    return withLocalArtifactAnchor(state, () => state.artifacts.read(normalizedKey));
   }
 
   async exists(key: string): Promise<boolean> {
+    const state = localArtifactState(this);
+    assertLocalArtifactRuntime(state);
     const normalizedKey = normalizeArtifactKey(key);
-    const path = join(this.root, normalizedKey);
-    assertInside(this.root, path);
-    return existsSync(path);
+    return withLocalArtifactAnchor(state, () => state.artifacts.exists(normalizedKey));
+  }
+}
+
+function localArtifactFilesystemError(
+  error: unknown,
+  boundary: ArtifactStoreRuntimeBoundary,
+): never {
+  if (error instanceof AnchoredFilesystemError) {
+    throw configContainmentError(
+      'local artifact filesystem containment failed',
+      boundary.surface ?? 'public-api',
+    );
+  }
+  throw error;
+}
+
+function withLocalArtifactAnchor<T>(state: LocalArtifactState, operation: () => T): T {
+  try {
+    return operation();
+  } catch (error) {
+    return localArtifactFilesystemError(error, state.boundary);
+  }
+}
+
+function assertLocalArtifactRuntime(state: LocalArtifactState): void {
+  const intent = {
+    surface: state.boundary.surface ?? 'public-api',
+    env: state.boundary.env ?? process.env,
+  } as const;
+  assertKnowledgeLocalRuntime(intent);
+  if (state.configPath) {
+    const current = readConfigFingerprint(state.configPath, intent.surface);
+    if (state.configBaseline && !sameConfigFingerprint(state.configBaseline, current)) {
+      throw configContainmentError(
+        'local artifact authority was revoked because its trusted config was deleted or replaced',
+        intent.surface,
+      );
+    }
+    if (current) {
+      assertKnowledgeLocalRuntime({ ...intent, configMode: current.mode });
+    } else if (state.boundary.requireConfig) {
+      throw configContainmentError('local artifact authority requires a current trusted config', intent.surface);
+    }
+  }
+  if (state.readConfigMode) {
+    assertKnowledgeLocalRuntimeWithConfig(intent, state.readConfigMode);
   }
 }
 
@@ -103,100 +309,68 @@ export interface S3ArtifactStoreOptions {
 }
 
 export class S3ArtifactStore implements ArtifactStore {
+  declare private readonly options: S3ArtifactStoreOptions;
   readonly type = 's3' as const;
   readonly canRead = true;
   readonly canWrite = true;
-  private client?: S3ClientLike;
-
-  constructor(private readonly options: S3ArtifactStoreOptions) {
-    this.client = options.client;
+  declare private client?: S3ClientLike;
+  constructor(options: S3ArtifactStoreOptions) {
+    containedS3ArtifactStore();
   }
 
-  private async getClient(): Promise<S3ClientLike> {
-    if (this.client) return this.client;
-    const [{ S3Client }, { fromIni }] = await Promise.all([
-      import('@aws-sdk/client-s3'),
-      import('@aws-sdk/credential-providers'),
-    ]);
-    this.client = new S3Client({
-      region: this.options.region,
-      credentials: this.options.profile ? fromIni({ profile: this.options.profile }) : undefined,
-      maxAttempts: this.options.max_attempts,
-    });
-    return this.client;
-  }
+  private async getClient(): Promise<S3ClientLike> { return containedS3ArtifactStore(); }
+  private objectKey(key: string): string { return containedS3ArtifactStore(); }
 
-  private objectKey(key: string): string {
-    const normalizedKey = normalizeArtifactKey(key);
-    const prefix = this.options.prefix ? normalizeArtifactKey(this.options.prefix) : '';
-    return prefix ? `${prefix}/${normalizedKey}` : normalizedKey;
-  }
-
-  async put(entry: ArtifactWrite): Promise<ArtifactWriteResult> {
-    const [{ PutObjectCommand }, client] = await Promise.all([
-      import('@aws-sdk/client-s3'),
-      this.getClient(),
-    ]);
-    const logicalKey = normalizeArtifactKey(entry.key);
-    const key = this.objectKey(logicalKey);
-    await client.send(new PutObjectCommand({
-      Bucket: this.options.bucket,
-      Key: key,
-      Body: entry.body,
-      ContentType: entry.content_type,
-      Metadata: s3UserMetadata(entry.metadata),
-      ServerSideEncryption: this.options.server_side_encryption,
-      SSEKMSKeyId: this.options.kms_key_id,
-    }));
-    return { key: logicalKey, uri: `s3://${this.options.bucket}/${key}`, modified_at: new Date().toISOString() };
-  }
-
-  async getText(key: string): Promise<string> {
-    const [{ GetObjectCommand }, client] = await Promise.all([
-      import('@aws-sdk/client-s3'),
-      this.getClient(),
-    ]);
-    const objectKey = this.objectKey(key);
-    const response = await client.send(new GetObjectCommand({
-      Bucket: this.options.bucket,
-      Key: objectKey,
-    }));
-    if (!response.Body) return '';
-    return await response.Body.transformToString();
-  }
-
-  async exists(key: string): Promise<boolean> {
-    const [{ HeadObjectCommand }, client] = await Promise.all([
-      import('@aws-sdk/client-s3'),
-      this.getClient(),
-    ]);
-    const objectKey = this.objectKey(key);
-    try {
-      await client.send(new HeadObjectCommand({
-        Bucket: this.options.bucket,
-        Key: objectKey,
-      }));
-      return true;
-    } catch (error) {
-      const name = error instanceof Error ? error.name : '';
-      if (name === 'NotFound' || name === 'NoSuchKey' || name === 'NotFoundError') return false;
-      throw error;
-    }
-  }
+  async put(entry: ArtifactWrite): Promise<ArtifactWriteResult> { return containedS3ArtifactStore(); }
+  async getText(key: string): Promise<string> { return containedS3ArtifactStore(); }
+  async exists(key: string): Promise<boolean> { return containedS3ArtifactStore(); }
 }
 
-export function createArtifactStore(config: KnowledgeConfig, workspace: KnowledgeWorkspace): ArtifactStore {
+function containedS3ArtifactStore(): never {
+  return assertKnowledgeLocalRuntime({
+    surface: 'public-api',
+    env: {},
+    hostedRequested: true,
+  }) as never;
+}
+
+Object.freeze(LocalArtifactStore.prototype);
+Object.freeze(S3ArtifactStore.prototype);
+
+export function createArtifactStore(
+  config: KnowledgeConfig,
+  workspace: KnowledgeWorkspace,
+): ArtifactStore {
+  const boundary = (arguments as unknown as { 2?: ArtifactStoreRuntimeBoundary })[2] ?? {};
+  const surface = boundary.surface ?? 'public-api';
+  const env = boundary.env ?? process.env;
+  // Reject hosted runtime intent before inspecting caller-supplied config.
+  assertKnowledgeLocalRuntime({ surface, env });
+  assertValidKnowledgeConfig(config, surface);
+  const workspaceIdentity = trustedKnowledgeWorkspaceIdentity(workspace);
+  const readConfigMode = boundary.readConfigMode
+    ?? (() => readKnowledgeConfiguredMode(
+      workspace.configPath,
+      undefined,
+      boundary.requireConfig ?? false,
+    ));
+  assertKnowledgeLocalRuntimeWithConfig({
+    surface,
+    env,
+    configMode: config.mode,
+    hostedRequested: config.storage.type === 's3',
+  }, readConfigMode);
   if (config.storage.type === 's3') {
-    if (!config.storage.s3?.bucket) throw new Error('S3 artifact storage requires storage.s3.bucket');
-    return new S3ArtifactStore({
-      bucket: config.storage.s3.bucket,
-      prefix: config.storage.s3.prefix,
-      region: config.storage.s3.region,
-      profile: config.storage.s3.profile,
-      max_attempts: config.storage.s3.max_attempts,
-      server_side_encryption: config.storage.s3.server_side_encryption,
-      kms_key_id: config.storage.s3.kms_key_id,
-    });
+    return new S3ArtifactStore(config.storage.s3 as S3ArtifactStoreOptions);
   }
-  return new LocalArtifactStore(workspace.artifactsDir);
+  const store = new (LocalArtifactStore as unknown as {
+    new(root: string, boundary: ArtifactStoreRuntimeBoundary): LocalArtifactStore;
+  })(workspace.artifactsDir, {
+    ...boundary,
+    configPath: boundary.configPath ?? workspace.configPath,
+    readConfigMode,
+  });
+  artifactStoreWorkspaceIdentities.set(store, workspaceIdentity);
+  Object.freeze(store);
+  return store;
 }

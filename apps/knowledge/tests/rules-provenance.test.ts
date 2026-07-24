@@ -8,6 +8,7 @@ import { getKnowledgeDbStats, openKnowledgeDb } from '../src/knowledge-db';
 import { importRulesProvenance } from '../src/rules-provenance';
 import { redactSecrets } from '../src/safety';
 import { createKnowledgeService } from '../src/service';
+import { sanitizedLocalTestEnv } from './helpers/sanitized-env';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI = join(__dirname, '..', 'src', 'cli.ts');
@@ -15,7 +16,7 @@ const CLI = join(__dirname, '..', 'src', 'cli.ts');
 function runCli(args: string[], cwd: string) {
   const result = spawnSync('bun', [CLI, ...args], {
     cwd,
-    env: { ...process.env, HOME: cwd, USERPROFILE: cwd },
+    env: sanitizedLocalTestEnv({ HOME: cwd, USERPROFILE: cwd }),
     maxBuffer: 64 * 1024 * 1024,
   });
   return {
@@ -155,7 +156,7 @@ describe('global rules provenance import', () => {
     mkdirSync(join(dir, '.codewith', 'rules'), { recursive: true });
     writeFileSync(join(dir, '.codewith', 'rules', 'global.md'), '# Codewith Rules\n\nPreserve provenance on imports.');
     const knowledgeHome = join(dir, '.hasna', 'knowledge');
-    mkdirSync(knowledgeHome, { recursive: true });
+    mkdirSync(knowledgeHome, { recursive: true, mode: 0o700 });
     writeFileSync(join(knowledgeHome, 'db.json'), JSON.stringify({
       items: [{
         id: 'k_legacy_rules',

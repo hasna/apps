@@ -3,11 +3,41 @@ import { existsSync, readFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { relative, resolve, sep } from 'node:path';
-import type { Database, SQLQueryBindings } from 'bun:sqlite';
 import { CURRENT_SCHEMA_VERSION, getSchemaVersion, migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
 import { recordStorageObjects, type GeneratedStorageObject, type StorageContract } from './storage-contract';
 import { normalizeArtifactKey, type ArtifactStore } from './artifact-store';
 import type { KnowledgeMachineEntry, KnowledgeMachineRouteResolution, KnowledgeMachineTopology, KnowledgeMachineWorkspaceResolution } from './machines';
+import { parseBoundedJsonData } from './input-limits';
+
+interface SyncDatabaseChanges {
+  readonly changes: number;
+  readonly lastInsertRowid: number | bigint;
+}
+
+interface SyncDatabaseStatement<Row = unknown, Params extends unknown[] = unknown[]> {
+  all(...params: Params): Row[];
+  get(...params: Params): Row | null;
+  run(...params: Params): SyncDatabaseChanges;
+  values(...params: Params): unknown[][];
+}
+
+/** Self-contained structural surface retained for the public sync declaration. */
+interface Database {
+  readonly inTransaction: boolean;
+  run(sql: string, ...bindings: unknown[]): SyncDatabaseChanges;
+  exec(sql: string, ...bindings: unknown[]): SyncDatabaseChanges;
+  query<Row = unknown, Params extends unknown | unknown[] = unknown[]>(
+    sql: string,
+  ): SyncDatabaseStatement<Row, Params extends unknown[] ? Params : [Params]>;
+  prepare<Row = unknown, Params extends unknown | unknown[] = unknown[]>(
+    sql: string,
+    params?: Params,
+  ): SyncDatabaseStatement<Row, Params extends unknown[] ? Params : [Params]>;
+  transaction<Args extends unknown[], Result>(
+    callback: (...args: Args) => Result,
+  ): (...args: Args) => Result;
+  close(throwOnError?: boolean): void;
+}
 
 export interface KnowledgeSyncMachineRow {
   machine_id: string;
@@ -446,8 +476,9 @@ function count(db: Database, table: string): number {
 
 function parseJson<T>(value: string, fallback: T): T {
   try {
-    return JSON.parse(value) as T;
-  } catch {
+    return parseBoundedJsonData<T>(value, 'Persisted sync JSON');
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
     return fallback;
   }
 }
@@ -726,9 +757,9 @@ function upsertSqliteRows(db: Database, table: KnowledgeSyncTable, rows: Row[]):
   return rows.length;
 }
 
-function parseRowKeyValues(table: KnowledgeSyncTable, key: string): SQLQueryBindings[] | null {
+function parseRowKeyValues(table: KnowledgeSyncTable, key: string): unknown[] | null {
   const primaryKeys = PRIMARY_KEYS[table];
-  const values: SQLQueryBindings[] = [];
+  const values: unknown[] = [];
   let rest = key;
   for (let index = 0; index < primaryKeys.length; index += 1) {
     const primaryKey = primaryKeys[index]!;
@@ -740,7 +771,7 @@ function parseRowKeyValues(table: KnowledgeSyncTable, key: string): SQLQueryBind
     const markerIndex = marker ? remaining.indexOf(marker) : -1;
     const encoded = markerIndex >= 0 ? remaining.slice(0, markerIndex) : remaining;
     try {
-      values.push(JSON.parse(encoded) as SQLQueryBindings);
+      values.push(parseBoundedJsonData<unknown>(encoded, 'Persisted sync binding'));
     } catch {
       return null;
     }
@@ -908,9 +939,10 @@ function machineFromTopologyEntry(entry: KnowledgeMachineEntry, now: string): Kn
 function parseJsonRecord(value: string | null | undefined): Record<string, unknown> {
   if (!value) return {};
   try {
-    const parsed = JSON.parse(value);
+    const parsed = parseBoundedJsonData<unknown>(value, 'Persisted sync metadata');
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
-  } catch {
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
     return {};
   }
 }
@@ -918,9 +950,10 @@ function parseJsonRecord(value: string | null | undefined): Record<string, unkno
 function parseJsonArray(value: string | null | undefined): unknown[] {
   if (!value) return [];
   try {
-    const parsed = JSON.parse(value);
+    const parsed = parseBoundedJsonData<unknown>(value, 'Persisted sync array');
     return Array.isArray(parsed) ? parsed : [];
-  } catch {
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
     return [];
   }
 }
@@ -2572,4 +2605,4 @@ export function syncArtifactsFromSnapshot(snapshot: KnowledgeSyncSnapshotRow): A
   return parseJson(snapshot.artifact_hashes_json, []);
 }
 
-export { CURRENT_SCHEMA_VERSION as KNOWLEDGE_SYNC_SCHEMA_VERSION };
+export const KNOWLEDGE_SYNC_SCHEMA_VERSION = CURRENT_SCHEMA_VERSION;
