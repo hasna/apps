@@ -8,6 +8,7 @@ import { executeDispatch, runDueDispatches, dispatchToMultiple } from "../../lib
 import { formatDispatchMessage } from "../../lib/dispatch-formatter.js";
 import { calculateDelay } from "../../lib/tmux.js";
 import type { Task } from "../../types/index.js";
+import { parsePositiveSafeInteger } from "../../lib/positive-safe-integer.js";
 
 export function registerDispatchCommands(program: Command): void {
   // ── dispatch subcommand ──────────────────────────────────────────────────────
@@ -18,10 +19,10 @@ export function registerDispatchCommands(program: Command): void {
     .option("--tasks <ids>", "Comma-separated task IDs to dispatch")
     .option("--list <id>", "Task list ID or slug to dispatch")
     .option("--filter-status <statuses>", "Comma-separated task statuses to include (default: pending)", "pending")
-    .option("--delay <ms>", "Delay in ms between message and Enter (auto-calculated if omitted)", parseInt)
+    .option("--delay <ms>", "Delay in ms between message and Enter (auto-calculated if omitted)", (value) => parsePositiveSafeInteger(value, "--delay"))
     .option("--at <datetime>", "ISO datetime to schedule the dispatch")
     .option("--multiple <targets>", "Comma-separated list of additional legacy/emergency tmux targets (fan-out)")
-    .option("--stagger <ms>", "Delay between targets when using --multiple (default: 500ms)", parseInt)
+    .option("--stagger <ms>", "Delay between targets when using --multiple (default: 500ms)", (value) => parsePositiveSafeInteger(value, "--stagger"))
     .option("--confirm-busy", "Send even if the target tmux pane appears busy")
     .option("--dry-run", "Preview the formatted message without sending")
     .action(async (target: string, opts) => {
@@ -137,7 +138,7 @@ export function registerDispatchCommands(program: Command): void {
     .command("dispatches")
     .description("List dispatch history")
     .option("--status <status>", "Filter by status: pending, sent, failed, cancelled")
-    .option("--limit <n>", "Max results (default: 20)", parseInt)
+    .option("--limit <n>", "Max results (default: 20)", (value) => parsePositiveSafeInteger(value, "--limit"))
     .option("--cancel <id>", "Cancel a pending dispatch by ID")
     .action((opts) => {
       const globalOpts = program.opts();

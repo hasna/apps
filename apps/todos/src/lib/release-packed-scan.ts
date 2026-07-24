@@ -3,7 +3,7 @@ import { resolve, sep } from "node:path";
 import {
   isPackedTextContent,
   validatePackedBinaryFile,
-  validatePublicTextSurfaces,
+  validatePackedTextSurfaces,
   type ReleaseGateFailure,
   type TextFile,
 } from "./public-release-gate.js";
@@ -58,5 +58,5 @@ export function scanExtractedPackedFiles(
     }
   }
 
-  return [...failures, ...validatePublicTextSurfaces(files)];
+  return [...failures, ...validatePackedTextSurfaces(files)];
 }

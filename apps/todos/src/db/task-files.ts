@@ -21,7 +21,7 @@ export interface AddTaskFileInput {
 }
 
 export function addTaskFile(input: AddTaskFileInput, db?: Database): TaskFile {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const id = uuid();
   const timestamp = now();
 
@@ -47,19 +47,19 @@ export function addTaskFile(input: AddTaskFileInput, db?: Database): TaskFile {
 }
 
 export function getTaskFile(id: string, db?: Database): TaskFile | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return d.query("SELECT * FROM task_files WHERE id = ?").get(id) as TaskFile | null;
 }
 
 export function listTaskFiles(taskId: string, db?: Database): TaskFile[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return d.query(
     "SELECT * FROM task_files WHERE task_id = ? ORDER BY path",
   ).all(taskId) as TaskFile[];
 }
 
 export function findTasksByFile(path: string, db?: Database): TaskFile[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return d.query(
     "SELECT * FROM task_files WHERE path = ? AND status != 'removed' ORDER BY updated_at DESC",
   ).all(path) as TaskFile[];
@@ -72,7 +72,7 @@ export function updateTaskFileStatus(
   agentId?: string,
   db?: Database,
 ): TaskFile | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const timestamp = now();
   d.run(
     "UPDATE task_files SET status = ?, agent_id = COALESCE(?, agent_id), updated_at = ? WHERE task_id = ? AND path = ?",
@@ -85,7 +85,7 @@ export function updateTaskFileStatus(
 }
 
 export function removeTaskFile(taskId: string, path: string, db?: Database): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const result = d.run(
     "DELETE FROM task_files WHERE task_id = ? AND path = ?",
     [taskId, path],
@@ -106,7 +106,7 @@ export interface FileConflict {
  * Returns conflicts (not a hard block — caller decides what to do).
  */
 export function detectFileConflicts(taskId: string, paths: string[], db?: Database): FileConflict[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   if (paths.length === 0) return [];
 
   const placeholders = paths.map(() => "?").join(", ");
@@ -133,7 +133,7 @@ export interface BulkFileResult {
 }
 
 export function bulkFindTasksByFiles(paths: string[], db?: Database): BulkFileResult[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   if (paths.length === 0) return [];
 
   const placeholders = paths.map(() => "?").join(", ");
@@ -180,7 +180,7 @@ export interface ActiveFileInfo {
 }
 
 export function listActiveFiles(db?: Database): ActiveFileInfo[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return d.query(`
     SELECT
       tf.path,
@@ -218,7 +218,7 @@ export function getFileHeatMap(
   opts?: { limit?: number; project_id?: string; min_edits?: number },
   db?: Database
 ): FileHeatMapEntry[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const limit = opts?.limit ?? 20;
   const minEdits = opts?.min_edits ?? 1;
 
@@ -263,7 +263,7 @@ export function bulkAddTaskFiles(
   agentId?: string,
   db?: Database,
 ): TaskFile[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const results: TaskFile[] = [];
   const tx = d.transaction(() => {
     for (const path of paths) {

@@ -4,7 +4,17 @@ import { execSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createTask } from "../../db/tasks.js";
-import { autoProject, output, resolveTaskId, resolveTaskIdForCommand, handleError } from "../helpers.js";
+import {
+  autoProject,
+  output,
+  resolveTaskId,
+  resolveTaskIdForCommand,
+  handleError,
+  parseOptionalNonNegativeSafeInteger,
+  parseOptionalPositiveSafeInteger,
+  parsePositiveSafeInteger,
+  parsePositiveSafeIntegerOr,
+} from "../helpers.js";
 import { getTodosCloudClient, cloudRecordVerification, cloudLinkCommit, cloudFindCommit, cloudLinkRef, cloudFindRefs } from "../cloud-router.js";
 
 const HOME = process.env["HOME"] || process.env["USERPROFILE"] || "~";
@@ -515,7 +525,7 @@ exit 0
     .option("--base <name>", "Base branch", "main")
     .option("--plan <id>", "Plan ID scope instead of a single task")
     .option("--path <list>", "Comma-separated extra paths expected for this branch")
-    .option("--root <path>", "Git root to inspect", process.cwd())
+    .option("--root <path>", "Git root to inspect (defaults to the current directory at execution)")
     .option("--no-git-status", "Skip local git status checks")
     .action(async (taskId: string | undefined, opts: { branch: string; base?: string; plan?: string; path?: string; root?: string; gitStatus?: boolean }) => {
       const globalOpts = program.opts();
@@ -527,7 +537,7 @@ exit 0
         branch: opts.branch,
         base_branch: opts.base,
         paths: opts.path ? opts.path.split(",").map((item) => item.trim()).filter(Boolean) : undefined,
-        root: opts.root,
+        root: opts.root ?? process.cwd(),
         include_git_status: opts.gitStatus !== false,
       });
       if (globalOpts.json) { output(plan, true); return; }
@@ -768,7 +778,7 @@ exit 0
     .option("--cwd <path>", "Command working directory")
     .option("--capabilities <items>", "Comma-separated capability labels")
     .option("--attempts <n>", "Retry attempts", "1")
-    .option("--backoff-ms <n>", "Retry backoff in milliseconds", "0")
+    .option("--backoff-ms <n>", "Retry backoff in milliseconds")
     .option("--timeout-ms <n>", "Command timeout in milliseconds")
     .option("--env <json>", "Static provider environment as a JSON object")
     .action(async (name: string, opts: { kind: string; command?: string; cwd?: string; capabilities?: string; attempts?: string; backoffMs?: string; timeoutMs?: string; env?: string }) => {
@@ -784,8 +794,11 @@ exit 0
         command: opts.command,
         cwd: opts.cwd,
         capabilities: listOption(opts.capabilities),
-        retry: { attempts: Number(opts.attempts), backoff_ms: Number(opts.backoffMs) },
-        timeout_ms: opts.timeoutMs ? Number(opts.timeoutMs) : undefined,
+        retry: {
+          attempts: parsePositiveSafeIntegerOr(opts.attempts, 1, "--attempts"),
+          backoff_ms: opts.backoffMs === undefined ? 0 : parsePositiveSafeInteger(opts.backoffMs, "--backoff-ms"),
+        },
+        timeout_ms: parseOptionalPositiveSafeInteger(opts.timeoutMs, "--timeout-ms"),
         env: parseJsonOption(opts.env, "--env") as Record<string, string> | undefined,
       });
       if (globalOpts.json) { output(provider, true); return; }
@@ -1050,12 +1063,12 @@ exit 0
         run_id: runId,
         command,
         status: opts.status,
-        exit_code: opts.exitCode !== undefined ? Number.parseInt(opts.exitCode, 10) : undefined,
+        exit_code: parseOptionalNonNegativeSafeInteger(opts.exitCode, "--exit-code"),
         output_summary: opts.summary,
         artifact_path: opts.artifact,
-        tokens: opts.tokens !== undefined ? Number.parseInt(opts.tokens, 10) : undefined,
+        tokens: parseOptionalPositiveSafeInteger(opts.tokens, "--tokens"),
         cost_usd: opts.costUsd !== undefined ? Number.parseFloat(opts.costUsd) : undefined,
-        duration_ms: opts.durationMs !== undefined ? Number.parseInt(opts.durationMs, 10) : undefined,
+        duration_ms: parseOptionalPositiveSafeInteger(opts.durationMs, "--duration-ms"),
         agent_id: opts.agent || globalOpts.agent,
       });
       if (globalOpts.json) { output(evidence, true); return; }
@@ -1107,11 +1120,11 @@ exit 0
         path,
         artifact_type: opts.type,
         description: opts.description,
-        size_bytes: opts.size !== undefined ? Number.parseInt(opts.size, 10) : undefined,
+        size_bytes: parseOptionalPositiveSafeInteger(opts.size, "--size"),
         sha256: opts.sha256,
         metadata: parseJsonOption(opts.metadata, "--metadata"),
         store_content: opts.requireFile ? true : opts.store,
-        retention_days: opts.retentionDays !== undefined ? Number.parseInt(opts.retentionDays, 10) : undefined,
+        retention_days: parseOptionalPositiveSafeInteger(opts.retentionDays, "--retention-days"),
         agent_id: opts.agent || globalOpts.agent,
       });
       if (globalOpts.json) { output(artifact, true); return; }
@@ -1223,7 +1236,7 @@ exit 0
         status: opts.status,
         agent_id: opts.agent || globalOpts.agent,
         reason: opts.reason,
-        limit: opts.limit ? Number.parseInt(opts.limit, 10) : undefined,
+        limit: parseOptionalPositiveSafeInteger(opts.limit, "--limit"),
         apply: opts.apply,
       });
       output(result, true);
@@ -1244,7 +1257,7 @@ exit 0
         run_id: opts.run,
         status: opts.status,
         source: opts.source,
-        limit: opts.limit ? Number.parseInt(opts.limit, 10) : undefined,
+        limit: parseOptionalPositiveSafeInteger(opts.limit, "--limit"),
       });
       output(findings, true);
     });

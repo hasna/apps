@@ -98,7 +98,7 @@ export interface AgentReliabilityExport {
  * Compute metrics for a single agent from task data.
  */
 export function getAgentMetrics(agentId: string, opts?: { project_id?: string }, db?: Database): AgentMetrics | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
 
   // Resolve agent name
   const agent = d.query("SELECT id, name FROM agents WHERE id = ? OR LOWER(name) = LOWER(?)").get(agentId, agentId) as { id: string; name: string } | null;
@@ -199,7 +199,7 @@ export function getAgentMetrics(agentId: string, opts?: { project_id?: string },
  * Get leaderboard: all agents ranked by composite score.
  */
 export function getLeaderboard(opts?: { project_id?: string; limit?: number }, db?: Database): LeaderboardEntry[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const agents = d.query("SELECT id FROM agents ORDER BY name").all() as { id: string }[];
 
   const entries: AgentMetrics[] = [];
@@ -223,7 +223,7 @@ export function getLeaderboard(opts?: { project_id?: string; limit?: number }, d
  * Score a task completion (store review score in metadata).
  */
 export function scoreTask(taskId: string, score: number, reviewerId?: string, db?: Database): void {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   if (score < 0 || score > 1) throw new Error("Score must be between 0 and 1");
 
   const task = d.query("SELECT metadata FROM tasks WHERE id = ?").get(taskId) as { metadata: string } | null;
@@ -327,7 +327,7 @@ export function getAgentReliabilityScorecard(
   options: AgentReliabilityScorecardOptions = {},
   db?: Database,
 ): AgentReliabilityScorecard | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const agent = resolveAgent(agentId, d);
   if (!agent) return null;
 
@@ -533,7 +533,7 @@ export function listAgentReliabilityScorecards(
   options: AgentReliabilityScorecardOptions & { agent_id?: string; limit?: number } = {},
   db?: Database,
 ): AgentReliabilityScorecard[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const agents = options.agent_id
     ? (resolveAgent(options.agent_id, d) ? [resolveAgent(options.agent_id, d)!] : [])
     : d.query("SELECT id, name FROM agents ORDER BY name").all() as Array<{ id: string; name: string }>;

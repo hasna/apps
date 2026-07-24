@@ -1,2435 +1,2452 @@
-// REST SDK Client (for cross-process/cross-machine use)
-export { TodosClient, createClient } from "./sdk.js";
-export type { TodosClientOptions } from "./sdk.js";
-
-// Package capability manifest
-export { TODOS_CAPABILITIES, createCapabilityManifest } from "./capabilities.js";
-export type {
-  CreateCapabilityManifestOptions,
-  TodosCapability,
-  TodosCapabilityKind,
-  TodosCapabilityManifest,
-  TodosCapabilitySource,
-  TodosCapabilityStability,
-} from "./capabilities.js";
-
-// Stable integration contracts
-export { TODOS_CONTRACTS, TODOS_API_ROUTES, TODOS_ERROR_CODES, createContractsManifest } from "./contracts.js";
-export type {
-  CreateContractsManifestOptions,
-  TodosApiRouteContract,
-  TodosContractPackageSource,
-  TodosContractsManifest,
-  TodosContractStability,
-  TodosErrorContract,
-  TodosHttpMethod,
-  TodosJsonSchema,
-} from "./contracts.js";
-export {
-  TODOS_JSON_CONTRACTS,
-  TODOS_JSON_CONTRACTS_MANIFEST,
-  createJsonContractsManifest,
-  getJsonContract,
-  validateJsonContract,
-} from "./contracts.js";
-export type {
-  CreateJsonContractsManifestOptions,
-  JsonContractValidationIssue,
-  JsonContractValidationResult,
-  TodosJsonContractPackageSource,
-  TodosJsonContractsManifest,
-  TodosJsonFieldContract,
-  TodosJsonFieldType,
-  TodosJsonObjectContract,
-  TodosJsonStability,
-  TodosJsonSurface,
-} from "./contracts.js";
-
-// Bundled local onboarding fixtures
-export {
-  TODOS_ONBOARDING_FIXTURE_LIBRARY_VERSION,
-  TODOS_ONBOARDING_FIXTURE_SOURCE,
-  getOnboardingFixture,
-  getOnboardingFixtureBundle,
-  importOnboardingFixture,
-  listOnboardingFixtures,
-  writeOnboardingFixtureFiles,
-} from "./lib/onboarding-fixtures.js";
-export type {
-  ImportOnboardingFixtureOptions,
-  OnboardingFixture,
-  OnboardingFixtureSummary,
-  WriteOnboardingFixtureResult,
-} from "./lib/onboarding-fixtures.js";
-
-// Local snapshot resources
-export {
-  TODOS_LOCAL_SNAPSHOT_SCHEMA_VERSION,
-  getLocalSnapshot,
-  listLocalSnapshotResources,
-  pollLocalSnapshots,
-  renderLocalSnapshotMarkdown,
-} from "./lib/local-snapshots.js";
-export type {
-  LocalSnapshot,
-  LocalSnapshotCatalogEntry,
-  LocalSnapshotOptions,
-  LocalSnapshotPollResult,
-  LocalSnapshotType,
-} from "./lib/local-snapshots.js";
-
-// SDK integration fixtures
-export {
-  TODOS_SDK_INTEGRATION_FIXTURE_GENERATED_AT,
-  TODOS_SDK_INTEGRATION_FIXTURE_SCHEMA_VERSION,
-  createSdkIntegrationFixturePack,
-  listSdkIntegrationExamples,
-  writeSdkIntegrationFixtures,
-} from "./lib/sdk-integration-fixtures.js";
-export type {
-  SdkIntegrationExample,
-  SdkIntegrationExampleSurface,
-  SdkIntegrationFixtureDatabase,
-  SdkIntegrationFixturePack,
-  WriteSdkIntegrationFixturesResult,
-} from "./lib/sdk-integration-fixtures.js";
-
-// Local review queues
-export {
-  approveReviewItem,
-  claimReviewItem,
-  listReviewQueue,
-  listReviewRoutingRules,
-  removeReviewRoutingRule,
-  reopenReviewItem,
-  requestReviewQueue,
-  returnReviewItem,
-  upsertReviewRoutingRule,
-} from "./lib/review-queues.js";
-export type {
-  ClaimReviewInput,
-  DecideReviewInput,
-  RequestReviewQueueInput,
-  ReviewQueueHistoryEntry,
-  ReviewQueueItem,
-  ReviewQueueListOptions,
-  ReviewQueueMetadata,
-  ReviewQueueState,
-  UpsertReviewRoutingRuleInput,
-} from "./lib/review-queues.js";
-
-// Side-effect-free MCP metadata
-export {
-  CORE_MCP_TOOLS,
-  MCP_PROFILE_GROUPS,
-  MCP_TOOL_GROUPS,
-  TODOS_MCP_MANIFEST,
-  createMcpManifest,
-  getMcpToolNames,
-  shouldRegisterToolForProfile,
-} from "./mcp.js";
-export type {
-  CreateMcpManifestOptions,
-  GetMcpToolNamesOptions,
-  TodosMcpManifest,
-  TodosMcpPackageSource,
-  TodosMcpStability,
-  TodosMcpToolContract,
-} from "./mcp.js";
-
-// CLI/MCP parity contract
-export {
-  TODOS_CLI_MCP_PARITY,
-  TODOS_CLI_MCP_PARITY_MANIFEST,
-  createCliMcpParityManifest,
-} from "./cli-mcp-parity.js";
-export type {
-  CreateCliMcpParityManifestOptions,
-  TodosCliMcpParityDomain,
-  TodosCliMcpParityEntry,
-  TodosCliMcpParityGap,
-  TodosCliMcpParityManifest,
-  TodosCliMcpParityPackageSource,
-  TodosCliMcpParityStatus,
-} from "./cli-mcp-parity.js";
-
-// Package registry manifest
-export { TODOS_PACKAGE_EXPORTS, TODOS_REGISTRY, createTodosRegistry } from "./registry.js";
-export type {
-  CreateTodosRegistryOptions,
-  TodosPackageExportContract,
-  TodosPackageSource,
-  TodosRegistry,
-} from "./registry.js";
-
-// Native local/remote storage status
-export {
-  getNativeStorageStatus,
-  getNativeStorageSyncPlan,
-  redactDatabaseUrl,
-} from "./lib/native-storage-status.js";
-export type {
-  NativeStorageEnvStatus,
-  NativeStorageStatus,
-  NativeStorageSyncPlan,
-  NativeStorageSyncPlanOptions,
-} from "./lib/native-storage-status.js";
-
-// Read-only task route source discovery
-export {
-  TASK_ROUTE_SOURCE_DISCOVERY_SCHEMA_VERSION,
-  discoverTaskRouteSources,
-} from "./lib/task-route-sources.js";
-export type {
-  DiscoverTaskRouteSourcesInput,
-  TaskRouteSourceCandidate,
-  TaskRouteSourceDiscoveryResult,
-  TaskRouteSourceError,
-  TaskRouteSourceStoreResult,
-  TaskRouteSourceStoreStatus,
-} from "./lib/task-route-sources.js";
-
-// Core database
-export { getDatabase, closeDatabase, resetDatabase, resolvePartialId, now, uuid } from "./db/database.js";
-
-// Tasks
-export {
-  createTask,
-  getTask,
-  getTaskWithRelations,
-  listTasks,
-  countTasks,
-  updateTask,
-  upsertTaskByFingerprint,
-  getTaskByFingerprint,
-  deleteTask,
-  startTask,
-  completeTask,
-  lockTask,
-  unlockTask,
-  getTaskLockStatus,
-  addDependency,
-  removeDependency,
-  getTaskDependencies,
-  getTaskDependents,
-  getBlockingDeps,
-  bulkUpdateTasks,
-  bulkCreateTasks,
-  cloneTask,
-  getTaskStats,
-  getTaskGraph,
-  moveTask,
-  getNextTask,
-  claimNextTask,
-  stealTask,
-  claimOrSteal,
-  logCost,
-  getActiveWork,
-  failTask,
-  getTasksChangedSince,
-  getStaleTasks,
-  getStatus,
-  decomposeTasks,
-  setTaskStatus,
-  setTaskPriority,
-  redistributeStaleTasks,
-  getOverdueTasks,
-  getEscalatedTasks,
-  archiveTasks,
-  unarchiveTask,
-  logTime,
-  getTimeLogs,
-  getTimeReport,
-  startFocusSession,
-  getFocusSession,
-  listFocusSessions,
-  pauseFocusSession,
-  resumeFocusSession,
-  stopFocusSession,
-  getIdleFocusSessionPrompts,
-  buildTaskBoardSnapshot,
-  createTaskBoard,
-  deleteTaskBoard,
-  exportTaskBoardBundle,
-  getTaskBoard,
-  importTaskBoardBundle,
-  listTaskBoards,
-  moveBoardCard,
-  renderTaskBoard,
-  updateTaskBoard,
-  createCalendarItem,
-  exportCalendarIcs,
-  getCalendarItem,
-  importCalendarIcs,
-  listCalendarEvents,
-  listCalendarItems,
-} from "./db/tasks.js";
-export type { TaskGraphNode, TaskGraph, BulkCreateTaskInput, EscalatedTask, ActiveWorkItem, StatusSummary, DecomposeSubtaskInput, StaleTaskQuery, TaskLockStatus, FocusSessionQuery, IdleFocusSessionPrompt, LogTimeInput, StartFocusSessionInput, StopFocusSessionInput, TimeReportEntry, CreateTaskBoardInput, MoveBoardCardInput, TaskBoardBundle, TaskBoardQuery, UpdateTaskBoardInput, CalendarQuery, CreateCalendarItemInput, IcsExportOptions, IcsImportResult } from "./db/tasks.js";
-
-// Cycles
-export {
-  createCycle,
-  getCycle,
-  getCycleByNumber,
-  listCycles,
-  updateCycle,
-  deleteCycle,
-  generateCycles,
-  getCurrentCycle,
-  getNextCycle,
-  getCycleStats,
-  listCyclesWithStats,
-} from "./db/cycles.js";
-export type { Cycle, CycleWithStats, CreateCycleInput, CycleUpdateInput, CycleQueryOptions } from "./db/cycles.js";
-
-// Projects
-export {
-  createProject,
-  getProject,
-  getProjectByPath,
-  getProjectWithSources,
-  listProjects,
-  updateProject,
-  deleteProject,
-  ensureProject,
-  nextTaskShortId,
-  slugify,
-  addProjectSource,
-  removeProjectSource,
-  listProjectSources,
-  renameProject,
-  setMachineLocalPath,
-  getMachineLocalPath,
-  listMachineLocalPaths,
-  removeMachineLocalPath,
-} from "./db/projects.js";
-export type { ProjectMachinePath } from "./db/projects.js";
-
-// Plans
-export {
-  createPlan,
-  getPlan,
-  listPlans,
-  updatePlan,
-  deletePlan,
-} from "./db/plans.js";
-export {
-  PLAN_MARKDOWN_SCHEMA,
-  buildPlanArtifactSnapshot,
-  inspectPlanArtifact,
-  parsePlanArtifactMarkdown,
-  readPlanArtifact,
-  renderPlanArtifactMarkdown,
-  resolvePlanArtifactPaths,
-  resolvePlanArtifactProject,
-  writePlanArtifact,
-} from "./lib/plan-artifacts.js";
-export type {
-  PlanArtifactConflict,
-  PlanArtifactInspection,
-  PlanArtifactMetadata,
-  PlanArtifactPaths,
-  PlanArtifactReadResult,
-  PlanArtifactSnapshot,
-  PlanArtifactTaskReference,
-  ResolvePlanArtifactPathInput,
-  WritePlanArtifactResult,
-} from "./lib/plan-artifacts.js";
-
-// Local project knowledge records
-export {
-  createKnowledgeExportReport,
-  createKnowledgeRecord,
-  createKnowledgeSnapshot,
-  getKnowledgeRecord,
-  listKnowledgeRecords,
-  renderKnowledgeExportMarkdown,
-  searchKnowledgeRecords,
-} from "./db/project-knowledge.js";
-export type {
-  CreateKnowledgeRecordInput,
-  CreateKnowledgeSnapshotInput,
-  KnowledgeExportFormat,
-  KnowledgeExportReport,
-  KnowledgeRecordType,
-  ListKnowledgeRecordsOptions,
-  ProjectKnowledgeRecord,
-  SearchKnowledgeRecordsOptions,
-} from "./db/project-knowledge.js";
-
-// Local risk register and health scoring
-export {
-  closeRisk,
-  createRisk,
-  createRiskRegisterExport,
-  getRisk,
-  listRisks,
-  renderRiskRegisterMarkdown,
-  scorePlanHealth,
-  scoreProjectHealth,
-  updateRisk,
-} from "./db/project-risks.js";
-export type {
-  CreateRiskInput,
-  ListRisksOptions,
-  ProjectHealthReport,
-  ProjectHealthStatus,
-  ProjectRiskProbability,
-  ProjectRiskRecord,
-  ProjectRiskSeverity,
-  ProjectRiskStatus,
-  RiskExportFormat,
-  RiskRegisterExport,
-  UpdateRiskInput,
-} from "./db/project-risks.js";
-
-// Local retrospectives and lessons learned
-export {
-  createRetrospective,
-  createRetrospectiveExport,
-  getRetrospective,
-  listRetrospectives,
-  renderRetrospectiveMarkdown,
-} from "./db/retrospectives.js";
-export type {
-  CreateRetrospectiveInput,
-  ListRetrospectivesOptions,
-  RetrospectiveExport,
-  RetrospectiveExportFormat,
-  RetrospectiveRecord,
-  RetrospectiveReport,
-  RetrospectiveScope,
-} from "./db/retrospectives.js";
-
-// Project bootstrap and workspace discovery
-export {
-  bootstrapProject,
-  discoverProjectWorkspace,
-} from "./lib/project-bootstrap.js";
-export type {
-  ProjectBootstrapOptions,
-  ProjectBootstrapResult,
-  ProjectWorkspaceDiscovery,
-} from "./lib/project-bootstrap.js";
-
-// Task routing and workflow invocation pointers
-export {
-  getTaskRouteState,
-  setTaskWorkflowPointers,
-} from "./lib/task-routing.js";
-export type {
-  SetTaskWorkflowPointersInput,
-  TaskRouteContext,
-  TaskRouteGates,
-  TaskRouteState,
-} from "./lib/task-routing.js";
-export {
-  TASK_WORKFLOW_POINTER_SCHEMA_VERSION,
-  TODOS_TASK_ROUTE_STATE_SCHEMA_VERSION,
-  booleanField,
-  classifyProjectKind,
-  compactWorkflowPointers,
-  inferRootProjectId,
-  isWorktreePath,
-  objectField,
-  routeEnabledForTask,
-  routingAutomationMetadata,
-  workflowPointersFromMetadata,
-} from "./lib/task-route-contract.js";
-export type {
-  ResolvedTaskRouteContext,
-  TaskRoutingAutomationMetadata,
-  TaskWorkflowPointers,
-} from "./lib/task-route-contract.js";
-
-// Comments
-export {
-  addComment,
-  getComment,
-  listComments,
-  deleteComment,
-  logProgress,
-} from "./db/comments.js";
-
-// Agents
-export {
-  registerAgent,
-  isAgentConflict,
-  releaseAgent,
-  autoReleaseStaleAgents,
-  getAgent,
-  getAgentByName,
-  listAgents,
-  updateAgent,
-  updateAgentActivity,
-  deleteAgent,
-  archiveAgent,
-  unarchiveAgent,
-  getDirectReports,
-  getOrgChart,
-  matchCapabilities,
-  getCapableAgents,
-  normalizeGeneratedAgentNames,
-  suggestAgentNames,
-} from "./db/agents.js";
-export type { OrgNode } from "./db/agents.js";
-
-// API keys
-export {
-  createApiKey,
-  listApiKeys,
-  hasActiveApiKeys,
-  verifyApiKey,
-  revokeApiKey,
-} from "./db/api-keys.js";
-export type { ApiKeyRecord, CreateApiKeyInput, CreatedApiKey } from "./db/api-keys.js";
-
-// Task Lists
-export {
-  createTaskList,
-  getTaskList,
-  getTaskListBySlug,
-  listTaskLists,
-  updateTaskList,
-  deleteTaskList,
-  ensureTaskList,
-} from "./db/task-lists.js";
-
-// Sessions
-export {
-  createSession,
-  getSession,
-  listSessions,
-  updateSessionActivity,
-  deleteSession,
-} from "./db/sessions.js";
-
-// Audit
-export { logTaskChange, getTaskHistory, getRecentActivity, getRecap } from "./db/audit.js";
-export type { RecapSummary } from "./db/audit.js";
-
-// Training data gatherer (for @hasna/brains fine-tuning integration)
-export { gatherTrainingData } from "./lib/gatherer.js";
-
-// Model config (active fine-tuned model ID)
-export {
-  getActiveModel,
-  setActiveModel,
-  clearActiveModel,
-  DEFAULT_MODEL,
-} from "./lib/model-config.js";
-
-// Webhooks
-export { createWebhook, getWebhook, listWebhooks, deleteWebhook, dispatchWebhook, listDeliveries } from "./db/webhooks.js";
-export type { WebhookDelivery } from "./db/webhooks.js";
-
-// Artifacts (local-only attachment store)
-export {
-  addArtifact,
-  getArtifact,
-  listArtifacts,
-  softDeleteArtifact,
-  purgeArtifact,
-  cleanupArtifacts,
-  exportArtifacts,
-  importArtifactFromManifestEntry,
-  updateArtifactRedaction,
-  ARTIFACT_ENTITY_TYPES,
-  ARTIFACT_STORAGE_MODES,
-  ARTIFACT_REDACTION_STATUSES,
-} from "./db/artifacts.js";
-export type {
-  Artifact,
-  ArtifactEntityType,
-  ArtifactStorageMode,
-  ArtifactRedactionStatus,
-  AddArtifactInput,
-  ListArtifactsFilter,
-  ImportArtifactInput,
-} from "./db/artifacts.js";
-export {
-  getArtifactStoreRoot,
-  computeContentHash,
-  buildArtifactExportManifest,
-  writeArtifactExportManifest,
-  isArtifactExpired,
-} from "./lib/artifact-store.js";
-export type { ArtifactExportEntry, ArtifactExportManifest, CleanupPolicy, StoredArtifactFile } from "./lib/artifact-store.js";
-
-// Headless boundaries
-export {
-  getHeadlessBoundaryManifest,
-  isAllowedLocalApiUrl,
-  assertHeadlessOutboundUrl,
-  scanSourceForForbiddenWebPatterns,
-  HEADLESS_BOUNDARY_VERSION,
-  FORBIDDEN_HOSTED_HOSTS,
-  FORBIDDEN_WEB_PATTERNS,
-} from "./lib/headless-boundaries.js";
-export type { HeadlessBoundaryManifest } from "./lib/headless-boundaries.js";
-
-// Goal workflow (/goal compatibility)
-export {
-  parseGoalCommand,
-  createGoalWorkflow,
-  getGoalProgress,
-  claimGoalStep,
-  logGoalProgress,
-  formatGoalHandoff,
-  resolvePlanId,
-  getGoalCommandRecipesMarkdown,
-  GOAL_COMMAND_RECIPES,
-  GOAL_WORKFLOW_VERSION,
-} from "./lib/goal-workflow.js";
-export type {
-  GoalStep,
-  GoalInput,
-  GoalManifest,
-  GoalProgress,
-  ParsedGoalCommand,
-} from "./lib/goal-workflow.js";
-
-// Verification providers
-export {
-  upsertVerificationProvider,
-  listVerificationRecords,
-  getVerificationRecord,
-  listVerificationProviders,
-  removeVerificationProvider,
-  discoverVerificationProviderCapabilities,
-  runVerificationProvider,
-} from "./lib/verification-providers.js";
-export type {
-  RunVerificationProviderInput,
-  UpsertVerificationProviderInput,
-  VerificationProviderConfig,
-  VerificationProviderCapabilities,
-  VerificationProviderKind,
-  VerificationProviderResult,
-  VerificationProviderRetryConfig,
-  VerificationProviderStatus,
-  VerificationRecordResult,
-} from "./lib/verification-providers.js";
-
-// Portable verification evidence
-export {
-  VERIFICATION_EVIDENCE_SCHEMA,
-  createVerificationEvidence,
-  listVerificationEvidence,
-  getVerificationEvidence,
-  exportVerificationEvidence,
-  writeVerificationExport,
-  toPortableEvidence,
-} from "./lib/verification-evidence.js";
-export type {
-  PortableVerificationEvidence,
-  CreateVerificationEvidenceInput,
-  VerificationExportBundle,
-  VerificationCommandEntry,
-  VerificationTestResult,
-  VerificationLinkRef,
-} from "./lib/verification-evidence.js";
-
-// Local encryption
-export {
-  DEFAULT_ENCRYPTION_KEY_ENV,
-  DEFAULT_ENCRYPTION_PROFILE,
-  TODOS_ENCRYPTED_BRIDGE_KIND,
-  TODOS_ENCRYPTED_VALUE_KIND,
-  TODOS_ENCRYPTION_SCHEMA_VERSION,
-  applyExportProfile,
-  assertExportProfileAllowed,
-  createEncryptedBridgeBundle,
-  decryptBridgeBundle,
-  encryptValue,
-  decryptValue,
-  decryptString,
-  encryptSensitiveFields,
-  encryptString,
-  encryptionProfileStatus,
-  ensureEncryptionProfile,
-  isEncryptedBridgeBundle,
-  isEncryptedValue,
-  listEncryptionProfiles,
-  looksSensitiveKey,
-  removeEncryptionProfile,
-  upsertEncryptionProfile,
-} from "./lib/local-encryption.js";
-export type {
-  EncryptedLocalBridgeBundle,
-  ExportProfile,
-  LocalEncryptionEnvelope,
-  UpsertEncryptionProfileInput,
-} from "./lib/local-encryption.js";
-
-// Context packs
-export {
-  createAgentContextPack,
-  renderAgentContextPack,
-  renderAgentContextPackCompactMarkdown,
-  renderAgentContextPackMarkdown,
-} from "./lib/context-packs.js";
-export type {
-  AgentContextPack,
-  AgentContextPackFormat,
-  AgentContextPackProfile,
-  AgentContextPackRelatedTask,
-  AgentContextPackSection,
-  AgentContextPackTask,
-  CreateAgentContextPackInput,
-} from "./lib/context-packs.js";
-
-// Policy packs
-export {
-  getPolicyPack,
-  listPolicyPacks,
-  upsertPolicyPack,
-  removePolicyPack,
-  validatePolicyPack,
-  explainPolicyPack,
-} from "./lib/policy-packs.js";
-export type {
-  PolicyEvidenceSummary,
-  PolicyFindingSeverity,
-  PolicyFindingStatus,
-  PolicyPackFinding,
-  PolicyPackValidationResult,
-  UpsertPolicyPackInput,
-  ValidatePolicyPackInput,
-} from "./lib/policy-packs.js";
-
-// Resource snapshots
-export {
-  buildResourceSnapshot,
-  subscribeResource,
-  unsubscribeResource,
-  listSubscriptions,
-  isSnapshotStale,
-  getChangedResourcesSince,
-  resourceDiagnostics,
-  resetSubscriptions,
-  RESOURCE_URIS,
-  RESOURCE_SNAPSHOT_VERSION,
-} from "./lib/resource-snapshots.js";
-export type { ResourceSnapshot, ResourceSubscription, ResourceUri } from "./lib/resource-snapshots.js";
-
-// Sandbox profiles
-export {
-  loadSandboxProfiles,
-  saveSandboxProfiles,
-  getSandboxProfile,
-  checkSandboxCommand,
-  getDefaultSandboxProfiles,
-  resetSandboxProfileCache,
-  SANDBOX_PROFILE_VERSION,
-} from "./lib/sandbox-profiles.js";
-export type { SandboxProfile, SandboxCheckInput, SandboxCheckResult } from "./lib/sandbox-profiles.js";
-
-// Agent run dispatcher
-export {
-  loadAgentAdapters,
-  saveAgentAdapters,
-  getAgentAdapter,
-  getDefaultAgentAdapters,
-  resetAgentAdapterCache,
-  enqueueAgentRun,
-  claimNextAgentRun,
-  completeAgentRun,
-  failAgentRun,
-  cancelAgentRun,
-  retryAgentRun,
-  listAgentRuns,
-  getAgentRun,
-  AGENT_RUN_SCHEMA_VERSION,
-} from "./lib/agent-run-dispatcher.js";
-export type {
-  AgentAdapterConfig,
-  AgentRun,
-  AgentRunStatus,
-  EnqueueAgentRunInput,
-  ListAgentRunsFilter,
-} from "./lib/agent-run-dispatcher.js";
-
-// Git traceability
-export {
-  linkTaskToCommit,
-  getTaskCommits,
-  findTaskByCommit,
-  unlinkTaskCommit,
-  getTaskTraceability,
-} from "./db/task-commits.js";
-export type { TaskCommit, CiSnapshot, TaskTraceabilityReport, LinkTaskToCommitInput } from "./db/task-commits.js";
-export {
-  linkTaskGitTrace,
-  inspectGitCommit,
-  getHeadSha,
-  getCurrentBranch,
-  resolveGitRoot,
-  loadCiSnapshot,
-  detectPrForBranch,
-  formatTraceabilityReport,
-  GIT_TRACEABILITY_SCHEMA_VERSION,
-} from "./lib/git-traceability.js";
-export type { GitCommitInfo, LinkGitTraceInput } from "./lib/git-traceability.js";
-
-// Mention resolver
-export { resolveMentions } from "./lib/mention-resolver.js";
-export type {
-  MentionBacklink,
-  MentionReferenceKind,
-  MentionResolution,
-  MentionResolutionReport,
-  MentionResolverInput,
-} from "./lib/mention-resolver.js";
-
-// Labels and custom fields
-export {
-  createLabel, getLabel, listLabels, updateLabel, deleteLabel,
-  assignLabelToTask, removeLabelFromTask, getTaskLabels,
-} from "./db/labels.js";
-export type { Label, CreateLabelInput, UpdateLabelInput } from "./db/labels.js";
-export {
-  createCustomFieldDefinition, getCustomFieldDefinition, listCustomFieldDefinitions,
-  deleteCustomFieldDefinition, setTaskCustomField, getTaskCustomFields,
-  setTaskPriorityMeta, exportTaskFields, CUSTOM_FIELD_TYPES,
-} from "./db/custom-fields.js";
-export type { CustomFieldDefinition, CustomFieldType, TaskCustomFieldValue } from "./db/custom-fields.js";
-
-// Task dedupe and merge
-export {
-  findDuplicateTasks,
-  findDuplicateCandidates,
-  mergeDuplicateTask,
-} from "./lib/task-dedupe.js";
-export type {
-  DuplicateTaskCandidate,
-  FindDuplicateTasksOptions,
-  MergeDuplicateTaskInput,
-  TaskMergeMovedCounts,
-  TaskMergeResult,
-} from "./lib/task-dedupe.js";
-
-// todos.md markdown
-export {
-  TODOS_MARKDOWN_BRIDGE_MARKER,
-  TODOS_MARKDOWN_SCHEMA,
-  exportTodosMarkdown,
-  importTodosMarkdown,
-} from "./lib/todos-md.js";
-export type { ImportTodosMarkdownOptions, TodosMarkdownImportResult } from "./lib/todos-md.js";
-
-// Workspace trust
-export {
-  checkWorkspacePermission,
-  getWorkspaceTrustStatus,
-  listWorkspaceTrustProfiles,
-  removeWorkspaceTrustProfile,
-  upsertWorkspaceTrustProfile,
-} from "./lib/workspace-trust.js";
-export type {
-  UpsertWorkspaceTrustInput,
-  WorkspacePermissionCheck,
-  WorkspacePermissionCheckInput,
-  WorkspaceTrustStatus,
-} from "./lib/workspace-trust.js";
-
-// Approval gates
-export {
-  approveApprovalGate,
-  assertApprovalGate,
-  checkApprovalGate,
-  expireApprovalGate,
-  listApprovalGates,
-  rejectApprovalGate,
-  requestApprovalGate,
-} from "./lib/approval-gates.js";
-export type {
-  ApprovalGate,
-  ApprovalGateStatus,
-  CheckApprovalGateResult,
-  DecideApprovalGateInput,
-  RequestApprovalGateInput,
-} from "./lib/approval-gates.js";
-
-// Agent coordination leases
-export {
-  acquireTaskLease,
-  renewTaskLease,
-  releaseTaskLease,
-  stealTaskLease,
-  recoverStaleLeases,
-  listActiveLeases,
-  listExpiredLeases,
-  getTaskLease,
-  formatLockConflict,
-  AGENT_COORDINATION_SCHEMA,
-  DEFAULT_LEASE_MINUTES,
-} from "./lib/agent-coordination.js";
-export type { TaskLease, LeaseAcquireResult, LockConflict, StaleRecoveryResult } from "./lib/agent-coordination.js";
-
-// CLI MCP parity
-export {
-  CLI_MCP_PARITY_MANIFEST,
-  getParityReport,
-  validateParityManifest,
-  findParityForMcpTool,
-  findParityForCliCommand,
-  normalizeErrorContract,
-  PARITY_SCHEMA_VERSION,
-} from "./lib/cli-mcp-parity.js";
-export type { ParityEntry, ParityReport, ParityDomain, ErrorContract } from "./lib/cli-mcp-parity.js";
-
-// Secret redaction
-export {
-  scanTextForSecrets,
-  redactText,
-  scanAndRedactText,
-  scanFileForSecrets,
-  safeStringify,
-  assertNoSecrets,
-  redactCommentContent,
-  redactHandoffPayload,
-  redactExportRecord,
-  getDefaultSecretPatterns,
-  registerCustomRedactor,
-  resetCustomRedactors,
-  SECRET_REDACTION_SCHEMA,
-  REDACTION_PLACEHOLDER,
-} from "./lib/secret-redaction.js";
-export type { SecretMatch, SecretScanResult, RedactionOptions, SecretPattern } from "./lib/secret-redaction.js";
-
-// Access profiles
-export {
-  ACCESS_PROFILES,
-  resolveAccessProfile,
-  getAccessProfileMeta,
-  listAccessProfiles,
-  shouldRegisterToolForProfile as shouldRegisterToolForAccessProfile,
-  assertToolAllowed,
-  getHeadlessUsageNotes,
-  getProfileToolCount,
-  ACCESS_PROFILE_SCHEMA,
-} from "./lib/access-profiles.js";
-export type { AccessProfile, AccessProfileMeta } from "./lib/access-profiles.js";
-
-// Agent adapter docs
-export {
-  ADAPTER_DOCS_SCHEMA_VERSION,
-  AGENT_ADAPTER_HOSTS,
-  AGENT_ADAPTER_DOCS,
-  normalizeAdapterHost,
-  getAgentAdapterDoc,
-  listAgentAdapterDocs,
-  validateAdapterDocs,
-  renderAdapterDocMarkdown,
-  renderAllAdapterDocsMarkdown,
-  getAdapterDocsFingerprint,
-} from "./lib/agent-adapter-docs.js";
-export type { AgentAdapterHost, AgentAdapterDoc, AdapterWorkflowStep, AdapterFailureMode } from "./lib/agent-adapter-docs.js";
-
-// Inbox intake
-export {
-  INBOX_INTAKE_SCHEMA,
-  INTAKE_SOURCE_TYPES,
-  INTAKE_TRIAGE_STATUSES,
-  detectSourceType,
-  parseCiLog,
-  parseErrorPaste,
-  parseFeedback,
-  previewInboxIntake,
-  createInboxIntake,
-  formatIntakePreviewText,
-} from "./lib/inbox-intake.js";
-export type { IntakeSourceType, IntakeTriageStatus, IntakeInput, IntakePreview, IntakeResult, IntakeOptions } from "./lib/inbox-intake.js";
-
-// Natural-language intake
-export {
-  NL_INTAKE_SCHEMA,
-  parseNaturalLanguageTask,
-  previewNlIntake,
-  createNlIntake,
-  formatNlIntakePreviewText,
-} from "./lib/nl-intake.js";
-export type {
-  ParsedNlFields,
-  NlIntakeExplain,
-  NlIntakeInput,
-  NlIntakePreview,
-  NlIntakeResult,
-  ParseNaturalLanguageOptions,
-} from "./lib/nl-intake.js";
-
-// External issue importers
-export {
-  ISSUE_IMPORT_SCHEMA,
-  ISSUE_SOURCES,
-  detectIssueExportSource,
-  parseIssueExport,
-  loadIssueExportFromFile,
-  previewIssueImport,
-  importIssues,
-  formatIssueImportPreviewText,
-  getIssueImportDocs,
-} from "./lib/issue-importers.js";
-export type {
-  IssueSource,
-  ResolvedIssueSource,
-  NormalizedExternalIssue,
-  IssueImportInput,
-  IssueImportPreviewItem,
-  IssueImportPreview,
-  IssueImportOptions,
-  IssueImportResult,
-} from "./lib/issue-importers.js";
-
-// Run records
-export {
-  RUN_RECORD_SCHEMA,
-  RUN_RECORD_STATUSES,
-  createRunRecord,
-  getRunRecord,
-  listRunRecords,
-  appendRunCommand,
-  recordFilesTouched,
-  linkRunVerification,
-  linkRunArtifact,
-  completeRunRecord,
-  failRunRecord,
-  buildRunReplayBundle,
-  exportRunReplay,
-  formatRunRecordMarkdown,
-  getDefaultReplayDir,
-} from "./lib/run-records.js";
-export type {
-  RunRecordStatus,
-  RunRecord,
-  RunCommandEntry,
-  RunStatusTransition,
-  RunVerificationRef,
-  CreateRunRecordInput,
-  ListRunRecordsFilter,
-  RunReplayBundle,
-} from "./lib/run-records.js";
-
-// Release checks
-export {
-  RELEASE_CHECK_SCHEMA,
-  auditPackageContents,
-  scanDistArtifacts,
-  validateReleaseScripts,
-  runReleaseChecks,
-  formatReleaseCheckReport,
-  getReleaseWorkflowDocs,
-} from "./lib/release-checks.js";
-export type { ReleaseCheckSeverity, ReleaseCheckItem, ReleaseCheckReport, ReleaseCheckOptions } from "./lib/release-checks.js";
-
-// Release notes
-export { generateReleaseNotes, renderReleaseNotesMarkdown } from "./lib/release-notes.js";
-export type {
-  GenerateReleaseNotesInput,
-  ReleaseNotesDocument,
-  ReleaseNotesPlan,
-  ReleaseNotesScope,
-  ReleaseNotesTask,
-} from "./lib/release-notes.js";
-
-// Database backup
-export {
-  DB_BACKUP_SCHEMA,
-  backupDatabase,
-  restoreDatabase,
-  checkDatabaseIntegrity,
-  compactDatabase,
-  migrationDryRun,
-  defaultBackupPath,
-  writeBackupManifest,
-  readBackupManifest,
-} from "./lib/db-backup.js";
-export type { BackupResult, IntegrityResult, MigrationDryRunResult } from "./lib/db-backup.js";
-
-// JSON schemas
-export {
-  JSON_SCHEMA_CATALOG_VERSION,
-  SCHEMA_SEMVER,
-  SCHEMA_ENTITIES,
-  JSON_SCHEMAS,
-  SCHEMA_CONTRACT_FIXTURES,
-  validateSchemaPayload,
-  validateAllContractFixtures,
-  checkSchemaCompatibility,
-  listJsonSchemas,
-  getJsonSchema,
-  getSchemaSemverGuidance,
-  exportSchemasToDirectory,
-  wrapWithSchemaVersion,
-} from "./lib/json-schemas.js";
-export type {
-  SchemaEntity,
-  JsonSchemaDefinition,
-  JsonSchemaProperty,
-  SchemaValidationIssue,
-  SchemaValidationResult,
-  SchemaCompatibilityResult,
-} from "./lib/json-schemas.js";
-
-// Activity audit
-export {
-  ACTIVITY_LOG_SCHEMA,
-  ACTIVITY_ENTITY_TYPES,
-  logActivity,
-  listActivity,
-  getActivityTimeline,
-  exportActivityLog,
-  importActivityLog,
-  redactActivityRecord,
-  formatActivityRecordText,
-} from "./lib/activity-audit.js";
-export type {
-  ActivityEntityType,
-  ActivityRecord,
-  LogActivityInput,
-  ListActivityFilter,
-  ActivityExportBundle,
-} from "./lib/activity-audit.js";
-
-// Task scheduling
-export {
-  TASK_SCHEDULING_SCHEMA,
-  scheduleTask,
-  listDelayedStartTasks,
-  listReadyScheduledTasks,
-  getAgentSafeQueue,
-  getStaleTaskReport,
-  getSchedulingSummary,
-  previewNextRecurrence,
-  agentClaimNextSafe,
-  getAgentLoopDocs,
-} from "./lib/task-scheduling.js";
-export type { ScheduleTaskInput, StaleTaskReport, SchedulingQueueItem, SchedulingSummary } from "./lib/task-scheduling.js";
-
-// Saved views / unified search
-export {
-  SAVED_VIEWS_SCHEMA,
-  createSavedView,
-  getSavedView,
-  listSavedViews,
-  deleteSavedView,
-  unifiedSearch,
-  runSavedView,
-  getBuiltinSavedViews,
-} from "./lib/saved-views.js";
-export type { SearchEntityType, SavedView, UnifiedSearchInput, SearchHit, UnifiedSearchResult } from "./lib/saved-views.js";
-
-// Notification reminders
-export {
-  NOTIFICATION_REMINDERS_SCHEMA,
-  REMINDER_TYPES,
-  REMINDER_STATUSES,
-  createReminder,
-  getReminder,
-  listReminders,
-  dismissReminder,
-  snoozeReminder,
-  scanReminders,
-  processDueReminders,
-  getReminderSummary,
-  getReminderPreferences,
-  setReminderPreferences,
-  getUpcomingDueTasks,
-  notifyUpcomingDeadlines,
-  getReminderDocs,
-} from "./lib/notification-reminders.js";
-export type {
-  ReminderType,
-  ReminderStatus,
-  ReminderPreferences,
-  NotificationReminder,
-  ScanRemindersResult,
-  ProcessRemindersResult,
-  ReminderSummary,
-  CreateReminderInput,
-} from "./lib/notification-reminders.js";
-
-// Terminal notifications / watch rules
-export {
-  describeTerminalNotificationRule,
-  evaluateTerminalWatchRules,
-  getTerminalNotificationRule,
-  listTerminalNotificationRules,
-  parseQuietHours,
-  removeTerminalNotificationRule,
-  renderTerminalNotification,
-  testTerminalNotificationRule,
-  upsertTerminalNotificationRule,
-} from "./lib/terminal-notifications.js";
-export type {
-  TerminalNotification,
-  TerminalNotificationEvaluation,
-  TerminalNotificationRuleInput,
-  TerminalWatchEventInput,
-} from "./lib/terminal-notifications.js";
-
-// Import/export bridge
-export {
-  BUNDLE_SCHEMA,
-  BUNDLE_TYPES,
-  MERGE_STRATEGIES,
-  exportLocalBundle,
-  validateBundle,
-  previewSync,
-  importBundle,
-  writeBundleFile,
-  readBundleFile,
-  getBridgeDocs,
-} from "./lib/import-export-bridge.js";
-export type {
-  ImportExportBundle,
-  ExportLocalBundleOptions,
-  SyncConflict,
-  SyncPreview,
-  ImportBundleOptions,
-  ImportResult,
-  BundleType,
-  MergeStrategy,
-  ConflictType,
-} from "./lib/import-export-bridge.js";
-
-// Dependency graph
-export {
-  DEPENDENCY_GRAPH_SCHEMA,
-  getReadyTasks,
-  getBlockedTaskReports,
-  getCriticalPath,
-  getUnlockImpact,
-  analyzeDependencyGraph,
-  getDependents,
-  getBlockers,
-} from "./lib/dependency-graph.js";
-export type {
-  DependencyNode,
-  BlockedTaskReport,
-  ReadyTaskReport,
-  CriticalPathEntry,
-  UnlockImpactReport,
-  DependencyGraphAnalysis,
-  GraphFilter,
-} from "./lib/dependency-graph.js";
-
-// Plan execution
-export {
-  PLAN_EXECUTION_SCHEMA,
-  PLAN_EXECUTION_MODES,
-  attachPlanToProject,
-  materializePlanSteps,
-  getPlanExecutionState,
-  claimPlanStep,
-  exportPlanExecutionContract,
-  createPlanWithSteps,
-  resolvePlanRef,
-} from "./lib/plan-execution.js";
-export type {
-  PlanExecutionMode,
-  PlanStepInput,
-  PlanExecutionManifest,
-  PlanExecutionState,
-  AttachPlanInput,
-  MaterializePlanInput,
-} from "./lib/plan-execution.js";
-
-// Handoff packets
-export {
-  HANDOFF_PACKET_SCHEMA,
-  buildHandoffPacket,
-  createHandoffPacket,
-  formatHandoffPacket,
-  exportHandoffPacket,
-  getLatestHandoffPacket,
-  getStoredHandoffAsPacket,
-} from "./lib/handoff-packets.js";
-export type {
-  HandoffPacket,
-  HandoffPacketContext,
-  HandoffTaskSummary,
-  BuildHandoffPacketInput,
-} from "./lib/handoff-packets.js";
-
-// TUI dashboard
-export {
-  TUI_DASHBOARD_VIEWS,
-  createTuiDashboardSnapshot,
-  renderTuiDashboardSnapshot,
-} from "./lib/tui-dashboard.js";
-export type {
-  CreateTuiDashboardSnapshotOptions,
-  TuiDashboardDependency,
-  TuiDashboardPlan,
-  TuiDashboardProject,
-  TuiDashboardSnapshot,
-  TuiDashboardView,
-} from "./lib/tui-dashboard.js";
-
-// CLI reference, completions, manpage
-export {
-  CLI_REFERENCE_SCHEMA,
-  CLI_COMMAND_GROUPS,
-  ENV_VARS,
-  EXIT_CODES,
-  JSON_OUTPUT_CONTRACT,
-  listTopLevelCommands,
-  NESTED_SUBCOMMANDS,
-  getCommandHelp,
-  getInstallInstructions,
-} from "./lib/cli-reference.js";
-export type { CliCommandRef, CliCommandGroup, ExitCodeRef, EnvVarRef } from "./lib/cli-reference.js";
-export {
-  COMPLETIONS_SCHEMA,
-  generateBashCompletion,
-  generateZshCompletion,
-  generateFishCompletion,
-  generateCompletionInstallScript,
-} from "./lib/cli-completions.js";
-export {
-  MANPAGE_SCHEMA,
-  generateManpage,
-  generateCliReferenceMarkdown,
-} from "./lib/cli-manpage.js";
-
-// Templates
-export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate, previewTemplate, resolveVariables, evaluateCondition, exportTemplate, importTemplate, getTemplateVersion, listTemplateVersions } from "./db/templates.js";
-export type { TemplatePreview, TemplatePreviewTask, UpdateTemplateInput, TemplateExport } from "./db/templates.js";
-
-// Built-in Templates
-export {
-  BUILTIN_TEMPLATE_LIBRARY_SOURCE,
-  BUILTIN_TEMPLATE_LIBRARY_VERSION,
-  BUILTIN_TEMPLATES,
-  exportBuiltinTemplate,
-  exportBuiltinTemplateFiles,
-  getBuiltinTemplate,
-  initBuiltinTemplates,
-  listBuiltinTemplates,
-  writeBuiltinTemplateFiles,
-} from "./db/builtin-templates.js";
-export type { BuiltinTemplate } from "./db/builtin-templates.js";
-
-// Template library
-export {
-  listTemplateLibrary,
-  getBuiltinTemplate as getBuiltinTemplateFromLibrary,
-  previewBuiltinTemplate,
-  installTemplateLibrary,
-  exportTemplateLibraryCatalog,
-  exportInstalledTemplate,
-  importTemplateFromFile,
-  previewInstalledTemplate,
-  getTemplateLibraryDocs,
-} from "./lib/template-library.js";
-export type { TemplateLibraryEntry, TemplateLibraryCatalog, TemplateLibraryExport } from "./lib/template-library.js";
-
-// Machine topology
-export {
-  MACHINE_TOPOLOGY_SCHEMA,
-  registerLocalMachine,
-  getPathOverrides,
-  getMachineAgentSummaries,
-  buildMachineTopologyReport,
-  getReachableHostnames,
-  getTopologyDocs,
-} from "./lib/machine-topology.js";
-export type {
-  MachinePathOverride,
-  MachineAgentSummary,
-  MachineTopologyNode,
-  MachineTopologyReport,
-} from "./lib/machine-topology.js";
-
-// Environment snapshots
-export {
-  captureEnvironmentSnapshot,
-  compareEnvironmentSnapshotFiles,
-  compareEnvironmentSnapshots,
-  readEnvironmentSnapshot,
-  recordEnvironmentSnapshot,
-  writeEnvironmentSnapshot,
-} from "./lib/environment-snapshots.js";
-export type {
-  CaptureEnvironmentSnapshotInput,
-  EnvironmentSnapshot,
-  EnvironmentSnapshotComparison,
-  EnvironmentSnapshotFile,
-  EnvironmentSnapshotManifest,
-  RecordEnvironmentSnapshotInput,
-  RecordedEnvironmentSnapshot,
-} from "./lib/environment-snapshots.js";
-
-// Decision records and knowledge snapshots
-export {
-  DECISION_RECORD_SCHEMA,
-  KNOWLEDGE_SNAPSHOT_SCHEMA,
-  DECISION_STATUSES,
-  KNOWLEDGE_SNAPSHOT_SOURCES,
-  createDecisionRecord,
-  getDecisionRecord,
-  getDecisionRecordByRef,
-  listDecisionRecords,
-  updateDecisionRecord,
-  setDecisionStatus,
-  supersedeDecisionRecord,
-  formatDecisionRecordMarkdown,
-  exportDecisionRecord,
-  buildKnowledgeSnapshotPayload,
-  captureKnowledgeSnapshot,
-  getKnowledgeSnapshot,
-  listKnowledgeSnapshots,
-  formatKnowledgeSnapshotMarkdown,
-  exportKnowledgeSnapshot,
-  getDecisionRecordsDocs,
-} from "./lib/decision-records.js";
-export type {
-  DecisionStatus,
-  KnowledgeSnapshotSource,
-  DecisionAlternative,
-  DecisionRecord,
-  CreateDecisionRecordInput,
-  UpdateDecisionRecordInput,
-  ListDecisionRecordsFilter,
-  KnowledgeSnapshotDecisionSummary,
-  KnowledgeSnapshotPayload,
-  KnowledgeSnapshotRecord,
-  CaptureKnowledgeSnapshotInput,
-  ListKnowledgeSnapshotsFilter,
-} from "./lib/decision-records.js";
-
-// Report exports
-export {
-  REPORT_EXPORT_SCHEMA,
-  REPORT_KINDS,
-  REPORT_FORMATS,
-  buildReportExportData,
-  formatReportMarkdown,
-  formatReportHtml,
-  formatReportExport,
-  writeReportExport,
-  exportReport,
-  getReportExportDocs,
-} from "./lib/report-exports.js";
-export type {
-  ReportKind,
-  ReportFormat,
-  ReportSection,
-  ReportExportData,
-  BuildReportExportInput,
-} from "./lib/report-exports.js";
-
-// Command aliases
-export {
-  COMMAND_ALIASES_SCHEMA,
-  validateAliasName,
-  loadAliasStore,
-  saveAliasStore,
-  listCommandAliases,
-  getCommandAlias,
-  saveCommandAlias,
-  deleteCommandAlias,
-  resolveCommandQuery,
-  explainCommandQuery,
-  exportCommandAliases,
-  importCommandAliases,
-  getCommandAliasDocs,
-  listBuiltinShortcuts,
-} from "./lib/command-aliases.js";
-export type {
-  CommandAlias,
-  AliasStore,
-  QueryResolution,
-  ImportAliasesResult,
-} from "./lib/command-aliases.js";
-
-// Failure triage
-export {
-  FAILURE_TRIAGE_SCHEMA,
-  FAILURE_CLASSES,
-  buildFailureTriageReport,
-  applyFailureTriage,
-  formatFailureTriageMarkdown,
-  getFailureTriageDocs,
-} from "./lib/failure-triage.js";
-export type {
-  FailureClass,
-  FailureTriageItem,
-  FailureTriageReport,
-  ApplyFailureTriageInput,
-  ApplyFailureTriageResult,
-} from "./lib/failure-triage.js";
-
-// Branch work plans
-export { createBranchWorkPlan } from "./lib/branch-work-plans.js";
-export type {
-  BranchWorkPlan,
-  BranchWorkPlanConflict,
-  BranchWorkPlanGitStatus,
-  CreateBranchWorkPlanInput,
-} from "./lib/branch-work-plans.js";
-
-// User scaffolds
-export {
-  USER_SCAFFOLD_SCHEMA,
-  SCAFFOLD_KINDS,
-  loadUserScaffoldStore,
-  saveUserScaffoldStore,
-  listUserScaffolds,
-  getUserScaffold,
-  createUserScaffold,
-  updateUserScaffold,
-  previewUserScaffold,
-  applyUserScaffold,
-  exportUserScaffold,
-  importUserScaffold,
-  linkTemplateAsScaffold,
-  getUserScaffoldDocs,
-  listLinkedTemplates,
-} from "./lib/user-scaffolds.js";
-export type { ScaffoldKind, UserScaffold, UserScaffoldStore, ScaffoldPreview } from "./lib/user-scaffolds.js";
-
-// Agent workflow demo
-export {
-  AGENT_WORKFLOW_DEMO_SCHEMA,
-  DEMO_DEFAULT_AGENT,
-  DEMO_DEFAULT_PROJECT,
-  DEMO_PROJECT_PATH,
-  runAgentWorkflowDemo,
-  setupEphemeralDemoDb,
-  normalizeAgentWorkflowDemoResult,
-  formatAgentWorkflowDemoReport,
-  getAgentWorkflowDemoDocs,
-} from "./lib/agent-workflow-demo.js";
-export type {
-  DemoStep,
-  AgentWorkflowDemoResult,
-  RunAgentWorkflowDemoOptions,
-  EphemeralDbHandle,
-} from "./lib/agent-workflow-demo.js";
-
-// Feature manifest
-export {
-  FEATURE_MANIFEST_SCHEMA,
-  FEATURE_AREAS,
-  ALL_MCP_TOOLS,
-  buildFeatureManifest,
-  buildMcpToolGroups,
-  getCapabilityDiscovery,
-  normalizeFeatureManifest,
-  formatFeatureManifestReport,
-  getFeatureManifestDocs,
-  validateFeatureManifest,
-  listMcpToolNames,
-  categorizeMcpTool,
-} from "./lib/feature-manifest.js";
-export type {
-  FeatureArea,
-  McpToolGroup,
-  FeatureManifest,
-  CapabilityKind,
-  CapabilityMatch,
-  CapabilityDiscovery,
-  BuildFeatureManifestOptions,
-  GetCapabilityDiscoveryOptions,
-} from "./lib/feature-manifest.js";
-
-// Checklists
-export {
-  getChecklist,
-  addChecklistItem,
-  checkChecklistItem,
-  updateChecklistItemText,
-  removeChecklistItem,
-  clearChecklist,
-  getChecklistStats,
-} from "./db/checklists.js";
-
-// Handoffs
-export {
-  acknowledgeHandoff,
-  createHandoff,
-  createSessionRecoveryHandoff,
-  exportHandoffBundle,
-  getHandoff,
-  getLatestHandoff,
-  importHandoffBundle,
-  listHandoffs,
-} from "./db/handoffs.js";
-export type {
-  CreateHandoffInput,
-  CreateSessionRecoveryHandoffInput,
-  Handoff,
-  HandoffBundle,
-  ImportHandoffBundleResult,
-  ListHandoffsOptions,
-} from "./db/handoffs.js";
-
-// Task Files
-export { addTaskFile, getTaskFile, listTaskFiles, findTasksByFile, updateTaskFileStatus, removeTaskFile, bulkAddTaskFiles } from "./db/task-files.js";
-export type { TaskFile, AddTaskFileInput } from "./db/task-files.js";
-
-// Locks
-export { acquireLock, releaseLock, checkLock, cleanExpiredLocks } from "./db/locks.js";
-export type { ResourceLock } from "./db/locks.js";
-
-// Machines
-export {
-  getOrCreateLocalMachine,
-  getMachineId,
-  resetMachineId,
-  getMachine,
-  getMachineByName,
-  listMachines,
-  registerMachine,
-  updateMachineHeartbeat,
-  getMachineTopologyDiagnostics,
-  deleteMachine,
-} from "./db/machines.js";
-export type {
-  MachineTopologyOptions,
-} from "./db/machines.js";
-export type {
-  MachinePathIssue,
-  MachineTopologyDiagnostics,
-  MachineTopologyMetadata,
-  MachineTopologySummary,
-} from "./types/index.js";
-
-// Orgs
-export { createOrg, getOrg, getOrgByName, listOrgs, updateOrg, deleteOrg } from "./db/orgs.js";
-
-// Task Relationships
-export {
-  addTaskRelationship,
-  getTaskRelationship,
-  removeTaskRelationship,
-  removeTaskRelationshipByPair,
-  getTaskRelationships,
-  findRelatedTaskIds,
-  autoDetectFileRelationships,
-} from "./db/task-relationships.js";
-export { RELATIONSHIP_TYPES } from "./db/task-relationships.js";
-export type { TaskRelationship, AddTaskRelationshipInput, RelationshipType } from "./db/task-relationships.js";
-
-// Knowledge Graph
-export { syncKgEdges, getRelated, findPath, getImpactAnalysis, getCriticalPath as getKgCriticalPath, addKgEdge, removeKgEdges } from "./db/kg.js";
-export type { KgEdge } from "./db/kg.js";
-
-// Patrol & Review
-export { patrolTasks, getReviewQueue } from "./db/patrol.js";
-export type { PatrolIssue, PatrolResult } from "./db/patrol.js";
-
-// Agent Metrics
-export {
-  createAgentReliabilityExport,
-  getAgentMetrics,
-  getAgentReliabilityScorecard,
-  getLeaderboard,
-  listAgentReliabilityScorecards,
-  renderAgentReliabilityMarkdown,
-  scoreTask,
-} from "./db/agent-metrics.js";
-export type {
-  AgentMetrics,
-  AgentReliabilityExport,
-  AgentReliabilityGrade,
-  AgentReliabilityScorecard,
-  AgentReliabilityScorecardOptions,
-  LeaderboardEntry,
-} from "./db/agent-metrics.js";
-
-// Search
-export { searchTasks } from "./lib/search.js";
-export type { SearchOptions } from "./lib/search.js";
-export {
-  deleteSearchView,
-  getSearchView,
-  listSearchViews,
-  normalizeScope,
-  runSavedSearch,
-  runSearchView,
-  saveSearchView,
-} from "./lib/saved-search-views.js";
-export type {
-  SavedSearchFilters,
-  SavedSearchResult,
-  SavedSearchRunResult,
-  SavedSearchScope,
-  SavedSearchView,
-  SaveSearchViewInput,
-} from "./lib/saved-search-views.js";
-
-// Sync
-export { defaultSyncAgents, syncWithAgent, syncWithAgents } from "./lib/sync.js";
-export type { SyncResult } from "./lib/sync-types.js";
-
-// Extract
-export { buildCodebaseIndex, extractTodos, extractFromSource, tagToPriority, watchSourceTodos, EXTRACT_TAGS } from "./lib/extract.js";
-
-// Burndown
-export { getBurndown } from "./lib/burndown.js";
-export type { BurndownData } from "./lib/burndown.js";
-
-// GitHub import
-export { parseGitHubUrl, fetchGitHubIssue, issueToTask } from "./lib/github.js";
-export type { GitHubIssue } from "./lib/github.js";
-
-// Traces
-export { logTrace, getTaskTraces, getTraceStats } from "./db/traces.js";
-export type { TaskTrace, LogTraceInput, TraceType } from "./db/traces.js";
-
-// Context Snapshots
-export { saveSnapshot, getLatestSnapshot, listSnapshots } from "./db/snapshots.js";
-export type { ContextSnapshot, SaveSnapshotInput, SnapshotType } from "./db/snapshots.js";
-
-// Agent Budgets
-export { setBudget, getBudget, checkBudget } from "./db/budgets.js";
-export type { AgentBudget, BudgetCheck } from "./db/budgets.js";
-export type {
-  CodebaseIndex,
-  ExtractedComment,
-  ExtractOptions,
-  ExtractResult,
-  ExtractTag,
-  SourceIndexFile,
-  SourceSymbol,
-  SourceSymbolKind,
-  SourceTodoWatchResult,
-  SourceTodoWatchRun,
-  WatchSourceTodosOptions,
-} from "./lib/extract.js";
-
-// Config
-export {
-  loadConfig,
-  updateConfig,
-  getCompletionGuardConfig,
-  getLocalApiConfig,
-  normalizeApiUrl,
-} from "./lib/config.js";
-export type {
-  TodosConfig,
-  AgentConfig,
-  AgentRunAdapterConfig,
-  CompletionGuardConfig,
-  LocalApiConfig,
-  LocalEncryptionAlgorithm,
-  LocalEncryptionKdf,
-  LocalEncryptionProfileConfig,
-  LocalEventHookConfig,
-  LocalEventHookRetryConfig,
-  LocalEventHookTarget,
-  PolicyPackConfig,
-  RunnerSandboxNetworkPolicy,
-  RunnerSandboxProfile,
-  WorkspacePermissionPreset,
-  WorkspaceTrustProfile as WorkspaceTrustProfileConfig,
-} from "./lib/config.js";
-export {
-  checkRunnerSandbox,
-  explainRunnerSandbox,
-  getRunnerSandboxProfile,
-  listRunnerSandboxProfiles,
-  removeRunnerSandboxProfile,
-  upsertRunnerSandboxProfile,
-} from "./lib/runner-sandbox.js";
-export {
-  cancelAgentRunDispatch,
-  listAgentRunAdapters,
-  listAgentRunQueue,
-  queueAgentRun,
-  removeAgentRunAdapter,
-  retryAgentRunDispatch,
-  runNextAgentDispatch,
-  upsertAgentRunAdapter,
-} from "./lib/agent-run-dispatcher.js";
-export type {
-  AgentRunDispatchMetadata,
-  AgentRunDispatchState,
-  QueueAgentRunInput,
-  QueuedAgentRun,
-  RunAgentDispatchResult,
-  RunNextAgentDispatchInput,
-  UpsertAgentRunAdapterInput,
-} from "./lib/agent-run-dispatcher.js";
-export type {
-  RunnerSandboxCheck,
-  RunnerSandboxCheckInput,
-  UpsertRunnerSandboxInput,
-} from "./lib/runner-sandbox.js";
-export {
-  LOCAL_EVENT_TYPES,
-  emitLocalEventHooks,
-  emitLocalEventHooksQuiet,
-  getLocalEventHook,
-  listLocalEventHooks,
-  removeLocalEventHook,
-  testLocalEventHook,
-  upsertLocalEventHook,
-} from "./lib/event-hooks.js";
-export type {
-  LocalEventEnvelope,
-  LocalEventHookDispatchInput,
-  LocalEventHookDispatchResult,
-  LocalEventHookInput,
-  LocalEventType,
-} from "./lib/event-hooks.js";
-export { previewNaturalLanguageIntake } from "./lib/natural-language-intake.js";
-export type {
-  NaturalLanguageIntakeInput,
-  NaturalLanguageIntakePreview,
-  NaturalLanguageTaskPreview,
-} from "./lib/natural-language-intake.js";
-export {
-  getTaskLocalFields,
-  queryTasksByLocalFields,
-  setTaskLocalFields,
-} from "./lib/local-fields.js";
-export type {
-  LocalTaskFieldQuery,
-  LocalTaskFields,
-  LocalTaskSeverity,
-  SetTaskLocalFieldsInput,
-} from "./lib/local-fields.js";
-export {
-  getTaskWorkflowState,
-  listWorkflowStates,
-  migrateWorkflowStates,
-  queryTasksByWorkflowState,
-  renderWorkflowStatesMarkdown,
-  resolveWorkflowState,
-  setTaskWorkflowState,
-} from "./lib/workflow-states.js";
-export type {
-  SetTaskWorkflowStateOptions,
-  TaskWorkflowStateResult,
-  WorkflowState,
-  WorkflowStateMigrationItem,
-  WorkflowStateMigrationOptions,
-  WorkflowStateMigrationReport,
-  WorkflowStateQuery,
-  WorkflowStateQueryResult,
-  WorkflowStateResolution,
-} from "./lib/workflow-states.js";
-export {
-  renderAgentReplaySimulationMarkdown,
-  simulateAgentReplay,
-  simulateAgentReplayFile,
-} from "./lib/agent-replay-simulator.js";
-export type {
-  AgentReplayOptions,
-  AgentReplaySimulation,
-  AgentReplayStep,
-} from "./lib/agent-replay-simulator.js";
-export {
-  discoverLocalExtensions,
-  getLocalExtension,
-  inspectExtensionSource,
-  installLocalExtension,
-  listLocalExtensions,
-  removeLocalExtension,
-  renderExtensionSummary,
-  validateExtensionManifest,
-  verifyExtensionSignature,
-} from "./lib/local-extensions.js";
-export type {
-  DiscoverLocalExtensionsOptions,
-  ExtensionCompatibilityReport,
-  ExtensionSandboxCheck,
-  ExtensionSourceInspection,
-  ExtensionValidationResult,
-  InstallLocalExtensionInput,
-  LocalExtensionDiscoveryReport,
-  VerifyExtensionSignatureInput,
-} from "./lib/local-extensions.js";
-export {
-  getWorkflowPrompt,
-  listWorkflowPrompts,
-  renderWorkflowPrompt,
-  renderWorkflowPromptMarkdown,
-  WORKFLOW_PROMPTS,
-} from "./lib/workflow-prompts.js";
-export type {
-  WorkflowPromptArgument,
-  WorkflowPromptDefinition,
-  WorkflowPromptRender,
-  WorkflowPromptRenderInput,
-} from "./lib/workflow-prompts.js";
-
-// Completion Guard
-export { checkCompletionGuard } from "./lib/completion-guard.js";
-
-// Recurrence
-export { parseRecurrenceRule, isValidRecurrenceRule, nextOccurrence } from "./lib/recurrence.js";
-export type { ParsedRule } from "./lib/recurrence.js";
-
-// Types
-export type {
-  Task,
-  TaskWithRelations,
-  CreateTaskInput,
-  UpdateTaskInput,
-  TaskFilter,
-  TaskStatus,
-  TaskPriority,
-  TaskDependency,
-  TaskComment,
-  CreateCommentInput,
-  Project,
-  CreateProjectInput,
-  ProjectSource,
-  ProjectSourceRow,
-  CreateProjectSourceInput,
-  ChecklistItem,
-  ChecklistItemRow,
-  CreateChecklistItemInput,
-  Plan,
-  CreatePlanInput,
-  UpdatePlanInput,
-  PlanStatus,
-  Session,
-  CreateSessionInput,
-  Agent,
-  AgentRow,
-  RegisterAgentInput,
-  TaskList,
-  TaskListRow,
-  CreateTaskListInput,
-  UpdateTaskListInput,
-  LockResult,
-  TaskRow,
-  SessionRow,
-  TaskHistory,
-  Webhook,
-  CreateWebhookInput,
-  TaskTemplate,
-  CreateTemplateInput,
-  TemplateTask,
-  TemplateTaskInput,
-  TemplateWithTasks,
-  TemplateVariable,
-  TemplateVersion,
-  Org,
-  CreateOrgInput,
-} from "./types/index.js";
-
-export {
-  TASK_STATUSES,
-  TASK_PRIORITIES,
-  PLAN_STATUSES,
-  DISPATCH_STATUSES,
-  VersionConflictError,
-  TaskNotFoundError,
-  ProjectNotFoundError,
-  PlanNotFoundError,
-  LockError,
-  DependencyCycleError,
-  AgentNotFoundError,
-  TaskListNotFoundError,
-  CompletionGuardError,
-  DispatchNotFoundError,
-} from "./types/index.js";
-
-// Dispatch types
-export type {
-  Dispatch,
-  DispatchStatus,
-  DispatchLog,
-  TmuxTarget,
-  CreateDispatchInput,
-  ListDispatchesFilter,
-} from "./types/index.js";
-
-// Dispatch DB functions
-export {
-  createDispatch,
-  getDispatch,
-  listDispatches,
-  cancelDispatch,
-  updateDispatchStatus,
-  createDispatchLog,
-  listDispatchLogs,
-  getDueDispatches,
-} from "./db/dispatches.js";
-
-// Dispatch engine
-export { executeDispatch, runDueDispatches, dispatchToMultiple } from "./lib/dispatch.js";
-export {
-  LOOP_RUN_TRANSACTION_SCHEMA_VERSION,
-  addTaskRunArtifact,
-  addTaskRunCommand,
-  addTaskRunEvent,
-  addTaskRunFile,
-  beginTaskRunTransaction,
-  finishTaskRun,
-  finishTaskRunTransaction,
-  findTaskRunByTransactionKey,
-  getTaskRun,
-  getTaskRunLedger,
-  listTaskRuns,
-  redactEvidenceText,
-  resolveTaskRunId,
-  summarizeTaskRun,
-  startTaskRun,
-  verifyTaskRunArtifacts,
-} from "./db/task-runs.js";
-export {
-  TASK_FINDING_RESOLVE_MISSING_SCHEMA_VERSION,
-  TASK_FINDING_SCHEMA_VERSION,
-  TASK_FINDING_UPSERT_SCHEMA_VERSION,
-  listCompactTaskFindings,
-  listTaskFindings,
-  resolveMissingTaskFindings,
-  upsertTaskFinding,
-} from "./db/findings.js";
-export {
-  getSecretSafetyConfig,
-  hasSecretFindings,
-  listSecretFindings,
-  redactValue,
-  upsertSecretSafetyConfig,
-} from "./lib/redaction.js";
-export type {
-  SecretFinding,
-} from "./lib/redaction.js";
-export type {
-  SecretSafetyConfig,
-} from "./lib/config.js";
-export {
-  RETENTION_CLEANUP_CONFIRMATION,
-  applyRetentionCleanup,
-  previewRetentionCleanup,
-} from "./lib/retention-cleanup.js";
-export type {
-  ApplyRetentionCleanupInput,
-  RetentionCleanupArtifactFileCandidate,
-  RetentionCleanupCounts,
-  RetentionCleanupInput,
-  RetentionCleanupRecordCandidate,
-  RetentionCleanupReport,
-  RetentionCleanupRunStatus,
-  RetentionCleanupScope,
-} from "./lib/retention-cleanup.js";
-export {
-  compactScaleStorage,
-  createScalePerformanceReport,
-  renderScalePerformanceReportMarkdown,
-} from "./lib/scale-hardening.js";
-export type {
-  CompactScaleStorageOptions,
-  CreateScalePerformanceReportOptions,
-  ScaleBenchmark,
-  ScaleCompactionResult,
-  ScalePerformanceReport,
-} from "./lib/scale-hardening.js";
-export {
-  artifactStorePath,
-  artifactStoreRoot,
-  exportStoredArtifactContent,
-  importStoredArtifactContent,
-  storeArtifactContent,
-  verifyStoredArtifact,
-} from "./lib/artifact-store.js";
-export type {
-  ArtifactIntegrityReport,
-  ArtifactIntegrityStatus,
-  ExportedArtifactContent,
-  StoredArtifactContent,
-  StoredArtifactMetadata,
-} from "./lib/artifact-store.js";
-export type {
-  BeginTaskRunTransactionInput,
-  CompactTaskRun,
-  FinishTaskRunTransactionInput,
-  LoopRunTransactionAction,
-  LoopRunTransactionResult,
-  TaskRun,
-  TaskRunArtifact,
-  TaskRunCommand,
-  TaskRunCommandStatus,
-  TaskRunEvent,
-  TaskRunEventType,
-  TaskRunLedger,
-  TaskRunStatus,
-} from "./db/task-runs.js";
-export type {
-  CompactTaskFinding,
-  ListTaskFindingsFilter,
-  ResolveMissingFindingsInput,
-  ResolveMissingFindingsResult,
-  TaskFinding,
-  TaskFindingResolveAction,
-  TaskFindingSeverity,
-  TaskFindingStatus,
-  TaskFindingUpsertAction,
-  UpsertTaskFindingInput,
-  UpsertTaskFindingResult,
-} from "./db/findings.js";
-export {
-  createInboxItem,
-  deriveInboxTitle,
-  detectInboxSourceType,
-  fingerprintInboxInput,
-  getInboxItem,
-  listInboxItems,
-} from "./db/inbox.js";
-export type { CreateInboxItemInput, InboxItem, InboxSourceType, InboxStatus } from "./db/inbox.js";
-export {
-  TODOS_LOCAL_BRIDGE_KIND,
-  TODOS_LOCAL_BRIDGE_SCHEMA_VERSION,
-  createLocalBridgeBundle,
-  importLocalBridgeBundle,
-  validateLocalBridgeBundle,
-} from "./lib/local-bridge.js";
-export {
-  LOCAL_BACKUP_CHECKSUM_ALGORITHM,
-  TODOS_LOCAL_BACKUP_KIND,
-  TODOS_LOCAL_BACKUP_SCHEMA_VERSION,
-  TODOS_LOCAL_INTEGRITY_KIND,
-  TODOS_LOCAL_INTEGRITY_SCHEMA_VERSION,
-  checkLocalIntegrity,
-  createLocalBackup,
-  readLocalBackupFile,
-  restoreLocalBackup,
-  verifyLocalBackup,
-  writeLocalBackupFile,
-} from "./lib/local-backups.js";
-export type {
-  ExportLocalBridgeOptions,
-  LocalBridgeImportConflict,
-  LocalBridgeImportResult,
-  LocalBridgeValidationResult,
-  TodosLocalBridgeBundle,
-  TodosLocalBridgeData,
-  TodosLocalBridgePackageSource,
-  TodosLocalBridgeSource,
-} from "./lib/local-bridge.js";
-export type {
-  CreateLocalBackupOptions,
-  LocalBackupBundle,
-  LocalBackupManifest,
-  LocalBackupRestoreResult,
-  LocalBackupSqliteIntegrity,
-  LocalBackupVerification,
-  LocalIntegrityReport,
-  RestoreLocalBackupOptions,
-} from "./lib/local-backups.js";
-export { getLocalActivityTimeline } from "./lib/activity-timeline.js";
-export type {
-  LocalActivityTimelineEntityType,
-  LocalActivityTimelineEntry,
-  LocalActivityTimelineOptions,
-  LocalActivityTimelineOrder,
-  LocalActivityTimelinePage,
-  LocalActivityTimelineSource,
-} from "./lib/activity-timeline.js";
-export { runTodosDoctor } from "./lib/doctor.js";
-export type {
-  DoctorBackup,
-  DoctorCheck,
-  DoctorRepair,
-  DoctorResult,
-  DoctorSeverity,
-  DoctorSummary,
-  RunTodosDoctorOptions,
-} from "./lib/doctor.js";
-export {
-  checkTaskDoneContract,
-  getTaskContract,
-  getTaskReview,
-  recordTaskReview,
-  requestTaskReview,
-  setTaskContract,
-} from "./lib/task-contracts.js";
-export type {
-  RecordTaskReviewInput,
-  RecordableTaskReviewState,
-  RequestTaskReviewInput,
-  SetTaskContractInput,
-  TaskContract,
-  TaskDoneContractResult,
-  TaskReview,
-  TaskReviewHistoryEntry,
-  TaskReviewState,
-  TaskRiskLevel,
-} from "./lib/task-contracts.js";
-export {
-  LOCAL_ROADMAP_SCHEMA_VERSION,
-  createMilestone,
-  createRoadmap,
-  deleteMilestone,
-  deleteRoadmap,
-  exportRoadmapBundle,
-  getRoadmap,
-  importRoadmapBundle,
-  listMilestones,
-  listReleaseGroups,
-  listRoadmaps,
-  renderRoadmapMarkdown,
-  summarizeMilestone,
-  summarizeRoadmap,
-  updateMilestone,
-  updateRoadmap,
-  upsertReleaseGroup,
-} from "./lib/roadmaps.js";
-export type {
-  CreateMilestoneInput,
-  CreateRoadmapInput,
-  ImportRoadmapBundleResult,
-  LocalMilestoneConfig,
-  LocalMilestoneStatus,
-  LocalReleaseGroupConfig,
-  LocalRoadmapConfig,
-  LocalRoadmapStatus,
-  LocalRoadmapStoreConfig,
-  MilestoneSummary,
-  RoadmapBundle,
-  RoadmapProgressSummary,
-  RoadmapSummary,
-  UpdateMilestoneInput,
-  UpdateRoadmapInput,
-  UpsertReleaseGroupInput,
-} from "./lib/roadmaps.js";
-
-export {
-  LOCAL_CAPACITY_SCHEMA_VERSION,
-  getPlanningForecast,
-  listCapacityProfiles,
-  removeCapacityProfile,
-  renderPlanningForecastMarkdown,
-  upsertCapacityProfile,
-} from "./lib/capacity-forecasts.js";
-export type {
-  CapacityProfileQuery,
-  ForecastRiskFlag,
-  LocalCapacityProfileConfig,
-  LocalCapacityStoreConfig,
-  PlanningForecast,
-  PlanningForecastInput,
-  PlanningForecastTask,
-  UpsertCapacityProfileInput,
-} from "./lib/capacity-forecasts.js";
-
-export {
-  LOCAL_AUDIT_LEDGER_HASH_ALGORITHM,
-  LOCAL_AUDIT_LEDGER_SCHEMA_VERSION,
-  getLocalAuditLedger,
-  listLocalAuditLedgerCheckpoints,
-  renderLocalAuditLedgerMarkdown,
-  sealLocalAuditLedger,
-  verifyLocalAuditLedger,
-} from "./lib/audit-ledger.js";
-export type {
-  LocalAuditLedger,
-  LocalAuditLedgerEntry,
-  LocalAuditLedgerInput,
-  LocalAuditLedgerScope,
-  LocalAuditLedgerSource,
-  LocalAuditLedgerVerifyResult,
-  SealLocalAuditLedgerInput,
-} from "./lib/audit-ledger.js";
-
-export {
-  LOCAL_RELEASE_COMPATIBILITY_SCHEMA_VERSION,
-  createReleaseCompatibilityReport,
-  renderReleaseCompatibilityMarkdown,
-} from "./lib/release-compatibility.js";
-export type {
-  CreateReleaseCompatibilityReportOptions,
-  ReleaseCompatibilityCheck,
-  ReleaseCompatibilityReport,
-  ReleaseCompatibilityStatus,
-} from "./lib/release-compatibility.js";
-
-export {
-  EXTERNAL_ISSUE_IMPORT_SCHEMA_VERSION,
-  importExternalIssues,
-} from "./lib/external-issue-importers.js";
-export {
-  TESTERS_ISSUE_REPORT_BATCH_RESULT_SCHEMA_VERSION,
-  TESTERS_ISSUE_REPORT_RESULT_SCHEMA_VERSION,
-  TESTERS_ISSUE_REPORT_SCHEMA_VERSION,
-  fingerprintTesterIssueReport,
-  normalizeTesterIssueReport,
-  readTesterIssueReportsPayload,
-  upsertTesterIssueReport,
-  upsertTesterIssueReports,
-} from "./lib/tester-issue-reports.js";
-export {
-  LOCAL_NOTIFICATION_SCHEMA_VERSION,
-  checkLocalNotifications,
-} from "./lib/local-notifications.js";
-export {
-  LOCAL_USAGE_LEDGER_SCHEMA_VERSION,
-  createLocalUsageLedger,
-  renderLocalUsageLedgerMarkdown,
-} from "./lib/usage-ledger.js";
-export {
-  LOCAL_REPORT_SCHEMA_VERSION,
-  LOCAL_REPORT_TYPES,
-  createLocalReport,
-  listLocalReportTypes,
-  renderLocalReportMarkdown,
-} from "./lib/local-reports.js";
-export type {
-  ExternalIssueExistingMatch,
-  ExternalIssueImportInput,
-  ExternalIssueImportResult,
-  ExternalIssueProvider,
-  ExternalIssueRecord,
-} from "./lib/external-issue-importers.js";
-export type {
-  TesterIssueArtifact,
-  TesterIssueEvidence,
-  TesterIssueFailure,
-  TesterIssueKind,
-  TesterIssueReportAction,
-  TesterIssueReportSource,
-  TesterIssueReportTarget,
-  TesterIssueReportV1,
-  TesterIssueSeverity,
-  UpsertTesterIssueReportInput,
-  UpsertTesterIssueReportResult,
-  UpsertTesterIssueReportsResult,
-} from "./lib/tester-issue-reports.js";
-export type {
-  CheckLocalNotificationsInput,
-  CheckLocalNotificationsResult,
-  LocalNotificationAlert,
-  LocalNotificationKind,
-  LocalNotificationQuietHours,
-  LocalNotificationSeverity,
-} from "./lib/local-notifications.js";
-export type {
-  UsageLedgerOptions,
-  UsageLedgerQuotaInput,
-  UsageLedgerQuotaResult,
-  UsageLedgerReport,
-} from "./lib/usage-ledger.js";
-export type {
-  LocalReport,
-  LocalReportAgentSummary,
-  LocalReportBlockedTask,
-  LocalReportOptions,
-  LocalReportPlanSummary,
-  LocalReportRunSummary,
-  LocalReportTaskSummary,
-  LocalReportTaskView,
-  LocalReportType,
-  LocalReportVerificationSummary,
-} from "./lib/local-reports.js";
-export {
-  COMPLETION_SHELLS,
-  collectCliCommandEntries,
-  createCliManual,
-  generateCompletionScript,
-  renderCliManualMarkdown,
-} from "./lib/cli-help.js";
-export type {
-  CliCommandEntry,
-  CliManual,
-  CliOptionEntry,
-  CompletionShell,
-} from "./lib/cli-help.js";
-// Dispatch formatter
-export { formatDispatchMessage, formatSingleTask } from "./lib/dispatch-formatter.js";
-export type { FormatOpts } from "./lib/dispatch-formatter.js";
-
-// tmux primitives
-export { parseTmuxTarget, formatTmuxTarget, validateTmuxTarget, sendToTmux, calculateDelay, DELAY_MIN, DELAY_MAX } from "./lib/tmux.js";
-
-// Storage/service adapter boundary
-export {
-  STORAGE_TABLES,
-  TODOS_STORAGE_ENV,
-  TODOS_STORAGE_FALLBACK_ENV,
-  TODOS_STORAGE_TABLES,
-  assertTodosRemoteStorageConfig,
-  createLocalSqliteTodosStorageAdapter,
-  createHybridTodosStorageAdapter,
-  createPostgresTodosSyncStore,
-  createPostgresTodosStorageAdapter,
-  createTodosS3ArtifactStore,
-  createTodosStorageAdapter,
-  downloadRunArtifactsFromS3,
-  exportSqliteTodosStorageSnapshot,
-  getStorageDatabaseEnv,
-  getStorageDatabaseUrl,
-  getStorageMode,
-  getTodosStorageDatabaseEnv,
-  getTodosStorageDatabaseUrl,
-  getTodosStorageEnvName,
-  getTodosStorageMode,
-  importSqliteTodosStorageSnapshot,
-  isTodosRemoteStorageEnabled,
-  loadStorageConfig,
-  loadTodosStorageConfig,
-  parseStorageMode,
-  planRunArtifactsS3Sync,
-  postgresTodosSyncSchemaSql,
-  signAwsV4Request,
-  uploadRunArtifactsToS3,
-  buildS3ObjectKey,
-  buildS3ObjectUrl,
-} from "./storage.js";
-export type {
-  CreatePostgresTodosSyncStoreOptions,
-  CreatePostgresTodosStorageAdapterOptions,
-  CreateTodosStorageAdapterOptions,
-  CreateLocalSqliteTodosStorageAdapterOptions,
-  CreateHybridTodosStorageAdapterOptions,
-  DownloadRunArtifactsFromS3Options,
-  HybridTodosRemoteSync,
-  HybridTodosStorageAdapter,
-  HybridTodosStorageSyncResult,
-  PlanRunArtifactsS3SyncOptions,
-  MaybePromise,
-  PostgresTodosSyncPushResult,
-  PullPostgresTodosSnapshotOptions,
-  PutTodosS3ObjectInput,
-  SignAwsV4RequestInput,
-  SignedAwsV4Request,
-  TodosAwsCredentials,
-  TodosActiveWorkFilter,
-  TodosAgentUpdateInput,
-  TodosAgentStore,
-  TodosAuditStore,
-  TodosPlanStore,
-  TodosProjectStore,
-  TodosStorageAdapter,
-  TodosStorageCapabilities,
-  TodosStorageConfig,
-  TodosStorageContext,
-  TodosStorageEnv,
-  TodosStorageImportResult,
-  TodosStorageKind,
-  TodosStorageMode,
-  TodosStorageTable,
-  TodosStorageSnapshot,
-  TodosPostgresStorageConfig,
-  TodosPostgresQueryClient,
-  TodosPostgresQueryResult,
-  TodosPostgresSyncRecordRow,
-  TodosPostgresSyncRecordType,
-  TodosS3ArtifactStore,
-  TodosS3ArtifactStoreOptions,
-  TodosS3StorageConfig,
-  TodosS3ObjectRef,
-  TodosRunArtifactRemoteRef,
-  TodosRunArtifactSyncFilter,
-  TodosRunArtifactSyncPlan,
-  TodosRunArtifactSyncResult,
-  TodosSyncStore,
-  TodosSyncConfig,
-  TodosTaskClaimFilter,
-  TodosTaskCompletionOptions,
-  TodosTaskFailureOptions,
-  TodosTaskFailureResult,
-  TodosTaskListStore,
-  TodosTaskStore,
-  TodosTemplateStore,
-  UploadRunArtifactsToS3Options,
-} from "./storage.js";
+/** Generated dependency-light Stage A public boundary. */
+import type * as Runtime from "./index.runtime.js";
+import { assertTodosLocalStorageRole as assertStageALocalStorageRole } from "./storage/config.js";
+export type * from "./index.runtime.js";
+export { createHybridTodosStorageAdapter, createPostgresTodosStorageAdapter, createPostgresTodosSyncStore, createTodosS3ArtifactStore, downloadRunArtifactsFromS3, planRunArtifactsS3Sync, uploadRunArtifactsToS3 } from "./storage.js";
+export { TodosHostedStorageUnavailableError } from "./storage/authority-floor.js";
+
+function loadRuntimeOwner(): typeof import("./stage-a-public-runtime.js") {
+  assertStageALocalStorageRole(process.env);
+  const ownerSpecifier = import.meta.url.endsWith(".ts") ? "./stage-a-public-runtime.ts" : "./stage-a-public-runtime.js";
+  return require(ownerSpecifier) as typeof import("./stage-a-public-runtime.js");
+}
+
+function loadRuntime(): typeof Runtime {
+  return loadRuntimeOwner().root;
+}
+
+function preparePublicSqliteBoundaryArguments(args: readonly unknown[]): unknown[] {
+  return loadRuntimeOwner().preparePublicSqliteBoundaryArguments(args);
+}
+
+function publicizePublicSqliteBoundaryResult<T>(value: T): T {
+  return loadRuntimeOwner().publicizePublicSqliteBoundaryResult(value);
+}
+
+type LazyPublicValueKind = "array" | "date" | "map" | "null-object" | "object" | "regexp" | "set";
+
+function lazyPublicValue(name: keyof typeof Runtime, kind: LazyPublicValueKind): unknown {
+  const target: object = kind === "array" ? []
+    : kind === "date" ? new Date(0)
+      : kind === "map" ? new Map()
+        : kind === "null-object" ? Object.create(null)
+          : kind === "regexp" ? new RegExp("")
+            : kind === "set" ? new Set()
+              : {};
+  let resolved: object | undefined;
+  let publicProxy: object;
+  const methodWrappers = new WeakMap<Function, Function>();
+  const guardedOperationObjects = new WeakMap<object, object>();
+  const targetPrototype = Reflect.getPrototypeOf(target);
+  const targetConstructor = targetPrototype === null ? undefined : Reflect.get(targetPrototype, "constructor", targetPrototype);
+  const resolve = (): object => {
+    assertStageALocalStorageRole(process.env);
+    if (resolved) return resolved;
+    const value = Reflect.get(loadRuntime(), name);
+    if (value === null || typeof value !== "object") throw new TypeError(`public export ${String(name)} is not an object`);
+    resolved = value;
+    return value;
+  };
+  const operationReceiver = (): object => {
+    const value = resolve();
+    return Reflect.isExtensible(target) ? value : target;
+  };
+  const nativeSlotAccessorGetters = new Set<Function>();
+  for (const prototype of [Set.prototype, Map.prototype, RegExp.prototype]) {
+    for (const property of Reflect.ownKeys(prototype)) {
+      const getter = Reflect.getOwnPropertyDescriptor(prototype, property)?.get;
+      if (getter) nativeSlotAccessorGetters.add(getter);
+    }
+  }
+  const accessorReceiver = (receiver: object, property: PropertyKey, publicReceiver: object): object => {
+    let owner: object | null = receiver;
+    while (owner !== null) {
+      const descriptor = Reflect.getOwnPropertyDescriptor(owner, property);
+      if (descriptor) return descriptor.get && nativeSlotAccessorGetters.has(descriptor.get) ? receiver : publicReceiver;
+      owner = Reflect.getPrototypeOf(owner);
+    }
+    return publicReceiver;
+  };
+  const guardOperationObject = (operationObject: object): object => {
+    const cachedProxy = guardedOperationObjects.get(operationObject);
+    if (cachedProxy) return cachedProxy;
+    const operationMethods = new WeakMap<Function, Function>();
+    const operationPrototype = Reflect.getPrototypeOf(operationObject);
+    const operationConstructor = operationPrototype === null
+      ? undefined : Reflect.get(operationPrototype, "constructor", operationPrototype);
+    let operationProxy: object;
+    const authorize = (): object => { resolve(); return operationObject; };
+    const publicize = (property: PropertyKey, value: unknown): unknown => {
+      if (value === operationObject) return operationProxy;
+      if (typeof value !== "function") return value;
+      if (property === "constructor" && value === operationConstructor) return value;
+      const cachedMethod = operationMethods.get(value);
+      if (cachedMethod) return cachedMethod;
+      let methodProxy!: Function;
+      methodProxy = new Proxy(value, {
+        apply(_method, thisArg, args) {
+          const receiver = authorize();
+          const invocationReceiver = thisArg === operationProxy ? receiver : thisArg;
+          const result = Reflect.apply(value, invocationReceiver, args);
+          return result === receiver ? operationProxy : result;
+        },
+        construct(_method, args, newTarget) {
+          authorize();
+          return Reflect.construct(value, args, newTarget);
+        },
+      });
+      operationMethods.set(value, methodProxy);
+      operationMethods.set(methodProxy, methodProxy);
+      return methodProxy;
+    };
+    operationProxy = new Proxy(operationObject, {
+      get(_target, property) { const receiver = authorize(); return publicize(property, Reflect.get(receiver, property, operationProxy)); },
+      set(_target, property, value) { const receiver = authorize(); return Reflect.set(receiver, property, value, operationProxy); },
+      has(_target, property) { return Reflect.has(authorize(), property); },
+      ownKeys() { return Reflect.ownKeys(authorize()); },
+      getOwnPropertyDescriptor(_target, property) {
+        const descriptor = Reflect.getOwnPropertyDescriptor(authorize(), property);
+        if (!descriptor || !("value" in descriptor) || descriptor.configurable === false) return descriptor;
+        return { ...descriptor, value: publicize(property, descriptor.value) };
+      },
+      defineProperty(_target, property, descriptor) { return Reflect.defineProperty(authorize(), property, descriptor); },
+      deleteProperty(_target, property) { return Reflect.deleteProperty(authorize(), property); },
+      getPrototypeOf() { return Reflect.getPrototypeOf(authorize()); },
+      setPrototypeOf(_target, prototype) { return Reflect.setPrototypeOf(authorize(), prototype); },
+      isExtensible() { return Reflect.isExtensible(authorize()); },
+      preventExtensions() { return Reflect.preventExtensions(authorize()); },
+    });
+    guardedOperationObjects.set(operationObject, operationProxy);
+    return operationProxy;
+  };
+  const isIteratorFactory = (property: PropertyKey): boolean => property === Symbol.iterator
+    || ((kind === "array" || kind === "map" || kind === "set")
+      && (property === "entries" || property === "keys" || property === "values"));
+  const callbackReceiverIndex = (property: PropertyKey): number | undefined => {
+    if ((kind === "map" || kind === "set") && property === "forEach") return 2;
+    if (kind !== "array") return undefined;
+    if (property === "reduce" || property === "reduceRight") return 3;
+    return property === "every" || property === "filter" || property === "find"
+      || property === "findIndex" || property === "findLast" || property === "findLastIndex"
+      || property === "flatMap" || property === "forEach" || property === "map" || property === "some"
+      ? 2 : undefined;
+  };
+  const publicizeCallbackArguments = (property: PropertyKey, args: unknown[], receiver: object): unknown[] => {
+    const receiverIndex = callbackReceiverIndex(property);
+    if (receiverIndex === undefined || typeof args[0] !== "function") return args;
+    const callback = args[0] as Function;
+    const guardedCallback = function (this: unknown, ...callbackArgs: unknown[]): unknown {
+      resolve();
+      if (callbackArgs[receiverIndex] === receiver) callbackArgs[receiverIndex] = publicProxy;
+      return Reflect.apply(callback, this, callbackArgs);
+    };
+    return [guardedCallback, ...args.slice(1)];
+  };
+  const publicizeProperty = (receiver: object, property: PropertyKey, value: unknown): unknown => {
+    if (value === receiver) return publicProxy;
+    if (typeof value !== "function") return value;
+    if (property === "constructor" && value === targetConstructor) return value;
+    const cached = methodWrappers.get(value);
+    if (cached) return cached;
+    let wrapper!: Function;
+    wrapper = new Proxy(value, {
+      apply(_method, thisArg, args) {
+        const currentReceiver = operationReceiver();
+        const invocationReceiver = thisArg === publicProxy ? currentReceiver : thisArg;
+        const result = Reflect.apply(value, invocationReceiver, publicizeCallbackArguments(property, args, currentReceiver));
+        if (result === currentReceiver) return publicProxy;
+        return isIteratorFactory(property) && result !== null && typeof result === "object"
+          ? guardOperationObject(result) : result;
+      },
+      construct(_method, args, newTarget) {
+        const currentReceiver = operationReceiver();
+        const result = Reflect.construct(value, args, newTarget);
+        return result === currentReceiver ? publicProxy : result;
+      },
+    });
+    methodWrappers.set(value, wrapper);
+    methodWrappers.set(wrapper, wrapper);
+    return wrapper;
+  };
+  const publicizeDescriptor = (receiver: object, property: PropertyKey, descriptor: PropertyDescriptor): PropertyDescriptor =>
+    "value" in descriptor ? { ...descriptor, value: publicizeProperty(receiver, property, descriptor.value) } : descriptor;
+  const materializeTarget = (): boolean => {
+    const value = resolve();
+    if (!Reflect.isExtensible(target)) return true;
+    if (kind === "map") {
+      for (const [entryKey, entryValue] of value as Map<unknown, unknown>)
+        (target as Map<unknown, unknown>).set(entryKey, entryValue);
+    } else if (kind === "set") {
+      for (const entryValue of value as Set<unknown>) (target as Set<unknown>).add(entryValue);
+    } else if (kind === "date") {
+      (target as Date).setTime((value as Date).getTime());
+    }
+    for (const property of Reflect.ownKeys(value)) {
+      const rawDescriptor = Reflect.getOwnPropertyDescriptor(value, property);
+      if (!rawDescriptor) continue;
+      const descriptor = publicizeDescriptor(value, property, rawDescriptor);
+      const current = Reflect.getOwnPropertyDescriptor(target, property);
+      if (current && !current.configurable) {
+        if ("value" in descriptor && "value" in current) {
+          if (!Reflect.defineProperty(target, property, { value: descriptor.value, writable: descriptor.writable })) return false;
+        } else if (descriptor.get !== current.get || descriptor.set !== current.set) return false;
+        continue;
+      }
+      if (!Reflect.defineProperty(target, property, descriptor)) return false;
+    }
+    return Reflect.preventExtensions(target);
+  };
+  publicProxy = new Proxy(target, {
+    get(_target, property) {
+      const receiver = operationReceiver();
+      const value = Reflect.get(receiver, property, accessorReceiver(receiver, property, publicProxy));
+      return publicizeProperty(receiver, property, value);
+    },
+    set(_target, property, value) { const receiver = operationReceiver(); return Reflect.set(receiver, property, value, publicProxy); },
+    has(_target, property) { return Reflect.has(operationReceiver(), property); },
+    ownKeys() { return Reflect.ownKeys(operationReceiver()); },
+    getOwnPropertyDescriptor(_target, property) {
+      resolve();
+      if (!Reflect.isExtensible(target)) return Reflect.getOwnPropertyDescriptor(target, property);
+      if (kind === "array" && property === "length") {
+        (target as unknown[]).length = (resolve() as unknown[]).length;
+        return Reflect.getOwnPropertyDescriptor(target, property);
+      }
+      const receiver = resolve();
+      const descriptor = Reflect.getOwnPropertyDescriptor(receiver, property);
+      return descriptor ? { ...publicizeDescriptor(receiver, property, descriptor), configurable: true } : undefined;
+    },
+    defineProperty(_target, property, descriptor) { return Reflect.defineProperty(operationReceiver(), property, descriptor); },
+    deleteProperty(_target, property) { return Reflect.deleteProperty(operationReceiver(), property); },
+    getPrototypeOf() { resolve(); return Reflect.getPrototypeOf(target); },
+    setPrototypeOf(_target, prototype) { resolve(); return prototype === Reflect.getPrototypeOf(target); },
+    isExtensible() { resolve(); return Reflect.isExtensible(target); },
+    preventExtensions() { return materializeTarget(); },
+  });
+  return publicProxy;
+}
+
+const runtimeClassBridges = new WeakMap<Function, Set<Function>>();
+
+function bridgeRuntimeClassInstanceof(runtimeClass: Function, wrapperClass: Function): void {
+  let wrappers = runtimeClassBridges.get(runtimeClass);
+  if (!wrappers) {
+    wrappers = new Set<Function>();
+    runtimeClassBridges.set(runtimeClass, wrappers);
+    const originalHasInstance = runtimeClass[Symbol.hasInstance];
+    Object.defineProperty(runtimeClass, Symbol.hasInstance, {
+      configurable: true,
+      value(value: unknown): boolean {
+        if (Reflect.apply(originalHasInstance, runtimeClass, [value])) return true;
+        const nativeHasInstance = Function.prototype[Symbol.hasInstance];
+        return [...wrappers!].some((wrapper) => Reflect.apply(nativeHasInstance, wrapper, [value]));
+      },
+    });
+  }
+  wrappers.add(wrapperClass);
+}
+
+export const ACCESS_PROFILES = lazyPublicValue("ACCESS_PROFILES", "array") as typeof Runtime.ACCESS_PROFILES;
+export const ACCESS_PROFILE_SCHEMA = ("todos.access_profile.v1") as unknown as typeof Runtime.ACCESS_PROFILE_SCHEMA;
+export const ACTIVITY_ENTITY_TYPES = lazyPublicValue("ACTIVITY_ENTITY_TYPES", "array") as typeof Runtime.ACTIVITY_ENTITY_TYPES;
+export const ACTIVITY_LOG_SCHEMA = ("todos.activity_log.v1") as unknown as typeof Runtime.ACTIVITY_LOG_SCHEMA;
+export const ADAPTER_DOCS_SCHEMA_VERSION = ("todos.agent_adapter_docs.v1") as unknown as typeof Runtime.ADAPTER_DOCS_SCHEMA_VERSION;
+export const AGENT_ADAPTER_DOCS = lazyPublicValue("AGENT_ADAPTER_DOCS", "object") as typeof Runtime.AGENT_ADAPTER_DOCS;
+export const AGENT_ADAPTER_HOSTS = lazyPublicValue("AGENT_ADAPTER_HOSTS", "array") as typeof Runtime.AGENT_ADAPTER_HOSTS;
+export const AGENT_COORDINATION_SCHEMA = ("todos.agent_coordination.v1") as unknown as typeof Runtime.AGENT_COORDINATION_SCHEMA;
+export const AGENT_RUN_SCHEMA_VERSION = ("todos.agent_run.v1") as unknown as typeof Runtime.AGENT_RUN_SCHEMA_VERSION;
+export const AGENT_WORKFLOW_DEMO_SCHEMA = ("todos.agent_workflow_demo.v1") as unknown as typeof Runtime.AGENT_WORKFLOW_DEMO_SCHEMA;
+export const ALL_MCP_TOOLS = lazyPublicValue("ALL_MCP_TOOLS", "array") as typeof Runtime.ALL_MCP_TOOLS;
+export const ARTIFACT_ENTITY_TYPES = lazyPublicValue("ARTIFACT_ENTITY_TYPES", "array") as typeof Runtime.ARTIFACT_ENTITY_TYPES;
+export const ARTIFACT_REDACTION_STATUSES = lazyPublicValue("ARTIFACT_REDACTION_STATUSES", "array") as typeof Runtime.ARTIFACT_REDACTION_STATUSES;
+export const ARTIFACT_STORAGE_MODES = lazyPublicValue("ARTIFACT_STORAGE_MODES", "array") as typeof Runtime.ARTIFACT_STORAGE_MODES;
+const _AgentNotFoundErrorPublicWrapper = class AgentNotFoundError extends Error {
+  constructor(a0: any, ...args: any[]) { super(); assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); const runtimeClass = loadRuntime().AgentNotFoundError; bridgeRuntimeClassInstanceof(runtimeClass, AgentNotFoundError); return publicizePublicSqliteBoundaryResult(Reflect.construct(runtimeClass, publicArgs, new.target)) as any; }
+  static [Symbol.hasInstance](value: unknown): boolean { assertStageALocalStorageRole(process.env); const nativeHasInstance = Function.prototype[Symbol.hasInstance]; if (Reflect.apply(nativeHasInstance, this, [value])) return true; return this === AgentNotFoundError && Reflect.apply(nativeHasInstance, loadRuntime().AgentNotFoundError, [value]); }
+};
+Object.defineProperties(_AgentNotFoundErrorPublicWrapper, { name: { value: "AgentNotFoundError", configurable: true }, length: { value: 1, configurable: true } });
+export const AgentNotFoundError = _AgentNotFoundErrorPublicWrapper as unknown as typeof Runtime.AgentNotFoundError;
+export type AgentNotFoundError = Runtime.AgentNotFoundError;
+export const BUILTIN_TEMPLATES = lazyPublicValue("BUILTIN_TEMPLATES", "array") as typeof Runtime.BUILTIN_TEMPLATES;
+export const BUILTIN_TEMPLATE_LIBRARY_SOURCE = ("bundled-local-template-library") as unknown as typeof Runtime.BUILTIN_TEMPLATE_LIBRARY_SOURCE;
+export const BUILTIN_TEMPLATE_LIBRARY_VERSION = ("2026-05-21") as unknown as typeof Runtime.BUILTIN_TEMPLATE_LIBRARY_VERSION;
+export const BUNDLE_SCHEMA = ("todos.bundle.v1") as unknown as typeof Runtime.BUNDLE_SCHEMA;
+export const BUNDLE_TYPES = lazyPublicValue("BUNDLE_TYPES", "array") as typeof Runtime.BUNDLE_TYPES;
+export const CLI_COMMAND_GROUPS = lazyPublicValue("CLI_COMMAND_GROUPS", "array") as typeof Runtime.CLI_COMMAND_GROUPS;
+export const CLI_MCP_PARITY_MANIFEST = lazyPublicValue("CLI_MCP_PARITY_MANIFEST", "array") as typeof Runtime.CLI_MCP_PARITY_MANIFEST;
+export const CLI_REFERENCE_SCHEMA = ("todos.cli_reference.v1") as unknown as typeof Runtime.CLI_REFERENCE_SCHEMA;
+export const COMMAND_ALIASES_SCHEMA = ("todos.command_aliases.v1") as unknown as typeof Runtime.COMMAND_ALIASES_SCHEMA;
+export const COMPLETIONS_SCHEMA = ("todos.cli_completions.v1") as unknown as typeof Runtime.COMPLETIONS_SCHEMA;
+export const COMPLETION_SHELLS = lazyPublicValue("COMPLETION_SHELLS", "array") as typeof Runtime.COMPLETION_SHELLS;
+export const CORE_MCP_TOOLS = lazyPublicValue("CORE_MCP_TOOLS", "set") as typeof Runtime.CORE_MCP_TOOLS;
+export const CUSTOM_FIELD_TYPES = lazyPublicValue("CUSTOM_FIELD_TYPES", "array") as typeof Runtime.CUSTOM_FIELD_TYPES;
+const _CompletionGuardErrorPublicWrapper = class CompletionGuardError extends Error {
+  constructor(a0: any, a1: any, ...args: any[]) { super(); assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); const runtimeClass = loadRuntime().CompletionGuardError; bridgeRuntimeClassInstanceof(runtimeClass, CompletionGuardError); return publicizePublicSqliteBoundaryResult(Reflect.construct(runtimeClass, publicArgs, new.target)) as any; }
+  static [Symbol.hasInstance](value: unknown): boolean { assertStageALocalStorageRole(process.env); const nativeHasInstance = Function.prototype[Symbol.hasInstance]; if (Reflect.apply(nativeHasInstance, this, [value])) return true; return this === CompletionGuardError && Reflect.apply(nativeHasInstance, loadRuntime().CompletionGuardError, [value]); }
+};
+Object.defineProperties(_CompletionGuardErrorPublicWrapper, { name: { value: "CompletionGuardError", configurable: true }, length: { value: 2, configurable: true } });
+export const CompletionGuardError = _CompletionGuardErrorPublicWrapper as unknown as typeof Runtime.CompletionGuardError;
+export type CompletionGuardError = Runtime.CompletionGuardError;
+export const DB_BACKUP_SCHEMA = ("todos.db_backup.v1") as unknown as typeof Runtime.DB_BACKUP_SCHEMA;
+export const DECISION_RECORD_SCHEMA = ("todos.decision_record.v1") as unknown as typeof Runtime.DECISION_RECORD_SCHEMA;
+export const DECISION_STATUSES = lazyPublicValue("DECISION_STATUSES", "array") as typeof Runtime.DECISION_STATUSES;
+export const DEFAULT_ENCRYPTION_KEY_ENV = ("TODOS_ENCRYPTION_KEY") as unknown as typeof Runtime.DEFAULT_ENCRYPTION_KEY_ENV;
+export const DEFAULT_ENCRYPTION_PROFILE = ("default") as unknown as typeof Runtime.DEFAULT_ENCRYPTION_PROFILE;
+export const DEFAULT_LEASE_MINUTES = 30 as unknown as typeof Runtime.DEFAULT_LEASE_MINUTES;
+export const DEFAULT_MODEL = ("gpt-4o-mini") as unknown as typeof Runtime.DEFAULT_MODEL;
+export const DELAY_MAX = 5000 as unknown as typeof Runtime.DELAY_MAX;
+export const DELAY_MIN = 3000 as unknown as typeof Runtime.DELAY_MIN;
+export const DEMO_DEFAULT_AGENT = ("demoagent") as unknown as typeof Runtime.DEMO_DEFAULT_AGENT;
+export const DEMO_DEFAULT_PROJECT = ("Agent Workflow Demo") as unknown as typeof Runtime.DEMO_DEFAULT_PROJECT;
+export const DEMO_PROJECT_PATH = ("/tmp/todos-agent-workflow-demo") as unknown as typeof Runtime.DEMO_PROJECT_PATH;
+export const DEPENDENCY_GRAPH_SCHEMA = ("todos.dependency_graph.v1") as unknown as typeof Runtime.DEPENDENCY_GRAPH_SCHEMA;
+export const DISPATCH_STATUSES = lazyPublicValue("DISPATCH_STATUSES", "array") as typeof Runtime.DISPATCH_STATUSES;
+const _DependencyCycleErrorPublicWrapper = class DependencyCycleError extends Error {
+  constructor(a0: any, a1: any, ...args: any[]) { super(); assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); const runtimeClass = loadRuntime().DependencyCycleError; bridgeRuntimeClassInstanceof(runtimeClass, DependencyCycleError); return publicizePublicSqliteBoundaryResult(Reflect.construct(runtimeClass, publicArgs, new.target)) as any; }
+  static [Symbol.hasInstance](value: unknown): boolean { assertStageALocalStorageRole(process.env); const nativeHasInstance = Function.prototype[Symbol.hasInstance]; if (Reflect.apply(nativeHasInstance, this, [value])) return true; return this === DependencyCycleError && Reflect.apply(nativeHasInstance, loadRuntime().DependencyCycleError, [value]); }
+};
+Object.defineProperties(_DependencyCycleErrorPublicWrapper, { name: { value: "DependencyCycleError", configurable: true }, length: { value: 2, configurable: true } });
+export const DependencyCycleError = _DependencyCycleErrorPublicWrapper as unknown as typeof Runtime.DependencyCycleError;
+export type DependencyCycleError = Runtime.DependencyCycleError;
+const _DispatchNotFoundErrorPublicWrapper = class DispatchNotFoundError extends Error {
+  constructor(a0: any, ...args: any[]) { super(); assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); const runtimeClass = loadRuntime().DispatchNotFoundError; bridgeRuntimeClassInstanceof(runtimeClass, DispatchNotFoundError); return publicizePublicSqliteBoundaryResult(Reflect.construct(runtimeClass, publicArgs, new.target)) as any; }
+  static [Symbol.hasInstance](value: unknown): boolean { assertStageALocalStorageRole(process.env); const nativeHasInstance = Function.prototype[Symbol.hasInstance]; if (Reflect.apply(nativeHasInstance, this, [value])) return true; return this === DispatchNotFoundError && Reflect.apply(nativeHasInstance, loadRuntime().DispatchNotFoundError, [value]); }
+};
+Object.defineProperties(_DispatchNotFoundErrorPublicWrapper, { name: { value: "DispatchNotFoundError", configurable: true }, length: { value: 1, configurable: true } });
+export const DispatchNotFoundError = _DispatchNotFoundErrorPublicWrapper as unknown as typeof Runtime.DispatchNotFoundError;
+export type DispatchNotFoundError = Runtime.DispatchNotFoundError;
+export const ENV_VARS = lazyPublicValue("ENV_VARS", "array") as typeof Runtime.ENV_VARS;
+export const EXIT_CODES = lazyPublicValue("EXIT_CODES", "array") as typeof Runtime.EXIT_CODES;
+export const EXTERNAL_ISSUE_IMPORT_SCHEMA_VERSION = 1 as unknown as typeof Runtime.EXTERNAL_ISSUE_IMPORT_SCHEMA_VERSION;
+export const EXTRACT_TAGS = lazyPublicValue("EXTRACT_TAGS", "array") as typeof Runtime.EXTRACT_TAGS;
+export const FAILURE_CLASSES = lazyPublicValue("FAILURE_CLASSES", "array") as typeof Runtime.FAILURE_CLASSES;
+export const FAILURE_TRIAGE_SCHEMA = ("todos.failure_triage.v1") as unknown as typeof Runtime.FAILURE_TRIAGE_SCHEMA;
+export const FEATURE_AREAS = lazyPublicValue("FEATURE_AREAS", "array") as typeof Runtime.FEATURE_AREAS;
+export const FEATURE_MANIFEST_SCHEMA = ("todos.feature_manifest.v1") as unknown as typeof Runtime.FEATURE_MANIFEST_SCHEMA;
+export const FORBIDDEN_HOSTED_HOSTS = lazyPublicValue("FORBIDDEN_HOSTED_HOSTS", "array") as typeof Runtime.FORBIDDEN_HOSTED_HOSTS;
+export const FORBIDDEN_WEB_PATTERNS = lazyPublicValue("FORBIDDEN_WEB_PATTERNS", "array") as typeof Runtime.FORBIDDEN_WEB_PATTERNS;
+export const GIT_TRACEABILITY_SCHEMA_VERSION = ("todos.git_traceability.v1") as unknown as typeof Runtime.GIT_TRACEABILITY_SCHEMA_VERSION;
+export const GOAL_COMMAND_RECIPES = lazyPublicValue("GOAL_COMMAND_RECIPES", "array") as typeof Runtime.GOAL_COMMAND_RECIPES;
+export const GOAL_WORKFLOW_VERSION = ("todos.goal-workflow.v1") as unknown as typeof Runtime.GOAL_WORKFLOW_VERSION;
+export const HANDOFF_PACKET_SCHEMA = ("todos.handoff_packet.v1") as unknown as typeof Runtime.HANDOFF_PACKET_SCHEMA;
+export const HEADLESS_BOUNDARY_VERSION = ("todos.headless-boundary.v1") as unknown as typeof Runtime.HEADLESS_BOUNDARY_VERSION;
+export const INBOX_INTAKE_SCHEMA = ("todos.inbox_intake.v1") as unknown as typeof Runtime.INBOX_INTAKE_SCHEMA;
+export const INTAKE_SOURCE_TYPES = lazyPublicValue("INTAKE_SOURCE_TYPES", "array") as typeof Runtime.INTAKE_SOURCE_TYPES;
+export const INTAKE_TRIAGE_STATUSES = lazyPublicValue("INTAKE_TRIAGE_STATUSES", "array") as typeof Runtime.INTAKE_TRIAGE_STATUSES;
+export const ISSUE_IMPORT_SCHEMA = ("todos.issue_import.v1") as unknown as typeof Runtime.ISSUE_IMPORT_SCHEMA;
+export const ISSUE_SOURCES = lazyPublicValue("ISSUE_SOURCES", "array") as typeof Runtime.ISSUE_SOURCES;
+export const JSON_OUTPUT_CONTRACT = lazyPublicValue("JSON_OUTPUT_CONTRACT", "object") as typeof Runtime.JSON_OUTPUT_CONTRACT;
+export const JSON_SCHEMAS = lazyPublicValue("JSON_SCHEMAS", "object") as typeof Runtime.JSON_SCHEMAS;
+export const JSON_SCHEMA_CATALOG_VERSION = ("todos.json_schema_catalog.v1") as unknown as typeof Runtime.JSON_SCHEMA_CATALOG_VERSION;
+export const KNOWLEDGE_SNAPSHOT_SCHEMA = ("todos.knowledge_snapshot.v1") as unknown as typeof Runtime.KNOWLEDGE_SNAPSHOT_SCHEMA;
+export const KNOWLEDGE_SNAPSHOT_SOURCES = lazyPublicValue("KNOWLEDGE_SNAPSHOT_SOURCES", "array") as typeof Runtime.KNOWLEDGE_SNAPSHOT_SOURCES;
+export const LOCAL_AUDIT_LEDGER_HASH_ALGORITHM = ("sha256") as unknown as typeof Runtime.LOCAL_AUDIT_LEDGER_HASH_ALGORITHM;
+export const LOCAL_AUDIT_LEDGER_SCHEMA_VERSION = 1 as unknown as typeof Runtime.LOCAL_AUDIT_LEDGER_SCHEMA_VERSION;
+export const LOCAL_BACKUP_CHECKSUM_ALGORITHM = ("sha256") as unknown as typeof Runtime.LOCAL_BACKUP_CHECKSUM_ALGORITHM;
+export const LOCAL_CAPACITY_SCHEMA_VERSION = 1 as unknown as typeof Runtime.LOCAL_CAPACITY_SCHEMA_VERSION;
+export const LOCAL_EVENT_TYPES = lazyPublicValue("LOCAL_EVENT_TYPES", "array") as typeof Runtime.LOCAL_EVENT_TYPES;
+export const LOCAL_NOTIFICATION_SCHEMA_VERSION = 1 as unknown as typeof Runtime.LOCAL_NOTIFICATION_SCHEMA_VERSION;
+export const LOCAL_RELEASE_COMPATIBILITY_SCHEMA_VERSION = 1 as unknown as typeof Runtime.LOCAL_RELEASE_COMPATIBILITY_SCHEMA_VERSION;
+export const LOCAL_REPORT_SCHEMA_VERSION = 1 as unknown as typeof Runtime.LOCAL_REPORT_SCHEMA_VERSION;
+export const LOCAL_REPORT_TYPES = lazyPublicValue("LOCAL_REPORT_TYPES", "array") as typeof Runtime.LOCAL_REPORT_TYPES;
+export const LOCAL_ROADMAP_SCHEMA_VERSION = 1 as unknown as typeof Runtime.LOCAL_ROADMAP_SCHEMA_VERSION;
+export const LOCAL_USAGE_LEDGER_SCHEMA_VERSION = 1 as unknown as typeof Runtime.LOCAL_USAGE_LEDGER_SCHEMA_VERSION;
+export const LOOP_RUN_TRANSACTION_SCHEMA_VERSION = ("todos.loop_run_transaction.v1") as unknown as typeof Runtime.LOOP_RUN_TRANSACTION_SCHEMA_VERSION;
+const _LockErrorPublicWrapper = class LockError extends Error {
+  constructor(a0: any, a1: any, ...args: any[]) { super(); assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); const runtimeClass = loadRuntime().LockError; bridgeRuntimeClassInstanceof(runtimeClass, LockError); return publicizePublicSqliteBoundaryResult(Reflect.construct(runtimeClass, publicArgs, new.target)) as any; }
+  static [Symbol.hasInstance](value: unknown): boolean { assertStageALocalStorageRole(process.env); const nativeHasInstance = Function.prototype[Symbol.hasInstance]; if (Reflect.apply(nativeHasInstance, this, [value])) return true; return this === LockError && Reflect.apply(nativeHasInstance, loadRuntime().LockError, [value]); }
+};
+Object.defineProperties(_LockErrorPublicWrapper, { name: { value: "LockError", configurable: true }, length: { value: 2, configurable: true } });
+export const LockError = _LockErrorPublicWrapper as unknown as typeof Runtime.LockError;
+export type LockError = Runtime.LockError;
+export const MACHINE_TOPOLOGY_SCHEMA = ("todos.machine_topology.v1") as unknown as typeof Runtime.MACHINE_TOPOLOGY_SCHEMA;
+export const MANPAGE_SCHEMA = ("todos.cli_manpage.v1") as unknown as typeof Runtime.MANPAGE_SCHEMA;
+export const MCP_PROFILE_GROUPS = lazyPublicValue("MCP_PROFILE_GROUPS", "object") as typeof Runtime.MCP_PROFILE_GROUPS;
+export const MCP_TOOL_GROUPS = lazyPublicValue("MCP_TOOL_GROUPS", "object") as typeof Runtime.MCP_TOOL_GROUPS;
+export const MERGE_STRATEGIES = lazyPublicValue("MERGE_STRATEGIES", "array") as typeof Runtime.MERGE_STRATEGIES;
+export const NESTED_SUBCOMMANDS = lazyPublicValue("NESTED_SUBCOMMANDS", "object") as typeof Runtime.NESTED_SUBCOMMANDS;
+export const NL_INTAKE_SCHEMA = ("todos.nl_intake.v1") as unknown as typeof Runtime.NL_INTAKE_SCHEMA;
+export const NOTIFICATION_REMINDERS_SCHEMA = ("todos.notification_reminders.v1") as unknown as typeof Runtime.NOTIFICATION_REMINDERS_SCHEMA;
+export const PARITY_SCHEMA_VERSION = ("todos.cli_mcp_parity.v1") as unknown as typeof Runtime.PARITY_SCHEMA_VERSION;
+export const PLAN_EXECUTION_MODES = lazyPublicValue("PLAN_EXECUTION_MODES", "array") as typeof Runtime.PLAN_EXECUTION_MODES;
+export const PLAN_EXECUTION_SCHEMA = ("todos.plan_execution.v1") as unknown as typeof Runtime.PLAN_EXECUTION_SCHEMA;
+export const PLAN_MARKDOWN_SCHEMA = ("hasna.todos.plan/v1") as unknown as typeof Runtime.PLAN_MARKDOWN_SCHEMA;
+export const PLAN_STATUSES = lazyPublicValue("PLAN_STATUSES", "array") as typeof Runtime.PLAN_STATUSES;
+const _PlanNotFoundErrorPublicWrapper = class PlanNotFoundError extends Error {
+  constructor(a0: any, ...args: any[]) { super(); assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); const runtimeClass = loadRuntime().PlanNotFoundError; bridgeRuntimeClassInstanceof(runtimeClass, PlanNotFoundError); return publicizePublicSqliteBoundaryResult(Reflect.construct(runtimeClass, publicArgs, new.target)) as any; }
+  static [Symbol.hasInstance](value: unknown): boolean { assertStageALocalStorageRole(process.env); const nativeHasInstance = Function.prototype[Symbol.hasInstance]; if (Reflect.apply(nativeHasInstance, this, [value])) return true; return this === PlanNotFoundError && Reflect.apply(nativeHasInstance, loadRuntime().PlanNotFoundError, [value]); }
+};
+Object.defineProperties(_PlanNotFoundErrorPublicWrapper, { name: { value: "PlanNotFoundError", configurable: true }, length: { value: 1, configurable: true } });
+export const PlanNotFoundError = _PlanNotFoundErrorPublicWrapper as unknown as typeof Runtime.PlanNotFoundError;
+export type PlanNotFoundError = Runtime.PlanNotFoundError;
+const _ProjectNotFoundErrorPublicWrapper = class ProjectNotFoundError extends Error {
+  constructor(a0: any, ...args: any[]) { super(); assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); const runtimeClass = loadRuntime().ProjectNotFoundError; bridgeRuntimeClassInstanceof(runtimeClass, ProjectNotFoundError); return publicizePublicSqliteBoundaryResult(Reflect.construct(runtimeClass, publicArgs, new.target)) as any; }
+  static [Symbol.hasInstance](value: unknown): boolean { assertStageALocalStorageRole(process.env); const nativeHasInstance = Function.prototype[Symbol.hasInstance]; if (Reflect.apply(nativeHasInstance, this, [value])) return true; return this === ProjectNotFoundError && Reflect.apply(nativeHasInstance, loadRuntime().ProjectNotFoundError, [value]); }
+};
+Object.defineProperties(_ProjectNotFoundErrorPublicWrapper, { name: { value: "ProjectNotFoundError", configurable: true }, length: { value: 1, configurable: true } });
+export const ProjectNotFoundError = _ProjectNotFoundErrorPublicWrapper as unknown as typeof Runtime.ProjectNotFoundError;
+export type ProjectNotFoundError = Runtime.ProjectNotFoundError;
+export const REDACTION_PLACEHOLDER = ("[REDACTED]") as unknown as typeof Runtime.REDACTION_PLACEHOLDER;
+export const RELATIONSHIP_TYPES = lazyPublicValue("RELATIONSHIP_TYPES", "array") as typeof Runtime.RELATIONSHIP_TYPES;
+export const RELEASE_CHECK_SCHEMA = ("todos.release_check.v1") as unknown as typeof Runtime.RELEASE_CHECK_SCHEMA;
+export const REMINDER_STATUSES = lazyPublicValue("REMINDER_STATUSES", "array") as typeof Runtime.REMINDER_STATUSES;
+export const REMINDER_TYPES = lazyPublicValue("REMINDER_TYPES", "array") as typeof Runtime.REMINDER_TYPES;
+export const REPORT_EXPORT_SCHEMA = ("todos.report_export.v1") as unknown as typeof Runtime.REPORT_EXPORT_SCHEMA;
+export const REPORT_FORMATS = lazyPublicValue("REPORT_FORMATS", "array") as typeof Runtime.REPORT_FORMATS;
+export const REPORT_KINDS = lazyPublicValue("REPORT_KINDS", "array") as typeof Runtime.REPORT_KINDS;
+export const RESOURCE_SNAPSHOT_VERSION = ("todos.resource-snapshot.v1") as unknown as typeof Runtime.RESOURCE_SNAPSHOT_VERSION;
+export const RESOURCE_URIS = lazyPublicValue("RESOURCE_URIS", "array") as typeof Runtime.RESOURCE_URIS;
+export const RETENTION_CLEANUP_CONFIRMATION = ("delete-local-retention-data") as unknown as typeof Runtime.RETENTION_CLEANUP_CONFIRMATION;
+export const RUN_RECORD_SCHEMA = ("todos.run_record.v1") as unknown as typeof Runtime.RUN_RECORD_SCHEMA;
+export const RUN_RECORD_STATUSES = lazyPublicValue("RUN_RECORD_STATUSES", "array") as typeof Runtime.RUN_RECORD_STATUSES;
+export const SANDBOX_PROFILE_VERSION = ("todos.sandbox-profile.v1") as unknown as typeof Runtime.SANDBOX_PROFILE_VERSION;
+export const SAVED_VIEWS_SCHEMA = ("todos.saved_views.v1") as unknown as typeof Runtime.SAVED_VIEWS_SCHEMA;
+export const SCAFFOLD_KINDS = lazyPublicValue("SCAFFOLD_KINDS", "array") as typeof Runtime.SCAFFOLD_KINDS;
+export const SCHEMA_CONTRACT_FIXTURES = lazyPublicValue("SCHEMA_CONTRACT_FIXTURES", "object") as typeof Runtime.SCHEMA_CONTRACT_FIXTURES;
+export const SCHEMA_ENTITIES = lazyPublicValue("SCHEMA_ENTITIES", "array") as typeof Runtime.SCHEMA_ENTITIES;
+export const SCHEMA_SEMVER = ("1.0.0") as unknown as typeof Runtime.SCHEMA_SEMVER;
+export const SECRET_REDACTION_SCHEMA = ("todos.secret_redaction.v1") as unknown as typeof Runtime.SECRET_REDACTION_SCHEMA;
+export const STORAGE_TABLES = lazyPublicValue("STORAGE_TABLES", "array") as typeof Runtime.STORAGE_TABLES;
+export const TASK_FINDING_RESOLVE_MISSING_SCHEMA_VERSION = ("todos.task_finding_resolve_missing.v1") as unknown as typeof Runtime.TASK_FINDING_RESOLVE_MISSING_SCHEMA_VERSION;
+export const TASK_FINDING_SCHEMA_VERSION = ("todos.task_finding.v1") as unknown as typeof Runtime.TASK_FINDING_SCHEMA_VERSION;
+export const TASK_FINDING_UPSERT_SCHEMA_VERSION = ("todos.task_finding_upsert.v1") as unknown as typeof Runtime.TASK_FINDING_UPSERT_SCHEMA_VERSION;
+export const TASK_PRIORITIES = lazyPublicValue("TASK_PRIORITIES", "array") as typeof Runtime.TASK_PRIORITIES;
+export const TASK_ROUTE_SOURCE_DISCOVERY_SCHEMA_VERSION = ("todos.task_route_sources.v1") as unknown as typeof Runtime.TASK_ROUTE_SOURCE_DISCOVERY_SCHEMA_VERSION;
+export const TASK_SCHEDULING_SCHEMA = ("todos.task_scheduling.v1") as unknown as typeof Runtime.TASK_SCHEDULING_SCHEMA;
+export const TASK_STATUSES = lazyPublicValue("TASK_STATUSES", "array") as typeof Runtime.TASK_STATUSES;
+export const TASK_WORKFLOW_POINTER_SCHEMA_VERSION = ("todos.task_workflow_pointer.v1") as unknown as typeof Runtime.TASK_WORKFLOW_POINTER_SCHEMA_VERSION;
+export const TESTERS_ISSUE_REPORT_BATCH_RESULT_SCHEMA_VERSION = ("todos.tester_issue_report_batch_result.v1") as unknown as typeof Runtime.TESTERS_ISSUE_REPORT_BATCH_RESULT_SCHEMA_VERSION;
+export const TESTERS_ISSUE_REPORT_RESULT_SCHEMA_VERSION = ("todos.tester_issue_report_result.v1") as unknown as typeof Runtime.TESTERS_ISSUE_REPORT_RESULT_SCHEMA_VERSION;
+export const TESTERS_ISSUE_REPORT_SCHEMA_VERSION = ("testers.issue_report.v1") as unknown as typeof Runtime.TESTERS_ISSUE_REPORT_SCHEMA_VERSION;
+export const TODOS_API_ROUTES = lazyPublicValue("TODOS_API_ROUTES", "array") as typeof Runtime.TODOS_API_ROUTES;
+export const TODOS_CAPABILITIES = lazyPublicValue("TODOS_CAPABILITIES", "array") as typeof Runtime.TODOS_CAPABILITIES;
+export const TODOS_CLI_MCP_PARITY = lazyPublicValue("TODOS_CLI_MCP_PARITY", "array") as typeof Runtime.TODOS_CLI_MCP_PARITY;
+export const TODOS_CLI_MCP_PARITY_MANIFEST = lazyPublicValue("TODOS_CLI_MCP_PARITY_MANIFEST", "object") as typeof Runtime.TODOS_CLI_MCP_PARITY_MANIFEST;
+export const TODOS_CONTRACTS = lazyPublicValue("TODOS_CONTRACTS", "object") as typeof Runtime.TODOS_CONTRACTS;
+export const TODOS_ENCRYPTED_BRIDGE_KIND = ("hasna.todos.encrypted-bridge") as unknown as typeof Runtime.TODOS_ENCRYPTED_BRIDGE_KIND;
+export const TODOS_ENCRYPTED_VALUE_KIND = ("hasna.todos.encrypted-value") as unknown as typeof Runtime.TODOS_ENCRYPTED_VALUE_KIND;
+export const TODOS_ENCRYPTION_SCHEMA_VERSION = 1 as unknown as typeof Runtime.TODOS_ENCRYPTION_SCHEMA_VERSION;
+export const TODOS_ERROR_CODES = lazyPublicValue("TODOS_ERROR_CODES", "array") as typeof Runtime.TODOS_ERROR_CODES;
+export const TODOS_JSON_CONTRACTS = lazyPublicValue("TODOS_JSON_CONTRACTS", "array") as typeof Runtime.TODOS_JSON_CONTRACTS;
+export const TODOS_JSON_CONTRACTS_MANIFEST = lazyPublicValue("TODOS_JSON_CONTRACTS_MANIFEST", "object") as typeof Runtime.TODOS_JSON_CONTRACTS_MANIFEST;
+export const TODOS_LOCAL_BACKUP_KIND = ("hasna.todos.local-backup") as unknown as typeof Runtime.TODOS_LOCAL_BACKUP_KIND;
+export const TODOS_LOCAL_BACKUP_SCHEMA_VERSION = 1 as unknown as typeof Runtime.TODOS_LOCAL_BACKUP_SCHEMA_VERSION;
+export const TODOS_LOCAL_BRIDGE_KIND = ("hasna.todos.local-bridge") as unknown as typeof Runtime.TODOS_LOCAL_BRIDGE_KIND;
+export const TODOS_LOCAL_BRIDGE_SCHEMA_VERSION = 1 as unknown as typeof Runtime.TODOS_LOCAL_BRIDGE_SCHEMA_VERSION;
+export const TODOS_LOCAL_INTEGRITY_KIND = ("hasna.todos.local-integrity") as unknown as typeof Runtime.TODOS_LOCAL_INTEGRITY_KIND;
+export const TODOS_LOCAL_INTEGRITY_SCHEMA_VERSION = 1 as unknown as typeof Runtime.TODOS_LOCAL_INTEGRITY_SCHEMA_VERSION;
+export const TODOS_LOCAL_SNAPSHOT_SCHEMA_VERSION = 1 as unknown as typeof Runtime.TODOS_LOCAL_SNAPSHOT_SCHEMA_VERSION;
+export const TODOS_MARKDOWN_BRIDGE_MARKER = ("hasna.todos.bridge") as unknown as typeof Runtime.TODOS_MARKDOWN_BRIDGE_MARKER;
+export const TODOS_MARKDOWN_SCHEMA = ("hasna.todos.md/v1") as unknown as typeof Runtime.TODOS_MARKDOWN_SCHEMA;
+export const TODOS_MCP_MANIFEST = lazyPublicValue("TODOS_MCP_MANIFEST", "object") as typeof Runtime.TODOS_MCP_MANIFEST;
+export const TODOS_ONBOARDING_FIXTURE_LIBRARY_VERSION = ("2026-05-22") as unknown as typeof Runtime.TODOS_ONBOARDING_FIXTURE_LIBRARY_VERSION;
+export const TODOS_ONBOARDING_FIXTURE_SOURCE = ("bundled-local-onboarding-fixtures") as unknown as typeof Runtime.TODOS_ONBOARDING_FIXTURE_SOURCE;
+export const TODOS_PACKAGE_EXPORTS = lazyPublicValue("TODOS_PACKAGE_EXPORTS", "array") as typeof Runtime.TODOS_PACKAGE_EXPORTS;
+export const TODOS_REGISTRY = lazyPublicValue("TODOS_REGISTRY", "object") as typeof Runtime.TODOS_REGISTRY;
+export const TODOS_SDK_INTEGRATION_FIXTURE_GENERATED_AT = ("2026-05-22T00:00:00.000Z") as unknown as typeof Runtime.TODOS_SDK_INTEGRATION_FIXTURE_GENERATED_AT;
+export const TODOS_SDK_INTEGRATION_FIXTURE_SCHEMA_VERSION = 1 as unknown as typeof Runtime.TODOS_SDK_INTEGRATION_FIXTURE_SCHEMA_VERSION;
+export const TODOS_STORAGE_ENV = lazyPublicValue("TODOS_STORAGE_ENV", "object") as typeof Runtime.TODOS_STORAGE_ENV;
+export const TODOS_STORAGE_FALLBACK_ENV = lazyPublicValue("TODOS_STORAGE_FALLBACK_ENV", "object") as typeof Runtime.TODOS_STORAGE_FALLBACK_ENV;
+export const TODOS_STORAGE_TABLES = STORAGE_TABLES as typeof Runtime.TODOS_STORAGE_TABLES;
+export const TODOS_TASK_ROUTE_STATE_SCHEMA_VERSION = ("todos.task_route_state.v1") as unknown as typeof Runtime.TODOS_TASK_ROUTE_STATE_SCHEMA_VERSION;
+export const TUI_DASHBOARD_VIEWS = lazyPublicValue("TUI_DASHBOARD_VIEWS", "array") as typeof Runtime.TUI_DASHBOARD_VIEWS;
+const _TaskListNotFoundErrorPublicWrapper = class TaskListNotFoundError extends Error {
+  constructor(a0: any, ...args: any[]) { super(); assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); const runtimeClass = loadRuntime().TaskListNotFoundError; bridgeRuntimeClassInstanceof(runtimeClass, TaskListNotFoundError); return publicizePublicSqliteBoundaryResult(Reflect.construct(runtimeClass, publicArgs, new.target)) as any; }
+  static [Symbol.hasInstance](value: unknown): boolean { assertStageALocalStorageRole(process.env); const nativeHasInstance = Function.prototype[Symbol.hasInstance]; if (Reflect.apply(nativeHasInstance, this, [value])) return true; return this === TaskListNotFoundError && Reflect.apply(nativeHasInstance, loadRuntime().TaskListNotFoundError, [value]); }
+};
+Object.defineProperties(_TaskListNotFoundErrorPublicWrapper, { name: { value: "TaskListNotFoundError", configurable: true }, length: { value: 1, configurable: true } });
+export const TaskListNotFoundError = _TaskListNotFoundErrorPublicWrapper as unknown as typeof Runtime.TaskListNotFoundError;
+export type TaskListNotFoundError = Runtime.TaskListNotFoundError;
+const _TaskNotFoundErrorPublicWrapper = class TaskNotFoundError extends Error {
+  constructor(a0: any, ...args: any[]) { super(); assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); const runtimeClass = loadRuntime().TaskNotFoundError; bridgeRuntimeClassInstanceof(runtimeClass, TaskNotFoundError); return publicizePublicSqliteBoundaryResult(Reflect.construct(runtimeClass, publicArgs, new.target)) as any; }
+  static [Symbol.hasInstance](value: unknown): boolean { assertStageALocalStorageRole(process.env); const nativeHasInstance = Function.prototype[Symbol.hasInstance]; if (Reflect.apply(nativeHasInstance, this, [value])) return true; return this === TaskNotFoundError && Reflect.apply(nativeHasInstance, loadRuntime().TaskNotFoundError, [value]); }
+};
+Object.defineProperties(_TaskNotFoundErrorPublicWrapper, { name: { value: "TaskNotFoundError", configurable: true }, length: { value: 1, configurable: true } });
+export const TaskNotFoundError = _TaskNotFoundErrorPublicWrapper as unknown as typeof Runtime.TaskNotFoundError;
+export type TaskNotFoundError = Runtime.TaskNotFoundError;
+const _TodosClientPublicWrapper = class TodosClient {
+  constructor(...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); const runtimeClass = loadRuntime().TodosClient; bridgeRuntimeClassInstanceof(runtimeClass, TodosClient); return publicizePublicSqliteBoundaryResult(Reflect.construct(runtimeClass, publicArgs, new.target)) as any; }
+  static fromEnv(a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient, "fromEnv"), this, publicArgs)); }
+  static [Symbol.hasInstance](value: unknown): boolean { assertStageALocalStorageRole(process.env); const nativeHasInstance = Function.prototype[Symbol.hasInstance]; if (Reflect.apply(nativeHasInstance, this, [value])) return true; return this === TodosClient && Reflect.apply(nativeHasInstance, loadRuntime().TodosClient, [value]); }
+  async _fetchRaw(a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "_fetchRaw"), this, publicArgs)); }
+  _buildHeaders(a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "_buildHeaders"), this, publicArgs)); }
+  async _fetchWithRetry(a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "_fetchWithRetry"), this, publicArgs)); }
+  async _fetch(a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "_fetch"), this, publicArgs)); }
+  async _get(a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "_get"), this, publicArgs)); }
+  async _post(a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "_post"), this, publicArgs)); }
+  async _patch(a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "_patch"), this, publicArgs)); }
+  async _delete(a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "_delete"), this, publicArgs)); }
+  _sleep(a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "_sleep"), this, publicArgs)); }
+  async getHealth(...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "getHealth"), this, publicArgs)); }
+  async isAlive(...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "isAlive"), this, publicArgs)); }
+  async getStats(...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "getStats"), this, publicArgs)); }
+  async getReport(a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "getReport"), this, publicArgs)); }
+  async doctor(...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "doctor"), this, publicArgs)); }
+  async activity(a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "activity"), this, publicArgs)); }
+  async listTasks(...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "listTasks"), this, publicArgs)); }
+  async getTask(a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "getTask"), this, publicArgs)); }
+  async createTask(a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "createTask"), this, publicArgs)); }
+  async updateTask(a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "updateTask"), this, publicArgs)); }
+  async deleteTask(a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "deleteTask"), this, publicArgs)); }
+  async startTask(a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "startTask"), this, publicArgs)); }
+  async completeTask(a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "completeTask"), this, publicArgs)); }
+  async failTask(a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "failTask"), this, publicArgs)); }
+  async logProgress(a0: any, a1: any, a2: any, a3: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, a3, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "logProgress"), this, publicArgs)); }
+  async getStatus(a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "getStatus"), this, publicArgs)); }
+  async getActiveWork(a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "getActiveWork"), this, publicArgs)); }
+  async getTasksChangedSince(a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "getTasksChangedSince"), this, publicArgs)); }
+  async getStaleTasks(a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "getStaleTasks"), this, publicArgs)); }
+  async getContext(...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "getContext"), this, publicArgs)); }
+  async exportTasks(...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "exportTasks"), this, publicArgs)); }
+  async claimNextTask(a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "claimNextTask"), this, publicArgs)); }
+  async getTaskHistory(a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "getTaskHistory"), this, publicArgs)); }
+  async getTaskAttachments(a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "getTaskAttachments"), this, publicArgs)); }
+  async getTaskProgress(a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "getTaskProgress"), this, publicArgs)); }
+  subscribeToStream(...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "subscribeToStream"), this, publicArgs)); }
+  async getProjects(...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(Reflect.get(loadRuntime().TodosClient.prototype, "getProjects"), this, publicArgs)); }
+};
+Object.defineProperties(_TodosClientPublicWrapper, { name: { value: "TodosClient", configurable: true }, length: { value: 0, configurable: true } });
+export const TodosClient = _TodosClientPublicWrapper as unknown as typeof Runtime.TodosClient;
+export type TodosClient = Runtime.TodosClient;
+export const USER_SCAFFOLD_SCHEMA = ("todos.user_scaffold.v1") as unknown as typeof Runtime.USER_SCAFFOLD_SCHEMA;
+export const VERIFICATION_EVIDENCE_SCHEMA = ("todos.verification_evidence.v1") as unknown as typeof Runtime.VERIFICATION_EVIDENCE_SCHEMA;
+const _VersionConflictErrorPublicWrapper = class VersionConflictError extends Error {
+  constructor(a0: any, a1: any, a2: any, ...args: any[]) { super(); assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); const runtimeClass = loadRuntime().VersionConflictError; bridgeRuntimeClassInstanceof(runtimeClass, VersionConflictError); return publicizePublicSqliteBoundaryResult(Reflect.construct(runtimeClass, publicArgs, new.target)) as any; }
+  static [Symbol.hasInstance](value: unknown): boolean { assertStageALocalStorageRole(process.env); const nativeHasInstance = Function.prototype[Symbol.hasInstance]; if (Reflect.apply(nativeHasInstance, this, [value])) return true; return this === VersionConflictError && Reflect.apply(nativeHasInstance, loadRuntime().VersionConflictError, [value]); }
+};
+Object.defineProperties(_VersionConflictErrorPublicWrapper, { name: { value: "VersionConflictError", configurable: true }, length: { value: 3, configurable: true } });
+export const VersionConflictError = _VersionConflictErrorPublicWrapper as unknown as typeof Runtime.VersionConflictError;
+export type VersionConflictError = Runtime.VersionConflictError;
+export const WORKFLOW_PROMPTS = lazyPublicValue("WORKFLOW_PROMPTS", "array") as typeof Runtime.WORKFLOW_PROMPTS;
+export const acknowledgeHandoff = function acknowledgeHandoff(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().acknowledgeHandoff, this, publicArgs)); } as unknown as typeof Runtime.acknowledgeHandoff;
+Object.defineProperties(acknowledgeHandoff, { name: { value: "acknowledgeHandoff", configurable: true }, length: { value: 3, configurable: true } });
+export const acquireLock = function acquireLock(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().acquireLock, this, publicArgs)); } as unknown as typeof Runtime.acquireLock;
+Object.defineProperties(acquireLock, { name: { value: "acquireLock", configurable: true }, length: { value: 3, configurable: true } });
+export const acquireTaskLease = function acquireTaskLease(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().acquireTaskLease, this, publicArgs)); } as unknown as typeof Runtime.acquireTaskLease;
+Object.defineProperties(acquireTaskLease, { name: { value: "acquireTaskLease", configurable: true }, length: { value: 2, configurable: true } });
+export const addArtifact = function addArtifact(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().addArtifact, this, publicArgs)); } as unknown as typeof Runtime.addArtifact;
+Object.defineProperties(addArtifact, { name: { value: "addArtifact", configurable: true }, length: { value: 3, configurable: true } });
+export const addChecklistItem = function addChecklistItem(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().addChecklistItem, this, publicArgs)); } as unknown as typeof Runtime.addChecklistItem;
+Object.defineProperties(addChecklistItem, { name: { value: "addChecklistItem", configurable: true }, length: { value: 2, configurable: true } });
+export const addComment = function addComment(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().addComment, this, publicArgs)); } as unknown as typeof Runtime.addComment;
+Object.defineProperties(addComment, { name: { value: "addComment", configurable: true }, length: { value: 2, configurable: true } });
+export const addDependency = function addDependency(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().addDependency, this, publicArgs)); } as unknown as typeof Runtime.addDependency;
+Object.defineProperties(addDependency, { name: { value: "addDependency", configurable: true }, length: { value: 3, configurable: true } });
+export const addKgEdge = function addKgEdge(this: unknown, a0: any, a1: any, a2: any, a3: any, a4: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, a3, a4, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().addKgEdge, this, publicArgs)); } as unknown as typeof Runtime.addKgEdge;
+Object.defineProperties(addKgEdge, { name: { value: "addKgEdge", configurable: true }, length: { value: 5, configurable: true } });
+export const addProjectSource = function addProjectSource(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().addProjectSource, this, publicArgs)); } as unknown as typeof Runtime.addProjectSource;
+Object.defineProperties(addProjectSource, { name: { value: "addProjectSource", configurable: true }, length: { value: 2, configurable: true } });
+export const addTaskFile = function addTaskFile(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().addTaskFile, this, publicArgs)); } as unknown as typeof Runtime.addTaskFile;
+Object.defineProperties(addTaskFile, { name: { value: "addTaskFile", configurable: true }, length: { value: 2, configurable: true } });
+export const addTaskRelationship = function addTaskRelationship(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().addTaskRelationship, this, publicArgs)); } as unknown as typeof Runtime.addTaskRelationship;
+Object.defineProperties(addTaskRelationship, { name: { value: "addTaskRelationship", configurable: true }, length: { value: 2, configurable: true } });
+export const addTaskRunArtifact = function addTaskRunArtifact(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().addTaskRunArtifact, this, publicArgs)); } as unknown as typeof Runtime.addTaskRunArtifact;
+Object.defineProperties(addTaskRunArtifact, { name: { value: "addTaskRunArtifact", configurable: true }, length: { value: 2, configurable: true } });
+export const addTaskRunCommand = function addTaskRunCommand(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().addTaskRunCommand, this, publicArgs)); } as unknown as typeof Runtime.addTaskRunCommand;
+Object.defineProperties(addTaskRunCommand, { name: { value: "addTaskRunCommand", configurable: true }, length: { value: 2, configurable: true } });
+export const addTaskRunEvent = function addTaskRunEvent(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().addTaskRunEvent, this, publicArgs)); } as unknown as typeof Runtime.addTaskRunEvent;
+Object.defineProperties(addTaskRunEvent, { name: { value: "addTaskRunEvent", configurable: true }, length: { value: 2, configurable: true } });
+export const addTaskRunFile = function addTaskRunFile(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().addTaskRunFile, this, publicArgs)); } as unknown as typeof Runtime.addTaskRunFile;
+Object.defineProperties(addTaskRunFile, { name: { value: "addTaskRunFile", configurable: true }, length: { value: 2, configurable: true } });
+export const addTemplateTasks = function addTemplateTasks(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().addTemplateTasks, this, publicArgs)); } as unknown as typeof Runtime.addTemplateTasks;
+Object.defineProperties(addTemplateTasks, { name: { value: "addTemplateTasks", configurable: true }, length: { value: 3, configurable: true } });
+export const agentClaimNextSafe = function agentClaimNextSafe(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().agentClaimNextSafe, this, publicArgs)); } as unknown as typeof Runtime.agentClaimNextSafe;
+Object.defineProperties(agentClaimNextSafe, { name: { value: "agentClaimNextSafe", configurable: true }, length: { value: 3, configurable: true } });
+export const analyzeDependencyGraph = function analyzeDependencyGraph(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().analyzeDependencyGraph, this, publicArgs)); } as unknown as typeof Runtime.analyzeDependencyGraph;
+Object.defineProperties(analyzeDependencyGraph, { name: { value: "analyzeDependencyGraph", configurable: true }, length: { value: 0, configurable: true } });
+export const appendRunCommand = function appendRunCommand(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().appendRunCommand, this, publicArgs)); } as unknown as typeof Runtime.appendRunCommand;
+Object.defineProperties(appendRunCommand, { name: { value: "appendRunCommand", configurable: true }, length: { value: 2, configurable: true } });
+export const applyExportProfile = function applyExportProfile(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().applyExportProfile, this, publicArgs)); } as unknown as typeof Runtime.applyExportProfile;
+Object.defineProperties(applyExportProfile, { name: { value: "applyExportProfile", configurable: true }, length: { value: 1, configurable: true } });
+export const applyFailureTriage = function applyFailureTriage(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().applyFailureTriage, this, publicArgs)); } as unknown as typeof Runtime.applyFailureTriage;
+Object.defineProperties(applyFailureTriage, { name: { value: "applyFailureTriage", configurable: true }, length: { value: 2, configurable: true } });
+export const applyRetentionCleanup = function applyRetentionCleanup(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().applyRetentionCleanup, this, publicArgs)); } as unknown as typeof Runtime.applyRetentionCleanup;
+Object.defineProperties(applyRetentionCleanup, { name: { value: "applyRetentionCleanup", configurable: true }, length: { value: 2, configurable: true } });
+export const applyUserScaffold = function applyUserScaffold(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().applyUserScaffold, this, publicArgs)); } as unknown as typeof Runtime.applyUserScaffold;
+Object.defineProperties(applyUserScaffold, { name: { value: "applyUserScaffold", configurable: true }, length: { value: 1, configurable: true } });
+export const approveApprovalGate = function approveApprovalGate(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().approveApprovalGate, this, publicArgs)); } as unknown as typeof Runtime.approveApprovalGate;
+Object.defineProperties(approveApprovalGate, { name: { value: "approveApprovalGate", configurable: true }, length: { value: 2, configurable: true } });
+export const approveReviewItem = function approveReviewItem(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().approveReviewItem, this, publicArgs)); } as unknown as typeof Runtime.approveReviewItem;
+Object.defineProperties(approveReviewItem, { name: { value: "approveReviewItem", configurable: true }, length: { value: 2, configurable: true } });
+export const archiveAgent = function archiveAgent(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().archiveAgent, this, publicArgs)); } as unknown as typeof Runtime.archiveAgent;
+Object.defineProperties(archiveAgent, { name: { value: "archiveAgent", configurable: true }, length: { value: 2, configurable: true } });
+export const archiveTasks = function archiveTasks(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().archiveTasks, this, publicArgs)); } as unknown as typeof Runtime.archiveTasks;
+Object.defineProperties(archiveTasks, { name: { value: "archiveTasks", configurable: true }, length: { value: 2, configurable: true } });
+export const artifactStorePath = function artifactStorePath(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().artifactStorePath, this, publicArgs)); } as unknown as typeof Runtime.artifactStorePath;
+Object.defineProperties(artifactStorePath, { name: { value: "artifactStorePath", configurable: true }, length: { value: 1, configurable: true } });
+export const artifactStoreRoot = function artifactStoreRoot(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().artifactStoreRoot, this, publicArgs)); } as unknown as typeof Runtime.artifactStoreRoot;
+Object.defineProperties(artifactStoreRoot, { name: { value: "artifactStoreRoot", configurable: true }, length: { value: 0, configurable: true } });
+export const assertApprovalGate = function assertApprovalGate(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().assertApprovalGate, this, publicArgs)); } as unknown as typeof Runtime.assertApprovalGate;
+Object.defineProperties(assertApprovalGate, { name: { value: "assertApprovalGate", configurable: true }, length: { value: 3, configurable: true } });
+export const assertExportProfileAllowed = function assertExportProfileAllowed(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().assertExportProfileAllowed, this, publicArgs)); } as unknown as typeof Runtime.assertExportProfileAllowed;
+Object.defineProperties(assertExportProfileAllowed, { name: { value: "assertExportProfileAllowed", configurable: true }, length: { value: 1, configurable: true } });
+export const assertHeadlessOutboundUrl = function assertHeadlessOutboundUrl(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().assertHeadlessOutboundUrl, this, publicArgs)); } as unknown as typeof Runtime.assertHeadlessOutboundUrl;
+Object.defineProperties(assertHeadlessOutboundUrl, { name: { value: "assertHeadlessOutboundUrl", configurable: true }, length: { value: 1, configurable: true } });
+export const assertNoSecrets = function assertNoSecrets(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().assertNoSecrets, this, publicArgs)); } as unknown as typeof Runtime.assertNoSecrets;
+Object.defineProperties(assertNoSecrets, { name: { value: "assertNoSecrets", configurable: true }, length: { value: 2, configurable: true } });
+export const assertTodosLocalStorageRole = function assertTodosLocalStorageRole(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().assertTodosLocalStorageRole, this, publicArgs)); } as unknown as typeof Runtime.assertTodosLocalStorageRole;
+Object.defineProperties(assertTodosLocalStorageRole, { name: { value: "assertTodosLocalStorageRole", configurable: true }, length: { value: 0, configurable: true } });
+export const assertTodosRemoteStorageConfig = function assertTodosRemoteStorageConfig(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().assertTodosRemoteStorageConfig, this, publicArgs)); } as unknown as typeof Runtime.assertTodosRemoteStorageConfig;
+Object.defineProperties(assertTodosRemoteStorageConfig, { name: { value: "assertTodosRemoteStorageConfig", configurable: true }, length: { value: 1, configurable: true } });
+export const assertToolAllowed = function assertToolAllowed(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().assertToolAllowed, this, publicArgs)); } as unknown as typeof Runtime.assertToolAllowed;
+Object.defineProperties(assertToolAllowed, { name: { value: "assertToolAllowed", configurable: true }, length: { value: 2, configurable: true } });
+export const assignLabelToTask = function assignLabelToTask(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().assignLabelToTask, this, publicArgs)); } as unknown as typeof Runtime.assignLabelToTask;
+Object.defineProperties(assignLabelToTask, { name: { value: "assignLabelToTask", configurable: true }, length: { value: 3, configurable: true } });
+export const attachPlanToProject = function attachPlanToProject(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().attachPlanToProject, this, publicArgs)); } as unknown as typeof Runtime.attachPlanToProject;
+Object.defineProperties(attachPlanToProject, { name: { value: "attachPlanToProject", configurable: true }, length: { value: 2, configurable: true } });
+export const auditPackageContents = function auditPackageContents(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().auditPackageContents, this, publicArgs)); } as unknown as typeof Runtime.auditPackageContents;
+Object.defineProperties(auditPackageContents, { name: { value: "auditPackageContents", configurable: true }, length: { value: 1, configurable: true } });
+export const autoDetectFileRelationships = function autoDetectFileRelationships(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().autoDetectFileRelationships, this, publicArgs)); } as unknown as typeof Runtime.autoDetectFileRelationships;
+Object.defineProperties(autoDetectFileRelationships, { name: { value: "autoDetectFileRelationships", configurable: true }, length: { value: 2, configurable: true } });
+export const autoReleaseStaleAgents = function autoReleaseStaleAgents(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().autoReleaseStaleAgents, this, publicArgs)); } as unknown as typeof Runtime.autoReleaseStaleAgents;
+Object.defineProperties(autoReleaseStaleAgents, { name: { value: "autoReleaseStaleAgents", configurable: true }, length: { value: 1, configurable: true } });
+export const backupDatabase = function backupDatabase(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().backupDatabase, this, publicArgs)); } as unknown as typeof Runtime.backupDatabase;
+Object.defineProperties(backupDatabase, { name: { value: "backupDatabase", configurable: true }, length: { value: 2, configurable: true } });
+export const beginTaskRunTransaction = function beginTaskRunTransaction(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().beginTaskRunTransaction, this, publicArgs)); } as unknown as typeof Runtime.beginTaskRunTransaction;
+Object.defineProperties(beginTaskRunTransaction, { name: { value: "beginTaskRunTransaction", configurable: true }, length: { value: 2, configurable: true } });
+export const booleanField = function booleanField(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().booleanField, this, publicArgs)); } as unknown as typeof Runtime.booleanField;
+Object.defineProperties(booleanField, { name: { value: "booleanField", configurable: true }, length: { value: 1, configurable: true } });
+export const bootstrapProject = function bootstrapProject(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().bootstrapProject, this, publicArgs)); } as unknown as typeof Runtime.bootstrapProject;
+Object.defineProperties(bootstrapProject, { name: { value: "bootstrapProject", configurable: true }, length: { value: 0, configurable: true } });
+export const buildArtifactExportManifest = function buildArtifactExportManifest(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().buildArtifactExportManifest, this, publicArgs)); } as unknown as typeof Runtime.buildArtifactExportManifest;
+Object.defineProperties(buildArtifactExportManifest, { name: { value: "buildArtifactExportManifest", configurable: true }, length: { value: 2, configurable: true } });
+export const buildCodebaseIndex = function buildCodebaseIndex(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().buildCodebaseIndex, this, publicArgs)); } as unknown as typeof Runtime.buildCodebaseIndex;
+Object.defineProperties(buildCodebaseIndex, { name: { value: "buildCodebaseIndex", configurable: true }, length: { value: 1, configurable: true } });
+export const buildFailureTriageReport = function buildFailureTriageReport(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().buildFailureTriageReport, this, publicArgs)); } as unknown as typeof Runtime.buildFailureTriageReport;
+Object.defineProperties(buildFailureTriageReport, { name: { value: "buildFailureTriageReport", configurable: true }, length: { value: 0, configurable: true } });
+export const buildFeatureManifest = function buildFeatureManifest(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().buildFeatureManifest, this, publicArgs)); } as unknown as typeof Runtime.buildFeatureManifest;
+Object.defineProperties(buildFeatureManifest, { name: { value: "buildFeatureManifest", configurable: true }, length: { value: 0, configurable: true } });
+export const buildHandoffPacket = function buildHandoffPacket(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().buildHandoffPacket, this, publicArgs)); } as unknown as typeof Runtime.buildHandoffPacket;
+Object.defineProperties(buildHandoffPacket, { name: { value: "buildHandoffPacket", configurable: true }, length: { value: 0, configurable: true } });
+export const buildKnowledgeSnapshotPayload = function buildKnowledgeSnapshotPayload(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().buildKnowledgeSnapshotPayload, this, publicArgs)); } as unknown as typeof Runtime.buildKnowledgeSnapshotPayload;
+Object.defineProperties(buildKnowledgeSnapshotPayload, { name: { value: "buildKnowledgeSnapshotPayload", configurable: true }, length: { value: 2, configurable: true } });
+export const buildMachineTopologyReport = function buildMachineTopologyReport(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().buildMachineTopologyReport, this, publicArgs)); } as unknown as typeof Runtime.buildMachineTopologyReport;
+Object.defineProperties(buildMachineTopologyReport, { name: { value: "buildMachineTopologyReport", configurable: true }, length: { value: 1, configurable: true } });
+export const buildMcpToolGroups = function buildMcpToolGroups(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().buildMcpToolGroups, this, publicArgs)); } as unknown as typeof Runtime.buildMcpToolGroups;
+Object.defineProperties(buildMcpToolGroups, { name: { value: "buildMcpToolGroups", configurable: true }, length: { value: 0, configurable: true } });
+export const buildPlanArtifactSnapshot = function buildPlanArtifactSnapshot(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().buildPlanArtifactSnapshot, this, publicArgs)); } as unknown as typeof Runtime.buildPlanArtifactSnapshot;
+Object.defineProperties(buildPlanArtifactSnapshot, { name: { value: "buildPlanArtifactSnapshot", configurable: true }, length: { value: 1, configurable: true } });
+export const buildReportExportData = function buildReportExportData(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().buildReportExportData, this, publicArgs)); } as unknown as typeof Runtime.buildReportExportData;
+Object.defineProperties(buildReportExportData, { name: { value: "buildReportExportData", configurable: true }, length: { value: 2, configurable: true } });
+export const buildResourceSnapshot = function buildResourceSnapshot(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().buildResourceSnapshot, this, publicArgs)); } as unknown as typeof Runtime.buildResourceSnapshot;
+Object.defineProperties(buildResourceSnapshot, { name: { value: "buildResourceSnapshot", configurable: true }, length: { value: 1, configurable: true } });
+export const buildRunReplayBundle = function buildRunReplayBundle(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().buildRunReplayBundle, this, publicArgs)); } as unknown as typeof Runtime.buildRunReplayBundle;
+Object.defineProperties(buildRunReplayBundle, { name: { value: "buildRunReplayBundle", configurable: true }, length: { value: 2, configurable: true } });
+export const buildS3ObjectKey = function buildS3ObjectKey(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().buildS3ObjectKey, this, publicArgs)); } as unknown as typeof Runtime.buildS3ObjectKey;
+Object.defineProperties(buildS3ObjectKey, { name: { value: "buildS3ObjectKey", configurable: true }, length: { value: 2, configurable: true } });
+export const buildS3ObjectUrl = function buildS3ObjectUrl(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().buildS3ObjectUrl, this, publicArgs)); } as unknown as typeof Runtime.buildS3ObjectUrl;
+Object.defineProperties(buildS3ObjectUrl, { name: { value: "buildS3ObjectUrl", configurable: true }, length: { value: 2, configurable: true } });
+export const buildTaskBoardSnapshot = function buildTaskBoardSnapshot(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().buildTaskBoardSnapshot, this, publicArgs)); } as unknown as typeof Runtime.buildTaskBoardSnapshot;
+Object.defineProperties(buildTaskBoardSnapshot, { name: { value: "buildTaskBoardSnapshot", configurable: true }, length: { value: 2, configurable: true } });
+export const bulkAddTaskFiles = function bulkAddTaskFiles(this: unknown, a0: any, a1: any, a2: any, a3: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, a3, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().bulkAddTaskFiles, this, publicArgs)); } as unknown as typeof Runtime.bulkAddTaskFiles;
+Object.defineProperties(bulkAddTaskFiles, { name: { value: "bulkAddTaskFiles", configurable: true }, length: { value: 4, configurable: true } });
+export const bulkCreateTasks = function bulkCreateTasks(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().bulkCreateTasks, this, publicArgs)); } as unknown as typeof Runtime.bulkCreateTasks;
+Object.defineProperties(bulkCreateTasks, { name: { value: "bulkCreateTasks", configurable: true }, length: { value: 2, configurable: true } });
+export const bulkUpdateTasks = function bulkUpdateTasks(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().bulkUpdateTasks, this, publicArgs)); } as unknown as typeof Runtime.bulkUpdateTasks;
+Object.defineProperties(bulkUpdateTasks, { name: { value: "bulkUpdateTasks", configurable: true }, length: { value: 3, configurable: true } });
+export const calculateDelay = function calculateDelay(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().calculateDelay, this, publicArgs)); } as unknown as typeof Runtime.calculateDelay;
+Object.defineProperties(calculateDelay, { name: { value: "calculateDelay", configurable: true }, length: { value: 1, configurable: true } });
+export const cancelAgentRun = function cancelAgentRun(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().cancelAgentRun, this, publicArgs)); } as unknown as typeof Runtime.cancelAgentRun;
+Object.defineProperties(cancelAgentRun, { name: { value: "cancelAgentRun", configurable: true }, length: { value: 2, configurable: true } });
+export const cancelAgentRunDispatch = function cancelAgentRunDispatch(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().cancelAgentRunDispatch, this, publicArgs)); } as unknown as typeof Runtime.cancelAgentRunDispatch;
+Object.defineProperties(cancelAgentRunDispatch, { name: { value: "cancelAgentRunDispatch", configurable: true }, length: { value: 2, configurable: true } });
+export const cancelDispatch = function cancelDispatch(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().cancelDispatch, this, publicArgs)); } as unknown as typeof Runtime.cancelDispatch;
+Object.defineProperties(cancelDispatch, { name: { value: "cancelDispatch", configurable: true }, length: { value: 2, configurable: true } });
+export const captureEnvironmentSnapshot = function captureEnvironmentSnapshot(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().captureEnvironmentSnapshot, this, publicArgs)); } as unknown as typeof Runtime.captureEnvironmentSnapshot;
+Object.defineProperties(captureEnvironmentSnapshot, { name: { value: "captureEnvironmentSnapshot", configurable: true }, length: { value: 0, configurable: true } });
+export const captureKnowledgeSnapshot = function captureKnowledgeSnapshot(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().captureKnowledgeSnapshot, this, publicArgs)); } as unknown as typeof Runtime.captureKnowledgeSnapshot;
+Object.defineProperties(captureKnowledgeSnapshot, { name: { value: "captureKnowledgeSnapshot", configurable: true }, length: { value: 2, configurable: true } });
+export const categorizeMcpTool = function categorizeMcpTool(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().categorizeMcpTool, this, publicArgs)); } as unknown as typeof Runtime.categorizeMcpTool;
+Object.defineProperties(categorizeMcpTool, { name: { value: "categorizeMcpTool", configurable: true }, length: { value: 1, configurable: true } });
+export const checkApprovalGate = function checkApprovalGate(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().checkApprovalGate, this, publicArgs)); } as unknown as typeof Runtime.checkApprovalGate;
+Object.defineProperties(checkApprovalGate, { name: { value: "checkApprovalGate", configurable: true }, length: { value: 3, configurable: true } });
+export const checkBudget = function checkBudget(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().checkBudget, this, publicArgs)); } as unknown as typeof Runtime.checkBudget;
+Object.defineProperties(checkBudget, { name: { value: "checkBudget", configurable: true }, length: { value: 2, configurable: true } });
+export const checkChecklistItem = function checkChecklistItem(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().checkChecklistItem, this, publicArgs)); } as unknown as typeof Runtime.checkChecklistItem;
+Object.defineProperties(checkChecklistItem, { name: { value: "checkChecklistItem", configurable: true }, length: { value: 3, configurable: true } });
+export const checkCompletionGuard = function checkCompletionGuard(this: unknown, a0: any, a1: any, a2: any, a3: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, a3, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().checkCompletionGuard, this, publicArgs)); } as unknown as typeof Runtime.checkCompletionGuard;
+Object.defineProperties(checkCompletionGuard, { name: { value: "checkCompletionGuard", configurable: true }, length: { value: 4, configurable: true } });
+export const checkDatabaseIntegrity = function checkDatabaseIntegrity(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().checkDatabaseIntegrity, this, publicArgs)); } as unknown as typeof Runtime.checkDatabaseIntegrity;
+Object.defineProperties(checkDatabaseIntegrity, { name: { value: "checkDatabaseIntegrity", configurable: true }, length: { value: 1, configurable: true } });
+export const checkLocalIntegrity = function checkLocalIntegrity(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().checkLocalIntegrity, this, publicArgs)); } as unknown as typeof Runtime.checkLocalIntegrity;
+Object.defineProperties(checkLocalIntegrity, { name: { value: "checkLocalIntegrity", configurable: true }, length: { value: 0, configurable: true } });
+export const checkLocalNotifications = async function checkLocalNotifications(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().checkLocalNotifications, this, publicArgs)); } as unknown as typeof Runtime.checkLocalNotifications;
+Object.defineProperties(checkLocalNotifications, { name: { value: "checkLocalNotifications", configurable: true }, length: { value: 0, configurable: true } });
+export const checkLock = function checkLock(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().checkLock, this, publicArgs)); } as unknown as typeof Runtime.checkLock;
+Object.defineProperties(checkLock, { name: { value: "checkLock", configurable: true }, length: { value: 3, configurable: true } });
+export const checkRunnerSandbox = function checkRunnerSandbox(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().checkRunnerSandbox, this, publicArgs)); } as unknown as typeof Runtime.checkRunnerSandbox;
+Object.defineProperties(checkRunnerSandbox, { name: { value: "checkRunnerSandbox", configurable: true }, length: { value: 0, configurable: true } });
+export const checkSandboxCommand = function checkSandboxCommand(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().checkSandboxCommand, this, publicArgs)); } as unknown as typeof Runtime.checkSandboxCommand;
+Object.defineProperties(checkSandboxCommand, { name: { value: "checkSandboxCommand", configurable: true }, length: { value: 1, configurable: true } });
+export const checkSchemaCompatibility = function checkSchemaCompatibility(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().checkSchemaCompatibility, this, publicArgs)); } as unknown as typeof Runtime.checkSchemaCompatibility;
+Object.defineProperties(checkSchemaCompatibility, { name: { value: "checkSchemaCompatibility", configurable: true }, length: { value: 3, configurable: true } });
+export const checkTaskDoneContract = function checkTaskDoneContract(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().checkTaskDoneContract, this, publicArgs)); } as unknown as typeof Runtime.checkTaskDoneContract;
+Object.defineProperties(checkTaskDoneContract, { name: { value: "checkTaskDoneContract", configurable: true }, length: { value: 2, configurable: true } });
+export const checkWorkspacePermission = function checkWorkspacePermission(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().checkWorkspacePermission, this, publicArgs)); } as unknown as typeof Runtime.checkWorkspacePermission;
+Object.defineProperties(checkWorkspacePermission, { name: { value: "checkWorkspacePermission", configurable: true }, length: { value: 0, configurable: true } });
+export const claimGoalStep = function claimGoalStep(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().claimGoalStep, this, publicArgs)); } as unknown as typeof Runtime.claimGoalStep;
+Object.defineProperties(claimGoalStep, { name: { value: "claimGoalStep", configurable: true }, length: { value: 3, configurable: true } });
+export const claimNextAgentRun = function claimNextAgentRun(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().claimNextAgentRun, this, publicArgs)); } as unknown as typeof Runtime.claimNextAgentRun;
+Object.defineProperties(claimNextAgentRun, { name: { value: "claimNextAgentRun", configurable: true }, length: { value: 1, configurable: true } });
+export const claimNextTask = function claimNextTask(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().claimNextTask, this, publicArgs)); } as unknown as typeof Runtime.claimNextTask;
+Object.defineProperties(claimNextTask, { name: { value: "claimNextTask", configurable: true }, length: { value: 3, configurable: true } });
+export const claimOrSteal = function claimOrSteal(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().claimOrSteal, this, publicArgs)); } as unknown as typeof Runtime.claimOrSteal;
+Object.defineProperties(claimOrSteal, { name: { value: "claimOrSteal", configurable: true }, length: { value: 3, configurable: true } });
+export const claimPlanStep = function claimPlanStep(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().claimPlanStep, this, publicArgs)); } as unknown as typeof Runtime.claimPlanStep;
+Object.defineProperties(claimPlanStep, { name: { value: "claimPlanStep", configurable: true }, length: { value: 3, configurable: true } });
+export const claimReviewItem = function claimReviewItem(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().claimReviewItem, this, publicArgs)); } as unknown as typeof Runtime.claimReviewItem;
+Object.defineProperties(claimReviewItem, { name: { value: "claimReviewItem", configurable: true }, length: { value: 2, configurable: true } });
+export const classifyProjectKind = function classifyProjectKind(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().classifyProjectKind, this, publicArgs)); } as unknown as typeof Runtime.classifyProjectKind;
+Object.defineProperties(classifyProjectKind, { name: { value: "classifyProjectKind", configurable: true }, length: { value: 2, configurable: true } });
+export const cleanExpiredLocks = function cleanExpiredLocks(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().cleanExpiredLocks, this, publicArgs)); } as unknown as typeof Runtime.cleanExpiredLocks;
+Object.defineProperties(cleanExpiredLocks, { name: { value: "cleanExpiredLocks", configurable: true }, length: { value: 1, configurable: true } });
+export const cleanupArtifacts = function cleanupArtifacts(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().cleanupArtifacts, this, publicArgs)); } as unknown as typeof Runtime.cleanupArtifacts;
+Object.defineProperties(cleanupArtifacts, { name: { value: "cleanupArtifacts", configurable: true }, length: { value: 0, configurable: true } });
+export const clearActiveModel = function clearActiveModel(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().clearActiveModel, this, publicArgs)); } as unknown as typeof Runtime.clearActiveModel;
+Object.defineProperties(clearActiveModel, { name: { value: "clearActiveModel", configurable: true }, length: { value: 0, configurable: true } });
+export const clearChecklist = function clearChecklist(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().clearChecklist, this, publicArgs)); } as unknown as typeof Runtime.clearChecklist;
+Object.defineProperties(clearChecklist, { name: { value: "clearChecklist", configurable: true }, length: { value: 2, configurable: true } });
+export const cloneTask = function cloneTask(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().cloneTask, this, publicArgs)); } as unknown as typeof Runtime.cloneTask;
+Object.defineProperties(cloneTask, { name: { value: "cloneTask", configurable: true }, length: { value: 3, configurable: true } });
+export const closeDatabase = function closeDatabase(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().closeDatabase, this, publicArgs)); } as unknown as typeof Runtime.closeDatabase;
+Object.defineProperties(closeDatabase, { name: { value: "closeDatabase", configurable: true }, length: { value: 0, configurable: true } });
+export const closeRisk = function closeRisk(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().closeRisk, this, publicArgs)); } as unknown as typeof Runtime.closeRisk;
+Object.defineProperties(closeRisk, { name: { value: "closeRisk", configurable: true }, length: { value: 1, configurable: true } });
+export const collectCliCommandEntries = function collectCliCommandEntries(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().collectCliCommandEntries, this, publicArgs)); } as unknown as typeof Runtime.collectCliCommandEntries;
+Object.defineProperties(collectCliCommandEntries, { name: { value: "collectCliCommandEntries", configurable: true }, length: { value: 1, configurable: true } });
+export const compactDatabase = function compactDatabase(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().compactDatabase, this, publicArgs)); } as unknown as typeof Runtime.compactDatabase;
+Object.defineProperties(compactDatabase, { name: { value: "compactDatabase", configurable: true }, length: { value: 1, configurable: true } });
+export const compactScaleStorage = function compactScaleStorage(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().compactScaleStorage, this, publicArgs)); } as unknown as typeof Runtime.compactScaleStorage;
+Object.defineProperties(compactScaleStorage, { name: { value: "compactScaleStorage", configurable: true }, length: { value: 0, configurable: true } });
+export const compactWorkflowPointers = function compactWorkflowPointers(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().compactWorkflowPointers, this, publicArgs)); } as unknown as typeof Runtime.compactWorkflowPointers;
+Object.defineProperties(compactWorkflowPointers, { name: { value: "compactWorkflowPointers", configurable: true }, length: { value: 1, configurable: true } });
+export const compareEnvironmentSnapshotFiles = function compareEnvironmentSnapshotFiles(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().compareEnvironmentSnapshotFiles, this, publicArgs)); } as unknown as typeof Runtime.compareEnvironmentSnapshotFiles;
+Object.defineProperties(compareEnvironmentSnapshotFiles, { name: { value: "compareEnvironmentSnapshotFiles", configurable: true }, length: { value: 2, configurable: true } });
+export const compareEnvironmentSnapshots = function compareEnvironmentSnapshots(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().compareEnvironmentSnapshots, this, publicArgs)); } as unknown as typeof Runtime.compareEnvironmentSnapshots;
+Object.defineProperties(compareEnvironmentSnapshots, { name: { value: "compareEnvironmentSnapshots", configurable: true }, length: { value: 2, configurable: true } });
+export const completeAgentRun = function completeAgentRun(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().completeAgentRun, this, publicArgs)); } as unknown as typeof Runtime.completeAgentRun;
+Object.defineProperties(completeAgentRun, { name: { value: "completeAgentRun", configurable: true }, length: { value: 1, configurable: true } });
+export const completeRunRecord = function completeRunRecord(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().completeRunRecord, this, publicArgs)); } as unknown as typeof Runtime.completeRunRecord;
+Object.defineProperties(completeRunRecord, { name: { value: "completeRunRecord", configurable: true }, length: { value: 3, configurable: true } });
+export const completeTask = function completeTask(this: unknown, a0: any, a1: any, a2: any, a3: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, a3, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().completeTask, this, publicArgs)); } as unknown as typeof Runtime.completeTask;
+Object.defineProperties(completeTask, { name: { value: "completeTask", configurable: true }, length: { value: 4, configurable: true } });
+export const computeContentHash = function computeContentHash(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().computeContentHash, this, publicArgs)); } as unknown as typeof Runtime.computeContentHash;
+Object.defineProperties(computeContentHash, { name: { value: "computeContentHash", configurable: true }, length: { value: 1, configurable: true } });
+export const countTasks = function countTasks(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().countTasks, this, publicArgs)); } as unknown as typeof Runtime.countTasks;
+Object.defineProperties(countTasks, { name: { value: "countTasks", configurable: true }, length: { value: 0, configurable: true } });
+export const createAgentContextPack = function createAgentContextPack(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createAgentContextPack, this, publicArgs)); } as unknown as typeof Runtime.createAgentContextPack;
+Object.defineProperties(createAgentContextPack, { name: { value: "createAgentContextPack", configurable: true }, length: { value: 2, configurable: true } });
+export const createAgentReliabilityExport = function createAgentReliabilityExport(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createAgentReliabilityExport, this, publicArgs)); } as unknown as typeof Runtime.createAgentReliabilityExport;
+Object.defineProperties(createAgentReliabilityExport, { name: { value: "createAgentReliabilityExport", configurable: true }, length: { value: 0, configurable: true } });
+export const createApiKey = function createApiKey(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createApiKey, this, publicArgs)); } as unknown as typeof Runtime.createApiKey;
+Object.defineProperties(createApiKey, { name: { value: "createApiKey", configurable: true }, length: { value: 2, configurable: true } });
+export const createBranchWorkPlan = function createBranchWorkPlan(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createBranchWorkPlan, this, publicArgs)); } as unknown as typeof Runtime.createBranchWorkPlan;
+Object.defineProperties(createBranchWorkPlan, { name: { value: "createBranchWorkPlan", configurable: true }, length: { value: 2, configurable: true } });
+export const createCalendarItem = function createCalendarItem(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createCalendarItem, this, publicArgs)); } as unknown as typeof Runtime.createCalendarItem;
+Object.defineProperties(createCalendarItem, { name: { value: "createCalendarItem", configurable: true }, length: { value: 2, configurable: true } });
+export const createCapabilityManifest = function createCapabilityManifest(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createCapabilityManifest, this, publicArgs)); } as unknown as typeof Runtime.createCapabilityManifest;
+Object.defineProperties(createCapabilityManifest, { name: { value: "createCapabilityManifest", configurable: true }, length: { value: 0, configurable: true } });
+export const createCliManual = function createCliManual(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createCliManual, this, publicArgs)); } as unknown as typeof Runtime.createCliManual;
+Object.defineProperties(createCliManual, { name: { value: "createCliManual", configurable: true }, length: { value: 1, configurable: true } });
+export const createCliMcpParityManifest = function createCliMcpParityManifest(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createCliMcpParityManifest, this, publicArgs)); } as unknown as typeof Runtime.createCliMcpParityManifest;
+Object.defineProperties(createCliMcpParityManifest, { name: { value: "createCliMcpParityManifest", configurable: true }, length: { value: 0, configurable: true } });
+export const createClient = function createClient(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createClient, this, publicArgs)); } as unknown as typeof Runtime.createClient;
+Object.defineProperties(createClient, { name: { value: "createClient", configurable: true }, length: { value: 1, configurable: true } });
+export const createContractsManifest = function createContractsManifest(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createContractsManifest, this, publicArgs)); } as unknown as typeof Runtime.createContractsManifest;
+Object.defineProperties(createContractsManifest, { name: { value: "createContractsManifest", configurable: true }, length: { value: 0, configurable: true } });
+export const createCustomFieldDefinition = function createCustomFieldDefinition(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createCustomFieldDefinition, this, publicArgs)); } as unknown as typeof Runtime.createCustomFieldDefinition;
+Object.defineProperties(createCustomFieldDefinition, { name: { value: "createCustomFieldDefinition", configurable: true }, length: { value: 2, configurable: true } });
+export const createCycle = function createCycle(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createCycle, this, publicArgs)); } as unknown as typeof Runtime.createCycle;
+Object.defineProperties(createCycle, { name: { value: "createCycle", configurable: true }, length: { value: 2, configurable: true } });
+export const createDecisionRecord = function createDecisionRecord(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createDecisionRecord, this, publicArgs)); } as unknown as typeof Runtime.createDecisionRecord;
+Object.defineProperties(createDecisionRecord, { name: { value: "createDecisionRecord", configurable: true }, length: { value: 2, configurable: true } });
+export const createDispatch = function createDispatch(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createDispatch, this, publicArgs)); } as unknown as typeof Runtime.createDispatch;
+Object.defineProperties(createDispatch, { name: { value: "createDispatch", configurable: true }, length: { value: 2, configurable: true } });
+export const createDispatchLog = function createDispatchLog(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createDispatchLog, this, publicArgs)); } as unknown as typeof Runtime.createDispatchLog;
+Object.defineProperties(createDispatchLog, { name: { value: "createDispatchLog", configurable: true }, length: { value: 2, configurable: true } });
+export const createEncryptedBridgeBundle = function createEncryptedBridgeBundle(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createEncryptedBridgeBundle, this, publicArgs)); } as unknown as typeof Runtime.createEncryptedBridgeBundle;
+Object.defineProperties(createEncryptedBridgeBundle, { name: { value: "createEncryptedBridgeBundle", configurable: true }, length: { value: 1, configurable: true } });
+export const createGoalWorkflow = function createGoalWorkflow(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createGoalWorkflow, this, publicArgs)); } as unknown as typeof Runtime.createGoalWorkflow;
+Object.defineProperties(createGoalWorkflow, { name: { value: "createGoalWorkflow", configurable: true }, length: { value: 2, configurable: true } });
+export const createHandoff = function createHandoff(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createHandoff, this, publicArgs)); } as unknown as typeof Runtime.createHandoff;
+Object.defineProperties(createHandoff, { name: { value: "createHandoff", configurable: true }, length: { value: 2, configurable: true } });
+export const createHandoffPacket = function createHandoffPacket(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createHandoffPacket, this, publicArgs)); } as unknown as typeof Runtime.createHandoffPacket;
+Object.defineProperties(createHandoffPacket, { name: { value: "createHandoffPacket", configurable: true }, length: { value: 0, configurable: true } });
+export const createInboxIntake = function createInboxIntake(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createInboxIntake, this, publicArgs)); } as unknown as typeof Runtime.createInboxIntake;
+Object.defineProperties(createInboxIntake, { name: { value: "createInboxIntake", configurable: true }, length: { value: 1, configurable: true } });
+export const createInboxItem = function createInboxItem(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createInboxItem, this, publicArgs)); } as unknown as typeof Runtime.createInboxItem;
+Object.defineProperties(createInboxItem, { name: { value: "createInboxItem", configurable: true }, length: { value: 2, configurable: true } });
+export const createJsonContractsManifest = function createJsonContractsManifest(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createJsonContractsManifest, this, publicArgs)); } as unknown as typeof Runtime.createJsonContractsManifest;
+Object.defineProperties(createJsonContractsManifest, { name: { value: "createJsonContractsManifest", configurable: true }, length: { value: 0, configurable: true } });
+export const createKnowledgeExportReport = function createKnowledgeExportReport(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createKnowledgeExportReport, this, publicArgs)); } as unknown as typeof Runtime.createKnowledgeExportReport;
+Object.defineProperties(createKnowledgeExportReport, { name: { value: "createKnowledgeExportReport", configurable: true }, length: { value: 2, configurable: true } });
+export const createKnowledgeRecord = function createKnowledgeRecord(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createKnowledgeRecord, this, publicArgs)); } as unknown as typeof Runtime.createKnowledgeRecord;
+Object.defineProperties(createKnowledgeRecord, { name: { value: "createKnowledgeRecord", configurable: true }, length: { value: 2, configurable: true } });
+export const createKnowledgeSnapshot = function createKnowledgeSnapshot(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createKnowledgeSnapshot, this, publicArgs)); } as unknown as typeof Runtime.createKnowledgeSnapshot;
+Object.defineProperties(createKnowledgeSnapshot, { name: { value: "createKnowledgeSnapshot", configurable: true }, length: { value: 2, configurable: true } });
+export const createLabel = function createLabel(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createLabel, this, publicArgs)); } as unknown as typeof Runtime.createLabel;
+Object.defineProperties(createLabel, { name: { value: "createLabel", configurable: true }, length: { value: 2, configurable: true } });
+export const createLocalBackup = function createLocalBackup(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createLocalBackup, this, publicArgs)); } as unknown as typeof Runtime.createLocalBackup;
+Object.defineProperties(createLocalBackup, { name: { value: "createLocalBackup", configurable: true }, length: { value: 0, configurable: true } });
+export const createLocalBridgeBundle = function createLocalBridgeBundle(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createLocalBridgeBundle, this, publicArgs)); } as unknown as typeof Runtime.createLocalBridgeBundle;
+Object.defineProperties(createLocalBridgeBundle, { name: { value: "createLocalBridgeBundle", configurable: true }, length: { value: 0, configurable: true } });
+export const createLocalReport = function createLocalReport(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createLocalReport, this, publicArgs)); } as unknown as typeof Runtime.createLocalReport;
+Object.defineProperties(createLocalReport, { name: { value: "createLocalReport", configurable: true }, length: { value: 0, configurable: true } });
+export const createLocalSqliteTodosStorageAdapter = function createLocalSqliteTodosStorageAdapter(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createLocalSqliteTodosStorageAdapter, this, publicArgs)); } as unknown as typeof Runtime.createLocalSqliteTodosStorageAdapter;
+Object.defineProperties(createLocalSqliteTodosStorageAdapter, { name: { value: "createLocalSqliteTodosStorageAdapter", configurable: true }, length: { value: 0, configurable: true } });
+export const createLocalUsageLedger = function createLocalUsageLedger(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createLocalUsageLedger, this, publicArgs)); } as unknown as typeof Runtime.createLocalUsageLedger;
+Object.defineProperties(createLocalUsageLedger, { name: { value: "createLocalUsageLedger", configurable: true }, length: { value: 0, configurable: true } });
+export const createMcpManifest = function createMcpManifest(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createMcpManifest, this, publicArgs)); } as unknown as typeof Runtime.createMcpManifest;
+Object.defineProperties(createMcpManifest, { name: { value: "createMcpManifest", configurable: true }, length: { value: 0, configurable: true } });
+export const createMilestone = function createMilestone(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createMilestone, this, publicArgs)); } as unknown as typeof Runtime.createMilestone;
+Object.defineProperties(createMilestone, { name: { value: "createMilestone", configurable: true }, length: { value: 1, configurable: true } });
+export const createNlIntake = function createNlIntake(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createNlIntake, this, publicArgs)); } as unknown as typeof Runtime.createNlIntake;
+Object.defineProperties(createNlIntake, { name: { value: "createNlIntake", configurable: true }, length: { value: 1, configurable: true } });
+export const createOrg = function createOrg(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createOrg, this, publicArgs)); } as unknown as typeof Runtime.createOrg;
+Object.defineProperties(createOrg, { name: { value: "createOrg", configurable: true }, length: { value: 2, configurable: true } });
+export const createPlan = function createPlan(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createPlan, this, publicArgs)); } as unknown as typeof Runtime.createPlan;
+Object.defineProperties(createPlan, { name: { value: "createPlan", configurable: true }, length: { value: 2, configurable: true } });
+export const createPlanWithSteps = function createPlanWithSteps(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createPlanWithSteps, this, publicArgs)); } as unknown as typeof Runtime.createPlanWithSteps;
+Object.defineProperties(createPlanWithSteps, { name: { value: "createPlanWithSteps", configurable: true }, length: { value: 2, configurable: true } });
+export const createProject = function createProject(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createProject, this, publicArgs)); } as unknown as typeof Runtime.createProject;
+Object.defineProperties(createProject, { name: { value: "createProject", configurable: true }, length: { value: 2, configurable: true } });
+export const createReleaseCompatibilityReport = function createReleaseCompatibilityReport(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createReleaseCompatibilityReport, this, publicArgs)); } as unknown as typeof Runtime.createReleaseCompatibilityReport;
+Object.defineProperties(createReleaseCompatibilityReport, { name: { value: "createReleaseCompatibilityReport", configurable: true }, length: { value: 0, configurable: true } });
+export const createReminder = function createReminder(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createReminder, this, publicArgs)); } as unknown as typeof Runtime.createReminder;
+Object.defineProperties(createReminder, { name: { value: "createReminder", configurable: true }, length: { value: 2, configurable: true } });
+export const createRetrospective = function createRetrospective(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createRetrospective, this, publicArgs)); } as unknown as typeof Runtime.createRetrospective;
+Object.defineProperties(createRetrospective, { name: { value: "createRetrospective", configurable: true }, length: { value: 2, configurable: true } });
+export const createRetrospectiveExport = function createRetrospectiveExport(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createRetrospectiveExport, this, publicArgs)); } as unknown as typeof Runtime.createRetrospectiveExport;
+Object.defineProperties(createRetrospectiveExport, { name: { value: "createRetrospectiveExport", configurable: true }, length: { value: 0, configurable: true } });
+export const createRisk = function createRisk(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createRisk, this, publicArgs)); } as unknown as typeof Runtime.createRisk;
+Object.defineProperties(createRisk, { name: { value: "createRisk", configurable: true }, length: { value: 2, configurable: true } });
+export const createRiskRegisterExport = function createRiskRegisterExport(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createRiskRegisterExport, this, publicArgs)); } as unknown as typeof Runtime.createRiskRegisterExport;
+Object.defineProperties(createRiskRegisterExport, { name: { value: "createRiskRegisterExport", configurable: true }, length: { value: 0, configurable: true } });
+export const createRoadmap = function createRoadmap(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createRoadmap, this, publicArgs)); } as unknown as typeof Runtime.createRoadmap;
+Object.defineProperties(createRoadmap, { name: { value: "createRoadmap", configurable: true }, length: { value: 1, configurable: true } });
+export const createRunRecord = function createRunRecord(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createRunRecord, this, publicArgs)); } as unknown as typeof Runtime.createRunRecord;
+Object.defineProperties(createRunRecord, { name: { value: "createRunRecord", configurable: true }, length: { value: 0, configurable: true } });
+export const createSavedView = function createSavedView(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createSavedView, this, publicArgs)); } as unknown as typeof Runtime.createSavedView;
+Object.defineProperties(createSavedView, { name: { value: "createSavedView", configurable: true }, length: { value: 2, configurable: true } });
+export const createScalePerformanceReport = function createScalePerformanceReport(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createScalePerformanceReport, this, publicArgs)); } as unknown as typeof Runtime.createScalePerformanceReport;
+Object.defineProperties(createScalePerformanceReport, { name: { value: "createScalePerformanceReport", configurable: true }, length: { value: 0, configurable: true } });
+export const createSdkIntegrationFixturePack = function createSdkIntegrationFixturePack(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createSdkIntegrationFixturePack, this, publicArgs)); } as unknown as typeof Runtime.createSdkIntegrationFixturePack;
+Object.defineProperties(createSdkIntegrationFixturePack, { name: { value: "createSdkIntegrationFixturePack", configurable: true }, length: { value: 0, configurable: true } });
+export const createSession = function createSession(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createSession, this, publicArgs)); } as unknown as typeof Runtime.createSession;
+Object.defineProperties(createSession, { name: { value: "createSession", configurable: true }, length: { value: 2, configurable: true } });
+export const createSessionRecoveryHandoff = function createSessionRecoveryHandoff(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createSessionRecoveryHandoff, this, publicArgs)); } as unknown as typeof Runtime.createSessionRecoveryHandoff;
+Object.defineProperties(createSessionRecoveryHandoff, { name: { value: "createSessionRecoveryHandoff", configurable: true }, length: { value: 2, configurable: true } });
+export const createTask = function createTask(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createTask, this, publicArgs)); } as unknown as typeof Runtime.createTask;
+Object.defineProperties(createTask, { name: { value: "createTask", configurable: true }, length: { value: 2, configurable: true } });
+export const createTaskBoard = function createTaskBoard(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createTaskBoard, this, publicArgs)); } as unknown as typeof Runtime.createTaskBoard;
+Object.defineProperties(createTaskBoard, { name: { value: "createTaskBoard", configurable: true }, length: { value: 2, configurable: true } });
+export const createTaskList = function createTaskList(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createTaskList, this, publicArgs)); } as unknown as typeof Runtime.createTaskList;
+Object.defineProperties(createTaskList, { name: { value: "createTaskList", configurable: true }, length: { value: 2, configurable: true } });
+export const createTemplate = function createTemplate(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createTemplate, this, publicArgs)); } as unknown as typeof Runtime.createTemplate;
+Object.defineProperties(createTemplate, { name: { value: "createTemplate", configurable: true }, length: { value: 2, configurable: true } });
+export const createTodosRegistry = function createTodosRegistry(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createTodosRegistry, this, publicArgs)); } as unknown as typeof Runtime.createTodosRegistry;
+Object.defineProperties(createTodosRegistry, { name: { value: "createTodosRegistry", configurable: true }, length: { value: 0, configurable: true } });
+export const createTodosStorageAdapter = function createTodosStorageAdapter(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createTodosStorageAdapter, this, publicArgs)); } as unknown as typeof Runtime.createTodosStorageAdapter;
+Object.defineProperties(createTodosStorageAdapter, { name: { value: "createTodosStorageAdapter", configurable: true }, length: { value: 0, configurable: true } });
+export const createTuiDashboardSnapshot = function createTuiDashboardSnapshot(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createTuiDashboardSnapshot, this, publicArgs)); } as unknown as typeof Runtime.createTuiDashboardSnapshot;
+Object.defineProperties(createTuiDashboardSnapshot, { name: { value: "createTuiDashboardSnapshot", configurable: true }, length: { value: 0, configurable: true } });
+export const createUserScaffold = function createUserScaffold(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createUserScaffold, this, publicArgs)); } as unknown as typeof Runtime.createUserScaffold;
+Object.defineProperties(createUserScaffold, { name: { value: "createUserScaffold", configurable: true }, length: { value: 3, configurable: true } });
+export const createVerificationEvidence = function createVerificationEvidence(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createVerificationEvidence, this, publicArgs)); } as unknown as typeof Runtime.createVerificationEvidence;
+Object.defineProperties(createVerificationEvidence, { name: { value: "createVerificationEvidence", configurable: true }, length: { value: 2, configurable: true } });
+export const createWebhook = function createWebhook(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().createWebhook, this, publicArgs)); } as unknown as typeof Runtime.createWebhook;
+Object.defineProperties(createWebhook, { name: { value: "createWebhook", configurable: true }, length: { value: 2, configurable: true } });
+export const decomposeTasks = function decomposeTasks(this: unknown, a0: any, a1: any, a2: any, a3: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, a3, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().decomposeTasks, this, publicArgs)); } as unknown as typeof Runtime.decomposeTasks;
+Object.defineProperties(decomposeTasks, { name: { value: "decomposeTasks", configurable: true }, length: { value: 4, configurable: true } });
+export const decryptBridgeBundle = function decryptBridgeBundle(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().decryptBridgeBundle, this, publicArgs)); } as unknown as typeof Runtime.decryptBridgeBundle;
+Object.defineProperties(decryptBridgeBundle, { name: { value: "decryptBridgeBundle", configurable: true }, length: { value: 1, configurable: true } });
+export const decryptString = function decryptString(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().decryptString, this, publicArgs)); } as unknown as typeof Runtime.decryptString;
+Object.defineProperties(decryptString, { name: { value: "decryptString", configurable: true }, length: { value: 1, configurable: true } });
+export const decryptValue = function decryptValue(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().decryptValue, this, publicArgs)); } as unknown as typeof Runtime.decryptValue;
+Object.defineProperties(decryptValue, { name: { value: "decryptValue", configurable: true }, length: { value: 1, configurable: true } });
+export const defaultBackupPath = function defaultBackupPath(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().defaultBackupPath, this, publicArgs)); } as unknown as typeof Runtime.defaultBackupPath;
+Object.defineProperties(defaultBackupPath, { name: { value: "defaultBackupPath", configurable: true }, length: { value: 1, configurable: true } });
+export const defaultSyncAgents = function defaultSyncAgents(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().defaultSyncAgents, this, publicArgs)); } as unknown as typeof Runtime.defaultSyncAgents;
+Object.defineProperties(defaultSyncAgents, { name: { value: "defaultSyncAgents", configurable: true }, length: { value: 0, configurable: true } });
+export const deleteAgent = function deleteAgent(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().deleteAgent, this, publicArgs)); } as unknown as typeof Runtime.deleteAgent;
+Object.defineProperties(deleteAgent, { name: { value: "deleteAgent", configurable: true }, length: { value: 2, configurable: true } });
+export const deleteCommandAlias = function deleteCommandAlias(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().deleteCommandAlias, this, publicArgs)); } as unknown as typeof Runtime.deleteCommandAlias;
+Object.defineProperties(deleteCommandAlias, { name: { value: "deleteCommandAlias", configurable: true }, length: { value: 2, configurable: true } });
+export const deleteComment = function deleteComment(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().deleteComment, this, publicArgs)); } as unknown as typeof Runtime.deleteComment;
+Object.defineProperties(deleteComment, { name: { value: "deleteComment", configurable: true }, length: { value: 2, configurable: true } });
+export const deleteCustomFieldDefinition = function deleteCustomFieldDefinition(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().deleteCustomFieldDefinition, this, publicArgs)); } as unknown as typeof Runtime.deleteCustomFieldDefinition;
+Object.defineProperties(deleteCustomFieldDefinition, { name: { value: "deleteCustomFieldDefinition", configurable: true }, length: { value: 2, configurable: true } });
+export const deleteCycle = function deleteCycle(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().deleteCycle, this, publicArgs)); } as unknown as typeof Runtime.deleteCycle;
+Object.defineProperties(deleteCycle, { name: { value: "deleteCycle", configurable: true }, length: { value: 2, configurable: true } });
+export const deleteLabel = function deleteLabel(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().deleteLabel, this, publicArgs)); } as unknown as typeof Runtime.deleteLabel;
+Object.defineProperties(deleteLabel, { name: { value: "deleteLabel", configurable: true }, length: { value: 2, configurable: true } });
+export const deleteMachine = function deleteMachine(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().deleteMachine, this, publicArgs)); } as unknown as typeof Runtime.deleteMachine;
+Object.defineProperties(deleteMachine, { name: { value: "deleteMachine", configurable: true }, length: { value: 2, configurable: true } });
+export const deleteMilestone = function deleteMilestone(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().deleteMilestone, this, publicArgs)); } as unknown as typeof Runtime.deleteMilestone;
+Object.defineProperties(deleteMilestone, { name: { value: "deleteMilestone", configurable: true }, length: { value: 1, configurable: true } });
+export const deleteOrg = function deleteOrg(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().deleteOrg, this, publicArgs)); } as unknown as typeof Runtime.deleteOrg;
+Object.defineProperties(deleteOrg, { name: { value: "deleteOrg", configurable: true }, length: { value: 2, configurable: true } });
+export const deletePlan = function deletePlan(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().deletePlan, this, publicArgs)); } as unknown as typeof Runtime.deletePlan;
+Object.defineProperties(deletePlan, { name: { value: "deletePlan", configurable: true }, length: { value: 2, configurable: true } });
+export const deleteProject = function deleteProject(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().deleteProject, this, publicArgs)); } as unknown as typeof Runtime.deleteProject;
+Object.defineProperties(deleteProject, { name: { value: "deleteProject", configurable: true }, length: { value: 2, configurable: true } });
+export const deleteRoadmap = function deleteRoadmap(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().deleteRoadmap, this, publicArgs)); } as unknown as typeof Runtime.deleteRoadmap;
+Object.defineProperties(deleteRoadmap, { name: { value: "deleteRoadmap", configurable: true }, length: { value: 1, configurable: true } });
+export const deleteSavedView = function deleteSavedView(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().deleteSavedView, this, publicArgs)); } as unknown as typeof Runtime.deleteSavedView;
+Object.defineProperties(deleteSavedView, { name: { value: "deleteSavedView", configurable: true }, length: { value: 2, configurable: true } });
+export const deleteSearchView = function deleteSearchView(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().deleteSearchView, this, publicArgs)); } as unknown as typeof Runtime.deleteSearchView;
+Object.defineProperties(deleteSearchView, { name: { value: "deleteSearchView", configurable: true }, length: { value: 2, configurable: true } });
+export const deleteSession = function deleteSession(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().deleteSession, this, publicArgs)); } as unknown as typeof Runtime.deleteSession;
+Object.defineProperties(deleteSession, { name: { value: "deleteSession", configurable: true }, length: { value: 2, configurable: true } });
+export const deleteTask = function deleteTask(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().deleteTask, this, publicArgs)); } as unknown as typeof Runtime.deleteTask;
+Object.defineProperties(deleteTask, { name: { value: "deleteTask", configurable: true }, length: { value: 2, configurable: true } });
+export const deleteTaskBoard = function deleteTaskBoard(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().deleteTaskBoard, this, publicArgs)); } as unknown as typeof Runtime.deleteTaskBoard;
+Object.defineProperties(deleteTaskBoard, { name: { value: "deleteTaskBoard", configurable: true }, length: { value: 2, configurable: true } });
+export const deleteTaskList = function deleteTaskList(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().deleteTaskList, this, publicArgs)); } as unknown as typeof Runtime.deleteTaskList;
+Object.defineProperties(deleteTaskList, { name: { value: "deleteTaskList", configurable: true }, length: { value: 2, configurable: true } });
+export const deleteTemplate = function deleteTemplate(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().deleteTemplate, this, publicArgs)); } as unknown as typeof Runtime.deleteTemplate;
+Object.defineProperties(deleteTemplate, { name: { value: "deleteTemplate", configurable: true }, length: { value: 2, configurable: true } });
+export const deleteWebhook = function deleteWebhook(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().deleteWebhook, this, publicArgs)); } as unknown as typeof Runtime.deleteWebhook;
+Object.defineProperties(deleteWebhook, { name: { value: "deleteWebhook", configurable: true }, length: { value: 2, configurable: true } });
+export const deriveInboxTitle = function deriveInboxTitle(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().deriveInboxTitle, this, publicArgs)); } as unknown as typeof Runtime.deriveInboxTitle;
+Object.defineProperties(deriveInboxTitle, { name: { value: "deriveInboxTitle", configurable: true }, length: { value: 3, configurable: true } });
+export const describeTerminalNotificationRule = function describeTerminalNotificationRule(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().describeTerminalNotificationRule, this, publicArgs)); } as unknown as typeof Runtime.describeTerminalNotificationRule;
+Object.defineProperties(describeTerminalNotificationRule, { name: { value: "describeTerminalNotificationRule", configurable: true }, length: { value: 1, configurable: true } });
+export const detectInboxSourceType = function detectInboxSourceType(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().detectInboxSourceType, this, publicArgs)); } as unknown as typeof Runtime.detectInboxSourceType;
+Object.defineProperties(detectInboxSourceType, { name: { value: "detectInboxSourceType", configurable: true }, length: { value: 2, configurable: true } });
+export const detectIssueExportSource = function detectIssueExportSource(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().detectIssueExportSource, this, publicArgs)); } as unknown as typeof Runtime.detectIssueExportSource;
+Object.defineProperties(detectIssueExportSource, { name: { value: "detectIssueExportSource", configurable: true }, length: { value: 1, configurable: true } });
+export const detectPrForBranch = function detectPrForBranch(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().detectPrForBranch, this, publicArgs)); } as unknown as typeof Runtime.detectPrForBranch;
+Object.defineProperties(detectPrForBranch, { name: { value: "detectPrForBranch", configurable: true }, length: { value: 2, configurable: true } });
+export const detectSourceType = function detectSourceType(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().detectSourceType, this, publicArgs)); } as unknown as typeof Runtime.detectSourceType;
+Object.defineProperties(detectSourceType, { name: { value: "detectSourceType", configurable: true }, length: { value: 1, configurable: true } });
+export const discoverLocalExtensions = function discoverLocalExtensions(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().discoverLocalExtensions, this, publicArgs)); } as unknown as typeof Runtime.discoverLocalExtensions;
+Object.defineProperties(discoverLocalExtensions, { name: { value: "discoverLocalExtensions", configurable: true }, length: { value: 0, configurable: true } });
+export const discoverProjectWorkspace = function discoverProjectWorkspace(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().discoverProjectWorkspace, this, publicArgs)); } as unknown as typeof Runtime.discoverProjectWorkspace;
+Object.defineProperties(discoverProjectWorkspace, { name: { value: "discoverProjectWorkspace", configurable: true }, length: { value: 0, configurable: true } });
+export const discoverTaskRouteSources = function discoverTaskRouteSources(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().discoverTaskRouteSources, this, publicArgs)); } as unknown as typeof Runtime.discoverTaskRouteSources;
+Object.defineProperties(discoverTaskRouteSources, { name: { value: "discoverTaskRouteSources", configurable: true }, length: { value: 1, configurable: true } });
+export const discoverVerificationProviderCapabilities = function discoverVerificationProviderCapabilities(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().discoverVerificationProviderCapabilities, this, publicArgs)); } as unknown as typeof Runtime.discoverVerificationProviderCapabilities;
+Object.defineProperties(discoverVerificationProviderCapabilities, { name: { value: "discoverVerificationProviderCapabilities", configurable: true }, length: { value: 1, configurable: true } });
+export const dismissReminder = function dismissReminder(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().dismissReminder, this, publicArgs)); } as unknown as typeof Runtime.dismissReminder;
+Object.defineProperties(dismissReminder, { name: { value: "dismissReminder", configurable: true }, length: { value: 2, configurable: true } });
+export const dispatchToMultiple = async function dispatchToMultiple(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().dispatchToMultiple, this, publicArgs)); } as unknown as typeof Runtime.dispatchToMultiple;
+Object.defineProperties(dispatchToMultiple, { name: { value: "dispatchToMultiple", configurable: true }, length: { value: 1, configurable: true } });
+export const dispatchWebhook = async function dispatchWebhook(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().dispatchWebhook, this, publicArgs)); } as unknown as typeof Runtime.dispatchWebhook;
+Object.defineProperties(dispatchWebhook, { name: { value: "dispatchWebhook", configurable: true }, length: { value: 3, configurable: true } });
+export const emitLocalEventHooks = async function emitLocalEventHooks(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().emitLocalEventHooks, this, publicArgs)); } as unknown as typeof Runtime.emitLocalEventHooks;
+Object.defineProperties(emitLocalEventHooks, { name: { value: "emitLocalEventHooks", configurable: true }, length: { value: 1, configurable: true } });
+export const emitLocalEventHooksQuiet = function emitLocalEventHooksQuiet(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().emitLocalEventHooksQuiet, this, publicArgs)); } as unknown as typeof Runtime.emitLocalEventHooksQuiet;
+Object.defineProperties(emitLocalEventHooksQuiet, { name: { value: "emitLocalEventHooksQuiet", configurable: true }, length: { value: 1, configurable: true } });
+export const encryptSensitiveFields = function encryptSensitiveFields(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().encryptSensitiveFields, this, publicArgs)); } as unknown as typeof Runtime.encryptSensitiveFields;
+Object.defineProperties(encryptSensitiveFields, { name: { value: "encryptSensitiveFields", configurable: true }, length: { value: 1, configurable: true } });
+export const encryptString = function encryptString(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().encryptString, this, publicArgs)); } as unknown as typeof Runtime.encryptString;
+Object.defineProperties(encryptString, { name: { value: "encryptString", configurable: true }, length: { value: 1, configurable: true } });
+export const encryptValue = function encryptValue(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().encryptValue, this, publicArgs)); } as unknown as typeof Runtime.encryptValue;
+Object.defineProperties(encryptValue, { name: { value: "encryptValue", configurable: true }, length: { value: 1, configurable: true } });
+export const encryptionProfileStatus = function encryptionProfileStatus(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().encryptionProfileStatus, this, publicArgs)); } as unknown as typeof Runtime.encryptionProfileStatus;
+Object.defineProperties(encryptionProfileStatus, { name: { value: "encryptionProfileStatus", configurable: true }, length: { value: 0, configurable: true } });
+export const enqueueAgentRun = function enqueueAgentRun(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().enqueueAgentRun, this, publicArgs)); } as unknown as typeof Runtime.enqueueAgentRun;
+Object.defineProperties(enqueueAgentRun, { name: { value: "enqueueAgentRun", configurable: true }, length: { value: 2, configurable: true } });
+export const ensureEncryptionProfile = function ensureEncryptionProfile(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().ensureEncryptionProfile, this, publicArgs)); } as unknown as typeof Runtime.ensureEncryptionProfile;
+Object.defineProperties(ensureEncryptionProfile, { name: { value: "ensureEncryptionProfile", configurable: true }, length: { value: 0, configurable: true } });
+export const ensureProject = function ensureProject(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().ensureProject, this, publicArgs)); } as unknown as typeof Runtime.ensureProject;
+Object.defineProperties(ensureProject, { name: { value: "ensureProject", configurable: true }, length: { value: 3, configurable: true } });
+export const ensureTaskList = function ensureTaskList(this: unknown, a0: any, a1: any, a2: any, a3: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, a3, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().ensureTaskList, this, publicArgs)); } as unknown as typeof Runtime.ensureTaskList;
+Object.defineProperties(ensureTaskList, { name: { value: "ensureTaskList", configurable: true }, length: { value: 4, configurable: true } });
+export const evaluateCondition = function evaluateCondition(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().evaluateCondition, this, publicArgs)); } as unknown as typeof Runtime.evaluateCondition;
+Object.defineProperties(evaluateCondition, { name: { value: "evaluateCondition", configurable: true }, length: { value: 2, configurable: true } });
+export const evaluateTerminalWatchRules = function evaluateTerminalWatchRules(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().evaluateTerminalWatchRules, this, publicArgs)); } as unknown as typeof Runtime.evaluateTerminalWatchRules;
+Object.defineProperties(evaluateTerminalWatchRules, { name: { value: "evaluateTerminalWatchRules", configurable: true }, length: { value: 1, configurable: true } });
+export const executeDispatch = async function executeDispatch(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().executeDispatch, this, publicArgs)); } as unknown as typeof Runtime.executeDispatch;
+Object.defineProperties(executeDispatch, { name: { value: "executeDispatch", configurable: true }, length: { value: 1, configurable: true } });
+export const expireApprovalGate = function expireApprovalGate(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().expireApprovalGate, this, publicArgs)); } as unknown as typeof Runtime.expireApprovalGate;
+Object.defineProperties(expireApprovalGate, { name: { value: "expireApprovalGate", configurable: true }, length: { value: 2, configurable: true } });
+export const explainCommandQuery = function explainCommandQuery(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().explainCommandQuery, this, publicArgs)); } as unknown as typeof Runtime.explainCommandQuery;
+Object.defineProperties(explainCommandQuery, { name: { value: "explainCommandQuery", configurable: true }, length: { value: 2, configurable: true } });
+export const explainPolicyPack = function explainPolicyPack(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().explainPolicyPack, this, publicArgs)); } as unknown as typeof Runtime.explainPolicyPack;
+Object.defineProperties(explainPolicyPack, { name: { value: "explainPolicyPack", configurable: true }, length: { value: 2, configurable: true } });
+export const explainRunnerSandbox = function explainRunnerSandbox(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().explainRunnerSandbox, this, publicArgs)); } as unknown as typeof Runtime.explainRunnerSandbox;
+Object.defineProperties(explainRunnerSandbox, { name: { value: "explainRunnerSandbox", configurable: true }, length: { value: 0, configurable: true } });
+export const exportActivityLog = function exportActivityLog(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().exportActivityLog, this, publicArgs)); } as unknown as typeof Runtime.exportActivityLog;
+Object.defineProperties(exportActivityLog, { name: { value: "exportActivityLog", configurable: true }, length: { value: 0, configurable: true } });
+export const exportArtifacts = function exportArtifacts(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().exportArtifacts, this, publicArgs)); } as unknown as typeof Runtime.exportArtifacts;
+Object.defineProperties(exportArtifacts, { name: { value: "exportArtifacts", configurable: true }, length: { value: 0, configurable: true } });
+export const exportBuiltinTemplate = function exportBuiltinTemplate(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().exportBuiltinTemplate, this, publicArgs)); } as unknown as typeof Runtime.exportBuiltinTemplate;
+Object.defineProperties(exportBuiltinTemplate, { name: { value: "exportBuiltinTemplate", configurable: true }, length: { value: 1, configurable: true } });
+export const exportBuiltinTemplateFiles = function exportBuiltinTemplateFiles(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().exportBuiltinTemplateFiles, this, publicArgs)); } as unknown as typeof Runtime.exportBuiltinTemplateFiles;
+Object.defineProperties(exportBuiltinTemplateFiles, { name: { value: "exportBuiltinTemplateFiles", configurable: true }, length: { value: 0, configurable: true } });
+export const exportCalendarIcs = function exportCalendarIcs(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().exportCalendarIcs, this, publicArgs)); } as unknown as typeof Runtime.exportCalendarIcs;
+Object.defineProperties(exportCalendarIcs, { name: { value: "exportCalendarIcs", configurable: true }, length: { value: 0, configurable: true } });
+export const exportCommandAliases = function exportCommandAliases(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().exportCommandAliases, this, publicArgs)); } as unknown as typeof Runtime.exportCommandAliases;
+Object.defineProperties(exportCommandAliases, { name: { value: "exportCommandAliases", configurable: true }, length: { value: 1, configurable: true } });
+export const exportDecisionRecord = function exportDecisionRecord(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().exportDecisionRecord, this, publicArgs)); } as unknown as typeof Runtime.exportDecisionRecord;
+Object.defineProperties(exportDecisionRecord, { name: { value: "exportDecisionRecord", configurable: true }, length: { value: 2, configurable: true } });
+export const exportHandoffBundle = function exportHandoffBundle(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().exportHandoffBundle, this, publicArgs)); } as unknown as typeof Runtime.exportHandoffBundle;
+Object.defineProperties(exportHandoffBundle, { name: { value: "exportHandoffBundle", configurable: true }, length: { value: 2, configurable: true } });
+export const exportHandoffPacket = function exportHandoffPacket(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().exportHandoffPacket, this, publicArgs)); } as unknown as typeof Runtime.exportHandoffPacket;
+Object.defineProperties(exportHandoffPacket, { name: { value: "exportHandoffPacket", configurable: true }, length: { value: 0, configurable: true } });
+export const exportInstalledTemplate = function exportInstalledTemplate(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().exportInstalledTemplate, this, publicArgs)); } as unknown as typeof Runtime.exportInstalledTemplate;
+Object.defineProperties(exportInstalledTemplate, { name: { value: "exportInstalledTemplate", configurable: true }, length: { value: 2, configurable: true } });
+export const exportKnowledgeSnapshot = function exportKnowledgeSnapshot(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().exportKnowledgeSnapshot, this, publicArgs)); } as unknown as typeof Runtime.exportKnowledgeSnapshot;
+Object.defineProperties(exportKnowledgeSnapshot, { name: { value: "exportKnowledgeSnapshot", configurable: true }, length: { value: 2, configurable: true } });
+export const exportLocalBundle = function exportLocalBundle(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().exportLocalBundle, this, publicArgs)); } as unknown as typeof Runtime.exportLocalBundle;
+Object.defineProperties(exportLocalBundle, { name: { value: "exportLocalBundle", configurable: true }, length: { value: 0, configurable: true } });
+export const exportPlanExecutionContract = function exportPlanExecutionContract(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().exportPlanExecutionContract, this, publicArgs)); } as unknown as typeof Runtime.exportPlanExecutionContract;
+Object.defineProperties(exportPlanExecutionContract, { name: { value: "exportPlanExecutionContract", configurable: true }, length: { value: 2, configurable: true } });
+export const exportReport = function exportReport(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().exportReport, this, publicArgs)); } as unknown as typeof Runtime.exportReport;
+Object.defineProperties(exportReport, { name: { value: "exportReport", configurable: true }, length: { value: 2, configurable: true } });
+export const exportRoadmapBundle = function exportRoadmapBundle(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().exportRoadmapBundle, this, publicArgs)); } as unknown as typeof Runtime.exportRoadmapBundle;
+Object.defineProperties(exportRoadmapBundle, { name: { value: "exportRoadmapBundle", configurable: true }, length: { value: 1, configurable: true } });
+export const exportRunReplay = function exportRunReplay(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().exportRunReplay, this, publicArgs)); } as unknown as typeof Runtime.exportRunReplay;
+Object.defineProperties(exportRunReplay, { name: { value: "exportRunReplay", configurable: true }, length: { value: 3, configurable: true } });
+export const exportSchemasToDirectory = function exportSchemasToDirectory(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().exportSchemasToDirectory, this, publicArgs)); } as unknown as typeof Runtime.exportSchemasToDirectory;
+Object.defineProperties(exportSchemasToDirectory, { name: { value: "exportSchemasToDirectory", configurable: true }, length: { value: 1, configurable: true } });
+export const exportSqliteTodosStorageSnapshot = function exportSqliteTodosStorageSnapshot(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().exportSqliteTodosStorageSnapshot, this, publicArgs)); } as unknown as typeof Runtime.exportSqliteTodosStorageSnapshot;
+Object.defineProperties(exportSqliteTodosStorageSnapshot, { name: { value: "exportSqliteTodosStorageSnapshot", configurable: true }, length: { value: 1, configurable: true } });
+export const exportStoredArtifactContent = function exportStoredArtifactContent(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().exportStoredArtifactContent, this, publicArgs)); } as unknown as typeof Runtime.exportStoredArtifactContent;
+Object.defineProperties(exportStoredArtifactContent, { name: { value: "exportStoredArtifactContent", configurable: true }, length: { value: 1, configurable: true } });
+export const exportTaskBoardBundle = function exportTaskBoardBundle(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().exportTaskBoardBundle, this, publicArgs)); } as unknown as typeof Runtime.exportTaskBoardBundle;
+Object.defineProperties(exportTaskBoardBundle, { name: { value: "exportTaskBoardBundle", configurable: true }, length: { value: 2, configurable: true } });
+export const exportTaskFields = function exportTaskFields(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().exportTaskFields, this, publicArgs)); } as unknown as typeof Runtime.exportTaskFields;
+Object.defineProperties(exportTaskFields, { name: { value: "exportTaskFields", configurable: true }, length: { value: 2, configurable: true } });
+export const exportTemplate = function exportTemplate(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().exportTemplate, this, publicArgs)); } as unknown as typeof Runtime.exportTemplate;
+Object.defineProperties(exportTemplate, { name: { value: "exportTemplate", configurable: true }, length: { value: 2, configurable: true } });
+export const exportTemplateLibraryCatalog = function exportTemplateLibraryCatalog(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().exportTemplateLibraryCatalog, this, publicArgs)); } as unknown as typeof Runtime.exportTemplateLibraryCatalog;
+Object.defineProperties(exportTemplateLibraryCatalog, { name: { value: "exportTemplateLibraryCatalog", configurable: true }, length: { value: 2, configurable: true } });
+export const exportTodosMarkdown = function exportTodosMarkdown(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().exportTodosMarkdown, this, publicArgs)); } as unknown as typeof Runtime.exportTodosMarkdown;
+Object.defineProperties(exportTodosMarkdown, { name: { value: "exportTodosMarkdown", configurable: true }, length: { value: 0, configurable: true } });
+export const exportUserScaffold = function exportUserScaffold(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().exportUserScaffold, this, publicArgs)); } as unknown as typeof Runtime.exportUserScaffold;
+Object.defineProperties(exportUserScaffold, { name: { value: "exportUserScaffold", configurable: true }, length: { value: 3, configurable: true } });
+export const exportVerificationEvidence = function exportVerificationEvidence(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().exportVerificationEvidence, this, publicArgs)); } as unknown as typeof Runtime.exportVerificationEvidence;
+Object.defineProperties(exportVerificationEvidence, { name: { value: "exportVerificationEvidence", configurable: true }, length: { value: 0, configurable: true } });
+export const extractFromSource = function extractFromSource(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().extractFromSource, this, publicArgs)); } as unknown as typeof Runtime.extractFromSource;
+Object.defineProperties(extractFromSource, { name: { value: "extractFromSource", configurable: true }, length: { value: 2, configurable: true } });
+export const extractTodos = function extractTodos(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().extractTodos, this, publicArgs)); } as unknown as typeof Runtime.extractTodos;
+Object.defineProperties(extractTodos, { name: { value: "extractTodos", configurable: true }, length: { value: 2, configurable: true } });
+export const failAgentRun = function failAgentRun(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().failAgentRun, this, publicArgs)); } as unknown as typeof Runtime.failAgentRun;
+Object.defineProperties(failAgentRun, { name: { value: "failAgentRun", configurable: true }, length: { value: 3, configurable: true } });
+export const failRunRecord = function failRunRecord(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().failRunRecord, this, publicArgs)); } as unknown as typeof Runtime.failRunRecord;
+Object.defineProperties(failRunRecord, { name: { value: "failRunRecord", configurable: true }, length: { value: 3, configurable: true } });
+export const failTask = function failTask(this: unknown, a0: any, a1: any, a2: any, a3: any, a4: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, a3, a4, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().failTask, this, publicArgs)); } as unknown as typeof Runtime.failTask;
+Object.defineProperties(failTask, { name: { value: "failTask", configurable: true }, length: { value: 5, configurable: true } });
+export const fetchGitHubIssue = function fetchGitHubIssue(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().fetchGitHubIssue, this, publicArgs)); } as unknown as typeof Runtime.fetchGitHubIssue;
+Object.defineProperties(fetchGitHubIssue, { name: { value: "fetchGitHubIssue", configurable: true }, length: { value: 3, configurable: true } });
+export const findDuplicateCandidates = function findDuplicateTasks(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().findDuplicateCandidates, this, publicArgs)); } as unknown as typeof Runtime.findDuplicateCandidates;
+Object.defineProperties(findDuplicateCandidates, { name: { value: "findDuplicateTasks", configurable: true }, length: { value: 0, configurable: true } });
+export const findDuplicateTasks = function findDuplicateTasks(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().findDuplicateTasks, this, publicArgs)); } as unknown as typeof Runtime.findDuplicateTasks;
+Object.defineProperties(findDuplicateTasks, { name: { value: "findDuplicateTasks", configurable: true }, length: { value: 0, configurable: true } });
+export const findParityForCliCommand = function findParityForCliCommand(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().findParityForCliCommand, this, publicArgs)); } as unknown as typeof Runtime.findParityForCliCommand;
+Object.defineProperties(findParityForCliCommand, { name: { value: "findParityForCliCommand", configurable: true }, length: { value: 1, configurable: true } });
+export const findParityForMcpTool = function findParityForMcpTool(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().findParityForMcpTool, this, publicArgs)); } as unknown as typeof Runtime.findParityForMcpTool;
+Object.defineProperties(findParityForMcpTool, { name: { value: "findParityForMcpTool", configurable: true }, length: { value: 1, configurable: true } });
+export const findPath = function findPath(this: unknown, a0: any, a1: any, a2: any, a3: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, a3, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().findPath, this, publicArgs)); } as unknown as typeof Runtime.findPath;
+Object.defineProperties(findPath, { name: { value: "findPath", configurable: true }, length: { value: 4, configurable: true } });
+export const findRelatedTaskIds = function findRelatedTaskIds(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().findRelatedTaskIds, this, publicArgs)); } as unknown as typeof Runtime.findRelatedTaskIds;
+Object.defineProperties(findRelatedTaskIds, { name: { value: "findRelatedTaskIds", configurable: true }, length: { value: 3, configurable: true } });
+export const findTaskByCommit = function findTaskByCommit(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().findTaskByCommit, this, publicArgs)); } as unknown as typeof Runtime.findTaskByCommit;
+Object.defineProperties(findTaskByCommit, { name: { value: "findTaskByCommit", configurable: true }, length: { value: 2, configurable: true } });
+export const findTaskRunByTransactionKey = function findTaskRunByTransactionKey(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().findTaskRunByTransactionKey, this, publicArgs)); } as unknown as typeof Runtime.findTaskRunByTransactionKey;
+Object.defineProperties(findTaskRunByTransactionKey, { name: { value: "findTaskRunByTransactionKey", configurable: true }, length: { value: 3, configurable: true } });
+export const findTasksByFile = function findTasksByFile(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().findTasksByFile, this, publicArgs)); } as unknown as typeof Runtime.findTasksByFile;
+Object.defineProperties(findTasksByFile, { name: { value: "findTasksByFile", configurable: true }, length: { value: 2, configurable: true } });
+export const fingerprintInboxInput = function fingerprintInboxInput(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().fingerprintInboxInput, this, publicArgs)); } as unknown as typeof Runtime.fingerprintInboxInput;
+Object.defineProperties(fingerprintInboxInput, { name: { value: "fingerprintInboxInput", configurable: true }, length: { value: 1, configurable: true } });
+export const fingerprintTesterIssueReport = function fingerprintTesterIssueReport(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().fingerprintTesterIssueReport, this, publicArgs)); } as unknown as typeof Runtime.fingerprintTesterIssueReport;
+Object.defineProperties(fingerprintTesterIssueReport, { name: { value: "fingerprintTesterIssueReport", configurable: true }, length: { value: 1, configurable: true } });
+export const finishTaskRun = function finishTaskRun(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().finishTaskRun, this, publicArgs)); } as unknown as typeof Runtime.finishTaskRun;
+Object.defineProperties(finishTaskRun, { name: { value: "finishTaskRun", configurable: true }, length: { value: 2, configurable: true } });
+export const finishTaskRunTransaction = function finishTaskRunTransaction(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().finishTaskRunTransaction, this, publicArgs)); } as unknown as typeof Runtime.finishTaskRunTransaction;
+Object.defineProperties(finishTaskRunTransaction, { name: { value: "finishTaskRunTransaction", configurable: true }, length: { value: 2, configurable: true } });
+export const formatActivityRecordText = function formatActivityRecordText(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().formatActivityRecordText, this, publicArgs)); } as unknown as typeof Runtime.formatActivityRecordText;
+Object.defineProperties(formatActivityRecordText, { name: { value: "formatActivityRecordText", configurable: true }, length: { value: 1, configurable: true } });
+export const formatAgentWorkflowDemoReport = function formatAgentWorkflowDemoReport(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().formatAgentWorkflowDemoReport, this, publicArgs)); } as unknown as typeof Runtime.formatAgentWorkflowDemoReport;
+Object.defineProperties(formatAgentWorkflowDemoReport, { name: { value: "formatAgentWorkflowDemoReport", configurable: true }, length: { value: 1, configurable: true } });
+export const formatDecisionRecordMarkdown = function formatDecisionRecordMarkdown(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().formatDecisionRecordMarkdown, this, publicArgs)); } as unknown as typeof Runtime.formatDecisionRecordMarkdown;
+Object.defineProperties(formatDecisionRecordMarkdown, { name: { value: "formatDecisionRecordMarkdown", configurable: true }, length: { value: 1, configurable: true } });
+export const formatDispatchMessage = function formatDispatchMessage(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().formatDispatchMessage, this, publicArgs)); } as unknown as typeof Runtime.formatDispatchMessage;
+Object.defineProperties(formatDispatchMessage, { name: { value: "formatDispatchMessage", configurable: true }, length: { value: 1, configurable: true } });
+export const formatFailureTriageMarkdown = function formatFailureTriageMarkdown(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().formatFailureTriageMarkdown, this, publicArgs)); } as unknown as typeof Runtime.formatFailureTriageMarkdown;
+Object.defineProperties(formatFailureTriageMarkdown, { name: { value: "formatFailureTriageMarkdown", configurable: true }, length: { value: 1, configurable: true } });
+export const formatFeatureManifestReport = function formatFeatureManifestReport(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().formatFeatureManifestReport, this, publicArgs)); } as unknown as typeof Runtime.formatFeatureManifestReport;
+Object.defineProperties(formatFeatureManifestReport, { name: { value: "formatFeatureManifestReport", configurable: true }, length: { value: 2, configurable: true } });
+export const formatGoalHandoff = function formatGoalHandoff(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().formatGoalHandoff, this, publicArgs)); } as unknown as typeof Runtime.formatGoalHandoff;
+Object.defineProperties(formatGoalHandoff, { name: { value: "formatGoalHandoff", configurable: true }, length: { value: 1, configurable: true } });
+export const formatHandoffPacket = function formatHandoffPacket(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().formatHandoffPacket, this, publicArgs)); } as unknown as typeof Runtime.formatHandoffPacket;
+Object.defineProperties(formatHandoffPacket, { name: { value: "formatHandoffPacket", configurable: true }, length: { value: 1, configurable: true } });
+export const formatIntakePreviewText = function formatIntakePreviewText(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().formatIntakePreviewText, this, publicArgs)); } as unknown as typeof Runtime.formatIntakePreviewText;
+Object.defineProperties(formatIntakePreviewText, { name: { value: "formatIntakePreviewText", configurable: true }, length: { value: 1, configurable: true } });
+export const formatIssueImportPreviewText = function formatIssueImportPreviewText(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().formatIssueImportPreviewText, this, publicArgs)); } as unknown as typeof Runtime.formatIssueImportPreviewText;
+Object.defineProperties(formatIssueImportPreviewText, { name: { value: "formatIssueImportPreviewText", configurable: true }, length: { value: 1, configurable: true } });
+export const formatKnowledgeSnapshotMarkdown = function formatKnowledgeSnapshotMarkdown(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().formatKnowledgeSnapshotMarkdown, this, publicArgs)); } as unknown as typeof Runtime.formatKnowledgeSnapshotMarkdown;
+Object.defineProperties(formatKnowledgeSnapshotMarkdown, { name: { value: "formatKnowledgeSnapshotMarkdown", configurable: true }, length: { value: 1, configurable: true } });
+export const formatLockConflict = function formatLockConflict(this: unknown, a0: any, a1: any, a2: any, a3: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, a3, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().formatLockConflict, this, publicArgs)); } as unknown as typeof Runtime.formatLockConflict;
+Object.defineProperties(formatLockConflict, { name: { value: "formatLockConflict", configurable: true }, length: { value: 4, configurable: true } });
+export const formatNlIntakePreviewText = function formatNlIntakePreviewText(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().formatNlIntakePreviewText, this, publicArgs)); } as unknown as typeof Runtime.formatNlIntakePreviewText;
+Object.defineProperties(formatNlIntakePreviewText, { name: { value: "formatNlIntakePreviewText", configurable: true }, length: { value: 1, configurable: true } });
+export const formatReleaseCheckReport = function formatReleaseCheckReport(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().formatReleaseCheckReport, this, publicArgs)); } as unknown as typeof Runtime.formatReleaseCheckReport;
+Object.defineProperties(formatReleaseCheckReport, { name: { value: "formatReleaseCheckReport", configurable: true }, length: { value: 1, configurable: true } });
+export const formatReportExport = function formatReportExport(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().formatReportExport, this, publicArgs)); } as unknown as typeof Runtime.formatReportExport;
+Object.defineProperties(formatReportExport, { name: { value: "formatReportExport", configurable: true }, length: { value: 2, configurable: true } });
+export const formatReportHtml = function formatReportHtml(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().formatReportHtml, this, publicArgs)); } as unknown as typeof Runtime.formatReportHtml;
+Object.defineProperties(formatReportHtml, { name: { value: "formatReportHtml", configurable: true }, length: { value: 1, configurable: true } });
+export const formatReportMarkdown = function formatReportMarkdown(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().formatReportMarkdown, this, publicArgs)); } as unknown as typeof Runtime.formatReportMarkdown;
+Object.defineProperties(formatReportMarkdown, { name: { value: "formatReportMarkdown", configurable: true }, length: { value: 1, configurable: true } });
+export const formatRunRecordMarkdown = function formatRunRecordMarkdown(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().formatRunRecordMarkdown, this, publicArgs)); } as unknown as typeof Runtime.formatRunRecordMarkdown;
+Object.defineProperties(formatRunRecordMarkdown, { name: { value: "formatRunRecordMarkdown", configurable: true }, length: { value: 1, configurable: true } });
+export const formatSingleTask = function formatSingleTask(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().formatSingleTask, this, publicArgs)); } as unknown as typeof Runtime.formatSingleTask;
+Object.defineProperties(formatSingleTask, { name: { value: "formatSingleTask", configurable: true }, length: { value: 1, configurable: true } });
+export const formatTmuxTarget = function formatTmuxTarget(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().formatTmuxTarget, this, publicArgs)); } as unknown as typeof Runtime.formatTmuxTarget;
+Object.defineProperties(formatTmuxTarget, { name: { value: "formatTmuxTarget", configurable: true }, length: { value: 1, configurable: true } });
+export const formatTraceabilityReport = function formatTraceabilityReport(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().formatTraceabilityReport, this, publicArgs)); } as unknown as typeof Runtime.formatTraceabilityReport;
+Object.defineProperties(formatTraceabilityReport, { name: { value: "formatTraceabilityReport", configurable: true }, length: { value: 1, configurable: true } });
+export const gatherTrainingData = async function gatherTrainingData(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().gatherTrainingData, this, publicArgs)); } as unknown as typeof Runtime.gatherTrainingData;
+Object.defineProperties(gatherTrainingData, { name: { value: "gatherTrainingData", configurable: true }, length: { value: 0, configurable: true } });
+export const generateBashCompletion = function generateBashCompletion(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().generateBashCompletion, this, publicArgs)); } as unknown as typeof Runtime.generateBashCompletion;
+Object.defineProperties(generateBashCompletion, { name: { value: "generateBashCompletion", configurable: true }, length: { value: 0, configurable: true } });
+export const generateCliReferenceMarkdown = function generateCliReferenceMarkdown(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().generateCliReferenceMarkdown, this, publicArgs)); } as unknown as typeof Runtime.generateCliReferenceMarkdown;
+Object.defineProperties(generateCliReferenceMarkdown, { name: { value: "generateCliReferenceMarkdown", configurable: true }, length: { value: 0, configurable: true } });
+export const generateCompletionInstallScript = function generateCompletionInstallScript(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().generateCompletionInstallScript, this, publicArgs)); } as unknown as typeof Runtime.generateCompletionInstallScript;
+Object.defineProperties(generateCompletionInstallScript, { name: { value: "generateCompletionInstallScript", configurable: true }, length: { value: 1, configurable: true } });
+export const generateCompletionScript = function generateCompletionScript(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().generateCompletionScript, this, publicArgs)); } as unknown as typeof Runtime.generateCompletionScript;
+Object.defineProperties(generateCompletionScript, { name: { value: "generateCompletionScript", configurable: true }, length: { value: 2, configurable: true } });
+export const generateCycles = function generateCycles(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().generateCycles, this, publicArgs)); } as unknown as typeof Runtime.generateCycles;
+Object.defineProperties(generateCycles, { name: { value: "generateCycles", configurable: true }, length: { value: 3, configurable: true } });
+export const generateFishCompletion = function generateFishCompletion(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().generateFishCompletion, this, publicArgs)); } as unknown as typeof Runtime.generateFishCompletion;
+Object.defineProperties(generateFishCompletion, { name: { value: "generateFishCompletion", configurable: true }, length: { value: 0, configurable: true } });
+export const generateManpage = function generateManpage(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().generateManpage, this, publicArgs)); } as unknown as typeof Runtime.generateManpage;
+Object.defineProperties(generateManpage, { name: { value: "generateManpage", configurable: true }, length: { value: 0, configurable: true } });
+export const generateReleaseNotes = function generateReleaseNotes(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().generateReleaseNotes, this, publicArgs)); } as unknown as typeof Runtime.generateReleaseNotes;
+Object.defineProperties(generateReleaseNotes, { name: { value: "generateReleaseNotes", configurable: true }, length: { value: 0, configurable: true } });
+export const generateZshCompletion = function generateZshCompletion(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().generateZshCompletion, this, publicArgs)); } as unknown as typeof Runtime.generateZshCompletion;
+Object.defineProperties(generateZshCompletion, { name: { value: "generateZshCompletion", configurable: true }, length: { value: 0, configurable: true } });
+export const getAccessProfileMeta = function getAccessProfileMeta(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getAccessProfileMeta, this, publicArgs)); } as unknown as typeof Runtime.getAccessProfileMeta;
+Object.defineProperties(getAccessProfileMeta, { name: { value: "getAccessProfileMeta", configurable: true }, length: { value: 1, configurable: true } });
+export const getActiveModel = function getActiveModel(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getActiveModel, this, publicArgs)); } as unknown as typeof Runtime.getActiveModel;
+Object.defineProperties(getActiveModel, { name: { value: "getActiveModel", configurable: true }, length: { value: 0, configurable: true } });
+export const getActiveWork = function getActiveWork(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getActiveWork, this, publicArgs)); } as unknown as typeof Runtime.getActiveWork;
+Object.defineProperties(getActiveWork, { name: { value: "getActiveWork", configurable: true }, length: { value: 2, configurable: true } });
+export const getActivityTimeline = function getActivityTimeline(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getActivityTimeline, this, publicArgs)); } as unknown as typeof Runtime.getActivityTimeline;
+Object.defineProperties(getActivityTimeline, { name: { value: "getActivityTimeline", configurable: true }, length: { value: 3, configurable: true } });
+export const getAdapterDocsFingerprint = function getAdapterDocsFingerprint(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getAdapterDocsFingerprint, this, publicArgs)); } as unknown as typeof Runtime.getAdapterDocsFingerprint;
+Object.defineProperties(getAdapterDocsFingerprint, { name: { value: "getAdapterDocsFingerprint", configurable: true }, length: { value: 0, configurable: true } });
+export const getAgent = function getAgent(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getAgent, this, publicArgs)); } as unknown as typeof Runtime.getAgent;
+Object.defineProperties(getAgent, { name: { value: "getAgent", configurable: true }, length: { value: 2, configurable: true } });
+export const getAgentAdapter = function getAgentAdapter(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getAgentAdapter, this, publicArgs)); } as unknown as typeof Runtime.getAgentAdapter;
+Object.defineProperties(getAgentAdapter, { name: { value: "getAgentAdapter", configurable: true }, length: { value: 1, configurable: true } });
+export const getAgentAdapterDoc = function getAgentAdapterDoc(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getAgentAdapterDoc, this, publicArgs)); } as unknown as typeof Runtime.getAgentAdapterDoc;
+Object.defineProperties(getAgentAdapterDoc, { name: { value: "getAgentAdapterDoc", configurable: true }, length: { value: 1, configurable: true } });
+export const getAgentByName = function getAgentByName(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getAgentByName, this, publicArgs)); } as unknown as typeof Runtime.getAgentByName;
+Object.defineProperties(getAgentByName, { name: { value: "getAgentByName", configurable: true }, length: { value: 2, configurable: true } });
+export const getAgentLoopDocs = function getAgentLoopDocs(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getAgentLoopDocs, this, publicArgs)); } as unknown as typeof Runtime.getAgentLoopDocs;
+Object.defineProperties(getAgentLoopDocs, { name: { value: "getAgentLoopDocs", configurable: true }, length: { value: 0, configurable: true } });
+export const getAgentMetrics = function getAgentMetrics(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getAgentMetrics, this, publicArgs)); } as unknown as typeof Runtime.getAgentMetrics;
+Object.defineProperties(getAgentMetrics, { name: { value: "getAgentMetrics", configurable: true }, length: { value: 3, configurable: true } });
+export const getAgentReliabilityScorecard = function getAgentReliabilityScorecard(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getAgentReliabilityScorecard, this, publicArgs)); } as unknown as typeof Runtime.getAgentReliabilityScorecard;
+Object.defineProperties(getAgentReliabilityScorecard, { name: { value: "getAgentReliabilityScorecard", configurable: true }, length: { value: 1, configurable: true } });
+export const getAgentRun = function getAgentRun(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getAgentRun, this, publicArgs)); } as unknown as typeof Runtime.getAgentRun;
+Object.defineProperties(getAgentRun, { name: { value: "getAgentRun", configurable: true }, length: { value: 2, configurable: true } });
+export const getAgentSafeQueue = function getAgentSafeQueue(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getAgentSafeQueue, this, publicArgs)); } as unknown as typeof Runtime.getAgentSafeQueue;
+Object.defineProperties(getAgentSafeQueue, { name: { value: "getAgentSafeQueue", configurable: true }, length: { value: 1, configurable: true } });
+export const getAgentWorkflowDemoDocs = function getAgentWorkflowDemoDocs(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getAgentWorkflowDemoDocs, this, publicArgs)); } as unknown as typeof Runtime.getAgentWorkflowDemoDocs;
+Object.defineProperties(getAgentWorkflowDemoDocs, { name: { value: "getAgentWorkflowDemoDocs", configurable: true }, length: { value: 0, configurable: true } });
+export const getArtifact = function getArtifact(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getArtifact, this, publicArgs)); } as unknown as typeof Runtime.getArtifact;
+Object.defineProperties(getArtifact, { name: { value: "getArtifact", configurable: true }, length: { value: 2, configurable: true } });
+export const getArtifactStoreRoot = function getArtifactStoreRoot(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getArtifactStoreRoot, this, publicArgs)); } as unknown as typeof Runtime.getArtifactStoreRoot;
+Object.defineProperties(getArtifactStoreRoot, { name: { value: "getArtifactStoreRoot", configurable: true }, length: { value: 1, configurable: true } });
+export const getBlockedTaskReports = function getBlockedTaskReports(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getBlockedTaskReports, this, publicArgs)); } as unknown as typeof Runtime.getBlockedTaskReports;
+Object.defineProperties(getBlockedTaskReports, { name: { value: "getBlockedTaskReports", configurable: true }, length: { value: 0, configurable: true } });
+export const getBlockers = function getBlockers(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getBlockers, this, publicArgs)); } as unknown as typeof Runtime.getBlockers;
+Object.defineProperties(getBlockers, { name: { value: "getBlockers", configurable: true }, length: { value: 2, configurable: true } });
+export const getBlockingDeps = function getBlockingDeps(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getBlockingDeps, this, publicArgs)); } as unknown as typeof Runtime.getBlockingDeps;
+Object.defineProperties(getBlockingDeps, { name: { value: "getBlockingDeps", configurable: true }, length: { value: 2, configurable: true } });
+export const getBridgeDocs = function getBridgeDocs(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getBridgeDocs, this, publicArgs)); } as unknown as typeof Runtime.getBridgeDocs;
+Object.defineProperties(getBridgeDocs, { name: { value: "getBridgeDocs", configurable: true }, length: { value: 0, configurable: true } });
+export const getBudget = function getBudget(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getBudget, this, publicArgs)); } as unknown as typeof Runtime.getBudget;
+Object.defineProperties(getBudget, { name: { value: "getBudget", configurable: true }, length: { value: 2, configurable: true } });
+export const getBuiltinSavedViews = function getBuiltinSavedViews(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getBuiltinSavedViews, this, publicArgs)); } as unknown as typeof Runtime.getBuiltinSavedViews;
+Object.defineProperties(getBuiltinSavedViews, { name: { value: "getBuiltinSavedViews", configurable: true }, length: { value: 0, configurable: true } });
+export const getBuiltinTemplate = function getBuiltinTemplate(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getBuiltinTemplate, this, publicArgs)); } as unknown as typeof Runtime.getBuiltinTemplate;
+Object.defineProperties(getBuiltinTemplate, { name: { value: "getBuiltinTemplate", configurable: true }, length: { value: 1, configurable: true } });
+export const getBuiltinTemplateFromLibrary = function getBuiltinTemplate(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getBuiltinTemplateFromLibrary, this, publicArgs)); } as unknown as typeof Runtime.getBuiltinTemplateFromLibrary;
+Object.defineProperties(getBuiltinTemplateFromLibrary, { name: { value: "getBuiltinTemplate", configurable: true }, length: { value: 1, configurable: true } });
+export const getBurndown = function getBurndown(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getBurndown, this, publicArgs)); } as unknown as typeof Runtime.getBurndown;
+Object.defineProperties(getBurndown, { name: { value: "getBurndown", configurable: true }, length: { value: 2, configurable: true } });
+export const getCalendarItem = function getCalendarItem(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getCalendarItem, this, publicArgs)); } as unknown as typeof Runtime.getCalendarItem;
+Object.defineProperties(getCalendarItem, { name: { value: "getCalendarItem", configurable: true }, length: { value: 2, configurable: true } });
+export const getCapabilityDiscovery = function getCapabilityDiscovery(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getCapabilityDiscovery, this, publicArgs)); } as unknown as typeof Runtime.getCapabilityDiscovery;
+Object.defineProperties(getCapabilityDiscovery, { name: { value: "getCapabilityDiscovery", configurable: true }, length: { value: 0, configurable: true } });
+export const getCapableAgents = function getCapableAgents(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getCapableAgents, this, publicArgs)); } as unknown as typeof Runtime.getCapableAgents;
+Object.defineProperties(getCapableAgents, { name: { value: "getCapableAgents", configurable: true }, length: { value: 3, configurable: true } });
+export const getChangedResourcesSince = function getChangedResourcesSince(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getChangedResourcesSince, this, publicArgs)); } as unknown as typeof Runtime.getChangedResourcesSince;
+Object.defineProperties(getChangedResourcesSince, { name: { value: "getChangedResourcesSince", configurable: true }, length: { value: 1, configurable: true } });
+export const getChecklist = function getChecklist(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getChecklist, this, publicArgs)); } as unknown as typeof Runtime.getChecklist;
+Object.defineProperties(getChecklist, { name: { value: "getChecklist", configurable: true }, length: { value: 2, configurable: true } });
+export const getChecklistStats = function getChecklistStats(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getChecklistStats, this, publicArgs)); } as unknown as typeof Runtime.getChecklistStats;
+Object.defineProperties(getChecklistStats, { name: { value: "getChecklistStats", configurable: true }, length: { value: 2, configurable: true } });
+export const getCommandAlias = function getCommandAlias(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getCommandAlias, this, publicArgs)); } as unknown as typeof Runtime.getCommandAlias;
+Object.defineProperties(getCommandAlias, { name: { value: "getCommandAlias", configurable: true }, length: { value: 2, configurable: true } });
+export const getCommandAliasDocs = function getCommandAliasDocs(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getCommandAliasDocs, this, publicArgs)); } as unknown as typeof Runtime.getCommandAliasDocs;
+Object.defineProperties(getCommandAliasDocs, { name: { value: "getCommandAliasDocs", configurable: true }, length: { value: 0, configurable: true } });
+export const getCommandHelp = function getCommandHelp(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getCommandHelp, this, publicArgs)); } as unknown as typeof Runtime.getCommandHelp;
+Object.defineProperties(getCommandHelp, { name: { value: "getCommandHelp", configurable: true }, length: { value: 1, configurable: true } });
+export const getComment = function getComment(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getComment, this, publicArgs)); } as unknown as typeof Runtime.getComment;
+Object.defineProperties(getComment, { name: { value: "getComment", configurable: true }, length: { value: 2, configurable: true } });
+export const getCompletionGuardConfig = function getCompletionGuardConfig(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getCompletionGuardConfig, this, publicArgs)); } as unknown as typeof Runtime.getCompletionGuardConfig;
+Object.defineProperties(getCompletionGuardConfig, { name: { value: "getCompletionGuardConfig", configurable: true }, length: { value: 1, configurable: true } });
+export const getCriticalPath = function getCriticalPath(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getCriticalPath, this, publicArgs)); } as unknown as typeof Runtime.getCriticalPath;
+Object.defineProperties(getCriticalPath, { name: { value: "getCriticalPath", configurable: true }, length: { value: 0, configurable: true } });
+export const getCurrentBranch = function getCurrentBranch(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getCurrentBranch, this, publicArgs)); } as unknown as typeof Runtime.getCurrentBranch;
+Object.defineProperties(getCurrentBranch, { name: { value: "getCurrentBranch", configurable: true }, length: { value: 1, configurable: true } });
+export const getCurrentCycle = function getCurrentCycle(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getCurrentCycle, this, publicArgs)); } as unknown as typeof Runtime.getCurrentCycle;
+Object.defineProperties(getCurrentCycle, { name: { value: "getCurrentCycle", configurable: true }, length: { value: 2, configurable: true } });
+export const getCustomFieldDefinition = function getCustomFieldDefinition(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getCustomFieldDefinition, this, publicArgs)); } as unknown as typeof Runtime.getCustomFieldDefinition;
+Object.defineProperties(getCustomFieldDefinition, { name: { value: "getCustomFieldDefinition", configurable: true }, length: { value: 2, configurable: true } });
+export const getCycle = function getCycle(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getCycle, this, publicArgs)); } as unknown as typeof Runtime.getCycle;
+Object.defineProperties(getCycle, { name: { value: "getCycle", configurable: true }, length: { value: 2, configurable: true } });
+export const getCycleByNumber = function getCycleByNumber(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getCycleByNumber, this, publicArgs)); } as unknown as typeof Runtime.getCycleByNumber;
+Object.defineProperties(getCycleByNumber, { name: { value: "getCycleByNumber", configurable: true }, length: { value: 3, configurable: true } });
+export const getCycleStats = function getCycleStats(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getCycleStats, this, publicArgs)); } as unknown as typeof Runtime.getCycleStats;
+Object.defineProperties(getCycleStats, { name: { value: "getCycleStats", configurable: true }, length: { value: 2, configurable: true } });
+export const getDatabase = function getDatabase(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getDatabase, this, publicArgs)); } as unknown as typeof Runtime.getDatabase;
+Object.defineProperties(getDatabase, { name: { value: "getDatabase", configurable: true }, length: { value: 1, configurable: true } });
+export const getDecisionRecord = function getDecisionRecord(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getDecisionRecord, this, publicArgs)); } as unknown as typeof Runtime.getDecisionRecord;
+Object.defineProperties(getDecisionRecord, { name: { value: "getDecisionRecord", configurable: true }, length: { value: 2, configurable: true } });
+export const getDecisionRecordByRef = function getDecisionRecordByRef(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getDecisionRecordByRef, this, publicArgs)); } as unknown as typeof Runtime.getDecisionRecordByRef;
+Object.defineProperties(getDecisionRecordByRef, { name: { value: "getDecisionRecordByRef", configurable: true }, length: { value: 2, configurable: true } });
+export const getDecisionRecordsDocs = function getDecisionRecordsDocs(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getDecisionRecordsDocs, this, publicArgs)); } as unknown as typeof Runtime.getDecisionRecordsDocs;
+Object.defineProperties(getDecisionRecordsDocs, { name: { value: "getDecisionRecordsDocs", configurable: true }, length: { value: 0, configurable: true } });
+export const getDefaultAgentAdapters = function getDefaultAgentAdapters(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getDefaultAgentAdapters, this, publicArgs)); } as unknown as typeof Runtime.getDefaultAgentAdapters;
+Object.defineProperties(getDefaultAgentAdapters, { name: { value: "getDefaultAgentAdapters", configurable: true }, length: { value: 0, configurable: true } });
+export const getDefaultReplayDir = function getDefaultReplayDir(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getDefaultReplayDir, this, publicArgs)); } as unknown as typeof Runtime.getDefaultReplayDir;
+Object.defineProperties(getDefaultReplayDir, { name: { value: "getDefaultReplayDir", configurable: true }, length: { value: 0, configurable: true } });
+export const getDefaultSandboxProfiles = function getDefaultSandboxProfiles(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getDefaultSandboxProfiles, this, publicArgs)); } as unknown as typeof Runtime.getDefaultSandboxProfiles;
+Object.defineProperties(getDefaultSandboxProfiles, { name: { value: "getDefaultSandboxProfiles", configurable: true }, length: { value: 0, configurable: true } });
+export const getDefaultSecretPatterns = function getDefaultSecretPatterns(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getDefaultSecretPatterns, this, publicArgs)); } as unknown as typeof Runtime.getDefaultSecretPatterns;
+Object.defineProperties(getDefaultSecretPatterns, { name: { value: "getDefaultSecretPatterns", configurable: true }, length: { value: 0, configurable: true } });
+export const getDependents = function getDependents(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getDependents, this, publicArgs)); } as unknown as typeof Runtime.getDependents;
+Object.defineProperties(getDependents, { name: { value: "getDependents", configurable: true }, length: { value: 2, configurable: true } });
+export const getDirectReports = function getDirectReports(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getDirectReports, this, publicArgs)); } as unknown as typeof Runtime.getDirectReports;
+Object.defineProperties(getDirectReports, { name: { value: "getDirectReports", configurable: true }, length: { value: 2, configurable: true } });
+export const getDispatch = function getDispatch(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getDispatch, this, publicArgs)); } as unknown as typeof Runtime.getDispatch;
+Object.defineProperties(getDispatch, { name: { value: "getDispatch", configurable: true }, length: { value: 2, configurable: true } });
+export const getDueDispatches = function getDueDispatches(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getDueDispatches, this, publicArgs)); } as unknown as typeof Runtime.getDueDispatches;
+Object.defineProperties(getDueDispatches, { name: { value: "getDueDispatches", configurable: true }, length: { value: 1, configurable: true } });
+export const getEscalatedTasks = function getEscalatedTasks(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getEscalatedTasks, this, publicArgs)); } as unknown as typeof Runtime.getEscalatedTasks;
+Object.defineProperties(getEscalatedTasks, { name: { value: "getEscalatedTasks", configurable: true }, length: { value: 0, configurable: true } });
+export const getFailureTriageDocs = function getFailureTriageDocs(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getFailureTriageDocs, this, publicArgs)); } as unknown as typeof Runtime.getFailureTriageDocs;
+Object.defineProperties(getFailureTriageDocs, { name: { value: "getFailureTriageDocs", configurable: true }, length: { value: 0, configurable: true } });
+export const getFeatureManifestDocs = function getFeatureManifestDocs(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getFeatureManifestDocs, this, publicArgs)); } as unknown as typeof Runtime.getFeatureManifestDocs;
+Object.defineProperties(getFeatureManifestDocs, { name: { value: "getFeatureManifestDocs", configurable: true }, length: { value: 0, configurable: true } });
+export const getFocusSession = function getFocusSession(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getFocusSession, this, publicArgs)); } as unknown as typeof Runtime.getFocusSession;
+Object.defineProperties(getFocusSession, { name: { value: "getFocusSession", configurable: true }, length: { value: 2, configurable: true } });
+export const getGoalCommandRecipesMarkdown = function getGoalCommandRecipesMarkdown(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getGoalCommandRecipesMarkdown, this, publicArgs)); } as unknown as typeof Runtime.getGoalCommandRecipesMarkdown;
+Object.defineProperties(getGoalCommandRecipesMarkdown, { name: { value: "getGoalCommandRecipesMarkdown", configurable: true }, length: { value: 0, configurable: true } });
+export const getGoalProgress = function getGoalProgress(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getGoalProgress, this, publicArgs)); } as unknown as typeof Runtime.getGoalProgress;
+Object.defineProperties(getGoalProgress, { name: { value: "getGoalProgress", configurable: true }, length: { value: 2, configurable: true } });
+export const getHandoff = function getHandoff(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getHandoff, this, publicArgs)); } as unknown as typeof Runtime.getHandoff;
+Object.defineProperties(getHandoff, { name: { value: "getHandoff", configurable: true }, length: { value: 2, configurable: true } });
+export const getHeadSha = function getHeadSha(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getHeadSha, this, publicArgs)); } as unknown as typeof Runtime.getHeadSha;
+Object.defineProperties(getHeadSha, { name: { value: "getHeadSha", configurable: true }, length: { value: 1, configurable: true } });
+export const getHeadlessBoundaryManifest = function getHeadlessBoundaryManifest(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getHeadlessBoundaryManifest, this, publicArgs)); } as unknown as typeof Runtime.getHeadlessBoundaryManifest;
+Object.defineProperties(getHeadlessBoundaryManifest, { name: { value: "getHeadlessBoundaryManifest", configurable: true }, length: { value: 0, configurable: true } });
+export const getHeadlessUsageNotes = function getHeadlessUsageNotes(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getHeadlessUsageNotes, this, publicArgs)); } as unknown as typeof Runtime.getHeadlessUsageNotes;
+Object.defineProperties(getHeadlessUsageNotes, { name: { value: "getHeadlessUsageNotes", configurable: true }, length: { value: 1, configurable: true } });
+export const getIdleFocusSessionPrompts = function getIdleFocusSessionPrompts(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getIdleFocusSessionPrompts, this, publicArgs)); } as unknown as typeof Runtime.getIdleFocusSessionPrompts;
+Object.defineProperties(getIdleFocusSessionPrompts, { name: { value: "getIdleFocusSessionPrompts", configurable: true }, length: { value: 0, configurable: true } });
+export const getImpactAnalysis = function getImpactAnalysis(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getImpactAnalysis, this, publicArgs)); } as unknown as typeof Runtime.getImpactAnalysis;
+Object.defineProperties(getImpactAnalysis, { name: { value: "getImpactAnalysis", configurable: true }, length: { value: 3, configurable: true } });
+export const getInboxItem = function getInboxItem(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getInboxItem, this, publicArgs)); } as unknown as typeof Runtime.getInboxItem;
+Object.defineProperties(getInboxItem, { name: { value: "getInboxItem", configurable: true }, length: { value: 2, configurable: true } });
+export const getInstallInstructions = function getInstallInstructions(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getInstallInstructions, this, publicArgs)); } as unknown as typeof Runtime.getInstallInstructions;
+Object.defineProperties(getInstallInstructions, { name: { value: "getInstallInstructions", configurable: true }, length: { value: 1, configurable: true } });
+export const getIssueImportDocs = function getIssueImportDocs(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getIssueImportDocs, this, publicArgs)); } as unknown as typeof Runtime.getIssueImportDocs;
+Object.defineProperties(getIssueImportDocs, { name: { value: "getIssueImportDocs", configurable: true }, length: { value: 0, configurable: true } });
+export const getJsonContract = function getJsonContract(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getJsonContract, this, publicArgs)); } as unknown as typeof Runtime.getJsonContract;
+Object.defineProperties(getJsonContract, { name: { value: "getJsonContract", configurable: true }, length: { value: 1, configurable: true } });
+export const getJsonSchema = function getJsonSchema(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getJsonSchema, this, publicArgs)); } as unknown as typeof Runtime.getJsonSchema;
+Object.defineProperties(getJsonSchema, { name: { value: "getJsonSchema", configurable: true }, length: { value: 1, configurable: true } });
+export const getKgCriticalPath = function getCriticalPath(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getKgCriticalPath, this, publicArgs)); } as unknown as typeof Runtime.getKgCriticalPath;
+Object.defineProperties(getKgCriticalPath, { name: { value: "getCriticalPath", configurable: true }, length: { value: 2, configurable: true } });
+export const getKnowledgeRecord = function getKnowledgeRecord(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getKnowledgeRecord, this, publicArgs)); } as unknown as typeof Runtime.getKnowledgeRecord;
+Object.defineProperties(getKnowledgeRecord, { name: { value: "getKnowledgeRecord", configurable: true }, length: { value: 2, configurable: true } });
+export const getKnowledgeSnapshot = function getKnowledgeSnapshot(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getKnowledgeSnapshot, this, publicArgs)); } as unknown as typeof Runtime.getKnowledgeSnapshot;
+Object.defineProperties(getKnowledgeSnapshot, { name: { value: "getKnowledgeSnapshot", configurable: true }, length: { value: 2, configurable: true } });
+export const getLabel = function getLabel(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getLabel, this, publicArgs)); } as unknown as typeof Runtime.getLabel;
+Object.defineProperties(getLabel, { name: { value: "getLabel", configurable: true }, length: { value: 2, configurable: true } });
+export const getLatestHandoff = function getLatestHandoff(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getLatestHandoff, this, publicArgs)); } as unknown as typeof Runtime.getLatestHandoff;
+Object.defineProperties(getLatestHandoff, { name: { value: "getLatestHandoff", configurable: true }, length: { value: 3, configurable: true } });
+export const getLatestHandoffPacket = function getLatestHandoffPacket(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getLatestHandoffPacket, this, publicArgs)); } as unknown as typeof Runtime.getLatestHandoffPacket;
+Object.defineProperties(getLatestHandoffPacket, { name: { value: "getLatestHandoffPacket", configurable: true }, length: { value: 3, configurable: true } });
+export const getLatestSnapshot = function getLatestSnapshot(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getLatestSnapshot, this, publicArgs)); } as unknown as typeof Runtime.getLatestSnapshot;
+Object.defineProperties(getLatestSnapshot, { name: { value: "getLatestSnapshot", configurable: true }, length: { value: 3, configurable: true } });
+export const getLeaderboard = function getLeaderboard(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getLeaderboard, this, publicArgs)); } as unknown as typeof Runtime.getLeaderboard;
+Object.defineProperties(getLeaderboard, { name: { value: "getLeaderboard", configurable: true }, length: { value: 2, configurable: true } });
+export const getLocalActivityTimeline = function getLocalActivityTimeline(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getLocalActivityTimeline, this, publicArgs)); } as unknown as typeof Runtime.getLocalActivityTimeline;
+Object.defineProperties(getLocalActivityTimeline, { name: { value: "getLocalActivityTimeline", configurable: true }, length: { value: 0, configurable: true } });
+export const getLocalApiConfig = function getLocalApiConfig(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getLocalApiConfig, this, publicArgs)); } as unknown as typeof Runtime.getLocalApiConfig;
+Object.defineProperties(getLocalApiConfig, { name: { value: "getLocalApiConfig", configurable: true }, length: { value: 0, configurable: true } });
+export const getLocalAuditLedger = function getLocalAuditLedger(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getLocalAuditLedger, this, publicArgs)); } as unknown as typeof Runtime.getLocalAuditLedger;
+Object.defineProperties(getLocalAuditLedger, { name: { value: "getLocalAuditLedger", configurable: true }, length: { value: 0, configurable: true } });
+export const getLocalEventHook = function getLocalEventHook(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getLocalEventHook, this, publicArgs)); } as unknown as typeof Runtime.getLocalEventHook;
+Object.defineProperties(getLocalEventHook, { name: { value: "getLocalEventHook", configurable: true }, length: { value: 1, configurable: true } });
+export const getLocalExtension = function getLocalExtension(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getLocalExtension, this, publicArgs)); } as unknown as typeof Runtime.getLocalExtension;
+Object.defineProperties(getLocalExtension, { name: { value: "getLocalExtension", configurable: true }, length: { value: 1, configurable: true } });
+export const getLocalSnapshot = function getLocalSnapshot(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getLocalSnapshot, this, publicArgs)); } as unknown as typeof Runtime.getLocalSnapshot;
+Object.defineProperties(getLocalSnapshot, { name: { value: "getLocalSnapshot", configurable: true }, length: { value: 2, configurable: true } });
+export const getMachine = function getMachine(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getMachine, this, publicArgs)); } as unknown as typeof Runtime.getMachine;
+Object.defineProperties(getMachine, { name: { value: "getMachine", configurable: true }, length: { value: 2, configurable: true } });
+export const getMachineAgentSummaries = function getMachineAgentSummaries(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getMachineAgentSummaries, this, publicArgs)); } as unknown as typeof Runtime.getMachineAgentSummaries;
+Object.defineProperties(getMachineAgentSummaries, { name: { value: "getMachineAgentSummaries", configurable: true }, length: { value: 1, configurable: true } });
+export const getMachineByName = function getMachineByName(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getMachineByName, this, publicArgs)); } as unknown as typeof Runtime.getMachineByName;
+Object.defineProperties(getMachineByName, { name: { value: "getMachineByName", configurable: true }, length: { value: 2, configurable: true } });
+export const getMachineId = function getMachineId(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getMachineId, this, publicArgs)); } as unknown as typeof Runtime.getMachineId;
+Object.defineProperties(getMachineId, { name: { value: "getMachineId", configurable: true }, length: { value: 1, configurable: true } });
+export const getMachineLocalPath = function getMachineLocalPath(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getMachineLocalPath, this, publicArgs)); } as unknown as typeof Runtime.getMachineLocalPath;
+Object.defineProperties(getMachineLocalPath, { name: { value: "getMachineLocalPath", configurable: true }, length: { value: 2, configurable: true } });
+export const getMachineTopologyDiagnostics = function getMachineTopologyDiagnostics(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getMachineTopologyDiagnostics, this, publicArgs)); } as unknown as typeof Runtime.getMachineTopologyDiagnostics;
+Object.defineProperties(getMachineTopologyDiagnostics, { name: { value: "getMachineTopologyDiagnostics", configurable: true }, length: { value: 0, configurable: true } });
+export const getMcpToolNames = function getMcpToolNames(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getMcpToolNames, this, publicArgs)); } as unknown as typeof Runtime.getMcpToolNames;
+Object.defineProperties(getMcpToolNames, { name: { value: "getMcpToolNames", configurable: true }, length: { value: 0, configurable: true } });
+export const getNativeStorageStatus = function getNativeStorageStatus(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getNativeStorageStatus, this, publicArgs)); } as unknown as typeof Runtime.getNativeStorageStatus;
+Object.defineProperties(getNativeStorageStatus, { name: { value: "getNativeStorageStatus", configurable: true }, length: { value: 0, configurable: true } });
+export const getNativeStorageSyncPlan = function getNativeStorageSyncPlan(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getNativeStorageSyncPlan, this, publicArgs)); } as unknown as typeof Runtime.getNativeStorageSyncPlan;
+Object.defineProperties(getNativeStorageSyncPlan, { name: { value: "getNativeStorageSyncPlan", configurable: true }, length: { value: 0, configurable: true } });
+export const getNextCycle = function getNextCycle(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getNextCycle, this, publicArgs)); } as unknown as typeof Runtime.getNextCycle;
+Object.defineProperties(getNextCycle, { name: { value: "getNextCycle", configurable: true }, length: { value: 2, configurable: true } });
+export const getNextTask = function getNextTask(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getNextTask, this, publicArgs)); } as unknown as typeof Runtime.getNextTask;
+Object.defineProperties(getNextTask, { name: { value: "getNextTask", configurable: true }, length: { value: 3, configurable: true } });
+export const getOnboardingFixture = function getOnboardingFixture(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getOnboardingFixture, this, publicArgs)); } as unknown as typeof Runtime.getOnboardingFixture;
+Object.defineProperties(getOnboardingFixture, { name: { value: "getOnboardingFixture", configurable: true }, length: { value: 0, configurable: true } });
+export const getOnboardingFixtureBundle = function getOnboardingFixtureBundle(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getOnboardingFixtureBundle, this, publicArgs)); } as unknown as typeof Runtime.getOnboardingFixtureBundle;
+Object.defineProperties(getOnboardingFixtureBundle, { name: { value: "getOnboardingFixtureBundle", configurable: true }, length: { value: 0, configurable: true } });
+export const getOrCreateLocalMachine = function getOrCreateLocalMachine(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getOrCreateLocalMachine, this, publicArgs)); } as unknown as typeof Runtime.getOrCreateLocalMachine;
+Object.defineProperties(getOrCreateLocalMachine, { name: { value: "getOrCreateLocalMachine", configurable: true }, length: { value: 1, configurable: true } });
+export const getOrg = function getOrg(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getOrg, this, publicArgs)); } as unknown as typeof Runtime.getOrg;
+Object.defineProperties(getOrg, { name: { value: "getOrg", configurable: true }, length: { value: 2, configurable: true } });
+export const getOrgByName = function getOrgByName(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getOrgByName, this, publicArgs)); } as unknown as typeof Runtime.getOrgByName;
+Object.defineProperties(getOrgByName, { name: { value: "getOrgByName", configurable: true }, length: { value: 2, configurable: true } });
+export const getOrgChart = function getOrgChart(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getOrgChart, this, publicArgs)); } as unknown as typeof Runtime.getOrgChart;
+Object.defineProperties(getOrgChart, { name: { value: "getOrgChart", configurable: true }, length: { value: 1, configurable: true } });
+export const getOverdueTasks = function getOverdueTasks(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getOverdueTasks, this, publicArgs)); } as unknown as typeof Runtime.getOverdueTasks;
+Object.defineProperties(getOverdueTasks, { name: { value: "getOverdueTasks", configurable: true }, length: { value: 2, configurable: true } });
+export const getParityReport = function getParityReport(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getParityReport, this, publicArgs)); } as unknown as typeof Runtime.getParityReport;
+Object.defineProperties(getParityReport, { name: { value: "getParityReport", configurable: true }, length: { value: 0, configurable: true } });
+export const getPathOverrides = function getPathOverrides(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getPathOverrides, this, publicArgs)); } as unknown as typeof Runtime.getPathOverrides;
+Object.defineProperties(getPathOverrides, { name: { value: "getPathOverrides", configurable: true }, length: { value: 1, configurable: true } });
+export const getPlan = function getPlan(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getPlan, this, publicArgs)); } as unknown as typeof Runtime.getPlan;
+Object.defineProperties(getPlan, { name: { value: "getPlan", configurable: true }, length: { value: 2, configurable: true } });
+export const getPlanExecutionState = function getPlanExecutionState(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getPlanExecutionState, this, publicArgs)); } as unknown as typeof Runtime.getPlanExecutionState;
+Object.defineProperties(getPlanExecutionState, { name: { value: "getPlanExecutionState", configurable: true }, length: { value: 2, configurable: true } });
+export const getPlanningForecast = function getPlanningForecast(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getPlanningForecast, this, publicArgs)); } as unknown as typeof Runtime.getPlanningForecast;
+Object.defineProperties(getPlanningForecast, { name: { value: "getPlanningForecast", configurable: true }, length: { value: 0, configurable: true } });
+export const getPolicyPack = function getPolicyPack(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getPolicyPack, this, publicArgs)); } as unknown as typeof Runtime.getPolicyPack;
+Object.defineProperties(getPolicyPack, { name: { value: "getPolicyPack", configurable: true }, length: { value: 1, configurable: true } });
+export const getProfileToolCount = function getProfileToolCount(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getProfileToolCount, this, publicArgs)); } as unknown as typeof Runtime.getProfileToolCount;
+Object.defineProperties(getProfileToolCount, { name: { value: "getProfileToolCount", configurable: true }, length: { value: 2, configurable: true } });
+export const getProject = function getProject(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getProject, this, publicArgs)); } as unknown as typeof Runtime.getProject;
+Object.defineProperties(getProject, { name: { value: "getProject", configurable: true }, length: { value: 2, configurable: true } });
+export const getProjectByPath = function getProjectByPath(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getProjectByPath, this, publicArgs)); } as unknown as typeof Runtime.getProjectByPath;
+Object.defineProperties(getProjectByPath, { name: { value: "getProjectByPath", configurable: true }, length: { value: 2, configurable: true } });
+export const getProjectWithSources = function getProjectWithSources(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getProjectWithSources, this, publicArgs)); } as unknown as typeof Runtime.getProjectWithSources;
+Object.defineProperties(getProjectWithSources, { name: { value: "getProjectWithSources", configurable: true }, length: { value: 2, configurable: true } });
+export const getReachableHostnames = function getReachableHostnames(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getReachableHostnames, this, publicArgs)); } as unknown as typeof Runtime.getReachableHostnames;
+Object.defineProperties(getReachableHostnames, { name: { value: "getReachableHostnames", configurable: true }, length: { value: 0, configurable: true } });
+export const getReadyTasks = function getReadyTasks(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getReadyTasks, this, publicArgs)); } as unknown as typeof Runtime.getReadyTasks;
+Object.defineProperties(getReadyTasks, { name: { value: "getReadyTasks", configurable: true }, length: { value: 0, configurable: true } });
+export const getRecap = function getRecap(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getRecap, this, publicArgs)); } as unknown as typeof Runtime.getRecap;
+Object.defineProperties(getRecap, { name: { value: "getRecap", configurable: true }, length: { value: 0, configurable: true } });
+export const getRecentActivity = function getRecentActivity(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getRecentActivity, this, publicArgs)); } as unknown as typeof Runtime.getRecentActivity;
+Object.defineProperties(getRecentActivity, { name: { value: "getRecentActivity", configurable: true }, length: { value: 0, configurable: true } });
+export const getRelated = function getRelated(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getRelated, this, publicArgs)); } as unknown as typeof Runtime.getRelated;
+Object.defineProperties(getRelated, { name: { value: "getRelated", configurable: true }, length: { value: 3, configurable: true } });
+export const getReleaseWorkflowDocs = function getReleaseWorkflowDocs(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getReleaseWorkflowDocs, this, publicArgs)); } as unknown as typeof Runtime.getReleaseWorkflowDocs;
+Object.defineProperties(getReleaseWorkflowDocs, { name: { value: "getReleaseWorkflowDocs", configurable: true }, length: { value: 0, configurable: true } });
+export const getReminder = function getReminder(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getReminder, this, publicArgs)); } as unknown as typeof Runtime.getReminder;
+Object.defineProperties(getReminder, { name: { value: "getReminder", configurable: true }, length: { value: 2, configurable: true } });
+export const getReminderDocs = function getReminderDocs(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getReminderDocs, this, publicArgs)); } as unknown as typeof Runtime.getReminderDocs;
+Object.defineProperties(getReminderDocs, { name: { value: "getReminderDocs", configurable: true }, length: { value: 0, configurable: true } });
+export const getReminderPreferences = function getReminderPreferences(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getReminderPreferences, this, publicArgs)); } as unknown as typeof Runtime.getReminderPreferences;
+Object.defineProperties(getReminderPreferences, { name: { value: "getReminderPreferences", configurable: true }, length: { value: 1, configurable: true } });
+export const getReminderSummary = function getReminderSummary(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getReminderSummary, this, publicArgs)); } as unknown as typeof Runtime.getReminderSummary;
+Object.defineProperties(getReminderSummary, { name: { value: "getReminderSummary", configurable: true }, length: { value: 1, configurable: true } });
+export const getReportExportDocs = function getReportExportDocs(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getReportExportDocs, this, publicArgs)); } as unknown as typeof Runtime.getReportExportDocs;
+Object.defineProperties(getReportExportDocs, { name: { value: "getReportExportDocs", configurable: true }, length: { value: 0, configurable: true } });
+export const getRetrospective = function getRetrospective(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getRetrospective, this, publicArgs)); } as unknown as typeof Runtime.getRetrospective;
+Object.defineProperties(getRetrospective, { name: { value: "getRetrospective", configurable: true }, length: { value: 2, configurable: true } });
+export const getReviewQueue = function getReviewQueue(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getReviewQueue, this, publicArgs)); } as unknown as typeof Runtime.getReviewQueue;
+Object.defineProperties(getReviewQueue, { name: { value: "getReviewQueue", configurable: true }, length: { value: 2, configurable: true } });
+export const getRisk = function getRisk(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getRisk, this, publicArgs)); } as unknown as typeof Runtime.getRisk;
+Object.defineProperties(getRisk, { name: { value: "getRisk", configurable: true }, length: { value: 2, configurable: true } });
+export const getRoadmap = function getRoadmap(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getRoadmap, this, publicArgs)); } as unknown as typeof Runtime.getRoadmap;
+Object.defineProperties(getRoadmap, { name: { value: "getRoadmap", configurable: true }, length: { value: 1, configurable: true } });
+export const getRunRecord = function getRunRecord(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getRunRecord, this, publicArgs)); } as unknown as typeof Runtime.getRunRecord;
+Object.defineProperties(getRunRecord, { name: { value: "getRunRecord", configurable: true }, length: { value: 2, configurable: true } });
+export const getRunnerSandboxProfile = function getRunnerSandboxProfile(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getRunnerSandboxProfile, this, publicArgs)); } as unknown as typeof Runtime.getRunnerSandboxProfile;
+Object.defineProperties(getRunnerSandboxProfile, { name: { value: "getRunnerSandboxProfile", configurable: true }, length: { value: 1, configurable: true } });
+export const getSandboxProfile = function getSandboxProfile(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getSandboxProfile, this, publicArgs)); } as unknown as typeof Runtime.getSandboxProfile;
+Object.defineProperties(getSandboxProfile, { name: { value: "getSandboxProfile", configurable: true }, length: { value: 1, configurable: true } });
+export const getSavedView = function getSavedView(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getSavedView, this, publicArgs)); } as unknown as typeof Runtime.getSavedView;
+Object.defineProperties(getSavedView, { name: { value: "getSavedView", configurable: true }, length: { value: 2, configurable: true } });
+export const getSchedulingSummary = function getSchedulingSummary(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getSchedulingSummary, this, publicArgs)); } as unknown as typeof Runtime.getSchedulingSummary;
+Object.defineProperties(getSchedulingSummary, { name: { value: "getSchedulingSummary", configurable: true }, length: { value: 3, configurable: true } });
+export const getSchemaSemverGuidance = function getSchemaSemverGuidance(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getSchemaSemverGuidance, this, publicArgs)); } as unknown as typeof Runtime.getSchemaSemverGuidance;
+Object.defineProperties(getSchemaSemverGuidance, { name: { value: "getSchemaSemverGuidance", configurable: true }, length: { value: 0, configurable: true } });
+export const getSearchView = function getSearchView(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getSearchView, this, publicArgs)); } as unknown as typeof Runtime.getSearchView;
+Object.defineProperties(getSearchView, { name: { value: "getSearchView", configurable: true }, length: { value: 2, configurable: true } });
+export const getSecretSafetyConfig = function getSecretSafetyConfig(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getSecretSafetyConfig, this, publicArgs)); } as unknown as typeof Runtime.getSecretSafetyConfig;
+Object.defineProperties(getSecretSafetyConfig, { name: { value: "getSecretSafetyConfig", configurable: true }, length: { value: 0, configurable: true } });
+export const getSession = function getSession(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getSession, this, publicArgs)); } as unknown as typeof Runtime.getSession;
+Object.defineProperties(getSession, { name: { value: "getSession", configurable: true }, length: { value: 2, configurable: true } });
+export const getStaleTaskReport = function getStaleTaskReport(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getStaleTaskReport, this, publicArgs)); } as unknown as typeof Runtime.getStaleTaskReport;
+Object.defineProperties(getStaleTaskReport, { name: { value: "getStaleTaskReport", configurable: true }, length: { value: 0, configurable: true } });
+export const getStaleTasks = function getStaleTasks(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getStaleTasks, this, publicArgs)); } as unknown as typeof Runtime.getStaleTasks;
+Object.defineProperties(getStaleTasks, { name: { value: "getStaleTasks", configurable: true }, length: { value: 0, configurable: true } });
+export const getStatus = function getStatus(this: unknown, a0: any, a1: any, a2: any, a3: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, a3, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getStatus, this, publicArgs)); } as unknown as typeof Runtime.getStatus;
+Object.defineProperties(getStatus, { name: { value: "getStatus", configurable: true }, length: { value: 4, configurable: true } });
+export const getStorageDatabaseEnv = function getStorageDatabaseEnv(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getStorageDatabaseEnv, this, publicArgs)); } as unknown as typeof Runtime.getStorageDatabaseEnv;
+Object.defineProperties(getStorageDatabaseEnv, { name: { value: "getStorageDatabaseEnv", configurable: true }, length: { value: 0, configurable: true } });
+export const getStorageDatabaseUrl = function getStorageDatabaseUrl(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getStorageDatabaseUrl, this, publicArgs)); } as unknown as typeof Runtime.getStorageDatabaseUrl;
+Object.defineProperties(getStorageDatabaseUrl, { name: { value: "getStorageDatabaseUrl", configurable: true }, length: { value: 0, configurable: true } });
+export const getStorageMode = function getStorageMode(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getStorageMode, this, publicArgs)); } as unknown as typeof Runtime.getStorageMode;
+Object.defineProperties(getStorageMode, { name: { value: "getStorageMode", configurable: true }, length: { value: 0, configurable: true } });
+export const getStoredHandoffAsPacket = function getStoredHandoffAsPacket(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getStoredHandoffAsPacket, this, publicArgs)); } as unknown as typeof Runtime.getStoredHandoffAsPacket;
+Object.defineProperties(getStoredHandoffAsPacket, { name: { value: "getStoredHandoffAsPacket", configurable: true }, length: { value: 2, configurable: true } });
+export const getTask = function getTask(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTask, this, publicArgs)); } as unknown as typeof Runtime.getTask;
+Object.defineProperties(getTask, { name: { value: "getTask", configurable: true }, length: { value: 2, configurable: true } });
+export const getTaskBoard = function getTaskBoard(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTaskBoard, this, publicArgs)); } as unknown as typeof Runtime.getTaskBoard;
+Object.defineProperties(getTaskBoard, { name: { value: "getTaskBoard", configurable: true }, length: { value: 2, configurable: true } });
+export const getTaskByFingerprint = function getTaskByFingerprint(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTaskByFingerprint, this, publicArgs)); } as unknown as typeof Runtime.getTaskByFingerprint;
+Object.defineProperties(getTaskByFingerprint, { name: { value: "getTaskByFingerprint", configurable: true }, length: { value: 2, configurable: true } });
+export const getTaskCommits = function getTaskCommits(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTaskCommits, this, publicArgs)); } as unknown as typeof Runtime.getTaskCommits;
+Object.defineProperties(getTaskCommits, { name: { value: "getTaskCommits", configurable: true }, length: { value: 2, configurable: true } });
+export const getTaskContract = function getTaskContract(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTaskContract, this, publicArgs)); } as unknown as typeof Runtime.getTaskContract;
+Object.defineProperties(getTaskContract, { name: { value: "getTaskContract", configurable: true }, length: { value: 2, configurable: true } });
+export const getTaskCustomFields = function getTaskCustomFields(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTaskCustomFields, this, publicArgs)); } as unknown as typeof Runtime.getTaskCustomFields;
+Object.defineProperties(getTaskCustomFields, { name: { value: "getTaskCustomFields", configurable: true }, length: { value: 2, configurable: true } });
+export const getTaskDependencies = function getTaskDependencies(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTaskDependencies, this, publicArgs)); } as unknown as typeof Runtime.getTaskDependencies;
+Object.defineProperties(getTaskDependencies, { name: { value: "getTaskDependencies", configurable: true }, length: { value: 2, configurable: true } });
+export const getTaskDependents = function getTaskDependents(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTaskDependents, this, publicArgs)); } as unknown as typeof Runtime.getTaskDependents;
+Object.defineProperties(getTaskDependents, { name: { value: "getTaskDependents", configurable: true }, length: { value: 2, configurable: true } });
+export const getTaskFile = function getTaskFile(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTaskFile, this, publicArgs)); } as unknown as typeof Runtime.getTaskFile;
+Object.defineProperties(getTaskFile, { name: { value: "getTaskFile", configurable: true }, length: { value: 2, configurable: true } });
+export const getTaskGraph = function getTaskGraph(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTaskGraph, this, publicArgs)); } as unknown as typeof Runtime.getTaskGraph;
+Object.defineProperties(getTaskGraph, { name: { value: "getTaskGraph", configurable: true }, length: { value: 1, configurable: true } });
+export const getTaskHistory = function getTaskHistory(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTaskHistory, this, publicArgs)); } as unknown as typeof Runtime.getTaskHistory;
+Object.defineProperties(getTaskHistory, { name: { value: "getTaskHistory", configurable: true }, length: { value: 2, configurable: true } });
+export const getTaskLabels = function getTaskLabels(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTaskLabels, this, publicArgs)); } as unknown as typeof Runtime.getTaskLabels;
+Object.defineProperties(getTaskLabels, { name: { value: "getTaskLabels", configurable: true }, length: { value: 2, configurable: true } });
+export const getTaskLease = function getTaskLease(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTaskLease, this, publicArgs)); } as unknown as typeof Runtime.getTaskLease;
+Object.defineProperties(getTaskLease, { name: { value: "getTaskLease", configurable: true }, length: { value: 2, configurable: true } });
+export const getTaskList = function getTaskList(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTaskList, this, publicArgs)); } as unknown as typeof Runtime.getTaskList;
+Object.defineProperties(getTaskList, { name: { value: "getTaskList", configurable: true }, length: { value: 2, configurable: true } });
+export const getTaskListBySlug = function getTaskListBySlug(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTaskListBySlug, this, publicArgs)); } as unknown as typeof Runtime.getTaskListBySlug;
+Object.defineProperties(getTaskListBySlug, { name: { value: "getTaskListBySlug", configurable: true }, length: { value: 3, configurable: true } });
+export const getTaskLocalFields = function getTaskLocalFields(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTaskLocalFields, this, publicArgs)); } as unknown as typeof Runtime.getTaskLocalFields;
+Object.defineProperties(getTaskLocalFields, { name: { value: "getTaskLocalFields", configurable: true }, length: { value: 2, configurable: true } });
+export const getTaskLockStatus = function getTaskLockStatus(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTaskLockStatus, this, publicArgs)); } as unknown as typeof Runtime.getTaskLockStatus;
+Object.defineProperties(getTaskLockStatus, { name: { value: "getTaskLockStatus", configurable: true }, length: { value: 2, configurable: true } });
+export const getTaskRelationship = function getTaskRelationship(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTaskRelationship, this, publicArgs)); } as unknown as typeof Runtime.getTaskRelationship;
+Object.defineProperties(getTaskRelationship, { name: { value: "getTaskRelationship", configurable: true }, length: { value: 2, configurable: true } });
+export const getTaskRelationships = function getTaskRelationships(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTaskRelationships, this, publicArgs)); } as unknown as typeof Runtime.getTaskRelationships;
+Object.defineProperties(getTaskRelationships, { name: { value: "getTaskRelationships", configurable: true }, length: { value: 3, configurable: true } });
+export const getTaskReview = function getTaskReview(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTaskReview, this, publicArgs)); } as unknown as typeof Runtime.getTaskReview;
+Object.defineProperties(getTaskReview, { name: { value: "getTaskReview", configurable: true }, length: { value: 2, configurable: true } });
+export const getTaskRouteState = function getTaskRouteState(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTaskRouteState, this, publicArgs)); } as unknown as typeof Runtime.getTaskRouteState;
+Object.defineProperties(getTaskRouteState, { name: { value: "getTaskRouteState", configurable: true }, length: { value: 2, configurable: true } });
+export const getTaskRun = function getTaskRun(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTaskRun, this, publicArgs)); } as unknown as typeof Runtime.getTaskRun;
+Object.defineProperties(getTaskRun, { name: { value: "getTaskRun", configurable: true }, length: { value: 2, configurable: true } });
+export const getTaskRunLedger = function getTaskRunLedger(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTaskRunLedger, this, publicArgs)); } as unknown as typeof Runtime.getTaskRunLedger;
+Object.defineProperties(getTaskRunLedger, { name: { value: "getTaskRunLedger", configurable: true }, length: { value: 2, configurable: true } });
+export const getTaskStats = function getTaskStats(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTaskStats, this, publicArgs)); } as unknown as typeof Runtime.getTaskStats;
+Object.defineProperties(getTaskStats, { name: { value: "getTaskStats", configurable: true }, length: { value: 2, configurable: true } });
+export const getTaskTraceability = function getTaskTraceability(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTaskTraceability, this, publicArgs)); } as unknown as typeof Runtime.getTaskTraceability;
+Object.defineProperties(getTaskTraceability, { name: { value: "getTaskTraceability", configurable: true }, length: { value: 2, configurable: true } });
+export const getTaskTraces = function getTaskTraces(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTaskTraces, this, publicArgs)); } as unknown as typeof Runtime.getTaskTraces;
+Object.defineProperties(getTaskTraces, { name: { value: "getTaskTraces", configurable: true }, length: { value: 2, configurable: true } });
+export const getTaskWithRelations = function getTaskWithRelations(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTaskWithRelations, this, publicArgs)); } as unknown as typeof Runtime.getTaskWithRelations;
+Object.defineProperties(getTaskWithRelations, { name: { value: "getTaskWithRelations", configurable: true }, length: { value: 2, configurable: true } });
+export const getTaskWorkflowState = function getTaskWorkflowState(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTaskWorkflowState, this, publicArgs)); } as unknown as typeof Runtime.getTaskWorkflowState;
+Object.defineProperties(getTaskWorkflowState, { name: { value: "getTaskWorkflowState", configurable: true }, length: { value: 3, configurable: true } });
+export const getTasksChangedSince = function getTasksChangedSince(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTasksChangedSince, this, publicArgs)); } as unknown as typeof Runtime.getTasksChangedSince;
+Object.defineProperties(getTasksChangedSince, { name: { value: "getTasksChangedSince", configurable: true }, length: { value: 3, configurable: true } });
+export const getTemplate = function getTemplate(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTemplate, this, publicArgs)); } as unknown as typeof Runtime.getTemplate;
+Object.defineProperties(getTemplate, { name: { value: "getTemplate", configurable: true }, length: { value: 2, configurable: true } });
+export const getTemplateLibraryDocs = function getTemplateLibraryDocs(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTemplateLibraryDocs, this, publicArgs)); } as unknown as typeof Runtime.getTemplateLibraryDocs;
+Object.defineProperties(getTemplateLibraryDocs, { name: { value: "getTemplateLibraryDocs", configurable: true }, length: { value: 0, configurable: true } });
+export const getTemplateTasks = function getTemplateTasks(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTemplateTasks, this, publicArgs)); } as unknown as typeof Runtime.getTemplateTasks;
+Object.defineProperties(getTemplateTasks, { name: { value: "getTemplateTasks", configurable: true }, length: { value: 2, configurable: true } });
+export const getTemplateVersion = function getTemplateVersion(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTemplateVersion, this, publicArgs)); } as unknown as typeof Runtime.getTemplateVersion;
+Object.defineProperties(getTemplateVersion, { name: { value: "getTemplateVersion", configurable: true }, length: { value: 3, configurable: true } });
+export const getTemplateWithTasks = function getTemplateWithTasks(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTemplateWithTasks, this, publicArgs)); } as unknown as typeof Runtime.getTemplateWithTasks;
+Object.defineProperties(getTemplateWithTasks, { name: { value: "getTemplateWithTasks", configurable: true }, length: { value: 2, configurable: true } });
+export const getTerminalNotificationRule = function getTerminalNotificationRule(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTerminalNotificationRule, this, publicArgs)); } as unknown as typeof Runtime.getTerminalNotificationRule;
+Object.defineProperties(getTerminalNotificationRule, { name: { value: "getTerminalNotificationRule", configurable: true }, length: { value: 1, configurable: true } });
+export const getTimeLogs = function getTimeLogs(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTimeLogs, this, publicArgs)); } as unknown as typeof Runtime.getTimeLogs;
+Object.defineProperties(getTimeLogs, { name: { value: "getTimeLogs", configurable: true }, length: { value: 2, configurable: true } });
+export const getTimeReport = function getTimeReport(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTimeReport, this, publicArgs)); } as unknown as typeof Runtime.getTimeReport;
+Object.defineProperties(getTimeReport, { name: { value: "getTimeReport", configurable: true }, length: { value: 2, configurable: true } });
+export const getTodosStorageDatabaseEnv = function getTodosStorageDatabaseEnv(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTodosStorageDatabaseEnv, this, publicArgs)); } as unknown as typeof Runtime.getTodosStorageDatabaseEnv;
+Object.defineProperties(getTodosStorageDatabaseEnv, { name: { value: "getTodosStorageDatabaseEnv", configurable: true }, length: { value: 0, configurable: true } });
+export const getTodosStorageDatabaseUrl = function getTodosStorageDatabaseUrl(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTodosStorageDatabaseUrl, this, publicArgs)); } as unknown as typeof Runtime.getTodosStorageDatabaseUrl;
+Object.defineProperties(getTodosStorageDatabaseUrl, { name: { value: "getTodosStorageDatabaseUrl", configurable: true }, length: { value: 0, configurable: true } });
+export const getTodosStorageEnvName = function getTodosStorageEnvName(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTodosStorageEnvName, this, publicArgs)); } as unknown as typeof Runtime.getTodosStorageEnvName;
+Object.defineProperties(getTodosStorageEnvName, { name: { value: "getTodosStorageEnvName", configurable: true }, length: { value: 2, configurable: true } });
+export const getTodosStorageMode = function getTodosStorageMode(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTodosStorageMode, this, publicArgs)); } as unknown as typeof Runtime.getTodosStorageMode;
+Object.defineProperties(getTodosStorageMode, { name: { value: "getTodosStorageMode", configurable: true }, length: { value: 0, configurable: true } });
+export const getTopologyDocs = function getTopologyDocs(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTopologyDocs, this, publicArgs)); } as unknown as typeof Runtime.getTopologyDocs;
+Object.defineProperties(getTopologyDocs, { name: { value: "getTopologyDocs", configurable: true }, length: { value: 0, configurable: true } });
+export const getTraceStats = function getTraceStats(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getTraceStats, this, publicArgs)); } as unknown as typeof Runtime.getTraceStats;
+Object.defineProperties(getTraceStats, { name: { value: "getTraceStats", configurable: true }, length: { value: 2, configurable: true } });
+export const getUnlockImpact = function getUnlockImpact(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getUnlockImpact, this, publicArgs)); } as unknown as typeof Runtime.getUnlockImpact;
+Object.defineProperties(getUnlockImpact, { name: { value: "getUnlockImpact", configurable: true }, length: { value: 2, configurable: true } });
+export const getUpcomingDueTasks = function getUpcomingDueTasks(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getUpcomingDueTasks, this, publicArgs)); } as unknown as typeof Runtime.getUpcomingDueTasks;
+Object.defineProperties(getUpcomingDueTasks, { name: { value: "getUpcomingDueTasks", configurable: true }, length: { value: 0, configurable: true } });
+export const getUserScaffold = function getUserScaffold(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getUserScaffold, this, publicArgs)); } as unknown as typeof Runtime.getUserScaffold;
+Object.defineProperties(getUserScaffold, { name: { value: "getUserScaffold", configurable: true }, length: { value: 2, configurable: true } });
+export const getUserScaffoldDocs = function getUserScaffoldDocs(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getUserScaffoldDocs, this, publicArgs)); } as unknown as typeof Runtime.getUserScaffoldDocs;
+Object.defineProperties(getUserScaffoldDocs, { name: { value: "getUserScaffoldDocs", configurable: true }, length: { value: 0, configurable: true } });
+export const getVerificationEvidence = function getVerificationEvidence(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getVerificationEvidence, this, publicArgs)); } as unknown as typeof Runtime.getVerificationEvidence;
+Object.defineProperties(getVerificationEvidence, { name: { value: "getVerificationEvidence", configurable: true }, length: { value: 2, configurable: true } });
+export const getVerificationRecord = function getVerificationRecord(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getVerificationRecord, this, publicArgs)); } as unknown as typeof Runtime.getVerificationRecord;
+Object.defineProperties(getVerificationRecord, { name: { value: "getVerificationRecord", configurable: true }, length: { value: 2, configurable: true } });
+export const getWebhook = function getWebhook(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getWebhook, this, publicArgs)); } as unknown as typeof Runtime.getWebhook;
+Object.defineProperties(getWebhook, { name: { value: "getWebhook", configurable: true }, length: { value: 2, configurable: true } });
+export const getWorkflowPrompt = function getWorkflowPrompt(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getWorkflowPrompt, this, publicArgs)); } as unknown as typeof Runtime.getWorkflowPrompt;
+Object.defineProperties(getWorkflowPrompt, { name: { value: "getWorkflowPrompt", configurable: true }, length: { value: 1, configurable: true } });
+export const getWorkspaceTrustStatus = function getWorkspaceTrustStatus(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().getWorkspaceTrustStatus, this, publicArgs)); } as unknown as typeof Runtime.getWorkspaceTrustStatus;
+Object.defineProperties(getWorkspaceTrustStatus, { name: { value: "getWorkspaceTrustStatus", configurable: true }, length: { value: 0, configurable: true } });
+export const hasActiveApiKeys = function hasActiveApiKeys(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().hasActiveApiKeys, this, publicArgs)); } as unknown as typeof Runtime.hasActiveApiKeys;
+Object.defineProperties(hasActiveApiKeys, { name: { value: "hasActiveApiKeys", configurable: true }, length: { value: 1, configurable: true } });
+export const hasSecretFindings = function hasSecretFindings(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().hasSecretFindings, this, publicArgs)); } as unknown as typeof Runtime.hasSecretFindings;
+Object.defineProperties(hasSecretFindings, { name: { value: "hasSecretFindings", configurable: true }, length: { value: 1, configurable: true } });
+export const importActivityLog = function importActivityLog(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().importActivityLog, this, publicArgs)); } as unknown as typeof Runtime.importActivityLog;
+Object.defineProperties(importActivityLog, { name: { value: "importActivityLog", configurable: true }, length: { value: 1, configurable: true } });
+export const importArtifactFromManifestEntry = function importArtifactFromManifestEntry(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().importArtifactFromManifestEntry, this, publicArgs)); } as unknown as typeof Runtime.importArtifactFromManifestEntry;
+Object.defineProperties(importArtifactFromManifestEntry, { name: { value: "importArtifactFromManifestEntry", configurable: true }, length: { value: 3, configurable: true } });
+export const importBundle = function importBundle(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().importBundle, this, publicArgs)); } as unknown as typeof Runtime.importBundle;
+Object.defineProperties(importBundle, { name: { value: "importBundle", configurable: true }, length: { value: 1, configurable: true } });
+export const importCalendarIcs = function importCalendarIcs(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().importCalendarIcs, this, publicArgs)); } as unknown as typeof Runtime.importCalendarIcs;
+Object.defineProperties(importCalendarIcs, { name: { value: "importCalendarIcs", configurable: true }, length: { value: 2, configurable: true } });
+export const importCommandAliases = function importCommandAliases(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().importCommandAliases, this, publicArgs)); } as unknown as typeof Runtime.importCommandAliases;
+Object.defineProperties(importCommandAliases, { name: { value: "importCommandAliases", configurable: true }, length: { value: 1, configurable: true } });
+export const importExternalIssues = function importExternalIssues(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().importExternalIssues, this, publicArgs)); } as unknown as typeof Runtime.importExternalIssues;
+Object.defineProperties(importExternalIssues, { name: { value: "importExternalIssues", configurable: true }, length: { value: 2, configurable: true } });
+export const importHandoffBundle = function importHandoffBundle(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().importHandoffBundle, this, publicArgs)); } as unknown as typeof Runtime.importHandoffBundle;
+Object.defineProperties(importHandoffBundle, { name: { value: "importHandoffBundle", configurable: true }, length: { value: 1, configurable: true } });
+export const importIssues = function importIssues(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().importIssues, this, publicArgs)); } as unknown as typeof Runtime.importIssues;
+Object.defineProperties(importIssues, { name: { value: "importIssues", configurable: true }, length: { value: 1, configurable: true } });
+export const importLocalBridgeBundle = function importLocalBridgeBundle(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().importLocalBridgeBundle, this, publicArgs)); } as unknown as typeof Runtime.importLocalBridgeBundle;
+Object.defineProperties(importLocalBridgeBundle, { name: { value: "importLocalBridgeBundle", configurable: true }, length: { value: 1, configurable: true } });
+export const importOnboardingFixture = function importOnboardingFixture(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().importOnboardingFixture, this, publicArgs)); } as unknown as typeof Runtime.importOnboardingFixture;
+Object.defineProperties(importOnboardingFixture, { name: { value: "importOnboardingFixture", configurable: true }, length: { value: 0, configurable: true } });
+export const importRoadmapBundle = function importRoadmapBundle(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().importRoadmapBundle, this, publicArgs)); } as unknown as typeof Runtime.importRoadmapBundle;
+Object.defineProperties(importRoadmapBundle, { name: { value: "importRoadmapBundle", configurable: true }, length: { value: 1, configurable: true } });
+export const importSqliteTodosStorageSnapshot = function importSqliteTodosStorageSnapshot(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().importSqliteTodosStorageSnapshot, this, publicArgs)); } as unknown as typeof Runtime.importSqliteTodosStorageSnapshot;
+Object.defineProperties(importSqliteTodosStorageSnapshot, { name: { value: "importSqliteTodosStorageSnapshot", configurable: true }, length: { value: 2, configurable: true } });
+export const importStoredArtifactContent = function importStoredArtifactContent(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().importStoredArtifactContent, this, publicArgs)); } as unknown as typeof Runtime.importStoredArtifactContent;
+Object.defineProperties(importStoredArtifactContent, { name: { value: "importStoredArtifactContent", configurable: true }, length: { value: 1, configurable: true } });
+export const importTaskBoardBundle = function importTaskBoardBundle(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().importTaskBoardBundle, this, publicArgs)); } as unknown as typeof Runtime.importTaskBoardBundle;
+Object.defineProperties(importTaskBoardBundle, { name: { value: "importTaskBoardBundle", configurable: true }, length: { value: 2, configurable: true } });
+export const importTemplate = function importTemplate(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().importTemplate, this, publicArgs)); } as unknown as typeof Runtime.importTemplate;
+Object.defineProperties(importTemplate, { name: { value: "importTemplate", configurable: true }, length: { value: 2, configurable: true } });
+export const importTemplateFromFile = function importTemplateFromFile(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().importTemplateFromFile, this, publicArgs)); } as unknown as typeof Runtime.importTemplateFromFile;
+Object.defineProperties(importTemplateFromFile, { name: { value: "importTemplateFromFile", configurable: true }, length: { value: 2, configurable: true } });
+export const importTodosMarkdown = function importTodosMarkdown(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().importTodosMarkdown, this, publicArgs)); } as unknown as typeof Runtime.importTodosMarkdown;
+Object.defineProperties(importTodosMarkdown, { name: { value: "importTodosMarkdown", configurable: true }, length: { value: 1, configurable: true } });
+export const importUserScaffold = function importUserScaffold(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().importUserScaffold, this, publicArgs)); } as unknown as typeof Runtime.importUserScaffold;
+Object.defineProperties(importUserScaffold, { name: { value: "importUserScaffold", configurable: true }, length: { value: 1, configurable: true } });
+export const inferRootProjectId = function inferRootProjectId(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().inferRootProjectId, this, publicArgs)); } as unknown as typeof Runtime.inferRootProjectId;
+Object.defineProperties(inferRootProjectId, { name: { value: "inferRootProjectId", configurable: true }, length: { value: 1, configurable: true } });
+export const initBuiltinTemplates = function initBuiltinTemplates(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().initBuiltinTemplates, this, publicArgs)); } as unknown as typeof Runtime.initBuiltinTemplates;
+Object.defineProperties(initBuiltinTemplates, { name: { value: "initBuiltinTemplates", configurable: true }, length: { value: 1, configurable: true } });
+export const inspectExtensionSource = function inspectExtensionSource(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().inspectExtensionSource, this, publicArgs)); } as unknown as typeof Runtime.inspectExtensionSource;
+Object.defineProperties(inspectExtensionSource, { name: { value: "inspectExtensionSource", configurable: true }, length: { value: 1, configurable: true } });
+export const inspectGitCommit = function inspectGitCommit(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().inspectGitCommit, this, publicArgs)); } as unknown as typeof Runtime.inspectGitCommit;
+Object.defineProperties(inspectGitCommit, { name: { value: "inspectGitCommit", configurable: true }, length: { value: 2, configurable: true } });
+export const inspectPlanArtifact = function inspectPlanArtifact(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().inspectPlanArtifact, this, publicArgs)); } as unknown as typeof Runtime.inspectPlanArtifact;
+Object.defineProperties(inspectPlanArtifact, { name: { value: "inspectPlanArtifact", configurable: true }, length: { value: 2, configurable: true } });
+export const installLocalExtension = function installLocalExtension(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().installLocalExtension, this, publicArgs)); } as unknown as typeof Runtime.installLocalExtension;
+Object.defineProperties(installLocalExtension, { name: { value: "installLocalExtension", configurable: true }, length: { value: 1, configurable: true } });
+export const installTemplateLibrary = function installTemplateLibrary(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().installTemplateLibrary, this, publicArgs)); } as unknown as typeof Runtime.installTemplateLibrary;
+Object.defineProperties(installTemplateLibrary, { name: { value: "installTemplateLibrary", configurable: true }, length: { value: 1, configurable: true } });
+export const isAgentConflict = function isAgentConflict(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().isAgentConflict, this, publicArgs)); } as unknown as typeof Runtime.isAgentConflict;
+Object.defineProperties(isAgentConflict, { name: { value: "isAgentConflict", configurable: true }, length: { value: 1, configurable: true } });
+export const isAllowedLocalApiUrl = function isAllowedLocalApiUrl(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().isAllowedLocalApiUrl, this, publicArgs)); } as unknown as typeof Runtime.isAllowedLocalApiUrl;
+Object.defineProperties(isAllowedLocalApiUrl, { name: { value: "isAllowedLocalApiUrl", configurable: true }, length: { value: 1, configurable: true } });
+export const isArtifactExpired = function isArtifactExpired(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().isArtifactExpired, this, publicArgs)); } as unknown as typeof Runtime.isArtifactExpired;
+Object.defineProperties(isArtifactExpired, { name: { value: "isArtifactExpired", configurable: true }, length: { value: 1, configurable: true } });
+export const isEncryptedBridgeBundle = function isEncryptedBridgeBundle(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().isEncryptedBridgeBundle, this, publicArgs)); } as unknown as typeof Runtime.isEncryptedBridgeBundle;
+Object.defineProperties(isEncryptedBridgeBundle, { name: { value: "isEncryptedBridgeBundle", configurable: true }, length: { value: 1, configurable: true } });
+export const isEncryptedValue = function isEncryptedValue(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().isEncryptedValue, this, publicArgs)); } as unknown as typeof Runtime.isEncryptedValue;
+Object.defineProperties(isEncryptedValue, { name: { value: "isEncryptedValue", configurable: true }, length: { value: 1, configurable: true } });
+export const isSnapshotStale = function isSnapshotStale(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().isSnapshotStale, this, publicArgs)); } as unknown as typeof Runtime.isSnapshotStale;
+Object.defineProperties(isSnapshotStale, { name: { value: "isSnapshotStale", configurable: true }, length: { value: 1, configurable: true } });
+export const isTodosRemoteStorageEnabled = function isTodosRemoteStorageEnabled(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().isTodosRemoteStorageEnabled, this, publicArgs)); } as unknown as typeof Runtime.isTodosRemoteStorageEnabled;
+Object.defineProperties(isTodosRemoteStorageEnabled, { name: { value: "isTodosRemoteStorageEnabled", configurable: true }, length: { value: 1, configurable: true } });
+export const isValidRecurrenceRule = function isValidRecurrenceRule(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().isValidRecurrenceRule, this, publicArgs)); } as unknown as typeof Runtime.isValidRecurrenceRule;
+Object.defineProperties(isValidRecurrenceRule, { name: { value: "isValidRecurrenceRule", configurable: true }, length: { value: 1, configurable: true } });
+export const isWorktreePath = function isWorktreePath(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().isWorktreePath, this, publicArgs)); } as unknown as typeof Runtime.isWorktreePath;
+Object.defineProperties(isWorktreePath, { name: { value: "isWorktreePath", configurable: true }, length: { value: 1, configurable: true } });
+export const issueToTask = function issueToTask(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().issueToTask, this, publicArgs)); } as unknown as typeof Runtime.issueToTask;
+Object.defineProperties(issueToTask, { name: { value: "issueToTask", configurable: true }, length: { value: 2, configurable: true } });
+export const linkRunArtifact = function linkRunArtifact(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().linkRunArtifact, this, publicArgs)); } as unknown as typeof Runtime.linkRunArtifact;
+Object.defineProperties(linkRunArtifact, { name: { value: "linkRunArtifact", configurable: true }, length: { value: 3, configurable: true } });
+export const linkRunVerification = function linkRunVerification(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().linkRunVerification, this, publicArgs)); } as unknown as typeof Runtime.linkRunVerification;
+Object.defineProperties(linkRunVerification, { name: { value: "linkRunVerification", configurable: true }, length: { value: 3, configurable: true } });
+export const linkTaskGitTrace = function linkTaskGitTrace(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().linkTaskGitTrace, this, publicArgs)); } as unknown as typeof Runtime.linkTaskGitTrace;
+Object.defineProperties(linkTaskGitTrace, { name: { value: "linkTaskGitTrace", configurable: true }, length: { value: 2, configurable: true } });
+export const linkTaskToCommit = function linkTaskToCommit(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().linkTaskToCommit, this, publicArgs)); } as unknown as typeof Runtime.linkTaskToCommit;
+Object.defineProperties(linkTaskToCommit, { name: { value: "linkTaskToCommit", configurable: true }, length: { value: 2, configurable: true } });
+export const linkTemplateAsScaffold = function linkTemplateAsScaffold(this: unknown, a0: any, a1: any, a2: any, a3: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, a3, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().linkTemplateAsScaffold, this, publicArgs)); } as unknown as typeof Runtime.linkTemplateAsScaffold;
+Object.defineProperties(linkTemplateAsScaffold, { name: { value: "linkTemplateAsScaffold", configurable: true }, length: { value: 4, configurable: true } });
+export const listAccessProfiles = function listAccessProfiles(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listAccessProfiles, this, publicArgs)); } as unknown as typeof Runtime.listAccessProfiles;
+Object.defineProperties(listAccessProfiles, { name: { value: "listAccessProfiles", configurable: true }, length: { value: 0, configurable: true } });
+export const listActiveLeases = function listActiveLeases(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listActiveLeases, this, publicArgs)); } as unknown as typeof Runtime.listActiveLeases;
+Object.defineProperties(listActiveLeases, { name: { value: "listActiveLeases", configurable: true }, length: { value: 2, configurable: true } });
+export const listActivity = function listActivity(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listActivity, this, publicArgs)); } as unknown as typeof Runtime.listActivity;
+Object.defineProperties(listActivity, { name: { value: "listActivity", configurable: true }, length: { value: 0, configurable: true } });
+export const listAgentAdapterDocs = function listAgentAdapterDocs(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listAgentAdapterDocs, this, publicArgs)); } as unknown as typeof Runtime.listAgentAdapterDocs;
+Object.defineProperties(listAgentAdapterDocs, { name: { value: "listAgentAdapterDocs", configurable: true }, length: { value: 0, configurable: true } });
+export const listAgentReliabilityScorecards = function listAgentReliabilityScorecards(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listAgentReliabilityScorecards, this, publicArgs)); } as unknown as typeof Runtime.listAgentReliabilityScorecards;
+Object.defineProperties(listAgentReliabilityScorecards, { name: { value: "listAgentReliabilityScorecards", configurable: true }, length: { value: 0, configurable: true } });
+export const listAgentRunAdapters = function listAgentRunAdapters(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listAgentRunAdapters, this, publicArgs)); } as unknown as typeof Runtime.listAgentRunAdapters;
+Object.defineProperties(listAgentRunAdapters, { name: { value: "listAgentRunAdapters", configurable: true }, length: { value: 0, configurable: true } });
+export const listAgentRunQueue = function listAgentRunQueue(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listAgentRunQueue, this, publicArgs)); } as unknown as typeof Runtime.listAgentRunQueue;
+Object.defineProperties(listAgentRunQueue, { name: { value: "listAgentRunQueue", configurable: true }, length: { value: 1, configurable: true } });
+export const listAgentRuns = function listAgentRuns(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listAgentRuns, this, publicArgs)); } as unknown as typeof Runtime.listAgentRuns;
+Object.defineProperties(listAgentRuns, { name: { value: "listAgentRuns", configurable: true }, length: { value: 0, configurable: true } });
+export const listAgents = function listAgents(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listAgents, this, publicArgs)); } as unknown as typeof Runtime.listAgents;
+Object.defineProperties(listAgents, { name: { value: "listAgents", configurable: true }, length: { value: 2, configurable: true } });
+export const listApiKeys = function listApiKeys(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listApiKeys, this, publicArgs)); } as unknown as typeof Runtime.listApiKeys;
+Object.defineProperties(listApiKeys, { name: { value: "listApiKeys", configurable: true }, length: { value: 2, configurable: true } });
+export const listApprovalGates = function listApprovalGates(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listApprovalGates, this, publicArgs)); } as unknown as typeof Runtime.listApprovalGates;
+Object.defineProperties(listApprovalGates, { name: { value: "listApprovalGates", configurable: true }, length: { value: 2, configurable: true } });
+export const listArtifacts = function listArtifacts(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listArtifacts, this, publicArgs)); } as unknown as typeof Runtime.listArtifacts;
+Object.defineProperties(listArtifacts, { name: { value: "listArtifacts", configurable: true }, length: { value: 0, configurable: true } });
+export const listBuiltinShortcuts = function listBuiltinShortcuts(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listBuiltinShortcuts, this, publicArgs)); } as unknown as typeof Runtime.listBuiltinShortcuts;
+Object.defineProperties(listBuiltinShortcuts, { name: { value: "listBuiltinShortcuts", configurable: true }, length: { value: 0, configurable: true } });
+export const listBuiltinTemplates = function listBuiltinTemplates(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listBuiltinTemplates, this, publicArgs)); } as unknown as typeof Runtime.listBuiltinTemplates;
+Object.defineProperties(listBuiltinTemplates, { name: { value: "listBuiltinTemplates", configurable: true }, length: { value: 0, configurable: true } });
+export const listCalendarEvents = function listCalendarEvents(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listCalendarEvents, this, publicArgs)); } as unknown as typeof Runtime.listCalendarEvents;
+Object.defineProperties(listCalendarEvents, { name: { value: "listCalendarEvents", configurable: true }, length: { value: 0, configurable: true } });
+export const listCalendarItems = function listCalendarItems(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listCalendarItems, this, publicArgs)); } as unknown as typeof Runtime.listCalendarItems;
+Object.defineProperties(listCalendarItems, { name: { value: "listCalendarItems", configurable: true }, length: { value: 0, configurable: true } });
+export const listCapacityProfiles = function listCapacityProfiles(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listCapacityProfiles, this, publicArgs)); } as unknown as typeof Runtime.listCapacityProfiles;
+Object.defineProperties(listCapacityProfiles, { name: { value: "listCapacityProfiles", configurable: true }, length: { value: 0, configurable: true } });
+export const listCommandAliases = function listCommandAliases(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listCommandAliases, this, publicArgs)); } as unknown as typeof Runtime.listCommandAliases;
+Object.defineProperties(listCommandAliases, { name: { value: "listCommandAliases", configurable: true }, length: { value: 1, configurable: true } });
+export const listComments = function listComments(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listComments, this, publicArgs)); } as unknown as typeof Runtime.listComments;
+Object.defineProperties(listComments, { name: { value: "listComments", configurable: true }, length: { value: 2, configurable: true } });
+export const listCompactTaskFindings = function listCompactTaskFindings(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listCompactTaskFindings, this, publicArgs)); } as unknown as typeof Runtime.listCompactTaskFindings;
+Object.defineProperties(listCompactTaskFindings, { name: { value: "listCompactTaskFindings", configurable: true }, length: { value: 0, configurable: true } });
+export const listCustomFieldDefinitions = function listCustomFieldDefinitions(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listCustomFieldDefinitions, this, publicArgs)); } as unknown as typeof Runtime.listCustomFieldDefinitions;
+Object.defineProperties(listCustomFieldDefinitions, { name: { value: "listCustomFieldDefinitions", configurable: true }, length: { value: 2, configurable: true } });
+export const listCycles = function listCycles(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listCycles, this, publicArgs)); } as unknown as typeof Runtime.listCycles;
+Object.defineProperties(listCycles, { name: { value: "listCycles", configurable: true }, length: { value: 0, configurable: true } });
+export const listCyclesWithStats = function listCyclesWithStats(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listCyclesWithStats, this, publicArgs)); } as unknown as typeof Runtime.listCyclesWithStats;
+Object.defineProperties(listCyclesWithStats, { name: { value: "listCyclesWithStats", configurable: true }, length: { value: 0, configurable: true } });
+export const listDecisionRecords = function listDecisionRecords(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listDecisionRecords, this, publicArgs)); } as unknown as typeof Runtime.listDecisionRecords;
+Object.defineProperties(listDecisionRecords, { name: { value: "listDecisionRecords", configurable: true }, length: { value: 0, configurable: true } });
+export const listDelayedStartTasks = function listDelayedStartTasks(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listDelayedStartTasks, this, publicArgs)); } as unknown as typeof Runtime.listDelayedStartTasks;
+Object.defineProperties(listDelayedStartTasks, { name: { value: "listDelayedStartTasks", configurable: true }, length: { value: 1, configurable: true } });
+export const listDeliveries = function listDeliveries(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listDeliveries, this, publicArgs)); } as unknown as typeof Runtime.listDeliveries;
+Object.defineProperties(listDeliveries, { name: { value: "listDeliveries", configurable: true }, length: { value: 1, configurable: true } });
+export const listDispatchLogs = function listDispatchLogs(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listDispatchLogs, this, publicArgs)); } as unknown as typeof Runtime.listDispatchLogs;
+Object.defineProperties(listDispatchLogs, { name: { value: "listDispatchLogs", configurable: true }, length: { value: 2, configurable: true } });
+export const listDispatches = function listDispatches(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listDispatches, this, publicArgs)); } as unknown as typeof Runtime.listDispatches;
+Object.defineProperties(listDispatches, { name: { value: "listDispatches", configurable: true }, length: { value: 0, configurable: true } });
+export const listEncryptionProfiles = function listEncryptionProfiles(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listEncryptionProfiles, this, publicArgs)); } as unknown as typeof Runtime.listEncryptionProfiles;
+Object.defineProperties(listEncryptionProfiles, { name: { value: "listEncryptionProfiles", configurable: true }, length: { value: 0, configurable: true } });
+export const listExpiredLeases = function listExpiredLeases(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listExpiredLeases, this, publicArgs)); } as unknown as typeof Runtime.listExpiredLeases;
+Object.defineProperties(listExpiredLeases, { name: { value: "listExpiredLeases", configurable: true }, length: { value: 1, configurable: true } });
+export const listFocusSessions = function listFocusSessions(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listFocusSessions, this, publicArgs)); } as unknown as typeof Runtime.listFocusSessions;
+Object.defineProperties(listFocusSessions, { name: { value: "listFocusSessions", configurable: true }, length: { value: 0, configurable: true } });
+export const listHandoffs = function listHandoffs(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listHandoffs, this, publicArgs)); } as unknown as typeof Runtime.listHandoffs;
+Object.defineProperties(listHandoffs, { name: { value: "listHandoffs", configurable: true }, length: { value: 1, configurable: true } });
+export const listInboxItems = function listInboxItems(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listInboxItems, this, publicArgs)); } as unknown as typeof Runtime.listInboxItems;
+Object.defineProperties(listInboxItems, { name: { value: "listInboxItems", configurable: true }, length: { value: 2, configurable: true } });
+export const listJsonSchemas = function listJsonSchemas(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listJsonSchemas, this, publicArgs)); } as unknown as typeof Runtime.listJsonSchemas;
+Object.defineProperties(listJsonSchemas, { name: { value: "listJsonSchemas", configurable: true }, length: { value: 0, configurable: true } });
+export const listKnowledgeRecords = function listKnowledgeRecords(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listKnowledgeRecords, this, publicArgs)); } as unknown as typeof Runtime.listKnowledgeRecords;
+Object.defineProperties(listKnowledgeRecords, { name: { value: "listKnowledgeRecords", configurable: true }, length: { value: 0, configurable: true } });
+export const listKnowledgeSnapshots = function listKnowledgeSnapshots(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listKnowledgeSnapshots, this, publicArgs)); } as unknown as typeof Runtime.listKnowledgeSnapshots;
+Object.defineProperties(listKnowledgeSnapshots, { name: { value: "listKnowledgeSnapshots", configurable: true }, length: { value: 0, configurable: true } });
+export const listLabels = function listLabels(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listLabels, this, publicArgs)); } as unknown as typeof Runtime.listLabels;
+Object.defineProperties(listLabels, { name: { value: "listLabels", configurable: true }, length: { value: 2, configurable: true } });
+export const listLinkedTemplates = function listLinkedTemplates(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listLinkedTemplates, this, publicArgs)); } as unknown as typeof Runtime.listLinkedTemplates;
+Object.defineProperties(listLinkedTemplates, { name: { value: "listLinkedTemplates", configurable: true }, length: { value: 2, configurable: true } });
+export const listLocalAuditLedgerCheckpoints = function listLocalAuditLedgerCheckpoints(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listLocalAuditLedgerCheckpoints, this, publicArgs)); } as unknown as typeof Runtime.listLocalAuditLedgerCheckpoints;
+Object.defineProperties(listLocalAuditLedgerCheckpoints, { name: { value: "listLocalAuditLedgerCheckpoints", configurable: true }, length: { value: 0, configurable: true } });
+export const listLocalEventHooks = function listLocalEventHooks(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listLocalEventHooks, this, publicArgs)); } as unknown as typeof Runtime.listLocalEventHooks;
+Object.defineProperties(listLocalEventHooks, { name: { value: "listLocalEventHooks", configurable: true }, length: { value: 0, configurable: true } });
+export const listLocalExtensions = function listLocalExtensions(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listLocalExtensions, this, publicArgs)); } as unknown as typeof Runtime.listLocalExtensions;
+Object.defineProperties(listLocalExtensions, { name: { value: "listLocalExtensions", configurable: true }, length: { value: 0, configurable: true } });
+export const listLocalReportTypes = function listLocalReportTypes(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listLocalReportTypes, this, publicArgs)); } as unknown as typeof Runtime.listLocalReportTypes;
+Object.defineProperties(listLocalReportTypes, { name: { value: "listLocalReportTypes", configurable: true }, length: { value: 0, configurable: true } });
+export const listLocalSnapshotResources = function listLocalSnapshotResources(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listLocalSnapshotResources, this, publicArgs)); } as unknown as typeof Runtime.listLocalSnapshotResources;
+Object.defineProperties(listLocalSnapshotResources, { name: { value: "listLocalSnapshotResources", configurable: true }, length: { value: 0, configurable: true } });
+export const listMachineLocalPaths = function listMachineLocalPaths(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listMachineLocalPaths, this, publicArgs)); } as unknown as typeof Runtime.listMachineLocalPaths;
+Object.defineProperties(listMachineLocalPaths, { name: { value: "listMachineLocalPaths", configurable: true }, length: { value: 2, configurable: true } });
+export const listMachines = function listMachines(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listMachines, this, publicArgs)); } as unknown as typeof Runtime.listMachines;
+Object.defineProperties(listMachines, { name: { value: "listMachines", configurable: true }, length: { value: 1, configurable: true } });
+export const listMcpToolNames = function listMcpToolNames(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listMcpToolNames, this, publicArgs)); } as unknown as typeof Runtime.listMcpToolNames;
+Object.defineProperties(listMcpToolNames, { name: { value: "listMcpToolNames", configurable: true }, length: { value: 0, configurable: true } });
+export const listMilestones = function listMilestones(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listMilestones, this, publicArgs)); } as unknown as typeof Runtime.listMilestones;
+Object.defineProperties(listMilestones, { name: { value: "listMilestones", configurable: true }, length: { value: 0, configurable: true } });
+export const listOnboardingFixtures = function listOnboardingFixtures(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listOnboardingFixtures, this, publicArgs)); } as unknown as typeof Runtime.listOnboardingFixtures;
+Object.defineProperties(listOnboardingFixtures, { name: { value: "listOnboardingFixtures", configurable: true }, length: { value: 0, configurable: true } });
+export const listOrgs = function listOrgs(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listOrgs, this, publicArgs)); } as unknown as typeof Runtime.listOrgs;
+Object.defineProperties(listOrgs, { name: { value: "listOrgs", configurable: true }, length: { value: 1, configurable: true } });
+export const listPlans = function listPlans(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listPlans, this, publicArgs)); } as unknown as typeof Runtime.listPlans;
+Object.defineProperties(listPlans, { name: { value: "listPlans", configurable: true }, length: { value: 2, configurable: true } });
+export const listPolicyPacks = function listPolicyPacks(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listPolicyPacks, this, publicArgs)); } as unknown as typeof Runtime.listPolicyPacks;
+Object.defineProperties(listPolicyPacks, { name: { value: "listPolicyPacks", configurable: true }, length: { value: 0, configurable: true } });
+export const listProjectSources = function listProjectSources(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listProjectSources, this, publicArgs)); } as unknown as typeof Runtime.listProjectSources;
+Object.defineProperties(listProjectSources, { name: { value: "listProjectSources", configurable: true }, length: { value: 2, configurable: true } });
+export const listProjects = function listProjects(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listProjects, this, publicArgs)); } as unknown as typeof Runtime.listProjects;
+Object.defineProperties(listProjects, { name: { value: "listProjects", configurable: true }, length: { value: 1, configurable: true } });
+export const listReadyScheduledTasks = function listReadyScheduledTasks(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listReadyScheduledTasks, this, publicArgs)); } as unknown as typeof Runtime.listReadyScheduledTasks;
+Object.defineProperties(listReadyScheduledTasks, { name: { value: "listReadyScheduledTasks", configurable: true }, length: { value: 0, configurable: true } });
+export const listReleaseGroups = function listReleaseGroups(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listReleaseGroups, this, publicArgs)); } as unknown as typeof Runtime.listReleaseGroups;
+Object.defineProperties(listReleaseGroups, { name: { value: "listReleaseGroups", configurable: true }, length: { value: 1, configurable: true } });
+export const listReminders = function listReminders(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listReminders, this, publicArgs)); } as unknown as typeof Runtime.listReminders;
+Object.defineProperties(listReminders, { name: { value: "listReminders", configurable: true }, length: { value: 0, configurable: true } });
+export const listRetrospectives = function listRetrospectives(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listRetrospectives, this, publicArgs)); } as unknown as typeof Runtime.listRetrospectives;
+Object.defineProperties(listRetrospectives, { name: { value: "listRetrospectives", configurable: true }, length: { value: 0, configurable: true } });
+export const listReviewQueue = function listReviewQueue(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listReviewQueue, this, publicArgs)); } as unknown as typeof Runtime.listReviewQueue;
+Object.defineProperties(listReviewQueue, { name: { value: "listReviewQueue", configurable: true }, length: { value: 0, configurable: true } });
+export const listReviewRoutingRules = function listReviewRoutingRules(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listReviewRoutingRules, this, publicArgs)); } as unknown as typeof Runtime.listReviewRoutingRules;
+Object.defineProperties(listReviewRoutingRules, { name: { value: "listReviewRoutingRules", configurable: true }, length: { value: 0, configurable: true } });
+export const listRisks = function listRisks(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listRisks, this, publicArgs)); } as unknown as typeof Runtime.listRisks;
+Object.defineProperties(listRisks, { name: { value: "listRisks", configurable: true }, length: { value: 0, configurable: true } });
+export const listRoadmaps = function listRoadmaps(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listRoadmaps, this, publicArgs)); } as unknown as typeof Runtime.listRoadmaps;
+Object.defineProperties(listRoadmaps, { name: { value: "listRoadmaps", configurable: true }, length: { value: 0, configurable: true } });
+export const listRunRecords = function listRunRecords(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listRunRecords, this, publicArgs)); } as unknown as typeof Runtime.listRunRecords;
+Object.defineProperties(listRunRecords, { name: { value: "listRunRecords", configurable: true }, length: { value: 0, configurable: true } });
+export const listRunnerSandboxProfiles = function listRunnerSandboxProfiles(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listRunnerSandboxProfiles, this, publicArgs)); } as unknown as typeof Runtime.listRunnerSandboxProfiles;
+Object.defineProperties(listRunnerSandboxProfiles, { name: { value: "listRunnerSandboxProfiles", configurable: true }, length: { value: 0, configurable: true } });
+export const listSavedViews = function listSavedViews(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listSavedViews, this, publicArgs)); } as unknown as typeof Runtime.listSavedViews;
+Object.defineProperties(listSavedViews, { name: { value: "listSavedViews", configurable: true }, length: { value: 1, configurable: true } });
+export const listSdkIntegrationExamples = function listSdkIntegrationExamples(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listSdkIntegrationExamples, this, publicArgs)); } as unknown as typeof Runtime.listSdkIntegrationExamples;
+Object.defineProperties(listSdkIntegrationExamples, { name: { value: "listSdkIntegrationExamples", configurable: true }, length: { value: 0, configurable: true } });
+export const listSearchViews = function listSearchViews(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listSearchViews, this, publicArgs)); } as unknown as typeof Runtime.listSearchViews;
+Object.defineProperties(listSearchViews, { name: { value: "listSearchViews", configurable: true }, length: { value: 2, configurable: true } });
+export const listSecretFindings = function listSecretFindings(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listSecretFindings, this, publicArgs)); } as unknown as typeof Runtime.listSecretFindings;
+Object.defineProperties(listSecretFindings, { name: { value: "listSecretFindings", configurable: true }, length: { value: 1, configurable: true } });
+export const listSessions = function listSessions(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listSessions, this, publicArgs)); } as unknown as typeof Runtime.listSessions;
+Object.defineProperties(listSessions, { name: { value: "listSessions", configurable: true }, length: { value: 1, configurable: true } });
+export const listSnapshots = function listSnapshots(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listSnapshots, this, publicArgs)); } as unknown as typeof Runtime.listSnapshots;
+Object.defineProperties(listSnapshots, { name: { value: "listSnapshots", configurable: true }, length: { value: 2, configurable: true } });
+export const listSubscriptions = function listSubscriptions(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listSubscriptions, this, publicArgs)); } as unknown as typeof Runtime.listSubscriptions;
+Object.defineProperties(listSubscriptions, { name: { value: "listSubscriptions", configurable: true }, length: { value: 1, configurable: true } });
+export const listTaskBoards = function listTaskBoards(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listTaskBoards, this, publicArgs)); } as unknown as typeof Runtime.listTaskBoards;
+Object.defineProperties(listTaskBoards, { name: { value: "listTaskBoards", configurable: true }, length: { value: 0, configurable: true } });
+export const listTaskFiles = function listTaskFiles(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listTaskFiles, this, publicArgs)); } as unknown as typeof Runtime.listTaskFiles;
+Object.defineProperties(listTaskFiles, { name: { value: "listTaskFiles", configurable: true }, length: { value: 2, configurable: true } });
+export const listTaskFindings = function listTaskFindings(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listTaskFindings, this, publicArgs)); } as unknown as typeof Runtime.listTaskFindings;
+Object.defineProperties(listTaskFindings, { name: { value: "listTaskFindings", configurable: true }, length: { value: 0, configurable: true } });
+export const listTaskLists = function listTaskLists(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listTaskLists, this, publicArgs)); } as unknown as typeof Runtime.listTaskLists;
+Object.defineProperties(listTaskLists, { name: { value: "listTaskLists", configurable: true }, length: { value: 2, configurable: true } });
+export const listTaskRuns = function listTaskRuns(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listTaskRuns, this, publicArgs)); } as unknown as typeof Runtime.listTaskRuns;
+Object.defineProperties(listTaskRuns, { name: { value: "listTaskRuns", configurable: true }, length: { value: 2, configurable: true } });
+export const listTasks = function listTasks(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listTasks, this, publicArgs)); } as unknown as typeof Runtime.listTasks;
+Object.defineProperties(listTasks, { name: { value: "listTasks", configurable: true }, length: { value: 0, configurable: true } });
+export const listTemplateLibrary = function listTemplateLibrary(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listTemplateLibrary, this, publicArgs)); } as unknown as typeof Runtime.listTemplateLibrary;
+Object.defineProperties(listTemplateLibrary, { name: { value: "listTemplateLibrary", configurable: true }, length: { value: 1, configurable: true } });
+export const listTemplateVersions = function listTemplateVersions(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listTemplateVersions, this, publicArgs)); } as unknown as typeof Runtime.listTemplateVersions;
+Object.defineProperties(listTemplateVersions, { name: { value: "listTemplateVersions", configurable: true }, length: { value: 2, configurable: true } });
+export const listTemplates = function listTemplates(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listTemplates, this, publicArgs)); } as unknown as typeof Runtime.listTemplates;
+Object.defineProperties(listTemplates, { name: { value: "listTemplates", configurable: true }, length: { value: 1, configurable: true } });
+export const listTerminalNotificationRules = function listTerminalNotificationRules(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listTerminalNotificationRules, this, publicArgs)); } as unknown as typeof Runtime.listTerminalNotificationRules;
+Object.defineProperties(listTerminalNotificationRules, { name: { value: "listTerminalNotificationRules", configurable: true }, length: { value: 0, configurable: true } });
+export const listTopLevelCommands = function listTopLevelCommands(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listTopLevelCommands, this, publicArgs)); } as unknown as typeof Runtime.listTopLevelCommands;
+Object.defineProperties(listTopLevelCommands, { name: { value: "listTopLevelCommands", configurable: true }, length: { value: 0, configurable: true } });
+export const listUserScaffolds = function listUserScaffolds(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listUserScaffolds, this, publicArgs)); } as unknown as typeof Runtime.listUserScaffolds;
+Object.defineProperties(listUserScaffolds, { name: { value: "listUserScaffolds", configurable: true }, length: { value: 2, configurable: true } });
+export const listVerificationEvidence = function listVerificationEvidence(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listVerificationEvidence, this, publicArgs)); } as unknown as typeof Runtime.listVerificationEvidence;
+Object.defineProperties(listVerificationEvidence, { name: { value: "listVerificationEvidence", configurable: true }, length: { value: 0, configurable: true } });
+export const listVerificationProviders = function listVerificationProviders(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listVerificationProviders, this, publicArgs)); } as unknown as typeof Runtime.listVerificationProviders;
+Object.defineProperties(listVerificationProviders, { name: { value: "listVerificationProviders", configurable: true }, length: { value: 0, configurable: true } });
+export const listVerificationRecords = function listVerificationRecords(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listVerificationRecords, this, publicArgs)); } as unknown as typeof Runtime.listVerificationRecords;
+Object.defineProperties(listVerificationRecords, { name: { value: "listVerificationRecords", configurable: true }, length: { value: 0, configurable: true } });
+export const listWebhooks = function listWebhooks(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listWebhooks, this, publicArgs)); } as unknown as typeof Runtime.listWebhooks;
+Object.defineProperties(listWebhooks, { name: { value: "listWebhooks", configurable: true }, length: { value: 1, configurable: true } });
+export const listWorkflowPrompts = function listWorkflowPrompts(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listWorkflowPrompts, this, publicArgs)); } as unknown as typeof Runtime.listWorkflowPrompts;
+Object.defineProperties(listWorkflowPrompts, { name: { value: "listWorkflowPrompts", configurable: true }, length: { value: 0, configurable: true } });
+export const listWorkflowStates = function listWorkflowStates(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listWorkflowStates, this, publicArgs)); } as unknown as typeof Runtime.listWorkflowStates;
+Object.defineProperties(listWorkflowStates, { name: { value: "listWorkflowStates", configurable: true }, length: { value: 1, configurable: true } });
+export const listWorkspaceTrustProfiles = function listWorkspaceTrustProfiles(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().listWorkspaceTrustProfiles, this, publicArgs)); } as unknown as typeof Runtime.listWorkspaceTrustProfiles;
+Object.defineProperties(listWorkspaceTrustProfiles, { name: { value: "listWorkspaceTrustProfiles", configurable: true }, length: { value: 0, configurable: true } });
+export const loadAgentAdapters = function loadAgentAdapters(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().loadAgentAdapters, this, publicArgs)); } as unknown as typeof Runtime.loadAgentAdapters;
+Object.defineProperties(loadAgentAdapters, { name: { value: "loadAgentAdapters", configurable: true }, length: { value: 0, configurable: true } });
+export const loadAliasStore = function loadAliasStore(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().loadAliasStore, this, publicArgs)); } as unknown as typeof Runtime.loadAliasStore;
+Object.defineProperties(loadAliasStore, { name: { value: "loadAliasStore", configurable: true }, length: { value: 1, configurable: true } });
+export const loadCiSnapshot = function loadCiSnapshot(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().loadCiSnapshot, this, publicArgs)); } as unknown as typeof Runtime.loadCiSnapshot;
+Object.defineProperties(loadCiSnapshot, { name: { value: "loadCiSnapshot", configurable: true }, length: { value: 1, configurable: true } });
+export const loadConfig = function loadConfig(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().loadConfig, this, publicArgs)); } as unknown as typeof Runtime.loadConfig;
+Object.defineProperties(loadConfig, { name: { value: "loadConfig", configurable: true }, length: { value: 0, configurable: true } });
+export const loadIssueExportFromFile = function loadIssueExportFromFile(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().loadIssueExportFromFile, this, publicArgs)); } as unknown as typeof Runtime.loadIssueExportFromFile;
+Object.defineProperties(loadIssueExportFromFile, { name: { value: "loadIssueExportFromFile", configurable: true }, length: { value: 1, configurable: true } });
+export const loadSandboxProfiles = function loadSandboxProfiles(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().loadSandboxProfiles, this, publicArgs)); } as unknown as typeof Runtime.loadSandboxProfiles;
+Object.defineProperties(loadSandboxProfiles, { name: { value: "loadSandboxProfiles", configurable: true }, length: { value: 0, configurable: true } });
+export const loadStorageConfig = function loadStorageConfig(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().loadStorageConfig, this, publicArgs)); } as unknown as typeof Runtime.loadStorageConfig;
+Object.defineProperties(loadStorageConfig, { name: { value: "loadStorageConfig", configurable: true }, length: { value: 0, configurable: true } });
+export const loadTodosStorageConfig = function loadTodosStorageConfig(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().loadTodosStorageConfig, this, publicArgs)); } as unknown as typeof Runtime.loadTodosStorageConfig;
+Object.defineProperties(loadTodosStorageConfig, { name: { value: "loadTodosStorageConfig", configurable: true }, length: { value: 0, configurable: true } });
+export const loadUserScaffoldStore = function loadUserScaffoldStore(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().loadUserScaffoldStore, this, publicArgs)); } as unknown as typeof Runtime.loadUserScaffoldStore;
+Object.defineProperties(loadUserScaffoldStore, { name: { value: "loadUserScaffoldStore", configurable: true }, length: { value: 1, configurable: true } });
+export const lockTask = function lockTask(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().lockTask, this, publicArgs)); } as unknown as typeof Runtime.lockTask;
+Object.defineProperties(lockTask, { name: { value: "lockTask", configurable: true }, length: { value: 3, configurable: true } });
+export const logActivity = function logActivity(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().logActivity, this, publicArgs)); } as unknown as typeof Runtime.logActivity;
+Object.defineProperties(logActivity, { name: { value: "logActivity", configurable: true }, length: { value: 2, configurable: true } });
+export const logCost = function logCost(this: unknown, a0: any, a1: any, a2: any, a3: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, a3, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().logCost, this, publicArgs)); } as unknown as typeof Runtime.logCost;
+Object.defineProperties(logCost, { name: { value: "logCost", configurable: true }, length: { value: 4, configurable: true } });
+export const logGoalProgress = function logGoalProgress(this: unknown, a0: any, a1: any, a2: any, a3: any, a4: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, a3, a4, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().logGoalProgress, this, publicArgs)); } as unknown as typeof Runtime.logGoalProgress;
+Object.defineProperties(logGoalProgress, { name: { value: "logGoalProgress", configurable: true }, length: { value: 5, configurable: true } });
+export const logProgress = function logProgress(this: unknown, a0: any, a1: any, a2: any, a3: any, a4: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, a3, a4, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().logProgress, this, publicArgs)); } as unknown as typeof Runtime.logProgress;
+Object.defineProperties(logProgress, { name: { value: "logProgress", configurable: true }, length: { value: 5, configurable: true } });
+export const logTaskChange = function logTaskChange(this: unknown, a0: any, a1: any, a2: any, a3: any, a4: any, a5: any, a6: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, a3, a4, a5, a6, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().logTaskChange, this, publicArgs)); } as unknown as typeof Runtime.logTaskChange;
+Object.defineProperties(logTaskChange, { name: { value: "logTaskChange", configurable: true }, length: { value: 7, configurable: true } });
+export const logTime = function logTime(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().logTime, this, publicArgs)); } as unknown as typeof Runtime.logTime;
+Object.defineProperties(logTime, { name: { value: "logTime", configurable: true }, length: { value: 2, configurable: true } });
+export const logTrace = function logTrace(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().logTrace, this, publicArgs)); } as unknown as typeof Runtime.logTrace;
+Object.defineProperties(logTrace, { name: { value: "logTrace", configurable: true }, length: { value: 2, configurable: true } });
+export const looksSensitiveKey = function looksSensitiveKey(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().looksSensitiveKey, this, publicArgs)); } as unknown as typeof Runtime.looksSensitiveKey;
+Object.defineProperties(looksSensitiveKey, { name: { value: "looksSensitiveKey", configurable: true }, length: { value: 1, configurable: true } });
+export const matchCapabilities = function matchCapabilities(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().matchCapabilities, this, publicArgs)); } as unknown as typeof Runtime.matchCapabilities;
+Object.defineProperties(matchCapabilities, { name: { value: "matchCapabilities", configurable: true }, length: { value: 2, configurable: true } });
+export const materializePlanSteps = function materializePlanSteps(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().materializePlanSteps, this, publicArgs)); } as unknown as typeof Runtime.materializePlanSteps;
+Object.defineProperties(materializePlanSteps, { name: { value: "materializePlanSteps", configurable: true }, length: { value: 2, configurable: true } });
+export const mergeDuplicateTask = function mergeDuplicateTask(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().mergeDuplicateTask, this, publicArgs)); } as unknown as typeof Runtime.mergeDuplicateTask;
+Object.defineProperties(mergeDuplicateTask, { name: { value: "mergeDuplicateTask", configurable: true }, length: { value: 2, configurable: true } });
+export const migrateWorkflowStates = function migrateWorkflowStates(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().migrateWorkflowStates, this, publicArgs)); } as unknown as typeof Runtime.migrateWorkflowStates;
+Object.defineProperties(migrateWorkflowStates, { name: { value: "migrateWorkflowStates", configurable: true }, length: { value: 0, configurable: true } });
+export const migrationDryRun = function migrationDryRun(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().migrationDryRun, this, publicArgs)); } as unknown as typeof Runtime.migrationDryRun;
+Object.defineProperties(migrationDryRun, { name: { value: "migrationDryRun", configurable: true }, length: { value: 1, configurable: true } });
+export const moveBoardCard = function moveBoardCard(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().moveBoardCard, this, publicArgs)); } as unknown as typeof Runtime.moveBoardCard;
+Object.defineProperties(moveBoardCard, { name: { value: "moveBoardCard", configurable: true }, length: { value: 2, configurable: true } });
+export const moveTask = function moveTask(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().moveTask, this, publicArgs)); } as unknown as typeof Runtime.moveTask;
+Object.defineProperties(moveTask, { name: { value: "moveTask", configurable: true }, length: { value: 3, configurable: true } });
+export const nextOccurrence = function nextOccurrence(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().nextOccurrence, this, publicArgs)); } as unknown as typeof Runtime.nextOccurrence;
+Object.defineProperties(nextOccurrence, { name: { value: "nextOccurrence", configurable: true }, length: { value: 2, configurable: true } });
+export const nextTaskShortId = function nextTaskShortId(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().nextTaskShortId, this, publicArgs)); } as unknown as typeof Runtime.nextTaskShortId;
+Object.defineProperties(nextTaskShortId, { name: { value: "nextTaskShortId", configurable: true }, length: { value: 2, configurable: true } });
+export const normalizeAdapterHost = function normalizeAdapterHost(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().normalizeAdapterHost, this, publicArgs)); } as unknown as typeof Runtime.normalizeAdapterHost;
+Object.defineProperties(normalizeAdapterHost, { name: { value: "normalizeAdapterHost", configurable: true }, length: { value: 1, configurable: true } });
+export const normalizeAgentWorkflowDemoResult = function normalizeAgentWorkflowDemoResult(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().normalizeAgentWorkflowDemoResult, this, publicArgs)); } as unknown as typeof Runtime.normalizeAgentWorkflowDemoResult;
+Object.defineProperties(normalizeAgentWorkflowDemoResult, { name: { value: "normalizeAgentWorkflowDemoResult", configurable: true }, length: { value: 1, configurable: true } });
+export const normalizeApiUrl = function normalizeApiUrl(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().normalizeApiUrl, this, publicArgs)); } as unknown as typeof Runtime.normalizeApiUrl;
+Object.defineProperties(normalizeApiUrl, { name: { value: "normalizeApiUrl", configurable: true }, length: { value: 1, configurable: true } });
+export const normalizeErrorContract = function normalizeErrorContract(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().normalizeErrorContract, this, publicArgs)); } as unknown as typeof Runtime.normalizeErrorContract;
+Object.defineProperties(normalizeErrorContract, { name: { value: "normalizeErrorContract", configurable: true }, length: { value: 1, configurable: true } });
+export const normalizeFeatureManifest = function normalizeFeatureManifest(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().normalizeFeatureManifest, this, publicArgs)); } as unknown as typeof Runtime.normalizeFeatureManifest;
+Object.defineProperties(normalizeFeatureManifest, { name: { value: "normalizeFeatureManifest", configurable: true }, length: { value: 1, configurable: true } });
+export const normalizeGeneratedAgentNames = function normalizeGeneratedAgentNames(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().normalizeGeneratedAgentNames, this, publicArgs)); } as unknown as typeof Runtime.normalizeGeneratedAgentNames;
+Object.defineProperties(normalizeGeneratedAgentNames, { name: { value: "normalizeGeneratedAgentNames", configurable: true }, length: { value: 1, configurable: true } });
+export const normalizeScope = function normalizeScope(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().normalizeScope, this, publicArgs)); } as unknown as typeof Runtime.normalizeScope;
+Object.defineProperties(normalizeScope, { name: { value: "normalizeScope", configurable: true }, length: { value: 1, configurable: true } });
+export const normalizeTesterIssueReport = function normalizeTesterIssueReport(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().normalizeTesterIssueReport, this, publicArgs)); } as unknown as typeof Runtime.normalizeTesterIssueReport;
+Object.defineProperties(normalizeTesterIssueReport, { name: { value: "normalizeTesterIssueReport", configurable: true }, length: { value: 1, configurable: true } });
+export const normalizeTodosStorageMode = function normalizeTodosStorageMode(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().normalizeTodosStorageMode, this, publicArgs)); } as unknown as typeof Runtime.normalizeTodosStorageMode;
+Object.defineProperties(normalizeTodosStorageMode, { name: { value: "normalizeTodosStorageMode", configurable: true }, length: { value: 1, configurable: true } });
+export const notifyUpcomingDeadlines = function notifyUpcomingDeadlines(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().notifyUpcomingDeadlines, this, publicArgs)); } as unknown as typeof Runtime.notifyUpcomingDeadlines;
+Object.defineProperties(notifyUpcomingDeadlines, { name: { value: "notifyUpcomingDeadlines", configurable: true }, length: { value: 0, configurable: true } });
+export const now = function now(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().now, this, publicArgs)); } as unknown as typeof Runtime.now;
+Object.defineProperties(now, { name: { value: "now", configurable: true }, length: { value: 0, configurable: true } });
+export const objectField = function objectField(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().objectField, this, publicArgs)); } as unknown as typeof Runtime.objectField;
+Object.defineProperties(objectField, { name: { value: "objectField", configurable: true }, length: { value: 1, configurable: true } });
+export const parseCiLog = function parseCiLog(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().parseCiLog, this, publicArgs)); } as unknown as typeof Runtime.parseCiLog;
+Object.defineProperties(parseCiLog, { name: { value: "parseCiLog", configurable: true }, length: { value: 1, configurable: true } });
+export const parseErrorPaste = function parseErrorPaste(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().parseErrorPaste, this, publicArgs)); } as unknown as typeof Runtime.parseErrorPaste;
+Object.defineProperties(parseErrorPaste, { name: { value: "parseErrorPaste", configurable: true }, length: { value: 1, configurable: true } });
+export const parseFeedback = function parseFeedback(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().parseFeedback, this, publicArgs)); } as unknown as typeof Runtime.parseFeedback;
+Object.defineProperties(parseFeedback, { name: { value: "parseFeedback", configurable: true }, length: { value: 1, configurable: true } });
+export const parseGitHubUrl = function parseGitHubUrl(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().parseGitHubUrl, this, publicArgs)); } as unknown as typeof Runtime.parseGitHubUrl;
+Object.defineProperties(parseGitHubUrl, { name: { value: "parseGitHubUrl", configurable: true }, length: { value: 1, configurable: true } });
+export const parseGoalCommand = function parseGoalCommand(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().parseGoalCommand, this, publicArgs)); } as unknown as typeof Runtime.parseGoalCommand;
+Object.defineProperties(parseGoalCommand, { name: { value: "parseGoalCommand", configurable: true }, length: { value: 1, configurable: true } });
+export const parseIssueExport = function parseIssueExport(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().parseIssueExport, this, publicArgs)); } as unknown as typeof Runtime.parseIssueExport;
+Object.defineProperties(parseIssueExport, { name: { value: "parseIssueExport", configurable: true }, length: { value: 1, configurable: true } });
+export const parseNaturalLanguageTask = function parseNaturalLanguageTask(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().parseNaturalLanguageTask, this, publicArgs)); } as unknown as typeof Runtime.parseNaturalLanguageTask;
+Object.defineProperties(parseNaturalLanguageTask, { name: { value: "parseNaturalLanguageTask", configurable: true }, length: { value: 1, configurable: true } });
+export const parsePlanArtifactMarkdown = function parsePlanArtifactMarkdown(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().parsePlanArtifactMarkdown, this, publicArgs)); } as unknown as typeof Runtime.parsePlanArtifactMarkdown;
+Object.defineProperties(parsePlanArtifactMarkdown, { name: { value: "parsePlanArtifactMarkdown", configurable: true }, length: { value: 1, configurable: true } });
+export const parseQuietHours = function parseQuietHours(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().parseQuietHours, this, publicArgs)); } as unknown as typeof Runtime.parseQuietHours;
+Object.defineProperties(parseQuietHours, { name: { value: "parseQuietHours", configurable: true }, length: { value: 1, configurable: true } });
+export const parseRecurrenceRule = function parseRecurrenceRule(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().parseRecurrenceRule, this, publicArgs)); } as unknown as typeof Runtime.parseRecurrenceRule;
+Object.defineProperties(parseRecurrenceRule, { name: { value: "parseRecurrenceRule", configurable: true }, length: { value: 1, configurable: true } });
+export const parseStorageMode = function parseStorageMode(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().parseStorageMode, this, publicArgs)); } as unknown as typeof Runtime.parseStorageMode;
+Object.defineProperties(parseStorageMode, { name: { value: "parseStorageMode", configurable: true }, length: { value: 1, configurable: true } });
+export const parseTmuxTarget = function parseTmuxTarget(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().parseTmuxTarget, this, publicArgs)); } as unknown as typeof Runtime.parseTmuxTarget;
+Object.defineProperties(parseTmuxTarget, { name: { value: "parseTmuxTarget", configurable: true }, length: { value: 1, configurable: true } });
+export const patrolTasks = function patrolTasks(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().patrolTasks, this, publicArgs)); } as unknown as typeof Runtime.patrolTasks;
+Object.defineProperties(patrolTasks, { name: { value: "patrolTasks", configurable: true }, length: { value: 2, configurable: true } });
+export const pauseFocusSession = function pauseFocusSession(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().pauseFocusSession, this, publicArgs)); } as unknown as typeof Runtime.pauseFocusSession;
+Object.defineProperties(pauseFocusSession, { name: { value: "pauseFocusSession", configurable: true }, length: { value: 3, configurable: true } });
+export const pollLocalSnapshots = function pollLocalSnapshots(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().pollLocalSnapshots, this, publicArgs)); } as unknown as typeof Runtime.pollLocalSnapshots;
+Object.defineProperties(pollLocalSnapshots, { name: { value: "pollLocalSnapshots", configurable: true }, length: { value: 0, configurable: true } });
+export const postgresTodosSyncSchemaSql = function postgresTodosSyncSchemaSql(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().postgresTodosSyncSchemaSql, this, publicArgs)); } as unknown as typeof Runtime.postgresTodosSyncSchemaSql;
+Object.defineProperties(postgresTodosSyncSchemaSql, { name: { value: "postgresTodosSyncSchemaSql", configurable: true }, length: { value: 0, configurable: true } });
+export const previewBuiltinTemplate = function previewBuiltinTemplate(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().previewBuiltinTemplate, this, publicArgs)); } as unknown as typeof Runtime.previewBuiltinTemplate;
+Object.defineProperties(previewBuiltinTemplate, { name: { value: "previewBuiltinTemplate", configurable: true }, length: { value: 1, configurable: true } });
+export const previewInboxIntake = function previewInboxIntake(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().previewInboxIntake, this, publicArgs)); } as unknown as typeof Runtime.previewInboxIntake;
+Object.defineProperties(previewInboxIntake, { name: { value: "previewInboxIntake", configurable: true }, length: { value: 2, configurable: true } });
+export const previewInstalledTemplate = function previewInstalledTemplate(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().previewInstalledTemplate, this, publicArgs)); } as unknown as typeof Runtime.previewInstalledTemplate;
+Object.defineProperties(previewInstalledTemplate, { name: { value: "previewInstalledTemplate", configurable: true }, length: { value: 1, configurable: true } });
+export const previewIssueImport = function previewIssueImport(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().previewIssueImport, this, publicArgs)); } as unknown as typeof Runtime.previewIssueImport;
+Object.defineProperties(previewIssueImport, { name: { value: "previewIssueImport", configurable: true }, length: { value: 2, configurable: true } });
+export const previewNaturalLanguageIntake = function previewNaturalLanguageIntake(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().previewNaturalLanguageIntake, this, publicArgs)); } as unknown as typeof Runtime.previewNaturalLanguageIntake;
+Object.defineProperties(previewNaturalLanguageIntake, { name: { value: "previewNaturalLanguageIntake", configurable: true }, length: { value: 2, configurable: true } });
+export const previewNextRecurrence = function previewNextRecurrence(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().previewNextRecurrence, this, publicArgs)); } as unknown as typeof Runtime.previewNextRecurrence;
+Object.defineProperties(previewNextRecurrence, { name: { value: "previewNextRecurrence", configurable: true }, length: { value: 2, configurable: true } });
+export const previewNlIntake = function previewNlIntake(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().previewNlIntake, this, publicArgs)); } as unknown as typeof Runtime.previewNlIntake;
+Object.defineProperties(previewNlIntake, { name: { value: "previewNlIntake", configurable: true }, length: { value: 2, configurable: true } });
+export const previewRetentionCleanup = function previewRetentionCleanup(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().previewRetentionCleanup, this, publicArgs)); } as unknown as typeof Runtime.previewRetentionCleanup;
+Object.defineProperties(previewRetentionCleanup, { name: { value: "previewRetentionCleanup", configurable: true }, length: { value: 2, configurable: true } });
+export const previewSync = function previewSync(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().previewSync, this, publicArgs)); } as unknown as typeof Runtime.previewSync;
+Object.defineProperties(previewSync, { name: { value: "previewSync", configurable: true }, length: { value: 1, configurable: true } });
+export const previewTemplate = function previewTemplate(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().previewTemplate, this, publicArgs)); } as unknown as typeof Runtime.previewTemplate;
+Object.defineProperties(previewTemplate, { name: { value: "previewTemplate", configurable: true }, length: { value: 3, configurable: true } });
+export const previewUserScaffold = function previewUserScaffold(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().previewUserScaffold, this, publicArgs)); } as unknown as typeof Runtime.previewUserScaffold;
+Object.defineProperties(previewUserScaffold, { name: { value: "previewUserScaffold", configurable: true }, length: { value: 1, configurable: true } });
+export const processDueReminders = function processDueReminders(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().processDueReminders, this, publicArgs)); } as unknown as typeof Runtime.processDueReminders;
+Object.defineProperties(processDueReminders, { name: { value: "processDueReminders", configurable: true }, length: { value: 0, configurable: true } });
+export const purgeArtifact = function purgeArtifact(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().purgeArtifact, this, publicArgs)); } as unknown as typeof Runtime.purgeArtifact;
+Object.defineProperties(purgeArtifact, { name: { value: "purgeArtifact", configurable: true }, length: { value: 3, configurable: true } });
+export const queryTasksByLocalFields = function queryTasksByLocalFields(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().queryTasksByLocalFields, this, publicArgs)); } as unknown as typeof Runtime.queryTasksByLocalFields;
+Object.defineProperties(queryTasksByLocalFields, { name: { value: "queryTasksByLocalFields", configurable: true }, length: { value: 2, configurable: true } });
+export const queryTasksByWorkflowState = function queryTasksByWorkflowState(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().queryTasksByWorkflowState, this, publicArgs)); } as unknown as typeof Runtime.queryTasksByWorkflowState;
+Object.defineProperties(queryTasksByWorkflowState, { name: { value: "queryTasksByWorkflowState", configurable: true }, length: { value: 2, configurable: true } });
+export const queueAgentRun = function queueAgentRun(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().queueAgentRun, this, publicArgs)); } as unknown as typeof Runtime.queueAgentRun;
+Object.defineProperties(queueAgentRun, { name: { value: "queueAgentRun", configurable: true }, length: { value: 2, configurable: true } });
+export const readBackupManifest = function readBackupManifest(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().readBackupManifest, this, publicArgs)); } as unknown as typeof Runtime.readBackupManifest;
+Object.defineProperties(readBackupManifest, { name: { value: "readBackupManifest", configurable: true }, length: { value: 1, configurable: true } });
+export const readBundleFile = function readBundleFile(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().readBundleFile, this, publicArgs)); } as unknown as typeof Runtime.readBundleFile;
+Object.defineProperties(readBundleFile, { name: { value: "readBundleFile", configurable: true }, length: { value: 1, configurable: true } });
+export const readEnvironmentSnapshot = function readEnvironmentSnapshot(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().readEnvironmentSnapshot, this, publicArgs)); } as unknown as typeof Runtime.readEnvironmentSnapshot;
+Object.defineProperties(readEnvironmentSnapshot, { name: { value: "readEnvironmentSnapshot", configurable: true }, length: { value: 1, configurable: true } });
+export const readLocalBackupFile = function readLocalBackupFile(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().readLocalBackupFile, this, publicArgs)); } as unknown as typeof Runtime.readLocalBackupFile;
+Object.defineProperties(readLocalBackupFile, { name: { value: "readLocalBackupFile", configurable: true }, length: { value: 1, configurable: true } });
+export const readPlanArtifact = function readPlanArtifact(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().readPlanArtifact, this, publicArgs)); } as unknown as typeof Runtime.readPlanArtifact;
+Object.defineProperties(readPlanArtifact, { name: { value: "readPlanArtifact", configurable: true }, length: { value: 2, configurable: true } });
+export const readTesterIssueReportsPayload = function readTesterIssueReportsPayload(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().readTesterIssueReportsPayload, this, publicArgs)); } as unknown as typeof Runtime.readTesterIssueReportsPayload;
+Object.defineProperties(readTesterIssueReportsPayload, { name: { value: "readTesterIssueReportsPayload", configurable: true }, length: { value: 1, configurable: true } });
+export const recordEnvironmentSnapshot = function recordEnvironmentSnapshot(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().recordEnvironmentSnapshot, this, publicArgs)); } as unknown as typeof Runtime.recordEnvironmentSnapshot;
+Object.defineProperties(recordEnvironmentSnapshot, { name: { value: "recordEnvironmentSnapshot", configurable: true }, length: { value: 0, configurable: true } });
+export const recordFilesTouched = function recordFilesTouched(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().recordFilesTouched, this, publicArgs)); } as unknown as typeof Runtime.recordFilesTouched;
+Object.defineProperties(recordFilesTouched, { name: { value: "recordFilesTouched", configurable: true }, length: { value: 3, configurable: true } });
+export const recordTaskReview = function recordTaskReview(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().recordTaskReview, this, publicArgs)); } as unknown as typeof Runtime.recordTaskReview;
+Object.defineProperties(recordTaskReview, { name: { value: "recordTaskReview", configurable: true }, length: { value: 2, configurable: true } });
+export const recoverStaleLeases = function recoverStaleLeases(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().recoverStaleLeases, this, publicArgs)); } as unknown as typeof Runtime.recoverStaleLeases;
+Object.defineProperties(recoverStaleLeases, { name: { value: "recoverStaleLeases", configurable: true }, length: { value: 0, configurable: true } });
+export const redactActivityRecord = function redactActivityRecord(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().redactActivityRecord, this, publicArgs)); } as unknown as typeof Runtime.redactActivityRecord;
+Object.defineProperties(redactActivityRecord, { name: { value: "redactActivityRecord", configurable: true }, length: { value: 1, configurable: true } });
+export const redactCommentContent = function redactCommentContent(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().redactCommentContent, this, publicArgs)); } as unknown as typeof Runtime.redactCommentContent;
+Object.defineProperties(redactCommentContent, { name: { value: "redactCommentContent", configurable: true }, length: { value: 1, configurable: true } });
+export const redactDatabaseUrl = function redactDatabaseUrl(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().redactDatabaseUrl, this, publicArgs)); } as unknown as typeof Runtime.redactDatabaseUrl;
+Object.defineProperties(redactDatabaseUrl, { name: { value: "redactDatabaseUrl", configurable: true }, length: { value: 1, configurable: true } });
+export const redactEvidenceText = function redactEvidenceText(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().redactEvidenceText, this, publicArgs)); } as unknown as typeof Runtime.redactEvidenceText;
+Object.defineProperties(redactEvidenceText, { name: { value: "redactEvidenceText", configurable: true }, length: { value: 1, configurable: true } });
+export const redactExportRecord = function redactExportRecord(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().redactExportRecord, this, publicArgs)); } as unknown as typeof Runtime.redactExportRecord;
+Object.defineProperties(redactExportRecord, { name: { value: "redactExportRecord", configurable: true }, length: { value: 1, configurable: true } });
+export const redactHandoffPayload = function redactHandoffPayload(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().redactHandoffPayload, this, publicArgs)); } as unknown as typeof Runtime.redactHandoffPayload;
+Object.defineProperties(redactHandoffPayload, { name: { value: "redactHandoffPayload", configurable: true }, length: { value: 1, configurable: true } });
+export const redactText = function redactText(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().redactText, this, publicArgs)); } as unknown as typeof Runtime.redactText;
+Object.defineProperties(redactText, { name: { value: "redactText", configurable: true }, length: { value: 1, configurable: true } });
+export const redactValue = function redactValue(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().redactValue, this, publicArgs)); } as unknown as typeof Runtime.redactValue;
+Object.defineProperties(redactValue, { name: { value: "redactValue", configurable: true }, length: { value: 1, configurable: true } });
+export const redistributeStaleTasks = function redistributeStaleTasks(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().redistributeStaleTasks, this, publicArgs)); } as unknown as typeof Runtime.redistributeStaleTasks;
+Object.defineProperties(redistributeStaleTasks, { name: { value: "redistributeStaleTasks", configurable: true }, length: { value: 3, configurable: true } });
+export const registerAgent = function registerAgent(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().registerAgent, this, publicArgs)); } as unknown as typeof Runtime.registerAgent;
+Object.defineProperties(registerAgent, { name: { value: "registerAgent", configurable: true }, length: { value: 2, configurable: true } });
+export const registerCustomRedactor = function registerCustomRedactor(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().registerCustomRedactor, this, publicArgs)); } as unknown as typeof Runtime.registerCustomRedactor;
+Object.defineProperties(registerCustomRedactor, { name: { value: "registerCustomRedactor", configurable: true }, length: { value: 1, configurable: true } });
+export const registerLocalMachine = function registerLocalMachine(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().registerLocalMachine, this, publicArgs)); } as unknown as typeof Runtime.registerLocalMachine;
+Object.defineProperties(registerLocalMachine, { name: { value: "registerLocalMachine", configurable: true }, length: { value: 1, configurable: true } });
+export const registerMachine = function registerMachine(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().registerMachine, this, publicArgs)); } as unknown as typeof Runtime.registerMachine;
+Object.defineProperties(registerMachine, { name: { value: "registerMachine", configurable: true }, length: { value: 3, configurable: true } });
+export const rejectApprovalGate = function rejectApprovalGate(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().rejectApprovalGate, this, publicArgs)); } as unknown as typeof Runtime.rejectApprovalGate;
+Object.defineProperties(rejectApprovalGate, { name: { value: "rejectApprovalGate", configurable: true }, length: { value: 2, configurable: true } });
+export const releaseAgent = function releaseAgent(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().releaseAgent, this, publicArgs)); } as unknown as typeof Runtime.releaseAgent;
+Object.defineProperties(releaseAgent, { name: { value: "releaseAgent", configurable: true }, length: { value: 3, configurable: true } });
+export const releaseLock = function releaseLock(this: unknown, a0: any, a1: any, a2: any, a3: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, a3, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().releaseLock, this, publicArgs)); } as unknown as typeof Runtime.releaseLock;
+Object.defineProperties(releaseLock, { name: { value: "releaseLock", configurable: true }, length: { value: 4, configurable: true } });
+export const releaseTaskLease = function releaseTaskLease(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().releaseTaskLease, this, publicArgs)); } as unknown as typeof Runtime.releaseTaskLease;
+Object.defineProperties(releaseTaskLease, { name: { value: "releaseTaskLease", configurable: true }, length: { value: 3, configurable: true } });
+export const removeAgentRunAdapter = function removeAgentRunAdapter(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().removeAgentRunAdapter, this, publicArgs)); } as unknown as typeof Runtime.removeAgentRunAdapter;
+Object.defineProperties(removeAgentRunAdapter, { name: { value: "removeAgentRunAdapter", configurable: true }, length: { value: 1, configurable: true } });
+export const removeCapacityProfile = function removeCapacityProfile(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().removeCapacityProfile, this, publicArgs)); } as unknown as typeof Runtime.removeCapacityProfile;
+Object.defineProperties(removeCapacityProfile, { name: { value: "removeCapacityProfile", configurable: true }, length: { value: 2, configurable: true } });
+export const removeChecklistItem = function removeChecklistItem(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().removeChecklistItem, this, publicArgs)); } as unknown as typeof Runtime.removeChecklistItem;
+Object.defineProperties(removeChecklistItem, { name: { value: "removeChecklistItem", configurable: true }, length: { value: 2, configurable: true } });
+export const removeDependency = function removeDependency(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().removeDependency, this, publicArgs)); } as unknown as typeof Runtime.removeDependency;
+Object.defineProperties(removeDependency, { name: { value: "removeDependency", configurable: true }, length: { value: 3, configurable: true } });
+export const removeEncryptionProfile = function removeEncryptionProfile(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().removeEncryptionProfile, this, publicArgs)); } as unknown as typeof Runtime.removeEncryptionProfile;
+Object.defineProperties(removeEncryptionProfile, { name: { value: "removeEncryptionProfile", configurable: true }, length: { value: 1, configurable: true } });
+export const removeKgEdges = function removeKgEdges(this: unknown, a0: any, a1: any, a2: any, a3: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, a3, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().removeKgEdges, this, publicArgs)); } as unknown as typeof Runtime.removeKgEdges;
+Object.defineProperties(removeKgEdges, { name: { value: "removeKgEdges", configurable: true }, length: { value: 4, configurable: true } });
+export const removeLabelFromTask = function removeLabelFromTask(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().removeLabelFromTask, this, publicArgs)); } as unknown as typeof Runtime.removeLabelFromTask;
+Object.defineProperties(removeLabelFromTask, { name: { value: "removeLabelFromTask", configurable: true }, length: { value: 3, configurable: true } });
+export const removeLocalEventHook = function removeLocalEventHook(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().removeLocalEventHook, this, publicArgs)); } as unknown as typeof Runtime.removeLocalEventHook;
+Object.defineProperties(removeLocalEventHook, { name: { value: "removeLocalEventHook", configurable: true }, length: { value: 1, configurable: true } });
+export const removeLocalExtension = function removeLocalExtension(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().removeLocalExtension, this, publicArgs)); } as unknown as typeof Runtime.removeLocalExtension;
+Object.defineProperties(removeLocalExtension, { name: { value: "removeLocalExtension", configurable: true }, length: { value: 1, configurable: true } });
+export const removeMachineLocalPath = function removeMachineLocalPath(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().removeMachineLocalPath, this, publicArgs)); } as unknown as typeof Runtime.removeMachineLocalPath;
+Object.defineProperties(removeMachineLocalPath, { name: { value: "removeMachineLocalPath", configurable: true }, length: { value: 3, configurable: true } });
+export const removePolicyPack = function removePolicyPack(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().removePolicyPack, this, publicArgs)); } as unknown as typeof Runtime.removePolicyPack;
+Object.defineProperties(removePolicyPack, { name: { value: "removePolicyPack", configurable: true }, length: { value: 1, configurable: true } });
+export const removeProjectSource = function removeProjectSource(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().removeProjectSource, this, publicArgs)); } as unknown as typeof Runtime.removeProjectSource;
+Object.defineProperties(removeProjectSource, { name: { value: "removeProjectSource", configurable: true }, length: { value: 2, configurable: true } });
+export const removeReviewRoutingRule = function removeReviewRoutingRule(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().removeReviewRoutingRule, this, publicArgs)); } as unknown as typeof Runtime.removeReviewRoutingRule;
+Object.defineProperties(removeReviewRoutingRule, { name: { value: "removeReviewRoutingRule", configurable: true }, length: { value: 1, configurable: true } });
+export const removeRunnerSandboxProfile = function removeRunnerSandboxProfile(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().removeRunnerSandboxProfile, this, publicArgs)); } as unknown as typeof Runtime.removeRunnerSandboxProfile;
+Object.defineProperties(removeRunnerSandboxProfile, { name: { value: "removeRunnerSandboxProfile", configurable: true }, length: { value: 1, configurable: true } });
+export const removeTaskFile = function removeTaskFile(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().removeTaskFile, this, publicArgs)); } as unknown as typeof Runtime.removeTaskFile;
+Object.defineProperties(removeTaskFile, { name: { value: "removeTaskFile", configurable: true }, length: { value: 3, configurable: true } });
+export const removeTaskRelationship = function removeTaskRelationship(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().removeTaskRelationship, this, publicArgs)); } as unknown as typeof Runtime.removeTaskRelationship;
+Object.defineProperties(removeTaskRelationship, { name: { value: "removeTaskRelationship", configurable: true }, length: { value: 2, configurable: true } });
+export const removeTaskRelationshipByPair = function removeTaskRelationshipByPair(this: unknown, a0: any, a1: any, a2: any, a3: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, a3, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().removeTaskRelationshipByPair, this, publicArgs)); } as unknown as typeof Runtime.removeTaskRelationshipByPair;
+Object.defineProperties(removeTaskRelationshipByPair, { name: { value: "removeTaskRelationshipByPair", configurable: true }, length: { value: 4, configurable: true } });
+export const removeTerminalNotificationRule = function removeTerminalNotificationRule(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().removeTerminalNotificationRule, this, publicArgs)); } as unknown as typeof Runtime.removeTerminalNotificationRule;
+Object.defineProperties(removeTerminalNotificationRule, { name: { value: "removeTerminalNotificationRule", configurable: true }, length: { value: 1, configurable: true } });
+export const removeVerificationProvider = function removeVerificationProvider(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().removeVerificationProvider, this, publicArgs)); } as unknown as typeof Runtime.removeVerificationProvider;
+Object.defineProperties(removeVerificationProvider, { name: { value: "removeVerificationProvider", configurable: true }, length: { value: 1, configurable: true } });
+export const removeWorkspaceTrustProfile = function removeWorkspaceTrustProfile(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().removeWorkspaceTrustProfile, this, publicArgs)); } as unknown as typeof Runtime.removeWorkspaceTrustProfile;
+Object.defineProperties(removeWorkspaceTrustProfile, { name: { value: "removeWorkspaceTrustProfile", configurable: true }, length: { value: 1, configurable: true } });
+export const renameProject = function renameProject(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().renameProject, this, publicArgs)); } as unknown as typeof Runtime.renameProject;
+Object.defineProperties(renameProject, { name: { value: "renameProject", configurable: true }, length: { value: 3, configurable: true } });
+export const renderAdapterDocMarkdown = function renderAdapterDocMarkdown(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().renderAdapterDocMarkdown, this, publicArgs)); } as unknown as typeof Runtime.renderAdapterDocMarkdown;
+Object.defineProperties(renderAdapterDocMarkdown, { name: { value: "renderAdapterDocMarkdown", configurable: true }, length: { value: 1, configurable: true } });
+export const renderAgentContextPack = function renderAgentContextPack(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().renderAgentContextPack, this, publicArgs)); } as unknown as typeof Runtime.renderAgentContextPack;
+Object.defineProperties(renderAgentContextPack, { name: { value: "renderAgentContextPack", configurable: true }, length: { value: 2, configurable: true } });
+export const renderAgentContextPackCompactMarkdown = function renderAgentContextPackCompactMarkdown(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().renderAgentContextPackCompactMarkdown, this, publicArgs)); } as unknown as typeof Runtime.renderAgentContextPackCompactMarkdown;
+Object.defineProperties(renderAgentContextPackCompactMarkdown, { name: { value: "renderAgentContextPackCompactMarkdown", configurable: true }, length: { value: 1, configurable: true } });
+export const renderAgentContextPackMarkdown = function renderAgentContextPackMarkdown(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().renderAgentContextPackMarkdown, this, publicArgs)); } as unknown as typeof Runtime.renderAgentContextPackMarkdown;
+Object.defineProperties(renderAgentContextPackMarkdown, { name: { value: "renderAgentContextPackMarkdown", configurable: true }, length: { value: 1, configurable: true } });
+export const renderAgentReliabilityMarkdown = function renderAgentReliabilityMarkdown(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().renderAgentReliabilityMarkdown, this, publicArgs)); } as unknown as typeof Runtime.renderAgentReliabilityMarkdown;
+Object.defineProperties(renderAgentReliabilityMarkdown, { name: { value: "renderAgentReliabilityMarkdown", configurable: true }, length: { value: 1, configurable: true } });
+export const renderAgentReplaySimulationMarkdown = function renderAgentReplaySimulationMarkdown(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().renderAgentReplaySimulationMarkdown, this, publicArgs)); } as unknown as typeof Runtime.renderAgentReplaySimulationMarkdown;
+Object.defineProperties(renderAgentReplaySimulationMarkdown, { name: { value: "renderAgentReplaySimulationMarkdown", configurable: true }, length: { value: 1, configurable: true } });
+export const renderAllAdapterDocsMarkdown = function renderAllAdapterDocsMarkdown(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().renderAllAdapterDocsMarkdown, this, publicArgs)); } as unknown as typeof Runtime.renderAllAdapterDocsMarkdown;
+Object.defineProperties(renderAllAdapterDocsMarkdown, { name: { value: "renderAllAdapterDocsMarkdown", configurable: true }, length: { value: 0, configurable: true } });
+export const renderCliManualMarkdown = function renderCliManualMarkdown(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().renderCliManualMarkdown, this, publicArgs)); } as unknown as typeof Runtime.renderCliManualMarkdown;
+Object.defineProperties(renderCliManualMarkdown, { name: { value: "renderCliManualMarkdown", configurable: true }, length: { value: 1, configurable: true } });
+export const renderExtensionSummary = function renderExtensionSummary(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().renderExtensionSummary, this, publicArgs)); } as unknown as typeof Runtime.renderExtensionSummary;
+Object.defineProperties(renderExtensionSummary, { name: { value: "renderExtensionSummary", configurable: true }, length: { value: 1, configurable: true } });
+export const renderKnowledgeExportMarkdown = function renderKnowledgeExportMarkdown(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().renderKnowledgeExportMarkdown, this, publicArgs)); } as unknown as typeof Runtime.renderKnowledgeExportMarkdown;
+Object.defineProperties(renderKnowledgeExportMarkdown, { name: { value: "renderKnowledgeExportMarkdown", configurable: true }, length: { value: 1, configurable: true } });
+export const renderLocalAuditLedgerMarkdown = function renderLocalAuditLedgerMarkdown(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().renderLocalAuditLedgerMarkdown, this, publicArgs)); } as unknown as typeof Runtime.renderLocalAuditLedgerMarkdown;
+Object.defineProperties(renderLocalAuditLedgerMarkdown, { name: { value: "renderLocalAuditLedgerMarkdown", configurable: true }, length: { value: 1, configurable: true } });
+export const renderLocalReportMarkdown = function renderLocalReportMarkdown(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().renderLocalReportMarkdown, this, publicArgs)); } as unknown as typeof Runtime.renderLocalReportMarkdown;
+Object.defineProperties(renderLocalReportMarkdown, { name: { value: "renderLocalReportMarkdown", configurable: true }, length: { value: 1, configurable: true } });
+export const renderLocalSnapshotMarkdown = function renderLocalSnapshotMarkdown(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().renderLocalSnapshotMarkdown, this, publicArgs)); } as unknown as typeof Runtime.renderLocalSnapshotMarkdown;
+Object.defineProperties(renderLocalSnapshotMarkdown, { name: { value: "renderLocalSnapshotMarkdown", configurable: true }, length: { value: 1, configurable: true } });
+export const renderLocalUsageLedgerMarkdown = function renderLocalUsageLedgerMarkdown(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().renderLocalUsageLedgerMarkdown, this, publicArgs)); } as unknown as typeof Runtime.renderLocalUsageLedgerMarkdown;
+Object.defineProperties(renderLocalUsageLedgerMarkdown, { name: { value: "renderLocalUsageLedgerMarkdown", configurable: true }, length: { value: 1, configurable: true } });
+export const renderPlanArtifactMarkdown = function renderPlanArtifactMarkdown(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().renderPlanArtifactMarkdown, this, publicArgs)); } as unknown as typeof Runtime.renderPlanArtifactMarkdown;
+Object.defineProperties(renderPlanArtifactMarkdown, { name: { value: "renderPlanArtifactMarkdown", configurable: true }, length: { value: 1, configurable: true } });
+export const renderPlanningForecastMarkdown = function renderPlanningForecastMarkdown(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().renderPlanningForecastMarkdown, this, publicArgs)); } as unknown as typeof Runtime.renderPlanningForecastMarkdown;
+Object.defineProperties(renderPlanningForecastMarkdown, { name: { value: "renderPlanningForecastMarkdown", configurable: true }, length: { value: 1, configurable: true } });
+export const renderReleaseCompatibilityMarkdown = function renderReleaseCompatibilityMarkdown(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().renderReleaseCompatibilityMarkdown, this, publicArgs)); } as unknown as typeof Runtime.renderReleaseCompatibilityMarkdown;
+Object.defineProperties(renderReleaseCompatibilityMarkdown, { name: { value: "renderReleaseCompatibilityMarkdown", configurable: true }, length: { value: 1, configurable: true } });
+export const renderReleaseNotesMarkdown = function renderReleaseNotesMarkdown(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().renderReleaseNotesMarkdown, this, publicArgs)); } as unknown as typeof Runtime.renderReleaseNotesMarkdown;
+Object.defineProperties(renderReleaseNotesMarkdown, { name: { value: "renderReleaseNotesMarkdown", configurable: true }, length: { value: 1, configurable: true } });
+export const renderRetrospectiveMarkdown = function renderRetrospectiveMarkdown(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().renderRetrospectiveMarkdown, this, publicArgs)); } as unknown as typeof Runtime.renderRetrospectiveMarkdown;
+Object.defineProperties(renderRetrospectiveMarkdown, { name: { value: "renderRetrospectiveMarkdown", configurable: true }, length: { value: 1, configurable: true } });
+export const renderRiskRegisterMarkdown = function renderRiskRegisterMarkdown(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().renderRiskRegisterMarkdown, this, publicArgs)); } as unknown as typeof Runtime.renderRiskRegisterMarkdown;
+Object.defineProperties(renderRiskRegisterMarkdown, { name: { value: "renderRiskRegisterMarkdown", configurable: true }, length: { value: 1, configurable: true } });
+export const renderRoadmapMarkdown = function renderRoadmapMarkdown(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().renderRoadmapMarkdown, this, publicArgs)); } as unknown as typeof Runtime.renderRoadmapMarkdown;
+Object.defineProperties(renderRoadmapMarkdown, { name: { value: "renderRoadmapMarkdown", configurable: true }, length: { value: 2, configurable: true } });
+export const renderScalePerformanceReportMarkdown = function renderScalePerformanceReportMarkdown(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().renderScalePerformanceReportMarkdown, this, publicArgs)); } as unknown as typeof Runtime.renderScalePerformanceReportMarkdown;
+Object.defineProperties(renderScalePerformanceReportMarkdown, { name: { value: "renderScalePerformanceReportMarkdown", configurable: true }, length: { value: 1, configurable: true } });
+export const renderTaskBoard = function renderTaskBoard(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().renderTaskBoard, this, publicArgs)); } as unknown as typeof Runtime.renderTaskBoard;
+Object.defineProperties(renderTaskBoard, { name: { value: "renderTaskBoard", configurable: true }, length: { value: 1, configurable: true } });
+export const renderTerminalNotification = function renderTerminalNotification(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().renderTerminalNotification, this, publicArgs)); } as unknown as typeof Runtime.renderTerminalNotification;
+Object.defineProperties(renderTerminalNotification, { name: { value: "renderTerminalNotification", configurable: true }, length: { value: 1, configurable: true } });
+export const renderTuiDashboardSnapshot = function renderTuiDashboardSnapshot(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().renderTuiDashboardSnapshot, this, publicArgs)); } as unknown as typeof Runtime.renderTuiDashboardSnapshot;
+Object.defineProperties(renderTuiDashboardSnapshot, { name: { value: "renderTuiDashboardSnapshot", configurable: true }, length: { value: 1, configurable: true } });
+export const renderWorkflowPrompt = function renderWorkflowPrompt(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().renderWorkflowPrompt, this, publicArgs)); } as unknown as typeof Runtime.renderWorkflowPrompt;
+Object.defineProperties(renderWorkflowPrompt, { name: { value: "renderWorkflowPrompt", configurable: true }, length: { value: 1, configurable: true } });
+export const renderWorkflowPromptMarkdown = function renderWorkflowPromptMarkdown(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().renderWorkflowPromptMarkdown, this, publicArgs)); } as unknown as typeof Runtime.renderWorkflowPromptMarkdown;
+Object.defineProperties(renderWorkflowPromptMarkdown, { name: { value: "renderWorkflowPromptMarkdown", configurable: true }, length: { value: 1, configurable: true } });
+export const renderWorkflowStatesMarkdown = function renderWorkflowStatesMarkdown(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().renderWorkflowStatesMarkdown, this, publicArgs)); } as unknown as typeof Runtime.renderWorkflowStatesMarkdown;
+Object.defineProperties(renderWorkflowStatesMarkdown, { name: { value: "renderWorkflowStatesMarkdown", configurable: true }, length: { value: 0, configurable: true } });
+export const renewTaskLease = function renewTaskLease(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().renewTaskLease, this, publicArgs)); } as unknown as typeof Runtime.renewTaskLease;
+Object.defineProperties(renewTaskLease, { name: { value: "renewTaskLease", configurable: true }, length: { value: 2, configurable: true } });
+export const reopenReviewItem = function reopenReviewItem(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().reopenReviewItem, this, publicArgs)); } as unknown as typeof Runtime.reopenReviewItem;
+Object.defineProperties(reopenReviewItem, { name: { value: "reopenReviewItem", configurable: true }, length: { value: 2, configurable: true } });
+export const requestApprovalGate = function requestApprovalGate(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().requestApprovalGate, this, publicArgs)); } as unknown as typeof Runtime.requestApprovalGate;
+Object.defineProperties(requestApprovalGate, { name: { value: "requestApprovalGate", configurable: true }, length: { value: 2, configurable: true } });
+export const requestReviewQueue = function requestReviewQueue(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().requestReviewQueue, this, publicArgs)); } as unknown as typeof Runtime.requestReviewQueue;
+Object.defineProperties(requestReviewQueue, { name: { value: "requestReviewQueue", configurable: true }, length: { value: 2, configurable: true } });
+export const requestTaskReview = function requestTaskReview(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().requestTaskReview, this, publicArgs)); } as unknown as typeof Runtime.requestTaskReview;
+Object.defineProperties(requestTaskReview, { name: { value: "requestTaskReview", configurable: true }, length: { value: 2, configurable: true } });
+export const resetAgentAdapterCache = function resetAgentAdapterCache(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().resetAgentAdapterCache, this, publicArgs)); } as unknown as typeof Runtime.resetAgentAdapterCache;
+Object.defineProperties(resetAgentAdapterCache, { name: { value: "resetAgentAdapterCache", configurable: true }, length: { value: 0, configurable: true } });
+export const resetCustomRedactors = function resetCustomRedactors(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().resetCustomRedactors, this, publicArgs)); } as unknown as typeof Runtime.resetCustomRedactors;
+Object.defineProperties(resetCustomRedactors, { name: { value: "resetCustomRedactors", configurable: true }, length: { value: 0, configurable: true } });
+export const resetDatabase = function resetDatabase(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().resetDatabase, this, publicArgs)); } as unknown as typeof Runtime.resetDatabase;
+Object.defineProperties(resetDatabase, { name: { value: "resetDatabase", configurable: true }, length: { value: 0, configurable: true } });
+export const resetMachineId = function resetMachineId(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().resetMachineId, this, publicArgs)); } as unknown as typeof Runtime.resetMachineId;
+Object.defineProperties(resetMachineId, { name: { value: "resetMachineId", configurable: true }, length: { value: 0, configurable: true } });
+export const resetSandboxProfileCache = function resetSandboxProfileCache(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().resetSandboxProfileCache, this, publicArgs)); } as unknown as typeof Runtime.resetSandboxProfileCache;
+Object.defineProperties(resetSandboxProfileCache, { name: { value: "resetSandboxProfileCache", configurable: true }, length: { value: 0, configurable: true } });
+export const resetSubscriptions = function resetSubscriptions(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().resetSubscriptions, this, publicArgs)); } as unknown as typeof Runtime.resetSubscriptions;
+Object.defineProperties(resetSubscriptions, { name: { value: "resetSubscriptions", configurable: true }, length: { value: 0, configurable: true } });
+export const resolveAccessProfile = function resolveAccessProfile(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().resolveAccessProfile, this, publicArgs)); } as unknown as typeof Runtime.resolveAccessProfile;
+Object.defineProperties(resolveAccessProfile, { name: { value: "resolveAccessProfile", configurable: true }, length: { value: 1, configurable: true } });
+export const resolveCommandQuery = function resolveCommandQuery(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().resolveCommandQuery, this, publicArgs)); } as unknown as typeof Runtime.resolveCommandQuery;
+Object.defineProperties(resolveCommandQuery, { name: { value: "resolveCommandQuery", configurable: true }, length: { value: 1, configurable: true } });
+export const resolveGitRoot = function resolveGitRoot(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().resolveGitRoot, this, publicArgs)); } as unknown as typeof Runtime.resolveGitRoot;
+Object.defineProperties(resolveGitRoot, { name: { value: "resolveGitRoot", configurable: true }, length: { value: 1, configurable: true } });
+export const resolveMentions = function resolveMentions(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().resolveMentions, this, publicArgs)); } as unknown as typeof Runtime.resolveMentions;
+Object.defineProperties(resolveMentions, { name: { value: "resolveMentions", configurable: true }, length: { value: 2, configurable: true } });
+export const resolveMissingTaskFindings = function resolveMissingTaskFindings(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().resolveMissingTaskFindings, this, publicArgs)); } as unknown as typeof Runtime.resolveMissingTaskFindings;
+Object.defineProperties(resolveMissingTaskFindings, { name: { value: "resolveMissingTaskFindings", configurable: true }, length: { value: 2, configurable: true } });
+export const resolvePartialId = function resolvePartialId(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().resolvePartialId, this, publicArgs)); } as unknown as typeof Runtime.resolvePartialId;
+Object.defineProperties(resolvePartialId, { name: { value: "resolvePartialId", configurable: true }, length: { value: 3, configurable: true } });
+export const resolvePlanArtifactPaths = function resolvePlanArtifactPaths(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().resolvePlanArtifactPaths, this, publicArgs)); } as unknown as typeof Runtime.resolvePlanArtifactPaths;
+Object.defineProperties(resolvePlanArtifactPaths, { name: { value: "resolvePlanArtifactPaths", configurable: true }, length: { value: 1, configurable: true } });
+export const resolvePlanArtifactProject = function resolvePlanArtifactProject(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().resolvePlanArtifactProject, this, publicArgs)); } as unknown as typeof Runtime.resolvePlanArtifactProject;
+Object.defineProperties(resolvePlanArtifactProject, { name: { value: "resolvePlanArtifactProject", configurable: true }, length: { value: 1, configurable: true } });
+export const resolvePlanId = function resolvePlanId(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().resolvePlanId, this, publicArgs)); } as unknown as typeof Runtime.resolvePlanId;
+Object.defineProperties(resolvePlanId, { name: { value: "resolvePlanId", configurable: true }, length: { value: 2, configurable: true } });
+export const resolvePlanRef = function resolvePlanRef(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().resolvePlanRef, this, publicArgs)); } as unknown as typeof Runtime.resolvePlanRef;
+Object.defineProperties(resolvePlanRef, { name: { value: "resolvePlanRef", configurable: true }, length: { value: 2, configurable: true } });
+export const resolveTaskRunId = function resolveTaskRunId(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().resolveTaskRunId, this, publicArgs)); } as unknown as typeof Runtime.resolveTaskRunId;
+Object.defineProperties(resolveTaskRunId, { name: { value: "resolveTaskRunId", configurable: true }, length: { value: 2, configurable: true } });
+export const resolveTodosStorageRole = function resolveTodosStorageRole(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().resolveTodosStorageRole, this, publicArgs)); } as unknown as typeof Runtime.resolveTodosStorageRole;
+Object.defineProperties(resolveTodosStorageRole, { name: { value: "resolveTodosStorageRole", configurable: true }, length: { value: 0, configurable: true } });
+export const resolveVariables = function resolveVariables(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().resolveVariables, this, publicArgs)); } as unknown as typeof Runtime.resolveVariables;
+Object.defineProperties(resolveVariables, { name: { value: "resolveVariables", configurable: true }, length: { value: 2, configurable: true } });
+export const resolveWorkflowState = function resolveWorkflowState(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().resolveWorkflowState, this, publicArgs)); } as unknown as typeof Runtime.resolveWorkflowState;
+Object.defineProperties(resolveWorkflowState, { name: { value: "resolveWorkflowState", configurable: true }, length: { value: 2, configurable: true } });
+export const resourceDiagnostics = function resourceDiagnostics(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().resourceDiagnostics, this, publicArgs)); } as unknown as typeof Runtime.resourceDiagnostics;
+Object.defineProperties(resourceDiagnostics, { name: { value: "resourceDiagnostics", configurable: true }, length: { value: 0, configurable: true } });
+export const restoreDatabase = function restoreDatabase(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().restoreDatabase, this, publicArgs)); } as unknown as typeof Runtime.restoreDatabase;
+Object.defineProperties(restoreDatabase, { name: { value: "restoreDatabase", configurable: true }, length: { value: 2, configurable: true } });
+export const restoreLocalBackup = function restoreLocalBackup(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().restoreLocalBackup, this, publicArgs)); } as unknown as typeof Runtime.restoreLocalBackup;
+Object.defineProperties(restoreLocalBackup, { name: { value: "restoreLocalBackup", configurable: true }, length: { value: 1, configurable: true } });
+export const resumeFocusSession = function resumeFocusSession(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().resumeFocusSession, this, publicArgs)); } as unknown as typeof Runtime.resumeFocusSession;
+Object.defineProperties(resumeFocusSession, { name: { value: "resumeFocusSession", configurable: true }, length: { value: 3, configurable: true } });
+export const retryAgentRun = function retryAgentRun(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().retryAgentRun, this, publicArgs)); } as unknown as typeof Runtime.retryAgentRun;
+Object.defineProperties(retryAgentRun, { name: { value: "retryAgentRun", configurable: true }, length: { value: 2, configurable: true } });
+export const retryAgentRunDispatch = function retryAgentRunDispatch(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().retryAgentRunDispatch, this, publicArgs)); } as unknown as typeof Runtime.retryAgentRunDispatch;
+Object.defineProperties(retryAgentRunDispatch, { name: { value: "retryAgentRunDispatch", configurable: true }, length: { value: 2, configurable: true } });
+export const returnReviewItem = function returnReviewItem(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().returnReviewItem, this, publicArgs)); } as unknown as typeof Runtime.returnReviewItem;
+Object.defineProperties(returnReviewItem, { name: { value: "returnReviewItem", configurable: true }, length: { value: 2, configurable: true } });
+export const revokeApiKey = function revokeApiKey(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().revokeApiKey, this, publicArgs)); } as unknown as typeof Runtime.revokeApiKey;
+Object.defineProperties(revokeApiKey, { name: { value: "revokeApiKey", configurable: true }, length: { value: 2, configurable: true } });
+export const routeEnabledForTask = function routeEnabledForTask(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().routeEnabledForTask, this, publicArgs)); } as unknown as typeof Runtime.routeEnabledForTask;
+Object.defineProperties(routeEnabledForTask, { name: { value: "routeEnabledForTask", configurable: true }, length: { value: 2, configurable: true } });
+export const routingAutomationMetadata = function routingAutomationMetadata(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().routingAutomationMetadata, this, publicArgs)); } as unknown as typeof Runtime.routingAutomationMetadata;
+Object.defineProperties(routingAutomationMetadata, { name: { value: "routingAutomationMetadata", configurable: true }, length: { value: 2, configurable: true } });
+export const runAgentWorkflowDemo = function runAgentWorkflowDemo(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().runAgentWorkflowDemo, this, publicArgs)); } as unknown as typeof Runtime.runAgentWorkflowDemo;
+Object.defineProperties(runAgentWorkflowDemo, { name: { value: "runAgentWorkflowDemo", configurable: true }, length: { value: 0, configurable: true } });
+export const runDueDispatches = async function runDueDispatches(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().runDueDispatches, this, publicArgs)); } as unknown as typeof Runtime.runDueDispatches;
+Object.defineProperties(runDueDispatches, { name: { value: "runDueDispatches", configurable: true }, length: { value: 0, configurable: true } });
+export const runNextAgentDispatch = async function runNextAgentDispatch(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().runNextAgentDispatch, this, publicArgs)); } as unknown as typeof Runtime.runNextAgentDispatch;
+Object.defineProperties(runNextAgentDispatch, { name: { value: "runNextAgentDispatch", configurable: true }, length: { value: 0, configurable: true } });
+export const runReleaseChecks = function runReleaseChecks(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().runReleaseChecks, this, publicArgs)); } as unknown as typeof Runtime.runReleaseChecks;
+Object.defineProperties(runReleaseChecks, { name: { value: "runReleaseChecks", configurable: true }, length: { value: 0, configurable: true } });
+export const runSavedSearch = function runSavedSearch(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().runSavedSearch, this, publicArgs)); } as unknown as typeof Runtime.runSavedSearch;
+Object.defineProperties(runSavedSearch, { name: { value: "runSavedSearch", configurable: true }, length: { value: 0, configurable: true } });
+export const runSavedView = function runSavedView(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().runSavedView, this, publicArgs)); } as unknown as typeof Runtime.runSavedView;
+Object.defineProperties(runSavedView, { name: { value: "runSavedView", configurable: true }, length: { value: 1, configurable: true } });
+export const runSearchView = function runSearchView(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().runSearchView, this, publicArgs)); } as unknown as typeof Runtime.runSearchView;
+Object.defineProperties(runSearchView, { name: { value: "runSearchView", configurable: true }, length: { value: 2, configurable: true } });
+export const runTodosDoctor = function runTodosDoctor(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().runTodosDoctor, this, publicArgs)); } as unknown as typeof Runtime.runTodosDoctor;
+Object.defineProperties(runTodosDoctor, { name: { value: "runTodosDoctor", configurable: true }, length: { value: 0, configurable: true } });
+export const runVerificationProvider = async function runVerificationProvider(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().runVerificationProvider, this, publicArgs)); } as unknown as typeof Runtime.runVerificationProvider;
+Object.defineProperties(runVerificationProvider, { name: { value: "runVerificationProvider", configurable: true }, length: { value: 2, configurable: true } });
+export const safeStringify = function safeStringify(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().safeStringify, this, publicArgs)); } as unknown as typeof Runtime.safeStringify;
+Object.defineProperties(safeStringify, { name: { value: "safeStringify", configurable: true }, length: { value: 2, configurable: true } });
+export const saveAgentAdapters = function saveAgentAdapters(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().saveAgentAdapters, this, publicArgs)); } as unknown as typeof Runtime.saveAgentAdapters;
+Object.defineProperties(saveAgentAdapters, { name: { value: "saveAgentAdapters", configurable: true }, length: { value: 1, configurable: true } });
+export const saveAliasStore = function saveAliasStore(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().saveAliasStore, this, publicArgs)); } as unknown as typeof Runtime.saveAliasStore;
+Object.defineProperties(saveAliasStore, { name: { value: "saveAliasStore", configurable: true }, length: { value: 2, configurable: true } });
+export const saveCommandAlias = function saveCommandAlias(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().saveCommandAlias, this, publicArgs)); } as unknown as typeof Runtime.saveCommandAlias;
+Object.defineProperties(saveCommandAlias, { name: { value: "saveCommandAlias", configurable: true }, length: { value: 2, configurable: true } });
+export const saveSandboxProfiles = function saveSandboxProfiles(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().saveSandboxProfiles, this, publicArgs)); } as unknown as typeof Runtime.saveSandboxProfiles;
+Object.defineProperties(saveSandboxProfiles, { name: { value: "saveSandboxProfiles", configurable: true }, length: { value: 1, configurable: true } });
+export const saveSearchView = function saveSearchView(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().saveSearchView, this, publicArgs)); } as unknown as typeof Runtime.saveSearchView;
+Object.defineProperties(saveSearchView, { name: { value: "saveSearchView", configurable: true }, length: { value: 2, configurable: true } });
+export const saveSnapshot = function saveSnapshot(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().saveSnapshot, this, publicArgs)); } as unknown as typeof Runtime.saveSnapshot;
+Object.defineProperties(saveSnapshot, { name: { value: "saveSnapshot", configurable: true }, length: { value: 2, configurable: true } });
+export const saveUserScaffoldStore = function saveUserScaffoldStore(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().saveUserScaffoldStore, this, publicArgs)); } as unknown as typeof Runtime.saveUserScaffoldStore;
+Object.defineProperties(saveUserScaffoldStore, { name: { value: "saveUserScaffoldStore", configurable: true }, length: { value: 2, configurable: true } });
+export const scanAndRedactText = function scanAndRedactText(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().scanAndRedactText, this, publicArgs)); } as unknown as typeof Runtime.scanAndRedactText;
+Object.defineProperties(scanAndRedactText, { name: { value: "scanAndRedactText", configurable: true }, length: { value: 1, configurable: true } });
+export const scanDistArtifacts = function scanDistArtifacts(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().scanDistArtifacts, this, publicArgs)); } as unknown as typeof Runtime.scanDistArtifacts;
+Object.defineProperties(scanDistArtifacts, { name: { value: "scanDistArtifacts", configurable: true }, length: { value: 1, configurable: true } });
+export const scanFileForSecrets = function scanFileForSecrets(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().scanFileForSecrets, this, publicArgs)); } as unknown as typeof Runtime.scanFileForSecrets;
+Object.defineProperties(scanFileForSecrets, { name: { value: "scanFileForSecrets", configurable: true }, length: { value: 1, configurable: true } });
+export const scanReminders = function scanReminders(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().scanReminders, this, publicArgs)); } as unknown as typeof Runtime.scanReminders;
+Object.defineProperties(scanReminders, { name: { value: "scanReminders", configurable: true }, length: { value: 0, configurable: true } });
+export const scanSourceForForbiddenWebPatterns = function scanSourceForForbiddenWebPatterns(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().scanSourceForForbiddenWebPatterns, this, publicArgs)); } as unknown as typeof Runtime.scanSourceForForbiddenWebPatterns;
+Object.defineProperties(scanSourceForForbiddenWebPatterns, { name: { value: "scanSourceForForbiddenWebPatterns", configurable: true }, length: { value: 2, configurable: true } });
+export const scanTextForSecrets = function scanTextForSecrets(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().scanTextForSecrets, this, publicArgs)); } as unknown as typeof Runtime.scanTextForSecrets;
+Object.defineProperties(scanTextForSecrets, { name: { value: "scanTextForSecrets", configurable: true }, length: { value: 1, configurable: true } });
+export const scheduleTask = function scheduleTask(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().scheduleTask, this, publicArgs)); } as unknown as typeof Runtime.scheduleTask;
+Object.defineProperties(scheduleTask, { name: { value: "scheduleTask", configurable: true }, length: { value: 3, configurable: true } });
+export const scorePlanHealth = function scorePlanHealth(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().scorePlanHealth, this, publicArgs)); } as unknown as typeof Runtime.scorePlanHealth;
+Object.defineProperties(scorePlanHealth, { name: { value: "scorePlanHealth", configurable: true }, length: { value: 2, configurable: true } });
+export const scoreProjectHealth = function scoreProjectHealth(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().scoreProjectHealth, this, publicArgs)); } as unknown as typeof Runtime.scoreProjectHealth;
+Object.defineProperties(scoreProjectHealth, { name: { value: "scoreProjectHealth", configurable: true }, length: { value: 2, configurable: true } });
+export const scoreTask = function scoreTask(this: unknown, a0: any, a1: any, a2: any, a3: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, a3, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().scoreTask, this, publicArgs)); } as unknown as typeof Runtime.scoreTask;
+Object.defineProperties(scoreTask, { name: { value: "scoreTask", configurable: true }, length: { value: 4, configurable: true } });
+export const sealLocalAuditLedger = function sealLocalAuditLedger(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().sealLocalAuditLedger, this, publicArgs)); } as unknown as typeof Runtime.sealLocalAuditLedger;
+Object.defineProperties(sealLocalAuditLedger, { name: { value: "sealLocalAuditLedger", configurable: true }, length: { value: 2, configurable: true } });
+export const searchKnowledgeRecords = function searchKnowledgeRecords(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().searchKnowledgeRecords, this, publicArgs)); } as unknown as typeof Runtime.searchKnowledgeRecords;
+Object.defineProperties(searchKnowledgeRecords, { name: { value: "searchKnowledgeRecords", configurable: true }, length: { value: 2, configurable: true } });
+export const searchTasks = function searchTasks(this: unknown, a0: any, a1: any, a2: any, a3: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, a3, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().searchTasks, this, publicArgs)); } as unknown as typeof Runtime.searchTasks;
+Object.defineProperties(searchTasks, { name: { value: "searchTasks", configurable: true }, length: { value: 4, configurable: true } });
+export const sendToTmux = async function sendToTmux(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().sendToTmux, this, publicArgs)); } as unknown as typeof Runtime.sendToTmux;
+Object.defineProperties(sendToTmux, { name: { value: "sendToTmux", configurable: true }, length: { value: 3, configurable: true } });
+export const setActiveModel = function setActiveModel(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().setActiveModel, this, publicArgs)); } as unknown as typeof Runtime.setActiveModel;
+Object.defineProperties(setActiveModel, { name: { value: "setActiveModel", configurable: true }, length: { value: 1, configurable: true } });
+export const setBudget = function setBudget(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().setBudget, this, publicArgs)); } as unknown as typeof Runtime.setBudget;
+Object.defineProperties(setBudget, { name: { value: "setBudget", configurable: true }, length: { value: 3, configurable: true } });
+export const setDecisionStatus = function setDecisionStatus(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().setDecisionStatus, this, publicArgs)); } as unknown as typeof Runtime.setDecisionStatus;
+Object.defineProperties(setDecisionStatus, { name: { value: "setDecisionStatus", configurable: true }, length: { value: 3, configurable: true } });
+export const setMachineLocalPath = function setMachineLocalPath(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().setMachineLocalPath, this, publicArgs)); } as unknown as typeof Runtime.setMachineLocalPath;
+Object.defineProperties(setMachineLocalPath, { name: { value: "setMachineLocalPath", configurable: true }, length: { value: 3, configurable: true } });
+export const setReminderPreferences = function setReminderPreferences(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().setReminderPreferences, this, publicArgs)); } as unknown as typeof Runtime.setReminderPreferences;
+Object.defineProperties(setReminderPreferences, { name: { value: "setReminderPreferences", configurable: true }, length: { value: 2, configurable: true } });
+export const setTaskContract = function setTaskContract(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().setTaskContract, this, publicArgs)); } as unknown as typeof Runtime.setTaskContract;
+Object.defineProperties(setTaskContract, { name: { value: "setTaskContract", configurable: true }, length: { value: 2, configurable: true } });
+export const setTaskCustomField = function setTaskCustomField(this: unknown, a0: any, a1: any, a2: any, a3: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, a3, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().setTaskCustomField, this, publicArgs)); } as unknown as typeof Runtime.setTaskCustomField;
+Object.defineProperties(setTaskCustomField, { name: { value: "setTaskCustomField", configurable: true }, length: { value: 4, configurable: true } });
+export const setTaskLocalFields = function setTaskLocalFields(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().setTaskLocalFields, this, publicArgs)); } as unknown as typeof Runtime.setTaskLocalFields;
+Object.defineProperties(setTaskLocalFields, { name: { value: "setTaskLocalFields", configurable: true }, length: { value: 3, configurable: true } });
+export const setTaskPriority = function setTaskPriority(this: unknown, a0: any, a1: any, a2: any, a3: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, a3, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().setTaskPriority, this, publicArgs)); } as unknown as typeof Runtime.setTaskPriority;
+Object.defineProperties(setTaskPriority, { name: { value: "setTaskPriority", configurable: true }, length: { value: 4, configurable: true } });
+export const setTaskPriorityMeta = function setTaskPriorityMeta(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().setTaskPriorityMeta, this, publicArgs)); } as unknown as typeof Runtime.setTaskPriorityMeta;
+Object.defineProperties(setTaskPriorityMeta, { name: { value: "setTaskPriorityMeta", configurable: true }, length: { value: 3, configurable: true } });
+export const setTaskStatus = function setTaskStatus(this: unknown, a0: any, a1: any, a2: any, a3: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, a3, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().setTaskStatus, this, publicArgs)); } as unknown as typeof Runtime.setTaskStatus;
+Object.defineProperties(setTaskStatus, { name: { value: "setTaskStatus", configurable: true }, length: { value: 4, configurable: true } });
+export const setTaskWorkflowPointers = function setTaskWorkflowPointers(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().setTaskWorkflowPointers, this, publicArgs)); } as unknown as typeof Runtime.setTaskWorkflowPointers;
+Object.defineProperties(setTaskWorkflowPointers, { name: { value: "setTaskWorkflowPointers", configurable: true }, length: { value: 3, configurable: true } });
+export const setTaskWorkflowState = function setTaskWorkflowState(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().setTaskWorkflowState, this, publicArgs)); } as unknown as typeof Runtime.setTaskWorkflowState;
+Object.defineProperties(setTaskWorkflowState, { name: { value: "setTaskWorkflowState", configurable: true }, length: { value: 2, configurable: true } });
+export const setupEphemeralDemoDb = function setupEphemeralDemoDb(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().setupEphemeralDemoDb, this, publicArgs)); } as unknown as typeof Runtime.setupEphemeralDemoDb;
+Object.defineProperties(setupEphemeralDemoDb, { name: { value: "setupEphemeralDemoDb", configurable: true }, length: { value: 0, configurable: true } });
+export const shouldRegisterToolForAccessProfile = function shouldRegisterToolForProfile(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().shouldRegisterToolForAccessProfile, this, publicArgs)); } as unknown as typeof Runtime.shouldRegisterToolForAccessProfile;
+Object.defineProperties(shouldRegisterToolForAccessProfile, { name: { value: "shouldRegisterToolForProfile", configurable: true }, length: { value: 2, configurable: true } });
+export const shouldRegisterToolForProfile = function shouldRegisterToolForProfile(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().shouldRegisterToolForProfile, this, publicArgs)); } as unknown as typeof Runtime.shouldRegisterToolForProfile;
+Object.defineProperties(shouldRegisterToolForProfile, { name: { value: "shouldRegisterToolForProfile", configurable: true }, length: { value: 1, configurable: true } });
+export const signAwsV4Request = function signAwsV4Request(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().signAwsV4Request, this, publicArgs)); } as unknown as typeof Runtime.signAwsV4Request;
+Object.defineProperties(signAwsV4Request, { name: { value: "signAwsV4Request", configurable: true }, length: { value: 1, configurable: true } });
+export const simulateAgentReplay = function simulateAgentReplay(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().simulateAgentReplay, this, publicArgs)); } as unknown as typeof Runtime.simulateAgentReplay;
+Object.defineProperties(simulateAgentReplay, { name: { value: "simulateAgentReplay", configurable: true }, length: { value: 1, configurable: true } });
+export const simulateAgentReplayFile = function simulateAgentReplayFile(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().simulateAgentReplayFile, this, publicArgs)); } as unknown as typeof Runtime.simulateAgentReplayFile;
+Object.defineProperties(simulateAgentReplayFile, { name: { value: "simulateAgentReplayFile", configurable: true }, length: { value: 1, configurable: true } });
+export const slugify = function slugify(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().slugify, this, publicArgs)); } as unknown as typeof Runtime.slugify;
+Object.defineProperties(slugify, { name: { value: "slugify", configurable: true }, length: { value: 1, configurable: true } });
+export const snoozeReminder = function snoozeReminder(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().snoozeReminder, this, publicArgs)); } as unknown as typeof Runtime.snoozeReminder;
+Object.defineProperties(snoozeReminder, { name: { value: "snoozeReminder", configurable: true }, length: { value: 3, configurable: true } });
+export const softDeleteArtifact = function softDeleteArtifact(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().softDeleteArtifact, this, publicArgs)); } as unknown as typeof Runtime.softDeleteArtifact;
+Object.defineProperties(softDeleteArtifact, { name: { value: "softDeleteArtifact", configurable: true }, length: { value: 2, configurable: true } });
+export const startFocusSession = function startFocusSession(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().startFocusSession, this, publicArgs)); } as unknown as typeof Runtime.startFocusSession;
+Object.defineProperties(startFocusSession, { name: { value: "startFocusSession", configurable: true }, length: { value: 2, configurable: true } });
+export const startTask = function startTask(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().startTask, this, publicArgs)); } as unknown as typeof Runtime.startTask;
+Object.defineProperties(startTask, { name: { value: "startTask", configurable: true }, length: { value: 3, configurable: true } });
+export const startTaskRun = function startTaskRun(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().startTaskRun, this, publicArgs)); } as unknown as typeof Runtime.startTaskRun;
+Object.defineProperties(startTaskRun, { name: { value: "startTaskRun", configurable: true }, length: { value: 2, configurable: true } });
+export const stealTask = function stealTask(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().stealTask, this, publicArgs)); } as unknown as typeof Runtime.stealTask;
+Object.defineProperties(stealTask, { name: { value: "stealTask", configurable: true }, length: { value: 3, configurable: true } });
+export const stealTaskLease = function stealTaskLease(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().stealTaskLease, this, publicArgs)); } as unknown as typeof Runtime.stealTaskLease;
+Object.defineProperties(stealTaskLease, { name: { value: "stealTaskLease", configurable: true }, length: { value: 2, configurable: true } });
+export const stopFocusSession = function stopFocusSession(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().stopFocusSession, this, publicArgs)); } as unknown as typeof Runtime.stopFocusSession;
+Object.defineProperties(stopFocusSession, { name: { value: "stopFocusSession", configurable: true }, length: { value: 2, configurable: true } });
+export const storeArtifactContent = function storeArtifactContent(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().storeArtifactContent, this, publicArgs)); } as unknown as typeof Runtime.storeArtifactContent;
+Object.defineProperties(storeArtifactContent, { name: { value: "storeArtifactContent", configurable: true }, length: { value: 1, configurable: true } });
+export const subscribeResource = function subscribeResource(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().subscribeResource, this, publicArgs)); } as unknown as typeof Runtime.subscribeResource;
+Object.defineProperties(subscribeResource, { name: { value: "subscribeResource", configurable: true }, length: { value: 2, configurable: true } });
+export const suggestAgentNames = function suggestAgentNames(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().suggestAgentNames, this, publicArgs)); } as unknown as typeof Runtime.suggestAgentNames;
+Object.defineProperties(suggestAgentNames, { name: { value: "suggestAgentNames", configurable: true }, length: { value: 0, configurable: true } });
+export const summarizeMilestone = function summarizeMilestone(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().summarizeMilestone, this, publicArgs)); } as unknown as typeof Runtime.summarizeMilestone;
+Object.defineProperties(summarizeMilestone, { name: { value: "summarizeMilestone", configurable: true }, length: { value: 2, configurable: true } });
+export const summarizeRoadmap = function summarizeRoadmap(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().summarizeRoadmap, this, publicArgs)); } as unknown as typeof Runtime.summarizeRoadmap;
+Object.defineProperties(summarizeRoadmap, { name: { value: "summarizeRoadmap", configurable: true }, length: { value: 2, configurable: true } });
+export const summarizeTaskRun = function summarizeTaskRun(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().summarizeTaskRun, this, publicArgs)); } as unknown as typeof Runtime.summarizeTaskRun;
+Object.defineProperties(summarizeTaskRun, { name: { value: "summarizeTaskRun", configurable: true }, length: { value: 1, configurable: true } });
+export const supersedeDecisionRecord = function supersedeDecisionRecord(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().supersedeDecisionRecord, this, publicArgs)); } as unknown as typeof Runtime.supersedeDecisionRecord;
+Object.defineProperties(supersedeDecisionRecord, { name: { value: "supersedeDecisionRecord", configurable: true }, length: { value: 3, configurable: true } });
+export const syncKgEdges = function syncKgEdges(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().syncKgEdges, this, publicArgs)); } as unknown as typeof Runtime.syncKgEdges;
+Object.defineProperties(syncKgEdges, { name: { value: "syncKgEdges", configurable: true }, length: { value: 1, configurable: true } });
+export const syncWithAgent = function syncWithAgent(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().syncWithAgent, this, publicArgs)); } as unknown as typeof Runtime.syncWithAgent;
+Object.defineProperties(syncWithAgent, { name: { value: "syncWithAgent", configurable: true }, length: { value: 3, configurable: true } });
+export const syncWithAgents = function syncWithAgents(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().syncWithAgents, this, publicArgs)); } as unknown as typeof Runtime.syncWithAgents;
+Object.defineProperties(syncWithAgents, { name: { value: "syncWithAgents", configurable: true }, length: { value: 3, configurable: true } });
+export const tagToPriority = function tagToPriority(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().tagToPriority, this, publicArgs)); } as unknown as typeof Runtime.tagToPriority;
+Object.defineProperties(tagToPriority, { name: { value: "tagToPriority", configurable: true }, length: { value: 1, configurable: true } });
+export const taskFromTemplate = function taskFromTemplate(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().taskFromTemplate, this, publicArgs)); } as unknown as typeof Runtime.taskFromTemplate;
+Object.defineProperties(taskFromTemplate, { name: { value: "taskFromTemplate", configurable: true }, length: { value: 1, configurable: true } });
+export const tasksFromTemplate = function tasksFromTemplate(this: unknown, a0: any, a1: any, a2: any, a3: any, a4: any, a5: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, a3, a4, a5, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().tasksFromTemplate, this, publicArgs)); } as unknown as typeof Runtime.tasksFromTemplate;
+Object.defineProperties(tasksFromTemplate, { name: { value: "tasksFromTemplate", configurable: true }, length: { value: 6, configurable: true } });
+export const testLocalEventHook = async function testLocalEventHook(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().testLocalEventHook, this, publicArgs)); } as unknown as typeof Runtime.testLocalEventHook;
+Object.defineProperties(testLocalEventHook, { name: { value: "testLocalEventHook", configurable: true }, length: { value: 2, configurable: true } });
+export const testTerminalNotificationRule = function testTerminalNotificationRule(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().testTerminalNotificationRule, this, publicArgs)); } as unknown as typeof Runtime.testTerminalNotificationRule;
+Object.defineProperties(testTerminalNotificationRule, { name: { value: "testTerminalNotificationRule", configurable: true }, length: { value: 2, configurable: true } });
+export const toPortableEvidence = function toPortableEvidence(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().toPortableEvidence, this, publicArgs)); } as unknown as typeof Runtime.toPortableEvidence;
+Object.defineProperties(toPortableEvidence, { name: { value: "toPortableEvidence", configurable: true }, length: { value: 1, configurable: true } });
+export const unarchiveAgent = function unarchiveAgent(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().unarchiveAgent, this, publicArgs)); } as unknown as typeof Runtime.unarchiveAgent;
+Object.defineProperties(unarchiveAgent, { name: { value: "unarchiveAgent", configurable: true }, length: { value: 2, configurable: true } });
+export const unarchiveTask = function unarchiveTask(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().unarchiveTask, this, publicArgs)); } as unknown as typeof Runtime.unarchiveTask;
+Object.defineProperties(unarchiveTask, { name: { value: "unarchiveTask", configurable: true }, length: { value: 2, configurable: true } });
+export const unifiedSearch = function unifiedSearch(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().unifiedSearch, this, publicArgs)); } as unknown as typeof Runtime.unifiedSearch;
+Object.defineProperties(unifiedSearch, { name: { value: "unifiedSearch", configurable: true }, length: { value: 0, configurable: true } });
+export const unlinkTaskCommit = function unlinkTaskCommit(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().unlinkTaskCommit, this, publicArgs)); } as unknown as typeof Runtime.unlinkTaskCommit;
+Object.defineProperties(unlinkTaskCommit, { name: { value: "unlinkTaskCommit", configurable: true }, length: { value: 3, configurable: true } });
+export const unlockTask = function unlockTask(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().unlockTask, this, publicArgs)); } as unknown as typeof Runtime.unlockTask;
+Object.defineProperties(unlockTask, { name: { value: "unlockTask", configurable: true }, length: { value: 3, configurable: true } });
+export const unsubscribeResource = function unsubscribeResource(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().unsubscribeResource, this, publicArgs)); } as unknown as typeof Runtime.unsubscribeResource;
+Object.defineProperties(unsubscribeResource, { name: { value: "unsubscribeResource", configurable: true }, length: { value: 2, configurable: true } });
+export const updateAgent = function updateAgent(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().updateAgent, this, publicArgs)); } as unknown as typeof Runtime.updateAgent;
+Object.defineProperties(updateAgent, { name: { value: "updateAgent", configurable: true }, length: { value: 3, configurable: true } });
+export const updateAgentActivity = function updateAgentActivity(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().updateAgentActivity, this, publicArgs)); } as unknown as typeof Runtime.updateAgentActivity;
+Object.defineProperties(updateAgentActivity, { name: { value: "updateAgentActivity", configurable: true }, length: { value: 2, configurable: true } });
+export const updateArtifactRedaction = function updateArtifactRedaction(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().updateArtifactRedaction, this, publicArgs)); } as unknown as typeof Runtime.updateArtifactRedaction;
+Object.defineProperties(updateArtifactRedaction, { name: { value: "updateArtifactRedaction", configurable: true }, length: { value: 3, configurable: true } });
+export const updateChecklistItemText = function updateChecklistItemText(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().updateChecklistItemText, this, publicArgs)); } as unknown as typeof Runtime.updateChecklistItemText;
+Object.defineProperties(updateChecklistItemText, { name: { value: "updateChecklistItemText", configurable: true }, length: { value: 3, configurable: true } });
+export const updateConfig = function updateConfig(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().updateConfig, this, publicArgs)); } as unknown as typeof Runtime.updateConfig;
+Object.defineProperties(updateConfig, { name: { value: "updateConfig", configurable: true }, length: { value: 1, configurable: true } });
+export const updateCycle = function updateCycle(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().updateCycle, this, publicArgs)); } as unknown as typeof Runtime.updateCycle;
+Object.defineProperties(updateCycle, { name: { value: "updateCycle", configurable: true }, length: { value: 3, configurable: true } });
+export const updateDecisionRecord = function updateDecisionRecord(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().updateDecisionRecord, this, publicArgs)); } as unknown as typeof Runtime.updateDecisionRecord;
+Object.defineProperties(updateDecisionRecord, { name: { value: "updateDecisionRecord", configurable: true }, length: { value: 3, configurable: true } });
+export const updateDispatchStatus = function updateDispatchStatus(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().updateDispatchStatus, this, publicArgs)); } as unknown as typeof Runtime.updateDispatchStatus;
+Object.defineProperties(updateDispatchStatus, { name: { value: "updateDispatchStatus", configurable: true }, length: { value: 2, configurable: true } });
+export const updateLabel = function updateLabel(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().updateLabel, this, publicArgs)); } as unknown as typeof Runtime.updateLabel;
+Object.defineProperties(updateLabel, { name: { value: "updateLabel", configurable: true }, length: { value: 3, configurable: true } });
+export const updateMachineHeartbeat = function updateMachineHeartbeat(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().updateMachineHeartbeat, this, publicArgs)); } as unknown as typeof Runtime.updateMachineHeartbeat;
+Object.defineProperties(updateMachineHeartbeat, { name: { value: "updateMachineHeartbeat", configurable: true }, length: { value: 1, configurable: true } });
+export const updateMilestone = function updateMilestone(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().updateMilestone, this, publicArgs)); } as unknown as typeof Runtime.updateMilestone;
+Object.defineProperties(updateMilestone, { name: { value: "updateMilestone", configurable: true }, length: { value: 2, configurable: true } });
+export const updateOrg = function updateOrg(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().updateOrg, this, publicArgs)); } as unknown as typeof Runtime.updateOrg;
+Object.defineProperties(updateOrg, { name: { value: "updateOrg", configurable: true }, length: { value: 3, configurable: true } });
+export const updatePlan = function updatePlan(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().updatePlan, this, publicArgs)); } as unknown as typeof Runtime.updatePlan;
+Object.defineProperties(updatePlan, { name: { value: "updatePlan", configurable: true }, length: { value: 3, configurable: true } });
+export const updateProject = function updateProject(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().updateProject, this, publicArgs)); } as unknown as typeof Runtime.updateProject;
+Object.defineProperties(updateProject, { name: { value: "updateProject", configurable: true }, length: { value: 3, configurable: true } });
+export const updateRisk = function updateRisk(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().updateRisk, this, publicArgs)); } as unknown as typeof Runtime.updateRisk;
+Object.defineProperties(updateRisk, { name: { value: "updateRisk", configurable: true }, length: { value: 3, configurable: true } });
+export const updateRoadmap = function updateRoadmap(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().updateRoadmap, this, publicArgs)); } as unknown as typeof Runtime.updateRoadmap;
+Object.defineProperties(updateRoadmap, { name: { value: "updateRoadmap", configurable: true }, length: { value: 2, configurable: true } });
+export const updateSessionActivity = function updateSessionActivity(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().updateSessionActivity, this, publicArgs)); } as unknown as typeof Runtime.updateSessionActivity;
+Object.defineProperties(updateSessionActivity, { name: { value: "updateSessionActivity", configurable: true }, length: { value: 2, configurable: true } });
+export const updateTask = function updateTask(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().updateTask, this, publicArgs)); } as unknown as typeof Runtime.updateTask;
+Object.defineProperties(updateTask, { name: { value: "updateTask", configurable: true }, length: { value: 3, configurable: true } });
+export const updateTaskBoard = function updateTaskBoard(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().updateTaskBoard, this, publicArgs)); } as unknown as typeof Runtime.updateTaskBoard;
+Object.defineProperties(updateTaskBoard, { name: { value: "updateTaskBoard", configurable: true }, length: { value: 3, configurable: true } });
+export const updateTaskFileStatus = function updateTaskFileStatus(this: unknown, a0: any, a1: any, a2: any, a3: any, a4: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, a3, a4, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().updateTaskFileStatus, this, publicArgs)); } as unknown as typeof Runtime.updateTaskFileStatus;
+Object.defineProperties(updateTaskFileStatus, { name: { value: "updateTaskFileStatus", configurable: true }, length: { value: 5, configurable: true } });
+export const updateTaskList = function updateTaskList(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().updateTaskList, this, publicArgs)); } as unknown as typeof Runtime.updateTaskList;
+Object.defineProperties(updateTaskList, { name: { value: "updateTaskList", configurable: true }, length: { value: 3, configurable: true } });
+export const updateTemplate = function updateTemplate(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().updateTemplate, this, publicArgs)); } as unknown as typeof Runtime.updateTemplate;
+Object.defineProperties(updateTemplate, { name: { value: "updateTemplate", configurable: true }, length: { value: 3, configurable: true } });
+export const updateUserScaffold = function updateUserScaffold(this: unknown, a0: any, a1: any, a2: any, a3: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, a3, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().updateUserScaffold, this, publicArgs)); } as unknown as typeof Runtime.updateUserScaffold;
+Object.defineProperties(updateUserScaffold, { name: { value: "updateUserScaffold", configurable: true }, length: { value: 4, configurable: true } });
+export const upsertAgentRunAdapter = function upsertAgentRunAdapter(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().upsertAgentRunAdapter, this, publicArgs)); } as unknown as typeof Runtime.upsertAgentRunAdapter;
+Object.defineProperties(upsertAgentRunAdapter, { name: { value: "upsertAgentRunAdapter", configurable: true }, length: { value: 1, configurable: true } });
+export const upsertCapacityProfile = function upsertCapacityProfile(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().upsertCapacityProfile, this, publicArgs)); } as unknown as typeof Runtime.upsertCapacityProfile;
+Object.defineProperties(upsertCapacityProfile, { name: { value: "upsertCapacityProfile", configurable: true }, length: { value: 1, configurable: true } });
+export const upsertEncryptionProfile = function upsertEncryptionProfile(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().upsertEncryptionProfile, this, publicArgs)); } as unknown as typeof Runtime.upsertEncryptionProfile;
+Object.defineProperties(upsertEncryptionProfile, { name: { value: "upsertEncryptionProfile", configurable: true }, length: { value: 1, configurable: true } });
+export const upsertLocalEventHook = function upsertLocalEventHook(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().upsertLocalEventHook, this, publicArgs)); } as unknown as typeof Runtime.upsertLocalEventHook;
+Object.defineProperties(upsertLocalEventHook, { name: { value: "upsertLocalEventHook", configurable: true }, length: { value: 1, configurable: true } });
+export const upsertPolicyPack = function upsertPolicyPack(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().upsertPolicyPack, this, publicArgs)); } as unknown as typeof Runtime.upsertPolicyPack;
+Object.defineProperties(upsertPolicyPack, { name: { value: "upsertPolicyPack", configurable: true }, length: { value: 1, configurable: true } });
+export const upsertReleaseGroup = function upsertReleaseGroup(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().upsertReleaseGroup, this, publicArgs)); } as unknown as typeof Runtime.upsertReleaseGroup;
+Object.defineProperties(upsertReleaseGroup, { name: { value: "upsertReleaseGroup", configurable: true }, length: { value: 1, configurable: true } });
+export const upsertReviewRoutingRule = function upsertReviewRoutingRule(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().upsertReviewRoutingRule, this, publicArgs)); } as unknown as typeof Runtime.upsertReviewRoutingRule;
+Object.defineProperties(upsertReviewRoutingRule, { name: { value: "upsertReviewRoutingRule", configurable: true }, length: { value: 1, configurable: true } });
+export const upsertRunnerSandboxProfile = function upsertRunnerSandboxProfile(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().upsertRunnerSandboxProfile, this, publicArgs)); } as unknown as typeof Runtime.upsertRunnerSandboxProfile;
+Object.defineProperties(upsertRunnerSandboxProfile, { name: { value: "upsertRunnerSandboxProfile", configurable: true }, length: { value: 1, configurable: true } });
+export const upsertSecretSafetyConfig = function upsertSecretSafetyConfig(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().upsertSecretSafetyConfig, this, publicArgs)); } as unknown as typeof Runtime.upsertSecretSafetyConfig;
+Object.defineProperties(upsertSecretSafetyConfig, { name: { value: "upsertSecretSafetyConfig", configurable: true }, length: { value: 1, configurable: true } });
+export const upsertTaskByFingerprint = function upsertTaskByFingerprint(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().upsertTaskByFingerprint, this, publicArgs)); } as unknown as typeof Runtime.upsertTaskByFingerprint;
+Object.defineProperties(upsertTaskByFingerprint, { name: { value: "upsertTaskByFingerprint", configurable: true }, length: { value: 2, configurable: true } });
+export const upsertTaskFinding = function upsertTaskFinding(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().upsertTaskFinding, this, publicArgs)); } as unknown as typeof Runtime.upsertTaskFinding;
+Object.defineProperties(upsertTaskFinding, { name: { value: "upsertTaskFinding", configurable: true }, length: { value: 2, configurable: true } });
+export const upsertTerminalNotificationRule = function upsertTerminalNotificationRule(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().upsertTerminalNotificationRule, this, publicArgs)); } as unknown as typeof Runtime.upsertTerminalNotificationRule;
+Object.defineProperties(upsertTerminalNotificationRule, { name: { value: "upsertTerminalNotificationRule", configurable: true }, length: { value: 1, configurable: true } });
+export const upsertTesterIssueReport = function upsertTesterIssueReport(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().upsertTesterIssueReport, this, publicArgs)); } as unknown as typeof Runtime.upsertTesterIssueReport;
+Object.defineProperties(upsertTesterIssueReport, { name: { value: "upsertTesterIssueReport", configurable: true }, length: { value: 2, configurable: true } });
+export const upsertTesterIssueReports = function upsertTesterIssueReports(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().upsertTesterIssueReports, this, publicArgs)); } as unknown as typeof Runtime.upsertTesterIssueReports;
+Object.defineProperties(upsertTesterIssueReports, { name: { value: "upsertTesterIssueReports", configurable: true }, length: { value: 2, configurable: true } });
+export const upsertVerificationProvider = function upsertVerificationProvider(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().upsertVerificationProvider, this, publicArgs)); } as unknown as typeof Runtime.upsertVerificationProvider;
+Object.defineProperties(upsertVerificationProvider, { name: { value: "upsertVerificationProvider", configurable: true }, length: { value: 1, configurable: true } });
+export const upsertWorkspaceTrustProfile = function upsertWorkspaceTrustProfile(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().upsertWorkspaceTrustProfile, this, publicArgs)); } as unknown as typeof Runtime.upsertWorkspaceTrustProfile;
+Object.defineProperties(upsertWorkspaceTrustProfile, { name: { value: "upsertWorkspaceTrustProfile", configurable: true }, length: { value: 1, configurable: true } });
+export const uuid = function uuid(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().uuid, this, publicArgs)); } as unknown as typeof Runtime.uuid;
+Object.defineProperties(uuid, { name: { value: "uuid", configurable: true }, length: { value: 0, configurable: true } });
+export const validateAdapterDocs = function validateAdapterDocs(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().validateAdapterDocs, this, publicArgs)); } as unknown as typeof Runtime.validateAdapterDocs;
+Object.defineProperties(validateAdapterDocs, { name: { value: "validateAdapterDocs", configurable: true }, length: { value: 0, configurable: true } });
+export const validateAliasName = function validateAliasName(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().validateAliasName, this, publicArgs)); } as unknown as typeof Runtime.validateAliasName;
+Object.defineProperties(validateAliasName, { name: { value: "validateAliasName", configurable: true }, length: { value: 1, configurable: true } });
+export const validateAllContractFixtures = function validateAllContractFixtures(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().validateAllContractFixtures, this, publicArgs)); } as unknown as typeof Runtime.validateAllContractFixtures;
+Object.defineProperties(validateAllContractFixtures, { name: { value: "validateAllContractFixtures", configurable: true }, length: { value: 0, configurable: true } });
+export const validateBundle = function validateBundle(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().validateBundle, this, publicArgs)); } as unknown as typeof Runtime.validateBundle;
+Object.defineProperties(validateBundle, { name: { value: "validateBundle", configurable: true }, length: { value: 1, configurable: true } });
+export const validateExtensionManifest = function validateExtensionManifest(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().validateExtensionManifest, this, publicArgs)); } as unknown as typeof Runtime.validateExtensionManifest;
+Object.defineProperties(validateExtensionManifest, { name: { value: "validateExtensionManifest", configurable: true }, length: { value: 1, configurable: true } });
+export const validateFeatureManifest = function validateFeatureManifest(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().validateFeatureManifest, this, publicArgs)); } as unknown as typeof Runtime.validateFeatureManifest;
+Object.defineProperties(validateFeatureManifest, { name: { value: "validateFeatureManifest", configurable: true }, length: { value: 1, configurable: true } });
+export const validateJsonContract = function validateJsonContract(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().validateJsonContract, this, publicArgs)); } as unknown as typeof Runtime.validateJsonContract;
+Object.defineProperties(validateJsonContract, { name: { value: "validateJsonContract", configurable: true }, length: { value: 2, configurable: true } });
+export const validateLocalBridgeBundle = function validateLocalBridgeBundle(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().validateLocalBridgeBundle, this, publicArgs)); } as unknown as typeof Runtime.validateLocalBridgeBundle;
+Object.defineProperties(validateLocalBridgeBundle, { name: { value: "validateLocalBridgeBundle", configurable: true }, length: { value: 1, configurable: true } });
+export const validateParityManifest = function validateParityManifest(this: unknown, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().validateParityManifest, this, publicArgs)); } as unknown as typeof Runtime.validateParityManifest;
+Object.defineProperties(validateParityManifest, { name: { value: "validateParityManifest", configurable: true }, length: { value: 0, configurable: true } });
+export const validatePolicyPack = function validatePolicyPack(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().validatePolicyPack, this, publicArgs)); } as unknown as typeof Runtime.validatePolicyPack;
+Object.defineProperties(validatePolicyPack, { name: { value: "validatePolicyPack", configurable: true }, length: { value: 2, configurable: true } });
+export const validateReleaseScripts = function validateReleaseScripts(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().validateReleaseScripts, this, publicArgs)); } as unknown as typeof Runtime.validateReleaseScripts;
+Object.defineProperties(validateReleaseScripts, { name: { value: "validateReleaseScripts", configurable: true }, length: { value: 1, configurable: true } });
+export const validateSchemaPayload = function validateSchemaPayload(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().validateSchemaPayload, this, publicArgs)); } as unknown as typeof Runtime.validateSchemaPayload;
+Object.defineProperties(validateSchemaPayload, { name: { value: "validateSchemaPayload", configurable: true }, length: { value: 2, configurable: true } });
+export const validateTmuxTarget = async function validateTmuxTarget(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().validateTmuxTarget, this, publicArgs)); } as unknown as typeof Runtime.validateTmuxTarget;
+Object.defineProperties(validateTmuxTarget, { name: { value: "validateTmuxTarget", configurable: true }, length: { value: 1, configurable: true } });
+export const verifyApiKey = function verifyApiKey(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().verifyApiKey, this, publicArgs)); } as unknown as typeof Runtime.verifyApiKey;
+Object.defineProperties(verifyApiKey, { name: { value: "verifyApiKey", configurable: true }, length: { value: 2, configurable: true } });
+export const verifyExtensionSignature = function verifyExtensionSignature(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().verifyExtensionSignature, this, publicArgs)); } as unknown as typeof Runtime.verifyExtensionSignature;
+Object.defineProperties(verifyExtensionSignature, { name: { value: "verifyExtensionSignature", configurable: true }, length: { value: 1, configurable: true } });
+export const verifyLocalAuditLedger = function verifyLocalAuditLedger(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().verifyLocalAuditLedger, this, publicArgs)); } as unknown as typeof Runtime.verifyLocalAuditLedger;
+Object.defineProperties(verifyLocalAuditLedger, { name: { value: "verifyLocalAuditLedger", configurable: true }, length: { value: 2, configurable: true } });
+export const verifyLocalBackup = function verifyLocalBackup(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().verifyLocalBackup, this, publicArgs)); } as unknown as typeof Runtime.verifyLocalBackup;
+Object.defineProperties(verifyLocalBackup, { name: { value: "verifyLocalBackup", configurable: true }, length: { value: 1, configurable: true } });
+export const verifyStoredArtifact = function verifyStoredArtifact(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().verifyStoredArtifact, this, publicArgs)); } as unknown as typeof Runtime.verifyStoredArtifact;
+Object.defineProperties(verifyStoredArtifact, { name: { value: "verifyStoredArtifact", configurable: true }, length: { value: 1, configurable: true } });
+export const verifyTaskRunArtifacts = function verifyTaskRunArtifacts(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().verifyTaskRunArtifacts, this, publicArgs)); } as unknown as typeof Runtime.verifyTaskRunArtifacts;
+Object.defineProperties(verifyTaskRunArtifacts, { name: { value: "verifyTaskRunArtifacts", configurable: true }, length: { value: 2, configurable: true } });
+export const watchSourceTodos = async function watchSourceTodos(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().watchSourceTodos, this, publicArgs)); } as unknown as typeof Runtime.watchSourceTodos;
+Object.defineProperties(watchSourceTodos, { name: { value: "watchSourceTodos", configurable: true }, length: { value: 2, configurable: true } });
+export const workflowPointersFromMetadata = function workflowPointersFromMetadata(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().workflowPointersFromMetadata, this, publicArgs)); } as unknown as typeof Runtime.workflowPointersFromMetadata;
+Object.defineProperties(workflowPointersFromMetadata, { name: { value: "workflowPointersFromMetadata", configurable: true }, length: { value: 1, configurable: true } });
+export const wrapWithSchemaVersion = function wrapWithSchemaVersion(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().wrapWithSchemaVersion, this, publicArgs)); } as unknown as typeof Runtime.wrapWithSchemaVersion;
+Object.defineProperties(wrapWithSchemaVersion, { name: { value: "wrapWithSchemaVersion", configurable: true }, length: { value: 2, configurable: true } });
+export const writeArtifactExportManifest = function writeArtifactExportManifest(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().writeArtifactExportManifest, this, publicArgs)); } as unknown as typeof Runtime.writeArtifactExportManifest;
+Object.defineProperties(writeArtifactExportManifest, { name: { value: "writeArtifactExportManifest", configurable: true }, length: { value: 2, configurable: true } });
+export const writeBackupManifest = function writeBackupManifest(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().writeBackupManifest, this, publicArgs)); } as unknown as typeof Runtime.writeBackupManifest;
+Object.defineProperties(writeBackupManifest, { name: { value: "writeBackupManifest", configurable: true }, length: { value: 2, configurable: true } });
+export const writeBuiltinTemplateFiles = function writeBuiltinTemplateFiles(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().writeBuiltinTemplateFiles, this, publicArgs)); } as unknown as typeof Runtime.writeBuiltinTemplateFiles;
+Object.defineProperties(writeBuiltinTemplateFiles, { name: { value: "writeBuiltinTemplateFiles", configurable: true }, length: { value: 1, configurable: true } });
+export const writeBundleFile = function writeBundleFile(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().writeBundleFile, this, publicArgs)); } as unknown as typeof Runtime.writeBundleFile;
+Object.defineProperties(writeBundleFile, { name: { value: "writeBundleFile", configurable: true }, length: { value: 2, configurable: true } });
+export const writeEnvironmentSnapshot = function writeEnvironmentSnapshot(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().writeEnvironmentSnapshot, this, publicArgs)); } as unknown as typeof Runtime.writeEnvironmentSnapshot;
+Object.defineProperties(writeEnvironmentSnapshot, { name: { value: "writeEnvironmentSnapshot", configurable: true }, length: { value: 2, configurable: true } });
+export const writeLocalBackupFile = function writeLocalBackupFile(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().writeLocalBackupFile, this, publicArgs)); } as unknown as typeof Runtime.writeLocalBackupFile;
+Object.defineProperties(writeLocalBackupFile, { name: { value: "writeLocalBackupFile", configurable: true }, length: { value: 2, configurable: true } });
+export const writeOnboardingFixtureFiles = function writeOnboardingFixtureFiles(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().writeOnboardingFixtureFiles, this, publicArgs)); } as unknown as typeof Runtime.writeOnboardingFixtureFiles;
+Object.defineProperties(writeOnboardingFixtureFiles, { name: { value: "writeOnboardingFixtureFiles", configurable: true }, length: { value: 1, configurable: true } });
+export const writePlanArtifact = function writePlanArtifact(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().writePlanArtifact, this, publicArgs)); } as unknown as typeof Runtime.writePlanArtifact;
+Object.defineProperties(writePlanArtifact, { name: { value: "writePlanArtifact", configurable: true }, length: { value: 2, configurable: true } });
+export const writeReportExport = function writeReportExport(this: unknown, a0: any, a1: any, a2: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, a2, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().writeReportExport, this, publicArgs)); } as unknown as typeof Runtime.writeReportExport;
+Object.defineProperties(writeReportExport, { name: { value: "writeReportExport", configurable: true }, length: { value: 3, configurable: true } });
+export const writeSdkIntegrationFixtures = function writeSdkIntegrationFixtures(this: unknown, a0: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().writeSdkIntegrationFixtures, this, publicArgs)); } as unknown as typeof Runtime.writeSdkIntegrationFixtures;
+Object.defineProperties(writeSdkIntegrationFixtures, { name: { value: "writeSdkIntegrationFixtures", configurable: true }, length: { value: 1, configurable: true } });
+export const writeVerificationExport = function writeVerificationExport(this: unknown, a0: any, a1: any, ...args: any[]) { assertStageALocalStorageRole(process.env); const publicArgs = preparePublicSqliteBoundaryArguments([a0, a1, ...args]); return publicizePublicSqliteBoundaryResult(Reflect.apply(loadRuntime().writeVerificationExport, this, publicArgs)); } as unknown as typeof Runtime.writeVerificationExport;
+Object.defineProperties(writeVerificationExport, { name: { value: "writeVerificationExport", configurable: true }, length: { value: 2, configurable: true } });

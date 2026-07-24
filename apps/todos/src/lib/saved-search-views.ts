@@ -319,7 +319,7 @@ function toResults<T extends SearchResultEntity>(entityType: SavedSearchResult["
 }
 
 export function runSavedSearch(filters: SavedSearchFilters = {}, scope: SavedSearchScope = "tasks", db?: Database): SavedSearchRunResult {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const normalizedScope = normalizeScope(scope);
   const scopes = normalizedScope === "all"
     ? ["tasks", "projects", "plans", "runs", "comments"] as const
@@ -341,7 +341,7 @@ export function runSavedSearch(filters: SavedSearchFilters = {}, scope: SavedSea
 }
 
 export function saveSearchView(input: SaveSearchViewInput, db?: Database): SavedSearchView {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const name = normalizeName(input.name);
   const timestamp = now();
   const existing = getSearchView(name, d);
@@ -378,7 +378,7 @@ export function saveSearchView(input: SaveSearchViewInput, db?: Database): Saved
 }
 
 export function getSearchView(idOrName: string, db?: Database): SavedSearchView | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query(
     "SELECT * FROM saved_search_views WHERE id = ? OR name = ?",
   ).get(idOrName, idOrName) as SavedSearchViewRow | null;
@@ -386,7 +386,7 @@ export function getSearchView(idOrName: string, db?: Database): SavedSearchView 
 }
 
 export function listSearchViews(scope?: SavedSearchScope, db?: Database): SavedSearchView[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const normalizedScope = scope ? normalizeScope(scope) : null;
   const rows = normalizedScope
     ? d.query("SELECT * FROM saved_search_views WHERE scope = ? ORDER BY name").all(normalizedScope) as SavedSearchViewRow[]
@@ -395,13 +395,13 @@ export function listSearchViews(scope?: SavedSearchScope, db?: Database): SavedS
 }
 
 export function deleteSearchView(idOrName: string, db?: Database): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const result = d.run("DELETE FROM saved_search_views WHERE id = ? OR name = ?", [idOrName, idOrName]);
   return result.changes > 0;
 }
 
 export function runSearchView(idOrName: string, db?: Database): SavedSearchRunResult {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const view = getSearchView(idOrName, d);
   if (!view) throw new Error(`Saved search view not found: ${idOrName}`);
   return { ...runSavedSearch(view.filters, view.scope, d), view };

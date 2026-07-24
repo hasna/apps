@@ -127,7 +127,7 @@ function maybeFilter<T>(value: unknown): T | undefined {
 }
 
 export function createTaskBoard(input: CreateTaskBoardInput, db?: Database): TaskBoard {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const id = uuid();
   const timestamp = now();
   const scope = input.scope || "tasks";
@@ -153,7 +153,7 @@ export function createTaskBoard(input: CreateTaskBoardInput, db?: Database): Tas
 }
 
 export function getTaskBoard(idOrName: string, db?: Database): TaskBoard | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d
     .query("SELECT * FROM task_boards WHERE id = ? OR name = ?")
     .get(idOrName, idOrName) as TaskBoardRow | null;
@@ -161,7 +161,7 @@ export function getTaskBoard(idOrName: string, db?: Database): TaskBoard | null 
 }
 
 export function listTaskBoards(query: TaskBoardQuery = {}, db?: Database): TaskBoard[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const conditions: string[] = [];
   const params: SQLQueryBindings[] = [];
   if (query.scope) { conditions.push("scope = ?"); params.push(query.scope); }
@@ -177,7 +177,7 @@ export function listTaskBoards(query: TaskBoardQuery = {}, db?: Database): TaskB
 }
 
 export function updateTaskBoard(idOrName: string, input: UpdateTaskBoardInput, db?: Database): TaskBoard {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const board = getTaskBoard(idOrName, d);
   if (!board) throw new Error(`Board not found: ${idOrName}`);
   const sets: string[] = ["updated_at = ?"];
@@ -195,7 +195,7 @@ export function updateTaskBoard(idOrName: string, input: UpdateTaskBoardInput, d
 }
 
 export function deleteTaskBoard(idOrName: string, db?: Database): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const board = getTaskBoard(idOrName, d);
   if (!board) return false;
   return d.run("DELETE FROM task_boards WHERE id = ?", [board.id]).changes > 0;
@@ -312,7 +312,7 @@ function buildLaneSnapshots(board: TaskBoard, cards: BoardCard[]): BoardLaneSnap
 }
 
 export function buildTaskBoardSnapshot(idOrBoard: string | TaskBoard, db?: Database): BoardSnapshot {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const board = typeof idOrBoard === "string" ? getTaskBoard(idOrBoard, d) : idOrBoard;
   if (!board) throw new Error(`Board not found: ${idOrBoard}`);
   const cards = board.scope === "plans"
@@ -341,7 +341,7 @@ export function buildTaskBoardSnapshot(idOrBoard: string | TaskBoard, db?: Datab
 }
 
 export function moveBoardCard(input: MoveBoardCardInput, db?: Database): BoardCard {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const board = getTaskBoard(input.board_id, d);
   if (!board) throw new Error(`Board not found: ${input.board_id}`);
   const lane = input.lane_id ? board.lanes.find((candidate) => candidate.id === input.lane_id || candidate.name === input.lane_id) : null;
@@ -381,7 +381,7 @@ export function renderTaskBoard(snapshot: BoardSnapshot): string {
 }
 
 export function exportTaskBoardBundle(idOrName?: string, db?: Database): TaskBoardBundle {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const boards = idOrName ? [getTaskBoard(idOrName, d)].filter(Boolean) as TaskBoard[] : listTaskBoards({}, d);
   return {
     kind: "hasna.todos.task-board",
@@ -392,7 +392,7 @@ export function exportTaskBoardBundle(idOrName?: string, db?: Database): TaskBoa
 }
 
 export function importTaskBoardBundle(bundle: TaskBoardBundle, db?: Database): { inserted: number; updated: number; skipped: number } {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   if (bundle.kind !== "hasna.todos.task-board" || bundle.schemaVersion !== 1 || !Array.isArray(bundle.boards)) {
     throw new Error("Invalid task board bundle");
   }

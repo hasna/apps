@@ -1,10 +1,14 @@
 import type { Command } from "commander";
 import chalk from "chalk";
 import { getDatabase, resolvePartialId } from "../../db/database.js";
-import { handleError, output } from "../helpers.js";
+import { handleError, output, parsePositiveSafeInteger } from "../helpers.js";
 
 function splitDays(value?: string): number[] | undefined {
-  return value?.split(",").map((item) => Number(item.trim())).filter((item) => Number.isFinite(item));
+  if (value === undefined) return undefined;
+  if (!/^[0-6](?:,[0-6])*$/.test(value)) {
+    throw new Error("--days must be a comma-separated list of digits from 0 through 6");
+  }
+  return value.split(",").map((item) => item.charCodeAt(0) - 48);
 }
 
 function resolveOptional(table: string, value?: string): string | undefined {
@@ -38,7 +42,7 @@ export function registerCapacityCommands(program: Command) {
         const profile = upsertCapacityProfile({
           agent_id: agent,
           project_id: resolveOptional("projects", opts.project || globalOpts.project),
-          minutes_per_day: Number(opts.minutesPerDay),
+          minutes_per_day: parsePositiveSafeInteger(opts.minutesPerDay, "--minutes-per-day"),
           working_days: splitDays(opts.days),
           effective_from: opts.from,
         });

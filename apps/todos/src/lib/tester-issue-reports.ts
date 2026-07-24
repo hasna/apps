@@ -512,7 +512,7 @@ export function upsertTesterIssueReport(
   input: UpsertTesterIssueReportInput,
   db?: Database,
 ): UpsertTesterIssueReportResult {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const timestamp = now();
   const warnings: string[] = [];
   const report = normalizeTesterIssueReport(input.report, input.default_priority || "medium");
@@ -596,7 +596,7 @@ export function upsertTesterIssueReports(
   input: Omit<UpsertTesterIssueReportInput, "report"> & { reports: unknown[] },
   db?: Database,
 ): UpsertTesterIssueReportsResult {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const run = () => input.reports.map((report) => upsertTesterIssueReport({ ...input, report }, d));
   const results = input.apply ? d.transaction(run)() : run();
   const summary: UpsertTesterIssueReportsResult["summary"] = {

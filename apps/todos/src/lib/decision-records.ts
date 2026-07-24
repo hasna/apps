@@ -193,7 +193,7 @@ function stableSnapshotHash(payload: KnowledgeSnapshotPayload): string {
 }
 
 export function createDecisionRecord(input: CreateDecisionRecordInput, db?: Database): DecisionRecord {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const id = uuid();
   const ts = now();
   const sequenceNum = nextSequenceNum(input.project_id, d);
@@ -239,19 +239,19 @@ export function createDecisionRecord(input: CreateDecisionRecordInput, db?: Data
 }
 
 export function getDecisionRecord(id: string, db?: Database): DecisionRecord | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query("SELECT * FROM decision_records WHERE id = ?").get(id) as Record<string, unknown> | null;
   return row ? rowToDecisionRecord(row) : null;
 }
 
 export function getDecisionRecordByRef(shortRef: string, db?: Database): DecisionRecord | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query("SELECT * FROM decision_records WHERE short_ref = ?").get(shortRef) as Record<string, unknown> | null;
   return row ? rowToDecisionRecord(row) : null;
 }
 
 export function listDecisionRecords(filter: ListDecisionRecordsFilter = {}, db?: Database): DecisionRecord[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const conditions: string[] = ["1=1"];
   const params: unknown[] = [];
 
@@ -284,7 +284,7 @@ export function listDecisionRecords(filter: ListDecisionRecordsFilter = {}, db?:
 }
 
 export function updateDecisionRecord(id: string, input: UpdateDecisionRecordInput, db?: Database): DecisionRecord {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const existing = getDecisionRecord(id, d);
   if (!existing) throw new Error(`Decision record not found: ${id}`);
 
@@ -315,7 +315,7 @@ export function setDecisionStatus(id: string, status: DecisionStatus, db?: Datab
     throw new Error(`Invalid decision status: ${status}`);
   }
 
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const existing = getDecisionRecord(id, d);
   if (!existing) throw new Error(`Decision record not found: ${id}`);
 
@@ -328,7 +328,7 @@ export function supersedeDecisionRecord(
   input: Omit<CreateDecisionRecordInput, "supersedes_id">,
   db?: Database,
 ): { previous: DecisionRecord; replacement: DecisionRecord } {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const previous = getDecisionRecord(id, d);
   if (!previous) throw new Error(`Decision record not found: ${id}`);
 
@@ -407,7 +407,7 @@ export function buildKnowledgeSnapshotPayload(
   input: CaptureKnowledgeSnapshotInput,
   db?: Database,
 ): KnowledgeSnapshotPayload {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const project = getProject(input.project_id, d);
   if (!project) throw new Error(`Project not found: ${input.project_id}`);
 
@@ -452,7 +452,7 @@ export function buildKnowledgeSnapshotPayload(
 }
 
 export function captureKnowledgeSnapshot(input: CaptureKnowledgeSnapshotInput, db?: Database): KnowledgeSnapshotRecord {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const payload = buildKnowledgeSnapshotPayload(input, d);
   const contentHash = stableSnapshotHash(payload);
   const id = uuid();
@@ -498,13 +498,13 @@ function rowToKnowledgeSnapshot(row: Record<string, unknown>): KnowledgeSnapshot
 }
 
 export function getKnowledgeSnapshot(id: string, db?: Database): KnowledgeSnapshotRecord | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query("SELECT * FROM knowledge_snapshots WHERE id = ?").get(id) as Record<string, unknown> | null;
   return row ? rowToKnowledgeSnapshot(row) : null;
 }
 
 export function listKnowledgeSnapshots(filter: ListKnowledgeSnapshotsFilter = {}, db?: Database): KnowledgeSnapshotRecord[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const conditions: string[] = ["1=1"];
   const params: unknown[] = [];
 

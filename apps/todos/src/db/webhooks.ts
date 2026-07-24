@@ -125,7 +125,7 @@ export function createWebhook(input: CreateWebhookInput, db?: Database): Webhook
   if (!urlValidation.valid) {
     throw new Error(`Invalid webhook URL: ${urlValidation.error}`);
   }
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const id = uuid();
   d.run(
     `INSERT INTO webhooks (id, url, events, secret, project_id, task_list_id, agent_id, task_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -145,23 +145,23 @@ export function createWebhook(input: CreateWebhookInput, db?: Database): Webhook
 }
 
 export function getWebhook(id: string, db?: Database): Webhook | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query("SELECT * FROM webhooks WHERE id = ?").get(id);
   return row ? rowToWebhook(row) : null;
 }
 
 export function listWebhooks(db?: Database): Webhook[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return (d.query("SELECT * FROM webhooks ORDER BY created_at DESC").all()).map(rowToWebhook);
 }
 
 export function deleteWebhook(id: string, db?: Database): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return d.run("DELETE FROM webhooks WHERE id = ?", [id]).changes > 0;
 }
 
 export function listDeliveries(webhookId?: string, limit = 50, db?: Database): WebhookDelivery[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   if (webhookId) {
     return d.query("SELECT * FROM webhook_deliveries WHERE webhook_id = ? ORDER BY created_at DESC LIMIT ?").all(webhookId, limit) as WebhookDelivery[];
   }
@@ -268,7 +268,7 @@ async function deliverWebhook(
 }
 
 export async function dispatchWebhook(event: string, payload: unknown, db?: Database): Promise<void> {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const webhooks = listWebhooks(d).filter(w => w.active && (w.events.length === 0 || w.events.includes(event)));
   const payloadObj = (typeof payload === "object" && payload !== null ? payload : {}) as Record<string, unknown>;
 

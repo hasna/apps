@@ -309,7 +309,7 @@ export function writeBuiltinTemplateFiles(directory: string): { directory: strin
  * Returns the count of templates created.
  */
 export function initBuiltinTemplates(db?: Database): { created: number; skipped: number; names: string[] } {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const existing = listTemplates(d);
   const existingNames = new Set(existing.map(t => t.name));
 

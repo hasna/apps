@@ -79,7 +79,7 @@ function dispatcherFromRun(run: TaskRun): AgentRunDispatchMetadata | null {
 }
 
 function updateDispatcherMetadata(runId: string, dispatcher: AgentRunDispatchMetadata, db?: Database): TaskRun {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const run = getTaskRun(resolveTaskRunId(runId, d), d);
   if (!run) throw new Error(`Run not found: ${runId}`);
   const metadata = redactValue({
@@ -181,7 +181,7 @@ export function listAgentRunQueue(db?: Database): QueuedAgentRun[] {
 }
 
 export function cancelAgentRunDispatch(runId: string, db?: Database): QueuedAgentRun {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const run = getTaskRun(resolveTaskRunId(runId, d), d);
   if (!run) throw new Error(`Run not found: ${runId}`);
   const dispatcher = dispatcherFromRun(run);
@@ -193,7 +193,7 @@ export function cancelAgentRunDispatch(runId: string, db?: Database): QueuedAgen
 }
 
 export function retryAgentRunDispatch(runId: string, db?: Database): QueuedAgentRun {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const run = getTaskRun(resolveTaskRunId(runId, d), d);
   if (!run) throw new Error(`Run not found: ${runId}`);
   const dispatcher = dispatcherFromRun(run);
@@ -211,7 +211,7 @@ export function retryAgentRunDispatch(runId: string, db?: Database): QueuedAgent
 }
 
 export async function runNextAgentDispatch(input: RunNextAgentDispatchInput = {}, db?: Database): Promise<RunAgentDispatchResult | null> {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const next = listAgentRunQueue(d).find((item) => (
     item.dispatcher.state === "queued"
     && (!input.adapter || item.dispatcher.adapter === input.adapter)
@@ -356,7 +356,7 @@ function toAgentRun(item: QueuedAgentRun): AgentRun {
 }
 
 function queuedRunById(runId: string, db?: Database): QueuedAgentRun | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const run = getTaskRun(resolveTaskRunId(runId, d), d);
   if (!run) return null;
   const item = { run, dispatcher: dispatcherFromRun(run) };
@@ -387,7 +387,7 @@ export function claimNextAgentRun(
   options: { adapter?: string } = {},
   db?: Database,
 ): AgentRun | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const next = listAgentRunQueue(d).find(
     (item) => item.dispatcher.state === "queued" && (!options.adapter || item.dispatcher.adapter === options.adapter),
   );
@@ -400,7 +400,7 @@ export function claimNextAgentRun(
 }
 
 export function completeAgentRun(runId: string, evidence: Record<string, unknown> = {}, db?: Database): AgentRun {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const item = queuedRunById(runId, d);
   if (!item) throw new Error(`Agent run not found: ${runId}`);
   const dispatcher = { ...item.dispatcher, state: "completed" as const, completed_at: new Date().toISOString() };
@@ -412,7 +412,7 @@ export function completeAgentRun(runId: string, evidence: Record<string, unknown
 }
 
 export function failAgentRun(runId: string, error?: string, db?: Database): AgentRun {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const item = queuedRunById(runId, d);
   if (!item) throw new Error(`Agent run not found: ${runId}`);
   const dispatcher = { ...item.dispatcher, state: "failed" as const, completed_at: new Date().toISOString(), last_error: error };

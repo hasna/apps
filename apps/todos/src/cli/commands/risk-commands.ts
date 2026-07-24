@@ -15,7 +15,7 @@ import {
   type ProjectRiskSeverity,
   type ProjectRiskStatus,
 } from "../../db/project-risks.js";
-import { handleError, output } from "../helpers.js";
+import { handleError, output, parseOptionalPositiveSafeInteger } from "../helpers.js";
 
 const STATUSES = ["open", "mitigating", "resolved", "accepted"] as const;
 const SEVERITIES = ["low", "medium", "high", "critical"] as const;
@@ -56,7 +56,7 @@ function commonFilters(opts: Record<string, any>) {
     task_id: opts.task,
     tag: opts.tag,
     include_closed: Boolean(opts.includeClosed),
-    limit: opts.limit ? Number.parseInt(opts.limit, 10) : undefined,
+    limit: parseOptionalPositiveSafeInteger(opts.limit, "--limit"),
   };
 }
 

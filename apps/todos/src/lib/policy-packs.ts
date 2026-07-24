@@ -292,7 +292,7 @@ export function removePolicyPack(name: string): boolean {
 export function validatePolicyPack(input: ValidatePolicyPackInput, db?: Database): PolicyPackValidationResult {
   const pack = getPolicyPack(input.name);
   if (!pack) throw new Error(`Policy pack not found: ${input.name}`);
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const evidence = gatherEvidence(input.task_id, d);
   const summary = summarizeEvidence(evidence);
   const allCommands = [

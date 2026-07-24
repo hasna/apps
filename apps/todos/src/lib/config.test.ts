@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "bun:test";
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from "bun:test";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -45,6 +45,12 @@ beforeAll(() => {
       bob: { tasks_dir: "/tmp/bob" },
     },
   }));
+  process.env["HOME"] = testHomeDir;
+});
+
+beforeEach(() => {
+  // The repository preload restores its disposable HOME before each test;
+  // this file then opts into its own narrower config fixture.
   process.env["HOME"] = testHomeDir;
 });
 

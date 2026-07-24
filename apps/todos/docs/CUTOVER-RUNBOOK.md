@@ -1,8 +1,24 @@
-# Shared Cloud Task Store — Cutover Runbook
+# Shared Cloud Task Store — Deferred Stage B Design
 
-This runbook covers the migration of `@hasna/todos` from disjoint per-machine
-local SQLite stores to a single shared Postgres task store, using the sanctioned
-two-phase plan:
+> **STAGE A STOP.** This document is design input for a future
+> authority-enabled Stage B. Nothing below is operational in Stage A. Do not
+> enable shadowing, open a remote datastore, migrate, backfill, flip storage,
+> deploy a remote runtime, or run the example provider commands. In Stage A,
+> `remote_enabled=false` and `runtime_enabled=false`; `remote_configured` only
+> reports configured intent. Every remote operator entry point reaches the
+> deterministic authority floor before config, dependencies, SQLite, or
+> network access.
+
+This document preserves the proposed migration design for `@hasna/todos` from
+disjoint per-machine local SQLite stores to a shared Postgres task store. It may
+be activated only after Stage B supplies a trusted authority resolver and a
+separately reviewed rollout:
+
+The tracked Dockerfile and compose file are Stage A containment-only artifacts:
+their default command renders help and starts no listener. If a future reviewed
+image starts the server, `/health` is liveness only; `/ready` remains unavailable
+with 503 until trusted authority exists. Stage B defers RDS, migration, and hosted
+runtime activation together with their rollback and artifact review.
 
 1. **Dual-write shadow** (pre-cutover, reversible at any time): local SQLite
    stays the sole source of truth for reads **and** writes; every successful
@@ -16,19 +32,19 @@ The council rejected per-machine cloud flips because they create a split-brain
 across disjoint stores. Machines therefore flip **together**, never one at a
 time.
 
-## Terminology and knobs
+## Deferred terminology and knobs
 
 | Env var | Meaning |
 | --- | --- |
-| `HASNA_TODOS_STORAGE_MODE` | `local` (default) \| `remote` \| `hybrid` |
-| `HASNA_TODOS_SHADOW` | `1` enables the dual-write shadow mirror (requires `MODE=local` + a DSN) |
-| `HASNA_TODOS_DATABASE_URL` | Postgres DSN for the shared store (from Secrets Manager) |
-| `HASNA_TODOS_DATABASE_SSL` | boolean, defaults to `true` |
+| `HASNA_TODOS_STORAGE_MODE` | `local` runs locally; `remote`/`hybrid` record intent and fail closed in Stage A |
+| `HASNA_TODOS_SHADOW` | Reserved Stage B intent; it cannot enable a mirror in Stage A |
+| `HASNA_TODOS_DATABASE_URL` | Reserved Stage B DSN input; Stage A diagnostics redact it and never connect |
+| `HASNA_TODOS_DATABASE_SSL` | Reserved Stage B TLS intent; it does not enable a runtime |
 
 Local-development fallbacks without the `HASNA_` prefix are accepted
 (`TODOS_SHADOW`, `TODOS_DATABASE_URL`, ...).
 
-## Deployment infrastructure
+## Deferred Stage B deployment infrastructure
 
 - Supply the target cluster/database, AWS account, region, ECR repository, and
   secret reference through the private deployment environment. Do not commit
@@ -38,7 +54,7 @@ Local-development fallbacks without the `HASNA_` prefix are accepted
   only through the SSM port-forward bastion documented in the secret's `ssm`
   block (`AWS-StartPortForwardingSessionToRemoteHost`).
 
-### Opening the sanctioned tunnel (reachability fallback)
+### Deferred Stage B tunnel design (not a Stage A command)
 
 ```
 aws ssm start-session \
@@ -47,16 +63,18 @@ aws ssm start-session \
   --parameters '{"host":["<rds host>"],"portNumber":["5432"],"localPortNumber":["15432"]}'
 ```
 
-Then point tooling at `127.0.0.1:15432` with `sslmode=require`. Never paste the
+Only an approved Stage B operator would point tooling at `127.0.0.1:15432` with
+`sslmode=require`. Never paste the
 password on a command line; pull the DSN from Secrets Manager and pipe it
 directly into `psql` / the app.
 
-## Schema
+## Deferred Stage B schema
 
 The shared store uses the repo-native sync schema
 (`postgresTodosSyncSchemaSql()` in `./storage`): `todos_sync_records`
 (keyed by `service, object_type, object_id`) plus `todos_sync_cursors`. Apply
-it idempotently before any mirror or cutover:
+it idempotently before a future Stage B mirror or cutover. The following is a
+design excerpt, not an authorized Stage A procedure:
 
 ```
 bun -e "const m=await import('./src/storage/postgres-sync.ts'); \
@@ -68,11 +86,11 @@ All statements use `IF NOT EXISTS`, so re-running is safe.
 
 ---
 
-## Phase 1 — Dual-write shadow (already implemented)
+## Deferred Stage B Phase 1 — Dual-write shadow (not live in Stage A)
 
-Shadow mode wraps the local adapter so successful writes are mirrored
+The proposed shadow mode would wrap the local adapter so successful writes are mirrored
 fire-and-forget to the cloud with bounded retries and a divergence counter. It
-never reads from the cloud. Enable it per machine:
+would never read from the cloud. These values are non-operational intent in Stage A:
 
 ```
 HASNA_TODOS_STORAGE_MODE=local
@@ -80,15 +98,15 @@ HASNA_TODOS_SHADOW=1
 HASNA_TODOS_DATABASE_URL=<DSN from the approved deployment secret>
 ```
 
-Watch divergence with the read-only diagnostic (this command **does** open a DB
-connection, unlike `todos storage status`):
+In a future Stage B, divergence could be watched with the diagnostic below. In
+Stage A both commands fail at the authority floor before opening a DB connection:
 
 ```
 todos storage shadow-status            # human-readable
 todos storage shadow-status --json     # machine-readable
 ```
 
-`shadow-status` reports per-object-type local vs cloud row counts, cloud
+The future `shadow-status` design reports per-object-type local vs cloud row counts, cloud
 tombstones, `in_sync`, and last mirror lag.
 
 > **Runtime-wiring caveat.** The mirror lives in the storage adapter
@@ -100,9 +118,10 @@ tombstones, `in_sync`, and last mirror lag.
 
 ---
 
-## Phase 2 — Single-writer flip (all machines together, Amendment A1)
+## Deferred Stage B Phase 2 — Single-writer flip (not authorized in Stage A)
 
-Perform this as one coordinated operation across every fleet machine.
+After trusted authority and separate approval exist, this would be performed as
+one coordinated operation across every fleet machine.
 
 ### Preconditions
 
@@ -137,8 +156,9 @@ Perform this as one coordinated operation across every fleet machine.
    machine-by-machine.
 5. **Back up local SQLite.** Rename each machine's local DB to a dated backup
    (e.g. `todos.sqlite.pre-cutover-YYYYMMDD`). Do not delete it.
-6. **Unfreeze.** Restart writers. All machines now read and write the shared
-   store; `todos storage status` shows `Mode: remote`, `Remote: enabled`.
+6. **Unfreeze.** Restart writers only in the future Stage B. Stage A status must
+   continue to show `remote_enabled: false` and `runtime_enabled: false`, even
+   when `remote_configured: true` records intent.
 7. **Validate co-drain.** Confirm two machines can claim disjoint tasks from the
    shared queue without double-claim (claim-safety is enforced by the shared
    `route_state`/optimistic locking now that the store is shared).
@@ -167,12 +187,14 @@ avoiding the split-brain the council rejected.
 
 ## Safety invariants
 
+- Stage A never executes any shadow, migration, backfill, flip, or cloud-runtime
+  step in this document.
 - Never make the RDS instance publicly accessible.
 - Never echo the DSN password; pull from Secrets Manager and pipe directly.
 - Shadow mode is read-never: it must not introduce a cloud read path.
 - The flip is all-machines-together; per-machine flips are prohibited.
 
-## Cloud container runtime boundary
+## Deferred Stage B cloud container runtime boundary
 
 The production image is an ARM64, musl-based Bun container. Its Dockerfile pins
 the exact official `oven/bun:1.3.14-alpine` ARM64 manifest digest rather than a
@@ -215,7 +237,8 @@ build-only name. The public Dockerfile default remains the official Docker Hub
 digest. Do not fall back to a mutable base tag or widen the builder's ECR policy
 without a separately reviewed infrastructure change.
 
-Before an image digest may enter Terraform, require all of the following:
+If Stage B is authorized, before an image digest may enter Terraform, require
+all of the following. None of these are Stage A procedures:
 
 1. Build natively for `linux/arm64` from an exact committed source archive.
 2. Record OCI architecture, entrypoint, default command, Bun version, Alpine
@@ -243,9 +266,11 @@ Before an image digest may enter Terraform, require all of the following:
 A non-root user remains a separate hardening item. Do not compound that identity
 change with the base-image vulnerability fix and runtime dependency pruning.
 
-## Task-comment pagination and historical-redaction rollout
+## Deferred Stage B task-comment historical-redaction rollout
 
-This change has an intentional mixed-version sequence. Do not reverse it.
+This proposed data-changing sequence is not available in Stage A: the package
+script and server operator command fail at the authority floor. If Stage B is
+authorized later, its mixed-version sequence must not be reversed.
 
 1. **Rotate or revoke exposed credentials first.** Redacting stored evidence is
    not a substitute for invalidating any credential that may have appeared in a

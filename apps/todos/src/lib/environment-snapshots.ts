@@ -308,7 +308,7 @@ export function recordEnvironmentSnapshot(input: RecordEnvironmentSnapshotInput 
   let taskId = input.task_id;
   let runId = input.run_id;
   const needsDatabase = Boolean(taskId || runId);
-  const d = needsDatabase ? (db || getDatabase()) : null;
+  const d = needsDatabase ? (getDatabase(db)) : null;
   if (runId) {
     runId = resolveTaskRunId(runId, d!);
     const run = getTaskRun(runId, d!);

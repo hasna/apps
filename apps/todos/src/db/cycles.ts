@@ -52,7 +52,7 @@ export interface CycleQueryOptions {
 // ── CRUD ────────────────────────────────────────────────────────────────────
 
 export function createCycle(input: CreateCycleInput, db?: Database): Cycle {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const id = crypto.randomUUID();
   const project_id = input.project_id || null;
   const duration_weeks = input.duration_weeks ?? 1;
@@ -83,19 +83,19 @@ function getNextCycleNumber(project_id: string | null, db: Database): number {
 }
 
 export function getCycle(id: string, db?: Database): Cycle | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return d.query("SELECT * FROM cycles WHERE id = ?").get(id) as Cycle | null;
 }
 
 export function getCycleByNumber(project_id: string, number: number, db?: Database): Cycle | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return d.query(
     "SELECT * FROM cycles WHERE project_id = ? AND number = ?"
   ).get(project_id, number) as Cycle | null;
 }
 
 export function listCycles(options: CycleQueryOptions = {}, db?: Database): Cycle[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   let sql = "SELECT * FROM cycles WHERE 1=1";
   const params: (SQLQueryBindings)[] = [];
 
@@ -116,7 +116,7 @@ export function listCycles(options: CycleQueryOptions = {}, db?: Database): Cycl
 }
 
 export function updateCycle(id: string, input: CycleUpdateInput, db?: Database): Cycle | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const existing = getCycle(id, d);
   if (!existing) return null;
 
@@ -134,7 +134,7 @@ export function updateCycle(id: string, input: CycleUpdateInput, db?: Database):
 }
 
 export function deleteCycle(id: string, db?: Database): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const result = d.prepare("DELETE FROM cycles WHERE id = ?").run(id);
   return result.changes > 0;
 }
@@ -150,7 +150,7 @@ export function generateCycles(
   options: { start_date: string; count: number; duration_weeks?: number },
   db?: Database,
 ): Cycle[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const duration_weeks = options.duration_weeks ?? 1;
   const cycles: Cycle[] = [];
 
@@ -174,7 +174,7 @@ export function generateCycles(
  * Get the currently active cycle for a project (today falls within start/end).
  */
 export function getCurrentCycle(project_id: string, db?: Database): Cycle | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const today = new Date().toISOString().split("T")[0]!;
   return d.query(
     "SELECT * FROM cycles WHERE project_id = ? AND status = 'active' AND start_date <= ? AND end_date >= ? ORDER BY number DESC LIMIT 1"
@@ -185,7 +185,7 @@ export function getCurrentCycle(project_id: string, db?: Database): Cycle | null
  * Get the next upcoming cycle (start_date is in the future).
  */
 export function getNextCycle(project_id: string, db?: Database): Cycle | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const today = new Date().toISOString().split("T")[0]!;
   return d.query(
     "SELECT * FROM cycles WHERE project_id = ? AND start_date > ? ORDER BY number ASC LIMIT 1"
@@ -201,7 +201,7 @@ export function getCycleStats(cycle_id: string, db?: Database): {
   started_count: number;
   uncompleted_count: number;
 } | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query(`
     SELECT
       COUNT(*) as task_count,

@@ -73,7 +73,7 @@ export interface ImportHandoffBundleResult {
 }
 
 export function createHandoff(input: CreateHandoffInput, db?: Database): Handoff {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const id = uuid();
   const timestamp = now();
   d.run(
@@ -129,7 +129,7 @@ function toOptionalArray(value: unknown): string[] | undefined {
 }
 
 export function exportHandoffBundle(id: string, db?: Database, exportedAt: Date = new Date()): HandoffBundle {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const handoff = getHandoff(id, d);
   if (!handoff) throw new Error(`Handoff not found: ${id}`);
 
@@ -204,7 +204,7 @@ export function importHandoffBundle(
   if (!bundle || bundle.schemaVersion !== 1 || bundle.kind !== "hasna.todos.handoff" || !bundle.handoff?.id) {
     throw new Error("Invalid handoff bundle");
   }
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const handoff = bundle.handoff;
   const existing = getHandoff(handoff.id, d);
   const warnings: string[] = [];
@@ -299,7 +299,7 @@ export function listHandoffs(projectIdOrOptions?: string | ListHandoffsOptions, 
   const options: ListHandoffsOptions = typeof projectIdOrOptions === "object" && projectIdOrOptions !== null
     ? projectIdOrOptions
     : { project_id: projectIdOrOptions || undefined, limit: typeof limitOrDb === "number" ? limitOrDb : 10 };
-  const d = maybeDb || (typeof limitOrDb === "object" ? limitOrDb : undefined) || getDatabase();
+  const d = getDatabase(maybeDb ?? (typeof limitOrDb === "object" ? limitOrDb : undefined));
   const conditions: string[] = [];
   const params: SQLQueryBindings[] = [];
 
@@ -322,7 +322,7 @@ export function listHandoffs(projectIdOrOptions?: string | ListHandoffsOptions, 
 }
 
 export function getHandoff(id: string, db?: Database): Handoff | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query("SELECT * FROM handoffs WHERE id = ? OR id LIKE ? ORDER BY rowid DESC LIMIT 2").all(id, `${id}%`) as any[];
   if (row.length === 0) return null;
   if (row.length > 1) throw new Error(`Handoff ID is ambiguous: ${id}`);
@@ -330,7 +330,7 @@ export function getHandoff(id: string, db?: Database): Handoff | null {
 }
 
 export function acknowledgeHandoff(id: string, agentId: string, db?: Database): Handoff {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const handoff = getHandoff(id, d);
   if (!handoff) throw new Error(`Handoff not found: ${id}`);
   d.run(
@@ -341,7 +341,7 @@ export function acknowledgeHandoff(id: string, agentId: string, db?: Database): 
 }
 
 export function getLatestHandoff(agentId?: string, projectId?: string, db?: Database): Handoff | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   let query = "SELECT * FROM handoffs WHERE 1=1";
   const params: any[] = [];
   if (agentId) { query += " AND agent_id = ?"; params.push(agentId); }
@@ -352,7 +352,7 @@ export function getLatestHandoff(agentId?: string, projectId?: string, db?: Data
 }
 
 export function createSessionRecoveryHandoff(input: CreateSessionRecoveryHandoffInput, db?: Database): Handoff {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const limit = input.limit || 20;
   const conditions = ["status = 'in_progress'", "(assigned_to = ? OR agent_id = ? OR locked_by = ?)"];
   const params: SQLQueryBindings[] = [input.agent_id, input.agent_id, input.agent_id];

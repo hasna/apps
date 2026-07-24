@@ -3,9 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:f
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
-import { Database } from "bun:sqlite";
-import { closeDatabase, getDatabase, resetDatabase } from "../db/database.js";
-import { runMigrations } from "../db/schema.js";
+import { closeDatabase, getDatabase, openLocalSqliteDatabase, resetDatabase } from "../db/database.js";
 import { finishTaskRun, startTaskRun } from "../db/task-runs.js";
 import { completeTask, createTask, startTask } from "../db/tasks.js";
 import { approveApprovalGate, requestApprovalGate } from "./approval-gates.js";
@@ -81,9 +79,7 @@ describe("local event hooks", () => {
     const previousDbPath = process.env["TODOS_DB_PATH"];
     const nonTempHome = makeNonTempHome("todos-event-hooks-home");
     const filePath = join(home, "explicit-lifecycle.jsonl");
-    const explicitDb = new Database(":memory:");
-    explicitDb.run("PRAGMA foreign_keys = ON");
-    runMigrations(explicitDb);
+    const explicitDb = openLocalSqliteDatabase(":memory:");
     try {
       process.env["HOME"] = nonTempHome;
       delete process.env["TODOS_DB_PATH"];
@@ -115,9 +111,7 @@ describe("local event hooks", () => {
     const previousDbPath = process.env["TODOS_DB_PATH"];
     const nonTempHome = makeNonTempHome("todos-run-hooks-home");
     const filePath = join(home, "explicit-run.jsonl");
-    const explicitDb = new Database(":memory:");
-    explicitDb.run("PRAGMA foreign_keys = ON");
-    runMigrations(explicitDb);
+    const explicitDb = openLocalSqliteDatabase(":memory:");
     try {
       process.env["HOME"] = nonTempHome;
       delete process.env["TODOS_DB_PATH"];
@@ -153,9 +147,7 @@ describe("local event hooks", () => {
     const previousDbPath = process.env["TODOS_DB_PATH"];
     const nonTempHome = makeNonTempHome("todos-review-hooks-home");
     const filePath = join(home, "explicit-review.jsonl");
-    const explicitDb = new Database(":memory:");
-    explicitDb.run("PRAGMA foreign_keys = ON");
-    runMigrations(explicitDb);
+    const explicitDb = openLocalSqliteDatabase(":memory:");
     try {
       process.env["HOME"] = nonTempHome;
       delete process.env["TODOS_DB_PATH"];

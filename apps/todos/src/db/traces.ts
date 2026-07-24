@@ -30,7 +30,7 @@ export interface LogTraceInput {
 }
 
 export function logTrace(input: LogTraceInput, db?: Database): TaskTrace {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const id = uuid();
   const timestamp = now();
   d.run(
@@ -46,12 +46,12 @@ export function logTrace(input: LogTraceInput, db?: Database): TaskTrace {
 }
 
 export function getTaskTraces(taskId: string, db?: Database): TaskTrace[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return d.query("SELECT * FROM task_traces WHERE task_id = ? ORDER BY created_at DESC").all(taskId) as TaskTrace[];
 }
 
 export function getTraceStats(taskId: string, db?: Database): { total: number; tool_calls: number; llm_calls: number; errors: number; total_tokens: number; total_cost_usd: number; total_duration_ms: number } {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query(
     `SELECT COUNT(*) as total,
        SUM(CASE WHEN trace_type = 'tool_call' THEN 1 ELSE 0 END) as tool_calls,

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "bun:test";
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from "bun:test";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getActiveModel, setActiveModel, clearActiveModel, DEFAULT_MODEL } from "./model-config.js";
@@ -9,6 +9,10 @@ const configPath = join(configDir, "config.json");
 
 beforeAll(() => {
   mkdirSync(configDir, { recursive: true });
+  process.env["HOME"] = testHomeDir;
+});
+
+beforeEach(() => {
   process.env["HOME"] = testHomeDir;
 });
 

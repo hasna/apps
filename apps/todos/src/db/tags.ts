@@ -93,7 +93,7 @@ function renameTaskTagRows(oldName: string, newName: string, db: Database): void
 }
 
 export function createTag(input: CreateTagInput, db?: Database): Tag {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const name = normalizeName(input.name);
   if (!name) throw new Error("Tag name is required");
   const id = uuid();
@@ -107,7 +107,7 @@ export function createTag(input: CreateTagInput, db?: Database): Tag {
 }
 
 export function listTags(db?: Database): Tag[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const rows = d.query("SELECT * FROM tags ORDER BY name").all() as TagRow[];
   const tagsByName = new Map(rows.map((row) => [row.name.toLowerCase(), rowToTag(row, d)]));
   const taskTags = d.query("SELECT tag, COUNT(*) AS count FROM task_tags GROUP BY tag ORDER BY tag").all() as { tag: string; count: number }[];
@@ -119,7 +119,7 @@ export function listTags(db?: Database): Tag[] {
 }
 
 export function getTag(idOrName: string, db?: Database): Tag | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = getTagRow(idOrName, d);
   if (row) return rowToTag(row, d);
   const existing = d.query("SELECT tag FROM task_tags WHERE lower(tag) = lower(?) LIMIT 1").get(idOrName) as { tag: string } | null;
@@ -127,7 +127,7 @@ export function getTag(idOrName: string, db?: Database): Tag | null {
 }
 
 export function updateTag(idOrName: string, input: UpdateTagInput, db?: Database): Tag {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const existing = getTag(idOrName, d);
   if (!existing) throw new Error(`Tag not found: ${idOrName}`);
 
@@ -155,7 +155,7 @@ export function updateTag(idOrName: string, input: UpdateTagInput, db?: Database
 }
 
 export function deleteTag(idOrName: string, db?: Database): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const existing = getTag(idOrName, d);
   if (!existing) return false;
   d.run("DELETE FROM tags WHERE id = ? OR lower(name) = lower(?)", [existing.id, existing.name]);

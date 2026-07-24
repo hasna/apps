@@ -77,7 +77,7 @@ function generatePlaintextKey(): string {
 }
 
 export function createApiKey(input: CreateApiKeyInput, db?: Database): CreatedApiKey {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const name = input.name.trim();
   if (!name) throw new Error("API key name is required");
 
@@ -103,7 +103,7 @@ export function createApiKey(input: CreateApiKeyInput, db?: Database): CreatedAp
 }
 
 export function listApiKeys(opts?: { include_revoked?: boolean }, db?: Database): ApiKeyRecord[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const includeRevoked = opts?.include_revoked ?? false;
   const sql = includeRevoked
     ? "SELECT * FROM api_keys ORDER BY created_at DESC"
@@ -112,7 +112,7 @@ export function listApiKeys(opts?: { include_revoked?: boolean }, db?: Database)
 }
 
 export function hasActiveApiKeys(db?: Database): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query(
     "SELECT COUNT(*) AS count FROM api_keys WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)",
   ).get(now()) as { count: number } | null;
@@ -120,7 +120,7 @@ export function hasActiveApiKeys(db?: Database): boolean {
 }
 
 export function verifyApiKey(key: string, db?: Database): ApiKeyRecord | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const candidateHash = hashApiKey(key);
   const rows = d.query(
     "SELECT * FROM api_keys WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)",
@@ -134,7 +134,7 @@ export function verifyApiKey(key: string, db?: Database): ApiKeyRecord | null {
 }
 
 export function revokeApiKey(idOrPrefix: string, db?: Database): ApiKeyRecord | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const identifier = idOrPrefix.trim();
   const row = d.query(
     "SELECT * FROM api_keys WHERE id = ? OR prefix = ?",

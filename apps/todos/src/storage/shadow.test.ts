@@ -2,21 +2,20 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { closeDatabase, getDatabase, resetDatabase } from "../db/database.js";
 import { setMachineLocalPath } from "../db/projects.js";
-import {
-  createLocalSqliteTodosStorageAdapter,
-  createShadowTodosStorageAdapter,
-  createTodosStorageAdapter,
-  loadTodosStorageConfig,
-  type TodosPostgresQueryClient,
-} from "../storage.js";
+import { createLocalSqliteTodosStorageAdapter } from "./local-sqlite.js";
+import { createTodosStorageAdapter } from "./factory.js";
+import { loadTodosStorageConfig } from "./config.js";
+import { createShadowTodosStorageAdapter } from "./shadow.js";
+import type { TodosPostgresQueryClient } from "./postgres-sync.js";
 import { getTodosShadowStatus } from "../lib/shadow-status.js";
 
 let db: Database;
+const LOCAL_TEST_ENV = { HASNA_TODOS_STORAGE_MODE: "local" } as const;
 
 beforeEach(() => {
   process.env["TODOS_DB_PATH"] = ":memory:";
   resetDatabase();
-  db = getDatabase();
+  db = getDatabase(undefined, LOCAL_TEST_ENV);
 });
 
 afterEach(() => {
@@ -226,7 +225,7 @@ describe("dual-write shadow adapter", () => {
     expect(report.error).toContain("connection refused");
   });
 
-  test("factory builds a shadow adapter when HASNA_TODOS_SHADOW is enabled", async () => {
+  test("Stage-A convenience factory preserves local SQLite without constructing shadow remote", async () => {
     const postgres = createMemoryPostgresClient();
     const config = loadTodosStorageConfig({
       HASNA_TODOS_STORAGE_MODE: "local",
@@ -235,21 +234,28 @@ describe("dual-write shadow adapter", () => {
     });
     const adapter = createTodosStorageAdapter({
       config,
-      env: { HASNA_TODOS_SHADOW: "1", HASNA_TODOS_DATABASE_URL: "postgres://todos@rds.example/todos" },
+      env: {
+        HASNA_TODOS_STORAGE_MODE: "local",
+        HASNA_TODOS_SHADOW: "1",
+        HASNA_TODOS_DATABASE_URL: "postgres://todos@rds.example/todos",
+      },
       local: { db },
       postgresClient: postgres.client,
     });
-    expect("shadow" in adapter).toBe(true);
+    expect(adapter.kind).toBe("sqlite");
     expect(adapter.capabilities.remotePersistence).toBe(false);
+    expect(postgres.calls).toEqual([]);
   });
 
-  test("factory rejects shadow mode without a remote DSN", () => {
+  test("Stage-A convenience factory does not require a shadow DSN", () => {
     const config = loadTodosStorageConfig({
       HASNA_TODOS_STORAGE_MODE: "local",
       HASNA_TODOS_SHADOW: "1",
     });
-    expect(() =>
-      createTodosStorageAdapter({ config, env: { HASNA_TODOS_SHADOW: "1" }, local: { db } }),
-    ).toThrow("required");
+    expect(createTodosStorageAdapter({
+      config,
+      env: { HASNA_TODOS_STORAGE_MODE: "local", HASNA_TODOS_SHADOW: "1" },
+      local: { db },
+    }).kind).toBe("sqlite");
   });
 });

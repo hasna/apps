@@ -438,7 +438,7 @@ function applyContextBudget(pack: AgentContextPack, input: CreateAgentContextPac
 }
 
 export function createAgentContextPack(input: CreateAgentContextPackInput, db?: Database): AgentContextPack {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const task = getTask(input.task_id, d);
   if (!task) throw new TaskNotFoundError(input.task_id);
   const limit = limits(input);

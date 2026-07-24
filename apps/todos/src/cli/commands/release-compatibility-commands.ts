@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import chalk from "chalk";
-import { handleError, output } from "../helpers.js";
+import { handleError, output, parseNonNegativeSafeInteger } from "../helpers.js";
 
 function globalOptions(program: Command): Record<string, any> {
   const command = program as Command & { optsWithGlobals?: () => Record<string, any> };
@@ -11,8 +11,7 @@ function parseLevels(value?: string): number[] | undefined {
   if (!value) return undefined;
   return value
     .split(",")
-    .map((item) => Number.parseInt(item.trim(), 10))
-    .filter((item) => Number.isInteger(item) && item >= 0);
+    .map((item) => parseNonNegativeSafeInteger(item, "--levels"));
 }
 
 export function registerReleaseCompatibilityCommands(program: Command) {
@@ -23,7 +22,7 @@ export function registerReleaseCompatibilityCommands(program: Command) {
   releaseCompat
     .command("check")
     .description("Build a local release compatibility report")
-    .option("--root <path>", "Package root", process.cwd())
+    .option("--root <path>", "Package root (defaults to the current directory at execution)")
     .option("--levels <csv>", "Comma-separated migration levels to simulate")
     .option("--format <format>", "json or markdown", "json")
     .action(async (opts: { root?: string; levels?: string; format?: string }) => {
@@ -31,7 +30,7 @@ export function registerReleaseCompatibilityCommands(program: Command) {
       try {
         const { createReleaseCompatibilityReport, renderReleaseCompatibilityMarkdown } = await import("../../lib/release-compatibility.js");
         const report = createReleaseCompatibilityReport({
-          root: opts.root,
+          root: opts.root ?? process.cwd(),
           simulated_levels: parseLevels(opts.levels),
         });
         if (opts.format === "markdown") {

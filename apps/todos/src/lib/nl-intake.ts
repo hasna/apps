@@ -385,7 +385,7 @@ function enrichIntakePreview(intake: IntakePreview, parsed: ParsedNlFields, rawT
 }
 
 export function previewNlIntake(input: NlIntakeInput, db?: Database): NlIntakePreview {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const { parsed, explain } = parseNaturalLanguageTask(input.text);
   const intake = enrichIntakePreview(
     previewInboxIntake(toIntakeInput(input, parsed), d),
@@ -407,7 +407,7 @@ export function createNlIntake(
   options: IntakeOptions = {},
   db?: Database,
 ): NlIntakeResult {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const preview = previewNlIntake(input, d);
 
   if (options.dry_run) {

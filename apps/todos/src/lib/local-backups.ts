@@ -197,7 +197,7 @@ export function createLocalBackup(
   options: CreateLocalBackupOptions = {},
   db?: Database,
 ): LocalBackupBundle {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const createdAt = options.generated_at ?? now();
   const bridge = createLocalBridgeBundle({
     project_id: options.project_id,
@@ -327,7 +327,7 @@ export function verifyLocalBackup(
     issues.push(`bridge schemaVersion must be ${TODOS_LOCAL_BRIDGE_SCHEMA_VERSION}`);
   }
 
-  const sqlite = options.check_sqlite === false ? null : sqliteIntegrity(db || getDatabase());
+  const sqlite = options.check_sqlite === false ? null : sqliteIntegrity(getDatabase(db));
   if (sqlite && !sqlite.ok) warnings.push("current SQLite integrity check did not pass");
 
   return {
@@ -366,7 +366,7 @@ export function restoreLocalBackup(
   options: RestoreLocalBackupOptions = {},
   db?: Database,
 ): LocalBackupRestoreResult {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const verification = verifyLocalBackup(backup, { verified_at: options.verified_at, check_sqlite: true }, d);
   const issues = [...verification.issues];
   let importResult: LocalBridgeImportResult | null = null;
@@ -422,7 +422,7 @@ export function checkLocalIntegrity(
   options: { generated_at?: string; project_id?: string; version?: string } = {},
   db?: Database,
 ): LocalIntegrityReport {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const bridge = createLocalBridgeBundle({
     project_id: options.project_id,
     generatedAt: options.generated_at,

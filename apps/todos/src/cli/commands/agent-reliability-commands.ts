@@ -7,12 +7,10 @@ import {
   renderAgentReliabilityMarkdown,
   type AgentReliabilityScorecard,
 } from "../../db/agent-metrics.js";
-import { handleError, output } from "../helpers.js";
+import { handleError, output, parsePositiveSafeIntegerOr } from "../helpers.js";
 
 function parseNumber(value: string | undefined, fallback: number): number {
-  if (!value) return fallback;
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  return parsePositiveSafeIntegerOr(value, fallback);
 }
 
 function commonOptions(opts: Record<string, any>) {

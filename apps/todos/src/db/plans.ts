@@ -60,7 +60,7 @@ function resolveCreateSlug(input: CreatePlanInput, projectId: string | null, db:
 }
 
 export function resolvePlanRefDetailed(ref: string, db?: Database, projectId?: string | null): ResolvePlanRefResult {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const byId = d.query("SELECT * FROM plans WHERE id = ? OR id LIKE ? ORDER BY id").all(ref, `${ref}%`) as Plan[];
   if (byId.length === 1) return { id: byId[0]!.id, reason: "id", matches: byId };
   if (byId.length > 1) return { id: null, reason: "ambiguous", matches: byId };
@@ -79,7 +79,7 @@ export function resolvePlanRef(ref: string, db?: Database, projectId?: string | 
 }
 
 export function createPlan(input: CreatePlanInput, db?: Database): Plan {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const id = uuid();
   const timestamp = now();
   const projectId = input.project_id || null;
@@ -108,13 +108,13 @@ export function createPlan(input: CreatePlanInput, db?: Database): Plan {
 }
 
 export function getPlan(id: string, db?: Database): Plan | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query("SELECT * FROM plans WHERE id = ?").get(id) as Plan | null;
   return row;
 }
 
 export function listPlans(projectId?: string, db?: Database): Plan[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   if (projectId) {
     return d
       .query("SELECT * FROM plans WHERE project_id = ? ORDER BY created_at DESC")
@@ -130,7 +130,7 @@ export function updatePlan(
   input: UpdatePlanInput,
   db?: Database,
 ): Plan {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const plan = getPlan(id, d);
   if (!plan) throw new PlanNotFoundError(id);
 
@@ -179,7 +179,7 @@ export function updatePlan(
 }
 
 export function deletePlan(id: string, db?: Database): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const plan = getPlan(id, d);
   if (!plan) return false;
   recordStorageTombstone({

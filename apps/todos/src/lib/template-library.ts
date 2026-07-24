@@ -40,7 +40,7 @@ export interface TemplateLibraryExport {
 }
 
 export function listTemplateLibrary(db?: Database): TemplateLibraryEntry[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const installed = new Set(listTemplates(d).map((t) => t.name));
 
   return BUILTIN_TEMPLATES.map((bt) => ({
@@ -96,7 +96,7 @@ export function exportTemplateLibraryCatalog(path?: string, db?: Database): Temp
 }
 
 export function exportInstalledTemplate(name: string, db?: Database): TemplateLibraryExport | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const template = listTemplates(d).find((t) => t.name === name);
   if (!template) return null;
   return {
@@ -107,7 +107,7 @@ export function exportInstalledTemplate(name: string, db?: Database): TemplateLi
 }
 
 export function importTemplateFromFile(path: string, db?: Database): { id: string; name: string } {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const raw = JSON.parse(readFileSync(path, "utf8"));
   const payload = raw.template ?? raw;
   const created = importTemplate(payload, d);
@@ -119,7 +119,7 @@ export function previewInstalledTemplate(
   variables: Record<string, string> = {},
   db?: Database,
 ): ReturnType<typeof previewTemplate> | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const template = listTemplates(d).find((t) => t.name === name);
   if (!template) return previewBuiltinTemplate(name, variables) as ReturnType<typeof previewTemplate> | null;
   return previewTemplate(template.id, variables, d);

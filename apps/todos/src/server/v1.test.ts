@@ -3,16 +3,17 @@ import type { Database } from "bun:sqlite";
 import { getDatabase, resetDatabase } from "../db/database.js";
 import { createLocalSqliteTodosStorageAdapter } from "../storage/local-sqlite.js";
 import type { TodosStorageAdapter } from "../storage/interfaces.js";
-import { handleV1Request, type V1RequestDependencies } from "./v1.js";
+import { createLocalV1DispatchDependencies, dispatchV1Request } from "./v1.js";
 
 let db: Database;
 let store: TodosStorageAdapter;
 let principal: { agent: string | null; scopes: string[] };
-let dependencies: V1RequestDependencies;
+const LOCAL_TEST_ENV = { HASNA_TODOS_STORAGE_MODE: "local" } as const;
 
-function request(path: string, method = "GET", body?: unknown): Promise<Response | null> {
+async function request(path: string, method = "GET", body?: Record<string, unknown>): Promise<Response | null> {
   const url = new URL(`https://todos.example.test${path}`);
-  return handleV1Request(new Request(url, {
+  const dependencies = await createLocalV1DispatchDependencies({ storageAdapter: store, principal });
+  return dispatchV1Request(new Request(url, {
     method,
     headers: { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -21,16 +22,9 @@ function request(path: string, method = "GET", body?: unknown): Promise<Response
 
 beforeEach(() => {
   resetDatabase();
-  db = getDatabase(":memory:");
+  db = getDatabase(":memory:", LOCAL_TEST_ENV);
   store = createLocalSqliteTodosStorageAdapter({ db });
   principal = { agent: null, scopes: ["todos:*"] };
-  dependencies = {
-    ensureSchema: async () => {},
-    getStorageAdapter: () => store,
-    getVerifier: () => ({
-      authenticate: async () => ({ ok: true, principal }),
-    }) as ReturnType<NonNullable<V1RequestDependencies["getVerifier"]>>,
-  };
 });
 
 afterEach(() => resetDatabase());
@@ -64,6 +58,43 @@ describe("/v1 task-list cloud parity", () => {
     const firstBody = await firstPage!.json() as { tasks: Array<{ title: string }>; count: number; total: number };
     expect(firstBody).toMatchObject({ count: 1, total: 2 });
     expect(new Set([body.tasks[0]!.title, firstBody.tasks[0]!.title])).toEqual(new Set(["first", "second"]));
+  });
+  test("a branded local adapter cannot be rewritten before dependency issuance", async () => {
+    let hostileCalls = 0;
+    expect(Object.isFrozen(store)).toBe(true);
+    expect(Object.isFrozen(store.tasks)).toBe(true);
+    expect(() => {
+      (store.tasks as unknown as { list: () => never[] }).list = () => {
+        hostileCalls += 1;
+        return [];
+      };
+    }).toThrow();
+
+    const response = await request("/v1/tasks");
+    expect(response?.status).toBe(200);
+    expect(hostileCalls).toBe(0);
+  });
+
+  test("a branded local adapter does not retain a mutable caller options path", async () => {
+    const options: { db?: Database } = { db };
+    const adapter = createLocalSqliteTodosStorageAdapter(options);
+    let hostileReads = 0;
+    options.db = new Proxy({} as Database, {
+      get() {
+        hostileReads += 1;
+        throw new Error("FAKE_ONLY_MUTATED_DATABASE_OPTIONS_MARKER");
+      },
+    });
+
+    const dependencies = await createLocalV1DispatchDependencies({
+      storageAdapter: adapter,
+      principal,
+    });
+    const url = new URL("https://todos.example.test/v1/tasks");
+    const response = await dispatchV1Request(new Request(url), url, dependencies);
+
+    expect(response?.status).toBe(200);
+    expect(hostileReads).toBe(0);
   });
 
   test("create, project-scoped enumeration, get, update, and delete share one canonical id", async () => {
@@ -336,17 +367,6 @@ describe("/v1 task hierarchy and lock authorization", () => {
   test("include_subtasks=true returns roots and descendants with an inclusive total", async () => {
     const parent = await store.tasks.create({ title: "parent" });
     const child = await store.tasks.create({ title: "child", parent_id: parent.id });
-    const seenFilters: Array<Record<string, unknown>> = [];
-    const originalList = store.tasks.list.bind(store.tasks);
-    const originalCount = store.tasks.count.bind(store.tasks);
-    store.tasks.list = (filter = {}) => {
-      seenFilters.push({ ...filter });
-      return originalList(filter);
-    };
-    store.tasks.count = (filter = {}) => {
-      seenFilters.push({ ...filter });
-      return originalCount(filter);
-    };
 
     const response = await request("/v1/tasks?include_subtasks=true&limit=10&offset=0");
     expect(response?.status).toBe(200);
@@ -354,10 +374,6 @@ describe("/v1 task hierarchy and lock authorization", () => {
     expect(new Set(body.tasks.map((task) => task.id))).toEqual(new Set([parent.id, child.id]));
     expect(body.count).toBe(2);
     expect(body.total).toBe(2);
-    expect(seenFilters).toEqual([
-      { include_subtasks: true, limit: 10, offset: 0 },
-      { include_subtasks: true },
-    ]);
     expect((await request("/v1/tasks?include_subtasks=1"))?.status).toBe(400);
   });
 

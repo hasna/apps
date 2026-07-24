@@ -173,7 +173,7 @@ export function buildFailureTriageReport(
   filter: { project_id?: string; plan_id?: string; limit?: number } = {},
   db?: Database,
 ): FailureTriageReport {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const limit = filter.limit ?? 50;
   const items: FailureTriageItem[] = [];
 
@@ -269,7 +269,7 @@ export function buildFailureTriageReport(
 }
 
 export function applyFailureTriage(input: ApplyFailureTriageInput, db?: Database): ApplyFailureTriageResult {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const action = input.action ?? "annotate";
 
   if (input.task_id) {

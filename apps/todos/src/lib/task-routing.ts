@@ -217,7 +217,7 @@ export function getTaskRouteState(
   db?: Database,
   options: GetTaskRouteStateOptions = {},
 ): TaskRouteState {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const task = typeof taskOrId === "string" ? getTask(taskOrId, d) : taskOrId;
   if (!task) throw new Error(`Task not found: ${taskOrId}`);
 
@@ -364,7 +364,7 @@ export function setTaskWorkflowPointers(
   input: SetTaskWorkflowPointersInput,
   db?: Database,
 ): Task {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const task = getTask(taskId, d);
   if (!task) throw new Error(`Task not found: ${taskId}`);
 

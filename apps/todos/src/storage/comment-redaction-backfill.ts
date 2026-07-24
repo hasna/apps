@@ -3,29 +3,19 @@ import {
   DEFAULT_TODOS_POSTGRES_SYNC_TABLE,
   type TodosPostgresQueryClient,
 } from "./postgres-sync.js";
-
-export const COMMENT_REDACTION_BACKFILL_CONFIRMATION = "REDACT_STORED_TODOS_COMMENTS";
-
-export interface CommentRedactionBackfillOptions {
-  /** Defaults to a non-mutating scan. */
-  apply?: boolean;
-  /** Required when `apply` is true to prevent an accidental production rewrite. */
-  confirmation?: string;
-  service?: string;
-  tableName?: string;
-  batchSize?: number;
-}
-
-export interface CommentRedactionBackfillResult {
-  dry_run: boolean;
-  scanned: number;
-  candidates: number;
-  updated: number;
-  conflicts: number;
-  batches: number;
-  /** Raw candidates still present after this run (or found by a dry run). */
-  remaining_candidates: number;
-}
+import {
+  COMMENT_REDACTION_BACKFILL_CONFIRMATION,
+  type CommentRedactionBackfillOptions,
+  type CommentRedactionBackfillResult,
+} from "./comment-redaction-contract.js";
+export {
+  COMMENT_REDACTION_BACKFILL_CONFIRMATION,
+  isCommentRedactionBackfillComplete,
+} from "./comment-redaction-contract.js";
+export type {
+  CommentRedactionBackfillOptions,
+  CommentRedactionBackfillResult,
+} from "./comment-redaction-contract.js";
 
 interface CommentPayloadRow {
   object_id: string;
@@ -141,9 +131,4 @@ export async function backfillPostgresCommentRedaction(
   });
   result.remaining_candidates = verification.candidates;
   return result;
-}
-
-/** True only when an apply run had no CAS misses and the final rescan is clean. */
-export function isCommentRedactionBackfillComplete(result: CommentRedactionBackfillResult): boolean {
-  return !result.dry_run && result.conflicts === 0 && result.remaining_candidates === 0;
 }

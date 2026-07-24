@@ -23,11 +23,17 @@ import {
   type CommentRedactionBackfillOptions,
   type CommentRedactionBackfillResult,
 } from "../storage/comment-redaction-backfill.js";
+import { assertTodosStageARemoteAccessFloor } from "../storage/authority-floor.js";
+
+function assertCloudAuthority(): void {
+  assertTodosStageARemoteAccessFloor();
+}
 
 export const TODOS_APP_SLUG = "todos";
 
 /** Resolve the remote DATABASE_URL from the supported env vars (in priority order). */
 export function resolveCloudDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  assertCloudAuthority();
   return (
     env.HASNA_TODOS_DATABASE_URL ||
     env.TODOS_DATABASE_URL ||
@@ -38,6 +44,7 @@ export function resolveCloudDatabaseUrl(env: NodeJS.ProcessEnv = process.env): s
 
 /** Resolve the HMAC signing secret used to verify API keys. */
 export function resolveSigningSecret(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  assertCloudAuthority();
   return (
     env.HASNA_TODOS_API_SIGNING_KEY ||
     env.HASNA_API_SIGNING_KEY ||
@@ -48,6 +55,7 @@ export function resolveSigningSecret(env: NodeJS.ProcessEnv = process.env): stri
 
 /** True when this process is configured to serve the cloud `/v1` API. */
 export function isCloudModeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  assertCloudAuthority();
   return Boolean(resolveCloudDatabaseUrl(env));
 }
 
@@ -58,6 +66,7 @@ let cachedVerifier: ApiKeyVerifier | null = null;
 let schemaEnsured: Promise<void> | null = null;
 
 function getClient(): TodosCloudQueryClient {
+  assertCloudAuthority();
   if (cachedClient) return cachedClient;
   const url = resolveCloudDatabaseUrl();
   if (!url) {
@@ -71,6 +80,7 @@ function getClient(): TodosCloudQueryClient {
 
 /** The pure-remote Postgres storage adapter backing every `/v1` handler. */
 export function getCloudStorageAdapter(): TodosStorageAdapter {
+  assertCloudAuthority();
   if (cachedAdapter) return cachedAdapter;
   const client = getClient();
   cachedAdapter = createPostgresTodosStorageAdapter({ client, service: TODOS_APP_SLUG });
@@ -82,6 +92,7 @@ export function getCloudStorageAdapter(): TodosStorageAdapter {
  * `AuthQueryClient` ({ many, get, execute }). Keeps a single connection pool.
  */
 function authClient(): AuthQueryClient {
+  assertCloudAuthority();
   const client = getClient();
   return {
     async many<T extends Record<string, unknown>>(sql: string, params: readonly unknown[] = []): Promise<T[]> {
@@ -99,6 +110,7 @@ function authClient(): AuthQueryClient {
 }
 
 export function getApiKeyStore(): ApiKeyStore {
+  assertCloudAuthority();
   if (cachedStore) return cachedStore;
   cachedStore = new ApiKeyStore(authClient());
   return cachedStore;
@@ -110,6 +122,7 @@ export function getApiKeyStore(): ApiKeyStore {
  * `api_keys` table. Fails closed when no signing secret is configured.
  */
 export function getCloudVerifier(): ApiKeyVerifier {
+  assertCloudAuthority();
   if (cachedVerifier) return cachedVerifier;
   const signingSecret = resolveSigningSecret();
   if (!signingSecret) {
@@ -132,6 +145,7 @@ export function getCloudVerifier(): ApiKeyVerifier {
  * the migration runner. NEVER drops or rewrites existing tables.
  */
 export async function ensureCloudSchema(): Promise<void> {
+  assertCloudAuthority();
   if (schemaEnsured) return schemaEnsured;
   schemaEnsured = (async () => {
     const client = getClient();
@@ -149,11 +163,13 @@ export async function ensureCloudSchema(): Promise<void> {
  * `CREATE INDEX CONCURRENTLY` to execute outside an explicit transaction.
  */
 export async function ensureCloudCommentCursorIndex(): Promise<void> {
+  assertCloudAuthority();
   await getClient().query(postgresTodosCommentCursorIndexSql());
 }
 
 /** Audit duplicates, then establish project/task-list slug invariants concurrently. */
 export async function ensureCloudScopedSlugUniqueIndexes(): Promise<void> {
+  assertCloudAuthority();
   await ensurePostgresScopedSlugUniqueIndexes(getClient());
 }
 
@@ -167,6 +183,7 @@ export async function ensureCloudScopedSlugUniqueIndexes(): Promise<void> {
  * that was normalized.
  */
 export async function normalizeCloudPayloads(): Promise<number> {
+  assertCloudAuthority();
   const client = getClient();
   const res = await client.query<{ id: string }>(
     `UPDATE todos_sync_records
@@ -185,11 +202,13 @@ export async function normalizeCloudPayloads(): Promise<number> {
 export function backfillCloudCommentRedaction(
   options: CommentRedactionBackfillOptions = {},
 ): Promise<CommentRedactionBackfillResult> {
+  assertCloudAuthority();
   return backfillPostgresCommentRedaction(getClient(), { ...options, service: TODOS_APP_SLUG });
 }
 
 /** Cheap readiness probe: round-trips a trivial query to RDS. */
 export async function pingCloud(): Promise<boolean> {
+  assertCloudAuthority();
   const client = getClient();
   const res = await client.query<{ ok: number }>("select 1 as ok");
   return res.rows[0]?.ok === 1;
@@ -197,6 +216,7 @@ export async function pingCloud(): Promise<boolean> {
 
 /** Test/shutdown helper. */
 export async function closeCloud(): Promise<void> {
+  assertCloudAuthority();
   if (cachedClient) await cachedClient.close();
   cachedClient = null;
   cachedAdapter = null;

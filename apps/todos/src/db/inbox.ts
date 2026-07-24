@@ -106,7 +106,7 @@ function redactedMetadata(value: Record<string, unknown>): Record<string, unknow
 }
 
 export function createInboxItem(input: CreateInboxItemInput, db?: Database): { item: InboxItem; task: Task | null; duplicate: boolean } {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const body = redactEvidenceText(input.body);
   const sourceType = input.source_type || detectInboxSourceType(body, input.source_url);
   const title = redactEvidenceText(input.title || deriveInboxTitle(body, sourceType, input.source_url));
@@ -166,13 +166,13 @@ export function createInboxItem(input: CreateInboxItemInput, db?: Database): { i
 }
 
 export function getInboxItem(id: string, db?: Database): InboxItem | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query("SELECT * FROM inbox_items WHERE id = ? OR id LIKE ?").get(id, `${id}%`) as InboxRow | null;
   return row ? rowToInboxItem(row) : null;
 }
 
 export function listInboxItems(opts?: { status?: InboxStatus; source_type?: InboxSourceType; limit?: number }, db?: Database): InboxItem[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const where: string[] = [];
   const params: SQLQueryBindings[] = [];
   if (opts?.status) { where.push("status = ?"); params.push(opts.status); }

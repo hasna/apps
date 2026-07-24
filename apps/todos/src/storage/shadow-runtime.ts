@@ -1,34 +1,44 @@
 import type { Database } from "bun:sqlite";
-import { isTodosShadowEnabled, getTodosStorageShadowEnvName, getTodosStorageDatabaseEnv, type TodosStorageEnv } from "./config.js";
-import { createTodosCloudQueryClientFromEnv, type TodosCloudQueryClient } from "./cloud-client.js";
+import {
+  isTodosShadowEnabled,
+  resolveTodosStorageRole,
+  type TodosStorageEnv,
+} from "./config.js";
+import {
+  assertTodosStageARemoteAccessFloor,
+  TodosHostedStorageUnavailableError,
+} from "./authority-floor.js";
+import type { TodosCloudQueryClient } from "./cloud-client.js";
 import {
   TodosShadowOutbox,
   installShadowOutboxSchema,
 } from "./shadow-outbox.js";
 
 /**
- * Runtime glue that makes the durable dual-write shadow "real" for every write
- * path. Capture triggers are installed on the shared `getDatabase()` handle so
- * CLI, MCP (stdio + HTTP), and `todos-serve` all enqueue mirror ops without
- * having to route their hundreds of raw-SQL writes through the storage adapter.
- *
- * Draining (the network push to cloud Postgres) is opt-in per process:
- *  - long-running servers call {@link startRuntimeShadowDrain};
- *  - CLI one-shots flush best-effort on exit via {@link registerShadowExitFlush};
- *  - `todos storage shadow-drain` calls {@link getRuntimeShadowOutbox}.
+ * Stage-A runtime glue. Explicit local mode may install durable SQLite capture,
+ * but all automatic remote construction, draining, pushing, and exit flushing
+ * is disabled until a trusted authority resolver exists.
  */
 
 let _capturedDb: Database | null = null;
 let _outbox: TodosShadowOutbox | null = null;
 let _cloud: TodosCloudQueryClient | null = null;
-let _exitRegistered = false;
+
+export interface RuntimeShadowDependencies {
+  createCloudClient?: (env: TodosStorageEnv) => TodosCloudQueryClient | null;
+}
 
 /**
  * Install durable capture triggers if the shadow is enabled. Pure SQLite, never
  * throws for cloud-config reasons, never keeps the process alive. Idempotent.
  */
 export function maybeInstallShadowCapture(db: Database, env: TodosStorageEnv = process.env): boolean {
+  const processRole = resolveTodosStorageRole(process.env);
+  if (processRole.role !== "local") {
+    throw new TodosHostedStorageUnavailableError(processRole.reason);
+  }
   if (!isTodosShadowEnabled(env)) return false;
+  if (resolveTodosStorageRole(env).role !== "local") return false;
   if (_capturedDb === db) return true;
   installShadowOutboxSchema(db);
   _capturedDb = db;
@@ -36,70 +46,49 @@ export function maybeInstallShadowCapture(db: Database, env: TodosStorageEnv = p
 }
 
 /**
- * Build (or reuse) the process-wide shadow outbox bound to `db`. Requires a
- * cloud DSN — throws a clear error if the shadow is enabled without one, rather
- * than silently no-oping. Capture (local durability) does NOT depend on this.
+ * Stage-A remote-drain floor. Capture remains local; no outbox client is built.
  */
-export function getRuntimeShadowOutbox(db: Database, env: TodosStorageEnv = process.env): TodosShadowOutbox {
-  if (!isTodosShadowEnabled(env)) {
-    throw new Error(
-      `dual-write shadow is disabled: set ${getTodosStorageShadowEnvName(env)}=1 to enable it`,
-    );
-  }
-  if (_outbox && _capturedDb === db) return _outbox;
-  const cloud = createTodosCloudQueryClientFromEnv(env);
-  if (!cloud) {
-    throw new Error(
-      `dual-write shadow drain requires a remote Postgres DSN in ${getTodosStorageDatabaseEnv(env)}`,
-    );
-  }
-  _cloud = cloud;
-  installShadowOutboxSchema(db);
-  _capturedDb = db;
-  _outbox = new TodosShadowOutbox({ db, postgresClient: cloud });
-  return _outbox;
+export function getRuntimeShadowOutbox(
+  _db: Database,
+  _env: TodosStorageEnv = process.env,
+  _dependencies: RuntimeShadowDependencies = {},
+): TodosShadowOutbox {
+  return assertTodosStageARemoteAccessFloor();
 }
 
 /**
- * Start the background drain loop for a long-running process (MCP / serve).
- * Safe no-op when the shadow is disabled. Never throws — a missing DSN or an
- * unreachable cloud simply leaves writes durably queued in the local outbox.
+ * Preserve local capture without starting a background remote drain.
  */
-export function startRuntimeShadowDrain(db: Database, env: TodosStorageEnv = process.env): void {
+export function startRuntimeShadowDrain(
+  db: Database,
+  env: TodosStorageEnv = process.env,
+  dependencies: RuntimeShadowDependencies = {},
+): void {
+  const processRole = resolveTodosStorageRole(process.env);
+  if (processRole.role !== "local") {
+    throw new TodosHostedStorageUnavailableError(processRole.reason);
+  }
   if (!isTodosShadowEnabled(env)) return;
-  // Always install capture, even if draining can't start (writes stay durable).
+  void dependencies;
+  // Explicit local mode may keep durable SQLite capture. Stage A deliberately
+  // performs no automatic remote construction, drain, push, or exit flush.
   maybeInstallShadowCapture(db, env);
-  try {
-    const outbox = getRuntimeShadowOutbox(db, env);
-    outbox.startLoop();
-    registerShadowExitFlush(db, env);
-  } catch (error) {
-    // No DSN / cloud client: capture is live and durable; draining will begin
-    // once a DSN is configured. Surface the reason without crashing the server.
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`[todos] shadow drain not started: ${message}`);
-  }
 }
 
 /**
- * Best-effort flush of the durable outbox on process exit (CLI one-shots).
- * Registered idempotently; the local writes are already durable regardless.
+ * Stage-A no-op retained as an API-compatible rollback floor.
  */
 export function registerShadowExitFlush(db: Database, env: TodosStorageEnv = process.env): void {
-  if (_exitRegistered) return;
-  if (!isTodosShadowEnabled(env)) return;
-  _exitRegistered = true;
-  const flush = async () => {
-    try {
-      const outbox = getRuntimeShadowOutbox(db, env);
-      await outbox.flush(5_000);
-    } catch {
-      // Best effort; durable outbox retries on the next server/drain run.
-    } finally {
-      await closeRuntimeShadowCloud();
-    }
-  };
-  process.once("beforeExit", () => { void flush(); });
+  void db;
+  void env;
+  // Stage A floor: automatic process-exit flushing is disabled.
+}
+
+/** Refuse every explicit remote shadow command until trusted authority exists. */
+export function assertRuntimeShadowRemoteAccessDisabled(
+  _env: TodosStorageEnv = process.env,
+): never {
+  return assertTodosStageARemoteAccessFloor();
 }
 
 export async function closeRuntimeShadowCloud(): Promise<void> {
@@ -116,5 +105,4 @@ export function __resetRuntimeShadowForTests(): void {
   _capturedDb = null;
   _outbox = null;
   _cloud = null;
-  _exitRegistered = false;
 }

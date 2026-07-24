@@ -1,7 +1,6 @@
-# @hasna/todos self_hosted service — ARM64 / Bun.
-# Default CMD runs todos-serve (cloud / PURE REMOTE per Amendment A1: the serve
-# process reads/writes RDS Postgres directly with @hasna/contracts API-key auth).
-# The ECS one-shot migration task overrides the command with `... migrate`.
+# @hasna/todos Stage A containment-only image — ARM64 / Bun.
+# This artifact proves an install-free build but intentionally starts only the
+# dependency-light help surface. It is not an operational service image.
 
 ARG BUN_IMAGE=oven/bun:1.3.14-alpine@sha256:3c9ab1a521c82144dff537125695017a0480d3a13088fba7e012cfae0f63146f
 ARG BASH_VERSION=5.2.37-r0
@@ -30,8 +29,7 @@ RUN ! apk info -e openssl
 
 FROM base AS deps
 WORKDIR /app
-# Root manifest + the dashboard workspace member's manifest (needed for the
-# workspace to resolve; the dashboard itself is not built in the server image).
+# Root manifest plus the dashboard workspace manifest needed for resolution.
 COPY package.json bun.lock ./
 COPY dashboard/package.json ./dashboard/package.json
 RUN bun install --frozen-lockfile --ignore-scripts
@@ -47,31 +45,16 @@ RUN bun run build:server
 FROM base AS runner
 ARG BASH_VERSION
 WORKDIR /app
-# The previous Debian runtime included bash, and the bundled event-hook and
-# agent-run paths invoke bash explicitly. Preserve that supported boundary with
-# one exact Alpine package; git and tmux were not present in the predecessor
-# image and remain intentionally outside the cloud container contract.
+# Preserve the reviewed bash runtime boundary. Git and tmux remain absent.
 RUN apk add --no-cache "bash=${BASH_VERSION}" \
     && apk info -vv | grep -q "^bash-${BASH_VERSION} - " \
     && ! command -v git \
     && ! command -v tmux
-# Amazon RDS global CA bundle so TLS to the shared RDS succeeds even under
-# verify-full-capable clients.
-COPY docker/rds-global-bundle.pem /etc/ssl/certs/rds-global-bundle.pem
 ENV NODE_ENV=production \
-    HASNA_TODOS_STORAGE_MODE=remote \
-    NODE_EXTRA_CA_CERTS=/etc/ssl/certs/rds-global-bundle.pem \
-    PGSSLROOTCERT=/etc/ssl/certs/rds-global-bundle.pem \
-    TODOS_NO_OPEN=true \
-    HOST=0.0.0.0 \
-    PORT=19427
+    TODOS_NO_OPEN=true
 COPY --from=build /app/dist ./dist
-# The server bundle is self-contained. Keep only the standalone, pre-bundled
-# contracts CLI used to mint the ephemeral API key during controlled smoke and
-# operational workflows; do not ship the workspace dependency tree.
-COPY --from=deps /app/node_modules/@hasna/contracts/dist/cli/index.js ./bin/contracts-cli.js
-EXPOSE 19427
-# Fail-closed: todos-serve /v1 refuses to serve without a cloud DSN + signing
-# secret (503), and /ready reports DB reachability — no silent stub.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD ["bun", "-e", "const response = await fetch('http://127.0.0.1:19427/ready'); if (!response.ok) process.exit(1);"]
-CMD ["bun", "dist/server/index.js"]
+# Stage A containment-only: no listener, datastore, schema operation, or
+# provider command is started by this image. A later reviewed stage must define
+# a separate operational contract and health policy.
+HEALTHCHECK NONE
+CMD ["bun", "dist/server/index.js", "--help"]

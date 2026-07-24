@@ -1,10 +1,63 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
-  getTodosCloudClient,
+  getTodosCloudClient as containedGetTodosCloudClient,
   getTodosRemoteAuthorityConfigStatus,
   resolveTodosCliStorageMode,
   isCloudRouting,
   resetTodosCloudClient,
+  cloudListTasks as containedCloudListTasks,
+} from "./cloud-router.js";
+
+// Keep the dormant future-positive response/path mapper contract covered
+// without adding an executable test escape hatch to the production module.
+// The real module is used by the containment tests below; positive latest-main
+// contracts use a temporary bundle with the exact Stage-A checks removed. The
+// production source and package exports retain the unconditional Stage-A floor.
+const mapperHarnessRoot = mkdtempSync(join(tmpdir(), "todos-cloud-router-mappers-"));
+const mapperBuild = await Bun.build({
+  entrypoints: [new URL("./cloud-router.ts", import.meta.url).pathname],
+  outdir: mapperHarnessRoot,
+  target: "bun",
+  format: "esm",
+  plugins: [{
+    name: "future-cloud-router-contract-harness",
+    setup(builder) {
+      builder.onLoad({ filter: /cloud-router\.ts$/ }, async ({ path }) => {
+        const source = await Bun.file(path).text();
+        const pattern = /function authorizedCloudClient\(_client: HasnaStorageClient\): HasnaStorageClient \{[\s\S]*?\n\}/;
+        const mapperEnabled = source.replace(
+          pattern,
+          "function authorizedCloudClient(_client: HasnaStorageClient): HasnaStorageClient { return _client; }",
+        );
+        if (mapperEnabled === source) throw new Error("cloud router authority harness replacement did not match");
+        const constructorFloor = [
+          "  const processRole = resolveTodosStorageRole(process.env as Env);",
+          "  if (processRole.role !== \"local\") throw new TodosHostedStorageUnavailableError(processRole.reason);",
+          "  const role = resolveTodosStorageRole(env);",
+          "  if (role.role !== \"local\") throw new TodosHostedStorageUnavailableError(role.reason);",
+          "",
+        ].join("\n");
+        const transformed = mapperEnabled.replace(constructorFloor, "");
+        if (transformed === mapperEnabled) throw new Error("cloud router constructor-floor harness replacement did not match");
+        return { contents: transformed, loader: "ts" };
+      });
+    },
+  }],
+});
+if (!mapperBuild.success) {
+  throw new Error(mapperBuild.logs.map((entry) => entry.message).join("\n"));
+}
+const mapperEntry = mapperBuild.outputs.find((output) => output.kind === "entry-point");
+if (!mapperEntry) throw new Error("cloud router authority harness produced no entry point");
+const futureRouter = await import(`${pathToFileURL(mapperEntry.path).href}?fixture=${Date.now()}`) as typeof import("./cloud-router.js");
+const {
+  getTodosCloudClient,
+  resetTodosCloudClient: resetFutureTodosCloudClient,
   cloudListTasks,
   cloudGetTask,
   cloudCreateTask,
@@ -41,13 +94,27 @@ import {
   cloudResolvePlan,
   cloudResolveTaskListRef,
   cloudResolveTaskRef,
-} from "./cloud-router.js";
+  cloudRenameProject,
+  cloudCreatePlan,
+  cloudListPlans,
+  cloudUpdatePlan,
+  cloudDeletePlan,
+} = futureRouter;
+
+afterAll(() => rmSync(mapperHarnessRoot, { recursive: true, force: true }));
 
 const CLOUD_ENV = {
   HASNA_TODOS_STORAGE_MODE: "self_hosted",
   HASNA_TODOS_API_URL: "https://todos.hasna.xyz",
   HASNA_TODOS_API_KEY: "hasna_todos_test_key",
 };
+
+/** Test-only client for exercising the dormant latest-main cloud contract. */
+function createTestCloudClient(): HasnaStorageClient {
+  const client = getTodosCloudClient(CLOUD_ENV);
+  if (!client) throw new Error("expected synthetic cloud transport");
+  return client;
+}
 
 type Call = { url: string; method: string; headers: Record<string, string>; body: unknown; redirect?: RequestRedirect };
 
@@ -83,53 +150,84 @@ afterEach(() => {
     previousFetch = undefined;
   }
   resetTodosCloudClient();
+  resetFutureTodosCloudClient();
 });
 
 describe("todos client self_hosted resolver", () => {
   test("no env -> local (null client, isCloudRouting false)", () => {
-    expect(getTodosCloudClient({})).toBeNull();
+    expect(containedGetTodosCloudClient({})).toBeNull();
     expect(isCloudRouting({})).toBe(false);
   });
 
-  test("self_hosted + API_URL + API_KEY -> cloud-http client at /v1", () => {
-    const client = getTodosCloudClient(CLOUD_ENV);
-    expect(client).not.toBeNull();
-    expect(client!.baseUrl).toBe("https://todos.hasna.xyz/v1");
-    expect(isCloudRouting(CLOUD_ENV)).toBe(true);
+  test("self_hosted + API_URL + API_KEY fails before client construction", () => {
+    expect(() => containedGetTodosCloudClient(CLOUD_ENV)).toThrow("HOSTED_AUTHORITY_UNAVAILABLE");
+    expect(() => isCloudRouting(CLOUD_ENV)).toThrow("HOSTED_AUTHORITY_UNAVAILABLE");
   });
 
   test("API_URL + API_KEY WITHOUT a mode var -> local (flip-safety guard)", () => {
     // contracts >=0.5.1 would resolve bare URL+KEY to cloud; the todos guard keeps
     // it local so the flip is only ever armed by an explicit HASNA_TODOS_STORAGE_MODE.
     const noMode = { HASNA_TODOS_API_URL: "https://todos.hasna.xyz", HASNA_TODOS_API_KEY: "k" } as never;
-    expect(getTodosCloudClient(noMode)).toBeNull();
+    expect(containedGetTodosCloudClient(noMode)).toBeNull();
     expect(isCloudRouting(noMode)).toBe(false);
   });
 
-  test("mode=cloud + API_URL + API_KEY -> cloud-http client", () => {
-    const client = getTodosCloudClient({
+  test("a cached local result cannot survive a hosted role flip", () => {
+    const calls = installFetch(() => ({ body: {} }));
+    const environment: Record<string, string> = { HASNA_TODOS_STORAGE_MODE: "local" };
+    expect(containedGetTodosCloudClient(environment)).toBeNull();
+
+    environment.HASNA_TODOS_STORAGE_MODE = "self_hosted";
+    environment.HASNA_TODOS_API_URL = "https://todos.example.test";
+    environment.HASNA_TODOS_API_KEY = "synthetic-key";
+    expect(() => containedGetTodosCloudClient(environment)).toThrow("HOSTED_AUTHORITY_UNAVAILABLE");
+    expect(calls).toEqual([]);
+  });
+
+  test("a caller-supplied local environment cannot downgrade hosted process authority", () => {
+    const originalMode = process.env.HASNA_TODOS_STORAGE_MODE;
+    const originalFallback = process.env.TODOS_STORAGE_MODE;
+    process.env.HASNA_TODOS_STORAGE_MODE = "remote";
+    process.env.TODOS_STORAGE_MODE = "remote";
+    const localEnvironment = new Proxy({ HASNA_TODOS_STORAGE_MODE: "local" }, {
+      get() {
+        throw new Error("FAKE_ONLY_CALLER_LOCAL_ENV_MARKER");
+      },
+    });
+    try {
+      expect(() => containedGetTodosCloudClient(localEnvironment)).toThrow("HOSTED_AUTHORITY_UNAVAILABLE");
+    } finally {
+      if (originalMode === undefined) delete process.env.HASNA_TODOS_STORAGE_MODE;
+      else process.env.HASNA_TODOS_STORAGE_MODE = originalMode;
+      if (originalFallback === undefined) delete process.env.TODOS_STORAGE_MODE;
+      else process.env.TODOS_STORAGE_MODE = originalFallback;
+    }
+  });
+
+  test("mode=cloud + API_URL + API_KEY remains on the same local floor", () => {
+    expect(() => containedGetTodosCloudClient({
       HASNA_TODOS_STORAGE_MODE: "cloud",
       HASNA_TODOS_API_URL: "https://todos.hasna.xyz",
       HASNA_TODOS_API_KEY: "hasna_todos_test_key",
-    } as never);
-    expect(client).not.toBeNull();
-    expect(client!.baseUrl).toBe("https://todos.hasna.xyz/v1");
+    } as never)).toThrow("HOSTED_AUTHORITY_UNAVAILABLE");
   });
 
   test("mode=remote rejects an implicit default when HASNA_TODOS_API_URL is missing", () => {
-    expect(() => getTodosCloudClient({
+    const environment = {
       HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_API_KEY: "fixture-key",
       TODOS_URL: "https://todos.md",
-    } as never)).toThrow(
+    } as never;
+    expect(() => containedGetTodosCloudClient(environment)).toThrow("HOSTED_AUTHORITY_UNAVAILABLE");
+    expect(getTodosRemoteAuthorityConfigStatus(environment).issues[0]).toContain(
       "REMOTE_API_URL_MISSING: remote Todos storage requires HASNA_TODOS_API_URL",
     );
   });
 
   test("mode=self_hosted reports the exact missing API key without local fallback", () => {
-    expect(() =>
-      getTodosCloudClient({ HASNA_TODOS_STORAGE_MODE: "self_hosted", HASNA_TODOS_API_URL: "https://todos.hasna.xyz" }),
-    ).toThrow(
+    const environment = { HASNA_TODOS_STORAGE_MODE: "self_hosted", HASNA_TODOS_API_URL: "https://todos.hasna.xyz" };
+    expect(() => containedGetTodosCloudClient(environment)).toThrow("HOSTED_AUTHORITY_UNAVAILABLE");
+    expect(getTodosRemoteAuthorityConfigStatus(environment).issues[0]).toContain(
       "REMOTE_API_KEY_MISSING: remote Todos storage requires HASNA_TODOS_API_KEY",
     );
   });
@@ -159,11 +257,13 @@ describe("todos client self_hosted resolver", () => {
     "https://todos.example/custom",
     "http://todos.example",
   ])("rejects ambiguous or credential-unsafe authority URL %s", (apiUrl) => {
-    expect(() => getTodosCloudClient({
+    const environment = {
       HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_API_URL: apiUrl,
       HASNA_TODOS_API_KEY: "fixture-key",
-    })).toThrow("REMOTE_API_URL_INVALID");
+    };
+    expect(() => containedGetTodosCloudClient(environment)).toThrow("HOSTED_AUTHORITY_UNAVAILABLE");
+    expect(getTodosRemoteAuthorityConfigStatus(environment).issues[0]).toContain("REMOTE_API_URL_INVALID");
   });
 
   test("accepts exact /v1 and loopback HTTP without duplicating the route prefix", () => {
@@ -258,6 +358,41 @@ describe("remote authority compatibility diagnostics", () => {
     const client = getTodosCloudClient(CLOUD_ENV)!;
     await expect(cloudListProjects(client)).rejects.toThrow("REMOTE_API_TIMEOUT");
   });
+});
+
+describe("Stage-A injected cloud helper containment", () => {
+  test.each(["local", "remote"])(
+    "%s process authority rejects an injected HTTP client before caller access",
+    async (mode) => {
+      const originalMode = process.env.HASNA_TODOS_STORAGE_MODE;
+      const originalFallback = process.env.TODOS_STORAGE_MODE;
+      process.env.HASNA_TODOS_STORAGE_MODE = mode;
+      process.env.TODOS_STORAGE_MODE = mode;
+      let clientReads = 0;
+      let filterReads = 0;
+      const client = new Proxy({}, {
+        get() {
+          clientReads += 1;
+          throw new Error("FAKE_ONLY_INJECTED_HTTP_CLIENT_MARKER");
+        },
+      }) as HasnaStorageClient;
+      const filter = new Proxy({}, {
+        get() {
+          filterReads += 1;
+          throw new Error("FAKE_ONLY_INJECTED_HTTP_FILTER_MARKER");
+        },
+      });
+      try {
+        await expect(containedCloudListTasks(client, filter)).rejects.toThrow("HOSTED_AUTHORITY_UNAVAILABLE");
+        expect({ clientReads, filterReads }).toEqual({ clientReads: 0, filterReads: 0 });
+      } finally {
+        if (originalMode === undefined) delete process.env.HASNA_TODOS_STORAGE_MODE;
+        else process.env.HASNA_TODOS_STORAGE_MODE = originalMode;
+        if (originalFallback === undefined) delete process.env.TODOS_STORAGE_MODE;
+        else process.env.TODOS_STORAGE_MODE = originalFallback;
+      }
+    },
+  );
 });
 
 describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => {
@@ -559,7 +694,7 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
 
   test("list -> GET /v1/tasks, unwraps { tasks }", async () => {
     const calls = installFetch(() => ({ body: { tasks: [{ id: "t1", title: "a" }], count: 1 } }));
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
     const tasks = await cloudListTasks(client, { status: "pending", limit: 5 });
     expect(tasks).toHaveLength(1);
     expect(tasks[0]!.id).toBe("t1");
@@ -574,7 +709,7 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     const calls = installFetch((c) =>
       c.url.endsWith("/tasks/missing") ? { status: 404, body: { error: "not found" } } : { body: { task: { id: "t9", title: "z" } } },
     );
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
     const task = await cloudGetTask(client, "t9");
     expect(task!.id).toBe("t9");
     expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t9");
@@ -584,18 +719,18 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
 
   test("create -> POST /v1/tasks with Idempotency-Key, unwraps { task }", async () => {
     const calls = installFetch(() => ({ status: 201, body: { task: { id: "new1", title: "made" } } }));
-    const client = getTodosCloudClient(CLOUD_ENV)!;
-    const task = await cloudCreateTask(client, { title: "made" });
+    const client = createTestCloudClient();
+    const task = await cloudCreateTask(client, { title: "made", parent_id: "parent-1" });
     expect(task.id).toBe("new1");
     expect(calls[0]!.method).toBe("POST");
     expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks");
-    expect(calls[0]!.body).toEqual({ title: "made" });
+    expect(calls[0]!.body).toEqual({ title: "made", parent_id: "parent-1" });
     expect(calls[0]!.headers["idempotency-key"]).toBeTruthy();
   });
 
   test("update -> PATCH /v1/tasks/:id, unwraps { task }", async () => {
     const calls = installFetch(() => ({ body: { task: { id: "t2", title: "patched" } } }));
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
     const task = await cloudUpdateTask(client, "t2", { title: "patched" });
     expect(task.title).toBe("patched");
     expect(calls[0]!.method).toBe("PATCH");
@@ -604,7 +739,7 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
 
   test("delete -> DELETE /v1/tasks/:id (204 ok)", async () => {
     const calls = installFetch(() => ({ status: 204 }));
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
     await expect(cloudDeleteTask(client, "t3")).resolves.toBe(true);
     expect(calls[0]!.method).toBe("DELETE");
     expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t3");
@@ -618,7 +753,7 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
 
   test("action -> POST /v1/tasks/:id/start, unwraps { task }", async () => {
     const calls = installFetch(() => ({ body: { task: { id: "t4", status: "in_progress" } } }));
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
     const task = await cloudTaskAction(client, "t4", "start", { agent_id: "cli" });
     expect(task.status).toBe("in_progress");
     expect(calls[0]!.method).toBe("POST");
@@ -637,7 +772,7 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
       created_at: "2026-07-10T00:00:00.000Z",
     };
     const calls = installFetch(() => ({ body: { comments: [comment], count: 1, has_more: false, next_cursor: null } }));
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
 
     await expect(cloudListComments(client, comment.task_id)).resolves.toEqual({
       comments: [comment],
@@ -664,7 +799,7 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
       created_at: "2026-07-10T00:00:00.000Z",
     };
     installFetch(() => ({ status: 201, body: { comment: rawComment } }));
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
     const comment = await cloudAddComment(client, rawComment.task_id, { content: rawComment.content });
     expect(comment.content).toContain("[REDACTED]");
     expect(comment.content).not.toContain("abcdefghijklmnop");
@@ -682,7 +817,7 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
       created_at: "2026-07-10T00:00:00.000Z",
     };
     installFetch(() => ({ body: [comment] }));
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
     await expect(cloudListComments(client, "t2")).resolves.toEqual({
       comments: [comment],
       count: 1,
@@ -707,7 +842,7 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     const calls = installFetch(() => ({
       body: { comments: [comment], count: 1, has_more: true, next_cursor: "opaque-next" },
     }));
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
     const page = await cloudListComments(client, "t-page", { limit: 25, cursor: "opaque-current" });
     expect(page).toMatchObject({
       count: 1,
@@ -737,13 +872,13 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     for (const body of malformed) {
       resetTodosCloudClient();
       installFetch(() => ({ body }));
-      const client = getTodosCloudClient(CLOUD_ENV)!;
+      const client = createTestCloudClient();
       await expect(cloudListComments(client, "t3")).rejects.toThrow(/invalid cloud comments.*response/i);
     }
   });
 
   test("comments rejects invalid limits and paginated server pages larger than requested", async () => {
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
     for (const limit of [0, 501, 1.5, Number.NaN]) {
       await expect(cloudListComments(client, "t-limit", { limit })).rejects.toThrow(/limit/i);
     }
@@ -756,7 +891,7 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
       { id: "c1", task_id: "t-limit", agent_id: null, session_id: null, content: "one", type: "comment", progress_pct: null, created_at: "2026-07-10T00:00:00.000Z" },
       { id: "c2", task_id: "t-limit", agent_id: null, session_id: null, content: "two", type: "comment", progress_pct: null, created_at: "2026-07-10T00:00:01.000Z" },
     ], count: 2, has_more: false, next_cursor: null } }));
-    await expect(cloudListComments(getTodosCloudClient(CLOUD_ENV)!, "t-limit", { limit: 1 }))
+    await expect(cloudListComments(createTestCloudClient(), "t-limit", { limit: 1 }))
       .rejects.toThrow(/exceeds requested limit/i);
   });
 
@@ -772,7 +907,7 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
       created_at: `2026-07-10T00:${String(Math.floor(index / 60)).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}.000Z`,
     }));
     const calls = installFetch(() => ({ body: { comments, count: comments.length } }));
-    const page = await cloudListComments(getTodosCloudClient(CLOUD_ENV)!, "t-legacy", { limit: 100 });
+    const page = await cloudListComments(createTestCloudClient(), "t-legacy", { limit: 100 });
     expect(page.comments).toHaveLength(100);
     expect(page.comments[0]!.id).toBe("legacy-050");
     expect(page).toMatchObject({
@@ -789,13 +924,13 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     for (const status of [404, 405]) {
       resetTodosCloudClient();
       installFetch(() => ({ status, body: { error: "unsupported" } }));
-      const client = getTodosCloudClient(CLOUD_ENV)!;
+      const client = createTestCloudClient();
       await expect(cloudListComments(client, "t4")).rejects.toThrow(/compatible.*server|server.*compatible/i);
     }
 
     resetTodosCloudClient();
     installFetch(() => ({ status: 500, body: { error: "failed" } }));
-    const retryingClient = getTodosCloudClient(CLOUD_ENV)!;
+    const retryingClient = createTestCloudClient();
     await expect(cloudListComments(retryingClient, "t4")).rejects.toThrow("REMOTE_API_UNAVAILABLE");
   });
 });
@@ -803,7 +938,7 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
 describe("cloud agent + lock + deps + verification routing (identity/coordination fixes)", () => {
   test("register_agent -> POST /v1/agents, unwraps { agent }, carries bearer key", async () => {
     const calls = installFetch(() => ({ status: 201, body: { agent: { id: "ag1", name: "seneca" } } }));
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
     const agent = await cloudRegisterAgent(client, { name: "seneca", description: "worker" });
     expect(agent.id).toBe("ag1");
     expect(calls[0]!.method).toBe("POST");
@@ -814,13 +949,13 @@ describe("cloud agent + lock + deps + verification routing (identity/coordinatio
 
   test("register_agent -> a 409 conflict throws (no silent local duplicate)", async () => {
     installFetch(() => ({ status: 409, body: { error: "Agent name 'seneca' is already active", conflict: true } }));
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
     await expect(cloudRegisterAgent(client, { name: "seneca" })).rejects.toBeDefined();
   });
 
   test("lock -> POST /v1/tasks/:id/lock with agent_id, unwraps { result }", async () => {
     const calls = installFetch(() => ({ body: { result: { success: true, locked_by: "cli", locked_at: "2026-01-01T00:00:00Z" } } }));
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
     const result = await cloudLockTask(client, "t1", "cli");
     expect(result.success).toBe(true);
     expect(result.locked_by).toBe("cli");
@@ -831,7 +966,7 @@ describe("cloud agent + lock + deps + verification routing (identity/coordinatio
 
   test("unlock -> POST /v1/tasks/:id/unlock, returns success boolean", async () => {
     const calls = installFetch(() => ({ body: { success: true } }));
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
     await expect(cloudUnlockTask(client, "t1", "cli")).resolves.toBe(true);
     expect(calls[0]!.method).toBe("POST");
     expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t1/unlock");
@@ -840,7 +975,7 @@ describe("cloud agent + lock + deps + verification routing (identity/coordinatio
 
   test("deps add -> POST /v1/tasks/:id/dependencies, unwraps { dependency }", async () => {
     const calls = installFetch(() => ({ status: 201, body: { dependency: { task_id: "t1", depends_on: "t2" } } }));
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
     const dep = await cloudAddDependency(client, "t1", "t2");
     expect(dep.depends_on).toBe("t2");
     expect(calls[0]!.method).toBe("POST");
@@ -850,7 +985,7 @@ describe("cloud agent + lock + deps + verification routing (identity/coordinatio
 
   test("deps remove -> DELETE /v1/tasks/:id/dependencies/:dep, returns removed", async () => {
     const calls = installFetch(() => ({ body: { removed: true } }));
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
     await expect(cloudRemoveDependency(client, "t1", "t2")).resolves.toBe(true);
     expect(calls[0]!.method).toBe("DELETE");
     expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t1/dependencies/t2");
@@ -858,7 +993,7 @@ describe("cloud agent + lock + deps + verification routing (identity/coordinatio
 
   test("deps list -> GET /v1/tasks/:id/dependencies, defaults arrays", async () => {
     const calls = installFetch(() => ({ body: { dependencies: [{ task_id: "t1", depends_on: "t2" }], blocked_by: [] } }));
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
     const edges = await cloudGetDependencies(client, "t1");
     expect(edges.dependencies).toHaveLength(1);
     expect(edges.blocked_by).toEqual([]);
@@ -868,7 +1003,7 @@ describe("cloud agent + lock + deps + verification routing (identity/coordinatio
 
   test("record-verification -> POST /v1/tasks/:id/verifications, unwraps { verification }", async () => {
     const calls = installFetch(() => ({ status: 201, body: { verification: { id: "v1", task_id: "t1", command: "bun test", status: "passed" } } }));
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
     const v = await cloudRecordVerification(client, "t1", { command: "bun test", status: "passed" });
     expect(v.status).toBe("passed");
     expect(calls[0]!.method).toBe("POST");
@@ -889,7 +1024,7 @@ describe("cloud read/analytics routing reads the shared cloud dataset", () => {
         ],
       },
     }));
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
     const work = await cloudActiveWork(client, {});
     expect(work.map((t) => t.id)).toEqual(["b", "a"]);
     expect(calls[0]!.url).toContain("/v1/tasks");
@@ -905,7 +1040,7 @@ describe("cloud read/analytics routing reads the shared cloud dataset", () => {
         ],
       },
     }));
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
     const tasks = await cloudStaleTasks(client, 30, {});
     expect(tasks.map((t) => t.id)).toEqual(["stale"]);
   });
@@ -925,7 +1060,7 @@ describe("cloud read/analytics routing reads the shared cloud dataset", () => {
         },
       };
     });
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
     const tasks = await cloudOverdueTasks(client);
     expect(tasks.map((t) => t.id)).toEqual(["overdue"]);
   });
@@ -938,7 +1073,7 @@ describe("cloud read/analytics routing reads the shared cloud dataset", () => {
           : [{ id: "sla", status: "in_progress", sla_minutes: 1, started_at: iso(60 * 60 * 1000), created_at: iso(9e7) }],
       },
     }));
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
     const esc = await cloudEscalatedTasks(client, {});
     const byId = Object.fromEntries(esc.map((e) => [e.task.id, e.reasons]));
     expect(byId["od"]).toEqual(["overdue"]);
@@ -954,7 +1089,7 @@ describe("cloud read/analytics routing reads the shared cloud dataset", () => {
         ],
       },
     }));
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
     const since = iso(24 * 60 * 60 * 1000);
     const tasks = await cloudChangedSince(client, since);
     expect(tasks.map((t) => t.id)).toEqual(["new"]);
@@ -970,7 +1105,7 @@ describe("cloud read/analytics routing reads the shared cloud dataset", () => {
         ],
       },
     }));
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
     const stats = await cloudTaskStats(client, {});
     expect(stats.total).toBe(3);
     expect(stats.by_status["completed"]).toBe(2);
@@ -981,7 +1116,7 @@ describe("cloud read/analytics routing reads the shared cloud dataset", () => {
 
   test("recent activity -> GET /v1/activity?limit, unwraps { activity }", async () => {
     const calls = installFetch(() => ({ body: { activity: [{ id: "h1", task_id: "t1", action: "create", created_at: iso(0) }], count: 1 } }));
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
     const entries = await cloudRecentActivity(client, 30);
     expect(entries).toHaveLength(1);
     expect(calls[0]!.method).toBe("GET");
@@ -991,7 +1126,7 @@ describe("cloud read/analytics routing reads the shared cloud dataset", () => {
 
   test("task lists -> GET /v1/task-lists?project_id, unwraps { task_lists }", async () => {
     const calls = installFetch(() => ({ body: { task_lists: [{ id: "tl1", name: "Backlog", slug: "backlog" }], count: 1 } }));
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
     const lists = await cloudListTaskLists(client, "proj1");
     expect(lists).toHaveLength(1);
     expect(calls[0]!.url).toContain("/v1/task-lists");
@@ -1002,7 +1137,7 @@ describe("cloud read/analytics routing reads the shared cloud dataset", () => {
     const calls = installFetch((c) =>
       c.url.includes("agent=julius") ? { body: { task: { id: "best", title: "do this" } } } : { body: { task: null } },
     );
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
     const task = await cloudNextTask(client, "julius", { project_id: "p1" });
     expect(task!.id).toBe("best");
     expect(calls[0]!.url).toContain("/v1/next");
@@ -1014,7 +1149,7 @@ describe("cloud read/analytics routing reads the shared cloud dataset", () => {
 
   test("all dependencies -> GET /v1/dependencies, unwraps { dependencies }", async () => {
     const calls = installFetch(() => ({ body: { dependencies: [{ task_id: "a", depends_on: "b" }], count: 1 } }));
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
     const edges = await cloudAllDependencies(client);
     expect(edges).toHaveLength(1);
     expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/dependencies");
@@ -1029,7 +1164,7 @@ describe("cloud read/analytics routing reads the shared cloud dataset", () => {
       if (c.url.endsWith("/tasks/open")) return { body: { task: { id: "open", status: "pending", title: "open" } } };
       return { body: { task: null } };
     });
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
     const map = await cloudBlockingDepsMap(client, [{ id: "cand" } as never]);
     expect(map.get("cand")!.map((t) => t.id)).toEqual(["open"]);
   });
@@ -1051,7 +1186,7 @@ describe("cloud read/analytics routing reads the shared cloud dataset", () => {
         },
       };
     });
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
     const recap = await cloudRecap(client, 8);
     expect(recap.completed.map((t) => t.id)).toEqual(["c1"]);
     expect(recap.completed[0]!.duration_minutes).toBe(59);
@@ -1070,7 +1205,7 @@ describe("cloud read/analytics routing reads the shared cloud dataset", () => {
         ],
       },
     }));
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
     const page = await cloudTimeline(client, { order: "desc", limit: 10 });
     expect(page.total).toBe(2);
     expect(page.entries[0]!.task_id).toBe("t2");
@@ -1080,7 +1215,7 @@ describe("cloud read/analytics routing reads the shared cloud dataset", () => {
 
   test("timeline -> non-task entity filter yields no rows (cloud degradation)", async () => {
     installFetch(() => ({ body: { activity: [{ id: "h1", task_id: "t1", action: "create", created_at: iso(0) }] } }));
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
     const page = await cloudTimeline(client, { entity_type: "project", entity_id: "p1" });
     expect(page.total).toBe(0);
   });
@@ -1100,7 +1235,7 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
         ],
       },
     }));
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
 
     for (const ref of [
       "99999999-9999-4999-8999-999999999999",
@@ -1127,7 +1262,7 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
         ],
       },
     }));
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
 
     await expect(cloudResolveProjectRef(client, "missing"))
       .rejects.toThrow('Project not found: "missing"');
@@ -1141,7 +1276,7 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
 
   test("list forwards task-list, parent, and multi-status filters", async () => {
     const calls = installFetch(() => ({ body: { tasks: [] } }));
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
     await cloudListTasks(client, {
       task_list_id: "list-1",
       parent_id: "parent-1",
@@ -1160,7 +1295,7 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
       if (call.method === "DELETE") return { status: 204 };
       return { body: { task_lists: [{ id: "12345678-full", slug: "todos-open-emails", name: "Open Emails" }] } };
     });
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
     await expect(cloudCreateTaskList(client, { name: "Open Emails", slug: "todos-open-emails" }))
       .resolves.toMatchObject({ id: "12345678-full" });
     await expect(cloudResolveTaskListRef(client, "todos-open-emails")).resolves.toBe("12345678-full");
@@ -1179,7 +1314,7 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
         ],
       },
     }));
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
 
     await expect(cloudResolveTaskListRef(client, `  ${listId.toUpperCase()}  `))
       .resolves.toBe(listId);
@@ -1224,7 +1359,7 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
         ],
       },
     }));
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
 
     await expect(cloudResolveTaskListRef(client, "missing", "project-1"))
       .rejects.toThrow('Task list not found: "missing"');
@@ -1236,8 +1371,132 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
 
   test("force unlock sends an explicit force flag instead of spoofing the lock holder", async () => {
     const calls = installFetch(() => ({ body: { success: true } }));
-    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const client = createTestCloudClient();
     await expect(cloudUnlockTask(client, "task-1", undefined, true)).resolves.toBe(true);
     expect(calls[0]!.body).toEqual({ force: true });
+  });
+});
+
+describe("bounded hosted CLI orchestration contracts at the pure router seam", () => {
+  // Stage A denies the executable hosted CLI before client construction. These
+  // positive regressions intentionally exercise only pure request/response
+  // mapping with an in-process synthetic fetch; no hosted data plane is reached.
+  const projectId = "99999999-9999-4999-8999-999999999999";
+  const planId = "77777777-7777-4777-8777-777777777777";
+
+  test("project rename is one atomic server mutation and performs no rollback request", async () => {
+    const calls = installFetch((call) => {
+      if (call.method === "GET" && call.url.endsWith("/v1/projects")) {
+        return {
+          body: {
+            projects: [{ id: projectId, name: "Open Emails", path: "/workspace/open-emails" }],
+          },
+        };
+      }
+      if (call.method === "POST" && call.url.endsWith(`/v1/projects/${projectId}/rename`)) {
+        return {
+          body: {
+            project: { id: projectId, name: "Emails Next", task_list_id: "emails-next" },
+            task_lists_updated: 1,
+          },
+        };
+      }
+      return { status: 500, body: { error: "unexpected request" } };
+    });
+    const client = createTestCloudClient();
+
+    await expect(cloudRenameProject(client, "Open Emails", "emails-next", "Emails Next"))
+      .resolves.toMatchObject({
+        project: { id: projectId, name: "Emails Next", task_list_id: "emails-next" },
+        task_lists_updated: 1,
+      });
+    expect(calls.map(({ method, url, body }) => ({ method, url, body }))).toEqual([
+      { method: "GET", url: "https://todos.hasna.xyz/v1/projects", body: undefined },
+      {
+        method: "POST",
+        url: `https://todos.hasna.xyz/v1/projects/${projectId}/rename`,
+        body: { new_slug: "emails-next", name: "Emails Next" },
+      },
+    ]);
+
+    const failureCalls = installFetch((call) => {
+      if (call.method === "GET") {
+        return { body: { projects: [{ id: projectId, name: "Open Emails", path: "/workspace/open-emails" }] } };
+      }
+      return { status: 503, body: { error: "response unavailable" } };
+    });
+    await expect(cloudRenameProject(createTestCloudClient(), "Open Emails", "emails-next"))
+      .rejects.toThrow();
+    // The failure path is still exactly resolve + atomic rename: no PATCH,
+    // compensating rename, task-list write, or other client-side rollback.
+    expect(failureCalls.map((call) => `${call.method} ${new URL(call.url).pathname}`)).toEqual([
+      "GET /v1/projects",
+      `POST /v1/projects/${projectId}/rename`,
+    ]);
+  });
+
+  test("plan create, list, read, complete, and delete retain their positive lifecycle mapping", async () => {
+    let plan: Record<string, unknown> | null = null;
+    const calls = installFetch((call) => {
+      if (call.url.endsWith("/v1/plans") && call.method === "POST") {
+        plan = {
+          id: planId,
+          slug: "stage-a-control",
+          name: "Stage A control",
+          status: "active",
+          created_at: "2026-07-18T00:00:00.000Z",
+          updated_at: "2026-07-18T00:00:00.000Z",
+          ...(call.body as object),
+        };
+        return { status: 201, body: { plan } };
+      }
+      if (call.url.endsWith("/v1/plans") && call.method === "GET") {
+        return { body: { plans: plan ? [plan] : [], count: plan ? 1 : 0 } };
+      }
+      if (call.url.endsWith(`/v1/plans/${planId}`) && call.method === "GET") {
+        return { body: { plan } };
+      }
+      if (call.url.endsWith(`/v1/plans/${planId}`) && call.method === "PATCH") {
+        plan = plan ? { ...plan, ...(call.body as object) } : null;
+        return { body: { plan } };
+      }
+      if (call.url.endsWith(`/v1/plans/${planId}`) && call.method === "DELETE") {
+        plan = null;
+        return { body: { deleted: true, id: planId } };
+      }
+      return { status: 500, body: { error: "unexpected request" } };
+    });
+    const client = createTestCloudClient();
+
+    await expect(cloudCreatePlan(client, {
+      name: "Stage A control",
+      slug: "stage-a-control",
+      description: "Pure router fixture",
+    })).resolves.toMatchObject({ id: planId, status: "active" });
+    await expect(cloudListPlans(client)).resolves.toEqual([
+      expect.objectContaining({ id: planId }),
+    ]);
+    await expect(cloudResolvePlan(client, planId)).resolves.toMatchObject({ id: planId });
+    await expect(cloudUpdatePlan(client, planId, { status: "completed" }))
+      .resolves.toMatchObject({ id: planId, status: "completed" });
+    await expect(cloudDeletePlan(client, planId)).resolves.toBe(true);
+
+    expect(calls.map((call) => `${call.method} ${new URL(call.url).pathname}`)).toEqual([
+      "POST /v1/plans",
+      "GET /v1/plans",
+      `GET /v1/plans/${planId}`,
+      `PATCH /v1/plans/${planId}`,
+      `DELETE /v1/plans/${planId}`,
+    ]);
+  });
+
+  test("an old server's missing plan-delete route preserves not-found delete compatibility", async () => {
+    const calls = installFetch(() => ({ status: 404, body: { error: "not found" } }));
+    const client = createTestCloudClient();
+
+    await expect(cloudDeletePlan(client, planId)).resolves.toBe(false);
+    expect(calls.map((call) => `${call.method} ${new URL(call.url).pathname}`)).toEqual([
+      `DELETE /v1/plans/${planId}`,
+    ]);
   });
 });
