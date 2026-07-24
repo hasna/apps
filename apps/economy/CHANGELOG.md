@@ -2,6 +2,11 @@
 
 All notable changes to this repository are tracked here. This project follows semantic versioning for published npm packages when practical.
 
+## @hasna/economy 0.3.7 - 2026-07-24
+
+- Reconciled `main` with the published npm line: the deployed `0.3.x` code (`0.3.0`–`0.3.6`, including the unified `Store` refactor and the cloud/self_hosted service surfaces) had shipped to npm but was never merged back to `main`, which still sat at `0.2.45`. The published `v0.3.6` tag (commit `4f76834d`) is a strict descendant of `main` (18 ahead / 0 behind), so this was a clean fast-forward with no main-only commits at risk.
+- Fixed a version anomaly: the published `v0.3.6` tag commit carried `package.json` version `0.3.5` (the `0.3.6` publish bumped the registry without a follow-up commit). This release bumps strictly above the published `0.3.6` latest to `0.3.7` so the git tree and npm line are consistent again.
+
 ## @hasna/economy 0.2.43 - 2026-07-06
 
 - Added the self_hosted service surface: `economy-serve` foundation probes (`GET /health`, `/ready`, `/version` -> `{ status, version, mode }`) and a versioned `/v1` API covering summaries, sessions, breakdowns, budgets, goals, pricing, subscriptions, billing, and sync.
