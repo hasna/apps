@@ -4,16 +4,15 @@
  * subscribe_channel_notifications, unsubscribe_channel_notifications,
  * list_channel_subscriptions, read_channel_notifications, mark_channel_notifications_read,
  * set_channel_topic, get_channel_topic, summarize_channel
+ *
+ * Every read/write routes through the Store (getStore()): LocalStore on-box, or
+ * ApiStore against the self_hosted/cloud API. Nothing here touches sqlite directly.
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { sendMessage, readMessages, markReadByIds } from "../../lib/messages.js";
-import { createChannel, updateChannel, renameChannel, archiveChannel, unarchiveChannel, listChannels, getChannel, joinChannel, leaveChannel } from "../../lib/channels.js";
-import { listChannelNotificationSubscriptions, markAllChannelNotificationsRead, markChannelNotificationsRead, readChannelNotifications, subscribeToChannelNotifications, unsubscribeFromChannelNotifications } from "../../lib/channel-notifications.js";
+import { getStore } from "../../lib/store/index.js";
 import { resolveIdentity } from "../../lib/identity.js";
-import { recordReadReceiptsBatch } from "../../lib/messages.js";
-import { getConversationSummary } from "../../lib/summary.js";
 import { compactQueriedMessages, compactWindowedChannels, jsonText, resolveMcpWindow } from "../compact.js";
 
 export function registerChannelTools(server: McpServer): void {
@@ -28,17 +27,18 @@ export function registerChannelTools(server: McpServer): void {
       project_id: z.string().optional(),
     },
   }, async (args: Record<string, any>) => {
+    const store = getStore();
     const { from: fromParam, name, description, topic, project_id } = args;
     const agent = resolveIdentity(fromParam);
     try {
-      const sp = createChannel(name, agent, { description, topic, project_id });
+      const sp = await store.createChannel(name, agent, { description, topic, project_id });
       return {
         content: [{ type: "text", text: JSON.stringify(sp) }],
       };
     } catch (e: any) {
       if (e.message?.includes("UNIQUE constraint")) {
         try {
-          const existing = getChannel(name);
+          const existing = await store.getChannel(name);
           if (existing) {
             return {
               content: [{ type: "text", text: `Channel "${name}" already exists. Use read_channel or join_channel to interact with it.` }],
@@ -68,12 +68,13 @@ export function registerChannelTools(server: McpServer): void {
       verbose: z.coerce.boolean().optional().describe("Return legacy raw channel array"),
     },
   }, async (args: Record<string, any>) => {
+    const store = getStore();
     const { project_id, include_archived } = args;
     const opts: { project_id?: string; include_archived?: boolean } = {};
     if (project_id) opts.project_id = project_id;
     if (include_archived) opts.include_archived = true;
 
-    const channels = listChannels(opts);
+    const channels = await store.listChannels(opts);
 
     return {
       content: [{ type: "text", text: jsonText(args.verbose ? channels : compactWindowedChannels(channels, args)) }],
@@ -90,10 +91,11 @@ export function registerChannelTools(server: McpServer): void {
       blocking: z.coerce.boolean().optional(),
     },
   }, async (args: Record<string, any>) => {
+    const store = getStore();
     const { from: fromParam, channel, content, priority, blocking } = args;
     const from = resolveIdentity(fromParam);
 
-    const sp = getChannel(channel);
+    const sp = await store.getChannel(channel);
     if (!sp) {
       return {
         content: [{ type: "text", text: `channel "${channel}" not found` }],
@@ -101,7 +103,7 @@ export function registerChannelTools(server: McpServer): void {
       };
     }
 
-    const msg = sendMessage({
+    const msg = await store.sendMessage({
       from,
       to: channel,
       content,
@@ -132,10 +134,11 @@ export function registerChannelTools(server: McpServer): void {
       verbose: z.coerce.boolean().optional().describe("Return full raw message records instead of compact previews"),
     },
   }, async (args: Record<string, any>) => {
+    const store = getStore();
     const { channel, from: fromParam, since, limit, mark_read, max_content_length, threads_only, include_reply_counts, latest } = args;
     const window = resolveMcpWindow(args);
     const verbose = args.verbose === true;
-    const messages = readMessages({
+    const messages = await store.readMessages({
       channel,
       since,
       limit: verbose ? limit : window.limit + 1,
@@ -148,14 +151,14 @@ export function registerChannelTools(server: McpServer): void {
     const visible = verbose ? messages : messages.slice(0, window.limit);
 
     if (mark_read !== false && visible.length > 0) {
-      markReadByIds(visible.map((m) => m.id));
+      await store.markReadByIds(visible.map((m) => m.id));
     }
 
     // Record per-agent read receipts for all channel messages
     if (fromParam && visible.length > 0) {
       const agent = resolveIdentity(fromParam);
-      recordReadReceiptsBatch(visible.map((m) => m.id), agent);
-      markChannelNotificationsRead(agent, visible.map((m) => m.id));
+      await store.recordReadReceiptsBatch(visible.map((m) => m.id), agent);
+      await store.markChannelNotificationsRead(agent, visible.map((m) => m.id));
     }
 
     return {
@@ -170,9 +173,10 @@ export function registerChannelTools(server: McpServer): void {
       from: z.string().optional(),
     },
   }, async (args: Record<string, any>) => {
+    const store = getStore();
     const { from: fromParam, channel } = args;
     const agent = resolveIdentity(fromParam);
-    const ok = joinChannel(channel, agent);
+    const ok = await store.joinChannel(channel, agent);
 
     if (!ok) {
       return {
@@ -193,9 +197,10 @@ export function registerChannelTools(server: McpServer): void {
       from: z.string().optional(),
     },
   }, async (args: Record<string, any>) => {
+    const store = getStore();
     const { from: fromParam, channel } = args;
     const agent = resolveIdentity(fromParam);
-    const left = leaveChannel(channel, agent);
+    const left = await store.leaveChannel(channel, agent);
 
     return {
       content: [{ type: "text", text: JSON.stringify({ channel, agent, left }) }],
@@ -210,9 +215,10 @@ export function registerChannelTools(server: McpServer): void {
       preview_chars: z.coerce.number().optional(),
     },
   }, async (args: Record<string, any>) => {
+    const store = getStore();
     const agent = resolveIdentity(args.from);
     try {
-      const subscription = subscribeToChannelNotifications(args.channel, agent, { preview_chars: args.preview_chars });
+      const subscription = await store.subscribeToChannelNotifications(args.channel, agent, { preview_chars: args.preview_chars });
       return { content: [{ type: "text", text: JSON.stringify(subscription) }] };
     } catch (e: any) {
       return { content: [{ type: "text", text: e.message }], isError: true };
@@ -226,8 +232,9 @@ export function registerChannelTools(server: McpServer): void {
       from: z.string().optional(),
     },
   }, async (args: Record<string, any>) => {
+    const store = getStore();
     const agent = resolveIdentity(args.from);
-    const unsubscribed = unsubscribeFromChannelNotifications(args.channel, agent);
+    const unsubscribed = await store.unsubscribeFromChannelNotifications(args.channel, agent);
     return { content: [{ type: "text", text: JSON.stringify({ channel: args.channel, agent, unsubscribed }) }] };
   });
 
@@ -238,8 +245,9 @@ export function registerChannelTools(server: McpServer): void {
       channel: z.string().optional(),
     },
   }, async (args: Record<string, any>) => {
+    const store = getStore();
     const agent = resolveIdentity(args.from);
-    const subscriptions = listChannelNotificationSubscriptions(agent)
+    const subscriptions = (await store.listChannelNotificationSubscriptions(agent))
       .filter((row) => !args.channel || row.channel === args.channel);
     return { content: [{ type: "text", text: JSON.stringify(subscriptions) }] };
   });
@@ -255,8 +263,9 @@ export function registerChannelTools(server: McpServer): void {
       mark_read: z.coerce.boolean().optional(),
     },
   }, async (args: Record<string, any>) => {
+    const store = getStore();
     const agent = resolveIdentity(args.from);
-    const notifications = readChannelNotifications({
+    const notifications = await store.readChannelNotifications({
       agent,
       channel: args.channel,
       unread_only: args.unread_only,
@@ -276,12 +285,13 @@ export function registerChannelTools(server: McpServer): void {
       all: z.coerce.boolean().optional(),
     },
   }, async (args: Record<string, any>) => {
+    const store = getStore();
     const agent = resolveIdentity(args.from);
     let marked = 0;
     if (args.all) {
-      marked = markAllChannelNotificationsRead(agent, args.channel);
+      marked = await store.markAllChannelNotificationsRead(agent, args.channel);
     } else if (Array.isArray(args.ids) && args.ids.length > 0) {
-      marked = markChannelNotificationsRead(agent, args.ids);
+      marked = await store.markChannelNotificationsRead(agent, args.ids);
     } else {
       return { content: [{ type: "text", text: "Provide ids or all=true" }], isError: true };
     }
@@ -299,6 +309,7 @@ export function registerChannelTools(server: McpServer): void {
       project_id: z.string().optional(),
     },
   }, async (args: Record<string, any>) => {
+    const store = getStore();
     const { name, new_name, description, topic, project_id } = args;
     const updates: { name?: string; description?: string; topic?: string | null; project_id?: string | null } = {};
     if (new_name !== undefined) updates.name = new_name;
@@ -307,7 +318,7 @@ export function registerChannelTools(server: McpServer): void {
     if (project_id !== undefined) updates.project_id = project_id === "null" ? null : project_id;
 
     try {
-      const sp = updateChannel(name, updates);
+      const sp = await store.updateChannel(name, updates);
       return {
         content: [{ type: "text", text: JSON.stringify(sp) }],
       };
@@ -326,8 +337,9 @@ export function registerChannelTools(server: McpServer): void {
       new_name: z.string().describe("New channel name"),
     },
   }, async (args: Record<string, any>) => {
+    const store = getStore();
     try {
-      const sp = renameChannel(args.name, args.new_name);
+      const sp = await store.renameChannel(args.name, args.new_name);
       return {
         content: [{ type: "text", text: JSON.stringify(sp) }],
       };
@@ -345,8 +357,9 @@ export function registerChannelTools(server: McpServer): void {
       name: z.string(),
     },
   }, async ({ name }) => {
+    const store = getStore();
     try {
-      const sp = archiveChannel(name);
+      const sp = await store.archiveChannel(name);
       return {
         content: [{ type: "text", text: JSON.stringify(sp) }],
       };
@@ -364,8 +377,9 @@ export function registerChannelTools(server: McpServer): void {
       name: z.string(),
     },
   }, async ({ name }) => {
+    const store = getStore();
     try {
-      const sp = unarchiveChannel(name);
+      const sp = await store.unarchiveChannel(name);
       return {
         content: [{ type: "text", text: JSON.stringify(sp) }],
       };
@@ -378,18 +392,18 @@ export function registerChannelTools(server: McpServer): void {
   });
 
   server.registerTool("set_channel_topic", {
-    description: "Set the current topic/status of a channel. Separate from the static description — use this for live status like '\ud83d\udd34 blocked on auth' or '\u2705 shipping v2'.",
+    description: "Set the current topic/status of a channel. Separate from the static description — use this for live status like '🔴 blocked on auth' or '✅ shipping v2'.",
     inputSchema: {
       channel: z.string().describe("Channel name"),
       topic: z.string().nullable().describe("New topic/status. Pass null to clear."),
     },
   }, async (args: Record<string, any>) => {
-    const db = (await import("../../lib/db.js")).getDb();
-    const existing = db.prepare("SELECT name FROM channels WHERE name = ?").get(args.channel);
+    const store = getStore();
+    const existing = await store.getChannel(args.channel);
     if (!existing) {
       return { content: [{ type: "text", text: `Channel not found: ${args.channel}` }], isError: true };
     }
-    db.prepare("UPDATE channels SET topic = ? WHERE name = ?").run(args.topic ?? null, args.channel);
+    await store.updateChannel(args.channel, { topic: args.topic ?? null });
     return { content: [{ type: "text", text: args.topic ? `Topic set: ${args.topic}` : "Topic cleared" }] };
   });
 
@@ -397,8 +411,8 @@ export function registerChannelTools(server: McpServer): void {
     description: "Get the current topic/status of a channel.",
     inputSchema: { channel: z.string() },
   }, async (args: Record<string, any>) => {
-    const db = (await import("../../lib/db.js")).getDb();
-    const row = db.prepare("SELECT topic FROM channels WHERE name = ?").get(args.channel) as { topic: string | null } | null;
+    const store = getStore();
+    const row = await store.getChannel(args.channel);
     if (!row) return { content: [{ type: "text", text: `Channel not found: ${args.channel}` }], isError: true };
     return { content: [{ type: "text", text: JSON.stringify({ channel: args.channel, topic: row.topic }) }] };
   });
@@ -411,39 +425,33 @@ export function registerChannelTools(server: McpServer): void {
       limit: z.coerce.number().optional().describe("Max messages to analyze (default: 100)"),
     },
   }, async (args: Record<string, any>) => {
+    const store = getStore();
     const { channel, since, limit } = args;
     const sinceTs = since ?? new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const db = (await import("../../lib/db.js")).getDb();
 
-    // Count messages in window
-    const total = (db.prepare(
-      "SELECT COUNT(*) as c FROM messages WHERE channel = ? AND created_at >= ?"
-    ).get(channel, sinceTs) as { c: number }).c;
+    // Newest-first window through the Store (no direct sqlite).
+    const rows = await store.readMessages({ channel, since: sinceTs, latest: limit ?? 100 });
+    const total = rows.length;
 
     if (total === 0) {
       return { content: [{ type: "text", text: `No messages in #${channel} since ${sinceTs.slice(0, 10)}.` }] };
     }
 
-    // Get summary using existing getConversationSummary but filtered by since
-    const rows = db.prepare(
-      `SELECT * FROM messages WHERE channel = ? AND created_at >= ? ORDER BY created_at DESC LIMIT ?`
-    ).all(channel, sinceTs, limit ?? 100) as Record<string, unknown>[];
-
     // Participants
     const agents = new Set<string>();
     const agentCounts: Record<string, number> = {};
-    const blockers: Array<{id: number; from: string; content: string; created_at: string}> = [];
+    const blockers: Array<{ id: number; from: string; content: string; created_at: string }> = [];
     const mentions: Record<string, number> = {};
 
     for (const m of rows) {
-      const from = m.from_agent as string;
+      const from = m.from_agent;
       agents.add(from);
       agentCounts[from] = (agentCounts[from] ?? 0) + 1;
       if (m.blocking) {
-        blockers.push({ id: m.id as number, from, content: (m.content as string).slice(0, 150), created_at: m.created_at as string });
+        blockers.push({ id: m.id, from, content: m.content.slice(0, 150), created_at: m.created_at });
       }
       // Count @mentions
-      const mentionedAgents = (m.content as string).match(/@([a-zA-Z0-9_-]+)/g) ?? [];
+      const mentionedAgents = m.content.match(/@([a-zA-Z0-9_-]+)/g) ?? [];
       for (const mention of mentionedAgents) {
         const a = mention.slice(1).toLowerCase();
         mentions[a] = (mentions[a] ?? 0) + 1;
@@ -461,22 +469,22 @@ export function registerChannelTools(server: McpServer): void {
     }
 
     if (blockers.length > 0) {
-      parts.push(`\n\u26d4 ${blockers.length} blocking message(s):`);
+      parts.push(`\n⛔ ${blockers.length} blocking message(s):`);
       for (const b of blockers.slice(0, 5)) {
-        parts.push(`  \u2022 [#${b.id}] ${b.from}: ${b.content}${b.content.length > 150 ? "..." : ""}`);
+        parts.push(`  • [#${b.id}] ${b.from}: ${b.content}${b.content.length > 150 ? "..." : ""}`);
       }
     }
 
     // Recent key messages (high priority or replies)
     const highPri = rows.filter((m) => m.priority === "high" || m.priority === "urgent").slice(0, 5);
     if (highPri.length > 0) {
-      parts.push(`\n\ud83d\udd34 High priority (${highPri.length}):`);
+      parts.push(`\n🔴 High priority (${highPri.length}):`);
       for (const m of highPri) {
-        parts.push(`  \u2022 [${m.priority}] ${m.from_agent}: ${(m.content as string).slice(0, 100)}`);
+        parts.push(`  • [${m.priority}] ${m.from_agent}: ${m.content.slice(0, 100)}`);
       }
     }
 
-    parts.push(`\nLast message: ${(rows[0]?.created_at as string)?.slice(0, 16) ?? "?"}`);
+    parts.push(`\nLast message: ${rows[0]?.created_at?.slice(0, 16) ?? "?"}`);
 
     return { content: [{ type: "text", text: parts.join("\n") }] };
   });

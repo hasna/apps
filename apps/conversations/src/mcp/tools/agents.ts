@@ -5,17 +5,15 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { getStore } from "../../lib/store/index.js";
 import { resolveIdentity, updateCachedAutoName } from "../../lib/identity.js";
-import { heartbeat, registerAgent, listAgents, removePresence, renameAgent, getPresence, setPresenceProject } from "../../lib/presence.js";
 import { setSessionAgent, setClaudeSessionId } from "../channel.js";
-import { getSessionActivity } from "../../lib/sessions.js";
-import { getUnreadBlockers } from "../../lib/messages.js";
 import { compactQueriedMessages, compactWindowedAgents, jsonText, resolveMcpWindow } from "../compact.js";
 
 export function registerAgentTools(
   server: McpServer,
   agentFocus: Map<string, { project_id: string | null }>,
-  getAgentFocus: (agentId: string) => string | null,
+  getAgentFocus: (agentId: string) => Promise<string | null>,
 ): void {
 
   server.registerTool("register_agent", {
@@ -36,7 +34,7 @@ export function registerAgentTools(
     const claudeSid = process.env.CONVERSATIONS_SESSION_ID || null;
     const session_id = manualSid || claudeSid || `${name}-${Date.now()}`;
     try {
-      const result = registerAgent(name, session_id, role, project_id);
+      const result = await getStore().registerAgent(name, session_id, role, project_id);
       setSessionAgent(name); // Bridge now knows who we are
       if (claudeSid) setClaudeSessionId(claudeSid); // Track for channel bridge polling
       return {
@@ -64,7 +62,7 @@ export function registerAgentTools(
   }, async (args: Record<string, any>) => {
     const { from: fromParam, name: nameParam, agent_name, status } = args;
     const agent = resolveIdentity(fromParam || nameParam || agent_name);
-    heartbeat(agent, status);
+    await getStore().heartbeat(agent, status);
     setSessionAgent(agent); // Bridge now knows who we are
 
     return {
@@ -82,7 +80,7 @@ export function registerAgentTools(
     },
   }, async (args: Record<string, any>) => {
     const { online_only } = args;
-    const agents = listAgents({ online_only });
+    const agents = await getStore().listAgents({ online_only });
 
     return {
       content: [{ type: "text", text: jsonText(args.verbose ? agents : compactWindowedAgents(agents, args)) }],
@@ -100,7 +98,7 @@ export function registerAgentTools(
     const self = resolveIdentity(fromParam);
     const agent = targetAgent?.trim() || self;
 
-    const removed = removePresence(agent);
+    const removed = await getStore().removePresence(agent);
     if (!removed) {
       return {
         content: [{ type: "text", text: `agent "${agent}" not found` }],
@@ -132,7 +130,7 @@ export function registerAgentTools(
     }
 
     try {
-      const renamed = renameAgent(oldName, newName);
+      const renamed = await getStore().renameAgent(oldName, newName);
       if (!renamed) {
         return {
           content: [{ type: "text", text: `agent "${oldName}" not found` }],
@@ -168,7 +166,7 @@ export function registerAgentTools(
     agentFocus.set(agent, { project_id });
 
     // Also persist to DB
-    setPresenceProject(agent, project_id);
+    await getStore().setPresenceProject(agent, project_id);
 
     return {
       content: [{ type: "text", text: JSON.stringify({ agent, focused: true, project_id }) }],
@@ -183,8 +181,8 @@ export function registerAgentTools(
   }, async (args: Record<string, any>) => {
     const agent = resolveIdentity(args.from);
     const sessionFocus = agentFocus.get(agent) ?? null;
-    const presence = getPresence(agent);
-    const effective = getAgentFocus(agent);
+    const presence = await getStore().getPresence(agent);
+    const effective = await getAgentFocus(agent);
 
     return {
       content: [{
@@ -209,7 +207,7 @@ export function registerAgentTools(
     agentFocus.delete(agent);
 
     // Clear from DB too
-    setPresenceProject(agent, null);
+    await getStore().setPresenceProject(agent, null);
 
     return {
       content: [{ type: "text", text: JSON.stringify({ agent, focused: false, project_id: null }) }],
@@ -222,7 +220,7 @@ export function registerAgentTools(
       session_id: z.string(),
     },
   }, async (args: Record<string, any>) => {
-    const activity = getSessionActivity(args.session_id);
+    const activity = await getStore().getSessionActivity(args.session_id);
     if (!activity) {
       return { content: [{ type: "text", text: `session "${args.session_id}" not found` }], isError: true };
     }
@@ -241,7 +239,7 @@ export function registerAgentTools(
     const { from: fromParam } = args;
     const agent = resolveIdentity(fromParam);
     const window = resolveMcpWindow(args);
-    const blockers = getUnreadBlockers(
+    const blockers = await getStore().getUnreadBlockers(
       agent,
       args.verbose ? undefined : { limit: window.limit + 1, offset: window.offset },
     );

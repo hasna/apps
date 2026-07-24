@@ -116,6 +116,28 @@ export function listChannels(options?: {
   return rows.map(parseChannelInfo);
 }
 
+export interface MemberChannel {
+  name: string;
+  description: string | null;
+  unread: number;
+}
+
+/**
+ * Channels the agent is a member of, with the count of unread messages in each.
+ * Powers the agent-boot `context` command's "My channels" section.
+ */
+export function getMemberChannels(agent: string): MemberChannel[] {
+  const db = getDb();
+  return db.prepare(`
+    SELECT s.name, s.description,
+      (SELECT COUNT(*) FROM messages m WHERE m.channel = s.name AND m.read_at IS NULL) as unread
+    FROM channels s
+    JOIN channel_members sm ON sm.channel = s.name
+    WHERE sm.agent = ?
+    ORDER BY s.name
+  `).all(agent) as MemberChannel[];
+}
+
 export function getChannel(name: string): ChannelInfo | null {
   const db = getDb();
   const channelName = normalizeChannelName(name);

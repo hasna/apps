@@ -1,9 +1,9 @@
 import type { Command } from "commander";
+import { getStore } from "../../lib/store/index.js";
 import chalk from "chalk";
-import { getDb, closeDb } from "../../lib/db.js";
+import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
-import { heartbeat, registerAgent, isAgentConflict, listAgents, removePresence, renameAgent, getPresence, setPresenceProject } from "../../lib/presence.js";
-import { getProject, getProjectByName } from "../../lib/projects.js";
+import { isAgentConflict } from "../../lib/presence.js";
 import { windowItems } from "../../lib/compact-output.js";
 import { getCliWindow, printCompactFooter } from "../compact.js";
 
@@ -63,11 +63,11 @@ export function registerAgentCommands(program: Command): void {
     .option("--limit <n>", "Max agents to show", parseInt)
     .option("--cursor <n>", "Skip first N agents for pagination", parseInt)
     .option("-j, --json", "Output as JSON")
-    .action((opts) => {
+    .action(async (opts) => {
       const agent = resolveIdentity();
-      heartbeat(agent);
+      await getStore().heartbeat(agent);
 
-      const agentsList = listAgents({ online_only: opts.online });
+      const agentsList = await getStore().listAgents({ online_only: opts.online });
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
       const page = windowItems(agentsList, window);
 
@@ -101,14 +101,14 @@ export function registerAgentCommands(program: Command): void {
     .description("Remove an agent from the presence list")
     .argument("<name>", "Agent name to remove")
     .option("-j, --json", "Output as JSON")
-    .action((name, opts) => {
+    .action(async (name, opts) => {
       const agentName = typeof name === "string" ? name.trim() : "";
       if (!agentName) {
         console.error(chalk.red("Agent name cannot be empty."));
         process.exit(1);
       }
 
-      const removed = removePresence(agentName);
+      const removed = await getStore().removePresence(agentName);
 
       if (opts.json) {
         console.log(JSON.stringify({ agent: agentName, removed }));
@@ -129,7 +129,7 @@ export function registerAgentCommands(program: Command): void {
     .argument("<old-name>", "Current agent name")
     .argument("<new-name>", "New agent name")
     .option("-j, --json", "Output as JSON")
-    .action((oldName, newName, opts) => {
+    .action(async (oldName, newName, opts) => {
       const old = typeof oldName === "string" ? oldName.trim() : "";
       const renamed = typeof newName === "string" ? newName.trim() : "";
 
@@ -139,7 +139,7 @@ export function registerAgentCommands(program: Command): void {
       }
 
       try {
-        const ok = renameAgent(old, renamed);
+        const ok = await getStore().renameAgent(old, renamed);
         if (!ok) {
           console.error(chalk.red(`Agent "${old}" not found.`));
           process.exit(1);
@@ -166,7 +166,7 @@ export function registerAgentCommands(program: Command): void {
     .option("--project <id>", "Project ID to lock agent to")
     .option("--force", "Force takeover even if another session is active")
     .option("-j, --json", "Output as JSON")
-    .action((name, opts) => {
+    .action(async (name, opts) => {
       const agentName = (typeof name === "string" ? name : "").trim();
       if (!agentName) {
         console.error(chalk.red("Agent name is required."));
@@ -174,7 +174,7 @@ export function registerAgentCommands(program: Command): void {
       }
 
       const sessionId = opts.session || crypto.randomUUID();
-      const result = registerAgent(agentName, sessionId, opts.role, opts.project);
+      const result = await getStore().registerAgent(agentName, sessionId, opts.role, opts.project);
 
       if (isAgentConflict(result)) {
         if (opts.json) {
@@ -201,10 +201,10 @@ export function registerAgentCommands(program: Command): void {
     .option("--from <agent>", "Agent identity (default: CONVERSATIONS_AGENT_ID or auto)")
     .option("--status <status>", "Status: online, busy, idle (default: online)")
     .option("-j, --json", "Output as JSON")
-    .action((opts) => {
+    .action(async (opts) => {
       const agent = resolveIdentity(opts.from);
       const status = opts.status || "online";
-      heartbeat(agent, status);
+      await getStore().heartbeat(agent, status);
 
       if (opts.json) {
         console.log(JSON.stringify({ agent, status, heartbeat: true }));
@@ -225,14 +225,14 @@ export function registerAgentCommands(program: Command): void {
     .argument("<project>", "Project ID or name")
     .option("--from <agent>", "Agent identity")
     .option("-j, --json", "Output as JSON")
-    .action((projectArg, opts) => {
+    .action(async (projectArg, opts) => {
       const agent = resolveIdentity(opts.from);
-      const project = getProject(projectArg) || getProjectByName(projectArg);
+      const project = await getStore().getProject(projectArg) || await getStore().getProjectByName(projectArg);
       if (!project) {
         console.error(chalk.red(`Project "${projectArg}" not found.`));
         process.exit(1);
       }
-      setPresenceProject(agent, project.id);
+      await getStore().setPresenceProject(agent, project.id);
 
       if (opts.json) {
         console.log(JSON.stringify({ agent, project_id: project.id, project_name: project.name, focused: true }));
@@ -247,9 +247,9 @@ export function registerAgentCommands(program: Command): void {
     .description("Clear your project focus")
     .option("--from <agent>", "Agent identity")
     .option("-j, --json", "Output as JSON")
-    .action((opts) => {
+    .action(async (opts) => {
       const agent = resolveIdentity(opts.from);
-      setPresenceProject(agent, null);
+      await getStore().setPresenceProject(agent, null);
 
       if (opts.json) {
         console.log(JSON.stringify({ agent, project_id: null, focused: false }));
@@ -264,11 +264,11 @@ export function registerAgentCommands(program: Command): void {
     .description("Show current project focus")
     .option("--from <agent>", "Agent identity")
     .option("-j, --json", "Output as JSON")
-    .action((opts) => {
+    .action(async (opts) => {
       const agent = resolveIdentity(opts.from);
-      const presence = getPresence(agent);
+      const presence = await getStore().getPresence(agent);
       const projectId = presence?.project_id ?? null;
-      const project = projectId ? (getProject(projectId) || null) : null;
+      const project = projectId ? (await getStore().getProject(projectId) || null) : null;
 
       if (opts.json) {
         console.log(JSON.stringify({ agent, project_id: projectId, project_name: project?.name ?? null }));
@@ -289,7 +289,7 @@ export function registerAgentCommands(program: Command): void {
     .description("Show current agent identity and online status")
     .option("--from <agent>", "Explicit agent identity")
     .option("-j, --json", "Output as JSON")
-    .action((opts) => {
+    .action(async (opts) => {
       const envValue = process.env.CONVERSATIONS_AGENT_ID?.trim();
       const agent = resolveIdentity(opts.from);
 
@@ -306,7 +306,7 @@ export function registerAgentCommands(program: Command): void {
         source = `auto-generated (${agentIdFile})`;
       }
 
-      const presence = getPresence(agent);
+      const presence = await getStore().getPresence(agent);
       const payload = buildWhoamiPayload(agent, source, presence);
       if (opts.json) {
         console.log(JSON.stringify(payload, null, 2));

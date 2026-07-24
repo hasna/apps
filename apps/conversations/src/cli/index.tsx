@@ -5,9 +5,10 @@ import chalk from "chalk";
 import { render } from "ink";
 import React from "react";
 import { resolveIdentity } from "../lib/identity.js";
+import { isCloudStore } from "../lib/store/index.js";
+import { HasnaHttpError } from "../lib/contracts-client/index.js";
 import { App } from "./components/App.js";
 import { registerBrainsCommand } from "./brains.js";
-import { registerStorageCommands } from "./storage.js";
 import { registerMessagingCommands } from "./commands/messaging.js";
 import { registerChannelCommands } from "./commands/channels.js";
 import { registerProjectCommands } from "./commands/projects.js";
@@ -66,12 +67,21 @@ program
 // ---- brains ----
 registerBrainsCommand(program);
 
-// ---- storage sync/push/pull/feedback ----
-registerStorageCommands(program);
-
 // ---- default: TUI ----
+// The interactive TUI reads/writes the on-box SQLite domain helpers directly
+// (real-time polling). That is the local Store's own backing, so it is correct
+// in `local` mode. In api mode (self_hosted/cloud) rendering it would silently
+// show/mutate the LOCAL db instead of the cloud API — the split-brain bug this
+// architecture forbids. So in cloud mode we refuse and route the operator to the
+// Store-backed subcommands instead of quietly serving stale local data.
 program
   .action(() => {
+    if (isCloudStore()) {
+      console.error(chalk.red("The interactive TUI is local-mode only."));
+      console.error(chalk.dim("This client is in api mode (HASNA_CONVERSATIONS_API_URL/_API_KEY set)."));
+      console.error(chalk.dim("Use the routed subcommands (send, read, sessions, channels, etc.) which talk to the cloud API."));
+      process.exit(1);
+    }
     if (!process.stdin.isTTY) {
       console.error(chalk.red("Interactive mode requires a TTY terminal."));
       console.error(chalk.dim("Use subcommands (send, read, sessions, etc.) for non-interactive use."));
@@ -82,4 +92,27 @@ program
   });
 registerEventsCommands(program, { source: "conversations" });
 
-program.parse();
+// ---- top-level error handling ----
+// Commander actions are async; `program.parse()` returns before they settle, so a
+// rejected action would otherwise surface as an unhandled rejection with a raw
+// (minified) stack trace. Route every failure through one clean formatter instead.
+function reportCliError(err: unknown): never {
+  if (err instanceof HasnaHttpError) {
+    const body = err.body as { error?: string; message?: string } | undefined;
+    const detail = body?.error || body?.message;
+    console.error(chalk.red(`Request failed: ${err.method} ${err.path} -> ${err.status}`));
+    if (detail) console.error(chalk.dim(detail));
+    if (err.status === 404) {
+      console.error(
+        chalk.dim("The cloud API did not recognize this route. Ensure the server is up to date."),
+      );
+    }
+    process.exit(1);
+  }
+  console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+  process.exit(1);
+}
+
+process.on("unhandledRejection", reportCliError);
+
+program.parseAsync().catch(reportCliError);

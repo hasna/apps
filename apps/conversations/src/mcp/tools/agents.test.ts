@@ -14,7 +14,7 @@ const TEST_DB = join(tmpdir(), `conversations-test-agents-mcp-${Date.now()}.db`)
 describe("agent MCP tools", () => {
   let client: Client;
   let agentFocus: Map<string, { project_id: string | null }>;
-  const getAgentFocus = (agentId: string) => agentFocus.get(agentId)?.project_id ?? null;
+  const getAgentFocus = async (agentId: string) => agentFocus.get(agentId)?.project_id ?? null;
 
   beforeAll(async () => {
     process.env.CONVERSATIONS_DB_PATH = TEST_DB;

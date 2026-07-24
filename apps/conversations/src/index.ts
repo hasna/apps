@@ -1,282 +1,37 @@
 /**
- * @hasna/conversations - Real-time CLI messaging for AI agents
+ * @hasna/conversations — public library API.
  *
- * Send and receive messages between AI agents on the same machine:
+ * Real-time messaging + coordination for AI agents:
  *   conversations send --to claude-code "hello from codex"
  *   conversations read --to codex --json
  *   conversations channel send deployments "v1.2 deployed"
  *
- * Or use the interactive TUI:
- *   conversations
+ * The public surface is the Store abstraction plus the shared domain types.
+ * EVERY SDK consumer reads and writes conversations DATA through `getStore()`,
+ * which returns a `ConversationsStore` bound to on-box SQLite (LocalStore) or the
+ * self_hosted/cloud HTTP API (ApiStore) resolved from the client-flip env — the
+ * SAME one interface the CLI and MCP use. The raw on-box SQLite domain helpers
+ * (sendMessage/readMessages/markRead/…) and the `getDb()` handle are NOT public
+ * API: re-exporting them meant SDK callers silently bypassed the Store and always
+ * hit local sqlite even after the client was flipped to the cloud. That was the
+ * split-brain bug this surface eliminates.
+ *
+ *   import { getStore } from "@hasna/conversations";
+ *   const msg = await getStore().sendMessage({ from, to, content });
+ *
+ * SAFETY: the ApiStore holds the bearer key only inside its HTTP transport; it is
+ * never logged, returned, or embedded in any value produced here.
  */
 
-export {
-  sendMessage,
-  readMessages,
-  readDigest,
-  markRead,
-  markSessionRead,
-  markChannelRead,
-  markAllRead,
-  getMessageById,
-  searchMessages,
-  exportMessages,
-  deleteMessage,
-  editMessage,
-  pinMessage,
-  unpinMessage,
-  getPinnedMessages,
-  getUnreadBlockers,
-  getThreadReplies,
-  DEFAULT_DIGEST_MAX_BYTES,
-  MIN_DIGEST_MAX_BYTES,
-  MAX_DIGEST_MAX_BYTES,
-} from "./lib/messages.js";
+// Shared domain types (type-only; no runtime surface).
+export * from "./types.js";
 
-export type {
-  DigestMessage,
-  DigestResult,
-  ReadDigestOptions,
-} from "./lib/messages.js";
+// The Store abstraction: getStore(), ConversationsStore, LocalStore, the mode
+// resolvers (isCloudStore/cloudApiUrl/…) and normalizeChannelName.
+export * from "./lib/store/index.js";
 
-export {
-  listSessions,
-  getSession,
-  getSessionActivity,
-} from "./lib/sessions.js";
-
-export type { SessionActivity } from "./lib/sessions.js";
-
-export {
-  createChannel,
-  updateChannel,
-  renameChannel,
-  archiveChannel,
-  unarchiveChannel,
-  listChannels,
-  getChannel,
-  joinChannel,
-  leaveChannel,
-  getChannelMembers,
-  isChannelMember,
-} from "./lib/channels.js";
-
-export {
-  buildMessagePreview,
-  subscribeToChannelNotifications,
-  unsubscribeFromChannelNotifications,
-  listChannelNotificationSubscriptions,
-  getSubscribedChannels,
-  readChannelNotifications,
-  markChannelNotificationsRead,
-  markAllChannelNotificationsRead,
-} from "./lib/channel-notifications.js";
-
-export {
-  listWebhooks,
-  addWebhook,
-  removeWebhook,
-} from "./lib/webhooks.js";
-
-export {
-  createProject,
-  listProjects,
-  getProject,
-  getProjectByName,
-  updateProject,
-  deleteProject,
-} from "./lib/projects.js";
-
+// Contract-valid project dashboard panel, aggregated through the active Store.
 export {
   createConversationsProjectPanel,
+  type ConversationsProjectPanelOptions,
 } from "./lib/project-panel.js";
-
-export type {
-  ConversationsProjectPanelOptions,
-} from "./lib/project-panel.js";
-
-export {
-  getDb,
-  getDbPath,
-  closeDb,
-} from "./lib/db.js";
-
-export {
-  CANONICAL_CONVERSATIONS_DATABASE_ENV,
-  CANONICAL_CONVERSATIONS_RDS_CLUSTER,
-  CANONICAL_CONVERSATIONS_RDS_DATABASE,
-  CANONICAL_CONVERSATIONS_RDS_SECRET_PATH,
-  CONVERSATIONS_DATABASE_FALLBACK_ENV,
-  DEFAULT_STORAGE_TABLES,
-  SYNC_EXCLUDED,
-  STORAGE_CONFIG_PATH,
-  STORAGE_DATABASE_ENV,
-  STORAGE_MODE_ENV,
-  getCanonicalConversationsRdsConfig,
-  getStorageConfig,
-  getStorageDatabaseUrl,
-  getStoragePg,
-  listConflicts,
-  listPgTables,
-  listSqliteTables,
-  resolveTables,
-  runStorageMigrations,
-  storagePull,
-  storagePush,
-  storageSync,
-} from "./lib/storage-sync.js";
-export type {
-  CanonicalConversationsRdsConfig,
-  StorageConfig,
-  StorageMode,
-  StorageSyncResult,
-  SyncConflict,
-  SyncResult,
-} from "./lib/storage-sync.js";
-
-export {
-  startPolling,
-  useMessages,
-  useChannelMessages,
-} from "./lib/poll.js";
-
-export {
-  resolveIdentity,
-  requireIdentity,
-} from "./lib/identity.js";
-
-export {
-  addReaction,
-  removeReaction,
-  getReactions,
-  getReactionSummary,
-} from "./lib/reactions.js";
-
-export type { ReactionSummary } from "./lib/reactions.js";
-
-export {
-  fireWebhooks,
-  fireTaskWebhooks,
-} from "./lib/webhooks.js";
-
-export type { WebhookConfig, TaskEvent } from "./lib/webhooks.js";
-
-export {
-  heartbeat,
-  registerAgent,
-  isAgentConflict,
-  getPresence,
-  listAgents,
-  removePresence,
-  renameAgent,
-} from "./lib/presence.js";
-
-export {
-  acquireLock,
-  tryBulkAcquireLock,
-  releaseLock,
-  checkLock,
-  cleanExpiredLocks,
-  releaseStaleAgentLocks,
-  listLocks,
-  listLocksEnriched,
-} from "./lib/locks.js";
-
-export type { ResourceLock, EnrichedLock, BulkLockRequest, BulkAcquireResult } from "./lib/locks.js";
-
-export {
-  computeHotness,
-  listHotSessions,
-} from "./lib/hot.js";
-
-export type { HotSession, HotSessionsOptions } from "./lib/hot.js";
-
-export {
-  extractTopics,
-  getChannelTopics,
-  getSessionTopics,
-  getTrendingTopics,
-} from "./lib/topics.js";
-
-export type { TopicWeight } from "./lib/topics.js";
-
-export { getConversationSummary } from "./lib/summary.js";
-
-export {
-  buildGraph,
-  getRelated,
-  getAgentNetwork,
-  getGraphStats,
-} from "./lib/graph.js";
-
-export type { GraphEdge, RelatedEntity, AgentNetwork } from "./lib/graph.js";
-
-export type { ConversationSummary, SummaryOptions } from "./lib/summary.js";
-
-export { gatherTrainingData } from "./lib/gatherer.js";
-
-export {
-  getActiveModel,
-  setActiveModel,
-  clearActiveModel,
-} from "./lib/model-config.js";
-
-export {
-  createTask,
-  getTask,
-  listTasks,
-  startTask,
-  completeTask,
-  cancelTask,
-  blockTask,
-  unblockTask,
-  reopenTask,
-  assignTask,
-  setTaskPriority,
-  addComment,
-  getComments,
-  getSubtasks,
-  getTaskTree,
-  addDependency,
-  removeDependency,
-  getDependencies,
-  getDependents,
-  getTaskActivity,
-  deleteTask,
-  getDueTasks,
-  getTaskSummary,
-  searchTasks,
-} from "./lib/tasks.js";
-
-export type { DueTaskReminder, TaskSummary } from "./lib/tasks.js";
-
-export type {
-  Message,
-  Session,
-  Channel,
-  ChannelInfo,
-  ChannelMember,
-  Project,
-  ProjectInfo,
-  Priority,
-  SendMessageOptions,
-  ReadMessagesOptions,
-  SearchMessagesOptions,
-  SearchResult,
-  AgentPresence,
-  AgentConflictError,
-  RegisterAgentResult,
-  Reaction,
-  Attachment,
-  Task,
-  TaskInfo,
-  TaskComment,
-  TaskActivity,
-  TaskStatus,
-  TaskPriority,
-  CreateTaskOptions,
-  ListTasksOptions,
-  TaskTransition,
-  SearchResultTask,
-  SearchTasksOptions,
-} from "./types.js";

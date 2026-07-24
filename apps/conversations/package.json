@@ -1,6 +1,6 @@
 {
   "name": "@hasna/conversations",
-  "version": "0.3.5",
+  "version": "0.5.7",
   "description": "Real-time CLI messaging for AI agents",
   "type": "module",
   "bin": {
@@ -13,10 +13,6 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
-    },
-    "./storage": {
-      "import": "./dist/storage.js",
-      "types": "./dist/storage.d.ts"
     },
     "./sdk": {
       "import": "./dist/sdk/index.js",
@@ -34,7 +30,7 @@
   "types": "./dist/index.d.ts",
   "scripts": {
     "clean": "rm -rf dist bin",
-    "build": "bun run clean && bun build ./src/cli/index.tsx --outdir ./bin --target bun --external ink --external react --external chalk && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun && bun build ./src/server/serve-entry.ts --outfile ./bin/serve.js --target bun && bun build ./src/hooks/blocker-hook.ts --outfile ./bin/hook.js --target bun && bun build ./src/index.ts ./src/storage.ts ./src/sdk/index.ts --outdir ./dist --target bun && (tsc --emitDeclarationOnly --declaration --outDir dist || true)",
+    "build": "bun run clean && bun build ./src/cli/index.tsx --outdir ./bin --target bun --external ink --external react --external chalk && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun && bun build ./src/server/serve-entry.ts --outfile ./bin/serve.js --target bun && bun build ./src/hooks/blocker-hook.ts --outfile ./bin/hook.js --target bun && bun build ./src/index.ts ./src/sdk/index.ts --outdir ./dist --target bun && (tsc --emitDeclarationOnly --declaration --outDir dist || true)",
     "build:dashboard": "cd dashboard && bun install && bun run build",
     "test": "bun test",
     "dev": "bun run ./src/cli/index.tsx",
@@ -67,7 +63,7 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "@hasna/contracts": "^0.5.0",
+    "@hasna/contracts": "^0.4.2",
     "@hasna/events": "^0.1.6",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "chalk": "^5.3.0",

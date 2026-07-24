@@ -27,11 +27,39 @@ function makeFakeClient() {
       if (/revoked_at IS NOT NULL/i.test(sql)) return [];
       return [];
     },
+    async query(sql: string, p: readonly unknown[] = []): Promise<{ rows: any[]; rowCount: number }> {
+      if (/INSERT INTO messages/i.test(sql) && /ON CONFLICT/i.test(sql)) {
+        // One COALESCE(...) is emitted per row (for created_at) → row count.
+        const numRows = (sql.match(/COALESCE\(/g) || []).length || 1;
+        const perRow = p.length / numRows;
+        let inserted = 0;
+        for (let i = 0; i < numRows; i++) {
+          const uuid = (p as any[])[i * perRow]; // uuid is the first column
+          const to_agent = (p as any[])[i * perRow + 3];
+          const channel = (p as any[])[i * perRow + 4];
+          const content = (p as any[])[i * perRow + 6];
+          if (!messages.find((m) => m.uuid === uuid)) {
+            messages.push({ id: nextId++, uuid, to_agent, channel, content });
+            inserted++;
+          }
+        }
+        return { rows: [], rowCount: inserted };
+      }
+      if (/INSERT INTO channel_members/i.test(sql)) {
+        const [channel, agent] = p as any[];
+        channelMembers.add(`${channel}:${agent}`);
+        return { rows: [], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    },
     async get(sql: string, p: readonly unknown[] = []): Promise<any> {
       if (/SELECT 1 AS ok/i.test(sql)) return { ok: 1 };
       if (/SELECT id FROM projects WHERE id/i.test(sql)) {
         return projects[(p as any[])[0]] ?? null;
       }
+      // Match only the standalone message-count query, not channel/project
+      // GETs that carry COUNT(*) subqueries for member_count/message_count.
+      if (/count\(\*\)::bigint\s+as\s+n/i.test(sql)) return { n: messages.length };
       if (/INSERT INTO channels/i.test(sql)) {
         const [name, description, topic, project_id, created_by, metadata, tags] = p as any[];
         const row = {
@@ -250,6 +278,65 @@ describe("conversations-serve", () => {
       body: JSON.stringify({ from: "a" }),
     });
     expect(r.status).toBe(400);
+  });
+
+  test("POST /v1/messages/bulk is idempotent (ON CONFLICT by uuid)", async () => {
+    const batch = {
+      messages: [
+        { uuid: "bulk-1", from: "a", to: "b", content: "one", channel: "backfill", created_at: "2026-01-01T00:00:00.000Z" },
+        { uuid: "bulk-2", from: "a", to: "b", content: "two", channel: "backfill", created_at: "2026-01-02T00:00:00.000Z" },
+      ],
+    };
+    const first = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify(batch),
+    });
+    expect(first.status).toBe(200);
+    const b1 = await first.json();
+    expect(b1.requested).toBe(2);
+    expect(b1.inserted).toBe(2);
+    expect(b1.skipped).toBe(0);
+
+    // Re-run the same batch → nothing new inserted, no duplicates.
+    const second = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify(batch),
+    });
+    const b2 = await second.json();
+    expect(b2.inserted).toBe(0);
+    expect(b2.skipped).toBe(2);
+    expect(b2.total).toBe(b1.total); // count unchanged on re-run
+  });
+
+  test("bulk ingest requires the write scope (read-only key -> 403)", async () => {
+    const r = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": roKey, "content-type": "application/json" },
+      body: JSON.stringify({ messages: [{ uuid: "ro-1", from: "a", to: "b", content: "x" }] }),
+    });
+    expect(r.status).toBe(403);
+  });
+
+  test("bulk ingest rejects a non-array body and missing fields", async () => {
+    const bad = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ messages: "nope" }),
+    });
+    expect(bad.status).toBe(400);
+    const missing = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ messages: [{ from: "a", to: "b" }] }),
+    });
+    expect(missing.status).toBe(400);
+  });
+
+  test("GET /v1/messages?count=1 returns a numeric count", async () => {
+    const b = await (await fetch(`${base}/v1/messages?count=1`, { headers: { "x-api-key": rwKey } })).json();
+    expect(typeof b.count).toBe("number");
   });
 
   test("GET /v1/openapi.json is served for SDK discovery", async () => {

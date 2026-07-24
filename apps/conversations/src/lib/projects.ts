@@ -2,33 +2,43 @@ import { getDb } from "./db.js";
 import { randomUUID } from "crypto";
 import type { Project, ProjectInfo } from "../types.js";
 
-function parseProject(row: Record<string, unknown>): Project {
-  let metadata: Record<string, unknown> | null = null;
-  if (row.metadata) {
+/**
+ * Coerce a raw project DB/API row into the client-facing {@link Project} shape:
+ * `tags`/`metadata`/`settings` parsed from their JSON-text columns, nullable
+ * fields normalized. Pure (no sqlite); shared by the local lib and the ApiStore so
+ * both transports return the identical contract — `tags` is ALWAYS an array, never
+ * a raw JSON string or null (that mismatch crashed `project get` in cloud mode).
+ */
+export function parseProject(row: Record<string, unknown>): Project {
+  // Columns are JSON text (sqlite + the Postgres TEXT columns), but tolerate an
+  // already-parsed value in case a transport hands back native JSON.
+  const asObject = (v: unknown): Record<string, unknown> | null => {
+    if (v == null) return null;
+    if (typeof v === "object" && !Array.isArray(v)) return v as Record<string, unknown>;
+    if (typeof v !== "string") return null;
     try {
-      metadata = JSON.parse(row.metadata as string);
+      const p = JSON.parse(v);
+      return p && typeof p === "object" && !Array.isArray(p) ? (p as Record<string, unknown>) : null;
     } catch {
-      metadata = null;
+      return null;
     }
-  }
+  };
+
+  const metadata = asObject(row.metadata);
 
   let tags: string[] = [];
-  if (row.tags) {
+  if (Array.isArray(row.tags)) {
+    tags = row.tags as string[];
+  } else if (typeof row.tags === "string" && row.tags) {
     try {
-      tags = JSON.parse(row.tags as string);
+      const p = JSON.parse(row.tags);
+      tags = Array.isArray(p) ? p : [];
     } catch {
       tags = [];
     }
   }
 
-  let settings: Record<string, unknown> | null = null;
-  if (row.settings) {
-    try {
-      settings = JSON.parse(row.settings as string);
-    } catch {
-      settings = null;
-    }
-  }
+  const settings = asObject(row.settings);
 
   return {
     id: row.id as string,

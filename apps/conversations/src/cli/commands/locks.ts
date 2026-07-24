@@ -1,7 +1,6 @@
 import type { Command } from "commander";
+import { getStore } from "../../lib/store/index.js";
 import chalk from "chalk";
-import { acquireLock, releaseLock, checkLock, listLocksEnriched, cleanExpiredLocks, releaseStaleAgentLocks } from "../../lib/locks.js";
-import { sendMessage } from "../../lib/messages.js";
 import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { windowItems } from "../../lib/compact-output.js";
@@ -48,7 +47,7 @@ export function registerLockCommands(program: Command): void {
     .option("--exclusive", "Acquire an exclusive lock instead of advisory")
     .option("--no-dm", "Do not DM the holding agent on conflict")
     .option("-j, --json", "Output as JSON")
-    .action((key, opts) => {
+    .action(async (key, opts) => {
       const resourceId = resolveKey(key);
       const resourceType = resolveType(opts.type);
       const expiryMs = resolveTtlMs(opts.ttl);
@@ -59,11 +58,11 @@ export function registerLockCommands(program: Command): void {
       }
       const lockType = opts.exclusive ? "exclusive" : "advisory";
 
-      const result = acquireLock(resourceType, resourceId, agent, lockType, expiryMs);
+      const result = await getStore().acquireLock(resourceType, resourceId, agent, lockType, expiryMs);
 
       if (!result.acquired && result.held_by && opts.dm !== false) {
         try {
-          sendMessage({
+          await await getStore().sendMessage({
             from: agent,
             to: result.held_by,
             content: `Lock conflict: I (@${agent}) tried to acquire ${lockType} lock on \`${resourceType}/${resourceId}\` but you hold it. If you no longer need it, release it with \`conversations locks release ${resourceId}${resourceType !== DEFAULT_RESOURCE_TYPE ? ` --type ${resourceType}` : ""}\`.`,
@@ -93,7 +92,7 @@ export function registerLockCommands(program: Command): void {
     .option("--from <agent>", "Agent releasing the lock")
     .option("--type <resource-type>", `Lock resource type (default: ${DEFAULT_RESOURCE_TYPE})`)
     .option("-j, --json", "Output as JSON")
-    .action((key, opts) => {
+    .action(async (key, opts) => {
       const resourceId = resolveKey(key);
       const resourceType = resolveType(opts.type);
       const agent = resolveIdentity(opts.from).trim();
@@ -102,7 +101,7 @@ export function registerLockCommands(program: Command): void {
         process.exit(1);
       }
 
-      const released = releaseLock(resourceType, resourceId, agent);
+      const released = await getStore().releaseLock(resourceType, resourceId, agent);
 
       if (opts.json) {
         console.log(JSON.stringify({ released }));
@@ -120,11 +119,11 @@ export function registerLockCommands(program: Command): void {
     .argument("<key>", "Lock key (the lock's resource_id)")
     .option("--type <resource-type>", `Lock resource type (default: ${DEFAULT_RESOURCE_TYPE})`)
     .option("-j, --json", "Output as JSON")
-    .action((key, opts) => {
+    .action(async (key, opts) => {
       const resourceId = resolveKey(key);
       const resourceType = resolveType(opts.type);
 
-      const lock = checkLock(resourceType, resourceId);
+      const lock = await getStore().checkLock(resourceType, resourceId);
 
       if (opts.json) {
         console.log(JSON.stringify(lock ? { locked: true, ...lock } : { locked: false }, null, 2));
@@ -146,12 +145,12 @@ export function registerLockCommands(program: Command): void {
     .option("--limit <n>", "Max locks to show", parseInt)
     .option("--cursor <n>", "Skip first N locks for pagination", parseInt)
     .option("-j, --json", "Output as JSON")
-    .action((opts) => {
+    .action(async (opts) => {
       const filter: { resource_type?: string; agent_id?: string } = {};
       if (typeof opts.type === "string" && opts.type.trim()) filter.resource_type = opts.type.trim();
       if (typeof opts.agent === "string" && opts.agent.trim()) filter.agent_id = opts.agent.trim();
 
-      const locksList = listLocksEnriched(filter);
+      const locksList = await getStore().listLocksEnriched(filter);
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
       const page = windowItems(locksList, window);
 
@@ -185,9 +184,9 @@ export function registerLockCommands(program: Command): void {
     .command("clean")
     .description("Release expired locks and locks held by agents with stale heartbeats (>30 min)")
     .option("-j, --json", "Output as JSON")
-    .action((opts) => {
-      const released_stale_agent = releaseStaleAgentLocks();
-      const released_expired = cleanExpiredLocks();
+    .action(async (opts) => {
+      const released_stale_agent = await getStore().releaseStaleAgentLocks();
+      const released_expired = await getStore().cleanExpiredLocks();
       const total = released_stale_agent + released_expired;
 
       if (opts.json) {

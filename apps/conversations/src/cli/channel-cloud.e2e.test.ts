@@ -40,6 +40,10 @@ function makeFakeClient() {
       }
       return null;
     },
+    async query(_sql: string, _p: readonly unknown[] = []): Promise<{ rows: any[]; rowCount: number }> {
+      // The channel-create path auto-joins the creator via INSERT INTO channel_members.
+      return { rows: [], rowCount: 0 };
+    },
     async execute(_sql: string, _p: readonly unknown[] = []): Promise<void> {},
   };
   return client;

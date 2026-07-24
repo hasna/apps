@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.5.7] - 2026-07-24
+
+### Fixed
+- **History reconciliation: `main` now contains the published 0.5.x self-hosted/cloud line.** The npm-published 0.5.x releases (ApiStore routing, cloud read/receipt endpoints, server uuid message filter, Docker/ECR base image, `@hasna/contracts ^0.4.1` pin, releases through 0.5.6) had been shipped to npm but never merged back to `main` (which sat at an unreleased 0.3.5). This release merges the published `v0.5.6` tag into `main`, adopting all deployed 0.5.x behavior while preserving `main`'s channel-project-diagnostics work, so future publishes flow from `main` again.
+- **Channel project diagnostics re-applied on top of the 0.5.x refactor** (previously main-only, not on the published line): the self-hosted API now returns structured `Validation failed` field errors (`code`/`field`/`value`/`reason`/`hint`) for `POST /v1/channels` and `PATCH /v1/channels/{name}` when `project_id` references a non-existent conversations project (e.g. an external Projects `wks_*` id), when the channel name normalizes to empty, or when `metadata`/`tags` are malformed. The OpenAPI document documents the `400` error schema. `conversationsCloudEnv` treats a command-level `HASNA_CONVERSATIONS_DB_PATH`/`CONVERSATIONS_DB_PATH` as an explicit local override so local test/dev commands cannot accidentally write to cloud when cloud credentials are exported globally. Webhook delivery failures are logged with redacted URLs instead of being silently swallowed.
+
+## [0.5.1] - 2026-07-08
+
+### Fixed
+- **Relative `--since` durations no longer 500 against the self_hosted API.** The CLI/MCP/SDK forwarded a raw relative duration (`7d`, `24h`, `1w`, `30m`, `45s`, combos like `1w2d3h`) straight into the cloud query as `since=7d`, which the service could not parse and returned `500`. Relative durations are now converted to an absolute ISO-8601 timestamp (`new Date(now - ms).toISOString()`) before the request in `read`, `digest`, `search`, `export`, and channel `notifications`; ISO/absolute values pass through untouched, so the change is backward-compatible and reversible. The same normalization also fixes the previously silent wrong-results case where a relative duration was string-compared against `created_at` in local mode. New shared helper `src/lib/since.ts` (`normalizeSince`) with unit tests.
+
 ### Added
 - **Self-hosted HTTP API surface (`conversations-serve`)**: a pure-remote (Amendment A1) service that reads/writes the app's cloud Postgres directly via the vendored `@hasna/contracts` storage kit. Exposes `GET /health`, `/ready`, `/version` (`{status,version,mode}`) and a versioned `/v1` API (messages, channels, projects, agent presence) guarded by `@hasna/contracts` API-key auth (`conversations:read` / `conversations:write` scopes). `GET /v1/openapi.json` serves the OpenAPI document.
 - **Generated typed SDK** under the `@hasna/conversations/sdk` export, generated from the serve OpenAPI (`bun run sdk:generate`).

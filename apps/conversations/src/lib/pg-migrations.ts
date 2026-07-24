@@ -101,6 +101,10 @@ export const PG_MIGRATIONS: string[] = [
   CREATE INDEX IF NOT EXISTS idx_messages_blocking ON messages(blocking);
   CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages(reply_to);
   CREATE INDEX IF NOT EXISTS idx_messages_project ON messages(project_id);
+  -- Idempotent conflict target for bulk backfill (ON CONFLICT (uuid) DO NOTHING).
+  -- The CREATE TABLE above declares uuid UNIQUE, but older tables may have had
+  -- uuid added via ALTER without the constraint; this guarantees it either way.
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_uuid ON messages(uuid);
   UPDATE channel_subscriptions ss
   SET since_message_id = COALESCE(
     (SELECT MAX(m.id) FROM messages m WHERE m.channel = ss.channel),
@@ -623,5 +627,70 @@ export const PG_MIGRATIONS: string[] = [
   CREATE INDEX IF NOT EXISTS idx_messages_channel_created ON messages(channel, created_at, id);
   CREATE INDEX IF NOT EXISTS idx_messages_to_agent_unread ON messages(to_agent) WHERE read_at IS NULL;
   INSERT INTO _migrations (id) VALUES (2) ON CONFLICT DO NOTHING;
+  `,
+  // Migration 3: tasks + task_comments + task_activity + task_dependencies.
+  // The SQLite schema (db.ts) carries a full task tracker; migration 1 only
+  // referenced `tasks` conditionally (for legacy-space rewrites) but never
+  // created it. This mirrors the SQLite tables so the self_hosted/cloud API can
+  // serve the ApiStore's /tasks/* routes at parity with the local store.
+  `
+  CREATE TABLE IF NOT EXISTS tasks (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    uuid TEXT NOT NULL DEFAULT replace(gen_random_uuid()::text, '-', '') UNIQUE,
+    subject TEXT NOT NULL,
+    description TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    priority TEXT NOT NULL DEFAULT 'medium',
+    assignee TEXT,
+    reporter TEXT NOT NULL,
+    project_id TEXT,
+    channel TEXT,
+    parent_id BIGINT REFERENCES tasks(id),
+    depends_on TEXT,
+    tags TEXT,
+    metadata TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    started_at TEXT,
+    completed_at TEXT,
+    cancelled_at TEXT,
+    due_at TEXT
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_uuid ON tasks(uuid);
+  CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+  CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee);
+  CREATE INDEX IF NOT EXISTS idx_tasks_reporter ON tasks(reporter);
+  CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
+  CREATE INDEX IF NOT EXISTS idx_tasks_channel ON tasks(channel);
+  CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id);
+  CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority);
+
+  CREATE TABLE IF NOT EXISTS task_comments (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    task_id BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    agent TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_comments_task ON task_comments(task_id);
+
+  CREATE TABLE IF NOT EXISTS task_activity (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    task_id BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    agent TEXT NOT NULL,
+    action TEXT NOT NULL,
+    detail TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_activity_task ON task_activity(task_id);
+  CREATE INDEX IF NOT EXISTS idx_task_activity_agent ON task_activity(agent);
+
+  CREATE TABLE IF NOT EXISTS task_dependencies (
+    task_id BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    depends_on_id BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    PRIMARY KEY (task_id, depends_on_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_deps_depends ON task_dependencies(depends_on_id);
+
+  INSERT INTO _migrations (id) VALUES (3) ON CONFLICT DO NOTHING;
   `,
 ];
