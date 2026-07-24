@@ -5,9 +5,12 @@ previews UI variants in the browser with a **self-contained, dependency-free
 picker** — no remote MCP, no hosted picker script. Bring your own ui.sh access,
 harvest the design skill once, and work fully offline after that.
 
+`@hasna/ui` is stateless at the package level. Harvested ui.sh content is a
+user-managed local mirror under `content/` and can be deleted or regenerated.
+
 > **Note on content:** this repo ships the *tooling* only. The ui.sh design
 > guidelines are ui.sh's content and are **not redistributed here** — run
-> `bun run harvest` with your own ui.sh MCP credentials to populate `content/`
+> `ui harvest` with your own ui.sh MCP credentials to populate `content/`
 > locally (git-ignored). The variant picker (`src/picker.ts`) is an original,
 > behaviour-compatible reimplementation of ui.sh's picker.
 
@@ -29,6 +32,10 @@ harvest the design skill once, and work fully offline after that.
 bun add -g @hasna/ui     # or: bunx @hasna/ui ...
 ```
 
+The package does not include the harvested `content/` mirror. Until you create
+one, `ui fetch` and `ui list` fail with setup guidance instead of pretending
+the package has zero resources.
+
 ## Use
 
 ```sh
@@ -37,7 +44,7 @@ bun install
 cp .env.example .env.local && $EDITOR .env.local
 set -a; source .env.local; set +a
 
-bun run harvest          # mirror the design skill into content/ (your token)
+ui harvest               # mirror the design skill into content/ (your token)
 bun run build:picker     # build public/ui-picker.js
 bun run serve            # http://localhost:5173  (?picker=local | ?picker=reference)
 bun test                 # fetch-shim + content-tree tests (needs content/)
@@ -45,6 +52,9 @@ bun test                 # fetch-shim + content-tree tests (needs content/)
 ui fetch uidotsh://ui/design-guidelines/buttons
 ui list
 ```
+
+By default the CLI reads `./content` from the current project directory. Set
+`HASNA_UI_CONTENT_DIR=/path/to/content` when the mirror lives somewhere else.
 
 ## The variant picker
 

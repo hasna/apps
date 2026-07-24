@@ -9,9 +9,9 @@
 // Reads from the mirrored content/ tree — no network, no remote picker.
 
 import { join } from "node:path";
+import { assertContentMirror, resolveContentDir } from "./content.ts";
 import { fetchResource } from "./fetch.ts";
-
-const CONTENT_DIR = join(import.meta.dir, "..", "content");
+import { harvest } from "./harvest.ts";
 
 async function runSharedEventCli(args: string[]): Promise<boolean> {
   if (args[0] !== "events" && args[0] !== "webhooks") return false;
@@ -27,12 +27,10 @@ async function runSharedEventCli(args: string[]): Promise<boolean> {
 
 
 async function listUris(): Promise<string[]> {
-  const idxFile = Bun.file(join(CONTENT_DIR, "index.json"));
-  if (await idxFile.exists()) {
-    const idx = (await idxFile.json()) as Record<string, string>;
-    return Object.keys(idx).sort();
-  }
-  return [];
+  const contentDir = resolveContentDir();
+  await assertContentMirror(contentDir);
+  const idx = (await Bun.file(join(contentDir, "index.json")).json()) as Record<string, string>;
+  return Object.keys(idx).sort();
 }
 
 async function main() {
@@ -54,6 +52,10 @@ async function main() {
       console.error(`\n${uris.length} resources`);
       break;
     }
+    case "harvest": {
+      await harvest({ contentDir: rest[0] });
+      break;
+    }
     case "serve": {
       const port = rest[0] ? Number(rest[0]) : 5173;
       process.env.UI_LOCAL_PORT = String(port);
@@ -61,7 +63,7 @@ async function main() {
       break;
     }
     default:
-      console.error("ui (@hasna/ui) — offline ui.sh\n  commands: fetch <uri...>, list, serve [port], events, webhooks");
+      console.error("ui (@hasna/ui) — offline ui.sh\n  commands: fetch <uri...>, list, harvest [content-dir], serve [port], events, webhooks");
       process.exit(cmd ? 1 : 0);
   }
 }
