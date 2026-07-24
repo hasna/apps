@@ -350,7 +350,7 @@ export function registerPlanTemplateCommands(program: Command) {
             console.error(chalk.red(`Plan not found: ${opts.show}`));
             process.exit(1);
           }
-          const tasks = await cloudListTasks(cloud, { plan_id: plan.id } as never);
+          const tasks = await cloudListTasks(cloud, { plan_id: plan.id, include_subtasks: true });
           if (globalOpts.json) {
             output({ plan, tasks, artifact: null }, true);
             return;

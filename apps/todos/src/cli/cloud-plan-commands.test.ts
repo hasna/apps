@@ -122,6 +122,81 @@ describe("cloud CLI plan commands", () => {
     }
   });
 
+  test("shows every nested plan task in authority order without duplicates", async () => {
+    const plan = {
+      id: PLAN_ID,
+      slug: "nested-delivery",
+      name: "Nested delivery",
+      description: null,
+      status: "active",
+      project_id: null,
+      created_at: "2026-07-23T00:00:00.000Z",
+      updated_at: "2026-07-23T00:00:00.000Z",
+    };
+    const tasks = [
+      {
+        id: "11111111-1111-4111-8111-111111111111",
+        short_id: "PLAN-1",
+        title: "Root",
+        plan_id: PLAN_ID,
+        parent_id: null,
+      },
+      {
+        id: "22222222-2222-4222-8222-222222222222",
+        short_id: "PLAN-2",
+        title: "Child",
+        plan_id: PLAN_ID,
+        parent_id: "11111111-1111-4111-8111-111111111111",
+      },
+      {
+        id: "33333333-3333-4333-8333-333333333333",
+        short_id: "PLAN-3",
+        title: "Grandchild",
+        plan_id: PLAN_ID,
+        parent_id: "22222222-2222-4222-8222-222222222222",
+      },
+    ];
+    let taskQuery: URLSearchParams | null = null;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "GET") {
+          return Response.json({ plan });
+        }
+        if (url.pathname === "/v1/tasks" && request.method === "GET") {
+          taskQuery = new URLSearchParams(url.searchParams);
+          const planTasks = tasks.filter((task) => task.plan_id === url.searchParams.get("plan_id"));
+          const visibleTasks = url.searchParams.get("include_subtasks") === "true"
+            ? planTasks
+            : planTasks.filter((task) => task.parent_id === null);
+          return Response.json({ tasks: visibleTasks, count: visibleTasks.length });
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-plans-nested-"));
+    tempRoots.push(root);
+    try {
+      const shown = await runCli(
+        ["--json", "plans", "--show", PLAN_ID],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(shown).toMatchObject({ exitCode: 0, stderr: "" });
+      const shownTasks = (JSON.parse(shown.stdout) as { tasks: Array<{ id: string }> }).tasks;
+      expect(shownTasks.map((task) => task.id)).toEqual(tasks.map((task) => task.id));
+      expect(new Set(shownTasks.map((task) => task.id)).size).toBe(tasks.length);
+      expect(Object.fromEntries(taskQuery ?? [])).toMatchObject({
+        plan_id: PLAN_ID,
+        include_subtasks: "true",
+      });
+    } finally {
+      server.stop(true);
+    }
+  });
+
   test.each([
     ["--complete", "Duplicate plan"],
     ["--complete", "duplicate-slug"],
