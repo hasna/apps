@@ -23,7 +23,8 @@ import {
   saveKnowledgeAuth,
   type KnowledgeAuthStatus,
 } from './auth';
-import { runKnowledgePrompt, type KnowledgePromptOptions } from './agent';
+import { runKnowledgePrompt, runKnowledgePromptOverItems, type KnowledgePromptOptions } from './agent';
+import { isKnowledgeApiMode, resolveKnowledgeCloudStore, fetchAllCloudItems } from './cloud-store';
 import { buildKnowledgeAgentContextPack, type KnowledgeAgentContextPack, type KnowledgeAgentContextPackOptions } from './context-pack';
 import {
   proposeKnowledgeSyncConflictResolutionWithAi,
@@ -37,7 +38,7 @@ import {
   type EmbeddingSearchOptions,
 } from './embeddings';
 import { consumeOpenFilesOutbox } from './outbox-consume';
-import { getKnowledgeDbStats, migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
+import { assertLocalCatalogMode, getKnowledgeDbStats, migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
 import { ingestOpenFilesManifest } from './manifest-ingest';
 import {
   discoverKnowledgeMachineTopology,
@@ -53,13 +54,12 @@ import { ingestSourceRef } from './source-ingest';
 import { resolveOpenFilesSource } from './source-resolver';
 import { providerStatus, listModelRegistry, type ProviderStatusResult, type ModelRegistryEntry } from './providers';
 import { enqueueMissingEmbeddings, refreshEmbeddingIndex, reindexHealth, type ReindexRuntimeOptions } from './reindex';
-import { knowledgeRegistryContract, RemoteKnowledgeClient, type RemoteKnowledgeRegistryContract } from './remote-client';
-import { retrieveKnowledgeContext, retrieveKnowledgeContextFromSearch, type KnowledgeContextPack, type RetrievalOptions } from './retrieval';
+import { retrieveKnowledgeContext, retrieveKnowledgeContextFromItems, retrieveKnowledgeContextFromSearch, type KnowledgeContextPack, type RetrievalOptions } from './retrieval';
 import {
   importRulesProvenance,
   type RulesProvenanceImportResult,
 } from './rules-provenance';
-import { hybridSearch, hybridSearchLegacyStore, type HybridSearchOptions, type HybridSearchResult } from './search';
+import { hybridSearch, hybridSearchItems, hybridSearchLegacyStore, type HybridSearchOptions, type HybridSearchResult } from './search';
 import { recordAuditEvent, redactSecrets, resolveSafetyPolicy, type SafetyPolicy } from './safety';
 import { runProviderWebSearch, type WebSearchOptions } from './web-search';
 import {
@@ -93,6 +93,13 @@ import {
   type StorageValidationResult,
 } from './storage-contract';
 import { ensureStore, type KnowledgeItem } from './store';
+import {
+  resolveItemStore,
+  type ItemStore,
+  type ItemCreateInput,
+  type ItemPatch,
+  type ItemListResult,
+} from './item-store';
 import { initializeWikiLayout, recordWikiLayoutCatalog } from './wiki-layout';
 import {
   canonicalExampleKnowledgeStorage,
@@ -1579,6 +1586,61 @@ export class KnowledgeService {
     return this.ensureWorkspace().jsonStorePath;
   }
 
+  /**
+   * The single knowledge-item Store for this scope. One interface, two
+   * transports resolved from the environment: LocalItemStore (on-box db.json)
+   * in local mode, ApiItemStore (HTTP `/v1` + bearer key) in self_hosted/cloud
+   * mode. EVERY item read/write — CLI, MCP, and SDK — routes through this one
+   * surface, so no path touches sqlite or the raw HTTP client directly.
+   */
+  itemStore(): ItemStore {
+    const workspace = this.ensureWorkspace();
+    return resolveItemStore({
+      storePath: workspace.jsonStorePath,
+      storePathOverridden: false,
+    });
+  }
+
+  /** List every knowledge item (including archived) via the unified Store. */
+  async listItems(): Promise<ItemListResult> {
+    return this.itemStore().listAll();
+  }
+
+  /** Fetch one knowledge item by id or short id via the unified Store. */
+  async getItem(idOrShort: string): Promise<KnowledgeItem | null> {
+    return this.itemStore().get(idOrShort);
+  }
+
+  /** Create (or upsert on a caller-supplied id) an item via the unified Store. */
+  async createItem(input: ItemCreateInput): Promise<KnowledgeItem> {
+    return this.itemStore().create(input);
+  }
+
+  /** Patch an item by id or short id via the unified Store. */
+  async updateItem(idOrShort: string, patch: ItemPatch): Promise<KnowledgeItem | null> {
+    return this.itemStore().update(idOrShort, patch);
+  }
+
+  /** Delete one item by id or short id via the unified Store. */
+  async deleteItem(idOrShort: string): Promise<boolean> {
+    return this.itemStore().delete(idOrShort);
+  }
+
+  /** Delete many items by id/short id via the unified Store; returns the count. */
+  async deleteItems(idsOrShorts: string[]): Promise<number> {
+    return this.itemStore().deleteMany(idsOrShorts);
+  }
+
+  /**
+   * Unified inventory dispatch: the shared cloud knowledge-item corpus in api
+   * mode (self_hosted/cloud), the local sqlite/JSON catalog otherwise. CLI, MCP,
+   * and SDK all call this so no surface reads a divergent store.
+   */
+  async resolveInventory(options: KnowledgeInventoryOptions = {}): Promise<KnowledgeInventoryResult> {
+    if (this.isApiMode()) return this.cloudInventory(options);
+    return this.inventory(options);
+  }
+
   config(options: { ensure?: boolean } = {}): KnowledgeConfig {
     const workspace = options.ensure ? this.ensureWorkspace() : this.workspace;
     if (!this.cachedConfig || options.ensure || existsSync(workspace.configPath)) {
@@ -1654,7 +1716,7 @@ export class KnowledgeService {
       canonical_example: storage.canonical_example,
       config_path: workspace.configPath,
       next: mode === 'hosted'
-        ? ['knowledge auth login --api-key <key>', 'knowledge storage status --json', 'knowledge remote contracts --json']
+        ? ['knowledge auth login --api-key <key>', 'knowledge storage status --json']
         : ['knowledge search <query>', 'knowledge <prompt>'],
       message: `Set knowledge mode to ${mode}`,
     };
@@ -1687,20 +1749,6 @@ export class KnowledgeService {
     return clearKnowledgeAuth(env);
   }
 
-  remoteContract(): RemoteKnowledgeRegistryContract {
-    const storage = this.storageContract();
-    return knowledgeRegistryContract({
-      mode: this.config().mode,
-      sourceSchemes: this.config().sources.allowed_schemes,
-      storageType: storage.artifact_store.type,
-      artifactUriPrefix: storage.artifact_store.uri_prefix,
-    });
-  }
-
-  remoteClient(env: Record<string, string | undefined> = process.env): RemoteKnowledgeClient | null {
-    return RemoteKnowledgeClient.fromConfig(this.config(), env);
-  }
-
   paths(): KnowledgePathsResult {
     const workspace = this.workspace;
     return {
@@ -1730,9 +1778,121 @@ export class KnowledgeService {
   }
 
   dbStats() {
+    // Refuse in api mode even when no local db exists yet, so `db stats` never
+    // reports the on-box catalog as authoritative while the cloud flip is active.
+    assertLocalCatalogMode('reading knowledge.db stats');
     const workspace = this.workspace;
     if (!existsSync(workspace.knowledgeDbPath)) return emptyKnowledgeDbStats();
     return getKnowledgeDbStats(workspace.knowledgeDbPath);
+  }
+
+  /**
+   * Build a knowledge inventory from a bare item list (no local sqlite catalog).
+   * Shared by the local no-db path and the cloud path so both produce the exact
+   * same KnowledgeInventoryResult shape with empty catalog sections.
+   */
+  private itemOnlyInventory(params: {
+    items: KnowledgeItem[];
+    limit: number;
+    includeArchived: boolean;
+    storePath: string;
+    storeExists: boolean;
+    storeReadError: string | null;
+  }): KnowledgeInventoryResult {
+    const workspace = this.workspace;
+    const { items, limit, includeArchived, storePath, storeExists, storeReadError } = params;
+    const activeItems = items.filter((item) => item.archived !== true);
+    const visibleItems = includeArchived ? items : activeItems;
+    const stats = emptyKnowledgeDbStats();
+    const summary = {
+      legacy_items: items.length,
+      active_items: activeItems.length,
+      archived_items: items.length - activeItems.length,
+      schema_version: stats.schema_version,
+      sources: stats.sources,
+      source_revisions: stats.source_revisions,
+      chunks: stats.chunks,
+      wiki_pages: stats.wiki_pages,
+      citations: stats.citations,
+      indexes: stats.indexes,
+      runs: stats.runs,
+      run_events: stats.run_events,
+      storage_objects: stats.storage_objects,
+      embeddings: stats.embeddings,
+      vector_entries: stats.vector_entries,
+      reindex_queue: stats.reindex_queue,
+      redaction_findings: stats.redaction_findings,
+      audit_events: stats.audit_events,
+      approval_gates: stats.approval_gates,
+      knowledge_machines: stats.knowledge_machines,
+      sync_snapshots: stats.sync_snapshots,
+      sync_changes: stats.sync_changes,
+      sync_conflicts: stats.sync_conflicts,
+      sync_table_clocks: stats.sync_table_clocks,
+      sync_imports: stats.sync_imports,
+    };
+    return {
+      ok: true,
+      scope: this.scope,
+      home: workspace.home,
+      limit,
+      paths: {
+        json_store_path: storePath,
+        json_store_exists: storeExists,
+        knowledge_db_path: workspace.knowledgeDbPath,
+        knowledge_db_exists: false,
+        artifacts_dir: workspace.artifactsDir,
+        indexes_dir: workspace.indexesDir,
+        logs_dir: workspace.logsDir,
+        wiki_dir: workspace.wikiDir,
+      },
+      summary,
+      legacy_store: {
+        path: storePath,
+        exists: storeExists,
+        read_error: storeReadError,
+        total_items: items.length,
+        active_items: activeItems.length,
+        archived_items: items.length - activeItems.length,
+        items_returned: Math.min(visibleItems.length, limit),
+      },
+      items: visibleItems.slice(0, limit).map(legacyInventoryItem),
+      sources: [],
+      source_revisions: [],
+      chunks: [],
+      wiki_pages: [],
+      indexes: [],
+      storage_objects: [],
+      runs: [],
+      vector_indexes: [],
+      reindex_queue: [],
+      machines: [],
+      sync_conflicts: [],
+      approval_gates: [],
+      audit_events: [],
+      message: `${items.length} item(s), 0 source(s), 0 chunk(s), 0 wiki page(s), 0 artifact(s)`,
+    };
+  }
+
+  /**
+   * Cloud (api mode) inventory: reports the shared cloud knowledge-item corpus.
+   * The RAG catalog (sources/chunks/wiki/sync/machines) lives only in the local
+   * sqlite pipeline and has no cloud counterpart, so those sections are empty —
+   * this routes through the same cloud item transport every item command uses,
+   * never the local db.json or sqlite catalog.
+   */
+  async cloudInventory(options: KnowledgeInventoryOptions = {}): Promise<KnowledgeInventoryResult> {
+    const limit = inventoryLimit(options.limit);
+    const items = await this.fetchCloudItems();
+    const cloud = resolveKnowledgeCloudStore();
+    return this.itemOnlyInventory({
+      items,
+      limit,
+      includeArchived: options.includeArchived ?? false,
+      storePath: cloud?.baseUrl ?? 'cloud',
+      storeExists: true,
+      storeReadError: null,
+    });
   }
 
   inventory(options: KnowledgeInventoryOptions = {}): KnowledgeInventoryResult {
@@ -1744,75 +1904,14 @@ export class KnowledgeService {
     const visibleItems = options.includeArchived ? legacyStore.items : activeItems;
     const dbExists = existsSync(workspace.knowledgeDbPath);
     if (!dbExists) {
-      const stats = emptyKnowledgeDbStats();
-      const summary = {
-        legacy_items: legacyStore.items.length,
-        active_items: activeItems.length,
-        archived_items: legacyStore.items.length - activeItems.length,
-        schema_version: stats.schema_version,
-        sources: stats.sources,
-        source_revisions: stats.source_revisions,
-        chunks: stats.chunks,
-        wiki_pages: stats.wiki_pages,
-        citations: stats.citations,
-        indexes: stats.indexes,
-        runs: stats.runs,
-        run_events: stats.run_events,
-        storage_objects: stats.storage_objects,
-        embeddings: stats.embeddings,
-        vector_entries: stats.vector_entries,
-        reindex_queue: stats.reindex_queue,
-        redaction_findings: stats.redaction_findings,
-        audit_events: stats.audit_events,
-        approval_gates: stats.approval_gates,
-        knowledge_machines: stats.knowledge_machines,
-        sync_snapshots: stats.sync_snapshots,
-        sync_changes: stats.sync_changes,
-        sync_conflicts: stats.sync_conflicts,
-        sync_table_clocks: stats.sync_table_clocks,
-        sync_imports: stats.sync_imports,
-      };
-      return {
-        ok: true,
-        scope: this.scope,
-        home: workspace.home,
+      return this.itemOnlyInventory({
+        items: legacyStore.items,
         limit,
-        paths: {
-          json_store_path: storePath,
-          json_store_exists: legacyStore.exists,
-          knowledge_db_path: workspace.knowledgeDbPath,
-          knowledge_db_exists: false,
-          artifacts_dir: workspace.artifactsDir,
-          indexes_dir: workspace.indexesDir,
-          logs_dir: workspace.logsDir,
-          wiki_dir: workspace.wikiDir,
-        },
-        summary,
-        legacy_store: {
-          path: storePath,
-          exists: legacyStore.exists,
-          read_error: legacyStore.read_error,
-          total_items: legacyStore.items.length,
-          active_items: activeItems.length,
-          archived_items: legacyStore.items.length - activeItems.length,
-          items_returned: Math.min(visibleItems.length, limit),
-        },
-        items: visibleItems.slice(0, limit).map(legacyInventoryItem),
-        sources: [],
-        source_revisions: [],
-        chunks: [],
-        wiki_pages: [],
-        indexes: [],
-        storage_objects: [],
-        runs: [],
-        vector_indexes: [],
-        reindex_queue: [],
-        machines: [],
-        sync_conflicts: [],
-        approval_gates: [],
-        audit_events: [],
-        message: `${legacyStore.items.length} item(s), 0 source(s), 0 chunk(s), 0 wiki page(s), 0 artifact(s)`,
-      };
+        includeArchived: options.includeArchived ?? false,
+        storePath,
+        storeExists: legacyStore.exists,
+        storeReadError: legacyStore.read_error,
+      });
     }
     migrateKnowledgeDb(workspace.knowledgeDbPath);
     const stats = getKnowledgeDbStats(workspace.knowledgeDbPath);
@@ -2306,8 +2405,35 @@ export class KnowledgeService {
     });
   }
 
+  /** True when the client-flip resolves to the cloud HTTP transport. In api mode
+   * the shared corpus is the cloud knowledge-items, not a local sqlite catalog. */
+  private isApiMode(): boolean {
+    return isKnowledgeApiMode();
+  }
+
+  /** Fetch the entire shared knowledge-item corpus from the cloud (api mode). */
+  private async fetchCloudItems(): Promise<KnowledgeItem[]> {
+    const cloud = resolveKnowledgeCloudStore();
+    if (!cloud) throw new Error('knowledge: cloud store requested but not resolvable (check HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY).');
+    return fetchAllCloudItems(cloud);
+  }
+
   async semanticSearch(options: Omit<EmbeddingSearchOptions, 'dbPath' | 'config'>) {
     const workspace = this.workspace;
+    if (this.isApiMode()) {
+      // The vector index lives only in the local sqlite catalog. In cloud mode
+      // fall back to lexical search over the shared cloud item corpus rather
+      // than throwing — semantic ranking is reported as unavailable.
+      const items = await this.fetchCloudItems();
+      const search = await hybridSearchItems(items, { ...options }, ['semantic_search_requires_local_catalog']);
+      return {
+        provider: 'openai' as const,
+        model: 'text-embedding-3-small',
+        dimensions: options.dimensions ?? 1536,
+        query: options.query,
+        results: search.results,
+      };
+    }
     if (!existsSync(workspace.knowledgeDbPath)) {
       return {
         provider: 'openai' as const,
@@ -2326,6 +2452,10 @@ export class KnowledgeService {
 
   async search(options: Omit<HybridSearchOptions, 'dbPath' | 'config'>) {
     const workspace = this.workspace;
+    if (this.isApiMode()) {
+      const items = await this.fetchCloudItems();
+      return hybridSearchItems(items, options);
+    }
     const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
     if (!existsSync(workspace.knowledgeDbPath)) {
       if (existsSync(legacyStorePath)) {
@@ -2351,6 +2481,10 @@ export class KnowledgeService {
 
   async retrieveContext(options: Omit<RetrievalOptions, 'dbPath' | 'config'>) {
     const workspace = this.workspace;
+    if (this.isApiMode()) {
+      const items = await this.fetchCloudItems();
+      return retrieveKnowledgeContextFromItems(items, options);
+    }
     const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
     if (!existsSync(workspace.knowledgeDbPath)) {
       if (existsSync(legacyStorePath)) {
@@ -2379,6 +2513,16 @@ export class KnowledgeService {
 
   async contextPack(options: Omit<KnowledgeAgentContextPackOptions, 'dbPath' | 'config' | 'safetyPolicy'>) {
     const workspace = this.workspace;
+    if (this.isApiMode()) {
+      const query = (options.query ?? options.topic ?? '').trim();
+      if (query && options.source !== 'loops' && options.source !== 'runs') {
+        const items = await this.fetchCloudItems();
+        const search = await hybridSearchItems(items, { ...options, query });
+        const context = retrieveKnowledgeContextFromSearch(search, { contextChars: options.contextChars });
+        return legacyAgentContextPack(options, context, this.safetyPolicy());
+      }
+      return emptyAgentContextPack(options);
+    }
     const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
     if (!existsSync(workspace.knowledgeDbPath)) {
       const query = (options.query ?? options.topic ?? '').trim();
@@ -2406,6 +2550,10 @@ export class KnowledgeService {
   }
 
   async runPrompt(options: Omit<KnowledgePromptOptions, 'dbPath' | 'config'>) {
+    if (this.isApiMode()) {
+      const items = await this.fetchCloudItems();
+      return runKnowledgePromptOverItems(items, { ...options, config: this.config() });
+    }
     const workspace = this.ensureWorkspace();
     const legacyStorePath = options.legacyStorePath ?? workspace.jsonStorePath;
     if (!options.legacyStorePath) ensureStore(legacyStorePath);

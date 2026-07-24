@@ -37,7 +37,7 @@ describe('knowledge project panel provider', () => {
     writeFileSync(source, 'Swiss banking source document with due diligence context.');
     await service.ingestSource(`file://${source}`, 'knowledge_index');
 
-    const panel = createKnowledgeProjectPanel('Swiss Bank Account', { service, limit: 5 });
+    const panel = await createKnowledgeProjectPanel('Swiss Bank Account', { service, limit: 5 });
 
     expect(panel.schema).toBe('hasna.project_panel.v1');
     expect(panel.projectId).toBe('swiss-bank-account');
@@ -50,6 +50,51 @@ describe('knowledge project panel provider', () => {
     expect(panel.metrics.find((metric) => metric.id === 'active_items')?.value).toBe(1);
     expect(panel.metrics.find((metric) => metric.id === 'sources')?.value).toBe(1);
     expect(panel.resourceRefs.some((ref) => ref.uri === 'project://swiss-bank-account')).toBe(true);
+  });
+
+  // Regression: a knowledge item whose `url` used a scheme outside the contract
+  // allow-list (e.g. s3://) was copied verbatim into evidenceRefs[].uri, so
+  // parseContract rejected the whole panel with a ContractValidationError. This
+  // surfaced in cloud mode where the shared corpus carries such URLs. The panel
+  // must now drop the unsupported URI from evidenceRefs and stay contract-valid.
+  test('drops evidence URIs with unsupported schemes instead of failing validation', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'knowledge-project-panel-uri-'));
+    const service = createKnowledgeService({ scope: 'project', cwd: dir });
+    service.paths();
+    saveStore(service.jsonStorePath(), {
+      items: [
+        {
+          id: 'k_bad_scheme',
+          short_id: 'badscheme',
+          title: 'Item with an unsupported URL scheme',
+          content: 'Body content for the unsupported-scheme knowledge item.',
+          url: 's3://internal-bucket/reports/2026/summary.json',
+          tags: ['reports'],
+          created_at: '2026-06-29T00:00:00.000Z',
+          updated_at: '2026-06-29T00:01:00.000Z',
+        },
+        {
+          id: 'k_good_scheme',
+          short_id: 'goodscheme',
+          title: 'Item with a supported URL scheme',
+          content: 'Body content for the supported-scheme knowledge item.',
+          url: 'https://example.com/report',
+          tags: ['reports'],
+          created_at: '2026-06-29T00:00:00.000Z',
+          updated_at: '2026-06-29T00:01:00.000Z',
+        },
+      ],
+    });
+
+    // Would throw ContractValidationError before the fix.
+    const panel = await createKnowledgeProjectPanel('reports', { service, limit: 10 });
+    expect(panel.schema).toBe('hasna.project_panel.v1');
+
+    const bad = panel.items.find((item) => item.id === 'item_k_bad_scheme');
+    const good = panel.items.find((item) => item.id === 'item_k_good_scheme');
+    expect(bad?.evidenceRefs.length).toBe(0);
+    expect((bad?.metadata as { url?: string } | undefined)?.url).toBe('s3://internal-bucket/reports/2026/summary.json');
+    expect(good?.evidenceRefs[0]?.uri).toBe('https://example.com/report');
   });
 
   test('CLI prints project-panel contract JSON for project scope', () => {

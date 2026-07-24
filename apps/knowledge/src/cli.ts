@@ -4,19 +4,13 @@
  * Copyright 2026 Hasna Inc.
  * Licensed under the Apache License, Version 2.0
  */
-import { defaultStorePath, loadStore, loadStoreIfExists, saveStore, withLock, makeId, makeShortId, ensureStore, type KnowledgeItem } from './store';
-import { resolveKnowledgeCloudStore, fetchAllCloudItems, type KnowledgeCloudStore } from './cloud-store';
+import { defaultStorePath, ensureStore, type KnowledgeItem } from './store';
+import { resolveItemStore, type ItemStore } from './item-store';
+import { isKnowledgeApiMode } from './cloud-store';
 import { openKnowledgeDb } from './knowledge-db';
 import { createKnowledgeService } from './service';
 import { createKnowledgeProjectPanel, formatKnowledgeProjectPanel } from './project-panel';
-import {
-  getStorageStatus as getDatabaseStorageStatus,
-  parseStorageTables,
-  storagePull as databaseStoragePull,
-  storagePush as databaseStoragePush,
-  storageSync as databaseStorageSync,
-  type SyncResult,
-} from './storage';
+import { getStorageStatus as getDatabaseStorageStatus } from './storage';
 import { assertProviderCredentials, parseModelRef, resolveModelRef, type AiProviderId } from './providers';
 import { approvalStatus, assertS3ReadAllowed, assertWebSearchAllowed, createApprovalGate, recordAuditEvent, recordRedactionFindings, redactSecrets } from './safety';
 import { Command } from 'commander';
@@ -114,7 +108,7 @@ interface ParseResult {
 }
 
 const EVENTS_COMMANDS = ['events', 'webhooks'];
-const COMMANDS = ['add', 'list', 'get', 'delete', 'update', 'archive', 'restore', 'upsert', 'untag', 'export', 'prune', 'dedupe', 'stats', 'inventory', 'project-panel', 'paths', 'setup', 'auth', 'remote', 'storage', 'machines', 'sync', 'db', 'wiki', 'app-wiki', 'source', 'ingest', 'reindex', 'search', 'context', 'proposals', 'web', 'ask', 'build', 'embeddings', 'providers', 'safety', 'help', ...EVENTS_COMMANDS];
+const COMMANDS = ['add', 'list', 'get', 'delete', 'update', 'archive', 'restore', 'upsert', 'untag', 'export', 'prune', 'dedupe', 'stats', 'inventory', 'project-panel', 'paths', 'setup', 'auth', 'storage', 'machines', 'sync', 'db', 'wiki', 'app-wiki', 'source', 'ingest', 'reindex', 'search', 'context', 'proposals', 'web', 'ask', 'build', 'embeddings', 'providers', 'safety', 'help', ...EVENTS_COMMANDS];
 const COMMAND_ALIASES: Record<string, string> = {
   ls: 'list',
   rm: 'delete',
@@ -275,7 +269,6 @@ Commands:
   paths                        Show resolved workspace/store paths
   setup                        Configure local, hosted, or canonical example S3 mode
   auth login|whoami|logout     Manage hosted API credentials
-  remote contracts|status      Inspect hosted client contracts/readiness
   storage status|validate|repair-artifact-keys|migrate-legacy-path
                                Inspect or repair local/S3 artifact storage metadata
   machines topology|preflight  Inspect optional machine topology/sync readiness
@@ -404,11 +397,10 @@ function printCommandHelp(command: string): void {
   if (command === 'paths') { console.log('Usage: knowledge paths [--scope local|global|project] [--json]'); return; }
   if (command === 'setup') { console.log('Usage: knowledge setup --mode local|hosted [--api-url https://...] [--canonical-example] [--scope local|global|project] [--json]'); return; }
   if (command === 'auth') { console.log('Usage: knowledge auth login|whoami|logout [--api-key <key>] [--email <email>] [--org <slug>] [--api-url https://...] [--scope local|global|project] [--json]'); return; }
-  if (command === 'remote') { console.log('Usage: knowledge remote contracts|status [--scope local|global|project] [--json]'); return; }
   if (command === 'storage') { console.log('Usage: knowledge storage status|validate|repair-artifact-keys|migrate-legacy-path [--approve-write --approved-by <name>] [--scope local|global|project] [--json]'); return; }
   if (command === 'machines') { console.log('Usage: knowledge machines topology [--no-tailscale] | preflight [machine] [--workspace <repo>] [--scope local|global|project] [--json]'); return; }
   if (command === 'sync') { console.log('Usage: knowledge sync status|doctor|readiness|snapshot|machines|conflicts [show|propose|resolve] [id] | dry-run|pull|push|sync|export|import [--peer-workspace <path>] [--machine <ssh-alias>] [--tables <names>] [--dry-run] [--limit <n>] [--approve-write] [--approved-by <name>] [--strategy <name>] [--mode deterministic|ai] [--model <alias|provider:model>] [--fake] [--no-tailscale] [--scope local|global|project] [--json]\n\nRemote machine sync resolves peer paths through @hasna/machines when --peer-workspace is omitted.'); return; }
-  if (command === 'db') { console.log('Usage: knowledge db init|stats|storage status|push|pull|sync [--tables sources,chunks] [--scope local|global|project] [--json]'); return; }
+  if (command === 'db') { console.log('Usage: knowledge db init|stats|storage status [--scope local|global|project] [--json]'); return; }
   if (command === 'wiki') { console.log('Usage: knowledge wiki init|compile|file-answer|lint [query|prompt] [--title <title>] [--content <answer>] [--approve-write] [--limit <n>] [--scope local|global|project] [--json]'); return; }
   if (command === 'app-wiki') { console.log('Usage: knowledge app-wiki init | note add|get|list | source add <source-ref> | search <query> | query <query> [--title <title>] [--content <text>] [--tag <tag>] [--source-ref <uri>] [--scope project|local|global] [--allow-global] [--json]'); return; }
   if (command === 'source') { console.log('Usage: knowledge source resolve <source-ref> [--purpose knowledge_answer|knowledge_index] [--limit <n>] [--scope local|global|project] [--json]'); return; }
@@ -482,17 +474,6 @@ function machineIsLocal(machine: string | undefined): boolean {
   return !machine || machine === 'local' || machine === 'localhost';
 }
 
-function syncOk(results: SyncResult[]): boolean {
-  return results.every((result) => result.errors.length === 0);
-}
-
-function syncMessage(results: SyncResult[], label: string): string {
-  const written = results.reduce((sum, result) => sum + result.rowsWritten, 0);
-  const errors = results.flatMap((result) => result.errors.map((error) => `${result.table}: ${error}`));
-  if (errors.length > 0) return `Storage ${label} completed with errors: ${errors.join('; ')}`;
-  return `Storage ${label} completed: ${written} rows across ${results.length} tables`;
-}
-
 function requireId(flags: Flags): asserts flags is Flags & { id: string } {
   if (!flags.id) throw new Error('Missing required --id. Example: knowledge get --id <id>');
 }
@@ -524,11 +505,11 @@ async function run(argv: string[]): Promise<void> {
   if (flags.completions) {
     const shell = flags.completions;
     if (shell === 'bash') {
-    console.log(`_knowledge() { local cur; cur="${"$"}{COMP_WORDS[COMP_CWORD]}"; COMPREPLY=($(compgen -W "add list get update archive restore upsert untag delete export prune dedupe stats inventory project-panel paths setup auth remote storage machines sync db wiki app-wiki source ingest reindex search context proposals web ask build embeddings providers safety events webhooks help ls rm edit unarchive --json --yes --help --version --desc --page --limit --search --sort --id --store --title --content --url --tag --format --completions --purpose --model --dimensions --semantic --context --max-tokens --max-items --from --since --topic --dedupe --generate --approve-write --provider --mode --machine --workspace --peer-workspace --api-url --canonical-example --api-key --email --org --org-id --user-id --owner --domain --file-results --full --dry-run --fake --no-tailscale --no-artifact-content --no-color --scope --tables --archived --include-archived --project --contract --source-ref --allow-global" -- "$cur")); }; complete -F _knowledge knowledge`);
+    console.log(`_knowledge() { local cur; cur="${"$"}{COMP_WORDS[COMP_CWORD]}"; COMPREPLY=($(compgen -W "add list get update archive restore upsert untag delete export prune dedupe stats inventory project-panel paths setup auth storage machines sync db wiki app-wiki source ingest reindex search context proposals web ask build embeddings providers safety events webhooks help ls rm edit unarchive --json --yes --help --version --desc --page --limit --search --sort --id --store --title --content --url --tag --format --completions --purpose --model --dimensions --semantic --context --max-tokens --max-items --from --since --topic --dedupe --generate --approve-write --provider --mode --machine --workspace --peer-workspace --api-url --canonical-example --api-key --email --org --org-id --user-id --owner --domain --file-results --full --dry-run --fake --no-tailscale --no-artifact-content --no-color --scope --tables --archived --include-archived --project --contract --source-ref --allow-global" -- "$cur")); }; complete -F _knowledge knowledge`);
     } else if (shell === 'zsh') {
-      console.log(`#compdef knowledge\n_knowledge() { _arguments -C "1: :(add list get update archive restore upsert untag delete export prune dedupe stats inventory project-panel paths setup auth remote storage machines sync db wiki app-wiki source ingest reindex search context proposals web ask build embeddings providers safety events webhooks help ls rm edit unarchive)" "(--json)--json" "(--yes)-y" "(--help)--help" "(--version)--version" "(--desc)--desc" "(--archived)--archived" "(--include-archived)--include-archived" "(--semantic)--semantic" "(--context)--context" "(--dedupe)--dedupe" "(--generate)--generate" "(--approve-write)--approve-write" "(--canonical-example)--canonical-example" "(--file-results)--file-results" "(--full)--full" "(--dry-run)--dry-run" "(--fake)--fake" "(--no-tailscale)--no-tailscale" "(--no-artifact-content)--no-artifact-content" "(--contract)--contract" "(--allow-global)--allow-global" "(-p --page)"{-p,--page}"[page number]:number:" "(-l --limit)"{-l,--limit}"[items per page]:number:" "(-s --search)"{-s,--search}"[search text]:text:" "(--sort)--sort"\{created,title\}:" "(--id)--id[item id]:id:" "(--store)--store[store path]:path:" "(--title)--title[new title]:" "(--content)--content[new content]:" "(--url)--url[source url]:" "(-t --tag)"{-t,--tag}"[tag]:tag:" "(--format)--format[json|jsonl]:" "(--completions)--completions[output completions]:shell:(bash zsh fish):" "(--purpose)--purpose[purpose]:" "(--model)--model[model ref]:" "(--dimensions)--dimensions[embedding dimensions]:number:" "(--max-tokens)--max-tokens[token budget]:number:" "(--max-items)--max-items[item budget]:number:" "(--from)--from"\{search,loops,runs\}:" "(--since)--since[duration or ISO time]:" "(--topic)--topic[topic text]:" "(--provider)--provider[provider]:" "(--mode)--mode"\{local,hosted\}:" "(--machine)--machine[machine id or SSH alias]:" "(--workspace)--workspace[repo workspace path]:path:" "(--peer-workspace)--peer-workspace[peer repo or knowledge home path]:path:" "(--api-url)--api-url[hosted API URL]:" "(--api-key)--api-key[hosted API key]:" "(--email)--email[email]:" "(--org)--org[org slug]:" "(--org-id)--org-id[org id]:" "(--user-id)--user-id[user id]:" "(--owner)--owner[provenance owner]:" "(--domain)--domain[domain]:" "(--project)--project[project id/name/slug]:" "(--source-ref)--source-ref[source ref]:" "(--no-color)--no-color[disable color]" "(--scope)--scope"\{local,global,project\}:" "(--tables)--tables[comma-separated DB sync tables]:" }; _knowledge`);
+      console.log(`#compdef knowledge\n_knowledge() { _arguments -C "1: :(add list get update archive restore upsert untag delete export prune dedupe stats inventory project-panel paths setup auth storage machines sync db wiki app-wiki source ingest reindex search context proposals web ask build embeddings providers safety events webhooks help ls rm edit unarchive)" "(--json)--json" "(--yes)-y" "(--help)--help" "(--version)--version" "(--desc)--desc" "(--archived)--archived" "(--include-archived)--include-archived" "(--semantic)--semantic" "(--context)--context" "(--dedupe)--dedupe" "(--generate)--generate" "(--approve-write)--approve-write" "(--canonical-example)--canonical-example" "(--file-results)--file-results" "(--full)--full" "(--dry-run)--dry-run" "(--fake)--fake" "(--no-tailscale)--no-tailscale" "(--no-artifact-content)--no-artifact-content" "(--contract)--contract" "(--allow-global)--allow-global" "(-p --page)"{-p,--page}"[page number]:number:" "(-l --limit)"{-l,--limit}"[items per page]:number:" "(-s --search)"{-s,--search}"[search text]:text:" "(--sort)--sort"\{created,title\}:" "(--id)--id[item id]:id:" "(--store)--store[store path]:path:" "(--title)--title[new title]:" "(--content)--content[new content]:" "(--url)--url[source url]:" "(-t --tag)"{-t,--tag}"[tag]:tag:" "(--format)--format[json|jsonl]:" "(--completions)--completions[output completions]:shell:(bash zsh fish):" "(--purpose)--purpose[purpose]:" "(--model)--model[model ref]:" "(--dimensions)--dimensions[embedding dimensions]:number:" "(--max-tokens)--max-tokens[token budget]:number:" "(--max-items)--max-items[item budget]:number:" "(--from)--from"\{search,loops,runs\}:" "(--since)--since[duration or ISO time]:" "(--topic)--topic[topic text]:" "(--provider)--provider[provider]:" "(--mode)--mode"\{local,hosted\}:" "(--machine)--machine[machine id or SSH alias]:" "(--workspace)--workspace[repo workspace path]:path:" "(--peer-workspace)--peer-workspace[peer repo or knowledge home path]:path:" "(--api-url)--api-url[hosted API URL]:" "(--api-key)--api-key[hosted API key]:" "(--email)--email[email]:" "(--org)--org[org slug]:" "(--org-id)--org-id[org id]:" "(--user-id)--user-id[user id]:" "(--owner)--owner[provenance owner]:" "(--domain)--domain[domain]:" "(--project)--project[project id/name/slug]:" "(--source-ref)--source-ref[source ref]:" "(--no-color)--no-color[disable color]" "(--scope)--scope"\{local,global,project\}:" "(--tables)--tables[comma-separated DB sync tables]:" }; _knowledge`);
     } else if (shell === 'fish') {
-      console.log(`complete -c knowledge -f; complete -c knowledge -a "add list get update archive restore upsert untag delete export prune dedupe stats inventory project-panel paths setup auth remote storage machines sync db wiki app-wiki source ingest reindex search context proposals web ask build embeddings providers safety events webhooks help ls rm edit unarchive"; complete -c knowledge -l json; complete -c knowledge -l yes -s y; complete -c knowledge -l help -s h; complete -c knowledge -l version -s v; complete -c knowledge -l desc; complete -c knowledge -l archived; complete -c knowledge -l include-archived; complete -c knowledge -l semantic; complete -c knowledge -l context; complete -c knowledge -l max-tokens; complete -c knowledge -l max-items; complete -c knowledge -l from -a "search loops runs"; complete -c knowledge -l since; complete -c knowledge -l topic; complete -c knowledge -l dedupe; complete -c knowledge -l generate; complete -c knowledge -l approve-write; complete -c knowledge -l allow-global; complete -c knowledge -l canonical-example; complete -c knowledge -l provider; complete -c knowledge -l mode; complete -c knowledge -l machine; complete -c knowledge -l workspace; complete -c knowledge -l peer-workspace; complete -c knowledge -l api-url; complete -c knowledge -l api-key; complete -c knowledge -l email; complete -c knowledge -l org; complete -c knowledge -l org-id; complete -c knowledge -l user-id; complete -c knowledge -l owner; complete -c knowledge -l domain; complete -c knowledge -l project; complete -c knowledge -l contract; complete -c knowledge -l source-ref; complete -c knowledge -l file-results; complete -c knowledge -l full; complete -c knowledge -l dry-run; complete -c knowledge -l fake; complete -c knowledge -l no-tailscale; complete -c knowledge -l no-artifact-content; complete -c knowledge -s p -l page; complete -c knowledge -s l -l limit; complete -c knowledge -s s -l search; complete -c knowledge -l sort; complete -c knowledge -l id; complete -c knowledge -l store; complete -c knowledge -l title; complete -c knowledge -l content; complete -c knowledge -l url; complete -c knowledge -s t -l tag; complete -c knowledge -l format; complete -c knowledge -l completions; complete -c knowledge -l purpose; complete -c knowledge -l model; complete -c knowledge -l dimensions; complete -c knowledge -l no-color; complete -c knowledge -l scope -a "local global project"; complete -c knowledge -l tables`);
+      console.log(`complete -c knowledge -f; complete -c knowledge -a "add list get update archive restore upsert untag delete export prune dedupe stats inventory project-panel paths setup auth storage machines sync db wiki app-wiki source ingest reindex search context proposals web ask build embeddings providers safety events webhooks help ls rm edit unarchive"; complete -c knowledge -l json; complete -c knowledge -l yes -s y; complete -c knowledge -l help -s h; complete -c knowledge -l version -s v; complete -c knowledge -l desc; complete -c knowledge -l archived; complete -c knowledge -l include-archived; complete -c knowledge -l semantic; complete -c knowledge -l context; complete -c knowledge -l max-tokens; complete -c knowledge -l max-items; complete -c knowledge -l from -a "search loops runs"; complete -c knowledge -l since; complete -c knowledge -l topic; complete -c knowledge -l dedupe; complete -c knowledge -l generate; complete -c knowledge -l approve-write; complete -c knowledge -l allow-global; complete -c knowledge -l canonical-example; complete -c knowledge -l provider; complete -c knowledge -l mode; complete -c knowledge -l machine; complete -c knowledge -l workspace; complete -c knowledge -l peer-workspace; complete -c knowledge -l api-url; complete -c knowledge -l api-key; complete -c knowledge -l email; complete -c knowledge -l org; complete -c knowledge -l org-id; complete -c knowledge -l user-id; complete -c knowledge -l owner; complete -c knowledge -l domain; complete -c knowledge -l project; complete -c knowledge -l contract; complete -c knowledge -l source-ref; complete -c knowledge -l file-results; complete -c knowledge -l full; complete -c knowledge -l dry-run; complete -c knowledge -l fake; complete -c knowledge -l no-tailscale; complete -c knowledge -l no-artifact-content; complete -c knowledge -s p -l page; complete -c knowledge -s l -l limit; complete -c knowledge -s s -l search; complete -c knowledge -l sort; complete -c knowledge -l id; complete -c knowledge -l store; complete -c knowledge -l title; complete -c knowledge -l content; complete -c knowledge -l url; complete -c knowledge -s t -l tag; complete -c knowledge -l format; complete -c knowledge -l completions; complete -c knowledge -l purpose; complete -c knowledge -l model; complete -c knowledge -l dimensions; complete -c knowledge -l no-color; complete -c knowledge -l scope -a "local global project"; complete -c knowledge -l tables`);
     } else {
       throw new Error("Invalid --completions value. Use 'bash', 'zsh', or 'fish'.");
     }
@@ -574,21 +555,30 @@ async function run(argv: string[]): Promise<void> {
       storePath = defaultStorePath();
     }
   }
-  if (!storePathOverridden && (command === 'ask' || command === 'build')) {
+  // ask/build seed a local JSON store only in local mode. In cloud/api mode the
+  // prompt flow runs over the shared cloud item corpus, so touching a local file
+  // here would be an unnecessary local-side write while the flip is active.
+  if (!storePathOverridden && (command === 'ask' || command === 'build') && !isKnowledgeApiMode()) {
     ensureStore(storePath);
   }
 
-  // Client-flip (self_hosted): when HASNA_KNOWLEDGE_STORAGE_MODE=self_hosted and
-  // HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY are set, ALL knowledge-item
-  // reads/writes go to https://knowledge.hasna.xyz/v1 (bearer key), not local.
-  // An explicit --store override always pins to the local file store.
-  const cloud: KnowledgeCloudStore | null = storePathOverridden ? null : resolveKnowledgeCloudStore();
+  // Single knowledge-item Store abstraction. When the client-flip resolves to
+  // the cloud HTTP transport (HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY,
+  // and/or *_STORAGE_MODE) ALL item reads/writes go to https://knowledge.hasna.xyz/v1
+  // with the bearer key; otherwise the on-box JSON store. An explicit --store
+  // override always pins to the local transport (fully reversible). Every item
+  // command below routes through `itemStore` — never the JSON file or HTTP
+  // client directly.
+  const itemStore: ItemStore = resolveItemStore({ storePath, storePathOverridden });
 
   if (command === 'inventory') {
-    const inventory = service.inventory({
+    // Single dispatch shared with the MCP + SDK: the shared cloud item corpus in
+    // api mode (routes through the cloud transport), otherwise the full local
+    // inventory across json + sqlite. No surface reads a divergent store.
+    const inventory = await service.resolveInventory({
       limit: flags.limit,
       includeArchived: flags.includeArchived || flags.archived,
-      storePath,
+      storePath: isKnowledgeApiMode() ? undefined : storePath,
     });
     output(flags.json ? inventory : formatInventory(inventory), flags.json);
     return;
@@ -597,10 +587,10 @@ async function run(argv: string[]): Promise<void> {
   if (command === 'project-panel') {
     const projectRef = flags.project ?? positional[1];
     if (!projectRef) throw new Error('Usage: knowledge project-panel --project <id|name|slug> [--json|--contract]');
-    const panel = createKnowledgeProjectPanel(projectRef, {
+    const panel = await createKnowledgeProjectPanel(projectRef, {
       service,
       limit: flags.limit,
-      storePath,
+      storePath: isKnowledgeApiMode() ? undefined : storePath,
       includeArchived: flags.includeArchived || flags.archived,
     });
     output(flags.json || flags.contract ? panel : formatKnowledgeProjectPanel(panel), flags.json || flags.contract);
@@ -657,38 +647,6 @@ async function run(argv: string[]): Promise<void> {
       return;
     }
     throw new Error("Invalid auth action. Use 'login', 'whoami', or 'logout'.");
-  }
-
-  if (command === 'remote') {
-    const action = positional[1] ?? 'status';
-    if (action === 'contracts' || action === 'contract') {
-      const auth = service.authStatus(process.env);
-      output({
-        ok: true,
-        authenticated: auth.authenticated,
-        api_url: auth.api_url,
-        contract: service.remoteContract(),
-        message: `Remote contract v${service.remoteContract().contract_version}`,
-      }, flags.json);
-      return;
-    }
-    if (action === 'status') {
-      const auth = service.authStatus(process.env);
-      const contract = service.remoteContract();
-      output({
-        ok: true,
-        mode: service.config().mode,
-        authenticated: auth.authenticated,
-        auth_source: auth.source,
-        api_url: auth.api_url,
-        client_ready: Boolean(service.remoteClient(process.env)),
-        contract_version: contract.contract_version,
-        capabilities: contract.capabilities,
-        message: auth.authenticated ? `Remote client ready for ${auth.api_url}` : 'Remote client not authenticated',
-      }, flags.json);
-      return;
-    }
-    throw new Error("Invalid remote action. Use 'contracts' or 'status'.");
   }
 
   if (command === 'storage') {
@@ -925,7 +883,6 @@ async function run(argv: string[]): Promise<void> {
     }
     if (action === 'storage') {
       const storageAction = positional[2] ?? 'status';
-      const tables = parseStorageTables(flags.tables);
       if (storageAction === 'status') {
         const status = getDatabaseStorageStatus({ scope: flags.scope });
         output({
@@ -935,26 +892,13 @@ async function run(argv: string[]): Promise<void> {
         }, flags.json);
         return;
       }
-      if (storageAction === 'push') {
-        const results = await databaseStoragePush({ scope: flags.scope, tables });
-        output({ ok: syncOk(results), results, message: syncMessage(results, 'push') }, flags.json);
-        return;
-      }
-      if (storageAction === 'pull') {
-        const results = await databaseStoragePull({ scope: flags.scope, tables });
-        output({ ok: syncOk(results), results, message: syncMessage(results, 'pull') }, flags.json);
-        return;
-      }
-      if (storageAction === 'sync') {
-        const result = await databaseStorageSync({ scope: flags.scope, tables });
-        output({
-          ok: syncOk(result.pull) && syncOk(result.push),
-          ...result,
-          message: `${syncMessage(result.pull, 'pull')}; ${syncMessage(result.push, 'push')}`,
-        }, flags.json);
-        return;
-      }
-      throw new Error("Invalid db storage action. Use 'status', 'push', 'pull', or 'sync'.");
+      // The client-side Postgres sync engine (push/pull/sync) was removed: it was
+      // a forbidden DSN-on-client path. The shared store is reached through the
+      // HTTP ApiStore (knowledge items) — not by syncing local sqlite to RDS.
+      throw new Error(
+        "Invalid db storage action. Only 'status' is supported. The 'push'/'pull'/'sync' "
+          + 'Postgres sync commands were removed (DSN-on-client is forbidden); use the cloud API flip instead.',
+      );
     }
     throw new Error("Invalid db action. Use 'init', 'stats', or 'storage'.");
   }
@@ -1495,28 +1439,9 @@ async function run(argv: string[]): Promise<void> {
     const title = positional[1];
     const content = positional[2];
     if (!title || !content) throw new Error('Usage: knowledge add <title> <content>');
-    if (cloud) {
-      const item = await cloud.create({ title, content, url: flags.url ?? null, tags: flags.tag ? [flags.tag] : [] });
-      log('info', 'Item added (cloud)', { id: item.id, title: item.title });
-      output({ ok: true, item, message: `Added ${item.id}` }, flags.json);
-      return;
-    }
-    withLock(storePath, () => {
-      const db = loadStore(storePath);
-      const item: KnowledgeItem = {
-        id: makeId(),
-        title,
-        content,
-        url: flags.url ?? null,
-        tags: flags.tag ? [flags.tag] : [],
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
-      db.items.push(item);
-      saveStore(storePath, db);
-      log('info', 'Item added', { id: item.id, title: item.title });
-      output({ ok: true, item, message: `Added ${item.id}` }, flags.json);
-    }, { createParent: true });
+    const item = await itemStore.create({ title, content, url: flags.url ?? null, tags: flags.tag ? [flags.tag] : [] });
+    log('info', 'Item added', { id: item.id, title: item.title, transport: itemStore.kind });
+    output({ ok: true, item, message: `Added ${item.id}` }, flags.json);
     return;
   }
 
@@ -1524,9 +1449,7 @@ async function run(argv: string[]): Promise<void> {
     if (flags.format !== undefined && flags.format !== 'table' && flags.format !== 'json') {
       throw new Error("Invalid --format value for list. Use 'table' or 'json'.");
     }
-    const db = cloud
-      ? { exists: true, items: await fetchAllCloudItems(cloud) }
-      : loadStoreIfExists(storePath);
+    const db = await itemStore.listAll();
     const page = Number.isFinite(flags.page) && (flags.page as number) > 0 ? flags.page as number : 1;
     const limit = Number.isFinite(flags.limit) && (flags.limit as number) > 0 ? flags.limit as number : 20;
     const search = flags.search ? String(flags.search).toLowerCase() : '';
@@ -1566,198 +1489,93 @@ async function run(argv: string[]): Promise<void> {
 
   if (command === 'get') {
     requireId(flags);
-    if (cloud) {
-      const item = await cloud.get(flags.id!);
-      if (!item) throw new Error(`Item not found: ${flags.id}`);
-      output({ ok: true, item, store_exists: true, message: `${item.id}: ${item.title}` }, flags.json);
-      return;
-    }
-    const db = loadStoreIfExists(storePath);
-    const item = db.items.find((x) => x.id === flags.id || x.short_id === flags.id);
+    const item = await itemStore.get(flags.id!);
     if (!item) throw new Error(`Item not found: ${flags.id}`);
-    output({ ok: true, item, store_exists: db.exists, message: `${item.id}: ${item.title}` }, flags.json);
+    output({ ok: true, item, store_exists: itemStore.exists, message: `${item.id}: ${item.title}` }, flags.json);
     return;
   }
 
   if (command === 'update') {
     requireId(flags);
-    if (cloud) {
-      const current = await cloud.get(flags.id!);
-      if (!current) throw new Error(`Item not found: ${flags.id}`);
-      const patch: Record<string, unknown> = {};
-      if (flags.title !== undefined) patch.title = flags.title;
-      if (flags.content !== undefined) patch.content = flags.content;
-      if (flags.url !== undefined) patch.url = flags.url;
-      if (flags.tag !== undefined) {
-        const tags = current.tags ?? [];
-        if (!tags.map((t) => t.toLowerCase()).includes(flags.tag!.toLowerCase())) patch.tags = [...tags, flags.tag!];
-      }
-      const item = await cloud.update(current.id, patch);
-      output({ ok: true, item, message: `Updated ${item?.id ?? current.id}` }, flags.json);
-      return;
+    const current = await itemStore.get(flags.id!);
+    if (!current) throw new Error(`Item not found: ${flags.id}`);
+    const patch: Record<string, unknown> = {};
+    if (flags.title !== undefined) patch.title = flags.title;
+    if (flags.content !== undefined) patch.content = flags.content;
+    if (flags.url !== undefined) patch.url = flags.url;
+    if (flags.tag !== undefined) {
+      const tags = current.tags ?? [];
+      if (!tags.map((t) => t.toLowerCase()).includes(flags.tag!.toLowerCase())) patch.tags = [...tags, flags.tag!];
     }
-    withLock(storePath, () => {
-      const db = loadStore(storePath);
-      const idx = db.items.findIndex((x) => x.id === flags.id || x.short_id === flags.id);
-      if (idx === -1) throw new Error(`Item not found: ${flags.id}`);
-      const item = db.items[idx];
-      if (flags.title !== undefined) item.title = flags.title;
-      if (flags.content !== undefined) item.content = flags.content;
-      if (flags.url !== undefined) item.url = flags.url;
-      if (flags.tag !== undefined) {
-        item.tags = item.tags || [];
-        if (!item.tags.map((t) => t.toLowerCase()).includes(flags.tag!.toLowerCase())) {
-          item.tags.push(flags.tag!);
-        }
-      }
-      item.updated_at = new Date().toISOString();
-      db.items[idx] = item;
-      saveStore(storePath, db);
-      output({ ok: true, item, message: `Updated ${item.id}` }, flags.json);
-    }, { createParent: true });
+    const item = await itemStore.update(current.id, patch);
+    output({ ok: true, item, message: `Updated ${item?.id ?? current.id}` }, flags.json);
     return;
   }
 
   if (command === 'archive' || command === 'restore') {
     requireId(flags);
-    if (cloud) {
-      const current = await cloud.get(flags.id!);
-      if (!current) throw new Error(`Item not found: ${flags.id}`);
-      const item = await cloud.update(current.id, { archived: command === 'archive' });
-      output({ ok: true, item, message: `${command === 'archive' ? 'Archived' : 'Restored'} ${item?.id ?? current.id}` }, flags.json);
-      return;
-    }
-    withLock(storePath, () => {
-      const db = loadStore(storePath);
-      const idx = db.items.findIndex((x) => x.id === flags.id || x.short_id === flags.id);
-      if (idx === -1) throw new Error(`Item not found: ${flags.id}`);
-      const item = db.items[idx];
-      item.archived = command === 'archive';
-      item.updated_at = new Date().toISOString();
-      db.items[idx] = item;
-      saveStore(storePath, db);
-      output({ ok: true, item, message: `${command === 'archive' ? 'Archived' : 'Restored'} ${item.id}` }, flags.json);
-    }, { createParent: true });
+    const current = await itemStore.get(flags.id!);
+    if (!current) throw new Error(`Item not found: ${flags.id}`);
+    const item = await itemStore.update(current.id, { archived: command === 'archive' });
+    output({ ok: true, item, message: `${command === 'archive' ? 'Archived' : 'Restored'} ${item?.id ?? current.id}` }, flags.json);
     return;
   }
 
   if (command === 'untag') {
     requireId(flags);
     if (!flags.tag) throw new Error('Missing required --tag. Example: knowledge untag --id <id> -t <tag>');
-    if (cloud) {
-      const current = await cloud.get(flags.id!);
-      if (!current) throw new Error(`Item not found: ${flags.id}`);
-      const before = current.tags?.length ?? 0;
-      const tags = (current.tags ?? []).filter((tag) => tag.toLowerCase() !== flags.tag!.toLowerCase());
-      const item = await cloud.update(current.id, { tags });
-      output({ ok: true, item, removed: before - tags.length, message: `Removed tag from ${item?.id ?? current.id}` }, flags.json);
-      return;
-    }
-    withLock(storePath, () => {
-      const db = loadStore(storePath);
-      const idx = db.items.findIndex((x) => x.id === flags.id || x.short_id === flags.id);
-      if (idx === -1) throw new Error(`Item not found: ${flags.id}`);
-      const item = db.items[idx];
-      const before = item.tags?.length ?? 0;
-      item.tags = (item.tags ?? []).filter((tag) => tag.toLowerCase() !== flags.tag!.toLowerCase());
-      item.updated_at = new Date().toISOString();
-      db.items[idx] = item;
-      saveStore(storePath, db);
-      output({ ok: true, item, removed: before - item.tags.length, message: `Removed tag from ${item.id}` }, flags.json);
-    }, { createParent: true });
+    const current = await itemStore.get(flags.id!);
+    if (!current) throw new Error(`Item not found: ${flags.id}`);
+    const before = current.tags?.length ?? 0;
+    const tags = (current.tags ?? []).filter((tag) => tag.toLowerCase() !== flags.tag!.toLowerCase());
+    const item = await itemStore.update(current.id, { tags });
+    output({ ok: true, item, removed: before - tags.length, message: `Removed tag from ${item?.id ?? current.id}` }, flags.json);
     return;
   }
 
   if (command === 'upsert') {
     const title = flags.title ?? positional[1];
     const content = flags.content ?? positional[2];
-    if (cloud) {
-      const existing = flags.id ? await cloud.get(flags.id) : null;
-      if (!existing) {
-        if (!title || !content) throw new Error('New item requires title and content. Example: knowledge upsert <title> <content> [--id <id>]');
-        const item = await cloud.create({ title, content, url: flags.url ?? null, tags: flags.tag ? [flags.tag] : [] });
-        output({ ok: true, created: true, item, message: `Upserted ${item.id}` }, flags.json);
-        return;
-      }
-      const patch: Record<string, unknown> = {};
-      if (title !== undefined) patch.title = title;
-      if (content !== undefined) patch.content = content;
-      if (flags.url !== undefined) patch.url = flags.url;
-      if (flags.tag !== undefined) {
-        const tags = existing.tags ?? [];
-        if (!tags.map((t) => t.toLowerCase()).includes(flags.tag.toLowerCase())) patch.tags = [...tags, flags.tag];
-      }
-      const item = await cloud.update(existing.id, patch);
-      output({ ok: true, created: false, item, message: `Upserted ${item?.id ?? existing.id}` }, flags.json);
+    const existing = flags.id ? await itemStore.get(flags.id) : null;
+    if (!existing) {
+      if (!title || !content) throw new Error('New item requires title and content. Example: knowledge upsert <title> <content> [--id <id>]');
+      const item = await itemStore.create({
+        id: flags.id,
+        title,
+        content,
+        url: flags.url ?? null,
+        tags: flags.tag ? [flags.tag] : [],
+      });
+      output({ ok: true, created: true, item, message: `Upserted ${item.id}` }, flags.json);
       return;
     }
-    withLock(storePath, () => {
-      const db = loadStore(storePath);
-      const idx = flags.id ? db.items.findIndex((x) => x.id === flags.id || x.short_id === flags.id) : -1;
-      const now = new Date().toISOString();
-      if (idx === -1) {
-        if (!title || !content) throw new Error('New item requires title and content. Example: knowledge upsert <title> <content> [--id <id>]');
-        const id = flags.id ?? makeId();
-        const item: KnowledgeItem = {
-          id,
-          short_id: makeShortId(id),
-          title,
-          content,
-          url: flags.url ?? null,
-          tags: flags.tag ? [flags.tag] : [],
-          metadata: {},
-          archived: false,
-          created_at: now,
-          updated_at: now,
-        };
-        db.items.push(item);
-        saveStore(storePath, db);
-        output({ ok: true, created: true, item, message: `Upserted ${item.id}` }, flags.json);
-        return;
-      }
-      const item = db.items[idx];
-      if (title !== undefined) item.title = title;
-      if (content !== undefined) item.content = content;
-      if (flags.url !== undefined) item.url = flags.url;
-      if (flags.tag !== undefined) {
-        item.tags = item.tags || [];
-        if (!item.tags.map((tag) => tag.toLowerCase()).includes(flags.tag.toLowerCase())) item.tags.push(flags.tag);
-      }
-      item.updated_at = now;
-      db.items[idx] = item;
-      saveStore(storePath, db);
-      output({ ok: true, created: false, item, message: `Upserted ${item.id}` }, flags.json);
-    }, { createParent: true });
+    const patch: Record<string, unknown> = {};
+    if (title !== undefined) patch.title = title;
+    if (content !== undefined) patch.content = content;
+    if (flags.url !== undefined) patch.url = flags.url;
+    if (flags.tag !== undefined) {
+      const tags = existing.tags ?? [];
+      if (!tags.map((t) => t.toLowerCase()).includes(flags.tag.toLowerCase())) patch.tags = [...tags, flags.tag];
+    }
+    const item = await itemStore.update(existing.id, patch);
+    output({ ok: true, created: false, item, message: `Upserted ${item?.id ?? existing.id}` }, flags.json);
     return;
   }
 
   if (command === 'delete') {
     requireId(flags);
     if (!flags.yes) throw new Error('Refusing delete without --yes. Re-run with: knowledge delete --id <id> --yes');
-    if (cloud) {
-      const deleted = await cloud.delete(flags.id!);
-      if (!deleted) throw new Error(`Item not found: ${flags.id}`);
-      log('info', 'Item deleted (cloud)', { id: flags.id });
-      output({ ok: true, deleted_id: flags.id, message: `Deleted ${flags.id}` }, flags.json);
-      return;
-    }
-    withLock(storePath, () => {
-      const db = loadStore(storePath);
-      const before = db.items.length;
-      db.items = db.items.filter((x) => x.id !== flags.id && x.short_id !== flags.id);
-      const deleted = before !== db.items.length;
-      saveStore(storePath, db);
-      if (!deleted) throw new Error(`Item not found: ${flags.id}`);
-      log('info', 'Item deleted', { id: flags.id });
-      output({ ok: true, deleted_id: flags.id, message: `Deleted ${flags.id}` }, flags.json);
-    }, { createParent: true });
+    const deleted = await itemStore.delete(flags.id!);
+    if (!deleted) throw new Error(`Item not found: ${flags.id}`);
+    log('info', 'Item deleted', { id: flags.id, transport: itemStore.kind });
+    output({ ok: true, deleted_id: flags.id, message: `Deleted ${flags.id}` }, flags.json);
     return;
   }
 
   if (command === 'export') {
     const format = flags.format ?? 'json';
     if (format !== 'json' && format !== 'jsonl') throw new Error("Invalid --format. Use 'json' or 'jsonl'.");
-    const db = cloud ? { exists: true, items: await fetchAllCloudItems(cloud) } : loadStoreIfExists(storePath);
+    const db = await itemStore.listAll();
     if (format === 'jsonl') {
       for (const item of db.items) console.log(JSON.stringify(item));
     } else {
@@ -1768,72 +1586,35 @@ async function run(argv: string[]): Promise<void> {
 
   if (command === 'prune') {
     if (!flags.yes) throw new Error('Refusing prune without --yes. Re-run with: knowledge prune --yes [--older-than <days>] [--empty]');
-    if (cloud) {
-      const items = await fetchAllCloudItems(cloud);
-      const cutoff = flags.olderThan !== undefined ? new Date(Date.now() - (flags.olderThan as number) * 86_400_000) : null;
-      const toDelete = items.filter((x) =>
-        (cutoff !== null && new Date(x.created_at) < cutoff) || (flags.empty && x.content.trim().length === 0));
-      for (const item of toDelete) await cloud.delete(item.id);
-      const remaining = items.length - toDelete.length;
-      log('info', 'Prune completed (cloud)', { pruned: toDelete.length, remaining });
-      output({ ok: true, pruned: toDelete.length, remaining, message: `Pruned ${toDelete.length} item(s)` }, flags.json);
-      return;
-    }
-    withLock(storePath, () => {
-      const db = loadStore(storePath);
-      const before = db.items.length;
-      if (flags.olderThan !== undefined) {
-        const cutoff = new Date();
-        cutoff.setDate(cutoff.getDate() - flags.olderThan);
-        db.items = db.items.filter((x) => new Date(x.created_at) >= cutoff);
-      }
-      if (flags.empty) {
-        db.items = db.items.filter((x) => x.content.trim().length > 0);
-      }
-      const pruned = before - db.items.length;
-      saveStore(storePath, db);
-      log('info', 'Prune completed', { pruned, remaining: db.items.length });
-      output({ ok: true, pruned, remaining: db.items.length, message: `Pruned ${pruned} item(s)` }, flags.json);
-    }, { createParent: true });
+    const { items } = await itemStore.listAll();
+    const cutoff = flags.olderThan !== undefined ? new Date(Date.now() - (flags.olderThan as number) * 86_400_000) : null;
+    const toDelete = items.filter((x) =>
+      (cutoff !== null && new Date(x.created_at) < cutoff) || (flags.empty && x.content.trim().length === 0));
+    const pruned = await itemStore.deleteMany(toDelete.map((x) => x.id));
+    const remaining = items.length - pruned;
+    log('info', 'Prune completed', { pruned, remaining, transport: itemStore.kind });
+    output({ ok: true, pruned, remaining, message: `Pruned ${pruned} item(s)` }, flags.json);
     return;
   }
 
   if (command === 'dedupe') {
     if (!flags.yes) throw new Error('Refusing dedupe without --yes. Re-run with: knowledge dedupe --yes [--json]');
-    if (cloud) {
-      const items = await fetchAllCloudItems(cloud);
-      const seen = new Set<string>();
-      const dupes: KnowledgeItem[] = [];
-      for (const x of items) {
-        const key = `${x.title} ${x.content}`;
-        if (seen.has(key)) dupes.push(x); else seen.add(key);
-      }
-      for (const item of dupes) await cloud.delete(item.id);
-      const remaining = items.length - dupes.length;
-      log('info', 'Dedupe completed (cloud)', { removed: dupes.length, remaining });
-      output({ ok: true, removed: dupes.length, remaining, message: `Dedupe removed ${dupes.length} duplicate(s)` }, flags.json);
-      return;
+    const { items } = await itemStore.listAll();
+    const seen = new Set<string>();
+    const dupes: KnowledgeItem[] = [];
+    for (const x of items) {
+      const key = `${x.title} ${x.content}`;
+      if (seen.has(key)) dupes.push(x); else seen.add(key);
     }
-    withLock(storePath, () => {
-      const db = loadStore(storePath);
-      const seen = new Set<string>();
-      const before = db.items.length;
-      db.items = db.items.filter((x) => {
-        const key = `${x.title}\u0000${x.content}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-      const removed = before - db.items.length;
-      saveStore(storePath, db);
-      log('info', 'Dedupe completed', { removed, remaining: db.items.length });
-      output({ ok: true, removed, remaining: db.items.length, message: `Dedupe removed ${removed} duplicate(s)` }, flags.json);
-    }, { createParent: true });
+    const removed = await itemStore.deleteMany(dupes.map((x) => x.id));
+    const remaining = items.length - removed;
+    log('info', 'Dedupe completed', { removed, remaining, transport: itemStore.kind });
+    output({ ok: true, removed, remaining, message: `Dedupe removed ${removed} duplicate(s)` }, flags.json);
     return;
   }
 
   if (command === 'stats') {
-    const db = cloud ? { exists: true, items: await fetchAllCloudItems(cloud) } : loadStoreIfExists(storePath);
+    const db = await itemStore.listAll();
     const activeItems = db.items.filter((x) => !x.archived);
     const total = activeItems.length;
     const archived = db.items.length - total;

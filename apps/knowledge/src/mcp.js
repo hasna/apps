@@ -5,15 +5,12 @@ import { z } from 'zod';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import pkg from '../package.json' with { type: 'json' };
 import { migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db.ts';
-import { defaultStorePath, loadStore, saveStore, makeId, withLock } from './store.ts';
+import { defaultStorePath } from './store.ts';
+import { resolveItemStore } from './item-store.ts';
+import { isKnowledgeApiMode } from './cloud-store.ts';
 import { parseSourceRef } from './source-ref.ts';
 import { createKnowledgeService } from './service.ts';
-import {
-  getStorageStatus as getDatabaseStorageStatus,
-  storagePull as databaseStoragePull,
-  storagePush as databaseStoragePush,
-  storageSync as databaseStorageSync,
-} from './storage.ts';
+import { getStorageStatus as getDatabaseStorageStatus } from './storage.ts';
 
 const storePathField = z.string().optional().describe('Path to the JSON store file');
 const scopeField = z.enum(['local', 'global', 'project']).optional().describe('Workspace scope');
@@ -30,10 +27,6 @@ function errorText(message) {
   return { content: [{ type: 'text', text: `Error: ${message}` }], isError: true };
 }
 
-function shortIdFor(id) {
-  return id.replace(/^k_/, '').slice(0, 12);
-}
-
 function resolveStorePath(storePath, scope) {
   if (storePath) return storePath;
   if (scope === 'project' || scope === 'local') {
@@ -42,21 +35,16 @@ function resolveStorePath(storePath, scope) {
   return defaultStorePath();
 }
 
-function readStoreLocked(storePath, fn) {
-  return withLock(storePath, () => fn(loadStore(storePath)));
-}
-
-function writeStoreLocked(storePath, fn) {
-  return withLock(storePath, () => {
-    const db = loadStore(storePath);
-    const result = fn(db);
-    saveStore(storePath, db);
-    return result;
-  }, { createParent: true });
-}
-
-function findItem(db, id) {
-  return db.items.find((item) => item.id === id || item.short_id === id);
+/**
+ * Resolve the unified knowledge-item Store for an MCP item tool. When no
+ * explicit `store_path` is given and the client-flip resolves to the cloud HTTP
+ * transport, item reads/writes route to the app API with the bearer key;
+ * otherwise the on-box JSON store. An explicit `store_path` always pins local.
+ * Every MCP item tool routes through this Store — never the JSON file directly.
+ */
+function itemStoreFor(storePath, scope) {
+  const resolved = resolveStorePath(storePath, scope);
+  return resolveItemStore({ storePath: resolved, storePathOverridden: Boolean(storePath) });
 }
 
 function sortItems(items, sort = 'created', desc = false) {
@@ -127,13 +115,15 @@ function openProjectDb(service = projectService()) {
   return openKnowledgeDb(workspace.knowledgeDbPath);
 }
 
-function itemResources(storePath = createKnowledgeService({ scope: 'project' }).jsonStorePath()) {
-  return readStoreLocked(storePath, (db) => activeItems(db.items, false).slice(0, 100).map((item) => ({
+async function itemResources(storePath, scope = 'project') {
+  const store = itemStoreFor(storePath, scope);
+  const { items } = await store.listAll();
+  return activeItems(items, false).slice(0, 100).map((item) => ({
     uri: `knowledge://project/items/${encodeURIComponent(item.id)}`,
     name: item.title,
     description: `Knowledge item ${item.id}`,
     mimeType: 'application/json',
-  })));
+  }));
 }
 
 function listRows(db, sql, params = []) {
@@ -469,15 +459,32 @@ function decisionSnapshot(id, service = projectService()) {
 async function getKnowledgeRecord(kind, id, options = {}) {
   const normalized = kind ?? 'auto';
   const service = createKnowledgeService({ scope: options.scope });
+  // In cloud/api mode the shared corpus is the cloud knowledge-items; the local
+  // sqlite catalog record kinds (source/wiki_page/run/index/decision) have no
+  // cloud counterpart and would throw the local-catalog guard. Only the `item`
+  // kind is cloud-backed, so restrict `auto` to it and refuse an explicit
+  // catalog kind with a clear message rather than the raw sqlite refusal.
+  if (isKnowledgeApiMode()) {
+    if (normalized !== 'auto' && normalized !== 'item') {
+      throw new Error(
+        `knowledge: reading a '${normalized}' record targets the on-box sqlite RAG catalog, which is not available in cloud mode `
+          + `(HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY set). In cloud mode the shared corpus is the cloud knowledge-items; `
+          + `use kind 'item' (or 'auto'). Unset the API env to read the full local catalog.`,
+      );
+    }
+    const store = itemStoreFor(options.store_path, options.scope);
+    const item = await store.get(id);
+    return item ? { kind: 'item', item, store_path: store.location } : null;
+  }
   const attempts = normalized === 'auto'
     ? ['item', 'source', 'wiki_page', 'run', 'index', 'decision']
     : [normalized];
 
   for (const entry of attempts) {
     if (entry === 'item') {
-      const storePath = resolveStorePath(options.store_path, options.scope);
-      const item = readStoreLocked(storePath, (db) => findItem(db, id));
-      if (item) return { kind: 'item', item, store_path: storePath };
+      const store = itemStoreFor(options.store_path, options.scope);
+      const item = await store.get(id);
+      if (item) return { kind: 'item', item, store_path: store.location };
     }
     if (entry === 'source') {
       const source = sourceSnapshot(id, { limit: options.limit, service });
@@ -527,7 +534,7 @@ function registerKnowledgeResources(server) {
     'knowledge://project/inventory',
     'Project knowledge inventory',
     'Unified capped inventory of JSON items, SQLite catalog rows, wiki artifacts, runs, and sync state',
-    async () => projectService().inventory({ limit: 50 }),
+    async () => projectService().resolveInventory({ limit: 50 }),
   );
   registerJsonResource(
     server,
@@ -613,7 +620,7 @@ function registerKnowledgeResources(server) {
     'knowledge://project/items/{id}',
     'Project knowledge item',
     'Read a compatibility JSON-store item by id',
-    async () => ({ resources: itemResources() }),
+    async () => ({ resources: await itemResources() }),
     async (_uri, variables) => {
       const id = decodeURIComponent(String(variables.id));
       const record = await getKnowledgeRecord('item', id, { scope: 'project' });
@@ -755,11 +762,14 @@ export function buildServer() {
   }, async ({ scope, limit, include_archived, store_path }) => {
     const service = createKnowledgeService({ scope });
     try {
-      return jsonText(service.inventory({
+      // Single dispatch shared with the CLI + SDK: cloud item corpus in api
+      // mode via the cloud transport; local json + sqlite catalog otherwise.
+      const inventory = await service.resolveInventory({
         limit,
         includeArchived: include_archived,
-        storePath: store_path,
-      }));
+        storePath: isKnowledgeApiMode() ? undefined : store_path,
+      });
+      return jsonText(inventory);
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }
@@ -1083,38 +1093,11 @@ export function buildServer() {
     }
   });
 
-  registerTool(server, 'storage_push', 'Push knowledge database storage', 'Push local knowledge.db catalog rows to storage PostgreSQL', {
-    scope: scopeField,
-    tables: z.array(z.string()).optional().describe('Optional knowledge.db tables to push'),
-  }, async ({ scope, tables }) => {
-    try {
-      return jsonText(await databaseStoragePush({ scope, tables }));
-    } catch (error) {
-      return errorText(error instanceof Error ? error.message : String(error));
-    }
-  });
-
-  registerTool(server, 'storage_pull', 'Pull knowledge database storage', 'Pull knowledge.db catalog rows from storage PostgreSQL to local SQLite', {
-    scope: scopeField,
-    tables: z.array(z.string()).optional().describe('Optional knowledge.db tables to pull'),
-  }, async ({ scope, tables }) => {
-    try {
-      return jsonText(await databaseStoragePull({ scope, tables }));
-    } catch (error) {
-      return errorText(error instanceof Error ? error.message : String(error));
-    }
-  });
-
-  registerTool(server, 'storage_sync', 'Sync knowledge database storage', 'Bidirectional knowledge.db sync: pull then push', {
-    scope: scopeField,
-    tables: z.array(z.string()).optional().describe('Optional knowledge.db tables to sync'),
-  }, async ({ scope, tables }) => {
-    try {
-      return jsonText(await databaseStorageSync({ scope, tables }));
-    } catch (error) {
-      return errorText(error instanceof Error ? error.message : String(error));
-    }
-  });
+  // The knowledge.db Postgres sync tools (storage_push / storage_pull /
+  // storage_sync) were REMOVED: they were a forbidden DSN-on-client path that
+  // connected fleet machines straight to the shared RDS. The shared store is
+  // reached through the HTTP ApiStore (knowledge items), not by syncing local
+  // sqlite to Postgres.
 
   registerTool(server, 'ok_parse_source_ref', 'Parse source reference', 'Parse and validate an open-files, S3, file, or web source ref', {
     uri: z.string().describe('Source reference URI'),
@@ -1463,7 +1446,6 @@ export function buildServer() {
         ok: validation.ok,
         ...service.storageContract(),
         validation,
-        remote_contract: service.remoteContract(),
       });
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
@@ -1512,25 +1494,8 @@ export function buildServer() {
     store_path: storePathField,
     scope: scopeField,
   }, async ({ title, content, tags, metadata, url, store_path, scope }) => {
-    const storePath = resolveStorePath(store_path, scope);
-    const item = writeStoreLocked(storePath, (db) => {
-      const now = new Date().toISOString();
-      const id = makeId();
-      const entry = {
-        id,
-        short_id: shortIdFor(id),
-        title,
-        content,
-        url: url ?? null,
-        tags: tags ?? [],
-        metadata: metadata ?? {},
-        archived: false,
-        created_at: now,
-        updated_at: now,
-      };
-      db.items.push(entry);
-      return entry;
-    });
+    const store = itemStoreFor(store_path, scope);
+    const item = await store.create({ title, content, url: url ?? null, tags: tags ?? [], metadata: metadata ?? {} });
     return jsonText({ ok: true, item, message: `Added ${item.id}` });
   });
 
@@ -1545,31 +1510,30 @@ export function buildServer() {
     store_path: storePathField,
     scope: scopeField,
   }, async ({ search, tag, include_archived, page, limit, sort, desc, store_path, scope }) => {
-    const storePath = resolveStorePath(store_path, scope);
-    return readStoreLocked(storePath, (db) => {
-      const q = search ? search.toLowerCase() : '';
-      const requiredTags = (tag ?? []).map((entry) => entry.toLowerCase());
-      let items = activeItems(db.items, include_archived);
-      if (q) items = items.filter((item) => item.title.toLowerCase().includes(q) || item.content.toLowerCase().includes(q));
-      if (requiredTags.length > 0) {
-        items = items.filter((item) => {
-          const itemTags = (item.tags ?? []).map((entry) => entry.toLowerCase());
-          return requiredTags.every((entry) => itemTags.includes(entry));
-        });
-      }
-      const p = page && page > 0 ? page : 1;
-      const l = limit && limit > 0 ? limit : 20;
-      const sorted = sortItems(items, sort ?? 'created', desc ?? false);
-      const start = (p - 1) * l;
-      const rows = sorted.slice(start, start + l);
-      return jsonText({
-        ok: true,
-        page: p,
-        limit: l,
-        total: sorted.length,
-        total_pages: Math.max(1, Math.ceil(sorted.length / l)),
-        items: rows,
+    const store = itemStoreFor(store_path, scope);
+    const { items: all } = await store.listAll();
+    const q = search ? search.toLowerCase() : '';
+    const requiredTags = (tag ?? []).map((entry) => entry.toLowerCase());
+    let items = activeItems(all, include_archived);
+    if (q) items = items.filter((item) => item.title.toLowerCase().includes(q) || item.content.toLowerCase().includes(q));
+    if (requiredTags.length > 0) {
+      items = items.filter((item) => {
+        const itemTags = (item.tags ?? []).map((entry) => entry.toLowerCase());
+        return requiredTags.every((entry) => itemTags.includes(entry));
       });
+    }
+    const p = page && page > 0 ? page : 1;
+    const l = limit && limit > 0 ? limit : 20;
+    const sorted = sortItems(items, sort ?? 'created', desc ?? false);
+    const start = (p - 1) * l;
+    const rows = sorted.slice(start, start + l);
+    return jsonText({
+      ok: true,
+      page: p,
+      limit: l,
+      total: sorted.length,
+      total_pages: Math.max(1, Math.ceil(sorted.length / l)),
+      items: rows,
     });
   });
 
@@ -1578,11 +1542,9 @@ export function buildServer() {
     store_path: storePathField,
     scope: scopeField,
   }, async ({ id, store_path, scope }) => {
-    const storePath = resolveStorePath(store_path, scope);
-    return readStoreLocked(storePath, (db) => {
-      const item = findItem(db, id);
-      return item ? jsonText({ ok: true, item }) : errorText(`Item not found: ${id}`);
-    });
+    const store = itemStoreFor(store_path, scope);
+    const item = await store.get(id);
+    return item ? jsonText({ ok: true, item }) : errorText(`Item not found: ${id}`);
   });
 
   registerTool(server, 'ok_update', 'Update a knowledge item', 'Update title, content, URL, tags, or metadata', {
@@ -1595,18 +1557,16 @@ export function buildServer() {
     store_path: storePathField,
     scope: scopeField,
   }, async ({ id, title, content, url, tags, metadata, store_path, scope }) => {
-    const storePath = resolveStorePath(store_path, scope);
-    const result = writeStoreLocked(storePath, (db) => {
-      const item = findItem(db, id);
-      if (!item) return null;
-      if (title !== undefined) item.title = title;
-      if (content !== undefined) item.content = content;
-      if (url !== undefined) item.url = url;
-      if (tags) item.tags = [...new Set([...(item.tags ?? []), ...tags])];
-      if (metadata) item.metadata = { ...(item.metadata ?? {}), ...metadata };
-      item.updated_at = new Date().toISOString();
-      return item;
-    });
+    const store = itemStoreFor(store_path, scope);
+    const current = await store.get(id);
+    if (!current) return errorText(`Item not found: ${id}`);
+    const patch = {};
+    if (title !== undefined) patch.title = title;
+    if (content !== undefined) patch.content = content;
+    if (url !== undefined) patch.url = url;
+    if (tags) patch.tags = [...new Set([...(current.tags ?? []), ...tags])];
+    if (metadata) patch.metadata = { ...(current.metadata ?? {}), ...metadata };
+    const result = await store.update(current.id, patch);
     return result ? jsonText({ ok: true, item: result }) : errorText(`Item not found: ${id}`);
   });
 
@@ -1617,12 +1577,8 @@ export function buildServer() {
     scope: scopeField,
   }, async ({ id, confirm, store_path, scope }) => {
     if (!confirm) return errorText('Refusing delete without confirm=true.');
-    const storePath = resolveStorePath(store_path, scope);
-    const deleted = writeStoreLocked(storePath, (db) => {
-      const before = db.items.length;
-      db.items = db.items.filter((item) => item.id !== id && item.short_id !== id);
-      return before !== db.items.length;
-    });
+    const store = itemStoreFor(store_path, scope);
+    const deleted = await store.delete(id);
     return deleted ? jsonText({ ok: true, deleted_id: id }) : errorText(`Item not found: ${id}`);
   });
 
@@ -1631,14 +1587,10 @@ export function buildServer() {
     store_path: storePathField,
     scope: scopeField,
   }, async ({ id, store_path, scope }) => {
-    const storePath = resolveStorePath(store_path, scope);
-    const item = writeStoreLocked(storePath, (db) => {
-      const entry = findItem(db, id);
-      if (!entry) return null;
-      entry.archived = true;
-      entry.updated_at = new Date().toISOString();
-      return entry;
-    });
+    const store = itemStoreFor(store_path, scope);
+    const current = await store.get(id);
+    if (!current) return errorText(`Item not found: ${id}`);
+    const item = await store.update(current.id, { archived: true });
     return item ? jsonText({ ok: true, item }) : errorText(`Item not found: ${id}`);
   });
 
@@ -1647,14 +1599,10 @@ export function buildServer() {
     store_path: storePathField,
     scope: scopeField,
   }, async ({ id, store_path, scope }) => {
-    const storePath = resolveStorePath(store_path, scope);
-    const item = writeStoreLocked(storePath, (db) => {
-      const entry = findItem(db, id);
-      if (!entry) return null;
-      entry.archived = false;
-      entry.updated_at = new Date().toISOString();
-      return entry;
-    });
+    const store = itemStoreFor(store_path, scope);
+    const current = await store.get(id);
+    if (!current) return errorText(`Item not found: ${id}`);
+    const item = await store.update(current.id, { archived: false });
     return item ? jsonText({ ok: true, item }) : errorText(`Item not found: ${id}`);
   });
 
@@ -1667,34 +1615,20 @@ export function buildServer() {
     store_path: storePathField,
     scope: scopeField,
   }, async ({ id, title, content, tags, metadata, store_path, scope }) => {
-    const storePath = resolveStorePath(store_path, scope);
-    const item = writeStoreLocked(storePath, (db) => {
-      let entry = findItem(db, id);
-      const now = new Date().toISOString();
-      if (!entry) {
-        if (!title || !content) return null;
-        entry = {
-          id,
-          short_id: shortIdFor(id),
-          title,
-          content,
-          tags: tags ?? [],
-          metadata: metadata ?? {},
-          archived: false,
-          created_at: now,
-          updated_at: now,
-        };
-        db.items.push(entry);
-        return entry;
-      }
-      if (title !== undefined) entry.title = title;
-      if (content !== undefined) entry.content = content;
-      if (tags) entry.tags = [...new Set([...(entry.tags ?? []), ...tags])];
-      if (metadata) entry.metadata = { ...(entry.metadata ?? {}), ...metadata };
-      entry.updated_at = now;
-      return entry;
-    });
-    return item ? jsonText({ ok: true, item }) : errorText('New item requires both title and content.');
+    const store = itemStoreFor(store_path, scope);
+    const existing = await store.get(id);
+    if (!existing) {
+      if (!title || !content) return errorText('New item requires both title and content.');
+      const created = await store.create({ id, title, content, tags: tags ?? [], metadata: metadata ?? {} });
+      return jsonText({ ok: true, item: created });
+    }
+    const patch = {};
+    if (title !== undefined) patch.title = title;
+    if (content !== undefined) patch.content = content;
+    if (tags) patch.tags = [...new Set([...(existing.tags ?? []), ...tags])];
+    if (metadata) patch.metadata = { ...(existing.metadata ?? {}), ...metadata };
+    const item = await store.update(existing.id, patch);
+    return item ? jsonText({ ok: true, item }) : errorText(`Item not found: ${id}`);
   });
 
   registerTool(server, 'ok_untag', 'Remove tags from a knowledge item', 'Remove specific tags from an item', {
@@ -1703,17 +1637,14 @@ export function buildServer() {
     store_path: storePathField,
     scope: scopeField,
   }, async ({ id, tags, store_path, scope }) => {
-    const storePath = resolveStorePath(store_path, scope);
-    const result = writeStoreLocked(storePath, (db) => {
-      const item = findItem(db, id);
-      if (!item) return null;
-      const remove = new Set(tags.map((tag) => tag.toLowerCase()));
-      const before = (item.tags ?? []).length;
-      item.tags = (item.tags ?? []).filter((tag) => !remove.has(tag.toLowerCase()));
-      item.updated_at = new Date().toISOString();
-      return { item, removed: before - item.tags.length };
-    });
-    return result ? jsonText({ ok: true, ...result }) : errorText(`Item not found: ${id}`);
+    const store = itemStoreFor(store_path, scope);
+    const current = await store.get(id);
+    if (!current) return errorText(`Item not found: ${id}`);
+    const remove = new Set(tags.map((tag) => tag.toLowerCase()));
+    const before = (current.tags ?? []).length;
+    const nextTags = (current.tags ?? []).filter((tag) => !remove.has(tag.toLowerCase()));
+    const item = await store.update(current.id, { tags: nextTags });
+    return item ? jsonText({ ok: true, item, removed: before - nextTags.length }) : errorText(`Item not found: ${id}`);
   });
 
   registerTool(server, 'ok_bulk_delete', 'Bulk delete knowledge items', 'Delete multiple items by tag or search. Requires confirm=true.', {
@@ -1725,19 +1656,17 @@ export function buildServer() {
   }, async ({ tag, search, confirm, store_path, scope }) => {
     if (!confirm) return errorText('Refusing bulk delete without confirm=true.');
     if (!tag && !search) return errorText('Missing filter. Use tag or search.');
-    const storePath = resolveStorePath(store_path, scope);
-    const deleted = writeStoreLocked(storePath, (db) => {
-      const q = search ? search.toLowerCase() : '';
-      const tags = (tag ?? []).map((entry) => entry.toLowerCase());
-      const deleteIds = new Set(db.items.filter((item) => {
-        const matchesSearch = q ? item.title.toLowerCase().includes(q) || item.content.toLowerCase().includes(q) : false;
-        const itemTags = (item.tags ?? []).map((entry) => entry.toLowerCase());
-        const matchesTag = tags.length > 0 ? tags.some((entry) => itemTags.includes(entry)) : false;
-        return matchesSearch || matchesTag;
-      }).map((item) => item.id));
-      db.items = db.items.filter((item) => !deleteIds.has(item.id));
-      return deleteIds.size;
-    });
+    const store = itemStoreFor(store_path, scope);
+    const { items: all } = await store.listAll();
+    const q = search ? search.toLowerCase() : '';
+    const tags = (tag ?? []).map((entry) => entry.toLowerCase());
+    const deleteIds = all.filter((item) => {
+      const matchesSearch = q ? item.title.toLowerCase().includes(q) || item.content.toLowerCase().includes(q) : false;
+      const itemTags = (item.tags ?? []).map((entry) => entry.toLowerCase());
+      const matchesTag = tags.length > 0 ? tags.some((entry) => itemTags.includes(entry)) : false;
+      return matchesSearch || matchesTag;
+    }).map((item) => item.id);
+    const deleted = await store.deleteMany(deleteIds);
     return jsonText({ ok: true, deleted });
   });
 
@@ -1749,21 +1678,19 @@ export function buildServer() {
     scope: scopeField,
   }, async ({ older_than_days, empty, confirm, store_path, scope }) => {
     if (!confirm) return errorText('Refusing prune without confirm=true.');
-    const storePath = resolveStorePath(store_path, scope);
-    const pruned = writeStoreLocked(storePath, (db) => {
-      const before = db.items.length;
-      let cutoff = null;
-      if (older_than_days !== undefined) {
-        cutoff = new Date();
-        cutoff.setDate(cutoff.getDate() - older_than_days);
-      }
-      db.items = db.items.filter((item) => {
-        if (cutoff && new Date(item.created_at) < cutoff) return false;
-        if (empty && item.content.trim().length === 0) return false;
-        return true;
-      });
-      return before - db.items.length;
-    });
+    const store = itemStoreFor(store_path, scope);
+    const { items: all } = await store.listAll();
+    let cutoff = null;
+    if (older_than_days !== undefined) {
+      cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - older_than_days);
+    }
+    const deleteIds = all.filter((item) => {
+      if (cutoff && new Date(item.created_at) < cutoff) return true;
+      if (empty && item.content.trim().length === 0) return true;
+      return false;
+    }).map((item) => item.id);
+    const pruned = await store.deleteMany(deleteIds);
     return jsonText({ ok: true, pruned });
   });
 
@@ -1773,18 +1700,15 @@ export function buildServer() {
     scope: scopeField,
   }, async ({ confirm, store_path, scope }) => {
     if (!confirm) return errorText('Refusing dedupe without confirm=true.');
-    const storePath = resolveStorePath(store_path, scope);
-    const removed = writeStoreLocked(storePath, (db) => {
-      const seen = new Set();
-      const before = db.items.length;
-      db.items = db.items.filter((item) => {
-        const key = `${item.title}\u0000${item.content}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-      return before - db.items.length;
-    });
+    const store = itemStoreFor(store_path, scope);
+    const { items: all } = await store.listAll();
+    const seen = new Set();
+    const dupeIds = [];
+    for (const item of all) {
+      const key = `${item.title}\u0000${item.content}`;
+      if (seen.has(key)) dupeIds.push(item.id); else seen.add(key);
+    }
+    const removed = await store.deleteMany(dupeIds);
     return jsonText({ ok: true, removed });
   });
 
@@ -1792,19 +1716,18 @@ export function buildServer() {
     store_path: storePathField,
     scope: scopeField,
   }, async ({ store_path, scope }) => {
-    const storePath = resolveStorePath(store_path, scope);
-    return readStoreLocked(storePath, (db) => {
-      const items = activeItems(db.items, false);
-      const tagCounts = {};
-      for (const item of items) {
-        for (const tag of item.tags ?? []) tagCounts[tag] = (tagCounts[tag] ?? 0) + 1;
-      }
-      return jsonText({
-        ok: true,
-        total: items.length,
-        archived: db.items.length - items.length,
-        tags: Object.fromEntries(Object.entries(tagCounts).sort((a, b) => b[1] - a[1])),
-      });
+    const store = itemStoreFor(store_path, scope);
+    const { items: all } = await store.listAll();
+    const items = activeItems(all, false);
+    const tagCounts = {};
+    for (const item of items) {
+      for (const tag of item.tags ?? []) tagCounts[tag] = (tagCounts[tag] ?? 0) + 1;
+    }
+    return jsonText({
+      ok: true,
+      total: items.length,
+      archived: all.length - items.length,
+      tags: Object.fromEntries(Object.entries(tagCounts).sort((a, b) => b[1] - a[1])),
     });
   });
 
@@ -1813,12 +1736,11 @@ export function buildServer() {
     store_path: storePathField,
     scope: scopeField,
   }, async ({ file, store_path, scope }) => {
-    const storePath = resolveStorePath(store_path, scope);
-    return readStoreLocked(storePath, (db) => {
-      const filePath = file || './knowledge-export.json';
-      writeFileSync(filePath, JSON.stringify(db, null, 2));
-      return jsonText({ ok: true, file: filePath, count: db.items.length });
-    });
+    const store = itemStoreFor(store_path, scope);
+    const { items } = await store.listAll();
+    const filePath = file || './knowledge-export.json';
+    writeFileSync(filePath, JSON.stringify({ items }, null, 2));
+    return jsonText({ ok: true, file: filePath, count: items.length });
   });
 
   registerTool(server, 'ok_import', 'Import knowledge items', 'Import items from an exported JSON file, skipping duplicate IDs', {
@@ -1829,20 +1751,26 @@ export function buildServer() {
     if (!existsSync(file)) return errorText(`File not found: ${file}`);
     const imported = JSON.parse(readFileSync(file, 'utf8'));
     if (!imported || !Array.isArray(imported.items)) return errorText('Invalid import file: expected {"items": [...]}');
-    const storePath = resolveStorePath(store_path, scope);
-    const result = writeStoreLocked(storePath, (db) => {
-      const existingIds = new Set(db.items.map((item) => item.id));
-      let added = 0;
-      for (const item of imported.items) {
-        if (!existingIds.has(item.id)) {
-          db.items.push(item);
-          existingIds.add(item.id);
-          added += 1;
-        }
-      }
-      return { added, skipped: imported.items.length - added };
-    });
-    return jsonText({ ok: true, ...result });
+    // Route through the item Store so imports land in the shared cloud when the
+    // API flip is active (never silently into local db.json).
+    const store = itemStoreFor(store_path, scope);
+    const { items: existing } = await store.listAll();
+    const existingIds = new Set(existing.map((item) => item.id));
+    let added = 0;
+    for (const item of imported.items) {
+      if (item.id && existingIds.has(item.id)) continue;
+      const created = await store.create({
+        id: item.id,
+        title: item.title,
+        content: item.content,
+        url: item.url ?? null,
+        tags: item.tags ?? [],
+        metadata: item.metadata ?? {},
+      });
+      existingIds.add(created.id);
+      added += 1;
+    }
+    return jsonText({ ok: true, added, skipped: imported.items.length - added });
   });
 
   registerTool(server, 'ok_batch', 'Batch add knowledge items', 'Add multiple items at once', {
@@ -1858,35 +1786,29 @@ export function buildServer() {
     store_path: storePathField,
     scope: scopeField,
   }, async ({ items, store_path, scope }) => {
-    const storePath = resolveStorePath(store_path, scope);
-    const result = writeStoreLocked(storePath, (db) => {
-      const existingIds = new Set(db.items.map((item) => item.id));
-      let added = 0;
-      let skipped = 0;
-      const now = new Date().toISOString();
-      for (const entry of items) {
-        if (entry.id && existingIds.has(entry.id)) {
-          skipped += 1;
-          continue;
-        }
-        const id = entry.id ?? makeId();
-        db.items.push({
-          id,
-          short_id: shortIdFor(id),
-          title: entry.title,
-          content: entry.content,
-          tags: entry.tags ?? [],
-          metadata: entry.metadata ?? {},
-          archived: false,
-          created_at: entry.created_at ?? now,
-          updated_at: entry.updated_at ?? now,
-        });
-        existingIds.add(id);
-        added += 1;
+    // Route through the item Store so batch adds land in the shared cloud when
+    // the API flip is active (never silently into local db.json).
+    const store = itemStoreFor(store_path, scope);
+    const { items: existing } = await store.listAll();
+    const existingIds = new Set(existing.map((item) => item.id));
+    let added = 0;
+    let skipped = 0;
+    for (const entry of items) {
+      if (entry.id && existingIds.has(entry.id)) {
+        skipped += 1;
+        continue;
       }
-      return { added, skipped };
-    });
-    return jsonText({ ok: true, ...result });
+      const created = await store.create({
+        id: entry.id,
+        title: entry.title,
+        content: entry.content,
+        tags: entry.tags ?? [],
+        metadata: entry.metadata ?? {},
+      });
+      existingIds.add(created.id);
+      added += 1;
+    }
+    return jsonText({ ok: true, added, skipped });
   });
 
   return server;

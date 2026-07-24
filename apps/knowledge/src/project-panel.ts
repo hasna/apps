@@ -1,6 +1,7 @@
 import {
   parseContract,
   SCHEMA_IDS,
+  UriSchema,
   type ProjectPanel,
   type ProjectPanelInput,
   type ResourceKind,
@@ -52,8 +53,14 @@ function toTimestamp(value: unknown): string | undefined {
   return Number.isNaN(parsed.valueOf()) ? undefined : parsed.toISOString();
 }
 
+// A resource/evidence URI is only usable if it passes the SAME contract schema
+// that parseContract enforces on the panel. The old generic `scheme:` regex
+// accepted schemes the contract rejects (e.g. s3://, ftp://, mailto:), so cloud
+// knowledge items carrying such URLs blew up project-panel with a
+// ContractValidationError. Delegating to UriSchema keeps this in lockstep with
+// the contract and cannot drift.
 function hasUriScheme(value: string): boolean {
-  return /^[a-z][a-z0-9+.-]*:/i.test(value);
+  return UriSchema.safeParse(value).success;
 }
 
 function resource(kind: ResourceKind, id: string, name?: string, uri?: string, tags: string[] = []) {
@@ -113,11 +120,12 @@ function inventoryItems(inventory: KnowledgeInventoryResult, limit: number): Pro
       priority: 'medium',
       timestamp: toTimestamp(row.updated_at ?? row.created_at),
       resourceRefs: [resource('knowledge', row.id, row.title, `knowledge://item/${encodeURIComponent(row.id)}`, row.tags)],
-      evidenceRefs: row.url ? [{ id: `url_${row.id}`, kind: 'url', uri: row.url, summary: 'Source URL for this knowledge item.' }] : [],
+      evidenceRefs: row.url && hasUriScheme(row.url) ? [{ id: `url_${row.id}`, kind: 'url', uri: row.url, summary: 'Source URL for this knowledge item.' }] : [],
       metadata: {
         source: 'legacy_store',
         archived: row.archived,
         tags: row.tags,
+        url: row.url || undefined,
       },
     });
   }
@@ -204,12 +212,15 @@ function inventoryItems(inventory: KnowledgeInventoryResult, limit: number): Pro
   return items.slice(0, limit);
 }
 
-export function createKnowledgeProjectPanel(projectRef: string, options: KnowledgeProjectPanelOptions = {}): ProjectPanel {
+export async function createKnowledgeProjectPanel(projectRef: string, options: KnowledgeProjectPanelOptions = {}): Promise<ProjectPanel> {
   const limit = clampLimit(options.limit);
   const generatedAt = new Date().toISOString();
   const projectId = slugify(projectRef);
   const service = options.service ?? createKnowledgeService({ scope: options.scope ?? 'project', cwd: options.cwd });
-  const inventory = service.inventory({
+  // Route through the unified inventory dispatch so the panel reflects the shared
+  // cloud corpus in api mode and the local catalog otherwise — never the local
+  // sqlite guard throw when the fleet flip is active on a box with a local db.
+  const inventory = await service.resolveInventory({
     limit,
     storePath: options.storePath,
     includeArchived: options.includeArchived,

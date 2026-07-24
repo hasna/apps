@@ -43,6 +43,42 @@ describe('bounded knowledge agent context packs', () => {
     expect(JSON.stringify(pack)).not.toContain('sk-testsecretkeyvalue');
   });
 
+  // Regression: long previews forced fitPackToBudget to call truncateText,
+  // which overshot maxChars by 2 (sliced maxChars-1 then appended a 3-char
+  // ellipsis). The `length > 180`/`> 120` truncation branches could therefore
+  // never satisfy their own threshold, so the while-loop spun forever and the
+  // whole `context pack` command hung in local mode. This test would never
+  // return before the fix.
+  test('fits packs with long previews without an infinite truncation loop', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-context-pack-fit-'));
+    const dbPath = join(dir, 'knowledge.db');
+    const longParagraph = `${'Alpha widget rollout details. '.repeat(40)}`; // ~1200 chars, all matching
+    for (let i = 0; i < 6; i += 1) {
+      const source = join(dir, `long-${i}.md`);
+      writeFileSync(source, `${longParagraph} (document ${i})`);
+      await ingestSourceRef({ dbPath, sourceRef: `file://${source}`, purpose: 'knowledge_index' });
+    }
+
+    const pack = await buildKnowledgeAgentContextPack({
+      dbPath,
+      safetyPolicy: safetyFor(dir),
+      source: 'search',
+      query: 'alpha widget rollout',
+      maxTokens: 900,
+      maxItems: 6,
+      now: new Date('2026-06-26T00:00:00.000Z'),
+    });
+
+    // Reaching this assertion at all proves the loop terminated.
+    expect(pack.budgets.estimated_tokens).toBeLessThanOrEqual(pack.budgets.max_tokens);
+    for (const evidence of pack.evidence) {
+      expect(evidence.text_preview.length).toBeLessThanOrEqual(180);
+    }
+    for (const citation of pack.citations) {
+      expect((citation.quote_preview ?? '').length).toBeLessThanOrEqual(120);
+    }
+  });
+
   test('summarizes loop run evidence and duplicate candidates without raw artifacts', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-loop-context-pack-'));
     const dbPath = join(dir, 'knowledge.db');

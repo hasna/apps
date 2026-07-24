@@ -1,4 +1,5 @@
 import { type KnowledgeContextPack, type RetrievalOptions } from './retrieval';
+import type { KnowledgeItem } from './store';
 export interface KnowledgePromptOptions extends Omit<RetrievalOptions, 'query'> {
     prompt: string;
     generate?: boolean;
@@ -33,3 +34,13 @@ export interface KnowledgePromptResult {
     warnings: string[];
 }
 export declare function runKnowledgePrompt(options: KnowledgePromptOptions): Promise<KnowledgePromptResult>;
+export interface KnowledgePromptOverItemsOptions extends Omit<KnowledgePromptOptions, 'dbPath' | 'legacyStorePath'> {
+}
+/**
+ * Run an `ask`/`build` prompt against an in-memory knowledge-item corpus — the
+ * api (self_hosted / cloud) path. Retrieval reads the shared cloud items (fetched
+ * through the item Store); the LLM runs client-side with the caller's provider
+ * key. There is no local sqlite catalog, so run telemetry is not persisted to a
+ * local db (it would be split-brain); the run id is still returned for the shape.
+ */
+export declare function runKnowledgePromptOverItems(items: KnowledgeItem[], options: KnowledgePromptOverItemsOptions): Promise<KnowledgePromptResult>;

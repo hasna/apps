@@ -7,7 +7,6 @@ import { type EmbeddingIndexOptions, type EmbeddingSearchOptions } from './embed
 import { type KnowledgeMachinePreflightOptions, type KnowledgeMachineRouteResolution, type KnowledgeMachineWorkspaceResolution, type KnowledgeMachineTopologyOptions } from './machines';
 import { type ProviderStatusResult, type ModelRegistryEntry } from './providers';
 import { type ReindexRuntimeOptions } from './reindex';
-import { RemoteKnowledgeClient, type RemoteKnowledgeRegistryContract } from './remote-client';
 import { type KnowledgeContextPack, type RetrievalOptions } from './retrieval';
 import { type RulesProvenanceImportResult } from './rules-provenance';
 import { type HybridSearchOptions, type HybridSearchResult } from './search';
@@ -16,6 +15,8 @@ import { type WebSearchOptions } from './web-search';
 import { type KnowledgeSyncConflict, type KnowledgeSyncConflictResolutionProposal, type KnowledgePeerSyncResult, type KnowledgeSyncApplyResult, type KnowledgeSyncBundle, type KnowledgeSyncMachineRow, type KnowledgeSyncSnapshotResult, type KnowledgeSyncStatus } from './sync';
 import { type WikiCompileOptions } from './wiki-compiler';
 import { type StorageContract, type StorageValidationResult } from './storage-contract';
+import { type KnowledgeItem } from './store';
+import { type ItemStore, type ItemCreateInput, type ItemPatch, type ItemListResult } from './item-store';
 import { type KnowledgeConfig, type KnowledgeWorkspace } from './workspace';
 import { type KnowledgeLegacyWorkspaceMigrationResult } from './workspace-migration';
 export interface KnowledgeServiceOptions {
@@ -358,6 +359,32 @@ export declare class KnowledgeService {
     get workspace(): KnowledgeWorkspace;
     ensureWorkspace(): KnowledgeWorkspace;
     jsonStorePath(): string;
+    /**
+     * The single knowledge-item Store for this scope. One interface, two
+     * transports resolved from the environment: LocalItemStore (on-box db.json)
+     * in local mode, ApiItemStore (HTTP `/v1` + bearer key) in self_hosted/cloud
+     * mode. EVERY item read/write — CLI, MCP, and SDK — routes through this one
+     * surface, so no path touches sqlite or the raw HTTP client directly.
+     */
+    itemStore(): ItemStore;
+    /** List every knowledge item (including archived) via the unified Store. */
+    listItems(): Promise<ItemListResult>;
+    /** Fetch one knowledge item by id or short id via the unified Store. */
+    getItem(idOrShort: string): Promise<KnowledgeItem | null>;
+    /** Create (or upsert on a caller-supplied id) an item via the unified Store. */
+    createItem(input: ItemCreateInput): Promise<KnowledgeItem>;
+    /** Patch an item by id or short id via the unified Store. */
+    updateItem(idOrShort: string, patch: ItemPatch): Promise<KnowledgeItem | null>;
+    /** Delete one item by id or short id via the unified Store. */
+    deleteItem(idOrShort: string): Promise<boolean>;
+    /** Delete many items by id/short id via the unified Store; returns the count. */
+    deleteItems(idsOrShorts: string[]): Promise<number>;
+    /**
+     * Unified inventory dispatch: the shared cloud knowledge-item corpus in api
+     * mode (self_hosted/cloud), the local sqlite/JSON catalog otherwise. CLI, MCP,
+     * and SDK all call this so no surface reads a divergent store.
+     */
+    resolveInventory(options?: KnowledgeInventoryOptions): Promise<KnowledgeInventoryResult>;
     config(options?: {
         ensure?: boolean;
     }): KnowledgeConfig;
@@ -384,14 +411,26 @@ export declare class KnowledgeService {
         apiUrl?: string;
     }, env?: Record<string, string | undefined>): import("./auth").KnowledgeAuthConfig;
     clearAuth(env?: Record<string, string | undefined>): boolean;
-    remoteContract(): RemoteKnowledgeRegistryContract;
-    remoteClient(env?: Record<string, string | undefined>): RemoteKnowledgeClient | null;
     paths(): KnowledgePathsResult;
     initDb(): {
         path: string;
         schema_version: number;
     };
     dbStats(): import("./knowledge-db").KnowledgeDbStats;
+    /**
+     * Build a knowledge inventory from a bare item list (no local sqlite catalog).
+     * Shared by the local no-db path and the cloud path so both produce the exact
+     * same KnowledgeInventoryResult shape with empty catalog sections.
+     */
+    private itemOnlyInventory;
+    /**
+     * Cloud (api mode) inventory: reports the shared cloud knowledge-item corpus.
+     * The RAG catalog (sources/chunks/wiki/sync/machines) lives only in the local
+     * sqlite pipeline and has no cloud counterpart, so those sections are empty —
+     * this routes through the same cloud item transport every item command uses,
+     * never the local db.json or sqlite catalog.
+     */
+    cloudInventory(options?: KnowledgeInventoryOptions): Promise<KnowledgeInventoryResult>;
     inventory(options?: KnowledgeInventoryOptions): KnowledgeInventoryResult;
     private assertAppWikiWrite;
     initAppWiki(options?: KnowledgeAppWikiWriteOptions): Promise<KnowledgeAppWikiInitResult>;
@@ -436,7 +475,18 @@ export declare class KnowledgeService {
     modelRegistry(): ModelRegistryEntry[];
     embeddingStatus(): import("./embeddings").EmbeddingStatusResult;
     indexEmbeddings(options?: Omit<EmbeddingIndexOptions, 'dbPath' | 'config'>): Promise<import("./embeddings").EmbeddingIndexResult>;
-    semanticSearch(options: Omit<EmbeddingSearchOptions, 'dbPath' | 'config'>): Promise<import("./embeddings").SemanticSearchResult>;
+    /** True when the client-flip resolves to the cloud HTTP transport. In api mode
+     * the shared corpus is the cloud knowledge-items, not a local sqlite catalog. */
+    private isApiMode;
+    /** Fetch the entire shared knowledge-item corpus from the cloud (api mode). */
+    private fetchCloudItems;
+    semanticSearch(options: Omit<EmbeddingSearchOptions, 'dbPath' | 'config'>): Promise<import("./embeddings").SemanticSearchResult | {
+        provider: 'openai';
+        model: string;
+        dimensions: number;
+        query: string;
+        results: import("./search").HybridSearchEntry[];
+    }>;
     search(options: Omit<HybridSearchOptions, 'dbPath' | 'config'>): Promise<HybridSearchResult>;
     retrieveContext(options: Omit<RetrievalOptions, 'dbPath' | 'config'>): Promise<KnowledgeContextPack>;
     contextPack(options: Omit<KnowledgeAgentContextPackOptions, 'dbPath' | 'config' | 'safetyPolicy'>): Promise<KnowledgeAgentContextPack>;

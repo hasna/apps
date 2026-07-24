@@ -314,18 +314,28 @@ function legacyItemHaystack(item: KnowledgeItem): string {
   ].filter((value): value is string => typeof value === 'string' && value.length > 0).join(' ').toLowerCase();
 }
 
-function selectLegacyItems(path: string | undefined, terms: string[], limit: number): Array<{
+/** Pure lexical ranking over an in-memory knowledge-item corpus. Shared by the
+ * on-box legacy JSON store path and the cloud (api-mode) item corpus so both
+ * transports rank identically. */
+function selectItems(items: KnowledgeItem[], terms: string[], limit: number): Array<{
   item: KnowledgeItem;
   score: number;
 }> {
   if (terms.length === 0) return [];
-  return readLegacyItems(path)
+  return items
     .filter((item) => item.archived !== true)
     .map((item) => ({ item, haystack: legacyItemHaystack(item) }))
     .filter(({ haystack }) => terms.some((term) => haystack.includes(term)))
     .map(({ item, haystack }) => ({ item, score: catalogScore(haystack, terms) }))
     .sort((a, b) => b.score - a.score || a.item.id.localeCompare(b.item.id))
     .slice(0, limit);
+}
+
+function selectLegacyItems(path: string | undefined, terms: string[], limit: number): Array<{
+  item: KnowledgeItem;
+  score: number;
+}> {
+  return selectItems(readLegacyItems(path), terms, limit);
 }
 
 function chunkResult(row: FtsChunkRow, keywordScore: number): HybridSearchEntry {
@@ -586,16 +596,32 @@ export async function hybridSearch(options: HybridSearchOptions): Promise<Hybrid
 }
 
 export async function hybridSearchLegacyStore(options: Omit<HybridSearchOptions, 'dbPath'>): Promise<HybridSearchResult> {
+  return hybridSearchItems(readLegacyItems(options.legacyStorePath), options, ['knowledge_db_missing']);
+}
+
+/**
+ * Lexical search over an in-memory knowledge-item corpus. In api (self_hosted /
+ * cloud) mode the client has no local sqlite catalog; the shared corpus is the
+ * cloud knowledge-items fetched through the item Store. Both `search` and `ask`
+ * route their retrieval here so cloud mode is first-class instead of throwing.
+ * Semantic ranking (vector index) lives only in the local sqlite catalog, so it
+ * is reported as skipped rather than silently ignored.
+ */
+export async function hybridSearchItems(
+  items: KnowledgeItem[],
+  options: Omit<HybridSearchOptions, 'dbPath' | 'legacyStorePath'>,
+  baseWarnings: string[] = [],
+): Promise<HybridSearchResult> {
   const query = options.query.trim();
   if (!query) throw new Error('Search query is required.');
   const limit = Math.max(1, Math.min(options.limit ?? 10, 100));
   const terms = queryTerms(query);
   const semanticEnabled = options.semantic === true || options.fake === true || Boolean(options.modelRef);
   const merged = new Map<string, HybridSearchEntry>();
-  const legacyRows = selectLegacyItems(options.legacyStorePath, terms, Math.max(limit, 10));
-  legacyRows.forEach(({ item, score }) => mergeResult(merged, legacyItemResult(item, score)));
-  const warnings = ['knowledge_db_missing'];
-  if (semanticEnabled) warnings.push('semantic_search_skipped_knowledge_db_missing');
+  const itemRows = selectItems(items, terms, Math.max(limit, 10));
+  itemRows.forEach(({ item, score }) => mergeResult(merged, legacyItemResult(item, score)));
+  const warnings = [...baseWarnings];
+  if (semanticEnabled) warnings.push('semantic_search_requires_local_catalog');
   const results = sortResults(Array.from(merged.values())).slice(0, limit);
   return {
     query,
@@ -609,7 +635,7 @@ export async function hybridSearchLegacyStore(options: Omit<HybridSearchOptions,
     semantic_model: null,
     semantic_dimensions: null,
     counts: {
-      keyword_results: legacyRows.length,
+      keyword_results: itemRows.length,
       catalog_results: 0,
       semantic_results: 0,
       merged_results: results.length,

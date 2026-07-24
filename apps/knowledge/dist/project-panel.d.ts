@@ -8,5 +8,5 @@ export interface KnowledgeProjectPanelOptions {
     storePath?: string;
     includeArchived?: boolean;
 }
-export declare function createKnowledgeProjectPanel(projectRef: string, options?: KnowledgeProjectPanelOptions): ProjectPanel;
+export declare function createKnowledgeProjectPanel(projectRef: string, options?: KnowledgeProjectPanelOptions): Promise<ProjectPanel>;
 export declare function formatKnowledgeProjectPanel(panel: ProjectPanel): string;

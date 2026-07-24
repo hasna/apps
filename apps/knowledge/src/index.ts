@@ -18,12 +18,35 @@ export {
   type KnowledgeClientOptions,
   type KnowledgeContextOptions,
   type KnowledgeInventoryOptions,
+  type KnowledgeItemsSdk,
   type KnowledgeRulesProvenanceOptions,
   type KnowledgeSearchOptions,
   type KnowledgeSetupOptions,
   type KnowledgeSyncDoctorOptions,
   type KnowledgeWebSearchOptions,
 } from './sdk.js';
+export {
+  resolveItemStore,
+  type ItemStore,
+  type ItemCreateInput,
+  type ItemPatch,
+  type ItemListResult,
+  type ResolveItemStoreOptions,
+} from './item-store.js';
+export {
+  type KnowledgeItem,
+  type Store as KnowledgeItemStoreFile,
+} from './store.js';
+export {
+  KNOWLEDGE_APP_SLUG,
+  KNOWLEDGE_RESOURCE,
+  isKnowledgeApiMode,
+  resolveKnowledgeCloudStore,
+  type KnowledgeCloudStore,
+  type KnowledgeCloudCreateInput,
+  type KnowledgeCloudListOptions,
+  type KnowledgeCloudPatch,
+} from './cloud-store.js';
 export {
   buildKnowledgeAgentContextPack,
   type KnowledgeAgentContextCitation,
@@ -205,30 +228,18 @@ export {
   type StorageValidationResult,
 } from './storage-contract.js';
 export {
-  KNOWLEDGE_STORAGE_ENV,
-  KNOWLEDGE_STORAGE_FALLBACK_ENV,
   KNOWLEDGE_STORAGE_MODE_ENV,
   KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV,
   KNOWLEDGE_STORAGE_TABLES,
-  STORAGE_DATABASE_ENV,
   STORAGE_MODE_ENV,
   STORAGE_TABLES,
-  getStorageDatabaseEnv,
-  getStorageDatabaseEnvName,
-  getStorageDatabaseUrl,
   getStorageMode,
-  getStoragePg,
   getStorageStatus,
   getSyncMetaAll,
   parseStorageTables,
   resolveTables,
-  runStorageMigrations,
-  storagePull,
-  storagePush,
-  storageSync,
 } from './storage.js';
 export type {
-  StorageEnv,
   StorageMode,
   StorageStatus,
   StorageStatusOptions,
@@ -384,15 +395,6 @@ export {
   type KnowledgeAuthStatus,
 } from './auth.js';
 export {
-  KnowledgeApiClient,
-  ApiError as KnowledgeApiError,
-  type KnowledgeApiClientOptions,
-  type Note as KnowledgeNote,
-  type NoteInput as KnowledgeNoteInput,
-  type NotePatch as KnowledgeNotePatch,
-  type NoteList as KnowledgeNoteList,
-} from './generated/knowledge-api-client.js';
-export {
   KNOWLEDGE_SERVE_APP,
   createServeHandler,
   startKnowledgeServe,
@@ -404,19 +406,3 @@ export {
   type StartServeOptions as KnowledgeStartServeOptions,
   type RunningServe as KnowledgeRunningServe,
 } from './serve.js';
-export {
-  REMOTE_KNOWLEDGE_CONTRACT_VERSION,
-  RemoteKnowledgeClient,
-  knowledgeRegistryContract,
-  normalizeRemoteKnowledgeRunContract,
-  type RemoteKnowledgeArtifact,
-  type RemoteKnowledgeArtifactContract,
-  type RemoteKnowledgeLogEntry,
-  type RemoteKnowledgePromptRequest,
-  type RemoteKnowledgeRegistryContract,
-  type RemoteKnowledgeRunContract,
-  type RemoteKnowledgeRunStatus,
-  type RemoteKnowledgeSearchRequest,
-  type RemoteKnowledgeSourceContract,
-  type RemoteKnowledgeSyncRequest,
-} from './remote-client.js';

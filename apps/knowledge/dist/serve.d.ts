@@ -11,6 +11,10 @@ export declare const KNOWLEDGE_SERVE_APP = "knowledge";
  */
 export declare function normalizeCloudDatabaseUrl(env?: NodeJS.ProcessEnv): string | undefined;
 export interface NoteInput {
+    /** Optional caller-supplied stable id (upsert). When present, create is an
+     * idempotent upsert on this id — matching the local db.json upsert semantics so
+     * `upsert --id <stable>` and data import/re-sync never duplicate in cloud mode. */
+    id?: string;
     title: string;
     content?: string;
     url?: string | null;

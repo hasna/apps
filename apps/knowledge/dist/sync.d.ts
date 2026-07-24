@@ -206,7 +206,7 @@ export interface KnowledgeSyncConflictEvidence {
     citations: KnowledgeSyncConflictProposalCitation[];
     read_only_tools: KnowledgeSyncConflictReadOnlyToolCall[];
 }
-export declare const KNOWLEDGE_SYNC_TABLES: readonly ["sources", "wiki_pages", "source_revisions", "chunks", "chunk_embeddings", "wiki_backlinks", "citations", "knowledge_indexes", "runs", "run_events", "provider_usage", "redaction_findings", "storage_objects", "audit_events", "approval_gates", "vector_index_entries", "reindex_queue", "knowledge_machines", "knowledge_sync_snapshots", "knowledge_sync_changes", "knowledge_sync_conflicts", "knowledge_sync_table_clocks", "knowledge_sync_imports"];
+export declare const KNOWLEDGE_SYNC_TABLES: readonly ['sources', 'wiki_pages', 'source_revisions', 'chunks', 'chunk_embeddings', 'wiki_backlinks', 'citations', 'knowledge_indexes', 'runs', 'run_events', 'provider_usage', 'redaction_findings', 'storage_objects', 'audit_events', 'approval_gates', 'vector_index_entries', 'reindex_queue', 'knowledge_machines', 'knowledge_sync_snapshots', 'knowledge_sync_changes', 'knowledge_sync_conflicts', 'knowledge_sync_table_clocks', 'knowledge_sync_imports'];
 export declare const KNOWLEDGE_SYNC_PROTOCOL_VERSION = 2;
 export declare const KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION = 1;
 export type KnowledgeSyncTable = (typeof KNOWLEDGE_SYNC_TABLES)[number];
