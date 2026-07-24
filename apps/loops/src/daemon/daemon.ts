@@ -88,6 +88,16 @@ export function daemonLogLine(message: string): string {
   return `[${new Date().toISOString()}] [loops-daemon] ${message}`;
 }
 
+// Matches CSI SGR color/style sequences (e.g. ESC[31m, ESC[0m). Older daemon
+// builds logged through `console.error`, which Bun wraps in red SGR codes under
+// a TTY/FORCE_COLOR, so historical log files hold color-polluted lines that the
+// `daemon logs` reader must strip before emitting.
+const ANSI_SGR = /\x1b\[[0-9;]*m/g;
+
+export function stripAnsi(text: string): string {
+  return text.replace(ANSI_SGR, "");
+}
+
 export function rotateDaemonLog(
   path: string = daemonLogPath(),
   maxBytes: number = DAEMON_LOG_MAX_BYTES,
@@ -116,7 +126,11 @@ export function rotateDaemonLog(
 
 function defaultDaemonLog(message: string): void {
   rotateDaemonLog();
-  console.error(daemonLogLine(message));
+  // Write directly to stderr rather than `console.error`: Bun wraps
+  // `console.error` output in red SGR codes under a TTY/FORCE_COLOR, which
+  // mis-colored every daemon log line (including non-error "succeeded"/"stopped"
+  // lines) red in the persisted log file.
+  process.stderr.write(`${daemonLogLine(message)}\n`);
 }
 
 export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {

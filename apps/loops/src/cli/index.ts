@@ -43,7 +43,7 @@ import { getStore, isCloudStore, type LoopStore } from "../lib/store/index.js";
 import { executeWorkflow, preflightWorkflow } from "../lib/workflow-runner.js";
 import { runLoopNow, tick } from "../lib/scheduler.js";
 import { daemonStatus, stopDaemon } from "../daemon/control.js";
-import { runDaemon, startDaemon } from "../daemon/daemon.js";
+import { runDaemon, startDaemon, stripAnsi } from "../daemon/daemon.js";
 import { enableStartup, installStartup } from "../daemon/install.js";
 import { normalizeGoalSpec } from "../lib/workflow-spec.js";
 import { runDoctor } from "../lib/doctor.js";
@@ -2748,14 +2748,19 @@ daemon
     assertLocalOnlyCommand("daemon logs");
     const path = daemonLogPath();
     if (!existsSync(path)) {
-      console.log("");
+      if (isJson()) console.log(JSON.stringify({ path, lines: [] }, null, 2));
+      else console.log("");
       return;
     }
     // Validate n so a bad value ('abc') errors instead of NaN -> slice(0) dumping
     // the whole log. --tail wins when both are supplied.
     const count = positiveInteger(opts.tail ?? opts.lines, opts.tail !== undefined ? "--tail" : "--lines") ?? 80;
-    const lines = readFileSync(path, "utf8").trimEnd().split("\n");
-    console.log(lines.slice(-count).join("\n"));
+    // Strip SGR color codes: older daemon builds logged through Bun's
+    // `console.error`, which wraps lines in red ANSI, so persisted logs carry
+    // color pollution that would otherwise leak into both outputs.
+    const lines = readFileSync(path, "utf8").trimEnd().split("\n").slice(-count).map(stripAnsi);
+    if (isJson()) console.log(JSON.stringify({ path, lines }, null, 2));
+    else console.log(lines.join("\n"));
   }));
 
 await program.parseAsync(process.argv);

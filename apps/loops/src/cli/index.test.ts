@@ -816,6 +816,32 @@ describe("loops CLI", () => {
     expect(bad.stderr).toContain("positive integer");
   });
 
+  test("daemon logs honors --json and strips ANSI color pollution", () => {
+    const dataDir = freshDataDir("loops-cli-daemon-logs-json-");
+    // Older daemon builds logged via Bun's console.error, which wraps every line
+    // in red SGR codes — even non-error "succeeded"/"stopped" lines.
+    const RED = "\x1b[0m\x1b[31m";
+    const RESET = "\x1b[0m";
+    writeFileSync(
+      join(dataDir, "daemon.log"),
+      [`${RED}[loops-daemon] started${RESET}`, `${RED}[loops-daemon] stopped${RESET}`].join("\n"),
+    );
+
+    // Human output: no leftover ANSI escapes.
+    const human = runCli(dataDir, ["daemon", "logs"]);
+    expect(human.status).toBe(0);
+    expect(human.stdout).not.toContain("\x1b[");
+    expect(human.stdout.trim().split("\n")).toEqual(["[loops-daemon] started", "[loops-daemon] stopped"]);
+
+    // --json: structured payload, ANSI stripped, tail honored.
+    const json = runCli(dataDir, ["--json", "daemon", "logs", "-n", "1"]);
+    expect(json.status).toBe(0);
+    expect(json.stdout).not.toContain("\x1b[");
+    const parsed = JSON.parse(json.stdout) as { path: string; lines: string[] };
+    expect(parsed.lines).toEqual(["[loops-daemon] stopped"]);
+    expect(parsed.path).toContain("daemon.log");
+  });
+
   test("mutation commands reject ambiguous loop names instead of touching the newest match", () => {
     const dataDir = freshDataDir("loops-cli-ambiguous-name-");
     let firstId = "";

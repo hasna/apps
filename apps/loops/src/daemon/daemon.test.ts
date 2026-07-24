@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { Store } from "../lib/store.js";
-import { daemonLogLine, rotateDaemonLog, runDaemon } from "./daemon.js";
+import { daemonLogLine, rotateDaemonLog, runDaemon, stripAnsi } from "./daemon.js";
 import { RESTART_INTERRUPTED_RUN_PREFIX } from "../lib/health.js";
 import { isAlive, processStartTimeMs } from "./control.js";
 import { tick } from "../lib/scheduler.js";
@@ -558,6 +558,14 @@ describe("daemon", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test("stripAnsi removes SGR color codes while preserving text", () => {
+    // Bun wraps console.error output in red SGR codes under a TTY/FORCE_COLOR,
+    // so persisted daemon logs from older builds carry this pollution.
+    expect(stripAnsi("\x1b[0m\x1b[31m[loops-daemon] stopped\x1b[0m")).toBe("[loops-daemon] stopped");
+    expect(stripAnsi("[loops-daemon] plain")).toBe("[loops-daemon] plain");
+    expect(stripAnsi("")).toBe("");
   });
 
   test("rejects a completed child result when the daemon lease was lost before finalization", async () => {
