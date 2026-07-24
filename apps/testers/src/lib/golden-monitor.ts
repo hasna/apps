@@ -4,7 +4,7 @@ import {
   listGoldenAnswers,
   createGoldenCheckResult,
   listGoldenCheckResults,
-} from "../db/golden-answers.js";
+} from "../store/index.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -81,7 +81,7 @@ export async function checkGoldenAnswer(
 
   // Drift detection: compare score vs 7-day average
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-  const recentResults = listGoldenCheckResults(golden.id, { since: sevenDaysAgo });
+  const recentResults = await listGoldenCheckResults(golden.id, { since: sevenDaysAgo });
 
   let driftDetected = false;
   if (recentResults.length >= 3) {
@@ -109,7 +109,7 @@ export async function checkGoldenAnswer(
 export async function runGoldenMonitor(
   options: { projectId?: string; baseUrl: string; judgeModel?: string }
 ): Promise<GoldenMonitorResult> {
-  const goldens = listGoldenAnswers({
+  const goldens = await listGoldenAnswers({
     projectId: options.projectId,
     enabled: true,
   });

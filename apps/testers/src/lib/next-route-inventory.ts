@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join, relative, resolve } from "node:path";
-import { upsertScenario } from "../db/scenarios.js";
-import { createTestingWorkflow, listTestingWorkflows, updateTestingWorkflow } from "../db/workflows.js";
+import { upsertScenario } from "../store/index.js";
+import { createTestingWorkflow, listTestingWorkflows, updateTestingWorkflow } from "../store/index.js";
 import { defaultRouteFixturesForParams } from "./route-fixtures.js";
 import type {
   Assertion,
@@ -295,9 +295,9 @@ function scenarioInputForNextRouteAction(
   };
 }
 
-export function importNextRouteInventory(
+export async function importNextRouteInventory(
   options: ImportNextRouteInventoryOptions,
-): ImportNextRouteInventoryResult {
+): Promise<ImportNextRouteInventoryResult> {
   const inventory = discoverNextRouteInventory(options);
   let created = 0;
   let updated = 0;
@@ -308,7 +308,7 @@ export function importNextRouteInventory(
 
   if (options.createScenarios) {
     for (const item of inventory.items) {
-      const result = upsertScenario(scenarioInputForNextRoute(item, options.projectId));
+      const result = await upsertScenario(scenarioInputForNextRoute(item, options.projectId));
       scenarios.push(result.scenario);
       if (result.action === "created") created++;
       else if (result.action === "updated") updated++;
@@ -319,7 +319,7 @@ export function importNextRouteInventory(
   if (options.createActionScenarios) {
     for (const item of inventory.items) {
       for (const input of scenarioInputsForNextRouteActions(item, options.projectId)) {
-        const result = upsertScenario(input);
+        const result = await upsertScenario(input);
         scenarios.push(result.scenario);
         actionScenarios.push(result.scenario);
         if (result.action === "created") created++;
@@ -330,20 +330,20 @@ export function importNextRouteInventory(
   }
 
   if (options.createWorkflows) {
-    workflows.push(...upsertRouteInventoryWorkflows(inventory, options));
+    workflows.push(...await upsertRouteInventoryWorkflows(inventory, options));
   }
 
   if (options.createActionWorkflows) {
-    workflows.push(...upsertRouteInventoryActionWorkflows(inventory, options));
+    workflows.push(...await upsertRouteInventoryActionWorkflows(inventory, options));
   }
 
   return { inventory, created, updated, deduped, scenarios, actionScenarios, workflows };
 }
 
-function upsertRouteInventoryWorkflows(
+async function upsertRouteInventoryWorkflows(
   inventory: NextRouteInventory,
   options: ImportNextRouteInventoryOptions,
-): TestingWorkflow[] {
+): Promise<TestingWorkflow[]> {
   const workflows: TestingWorkflow[] = [];
   const categories = Object.keys(inventory.categories).sort();
   for (const category of categories) {
@@ -358,7 +358,7 @@ function upsertRouteInventoryWorkflows(
         sandboxSyncStrategy: "rsync",
         ...options.workflowExecution,
       };
-      const existing = listTestingWorkflows({ projectId: options.projectId, enabled: undefined })
+      const existing = (await listTestingWorkflows({ projectId: options.projectId, enabled: undefined }))
         .find((workflow) => workflow.name === name);
       const input = {
         name,
@@ -367,19 +367,19 @@ function upsertRouteInventoryWorkflows(
         scenarioFilter: { tags: scenarioTags },
         execution,
       };
-      workflows.push(existing ? updateTestingWorkflow(existing.id, input) : createTestingWorkflow(input));
+      workflows.push(existing ? await updateTestingWorkflow(existing.id, input) : await createTestingWorkflow(input));
     }
   }
   return workflows;
 }
 
-function upsertRouteInventoryActionWorkflows(
+async function upsertRouteInventoryActionWorkflows(
   inventory: NextRouteInventory,
   options: ImportNextRouteInventoryOptions,
-): TestingWorkflow[] {
+): Promise<TestingWorkflow[]> {
   const workflows: TestingWorkflow[] = [];
   const grouping = options.actionWorkflowGrouping ?? "route";
-  const existingWorkflows = listTestingWorkflows({ projectId: options.projectId, enabled: undefined });
+  const existingWorkflows = await listTestingWorkflows({ projectId: options.projectId, enabled: undefined });
 
   if (grouping === "area-kind") {
     const keys = new Set<string>();
@@ -392,7 +392,7 @@ function upsertRouteInventoryActionWorkflows(
       const [category, actionKind] = key.split("|") as [string, NextRouteActionKind];
       const name = `Next action inventory ${category} ${actionKind}`;
       const scenarioTags = ["next-action", `area:${category}`, `action:${actionKind}`];
-      workflows.push(upsertTestingWorkflow(existingWorkflows, name, {
+      workflows.push(await upsertTestingWorkflow(existingWorkflows, name, {
         name,
         description: `Source-discovered ${actionKind} action coverage for ${category} routes.`,
         projectId: options.projectId,
@@ -405,7 +405,7 @@ function upsertRouteInventoryActionWorkflows(
 
   if (grouping === "action") {
     for (const item of inventory.items.filter((route) => route.actions.length > 0)) {
-      item.actions.forEach((action, index) => {
+      for (const [index, action] of item.actions.entries()) {
         const name = `Next action inventory ${item.kind} ${item.routePath} #${index + 1} ${action.kind} ${action.label}`;
         const scenarioTags = [
           "next-action",
@@ -414,14 +414,14 @@ function upsertRouteInventoryActionWorkflows(
           `route-path:${item.routePath}`,
           `action-ordinal:${index + 1}`,
         ];
-        workflows.push(upsertTestingWorkflow(existingWorkflows, name, {
+        workflows.push(await upsertTestingWorkflow(existingWorkflows, name, {
           name,
           description: `Source-discovered action #${index + 1} coverage for ${item.kind} route ${item.routePath}: ${action.kind} "${action.label}".`,
           projectId: options.projectId,
           scenarioFilter: { tags: scenarioTags },
           execution: workflowExecutionFromOptions(options),
         }));
-      });
+      }
     }
     return workflows;
   }
@@ -429,7 +429,7 @@ function upsertRouteInventoryActionWorkflows(
   for (const item of inventory.items.filter((route) => route.actions.length > 0)) {
     const name = `Next action inventory ${item.kind} ${item.routePath}`;
     const scenarioTags = ["next-action", `route:${item.kind}`, `route-path:${item.routePath}`];
-    workflows.push(upsertTestingWorkflow(existingWorkflows, name, {
+    workflows.push(await upsertTestingWorkflow(existingWorkflows, name, {
       name,
       description: `Source-discovered action coverage for ${item.kind} route ${item.routePath}.`,
       projectId: options.projectId,
@@ -451,11 +451,11 @@ function workflowExecutionFromOptions(options: ImportNextRouteInventoryOptions):
   };
 }
 
-function upsertTestingWorkflow(
+async function upsertTestingWorkflow(
   existingWorkflows: TestingWorkflow[],
   name: string,
   input: Parameters<typeof createTestingWorkflow>[0],
-): TestingWorkflow {
+): Promise<TestingWorkflow> {
   const existing = existingWorkflows.find((workflow) => workflow.name === name);
   return existing ? updateTestingWorkflow(existing.id, input) : createTestingWorkflow(input);
 }

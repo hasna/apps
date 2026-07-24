@@ -11,9 +11,9 @@
  */
 
 import { join } from "node:path";
-import { createRun, getRun, updateRun } from "../db/runs.js";
-import { listScenarios } from "../db/scenarios.js";
-import { getResultsByRun } from "../db/results.js";
+import { createRun, getRun, updateRun } from "../store/index.js";
+import { listScenarios } from "../store/index.js";
+import { getResultsByRun } from "../store/index.js";
 import { resolveModel } from "./ai-client.js";
 import { loadConfig } from "./config.js";
 import type { Run } from "../types/index.js";
@@ -72,26 +72,26 @@ export async function runWithArmy(options: ArmyRunOptions): Promise<ArmyRunResul
   // Resolve scenarios
   let scenarios;
   if (options.scenarioIds && options.scenarioIds.length > 0) {
-    const all = listScenarios({ projectId: options.projectId });
+    const all = await listScenarios({ projectId: options.projectId });
     scenarios = all.filter((s) => options.scenarioIds!.includes(s.id) || options.scenarioIds!.includes(s.shortId));
   } else {
-    scenarios = listScenarios({ projectId: options.projectId, tags: options.tags });
+    scenarios = await listScenarios({ projectId: options.projectId, tags: options.tags });
   }
 
   if (scenarios.length === 0) {
-    const run = createRun({ url: options.url, model, projectId: options.projectId });
-    updateRun(run.id, { status: "passed", total: 0, finished_at: new Date().toISOString() });
+    const run = await createRun({ url: options.url, model, projectId: options.projectId });
+    await updateRun(run.id, { status: "passed", total: 0, finished_at: new Date().toISOString() });
     return { runId: run.id, workerCount: 0, scenarioCount: 0, status: "dispatched", message: "No scenarios found" };
   }
 
   // Create a shared run record that all workers will populate
-  const run = createRun({
+  const run = await createRun({
     url: options.url,
     model,
     parallel: workers * (options.parallel ?? 2),
     projectId: options.projectId,
   });
-  updateRun(run.id, { status: "running", total: scenarios.length });
+  await updateRun(run.id, { status: "running", total: scenarios.length });
 
   // Split scenarios across workers
   const actualWorkers = Math.min(workers, scenarios.length);
@@ -131,18 +131,18 @@ export async function runWithArmy(options: ArmyRunOptions): Promise<ArmyRunResul
 
   // Monitor in background — update run status when all workers finish
   Promise.all(workerPromises).then(async () => {
-    const results = getResultsByRun(run.id);
+    const results = await getResultsByRun(run.id);
     const passed = results.filter((r) => r.status === "passed").length;
     const failed = results.filter((r) => r.status !== "passed" && r.status !== "skipped").length;
-    updateRun(run.id, {
+    await updateRun(run.id, {
       status: failed > 0 ? "failed" : "passed",
       passed,
       failed,
       total: scenarios.length,
       finished_at: new Date().toISOString(),
     });
-  }).catch(() => {
-    updateRun(run.id, { status: "failed", finished_at: new Date().toISOString() });
+  }).catch(async () => {
+    await updateRun(run.id, { status: "failed", finished_at: new Date().toISOString() });
   });
 
   return {
@@ -160,7 +160,7 @@ export async function runWithArmy(options: ArmyRunOptions): Promise<ArmyRunResul
 export async function waitForArmyRun(runId: string, timeoutMs = 600_000): Promise<Run> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const run = getRun(runId);
+    const run = await getRun(runId);
     if (!run) throw new Error(`Run ${runId} not found`);
     if (["passed", "failed", "cancelled"].includes(run.status)) return run;
     await new Promise((r) => setTimeout(r, 3000));

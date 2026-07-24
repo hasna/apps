@@ -1,5 +1,11 @@
-import { getDatabase } from "../db/database.js";
-import { listRuns } from "../db/runs.js";
+import {
+  listRuns,
+  getResultsByRun,
+  listScenarios,
+  listScanIssues,
+  listGoldenAnswers,
+  listGoldenCheckResults,
+} from "../store/index.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -25,7 +31,7 @@ export interface ComplianceReport {
   qualityMetrics: {
     evalScenariosRun: number;
     averageEvalScore: number;
-    a11yViolationsCritical: number;
+    criticalIssues: number;
     flakyScenarioCount: number;
   };
 
@@ -60,112 +66,71 @@ async function collectComplianceData(options: {
   periodStart: string;
   periodEnd: string;
 }): Promise<Omit<ComplianceReport, "attestation">> {
-  const db = getDatabase();
+  const { projectId, periodStart, periodEnd } = options;
 
   // ─── Risk Management: runs in period ───────────────────────────────────────
-  const runsInPeriod = listRuns({
-    projectId: options.projectId,
-    limit: 10000,
-  }).filter((r) => r.startedAt >= options.periodStart && r.startedAt <= options.periodEnd);
+  const allRuns = await listRuns({ projectId, limit: 10000 });
+  const runsInPeriod = allRuns.filter(
+    (r) => r.startedAt >= periodStart && r.startedAt <= periodEnd,
+  );
 
   const totalRunsInPeriod = runsInPeriod.length;
   const passedRuns = runsInPeriod.filter((r) => r.status === "passed").length;
   const averagePassRate = totalRunsInPeriod > 0 ? passedRuns / totalRunsInPeriod : 1;
-
-  // Critical failures = runs that failed with high or critical priority scenarios
   const criticalFailures = runsInPeriod.filter((r) => r.status === "failed").length;
 
   // ─── Safety Checks: scan issues ───────────────────────────────────────────
-  const scanConditions: string[] = ["first_seen_at >= ?", "first_seen_at <= ?"];
-  const scanParams: (string | null)[] = [options.periodStart, options.periodEnd];
+  const scanIssues = (await listScanIssues({ projectId })).filter(
+    (i) => i.firstSeenAt >= periodStart && i.firstSeenAt <= periodEnd,
+  );
 
-  if (options.projectId) {
-    scanConditions.push("project_id = ?");
-    scanParams.push(options.projectId);
-  }
-
-  const scanIssues = db
-    .query(`SELECT type, severity FROM scan_issues WHERE ${scanConditions.join(" AND ")}`)
-    .all(...scanParams) as Array<{ type: string; severity: string }>;
-
-  const injectionProbesRun = scanIssues.filter((i) =>
-    i.type === "injection" || i.type === "sql_injection" || i.type === "xss"
-  ).length;
+  const injectionProbesRun = scanIssues.filter((i) => i.type === "injection").length;
   const injectionVulnsFound = scanIssues.filter(
-    (i) => (i.type === "injection" || i.type === "xss") && (i.severity === "high" || i.severity === "critical")
+    (i) => i.type === "injection" && (i.severity === "high" || i.severity === "critical"),
   ).length;
-  const piiLeaksDetected = scanIssues.filter((i) => i.type === "pii" || i.type === "pii_leak").length;
+  const piiLeaksDetected = scanIssues.filter((i) => i.type === "pii_leak").length;
 
-  // Golden answer drift events
+  // Golden answer drift events in period
+  const goldenAnswers = await listGoldenAnswers({ projectId });
   let goldenAnswerDriftEvents = 0;
-  try {
-    const driftRows = db
-      .query(
-        `SELECT COUNT(*) as count FROM golden_check_results WHERE drift_detected = 1 AND created_at >= ? AND created_at <= ?`
-      )
-      .get(options.periodStart, options.periodEnd) as { count: number } | null;
-    goldenAnswerDriftEvents = driftRows?.count ?? 0;
-  } catch {
-    // golden_check_results table may not exist in older DBs
-    goldenAnswerDriftEvents = 0;
+  for (const golden of goldenAnswers) {
+    const checks = await listGoldenCheckResults(golden.id, { since: periodStart });
+    goldenAnswerDriftEvents += checks.filter(
+      (c) => c.driftDetected && c.createdAt <= periodEnd,
+    ).length;
   }
 
   // ─── Quality Metrics: eval scenarios and flakiness ────────────────────────
+  const evalScenarioIds = new Set(
+    (await listScenarios({ projectId }))
+      .filter((s) => s.scenarioType === "eval")
+      .map((s) => s.id),
+  );
 
-  // Results in period for eval scenarios
-  const runIds = runsInPeriod.map((r) => r.id);
   let evalScenariosRun = 0;
   let totalEvalScore = 0;
-  let a11yViolationsCritical = 0;
-  let flakyScenarioCount = 0;
+  const flakyScenarioIds = new Set<string>();
 
-  if (runIds.length > 0) {
-    const placeholders = runIds.map(() => "?").join(", ");
-
-    // Eval scenario results (metadata contains eval score)
-    const evalResults = db
-      .query(
-        `SELECT r.status, r.metadata FROM results r
-         JOIN scenarios s ON r.scenario_id = s.id
-         WHERE r.run_id IN (${placeholders}) AND s.scenario_type = 'eval'`
-      )
-      .all(...runIds) as Array<{ status: string; metadata: string | null }>;
-
-    evalScenariosRun = evalResults.length;
-    for (const er of evalResults) {
-      try {
-        const meta = er.metadata ? JSON.parse(er.metadata) as Record<string, unknown> : null;
-        const score = typeof meta?.score === "number" ? meta.score : er.status === "passed" ? 1 : 0;
-        totalEvalScore += score;
-      } catch {
-        totalEvalScore += er.status === "passed" ? 1 : 0;
-      }
+  for (const run of runsInPeriod) {
+    const results = await getResultsByRun(run.id);
+    for (const result of results) {
+      if (result.status === "flaky") flakyScenarioIds.add(result.scenarioId);
+      if (!evalScenarioIds.has(result.scenarioId)) continue;
+      evalScenariosRun += 1;
+      const score = result.metadata?.score;
+      totalEvalScore +=
+        typeof score === "number" ? score : result.status === "passed" ? 1 : 0;
     }
-
-    // A11y violations from scan issues
-    const a11yRows = db
-      .query(
-        `SELECT COUNT(*) as count FROM scan_issues WHERE type = 'a11y' AND severity = 'critical' AND first_seen_at >= ? AND first_seen_at <= ?`
-      )
-      .get(options.periodStart, options.periodEnd) as { count: number } | null;
-    a11yViolationsCritical = a11yRows?.count ?? 0;
-
-    // Flaky scenarios = results with status 'flaky' in this period
-    const flakyRows = db
-      .query(
-        `SELECT COUNT(DISTINCT scenario_id) as count FROM results WHERE run_id IN (${placeholders}) AND status = 'flaky'`
-      )
-      .get(...runIds) as { count: number } | null;
-    flakyScenarioCount = flakyRows?.count ?? 0;
   }
 
   const averageEvalScore = evalScenariosRun > 0 ? totalEvalScore / evalScenariosRun : 1;
+  const criticalIssues = scanIssues.filter((i) => i.severity === "critical").length;
 
   return {
     generatedAt: new Date().toISOString(),
-    periodStart: options.periodStart,
-    periodEnd: options.periodEnd,
-    projectId: options.projectId,
+    periodStart,
+    periodEnd,
+    projectId,
 
     riskManagement: {
       totalRunsInPeriod,
@@ -183,8 +148,8 @@ async function collectComplianceData(options: {
     qualityMetrics: {
       evalScenariosRun,
       averageEvalScore,
-      a11yViolationsCritical,
-      flakyScenarioCount,
+      criticalIssues,
+      flakyScenarioCount: flakyScenarioIds.size,
     },
   };
 }
@@ -228,7 +193,7 @@ function markdownReport(report: ComplianceReport): string {
     `|--------|-------|`,
     `| Eval scenarios run | ${report.qualityMetrics.evalScenariosRun} |`,
     `| Average eval score | ${pct(report.qualityMetrics.averageEvalScore)} |`,
-    `| A11y critical violations | ${report.qualityMetrics.a11yViolationsCritical} |`,
+    `| Critical issues | ${report.qualityMetrics.criticalIssues} |`,
     `| Flaky scenario count | ${report.qualityMetrics.flakyScenarioCount} |`,
     "",
     "---",

@@ -1,8 +1,8 @@
 import chalk from "chalk";
 import type { Run, Result, Screenshot } from "../types/index.js";
-import { listScreenshots } from "../db/screenshots.js";
-import { getScenario } from "../db/scenarios.js";
-import { getDatabase } from "../db/database.js";
+import { listScreenshots } from "../store/index.js";
+import { getScenario } from "../store/index.js";
+import { getScenarioResultStats } from "../store/index.js";
 import { pageItems, paginationHint, truncateText } from "./compact-output.js";
 
 // ─── Color/emoji helpers ─────────────────────────────────────────────────────
@@ -21,7 +21,7 @@ export interface ReportOptions {
   compactFooter?: boolean;
 }
 
-export function formatTerminal(run: Run, results: Result[], options?: ReportOptions): string {
+export async function formatTerminal(run: Run, results: Result[], options?: ReportOptions): Promise<string> {
   const lines: string[] = [];
   const failedOnly = options?.failedOnly ?? false;
   const verbose = options?.verbose ?? false;
@@ -57,11 +57,11 @@ export function formatTerminal(run: Run, results: Result[], options?: ReportOpti
   }
 
   for (const result of page.items) {
-    const scenario = getScenario(result.scenarioId);
+    const scenario = await getScenario(result.scenarioId);
     const name = scenario
       ? `${scenario.shortId}: ${verbose ? scenario.name : truncateText(scenario.name, 90)}`
       : result.scenarioId.slice(0, 8);
-    const screenshots = listScreenshots(result.id);
+    const screenshots = await listScreenshots(result.id);
     const duration = `${(result.durationMs / 1000).toFixed(1)}s`;
     const screenshotCount = screenshots.length;
 
@@ -149,7 +149,7 @@ export function formatActionableSummary(run: Run, results: Result[]): string {
   return lines.join("\n");
 }
 
-export function formatJSON(run: Run, results: Result[]): string {
+export async function formatJSON(run: Run, results: Result[]): Promise<string> {
   const output = {
     run: {
       id: run.id,
@@ -164,9 +164,9 @@ export function formatJSON(run: Run, results: Result[]): string {
       startedAt: run.startedAt,
       finishedAt: run.finishedAt,
     },
-    results: results.map((r) => {
-      const scenario = getScenario(r.scenarioId);
-      const screenshots = listScreenshots(r.id);
+    results: await Promise.all(results.map(async (r) => {
+      const scenario = await getScenario(r.scenarioId);
+      const screenshots = await listScreenshots(r.id);
       return {
         id: r.id,
         scenarioId: r.scenarioId,
@@ -187,7 +187,7 @@ export function formatJSON(run: Run, results: Result[]): string {
           filePath: s.filePath,
         })),
       };
-    }),
+    })),
     summary: {
       total: run.total,
       passed: run.passed,
@@ -248,29 +248,19 @@ export interface ScenarioRunStats {
   passRate: string; // e.g. "8/10"
 }
 
-export function getScenarioRunStats(scenarioId: string): ScenarioRunStats {
-  const db = getDatabase();
-
-  // Get last result for this scenario
-  const lastRow = db.query(
-    "SELECT status FROM results WHERE scenario_id = ? ORDER BY created_at DESC LIMIT 1"
-  ).get(scenarioId) as { status: string } | null;
-
-  // Get all-time pass/total count
-  const statsRow = db.query(
-    "SELECT COUNT(*) as total, SUM(CASE WHEN status = 'passed' THEN 1 ELSE 0 END) as passed FROM results WHERE scenario_id = ?"
-  ).get(scenarioId) as { total: number; passed: number } | null;
-
+export async function getScenarioRunStats(scenarioId: string): Promise<ScenarioRunStats> {
+  // Routed through the Store: local SQLite locally, /v1 aggregate in cloud mode.
+  const stats = await getScenarioResultStats(scenarioId);
   return {
-    lastStatus: lastRow ? (lastRow.status as ScenarioRunStats["lastStatus"]) : null,
-    passRate: statsRow && statsRow.total > 0 ? `${statsRow.passed}/${statsRow.total}` : "—",
+    lastStatus: stats.lastStatus as ScenarioRunStats["lastStatus"],
+    passRate: stats.total > 0 ? `${stats.passed}/${stats.total}` : "—",
   };
 }
 
-export function formatScenarioList(
+export async function formatScenarioList(
   scenarios: Array<{ id?: string; shortId: string; name: string; priority: string; tags: string[]; flakinessScore?: number | null; recentRunCount?: number }>,
   options?: { total?: number; limit?: number; offset?: number; verbose?: boolean },
-): string {
+): Promise<string> {
   const lines: string[] = [];
   lines.push("");
   lines.push(chalk.bold("  Scenarios"));
@@ -281,6 +271,16 @@ export function formatScenarioList(
     lines.push("");
     return lines.join("\n");
   }
+
+  // Fetch per-scenario run stats through the Store, in parallel.
+  const statsById = new Map<string, ScenarioRunStats>();
+  await Promise.all(
+    scenarios
+      .filter((s): s is typeof s & { id: string } => Boolean(s.id))
+      .map(async (s) => {
+        statsById.set(s.id, await getScenarioRunStats(s.id));
+      }),
+  );
 
   for (const s of scenarios) {
     const priorityColor = s.priority === "critical"
@@ -298,8 +298,8 @@ export function formatScenarioList(
     // Run stats (last status + pass rate)
     let lastStatusIcon = chalk.dim("—");
     let passRateStr = chalk.dim("—");
-    if (s.id) {
-      const stats = getScenarioRunStats(s.id);
+    const stats = s.id ? statsById.get(s.id) : undefined;
+    if (stats) {
       if (stats.lastStatus === "passed") lastStatusIcon = chalk.green("✓");
       else if (stats.lastStatus === "failed") lastStatusIcon = chalk.red("✗");
       else if (stats.lastStatus === "error") lastStatusIcon = chalk.yellow("!");
@@ -321,9 +321,9 @@ export function formatScenarioList(
   return lines.join("\n");
 }
 
-export function formatResultDetail(result: Result, screenshots: Screenshot[]): string {
+export async function formatResultDetail(result: Result, screenshots: Screenshot[]): Promise<string> {
   const lines: string[] = [];
-  const scenario = getScenario(result.scenarioId);
+  const scenario = await getScenario(result.scenarioId);
 
   lines.push("");
   lines.push(chalk.bold(`  Result ${result.id.slice(0, 8)}`));

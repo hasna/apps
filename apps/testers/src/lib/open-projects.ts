@@ -1,4 +1,4 @@
-import { createProject as createTesterProject, getProjectByPath, listProjects } from "../db/projects.js";
+import { createProject as createTesterProject, getProjectByPath, listProjects } from "../store/index.js";
 import type { Project } from "../types/index.js";
 
 export interface OpenProjectsMirrorResult {
@@ -28,8 +28,8 @@ export async function importFromOpenProjects(ref: string): Promise<OpenProjectsM
   const path = getOpenProjectPath(openProject);
   if (!path) throw new Error(`open-projects project has no primary path: ${ref}`);
 
-  const existing = getProjectByPath(path)
-    ?? listProjects().find((project) => project.settings.openProjectsProjectId === openProject.id);
+  const existing = (await getProjectByPath(path))
+    ?? (await listProjects()).find((project) => project.settings.openProjectsProjectId === openProject.id);
   if (existing) {
     return {
       project: existing,
@@ -38,7 +38,7 @@ export async function importFromOpenProjects(ref: string): Promise<OpenProjectsM
     };
   }
 
-  const project = createTesterProject({
+  const project = await createTesterProject({
     name: openProject.name,
     path,
     description: openProject.description ?? undefined,
@@ -57,7 +57,7 @@ export async function importFromOpenProjects(ref: string): Promise<OpenProjectsM
 }
 
 export async function exportToOpenProjects(projectIdOrName: string): Promise<OpenProjectsMirrorResult> {
-  const project = listProjects().find((item) => (
+  const project = (await listProjects()).find((item) => (
     item.id === projectIdOrName
     || item.id.startsWith(projectIdOrName)
     || item.name === projectIdOrName

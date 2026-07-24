@@ -17,7 +17,7 @@ describe("compact terminal report output", () => {
     closeDatabase();
   });
 
-  test("caps result rows by default and discloses full output with verbose", () => {
+  test("caps result rows by default and discloses full output with verbose", async () => {
     const run = createRun({
       url: "https://example.test/run",
       model: "model-compact",
@@ -45,12 +45,12 @@ describe("compact terminal report output", () => {
       failed: 0,
     });
 
-    const compact = formatTerminal(completedRun, results);
+    const compact = await formatTerminal(completedRun, results);
     expect(compact).toContain("Showing 1-50 of 55");
     expect(compact).toContain("Compact output");
     expect(compact).not.toContain("TAIL_RESULT_ROW");
 
-    const verbose = formatTerminal(completedRun, results, { verbose: true });
+    const verbose = await formatTerminal(completedRun, results, { verbose: true });
     expect(verbose).toContain("TAIL_RESULT_ROW");
     expect(verbose).not.toContain("Compact output");
   });

@@ -1,5 +1,5 @@
 import type { Run, Result } from "../types/index.js";
-import { getScenario } from "../db/scenarios.js";
+import { getScenario } from "../store/index.js";
 
 export function generateGitHubActionsWorkflow(): string {
   return `name: AI QA Tests
@@ -46,7 +46,7 @@ jobs:
  *   - Optional link to a dashboard
  *   - Footer attribution
  */
-export function formatPRComment(run: Run, results: Result[], dashboardUrl?: string): string {
+export async function formatPRComment(run: Run, results: Result[], dashboardUrl?: string): Promise<string> {
   const icon = run.status === "passed" ? "✅" : run.status === "failed" ? "❌" : "⚠️";
   const passRate = run.total > 0 ? Math.round((run.passed / run.total) * 100) : 0;
 
@@ -57,15 +57,15 @@ export function formatPRComment(run: Run, results: Result[], dashboardUrl?: stri
   });
 
   const MAX_ROWS = 20;
-  const rows = ordered.slice(0, MAX_ROWS).map((r) => {
+  const rows = (await Promise.all(ordered.slice(0, MAX_ROWS).map(async (r) => {
     const rowIcon = r.status === "passed" ? "✅"
       : r.status === "failed" ? "❌"
       : r.status === "error" ? "⚠️"
       : r.status === "flaky" ? "🟡"
       : "⏭️";
     const dur = r.durationMs > 0 ? `${(r.durationMs / 1000).toFixed(1)}s` : "—";
-    const scenario = (() => {
-      try { return getScenario(r.scenarioId); } catch { return null; }
+    const scenario = await (async () => {
+      try { return await getScenario(r.scenarioId); } catch { return null; }
     })();
     const name = scenario ? scenario.name : r.scenarioId.slice(0, 8);
     // Escape pipe chars so markdown tables don't break on scenario names containing "|".
@@ -75,7 +75,7 @@ export function formatPRComment(run: Run, results: Result[], dashboardUrl?: stri
       ? ` ${errSource.replace(/\s+/g, " ").slice(0, 140).replace(/\|/g, "\\|")}`
       : "";
     return `| ${rowIcon} | ${safeName} | ${r.status} | ${dur} |${err} |`;
-  }).join("\n");
+  }))).join("\n");
 
   const truncated = results.length > MAX_ROWS ? `\n_...and ${results.length - MAX_ROWS} more_` : "";
   const dashLink = dashboardUrl ? `\n\n[View full report →](${dashboardUrl}/runs/${run.id})` : "";
@@ -133,7 +133,7 @@ export async function postGitHubComment(
   const repo = process.env["GITHUB_REPOSITORY"];
   if (!repo) return false;
 
-  const body = formatPRComment(run, results, options?.dashboardUrl ?? process.env["TESTERS_DASHBOARD_URL"]);
+  const body = await formatPRComment(run, results, options?.dashboardUrl ?? process.env["TESTERS_DASHBOARD_URL"]);
   const apiUrl = `https://api.github.com/repos/${repo}/issues/${prNumber}/comments`;
 
   try {

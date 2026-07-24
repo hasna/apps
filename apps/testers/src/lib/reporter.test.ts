@@ -57,44 +57,44 @@ beforeAll(() => {
 });
 
 describe("formatJSON", () => {
-  it("returns valid JSON", () => {
-    const json = formatJSON(testRun, [testResult]);
+  it("returns valid JSON", async () => {
+    const json = await formatJSON(testRun, [testResult]);
     expect(() => JSON.parse(json)).not.toThrow();
   });
 
-  it("has correct top-level structure", () => {
-    const json = formatJSON(testRun, [testResult]);
+  it("has correct top-level structure", async () => {
+    const json = await formatJSON(testRun, [testResult]);
     const parsed = JSON.parse(json);
     expect(parsed).toHaveProperty("run");
     expect(parsed).toHaveProperty("results");
     expect(parsed).toHaveProperty("summary");
   });
 
-  it("includes run metadata", () => {
-    const json = formatJSON(testRun, [testResult]);
+  it("includes run metadata", async () => {
+    const json = await formatJSON(testRun, [testResult]);
     const parsed = JSON.parse(json);
     expect(parsed.run.id).toBe(testRun.id);
     expect(parsed.run.url).toBe("http://localhost:3000");
     expect(parsed.run.model).toBe("claude-haiku-4-5-20251001");
   });
 
-  it("includes results with scenario info", () => {
-    const json = formatJSON(testRun, [testResult]);
+  it("includes results with scenario info", async () => {
+    const json = await formatJSON(testRun, [testResult]);
     const parsed = JSON.parse(json);
     expect(parsed.results).toHaveLength(1);
     expect(parsed.results[0].scenarioName).toBe("Login test");
     expect(parsed.results[0].status).toBe("passed");
   });
 
-  it("includes screenshots in results", () => {
-    const json = formatJSON(testRun, [testResult]);
+  it("includes screenshots in results", async () => {
+    const json = await formatJSON(testRun, [testResult]);
     const parsed = JSON.parse(json);
     expect(parsed.results[0].screenshots).toHaveLength(1);
     expect(parsed.results[0].screenshots[0].action).toBe("navigate");
   });
 
-  it("includes summary with totals", () => {
-    const json = formatJSON(testRun, [testResult]);
+  it("includes summary with totals", async () => {
+    const json = await formatJSON(testRun, [testResult]);
     const parsed = JSON.parse(json);
     expect(parsed.summary.total).toBe(testRun.total);
     expect(parsed.summary.passed).toBe(testRun.passed);
@@ -105,34 +105,34 @@ describe("formatJSON", () => {
 });
 
 describe("getExitCode", () => {
-  it("returns 0 for passed run", () => {
+  it("returns 0 for passed run", async () => {
     const run = { ...testRun, status: "passed" } as Run;
     expect(getExitCode(run)).toBe(0);
   });
 
-  it("returns 1 for failed run", () => {
+  it("returns 1 for failed run", async () => {
     const run = { ...testRun, status: "failed" } as Run;
     expect(getExitCode(run)).toBe(1);
   });
 
-  it("returns 2 for cancelled run", () => {
+  it("returns 2 for cancelled run", async () => {
     const run = { ...testRun, status: "cancelled" } as Run;
     expect(getExitCode(run)).toBe(2);
   });
 
-  it("returns 2 for pending run", () => {
+  it("returns 2 for pending run", async () => {
     const run = { ...testRun, status: "pending" } as Run;
     expect(getExitCode(run)).toBe(2);
   });
 
-  it("returns 2 for running run", () => {
+  it("returns 2 for running run", async () => {
     const run = { ...testRun, status: "running" } as Run;
     expect(getExitCode(run)).toBe(2);
   });
 });
 
 describe("formatSummary", () => {
-  it("includes passed count", () => {
+  it("includes passed count", async () => {
     const run = {
       ...testRun,
       status: "passed" as const,
@@ -145,7 +145,7 @@ describe("formatSummary", () => {
     expect(summary).toContain("3 passed");
   });
 
-  it("includes failed count when there are failures", () => {
+  it("includes failed count when there are failures", async () => {
     const run = {
       ...testRun,
       status: "failed" as const,
@@ -159,7 +159,7 @@ describe("formatSummary", () => {
     expect(summary).toContain("1 failed");
   });
 
-  it("includes total count", () => {
+  it("includes total count", async () => {
     const run = {
       ...testRun,
       status: "passed" as const,
@@ -172,7 +172,7 @@ describe("formatSummary", () => {
     expect(summary).toContain("5 total");
   });
 
-  it("shows 'running' when no finishedAt", () => {
+  it("shows 'running' when no finishedAt", async () => {
     const run = {
       ...testRun,
       status: "running" as const,

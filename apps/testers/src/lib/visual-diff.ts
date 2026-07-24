@@ -1,11 +1,14 @@
 import { readFileSync, existsSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
 import chalk from "chalk";
-import { listScreenshots } from "../db/screenshots.js";
-import { getResultsByRun } from "../db/results.js";
-import { getRun, updateRun } from "../db/runs.js";
-import { getScenario } from "../db/scenarios.js";
-import { getDatabase } from "../db/database.js";
+import {
+  listScreenshots,
+  getResultsByRun,
+  getRun,
+  updateRun,
+  listRuns,
+  getScenario,
+} from "../store/index.js";
 import type { Run } from "../types/index.js";
 
 export interface VisualDiffResult {
@@ -23,42 +26,36 @@ const DEFAULT_THRESHOLD = 0.1; // 0.1% pixel difference
 /**
  * Mark a run as the visual baseline. Unsets any previous baseline for the same project.
  */
-export function setBaseline(runId: string): void {
-  const run = getRun(runId);
+export async function setBaseline(runId: string): Promise<void> {
+  const run = await getRun(runId);
   if (!run) {
     throw new Error(`Run not found: ${runId}`);
   }
 
-  const db = getDatabase();
-
-  // Unset previous baselines for the same project (or all if no project)
-  if (run.projectId) {
-    db.query("UPDATE runs SET is_baseline = 0 WHERE project_id = ? AND is_baseline = 1").run(run.projectId);
-  } else {
-    db.query("UPDATE runs SET is_baseline = 0 WHERE project_id IS NULL AND is_baseline = 1").run();
+  // Unset previous baselines in the same scope: the run's project, or the set of
+  // project-less runs when this run has no project. Routed through the Store.
+  const scope = run.projectId
+    ? await listRuns({ projectId: run.projectId })
+    : (await listRuns()).filter((r) => r.projectId === null);
+  for (const prev of scope) {
+    if (prev.isBaseline && prev.id !== run.id) {
+      await updateRun(prev.id, { is_baseline: 0 });
+    }
   }
 
   // Set this run as baseline
-  updateRun(run.id, { is_baseline: 1 });
+  await updateRun(run.id, { is_baseline: 1 });
 }
 
 /**
  * Get the most recent baseline run, optionally filtered by project.
  */
-export function getBaseline(projectId?: string): Run | null {
-  const db = getDatabase();
-  let row;
-  if (projectId) {
-    row = db.query("SELECT * FROM runs WHERE is_baseline = 1 AND project_id = ? ORDER BY started_at DESC LIMIT 1").get(projectId);
-  } else {
-    row = db.query("SELECT * FROM runs WHERE is_baseline = 1 ORDER BY started_at DESC LIMIT 1").get();
-  }
-
-  if (!row) return null;
-
-  // Use getRun to go through the standard row converter
-  const runRow = row as { id: string };
-  return getRun(runRow.id);
+export async function getBaseline(projectId?: string): Promise<Run | null> {
+  const runs = projectId ? await listRuns({ projectId }) : await listRuns();
+  const baselines = runs
+    .filter((r) => r.isBaseline)
+    .sort((a, b) => (a.startedAt < b.startedAt ? 1 : a.startedAt > b.startedAt ? -1 : 0));
+  return baselines[0] ?? null;
 }
 
 export interface CompareImagesResult {
@@ -149,19 +146,19 @@ export async function compareRunScreenshots(
   baselineRunId: string,
   threshold: number = DEFAULT_THRESHOLD,
 ): Promise<VisualDiffResult[]> {
-  const run = getRun(runId);
+  const run = await getRun(runId);
   if (!run) throw new Error(`Run not found: ${runId}`);
 
-  const baselineRun = getRun(baselineRunId);
+  const baselineRun = await getRun(baselineRunId);
   if (!baselineRun) throw new Error(`Baseline run not found: ${baselineRunId}`);
 
-  const currentResults = getResultsByRun(run.id);
-  const baselineResults = getResultsByRun(baselineRun.id);
+  const currentResults = await getResultsByRun(run.id);
+  const baselineResults = await getResultsByRun(baselineRun.id);
 
   // Build a map of baseline screenshots keyed by "scenarioId:stepNumber"
   const baselineMap = new Map<string, { path: string; action: string }>();
   for (const result of baselineResults) {
-    const screenshots = listScreenshots(result.id);
+    const screenshots = await listScreenshots(result.id);
     for (const ss of screenshots) {
       const key = `${result.scenarioId}:${ss.stepNumber}`;
       baselineMap.set(key, { path: ss.filePath, action: ss.action });
@@ -171,7 +168,7 @@ export async function compareRunScreenshots(
   const results: VisualDiffResult[] = [];
 
   for (const result of currentResults) {
-    const screenshots = listScreenshots(result.id);
+    const screenshots = await listScreenshots(result.id);
     for (const ss of screenshots) {
       const key = `${result.scenarioId}:${ss.stepNumber}`;
       const baseline = baselineMap.get(key);
@@ -202,10 +199,10 @@ export async function compareRunScreenshots(
 /**
  * Format visual diff results for terminal output with colored diff percentages.
  */
-export function formatVisualDiffTerminal(
+export async function formatVisualDiffTerminal(
   results: VisualDiffResult[],
   threshold: number = DEFAULT_THRESHOLD,
-): string {
+): Promise<string> {
   if (results.length === 0) {
     return chalk.dim("\n  No screenshot comparisons found.\n");
   }
@@ -221,7 +218,7 @@ export function formatVisualDiffTerminal(
   if (regressions.length > 0) {
     lines.push(chalk.red.bold(`  Regressions (${regressions.length}):`));
     for (const r of regressions) {
-      const scenario = getScenario(r.scenarioId);
+      const scenario = await getScenario(r.scenarioId);
       const label = scenario ? `${scenario.shortId}: ${scenario.name}` : r.scenarioId.slice(0, 8);
       const pct = chalk.red(`${r.diffPercent.toFixed(2)}%`);
       lines.push(`    ${chalk.red("!")} ${label} step ${r.stepNumber} (${r.action}) — ${pct} diff`);
@@ -232,7 +229,7 @@ export function formatVisualDiffTerminal(
   if (passed.length > 0) {
     lines.push(chalk.green.bold(`  Passed (${passed.length}):`));
     for (const r of passed) {
-      const scenario = getScenario(r.scenarioId);
+      const scenario = await getScenario(r.scenarioId);
       const label = scenario ? `${scenario.shortId}: ${scenario.name}` : r.scenarioId.slice(0, 8);
       const pct = chalk.green(`${r.diffPercent.toFixed(2)}%`);
       lines.push(`    ${chalk.green("✓")} ${label} step ${r.stepNumber} (${r.action}) — ${pct} diff`);

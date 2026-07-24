@@ -21,14 +21,14 @@ afterEach(() => {
 });
 
 describe("contacts connector availability", () => {
-  test("reports a missing local contacts database explicitly", () => {
+  test("reports a missing local contacts database explicitly", async () => {
     tempDir = mkdtempSync(join(tmpdir(), "testers-contacts-missing-"));
     const missingPath = join(tempDir, "contacts.db");
     process.env.HASNA_CONTACTS_DB_PATH = missingPath;
     delete process.env.OPEN_CONTACTS_DB;
 
     expect(getContactsAvailability()).toEqual({ available: false, dbPath: missingPath });
-    expect(importPersonasFromContacts({ dryRun: true })).toEqual({
+    expect(await importPersonasFromContacts({ dryRun: true })).toEqual({
       imported: 0,
       skipped: 0,
       personas: [],

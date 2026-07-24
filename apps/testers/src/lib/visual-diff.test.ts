@@ -39,27 +39,27 @@ describe("visual regression (OPE9-00256)", () => {
   });
 
   describe("setBaseline/getBaseline", () => {
-    test("sets and retrieves baseline", () => {
+    test("sets and retrieves baseline", async () => {
       const run = createRun({ url: "http://test.example", model: "quick" });
-      setBaseline(run.id);
-      const baseline = getBaseline();
+      await setBaseline(run.id);
+      const baseline = await getBaseline();
       expect(baseline).not.toBeNull();
       expect(baseline!.id).toBe(run.id);
     });
 
-    test("replaces previous baseline", () => {
+    test("replaces previous baseline", async () => {
       const run1 = createRun({ url: "http://test.example", model: "quick" });
-      setBaseline(run1.id);
+      await setBaseline(run1.id);
 
       const run2 = createRun({ url: "http://test.example", model: "quick" });
-      setBaseline(run2.id);
+      await setBaseline(run2.id);
 
-      const baseline = getBaseline();
+      const baseline = await getBaseline();
       expect(baseline!.id).toBe(run2.id);
     });
 
-    test("returns null when no baseline set", () => {
-      expect(getBaseline()).toBeNull();
+    test("returns null when no baseline set", async () => {
+      expect(await getBaseline()).toBeNull();
     });
   });
 
@@ -121,12 +121,12 @@ describe("visual regression (OPE9-00256)", () => {
   });
 
   describe("formatVisualDiffTerminal", () => {
-    test("formats empty results", () => {
-      const output = formatVisualDiffTerminal([]);
+    test("formats empty results", async () => {
+      const output = await formatVisualDiffTerminal([]);
       expect(output).toContain("No screenshot comparisons");
     });
 
-    test("formats passing results", () => {
+    test("formats passing results", async () => {
       const scenario = createScenario({ name: "Pass Test", description: "Visual pass" });
       const results = [{
         scenarioId: scenario.id,
@@ -137,12 +137,12 @@ describe("visual regression (OPE9-00256)", () => {
         diffPercent: 0.01,
         isRegression: false,
       }];
-      const output = formatVisualDiffTerminal(results);
+      const output = await formatVisualDiffTerminal(results);
       expect(output).toContain("Passed");
       expect(output).toContain("0.01%");
     });
 
-    test("formats regression results", () => {
+    test("formats regression results", async () => {
       const scenario = createScenario({ name: "Fail Test", description: "Visual fail" });
       const results = [{
         scenarioId: scenario.id,
@@ -153,7 +153,7 @@ describe("visual regression (OPE9-00256)", () => {
         diffPercent: 5.5,
         isRegression: true,
       }];
-      const output = formatVisualDiffTerminal(results);
+      const output = await formatVisualDiffTerminal(results);
       expect(output).toContain("Regressions");
       expect(output).toContain("5.50%");
     });

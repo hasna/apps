@@ -1,7 +1,7 @@
 import chalk from "chalk";
-import { getRun } from "../db/runs.js";
-import { getResultsByRun } from "../db/results.js";
-import { getScenario } from "../db/scenarios.js";
+import { getRun } from "../store/index.js";
+import { getResultsByRun } from "../store/index.js";
+import { getScenario } from "../store/index.js";
 import type { Run, Result } from "../types/index.js";
 
 export interface DiffResult {
@@ -26,19 +26,19 @@ export interface ScenarioDiff {
   tokens2: number | null;
 }
 
-export function diffRuns(runId1: string, runId2: string): DiffResult {
-  const run1 = getRun(runId1);
+export async function diffRuns(runId1: string, runId2: string): Promise<DiffResult> {
+  const run1 = await getRun(runId1);
   if (!run1) {
     throw new Error(`Run not found: ${runId1}`);
   }
 
-  const run2 = getRun(runId2);
+  const run2 = await getRun(runId2);
   if (!run2) {
     throw new Error(`Run not found: ${runId2}`);
   }
 
-  const results1 = getResultsByRun(run1.id);
-  const results2 = getResultsByRun(run2.id);
+  const results1 = await getResultsByRun(run1.id);
+  const results2 = await getResultsByRun(run2.id);
 
   const map1 = new Map<string, Result>();
   for (const r of results1) {
@@ -62,7 +62,7 @@ export function diffRuns(runId1: string, runId2: string): DiffResult {
     const r1 = map1.get(scenarioId) ?? null;
     const r2 = map2.get(scenarioId) ?? null;
 
-    const scenario = getScenario(scenarioId);
+    const scenario = await getScenario(scenarioId);
 
     const diff: ScenarioDiff = {
       scenarioId,

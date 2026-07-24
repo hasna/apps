@@ -16,13 +16,13 @@ describe("JUnit XML export (OPE9-00255)", () => {
     closeDatabase();
   });
 
-  test("generates valid JUnit XML for passing results", () => {
+  test("generates valid JUnit XML for passing results", async () => {
     const run = createRun({ url: "http://test.example", model: "quick" });
     const scenario = createScenario({ name: "Pass Test", description: "Should pass" });
     const result = createResult({ runId: run.id, scenarioId: scenario.id, model: "quick", stepsTotal: 1 });
     updateResult(result.id, { status: "passed", durationMs: 5000, tokensUsed: 1000 });
 
-    const xml = toJUnitXml(run.id, [getResult(result.id)!], "http://test.example");
+    const xml = await toJUnitXml(run.id, [getResult(result.id)!], "http://test.example");
     expect(xml).toContain('<?xml version="1.0" encoding="UTF-8"?>');
     expect(xml).toContain('tests="1"');
     expect(xml).toContain('failures="0"');
@@ -33,7 +33,7 @@ describe("JUnit XML export (OPE9-00255)", () => {
     expect(xml).toContain("</testsuites>");
   });
 
-  test("generates JUnit XML with failure details", () => {
+  test("generates JUnit XML with failure details", async () => {
     const run = createRun({ url: "http://fail.example", model: "quick" });
     const s1 = createScenario({ name: "Fail Test", description: "Should fail" });
     const r1 = createResult({ runId: run.id, scenarioId: s1.id, model: "quick", stepsTotal: 1 });
@@ -47,7 +47,7 @@ describe("JUnit XML export (OPE9-00255)", () => {
     const r3 = createResult({ runId: run.id, scenarioId: s3.id, model: "quick", stepsTotal: 1 });
     updateResult(r3.id, { status: "error", error: "Browser crashed", durationMs: 1000 });
 
-    const xml = toJUnitXml(run.id, [getResult(r1.id)!, getResult(r2.id)!, getResult(r3.id)!], "http://fail.example");
+    const xml = await toJUnitXml(run.id, [getResult(r1.id)!, getResult(r2.id)!, getResult(r3.id)!], "http://fail.example");
     expect(xml).toContain('tests="3"');
     expect(xml).toContain('failures="1"');
     expect(xml).toContain('errors="1"');
@@ -55,17 +55,17 @@ describe("JUnit XML export (OPE9-00255)", () => {
     expect(xml).toContain("<error");
   });
 
-  test("generates JUnit XML with skipped results", () => {
+  test("generates JUnit XML with skipped results", async () => {
     const run = createRun({ url: "http://skip.example", model: "quick" });
     const scenario = createScenario({ name: "Skipped Test", description: "Dependency failed" });
     const result = createResult({ runId: run.id, scenarioId: scenario.id, model: "quick", stepsTotal: 0 });
     // Already skipped by default
-    const xml = toJUnitXml(run.id, [getResult(result.id)!], "http://skip.example");
+    const xml = await toJUnitXml(run.id, [getResult(result.id)!], "http://skip.example");
     expect(xml).toContain('skipped="1"');
     expect(xml).toContain("<skipped/>");
   });
 
-  test("escapes XML special characters in error messages", () => {
+  test("escapes XML special characters in error messages", async () => {
     const run = createRun({ url: "http://escape.example", model: "quick" });
     const scenario = createScenario({ name: "Escape <Test> & \"Quotes\"", description: "Test escaping" });
     const result = createResult({ runId: run.id, scenarioId: scenario.id, model: "quick", stepsTotal: 1 });
@@ -76,7 +76,7 @@ describe("JUnit XML export (OPE9-00255)", () => {
       durationMs: 1000,
     });
 
-    const xml = toJUnitXml(run.id, [getResult(result.id)!], "http://escape.example");
+    const xml = await toJUnitXml(run.id, [getResult(result.id)!], "http://escape.example");
     expect(xml).not.toContain("<div>");
     expect(xml).toContain("&lt;div&gt;");
     expect(xml).toContain("&amp;");
@@ -84,8 +84,8 @@ describe("JUnit XML export (OPE9-00255)", () => {
     expect(xml).toContain("&apos;");
   });
 
-  test("handles empty results", () => {
-    const xml = toJUnitXml("run-empty", [], "http://empty.example");
+  test("handles empty results", async () => {
+    const xml = await toJUnitXml("run-empty", [], "http://empty.example");
     expect(xml).toContain('tests="0"');
     expect(xml).toContain("<testsuites");
   });

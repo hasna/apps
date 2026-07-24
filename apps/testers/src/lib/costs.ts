@@ -1,5 +1,6 @@
 import chalk from "chalk";
-import { getDatabase } from "../db/database.js";
+import { listRuns, getResultsByRun, getScenario } from "../store/index.js";
+import type { Result } from "../types/index.js";
 import { loadConfig } from "./config.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -23,17 +24,55 @@ export interface BudgetConfig {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-function getDateFilter(period: "day" | "week" | "month" | "all"): string {
+type Period = "day" | "week" | "month" | "all";
+
+/** Epoch-ms lower bound for a period, or null for "all" (no lower bound). */
+function periodCutoffMs(period: Period): number | null {
+  const nowMs = Date.now();
   switch (period) {
-    case "day":
-      return "AND r.created_at >= date('now', 'start of day')";
+    case "day": {
+      const d = new Date(nowMs);
+      return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+    }
     case "week":
-      return "AND r.created_at >= date('now', '-7 days')";
+      return nowMs - 7 * 86_400_000;
     case "month":
-      return "AND r.created_at >= date('now', '-30 days')";
+      return nowMs - 30 * 86_400_000;
     case "all":
-      return "";
+      return null;
   }
+}
+
+/**
+ * Collect every result (across the store's runs, optionally scoped to a project)
+ * that falls within the requested period. Routes entirely through the Store so
+ * cloud mode reads the cloud dataset, not on-box SQLite.
+ */
+async function collectResults(projectId: string | undefined, period: Period): Promise<Result[]> {
+  const cutoff = periodCutoffMs(period);
+  const runs = await listRuns(projectId ? { projectId } : undefined);
+  const out: Result[] = [];
+  for (const run of runs) {
+    const results = await getResultsByRun(run.id);
+    for (const r of results) {
+      if (cutoff !== null) {
+        const t = Date.parse(r.createdAt);
+        if (Number.isFinite(t) && t < cutoff) continue;
+      }
+      out.push(r);
+    }
+  }
+  return out;
+}
+
+/** Resolve scenario display names once, cached across a single aggregation. */
+async function resolveScenarioNames(scenarioIds: Iterable<string>): Promise<Map<string, string>> {
+  const names = new Map<string, string>();
+  for (const id of new Set(scenarioIds)) {
+    const scenario = await getScenario(id);
+    names.set(id, scenario?.name ?? id);
+  }
+  return names;
 }
 
 function getPeriodDays(period: "day" | "week" | "month" | "all"): number {
@@ -61,94 +100,68 @@ function loadBudgetConfig(): BudgetConfig {
 
 // ─── Core Functions ─────────────────────────────────────────────────────────
 
-export function getCostSummary(options?: {
+export async function getCostSummary(options?: {
   projectId?: string;
   period?: "day" | "week" | "month" | "all";
-}): CostSummary {
-  const db = getDatabase();
+}): Promise<CostSummary> {
   const period = options?.period ?? "month";
-  const projectId = options?.projectId;
-  const dateFilter = getDateFilter(period);
+  const results = await collectResults(options?.projectId, period);
 
-  const projectFilter = projectId ? "AND ru.project_id = ?" : "";
-  const projectParams = projectId ? [projectId] : [];
+  let totalCostCents = 0;
+  let totalTokens = 0;
+  const runIds = new Set<string>();
 
-  // Aggregate totals
-  const totalsRow = db
-    .query(
-      `SELECT
-        COALESCE(SUM(r.cost_cents), 0) as total_cost,
-        COALESCE(SUM(r.tokens_used), 0) as total_tokens,
-        COUNT(DISTINCT r.run_id) as run_count
-      FROM results r
-      JOIN runs ru ON r.run_id = ru.id
-      WHERE 1=1 ${dateFilter} ${projectFilter}`
-    )
-    .get(...projectParams) as { total_cost: number; total_tokens: number; run_count: number };
+  const byModel: Record<string, { costCents: number; tokens: number; runs: Set<string> }> = {};
+  const byScenarioAgg = new Map<string, { costCents: number; tokens: number; runs: Set<string> }>();
 
-  // By model breakdown
-  const modelRows = db
-    .query(
-      `SELECT
-        r.model,
-        COALESCE(SUM(r.cost_cents), 0) as cost_cents,
-        COALESCE(SUM(r.tokens_used), 0) as tokens,
-        COUNT(DISTINCT r.run_id) as runs
-      FROM results r
-      JOIN runs ru ON r.run_id = ru.id
-      WHERE 1=1 ${dateFilter} ${projectFilter}
-      GROUP BY r.model
-      ORDER BY cost_cents DESC`
-    )
-    .all(...projectParams) as Array<{ model: string; cost_cents: number; tokens: number; runs: number }>;
+  for (const r of results) {
+    totalCostCents += r.costCents;
+    totalTokens += r.tokensUsed;
+    runIds.add(r.runId);
 
-  const byModel: Record<string, { costCents: number; tokens: number; runs: number }> = {};
-  for (const row of modelRows) {
-    byModel[row.model] = {
-      costCents: row.cost_cents,
-      tokens: row.tokens,
-      runs: row.runs,
-    };
+    const m = (byModel[r.model] ??= { costCents: 0, tokens: 0, runs: new Set() });
+    m.costCents += r.costCents;
+    m.tokens += r.tokensUsed;
+    m.runs.add(r.runId);
+
+    let s = byScenarioAgg.get(r.scenarioId);
+    if (!s) {
+      s = { costCents: 0, tokens: 0, runs: new Set() };
+      byScenarioAgg.set(r.scenarioId, s);
+    }
+    s.costCents += r.costCents;
+    s.tokens += r.tokensUsed;
+    s.runs.add(r.runId);
   }
 
-  // By scenario breakdown (top 10 by cost)
-  const scenarioRows = db
-    .query(
-      `SELECT
-        r.scenario_id,
-        COALESCE(s.name, r.scenario_id) as name,
-        COALESCE(SUM(r.cost_cents), 0) as cost_cents,
-        COALESCE(SUM(r.tokens_used), 0) as tokens,
-        COUNT(DISTINCT r.run_id) as runs
-      FROM results r
-      JOIN runs ru ON r.run_id = ru.id
-      LEFT JOIN scenarios s ON r.scenario_id = s.id
-      WHERE 1=1 ${dateFilter} ${projectFilter}
-      GROUP BY r.scenario_id
-      ORDER BY cost_cents DESC
-      LIMIT 10`
-    )
-    .all(...projectParams) as Array<{ scenario_id: string; name: string; cost_cents: number; tokens: number; runs: number }>;
+  const byModelOut: Record<string, { costCents: number; tokens: number; runs: number }> = {};
+  for (const [model, data] of Object.entries(byModel)) {
+    byModelOut[model] = { costCents: data.costCents, tokens: data.tokens, runs: data.runs.size };
+  }
 
-  const byScenario = scenarioRows.map((row) => ({
-    scenarioId: row.scenario_id,
-    name: row.name,
-    costCents: row.cost_cents,
-    tokens: row.tokens,
-    runs: row.runs,
-  }));
+  const names = await resolveScenarioNames(byScenarioAgg.keys());
+  const byScenario = [...byScenarioAgg.entries()]
+    .map(([scenarioId, data]) => ({
+      scenarioId,
+      name: names.get(scenarioId) ?? scenarioId,
+      costCents: data.costCents,
+      tokens: data.tokens,
+      runs: data.runs.size,
+    }))
+    .sort((a, b) => b.costCents - a.costCents)
+    .slice(0, 10);
 
-  const runCount = totalsRow.run_count;
-  const avgCostPerRun = runCount > 0 ? totalsRow.total_cost / runCount : 0;
+  const runCount = runIds.size;
+  const avgCostPerRun = runCount > 0 ? totalCostCents / runCount : 0;
   const periodDays = getPeriodDays(period);
-  const estimatedMonthlyCents = periodDays > 0 ? (totalsRow.total_cost / periodDays) * 30 : 0;
+  const estimatedMonthlyCents = periodDays > 0 ? (totalCostCents / periodDays) * 30 : 0;
 
   return {
     period,
-    totalCostCents: totalsRow.total_cost,
-    totalTokens: totalsRow.total_tokens,
+    totalCostCents,
+    totalTokens,
     runCount,
-    byModel,
+    byModel: byModelOut,
     byScenario,
     avgCostPerRun,
     estimatedMonthlyCents,
@@ -220,45 +233,34 @@ export interface ScenarioCostRow {
   avgCostPerRunCents: number;
 }
 
-export function getCostsByScenario(options?: {
+export async function getCostsByScenario(options?: {
   projectId?: string;
   period?: "day" | "week" | "month" | "all";
-}): ScenarioCostRow[] {
-  const db = getDatabase();
+}): Promise<ScenarioCostRow[]> {
   const period = options?.period ?? "month";
-  const projectId = options?.projectId;
-  const dateFilter = getDateFilter(period);
-  const projectFilter = projectId ? "AND ru.project_id = ?" : "";
-  const projectParams = projectId ? [projectId] : [];
+  const results = await collectResults(options?.projectId, period);
 
-  const rows = db
-    .query(
-      `SELECT
-        r.scenario_id,
-        COALESCE(s.name, r.scenario_id) as name,
-        COUNT(DISTINCT r.run_id) as run_count,
-        COALESCE(SUM(r.cost_cents), 0) as total_cost_cents
-      FROM results r
-      JOIN runs ru ON r.run_id = ru.id
-      LEFT JOIN scenarios s ON r.scenario_id = s.id
-      WHERE 1=1 ${dateFilter} ${projectFilter}
-      GROUP BY r.scenario_id
-      ORDER BY total_cost_cents DESC`
-    )
-    .all(...projectParams) as Array<{
-      scenario_id: string;
-      name: string;
-      run_count: number;
-      total_cost_cents: number;
-    }>;
+  const agg = new Map<string, { totalCostCents: number; runs: Set<string> }>();
+  for (const r of results) {
+    let a = agg.get(r.scenarioId);
+    if (!a) {
+      a = { totalCostCents: 0, runs: new Set() };
+      agg.set(r.scenarioId, a);
+    }
+    a.totalCostCents += r.costCents;
+    a.runs.add(r.runId);
+  }
 
-  return rows.map((row) => ({
-    scenarioId: row.scenario_id,
-    name: row.name,
-    runCount: row.run_count,
-    totalCostCents: row.total_cost_cents,
-    avgCostPerRunCents: row.run_count > 0 ? row.total_cost_cents / row.run_count : 0,
-  }));
+  const names = await resolveScenarioNames(agg.keys());
+  return [...agg.entries()]
+    .map(([scenarioId, a]) => ({
+      scenarioId,
+      name: names.get(scenarioId) ?? scenarioId,
+      runCount: a.runs.size,
+      totalCostCents: a.totalCostCents,
+      avgCostPerRunCents: a.runs.size > 0 ? a.totalCostCents / a.runs.size : 0,
+    }))
+    .sort((a, b) => b.totalCostCents - a.totalCostCents);
 }
 
 export function formatCostsByScenarioTerminal(rows: ScenarioCostRow[], period: string): string {
@@ -288,7 +290,7 @@ export function formatCostsByScenarioTerminal(rows: ScenarioCostRow[], period: s
   return lines.join("\n");
 }
 
-export function checkBudget(estimatedCostCents: number): { allowed: boolean; warning?: string } {
+export async function checkBudget(estimatedCostCents: number): Promise<{ allowed: boolean; warning?: string }> {
   const budget = loadBudgetConfig();
 
   // Check per-run limit
@@ -300,7 +302,7 @@ export function checkBudget(estimatedCostCents: number): { allowed: boolean; war
   }
 
   // Check daily limit
-  const todaySummary = getCostSummary({ period: "day" });
+  const todaySummary = await getCostSummary({ period: "day" });
   const projectedDaily = todaySummary.totalCostCents + estimatedCostCents;
 
   if (projectedDaily > budget.maxPerDayCents) {

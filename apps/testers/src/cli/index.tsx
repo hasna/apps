@@ -8,16 +8,6 @@ import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { dirname, join, resolve } from "node:path";
 
-import {
-  createScenario,
-  getScenario,
-  getScenarioByShortId,
-  listScenarios,
-  updateScenario,
-} from "../db/scenarios.js";
-import { getRun, listRuns, countRuns } from "../db/runs.js";
-import { getResultsByRun } from "../db/results.js";
-import { listScreenshots } from "../db/screenshots.js";
 import { runByFilter, startRunAsync, onRunEvent } from "../lib/runner.js";
 import {
   formatTerminal,
@@ -45,7 +35,6 @@ import {
 import { diffRuns, formatDiffTerminal, formatDiffJSON } from "../lib/diff.js";
 import {
   setBaseline,
-  getBaseline,
   compareRunScreenshots,
   formatVisualDiffTerminal,
 } from "../lib/visual-diff.js";
@@ -69,54 +58,48 @@ import {
 } from "../lib/model-credentials.js";
 import type { AIProvider } from "../lib/ai-client.js";
 
+// THE storage boundary: every CLI command routes reads/writes through the
+// single Store (LocalStore on-box SQLite | ApiStore cloud /v1 + bearer key),
+// resolved once from the environment. No command touches sqlite or the cloud
+// HTTP transport directly. See ../store/index.ts.
 import {
+  isCloudStore,
+  storageStatus,
+  createScenario,
+  getScenario,
+  getScenarioByShortId,
+  listScenarios,
+  updateScenario,
+  countScenarios,
+  deleteScenario,
+  getRun,
+  listRuns,
+  countRuns,
+  getResultsByRun,
+  listScreenshots,
+  createPersona,
+  getPersona,
+  listPersonas,
+  countPersonas,
+  deletePersona,
+  createProject,
   getProject,
-} from "../db/projects.js";
-// Client storage resolver / facade: routes the user-facing persona CRUD commands
-// to the cloud /v1 API when HASNA_TESTERS_STORAGE_MODE=self_hosted + API_URL +
-// API_KEY are set, otherwise to the on-box SQLite store. See ../cloud/store.ts.
-import {
-  createPersona as storeCreatePersona,
-  getPersona as storeGetPersona,
-  listPersonas as storeListPersonas,
-  countPersonas as storeCountPersonas,
-  deletePersona as storeDeletePersona,
-  createScenario as storeCreateScenario,
-  getScenario as storeGetScenario,
-  getScenarioByShortId as storeGetScenarioByShortId,
-  listScenarios as storeListScenarios,
-  countScenarios as storeCountScenarios,
-  updateScenario as storeUpdateScenario,
-  deleteScenario as storeDeleteScenario,
-  createProject as storeCreateProject,
-  getProject as storeGetProject,
-  listProjects as storeListProjects,
-  ensureProject as storeEnsureProject,
-  isCloud as isCloudStore,
-} from "../cloud/store.js";
-import {
+  listProjects,
+  ensureProject,
   countApiChecks,
   createApiCheck,
   getApiCheck,
   listApiChecks,
   deleteApiCheck,
-} from "../db/api-checks.js";
-import { runApiCheck, runApiChecksByFilter } from "../lib/api-runner.js";
-import {
   createSchedule,
   getSchedule,
   listSchedules,
   updateSchedule,
   deleteSchedule,
-} from "../db/schedules.js";
-import { getTemplate, listTemplateNames } from "../lib/templates.js";
-import {
   createAuthPreset,
   getAuthPreset,
   listAuthPresets,
   deleteAuthPreset,
-} from "../db/auth-presets.js";
-import {
   addDependency,
   removeDependency,
   getDependencies,
@@ -125,35 +108,37 @@ import {
   getFlow,
   listFlows,
   deleteFlow,
-} from "../db/flows.js";
-import {
   createTestingWorkflow,
   deleteTestingWorkflow,
   getTestingWorkflow,
   listTestingWorkflows,
   updateTestingWorkflow,
-} from "../db/workflows.js";
-import { runTestingWorkflow } from "../lib/workflow-runner.js";
-import {
   createEnvironment,
   getEnvironment,
   listEnvironments,
   deleteEnvironment,
   setDefaultEnvironment,
   getDefaultEnvironment,
-} from "../db/environments.js";
-import { generateGitHubActionsWorkflow } from "../lib/ci.js";
-import type { ScenarioPriority } from "../types/index.js";
-import { parseAssertionString } from "../lib/assertions.js";
-import { existsSync, mkdirSync } from "node:fs";
-import { getTestersDir } from "../lib/paths.js";
-import {
   listSessions,
   getSession,
   deleteSession,
   countSessions,
   searchSessions,
-} from "../db/sessions.js";
+  registerAgent,
+  heartbeatAgent,
+  setAgentFocus,
+  listAgents,
+  listScanIssues,
+  resolveScanIssue,
+} from "../store/index.js";
+import { runApiCheck, runApiChecksByFilter } from "../lib/api-runner.js";
+import { getTemplate, listTemplateNames } from "../lib/templates.js";
+import { runTestingWorkflow } from "../lib/workflow-runner.js";
+import { generateGitHubActionsWorkflow } from "../lib/ci.js";
+import type { ScenarioPriority } from "../types/index.js";
+import { parseAssertionString } from "../lib/assertions.js";
+import { existsSync, mkdirSync } from "node:fs";
+import { getTestersDir } from "../lib/paths.js";
 import {
   discoverRepo,
   clearDiscoveryCache,
@@ -180,7 +165,7 @@ function registerUnavailableEventsCommand(program: Command): void {
   program
     .command("events")
     .description("Emit, list, and replay Hasna events")
-    .action(() => {
+    .action(async () => {
       console.error(
         "The optional @hasna/events package is not available in this environment.",
       );
@@ -728,7 +713,7 @@ async function runInteractiveAdd(projectId: string | undefined): Promise<void> {
           .map((t) => t.trim())
           .filter(Boolean)
       : [];
-    const scenario = createScenario({
+    const scenario = await createScenario({
       name: result.name,
       description: result.description || result.name,
       steps: [],
@@ -773,11 +758,6 @@ function logError(...args: unknown[]) {
   if (QUIET) return;
   // eslint-disable-next-line no-console
   console.error(...args);
-}
-
-function stripAnsi(str: string): string {
-  // eslint-disable-next-line no-control-regex
-  return str.replace(/\x1B\[[0-9;]*m/g, "");
 }
 
 function cliPage<T>(items: T[], opts: { limit?: string; offset?: string }, defaultLimit = 20, maxLimit = 100) {
@@ -836,7 +816,7 @@ program
   )
   .option("--json", "Output JSON", false)
   .option("-o, --output <filepath>", "Write plan to file")
-  .action((target: string, opts) => {
+  .action(async (target: string, opts) => {
     const config = loadConfig();
     const plan = createProdDebugPlan(
       {
@@ -881,11 +861,11 @@ function getActiveProject(): string | undefined {
   return undefined;
 }
 
-function resolveProject(optProject?: string): string | undefined {
+async function resolveProject(optProject?: string): Promise<string | undefined> {
   if (optProject) return optProject;
   const activeProject = getActiveProject();
   if (!activeProject) return undefined;
-  return getProject(activeProject) ? activeProject : undefined;
+  return (await getProject(activeProject)) ? activeProject : undefined;
 }
 
 /**
@@ -897,9 +877,9 @@ function resolveProject(optProject?: string): string | undefined {
  * and tell the user to bind a cloud project with `testers project use`.
  */
 async function resolveWriteProjectId(optProject?: string): Promise<string | undefined> {
-  const projectId = resolveProject(optProject);
+  const projectId = await resolveProject(optProject);
   if (projectId && isCloudStore()) {
-    const inCloud = await storeGetProject(projectId);
+    const inCloud = await getProject(projectId);
     if (!inCloud) {
       logError(
         chalk.yellow(
@@ -978,7 +958,7 @@ program
         opts.template ||
         opts.assert?.length;
       if (!name && !hasFlags) {
-        const projectId = resolveProject(opts.project);
+        const projectId = await resolveProject(opts.project);
         await runInteractiveAdd(projectId);
         return;
       }
@@ -1000,7 +980,7 @@ program
         }
         const projectId = await resolveWriteProjectId(opts.project);
         for (const input of template) {
-          const s = await storeCreateScenario({ ...input, projectId });
+          const s = await createScenario({ ...input, projectId });
           log(chalk.green(`  Created ${s.shortId}: ${s.name}`));
         }
         return;
@@ -1009,13 +989,13 @@ program
       const assertions = (opts.assert as string[]).map(parseAssertionString);
       const projectId = await resolveWriteProjectId(opts.project);
       const authPreset = opts.authPreset
-        ? getAuthPreset(opts.authPreset)
+        ? await getAuthPreset(opts.authPreset)
         : null;
       if (opts.authPreset && !authPreset) {
         logError(chalk.red(`Auth preset not found: ${opts.authPreset}`));
         process.exit(1);
       }
-      const scenario = await storeCreateScenario({
+      const scenario = await createScenario({
         name,
         description: opts.description || name,
         steps: opts.steps,
@@ -1084,12 +1064,12 @@ program
         sort: opts.sort as "date" | "priority" | "name" | undefined,
         desc: !opts.asc,
       };
-      const scenarios = await storeListScenarios({
+      const scenarios = await listScenarios({
         ...filter,
         limit,
         offset: offset || undefined,
       });
-      const total = await storeCountScenarios(filter);
+      const total = await countScenarios(filter);
       if (opts.json) {
         log(JSON.stringify(scenarios, null, 2));
       } else if (opts.group) {
@@ -1103,10 +1083,10 @@ program
           log("");
           log(chalk.bold(`  ${groupName}`) + chalk.dim(` (${items.length})`));
           log(chalk.dim("  " + "─".repeat(40)));
-          log(formatScenarioList(items, { total: items.length, verbose: opts.verbose }));
+          log(await formatScenarioList(items, { total: items.length, verbose: opts.verbose }));
         }
       } else {
-        log(formatScenarioList(scenarios, { total, limit, offset, verbose: opts.verbose }));
+        log(await formatScenarioList(scenarios, { total, limit, offset, verbose: opts.verbose }));
       }
     } catch (error) {
       logError(
@@ -1126,7 +1106,7 @@ program
   .option("--json", "Output as JSON", false)
   .action(async (id: string, opts) => {
     try {
-      const scenario = (await storeGetScenario(id)) ?? (await storeGetScenarioByShortId(id));
+      const scenario = (await getScenario(id)) ?? (await getScenarioByShortId(id));
       if (!scenario) {
         logError(chalk.red(`Scenario not found: ${id}`));
         process.exit(1);
@@ -1222,7 +1202,7 @@ program
   .option("-m, --model <model>", "New model")
   .action(async (id: string, opts) => {
     try {
-      const scenario = (await storeGetScenario(id)) ?? (await storeGetScenarioByShortId(id));
+      const scenario = (await getScenario(id)) ?? (await getScenarioByShortId(id));
       if (!scenario) {
         logError(chalk.red(`Scenario not found: ${id}`));
         process.exit(1);
@@ -1240,7 +1220,7 @@ program
         newTags = [...existing];
       }
 
-      const updated = await storeUpdateScenario(
+      const updated = await updateScenario(
         scenario.id,
         {
           name: opts.name,
@@ -1279,7 +1259,7 @@ program
   .option("-y, --yes", "Skip confirmation prompt", false)
   .action(async (id: string, opts) => {
     try {
-      const scenario = (await storeGetScenario(id)) ?? (await storeGetScenarioByShortId(id));
+      const scenario = (await getScenario(id)) ?? (await getScenarioByShortId(id));
       if (!scenario) {
         logError(chalk.red(`Scenario not found: ${id}`));
         process.exit(1);
@@ -1310,7 +1290,7 @@ program
         }
       }
 
-      const deleted = await storeDeleteScenario(scenario.id);
+      const deleted = await deleteScenario(scenario.id);
       if (deleted) {
         log(
           chalk.green(`Deleted scenario ${scenario.shortId}: ${scenario.name}`),
@@ -1338,7 +1318,7 @@ program
   .option("-y, --yes", "Skip confirmation prompt", false)
   .action(async (id: string, opts) => {
     try {
-      const scenario = (await storeGetScenario(id)) ?? (await storeGetScenarioByShortId(id));
+      const scenario = (await getScenario(id)) ?? (await getScenarioByShortId(id));
       if (!scenario) {
         logError(chalk.red(`Scenario not found: ${id}`));
         process.exit(1);
@@ -1368,7 +1348,7 @@ program
         }
       }
 
-      const deleted = await storeDeleteScenario(scenario.id);
+      const deleted = await deleteScenario(scenario.id);
       if (deleted) {
         log(
           chalk.green(`Removed scenario ${scenario.shortId}: ${scenario.name}`),
@@ -1520,12 +1500,12 @@ program
       opts,
     ) => {
       try {
-        const projectId = resolveProject(opts.project);
+        const projectId = await resolveProject(opts.project);
 
         // Resolve URL: explicit arg > --env > default environment
         let url = urlArg;
         if (!url && opts.env) {
-          const env = getEnvironment(opts.env);
+          const env = await getEnvironment(opts.env);
           if (!env) {
             logError(chalk.red(`Environment not found: ${opts.env}`));
             process.exit(1);
@@ -1533,7 +1513,7 @@ program
           url = env.url;
         }
         if (!url) {
-          const defaultEnv = getDefaultEnvironment();
+          const defaultEnv = await getDefaultEnvironment();
           if (defaultEnv) {
             url = defaultEnv.url;
             log(
@@ -1659,7 +1639,7 @@ program
 
         // Budget warning check (OPE9-00080)
         if (!opts.dryRun && !opts.background) {
-          const budgetResult = checkBudget(0); // 0 = just check daily threshold
+          const budgetResult = await checkBudget(0); // 0 = just check daily threshold
           if (budgetResult.warning) {
             log(chalk.yellow(`  ⚠️  Budget warning: ${budgetResult.warning}`));
             if (!budgetResult.allowed) {
@@ -1688,7 +1668,7 @@ program
 
         // If --from-todos, import scenarios first
         if (opts.fromTodos) {
-          const result = importFromTodos({ projectId });
+          const result = await importFromTodos({ projectId });
           log(
             chalk.blue(
               `Imported ${result.imported} scenarios from todos (${result.skipped} skipped)`,
@@ -1698,10 +1678,10 @@ program
 
         // Dry-run mode — validate and print what would run, no browser
         if (opts.dryRun) {
-          const dryScenarios = listScenarios({
+          const dryScenarios = (await listScenarios({
             tags: opts.tag.length > 0 ? opts.tag : undefined,
             projectId,
-          }).filter((s) => {
+          })).filter((s) => {
             if (
               scenarioIds &&
               !scenarioIds.includes(s.id) &&
@@ -1725,12 +1705,8 @@ program
                 const error = validateStoredAssertion(a);
                 if (error) assertionErrors.push(error);
               }
-              // Check auth preset exists if required
-              let authOk = true;
-              if (s.authPreset) {
-                const presets = listAuthPresets();
-                authOk = presets.some((p) => p.name === s.authPreset);
-              }
+              // Check auth is configured if the scenario requires it
+              const authOk = !s.requiresAuth || Boolean(s.authConfig);
               const statusIcon =
                 assertionErrors.length === 0 && authOk
                   ? chalk.green("✓")
@@ -1746,7 +1722,7 @@ program
                 );
               }
               if (!authOk) {
-                log(chalk.red(`      Auth preset not found: ${s.authPreset}`));
+                log(chalk.red(`      Auth required but not configured`));
               }
             }
           }
@@ -1760,14 +1736,14 @@ program
         // Background mode — start async and return immediately
         if (opts.background) {
           if (description) {
-            createScenario({
+            await createScenario({
               name: description,
               description,
               tags: ["ad-hoc"],
               projectId,
             });
           }
-          const { runId, scenarioCount } = startRunAsync({
+          const { runId, scenarioCount } = await startRunAsync({
             url,
             tags: opts.tag.length > 0 ? opts.tag : undefined,
             scenarioIds,
@@ -1800,10 +1776,10 @@ program
             const POLL_INTERVAL = 3000;
             const DONE_STATUSES = new Set(["passed", "failed", "cancelled"]);
 
-            const renderTable = () => {
-              const run = getRun(runId);
+            const renderTable = async () => {
+              const run = await getRun(runId);
               if (!run) return;
-              const results = getResultsByRun(runId);
+              const results = await getResultsByRun(runId);
 
               // Clear previous table by moving cursor up (rough approach: reprint header)
               const statusIcon =
@@ -1823,7 +1799,7 @@ program
                 maxLimit: 50,
               });
               for (const r of resultPage.items) {
-                const scenario = getScenario(r.scenarioId);
+                const scenario = await getScenario(r.scenarioId);
                 const name = scenario
                   ? truncateText(scenario.name, 90)
                   : r.scenarioId.slice(0, 8);
@@ -1851,10 +1827,10 @@ program
             };
 
             await new Promise<void>((resolve) => {
-              const poll = setInterval(() => {
-                const run = getRun(runId);
+              const poll = setInterval(async () => {
+                const run = await getRun(runId);
                 if (!run) return;
-                renderTable();
+                await renderTable();
                 if (DONE_STATUSES.has(run.status)) {
                   clearInterval(poll);
                   resolve();
@@ -1862,11 +1838,11 @@ program
               }, POLL_INTERVAL);
             });
 
-            const finalRun = getRun(runId);
+            const finalRun = await getRun(runId);
             if (finalRun) {
               log("");
-              const results = getResultsByRun(runId);
-              log(formatTerminal(finalRun, results, { verbose: opts.verbose }));
+              const results = await getResultsByRun(runId);
+              log(await formatTerminal(finalRun, results, { verbose: opts.verbose }));
             }
             process.exit(finalRun ? getExitCode(finalRun) : 0);
           }
@@ -1965,7 +1941,7 @@ program
 
         // If description provided, create an ad-hoc scenario and run it
         if (description) {
-          const scenario = createScenario({
+          const scenario = await createScenario({
             name: description,
             description,
             tags: ["ad-hoc"],
@@ -1998,7 +1974,7 @@ program
           });
 
           if (opts.json || opts.output) {
-            const jsonOutput = formatJSON(run, results);
+            const jsonOutput = await formatJSON(run, results);
             if (opts.output) {
               writeFileSync(opts.output, jsonOutput, "utf-8");
               log(chalk.green(`Results written to ${opts.output}`));
@@ -2007,7 +1983,7 @@ program
               log(jsonOutput);
             }
           } else {
-            log(formatTerminal(run, results, { failedOnly: opts.failedOnly, verbose: opts.verbose }));
+            log(await formatTerminal(run, results, { failedOnly: opts.failedOnly, verbose: opts.verbose }));
           }
 
           // Post GitHub PR comment if requested
@@ -2039,7 +2015,7 @@ program
         const noFilters =
           !scenarioIds && opts.tag.length === 0 && !opts.priority;
         if (noFilters && !opts.json && !opts.output) {
-          const allScenarios = listScenarios({ projectId });
+          const allScenarios = await listScenarios({ projectId });
           log(chalk.bold(`  Running all ${allScenarios.length} scenarios...`));
           log("");
         }
@@ -2051,7 +2027,7 @@ program
         const shouldAutoGenerate =
           urlArg !== undefined && opts.autoGenerate !== false && noFilters;
         if (shouldAutoGenerate) {
-          const existingScenarios = listScenarios({ projectId });
+          const existingScenarios = await listScenarios({ projectId });
           if (existingScenarios.length === 0) {
             log(
               chalk.blue(
@@ -2116,7 +2092,7 @@ program
               ];
               const { matchFilesToScenarios } =
                 await import("../lib/affected.js");
-              const allScenarios = listScenarios({ projectId });
+              const allScenarios = await listScenarios({ projectId });
               const matched = matchFilesToScenarios(
                 filePaths,
                 allScenarios,
@@ -2181,7 +2157,7 @@ program
         });
 
         if (opts.json || opts.output) {
-          const jsonOutput = formatJSON(run, results);
+          const jsonOutput = await formatJSON(run, results);
           if (opts.output) {
             writeFileSync(opts.output, jsonOutput, "utf-8");
             log(chalk.green(`Results written to ${opts.output}`));
@@ -2190,7 +2166,7 @@ program
             log(jsonOutput);
           }
         } else {
-          log(formatTerminal(run, results, { failedOnly: opts.failedOnly, verbose: opts.verbose }));
+          log(await formatTerminal(run, results, { failedOnly: opts.failedOnly, verbose: opts.verbose }));
         }
 
         // Post GitHub PR comment if requested (works for the main run path too, not just ad-hoc)
@@ -2239,7 +2215,7 @@ program
   .option("--offset <n>", "Skip first N results", "0")
   .option("--json", "Output as JSON", false)
   .option("--verbose", "Show untruncated run URLs", false)
-  .action((opts) => {
+  .action(async (opts) => {
     try {
       const limit = opts.json
         ? (cliRequestedLimit(opts.limit, 20) ?? 20)
@@ -2256,12 +2232,12 @@ program
         sort: opts.sort as "date" | "duration" | "cost" | undefined,
         desc: !opts.asc,
       };
-      const runs = listRuns({
+      const runs = await listRuns({
         ...filter,
         limit,
         offset: offset || undefined,
       });
-      const total = countRuns(filter);
+      const total = await countRuns(filter);
       if (opts.json) {
         log(JSON.stringify(runs, null, 2));
       } else {
@@ -2287,23 +2263,23 @@ program
   .option("--offset <n>", "Skip first N results", "0")
   .option("--failed-only", "Show only failed/error results", false)
   .option("--verbose", "Show full reasoning, errors, scenario names, and run URL", false)
-  .action((runId: string, opts) => {
+  .action(async (runId: string, opts) => {
     try {
-      const run = getRun(runId);
+      const run = await getRun(runId);
       if (!run) {
         logError(chalk.red(`Run not found: ${runId}`));
         process.exit(1);
       }
 
-      const results = getResultsByRun(run.id);
+      const results = await getResultsByRun(run.id);
       if (opts.json) {
-        log(formatJSON(run, results));
+        log(await formatJSON(run, results));
       } else {
         const filtered = opts.failedOnly
           ? results.filter((r) => r.status === "failed" || r.status === "error")
           : results;
         const page = cliPage(filtered, opts, 50, 200);
-        log(formatTerminal(run, page.items, { failedOnly: false, summaryResults: results, verbose: opts.verbose, compactFooter: false }));
+        log(await formatTerminal(run, page.items, { failedOnly: false, summaryResults: results, verbose: opts.verbose, compactFooter: false }));
         logCompactFooter(page.returned, page.total, "testers results <run-id> --json, --verbose, --failed-only, or --limit/--offset", page.offset);
       }
     } catch (error) {
@@ -2324,15 +2300,15 @@ program
   .option("--json", "Output as JSON", false)
   .option("-l, --limit <n>", "Limit results", "200")
   .option("--offset <n>", "Skip first N results", "0")
-  .action((id: string, opts) => {
+  .action(async (id: string, opts) => {
     try {
       const limit = Math.max(1, parseInt(opts.limit, 10) || 200);
       const offset = Math.max(0, parseInt(opts.offset, 10) || 0);
 
       // Try as run-id first: get all results, then all screenshots
-      const run = getRun(id);
+      const run = await getRun(id);
       if (run) {
-        const results = getResultsByRun(run.id);
+        const results = await getResultsByRun(run.id);
         const flattened: Array<{
           screenshotId: string;
           resultId: string;
@@ -2348,8 +2324,8 @@ program
         }> = [];
 
         for (const result of results) {
-          const screenshots = listScreenshots(result.id);
-          const scenario = getScenario(result.scenarioId);
+          const screenshots = await listScreenshots(result.id);
+          const scenario = await getScenario(result.scenarioId);
           for (const ss of screenshots) {
             flattened.push({
               screenshotId: ss.id,
@@ -2394,9 +2370,9 @@ program
         log("");
 
         for (const result of results) {
-          const screenshots = listScreenshots(result.id);
+          const screenshots = await listScreenshots(result.id);
           if (screenshots.length > 0) {
-            const scenario = getScenario(result.scenarioId);
+            const scenario = await getScenario(result.scenarioId);
             const label = scenario
               ? `${scenario.shortId}: ${scenario.name}`
               : result.scenarioId.slice(0, 8);
@@ -2437,7 +2413,7 @@ program
       }
 
       // Try as result-id
-      const screenshots = listScreenshots(id);
+      const screenshots = await listScreenshots(id);
       const paged = screenshots.slice(offset, offset + limit);
       if (opts.json) {
         log(
@@ -2504,7 +2480,7 @@ program
 program
   .command("import <dir>")
   .description("Import markdown test files as scenarios")
-  .action((dir: string) => {
+  .action(async (dir: string) => {
     try {
       const absDir = resolve(dir);
       const files = readdirSync(absDir).filter((f) => f.endsWith(".md"));
@@ -2540,7 +2516,7 @@ program
           }
         }
 
-        const scenario = createScenario({
+        const scenario = await createScenario({
           name,
           description: descriptionLines.join(" ") || name,
           steps,
@@ -2575,7 +2551,7 @@ program
   .option("-t, --tag <tag>", "Filter by tag")
   .option("-p, --priority <level>", "Filter by priority")
   .option("--project <id>", "Filter by project ID")
-  .action((format: string | undefined, opts) => {
+  .action(async (format: string | undefined, opts) => {
     try {
       const fmt = (format ?? "json").toLowerCase();
       if (fmt !== "json" && fmt !== "markdown") {
@@ -2585,8 +2561,8 @@ program
         process.exit(1);
       }
 
-      const projectId = resolveProject(opts.project);
-      const scenarios = listScenarios({
+      const projectId = await resolveProject(opts.project);
+      const scenarios = await listScenarios({
         tags: opts.tag ? [opts.tag] : undefined,
         priority: opts.priority as ScenarioPriority | undefined,
         projectId,
@@ -2670,7 +2646,7 @@ program
 program
   .command("config")
   .description("Show current configuration")
-  .action(() => {
+  .action(async () => {
     try {
       const config = loadConfig();
       log(JSON.stringify(config, null, 2));
@@ -2690,18 +2666,28 @@ program
   .command("status")
   .description("Show database and auth status")
   .option("--json", "Output as JSON", false)
-  .action((opts) => {
+  .action(async (opts) => {
     try {
       const config = loadConfig();
       const hasApiKey =
         !!config.anthropicApiKey || !!process.env["ANTHROPIC_API_KEY"];
-      const dbPath = join(getTestersDir(), "testers.db");
+      const storage = storageStatus();
+      const isCloud = storage.transport === "cloud-http";
+      // TRUTH: in cloud mode reads/writes go to the /v1 API — there is no local db.
+      const dbPath = isCloud
+        ? null
+        : storage.dbPath || join(getTestersDir(), "testers.db");
 
       if (opts.json) {
         log(
           JSON.stringify(
             {
               status: hasApiKey ? "ok" : "warn",
+              storageMode: storage.mode,
+              transport: storage.transport,
+              apiBaseUrl: storage.baseUrl,
+              storageApiKey: { set: storage.apiKeyPresent, source: storage.apiKeySource },
+              storageModeSource: storage.modeSource,
               anthropicApiKey: { set: hasApiKey },
               database: { path: dbPath },
               defaultModel: config.defaultModel,
@@ -2719,9 +2705,20 @@ program
       log(chalk.bold("  Open Testers Status"));
       log("");
       log(
+        `  Storage mode:      ${isCloud ? chalk.cyan("cloud") : chalk.yellow("local")}` +
+          chalk.dim(` (${storage.modeSource})`),
+      );
+      if (isCloud) {
+        log(`  API base URL:      ${storage.baseUrl}`);
+        log(
+          `  API key:           ${storage.apiKeyPresent ? chalk.green("configured") : chalk.red("not set")}`,
+        );
+      } else {
+        log(`  Database:          ${dbPath}`);
+      }
+      log(
         `  ANTHROPIC_API_KEY: ${hasApiKey ? chalk.green("set") : chalk.red("not set")}`,
       );
-      log(`  Database:          ${dbPath}`);
       log(`  Default model:     ${config.defaultModel}`);
       log(`  Image model:       ${config.defaultImageModel}`);
       log(`  Screenshots dir:   ${config.screenshots.dir}`);
@@ -2787,7 +2784,7 @@ projectCmd
   .option("--prefix <prefix>", "Scenario prefix", "TST")
   .action(async (name: string, opts) => {
     try {
-      const project = await storeCreateProject({
+      const project = await createProject({
         name,
         path: opts.path,
         description: opts.description,
@@ -2830,7 +2827,7 @@ projectCmd
           ? opts.search.trim().toLowerCase()
           : null;
 
-      const allProjects = await storeListProjects();
+      const allProjects = await listProjects();
       const filtered = search
         ? allProjects.filter((p) => {
             const name = p.name.toLowerCase();
@@ -2898,9 +2895,9 @@ projectCmd
   .action(async (id: string, opts) => {
     try {
       // Try full UUID, then partial prefix match, then name
-      let project = await storeGetProject(id);
+      let project = await getProject(id);
       if (!project) {
-        const all = await storeListProjects();
+        const all = await listProjects();
         project = all.find((p) => p.id.startsWith(id) || p.name === id) ?? null;
       }
       if (!project) {
@@ -2997,7 +2994,7 @@ projectCmd
   .option("--json", "Output as JSON", false)
   .action(async (name: string, opts) => {
     try {
-      const project = await storeEnsureProject(name, process.cwd());
+      const project = await ensureProject(name, process.cwd());
       if (!existsSync(CONFIG_DIR)) {
         mkdirSync(CONFIG_DIR, { recursive: true });
       }
@@ -3045,7 +3042,7 @@ repoCmd
   .option("--refresh", "Force a fresh scan, ignoring cache", false)
   .option("--json", "Output as JSON", false)
   .option("--base-url <url>", "Override the suggested base URL")
-  .action((path: string | undefined, opts) => {
+  .action(async (path: string | undefined, opts) => {
     try {
       const repoPath = resolve(path ?? process.cwd());
       const snapshot = discoverRepo({
@@ -3150,7 +3147,7 @@ repoCmd
   .option("--seed", "Seed the database", false)
   .option("--refresh", "Force fresh discovery scan", false)
   .option("--json", "Output as JSON", false)
-  .action((path: string | undefined, opts) => {
+  .action(async (path: string | undefined, opts) => {
     try {
       const repoPath = resolve(path ?? process.cwd());
       const snapshot = discoverRepo({ repoPath, refresh: opts.refresh });
@@ -3358,7 +3355,7 @@ repoCmd
   .description("Manage discovery cache")
   .option("--clear", "Clear discovery cache", false)
   .option("--status", "Show cache status", false)
-  .action((path: string | undefined, opts) => {
+  .action(async (path: string | undefined, opts) => {
     try {
       if (opts.clear) {
         const repoPath = path ? resolve(path) : undefined;
@@ -3695,7 +3692,7 @@ sandboxCmd
   .option("-l, --limit <n>", "Limit results", "20")
   .option("--offset <n>", "Skip first N results", "0")
   .option("--verbose", "Show full source and working directories", false)
-  .action((opts) => {
+  .action(async (opts) => {
     const launches = listSandboxAppLaunches();
     const page = cliPage(launches, opts, 20, 100);
     if (opts.json) {
@@ -3836,19 +3833,19 @@ sessionCmd
   .option("--search <query>", "Search by URL or title")
   .option("--json", "Output as JSON", false)
   .option("--verbose", "Show full URLs and titles", false)
-  .action((opts) => {
+  .action(async (opts) => {
     try {
       const limit = compactLimit(opts.limit, 20, 100);
       const sessions = opts.search
-        ? searchSessions(opts.search, limit)
-        : listSessions(limit);
+        ? await searchSessions(opts.search, limit)
+        : await listSessions(limit);
 
       if (opts.json) {
         log(JSON.stringify(sessions, null, 2));
         return;
       }
 
-      const total = countSessions();
+      const total = await countSessions();
       if (sessions.length === 0) {
         log(
           chalk.dim(
@@ -3899,9 +3896,9 @@ sessionCmd
   .command("show <id>")
   .description("Show details of a recorded session")
   .option("--json", "Output as JSON", false)
-  .action((id: string, opts) => {
+  .action(async (id: string, opts) => {
     try {
-      const session = getSession(id);
+      const session = await getSession(id);
       if (!session) {
         logError(chalk.red("Session not found."));
         process.exit(1);
@@ -3929,8 +3926,14 @@ sessionCmd
       log("");
 
       // Show error entries if any
-      const errors = session.entries.filter(
-        (e: any) => e && e.type === "error",
+      type SessionEntry = {
+        type?: string;
+        timestamp?: string;
+        message?: string;
+        text?: string;
+      };
+      const errors = (session.entries as SessionEntry[]).filter(
+        (e) => Boolean(e) && e.type === "error",
       );
       if (errors.length > 0) {
         log(chalk.bold.red("  Errors:"));
@@ -3967,7 +3970,7 @@ sessionCmd
       // Accept either a single session object or an array of sessions
       const items = Array.isArray(data) ? data : [data];
 
-      const { createSession } = await import("../db/sessions.js");
+      const { createSession } = await import("../store/index.js");
 
       let imported = 0;
       for (const item of items) {
@@ -3987,7 +3990,7 @@ sessionCmd
           (e: any) => e && e.type === "navigation",
         ).length;
 
-        createSession({
+        await createSession({
           sessionId,
           tabId: item.tabId ?? 0,
           url: item.url ?? item.lastUrl ?? null,
@@ -4019,9 +4022,9 @@ sessionCmd
 sessionCmd
   .command("delete <id>")
   .description("Delete a recorded session")
-  .action((id: string) => {
+  .action(async (id: string) => {
     try {
-      const ok = deleteSession(id);
+      const ok = await deleteSession(id);
       if (ok) {
         log(chalk.green("Session deleted."));
       } else {
@@ -4064,10 +4067,10 @@ scheduleCmd
   .option("--headed", "Run in headed mode", false)
   .option("--timeout <ms>", "Timeout in milliseconds")
   .option("--project <id>", "Project ID")
-  .action((name: string, opts) => {
+  .action(async (name: string, opts) => {
     try {
-      const projectId = resolveProject(opts.project);
-      const schedule = createSchedule({
+      const projectId = await resolveProject(opts.project);
+      const schedule = await createSchedule({
         name,
         cronExpression: opts.cron,
         url: opts.url,
@@ -4108,10 +4111,10 @@ scheduleCmd
   .option("-l, --limit <n>", "Limit results", "20")
   .option("--offset <n>", "Skip first N results", "0")
   .option("--verbose", "Show untruncated schedule names and URLs", false)
-  .action((opts) => {
+  .action(async (opts) => {
     try {
-      const projectId = resolveProject(opts.project);
-      const schedules = listSchedules({
+      const projectId = await resolveProject(opts.project);
+      const schedules = await listSchedules({
         projectId,
         enabled: opts.enabled ? true : undefined,
       });
@@ -4159,9 +4162,9 @@ scheduleCmd
 scheduleCmd
   .command("show <id>")
   .description("Show schedule details")
-  .action((id: string) => {
+  .action(async (id: string) => {
     try {
-      const schedule = getSchedule(id);
+      const schedule = await getSchedule(id);
       if (!schedule) {
         logError(chalk.red(`Schedule not found: ${id}`));
         process.exit(1);
@@ -4201,9 +4204,9 @@ scheduleCmd
 scheduleCmd
   .command("enable <id>")
   .description("Enable a schedule")
-  .action((id: string) => {
+  .action(async (id: string) => {
     try {
-      const schedule = updateSchedule(id, { enabled: true });
+      const schedule = await updateSchedule(id, { enabled: true });
       log(chalk.green(`Enabled schedule ${chalk.bold(schedule.name)}`));
     } catch (error) {
       logError(
@@ -4218,9 +4221,9 @@ scheduleCmd
 scheduleCmd
   .command("disable <id>")
   .description("Disable a schedule")
-  .action((id: string) => {
+  .action(async (id: string) => {
     try {
-      const schedule = updateSchedule(id, { enabled: false });
+      const schedule = await updateSchedule(id, { enabled: false });
       log(chalk.green(`Disabled schedule ${chalk.bold(schedule.name)}`));
     } catch (error) {
       logError(
@@ -4235,9 +4238,9 @@ scheduleCmd
 scheduleCmd
   .command("delete <id>")
   .description("Delete a schedule")
-  .action((id: string) => {
+  .action(async (id: string) => {
     try {
-      const deleted = deleteSchedule(id);
+      const deleted = await deleteSchedule(id);
       if (deleted) {
         log(chalk.green(`Deleted schedule: ${id}`));
       } else {
@@ -4260,7 +4263,7 @@ scheduleCmd
   .option("--json", "Output results as JSON", false)
   .action(async (id: string, opts) => {
     try {
-      const schedule = getSchedule(id);
+      const schedule = await getSchedule(id);
       if (!schedule) {
         logError(chalk.red(`Schedule not found: ${id}`));
         process.exit(1);
@@ -4286,9 +4289,9 @@ scheduleCmd
       });
 
       if (opts.json) {
-        log(formatJSON(run, results));
+        log(await formatJSON(run, results));
       } else {
-        log(formatTerminal(run, results));
+        log(await formatTerminal(run, results));
       }
 
       process.exit(getExitCode(run));
@@ -4320,7 +4323,7 @@ program
       const checkAndRun = async () => {
         while (running) {
           try {
-            const schedules = listSchedules({ enabled: true });
+            const schedules = await listSchedules({ enabled: true });
             const now = new Date().toISOString();
 
             for (const schedule of schedules) {
@@ -4350,7 +4353,7 @@ program
                   );
 
                   // Update schedule with last run info
-                  updateSchedule(schedule.id, {});
+                  await updateSchedule(schedule.id, {});
                 } catch (err) {
                   logError(
                     chalk.red(
@@ -4442,7 +4445,7 @@ program
   .option("-y, --yes", "Skip interactive prompts (non-interactive mode)", false)
   .action(async (opts) => {
     try {
-      const { project, scenarios, framework, url } = initProject({
+      const { project, scenarios, framework, url } = await initProject({
         name: opts.name,
         url: opts.url,
         path: opts.path,
@@ -4514,7 +4517,7 @@ program
           const envUrl = await ask(`  Base URL (default: ${url}): `);
           const resolvedEnvName = envName.trim() || "staging";
           const resolvedEnvUrl = envUrl.trim() || url;
-          createEnvironment({
+          await createEnvironment({
             name: resolvedEnvName,
             url: resolvedEnvUrl,
             projectId: project.id,
@@ -4538,7 +4541,7 @@ program
           const resolvedScenarioName =
             scenarioName.trim() || "My first scenario";
           const resolvedScenarioUrl = scenarioUrl.trim() || url;
-          const newScenario = createScenario({
+          const newScenario = await createScenario({
             name: resolvedScenarioName,
             description: `Navigate to ${resolvedScenarioUrl} and verify it loads correctly.`,
             projectId: project.id,
@@ -4584,13 +4587,13 @@ program
   .option("--parallel <n>", "Parallel count", "1")
   .action(async (runId: string, opts) => {
     try {
-      const originalRun = getRun(runId);
+      const originalRun = await getRun(runId);
       if (!originalRun) {
         logError(chalk.red(`Run not found: ${runId}`));
         process.exit(1);
       }
 
-      const originalResults = getResultsByRun(originalRun.id);
+      const originalResults = await getResultsByRun(originalRun.id);
       const scenarioIds = originalResults.map((r) => r.scenarioId);
 
       if (scenarioIds.length === 0) {
@@ -4613,9 +4616,9 @@ program
       });
 
       if (opts.json) {
-        log(formatJSON(run, results));
+        log(await formatJSON(run, results));
       } else {
-        log(formatTerminal(run, results));
+        log(await formatTerminal(run, results));
       }
       process.exit(getExitCode(run));
     } catch (error) {
@@ -4640,13 +4643,13 @@ program
   .option("--parallel <n>", "Parallel count", "1")
   .action(async (runId: string, opts) => {
     try {
-      const originalRun = getRun(runId);
+      const originalRun = await getRun(runId);
       if (!originalRun) {
         logError(chalk.red(`Run not found: ${runId}`));
         process.exit(1);
       }
 
-      const originalResults = getResultsByRun(originalRun.id);
+      const originalResults = await getResultsByRun(originalRun.id);
       const failedScenarioIds = originalResults
         .filter((r) => r.status === "failed" || r.status === "error")
         .map((r) => r.scenarioId);
@@ -4693,9 +4696,9 @@ program
       }
 
       if (opts.json) {
-        log(formatJSON(run, results));
+        log(await formatJSON(run, results));
       } else {
-        log(formatTerminal(run, results));
+        log(await formatTerminal(run, results));
       }
       process.exit(getExitCode(run));
     } catch (error) {
@@ -4720,7 +4723,7 @@ program
   .option("--project <id>", "Project ID")
   .action(async (url: string, opts) => {
     try {
-      const projectId = resolveProject(opts.project);
+      const projectId = await resolveProject(opts.project);
 
       log(chalk.blue(`Running smoke test against ${chalk.bold(url)}...`));
       log("");
@@ -4808,7 +4811,7 @@ program
   .option("-o, --output <file>", "Write JSON results to a file")
   .action(async (url: string, opts) => {
     try {
-      const projectId = resolveProject(opts.project);
+      const projectId = await resolveProject(opts.project);
       const includeA11y = opts.a11y !== undefined;
       const wcagLevel = includeA11y
         ? normalizeQuickQaWcagLevel(opts.a11y)
@@ -4873,9 +4876,9 @@ program
   .description("Compare two test runs")
   .option("--json", "JSON output", false)
   .option("--threshold <percent>", "Visual diff threshold percentage", "0.1")
-  .action((run1: string, run2: string, opts) => {
+  .action(async (run1: string, run2: string, opts) => {
     try {
-      const diff = diffRuns(run1, run2);
+      const diff = await diffRuns(run1, run2);
       if (opts.json) {
         log(formatDiffJSON(diff));
       } else {
@@ -4884,12 +4887,12 @@ program
 
       // Visual screenshot diff
       const threshold = parseFloat(opts.threshold);
-      const visualResults = compareRunScreenshots(run2, run1, threshold);
+      const visualResults = await compareRunScreenshots(run2, run1, threshold);
       if (visualResults.length > 0) {
         if (opts.json) {
           log(JSON.stringify({ visualDiff: visualResults }, null, 2));
         } else {
-          log(formatVisualDiffTerminal(visualResults, threshold));
+          log(await formatVisualDiffTerminal(visualResults, threshold));
         }
       }
 
@@ -4932,7 +4935,7 @@ program
       if (opts.compliance) {
         const { generateComplianceReport } =
           await import("../lib/compliance-report.js");
-        const projectId = resolveProject(opts.project);
+        const projectId = await resolveProject(opts.project);
         const format = (opts.format === "json" ? "json" : "markdown") as
           | "json"
           | "markdown";
@@ -4955,9 +4958,9 @@ program
       // HTML report mode
       let html: string;
       if (opts.latest || !runId) {
-        html = generateLatestReport();
+        html = await generateLatestReport();
       } else {
-        html = generateHtmlReport(runId);
+        html = await generateHtmlReport(runId);
       }
       writeFileSync(opts.output, html, "utf-8");
       const absPath = resolve(opts.output);
@@ -4991,7 +4994,7 @@ authCmd
     "Environment variable name for the login password",
   )
   .option("--login-path <path>", "Login page path", "/login")
-  .action((name: string, opts) => {
+  .action(async (name: string, opts) => {
     try {
       const email = opts.email ?? envCredentialRef(opts.emailEnv);
       const password = opts.password ?? envCredentialRef(opts.passwordEnv);
@@ -5003,7 +5006,7 @@ authCmd
         logError(chalk.red("Error: provide --password or --password-env"));
         process.exit(1);
       }
-      const preset = createAuthPreset({
+      const preset = await createAuthPreset({
         name,
         email,
         password,
@@ -5030,9 +5033,9 @@ authCmd
   .option("-l, --limit <n>", "Limit results", "20")
   .option("--offset <n>", "Skip first N results", "0")
   .option("--verbose", "Show full preset names, email references, and paths", false)
-  .action((opts) => {
+  .action(async (opts) => {
     try {
-      const presets = listAuthPresets();
+      const presets = await listAuthPresets();
       const page = cliPage(presets, opts, 20, 100);
       if (presets.length === 0) {
         log(chalk.dim("No auth presets found."));
@@ -5071,9 +5074,9 @@ authCmd
 authCmd
   .command("delete <name>")
   .description("Delete an auth preset")
-  .action((name: string) => {
+  .action(async (name: string) => {
     try {
-      const deleted = deleteAuthPreset(name);
+      const deleted = await deleteAuthPreset(name);
       if (deleted) {
         log(chalk.green(`Deleted auth preset: ${name}`));
       } else {
@@ -5108,13 +5111,13 @@ program
   )
   .option("--json", "JSON output", false)
   .option("--csv", "CSV output", false)
-  .action((opts) => {
+  .action(async (opts) => {
     try {
-      const projectId = resolveProject(opts.project);
+      const projectId = await resolveProject(opts.project);
       const period = opts.period as "day" | "week" | "month" | "all";
 
       if (opts.byScenario) {
-        const rows = getCostsByScenario({ projectId, period });
+        const rows = await getCostsByScenario({ projectId, period });
         if (opts.json) {
           log(JSON.stringify(rows, null, 2));
         } else {
@@ -5123,7 +5126,7 @@ program
         return;
       }
 
-      const summary = getCostSummary({ projectId, period });
+      const summary = await getCostSummary({ projectId, period });
       if (opts.csv) {
         log(formatCostsCsv(summary));
       } else if (opts.json) {
@@ -5147,23 +5150,23 @@ program
   .command("chain <scenario-id>")
   .description("Add a dependency to a scenario")
   .requiredOption("--depends-on <id>", "Scenario ID that must run first")
-  .action((scenarioId: string, opts) => {
+  .action(async (scenarioId: string, opts) => {
     try {
       const scenario =
-        getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
+        await getScenario(scenarioId) ?? await getScenarioByShortId(scenarioId);
       if (!scenario) {
         logError(chalk.red(`Scenario not found: ${scenarioId}`));
         process.exit(1);
       }
 
       const dep =
-        getScenario(opts.dependsOn) ?? getScenarioByShortId(opts.dependsOn);
+        await getScenario(opts.dependsOn) ?? await getScenarioByShortId(opts.dependsOn);
       if (!dep) {
         logError(chalk.red(`Dependency scenario not found: ${opts.dependsOn}`));
         process.exit(1);
       }
 
-      addDependency(scenario.id, dep.id);
+      await addDependency(scenario.id, dep.id);
       log(chalk.green(`${scenario.shortId} now depends on ${dep.shortId}`));
     } catch (error) {
       logError(
@@ -5180,10 +5183,10 @@ program
   .description("Remove a dependency from a scenario")
   .requiredOption("--depends-on <id>", "Dependency to remove (alias: --from)")
   .option("--from <id>", "Dependency to remove (alias for --depends-on)")
-  .action((scenarioId: string, opts) => {
+  .action(async (scenarioId: string, opts) => {
     try {
       const scenario =
-        getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
+        await getScenario(scenarioId) ?? await getScenarioByShortId(scenarioId);
       if (!scenario) {
         logError(chalk.red(`Scenario not found: ${scenarioId}`));
         process.exit(1);
@@ -5196,13 +5199,13 @@ program
         );
         process.exit(1);
       }
-      const dep = getScenario(depId) ?? getScenarioByShortId(depId);
+      const dep = await getScenario(depId) ?? await getScenarioByShortId(depId);
       if (!dep) {
         logError(chalk.red(`Dependency not found: ${depId}`));
         process.exit(1);
       }
 
-      removeDependency(scenario.id, dep.id);
+      await removeDependency(scenario.id, dep.id);
       log(
         chalk.green(
           `Removed dependency: ${scenario.shortId} no longer depends on ${dep.shortId}`,
@@ -5221,17 +5224,17 @@ program
 program
   .command("deps <scenario-id>")
   .description("Show dependencies for a scenario")
-  .action((scenarioId: string) => {
+  .action(async (scenarioId: string) => {
     try {
       const scenario =
-        getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
+        await getScenario(scenarioId) ?? await getScenarioByShortId(scenarioId);
       if (!scenario) {
         logError(chalk.red(`Scenario not found: ${scenarioId}`));
         process.exit(1);
       }
 
-      const deps = getDependencies(scenario.id);
-      const dependents = getDependents(scenario.id);
+      const deps = await getDependencies(scenario.id);
+      const dependents = await getDependents(scenario.id);
 
       log("");
       log(
@@ -5242,7 +5245,7 @@ program
       if (deps.length > 0) {
         log(chalk.dim("  Depends on:"));
         for (const depId of deps) {
-          const s = getScenario(depId);
+          const s = await getScenario(depId);
           log(`    → ${s ? `${s.shortId}: ${s.name}` : depId.slice(0, 8)}`);
         }
       } else {
@@ -5253,7 +5256,7 @@ program
         log("");
         log(chalk.dim("  Required by:"));
         for (const depId of dependents) {
-          const s = getScenario(depId);
+          const s = await getScenario(depId);
           log(`    ← ${s ? `${s.shortId}: ${s.name}` : depId.slice(0, 8)}`);
         }
       }
@@ -5279,30 +5282,32 @@ flowCmd
   .description("Create a flow from scenario IDs")
   .requiredOption("--chain <ids>", "Comma-separated scenario IDs in order")
   .option("--project <id>", "Project ID")
-  .action((name: string, opts) => {
+  .action(async (name: string, opts) => {
     try {
-      const ids = opts.chain.split(",").map((id: string) => {
-        const s = getScenario(id.trim()) ?? getScenarioByShortId(id.trim());
-        if (!s) {
-          logError(chalk.red(`Scenario not found: ${id.trim()}`));
-          process.exit(1);
-        }
-        return s.id;
-      });
+      const ids = await Promise.all(
+        opts.chain.split(",").map(async (id: string) => {
+          const s = (await getScenario(id.trim())) ?? (await getScenarioByShortId(id.trim()));
+          if (!s) {
+            logError(chalk.red(`Scenario not found: ${id.trim()}`));
+            process.exit(1);
+          }
+          return s.id;
+        }),
+      );
 
       // Auto-create dependencies: each scenario depends on the previous
       for (let i = 1; i < ids.length; i++) {
         try {
-          addDependency(ids[i], ids[i - 1]);
+          await addDependency(ids[i], ids[i - 1]);
         } catch {
           /* already exists */
         }
       }
 
-      const flow = createFlow({
+      const flow = await createFlow({
         name,
         scenarioIds: ids,
-        projectId: resolveProject(opts.project),
+        projectId: await resolveProject(opts.project),
       });
       log(
         chalk.green(
@@ -5327,8 +5332,8 @@ flowCmd
   .option("-l, --limit <n>", "Limit results", "20")
   .option("--offset <n>", "Skip first N results", "0")
   .option("--verbose", "Show untruncated flow names", false)
-  .action((opts) => {
-    const flows = listFlows(resolveProject(opts.project) ?? undefined);
+  .action(async (opts) => {
+    const flows = await listFlows(await resolveProject(opts.project) ?? undefined);
     const page = cliPage(flows, opts, 20, 100);
     if (opts.json) {
       log(JSON.stringify(flows, null, 2));
@@ -5354,8 +5359,8 @@ flowCmd
 flowCmd
   .command("show <id>")
   .description("Show flow details")
-  .action((id: string) => {
-    const flow = getFlow(id);
+  .action(async (id: string) => {
+    const flow = await getFlow(id);
     if (!flow) {
       logError(chalk.red(`Flow not found: ${id}`));
       process.exit(1);
@@ -5365,9 +5370,11 @@ flowCmd
     log(`  ID: ${chalk.dim(flow.id)}`);
     log(`  Scenarios (in order):`);
     for (let i = 0; i < flow.scenarioIds.length; i++) {
-      const s = getScenario(flow.scenarioIds[i]);
+      const sid = flow.scenarioIds[i];
+      if (!sid) continue;
+      const s = await getScenario(sid);
       log(
-        `    ${i + 1}. ${s ? `${s.shortId}: ${s.name}` : flow.scenarioIds[i].slice(0, 8)}`,
+        `    ${i + 1}. ${s ? `${s.shortId}: ${s.name}` : sid.slice(0, 8)}`,
       );
     }
     log("");
@@ -5376,8 +5383,8 @@ flowCmd
 flowCmd
   .command("delete <id>")
   .description("Delete a flow")
-  .action((id: string) => {
-    if (deleteFlow(id)) log(chalk.green("Flow deleted."));
+  .action(async (id: string) => {
+    if (await deleteFlow(id)) log(chalk.green("Flow deleted."));
     else {
       logError(chalk.red("Flow not found."));
       process.exit(1);
@@ -5393,7 +5400,7 @@ flowCmd
   .option("--json", "JSON output", false)
   .action(async (id: string, opts) => {
     try {
-      const flow = getFlow(id);
+      const flow = await getFlow(id);
       if (!flow) {
         logError(chalk.red(`Flow not found: ${id}`));
         process.exit(1);
@@ -5417,8 +5424,8 @@ flowCmd
         parallel: 1, // flows run sequentially by design
       });
 
-      if (opts.json) log(formatJSON(run, results));
-      else log(formatTerminal(run, results));
+      if (opts.json) log(await formatJSON(run, results));
+      else log(await formatTerminal(run, results));
       process.exit(getExitCode(run));
     } catch (error) {
       logError(
@@ -5441,9 +5448,9 @@ envCmd
   .option("--auth <preset>", "Auth preset name")
   .option("--project <id>", "Project ID")
   .option("--default", "Set as default environment", false)
-  .action((name: string, opts) => {
+  .action(async (name: string, opts) => {
     try {
-      const env = createEnvironment({
+      const env = await createEnvironment({
         name,
         url: opts.url,
         authPresetName: opts.auth,
@@ -5473,9 +5480,9 @@ envCmd
   .option("-l, --limit <n>", "Limit results", "20")
   .option("--offset <n>", "Skip first N results", "0")
   .option("--verbose", "Show full URLs", false)
-  .action((opts) => {
+  .action(async (opts) => {
     try {
-      const envs = listEnvironments(opts.project);
+      const envs = await listEnvironments(opts.project);
       const page = cliPage(envs, opts, 20, 100);
       if (opts.json) {
         log(JSON.stringify({ total: envs.length, items: envs }, null, 2));
@@ -5613,10 +5620,14 @@ envCmd
 envCmd
   .command("use <name>")
   .description("Set an environment as the default")
-  .action((name: string) => {
+  .action(async (name: string) => {
     try {
-      setDefaultEnvironment(name);
-      const env = getEnvironment(name)!;
+      await setDefaultEnvironment(name);
+      const env = await getEnvironment(name);
+      if (!env) {
+        logError(chalk.red(`Environment not found: ${name}`));
+        process.exit(1);
+      }
       log(chalk.green(`Default environment set: ${env.name} → ${env.url}`));
     } catch (error) {
       logError(
@@ -5631,9 +5642,9 @@ envCmd
 envCmd
   .command("delete <name>")
   .description("Delete an environment")
-  .action((name: string) => {
+  .action(async (name: string) => {
     try {
-      const deleted = deleteEnvironment(name);
+      const deleted = await deleteEnvironment(name);
       if (deleted) {
         log(chalk.green(`Environment deleted: ${name}`));
       } else {
@@ -5655,10 +5666,10 @@ envCmd
 program
   .command("baseline <run-id>")
   .description("Set a run as the visual baseline")
-  .action((runId: string) => {
+  .action(async (runId: string) => {
     try {
-      setBaseline(runId);
-      const run = getRun(runId);
+      await setBaseline(runId);
+      const run = await getRun(runId);
       log(
         chalk.green(
           `Baseline set: ${chalk.bold(runId.slice(0, 8))}${run ? ` (${run.status}, ${run.total} scenarios)` : ""}`,
@@ -5683,9 +5694,9 @@ program
   .action(async (spec: string, opts) => {
     try {
       const { importFromOpenAPI } = await import("../lib/openapi-import.js");
-      const { imported, scenarios } = importFromOpenAPI(
+      const { imported, scenarios } = await importFromOpenAPI(
         spec,
-        resolveProject(opts.project) ?? undefined,
+        await resolveProject(opts.project) ?? undefined,
       );
       log(chalk.green(`\nImported ${imported} scenarios from API spec:`));
       for (const s of scenarios) {
@@ -5833,7 +5844,7 @@ inventoryCmd
     try {
       const { importNextRouteInventory } =
         await import("../lib/next-route-inventory.js");
-      const projectId = resolveProject(opts.project) ?? undefined;
+      const projectId = await resolveProject(opts.project) ?? undefined;
       const env = parseSandboxEnv(opts.sandboxEnv, opts.sandboxEnvOptional);
       if (
         !["route", "area-kind", "action"].includes(opts.actionWorkflowGrouping)
@@ -5842,7 +5853,7 @@ inventoryCmd
           "--action-workflow-grouping must be route, area-kind, or action",
         );
       }
-      const result = importNextRouteInventory({
+      const result = await importNextRouteInventory({
         rootDir: root ?? process.cwd(),
         appDir: opts.appDir,
         projectId,
@@ -5959,7 +5970,7 @@ program
   .action(async (url: string, opts) => {
     try {
       const { generateScenarios } = await import("../lib/generator.js");
-      const projectId = resolveProject(opts.project) ?? undefined;
+      const projectId = await resolveProject(opts.project) ?? undefined;
 
       log(chalk.dim(`  Crawling ${url} and generating scenarios...`));
 
@@ -6042,7 +6053,7 @@ program
       const { recording, scenario } = await recordAndSave(
         url,
         opts.name,
-        resolveProject(opts.project) ?? undefined,
+        await resolveProject(opts.project) ?? undefined,
       );
       log("");
       log(
@@ -6101,7 +6112,7 @@ program
       const { matchFilesToScenarios } = await import("../lib/affected.js");
       const { runBatch } = await import("../lib/runner.js");
 
-      const projectId = resolveProject(opts.project);
+      const projectId = await resolveProject(opts.project);
 
       // Parse --map glob:tags options
       const mappings = (opts.map as string[])
@@ -6118,7 +6129,7 @@ program
         })
         .filter(Boolean) as { glob: string; tags: string[] }[];
 
-      const allScenarios = listScenarios({ projectId });
+      const allScenarios = await listScenarios({ projectId });
       const matched = matchFilesToScenarios(
         opts.file as string[],
         allScenarios,
@@ -6159,7 +6170,7 @@ program
         log(JSON.stringify({ run, results }, null, 2));
       } else {
         const { formatTerminal } = await import("../lib/reporter.js");
-        log(formatTerminal(run, results));
+        log(await formatTerminal(run, results));
       }
 
       const { getExitCode } = await import("../lib/reporter.js");
@@ -6216,7 +6227,7 @@ program
         dir: opts.dir,
         pollIntervalMs: parseInt(opts.poll, 10),
         mappings,
-        projectId: resolveProject(opts.project),
+        projectId: await resolveProject(opts.project),
         model: opts.model,
         headed: opts.headed,
         parallel: parseInt(opts.parallel, 10),
@@ -6242,10 +6253,9 @@ agentCmd
   .description("Register an agent (idempotent)")
   .option("-d, --description <text>", "Agent description")
   .option("-r, --role <role>", "Agent role")
-  .action((name: string, opts) => {
+  .action(async (name: string, opts) => {
     try {
-      const { registerAgent } = require("../db/agents.js");
-      const agent = registerAgent({
+      const agent = await registerAgent({
         name,
         description: opts.description,
         role: opts.role,
@@ -6268,10 +6278,9 @@ agentCmd
 agentCmd
   .command("heartbeat <id>")
   .description("Update agent last_seen_at timestamp")
-  .action((id: string) => {
+  .action(async (id: string) => {
     try {
-      const { heartbeatAgent } = require("../db/agents.js");
-      const agent = heartbeatAgent(id);
+      const agent = await heartbeatAgent(id);
       if (!agent) {
         logError(chalk.red(`Agent not found: ${id}`));
         process.exit(1);
@@ -6292,10 +6301,9 @@ agentCmd
 agentCmd
   .command("focus <agent-id> [scenario-id]")
   .description("Set (or clear) an agent's current focus scenario")
-  .action((agentId: string, scenarioId: string | undefined) => {
+  .action(async (agentId: string, scenarioId: string | undefined) => {
     try {
-      const { setAgentFocus } = require("../db/agents.js");
-      const agent = setAgentFocus(agentId, scenarioId ?? null);
+      const agent = await setAgentFocus(agentId, scenarioId ?? null);
       if (!agent) {
         logError(chalk.red(`Agent not found: ${agentId}`));
         process.exit(1);
@@ -6323,10 +6331,9 @@ agentCmd
   .option("-l, --limit <n>", "Limit results", "20")
   .option("--offset <n>", "Skip first N results", "0")
   .option("--verbose", "Show full focus text", false)
-  .action((opts) => {
+  .action(async (opts) => {
     try {
-      const { listAgents } = require("../db/agents.js");
-      const agents = listAgents();
+      const agents = await listAgents();
       const page = cliPage(agents, opts, 20, 100);
       if (agents.length === 0) {
         log(chalk.dim("No agents registered."));
@@ -6379,14 +6386,14 @@ SCAN_COMMON_OPTIONS(
 ).action(async (url: string, opts) => {
   try {
     const { scanConsoleErrors } = await import("../lib/scanners/console.js");
-    const { upsertScanIssue } = await import("../db/scan-issues.js");
+    const { upsertScanIssue } = await import("../store/index.js");
     const result = await scanConsoleErrors({
       url,
       pages: opts.page,
       headed: opts.headed,
       timeoutMs: parseInt(opts.timeout),
     });
-    result.issues.forEach((i) => upsertScanIssue(i, opts.project));
+    await Promise.all(result.issues.map((i) => upsertScanIssue(i, opts.project)));
     printScanResult(result, opts.json);
   } catch (e) {
     logError(chalk.red(e instanceof Error ? e.message : String(e)));
@@ -6410,14 +6417,14 @@ SCAN_COMMON_OPTIONS(
 ).action(async (url: string, opts) => {
   try {
     const { scanNetworkErrors } = await import("../lib/scanners/network.js");
-    const { upsertScanIssue } = await import("../db/scan-issues.js");
+    const { upsertScanIssue } = await import("../store/index.js");
     const result = await scanNetworkErrors({
       url,
       pages: opts.page,
       headed: opts.headed,
       timeoutMs: parseInt(opts.timeout),
     });
-    result.issues.forEach((i) => upsertScanIssue(i, opts.project));
+    await Promise.all(result.issues.map((i) => upsertScanIssue(i, opts.project)));
     printScanResult(result, opts.json);
   } catch (e) {
     logError(chalk.red(e instanceof Error ? e.message : String(e)));
@@ -6433,14 +6440,14 @@ SCAN_COMMON_OPTIONS(
 ).action(async (url: string, opts) => {
   try {
     const { scanBrokenLinks } = await import("../lib/scanners/links.js");
-    const { upsertScanIssue } = await import("../db/scan-issues.js");
+    const { upsertScanIssue } = await import("../store/index.js");
     const result = await scanBrokenLinks({
       url,
       maxPages: parseInt(opts.maxPages),
       headed: opts.headed,
       timeoutMs: parseInt(opts.timeout),
     });
-    result.issues.forEach((i) => upsertScanIssue(i, opts.project));
+    await Promise.all(result.issues.map((i) => upsertScanIssue(i, opts.project)));
     printScanResult(result, opts.json);
   } catch (e) {
     logError(chalk.red(e instanceof Error ? e.message : String(e)));
@@ -6474,7 +6481,7 @@ SCAN_COMMON_OPTIONS(
 ).action(async (url: string, opts) => {
   try {
     const { scanPerformance } = await import("../lib/scanners/performance.js");
-    const { upsertScanIssue } = await import("../db/scan-issues.js");
+    const { upsertScanIssue } = await import("../store/index.js");
     const result = await scanPerformance({
       url,
       pages: opts.page,
@@ -6485,7 +6492,7 @@ SCAN_COMMON_OPTIONS(
         loadTimeMs: parseInt(opts.loadThreshold),
       },
     });
-    result.issues.forEach((i) => upsertScanIssue(i, opts.project));
+    await Promise.all(result.issues.map((i) => upsertScanIssue(i, opts.project)));
     printScanResult(result, opts.json);
   } catch (e) {
     logError(chalk.red(e instanceof Error ? e.message : String(e)));
@@ -6576,10 +6583,9 @@ scanCmd
   .option("--offset <n>", "Skip first N results", "0")
   .option("--verbose", "Show full issue messages and page URLs", false)
   .option("--json", "Output as JSON", false)
-  .action((opts) => {
+  .action(async (opts) => {
     try {
-      const { listScanIssues } = require("../db/scan-issues.js");
-      const filteredIssues = listScanIssues({
+      const filteredIssues = await listScanIssues({
         status: opts.status,
         type: opts.type,
         projectId: opts.project,
@@ -6618,10 +6624,9 @@ scanCmd
 scanCmd
   .command("resolve <id>")
   .description("Mark a scan issue as resolved")
-  .action((id: string) => {
+  .action(async (id: string) => {
     try {
-      const { resolveScanIssue } = require("../db/scan-issues.js");
-      const ok = resolveScanIssue(id);
+      const ok = await resolveScanIssue(id);
       if (!ok) {
         logError(chalk.red(`Scan issue not found: ${id}`));
         process.exit(1);
@@ -6652,7 +6657,7 @@ SCAN_COMMON_OPTIONS(
 ).action(async (url: string, opts) => {
   try {
     const { scanA11y } = await import("../lib/scanners/a11y.js");
-    const { upsertScanIssue } = await import("../db/scan-issues.js");
+    const { upsertScanIssue } = await import("../store/index.js");
     const result = await scanA11y({
       url,
       pages: opts.page,
@@ -6660,7 +6665,7 @@ SCAN_COMMON_OPTIONS(
       headed: opts.headed,
       timeoutMs: parseInt(opts.timeout ?? "15000"),
     });
-    result.issues.forEach((i) => upsertScanIssue(i, opts.project));
+    await Promise.all(result.issues.map((i) => upsertScanIssue(i, opts.project)));
     printScanResult(result, opts.json);
   } catch (e) {
     logError(chalk.red(e instanceof Error ? e.message : String(e)));
@@ -6697,7 +6702,7 @@ SCAN_COMMON_OPTIONS(
 ).action(async (url: string, opts) => {
   try {
     const { scanInjection } = await import("../lib/scanners/injection.js");
-    const { upsertScanIssue } = await import("../db/scan-issues.js");
+    const { upsertScanIssue } = await import("../store/index.js");
 
     log(chalk.bold(`  Injection probe: ${url}`));
     log(
@@ -6726,7 +6731,7 @@ SCAN_COMMON_OPTIONS(
       headed: opts.headed,
     });
 
-    result.issues.forEach((i) => upsertScanIssue(i, opts.project));
+    await Promise.all(result.issues.map((i) => upsertScanIssue(i, opts.project)));
 
     if (opts.json) {
       log(JSON.stringify(result, null, 2));
@@ -6788,7 +6793,7 @@ SCAN_COMMON_OPTIONS(
 ).action(async (url: string, opts) => {
   try {
     const { scanPiiEndpoint } = await import("../lib/scanners/pii-scanner.js");
-    const { upsertScanIssue } = await import("../db/scan-issues.js");
+    const { upsertScanIssue } = await import("../store/index.js");
     const seedPii = opts.seed
       ? (opts.seed as string)
           .split(",")
@@ -6805,7 +6810,7 @@ SCAN_COMMON_OPTIONS(
       timeoutMs: parseInt(opts.timeout, 10),
     });
 
-    result.issues.forEach((i) => upsertScanIssue(i, opts.project));
+    await Promise.all(result.issues.map((i) => upsertScanIssue(i, opts.project)));
 
     if (opts.json) {
       log(JSON.stringify(result, null, 2));
@@ -6921,19 +6926,32 @@ program
       allPassed = false;
     }
 
-    // 2. Check DB is accessible
-    const dbPath = join(getTestersDir(), "testers.db");
-    try {
-      const { Database } = await import("bun:sqlite");
-      const db = new Database(dbPath, { create: true });
-      db.close();
-      log(chalk.green("✓") + ` Database accessible: ${dbPath}`);
-    } catch (err) {
-      log(
-        chalk.red("✗") +
-          ` Database not accessible at ${dbPath}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      allPassed = false;
+    // 2. Check the resolved storage backend is reachable.
+    if (isCloudStore()) {
+      // Cloud/self_hosted: never touch a local sqlite file — probe the API store.
+      try {
+        await listProjects();
+        log(chalk.green("✓") + " Cloud storage API reachable (HASNA_TESTERS_API_URL)");
+      } catch (err) {
+        log(
+          chalk.red("✗") +
+            ` Cloud storage API not reachable: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        allPassed = false;
+      }
+    } else {
+      const dbPath = join(getTestersDir(), "testers.db");
+      try {
+        // Probe the local store through the Store abstraction (no raw sqlite).
+        await listProjects();
+        log(chalk.green("✓") + ` Database accessible: ${dbPath}`);
+      } catch (err) {
+        log(
+          chalk.red("✗") +
+            ` Database not accessible at ${dbPath}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        allPassed = false;
+      }
     }
 
     // 3. Check Playwright/chromium is installed
@@ -7026,18 +7044,9 @@ program
       const port = parseInt(opts.port, 10);
       const url = `http://localhost:${port}`;
 
-      // Spawn the server process
-      const serverBin = join(
-        resolve(process.execPath, ".."),
-        "..",
-        "dist",
-        "server",
-        "index.js",
-      );
-      // Fallback: try to run directly via bun
+      // Resolve the server entrypoint relative to this module
       const {
         join: pathJoin,
-        resolve: pathResolve,
         dirname,
       } = await import("node:path");
       const { fileURLToPath } = await import("node:url");
@@ -7090,14 +7099,14 @@ apiCmd
   .option("-l, --limit <n>", "Limit results")
   .option("--offset <n>", "Skip first N results", "0")
   .option("--verbose", "Show untruncated names, URLs, and tags", false)
-  .action((opts) => {
+  .action(async (opts) => {
     try {
-      const projectId = resolveProject(opts.project);
+      const projectId = await resolveProject(opts.project);
       const limit = compactLimit(opts.limit, 20, 100);
       const offset = compactOffset(opts.offset);
       if (opts.json) {
         const jsonLimit = cliRequestedLimit(opts.limit);
-        const checks = listApiChecks({
+        const checks = await listApiChecks({
           projectId,
           enabled: opts.enabled ? true : undefined,
           limit: jsonLimit,
@@ -7106,13 +7115,13 @@ apiCmd
         log(JSON.stringify(checks, null, 2));
         return;
       }
-      const checks = listApiChecks({
+      const checks = await listApiChecks({
         projectId,
         enabled: opts.enabled ? true : undefined,
         limit,
         offset: offset || undefined,
       });
-      const total = countApiChecks({
+      const total = await countApiChecks({
         projectId,
         enabled: opts.enabled ? true : undefined,
       });
@@ -7167,8 +7176,8 @@ apiCmd
     try {
       // Non-interactive mode
       if (opts.url) {
-        const projectId = resolveProject(opts.project);
-        const check = createApiCheck({
+        const projectId = await resolveProject(opts.project);
+        const check = await createApiCheck({
           name: opts.name?.trim() || opts.url,
           method: (opts.method?.toUpperCase() ?? "GET") as
             | "GET"
@@ -7230,8 +7239,8 @@ apiCmd
       );
       const tagsInput = await ask("Tags (comma-separated, optional): ");
       rl.close();
-      const projectId = resolveProject(opts.project);
-      const check = createApiCheck({
+      const projectId = await resolveProject(opts.project);
+      const check = await createApiCheck({
         name: name.trim(),
         method: method as "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD",
         url: url.trim(),
@@ -7269,9 +7278,9 @@ apiCmd
 apiCmd
   .command("show <id>")
   .description("Show API check details and last result")
-  .action((id: string) => {
+  .action(async (id: string) => {
     try {
-      const check = getApiCheck(id);
+      const check = await getApiCheck(id);
       if (!check) {
         logError(chalk.red(`API check not found: ${id}`));
         process.exit(1);
@@ -7314,10 +7323,10 @@ apiCmd
   .option("--json", "Output as JSON", false)
   .action(async (baseUrlArg: string | undefined, opts) => {
     try {
-      const projectId = resolveProject(opts.project);
+      const projectId = await resolveProject(opts.project);
       let baseUrl = baseUrlArg;
       if (!baseUrl && opts.env) {
-        const env = getEnvironment(opts.env);
+        const env = await getEnvironment(opts.env);
         if (!env) {
           logError(chalk.red(`Environment not found: ${opts.env}`));
           process.exit(1);
@@ -7326,7 +7335,7 @@ apiCmd
         log(chalk.dim(`Using environment: ${env.name} (${env.url})`));
       }
       if (!baseUrl) {
-        const defaultEnv = getDefaultEnvironment();
+        const defaultEnv = await getDefaultEnvironment();
         if (defaultEnv) {
           baseUrl = defaultEnv.url;
           log(
@@ -7345,7 +7354,7 @@ apiCmd
         process.exit(1);
       }
       if (opts.check) {
-        const check = getApiCheck(opts.check);
+        const check = await getApiCheck(opts.check);
         if (!check) {
           logError(chalk.red(`API check not found: ${opts.check}`));
           process.exit(1);
@@ -7383,7 +7392,7 @@ apiCmd
         }
         log("");
         for (const r of results) {
-          const check = getApiCheck(r.checkId);
+          const check = await getApiCheck(r.checkId);
           const name = check?.name ?? r.checkId;
           const icon =
             r.status === "passed"
@@ -7423,7 +7432,7 @@ apiCmd
   .option("-y, --yes", "Skip confirmation", false)
   .action(async (id: string, opts) => {
     try {
-      const check = getApiCheck(id);
+      const check = await getApiCheck(id);
       if (!check) {
         logError(chalk.red(`API check not found: ${id}`));
         process.exit(1);
@@ -7442,7 +7451,7 @@ apiCmd
           return;
         }
       }
-      deleteApiCheck(id);
+      await deleteApiCheck(id);
       log(chalk.green(`✓ Deleted API check ${chalk.bold(check.name)}`));
     } catch (error) {
       logError(
@@ -7463,7 +7472,7 @@ apiCmd
     try {
       const { parseOpenAPISpecAsChecks, importApiChecksFromOpenAPI } =
         await import("../lib/openapi-import.js");
-      const projectId = resolveProject(opts.project) ?? undefined;
+      const projectId = await resolveProject(opts.project) ?? undefined;
 
       if (opts.dryRun) {
         const inputs = parseOpenAPISpecAsChecks(spec);
@@ -7485,7 +7494,7 @@ apiCmd
         return;
       }
 
-      const { imported, checks } = importApiChecksFromOpenAPI(spec, projectId);
+      const { imported, checks } = await importApiChecksFromOpenAPI(spec, projectId);
       log("");
       log(chalk.green(`✓ Imported ${imported} API checks from spec:`));
       log("");
@@ -7599,10 +7608,10 @@ apiCmd
   .option("--env <name>", "Use a named environment's URL")
   .action(async (baseUrlArg: string | undefined, opts) => {
     try {
-      const projectId = resolveProject(opts.project);
+      const projectId = await resolveProject(opts.project);
       let baseUrl = baseUrlArg;
       if (!baseUrl && opts.env) {
-        const env = getEnvironment(opts.env);
+        const env = await getEnvironment(opts.env);
         if (!env) {
           logError(chalk.red(`Environment not found: ${opts.env}`));
           process.exit(1);
@@ -7610,7 +7619,7 @@ apiCmd
         baseUrl = env.url;
       }
       if (!baseUrl) {
-        const defaultEnv = getDefaultEnvironment();
+        const defaultEnv = await getDefaultEnvironment();
         if (defaultEnv) {
           baseUrl = defaultEnv.url;
           log(
@@ -7641,7 +7650,7 @@ apiCmd
       log("");
 
       const poll = async () => {
-        const checks = listApiChecks({ projectId, enabled: true });
+        const checks = await listApiChecks({ projectId, enabled: true });
         if (checks.length === 0) {
           log(chalk.yellow("  No enabled API checks found."));
           return;
@@ -7848,12 +7857,12 @@ workflowCmd
   .option("--e2b-template <name>", "Legacy alias for --sandbox-image")
   .option("--timeout <ms>", "Workflow timeout")
   .option("--json", "Output as JSON", false)
-  .action((name: string, opts) => {
+  .action(async (name: string, opts) => {
     try {
-      const workflow = createTestingWorkflow({
+      const workflow = await createTestingWorkflow({
         name,
         description: opts.description,
-        projectId: opts.project ? resolveProject(opts.project) : undefined,
+        projectId: opts.project ? await resolveProject(opts.project) : undefined,
         scenarioFilter: {
           scenarioIds: opts.scenario
             ? opts.scenario
@@ -7944,9 +7953,9 @@ workflowCmd
     false,
   )
   .option("--json", "Output as JSON", false)
-  .action((id: string, opts) => {
+  .action(async (id: string, opts) => {
     try {
-      const workflow = getTestingWorkflow(id);
+      const workflow = await getTestingWorkflow(id);
       if (!workflow) {
         logError(chalk.red(`Workflow not found: ${id}`));
         process.exit(1);
@@ -7964,7 +7973,7 @@ workflowCmd
       };
       if (Object.keys(execution.env ?? {}).length === 0) delete execution.env;
 
-      const updated = updateTestingWorkflow(workflow.id, { execution });
+      const updated = await updateTestingWorkflow(workflow.id, { execution });
       if (opts.json) log(JSON.stringify(updated, null, 2));
       else
         log(
@@ -7991,9 +8000,9 @@ workflowCmd
   .option("-l, --limit <n>", "Limit results", "20")
   .option("--offset <n>", "Skip first N results", "0")
   .option("--verbose", "Show untruncated workflow names", false)
-  .action((opts) => {
-    const workflows = listTestingWorkflows({
-      projectId: opts.project ? resolveProject(opts.project) : undefined,
+  .action(async (opts) => {
+    const workflows = await listTestingWorkflows({
+      projectId: opts.project ? await resolveProject(opts.project) : undefined,
       enabled: opts.all ? undefined : true,
     });
     const page = cliPage(workflows, opts, 20, 100);
@@ -8029,8 +8038,8 @@ workflowCmd
   .description("Show workflow details")
   .option("--json", "Output as JSON", false)
   .option("--verbose", "Show full long fields", false)
-  .action((id: string, opts) => {
-    const workflow = getTestingWorkflow(id);
+  .action(async (id: string, opts) => {
+    const workflow = await getTestingWorkflow(id);
     if (!workflow) {
       logError(chalk.red(`Workflow not found: ${id}`));
       process.exit(1);
@@ -8079,7 +8088,7 @@ workflowCmd
         log(JSON.stringify(output, null, 2));
         return;
       }
-      log(formatTerminal(output.run!, output.results));
+      log(await formatTerminal(output.run!, output.results));
       process.exit(getExitCode(output.run!));
     } catch (error) {
       logError(
@@ -8146,7 +8155,7 @@ workflowCmd
     try {
       const fanoutOptions = {
         workflowIds: ids,
-        projectId: opts.project ? resolveProject(opts.project) : undefined,
+        projectId: opts.project ? await resolveProject(opts.project) : undefined,
         tags: opts.tag,
         includeDisabled: opts.all,
         workers: opts.workers ? parseInt(opts.workers, 10) : undefined,
@@ -8361,8 +8370,8 @@ workflowCmd
 workflowCmd
   .command("delete <id>")
   .description("Delete a saved workflow")
-  .action((id: string) => {
-    if (deleteTestingWorkflow(id)) log(chalk.green("Workflow deleted."));
+  .action(async (id: string) => {
+    if (await deleteTestingWorkflow(id)) log(chalk.green("Workflow deleted."));
     else {
       logError(chalk.red("Workflow not found."));
       process.exit(1);
@@ -8385,7 +8394,7 @@ personaCmd
   .option("--verbose", "Show untruncated names and roles", false)
   .action(async (opts) => {
     try {
-      const projectId = resolveProject(opts.project);
+      const projectId = await resolveProject(opts.project);
       const limit = compactLimit(opts.limit, 20, 100);
       const offset = compactOffset(opts.offset);
       const filter = {
@@ -8393,7 +8402,7 @@ personaCmd
         globalOnly: opts.global ? true : undefined,
       };
       if (opts.json) {
-        const personas = await storeListPersonas({
+        const personas = await listPersonas({
           ...filter,
           limit: cliRequestedLimit(opts.limit),
           offset: offset || undefined,
@@ -8401,12 +8410,12 @@ personaCmd
         log(JSON.stringify(redactPersonas(personas), null, 2));
         return;
       }
-      const personas = await storeListPersonas({
+      const personas = await listPersonas({
         ...filter,
         limit,
         offset: offset || undefined,
       });
-      const total = await storeCountPersonas(filter);
+      const total = await countPersonas(filter);
       if (personas.length === 0) {
         log(chalk.dim("No personas found."));
         return;
@@ -8456,12 +8465,13 @@ personaCmd
   .option("--auth-password <pass>", "Login password for auth testing")
   .option("--auth-login-path <path>", "Login page path (default: /login)")
   .action(async (opts) => {
+    let rl: ReturnType<typeof createInterface> | undefined;
     try {
       // Non-interactive mode: --name and --role provided
       if (opts.name && opts.role) {
         const projectId = opts.global
           ? undefined
-          : resolveProject(opts.project);
+          : await resolveProject(opts.project);
         const traits = opts.traits
           ? opts.traits
               .split(",")
@@ -8474,7 +8484,7 @@ personaCmd
               .map((g: string) => g.trim())
               .filter(Boolean)
           : [];
-        const persona = await storeCreatePersona({
+        const persona = await createPersona({
           name: opts.name.trim(),
           role: opts.role.trim(),
           description: opts.description?.trim() ?? "",
@@ -8498,12 +8508,12 @@ personaCmd
       }
 
       // Interactive mode
-      const rl = createInterface({
+      rl = createInterface({
         input: process.stdin,
         output: process.stdout,
       });
       const ask = (q: string): Promise<string> =>
-        new Promise((res) => rl.question(q, res));
+        new Promise((res) => rl!.question(q, res));
       const name = await ask("Name: ");
       if (!name.trim()) {
         logError(chalk.red("Name is required"));
@@ -8528,7 +8538,7 @@ personaCmd
       const goalsInput = await ask("Goals (comma-separated): ");
       rl.close();
 
-      const projectId = opts.global ? undefined : resolveProject(opts.project);
+      const projectId = opts.global ? undefined : await resolveProject(opts.project);
       const traits = traitsInput.trim()
         ? traitsInput
             .split(",")
@@ -8542,7 +8552,7 @@ personaCmd
             .filter(Boolean)
         : [];
 
-      const persona = await storeCreatePersona({
+      const persona = await createPersona({
         name: name.trim(),
         role: role.trim(),
         description: description.trim(),
@@ -8560,7 +8570,7 @@ personaCmd
       log(chalk.dim(`  Role: ${persona.role}`));
       log(chalk.dim(`  Scope: ${persona.projectId ? "project" : "global"}`));
     } catch (error) {
-      rl.close();
+      rl?.close();
       logError(
         chalk.red(
           `Error: ${error instanceof Error ? error.message : String(error)}`,
@@ -8575,7 +8585,7 @@ personaCmd
   .description("Show persona details")
   .action(async (id: string) => {
     try {
-      const persona = await storeGetPersona(id);
+      const persona = await getPersona(id);
       if (!persona) {
         logError(chalk.red(`Persona not found: ${id}`));
         process.exit(1);
@@ -8619,7 +8629,7 @@ personaCmd
   .option("-y, --yes", "Skip confirmation prompt", false)
   .action(async (id: string, opts) => {
     try {
-      const persona = await storeGetPersona(id);
+      const persona = await getPersona(id);
       if (!persona) {
         logError(chalk.red(`Persona not found: ${id}`));
         process.exit(1);
@@ -8647,7 +8657,7 @@ personaCmd
           return;
         }
       }
-      const deleted = await storeDeletePersona(persona.id);
+      const deleted = await deletePersona(persona.id);
       if (deleted) {
         log(chalk.green(`Deleted persona ${persona.shortId}: ${persona.name}`));
       } else {
@@ -8669,21 +8679,21 @@ personaCmd
   .description("Attach a persona to a scenario")
   .action(async (personaId: string, scenarioId: string) => {
     try {
-      const persona = await storeGetPersona(personaId);
+      const persona = await getPersona(personaId);
       if (!persona) {
         logError(chalk.red(`Persona not found: ${personaId}`));
         process.exit(1);
       }
       const scenario =
-        (await storeGetScenario(scenarioId)) ??
-        (await storeGetScenarioByShortId(scenarioId));
+        (await getScenario(scenarioId)) ??
+        (await getScenarioByShortId(scenarioId));
       if (!scenario) {
         logError(chalk.red(`Scenario not found: ${scenarioId}`));
         process.exit(1);
       }
-      await storeUpdateScenario(
+      await updateScenario(
         scenario.id,
-        { personaId: persona.id } as Parameters<typeof storeUpdateScenario>[1],
+        { personaId: persona.id } as Parameters<typeof updateScenario>[1],
         scenario.version,
       );
       log(
@@ -8705,10 +8715,10 @@ personaCmd
   .command("seed")
   .description("Seed the 7 default global personas (idempotent)")
   .option("--json", "Output as JSON", false)
-  .action((seedOpts) => {
+  .action(async (seedOpts) => {
     try {
-      const { seedDefaultPersonas } = require("../db/seed-personas.js");
-      const result = seedDefaultPersonas();
+      const { seedDefaultPersonas } = await import("../lib/seed-personas.js");
+      const result = await seedDefaultPersonas();
       if (seedOpts.json) {
         log(JSON.stringify(result, null, 2));
       } else {
@@ -8738,12 +8748,12 @@ personaCmd
   .action(async (scenarioId: string) => {
     try {
       const scenario =
-        getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
+        await getScenario(scenarioId) ?? await getScenarioByShortId(scenarioId);
       if (!scenario) {
         logError(chalk.red(`Scenario not found: ${scenarioId}`));
         process.exit(1);
       }
-      updateScenario(
+      await updateScenario(
         scenario.id,
         { personaId: null } as Parameters<typeof updateScenario>[1],
         scenario.version,
@@ -8772,12 +8782,12 @@ personaCmd
   .option("--json", "Output as JSON", false)
   .action(async (persona1: string, persona2: string, opts) => {
     try {
-      const p1 = await storeGetPersona(persona1);
+      const p1 = await getPersona(persona1);
       if (!p1) {
         logError(chalk.red(`Persona not found: ${persona1}`));
         process.exit(1);
       }
-      const p2 = await storeGetPersona(persona2);
+      const p2 = await getPersona(persona2);
       if (!p2) {
         logError(chalk.red(`Persona not found: ${persona2}`));
         process.exit(1);
@@ -8810,7 +8820,7 @@ personaCmd
       });
 
       const allResults = [...result1.results, ...result2.results];
-      const scenarios = listScenarios({});
+      const scenarios = await listScenarios({});
 
       const divergences = diffPersonaResults(
         allResults,
@@ -8875,8 +8885,8 @@ program
       }
 
       if (opts.save) {
-        const projectId = resolveProject(opts.project);
-        const saved = createScenario({
+        const projectId = await resolveProject(opts.project);
+        const saved = await createScenario({
           name: scenario.name,
           description: scenario.description,
           steps: scenario.steps,
@@ -8936,7 +8946,7 @@ evalCmd
   .action(async (url: string, opts) => {
     try {
       const { runRagEval } = await import("../lib/eval-runner.js");
-      const { createRun, updateRun } = await import("../db/runs.js");
+      const { createRun, updateRun } = await import("../store/index.js");
 
       let ragTestCases: unknown[] = [];
       if (opts.docs) {
@@ -8965,7 +8975,7 @@ evalCmd
       );
 
       // Create a temporary scenario and run
-      const scenario = createScenario({
+      const scenario = await createScenario({
         name: `RAG eval — ${url}`,
         description: "RAG quality evaluation",
         steps: [],
@@ -8982,7 +8992,7 @@ evalCmd
         },
       });
 
-      const run = createRun({ scenarioId: scenario.id, model: "rag-eval" });
+      const run = await createRun({ url, scenarioIds: [scenario.id], model: "rag-eval" });
       await updateRun(run.id, { status: "running" });
 
       const result = await runRagEval(scenario, {
@@ -9069,12 +9079,12 @@ goldenCmd
   .option("--judge-model <model>", "Model to use as judge")
   .action(async (opts) => {
     try {
-      const { createGoldenAnswer } = await import("../db/golden-answers.js");
+      const { createGoldenAnswer } = await import("../store/index.js");
 
       // Non-interactive mode
       if (opts.question && opts.answer && opts.endpoint) {
-        const projectId = resolveProject(opts.project);
-        const golden = createGoldenAnswer({
+        const projectId = await resolveProject(opts.project);
+        const golden = await createGoldenAnswer({
           question: opts.question,
           goldenAnswer: opts.answer,
           endpoint: opts.endpoint,
@@ -9126,9 +9136,9 @@ goldenCmd
       }
 
       const judgeModel = await ask("Judge model (leave blank for auto): ");
-      const projectId = resolveProject(opts.project);
+      const projectId = await resolveProject(opts.project);
 
-      const golden = createGoldenAnswer({
+      const golden = await createGoldenAnswer({
         question,
         goldenAnswer,
         endpoint,
@@ -9163,9 +9173,9 @@ goldenCmd
   .option("--verbose", "Show untruncated endpoint and question text", false)
   .action(async (opts) => {
     try {
-      const { listGoldenAnswers } = await import("../db/golden-answers.js");
-      const projectId = resolveProject(opts.project);
-      const goldens = listGoldenAnswers({ projectId });
+      const { listGoldenAnswers } = await import("../store/index.js");
+      const projectId = await resolveProject(opts.project);
+      const goldens = await listGoldenAnswers({ projectId });
       const page = cliPage(goldens, opts, 20, 100);
 
       if (opts.json) {
@@ -9210,7 +9220,7 @@ goldenCmd
   .action(async (baseUrl: string, opts) => {
     try {
       const { runGoldenMonitor } = await import("../lib/golden-monitor.js");
-      const projectId = resolveProject(opts.project);
+      const projectId = await resolveProject(opts.project);
 
       log(chalk.dim(`Running golden answer checks against ${baseUrl} ...`));
 
@@ -9277,19 +9287,19 @@ program
   .option("--json", "Output as JSON", false)
   .action(async (url: string, opts) => {
     try {
-      const projectId = resolveProject(opts.project);
+      const projectId = await resolveProject(opts.project);
 
       // Resolve personas
       let personas;
       if (opts.personas === "all") {
-        personas = await storeListPersonas({ globalOnly: true, enabled: true });
+        personas = await listPersonas({ globalOnly: true, enabled: true });
       } else {
         const ids = opts.personas
           .split(",")
           .map((s: string) => s.trim())
           .filter(Boolean);
         personas = (
-          await Promise.all(ids.map((id: string) => storeGetPersona(id)))
+          await Promise.all(ids.map((id: string) => getPersona(id)))
         ).filter(Boolean);
       }
       if (personas.length === 0) {
@@ -9300,13 +9310,13 @@ program
       // Resolve scenarios
       let scenarios;
       if (opts.scenarios === "all") {
-        scenarios = listScenarios({ projectId, limit: 20 });
+        scenarios = await listScenarios({ projectId, limit: 20 });
       } else {
         const ids = opts.scenarios
           .split(",")
           .map((s: string) => s.trim())
           .filter(Boolean);
-        const all = listScenarios({ projectId });
+        const all = await listScenarios({ projectId });
         scenarios = all.filter(
           (s) => ids.includes(s.id) || ids.includes(s.shortId),
         );
@@ -9333,7 +9343,7 @@ program
       for (const persona of personas) {
         if (!persona) continue;
         log(chalk.dim(`  Starting run for persona: ${persona.name} ...`));
-        const { run, results } = await runByFilter({
+        const { run } = await runByFilter({
           url,
           scenarioIds: scenarios.map((s) => s.id),
           model: opts.model,
@@ -9422,7 +9432,7 @@ program
         const icon =
           result.status === "passed" ? chalk.green("PASS") : chalk.red("FAIL");
         log(
-          `${icon}  ${result.name ?? scenario.name} (${result.durationMs}ms)`,
+          `${icon}  ${result.scenarioName ?? scenario.name} (${result.durationMs}ms)`,
         );
         if (result.status !== "passed" && result.error) {
           log(chalk.dim(`     ${result.error}`));
@@ -9515,4 +9525,10 @@ program.hook("preAction", () => {
   }
 });
 
-program.parse();
+// Use parseAsync so rejections from async command actions surface as clean,
+// single-line errors with a non-zero exit code instead of an uncaught raw stack
+// trace (e.g. a cloud API returning 404 for an unreachable route).
+program.parseAsync().catch((error) => {
+  logError(chalk.red(error instanceof Error ? error.message : String(error)));
+  process.exit(1);
+});

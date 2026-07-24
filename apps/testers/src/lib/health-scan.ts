@@ -5,7 +5,7 @@ import { scanPerformance } from "./scanners/performance.js";
 import { scanInjection } from "./scanners/injection.js";
 import { scanPiiEndpoint } from "./scanners/pii-scanner.js";
 import { scanA11y } from "./scanners/a11y.js";
-import { upsertScanIssue, setScanIssueTodoTaskId } from "../db/scan-issues.js";
+import { upsertScanIssue, setScanIssueTodoTaskId } from "../store/index.js";
 import {
   reportTesterIssueReportsToTodos,
   TESTERS_ISSUE_REPORT_SCHEMA_VERSION,
@@ -112,7 +112,7 @@ export async function runHealthScan(options: HealthScanOptions): Promise<HealthS
   const newAndRegressed: Array<{ issue: ScanIssue; persistedId: string; fingerprint: string }> = [];
 
   for (const issue of allIssues) {
-    const { issue: persisted, outcome } = upsertScanIssue(issue, projectId);
+    const { issue: persisted, outcome } = await upsertScanIssue(issue, projectId);
     if (outcome === "new") { newCount++; newAndRegressed.push({ issue, persistedId: persisted.id, fingerprint: persisted.fingerprint }); }
     else if (outcome === "regressed") { regressedCount++; newAndRegressed.push({ issue, persistedId: persisted.id, fingerprint: persisted.fingerprint }); }
     else existingCount++;
@@ -159,7 +159,7 @@ async function createTodoTasksForIssues(
       ? item.report.metadata["scan_issue_id"]
       : null;
     if (persistedId && item.task?.id) {
-      setScanIssueTodoTaskId(persistedId, item.task.id);
+      await setScanIssueTodoTaskId(persistedId, item.task.id);
     }
   }
 }

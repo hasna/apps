@@ -30,7 +30,7 @@ describe("discovery", () => {
   });
 
   describe("parseYamlLike", () => {
-    test("parses scenario with steps", () => {
+    test("parses scenario with steps", async () => {
       const content = `url: http://example.com
 model: quick
 scenarios:
@@ -54,7 +54,7 @@ scenarios:
       expect(config.scenarios![0].tags).toEqual(["smoke", "auth"]);
     });
 
-    test("parses inline array values", () => {
+    test("parses inline array values", async () => {
       const content = `scenarios:
   - name: Quick Test
     priority: high
@@ -68,12 +68,12 @@ scenarios:
   });
 
   describe("discoverScenariosFromFiles", () => {
-    test("returns zero when no config files exist", () => {
-      const result = discoverScenariosFromFiles(tmpDir);
+    test("returns zero when no config files exist", async () => {
+      const result = await discoverScenariosFromFiles(tmpDir);
       expect(result.total).toBe(0);
     });
 
-    test("discovers from .testers.yml", () => {
+    test("discovers from .testers.yml", async () => {
       const content = `scenarios:
   - name: File Discovery Test
     description: Tests file-based discovery
@@ -83,17 +83,17 @@ scenarios:
       - smoke
 `;
       writeFile(".testers.yml", content);
-      const result = discoverScenariosFromFiles(tmpDir);
+      const result = await discoverScenariosFromFiles(tmpDir);
       expect(result.created).toBe(1);
       expect(result.total).toBe(1);
 
       // Second run should dedupe
-      const result2 = discoverScenariosFromFiles(tmpDir);
+      const result2 = await discoverScenariosFromFiles(tmpDir);
       expect(result2.deduped).toBe(1);
       expect(result2.created).toBe(0);
     });
 
-    test("discovers from tests/scenarios/*.yaml", () => {
+    test("discovers from tests/scenarios/*.yaml", async () => {
       const content = `scenarios:
   - name: Scenario From File
     description: Auto-discovered
@@ -103,7 +103,7 @@ scenarios:
       - auto
 `;
       writeFile("tests/scenarios/home.yaml", content);
-      const result = discoverScenariosFromFiles(tmpDir);
+      const result = await discoverScenariosFromFiles(tmpDir);
       expect(result.created).toBeGreaterThanOrEqual(1);
     });
   });

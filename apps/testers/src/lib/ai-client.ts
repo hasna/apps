@@ -1259,7 +1259,7 @@ export type StepEventHandler = (event: {
   toolResult?: string;
   thinking?: string;
   stepNumber: number;
-}) => void;
+}) => void | Promise<void>;
 
 interface AgentLoopOptions {
   client: Anthropic | OpenAICompatConfig;
@@ -1497,7 +1497,7 @@ export async function runAgentLoop(
       );
       if (textBlocks.length > 0 && onStep) {
         const thinking = textBlocks.map((b) => b.text).join("\n");
-        onStep({ type: "thinking", thinking, stepNumber });
+        await onStep({ type: "thinking", thinking, stepNumber });
       }
 
       for (const toolBlock of toolUseBlocks) {
@@ -1506,7 +1506,7 @@ export async function runAgentLoop(
 
         // Emit tool call event
         if (onStep) {
-          onStep({ type: "tool_call", toolName: toolBlock.name, toolInput, stepNumber });
+          await onStep({ type: "tool_call", toolName: toolBlock.name, toolInput, stepNumber });
         }
 
         const execResult = await executeTool(
@@ -1519,7 +1519,7 @@ export async function runAgentLoop(
 
         // Emit tool result event
         if (onStep) {
-          onStep({ type: "tool_result", toolName: toolBlock.name, toolResult: execResult.result, stepNumber });
+          await onStep({ type: "tool_result", toolName: toolBlock.name, toolResult: execResult.result, stepNumber });
         }
 
         // Collect screenshots

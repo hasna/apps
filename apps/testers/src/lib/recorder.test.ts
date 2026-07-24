@@ -4,7 +4,7 @@ import { authStateToScenarioMetadata, actionsToScenarioInput, type RecordingResu
 
 describe("recorder", () => {
   describe("actionsToScenarioInput", () => {
-    test("converts navigation to step", () => {
+    test("converts navigation to step", async () => {
       const recording: RecordingResult = {
         url: "http://example.com",
         actions: [{ type: "navigate", url: "http://example.com", timestamp: 0 }],
@@ -14,7 +14,7 @@ describe("recorder", () => {
       expect(input.steps).toContain('Navigate to http://example.com');
     });
 
-    test("converts click actions to steps", () => {
+    test("converts click actions to steps", async () => {
       const recording: RecordingResult = {
         url: "http://example.com",
         actions: [{ type: "click", selector: "#submit", timestamp: 100 }],
@@ -24,7 +24,7 @@ describe("recorder", () => {
       expect(input.steps).toContain('Click #submit');
     });
 
-    test("deduplicates fill actions", () => {
+    test("deduplicates fill actions", async () => {
       const recording: RecordingResult = {
         url: "http://example.com",
         actions: [
@@ -39,28 +39,28 @@ describe("recorder", () => {
   });
 
   describe("authStateToScenarioMetadata", () => {
-    test("creates scenario with auth metadata", () => {
+    test("creates scenario with auth metadata", async () => {
       const authState: SavedAuthState = {
         cookies: [{ name: "session", value: "abc123", domain: "example.com", path: "/" }],
         localStorage: [],
         loginUrl: "http://example.com/login",
         recordedAt: "2026-01-01T00:00:00Z",
       };
-      const scenario = authStateToScenarioMetadata(authState, "Auth Scenario");
+      const scenario = await authStateToScenarioMetadata(authState, "Auth Scenario");
       expect(scenario.name).toBe("Auth Scenario");
       expect(scenario.requiresAuth).toBe(true);
       expect(scenario.tags).toContain("auth");
       expect(scenario.metadata).toBeDefined();
     });
 
-    test("stores auth state in metadata", () => {
+    test("stores auth state in metadata", async () => {
       const authState: SavedAuthState = {
         cookies: [{ name: "token", value: "xyz", domain: "test.com", path: "/app" }],
         localStorage: [{ origin: "http://test.com", entries: [{ name: "user", value: "1" }] }],
         loginUrl: "http://test.com/login",
         recordedAt: "2026-01-01T00:00:00Z",
       };
-      const scenario = authStateToScenarioMetadata(authState, "Full Auth");
+      const scenario = await authStateToScenarioMetadata(authState, "Full Auth");
       const meta = scenario.metadata as { authState?: SavedAuthState } | null;
       expect(meta?.authState).toBeDefined();
       expect(meta?.authState?.cookies).toHaveLength(1);

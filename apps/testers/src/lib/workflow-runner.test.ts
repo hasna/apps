@@ -106,7 +106,7 @@ describe("workflow runner", () => {
     expect(first.sandbox?.stateRemoteDir).toBe(`${first.sandbox?.remoteDir}/.testers-state`);
   });
 
-  test("creates sandbox database bundles under temp paths with quotes", () => {
+  test("creates sandbox database bundles under temp paths with quotes", async () => {
     const originalTmpdir = process.env.TMPDIR;
     const parentDir = mkdtempSync(join(tmpdir(), "testers-quoted-tmp-"));
     const quotedTmpdir = join(parentDir, "tmp'quoted");
@@ -126,7 +126,7 @@ describe("workflow runner", () => {
       });
       const plan = buildWorkflowRunPlan(workflow, { url: "https://preview.example" });
 
-      const bundle = createWorkflowDatabaseBundle(workflow, plan);
+      const bundle = await createWorkflowDatabaseBundle(workflow, plan);
       cleanupPaths.push(bundle.localDir);
 
       expect(bundle.localDir).toContain("'");
@@ -137,7 +137,7 @@ describe("workflow runner", () => {
     }
   });
 
-  test("rejects sandbox app remote directories that escape the workflow bundle", () => {
+  test("rejects sandbox app remote directories that escape the workflow bundle", async () => {
     const appSourceDir = mkdtempSync(join(tmpdir(), "testers-app-source-"));
     cleanupPaths.push(appSourceDir);
     writeFileSync(join(appSourceDir, "package.json"), "{}");
@@ -169,7 +169,7 @@ describe("workflow runner", () => {
     });
     const absolutePlan = buildWorkflowRunPlan(absoluteEscape, { url: "https://preview.example" });
 
-    expect(() => createWorkflowDatabaseBundle(absoluteEscape, absolutePlan)).toThrow("inside the workflow remote directory");
+    await expect(createWorkflowDatabaseBundle(absoluteEscape, absolutePlan)).rejects.toThrow("inside the workflow remote directory");
   });
 
   test("rejects relative workflow sandbox remote directories", () => {
@@ -187,7 +187,7 @@ describe("workflow runner", () => {
       .toThrow("absolute POSIX path");
   });
 
-  test("resolves relative app remote directories under the workflow remote directory", () => {
+  test("resolves relative app remote directories under the workflow remote directory", async () => {
     const sourceDir = mkdtempSync(join(tmpdir(), "testers-app-source-"));
     cleanupPaths.push(sourceDir);
     writeFileSync(join(sourceDir, "package.json"), "{}");
@@ -211,7 +211,7 @@ describe("workflow runner", () => {
     expect(plan.sandbox?.appRemoteDir).toBe("/workspace/testers/nested/app");
     expect(plan.sandbox?.command).toContain("cd '/workspace/testers/nested/app'");
 
-    const bundle = createWorkflowDatabaseBundle(workflow, plan);
+    const bundle = await createWorkflowDatabaseBundle(workflow, plan);
     cleanupPaths.push(bundle.localDir);
     expect(existsSync(join(bundle.localDir, "nested", "app", "src", "index.ts"))).toBe(true);
   });
@@ -341,7 +341,7 @@ describe("workflow runner", () => {
     expect(calls).toContainEqual({ cleanup: true });
   });
 
-  test("builds and bundles app source for sandbox workflows that start the app", () => {
+  test("builds and bundles app source for sandbox workflows that start the app", async () => {
     const sourceDir = mkdtempSync(join(tmpdir(), "testers-app-source-"));
     cleanupPaths.push(sourceDir);
     writeFileSync(join(sourceDir, "package.json"), JSON.stringify({ scripts: { dev: "next dev" } }));
@@ -390,7 +390,7 @@ describe("workflow runner", () => {
       plan.sandbox?.command.indexOf("'run' 'http://127.0.0.1:3325'") ?? 0,
     );
 
-    const bundle = createWorkflowDatabaseBundle(workflow, plan);
+    const bundle = await createWorkflowDatabaseBundle(workflow, plan);
     cleanupPaths.push(bundle.localDir);
     expect(bundle.remoteDir).toBe("/workspace/testers");
     expect(existsSync(join(bundle.localDir, ".testers-state", "testers.db"))).toBe(true);

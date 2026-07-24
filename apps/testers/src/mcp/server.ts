@@ -1,33 +1,72 @@
 #!/usr/bin/env bun
-// @ts-nocheck
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import pkg from "../../package.json";
 
-import { createScenario, getScenario, getScenarioByShortId, listScenarios, countScenarios, updateScenario, deleteScenario, findStaleScenarios } from "../db/scenarios.js";
-import { getTemplate, listTemplateNames, SCENARIO_TEMPLATES } from "../lib/templates.js";
-import { getRun, listRuns, countRuns, updateRun } from "../db/runs.js";
-import { listResults, getResultsByRun } from "../db/results.js";
-import { listScreenshots } from "../db/screenshots.js";
-import { createProject, ensureProject, listProjects } from "../db/projects.js";
-import { registerAgent, listAgents, heartbeatAgent, setAgentFocus } from "../db/agents.js";
+// THE storage boundary: every MCP tool routes reads/writes through the single
+// Store (LocalStore on-box SQLite | ApiStore cloud /v1 + bearer key), resolved
+// once from the environment. No tool touches sqlite or the cloud HTTP transport
+// directly. See ../store/index.ts.
+import {
+  createScenario,
+  getScenario,
+  getScenarioByShortId,
+  listScenarios,
+  countScenarios,
+  updateScenario,
+  deleteScenario,
+  findStaleScenarios,
+  getRun,
+  listRuns,
+  countRuns,
+  updateRun,
+  listResults,
+  getResultsByRun,
+  listScreenshots,
+  createProject,
+  ensureProject,
+  listProjects,
+  registerAgent,
+  listAgents,
+  heartbeatAgent,
+  setAgentFocus,
+  listScanIssues,
+  resolveScanIssue,
+  upsertScanIssue,
+  createSchedule,
+  listSchedules,
+  updateSchedule,
+  deleteSchedule,
+  createApiCheck,
+  getApiCheck,
+  listApiChecks,
+  countApiChecks,
+  updateApiCheck,
+  deleteApiCheck,
+  getLatestApiCheckResult,
+  listApiCheckResults,
+  createPersona,
+  getPersona,
+  listPersonas,
+  countPersonas,
+  updatePersona,
+  deletePersona,
+  createTestingWorkflow,
+  getTestingWorkflow,
+  listTestingWorkflows,
+  storageStatus,
+} from "../store/index.js";
+import { getTemplate, listTemplateNames } from "../lib/templates.js";
 import { startRunAsync } from "../lib/runner.js";
 import { matchFilesToScenarios } from "../lib/affected.js";
-import { listScanIssues, getScanIssue, resolveScanIssue } from "../db/scan-issues.js";
 import { loadConfig } from "../lib/config.js";
 import { importFromTodos } from "../lib/todos-connector.js";
-import { createSchedule, listSchedules, updateSchedule, deleteSchedule, getSchedule } from "../db/schedules.js";
 import { getNextRunTime } from "../lib/scheduler.js";
-import { getDatabase } from "../db/database.js";
 import { VersionConflictError } from "../types/index.js";
-import { createApiCheck, getApiCheck, listApiChecks, countApiChecks, updateApiCheck, deleteApiCheck, getLatestApiCheckResult, listApiCheckResults } from "../db/api-checks.js";
 import { runApiCheck, runApiChecksByFilter } from "../lib/api-runner.js";
-import { createPersona, getPersona, listPersonas, countPersonas, updatePersona, deletePersona } from "../db/personas.js";
-import { PersonaNotFoundError } from "../types/index.js";
 import { getTestersDir } from "../lib/paths.js";
 import { createProdDebugPlan } from "../lib/prod-debug.js";
-import { createTestingWorkflow, getTestingWorkflow, listTestingWorkflows } from "../db/workflows.js";
 import { runTestingWorkflow } from "../lib/workflow-runner.js";
 import { runWorkflowGoalLoop } from "../lib/workflow-agent.js";
 import { redactPersona, redactPersonas } from "../lib/persona-redaction.js";
@@ -59,7 +98,7 @@ function notFoundErr(id: string, label = "Resource"): Error {
 
 function errorResponse(
   e: unknown,
-  context?: { fetchCurrent?: () => unknown }
+  context?: { current?: unknown }
 ): { content: [{ type: "text"; text: string }]; isError: true } {
   const err = e instanceof Error ? e : new Error(String(e));
 
@@ -82,15 +121,11 @@ function errorResponse(
       },
     };
 
-    if (context?.fetchCurrent) {
-      try {
-        const current = context.fetchCurrent() as { version?: number } | null;
-        if (current && typeof current.version === "number") {
-          payload.error.currentVersion = current.version;
-          payload.error.hint = `Retry with version: ${current.version}`;
-        }
-      } catch {
-        // ignore — return base conflict error
+    if (context?.current) {
+      const current = context.current as { version?: number } | null;
+      if (current && typeof current.version === "number") {
+        payload.error.currentVersion = current.version;
+        payload.error.hint = `Retry with version: ${current.version}`;
       }
     }
 
@@ -130,8 +165,8 @@ const ID_DESC = "Accepts either the full UUID (e.g. 'abc123...') or the short ID
 const MODEL_DESC =
   "Model to use. Values: 'quick' (claude-haiku-4-5, cheapest), 'thorough' (claude-sonnet-4-6, balanced), 'deep' (claude-opus-4-6, most capable). Default: 'quick'.";
 
-function compactToolPayload<T>(
-  items: T[],
+function compactToolPayload(
+  items: readonly unknown[],
   total: number,
   detailHint: string,
   meta: Record<string, unknown> = {},
@@ -197,7 +232,7 @@ server.tool(
   },
   async ({ name, description, steps, tags, priority, model, targetPath, requiresAuth, projectId }) => {
     try {
-      const scenario = createScenario({ name, description, steps, tags, priority, model, targetPath, requiresAuth, projectId });
+      const scenario = await createScenario({ name, description, steps, tags, priority, model, targetPath, requiresAuth, projectId });
       return json(scenario);
     } catch (error) {
       return errorResponse(error);
@@ -229,7 +264,7 @@ server.tool(
       const results: { id: string; name: string; shortId: string; error?: string }[] = [];
       for (const s of scenarios) {
         try {
-          const scenario = createScenario({
+          const scenario = await createScenario({
             ...s,
             description: s.description ?? s.name,
             targetPath: s.targetPath ?? s.url,
@@ -285,7 +320,7 @@ server.tool(
       const results: { id: string; name: string; shortId: string; error?: string }[] = [];
       for (const s of scenarios) {
         try {
-          const scenario = createScenario({ ...s, projectId });
+          const scenario = await createScenario({ ...s, projectId });
           results.push({ id: scenario.id, name: scenario.name, shortId: scenario.shortId });
         } catch (e) {
           results.push({ id: "", name: s.name, shortId: "", error: e instanceof Error ? e.message : String(e) });
@@ -310,7 +345,7 @@ server.tool(
   },
   async ({ id }) => {
     try {
-      const scenario = getScenario(id) ?? getScenarioByShortId(id);
+      const scenario = await getScenario(id) ?? await getScenarioByShortId(id);
       if (!scenario) return errorResponse(notFoundErr(id, "Scenario"));
       return json(scenario);
     } catch (error) {
@@ -340,7 +375,7 @@ server.tool(
       let page;
       let total: number;
       if (flakyOnly) {
-        const scenarios = listScenarios({ projectId, tags, priority })
+        const scenarios = (await listScenarios({ projectId, tags, priority }))
           .filter((s) => s.flakinessScore !== null && s.flakinessScore !== undefined && s.flakinessScore < 0.8);
         page = pageItems(scenarios, {
           limit: effectiveLimit,
@@ -350,14 +385,14 @@ server.tool(
         });
         total = page.total;
       } else {
-        const scenarios = listScenarios({
+        const scenarios = await listScenarios({
           projectId,
           tags,
           priority,
           limit: effectiveLimit,
           offset: effectiveOffset || undefined,
         });
-        total = countScenarios({ projectId, tags, priority });
+        total = await countScenarios({ projectId, tags, priority });
         page = {
           items: scenarios,
           total,
@@ -396,11 +431,11 @@ server.tool(
   },
   async ({ id, name, description, steps, tags, priority, model, version }) => {
     try {
-      const scenario = updateScenario(id, { name, description, steps, tags, priority, model }, version);
+      const scenario = await updateScenario(id, { name, description, steps, tags, priority, model }, version);
       return json(scenario);
     } catch (error) {
       return errorResponse(error, {
-        fetchCurrent: () => getScenario(id) ?? getScenarioByShortId(id),
+        current: (await getScenario(id)) ?? (await getScenarioByShortId(id)),
       });
     }
   },
@@ -416,7 +451,7 @@ server.tool(
   },
   async ({ id }) => {
     try {
-      const deleted = deleteScenario(id);
+      const deleted = await deleteScenario(id);
       if (!deleted) return errorResponse(notFoundErr(id, "Scenario"));
       return json({ deleted: true, id });
     } catch (error) {
@@ -453,18 +488,18 @@ server.tool(
     try {
       let resolvedUrl = url;
       if (!resolvedUrl && env) {
-        const { getEnvironment } = await import("./db/environments.js").catch(() => import("../db/environments.js"));
-        const environment = getEnvironment(env);
+        const { getEnvironment } = await import("../store/index.js");
+        const environment = await getEnvironment(env);
         if (!environment) return errorResponse(notFoundErr(env, "Environment"));
         resolvedUrl = environment.url;
       }
       if (!resolvedUrl) {
-        const { getDefaultEnvironment } = await import("./db/environments.js").catch(() => import("../db/environments.js"));
-        const defaultEnv = getDefaultEnvironment();
+        const { getDefaultEnvironment } = await import("../store/index.js");
+        const defaultEnv = await getDefaultEnvironment();
         if (defaultEnv) resolvedUrl = defaultEnv.url;
       }
       if (!resolvedUrl) return errorResponse(new Error("No URL provided and no default environment set. Pass url or env."));
-      const { runId, scenarioCount } = startRunAsync({ url: resolvedUrl, tags, scenarioIds, priority, model, headed, parallel, personaId, personaIds, samples, flakinessThreshold, maxCostCents, cacheMaxAgeMs, minimal, timeout: timeoutMs, recordVideo });
+      const { runId, scenarioCount } = await startRunAsync({ url: resolvedUrl, tags, scenarioIds, priority, model, headed, parallel, personaId, personaIds, samples, flakinessThreshold, maxCostCents, cacheMaxAgeMs, minimal, timeout: timeoutMs, recordVideo });
       return json({ runId, scenarioCount, url: resolvedUrl, status: "running", message: "Poll with get_run to check progress." });
     } catch (error) {
       return errorResponse(error);
@@ -488,16 +523,16 @@ server.tool(
   },
   async ({ runId, url, model, headed, parallel, maxRetries, maxCostCents }) => {
     try {
-      const run = getRun(runId);
+      const run = await getRun(runId);
       if (!run) return errorResponse(notFoundErr(runId, "Run"));
       if (run.status !== "failed") return errorResponse(new Error("Run is not in failed state. Can only retry failures from a failed run."));
 
-      const results = getResultsByRun(runId);
+      const results = await getResultsByRun(runId);
       const failedResultIds = results.filter((r: any) => r.status === "failed" || r.status === "error").map((r: any) => r.scenarioId);
       if (failedResultIds.length === 0) return errorResponse(new Error("No failed results found in this run."));
 
       const resolvedUrl = url ?? run.url;
-      const { runId: newRunId, scenarioCount } = startRunAsync({
+      const { runId: newRunId, scenarioCount } = await startRunAsync({
         url: resolvedUrl,
         scenarioIds: failedResultIds,
         model,
@@ -531,7 +566,7 @@ server.tool(
   },
   async ({ id }) => {
     try {
-      const run = getRun(id);
+      const run = await getRun(id);
       if (!run) return errorResponse(notFoundErr(id, "Run"));
       return json(run);
     } catch (error) {
@@ -560,8 +595,8 @@ server.tool(
     try {
       const effectiveLimit = compactLimit(limit, 20, 100);
       const effectiveOffset = compactOffset(offset);
-      const runs = listRuns({ projectId, status, since, until, sort, desc, limit: effectiveLimit, offset: effectiveOffset || undefined });
-      const total = countRuns({ projectId, status, since, until });
+      const runs = await listRuns({ projectId, status, since, until, sort, desc, limit: effectiveLimit, offset: effectiveOffset || undefined });
+      const total = await countRuns({ projectId, status, since, until });
       return json(compactToolPayload(
         verbose ? runs : runs.map(compactRun),
         total,
@@ -589,7 +624,7 @@ server.tool(
   },
   async ({ runId, status, scenarioId, limit, offset, verbose }) => {
     try {
-      let results = listResults(runId);
+      let results = await listResults(runId);
       if (status) {
         results = results.filter((r) => r.status === status);
       }
@@ -597,7 +632,7 @@ server.tool(
         results = results.filter((r) => r.scenarioId === scenarioId || r.scenarioId.startsWith(scenarioId));
       }
       const page = pageItems(results, { limit, offset, defaultLimit: 20, maxLimit: 100 });
-      const summaries = page.items.map((result) => compactResult(result, getScenario(result.scenarioId)));
+      const summaries = await Promise.all(page.items.map(async (result) => compactResult(result, await getScenario(result.scenarioId))));
       return json(compactToolPayload(
         verbose ? page.items : summaries,
         page.total,
@@ -622,7 +657,7 @@ server.tool(
   },
   async ({ resultId }) => {
     try {
-      const screenshots = listScreenshots(resultId);
+      const screenshots = await listScreenshots(resultId);
       if (screenshots.length === 0) {
         return json({ items: [], total: 0 });
       }
@@ -670,8 +705,8 @@ server.tool(
   async ({ name, path, description }) => {
     try {
       const project = description
-        ? createProject({ name, path, description })
-        : ensureProject(name, path);
+        ? await createProject({ name, path, description })
+        : await ensureProject(name, path);
       return json(project);
     } catch (error) {
       return errorResponse(error);
@@ -691,7 +726,7 @@ server.tool(
   },
   async ({ limit, offset, verbose }) => {
     try {
-      const projects = listProjects();
+      const projects = await listProjects();
       const page = pageItems(projects, { limit, offset, defaultLimit: 20, maxLimit: 100 });
       return json(compactToolPayload(
         verbose ? page.items : page.items.map(compactProject),
@@ -761,7 +796,7 @@ server.tool(
     e2bTemplate,
   }) => {
     try {
-      return json(createTestingWorkflow({
+      return json(await createTestingWorkflow({
         name,
         description,
         projectId,
@@ -794,7 +829,7 @@ server.tool(
   },
   async ({ projectId, enabled, limit, offset, verbose }) => {
     try {
-      const workflows = listTestingWorkflows({ projectId, enabled });
+      const workflows = await listTestingWorkflows({ projectId, enabled });
       const page = pageItems(workflows, { limit, offset, defaultLimit: 20, maxLimit: 100 });
       return json(compactToolPayload(
         verbose ? page.items : page.items.map(compactWorkflow),
@@ -856,7 +891,7 @@ server.tool(
   },
   async ({ id }) => {
     try {
-      const workflow = getTestingWorkflow(id);
+      const workflow = await getTestingWorkflow(id);
       if (!workflow) return errorResponse(notFoundErr(id, "Workflow"));
       return json(workflow);
     } catch (error) {
@@ -877,7 +912,7 @@ server.tool(
   },
   async ({ name, description, role }) => {
     try {
-      const agent = registerAgent({ name, description, role });
+      const agent = await registerAgent({ name, description, role });
       return json(agent);
     } catch (error) {
       return errorResponse(error);
@@ -897,7 +932,7 @@ server.tool(
   },
   async ({ limit, offset, verbose }) => {
     try {
-      const agents = listAgents();
+      const agents = await listAgents();
       const page = pageItems(agents, { limit, offset, defaultLimit: 20, maxLimit: 100 });
       const compactAgents = page.items.map((agent) => ({
         id: agent.id,
@@ -928,12 +963,22 @@ server.tool(
   async () => {
     try {
       const config = loadConfig();
-      const db = getDatabase();
-      const scenarioCount = (db.query("SELECT COUNT(*) as count FROM scenarios").get() as { count: number }).count;
-      const runCount = (db.query("SELECT COUNT(*) as count FROM runs").get() as { count: number }).count;
+      const scenarioCount = await countScenarios();
+      const runCount = await countRuns();
       const hasApiKey = !!(config.anthropicApiKey || process.env["ANTHROPIC_API_KEY"]);
+      const storage = storageStatus();
       return json({
-        dbPath: process.env["HASNA_TESTERS_DB_PATH"] || process.env["TESTERS_DB_PATH"] || `${getTestersDir()}/testers.db`,
+        // TRUTH about where reads/writes actually go. In cloud mode there is no
+        // local db, so dbPath is null and the cloud /v1 base URL is reported.
+        storageMode: storage.mode,
+        transport: storage.transport,
+        apiBaseUrl: storage.baseUrl,
+        storageApiKey: storage.apiKeyPresent ? "configured" : "not set",
+        storageModeSource: storage.modeSource,
+        dbPath:
+          storage.transport === "cloud-http"
+            ? null
+            : storage.dbPath || `${getTestersDir()}/testers.db`,
         apiKey: hasApiKey ? "configured" : "not set",
         scenarioCount,
         runCount,
@@ -956,7 +1001,7 @@ server.tool(
   },
   async ({ name, projectId }) => {
     try {
-      const scenarios = listScenarios({ projectId });
+      const scenarios = await listScenarios({ projectId });
       const scenario = scenarios.find((s) => s.name === name) ?? null;
       return json({ exists: scenario !== null, scenario });
     } catch (error) {
@@ -975,10 +1020,10 @@ server.tool(
   },
   async ({ runId }) => {
     try {
-      const run = getRun(runId);
+      const run = await getRun(runId);
       if (!run) return errorResponse(notFoundErr(runId, "Run"));
 
-      const results = getResultsByRun(runId);
+      const results = await getResultsByRun(runId);
       const total = results.length;
       const passed = results.filter((r) => r.status === "passed").length;
       const failed = results.filter((r) => r.status === "failed").length;
@@ -1006,16 +1051,16 @@ server.tool(
   },
   async ({ runId }) => {
     try {
-      const run = getRun(runId);
+      const run = await getRun(runId);
       if (!run) return errorResponse(notFoundErr(runId, "Run"));
 
-      const results = getResultsByRun(runId);
+      const results = await getResultsByRun(runId);
       const totalCostCents = results.reduce((sum, r) => sum + (r.costCents ?? 0), 0);
       const totalTokens = results.reduce((sum, r) => sum + (r.tokensUsed ?? 0), 0);
-      const byScenario = results.map((r) => {
-        const scenario = getScenario(r.scenarioId);
+      const byScenario = await Promise.all(results.map(async (r) => {
+        const scenario = await getScenario(r.scenarioId);
         return { scenarioId: r.scenarioId, scenarioName: scenario?.name ?? r.scenarioId, costCents: r.costCents ?? 0, tokens: r.tokensUsed ?? 0, status: r.status };
-      });
+      }));
 
       return json({ runId, totalCostCents, totalTokens, byScenario });
     } catch (error) {
@@ -1034,10 +1079,10 @@ server.tool(
   },
   async ({ runId }) => {
     try {
-      const run = getRun(runId);
+      const run = await getRun(runId);
       if (!run) return errorResponse(notFoundErr(runId, "Run"));
 
-      updateRun(runId, { status: "cancelled", finished_at: new Date().toISOString() });
+      await updateRun(runId, { status: "cancelled", finished_at: new Date().toISOString() });
       return json({ cancelled: true, runId });
     } catch (error) {
       return errorResponse(error);
@@ -1055,7 +1100,7 @@ server.tool(
   },
   async ({ projectId }) => {
     try {
-      const scenarios = listScenarios({ projectId });
+      const scenarios = await listScenarios({ projectId });
       const tagSet = new Set<string>();
       for (const s of scenarios) {
         for (const tag of s.tags) {
@@ -1084,7 +1129,7 @@ server.tool(
   },
   async ({ days = 7, projectId, limit, offset, verbose }) => {
     try {
-      let scenarios = findStaleScenarios(days);
+      let scenarios = await findStaleScenarios(days);
       if (projectId) {
         scenarios = scenarios.filter((s) => s.projectId === projectId);
       }
@@ -1125,13 +1170,13 @@ server.tool(
   },
   async ({ url, filePaths, mappings, projectId, model, headed, parallel }) => {
     try {
-      const allScenarios = listScenarios({ projectId });
+      const allScenarios = await listScenarios({ projectId });
       const matched = matchFilesToScenarios(filePaths, allScenarios, mappings ?? []);
       if (matched.length === 0) {
         return json({ runId: null, scenarioCount: 0, matchedScenarios: [], message: "No scenarios matched the provided file paths." });
       }
       const scenarioIds = matched.map((s) => s.id);
-      const { runId, scenarioCount } = startRunAsync({ url, scenarioIds, model, headed, parallel, projectId });
+      const { runId, scenarioCount } = await startRunAsync({ url, scenarioIds, model, headed, parallel, projectId });
       return json({
         runId,
         scenarioCount,
@@ -1156,7 +1201,7 @@ server.tool(
   },
   async ({ agentId }) => {
     try {
-      const agent = heartbeatAgent(agentId);
+      const agent = await heartbeatAgent(agentId);
       if (!agent) return errorResponse(notFoundErr(agentId, "Agent"));
       return json({ ok: true, agentId: agent.id, lastSeenAt: agent.lastSeenAt });
     } catch (error) {
@@ -1176,7 +1221,7 @@ server.tool(
   },
   async ({ agentId, scenarioId }) => {
     try {
-      const agent = setAgentFocus(agentId, scenarioId);
+      const agent = await setAgentFocus(agentId, scenarioId);
       if (!agent) return errorResponse(notFoundErr(agentId, "Agent"));
       return json({ ok: true, agentId: agent.id, focus: (agent.metadata as Record<string, unknown> | null)?.focus ?? null });
     } catch (error) {
@@ -1200,12 +1245,14 @@ server.tool(
   async ({ url, pages, projectId, headed, timeoutMs }) => {
     try {
       const { scanConsoleErrors } = await import("../lib/scanners/console.js");
-      const { upsertScanIssue } = await import("../db/scan-issues.js");
       const result = await scanConsoleErrors({ url, pages, headed, timeoutMs });
-      const deduped = result.issues.map((issue) => {
-        const { outcome } = upsertScanIssue(issue, projectId);
-        return { ...issue, outcome };
-      });
+      // Sequential upsert: two issues in one scan that share a fingerprint must
+      // fold into the same row, not race the UNIQUE(fingerprint) constraint.
+      const deduped: Array<Record<string, unknown>> = [];
+      for (const issue of result.issues) {
+        const { outcome } = await upsertScanIssue(issue, projectId);
+        deduped.push({ ...issue, outcome });
+      }
       return json({ ...result, issues: deduped });
     } catch (e) { return errorResponse(e); }
   },
@@ -1226,12 +1273,14 @@ server.tool(
   async ({ url, pages, projectId, headed, timeoutMs }) => {
     try {
       const { scanNetworkErrors } = await import("../lib/scanners/network.js");
-      const { upsertScanIssue } = await import("../db/scan-issues.js");
       const result = await scanNetworkErrors({ url, pages, headed, timeoutMs });
-      const deduped = result.issues.map((issue) => {
-        const { outcome } = upsertScanIssue(issue, projectId);
-        return { ...issue, outcome };
-      });
+      // Sequential upsert: two issues in one scan that share a fingerprint must
+      // fold into the same row, not race the UNIQUE(fingerprint) constraint.
+      const deduped: Array<Record<string, unknown>> = [];
+      for (const issue of result.issues) {
+        const { outcome } = await upsertScanIssue(issue, projectId);
+        deduped.push({ ...issue, outcome });
+      }
       return json({ ...result, issues: deduped });
     } catch (e) { return errorResponse(e); }
   },
@@ -1252,12 +1301,14 @@ server.tool(
   async ({ url, maxPages, projectId, headed, timeoutMs }) => {
     try {
       const { scanBrokenLinks } = await import("../lib/scanners/links.js");
-      const { upsertScanIssue } = await import("../db/scan-issues.js");
       const result = await scanBrokenLinks({ url, maxPages, headed, timeoutMs });
-      const deduped = result.issues.map((issue) => {
-        const { outcome } = upsertScanIssue(issue, projectId);
-        return { ...issue, outcome };
-      });
+      // Sequential upsert: two issues in one scan that share a fingerprint must
+      // fold into the same row, not race the UNIQUE(fingerprint) constraint.
+      const deduped: Array<Record<string, unknown>> = [];
+      for (const issue of result.issues) {
+        const { outcome } = await upsertScanIssue(issue, projectId);
+        deduped.push({ ...issue, outcome });
+      }
       return json({ ...result, issues: deduped });
     } catch (e) { return errorResponse(e); }
   },
@@ -1283,12 +1334,14 @@ server.tool(
   async ({ url, pages, projectId, headed, timeoutMs, thresholds }) => {
     try {
       const { scanPerformance } = await import("../lib/scanners/performance.js");
-      const { upsertScanIssue } = await import("../db/scan-issues.js");
       const result = await scanPerformance({ url, pages, headed, timeoutMs, thresholds });
-      const deduped = result.issues.map((issue) => {
-        const { outcome } = upsertScanIssue(issue, projectId);
-        return { ...issue, outcome };
-      });
+      // Sequential upsert: two issues in one scan that share a fingerprint must
+      // fold into the same row, not race the UNIQUE(fingerprint) constraint.
+      const deduped: Array<Record<string, unknown>> = [];
+      for (const issue of result.issues) {
+        const { outcome } = await upsertScanIssue(issue, projectId);
+        deduped.push({ ...issue, outcome });
+      }
       return json({ ...result, issues: deduped });
     } catch (e) { return errorResponse(e); }
   },
@@ -1333,7 +1386,7 @@ server.tool(
   },
   async ({ status, type, projectId, limit, offset, verbose }) => {
     try {
-      const issues = listScanIssues({ status, type, projectId });
+      const issues = await listScanIssues({ status, type, projectId });
       const page = pageItems(issues, { limit, offset, defaultLimit: 20, maxLimit: 100 });
       const compactIssues = page.items.map((issue) => ({
         id: issue.id,
@@ -1363,7 +1416,7 @@ server.tool(
   { id: z.string().describe("Scan issue ID") },
   async ({ id }) => {
     try {
-      const ok = resolveScanIssue(id);
+      const ok = await resolveScanIssue(id);
       if (!ok) return errorResponse(notFoundErr(id, "ScanIssue"));
       return json({ resolved: true, id });
     } catch (e) { return errorResponse(e); }
@@ -1394,7 +1447,7 @@ server.tool(
   },
   async (params) => {
     try {
-      const check = createApiCheck({
+      const check = await createApiCheck({
         name: params.name,
         url: params.url,
         method: params.method,
@@ -1434,16 +1487,16 @@ server.tool(
       const effectiveLimit = compactLimit(limit, 20, 100);
       const effectiveOffset = compactOffset(offset);
       const checks = tags && tags.length > 0
-        ? pageItems(listApiChecks({ projectId, enabled, tags }), {
+        ? pageItems(await listApiChecks({ projectId, enabled, tags }), {
             limit: effectiveLimit,
             offset: effectiveOffset,
             defaultLimit: 20,
             maxLimit: 100,
           }).items
-        : listApiChecks({ projectId, enabled, limit: effectiveLimit, offset: effectiveOffset || undefined });
+        : await listApiChecks({ projectId, enabled, limit: effectiveLimit, offset: effectiveOffset || undefined });
       const total = tags && tags.length > 0
-        ? listApiChecks({ projectId, enabled, tags }).length
-        : countApiChecks({ projectId, enabled });
+        ? (await listApiChecks({ projectId, enabled, tags })).length
+        : await countApiChecks({ projectId, enabled });
       return json(compactToolPayload(
         verbose ? checks : checks.map(compactApiCheck),
         total,
@@ -1466,9 +1519,9 @@ server.tool(
   },
   async ({ id }) => {
     try {
-      const check = getApiCheck(id);
+      const check = await getApiCheck(id);
       if (!check) return errorResponse(notFoundErr(id, "ApiCheck"));
-      const lastResult = getLatestApiCheckResult(check.id);
+      const lastResult = await getLatestApiCheckResult(check.id);
       return json({ ...check, lastResult });
     } catch (error) {
       return errorResponse(error);
@@ -1499,11 +1552,11 @@ server.tool(
   },
   async ({ id, version, ...updates }) => {
     try {
-      const check = updateApiCheck(id, updates, version);
+      const check = await updateApiCheck(id, updates, version);
       return json(check);
     } catch (error) {
       return errorResponse(error, {
-        fetchCurrent: () => getApiCheck(id),
+        current: await getApiCheck(id),
       });
     }
   },
@@ -1519,7 +1572,7 @@ server.tool(
   },
   async ({ id }) => {
     try {
-      const deleted = deleteApiCheck(id);
+      const deleted = await deleteApiCheck(id);
       if (!deleted) return errorResponse(notFoundErr(id, "ApiCheck"));
       return json({ deleted: true, id });
     } catch (error) {
@@ -1539,7 +1592,7 @@ server.tool(
   },
   async ({ id, baseUrl }) => {
     try {
-      const check = getApiCheck(id);
+      const check = await getApiCheck(id);
       if (!check) return errorResponse(notFoundErr(id, "ApiCheck"));
       const result = await runApiCheck(check, { baseUrl });
       return json(result);
@@ -1585,9 +1638,9 @@ server.tool(
   },
   async ({ checkId, limit = 10, offset, verbose }) => {
     try {
-      const check = getApiCheck(checkId);
+      const check = await getApiCheck(checkId);
       if (!check) return errorResponse(notFoundErr(checkId, "ApiCheck"));
-      const results = listApiCheckResults(check.id);
+      const results = await listApiCheckResults(check.id);
       const page = pageItems(results, { limit, offset, defaultLimit: 10, maxLimit: 100 });
       return json(compactToolPayload(
         verbose ? page.items : page.items.map(compactApiCheckResult),
@@ -1622,7 +1675,7 @@ server.tool(
   },
   async ({ name, role, description, instructions, traits, goals, projectId, authEmail, authPassword, authLoginPath }) => {
     try {
-      const persona = createPersona({
+      const persona = await createPersona({
         name,
         role,
         description,
@@ -1659,12 +1712,12 @@ server.tool(
       const effectiveLimit = compactLimit(limit, 20, 100);
       const effectiveOffset = compactOffset(offset);
       const filter = { projectId, enabled, globalOnly };
-      const personas = listPersonas({
+      const personas = await listPersonas({
         ...filter,
         limit: effectiveLimit,
         offset: effectiveOffset || undefined,
       });
-      const total = countPersonas(filter);
+      const total = await countPersonas(filter);
       return json(compactToolPayload(
         verbose ? redactPersonas(personas) : personas.map(compactPersona),
         total,
@@ -1687,17 +1740,14 @@ server.tool(
   },
   async ({ id }) => {
     try {
-      const persona = getPersona(id);
+      const persona = await getPersona(id);
       if (!persona) return errorResponse(notFoundErr(id, "Persona"));
 
-      const db = getDatabase();
-      const scenarioRows = db
-        .query("SELECT id, short_id, name FROM scenarios WHERE persona_id = ?")
-        .all(persona.id) as { id: string; short_id: string; name: string }[];
+      const usedBy = (await listScenarios()).filter((s) => s.personaId === persona.id);
 
       return json({
         ...redactPersona(persona),
-        usedByScenarios: scenarioRows.map((r) => ({ id: r.id, shortId: r.short_id, name: r.name })),
+        usedByScenarios: usedBy.map((s) => ({ id: s.id, shortId: s.shortId, name: s.name })),
       });
     } catch (error) {
       return errorResponse(error);
@@ -1726,11 +1776,11 @@ server.tool(
   },
   async ({ id, version, ...updates }) => {
     try {
-      const persona = updatePersona(id, updates, version);
+      const persona = await updatePersona(id, updates, version);
       return json(redactPersona(persona));
     } catch (error) {
       return errorResponse(error, {
-        fetchCurrent: () => getPersona(id),
+        current: await getPersona(id),
       });
     }
   },
@@ -1746,7 +1796,7 @@ server.tool(
   },
   async ({ id }) => {
     try {
-      const deleted = deletePersona(id);
+      const deleted = await deletePersona(id);
       if (!deleted) return errorResponse(notFoundErr(id, "Persona"));
       return json({ deleted: true, id });
     } catch (error) {
@@ -1766,13 +1816,13 @@ server.tool(
   },
   async ({ personaId, scenarioId }) => {
     try {
-      const persona = getPersona(personaId);
+      const persona = await getPersona(personaId);
       if (!persona) return errorResponse(notFoundErr(personaId, "Persona"));
 
-      const scenario = getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
+      const scenario = await getScenario(scenarioId) ?? await getScenarioByShortId(scenarioId);
       if (!scenario) return errorResponse(notFoundErr(scenarioId, "Scenario"));
 
-      const updated = updateScenario(scenario.id, { personaId: persona.id } as Parameters<typeof updateScenario>[1], scenario.version);
+      const updated = await updateScenario(scenario.id, { personaId: persona.id } as Parameters<typeof updateScenario>[1], scenario.version);
       return json({ ...updated, attachedPersona: redactPersona(persona) });
     } catch (error) {
       return errorResponse(error);
@@ -1790,10 +1840,10 @@ server.tool(
   },
   async ({ scenarioId }) => {
     try {
-      const scenario = getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
+      const scenario = await getScenario(scenarioId) ?? await getScenarioByShortId(scenarioId);
       if (!scenario) return errorResponse(notFoundErr(scenarioId, "Scenario"));
 
-      const updated = updateScenario(scenario.id, { personaId: null } as Parameters<typeof updateScenario>[1], scenario.version);
+      const updated = await updateScenario(scenario.id, { personaId: null } as Parameters<typeof updateScenario>[1], scenario.version);
       return json(updated);
     } catch (error) {
       return errorResponse(error);
@@ -1819,13 +1869,13 @@ server.tool(
       // Resolve URL
       let resolvedUrl = url;
       if (!resolvedUrl && env) {
-        const { getEnvironment } = await import("../db/environments.js");
-        const environment = getEnvironment(env);
+        const { getEnvironment } = await import("../store/index.js");
+        const environment = await getEnvironment(env);
         if (environment) resolvedUrl = environment.url;
       }
       if (!resolvedUrl) {
-        const { getDefaultEnvironment } = await import("../db/environments.js");
-        const defaultEnv = getDefaultEnvironment(projectId);
+        const { getDefaultEnvironment } = await import("../store/index.js");
+        const defaultEnv = await getDefaultEnvironment();
         if (defaultEnv) resolvedUrl = defaultEnv.url;
       }
       if (!resolvedUrl) return errorResponse(new Error("No URL provided. Pass url or env parameter."));
@@ -1834,7 +1884,7 @@ server.tool(
       const resolvedTags = tags ?? ["smoke"];
 
       // Run browser scenarios (smoke-tagged, max 10, synchronously)
-      const smokeScenarios = listScenarios({ tags: resolvedTags, projectId, limit: 10 });
+      const smokeScenarios = await listScenarios({ tags: resolvedTags, projectId, limit: 10 });
       let browserPassed = 0;
       let browserFailed = 0;
       const failedScenarios: Array<{ name: string; shortId: string; error: string }> = [];
@@ -1868,7 +1918,7 @@ server.tool(
         const apiResult = await runApiChecksByFilter({ baseUrl: resolvedUrl, projectId, enabled: true });
         apiPassed = apiResult.passed;
         apiFailed = apiResult.failed + apiResult.errors;
-        const allChecks = listApiChecks({ projectId, enabled: true });
+        const allChecks = await listApiChecks({ projectId, enabled: true });
         for (const r of apiResult.results.filter((r) => r.status !== "passed")) {
           const check = allChecks.find((c) => c.id === r.checkId);
           failedApiChecks.push({
@@ -1912,7 +1962,7 @@ server.tool(
   async ({ resultId }) => {
     try {
       const { explainFailure } = await import("../lib/failure-explainer.js");
-      const explanation = explainFailure(resultId);
+      const explanation = await explainFailure(resultId);
       return json(explanation);
     } catch (e) {
       return errorResponse(e);
@@ -1938,14 +1988,14 @@ server.tool(
       // Resolve URL
       let resolvedUrl = url;
       if (!resolvedUrl && env) {
-        const { getEnvironment } = await import("../db/environments.js");
-        const environment = getEnvironment(env);
+        const { getEnvironment } = await import("../store/index.js");
+        const environment = await getEnvironment(env);
         if (!environment) return errorResponse(notFoundErr(env, "Environment"));
         resolvedUrl = environment.url;
       }
       if (!resolvedUrl) {
-        const { getDefaultEnvironment } = await import("../db/environments.js");
-        const defaultEnv = getDefaultEnvironment();
+        const { getDefaultEnvironment } = await import("../store/index.js");
+        const defaultEnv = await getDefaultEnvironment();
         if (defaultEnv) resolvedUrl = defaultEnv.url;
       }
       if (!resolvedUrl) return errorResponse(new Error("No URL provided and no default environment set. Pass url or env."));
@@ -1969,14 +2019,14 @@ server.tool(
       const filePaths = [...new Set(diffOutput.split("\n").filter(Boolean))];
 
       // Match files to scenarios
-      const allScenarios = listScenarios({ projectId });
+      const allScenarios = await listScenarios({ projectId });
       const matched = matchFilesToScenarios(filePaths, allScenarios, []);
 
       if (matched.length === 0) {
         return json({ skipped: true, reason: "No scenarios match changed files", changedFiles: filePaths });
       }
 
-      const { runId, scenarioCount } = startRunAsync({
+      const { runId, scenarioCount } = await startRunAsync({
         url: resolvedUrl,
         scenarioIds: matched.map((s) => s.id),
         model,
@@ -2026,10 +2076,10 @@ server.tool(
 
       let scenarios;
       if (scenarioIds && scenarioIds.length > 0) {
-        const allScenarios = listScenarios({ projectId });
+        const allScenarios = await listScenarios({ projectId });
         scenarios = allScenarios.filter((s) => scenarioIds.includes(s.id) || scenarioIds.includes(s.shortId));
       } else {
-        scenarios = listScenarios({ tags, projectId });
+        scenarios = await listScenarios({ tags, projectId });
       }
 
       const count = scenarios.length;
@@ -2061,9 +2111,9 @@ server.tool(
   },
   async ({ runId }) => {
     try {
-      const run = getRun(runId);
+      const run = await getRun(runId);
       if (!run) return errorResponse(notFoundErr(runId, "Run"));
-      const results = getResultsByRun(runId);
+      const results = await getResultsByRun(runId);
 
       // Group failures by type
       const failureGroups: Record<string, { count: number; examples: string[] }> = {};
@@ -2149,7 +2199,7 @@ server.tool(
         }
       }
 
-      const allScenarios = listScenarios({ projectId });
+      const allScenarios = await listScenarios({ projectId });
       const covered: Array<{ file: string; scenarios: Array<{ id: string; shortId: string; name: string }> }> = [];
       const uncovered: string[] = [];
 
@@ -2197,19 +2247,19 @@ server.tool(
       // Resolve scenarios
       let scenarios;
       if (scenarioIds && scenarioIds.length > 0) {
-        const all = listScenarios({ projectId });
+        const all = await listScenarios({ projectId });
         scenarios = all.filter((s) => scenarioIds.includes(s.id) || scenarioIds.includes(s.shortId));
       } else {
-        scenarios = listScenarios({ projectId, limit: 20 });
+        scenarios = await listScenarios({ projectId, limit: 20 });
       }
       if (scenarios.length === 0) return json({ runs: [], message: "No scenarios found." });
 
       // Resolve personas
       let personas;
       if (personaIds && personaIds.length > 0) {
-        personas = personaIds.map((id) => getPersona(id)).filter(Boolean);
+        personas = (await Promise.all(personaIds.map((id) => getPersona(id)))).filter(Boolean);
       } else {
-        personas = listPersonas({ globalOnly: true, enabled: true });
+        personas = await listPersonas({ globalOnly: true, enabled: true });
       }
       if (personas.length === 0) return json({ runs: [], message: "No personas found. Seed defaults with persona seed command." });
 
@@ -2225,7 +2275,7 @@ server.tool(
 
       for (const persona of personas) {
         if (!persona) continue;
-        const { runId, scenarioCount } = startRunAsync({
+        const { runId, scenarioCount } = await startRunAsync({
           url,
           scenarioIds: scenarios.map((s) => s.id),
           model,
@@ -2268,14 +2318,14 @@ server.tool(
   },
   async ({ scenarioId, personaId, nameSuffix }) => {
     try {
-      const scenario = getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
+      const scenario = await getScenario(scenarioId) ?? await getScenarioByShortId(scenarioId);
       if (!scenario) return errorResponse(notFoundErr(scenarioId, "Scenario"));
 
-      const persona = getPersona(personaId);
+      const persona = await getPersona(personaId);
       if (!persona) return errorResponse(notFoundErr(personaId, "Persona"));
 
       const suffix = nameSuffix ?? persona.name;
-      const clone = createScenario({
+      const clone = await createScenario({
         name: `${scenario.name} [${suffix}]`,
         description: scenario.description,
         steps: scenario.steps,
@@ -2313,14 +2363,14 @@ server.tool(
       const created: Array<{ scenarioId: string; personaId: string; name: string; shortId: string }> = [];
 
       for (const scenarioId of scenarioIds) {
-        const scenario = getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
+        const scenario = await getScenario(scenarioId) ?? await getScenarioByShortId(scenarioId);
         if (!scenario) continue;
 
         for (const personaId of personaIds) {
-          const persona = getPersona(personaId);
+          const persona = await getPersona(personaId);
           if (!persona) continue;
 
-          const clone = createScenario({
+          const clone = await createScenario({
             name: `${scenario.name} [${persona.name}]`,
             description: scenario.description,
             steps: scenario.steps,
@@ -2373,7 +2423,7 @@ server.tool(
         ...(context ? [`Context: ${context}`] : []),
       ];
 
-      const scenario = createScenario({
+      const scenario = await createScenario({
         name,
         description: `Regression test for: ${error}${context ? `\n\nContext: ${context}` : ""}`,
         steps,
@@ -2385,7 +2435,7 @@ server.tool(
 
       let runInfo = null;
       if (autoRun) {
-        const { runId, scenarioCount } = startRunAsync({ url, scenarioIds: [scenario.id], projectId });
+        const { runId, scenarioCount } = await startRunAsync({ url, scenarioIds: [scenario.id], projectId });
         runInfo = { runId, scenarioCount };
       }
 
@@ -2407,8 +2457,8 @@ server.tool(
   },
   async ({ resultId, includeContent }) => {
     try {
-      const { getResult } = await import("../db/results.js");
-      const result = getResult(resultId);
+      const { getResult } = await import("../store/index.js");
+      const result = await getResult(resultId);
       if (!result) return errorResponse(notFoundErr(resultId, "Result"));
 
       const harPath = (result as { harPath?: string | null }).harPath ?? (result.metadata as { harPath?: string } | null)?.harPath;
@@ -2419,7 +2469,7 @@ server.tool(
       if (!exists) return json({ resultId, harPath, harAvailable: false, message: "HAR file was recorded but has been cleaned up." });
 
       if (!includeContent) {
-        const size = await harFile.size();
+        const size = harFile.size;
         return json({ resultId, harPath, harAvailable: true, sizeBytes: size, message: "HAR file available. Use includeContent: true to retrieve." });
       }
 
@@ -2443,7 +2493,7 @@ server.tool(
   },
   async ({ runId, timeoutMs = 300000, pollIntervalMs = 2000 }) => {
     try {
-      const run = getRun(runId);
+      const run = await getRun(runId);
       if (!run) return errorResponse(notFoundErr(runId, "Run"));
 
       const deadline = Date.now() + (timeoutMs ?? 300000);
@@ -2451,19 +2501,23 @@ server.tool(
 
       const poll = (): Promise<typeof run> =>
         new Promise((resolve, reject) => {
-          const check = () => {
-            const current = getRun(runId);
-            if (!current) return reject(new Error(`Run ${runId} disappeared`));
-            const terminal = ["passed", "failed", "cancelled"].includes(current.status);
-            if (terminal) return resolve(current);
-            if (Date.now() >= deadline) return reject(new Error(`wait_for_run timed out after ${timeoutMs}ms`));
-            setTimeout(check, interval);
+          const check = async () => {
+            try {
+              const current = await getRun(runId);
+              if (!current) return reject(new Error(`Run ${runId} disappeared`));
+              const terminal = ["passed", "failed", "cancelled"].includes(current.status);
+              if (terminal) return resolve(current);
+              if (Date.now() >= deadline) return reject(new Error(`wait_for_run timed out after ${timeoutMs}ms`));
+              setTimeout(check, interval);
+            } catch (err) {
+              reject(err);
+            }
           };
-          check();
+          void check();
         });
 
       const finalRun = await poll();
-      const results = getResultsByRun(runId);
+      const results = await getResultsByRun(runId);
       const failedResults = results.filter((r) => r.status !== "passed" && r.status !== "skipped");
 
       return json({
@@ -2505,7 +2559,7 @@ server.tool(
   },
   async ({ name, cronExpression, url, tags, scenarioIds, projectId, model, parallel, timeoutMs }) => {
     try {
-      const schedule = createSchedule({
+      const schedule = await createSchedule({
         name,
         cronExpression,
         url,
@@ -2539,7 +2593,7 @@ server.tool(
     try {
       const effectiveLimit = compactLimit(limit, 20, 100);
       const effectiveOffset = compactOffset(offset);
-      const allSchedules = listSchedules({ projectId, enabled });
+      const allSchedules = await listSchedules({ projectId, enabled });
       const page = pageItems(allSchedules, { limit: effectiveLimit, offset: effectiveOffset });
       const enriched = page.items.map((s) => ({
         ...s,
@@ -2565,7 +2619,7 @@ server.tool(
   { id: z.string().describe("Schedule ID") },
   async ({ id }) => {
     try {
-      const deleted = deleteSchedule(id);
+      const deleted = await deleteSchedule(id);
       if (!deleted) return errorResponse(notFoundErr(id, "Schedule"));
       return json({ deleted: true, id });
     } catch (e) {
@@ -2582,7 +2636,7 @@ server.tool(
   { id: z.string().describe("Schedule ID") },
   async ({ id }) => {
     try {
-      const schedule = updateSchedule(id, { enabled: true });
+      const schedule = await updateSchedule(id, { enabled: true });
       return json(schedule);
     } catch (e) {
       return errorResponse(e);
@@ -2596,7 +2650,7 @@ server.tool(
   { id: z.string().describe("Schedule ID") },
   async ({ id }) => {
     try {
-      const schedule = updateSchedule(id, { enabled: false });
+      const schedule = await updateSchedule(id, { enabled: false });
       return json(schedule);
     } catch (e) {
       return errorResponse(e);
@@ -2623,7 +2677,7 @@ server.tool(
         const tasks = pullTasks({ tags: tags ?? ["qa", "test", "testing"] });
         return json({ dryRun: true, wouldImport: tasks.length, tasks: tasks.slice(0, 20) });
       }
-      const result = importFromTodos({ projectId, tags, projectName: todosProjectId });
+      const result = await importFromTodos({ projectId, tags, projectName: todosProjectId });
       return json(result);
     } catch (e) {
       return errorResponse(e);
@@ -2644,7 +2698,7 @@ server.tool(
   async ({ tags, projectId, dryRun }) => {
     try {
       const { importPersonasFromContacts } = await import("../lib/contacts-connector.js");
-      const result = importPersonasFromContacts({ tags: tags ?? ["test-user", "tester", "qa"], projectId, dryRun: dryRun ?? false });
+      const result = await importPersonasFromContacts({ tags: tags ?? ["test-user", "tester", "qa"], projectId, dryRun: dryRun ?? false });
       return json({ ...result, dryRun: dryRun ?? false });
     } catch (e) {
       return errorResponse(e);
@@ -2662,10 +2716,10 @@ server.tool(
   },
   async ({ personaId }) => {
     try {
-      const persona = getPersona(personaId);
+      const persona = await getPersona(personaId);
       if (!persona) return errorResponse(notFoundErr(personaId, "Persona"));
       const { getContactsAvailability, syncPersonaFromContact } = await import("../lib/contacts-connector.js");
-      const updated = syncPersonaFromContact(persona.id);
+      const updated = await syncPersonaFromContact(persona.id);
       const contacts = getContactsAvailability();
       if (!contacts.available) {
         return json({
@@ -2759,8 +2813,8 @@ server.tool(
   },
   async ({ name, url, projectId, isDefault, variables }) => {
     try {
-      const { createEnvironment } = await import("../db/environments.js");
-      const env = createEnvironment({ name, url, projectId, isDefault, variables });
+      const { createEnvironment } = await import("../store/index.js");
+      const env = await createEnvironment({ name, url, projectId, isDefault, variables });
       return json(env);
     } catch (e) {
       return errorResponse(e);
@@ -2781,8 +2835,8 @@ server.tool(
   },
   async ({ projectId, limit, offset, verbose }) => {
     try {
-      const { listEnvironments } = await import("../db/environments.js");
-      const envs = listEnvironments(projectId);
+      const { listEnvironments } = await import("../store/index.js");
+      const envs = await listEnvironments(projectId);
       const page = pageItems(envs, { limit, offset, defaultLimit: 20, maxLimit: 100 });
       return json(compactToolPayload(
         verbose ? page.items : page.items.map(compactEnvironment),
@@ -2804,8 +2858,8 @@ server.tool(
   { name: z.string().describe("Environment name to delete") },
   async ({ name }) => {
     try {
-      const { deleteEnvironment } = await import("../db/environments.js");
-      const deleted = deleteEnvironment(name);
+      const { deleteEnvironment } = await import("../store/index.js");
+      const deleted = await deleteEnvironment(name);
       if (!deleted) return errorResponse(notFoundErr(name, "Environment"));
       return json({ deleted: true, name });
     } catch (e) {
@@ -2822,9 +2876,9 @@ server.tool(
   { name: z.string().describe("Environment name to set as default") },
   async ({ name }) => {
     try {
-      const { setDefaultEnvironment, getEnvironment } = await import("../db/environments.js");
-      setDefaultEnvironment(name);
-      return json({ default: true, name, env: getEnvironment(name) });
+      const { setDefaultEnvironment, getEnvironment } = await import("../store/index.js");
+      await setDefaultEnvironment(name);
+      return json({ default: true, name, env: await getEnvironment(name) });
     } catch (e) {
       return errorResponse(e);
     }
@@ -2845,7 +2899,7 @@ server.tool(
   },
   async ({ projectId, limit, offset, scenariosPerPage, verbose }) => {
     try {
-      const scenarios = listScenarios({ projectId });
+      const scenarios = await listScenarios({ projectId });
       const byPage: Record<string, Array<{ id: string; shortId: string; name: string; priority: string; tags: string[] }>> = {};
       const noPath: Array<{ id: string; shortId: string; name: string }> = [];
       const scenarioSampleLimit = compactLimit(scenariosPerPage, 5, 20);

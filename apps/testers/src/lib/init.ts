@@ -1,8 +1,8 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { join, basename } from "path";
 import { getTestersDir } from "./paths.js";
-import { createScenario, listScenarios } from "../db/scenarios.js";
-import { ensureProject } from "../db/projects.js";
+import { createScenario, listScenarios } from "../store/index.js";
+import { ensureProject } from "../store/index.js";
 import type { CreateScenarioInput } from "../types/index.js";
 
 // ─── Framework Detection ────────────────────────────────────────────────────
@@ -293,13 +293,13 @@ export interface InitOptions {
 }
 
 export interface InitResult {
-  project: ReturnType<typeof ensureProject>;
-  scenarios: ReturnType<typeof createScenario>[];
+  project: Awaited<ReturnType<typeof ensureProject>>;
+  scenarios: Awaited<ReturnType<typeof createScenario>>[];
   framework: FrameworkInfo | null;
   url: string;
 }
 
-export function initProject(options: InitOptions): InitResult {
+export async function initProject(options: InitOptions): Promise<InitResult> {
   const dir = options.dir ?? process.cwd();
   const name = options.name ?? basename(dir);
   const framework = detectFramework(dir);
@@ -307,7 +307,7 @@ export function initProject(options: InitOptions): InitResult {
   const projectPath = options.path ?? dir;
 
   // Create or find the project
-  const project = ensureProject(name, projectPath);
+  const project = await ensureProject(name, projectPath);
 
   // Create starter scenarios (skip if project already has scenarios — idempotent)
   const starterInputs = getStarterScenarios(
@@ -315,10 +315,10 @@ export function initProject(options: InitOptions): InitResult {
     project.id,
   );
 
-  const existingScenarios = listScenarios({ projectId: project.id });
+  const existingScenarios = await listScenarios({ projectId: project.id });
   const scenarios = existingScenarios.length > 0
     ? existingScenarios
-    : starterInputs.map((input) => { try { return createScenario(input); } catch { return null; } }).filter((s): s is NonNullable<typeof s> => s !== null);
+    : (await Promise.all(starterInputs.map(async (input) => { try { return await createScenario(input); } catch { return null; } }))).filter((s): s is NonNullable<typeof s> => s !== null);
 
   // Write activeProject to config
   const configDir = getTestersDir();

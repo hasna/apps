@@ -245,9 +245,9 @@ export async function generateScenarios(options: GeneratorOptions): Promise<Gene
 
     // Optionally persist to DB
     if (options.save && scenarios.length > 0) {
-      const { createScenario } = await import("../db/scenarios.js");
+      const { createScenario } = await import("../store/index.js");
       for (const scenario of scenarios) {
-        try { createScenario(scenario); } catch { /* skip duplicates */ }
+        try { await createScenario(scenario); } catch { /* skip duplicates */ }
       }
     }
 

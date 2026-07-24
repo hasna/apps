@@ -1,6 +1,7 @@
-import { createPersona, listPersonas } from "./personas.js";
+import { createPersona, listPersonas } from "../store/index.js";
+import type { CreatePersonaInput } from "../types/index.js";
 
-export const DEFAULT_PERSONAS = [
+export const DEFAULT_PERSONAS: CreatePersonaInput[] = [
   {
     name: "First-Time User",
     role: "first-time user who has never used this app",
@@ -73,13 +74,13 @@ export const DEFAULT_PERSONAS = [
   },
 ];
 
-export function seedDefaultPersonas(): { seeded: number; skipped: number } {
-  const existing = listPersonas({ globalOnly: true });
+export async function seedDefaultPersonas(): Promise<{ seeded: number; skipped: number }> {
+  const existing = await listPersonas({ globalOnly: true });
   if (existing.length > 0) return { seeded: 0, skipped: DEFAULT_PERSONAS.length };
   let seeded = 0;
   for (const p of DEFAULT_PERSONAS) {
     try {
-      createPersona(p);
+      await createPersona(p);
       seeded++;
     } catch {
       // skip duplicates

@@ -11,7 +11,7 @@
  */
 
 import { launchBrowser, getPage, closeBrowser } from "./browser.js";
-import { createScenario } from "../db/scenarios.js";
+import { createScenario } from "../store/index.js";
 import {
   callOpenAICompatible,
   createClientForModel,
@@ -293,7 +293,7 @@ export async function crawlAndGenerate(options: CrawlAndGenerateOptions): Promis
           ? s.priority
           : "medium") as "low" | "medium" | "high" | "critical";
 
-        const scenario = createScenario({
+        const scenario = await createScenario({
           name: s.name,
           description: s.description,
           steps: s.steps,

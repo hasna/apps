@@ -675,6 +675,37 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_run_attempts_run_spec_attempt
   ON run_attempts(run_id, spec_id, attempt_number)
   WHERE run_id IS NOT NULL AND spec_id IS NOT NULL;
   `,
+
+  // Migration 36: Re-ensure the sessions table (idempotent backfill).
+  // The original sessions migration (labeled "Migration 30") was inserted
+  // mid-array rather than appended, so its positional id collided with a
+  // migration already recorded as applied in databases created by earlier
+  // releases — meaning `CREATE TABLE sessions` was silently skipped and every
+  // `sessions` command failed with "no such table: sessions". This trailing,
+  // fully idempotent migration gets a fresh id that no existing database has
+  // applied, so it runs everywhere and heals those databases. It is a harmless
+  // no-op on databases that already have the table.
+  `
+  CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    tab_id INTEGER NOT NULL,
+    url TEXT,
+    title TEXT,
+    entries TEXT NOT NULL DEFAULT '[]',
+    entry_count INTEGER NOT NULL DEFAULT 0,
+    error_count INTEGER NOT NULL DEFAULT 0,
+    console_count INTEGER NOT NULL DEFAULT 0,
+    nav_count INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'exported' CHECK(status IN ('live','saved','exported')),
+    start_time TEXT NOT NULL,
+    end_time TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_sessions_tab ON sessions(tab_id);
+  CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
+  CREATE INDEX IF NOT EXISTS idx_sessions_created ON sessions(created_at DESC);
+  `,
 ];
 
 function applyMigrations(database: Database): void {

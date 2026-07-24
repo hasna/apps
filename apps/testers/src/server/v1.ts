@@ -15,7 +15,7 @@ import { ValidationError } from "../db/pg-store.js";
 const CORS = {
   "Content-Type": "application/json",
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization, x-api-key",
 };
 
@@ -158,6 +158,29 @@ export async function handleV1(
   }
 }
 
+/**
+ * Split a `/v1/...` pathname into decoded path segments.
+ *
+ * The standard Hasna storage client `encodeURIComponent()`s every id (RFC 3986),
+ * so a composite id like `scenarioId:dependsOn` arrives on the wire as
+ * `scenarioId%3AdependsOn`. Percent-decode each segment here so reserved
+ * characters (`:`, `/`, spaces, ...) round-trip to the literal form the route
+ * handlers expect. Malformed escapes fall back to the raw segment.
+ */
+export function parsePathSegments(pathname: string): string[] {
+  return pathname
+    .replace(/^\/v1\//, "")
+    .split("/")
+    .filter(Boolean)
+    .map((s) => {
+      try {
+        return decodeURIComponent(s);
+      } catch {
+        return s;
+      }
+    });
+}
+
 async function route(
   req: Request,
   pathname: string,
@@ -165,7 +188,7 @@ async function route(
   searchParams: URLSearchParams,
 ): Promise<Response> {
   const db = getCloudClient();
-  const seg = pathname.replace(/^\/v1\//, "").split("/").filter(Boolean); // e.g. ["scenarios","<id>"]
+  const seg = parsePathSegments(pathname); // e.g. ["scenarios","<id>"]
   const [resource, id, sub] = seg;
 
   // ── projects ──
@@ -181,12 +204,23 @@ async function route(
 
   // ── scenarios ──
   if (resource === "scenarios") {
+    // Aggregate/bulk sub-routes (must precede the id-based branch).
+    if (id && sub === "result-stats" && method === "GET") {
+      return json(await store.getScenarioResultStats(db, id));
+    }
+    if (id === "count" && method === "GET") {
+      return json({ count: await store.countScenarios(db) });
+    }
+    if (id === "import" && method === "POST") {
+      return json(await store.importScenarios(db, (await readJson(req)) as never), 200);
+    }
     if (!id) {
       if (method === "GET")
         return json(
           await store.listScenarios(db, {
             projectId: searchParams.get("projectId") ?? undefined,
             limit: numParam(searchParams.get("limit")),
+            offset: numParam(searchParams.get("offset")),
           }),
         );
       if (method === "POST") return json(await store.createScenario(db, (await readJson(req)) as never), 201);
@@ -201,12 +235,20 @@ async function route(
   if (resource === "runs") {
     if (!id) {
       if (method === "GET")
-        return json(await store.listRuns(db, { projectId: searchParams.get("projectId") ?? undefined }));
+        return json(
+          await store.listRuns(db, {
+            projectId: searchParams.get("projectId") ?? undefined,
+            limit: numParam(searchParams.get("limit")),
+            offset: numParam(searchParams.get("offset")),
+          }),
+        );
       if (method === "POST") return json(await store.createRun(db, (await readJson(req)) as never), 201);
     } else if (sub === "results" && method === "GET") {
       return json(await store.listResultsByRun(db, id));
     } else if (!sub && method === "GET") {
       return notNull(await store.getRun(db, id), "run");
+    } else if (!sub && (method === "PUT" || method === "PATCH")) {
+      return notNull(await store.updateRun(db, id, (await readJson(req)) as never), "run");
     }
   }
 
@@ -228,6 +270,256 @@ async function route(
     }
   }
 
+  // ── scan issues ──
+  if (resource === "scan-issues") {
+    if (!id) {
+      if (method === "GET")
+        return json(
+          await store.listScanIssues(db, {
+            status: searchParams.get("status") ?? undefined,
+            type: searchParams.get("type") ?? undefined,
+            projectId: searchParams.get("projectId") ?? undefined,
+            limit: numParam(searchParams.get("limit")),
+            offset: numParam(searchParams.get("offset")),
+          }),
+        );
+      // POST upserts by fingerprint (server owns dedup); returns { issue, outcome }.
+      if (method === "POST") return json(await store.upsertScanIssue(db, (await readJson(req)) as never), 200);
+    } else {
+      if (method === "GET") return notNull(await store.getScanIssue(db, id), "scan issue");
+      if (method === "PATCH") {
+        const body = await readJson(req);
+        if (typeof body["todoTaskId"] === "string") {
+          return notNull(await store.setScanIssueTodoTaskId(db, id, body["todoTaskId"]), "scan issue");
+        }
+        if (body["status"] === "resolved") {
+          return (await store.resolveScanIssue(db, id))
+            ? json({ id, status: "resolved" })
+            : err("scan issue not found", 404);
+        }
+        return err("unsupported scan-issue patch", 400);
+      }
+    }
+  }
+
+  // ── webhooks ──
+  if (resource === "webhooks") {
+    if (!id) {
+      if (method === "GET")
+        return json(
+          await store.listWebhooks(db, {
+            projectId: searchParams.get("projectId") ?? undefined,
+            limit: numParam(searchParams.get("limit")),
+            offset: numParam(searchParams.get("offset")),
+          }),
+        );
+      if (method === "POST") return json(await store.createWebhook(db, (await readJson(req)) as never), 201);
+    } else {
+      if (method === "GET") return notNull(await store.getWebhook(db, id), "webhook");
+      if (method === "DELETE") return json({ deleted: await store.deleteWebhook(db, id) });
+    }
+  }
+
+  // ── agents ──
+  if (resource === "agents") {
+    if (!id) {
+      if (method === "GET") return json(await store.listAgents(db));
+      if (method === "POST") return json(await store.registerAgent(db, (await readJson(req)) as never), 201);
+    } else {
+      if (method === "GET") return notNull(await store.getAgent(db, id), "agent");
+      if (method === "PATCH") return notNull(await store.updateAgent(db, id, (await readJson(req)) as never), "agent");
+    }
+  }
+
+  // ── environments ──
+  if (resource === "environments") {
+    if (!id) {
+      if (method === "GET") return json(await store.listEnvironments(db, searchParams.get("projectId") ?? undefined));
+      if (method === "POST") return json(await store.createEnvironment(db, (await readJson(req)) as never), 201);
+    } else {
+      if (method === "GET") return notNull(await store.getEnvironment(db, id), "environment");
+      if (method === "PATCH") return notNull(await store.updateEnvironment(db, id, (await readJson(req)) as never), "environment");
+      if (method === "DELETE") return json({ deleted: await store.deleteEnvironment(db, id) });
+    }
+  }
+
+  // ── auth presets (get/delete keyed on name) ──
+  if (resource === "auth-presets") {
+    if (!id) {
+      if (method === "GET") return json(await store.listAuthPresets(db));
+      if (method === "POST") return json(await store.createAuthPreset(db, (await readJson(req)) as never), 201);
+    } else {
+      if (method === "GET") return notNull(await store.getAuthPreset(db, id), "auth preset");
+      if (method === "DELETE") return json({ deleted: await store.deleteAuthPreset(db, id) });
+    }
+  }
+
+  // ── schedules ──
+  if (resource === "schedules") {
+    if (!id) {
+      if (method === "GET")
+        return json(
+          await store.listSchedules(db, {
+            projectId: searchParams.get("projectId") ?? undefined,
+            enabled: boolParam(searchParams.get("enabled")),
+          }),
+        );
+      if (method === "POST") return json(await store.createSchedule(db, (await readJson(req)) as never), 201);
+    } else {
+      if (method === "GET") return notNull(await store.getSchedule(db, id), "schedule");
+      if (method === "PUT" || method === "PATCH")
+        return notNull(await store.updateSchedule(db, id, (await readJson(req)) as never), "schedule");
+      if (method === "DELETE") return json({ deleted: await store.deleteSchedule(db, id) });
+    }
+  }
+
+  // ── flows ──
+  if (resource === "flows") {
+    if (!id) {
+      if (method === "GET") return json(await store.listFlows(db, searchParams.get("projectId") ?? undefined));
+      if (method === "POST") return json(await store.createFlow(db, (await readJson(req)) as never), 201);
+    } else {
+      if (method === "GET") return notNull(await store.getFlow(db, id), "flow");
+      if (method === "DELETE") return json({ deleted: await store.deleteFlow(db, id) });
+    }
+  }
+
+  // ── flow dependencies (id encoded as "scenarioId:dependsOn") ──
+  if (resource === "flow-dependencies") {
+    if (!id) {
+      if (method === "GET")
+        return json(
+          await store.listFlowDependencies(db, {
+            scenarioId: searchParams.get("scenarioId") ?? undefined,
+            dependsOn: searchParams.get("dependsOn") ?? undefined,
+          }),
+        );
+      if (method === "POST") return json(await store.createFlowDependency(db, (await readJson(req)) as never), 201);
+    } else if (method === "DELETE") {
+      const sep = id.indexOf(":");
+      if (sep < 0) return err("flow-dependency id must be 'scenarioId:dependsOn'", 400);
+      return json({ deleted: await store.deleteFlowDependency(db, id.slice(0, sep), id.slice(sep + 1)) });
+    }
+  }
+
+  // ── sessions ──
+  if (resource === "sessions") {
+    if (!id) {
+      if (method === "GET")
+        return json(await store.listSessions(db, numParam(searchParams.get("limit")) ?? 50, numParam(searchParams.get("offset")) ?? 0));
+      if (method === "POST") return json(await store.createSession(db, (await readJson(req)) as never), 201);
+    } else {
+      if (method === "GET") return notNull(await store.getSession(db, id), "session");
+      if (method === "DELETE") return json({ deleted: await store.deleteSession(db, id) });
+    }
+  }
+
+  // ── api checks ──
+  if (resource === "api-checks") {
+    if (!id) {
+      if (method === "GET")
+        return json(
+          await store.listApiChecks(db, {
+            projectId: searchParams.get("projectId") ?? undefined,
+            enabled: boolParam(searchParams.get("enabled")),
+          }),
+        );
+      if (method === "POST") return json(await store.createApiCheck(db, (await readJson(req)) as never), 201);
+    } else {
+      if (method === "GET") return notNull(await store.getApiCheck(db, id), "api check");
+      if (method === "PUT" || method === "PATCH")
+        return notNull(await store.updateApiCheck(db, id, (await readJson(req)) as never), "api check");
+      if (method === "DELETE") return json({ deleted: await store.deleteApiCheck(db, id) });
+    }
+  }
+
+  // ── api check results ──
+  if (resource === "api-check-results") {
+    if (!id) {
+      if (method === "GET") {
+        const checkId = searchParams.get("checkId");
+        if (!checkId) return err("checkId query param is required", 400);
+        return json(await store.listApiCheckResults(db, checkId));
+      }
+      if (method === "POST") return json(await store.createApiCheckResult(db, (await readJson(req)) as never), 201);
+    }
+  }
+
+  // ── screenshots ──
+  if (resource === "screenshots") {
+    if (!id) {
+      if (method === "GET") {
+        const resultId = searchParams.get("resultId");
+        if (!resultId) return err("resultId query param is required", 400);
+        return json(await store.listScreenshots(db, resultId));
+      }
+      if (method === "POST") return json(await store.createScreenshot(db, (await readJson(req)) as never), 201);
+    }
+  }
+
+  // ── step results ──
+  if (resource === "step-results") {
+    if (!id) {
+      if (method === "GET") {
+        const resultId = searchParams.get("resultId");
+        if (!resultId) return err("resultId query param is required", 400);
+        return json(await store.listStepResults(db, resultId));
+      }
+      if (method === "POST") return json(await store.createStepResult(db, (await readJson(req)) as never), 201);
+    } else {
+      if (method === "GET") return notNull(await store.getStepResult(db, id), "step result");
+      if (method === "PUT" || method === "PATCH")
+        return notNull(await store.updateStepResult(db, id, (await readJson(req)) as never), "step result");
+    }
+  }
+
+  // ── testing workflows ──
+  if (resource === "workflows") {
+    if (!id) {
+      if (method === "GET")
+        return json(
+          await store.listTestingWorkflows(db, {
+            projectId: searchParams.get("projectId") ?? undefined,
+            enabled: boolParam(searchParams.get("enabled")),
+          }),
+        );
+      if (method === "POST") return json(await store.createTestingWorkflow(db, (await readJson(req)) as never), 201);
+    } else {
+      if (method === "GET") return notNull(await store.getTestingWorkflow(db, id), "workflow");
+      if (method === "PUT" || method === "PATCH")
+        return notNull(await store.updateTestingWorkflow(db, id, (await readJson(req)) as never), "workflow");
+      if (method === "DELETE") return json({ deleted: await store.deleteTestingWorkflow(db, id) });
+    }
+  }
+
+  // ── golden answers ──
+  if (resource === "golden-answers") {
+    if (!id) {
+      if (method === "GET")
+        return json(
+          await store.listGoldenAnswers(db, {
+            projectId: searchParams.get("projectId") ?? undefined,
+            enabled: boolParam(searchParams.get("enabled")),
+          }),
+        );
+      if (method === "POST") return json(await store.createGoldenAnswer(db, (await readJson(req)) as never), 201);
+    } else if (method === "GET") {
+      return notNull(await store.getGoldenAnswer(db, id), "golden answer");
+    }
+  }
+
+  // ── golden check results ──
+  if (resource === "golden-check-results") {
+    if (!id) {
+      if (method === "GET") {
+        const goldenId = searchParams.get("goldenId");
+        if (!goldenId) return err("goldenId query param is required", 400);
+        return json(await store.listGoldenCheckResults(db, goldenId));
+      }
+      if (method === "POST") return json(await store.createGoldenCheckResult(db, (await readJson(req)) as never), 201);
+    }
+  }
+
   return err("not found", 404);
 }
 
@@ -238,4 +530,8 @@ function numParam(v: string | null): number | undefined {
   if (!v) return undefined;
   const n = Number(v);
   return Number.isFinite(n) ? n : undefined;
+}
+function boolParam(v: string | null): boolean | undefined {
+  if (v === null || v === "") return undefined;
+  return v === "true" || v === "1";
 }

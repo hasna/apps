@@ -10,7 +10,7 @@ interface AuthPresetRow {
   created_at: string;
 }
 
-interface AuthPreset {
+export interface AuthPreset {
   id: string;
   name: string;
   email: string;

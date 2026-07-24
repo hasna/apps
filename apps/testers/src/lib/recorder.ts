@@ -1,6 +1,6 @@
 import { chromium, type BrowserContext } from "playwright";
 import type { CreateScenarioInput } from "../types/index.js";
-import { createScenario } from "../db/scenarios.js";
+import { createScenario } from "../store/index.js";
 // Use @hasna/browser's recording API for cross-tool session persistence
 import { startRecording, stopRecording } from "@hasna/browser";
 import { launchPlaywright } from "@hasna/browser";
@@ -207,10 +207,10 @@ export async function recordAndSave(
   url: string,
   name: string,
   projectId?: string,
-): Promise<{ recording: RecordingResult; scenario: ReturnType<typeof createScenario> }> {
+): Promise<{ recording: RecordingResult; scenario: Awaited<ReturnType<typeof createScenario>> }> {
   const recording = await recordSession(url);
   const input = actionsToScenarioInput(recording, name, projectId);
-  const scenario = createScenario(input);
+  const scenario = await createScenario(input);
   return { recording, scenario };
 }
 
