@@ -478,6 +478,7 @@ export async function handleV1Request(
           }
           const hasParentFilter = url.searchParams.has("parent_id");
           const filter = {
+            ...(url.searchParams.get("q") ? { query: url.searchParams.get("q")! } : {}),
             ...(url.searchParams.get("status") ? {
               status: (url.searchParams.get("status")!.includes(",")
                 ? url.searchParams.get("status")!.split(",")

@@ -342,7 +342,7 @@ class PostgresJsonRecordStore {
    * (createMemoryPostgresClient): the condition emission order below is decoded
    * positionally there.
    */
-  private buildTaskFilterSql(filter: TaskFilter): { where: string; params: unknown[] } {
+  private buildTaskFilterSql(filter: TaskFilter): { where: string; params: unknown[]; queryRef?: string } {
     const params: unknown[] = [this.service, "tasks"];
     const conds: string[] = ["service = $1", "object_type = $2", "deleted_at IS NULL"];
     const p = (value: unknown): string => {
@@ -376,13 +376,41 @@ class PostgresJsonRecordStore {
     }
     // include_subtasks defaults to false: exclude tasks that have a parent.
     if (filter.include_subtasks !== true) conds.push(`(payload->>'parent_id' IS NULL OR payload->>'parent_id' = '')`);
-    return { where: conds.join(" AND "), params };
+    // Full-text search parity with the SQLite FTS5 path (src/lib/search.ts).
+    // "*" is the "match everything" sentinel — treat as filter-only (no predicate).
+    let queryRef: string | undefined;
+    const rawQuery = filter.query?.trim() ?? "";
+    if (rawQuery && rawQuery !== "*") {
+      queryRef = p(rawQuery);
+      // Weighted full-text match, diacritics folded via the immutable unaccent
+      // wrapper installed by migrations/0006 (mirrored in postgresTodosSyncSchemaSql).
+      // websearch_to_tsquery gives AND-by-default, quoted phrases, and tolerates
+      // punctuation instead of rejecting it.
+      const clauses = [`task_search_tsv @@ websearch_to_tsquery('simple', todos_immutable_unaccent(${queryRef}))`];
+      // A pg_trgm word-similarity fuzzy fallback catches single-word typos
+      // ("authentcation" -> "authentication"). Only for single-term queries: on a
+      // multi-term query it would defeat the AND semantics by matching any one word.
+      if (!/\s/.test(rawQuery)) {
+        clauses.push(
+          `todos_immutable_unaccent(${queryRef}) <% todos_immutable_unaccent(` +
+          `COALESCE(payload->>'title', '') || ' ' || COALESCE(payload->>'description', ''))`,
+        );
+      }
+      conds.push(`(${clauses.join(" OR ")})`);
+    }
+    return { where: conds.join(" AND "), params, queryRef };
   }
 
   async listTasks(filter: TaskFilter): Promise<Task[]> {
     await this.ensureSchema();
-    const { where, params } = this.buildTaskFilterSql(filter);
-    let sql = `/* todos:list-tasks */ SELECT payload FROM ${this.tableName} WHERE ${where} ${TASK_ORDER_BY}`;
+    const { where, params, queryRef } = this.buildTaskFilterSql(filter);
+    // With a search query, rank by full-text relevance first (parity with the
+    // SQLite bm25() ordering), then fall back to the standard priority/recency
+    // tiebreak. Trigram-only fuzzy hits rank 0 and sort after exact matches.
+    const orderBy = queryRef
+      ? `ORDER BY ts_rank_cd(task_search_tsv, websearch_to_tsquery('simple', todos_immutable_unaccent(${queryRef}))) DESC, ${TASK_ORDER_TIEBREAK}`
+      : TASK_ORDER_BY;
+    let sql = `/* todos:list-tasks */ SELECT payload FROM ${this.tableName} WHERE ${where} ${orderBy}`;
     if (filter.limit !== undefined) {
       params.push(filter.limit);
       sql += ` LIMIT $${params.length}`;
@@ -1354,8 +1382,9 @@ async function findGitRefs(ref: string, store: PostgresJsonRecordStore): Promise
 // SQL fragment: order by priority rank (critical→low) then created_at, matching
 // the previous in-JS sort. Kept as a constant so listTasks/countTasks and the
 // test mock stay in lockstep.
-const TASK_ORDER_BY =
-  "ORDER BY CASE payload->>'priority' WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END ASC, payload->>'created_at' ASC, payload->>'id' ASC";
+const TASK_ORDER_TIEBREAK =
+  "CASE payload->>'priority' WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END ASC, payload->>'created_at' ASC, payload->>'id' ASC";
+const TASK_ORDER_BY = `ORDER BY ${TASK_ORDER_TIEBREAK}`;
 
 function toFilterArray<T>(value: T | T[]): T[] {
   return Array.isArray(value) ? value : [value];

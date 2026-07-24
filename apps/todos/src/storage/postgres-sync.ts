@@ -91,6 +91,35 @@ export function postgresTodosSyncSchemaSql(
     `CREATE INDEX IF NOT EXISTS ${tableName}_task_status_idx ON ${tableName} ((payload->>'status')) WHERE object_type = 'tasks' AND deleted_at IS NULL`,
     `CREATE INDEX IF NOT EXISTS ${tableName}_task_project_idx ON ${tableName} ((payload->>'project_id')) WHERE object_type = 'tasks' AND deleted_at IS NULL`,
     `CREATE INDEX IF NOT EXISTS ${tableName}_payload_gin ON ${tableName} USING gin (payload jsonb_path_ops)`,
+    // Full-text + fuzzy search parity for cloud/self-hosted. Mirrors
+    // migrations/0006_task_fulltext_search.sql so a FRESH bootstrap (which runs
+    // ensureSchema, not the numbered migrations) gets the same weighted tsvector,
+    // GIN, and pg_trgm indexes the Postgres adapter's buildTaskFilterSql relies on.
+    // Without these, cloud search hits a table with no search column and errors /
+    // returns empty. All idempotent. Extensions are no-ops when already present.
+    `CREATE EXTENSION IF NOT EXISTS pg_trgm`,
+    `CREATE EXTENSION IF NOT EXISTS unaccent`,
+    // Stock unaccent(text) is STABLE and cannot be used in a generated column or
+    // expression index; the two-arg form pinned in an IMMUTABLE wrapper can.
+    `CREATE OR REPLACE FUNCTION todos_immutable_unaccent(text)
+      RETURNS text
+      LANGUAGE sql IMMUTABLE PARALLEL SAFE STRICT
+      AS $$ SELECT unaccent('unaccent', $1) $$`,
+    `ALTER TABLE ${tableName}
+      ADD COLUMN IF NOT EXISTS task_search_tsv tsvector
+      GENERATED ALWAYS AS (
+        setweight(to_tsvector('simple', todos_immutable_unaccent(COALESCE(payload->>'title', ''))), 'A')
+        || setweight(to_tsvector('simple', todos_immutable_unaccent(COALESCE(payload->>'description', ''))), 'B')
+        || setweight(to_tsvector('simple', todos_immutable_unaccent(translate(COALESCE(payload->>'tags', '[]'), '[]",', '    '))), 'C')
+      ) STORED`,
+    `CREATE INDEX IF NOT EXISTS ${tableName}_task_search_tsv_idx
+      ON ${tableName} USING gin (task_search_tsv)
+      WHERE object_type = 'tasks' AND deleted_at IS NULL`,
+    `CREATE INDEX IF NOT EXISTS ${tableName}_task_search_trgm_idx
+      ON ${tableName} USING gin (
+        todos_immutable_unaccent(COALESCE(payload->>'title', '') || ' ' || COALESCE(payload->>'description', '')) gin_trgm_ops
+      )
+      WHERE object_type = 'tasks' AND deleted_at IS NULL`,
     `CREATE TABLE IF NOT EXISTS ${cursorTableName} (
       service text NOT NULL,
       cursor_name text NOT NULL,

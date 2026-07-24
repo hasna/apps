@@ -11,7 +11,7 @@ import {
   updateProject,
 } from "../../db/projects.js";
 import { addComment } from "../../db/comments.js";
-import { getTodosCloudClient, cloudAddComment, cloudCreateProject, cloudListProjects, cloudResolveProject, cloudUpdateProject, cloudAddDependency, cloudRemoveDependency, cloudGetDependencies, cloudRenameProject } from "../cloud-router.js";
+import { getTodosCloudClient, cloudAddComment, cloudCreateProject, cloudListProjects, cloudListTasks, cloudResolveProject, cloudUpdateProject, cloudAddDependency, cloudRemoveDependency, cloudGetDependencies, cloudRenameProject } from "../cloud-router.js";
 import { searchTasks } from "../../lib/search.js";
 import {
   deleteSearchView,
@@ -268,10 +268,19 @@ export function registerProjectCommands(program: Command) {
     .option("--save-as <name>", "Save this search as a named view")
     .option("--description <text>", "Saved view description")
     .option("--all-projects", "Do not auto-scope the search to the current project")
-    .action((query: string, opts) => {
+    .action(async (query: string, opts) => {
       const globalOpts = program.opts();
       try {
-        const projectId = opts.allProjects ? undefined : autoProject(globalOpts);
+        // self_hosted cloud routing: the local FTS5 index (searchTasks) only sees
+        // the local SQLite file, which is empty on a cloud/self-hosted deployment.
+        // Route task search through the shared `/v1/tasks?q=` API so it runs the
+        // Postgres tsvector/trigram path instead of returning nothing.
+        const cloud = getTodosCloudClient();
+        const projectId = opts.allProjects
+          ? undefined
+          : cloud
+            ? undefined
+            : autoProject(globalOpts);
         const scope = normalizeScope(opts.scope) as SavedSearchScope;
         const searchOpts = buildSearchFilters(query, opts, projectId);
         if (opts.saveAs) {
@@ -283,6 +292,38 @@ export function registerProjectCommands(program: Command) {
           });
           output(view, Boolean(globalOpts.json));
           if (!globalOpts.json) console.log(chalk.green(`Saved view ${view.name}.`));
+          return;
+        }
+        if (cloud) {
+          if (scope !== "tasks") {
+            console.error(chalk.red(`Cross-entity search scope "${scope}" is not supported against a self-hosted authority; only --scope tasks is available.`));
+            process.exit(1);
+          }
+          const tasks = await cloudListTasks(cloud, {
+            query,
+            ...(searchOpts.project_id ? { project_id: searchOpts.project_id } : {}),
+            ...(searchOpts.status ? { status: searchOpts.status as never } : {}),
+            ...(searchOpts.priority ? { priority: searchOpts.priority as never } : {}),
+            ...(searchOpts.assigned_to ? { assigned_to: searchOpts.assigned_to } : {}),
+            ...(searchOpts.agent_id ? { agent_id: searchOpts.agent_id } : {}),
+            ...(searchOpts.task_list_id ? { task_list_id: searchOpts.task_list_id } : {}),
+            ...(searchOpts.plan_id ? { plan_id: searchOpts.plan_id } : {}),
+            ...(searchOpts.tags?.length ? { tags: searchOpts.tags } : {}),
+            ...(typeof searchOpts.limit === "number" ? { limit: searchOpts.limit } : {}),
+          });
+          const outputTasks = redactBroadTasks(tasks);
+          if (globalOpts.json) {
+            output(outputTasks, true);
+            return;
+          }
+          if (outputTasks.length === 0) {
+            console.log(chalk.dim(`No tasks matching "${query}".`));
+            return;
+          }
+          console.log(chalk.bold(`${outputTasks.length} result(s) for "${query}":\n`));
+          for (const t of outputTasks) {
+            console.log(formatTaskLine(t));
+          }
           return;
         }
         if (scope !== "tasks") {

@@ -128,6 +128,19 @@ describe("storage adapter contracts", () => {
     expectStore(adapter, "sync", ["getTasksChangedSince", "exportSnapshot", "importSnapshot"]);
   });
 
+  test("tasks.list/count route a free-text query through FTS on the local adapter", async () => {
+    const adapter = createLocalSqliteTodosStorageAdapter({ db });
+    await adapter.tasks.create({ title: "Fix login authentication bug" });
+    await adapter.tasks.create({ title: "Add dashboard widget" });
+
+    const hits = await adapter.tasks.list({ query: "authentication" });
+    expect(hits.map((t) => t.title)).toEqual(["Fix login authentication bug"]);
+    expect(await adapter.tasks.count({ query: "authentication" })).toBe(1);
+
+    await adapter.tasks.create({ title: "authentication retry path" });
+    expect(await adapter.tasks.list({ query: "authentication", limit: 1 })).toHaveLength(1);
+  });
+
   test("delegates core task, project, plan, agent, template, audit, and sync operations", async () => {
     const adapter = createLocalSqliteTodosStorageAdapter({ db });
     const project = await adapter.projects.create({
