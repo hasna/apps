@@ -481,6 +481,14 @@ export function registerAnalyticsCommands(program: Command): void {
     .option("--from <agent>", "Agent identity override")
     .option("-j, --json", "Output as JSON")
     .action(async (id, emoji, opts) => {
+      if (!Number.isInteger(id) || id <= 0) {
+        console.error(chalk.red("Message ID must be a positive integer."));
+        process.exit(1);
+      }
+      if (!(await getStore().getMessageById(id))) {
+        console.error(chalk.red(`Message #${id} not found.`));
+        process.exit(1);
+      }
       const agent = resolveIdentity(opts.from);
       let reaction;
       try {

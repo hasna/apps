@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { addReaction, removeReaction, getReactions, getReactionSummary } from "./reactions";
+import { addReaction, removeReaction, getReactions, getReactionSummary, MessageNotFoundError } from "./reactions";
 import { sendMessage } from "./messages";
 import { closeDb } from "./db";
 import { unlinkSync } from "fs";
@@ -54,6 +54,15 @@ describe("addReaction", () => {
     addReaction(msg.id, "bob", "❤️");
     const all = getReactions(msg.id);
     expect(all.length).toBe(2);
+  });
+
+  test("throws MessageNotFoundError for a nonexistent message (no orphan row)", () => {
+    // Regression: reacting on a nonexistent message must fail cleanly with a
+    // not-found error instead of leaking a raw DB error (HTTP 500) or silently
+    // inserting an orphan reaction row.
+    expect(() => addReaction(999999999, "bob", "🚀")).toThrow(MessageNotFoundError);
+    expect(() => addReaction(999999999, "bob", "🚀")).toThrow("Message #999999999 not found.");
+    expect(getReactions(999999999).length).toBe(0);
   });
 });
 

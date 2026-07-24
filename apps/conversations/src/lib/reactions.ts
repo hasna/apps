@@ -1,8 +1,26 @@
 import { getDb } from "./db.js";
 import type { Reaction } from "../types.js";
 
+/**
+ * Thrown when a reaction operation targets a message ID that does not exist.
+ * Consumers (CLI, server, MCP) can map this to a clean not-found response
+ * instead of leaking a raw DB/foreign-key error as an HTTP 500.
+ */
+export class MessageNotFoundError extends Error {
+  readonly messageId: number;
+  constructor(messageId: number) {
+    super(`Message #${messageId} not found.`);
+    this.name = "MessageNotFoundError";
+    this.messageId = messageId;
+  }
+}
+
 export function addReaction(messageId: number, agent: string, emoji: string): Reaction {
   const db = getDb();
+  const exists = db.prepare("SELECT 1 FROM messages WHERE id = ?").get(messageId);
+  if (!exists) {
+    throw new MessageNotFoundError(messageId);
+  }
   const stmt = db.prepare(`
     INSERT INTO reactions (message_id, agent, emoji)
     VALUES (?, ?, ?)

@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Fixed
+- `conversations react <id> <emoji>` on a nonexistent message now fails cleanly with `Message #<id> not found.` (exit 1), matching sibling commands (`show`, `receipts`), instead of leaking a raw server error / HTTP 500 or silently inserting an orphan reaction row. The `react` CLI now pre-checks existence via the active store (`getStore().getMessageById`), so it is correct in both local and self-hosted/cloud modes; `addReaction()` also validates message existence and throws a typed `MessageNotFoundError` as a single source of truth for all consumers (CLI, MCP, SDK).
+
 ## [0.5.7] - 2026-07-24
 
 ### Fixed
