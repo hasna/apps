@@ -2,14 +2,8 @@
 import { registerEventsCommands } from "@hasna/events/commander";
 import { Command } from "commander";
 import chalk from "chalk";
-import { createOrg, getOrg, getOrgBySlug, listOrgs, updateOrg, deleteOrg } from "../db/orgs.js";
-import { registerAgent, getAgentByName, listAgents, heartbeat, updateAgent, deleteAgent } from "../db/agents.js";
-import { createCalendar, getCalendar, listCalendars, updateCalendar, deleteCalendar } from "../db/calendars.js";
-import { createEvent, getEvent, listEvents, updateEvent, deleteEvent, findConflicts, searchEvents } from "../db/events.js";
-import { createAttendee, getAttendeesForEvent, updateAttendee, deleteAttendee } from "../db/attendees.js";
-import { getAvailabilityForAgent, upsertAgentAvailability, deleteAvailability } from "../db/availability.js";
-import { createMembership, getMembershipsForOrg, getOrgsForAgent, deleteMembershipByAgentAndOrg } from "../db/memberships.js";
-import { getCalendarCloud } from "../cloud/store.js";
+import { getStore } from "../store/index.js";
+import type { CalendarVisibility, EventStatus, EventBusyType, AttendeeStatus, OrgRole } from "../types/index.js";
 
 const packageJson = await Bun.file(new URL("../../package.json", import.meta.url)).json() as { version: string };
 const program = new Command();
@@ -39,26 +33,21 @@ calendarCommand("org-add <name>")
   .option("--slug <slug>", "Org slug")
   .option("--description <desc>", "Description")
   .action(async (name, opts) => {
-    const cloud = getCalendarCloud();
-    const org = cloud
-      ? (await cloud.createOrg({ name, slug: opts.slug, description: opts.description })) as any
-      : createOrg({ name, slug: opts.slug, description: opts.description });
+    const org = await getStore().createOrg({ name, slug: opts.slug, description: opts.description });
     output(wantsJson(opts) ? JSON.stringify(org) : chalk.green(`Org created: ${org.name} (${org.slug}) [${org.id}]`));
   });
 
 calendarCommand("org-list")
   .description("List all orgs")
   .action(async (opts) => {
-    const cloud = getCalendarCloud();
-    const orgs = (cloud ? await cloud.listOrgs() : listOrgs()) as any[];
+    const orgs = await getStore().listOrgs();
     output(wantsJson(opts) ? JSON.stringify(orgs) : orgs.map((o) => `${o.name} (${o.slug}) [${o.id}]`).join("\n") || chalk.gray("No orgs"));
   });
 
 calendarCommand("org-show <id>")
   .description("Show org details")
   .action(async (id, opts) => {
-    const cloud = getCalendarCloud();
-    const org = (cloud ? await cloud.getOrg(id) : (getOrg(id) || getOrgBySlug(id))) as any;
+    const org = await getStore().getOrg(id);
     if (!org) fail("Org not found");
     output(wantsJson(opts) ? JSON.stringify(org) : `${org.name} (${org.slug})\n  ID: ${org.id}`);
   });
@@ -68,18 +57,14 @@ calendarCommand("org-update <id>")
   .option("--name <name>", "Org name")
   .option("--description <desc>", "Description")
   .action(async (id, opts) => {
-    const cloud = getCalendarCloud();
-    const org = (cloud
-      ? await cloud.updateOrg(id, { name: opts.name, description: opts.description })
-      : updateOrg(id, { name: opts.name, description: opts.description })) as any;
+    const org = await getStore().updateOrg(id, { name: opts.name, description: opts.description });
     output(wantsJson(opts) ? JSON.stringify(org) : chalk.green(`Org updated: ${org.name}`));
   });
 
 calendarCommand("org-delete <id>")
   .description("Delete an org")
   .action(async (id, opts) => {
-    const cloud = getCalendarCloud();
-    const ok = cloud ? await cloud.deleteOrg(id) : deleteOrg(id);
+    const ok = await getStore().deleteOrg(id);
     outputJsonOrText({ deleted: ok }, ok ? chalk.green("Org deleted") : chalk.red("Org not found"), opts);
   });
 
@@ -90,26 +75,25 @@ calendarCommand("init <name>")
   .option("--description <desc>", "Description")
   .option("--role <role>", "Role")
   .option("--org <org>", "Org ID")
-  .action((name, opts) => {
-    const agent = registerAgent({ name, description: opts.description, role: opts.role, org_id: opts.org });
+  .action(async (name, opts) => {
+    const agent = await getStore().registerAgent({ name, description: opts.description, role: opts.role, org_id: opts.org });
     output(wantsJson(opts) ? JSON.stringify(agent) : chalk.green(`Agent registered: ${agent.name} [${agent.id}]`));
   });
 
 calendarCommand("agents")
   .description("List agents")
-  .action((opts) => {
-    const agents = listAgents();
+  .action(async (opts) => {
+    const agents = await getStore().listAgents();
     output(wantsJson(opts) ? JSON.stringify(agents) : agents.map((a) => `${a.name} [${a.id}]`).join("\n") || chalk.gray("No agents"));
   });
 
 calendarCommand("heartbeat [agent]")
   .description("Update agent heartbeat")
-  .action((agent, opts) => {
+  .action(async (agent, opts) => {
     const name = agent || opts.agent || program.opts().agent;
     if (!name) fail("Agent name required");
-    const a = getAgentByName(name);
-    if (!a) fail("Agent not found");
-    const updated = heartbeat(a.id);
+    const updated = await getStore().heartbeatAgent(name);
+    if (!updated) fail("Agent not found");
     outputJsonOrText(updated, chalk.green(`Heartbeat: ${name}`), opts);
   });
 
@@ -117,15 +101,15 @@ calendarCommand("agent-update <id>")
   .description("Update an agent")
   .option("--description <desc>", "Description")
   .option("--role <role>", "Role")
-  .action((id, opts) => {
-    const agent = updateAgent(id, { description: opts.description, role: opts.role });
+  .action(async (id, opts) => {
+    const agent = await getStore().updateAgent(id, { description: opts.description, role: opts.role });
     output(wantsJson(opts) ? JSON.stringify(agent) : chalk.green(`Agent updated: ${agent?.name}`));
   });
 
 calendarCommand("agent-delete <id>")
   .description("Delete an agent")
-  .action((id, opts) => {
-    const ok = deleteAgent(id);
+  .action(async (id, opts) => {
+    const ok = await getStore().deleteAgent(id);
     outputJsonOrText({ deleted: ok }, ok ? chalk.green("Agent deleted") : chalk.red("Agent not found"), opts);
   });
 
@@ -140,17 +124,15 @@ calendarCommand("cal-add <name>")
   .option("--timezone <tz>", "Timezone (default: UTC)")
   .option("--visibility <vis>", "Visibility: public, org, private")
   .action(async (name, opts) => {
-    const input = {
+    const cal = await getStore().createCalendar({
       name,
       org_id: opts.org,
       slug: opts.slug,
       description: opts.description,
       color: opts.color,
       timezone: opts.timezone || "UTC",
-      visibility: opts.visibility as any,
-    };
-    const cloud = getCalendarCloud();
-    const cal = (cloud ? await cloud.createCalendar(input) : createCalendar(input)) as any;
+      visibility: opts.visibility as CalendarVisibility | undefined,
+    });
     output(wantsJson(opts) ? JSON.stringify(cal) : chalk.green(`Calendar created: ${cal.name} [${cal.id}]`));
   });
 
@@ -158,8 +140,7 @@ calendarCommand("cal-list")
   .description("List calendars")
   .option("--org <orgId>", "Filter by org")
   .action(async (opts) => {
-    const cloud = getCalendarCloud();
-    const cals = (cloud ? await cloud.listCalendars(opts.org || undefined) : listCalendars(opts.org || undefined)) as any[];
+    const cals = await getStore().listCalendars(opts.org || undefined);
     output(wantsJson(opts) ? JSON.stringify(cals) : cals.map((c) => `${c.name} (${c.slug}) [${c.id}]`).join("\n") || chalk.gray("No calendars"));
   });
 
@@ -171,23 +152,20 @@ calendarCommand("cal-update <id>")
   .option("--timezone <tz>", "Timezone")
   .option("--visibility <vis>", "Visibility")
   .action(async (id, opts) => {
-    const input = {
+    const cal = await getStore().updateCalendar(id, {
       name: opts.name,
       description: opts.description,
       color: opts.color,
       timezone: opts.timezone,
-      visibility: opts.visibility as any,
-    };
-    const cloud = getCalendarCloud();
-    const cal = (cloud ? await cloud.updateCalendar(id, input) : updateCalendar(id, input)) as any;
+      visibility: opts.visibility as CalendarVisibility | undefined,
+    });
     output(wantsJson(opts) ? JSON.stringify(cal) : chalk.green(`Calendar updated: ${cal.name}`));
   });
 
 calendarCommand("cal-delete <id>")
   .description("Delete a calendar")
   .action(async (id, opts) => {
-    const cloud = getCalendarCloud();
-    const ok = cloud ? await cloud.deleteCalendar(id) : deleteCalendar(id);
+    const ok = await getStore().deleteCalendar(id);
     outputJsonOrText({ deleted: ok }, ok ? chalk.green("Calendar deleted") : chalk.red("Calendar not found"), opts);
   });
 
@@ -209,11 +187,11 @@ calendarCommand("add <title>")
   .option("--source-task <id>", "Link to open-todos task ID")
   .option("--agent <agentId>", "Creator agent ID")
   .action(async (title, opts) => {
-    const cloud = getCalendarCloud();
-    const cal = (cloud ? await cloud.getCalendar(opts.calendar) : getCalendar(opts.calendar)) as any;
+    const store = getStore();
+    const cal = await store.getCalendar(opts.calendar);
     if (!cal) fail("Calendar not found");
 
-    const input = {
+    const evt = await store.createEvent({
       title,
       calendar_id: opts.calendar,
       org_id: opts.org || cal.org_id,
@@ -223,13 +201,12 @@ calendarCommand("add <title>")
       location: opts.location,
       all_day: opts.allDay,
       timezone: opts.timezone || cal.timezone,
-      status: opts.status as any,
-      busy_type: opts.busy as any,
+      status: opts.status as EventStatus | undefined,
+      busy_type: opts.busy as EventBusyType | undefined,
       recurrence_rule: opts.rrule,
       source_task_id: opts.sourceTask,
       created_by: opts.agent,
-    };
-    const evt = (cloud ? await cloud.createEvent(input) : createEvent(input)) as any;
+    });
 
     output(wantsJson(opts) ? JSON.stringify(evt) : chalk.green(`Event created: ${evt.title}\n  ${evt.start_at} -> ${evt.end_at} [${evt.id}]`));
   });
@@ -242,35 +219,22 @@ calendarCommand("list")
   .option("--before <date>", "Before date (ISO)")
   .option("--limit <n>", "Limit results", parseInt)
   .action(async (opts) => {
-    const filter = {
+    const events = await getStore().listEvents({
       calendar_id: opts.calendar,
       org_id: opts.org,
       after: opts.after,
       before: opts.before,
       limit: opts.limit,
-    };
-    const cloud = getCalendarCloud();
-    const events = (cloud ? await cloud.listEvents(filter) : listEvents(filter)) as any[];
+    });
     output(wantsJson(opts) ? JSON.stringify(events) : events.map((e) => `${e.title}\n  ${e.start_at} -> ${e.end_at} [${e.id}]`).join("\n") || chalk.gray("No events"));
   });
 
 calendarCommand("show <id>")
   .description("Show event details")
   .action(async (id, opts) => {
-    const cloud = getCalendarCloud();
-    let evt: any;
-    let attendees: any[];
-    if (cloud) {
-      const withAtt = await cloud.getEventWithAttendees(id);
-      if (!withAtt) fail("Event not found");
-      evt = withAtt!.event;
-      attendees = withAtt!.attendees as any[];
-    } else {
-      evt = getEvent(id);
-      if (!evt) fail("Event not found");
-      attendees = getAttendeesForEvent(id);
-    }
-    const result = { event: evt, attendees };
+    const result = await getStore().getEventWithAttendees(id);
+    if (!result) fail("Event not found");
+    const { event: evt, attendees } = result;
     output(wantsJson(opts) ? JSON.stringify(result) : `${evt.title}\n  ${evt.start_at} -> ${evt.end_at}\n  Location: ${evt.location || "—"}\n  Status: ${evt.status}\n  Attendees: ${attendees.length}`);
   });
 
@@ -283,32 +247,29 @@ calendarCommand("update <id>")
   .option("--location <loc>", "Location")
   .option("--status <status>", "Status")
   .action(async (id, opts) => {
-    const input = {
+    const evt = await getStore().updateEvent(id, {
       title: opts.title,
       start_at: opts.start,
       end_at: opts.end,
       description: opts.description,
       location: opts.location,
-      status: opts.status as any,
-    };
-    const cloud = getCalendarCloud();
-    const evt = (cloud ? await cloud.updateEvent(id, input) : updateEvent(id, input)) as any;
+      status: opts.status as EventStatus | undefined,
+    });
     output(wantsJson(opts) ? JSON.stringify(evt) : chalk.green(`Event updated: ${evt.title}`));
   });
 
 calendarCommand("delete <id>")
   .description("Delete an event")
   .action(async (id, opts) => {
-    const cloud = getCalendarCloud();
-    const ok = cloud ? await cloud.deleteEvent(id) : deleteEvent(id);
+    const ok = await getStore().deleteEvent(id);
     outputJsonOrText({ deleted: ok }, ok ? chalk.green("Event deleted") : chalk.red("Event not found"), opts);
   });
 
 calendarCommand("search <query>")
   .description("Search events (full-text)")
   .option("--org <orgId>", "Org ID")
-  .action((query, opts) => {
-    const events = searchEvents(query, opts.org || undefined);
+  .action(async (query, opts) => {
+    const events = await getStore().searchEvents(query, opts.org || undefined);
     output(wantsJson(opts) ? JSON.stringify(events) : events.map((e) => `${e.title}\n  ${e.start_at} -> ${e.end_at}`).join("\n") || chalk.gray("No results"));
   });
 
@@ -316,8 +277,8 @@ calendarCommand("conflicts <calendarId>")
   .description("Find conflicting events for a time range")
   .requiredOption("--start <iso>", "Start time")
   .requiredOption("--end <iso>", "End time")
-  .action((calendarId, opts) => {
-    const conflicts = findConflicts(calendarId, { start: opts.start, end: opts.end });
+  .action(async (calendarId, opts) => {
+    const conflicts = await getStore().findConflicts(calendarId, { start: opts.start, end: opts.end });
     output(wantsJson(opts) ? JSON.stringify(conflicts) : conflicts.length === 0
       ? chalk.green("No conflicts")
       : chalk.yellow(`${conflicts.length} conflict(s):\n${conflicts.map((e) => `  ${e.title} (${e.start_at} -> ${e.end_at})`).join("\n")}`)
@@ -334,8 +295,8 @@ calendarCommand("attendee-add")
   .option("--email <email>", "Email")
   .option("--required", "Required attendee (default)")
   .option("--optional", "Optional attendee")
-  .action((opts) => {
-    const attendee = createAttendee({
+  .action(async (opts) => {
+    const attendee = await getStore().createAttendee({
       event_id: opts.event,
       agent_id: opts.agent,
       display_name: opts.name,
@@ -349,15 +310,15 @@ calendarCommand("attendee-respond <attendeeId>")
   .description("Respond to event invitation")
   .requiredOption("--status <status>", "Status: accepted, declined, tentative")
   .option("--comment <comment>", "Response comment")
-  .action((attendeeId, opts) => {
-    const attendee = updateAttendee(attendeeId, { status: opts.status as any, response_comment: opts.comment || null });
+  .action(async (attendeeId, opts) => {
+    const attendee = await getStore().updateAttendee(attendeeId, { status: opts.status as AttendeeStatus, response_comment: opts.comment || null });
     output(wantsJson(opts) ? JSON.stringify(attendee) : chalk.green(`Response recorded: ${attendee.status}`));
   });
 
 calendarCommand("attendee-delete <id>")
   .description("Delete an attendee")
-  .action((id, opts) => {
-    const ok = deleteAttendee(id);
+  .action(async (id, opts) => {
+    const ok = await getStore().deleteAttendee(id);
     outputJsonOrText({ deleted: ok }, ok ? chalk.green("Attendee deleted") : chalk.red("Attendee not found"), opts);
   });
 
@@ -370,24 +331,24 @@ calendarCommand("availability-set")
   .requiredOption("--day <0-6>", "Day of week (0=Sun, 6=Sat)", parseInt)
   .requiredOption("--start <HH:mm>", "Start time")
   .requiredOption("--end <HH:mm>", "End time")
-  .action((opts) => {
-    const av = upsertAgentAvailability(opts.agent, opts.org, opts.day, opts.start, opts.end);
+  .action(async (opts) => {
+    const av = await getStore().upsertAgentAvailability(opts.agent, opts.org, opts.day, opts.start, opts.end);
     output(wantsJson(opts) ? JSON.stringify(av) : chalk.green(`Availability set: day ${opts.day} ${opts.start}-${opts.end} [${av.id}]`));
   });
 
 calendarCommand("availability-show <agentId>")
   .description("Show agent availability")
   .option("--org <orgId>", "Org ID")
-  .action((agentId, opts) => {
-    const avail = getAvailabilityForAgent(agentId, opts.org || undefined);
+  .action(async (agentId, opts) => {
+    const avail = await getStore().getAvailabilityForAgent(agentId, opts.org || undefined);
     const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     output(wantsJson(opts) ? JSON.stringify(avail) : avail.map((a) => `  ${days[a.day_of_week]}: ${a.start_time} - ${a.end_time}`).join("\n") || chalk.gray("No availability set"));
   });
 
 calendarCommand("availability-delete <id>")
   .description("Delete an availability entry")
-  .action((id, opts) => {
-    const ok = deleteAvailability(id);
+  .action(async (id, opts) => {
+    const ok = await getStore().deleteAvailability(id);
     outputJsonOrText({ deleted: ok }, ok ? chalk.green("Availability deleted") : chalk.red("Availability not found"), opts);
   });
 
@@ -398,22 +359,22 @@ calendarCommand("member-add")
   .requiredOption("--org <orgId>", "Org ID")
   .requiredOption("--agent <agentId>", "Agent ID")
   .option("--role <role>", "Role: admin, member, service")
-  .action((opts) => {
-    const m = createMembership({ org_id: opts.org, agent_id: opts.agent, role: opts.role as any });
+  .action(async (opts) => {
+    const m = await getStore().createMembership({ org_id: opts.org, agent_id: opts.agent, role: opts.role as OrgRole | undefined });
     output(wantsJson(opts) ? JSON.stringify(m) : chalk.green(`Added ${opts.agent} to org ${opts.org} as ${m.role}`));
   });
 
 calendarCommand("members <orgId>")
   .description("List org members")
-  .action((orgId, opts) => {
-    const members = getMembershipsForOrg(orgId);
+  .action(async (orgId, opts) => {
+    const members = await getStore().getMembershipsForOrg(orgId);
     output(wantsJson(opts) ? JSON.stringify(members) : members.map((m) => `  ${m.agent_id} — ${m.role}`).join("\n") || chalk.gray("No members"));
   });
 
 calendarCommand("member-remove <agentId> <orgId>")
   .description("Remove agent from org")
-  .action((agentId, orgId, opts) => {
-    const ok = deleteMembershipByAgentAndOrg(agentId, orgId);
+  .action(async (agentId, orgId, opts) => {
+    const ok = await getStore().deleteMembershipByAgentAndOrg(agentId, orgId);
     outputJsonOrText({ removed: ok }, ok ? chalk.green("Member removed") : chalk.red("Member not found"), opts);
   });
 
@@ -421,8 +382,8 @@ calendarCommand("member-remove <agentId> <orgId>")
 
 calendarCommand("agent-orgs <agentId>")
   .description("List orgs an agent belongs to")
-  .action((agentId, opts) => {
-    const orgs = getOrgsForAgent(agentId);
+  .action(async (agentId, opts) => {
+    const orgs = await getStore().getOrgsForAgent(agentId);
     output(wantsJson(opts) ? JSON.stringify(orgs) : orgs.map((m) => `  ${m.org_id} — ${m.role}`).join("\n") || chalk.gray("No orgs"));
   });
 

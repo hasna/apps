@@ -2,7 +2,7 @@
 // Regenerate: bun run scripts/generate-sdk.ts
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Calendar API 0.1.14
+// Source: Calendar API 0.2.0
 
 export interface Org { "id": string; "name": string; "slug": string; "description"?: string; "metadata"?: Record<string, unknown>; "created_at"?: string; "updated_at"?: string }
 
@@ -26,9 +26,13 @@ export interface Attendee { "id": string; "event_id": string; "agent_id"?: strin
 
 export interface CreateAttendeeInput { "event_id": string; "agent_id"?: string; "display_name"?: string; "email"?: string; "status"?: "needsAction" | "accepted" | "declined" | "tentative"; "required"?: boolean }
 
+export interface UpdateAttendeeInput { "status"?: "needsAction" | "accepted" | "declined" | "tentative"; "response_comment"?: string; "required"?: boolean }
+
 export interface Agent { "id": string; "name": string; "description"?: string; "role"?: string; "status"?: string; "metadata"?: Record<string, unknown>; "created_at"?: string; "last_seen_at"?: string }
 
 export interface RegisterAgentInput { "name": string; "description"?: string; "role"?: string; "title"?: string; "level"?: string; "org_id"?: string }
+
+export interface UpdateAgentInput { "description"?: string; "role"?: string; "title"?: string; "level"?: string; "org_id"?: string }
 
 export interface Availability { "id": string; "agent_id": string; "org_id": string; "day_of_week": number; "start_time": string; "end_time": string; "exceptions"?: Array<string>; "created_at"?: string; "updated_at"?: string }
 
@@ -115,9 +119,72 @@ export class CalendarV1Client {
       });
     }
 
+    /** Get an agent by id or name */
+    async getAgent(id: string, init?: RequestInit): Promise<{ "agent"?: Agent }> {
+      return this.request("GET", `/v1/agents/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Delete an agent */
+    async deleteAgent(id: string, init?: RequestInit): Promise<DeleteResult> {
+      return this.request("DELETE", `/v1/agents/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Update an agent */
+    async updateAgent(id: string, body: UpdateAgentInput, init?: RequestInit): Promise<{ "agent"?: Agent }> {
+      return this.request("PATCH", `/v1/agents/${encodeURIComponent(String(id))}`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Update an agent's last_seen_at */
+    async heartbeatAgent(id: string, init?: RequestInit): Promise<{ "agent"?: Agent }> {
+      return this.request("POST", `/v1/agents/${encodeURIComponent(String(id))}/heartbeat`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** List attendees for an event */
+    async listAttendees(query?: { "event_id": string }, init?: RequestInit): Promise<{ "attendees"?: Array<Attendee>; "count"?: number }> {
+      return this.request("GET", `/v1/attendees`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
     /** Add an attendee to an event */
     async addAttendee(body: CreateAttendeeInput, init?: RequestInit): Promise<{ "attendee"?: Attendee }> {
       return this.request("POST", `/v1/attendees`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Delete an attendee */
+    async deleteAttendee(id: string, init?: RequestInit): Promise<DeleteResult> {
+      return this.request("DELETE", `/v1/attendees/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Update / respond to an attendee */
+    async updateAttendee(id: string, body: UpdateAttendeeInput, init?: RequestInit): Promise<{ "attendee"?: Attendee }> {
+      return this.request("PATCH", `/v1/attendees/${encodeURIComponent(String(id))}`, {
         body,
         query: undefined,
         init,
@@ -137,6 +204,15 @@ export class CalendarV1Client {
     async upsertAvailability(body: UpsertAvailabilityInput, init?: RequestInit): Promise<{ "availability"?: Availability }> {
       return this.request("POST", `/v1/availability`, {
         body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Delete an availability window */
+    async deleteAvailability(id: string, init?: RequestInit): Promise<DeleteResult> {
+      return this.request("DELETE", `/v1/availability/${encodeURIComponent(String(id))}`, {
+        body: undefined,
         query: undefined,
         init,
       });
@@ -250,8 +326,8 @@ export class CalendarV1Client {
       });
     }
 
-    /** List org memberships */
-    async listMembers(query?: { "org_id": string }, init?: RequestInit): Promise<{ "members"?: Array<Membership>; "count"?: number }> {
+    /** List memberships by org or by agent */
+    async listMembers(query?: { "org_id"?: string; "agent_id"?: string }, init?: RequestInit): Promise<{ "members"?: Array<Membership>; "count"?: number }> {
       return this.request("GET", `/v1/members`, {
         body: undefined,
         query,
@@ -264,6 +340,15 @@ export class CalendarV1Client {
       return this.request("POST", `/v1/members`, {
         body,
         query: undefined,
+        init,
+      });
+    }
+
+    /** Remove an agent from an org */
+    async removeMember(query?: { "agent_id": string; "org_id": string }, init?: RequestInit): Promise<DeleteResult> {
+      return this.request("DELETE", `/v1/members`, {
+        body: undefined,
+        query,
         init,
       });
     }
