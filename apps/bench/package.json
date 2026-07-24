@@ -1,6 +1,6 @@
 {
   "name": "@hasna/bench",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "CLI, SDK, and MCP foundation for an open-source AI benchmark aggregator and wrapper.",
   "type": "module",
   "main": "dist/index.js",
@@ -42,7 +42,7 @@
     "CODE_OF_CONDUCT.md"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun --external @modelcontextprotocol/sdk --external @hasna/contracts && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external @hasna/contracts && bun build src/index.ts src/contracts.ts src/storage.ts src/sdk/index.ts --outdir dist --target bun --external @hasna/contracts && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
+    "build": "bun scripts/sync-version.mjs && rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun --external @modelcontextprotocol/sdk --external @hasna/contracts && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external @hasna/contracts && bun build src/index.ts src/contracts.ts src/storage.ts src/sdk/index.ts --outdir dist --target bun --external @hasna/contracts && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "contracts:conformance": "contracts conformance examples/contracts",

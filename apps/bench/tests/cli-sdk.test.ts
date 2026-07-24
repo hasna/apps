@@ -64,7 +64,10 @@ describe("@hasna/bench CLI and SDK core", () => {
       expect(help.stdout).toContain("Usage:");
       expect(help.stderr).toBe("");
       expect(version.status).toBe(0);
-      expect(version.stdout.trim()).toBe("0.0.1");
+      const pkgVersion = JSON.parse(
+        readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")
+      ).version as string;
+      expect(version.stdout.trim()).toBe(pkgVersion);
       expect(version.stderr).toBe("");
     } finally {
       rmSync(home, { recursive: true, force: true });
