@@ -46,6 +46,7 @@
     "build": "bun x tsc -p tsconfig.json",
     "typecheck": "bun x tsc --noEmit",
     "test": "bun test",
+    "check": "bun run typecheck && bun test && bun run build",
     "verify:release": "bun run typecheck && bun test && bun run build",
     "prepublishOnly": "bun run verify:release",
     "postinstall": "mkdir -p $HOME/.hasna/snapshots/{exports,logs,plans} 2>/dev/null || true"
