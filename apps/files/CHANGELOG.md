@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.7 — 2026-07-24
+
+Security hardening for `files-serve`:
+
+- Remove wildcard `Access-Control-Allow-Origin: *` from all REST JSON responses
+  and the `OPTIONS` preflight. Browser requests are now allowed only when the
+  `Origin` matches the request's own origin, an exact entry in
+  `OPEN_FILES_REST_ALLOWED_ORIGINS` (comma-separated), or when
+  `OPEN_FILES_REST_ALLOW_ANY_ORIGIN` is explicitly set. Disallowed origins get a
+  `403 Origin not allowed` and no CORS headers; non-browser clients (no `Origin`
+  header) are unaffected.
+- Bind `files-serve` to `127.0.0.1` by default; `OPEN_FILES_REST_HOST` is the
+  explicit override for non-loopback operator deployments.
+- Add browser-origin regression tests for arbitrary remote origins, unconfigured
+  loopback origins, configured origins, same-origin requests, non-browser
+  clients, and preflight.
+
 ## 0.3.6 — 2026-07-24
 
 Reconciliation release. Realigns `main` with the published npm line (`@hasna/files@0.3.5`,

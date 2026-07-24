@@ -62,7 +62,7 @@ type RestCapability = "mutations" | "destructive" | "imports" | "signed_urls" | 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+    headers: { "Content-Type": "application/json" },
   });
 }
 
@@ -91,6 +91,67 @@ function restCapabilityEnvName(capability: RestCapability): string {
 
 function truthyEnv(value: string | undefined): boolean {
   return value === "1" || value === "true" || value === "yes" || value === "on";
+}
+
+interface RestCorsDecision {
+  allowed: boolean;
+  headers: Record<string, string>;
+}
+
+function getRestCorsDecision(origin: string | null, requestUrl: string): RestCorsDecision {
+  if (!origin) return { allowed: true, headers: {} };
+  if (truthyEnv(process.env.OPEN_FILES_REST_ALLOW_ANY_ORIGIN)) {
+    return { allowed: true, headers: corsHeaders(origin) };
+  }
+  if (configuredRestOrigins().has(origin)) {
+    return { allowed: true, headers: corsHeaders(origin) };
+  }
+
+  try {
+    if (origin === new URL(requestUrl).origin) {
+      return { allowed: true, headers: corsHeaders(origin) };
+    }
+  } catch {
+    return { allowed: false, headers: {} };
+  }
+
+  return { allowed: false, headers: {} };
+}
+
+function configuredRestOrigins(): Set<string> {
+  const raw = process.env.OPEN_FILES_REST_ALLOWED_ORIGINS ?? process.env.OPEN_FILES_REST_ALLOW_ORIGINS ?? "";
+  return new Set(raw.split(",").map((origin) => origin.trim()).filter(Boolean));
+}
+
+function corsHeaders(origin: string): Record<string, string> {
+  return {
+    "Access-Control-Allow-Origin": origin,
+    "Vary": "Origin",
+  };
+}
+
+function preflightHeaders(cors: Record<string, string>): Record<string, string> {
+  return {
+    ...cors,
+    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Access-Control-Max-Age": "600",
+  };
+}
+
+function withCors(response: Response, cors: Record<string, string>): Response {
+  for (const [key, value] of Object.entries(cors)) {
+    if (value !== undefined) response.headers.set(key, String(value));
+  }
+  return response;
+}
+
+function restHost(): string {
+  return process.env.OPEN_FILES_REST_HOST ?? process.env.FILES_REST_HOST ?? "127.0.0.1";
+}
+
+function hostForUrl(hostname: string): string {
+  return hostname.includes(":") && !hostname.startsWith("[") ? `[${hostname}]` : hostname;
 }
 
 async function parseBody(req: Request): Promise<Record<string, unknown>> {
@@ -153,17 +214,26 @@ function optionalAssetStatus(value: string | null): FileAssetStatus | undefined 
   throw new Error(`Invalid status: ${value}`);
 }
 
-export function startServer(port: number): void {
-  const v1 = createV1Handler();
-  Bun.serve({
-    port,
-    idleTimeout: 30,
-    async fetch(req) {
+let _v1Handler: ReturnType<typeof createV1Handler> | null = null;
+function v1Handler(): ReturnType<typeof createV1Handler> {
+  return (_v1Handler ??= createV1Handler());
+}
+
+export async function handleRestRequest(req: Request): Promise<Response> {
+  const cors = getRestCorsDecision(req.headers.get("Origin"), req.url);
+  if (req.method === "OPTIONS") {
+    if (!cors.allowed) return err("Origin not allowed", 403);
+    return new Response(null, { status: 204, headers: preflightHeaders(cors.headers) });
+  }
+  if (!cors.allowed) return err("Origin not allowed", 403);
+  return withCors(await routeRestRequest(req), cors.headers);
+}
+
+async function routeRestRequest(req: Request): Promise<Response> {
+      const v1 = v1Handler();
       const url = new URL(req.url);
       const path = url.pathname;
       const method = req.method;
-
-      if (method === "OPTIONS") return new Response(null, { status: 204, headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "*", "Access-Control-Allow-Headers": "*" } });
 
       // ── Liveness / readiness / version (unauthenticated) ───────────────
       if (path === "/health") return json({ status: "ok", version: pkg.version, mode: serviceMode() });
@@ -492,8 +562,10 @@ export function startServer(port: number): void {
       }
 
       return err("Not found", 404);
-    },
-  });
+}
 
-  console.log(`files-serve running on http://localhost:${port}`);
+export function startServer(port: number): void {
+  const hostname = restHost();
+  Bun.serve({ hostname, port, idleTimeout: 30, fetch: handleRestRequest });
+  console.log(`files-serve running on http://${hostForUrl(hostname)}:${port}`);
 }

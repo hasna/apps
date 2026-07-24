@@ -185,6 +185,12 @@ REST mutation, destructive, signed URL, download, import, and indexing routes
 are also disabled by default. Use `OPEN_FILES_REST_ALLOW_<CAPABILITY>=1` or
 `OPEN_FILES_ALLOW_<CAPABILITY>=1` for controlled operator sessions.
 
+`files-serve` binds to `127.0.0.1` by default and does not emit wildcard CORS
+headers. Browser requests are accepted only from the same origin or from exact
+origins listed in `OPEN_FILES_REST_ALLOWED_ORIGINS` (comma-separated), for
+example `OPEN_FILES_REST_ALLOWED_ORIGINS=http://localhost:5173`. Set
+`OPEN_FILES_REST_HOST` only for explicit non-loopback operator deployments.
+
 ## Evidence Vault
 
 `@hasna/files` can also serve as a shared evidence layer for other apps. Apps

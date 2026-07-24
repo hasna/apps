@@ -28,7 +28,7 @@ ENV NODE_ENV=production \
     HASNA_FILES_STORAGE_MODE=cloud \
     NODE_EXTRA_CA_CERTS=/etc/ssl/certs/rds-global-bundle.pem \
     PGSSLROOTCERT=/etc/ssl/certs/rds-global-bundle.pem \
-    HOST=0.0.0.0 \
+    OPEN_FILES_REST_HOST=0.0.0.0 \
     PORT=19432
 COPY package.json bun.lock ./
 COPY --from=deps /app/node_modules ./node_modules
