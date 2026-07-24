@@ -7,7 +7,7 @@
   "types": "./dist/index.d.ts",
   "bin": {
     "automations": "dist/cli/index.js",
-    "hasna-automations": "dist/cli/index.js",
+    "hasna-automations": "dist/cli/hasna-automations.js",
     "automations-daemon": "dist/daemon/index.js"
   },
   "exports": {
@@ -52,7 +52,7 @@
     "CONTRIBUTING.md"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/cli/index.ts src/daemon/index.ts src/index.ts src/types.ts src/lib/store.ts src/lib/paths.ts src/lib/runtime.ts src/lib/contracts.ts src/recipes/launch-followup.ts --root src --outdir dist --target bun --packages external && chmod +x dist/cli/index.js dist/daemon/index.js && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
+    "build": "rm -rf dist && bun build src/cli/index.ts src/cli/hasna-automations.ts src/daemon/index.ts src/index.ts src/types.ts src/lib/store.ts src/lib/paths.ts src/lib/runtime.ts src/lib/contracts.ts src/recipes/launch-followup.ts --root src --outdir dist --target bun --packages external && chmod +x dist/cli/index.js dist/cli/hasna-automations.js dist/daemon/index.js && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
     "smoke:webhook-release": "bun run scripts/release-webhook-smoke.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",

@@ -754,6 +754,8 @@ function packageVersion(): string {
   }
 }
 
-if (import.meta.main) {
+const skipDefaultCliMain = (globalThis as Record<string, unknown>).__HASNA_AUTOMATIONS_SKIP_MAIN__ === true;
+
+if (import.meta.main && !skipDefaultCliMain) {
   process.exit(await runAutomationsCli());
 }

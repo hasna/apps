@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHmac } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AutomationsStore } from "../index.js";
@@ -47,6 +47,35 @@ async function runDaemon(args: string[]) {
 }
 
 describe("automations CLI", () => {
+  test("package bin aliases use distinct built entrypoints", () => {
+    const packageJson = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf-8")) as {
+      bin: Record<string, string>;
+    };
+
+    expect(packageJson.bin.automations).toBe("dist/cli/index.js");
+    expect(packageJson.bin["hasna-automations"]).toBe("dist/cli/hasna-automations.js");
+    expect(new Set(Object.values(packageJson.bin)).size).toBe(Object.values(packageJson.bin).length);
+  });
+
+  test("hasna-automations alias entrypoint runs the shared CLI", async () => {
+    const child = Bun.spawn({
+      cmd: ["bun", "run", "src/cli/hasna-automations.ts", "--help"],
+      cwd: process.cwd(),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+
+    expect(exitCode).toBe(0);
+    expect(stderr).toBe("");
+    expect(stdout).toContain("hasna-automations");
+    expect(stdout).toContain("status");
+  });
+
   test("prints help, initializes status, and outputs example specs", async () => {
     const help = await runCli(["--help"]);
     expect(help.exitCode).toBe(0);
