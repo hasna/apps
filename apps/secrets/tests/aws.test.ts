@@ -161,9 +161,9 @@ describe("AWS dry-run planning", () => {
     }));
 
     await expect(
-      pushSecret("hasna/xyz/opensource/files/prod/does-not-exist", {
+      pushSecret("example/app/prod/does-not-exist", {
         dryRun: true,
-        profile: "hasna-xyz-infra",
+        profile: "example-aws-profile",
         prefix: "test-prefix",
       })
     ).rejects.toThrow("Secret not found");
