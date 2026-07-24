@@ -605,6 +605,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["email", "marketing", "automation"],
   },
   {
+    name: "vidyard",
+    displayName: "Vidyard",
+    description: "Video hosting and marketing platform",
+    category: "Communication",
+    tags: ["video", "marketing"],
+  },
+  {
     name: "vowel",
     displayName: "Vowel",
     description: "Video meetings with built-in transcription and summaries",
