@@ -93,4 +93,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Database",
     tags: ["sqlite", "serverless", "database", "libsql", "edge"],
   },
+  {
+    name: "turso-api-platform",
+    displayName: "Turso Api Platform",
+    description: "Serverless database API platform for items, events, and search",
+    category: "Database",
+    tags: ["turso", "database", "api", "serverless"],
+  },
 ];

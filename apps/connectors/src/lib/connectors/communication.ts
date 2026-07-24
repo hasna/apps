@@ -674,4 +674,18 @@ export const connectors: ConnectorMeta[] = [
     category: "Communication",
     tags: ["chat", "messaging", "open-source", "threads"],
   },
+  {
+    name: "unione",
+    displayName: "UniOne",
+    description: "Transactional email API for sending, templates, and validation",
+    category: "Communication",
+    tags: ["email", "transactional", "api"],
+  },
+  {
+    name: "waboxapp",
+    displayName: "WaboxApp",
+    description: "WhatsApp chat, image, link, and media messaging",
+    category: "Communication",
+    tags: ["whatsapp", "messaging", "crm", "api"],
+  },
 ];

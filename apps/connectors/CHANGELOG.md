@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Registry integration: added 111 net-new connectors in a single batch, consolidating
+  111 individual "feat: add <vendor> connector" PRs that were all colliding on the shared
+  `src/lib/connectors/*.ts` registry files. Each connector's directory was taken from its
+  originating PR head and its metadata entry appended to the correct category registry file
+  (deduped against the existing registry; no duplicate names). Represented PRs: #8, #14, #31,
+  #36, #37, #40, #41, #45, #46, #48, #49, #50, #54, #55, #58, #60, #64, #72, #74, #75, #76,
+  #84, #87, #88, #91, #92, #93, #94, #95, #96, #97, #101, #102, #103, #104, #105, #106, #107,
+  #108, #109, #110, #113, #115, #116, #118, #120, #121, #122, #123, #124, #127, #129, #130,
+  #131, #134, #135, #136, #137, #138, #139, #140, #141, #142, #143, #144, #146, #150, #151,
+  #155, #157, #162, #163, #171, #173, #175, #178, #180, #183, #187, #188, #198, #201, #220,
+  #221, #222, #244, #246, #248, #249, #250, #251, #252, #254, #257, #261, #262, #264, #267,
+  #273, #274, #275, #277, #279, #282, #289, #292, #295, #298, #321, #326, #328.
+
 ## [0.3.1] - 2026-03-12
 
 ### Added
