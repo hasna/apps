@@ -1241,4 +1241,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Developer Tools",
     tags: ["zapier", "automation", "api-platform"],
   },
+  {
+    name: "zoom-api",
+    displayName: "Zoom Api",
+    description: "Zoom Api REST API for items, events, search, and raw API access",
+    category: "Developer Tools",
+    tags: ["zoom-api", "api", "items", "events", "search", "developer-tools"],
+  },
 ];
