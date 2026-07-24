@@ -1295,6 +1295,12 @@ export interface FileOrganizationAuditExport {
   events?: FileOrganizationAuditExportEvent[];
 }
 
+export interface DuplicateGroup {
+  hash: string;
+  cnt: number;
+  paths: string;
+}
+
 export interface SearchResult extends FileWithTags {
   source_name?: string;
   machine_name?: string;

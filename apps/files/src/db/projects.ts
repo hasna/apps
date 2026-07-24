@@ -76,6 +76,14 @@ export function deleteProject(id: string): boolean {
   return getDb().run("DELETE FROM projects WHERE id=?", [id]).changes > 0;
 }
 
+/** Find a project by exact name, or create it if it does not exist. */
+export function getOrCreateProject(name: string, description = ""): Project {
+  const db = getDb();
+  const existing = db.query<ProjectRow, [string]>("SELECT * FROM projects WHERE name = ?").get(name);
+  if (existing) return toProject(existing);
+  return createProject(name, description);
+}
+
 export function addToProject(project_id: string, file_id: string): void {
   getDb().run("INSERT OR IGNORE INTO project_files (project_id, file_id) VALUES (?,?)", [project_id, file_id]);
 }

@@ -44,6 +44,15 @@ export const openApiDocument = {
           config: { type: "object", additionalProperties: true }, machine_id: { type: "string" },
         },
       },
+      UpdateSource: {
+        type: "object",
+        properties: {
+          name: { type: "string" }, enabled: { type: "boolean" },
+          path: { type: "string" }, bucket: { type: "string" },
+          prefix: { type: "string" }, region: { type: "string" },
+          config: { type: "object", additionalProperties: true },
+        },
+      },
       File: {
         type: "object",
         properties: {
@@ -83,6 +92,7 @@ export const openApiDocument = {
     },
     "/sources/{id}": {
       get: { operationId: "getSource", summary: "Get a source", parameters: [idParam("id")], responses: { "200": ok(ref("Source")) } },
+      patch: { operationId: "updateSource", summary: "Update a source (rename/enable/disable/reconfigure)", parameters: [idParam("id")], requestBody: { required: true, content: { "application/json": { schema: ref("UpdateSource") } } }, responses: { "200": ok(ref("Source")) } },
       delete: { operationId: "deleteSource", summary: "Delete a source", parameters: [idParam("id")], responses: { "200": ok(ref("Ok")) } },
     },
     "/files": {

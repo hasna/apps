@@ -20,15 +20,71 @@ import {
 import { copyS3Object, deleteFromS3, getPresignedPutUrl, getPresignedUrl, headS3Object, uploadBufferToS3 } from "./s3.js";
 import { sha256File } from "./hasher.js";
 import type {
+  CreateFileAccessEventInput,
+  CreateFileAssetInput,
   CreateFileLinkInput,
   FileAccessEvent,
   FileAsset,
   FileLink,
+  FileScanStatus,
   FileStorageProvider,
   FileUploadIntent,
   S3Config,
   Source,
 } from "../types/index.js";
+
+/**
+ * The DB seam behind evidence orchestration. There are two implementations:
+ *
+ *   - the on-box `db/evidence.ts` sqlite functions ({@link sqliteEvidenceDb},
+ *     the default — used by the {@link LocalStore} and CLI/MCP in local mode);
+ *   - the cloud Postgres functions in `server/pg-store.ts`, bound by the `/v1`
+ *     evidence routes so the self-hosted service writes the shared vault.
+ *
+ * Every orchestration function below routes its metadata reads/writes through
+ * this seam so the SAME choreography drives both transports — never a second,
+ * mode-specific code path. Methods may be sync (sqlite) or async (Postgres); the
+ * orchestration awaits them uniformly.
+ */
+export interface CreateUploadIntentInput {
+  asset_id: string;
+  expires_at: string;
+  expected_checksum: string;
+  expected_checksum_algorithm: string;
+  expected_size: number;
+  required_headers?: Record<string, string>;
+  metadata?: Record<string, unknown>;
+}
+
+export interface UpdateFileAssetStatusInput {
+  id: string;
+  status: FileAsset["status"];
+  scan_status?: FileScanStatus;
+  verified?: boolean;
+}
+
+export interface EvidenceDb {
+  createFileAsset(input: CreateFileAssetInput): FileAsset | Promise<FileAsset>;
+  getFileAsset(id: string): FileAsset | null | Promise<FileAsset | null>;
+  createFileUploadIntent(input: CreateUploadIntentInput): FileUploadIntent | Promise<FileUploadIntent>;
+  getFileUploadIntent(id: string): FileUploadIntent | null | Promise<FileUploadIntent | null>;
+  markFileUploadIntentCompleted(id: string): FileUploadIntent | null | Promise<FileUploadIntent | null>;
+  updateFileAssetStatus(input: UpdateFileAssetStatusInput): FileAsset | null | Promise<FileAsset | null>;
+  createFileLink(input: CreateFileLinkInput): FileLink | Promise<FileLink>;
+  createFileAccessEvent(input: CreateFileAccessEventInput): FileAccessEvent | Promise<FileAccessEvent>;
+}
+
+/** Default (on-box sqlite) evidence DB seam. */
+export const sqliteEvidenceDb: EvidenceDb = {
+  createFileAsset,
+  getFileAsset,
+  createFileUploadIntent,
+  getFileUploadIntent,
+  markFileUploadIntentCompleted,
+  updateFileAssetStatus,
+  createFileLink,
+  createFileAccessEvent,
+};
 
 export interface EvidenceStorageOptions {
   provider?: FileStorageProvider;
@@ -120,6 +176,7 @@ export function buildEvidenceObjectKey(input: {
 export async function createEvidenceUploadIntent(
   input: CreateEvidenceUploadInput,
   storageOverrides: EvidenceStorageOptions = {},
+  db: EvidenceDb = sqliteEvidenceDb,
 ): Promise<EvidenceUploadResult> {
   validateUploadInput(input);
   const storage = getEvidenceStorageOptions(storageOverrides);
@@ -127,13 +184,18 @@ export async function createEvidenceUploadIntent(
   const objectKey = buildEvidenceObjectKey({ ...input, asset_id: assetId, prefix: storage.prefix });
   const quarantineKey = `quarantine/${objectKey}`;
   const contentType = input.content_type ?? (mimeLookup(input.original_name) || "application/octet-stream").toString();
-  const asset = createFileAsset({
+  const asset = await db.createFileAsset({
     ...input,
     id: assetId,
     content_type: contentType,
     checksum_algorithm: input.checksum_algorithm ?? "sha256",
     storage_provider: storage.provider,
-    bucket: storage.provider === "s3" ? storage.bucket : undefined,
+    // `bucket` is the storage container for the asset. For s3 that is the S3
+    // bucket; for local it is the resolved on-box evidence root. Persisting it
+    // here is what lets a LATER `complete`/`verify`/`sign-download` invocation
+    // locate the bytes without re-passing `--local-root` — otherwise the root
+    // is re-resolved to the default and the object appears missing.
+    bucket: storage.provider === "s3" ? storage.bucket : storage.localRoot,
     region: storage.provider === "s3" ? storage.region : undefined,
     object_key: objectKey,
     quarantine_key: quarantineKey,
@@ -145,7 +207,7 @@ export async function createEvidenceUploadIntent(
 
   const expiresAt = new Date(Date.now() + (input.expires_in_seconds ?? 600) * 1000).toISOString();
   const requiredHeaders = makeRequiredUploadHeaders(asset);
-  const intent = createFileUploadIntent({
+  const intent = await db.createFileUploadIntent({
     asset_id: asset.id,
     expires_at: expiresAt,
     expected_checksum: asset.checksum,
@@ -162,9 +224,9 @@ export async function createEvidenceUploadIntent(
         checksumSha256: asset.checksum,
         metadata: evidenceMetadata(asset),
       })
-    : pathToFileURL(localObjectPath(storage, quarantineKey)).toString();
+    : pathToFileURL(localObjectPath(storage, quarantineKey, asset)).toString();
 
-  createFileAccessEvent({
+  await db.createFileAccessEvent({
     asset_id: asset.id,
     org_id: asset.org_id,
     company_id: asset.company_id,
@@ -176,10 +238,16 @@ export async function createEvidenceUploadIntent(
   return { asset, intent: { ...intent, upload_url: uploadUrl, required_headers: requiredHeaders } };
 }
 
-export async function uploadEvidenceFile(input: Omit<CreateEvidenceUploadInput, "size" | "checksum" | "content_type" | "original_name"> & {
+export type UploadEvidenceFileInput = Omit<CreateEvidenceUploadInput, "size" | "checksum" | "content_type" | "original_name"> & {
   path: string;
   original_name?: string;
-}, storageOverrides: EvidenceStorageOptions = {}): Promise<EvidenceUploadResult> {
+};
+
+export async function uploadEvidenceFile(
+  input: UploadEvidenceFileInput,
+  storageOverrides: EvidenceStorageOptions = {},
+  db: EvidenceDb = sqliteEvidenceDb,
+): Promise<EvidenceUploadResult> {
   if (!existsSync(input.path)) throw new Error(`File not found: ${input.path}`);
   const stat = statSync(input.path);
   const result = await createEvidenceUploadIntent({
@@ -189,7 +257,7 @@ export async function uploadEvidenceFile(input: Omit<CreateEvidenceUploadInput, 
     size: stat.size,
     checksum: sha256File(input.path),
     checksum_algorithm: "sha256",
-  }, storageOverrides);
+  }, storageOverrides, db);
 
   const storage = getEvidenceStorageOptions(storageOverrides);
   const key = result.asset.quarantine_key ?? result.asset.object_key;
@@ -204,22 +272,26 @@ export async function uploadEvidenceFile(input: Omit<CreateEvidenceUploadInput, 
       result.asset.checksum,
     );
   } else {
-    const dest = localObjectPath(storage, key);
+    const dest = localObjectPath(storage, key, result.asset);
     mkdirSync(dirname(dest), { recursive: true });
     copyFileSync(input.path, dest);
   }
 
-  const completed = await completeEvidenceUpload(result.intent.id, storageOverrides);
-  return { asset: completed, intent: getFileUploadIntent(result.intent.id)! };
+  const completed = await completeEvidenceUpload(result.intent.id, storageOverrides, db);
+  return { asset: completed, intent: (await db.getFileUploadIntent(result.intent.id))! };
 }
 
-export async function completeEvidenceUpload(intentId: string, storageOverrides: EvidenceStorageOptions = {}): Promise<FileAsset> {
-  const intent = getFileUploadIntent(intentId);
+export async function completeEvidenceUpload(
+  intentId: string,
+  storageOverrides: EvidenceStorageOptions = {},
+  db: EvidenceDb = sqliteEvidenceDb,
+): Promise<FileAsset> {
+  const intent = await db.getFileUploadIntent(intentId);
   if (!intent) throw new Error(`Upload intent not found: ${intentId}`);
   if (intent.status !== "pending") throw new Error(`Upload intent is not pending: ${intent.status}`);
   if (Date.parse(intent.expires_at) < Date.now()) throw new Error(`Upload intent expired: ${intentId}`);
 
-  const asset = getFileAsset(intent.asset_id);
+  const asset = await db.getFileAsset(intent.asset_id);
   if (!asset) throw new Error(`File asset not found: ${intent.asset_id}`);
   const storage = getEvidenceStorageOptions(storageOverrides);
   const quarantineKey = asset.quarantine_key ?? asset.object_key;
@@ -234,18 +306,18 @@ export async function completeEvidenceUpload(intentId: string, storageOverrides:
       await deleteFromS3(source, quarantineKey);
     }
   } else {
-    const sourcePath = localObjectPath(storage, quarantineKey);
+    const sourcePath = localObjectPath(storage, quarantineKey, asset);
     if (!existsSync(sourcePath)) throw new Error(`Uploaded file not found: ${sourcePath}`);
     assertUploadedObjectMatches(asset, statSync(sourcePath).size, sha256File(sourcePath));
-    const finalPath = localObjectPath(storage, asset.object_key);
+    const finalPath = localObjectPath(storage, asset.object_key, asset);
     mkdirSync(dirname(finalPath), { recursive: true });
     renameSync(sourcePath, finalPath);
   }
 
-  markFileUploadIntentCompleted(intent.id);
-  const verified = updateFileAssetStatus({ id: asset.id, status: "verified", scan_status: "skipped", verified: true });
+  await db.markFileUploadIntentCompleted(intent.id);
+  const verified = await db.updateFileAssetStatus({ id: asset.id, status: "verified", scan_status: "skipped", verified: true });
   if (!verified) throw new Error(`Failed to verify file asset: ${asset.id}`);
-  createFileAccessEvent({
+  await db.createFileAccessEvent({
     asset_id: verified.id,
     org_id: verified.org_id,
     company_id: verified.company_id,
@@ -256,9 +328,9 @@ export async function completeEvidenceUpload(intentId: string, storageOverrides:
   return verified;
 }
 
-export function linkEvidenceAsset(input: CreateFileLinkInput): FileLink {
-  const link = createFileLink(input);
-  createFileAccessEvent({
+export async function linkEvidenceAsset(input: CreateFileLinkInput, db: EvidenceDb = sqliteEvidenceDb): Promise<FileLink> {
+  const link = await db.createFileLink(input);
+  await db.createFileAccessEvent({
     asset_id: input.asset_id,
     org_id: input.org_id,
     company_id: input.company_id,
@@ -269,13 +341,19 @@ export function linkEvidenceAsset(input: CreateFileLinkInput): FileLink {
   return link;
 }
 
-export async function signEvidenceDownload(input: {
+export interface SignEvidenceDownloadInput {
   asset_id: string;
   actor_id?: string;
   purpose?: string;
   expires_in_seconds?: number;
-}, storageOverrides: EvidenceStorageOptions = {}): Promise<EvidenceDownloadGrant> {
-  const asset = getFileAsset(input.asset_id);
+}
+
+export async function signEvidenceDownload(
+  input: SignEvidenceDownloadInput,
+  storageOverrides: EvidenceStorageOptions = {},
+  db: EvidenceDb = sqliteEvidenceDb,
+): Promise<EvidenceDownloadGrant> {
+  const asset = await db.getFileAsset(input.asset_id);
   if (!asset) throw new Error(`File asset not found: ${input.asset_id}`);
   if (asset.status !== "verified") throw new Error(`File asset is not verified: ${asset.status}`);
 
@@ -283,10 +361,10 @@ export async function signEvidenceDownload(input: {
   const expiresIn = input.expires_in_seconds ?? 300;
   const url = asset.storage_provider === "s3"
     ? await getPresignedUrl(makeEvidenceSource(storage, asset), asset.object_key, expiresIn)
-    : pathToFileURL(localObjectPath(storage, asset.object_key)).toString();
+    : pathToFileURL(localObjectPath(storage, asset.object_key, asset)).toString();
   const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
 
-  createFileAccessEvent({
+  await db.createFileAccessEvent({
     asset_id: asset.id,
     org_id: asset.org_id,
     company_id: asset.company_id,
@@ -300,12 +378,18 @@ export async function signEvidenceDownload(input: {
   return { asset, url, expires_at: expiresAt };
 }
 
-export async function verifyEvidenceAsset(assetId: string, storageOverrides: EvidenceStorageOptions = {}): Promise<{
+export interface EvidenceVerifyResult {
   asset: FileAsset;
   ok: boolean;
   diagnostics: string[];
-}> {
-  const asset = getFileAsset(assetId);
+}
+
+export async function verifyEvidenceAsset(
+  assetId: string,
+  storageOverrides: EvidenceStorageOptions = {},
+  db: EvidenceDb = sqliteEvidenceDb,
+): Promise<EvidenceVerifyResult> {
+  const asset = await db.getFileAsset(assetId);
   if (!asset) throw new Error(`File asset not found: ${assetId}`);
   const storage = getEvidenceStorageOptions(storageOverrides);
   const diagnostics: string[] = [];
@@ -315,12 +399,12 @@ export async function verifyEvidenceAsset(assetId: string, storageOverrides: Evi
     if (!head) diagnostics.push("object_missing");
     else collectObjectDiagnostics(asset, head.size, head.metadata.checksum ?? head.checksum_sha256, diagnostics);
   } else {
-    const path = localObjectPath(storage, asset.object_key);
+    const path = localObjectPath(storage, asset.object_key, asset);
     if (!existsSync(path)) diagnostics.push("object_missing");
     else collectObjectDiagnostics(asset, statSync(path).size, sha256File(path), diagnostics);
   }
 
-  createFileAccessEvent({
+  await db.createFileAccessEvent({
     asset_id: asset.id,
     org_id: asset.org_id,
     company_id: asset.company_id,
@@ -407,8 +491,15 @@ function collectObjectDiagnostics(asset: FileAsset, size: number, checksum: stri
   }
 }
 
-function localObjectPath(storage: Required<EvidenceStorageOptions>, key: string): string {
-  return join(storage.localRoot, key);
+/**
+ * Resolve the on-disk path for a local evidence object. The root is taken from
+ * the asset's persisted container (`asset.bucket`, stamped at intent creation)
+ * when available so that byte resolution is stable across CLI invocations, and
+ * only falls back to the freshly-resolved `storage.localRoot` when the asset
+ * carries no persisted root (e.g. the intent-creation call itself).
+ */
+function localObjectPath(storage: Required<EvidenceStorageOptions>, key: string, asset?: Pick<FileAsset, "bucket">): string {
+  return join(asset?.bucket ?? storage.localRoot, key);
 }
 
 function cleanSegment(value: string): string {

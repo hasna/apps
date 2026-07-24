@@ -434,7 +434,7 @@ export function startServer(port: number): void {
           const denied = requireRestCapability("mutations");
           if (denied) return denied;
           const body = await parseBody(req);
-          return json(linkEvidenceAsset({
+          return json(await linkEvidenceAsset({
             asset_id: linkMatch[1]!,
             org_id: requiredString(body, "org_id"),
             company_id: optionalString(body.company_id),

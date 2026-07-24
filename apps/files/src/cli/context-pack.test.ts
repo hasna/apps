@@ -51,6 +51,29 @@ describe("context-pack CLI", () => {
     expect(pointer.citation_count).toBeGreaterThanOrEqual(1);
     expect(existsSync(outPath)).toBe(false);
   });
+
+  test("refuses context-pack and search-pack in cloud (api) mode instead of querying the local island", () => {
+    testDir = mkdtempSync(join(tmpdir(), "files-cli-context-pack-api-"));
+    const dataDir = join(testDir, "data");
+    mkdirSync(dataDir, { recursive: true });
+    // Bind the client to the cloud transport. The pack builders read on-box
+    // SQLite/FTS directly, so in api mode they must refuse (as the MCP tools
+    // already do) rather than silently return results from the wrong island.
+    const env = {
+      ...process.env,
+      HASNA_FILES_DATA_DIR: dataDir,
+      HASNA_FILES_DB_PATH: join(dataDir, "files.db"),
+      HASNA_FILES_API_URL: "https://files.hasna.xyz/v1",
+      HASNA_FILES_API_KEY: "hf_test_key_not_used_offline",
+    };
+
+    for (const args of [["context-pack", "open-files://file/f_missing"], ["search-pack", "anything"]]) {
+      const result = run(args, env);
+      expect(result.exitCode).toBe(1);
+      expect(new TextDecoder().decode(result.stderr)).toContain("on-box only");
+      expect(stdout(result).trim()).toBe("");
+    }
+  });
 });
 
 function seedCliFiles(): NodeJS.ProcessEnv {

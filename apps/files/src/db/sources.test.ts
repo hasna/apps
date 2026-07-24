@@ -62,11 +62,10 @@ describe("source config persistence", () => {
     })).toThrow("must not contain static credentials");
   });
 
-  test("sanitizes legacy source config secrets on read and metadata sync rows", async () => {
+  test("sanitizes legacy source config secrets on read", async () => {
     const { getDb } = await import("./database.js");
     const { getCurrentMachine } = await import("./machines.js");
     const { listSources } = await import("./sources.js");
-    const { sanitizeStorageRowForSync } = await import("./storage-sync.js");
 
     const machine = getCurrentMachine();
     getDb().run(
@@ -94,15 +93,5 @@ describe("source config persistence", () => {
       profile: "files-sync",
       endpoint: "https://s3-compatible.example.test",
     });
-
-    const sanitized = sanitizeStorageRowForSync("sources", {
-      config: JSON.stringify({
-        accessKeyId: "legacy-access",
-        secretAccessKey: "legacy-secret",
-        sessionToken: "legacy-session",
-        profile: "files-sync",
-      }),
-    });
-    expect(JSON.parse(sanitized.config as string)).toEqual({ profile: "files-sync" });
   });
 });

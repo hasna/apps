@@ -78,7 +78,9 @@ describe("evidence vault", () => {
 
     expect(result.asset.status).toBe("verified");
     expect(result.asset.scan_status).toBe("skipped");
-    expect(result.asset.bucket).toBeUndefined();
+    // The resolved local root is persisted as the asset's storage container so
+    // later invocations can locate the bytes without re-passing --local-root.
+    expect(result.asset.bucket).toBe(evidenceRoot());
     expect(result.asset.retention_policy).toBe("tax_evidence");
     expect(result.asset.storage_class).toBe("STANDARD_IA");
     expect(result.asset.legal_hold).toBe(true);
@@ -86,7 +88,7 @@ describe("evidence vault", () => {
     expect(existsSync(join(evidenceRoot(), result.asset.object_key))).toBe(true);
     expect(existsSync(join(evidenceRoot(), result.asset.quarantine_key!))).toBe(false);
 
-    const link = linkEvidenceAsset({
+    const link = await linkEvidenceAsset({
       asset_id: result.asset.id,
       org_id: "org_hasna",
       company_id: "co_us",
@@ -136,7 +138,7 @@ describe("evidence vault", () => {
     await expect(completeEvidenceUpload(result.intent.id, { provider: "local", localRoot: evidenceRoot() }))
       .rejects.toThrow("checksum_mismatch");
 
-    expect(() => linkEvidenceAsset({
+    await expect(linkEvidenceAsset({
       asset_id: result.asset.id,
       org_id: "org_hasna",
       company_id: "co_us",
@@ -144,7 +146,7 @@ describe("evidence vault", () => {
       source_type: "invoice",
       source_id: "inv_1",
       kind: "supporting_document",
-    })).toThrow("must be verified");
+    })).rejects.toThrow("must be verified");
   });
 });
 

@@ -7,6 +7,8 @@ export interface Source { "id": string; "name": string; "type": "local" | "s3" |
 
 export interface CreateSource { "type"?: "local" | "s3" | "google_drive"; "name"?: string; "path"?: string; "bucket"?: string; "prefix"?: string; "region"?: string; "config"?: Record<string, unknown>; "machine_id"?: string }
 
+export interface UpdateSource { "name"?: string; "enabled"?: boolean; "path"?: string; "bucket"?: string; "prefix"?: string; "region"?: string; "config"?: Record<string, unknown> }
+
 export interface File { "id": string; "source_id": string; "machine_id": string; "path": string; "name": string; "ext": string; "size": number; "mime": string; "hash"?: string | null; "status": "active" | "deleted" | "moved"; "indexed_at"?: string; "created_at"?: string; "tags": Array<string> }
 
 export interface Tag { "id": string; "name": string; "color": string; "created_at"?: string }
@@ -230,6 +232,15 @@ export class FilesClient {
     async deleteSource(id: string, init?: RequestInit): Promise<Ok> {
       return this.request("DELETE", `/sources/${encodeURIComponent(String(id))}`, {
         body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Update a source (rename/enable/disable/reconfigure) */
+    async updateSource(id: string, body: UpdateSource, init?: RequestInit): Promise<Source> {
+      return this.request("PATCH", `/sources/${encodeURIComponent(String(id))}`, {
+        body,
         query: undefined,
         init,
       });
