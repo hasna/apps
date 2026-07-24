@@ -29,6 +29,10 @@ three-way merge that keeps **both** histories.
   (and with it the `cloud schedule install|status|remove` commands) and
   `src/lib/fleet-sync.ts`. The MCP `sync` tool no longer reports `cloud_pushed` /
   `cloud_pulled` because `SyncAllResult` no longer carries them.
+- Replaced the `@hasna/agent-registry` and `@hasna/mcp-harness` `file:../open-*`
+  sibling pins with the registry ranges (`^0.1.0`) that every published tarball has
+  carried anyway. `bun install`, `tsc` and `src/mcp/http.test.ts` no longer require
+  unpublished sibling checkouts, and `package.json` now matches what actually ships.
 - Bumped strictly above the published `0.3.6` latest. (The `v0.3.6` tag commit itself
   carried `package.json` version `0.3.5`; the `0.3.6` publish bumped the registry
   without a follow-up commit.)
