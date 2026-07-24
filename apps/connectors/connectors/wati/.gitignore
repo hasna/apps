@@ -1,0 +1,14 @@
+node_modules/
+dist/
+bin/*.js
+.env
+.env.local
+.env.*.local
+.secrets/
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+bun.lockb
+*.log

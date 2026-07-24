@@ -640,6 +640,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["webinar", "streaming", "events"],
   },
   {
+    name: "wati",
+    displayName: "WATI",
+    description: "WhatsApp Business messaging via WATI API",
+    category: "Communication",
+    tags: ["whatsapp", "messaging", "chatbot"],
+  },
+  {
     name: "wizychat",
     displayName: "WizyChat",
     description: "AI chatbot builder for customer support",
