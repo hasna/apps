@@ -209,7 +209,7 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
       },
       async ({ include_archived }) => {
         try {
-          // self_hosted cloud routing: list agents from the shared <app>.hasna.xyz/v1
+          // self_hosted cloud routing: list agents from the shared <app-host>/v1
           // dataset rather than this machine's local SQLite island.
           const cloud = getTodosCloudClient();
           const agents = cloud

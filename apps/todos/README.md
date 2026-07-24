@@ -86,12 +86,12 @@ last-seen heartbeats, workspace paths, git roots, and user-provided Tailscale
 or LAN addresses without probing the network:
 
 ```bash
-todos machines register spark01 --ssh hasna@spark01 --tailscale-name spark01.tailnet --tailscale-ip 100.64.0.10 --lan-address 192.168.8.10 --workspace ~/workspace
-todos machines heartbeat spark01 --workspace ~/workspace
+todos machines register my-machine --ssh user@my-machine --tailscale-name my-machine.tailnet --tailscale-ip 100.100.100.100 --lan-address 192.0.2.10 --workspace ~/workspace
+todos machines heartbeat my-machine --workspace ~/workspace
 todos machines topology --json
-todos machines sync --machine spark01 --dry-run --json
-todos machines sync --machine spark01 --push
-todos machines sync --ssh hasna@spark01 --dry-run
+todos machines sync --machine my-machine --dry-run --json
+todos machines sync --machine my-machine --push
+todos machines sync --ssh user@my-machine --dry-run
 todos projects-path set <project-id> ~/workspace/my-project
 ```
 

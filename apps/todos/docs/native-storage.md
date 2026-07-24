@@ -76,17 +76,21 @@ Plain local-development fallbacks are accepted with the same names minus the
 `TODOS_S3_BUCKET`. Public docs and wrappers should still prefer the canonical
 `HASNA_TODOS_*` names.
 
-Production secrets should follow the broader open package convention:
+Production secrets should follow a consistent namespaced convention, for
+example:
 
-- `hasna/xyz/opensource/todos/prod/env`
-- `hasna/xyz/opensource/todos/prod/rds`
-- `hasna/xyz/opensource/todos/prod/s3`
+- `<org>/<division>/<app>/<env>/env`
+- `<org>/<division>/<app>/<env>/rds`
+- `<org>/<division>/<app>/<env>/s3`
 
-The canonical production RDS target is the shared Hasna XYZ infra apps
-Postgres cluster `hasna-xyz-infra-apps-prod-postgres`, database `todos`, and
-runtime secret `hasna/xyz/opensource/todos/prod/rds`. Runtime wiring should set
-`HASNA_TODOS_DATABASE_URL` from that secret. `TODOS_DATABASE_URL` is only a
-plain fallback for local development or wrappers that have not yet migrated.
+Deployment-specific infrastructure identifiers — the managed Postgres cluster
+name and the secrets-manager path that holds the runtime database URL — are
+owned by the private hosting wrapper and supplied at runtime via the optional
+`HASNA_TODOS_RDS_CLUSTER` and `HASNA_TODOS_RDS_RUNTIME_PATH` environment
+variables; this open package ships no real cluster names or secrets-manager
+paths. Runtime wiring should set `HASNA_TODOS_DATABASE_URL` from the resolved
+secret. `TODOS_DATABASE_URL` is only a plain fallback for local development or
+wrappers that have not yet migrated.
 
 A SaaS wrapper owns tenant state, billing, accounts, deployment, observability,
 and production secret wiring. The open package owns local storage, the public

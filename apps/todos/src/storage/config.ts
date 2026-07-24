@@ -76,23 +76,30 @@ export const TODOS_STORAGE_FALLBACK_ENV = {
   syncDryRun: "TODOS_SYNC_DRY_RUN",
 } as const;
 
-export const CANONICAL_TODOS_RDS_CLUSTER = "hasna-xyz-infra-apps-prod-postgres";
+// Deployment-specific infrastructure identifiers (the managed database cluster
+// name and the secrets-manager path that holds the runtime database URL) are NOT
+// baked into this open-source package. A private platform/hosting wrapper
+// supplies them at runtime via the environment variables below, so the published
+// package ships no real cluster names or secrets-manager paths. When unset,
+// these fields report `null` (no default) rather than exposing an internal
+// resource identifier.
+export const CANONICAL_TODOS_RDS_CLUSTER_ENV = "HASNA_TODOS_RDS_CLUSTER";
+export const CANONICAL_TODOS_RDS_RUNTIME_PATH_ENV = "HASNA_TODOS_RDS_RUNTIME_PATH";
 export const CANONICAL_TODOS_RDS_DATABASE = "todos";
-export const CANONICAL_TODOS_RDS_RUNTIME_PATH = "hasna/xyz/opensource/todos/prod/rds";
 
 export interface CanonicalTodosRdsConfig {
-  cluster: typeof CANONICAL_TODOS_RDS_CLUSTER;
+  cluster: string | null;
   database: typeof CANONICAL_TODOS_RDS_DATABASE;
-  runtimeSecretPath: typeof CANONICAL_TODOS_RDS_RUNTIME_PATH;
+  runtimeSecretPath: string | null;
   primaryEnv: typeof TODOS_STORAGE_ENV.databaseUrl;
   fallbackEnv: typeof TODOS_STORAGE_FALLBACK_ENV.databaseUrl;
 }
 
-export function getCanonicalTodosRdsConfig(): CanonicalTodosRdsConfig {
+export function getCanonicalTodosRdsConfig(env: TodosStorageEnv = process.env): CanonicalTodosRdsConfig {
   return {
-    cluster: CANONICAL_TODOS_RDS_CLUSTER,
+    cluster: clean(env[CANONICAL_TODOS_RDS_CLUSTER_ENV]) ?? null,
     database: CANONICAL_TODOS_RDS_DATABASE,
-    runtimeSecretPath: CANONICAL_TODOS_RDS_RUNTIME_PATH,
+    runtimeSecretPath: clean(env[CANONICAL_TODOS_RDS_RUNTIME_PATH_ENV]) ?? null,
     primaryEnv: TODOS_STORAGE_ENV.databaseUrl,
     fallbackEnv: TODOS_STORAGE_FALLBACK_ENV.databaseUrl,
   };

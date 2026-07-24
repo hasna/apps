@@ -45,7 +45,7 @@ import {
 
 const CLOUD_ENV = {
   HASNA_TODOS_STORAGE_MODE: "self_hosted",
-  HASNA_TODOS_API_URL: "https://todos.hasna.xyz",
+  HASNA_TODOS_API_URL: "https://todos.example.com",
   HASNA_TODOS_API_KEY: "hasna_todos_test_key",
 };
 
@@ -94,14 +94,14 @@ describe("todos client self_hosted resolver", () => {
   test("self_hosted + API_URL + API_KEY -> cloud-http client at /v1", () => {
     const client = getTodosCloudClient(CLOUD_ENV);
     expect(client).not.toBeNull();
-    expect(client!.baseUrl).toBe("https://todos.hasna.xyz/v1");
+    expect(client!.baseUrl).toBe("https://todos.example.com/v1");
     expect(isCloudRouting(CLOUD_ENV)).toBe(true);
   });
 
   test("API_URL + API_KEY WITHOUT a mode var -> local (flip-safety guard)", () => {
     // contracts >=0.5.1 would resolve bare URL+KEY to cloud; the todos guard keeps
     // it local so the flip is only ever armed by an explicit HASNA_TODOS_STORAGE_MODE.
-    const noMode = { HASNA_TODOS_API_URL: "https://todos.hasna.xyz", HASNA_TODOS_API_KEY: "k" } as never;
+    const noMode = { HASNA_TODOS_API_URL: "https://todos.example.com", HASNA_TODOS_API_KEY: "k" } as never;
     expect(getTodosCloudClient(noMode)).toBeNull();
     expect(isCloudRouting(noMode)).toBe(false);
   });
@@ -109,11 +109,11 @@ describe("todos client self_hosted resolver", () => {
   test("mode=cloud + API_URL + API_KEY -> cloud-http client", () => {
     const client = getTodosCloudClient({
       HASNA_TODOS_STORAGE_MODE: "cloud",
-      HASNA_TODOS_API_URL: "https://todos.hasna.xyz",
+      HASNA_TODOS_API_URL: "https://todos.example.com",
       HASNA_TODOS_API_KEY: "hasna_todos_test_key",
     } as never);
     expect(client).not.toBeNull();
-    expect(client!.baseUrl).toBe("https://todos.hasna.xyz/v1");
+    expect(client!.baseUrl).toBe("https://todos.example.com/v1");
   });
 
   test("mode=remote rejects an implicit default when HASNA_TODOS_API_URL is missing", () => {
@@ -128,7 +128,7 @@ describe("todos client self_hosted resolver", () => {
 
   test("mode=self_hosted reports the exact missing API key without local fallback", () => {
     expect(() =>
-      getTodosCloudClient({ HASNA_TODOS_STORAGE_MODE: "self_hosted", HASNA_TODOS_API_URL: "https://todos.hasna.xyz" }),
+      getTodosCloudClient({ HASNA_TODOS_STORAGE_MODE: "self_hosted", HASNA_TODOS_API_URL: "https://todos.example.com" }),
     ).toThrow(
       "REMOTE_API_KEY_MISSING: remote Todos storage requires HASNA_TODOS_API_KEY",
     );
@@ -206,7 +206,7 @@ describe("todos client self_hosted resolver", () => {
     ]);
 
     expect(getTodosCloudClient({})).toBeNull();
-    expect(getTodosCloudClient(CLOUD_ENV)?.baseUrl).toBe("https://todos.hasna.xyz/v1");
+    expect(getTodosCloudClient(CLOUD_ENV)?.baseUrl).toBe("https://todos.example.com/v1");
     expect(getTodosCloudClient({ HASNA_TODOS_STORAGE_MODE: "local" })).toBeNull();
   });
 });
@@ -291,7 +291,7 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
       confidence: 0.9,
     })).rejects.toThrow("REMOTE_COMPLETION_EVIDENCE_UNSUPPORTED");
     expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
-      "GET https://todos.hasna.xyz/v1/openapi.json",
+      "GET https://todos.example.com/v1/openapi.json",
     ]);
   });
 
@@ -441,7 +441,7 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     expect(tasks).toHaveLength(1);
     expect(tasks[0]!.id).toBe("t1");
     expect(calls[0]!.method).toBe("GET");
-    expect(calls[0]!.url).toContain("https://todos.hasna.xyz/v1/tasks");
+    expect(calls[0]!.url).toContain("https://todos.example.com/v1/tasks");
     expect(calls[0]!.url).toContain("status=pending");
     expect(calls[0]!.url).toContain("limit=5");
     expect(calls[0]!.headers["authorization"]).toBe("Bearer hasna_todos_test_key");
@@ -454,7 +454,7 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     const client = getTodosCloudClient(CLOUD_ENV)!;
     const task = await cloudGetTask(client, "t9");
     expect(task!.id).toBe("t9");
-    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t9");
+    expect(calls[0]!.url).toBe("https://todos.example.com/v1/tasks/t9");
     const gone = await cloudGetTask(client, "missing");
     expect(gone).toBeNull();
   });
@@ -465,7 +465,7 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     const task = await cloudCreateTask(client, { title: "made" });
     expect(task.id).toBe("new1");
     expect(calls[0]!.method).toBe("POST");
-    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks");
+    expect(calls[0]!.url).toBe("https://todos.example.com/v1/tasks");
     expect(calls[0]!.body).toEqual({ title: "made" });
     expect(calls[0]!.headers["idempotency-key"]).toBeTruthy();
   });
@@ -476,7 +476,7 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     const task = await cloudUpdateTask(client, "t2", { title: "patched" });
     expect(task.title).toBe("patched");
     expect(calls[0]!.method).toBe("PATCH");
-    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t2");
+    expect(calls[0]!.url).toBe("https://todos.example.com/v1/tasks/t2");
   });
 
   test("delete -> DELETE /v1/tasks/:id (204 ok)", async () => {
@@ -484,7 +484,7 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     const client = getTodosCloudClient(CLOUD_ENV)!;
     await expect(cloudDeleteTask(client, "t3")).resolves.toBe(true);
     expect(calls[0]!.method).toBe("DELETE");
-    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t3");
+    expect(calls[0]!.url).toBe("https://todos.example.com/v1/tasks/t3");
   });
 
   test("delete preserves a resource 404 as a normal not-found result", async () => {
@@ -499,7 +499,7 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     const task = await cloudTaskAction(client, "t4", "start", { agent_id: "cli" });
     expect(task.status).toBe("in_progress");
     expect(calls[0]!.method).toBe("POST");
-    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t4/start");
+    expect(calls[0]!.url).toBe("https://todos.example.com/v1/tasks/t4/start");
   });
 
   test("comments -> validates the envelope, count, method, auth, and encoded task path", async () => {
@@ -525,7 +525,7 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
       pagination_supported: true,
     });
     expect(calls[0]!.method).toBe("GET");
-    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/task%2Fwith%20%3F%20reserved/comments?limit=100");
+    expect(calls[0]!.url).toBe("https://todos.example.com/v1/tasks/task%2Fwith%20%3F%20reserved/comments?limit=100");
     expect(calls[0]!.headers["authorization"]).toBe("Bearer hasna_todos_test_key");
   });
 
@@ -595,7 +595,7 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     });
     expect(calls).toHaveLength(1);
     expect(calls[0]!.url).toBe(
-      "https://todos.hasna.xyz/v1/tasks/t-page/comments?limit=25&cursor=opaque-current",
+      "https://todos.example.com/v1/tasks/t-page/comments?limit=25&cursor=opaque-current",
     );
   });
 
@@ -684,7 +684,7 @@ describe("cloud agent + lock + deps + verification routing (identity/coordinatio
     const agent = await cloudRegisterAgent(client, { name: "seneca", description: "worker" });
     expect(agent.id).toBe("ag1");
     expect(calls[0]!.method).toBe("POST");
-    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/agents");
+    expect(calls[0]!.url).toBe("https://todos.example.com/v1/agents");
     expect(calls[0]!.body).toEqual({ name: "seneca", description: "worker" });
     expect(calls[0]!.headers["authorization"]).toBe("Bearer hasna_todos_test_key");
   });
@@ -702,7 +702,7 @@ describe("cloud agent + lock + deps + verification routing (identity/coordinatio
     expect(result.success).toBe(true);
     expect(result.locked_by).toBe("cli");
     expect(calls[0]!.method).toBe("POST");
-    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t1/lock");
+    expect(calls[0]!.url).toBe("https://todos.example.com/v1/tasks/t1/lock");
     expect(calls[0]!.body).toEqual({ agent_id: "cli" });
   });
 
@@ -711,7 +711,7 @@ describe("cloud agent + lock + deps + verification routing (identity/coordinatio
     const client = getTodosCloudClient(CLOUD_ENV)!;
     await expect(cloudUnlockTask(client, "t1", "cli")).resolves.toBe(true);
     expect(calls[0]!.method).toBe("POST");
-    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t1/unlock");
+    expect(calls[0]!.url).toBe("https://todos.example.com/v1/tasks/t1/unlock");
     expect(calls[0]!.body).toEqual({ agent_id: "cli" });
   });
 
@@ -721,7 +721,7 @@ describe("cloud agent + lock + deps + verification routing (identity/coordinatio
     const dep = await cloudAddDependency(client, "t1", "t2");
     expect(dep.depends_on).toBe("t2");
     expect(calls[0]!.method).toBe("POST");
-    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t1/dependencies");
+    expect(calls[0]!.url).toBe("https://todos.example.com/v1/tasks/t1/dependencies");
     expect(calls[0]!.body).toEqual({ depends_on: "t2" });
   });
 
@@ -730,7 +730,7 @@ describe("cloud agent + lock + deps + verification routing (identity/coordinatio
     const client = getTodosCloudClient(CLOUD_ENV)!;
     await expect(cloudRemoveDependency(client, "t1", "t2")).resolves.toBe(true);
     expect(calls[0]!.method).toBe("DELETE");
-    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t1/dependencies/t2");
+    expect(calls[0]!.url).toBe("https://todos.example.com/v1/tasks/t1/dependencies/t2");
   });
 
   test("deps list -> GET /v1/tasks/:id/dependencies, defaults arrays", async () => {
@@ -740,7 +740,7 @@ describe("cloud agent + lock + deps + verification routing (identity/coordinatio
     expect(edges.dependencies).toHaveLength(1);
     expect(edges.blocked_by).toEqual([]);
     expect(calls[0]!.method).toBe("GET");
-    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t1/dependencies");
+    expect(calls[0]!.url).toBe("https://todos.example.com/v1/tasks/t1/dependencies");
   });
 
   test("record-verification -> POST /v1/tasks/:id/verifications, unwraps { verification }", async () => {
@@ -749,7 +749,7 @@ describe("cloud agent + lock + deps + verification routing (identity/coordinatio
     const v = await cloudRecordVerification(client, "t1", { command: "bun test", status: "passed" });
     expect(v.status).toBe("passed");
     expect(calls[0]!.method).toBe("POST");
-    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t1/verifications");
+    expect(calls[0]!.url).toBe("https://todos.example.com/v1/tasks/t1/verifications");
     expect(calls[0]!.body).toEqual({ command: "bun test", status: "passed" });
   });
 });
@@ -894,7 +894,7 @@ describe("cloud read/analytics routing reads the shared cloud dataset", () => {
     const client = getTodosCloudClient(CLOUD_ENV)!;
     const edges = await cloudAllDependencies(client);
     expect(edges).toHaveLength(1);
-    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/dependencies");
+    expect(calls[0]!.url).toBe("https://todos.example.com/v1/dependencies");
   });
 
   test("blocking deps map -> incomplete blockers only", async () => {
@@ -1087,8 +1087,8 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
     const client = getTodosCloudClient(CLOUD_ENV)!;
     await expect(cloudResolvePlan(client, planId, "project-a")).resolves.toBeNull();
     expect(calls.map((call) => call.url)).toEqual([
-      `https://todos.hasna.xyz/v1/plans/${planId}`,
-      "https://todos.hasna.xyz/v1/plans?project_id=project-a",
+      `https://todos.example.com/v1/plans/${planId}`,
+      "https://todos.example.com/v1/plans?project_id=project-a",
     ]);
   });
 

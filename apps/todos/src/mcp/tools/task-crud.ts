@@ -84,7 +84,7 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
       async (params) => {
         try {
           const { depends_on, assigned_to, project_id, task_list_id, tags, estimate, confidence, retry_count, deadline, ...rest } = params;
-          // self_hosted cloud routing: create straight against <app>.hasna.xyz/v1.
+          // self_hosted cloud routing: create straight against <app-host>/v1.
           // Skip local id-resolution (it hits local SQLite); pass ids through so the
           // cloud dataset is authoritative. Reversible: unset the flip env -> local.
           const cloud = getTodosCloudClient();
@@ -195,7 +195,7 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
       },
       async (params) => {
         try {
-          // self_hosted cloud routing: list from <app>.hasna.xyz/v1 (no local id-resolve).
+          // self_hosted cloud routing: list from <app-host>/v1 (no local id-resolve).
           const cloud = getTodosCloudClient();
           if (cloud) {
             const tasks = await cloudListTasks(cloud, params as any);
@@ -231,7 +231,7 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
       },
       async ({ task_id, detail, max_description_chars, include_metadata }) => {
         try {
-          // self_hosted cloud routing: fetch the task from <app>.hasna.xyz/v1.
+          // self_hosted cloud routing: fetch the task from <app-host>/v1.
           const cloud = getTodosCloudClient();
           const task = cloud ? await cloudGetTask(cloud, task_id) : getTask(resolveId(task_id));
           if (!task) throw new TaskNotFoundError(task_id);
@@ -309,7 +309,7 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
         try {
           const cloud = getTodosCloudClient();
           if (cloud) {
-            // self_hosted cloud routing: PATCH straight against <app>.hasna.xyz/v1.
+            // self_hosted cloud routing: PATCH straight against <app-host>/v1.
             const { task_id, version, estimate, deadline, ...updates } = params;
             const patch: Record<string, unknown> = { ...updates };
             if (patch.assigned_to === "") patch.assigned_to = null;

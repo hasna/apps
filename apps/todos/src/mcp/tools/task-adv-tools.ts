@@ -64,7 +64,7 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
           const cloud = getTodosCloudClient();
           if (!task_id) {
             if (cloud) {
-              // self_hosted cloud routing: queue summary from <app>.hasna.xyz/v1.
+              // self_hosted cloud routing: queue summary from <app-host>/v1.
               const baseFilter: Record<string, unknown> = {};
               if (project_id) baseFilter.project_id = project_id;
               if (task_list_id) baseFilter.task_list_id = task_list_id;
@@ -572,7 +572,7 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
       },
       async ({ task_id, body, author }) => {
         try {
-          // self_hosted cloud routing: comment straight against <app>.hasna.xyz/v1.
+          // self_hosted cloud routing: comment straight against <app-host>/v1.
           // Skip local id-resolution (it hits local SQLite and 404s cloud-only
           // tasks); pass the id through so the cloud dataset is authoritative. The
           // server 404s a genuinely missing task, surfaced as isError below.

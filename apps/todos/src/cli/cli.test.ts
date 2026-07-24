@@ -2098,6 +2098,10 @@ describe("CLI integration", () => {
       TODOS_SYNC_DRY_RUN: "",
       TODOS_MODE: "remote",
       TODOS_API_URL: "https://legacy.example.invalid",
+      // Deployment identifiers come from the hosting layer via env; the package
+      // ships no real cluster names or secrets-manager paths.
+      HASNA_TODOS_RDS_CLUSTER: "example-cluster",
+      HASNA_TODOS_RDS_RUNTIME_PATH: "example/todos/prod/rds",
     });
 
     expect(status.exitCode).toBe(0);
@@ -2107,9 +2111,9 @@ describe("CLI integration", () => {
     expect(payload.no_network).toBe(true);
     expect(payload.database.configured).toBe(false);
     expect(payload.canonical).toEqual({
-      cluster: "hasna-xyz-infra-apps-prod-postgres",
+      cluster: "example-cluster",
       database: "todos",
-      runtimeSecretPath: "hasna/xyz/opensource/todos/prod/rds",
+      runtimeSecretPath: "example/todos/prod/rds",
       primaryEnv: "HASNA_TODOS_DATABASE_URL",
       fallbackEnv: "TODOS_DATABASE_URL",
     });

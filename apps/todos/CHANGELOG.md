@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.96] - 2026-07-24
+
+### Security
+- Remove internal production-infrastructure identifiers from the published open-source package. The managed database cluster name and the AWS Secrets Manager runtime path are no longer hardcoded in `src/storage/config.ts`; they are now supplied at runtime by the private hosting wrapper via `HASNA_TODOS_RDS_CLUSTER` and `HASNA_TODOS_RDS_RUNTIME_PATH`, and resolve to `null` when unset (no baked-in defaults).
+- Scrub the internal cloud domain (`*.hasna.xyz`) from source comments, the `union-backfill` script default endpoint, and test fixtures; compose the private billing host in the headless outbound-boundary allowlist from parts so it is not shipped as a plaintext literal (the outbound guard still blocks it).
+- Replace the real fleet machine identifier and private Tailscale/LAN addresses in the README machine-topology example with neutral placeholders.
+
+### Changed
+- **Breaking (public API):** `getCanonicalTodosRdsConfig()` now accepts an optional `env` argument and returns `cluster` / `runtimeSecretPath` as `string | null`. The exported constants `CANONICAL_TODOS_RDS_CLUSTER` and `CANONICAL_TODOS_RDS_RUNTIME_PATH` are replaced by `CANONICAL_TODOS_RDS_CLUSTER_ENV` and `CANONICAL_TODOS_RDS_RUNTIME_PATH_ENV`.
+
 ## [0.11.92] - 2026-07-18
 
 ### Fixed

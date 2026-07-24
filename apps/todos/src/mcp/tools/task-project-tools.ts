@@ -2717,7 +2717,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ task_id, body, author }) => {
         try {
-          // self_hosted cloud routing: comment straight against <app>.hasna.xyz/v1
+          // self_hosted cloud routing: comment straight against <app-host>/v1
           // (skip local id-resolution which 404s cloud-only tasks). Server 404s a
           // genuinely missing task, surfaced as isError below.
           const cloud = getTodosCloudClient();
