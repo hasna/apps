@@ -1,0 +1,42 @@
+{
+  "schema": "hasna.proof_bundle.v1",
+  "id": "proof_bench_contract_valid",
+  "createdAt": "2026-07-07T10:01:00.000Z",
+  "subject": {
+    "kind": "run",
+    "id": "run_bench_contract_valid",
+    "externalId": "run_bench_contract_valid",
+    "sourcePackage": "@hasna/bench"
+  },
+  "status": "succeeded",
+  "verdict": "passed",
+  "checks": [
+    {
+      "checkId": "bench-storage-record",
+      "status": "succeeded",
+      "summary": "bench run status: completed",
+      "evidenceRefs": [
+        {
+          "id": "ev_bench_segment_valid",
+          "kind": "artifact",
+          "uri": "artifact://bench/runs/run_bench_contract_valid/segments/segment_valid",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ]
+    }
+  ],
+  "verifier": {
+    "kind": "service",
+    "id": "open-bench-safety-gate",
+    "provider": "@hasna/bench"
+  },
+  "evidenceRefs": [
+    {
+      "id": "ev_bench_segment_valid",
+      "kind": "artifact",
+      "uri": "artifact://bench/runs/run_bench_contract_valid/segments/segment_valid",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ],
+  "freshness": "fresh"
+}

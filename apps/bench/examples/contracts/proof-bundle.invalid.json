@@ -1,0 +1,14 @@
+{
+  "schema": "hasna.proof_bundle.v1",
+  "id": "proof_bench_contract_invalid",
+  "createdAt": "2026-07-07T10:01:00.000Z",
+  "subject": {
+    "kind": "run",
+    "id": "run_bench_contract_invalid",
+    "externalId": "run_bench_contract_invalid",
+    "sourcePackage": "@hasna/bench"
+  },
+  "status": "succeeded",
+  "verdict": "passed",
+  "checks": []
+}

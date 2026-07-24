@@ -8,6 +8,11 @@ import {
   type RunRecordMetric,
   type ResultSummary
 } from "../sdk/index.js";
+import {
+  dryRunPlanToContractBundle,
+  resultDetailToContractBundle,
+  runRecordResultToContractBundle
+} from "../lib/contract-adapters.js";
 import { openBenchStorage } from "../storage.js";
 import { runFixtureAdapter } from "../runner.js";
 import { VERSION } from "../lib/version.js";
@@ -24,6 +29,14 @@ for (const arg of process.argv.slice(2)) {
 
 function printJson(value: unknown): void {
   console.log(JSON.stringify(value, null, 2));
+}
+
+function assertContractJson(options: { contract?: boolean; json?: boolean }): void {
+  if (options.contract && !options.json) throw new Error("--contract requires --json");
+}
+
+function contractEnvelope(legacy: unknown, contracts: unknown): unknown {
+  return { ok: true, legacy, contracts };
 }
 
 function printSuiteTable(rows: { id: string; name: string; category: string; status: string }[]): void {
@@ -202,8 +215,10 @@ program
   .requiredOption("--provider <provider>", "Provider or runtime name")
   .option("--route <route>", "Optional provider route")
   .option("--json", "Output JSON")
+  .option("--contract", "With --json, include canonical hasna.* contract output")
   .description("Create a dry-run benchmark execution plan without running a benchmark")
-  .action((suiteId: string, options: { model: string; provider: string; route?: string; json?: boolean }) => {
+  .action((suiteId: string, options: { model: string; provider: string; route?: string; json?: boolean; contract?: boolean }) => {
+    assertContractJson(options);
     const plan = sdk.plan({
       benchmarkId: suiteId,
       modelId: options.model,
@@ -211,7 +226,9 @@ program
       route: options.route
     });
     if (options.json) {
-      printJson(plan);
+      printJson(options.contract
+        ? contractEnvelope(plan, dryRunPlanToContractBundle({ ...plan, benchmark: sdk.showSuite(suiteId) }))
+        : plan);
       return;
     }
     console.log(`${plan.benchmark.id} ${plan.provider}/${plan.modelId}`);
@@ -230,23 +247,41 @@ runs
   .option("--input <path>", "JSON fixture with metrics, payload, usage, and labels")
   .option("--metric <metric>", "Metric as metric_id=number; can be repeated", collect, [])
   .option("--json", "Output JSON")
+  .option("--contract", "With --json, include canonical hasna.* contract output")
   .description("Record a local benchmark result without executing an external benchmark")
   .action(async (
     suiteId: string,
-    options: { model: string; provider: string; route?: string; input?: string; metric: string[]; json?: boolean }
+    options: { model: string; provider: string; route?: string; input?: string; metric: string[]; json?: boolean; contract?: boolean }
   ) => {
+    assertContractJson(options);
     const fixture = options.input ? parseRunRecordInput(readJsonFile(options.input)) : {};
     const metrics = [...(fixture.metrics ?? []), ...options.metric.map(parseMetric)];
-    const result = await sdk.recordRun({
+    const input = {
       benchmarkId: suiteId,
       modelId: options.model,
       provider: options.provider,
       route: options.route,
       ...fixture,
       metrics
-    });
+    };
+    const result = await sdk.recordRun(input);
     if (options.json) {
-      printJson(result);
+      printJson(options.contract
+        ? contractEnvelope(result, runRecordResultToContractBundle({
+          run: result.run,
+          attempt: result.attempt,
+          segment: result.segment,
+          usage: input.usage
+            ? {
+              runId: result.run.id,
+              attemptId: result.attempt.id,
+              provider: input.provider,
+              modelId: input.modelId,
+              ...input.usage
+            }
+            : undefined
+        }))
+        : result);
       return;
     }
     console.log(`recorded ${result.run.id}`);
@@ -267,6 +302,7 @@ runs
   .option("--max-output-tokens <tokens>", "Maximum allowed output tokens", parseNonNegativeInteger)
   .option("--max-runtime-ms <ms>", "Maximum allowed runtime in milliseconds", parseNonNegativeInteger)
   .option("--json", "Output JSON")
+  .option("--contract", "With --json, include canonical hasna.* contract output")
   .description("Record a fixture-safe local wrapper payload and persist normalized result evidence")
   .action(async (
     suiteId: string,
@@ -283,8 +319,10 @@ runs
       maxOutputTokens?: number;
       maxRuntimeMs?: number;
       json?: boolean;
+      contract?: boolean;
     }
   ) => {
+    assertContractJson(options);
     if (!options.input && options.metric.length === 0) {
       throw new Error("runs fixture requires --input or at least one --metric");
     }
@@ -292,8 +330,9 @@ runs
       ? readJsonFile(options.input)
       : { metrics: options.metric.map(parseMetric) };
     const storage = await openBenchStorage();
+    let result: Awaited<ReturnType<typeof runFixtureAdapter>>;
     try {
-      const result = await runFixtureAdapter(storage, {
+      result = await runFixtureAdapter(storage, {
         benchmarkId: suiteId,
         modelId: options.model,
         provider: options.provider,
@@ -308,14 +347,16 @@ runs
           maxRuntimeMs: options.maxRuntimeMs
         }
       });
-      if (options.json) {
-        printJson(result);
-        return;
-      }
-      console.log(`ran ${result.runId}`);
     } finally {
       storage.close();
     }
+    if (options.json) {
+      printJson(options.contract
+        ? contractEnvelope(result, resultDetailToContractBundle(await sdk.showResult(result.runId)))
+        : result);
+      return;
+    }
+    console.log(`ran ${result.runId}`);
   });
 
 const results = program.command("results").description("Inspect local benchmark results");
@@ -337,11 +378,15 @@ results
   .command("show")
   .argument("<run-id>", "Run id")
   .option("--json", "Output JSON")
+  .option("--contract", "With --json, include canonical hasna.* contract output")
   .description("Show one local benchmark result")
-  .action(async (runId: string, options: { json?: boolean }) => {
+  .action(async (runId: string, options: { json?: boolean; contract?: boolean }) => {
+    assertContractJson(options);
     const result = await sdk.showResult(runId);
     if (options.json) {
-      printJson(result);
+      printJson(options.contract
+        ? contractEnvelope(result, resultDetailToContractBundle(result))
+        : result);
       return;
     }
     console.log(`${chalk.cyan(result.runId)} ${result.benchmarkId} ${result.provider}/${result.modelId}`);

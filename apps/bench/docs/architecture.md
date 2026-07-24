@@ -50,7 +50,7 @@ Initial tables:
 
 ## Registry Manifest
 
-Every built-in suite is parsed through `bench.manifest.v1` at package load. A manifest records:
+Every built-in suite is parsed through legacy `bench.manifest.v1` at package load. A manifest records:
 
 - immutable `manifestVersion`
 - verified source references
@@ -59,6 +59,8 @@ Every built-in suite is parsed through `bench.manifest.v1` at package load. A ma
 - metrics with score direction
 - adapter status
 - safety class, network, sandbox, secret, and cost metadata
+
+`bench.manifest.v1` remains supported for current CLI, SDK, MCP, and fixture compatibility. Canonical `hasna.*` contract shapes are emitted additively through `@hasna/contracts`; `bench.manifest.v1` maps lossy into `hasna.validation_plan.v1` because the canonical plan records checks and evidence requirements, not the full benchmark registry manifest. This is the convergence path for the namespace decision that `hasna.*` schema ids are minted only by `@hasna/contracts`.
 
 ## Adapters
 
@@ -74,7 +76,9 @@ Adapter execution modes:
 
 Runnable paths fail closed unless license metadata is explicit and the caller satisfies the benchmark's safety metadata. Secret-bearing benchmarks accept only secret reference names such as `OPENAI_API_KEY`, never raw credential values. Network, sandbox, high-cost, token, and runtime limits are carried as explicit run policy.
 
-Fixture-safe runs do not execute external benchmark code. They normalize caller-supplied metric payloads, redact sensitive evidence fields before append-only storage, persist an evidence manifest, and index each segment by offset, length, and SHA-256.
+Fixture-safe runs do not execute external benchmark code. They normalize caller-supplied metric payloads, redact sensitive evidence fields before append-only storage, persist a legacy `bench.evidence.v1` manifest, and index each segment by offset, length, and SHA-256.
+
+Contract adapters under `src/lib/contract-adapters.ts` expose canonical `hasna.work_run.v1`, `hasna.cost_estimate.v1`, `hasna.evidence_ref.v1`, `hasna.proof_bundle.v1`, and `hasna.validation_plan.v1` JSON at the CLI boundary. The adapters validate drafts with `parseContract` and keep legacy storage/output behavior unchanged unless `--contract --json` is requested.
 
 Low-level storage helpers also protect evidence:
 

@@ -1,0 +1,21 @@
+{
+  "schema": "hasna.evidence_ref.v1",
+  "id": "ev_bench_segment_valid",
+  "createdAt": "2026-07-07T10:00:00.000Z",
+  "kind": "artifact",
+  "uri": "artifact://bench/runs/run_bench_contract_valid/segments/segment_valid",
+  "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "summary": "bench result segment: manual-record",
+  "contentType": "application/jsonl",
+  "sizeBytes": 128,
+  "redaction": "partial",
+  "resourceRefs": [
+    {
+      "kind": "run",
+      "id": "run_bench_contract_valid",
+      "externalId": "run_bench_contract_valid",
+      "sourcePackage": "@hasna/bench"
+    }
+  ],
+  "tags": ["bench.result-segment", "manual-record"]
+}

@@ -29,9 +29,9 @@ describe("@hasna/bench storage", () => {
     const home = mkdtempSync(join(tmpdir(), "bench-storage-"));
     try {
       const first = await openBenchStorage(isolatedEnv(home));
-      const tables = first.db
-        .query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
-        .all()
+      const tables = (first.db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        .all() as { name: string }[])
         .map((row) => row.name);
 
       expect(tables).toContain("registries");
@@ -42,12 +42,12 @@ describe("@hasna/bench storage", () => {
       expect(tables).toContain("metrics");
       expect(tables).toContain("artifacts");
       expect(tables).toContain("provider_usage");
-      expect(first.db.query<{ count: number }, []>("SELECT COUNT(*) as count FROM benchmarks").get()?.count).toBe(13);
+      expect((first.db.prepare("SELECT COUNT(*) as count FROM benchmarks").get() as { count: number } | null)?.count).toBe(13);
       first.close();
 
       const second = await openBenchStorage(isolatedEnv(home));
-      expect(second.db.query<{ count: number }, []>("SELECT COUNT(*) as count FROM benchmarks").get()?.count).toBe(13);
-      expect(second.db.query<{ count: number }, []>("SELECT COUNT(*) as count FROM benchmark_versions").get()?.count).toBe(13);
+      expect((second.db.prepare("SELECT COUNT(*) as count FROM benchmarks").get() as { count: number } | null)?.count).toBe(13);
+      expect((second.db.prepare("SELECT COUNT(*) as count FROM benchmark_versions").get() as { count: number } | null)?.count).toBe(13);
       second.close();
     } finally {
       rmSync(home, { recursive: true, force: true });
@@ -114,18 +114,16 @@ describe("@hasna/bench storage", () => {
       expect(JSON.parse(lines[0]).payload).toEqual({ metric: "accuracy", value: 0.42 });
 
       const segmentRow = storage.db
-        .query<{ byte_offset: number; byte_length: number; record_sha256: string }, [string]>(
-          "SELECT byte_offset, byte_length, record_sha256 FROM result_segments WHERE id = ?"
-        )
-        .get(first.id);
+        .prepare("SELECT byte_offset, byte_length, record_sha256 FROM result_segments WHERE id = ?")
+        .get(first.id) as { byte_offset: number; byte_length: number; record_sha256: string } | null;
       expect(segmentRow).toEqual({
         byte_offset: first.byteOffset,
         byte_length: first.byteLength,
         record_sha256: first.recordSha256
       });
-      expect(storage.db.query<{ count: number }, []>("SELECT COUNT(*) as count FROM metrics").get()?.count).toBe(1);
-      expect(storage.db.query<{ count: number }, []>("SELECT COUNT(*) as count FROM artifacts").get()?.count).toBe(1);
-      expect(storage.db.query<{ count: number }, []>("SELECT COUNT(*) as count FROM provider_usage").get()?.count).toBe(1);
+      expect((storage.db.prepare("SELECT COUNT(*) as count FROM metrics").get() as { count: number } | null)?.count).toBe(1);
+      expect((storage.db.prepare("SELECT COUNT(*) as count FROM artifacts").get() as { count: number } | null)?.count).toBe(1);
+      expect((storage.db.prepare("SELECT COUNT(*) as count FROM provider_usage").get() as { count: number } | null)?.count).toBe(1);
     } finally {
       storage.close();
       rmSync(home, { recursive: true, force: true });
@@ -162,7 +160,7 @@ describe("@hasna/bench storage", () => {
     const home = mkdtempSync(join(tmpdir(), "bench-storage-"));
     const storage = await openBenchStorage(isolatedEnv(home));
     try {
-      const pragma = storage.db.query<{ timeout: number }, []>("PRAGMA busy_timeout").get();
+      const pragma = storage.db.prepare("PRAGMA busy_timeout").get() as { timeout: number } | null;
       expect(pragma?.timeout).toBe(5000);
     } finally {
       storage.close();

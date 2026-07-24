@@ -90,8 +90,8 @@ describe("@hasna/bench safety and evidence gates", () => {
       });
 
       const segments = storage.db
-        .query<{ event_type: string; segment_path: string }, []>("SELECT event_type, segment_path FROM result_segments ORDER BY byte_offset")
-        .all();
+        .prepare("SELECT event_type, segment_path FROM result_segments ORDER BY byte_offset")
+        .all() as { event_type: string; segment_path: string }[];
       const raw = readFileSync(segments[0].segment_path, "utf8");
       expect(result.ok).toBe(true);
       expect(segments.map((segment) => segment.event_type)).toEqual(["fixture-result", "evidence-manifest"]);

@@ -38,11 +38,11 @@ describe("@hasna/bench fixture runners", () => {
 
       expect(result.ok).toBe(true);
       expect(result.metrics.map((metric) => metric.metricId)).toEqual(["score", "pass_rate"]);
-      expect(storage.db.query<{ count: number }, []>("SELECT COUNT(*) as count FROM metrics").get()?.count).toBe(2);
-      expect(storage.db.query<{ count: number }, []>("SELECT COUNT(*) as count FROM result_segments").get()?.count).toBe(2);
-      const segmentPath = storage.db.query<{ segment_path: string }, []>(
+      expect((storage.db.prepare("SELECT COUNT(*) as count FROM metrics").get() as { count: number } | null)?.count).toBe(2);
+      expect((storage.db.prepare("SELECT COUNT(*) as count FROM result_segments").get() as { count: number } | null)?.count).toBe(2);
+      const segmentPath = (storage.db.prepare(
         "SELECT segment_path FROM result_segments WHERE event_type = 'evidence-manifest'"
-      ).get()?.segment_path;
+      ).get() as { segment_path: string } | null)?.segment_path;
       expect(segmentPath).toBeTruthy();
       expect(readFileSync(segmentPath!, "utf8")).toContain("bench.evidence.v1");
     } finally {

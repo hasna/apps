@@ -89,6 +89,30 @@ export type {
   SourceRef
 } from "./contracts.js";
 export {
+  BENCH_CONTRACT_SOURCE_PACKAGE,
+  artifactToEvidenceRef,
+  benchmarkManifestToValidationPlan,
+  dryRunPlanToContractBundle,
+  evidenceManifestToEvidenceRefs,
+  evidenceManifestToProofBundle,
+  maybeProviderUsageToCostEstimate,
+  providerUsageToCostEstimate,
+  resultDetailToContractBundle,
+  resultSegmentToEvidenceRef,
+  runRecordResultToContractBundle,
+  storedRunToWorkRun
+} from "./lib/contract-adapters.js";
+export type {
+  BenchPlanContractBundle,
+  BenchRunContractBundle,
+  DryRunPlanForContracts,
+  EvidenceManifestContractInput,
+  EvidenceSegmentContractInput,
+  ProviderUsageContractInput,
+  ResultDetailForContracts,
+  WorkRunContractInput
+} from "./lib/contract-adapters.js";
+export {
   buildServer,
   callBenchTool,
   listBenchTools,

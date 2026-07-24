@@ -1,0 +1,39 @@
+{
+  "schema": "hasna.work_run.v1",
+  "id": "run_bench_contract_valid",
+  "createdAt": "2026-07-07T10:00:00.000Z",
+  "objective": "Benchmark lm-evaluation-harness on example-provider/example-model",
+  "status": "succeeded",
+  "actor": {
+    "kind": "service",
+    "id": "open-bench",
+    "provider": "@hasna/bench"
+  },
+  "startedAt": "2026-07-07T10:00:00.000Z",
+  "finishedAt": "2026-07-07T10:01:00.000Z",
+  "resourceRefs": [
+    {
+      "kind": "run",
+      "id": "run_bench_contract_valid",
+      "externalId": "run_bench_contract_valid",
+      "sourcePackage": "@hasna/bench"
+    }
+  ],
+  "evidenceRefs": [
+    {
+      "id": "ev_bench_segment_valid",
+      "kind": "artifact",
+      "uri": "artifact://bench/runs/run_bench_contract_valid/segments/segment_valid",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "summary": "bench result segment"
+    }
+  ],
+  "proofBundleRefs": [
+    {
+      "kind": "proof_bundle",
+      "id": "proof_bench_contract_valid",
+      "externalId": "proof_bench_contract_valid",
+      "sourcePackage": "@hasna/bench"
+    }
+  ]
+}

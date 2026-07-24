@@ -191,6 +191,123 @@ describe("@hasna/bench CLI and SDK core", () => {
     }
   });
 
+  it("emits canonical contract JSON additively without changing unflagged output", () => {
+    const home = mkdtempSync(join(tmpdir(), "bench-contract-cli-"));
+    const fixtureInput = join(home, "promptfoo-fixture.json");
+    const env = isolatedEnv(home);
+    try {
+      writeFileSync(fixtureInput, JSON.stringify({
+        metrics: [{ metricId: "score", value: 0.9 }]
+      }));
+      const plan = runBench([
+        "plan",
+        "lm-evaluation-harness",
+        "--model",
+        "example/model",
+        "--provider",
+        "example-provider",
+        "--json"
+      ], env) as { ok: boolean; contracts?: unknown };
+      const planContract = runBench([
+        "plan",
+        "lm-evaluation-harness",
+        "--model",
+        "example/model",
+        "--provider",
+        "example-provider",
+        "--json",
+        "--contract"
+      ], env) as {
+        ok: boolean;
+        legacy: { ok: boolean; command: string[] };
+        contracts: { validationPlan: { schema: string }; mappingNotes: string[] };
+      };
+      const recorded = runBench([
+        "runs",
+        "record",
+        "lm-evaluation-harness",
+        "--model",
+        "example/model",
+        "--provider",
+        "example-provider",
+        "--input",
+        "examples/result-record.json",
+        "--json",
+        "--contract"
+      ], env) as {
+        ok: boolean;
+        legacy: { run: { id: string } };
+        contracts: {
+          workRun: { schema: string; status: string };
+          costEstimates: Array<{ schema: string; amountMicros: number }>;
+          evidenceRefs: Array<{ schema: string; uri: string }>;
+          proofBundle: { schema: string; verdict: string };
+        };
+      };
+      const shown = runBench([
+        "results",
+        "show",
+        recorded.legacy.run.id,
+        "--json",
+        "--contract"
+      ], env) as {
+        legacy: { runId: string };
+        contracts: { workRun: { schema: string }; evidenceRefs: Array<{ uri: string }> };
+      };
+      const fixture = runBench([
+        "runs",
+        "fixture",
+        "promptfoo",
+        "--model",
+        "example/model",
+        "--provider",
+        "example-provider",
+        "--input",
+        fixtureInput,
+        "--secret-ref",
+        "OPENAI_API_KEY",
+        "--network",
+        "--json",
+        "--contract"
+      ], env) as {
+        contracts: {
+          costEstimates: Array<unknown>;
+          proofBundle: { verdict: string; checks: Array<{ checkId: string; status: string }> };
+        };
+      };
+
+      expect(plan.ok).toBe(true);
+      expect(plan.contracts).toBeUndefined();
+      expect(planContract.ok).toBe(true);
+      expect(planContract.legacy.command).toContain("lm_eval");
+      expect(planContract.contracts.validationPlan.schema).toBe("hasna.validation_plan.v1");
+      expect(planContract.contracts.mappingNotes[0]).toContain("bench.manifest.v1");
+      expect(recorded.contracts.workRun.schema).toBe("hasna.work_run.v1");
+      expect(recorded.contracts.workRun.status).toBe("succeeded");
+      expect(recorded.contracts.costEstimates[0]).toMatchObject({
+        schema: "hasna.cost_estimate.v1",
+        amountMicros: 12000
+      });
+      expect(recorded.contracts.evidenceRefs[0]?.schema).toBe("hasna.evidence_ref.v1");
+      expect(recorded.contracts.proofBundle).toMatchObject({
+        schema: "hasna.proof_bundle.v1",
+        verdict: "inconclusive"
+      });
+      expect(shown.legacy.runId).toBe(recorded.legacy.run.id);
+      expect(shown.contracts.workRun.schema).toBe("hasna.work_run.v1");
+      expect(shown.contracts.evidenceRefs[0]?.uri).not.toContain("/tmp");
+      expect(fixture.contracts.costEstimates).toEqual([]);
+      expect(fixture.contracts.proofBundle.verdict).toBe("passed");
+      expect(fixture.contracts.proofBundle.checks.map((check) => check.checkId)).toEqual([
+        "safety-gate",
+        "redaction",
+        "cleanup"
+      ]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("emits JSON errors for JSON-mode command failures", () => {
     const home = mkdtempSync(join(tmpdir(), "bench-cli-"));
     const env = isolatedEnv(home);

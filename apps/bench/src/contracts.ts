@@ -11,6 +11,9 @@ const idSchema = z
   .regex(/^[a-z0-9][a-z0-9._-]*$/, "Use lowercase ids with letters, numbers, dots, underscores, or dashes");
 const semverSchema = z.string().regex(/^\d+\.\d+\.\d+$/, "Expected semver, for example 1.0.0");
 
+// Legacy local schema id. New shared schema ids are minted by @hasna/contracts
+// under hasna.*; bench.manifest.v1 remains supported until the namespace
+// convergence decision is implemented in a later pass.
 export const manifestSchemaVersionSchema = z.literal("bench.manifest.v1");
 
 export const benchmarkCategorySchema = z.enum([

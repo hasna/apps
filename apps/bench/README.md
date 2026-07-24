@@ -9,9 +9,10 @@ It complements `@hasna/evals`: evals scores app behavior; bench orchestrates ext
 ## What It Does
 
 - Lists benchmark suites with source, license, runner, metric, adapter, and safety metadata.
-- Validates `bench.manifest.v1` benchmark manifests.
+- Validates legacy `bench.manifest.v1` benchmark manifests.
 - Returns dry-run adapter plans for external suites without executing benchmark code.
 - Records manual benchmark results and fixture-safe wrapper payloads into local SQLite plus append-only JSONL evidence.
+- Emits canonical `@hasna/contracts` JSON additively with `--contract --json` for dry-run plans, recorded runs, fixture runs, and result details.
 - Redacts raw credential-shaped values before persistence and rejects unsafe model/provider/metric/artifact metadata.
 - Enforces fail-closed fixture gates for secret refs, required network, sandbox requirements, high-cost budgets, token limits, and runtime limits.
 - Exposes the same core capabilities through CLI, SDK, and MCP tools.
@@ -52,8 +53,12 @@ From a repo checkout, you can also use the bundled fixtures:
 ```bash
 bench manifest validate examples/benchmark.valid.json --json
 bench runs record lm-evaluation-harness --model example/model --provider example-provider --input examples/result-record.json --json
-bench runs fixture promptfoo --model example/model --provider example-provider --metric score=0.9 --secret-ref OPENAI_API_KEY --network --json
+bench runs fixture lm-evaluation-harness --model example/model --provider example-provider --input examples/result-record.json --network --json
+bench plan lm-evaluation-harness --model example/model --provider example-provider --json --contract
+bench results show <run-id> --json --contract
 ```
+
+`--contract --json` is additive: the response includes both `legacy` bench output and canonical `contracts` output validated through `@hasna/contracts`. The canonical contract evidence refs use portable `artifact://bench/...` URIs. The `legacy` object preserves existing bench JSON and may include local storage paths such as result segment files, so share the `contracts` object when a portable or machine-neutral payload is needed. The local `bench.manifest.v1` and `bench.evidence.v1` envelopes are still supported, but they are legacy bench-owned shapes pending the namespace decision that `hasna.*` schema ids are minted only by `@hasna/contracts`.
 
 ## Discovery Model
 

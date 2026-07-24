@@ -1,0 +1,12 @@
+{
+  "schema": "hasna.validation_plan.v1",
+  "id": "validation_bench_contract_invalid",
+  "createdAt": "2026-07-07T10:00:00.000Z",
+  "objective": "Invalid actionable check without command or expected",
+  "checks": [
+    {
+      "id": "dry-run-command",
+      "kind": "command"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "schema": "hasna.work_run.v1",
+  "id": "run_bench_contract_invalid",
+  "createdAt": "2026-07-07T10:00:00.000Z",
+  "objective": "Invalid succeeded run without evidence",
+  "status": "succeeded",
+  "actor": {
+    "kind": "service",
+    "id": "open-bench",
+    "provider": "@hasna/bench"
+  },
+  "startedAt": "2026-07-07T10:00:00.000Z",
+  "finishedAt": "2026-07-07T10:01:00.000Z"
+}

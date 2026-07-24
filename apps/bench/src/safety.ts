@@ -78,6 +78,8 @@ export interface RedactionEvidence {
 }
 
 export interface EvidenceManifest {
+  // Legacy local evidence envelope. Canonical contract output is emitted as
+  // hasna.evidence_ref.v1 and hasna.proof_bundle.v1 via src/lib/contract-adapters.ts.
   schemaVersion: "bench.evidence.v1";
   runId: string;
   attemptId: string;
