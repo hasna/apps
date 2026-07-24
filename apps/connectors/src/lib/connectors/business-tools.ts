@@ -1109,6 +1109,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["feedback", "product", "customer-insights"],
   },
   {
+    name: "vela",
+    displayName: "Vela",
+    description: "AI scheduling coordination",
+    category: "Business Tools",
+    tags: ["scheduling", "calendar", "ai"],
+  },
+  {
     name: "vivifyscrum",
     displayName: "VivifyScrum",
     description: "Agile project management with Scrum and Kanban boards",
