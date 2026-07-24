@@ -136,6 +136,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["image generation", "automation", "personalization", "api", "graphics"],
   },
   {
+    name: "topaz-labs",
+    displayName: "Topaz Labs",
+    description: "AI image enhance, upscale, and restore API",
+    category: "Design & Content",
+    tags: ["images", "enhancement", "upscaling", "ai"],
+  },
+  {
     name: "tilda",
     displayName: "Tilda",
     description: "Website builder and publishing platform with block-based design tools",
