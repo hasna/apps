@@ -13,6 +13,8 @@ import { getCalendarCloud } from "../cloud/store.js";
 
 const packageJson = await Bun.file(new URL("../../package.json", import.meta.url)).json() as { version: string };
 const program = new Command();
+const DEFAULT_PAGE_LIMIT = 20;
+const MAX_PAGE_LIMIT = 100;
 
 program
   .name("calendar")
@@ -46,12 +48,18 @@ calendarCommand("org-add <name>")
     output(wantsJson(opts) ? JSON.stringify(org) : chalk.green(`Org created: ${org.name} (${org.slug}) [${org.id}]`));
   });
 
-calendarCommand("org-list")
+listCommand("org-list")
   .description("List all orgs")
   .action(async (opts) => {
     const cloud = getCalendarCloud();
     const orgs = (cloud ? await cloud.listOrgs() : listOrgs()) as any[];
-    output(wantsJson(opts) ? JSON.stringify(orgs) : orgs.map((o) => `${o.name} (${o.slug}) [${o.id}]`).join("\n") || chalk.gray("No orgs"));
+    outputList(orgs, opts, {
+      empty: "No orgs",
+      hint: "Use --verbose or calendar org-show <id> for details.",
+      row: (o) => opts.verbose
+        ? `${o.id}  ${o.slug}  ${truncate(o.name, 36)}  desc=${truncate(o.description)}`
+        : `${o.id}  ${o.slug}  ${truncate(o.name, 48)}`,
+    });
   });
 
 calendarCommand("org-show <id>")
@@ -95,11 +103,17 @@ calendarCommand("init <name>")
     output(wantsJson(opts) ? JSON.stringify(agent) : chalk.green(`Agent registered: ${agent.name} [${agent.id}]`));
   });
 
-calendarCommand("agents")
+listCommand("agents")
   .description("List agents")
   .action((opts) => {
     const agents = listAgents();
-    output(wantsJson(opts) ? JSON.stringify(agents) : agents.map((a) => `${a.name} [${a.id}]`).join("\n") || chalk.gray("No agents"));
+    outputList(agents, opts, {
+      empty: "No agents",
+      hint: "Use --verbose for role/session fields. Use --json for full records.",
+      row: (a) => opts.verbose
+        ? `${a.id}  ${a.name}  status=${a.status}  role=${a.role || "-"}  last_seen=${a.last_seen_at}  dir=${truncate(a.working_dir)}`
+        : `${a.id}  ${a.name}  ${a.status}  ${a.role || "-"}`,
+    });
   });
 
 calendarCommand("heartbeat [agent]")
@@ -154,13 +168,19 @@ calendarCommand("cal-add <name>")
     output(wantsJson(opts) ? JSON.stringify(cal) : chalk.green(`Calendar created: ${cal.name} [${cal.id}]`));
   });
 
-calendarCommand("cal-list")
+listCommand("cal-list")
   .description("List calendars")
   .option("--org <orgId>", "Filter by org")
   .action(async (opts) => {
     const cloud = getCalendarCloud();
     const cals = (cloud ? await cloud.listCalendars(opts.org || undefined) : listCalendars(opts.org || undefined)) as any[];
-    output(wantsJson(opts) ? JSON.stringify(cals) : cals.map((c) => `${c.name} (${c.slug}) [${c.id}]`).join("\n") || chalk.gray("No calendars"));
+    outputList(cals, opts, {
+      empty: "No calendars",
+      hint: "Use --verbose for org/timezone fields. Use --json for full records.",
+      row: (c) => opts.verbose
+        ? `${c.id}  ${c.slug}  ${truncate(c.name, 36)}  org=${c.org_id}  tz=${c.timezone}  visibility=${c.visibility}  desc=${truncate(c.description)}`
+        : `${c.id}  ${c.slug}  ${truncate(c.name, 48)}  ${c.visibility}`,
+    });
   });
 
 calendarCommand("cal-update <id>")
@@ -234,24 +254,28 @@ calendarCommand("add <title>")
     output(wantsJson(opts) ? JSON.stringify(evt) : chalk.green(`Event created: ${evt.title}\n  ${evt.start_at} -> ${evt.end_at} [${evt.id}]`));
   });
 
-calendarCommand("list")
+listCommand("list")
   .description("List events")
   .option("--calendar <calendarId>", "Calendar ID")
   .option("--org <orgId>", "Org ID")
   .option("--after <date>", "After date (ISO)")
   .option("--before <date>", "Before date (ISO)")
-  .option("--limit <n>", "Limit results", parseInt)
   .action(async (opts) => {
     const filter = {
       calendar_id: opts.calendar,
       org_id: opts.org,
       after: opts.after,
       before: opts.before,
-      limit: opts.limit,
     };
     const cloud = getCalendarCloud();
     const events = (cloud ? await cloud.listEvents(filter) : listEvents(filter)) as any[];
-    output(wantsJson(opts) ? JSON.stringify(events) : events.map((e) => `${e.title}\n  ${e.start_at} -> ${e.end_at} [${e.id}]`).join("\n") || chalk.gray("No events"));
+    outputList(events, opts, {
+      empty: "No events",
+      hint: "Use --verbose or calendar show <id> for details.",
+      row: (e) => opts.verbose
+        ? `${e.id}  ${e.start_at} -> ${e.end_at}  ${e.status}  ${truncate(e.title, 44)}  calendar=${e.calendar_id}  location=${truncate(e.location)}  desc=${truncate(e.description)}`
+        : `${e.id}  ${e.start_at} -> ${e.end_at}  ${e.status}  ${truncate(e.title, 56)}`,
+    });
   });
 
 calendarCommand("show <id>")
@@ -304,24 +328,33 @@ calendarCommand("delete <id>")
     outputJsonOrText({ deleted: ok }, ok ? chalk.green("Event deleted") : chalk.red("Event not found"), opts);
   });
 
-calendarCommand("search <query>")
+listCommand("search <query>")
   .description("Search events (full-text)")
   .option("--org <orgId>", "Org ID")
   .action((query, opts) => {
     const events = searchEvents(query, opts.org || undefined);
-    output(wantsJson(opts) ? JSON.stringify(events) : events.map((e) => `${e.title}\n  ${e.start_at} -> ${e.end_at}`).join("\n") || chalk.gray("No results"));
+    outputList(events, opts, {
+      empty: "No results",
+      hint: "Use --verbose or calendar show <id> for details.",
+      row: (e) => opts.verbose
+        ? `${e.id}  ${e.start_at} -> ${e.end_at}  ${e.status}  ${truncate(e.title, 44)}  location=${truncate(e.location)}  desc=${truncate(e.description)}`
+        : `${e.id}  ${e.start_at}  ${truncate(e.title, 64)}`,
+    });
   });
 
-calendarCommand("conflicts <calendarId>")
+listCommand("conflicts <calendarId>")
   .description("Find conflicting events for a time range")
   .requiredOption("--start <iso>", "Start time")
   .requiredOption("--end <iso>", "End time")
   .action((calendarId, opts) => {
     const conflicts = findConflicts(calendarId, { start: opts.start, end: opts.end });
-    output(wantsJson(opts) ? JSON.stringify(conflicts) : conflicts.length === 0
-      ? chalk.green("No conflicts")
-      : chalk.yellow(`${conflicts.length} conflict(s):\n${conflicts.map((e) => `  ${e.title} (${e.start_at} -> ${e.end_at})`).join("\n")}`)
-    );
+    outputList(conflicts, opts, {
+      empty: "No conflicts",
+      hint: "Use --verbose or calendar show <id> for details.",
+      row: (e) => opts.verbose
+        ? `${e.id}  ${e.start_at} -> ${e.end_at}  ${e.status}  ${truncate(e.title, 44)}  location=${truncate(e.location)}`
+        : `${e.id}  ${e.start_at} -> ${e.end_at}  ${truncate(e.title, 56)}`,
+    });
   });
 
 // ── Attendee commands ────────────────────────────────────────────────────────
@@ -375,13 +408,19 @@ calendarCommand("availability-set")
     output(wantsJson(opts) ? JSON.stringify(av) : chalk.green(`Availability set: day ${opts.day} ${opts.start}-${opts.end} [${av.id}]`));
   });
 
-calendarCommand("availability-show <agentId>")
+listCommand("availability-show <agentId>")
   .description("Show agent availability")
   .option("--org <orgId>", "Org ID")
   .action((agentId, opts) => {
     const avail = getAvailabilityForAgent(agentId, opts.org || undefined);
     const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-    output(wantsJson(opts) ? JSON.stringify(avail) : avail.map((a) => `  ${days[a.day_of_week]}: ${a.start_time} - ${a.end_time}`).join("\n") || chalk.gray("No availability set"));
+    outputList(avail, opts, {
+      empty: "No availability set",
+      hint: "Use --verbose for IDs/org fields. Use --json for full records.",
+      row: (a) => opts.verbose
+        ? `${a.id}  ${days[a.day_of_week]}  ${a.start_time}-${a.end_time}  org=${a.org_id}  agent=${a.agent_id}`
+        : `${days[a.day_of_week]}  ${a.start_time}-${a.end_time}  org=${a.org_id}`,
+    });
   });
 
 calendarCommand("availability-delete <id>")
@@ -403,11 +442,17 @@ calendarCommand("member-add")
     output(wantsJson(opts) ? JSON.stringify(m) : chalk.green(`Added ${opts.agent} to org ${opts.org} as ${m.role}`));
   });
 
-calendarCommand("members <orgId>")
+listCommand("members <orgId>")
   .description("List org members")
   .action((orgId, opts) => {
     const members = getMembershipsForOrg(orgId);
-    output(wantsJson(opts) ? JSON.stringify(members) : members.map((m) => `  ${m.agent_id} — ${m.role}`).join("\n") || chalk.gray("No members"));
+    outputList(members, opts, {
+      empty: "No members",
+      hint: "Use --verbose for membership IDs. Use --json for full records.",
+      row: (m) => opts.verbose
+        ? `${m.id}  agent=${m.agent_id}  role=${m.role}  created=${m.created_at}`
+        : `${m.agent_id}  ${m.role}`,
+    });
   });
 
 calendarCommand("member-remove <agentId> <orgId>")
@@ -419,17 +464,37 @@ calendarCommand("member-remove <agentId> <orgId>")
 
 // ── Agent org management ─────────────────────────────────────────────────────
 
-calendarCommand("agent-orgs <agentId>")
+listCommand("agent-orgs <agentId>")
   .description("List orgs an agent belongs to")
   .action((agentId, opts) => {
     const orgs = getOrgsForAgent(agentId);
-    output(wantsJson(opts) ? JSON.stringify(orgs) : orgs.map((m) => `  ${m.org_id} — ${m.role}`).join("\n") || chalk.gray("No orgs"));
+    outputList(orgs, opts, {
+      empty: "No orgs",
+      hint: "Use --verbose for membership IDs. Use --json for full records.",
+      row: (m) => opts.verbose
+        ? `${m.id}  org=${m.org_id}  role=${m.role}  created=${m.created_at}`
+        : `${m.org_id}  ${m.role}`,
+    });
   });
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function calendarCommand(name: string) {
   return program.command(name).option("--json", "Output as JSON");
+}
+
+function listCommand(name: string) {
+  return calendarCommand(name)
+    .option("--limit <n>", `Max rows for human output (default ${DEFAULT_PAGE_LIMIT}, max ${MAX_PAGE_LIMIT})`, parseInteger)
+    .option("--cursor <n>", "Zero-based row offset for the next page", parseInteger)
+    .option("--verbose", "Show additional fields without switching to JSON");
+}
+
+function parseInteger(value: string): number {
+  if (!/^-?\d+$/.test(value)) throw new Error(`Expected an integer, got "${value}"`);
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed)) throw new Error(`Expected an integer, got "${value}"`);
+  return parsed;
 }
 
 function wantsJson(opts: { json?: boolean } = {}) {
@@ -443,6 +508,50 @@ function outputJsonOrText(value: unknown, text: string, opts: { json?: boolean }
 function fail(message: string): never {
   output(wantsJson() ? JSON.stringify({ error: message }) : chalk.red(message));
   process.exit(1);
+}
+
+function truncate(value: string | null | undefined, max = 72): string {
+  const text = (value || "-").replace(/\s+/g, " ").trim();
+  return text.length > max ? `${text.slice(0, Math.max(0, max - 3))}...` : text;
+}
+
+function pageItems<T>(items: T[], opts: { json?: boolean; limit?: number; cursor?: number }) {
+  const jsonUnpaged = wantsJson(opts) && opts.limit === undefined && opts.cursor === undefined;
+  const cursor = opts.cursor ?? 0;
+  const requestedLimit = opts.limit ?? (jsonUnpaged ? Math.max(items.length, 1) : DEFAULT_PAGE_LIMIT);
+  if (cursor < 0) fail("--cursor must be zero or greater");
+  if (requestedLimit <= 0) fail("--limit must be greater than zero");
+  const limit = jsonUnpaged ? requestedLimit : Math.min(requestedLimit, MAX_PAGE_LIMIT);
+  const rows = items.slice(cursor, cursor + limit);
+  const nextCursor = cursor + rows.length < items.length ? cursor + rows.length : null;
+  return { rows, cursor, limit, nextCursor, total: items.length, jsonUnpaged };
+}
+
+function outputList<T>(
+  items: T[],
+  opts: { json?: boolean; verbose?: boolean; limit?: number; cursor?: number },
+  config: { empty: string; hint: string; row: (item: T) => string },
+) {
+  const page = pageItems(items, opts);
+  if (wantsJson(opts)) {
+    output(JSON.stringify(page.jsonUnpaged
+      ? page.rows
+      : { items: page.rows, total: page.total, limit: page.limit, cursor: page.cursor, next_cursor: page.nextCursor }));
+    return;
+  }
+  if (page.rows.length === 0) {
+    output(chalk.gray(config.empty));
+    return;
+  }
+
+  const lines = page.rows.map(config.row);
+  const shownEnd = page.cursor + page.rows.length;
+  lines.push(chalk.gray(`Showing ${page.cursor + 1}-${shownEnd} of ${page.total}.`));
+  if (page.nextCursor !== null) {
+    lines.push(chalk.gray(`Next page: rerun with --cursor ${page.nextCursor}.`));
+  }
+  lines.push(chalk.gray(config.hint));
+  output(lines.join("\n"));
 }
 
 function handleError(error: unknown): never {
