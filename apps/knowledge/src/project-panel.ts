@@ -5,7 +5,14 @@ import {
   type ProjectPanelInput,
   type ResourceKind,
 } from '@hasna/contracts';
-import { createKnowledgeService, type KnowledgeInventoryResult, type KnowledgeService } from './service';
+import {
+  assertKnowledgeServiceForProjectPanel,
+  createKnowledgeService,
+  type KnowledgeInventoryResult,
+  type KnowledgeService,
+} from './service';
+import { assertPublicInvocation } from './public-guard';
+import { canonicalKnowledgeScope } from './workspace';
 
 const SOURCE_PACKAGE = '@hasna/knowledge';
 
@@ -205,10 +212,13 @@ function inventoryItems(inventory: KnowledgeInventoryResult, limit: number): Pro
 }
 
 export function createKnowledgeProjectPanel(projectRef: string, options: KnowledgeProjectPanelOptions = {}): ProjectPanel {
+  assertPublicInvocation([options], { surface: 'sdk' });
+  const scope = canonicalKnowledgeScope(options.scope, 'project');
   const limit = clampLimit(options.limit);
   const generatedAt = new Date().toISOString();
   const projectId = slugify(projectRef);
-  const service = options.service ?? createKnowledgeService({ scope: options.scope ?? 'project', cwd: options.cwd });
+  const service = options.service ?? createKnowledgeService({ scope, cwd: options.cwd });
+  assertKnowledgeServiceForProjectPanel(service, { scope, cwd: options.cwd });
   const inventory = service.inventory({
     limit,
     storePath: options.storePath,

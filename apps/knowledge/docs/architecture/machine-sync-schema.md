@@ -185,8 +185,8 @@ knowledge_sync_imports
 ```
 
 The ledger stores hashes, refs, proposed patches, per-table logical clocks, and
-bundle replay records. Large generated objects live in the artifact store,
-locally or in S3.
+bundle replay records. Stage A stores generated objects only in the anchored
+local artifact store. A future hosted wrapper may supply remote object storage.
 
 ## Artifact Storage
 
@@ -196,7 +196,8 @@ Local mode stores generated artifacts under:
 .hasna/knowledge/artifacts/
 ```
 
-Cloud mode may store generated artifacts under an S3-compatible prefix:
+The retained contract can describe a future hosted wrapper's S3-compatible
+prefix, but Stage A treats it as metadata and cannot read or write it:
 
 ```text
 s3://<bucket>/<prefix>/.hasna/knowledge/
@@ -265,8 +266,9 @@ Semantic search state is derived but expensive. Local sync may copy vector rows
 when provider/model/dimensions/source hash match, but must be able to rebuild
 them from chunks and source refs.
 
-Hosted mode may replace local JSON vectors with pgvector or managed vector
-stores. CLI, SDK, and MCP should keep the same search/context result contracts.
+A future hosted wrapper may replace local JSON vectors with pgvector or managed
+vector stores while preserving the search/context result contracts. Stage A
+does not construct those hosted stores.
 
 ## Acceptance Criteria
 
@@ -287,5 +289,5 @@ stores. CLI, SDK, and MCP should keep the same search/context result contracts.
 - Sync can pull/push SQLite catalog rows and generated artifacts without copying
   raw open-files bytes into knowledge.
 - Conflict records are inspectable before approval.
-- The same contract can run over LAN/Tailscale/SSH locally or a hosted API/S3
-  backend later.
+- The same contract can run over LAN/Tailscale/SSH locally; a future hosted
+  wrapper may adapt it to a hosted API or S3 backend.

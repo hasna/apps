@@ -1,0 +1,61 @@
+{
+  "contract_version": 1,
+  "producer": "open-files",
+  "consumer": "@hasna/knowledge",
+  "optional_sibling_policy": "informational-only; sibling absence must not skip required contract tests",
+  "manifest_required_fields": [
+    "source_ref",
+    "file_id",
+    "revision_id",
+    "hash",
+    "status",
+    "permissions"
+  ],
+  "outbox_required_fields": [
+    "event",
+    "source_ref",
+    "hash",
+    "status",
+    "permissions"
+  ],
+  "raw_sentinel": "RAW_CONTRACT_BYTES_MUST_NOT_PERSIST",
+  "manifest_items": [
+    {
+      "source_ref": "open-files://file/contract-policy/revision/rev-before",
+      "file_id": "contract-policy",
+      "source_id": "contract-source",
+      "revision_id": "rev-before",
+      "path": "contract/policy.md",
+      "name": "policy.md",
+      "mime": "text/markdown",
+      "size": 64,
+      "hash": "sha256:contract-before",
+      "status": "active",
+      "updated_at": "2026-01-01T00:00:00.000Z",
+      "permissions": {
+        "mode": "read_only",
+        "allowed_purposes": [
+          "knowledge_index"
+        ]
+      },
+      "metadata": {
+        "contract_marker": "open-files-v1"
+      },
+      "raw_bytes": "RAW_CONTRACT_BYTES_MUST_NOT_PERSIST",
+      "extracted_text": "Versioned fixture policy text for local knowledge indexing."
+    }
+  ],
+  "outbox_events": [
+    {
+      "event": "deleted",
+      "source_ref": "open-files://file/contract-policy/revision/rev-before",
+      "hash": "sha256:contract-before",
+      "status": "deleted",
+      "updated_at": "2026-01-01T01:00:00.000Z",
+      "permissions": {
+        "mode": "read_only",
+        "allowed_purposes": []
+      }
+    }
+  ]
+}

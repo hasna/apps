@@ -29,9 +29,11 @@ The hosted wrapper owns:
   operations.
 
 Local mode must not require hosted identity, billing, queue workers, or hosted
-object storage. Hosted mode is an explicit remote boundary selected through
-`knowledge setup --mode hosted` plus `KNOWLEDGE_API_URL` and
-`KNOWLEDGE_API_KEY`.
+object storage. During Stage A, only local mode is executable:
+`knowledge setup --mode hosted`, `KNOWLEDGE_API_URL`, and
+`KNOWLEDGE_API_KEY` select typed containment and do not read or write auth,
+config, workspace, provider, or network state. A future wrapper may define an
+explicit remote boundary behind those retained compatibility names.
 
 ## Identity And Access
 
@@ -115,13 +117,17 @@ query, provider/model, usage, citations, artifacts, events, logs, errors,
 timestamps, and cost metadata. Workers should be idempotent and keyed by source
 revision, artifact hash, or run id where possible.
 
-## API Surface
+## Future API Surface
 
-The wrapper should implement the contract printed by:
+The future wrapper should implement the retained contract shape associated with:
 
 ```bash
 knowledge remote contracts --scope project --json
 ```
+
+That command is compatibility syntax only in Stage A and returns typed
+containment; it does not construct a remote client or print a live hosted
+registry from this package.
 
 Required endpoint families:
 

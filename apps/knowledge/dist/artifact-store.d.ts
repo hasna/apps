@@ -1,4 +1,4 @@
-import type { KnowledgeConfig, KnowledgeWorkspace } from './workspace';
+import { type KnowledgeConfig, type KnowledgeWorkspace } from './workspace';
 interface S3ClientLike {
     send(command: unknown): Promise<any>;
 }
@@ -21,6 +21,7 @@ export interface ArtifactStore {
     getText(key: string): Promise<string>;
     exists(key: string): Promise<boolean>;
 }
+export declare function assertArtifactStoreMatchesWorkspace(store: ArtifactStore, workspace: KnowledgeWorkspace): void;
 export declare function normalizeArtifactKey(key: string): string;
 export declare class LocalArtifactStore implements ArtifactStore {
     private readonly root;

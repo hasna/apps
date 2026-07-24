@@ -1,53 +1,33 @@
 /**
  * @hasna/knowledge — HTTP serve surface (knowledge-serve).
  *
- * A real HTTP API wrapping the knowledge core library. PURE REMOTE per
- * Amendment A1: the service reads and writes the shared cloud Postgres directly
- * (no local cache, no sync engine in the service). Requests are authenticated
- * with @hasna/contracts API-key middleware.
+ * Stage A is a contained HTTP surface: liveness and static metadata remain
+ * available, while every data/readiness route fails before auth or datastore
+ * construction until trusted project authority exists.
  *
  * Surfaces:
  *   GET  /health          liveness — { status, version, mode }         (public)
- *   GET  /ready           readiness — pings the DB                      (public)
+ *   GET  /ready           readiness — always 503, no dependency probes (public)
  *   GET  /version         { status, version, mode }                    (public)
  *   GET  /openapi.json    OpenAPI 3 document (source for the SDK)       (public)
- *   GET  /v1/registry     knowledge registry contract                  (auth: knowledge:read)
- *   POST /v1/notes        create a knowledge item                      (auth: knowledge:write)
- *   GET  /v1/notes        list knowledge items                         (auth: knowledge:read)
- *   GET  /v1/notes/{id}   fetch one knowledge item                     (auth: knowledge:read)
- *   PATCH /v1/notes/{id}  update a knowledge item                      (auth: knowledge:write)
- *   DELETE /v1/notes/{id} delete a knowledge item                      (auth: knowledge:write)
+ *   /v1/registry, /v1/notes* return typed 403/503 before auth/datastore
+ *   construction. Positive hosted authority remains disabled in Stage A.
  */
 import { readFileSync } from 'node:fs';
-import { verifyApiKey, ApiKeyStore, type ApiKeyVerifier, type ApiKeyPrincipal } from '@hasna/contracts/auth';
-import { createKnowledgeCloudClient } from './db/remote-storage.js';
-import { knowledgeRegistryContract } from './remote-client.js';
-import { makeId, makeShortId, type KnowledgeItem } from './store.js';
+import type { ApiKeyStore, ApiKeyVerifier } from '@hasna/contracts/auth';
+import type { KnowledgeItem } from './store.js';
 import type { PoolQueryClient } from './generated/storage-kit/index.js';
+import {
+  authorityContainmentError,
+  type KnowledgeAuthorityState,
+} from './runtime-role.js';
 
 export const KNOWLEDGE_SERVE_APP = 'knowledge';
 
-/**
- * Restore the vendored storage kit's intended `sslmode=require` semantics
- * (encrypt, do NOT verify — the fleet standard for in-VPC RDS) under
- * node-postgres >= 8.22, which otherwise reinterprets a bare `sslmode=require`
- * as `verify-full`. Appends libpq-compat so `require`/`prefer` mean exactly what
- * the kit documents. Never logs the URL. Returns the (possibly) updated value.
- */
-export function normalizeCloudDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const key = 'HASNA_KNOWLEDGE_DATABASE_URL';
-  const url = env[key] ?? env.KNOWLEDGE_DATABASE_URL;
-  if (!url) return url;
-  const lower = url.toLowerCase();
-  const needsCompat =
-    (lower.includes('sslmode=require') || lower.includes('sslmode=prefer')) &&
-    !lower.includes('uselibpqcompat');
-  if (!needsCompat) return url;
-  const updated = url.includes('?')
-    ? `${url}&uselibpqcompat=true`
-    : `${url}?uselibpqcompat=true`;
-  env[key] = updated;
-  return updated;
+/** Redacted compatibility surface: reports presence without returning a DSN. */
+export function normalizeCloudDatabaseUrl(env?: NodeJS.ProcessEnv): string | undefined;
+export function normalizeCloudDatabaseUrl(): string | undefined {
+  return undefined;
 }
 
 function resolveVersion(): string {
@@ -62,22 +42,8 @@ function resolveVersion(): string {
   }
 }
 
-function resolveSigningSecret(env: NodeJS.ProcessEnv = process.env): string {
-  const secret =
-    env.HASNA_KNOWLEDGE_API_SIGNING_KEY ??
-    env.API_KEY_SIGNING_SECRET ??
-    env.HASNA_API_SIGNING_KEY;
-  if (!secret) {
-    throw new Error(
-      'knowledge-serve requires an API signing secret: set HASNA_KNOWLEDGE_API_SIGNING_KEY ' +
-        '(or API_KEY_SIGNING_SECRET / HASNA_API_SIGNING_KEY).',
-    );
-  }
-  return secret;
-}
-
 // ---------------------------------------------------------------------------
-// Note repository — knowledge_items in the cloud Postgres (PURE REMOTE / A1).
+// Contained NoteRepo compatibility shape. Every method throws before client use.
 // ---------------------------------------------------------------------------
 
 export interface NoteInput {
@@ -95,119 +61,44 @@ export interface NoteListOptions {
   includeArchived?: boolean;
 }
 
-function rowToItem(row: Record<string, unknown>): KnowledgeItem {
-  const parseJson = <T>(value: unknown, fallback: T): T => {
-    if (value == null) return fallback;
-    if (typeof value === 'string') {
-      try {
-        return JSON.parse(value) as T;
-      } catch {
-        return fallback;
-      }
-    }
-    return value as T;
-  };
-  return {
-    id: String(row.id),
-    short_id: (row.short_id as string | null) ?? null,
-    title: String(row.title ?? ''),
-    content: String(row.content ?? ''),
-    url: (row.url as string | null) ?? null,
-    tags: parseJson<string[]>(row.tags, []),
-    metadata: parseJson<Record<string, unknown>>(row.metadata, {}),
-    archived: Boolean(row.archived),
-    created_at: String(row.created_at),
-    updated_at: String(row.updated_at),
-  };
+function containedNoteRepo(): never {
+  throw authorityContainmentError(undefined, 'server');
 }
 
 export class NoteRepo {
-  constructor(private readonly client: PoolQueryClient) {}
+  declare private readonly client: PoolQueryClient;
 
-  async create(input: NoteInput): Promise<KnowledgeItem> {
-    if (!input.title || typeof input.title !== 'string') {
-      throw new HttpError(400, 'title is required');
-    }
-    const id = makeId();
-    const now = new Date().toISOString();
-    const row = await this.client.get<Record<string, unknown>>(
-      `INSERT INTO knowledge_items (id, short_id, title, content, url, tags, metadata, archived, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,FALSE,$8,$9)
-       RETURNING *`,
-      [
-        id,
-        makeShortId(id),
-        input.title,
-        input.content ?? '',
-        input.url ?? null,
-        JSON.stringify(input.tags ?? []),
-        JSON.stringify(input.metadata ?? {}),
-        now,
-        now,
-      ],
-    );
-    return rowToItem(row!);
+  constructor(client: PoolQueryClient) {
+    Object.defineProperty(this, 'client', {
+      value: undefined,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
   }
 
-  async list(options: NoteListOptions = {}): Promise<{ items: KnowledgeItem[]; total: number }> {
-    const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
-    const offset = Math.max(options.offset ?? 0, 0);
-    const where: string[] = [];
-    const params: unknown[] = [];
-    if (!options.includeArchived) where.push('archived = FALSE');
-    if (options.search) {
-      params.push(`%${options.search}%`);
-      where.push(`(title ILIKE $${params.length} OR content ILIKE $${params.length})`);
-    }
-    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const totalRow = await this.client.get<{ count: string }>(
-      `SELECT count(*)::text AS count FROM knowledge_items ${whereSql}`,
-      params,
-    );
-    const rows = await this.client.many<Record<string, unknown>>(
-      `SELECT * FROM knowledge_items ${whereSql} ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`,
-      params,
-    );
-    return { items: rows.map(rowToItem), total: Number(totalRow?.count ?? 0) };
+  async create(input: NoteInput): Promise<KnowledgeItem> {
+    return containedNoteRepo();
+  }
+
+  list(options?: NoteListOptions): Promise<{ items: KnowledgeItem[]; total: number }>;
+  async list(): Promise<{ items: KnowledgeItem[]; total: number }> {
+    return containedNoteRepo();
   }
 
   async get(idOrShort: string): Promise<KnowledgeItem | null> {
-    const row = await this.client.get<Record<string, unknown>>(
-      `SELECT * FROM knowledge_items WHERE id = $1 OR short_id = $1 LIMIT 1`,
-      [idOrShort],
-    );
-    return row ? rowToItem(row) : null;
+    return containedNoteRepo();
   }
 
-  async update(idOrShort: string, patch: Partial<NoteInput> & { archived?: boolean }): Promise<KnowledgeItem | null> {
-    const existing = await this.get(idOrShort);
-    if (!existing) return null;
-    const sets: string[] = [];
-    const params: unknown[] = [];
-    const push = (col: string, val: unknown, cast = '') => {
-      params.push(val);
-      sets.push(`${col} = $${params.length}${cast}`);
-    };
-    if (patch.title !== undefined) push('title', patch.title);
-    if (patch.content !== undefined) push('content', patch.content);
-    if (patch.url !== undefined) push('url', patch.url);
-    if (patch.tags !== undefined) push('tags', JSON.stringify(patch.tags), '::jsonb');
-    if (patch.metadata !== undefined) push('metadata', JSON.stringify(patch.metadata), '::jsonb');
-    if (patch.archived !== undefined) push('archived', patch.archived);
-    push('updated_at', new Date().toISOString());
-    params.push(existing.id);
-    const row = await this.client.get<Record<string, unknown>>(
-      `UPDATE knowledge_items SET ${sets.join(', ')} WHERE id = $${params.length} RETURNING *`,
-      params,
-    );
-    return row ? rowToItem(row) : null;
+  async update(
+    idOrShort: string,
+    patch: Partial<NoteInput> & { archived?: boolean },
+  ): Promise<KnowledgeItem | null> {
+    return containedNoteRepo();
   }
 
   async delete(idOrShort: string): Promise<boolean> {
-    const existing = await this.get(idOrShort);
-    if (!existing) return false;
-    await this.client.execute(`DELETE FROM knowledge_items WHERE id = $1`, [existing.id]);
-    return true;
+    return containedNoteRepo();
   }
 }
 
@@ -216,6 +107,17 @@ export class NoteRepo {
 // ---------------------------------------------------------------------------
 
 export function knowledgeOpenApi(version: string): Record<string, unknown> {
+  const containmentResponseRefs = {
+    '403': { $ref: '#/components/responses/KnowledgeProjectForbidden' },
+    '503': { $ref: '#/components/responses/KnowledgeUnavailable' },
+  };
+  const stageAOperation = {
+    description: 'Disabled during Stage A. Project-authority containment is evaluated before authentication; future positive authority is explicitly deferred.',
+    deprecated: true,
+    security: [],
+    'x-knowledge-stage-a-containment': 'pre-auth',
+    'x-knowledge-operation-enabled': false,
+  };
   const noteSchema = {
     type: 'object',
     properties: {
@@ -256,7 +158,11 @@ export function knowledgeOpenApi(version: string): Record<string, unknown> {
   };
   return {
     openapi: '3.0.3',
-    info: { title: 'Knowledge', version, description: '@hasna/knowledge self-hosted HTTP API' },
+    info: {
+      title: 'Knowledge',
+      version,
+      description: '@hasna/knowledge Stage-A contained HTTP API; data operations fail before authentication or datastore access.',
+    },
     components: {
       securitySchemes: { apiKey: { type: 'apiKey', in: 'header', name: 'x-api-key' } },
       schemas: {
@@ -271,12 +177,46 @@ export function knowledgeOpenApi(version: string): Record<string, unknown> {
           },
           required: ['items', 'total'],
         },
+        KnowledgeContainmentResponse: {
+          type: 'object',
+          properties: {
+            ok: { type: 'boolean', enum: [false] },
+            code: {
+              type: 'string',
+              enum: [
+                'KNOWLEDGE_AUTHORITY_UNAVAILABLE',
+                'KNOWLEDGE_PROJECT_FORBIDDEN',
+                'KNOWLEDGE_POSITIVE_AUTHORITY_DISABLED',
+              ],
+            },
+            status: { type: 'integer', enum: [403, 503] },
+            role: { type: 'string', enum: ['hosted-server'] },
+            surface: { type: 'string', enum: ['server'] },
+            message: { type: 'string' },
+          },
+          required: ['ok', 'code', 'status', 'role', 'surface', 'message'],
+        },
+      },
+      responses: {
+        KnowledgeProjectForbidden: {
+          description: 'Trusted server-side authority has zero Knowledge project grants; evaluated before authentication.',
+          content: {
+            'application/json': { schema: { $ref: '#/components/schemas/KnowledgeContainmentResponse' } },
+          },
+        },
+        KnowledgeUnavailable: {
+          description: 'Authority is missing or untrusted, or positive hosted authority remains disabled; evaluated before authentication.',
+          content: {
+            'application/json': { schema: { $ref: '#/components/schemas/KnowledgeContainmentResponse' } },
+          },
+        },
       },
     },
-    security: [{ apiKey: [] }],
+    security: [],
     paths: {
       '/v1/notes': {
         get: {
+          ...stageAOperation,
           operationId: 'listNotes',
           summary: 'List knowledge items',
           parameters: [
@@ -285,10 +225,11 @@ export function knowledgeOpenApi(version: string): Record<string, unknown> {
             { name: 'search', in: 'query', schema: { type: 'string' } },
           ],
           responses: {
-            '200': { content: { 'application/json': { schema: { $ref: '#/components/schemas/NoteList' } } } },
+            ...containmentResponseRefs,
           },
         },
         post: {
+          ...stageAOperation,
           operationId: 'createNote',
           summary: 'Create a knowledge item',
           requestBody: {
@@ -296,20 +237,22 @@ export function knowledgeOpenApi(version: string): Record<string, unknown> {
             content: { 'application/json': { schema: { $ref: '#/components/schemas/NoteInput' } } },
           },
           responses: {
-            '201': { content: { 'application/json': { schema: { $ref: '#/components/schemas/Note' } } } },
+            ...containmentResponseRefs,
           },
         },
       },
       '/v1/notes/{id}': {
         get: {
+          ...stageAOperation,
           operationId: 'getNote',
           summary: 'Fetch a knowledge item',
           parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
           responses: {
-            '200': { content: { 'application/json': { schema: { $ref: '#/components/schemas/Note' } } } },
+            ...containmentResponseRefs,
           },
         },
         patch: {
+          ...stageAOperation,
           operationId: 'updateNote',
           summary: 'Update a knowledge item',
           parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
@@ -318,22 +261,26 @@ export function knowledgeOpenApi(version: string): Record<string, unknown> {
             content: { 'application/json': { schema: { $ref: '#/components/schemas/NotePatch' } } },
           },
           responses: {
-            '200': { content: { 'application/json': { schema: { $ref: '#/components/schemas/Note' } } } },
+            ...containmentResponseRefs,
           },
         },
         delete: {
+          ...stageAOperation,
           operationId: 'deleteNote',
           summary: 'Delete a knowledge item',
           parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
-          responses: { '204': {} },
+          responses: {
+            ...containmentResponseRefs,
+          },
         },
       },
       '/v1/registry': {
         get: {
+          ...stageAOperation,
           operationId: 'getRegistry',
           summary: 'Knowledge registry contract',
           responses: {
-            '200': { content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } } },
+            ...containmentResponseRefs,
           },
         },
       },
@@ -365,26 +312,11 @@ export interface ServeDeps {
   version: string;
 }
 
-export function createServeHandler(deps: ServeDeps): (req: Request) => Promise<Response> {
-  const repo = new NoteRepo(deps.client);
-  const mode = 'cloud';
+type InternalServeDeps = ServeDeps & { authority?: KnowledgeAuthorityState };
 
-  const authOrThrow = async (
-    req: Request,
-    requiredScopes: string[],
-  ): Promise<ApiKeyPrincipal> => {
-    const url = new URL(req.url);
-    const decision = await deps.verifier.authenticate(req.headers, {
-      method: req.method,
-      path: url.pathname,
-      requiredScopes,
-    });
-    if (decision.ok === false) {
-      throw new HttpError(decision.status, decision.message);
-    }
-    void deps.store.touchLastUsed(decision.principal.kid).catch(() => {});
-    return decision.principal;
-  };
+export function createServeHandler(deps: ServeDeps): (req: Request) => Promise<Response> {
+  const internalDeps = deps as InternalServeDeps;
+  const mode = 'contained';
 
   return async (req: Request): Promise<Response> => {
     const url = new URL(req.url);
@@ -400,71 +332,23 @@ export function createServeHandler(deps: ServeDeps): (req: Request) => Promise<R
         return json({ status: 'ok', version: deps.version, mode });
       }
       if (path === '/ready' && method === 'GET') {
-        try {
-          await deps.client.query('SELECT 1');
-          return json({ status: 'ready', version: deps.version, mode });
-        } catch {
-          return json({ status: 'unavailable', version: deps.version, mode }, 503);
-        }
+        const error = authorityContainmentError(internalDeps.authority, 'server');
+        const { status: httpStatus, ...containment } = error.toJSON();
+        return json({
+          status: 'unavailable',
+          http_status: httpStatus,
+          version: deps.version,
+          mode,
+          ...containment,
+        }, 503);
       }
       if (path === '/openapi.json' && method === 'GET') {
         return json(knowledgeOpenApi(deps.version));
       }
 
-      // ---- Registry ----
-      if (path === '/v1/registry' && method === 'GET') {
-        await authOrThrow(req, ['knowledge:read']);
-        return json(
-          knowledgeRegistryContract({
-            mode: 'hosted',
-            sourceSchemes: ['open-files', 's3', 'web', 'file'],
-            storageType: 's3',
-            artifactUriPrefix: process.env.HASNA_KNOWLEDGE_S3_PREFIX ?? null,
-          }),
-        );
-      }
-
-      // ---- Notes CRUD ----
-      if (path === '/v1/notes') {
-        if (method === 'GET') {
-          await authOrThrow(req, ['knowledge:read']);
-          const result = await repo.list({
-            limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined,
-            offset: url.searchParams.has('offset') ? Number(url.searchParams.get('offset')) : undefined,
-            search: url.searchParams.get('search') ?? undefined,
-            includeArchived: url.searchParams.get('includeArchived') === 'true',
-          });
-          return json(result);
-        }
-        if (method === 'POST') {
-          await authOrThrow(req, ['knowledge:write']);
-          const body = (await req.json().catch(() => ({}))) as NoteInput;
-          const item = await repo.create(body);
-          return json(item, 201);
-        }
-        return json({ error: 'method_not_allowed' }, 405);
-      }
-
-      const noteMatch = path.match(/^\/v1\/notes\/([^/]+)$/);
-      if (noteMatch) {
-        const id = decodeURIComponent(noteMatch[1]!);
-        if (method === 'GET') {
-          await authOrThrow(req, ['knowledge:read']);
-          const item = await repo.get(id);
-          return item ? json(item) : json({ error: 'not_found' }, 404);
-        }
-        if (method === 'PATCH') {
-          await authOrThrow(req, ['knowledge:write']);
-          const body = (await req.json().catch(() => ({}))) as Partial<NoteInput>;
-          const item = await repo.update(id, body);
-          return item ? json(item) : json({ error: 'not_found' }, 404);
-        }
-        if (method === 'DELETE') {
-          await authOrThrow(req, ['knowledge:write']);
-          const ok = await repo.delete(id);
-          return ok ? new Response(null, { status: 204 }) : json({ error: 'not_found' }, 404);
-        }
-        return json({ error: 'method_not_allowed' }, 405);
+      if (path === '/v1/registry' || path === '/v1/notes' || path.startsWith('/v1/notes/')) {
+        const error = authorityContainmentError(internalDeps.authority, 'server');
+        return json(error.toJSON(), error.status);
       }
 
       return json({ error: 'not_found', path }, 404);
@@ -492,35 +376,22 @@ export interface RunningServe {
 }
 
 /**
- * Start the knowledge HTTP service on Bun. Opens a PURE-REMOTE cloud pool and a
- * contracts API-key verifier backed by the api_keys table (revocation).
+ * Start the Stage-A liveness server. It intentionally constructs no auth,
+ * Postgres, schema, provider, or hosted transport dependencies.
  */
 export async function startKnowledgeServe(options: StartServeOptions = {}): Promise<RunningServe> {
+  const runtimeOptions = options as StartServeOptions & { version?: string };
   const env = options.env ?? process.env;
   const port = options.port ?? Number(env.PORT ?? env.HASNA_KNOWLEDGE_SERVE_PORT ?? 8080);
   const hostname = options.hostname ?? env.HOST ?? '0.0.0.0';
-  const version = resolveVersion();
+  const version = runtimeOptions.version ?? resolveVersion();
 
-  normalizeCloudDatabaseUrl(env);
-  const client = createKnowledgeCloudClient();
-  const store = new ApiKeyStore(client);
-  // DDL (the api_keys table) is owned by the migration task (run as the DB
-  // owner role); the service connects with a DML-only app role per least
-  // privilege, so it must NOT attempt CREATE TABLE here. The api_keys schema is
-  // a deploy prerequisite (bun scripts/apply-cloud-migrations.mjs).
-  const verifier = verifyApiKey({
-    app: KNOWLEDGE_SERVE_APP,
-    signingSecret: resolveSigningSecret(env),
-    isRevoked: store.isRevoked,
-    audit: (e) => {
-      if (e.outcome === 'deny') {
-        // Never log tokens/keys — kid + reason only.
-        console.warn(`[knowledge-serve] auth deny kid=${e.kid ?? '-'} reason=${e.reason} ${e.method} ${e.path}`);
-      }
-    },
+  const handler = createServeHandler({
+    client: undefined as never,
+    verifier: undefined as never,
+    store: undefined as never,
+    version,
   });
-
-  const handler = createServeHandler({ client, verifier, store, version });
 
   // Bun.serve is provided by the Bun runtime the Dockerfile uses.
   const BunGlobal = (globalThis as unknown as { Bun?: { serve: (o: unknown) => { port: number; stop: () => void } } })
@@ -529,14 +400,13 @@ export async function startKnowledgeServe(options: StartServeOptions = {}): Prom
     throw new Error('knowledge-serve requires the Bun runtime (Bun.serve unavailable).');
   }
   const server = BunGlobal.serve({ port, hostname, fetch: handler });
-  console.log(`[knowledge-serve] listening on http://${hostname}:${server.port} (mode=cloud, version=${version})`);
+  console.log(`[knowledge-serve] listening on http://${hostname}:${server.port} (mode=contained, version=${version})`);
 
   return {
     port: server.port,
     hostname,
     stop: async () => {
       server.stop();
-      await client.close();
     },
   };
 }

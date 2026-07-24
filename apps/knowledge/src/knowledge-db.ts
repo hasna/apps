@@ -1,7 +1,64 @@
-import { Database } from 'bun:sqlite';
+import { Database as BunDatabase } from 'bun:sqlite';
 import { ensureParentDir } from './workspace';
+import {
+  openAnchoredMutableRegularFile,
+  type AnchoredMutableFileHandle,
+  type AnchoredMutableFileSnapshot,
+} from './anchored-fs';
 
 export const CURRENT_SCHEMA_VERSION = 8;
+
+export type KnowledgeDbTestEvent = 'database-before-constructor' | 'database-before-migration';
+
+let knowledgeDbTestHook: ((event: KnowledgeDbTestEvent, path: string) => void) | undefined;
+
+/** Deterministic race injection for repository tests; never exported by the package root. */
+export function setKnowledgeDbTestHook(
+  hook: ((event: KnowledgeDbTestEvent, path: string) => void) | undefined,
+): void {
+  knowledgeDbTestHook = hook;
+}
+
+function fireKnowledgeDbTestHook(event: KnowledgeDbTestEvent, path: string): void {
+  knowledgeDbTestHook?.(event, path);
+}
+
+export interface KnowledgeDatabaseChanges {
+  readonly changes: number;
+  readonly lastInsertRowid: number | bigint;
+}
+
+export interface KnowledgeDatabaseStatement<
+  Row = unknown,
+  Params extends unknown[] = unknown[],
+> {
+  all(...params: Params): Row[];
+  get(...params: Params): Row | null;
+  run(...params: Params): KnowledgeDatabaseChanges;
+  values(...params: Params): unknown[][];
+}
+
+/**
+ * Package-owned structural database contract. Bun remains the private runtime
+ * implementation, but consumers do not need Bun ambient declarations merely
+ * to typecheck the published package.
+ */
+export interface KnowledgeDatabase {
+  readonly inTransaction: boolean;
+  run(sql: string, ...bindings: unknown[]): KnowledgeDatabaseChanges;
+  exec(sql: string, ...bindings: unknown[]): KnowledgeDatabaseChanges;
+  query<Row = unknown, Params extends unknown | unknown[] = unknown[]>(
+    sql: string,
+  ): KnowledgeDatabaseStatement<Row, Params extends unknown[] ? Params : [Params]>;
+  prepare<Row = unknown, Params extends unknown | unknown[] = unknown[]>(
+    sql: string,
+    params?: Params,
+  ): KnowledgeDatabaseStatement<Row, Params extends unknown[] ? Params : [Params]>;
+  transaction<Args extends unknown[], Result>(
+    callback: (...args: Args) => Result,
+  ): (...args: Args) => Result;
+  close(throwOnError?: boolean): void;
+}
 
 export interface KnowledgeDbStats {
   schema_version: number;
@@ -430,37 +487,135 @@ INSERT OR IGNORE INTO schema_versions(version, applied_at)
 VALUES (8, datetime('now'));
 `;
 
-export function openKnowledgeDb(path: string): Database {
-  ensureParentDir(path);
-  const db = new Database(path);
-  db.exec('PRAGMA foreign_keys = ON;');
-  db.exec('PRAGMA busy_timeout = 5000;');
-  return db;
+const databaseAnchors = new WeakMap<object, AnchoredMutableFileHandle>();
+
+function anchoredDatabase(
+  db: KnowledgeDatabase,
+  anchor: AnchoredMutableFileHandle,
+): KnowledgeDatabase {
+  let closed = false;
+  const proxy = new Proxy(db as object, {
+    get(target, property) {
+      if (property === 'close') {
+        return (throwOnError?: boolean) => {
+          if (closed) return;
+          closed = true;
+          try {
+            return Reflect.apply(
+              Reflect.get(target, property, target) as (...args: unknown[]) => unknown,
+              target,
+              [throwOnError],
+            );
+          } finally {
+            anchor.close();
+          }
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+    set: () => false,
+    defineProperty: () => false,
+    deleteProperty: () => false,
+    setPrototypeOf: () => false,
+  }) as KnowledgeDatabase;
+  databaseAnchors.set(proxy as object, anchor);
+  return proxy;
+}
+
+function databaseAnchor(db: KnowledgeDatabase): AnchoredMutableFileHandle {
+  const anchor = databaseAnchors.get(db as object);
+  if (!anchor) throw new Error('Knowledge database is not bound to an anchored file identity.');
+  return anchor;
+}
+
+export function verifyKnowledgeDbIdentity(
+  db: KnowledgeDatabase,
+  expected?: AnchoredMutableFileSnapshot,
+): AnchoredMutableFileSnapshot {
+  const anchor = databaseAnchor(db);
+  return expected ? anchor.verifyUnchanged(expected) : anchor.verifyIdentity();
+}
+
+function openKnowledgeDbAnchored(
+  path: string,
+  options: { ensureParent?: boolean } = {},
+): KnowledgeDatabase {
+  if (options.ensureParent !== false) ensureParentDir(path);
+  const anchor = openAnchoredMutableRegularFile(path, { create: true, mode: 0o600 });
+  const beforeConstructor = anchor.initial;
+  let raw: KnowledgeDatabase | undefined;
+  let wrapped: KnowledgeDatabase | undefined;
+  try {
+    fireKnowledgeDbTestHook('database-before-constructor', path);
+    anchor.verifyUnchanged(beforeConstructor);
+    raw = new BunDatabase(anchor.descriptorPath) as unknown as KnowledgeDatabase;
+    const db = anchoredDatabase(raw, anchor);
+    wrapped = db;
+    raw = undefined;
+    verifyKnowledgeDbIdentity(db);
+    db.exec('PRAGMA foreign_keys = ON;');
+    db.exec('PRAGMA busy_timeout = 5000;');
+    verifyKnowledgeDbIdentity(db);
+    wrapped = undefined;
+    return db;
+  } catch (error) {
+    if (wrapped) wrapped.close();
+    else try { raw?.close(); } finally { anchor.close(); }
+    throw error;
+  }
+}
+
+/** Base-compatible public database opener; internal callers use the anchored options helper. */
+export function openKnowledgeDb(path: string): KnowledgeDatabase {
+  return openKnowledgeDbAnchored(path);
+}
+
+function migrateOpenKnowledgeDb(db: KnowledgeDatabase): number {
+  db.exec(MIGRATION_1);
+  if (getSchemaVersion(db) < 2) db.exec(MIGRATION_2);
+  if (getSchemaVersion(db) < 3) db.exec(MIGRATION_3);
+  if (getSchemaVersion(db) < 4) db.exec(MIGRATION_4);
+  if (getSchemaVersion(db) < 5) db.exec(MIGRATION_5);
+  if (getSchemaVersion(db) < 6) db.exec(MIGRATION_6);
+  if (needsMigration7(db)) applyMigration7(db);
+  if (needsMigration8(db)) applyMigration8(db);
+  return getSchemaVersion(db);
+}
+
+export function openMigratedKnowledgeDb(
+  path: string,
+  options: { ensureParent?: boolean } = {},
+): KnowledgeDatabase {
+  const db = openKnowledgeDbAnchored(path, options);
+  try {
+    const beforeMigration = verifyKnowledgeDbIdentity(db);
+    fireKnowledgeDbTestHook('database-before-migration', path);
+    verifyKnowledgeDbIdentity(db, beforeMigration);
+    migrateOpenKnowledgeDb(db);
+    verifyKnowledgeDbIdentity(db);
+    return db;
+  } catch (error) {
+    db.close();
+    throw error;
+  }
 }
 
 export function migrateKnowledgeDb(path: string): { path: string; schema_version: number } {
-  const db = openKnowledgeDb(path);
+  const db = openMigratedKnowledgeDb(path);
   try {
-    db.exec(MIGRATION_1);
-    if (getSchemaVersion(db) < 2) db.exec(MIGRATION_2);
-    if (getSchemaVersion(db) < 3) db.exec(MIGRATION_3);
-    if (getSchemaVersion(db) < 4) db.exec(MIGRATION_4);
-    if (getSchemaVersion(db) < 5) db.exec(MIGRATION_5);
-    if (getSchemaVersion(db) < 6) db.exec(MIGRATION_6);
-    if (needsMigration7(db)) applyMigration7(db);
-    if (needsMigration8(db)) applyMigration8(db);
     return { path, schema_version: getSchemaVersion(db) };
   } finally {
     db.close();
   }
 }
 
-export function getSchemaVersion(db: Database): number {
+export function getSchemaVersion(db: KnowledgeDatabase): number {
   const row = db.query<{ version: number }, []>('SELECT MAX(version) AS version FROM schema_versions').get();
   return row?.version ?? 0;
 }
 
-function count(db: Database, table: string): number {
+function count(db: KnowledgeDatabase, table: string): number {
   const row = db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM ${table}`).get();
   return row?.n ?? 0;
 }
@@ -469,26 +624,26 @@ function quoteIdentifier(identifier: string): string {
   return `"${identifier.replaceAll('"', '""')}"`;
 }
 
-function tableExists(db: Database, table: string): boolean {
+function tableExists(db: KnowledgeDatabase, table: string): boolean {
   const row = db.query<{ name: string }, [string]>(
     "SELECT name FROM sqlite_master WHERE type IN ('table', 'virtual') AND name = ?",
   ).get(table);
   return Boolean(row);
 }
 
-function columnExists(db: Database, table: string, column: string): boolean {
+function columnExists(db: KnowledgeDatabase, table: string, column: string): boolean {
   if (!tableExists(db, table)) return false;
   const columns = db.query<{ name: string }, []>(`PRAGMA table_info(${quoteIdentifier(table)})`).all();
   return columns.some((row) => row.name === column);
 }
 
-function ensureColumn(db: Database, table: string, column: string, definition: string): void {
+function ensureColumn(db: KnowledgeDatabase, table: string, column: string, definition: string): void {
   if (!columnExists(db, table, column)) {
     db.exec(`ALTER TABLE ${quoteIdentifier(table)} ADD COLUMN ${quoteIdentifier(column)} ${definition};`);
   }
 }
 
-function needsMigration7(db: Database): boolean {
+function needsMigration7(db: KnowledgeDatabase): boolean {
   return getSchemaVersion(db) < 7
     || !columnExists(db, 'knowledge_sync_changes', 'logical_clock')
     || !columnExists(db, 'knowledge_sync_changes', 'bundle_id')
@@ -496,14 +651,14 @@ function needsMigration7(db: Database): boolean {
     || !tableExists(db, 'knowledge_sync_imports');
 }
 
-function applyMigration7(db: Database): void {
+function applyMigration7(db: KnowledgeDatabase): void {
   if (!tableExists(db, 'knowledge_sync_changes')) db.exec(MIGRATION_6);
   ensureColumn(db, 'knowledge_sync_changes', 'logical_clock', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn(db, 'knowledge_sync_changes', 'bundle_id', 'TEXT');
   db.exec(MIGRATION_7_TABLES_AND_INDEXES);
 }
 
-function needsMigration8(db: Database): boolean {
+function needsMigration8(db: KnowledgeDatabase): boolean {
   return getSchemaVersion(db) < 8
     || !columnExists(db, 'wiki_pages', 'valid_from')
     || !columnExists(db, 'wiki_pages', 'valid_to')
@@ -513,7 +668,7 @@ function needsMigration8(db: Database): boolean {
     || !columnExists(db, 'wiki_pages', 'last_verified_at');
 }
 
-function applyMigration8(db: Database): void {
+function applyMigration8(db: KnowledgeDatabase): void {
   if (!tableExists(db, 'wiki_pages')) db.exec(MIGRATION_1);
   ensureColumn(db, 'wiki_pages', 'valid_from', 'TEXT');
   ensureColumn(db, 'wiki_pages', 'valid_to', 'TEXT');

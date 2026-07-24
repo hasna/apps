@@ -16,1440 +16,1995 @@ var __export = (target, all) => {
 var __esm = (fn, res) => () => (fn && (res = fn(fn = 0)), res);
 var __require = import.meta.require;
 
-// src/knowledge-db.ts
-import { Database } from "bun:sqlite";
-
-// src/workspace.ts
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { homedir } from "os";
-import { dirname, join, resolve } from "path";
-var HASNA_KNOWLEDGE_APP_PATH = join(".hasna", "knowledge");
-var LEGACY_HASNA_KNOWLEDGE_APP_PATH = join(".hasna", "apps", "knowledge");
-var EXAMPLE_KNOWLEDGE_CANONICAL = {
-  division: "xyz",
-  app_type: "opensource",
-  app: "knowledge",
-  env: "prod",
-  local_path: HASNA_KNOWLEDGE_APP_PATH,
-  s3: {
-    bucket: "example-knowledge-prod",
-    region: "us-east-1",
-    profile: "example-infra",
-    prefix: ".hasna/knowledge",
-    server_side_encryption: "AES256"
-  },
-  secrets: {
-    env: "example/knowledge/prod/env",
-    aws: "example/knowledge/prod/aws",
-    s3: "example/knowledge/prod/s3",
-    rds: null,
-    future_rds: "example/knowledge/prod/rds"
-  },
-  source_owner: "open-files",
-  evidence_doc: "docs/canonical-secrets-bootstrap-2026-06-08.md"
-};
-function canonicalExampleKnowledgeStorage() {
-  return {
-    type: "s3",
-    artifacts_root: "artifacts",
-    s3: {
-      bucket: EXAMPLE_KNOWLEDGE_CANONICAL.s3.bucket,
-      prefix: EXAMPLE_KNOWLEDGE_CANONICAL.s3.prefix,
-      region: EXAMPLE_KNOWLEDGE_CANONICAL.s3.region,
-      profile: EXAMPLE_KNOWLEDGE_CANONICAL.s3.profile,
-      server_side_encryption: EXAMPLE_KNOWLEDGE_CANONICAL.s3.server_side_encryption
-    }
-  };
+// src/anchored-fs.ts
+import {
+  closeSync,
+  constants,
+  existsSync,
+  fchmodSync,
+  fstatSync,
+  fsyncSync,
+  linkSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  opendirSync,
+  readSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync
+} from "fs";
+import { createHash, randomUUID } from "crypto";
+import { basename, dirname, isAbsolute, normalize, resolve, sep } from "path";
+function fail(detail) {
+  throw new AnchoredFilesystemError(detail);
 }
-function legacyGlobalStorePath() {
-  return join(homedir(), ".open-knowledge", "db.json");
+function errno(error) {
+  return error?.code;
 }
-function globalKnowledgeHome() {
-  return join(homedir(), ".hasna", "knowledge");
-}
-function projectKnowledgeHome(cwd = process.cwd()) {
-  return resolve(cwd, HASNA_KNOWLEDGE_APP_PATH);
-}
-function legacyGlobalKnowledgeHome() {
-  return join(homedir(), LEGACY_HASNA_KNOWLEDGE_APP_PATH);
-}
-function legacyProjectKnowledgeHome(cwd = process.cwd()) {
-  return resolve(cwd, LEGACY_HASNA_KNOWLEDGE_APP_PATH);
-}
-function resolveLegacyScopedWorkspace(scope, cwd = process.cwd()) {
-  if (scope === "project" || scope === "local") {
-    return workspaceForHome(legacyProjectKnowledgeHome(cwd));
-  }
-  return workspaceForHome(legacyGlobalKnowledgeHome());
-}
-function workspaceForHome(home) {
-  return {
-    home,
-    configPath: join(home, "config.json"),
-    jsonStorePath: join(home, "db.json"),
-    knowledgeDbPath: join(home, "knowledge.db"),
-    artifactsDir: join(home, "artifacts"),
-    cacheDir: join(home, "cache"),
-    exportsDir: join(home, "exports"),
-    indexesDir: join(home, "indexes"),
-    logsDir: join(home, "logs"),
-    runsDir: join(home, "runs"),
-    schemasDir: join(home, "schemas"),
-    wikiDir: join(home, "wiki")
-  };
-}
-function defaultKnowledgeConfig() {
-  return {
-    version: 1,
-    mode: "local",
-    hosted: {
-      api_url: "https://knowledge.hasna.xyz"
-    },
-    storage: {
-      type: "local",
-      artifacts_root: "artifacts"
-    },
-    sources: {
-      preferred_ref: "open-files",
-      allowed_schemes: ["open-files", "s3", "file", "https", "http"]
-    },
-    providers: {
-      default_model: "openai:gpt-5.2",
-      aliases: {
-        fast: "openai:gpt-5-mini",
-        reasoning: "anthropic:claude-opus-4-6",
-        sonnet: "anthropic:claude-sonnet-4-6",
-        deepseek: "deepseek:deepseek-chat",
-        "deepseek-reasoning": "deepseek:deepseek-reasoner"
-      },
-      openai: {
-        api_key_env: "OPENAI_API_KEY",
-        default_model: "gpt-5.2"
-      },
-      anthropic: {
-        api_key_env: "ANTHROPIC_API_KEY",
-        default_model: "claude-sonnet-4-6"
-      },
-      deepseek: {
-        api_key_env: "DEEPSEEK_API_KEY",
-        default_model: "deepseek-chat"
-      }
-    },
-    embeddings: {
-      default_model: "openai:text-embedding-3-small",
-      dimensions: 1536,
-      batch_size: 64,
-      max_parallel_calls: 4
-    },
-    safety: {
-      network: {
-        web_search_enabled: false,
-        s3_reads_enabled: false,
-        allowed_s3_buckets: []
-      },
-      redaction: {
-        enabled: true
-      },
-      approvals: {
-        generated_writes_require_approval: true
-      }
-    }
-  };
-}
-function ensureKnowledgeWorkspace(home) {
-  const workspace = workspaceForHome(home);
-  mkdirSync(workspace.home, { recursive: true });
-  for (const dir of [
-    workspace.artifactsDir,
-    workspace.cacheDir,
-    workspace.exportsDir,
-    workspace.indexesDir,
-    workspace.logsDir,
-    workspace.runsDir,
-    workspace.schemasDir,
-    workspace.wikiDir
-  ]) {
-    mkdirSync(dir, { recursive: true });
-  }
-  if (!existsSync(workspace.configPath)) {
-    writeFileSync(workspace.configPath, `${JSON.stringify(defaultKnowledgeConfig(), null, 2)}
-`);
-  }
-  return workspace;
-}
-function resolveScopedWorkspace(scope, cwd = process.cwd()) {
-  if (scope === "project" || scope === "local") {
-    return workspaceForHome(projectKnowledgeHome(cwd));
-  }
-  return workspaceForHome(globalKnowledgeHome());
-}
-function ensureParentDir(path) {
-  mkdirSync(dirname(path), { recursive: true });
-}
-function readKnowledgeConfig(path) {
-  const raw = readFileSync(path, "utf8");
-  return JSON.parse(raw);
-}
-function writeKnowledgeConfig(path, config) {
-  ensureParentDir(path);
-  writeFileSync(path, `${JSON.stringify(config, null, 2)}
-`);
-}
-
-// src/knowledge-db.ts
-var CURRENT_SCHEMA_VERSION = 8;
-var MIGRATION_1 = `
-PRAGMA journal_mode = WAL;
-PRAGMA foreign_keys = ON;
-
-CREATE TABLE IF NOT EXISTS schema_versions (
-  version INTEGER PRIMARY KEY,
-  applied_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS sources (
-  id TEXT PRIMARY KEY,
-  uri TEXT NOT NULL UNIQUE,
-  kind TEXT NOT NULL,
-  title TEXT,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  acl_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS source_revisions (
-  id TEXT PRIMARY KEY,
-  source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
-  revision TEXT NOT NULL,
-  hash TEXT,
-  extracted_text_uri TEXT,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  UNIQUE(source_id, revision)
-);
-
-CREATE TABLE IF NOT EXISTS chunks (
-  id TEXT PRIMARY KEY,
-  source_revision_id TEXT REFERENCES source_revisions(id) ON DELETE CASCADE,
-  wiki_page_id TEXT,
-  kind TEXT NOT NULL,
-  ordinal INTEGER NOT NULL,
-  text TEXT NOT NULL,
-  token_count INTEGER,
-  start_offset INTEGER,
-  end_offset INTEGER,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS chunk_embeddings (
-  id TEXT PRIMARY KEY,
-  chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
-  provider TEXT NOT NULL,
-  model TEXT NOT NULL,
-  dimensions INTEGER NOT NULL,
-  vector_json TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  UNIQUE(chunk_id, provider, model)
-);
-
-CREATE TABLE IF NOT EXISTS wiki_pages (
-  id TEXT PRIMARY KEY,
-  path TEXT NOT NULL UNIQUE,
-  title TEXT NOT NULL,
-  artifact_uri TEXT,
-  content_hash TEXT,
-  status TEXT NOT NULL DEFAULT 'active',
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS wiki_backlinks (
-  from_page_id TEXT NOT NULL REFERENCES wiki_pages(id) ON DELETE CASCADE,
-  to_page_id TEXT NOT NULL REFERENCES wiki_pages(id) ON DELETE CASCADE,
-  label TEXT,
-  created_at TEXT NOT NULL,
-  PRIMARY KEY(from_page_id, to_page_id)
-);
-
-CREATE TABLE IF NOT EXISTS citations (
-  id TEXT PRIMARY KEY,
-  wiki_page_id TEXT REFERENCES wiki_pages(id) ON DELETE CASCADE,
-  chunk_id TEXT REFERENCES chunks(id) ON DELETE SET NULL,
-  source_uri TEXT NOT NULL,
-  quote TEXT,
-  start_offset INTEGER,
-  end_offset INTEGER,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS knowledge_indexes (
-  id TEXT PRIMARY KEY,
-  kind TEXT NOT NULL,
-  name TEXT NOT NULL,
-  artifact_uri TEXT,
-  shard_key TEXT,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  UNIQUE(kind, name, shard_key)
-);
-
-CREATE TABLE IF NOT EXISTS runs (
-  id TEXT PRIMARY KEY,
-  type TEXT NOT NULL,
-  prompt TEXT,
-  status TEXT NOT NULL,
-  provider TEXT,
-  model TEXT,
-  cost_tokens INTEGER NOT NULL DEFAULT 0,
-  cost_usd REAL NOT NULL DEFAULT 0,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS run_events (
-  id TEXT PRIMARY KEY,
-  run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-  level TEXT NOT NULL,
-  event TEXT NOT NULL,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS provider_usage (
-  id TEXT PRIMARY KEY,
-  run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
-  provider TEXT NOT NULL,
-  model TEXT NOT NULL,
-  input_tokens INTEGER NOT NULL DEFAULT 0,
-  output_tokens INTEGER NOT NULL DEFAULT 0,
-  cost_usd REAL NOT NULL DEFAULT 0,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS redaction_findings (
-  id TEXT PRIMARY KEY,
-  source_uri TEXT,
-  run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
-  severity TEXT NOT NULL,
-  finding_type TEXT NOT NULL,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS storage_objects (
-  id TEXT PRIMARY KEY,
-  artifact_uri TEXT NOT NULL UNIQUE,
-  kind TEXT NOT NULL,
-  content_type TEXT,
-  hash TEXT,
-  size_bytes INTEGER,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-
-CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
-  text,
-  title,
-  source_uri,
-  content='',
-  tokenize='porter unicode61'
-);
-
-INSERT OR IGNORE INTO schema_versions(version, applied_at)
-VALUES (1, datetime('now'));
-`;
-var MIGRATION_2 = `
-DROP TABLE IF EXISTS chunks_fts;
-
-CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
-  chunk_id UNINDEXED,
-  text,
-  title,
-  source_uri,
-  tokenize='porter unicode61'
-);
-
-INSERT OR IGNORE INTO schema_versions(version, applied_at)
-VALUES (2, datetime('now'));
-`;
-var MIGRATION_3 = `
-CREATE TABLE IF NOT EXISTS audit_events (
-  id TEXT PRIMARY KEY,
-  event_type TEXT NOT NULL,
-  action TEXT NOT NULL,
-  target_uri TEXT,
-  decision TEXT NOT NULL,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS approval_gates (
-  id TEXT PRIMARY KEY,
-  action TEXT NOT NULL,
-  target_uri TEXT,
-  status TEXT NOT NULL,
-  reason TEXT,
-  approved_by TEXT,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_audit_events_action ON audit_events(action);
-CREATE INDEX IF NOT EXISTS idx_audit_events_target ON audit_events(target_uri);
-CREATE INDEX IF NOT EXISTS idx_audit_events_created ON audit_events(created_at);
-CREATE INDEX IF NOT EXISTS idx_approval_gates_action ON approval_gates(action);
-CREATE INDEX IF NOT EXISTS idx_approval_gates_status ON approval_gates(status);
-
-INSERT OR IGNORE INTO schema_versions(version, applied_at)
-VALUES (3, datetime('now'));
-`;
-var MIGRATION_4 = `
-CREATE TABLE IF NOT EXISTS vector_index_entries (
-  id TEXT PRIMARY KEY,
-  chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
-  source_revision_id TEXT REFERENCES source_revisions(id) ON DELETE CASCADE,
-  provider TEXT NOT NULL,
-  model TEXT NOT NULL,
-  dimensions INTEGER NOT NULL,
-  vector_json TEXT NOT NULL,
-  vector_norm REAL NOT NULL,
-  source_uri TEXT,
-  source_ref TEXT,
-  revision TEXT,
-  hash TEXT,
-  start_offset INTEGER,
-  end_offset INTEGER,
-  token_count INTEGER,
-  status TEXT NOT NULL DEFAULT 'active',
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  UNIQUE(chunk_id, provider, model)
-);
-
-CREATE INDEX IF NOT EXISTS idx_vector_index_provider_model ON vector_index_entries(provider, model);
-CREATE INDEX IF NOT EXISTS idx_vector_index_source_revision ON vector_index_entries(source_revision_id);
-CREATE INDEX IF NOT EXISTS idx_vector_index_source_uri ON vector_index_entries(source_uri);
-CREATE INDEX IF NOT EXISTS idx_vector_index_status ON vector_index_entries(status);
-
-INSERT OR IGNORE INTO schema_versions(version, applied_at)
-VALUES (4, datetime('now'));
-`;
-var MIGRATION_5 = `
-CREATE TABLE IF NOT EXISTS reindex_queue (
-  id TEXT PRIMARY KEY,
-  kind TEXT NOT NULL,
-  target_id TEXT NOT NULL,
-  source_uri TEXT,
-  reason TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending',
-  attempts INTEGER NOT NULL DEFAULT 0,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  UNIQUE(kind, target_id, reason)
-);
-
-CREATE INDEX IF NOT EXISTS idx_reindex_queue_status ON reindex_queue(status);
-CREATE INDEX IF NOT EXISTS idx_reindex_queue_kind_target ON reindex_queue(kind, target_id);
-CREATE INDEX IF NOT EXISTS idx_reindex_queue_source_uri ON reindex_queue(source_uri);
-
-INSERT OR IGNORE INTO schema_versions(version, applied_at)
-VALUES (5, datetime('now'));
-`;
-var MIGRATION_6 = `
-CREATE TABLE IF NOT EXISTS knowledge_machines (
-  machine_id TEXT PRIMARY KEY,
-  hostname TEXT,
-  platform TEXT,
-  user_label TEXT,
-  workspace_home TEXT,
-  tailscale_dns TEXT,
-  tailscale_ips_json TEXT NOT NULL DEFAULT '[]',
-  ssh_target TEXT,
-  last_seen_at TEXT,
-  capabilities_json TEXT NOT NULL DEFAULT '{}',
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS knowledge_sync_snapshots (
-  id TEXT PRIMARY KEY,
-  machine_id TEXT NOT NULL,
-  scope TEXT NOT NULL,
-  workspace_home TEXT NOT NULL,
-  sqlite_schema_version INTEGER NOT NULL,
-  artifact_root_uri TEXT NOT NULL,
-  content_hash TEXT NOT NULL,
-  tables_json TEXT NOT NULL,
-  artifact_hashes_json TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS knowledge_sync_changes (
-  id TEXT PRIMARY KEY,
-  origin_machine_id TEXT NOT NULL,
-  updated_by_machine_id TEXT NOT NULL,
-  entity_kind TEXT NOT NULL,
-  entity_id TEXT NOT NULL,
-  operation TEXT NOT NULL,
-  base_hash TEXT,
-  next_hash TEXT,
-  source_ref TEXT,
-  source_revision_id TEXT,
-  artifact_uri TEXT,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS knowledge_sync_conflicts (
-  id TEXT PRIMARY KEY,
-  entity_kind TEXT NOT NULL,
-  entity_id TEXT NOT NULL,
-  local_machine_id TEXT NOT NULL,
-  remote_machine_id TEXT NOT NULL,
-  local_hash TEXT,
-  remote_hash TEXT,
-  base_hash TEXT,
-  status TEXT NOT NULL,
-  resolution_strategy TEXT,
-  proposed_patch_uri TEXT,
-  approved_by TEXT,
-  resolved_at TEXT,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_knowledge_machines_last_seen ON knowledge_machines(last_seen_at);
-CREATE INDEX IF NOT EXISTS idx_sync_snapshots_machine_created ON knowledge_sync_snapshots(machine_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_sync_snapshots_hash ON knowledge_sync_snapshots(content_hash);
-CREATE INDEX IF NOT EXISTS idx_sync_changes_entity ON knowledge_sync_changes(entity_kind, entity_id);
-CREATE INDEX IF NOT EXISTS idx_sync_changes_origin ON knowledge_sync_changes(origin_machine_id);
-CREATE INDEX IF NOT EXISTS idx_sync_changes_created ON knowledge_sync_changes(created_at);
-CREATE INDEX IF NOT EXISTS idx_sync_conflicts_status ON knowledge_sync_conflicts(status);
-CREATE INDEX IF NOT EXISTS idx_sync_conflicts_entity ON knowledge_sync_conflicts(entity_kind, entity_id);
-
-INSERT OR IGNORE INTO schema_versions(version, applied_at)
-VALUES (6, datetime('now'));
-`;
-var MIGRATION_7_TABLES_AND_INDEXES = `
-CREATE TABLE IF NOT EXISTS knowledge_sync_table_clocks (
-  table_name TEXT NOT NULL,
-  machine_id TEXT NOT NULL,
-  logical_clock INTEGER NOT NULL DEFAULT 0,
-  high_water_hash TEXT,
-  high_water_bundle_id TEXT,
-  origin_machine_id TEXT,
-  updated_by_machine_id TEXT,
-  last_applied_at TEXT,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  PRIMARY KEY(table_name, machine_id)
-);
-
-CREATE TABLE IF NOT EXISTS knowledge_sync_imports (
-  bundle_id TEXT PRIMARY KEY,
-  source_machine_id TEXT NOT NULL,
-  target_machine_id TEXT NOT NULL,
-  direction TEXT NOT NULL,
-  status TEXT NOT NULL,
-  content_hash TEXT NOT NULL,
-  table_clocks_json TEXT NOT NULL,
-  tables_json TEXT NOT NULL,
-  generated_at TEXT NOT NULL,
-  applied_at TEXT NOT NULL,
-  metadata_json TEXT NOT NULL DEFAULT '{}'
-);
-
-CREATE INDEX IF NOT EXISTS idx_sync_changes_bundle ON knowledge_sync_changes(bundle_id);
-CREATE INDEX IF NOT EXISTS idx_sync_changes_clock ON knowledge_sync_changes(entity_kind, logical_clock);
-CREATE INDEX IF NOT EXISTS idx_sync_table_clocks_machine ON knowledge_sync_table_clocks(machine_id);
-CREATE INDEX IF NOT EXISTS idx_sync_table_clocks_updated ON knowledge_sync_table_clocks(updated_at);
-CREATE INDEX IF NOT EXISTS idx_sync_imports_source ON knowledge_sync_imports(source_machine_id, applied_at);
-CREATE INDEX IF NOT EXISTS idx_sync_imports_target ON knowledge_sync_imports(target_machine_id, applied_at);
-CREATE INDEX IF NOT EXISTS idx_sync_imports_status ON knowledge_sync_imports(status);
-
-INSERT OR IGNORE INTO schema_versions(version, applied_at)
-VALUES (7, datetime('now'));
-`;
-var MIGRATION_8_TABLES_AND_INDEXES = `
-CREATE INDEX IF NOT EXISTS idx_wiki_pages_lifecycle_status ON wiki_pages(status, valid_to);
-CREATE INDEX IF NOT EXISTS idx_wiki_pages_last_verified ON wiki_pages(last_verified_at);
-CREATE INDEX IF NOT EXISTS idx_wiki_pages_supersedes ON wiki_pages(supersedes);
-CREATE INDEX IF NOT EXISTS idx_wiki_pages_superseded_by ON wiki_pages(superseded_by);
-
-INSERT OR IGNORE INTO schema_versions(version, applied_at)
-VALUES (8, datetime('now'));
-`;
-function openKnowledgeDb(path) {
-  ensureParentDir(path);
-  const db = new Database(path);
-  db.exec("PRAGMA foreign_keys = ON;");
-  db.exec("PRAGMA busy_timeout = 5000;");
-  return db;
-}
-function migrateKnowledgeDb(path) {
-  const db = openKnowledgeDb(path);
-  try {
-    db.exec(MIGRATION_1);
-    if (getSchemaVersion(db) < 2)
-      db.exec(MIGRATION_2);
-    if (getSchemaVersion(db) < 3)
-      db.exec(MIGRATION_3);
-    if (getSchemaVersion(db) < 4)
-      db.exec(MIGRATION_4);
-    if (getSchemaVersion(db) < 5)
-      db.exec(MIGRATION_5);
-    if (getSchemaVersion(db) < 6)
-      db.exec(MIGRATION_6);
-    if (needsMigration7(db))
-      applyMigration7(db);
-    if (needsMigration8(db))
-      applyMigration8(db);
-    return { path, schema_version: getSchemaVersion(db) };
-  } finally {
-    db.close();
+function assertAnchoredFilesystemPlatform(platform = process.platform) {
+  if (platform !== "linux" && platform !== "darwin") {
+    fail(`directory-FD anchoring is unsupported on ${platform}; local filesystem access is disabled`);
   }
 }
-function getSchemaVersion(db) {
-  const row = db.query("SELECT MAX(version) AS version FROM schema_versions").get();
-  return row?.version ?? 0;
-}
-function count(db, table) {
-  const row = db.query(`SELECT COUNT(*) AS n FROM ${table}`).get();
-  return row?.n ?? 0;
-}
-function quoteIdentifier(identifier) {
-  return `"${identifier.replaceAll('"', '""')}"`;
-}
-function tableExists(db, table) {
-  const row = db.query("SELECT name FROM sqlite_master WHERE type IN ('table', 'virtual') AND name = ?").get(table);
-  return Boolean(row);
-}
-function columnExists(db, table, column) {
-  if (!tableExists(db, table))
-    return false;
-  const columns = db.query(`PRAGMA table_info(${quoteIdentifier(table)})`).all();
-  return columns.some((row) => row.name === column);
-}
-function ensureColumn(db, table, column, definition) {
-  if (!columnExists(db, table, column)) {
-    db.exec(`ALTER TABLE ${quoteIdentifier(table)} ADD COLUMN ${quoteIdentifier(column)} ${definition};`);
+function fdBase() {
+  assertAnchoredFilesystemPlatform();
+  if (typeof constants.O_NOFOLLOW !== "number" || typeof constants.O_DIRECTORY !== "number") {
+    return fail("directory-FD anchoring is unavailable on this platform");
   }
+  if (existsSync("/proc/self/fd"))
+    return "/proc/self/fd";
+  if (existsSync("/dev/fd"))
+    return "/dev/fd";
+  return fail("directory-FD anchoring is unavailable on this platform");
 }
-function needsMigration7(db) {
-  return getSchemaVersion(db) < 7 || !columnExists(db, "knowledge_sync_changes", "logical_clock") || !columnExists(db, "knowledge_sync_changes", "bundle_id") || !tableExists(db, "knowledge_sync_table_clocks") || !tableExists(db, "knowledge_sync_imports");
+function fireTestHook(event, detail) {
+  anchoredFsTestHook?.(event, detail);
 }
-function applyMigration7(db) {
-  if (!tableExists(db, "knowledge_sync_changes"))
-    db.exec(MIGRATION_6);
-  ensureColumn(db, "knowledge_sync_changes", "logical_clock", "INTEGER NOT NULL DEFAULT 0");
-  ensureColumn(db, "knowledge_sync_changes", "bundle_id", "TEXT");
-  db.exec(MIGRATION_7_TABLES_AND_INDEXES);
+function artifactLockNow() {
+  return anchoredArtifactLockTestControl?.monotonicNow?.() ?? Number(process.hrtime.bigint() / 1000000n);
 }
-function needsMigration8(db) {
-  return getSchemaVersion(db) < 8 || !columnExists(db, "wiki_pages", "valid_from") || !columnExists(db, "wiki_pages", "valid_to") || !columnExists(db, "wiki_pages", "supersedes") || !columnExists(db, "wiki_pages", "superseded_by") || !columnExists(db, "wiki_pages", "confidence") || !columnExists(db, "wiki_pages", "last_verified_at");
-}
-function applyMigration8(db) {
-  if (!tableExists(db, "wiki_pages"))
-    db.exec(MIGRATION_1);
-  ensureColumn(db, "wiki_pages", "valid_from", "TEXT");
-  ensureColumn(db, "wiki_pages", "valid_to", "TEXT");
-  ensureColumn(db, "wiki_pages", "supersedes", "TEXT");
-  ensureColumn(db, "wiki_pages", "superseded_by", "TEXT");
-  ensureColumn(db, "wiki_pages", "confidence", "REAL");
-  ensureColumn(db, "wiki_pages", "last_verified_at", "TEXT");
-  db.exec(`
-    UPDATE wiki_pages
-    SET valid_from = COALESCE(valid_from, created_at),
-        last_verified_at = COALESCE(last_verified_at, updated_at),
-        confidence = COALESCE(confidence, 0.8)
-    WHERE valid_from IS NULL OR last_verified_at IS NULL OR confidence IS NULL;
-  `);
-  db.exec(MIGRATION_8_TABLES_AND_INDEXES);
-}
-function getKnowledgeDbStats(path) {
-  const db = openKnowledgeDb(path);
-  try {
-    return {
-      schema_version: getSchemaVersion(db),
-      sources: count(db, "sources"),
-      source_revisions: count(db, "source_revisions"),
-      chunks: count(db, "chunks"),
-      wiki_pages: count(db, "wiki_pages"),
-      citations: count(db, "citations"),
-      indexes: count(db, "knowledge_indexes"),
-      runs: count(db, "runs"),
-      run_events: count(db, "run_events"),
-      redaction_findings: count(db, "redaction_findings"),
-      audit_events: count(db, "audit_events"),
-      approval_gates: count(db, "approval_gates"),
-      storage_objects: count(db, "storage_objects"),
-      embeddings: count(db, "chunk_embeddings"),
-      vector_entries: count(db, "vector_index_entries"),
-      reindex_queue: count(db, "reindex_queue"),
-      knowledge_machines: count(db, "knowledge_machines"),
-      sync_snapshots: count(db, "knowledge_sync_snapshots"),
-      sync_changes: count(db, "knowledge_sync_changes"),
-      sync_conflicts: count(db, "knowledge_sync_conflicts"),
-      sync_table_clocks: count(db, "knowledge_sync_table_clocks"),
-      sync_imports: count(db, "knowledge_sync_imports")
-    };
-  } finally {
-    db.close();
-  }
-}
-
-// src/db/pg-migrations.ts
-var PG_MIGRATIONS = [
-  `CREATE TABLE IF NOT EXISTS sources (
-    id TEXT PRIMARY KEY,
-    uri TEXT NOT NULL UNIQUE,
-    kind TEXT NOT NULL,
-    title TEXT,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    acl_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS wiki_pages (
-    id TEXT PRIMARY KEY,
-    path TEXT NOT NULL UNIQUE,
-    title TEXT NOT NULL,
-    artifact_uri TEXT,
-    content_hash TEXT,
-    status TEXT NOT NULL DEFAULT 'active',
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS source_revisions (
-    id TEXT PRIMARY KEY,
-    source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
-    revision TEXT NOT NULL,
-    hash TEXT,
-    extracted_text_uri TEXT,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    UNIQUE(source_id, revision)
-  )`,
-  `CREATE TABLE IF NOT EXISTS chunks (
-    id TEXT PRIMARY KEY,
-    source_revision_id TEXT REFERENCES source_revisions(id) ON DELETE CASCADE,
-    wiki_page_id TEXT REFERENCES wiki_pages(id) ON DELETE CASCADE,
-    kind TEXT NOT NULL,
-    ordinal INTEGER NOT NULL,
-    text TEXT NOT NULL,
-    token_count INTEGER,
-    start_offset INTEGER,
-    end_offset INTEGER,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS chunk_embeddings (
-    id TEXT PRIMARY KEY,
-    chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
-    provider TEXT NOT NULL,
-    model TEXT NOT NULL,
-    dimensions INTEGER NOT NULL,
-    vector_json TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    UNIQUE(chunk_id, provider, model)
-  )`,
-  `CREATE TABLE IF NOT EXISTS wiki_backlinks (
-    from_page_id TEXT NOT NULL REFERENCES wiki_pages(id) ON DELETE CASCADE,
-    to_page_id TEXT NOT NULL REFERENCES wiki_pages(id) ON DELETE CASCADE,
-    label TEXT,
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    PRIMARY KEY(from_page_id, to_page_id)
-  )`,
-  `CREATE TABLE IF NOT EXISTS citations (
-    id TEXT PRIMARY KEY,
-    wiki_page_id TEXT REFERENCES wiki_pages(id) ON DELETE CASCADE,
-    chunk_id TEXT REFERENCES chunks(id) ON DELETE SET NULL,
-    source_uri TEXT NOT NULL,
-    quote TEXT,
-    start_offset INTEGER,
-    end_offset INTEGER,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS knowledge_indexes (
-    id TEXT PRIMARY KEY,
-    kind TEXT NOT NULL,
-    name TEXT NOT NULL,
-    artifact_uri TEXT,
-    shard_key TEXT,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text,
-    UNIQUE(kind, name, shard_key)
-  )`,
-  `CREATE TABLE IF NOT EXISTS runs (
-    id TEXT PRIMARY KEY,
-    type TEXT NOT NULL,
-    prompt TEXT,
-    status TEXT NOT NULL,
-    provider TEXT,
-    model TEXT,
-    cost_tokens INTEGER NOT NULL DEFAULT 0,
-    cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS run_events (
-    id TEXT PRIMARY KEY,
-    run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-    level TEXT NOT NULL,
-    event TEXT NOT NULL,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS provider_usage (
-    id TEXT PRIMARY KEY,
-    run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
-    provider TEXT NOT NULL,
-    model TEXT NOT NULL,
-    input_tokens INTEGER NOT NULL DEFAULT 0,
-    output_tokens INTEGER NOT NULL DEFAULT 0,
-    cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS redaction_findings (
-    id TEXT PRIMARY KEY,
-    source_uri TEXT,
-    run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
-    severity TEXT NOT NULL,
-    finding_type TEXT NOT NULL,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS storage_objects (
-    id TEXT PRIMARY KEY,
-    artifact_uri TEXT NOT NULL UNIQUE,
-    kind TEXT NOT NULL,
-    content_type TEXT,
-    hash TEXT,
-    size_bytes INTEGER,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS audit_events (
-    id TEXT PRIMARY KEY,
-    event_type TEXT NOT NULL,
-    action TEXT NOT NULL,
-    target_uri TEXT,
-    decision TEXT NOT NULL,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS approval_gates (
-    id TEXT PRIMARY KEY,
-    action TEXT NOT NULL,
-    target_uri TEXT,
-    status TEXT NOT NULL,
-    reason TEXT,
-    approved_by TEXT,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS vector_index_entries (
-    id TEXT PRIMARY KEY,
-    chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
-    source_revision_id TEXT REFERENCES source_revisions(id) ON DELETE CASCADE,
-    provider TEXT NOT NULL,
-    model TEXT NOT NULL,
-    dimensions INTEGER NOT NULL,
-    vector_json TEXT NOT NULL,
-    vector_norm DOUBLE PRECISION NOT NULL,
-    source_uri TEXT,
-    source_ref TEXT,
-    revision TEXT,
-    hash TEXT,
-    start_offset INTEGER,
-    end_offset INTEGER,
-    token_count INTEGER,
-    status TEXT NOT NULL DEFAULT 'active',
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text,
-    UNIQUE(chunk_id, provider, model)
-  )`,
-  `CREATE TABLE IF NOT EXISTS reindex_queue (
-    id TEXT PRIMARY KEY,
-    kind TEXT NOT NULL,
-    target_id TEXT NOT NULL,
-    source_uri TEXT,
-    reason TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',
-    attempts INTEGER NOT NULL DEFAULT 0,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text,
-    UNIQUE(kind, target_id, reason)
-  )`,
-  `CREATE TABLE IF NOT EXISTS knowledge_machines (
-    machine_id TEXT PRIMARY KEY,
-    hostname TEXT,
-    platform TEXT,
-    user_label TEXT,
-    workspace_home TEXT,
-    tailscale_dns TEXT,
-    tailscale_ips_json TEXT NOT NULL DEFAULT '[]',
-    ssh_target TEXT,
-    last_seen_at TEXT,
-    capabilities_json TEXT NOT NULL DEFAULT '{}',
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS knowledge_sync_snapshots (
-    id TEXT PRIMARY KEY,
-    machine_id TEXT NOT NULL,
-    scope TEXT NOT NULL,
-    workspace_home TEXT NOT NULL,
-    sqlite_schema_version INTEGER NOT NULL,
-    artifact_root_uri TEXT NOT NULL,
-    content_hash TEXT NOT NULL,
-    tables_json TEXT NOT NULL,
-    artifact_hashes_json TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS knowledge_sync_changes (
-    id TEXT PRIMARY KEY,
-    origin_machine_id TEXT NOT NULL,
-    updated_by_machine_id TEXT NOT NULL,
-    entity_kind TEXT NOT NULL,
-    entity_id TEXT NOT NULL,
-    operation TEXT NOT NULL,
-    base_hash TEXT,
-    next_hash TEXT,
-    source_ref TEXT,
-    source_revision_id TEXT,
-    artifact_uri TEXT,
-    logical_clock INTEGER NOT NULL DEFAULT 0,
-    bundle_id TEXT,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `ALTER TABLE knowledge_sync_changes ADD COLUMN IF NOT EXISTS logical_clock INTEGER NOT NULL DEFAULT 0`,
-  `ALTER TABLE knowledge_sync_changes ADD COLUMN IF NOT EXISTS bundle_id TEXT`,
-  `CREATE TABLE IF NOT EXISTS knowledge_sync_conflicts (
-    id TEXT PRIMARY KEY,
-    entity_kind TEXT NOT NULL,
-    entity_id TEXT NOT NULL,
-    local_machine_id TEXT NOT NULL,
-    remote_machine_id TEXT NOT NULL,
-    local_hash TEXT,
-    remote_hash TEXT,
-    base_hash TEXT,
-    status TEXT NOT NULL,
-    resolution_strategy TEXT,
-    proposed_patch_uri TEXT,
-    approved_by TEXT,
-    resolved_at TEXT,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS knowledge_sync_table_clocks (
-    table_name TEXT NOT NULL,
-    machine_id TEXT NOT NULL,
-    logical_clock INTEGER NOT NULL DEFAULT 0,
-    high_water_hash TEXT,
-    high_water_bundle_id TEXT,
-    origin_machine_id TEXT,
-    updated_by_machine_id TEXT,
-    last_applied_at TEXT,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text,
-    PRIMARY KEY(table_name, machine_id)
-  )`,
-  `CREATE TABLE IF NOT EXISTS knowledge_sync_imports (
-    bundle_id TEXT PRIMARY KEY,
-    source_machine_id TEXT NOT NULL,
-    target_machine_id TEXT NOT NULL,
-    direction TEXT NOT NULL,
-    status TEXT NOT NULL,
-    content_hash TEXT NOT NULL,
-    table_clocks_json TEXT NOT NULL,
-    tables_json TEXT NOT NULL,
-    generated_at TEXT NOT NULL,
-    applied_at TEXT NOT NULL,
-    metadata_json TEXT NOT NULL DEFAULT '{}'
-  )`,
-  `CREATE INDEX IF NOT EXISTS idx_source_revisions_source ON source_revisions(source_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_chunks_source_revision ON chunks(source_revision_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_chunks_wiki_page ON chunks(wiki_page_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_citations_wiki_page ON citations(wiki_page_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_citations_chunk ON citations(chunk_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_run_events_run ON run_events(run_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_provider_usage_run ON provider_usage(run_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_audit_events_action ON audit_events(action)`,
-  `CREATE INDEX IF NOT EXISTS idx_audit_events_target ON audit_events(target_uri)`,
-  `CREATE INDEX IF NOT EXISTS idx_audit_events_created ON audit_events(created_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_approval_gates_action ON approval_gates(action)`,
-  `CREATE INDEX IF NOT EXISTS idx_approval_gates_status ON approval_gates(status)`,
-  `CREATE INDEX IF NOT EXISTS idx_vector_index_provider_model ON vector_index_entries(provider, model)`,
-  `CREATE INDEX IF NOT EXISTS idx_vector_index_source_revision ON vector_index_entries(source_revision_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_vector_index_source_uri ON vector_index_entries(source_uri)`,
-  `CREATE INDEX IF NOT EXISTS idx_vector_index_status ON vector_index_entries(status)`,
-  `CREATE INDEX IF NOT EXISTS idx_reindex_queue_status ON reindex_queue(status)`,
-  `CREATE INDEX IF NOT EXISTS idx_reindex_queue_kind_target ON reindex_queue(kind, target_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_reindex_queue_source_uri ON reindex_queue(source_uri)`,
-  `CREATE INDEX IF NOT EXISTS idx_knowledge_machines_last_seen ON knowledge_machines(last_seen_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_snapshots_machine_created ON knowledge_sync_snapshots(machine_id, created_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_snapshots_hash ON knowledge_sync_snapshots(content_hash)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_changes_entity ON knowledge_sync_changes(entity_kind, entity_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_changes_origin ON knowledge_sync_changes(origin_machine_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_changes_created ON knowledge_sync_changes(created_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_changes_bundle ON knowledge_sync_changes(bundle_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_changes_clock ON knowledge_sync_changes(entity_kind, logical_clock)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_conflicts_status ON knowledge_sync_conflicts(status)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_conflicts_entity ON knowledge_sync_conflicts(entity_kind, entity_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_table_clocks_machine ON knowledge_sync_table_clocks(machine_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_table_clocks_updated ON knowledge_sync_table_clocks(updated_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_imports_source ON knowledge_sync_imports(source_machine_id, applied_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_imports_target ON knowledge_sync_imports(target_machine_id, applied_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_imports_status ON knowledge_sync_imports(status)`,
-  `CREATE TABLE IF NOT EXISTS knowledge_items (
-    id TEXT PRIMARY KEY,
-    short_id TEXT,
-    title TEXT NOT NULL,
-    content TEXT NOT NULL DEFAULT '',
-    url TEXT,
-    tags JSONB NOT NULL DEFAULT '[]'::jsonb,
-    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-    archived BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_short_id ON knowledge_items(short_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_archived ON knowledge_items(archived)`,
-  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_created ON knowledge_items(created_at)`
-];
-
-// src/generated/storage-kit/mode.ts
-var DEPRECATED_STORAGE_MODE_ALIASES = [
-  "remote",
-  "hybrid",
-  "self_hosted"
-];
-function normalizeStorageMode(value) {
-  const normalized = value.trim().toLowerCase().replace(/-/g, "_");
-  if (normalized === "local")
-    return { mode: "local", deprecatedAlias: null };
-  if (normalized === "cloud")
-    return { mode: "cloud", deprecatedAlias: null };
-  if (DEPRECATED_STORAGE_MODE_ALIASES.includes(normalized)) {
-    return { mode: "cloud", deprecatedAlias: normalized };
-  }
-  throw new Error(`Unknown storage mode: ${value}. Use local or cloud.`);
-}
-function envToken(name) {
-  return name.toUpperCase().replace(/-/g, "_");
-}
-function storageEnvKeys(name) {
-  const token = envToken(name);
-  return {
-    modeKeys: [`HASNA_${token}_STORAGE_MODE`, `${token}_STORAGE_MODE`],
-    databaseUrlKeys: [`HASNA_${token}_DATABASE_URL`, `${token}_DATABASE_URL`]
-  };
-}
-function firstEnv(env, keys) {
-  for (const key of keys) {
-    const value = env[key]?.trim();
-    if (value)
-      return { key, value };
-  }
-  return null;
-}
-function resolveStorageMode(name, env = process.env) {
-  const { modeKeys, databaseUrlKeys } = storageEnvKeys(name);
-  const dbHit = firstEnv(env, databaseUrlKeys);
-  const databaseUrlPresent = Boolean(dbHit);
-  const databaseUrlSource = dbHit ? dbHit.key : null;
-  const modeHit = firstEnv(env, modeKeys);
-  if (!modeHit) {
-    return {
-      mode: "local",
-      source: "default",
-      deprecatedAlias: null,
-      databaseUrlPresent,
-      databaseUrlSource,
-      warning: null
-    };
-  }
-  const { mode, deprecatedAlias } = normalizeStorageMode(modeHit.value);
-  const warnings = [];
-  if (deprecatedAlias) {
-    warnings.push(`Deprecated storage mode '${deprecatedAlias}' from ${modeHit.key} is treated as 'cloud'. Set ${modeKeys[0]}=cloud instead.`);
-  }
-  if (mode === "cloud" && !databaseUrlPresent) {
-    warnings.push(`cloud mode needs ${databaseUrlKeys[0]} (PURE REMOTE: reads and writes go to cloud Postgres).`);
-  }
-  if (modeHit.key !== modeKeys[0]) {
-    warnings.push(`Using alias env ${modeHit.key}; the canonical key is ${modeKeys[0]}.`);
-  }
-  return {
-    mode,
-    source: modeHit.key,
-    deprecatedAlias,
-    databaseUrlPresent,
-    databaseUrlSource,
-    warning: warnings.length > 0 ? warnings.join(" ") : null
-  };
-}
-function resolveDatabaseUrl(name, env = process.env) {
-  const { databaseUrlKeys } = storageEnvKeys(name);
-  const hit = firstEnv(env, databaseUrlKeys);
-  return hit ? hit.value : null;
-}
-// src/generated/storage-kit/tls.ts
-import { readFileSync as readFileSync2 } from "fs";
-function sslModeFromConnectionString(connectionString) {
-  const queryStart = connectionString.indexOf("?");
-  const params = new URLSearchParams(queryStart === -1 ? "" : connectionString.slice(queryStart + 1));
-  const sslmode = params.get("sslmode")?.trim().toLowerCase();
-  if (sslmode) {
-    switch (sslmode) {
-      case "disable":
-      case "prefer":
-      case "require":
-      case "verify-ca":
-      case "verify-full":
-        return sslmode;
-      case "allow":
-        return "prefer";
-      default:
-        throw new Error(`Unknown sslmode '${sslmode}' in connection string.`);
-    }
-  }
-  const ssl = params.get("ssl")?.trim().toLowerCase();
-  if (ssl && ["1", "true", "yes", "on", "require"].includes(ssl))
-    return "require";
-  return "disable";
-}
-function loadCaBundle(options) {
-  const env = options.env ?? process.env;
-  if (options.ca && options.ca.trim())
-    return options.ca;
-  const path = options.caCertPath ?? env.PGSSLROOTCERT ?? env.NODE_EXTRA_CA_CERTS;
-  if (path && path.trim())
-    return readFileSync2(path.trim(), "utf8");
-  return null;
-}
-function resolveTlsConfig(connectionString, options = {}) {
-  const mode = sslModeFromConnectionString(connectionString);
-  if (mode === "disable") {
+function waitForArtifactLock(milliseconds) {
+  if (anchoredArtifactLockTestControl?.wait) {
+    anchoredArtifactLockTestControl.wait(milliseconds);
     return;
   }
-  const ca = loadCaBundle(options);
-  if (mode === "prefer" || mode === "require") {
-    return ca ? { rejectUnauthorized: false, ca } : { rejectUnauthorized: false };
-  }
-  if (!ca) {
-    throw new Error(`sslmode=${mode} requires a CA bundle. Set PGSSLROOTCERT (or pass caCertPath/ca) to the ` + `Amazon RDS global bundle: https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem`);
-  }
-  return { rejectUnauthorized: true, ca };
+  const waitCell = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+  Atomics.wait(waitCell, 0, 0, milliseconds);
 }
-// src/generated/storage-kit/query.ts
-function wrapExecutor(executor) {
-  return {
-    async query(sql, params) {
-      const result = await executor.query(sql, params);
-      return { rows: result.rows, rowCount: result.rowCount ?? result.rows.length };
-    },
-    async many(sql, params) {
-      const result = await executor.query(sql, params);
-      return result.rows;
-    },
-    async get(sql, params) {
-      const result = await executor.query(sql, params);
-      return result.rows[0] ?? null;
-    },
-    async one(sql, params) {
-      const result = await executor.query(sql, params);
-      if (result.rows.length !== 1) {
-        throw new Error(`Expected exactly one row, got ${result.rows.length}.`);
-      }
-      return result.rows[0];
-    },
-    async execute(sql, params) {
-      await executor.query(sql, params);
-    }
-  };
+function awaitArtifactLockRetry(start) {
+  const elapsed = artifactLockNow() - start;
+  if (!Number.isFinite(elapsed) || elapsed < 0)
+    fail("artifact key lock monotonic clock is invalid");
+  if (elapsed >= ARTIFACT_LOCK_WAIT_MS) {
+    fail(`artifact same-key forward-progress lock could not be acquired after ${ARTIFACT_LOCK_WAIT_MS}ms`);
+  }
+  waitForArtifactLock(Math.min(ARTIFACT_LOCK_RETRY_MS, ARTIFACT_LOCK_WAIT_MS - elapsed));
 }
-function createQueryClient(pool) {
-  const base = wrapExecutor(pool);
-  return {
-    ...base,
-    pool,
-    async transaction(fn) {
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        const result = await fn(wrapExecutor(client));
-        await client.query("COMMIT");
-        return result;
-      } catch (error) {
-        try {
-          await client.query("ROLLBACK");
-        } catch {}
-        throw error;
-      } finally {
-        client.release();
-      }
-    },
-    async close() {
-      await pool.end();
-    }
-  };
+function artifactLockName(key) {
+  return `.knowledge-artifact-lock-${createHash("sha256").update(key).digest("hex")}`;
 }
-// src/generated/storage-kit/pool.ts
-import pg from "pg";
-function createPgPool(options) {
-  const ssl = resolveTlsConfig(options.connectionString, {
-    ...options.ca !== undefined ? { ca: options.ca } : {},
-    ...options.caCertPath !== undefined ? { caCertPath: options.caCertPath } : {},
-    ...options.env !== undefined ? { env: options.env } : {}
-  });
-  const config = { connectionString: options.connectionString };
-  if (ssl !== undefined)
-    config.ssl = ssl;
-  if (options.max !== undefined)
-    config.max = options.max;
-  if (options.idleTimeoutMillis !== undefined)
-    config.idleTimeoutMillis = options.idleTimeoutMillis;
-  if (options.connectionTimeoutMillis !== undefined)
-    config.connectionTimeoutMillis = options.connectionTimeoutMillis;
-  if (options.applicationName !== undefined)
-    config.application_name = options.applicationName;
-  return new pg.Pool(config);
+function assertArtifactLockStat(stat, links) {
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== links || (stat.mode & 511) !== 384 || stat.size <= 0 || stat.size > MAX_ARTIFACT_LOCK_BYTES) {
+    fail("artifact key lock identity, mode, links, or size is invalid");
+  }
 }
-function createCloudPoolFromEnv(appName, options = {}) {
-  const env = options.env ?? process.env;
-  const resolution = resolveStorageMode(appName, env);
-  if (resolution.mode !== "cloud") {
-    throw new Error(`createCloudPoolFromEnv requires ${appName} storage mode 'cloud', got '${resolution.mode}'. ` + `Set HASNA_${appName.toUpperCase().replace(/-/g, "_")}_STORAGE_MODE=cloud.`);
-  }
-  const connectionString = resolveDatabaseUrl(appName, env);
-  if (!connectionString) {
-    throw new Error(`cloud mode for ${appName} needs a database URL. Set ` + `HASNA_${appName.toUpperCase().replace(/-/g, "_")}_DATABASE_URL.`);
-  }
-  const pool = createPgPool({
-    connectionString,
-    ...options.ca !== undefined ? { ca: options.ca } : {},
-    ...options.caCertPath !== undefined ? { caCertPath: options.caCertPath } : {},
-    env,
-    ...options.max !== undefined ? { max: options.max } : {},
-    ...options.idleTimeoutMillis !== undefined ? { idleTimeoutMillis: options.idleTimeoutMillis } : {},
-    ...options.connectionTimeoutMillis !== undefined ? { connectionTimeoutMillis: options.connectionTimeoutMillis } : {},
-    ...options.applicationName !== undefined ? { applicationName: options.applicationName } : {}
-  });
-  return {
-    client: createQueryClient(pool),
-    connectionSource: resolution.databaseUrlSource ?? "unknown"
-  };
+function artifactLockStatIsSafeTransition(stat, links) {
+  return stat.isFile() && !stat.isSymbolicLink() && links === 1 && (stat.nlink === 0 || stat.nlink === 2) && (stat.mode & 511) === 384 && stat.size > 0 && stat.size <= MAX_ARTIFACT_LOCK_BYTES;
 }
-// src/generated/storage-kit/migrations.ts
-import { createHash } from "crypto";
-var DEFAULT_MIGRATION_LEDGER_TABLE = "schema_migrations";
-function checksumSql(sql) {
-  const normalized = sql.trim().replace(/\r\n/g, `
-`);
-  return `sha256:${createHash("sha256").update(normalized).digest("hex")}`;
+function sameArtifactLockStat(left, right) {
+  return left.dev === right.dev && left.ino === right.ino && left.size === right.size && left.mode === right.mode && left.nlink === right.nlink;
 }
-function defineMigration(id, sql) {
-  return Object.freeze({ id, sql: sql.trim(), checksum: checksumSql(sql) });
+function parseArtifactLockRecord(text) {
+  let value;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return fail("artifact key lock record is invalid");
+  }
+  const record = value;
+  if (!record || Object.keys(record).sort().join(",") !== "pid,token,version" || record.version !== 1 || !Number.isSafeInteger(record.pid) || (record.pid ?? 0) <= 0 || typeof record.token !== "string" || record.token.length < 1 || record.token.length > 128) {
+    return fail("artifact key lock record is invalid");
+  }
+  return Object.freeze({ version: 1, pid: record.pid, token: record.token });
 }
-function hasTransaction(client) {
-  return typeof client.transaction === "function";
-}
-
-class MigrationLedger {
-  client;
-  migrations;
-  ledgerTable;
-  constructor(client, migrations, options = {}) {
-    this.client = client;
-    this.migrations = migrations;
-    this.ledgerTable = options.ledgerTable ?? DEFAULT_MIGRATION_LEDGER_TABLE;
-    const seen = new Set;
-    for (const migration of migrations) {
-      if (seen.has(migration.id))
-        throw new Error(`Duplicate migration id: ${migration.id}`);
-      seen.add(migration.id);
-    }
-  }
-  async ensureLedger() {
-    await this.client.execute(`CREATE TABLE IF NOT EXISTS ${this.ledgerTable} (
-         id TEXT PRIMARY KEY,
-         checksum TEXT NOT NULL,
-         applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
-       )`);
-  }
-  async listApplied() {
-    await this.ensureLedger();
-    return this.readApplied();
-  }
-  async readApplied() {
-    const rows = await this.client.many(`SELECT id, checksum, applied_at FROM ${this.ledgerTable} ORDER BY id ASC`);
-    return rows.map((row) => ({
-      id: row.id,
-      checksum: row.checksum,
-      appliedAt: row.applied_at instanceof Date ? row.applied_at.toISOString() : String(row.applied_at)
-    }));
-  }
-  buildPlan(applied) {
-    const known = new Set(this.migrations.map((m) => m.id));
-    for (const row of applied) {
-      if (!known.has(row.id)) {
-        throw new Error(`Applied migration '${row.id}' is not recognized by this build (downgrade?).`);
-      }
-    }
-    const appliedById = new Map(applied.map((row) => [row.id, row]));
-    for (const migration of this.migrations) {
-      const existing = appliedById.get(migration.id);
-      if (existing && existing.checksum !== migration.checksum) {
-        throw new Error(`Migration checksum mismatch for '${migration.id}': the SQL changed after it was applied.`);
-      }
-    }
-    return this.migrations.map((migration) => ({
-      migration,
-      state: appliedById.has(migration.id) ? "already_applied" : "pending"
-    }));
-  }
-  async migrate(opts = {}) {
-    const dryRun = opts.dryRun === true;
-    await this.ensureLedger();
-    const applied = await this.readApplied();
-    const plan = this.buildPlan(applied);
-    if (dryRun)
-      return { dryRun, applied, plan };
-    for (const item of plan) {
-      if (item.state === "already_applied")
-        continue;
-      await this.applyPendingMigration(item.migration);
-    }
-    return { dryRun, applied: await this.readApplied(), plan };
-  }
-  async applyPendingMigration(migration) {
-    const apply = async (client) => {
-      await client.execute(migration.sql);
-      await client.execute(`INSERT INTO ${this.ledgerTable} (id, checksum, applied_at) VALUES ($1, $2, now())`, [migration.id, migration.checksum]);
-    };
-    if (hasTransaction(this.client)) {
-      await this.client.transaction(apply);
-      return;
-    }
-    await this.client.execute("BEGIN");
+function readArtifactLockSnapshot(rootFd, name, links = 1, tolerateContention = false) {
+  const before = lstatChild(rootFd, name);
+  if (!before)
+    return;
+  if (tolerateContention && artifactLockStatIsSafeTransition(before, links))
+    return;
+  assertArtifactLockStat(before, links);
+  let fd;
+  try {
     try {
-      await apply(this.client);
-      await this.client.execute("COMMIT");
+      fd = openSync(fdPath(rootFd, name), FILE_READ_FLAGS);
     } catch (error) {
-      try {
-        await this.client.execute("ROLLBACK");
-      } catch {}
+      if (tolerateContention && errno(error) === "ENOENT")
+        return;
       throw error;
     }
+    const opened = fstatSync(fd);
+    if (tolerateContention && artifactLockStatIsSafeTransition(opened, links))
+      return;
+    assertArtifactLockStat(opened, links);
+    if (!sameArtifactLockStat(before, opened)) {
+      if (tolerateContention)
+        return;
+      fail("artifact key lock changed while opening");
+    }
+    const buffer = Buffer.alloc(opened.size + 1);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      const count = readSync(fd, buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+      if (count === 0)
+        break;
+      bytesRead += count;
+    }
+    const after = fstatSync(fd);
+    const named = lstatChild(rootFd, name);
+    if (tolerateContention && (!named || artifactLockStatIsSafeTransition(after, links) || artifactLockStatIsSafeTransition(named, links)))
+      return;
+    if (bytesRead !== opened.size || !named || !sameArtifactLockStat(opened, after) || !sameArtifactLockStat(opened, named)) {
+      if (tolerateContention && bytesRead === opened.size && after.isFile() && !after.isSymbolicLink() && named?.isFile() && !named.isSymbolicLink() && (after.mode & 511) === 384 && (named.mode & 511) === 384 && after.size > 0 && after.size <= MAX_ARTIFACT_LOCK_BYTES && named.size > 0 && named.size <= MAX_ARTIFACT_LOCK_BYTES)
+        return;
+      fail("artifact key lock identity or contents changed during inspection");
+    }
+    const text = buffer.subarray(0, bytesRead).toString("utf8");
+    return Object.freeze({ record: parseArtifactLockRecord(text), text, stat: opened });
+  } finally {
+    if (fd !== undefined)
+      closeSync(fd);
   }
 }
-function createMigrationLedger(client, migrations, options = {}) {
-  return new MigrationLedger(client, migrations, options);
-}
-// src/generated/storage-kit/health.ts
-async function checkHealth(client) {
-  const start = Date.now();
+function artifactLockOwnerIsDead(pid) {
   try {
-    await client.get("SELECT 1 AS ok");
-    return { ok: true, latencyMs: Date.now() - start };
+    process.kill(pid, 0);
+    return false;
   } catch (error) {
-    return {
-      ok: false,
-      latencyMs: Date.now() - start,
-      error: error instanceof Error ? error.message : String(error)
-    };
+    return errno(error) === "ESRCH";
   }
 }
-async function checkReady(client, migrations, options = {}) {
-  const start = Date.now();
+function removeArtifactLockSnapshot(rootFd, name, expected) {
+  const current = readArtifactLockSnapshot(rootFd, name);
+  if (!current || !sameArtifactLockStat(current.stat, expected.stat) || current.text !== expected.text) {
+    return false;
+  }
+  const witness = `${name}.witness.${process.pid}.${randomUUID()}`;
+  let witnessed = false;
   try {
-    const ledger = new MigrationLedger(client, migrations, options);
-    const result = await ledger.migrate({ dryRun: true });
-    const pending = result.plan.filter((item) => item.state === "pending").map((item) => item.migration.id);
-    return { ok: pending.length === 0, latencyMs: Date.now() - start, pendingMigrations: pending };
+    try {
+      linkSync(fdPath(rootFd, name), fdPath(rootFd, witness));
+      witnessed = true;
+    } catch (error) {
+      if (errno(error) === "ENOENT" || errno(error) === "EEXIST")
+        return false;
+      throw error;
+    }
+    const named = readArtifactLockSnapshot(rootFd, name, 2);
+    const linked = readArtifactLockSnapshot(rootFd, witness, 2);
+    if (!named || !linked || named.stat.dev !== expected.stat.dev || named.stat.ino !== expected.stat.ino || linked.stat.dev !== expected.stat.dev || linked.stat.ino !== expected.stat.ino || named.text !== expected.text || linked.text !== expected.text)
+      return false;
+    unlinkSync(fdPath(rootFd, name));
+    const remaining = readArtifactLockSnapshot(rootFd, witness, 1);
+    if (!remaining || remaining.text !== expected.text) {
+      fail("artifact key lock witness changed during removal");
+    }
+    unlinkSync(fdPath(rootFd, witness));
+    witnessed = false;
+    return true;
+  } finally {
+    if (witnessed) {
+      try {
+        unlinkSync(fdPath(rootFd, witness));
+      } catch {}
+    }
+  }
+}
+function acquireArtifactKeyLock(rootFd, key) {
+  const name = artifactLockName(key);
+  const start = artifactLockNow();
+  for (;; ) {
+    const observedStat = lstatChild(rootFd, name);
+    if (observedStat) {
+      if (observedStat.nlink === 2) {
+        awaitArtifactLockRetry(start);
+        continue;
+      }
+      const observed = readArtifactLockSnapshot(rootFd, name, 1, true);
+      if (observed && artifactLockOwnerIsDead(observed.record.pid)) {
+        if (removeArtifactLockSnapshot(rootFd, name, observed))
+          continue;
+      }
+      awaitArtifactLockRetry(start);
+      continue;
+    }
+    const record = Object.freeze({ version: 1, pid: process.pid, token: randomUUID() });
+    const text = `${JSON.stringify(record)}
+`;
+    const candidate = `${name}.candidate.${process.pid}.${randomUUID()}`;
+    let fd;
+    let created;
+    let published = false;
+    try {
+      fd = openSync(fdPath(rootFd, candidate), constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 384);
+      fchmodSync(fd, 384);
+      writeFileSync(fd, text);
+      fsyncSync(fd);
+      created = fstatSync(fd);
+      assertArtifactLockStat(created, 1);
+      try {
+        linkSync(fdPath(rootFd, candidate), fdPath(rootFd, name));
+        published = true;
+      } catch (error) {
+        if (errno(error) !== "EEXIST")
+          throw error;
+      }
+      if (published) {
+        assertArtifactLockStat(fstatSync(fd), 2);
+        unlinkSync(fdPath(rootFd, candidate));
+        const owned = fstatSync(fd);
+        assertArtifactLockStat(owned, 1);
+        const named = readArtifactLockSnapshot(rootFd, name);
+        if (!named || named.stat.dev !== owned.dev || named.stat.ino !== owned.ino || named.text !== text)
+          fail("artifact key lock publication could not be verified");
+        const result = Object.freeze({ ...named, fd, name });
+        fd = undefined;
+        return result;
+      }
+    } finally {
+      if (fd !== undefined) {
+        try {
+          const currentCandidate = lstatChild(rootFd, candidate);
+          if (currentCandidate && created && currentCandidate.dev === created.dev && currentCandidate.ino === created.ino)
+            unlinkSync(fdPath(rootFd, candidate));
+        } catch {}
+        if (published && created) {
+          try {
+            const current2 = readArtifactLockSnapshot(rootFd, name);
+            if (current2 && current2.stat.dev === created.dev && current2.stat.ino === created.ino && current2.text === text)
+              removeArtifactLockSnapshot(rootFd, name, current2);
+          } catch {}
+        }
+        closeSync(fd);
+      }
+    }
+    const namedStat = lstatChild(rootFd, name);
+    if (namedStat?.nlink === 2) {
+      awaitArtifactLockRetry(start);
+      continue;
+    }
+    const current = readArtifactLockSnapshot(rootFd, name, 1, true);
+    if (current && artifactLockOwnerIsDead(current.record.pid)) {
+      if (removeArtifactLockSnapshot(rootFd, name, current))
+        continue;
+    }
+    awaitArtifactLockRetry(start);
+  }
+}
+function releaseArtifactKeyLock(rootFd, lock) {
+  try {
+    const opened = fstatSync(lock.fd);
+    const current = readArtifactLockSnapshot(rootFd, lock.name);
+    if (current && opened.dev === lock.stat.dev && opened.ino === lock.stat.ino && current.stat.dev === lock.stat.dev && current.stat.ino === lock.stat.ino && current.text === lock.text) {
+      removeArtifactLockSnapshot(rootFd, lock.name, current);
+    }
+  } finally {
+    closeSync(lock.fd);
+  }
+}
+function fdPath(fd, name) {
+  const base = `${fdBase()}/${fd}`;
+  return name === undefined ? base : `${base}/${name}`;
+}
+function identity(stat) {
+  return { dev: stat.dev, ino: stat.ino, mode: stat.mode & 511 };
+}
+function sameIdentity(left, right) {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+function sameIdentityAndMode(left, right) {
+  return sameIdentity(left, right) && left.mode === right.mode;
+}
+function assertDirectoryStat(stat, detail) {
+  if (!stat.isDirectory() || stat.isSymbolicLink())
+    fail(detail);
+}
+function assertRegularStat(stat, detail) {
+  if (!stat.isFile() || stat.isSymbolicLink())
+    fail(detail);
+}
+function absoluteSegments(path) {
+  if (!isAbsolute(path) || normalize(path) !== path || resolve(path) !== path) {
+    return fail("anchored path must be absolute and traversal-free");
+  }
+  return path.split(sep).filter(Boolean);
+}
+function relativeSegments(path) {
+  if (!path || isAbsolute(path) || path.includes("\x00")) {
+    return fail("anchored relative path is invalid");
+  }
+  const segments = path.replace(/\\/g, "/").split("/");
+  if (segments.some((part) => !part || part === "." || part === "..")) {
+    return fail("anchored relative path contains an unsafe component");
+  }
+  return segments;
+}
+function openDirectoryPath(path, create, mode = 448) {
+  assertAnchoredFilesystemPlatform();
+  const segments = absoluteSegments(path);
+  let current;
+  try {
+    current = openSync("/", DIRECTORY_FLAGS);
+    for (const segment of segments) {
+      const child = fdPath(current, segment);
+      if (create) {
+        try {
+          mkdirSync(child, { mode });
+        } catch (error) {
+          if (errno(error) !== "EEXIST")
+            throw error;
+        }
+      }
+      let next;
+      try {
+        next = openSync(child, DIRECTORY_FLAGS);
+      } catch (error) {
+        if (errno(error) === "ENOENT")
+          throw error;
+        return fail("directory component could not be opened without following links");
+      }
+      assertDirectoryStat(fstatSync(next), "opened path component is not a directory");
+      closeSync(current);
+      current = next;
+    }
+    const result = current;
+    current = undefined;
+    return result;
+  } finally {
+    if (current !== undefined)
+      closeSync(current);
+  }
+}
+function pathDirectoryIdentity(path) {
+  let fd;
+  try {
+    fd = openDirectoryPath(path, false);
+    return identity(fstatSync(fd));
   } catch (error) {
-    return {
-      ok: false,
-      latencyMs: Date.now() - start,
-      pendingMigrations: [],
-      error: error instanceof Error ? error.message : String(error)
-    };
+    if (errno(error) === "ENOENT")
+      return;
+    throw error;
+  } finally {
+    if (fd !== undefined)
+      closeSync(fd);
+  }
+}
+function assertDirectoryName(path, expected) {
+  const current = pathDirectoryIdentity(path);
+  if (!current || !sameIdentityAndMode(current, expected)) {
+    fail("anchored directory identity or confidentiality mode changed during the operation");
+  }
+}
+function assertExactMode(stat, expectedMode, detail) {
+  if ((stat.mode & 511) !== expectedMode)
+    fail(detail);
+}
+function assertArtifactFileStat(stat, detail) {
+  assertRegularStat(stat, detail);
+  if (stat.nlink !== 1)
+    fail("artifact file has multiple hard links");
+  assertExactMode(stat, 384, "artifact file confidentiality mode must be exactly 0600");
+}
+function lstatChild(fd, name) {
+  try {
+    return lstatSync(fdPath(fd, name));
+  } catch (error) {
+    if (errno(error) === "ENOENT")
+      return;
+    throw error;
+  }
+}
+function openChildDirectory(parentFd, name, create) {
+  const child = fdPath(parentFd, name);
+  if (create) {
+    try {
+      mkdirSync(child, { mode: 448 });
+    } catch (error) {
+      if (errno(error) !== "EEXIST")
+        throw error;
+    }
+  }
+  fireTestHook("artifact-before-component-open", name);
+  try {
+    const fd = openSync(child, DIRECTORY_FLAGS);
+    const opened = fstatSync(fd);
+    assertDirectoryStat(opened, "artifact path component is not a directory");
+    assertExactMode(opened, 448, "artifact directory confidentiality mode must be exactly 0700");
+    return fd;
+  } catch (error) {
+    if (error instanceof AnchoredFilesystemError || errno(error) === "ENOENT")
+      throw error;
+    return fail("artifact path component could not be opened without following links");
+  }
+}
+function openRelativeParent(rootFd, parts, create) {
+  let current = openSync(fdPath(rootFd, "."), DIRECTORY_FLAGS);
+  try {
+    for (const part of parts) {
+      const next = openChildDirectory(current, part, create);
+      closeSync(current);
+      current = next;
+    }
+    const result = current;
+    current = -1;
+    return result;
+  } finally {
+    if (current >= 0)
+      closeSync(current);
+  }
+}
+function openVerifiedRegular(parentFd, name, flags) {
+  const before = lstatChild(parentFd, name);
+  if (!before) {
+    const missing = new Error(`ENOENT: no such file, open '${name}'`);
+    missing.code = "ENOENT";
+    throw missing;
+  }
+  assertRegularStat(before, "anchored file must be a non-symlink regular file");
+  let fd;
+  try {
+    fd = openSync(fdPath(parentFd, name), flags | constants.O_NOFOLLOW);
+    const opened = fstatSync(fd);
+    assertRegularStat(opened, "opened file must be regular");
+    const named = lstatChild(parentFd, name);
+    if (!named || !sameIdentity(identity(opened), identity(named))) {
+      fail("file identity changed while it was opened");
+    }
+    const result = fd;
+    fd = undefined;
+    return result;
+  } catch (error) {
+    if (error instanceof AnchoredFilesystemError || errno(error) === "ENOENT")
+      throw error;
+    return fail("file could not be opened without following links");
+  } finally {
+    if (fd !== undefined)
+      closeSync(fd);
+  }
+}
+function createTemporary(parentFd, mode) {
+  const name = `.knowledge-tmp-${process.pid}-${randomUUID()}`;
+  const fd = openSync(fdPath(parentFd, name), constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, mode);
+  fchmodSync(fd, mode);
+  return { fd, name };
+}
+function readExactFileDescriptor(fd, size) {
+  const buffer = Buffer.alloc(size + 1);
+  let bytesRead = 0;
+  while (bytesRead < buffer.length) {
+    const count = readSync(fd, buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+    if (count === 0)
+      break;
+    bytesRead += count;
+  }
+  if (bytesRead !== size)
+    fail("installed file content size changed during final verification");
+  return buffer.subarray(0, bytesRead);
+}
+function verifyInstalledTemporary(parentFd, name, temporaryFd, expectedBody, expectedMode, expectedLinks) {
+  const temporary = fstatSync(temporaryFd);
+  assertRegularStat(temporary, "temporary install inode is not a regular file");
+  assertExactMode(temporary, expectedMode, "temporary install mode changed");
+  if (temporary.nlink !== expectedLinks)
+    fail("temporary install hard-link count changed");
+  const expected = typeof expectedBody === "string" ? Buffer.from(expectedBody) : Buffer.from(expectedBody);
+  if (temporary.size !== expected.byteLength)
+    fail("temporary install size changed");
+  let finalFd;
+  try {
+    finalFd = openVerifiedRegular(parentFd, name, FILE_READ_FLAGS);
+    const opened = fstatSync(finalFd);
+    const named = lstatChild(parentFd, name);
+    if (!named || !opened.isFile() || opened.isSymbolicLink() || !named.isFile() || named.isSymbolicLink() || opened.nlink !== expectedLinks || named.nlink !== expectedLinks || !sameIdentity(identity(temporary), identity(opened)) || !sameIdentity(identity(temporary), identity(named)) || (opened.mode & 511) !== expectedMode || (named.mode & 511) !== expectedMode || opened.size !== expected.byteLength || named.size !== expected.byteLength) {
+      fail("installed file identity, type, mode, or size does not match the intended temporary inode");
+    }
+    const actual = readExactFileDescriptor(finalFd, opened.size);
+    const after = fstatSync(finalFd);
+    if (!actual.equals(expected) || !sameIdentity(identity(opened), identity(after)) || after.size !== opened.size || after.nlink !== expectedLinks) {
+      fail("installed file content does not match the intended temporary inode");
+    }
+    return named;
+  } finally {
+    if (finalFd !== undefined)
+      closeSync(finalFd);
+  }
+}
+function rollbackTemporaryInstall(parentFd, target, temporaryFd, backup) {
+  const temporary = fstatSync(temporaryFd);
+  const current = lstatChild(parentFd, target);
+  if (current && sameIdentity(identity(current), identity(temporary))) {
+    try {
+      unlinkSync(fdPath(parentFd, target));
+    } catch {}
+  } else if (current && backup) {
+    const conflict = `.knowledge-conflict-${process.pid}-${randomUUID()}`;
+    try {
+      renameSync(fdPath(parentFd, target), fdPath(parentFd, conflict));
+    } catch {
+      return;
+    }
+  }
+  if (backup)
+    restoreRegularBackup(parentFd, backup, target);
+}
+function restoreRegularBackup(parentFd, backup, target) {
+  if (!lstatChild(parentFd, backup) || lstatChild(parentFd, target))
+    return;
+  try {
+    linkSync(fdPath(parentFd, backup), fdPath(parentFd, target));
+    unlinkSync(fdPath(parentFd, backup));
+  } catch {}
+}
+function ensureAnchoredDirectory(path, mode = 448) {
+  let fd;
+  try {
+    fd = openDirectoryPath(path, true, mode);
+    const opened = fstatSync(fd);
+    assertDirectoryStat(opened, "anchored path is not a directory");
+    assertExactMode(opened, mode, `anchored directory confidentiality mode must be exactly ${mode.toString(8)}`);
+    return identity(opened);
+  } finally {
+    if (fd !== undefined)
+      closeSync(fd);
   }
 }
 
-// src/generated/storage-kit/index.ts
-var KIT_VERSION = "0.4.0";
-
-// src/db/remote-storage.ts
-var KNOWLEDGE_APP_NAME = "knowledge";
-function translatePlaceholders(sql) {
-  let index = 0;
-  return sql.replace(/\?/g, () => `$${++index}`);
+class AnchoredDirectoryHandle {
+  path;
+  identity;
+  fd;
+  constructor(path) {
+    this.path = path;
+    this.fd = openDirectoryPath(path, false);
+    const opened = fstatSync(this.fd);
+    assertDirectoryStat(opened, "anchored parent handle is not a directory");
+    this.identity = Object.freeze(identity(opened));
+    assertDirectoryName(path, this.identity);
+  }
+  descriptor() {
+    if (this.fd === undefined)
+      fail("anchored parent handle is closed");
+    return this.fd;
+  }
+  safeName(name) {
+    const parts = relativeSegments(name);
+    if (parts.length !== 1)
+      fail("anchored child name must contain exactly one safe component");
+    return parts[0];
+  }
+  child(name) {
+    return fdPath(this.descriptor(), this.safeName(name));
+  }
+  verifyDescriptor() {
+    const descriptor = this.descriptor();
+    const stat = fstatSync(descriptor);
+    assertDirectoryStat(stat, "anchored parent descriptor is no longer a directory");
+    const opened = identity(stat);
+    if (!sameIdentityAndMode(opened, this.identity))
+      fail("anchored parent descriptor identity changed");
+  }
+  verify() {
+    this.verifyDescriptor();
+    assertDirectoryName(this.path, this.identity);
+  }
+  lstat(name) {
+    return lstatChild(this.descriptor(), this.safeName(name));
+  }
+  open(name, flags, mode) {
+    const safeName = this.safeName(name);
+    return openSync(fdPath(this.descriptor(), safeName), flags | constants.O_NOFOLLOW, mode);
+  }
+  link(source, target) {
+    linkSync(this.child(source), this.child(target));
+  }
+  rename(source, target) {
+    renameSync(this.child(source), this.child(target));
+  }
+  unlink(name) {
+    unlinkSync(this.child(name));
+  }
+  sync() {
+    fsyncSync(this.descriptor());
+  }
+  close() {
+    if (this.fd === undefined)
+      return;
+    closeSync(this.fd);
+    this.fd = undefined;
+  }
 }
-function normalizeParams(params) {
-  const flat = params.length === 1 && Array.isArray(params[0]) ? params[0] : params;
-  return flat.map((value) => value === undefined ? null : value);
+function mutableFileSnapshot(stat) {
+  return Object.freeze({
+    dev: stat.dev,
+    ino: stat.ino,
+    mode: stat.mode & 511,
+    size: stat.size,
+    nlink: stat.nlink,
+    mtimeMs: stat.mtimeMs,
+    ctimeMs: stat.ctimeMs
+  });
+}
+function sameMutableFileSnapshot(left, right) {
+  return left.dev === right.dev && left.ino === right.ino && left.mode === right.mode && left.size === right.size && left.nlink === right.nlink && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
 }
 
-class PgAdapterAsync {
-  client;
-  constructor(connectionString) {
-    const pool2 = createPgPool({
-      connectionString,
-      applicationName: "@hasna/knowledge"
+class AnchoredMutableFileHandle {
+  parent;
+  name;
+  descriptorPath;
+  initial;
+  fd;
+  constructor(parent, name, fd) {
+    this.parent = parent;
+    this.name = name;
+    this.fd = fd;
+    this.descriptorPath = fdPath(fd);
+    this.initial = this.verifyIdentity();
+  }
+  descriptor() {
+    if (this.fd === undefined)
+      fail("anchored file handle is closed");
+    return this.fd;
+  }
+  snapshot() {
+    return mutableFileSnapshot(fstatSync(this.descriptor()));
+  }
+  verifyIdentity() {
+    this.parent.verify();
+    const opened = fstatSync(this.descriptor());
+    const named = this.parent.lstat(this.name);
+    if (!opened.isFile() || opened.isSymbolicLink() || opened.nlink !== 1 || !named || !named.isFile() || named.isSymbolicLink() || named.nlink !== 1 || opened.dev !== named.dev || opened.ino !== named.ino || (opened.mode & 511) !== (named.mode & 511)) {
+      fail("anchored database identity must remain one canonical regular file");
+    }
+    return mutableFileSnapshot(opened);
+  }
+  verifyUnchanged(expected) {
+    const current = this.verifyIdentity();
+    if (!sameMutableFileSnapshot(current, expected)) {
+      fail("anchored database identity or contents changed before the next operation");
+    }
+    return current;
+  }
+  close() {
+    if (this.fd !== undefined) {
+      closeSync(this.fd);
+      this.fd = undefined;
+    }
+    this.parent.close();
+  }
+}
+function openAnchoredMutableRegularFile(path, options = {}) {
+  const parent = new AnchoredDirectoryHandle(dirname(path));
+  const name = basename(path);
+  let fd;
+  try {
+    const existing = parent.lstat(name);
+    if (existing) {
+      assertRegularStat(existing, "anchored database target must be a non-symlink regular file");
+      if (existing.nlink !== 1)
+        fail("anchored database target must not have hard links");
+      fd = parent.open(name, constants.O_RDWR);
+    } else {
+      if (options.create !== true) {
+        const missing = new Error(`ENOENT: no such file, open '${name}'`);
+        missing.code = "ENOENT";
+        throw missing;
+      }
+      fd = parent.open(name, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL, options.mode ?? 384);
+      fchmodSync(fd, options.mode ?? 384);
+      fsyncSync(fd);
+      parent.sync();
+    }
+    const handle = new AnchoredMutableFileHandle(parent, name, fd);
+    fd = undefined;
+    return handle;
+  } catch (error) {
+    if (fd !== undefined)
+      closeSync(fd);
+    parent.close();
+    throw error;
+  }
+}
+function readAnchoredRegularFileSnapshot(path, maxBytes = MAX_ANCHORED_CONFIG_BYTES) {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > MAX_ANCHORED_ARTIFACT_BYTES) {
+    return fail("anchored regular file byte limit is invalid");
+  }
+  const parent = dirname(path);
+  let parentFd;
+  let fileFd;
+  try {
+    try {
+      parentFd = openDirectoryPath(parent, false);
+    } catch (error) {
+      if (errno(error) === "ENOENT")
+        return;
+      throw error;
+    }
+    const parentIdentity = identity(fstatSync(parentFd));
+    if (!lstatChild(parentFd, basename(path)))
+      return;
+    fileFd = openVerifiedRegular(parentFd, basename(path), FILE_READ_FLAGS);
+    const opened = fstatSync(fileFd);
+    if (opened.size > maxBytes)
+      fail(`anchored regular file exceeds the ${maxBytes} byte hard limit`);
+    fireTestHook("snapshot-before-read", path);
+    const buffer = Buffer.alloc(opened.size + 1);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      const count = readSync(fileFd, buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+      if (count === 0)
+        break;
+      bytesRead += count;
+    }
+    fireTestHook("snapshot-after-read", path);
+    if (bytesRead > maxBytes) {
+      fail(`anchored regular file exceeds the ${maxBytes} byte hard limit`);
+    }
+    const after = fstatSync(fileFd);
+    const named = lstatChild(parentFd, basename(path));
+    if (bytesRead !== opened.size || opened.nlink !== 1 || after.nlink !== 1 || !named || !named.isFile() || named.isSymbolicLink() || named.nlink !== 1 || !sameIdentity(identity(opened), identity(after)) || !sameIdentity(identity(opened), identity(named)) || named.mode !== opened.mode || after.size !== opened.size || named.size !== opened.size || after.mtimeMs !== opened.mtimeMs || after.ctimeMs !== opened.ctimeMs || named.mtimeMs !== opened.mtimeMs || named.ctimeMs !== opened.ctimeMs) {
+      fail("anchored regular file identity or contents changed during the bounded snapshot read");
+    }
+    const content = buffer.subarray(0, bytesRead).toString("utf8");
+    assertDirectoryName(parent, parentIdentity);
+    return { content, identity: identity(opened) };
+  } finally {
+    if (fileFd !== undefined)
+      closeSync(fileFd);
+    if (parentFd !== undefined)
+      closeSync(parentFd);
+  }
+}
+function writeAnchoredRegularFile(path, body, mode = 384) {
+  const parent = dirname(path);
+  ensureAnchoredDirectory(parent);
+  let parentFd;
+  let temporaryFd;
+  let temporary = "";
+  let backup = "";
+  let targetLinked = false;
+  let installed = false;
+  try {
+    parentFd = openDirectoryPath(parent, false);
+    const parentIdentity = identity(fstatSync(parentFd));
+    const current = lstatChild(parentFd, basename(path));
+    if (current)
+      assertRegularStat(current, "replacement target must be a regular file");
+    ({ fd: temporaryFd, name: temporary } = createTemporary(parentFd, mode));
+    writeFileSync(temporaryFd, body);
+    fsyncSync(temporaryFd);
+    fireTestHook("config-before-parent-check", path);
+    assertDirectoryName(parent, parentIdentity);
+    if (current) {
+      backup = `.knowledge-backup-${process.pid}-${randomUUID()}`;
+      fireTestHook("config-before-target-move", path);
+      renameSync(fdPath(parentFd, basename(path)), fdPath(parentFd, backup));
+      const moved = lstatChild(parentFd, backup);
+      if (!moved || !sameIdentity(identity(current), identity(moved))) {
+        restoreRegularBackup(parentFd, backup, basename(path));
+        fail("replacement target identity changed before commit");
+      }
+    }
+    try {
+      linkSync(fdPath(parentFd, temporary), fdPath(parentFd, basename(path)));
+      targetLinked = true;
+    } catch {
+      if (backup)
+        restoreRegularBackup(parentFd, backup, basename(path));
+      fail("replacement target changed before no-clobber install");
+    }
+    fireTestHook("config-before-final-verify", path);
+    verifyInstalledTemporary(parentFd, basename(path), temporaryFd, body, mode, 2);
+    unlinkSync(fdPath(parentFd, temporary));
+    temporary = "";
+    verifyInstalledTemporary(parentFd, basename(path), temporaryFd, body, mode, 1);
+    if (backup) {
+      unlinkSync(fdPath(parentFd, backup));
+      backup = "";
+    }
+    fsyncSync(parentFd);
+    const written = verifyInstalledTemporary(parentFd, basename(path), temporaryFd, body, mode, 1);
+    assertDirectoryName(parent, parentIdentity);
+    installed = true;
+  } finally {
+    if (parentFd !== undefined) {
+      if (!installed && targetLinked && temporaryFd !== undefined) {
+        rollbackTemporaryInstall(parentFd, basename(path), temporaryFd, backup);
+        backup = "";
+      }
+      if (temporary && lstatChild(parentFd, temporary))
+        unlinkSync(fdPath(parentFd, temporary));
+      if (!installed && backup)
+        restoreRegularBackup(parentFd, backup, basename(path));
+      if (temporaryFd !== undefined)
+        closeSync(temporaryFd);
+      closeSync(parentFd);
+    } else if (temporaryFd !== undefined) {
+      closeSync(temporaryFd);
+    }
+  }
+}
+
+class AnchoredArtifactDirectory {
+  path;
+  expected;
+  constructor(path) {
+    this.path = path;
+    this.expected = ensureAnchoredDirectory(path);
+  }
+  openRoot() {
+    const fd = openDirectoryPath(this.path, false);
+    const opened = identity(fstatSync(fd));
+    if (!sameIdentityAndMode(opened, this.expected) || opened.mode !== 448) {
+      closeSync(fd);
+      return fail("artifact root identity or confidentiality mode changed");
+    }
+    assertDirectoryName(this.path, this.expected);
+    return fd;
+  }
+  put(relativePath, body) {
+    const bodyBytes = typeof body === "string" ? Buffer.byteLength(body) : body.byteLength;
+    if (bodyBytes > MAX_ANCHORED_ARTIFACT_BYTES) {
+      fail(`artifact body exceeds ${MAX_ANCHORED_ARTIFACT_BYTES} bytes`);
+    }
+    const parts = relativeSegments(relativePath);
+    const lockKey = parts.join("/");
+    const name = parts.pop();
+    let rootFd;
+    let keyLock;
+    let parentFd;
+    let fileFd;
+    let temporary = "";
+    let backup = "";
+    let targetLinked = false;
+    let installed = false;
+    try {
+      rootFd = this.openRoot();
+      keyLock = acquireArtifactKeyLock(rootFd, lockKey);
+      parentFd = openRelativeParent(rootFd, parts, true);
+      const current = lstatChild(parentFd, name);
+      if (current)
+        assertRegularStat(current, "artifact target must be a regular file");
+      const created = createTemporary(parentFd, 384);
+      fileFd = created.fd;
+      temporary = created.name;
+      writeFileSync(fileFd, body);
+      fsyncSync(fileFd);
+      assertDirectoryName(this.path, this.expected);
+      if (current) {
+        backup = `.knowledge-backup-${process.pid}-${randomUUID()}`;
+        renameSync(fdPath(parentFd, name), fdPath(parentFd, backup));
+        const moved = lstatChild(parentFd, backup);
+        if (!moved || !sameIdentity(identity(current), identity(moved))) {
+          restoreRegularBackup(parentFd, backup, name);
+          fail("artifact target identity changed before replacement");
+        }
+      }
+      try {
+        linkSync(fdPath(parentFd, temporary), fdPath(parentFd, name));
+        targetLinked = true;
+      } catch {
+        if (backup)
+          restoreRegularBackup(parentFd, backup, name);
+        fail("artifact target changed before no-clobber install");
+      }
+      fireTestHook("artifact-before-final-verify", relativePath);
+      verifyInstalledTemporary(parentFd, name, fileFd, body, 384, 2);
+      unlinkSync(fdPath(parentFd, temporary));
+      temporary = "";
+      verifyInstalledTemporary(parentFd, name, fileFd, body, 384, 1);
+      if (backup) {
+        unlinkSync(fdPath(parentFd, backup));
+        backup = "";
+      }
+      fsyncSync(parentFd);
+      const written = verifyInstalledTemporary(parentFd, name, fileFd, body, 384, 1);
+      assertDirectoryName(this.path, this.expected);
+      installed = true;
+      return { modifiedAt: written.mtime };
+    } finally {
+      if (parentFd !== undefined) {
+        if (!installed && targetLinked && fileFd !== undefined) {
+          rollbackTemporaryInstall(parentFd, name, fileFd, backup);
+          backup = "";
+        }
+        if (temporary && lstatChild(parentFd, temporary))
+          unlinkSync(fdPath(parentFd, temporary));
+        if (!installed && backup)
+          restoreRegularBackup(parentFd, backup, name);
+        if (fileFd !== undefined)
+          closeSync(fileFd);
+        closeSync(parentFd);
+      } else if (fileFd !== undefined) {
+        closeSync(fileFd);
+      }
+      if (keyLock !== undefined && rootFd !== undefined) {
+        releaseArtifactKeyLock(rootFd, keyLock);
+      }
+      if (rootFd !== undefined)
+        closeSync(rootFd);
+    }
+  }
+  read(relativePath) {
+    const parts = relativeSegments(relativePath);
+    const name = parts.pop();
+    let rootFd;
+    let parentFd;
+    let fileFd;
+    try {
+      rootFd = this.openRoot();
+      parentFd = openRelativeParent(rootFd, parts, false);
+      fileFd = openVerifiedRegular(parentFd, name, FILE_READ_FLAGS);
+      const opened = fstatSync(fileFd);
+      assertArtifactFileStat(opened, "artifact read target is not a regular file");
+      if (opened.size > MAX_ANCHORED_ARTIFACT_BYTES) {
+        fail(`artifact body exceeds ${MAX_ANCHORED_ARTIFACT_BYTES} bytes`);
+      }
+      fireTestHook("artifact-before-read", relativePath);
+      const buffer = Buffer.alloc(opened.size + 1);
+      let bytesRead = 0;
+      while (bytesRead < buffer.length) {
+        const count = readSync(fileFd, buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+        if (count === 0)
+          break;
+        bytesRead += count;
+      }
+      if (bytesRead > MAX_ANCHORED_ARTIFACT_BYTES) {
+        fail(`artifact body exceeds ${MAX_ANCHORED_ARTIFACT_BYTES} bytes`);
+      }
+      const after = fstatSync(fileFd);
+      assertArtifactFileStat(after, "artifact read target changed during the read");
+      if (bytesRead !== opened.size || after.size !== opened.size || after.mtimeMs !== opened.mtimeMs || after.ctimeMs !== opened.ctimeMs) {
+        fail("artifact read target changed during the bounded read");
+      }
+      const named = lstatChild(parentFd, name);
+      if (!named)
+        fail("artifact read target disappeared during the bounded read");
+      assertArtifactFileStat(named, "artifact read target changed during the bounded read");
+      if (!sameIdentity(identity(opened), identity(named)) || named.size !== opened.size || named.mtimeMs !== opened.mtimeMs || named.ctimeMs !== opened.ctimeMs) {
+        fail("artifact read target identity changed during the bounded read");
+      }
+      const output = buffer.subarray(0, bytesRead).toString("utf8");
+      if (Buffer.byteLength(output, "utf8") > MAX_ANCHORED_ARTIFACT_BYTES) {
+        fail(`artifact body exceeds ${MAX_ANCHORED_ARTIFACT_BYTES} encoded bytes`);
+      }
+      assertDirectoryName(this.path, this.expected);
+      return output;
+    } finally {
+      if (fileFd !== undefined)
+        closeSync(fileFd);
+      if (parentFd !== undefined)
+        closeSync(parentFd);
+      if (rootFd !== undefined)
+        closeSync(rootFd);
+    }
+  }
+  exists(relativePath) {
+    const parts = relativeSegments(relativePath);
+    const name = parts.pop();
+    let rootFd;
+    let parentFd;
+    let fileFd;
+    try {
+      rootFd = this.openRoot();
+      try {
+        parentFd = openRelativeParent(rootFd, parts, false);
+      } catch (error) {
+        if (errno(error) === "ENOENT")
+          return false;
+        throw error;
+      }
+      if (!lstatChild(parentFd, name))
+        return false;
+      fileFd = openVerifiedRegular(parentFd, name, FILE_READ_FLAGS);
+      assertArtifactFileStat(fstatSync(fileFd), "artifact exists target is not a regular file");
+      assertDirectoryName(this.path, this.expected);
+      return true;
+    } finally {
+      if (fileFd !== undefined)
+        closeSync(fileFd);
+      if (parentFd !== undefined)
+        closeSync(parentFd);
+      if (rootFd !== undefined)
+        closeSync(rootFd);
+    }
+  }
+  delete(relativePath) {
+    const parts = relativeSegments(relativePath);
+    const name = parts.pop();
+    let rootFd;
+    let parentFd;
+    let quarantine = "";
+    try {
+      rootFd = this.openRoot();
+      try {
+        parentFd = openRelativeParent(rootFd, parts, false);
+      } catch (error) {
+        if (errno(error) === "ENOENT")
+          return;
+        throw error;
+      }
+      const current = lstatChild(parentFd, name);
+      if (!current)
+        return;
+      assertArtifactFileStat(current, "artifact delete target must be a regular file");
+      quarantine = `.knowledge-delete-${process.pid}-${randomUUID()}`;
+      renameSync(fdPath(parentFd, name), fdPath(parentFd, quarantine));
+      const moved = lstatChild(parentFd, quarantine);
+      if (!moved || moved.nlink !== 1 || !sameIdentity(identity(current), identity(moved))) {
+        restoreRegularBackup(parentFd, quarantine, name);
+        fail("artifact delete target identity changed");
+      }
+      unlinkSync(fdPath(parentFd, quarantine));
+      quarantine = "";
+      fsyncSync(parentFd);
+      assertDirectoryName(this.path, this.expected);
+    } finally {
+      if (parentFd !== undefined) {
+        if (quarantine)
+          restoreRegularBackup(parentFd, quarantine, name);
+        closeSync(parentFd);
+      }
+      if (rootFd !== undefined)
+        closeSync(rootFd);
+    }
+  }
+  list(prefix = "") {
+    const prefixParts = prefix ? relativeSegments(prefix) : [];
+    let rootFd;
+    let startFd;
+    try {
+      rootFd = this.openRoot();
+      try {
+        startFd = openRelativeParent(rootFd, prefixParts, false);
+      } catch (error) {
+        if (errno(error) === "ENOENT")
+          return [];
+        throw error;
+      }
+      const output = [];
+      let visited = 0;
+      const visit = (directoryFd, pathParts) => {
+        const entries = [];
+        const directory = opendirSync(fdPath(directoryFd));
+        try {
+          for (;; ) {
+            const entry = directory.readSync();
+            if (!entry)
+              break;
+            if (++visited > MAX_ANCHORED_ARTIFACT_NODES) {
+              fail(`artifact tree exceeds ${MAX_ANCHORED_ARTIFACT_NODES} nodes`);
+            }
+            entries.push(entry.name);
+          }
+        } finally {
+          directory.closeSync();
+        }
+        for (const entry of entries.sort()) {
+          const stat = lstatChild(directoryFd, entry);
+          if (!stat)
+            fail("artifact entry changed while listing");
+          if (stat.isSymbolicLink())
+            fail("artifact list encountered a symlink");
+          if (stat.isDirectory()) {
+            const childFd = openChildDirectory(directoryFd, entry, false);
+            try {
+              visit(childFd, [...pathParts, entry]);
+            } finally {
+              closeSync(childFd);
+            }
+          } else if (stat.isFile()) {
+            const fileFd = openVerifiedRegular(directoryFd, entry, FILE_READ_FLAGS);
+            try {
+              assertArtifactFileStat(fstatSync(fileFd), "artifact list encountered a non-regular file");
+            } catch (error) {
+              closeSync(fileFd);
+              throw error;
+            }
+            closeSync(fileFd);
+            output.push([...pathParts, entry].join("/"));
+          } else {
+            fail("artifact list encountered a non-regular entry");
+          }
+        }
+      };
+      visit(startFd, prefixParts);
+      assertDirectoryName(this.path, this.expected);
+      return output;
+    } finally {
+      if (startFd !== undefined)
+        closeSync(startFd);
+      if (rootFd !== undefined)
+        closeSync(rootFd);
+    }
+  }
+}
+var AnchoredFilesystemError, DIRECTORY_FLAGS, FILE_READ_FLAGS, MAX_ANCHORED_CONFIG_BYTES = 1048576, MAX_ANCHORED_ARTIFACT_BYTES = 8388608, MAX_ANCHORED_ARTIFACT_NODES = 4096, ANCHORED_FILESYSTEM_SUPPORT, anchoredFsTestHook, anchoredArtifactLockTestControl, ARTIFACT_LOCK_WAIT_MS = 5000, ARTIFACT_LOCK_RETRY_MS = 10, MAX_ARTIFACT_LOCK_BYTES = 4096;
+var init_anchored_fs = __esm(() => {
+  AnchoredFilesystemError = class AnchoredFilesystemError extends Error {
+    name = "AnchoredFilesystemError";
+  };
+  DIRECTORY_FLAGS = constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW;
+  FILE_READ_FLAGS = constants.O_RDONLY | constants.O_NOFOLLOW;
+  ANCHORED_FILESYSTEM_SUPPORT = Object.freeze({
+    supportedPlatforms: ["linux", "darwin"],
+    unsupportedBehavior: "fail-closed-before-filesystem-io"
+  });
+});
+
+// src/input-limits.ts
+import { isProxy } from "util/types";
+function cloneBoundedDataGraph(value, options = {}) {
+  const label = options.label === "Provider response" ? "Provider response" : options.label === "Stored data" ? "Stored data" : "Input";
+  const maxBytes = options.maxBytes ?? MAX_INGEST_BODY_BYTES;
+  if (!Number.isInteger(maxBytes) || maxBytes < 0 || maxBytes > MAX_INGEST_BODY_BYTES) {
+    throw new Error(`${label} byte limit must be between 0 and ${MAX_INGEST_BODY_BYTES}.`);
+  }
+  const active = new WeakSet;
+  const clones = new WeakMap;
+  const completedExpansionBytes = new WeakMap;
+  let nodes = 0;
+  let properties = 0;
+  const boundedAdd = (left, right) => {
+    const total = left + right;
+    if (total > maxBytes) {
+      throw new Error(`${label} exceeds the ${maxBytes} byte hard limit.`);
+    }
+    return total;
+  };
+  const primitiveBytes = (entry) => {
+    const serialized = JSON.stringify(entry);
+    if (serialized === undefined) {
+      throw new Error(`${label} contains unsupported non-data values.`);
+    }
+    const bytes = Buffer.byteLength(serialized);
+    if (bytes > maxBytes) {
+      throw new Error(`${label} exceeds the ${maxBytes} byte hard limit.`);
+    }
+    return bytes;
+  };
+  const clone = (entry, depth) => {
+    if (entry === undefined) {
+      throw new Error(`${label} contains undefined, which is not JSON data.`);
+    }
+    if (entry === null || typeof entry === "boolean") {
+      return {
+        value: entry,
+        expansionBytes: primitiveBytes(entry)
+      };
+    }
+    if (typeof entry === "string") {
+      return { value: entry, expansionBytes: primitiveBytes(entry) };
+    }
+    if (typeof entry === "number") {
+      if (!Number.isFinite(entry))
+        throw new Error(`${label} contains a non-finite number.`);
+      return { value: entry, expansionBytes: primitiveBytes(entry) };
+    }
+    if (typeof entry !== "object") {
+      throw new Error(`${label} contains unsupported non-data values.`);
+    }
+    if (isProxy(entry))
+      throw new Error(`${label} proxy inputs are unsupported.`);
+    if (active.has(entry))
+      throw new Error(`${label} cyclic graphs are unsupported.`);
+    const existing = clones.get(entry);
+    if (existing) {
+      const expansionBytes2 = completedExpansionBytes.get(entry);
+      if (expansionBytes2 === undefined) {
+        throw new Error(`${label} cyclic graphs are unsupported.`);
+      }
+      return { value: existing, expansionBytes: expansionBytes2 };
+    }
+    if (++nodes > MAX_JSON_NODES) {
+      throw new Error(`${label} exceeds the ${MAX_JSON_NODES} node hard limit.`);
+    }
+    if (depth > MAX_JSON_DEPTH) {
+      throw new Error(`${label} exceeds the ${MAX_JSON_DEPTH} level depth hard limit.`);
+    }
+    const array = Array.isArray(entry);
+    const prototype = Object.getPrototypeOf(entry);
+    if (array && prototype !== Array.prototype || !array && prototype !== Object.prototype && prototype !== null) {
+      throw new Error(`${label} custom prototypes are unsupported.`);
+    }
+    if (array && entry.length > MAX_INGEST_BATCH_ITEMS) {
+      throw new Error(`${label} array exceeds the ${MAX_INGEST_BATCH_ITEMS} item hard limit.`);
+    }
+    let keys;
+    try {
+      keys = Reflect.ownKeys(entry);
+    } catch {
+      throw new Error(`${label} properties could not be enumerated safely.`);
+    }
+    let dataKeys;
+    if (array) {
+      const expectedKeys = new Set(["length"]);
+      for (let index = 0;index < entry.length; index += 1) {
+        expectedKeys.add(String(index));
+      }
+      for (let index = 0;index < entry.length; index += 1) {
+        if (!keys.includes(String(index))) {
+          throw new Error(`${label} sparse arrays are unsupported.`);
+        }
+      }
+      if (keys.length !== expectedKeys.size || keys.some((key) => typeof key !== "string" || !expectedKeys.has(key))) {
+        throw new Error(`${label} array own keys must be exactly canonical dense indexes and length.`);
+      }
+      let lengthDescriptor;
+      try {
+        lengthDescriptor = Object.getOwnPropertyDescriptor(entry, "length");
+      } catch {
+        throw new Error(`${label} property descriptors could not be inspected safely.`);
+      }
+      if (!lengthDescriptor || !("value" in lengthDescriptor) || lengthDescriptor.value !== entry.length || lengthDescriptor.writable !== true || lengthDescriptor.enumerable !== false || lengthDescriptor.configurable !== false) {
+        throw new Error(`${label} array length descriptor is noncanonical.`);
+      }
+      for (let index = 0;index < entry.length; index += 1) {
+        let descriptor;
+        try {
+          descriptor = Object.getOwnPropertyDescriptor(entry, String(index));
+        } catch {
+          throw new Error(`${label} property descriptors could not be inspected safely.`);
+        }
+        if (!descriptor)
+          throw new Error(`${label} sparse arrays are unsupported.`);
+        if (!("value" in descriptor))
+          throw new Error(`${label} accessor properties are unsupported.`);
+        if (descriptor.enumerable !== true || descriptor.writable !== true || descriptor.configurable !== true) {
+          throw new Error(`${label} array index descriptor is noncanonical.`);
+        }
+      }
+      dataKeys = Array.from({ length: entry.length }, (_, index) => String(index));
+    } else {
+      dataKeys = keys;
+    }
+    if (!array && dataKeys.length > MAX_JSON_OBJECT_PROPERTIES) {
+      throw new Error(`${label} object exceeds the ${MAX_JSON_OBJECT_PROPERTIES} property hard limit.`);
+    }
+    properties += dataKeys.length;
+    if (properties > MAX_JSON_PROPERTIES) {
+      throw new Error(`${label} exceeds the ${MAX_JSON_PROPERTIES} property hard limit.`);
+    }
+    const target = array ? new Array(entry.length) : Object.create(null);
+    clones.set(entry, target);
+    active.add(entry);
+    let expansionBytes = 2;
+    for (const key of dataKeys) {
+      if (typeof key !== "string")
+        throw new Error(`${label} symbol properties are unsupported.`);
+      if (DANGEROUS_DATA_KEYS.has(key)) {
+        throw new Error(`${label} contains a dangerous key.`);
+      }
+      if (Buffer.byteLength(key) > MAX_JSON_KEY_BYTES) {
+        throw new Error(`${label} exceeds the ${MAX_JSON_KEY_BYTES} key byte hard limit.`);
+      }
+      let descriptor;
+      try {
+        descriptor = Object.getOwnPropertyDescriptor(entry, key);
+      } catch {
+        throw new Error(`${label} property descriptors could not be inspected safely.`);
+      }
+      if (!descriptor || !("value" in descriptor)) {
+        throw new Error(`${label} accessor properties are unsupported.`);
+      }
+      if (!array && descriptor.enumerable !== true) {
+        throw new Error(`${label} non-enumerable object properties are unsupported.`);
+      }
+      const cloned = clone(descriptor.value, depth + 1);
+      const separatorBytes = expansionBytes === 2 ? 0 : 1;
+      expansionBytes = boundedAdd(expansionBytes, separatorBytes);
+      if (!array) {
+        expansionBytes = boundedAdd(expansionBytes, Buffer.byteLength(JSON.stringify(key)) + 1);
+      }
+      expansionBytes = boundedAdd(expansionBytes, cloned.expansionBytes);
+      Object.defineProperty(target, array ? Number(key) : key, {
+        value: cloned.value,
+        enumerable: true,
+        writable: true,
+        configurable: true
+      });
+    }
+    active.delete(entry);
+    completedExpansionBytes.set(entry, expansionBytes);
+    return { value: target, expansionBytes };
+  };
+  return clone(value, 0).value;
+}
+function hardLimit(requested, fallback, maximum, label) {
+  const value = requested ?? fallback;
+  if (!Number.isInteger(value) || value < 0 || value > maximum) {
+    throw new Error(`${label} must be an integer between 0 and ${maximum}.`);
+  }
+  return value;
+}
+function assertBoundedJsonText(text, maxArrayItems = MAX_INGEST_BATCH_ITEMS, maxTopLevelValues = maxArrayItems) {
+  const bytes = Buffer.byteLength(text);
+  if (bytes > MAX_INGEST_BODY_BYTES) {
+    throw new Error(`Input exceeds the ${MAX_INGEST_BODY_BYTES} byte hard limit.`);
+  }
+  let inString = false;
+  let escaped = false;
+  let depth = 0;
+  let structural = 0;
+  let properties = 0;
+  let nodes = 0;
+  let topLevelValues = 0;
+  const frames = [];
+  let topLevelValueActive = false;
+  const markArrayValue = () => {
+    const frame = frames.at(-1);
+    if (frame?.kind !== "array" || !frame.expectsValue)
+      return;
+    frame.expectsValue = false;
+    if (++frame.items > maxArrayItems) {
+      throw new Error(`Input array exceeds the ${maxArrayItems} item hard limit.`);
+    }
+  };
+  for (let index = 0;index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaped)
+        escaped = false;
+      else if (char === "\\")
+        escaped = true;
+      else if (char === '"')
+        inString = false;
+      continue;
+    }
+    if (/\s/.test(char))
+      continue;
+    if (depth === 0 && !topLevelValueActive) {
+      topLevelValueActive = true;
+      if (++topLevelValues > maxTopLevelValues) {
+        throw new Error(`Input exceeds the ${maxTopLevelValues} top-level item hard limit.`);
+      }
+    }
+    if (char === '"') {
+      markArrayValue();
+      inString = true;
+      continue;
+    }
+    if (char === "{" || char === "[") {
+      markArrayValue();
+      structural += 1;
+      depth += 1;
+      if (++nodes > MAX_JSON_NODES) {
+        throw new Error(`Input exceeds the ${MAX_JSON_NODES} node hard limit.`);
+      }
+      if (depth > MAX_JSON_DEPTH)
+        throw new Error(`Input exceeds the ${MAX_JSON_DEPTH} level JSON depth limit.`);
+      frames.push(char === "[" ? { kind: "array", items: 0, expectsValue: true } : { kind: "object", properties: 0 });
+    } else if (char === "}" || char === "]") {
+      frames.pop();
+      depth -= 1;
+      if (depth === 0)
+        topLevelValueActive = false;
+    } else if (char === "," || char === ":") {
+      structural += 1;
+      const frame = frames.at(-1);
+      if (char === "," && frame?.kind === "array")
+        frame.expectsValue = true;
+      if (char === ":" && frame?.kind === "object") {
+        if (++frame.properties > MAX_JSON_OBJECT_PROPERTIES) {
+          throw new Error(`Input object exceeds the ${MAX_JSON_OBJECT_PROPERTIES} property hard limit.`);
+        }
+        if (++properties > MAX_JSON_PROPERTIES) {
+          throw new Error(`Input exceeds the ${MAX_JSON_PROPERTIES} property hard limit.`);
+        }
+      }
+    } else {
+      markArrayValue();
+    }
+    if (structural > MAX_JSON_STRUCTURAL_TOKENS) {
+      throw new Error(`Input exceeds the ${MAX_JSON_STRUCTURAL_TOKENS} structural-token hard limit.`);
+    }
+  }
+}
+function parseBoundedJsonData(text, label = "Persisted JSON", maxArrayItems = MAX_INGEST_BATCH_ITEMS, maxTopLevelValues = 1) {
+  assertBoundedJsonText(text, maxArrayItems, maxTopLevelValues);
+  return cloneBoundedDataGraph(JSON.parse(text), {
+    label,
+    maxBytes: MAX_INGEST_BODY_BYTES
+  });
+}
+var MAX_INGEST_BODY_BYTES = 8388608, MAX_INGEST_BATCH_ITEMS = 4096, MAX_JSON_STRUCTURAL_TOKENS = 65536, MAX_JSON_PROPERTIES = 32768, MAX_JSON_DEPTH = 64, MAX_JSON_OBJECT_PROPERTIES = 256, MAX_JSON_NODES = 4096, MAX_JSON_KEY_BYTES = 16384, DANGEROUS_DATA_KEYS;
+var init_input_limits = __esm(() => {
+  DANGEROUS_DATA_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+});
+
+// src/runtime-role.ts
+import { existsSync as existsSync2, readFileSync } from "fs";
+import { isProxy as isProxy2 } from "util/types";
+function configGraphIssue(root) {
+  const seen = new WeakSet;
+  const pending = [root];
+  let nodes = 0;
+  let properties = 0;
+  let bytes = 0;
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (typeof value === "string") {
+      bytes += Buffer.byteLength(value);
+      if (bytes > MAX_CONFIG_BYTES)
+        return "config exceeds the aggregate byte limit";
+      continue;
+    }
+    if (!value || typeof value !== "object")
+      continue;
+    if (isProxy2(value))
+      return "config proxy inputs are unsupported";
+    if (seen.has(value))
+      continue;
+    let prototype;
+    try {
+      prototype = Object.getPrototypeOf(value);
+    } catch {
+      return "config prototype could not be inspected safely";
+    }
+    if (Array.isArray(value) && prototype !== Array.prototype || !Array.isArray(value) && prototype !== Object.prototype && prototype !== null) {
+      return "config custom prototypes are unsupported";
+    }
+    if (++nodes > MAX_CONFIG_NODES)
+      return "config exceeds the aggregate node limit";
+    seen.add(value);
+    if (Array.isArray(value) && value.length > MAX_CONFIG_ARRAY_ITEMS) {
+      return "config array exceeds the aggregate item limit";
+    }
+    let keys;
+    try {
+      keys = Reflect.ownKeys(value);
+    } catch {
+      return "config properties could not be enumerated safely";
+    }
+    properties += keys.length;
+    if (properties > MAX_CONFIG_PROPERTIES)
+      return "config exceeds the aggregate property limit";
+    for (const key of keys) {
+      let descriptor;
+      try {
+        descriptor = Object.getOwnPropertyDescriptor(value, key);
+      } catch {
+        return "config property descriptors could not be inspected safely";
+      }
+      if (!descriptor || !("value" in descriptor))
+        return "config accessor properties are unsupported";
+      pending.push(descriptor.value);
+    }
+  }
+  return null;
+}
+function configRecord(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
+}
+function safeRelativePath(value) {
+  if (typeof value !== "string" || !value.trim() || value.includes("\x00") || value.startsWith("/") || value.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(value)) {
+    return false;
+  }
+  const segments = value.replace(/\\/g, "/").split("/");
+  return segments.every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+}
+function optionalStringIssue(record, key, label, allowEmpty = false) {
+  const value = record[key];
+  if (value === undefined)
+    return null;
+  if (typeof value !== "string" || !allowEmpty && !value.trim()) {
+    return `${label} must be ${allowEmpty ? "a string" : "a non-empty string"} when present`;
+  }
+  return null;
+}
+function optionalBooleanIssue(record, key, label) {
+  const value = record[key];
+  return value === undefined || typeof value === "boolean" ? null : `${label} must be a boolean when present`;
+}
+function optionalPositiveIntegerIssue(record, key, label) {
+  const value = record[key];
+  return value === undefined || typeof value === "number" && Number.isInteger(value) && value > 0 ? null : `${label} must be a positive integer when present`;
+}
+function knowledgeConfigValidationIssue(value) {
+  let cloned;
+  try {
+    cloned = cloneBoundedDataGraph(value, {
+      label: "config",
+      maxBytes: MAX_CONFIG_BYTES
     });
-    this.client = createQueryClient(pool2);
+  } catch (error) {
+    return error instanceof Error ? error.message : "config could not be cloned safely";
   }
-  get pool() {
-    return this.client.pool;
+  const graphIssue = configGraphIssue(cloned);
+  if (graphIssue)
+    return graphIssue;
+  const config = configRecord(cloned);
+  if (!config)
+    return "config root must be an object";
+  if (config.version !== 1)
+    return "config version must be 1";
+  if (config.mode !== "local" && config.mode !== "hosted") {
+    return "config mode must be exactly local or hosted";
   }
-  async run(sql, ...params) {
-    const result = await this.client.query(translatePlaceholders(sql), normalizeParams(params));
-    return { changes: result.rowCount };
+  const storage = configRecord(config.storage);
+  if (!storage)
+    return "config storage must be an object";
+  if (storage.type !== "local" && storage.type !== "s3") {
+    return "config storage.type must be local or s3";
   }
-  async all(sql, ...params) {
-    const result = await this.client.query(translatePlaceholders(sql), normalizeParams(params));
-    return result.rows;
+  if (config.mode === "local" && storage.type === "s3") {
+    return "config mode local must not select S3 storage";
   }
-  async get(sql, ...params) {
-    return this.client.get(translatePlaceholders(sql), normalizeParams(params));
+  if (!safeRelativePath(storage.artifacts_root)) {
+    return "config storage.artifacts_root must be a safe relative path";
   }
-  async close() {
-    await this.client.close();
+  if (storage.type === "s3") {
+    const s3 = configRecord(storage.s3);
+    if (!s3 || typeof s3.bucket !== "string" || !s3.bucket.trim()) {
+      return "config S3 storage requires a non-empty bucket";
+    }
+  }
+  if (storage.type === "local" && storage.s3 !== undefined) {
+    return "config local storage must not include storage.s3";
+  }
+  if (storage.s3 !== undefined) {
+    const s3 = configRecord(storage.s3);
+    if (!s3)
+      return "config storage.s3 must be an object when present";
+    for (const [key, label, allowEmpty] of [
+      ["bucket", "config storage.s3.bucket", false],
+      ["prefix", "config storage.s3.prefix", true],
+      ["region", "config storage.s3.region", false],
+      ["profile", "config storage.s3.profile", false],
+      ["kms_key_id", "config storage.s3.kms_key_id", false]
+    ]) {
+      const issue = optionalStringIssue(s3, key, label, allowEmpty);
+      if (issue)
+        return issue;
+    }
+    const attemptsIssue = optionalPositiveIntegerIssue(s3, "max_attempts", "config storage.s3.max_attempts");
+    if (attemptsIssue)
+      return attemptsIssue;
+    if (s3.server_side_encryption !== undefined && s3.server_side_encryption !== "AES256" && s3.server_side_encryption !== "aws:kms") {
+      return "config storage.s3.server_side_encryption must be AES256 or aws:kms when present";
+    }
+  }
+  const sources = configRecord(config.sources);
+  if (!sources || sources.preferred_ref !== "open-files") {
+    return "config sources.preferred_ref must be open-files";
+  }
+  if (!Array.isArray(sources.allowed_schemes) || sources.allowed_schemes.some((entry) => typeof entry !== "string" || !entry.trim())) {
+    return "config sources.allowed_schemes must be an array of non-empty strings";
+  }
+  for (const key of ["hosted", "embeddings", "providers", "safety"]) {
+    if (config[key] !== undefined && !configRecord(config[key])) {
+      return `config ${key} must be an object when present`;
+    }
+  }
+  const hosted = configRecord(config.hosted);
+  if (hosted?.api_url !== undefined && (typeof hosted.api_url !== "string" || !hosted.api_url.trim())) {
+    return "config hosted.api_url must be a non-empty string when present";
+  }
+  const embeddings = configRecord(config.embeddings);
+  if (embeddings) {
+    const modelIssue = optionalStringIssue(embeddings, "default_model", "config embeddings.default_model");
+    if (modelIssue)
+      return modelIssue;
+    for (const key of ["dimensions", "batch_size", "max_parallel_calls"]) {
+      const issue = optionalPositiveIntegerIssue(embeddings, key, `config embeddings.${key}`);
+      if (issue)
+        return issue;
+    }
+  }
+  const providers = configRecord(config.providers);
+  if (providers) {
+    const modelIssue = optionalStringIssue(providers, "default_model", "config providers.default_model");
+    if (modelIssue)
+      return modelIssue;
+    if (providers.aliases !== undefined) {
+      const aliases = configRecord(providers.aliases);
+      if (!aliases || Object.entries(aliases).some(([key, value2]) => !key.trim() || typeof value2 !== "string" || !value2.trim())) {
+        return "config providers.aliases must map non-empty names to non-empty strings";
+      }
+    }
+    for (const providerName of ["openai", "anthropic", "deepseek"]) {
+      if (providers[providerName] === undefined)
+        continue;
+      const provider = configRecord(providers[providerName]);
+      if (!provider)
+        return `config providers.${providerName} must be an object when present`;
+      for (const key of ["api_key_env", "base_url", "default_model"]) {
+        const issue = optionalStringIssue(provider, key, `config providers.${providerName}.${key}`);
+        if (issue)
+          return issue;
+      }
+    }
+  }
+  const safety = configRecord(config.safety);
+  if (safety) {
+    if (safety.network !== undefined) {
+      const network = configRecord(safety.network);
+      if (!network)
+        return "config safety.network must be an object when present";
+      for (const key of ["web_search_enabled", "s3_reads_enabled"]) {
+        const issue = optionalBooleanIssue(network, key, `config safety.network.${key}`);
+        if (issue)
+          return issue;
+      }
+      if (network.allowed_s3_buckets !== undefined && (!Array.isArray(network.allowed_s3_buckets) || network.allowed_s3_buckets.some((entry) => typeof entry !== "string" || !entry.trim()))) {
+        return "config safety.network.allowed_s3_buckets must be an array of non-empty strings";
+      }
+    }
+    if (safety.redaction !== undefined) {
+      const redaction = configRecord(safety.redaction);
+      if (!redaction)
+        return "config safety.redaction must be an object when present";
+      const issue = optionalBooleanIssue(redaction, "enabled", "config safety.redaction.enabled");
+      if (issue)
+        return issue;
+    }
+    if (safety.approvals !== undefined) {
+      const approvals = configRecord(safety.approvals);
+      if (!approvals)
+        return "config safety.approvals must be an object when present";
+      const issue = optionalBooleanIssue(approvals, "generated_writes_require_approval", "config safety.approvals.generated_writes_require_approval");
+      if (issue)
+        return issue;
+    }
+  }
+  return null;
+}
+function configContainmentError(detail, surface = "public-api") {
+  return new KnowledgeContainmentError("KNOWLEDGE_CONFIG_INVALID", 503, "invalid", surface, `${detail}; no Knowledge write or data-plane I/O was attempted`);
+}
+function assertValidKnowledgeConfig(value, surface = "public-api") {
+  const issue = knowledgeConfigValidationIssue(value);
+  if (issue)
+    throw configContainmentError(issue, surface);
+}
+function readRegularConfigTextNoFollow(path) {
+  try {
+    return readAnchoredRegularFileSnapshot(path, MAX_CONFIG_BYTES)?.content;
+  } catch (error) {
+    if (error instanceof AnchoredFilesystemError) {
+      throw configContainmentError(error.message);
+    }
+    throw configContainmentError("config could not be opened through its anchored directory");
   }
 }
-function createKnowledgeCloudClient() {
-  return createCloudPoolFromEnv(KNOWLEDGE_APP_NAME, { applicationName: "@hasna/knowledge" }).client;
+function readValidatedKnowledgeConfig(configPath, fs = roleFs) {
+  let raw;
+  if (fs === roleFs) {
+    raw = readRegularConfigTextNoFollow(configPath);
+  } else {
+    if (!fs.existsSync(configPath))
+      return;
+    raw = fs.readFileSync(configPath, "utf8");
+  }
+  if (raw === undefined)
+    return;
+  if (Buffer.byteLength(raw) > MAX_CONFIG_BYTES) {
+    throw configContainmentError(`config exceeds the ${MAX_CONFIG_BYTES} byte hard limit`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw configContainmentError("config JSON is malformed");
+  }
+  assertValidKnowledgeConfig(parsed);
+  return parsed;
 }
+function normalizeMode(value) {
+  const normalized = value.trim().toLowerCase().replace(/-/g, "_");
+  if (normalized === "local" || normalized === "offline" || normalized === "standalone" || normalized === "desktop")
+    return "local";
+  if (normalized === "cloud" || normalized === "hosted" || normalized === "hosted_client" || normalized === "hosted_server" || normalized === "self_hosted" || normalized === "remote" || normalized === "hybrid")
+    return "hosted";
+  return null;
+}
+function normalizeBooleanMode(value) {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on")
+    return "hosted";
+  if (normalized === "false" || normalized === "0" || normalized === "no" || normalized === "off")
+    return "local";
+  return null;
+}
+function environmentLayers(supplied) {
+  const ambient = process.env;
+  if (!supplied || supplied === ambient)
+    return [{ name: "ambient", env: ambient }];
+  return [
+    { name: "ambient", env: ambient },
+    { name: "supplied", env: supplied }
+  ];
+}
+function safeEnvironmentValue(layer, key, addIssue) {
+  try {
+    let owner = layer.env;
+    let raw;
+    while (owner) {
+      if (isProxy2(owner)) {
+        addIssue(`unreadable-env:${layer.name}:${key}`);
+        return;
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(owner, key);
+      if (descriptor) {
+        if (!("value" in descriptor)) {
+          addIssue(`unreadable-env:${layer.name}:${key}`);
+          return;
+        }
+        raw = descriptor.value;
+        break;
+      }
+      owner = Object.getPrototypeOf(owner);
+    }
+    if (raw === undefined || raw === null || raw === "")
+      return;
+    if (typeof raw !== "string") {
+      addIssue(`non-string-env:${layer.name}:${key}`);
+      return;
+    }
+    return raw.trim() || undefined;
+  } catch {
+    addIssue(`unreadable-env:${layer.name}:${key}`);
+    return;
+  }
+}
+function environmentSignals(layers, keys, addIssue) {
+  const entries = [];
+  for (const layer of layers) {
+    for (const key of keys) {
+      const value = safeEnvironmentValue(layer, key, addIssue);
+      if (value)
+        entries.push({ source: `${layer.name}:${key}`, value });
+    }
+  }
+  return entries;
+}
+function distinctSignalValues(entries) {
+  return new Set(entries.map(({ value }) => value)).size;
+}
+function resolveKnowledgeRuntimeRole(intent = {}) {
+  const layers = environmentLayers(intent.env);
+  const surface = intent.surface ?? "public-api";
+  const signals = [];
+  const issues = [];
+  const modeSignals = [];
+  const addIssue = (issue) => {
+    if (!issues.includes(issue))
+      issues.push(issue);
+  };
+  const collectMode = (source, value, normalize2 = normalizeMode) => {
+    const trimmed = value?.trim();
+    if (!trimmed)
+      return;
+    signals.push(source);
+    const mode = normalize2(trimmed);
+    if (!mode)
+      addIssue(`unknown-mode:${source}`);
+    else
+      modeSignals.push({ source, mode });
+  };
+  collectMode("explicit-mode", intent.explicitMode);
+  collectMode("config-mode", intent.configMode);
+  for (const layer of layers) {
+    for (const key of MODE_KEYS) {
+      collectMode(`${layer.name}:${key}`, safeEnvironmentValue(layer, key, addIssue));
+    }
+    for (const key of ROLE_KEYS) {
+      collectMode(`${layer.name}:${key}`, safeEnvironmentValue(layer, key, addIssue));
+    }
+    for (const key of HOSTED_BOOLEAN_KEYS) {
+      collectMode(`${layer.name}:${key}`, safeEnvironmentValue(layer, key, addIssue), normalizeBooleanMode);
+    }
+  }
+  const apiUrls = environmentSignals(layers, API_URL_KEYS, addIssue);
+  const apiKeys = environmentSignals(layers, API_KEY_KEYS, addIssue);
+  const databaseUrls = environmentSignals(layers, DATABASE_URL_KEYS, addIssue);
+  signals.push(...apiUrls.map(({ source }) => source), ...apiKeys.map(({ source }) => source), ...databaseUrls.map(({ source }) => source));
+  if (distinctSignalValues(apiUrls) > 1)
+    addIssue("conflicting-api-url-aliases");
+  if (distinctSignalValues(apiKeys) > 1)
+    addIssue("conflicting-api-key-aliases");
+  if (distinctSignalValues(databaseUrls) > 1)
+    addIssue("conflicting-database-url-aliases");
+  for (const layer of layers) {
+    const layerUrls = environmentSignals([layer], API_URL_KEYS, addIssue);
+    const layerKeys = environmentSignals([layer], API_KEY_KEYS, addIssue);
+    if (layerUrls.length > 0 !== layerKeys.length > 0)
+      addIssue(`partial-http-intent:${layer.name}`);
+  }
+  const distinctModes = new Set(modeSignals.map(({ mode }) => mode));
+  if (distinctModes.size > 1)
+    addIssue("conflicting-modes");
+  const explicitLocal = modeSignals.some(({ mode }) => mode === "local");
+  const explicitHosted = modeSignals.some(({ mode }) => mode === "hosted");
+  const activeHostedSignal = apiUrls.length > 0 || apiKeys.length > 0 || databaseUrls.length > 0 || Boolean(intent.hostedRequested);
+  const hasApiUrl = apiUrls.length > 0;
+  const hasApiKey = apiKeys.length > 0;
+  if (hasApiUrl !== hasApiKey)
+    addIssue("partial-http-intent");
+  if (!explicitHosted && databaseUrls.length > 0)
+    addIssue("database-url-without-hosted-mode");
+  if (explicitLocal && activeHostedSignal)
+    addIssue("local-hosted-conflict");
+  const surfaceIsServer = surface === "server";
+  const surfaceIsOperator = surface === "operator-migration";
+  if (surfaceIsServer && explicitLocal)
+    addIssue("server-local-conflict");
+  if (surfaceIsOperator)
+    addIssue("operator-capability-required");
+  const hosted = explicitHosted || Boolean(intent.hostedRequested) || hasApiUrl && hasApiKey || surfaceIsServer;
+  if (hosted && intent.localStoreOverride)
+    addIssue("hosted-local-store-conflict");
+  if (issues.length > 0) {
+    return { role: "invalid", surface, source: "invalid", signals, issues };
+  }
+  if (hosted) {
+    return {
+      role: surfaceIsServer ? "hosted-server" : "hosted-client",
+      surface,
+      source: explicitHosted ? "mode" : intent.hostedRequested ? "operation" : surfaceIsServer ? "surface" : "http-config",
+      signals,
+      issues
+    };
+  }
+  return {
+    role: "local",
+    surface,
+    source: explicitLocal ? "mode" : "legacy-default",
+    signals,
+    issues
+  };
+}
+function assertKnowledgeLocalRuntimeWithConfig(intent, readConfigMode) {
+  return assertKnowledgeLocalRuntime(resolveKnowledgeRuntimeRoleWithConfig(intent, readConfigMode));
+}
+function resolveKnowledgeRuntimeRoleWithConfig(intent, readConfigMode) {
+  const preliminary = resolveKnowledgeRuntimeRole(intent);
+  if (preliminary.role !== "local")
+    return preliminary;
+  return resolveKnowledgeRuntimeRole({ ...intent, configMode: readConfigMode() });
+}
+function assertKnowledgeLocalRuntimeForConfigPath(intent, configPath, fs = roleFs, required = false) {
+  return assertKnowledgeLocalRuntimeWithConfig(intent, () => readKnowledgeConfiguredMode(configPath, fs, required));
+}
+function containmentErrorFor(resolution) {
+  if (resolution.role === "invalid") {
+    if (resolution.issues.includes("unknown-mode:config-mode")) {
+      return configContainmentError("persisted or supplied config is structurally invalid", resolution.surface);
+    }
+    return new KnowledgeContainmentError("KNOWLEDGE_RUNTIME_INTENT_INVALID", 503, resolution.role, resolution.surface, "runtime intent is incomplete, unknown, or conflicting; no Knowledge I/O was attempted");
+  }
+  if (resolution.role === "operator-migration") {
+    return new KnowledgeContainmentError("KNOWLEDGE_OPERATOR_REQUIRED", 503, resolution.role, resolution.surface, "operator-only operation is unavailable through this public boundary");
+  }
+  return new KnowledgeContainmentError("KNOWLEDGE_HOSTED_CONTAINED", 503, resolution.role, resolution.surface, "hosted Knowledge access is disabled until trusted project authority is available");
+}
+function assertKnowledgeLocalRuntime(intentOrResolution = {}) {
+  const resolution = "role" in intentOrResolution ? intentOrResolution : resolveKnowledgeRuntimeRole(intentOrResolution);
+  if (resolution.role !== "local")
+    throw containmentErrorFor(resolution);
+  return resolution;
+}
+function readKnowledgeConfiguredMode(configPath, fs = roleFs, required = false) {
+  try {
+    const parsed = readValidatedKnowledgeConfig(configPath, fs);
+    if (!parsed)
+      return required ? INVALID_CONFIG_MODE : undefined;
+    return configuredModeFromValidatedConfig(parsed);
+  } catch {
+    return INVALID_CONFIG_MODE;
+  }
+}
+function configuredModeFromValidatedConfig(parsed) {
+  const storage = parsed.storage;
+  return parsed.mode === "hosted" || storage.type === "s3" ? "hosted" : "local";
+}
+function authorityContainmentError(authority, surface = "server") {
+  if (!authority || authority.trust === "missing" || authority.trust === "untrusted") {
+    return new KnowledgeContainmentError("KNOWLEDGE_AUTHORITY_UNAVAILABLE", 503, "hosted-server", surface, "trusted tenant and project authority is unavailable");
+  }
+  if (authority.projectGrants.length === 0) {
+    return new KnowledgeContainmentError("KNOWLEDGE_PROJECT_FORBIDDEN", 403, "hosted-server", surface, "the trusted principal has no Knowledge project grant");
+  }
+  return new KnowledgeContainmentError("KNOWLEDGE_POSITIVE_AUTHORITY_DISABLED", 503, "hosted-server", surface, "positive hosted access is intentionally disabled during Stage A");
+}
+var roleFs, INVALID_CONFIG_MODE = "__invalid_config__", MAX_CONFIG_ARRAY_ITEMS = 4096, MAX_CONFIG_PROPERTIES = 4096, MAX_CONFIG_NODES = 2048, MAX_CONFIG_BYTES = 1048576, MODE_KEYS, ROLE_KEYS, HOSTED_BOOLEAN_KEYS, API_URL_KEYS, API_KEY_KEYS, DATABASE_URL_KEYS, MAX_KNOWLEDGE_DIAGNOSTIC_BYTES = 384, CONTAINMENT_MESSAGES, KnowledgeContainmentError;
+var init_runtime_role = __esm(() => {
+  init_anchored_fs();
+  init_input_limits();
+  roleFs = {
+    existsSync: existsSync2,
+    readFileSync
+  };
+  MODE_KEYS = [
+    "HASNA_KNOWLEDGE_STORAGE_MODE",
+    "KNOWLEDGE_STORAGE_MODE",
+    "HASNA_KNOWLEDGE_MODE",
+    "KNOWLEDGE_MODE"
+  ];
+  ROLE_KEYS = [
+    "CODEWITH_RUNTIME_ROLE",
+    "CODEWITH_EXECUTION_ROLE",
+    "CODEWITH_AGENT_ROLE",
+    "CODEWITH_ROLE",
+    "KNOWLEDGE_RUNTIME_ROLE",
+    "KNOWLEDGE_EXECUTION_ROLE",
+    "KNOWLEDGE_AGENT_ROLE",
+    "KNOWLEDGE_ROLE"
+  ];
+  HOSTED_BOOLEAN_KEYS = [
+    "CODEWITH_HOSTED",
+    "KNOWLEDGE_HOSTED"
+  ];
+  API_URL_KEYS = [
+    "HASNA_KNOWLEDGE_API_URL",
+    "HASNA_KNOWLEDGE_API_BASE_URL",
+    "KNOWLEDGE_API_URL",
+    "KNOWLEDGE_API_BASE_URL",
+    "OPEN_KNOWLEDGE_API_URL"
+  ];
+  API_KEY_KEYS = [
+    "HASNA_KNOWLEDGE_API_KEY",
+    "KNOWLEDGE_API_KEY",
+    "OPEN_KNOWLEDGE_API_KEY"
+  ];
+  DATABASE_URL_KEYS = [
+    "HASNA_KNOWLEDGE_DATABASE_URL",
+    "KNOWLEDGE_DATABASE_URL",
+    "HASNA_KNOWLEDGE_DATABASE_URL_OWNER"
+  ];
+  CONTAINMENT_MESSAGES = {
+    KNOWLEDGE_RUNTIME_INTENT_INVALID: "runtime intent was rejected before Knowledge I/O",
+    KNOWLEDGE_CONFIG_INVALID: "configuration was rejected before Knowledge I/O",
+    KNOWLEDGE_HOSTED_CONTAINED: "hosted capability is unavailable during Stage A",
+    KNOWLEDGE_AUTHORITY_UNAVAILABLE: "trusted authority is unavailable during Stage A",
+    KNOWLEDGE_PROJECT_FORBIDDEN: "project authority denied Knowledge access",
+    KNOWLEDGE_POSITIVE_AUTHORITY_DISABLED: "positive hosted authority is disabled during Stage A",
+    KNOWLEDGE_OPERATOR_REQUIRED: "operator capability is required for this operation"
+  };
+  KnowledgeContainmentError = class KnowledgeContainmentError extends Error {
+    code;
+    status;
+    role;
+    surface;
+    name = "KnowledgeContainmentError";
+    constructor(code, status, role, surface, _detail) {
+      const message = `${code}: ${CONTAINMENT_MESSAGES[code]}`;
+      super(Buffer.byteLength(message) <= MAX_KNOWLEDGE_DIAGNOSTIC_BYTES ? message : `${code}: contained`);
+      this.code = code;
+      this.status = status;
+      this.role = role;
+      this.surface = surface;
+    }
+    toJSON() {
+      const payload = {
+        ok: false,
+        code: this.code,
+        status: this.status,
+        role: this.role,
+        surface: this.surface,
+        message: this.message
+      };
+      if (Buffer.byteLength(JSON.stringify(payload)) > MAX_KNOWLEDGE_DIAGNOSTIC_BYTES) {
+        return { ...payload, message: `${this.code}: contained` };
+      }
+      return payload;
+    }
+  };
+});
 
 // src/db/storage-sync.ts
+init_runtime_role();
 var STORAGE_TABLES = [
   "sources",
   "wiki_pages",
@@ -1476,325 +2031,213 @@ var STORAGE_TABLES = [
   "knowledge_sync_imports"
 ];
 var KNOWLEDGE_STORAGE_TABLES = STORAGE_TABLES;
-var DEPRECATED_CLOUD_ALIASES = ["remote", "hybrid", "self_hosted"];
 var KNOWLEDGE_STORAGE_ENV = "HASNA_KNOWLEDGE_DATABASE_URL";
 var KNOWLEDGE_STORAGE_FALLBACK_ENV = "KNOWLEDGE_DATABASE_URL";
 var KNOWLEDGE_STORAGE_MODE_ENV = "HASNA_KNOWLEDGE_STORAGE_MODE";
 var KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV = "KNOWLEDGE_STORAGE_MODE";
 var STORAGE_DATABASE_ENV = [KNOWLEDGE_STORAGE_ENV, KNOWLEDGE_STORAGE_FALLBACK_ENV];
 var STORAGE_MODE_ENV = [KNOWLEDGE_STORAGE_MODE_ENV, KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV];
-var PRIMARY_KEYS = {
-  sources: ["id"],
-  wiki_pages: ["id"],
-  source_revisions: ["id"],
-  chunks: ["id"],
-  chunk_embeddings: ["id"],
-  wiki_backlinks: ["from_page_id", "to_page_id"],
-  citations: ["id"],
-  knowledge_indexes: ["id"],
-  runs: ["id"],
-  run_events: ["id"],
-  provider_usage: ["id"],
-  redaction_findings: ["id"],
-  storage_objects: ["id"],
-  audit_events: ["id"],
-  approval_gates: ["id"],
-  vector_index_entries: ["id"],
-  reindex_queue: ["id"],
-  knowledge_machines: ["machine_id"],
-  knowledge_sync_snapshots: ["id"],
-  knowledge_sync_changes: ["id"],
-  knowledge_sync_conflicts: ["id"],
-  knowledge_sync_table_clocks: ["table_name", "machine_id"],
-  knowledge_sync_imports: ["bundle_id"]
-};
-function readEnv(name) {
-  const value = process.env[name]?.trim();
-  return value || undefined;
-}
-function normalizeStorageMode2(value) {
-  const normalized = value?.trim().toLowerCase().replace(/-/g, "_");
-  if (normalized === "local")
-    return "local";
-  if (normalized === "cloud")
-    return "cloud";
-  if (normalized && DEPRECATED_CLOUD_ALIASES.includes(normalized))
-    return "cloud";
-  return;
-}
-function openScopedDb(options = {}) {
-  const workspace = ensureKnowledgeWorkspace(resolveScopedWorkspace(options.scope, options.cwd).home);
-  migrateKnowledgeDb(workspace.knowledgeDbPath);
-  return {
-    db: openKnowledgeDb(workspace.knowledgeDbPath),
-    path: workspace.knowledgeDbPath,
-    scope: options.scope ?? "global"
-  };
+function containedStorage() {
+  throw new KnowledgeContainmentError("KNOWLEDGE_HOSTED_CONTAINED", 503, "hosted-client", "public-api", "database synchronization is unavailable during Stage A");
 }
 function getStorageDatabaseEnvName() {
-  for (const name of STORAGE_DATABASE_ENV) {
-    if (readEnv(name))
-      return name;
-  }
   return null;
 }
 function getStorageDatabaseEnv() {
-  const name = getStorageDatabaseEnvName();
-  return name ? { name } : null;
+  return null;
 }
 function getStorageDatabaseUrl() {
-  const env = getStorageDatabaseEnv();
-  return env ? readEnv(env.name) ?? null : null;
+  return null;
 }
 function getStorageMode() {
-  const mode2 = normalizeStorageMode2(readEnv(KNOWLEDGE_STORAGE_MODE_ENV)) ?? normalizeStorageMode2(readEnv(KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV));
-  if (mode2)
-    return mode2;
   return "local";
 }
 async function getStoragePg() {
-  const url = getStorageDatabaseUrl();
-  if (!url) {
-    throw new Error("Missing HASNA_KNOWLEDGE_DATABASE_URL or KNOWLEDGE_DATABASE_URL");
-  }
-  return new PgAdapterAsync(url);
+  return containedStorage();
 }
 async function runStorageMigrations(remote) {
-  await remote.run("CREATE EXTENSION IF NOT EXISTS pgcrypto");
-  for (const sql of PG_MIGRATIONS)
-    await remote.run(sql);
+  return containedStorage();
 }
-async function storagePush(options = {}) {
-  const remote = options.remote ?? await getStoragePg();
-  const ownsRemote = !options.remote;
-  const local = openScopedDb(options);
-  try {
-    await runStorageMigrations(remote);
-    const results = [];
-    for (const table of resolveTables(options.tables)) {
-      results.push(await pushTable(local.db, remote, table));
-    }
-    recordSyncMeta(local.db, "push", results);
-    return results;
-  } finally {
-    local.db.close();
-    if (ownsRemote)
-      await remote.close();
-  }
+async function storagePush() {
+  return containedStorage();
 }
-async function storagePull(options = {}) {
-  const remote = options.remote ?? await getStoragePg();
-  const ownsRemote = !options.remote;
-  const local = openScopedDb(options);
-  try {
-    await runStorageMigrations(remote);
-    const results = [];
-    for (const table of resolveTables(options.tables)) {
-      results.push(await pullTable(remote, local.db, table));
-    }
-    recordSyncMeta(local.db, "pull", results);
-    return results;
-  } finally {
-    local.db.close();
-    if (ownsRemote)
-      await remote.close();
-  }
+async function storagePull() {
+  return containedStorage();
 }
-async function storageSync(options = {}) {
-  const pull = await storagePull(options);
-  const push = await storagePush(options);
-  return { pull, push };
+async function storageSync() {
+  return containedStorage();
 }
-function getSyncMetaAll(options = {}) {
-  const local = openScopedDb(options);
-  try {
-    ensureSyncMetaTable(local.db);
-    return local.db.query("SELECT table_name, last_synced_at, direction FROM _knowledge_sync_meta ORDER BY table_name, direction").all();
-  } finally {
-    local.db.close();
-  }
+function getSyncMetaAll() {
+  return [];
 }
-function getStorageStatus(options = {}) {
-  const activeEnv = getStorageDatabaseEnv();
-  const local = openScopedDb(options);
-  try {
-    ensureSyncMetaTable(local.db);
-    const sync = local.db.query("SELECT table_name, last_synced_at, direction FROM _knowledge_sync_meta ORDER BY table_name, direction").all();
-    return {
-      configured: Boolean(activeEnv),
-      mode: getStorageMode(),
-      env: STORAGE_DATABASE_ENV,
-      activeEnv: activeEnv?.name ?? null,
-      service: "knowledge",
-      scope: local.scope,
-      databasePath: local.path,
-      tables: STORAGE_TABLES,
-      sync
-    };
-  } finally {
-    local.db.close();
-  }
+function getStorageStatus() {
+  return {
+    configured: false,
+    mode: "local",
+    env: STORAGE_DATABASE_ENV,
+    activeEnv: null,
+    service: "knowledge",
+    scope: "contained",
+    databasePath: "[contained-zero-io]",
+    tables: STORAGE_TABLES,
+    sync: []
+  };
 }
 function resolveTables(tables) {
+  assertKnowledgeLocalRuntime({ surface: "public-api", env: process.env });
   if (!tables || tables.length === 0)
     return [...STORAGE_TABLES];
   const allowed = new Set(STORAGE_TABLES);
   const requested = tables.map((table) => table.trim()).filter(Boolean);
   const invalid = requested.filter((table) => !allowed.has(table));
   if (invalid.length > 0)
-    throw new Error(`Unknown knowledge sync table(s): ${invalid.join(", ")}`);
+    throw new Error("Unknown knowledge sync table selection.");
   return requested;
 }
 function parseStorageTables(value) {
+  assertKnowledgeLocalRuntime({ surface: "public-api", env: process.env });
   if (!value)
     return;
   return resolveTables(Array.isArray(value) ? value : value.split(","));
 }
-async function pushTable(db, remote, table) {
-  const result = { table, rowsRead: 0, rowsWritten: 0, errors: [] };
-  try {
-    if (!tableExists2(db, table))
-      return result;
-    const rows = db.query(`SELECT * FROM ${quoteIdent(table)}`).all();
-    result.rowsRead = rows.length;
-    if (rows.length === 0)
-      return result;
-    const remoteColumns = await getRemoteColumns(remote, table);
-    const columns = filterRemoteColumns(remoteColumns, Object.keys(rows[0]));
-    result.rowsWritten = await upsertPg(remote, table, columns, rows, remoteColumns);
-  } catch (error) {
-    result.errors.push(error instanceof Error ? error.message : String(error));
+// src/db/remote-storage.ts
+init_runtime_role();
+var KNOWLEDGE_APP_NAME = "knowledge";
+function containedRemoteStorage() {
+  throw new KnowledgeContainmentError("KNOWLEDGE_HOSTED_CONTAINED", 503, "hosted-client", "public-api", "remote database clients are unavailable during Stage A");
+}
+
+class PgAdapterAsync {
+  constructor(connectionString) {
+    containedRemoteStorage();
   }
-  return result;
-}
-async function pullTable(remote, db, table) {
-  const result = { table, rowsRead: 0, rowsWritten: 0, errors: [] };
-  try {
-    if (!tableExists2(db, table))
-      return result;
-    const rows = await remote.all(`SELECT * FROM ${quoteIdent(table)}`);
-    result.rowsRead = rows.length;
-    if (rows.length === 0)
-      return result;
-    const columns = filterLocalColumns(db, table, Object.keys(rows[0]));
-    result.rowsWritten = upsertSqlite(db, table, columns, rows);
-  } catch (error) {
-    result.errors.push(error instanceof Error ? error.message : String(error));
+  get pool() {
+    return containedRemoteStorage();
   }
-  return result;
-}
-async function getRemoteColumns(remote, table) {
-  const rows = await remote.all("SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name = ?", table);
-  return new Map(rows.map((row) => [row.column_name, row.data_type]));
-}
-function filterRemoteColumns(remoteColumns, columns) {
-  if (remoteColumns.size === 0)
-    return columns;
-  return columns.filter((column) => remoteColumns.has(column));
-}
-function filterLocalColumns(db, table, columns) {
-  const rows = db.query(`PRAGMA table_info(${quoteIdent(table)})`).all();
-  const allowed = new Set(rows.map((row) => row.name));
-  return columns.filter((column) => allowed.has(column));
-}
-async function upsertPg(remote, table, columns, rows, remoteColumns) {
-  if (columns.length === 0)
-    return 0;
-  const primaryKeys = PRIMARY_KEYS[table];
-  const columnList = columns.map(quoteIdent).join(", ");
-  const placeholders = columns.map(() => "?").join(", ");
-  const keyList = primaryKeys.map(quoteIdent).join(", ");
-  const updateColumns = columns.filter((column) => !primaryKeys.includes(column));
-  const fallbackKey = primaryKeys[0];
-  const setClause = updateColumns.length > 0 ? updateColumns.map((column) => `${quoteIdent(column)} = EXCLUDED.${quoteIdent(column)}`).join(", ") : `${quoteIdent(fallbackKey)} = EXCLUDED.${quoteIdent(fallbackKey)}`;
-  for (const row of rows) {
-    await remote.run(`INSERT INTO ${quoteIdent(table)} (${columnList}) VALUES (${placeholders})
-       ON CONFLICT (${keyList}) DO UPDATE SET ${setClause}`, ...columns.map((column) => coerceForPg(row[column], remoteColumns.get(column))));
+  async run(sql, ...params) {
+    return containedRemoteStorage();
   }
-  return rows.length;
-}
-function upsertSqlite(db, table, columns, rows) {
-  if (columns.length === 0)
-    return 0;
-  const primaryKeys = PRIMARY_KEYS[table];
-  const columnList = columns.map(quoteIdent).join(", ");
-  const placeholders = columns.map(() => "?").join(", ");
-  const keyList = primaryKeys.map(quoteIdent).join(", ");
-  const updateColumns = columns.filter((column) => !primaryKeys.includes(column));
-  const fallbackKey = primaryKeys[0];
-  const setClause = updateColumns.length > 0 ? updateColumns.map((column) => `${quoteIdent(column)} = excluded.${quoteIdent(column)}`).join(", ") : `${quoteIdent(fallbackKey)} = excluded.${quoteIdent(fallbackKey)}`;
-  const statement = db.query(`INSERT INTO ${quoteIdent(table)} (${columnList}) VALUES (${placeholders})
-     ON CONFLICT (${keyList}) DO UPDATE SET ${setClause}`);
-  const insert = db.transaction((batch) => {
-    for (const row of batch)
-      statement.run(...columns.map((column) => coerceForSqlite(row[column])));
-  });
-  insert(rows);
-  return rows.length;
-}
-function recordSyncMeta(db, direction, results) {
-  ensureSyncMetaTable(db);
-  const now = new Date().toISOString();
-  const statement = db.query(`
-    INSERT INTO _knowledge_sync_meta (table_name, last_synced_at, direction)
-    VALUES (?, ?, ?)
-    ON CONFLICT(table_name, direction) DO UPDATE SET last_synced_at = excluded.last_synced_at
-  `);
-  for (const result of results) {
-    if (result.errors.length > 0)
-      continue;
-    statement.run(result.table, now, direction);
+  async all(sql, ...params) {
+    return containedRemoteStorage();
+  }
+  async get(sql, ...params) {
+    return containedRemoteStorage();
+  }
+  async close() {
+    return containedRemoteStorage();
   }
 }
-function ensureSyncMetaTable(db) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS _knowledge_sync_meta (
-      table_name TEXT NOT NULL,
-      last_synced_at TEXT,
-      direction TEXT NOT NULL CHECK(direction IN ('push', 'pull')),
-      PRIMARY KEY (table_name, direction)
-    )
-  `);
+function createKnowledgeCloudClient() {
+  return containedRemoteStorage();
 }
-function tableExists2(db, table) {
-  const row = db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table);
-  return Boolean(row);
+// src/db/pg-migrations.ts
+var PG_MIGRATIONS = [];
+// src/generated/storage-kit/mode.ts
+init_runtime_role();
+function containedMode() {
+  throw new KnowledgeContainmentError("KNOWLEDGE_HOSTED_CONTAINED", 503, "hosted-client", "public-api", "storage mode capability is unavailable during Stage A");
 }
-function quoteIdent(identifier) {
-  return `"${identifier.replace(/"/g, '""')}"`;
+function normalizeStorageMode(value) {
+  return containedMode();
 }
-function coerceForPg(value, dataType) {
-  if (value === undefined || value === null)
-    return null;
-  if (dataType === "boolean") {
-    if (typeof value === "boolean")
-      return value;
-    if (typeof value === "number")
-      return value !== 0;
-    if (typeof value === "string")
-      return value === "1" || value.toLowerCase() === "true";
+function storageEnvKeys(name) {
+  return containedMode();
+}
+function resolveStorageMode(name) {
+  return containedMode();
+}
+function resolveDatabaseUrl(name) {
+  return null;
+}
+// src/generated/storage-kit/tls.ts
+init_runtime_role();
+function containedTls() {
+  throw new KnowledgeContainmentError("KNOWLEDGE_HOSTED_CONTAINED", 503, "hosted-client", "public-api", "database TLS capability is unavailable during Stage A");
+}
+function resolveTlsConfig(connectionString) {
+  return containedTls();
+}
+// src/generated/storage-kit/query.ts
+init_runtime_role();
+function containedQuery() {
+  throw new KnowledgeContainmentError("KNOWLEDGE_HOSTED_CONTAINED", 503, "hosted-client", "public-api", "query clients are unavailable during Stage A");
+}
+function wrapExecutor(executor) {
+  return containedQuery();
+}
+function createQueryClient(pool) {
+  return containedQuery();
+}
+// src/generated/storage-kit/pool.ts
+init_runtime_role();
+function containedPool() {
+  throw new KnowledgeContainmentError("KNOWLEDGE_HOSTED_CONTAINED", 503, "hosted-client", "public-api", "database pool construction is unavailable during Stage A");
+}
+function createPgPool(options) {
+  return containedPool();
+}
+function createCloudPoolFromEnv(appName) {
+  return containedPool();
+}
+// src/generated/storage-kit/migrations.ts
+init_runtime_role();
+function checksumSql(sql) {
+  return "0000000000000000000000000000000000000000000000000000000000000000";
+}
+function defineMigration(id, sql) {
+  return Object.freeze(Object.create(null));
+}
+function containedMigration() {
+  throw new KnowledgeContainmentError("KNOWLEDGE_HOSTED_CONTAINED", 503, "hosted-client", "public-api", "migration execution is unavailable during Stage A");
+}
+
+class MigrationLedger {
+  constructor(client, migrations, options = {}) {
+    for (const key of ["client", "migrations", "ledgerTable"]) {
+      Object.defineProperty(this, key, {
+        value: undefined,
+        enumerable: true,
+        configurable: true,
+        writable: true
+      });
+    }
   }
-  if (value instanceof Date)
-    return value.toISOString();
-  if (Buffer.isBuffer(value) || value instanceof Uint8Array)
-    return value;
-  if (typeof value === "object")
-    return JSON.stringify(value);
-  return value;
+  async ensureLedger() {
+    return containedMigration();
+  }
+  async listApplied() {
+    return containedMigration();
+  }
+  async readApplied() {
+    return containedMigration();
+  }
+  buildPlan(applied) {
+    return containedMigration();
+  }
+  async migrate() {
+    return containedMigration();
+  }
+  async applyPendingMigration(migration) {
+    return containedMigration();
+  }
 }
-function coerceForSqlite(value) {
-  if (value === undefined || value === null)
-    return null;
-  if (typeof value === "string" || typeof value === "number" || typeof value === "bigint" || typeof value === "boolean")
-    return value;
-  if (value instanceof Date)
-    return value.toISOString();
-  if (Buffer.isBuffer(value) || value instanceof Uint8Array)
-    return value;
-  if (typeof value === "object")
-    return JSON.stringify(value);
-  return String(value);
+function createMigrationLedger(client, migrations, options = {}) {
+  return new MigrationLedger(client, migrations, options);
 }
+// src/generated/storage-kit/health.ts
+init_runtime_role();
+function containedHealth() {
+  throw new KnowledgeContainmentError("KNOWLEDGE_HOSTED_CONTAINED", 503, "hosted-client", "public-api", "database health checks are unavailable during Stage A");
+}
+async function checkHealth(client) {
+  return containedHealth();
+}
+async function checkReady(client, migrations) {
+  return containedHealth();
+}
+
+// src/generated/storage-kit/index.ts
+var KIT_VERSION = "0.4.0";
 export {
   wrapExecutor,
   storageSync,

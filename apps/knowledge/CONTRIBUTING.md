@@ -73,7 +73,7 @@ Types: `feat`, `fix`, `docs`, `chore`, `refactor`, `test`
 
 - Use the [bug report template](.github/ISSUE_TEMPLATE/bug_report.yml)
 - Search existing issues first
-- Include: Node/Bun version, OS, steps to reproduce, expected vs actual
+- Include: Bun version, OS, steps to reproduce, expected vs actual
 
 ## Suggesting Features
 

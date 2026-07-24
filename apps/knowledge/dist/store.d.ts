@@ -18,6 +18,20 @@ export declare function ensureStore(path: string): void;
 export declare function loadStoreIfExists(path: string): Store & {
     exists: boolean;
 };
+export type StoreLockTestEvent = 'before-create' | 'after-create' | 'before-stale-remove' | 'before-witness-link' | 'before-owned-unlink' | 'before-store-final-verify' | 'before-release';
+export interface StoreLockTestDetail {
+    readonly path: string;
+    readonly owner: string;
+    readonly token: string;
+    readonly pid: number;
+}
+interface StoreLockTestControl {
+    readonly monotonicNow?: () => number;
+    readonly wait?: (milliseconds: number) => void;
+    readonly onEvent?: (event: StoreLockTestEvent, detail: StoreLockTestDetail) => void;
+}
+/** Deterministic lock race control for repository tests; never exported by the package root. */
+export declare function setStoreLockTestControl(control: StoreLockTestControl | undefined): void;
 export declare function loadStore(path: string): Store;
 export declare function saveStore(path: string, store: Store): void;
 export declare function withLock<T>(path: string, fn: () => T, options?: {
@@ -25,3 +39,4 @@ export declare function withLock<T>(path: string, fn: () => T, options?: {
 }): T;
 export declare function makeId(): string;
 export declare function makeShortId(id: string): string;
+export {};

@@ -1,11 +1,16 @@
-import type { ArtifactStore } from './artifact-store';
+import { type ArtifactStore } from './artifact-store';
 import { type SourceIngestResult } from './source-ingest';
 import { type SafetyPolicy } from './safety';
-import type { KnowledgeConfig, KnowledgeWorkspace } from './workspace';
+import { type KnowledgeConfig, type KnowledgeWorkspace } from './workspace';
 export interface AppWikiWriteGuardOptions {
     scope: string;
     workspace: KnowledgeWorkspace;
     safetyPolicy?: SafetyPolicy;
+    allowGlobal?: boolean;
+}
+export interface AppWikiReadGuardOptions {
+    scope: string;
+    workspace: KnowledgeWorkspace;
     allowGlobal?: boolean;
 }
 export interface AppWikiInitOptions extends AppWikiWriteGuardOptions {
@@ -22,11 +27,11 @@ export interface AppWikiNoteInput extends AppWikiWriteGuardOptions {
     metadata?: Record<string, unknown>;
     now?: Date;
 }
-export interface AppWikiNoteListOptions {
+export interface AppWikiNoteListOptions extends AppWikiReadGuardOptions {
     dbPath: string;
     limit?: number;
 }
-export interface AppWikiNoteGetOptions {
+export interface AppWikiNoteGetOptions extends AppWikiReadGuardOptions {
     dbPath: string;
     store: ArtifactStore;
     id: string;
@@ -76,6 +81,7 @@ export interface AppWikiInitResult {
     global_write_allowed: boolean;
     message: string;
 }
+export declare function assertAppWikiReadAllowed(options: AppWikiReadGuardOptions): void;
 export declare function assertAppWikiWriteAllowed(options: AppWikiWriteGuardOptions): void;
 export declare function initAppWikiScope(options: AppWikiInitOptions): Promise<AppWikiInitResult>;
 export declare function writeAppWikiNote(options: AppWikiNoteInput): Promise<AppWikiNoteWriteResult>;
