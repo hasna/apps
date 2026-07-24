@@ -316,9 +316,10 @@ describe('knowledge MCP', () => {
       expect(tools.tools.some((tool) => tool.name === 'knowledge_sync_conflict_resolve')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_sync_peer')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'storage_status')).toBe(true);
-      expect(tools.tools.some((tool) => tool.name === 'storage_push')).toBe(true);
-      expect(tools.tools.some((tool) => tool.name === 'storage_pull')).toBe(true);
-      expect(tools.tools.some((tool) => tool.name === 'storage_sync')).toBe(true);
+      // The DSN-on-client storage_push/pull/sync tools were removed.
+      expect(tools.tools.some((tool) => tool.name === 'storage_push')).toBe(false);
+      expect(tools.tools.some((tool) => tool.name === 'storage_pull')).toBe(false);
+      expect(tools.tools.some((tool) => tool.name === 'storage_sync')).toBe(false);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_resolve_source')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'ok_web_search')).toBe(true);
 
@@ -576,8 +577,9 @@ describe('knowledge MCP', () => {
         name: 'knowledge_storage',
         arguments: { scope: 'project' },
       }));
-      expect(stableStorage.remote_contract.contract_version).toBe(1);
-      expect(stableStorage.remote_contract.endpoints.build).toBe('/api/v1/knowledge/build');
+      expect(stableStorage.ok).toBe(true);
+      expect(stableStorage.artifact_store.type).toBe('local');
+      expect(stableStorage.source_ownership.owner).toBe('open-files');
 
       const databaseStorage = parseToolJson(await client.callTool({
         name: 'storage_status',

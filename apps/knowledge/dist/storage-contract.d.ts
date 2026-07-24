@@ -1,5 +1,5 @@
 import type { Database } from 'bun:sqlite';
-import { REMOTE_KNOWLEDGE_CONTRACT_VERSION } from './remote-client';
+import { KNOWLEDGE_REGISTRY_CONTRACT_VERSION } from './registry-contract';
 import type { KnowledgeConfig, KnowledgeWorkspace } from './workspace';
 import { EXAMPLE_KNOWLEDGE_CANONICAL } from './workspace';
 export interface StorageArtifactClass {
@@ -62,7 +62,7 @@ export interface StorageContract {
         api_url_env: 'KNOWLEDGE_API_URL';
         api_key_env: 'KNOWLEDGE_API_KEY';
         auth_storage: '~/.hasna/knowledge/auth.json';
-        remote_contract_version: typeof REMOTE_KNOWLEDGE_CONTRACT_VERSION;
+        registry_contract_version: typeof KNOWLEDGE_REGISTRY_CONTRACT_VERSION;
         requires_hosted_account_for_local_use: false;
     };
     source_ownership: {

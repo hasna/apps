@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { openKnowledgeDb } from './knowledge-db';
 import { isStaleStatus } from './provenance';
-import { hybridSearch, type HybridSearchEntry, type HybridSearchOptions, type HybridSearchResult, type SearchProvenance } from './search';
+import { hybridSearch, hybridSearchItems, type HybridSearchEntry, type HybridSearchOptions, type HybridSearchResult, type SearchProvenance } from './search';
+import type { KnowledgeItem } from './store';
 
 export interface RetrievalOptions extends HybridSearchOptions {
   contextChars?: number;
@@ -334,4 +335,17 @@ export async function retrieveKnowledgeContext(options: RetrievalOptions): Promi
     dbPath: options.dbPath,
     contextChars: options.contextChars,
   });
+}
+
+/**
+ * Retrieve context from an in-memory knowledge-item corpus (api / cloud mode).
+ * No local sqlite catalog means no graph evidence — the shared corpus is the
+ * cloud knowledge-items fetched through the item Store.
+ */
+export async function retrieveKnowledgeContextFromItems(
+  items: KnowledgeItem[],
+  options: Omit<RetrievalOptions, 'dbPath' | 'legacyStorePath'>,
+): Promise<KnowledgeContextPack> {
+  const search = await hybridSearchItems(items, options);
+  return retrieveKnowledgeContextFromSearch(search, { contextChars: options.contextChars });
 }

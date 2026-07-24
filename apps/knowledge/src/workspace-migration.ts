@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { Database } from 'bun:sqlite';
+import { openKnowledgeDbReadonly } from './knowledge-db';
 import {
   cpSync,
   existsSync,
@@ -100,7 +100,7 @@ function sqliteSummary(path: string): WorkspaceTreeSummary['sqlite'] {
   if (!existsSync(path)) {
     return { exists: false, integrity_check: null, table_counts: {} };
   }
-  const db = new Database(path, { readonly: true });
+  const db = openKnowledgeDbReadonly(path);
   try {
     const integrity = db.query<Record<string, string>, []>('PRAGMA integrity_check').get();
     const integrityCheck = integrity ? Object.values(integrity)[0] ?? null : null;

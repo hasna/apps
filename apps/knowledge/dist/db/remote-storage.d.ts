@@ -1,39 +1,20 @@
-import type { Pool, QueryResultRow } from 'pg';
 import { type PoolQueryClient } from '../generated/storage-kit/index.js';
 /** App name used for the canonical HASNA_KNOWLEDGE_* env contract. */
 export declare const KNOWLEDGE_APP_NAME = "knowledge";
 /**
- * Async Postgres adapter for knowledge cloud-mode access.
+ * Build a cloud query client from the environment. SERVER-SIDE ONLY.
  *
- * All pg access — TLS handling, pooling, and the typed query surface — is
- * delegated to the vendored `@hasna/contracts` storage kit
- * (`src/generated/storage-kit`). This replaces the previous hand-rolled
- * `rejectUnauthorized: false` TLS shim and restores the single-row `get()`
- * helper that had been dropped from this adapter.
- *
- * PURE REMOTE (Amendment A1): cloud mode reads AND writes go directly to the
- * cloud Postgres. There is no cache, no local mirror, and no merge — every
- * call round-trips to the database.
- */
-export declare class PgAdapterAsync {
-    private readonly client;
-    constructor(connectionString: string);
-    /** Underlying pg pool (fleet-standard TLS applied). */
-    get pool(): Pool;
-    run(sql: string, ...params: unknown[]): Promise<{
-        changes: number;
-    }>;
-    all(sql: string, ...params: unknown[]): Promise<unknown[]>;
-    /** First row or `null`. Restored via the storage kit's typed `get()`. */
-    get<T extends QueryResultRow = QueryResultRow>(sql: string, ...params: unknown[]): Promise<T | null>;
-    close(): Promise<void>;
-}
-/**
- * Build a PURE REMOTE cloud query client from the environment.
+ * This is the ONLY sanctioned raw-Postgres path and it lives on the server
+ * (src/serve + scripts/apply-cloud-migrations), which runs inside our AWS with
+ * the RDS DSN injected from Secrets Manager. It is intentionally NOT exported
+ * from the CLI/MCP/SDK client surface: the raw RDS DSN is never distributed to
+ * fleet machines, and clients reach the shared store only through the HTTP
+ * ApiStore (`https://<app>.hasna.xyz/v1` + bearer key). The previous
+ * `PgAdapterAsync` client adapter — a DSN-on-client sync engine — has been
+ * removed to eliminate that forbidden path.
  *
  * Requires `HASNA_KNOWLEDGE_STORAGE_MODE=cloud` and
  * `HASNA_KNOWLEDGE_DATABASE_URL`. Throws (without logging the URL) when the
- * mode is not `cloud` or the URL is missing. Returns the kit's typed client so
- * callers get `query/many/get/one/execute/transaction` uniformly.
+ * mode is not `cloud` or the URL is missing.
  */
 export declare function createKnowledgeCloudClient(): PoolQueryClient;

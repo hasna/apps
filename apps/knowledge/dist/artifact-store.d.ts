@@ -24,7 +24,7 @@ export interface ArtifactStore {
 export declare function normalizeArtifactKey(key: string): string;
 export declare class LocalArtifactStore implements ArtifactStore {
     private readonly root;
-    readonly type: "local";
+    readonly type: 'local';
     readonly canRead = true;
     readonly canWrite = true;
     constructor(root: string);
@@ -44,7 +44,7 @@ export interface S3ArtifactStoreOptions {
 }
 export declare class S3ArtifactStore implements ArtifactStore {
     private readonly options;
-    readonly type: "s3";
+    readonly type: 's3';
     readonly canRead = true;
     readonly canWrite = true;
     private client?;

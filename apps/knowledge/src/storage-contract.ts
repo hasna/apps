@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import type { Database } from 'bun:sqlite';
 import { DEFAULT_KNOWLEDGE_API_URL, normalizeKnowledgeApiOrigin } from './auth';
-import { REMOTE_KNOWLEDGE_CONTRACT_VERSION } from './remote-client';
+import { KNOWLEDGE_REGISTRY_CONTRACT_VERSION } from './registry-contract';
 import type { KnowledgeConfig, KnowledgeWorkspace } from './workspace';
 import { HASNA_KNOWLEDGE_APP_PATH, EXAMPLE_KNOWLEDGE_CANONICAL } from './workspace';
 
@@ -67,7 +67,7 @@ export interface StorageContract {
     api_url_env: 'KNOWLEDGE_API_URL';
     api_key_env: 'KNOWLEDGE_API_KEY';
     auth_storage: '~/.hasna/knowledge/auth.json';
-    remote_contract_version: typeof REMOTE_KNOWLEDGE_CONTRACT_VERSION;
+    registry_contract_version: typeof KNOWLEDGE_REGISTRY_CONTRACT_VERSION;
     requires_hosted_account_for_local_use: false;
   };
   source_ownership: {
@@ -242,7 +242,7 @@ export function resolveStorageContract(
       api_url_env: 'KNOWLEDGE_API_URL',
       api_key_env: 'KNOWLEDGE_API_KEY',
       auth_storage: '~/.hasna/knowledge/auth.json',
-      remote_contract_version: REMOTE_KNOWLEDGE_CONTRACT_VERSION,
+      registry_contract_version: KNOWLEDGE_REGISTRY_CONTRACT_VERSION,
       requires_hosted_account_for_local_use: false,
     },
     source_ownership: {

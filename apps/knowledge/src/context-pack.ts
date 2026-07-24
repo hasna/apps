@@ -164,7 +164,13 @@ function termsFor(value: string): string[] {
 function truncateText(value: string, maxChars: number): string {
   const normalized = normalizeText(value);
   if (normalized.length <= maxChars) return normalized;
-  return `${normalized.slice(0, Math.max(0, maxChars - 1)).trim()}...`;
+  const ellipsis = '...';
+  // The ellipsis must fit INSIDE the budget so the result never exceeds
+  // maxChars. Reserving maxChars-1 (as before) yielded maxChars+2 characters,
+  // which meant fitPackToBudget's `length > N` truncation branches could never
+  // satisfy their own threshold and spun forever. Reserve the ellipsis width.
+  if (maxChars <= ellipsis.length) return normalized.slice(0, Math.max(0, maxChars));
+  return `${normalized.slice(0, maxChars - ellipsis.length).trim()}${ellipsis}`;
 }
 
 function parseJsonObject(value: string | null | undefined): Record<string, unknown> {

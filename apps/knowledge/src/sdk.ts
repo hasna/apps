@@ -3,6 +3,30 @@ import {
   KnowledgeService,
   type KnowledgeServiceOptions,
 } from './service.js';
+import type { KnowledgeItem } from './store.js';
+import type {
+  ItemStore,
+  ItemCreateInput,
+  ItemPatch,
+  ItemListResult,
+} from './item-store.js';
+
+/**
+ * The unified knowledge-item Store surface, mirrored on the SDK so app code
+ * routes item CRUD through the SAME Store as the CLI and MCP in all three modes
+ * (local db.json, self_hosted, cloud). No SDK item method touches sqlite or the
+ * raw HTTP client — the mode is resolved from the environment by the Store.
+ */
+export interface KnowledgeItemsSdk {
+  /** The resolved Store for this scope (`kind: 'local' | 'api'`). */
+  readonly store: () => ItemStore;
+  readonly list: () => Promise<ItemListResult>;
+  readonly get: (idOrShort: string) => Promise<KnowledgeItem | null>;
+  readonly create: (input: ItemCreateInput) => Promise<KnowledgeItem>;
+  readonly update: (idOrShort: string, patch: ItemPatch) => Promise<KnowledgeItem | null>;
+  readonly delete: (idOrShort: string) => Promise<boolean>;
+  readonly deleteMany: (idsOrShorts: string[]) => Promise<number>;
+}
 
 export type KnowledgeClientOptions = KnowledgeServiceOptions;
 export type KnowledgeSetupOptions = Parameters<KnowledgeService['setup']>[0];
@@ -64,10 +88,6 @@ export interface KnowledgeClient {
     ) => ReturnType<KnowledgeService['saveAuth']>;
     readonly logout: (env?: Record<string, string | undefined>) => ReturnType<KnowledgeService['clearAuth']>;
   };
-  readonly remote: {
-    readonly contract: () => ReturnType<KnowledgeService['remoteContract']>;
-    readonly client: (env?: Record<string, string | undefined>) => ReturnType<KnowledgeService['remoteClient']>;
-  };
   readonly storage: {
     readonly status: () => ReturnType<KnowledgeService['storageContract']>;
     readonly validate: () => ReturnType<KnowledgeService['validateStorage']>;
@@ -89,7 +109,17 @@ export interface KnowledgeClient {
     readonly peer: (options: KnowledgePeerSyncOptions) => ReturnType<KnowledgeService['syncPeer']>;
     readonly remotePeer: (options: KnowledgeRemotePeerSyncOptions) => ReturnType<KnowledgeService['syncRemotePeer']>;
   };
-  readonly inventory: (options?: KnowledgeInventoryOptions) => ReturnType<KnowledgeService['inventory']>;
+  /**
+   * Knowledge-item CRUD routed through the unified Store. Identical behavior to
+   * the `knowledge add/list/get/update/delete` CLI commands in every mode.
+   */
+  readonly items: KnowledgeItemsSdk;
+  /**
+   * Inventory of the knowledge corpus. Routes to the shared cloud item corpus in
+   * api mode (self_hosted/cloud) and the local sqlite/JSON catalog otherwise, so
+   * the SDK never diverges from the CLI/MCP. Always async.
+   */
+  readonly inventory: (options?: KnowledgeInventoryOptions) => ReturnType<KnowledgeService['resolveInventory']>;
   readonly db: {
     readonly init: () => ReturnType<KnowledgeService['initDb']>;
     readonly stats: () => ReturnType<KnowledgeService['dbStats']>;
@@ -154,10 +184,6 @@ export function createKnowledgeClient(options: KnowledgeClientOptions = {}): Kno
       login: (input, env = process.env) => service.saveAuth(input, env),
       logout: (env = process.env) => service.clearAuth(env),
     },
-    remote: {
-      contract: () => service.remoteContract(),
-      client: (env = process.env) => service.remoteClient(env),
-    },
     storage: {
       status: () => service.storageContract(),
       validate: () => service.validateStorage(),
@@ -179,7 +205,16 @@ export function createKnowledgeClient(options: KnowledgeClientOptions = {}): Kno
       peer: (input) => service.syncPeer(input),
       remotePeer: (input) => service.syncRemotePeer(input),
     },
-    inventory: (input = {}) => service.inventory(input),
+    items: {
+      store: () => service.itemStore(),
+      list: () => service.listItems(),
+      get: (idOrShort) => service.getItem(idOrShort),
+      create: (input) => service.createItem(input),
+      update: (idOrShort, patch) => service.updateItem(idOrShort, patch),
+      delete: (idOrShort) => service.deleteItem(idOrShort),
+      deleteMany: (idsOrShorts) => service.deleteItems(idsOrShorts),
+    },
+    inventory: (input = {}) => service.resolveInventory(input),
     db: {
       init: () => service.initDb(),
       stats: () => service.dbStats(),

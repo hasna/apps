@@ -77,27 +77,27 @@ export interface KnowledgeConfig {
     };
 }
 export declare const EXAMPLE_KNOWLEDGE_CANONICAL: {
-    readonly division: "xyz";
-    readonly app_type: "opensource";
-    readonly app: "knowledge";
-    readonly env: "prod";
+    readonly division: 'xyz';
+    readonly app_type: 'opensource';
+    readonly app: 'knowledge';
+    readonly env: 'prod';
     readonly local_path: string;
     readonly s3: {
-        readonly bucket: "example-knowledge-prod";
-        readonly region: "us-east-1";
-        readonly profile: "example-infra";
-        readonly prefix: ".hasna/knowledge";
-        readonly server_side_encryption: "AES256";
+        readonly bucket: 'example-knowledge-prod';
+        readonly region: 'us-east-1';
+        readonly profile: 'example-infra';
+        readonly prefix: '.hasna/knowledge';
+        readonly server_side_encryption: 'AES256';
     };
     readonly secrets: {
-        readonly env: "example/knowledge/prod/env";
-        readonly aws: "example/knowledge/prod/aws";
-        readonly s3: "example/knowledge/prod/s3";
+        readonly env: 'example/knowledge/prod/env';
+        readonly aws: 'example/knowledge/prod/aws';
+        readonly s3: 'example/knowledge/prod/s3';
         readonly rds: any;
-        readonly future_rds: "example/knowledge/prod/rds";
+        readonly future_rds: 'example/knowledge/prod/rds';
     };
-    readonly source_owner: "open-files";
-    readonly evidence_doc: "docs/canonical-secrets-bootstrap-2026-06-08.md";
+    readonly source_owner: 'open-files';
+    readonly evidence_doc: 'docs/canonical-secrets-bootstrap-2026-06-08.md';
 };
 export declare function canonicalExampleKnowledgeStorage(): KnowledgeConfig['storage'];
 export declare function legacyGlobalStorePath(): string;

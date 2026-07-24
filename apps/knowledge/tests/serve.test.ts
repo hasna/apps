@@ -173,6 +173,40 @@ describe('knowledge-serve', () => {
     expect(fetched.id).toBe(note.id);
   });
 
+  test('caller-supplied id is honored and upsert is idempotent (no duplicate)', async () => {
+    const h = buildHandler();
+    const key = keyFor(['knowledge:read', 'knowledge:write']);
+    const post = (body: unknown) =>
+      h(
+        new Request('http://x/v1/notes', {
+          method: 'POST',
+          headers: { 'x-api-key': key, 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        }),
+      );
+
+    // First upsert with a stable caller id.
+    const first = await post({ id: 'k_stable', title: 'v1', content: 'first' });
+    expect(first.status).toBe(201);
+    const created = (await first.json()) as { id: string; title: string };
+    expect(created.id).toBe('k_stable'); // server persisted the caller id, not a fresh one
+
+    // The stable id is now resolvable by that id — this GET returned 404 before
+    // the fix, which is exactly why the upsert path created a fresh duplicate on
+    // every re-run in cloud mode.
+    const got = await h(new Request('http://x/v1/notes/k_stable', { headers: { 'x-api-key': key } }));
+    expect(got.status).toBe(200);
+    expect(((await got.json()) as { title: string }).title).toBe('v1');
+
+    // Re-upsert with the same id -> updates the SAME row in place (id unchanged).
+    const second = await post({ id: 'k_stable', title: 'v2', content: 'second' });
+    expect(second.status).toBe(201);
+    expect(((await second.json()) as { id: string }).id).toBe('k_stable');
+
+    const after = await h(new Request('http://x/v1/notes/k_stable', { headers: { 'x-api-key': key } }));
+    expect(((await after.json()) as { title: string }).title).toBe('v2');
+  });
+
   test('normalizeCloudDatabaseUrl appends libpq-compat for require', () => {
     const env: NodeJS.ProcessEnv = { HASNA_KNOWLEDGE_DATABASE_URL: 'postgres://u:p@h:5432/db?sslmode=require' };
     const out = normalizeCloudDatabaseUrl(env);

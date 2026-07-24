@@ -70,6 +70,9 @@ export interface KnowledgeCloudListOptions {
 }
 
 export interface KnowledgeCloudCreateInput {
+  /** Optional caller-supplied stable id. Forwarded to the server, which upserts
+   * on it — giving `upsert --id`/import the same idempotency as the local store. */
+  id?: string;
   title: string;
   content: string;
   url?: string | null;
@@ -136,6 +139,7 @@ function wrap(client: HasnaStorageClient): KnowledgeCloudStore {
 
     async create(input: KnowledgeCloudCreateInput) {
       return client.create<KnowledgeItem>(KNOWLEDGE_RESOURCE, {
+        ...(input.id ? { id: input.id } : {}),
         title: input.title,
         content: input.content,
         url: input.url ?? null,
@@ -177,6 +181,17 @@ export function resolveKnowledgeCloudStore(env: NodeJS.ProcessEnv = process.env)
   const resolved = resolveStorageClient(KNOWLEDGE_APP_SLUG, withInferredCloudMode(env));
   if (resolved.transport !== 'cloud-http') return null;
   return wrap(resolved.client);
+}
+
+/**
+ * True when the client-flip resolves to the cloud HTTP transport (self_hosted /
+ * cloud). This is the single mode signal the whole client uses: item commands
+ * route to the ApiStore, and the local sqlite catalog is refused (never a silent
+ * split-brain write). Local mode (default) returns false. Throws only when cloud
+ * was requested but misconfigured — matching the item Store, never silent drift.
+ */
+export function isKnowledgeApiMode(env: NodeJS.ProcessEnv = process.env): boolean {
+  return resolveStorageClient(KNOWLEDGE_APP_SLUG, withInferredCloudMode(env)).transport === 'cloud-http';
 }
 
 /**
