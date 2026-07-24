@@ -73,6 +73,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["storage", "aws", "cloud", "object-storage", "files"],
   },
   {
+    name: "vercel-blob",
+    displayName: "Vercel Blob",
+    description: "Blob storage platform",
+    category: "Infrastructure",
+    tags: ["blob", "storage", "vercel"],
+  },
+  {
     name: "spike",
     displayName: "Spike",
     description: "Incident management and on-call alerting platform",
