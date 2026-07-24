@@ -194,7 +194,7 @@ function upsertAutoReminder(
 }
 
 export function getReminderPreferences(db?: Database): ReminderPreferences {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query("SELECT * FROM reminder_preferences WHERE id = 'default'").get() as Record<string, unknown> | null;
   if (!row) {
     return { ...DEFAULT_PREFS, updated_at: now() };
@@ -213,7 +213,7 @@ export function setReminderPreferences(
   input: Partial<Omit<ReminderPreferences, "schema_version" | "updated_at">>,
   db?: Database,
 ): ReminderPreferences {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const current = getReminderPreferences(d);
   const next = {
     due_soon_hours: input.due_soon_hours ?? current.due_soon_hours,
@@ -245,7 +245,7 @@ export function setReminderPreferences(
 }
 
 export function createReminder(input: CreateReminderInput, db?: Database): NotificationReminder {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const ts = now();
   const id = uuid();
   let projectId = input.project_id ?? null;
@@ -282,7 +282,7 @@ export function createReminder(input: CreateReminderInput, db?: Database): Notif
 }
 
 export function getReminder(id: string, db?: Database): NotificationReminder | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query("SELECT * FROM notification_reminders WHERE id = ?").get(id) as Record<string, unknown> | null;
   return row ? rowToReminder(row) : null;
 }
@@ -298,7 +298,7 @@ export function listReminders(
   } = {},
   db?: Database,
 ): NotificationReminder[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const conditions: string[] = [];
   const params: SQLQueryBindings[] = [];
 
@@ -333,7 +333,7 @@ export function listReminders(
 }
 
 export function dismissReminder(id: string, db?: Database): NotificationReminder | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const ts = now();
   d.run(
     `UPDATE notification_reminders SET status = 'dismissed', dismissed_at = ?, updated_at = ? WHERE id = ?`,
@@ -343,7 +343,7 @@ export function dismissReminder(id: string, db?: Database): NotificationReminder
 }
 
 export function snoozeReminder(id: string, until: string, db?: Database): NotificationReminder | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const ts = now();
   d.run(
     `UPDATE notification_reminders SET status = 'snoozed', snoozed_until = ?, trigger_at = ?, updated_at = ? WHERE id = ?`,
@@ -356,7 +356,7 @@ export function getUpcomingDueTasks(
   filters: { hours?: number; project_id?: string; agent_id?: string } = {},
   db?: Database,
 ): Task[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const hours = filters.hours ?? 24;
   const nowDate = new Date();
   const horizon = new Date(nowDate.getTime() + hours * 3600000).toISOString();
@@ -535,7 +535,7 @@ export function scanReminders(
   filters: { project_id?: string; agent_id?: string } = {},
   db?: Database,
 ): ScanRemindersResult {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const prefs = getReminderPreferences(d);
   if (!prefs.enabled) {
     return { schema_version: NOTIFICATION_REMINDERS_SCHEMA, created: 0, updated: 0, dismissed: 0, reminders: [] };
@@ -570,7 +570,7 @@ export function processDueReminders(
   options: { desktop?: boolean; project_id?: string; agent_id?: string } = {},
   db?: Database,
 ): ProcessRemindersResult {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const prefs = getReminderPreferences(d);
   const ts = now();
   const dueReminders = listReminders({ status: ["pending", "snoozed"], limit: 500 }, d).filter((r) => {
@@ -606,7 +606,7 @@ export function processDueReminders(
 }
 
 export function getReminderSummary(db?: Database): ReminderSummary {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const ts = now();
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);

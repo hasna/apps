@@ -202,7 +202,7 @@ function routeForTask(task: Task): { queue: string; reviewer: string | null; rul
 }
 
 function writeQueue(task: Task, queue: ReviewQueueMetadata, actor: string, action: string, db?: Database): ReviewQueueItem {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   updateTask(task.id, {
     version: task.version,
     metadata: {
@@ -350,7 +350,7 @@ export function removeReviewRoutingRule(name: string): boolean {
 }
 
 export function requestReviewQueue(input: RequestReviewQueueInput, db?: Database): ReviewQueueItem {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const task = taskOrThrow(input.task_id, d);
   const route = routeForTask(task);
   requestTaskReview({
@@ -399,7 +399,7 @@ export function requestReviewQueue(input: RequestReviewQueueInput, db?: Database
 }
 
 export function claimReviewItem(input: ClaimReviewInput, db?: Database): ReviewQueueItem {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const task = taskOrThrow(input.task_id, d);
   const previous = derivedQueue(task, d);
   if (!previous) throw new Error(`Task is not in a review queue: ${task.id}`);
@@ -417,7 +417,7 @@ export function claimReviewItem(input: ClaimReviewInput, db?: Database): ReviewQ
 }
 
 export function approveReviewItem(input: DecideReviewInput, db?: Database): ReviewQueueItem {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const task = taskOrThrow(input.task_id, d);
   const previous = derivedQueue(task, d);
   if (!previous) throw new Error(`Task is not in a review queue: ${task.id}`);
@@ -438,7 +438,7 @@ export function approveReviewItem(input: DecideReviewInput, db?: Database): Revi
 }
 
 export function returnReviewItem(input: DecideReviewInput, db?: Database): ReviewQueueItem {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const task = taskOrThrow(input.task_id, d);
   const previous = derivedQueue(task, d);
   if (!previous) throw new Error(`Task is not in a review queue: ${task.id}`);
@@ -466,7 +466,7 @@ export function returnReviewItem(input: DecideReviewInput, db?: Database): Revie
 }
 
 export function reopenReviewItem(input: DecideReviewInput, db?: Database): ReviewQueueItem {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const task = taskOrThrow(input.task_id, d);
   const previous = derivedQueue(task, d);
   if (!previous) throw new Error(`Task is not in a review queue: ${task.id}`);
@@ -487,7 +487,7 @@ export function reopenReviewItem(input: DecideReviewInput, db?: Database): Revie
 }
 
 export function listReviewQueue(options: ReviewQueueListOptions = {}, db?: Database): ReviewQueueItem[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const tasks = listTasks({
     project_id: options.project_id,
     include_archived: false,

@@ -268,7 +268,7 @@ function buildReport(input: CreateRetrospectiveInput, db: Database): Retrospecti
 }
 
 export function createRetrospective(input: CreateRetrospectiveInput, db?: Database): RetrospectiveRecord {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const report = buildReport(input, d);
   const scope = scopeFromInput(input, d);
   const timestamp = now();
@@ -295,14 +295,14 @@ export function createRetrospective(input: CreateRetrospectiveInput, db?: Databa
 }
 
 export function getRetrospective(id: string, db?: Database): RetrospectiveRecord | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const resolved = resolvePartialId(d, "local_retrospectives", id) || id;
   const row = d.query("SELECT * FROM local_retrospectives WHERE id = ?").get(resolved) as RetrospectiveRow | null;
   return row ? rowToRetrospective(row) : null;
 }
 
 export function listRetrospectives(options: ListRetrospectivesOptions = {}, db?: Database): RetrospectiveRecord[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const conditions: string[] = [];
   const params: SQLQueryBindings[] = [];
   const projectId = resolveKnownId("projects", options.project_id, d);

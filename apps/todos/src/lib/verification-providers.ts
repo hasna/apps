@@ -267,7 +267,7 @@ function runBrowserProvider(input: RunVerificationProviderInput): Pick<Verificat
 }
 
 export async function runVerificationProvider(input: RunVerificationProviderInput, db?: Database): Promise<VerificationProviderResult> {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const provider = getProvider(input.name);
   if (!provider) throw new Error(`Verification provider not found: ${input.name}`);
   if (input.task_id && !getTask(input.task_id, d)) throw new Error(`Task not found: ${input.task_id}`);
@@ -382,7 +382,7 @@ function portableVerificationRowToRecord(row: Record<string, unknown>): Verifica
 }
 
 export function getVerificationRecord(id: string, db?: Database): VerificationRecordResult | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   try {
     const portable = d.query("SELECT * FROM verification_records WHERE id = ?").get(id) as Record<string, unknown> | null;
     if (portable) return portableVerificationRowToRecord(portable);
@@ -398,7 +398,7 @@ export function listVerificationRecords(
   filter: { task_id?: string; agent_id?: string; status?: string; run_record_id?: string; provider?: string; limit?: number } = {},
   db?: Database,
 ): VerificationRecordResult[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const records: VerificationRecordResult[] = [];
 
   try {

@@ -17,7 +17,7 @@ export function createSession(
   input: CreateSessionInput,
   db?: Database,
 ): Session {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const id = uuid();
   const timestamp = now();
 
@@ -39,14 +39,14 @@ export function createSession(
 }
 
 export function getSession(id: string, db?: Database): Session | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query("SELECT * FROM sessions WHERE id = ?").get(id) as SessionRow | null;
   if (!row) return null;
   return rowToSession(row);
 }
 
 export function listSessions(db?: Database): Session[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const rows = d
     .query("SELECT * FROM sessions ORDER BY last_activity DESC")
     .all() as SessionRow[];
@@ -57,12 +57,12 @@ export function updateSessionActivity(
   id: string,
   db?: Database,
 ): void {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   d.run("UPDATE sessions SET last_activity = ? WHERE id = ?", [now(), id]);
 }
 
 export function deleteSession(id: string, db?: Database): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const result = d.run("DELETE FROM sessions WHERE id = ?", [id]);
   return result.changes > 0;
 }

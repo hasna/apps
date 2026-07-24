@@ -7,7 +7,7 @@ function rowToOrg(row: any): Org {
 }
 
 export function createOrg(input: CreateOrgInput, db?: Database): Org {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const id = uuid();
   const timestamp = now();
   d.run(
@@ -18,24 +18,24 @@ export function createOrg(input: CreateOrgInput, db?: Database): Org {
 }
 
 export function getOrg(id: string, db?: Database): Org | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query("SELECT * FROM orgs WHERE id = ?").get(id);
   return row ? rowToOrg(row) : null;
 }
 
 export function getOrgByName(name: string, db?: Database): Org | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query("SELECT * FROM orgs WHERE name = ?").get(name);
   return row ? rowToOrg(row) : null;
 }
 
 export function listOrgs(db?: Database): Org[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return (d.query("SELECT * FROM orgs ORDER BY name").all()).map(rowToOrg);
 }
 
 export function updateOrg(id: string, input: { name?: string; description?: string; metadata?: Record<string, unknown> }, db?: Database): Org {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const org = getOrg(id, d);
   if (!org) throw new Error(`Org not found: ${id}`);
   const sets: string[] = ["updated_at = ?"];
@@ -49,6 +49,6 @@ export function updateOrg(id: string, input: { name?: string; description?: stri
 }
 
 export function deleteOrg(id: string, db?: Database): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return d.run("DELETE FROM orgs WHERE id = ?", [id]).changes > 0;
 }

@@ -156,7 +156,7 @@ function formatMs(value: number): string {
 }
 
 export function createScalePerformanceReport(options: CreateScalePerformanceReportOptions = {}, db?: Database): ScalePerformanceReport {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const olderThanDays = normalizedPositiveDays(options.older_than_days);
   const pageCount = pragmaNumber(d, "page_count");
   const freelistCount = pragmaNumber(d, "freelist_count");
@@ -228,7 +228,7 @@ export function createScalePerformanceReport(options: CreateScalePerformanceRepo
 }
 
 export function compactScaleStorage(options: CompactScaleStorageOptions = {}, db?: Database): ScaleCompactionResult {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const before = {
     page_count: pragmaNumber(d, "page_count"),
     freelist_count: pragmaNumber(d, "freelist_count"),

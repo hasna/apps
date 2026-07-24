@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import chalk from "chalk";
-import { handleError, output } from "../helpers.js";
+import { handleError, output, parsePositiveSafeIntegerOr } from "../helpers.js";
 
 function globalOptions(program: Command): Record<string, any> {
   const command = program as Command & { optsWithGlobals?: () => Record<string, any> };
@@ -8,12 +8,7 @@ function globalOptions(program: Command): Record<string, any> {
 }
 
 function parsePositiveInteger(value: string | undefined, fallback: number): number {
-  if (value === undefined) return fallback;
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed < 1) {
-    throw new Error("value must be a positive integer");
-  }
-  return parsed;
+  return parsePositiveSafeIntegerOr(value, fallback);
 }
 
 export function registerScaleHardeningCommands(program: Command) {

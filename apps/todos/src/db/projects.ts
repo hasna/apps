@@ -38,7 +38,7 @@ export function createProject(
   input: CreateProjectInput,
   db?: Database,
 ): Project {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return d.transaction(() => {
     const id = uuid();
     const timestamp = now();
@@ -62,13 +62,13 @@ export function createProject(
 }
 
 export function getProject(id: string, db?: Database): Project | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query("SELECT * FROM projects WHERE id = ?").get(id) as Project | null;
   return row;
 }
 
 export function getProjectByPath(path: string, db?: Database): Project | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   // Check machine-local path override first
   try {
     const machineId = getMachineId(d);
@@ -84,7 +84,7 @@ export function getProjectByPath(path: string, db?: Database): Project | null {
 }
 
 export function listProjects(db?: Database): Project[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return d
     .query("SELECT * FROM projects ORDER BY name")
     .all() as Project[];
@@ -95,7 +95,7 @@ export function updateProject(
   input: UpdateProjectInput,
   db?: Database,
 ): Project {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const project = getProject(id, d);
   if (!project) throw new ProjectNotFoundError(id);
   if ("task_list_id" in input) {
@@ -134,7 +134,7 @@ export function renameProject(
   input: { name?: string; new_slug?: string },
   db?: Database,
 ): { project: Project; task_lists_updated: number } {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return d.transaction(() => {
     const project = getProject(id, d);
     if (!project) throw new ProjectNotFoundError(id);
@@ -186,7 +186,7 @@ export function renameProject(
 }
 
 export function deleteProject(id: string, db?: Database): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const project = getProject(id, d);
   if (!project) return false;
   recordStorageTombstone({
@@ -210,7 +210,7 @@ function rowToSource(row: ProjectSourceRow): ProjectSource {
 }
 
 export function addProjectSource(input: CreateProjectSourceInput, db?: Database): ProjectSource {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const id = uuid();
   const timestamp = now();
   d.run(
@@ -223,19 +223,19 @@ export function addProjectSource(input: CreateProjectSourceInput, db?: Database)
 }
 
 export function removeProjectSource(id: string, db?: Database): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const result = d.run("DELETE FROM project_sources WHERE id = ?", [id]);
   return result.changes > 0;
 }
 
 export function listProjectSources(projectId: string, db?: Database): ProjectSource[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const rows = d.query("SELECT * FROM project_sources WHERE project_id = ? ORDER BY name").all(projectId) as ProjectSourceRow[];
   return rows.map(rowToSource);
 }
 
 export function getProjectWithSources(id: string, db?: Database): Project | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const project = getProject(id, d);
   if (!project) return null;
   project.sources = listProjectSources(id, d);
@@ -243,7 +243,7 @@ export function getProjectWithSources(id: string, db?: Database): Project | null
 }
 
 export function nextTaskShortId(projectId: string, db?: Database): string | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const project = getProject(projectId, d);
   if (!project || !project.task_prefix) return null;
 
@@ -258,7 +258,7 @@ export function ensureProject(
   path: string,
   db?: Database,
 ): Project {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const existing = getProjectByPath(path, d);
   if (existing) {
     // Backfill prefix for projects created before migration 6
@@ -292,7 +292,7 @@ export interface ProjectMachinePath {
  * Safe to call at any time — idempotent if path hasn't changed.
  */
 export function setMachineLocalPath(projectId: string, path: string, db?: Database): ProjectMachinePath {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const machineId = getMachineId(d);
   const ts = now();
   const existing = d.query(
@@ -322,7 +322,7 @@ export function setMachineLocalPath(projectId: string, path: string, db?: Databa
  * Falls back to the project's global path if no override is set.
  */
 export function getMachineLocalPath(projectId: string, db?: Database): string | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   try {
     const machineId = getMachineId(d);
     const row = d.query(
@@ -338,7 +338,7 @@ export function getMachineLocalPath(projectId: string, db?: Database): string | 
  * List all machine path overrides for a project.
  */
 export function listMachineLocalPaths(projectId: string, db?: Database): ProjectMachinePath[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return d.query(
     "SELECT * FROM project_machine_paths WHERE project_id = ? ORDER BY machine_id"
   ).all(projectId) as ProjectMachinePath[];
@@ -348,7 +348,7 @@ export function listMachineLocalPaths(projectId: string, db?: Database): Project
  * Remove the local path override for a project on a specific machine (default: current).
  */
 export function removeMachineLocalPath(projectId: string, machineId?: string, db?: Database): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const mid = machineId ?? getMachineId(d);
   const existing = d.query(
     "SELECT * FROM project_machine_paths WHERE project_id = ? AND machine_id = ?",

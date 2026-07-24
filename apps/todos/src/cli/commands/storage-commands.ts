@@ -1,9 +1,14 @@
 import type { Command } from "commander";
 import chalk from "chalk";
 import { handleError, output } from "../helpers.js";
-import type { NativeStorageStatus, NativeStorageSyncPlan } from "../../lib/native-storage-status.js";
-import type { ShadowStatusReport } from "../../lib/shadow-status.js";
-import type { TodosRunArtifactSyncPlan, TodosRunArtifactSyncResult } from "../../storage/index.js";
+import type {
+  NativeDiagnosticMetadata,
+  NativeStorageStatus,
+  NativeStorageSyncPlan,
+} from "../../lib/native-storage-status.js";
+import type { TodosRunArtifactSyncPlan, TodosRunArtifactSyncResult } from "../../storage/s3-artifact-sync.js";
+import { assertTodosStageARemoteAccessFloor } from "../../storage/authority-floor.js";
+import { parseOptionalPositiveSafeInteger } from "../helpers.js";
 import { getTodosRemoteAuthorityConfigStatus } from "../cloud-router.js";
 
 function globalOptions(program: Command): Record<string, any> {
@@ -11,10 +16,24 @@ function globalOptions(program: Command): Record<string, any> {
   return command.optsWithGlobals?.() ?? program.opts();
 }
 
+function printDiagnosticTruncation(metadata: NativeDiagnosticMetadata): void {
+  if (!metadata.truncated) return;
+  console.error(chalk.yellow(
+    `Diagnostics: truncated (${metadata.truncations.length} reported, ${metadata.omitted_truncations} omitted)`,
+  ));
+  for (const entry of metadata.truncations) {
+    console.error(chalk.yellow(
+      `  ${entry.path}: ${entry.kind} ${entry.original} -> ${entry.retained}`,
+    ));
+  }
+}
+
 function printStatus(status: NativeStorageStatus): void {
   console.log(chalk.bold("todos storage"));
   console.log(`Mode: ${status.mode}`);
   console.log(`Remote: ${status.remote_enabled ? "enabled" : "disabled"}`);
+  console.log(`Configured remote intent: ${status.remote_configured ? "yes" : "no"}`);
+  console.log(`Runtime enabled: ${status.runtime_enabled ? "yes" : "no"}`);
   console.log(`Canonical RDS: ${status.canonical.cluster}/${status.canonical.database}`);
   console.log(`Runtime secret: ${status.canonical.runtimeSecretPath}`);
   console.log(`Database env: ${status.canonical.primaryEnv} (fallback: ${status.canonical.fallbackEnv})`);
@@ -24,6 +43,7 @@ function printStatus(status: NativeStorageStatus): void {
   console.log(`Network: not used`);
   for (const issue of status.issues) console.error(chalk.red(`  ${issue}`));
   for (const warning of status.warnings) console.error(chalk.yellow(`  ${warning}`));
+  printDiagnosticTruncation(status.diagnostics);
 }
 
 function printSyncPlan(plan: NativeStorageSyncPlan): void {
@@ -40,50 +60,7 @@ function printSyncPlan(plan: NativeStorageSyncPlan): void {
   }
   for (const issue of plan.status.issues) console.error(chalk.red(`  ${issue}`));
   for (const warning of plan.status.warnings) console.error(chalk.yellow(`  ${warning}`));
-}
-
-function printShadowStatus(report: ShadowStatusReport, enabled: boolean, shadowEnv: string): void {
-  console.log(chalk.bold("todos storage shadow-status"));
-  console.log(`Shadow mirror: ${enabled ? "enabled" : "disabled"} (${shadowEnv})`);
-  console.log(`Service: ${report.service}`);
-  console.log(`Cloud reachable: ${report.cloud_reachable ? "yes" : "no"}`);
-  if (report.error) {
-    console.error(chalk.red(`  ${report.error}`));
-    return;
-  }
-  console.log(`In sync: ${report.in_sync ? "yes" : "no"}`);
-  console.log(`Last mirror: ${report.last_mirror_at ?? "never"}`);
-  console.log(
-    `Last mirror lag: ${report.last_mirror_lag_ms === null ? "n/a" : `${report.last_mirror_lag_ms}ms`}`,
-  );
-  console.log("Rows (local -> cloud):");
-  for (const entry of report.objects) {
-    const flag = entry.diff === 0 ? "" : chalk.yellow(`  (diff ${entry.diff > 0 ? "+" : ""}${entry.diff})`);
-    console.log(
-      `  ${entry.object_type.padEnd(14)} local=${String(entry.local).padStart(6)} cloud=${String(entry.cloud).padStart(6)} tombstones=${entry.cloud_tombstones}${flag}`,
-    );
-  }
-  console.log(
-    `  ${"TOTAL".padEnd(14)} local=${String(report.totals.local).padStart(6)} cloud=${String(report.totals.cloud).padStart(6)} diff=${report.totals.diff}`,
-  );
-}
-
-interface OutboxDepth { pending: number; failed: number; depth: number }
-
-function readOutboxDepth(): OutboxDepth {
-  try {
-    const { getDatabase } = require("../../db/database.js") as typeof import("../../db/database.js");
-    const db = getDatabase();
-    const has = db
-      .query(`SELECT name FROM sqlite_master WHERE type='table' AND name='shadow_outbox'`)
-      .get();
-    if (!has) return { pending: 0, failed: 0, depth: 0 };
-    const pending = (db.query<{ n: number }, []>(`SELECT count(*) AS n FROM shadow_outbox WHERE status='pending'`).get()?.n) ?? 0;
-    const failed = (db.query<{ n: number }, []>(`SELECT count(*) AS n FROM shadow_outbox WHERE status='failed'`).get()?.n) ?? 0;
-    return { pending, failed, depth: pending + failed };
-  } catch {
-    return { pending: 0, failed: 0, depth: 0 };
-  }
+  printDiagnosticTruncation(plan.diagnostics);
 }
 
 function printArtifactPlan(plan: TodosRunArtifactSyncPlan): void {
@@ -112,8 +89,7 @@ function printArtifactResult(direction: "upload" | "download", result: TodosRunA
 }
 
 function artifactFilter(opts: { runId?: string; taskId?: string; limit?: string; includeAlreadySynced?: boolean }) {
-  const limit = opts.limit ? Number.parseInt(opts.limit, 10) : undefined;
-  if (opts.limit && (!Number.isSafeInteger(limit) || limit! <= 0)) throw new Error("--limit must be a positive integer");
+  const limit = parseOptionalPositiveSafeInteger(opts.limit, "--limit");
   return {
     ...(opts.runId ? { runId: opts.runId } : {}),
     ...(opts.taskId ? { taskId: opts.taskId } : {}),
@@ -150,11 +126,11 @@ async function s3StoreFromEnv() {
 export function registerStorageCommands(program: Command) {
   const storage = program
     .command("storage")
-    .description("Inspect explicit native local and remote storage configuration");
+    .description("Inspect local storage and Stage B configured intent; remote runtime stays disabled in Stage A");
 
   storage
     .command("status")
-    .description("Show redacted native storage configuration without opening network connections")
+    .description("Show redacted local status and configured remote intent; remote_enabled remains false in Stage A")
     .option("-j, --json", "Output as JSON")
     .action(async (opts: { json?: boolean }) => {
       try {
@@ -216,7 +192,7 @@ export function registerStorageCommands(program: Command) {
 
   storage
     .command("sync-plan")
-    .description("Preview native storage sync work without opening network connections")
+    .description("Show a no-network Stage B-deferred sync design; it never enables or runs remote sync")
     .option("--schema-sql", "Include Postgres schema SQL in the dry-run output")
     .option("-j, --json", "Output as JSON")
     .action(async (opts: { schemaSql?: boolean; json?: boolean }) => {
@@ -238,83 +214,24 @@ export function registerStorageCommands(program: Command) {
 
   storage
     .command("shadow-status")
-    .description("Report dual-write shadow divergence: local vs cloud row counts and last mirror lag (opens a read-only DB connection)")
+    .description("Stage B deferred: remote shadow status is unavailable while Stage A authority is disabled")
     .option("-j, --json", "Output as JSON")
-    .action(async (opts: { json?: boolean }) => {
-      let cloud: { close: () => Promise<void> } | null = null;
+    .action((_opts: { json?: boolean }) => {
       try {
-        const globalOpts = globalOptions(program);
-        const asJson = Boolean(opts.json || globalOpts.json);
-        const {
-          createTodosCloudQueryClientFromEnv,
-          createLocalSqliteTodosStorageAdapter,
-          isTodosShadowEnabled,
-          getTodosStorageShadowEnvName,
-          getTodosStorageDatabaseEnv,
-        } = await import("../../storage/index.js");
-        const client = createTodosCloudQueryClientFromEnv();
-        if (!client) {
-          const message = `Shadow mirror not configured: set ${getTodosStorageDatabaseEnv()} to a remote Postgres DSN`;
-          if (asJson) { output({ configured: false, message }, true); return; }
-          console.log(chalk.yellow(message));
-          return;
-        }
-        cloud = client;
-        const { getTodosShadowStatus } = await import("../../lib/shadow-status.js");
-        const local = createLocalSqliteTodosStorageAdapter();
-        const report = await getTodosShadowStatus({ local, cloud: client });
-        const enabled = isTodosShadowEnabled();
-        const outbox = readOutboxDepth();
-        if (asJson) {
-          output({ shadow_enabled: enabled, shadow_env: getTodosStorageShadowEnvName(), outbox, ...report }, true);
-          return;
-        }
-        printShadowStatus(report, enabled, getTodosStorageShadowEnvName());
-        console.log(
-          `Outbox depth: ${outbox.depth} (pending=${outbox.pending} failed=${outbox.failed})`,
-        );
+        assertTodosStageARemoteAccessFloor();
       } catch (error) {
         handleError(error);
-      } finally {
-        if (cloud) await cloud.close().catch(() => {});
       }
     });
 
   storage
     .command("shadow-drain")
-    .description("Drain the durable dual-write shadow outbox to cloud Postgres (one-way, write-only)")
+    .description("Stage B deferred: remote shadow drain is unavailable while Stage A authority is disabled")
     .option("-j, --json", "Output as JSON")
     .option("--timeout <ms>", "Max drain time in milliseconds", "30000")
-    .action(async (opts: { json?: boolean; timeout?: string }) => {
+    .action((_opts: { json?: boolean; timeout?: string }) => {
       try {
-        const globalOpts = globalOptions(program);
-        const asJson = Boolean(opts.json || globalOpts.json);
-        const {
-          isTodosShadowEnabled,
-          getTodosStorageShadowEnvName,
-          getRuntimeShadowOutbox,
-          closeRuntimeShadowCloud,
-        } = await import("../../storage/index.js");
-        if (!isTodosShadowEnabled()) {
-          const message = `Shadow disabled: set ${getTodosStorageShadowEnvName()}=1 to enable the dual-write shadow`;
-          if (asJson) { output({ shadow_enabled: false, message }, true); return; }
-          console.log(chalk.yellow(message));
-          return;
-        }
-        const { getDatabase } = await import("../../db/database.js");
-        const timeout = Number.parseInt(opts.timeout ?? "30000", 10);
-        const outbox = getRuntimeShadowOutbox(getDatabase());
-        const stats = await outbox.flush(Number.isFinite(timeout) ? timeout : 30000);
-        await closeRuntimeShadowCloud();
-        if (asJson) { output({ shadow_enabled: true, ...stats }, true); return; }
-        console.log(chalk.bold("todos storage shadow-drain"));
-        console.log(`Mirrored: ${stats.mirrored}`);
-        console.log(`Retries: ${stats.retries}`);
-        console.log(`Pending: ${stats.pending}`);
-        console.log(`Failed (parked): ${stats.failed}`);
-        console.log(`Outbox depth: ${stats.depth}`);
-        console.log(`Last mirror: ${stats.lastMirrorAt ?? "never"}`);
-        if (stats.lastError) console.error(chalk.yellow(`Last error: ${stats.lastError}`));
+        assertTodosStageARemoteAccessFloor();
       } catch (error) {
         handleError(error);
       }
@@ -322,11 +239,11 @@ export function registerStorageCommands(program: Command) {
 
   const artifacts = storage
     .command("artifacts")
-    .description("Preview or apply native S3 sync for locally stored run artifacts");
+    .description("Stage B-deferred S3 artifact design; apply is denied in Stage A");
 
   artifacts
     .command("upload")
-    .description("Upload locally stored run artifact bytes to configured S3. Dry-run by default.")
+    .description("Preview Stage B-deferred uploads locally; --apply is denied in Stage A")
     .option("--run-id <id>", "Limit to one run id")
     .option("--task-id <id>", "Limit to one task id")
     .option("--limit <n>", "Maximum artifacts to scan")
@@ -336,7 +253,10 @@ export function registerStorageCommands(program: Command) {
     .action(async (opts: { runId?: string; taskId?: string; limit?: string; includeAlreadySynced?: boolean; apply?: boolean; json?: boolean }) => {
       try {
         const globalOpts = globalOptions(program);
-        const { planRunArtifactsS3Sync, uploadRunArtifactsToS3 } = await import("../../storage/index.js");
+        if (opts.apply) {
+          assertTodosStageARemoteAccessFloor();
+        }
+        const { planRunArtifactsS3Sync, uploadRunArtifactsToS3 } = await import("../../storage/s3-artifact-sync.js");
         const filter = artifactFilter(opts);
         if (!opts.apply) {
           const plan = planRunArtifactsS3Sync({ direction: "upload", filter });
@@ -354,7 +274,7 @@ export function registerStorageCommands(program: Command) {
 
   artifacts
     .command("download")
-    .description("Restore locally stored run artifact bytes from configured S3. Dry-run by default.")
+    .description("Preview Stage B-deferred downloads locally; --apply is denied in Stage A")
     .option("--run-id <id>", "Limit to one run id")
     .option("--task-id <id>", "Limit to one task id")
     .option("--limit <n>", "Maximum artifacts to scan")
@@ -364,7 +284,10 @@ export function registerStorageCommands(program: Command) {
     .action(async (opts: { runId?: string; taskId?: string; limit?: string; force?: boolean; apply?: boolean; json?: boolean }) => {
       try {
         const globalOpts = globalOptions(program);
-        const { downloadRunArtifactsFromS3, planRunArtifactsS3Sync } = await import("../../storage/index.js");
+        if (opts.apply) {
+          assertTodosStageARemoteAccessFloor();
+        }
+        const { downloadRunArtifactsFromS3, planRunArtifactsS3Sync } = await import("../../storage/s3-artifact-sync.js");
         const filter = artifactFilter(opts);
         if (!opts.apply) {
           const plan = planRunArtifactsS3Sync({ direction: "download", filter, force: Boolean(opts.force) });

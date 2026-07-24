@@ -265,7 +265,7 @@ function findIntakeDuplicate(
 }
 
 export function previewInboxIntake(input: IntakeInput, db?: Database): IntakePreview {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const { raw, source_type, metadata } = loadRawContent(input);
   const scan = scanAndRedactText(raw);
   const safeText = scan.redacted_text ?? redactText(raw);
@@ -324,7 +324,7 @@ export function createInboxIntake(
   options: IntakeOptions = {},
   db?: Database,
 ): IntakeResult {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const preview = previewInboxIntake(input, d);
 
   if (options.dry_run) {

@@ -29,7 +29,7 @@ function getActiveWindowMs(): number {
  */
 export function autoReleaseStaleAgents(db?: Database): number {
   if (process.env["TODOS_AGENT_AUTO_RELEASE"] !== "true") return 0;
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const cutoff = new Date(Date.now() - getActiveWindowMs()).toISOString();
   const result = d.run(
     "UPDATE agents SET session_id = NULL WHERE status = 'active' AND session_id IS NOT NULL AND last_seen_at < ?",
@@ -81,7 +81,7 @@ function rowToAgent(row: AgentRow): Agent {
  *  - force: true → skip active-agent check and take over regardless
  */
 export function registerAgent(input: RegisterAgentInput, db?: Database): Agent | AgentConflictError {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const machineId = currentStorageMachineId(d);
   const existingNames = (d.query("SELECT name FROM agents").all() as { name: string }[]).map((row) => row.name);
   const normalizedName = validateAgentName(input.name, existingNames);
@@ -192,7 +192,7 @@ function buildConflictError(existing: Agent, lastSeenMs: number, pool: string[] 
  * releasing your agent).
  */
 export function releaseAgent(id: string, session_id?: string, db?: Database): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const agent = getAgent(id, d);
   if (!agent) return false;
 
@@ -207,13 +207,13 @@ export function releaseAgent(id: string, session_id?: string, db?: Database): bo
 }
 
 export function getAgent(id: string, db?: Database): Agent | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query("SELECT * FROM agents WHERE id = ?").get(id) as AgentRow | null;
   return row ? rowToAgent(row) : null;
 }
 
 export function getAgentByName(name: string, db?: Database): Agent | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const normalizedName = name.trim().toLowerCase();
   const row = d.query("SELECT * FROM agents WHERE LOWER(name) = ?").get(normalizedName) as AgentRow | null;
   return row ? rowToAgent(row) : null;
@@ -227,7 +227,7 @@ export function listAgents(opts?: { include_archived?: boolean } | Database, db?
     d = opts;
   } else {
     includeArchived = (opts as { include_archived?: boolean } | undefined)?.include_archived ?? false;
-    d = db || getDatabase();
+    d = getDatabase(db);
   }
   autoReleaseStaleAgents(d);
   if (includeArchived) {
@@ -237,7 +237,7 @@ export function listAgents(opts?: { include_archived?: boolean } | Database, db?
 }
 
 export function updateAgentActivity(id: string, db?: Database): void {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   d.run("UPDATE agents SET last_seen_at = ? WHERE id = ?", [now(), id]);
 }
 
@@ -246,7 +246,7 @@ export function updateAgent(
   input: { name?: string; description?: string; role?: string; title?: string; level?: string; permissions?: string[]; capabilities?: string[]; reports_to?: string | null; org_id?: string | null; metadata?: Record<string, unknown> },
   db?: Database,
 ): Agent {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const agent = getAgent(id, d);
   if (!agent) throw new Error(`Agent not found: ${id}`);
 
@@ -315,27 +315,27 @@ export function updateAgent(
 
 /** Soft-delete: archives the agent instead of removing it. Tasks referencing this agent are preserved. */
 export function deleteAgent(id: string, db?: Database): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return d.run("UPDATE agents SET status = 'archived', last_seen_at = ? WHERE id = ?", [now(), id]).changes > 0;
 }
 
 /** Archive an agent (soft delete). */
 export function archiveAgent(id: string, db?: Database): Agent | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   d.run("UPDATE agents SET status = 'archived', last_seen_at = ? WHERE id = ?", [now(), id]);
   return getAgent(id, d);
 }
 
 /** Restore an archived agent. */
 export function unarchiveAgent(id: string, db?: Database): Agent | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   d.run("UPDATE agents SET status = 'active', last_seen_at = ? WHERE id = ?", [now(), id]);
   return getAgent(id, d);
 }
 
 /** Get direct reports of an agent. */
 export function getDirectReports(agentId: string, db?: Database): Agent[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return (d.query("SELECT * FROM agents WHERE reports_to = ? ORDER BY name").all(agentId) as AgentRow[]).map(rowToAgent);
 }
 

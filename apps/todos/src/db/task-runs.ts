@@ -261,7 +261,7 @@ export function findTaskRunByTransactionKey(
   taskId?: string,
   db?: Database,
 ): TaskRun | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const normalized = normalizeTransactionKey({ key });
   const transaction = getTaskRunTransactionByKey(normalized, taskId, d);
   if (transaction?.run_id) return getTaskRun(transaction.run_id, d);
@@ -277,7 +277,7 @@ function loopRunCommands(run: TaskRun | null, key: string): string[] {
 }
 
 export function resolveTaskRunId(idOrPrefix: string, db?: Database): string {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const rows = d
     .query("SELECT id FROM task_runs WHERE id = ? OR id LIKE ? ORDER BY created_at DESC LIMIT 2")
     .all(idOrPrefix, `${idOrPrefix}%`) as Array<{ id: string }>;
@@ -287,7 +287,7 @@ export function resolveTaskRunId(idOrPrefix: string, db?: Database): string {
 }
 
 export function getTaskRun(runId: string, db?: Database): TaskRun | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = getRunRow(runId, d);
   return row ? rowToRun(row) : null;
 }
@@ -304,7 +304,7 @@ export interface StartTaskRunInput {
 }
 
 export function startTaskRun(input: StartTaskRunInput, db?: Database): TaskRun {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   if (!getTask(input.task_id, d)) throw new TaskNotFoundError(input.task_id);
   const id = input.id ?? uuid();
   const timestamp = input.started_at || now();
@@ -361,7 +361,7 @@ export function beginTaskRunTransaction(
   input: BeginTaskRunTransactionInput,
   db?: Database,
 ): LoopRunTransactionResult {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   if (!getTask(input.task_id, d)) throw new TaskNotFoundError(input.task_id);
   const timestamp = input.started_at || now();
   const key = normalizeTransactionKey(input);
@@ -469,7 +469,7 @@ export interface AddTaskRunEventInput {
 }
 
 export function addTaskRunEvent(input: AddTaskRunEventInput, db?: Database): TaskRunEvent {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const runId = resolveTaskRunId(input.run_id, d);
   const run = getTaskRun(runId, d);
   if (!run) throw new Error(`Run not found: ${input.run_id}`);
@@ -512,7 +512,7 @@ export interface AddTaskRunCommandInput {
 }
 
 export function addTaskRunCommand(input: AddTaskRunCommandInput, db?: Database): TaskRunCommand {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const runId = resolveTaskRunId(input.run_id, d);
   const run = getTaskRun(runId, d);
   if (!run) throw new Error(`Run not found: ${input.run_id}`);
@@ -583,7 +583,7 @@ export interface AddTaskRunFileInput {
 }
 
 export function addTaskRunFile(input: AddTaskRunFileInput, db?: Database): TaskFile {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const runId = resolveTaskRunId(input.run_id, d);
   const run = getTaskRun(runId, d);
   if (!run) throw new Error(`Run not found: ${input.run_id}`);
@@ -618,7 +618,7 @@ export interface AddTaskRunArtifactInput {
 }
 
 export function addTaskRunArtifact(input: AddTaskRunArtifactInput, db?: Database): TaskRunArtifact {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const runId = resolveTaskRunId(input.run_id, d);
   const run = getTaskRun(runId, d);
   if (!run) throw new Error(`Run not found: ${input.run_id}`);
@@ -686,7 +686,7 @@ export interface FinishTaskRunInput {
 }
 
 export function finishTaskRun(input: FinishTaskRunInput, db?: Database): TaskRun {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const runId = resolveTaskRunId(input.run_id, d);
   const run = getTaskRun(runId, d);
   if (!run) throw new Error(`Run not found: ${input.run_id}`);
@@ -717,7 +717,7 @@ export function finishTaskRunTransaction(
   input: FinishTaskRunTransactionInput,
   db?: Database,
 ): LoopRunTransactionResult {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const timestamp = input.completed_at || now();
   const status = input.status || "completed";
   const key = input.key ? normalizeTransactionKey({ key: input.key }) : "";
@@ -787,7 +787,7 @@ export function finishTaskRunTransaction(
 }
 
 export function listTaskRuns(taskId?: string, db?: Database): TaskRun[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const rows = taskId
     ? d.query("SELECT * FROM task_runs WHERE task_id = ? ORDER BY started_at DESC, created_at DESC").all(taskId) as TaskRunRow[]
     : d.query("SELECT * FROM task_runs ORDER BY started_at DESC, created_at DESC LIMIT 100").all() as TaskRunRow[];
@@ -795,7 +795,7 @@ export function listTaskRuns(taskId?: string, db?: Database): TaskRun[] {
 }
 
 export function getTaskRunLedger(runId: string, db?: Database): TaskRunLedger {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const resolved = resolveTaskRunId(runId, d);
   const run = getTaskRun(resolved, d);
   if (!run) throw new Error(`Run not found: ${runId}`);

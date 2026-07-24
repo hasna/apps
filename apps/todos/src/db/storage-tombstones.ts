@@ -33,7 +33,7 @@ export interface RecordStorageTombstoneInput {
 }
 
 export function recordStorageTombstone(input: RecordStorageTombstoneInput, db?: Database): StorageTombstone {
-  const d = db ?? getDatabase();
+  const d = getDatabase(db);
   const deletedAt = input.deleted_at ?? now();
   const machineId = input.source_machine_id ?? currentStorageMachineId(d);
   d.run(
@@ -66,7 +66,7 @@ export function getStorageTombstone(
   objectId: string,
   db?: Database,
 ): StorageTombstone | null {
-  const d = db ?? getDatabase();
+  const d = getDatabase(db);
   const row = d
     .query("SELECT * FROM storage_tombstones WHERE object_type = ? AND object_id = ?")
     .get(objectType, objectId) as StorageTombstoneRow | null;
@@ -74,7 +74,7 @@ export function getStorageTombstone(
 }
 
 export function listStorageTombstones(db?: Database): StorageTombstone[] {
-  const d = db ?? getDatabase();
+  const d = getDatabase(db);
   return (d
     .query("SELECT * FROM storage_tombstones ORDER BY updated_at ASC, object_type ASC, object_id ASC")
     .all() as StorageTombstoneRow[]).map(rowToStorageTombstone);

@@ -27,7 +27,7 @@ function expiresAt(ttlSeconds: number): string {
 
 /** Clean up expired locks. Called automatically on read operations. */
 export function cleanExpiredFileLocks(db?: Database): number {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const result = d.run("DELETE FROM file_locks WHERE expires_at <= ?", [now()]);
   return result.changes;
 }
@@ -39,7 +39,7 @@ export function cleanExpiredFileLocks(db?: Database): number {
  * - If another agent holds an active lock, throws LockError.
  */
 export function lockFile(input: LockFileInput, db?: Database): FileLock {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const ttl = input.ttl_seconds ?? FILE_LOCK_DEFAULT_TTL_SECONDS;
   const expiry = expiresAt(ttl);
   const timestamp = now();
@@ -75,7 +75,7 @@ export function lockFile(input: LockFileInput, db?: Database): FileLock {
  * Returns true if released, false if not found or wrong agent.
  */
 export function unlockFile(path: string, agentId: string, db?: Database): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   cleanExpiredFileLocks(d);
   const result = d.run(
     "DELETE FROM file_locks WHERE path = ? AND agent_id = ?",
@@ -89,7 +89,7 @@ export function unlockFile(path: string, agentId: string, db?: Database): boolea
  * Returns null if unlocked or expired.
  */
 export function checkFileLock(path: string, db?: Database): FileLock | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   cleanExpiredFileLocks(d);
   return d.query("SELECT * FROM file_locks WHERE path = ?").get(path) as FileLock | null;
 }
@@ -98,7 +98,7 @@ export function checkFileLock(path: string, db?: Database): FileLock | null {
  * List all active (non-expired) file locks, optionally filtered by agent.
  */
 export function listFileLocks(agentId?: string, db?: Database): FileLock[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   cleanExpiredFileLocks(d);
   if (agentId) {
     return d.query("SELECT * FROM file_locks WHERE agent_id = ? ORDER BY created_at DESC").all(agentId) as FileLock[];
@@ -108,7 +108,7 @@ export function listFileLocks(agentId?: string, db?: Database): FileLock[] {
 
 /** Force-release a lock regardless of which agent holds it (admin operation). */
 export function forceUnlockFile(path: string, db?: Database): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const result = d.run("DELETE FROM file_locks WHERE path = ?", [path]);
   return result.changes > 0;
 }

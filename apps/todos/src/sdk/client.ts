@@ -69,10 +69,192 @@ import {
   TodosTimeoutError,
 } from "./types.js";
 import { getLocalApiConfig, normalizeApiUrl } from "../lib/config.js";
+import { resolveTodosStorageRole } from "../storage/config.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 type QueryValue = string | number | boolean | string[] | undefined;
+
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+const REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
+const MAX_REDIRECT_HOPS = 5;
+const REDIRECT_BODY_HEADERS = [
+  "content-encoding",
+  "content-language",
+  "content-length",
+  "content-location",
+  "content-type",
+  "transfer-encoding",
+] as const;
+
+function isLoopbackApiBaseUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+    if (url.username || url.password) return false;
+    if (LOOPBACK_HOSTS.has(url.hostname)) return true;
+    const octets = url.hostname.split(".");
+    return octets.length === 4
+      && octets.every((octet) => /^\d{1,3}$/.test(octet) && Number(octet) <= 255)
+      && Number(octets[0]) === 127;
+  } catch {
+    return false;
+  }
+}
+
+function hasDedicatedHostedApiIntent(env: NodeJS.ProcessEnv): boolean {
+  return Boolean(
+    env.HASNA_TODOS_API_URL?.trim()
+      || env.HASNA_TODOS_API_KEY?.trim(),
+  );
+}
+
+function assertTodosSdkLocalAuthority(baseUrl?: string | null): void {
+  const role = resolveTodosStorageRole(process.env);
+  const reason = role.role !== "local"
+    ? role.reason
+    : hasDedicatedHostedApiIntent(process.env)
+      ? "dedicated_hosted_api_intent"
+      : baseUrl && !isLoopbackApiBaseUrl(baseUrl)
+        ? "non_loopback_api_url"
+        : null;
+  if (!reason) return;
+  throw new TodosAPIError(
+    `HOSTED_AUTHORITY_UNAVAILABLE: ${reason}`,
+    503,
+    "Service Unavailable",
+    { code: "HOSTED_AUTHORITY_UNAVAILABLE", reason },
+  );
+}
+
+function assertTodosSdkRequestAuthority(baseUrl: string, requestUrl: string): void {
+  assertTodosSdkLocalAuthority(baseUrl);
+  let base: URL;
+  let target: URL;
+  try {
+    base = new URL(baseUrl);
+    target = new URL(requestUrl, base);
+  } catch {
+    throwHostedSdkUnavailable("invalid_request_url");
+  }
+  if (!isLoopbackApiBaseUrl(target.toString()) || target.origin !== base.origin) {
+    throwHostedSdkUnavailable("cross_origin_request_url");
+  }
+}
+
+function throwHostedSdkUnavailable(reason: string): never {
+  throw new TodosAPIError(
+    `HOSTED_AUTHORITY_UNAVAILABLE: ${reason}`,
+    503,
+    "Service Unavailable",
+    { code: "HOSTED_AUTHORITY_UNAVAILABLE", reason },
+  );
+}
+
+function snapshotTodosClientOptions(options: TodosClientOptions): TodosClientOptions {
+  const snapshot: TodosClientOptions = {};
+  for (const key of ["baseUrl", "apiKey", "timeout", "maxRetries", "retryDelay"] as const) {
+    let value: unknown;
+    try {
+      value = Reflect.get(options, key);
+    } catch {
+      throwHostedSdkUnavailable("unreadable_options");
+    }
+    if (
+      value !== undefined &&
+      ((key === "baseUrl" || key === "apiKey")
+        ? typeof value !== "string"
+        : typeof value !== "number" || !Number.isSafeInteger(value) || value < (key === "maxRetries" ? 0 : 1))
+    ) {
+      throwHostedSdkUnavailable("invalid_options");
+    }
+    if (value !== undefined) {
+      (snapshot as Record<string, unknown>)[key] = value;
+      // A remote base URL is already sufficient to deny construction. Do not
+      // inspect apiKey, retry, or timeout getters after that decision exists.
+      if (key === "baseUrl") assertTodosSdkLocalAuthority(normalizeApiUrl(value as string));
+    }
+  }
+  return snapshot;
+}
+
+function isHostedAuthorityUnavailable(error: unknown): boolean {
+  try {
+    if (!(error instanceof TodosAPIError) || error.status !== 503) return false;
+    const body = error.body;
+    return Boolean(
+      body
+        && typeof body === "object"
+        && Reflect.get(body, "code") === "HOSTED_AUTHORITY_UNAVAILABLE",
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Follow only bounded, same-origin redirects under explicit manual control.
+ * Kept outside the public class prototype so Stage-A hardening does not change
+ * the reflection surface shipped at the pinned base.
+ */
+async function fetchFollowingSafeRedirects(
+  baseUrl: string,
+  url: string,
+  init: RequestInit,
+): Promise<Response> {
+  let currentUrl = url;
+  let currentInit = init;
+  let redirectHops = 0;
+
+  while (true) {
+    assertTodosSdkRequestAuthority(baseUrl, currentUrl);
+    const response = await fetch(currentUrl, {
+      ...currentInit,
+      redirect: "manual",
+    });
+    if (!REDIRECT_STATUS_CODES.has(response.status)) return response;
+
+    // Cleanup is best-effort and deliberately detached. A hostile body can
+    // return a never-settling cancellation promise; that secondary cleanup
+    // must not bypass the request timeout or delay the typed redirect decision.
+    cancelRedirectResponseBody(response);
+    if (redirectHops >= MAX_REDIRECT_HOPS) {
+      throwHostedSdkUnavailable("too_many_redirects");
+    }
+
+    const location = response.headers.get("location");
+    if (!location) throwHostedSdkUnavailable("invalid_redirect_url");
+    let target: URL;
+    try {
+      target = new URL(location, currentUrl);
+    } catch {
+      throwHostedSdkUnavailable("invalid_redirect_url");
+    }
+
+    // This check must precede the next fetch. The headers already contain the
+    // API key, so following first and validating afterward would leak it.
+    assertTodosSdkRequestAuthority(baseUrl, target.toString());
+
+    const method = (currentInit.method ?? "GET").toUpperCase();
+    const switchToGet = (response.status === 303 && method !== "GET" && method !== "HEAD")
+      || ((response.status === 301 || response.status === 302) && method === "POST");
+    if (switchToGet) {
+      const headers = new Headers(currentInit.headers);
+      for (const name of REDIRECT_BODY_HEADERS) headers.delete(name);
+      currentInit = {
+        ...currentInit,
+        method: "GET",
+        body: undefined,
+        headers,
+      };
+    } else if (currentInit.body instanceof ReadableStream) {
+      throwHostedSdkUnavailable("unreplayable_redirect_body");
+    }
+
+    currentUrl = target.toString();
+    redirectHops += 1;
+  }
+}
 
 function buildQuery(params: Record<string, QueryValue>): string {
   const search = new URLSearchParams();
@@ -211,7 +393,15 @@ class TasksResource {
       fields: options?.fields,
     });
     const url = `${this.client.baseUrl}/api/tasks/context${q}`;
-    const res = await this.client._fetchRaw(url);
+    let res: Response;
+    try {
+      res = await this.client._fetchRaw(url);
+    } catch (error) {
+      // Base SDK compatibility treats local transport failures the same as a
+      // non-success response. The Stage-A authority floor remains terminal.
+      if (isHostedAuthorityUnavailable(error)) throw error;
+      return options?.format === "json" ? {} as TaskContextResponse : "";
+    }
     if (!res.ok) return options?.format === "json" ? {} as TaskContextResponse : "";
     if (options?.format === "json") return res.json() as Promise<TaskContextResponse>;
     return res.text();
@@ -475,14 +665,58 @@ export class TodosClient {
   readonly templates: TemplatesResource;
 
   constructor(options: TodosClientOptions = {}) {
-    const localConfig = getLocalApiConfig();
-    this.baseUrl = normalizeApiUrl(options.baseUrl)
-      || localConfig.apiUrl
+    // The real process role is authoritative and must be checked before any
+    // caller-controlled option getter, ownKeys trap, or local config read.
+    assertTodosSdkLocalAuthority();
+    const safeOptions = snapshotTodosClientOptions(options);
+    const explicitBaseUrl = normalizeApiUrl(safeOptions.baseUrl);
+    assertTodosSdkLocalAuthority(explicitBaseUrl);
+    let localConfig: ReturnType<typeof getLocalApiConfig>;
+    try {
+      localConfig = getLocalApiConfig();
+    } catch {
+      throwHostedSdkUnavailable("unreadable_config");
+    }
+    if (!localConfig || typeof localConfig !== "object") {
+      throwHostedSdkUnavailable("unreadable_config");
+    }
+    let localApiUrlValue: unknown;
+    try {
+      localApiUrlValue = Reflect.get(localConfig, "apiUrl");
+    } catch {
+      throwHostedSdkUnavailable("unreadable_config");
+    }
+    if (
+      localApiUrlValue !== null
+      && localApiUrlValue !== undefined
+      && typeof localApiUrlValue !== "string"
+    ) {
+      throwHostedSdkUnavailable("unreadable_config");
+    }
+    const localApiUrl = normalizeApiUrl(localApiUrlValue as string | null | undefined);
+    assertTodosSdkLocalAuthority(localApiUrl);
+    let localApiKeyValue: unknown;
+    try {
+      localApiKeyValue = Reflect.get(localConfig, "apiKey");
+    } catch {
+      throwHostedSdkUnavailable("unreadable_config");
+    }
+    if (
+      localApiKeyValue !== null
+      && localApiKeyValue !== undefined
+      && typeof localApiKeyValue !== "string"
+    ) {
+      throwHostedSdkUnavailable("unreadable_config");
+    }
+    const localApiKey = (localApiKeyValue as string | null | undefined) ?? null;
+    this.baseUrl = explicitBaseUrl
+      || localApiUrl
       || "http://localhost:19427";
-    this.timeout = options.timeout ?? 10000;
-    this.apiKey = options.apiKey || localConfig.apiKey;
-    this.maxRetries = options.maxRetries ?? 0;
-    this.retryDelay = options.retryDelay ?? 1000;
+    assertTodosSdkLocalAuthority(this.baseUrl);
+    this.timeout = safeOptions.timeout ?? 10000;
+    this.apiKey = safeOptions.apiKey || localApiKey;
+    this.maxRetries = safeOptions.maxRetries ?? 0;
+    this.retryDelay = safeOptions.retryDelay ?? 1000;
 
     this.tasks = new TasksResource(this);
     this.agents = new AgentsResource(this);
@@ -502,11 +736,23 @@ export class TodosClient {
 
   /** Raw fetch — for endpoints that don't return JSON (text, CSV, SSE) */
   async _fetchRaw(url: string, init?: RequestInit): Promise<Response> {
+    // Validate the supplied URL, not only the configured base. This must run
+    // before headers are constructed so a local key can never be forwarded.
+    assertTodosSdkRequestAuthority(this.baseUrl, url);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeout);
     try {
       const headers = this._buildHeaders(init?.headers);
-      return await fetch(url, { ...init, headers, signal: controller.signal });
+      return await fetchFollowingSafeRedirects(this.baseUrl, url, {
+        ...init,
+        headers,
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        throw new TodosTimeoutError(this.timeout);
+      }
+      throw error;
     } finally {
       clearTimeout(timer);
     }
@@ -536,6 +782,11 @@ export class TodosClient {
         return await this._fetch<T>(path, init);
       } catch (e) {
         lastError = e as Error;
+        if (
+          e instanceof TodosAPIError &&
+          e.status === 503 &&
+          (e.body as { code?: unknown } | null)?.code === "HOSTED_AUTHORITY_UNAVAILABLE"
+        ) throw e;
         if (e instanceof TodosAPIError && e.status < 500 && e.status !== 429) throw e;
         if (e instanceof TodosUnauthorizedError || e instanceof TodosNotFoundError || e instanceof TodosConflictError) throw e;
 
@@ -553,12 +804,17 @@ export class TodosClient {
   }
 
   private async _fetch<T>(path: string, init?: RequestInit): Promise<T> {
+    assertTodosSdkLocalAuthority(this.baseUrl);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeout);
     try {
       const url = `${this.baseUrl}${path}`;
       const headers = this._buildHeaders(init?.headers);
-      const res = await fetch(url, { ...init, headers, signal: controller.signal });
+      const res = await fetchFollowingSafeRedirects(this.baseUrl, url, {
+        ...init,
+        headers,
+        signal: controller.signal,
+      });
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({ error: res.statusText })) as { error?: string };
@@ -628,6 +884,7 @@ export class TodosClient {
 
   /** Quick alive check */
   async isAlive(): Promise<boolean> {
+    assertTodosSdkLocalAuthority(this.baseUrl);
     try {
       await this._get("/api/stats");
       return true;
@@ -762,6 +1019,15 @@ export class TodosClient {
   /** @deprecated Use client.projects.list() instead */
   async getProjects(): Promise<Project[]> {
     return this.projects.list();
+  }
+}
+
+function cancelRedirectResponseBody(response: Response): void {
+  try {
+    const cancellation = response.body?.cancel();
+    if (cancellation) void cancellation.catch(() => {});
+  } catch {
+    // Preserve the primary follow/reject outcome.
   }
 }
 

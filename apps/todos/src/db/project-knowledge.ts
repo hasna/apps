@@ -174,7 +174,7 @@ export function createKnowledgeRecord(input: CreateKnowledgeRecordInput, db?: Da
   assertType(input.record_type);
   const title = input.title.trim();
   if (!title) throw new Error("Knowledge record title is required");
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const timestamp = now();
   const id = uuid();
   d.run(
@@ -205,7 +205,7 @@ export function createKnowledgeRecord(input: CreateKnowledgeRecordInput, db?: Da
 }
 
 export function getKnowledgeRecord(id: string, db?: Database): ProjectKnowledgeRecord | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const resolved = resolvePartialId(d, "project_knowledge_records", id) || id;
   const row = d.query("SELECT * FROM project_knowledge_records WHERE id = ?").get(resolved) as KnowledgeRecordRow | null;
   return row ? rowToKnowledgeRecord(row) : null;
@@ -235,7 +235,7 @@ function buildFilters(options: ListKnowledgeRecordsOptions, db: Database): { whe
 }
 
 export function listKnowledgeRecords(options: ListKnowledgeRecordsOptions = {}, db?: Database): ProjectKnowledgeRecord[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const { where, params } = buildFilters(options, d);
   params.push(clampLimit(options.limit));
   return (d.query(`SELECT * FROM project_knowledge_records ${where} ORDER BY updated_at DESC, created_at DESC LIMIT ?`).all(...params) as KnowledgeRecordRow[])
@@ -245,7 +245,7 @@ export function listKnowledgeRecords(options: ListKnowledgeRecordsOptions = {}, 
 export function searchKnowledgeRecords(options: SearchKnowledgeRecordsOptions, db?: Database): ProjectKnowledgeRecord[] {
   const query = options.query.trim();
   if (!query) return listKnowledgeRecords(options, db);
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const { where, params } = buildFilters(options, d);
   const searchClause = `(
     lower(title) LIKE ?
@@ -263,7 +263,7 @@ export function searchKnowledgeRecords(options: SearchKnowledgeRecordsOptions, d
 }
 
 export function createKnowledgeSnapshot(input: CreateKnowledgeSnapshotInput, db?: Database): { snapshot_id: string; record: ProjectKnowledgeRecord } {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const snapshot = saveSnapshot({
     agent_id: input.agent_id,
     task_id: input.task_id,

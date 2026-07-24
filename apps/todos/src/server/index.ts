@@ -1,201 +1,142 @@
 #!/usr/bin/env bun
-/**
- * Standalone entry point for the todos dashboard server.
- * Usage: todos-serve [--port 19427]
- *
- * If the default port is in use, automatically finds the next free port.
- */
+/** Dependency-light, exact-argv todos-serve bootstrap. */
 
+import { exactMetadataInvocation, hasMixedMetadataFlag } from "../cli/exact-argv.js";
+import {
+  exitWithTodosCliStageAError,
+  todosCliStageAErrorPayload,
+} from "../cli/stage-a.js";
 import { getPackageVersion } from "../lib/package-version.js";
+import { parsePositiveSafeInteger } from "../lib/positive-safe-integer.js";
+import { assertTodosStageARemoteAccessFloor } from "../storage/authority-floor.js";
+import {
+  assertTodosLocalStorageRole,
+  snapshotTodosStorageEnvironment,
+  type TodosStorageEnv,
+} from "../storage/config.js";
 
 const DEFAULT_PORT = 19427;
+const VALUE_OPTIONS = new Set(["--port", "--host", "--api-key"]);
+const FLAG_OPTIONS = new Set(["--no-open"]);
+const OPERATOR_COMMANDS = new Set(["migrate", "redact-comments"]);
 
-function hasVersionFlag(): boolean {
-  return process.argv.includes("--version") || process.argv.includes("-V");
-}
-
-function hasHelpFlag(): boolean {
-  return process.argv.includes("--help") || process.argv.includes("-h");
+function enforceStageAOperatorFloor(): never {
+  return assertTodosStageARemoteAccessFloor();
 }
 
 function printHelp(): void {
   console.log(`Usage: todos-serve [options]
 
-Start the @hasna/todos dashboard server.
+Start the @hasna/todos local dashboard server.
 
 Commands:
-  migrate                 Apply idempotent schema migrations
-  redact-comments         Preview historical comment redaction (dry-run by default)
+  migrate                 Stage B deferred; unavailable in Stage A
+  redact-comments         Stage B deferred; unavailable in Stage A
 
 Options:
   --port <port>     HTTP port to bind. Defaults to ${DEFAULT_PORT}
   --host <host>     Hostname to bind. Defaults to 127.0.0.1
   --api-key <key>   Require this API key for dashboard/API requests
   --no-open         Do not open the dashboard in a browser
-  --batch-size <n>  redact-comments batch size, 1-500 (default: 100)
-  --apply           Apply redact-comments changes (default is dry-run)
-  --confirm <value> Explicit confirmation required with --apply
-  --json            Emit redact-comments aggregate JSON
   -V, --version     output the version number
-  -h, --help        display help for command
-
-Environment:
-  TODOS_NO_OPEN=true       Do not open the dashboard in a browser
-  TODOS_API_KEY=<key>      Require this API key for dashboard/API requests`);
+  -h, --help        display help for command`);
 }
 
-function parsePort(): number {
-  const portArg = process.argv.find((a) => a === "--port" || a.startsWith("--port="));
-  if (portArg) {
-    if (portArg.includes("=")) {
-      return parseInt(portArg.split("=")[1]!, 10) || DEFAULT_PORT;
+function validStartupGrammar(args: readonly string[]): boolean {
+  if (hasMixedMetadataFlag(args)) return false;
+  const seen = new Set<string>();
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index]!;
+    if (FLAG_OPTIONS.has(token)) {
+      if (seen.has(token)) return false;
+      seen.add(token);
+      continue;
     }
-    const idx = process.argv.indexOf(portArg);
-    return parseInt(process.argv[idx + 1]!, 10) || DEFAULT_PORT;
+    const assignment = [...VALUE_OPTIONS].find((option) => token.startsWith(`${option}=`));
+    if (assignment) {
+      if (seen.has(assignment) || token.length === assignment.length + 1) return false;
+      seen.add(assignment);
+      continue;
+    }
+    if (VALUE_OPTIONS.has(token)) {
+      const value = args[index + 1];
+      if (seen.has(token) || value === undefined || value.startsWith("-")) return false;
+      seen.add(token);
+      index += 1;
+      continue;
+    }
+    return false;
   }
-  return DEFAULT_PORT;
+  return true;
 }
 
-function parseStringArg(name: string): string | undefined {
-  const arg = process.argv.find((a) => a === name || a.startsWith(`${name}=`));
-  if (!arg) return undefined;
-  if (arg.includes("=")) return arg.split("=")[1] || undefined;
-  const idx = process.argv.indexOf(arg);
-  return process.argv[idx + 1] || undefined;
+function readValue(args: readonly string[], name: string): string | undefined {
+  const assignment = args.find((arg) => arg.startsWith(`${name}=`));
+  if (assignment) return assignment.slice(name.length + 1);
+  const index = args.indexOf(name);
+  return index >= 0 ? args[index + 1] : undefined;
 }
 
-async function findFreePort(start: number): Promise<number> {
-  for (let port = start; port < start + 100; port++) {
+async function findFreePort(start: number, environment: TodosStorageEnv): Promise<number> {
+  for (let port = start; port < start + 100; port += 1) {
+    // Keep authority outside the port-in-use catch: denial is not availability.
+    assertTodosLocalStorageRole(process.env);
+    assertTodosLocalStorageRole(environment);
     try {
-      const server = Bun.serve({ port, fetch: () => new Response("") });
-      server.stop(true);
+      const probe = Bun.serve({ port, hostname: "127.0.0.1", fetch: () => new Response("") });
+      probe.stop(true);
       return port;
     } catch {
-      // Port in use, try next
+      // Authorized local-only probing may continue to the next port.
     }
   }
-  return start; // fallback
+  return start;
 }
 
-async function runMigrate(): Promise<void> {
-  const {
-    ensureCloudSchema,
-    ensureCloudCommentCursorIndex,
-    ensureCloudScopedSlugUniqueIndexes,
-    normalizeCloudPayloads,
-    pingCloud,
-    resolveCloudDatabaseUrl,
-    closeCloud,
-  } =
-    await import("./cloud.js");
-  if (!resolveCloudDatabaseUrl()) {
-    console.error("migrate: no database URL (HASNA_TODOS_DATABASE_URL / TODOS_DATABASE_URL / DATABASE_URL)");
-    process.exit(2);
-  }
-  console.log("migrate: connecting…");
-  await pingCloud();
-  console.log("migrate: applying schema (sync tables + api_keys)…");
-  await ensureCloudSchema();
-  console.log("migrate: normalizing legacy double-encoded jsonb payloads…");
-  const normalized = await normalizeCloudPayloads();
-  console.log(`migrate: normalized ${normalized} payload row(s)`);
-  console.log("migrate: prebuilding comment cursor index concurrently…");
-  await ensureCloudCommentCursorIndex();
-  console.log("migrate: auditing scoped slug duplicates and building unique indexes concurrently…");
-  await ensureCloudScopedSlugUniqueIndexes();
-  console.log("migrate: done");
-  await closeCloud();
-  process.exit(0);
-}
-
-async function runCommentRedactionBackfill(): Promise<void> {
-  const {
-    backfillCloudCommentRedaction,
-    resolveCloudDatabaseUrl,
-    closeCloud,
-  } = await import("./cloud.js");
-  const {
-    COMMENT_REDACTION_BACKFILL_CONFIRMATION,
-    isCommentRedactionBackfillComplete,
-  } = await import("../storage/comment-redaction-backfill.js");
-  if (!resolveCloudDatabaseUrl()) {
-    console.error("redact-comments: no database URL (HASNA_TODOS_DATABASE_URL / TODOS_DATABASE_URL / DATABASE_URL)");
-    process.exit(2);
-  }
-
-  const apply = process.argv.includes("--apply");
-  const rawBatchSize = parseStringArg("--batch-size");
-  try {
-    const report = await backfillCloudCommentRedaction({
-      apply,
-      confirmation: parseStringArg("--confirm"),
-      batchSize: rawBatchSize === undefined ? 100 : Number(rawBatchSize),
-    });
-    if (process.argv.includes("--json")) {
-      console.log(JSON.stringify(report));
-    } else {
-      console.log(
-        `redact-comments: ${report.dry_run ? "dry-run" : "applied"}; ` +
-        `scanned=${report.scanned} candidates=${report.candidates} updated=${report.updated} ` +
-        `conflicts=${report.conflicts} remaining=${report.remaining_candidates} batches=${report.batches}`,
-      );
-      if (report.dry_run && report.candidates > 0) {
-        console.log(
-          `redact-comments: obtain approval before using ` +
-          `--apply --confirm=${COMMENT_REDACTION_BACKFILL_CONFIRMATION}`,
-        );
-      }
-    }
-    if (apply && !isCommentRedactionBackfillComplete(report)) {
-      console.error(
-        "redact-comments: incomplete apply; resolve conflicts and rerun until conflicts=0 and remaining=0",
-      );
-      process.exitCode = 1;
-    }
-  } catch (error) {
-    const message = (error as Error).message.replace(/postgres(?:ql)?:\/\/[^@\s]+@/gi, "postgresql://[REDACTED]@");
-    console.error(`redact-comments: failed: ${message}`);
-    process.exitCode = 1;
-  } finally {
-    await closeCloud();
-  }
-}
-
-async function main() {
-  if (hasVersionFlag()) {
-    console.log(getPackageVersion());
+async function main(): Promise<void> {
+  const args = process.argv.slice(2);
+  const metadata = exactMetadataInvocation(args);
+  if (metadata === "version") {
+    console.log(getPackageVersion(import.meta.url));
     return;
   }
-  if (hasHelpFlag()) {
+  if (metadata === "help") {
     printHelp();
     return;
   }
-  // One-shot schema migration (used by the ECS migration task):
-  //   todos-serve migrate
-  if (process.argv.includes("migrate")) {
-    await runMigrate();
-    return;
-  }
-  if (process.argv.includes("redact-comments")) {
-    await runCommentRedactionBackfill();
-    return;
-  }
-  // When PORT is set (container/service deployment) bind it EXACTLY — never scan
-  // for a free port, or the ALB health check would target the wrong port.
-  const explicitPortArg = process.argv.some((a) => a === "--port" || a.startsWith("--port="));
-  const envPort = process.env.PORT ? parseInt(process.env.PORT, 10) : undefined;
-  const requestedPort = explicitPortArg ? parsePort() : (envPort ?? parsePort());
-  const port = envPort || explicitPortArg ? requestedPort : await findFreePort(requestedPort);
-  if (port !== requestedPort) {
-    console.log(`Port ${requestedPort} in use, using ${port}`);
-  }
-  const noOpen = process.argv.includes("--no-open") || process.env["TODOS_NO_OPEN"] === "true" || Boolean(envPort);
+
+  if (OPERATOR_COMMANDS.has(args[0] ?? "")) enforceStageAOperatorFloor();
+  if (!validStartupGrammar(args)) enforceStageAOperatorFloor();
+
+  // This is deliberately before port/env parsing, probing, imports, CORS/rate
+  // setup, socket activity, and every possible Bun.serve call.
+  assertTodosLocalStorageRole(process.env);
+  const environment = snapshotTodosStorageEnvironment(process.env);
+
+  const rawPort = readValue(args, "--port");
+  const rawEnvironmentPort = environment.PORT;
+  const explicitPort = rawPort === undefined ? undefined : parsePositiveSafeInteger(rawPort, "--port");
+  const environmentPort = rawEnvironmentPort === undefined
+    ? undefined
+    : parsePositiveSafeInteger(rawEnvironmentPort, "PORT");
+  const requestedPort = explicitPort ?? environmentPort ?? DEFAULT_PORT;
+  const port = explicitPort !== undefined || environmentPort !== undefined
+    ? requestedPort
+    : await findFreePort(requestedPort, environment);
+  const noOpen = args.includes("--no-open")
+    || environment.TODOS_NO_OPEN === "true"
+    || environmentPort !== undefined;
   const { startServer } = await import("./serve.js");
-  startServer(port, {
+  await startServer(port, {
     open: !noOpen,
-    host: parseStringArg("--host") || process.env.HOST,
-    apiKey: parseStringArg("--api-key"),
+    host: readValue(args, "--host") ?? environment.HOST,
+    apiKey: readValue(args, "--api-key"),
+    environment,
   });
 }
 
-main();
+void main().catch((error) => {
+  if (todosCliStageAErrorPayload(error)) exitWithTodosCliStageAError(error);
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
+});

@@ -11,9 +11,10 @@
 export { TodosClient, createClient } from "./client.js";
 export type { TodosClientOptions } from "./client.js";
 
-// Versioned /v1 cloud client, generated from the serve OpenAPI document
-// (src/server/openapi.ts). Regenerate with `bun run scripts/generate-sdk.ts`.
-export { TodosV1Client, ApiError as TodosV1ApiError } from "./v1.generated.js";
+// Versioned /v1 future-positive client, generated from the explicitly non-live
+// contract in src/server/openapi.ts. Stage A exports the fail-closed class stub.
+// Regenerate with `bun run scripts/generate-sdk.ts`.
+export { TodosV1Client, ApiError as TodosV1ApiError } from "./v1-stage-a.js";
 export type {
   TodosV1ClientOptions,
   Task as TodosV1Task,

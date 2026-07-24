@@ -11,7 +11,7 @@ import {
   searchKnowledgeRecords,
   type KnowledgeRecordType,
 } from "../../db/project-knowledge.js";
-import { handleError, output } from "../helpers.js";
+import { handleError, output, parseOptionalPositiveSafeInteger } from "../helpers.js";
 
 const RECORD_TYPES = ["decision", "architecture_note", "tradeoff", "context_snapshot"] as const;
 
@@ -47,7 +47,7 @@ function commonFilters(opts: Record<string, any>) {
     plan_id: opts.plan,
     agent_id: opts.agent,
     tag: opts.tag,
-    limit: opts.limit ? Number.parseInt(opts.limit, 10) : undefined,
+    limit: parseOptionalPositiveSafeInteger(opts.limit, "--limit"),
   };
 }
 

@@ -60,8 +60,12 @@ import {
   getRecentActivity,
 } from "../db/audit.js";
 import { addComment, listComments } from "../db/comments.js";
-import { getDatabase } from "../db/database.js";
+import {
+  assertConstructorOwnedSqliteDatabase,
+  getDatabase,
+} from "../db/database.js";
 import type { TodosStorageAdapter } from "./interfaces.js";
+import { assertTodosLocalStorageRole } from "./config.js";
 import {
   exportSqliteTodosStorageSnapshot,
   importSqliteTodosStorageSnapshot,
@@ -71,10 +75,31 @@ export interface CreateLocalSqliteTodosStorageAdapterOptions {
   db?: Database;
 }
 
+const localSqliteAdapters = new WeakSet<object>();
+
+/** Internal provenance check used by local-only compatibility harnesses. */
+export function isLocalSqliteTodosStorageAdapter(
+  value: unknown,
+): value is TodosStorageAdapter {
+  return typeof value === "object" && value !== null && localSqliteAdapters.has(value);
+}
+
 export function createLocalSqliteTodosStorageAdapter(
   options: CreateLocalSqliteTodosStorageAdapterOptions = {},
 ): TodosStorageAdapter {
-  const database = () => options.db ?? getDatabase();
+  assertTodosLocalStorageRole();
+  // Capture the supplied handle before issuing the branded adapter. Keeping a
+  // live reference to the caller-owned options bag would let a local caller
+  // replace `options.db` after branding and route the retained V1 dispatcher
+  // through an arbitrary database-like object.
+  const suppliedDatabase = options.db;
+  if (suppliedDatabase !== undefined) assertConstructorOwnedSqliteDatabase(suppliedDatabase);
+  const database = () => {
+    assertTodosLocalStorageRole();
+    const resolved = getDatabase(suppliedDatabase);
+    assertConstructorOwnedSqliteDatabase(resolved);
+    return resolved;
+  };
   let adapter: TodosStorageAdapter;
 
   adapter = {
@@ -180,5 +205,13 @@ export function createLocalSqliteTodosStorageAdapter(
     },
   };
 
+  // The WeakSet brand is a capability boundary for the retained local V1
+  // parity dispatcher. Freeze every operation group before branding so a
+  // genuine local shell cannot be rewritten to carry remote/hostile methods.
+  for (const value of Object.values(adapter)) {
+    if (value && typeof value === "object") Object.freeze(value);
+  }
+  Object.freeze(adapter);
+  localSqliteAdapters.add(adapter);
   return adapter;
 }

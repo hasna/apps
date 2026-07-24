@@ -98,7 +98,7 @@ function extractTopology(machine: Machine): MachineTopologyMetadata {
  * Idempotent — returns existing machine if name matches.
  */
 export function getOrCreateLocalMachine(db?: Database): Machine {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const name = process.env["TODOS_MACHINE_NAME"] || osHostname();
   const host = osHostname();
   const plat = osPlatform();
@@ -139,19 +139,19 @@ export function resetMachineId(): void {
 }
 
 export function getMachine(id: string, db?: Database): Machine | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query("SELECT * FROM machines WHERE id = ?").get(id) as MachineRow | null;
   return row ? rowToMachine(row) : null;
 }
 
 export function getMachineByName(name: string, db?: Database): Machine | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query("SELECT * FROM machines WHERE name = ?").get(name) as MachineRow | null;
   return row ? rowToMachine(row) : null;
 }
 
 export function listMachines(db?: Database, includeArchived = false): Machine[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const query = includeArchived
     ? "SELECT * FROM machines ORDER BY last_seen_at DESC"
     : "SELECT * FROM machines WHERE archived_at IS NULL ORDER BY last_seen_at DESC";
@@ -167,7 +167,7 @@ export function registerMachine(
   opts: MachineTopologyOptions,
   db?: Database,
 ): Machine {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const existing = d.query("SELECT * FROM machines WHERE name = ?").get(name) as MachineRow | null;
   const metadata = topologyMetadata(opts, parseMetadata(existing?.metadata ?? null));
 
@@ -211,7 +211,7 @@ export function updateMachineHeartbeat(
   opts: MachineTopologyOptions = {},
   db?: Database,
 ): Machine {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const key = idOrName || process.env["TODOS_MACHINE_NAME"] || osHostname();
   const row = d.query("SELECT * FROM machines WHERE id = ? OR name = ?").get(key, key) as MachineRow | null;
   if (!row) {
@@ -244,7 +244,7 @@ export function getMachineTopologyDiagnostics(
   db?: Database,
   at: Date = new Date(),
 ): MachineTopologyDiagnostics {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const staleAfter = opts.stale_minutes ?? 30;
   const generatedAt = at.toISOString();
   const localMachine = getOrCreateLocalMachine(d);
@@ -350,7 +350,7 @@ export function getMachineTopologyDiagnostics(
  * Clears is_primary on all other machines.
  */
 export function setPrimaryMachine(name: string, db?: Database): Machine {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query("SELECT * FROM machines WHERE name = ?").get(name) as MachineRow | null;
   if (!row) throw new Error(`Machine '${name}' not found`);
   if (row.archived_at) throw new Error(`Cannot set archived machine '${name}' as primary`);
@@ -365,7 +365,7 @@ export function setPrimaryMachine(name: string, db?: Database): Machine {
  * Get the primary machine.
  */
 export function getPrimaryMachine(db?: Database): Machine | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query("SELECT * FROM machines WHERE is_primary = 1").get() as MachineRow | null;
   return row ? rowToMachine(row) : null;
 }
@@ -375,7 +375,7 @@ export function getPrimaryMachine(db?: Database): Machine | null {
  * Cannot archive the primary machine or machines with active/pending tasks.
  */
 export function archiveMachine(id: string, db?: Database): void {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query("SELECT * FROM machines WHERE id = ?").get(id) as MachineRow | null;
   if (!row) throw new Error(`Machine not found: ${id}`);
   if (row.is_primary) throw new Error("Cannot archive the primary machine");
@@ -395,7 +395,7 @@ export function archiveMachine(id: string, db?: Database): void {
  * Unarchive a machine.
  */
 export function unarchiveMachine(id: string, db?: Database): Machine | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   d.run("UPDATE machines SET archived_at = NULL WHERE id = ?", [id]);
   return getMachine(id, d);
 }
@@ -404,7 +404,7 @@ export function unarchiveMachine(id: string, db?: Database): Machine | null {
  * Delete a machine (hard delete). Only allowed if not primary and no tasks.
  */
 export function deleteMachine(id: string, db?: Database): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query("SELECT * FROM machines WHERE id = ?").get(id) as MachineRow | null;
   if (!row) return false;
   if (row.is_primary) throw new Error("Cannot delete the primary machine");

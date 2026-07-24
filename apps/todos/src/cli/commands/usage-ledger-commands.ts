@@ -1,18 +1,18 @@
 import type { Command } from "commander";
 import chalk from "chalk";
 import { getDatabase, resolvePartialId } from "../../db/database.js";
-import { autoProject, handleError, output } from "../helpers.js";
+import { autoProject, handleError, output, parseOptionalPositiveSafeInteger } from "../helpers.js";
 
 function globalOptions(program: Command): Record<string, any> {
   const command = program as Command & { optsWithGlobals?: () => Record<string, any> };
   return command.optsWithGlobals?.() ?? program.opts();
 }
 
-function parsePositiveNumber(value: string | undefined): number | undefined {
+function parsePositiveDecimal(value: string | undefined): number | undefined {
   if (value === undefined) return undefined;
   const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    console.error(chalk.red("quota limits must be non-negative numbers"));
+  if (!Number.isFinite(parsed) || parsed <= 0 || value.trim() !== value) {
+    console.error(chalk.red("cost quota must be a positive number"));
     process.exit(1);
   }
   return parsed;
@@ -73,13 +73,13 @@ export function registerUsageLedgerCommands(program: Command) {
           since: opts.since,
           until: opts.until,
           quotas: {
-            max_tasks: parsePositiveNumber(opts.maxTasks),
-            max_projects: parsePositiveNumber(opts.maxProjects),
-            max_runs: parsePositiveNumber(opts.maxRuns),
-            max_commands: parsePositiveNumber(opts.maxCommands),
-            max_tokens: parsePositiveNumber(opts.maxTokens),
-            max_cost_usd: parsePositiveNumber(opts.maxCostUsd),
-            max_storage_bytes: parsePositiveNumber(opts.maxStorageBytes),
+            max_tasks: parseOptionalPositiveSafeInteger(opts.maxTasks, "--max-tasks"),
+            max_projects: parseOptionalPositiveSafeInteger(opts.maxProjects, "--max-projects"),
+            max_runs: parseOptionalPositiveSafeInteger(opts.maxRuns, "--max-runs"),
+            max_commands: parseOptionalPositiveSafeInteger(opts.maxCommands, "--max-commands"),
+            max_tokens: parseOptionalPositiveSafeInteger(opts.maxTokens, "--max-tokens"),
+            max_cost_usd: parsePositiveDecimal(opts.maxCostUsd),
+            max_storage_bytes: parseOptionalPositiveSafeInteger(opts.maxStorageBytes, "--max-storage-bytes"),
           },
         });
         const format = (opts.json || globalOpts.json) ? "json" : opts.format || "json";

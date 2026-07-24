@@ -62,7 +62,7 @@ function rowToArtifact(row: Record<string, unknown>): Artifact {
 }
 
 export function addArtifact(input: AddArtifactInput, db?: Database, dbPath?: string): Artifact {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const id = uuid();
   const timestamp = now();
   const storageMode = input.storage_mode ?? "copy";
@@ -101,13 +101,13 @@ export function addArtifact(input: AddArtifactInput, db?: Database, dbPath?: str
 }
 
 export function getArtifact(id: string, db?: Database): Artifact | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query("SELECT * FROM artifacts WHERE id = ?").get(id) as Record<string, unknown> | null;
   return row ? rowToArtifact(row) : null;
 }
 
 export function listArtifacts(filter: ListArtifactsFilter = {}, db?: Database): Artifact[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   let query = "SELECT * FROM artifacts WHERE 1=1";
   const params: SQLQueryBindings[] = [];
 
@@ -136,7 +136,7 @@ export function updateArtifactRedaction(
   redactionStatus: ArtifactRedactionStatus,
   db?: Database,
 ): Artifact | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const timestamp = now();
   d.run(
     "UPDATE artifacts SET redaction_status = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
@@ -146,7 +146,7 @@ export function updateArtifactRedaction(
 }
 
 export function softDeleteArtifact(id: string, db?: Database): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const timestamp = now();
   const result = d.run(
     "UPDATE artifacts SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
@@ -156,7 +156,7 @@ export function softDeleteArtifact(id: string, db?: Database): boolean {
 }
 
 export function purgeArtifact(id: string, db?: Database, dbPath?: string): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const artifact = getArtifact(id, d);
   if (!artifact) return false;
   deleteStoredArtifactFile(artifact.local_path, artifact.storage_mode, dbPath);
@@ -165,7 +165,7 @@ export function purgeArtifact(id: string, db?: Database, dbPath?: string): boole
 }
 
 export function cleanupArtifacts(policy: CleanupPolicy = {}, db?: Database, dbPath?: string): number {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const expired = listArtifacts({ include_deleted: true }, d).filter((a) => isArtifactExpired(a.deleted_at, policy));
   let purged = 0;
   for (const artifact of expired) {

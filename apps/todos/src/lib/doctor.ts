@@ -280,7 +280,7 @@ function deleteOrphans(db: Database, table: string, where: string): number {
 }
 
 export function runTodosDoctor(options: RunTodosDoctorOptions = {}): DoctorResult {
-  const db = options.db ?? getDatabase();
+  const db = getDatabase(options.db);
   const dbPath = options.dbPath ?? getDatabasePath();
   const apply = options.apply === true;
   const checks: DoctorCheck[] = [];

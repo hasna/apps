@@ -15,7 +15,7 @@ function rowToTaskList(row: TaskListRow): TaskList {
 }
 
 export function createTaskList(input: CreateTaskListInput, db?: Database): TaskList {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return d.transaction(() => {
     const id = uuid();
     const timestamp = now();
@@ -41,13 +41,13 @@ export function createTaskList(input: CreateTaskListInput, db?: Database): TaskL
 }
 
 export function getTaskList(id: string, db?: Database): TaskList | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query("SELECT * FROM task_lists WHERE id = ?").get(id) as TaskListRow | null;
   return row ? rowToTaskList(row) : null;
 }
 
 export function getTaskListBySlug(slug: string, projectId?: string, db?: Database): TaskList | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   let row: TaskListRow | null;
   if (projectId) {
     row = d.query("SELECT * FROM task_lists WHERE slug = ? AND project_id = ?").get(slug, projectId) as TaskListRow | null;
@@ -58,7 +58,7 @@ export function getTaskListBySlug(slug: string, projectId?: string, db?: Databas
 }
 
 export function listTaskLists(projectId?: string, db?: Database): TaskList[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   if (projectId) {
     return (d.query("SELECT * FROM task_lists WHERE project_id = ? ORDER BY name").all(projectId) as TaskListRow[]).map(rowToTaskList);
   }
@@ -66,7 +66,7 @@ export function listTaskLists(projectId?: string, db?: Database): TaskList[] {
 }
 
 export function updateTaskList(id: string, input: UpdateTaskListInput, db?: Database): TaskList {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return d.transaction(() => {
     const existing = getTaskList(id, d);
     if (!existing) throw new TaskListNotFoundError(id);
@@ -112,7 +112,7 @@ export function updateTaskList(id: string, input: UpdateTaskListInput, db?: Data
 }
 
 export function deleteTaskList(id: string, db?: Database): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const list = getTaskList(id, d);
   if (!list) return false;
   recordStorageTombstone({
@@ -127,7 +127,7 @@ export function deleteTaskList(id: string, db?: Database): boolean {
 }
 
 export function ensureTaskList(name: string, slug: string, projectId?: string, db?: Database): TaskList {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const existing = getTaskListBySlug(slug, projectId, d);
   if (existing) return existing;
   return createTaskList({ name, slug, project_id: projectId }, d);

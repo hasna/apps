@@ -1,45 +1,8 @@
-# Local development stack for @hasna/todos in cloud (PURE REMOTE) mode.
-#   docker compose run --rm todos-migrate     # apply schema first
-#   docker compose up --build todos-serve
-# Auth: mint a key with `contracts issue-key --app todos --scopes todos:*`
-# using the SAME HASNA_TODOS_API_SIGNING_KEY and HASNA_TODOS_DATABASE_URL.
+# Stage A containment-only evidence profile. This starts the dependency-light
+# help command and exposes no port, datastore, provider, or remote runtime.
 services:
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: todos
-      POSTGRES_PASSWORD: todos
-      POSTGRES_DB: todos
-    ports:
-      - "5434:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U todos"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
-  todos-migrate:
+  todos-containment:
     build: .
-    command: ["bun", "dist/server/index.js", "migrate"]
-    environment:
-      HASNA_TODOS_STORAGE_MODE: remote
-      HASNA_TODOS_DATABASE_URL: postgres://todos:todos@postgres:5432/todos?sslmode=disable
-      HASNA_TODOS_API_SIGNING_KEY: dev-signing-secret-change-me
-    depends_on:
-      postgres:
-        condition: service_healthy
-
-  todos-serve:
-    build: .
-    ports:
-      - "19427:19427"
-    environment:
-      PORT: "19427"
-      HOST: 0.0.0.0
-      TODOS_NO_OPEN: "true"
-      HASNA_TODOS_STORAGE_MODE: remote
-      HASNA_TODOS_DATABASE_URL: postgres://todos:todos@postgres:5432/todos?sslmode=disable
-      HASNA_TODOS_API_SIGNING_KEY: dev-signing-secret-change-me
-    depends_on:
-      todos-migrate:
-        condition: service_completed_successfully
+    command: ["bun", "dist/server/index.js", "--help"]
+    restart: "no"
+    profiles: ["stage-a-evidence"]

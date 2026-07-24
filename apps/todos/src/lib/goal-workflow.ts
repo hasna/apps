@@ -111,7 +111,7 @@ function defaultStepsFromGoal(goal: string): GoalStep[] {
 }
 
 export function resolvePlanId(planRef: string, db?: Database): string | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const byId = getPlan(planRef, d);
   if (byId) return byId.id;
   const normalized = planRef.toLowerCase();
@@ -122,7 +122,7 @@ export function resolvePlanId(planRef: string, db?: Database): string | null {
 }
 
 export function createGoalWorkflow(input: GoalInput, db?: Database): GoalManifest {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const steps = input.steps?.length ? input.steps : defaultStepsFromGoal(input.goal);
   const planName = input.goal.split("\n")[0]!.slice(0, 120);
 
@@ -179,7 +179,7 @@ export function createGoalWorkflow(input: GoalInput, db?: Database): GoalManifes
 }
 
 export function getGoalProgress(planRef: string, db?: Database): GoalProgress | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const planId = resolvePlanId(planRef, d);
   if (!planId) return null;
 
@@ -217,7 +217,7 @@ export function getGoalProgress(planRef: string, db?: Database): GoalProgress | 
 }
 
 export function claimGoalStep(planRef: string, agentId: string, db?: Database): Task | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const planId = resolvePlanId(planRef, d);
   if (!planId) return null;
 
@@ -235,7 +235,7 @@ export function logGoalProgress(
   pctComplete?: number,
   db?: Database,
 ): void {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const prefix = pctComplete !== undefined ? `[${pctComplete}%] ` : "";
   addComment({ task_id: taskId, content: `${prefix}${message}`, agent_id: agentId }, d);
 }
@@ -246,7 +246,7 @@ export function formatGoalHandoff(
   agentId?: string,
   db?: Database,
 ): string | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const progress = getGoalProgress(planRef, d);
   if (!progress) return null;
 

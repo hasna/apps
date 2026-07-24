@@ -155,7 +155,7 @@ function stateForCanonicalStatus(status: TaskStatus, projectPath?: string | null
 }
 
 export function getTaskWorkflowState(taskId: string, db?: Database, projectPath?: string | null): WorkflowState {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const task = getTask(taskId, d);
   if (!task) throw new TaskNotFoundError(taskId);
   const fields = getTaskLocalFields(taskId, d);
@@ -198,7 +198,7 @@ export function setTaskWorkflowState(
   options: SetTaskWorkflowStateOptions = {},
   db?: Database,
 ): TaskWorkflowStateResult {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const target = resolveWorkflowState(stateInput, options.project_path).state;
   for (let attempt = 0; attempt < 3; attempt++) {
     const task = getTask(taskId, d);
@@ -232,7 +232,7 @@ export function setTaskWorkflowState(
 }
 
 export function queryTasksByWorkflowState(query: WorkflowStateQuery, db?: Database): WorkflowStateQueryResult {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const target = resolveWorkflowState(query.state, query.project_path).state;
   const tasks = listTasks({
     project_id: query.project_id,
@@ -245,7 +245,7 @@ export function queryTasksByWorkflowState(query: WorkflowStateQuery, db?: Databa
 }
 
 export function migrateWorkflowStates(options: WorkflowStateMigrationOptions = {}, db?: Database): WorkflowStateMigrationReport {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const tasks = listTasks({
     project_id: options.project_id,
     task_list_id: options.task_list_id,

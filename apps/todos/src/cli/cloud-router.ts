@@ -1,16 +1,19 @@
 /**
- * Authenticated `/v1` routing for the open Todos CLI.
+ * Stage-A client-side containment for the `todos` CLI.
  *
- * Local mode remains SQLite-backed. An explicit remote/self-hosted mode instead
- * requires the canonical API URL and API key, validates the authority before a
- * local-capable command module can run, and never falls back to SQLite. This is
- * the repo-owned self-hosted REST contract; it has no dependency on a private
- * SaaS API or database connection string.
+ * Explicit local behavior is preserved. Hosted, hybrid, ambiguous, and invalid
+ * intent fails locally before an HTTP client, credential path, or datastore can
+ * be reached. Stage B may replace this constant floor with trusted authority.
  */
 import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
 import { resolve as resolvePath } from "node:path";
 import type { Agent, CreatePlanInput, CreateTaskListInput, Plan, Project, RegisterAgentInput, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList, UpdatePlanInput, UpdateTaskListInput } from "../types/index.js";
 import { redactEvidenceText } from "../lib/redaction.js";
+import {
+  resolveTodosStorageRole,
+  TodosHostedStorageUnavailableError,
+} from "../storage/config.js";
+import { assertTodosStageARemoteAccessFloor } from "../storage/authority-floor.js";
 
 type Env = Record<string, string | undefined>;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -323,6 +326,7 @@ async function requiredRemoteRoute<T>(
   route: string,
   request: () => Promise<T>,
 ): Promise<T> {
+  authorizedCloudClient(client);
   try {
     return await request();
   } catch (error) {
@@ -338,14 +342,26 @@ async function requiredRemoteRoute<T>(
   }
 }
 
+function authorizedCloudClient(_client: HasnaStorageClient): HasnaStorageClient {
+  // Re-evaluate the process-authoritative Stage-A floor at the exact operation
+  // boundary. In particular, an injected client or a previously retained
+  // helper reference cannot manufacture hosted tenant/project grants.
+  assertTodosStageARemoteAccessFloor();
+}
+
 /**
- * Resolve the Todos HTTP storage client from the environment. Returns a ready
- * client for an explicit remote mode, or `null` for local mode. A selected
- * remote mode with a missing or invalid URL/key always throws.
+ * Return `null` only for canonical local mode. Every non-local role throws the
+ * deterministic Stage-A floor before client construction or network access.
  */
 export function getTodosCloudClient(env: Env = process.env as Env): HasnaStorageClient | null {
-  // Never route over HTTP from URL/key presence alone. The mode is the explicit
-  // authority selector; an absent selector preserves the local default.
+  const processRole = resolveTodosStorageRole(process.env as Env);
+  if (processRole.role !== "local") throw new TodosHostedStorageUnavailableError(processRole.reason);
+  const role = resolveTodosStorageRole(env);
+  if (role.role !== "local") throw new TodosHostedStorageUnavailableError(role.reason);
+  // Retain the latest-main client construction path for a later authority
+  // stage, but only after both process and supplied environments have proven
+  // local. Under Stage A this branch is therefore unreachable for every
+  // remote mode and cannot construct a transport or perform I/O.
   const mode = requestedStorageMode(env);
   if (!CLOUD_MODES.has(mode)) return null;
   const resolved = resolveStorageClient("todos", requireTodosRemoteAuthorityEnv(env), {
@@ -361,7 +377,6 @@ export function isCloudRouting(env: Env = process.env as Env): boolean {
 
 /** Backward-compatible test hook; authority clients are never process-cached. */
 export function resetTodosCloudClient(): void {
-  // Only protocol capabilities are cached, keyed by authority rather than credentials.
   completionCapabilityCache.clear();
 }
 
@@ -665,7 +680,7 @@ export async function cloudResolveTaskRef(client: HasnaStorageClient, ref: strin
 
 /** Fetch one task by id (`GET /v1/tasks/:id`); `null` on 404. */
 export async function cloudGetTask(client: HasnaStorageClient, id: string): Promise<Task | null> {
-  const raw = await client.get<unknown>("tasks", id);
+  const raw = await authorizedCloudClient(client).get<unknown>("tasks", id);
   return raw == null ? null : unwrapTask(raw);
 }
 
@@ -676,13 +691,13 @@ export async function cloudCreateTask(client: HasnaStorageClient, input: Record<
 
 /** Update a task (`PATCH /v1/tasks/:id`). */
 export async function cloudUpdateTask(client: HasnaStorageClient, id: string, patch: Record<string, unknown>): Promise<Task> {
-  return unwrapTask(await client.update<unknown>("tasks", id, patch));
+  return unwrapTask(await authorizedCloudClient(client).update<unknown>("tasks", id, patch));
 }
 
 /** Delete a task (`DELETE /v1/tasks/:id`); resolves for 2xx and 404. */
 export async function cloudDeleteTask(client: HasnaStorageClient, id: string): Promise<boolean> {
   try {
-    await client.transport.del(`/tasks/${encodeURIComponent(id)}`);
+    await authorizedCloudClient(client).transport.del(`/tasks/${encodeURIComponent(id)}`);
     return true;
   } catch (error) {
     if (error && typeof error === "object" && (error as { status?: unknown }).status === 404) return false;
@@ -697,7 +712,7 @@ export async function cloudTaskAction(
   action: "start" | "complete" | "fail" | "claim",
   body: Record<string, unknown> = {},
 ): Promise<Task> {
-  const raw = await client.transport.post<unknown>(`/tasks/${encodeURIComponent(id)}/${action}`, body);
+  const raw = await authorizedCloudClient(client).transport.post<unknown>(`/tasks/${encodeURIComponent(id)}/${action}`, body);
   return unwrapTask(raw);
 }
 
@@ -802,7 +817,7 @@ export async function cloudGetStats(client: HasnaStorageClient): Promise<CloudSt
 
 /** List registered agents from the cloud (`GET /v1/agents`). */
 export async function cloudListAgents(client: HasnaStorageClient): Promise<Agent[]> {
-  const res = await client.list<Agent>("agents");
+  const res = await authorizedCloudClient(client).list<Agent>("agents");
   const envelope = res.raw as { agents?: Agent[] } | undefined;
   return Array.isArray(envelope?.agents) ? envelope!.agents : res.items;
 }
@@ -888,7 +903,7 @@ export async function cloudUpdateProject(
   id: string,
   patch: Record<string, unknown>,
 ): Promise<Project> {
-  const raw = await client.update<unknown>("projects", id, patch);
+  const raw = await authorizedCloudClient(client).update<unknown>("projects", id, patch);
   if (raw && typeof raw === "object" && "project" in (raw as Record<string, unknown>)) {
     return (raw as { project: Project }).project;
   }
@@ -918,13 +933,13 @@ export async function cloudCreatePlan(client: HasnaStorageClient, input: CreateP
 
 /** Update one cloud plan (`PATCH /v1/plans/:id`). */
 export async function cloudUpdatePlan(client: HasnaStorageClient, id: string, patch: UpdatePlanInput): Promise<Plan> {
-  return unwrapPlan(await client.update<unknown>("plans", id, patch as unknown as Record<string, unknown>));
+  return unwrapPlan(await authorizedCloudClient(client).update<unknown>("plans", id, patch as unknown as Record<string, unknown>));
 }
 
 /** Delete one cloud plan (`DELETE /v1/plans/:id`). */
 export async function cloudDeletePlan(client: HasnaStorageClient, id: string): Promise<boolean> {
   try {
-    await client.transport.del<unknown>(`/plans/${encodeURIComponent(id)}`);
+    await authorizedCloudClient(client).transport.del<unknown>(`/plans/${encodeURIComponent(id)}`);
   } catch (error) {
     if (error && typeof error === "object" && "status" in error && (error as { status?: unknown }).status === 404) {
       return false;
@@ -945,7 +960,7 @@ export async function cloudAddComment(
   taskId: string,
   input: { content: string; agent_id?: string; session_id?: string; type?: string; progress_pct?: number },
 ): Promise<TaskComment> {
-  const raw = await client.transport.post<unknown>(`/tasks/${encodeURIComponent(taskId)}/comments`, input);
+  const raw = await authorizedCloudClient(client).transport.post<unknown>(`/tasks/${encodeURIComponent(taskId)}/comments`, input);
   const comment = raw && typeof raw === "object" && "comment" in (raw as Record<string, unknown>)
     ? (raw as { comment: unknown }).comment
     : raw;
@@ -994,7 +1009,7 @@ export async function cloudListComments(
   }
   let raw: unknown;
   try {
-    raw = await client.transport.get<unknown>(`/tasks/${encodeURIComponent(taskId)}/comments`, {
+    raw = await authorizedCloudClient(client).transport.get<unknown>(`/tasks/${encodeURIComponent(taskId)}/comments`, {
       query: { limit, ...(options.cursor ? { cursor: options.cursor } : {}) },
     });
   } catch (error) {
@@ -1079,7 +1094,7 @@ function redactComment(comment: TaskComment): TaskComment {
  * `/v1/tasks/:id/history` server route (ECS redeploy).
  */
 export async function cloudTaskHistory(client: HasnaStorageClient, taskId: string): Promise<TaskHistory[]> {
-  const raw = await client.transport.get<unknown>(`/tasks/${encodeURIComponent(taskId)}/history`);
+  const raw = await authorizedCloudClient(client).transport.get<unknown>(`/tasks/${encodeURIComponent(taskId)}/history`);
   const envelope = (raw ?? {}) as { history?: TaskHistory[] };
   if (Array.isArray(envelope.history)) return envelope.history;
   return Array.isArray(raw) ? (raw as TaskHistory[]) : [];
@@ -1138,7 +1153,7 @@ export async function cloudCountTasks(client: HasnaStorageClient, filter: TaskFi
  * local conflict path) rather than a silent duplicate.
  */
 export async function cloudRegisterAgent(client: HasnaStorageClient, input: RegisterAgentInput): Promise<Agent> {
-  const raw = await client.transport.post<unknown>("/agents", input as unknown as Record<string, unknown>);
+  const raw = await authorizedCloudClient(client).transport.post<unknown>("/agents", input as unknown as Record<string, unknown>);
   if (raw && typeof raw === "object" && "agent" in (raw as Record<string, unknown>)) {
     return (raw as { agent: Agent }).agent;
   }
@@ -1153,7 +1168,7 @@ export async function cloudRegisterAgent(client: HasnaStorageClient, input: Regi
  * cloud-only agent ("Agent not found") on a flipped machine.
  */
 export async function cloudHeartbeatAgent(client: HasnaStorageClient, idOrName: string): Promise<Agent | null> {
-  const raw = await client.transport.post<unknown>(`/agents/${encodeURIComponent(idOrName)}/heartbeat`, {});
+  const raw = await authorizedCloudClient(client).transport.post<unknown>(`/agents/${encodeURIComponent(idOrName)}/heartbeat`, {});
   if (raw && typeof raw === "object" && "agent" in (raw as Record<string, unknown>)) {
     return (raw as { agent: Agent }).agent;
   }
@@ -1177,7 +1192,7 @@ export async function cloudReleaseAgent(
   idOrName: string,
   sessionId?: string,
 ): Promise<CloudReleaseResult> {
-  const raw = await client.transport.post<unknown>(
+  const raw = await authorizedCloudClient(client).transport.post<unknown>(
     `/agents/${encodeURIComponent(idOrName)}/release`,
     sessionId ? { session_id: sessionId } : {},
   );
@@ -1207,7 +1222,7 @@ export async function cloudLinkCommit(
   taskId: string,
   input: { sha: string; message?: string; author?: string; files_changed?: string[] },
 ): Promise<CloudTaskCommit> {
-  const raw = await client.transport.post<unknown>(`/tasks/${encodeURIComponent(taskId)}/commits`, input);
+  const raw = await authorizedCloudClient(client).transport.post<unknown>(`/tasks/${encodeURIComponent(taskId)}/commits`, input);
   if (raw && typeof raw === "object" && "commit" in (raw as Record<string, unknown>)) {
     return (raw as { commit: CloudTaskCommit }).commit;
   }
@@ -1216,7 +1231,7 @@ export async function cloudLinkCommit(
 
 /** Find the task that explains a commit SHA (`GET /v1/commits/:sha`); `null` if none. */
 export async function cloudFindCommit(client: HasnaStorageClient, sha: string): Promise<CloudTaskCommit | null> {
-  const raw = await client.transport.get<unknown>(`/commits/${encodeURIComponent(sha)}`);
+  const raw = await authorizedCloudClient(client).transport.get<unknown>(`/commits/${encodeURIComponent(sha)}`);
   const env = (raw ?? {}) as { commit?: CloudTaskCommit | null };
   return env.commit ?? null;
 }
@@ -1240,7 +1255,7 @@ export async function cloudLinkRef(
   taskId: string,
   input: { ref_type: "branch" | "pull_request"; name: string; url?: string; provider?: string; metadata?: Record<string, unknown> },
 ): Promise<CloudTaskGitRef> {
-  const raw = await client.transport.post<unknown>(`/tasks/${encodeURIComponent(taskId)}/refs`, input);
+  const raw = await authorizedCloudClient(client).transport.post<unknown>(`/tasks/${encodeURIComponent(taskId)}/refs`, input);
   if (raw && typeof raw === "object" && "ref" in (raw as Record<string, unknown>)) {
     return (raw as { ref: CloudTaskGitRef }).ref;
   }
@@ -1249,7 +1264,7 @@ export async function cloudLinkRef(
 
 /** Find every task linked to a branch/PR ref by name (`GET /v1/refs/:ref`). */
 export async function cloudFindRefs(client: HasnaStorageClient, ref: string): Promise<CloudTaskGitRef[]> {
-  const raw = await client.transport.get<unknown>(`/refs/${encodeURIComponent(ref)}`);
+  const raw = await authorizedCloudClient(client).transport.get<unknown>(`/refs/${encodeURIComponent(ref)}`);
   const env = (raw ?? {}) as { refs?: CloudTaskGitRef[] };
   return Array.isArray(env.refs) ? env.refs : [];
 }
@@ -1263,7 +1278,7 @@ export async function cloudFindRefs(client: HasnaStorageClient, ref: string): Pr
 export async function cloudResolvePlan(client: HasnaStorageClient, ref: string, projectId?: string): Promise<Plan | null> {
   const normalizedRef = ref.toLowerCase();
   if (UUID_RE.test(ref)) {
-    const direct = await client.get<unknown>("plans", normalizedRef);
+    const direct = await authorizedCloudClient(client).get<unknown>("plans", normalizedRef);
     if (direct) {
       const plan = unwrapPlan(direct);
       if (!projectId || plan.project_id === projectId) return plan;
@@ -1299,7 +1314,7 @@ export interface CloudLockResult {
  * agent — the previous local-sqlite lookup 404'd cloud tasks ("Task not found").
  */
 export async function cloudLockTask(client: HasnaStorageClient, id: string, agentId: string): Promise<CloudLockResult> {
-  const raw = await client.transport.post<unknown>(`/tasks/${encodeURIComponent(id)}/lock`, { agent_id: agentId });
+  const raw = await authorizedCloudClient(client).transport.post<unknown>(`/tasks/${encodeURIComponent(id)}/lock`, { agent_id: agentId });
   if (raw && typeof raw === "object" && "result" in (raw as Record<string, unknown>)) {
     return (raw as { result: CloudLockResult }).result;
   }
@@ -1313,7 +1328,7 @@ export async function cloudUnlockTask(
   agentId?: string,
   force = false,
 ): Promise<boolean> {
-  const raw = await client.transport.post<unknown>(
+  const raw = await authorizedCloudClient(client).transport.post<unknown>(
     `/tasks/${encodeURIComponent(id)}/unlock`,
     { ...(agentId ? { agent_id: agentId } : {}), ...(force ? { force: true } : {}) },
   );
@@ -1331,14 +1346,14 @@ export interface CloudTaskDependencies {
 
 /** List a cloud task's dependency edges (`GET /v1/tasks/:id/dependencies`). */
 export async function cloudGetDependencies(client: HasnaStorageClient, id: string): Promise<CloudTaskDependencies> {
-  const raw = await client.transport.get<unknown>(`/tasks/${encodeURIComponent(id)}/dependencies`);
+  const raw = await authorizedCloudClient(client).transport.get<unknown>(`/tasks/${encodeURIComponent(id)}/dependencies`);
   const env = (raw ?? {}) as Partial<CloudTaskDependencies>;
   return { dependencies: env.dependencies ?? [], blocked_by: env.blocked_by ?? [] };
 }
 
 /** Add a dependency edge to a cloud task (`POST /v1/tasks/:id/dependencies`). */
 export async function cloudAddDependency(client: HasnaStorageClient, id: string, dependsOn: string): Promise<TaskDependency> {
-  const raw = await client.transport.post<unknown>(`/tasks/${encodeURIComponent(id)}/dependencies`, { depends_on: dependsOn });
+  const raw = await authorizedCloudClient(client).transport.post<unknown>(`/tasks/${encodeURIComponent(id)}/dependencies`, { depends_on: dependsOn });
   if (raw && typeof raw === "object" && "dependency" in (raw as Record<string, unknown>)) {
     return (raw as { dependency: TaskDependency }).dependency;
   }
@@ -1347,7 +1362,7 @@ export async function cloudAddDependency(client: HasnaStorageClient, id: string,
 
 /** Remove a dependency edge from a cloud task (`DELETE /v1/tasks/:id/dependencies/:dep`). */
 export async function cloudRemoveDependency(client: HasnaStorageClient, id: string, dependsOn: string): Promise<boolean> {
-  const raw = await client.transport.del<unknown>(
+  const raw = await authorizedCloudClient(client).transport.del<unknown>(
     `/tasks/${encodeURIComponent(id)}/dependencies/${encodeURIComponent(dependsOn)}`,
   );
   if (raw && typeof raw === "object" && "removed" in (raw as Record<string, unknown>)) {
@@ -1380,7 +1395,7 @@ export async function cloudRecordVerification(
   id: string,
   input: { command: string; status?: string; output_summary?: string; artifact_path?: string; agent_id?: string },
 ): Promise<CloudTaskVerification> {
-  const raw = await client.transport.post<unknown>(`/tasks/${encodeURIComponent(id)}/verifications`, input);
+  const raw = await authorizedCloudClient(client).transport.post<unknown>(`/tasks/${encodeURIComponent(id)}/verifications`, input);
   if (raw && typeof raw === "object" && "verification" in (raw as Record<string, unknown>)) {
     return (raw as { verification: CloudTaskVerification }).verification;
   }
@@ -1531,7 +1546,7 @@ export async function cloudTaskStats(client: HasnaStorageClient, filter: TaskFil
  * Requires the `/v1/activity` server route (ECS redeploy).
  */
 export async function cloudRecentActivity(client: HasnaStorageClient, limit = 50): Promise<TaskHistory[]> {
-  const raw = await client.transport.get<unknown>("/activity", { query: { limit } });
+  const raw = await authorizedCloudClient(client).transport.get<unknown>("/activity", { query: { limit } });
   const envelope = (raw ?? {}) as { activity?: TaskHistory[]; entries?: TaskHistory[] };
   if (Array.isArray(envelope.activity)) return envelope.activity;
   if (Array.isArray(envelope.entries)) return envelope.entries;
@@ -1560,7 +1575,7 @@ function unwrapTaskList(raw: unknown): TaskList {
 }
 
 export async function cloudGetTaskList(client: HasnaStorageClient, id: string): Promise<TaskList | null> {
-  const raw = await client.get<unknown>("task-lists", id);
+  const raw = await authorizedCloudClient(client).get<unknown>("task-lists", id);
   return raw == null ? null : unwrapTaskList(raw);
 }
 
@@ -1605,7 +1620,7 @@ export async function cloudCreateTaskList(
   input: CreateTaskListInput,
 ): Promise<TaskList> {
   return unwrapTaskList(await requiredRemoteRoute(client, "/v1/task-lists", () =>
-    client.transport.post<unknown>("/task-lists", input as unknown as Record<string, unknown>)));
+    authorizedCloudClient(client).transport.post<unknown>("/task-lists", input as unknown as Record<string, unknown>)));
 }
 
 /** Update one cloud task list by exact UUID (`PATCH /v1/task-lists/:id`). */
@@ -1614,7 +1629,11 @@ export async function cloudUpdateTaskList(
   id: string,
   patch: UpdateTaskListInput,
 ): Promise<TaskList> {
-  return unwrapTaskList(await client.update<unknown>("task-lists", id, patch as unknown as Record<string, unknown>));
+  return unwrapTaskList(await authorizedCloudClient(client).update<unknown>(
+    "task-lists",
+    id,
+    patch as unknown as Record<string, unknown>,
+  ));
 }
 
 /** Rename a cloud project through the server's atomic cascade operation. */
@@ -1627,7 +1646,7 @@ export async function cloudRenameProject(
   const id = await cloudResolveProjectRef(client, ref);
   const normalizedSlug = cloudProjectSlug(newSlug);
   if (!normalizedSlug) throw new Error("Invalid slug — must be non-empty kebab-case");
-  return client.transport.post<{ project: Project; task_lists_updated: number }>(
+  return authorizedCloudClient(client).transport.post<{ project: Project; task_lists_updated: number }>(
     `/projects/${encodeURIComponent(id)}/rename`,
     { new_slug: normalizedSlug, ...(name !== undefined ? { name } : {}) },
   );
@@ -1636,7 +1655,7 @@ export async function cloudRenameProject(
 /** Delete a task list in the cloud (`DELETE /v1/task-lists/:id`). */
 export async function cloudDeleteTaskList(client: HasnaStorageClient, id: string): Promise<boolean> {
   try {
-    await client.transport.del(`/task-lists/${encodeURIComponent(id)}`);
+    await authorizedCloudClient(client).transport.del(`/task-lists/${encodeURIComponent(id)}`);
     return true;
   } catch (error) {
     if (error && typeof error === "object" && (error as { status?: unknown }).status === 404) return false;
@@ -1682,7 +1701,7 @@ export async function cloudClaimNext(client: HasnaStorageClient, agentId: string
  * route (ECS redeploy).
  */
 export async function cloudAllDependencies(client: HasnaStorageClient): Promise<TaskDependency[]> {
-  const raw = await client.transport.get<unknown>("/dependencies");
+  const raw = await authorizedCloudClient(client).transport.get<unknown>("/dependencies");
   const envelope = (raw ?? {}) as { dependencies?: TaskDependency[] };
   if (Array.isArray(envelope.dependencies)) return envelope.dependencies;
   return Array.isArray(raw) ? (raw as TaskDependency[]) : [];

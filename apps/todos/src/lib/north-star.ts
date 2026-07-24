@@ -28,7 +28,7 @@ export function getNorthStarSnapshot(
   filters?: { project_id?: string },
   db?: Database,
 ): NorthStarSnapshot {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const active = getActiveWork(filters, d);
   const stale = getStaleTasks(30, filters, d);
 

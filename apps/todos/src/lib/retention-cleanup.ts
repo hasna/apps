@@ -313,14 +313,14 @@ function deleteByIds(db: Database, table: string, ids: string[]): number {
 }
 
 export function previewRetentionCleanup(input: RetentionCleanupInput, db?: Database): RetentionCleanupReport {
-  return buildReport(input, true, db || getDatabase());
+  return buildReport(input, true, getDatabase(db));
 }
 
 export function applyRetentionCleanup(input: ApplyRetentionCleanupInput, db?: Database): RetentionCleanupReport {
   if (input.confirm !== RETENTION_CLEANUP_CONFIRMATION) {
     throw new Error(`Destructive cleanup requires --confirm ${RETENTION_CLEANUP_CONFIRMATION}`);
   }
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const report = buildReport(input, false, d);
   const deleteInTransaction = d.transaction(() => {
     report.deleted_counts.comments = deleteByIds(d, "task_comments", report.candidates.comments.map((item) => item.id));

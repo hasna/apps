@@ -11,15 +11,15 @@ export const REDACTION_PLACEHOLDER = "[REDACTED]";
 export interface SecretPattern {
   name: string;
   pattern: RegExp;
-  /** If true, allowlisted contexts skip this pattern */
-  allowlist_ok?: boolean;
+  /** Only low-confidence assignment rules may accept exact placeholders. */
+  exact_placeholders?: readonly string[];
+  custom?: boolean;
 }
 
 export interface SecretMatch {
   pattern: string;
-  match: string;
   index: number;
-  line?: number;
+  line: number;
 }
 
 export interface SecretScanResult {
@@ -35,24 +35,64 @@ export interface RedactionOptions {
   placeholder?: string;
 }
 
+const EXACT_LOW_CONFIDENCE_PLACEHOLDERS = [
+  "your-api-key-here",
+  "example-token",
+  "[REDACTED]",
+] as const;
+
+export function isLowConfidenceSecretPattern(pattern: string): boolean {
+  return pattern === "generic_credential_assignment"
+    || pattern === "encoded_generic_credential_assignment";
+}
+
+const GENERIC_CREDENTIAL_ASSIGNMENT_SOURCE = String.raw`\b(?:[a-z0-9_-]*(?:api[_-]?key|secret|token|password|passwd)[a-z0-9_-]*)\b"?\s*[:=]\s*(?:([\'"])([^\'"\r\n]{8,})\1|([^\s\'";,\]\[(){}<>&?#]{8,}))`;
+const GENERIC_CREDENTIAL_ASSIGNMENT_PATTERN = new RegExp(
+  GENERIC_CREDENTIAL_ASSIGNMENT_SOURCE,
+  "dgi",
+);
+
 const DEFAULT_PATTERNS: SecretPattern[] = [
-  { name: "openai_sk", pattern: /\bsk-[a-zA-Z0-9]{10,}\b/g },
+  { name: "openai_sk", pattern: /\bsk-[a-zA-Z0-9_-]{10,}\b/g },
+  { name: "openai_token", pattern: /\bsk-[a-zA-Z0-9_-]{20,}\b/g },
   { name: "github_pat", pattern: /\bghp_[a-zA-Z0-9]{20,}\b/g },
   { name: "github_oauth", pattern: /\bgho_[a-zA-Z0-9]{20,}\b/g },
-  { name: "aws_access_key", pattern: /\bAKIA[0-9A-Z]{16}\b/g },
-  { name: "bearer_token", pattern: /\bBearer\s+[a-zA-Z0-9\-._~+/]+=*\b/gi },
+  { name: "github_token", pattern: /\b(?:github_pat_|gh[opusr]_)[a-zA-Z0-9_]{20,}\b/g },
+  { name: "npm_token", pattern: /\bnpm_[a-zA-Z0-9]{20,}\b/g },
+  { name: "aws_access_key", pattern: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g },
+  { name: "bearer_token", pattern: /\bBearer\s+[a-zA-Z0-9\-._~+/]{12,}=*/gi },
   { name: "jwt", pattern: /\beyJ[a-zA-Z0-9_-]+\.eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\b/g },
   { name: "private_key_block", pattern: /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g },
-  { name: "generic_api_key", pattern: /\b(?:api[_-]?key|secret|token|password)\s*[:=]\s*['"]?[a-zA-Z0-9\-._]{8,}['"]?/gi, allowlist_ok: true },
+  {
+    name: "generic_credential_assignment",
+    pattern: GENERIC_CREDENTIAL_ASSIGNMENT_PATTERN,
+    exact_placeholders: EXACT_LOW_CONFIDENCE_PLACEHOLDERS,
+  },
 ];
 
-const DEFAULT_ALLOWLIST: RegExp[] = [
-  /\[REDACTED\]/,
-  /example\.com/i,
-  /your-api-key-here/i,
-  /sk-test/i,
-  /ghp_xxx/i,
-];
+const MAX_PERCENT_DECODE_PASSES = 32;
+const ENCODED_GENERIC_CREDENTIAL_PATTERN = new RegExp(
+  GENERIC_CREDENTIAL_ASSIGNMENT_SOURCE,
+  "dgi",
+);
+
+interface EncodedSecretSpan {
+  start: number;
+  end: number;
+  matches: SecretMatch[];
+}
+
+interface DecodedUnit {
+  value: string;
+  start: number;
+  end: number;
+  encoded: boolean;
+}
+
+interface SourceSpan {
+  start: number;
+  end: number;
+}
 
 let customRedactors: Array<(text: string) => string> = [];
 
@@ -64,53 +104,242 @@ export function resetCustomRedactors(): void {
   customRedactors = [];
 }
 
-function isAllowlisted(text: string, match: string, allowlist: RegExp[]): boolean {
-  const context = text.slice(Math.max(0, text.indexOf(match) - 20), text.indexOf(match) + match.length + 20);
-  return allowlist.some((re) => re.test(context) || re.test(match));
+function assignmentValue(match: string): string {
+  const separator = Math.max(match.indexOf("="), match.indexOf(":"));
+  return (separator >= 0 ? match.slice(separator + 1) : match).trim().replace(/^['"]|['"]$/g, "");
 }
 
-export function scanTextForSecrets(text: string, options: RedactionOptions = {}): SecretScanResult {
-  const allowlist = [...DEFAULT_ALLOWLIST, ...(options.allowlist ?? [])];
-  const matches: SecretMatch[] = [];
-  const patterns: SecretPattern[] = [
-    ...DEFAULT_PATTERNS,
-    ...(options.custom_patterns?.map((p, i) => ({ name: `custom_${i}`, pattern: p })) ?? []),
-  ];
+function isExactPlaceholder(match: string, placeholders: readonly string[] | undefined): boolean {
+  if (!placeholders) return false;
+  const value = assignmentValue(match);
+  return placeholders.some((placeholder) => value === placeholder);
+}
 
-  for (const { name, pattern, allowlist_ok } of patterns) {
-    const re = new RegExp(pattern.source, pattern.flags);
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(text)) !== null) {
-      const match = m[0];
-      if (allowlist_ok && isAllowlisted(text, match, allowlist)) continue;
-      if (isAllowlisted(text, match, allowlist)) continue;
-      const line = text.slice(0, m.index).split("\n").length;
-      matches.push({ pattern: name, match: match.slice(0, 12) + (match.length > 12 ? "…" : ""), index: m.index, line });
+function genericValueRange(match: RegExpExecArray): SourceSpan {
+  const indices = (match as RegExpExecArray & {
+    indices?: Array<[number, number] | undefined>;
+  }).indices;
+  const indexed = indices?.[2] ?? indices?.[3];
+  if (indexed) return { start: indexed[0], end: indexed[1] };
+  const value = match[2] ?? match[3] ?? assignmentValue(match[0]);
+  const relative = match[0].lastIndexOf(value);
+  return {
+    start: match.index + Math.max(0, relative),
+    end: match.index + Math.max(0, relative) + value.length,
+  };
+}
+
+function lineAt(text: string, index: number): number {
+  let line = 1;
+  for (let cursor = 0; cursor < index; cursor += 1) if (text.charCodeAt(cursor) === 10) line += 1;
+  return line;
+}
+
+function customAllowlisted(text: string, match: string, index: number, allowlist: RegExp[]): boolean {
+  const context = text.slice(Math.max(0, index - 20), Math.min(text.length, index + match.length + 20));
+  return allowlist.some((pattern) => {
+    const direct = new RegExp(pattern.source, pattern.flags.replace("g", ""));
+    return direct.test(match) || direct.test(context);
+  });
+}
+
+function collectMatches(
+  text: string,
+  patterns: readonly SecretPattern[],
+  allowlist: RegExp[],
+): SecretMatch[] {
+  const matches: SecretMatch[] = [];
+  for (const { name, pattern, exact_placeholders, custom } of patterns) {
+    const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
+    const re = new RegExp(pattern.source, flags);
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(text)) !== null) {
+      if (isExactPlaceholder(match[0], exact_placeholders)) continue;
+      if (custom && customAllowlisted(text, match[0], match.index, allowlist)) continue;
+      matches.push({ pattern: name, index: match.index, line: lineAt(text, match.index) });
+      if (match[0].length === 0) re.lastIndex += 1;
+    }
+  }
+  return matches;
+}
+
+function collectEncodedSecretSpans(text: string): EncodedSecretSpan[] {
+  let units: DecodedUnit[] = Array.from({ length: text.length }, (_value, index) => ({
+    value: text[index]!,
+    start: index,
+    end: index + 1,
+    encoded: false,
+  }));
+  const spans: EncodedSecretSpan[] = [];
+  let decodeLimitReached = false;
+
+  for (let pass = 0; pass < MAX_PERCENT_DECODE_PASSES; pass += 1) {
+    const next: DecodedUnit[] = [];
+    let changed = false;
+    for (let index = 0; index < units.length; index += 1) {
+      const first = units[index]!;
+      const second = units[index + 1];
+      const third = units[index + 2];
+      if (first.value === "%" && second && third &&
+          /^[0-9a-f]$/i.test(second.value) && /^[0-9a-f]$/i.test(third.value)) {
+        const code = Number.parseInt(`${second.value}${third.value}`, 16);
+        // ASCII escapes decode directly. A standalone high byte becomes one
+        // detection-only sentinel so its hex digits cannot be mistaken for a
+        // credential-key prefix; the original `%HH` remains untouched in the
+        // returned source text while adjacent ASCII escapes are inspected.
+        next.push({
+          value: code <= 0x7f ? String.fromCharCode(code) : "\ufffd",
+          start: first.start,
+          end: third.end,
+          encoded: true,
+        });
+        index += 2;
+        changed = true;
+        continue;
+      }
+      next.push(first);
+    }
+    if (!changed) break;
+    units = next;
+
+    const decoded = units.map((unit) => unit.value).join("");
+    for (const { name, pattern, exact_placeholders } of DEFAULT_PATTERNS) {
+      // The general raw-text assignment rule deliberately accepts broad value
+      // punctuation. For source-span mapping, stop at structural delimiters so
+      // encoded redaction does not consume surrounding JSON/markup brackets.
+      const encodedPattern = name === "generic_credential_assignment"
+        ? ENCODED_GENERIC_CREDENTIAL_PATTERN
+        : pattern;
+      const flags = encodedPattern.flags.includes("g") ? encodedPattern.flags : `${encodedPattern.flags}g`;
+      const re = new RegExp(encodedPattern.source, flags);
+      let match: RegExpExecArray | null;
+      while ((match = re.exec(decoded)) !== null) {
+        if (isExactPlaceholder(match[0], exact_placeholders)) continue;
+        const completeMatchUnits = units.slice(match.index, match.index + match[0].length);
+        if (!completeMatchUnits.some((unit) => unit.encoded)) continue;
+        const range = name === "generic_credential_assignment"
+          ? genericValueRange(match)
+          : { start: match.index, end: match.index + match[0].length };
+        const matchedUnits = units.slice(range.start, range.end);
+        if (matchedUnits.length === 0) continue;
+        spans.push({
+          start: matchedUnits[0]!.start,
+          end: matchedUnits[matchedUnits.length - 1]!.end,
+          matches: [{ pattern: name, index: match.index, line: lineAt(decoded, match.index) }],
+        });
+        if (match[0].length === 0) re.lastIndex += 1;
+      }
+    }
+    if (pass === MAX_PERCENT_DECODE_PASSES - 1) {
+      decodeLimitReached = units.some((unit, index) =>
+        unit.value === "%" && /^[0-9a-f]$/i.test(units[index + 1]?.value ?? "")
+          && /^[0-9a-f]$/i.test(units[index + 2]?.value ?? ""));
     }
   }
 
+  // Reaching the bound before a fixed point is a representation attack. Fail
+  // closed on each remaining non-structural encoded token without consuming
+  // JSON/NDJSON or markup delimiters.
+  if (decodeLimitReached) {
+    const delimiter = /[\s'";,\]\[(){}<>&?#]/;
+    let index = 0;
+    while (index < units.length) {
+      while (index < units.length && delimiter.test(units[index]!.value)) index += 1;
+      const start = index;
+      while (index < units.length && !delimiter.test(units[index]!.value)) index += 1;
+      const token = units.slice(start, index);
+      if (token.some((unit) => unit.encoded) && token.some((unit) => unit.value === "%")) {
+        spans.push({
+          start: token[0]!.start,
+          end: token[token.length - 1]!.end,
+          matches: [{ pattern: "decode_limit", index: start, line: 1 }],
+        });
+      }
+    }
+  }
+
+  // Multiple patterns and recursive passes can identify overlapping source
+  // ranges. Merge them before replacement so reverse-order edits cannot expose
+  // a suffix of the same encoded credential.
+  const merged: EncodedSecretSpan[] = [];
+  for (const span of spans.sort((left, right) => left.start - right.start || left.end - right.end)) {
+    const previous = merged.at(-1);
+    if (!previous || span.start >= previous.end) {
+      merged.push({ ...span, matches: [...span.matches] });
+      continue;
+    }
+    previous.end = Math.max(previous.end, span.end);
+    previous.matches.push(...span.matches);
+  }
+  for (const span of merged) {
+    span.matches = [...new Map(span.matches.map((match) => [match.pattern, match])).values()];
+  }
+  return merged;
+}
+
+export function scanTextForSecrets(text: string, options: RedactionOptions = {}): SecretScanResult {
+  const allowlist = options.allowlist ?? [];
+  const patterns: SecretPattern[] = [
+    ...DEFAULT_PATTERNS,
+    ...(options.custom_patterns?.map((pattern, index) => ({ name: `custom_${index}`, pattern, custom: true })) ?? []),
+  ];
+  const matches = collectMatches(text, patterns, allowlist);
+
+  for (const span of collectEncodedSecretSpans(text)) {
+    for (const match of span.matches) {
+      matches.push({
+        pattern: `encoded_${match.pattern}`,
+        index: span.start,
+        line: lineAt(text, span.start),
+      });
+    }
+  }
+
+  const unique = [...new Map(matches.map((match) => [`${match.pattern}:${match.index}`, match])).values()]
+    .sort((left, right) => left.index - right.index || left.pattern.localeCompare(right.pattern));
+
   return {
     schema_version: SECRET_REDACTION_SCHEMA,
-    clean: matches.length === 0,
-    matches,
+    clean: unique.length === 0,
+    matches: unique,
   };
 }
 
 export function redactText(text: string, options: RedactionOptions = {}): string {
   const placeholder = options.placeholder ?? REDACTION_PLACEHOLDER;
-  let out = text;
-
-  for (const { pattern, allowlist_ok } of DEFAULT_PATTERNS) {
-    out = out.replace(new RegExp(pattern.source, pattern.flags), (match) => {
-      if (allowlist_ok && isAllowlisted(out, match, [...DEFAULT_ALLOWLIST, ...(options.allowlist ?? [])])) {
-        return match;
-      }
-      return placeholder;
-    });
+  const spans: SourceSpan[] = collectEncodedSecretSpans(text);
+  for (const { name, pattern, exact_placeholders } of DEFAULT_PATTERNS) {
+    const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
+    const re = new RegExp(pattern.source, flags);
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(text)) !== null) {
+      if (isExactPlaceholder(match[0], exact_placeholders)) continue;
+      spans.push(name === "generic_credential_assignment"
+        ? genericValueRange(match)
+        : { start: match.index, end: match.index + match[0].length });
+      if (match[0].length === 0) re.lastIndex += 1;
+    }
   }
 
   for (const custom of options.custom_patterns ?? []) {
-    out = out.replace(custom, placeholder);
+    const flags = custom.flags.includes("g") ? custom.flags : `${custom.flags}g`;
+    const re = new RegExp(custom.source, flags);
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(text)) !== null) {
+      spans.push({ start: match.index, end: match.index + match[0].length });
+      if (match[0].length === 0) re.lastIndex += 1;
+    }
+  }
+
+  const merged: SourceSpan[] = [];
+  for (const span of spans.sort((left, right) => left.start - right.start || left.end - right.end)) {
+    const previous = merged.at(-1);
+    if (!previous || span.start >= previous.end) merged.push({ ...span });
+    else previous.end = Math.max(previous.end, span.end);
+  }
+  let out = text;
+  for (const span of merged.reverse()) {
+    out = `${out.slice(0, span.start)}${placeholder}${out.slice(span.end)}`;
   }
 
   for (const fn of customRedactors) {
@@ -118,6 +347,52 @@ export function redactText(text: string, options: RedactionOptions = {}): string
   }
 
   return out;
+}
+
+export interface SecretScanByteProjection {
+  name: "raw-utf8" | "printable-bytes" | "compact-ascii" | "utf16le" | "utf16be";
+  text: string;
+}
+
+function printableByteProjection(bytes: Uint8Array): string {
+  let output = "";
+  for (const byte of bytes) {
+    output += (byte >= 0x20 && byte <= 0x7e) || byte === 0x09 || byte === 0x0a || byte === 0x0d
+      ? String.fromCharCode(byte)
+      : "\n";
+  }
+  return output;
+}
+
+function compactAsciiProjection(bytes: Uint8Array): string {
+  let output = "";
+  for (const byte of bytes) if (byte >= 0x20 && byte <= 0x7e) output += String.fromCharCode(byte);
+  return output;
+}
+
+function utf16Projection(bytes: Uint8Array, bigEndian: boolean): string {
+  const evenLength = bytes.byteLength - (bytes.byteLength % 2);
+  const copy = new Uint8Array(evenLength);
+  if (bigEndian) {
+    for (let index = 0; index < evenLength; index += 2) {
+      copy[index] = bytes[index + 1]!;
+      copy[index + 1] = bytes[index]!;
+    }
+  } else {
+    copy.set(bytes.subarray(0, evenLength));
+  }
+  return new TextDecoder("utf-16le").decode(copy);
+}
+
+/** Every credential scan must cover raw bytes and representation-bypass views. */
+export function secretScanByteProjections(bytes: Uint8Array): SecretScanByteProjection[] {
+  return [
+    { name: "raw-utf8", text: new TextDecoder("utf-8").decode(bytes) },
+    { name: "printable-bytes", text: printableByteProjection(bytes) },
+    { name: "compact-ascii", text: compactAsciiProjection(bytes) },
+    { name: "utf16le", text: utf16Projection(bytes, false) },
+    { name: "utf16be", text: utf16Projection(bytes, true) },
+  ];
 }
 
 export function scanAndRedactText(text: string, options: RedactionOptions = {}): SecretScanResult {

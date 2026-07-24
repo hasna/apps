@@ -32,7 +32,7 @@ export function setProjectAgentRole(
   isLead = false,
   db?: Database,
 ): ProjectAgentRole {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const existing = d.query(
     "SELECT * FROM project_agent_roles WHERE project_id = ? AND agent_id = ? AND role = ?",
   ).get(projectId, agentId, role) as ProjectAgentRoleRow | null;
@@ -59,7 +59,7 @@ export function removeProjectAgentRole(
   role?: string,
   db?: Database,
 ): number {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   if (role) {
     return d.run(
       "DELETE FROM project_agent_roles WHERE project_id = ? AND agent_id = ? AND role = ?",
@@ -73,14 +73,14 @@ export function removeProjectAgentRole(
 }
 
 export function listProjectAgentRoles(projectId: string, db?: Database): ProjectAgentRole[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return (d.query(
     "SELECT * FROM project_agent_roles WHERE project_id = ? ORDER BY role, created_at",
   ).all(projectId) as ProjectAgentRoleRow[]).map(rowToRole);
 }
 
 export function getAgentProjectRoles(agentId: string, db?: Database): ProjectAgentRole[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return (d.query(
     "SELECT * FROM project_agent_roles WHERE agent_id = ? ORDER BY project_id, role",
   ).all(agentId) as ProjectAgentRoleRow[]).map(rowToRole);
@@ -100,7 +100,7 @@ export function getProjectOrgChart(
   opts?: { filter_to_project?: boolean },
   db?: Database,
 ): ProjectOrgNode[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const globalTree = getOrgChart(d);
   const projectRoles = listProjectAgentRoles(projectId, d);
 

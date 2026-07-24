@@ -454,7 +454,7 @@ function inboxBody(issue: ExternalIssueRecord): string {
 }
 
 export function importExternalIssues(input: ExternalIssueImportInput, db?: Database): ExternalIssueImportResult {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const fallbackPriority = input.default_priority || "medium";
   const provider = providerFromInput(input);
   const warnings: string[] = [];

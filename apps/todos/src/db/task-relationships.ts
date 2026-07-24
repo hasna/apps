@@ -49,7 +49,7 @@ function rowToRelationship(row: TaskRelationshipRow): TaskRelationship {
 }
 
 export function addTaskRelationship(input: AddTaskRelationshipInput, db?: Database): TaskRelationship {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const id = uuid();
   const timestamp = now();
 
@@ -88,13 +88,13 @@ export function addTaskRelationship(input: AddTaskRelationshipInput, db?: Databa
 }
 
 export function getTaskRelationship(id: string, db?: Database): TaskRelationship | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query("SELECT * FROM task_relationships WHERE id = ?").get(id) as TaskRelationshipRow | null;
   return row ? rowToRelationship(row) : null;
 }
 
 export function removeTaskRelationship(id: string, db?: Database): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return d.run("DELETE FROM task_relationships WHERE id = ?", [id]).changes > 0;
 }
 
@@ -104,7 +104,7 @@ export function removeTaskRelationshipByPair(
   relationshipType: RelationshipType,
   db?: Database,
 ): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const symmetric: RelationshipType[] = ["related_to", "conflicts_with", "similar_to", "modifies_same_file"];
   if (symmetric.includes(relationshipType)) {
     return d.run(
@@ -128,7 +128,7 @@ export function getTaskRelationships(
   relationshipType?: RelationshipType,
   db?: Database,
 ): TaskRelationship[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   let sql = "SELECT * FROM task_relationships WHERE (source_task_id = ? OR target_task_id = ?)";
   const params: string[] = [taskId, taskId];
   if (relationshipType) {
@@ -160,7 +160,7 @@ export function findRelatedTaskIds(
  * Auto-detect tasks that modify the same file and create modifies_same_file relationships.
  */
 export function autoDetectFileRelationships(taskId: string, db?: Database): TaskRelationship[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   // Find files associated with this task
   const files = d.query(
     "SELECT path FROM task_files WHERE task_id = ? AND status != 'removed'",

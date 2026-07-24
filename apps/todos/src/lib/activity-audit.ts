@@ -103,7 +103,7 @@ export function redactActivityRecord(record: ActivityRecord): ActivityRecord {
 }
 
 export function logActivity(input: LogActivityInput, db?: Database): ActivityRecord {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const id = uuid();
   const ts = input.created_at ?? now();
   const machineId = input.machine_id ?? getMachineId();
@@ -133,13 +133,13 @@ export function logActivity(input: LogActivityInput, db?: Database): ActivityRec
 }
 
 export function getActivityRecord(id: string, db?: Database): ActivityRecord | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query("SELECT * FROM activity_log WHERE id = ?").get(id) as Record<string, unknown> | null;
   return row ? rowToActivity(row) : null;
 }
 
 export function listActivity(filter: ListActivityFilter = {}, db?: Database): ActivityRecord[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const conditions: string[] = ["1=1"];
   const params: unknown[] = [];
 
@@ -203,7 +203,7 @@ export function importActivityLog(
     throw new Error(`Unsupported activity bundle schema: ${bundle.schema_version}`);
   }
 
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   let imported = 0;
   let skipped = 0;
 

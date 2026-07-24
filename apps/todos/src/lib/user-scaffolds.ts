@@ -125,7 +125,7 @@ export function createUserScaffold(
   db?: Database,
   cwd?: string,
 ): UserScaffold {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const store = loadUserScaffoldStore(cwd);
   const id = uuid();
   const ts = now();
@@ -177,7 +177,7 @@ export function updateUserScaffold(
   db?: Database,
   cwd?: string,
 ): UserScaffold {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const store = loadUserScaffoldStore(cwd);
   const existing = getUserScaffold(idOrSlug, cwd);
   if (!existing) throw new Error(`Scaffold not found: ${idOrSlug}`);
@@ -244,7 +244,7 @@ export function previewUserScaffold(
   db?: Database,
   cwd?: string,
 ): ScaffoldPreview {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const scaffold = getUserScaffold(idOrSlug, cwd);
   if (!scaffold) throw new Error(`Scaffold not found: ${idOrSlug}`);
 
@@ -299,7 +299,7 @@ export function applyUserScaffold(
   db?: Database,
   cwd?: string,
 ): Record<string, unknown> {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const scaffold = getUserScaffold(idOrSlug, cwd);
   if (!scaffold) throw new Error(`Scaffold not found: ${idOrSlug}`);
 

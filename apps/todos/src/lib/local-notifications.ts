@@ -224,7 +224,7 @@ function countAlerts(alerts: LocalNotificationAlert[]): Record<LocalNotification
 }
 
 export async function checkLocalNotifications(input: CheckLocalNotificationsInput = {}, db?: Database): Promise<CheckLocalNotificationsResult> {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const checkedAt = input.now || now();
   const checkedMs = Date.parse(checkedAt);
   const dueWithin = minutes(input.due_within_minutes, 60);

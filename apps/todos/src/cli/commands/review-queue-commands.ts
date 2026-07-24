@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import chalk from "chalk";
-import { handleError, output, resolveTaskId } from "../helpers.js";
+import { handleError, output, resolveTaskId, parseOptionalPositiveSafeInteger } from "../helpers.js";
 import type { ReviewQueueState } from "../../lib/review-queues.js";
 import type { TaskPriority } from "../../types/index.js";
 
@@ -9,10 +9,7 @@ function splitList(value?: string): string[] | undefined {
 }
 
 function parseLimit(value?: string): number | undefined {
-  if (!value) return undefined;
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) throw new Error("--limit must be a positive integer");
-  return parsed;
+  return parseOptionalPositiveSafeInteger(value, "--limit");
 }
 
 export function registerReviewQueueCommands(program: Command) {

@@ -1,12 +1,13 @@
-import { createCapabilityManifest } from "./capabilities.js";
+import { TODOS_CAPABILITIES, createCapabilityManifest } from "./capabilities.js";
 import type { TodosCapabilityManifest } from "./capabilities.js";
-import { createCliMcpParityManifest } from "./cli-mcp-parity.js";
+import { TODOS_CLI_MCP_PARITY_MANIFEST, createCliMcpParityManifest } from "./cli-mcp-parity.js";
 import type { TodosCliMcpParityManifest } from "./cli-mcp-parity.js";
-import { createContractsManifest } from "./contracts.js";
+import { TODOS_CONTRACTS, createContractsManifest } from "./contracts.js";
 import type { TodosContractsManifest } from "./contracts.js";
 import { getPackageVersion } from "./lib/package-version.js";
-import { createMcpManifest } from "./mcp.js";
+import { TODOS_MCP_MANIFEST, createMcpManifest } from "./mcp.js";
 import type { TodosMcpManifest } from "./mcp.js";
+import { assertTodosLocalStorageRole } from "./storage/config.js";
 
 export interface CreateTodosRegistryOptions {
   version?: string;
@@ -93,6 +94,7 @@ function source(version: string): TodosPackageSource {
 }
 
 export function createTodosRegistry(options: CreateTodosRegistryOptions = {}): TodosRegistry {
+  assertTodosLocalStorageRole(process.env);
   const version = options.version ?? getPackageVersion(import.meta.url);
   const generatedAt = options.generatedAt ?? new Date().toISOString();
   return {
@@ -108,6 +110,19 @@ export function createTodosRegistry(options: CreateTodosRegistryOptions = {}): T
   };
 }
 
-export const TODOS_REGISTRY = createTodosRegistry({
+export const TODOS_REGISTRY: TodosRegistry = {
+  schemaVersion: 1,
   generatedAt: "1970-01-01T00:00:00.000Z",
-});
+  package: source(getPackageVersion(import.meta.url)),
+  exports: TODOS_PACKAGE_EXPORTS,
+  jsonContractDocsPath: "docs/json-contracts.md",
+  capabilities: {
+    schemaVersion: 1,
+    generatedAt: "1970-01-01T00:00:00.000Z",
+    package: source(getPackageVersion(import.meta.url)),
+    capabilities: TODOS_CAPABILITIES,
+  },
+  contracts: TODOS_CONTRACTS,
+  mcp: TODOS_MCP_MANIFEST,
+  cliMcpParity: TODOS_CLI_MCP_PARITY_MANIFEST,
+};

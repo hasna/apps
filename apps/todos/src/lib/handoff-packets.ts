@@ -88,7 +88,7 @@ function summarizeTask(t: { id: string; short_id: string | null; title: string; 
 }
 
 export function buildHandoffPacket(input: BuildHandoffPacketInput = {}, db?: Database): HandoffPacket {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const project = input.project_id ? getProject(input.project_id, d) : null;
   const plan = input.plan_id ? getPlan(input.plan_id, d) : null;
 

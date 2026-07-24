@@ -148,7 +148,7 @@ function addSourceOnce(
 }
 
 export function bootstrapProject(options: ProjectBootstrapOptions = {}, db?: Database): ProjectBootstrapResult {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const discovery = discoverProjectWorkspace(options.path);
   const taskListSlug = options.taskListSlug || `todos-${slugify(options.name || discovery.projectName)}`;
 

@@ -9,6 +9,16 @@ import { getDatabase, resolvePartialId } from "../db/database.js";
 import { ensureProject, getProject, getProjectByPath, slugify } from "../db/projects.js";
 import { getPackageVersion } from "../lib/package-version.js";
 import type { Project, Task } from "../types/index.js";
+import type { Database } from "bun:sqlite";
+import { exitWithTodosCliError } from "./stage-a.js";
+
+export {
+  parseNonNegativeSafeInteger,
+  parseOptionalNonNegativeSafeInteger,
+  parseOptionalPositiveSafeInteger,
+  parsePositiveSafeInteger,
+  parsePositiveSafeIntegerOr,
+} from "../lib/positive-safe-integer.js";
 
 export { getPackageVersion };
 
@@ -16,8 +26,7 @@ const stdoutRetryBuffer = new SharedArrayBuffer(4);
 const stdoutRetrySignal = new Int32Array(stdoutRetryBuffer);
 
 export function handleError(e: unknown): never {
-  console.error(chalk.red(e instanceof Error ? e.message : String(e)));
-  process.exit(1);
+  return exitWithTodosCliError(e);
 }
 
 /** Canonical task UUID (v4-shaped, but tolerant of any version/variant nibble). */
@@ -47,7 +56,10 @@ const TASK_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
  *     from the same machine/session. Ambiguous or unknown prefixes fail loudly
  *     with actionable guidance.
  */
-export function resolveTaskId(partialId: string): string {
+export function resolveTaskId(
+  partialId: string,
+  database: Database | number | undefined = undefined,
+): string {
   const raw = (partialId ?? "").trim();
 
   if (!raw) {
@@ -72,7 +84,10 @@ export function resolveTaskId(partialId: string): string {
   const cloud = isCloudRouting();
   let similar: { id: string }[] = [];
   try {
-    const db = getDatabase();
+    // Array.map supplies its numeric index as the second callback argument.
+    // Preserve that long-standing use while allowing detail reads to reuse an
+    // explicitly non-mutating database handle.
+    const db = typeof database === "number" ? getDatabase() : getDatabase(database);
     const id = resolvePartialId(db, "tasks", raw);
     if (id) return id;
     similar = db.query("SELECT id FROM tasks WHERE id LIKE ? LIMIT 3").all(`%${raw}%`) as { id: string }[];

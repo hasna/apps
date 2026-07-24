@@ -167,7 +167,7 @@ function isStaleBlocker(task: Task): boolean {
 }
 
 export function getReadyTasks(filter: GraphFilter = {}, db?: Database): ReadyTaskReport[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const pending = filterTasks(listTasks({ status: "pending" }, d), filter);
   const ready: ReadyTaskReport[] = [];
 
@@ -188,7 +188,7 @@ export function getReadyTasks(filter: GraphFilter = {}, db?: Database): ReadyTas
 }
 
 export function getBlockedTaskReports(filter: GraphFilter = {}, db?: Database): BlockedTaskReport[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const statuses = filter.status?.length ? filter.status : ["pending", "in_progress"];
   const candidates = filterTasks(listTasks({}, d).filter((t) => statuses.includes(t.status)), filter);
   const missing = findMissingDependencies(d);
@@ -249,7 +249,7 @@ function dependencyDepth(taskId: string, db: Database, memo: Map<string, number>
 }
 
 export function getCriticalPath(filter: GraphFilter = {}, db?: Database): CriticalPathEntry[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const tasks = filterTasks(listTasks({}, d).filter((t) => t.status !== "completed" && t.status !== "cancelled"), filter);
   const downstreamMemo = new Map<string, number>();
   const depthMemo = new Map<string, number>();
@@ -267,7 +267,7 @@ export function getCriticalPath(filter: GraphFilter = {}, db?: Database): Critic
 }
 
 export function getUnlockImpact(taskId: string, db?: Database): UnlockImpactReport {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const task = getTask(taskId, d);
   if (!task) throw new Error(`Task not found: ${taskId}`);
 
@@ -294,7 +294,7 @@ export function getUnlockImpact(taskId: string, db?: Database): UnlockImpactRepo
 }
 
 export function analyzeDependencyGraph(filter: GraphFilter = {}, db?: Database): DependencyGraphAnalysis {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const ready = getReadyTasks(filter, d);
   const blocked = getBlockedTaskReports(filter, d);
   const critical = getCriticalPath({ ...filter, limit: filter.limit ?? 10 }, d);
@@ -316,7 +316,7 @@ export function analyzeDependencyGraph(filter: GraphFilter = {}, db?: Database):
 }
 
 export function getDependents(taskId: string, db?: Database): DependencyNode[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return getTaskDependents(taskId, d)
     .map((dep) => getTask(dep.task_id, d))
     .filter(Boolean)
@@ -324,7 +324,7 @@ export function getDependents(taskId: string, db?: Database): DependencyNode[] {
 }
 
 export function getBlockers(taskId: string, db?: Database): BlockedTaskReport | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const task = getTask(taskId, d);
   if (!task) return null;
   const blockers = getBlockingDeps(taskId, d);

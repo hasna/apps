@@ -64,7 +64,7 @@ function addMetadataConditions(
 }
 
 export function createTask(input: CreateTaskInput, db?: Database): Task {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const timestamp = now();
   const tags = input.tags || [];
   const machineId = currentStorageMachineId(d);
@@ -147,7 +147,7 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
 }
 
 export function getTask(id: string, db?: Database): Task | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query("SELECT * FROM tasks WHERE id = ?").get(id) as TaskRow | null;
   if (!row) return null;
   return rowToTask(row);
@@ -157,7 +157,7 @@ export function getTaskWithRelations(
   id: string,
   db?: Database,
 ): TaskWithRelations | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const task = getTask(id, d);
   if (!task) return null;
 
@@ -190,7 +190,10 @@ export function getTaskWithRelations(
   // Get comments
   const comments = d
     .query(
-      "SELECT * FROM task_comments WHERE task_id = ? ORDER BY created_at",
+      // SQLite rowid is the stable local insertion-order tiebreaker. Apply it
+      // before the CLI's newest-100 display bound so equal-clock comments do
+      // not drift across repeated show/inspect reads.
+      "SELECT * FROM task_comments WHERE task_id = ? ORDER BY created_at, rowid",
     )
     .all(id) as TaskWithRelations["comments"];
 
@@ -212,7 +215,7 @@ export function getTaskWithRelations(
 }
 
 export function listTasks(filter: TaskFilter = {}, db?: Database): Task[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const { clearExpiredLocks } = require("./database.js");
   clearExpiredLocks(d);
   const conditions: string[] = [];
@@ -375,7 +378,7 @@ export function upsertTaskByFingerprint(
   input: UpsertTaskByFingerprintInput,
   db?: Database,
 ): UpsertTaskByFingerprintResult {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const fingerprint = input.fingerprint.trim();
   if (!fingerprint) throw new Error("fingerprint is required");
 
@@ -428,7 +431,7 @@ export function upsertTaskByFingerprint(
 }
 
 export function countTasks(filter: Omit<TaskFilter, 'limit' | 'offset'> = {}, db?: Database): number {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const conditions: string[] = [];
   const params: SQLQueryBindings[] = [];
 
@@ -538,7 +541,7 @@ export function updateTask(
   input: UpdateTaskInput,
   db?: Database,
 ): Task {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const task = getTask(id, d);
   if (!task) throw new TaskNotFoundError(id);
 
@@ -774,7 +777,7 @@ export function updateTask(
 }
 
 export function deleteTask(id: string, db?: Database): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query("SELECT * FROM tasks WHERE id = ?").get(id) as TaskRow | null;
   if (!row) return false;
   recordStorageTombstone({

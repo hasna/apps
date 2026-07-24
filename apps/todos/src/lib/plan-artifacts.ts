@@ -124,7 +124,7 @@ export function planArtifactFileName(plan: Pick<Plan, "id" | "name" | "slug">): 
 }
 
 export function resolvePlanArtifactProject(input: ResolvePlanArtifactPathInput): Project {
-  const db = input.db || getDatabase();
+  const db = getDatabase(input.db);
   const ref = input.project_id || input.project_ref;
   if (!ref) throw new Error("Plan artifacts require a project id or project reference");
 
@@ -307,7 +307,7 @@ function parseTaskReferences(body: string): PlanArtifactTaskReference[] {
 
 export function writePlanArtifact(plan: Plan, db?: Database): WritePlanArtifactResult | null {
   if (!plan.project_id) return null;
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const tasks = listTasks({ plan_id: plan.id, include_archived: true }, d);
   const paths = resolvePlanArtifactCandidatePaths(plan, d).primary;
   const snapshot = buildPlanArtifactSnapshot(plan, tasks);
@@ -318,7 +318,7 @@ export function writePlanArtifact(plan: Plan, db?: Database): WritePlanArtifactR
 
 export function readPlanArtifact(plan: Plan, db?: Database): PlanArtifactReadResult | null {
   if (!plan.project_id) return null;
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const paths = resolvePlanArtifactCandidatePaths(plan, d);
   const path = existsSync(paths.primary.file_path)
     ? paths.primary.file_path
@@ -336,7 +336,7 @@ export function readPlanArtifact(plan: Plan, db?: Database): PlanArtifactReadRes
 
 export function inspectPlanArtifact(plan: Plan, db?: Database): PlanArtifactInspection | null {
   if (!plan.project_id) return null;
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const paths = resolvePlanArtifactCandidatePaths(plan, d);
   const path = existsSync(paths.primary.file_path)
     ? paths.primary.file_path

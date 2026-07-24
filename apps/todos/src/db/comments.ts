@@ -9,7 +9,7 @@ export function addComment(
   input: CreateCommentInput,
   db?: Database,
 ): TaskComment {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
 
   // Verify task exists
   if (!getTask(input.task_id, d)) {
@@ -48,14 +48,14 @@ export function logProgress(
 }
 
 export function getComment(id: string, db?: Database): TaskComment | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return d
     .query("SELECT * FROM task_comments WHERE id = ?")
     .get(id) as TaskComment | null;
 }
 
 export function listComments(taskId: string, db?: Database): TaskComment[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return d
     .query(
       // Preserve local insertion-order semantics for same-clock comments. The
@@ -71,7 +71,7 @@ export function updateComment(
   input: { content: string },
   db?: Database,
 ): TaskComment {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   d.run("UPDATE task_comments SET content = ? WHERE id = ?", [redactEvidenceText(input.content), id]);
   const comment = getComment(id, d);
   if (!comment) {
@@ -81,7 +81,7 @@ export function updateComment(
 }
 
 export function deleteComment(id: string, db?: Database): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const result = d.run("DELETE FROM task_comments WHERE id = ?", [id]);
   return result.changes > 0;
 }

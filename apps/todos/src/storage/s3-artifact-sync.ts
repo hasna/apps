@@ -91,7 +91,7 @@ interface TaskRunArtifactRow extends Omit<TaskRunArtifact, "metadata"> {
 export async function uploadRunArtifactsToS3(
   options: UploadRunArtifactsToS3Options,
 ): Promise<TodosRunArtifactSyncResult> {
-  const db = options.db ?? getDatabase();
+  const db = getDatabase(options.db);
   const now = options.now ?? (() => new Date());
   const result = emptyResult();
 
@@ -159,7 +159,7 @@ export async function uploadRunArtifactsToS3(
 export function planRunArtifactsS3Sync(
   options: PlanRunArtifactsS3SyncOptions,
 ): TodosRunArtifactSyncPlan {
-  const db = options.db ?? getDatabase();
+  const db = getDatabase(options.db);
   const plan: TodosRunArtifactSyncPlan = {
     direction: options.direction,
     dry_run: true,
@@ -216,7 +216,7 @@ export function planRunArtifactsS3Sync(
 export async function downloadRunArtifactsFromS3(
   options: DownloadRunArtifactsFromS3Options,
 ): Promise<TodosRunArtifactSyncResult> {
-  const db = options.db ?? getDatabase();
+  const db = getDatabase(options.db);
   const now = options.now ?? (() => new Date());
   const result = emptyResult();
 

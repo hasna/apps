@@ -73,7 +73,7 @@ function taskLine(t: { short_id: string | null; title: string; status: string; p
 }
 
 export function buildReportExportData(input: BuildReportExportInput, db?: Database): ReportExportData {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const redact = input.redact !== false;
   const exportedAt = input.exported_at ?? now();
   const sections: ReportSection[] = [];

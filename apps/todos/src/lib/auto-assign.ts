@@ -21,7 +21,7 @@ export interface AutoAssignResult {
  * Strategy: least-loaded agent with role "agent" (not admin/observer).
  */
 export function findBestAgent(_task: Task, db?: Database): string | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const agents = listAgents(d).filter(a => (a.role || "agent") === "agent");
   if (agents.length === 0) return null;
 
@@ -60,7 +60,7 @@ function getAgentWorkloads(d: Database): Map<string, number> {
  * Uses only local SQLite state and never calls hosted provider APIs.
  */
 export async function autoAssignTask(taskId: string, db?: Database): Promise<AutoAssignResult> {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const task = getTask(taskId, d);
   if (!task) throw new Error(`Task ${taskId} not found`);
 

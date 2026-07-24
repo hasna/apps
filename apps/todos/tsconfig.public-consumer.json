@@ -1,0 +1,22 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@hasna/todos": ["./src/index.ts"],
+      "@hasna/todos/sdk": ["./src/sdk/index.ts"],
+      "@hasna/todos/storage": ["./src/storage.ts"]
+    },
+    "rootDir": ".",
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false
+  },
+  "include": [
+    "src/test/public-stage-a-class-consumer.fixture.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
+}

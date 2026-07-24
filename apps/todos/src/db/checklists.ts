@@ -7,7 +7,7 @@ function rowToItem(row: ChecklistItemRow): ChecklistItem {
 }
 
 export function getChecklist(taskId: string, db?: Database): ChecklistItem[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const rows = d
     .query("SELECT * FROM task_checklists WHERE task_id = ? ORDER BY position, created_at")
     .all(taskId) as ChecklistItemRow[];
@@ -15,7 +15,7 @@ export function getChecklist(taskId: string, db?: Database): ChecklistItem[] {
 }
 
 export function addChecklistItem(input: CreateChecklistItemInput, db?: Database): ChecklistItem {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const id = uuid();
   const timestamp = now();
 
@@ -37,7 +37,7 @@ export function addChecklistItem(input: CreateChecklistItemInput, db?: Database)
 }
 
 export function checkChecklistItem(id: string, checked: boolean, db?: Database): ChecklistItem | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const timestamp = now();
   const result = d.run(
     "UPDATE task_checklists SET checked = ?, updated_at = ? WHERE id = ?",
@@ -48,7 +48,7 @@ export function checkChecklistItem(id: string, checked: boolean, db?: Database):
 }
 
 export function updateChecklistItemText(id: string, text: string, db?: Database): ChecklistItem | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const timestamp = now();
   const result = d.run(
     "UPDATE task_checklists SET text = ?, updated_at = ? WHERE id = ?",
@@ -59,19 +59,19 @@ export function updateChecklistItemText(id: string, text: string, db?: Database)
 }
 
 export function removeChecklistItem(id: string, db?: Database): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const result = d.run("DELETE FROM task_checklists WHERE id = ?", [id]);
   return result.changes > 0;
 }
 
 export function clearChecklist(taskId: string, db?: Database): number {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const result = d.run("DELETE FROM task_checklists WHERE task_id = ?", [taskId]);
   return result.changes;
 }
 
 export function getChecklistStats(taskId: string, db?: Database): { total: number; checked: number } {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d
     .query("SELECT COUNT(*) as total, SUM(checked) as checked FROM task_checklists WHERE task_id = ?")
     .get(taskId) as { total: number; checked: number | null } | null;

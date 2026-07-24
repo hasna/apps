@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import type { Task, TaskRow } from "../types/index.js";
-import { isLockExpired } from "../db/database.js";
+import { isLockExpired, openReadonlyLocalSqliteDatabase } from "../db/database.js";
 import { getBlockingDeps } from "../db/task-lifecycle.js";
 import { rowToTask } from "../db/task-crud.js";
 import { redactValue } from "./redaction.js";
@@ -255,7 +255,7 @@ function openReadonlyStore(ref: SourceStoreRef): Database {
   if (!existsSync(ref.source_db_path)) {
     throw Object.assign(new Error(`Store does not exist: ${ref.source_db_path}`), { code: "STORE_MISSING" });
   }
-  return new Database(ref.source_db_path, { readonly: true, create: false });
+  return openReadonlyLocalSqliteDatabase(ref.source_db_path);
 }
 
 function hasTable(db: Database, tableName: string): boolean {
