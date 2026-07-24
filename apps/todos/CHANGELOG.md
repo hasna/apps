@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.1] - 2026-07-24
+
+### Fixed
+- SQLite task search no longer silently degrades or fails on queries containing punctuation. The `shouldUseFts` gate rejected any query with punctuation (e.g. `login: urgent`), falling back to a literal substring LIKE that matched nothing. A real FTS5 query parser now handles punctuation safely: AND-by-default terms, quoted phrases, and prefix matching, with FTS5 operator characters stripped/quoted instead of rejected.
+- Task search is now bounded. `searchTasks` built its SQL with no `LIMIT`, so a broad query scanned/returned the whole table. It now applies a bounded default (1000) and honors an explicit `SearchOptions.limit`.
+
+### Changed
+- SQLite FTS ranking now uses `bm25()` column weighting (title >> description > tags), mirroring the Postgres `ts_rank_cd` A/B/C weights so both backends rank equivalently. The FTS path is unioned with the id/short_id/working_dir/metadata LIKE fallback so identifier/fingerprint/path pastes still resolve, with full-text hits ranked first.
+
 ## [0.12.0] - 2026-07-24
 
 ### Fixed

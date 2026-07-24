@@ -25,7 +25,20 @@ export interface SearchOptions {
   updated_after?: string;
   has_dependencies?: boolean;
   is_blocked?: boolean;
+  /** Max results to return. Bounded default applied when omitted/invalid. */
+  limit?: number;
 }
+
+// A search was previously UNBOUNDED (no LIMIT anywhere), so a broad query
+// materialized the entire task table. Cap it; explicit SearchOptions.limit wins.
+// Matches the 1000 ceiling used by saved-search views (normalizeLimit).
+export const DEFAULT_SEARCH_LIMIT = 1000;
+
+// bm25 column weights: title >> description > tags. Column order matches the
+// tasks_fts schema (task_id UNINDEXED, title, description, tags); the UNINDEXED
+// column's weight is inert. Mirrors the Postgres ts_rank_cd A/B/C weighting so
+// SQLite and Postgres rank equivalently.
+const BM25_WEIGHTS = "0.0, 10.0, 5.0, 3.0";
 
 function hasFts(db: Database): boolean {
   try {
@@ -36,20 +49,41 @@ function hasFts(db: Database): boolean {
   }
 }
 
-function escapeFtsQuery(q: string): string {
-  // Escape FTS5 special characters and wrap tokens for prefix matching
-  // Strip characters that FTS5 treats as operators to avoid syntax errors
-  return q
-    .replace(/["*^()]/g, " ")
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean)
-    .map(token => `"${token}"*`)
-    .join(" ");
+/**
+ * Build a safe FTS5 MATCH expression from a free-text query.
+ *
+ * The old gate (`shouldUseFts`) REJECTED any query containing punctuation with
+ * `/^[\p{L}\p{N}_\-\s]+$/u`, silently degrading those searches. This parser never
+ * rejects — it always yields a valid MATCH string:
+ *   - double-quoted substrings become exact phrases
+ *   - bare terms are prefix-matched (`"term"*`)
+ *   - terms with default AND between them (websearch-like)
+ *   - every term is wrapped in double quotes and FTS5 operator characters are
+ *     stripped, so internal punctuation (e.g. `log-in`) is a literal the
+ *     tokenizer splits — never an operator that raises a syntax error
+ *
+ * Returns "" when the query has no searchable content; the caller then relies on
+ * the LIKE fallback alone.
+ */
+function buildFtsMatchQuery(raw: string): string {
+  const terms: string[] = [];
+  const re = /"([^"]*)"|(\S+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(raw)) !== null) {
+    if (m[1] !== undefined) {
+      const phrase = m[1].replace(/"/g, " ").replace(/\s+/g, " ").trim();
+      if (phrase) terms.push(`"${phrase}"`);
+    } else {
+      const cleaned = m[2]!.replace(/["*^():]/g, " ").replace(/\s+/g, " ").trim();
+      if (cleaned) terms.push(`"${cleaned}"*`);
+    }
+  }
+  return terms.join(" AND ");
 }
 
-function shouldUseFts(q: string): boolean {
-  return /^[\p{L}\p{N}_\-\s]+$/u.test(q);
+function boundedLimit(limit: number | undefined): number {
+  if (!Number.isFinite(limit) || !limit || (limit as number) <= 0) return DEFAULT_SEARCH_LIMIT;
+  return Math.trunc(limit as number);
 }
 
 export function searchTasks(
@@ -73,20 +107,36 @@ export function searchTasks(
   // "*" means "match everything" — treat as no query (filter-only mode)
   const q = raw === "*" ? "" : raw;
 
-  const useFts = hasFts(d) && q && shouldUseFts(q);
+  const ftsMatch = q ? buildFtsMatchQuery(q) : "";
+  const useFts = hasFts(d) && q !== "" && ftsMatch !== "";
 
   if (useFts) {
-    // FTS5 path — BM25-ranked full-text search
-    const ftsQuery = escapeFtsQuery(q);
-    sql = `SELECT t.* FROM tasks t
-      INNER JOIN tasks_fts fts ON fts.rowid = t.rowid
-      WHERE tasks_fts MATCH ?`;
-    params.push(ftsQuery);
-  } else if (q) {
-    // Fallback: LIKE pattern match, including ids and structured fields that
-    // operators commonly paste as exact fingerprints.
+    // LEFT JOIN a bm25-ranked FTS subquery so full-text hits carry a relevance
+    // score, then OR in a LIKE fallback for fields FTS does NOT index
+    // (id/short_id/working_dir/metadata) so identifier/fingerprint/path pastes
+    // still resolve. A single row per task — no UNION dedupe needed.
     const pattern = `%${q}%`;
-    sql = `SELECT * FROM tasks t WHERE (
+    sql = `SELECT t.* FROM tasks t
+      LEFT JOIN (
+        SELECT rowid, bm25(tasks_fts, ${BM25_WEIGHTS}) AS rank
+        FROM tasks_fts WHERE tasks_fts MATCH ?
+      ) fts ON fts.rowid = t.rowid
+      WHERE (
+        fts.rowid IS NOT NULL
+        OR t.id LIKE ?
+        OR t.short_id LIKE ?
+        OR t.title LIKE ?
+        OR t.description LIKE ?
+        OR t.working_dir LIKE ?
+        OR t.metadata LIKE ?
+        OR EXISTS (SELECT 1 FROM task_tags WHERE task_tags.task_id = t.id AND tag LIKE ?)
+      )`;
+    params.push(ftsMatch, pattern, pattern, pattern, pattern, pattern, pattern, pattern);
+  } else if (q) {
+    // No usable FTS (unavailable, or the query was only punctuation): LIKE match,
+    // including ids and structured fields operators paste as exact fingerprints.
+    const pattern = `%${q}%`;
+    sql = `SELECT t.* FROM tasks t WHERE (
       t.id LIKE ?
       OR t.short_id LIKE ?
       OR t.title LIKE ?
@@ -98,7 +148,7 @@ export function searchTasks(
     params.push(pattern, pattern, pattern, pattern, pattern, pattern, pattern);
   } else {
     // No query — filter-only mode, return all tasks matching filters
-    sql = `SELECT * FROM tasks t WHERE 1=1`;
+    sql = `SELECT t.* FROM tasks t WHERE 1=1`;
   }
 
   if (opts.project_id) {
@@ -164,8 +214,9 @@ export function searchTasks(
   }
 
   if (useFts) {
-    // FTS5: sort by BM25 relevance first, then priority, then recency
-    sql += ` ORDER BY bm25(tasks_fts),
+    // Full-text hits first (LIKE-only fallback matches after), then bm25
+    // relevance, then priority, then recency. NULLS from the LEFT JOIN sort last.
+    sql += ` ORDER BY (fts.rowid IS NULL) ASC, fts.rank ASC,
       CASE t.priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END,
       t.created_at DESC`;
   } else {
@@ -173,6 +224,10 @@ export function searchTasks(
       CASE t.priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END,
       t.created_at DESC`;
   }
+
+  // Bound the result set. Searches were previously unbounded (no LIMIT).
+  sql += ` LIMIT ?`;
+  params.push(boundedLimit(opts.limit));
 
   const rows = d.query(sql).all(...params) as TaskRow[];
   return rows.map(rowToTask);
