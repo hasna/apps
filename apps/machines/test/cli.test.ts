@@ -1042,4 +1042,78 @@ describe("cli command handling", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test("error and usage-validation paths emit structured JSON under --json", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-cli-json-errors-"));
+    try {
+      const env = {
+        ...process.env,
+        HASNA_MACHINES_MANIFEST_PATH: join(dir, "machines.json"),
+        HASNA_MACHINES_DB_PATH: join(dir, "machines.db"),
+        HASNA_MACHINES_MACHINE_ID: "control",
+        // Force the failing states deterministically regardless of host env.
+        HASNA_MACHINES_S3_BUCKET: "",
+        MACHINES_S3_BUCKET: "",
+        HASNA_MACHINES_STORAGE_MODE: "cloud",
+        HASNA_MACHINES_DATABASE_URL: "",
+        MACHINES_DATABASE_URL: "",
+        HASNA_MACHINES_DATABASE_URL_OWNER: "",
+        [MUTATION_APPROVAL_FLAG_ENV]: "1",
+      };
+      expect(runCli(["manifest", "init"], env).status).toBe(0);
+
+      // 1) Explicit action-level guard (no --machine/--all).
+      const screen = runCli(["screen-credentials", "--json"], env);
+      expect(screen.status).toBe(1);
+      expect(screen.stderr).toBe("");
+      expect(JSON.parse(screen.stdout)).toMatchObject({
+        ok: false,
+        error: "Provide --machine <id> or --all",
+      });
+
+      // 2) Commander required-option usage errors (before the action runs).
+      for (const sub of ["resolve", "doctor"]) {
+        const result = runCli(["workspace", sub, "--json"], env);
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toBe("");
+        const payload = JSON.parse(result.stdout);
+        expect(payload).toMatchObject({
+          ok: false,
+          code: "commander.missingMandatoryOptionValue",
+        });
+        expect(payload.error).toContain("--machine");
+      }
+
+      // 3) Business-logic throw surfaced from a helper (missing S3 bucket).
+      const backup = runCli(["backup", "--json"], env);
+      expect(backup.status).toBe(1);
+      expect(backup.stderr).toBe("");
+      expect(JSON.parse(backup.stdout)).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("Missing S3 backup bucket"),
+      });
+
+      // 4) Async business-logic throw (cloud mode without a database URL).
+      const migrate = runCli(["db", "migrate", "--dry-run", "--json"], env);
+      expect(migrate.status).toBe(1);
+      expect(migrate.stderr).toBe("");
+      expect(JSON.parse(migrate.stdout)).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("needs a database URL"),
+      });
+
+      // Non-JSON parity: plain text stays on stderr, stdout carries no JSON.
+      const backupText = runCli(["backup"], env);
+      expect(backupText.status).toBe(1);
+      expect(backupText.stderr).toContain("Missing S3 backup bucket");
+      expect(backupText.stdout).toBe("");
+
+      const workspaceText = runCli(["workspace", "resolve"], env);
+      expect(workspaceText.status).not.toBe(0);
+      expect(workspaceText.stderr).toContain("required option '--machine <id>' not specified");
+      expect(workspaceText.stdout).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30000);
 });

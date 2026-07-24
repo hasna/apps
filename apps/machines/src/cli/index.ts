@@ -221,6 +221,78 @@ function printStorageError(error: unknown): never {
   process.exit(1);
 }
 
+// Detect the JSON output flag from raw argv. Option parsing has not necessarily
+// happened when usage/validation errors fire, so the resolved options are not
+// available on those paths — the raw tokens are the source of truth there.
+function argvWantsJson(argv: readonly string[] = process.argv): boolean {
+  return argv.includes("--json") || argv.includes("-j");
+}
+
+function jsonCliError(message: string, extra?: Record<string, unknown>): string {
+  return JSON.stringify({ ok: false, error: message, ...extra }, null, 2);
+}
+
+// Emit a structured error on explicit CLI failure paths, honouring --json.
+function failCli(message: string, json: boolean, extra?: Record<string, unknown>): never {
+  if (json) {
+    console.log(jsonCliError(message, extra));
+  } else {
+    console.error(chalk.red(message));
+  }
+  process.exit(1);
+}
+
+// Route Commander's own usage/validation errors through exitOverride so they
+// can be rendered as JSON when requested instead of Commander's plain text.
+function applyJsonAwareErrorHandling(command: Command): void {
+  command.exitOverride();
+  command.configureOutput({
+    outputError: (str, write) => {
+      // Under --json the structured object is emitted from reportTopLevelError;
+      // suppress Commander's plain-text error so consumers get valid JSON only.
+      if (!argvWantsJson()) write(str);
+    },
+  });
+  for (const child of command.commands) applyJsonAwareErrorHandling(child);
+}
+
+// Wrap a command action so any thrown error is rendered as JSON under --json
+// (falling back to the standard red-on-stderr text otherwise). Used for actions
+// whose usage/validation failures bubble up from helpers rather than Commander.
+function jsonAwareAction<A extends unknown[]>(
+  handler: (...args: A) => void | Promise<void>,
+  wantsJson: (...args: A) => boolean,
+): (...args: A) => Promise<void> {
+  return async (...args: A) => {
+    try {
+      await handler(...args);
+    } catch (error) {
+      failCli(error instanceof Error ? error.message : String(error), wantsJson(...args));
+    }
+  };
+}
+
+function reportTopLevelError(error: unknown): never {
+  const code = (error as { code?: unknown }).code;
+  const isCommanderError = error instanceof Error && typeof code === "string" && code.startsWith("commander.");
+  if (isCommanderError) {
+    const exitCode = typeof (error as { exitCode?: unknown }).exitCode === "number" ? (error as { exitCode: number }).exitCode : 1;
+    // Success-exit paths (help/version) already wrote their output to stdout.
+    if (exitCode === 0) process.exit(0);
+    // Commander usage/validation errors: emit structured JSON under --json,
+    // otherwise Commander already wrote the plain message via outputError.
+    if (argvWantsJson()) {
+      console.log(jsonCliError(error.message.replace(/^error:\s*/i, ""), { code }));
+    }
+    process.exit(exitCode);
+  }
+  // Non-Commander throws keep their historical stderr rendering; commands that
+  // need JSON on these paths opt in explicitly (see jsonAwareAction / failCli).
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(chalk.red(message));
+  process.exit(1);
+}
+
 function renderAppsListResult(result: ReturnType<typeof listApps>): string {
   return [
     `machine: ${result.machineId}`,
@@ -2392,7 +2464,7 @@ program
   .option("--yes", "Confirm execution when using --apply", false)
   .option("--approval-token <token>", "Scoped mutation approval token")
   .option("-j, --json", "Print JSON output", false)
-  .action((options: { bucket?: string; prefix?: string; apply?: boolean; yes?: boolean; approvalToken?: string; json?: boolean }) => {
+  .action(jsonAwareAction((options: { bucket?: string; prefix?: string; apply?: boolean; yes?: boolean; approvalToken?: string; json?: boolean }) => {
     if (options.apply) {
       const target = resolveBackupTarget({ bucket: options.bucket, prefix: options.prefix });
       requireCliMutation("backup_apply", options.approvalToken, { resourceId: cliResourceId("backup", target.bucket, target.prefix), args: { bucket: target.bucket, prefix: target.prefix, yes: options.yes } });
@@ -2401,7 +2473,7 @@ program
       ? runBackup(options.bucket, options.prefix, { apply: true, yes: options.yes })
       : buildBackupPlan(options.bucket, options.prefix);
     console.log(JSON.stringify(result, null, 2));
-  });
+  }, (options) => Boolean(options.json)));
 
 const certCommand = program.command("cert").description("Manage mkcert-based local SSL certificates");
 
@@ -2971,9 +3043,7 @@ program
       ? topology.machines.map((machine) => machine.machine_id)
       : [options.machine].filter((machine): machine is string => Boolean(machine));
     if (machineIds.length === 0) {
-      console.error("Provide --machine <id> or --all");
-      process.exitCode = 1;
-      return;
+      failCli("Provide --machine <id> or --all", Boolean(options.json));
     }
     const results = machineIds.map((machineId) => {
       try {
@@ -3143,7 +3213,7 @@ dbCommand
   .description("Apply pending cloud migrations (api-keys + machines registry). Connects as the owner role.")
   .option("--dry-run", "Report the migration plan without applying", false)
   .option("-j, --json", "Print JSON output", false)
-  .action(async (options: { dryRun?: boolean; json?: boolean }) => {
+  .action(jsonAwareAction(async (options: { dryRun?: boolean; json?: boolean }) => {
     const result = await runMigrations({ dryRun: options.dryRun === true });
     if (options.json) {
       console.log(JSON.stringify(result, null, 2));
@@ -3156,7 +3226,7 @@ dbCommand
     }
     console.log(chalk.green(`applied ${result.applied.length} migration(s)${result.applied.length ? ": " + result.applied.join(", ") : ""}`));
     console.log(chalk.gray(`already applied: ${result.alreadyApplied.length}`));
-  });
+  }, (options) => Boolean(options.json)));
 
 const healCommand = program.command("heal").description("Self-healing network watchdog: keeps a Wi-Fi node reachable (SSID pinning + peer-reachability + gated reboot)");
 
@@ -3564,9 +3634,8 @@ registryCommand
   });
 
 try {
+  applyJsonAwareErrorHandling(program);
   await program.parseAsync(process.argv);
 } catch (error) {
-  const message = error instanceof Error ? error.message : String(error);
-  console.error(chalk.red(message));
-  process.exit(1);
+  reportTopLevelError(error);
 }
