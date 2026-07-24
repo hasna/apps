@@ -2,12 +2,13 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { relative, resolve, sep } from 'node:path';
+import { extname, relative, resolve, sep } from 'node:path';
 import type { Database, SQLQueryBindings } from 'bun:sqlite';
 import { CURRENT_SCHEMA_VERSION, getSchemaVersion, migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
 import { recordStorageObjects, type GeneratedStorageObject, type StorageContract } from './storage-contract';
 import { normalizeArtifactKey, type ArtifactStore } from './artifact-store';
 import type { KnowledgeMachineEntry, KnowledgeMachineRouteResolution, KnowledgeMachineTopology, KnowledgeMachineWorkspaceResolution } from './machines';
+import { redactPrivateRefs } from './private-ref';
 
 export interface KnowledgeSyncMachineRow {
   machine_id: string;
@@ -838,6 +839,15 @@ function keyForArtifactRow(row: { artifact_uri: string; metadata_json: string },
   }
 }
 
+const TEXT_ARTIFACT_EXTENSIONS = new Set(['.csv', '.html', '.json', '.jsonl', '.log', '.md', '.txt', '.xml', '.yaml', '.yml']);
+
+function isTextArtifact(contentType: string | null, key: string | null): boolean {
+  const normalized = contentType?.toLowerCase() ?? '';
+  if (normalized.startsWith('text/')) return true;
+  if (/(json|markdown|xml|yaml|csv)/.test(normalized)) return true;
+  return key ? TEXT_ARTIFACT_EXTENSIONS.has(extname(key).toLowerCase()) : false;
+}
+
 function artifactUriToKey(artifacts: KnowledgeSyncBundleArtifact[]): Map<string, string> {
   const map = new Map<string, string>();
   for (const artifact of artifacts) {
@@ -1296,18 +1306,31 @@ export function createKnowledgeSyncBundle(options: {
     ).all();
     const artifacts = artifactRows.map((row): KnowledgeSyncBundleArtifact => {
       const key = keyForArtifactRow(row, options.storage.local_layout.directories.artifacts);
-      const artifact: KnowledgeSyncBundleArtifact = { ...row, key };
+      let artifact: KnowledgeSyncBundleArtifact = { ...row, key };
       if (options.includeArtifactContent !== false && key && row.artifact_uri.startsWith('file://')) {
         try {
           const path = fileURLToPath(row.artifact_uri);
-          if (existsSync(path)) artifact.content_base64 = readFileSync(path).toString('base64');
-          else warnings.push(`artifact_missing:${row.artifact_uri}`);
+          if (existsSync(path)) {
+            if (!isTextArtifact(row.content_type, key)) {
+              warnings.push(`artifact_content_not_embedded_binary:${row.id}`);
+            } else {
+              const text = readFileSync(path, 'utf8');
+              const redactedText = redactPrivateRefs(text);
+              if (redactedText !== text) warnings.push(`artifact_content_redacted:${row.id}`);
+              artifact.content_base64 = Buffer.from(redactedText, 'utf8').toString('base64');
+              artifact.hash = sha256(redactedText);
+              artifact.size_bytes = Buffer.byteLength(redactedText);
+            }
+          } else {
+            warnings.push(`artifact_missing:${row.artifact_uri}`);
+          }
         } catch (error) {
           warnings.push(`artifact_read_failed:${row.artifact_uri}:${error instanceof Error ? error.message : String(error)}`);
         }
       } else if (options.includeArtifactContent !== false && row.artifact_uri.startsWith('s3://')) {
         warnings.push(`artifact_content_not_embedded:${row.artifact_uri}`);
       }
+      artifact = redactPrivateRefs(artifact);
       return artifact;
     });
     const sourceArtifactUriToKey = artifactUriToKey(artifacts);
@@ -1316,7 +1339,7 @@ export function createKnowledgeSyncBundle(options: {
       .map((table) => ({
         table,
         primary_keys: PRIMARY_KEYS[table],
-        rows: tableRows(db, table),
+        rows: tableRows(db, table).map((row) => redactPrivateRefs(row)),
       }));
     const tableClocks = tables.map((table) => prepareExportTableClock(db, {
       table: table.table,
@@ -1329,10 +1352,10 @@ export function createKnowledgeSyncBundle(options: {
     const contentHash = sha256(stableJson({
       source: {
         scope: options.scope,
-        workspace_home: options.workspaceHome,
+        workspace_home: redactPrivateRefs(options.workspaceHome),
         sqlite_schema_version: getSchemaVersion(db),
         machine_id: sourceMachineId,
-        artifact_root_uri: options.storage.artifact_store.uri_prefix,
+        artifact_root_uri: redactPrivateRefs(options.storage.artifact_store.uri_prefix),
       },
       tables: tables.map((table) => ({
         table: table.table,
@@ -1367,15 +1390,15 @@ export function createKnowledgeSyncBundle(options: {
       generated_at: generatedAt,
       source: {
         scope: options.scope,
-        workspace_home: options.workspaceHome,
+        workspace_home: redactPrivateRefs(options.workspaceHome),
         sqlite_schema_version: getSchemaVersion(db),
         machine_id: sourceMachineId,
-        artifact_root_uri: options.storage.artifact_store.uri_prefix,
+        artifact_root_uri: redactPrivateRefs(options.storage.artifact_store.uri_prefix),
       },
       table_clocks: tableClocks,
       tables,
       artifacts,
-      warnings,
+      warnings: redactPrivateRefs(warnings),
       message: `${tables.reduce((sum, table) => sum + table.rows.length, 0)} row(s), ${artifacts.length} artifact(s) exported`,
     };
   } finally {
@@ -2117,13 +2140,14 @@ export function createKnowledgeSyncSnapshot(options: {
   try {
     const machinesUpserted = options.topology ? refreshMachineRegistryFromTopology(db, options.topology, createdAt) : 0;
     const tables = tableCounts(db);
-    const artifacts = artifactHashes(db);
+    const artifacts = redactPrivateRefs(artifactHashes(db));
     const machineId = options.machineId ?? options.topology?.local_machine_id ?? 'unknown';
-    const artifactRootUri = options.storage.artifact_store.uri_prefix;
+    const artifactRootUri = redactPrivateRefs(options.storage.artifact_store.uri_prefix);
+    const workspaceHome = redactPrivateRefs(options.workspaceHome);
     const contentHash = sha256(stableJson({
       machine_id: machineId,
       scope: options.scope,
-      workspace_home: options.workspaceHome,
+      workspace_home: workspaceHome,
       sqlite_schema_version: getSchemaVersion(db),
       artifact_root_uri: artifactRootUri,
       tables,
@@ -2133,7 +2157,7 @@ export function createKnowledgeSyncSnapshot(options: {
       id: makeSyncId('syncsnap'),
       machine_id: machineId,
       scope: options.scope,
-      workspace_home: options.workspaceHome,
+      workspace_home: workspaceHome,
       sqlite_schema_version: getSchemaVersion(db),
       artifact_root_uri: artifactRootUri,
       content_hash: contentHash,
@@ -2160,7 +2184,7 @@ export function createKnowledgeSyncSnapshot(options: {
     );
     const artifactUriMap = new Map<string, string>();
     for (const table of filterExistingTables(db, resolveSyncTables()).filter((entry) => !TABLE_SYNC_EXCLUDES.has(entry))) {
-      const rows = tableRows(db, table);
+      const rows = tableRows(db, table).map((entry) => redactPrivateRefs(entry));
       const highWaterHash = tableContentHash(table, rows, artifactUriMap);
       const existing = tableClock(db, table, machineId);
       const logicalClock = existing?.high_water_hash === highWaterHash
@@ -2227,16 +2251,16 @@ export function getKnowledgeSyncStatus(options: {
     return {
       ok: true,
       scope: options.scope,
-      workspace_home: options.workspaceHome,
+      workspace_home: redactPrivateRefs(options.workspaceHome),
       sqlite_schema_version: getSchemaVersion(db),
       local_machine_id: options.localMachineId ?? null,
       machines: {
         total: machines.length,
-        rows: machines,
+        rows: redactPrivateRefs(machines),
       },
       snapshots: {
         total: count(db, 'knowledge_sync_snapshots'),
-        latest,
+        latest: redactPrivateRefs(latest),
       },
       changes: {
         total: count(db, 'knowledge_sync_changes'),
@@ -2248,7 +2272,7 @@ export function getKnowledgeSyncStatus(options: {
       },
       imports: {
         total: count(db, 'knowledge_sync_imports'),
-        latest: latestImport,
+        latest: redactPrivateRefs(latestImport),
       },
       conflicts: {
         total: totalConflicts,

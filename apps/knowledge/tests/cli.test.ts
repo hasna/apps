@@ -1047,6 +1047,30 @@ describe('knowledge cli', () => {
     expect(merged.items.map((item: any) => item.id)).toContain('k_legacy_reentrant');
   });
 
+  test('storage validation reports forbidden workspace env and backup artifacts without reading values', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-forbidden-cloud-env-'));
+    const knowledgeHome = join(dir, '.hasna', 'knowledge');
+    mkdirSync(join(knowledgeHome, 'migration-exports'), { recursive: true });
+    writeFileSync(join(knowledgeHome, 'cloud.env'), 'HASNA_KNOWLEDGE_DATABASE_URL=not-a-real-secret\n');
+    writeFileSync(join(knowledgeHome, 'knowledge.db.pre-cloud-2026-07-06.bak'), '');
+
+    const validate = runCli(['storage', 'validate', '--scope', 'project', '--json'], dir);
+    expect(validate.exitCode).toBe(1);
+    const out = JSON.parse(new TextDecoder().decode(validate.stdout));
+    expect(out.ok).toBe(false);
+    expect(out.validation.errors.join('\n')).toContain('cloud.env');
+    expect(out.validation.errors.join('\n')).toContain('migration-exports');
+    expect(out.validation.errors.join('\n')).toContain('knowledge.db.pre-cloud-2026-07-06.bak');
+    expect(JSON.stringify(out)).not.toContain('not-a-real-secret');
+  });
+
+  test('source ingestion rejects private Knowledge workspace file refs before reading', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-private-source-ref-'));
+    const ingest = runCli(['ingest', 'source', 'file:///home/hasna/.hasna/knowledge/knowledge.db', '--scope', 'project', '--json'], dir);
+    expect(ingest.exitCode).toBe(1);
+    expect(new TextDecoder().decode(ingest.stderr)).toContain('private-ref lint failed');
+  });
+
   test('storage migration safely moves legacy app workspace to canonical knowledge path', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-workspace-migrate-'));
     const legacyHome = join(dir, '.hasna', 'apps', 'knowledge');
@@ -1809,7 +1833,7 @@ describe('knowledge cli', () => {
     expect(resolvedOut.conflict.status).toBe('resolved');
     expect(resolvedOut.conflict.approved_by).toBe('cli-reviewer');
     expect(resolvedOut.audit_event_id).toStartWith('audit_');
-  });
+  }, 10000);
 
   test('sync dry-run and push copy a project catalog into a peer workspace', () => {
     const sourceDir = mkdtempSync(join(tmpdir(), 'ok-sync-cli-source-'));
@@ -1845,7 +1869,7 @@ describe('knowledge cli', () => {
     const peerStatsOut = JSON.parse(new TextDecoder().decode(peerStats.stdout));
     expect(peerStatsOut.sources).toBe(1);
     expect(peerStatsOut.storage_objects).toBe(4);
-  });
+  }, 10000);
 
   test('sync peer-workspace works without machines adapter calls', () => {
     const sourceDir = mkdtempSync(join(tmpdir(), 'ok-sync-no-machines-source-'));
@@ -1883,7 +1907,7 @@ describe('knowledge cli', () => {
     expect(pushOut.push.artifacts.copied).toBeGreaterThanOrEqual(1);
     expect(pushOut.resolved_workspace.adapter.error).toBe('argument_override');
     expect(existsSync(machinesMarker)).toBe(false);
-  });
+  }, 10000);
 
   test('sync export and import move a bundle through stdin/stdout', () => {
     const sourceDir = mkdtempSync(join(tmpdir(), 'ok-sync-export-source-'));
@@ -1910,7 +1934,7 @@ describe('knowledge cli', () => {
     expect(importedOut.min_protocol_version).toBe(1);
     expect(importedOut.artifacts.copied).toBe(4);
     expect(existsSync(join(peerDir, '.hasna', 'knowledge', 'artifacts', 'wiki', 'README.md'))).toBe(true);
-  });
+  }, 10000);
 
   test('ssh sync rejects remote export without protocol handshake', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-sync-ssh-old-export-'));

@@ -14993,7 +14993,7 @@ var init_mcp_http = () => {};
 init_zod();
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { existsSync as existsSync14, readFileSync as readFileSync13, writeFileSync as writeFileSync6 } from "fs";
+import { existsSync as existsSync15, readFileSync as readFileSync13, writeFileSync as writeFileSync6 } from "fs";
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
@@ -15107,7 +15107,7 @@ var package_default = {
 import { Database } from "bun:sqlite";
 
 // src/workspace.ts
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { dirname, join, resolve } from "path";
 var HASNA_KNOWLEDGE_APP_PATH = join(".hasna", "knowledge");
@@ -15245,7 +15245,7 @@ function defaultKnowledgeConfig() {
 }
 function ensureKnowledgeWorkspace(home) {
   const workspace = workspaceForHome(home);
-  mkdirSync(workspace.home, { recursive: true });
+  mkdirSync(workspace.home, { recursive: true, mode: 448 });
   for (const dir of [
     workspace.artifactsDir,
     workspace.cacheDir,
@@ -15256,11 +15256,12 @@ function ensureKnowledgeWorkspace(home) {
     workspace.schemasDir,
     workspace.wikiDir
   ]) {
-    mkdirSync(dir, { recursive: true });
+    mkdirSync(dir, { recursive: true, mode: 448 });
   }
   if (!existsSync(workspace.configPath)) {
     writeFileSync(workspace.configPath, `${JSON.stringify(defaultKnowledgeConfig(), null, 2)}
-`);
+`, { mode: 384 });
+    chmodSync(workspace.configPath, 384);
   }
   return workspace;
 }
@@ -15280,7 +15281,8 @@ function readKnowledgeConfig(path) {
 function writeKnowledgeConfig(path, config2) {
   ensureParentDir(path);
   writeFileSync(path, `${JSON.stringify(config2, null, 2)}
-`);
+`, { mode: 384 });
+  chmodSync(path, 384);
 }
 
 // node_modules/@hasna/contracts/dist/client/storage.js
@@ -22375,7 +22377,7 @@ function getKnowledgeDbStats(path) {
 }
 
 // src/store.ts
-import { readFileSync as readFileSync2, writeFileSync as writeFileSync2, existsSync as existsSync2, renameSync, unlinkSync } from "fs";
+import { chmodSync as chmodSync2, readFileSync as readFileSync2, writeFileSync as writeFileSync2, existsSync as existsSync2, renameSync, unlinkSync } from "fs";
 import { randomUUID } from "crypto";
 import { join as join2 } from "path";
 function defaultStorePath() {
@@ -22388,7 +22390,8 @@ function ensureStore(path) {
   if (!existsSync2(path)) {
     ensureParentDir(path);
     writeFileSync2(path, `${JSON.stringify({ items: [] }, null, 2)}
-`);
+`, { mode: 384 });
+    chmodSync2(path, 384);
   }
 }
 function timestampForPath(now) {
@@ -22415,7 +22418,8 @@ function storeContainsItem(index, item) {
 function writeJsonFile(path, value) {
   ensureParentDir(path);
   writeFileSync2(path, `${JSON.stringify(value, null, 2)}
-`);
+`, { mode: 384 });
+  chmodSync2(path, 384);
 }
 function readStoreFileForImport(path) {
   const value = JSON.parse(readFileSync2(path, "utf8"));
@@ -22539,7 +22543,7 @@ function acquireLock(lockPath2, ownerId) {
   while (Date.now() - start < maxWait) {
     try {
       if (!existsSync2(lockPath2)) {
-        writeFileSync2(lockPath2, JSON.stringify({ owner: ownerId, ts: Date.now() }));
+        writeFileSync2(lockPath2, JSON.stringify({ owner: ownerId, ts: Date.now() }), { mode: 384 });
         return;
       }
       const lock = JSON.parse(readFileSync2(lockPath2, "utf8"));
@@ -22573,8 +22577,9 @@ function loadStore(path) {
 }
 function saveStore(path, store) {
   const tmp = `${path}.tmp.${randomUUID()}`;
-  writeFileSync2(tmp, JSON.stringify(store, null, 2));
+  writeFileSync2(tmp, JSON.stringify(store, null, 2), { mode: 384 });
   renameSync(tmp, path);
+  chmodSync2(path, 384);
 }
 function withLock(path, fn, options = {}) {
   const owner = randomUUID();
@@ -22812,7 +22817,7 @@ function revisionIdForSourceRef(uri) {
 }
 
 // src/artifact-store.ts
-import { existsSync as existsSync4, mkdirSync as mkdirSync2, readFileSync as readFileSync3, statSync, writeFileSync as writeFileSync3 } from "fs";
+import { chmodSync as chmodSync3, existsSync as existsSync4, mkdirSync as mkdirSync2, readFileSync as readFileSync3, statSync, writeFileSync as writeFileSync3 } from "fs";
 import { dirname as dirname2, join as join3, relative, sep } from "path";
 import { pathToFileURL } from "url";
 function normalizeArtifactKey(key) {
@@ -22852,14 +22857,15 @@ class LocalArtifactStore {
   canWrite = true;
   constructor(root) {
     this.root = root;
-    mkdirSync2(root, { recursive: true });
+    mkdirSync2(root, { recursive: true, mode: 448 });
   }
   async put(entry) {
     const key = normalizeArtifactKey(entry.key);
     const path = join3(this.root, key);
     assertInside(this.root, path);
-    mkdirSync2(dirname2(path), { recursive: true });
-    writeFileSync3(path, entry.body);
+    mkdirSync2(dirname2(path), { recursive: true, mode: 448 });
+    writeFileSync3(path, entry.body, { mode: 384 });
+    chmodSync3(path, 384);
     return { key, uri: pathToFileURL(path).href, modified_at: statSync(path).mtime.toISOString() };
   }
   async getText(key) {
@@ -22975,17 +22981,19 @@ function createArtifactStore(config2, workspace) {
 }
 
 // src/service.ts
-import { createHash as createHash17 } from "crypto";
+import { createHash as createHash18 } from "crypto";
 import { spawnSync as spawnSync2 } from "child_process";
-import { existsSync as existsSync13, readFileSync as readFileSync12 } from "fs";
+import { existsSync as existsSync14, readFileSync as readFileSync12 } from "fs";
 import { hostname as hostname5 } from "os";
-import { join as join7, resolve as resolve5 } from "path";
+import { join as join8, resolve as resolve5 } from "path";
 
 // src/app-wiki.ts
-import { createHash as createHash5, randomUUID as randomUUID4 } from "crypto";
+import { createHash as createHash6, randomUUID as randomUUID4 } from "crypto";
 
 // src/storage-contract.ts
 import { createHash, randomUUID as randomUUID2 } from "crypto";
+import { existsSync as existsSync6, readdirSync } from "fs";
+import { join as join5 } from "path";
 import { pathToFileURL as pathToFileURL2 } from "url";
 
 // src/auth.ts
@@ -23109,6 +23117,26 @@ var GENERATED_ARTIFACTS = [
     description: "Portable exports and snapshots of derived knowledge state."
   }
 ];
+var FORBIDDEN_WORKSPACE_FILES = [
+  "cloud.env",
+  "knowledge.db.pre-cloud-*.bak",
+  "db.json.pre-cloud-*.bak",
+  "migration-exports"
+];
+function forbiddenWorkspaceFilesPresent(workspace) {
+  const present = [];
+  if (existsSync6(join5(workspace.home, "cloud.env")))
+    present.push("cloud.env");
+  if (existsSync6(join5(workspace.home, "migration-exports")))
+    present.push("migration-exports");
+  if (existsSync6(workspace.home)) {
+    for (const entry of readdirSync(workspace.home)) {
+      if (/^(?:knowledge\.db|db\.json)\.pre-cloud-.+\.bak$/i.test(entry))
+        present.push(entry);
+    }
+  }
+  return present;
+}
 function hashArtifactBody(body) {
   const bytes = typeof body === "string" ? Buffer.from(body) : Buffer.from(body);
   return {
@@ -23195,6 +23223,29 @@ function resolveStorageContract(config2, workspace, scope = "global") {
       registry_contract_version: KNOWLEDGE_REGISTRY_CONTRACT_VERSION,
       requires_hosted_account_for_local_use: false
     },
+    secret_handling: {
+      workspace_env_files_supported: false,
+      forbidden_workspace_files: FORBIDDEN_WORKSPACE_FILES,
+      forbidden_workspace_files_present: forbiddenWorkspaceFilesPresent(workspace),
+      runtime_env_keys: [
+        "HASNA_KNOWLEDGE_STORAGE_MODE",
+        "KNOWLEDGE_STORAGE_MODE",
+        "HASNA_KNOWLEDGE_DATABASE_URL",
+        "KNOWLEDGE_DATABASE_URL"
+      ],
+      secret_ref_authority: "open-secrets",
+      approved_secret_refs: {
+        env: EXAMPLE_KNOWLEDGE_CANONICAL.secrets.env,
+        aws: EXAMPLE_KNOWLEDGE_CANONICAL.secrets.aws,
+        s3: EXAMPLE_KNOWLEDGE_CANONICAL.secrets.s3,
+        rds: EXAMPLE_KNOWLEDGE_CANONICAL.secrets.rds
+      },
+      db_url_rotation_decision: {
+        status: "blocked_without_secret_authority",
+        reason: "No live secret mutation authority is available in @hasna/knowledge. Rotate the DB URL only through the approved secret authority if separate evidence proves the URL propagated to backups, exports, sync bundles, reports, or copied artifacts.",
+        authority_required: true
+      }
+    },
     source_ownership: {
       owner: "open-files",
       preferred_ref: config2.sources.preferred_ref,
@@ -23255,6 +23306,10 @@ function resolveStorageContract(config2, workspace, scope = "global") {
 function validateStorageConfig(config2, workspace) {
   const errors3 = [];
   const warnings = [];
+  const forbiddenFiles = forbiddenWorkspaceFilesPresent(workspace);
+  for (const file2 of forbiddenFiles) {
+    errors3.push(`Forbidden Knowledge workspace file present: ${file2}. Move secrets to open-secrets/runtime env and remove or replace legacy backups/exports with redacted owner-only artifacts.`);
+  }
   if (!workspace.home.endsWith(HASNA_KNOWLEDGE_APP_PATH)) {
     warnings.push(`Workspace home does not end with ${HASNA_KNOWLEDGE_APP_PATH}: ${workspace.home}`);
   }
@@ -23359,13 +23414,13 @@ function withProvenance(metadata, provenance) {
 }
 
 // src/source-ingest.ts
-import { createHash as createHash4 } from "crypto";
-import { existsSync as existsSync7, readFileSync as readFileSync6 } from "fs";
+import { createHash as createHash5 } from "crypto";
+import { existsSync as existsSync8, readFileSync as readFileSync6 } from "fs";
 import { basename as basename2 } from "path";
 
 // src/manifest-ingest.ts
-import { createHash as createHash3 } from "crypto";
-import { existsSync as existsSync6, readFileSync as readFileSync5 } from "fs";
+import { createHash as createHash4 } from "crypto";
+import { existsSync as existsSync7, readFileSync as readFileSync5 } from "fs";
 import { basename } from "path";
 
 // src/safety.ts
@@ -23534,12 +23589,125 @@ var COMMON_BARE_TOKEN_PATTERNS = [
 ];
 REDACTION_PATTERNS.push(...COMMON_BARE_TOKEN_PATTERNS);
 
+// src/private-ref.ts
+import { createHash as createHash3 } from "crypto";
+var FILE_URI_RE = /file:\/\/[^\s"'<>),\]}]+/gi;
+var ABSOLUTE_HASNA_PATH_RE = /\/[^\s"'<>),\]}]*\.hasna\/[^\s"'<>),\]}]*/g;
+var ABSOLUTE_LOCAL_PATH_RE = /\/(?:home|tmp)\/[^\s"'<>),\]}]+/g;
+var HASNA_PATH_RE = /(?:~|\/home\/[^/\s"'<>]+)?\/?\.hasna(?:\/[^\s"'<>),\]}]*)?/gi;
+var PRIVATE_WORKSPACE_PATH_RE = /\/home\/[^/\s"'<>]+\/(?:workspace|Workspace)\/[^\s"'<>),\]}]*/g;
+var RAW_DB_OR_ENV_RE = /\b(?:knowledge\.db(?:[-.][A-Za-z0-9_-]+)?|db\.json(?:[-.][A-Za-z0-9_-]+)?|cloud\.env|migration-exports\/[^\s"'<>),\]}]+)\b/gi;
+var DATABASE_URL_RE = /\b(?:postgres(?:ql)?|mysql|mariadb):\/\/[^\s"'<>),\]}]+/gi;
+var OPAQUE_EXPORT_KEYS = new Set(["content_base64"]);
+function fingerprint(value) {
+  return createHash3("sha256").update(value).digest("hex").slice(0, 12);
+}
+function preview(value) {
+  return value.length <= 80 ? value : `${value.slice(0, 77)}...`;
+}
+function includesPrivateKnowledgeArtifact(value) {
+  return /(?:^|\/)\.hasna(?:\/|$)/i.test(value) || /\b(?:knowledge\.db|db\.json|cloud\.env)\b/i.test(value) || /\bmigration-exports\//i.test(value);
+}
+function addStringIssues(value, path, options, issues) {
+  for (const match of value.matchAll(FILE_URI_RE)) {
+    const uri = match[0];
+    if (!options.allowFileSourceRefs || includesPrivateKnowledgeArtifact(uri)) {
+      issues.push({
+        type: includesPrivateKnowledgeArtifact(uri) ? "private_file_uri" : "local_file_uri",
+        severity: "high",
+        path,
+        preview: preview(uri.replace(/^file:\/\/.*/, `[redacted:file-uri:${fingerprint(uri)}]`))
+      });
+    }
+  }
+  for (const match of value.matchAll(HASNA_PATH_RE)) {
+    issues.push({
+      type: "private_hasna_path",
+      severity: "high",
+      path,
+      preview: `[redacted:.hasna:${fingerprint(match[0])}]`
+    });
+  }
+  for (const match of value.matchAll(RAW_DB_OR_ENV_RE)) {
+    issues.push({
+      type: match[0].toLowerCase() === "cloud.env" ? "workspace_env_file" : "raw_database_or_export_ref",
+      severity: "high",
+      path,
+      preview: `[redacted:${fingerprint(match[0])}]`
+    });
+  }
+  for (const match of value.matchAll(DATABASE_URL_RE)) {
+    issues.push({
+      type: "database_url",
+      severity: "high",
+      path,
+      preview: `[redacted:database-url:${fingerprint(match[0])}]`
+    });
+  }
+  if (!options.allowPrivateWorkspaceRefs) {
+    for (const match of value.matchAll(PRIVATE_WORKSPACE_PATH_RE)) {
+      issues.push({
+        type: "private_workspace_path",
+        severity: "medium",
+        path,
+        preview: `[redacted:workspace:${fingerprint(match[0])}]`
+      });
+    }
+  }
+}
+function lintPrivateRefs(value, options = {}, path = "$") {
+  const issues = [];
+  const visit = (entry, entryPath) => {
+    if (typeof entry === "string") {
+      addStringIssues(entry, entryPath, options, issues);
+      return;
+    }
+    if (!entry || typeof entry !== "object")
+      return;
+    if (Array.isArray(entry)) {
+      entry.forEach((item, index) => visit(item, `${entryPath}[${index}]`));
+      return;
+    }
+    for (const [key, item] of Object.entries(entry)) {
+      visit(item, `${entryPath}.${key}`);
+    }
+  };
+  visit(value, path);
+  return issues;
+}
+function assertNoPrivateRefs(value, options = {}) {
+  const issues = lintPrivateRefs(value, options);
+  if (issues.length === 0)
+    return;
+  const counts = new Map;
+  for (const issue2 of issues)
+    counts.set(issue2.type, (counts.get(issue2.type) ?? 0) + 1);
+  const summary = [...counts.entries()].map(([type, count2]) => `${type}:${count2}`).join(", ");
+  throw new Error(`Knowledge private-ref lint failed (${summary}). Store open-files/s3 refs or approved runtime secret refs instead of private .hasna, file://, raw DB/export, or cloud.env refs.`);
+}
+function redactString(value) {
+  return redactSecrets(value).text.replace(DATABASE_URL_RE, (match) => `[REDACTED:database-url:${fingerprint(match)}]`).replace(FILE_URI_RE, (match) => `[REDACTED:local-file-uri:${fingerprint(match)}]`).replace(ABSOLUTE_HASNA_PATH_RE, (match) => `[REDACTED:local-hasna-path:${fingerprint(match)}]`).replace(PRIVATE_WORKSPACE_PATH_RE, (match) => `[REDACTED:private-workspace:${fingerprint(match)}]`).replace(ABSOLUTE_LOCAL_PATH_RE, (match) => `[REDACTED:local-path:${fingerprint(match)}]`).replace(HASNA_PATH_RE, (match) => `[REDACTED:hasna-path:${fingerprint(match)}]`).replace(RAW_DB_OR_ENV_RE, (match) => `[REDACTED:private-artifact:${fingerprint(match)}]`);
+}
+function redactPrivateRefs(value) {
+  if (typeof value === "string")
+    return redactString(value);
+  if (!value || typeof value !== "object")
+    return value;
+  if (Array.isArray(value))
+    return value.map((entry) => redactPrivateRefs(entry));
+  const output = {};
+  for (const [key, entry] of Object.entries(value)) {
+    output[key] = OPAQUE_EXPORT_KEYS.has(key) ? entry : redactPrivateRefs(entry);
+  }
+  return output;
+}
+
 // src/manifest-ingest.ts
 var DEFAULT_MAX_MANIFEST_INPUT_BYTES = 20 * 1024 * 1024;
 var DEFAULT_MAX_MANIFEST_ITEMS = 1e4;
 var DEFAULT_MANIFEST_PREVIEW_ITEMS = 10;
 function stableId(prefix, value) {
-  return `${prefix}_${createHash3("sha256").update(value).digest("hex").slice(0, 20)}`;
+  return `${prefix}_${createHash4("sha256").update(value).digest("hex").slice(0, 20)}`;
 }
 function asObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
@@ -23653,15 +23821,16 @@ function metadataFromItem(item, normalized) {
   for (const [key, value] of Object.entries(item)) {
     if (OMIT_MANIFEST_METADATA_KEYS.has(normalizeMetadataKey(key)))
       continue;
-    metadata[key] = sanitizeManifestMetadataValue(value);
+    metadata[key] = redactPrivateRefs(sanitizeManifestMetadataValue(value));
   }
   metadata.source_ref = normalized.sourceRef;
   metadata.source_uri = normalized.sourceUri;
   metadata.status = normalized.status;
   return metadata;
 }
-function normalizeManifestItem(item, now) {
+function normalizeManifestItem(item, now, options = {}) {
   const sourceRef = buildSourceRefFromItem(item);
+  assertNoPrivateRefs(sourceRef, { allowFileSourceRefs: options.allowFileSourceRefs === true });
   const parsed = parseSourceRef(sourceRef);
   const sourceUri = baseSourceUri(sourceRef, parsed);
   const hash2 = hashFromItem(item);
@@ -23757,7 +23926,7 @@ async function readS3Text(uri, config2, safetyPolicy) {
 }
 async function readManifestInput(input, config2, safetyPolicy, maxInputBytes = DEFAULT_MAX_MANIFEST_INPUT_BYTES) {
   const text = input.startsWith("s3://") ? await readS3Text(input, config2, safetyPolicy) : (() => {
-    if (!existsSync6(input))
+    if (!existsSync7(input))
       throw new Error(`Manifest not found: ${input}`);
     return readFileSync5(input, "utf8");
   })();
@@ -23938,6 +24107,7 @@ async function ingestOpenFilesManifest(options) {
     dbPath: options.dbPath,
     items,
     sourceLabel: options.input,
+    allowFileSourceRefs: options.config?.sources.allowed_schemes.includes("file") === true,
     safetyPolicy: options.safetyPolicy,
     now,
     maxChunkChars: options.maxChunkChars,
@@ -23969,7 +24139,7 @@ async function ingestOpenFilesManifestItems(options) {
       let chunksDeleted = 0;
       let redactions = 0;
       let skipped = 0;
-      const preview = [];
+      const preview2 = [];
       recordAuditEvent(db, {
         event_type: "source_read",
         action: options.readAction ?? (options.sourceLabel.startsWith("s3://") ? "s3_manifest_read" : "local_manifest_read"),
@@ -23979,9 +24149,9 @@ async function ingestOpenFilesManifestItems(options) {
         created_at: now
       });
       for (const raw of options.items) {
-        const item = normalizeManifestItem(raw, now);
-        if (preview.length < DEFAULT_MANIFEST_PREVIEW_ITEMS) {
-          preview.push({
+        const item = normalizeManifestItem(raw, now, { allowFileSourceRefs: options.allowFileSourceRefs });
+        if (preview2.length < DEFAULT_MANIFEST_PREVIEW_ITEMS) {
+          preview2.push({
             source_ref: item.sourceRef,
             title: item.title,
             status: item.status,
@@ -24017,7 +24187,7 @@ async function ingestOpenFilesManifestItems(options) {
         chunks_deleted: chunksDeleted,
         redactions,
         skipped,
-        items_preview: preview
+        items_preview: preview2
       };
     })();
     return result;
@@ -24317,7 +24487,7 @@ async function resolveOpenFilesSource(options) {
 
 // src/source-ingest.ts
 function sha256Text(text) {
-  return `sha256:${createHash4("sha256").update(text).digest("hex")}`;
+  return `sha256:${createHash5("sha256").update(text).digest("hex")}`;
 }
 function stripHtml(html) {
   return html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/\s+\n/g, `
@@ -24373,7 +24543,7 @@ function titleForRef(parsed) {
 }
 async function readDirectSourceText(parsed, config2, safetyPolicy) {
   if (parsed.kind === "file") {
-    if (!existsSync7(parsed.path))
+    if (!existsSync8(parsed.path))
       throw new Error(`Source file not found: ${parsed.path}`);
     const text = readFileSync6(parsed.path, "utf8");
     return {
@@ -24478,7 +24648,7 @@ async function readOpenFilesSourceText(options) {
 function manifestItemForSource(sourceRef, parsed, resolved, purpose) {
   const hash2 = resolved.hash ?? sha256Text(resolved.text);
   const metadata = {
-    ...resolved.metadata,
+    ...redactPrivateRefs(resolved.metadata),
     source_ref: sourceRef,
     content_source: resolved.contentSource,
     read_only: true
@@ -24519,6 +24689,9 @@ function manifestItemForSource(sourceRef, parsed, resolved, purpose) {
 }
 async function ingestSourceRef(options) {
   const purpose = options.purpose ?? "knowledge_index";
+  assertNoPrivateRefs(options.sourceRef, {
+    allowFileSourceRefs: options.config?.sources.allowed_schemes.includes("file") !== false
+  });
   const parsed = parseSourceRef(options.sourceRef);
   const resolved = parsed.kind === "open-files" ? await readOpenFilesSourceText(options) : await readDirectSourceText(parsed, options.config, options.safetyPolicy);
   const item = manifestItemForSource(options.sourceRef, parsed, resolved, purpose);
@@ -24527,6 +24700,7 @@ async function ingestSourceRef(options) {
     items: [item],
     sourceLabel: options.sourceRef,
     readAction: "source_ref_ingest_read",
+    allowFileSourceRefs: options.config?.sources.allowed_schemes.includes("file") !== false,
     safetyPolicy: options.safetyPolicy,
     now: options.now
   });
@@ -24541,7 +24715,7 @@ async function ingestSourceRef(options) {
 
 // src/app-wiki.ts
 function stableId2(prefix, value) {
-  return `${prefix}_${createHash5("sha256").update(value).digest("hex").slice(0, 20)}`;
+  return `${prefix}_${createHash6("sha256").update(value).digest("hex").slice(0, 20)}`;
 }
 function slugify2(value) {
   const slug = value.normalize("NFKC").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
@@ -24633,7 +24807,7 @@ async function appendLog(store, event, now) {
 }
 function noteMetadata(input) {
   return {
-    ...input.metadata ?? {},
+    ...redactPrivateRefs(input.metadata ?? {}),
     app_wiki: true,
     note: true,
     artifact_key: input.path,
@@ -24829,6 +25003,9 @@ async function writeAppWikiNote(options) {
   const now = nowDate.toISOString();
   const tags = uniqueStrings(options.tags);
   const sourceRefs = uniqueStrings(options.sourceRefs);
+  for (const sourceRef of sourceRefs) {
+    assertNoPrivateRefs(sourceRef, { allowFileSourceRefs: options.safetyPolicy?.readOnlySourceAccess === true });
+  }
   const path = normalizeNotePath(options);
   const body = noteBody({
     title: options.title,
@@ -24982,6 +25159,9 @@ async function getAppWikiNote(options) {
 }
 async function ingestAppWikiSourceRef(options) {
   assertAppWikiWriteAllowed(options);
+  assertNoPrivateRefs(options.sourceRef, {
+    allowFileSourceRefs: options.config?.sources.allowed_schemes.includes("file") !== false
+  });
   return ingestSourceRef({
     dbPath: options.workspace.knowledgeDbPath,
     sourceRef: options.sourceRef,
@@ -25198,20 +25378,20 @@ function recordProviderUsage(db, input) {
 }
 
 // src/retrieval.ts
-import { createHash as createHash7 } from "crypto";
+import { createHash as createHash8 } from "crypto";
 
 // src/search.ts
-import { existsSync as existsSync8, readFileSync as readFileSync7 } from "fs";
+import { existsSync as existsSync9, readFileSync as readFileSync7 } from "fs";
 
 // src/embeddings.ts
-import { createHash as createHash6 } from "crypto";
+import { createHash as createHash7 } from "crypto";
 var DEFAULT_EMBEDDING_MODEL_REF = "openai:text-embedding-3-small";
 var DEFAULT_EMBEDDING_DIMENSIONS = 1536;
 function embeddingConfig(config2) {
   return config2?.embeddings ?? {};
 }
 function stableId3(prefix, value) {
-  return `${prefix}_${createHash6("sha256").update(value).digest("hex").slice(0, 20)}`;
+  return `${prefix}_${createHash7("sha256").update(value).digest("hex").slice(0, 20)}`;
 }
 function parseJsonObject3(value) {
   if (!value)
@@ -25253,7 +25433,7 @@ function cosineSimilarity(a, b, bNorm = vectorNorm(b)) {
   return dot / (aNorm * bNorm);
 }
 function deterministicVector(text, dimensions) {
-  const bytes = createHash6("sha256").update(text).digest();
+  const bytes = createHash7("sha256").update(text).digest();
   return Array.from({ length: dimensions }, (_, index) => {
     const value = bytes[index % bytes.length] / 255;
     return Number((value * 2 - 1).toFixed(6));
@@ -25783,7 +25963,7 @@ function selectKnowledgeIndexes(db, terms, limit) {
      LIMIT ?`).all(...likeParams(terms, fields.length), limit);
 }
 function readLegacyItems(path) {
-  if (!path || !existsSync8(path))
+  if (!path || !existsSync9(path))
     return [];
   try {
     const parsed = JSON.parse(readFileSync7(path, "utf8"));
@@ -26113,7 +26293,7 @@ async function hybridSearchItems(items, options, baseWarnings = []) {
 
 // src/retrieval.ts
 function stableId4(prefix, value) {
-  return `${prefix}_${createHash7("sha256").update(value).digest("hex").slice(0, 20)}`;
+  return `${prefix}_${createHash8("sha256").update(value).digest("hex").slice(0, 20)}`;
 }
 function normalizeQuery(query) {
   return query.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
@@ -26708,14 +26888,14 @@ ${answer}`;
 }
 
 // src/context-pack.ts
-import { createHash as createHash8 } from "crypto";
+import { createHash as createHash9 } from "crypto";
 var DEFAULT_MAX_TOKENS = 1200;
 var DEFAULT_MAX_ITEMS = 6;
 var MAX_MAX_TOKENS = 12000;
 var MAX_MAX_ITEMS = 50;
 var MIN_MAX_TOKENS = 800;
 function stableId5(prefix, value, size = 16) {
-  return `${prefix}_${createHash8("sha256").update(value).digest("hex").slice(0, size)}`;
+  return `${prefix}_${createHash9("sha256").update(value).digest("hex").slice(0, size)}`;
 }
 function normalizeText(value) {
   return value.normalize("NFKC").trim().replace(/\s+/g, " ");
@@ -27074,13 +27254,13 @@ async function buildRunDraft(options, maxItems, now) {
       citations.push(citation);
       const metadataSummary = summarizeMetadata(entry.metadata);
       const previewInput = [entry.row.prompt, metadataSummary].filter(Boolean).join(" | ") || `${entry.row.type} ${entry.row.status}`;
-      const preview = redactPreview(previewInput, options.safetyPolicy, 420);
-      redactions += preview.redactions;
+      const preview2 = redactPreview(previewInput, options.safetyPolicy, 420);
+      redactions += preview2.redactions;
       evidence.push({
         id: `run:${entry.row.id}`,
         kind: entry.row.type,
         title: truncateText(`${entry.row.type}: ${entry.row.status}`, 100),
-        text_preview: preview.text,
+        text_preview: preview2.text,
         score: entry.score,
         citation_ids: [citation.id],
         provenance: {
@@ -27099,13 +27279,13 @@ async function buildRunDraft(options, maxItems, now) {
       for (const eventEntry of eventRows) {
         const eventCitation = citationForEvent(eventEntry.event, eventEntry.metadata, options.safetyPolicy);
         citations.push(eventCitation);
-        const preview2 = redactPreview(`${eventEntry.event}: ${summarizeMetadata(eventEntry.metadata)}`, options.safetyPolicy, 320);
-        redactions += preview2.redactions;
+        const preview3 = redactPreview(`${eventEntry.event}: ${summarizeMetadata(eventEntry.metadata)}`, options.safetyPolicy, 320);
+        redactions += preview3.redactions;
         evidence.push({
           id: `event:${eventEntry.event.id}`,
           kind: `run_event:${eventEntry.event.level}`,
           title: truncateText(eventEntry.event.event, 100),
-          text_preview: preview2.text,
+          text_preview: preview3.text,
           score: eventEntry.score,
           citation_ids: [eventCitation.id],
           provenance: {
@@ -27288,11 +27468,11 @@ async function buildKnowledgeAgentContextPack(options) {
 import { randomUUID as randomUUID8 } from "crypto";
 
 // src/sync.ts
-import { createHash as createHash9, randomUUID as randomUUID7 } from "crypto";
-import { existsSync as existsSync9, readFileSync as readFileSync8 } from "fs";
+import { createHash as createHash10, randomUUID as randomUUID7 } from "crypto";
+import { existsSync as existsSync10, readFileSync as readFileSync8 } from "fs";
 import { hostname as hostname3 } from "os";
 import { fileURLToPath as fileURLToPath2 } from "url";
-import { relative as relative3, resolve as resolve3, sep as sep3 } from "path";
+import { extname, relative as relative3, resolve as resolve3, sep as sep3 } from "path";
 var KNOWLEDGE_SYNC_TABLES = [
   "sources",
   "wiki_pages",
@@ -27373,7 +27553,7 @@ function stableJson(value) {
   return JSON.stringify(value);
 }
 function sha256(value) {
-  return `sha256:${createHash9("sha256").update(value).digest("hex")}`;
+  return `sha256:${createHash10("sha256").update(value).digest("hex")}`;
 }
 function count2(db, table) {
   const row = db.query(`SELECT COUNT(*) AS n FROM ${table}`).get();
@@ -27728,6 +27908,15 @@ function keyForArtifactRow(row, artifactsDir) {
     return null;
   }
 }
+var TEXT_ARTIFACT_EXTENSIONS = new Set([".csv", ".html", ".json", ".jsonl", ".log", ".md", ".txt", ".xml", ".yaml", ".yml"]);
+function isTextArtifact(contentType, key) {
+  const normalized = contentType?.toLowerCase() ?? "";
+  if (normalized.startsWith("text/"))
+    return true;
+  if (/(json|markdown|xml|yaml|csv)/.test(normalized))
+    return true;
+  return key ? TEXT_ARTIFACT_EXTENSIONS.has(extname(key).toLowerCase()) : false;
+}
 function artifactUriToKey(artifacts) {
   const map2 = new Map;
   for (const artifact of artifacts) {
@@ -28077,27 +28266,39 @@ function createKnowledgeSyncBundle(options) {
        ORDER BY artifact_uri ASC`).all();
     const artifacts = artifactRows.map((row) => {
       const key = keyForArtifactRow(row, options.storage.local_layout.directories.artifacts);
-      const artifact = { ...row, key };
+      let artifact = { ...row, key };
       if (options.includeArtifactContent !== false && key && row.artifact_uri.startsWith("file://")) {
         try {
           const path = fileURLToPath2(row.artifact_uri);
-          if (existsSync9(path))
-            artifact.content_base64 = readFileSync8(path).toString("base64");
-          else
+          if (existsSync10(path)) {
+            if (!isTextArtifact(row.content_type, key)) {
+              warnings.push(`artifact_content_not_embedded_binary:${row.id}`);
+            } else {
+              const text = readFileSync8(path, "utf8");
+              const redactedText = redactPrivateRefs(text);
+              if (redactedText !== text)
+                warnings.push(`artifact_content_redacted:${row.id}`);
+              artifact.content_base64 = Buffer.from(redactedText, "utf8").toString("base64");
+              artifact.hash = sha256(redactedText);
+              artifact.size_bytes = Buffer.byteLength(redactedText);
+            }
+          } else {
             warnings.push(`artifact_missing:${row.artifact_uri}`);
+          }
         } catch (error51) {
           warnings.push(`artifact_read_failed:${row.artifact_uri}:${error51 instanceof Error ? error51.message : String(error51)}`);
         }
       } else if (options.includeArtifactContent !== false && row.artifact_uri.startsWith("s3://")) {
         warnings.push(`artifact_content_not_embedded:${row.artifact_uri}`);
       }
+      artifact = redactPrivateRefs(artifact);
       return artifact;
     });
     const sourceArtifactUriToKey = artifactUriToKey(artifacts);
     const tables = requestedTables.filter((table) => !TABLE_SYNC_EXCLUDES.has(table)).map((table) => ({
       table,
       primary_keys: PRIMARY_KEYS[table],
-      rows: tableRows(db, table)
+      rows: tableRows(db, table).map((row) => redactPrivateRefs(row))
     }));
     const tableClocks = tables.map((table) => prepareExportTableClock(db, {
       table: table.table,
@@ -28110,10 +28311,10 @@ function createKnowledgeSyncBundle(options) {
     const contentHash = sha256(stableJson({
       source: {
         scope: options.scope,
-        workspace_home: options.workspaceHome,
+        workspace_home: redactPrivateRefs(options.workspaceHome),
         sqlite_schema_version: getSchemaVersion(db),
         machine_id: sourceMachineId,
-        artifact_root_uri: options.storage.artifact_store.uri_prefix
+        artifact_root_uri: redactPrivateRefs(options.storage.artifact_store.uri_prefix)
       },
       tables: tables.map((table) => ({
         table: table.table,
@@ -28149,15 +28350,15 @@ function createKnowledgeSyncBundle(options) {
       generated_at: generatedAt,
       source: {
         scope: options.scope,
-        workspace_home: options.workspaceHome,
+        workspace_home: redactPrivateRefs(options.workspaceHome),
         sqlite_schema_version: getSchemaVersion(db),
         machine_id: sourceMachineId,
-        artifact_root_uri: options.storage.artifact_store.uri_prefix
+        artifact_root_uri: redactPrivateRefs(options.storage.artifact_store.uri_prefix)
       },
       table_clocks: tableClocks,
       tables,
       artifacts,
-      warnings,
+      warnings: redactPrivateRefs(warnings),
       message: `${tables.reduce((sum, table) => sum + table.rows.length, 0)} row(s), ${artifacts.length} artifact(s) exported`
     };
   } finally {
@@ -28727,13 +28928,14 @@ function createKnowledgeSyncSnapshot(options) {
   try {
     const machinesUpserted = options.topology ? refreshMachineRegistryFromTopology(db, options.topology, createdAt) : 0;
     const tables = tableCounts(db);
-    const artifacts = artifactHashes(db);
+    const artifacts = redactPrivateRefs(artifactHashes(db));
     const machineId = options.machineId ?? options.topology?.local_machine_id ?? "unknown";
-    const artifactRootUri = options.storage.artifact_store.uri_prefix;
+    const artifactRootUri = redactPrivateRefs(options.storage.artifact_store.uri_prefix);
+    const workspaceHome = redactPrivateRefs(options.workspaceHome);
     const contentHash = sha256(stableJson({
       machine_id: machineId,
       scope: options.scope,
-      workspace_home: options.workspaceHome,
+      workspace_home: workspaceHome,
       sqlite_schema_version: getSchemaVersion(db),
       artifact_root_uri: artifactRootUri,
       tables,
@@ -28743,7 +28945,7 @@ function createKnowledgeSyncSnapshot(options) {
       id: makeSyncId("syncsnap"),
       machine_id: machineId,
       scope: options.scope,
-      workspace_home: options.workspaceHome,
+      workspace_home: workspaceHome,
       sqlite_schema_version: getSchemaVersion(db),
       artifact_root_uri: artifactRootUri,
       content_hash: contentHash,
@@ -28759,7 +28961,7 @@ function createKnowledgeSyncSnapshot(options) {
     `).run(row.id, row.machine_id, row.scope, row.workspace_home, row.sqlite_schema_version, row.artifact_root_uri, row.content_hash, row.tables_json, row.artifact_hashes_json, row.created_at);
     const artifactUriMap = new Map;
     for (const table of filterExistingTables(db, resolveSyncTables()).filter((entry) => !TABLE_SYNC_EXCLUDES.has(entry))) {
-      const rows = tableRows(db, table);
+      const rows = tableRows(db, table).map((entry) => redactPrivateRefs(entry));
       const highWaterHash = tableContentHash(table, rows, artifactUriMap);
       const existing = tableClock(db, table, machineId);
       const logicalClock = existing?.high_water_hash === highWaterHash ? existing.logical_clock : (existing?.logical_clock ?? 0) + 1;
@@ -28808,16 +29010,16 @@ function getKnowledgeSyncStatus(options) {
     return {
       ok: true,
       scope: options.scope,
-      workspace_home: options.workspaceHome,
+      workspace_home: redactPrivateRefs(options.workspaceHome),
       sqlite_schema_version: getSchemaVersion(db),
       local_machine_id: options.localMachineId ?? null,
       machines: {
         total: machines.length,
-        rows: machines
+        rows: redactPrivateRefs(machines)
       },
       snapshots: {
         total: count2(db, "knowledge_sync_snapshots"),
-        latest
+        latest: redactPrivateRefs(latest)
       },
       changes: {
         total: count2(db, "knowledge_sync_changes"),
@@ -28829,7 +29031,7 @@ function getKnowledgeSyncStatus(options) {
       },
       imports: {
         total: count2(db, "knowledge_sync_imports"),
-        latest: latestImport
+        latest: redactPrivateRefs(latestImport)
       },
       conflicts: {
         total: totalConflicts,
@@ -29365,11 +29567,11 @@ async function proposeKnowledgeSyncConflictResolutionWithAi(options) {
 }
 
 // src/outbox-consume.ts
-import { createHash as createHash10, randomUUID as randomUUID9 } from "crypto";
-import { existsSync as existsSync10, readFileSync as readFileSync9 } from "fs";
+import { createHash as createHash11, randomUUID as randomUUID9 } from "crypto";
+import { existsSync as existsSync11, readFileSync as readFileSync9 } from "fs";
 import { basename as basename3 } from "path";
 function stableId6(prefix, value) {
-  return `${prefix}_${createHash10("sha256").update(value).digest("hex").slice(0, 20)}`;
+  return `${prefix}_${createHash11("sha256").update(value).digest("hex").slice(0, 20)}`;
 }
 function asObject2(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
@@ -29511,7 +29713,7 @@ async function readS3Text3(uri, config2, safetyPolicy) {
 async function readOutboxInput(input, config2, safetyPolicy) {
   if (input.startsWith("s3://"))
     return readS3Text3(input, config2, safetyPolicy);
-  if (!existsSync10(input))
+  if (!existsSync11(input))
     throw new Error(`Outbox not found: ${input}`);
   return readFileSync9(input, "utf8");
 }
@@ -30885,9 +31087,9 @@ async function preflightKnowledgeMachine(options = {}) {
 }
 
 // src/reindex.ts
-import { createHash as createHash11, randomUUID as randomUUID10 } from "crypto";
+import { createHash as createHash12, randomUUID as randomUUID10 } from "crypto";
 function stableId7(prefix, value) {
-  return `${prefix}_${createHash11("sha256").update(value).digest("hex").slice(0, 20)}`;
+  return `${prefix}_${createHash12("sha256").update(value).digest("hex").slice(0, 20)}`;
 }
 function queueCounts(dbPath) {
   const db = openKnowledgeDb(dbPath);
@@ -31072,9 +31274,9 @@ async function refreshEmbeddingIndex(options) {
 }
 
 // src/rules-provenance.ts
-import { createHash as createHash12 } from "crypto";
-import { existsSync as existsSync11, lstatSync, readdirSync, readFileSync as readFileSync10, statSync as statSync2 } from "fs";
-import { basename as basename4, extname, join as join5, relative as relative4, resolve as resolve4, sep as sep4 } from "path";
+import { createHash as createHash13 } from "crypto";
+import { existsSync as existsSync12, lstatSync, readdirSync as readdirSync2, readFileSync as readFileSync10, statSync as statSync2 } from "fs";
+import { basename as basename4, extname as extname2, join as join6, relative as relative4, resolve as resolve4, sep as sep4 } from "path";
 import { pathToFileURL as pathToFileURL3 } from "url";
 var DEFAULT_MAX_ITEMS2 = 100;
 var DEFAULT_EVIDENCE_LIMIT = 25;
@@ -31104,10 +31306,10 @@ var SKIP_DIRECTORIES = new Set([
 var SENSITIVE_PATH_RE = /(^|[._-])(secret|secrets|token|tokens|credential|credentials|password|passwd|private[_-]?key|id_rsa)([._-]|$)/i;
 var SELECTED_PROMPT_OR_PLAN_RE = /(agent|rule|rules|instruction|instructions|global|operating|standard|knowledge)/i;
 function sha256Text2(text) {
-  return `sha256:${createHash12("sha256").update(text).digest("hex")}`;
+  return `sha256:${createHash13("sha256").update(text).digest("hex")}`;
 }
 function sha256Bytes(bytes) {
-  return `sha256:${createHash12("sha256").update(bytes).digest("hex")}`;
+  return `sha256:${createHash13("sha256").update(bytes).digest("hex")}`;
 }
 function normalizePath(value) {
   return value.split(sep4).join("/");
@@ -31117,7 +31319,7 @@ function relativePath(root, absPath) {
   return rel ? normalizePath(rel) : basename4(absPath);
 }
 function isTextSource(path) {
-  return TEXT_EXTENSIONS.has(extname(path).toLowerCase());
+  return TEXT_EXTENSIONS.has(extname2(path).toLowerCase());
 }
 function hasSensitivePathPart(path) {
   return normalizePath(path).split("/").some((part) => SENSITIVE_PATH_RE.test(part));
@@ -31270,7 +31472,7 @@ function collectFiles(root, skipped) {
   const candidates = new Map;
   for (const entry of ruleSpecs()) {
     const basePath = resolve4(root, entry.base);
-    if (!existsSync11(basePath))
+    if (!existsSync12(basePath))
       continue;
     const rootStats = statSync2(basePath);
     if (rootStats.isFile()) {
@@ -31302,8 +31504,8 @@ function walkRuleDirectory(input) {
   const rootBasePath = input.rootBasePath ?? input.basePath;
   if (input.depth > input.maxDepth)
     return;
-  for (const dirent of readdirSync(input.basePath, { withFileTypes: true })) {
-    const absPath = join5(input.basePath, dirent.name);
+  for (const dirent of readdirSync2(input.basePath, { withFileTypes: true })) {
+    const absPath = join6(input.basePath, dirent.name);
     const rel = relativePath(rootBasePath, absPath);
     if (dirent.isSymbolicLink())
       continue;
@@ -31493,7 +31695,7 @@ function prepareLegacyRecord(input) {
   };
 }
 function deprecateLegacyNotes(input) {
-  if (!input.legacyStorePath || !existsSync11(input.legacyStorePath))
+  if (!input.legacyStorePath || !existsSync12(input.legacyStorePath))
     return 0;
   const byId = new Map(input.records.filter((record2) => record2.legacy_json_id && record2.importable).map((record2) => [record2.legacy_json_id, record2]));
   if (byId.size === 0)
@@ -31578,6 +31780,7 @@ async function importRulesProvenance(options = {}) {
         items: manifests,
         sourceLabel: "knowledge://rules-provenance/global-agent-rules",
         readAction: "rules_provenance_import",
+        allowFileSourceRefs: true,
         safetyPolicy: options.safetyPolicy,
         now: options.now,
         maxItems
@@ -31623,9 +31826,9 @@ async function importRulesProvenance(options = {}) {
 }
 
 // src/web-search.ts
-import { createHash as createHash13, randomUUID as randomUUID11 } from "crypto";
+import { createHash as createHash14, randomUUID as randomUUID11 } from "crypto";
 function stableHash(value) {
-  return `sha256:${createHash13("sha256").update(value).digest("hex")}`;
+  return `sha256:${createHash14("sha256").update(value).digest("hex")}`;
 }
 function estimateTokens3(text) {
   const words = text.trim().split(/\s+/).filter(Boolean).length;
@@ -31874,9 +32077,9 @@ async function runProviderWebSearch(options) {
 }
 
 // src/wiki-compiler.ts
-import { createHash as createHash14, randomUUID as randomUUID12 } from "crypto";
+import { createHash as createHash15, randomUUID as randomUUID12 } from "crypto";
 function stableId8(prefix, value) {
-  return `${prefix}_${createHash14("sha256").update(value).digest("hex").slice(0, 20)}`;
+  return `${prefix}_${createHash15("sha256").update(value).digest("hex").slice(0, 20)}`;
 }
 function slugify3(value) {
   const slug = value.normalize("NFKC").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
@@ -32420,7 +32623,7 @@ function lintWiki(options) {
 }
 
 // src/wiki-layout.ts
-import { createHash as createHash15 } from "crypto";
+import { createHash as createHash16 } from "crypto";
 function todayParts2(now) {
   const year = String(now.getUTCFullYear());
   const month = String(now.getUTCMonth() + 1).padStart(2, "0");
@@ -32428,7 +32631,7 @@ function todayParts2(now) {
   return { year, month, day };
 }
 function stableId9(prefix, value) {
-  return `${prefix}_${createHash15("sha256").update(value).digest("hex").slice(0, 20)}`;
+  return `${prefix}_${createHash16("sha256").update(value).digest("hex").slice(0, 20)}`;
 }
 function estimateTokenCount4(text) {
   const words = text.trim().split(/\s+/).filter(Boolean).length;
@@ -32626,38 +32829,39 @@ function recordWikiLayoutCatalog(db, artifacts, now = new Date) {
 }
 
 // src/workspace-migration.ts
-import { createHash as createHash16 } from "crypto";
+import { createHash as createHash17 } from "crypto";
 import {
   cpSync,
-  existsSync as existsSync12,
+  chmodSync as chmodSync4,
+  existsSync as existsSync13,
   lstatSync as lstatSync2,
   mkdirSync as mkdirSync4,
-  readdirSync as readdirSync2,
+  readdirSync as readdirSync3,
   readFileSync as readFileSync11,
   renameSync as renameSync2,
   rmSync,
   writeFileSync as writeFileSync5
 } from "fs";
-import { dirname as dirname4, join as join6, relative as relative5 } from "path";
+import { dirname as dirname4, join as join7, relative as relative5 } from "path";
 function walkFiles(root, base = root) {
-  if (!existsSync12(root))
+  if (!existsSync13(root))
     return [];
   const stat = lstatSync2(root);
   if (stat.isFile())
     return [relative5(base, root) || "."];
   if (!stat.isDirectory())
     return [];
-  return readdirSync2(root).flatMap((entry) => walkFiles(join6(root, entry), base)).sort();
+  return readdirSync3(root).flatMap((entry) => walkFiles(join7(root, entry), base)).sort();
 }
 function hashFiles(root, files) {
   if (files.length === 0)
     return { sha256: null, bytes: 0 };
-  const tree = createHash16("sha256");
+  const tree = createHash17("sha256");
   let bytes = 0;
   for (const file2 of files) {
-    const path = join6(root, file2);
+    const path = join7(root, file2);
     const body = readFileSync11(path);
-    const fileHash = createHash16("sha256").update(body).digest("hex");
+    const fileHash = createHash17("sha256").update(body).digest("hex");
     bytes += body.byteLength;
     tree.update(file2);
     tree.update("\x00");
@@ -32667,13 +32871,13 @@ function hashFiles(root, files) {
   return { sha256: tree.digest("hex"), bytes };
 }
 function jsonItemCount(path) {
-  if (!existsSync12(path))
+  if (!existsSync13(path))
     return null;
   const parsed = JSON.parse(readFileSync11(path, "utf8"));
   return Array.isArray(parsed.items) ? parsed.items.length : null;
 }
 function sqliteSummary(path) {
-  if (!existsSync12(path)) {
+  if (!existsSync13(path)) {
     return { exists: false, integrity_check: null, table_counts: {} };
   }
   const db = openKnowledgeDbReadonly(path);
@@ -32699,14 +32903,14 @@ function summarizeWorkspaceTree(workspace) {
   const artifactHash = hashFiles(workspace.artifactsDir, artifactFiles);
   return {
     path: workspace.home,
-    exists: existsSync12(workspace.home),
+    exists: existsSync13(workspace.home),
     file_count: files.length,
     total_bytes: treeHash.bytes,
     tree_sha256: treeHash.sha256,
     json_items: jsonItemCount(workspace.jsonStorePath),
     sqlite: sqliteSummary(workspace.knowledgeDbPath),
     artifacts: {
-      exists: existsSync12(workspace.artifactsDir),
+      exists: existsSync13(workspace.artifactsDir),
       file_count: artifactFiles.length,
       total_bytes: artifactHash.bytes,
       tree_sha256: artifactHash.sha256
@@ -32755,15 +32959,25 @@ function removeWorkspaceWithRetries(path) {
   }
   throw lastError;
 }
+function chmodOwnerOnlyTree(path) {
+  if (!existsSync13(path))
+    return;
+  const stat = lstatSync2(path);
+  chmodSync4(path, stat.isDirectory() ? 448 : 384);
+  if (!stat.isDirectory())
+    return;
+  for (const entry of readdirSync3(path))
+    chmodOwnerOnlyTree(join7(path, entry));
+}
 function isRetainedTombstoneFile(file2) {
   return file2 === "TOMBSTONE.md" || file2 === "migration.json" || file2 === "knowledge.db" || file2 === "knowledge.db-shm" || file2 === "knowledge.db-wal" || file2 === "knowledge.db-journal";
 }
 function prepareLegacyTombstoneDirectory(home) {
-  for (const file2 of readdirSync2(home)) {
+  for (const file2 of readdirSync3(home)) {
     if (file2 === "TOMBSTONE.md" || file2 === "migration.json")
       continue;
     try {
-      rmSync(join6(home, file2), { recursive: true, force: false });
+      rmSync(join7(home, file2), { recursive: true, force: false });
     } catch (error51) {
       if (!isRetriableFsLock(error51) || !file2.startsWith("knowledge.db"))
         throw error51;
@@ -32803,7 +33017,7 @@ function isMigrationTombstone(workspace, summary, currentHome) {
   if (summary.files.some((file2) => !isRetainedTombstoneFile(file2)))
     return false;
   try {
-    const metadata = JSON.parse(readFileSync11(join6(workspace.home, "migration.json"), "utf8"));
+    const metadata = JSON.parse(readFileSync11(join7(workspace.home, "migration.json"), "utf8"));
     return metadata.new_path === currentHome && typeof metadata.backup_path === "string";
   } catch {
     return false;
@@ -32854,7 +33068,7 @@ function migrateLegacyKnowledgeWorkspace(options) {
       current_home: options.current.home,
       legacy_home: options.legacy.home,
       backup_home: null,
-      tombstone_path: join6(options.legacy.home, "TOMBSTONE.md"),
+      tombstone_path: join7(options.legacy.home, "TOMBSTONE.md"),
       legacy_before: legacyBefore,
       current_before: currentBefore,
       backup_after: null,
@@ -32882,7 +33096,7 @@ function migrateLegacyKnowledgeWorkspace(options) {
       current_home: options.current.home,
       legacy_home: options.legacy.home,
       backup_home: `${options.legacy.home}.backup-${migrationTimestamp(now)}`,
-      tombstone_path: join6(options.legacy.home, "TOMBSTONE.md"),
+      tombstone_path: join7(options.legacy.home, "TOMBSTONE.md"),
       legacy_before: legacyBefore,
       current_before: currentBefore,
       backup_after: null,
@@ -32901,6 +33115,7 @@ function migrateLegacyKnowledgeWorkspace(options) {
     errorOnExist: true,
     preserveTimestamps: true
   });
+  chmodOwnerOnlyTree(backupHome);
   const backupWorkspace = workspaceForHome(backupHome);
   const backupAfter = summarizeWorkspaceTree(backupWorkspace);
   checks3.backup_matches_legacy = summariesMatch(legacyBefore, backupAfter);
@@ -32914,7 +33129,7 @@ function migrateLegacyKnowledgeWorkspace(options) {
   const currentAfter = summarizeWorkspaceTree(options.current);
   checks3.migrated_matches_backup = summariesMatch(backupAfter, currentAfter);
   mkdirSync4(options.legacy.home, { recursive: true });
-  const tombstonePath = join6(options.legacy.home, "TOMBSTONE.md");
+  const tombstonePath = join7(options.legacy.home, "TOMBSTONE.md");
   writeFileSync5(tombstonePath, [
     "# Migrated OpenKnowledge Workspace",
     "",
@@ -32926,8 +33141,10 @@ function migrateLegacyKnowledgeWorkspace(options) {
     "This directory is a diagnostic tombstone only. OpenKnowledge reads and writes the canonical .hasna/knowledge workspace.",
     ""
   ].join(`
-`));
-  writeFileSync5(join6(options.legacy.home, "migration.json"), `${JSON.stringify({
+`), { mode: 384 });
+  chmodSync4(tombstonePath, 384);
+  const migrationJsonPath = join7(options.legacy.home, "migration.json");
+  writeFileSync5(migrationJsonPath, `${JSON.stringify({
     migrated_at: now.toISOString(),
     approved_by: options.approvedBy,
     new_path: options.current.home,
@@ -32936,8 +33153,9 @@ function migrateLegacyKnowledgeWorkspace(options) {
     backup_after: backupAfter,
     current_after: currentAfter
   }, null, 2)}
-`);
-  checks3.tombstone_written = existsSync12(tombstonePath);
+`, { mode: 384 });
+  chmodSync4(migrationJsonPath, 384);
+  checks3.tombstone_written = existsSync13(tombstonePath);
   const ok = checks3.backup_matches_legacy && checks3.migrated_matches_backup && checks3.tombstone_written;
   return {
     ok,
@@ -32961,13 +33179,13 @@ function migrateLegacyKnowledgeWorkspace(options) {
 // src/service.ts
 function resolvePeerWorkspace(input) {
   const target = resolve5(input);
-  if (existsSync13(join7(target, "knowledge.db")) || existsSync13(join7(target, "config.json"))) {
+  if (existsSync14(join8(target, "knowledge.db")) || existsSync14(join8(target, "config.json"))) {
     return ensureKnowledgeWorkspace(target);
   }
   return ensureKnowledgeWorkspace(workspaceForHome(projectKnowledgeHome(target)).home);
 }
 function workspaceMachineId(workspace) {
-  return `${hostname5()}:${createHash17("sha256").update(workspace.home).digest("hex").slice(0, 12)}`;
+  return `${hostname5()}:${createHash18("sha256").update(workspace.home).digest("hex").slice(0, 12)}`;
 }
 function shellQuote2(value) {
   return `'${value.replace(/'/g, "'\\''")}'`;
@@ -33261,7 +33479,7 @@ function selectInventoryRows(db, sql, params = []) {
   return db.query(sql).all(...params);
 }
 function readLegacyInventoryStore(path) {
-  if (!existsSync13(path))
+  if (!existsSync14(path))
     return { exists: false, read_error: null, items: [] };
   try {
     const parsed = JSON.parse(readFileSync12(path, "utf8"));
@@ -33367,11 +33585,11 @@ function emptyContextPack(query, limit, semantic = false) {
 }
 function legacyStorePathForRead(scope, workspace, preferred) {
   const current = preferred ?? workspace.jsonStorePath;
-  if (existsSync13(current))
+  if (existsSync14(current))
     return current;
   if (scope === "global") {
     const legacy = legacyGlobalStorePath();
-    if (existsSync13(legacy))
+    if (existsSync14(legacy))
       return legacy;
   }
   return current;
@@ -33403,7 +33621,7 @@ function legacyAgentContextPack(options, context, policy) {
     redactions += quote.redactions;
     const ref = citation.source_ref ?? citation.source_uri ?? citation.artifact_path ?? citation.artifact_uri ?? citation.id;
     return {
-      id: `cite_${createHash17("sha256").update(`${citation.id}\x00${ref}`).digest("hex").slice(0, 12)}`,
+      id: `cite_${createHash18("sha256").update(`${citation.id}\x00${ref}`).digest("hex").slice(0, 12)}`,
       kind: citation.artifact_uri || citation.artifact_path ? "artifact" : "source",
       ref,
       source_ref: citation.source_ref,
@@ -33426,13 +33644,13 @@ function legacyAgentContextPack(options, context, policy) {
   const evidence = context.excerpts.slice(0, Math.max(maxItems * 2, maxItems)).map((excerpt2) => {
     const result = context.results.find((entry) => entry.id === excerpt2.result_id);
     const citation = excerpt2.citation_id ? citationByRetrievalId.get(excerpt2.citation_id) : undefined;
-    const preview = redactPreviewForPack(excerpt2.text, policy, 520);
-    redactions += preview.redactions;
+    const preview2 = redactPreviewForPack(excerpt2.text, policy, 520);
+    redactions += preview2.redactions;
     return {
-      id: `ev_${createHash17("sha256").update(`${excerpt2.kind}\x00${excerpt2.result_id}\x00${excerpt2.citation_id ?? ""}`).digest("hex").slice(0, 14)}`,
+      id: `ev_${createHash18("sha256").update(`${excerpt2.kind}\x00${excerpt2.result_id}\x00${excerpt2.citation_id ?? ""}`).digest("hex").slice(0, 14)}`,
       kind: excerpt2.kind,
       title: compactText(result?.title ?? citation?.ref ?? excerpt2.kind, 100),
-      text_preview: preview.text,
+      text_preview: preview2.text,
       score: Number(excerpt2.score.toFixed(6)),
       citation_ids: citation ? [citation.id] : [],
       provenance: {
@@ -33447,7 +33665,7 @@ function legacyAgentContextPack(options, context, policy) {
   const usedCitationIds = new Set(evidence.flatMap((entry) => entry.citation_ids));
   const usedCitations = citations.filter((citation) => usedCitationIds.has(citation.id));
   const warnings = Array.from(new Set(context.warnings));
-  const idempotencyKey = `ctx_${createHash17("sha256").update([source, purpose, query, warnings.join(","), evidence.map((entry) => entry.id).join(",")].join("\x00")).digest("hex").slice(0, 20)}`;
+  const idempotencyKey = `ctx_${createHash18("sha256").update([source, purpose, query, warnings.join(","), evidence.map((entry) => entry.id).join(",")].join("\x00")).digest("hex").slice(0, 20)}`;
   const pack = {
     ok: true,
     format: "knowledge-agent-context-pack",
@@ -33560,7 +33778,7 @@ function emptyAgentContextPack(options) {
   const query = (options.query ?? options.topic ?? "").normalize("NFKC").trim().replace(/\s+/g, " ");
   const maxItems = Math.max(1, Math.min(options.maxItems ?? options.limit ?? 8, 50));
   const maxTokens = Math.max(500, Math.min(options.maxTokens ?? 6000, 1e5));
-  const idempotencyKey = `ctx_${createHash17("sha256").update(["empty", source, purpose, query, options.topic ?? "", options.since ?? ""].join("\x00")).digest("hex").slice(0, 20)}`;
+  const idempotencyKey = `ctx_${createHash18("sha256").update(["empty", source, purpose, query, options.topic ?? "", options.since ?? ""].join("\x00")).digest("hex").slice(0, 20)}`;
   return {
     ok: true,
     format: "knowledge-agent-context-pack",
@@ -33881,8 +34099,8 @@ function parseRemoteJson(machine, action, raw) {
   try {
     return JSON.parse(raw);
   } catch (error51) {
-    const preview = raw.trim().slice(0, 240);
-    throw new Error(`Remote knowledge ${action} on ${machine} did not return JSON. Install a compatible @hasna/knowledge CLI on the remote machine. Output: ${preview || String(error51)}`);
+    const preview2 = raw.trim().slice(0, 240);
+    throw new Error(`Remote knowledge ${action} on ${machine} did not return JSON. Install a compatible @hasna/knowledge CLI on the remote machine. Output: ${preview2 || String(error51)}`);
   }
 }
 function assertRemoteSyncBundle(machine, value) {
@@ -33969,8 +34187,8 @@ class KnowledgeService {
   }
   config(options = {}) {
     const workspace = options.ensure ? this.ensureWorkspace() : this.workspace;
-    if (!this.cachedConfig || options.ensure || existsSync13(workspace.configPath)) {
-      this.cachedConfig = existsSync13(workspace.configPath) ? readKnowledgeConfig(workspace.configPath) : defaultKnowledgeConfig();
+    if (!this.cachedConfig || options.ensure || existsSync14(workspace.configPath)) {
+      this.cachedConfig = existsSync14(workspace.configPath) ? readKnowledgeConfig(workspace.configPath) : defaultKnowledgeConfig();
     }
     return this.cachedConfig;
   }
@@ -33985,6 +34203,12 @@ class KnowledgeService {
   }
   validateStorage() {
     return validateStorageConfig(this.config(), this.workspace);
+  }
+  assertStorageValid(action) {
+    const validation = this.validateStorage();
+    if (!validation.ok) {
+      throw new Error(`Storage contract invalid before ${action}: ${validation.errors.join("; ")}`);
+    }
   }
   migrateLegacyPath(options = {}) {
     const current = this.workspace;
@@ -34054,13 +34278,13 @@ class KnowledgeService {
       ok: true,
       scope: this.scope,
       home: workspace.home,
-      exists: existsSync13(workspace.home),
+      exists: existsSync14(workspace.home),
       config_path: workspace.configPath,
-      config_exists: existsSync13(workspace.configPath),
+      config_exists: existsSync14(workspace.configPath),
       json_store_path: workspace.jsonStorePath,
-      json_store_exists: existsSync13(workspace.jsonStorePath),
+      json_store_exists: existsSync14(workspace.jsonStorePath),
       knowledge_db_path: workspace.knowledgeDbPath,
-      knowledge_db_exists: existsSync13(workspace.knowledgeDbPath),
+      knowledge_db_exists: existsSync14(workspace.knowledgeDbPath),
       artifacts_dir: workspace.artifactsDir,
       indexes_dir: workspace.indexesDir,
       logs_dir: workspace.logsDir,
@@ -34077,7 +34301,7 @@ class KnowledgeService {
   dbStats() {
     assertLocalCatalogMode("reading knowledge.db stats");
     const workspace = this.workspace;
-    if (!existsSync13(workspace.knowledgeDbPath))
+    if (!existsSync14(workspace.knowledgeDbPath))
       return emptyKnowledgeDbStats();
     return getKnowledgeDbStats(workspace.knowledgeDbPath);
   }
@@ -34121,9 +34345,9 @@ class KnowledgeService {
       limit,
       paths: {
         json_store_path: workspace.jsonStorePath,
-        json_store_exists: existsSync13(workspace.jsonStorePath),
+        json_store_exists: existsSync14(workspace.jsonStorePath),
         knowledge_db_path: workspace.knowledgeDbPath,
-        knowledge_db_exists: existsSync13(workspace.knowledgeDbPath),
+        knowledge_db_exists: existsSync14(workspace.knowledgeDbPath),
         artifacts_dir: workspace.artifactsDir,
         indexes_dir: workspace.indexesDir,
         logs_dir: workspace.logsDir,
@@ -34176,7 +34400,7 @@ class KnowledgeService {
     const legacyStore = readLegacyInventoryStore(storePath);
     const activeItems = legacyStore.items.filter((item) => item.archived !== true);
     const visibleItems = options.includeArchived ? legacyStore.items : activeItems;
-    const dbExists = existsSync13(workspace.knowledgeDbPath);
+    const dbExists = existsSync14(workspace.knowledgeDbPath);
     if (!dbExists) {
       return this.itemOnlyInventory({
         items: legacyStore.items,
@@ -34453,7 +34677,7 @@ class KnowledgeService {
   }
   listAppWikiNotes(options = {}) {
     const workspace = this.workspace;
-    if (!existsSync13(workspace.knowledgeDbPath))
+    if (!existsSync14(workspace.knowledgeDbPath))
       return [];
     return listAppWikiNotes({
       dbPath: workspace.knowledgeDbPath,
@@ -34462,7 +34686,7 @@ class KnowledgeService {
   }
   async getAppWikiNote(id, options = {}) {
     const workspace = this.workspace;
-    if (!existsSync13(workspace.knowledgeDbPath))
+    if (!existsSync14(workspace.knowledgeDbPath))
       return null;
     return getAppWikiNote({
       dbPath: workspace.knowledgeDbPath,
@@ -34591,7 +34815,7 @@ class KnowledgeService {
   }
   reindexHealth(options = {}) {
     const workspace = this.workspace;
-    if (!existsSync13(workspace.knowledgeDbPath))
+    if (!existsSync14(workspace.knowledgeDbPath))
       return emptyReindexHealth();
     return reindexHealth({
       ...options,
@@ -34623,7 +34847,7 @@ class KnowledgeService {
   }
   embeddingStatus() {
     const workspace = this.workspace;
-    if (!existsSync13(workspace.knowledgeDbPath))
+    if (!existsSync14(workspace.knowledgeDbPath))
       return emptyEmbeddingStatus();
     return embeddingIndexStatus(workspace.knowledgeDbPath);
   }
@@ -34657,7 +34881,7 @@ class KnowledgeService {
         results: search.results
       };
     }
-    if (!existsSync13(workspace.knowledgeDbPath)) {
+    if (!existsSync14(workspace.knowledgeDbPath)) {
       return {
         provider: "openai",
         model: "text-embedding-3-small",
@@ -34679,8 +34903,8 @@ class KnowledgeService {
       return hybridSearchItems(items, options);
     }
     const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
-    if (!existsSync13(workspace.knowledgeDbPath)) {
-      if (existsSync13(legacyStorePath)) {
+    if (!existsSync14(workspace.knowledgeDbPath)) {
+      if (existsSync14(legacyStorePath)) {
         return hybridSearchLegacyStore({
           ...options,
           legacyStorePath,
@@ -34703,8 +34927,8 @@ class KnowledgeService {
       return retrieveKnowledgeContextFromItems(items, options);
     }
     const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
-    if (!existsSync13(workspace.knowledgeDbPath)) {
-      if (existsSync13(legacyStorePath)) {
+    if (!existsSync14(workspace.knowledgeDbPath)) {
+      if (existsSync14(legacyStorePath)) {
         const search = await hybridSearchLegacyStore({
           ...options,
           legacyStorePath,
@@ -34736,9 +34960,9 @@ class KnowledgeService {
       return emptyAgentContextPack(options);
     }
     const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
-    if (!existsSync13(workspace.knowledgeDbPath)) {
+    if (!existsSync14(workspace.knowledgeDbPath)) {
       const query = (options.query ?? options.topic ?? "").trim();
-      if (query && options.source !== "loops" && options.source !== "runs" && existsSync13(legacyStorePath)) {
+      if (query && options.source !== "loops" && options.source !== "runs" && existsSync14(legacyStorePath)) {
         const search = await hybridSearchLegacyStore({
           ...options,
           query,
@@ -34807,7 +35031,7 @@ class KnowledgeService {
   }
   syncStatus() {
     const workspace = this.workspace;
-    if (!existsSync13(workspace.knowledgeDbPath)) {
+    if (!existsSync14(workspace.knowledgeDbPath)) {
       return emptySyncStatus({
         scope: this.scope,
         workspaceHome: workspace.home
@@ -35028,7 +35252,7 @@ class KnowledgeService {
   }
   syncConflicts(options = {}) {
     const workspace = this.workspace;
-    if (!existsSync13(workspace.knowledgeDbPath))
+    if (!existsSync14(workspace.knowledgeDbPath))
       return [];
     return listKnowledgeSyncConflicts(workspace.knowledgeDbPath, options);
   }
@@ -35101,12 +35325,13 @@ class KnowledgeService {
   }
   syncMachines() {
     const workspace = this.workspace;
-    if (!existsSync13(workspace.knowledgeDbPath))
+    if (!existsSync14(workspace.knowledgeDbPath))
       return [];
     return listKnowledgeMachines(workspace.knowledgeDbPath);
   }
   exportSyncBundle(options = {}) {
     const workspace = this.ensureWorkspace();
+    this.assertStorageValid("sync export");
     migrateKnowledgeDb(workspace.knowledgeDbPath);
     return createKnowledgeSyncBundle({
       dbPath: workspace.knowledgeDbPath,
@@ -35121,6 +35346,7 @@ class KnowledgeService {
   }
   async importSyncBundle(options) {
     const workspace = this.ensureWorkspace();
+    this.assertStorageValid("sync import");
     migrateKnowledgeDb(workspace.knowledgeDbPath);
     return applyKnowledgeSyncBundle({
       targetDbPath: workspace.knowledgeDbPath,
@@ -36972,7 +37198,7 @@ function buildServer() {
     store_path: storePathField,
     scope: scopeField
   }, async ({ file: file2, store_path, scope }) => {
-    if (!existsSync14(file2))
+    if (!existsSync15(file2))
       return errorText(`File not found: ${file2}`);
     const imported = JSON.parse(readFileSync13(file2, "utf8"));
     if (!imported || !Array.isArray(imported.items))

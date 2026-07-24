@@ -929,6 +929,7 @@ async function run(argv: string[]): Promise<void> {
         validation,
         message: validation.ok ? 'Storage contract valid' : `Storage contract invalid: ${validation.errors.join('; ')}`,
       }, flags.json, flags);
+      if (!validation.ok) process.exitCode = 1;
       return;
     }
     if (action === 'repair-artifact-keys' || action === 'repair-keys') {

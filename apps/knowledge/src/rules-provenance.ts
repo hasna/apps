@@ -675,6 +675,7 @@ export async function importRulesProvenance(options: RulesProvenanceImportOption
         items: manifests,
         sourceLabel: 'knowledge://rules-provenance/global-agent-rules',
         readAction: 'rules_provenance_import',
+        allowFileSourceRefs: true,
         safetyPolicy: options.safetyPolicy,
         now: options.now,
         maxItems,

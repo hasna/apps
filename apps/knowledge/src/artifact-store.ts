@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { KnowledgeConfig, KnowledgeWorkspace } from './workspace';
@@ -64,15 +64,16 @@ export class LocalArtifactStore implements ArtifactStore {
   readonly canWrite = true;
 
   constructor(private readonly root: string) {
-    mkdirSync(root, { recursive: true });
+    mkdirSync(root, { recursive: true, mode: 0o700 });
   }
 
   async put(entry: ArtifactWrite): Promise<ArtifactWriteResult> {
     const key = normalizeArtifactKey(entry.key);
     const path = join(this.root, key);
     assertInside(this.root, path);
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, entry.body);
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    writeFileSync(path, entry.body, { mode: 0o600 });
+    chmodSync(path, 0o600);
     return { key, uri: pathToFileURL(path).href, modified_at: statSync(path).mtime.toISOString() };
   }
 

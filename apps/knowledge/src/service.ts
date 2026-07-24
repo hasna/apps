@@ -1668,6 +1668,13 @@ export class KnowledgeService {
     return validateStorageConfig(this.config(), this.workspace);
   }
 
+  assertStorageValid(action: string): void {
+    const validation = this.validateStorage();
+    if (!validation.ok) {
+      throw new Error(`Storage contract invalid before ${action}: ${validation.errors.join('; ')}`);
+    }
+  }
+
   migrateLegacyPath(options: { approveWrite?: boolean; approvedBy?: string } = {}): KnowledgeLegacyPathMigrationResult {
     const current = this.workspace;
     const legacy = resolveLegacyScopedWorkspace(this.options.scope, this.options.cwd);
@@ -2928,6 +2935,7 @@ export class KnowledgeService {
 
   exportSyncBundle(options: KnowledgeSyncBundleOptions = {}): KnowledgeSyncBundle {
     const workspace = this.ensureWorkspace();
+    this.assertStorageValid('sync export');
     migrateKnowledgeDb(workspace.knowledgeDbPath);
     return createKnowledgeSyncBundle({
       dbPath: workspace.knowledgeDbPath,
@@ -2943,6 +2951,7 @@ export class KnowledgeService {
 
   async importSyncBundle(options: KnowledgeSyncImportOptions): Promise<KnowledgeSyncApplyResult> {
     const workspace = this.ensureWorkspace();
+    this.assertStorageValid('sync import');
     migrateKnowledgeDb(workspace.knowledgeDbPath);
     return applyKnowledgeSyncBundle({
       targetDbPath: workspace.knowledgeDbPath,

@@ -56,6 +56,24 @@ export interface StorageContract {
         };
         evidence_doc: string;
     };
+    secret_handling: {
+        workspace_env_files_supported: false;
+        forbidden_workspace_files: string[];
+        forbidden_workspace_files_present: string[];
+        runtime_env_keys: string[];
+        secret_ref_authority: 'open-secrets';
+        approved_secret_refs: {
+            env: string;
+            aws: string;
+            s3: string;
+            rds: string | null;
+        };
+        db_url_rotation_decision: {
+            status: 'blocked_without_secret_authority';
+            reason: string;
+            authority_required: true;
+        };
+    };
     hosted: {
         enabled: boolean;
         api_url: string;

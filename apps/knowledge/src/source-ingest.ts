@@ -6,6 +6,7 @@ import { parseSourceRef, type SourceRef } from './source-ref';
 import { resolveOpenFilesSource } from './source-resolver';
 import type { KnowledgeConfig } from './workspace';
 import { assertS3ReadAllowed, assertWebSearchAllowed, type SafetyPolicy } from './safety';
+import { assertNoPrivateRefs, redactPrivateRefs } from './private-ref';
 
 export interface SourceIngestOptions {
   dbPath: string;
@@ -207,7 +208,7 @@ async function readOpenFilesSourceText(options: SourceIngestOptions): Promise<Re
 function manifestItemForSource(sourceRef: string, parsed: SourceRef, resolved: ResolvedText, purpose: string): ManifestObject {
   const hash = resolved.hash ?? sha256Text(resolved.text);
   const metadata = {
-    ...resolved.metadata,
+    ...redactPrivateRefs(resolved.metadata),
     source_ref: sourceRef,
     content_source: resolved.contentSource,
     read_only: true,
@@ -245,6 +246,9 @@ function manifestItemForSource(sourceRef: string, parsed: SourceRef, resolved: R
 
 export async function ingestSourceRef(options: SourceIngestOptions): Promise<SourceIngestResult> {
   const purpose = options.purpose ?? 'knowledge_index';
+  assertNoPrivateRefs(options.sourceRef, {
+    allowFileSourceRefs: options.config?.sources.allowed_schemes.includes('file') !== false,
+  });
   const parsed = parseSourceRef(options.sourceRef);
   const resolved = parsed.kind === 'open-files'
     ? await readOpenFilesSourceText(options)
@@ -255,6 +259,7 @@ export async function ingestSourceRef(options: SourceIngestOptions): Promise<Sou
     items: [item],
     sourceLabel: options.sourceRef,
     readAction: 'source_ref_ingest_read',
+    allowFileSourceRefs: options.config?.sources.allowed_schemes.includes('file') !== false,
     safetyPolicy: options.safetyPolicy,
     now: options.now,
   });

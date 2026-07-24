@@ -411,6 +411,15 @@ example/knowledge/prod/aws
 example/knowledge/prod/s3
 ```
 
+`knowledge` does not load `cloud.env` or any other env file from
+`.hasna/knowledge`. Cloud runtime secrets must be resolved by the approved
+secret authority or injected through runtime environment variables such as
+`HASNA_KNOWLEDGE_DATABASE_URL`; `storage validate` fails if `cloud.env`,
+pre-cloud DB/JSON backups, or `migration-exports/` are present in the Knowledge
+workspace. DB URL rotation is intentionally a blocker for the package unless a
+secret authority owner approves live mutation and separate evidence shows the
+URL propagated to backups, exports, sync bundles, reports, or copied artifacts.
+
 The future hosted database path, if provisioned, is
 `example/knowledge/prod/rds`.
 

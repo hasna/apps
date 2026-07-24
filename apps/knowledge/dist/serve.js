@@ -780,12 +780,12 @@ function knowledgeRegistryContract(input) {
 }
 
 // src/store.ts
-import { readFileSync as readFileSync3, writeFileSync as writeFileSync2, existsSync as existsSync2, renameSync, unlinkSync } from "fs";
+import { chmodSync as chmodSync2, readFileSync as readFileSync3, writeFileSync as writeFileSync2, existsSync as existsSync2, renameSync, unlinkSync } from "fs";
 import { randomUUID } from "crypto";
 import { join as join2 } from "path";
 
 // src/workspace.ts
-import { existsSync, mkdirSync, readFileSync as readFileSync2, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync as readFileSync2, writeFileSync } from "fs";
 import { homedir } from "os";
 import { dirname, join, resolve } from "path";
 var HASNA_KNOWLEDGE_APP_PATH = join(".hasna", "knowledge");
@@ -923,7 +923,7 @@ function defaultKnowledgeConfig() {
 }
 function ensureKnowledgeWorkspace(home) {
   const workspace = workspaceForHome(home);
-  mkdirSync(workspace.home, { recursive: true });
+  mkdirSync(workspace.home, { recursive: true, mode: 448 });
   for (const dir of [
     workspace.artifactsDir,
     workspace.cacheDir,
@@ -934,11 +934,12 @@ function ensureKnowledgeWorkspace(home) {
     workspace.schemasDir,
     workspace.wikiDir
   ]) {
-    mkdirSync(dir, { recursive: true });
+    mkdirSync(dir, { recursive: true, mode: 448 });
   }
   if (!existsSync(workspace.configPath)) {
     writeFileSync(workspace.configPath, `${JSON.stringify(defaultKnowledgeConfig(), null, 2)}
-`);
+`, { mode: 384 });
+    chmodSync(workspace.configPath, 384);
   }
   return workspace;
 }
@@ -958,7 +959,8 @@ function readKnowledgeConfig(path) {
 function writeKnowledgeConfig(path, config) {
   ensureParentDir(path);
   writeFileSync(path, `${JSON.stringify(config, null, 2)}
-`);
+`, { mode: 384 });
+  chmodSync(path, 384);
 }
 
 // src/store.ts
@@ -972,7 +974,8 @@ function ensureStore(path) {
   if (!existsSync2(path)) {
     ensureParentDir(path);
     writeFileSync2(path, `${JSON.stringify({ items: [] }, null, 2)}
-`);
+`, { mode: 384 });
+    chmodSync2(path, 384);
   }
 }
 function timestampForPath(now) {
@@ -999,7 +1002,8 @@ function storeContainsItem(index, item) {
 function writeJsonFile(path, value) {
   ensureParentDir(path);
   writeFileSync2(path, `${JSON.stringify(value, null, 2)}
-`);
+`, { mode: 384 });
+  chmodSync2(path, 384);
 }
 function readStoreFileForImport(path) {
   const value = JSON.parse(readFileSync3(path, "utf8"));
@@ -1123,7 +1127,7 @@ function acquireLock(lockPath2, ownerId) {
   while (Date.now() - start < maxWait) {
     try {
       if (!existsSync2(lockPath2)) {
-        writeFileSync2(lockPath2, JSON.stringify({ owner: ownerId, ts: Date.now() }));
+        writeFileSync2(lockPath2, JSON.stringify({ owner: ownerId, ts: Date.now() }), { mode: 384 });
         return;
       }
       const lock = JSON.parse(readFileSync3(lockPath2, "utf8"));
@@ -1157,8 +1161,9 @@ function loadStore(path) {
 }
 function saveStore(path, store) {
   const tmp = `${path}.tmp.${randomUUID()}`;
-  writeFileSync2(tmp, JSON.stringify(store, null, 2));
+  writeFileSync2(tmp, JSON.stringify(store, null, 2), { mode: 384 });
   renameSync(tmp, path);
+  chmodSync2(path, 384);
 }
 function withLock(path, fn, options = {}) {
   const owner = randomUUID();

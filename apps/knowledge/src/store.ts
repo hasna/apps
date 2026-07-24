@@ -3,7 +3,7 @@
  * Copyright 2026 Hasna Inc.
  * Licensed under the Apache License, Version 2.0
  */
-import { readFileSync, writeFileSync, existsSync, renameSync, unlinkSync } from 'node:fs';
+import { chmodSync, readFileSync, writeFileSync, existsSync, renameSync, unlinkSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { ensureParentDir, globalKnowledgeHome, legacyGlobalStorePath, workspaceForHome } from './workspace';
@@ -60,7 +60,8 @@ export function ensureStore(path: string): void {
   }
   if (!existsSync(path)) {
     ensureParentDir(path);
-    writeFileSync(path, `${JSON.stringify({ items: [] }, null, 2)}\n`);
+    writeFileSync(path, `${JSON.stringify({ items: [] }, null, 2)}\n`, { mode: 0o600 });
+    chmodSync(path, 0o600);
   }
 }
 
@@ -90,7 +91,8 @@ function storeContainsItem(index: Set<string>, item: KnowledgeItem): boolean {
 
 function writeJsonFile(path: string, value: unknown): void {
   ensureParentDir(path);
-  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  chmodSync(path, 0o600);
 }
 
 function readStoreFileForImport(path: string): { store: Store; skippedInvalid: number } {
@@ -232,7 +234,7 @@ function acquireLock(lockPath: string, ownerId: string): void {
   while (Date.now() - start < maxWait) {
     try {
       if (!existsSync(lockPath)) {
-        writeFileSync(lockPath, JSON.stringify({ owner: ownerId, ts: Date.now() }));
+        writeFileSync(lockPath, JSON.stringify({ owner: ownerId, ts: Date.now() }), { mode: 0o600 });
         return;
       }
       const lock = JSON.parse(readFileSync(lockPath, 'utf8')) as { owner: string; ts: number };
@@ -271,8 +273,9 @@ export function loadStore(path: string): Store {
 
 export function saveStore(path: string, store: Store): void {
   const tmp = `${path}.tmp.${randomUUID()}`;
-  writeFileSync(tmp, JSON.stringify(store, null, 2));
+  writeFileSync(tmp, JSON.stringify(store, null, 2), { mode: 0o600 });
   renameSync(tmp, path);
+  chmodSync(path, 0o600);
 }
 
 export function withLock<T>(path: string, fn: () => T, options: { createParent?: boolean } = {}): T {

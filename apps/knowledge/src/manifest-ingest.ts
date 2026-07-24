@@ -14,6 +14,7 @@ import {
   redactSecrets,
   type SafetyPolicy,
 } from './safety';
+import { assertNoPrivateRefs, redactPrivateRefs } from './private-ref';
 
 export interface ManifestIngestOptions {
   dbPath: string;
@@ -32,6 +33,7 @@ export interface ManifestItemsIngestOptions {
   items: ManifestObject[];
   sourceLabel: string;
   readAction?: string;
+  allowFileSourceRefs?: boolean;
   safetyPolicy?: SafetyPolicy;
   now?: Date;
   maxChunkChars?: number;
@@ -218,7 +220,7 @@ function metadataFromItem(item: ManifestObject, normalized: {
   const metadata: ManifestObject = {};
   for (const [key, value] of Object.entries(item)) {
     if (OMIT_MANIFEST_METADATA_KEYS.has(normalizeMetadataKey(key))) continue;
-    metadata[key] = sanitizeManifestMetadataValue(value);
+    metadata[key] = redactPrivateRefs(sanitizeManifestMetadataValue(value));
   }
   metadata.source_ref = normalized.sourceRef;
   metadata.source_uri = normalized.sourceUri;
@@ -226,8 +228,9 @@ function metadataFromItem(item: ManifestObject, normalized: {
   return metadata;
 }
 
-function normalizeManifestItem(item: ManifestObject, now: string): NormalizedManifestItem {
+function normalizeManifestItem(item: ManifestObject, now: string, options: { allowFileSourceRefs?: boolean } = {}): NormalizedManifestItem {
   const sourceRef = buildSourceRefFromItem(item);
+  assertNoPrivateRefs(sourceRef, { allowFileSourceRefs: options.allowFileSourceRefs === true });
   const parsed = parseSourceRef(sourceRef);
   const sourceUri = baseSourceUri(sourceRef, parsed);
   const hash = hashFromItem(item);
@@ -522,6 +525,7 @@ export async function ingestOpenFilesManifest(options: ManifestIngestOptions): P
     dbPath: options.dbPath,
     items,
     sourceLabel: options.input,
+    allowFileSourceRefs: options.config?.sources.allowed_schemes.includes('file') === true,
     safetyPolicy: options.safetyPolicy,
     now,
     maxChunkChars: options.maxChunkChars,
@@ -562,7 +566,7 @@ export async function ingestOpenFilesManifestItems(options: ManifestItemsIngestO
         created_at: now,
       });
       for (const raw of options.items) {
-        const item = normalizeManifestItem(raw, now);
+        const item = normalizeManifestItem(raw, now, { allowFileSourceRefs: options.allowFileSourceRefs });
         if (preview.length < DEFAULT_MANIFEST_PREVIEW_ITEMS) {
           preview.push({
             source_ref: item.sourceRef,

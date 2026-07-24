@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { Database } from 'bun:sqlite';
 import { DEFAULT_KNOWLEDGE_API_URL, normalizeKnowledgeApiOrigin } from './auth';
@@ -60,6 +62,24 @@ export interface StorageContract {
       future_rds: string;
     };
     evidence_doc: string;
+  };
+  secret_handling: {
+    workspace_env_files_supported: false;
+    forbidden_workspace_files: string[];
+    forbidden_workspace_files_present: string[];
+    runtime_env_keys: string[];
+    secret_ref_authority: 'open-secrets';
+    approved_secret_refs: {
+      env: string;
+      aws: string;
+      s3: string;
+      rds: string | null;
+    };
+    db_url_rotation_decision: {
+      status: 'blocked_without_secret_authority';
+      reason: string;
+      authority_required: true;
+    };
   };
   hosted: {
     enabled: boolean;
@@ -147,6 +167,25 @@ const GENERATED_ARTIFACTS: StorageArtifactClass[] = [
     description: 'Portable exports and snapshots of derived knowledge state.',
   },
 ];
+
+const FORBIDDEN_WORKSPACE_FILES = [
+  'cloud.env',
+  'knowledge.db.pre-cloud-*.bak',
+  'db.json.pre-cloud-*.bak',
+  'migration-exports',
+];
+
+function forbiddenWorkspaceFilesPresent(workspace: KnowledgeWorkspace): string[] {
+  const present: string[] = [];
+  if (existsSync(join(workspace.home, 'cloud.env'))) present.push('cloud.env');
+  if (existsSync(join(workspace.home, 'migration-exports'))) present.push('migration-exports');
+  if (existsSync(workspace.home)) {
+    for (const entry of readdirSync(workspace.home)) {
+      if (/^(?:knowledge\.db|db\.json)\.pre-cloud-.+\.bak$/i.test(entry)) present.push(entry);
+    }
+  }
+  return present;
+}
 
 export function hashArtifactBody(body: string | Uint8Array): { hash: string; size_bytes: number } {
   const bytes = typeof body === 'string' ? Buffer.from(body) : Buffer.from(body);
@@ -245,6 +284,29 @@ export function resolveStorageContract(
       registry_contract_version: KNOWLEDGE_REGISTRY_CONTRACT_VERSION,
       requires_hosted_account_for_local_use: false,
     },
+    secret_handling: {
+      workspace_env_files_supported: false,
+      forbidden_workspace_files: FORBIDDEN_WORKSPACE_FILES,
+      forbidden_workspace_files_present: forbiddenWorkspaceFilesPresent(workspace),
+      runtime_env_keys: [
+        'HASNA_KNOWLEDGE_STORAGE_MODE',
+        'KNOWLEDGE_STORAGE_MODE',
+        'HASNA_KNOWLEDGE_DATABASE_URL',
+        'KNOWLEDGE_DATABASE_URL',
+      ],
+      secret_ref_authority: 'open-secrets',
+      approved_secret_refs: {
+        env: EXAMPLE_KNOWLEDGE_CANONICAL.secrets.env,
+        aws: EXAMPLE_KNOWLEDGE_CANONICAL.secrets.aws,
+        s3: EXAMPLE_KNOWLEDGE_CANONICAL.secrets.s3,
+        rds: EXAMPLE_KNOWLEDGE_CANONICAL.secrets.rds,
+      },
+      db_url_rotation_decision: {
+        status: 'blocked_without_secret_authority',
+        reason: 'No live secret mutation authority is available in @hasna/knowledge. Rotate the DB URL only through the approved secret authority if separate evidence proves the URL propagated to backups, exports, sync bundles, reports, or copied artifacts.',
+        authority_required: true,
+      },
+    },
     source_ownership: {
       owner: 'open-files',
       preferred_ref: config.sources.preferred_ref,
@@ -306,6 +368,11 @@ export function resolveStorageContract(
 export function validateStorageConfig(config: KnowledgeConfig, workspace: KnowledgeWorkspace): StorageValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
+  const forbiddenFiles = forbiddenWorkspaceFilesPresent(workspace);
+
+  for (const file of forbiddenFiles) {
+    errors.push(`Forbidden Knowledge workspace file present: ${file}. Move secrets to open-secrets/runtime env and remove or replace legacy backups/exports with redacted owner-only artifacts.`);
+  }
 
   if (!workspace.home.endsWith(HASNA_KNOWLEDGE_APP_PATH)) {
     warnings.push(`Workspace home does not end with ${HASNA_KNOWLEDGE_APP_PATH}: ${workspace.home}`);

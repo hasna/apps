@@ -16,6 +16,7 @@ export interface ManifestItemsIngestOptions {
     items: ManifestObject[];
     sourceLabel: string;
     readAction?: string;
+    allowFileSourceRefs?: boolean;
     safetyPolicy?: SafetyPolicy;
     now?: Date;
     maxChunkChars?: number;

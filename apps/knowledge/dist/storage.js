@@ -20,7 +20,7 @@ var __require = import.meta.require;
 import { Database } from "bun:sqlite";
 
 // src/workspace.ts
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { dirname, join, resolve } from "path";
 var HASNA_KNOWLEDGE_APP_PATH = join(".hasna", "knowledge");
@@ -158,7 +158,7 @@ function defaultKnowledgeConfig() {
 }
 function ensureKnowledgeWorkspace(home) {
   const workspace = workspaceForHome(home);
-  mkdirSync(workspace.home, { recursive: true });
+  mkdirSync(workspace.home, { recursive: true, mode: 448 });
   for (const dir of [
     workspace.artifactsDir,
     workspace.cacheDir,
@@ -169,11 +169,12 @@ function ensureKnowledgeWorkspace(home) {
     workspace.schemasDir,
     workspace.wikiDir
   ]) {
-    mkdirSync(dir, { recursive: true });
+    mkdirSync(dir, { recursive: true, mode: 448 });
   }
   if (!existsSync(workspace.configPath)) {
     writeFileSync(workspace.configPath, `${JSON.stringify(defaultKnowledgeConfig(), null, 2)}
-`);
+`, { mode: 384 });
+    chmodSync(workspace.configPath, 384);
   }
   return workspace;
 }
@@ -193,7 +194,8 @@ function readKnowledgeConfig(path) {
 function writeKnowledgeConfig(path, config) {
   ensureParentDir(path);
   writeFileSync(path, `${JSON.stringify(config, null, 2)}
-`);
+`, { mode: 384 });
+  chmodSync(path, 384);
 }
 
 // node_modules/@hasna/contracts/dist/client/storage.js

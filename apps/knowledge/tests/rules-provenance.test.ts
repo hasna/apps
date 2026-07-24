@@ -196,10 +196,13 @@ describe('global rules provenance import', () => {
       for (const row of rows) {
         const metadata = JSON.parse(row.metadata_json);
         expect(typeof metadata.rule_provenance.owner).toBe('string');
-        expect(metadata.rule_provenance).toMatchObject({
-          source_ref: row.uri,
-          redaction_status: 'clean',
-        });
+        expect(metadata.rule_provenance.redaction_status).toBe('clean');
+        if (row.uri.startsWith('file://')) {
+          expect(metadata.rule_provenance.source_ref).toContain('[REDACTED:local-file-uri:');
+          expect(JSON.stringify(metadata.rule_provenance)).not.toContain('/tmp/');
+        } else {
+          expect(metadata.rule_provenance.source_ref).toBe(row.uri);
+        }
         expect(metadata.rule_provenance.citations[0].content_hash).toStartWith('sha256:');
       }
     } finally {

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
@@ -226,7 +226,7 @@ export function defaultKnowledgeConfig(): KnowledgeConfig {
 
 export function ensureKnowledgeWorkspace(home: string): KnowledgeWorkspace {
   const workspace = workspaceForHome(home);
-  mkdirSync(workspace.home, { recursive: true });
+  mkdirSync(workspace.home, { recursive: true, mode: 0o700 });
   for (const dir of [
     workspace.artifactsDir,
     workspace.cacheDir,
@@ -237,10 +237,11 @@ export function ensureKnowledgeWorkspace(home: string): KnowledgeWorkspace {
     workspace.schemasDir,
     workspace.wikiDir,
   ]) {
-    mkdirSync(dir, { recursive: true });
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
   if (!existsSync(workspace.configPath)) {
-    writeFileSync(workspace.configPath, `${JSON.stringify(defaultKnowledgeConfig(), null, 2)}\n`);
+    writeFileSync(workspace.configPath, `${JSON.stringify(defaultKnowledgeConfig(), null, 2)}\n`, { mode: 0o600 });
+    chmodSync(workspace.configPath, 0o600);
   }
   return workspace;
 }
@@ -263,5 +264,6 @@ export function readKnowledgeConfig(path: string): KnowledgeConfig {
 
 export function writeKnowledgeConfig(path: string, config: KnowledgeConfig): void {
   ensureParentDir(path);
-  writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+  writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  chmodSync(path, 0o600);
 }

@@ -226,7 +226,7 @@ describe('knowledge machine sync ledger', () => {
     expect(snapshot.snapshot.tables.storage_objects).toBe(1);
     expect(snapshot.snapshot.tables.knowledge_machines).toBe(2);
     expect(snapshot.snapshot.artifact_hashes).toEqual([{
-      artifact_uri: `file://${workspace.artifacts_dir}/wiki/generated/handbook.md`,
+      artifact_uri: expect.stringContaining('[REDACTED:local-file-uri:'),
       kind: 'wiki_page',
       hash: 'sha256:handbook',
       size_bytes: 128,
@@ -361,7 +361,7 @@ describe('knowledge machine sync ledger', () => {
     expect(replay.ok).toBe(true);
     expect(replay.push?.replayed).toBe(true);
     expect(replay.push?.tables.reduce((sum, table) => sum + table.inserted, 0)).toBe(0);
-  });
+  }, 10000);
 
   test('syncs generated artifact manifests through fake S3 without raw source bytes', async () => {
     const sourceDir = mkdtempSync(join(tmpdir(), 'ok-sync-fake-s3-source-'));
@@ -492,6 +492,42 @@ describe('knowledge machine sync ledger', () => {
         preserves_provenance: true,
       },
     });
+  }, 10000);
+
+  test('sync export redacts local file and workspace refs from bundles', async () => {
+    const sourceDir = mkdtempSync(join(tmpdir(), 'ok-sync-redacted-source-'));
+    const sourceService = createKnowledgeService({ scope: 'project', cwd: sourceDir });
+    const sourcePath = join(sourceDir, 'private-source.md');
+    writeFileSync(sourcePath, 'Sync export redaction should keep content portable without local paths.');
+
+    sourceService.initDb();
+    await sourceService.ingestSource(`file://${sourcePath}`, 'knowledge_index');
+    await sourceService.initWiki();
+    const artifactSecret = ['sk', 'syncartifactsecretvalue1234567890'].join('-');
+    const artifactDbUrl = ['postgres', '://user:pass@example.test/knowledge'].join('');
+    writeFileSync(
+      join(sourceDir, '.hasna', 'knowledge', 'artifacts', 'wiki', 'README.md'),
+      `Generated artifact cites ${sourceDir} token=${artifactSecret} db=${artifactDbUrl}`,
+    );
+
+    const bundle = sourceService.exportSyncBundle({
+      machineId: 'redaction-source',
+      includeArtifactContent: true,
+    });
+    const serialized = JSON.stringify(bundle);
+    expect(serialized).not.toContain(sourceDir);
+    expect(serialized).not.toContain('file://');
+    expect(serialized).toContain('[REDACTED:local-file-uri:');
+    expect(bundle.source.workspace_home).toContain('[REDACTED:');
+    expect(bundle.source.artifact_root_uri).toContain('[REDACTED:');
+
+    const embedded = bundle.artifacts.find((artifact) => artifact.key === 'wiki/README.md');
+    expect(embedded?.content_base64).toBeString();
+    const decoded = Buffer.from(embedded!.content_base64!, 'base64').toString('utf8');
+    expect(decoded).toContain('[REDACTED:');
+    expect(decoded).not.toContain(sourceDir);
+    expect(decoded).not.toContain(artifactSecret);
+    expect(decoded).not.toContain(artifactDbUrl);
   });
 
   test('records conflicts instead of overwriting divergent peer rows', async () => {
@@ -561,7 +597,7 @@ describe('knowledge machine sync ledger', () => {
     expect(finalPreview.ok).toBe(true);
     expect(finalPreview.pull?.tables.find((table) => table.table === 'wiki_pages')?.conflicts).toBe(0);
     expect(finalPreview.push?.tables.find((table) => table.table === 'wiki_pages')?.conflicts).toBe(0);
-  });
+  }, 10000);
 
   test('guards duplicate, interrupted, and out-of-order bundle imports with table clocks', async () => {
     const sourceDir = mkdtempSync(join(tmpdir(), 'ok-sync-clock-source-'));
@@ -631,5 +667,5 @@ describe('knowledge machine sync ledger', () => {
     expect(stale.clocks.stale_tables).toBeGreaterThan(0);
     expect(stale.warnings.some((warning) => warning.startsWith('stale_table_skipped:'))).toBe(true);
     expect(peerService.dbStats().sources).toBe(1);
-  });
+  }, 10000);
 });

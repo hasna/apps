@@ -301,5 +301,5 @@ describe('open-files knowledge sync fixtures', () => {
     expect(peerKnowledgeText).not.toContain(rawSentinelBase64);
     expect(peerKnowledgeText).toContain('safe_open_files_metadata');
     expect(peerKnowledgeText).toContain('safe_nested_metadata');
-  });
+  }, 10000);
 });

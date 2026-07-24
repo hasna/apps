@@ -7,6 +7,7 @@ import { generatedArtifactProvenance } from './provenance';
 import { ingestSourceRef, type SourceIngestResult } from './source-ingest';
 import { assertWriteAllowed, recordAuditEvent, type SafetyPolicy } from './safety';
 import type { KnowledgeConfig, KnowledgeWorkspace } from './workspace';
+import { assertNoPrivateRefs, redactPrivateRefs } from './private-ref';
 
 export interface AppWikiWriteGuardOptions {
   scope: string;
@@ -208,7 +209,7 @@ function noteMetadata(input: {
   metadata?: Record<string, unknown>;
 }): Record<string, unknown> {
   return {
-    ...(input.metadata ?? {}),
+    ...redactPrivateRefs(input.metadata ?? {}),
     app_wiki: true,
     note: true,
     artifact_key: input.path,
@@ -471,6 +472,9 @@ export async function writeAppWikiNote(options: AppWikiNoteInput): Promise<AppWi
   const now = nowDate.toISOString();
   const tags = uniqueStrings(options.tags);
   const sourceRefs = uniqueStrings(options.sourceRefs);
+  for (const sourceRef of sourceRefs) {
+    assertNoPrivateRefs(sourceRef, { allowFileSourceRefs: options.safetyPolicy?.readOnlySourceAccess === true });
+  }
   const path = normalizeNotePath(options);
   const body = noteBody({
     title: options.title,
@@ -667,6 +671,9 @@ export async function getAppWikiNote(options: AppWikiNoteGetOptions): Promise<Ap
 
 export async function ingestAppWikiSourceRef(options: AppWikiSourceRefInput): Promise<SourceIngestResult> {
   assertAppWikiWriteAllowed(options);
+  assertNoPrivateRefs(options.sourceRef, {
+    allowFileSourceRefs: options.config?.sources.allowed_schemes.includes('file') !== false,
+  });
   return ingestSourceRef({
     dbPath: options.workspace.knowledgeDbPath,
     sourceRef: options.sourceRef,

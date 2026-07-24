@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.2.90
+
+Knowledge private-ref lint/redaction hardening (rescoped from PR #18, originally
+authored against the pre-reconcile 0.2.78 line). The parts of the original change
+that re-introduced the client-side Postgres sync engine and legacy local-JSON
+item writes were dropped, since `main` already removed those forbidden
+DSN-on-client paths and unified item CRUD behind the Store abstraction. Kept only
+the additive, non-regressive security hardening:
+
+- Add `src/private-ref.ts`: lint (`assertNoPrivateRefs`) and redaction
+  (`redactPrivateRefs`) for private `.hasna` paths, `file://` URIs, raw
+  DB/export refs, `cloud.env`, and database URLs.
+- Apply private-ref lint on source/manifest/app-wiki ingestion and redaction on
+  sync-bundle export/import (including embedded artifact bytes).
+- Block forbidden Knowledge workspace artifacts (`cloud.env`, pre-cloud DB/JSON
+  backups, `migration-exports/`) in `storage validate`; make `storage validate`
+  exit non-zero on failure. Gate sync export/import on a valid storage contract.
+- Document runtime-env/secret-ref handling in the storage contract
+  (`secret_handling`) and record DB URL rotation as blocked without live secret
+  authority. No live secret mutation performed.
+- Make local stores, workspaces, artifacts, backups, and exports owner-only
+  (0700 dirs / 0600 files) where Knowledge writes them.
+- Bump the MCP stdio test timeout to 10s to reduce flakiness on slower hosts.
+
 ## Unreleased — inventory paths block fix
 
 Fix `knowledge inventory --json` reporting the wrong `paths` block in
