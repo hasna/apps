@@ -367,6 +367,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["email marketing", "newsletter", "automation", "campaigns"],
   },
   {
+    name: "snov-io",
+    displayName: "Snov.io",
+    description: "Email outreach, prospecting, and lead generation platform",
+    category: "Marketing & Sales",
+    tags: ["email", "outreach", "prospecting", "campaigns", "lead-generation"],
+  },
+  {
     name: "smartreach",
     displayName: "SmartReach",
     description: "Sales engagement and email outreach automation platform",
