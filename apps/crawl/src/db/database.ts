@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { SqliteAdapter, ensureFeedbackTable } from "@hasna/cloud";
-import { cpSync, existsSync, mkdirSync, statSync } from "fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
 import { dirname, join } from "path";
 import { runMigrations } from "./migrations";
 
@@ -16,15 +16,34 @@ export function getDataDir(): string {
   return newDir;
 }
 
-function migrateLegacyDataDir(home: string, newDir: string): void {
-  if (existsSync(newDir)) return;
+function copyMissingRecursive(src: string, dest: string): void {
+  mkdirSync(dest, { recursive: true });
+  for (const entry of readdirSync(src, { withFileTypes: true })) {
+    const srcPath = join(src, entry.name);
+    const destPath = join(dest, entry.name);
 
+    if (entry.isDirectory()) {
+      copyMissingRecursive(srcPath, destPath);
+      continue;
+    }
+
+    // Never overwrite a file that already exists in the canonical root.
+    if (!existsSync(destPath)) {
+      copyFileSync(srcPath, destPath);
+    }
+  }
+}
+
+function migrateLegacyDataDir(home: string, newDir: string): void {
+  // Copy forward any legacy files that are missing from the canonical root —
+  // even when the canonical root already exists — without deleting the legacy
+  // source or overwriting existing canonical files. `.open-crawl` takes
+  // precedence over `.crawl` on name collisions.
   for (const legacyName of [".open-crawl", ".crawl"]) {
     const legacyDir = join(home, legacyName);
     if (!existsSync(legacyDir)) continue;
     if (!statSync(legacyDir).isDirectory()) continue;
-    cpSync(legacyDir, newDir, { recursive: true });
-    return;
+    copyMissingRecursive(legacyDir, newDir);
   }
 }
 

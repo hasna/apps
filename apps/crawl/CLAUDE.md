@@ -43,7 +43,7 @@ src/
 - DB: `~/.hasna/crawl/data.db` (override: `HASNA_CRAWL_DB_PATH` or `CRAWL_DB_PATH`)
 - Config: `~/.hasna/crawl/config.json`
 - Screenshots: `~/.hasna/crawl/screenshots/`
-- Legacy `~/.open-crawl` and `~/.crawl` directories are copied forward on first use when the canonical directory does not exist.
+- Legacy `~/.open-crawl` and `~/.crawl` directories are copied forward on startup — missing files are copied into the canonical root even when it already exists, without deleting the legacy source or overwriting existing canonical files.
 
 ## Key Patterns
 - All three entry points (CLI, MCP, server) share the same db/ and lib/ layer

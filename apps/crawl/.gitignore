@@ -5,5 +5,4 @@ dist/
 *.db
 *.db-shm
 *.db-wal
-~/.open-crawl/
 bun.lockb

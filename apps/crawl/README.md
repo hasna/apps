@@ -122,6 +122,8 @@ MCP exposes the same flow through `storage_status`, `storage_push`,
 ## Data Directory
 
 Data is stored in `~/.hasna/crawl/`.
+Legacy `~/.open-crawl` and `~/.crawl` data is copied forward on startup without
+deleting the legacy source or overwriting existing canonical files.
 
 ## License
 

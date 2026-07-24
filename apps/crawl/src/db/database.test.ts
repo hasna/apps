@@ -45,17 +45,51 @@ describe("getDataDir", () => {
     });
   }
 
-  it("does not copy legacy data over an existing canonical directory", () => {
+  it("copies missing legacy files without overwriting an existing canonical directory", () => {
     const home = tempHome();
     const canonicalDir = join(home, ".hasna", "crawl");
-    const legacyDir = join(home, ".open-crawl");
+    const legacyDir = join(home, ".crawl");
     mkdirSync(canonicalDir, { recursive: true });
-    mkdirSync(legacyDir, { recursive: true });
+    mkdirSync(join(legacyDir, "screenshots"), { recursive: true });
     writeFileSync(join(canonicalDir, "data.db"), "canonical");
     writeFileSync(join(legacyDir, "data.db"), "legacy");
+    writeFileSync(join(legacyDir, "config.json"), "legacy-config");
+    writeFileSync(join(legacyDir, "screenshots", "page.txt"), "legacy-screenshot");
 
     expect(getDataDir()).toBe(canonicalDir);
+    // Existing canonical file is never overwritten.
     expect(readFileSync(join(canonicalDir, "data.db"), "utf8")).toBe("canonical");
+    // Missing legacy files are copied forward even though the canonical dir existed.
+    expect(readFileSync(join(canonicalDir, "config.json"), "utf8")).toBe("legacy-config");
+    expect(readFileSync(join(canonicalDir, "screenshots", "page.txt"), "utf8")).toBe("legacy-screenshot");
+    // Legacy source is preserved, not deleted.
+    expect(existsSync(join(legacyDir, "config.json"))).toBe(true);
+  });
+
+  it("prefers ~/.open-crawl over ~/.crawl on name collisions", () => {
+    const home = tempHome();
+    const openCrawl = join(home, ".open-crawl");
+    const crawl = join(home, ".crawl");
+    mkdirSync(openCrawl, { recursive: true });
+    mkdirSync(crawl, { recursive: true });
+    writeFileSync(join(openCrawl, "config.json"), "open-crawl-config");
+    writeFileSync(join(crawl, "config.json"), "crawl-config");
+    writeFileSync(join(crawl, "crawl-only.txt"), "crawl-only");
+
+    const dataDir = getDataDir();
+
+    expect(readFileSync(join(dataDir, "config.json"), "utf8")).toBe("open-crawl-config");
+    expect(readFileSync(join(dataDir, "crawl-only.txt"), "utf8")).toBe("crawl-only");
+  });
+
+  it("ignores a non-directory legacy path", () => {
+    const home = tempHome();
+    writeFileSync(join(home, ".crawl"), "not-a-directory");
+
+    const dataDir = getDataDir();
+
+    expect(dataDir).toBe(join(home, ".hasna", "crawl"));
+    expect(existsSync(dataDir)).toBe(true);
   });
 
   it("creates the canonical directory when no legacy directory exists", () => {
@@ -64,5 +98,16 @@ describe("getDataDir", () => {
 
     expect(dataDir).toBe(join(home, ".hasna", "crawl"));
     expect(existsSync(dataDir)).toBe(true);
+  });
+});
+
+describe("package install", () => {
+  it("does not pre-create the runtime data directory during postinstall", async () => {
+    const pkg = (await Bun.file(join(import.meta.dir, "../..", "package.json")).json()) as {
+      scripts?: Record<string, string>;
+    };
+
+    expect(pkg.scripts?.postinstall ?? "").not.toContain(".hasna/crawl");
+    expect(pkg.scripts?.postinstall ?? "").not.toContain(".crawl");
   });
 });
