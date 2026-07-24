@@ -1174,6 +1174,157 @@ export function queryCostCenterBreakdown(
   return filtered
 }
 
+// ── since-scoped breakdown helpers ──────────────────────────────────────────
+// These back the CLI `breakdown --since <date>` path. They mirror the period
+// breakdowns above but filter by an ISO date lower bound so a single LocalStore
+// code path can serve both period and since queries (no inline SQL in the CLI).
+
+export function queryProjectBreakdownSince(db: Database, since: string): ProjectBreakdown[] {
+  return db.prepare(`
+    SELECT project_path, project_name,
+           COUNT(*) as sessions,
+           COALESCE(SUM(total_tokens), 0) as total_tokens,
+           COALESCE(SUM(request_count), 0) as requests,
+           COALESCE(SUM(total_cost_usd), 0) as cost_usd,
+           MAX(started_at) as last_active
+    FROM sessions WHERE started_at >= ?
+    GROUP BY project_path ORDER BY cost_usd DESC
+  `).all(since) as ProjectBreakdown[]
+}
+
+export function queryAgentBreakdownSince(db: Database, since: string): AgentBreakdown[] {
+  return db.prepare(`
+    SELECT agent,
+           COUNT(DISTINCT session_id) as sessions,
+           COUNT(*) as requests,
+           COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_create_tokens), 0) as total_tokens,
+           COALESCE(SUM(cost_usd), 0) as api_equivalent_usd,
+           COALESCE(SUM(CASE WHEN cost_basis = 'metered_api' THEN cost_usd ELSE 0 END), 0) as billable_usd,
+           COALESCE(SUM(CASE WHEN cost_basis = 'subscription_included' THEN cost_usd ELSE 0 END), 0) as subscription_included_usd,
+           MAX(timestamp) as last_active
+    FROM requests
+    WHERE timestamp >= ?
+    GROUP BY agent
+    ORDER BY api_equivalent_usd DESC
+  `).all(since) as AgentBreakdown[]
+}
+
+export function queryModelBreakdownSince(db: Database, since: string): ModelBreakdown[] {
+  return db.prepare(`
+    SELECT model, agent,
+           COUNT(*) as requests,
+           COALESCE(SUM(input_tokens), 0) as input_tokens,
+           COALESCE(SUM(output_tokens), 0) as output_tokens,
+           COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_create_tokens), 0) as total_tokens,
+           COALESCE(SUM(cost_usd), 0) as cost_usd
+    FROM requests WHERE timestamp >= ?
+    GROUP BY model, agent ORDER BY cost_usd DESC
+  `).all(since) as ModelBreakdown[]
+}
+
+export function queryAccountBreakdownSince(db: Database, since: string): AccountBreakdown[] {
+  return db.prepare(`
+    WITH request_rows AS (
+      SELECT
+        r.session_id as session_id,
+        COALESCE(NULLIF(r.agent, ''), NULLIF(s.agent, ''), NULLIF(r.account_tool, ''), NULLIF(s.account_tool, ''), 'unknown') as account_agent,
+        COALESCE(NULLIF(r.account_key, ''), NULLIF(s.account_key, ''), '') as raw_account_key,
+        COALESCE(NULLIF(r.account_name, ''), NULLIF(s.account_name, ''), '') as raw_account_name,
+        LOWER(TRIM(COALESCE(NULLIF(r.account_email, ''), NULLIF(s.account_email, ''), ''))) as raw_account_email,
+        COALESCE(NULLIF(r.account_source, ''), NULLIF(s.account_source, ''), 'unknown') as account_source,
+        1 as requests,
+        COALESCE(r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_create_tokens, 0) as total_tokens,
+        COALESCE(r.cost_usd, 0) as cost_usd,
+        COALESCE(NULLIF(r.cost_basis, ''), 'estimated') as cost_basis,
+        r.timestamp as last_active
+      FROM requests r
+      LEFT JOIN sessions s ON s.id = r.session_id
+      WHERE r.timestamp >= ?
+        AND (
+          COALESCE(NULLIF(r.account_key, ''), NULLIF(s.account_key, ''), '') != ''
+          OR COALESCE(NULLIF(r.account_tool, ''), NULLIF(s.account_tool, ''), '') != ''
+          OR COALESCE(NULLIF(r.account_name, ''), NULLIF(s.account_name, ''), '') != ''
+          OR COALESCE(NULLIF(r.account_email, ''), NULLIF(s.account_email, ''), '') != ''
+        )
+    ),
+    session_only_rows AS (
+      SELECT
+        s.id as session_id,
+        COALESCE(NULLIF(s.agent, ''), NULLIF(s.account_tool, ''), 'unknown') as account_agent,
+        s.account_key as raw_account_key,
+        s.account_name as raw_account_name,
+        LOWER(TRIM(COALESCE(s.account_email, ''))) as raw_account_email,
+        COALESCE(NULLIF(s.account_source, ''), 'unknown') as account_source,
+        COALESCE(s.request_count, 0) as requests,
+        COALESCE(s.total_tokens, 0) as total_tokens,
+        COALESCE(s.total_cost_usd, 0) as cost_usd,
+        'estimated' as cost_basis,
+        s.started_at as last_active
+      FROM sessions s
+      WHERE s.started_at >= ?
+        AND s.id NOT IN (SELECT DISTINCT session_id FROM requests)
+        AND (s.account_key != '' OR s.account_tool != '' OR s.account_name != '' OR s.account_email != '')
+    ),
+    normalized AS (
+      SELECT
+        CASE
+          WHEN raw_account_email != '' THEN account_agent || ':' || raw_account_email
+          WHEN raw_account_name != '' THEN account_agent || ':' || raw_account_name
+          ELSE raw_account_key
+        END as account_key,
+        account_agent as account_tool,
+        raw_account_name as account_name,
+        raw_account_email as account_email,
+        account_source,
+        session_id,
+        requests,
+        total_tokens,
+        cost_usd,
+        cost_basis,
+        last_active
+      FROM request_rows
+      UNION ALL
+      SELECT
+        CASE
+          WHEN raw_account_email != '' THEN account_agent || ':' || raw_account_email
+          WHEN raw_account_name != '' THEN account_agent || ':' || raw_account_name
+          ELSE raw_account_key
+        END as account_key,
+        account_agent as account_tool,
+        raw_account_name as account_name,
+        raw_account_email as account_email,
+        account_source,
+        session_id,
+        requests,
+        total_tokens,
+        cost_usd,
+        cost_basis,
+        last_active
+      FROM session_only_rows
+    )
+    SELECT account_key,
+           account_tool,
+           COALESCE(MAX(NULLIF(account_name, '')), MAX(NULLIF(account_email, '')), account_key) as account_name,
+           NULLIF(account_email, '') as account_email,
+           COALESCE(MAX(NULLIF(account_source, 'unknown')), 'unknown') as account_source,
+           COUNT(DISTINCT session_id) as sessions,
+           COALESCE(SUM(requests), 0) as requests,
+           COALESCE(SUM(total_tokens), 0) as total_tokens,
+           COALESCE(SUM(cost_usd), 0) as api_equivalent_usd,
+           COALESCE(SUM(CASE WHEN cost_basis = 'metered_api' THEN cost_usd ELSE 0 END), 0) as billable_usd,
+           COALESCE(SUM(CASE WHEN cost_basis = 'metered_api' THEN cost_usd ELSE 0 END), 0) as metered_api_usd,
+           COALESCE(SUM(CASE WHEN cost_basis = 'subscription_included' THEN cost_usd ELSE 0 END), 0) as subscription_included_usd,
+           COALESCE(SUM(CASE WHEN cost_basis NOT IN ('metered_api', 'subscription_included', 'unknown') THEN cost_usd ELSE 0 END), 0) as estimated_usd,
+           COALESCE(SUM(CASE WHEN cost_basis = 'unknown' THEN cost_usd ELSE 0 END), 0) as unknown_usd,
+           COALESCE(SUM(cost_usd), 0) as cost_usd,
+           MAX(last_active) as last_active
+    FROM normalized
+    WHERE account_key != ''
+    GROUP BY account_key, account_tool, account_email
+    ORDER BY api_equivalent_usd DESC
+  `).all(since, since) as AccountBreakdown[]
+}
+
 export function queryDailyBreakdown(db: Database, days = 30, machine?: string): Array<{ date: string; cost_usd: number; agent: string }> {
   const machineClause = machine ? ' AND machine_id = ?' : ''
   const params = machine ? [`-${days}`, machine] : [`-${days}`]
@@ -1372,6 +1523,29 @@ export function queryRequestsSince(db: Database, since: string): EconomyRequest[
   return db.prepare(`SELECT * FROM requests WHERE timestamp > ? ORDER BY timestamp ASC`).all(since) as EconomyRequest[]
 }
 
+// ── Feedback ──────────────────────────────────────────────────────────────────
+
+export interface FeedbackRecord {
+  message: string
+  email?: string | null
+  category?: string | null
+  version?: string | null
+  machine_id?: string | null
+}
+
+/** Persist a feedback row. Used by both the LocalStore and the serve endpoint. */
+export function insertFeedback(db: Database, record: FeedbackRecord): void {
+  db.prepare(
+    `INSERT INTO feedback (message, email, category, version, machine_id) VALUES (?, ?, ?, ?, ?)`,
+  ).run(
+    record.message,
+    record.email ?? null,
+    record.category ?? 'general',
+    record.version ?? null,
+    record.machine_id ?? null,
+  )
+}
+
 // ── Billing (actual from provider admin APIs) ─────────────────────────────────
 
 export interface BillingDaily {
@@ -1405,6 +1579,25 @@ export function queryBillingSummary(db: Database, period: Period): { total_usd: 
   let total = 0
   for (const r of rows) { by_provider[r.provider] = r.cost; total += r.cost }
   return { total_usd: total, by_provider }
+}
+
+// ── Session detail ─────────────────────────────────────────────────────────
+
+export interface SessionDetail {
+  session: Record<string, unknown>
+  requests: Array<Record<string, unknown>>
+}
+
+/**
+ * Fetch a single session (by exact id or id-prefix) plus its per-request rows,
+ * ordered oldest-first. Returns null when no session matches. Backs the CLI
+ * `session <id>` command and the MCP `get_session_detail` tool via the Store.
+ */
+export function getSessionDetail(db: Database, id: string): SessionDetail | null {
+  const session = db.prepare(`SELECT * FROM sessions WHERE id = ? OR id LIKE ?`).get(id, `${id}%`) as Record<string, unknown> | null
+  if (!session) return null
+  const requests = db.prepare(`SELECT * FROM requests WHERE session_id = ? ORDER BY timestamp ASC`).all(session['id'] as string) as Array<Record<string, unknown>>
+  return { session, requests }
 }
 
 // ── Machines ─────────────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import type { SqliteAdapter as Database } from '@hasna/cloud'
 import type { ModelPricing } from '../types/index.js'
-import { deleteModelPricing, getModelPricing, seedModelPricing, upsertModelPricing } from '../db/database.js'
+import { deleteModelPricing, getModelPricing, seedModelPricing, upsertModelPricing, type DbModelPricing } from '../db/database.js'
 
 // Default pricing seed data (USD per 1M tokens).
 // These are written to SQLite and can be edited via `economy pricing set`.
@@ -561,6 +561,42 @@ export function computeCostFromDb(
   cacheStorageTokenHours = 0,
 ): number {
   const pricing = getPricingFromDb(db, model) ?? getPricing(model)
+  if (!pricing) return 0
+  return computeCostWithPricing(model, pricing, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, cacheWrite1hTokens, cacheStorageTokenHours)
+}
+
+// Resolve pricing from an in-memory list of pricing rows (as returned by the
+// Store's `listPricing()`), applying the same exact + prefix matching used by
+// `getPricingFromDb`. This lets the ApiStore estimate costs against the SHARED
+// cloud pricing table instead of the local one — no split-brain.
+export function getPricingFromRows(rows: DbModelPricing[], model: string): ModelPricing | null {
+  if (isFreeModel(model)) return FREE_PRICING
+
+  for (const key of modelLookupKeys(model)) {
+    const row = rows.find(r => r.model === key)
+    if (row) return modelPricingFromDbRow(row)
+  }
+
+  const match = bestModelMatch(model, rows.map(r => [r.model, r] as [string, DbModelPricing]))
+  if (!match) return null
+  return modelPricingFromDbRow(match)
+}
+
+// Cost estimate over a list of pricing rows (the transport-agnostic path shared
+// by the Store's `estimate`). Mirrors `computeCostFromDb` but sources pricing
+// from `rows` — the LocalStore passes its DB rows, the ApiStore passes the cloud
+// rows from `listPricing()`, so both compute identically over their own dataset.
+export function estimateCostFromRows(
+  rows: DbModelPricing[],
+  model: string,
+  inputTokens: number,
+  outputTokens: number,
+  cacheReadTokens = 0,
+  cacheWriteTokens = 0,
+  cacheWrite1hTokens = 0,
+  cacheStorageTokenHours = 0,
+): number {
+  const pricing = getPricingFromRows(rows, model) ?? getPricing(model)
   if (!pricing) return 0
   return computeCostWithPricing(model, pricing, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, cacheWrite1hTokens, cacheStorageTokenHours)
 }

@@ -57,7 +57,7 @@ economy todos show 9.7
 
 `--json` remains the machine-readable path for commands that support it. Human output may truncate rows or long text; use `--json`, `--verbose`, `--limit`, or a `show`/detail command for complete data.
 
-Status subcommands follow the same rule. For example, `economy cloud schedule status` prints a compact human summary by default and `economy cloud schedule status --json` prints the structured schedule status.
+Status subcommands follow the same rule. For example, `economy goal status` prints a compact human summary by default and `economy goal status --limit 5` or `--verbose` controls how many goals are listed.
 
 ## Agent Integrations
 

@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
 import { openDatabase } from '../db/database.js'
 import { ingestOtelRows, parseOtlpMetrics, parseSimpleIngest } from '../ingest/otel.js'
-import { maybePushAfterIngest } from '../lib/cloud-sync.js'
 import { packageMetadata } from '../lib/package-metadata.js'
 
 function resolvePort(argv: string[]): number {
@@ -58,7 +57,6 @@ const server = Bun.serve({
     }
 
     const result = await ingestOtelRows(db, rows)
-    await maybePushAfterIngest()
     return Response.json({ ingested: result.requests, sessions: result.sessions })
   },
 })

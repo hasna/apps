@@ -1,5 +1,31 @@
 import { describe, it, expect } from 'bun:test'
-import { translateSqliteDates } from './sync-pg.js'
+import { translateSqliteDates, isTransientConnError } from './sync-pg.js'
+
+describe('isTransientConnError', () => {
+  it('matches dead-connection blips that are safe to retry (case-insensitive)', () => {
+    for (const m of [
+      'Connection terminated unexpectedly',
+      'timeout exceeded when trying to connect',
+      'read ECONNRESET',
+      'connect ECONNREFUSED 10.0.0.1:5432',
+      'terminating connection due to administrator command',
+      'server closed the connection unexpectedly',
+    ]) {
+      expect(isTransientConnError(m)).toBe(true)
+    }
+  })
+
+  it('does NOT retry genuine query errors', () => {
+    for (const m of [
+      'syntax error at or near "SELCT"',
+      'relation "requests" does not exist',
+      'duplicate key value violates unique constraint',
+      'null value in column "id" violates not-null constraint',
+    ]) {
+      expect(isTransientConnError(m)).toBe(false)
+    }
+  })
+})
 
 describe('translateSqliteDates', () => {
   it("maps DATE('now') variants to ISO-text boundaries (text-comparable)", () => {

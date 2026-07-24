@@ -1,114 +1,127 @@
 import chalk from 'chalk'
-import type { SqliteAdapter as Database } from '@hasna/cloud'
-import {
-  openDatabase, querySummary, queryUsageSnapshots, listMachines,
-} from '../../db/database.js'
-import { querySavingsSummary } from '../../lib/savings.js'
-import { getCloudDatabaseUrl, getLastCloudPull } from '../../lib/cloud-sync.js'
+import { getStore, type EconomyStore } from '../../lib/store/index.js'
 import { getServeApiToken } from '../../lib/serve-auth.js'
+import type { SavingsSummary } from '../../lib/savings.js'
+import type { AgentBreakdown, CostSummary, UsageSnapshot } from '../../types/index.js'
 
 function fmt(usd: number): string {
   return '$' + usd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
-function topAgent(db: Database): string {
-  const row = db.prepare(`
-    SELECT agent, COALESCE(SUM(cost_usd), 0) as total
-    FROM requests
-    WHERE timestamp >= DATE('now', 'start of month')
-    GROUP BY agent
-    ORDER BY total DESC
-    LIMIT 1
-  `).get() as { agent: string; total: number } | null
-  return row?.agent ?? '—'
+/** Everything the status surfaces need, gathered through the Store (never sqlite
+ * directly) so local and self_hosted/cloud render the same numbers. */
+export interface StatusData {
+  today: CostSummary
+  week: CostSummary
+  month: CostSummary
+  savings: SavingsSummary
+  machineCount: number
+  topAgent: string
+  quota: string | null
+  transport: EconomyStore['transport']
 }
 
-function quotaHint(db: Database): string | null {
-  const snaps = queryUsageSnapshots(db, { since: new Date().toISOString().substring(0, 10) })
-  const claude = snaps.find((s) => s.agent === 'claude' && s.metric === 'five_hour_utilization')
-  const codex = snaps.find((s) => s.agent === 'codex' && s.metric === 'five_hour_utilization')
+function topAgentFrom(rows: AgentBreakdown[]): string {
+  let top: AgentBreakdown | undefined
+  for (const row of rows) {
+    if (!top || row.cost_usd > top.cost_usd) top = row
+  }
+  return top?.agent ?? '—'
+}
+
+function quotaFrom(snapshots: UsageSnapshot[]): string | null {
+  const claude = snapshots.find((s) => s.agent === 'claude' && s.metric === 'five_hour_utilization')
+  const codex = snapshots.find((s) => s.agent === 'codex' && s.metric === 'five_hour_utilization')
   const parts: string[] = []
   if (claude) parts.push(`claude ${claude.value.toFixed(0)}%`)
   if (codex) parts.push(`codex ${codex.value.toFixed(0)}%`)
   return parts.length ? parts.join(' · ') : null
 }
 
-export function buildStatusLine(db: Database): string {
-  const today = querySummary(db, 'today', undefined, true)
-  const week = querySummary(db, 'week', undefined, true)
-  const agent = topAgent(db)
-  const quota = quotaHint(db)
-  const cloud = getCloudDatabaseUrl() ? 'cloud' : 'local'
-  const lastPull = getLastCloudPull()
-  const pullAge = lastPull
-    ? `${Math.round((Date.now() - new Date(lastPull).getTime()) / 60000)}m`
-    : 'never'
-  const machines = listMachines(db).length
-  const parts = [
-    `today ${fmt(today.total_usd)}`,
-    `week ${fmt(week.total_usd)}`,
-    `top ${agent}`,
-    `${machines} machines`,
-    `${cloud} pull ${pullAge}`,
-  ]
-  if (quota) parts.push(quota)
-  return parts.join(' · ')
-}
-
-export function buildWaybarJson(db: Database): Record<string, unknown> {
-  const today = querySummary(db, 'today', undefined, true)
-  const savings = querySavingsSummary(db, 'month')
-  const quota = quotaHint(db)
+/** Collect the status snapshot from the active Store transport. */
+export async function gatherStatusData(store: EconomyStore = getStore()): Promise<StatusData> {
+  const [today, week, month, savings, machines, agents, usage] = await Promise.all([
+    store.summary('today'),
+    store.summary('week'),
+    store.summary('month'),
+    store.savings('month') as Promise<SavingsSummary>,
+    store.machines(),
+    store.agentBreakdown({ period: 'month' }),
+    store.usage('today') as Promise<{ snapshots: UsageSnapshot[] }>,
+  ])
   return {
-    text: fmt(today.total_usd),
-    tooltip: buildStatusLine(db),
-    class: quota?.includes('%') && Number(quota.match(/(\d+)%/)?.[1] ?? 0) >= 80 ? 'warning' : 'default',
-    percentage: null,
-    savings_usd: savings.saved_usd,
+    today,
+    week,
+    month,
+    savings,
+    machineCount: machines.length,
+    topAgent: topAgentFrom(agents),
+    quota: quotaFrom(usage?.snapshots ?? []),
+    transport: store.transport,
   }
 }
 
-export function printStatusLine(): void {
-  const db = openDatabase()
-  console.log(buildStatusLine(db))
+/** Deployment label for the status line, derived purely from the active Store
+ * transport: the cloud HTTP transport is self_hosted/cloud, else local. */
+function modeLabel(transport: EconomyStore['transport']): string {
+  return transport === 'cloud-http' ? 'self_hosted' : 'local'
 }
 
-export function printWaybarJson(): void {
-  const db = openDatabase()
-  console.log(JSON.stringify(buildWaybarJson(db)))
+export function buildStatusLine(data: StatusData): string {
+  const parts = [
+    `today ${fmt(data.today.total_usd)}`,
+    `week ${fmt(data.week.total_usd)}`,
+    `top ${data.topAgent}`,
+    `${data.machineCount} machines`,
+    modeLabel(data.transport),
+  ]
+  if (data.quota) parts.push(data.quota)
+  return parts.join(' · ')
+}
+
+export function buildWaybarJson(data: StatusData): Record<string, unknown> {
+  return {
+    text: fmt(data.today.total_usd),
+    tooltip: buildStatusLine(data),
+    class: data.quota?.includes('%') && Number(data.quota.match(/(\d+)%/)?.[1] ?? 0) >= 80 ? 'warning' : 'default',
+    percentage: null,
+    savings_usd: data.savings.saved_usd,
+  }
+}
+
+export async function printStatusLine(): Promise<void> {
+  console.log(buildStatusLine(await gatherStatusData()))
+}
+
+export async function printWaybarJson(): Promise<void> {
+  console.log(JSON.stringify(buildWaybarJson(await gatherStatusData())))
 }
 
 export async function runTui(opts: { watch?: boolean; interval?: number }): Promise<void> {
   const interval = opts.interval ?? 30
 
-  const render = () => {
-    const db = openDatabase()
-    const today = querySummary(db, 'today', undefined, true)
-    const week = querySummary(db, 'week', undefined, true)
-    const month = querySummary(db, 'month', undefined, true)
-    const savings = querySavingsSummary(db, 'month')
-    const machines = listMachines(db)
-    const quota = quotaHint(db)
+  const render = async () => {
+    const data = await gatherStatusData()
 
     process.stdout.write('\x1b[H\x1b[2J')
     console.log(chalk.bold.cyan('  economy'))
     console.log(chalk.dim('  ─────────────────────────────────'))
-    console.log(`  Today   ${chalk.green(fmt(today.total_usd))}   ${today.sessions} sessions`)
-    console.log(`  Week    ${fmt(week.total_usd)}   ${week.sessions} sessions`)
-    console.log(`  Month   ${fmt(month.total_usd)}   saved ${fmt(savings.saved_usd)}`)
+    console.log(`  Today   ${chalk.green(fmt(data.today.total_usd))}   ${data.today.sessions} sessions`)
+    console.log(`  Week    ${fmt(data.week.total_usd)}   ${data.week.sessions} sessions`)
+    console.log(`  Month   ${fmt(data.month.total_usd)}   saved ${fmt(data.savings.saved_usd)}`)
     console.log(chalk.dim('  ─────────────────────────────────'))
-    console.log(`  Top agent: ${topAgent(db)}`)
-    if (quota) console.log(`  Quota:     ${quota}`)
-    console.log(`  Fleet:     ${machines.length} machines`)
-    console.log(`  Cloud:     ${getCloudDatabaseUrl() ? 'connected' : 'local-only'}`)
+    console.log(`  Top agent: ${data.topAgent}`)
+    if (data.quota) console.log(`  Quota:     ${data.quota}`)
+    console.log(`  Fleet:     ${data.machineCount} machines`)
+    console.log(`  Store:     ${data.transport === 'cloud-http' ? 'self_hosted (cloud API)' : 'local'}`)
     if (getServeApiToken()) console.log(chalk.dim('  API auth:  ECONOMY_API_TOKEN set'))
     console.log(chalk.dim(`\n  ${opts.watch ? `Refreshing every ${interval}s — Ctrl+C to exit` : 'Run with --watch for live refresh'}`))
   }
 
-  render()
+  await render()
   if (!opts.watch) return
 
-  const timer = setInterval(render, interval * 1000)
+  const timer = setInterval(() => { void render() }, interval * 1000)
   process.on('SIGINT', () => {
     clearInterval(timer)
     process.exit(0)

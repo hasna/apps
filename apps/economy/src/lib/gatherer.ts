@@ -1,7 +1,7 @@
 // Training data gatherer for @hasna/economy
 // Exports gatherTrainingData() conforming to GatherResult interface from @hasna/brains
 
-import { openDatabase, querySummary, querySessions, queryModelBreakdown, queryProjectBreakdown, getBudgetStatuses, getGoalStatuses } from '../db/database.js'
+import { getStore } from './store/index.js'
 
 // Inline type definition — mirrors GatherResult / GatherTrainingDataFn from @hasna/brains
 // (avoids requiring @hasna/brains as a hard dependency)
@@ -43,14 +43,14 @@ export const gatherTrainingData: GatherTrainingDataFn = async (
   const examples: TrainingExample[] = []
 
   try {
-    const db = openDatabase()
+    const store = getStore()
 
     // ── Summary examples ──────────────────────────────────────────────────────
 
     const periods = ['today', 'week', 'month', 'all'] as const
     for (const period of periods) {
       try {
-        const s = querySummary(db, period)
+        const s = await store.summary(period)
         if (!hasCostData(s)) continue
         examples.push({
           messages: [
@@ -67,7 +67,7 @@ export const gatherTrainingData: GatherTrainingDataFn = async (
 
     // ── Session cost examples ─────────────────────────────────────────────────
 
-    const sessions = querySessions(db, {
+    const sessions = await store.sessions({
       limit: Math.min(Math.floor(limit / 4), 50),
       since: options.since?.toISOString().substring(0, 10),
     })
@@ -106,7 +106,7 @@ export const gatherTrainingData: GatherTrainingDataFn = async (
 
     // ── Model breakdown examples ──────────────────────────────────────────────
 
-    const modelBreakdown = queryModelBreakdown(db)
+    const modelBreakdown = await store.modelBreakdown()
     if (modelBreakdown.length > 0) {
       const topModels = modelBreakdown.slice(0, 5)
       examples.push({
@@ -138,7 +138,7 @@ export const gatherTrainingData: GatherTrainingDataFn = async (
 
     // ── Project breakdown examples ────────────────────────────────────────────
 
-    const projectBreakdown = queryProjectBreakdown(db)
+    const projectBreakdown = await store.projectBreakdown()
     if (projectBreakdown.length > 0) {
       const topProjects = projectBreakdown.slice(0, 5)
       examples.push({
@@ -171,7 +171,7 @@ export const gatherTrainingData: GatherTrainingDataFn = async (
     // ── Budget examples ────────────────────────────────────────────────────────
 
     try {
-      const budgets = getBudgetStatuses(db)
+      const budgets = await store.listBudgets()
       if (budgets.length > 0) {
         examples.push({
           messages: [
@@ -191,7 +191,7 @@ export const gatherTrainingData: GatherTrainingDataFn = async (
     // ── Goal examples ──────────────────────────────────────────────────────────
 
     try {
-      const goals = getGoalStatuses(db)
+      const goals = await store.listGoals()
       if (goals.length > 0) {
         examples.push({
           messages: [
@@ -210,8 +210,8 @@ export const gatherTrainingData: GatherTrainingDataFn = async (
 
     // ── Optimization advice examples ──────────────────────────────────────────
 
-    const weekSummary = querySummary(db, 'week')
-    const monthSummary = querySummary(db, 'month')
+    const weekSummary = await store.summary('week')
+    const monthSummary = await store.summary('month')
     if (weekSummary.total_usd > 0) {
       const projectedMonthly = (weekSummary.total_usd / 7) * 30
       examples.push({

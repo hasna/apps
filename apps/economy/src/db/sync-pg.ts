@@ -69,10 +69,35 @@ function resolveWorkerPath(): string {
   return candidates[0]!
 }
 
+/**
+ * Connection-level failures where the query provably never executed (the pool
+ * could not hand out or keep a live backend). These are safe to retry once —
+ * the pg pool discards the dead client and dials a fresh one on the next query,
+ * so a single retry transparently absorbs RDS failover / idle-drop / connect
+ * timeout blips instead of surfacing a 500 the caller has to retry by hand.
+ */
+export function isTransientConnError(message: string): boolean {
+  const m = message.toLowerCase()
+  return (
+    m.includes('econnreset') ||
+    m.includes('econnrefused') ||
+    m.includes('etimedout') ||
+    m.includes('connection terminated') ||
+    m.includes('connection ended') ||
+    m.includes('timeout exceeded when trying to connect') ||
+    m.includes('terminating connection') ||
+    m.includes('server closed the connection')
+  )
+}
+
 export class SyncPgAdapter implements DbAdapter {
   private readonly worker: Worker
   private readonly port: MessagePort
   private counter = 0
+  // Reused sleeper SAB: a 1ms Atomics.wait yields the CPU while a reply is in
+  // transit across the thread boundary, instead of a hot busy-spin that starves
+  // the very thread the message must be delivered on.
+  private readonly sleeper = new Int32Array(new SharedArrayBuffer(4))
 
   constructor(dsn: string) {
     // Pass the path as a runtime string so the bundler does not try to inline
@@ -86,9 +111,30 @@ export class SyncPgAdapter implements DbAdapter {
     this.worker.postMessage({ type: 'init', port: channel.port2 }, [channel.port2])
   }
 
-  private query(sql: string, params: unknown[]): { rows: Array<Record<string, unknown>>; rowCount: number } {
-    const pgSql = translateSqliteDates(translateSql(sql, 'pg'))
-    const pgParams = translateParams(params as unknown[])
+  /**
+   * Drain the reply matching `expectedId`. The reply is enqueued on the port
+   * before the worker notifies, but cross-thread delivery can lag under CPU
+   * pressure — so poll on a wall-clock deadline (yielding via a 1ms Atomics.wait
+   * between empty reads) rather than a fixed iteration count, which could give
+   * up prematurely on a busy box and throw a spurious 500. Replies whose id does
+   * not match are stale results of a previously abandoned (timed-out) query;
+   * discard them so the port never cross-talks between requests.
+   */
+  private drainReply(expectedId: number): Reply {
+    const deadline = Date.now() + 30_000
+    for (;;) {
+      const received = receiveMessageOnPort(this.port)
+      if (received) {
+        const reply = received.message as Reply
+        if (reply.id === expectedId) return reply
+        continue // stale reply from an abandoned query — drop it
+      }
+      if (Date.now() > deadline) throw new Error('SyncPgAdapter: no reply from worker (timeout)')
+      Atomics.wait(this.sleeper, 0, 0, 1)
+    }
+  }
+
+  private queryOnce(pgSql: string, pgParams: unknown[]): { rows: Array<Record<string, unknown>>; rowCount: number } {
     const id = ++this.counter
     const signal = new SharedArrayBuffer(4)
     const sig = new Int32Array(signal)
@@ -97,15 +143,23 @@ export class SyncPgAdapter implements DbAdapter {
     // Block until the worker signals completion (returns immediately if the
     // worker already stored 1 before we started waiting).
     Atomics.wait(sig, 0, 0)
-    // Drain the reply. It is enqueued before the worker notifies, so it is
-    // available synchronously now; spin a bounded number of times to absorb any
-    // delivery lag without ever blocking the loop.
-    let received = receiveMessageOnPort(this.port)
-    for (let attempt = 0; !received && attempt < 1_000_000; attempt++) received = receiveMessageOnPort(this.port)
-    if (!received) throw new Error('SyncPgAdapter: no reply from worker')
-    const reply = received.message as Reply
+    const reply = this.drainReply(id)
     if (!reply.ok) throw new Error(reply.error)
     return { rows: reply.rows, rowCount: reply.rowCount }
+  }
+
+  private query(sql: string, params: unknown[]): { rows: Array<Record<string, unknown>>; rowCount: number } {
+    const pgSql = translateSqliteDates(translateSql(sql, 'pg'))
+    const pgParams = translateParams(params as unknown[])
+    try {
+      return this.queryOnce(pgSql, pgParams)
+    } catch (err) {
+      if (err instanceof Error && isTransientConnError(err.message)) {
+        // One retry on a dead-connection blip; the pool self-heals the backend.
+        return this.queryOnce(pgSql, pgParams)
+      }
+      throw err
+    }
   }
 
   run(sql: string, ...params: unknown[]): RunResult {

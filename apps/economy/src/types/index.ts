@@ -210,7 +210,6 @@ export interface SyncOptions {
   loops?: boolean
   verbose?: boolean
   dedupe?: boolean
-  cloud?: boolean
 }
 
 export interface SessionFilter {
