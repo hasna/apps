@@ -1088,6 +1088,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["text processing", "formatting", "api", "utilities", "content"],
   },
   {
+    name: "tettra-api-platform",
+    displayName: "Tettra Api Platform",
+    description: "Knowledge platform API for items, events, and search",
+    category: "Developer Tools",
+    tags: ["api", "platform", "knowledge"],
+  },
+  {
     name: "tierion",
     displayName: "Tierion",
     description: "Blockchain-based data anchoring and verification platform",
