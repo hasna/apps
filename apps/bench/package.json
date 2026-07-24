@@ -1,6 +1,6 @@
 {
   "name": "@hasna/bench",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "CLI, SDK, and MCP foundation for an open-source AI benchmark aggregator and wrapper.",
   "type": "module",
   "main": "dist/index.js",
