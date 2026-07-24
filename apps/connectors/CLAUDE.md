@@ -19,6 +19,7 @@ bun run dev              # Run CLI from source
 bun run build            # Build everything: dashboard, CLI, MCP, serve, .d.ts declarations
 bun run build:dashboard  # Build dashboard only
 bun run typecheck        # tsc --noEmit
+bun run check:package-secrets  # Block tracked .npmrc literal auth tokens
 bun test                 # Run all 216 tests (6 test files)
 bun test src/server      # Run a single test file
 npm publish              # Runs prepublishOnly (test + build), then publishes
@@ -92,9 +93,11 @@ Connectors store configuration in `~/.connectors/connect-{name}/`:
 ```bash
 # 1. Bump version in package.json AND src/cli/index.tsx (.version())
 # 2. Update CHANGELOG.md
-# 3. Publish (runs tests + build automatically via prepublishOnly)
+# 3. Verify package-manager config stays env-backed
+bun run check:package-secrets
+# 4. Publish (runs package guard + tests + build automatically via prepublishOnly)
 npm publish
-# 4. Update global install
+# 5. Update global install
 bun install -g @hasna/connectors@<version>
 ```
 

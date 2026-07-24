@@ -17,6 +17,9 @@ jobs:
         with:
           bun-version: latest
 
+      - name: Package-manager secret guard
+        run: bun run check:package-secrets
+
       - name: Install dependencies
         run: bun install
 

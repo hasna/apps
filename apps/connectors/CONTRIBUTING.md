@@ -74,21 +74,22 @@ test: add component tests for installer
 
 ## NPM Auth (Optional)
 
-If you need a scoped registry token (publish or private installs), copy an example file and set `NPM_TOKEN`:
+If you need a scoped registry token (publish or private installs), keep the
+token value in your shell, CI secret store, or approved vault and use an
+environment-backed `.npmrc`:
 
-```bash
-# Repo root
-cp .npmrc.example .npmrc
-
-# Or per-connector
-cp connectors/connect-<name>/.npmrc.example connectors/connect-<name>/.npmrc
+```ini
+@hasna:registry=https://registry.npmjs.org/
+//registry.npmjs.org/:_authToken=${NPM_TOKEN}
 ```
 
-- Do not commit `.npmrc` files with real tokens.
+- Do not commit `.npmrc` files with literal tokens.
 - Use environment variables in CI: `NPM_TOKEN` only.
+- Run `bun run check:package-secrets` before committing package-manager config changes.
 
 ## Safe Publish Flow
 
+- Run `bun run check:package-secrets` from the repo root.
 - Run the connector release script from that connector folder:
   - `bun run release` (or `release:patch`, `release:minor`, `release:major`)
 - CI should inject `NPM_TOKEN` and create `.npmrc` at runtime if needed.

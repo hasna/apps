@@ -65,3 +65,9 @@ Before committing any connector:
 - [ ] Uses `@hasna` namespace
 - [ ] .env.example has placeholders only
 - [ ] .npmrc uses `${NPM_TOKEN}` variable
+- [ ] `bun run check:package-secrets` passes
+
+Tracked `.npmrc` files may contain only scoped registry configuration and
+environment/template auth references such as `${NPM_TOKEN}`. Never commit a
+literal npm token. The package-manager guard reports only paths, lines, rule
+names, and counts; it must not print credential values.
