@@ -23,6 +23,32 @@ brains --help
 - `brains finetune status`
 - `brains data`
 
+### Compact Output Defaults
+
+Human CLI output is compact by default so agent terminals do not fill with large
+records. List and status-style commands show the essential fields, cap displayed
+rows, truncate long text and paths, and print a hint for the next detail command
+or flag.
+
+Use these disclosure controls when you need more:
+
+```bash
+brains models list --limit 50
+brains models list --verbose
+brains models show <id>
+brains data preview ./dataset.jsonl --verbose
+brains data preview ./dataset.jsonl --json
+```
+
+- `--limit <n>` increases the number of human rows shown where supported.
+- `--verbose` keeps human output readable while showing fuller fields.
+- `show` commands are the detail path for one record.
+- `--json` returns machine-readable records and preserves full underlying data
+  unless a limiting flag is explicitly supplied.
+
+MCP list/preview tools follow the same rule: compact summaries by default, with
+`limit` and `verbose` inputs for larger or fuller responses.
+
 ## MCP Server
 
 ```bash

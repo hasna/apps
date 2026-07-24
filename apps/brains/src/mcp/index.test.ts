@@ -37,6 +37,7 @@ describe("MCP schema validation", () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.sources).toEqual(["todos", "mementos"]);
+      expect(result.data.limit).toBe(500);
     }
   });
 

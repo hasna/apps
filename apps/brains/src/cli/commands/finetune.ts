@@ -5,7 +5,15 @@ import { existsSync } from "fs";
 import { getDb, fineTunedModels, trainingJobs, trainingDatasets } from "../../db/index.js";
 import * as openaiProvider from "../../lib/providers/openai.js";
 import { ThinkerLabsProvider } from "../../lib/providers/thinker-labs.js";
-import { printStatus, printJson, printError, printSuccess, printInfo, printTable } from "../ui.js";
+import { printStatus, printJson, printError, printSuccess, printInfo, printTable, printHint } from "../ui.js";
+import {
+  DEFAULT_LIST_LIMIT,
+  formatDate,
+  limitItems,
+  parsePositiveIntegerOption,
+  truncateMiddle,
+  truncateText,
+} from "../../lib/compact-output.js";
 
 export function registerFinetuneCommands(program: Command): void {
   const finetuneCmd = program.command("finetune").description("Manage fine-tuning jobs");
@@ -111,8 +119,9 @@ export function registerFinetuneCommands(program: Command): void {
     .command("status <job-id>")
     .description("Get the status of a fine-tuning job")
     .option("--provider <provider>", "Provider (openai|thinker-labs)", "openai")
+    .option("--verbose", "Show full model and error fields")
     .option("--json", "Output as JSON")
-    .action(async (jobId: string, opts: { provider: string; json?: boolean }) => {
+    .action(async (jobId: string, opts: { provider: string; verbose?: boolean; json?: boolean }) => {
       try {
         let result: { jobId: string; status: string; fineTunedModel?: string; baseModel?: string; error?: string };
 
@@ -127,9 +136,19 @@ export function registerFinetuneCommands(program: Command): void {
           console.log();
           console.log(`  Job ID:           ${result.jobId}`);
           console.log(`  Status:           ${printStatus(result.status)}`);
-          if (result.fineTunedModel) console.log(`  Fine-tuned model: ${result.fineTunedModel}`);
-          if (result.error) console.log(`  Error:            ${result.error}`);
+          if (result.fineTunedModel) {
+            console.log(`  Fine-tuned model: ${opts.verbose ? result.fineTunedModel : truncateMiddle(result.fineTunedModel, 72)}`);
+          }
+          if (result.baseModel) {
+            console.log(`  Base model:       ${opts.verbose ? result.baseModel : truncateMiddle(result.baseModel, 72)}`);
+          }
+          if (result.error) {
+            console.log(`  Error:            ${opts.verbose ? result.error : truncateText(result.error, 160)}`);
+          }
           console.log();
+          if (!opts.verbose && (result.error && result.error.length > 160 || result.fineTunedModel && result.fineTunedModel.length > 72)) {
+            printHint("Use --verbose for full provider fields or --json for the raw status payload.");
+          }
         }
 
         const db = getDb();
@@ -226,9 +245,12 @@ export function registerFinetuneCommands(program: Command): void {
     .command("list")
     .description("List all fine-tuning jobs")
     .option("--provider <provider>", "Provider to query (openai|thinker-labs)", "openai")
+    .option("--limit <n>", `Maximum rows to show (default: ${DEFAULT_LIST_LIMIT} for human output)`)
+    .option("--verbose", "Show full model identifiers")
     .option("--json", "Output as JSON")
-    .action(async (opts: { provider: string; json?: boolean }) => {
+    .action(async (opts: { provider: string; limit?: string; verbose?: boolean; json?: boolean }) => {
       try {
+        const explicitLimit = parsePositiveIntegerOption(opts.limit, "--limit");
         let jobs: Array<{ id: string; model: string; status: string; created: number }>;
 
         if (opts.provider === "openai") {
@@ -238,18 +260,26 @@ export function registerFinetuneCommands(program: Command): void {
           jobs = await tl.listFineTunedModels();
         }
 
-        if (opts.json) { printJson(jobs); return; }
+        if (opts.json) {
+          printJson(jobs);
+          return;
+        }
         if (jobs.length === 0) { printInfo("No fine-tuning jobs found."); return; }
 
+        const limited = limitItems(jobs, explicitLimit ?? DEFAULT_LIST_LIMIT);
         printTable(
           ["Job ID", "Model", "Status", "Created"],
-          jobs.map((j) => [
+          limited.items.map((j) => [
             j.id,
-            j.model,
+            opts.verbose ? j.model : truncateMiddle(j.model, 48),
             printStatus(j.status),
-            new Date(j.created * 1000).toISOString().split("T")[0] ?? "",
+            formatDate(j.created * 1000),
           ])
         );
+        if (!explicitLimit && limited.hidden > 0) {
+          printHint(`Showing ${limited.shown} of ${limited.total} jobs. Use --limit ${limited.total} to show all.`);
+        }
+        printHint("Use --verbose for full model identifiers or --json for the raw provider list.");
       } catch (err) {
         printError(err instanceof Error ? err.message : String(err));
         process.exit(1);

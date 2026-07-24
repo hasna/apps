@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DEFAULT_GATHER_LIMIT } from "./compact-output.js";
 
 export const ProviderSchema = z.enum(["openai", "thinker-labs"], {
   errorMap: () => ({ message: "Invalid provider. Must be one of: openai, thinker-labs" }),
@@ -26,7 +27,7 @@ export const ModelUpdateSchema = z.object({
 
 export const McpGatherSchema = z.object({
   sources: z.array(z.enum(["todos", "mementos", "conversations", "sessions"])).min(1, "At least one source required"),
-  limit: z.number().int().positive().optional(),
+  limit: z.number().int().positive().default(DEFAULT_GATHER_LIMIT),
   output_dir: z.string().optional(),
 });
 

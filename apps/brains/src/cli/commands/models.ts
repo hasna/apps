@@ -5,7 +5,14 @@ import { getDb, fineTunedModels, trainingJobs } from "../../db/index.js";
 import { parseTagList } from "../../lib/gatherers/tags.js";
 import * as openaiProvider from "../../lib/providers/openai.js";
 import { ThinkerLabsProvider } from "../../lib/providers/thinker-labs.js";
-import { printTable, printStatus, printJson, printError, printSuccess, printInfo } from "../ui.js";
+import { printTable, printStatus, printJson, printError, printSuccess, printInfo, printHint } from "../ui.js";
+import {
+  DEFAULT_LIST_LIMIT,
+  formatShortId,
+  limitItems,
+  truncateMiddle,
+  truncateText,
+} from "../../lib/compact-output.js";
 
 type ModelRow = typeof fineTunedModels.$inferSelect;
 type Provider = ModelRow["provider"];
@@ -24,6 +31,7 @@ interface ListModelsOptions {
   provider?: string;
   status?: string;
   limit?: string;
+  verbose?: boolean;
 }
 
 function parseListLimit(rawLimit: string | undefined): number | undefined {
@@ -89,7 +97,8 @@ export function registerModelsCommands(program: Command): void {
     .description("List all tracked fine-tuned models")
     .option("--provider <provider>", "Filter by provider (openai|thinker-labs)")
     .option("--status <status>", "Filter by status (pending|running|succeeded|failed|cancelled)")
-    .option("--limit <n>", "Maximum number of results")
+    .option("--limit <n>", `Maximum number of rows to show (default: ${DEFAULT_LIST_LIMIT} for human output)`)
+    .option("--verbose", "Show full IDs and additional model columns")
     .option("--json", "Output as JSON")
     .action(async (opts: ListModelsOptions) => {
       try {
@@ -114,17 +123,38 @@ export function registerModelsCommands(program: Command): void {
           printInfo("No models tracked yet. Use 'brains finetune start' to train one.");
           return;
         }
-        printTable(
-          ["ID", "Display Name", "Provider", "Status", "Collection", "Base Model"],
-          models.map((m) => [
-            m.id,
-            m.displayName ?? m.name,
-            m.provider,
-            printStatus(m.status),
-            m.collection ?? "",
-            m.baseModel,
-          ])
-        );
+        const limited = limitItems(models, filters.limit ?? DEFAULT_LIST_LIMIT);
+        if (opts.verbose) {
+          printTable(
+            ["ID", "Display Name", "Provider", "Status", "Collection", "Base Model", "Job ID", "Description"],
+            limited.items.map((m) => [
+              m.id,
+              truncateText(m.displayName ?? m.name, 80),
+              m.provider,
+              printStatus(m.status),
+              truncateText(m.collection ?? "", 40),
+              truncateMiddle(m.baseModel, 60),
+              m.fineTuneJobId ?? "",
+              truncateText(m.description ?? "", 80),
+            ])
+          );
+        } else {
+          printTable(
+            ["ID", "Display Name", "Provider", "Status", "Collection", "Base Model"],
+            limited.items.map((m) => [
+              formatShortId(m.id),
+              truncateText(m.displayName ?? m.name, 40),
+              m.provider,
+              printStatus(m.status),
+              truncateText(m.collection ?? "", 24),
+              truncateMiddle(m.baseModel, 36),
+            ])
+          );
+        }
+        if (!filters.limit && limited.hidden > 0) {
+          printHint(`Showing ${limited.shown} of ${limited.total} models. Use --limit ${limited.total} to show all.`);
+        }
+        printHint("Use --verbose for more columns, --json for full records, or 'brains models show <id>' for details.");
       } catch (err) {
         printError(err instanceof Error ? err.message : String(err));
         process.exit(1);

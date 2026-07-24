@@ -21,6 +21,15 @@ import { getPackageVersion } from "../lib/package-metadata.js";
 import { ensurePrivateDirectory, writePrivateTextFile } from "../lib/private-files.js";
 import { McpGatherSchema, McpFinetuneStartSchema, McpFinetuneStatusSchema } from "../lib/schemas.js";
 import { BRAINS_STORAGE_TOOLS, handleBrainsStorageTool } from "./storage-tools.js";
+import {
+  DEFAULT_GATHER_LIMIT,
+  DEFAULT_LIST_LIMIT,
+  formatDate,
+  limitItems,
+  summarizeTrainingExample,
+  truncateMiddle,
+  truncateText,
+} from "../lib/compact-output.js";
 import { isStdioMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
 
 // --- helpers ---
@@ -33,6 +42,15 @@ function getProvider(provider: string) {
 
 function defaultOutputDir() {
   return resolve(homedir(), ".hasna", "brains", "datasets");
+}
+
+function parseMcpLimit(value: unknown, defaultValue = DEFAULT_LIST_LIMIT): number {
+  if (value === undefined || value === null) return defaultValue;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`Invalid limit: ${value}. Use a positive integer.`);
+  }
+  return parsed;
 }
 
 // --- in-memory agent registry ---
@@ -68,10 +86,13 @@ export function buildServer() {
     tools: [
       {
         name: "list_models",
-        description: "List all fine-tuned models tracked in the local DB",
+        description: "List fine-tuned models tracked in the local DB. Compact by default; use limit/verbose for more detail.",
         inputSchema: {
           type: "object",
-          properties: {},
+          properties: {
+            limit: { type: "number", description: `Maximum models to return (default: ${DEFAULT_LIST_LIMIT})` },
+            verbose: { type: "boolean", description: "Include longer fields in list rows" },
+          },
           required: [],
         },
       },
@@ -143,7 +164,7 @@ export function buildServer() {
             },
             limit: {
               type: "number",
-              description: "Max examples per source (default: unlimited)",
+              description: `Max examples per source (default: ${DEFAULT_GATHER_LIMIT})`,
             },
             output_dir: {
               type: "string",
@@ -166,6 +187,10 @@ export function buildServer() {
             limit: {
               type: "number",
               description: "Max number of examples to return (default: 5)",
+            },
+            verbose: {
+              type: "boolean",
+              description: "Return full examples instead of compact message previews",
             },
           },
           required: ["file_path"],
@@ -231,10 +256,12 @@ export function buildServer() {
       },
       {
         name: "list_agents",
-        description: "List all registered agents.",
+        description: "List registered agents. Compact by default; use limit for more rows.",
         inputSchema: {
           type: "object",
-          properties: {},
+          properties: {
+            limit: { type: "number", description: `Maximum agents to return (default: ${DEFAULT_LIST_LIMIT})` },
+          },
         },
       },
       ...BRAINS_STORAGE_TOOLS,
@@ -250,24 +277,46 @@ export function buildServer() {
 
       switch (name) {
       case "list_models": {
+        const toolArgs = args as { limit?: number; verbose?: boolean } | undefined;
+        const limit = parseMcpLimit(toolArgs?.limit);
+        const verbose = Boolean(toolArgs?.verbose);
         const db = getDb();
         const models = await db
-          .select({
-            id: fineTunedModels.id,
-            name: fineTunedModels.name,
-            provider: fineTunedModels.provider,
-            status: fineTunedModels.status,
-            base_model: fineTunedModels.baseModel,
-            created_at: fineTunedModels.createdAt,
-          })
+          .select()
           .from(fineTunedModels)
           .orderBy(fineTunedModels.createdAt);
+        const limited = limitItems(models, limit);
+        const rows = limited.items.map((model) => ({
+          id: model.id,
+          name: truncateText(model.displayName ?? model.name, verbose ? 120 : 60),
+          provider: model.provider,
+          status: model.status,
+          collection: model.collection ?? undefined,
+          base_model: verbose ? model.baseModel : truncateMiddle(model.baseModel, 64),
+          ...(verbose ? {
+            fine_tune_job_id: model.fineTuneJobId,
+            description: model.description ? truncateText(model.description, 160) : undefined,
+            created_at: formatDate(model.createdAt),
+            updated_at: formatDate(model.updatedAt),
+          } : { created_at: formatDate(model.createdAt) }),
+        }));
 
         return {
           content: [
             {
               type: "text",
-              text: JSON.stringify(models, null, 2),
+              text: JSON.stringify({
+                models: rows,
+                total: limited.total,
+                shown: limited.shown,
+                hidden: limited.hidden,
+                compact: !verbose,
+                hints: [
+                  ...(limited.hidden > 0 ? [`Call list_models with {"limit":${limited.total}} to include all models.`] : []),
+                  "Use get_model for one full record.",
+                  "Call list_models with verbose=true for longer list fields.",
+                ],
+              }, null, 2),
             },
           ],
         };
@@ -474,10 +523,12 @@ export function buildServer() {
       }
 
       case "preview_training_data": {
-        const { file_path, limit = 5 } = args as {
+        const { file_path, limit = 5, verbose = false } = args as {
           file_path: string;
           limit?: number;
+          verbose?: boolean;
         };
+        const parsedLimit = parseMcpLimit(limit, 5);
 
         const resolvedPath = resolve(file_path);
         if (!existsSync(resolvedPath)) {
@@ -497,14 +548,30 @@ export function buildServer() {
 
         const total = lines.length;
         const examples: TrainingExample[] = lines
-          .slice(0, limit)
+          .slice(0, parsedLimit)
           .map((line) => JSON.parse(line) as TrainingExample);
+        const response = verbose
+          ? { examples, total, shown: examples.length }
+          : {
+            examples: examples.map((example) => summarizeTrainingExample(example)),
+            total,
+            shown: examples.length,
+            compact: true,
+          };
+        const hidden = Math.max(0, total - examples.length);
 
         return {
           content: [
             {
               type: "text",
-              text: JSON.stringify({ examples, total }, null, 2),
+              text: JSON.stringify({
+                ...response,
+                hidden,
+                hints: [
+                  ...(hidden > 0 ? [`Call preview_training_data with {"limit":${total}} to include every example.`] : []),
+                  ...(!verbose ? ["Preview is compact by default. Call preview_training_data with verbose=true for full example JSON."] : []),
+                ],
+              }, null, 2),
             },
           ],
         };
@@ -550,7 +617,28 @@ export function buildServer() {
           return { content: [{ type: "text", text: JSON.stringify({ agent_id: agent.id, project_id: agent.project_id }) }] };
         }
         case "list_agents": {
-          return { content: [{ type: "text", text: JSON.stringify([..._brainsAgents.values()]) }] };
+          const toolArgs = args as { limit?: number } | undefined;
+          const limited = limitItems([..._brainsAgents.values()], parseMcpLimit(toolArgs?.limit));
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  agents: limited.items.map((agent) => ({
+                    id: agent.id,
+                    name: agent.name,
+                    session_id: agent.session_id ? truncateMiddle(agent.session_id, 48) : undefined,
+                    last_seen_at: agent.last_seen_at,
+                    project_id: agent.project_id,
+                  })),
+                  total: limited.total,
+                  shown: limited.shown,
+                  hidden: limited.hidden,
+                  hints: limited.hidden > 0 ? [`Call list_agents with {"limit":${limited.total}} to show all.`] : [],
+                }),
+              },
+            ],
+          };
         }
         default:
           return {

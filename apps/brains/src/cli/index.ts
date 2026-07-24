@@ -5,7 +5,7 @@ import { registerEventsCommands } from "@hasna/events/commander";
 import { Command } from "commander";
 import { eq } from "drizzle-orm";
 import { getDb, getRawDb, fineTunedModels, trainingJobs } from "../db/index.js";
-import { printTable, printError, printSuccess, printInfo, printJson } from "./ui.js";
+import { printTable, printError, printSuccess, printInfo, printJson, printHint } from "./ui.js";
 import { registerModelsCommands } from "./commands/models.js";
 import { registerFinetuneCommands } from "./commands/finetune.js";
 import { registerDataCommands } from "./commands/data.js";
@@ -13,6 +13,7 @@ import { registerCollectionsCommands } from "./commands/collections.js";
 import { registerStorageCommands } from "./commands/storage.js";
 import { getPackageVersion } from "../lib/package-metadata.js";
 import { parseRemoveType } from "./remove.js";
+import { DEFAULT_LIST_LIMIT, limitItems, parsePositiveIntegerOption, truncateText } from "../lib/compact-output.js";
 
 const program = new Command();
 
@@ -184,8 +185,10 @@ feedbackCmd
 feedbackCmd
   .command("list")
   .description("List locally saved feedback")
+  .option("--limit <n>", `Maximum rows to show (default: ${DEFAULT_LIST_LIMIT})`)
+  .option("--verbose", "Show longer feedback messages")
   .option("--json", "Output as JSON")
-  .action(async (opts: { json?: boolean }) => {
+  .action(async (opts: { limit?: string; verbose?: boolean; json?: boolean }) => {
     const rawDb = getRawDb();
     const entries = rawDb.all(
       "SELECT id, message, email, category, version, created_at FROM feedback ORDER BY created_at DESC"
@@ -200,16 +203,22 @@ feedbackCmd
     rawDb.close();
     if (opts.json) { console.log(JSON.stringify(entries, null, 2)); return; }
     if (entries.length === 0) { printInfo("No feedback saved yet."); return; }
+    const limit = parsePositiveIntegerOption(opts.limit, "--limit", DEFAULT_LIST_LIMIT) ?? DEFAULT_LIST_LIMIT;
+    const limited = limitItems(entries, limit);
     printTable(
       ["ID", "Message", "Email", "Version", "Created"],
-      entries.map((e) => [
+      limited.items.map((e) => [
         ((e as { id?: string }).id ?? "").slice(0, 8),
-        (e.message ?? "").slice(0, 60),
+        truncateText(e.message ?? "", opts.verbose ? 160 : 60),
         (e as { email?: string }).email ?? "",
         (e as { version?: string }).version ?? "",
         (e as { created_at?: string }).created_at ?? "",
       ])
     );
+    if (limited.hidden > 0) {
+      printHint(`Showing ${limited.shown} of ${limited.total} feedback entries. Use --limit ${limited.total} to show all.`);
+    }
+    printHint("Use --verbose for longer messages or --json for full records.");
   });
 
 // ── storage ───────────────────────────────────────────────────────────────────

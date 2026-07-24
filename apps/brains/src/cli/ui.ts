@@ -64,3 +64,7 @@ export function printSuccess(message: string): void {
 export function printInfo(message: string): void {
   console.log(chalk.dim("  " + message));
 }
+
+export function printHint(message: string): void {
+  printInfo(message);
+}

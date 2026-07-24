@@ -5,7 +5,17 @@ import { dirname, join } from "path";
 import { homedir } from "os";
 import { getDb, trainingDatasets } from "../../db/index.js";
 import { ensurePrivateDirectory, writePrivateTextFile } from "../../lib/private-files.js";
-import { printJson, printError, printSuccess, printInfo, printTable } from "../ui.js";
+import { printJson, printError, printSuccess, printInfo, printTable, printHint } from "../ui.js";
+import {
+  DEFAULT_LIST_LIMIT,
+  formatDate,
+  formatShortId,
+  limitItems,
+  parsePositiveIntegerOption,
+  summarizeTrainingExample,
+  truncateMiddle,
+  truncateText,
+} from "../../lib/compact-output.js";
 
 const DEFAULT_DATASETS_DIR = join(homedir(), ".hasna", "brains", "datasets");
 
@@ -93,34 +103,81 @@ export function registerDataCommands(program: Command): void {
     .command("preview <file>")
     .description("Preview a JSONL training file")
     .option("-n, --count <n>", "Number of examples to show", "5")
-    .action((file: string, opts: { count: string }) => {
+    .option("--verbose", "Show full JSON for each previewed example")
+    .option("--json", "Output preview examples as JSON")
+    .action((file: string, opts: { count: string; verbose?: boolean; json?: boolean }) => {
       if (!existsSync(file)) { printError(`File not found: ${file}`); process.exit(1); }
 
-      const n = parseInt(opts.count, 10);
-      if (isNaN(n) || n <= 0) { printError(`Invalid --count value: ${opts.count}`); process.exit(1); }
+      let n: number;
+      try {
+        n = parsePositiveIntegerOption(opts.count, "--count", 5) ?? 5;
+      } catch (err) {
+        printError(err instanceof Error ? err.message : String(err));
+        process.exit(1);
+      }
 
       try {
         const content = readFileSync(file, "utf8");
         const lines = content.trim().split("\n").filter(Boolean);
         const total = lines.length;
         const preview = lines.slice(0, n);
-
-        console.log();
-        printInfo(`File: ${file}`);
-        printInfo(`Total examples: ${total}`);
-        printInfo(`Showing first ${Math.min(n, total)}:`);
-        console.log();
+        const parsedPreview: unknown[] = [];
 
         preview.forEach((line, idx) => {
           try {
-            const parsed = JSON.parse(line);
-            console.log(`─── Example ${idx + 1} ───`);
-            printJson(parsed);
-            console.log();
+            parsedPreview.push(JSON.parse(line));
           } catch {
-            printError(`  Line ${idx + 1} is not valid JSON: ${line.slice(0, 80)}…`);
+            parsedPreview.push({ error: `Line ${idx + 1} is not valid JSON`, line: truncateText(line, 160) });
           }
         });
+
+        if (opts.json) {
+          printJson({ file, total, shown: parsedPreview.length, examples: parsedPreview });
+          return;
+        }
+
+        console.log();
+        printInfo(`File: ${truncateMiddle(file, opts.verbose ? 120 : 72)}`);
+        printInfo(`Total examples: ${total}`);
+        printInfo(`Showing first ${Math.min(n, total)} ${opts.verbose ? "full example(s)" : "compact preview(s)"}:`);
+        console.log();
+
+        parsedPreview.forEach((parsed, idx) => {
+          console.log(`─── Example ${idx + 1} ───`);
+          if (opts.verbose) {
+            printJson(parsed);
+            console.log();
+            return;
+          }
+
+          const compact = summarizeTrainingExample(parsed);
+          if (compact.messages.length === 0) {
+            console.log(`  ${truncateText(JSON.stringify(parsed), 180)}`);
+          } else {
+            for (const message of compact.messages) {
+              console.log(`  ${message.role.padEnd(10)} ${message.content}`);
+            }
+          }
+          if (compact.metadata) {
+            const metadata = Object.entries(compact.metadata)
+              .map(([key, value]) => `${key}=${value}`)
+              .join(", ");
+            console.log(`  metadata   ${metadata}`);
+          }
+          if (compact.omitted_messages || compact.omitted_metadata_keys || compact.truncated) {
+            const omitted = [
+              compact.omitted_messages ? `${compact.omitted_messages} message(s)` : "",
+              compact.omitted_metadata_keys ? `${compact.omitted_metadata_keys} metadata key(s)` : "",
+            ].filter(Boolean).join(", ");
+            console.log(`  omitted    ${omitted || "long fields truncated"}`);
+          }
+          console.log();
+        });
+
+        if (total > preview.length) {
+          printHint(`Showing ${preview.length} of ${total}. Increase --count to preview more examples.`);
+        }
+        printHint("Use --verbose for full example JSON or --json for machine-readable output.");
       } catch (err) {
         printError(err instanceof Error ? err.message : String(err));
         process.exit(1);
@@ -182,23 +239,31 @@ export function registerDataCommands(program: Command): void {
   dataCmd
     .command("list")
     .description("List all gathered datasets")
+    .option("--limit <n>", `Maximum rows to show (default: ${DEFAULT_LIST_LIMIT})`)
+    .option("--verbose", "Show full IDs and file paths")
     .option("--json", "Output as JSON")
-    .action(async (opts: { json?: boolean }) => {
+    .action(async (opts: { limit?: string; verbose?: boolean; json?: boolean }) => {
       try {
         const db = getDb();
         const datasets = await db.select().from(trainingDatasets);
         if (opts.json) { printJson(datasets); return; }
         if (datasets.length === 0) { printInfo("No datasets found. Use 'brains data gather' to create one."); return; }
+        const limit = parsePositiveIntegerOption(opts.limit, "--limit", DEFAULT_LIST_LIMIT) ?? DEFAULT_LIST_LIMIT;
+        const limited = limitItems(datasets, limit);
         printTable(
           ["ID", "Source", "Examples", "File", "Created"],
-          datasets.map((d) => [
-            d.id,
+          limited.items.map((d) => [
+            formatShortId(d.id, opts.verbose),
             d.source,
             String(d.exampleCount),
-            d.filePath ?? "",
-            new Date(d.createdAt).toISOString().split("T")[0] ?? "",
+            opts.verbose ? d.filePath ?? "" : truncateMiddle(d.filePath ?? "", 56),
+            formatDate(d.createdAt),
           ])
         );
+        if (limited.hidden > 0) {
+          printHint(`Showing ${limited.shown} of ${limited.total} datasets. Use --limit ${limited.total} to show all.`);
+        }
+        printHint("Use --verbose for full paths or --json for full records.");
       } catch (err) {
         printError(err instanceof Error ? err.message : String(err));
         process.exit(1);
