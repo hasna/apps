@@ -6,6 +6,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-07-24
+
+### Fixed
+
+- Fixed a `tsc` type-check/declaration-emit failure (TS2352) in
+  `reportTopLevelError` (`src/cli/index.ts`): the Commander `exitCode` is now
+  read via a single narrowing read instead of an invalid `Error -> { exitCode:
+  number }` cast, so `bun run build` / `verify:release` succeed. The emitted
+  runtime JS is unchanged.
+- Replaced the unresolvable `@hasna/mcp-harness` dependency pin
+  (`file:../open-mcp`) with the published registry range (`^0.1.0`). This clears
+  the `TS2307: Cannot find module '@hasna/mcp-harness'` error in
+  `src/mcp/http.ts` (and its MCP smoke test) on clean checkouts and CI, where no
+  `../open-mcp` sibling exists. API surface used (`healthPayload`, `isHttpMode`,
+  `resolveMcpHttpPort`) is present in `@hasna/mcp-harness@0.1.0`.
+
 ## [0.2.1] - 2026-07-24
 
 ### Security

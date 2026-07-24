@@ -6,7 +6,7 @@ import packageJson from "../package.json" assert { type: "json" };
 
 const PACKAGE_NAME = "@hasna/machines";
 const MAX_PACKAGE_BYTES = 4 * 1024 * 1024;
-const MACHINES_BIN_NAMES = ["machines", "machines-mcp", "machines-agent"] as const;
+const MACHINES_BIN_NAMES = ["machines", "machines-mcp", "machines-agent", "machines-serve"] as const;
 const DEPENDENCY_EVENT_BIN_NAMES = ["events", "hasna-events"] as const;
 const REQUIRED_FILES = [
   "package/package.json",
