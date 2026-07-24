@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Tests
+
+- **`connect-x` OAuth 2.0: lock in public-client token exchange (#1).** Added
+  `connectors/x/src/api/oauth.test.ts` covering `exchangeCodeForTokens`,
+  `refreshAccessToken`, and `revokeToken`. The suite asserts that the connector
+  authenticates the client with POST body parameters (`client_id`, plus
+  `client_secret` when one is configured) and never sends an
+  `Authorization: Basic` header to `/2/oauth2/token` or `/2/oauth2/revoke` —
+  the header X rejects with
+  `unauthorized_client / "Missing valid authorization header"` when the app is
+  registered as a public client. Test-only; no runtime change (the behaviour
+  itself was fixed in `5789e155`, released in 1.3.5).
+
 ## [1.3.46] - 2026-07-24
 
 ### Fixed
