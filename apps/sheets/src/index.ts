@@ -33,6 +33,15 @@ export {
   toRangeRef,
 } from "./lib/a1.js";
 
+// Resource limits + typed limit errors (untrusted-input safety)
+export {
+  DEFAULT_LIMITS,
+  type LimitOptions,
+  type SheetsLimitCode,
+  SheetsLimitError,
+  type SheetsLimits,
+} from "./lib/limits.js";
+
 // Recalc engine
 export { isFormula, parseLiteral, recalc } from "./lib/recalc.js";
 

@@ -5,6 +5,7 @@
  */
 import type { CellValue, Sheet, Workbook } from "../types/index.js";
 import { parseA1, toA1 } from "./a1.js";
+import type { SheetsLimits } from "./limits.js";
 import { createWorkbook, setCells } from "./workbook.js";
 
 /** Parse CSV text into a 2D array of raw string fields (RFC-4180 quoting). */
@@ -97,10 +98,16 @@ export function sheetToCsv(sheet: Sheet, options: { raw?: boolean; delimiter?: s
   return toCsv(rows, options.delimiter ?? ",");
 }
 
-/** Build a new workbook from CSV text. */
+/**
+ * Build a new workbook from CSV text. Import routes through {@link setCells},
+ * so the batch-size and populated-cell caps apply to bulk CSV imports; pass
+ * `limits` to override them.
+ *
+ * @throws {SheetsLimitError} when the import exceeds a write/populated limit.
+ */
 export function csvToWorkbook(
   text: string,
-  options: { sheetName?: string; delimiter?: string } = {},
+  options: { sheetName?: string; delimiter?: string; limits?: Partial<SheetsLimits> } = {},
 ): Workbook {
   const workbook = createWorkbook({ sheetName: options.sheetName ?? "Sheet1" });
   const sheet = workbook.sheets[0];
@@ -112,7 +119,7 @@ export function csvToWorkbook(
       if (value !== "") entries.push([toA1({ row: r, col: c }), value]);
     });
   });
-  setCells(workbook, entries, sheet.id);
+  setCells(workbook, entries, sheet.id, { limits: options.limits });
   return workbook;
 }
 
