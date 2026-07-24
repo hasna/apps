@@ -493,6 +493,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["leads", "tracking", "attribution"],
   },
   {
+    name: "webengage",
+    displayName: "WebEngage",
+    description: "Customer engagement and marketing automation platform",
+    category: "Marketing & Sales",
+    tags: ["engagement", "marketing", "automation"],
+  },
+  {
     name: "woodpeckerco",
     displayName: "Woodpecker.co",
     description: "Cold email outreach and follow-up automation",
