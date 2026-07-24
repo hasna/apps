@@ -212,6 +212,25 @@ describe("HTTP server routes", () => {
     }
   });
 
+  it("returns a 400 for invalid capture annotation input", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clip-server-annotation-"));
+    try {
+      const response = await handleClipHttpRequest(new Request("http://x/api/capture", {
+        method: "POST",
+        body: JSON.stringify({
+          mode: "full",
+          annotations: [{ type: "box", x: 0, y: 0, width: 10, height: 10, color: "not-a-color" }],
+        }),
+      }), {
+        clientOptions: { homeDir: dir },
+      });
+      expect(response.status).toBe(400);
+      expect((await response.json() as { error: string }).error).toContain("Invalid annotation color");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("redacts local filesystem paths from public status", async () => {
     const dir = mkdtempSync(join(tmpdir(), "clip-server-status-"));
     try {

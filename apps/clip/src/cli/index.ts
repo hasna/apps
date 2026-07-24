@@ -7,9 +7,10 @@ import { readConfig, updateConfig } from "../config.js";
 import { DEFAULT_PORT, resolveConfigPath } from "../paths.js";
 import { renderShareQrCode } from "../qr.js";
 import { ClipClient, createClipClient } from "../sdk.js";
-import type { CaptureMode, ClipboardHistoryRecord, ClipboardKind, ClipClientOptions, ClipRecord } from "../types.js";
+import type { CaptureAnnotation, CaptureMode, ClipboardHistoryRecord, ClipboardKind, ClipClientOptions, ClipRecord } from "../types.js";
 import { startClipServer } from "../server/server.js";
 import { compactRecord } from "../util.js";
+import { parseCaptureAnnotations } from "../capture/annotate.js";
 
 function getPackageVersion(): string {
   try {
@@ -95,6 +96,54 @@ function client(program: Command): ClipClient {
   return createClipClient(globalOptions(program));
 }
 
+function collectOption(value: string, previous: string[] = []): string[] {
+  return [...previous, value];
+}
+
+function parseNumberList(value: string, expected: number, label: string): number[] {
+  const parts = value.split(",").map((part) => part.trim());
+  if (parts.length < expected) throw new Error(`${label} expects at least ${expected} comma-separated values.`);
+  const values = parts.slice(0, expected).map((part) => Number.parseFloat(part));
+  if (values.some((part) => !Number.isFinite(part))) throw new Error(`${label} values must be finite numbers.`);
+  return values;
+}
+
+function annotationFlagValue(argv: string[], index: number, flag: string): { value: string; nextIndex: number } {
+  const arg = argv[index]!;
+  if (arg.startsWith(`${flag}=`)) return { value: arg.slice(flag.length + 1), nextIndex: index };
+  const value = argv[index + 1];
+  if (value === undefined || value.startsWith("--")) throw new Error(`${flag} expects a value.`);
+  return { value, nextIndex: index + 1 };
+}
+
+function parseCaptureAnnotationFlags(argv = process.argv): CaptureAnnotation[] | undefined {
+  const annotations: CaptureAnnotation[] = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index]!;
+    const flag = ["--annotation", "--crop", "--box", "--blur", "--arrow"].find((candidate) => arg === candidate || arg.startsWith(`${candidate}=`));
+    if (!flag) continue;
+    const parsedFlag = annotationFlagValue(argv, index, flag);
+    index = parsedFlag.nextIndex;
+    if (flag === "--annotation") {
+      const parsed = parseCaptureAnnotations(JSON.parse(parsedFlag.value));
+      if (parsed) annotations.push(...parsed);
+    } else if (flag === "--crop") {
+      const [x, y, width, height] = parseNumberList(parsedFlag.value, 4, flag);
+      annotations.push({ type: "crop", x: x!, y: y!, width: width!, height: height! });
+    } else if (flag === "--box") {
+      const [x, y, width, height] = parseNumberList(parsedFlag.value, 4, flag);
+      annotations.push({ type: "box", x: x!, y: y!, width: width!, height: height! });
+    } else if (flag === "--blur") {
+      const [x, y, width, height] = parseNumberList(parsedFlag.value, 4, flag);
+      annotations.push({ type: "blur", x: x!, y: y!, width: width!, height: height! });
+    } else {
+      const [x1, y1, x2, y2] = parseNumberList(parsedFlag.value, 4, flag);
+      annotations.push({ type: "arrow", from: { x: x1!, y: y1! }, to: { x: x2!, y: y2! } });
+    }
+  }
+  return annotations.length > 0 ? annotations : undefined;
+}
+
 function handleError(program: Command, error: unknown): never {
   const message = error instanceof Error ? error.message : String(error);
   if (isJson(program)) {
@@ -123,10 +172,19 @@ program
   .argument("[mode]", "full, window, or region", "full")
   .option("--title <title>", "Share title")
   .option("--copy-link", "Copy the share URL after capture")
+  .option("--annotation <json>", "JSON annotation operation or array", collectOption, [])
+  .option("--crop <x,y,width,height>", "Crop the screenshot before sharing", collectOption, [])
+  .option("--box <x,y,width,height>", "Draw a box annotation before sharing", collectOption, [])
+  .option("--blur <x,y,width,height>", "Blur a region before sharing", collectOption, [])
+  .option("--arrow <x1,y1,x2,y2>", "Draw an arrow annotation before sharing", collectOption, [])
   .description("Capture a screenshot with best-effort OS tools")
-  .action(async (mode: CaptureMode, opts: { title?: string; copyLink?: boolean }, command: Command) => {
+  .action(async (
+    mode: CaptureMode,
+    opts: { title?: string; copyLink?: boolean; annotation?: string[]; crop?: string[]; box?: string[]; blur?: string[]; arrow?: string[] },
+    command: Command,
+  ) => {
     try {
-      const record = await client(command).captureScreenshot(mode, { title: opts.title });
+      const record = await client(command).captureScreenshot(mode, { title: opts.title, annotations: parseCaptureAnnotationFlags() });
       if (opts.copyLink) await client(command).copyLink(record.id);
       outputRecord(command, record);
     } catch (error) {

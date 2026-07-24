@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { extname } from "node:path";
 import { Buffer } from "node:buffer";
 import { captureScreenshot } from "../capture/index.js";
+import { CaptureAnnotationError, parseCaptureAnnotations } from "../capture/annotate.js";
 import { shareClipboard } from "../clipboard.js";
 import { publicClipRecord, publicClipRecords, publicStorageStatus } from "../public.js";
 import { ClipStore } from "../storage.js";
@@ -251,10 +252,25 @@ export async function handleClipHttpRequest(req: Request, options: ClipServerOpt
     if (req.method === "POST" && path === "/api/capture") {
       const body = await requestJson(req);
       const mode = typeof body["mode"] === "string" ? body["mode"] as CaptureMode : "full";
-      const record = await captureScreenshot(mode, {
-        ...storeOptions(options),
-        title: typeof body["title"] === "string" ? body["title"] : undefined,
-      });
+      let annotations;
+      try {
+        annotations = parseCaptureAnnotations(body["annotations"]);
+      } catch (error) {
+        return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
+      }
+      let record: ClipRecord;
+      try {
+        record = await captureScreenshot(mode, {
+          ...storeOptions(options),
+          title: typeof body["title"] === "string" ? body["title"] : undefined,
+          annotations,
+        });
+      } catch (error) {
+        if (error instanceof CaptureAnnotationError) {
+          return jsonResponse({ error: error.message }, 400);
+        }
+        throw error;
+      }
       return jsonResponse(publicClipRecord(record), 201);
     }
 

@@ -2,10 +2,11 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { captureScreenshot } from "../capture/index.js";
+import { CaptureAnnotationError, parseCaptureAnnotations } from "../capture/annotate.js";
 import { shareClipboard } from "../clipboard.js";
 import { publicClipRecord, publicClipRecords, publicStorageStatus } from "../public.js";
 import { createClipClient } from "../sdk.js";
-import type { CaptureMode, ClipboardKind, ClipClientOptions, ClipStatus } from "../types.js";
+import type { CaptureAnnotation, CaptureMode, ClipboardKind, ClipClientOptions, ClipStatus } from "../types.js";
 
 const CAPTURE_MODES = ["full", "window", "region"] as const;
 const CLIPBOARD_KINDS = ["auto", "text", "image", "file"] as const;
@@ -73,6 +74,26 @@ function jsonError(code: string, message: string, details?: Record<string, unkno
     isError: true,
   };
 }
+
+const captureRectSchema = {
+  x: z.number(),
+  y: z.number(),
+  width: z.number(),
+  height: z.number(),
+};
+
+const captureAnnotationSchema = z.union([
+  z.object({ type: z.literal("crop"), ...captureRectSchema }),
+  z.object({ type: z.literal("box"), ...captureRectSchema, color: z.string().optional(), lineWidth: z.number().optional() }),
+  z.object({ type: z.literal("blur"), ...captureRectSchema, radius: z.number().optional() }),
+  z.object({
+    type: z.literal("arrow"),
+    from: z.object({ x: z.number(), y: z.number() }),
+    to: z.object({ x: z.number(), y: z.number() }),
+    color: z.string().optional(),
+    lineWidth: z.number().optional(),
+  }),
+]);
 
 function jsonResource(uri: string, value: unknown) {
   return {
@@ -263,12 +284,26 @@ export function buildServer(options: ClipClientOptions = {}): McpServer {
     z.object({
       mode: z.enum(["full", "window", "region"]).optional(),
       title: z.string().optional(),
+      annotations: z.array(captureAnnotationSchema).optional(),
     }).strict(),
     async (input) => {
       const args = readArgs(input);
-      rejectUnexpectedArgs(args, ["mode", "title"], "clip_capture");
+      rejectUnexpectedArgs(args, ["mode", "title", "annotations"], "clip_capture");
       const mode = optionalEnum(args, "mode", CAPTURE_MODES, "full") as CaptureMode;
-      return jsonText(publicClipRecord(await captureScreenshot(mode, { ...options, title: optionalString(args, "title") })));
+      let annotations: CaptureAnnotation[] | undefined;
+      try {
+        annotations = parseCaptureAnnotations(args["annotations"]);
+      } catch (error) {
+        if (error instanceof CaptureAnnotationError) {
+          throw new ToolInputError(error.message, { field: "annotations" });
+        }
+        throw error;
+      }
+      return jsonText(publicClipRecord(await captureScreenshot(mode, {
+        ...options,
+        title: optionalString(args, "title"),
+        annotations,
+      })));
     },
   );
 

@@ -5,7 +5,7 @@ import { copyTextToClipboard, openLocalTarget } from "./capture/tools.js";
 import { captureClipboardHistory, detectClipboardCapabilities, shareClipboard } from "./clipboard.js";
 import { ClipStore } from "./storage.js";
 import { buildShareUrl, resolveBaseUrl } from "./share.js";
-import type { CaptureMode, ClipboardHistoryRecord, ClipboardKind, ClipClientOptions, ClipRecord, ClipStatus } from "./types.js";
+import type { CaptureAnnotation, CaptureMode, ClipboardHistoryRecord, ClipboardKind, ClipClientOptions, ClipRecord, ClipStatus } from "./types.js";
 import { detectCaptureCapabilities } from "./capture/index.js";
 
 export class ClipClient {
@@ -50,8 +50,8 @@ export class ClipClient {
     }
   }
 
-  async captureScreenshot(mode: CaptureMode = "full", options: { title?: string } = {}): Promise<ClipRecord> {
-    return await captureScreenshot(mode, { ...this.options, title: options.title });
+  async captureScreenshot(mode: CaptureMode = "full", options: { title?: string; annotations?: CaptureAnnotation[] } = {}): Promise<ClipRecord> {
+    return await captureScreenshot(mode, { ...this.options, title: options.title, annotations: options.annotations });
   }
 
   async shareClipboard(kind: ClipboardKind = "auto", options: { title?: string } = {}): Promise<ClipRecord> {

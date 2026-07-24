@@ -2,6 +2,47 @@ export type JsonObject = Record<string, unknown>;
 
 export type CaptureMode = "full" | "window" | "region";
 
+export interface CapturePoint {
+  x: number;
+  y: number;
+}
+
+export interface CaptureRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface CaptureCropAnnotation extends CaptureRect {
+  type: "crop";
+}
+
+export interface CaptureBoxAnnotation extends CaptureRect {
+  type: "box";
+  color?: string;
+  lineWidth?: number;
+}
+
+export interface CaptureBlurAnnotation extends CaptureRect {
+  type: "blur";
+  radius?: number;
+}
+
+export interface CaptureArrowAnnotation {
+  type: "arrow";
+  from: CapturePoint;
+  to: CapturePoint;
+  color?: string;
+  lineWidth?: number;
+}
+
+export type CaptureAnnotation =
+  | CaptureCropAnnotation
+  | CaptureBoxAnnotation
+  | CaptureBlurAnnotation
+  | CaptureArrowAnnotation;
+
 export type ClipboardKind = "auto" | "text" | "image" | "file";
 
 export type ClipboardHistoryKind = "clipboard-text" | "clipboard-image" | "clipboard-file";

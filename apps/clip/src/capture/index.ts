@@ -2,7 +2,8 @@ import { existsSync, mkdtempSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ClipStore } from "../storage.js";
-import type { CaptureCapabilities, CaptureMode, ClipClientOptions, ClipRecord } from "../types.js";
+import type { CaptureAnnotation, CaptureCapabilities, CaptureMode, ClipClientOptions, ClipRecord, JsonObject } from "../types.js";
+import { applyCaptureAnnotationsToFile, validateCaptureAnnotations } from "./annotate.js";
 import { commandExists, runCommand } from "./tools.js";
 
 const CAPTURE_TOOLS = ["screencapture", "gnome-screenshot", "grim", "scrot", "xdotool", "osascript"] as const;
@@ -73,14 +74,16 @@ function captureCommand(mode: CaptureMode, outputPath: string): { command: strin
 
 export async function captureScreenshot(
   mode: CaptureMode = "full",
-  options: ClipClientOptions & { title?: string; baseUrl?: string } = {},
+  options: ClipClientOptions & { title?: string; baseUrl?: string; annotations?: CaptureAnnotation[] } = {},
 ): Promise<ClipRecord> {
+  const annotations = validateCaptureAnnotations(options.annotations);
   const capabilities = await detectCaptureCapabilities();
   if (!capabilities.modes[mode]) {
     throw new Error(`Screenshot mode '${mode}' is unavailable on ${process.platform}. Run clip doctor for details.`);
   }
   const dir = mkdtempSync(join(tmpdir(), "clip-capture-"));
   const outputPath = join(dir, "screenshot.png");
+  const cleanupPaths = new Set([outputPath]);
   const command = captureCommand(mode, outputPath);
   if (!command) throw new Error(`No capture command found for mode '${mode}'.`);
   const result = await runCommand(command.command, command.args);
@@ -89,8 +92,24 @@ export async function captureScreenshot(
   const store = new ClipStore(options);
   try {
     const activeWindow = await detectActiveWindow();
+    let artifactPath = outputPath;
+    let annotationMetadata: JsonObject | undefined;
+    if (annotations.length > 0) {
+      const annotatedPath = join(dir, "screenshot-annotated.png");
+      const annotation = applyCaptureAnnotationsToFile(outputPath, annotatedPath, annotations);
+      artifactPath = annotation.outputPath;
+      cleanupPaths.add(annotatedPath);
+      annotationMetadata = {
+        applied: true,
+        operations: annotation.operations,
+        originalWidth: annotation.originalWidth,
+        originalHeight: annotation.originalHeight,
+        width: annotation.width,
+        height: annotation.height,
+      };
+    }
     return store.createFileClip({
-      path: outputPath,
+      path: artifactPath,
       title: options.title ?? (mode === "full" ? "Full screenshot" : `${mode} screenshot`),
       kind: "screenshot",
       mimeType: "image/png",
@@ -101,15 +120,18 @@ export async function captureScreenshot(
         args: command.args,
         activeWindow,
         bestEffort: true,
+        annotations: annotationMetadata,
       },
       baseUrl: options.baseUrl,
     });
   } finally {
     store.close();
-    try {
-      unlinkSync(outputPath);
-    } catch {
-      // Temporary capture cleanup is best-effort.
+    for (const path of cleanupPaths) {
+      try {
+        unlinkSync(path);
+      } catch {
+        // Temporary capture cleanup is best-effort.
+      }
     }
   }
 }
