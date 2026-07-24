@@ -71,4 +71,29 @@ describe("local secret redaction", () => {
       access_token: "[REDACTED]",
     });
   });
+
+  test("detects npm and GitHub token families without returning values", () => {
+    const npmValue = `npm_${"a".repeat(36)}`;
+    const githubValue = `github_pat_${"A".repeat(32)}`;
+
+    const findings = listSecretFindings(`install token ${npmValue}\nrepo token ${githubValue}`);
+
+    expect(findings).toEqual([
+      { pattern: "npm-token", count: 1 },
+      { pattern: "github-fine-grained-token", count: 1 },
+    ]);
+    expect(JSON.stringify(findings)).not.toContain(npmValue);
+    expect(JSON.stringify(findings)).not.toContain(githubValue);
+    expect(redactEvidenceText(`install token ${npmValue}`)).toBe("install token [REDACTED_NPM_TOKEN]");
+  });
+
+  test("does not report redaction placeholders as env assignment secrets", () => {
+    const npmKey = ["NPM_", "TO", "KEN"].join("");
+    const genericKey = ["TO", "KEN"].join("");
+    expect(listSecretFindings(`${npmKey}=[REDACTED]\n${genericKey}=[REDACTED_NPM_TOKEN]`)).toEqual([]);
+    const malformedPlaceholder = `${genericKey}=${"[REDACTED]"}suffix`;
+    expect(listSecretFindings(malformedPlaceholder)).toEqual([
+      { pattern: "env-secret-assignment", count: 1 },
+    ]);
+  });
 });

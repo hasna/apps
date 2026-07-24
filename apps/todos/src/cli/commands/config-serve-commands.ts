@@ -217,6 +217,65 @@ export function registerConfigServeCommands(program: Command) {
       process.exitCode = 1;
     });
 
+  redaction
+    .command("evidence")
+    .description("Dry-run or apply scoped redaction for task evidence rows without printing secret values")
+    .option("--task <ids>", "Comma-separated task IDs to scan/redact")
+    .option("--comment <ids>", "Comma-separated task comment IDs to scan/redact")
+    .option("--apply", "Apply redaction. Defaults to dry-run.")
+    .option("--authority <text>", "Required apply authority reference; do not pass secret values")
+    .option("--confirm <value>", "Required exact confirmation for --apply")
+    .option("--backup-output <path>", "SQLite backup path to create before --apply")
+    .action(async (opts: {
+      task?: string;
+      comment?: string;
+      apply?: boolean;
+      authority?: string;
+      confirm?: string;
+      backupOutput?: string;
+    }) => {
+      const globalOpts = program.opts();
+      try {
+        const {
+          TODOS_EVIDENCE_REDACTION_CONFIRM,
+          redactEvidenceRows,
+        } = await import("../../lib/evidence-redaction.js");
+        const report = redactEvidenceRows({
+          task_ids: listOption(opts.task),
+          comment_ids: listOption(opts.comment),
+          apply: Boolean(opts.apply),
+          authority: opts.authority,
+          confirm: opts.confirm,
+          backup_output: opts.backupOutput,
+        });
+        const failed = report.issues.length > 0 || report.redacted_preview.findings.length > 0 || report.post_scan?.clean === false;
+        if (failed) process.exitCode = 1;
+        if (globalOpts.json) { output(report, true); return; }
+        console.log(chalk.bold(opts.apply ? "Evidence redaction apply" : "Evidence redaction dry-run"));
+        console.log(`  ${chalk.dim("Tasks:")} ${report.scope.task_ids.length}`);
+        console.log(`  ${chalk.dim("Comments:")} ${report.scope.comment_ids.length}`);
+        console.log(`  ${chalk.dim("Matched fields:")} ${report.totals.matched_fields}`);
+        console.log(`  ${chalk.dim("Findings:")} ${report.totals.findings}`);
+        console.log(`  ${chalk.dim("Would update:")} ${report.totals.would_update_fields}`);
+        console.log(`  ${chalk.dim("Applied fields:")} ${report.totals.applied_fields}`);
+        console.log(`  ${chalk.dim("Redacted preview clean:")} ${report.redacted_preview.clean ? "yes" : "no"}`);
+        if (report.backup) {
+          console.log(`  ${chalk.dim("Backup:")} ${report.backup.path}`);
+          console.log(`  ${chalk.dim("Backup integrity:")} ${report.backup.integrity_ok ? "ok" : "failed"}`);
+        }
+        for (const surface of report.surfaces) {
+          if (surface.matched_fields === 0) continue;
+          console.log(`  ${surface.surface}: ${surface.matched_fields} field(s), ${surface.findings} finding(s)`);
+        }
+        for (const issue of report.issues) console.log(chalk.yellow(`  issue: ${issue}`));
+        if (!opts.apply) {
+          console.log(chalk.dim(`  Apply requires --apply --authority <ref> --confirm ${TODOS_EVIDENCE_REDACTION_CONFIRM}`));
+        }
+      } catch (error) {
+        handleError(error);
+      }
+    });
+
   const retention = program
     .command("retention")
     .description("Preview or apply local retention cleanup for old comments, runs, verification evidence, and expired artifact files");

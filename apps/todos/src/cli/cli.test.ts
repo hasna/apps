@@ -2788,6 +2788,22 @@ describe("CLI integration", () => {
     expect(scan.stdout).not.toContain("INTERNAL-1234");
     expect(scan.stdout).not.toContain("secretsecret");
 
+    const refused = await runCli([
+      "--json",
+      "redaction",
+      "evidence",
+      "--apply",
+      "--task",
+      "00000000-0000-4000-8000-000000000401",
+    ], dbPath);
+    expect(refused.exitCode).toBe(1);
+    const refusal = JSON.parse(refused.stdout);
+    expect(refusal.issues).toEqual(expect.arrayContaining([
+      "apply requires --authority with an explicit rotation/redaction approval reference",
+      "apply requires --confirm REDACT_TODOS_EVIDENCE",
+    ]));
+    expect(refusal.backup).toBeNull();
+
     if (previousHome === undefined) delete process.env["HOME"];
     else process.env["HOME"] = previousHome;
     rmSync(home, { recursive: true, force: true });
