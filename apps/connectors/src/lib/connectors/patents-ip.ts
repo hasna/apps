@@ -30,4 +30,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Patents & IP",
     tags: ["patents", "trademarks", "ip", "wipo"],
   },
+  {
+    name: "stilta",
+    displayName: "Stilta",
+    description: "Stilta API: patent search, research jobs, and prior-art analysis",
+    category: "Patents & IP",
+    tags: ["patents", "ip", "research", "prior-art"],
+  },
 ];
