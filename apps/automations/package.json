@@ -49,6 +49,7 @@
   ],
   "scripts": {
     "build": "rm -rf dist && bun build src/cli/index.ts src/daemon/index.ts src/index.ts src/types.ts src/lib/store.ts src/lib/paths.ts src/lib/runtime.ts src/lib/contracts.ts --outdir dist --target bun --packages external && chmod +x dist/cli/index.js dist/daemon/index.js && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
+    "smoke:webhook-release": "bun run scripts/release-webhook-smoke.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "contracts:conformance": "contracts conformance examples",

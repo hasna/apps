@@ -53,6 +53,37 @@ The default data root is `~/.hasna/automations`. Override it with
 `automations-daemon run` stays alive and maintains the local daemon lease until
 it receives `SIGINT` or `SIGTERM`. Use `--once` for smoke checks and tests.
 
+## Release Webhook Smoke
+
+The repeatable release smoke for the `@hasna/automations@0.1.1` installed
+package evidence is captured in `scripts/release-webhook-smoke.ts`:
+
+```sh
+bun run smoke:webhook-release -- --package @hasna/automations@0.1.1
+```
+
+The script installs the requested package spec into a disposable Bun project.
+For the exact `@hasna/automations@0.1.1` replay it also pins the compatible
+release peers `@hasna/actions@0.1.0` and `@hasna/cloud@0.1.41` unless
+`--no-default-peers` is passed. It uses disposable `HASNA_AUTOMATIONS_DIR`
+state, creates a fixture automation and signed webhook route, records daemon
+heartbeat and `/healthz` checks, sends a signed HTTP `POST`, claims the queued
+action as an OpenLoops runner, and exports a normalized webhook event as dry-run
+OpenLoops handoff evidence. It prints JSON evidence with secrets and signatures
+redacted, then removes temp directories unless `--keep` is passed.
+
+For local worktree validation after `bun run build`, pass a local package spec
+and explicit peer specs:
+
+```sh
+bun run smoke:webhook-release -- --package file:$PWD --no-default-peers --peer file:/path/to/open-actions --peer file:/path/to/open-cloud
+```
+
+The OpenLoops handoff check is intentionally dry-run only: it validates the
+`automations --json webhooks event ...` envelope and records the exact
+`loops --json events handle generic` command that an operator would run, without
+creating OpenLoops workflow runs.
+
 ## Boundaries
 
 - `open-actions` defines portable action manifests and invocation contracts.
