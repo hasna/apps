@@ -192,6 +192,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["feature-flags", "experimentation"],
   },
   {
+    name: "split-io",
+    displayName: "Split.io",
+    description: "Feature flags, segments, and experimentation",
+    category: "Developer Tools",
+    tags: ["feature-flags", "experimentation"],
+  },
+  {
     name: "abuselpdb",
     displayName: "AbuseIPDB",
     description: "IP abuse checking and threat intelligence",
