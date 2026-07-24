@@ -16,6 +16,20 @@ import { deliverWebhook } from "../lib/webhooks.js";
 import { createApiKey, listApiKeys, revokeApiKey } from "../db/api-keys.js";
 import { getUsageSummary } from "../db/usage.js";
 import { VERSION } from "../version.js";
+import {
+  DEFAULT_LIST_LIMIT,
+  DEFAULT_PREVIEW_LIMIT,
+  DEFAULT_TEXT_PREVIEW_CHARS,
+  compactApiKey,
+  compactDelivery,
+  compactPage,
+  compactSearchResult,
+  compactWebhook,
+  compactWebSearchResult,
+  parseLimit,
+  shortId,
+  truncateText,
+} from "../lib/output.js";
 
 // These modules exist at runtime but are not yet written; typed as any to avoid type errors.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -250,29 +264,65 @@ program
   .description("List all crawl jobs")
   .option("--status <status>", "filter by status (pending|running|completed|failed)")
   .option("--domain <domain>", "filter by domain")
+  .option("--limit <n>", "max crawls to show")
+  .option("--offset <n>", "number of crawls to skip", "0")
+  .option("--verbose", "show additional crawl timestamps and errors")
   .option("--json", "output as JSON")
-  .action((opts: { status?: string; domain?: string; json?: boolean }) => {
+  .action((opts: { status?: string; domain?: string; limit?: string; offset: string; verbose?: boolean; json?: boolean }) => {
     try {
-      const crawls = listCrawls({ status: opts.status, domain: opts.domain, limit: 50 });
+      const limit = parseLimit(opts.limit);
+      const offset = parseInt(opts.offset, 10) || 0;
+      const jsonLimit = opts.limit ? parseLimit(opts.limit, 50, 10000) : 50;
+      const crawls = listCrawls({
+        status: opts.status,
+        domain: opts.domain,
+        limit: opts.json ? jsonLimit : limit + 1,
+        offset,
+      });
 
       if (opts.json) {
         process.stdout.write(JSON.stringify(crawls, null, 2) + "\n");
         return;
       }
 
-      if (crawls.length === 0) {
+      const visible = crawls.slice(0, limit);
+      const hasMore = crawls.length > visible.length;
+
+      if (visible.length === 0) {
         process.stderr.write(chalk.gray("No crawl jobs found.\n"));
         return;
       }
 
-      process.stderr.write(chalk.bold(`${crawls.length} crawl job(s):\n\n`));
-      for (const crawl of crawls) {
+      process.stderr.write(chalk.bold(`${visible.length}${hasMore ? "+" : ""} crawl job(s):\n\n`));
+      process.stderr.write(
+        chalk.gray(
+          `  ${"ID".padEnd(8)}  ${"Status".padEnd(10)}  ${"Pages".padStart(5)}  ${"Updated".padEnd(19)}  URL\n`
+        )
+      );
+      process.stderr.write(chalk.gray("  " + "─".repeat(110) + "\n"));
+      for (const crawl of visible) {
         process.stderr.write(
-          `  ${chalk.cyan(crawl.id.slice(0, 8))}  ` +
-          `${formatStatus(crawl.status).padEnd(18)}  ` +
+          `  ${chalk.cyan(shortId(crawl.id))}  ` +
+          `${formatStatus(crawl.status).padEnd(10)}  ` +
           `${chalk.white(String(crawl.pagesCrawled).padStart(4))} pages  ` +
-          `${chalk.blue(crawl.url.slice(0, 60))}\n`
+          `${chalk.gray(crawl.updatedAt.slice(0, 19))}  ` +
+          `${chalk.blue(truncateText(crawl.url, 70))}\n`
         );
+        if (opts.verbose) {
+          process.stderr.write(
+            chalk.gray(
+              `            depth=${crawl.depth} max=${crawl.maxPages} created=${crawl.createdAt.slice(0, 19)}` +
+              (crawl.errorMessage ? ` error=${truncateText(crawl.errorMessage, 100)}` : "") +
+              "\n"
+            )
+          );
+        }
+      }
+      const hint = hasMore
+        ? `Showing ${visible.length}; use --limit <n> or --offset ${offset + visible.length} for more. Use status <id> for details.`
+        : `Use status <id> for details, pages <id> for page summaries, or --json for machine-readable output.`;
+      if (hint) {
+        process.stderr.write(chalk.gray(`\n${hint}\n`));
       }
     } catch (err) {
       process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
@@ -370,8 +420,9 @@ program
 program
   .command("status <crawl-id>")
   .description("Show crawl job details and stats")
+  .option("--verbose", "show status code breakdown and crawl options")
   .option("--json", "output as JSON")
-  .action((crawlId: string, opts: { json?: boolean }) => {
+  .action((crawlId: string, opts: { verbose?: boolean; json?: boolean }) => {
     try {
       const crawl = getCrawl(crawlId);
       if (!crawl) {
@@ -386,30 +437,34 @@ program
         return;
       }
 
-      process.stderr.write(chalk.bold("Crawl Details\n") + chalk.gray("─".repeat(50)) + "\n");
-      process.stderr.write(`  ${chalk.bold("ID:")}          ${chalk.cyan(crawl.id)}\n`);
-      process.stderr.write(`  ${chalk.bold("URL:")}         ${chalk.blue(crawl.url)}\n`);
-      process.stderr.write(`  ${chalk.bold("Status:")}      ${formatStatus(crawl.status)}\n`);
-      process.stderr.write(`  ${chalk.bold("Pages:")}       ${crawl.pagesCrawled} / ${crawl.maxPages}\n`);
-      process.stderr.write(`  ${chalk.bold("Depth:")}       ${crawl.depth}\n`);
-      process.stderr.write(`  ${chalk.bold("Created:")}     ${crawl.createdAt}\n`);
+      process.stderr.write(chalk.bold("Crawl\n") + chalk.gray("─".repeat(50)) + "\n");
+      process.stderr.write(`  ${chalk.bold("ID:")}       ${chalk.cyan(crawl.id)}\n`);
+      process.stderr.write(`  ${chalk.bold("URL:")}      ${chalk.blue(truncateText(crawl.url, 120))}\n`);
+      process.stderr.write(`  ${chalk.bold("Status:")}   ${formatStatus(crawl.status)}\n`);
+      process.stderr.write(`  ${chalk.bold("Pages:")}    ${crawl.pagesCrawled} / ${crawl.maxPages}\n`);
+      process.stderr.write(`  ${chalk.bold("Depth:")}    ${crawl.depth}\n`);
+      process.stderr.write(`  ${chalk.bold("Created:")}  ${crawl.createdAt.slice(0, 19)}\n`);
       if (crawl.completedAt) {
-        process.stderr.write(`  ${chalk.bold("Completed:")}   ${crawl.completedAt}\n`);
+        process.stderr.write(`  ${chalk.bold("Done:")}     ${crawl.completedAt.slice(0, 19)}\n`);
       }
       if (crawl.errorMessage) {
-        process.stderr.write(`  ${chalk.bold("Error:")}       ${chalk.red(crawl.errorMessage)}\n`);
+        process.stderr.write(`  ${chalk.bold("Error:")}    ${chalk.red(truncateText(crawl.errorMessage, 180))}\n`);
       }
 
-      process.stderr.write("\n" + chalk.bold("Stats\n") + chalk.gray("─".repeat(50)) + "\n");
-      process.stderr.write(`  ${chalk.bold("Total pages:")}    ${stats.total}\n`);
-      process.stderr.write(`  ${chalk.bold("Avg word count:")} ${Math.round(stats.avgWordCount)}\n`);
-      if (Object.keys(stats.statusCodes).length > 0) {
-        process.stderr.write(`  ${chalk.bold("Status codes:")}\n`);
-        for (const [code, count] of Object.entries(stats.statusCodes)) {
-          const color = code.startsWith("2") ? chalk.green : code.startsWith("4") ? chalk.yellow : chalk.red;
-          process.stderr.write(`    ${color(code)}: ${count}\n`);
+      process.stderr.write(`  ${chalk.bold("Words/page:")} ${Math.round(stats.avgWordCount)} avg\n`);
+      if (opts.verbose) {
+        process.stderr.write("\n" + chalk.bold("Verbose\n") + chalk.gray("─".repeat(50)) + "\n");
+        process.stderr.write(`  ${chalk.bold("Total pages:")} ${stats.total}\n`);
+        if (Object.keys(stats.statusCodes).length > 0) {
+          process.stderr.write(`  ${chalk.bold("Status codes:")}\n`);
+          for (const [code, count] of Object.entries(stats.statusCodes)) {
+            const color = code.startsWith("2") ? chalk.green : code.startsWith("4") ? chalk.yellow : chalk.red;
+            process.stderr.write(`    ${color(code)}: ${count}\n`);
+          }
         }
+        process.stderr.write(`  ${chalk.bold("Options:")} ${chalk.gray(JSON.stringify(crawl.options))}\n`);
       }
+      process.stderr.write(chalk.gray(`\nUse pages ${crawl.id} for page summaries, status ${crawl.id} --verbose for details, or --json for full data.\n`));
     } catch (err) {
       process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
       process.exit(1);
@@ -421,38 +476,62 @@ program
 program
   .command("pages <crawl-id>")
   .description("List pages in a crawl")
-  .option("--limit <n>", "max pages to show", "20")
+  .option("--limit <n>", "max pages to show", String(DEFAULT_LIST_LIMIT))
+  .option("--offset <n>", "number of pages to skip", "0")
+  .option("--verbose", "show page titles and timestamps")
   .option("--json", "output as JSON")
-  .action((crawlId: string, opts: { limit: string; json?: boolean }) => {
+  .action((crawlId: string, opts: { limit: string; offset: string; verbose?: boolean; json?: boolean }) => {
     try {
-      const pages = listPages(crawlId, { limit: parseInt(opts.limit, 10) });
+      const limit = parseLimit(opts.limit);
+      const jsonLimit = Math.max(1, parseInt(opts.limit, 10) || DEFAULT_LIST_LIMIT);
+      const offset = parseInt(opts.offset, 10) || 0;
+      const pages = listPages(crawlId, {
+        limit: opts.json ? jsonLimit : limit + 1,
+        offset,
+      });
 
       if (opts.json) {
         process.stdout.write(JSON.stringify(pages, null, 2) + "\n");
         return;
       }
 
-      if (pages.length === 0) {
+      const visible = pages.slice(0, limit);
+      const hasMore = pages.length > visible.length;
+
+      if (visible.length === 0) {
         process.stderr.write(chalk.gray("No pages found for this crawl.\n"));
         return;
       }
 
-      process.stderr.write(chalk.bold(`${pages.length} page(s):\n\n`));
-      for (const page of pages) {
+      process.stderr.write(chalk.bold(`${visible.length}${hasMore ? "+" : ""} page(s):\n\n`));
+      process.stderr.write(
+        chalk.gray(
+          `  ${"ID".padEnd(8)}  ${"Code".padEnd(4)}  ${"Words".padStart(6)}  URL\n`
+        )
+      );
+      process.stderr.write(chalk.gray("  " + "─".repeat(100) + "\n"));
+      for (const page of visible) {
         const statusColor =
           (page.statusCode ?? 0) >= 200 && (page.statusCode ?? 0) < 300
             ? chalk.green
             : chalk.yellow;
         process.stderr.write(
-          `  ${chalk.cyan(page.id.slice(0, 8))}  ` +
+          `  ${chalk.cyan(shortId(page.id))}  ` +
           `${statusColor(String(page.statusCode ?? "?").padEnd(3))}  ` +
           `${String(page.wordCount ?? 0).padStart(6)} words  ` +
-          `${chalk.blue(page.url.slice(0, 60))}\n`
+          `${chalk.blue(truncateText(page.url, 72))}\n`
         );
-        if (page.title) {
-          process.stderr.write(`          ${chalk.gray(page.title.slice(0, 70))}\n`);
+        if (opts.verbose && page.title) {
+          process.stderr.write(`            ${chalk.gray(truncateText(page.title, 86))}\n`);
+        }
+        if (opts.verbose) {
+          process.stderr.write(`            ${chalk.gray(`crawled=${page.crawledAt.slice(0, 19)} type=${page.contentType ?? "unknown"}`)}\n`);
         }
       }
+      const hint = hasMore
+        ? `Showing ${visible.length}; use --offset ${offset + visible.length} for more. Use get <page-id> for preview or get <page-id> --full for content.`
+        : `Use get <page-id> for preview, get <page-id> --full for content, or --json for full page records.`;
+      process.stderr.write(chalk.gray(`\n${hint}\n`));
     } catch (err) {
       process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
       process.exit(1);
@@ -464,14 +543,16 @@ program
 program
   .command("links <crawl-id>")
   .description("Show broken links (4xx/5xx) found during a crawl")
+  .option("--limit <n>", "max broken links to show", String(DEFAULT_LIST_LIMIT))
   .option("--json", "output as JSON")
-  .action((crawlId: string, opts: { json?: boolean }) => {
+  .action((crawlId: string, opts: { limit: string; json?: boolean }) => {
     try {
       const crawl = getCrawl(crawlId);
       if (!crawl) {
         process.stderr.write(chalk.red(`Crawl not found: ${crawlId}\n`));
         process.exit(1);
       }
+      const displayLimit = parseLimit(opts.limit);
       const pages = listPages(crawlId, { limit: 10000 });
       const broken = pages.filter(p => (p.statusCode ?? 0) >= 400);
       if (opts.json) {
@@ -482,11 +563,18 @@ program
         process.stderr.write(chalk.green("✓ No broken links found\n"));
         return;
       }
-      process.stderr.write(chalk.bold(`${broken.length} broken link(s):\n\n`));
-      for (const page of broken) {
+      const visible = broken.slice(0, displayLimit);
+      const hasMore = broken.length > visible.length;
+      process.stderr.write(chalk.bold(`${visible.length}${hasMore ? "+" : ""} broken link(s):\n\n`));
+      for (const page of visible) {
         const code = page.statusCode ?? 0;
         const color = code >= 500 ? chalk.red : chalk.yellow;
-        process.stderr.write(`  ${color(String(code))}  ${chalk.blue(page.url.slice(0, 80))}\n`);
+        process.stderr.write(`  ${color(String(code))}  ${chalk.blue(truncateText(page.url, 90))}\n`);
+      }
+      if (hasMore) {
+        process.stderr.write(chalk.gray(`\nShowing ${visible.length}; use --limit <n> or --json for the full broken-link list.\n`));
+      } else {
+        process.stderr.write(chalk.gray(`\nUse --json for full broken page records.\n`));
       }
     } catch (err) {
       process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
@@ -498,10 +586,13 @@ program
 
 program
   .command("get <page-id>")
-  .description("Show page content")
+  .description("Show page summary and preview")
   .option("--format <fmt>", "output format: md | text", "md")
+  .option("--full", "print full page content")
+  .option("--preview-chars <n>", "characters to show in compact preview", String(DEFAULT_TEXT_PREVIEW_CHARS))
+  .option("--verbose", "show additional metadata")
   .option("--json", "output as JSON")
-  .action((pageId: string, opts: { format: string; json?: boolean }) => {
+  .action((pageId: string, opts: { format: string; full?: boolean; previewChars: string; verbose?: boolean; json?: boolean }) => {
     try {
       const page = getPage(pageId);
       if (!page) {
@@ -514,22 +605,51 @@ program
         return;
       }
 
-      if (process.stdout.isTTY) {
-        process.stderr.write(chalk.bold(page.title ?? "(no title)") + "\n");
-        process.stderr.write(chalk.blue(page.url) + "\n");
-        process.stderr.write(chalk.gray(`${page.wordCount ?? 0} words  ·  status ${page.statusCode ?? "?"}\n`));
-        process.stderr.write(chalk.gray("─".repeat(60)) + "\n\n");
-      }
-
       const content =
         opts.format === "text"
           ? page.textContent
           : page.markdownContent ?? page.textContent;
 
-      if (content) {
-        process.stdout.write(content + "\n");
+      if (opts.full) {
+        if (process.stdout.isTTY) {
+          process.stderr.write(chalk.bold(page.title ?? "(no title)") + "\n");
+          process.stderr.write(chalk.blue(page.url) + "\n");
+          process.stderr.write(chalk.gray(`${page.wordCount ?? 0} words  ·  status ${page.statusCode ?? "?"}\n`));
+          process.stderr.write(chalk.gray("─".repeat(60)) + "\n\n");
+        }
+        if (content) {
+          process.stdout.write(content + "\n");
+        } else {
+          process.stderr.write(chalk.gray("(no content)\n"));
+        }
+        return;
+      }
+
+      const summary = compactPage(page, {
+        includePreview: true,
+        previewChars: parseLimit(opts.previewChars, DEFAULT_TEXT_PREVIEW_CHARS, 5000),
+      });
+      const normalizedContentLength = content?.replace(/\s+/g, " ").trim().length ?? 0;
+
+      process.stderr.write(chalk.bold(summary.title ?? "(no title)") + "\n");
+      process.stderr.write(chalk.blue(truncateText(summary.url, 120)) + "\n");
+      process.stderr.write(chalk.gray(`${summary.wordCount ?? 0} words  ·  status ${summary.statusCode ?? "?"}  ·  ${summary.crawledAt.slice(0, 19)}\n`));
+      if (opts.verbose) {
+        process.stderr.write(chalk.gray(`id=${summary.id} crawl=${summary.crawlId} type=${summary.contentType ?? "unknown"} bytes=${summary.byteSize ?? 0}\n`));
+      } else {
+        process.stderr.write(chalk.gray(`id=${shortId(summary.id)}  crawl=${shortId(summary.crawlId)}\n`));
+      }
+      process.stderr.write(chalk.gray("─".repeat(60)) + "\n");
+
+      if (summary.preview) {
+        process.stdout.write(summary.preview + "\n");
+        const message = summary.preview.length < normalizedContentLength
+          ? `Preview truncated. Use get ${page.id} --full for complete ${opts.format === "text" ? "text" : "markdown"} or --json for the full record.`
+          : `Use get ${page.id} --full for complete content or --json for the full record.`;
+        process.stderr.write(chalk.gray(`\n${message}\n`));
       } else {
         process.stderr.write(chalk.gray("(no content)\n"));
+        process.stderr.write(chalk.gray(`Use get ${page.id} --json for the full record.\n`));
       }
     } catch (err) {
       process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
@@ -545,17 +665,23 @@ program
   .option("--domain <domain>", "filter by domain")
   .option("--crawl-id <id>", "filter by crawl ID")
   .option("--limit <n>", "max results", "10")
+  .option("--offset <n>", "number of results to skip", "0")
+  .option("--verbose", "show rank, word count, and full page IDs")
   .option("--json", "output as JSON")
   .action(
     (
       query: string,
-      opts: { domain?: string; crawlId?: string; limit: string; json?: boolean }
+      opts: { domain?: string; crawlId?: string; limit: string; offset: string; verbose?: boolean; json?: boolean }
     ) => {
       try {
+        const limit = parseLimit(opts.limit, 10);
+        const jsonLimit = Math.max(1, parseInt(opts.limit, 10) || 10);
+        const offset = parseInt(opts.offset, 10) || 0;
         const results = searchPages(query, {
           domain: opts.domain,
           crawlId: opts.crawlId,
-          limit: parseInt(opts.limit, 10),
+          limit: opts.json ? jsonLimit : limit + 1,
+          offset,
         });
 
         if (opts.json) {
@@ -568,17 +694,27 @@ program
           return;
         }
 
-        process.stderr.write(chalk.bold(`${results.length} result(s) for "${query}":\n\n`));
-        for (const result of results) {
+        const visible = results.slice(0, limit);
+        const hasMore = results.length > visible.length;
+        process.stderr.write(chalk.bold(`${visible.length}${hasMore ? "+" : ""} result(s) for "${query}":\n\n`));
+        for (const result of visible) {
+          const compact = compactSearchResult(result);
           process.stderr.write(
-            `  ${chalk.cyan(result.page.id.slice(0, 8))}  ` +
-            `${chalk.blue(result.page.url.slice(0, 70))}\n`
+            `  ${chalk.cyan(opts.verbose ? compact.pageId : shortId(compact.pageId))}  ` +
+            `${chalk.blue(truncateText(compact.url, 78))}\n`
           );
-          if (result.page.title) {
-            process.stderr.write(`  ${chalk.bold(result.page.title)}\n`);
+          if (compact.title) {
+            process.stderr.write(`  ${chalk.bold(truncateText(compact.title, 92))}\n`);
           }
-          process.stderr.write(`  ${chalk.gray(result.snippet)}\n\n`);
+          if (opts.verbose) {
+            process.stderr.write(chalk.gray(`  crawl=${compact.crawlId} rank=${compact.rank} words=${compact.wordCount ?? 0}\n`));
+          }
+          process.stderr.write(`  ${chalk.gray(compact.snippet)}\n\n`);
         }
+        const hint = hasMore
+          ? `Showing ${visible.length}; use --offset ${offset + visible.length} for more. Use get <page-id> for preview or --json for full search records.`
+          : `Use get <page-id> for preview, get <page-id> --full for content, or --json for full search records.`;
+        process.stderr.write(chalk.gray(hint + "\n"));
       } catch (err) {
         process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
         process.exit(1);
@@ -637,8 +773,10 @@ program
 program
   .command("sitemap <url>")
   .description("Discover URLs from sitemap.xml")
+  .option("--limit <n>", "max URLs to print in human output", String(DEFAULT_PREVIEW_LIMIT))
+  .option("--all", "print every discovered URL")
   .option("--json", "output as JSON")
-  .action(async (url: string, opts: { json?: boolean }) => {
+  .action(async (url: string, opts: { limit: string; all?: boolean; json?: boolean }) => {
     try {
       if (!opts.json) {
         process.stderr.write(chalk.cyan(`Fetching sitemap from ${url}...\n`));
@@ -651,9 +789,16 @@ program
         return;
       }
 
-      process.stderr.write(chalk.green(`✓ Found ${entries.length} URL(s):\n\n`));
-      for (const entry of entries) {
+      const displayLimit = parseLimit(opts.limit, DEFAULT_PREVIEW_LIMIT);
+      const visible = opts.all ? entries : entries.slice(0, displayLimit);
+      process.stderr.write(chalk.green(`✓ Found ${entries.length} URL(s); showing ${visible.length}:\n\n`));
+      for (const entry of visible) {
         process.stdout.write(entry.url + "\n");
+      }
+      if (!opts.all && entries.length > visible.length) {
+        process.stderr.write(chalk.gray(`\nShowing ${visible.length} of ${entries.length}. Use --all, --limit <n>, or --json for the full sitemap.\n`));
+      } else {
+        process.stderr.write(chalk.gray(`\nUse --json for structured sitemap metadata.\n`));
       }
     } catch (err) {
       process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
@@ -666,14 +811,18 @@ program
 program
   .command("map <url>")
   .description("Discover all URLs on a site without crawling content")
-  .option("--limit <n>", "max URLs to return", "1000")
+  .option("--limit <n>", "max URLs to discover", "1000")
+  .option("--show <n>", "max URLs to print in human output", String(DEFAULT_PREVIEW_LIMIT))
   .option("--search <pattern>", "filter URLs containing this string")
   .option("--allow-subdomains", "include subdomains")
+  .option("--all", "print every discovered URL")
   .option("--json", "output as JSON")
   .action(async (url: string, opts: {
     limit: string;
+    show: string;
     search?: string;
     allowSubdomains?: boolean;
+    all?: boolean;
     json?: boolean;
   }) => {
     try {
@@ -692,10 +841,17 @@ program
         return;
       }
 
-      for (const u of urls) {
+      const displayLimit = parseLimit(opts.show, DEFAULT_PREVIEW_LIMIT);
+      const visible = opts.all ? urls : urls.slice(0, displayLimit);
+      for (const u of visible) {
         process.stdout.write(u + "\n");
       }
-      process.stderr.write(chalk.gray(`\n${urls.length} URL(s) found\n`));
+      process.stderr.write(chalk.gray(`\n${urls.length} URL(s) found; showing ${visible.length}\n`));
+      if (!opts.all && urls.length > visible.length) {
+        process.stderr.write(chalk.gray(`Use --all, --show <n>, --search <pattern>, or --json for more URLs.\n`));
+      } else {
+        process.stderr.write(chalk.gray("Use --json for a machine-readable URL list.\n"));
+      }
     } catch (err) {
       process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
       process.exit(1);
@@ -810,11 +966,12 @@ program
   .option("--render", "use Playwright JS rendering")
   .option("--screenshot", "capture screenshots")
   .option("--delay <ms>", "delay between requests (ms)", "1000")
+  .option("--limit <n>", "max results to show in human output", String(DEFAULT_LIST_LIMIT))
   .option("--json", "output as JSON")
   .action(
     async (
       urls: string[],
-      opts: { render?: boolean; screenshot?: boolean; delay: string; json?: boolean }
+      opts: { render?: boolean; screenshot?: boolean; delay: string; limit: string; json?: boolean }
     ) => {
       try {
         if (!opts.json) {
@@ -838,16 +995,21 @@ program
         }
 
         process.stderr.write(chalk.green(`✓ Batch crawl complete\n\n`));
-        for (const result of results) {
+        const displayLimit = parseLimit(opts.limit);
+        const visible = results.slice(0, displayLimit);
+        for (const result of visible) {
           const statusIcon =
             result.status === "completed" ? chalk.green("✓") : chalk.red("✗");
           process.stderr.write(
-            `  ${statusIcon}  ${chalk.blue(result.url.slice(0, 70))}` +
+            `  ${statusIcon}  ${chalk.blue(truncateText(result.url, 70))}` +
             (result.error
-              ? chalk.red(` — ${result.error}`)
+              ? chalk.red(` — ${truncateText(result.error, 120)}`)
               : chalk.gray(` — ${result.pagesCrawled} pages`)) +
             "\n"
           );
+        }
+        if (results.length > visible.length) {
+          process.stderr.write(chalk.gray(`\nShowing ${visible.length} of ${results.length}. Use --limit <n> or --json for all batch results.\n`));
         }
       } catch (err) {
         process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
@@ -1122,13 +1284,14 @@ webhookCmd
   .description("Register a webhook endpoint")
   .option("--events <events>", "comma-separated events (default: crawl.completed)", "crawl.completed")
   .option("--secret <secret>", "HMAC signing secret")
+  .option("--include-secret", "include secret in JSON output")
   .option("--json", "output as JSON")
-  .action(async (url: string, opts: { events: string; secret?: string; json?: boolean }) => {
+  .action(async (url: string, opts: { events: string; secret?: string; includeSecret?: boolean; json?: boolean }) => {
     try {
       const events = opts.events.split(",").map(e => e.trim()) as Parameters<typeof createWebhook>[0]["events"];
       const webhook = createWebhook({ url, events, secret: opts.secret });
       if (opts.json) {
-        process.stdout.write(JSON.stringify(webhook, null, 2) + "\n");
+        process.stdout.write(JSON.stringify(opts.includeSecret ? webhook : compactWebhook(webhook), null, 2) + "\n");
         return;
       }
       process.stderr.write(
@@ -1143,37 +1306,55 @@ webhookCmd
 webhookCmd
   .command("list")
   .description("List all registered webhooks")
+  .option("--limit <n>", "max webhooks to show", String(DEFAULT_LIST_LIMIT))
+  .option("--offset <n>", "number of webhooks to skip", "0")
+  .option("--verbose", "show created timestamps and secret presence")
+  .option("--include-secrets", "include secrets in JSON output")
   .option("--json", "output as JSON")
-  .action((opts: { json?: boolean }) => {
+  .action((opts: { limit: string; offset: string; verbose?: boolean; includeSecrets?: boolean; json?: boolean }) => {
     try {
       const webhooks = listWebhooks();
+      const offset = parseInt(opts.offset, 10) || 0;
       if (opts.json) {
-        process.stdout.write(JSON.stringify(webhooks, null, 2) + "\n");
+        const limit = Math.max(1, parseInt(opts.limit, 10) || 100);
+        const visible = webhooks.slice(offset, offset + limit);
+        process.stdout.write(JSON.stringify(opts.includeSecrets ? visible : visible.map(compactWebhook), null, 2) + "\n");
         return;
       }
       if (webhooks.length === 0) {
         process.stderr.write(chalk.gray("No webhooks registered.\n"));
         return;
       }
-      process.stderr.write(chalk.bold(`${webhooks.length} webhook(s):\n\n`));
+      const displayLimit = parseLimit(opts.limit);
+      const visible = webhooks.slice(offset, offset + displayLimit);
+      process.stderr.write(chalk.bold(`${visible.length}${webhooks.length > offset + visible.length ? "+" : ""} webhook(s):\n\n`));
       process.stderr.write(
         chalk.gray(
           `  ${"ID".padEnd(8)}  ${"URL".padEnd(50)}  ${"Events".padEnd(30)}  ${"Active".padEnd(6)}  ${"Failures".padEnd(8)}  Last triggered\n`
         )
       );
       process.stderr.write(chalk.gray("  " + "─".repeat(120) + "\n"));
-      for (const w of webhooks) {
+      for (const webhook of visible) {
+        const w = compactWebhook(webhook);
         const activeStr = w.active ? chalk.green("yes") : chalk.red("no");
         const failStr = w.failureCount > 0 ? chalk.yellow(String(w.failureCount)) : chalk.gray("0");
         const lastStr = w.lastTriggeredAt ? chalk.gray(w.lastTriggeredAt.slice(0, 19)) : chalk.gray("never");
         process.stderr.write(
-          `  ${chalk.cyan(w.id.slice(0, 8))}  ` +
-          `${chalk.blue(w.url.slice(0, 50).padEnd(50))}  ` +
-          `${w.events.join(",").slice(0, 30).padEnd(30)}  ` +
+          `  ${chalk.cyan(shortId(w.id))}  ` +
+          `${chalk.blue(truncateText(w.url, 50).padEnd(50))}  ` +
+          `${truncateText(w.events.join(","), 30).padEnd(30)}  ` +
           `${activeStr.padEnd(6)}  ` +
           `${failStr.padEnd(8)}  ` +
           `${lastStr}\n`
         );
+        if (opts.verbose) {
+          process.stderr.write(chalk.gray(`            created=${w.createdAt.slice(0, 19)} hasSecret=${w.hasSecret ? "yes" : "no"}\n`));
+        }
+      }
+      if (webhooks.length > offset + visible.length) {
+        process.stderr.write(chalk.gray(`\nShowing ${visible.length} of ${webhooks.length}. Use --offset ${offset + visible.length}, --limit <n>, or --json for compact JSON records.\n`));
+      } else {
+        process.stderr.write(chalk.gray(`\nUse webhook deliveries <id> for history, --verbose for extra fields, or --json for compact JSON records.\n`));
       }
     } catch (err) {
       process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
@@ -1242,18 +1423,24 @@ webhookCmd
 webhookCmd
   .command("deliveries <webhook-id>")
   .description("Show delivery history for a webhook")
-  .option("--limit <n>", "max deliveries to show", "20")
+  .option("--limit <n>", "max deliveries to show", String(DEFAULT_LIST_LIMIT))
+  .option("--offset <n>", "number of deliveries to skip", "0")
+  .option("--verbose", "show payload and response previews")
+  .option("--include-payloads", "include full payloads and responses in JSON output")
   .option("--json", "output as JSON")
-  .action((id: string, opts: { limit: string; json?: boolean }) => {
+  .action((id: string, opts: { limit: string; offset: string; verbose?: boolean; includePayloads?: boolean; json?: boolean }) => {
     try {
       const webhook = getWebhook(id);
       if (!webhook) {
         process.stderr.write(chalk.red(`Webhook not found: ${id}\n`));
         process.exit(1);
       }
-      const deliveries = listDeliveries(id, parseInt(opts.limit, 10));
+      const limit = parseLimit(opts.limit);
+      const jsonLimit = Math.max(1, parseInt(opts.limit, 10) || DEFAULT_LIST_LIMIT);
+      const offset = parseInt(opts.offset, 10) || 0;
+      const deliveries = listDeliveries(id, opts.json ? jsonLimit : limit, offset);
       if (opts.json) {
-        process.stdout.write(JSON.stringify(deliveries, null, 2) + "\n");
+        process.stdout.write(JSON.stringify(opts.includePayloads ? deliveries : deliveries.map((d) => compactDelivery(d)), null, 2) + "\n");
         return;
       }
       if (deliveries.length === 0) {
@@ -1261,7 +1448,8 @@ webhookCmd
         return;
       }
       process.stderr.write(chalk.bold(`${deliveries.length} delivery/deliveries for webhook ${chalk.cyan(id.slice(0, 8))}:\n\n`));
-      for (const d of deliveries) {
+      for (const delivery of deliveries) {
+        const d = compactDelivery(delivery, { verbose: opts.verbose });
         const statusFn =
           d.status === "delivered" ? chalk.green :
           d.status === "failed"    ? chalk.red    :
@@ -1269,9 +1457,14 @@ webhookCmd
         const statusStr = statusFn(d.status.padEnd(10));
         const httpStr = d.httpStatus ? chalk.gray(`HTTP ${d.httpStatus}`) : chalk.gray("no response");
         process.stderr.write(
-          `  ${statusStr}  attempts=${d.attemptCount}  ${httpStr}  ${chalk.gray(d.createdAt.slice(0, 19))}\n`
+          `  ${chalk.cyan(shortId(d.id))}  ${statusStr}  attempts=${d.attemptCount}  ${httpStr}  ${chalk.gray(d.createdAt.slice(0, 19))}\n`
         );
+        if (opts.verbose) {
+          if (d.payloadPreview) process.stderr.write(chalk.gray(`            payload=${d.payloadPreview}\n`));
+          if (d.responsePreview) process.stderr.write(chalk.gray(`            response=${d.responsePreview}\n`));
+        }
       }
+      process.stderr.write(chalk.gray(`\nUse --offset <n> for older deliveries, --verbose for payload/response previews, or --json for compact JSON records.\n`));
     } catch (err) {
       process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
       process.exit(1);
@@ -1326,33 +1519,47 @@ apiKeyCmd
 apiKeyCmd
   .command("list")
   .description("List all API keys")
+  .option("--limit <n>", "max keys to show", String(DEFAULT_LIST_LIMIT))
+  .option("--offset <n>", "number of keys to skip", "0")
+  .option("--verbose", "show timestamps")
   .option("--json", "output as JSON")
-  .action((opts: { json?: boolean }) => {
+  .action((opts: { limit: string; offset: string; verbose?: boolean; json?: boolean }) => {
     try {
       const keys = listApiKeys();
+      const offset = parseInt(opts.offset, 10) || 0;
       if (opts.json) {
         // Never return key hash
-        process.stdout.write(JSON.stringify(keys.map(({ keyHash: _kh, ...rest }) => rest), null, 2) + "\n");
+        const limit = Math.max(1, parseInt(opts.limit, 10) || 100);
+        process.stdout.write(JSON.stringify(keys.slice(offset, offset + limit).map(({ keyHash: _kh, ...rest }) => rest), null, 2) + "\n");
         return;
       }
       if (keys.length === 0) {
         process.stderr.write(chalk.gray("No API keys found.\n"));
         return;
       }
-      process.stderr.write(chalk.bold(`${keys.length} API key(s):\n\n`));
-      for (const key of keys) {
+      const displayLimit = parseLimit(opts.limit);
+      const visible = keys.slice(offset, offset + displayLimit).map(compactApiKey);
+      process.stderr.write(chalk.bold(`${visible.length}${keys.length > offset + visible.length ? "+" : ""} API key(s):\n\n`));
+      for (const key of visible) {
         const status = key.active ? chalk.green("active") : chalk.red("revoked");
         const expired = key.expiresAt && new Date(key.expiresAt) < new Date();
         process.stderr.write(
-          `  ${chalk.cyan(key.id.slice(0, 8))}  ` +
+          `  ${chalk.cyan(shortId(key.id))}  ` +
           `${chalk.gray(key.keyPrefix + "...")}  ` +
           `${status}${expired ? chalk.yellow(" (expired)") : ""}` +
-          (key.name ? chalk.gray(`  — ${key.name}`) : "") +
+          (key.name ? chalk.gray(`  — ${truncateText(key.name, 60)}`) : "") +
           "\n"
         );
-        if (key.lastUsedAt) {
-          process.stderr.write(chalk.gray(`           Last used: ${key.lastUsedAt}\n`));
+        if (opts.verbose) {
+          process.stderr.write(chalk.gray(
+            `           created=${key.createdAt.slice(0, 19)} lastUsed=${key.lastUsedAt?.slice(0, 19) ?? "never"} expires=${key.expiresAt?.slice(0, 19) ?? "never"}\n`
+          ));
         }
+      }
+      if (keys.length > offset + visible.length) {
+        process.stderr.write(chalk.gray(`\nShowing ${visible.length} of ${keys.length}. Use --offset ${offset + visible.length}, --limit <n>, or --json for keys without hashes.\n`));
+      } else {
+        process.stderr.write(chalk.gray(`\nUse --verbose for timestamps or --json for machine-readable output without key hashes.\n`));
       }
     } catch (err) {
       process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
@@ -1414,15 +1621,19 @@ program
   .description("Search the web using Exa and optionally scrape results")
   .option("--limit <n>", "number of results", "10")
   .option("--scrape", "also crawl each result URL")
+  .option("--verbose", "show scraped page previews when --scrape is used")
   .option("--json", "output as JSON")
-  .action(async (query: string, opts: { limit: string; scrape?: boolean; json?: boolean }) => {
+  .action(async (query: string, opts: { limit: string; scrape?: boolean; verbose?: boolean; json?: boolean }) => {
     try {
       const { searchWeb } = await import("../lib/search-web.js");
       if (!opts.json) {
         process.stderr.write(chalk.cyan(`Searching: ${query}\n`));
       }
+      const searchLimit = opts.json
+        ? Math.max(1, parseInt(opts.limit, 10) || 10)
+        : parseLimit(opts.limit, 10);
       const results = await searchWeb(query, {
-        limit: parseInt(opts.limit, 10),
+        limit: searchLimit,
         scrape: opts.scrape,
       });
       if (opts.json) {
@@ -1435,10 +1646,25 @@ program
       }
       process.stderr.write(chalk.bold(`${results.length} result(s):\n\n`));
       for (const r of results) {
-        process.stderr.write(`  ${chalk.blue(r.url)}\n`);
-        process.stderr.write(`  ${chalk.bold(r.title)}\n`);
-        if (r.snippet) process.stderr.write(`  ${chalk.gray(r.snippet.slice(0, 120))}\n`);
+        const compact = compactWebSearchResult(r, { includePage: opts.verbose });
+        process.stderr.write(`  ${chalk.blue(truncateText(compact.url, 90))}\n`);
+        process.stderr.write(`  ${chalk.bold(truncateText(compact.title, 100))}\n`);
+        if (compact.snippet) process.stderr.write(`  ${chalk.gray(compact.snippet)}\n`);
+        if (compact.publishedDate) process.stderr.write(chalk.gray(`  published=${compact.publishedDate}\n`));
+        if (compact.scrapedPage) {
+          if ("preview" in compact.scrapedPage) {
+            process.stderr.write(chalk.gray(`  scraped page=${compact.scrapedPage.id} words=${compact.scrapedPage.wordCount ?? 0}\n`));
+            if (compact.scrapedPage.preview) process.stderr.write(chalk.gray(`  preview=${compact.scrapedPage.preview}\n`));
+          } else {
+            process.stderr.write(chalk.gray(`  scraped page=${compact.scrapedPage.id} status=${compact.scrapedPage.statusCode ?? "?"} words=${compact.scrapedPage.wordCount ?? 0}\n`));
+          }
+        }
         process.stderr.write("\n");
+      }
+      if (opts.scrape) {
+        process.stderr.write(chalk.gray("Use --verbose for scraped page previews or --json for full search/scrape records.\n"));
+      } else {
+        process.stderr.write(chalk.gray("Use --scrape to crawl result URLs or --json for machine-readable output.\n"));
       }
     } catch (err) {
       process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));

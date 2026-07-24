@@ -2,7 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { getCrawl, listCrawls, getCrawlStats, deleteCrawl, getGlobalStats } from "../db/crawls.js";
+import { createCrawl, getCrawl, listCrawls, getCrawlStats, deleteCrawl, getGlobalStats, updateCrawl } from "../db/crawls.js";
 import { getPage, listPages, searchPages } from "../db/pages.js";
 import {
   STORAGE_TABLES,
@@ -18,6 +18,18 @@ import { fetchSitemap, type SitemapEntry } from "../lib/sitemap.js";
 import type { ExportFormat } from "../types/index.js";
 import { createWebhook, getWebhook, listWebhooks, deleteWebhook, listDeliveries } from "../db/webhooks.js";
 import { VERSION } from "../version.js";
+import {
+  DEFAULT_PREVIEW_LIMIT,
+  MCP_TEXT_PREVIEW_CHARS,
+  compactCrawl,
+  compactDelivery,
+  compactPage,
+  compactSearchResult,
+  compactWebhook,
+  compactWebSearchResult,
+  parseLimit,
+  truncateText,
+} from "../lib/output.js";
 
 // These modules exist at runtime but are not yet implemented.
 // Using dynamic imports with .catch fallbacks so TypeScript infers `any` at call sites.
@@ -38,6 +50,32 @@ const { searchWeb } = await import("../lib/search-web.js").catch(() => ({ search
 interface _CrawlAgent { id: string; name: string; session_id?: string; last_seen_at: string; project_id?: string; }
 const _crawlAgents = new Map<string, _CrawlAgent>();
 
+function jsonText(value: unknown) {
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }],
+  };
+}
+
+function pageContent(page: { textContent: string | null; markdownContent: string | null }, format: "text" | "markdown") {
+  return format === "text" ? page.textContent : page.markdownContent ?? page.textContent;
+}
+
+function compactUrlList(urls: string[], show: number, hint: string) {
+  const visible = urls.slice(0, show);
+  return {
+    count: urls.length,
+    shown: visible.length,
+    urls: visible,
+    truncated: urls.length > visible.length,
+    hint: urls.length > visible.length ? hint : "Use the available filters or JSON/detail flags only if more detail is needed.",
+  };
+}
+
+function parseOffset(value: number | undefined): number {
+  if (!Number.isFinite(value) || !value || value < 0) return 0;
+  return Math.floor(value);
+}
+
 // ─── Server Setup ────────────────────────────────────────────────────────────
 
 export function buildServer(): McpServer {
@@ -52,11 +90,13 @@ const STORAGE_TABLE_SCHEMA = z.enum(STORAGE_TABLES);
 
 server.tool(
   "crawl_url",
-  "Crawl a single URL and return its content (title, text, markdown, metadata, links, word count)",
+  "Crawl a single URL and return a compact page summary plus a truncated content preview by default",
   {
     url: z.string().describe("URL to crawl"),
     render: z.boolean().optional().describe("Use Playwright JS rendering"),
     screenshot: z.boolean().optional().describe("Capture a screenshot"),
+    full: z.boolean().optional().describe("Return the full page record, including full text/markdown/html fields"),
+    content_limit: z.number().optional().describe(`Preview character limit for compact output (default ${MCP_TEXT_PREVIEW_CHARS})`),
     extract_schema: z
       .string()
       .optional()
@@ -77,52 +117,60 @@ server.tool(
       .describe("Pre-scrape browser actions (click, type, scroll, wait, waitForSelector)"),
   },
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  async ({ url, render, screenshot, extract_schema, actions }: any) => {
+  async ({ url, render, screenshot, full, content_limit, extract_schema, actions }: any) => {
     try {
       const extractSchema = extract_schema ? JSON.parse(extract_schema) : undefined;
-      // crawlUrl returns a Page-like object from the runtime crawler module
-      const result = (await crawlUrl(url, {
-        render,
-        screenshot,
-        extractSchema,
-        actions,
-      })) as {
-        url: string;
-        title: string | null;
-        statusCode: number | null;
-        wordCount: number | null;
-        textContent: string | null;
-        markdownContent: string | null;
-        description: string | null;
-        metadata: { links?: unknown[] };
-        screenshotPath: string | null;
-        extractedData?: unknown;
-      };
+      const crawl = createCrawl({
+        url,
+        depth: 1,
+        maxPages: 1,
+        options: {
+          render,
+          screenshot,
+          actions,
+          ...(extractSchema ? { extractSchema } : {}),
+        },
+      });
+      updateCrawl(crawl.id, { status: "running" });
 
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(
-              {
-                url: result.url,
-                title: result.title,
-                statusCode: result.statusCode,
-                wordCount: result.wordCount,
-                linksCount: result.metadata?.links?.length ?? 0,
-                markdown: result.markdownContent,
-                text: result.textContent,
-                description: result.description,
-                metadata: result.metadata,
-                screenshotPath: result.screenshotPath ?? null,
-                extractedData: result.extractedData ?? null,
-              },
-              null,
-              2
-            ),
-          },
-        ],
-      };
+      let result;
+      try {
+        result = await crawlUrl(url, crawl.id, {
+          render,
+          screenshot,
+          actions,
+          ...(extractSchema ? { extractSchema } : {}),
+        });
+        updateCrawl(crawl.id, {
+          status: "completed",
+          pagesCrawled: 1,
+          completedAt: new Date().toISOString(),
+        });
+      } catch (err) {
+        updateCrawl(crawl.id, {
+          status: "failed",
+          errorMessage: (err as Error).message,
+        });
+        throw err;
+      }
+
+      if (full) {
+        return jsonText({ crawl: compactCrawl(getCrawl(crawl.id) ?? crawl), page: result });
+      }
+
+      const previewChars = parseLimit(content_limit, MCP_TEXT_PREVIEW_CHARS, 20000);
+      const content = pageContent(result, "markdown");
+      const preview = truncateText(content, previewChars);
+
+      return jsonText({
+        crawlId: crawl.id,
+        page: compactPage(result),
+        linksCount: result.metadata?.links?.length ?? 0,
+        screenshotPath: result.screenshotPath ?? null,
+        preview: preview || null,
+        truncated: (content?.replace(/\s+/g, " ").trim().length ?? 0) > preview.length,
+        hint: "Use full: true for the complete page record, or content_limit to adjust preview length.",
+      });
     } catch (err) {
       return {
         content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
@@ -158,11 +206,11 @@ server.tool(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async ({ url, depth, max_pages, render, actions }: any) => {
     try {
-      const result = (await startCrawl(url, {
+      const result = (await startCrawl({
+        url,
         depth,
         maxPages: max_pages,
-        render,
-        actions,
+        options: { render, actions },
       })) as { id: string; status: string; pagesCrawled: number };
 
       const crawl = getCrawl(result.id);
@@ -254,32 +302,25 @@ server.tool(
       .optional()
       .describe("Filter by status: pending | running | completed | failed"),
     limit: z.number().default(20).describe("Maximum number of crawls to return (default 20)"),
+    offset: z.number().optional().describe("Number of crawls to skip for pagination"),
   },
-  ({ status, limit }) => {
+  ({ status, limit, offset }) => {
     try {
-      const crawls = listCrawls({ status, limit });
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(
-              crawls.map((c) => ({
-                id: c.id,
-                url: c.url,
-                domain: c.domain,
-                status: c.status,
-                pagesCrawled: c.pagesCrawled,
-                maxPages: c.maxPages,
-                depth: c.depth,
-                createdAt: c.createdAt,
-                completedAt: c.completedAt,
-              })),
-              null,
-              2
-            ),
-          },
-        ],
-      };
+      const cappedLimit = parseLimit(limit, 20);
+      const pageOffset = parseOffset(offset);
+      const crawls = listCrawls({ status, limit: cappedLimit + 1, offset: pageOffset });
+      const visible = crawls.slice(0, cappedLimit);
+      const hasMore = crawls.length > visible.length;
+      return jsonText({
+        offset: pageOffset,
+        count: visible.length,
+        hasMore,
+        nextOffset: hasMore ? pageOffset + visible.length : null,
+        crawls: visible.map(compactCrawl),
+        hint: hasMore
+          ? "Use nextOffset as offset for more crawls, or filter by status; call get_crawl with an id for page summaries."
+          : "Call get_crawl with an id for page summaries.",
+      });
     } catch (err) {
       return {
         content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
@@ -293,11 +334,14 @@ server.tool(
 
 server.tool(
   "get_crawl",
-  "Get crawl details including stats and the first 20 pages",
+  "Get crawl details including stats and compact page summaries",
   {
     id: z.string().describe("Crawl ID"),
+    limit: z.number().optional().describe("Maximum page summaries to return (default 20)"),
+    offset: z.number().optional().describe("Number of page summaries to skip for pagination"),
+    verbose: z.boolean().optional().describe("Include crawl options and full page metadata previews"),
   },
-  ({ id }) => {
+  ({ id, limit, offset, verbose }) => {
     try {
       const crawl = getCrawl(id);
       if (!crawl) {
@@ -307,32 +351,25 @@ server.tool(
         };
       }
 
+      const displayLimit = parseLimit(limit, 20);
+      const pageOffset = parseOffset(offset);
       const stats = getCrawlStats(id);
-      const pages = listPages(id, { limit: 20 });
+      const pages = listPages(id, { limit: displayLimit + 1, offset: pageOffset });
+      const visible = pages.slice(0, displayLimit);
+      const hasMorePages = pages.length > visible.length;
 
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(
-              {
-                crawl,
-                stats,
-                pages: pages.map((p) => ({
-                  id: p.id,
-                  url: p.url,
-                  title: p.title,
-                  statusCode: p.statusCode,
-                  wordCount: p.wordCount,
-                  crawledAt: p.crawledAt,
-                })),
-              },
-              null,
-              2
-            ),
-          },
-        ],
-      };
+      return jsonText({
+        crawl: verbose ? crawl : compactCrawl(crawl),
+        stats,
+        offset: pageOffset,
+        pageCount: visible.length,
+        hasMorePages,
+        nextOffset: hasMorePages ? pageOffset + visible.length : null,
+        pages: visible.map((p) => compactPage(p, { includePreview: Boolean(verbose), previewChars: MCP_TEXT_PREVIEW_CHARS })),
+        hint: hasMorePages
+          ? "Use nextOffset as offset for more page summaries. Use get_page with format: \"full\" for a complete page record."
+          : "Use get_page with format: \"full\" for a complete page record.",
+      });
     } catch (err) {
       return {
         content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
@@ -353,8 +390,10 @@ server.tool(
       .enum(["text", "markdown", "full"])
       .default("markdown")
       .describe("Content format: text | markdown | full (default markdown)"),
+    include_content: z.boolean().optional().describe("Include a truncated text/markdown preview in the response (default true)"),
+    content_limit: z.number().optional().describe(`Preview character limit (default ${MCP_TEXT_PREVIEW_CHARS})`),
   },
-  ({ id, format }) => {
+  ({ id, format, include_content, content_limit }) => {
     try {
       const page = getPage(id);
       if (!page) {
@@ -365,33 +404,20 @@ server.tool(
       }
 
       if (format === "full") {
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify(page, null, 2) }],
-        };
+        return jsonText(page);
       }
 
-      const content =
-        format === "text"
-          ? page.textContent
-          : page.markdownContent ?? page.textContent;
+      const content = pageContent(page, format);
+      const previewChars = parseLimit(content_limit, MCP_TEXT_PREVIEW_CHARS, 20000);
+      const preview = include_content === false ? null : truncateText(content, previewChars) || null;
 
-      const header = [
-        `# ${page.title ?? "(no title)"}`,
-        `URL: ${page.url}`,
-        `Status: ${page.statusCode ?? "unknown"}`,
-        `Words: ${page.wordCount ?? 0}`,
-        `Crawled: ${page.crawledAt}`,
-        "",
-      ].join("\n");
-
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: header + (content ?? "(no content)"),
-          },
-        ],
-      };
+      return jsonText({
+        page: compactPage(page),
+        contentFormat: format,
+        preview,
+        truncated: preview ? (content?.replace(/\s+/g, " ").trim().length ?? 0) > preview.length : false,
+        hint: "Use format: \"full\" for the complete page record, include_content: false for metadata only, or content_limit to adjust preview length.",
+      });
     } catch (err) {
       return {
         content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
@@ -420,26 +446,11 @@ server.tool(
         limit,
       });
 
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(
-              results.map((r) => ({
-                pageId: r.page.id,
-                url: r.page.url,
-                title: r.page.title,
-                snippet: r.snippet,
-                rank: r.rank,
-                wordCount: r.page.wordCount,
-                crawlId: r.page.crawlId,
-              })),
-              null,
-              2
-            ),
-          },
-        ],
-      };
+      return jsonText({
+        count: results.length,
+        results: results.map(compactSearchResult),
+        hint: "Use get_page with a pageId for preview/details, or format: \"full\" on get_page for complete content.",
+      });
     } catch (err) {
       return {
         content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
@@ -703,15 +714,24 @@ server.tool(
   "Quickly discover all URLs on a website without crawling content. Uses sitemap + link extraction.",
   {
     url: z.string().describe("Website URL to map"),
-    limit: z.number().optional().describe("Max URLs to return (default: 1000)"),
+    limit: z.number().optional().describe("Max URLs to discover (default: 1000)"),
+    show: z.number().optional().describe(`Max URLs to include in the default response (default: ${DEFAULT_PREVIEW_LIMIT})`),
+    all: z.boolean().optional().describe("Return every discovered URL"),
     search: z.string().optional().describe("Filter URLs containing this string"),
     allowSubdomains: z.boolean().optional(),
   },
-  async ({ url, limit, search, allowSubdomains }) => {
+  async ({ url, limit, show, all, search, allowSubdomains }) => {
     try {
       const { mapSite } = await import("../lib/crawler.js");
       const urls = await mapSite(url, { limit, search, allowSubdomains });
-      return { content: [{ type: "text" as const, text: JSON.stringify({ urls, count: urls.length }, null, 2) }] };
+      return jsonText({
+        ...compactUrlList(
+          urls,
+          all ? urls.length : parseLimit(show, DEFAULT_PREVIEW_LIMIT),
+          "Set all: true, increase show, or use search to narrow the URL list."
+        ),
+        search: search ?? null,
+      });
     } catch (err) {
       return { content: [{ type: "text" as const, text: String(err) }], isError: true };
     }
@@ -774,9 +794,10 @@ server.tool(
         events: events as Parameters<typeof createWebhook>[0]["events"],
         secret,
       });
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(webhook, null, 2) }],
-      };
+      return jsonText({
+        webhook: compactWebhook(webhook),
+        hint: "Secret values are not returned. Use list_webhooks for compact summaries.",
+      });
     } catch (err) {
       return {
         content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
@@ -791,13 +812,27 @@ server.tool(
 server.tool(
   "list_webhooks",
   "List all registered webhook endpoints",
-  {},
-  () => {
+  {
+    limit: z.number().optional().describe("Maximum webhooks to return (default 20)"),
+    offset: z.number().optional().describe("Number of webhooks to skip for pagination"),
+  },
+  ({ limit, offset }) => {
     try {
+      const displayLimit = parseLimit(limit, 20);
+      const pageOffset = parseOffset(offset);
       const webhooks = listWebhooks();
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(webhooks, null, 2) }],
-      };
+      const visible = webhooks.slice(pageOffset, pageOffset + displayLimit);
+      const hasMore = webhooks.length > pageOffset + visible.length;
+      return jsonText({
+        offset: pageOffset,
+        count: visible.length,
+        hasMore,
+        nextOffset: hasMore ? pageOffset + visible.length : null,
+        webhooks: visible.map(compactWebhook),
+        hint: hasMore
+          ? "Use nextOffset as offset for more webhook summaries. Secrets are omitted by default."
+          : "Secrets are omitted by default.",
+      });
     } catch (err) {
       return {
         content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
@@ -849,9 +884,11 @@ server.tool(
   "Get delivery history for a webhook endpoint",
   {
     id: z.string().describe("Webhook ID"),
-    limit: z.number().optional().describe("Maximum number of deliveries to return (default 50)"),
+    limit: z.number().optional().describe("Maximum number of deliveries to return (default 20)"),
+    offset: z.number().optional().describe("Number of deliveries to skip for pagination"),
+    include_payloads: z.boolean().optional().describe("Include truncated payload/response previews"),
   },
-  ({ id, limit }) => {
+  ({ id, limit, offset, include_payloads }) => {
     try {
       const webhook = getWebhook(id);
       if (!webhook) {
@@ -860,10 +897,22 @@ server.tool(
           isError: true,
         };
       }
-      const deliveries = listDeliveries(id, limit ?? 50);
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(deliveries, null, 2) }],
-      };
+      const displayLimit = parseLimit(limit, 20);
+      const pageOffset = parseOffset(offset);
+      const deliveries = listDeliveries(id, displayLimit + 1, pageOffset);
+      const visible = deliveries.slice(0, displayLimit);
+      const hasMore = deliveries.length > visible.length;
+      return jsonText({
+        offset: pageOffset,
+        count: visible.length,
+        hasMore,
+        nextOffset: hasMore ? pageOffset + visible.length : null,
+        webhook: compactWebhook(webhook),
+        deliveries: visible.map((d) => compactDelivery(d, { verbose: include_payloads })),
+        hint: hasMore
+          ? "Use nextOffset as offset for older deliveries. Set include_payloads: true for truncated payload/response previews."
+          : "Set include_payloads: true for truncated payload/response previews.",
+      });
     } catch (err) {
       return {
         content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
@@ -907,13 +956,18 @@ server.tool(
     query: z.string().describe("Search query"),
     limit: z.number().optional().describe("Number of results to return (default 10)"),
     scrape: z.boolean().optional().describe("Also crawl and store each result URL"),
+    verbose: z.boolean().optional().describe("Include scraped page previews when scrape is true"),
   },
-  async ({ query, limit, scrape }) => {
+  async ({ query, limit, scrape, verbose }) => {
     try {
       const results = await searchWeb(query, { limit, scrape });
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(results, null, 2) }],
-      };
+      return jsonText({
+        count: results.length,
+        results: results.map((r: any) => compactWebSearchResult(r, { includePage: verbose })),
+        hint: scrape
+          ? "Set verbose: true for scraped page previews, or use get_page on the scraped page id for details."
+          : "Set scrape: true to crawl result URLs.",
+      });
     } catch (err) {
       return {
         content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
@@ -965,10 +1019,12 @@ server.tool(
   "Discover all URLs on a site using an e2b cloud sandbox. Requires E2B_API_KEY.",
   {
     url: z.string().describe("Website URL to map"),
-    limit: z.number().optional().describe("Max URLs to return (default: 1000)"),
+    limit: z.number().optional().describe("Max URLs to discover (default: 1000)"),
+    show: z.number().optional().describe(`Max URLs to include in the default response (default: ${DEFAULT_PREVIEW_LIMIT})`),
+    all: z.boolean().optional().describe("Return every discovered URL"),
     search: z.string().optional().describe("Filter URLs containing this string"),
   },
-  async ({ url, limit, search }) => {
+  async ({ url, limit, show, all, search }) => {
     try {
       const { mapInSandbox, checkE2B } = await import("../lib/sandbox.js");
       const status = checkE2B();
@@ -976,7 +1032,14 @@ server.tool(
         return { content: [{ type: "text" as const, text: `Cannot use sandbox: ${status.reason}` }], isError: true };
       }
       const urls = await mapInSandbox(url, { limit, search });
-      return { content: [{ type: "text" as const, text: JSON.stringify({ urls, count: urls.length }, null, 2) }] };
+      return jsonText({
+        ...compactUrlList(
+          urls,
+          all ? urls.length : parseLimit(show, DEFAULT_PREVIEW_LIMIT),
+          "Set all: true, increase show, or use search to narrow the URL list."
+        ),
+        search: search ?? null,
+      });
     } catch (err) {
       return { content: [{ type: "text" as const, text: String(err) }], isError: true };
     }

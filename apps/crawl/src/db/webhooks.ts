@@ -229,13 +229,13 @@ export function updateDelivery(
   return getDelivery(id);
 }
 
-export function listDeliveries(webhookId: string, limit = 50): WebhookDelivery[] {
+export function listDeliveries(webhookId: string, limit = 50, offset = 0): WebhookDelivery[] {
   const db = getDb();
   return db
-    .prepare<WebhookDeliveryRow, [string, number]>(
-      "SELECT * FROM webhook_deliveries WHERE webhook_id = ? ORDER BY created_at DESC LIMIT ?"
+    .prepare<WebhookDeliveryRow, [string, number, number]>(
+      "SELECT * FROM webhook_deliveries WHERE webhook_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?"
     )
-    .all(webhookId, limit)
+    .all(webhookId, limit, offset)
     .map(rowToDelivery);
 }
 
