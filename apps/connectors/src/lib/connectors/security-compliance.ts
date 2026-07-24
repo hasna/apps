@@ -213,6 +213,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["security", "malware", "threat-intelligence"],
   },
   {
+    name: "wiz",
+    displayName: "Wiz",
+    description: "Cloud security platform for CSPM, vulnerability, and risk management",
+    category: "Security & Compliance",
+    tags: ["cspm", "security", "cloud"],
+  },
+  {
     name: "zscalerzia",
     displayName: "Zscaler ZIA",
     description: "Cloud-native internet access and security gateway",
