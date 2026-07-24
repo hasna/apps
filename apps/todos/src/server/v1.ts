@@ -10,7 +10,8 @@
 import { LockError, ProjectNotFoundError, ResourceConflictError } from "../types/index.js";
 import type { CreatePlanInput, CreateProjectInput, CreateTaskInput, CreateTaskListInput, CreateTemplateInput, RenameProjectInput, TaskComment, TemplateTaskInput, UpdateTaskInput, UpdateTaskListInput } from "../types/index.js";
 import type { TodosStorageContext, TodosStorageSnapshot, TodosTaskCompletionOptions, UpdateTemplateInput } from "../storage/interfaces.js";
-import { getCloudStorageAdapter, getCloudVerifier, ensureCloudSchema } from "./cloud.js";
+import { getCloudPrGroupLedger, getCloudStorageAdapter, getCloudVerifier, ensureCloudSchema } from "./cloud.js";
+import { handlePrGroupHttpRequest } from "./pr-groups.js";
 import { redactEvidenceText } from "../lib/redaction.js";
 import { isCanonicalSlug, normalizeSlug } from "../lib/slugs.js";
 
@@ -18,6 +19,7 @@ export interface V1RequestDependencies {
   getVerifier?: typeof getCloudVerifier;
   ensureSchema?: typeof ensureCloudSchema;
   getStorageAdapter?: typeof getCloudStorageAdapter;
+  getPrGroupLedger?: typeof getCloudPrGroupLedger;
 }
 
 const JSON_HEADERS = { "Content-Type": "application/json" } as const;
@@ -381,6 +383,15 @@ export async function handleV1Request(
 
   // Schema is idempotently ensured on the first authenticated request.
   await (dependencies.ensureSchema ?? ensureCloudSchema)();
+  if (path === "/v1/pr-groups" || path.startsWith("/v1/pr-groups/")) {
+    return handlePrGroupHttpRequest(
+      req,
+      url,
+      (dependencies.getPrGroupLedger ?? getCloudPrGroupLedger)(),
+      "/v1/pr-groups",
+      { actor_id: principal.agent, actor_run_id: principal.kid },
+    );
+  }
   const store = (dependencies.getStorageAdapter ?? getCloudStorageAdapter)();
 
   const segments = path.split("/").filter(Boolean); // ["v1", resource, id?, action?, subId?]

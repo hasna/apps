@@ -13,6 +13,11 @@ import { ApiKeyStore, type AuthQueryClient } from "@hasna/contracts/auth";
 import { createTodosCloudQueryClient, type TodosCloudQueryClient } from "../storage/cloud-client.js";
 import { createPostgresTodosStorageAdapter } from "../storage/postgres-adapter.js";
 import type { TodosStorageAdapter } from "../storage/interfaces.js";
+import { PrGroupLedger } from "../pr-groups/ledger.js";
+import {
+  PostgresPrGroupLedgerPersistence,
+  postgresPrGroupSchemaSql,
+} from "../pr-groups/postgres.js";
 import {
   ensurePostgresScopedSlugUniqueIndexes,
   postgresTodosCommentCursorIndexSql,
@@ -57,6 +62,7 @@ let cachedClient: TodosCloudQueryClient | null = null;
 let cachedAdapter: TodosStorageAdapter | null = null;
 let cachedStore: ApiKeyStore | null = null;
 let cachedVerifier: ApiKeyVerifier | null = null;
+let cachedPrGroupLedger: PrGroupLedger | null = null;
 let schemaEnsured: Promise<void> | null = null;
 
 function getClient(): TodosCloudQueryClient {
@@ -77,6 +83,13 @@ export function getCloudStorageAdapter(): TodosStorageAdapter {
   const client = getClient();
   cachedAdapter = createPostgresTodosStorageAdapter({ client, service: TODOS_APP_SLUG });
   return cachedAdapter;
+}
+
+/** Transactionally fenced PR-group ledger backed by dedicated Postgres rows. */
+export function getCloudPrGroupLedger(): PrGroupLedger {
+  if (cachedPrGroupLedger) return cachedPrGroupLedger;
+  cachedPrGroupLedger = new PrGroupLedger(new PostgresPrGroupLedgerPersistence(getClient()));
+  return cachedPrGroupLedger;
 }
 
 /**
@@ -138,6 +151,9 @@ export async function ensureCloudSchema(): Promise<void> {
   schemaEnsured = (async () => {
     const client = getClient();
     for (const sql of postgresTodosSyncSchemaSql()) {
+      await client.query(sql);
+    }
+    for (const sql of postgresPrGroupSchemaSql()) {
       await client.query(sql);
     }
     await getApiKeyStore().ensureSchema();
@@ -220,5 +236,6 @@ export async function closeCloud(): Promise<void> {
   cachedAdapter = null;
   cachedStore = null;
   cachedVerifier = null;
+  cachedPrGroupLedger = null;
   schemaEnsured = null;
 }

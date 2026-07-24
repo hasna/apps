@@ -11,11 +11,13 @@ import { getTodosStorageDatabaseUrl, type TodosStorageEnv } from "./config.js";
  * `?sslmode=require`); we never disable certificate verification.
  */
 export interface TodosCloudQueryClient extends TodosPostgresQueryClient {
+  transaction<T>(fn: (client: TodosPostgresQueryClient) => Promise<T>): Promise<T>;
   close(): Promise<void>;
 }
 
 interface BunSqlLike {
   unsafe(query: string, values?: unknown[]): Promise<unknown>;
+  begin?<T>(fn: (transaction: BunSqlLike) => Promise<T>): Promise<T>;
   end?(): Promise<void>;
   close?(): Promise<void>;
 }
@@ -61,19 +63,41 @@ export function createTodosCloudQueryClient(
     connectionTimeout: options.connectionTimeout ?? 15,
   });
 
-  return {
-    async query<T = Record<string, unknown>>(
+  const queryWith = async <T = Record<string, unknown>>(
+    handle: BunSqlLike,
+    text: string,
+    values: readonly unknown[] = [],
+  ): Promise<TodosPostgresQueryResult<T>> => {
+    const result = await handle.unsafe(text, values.length ? [...values] : []);
+    return { rows: toRows<T>(result) };
+  };
+
+  const client: TodosCloudQueryClient = {
+    query<T = Record<string, unknown>>(
       text: string,
       values: readonly unknown[] = [],
     ): Promise<TodosPostgresQueryResult<T>> {
-      const result = await sql.unsafe(text, values.length ? [...values] : []);
-      return { rows: toRows<T>(result) };
+      return queryWith<T>(sql, text, values);
+    },
+    async transaction<T>(fn: (transaction: TodosPostgresQueryClient) => Promise<T>): Promise<T> {
+      if (typeof sql.begin !== "function") {
+        throw new Error("PR_GROUP_ATOMICITY_UNAVAILABLE: Bun.SQL transaction support is required");
+      }
+      return sql.begin(async (handle) => fn({
+        query<R = Record<string, unknown>>(
+          text: string,
+          values: readonly unknown[] = [],
+        ): Promise<TodosPostgresQueryResult<R>> {
+          return queryWith<R>(handle, text, values);
+        },
+      }));
     },
     async close(): Promise<void> {
       if (typeof sql.end === "function") await sql.end();
       else if (typeof sql.close === "function") await sql.close();
     },
   };
+  return client;
 }
 
 /**

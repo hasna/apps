@@ -69,6 +69,15 @@ import {
   TodosTimeoutError,
 } from "./types.js";
 import { getLocalApiConfig, normalizeApiUrl } from "../lib/config.js";
+import type {
+  AdmitPrGroupInput,
+  AppendPrGroupEventInput,
+  PrGroupEventListOptions,
+  PrGroupEventPage,
+  PrGroupMutationResult,
+  PrGroupStateView,
+  RecoverPrGroupInput,
+} from "../pr-groups/types.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -456,6 +465,54 @@ class TemplatesResource {
   }
 }
 
+class PrGroupsResource {
+  constructor(private client: TodosClient) {}
+
+  /** Create or idempotently adopt a deterministic PR-group attempt. */
+  async admit(input: AdmitPrGroupInput): Promise<PrGroupMutationResult> {
+    return this.client._post(
+      "/api/pr-groups/admit",
+      input as unknown as Record<string, unknown>,
+    );
+  }
+
+  /** Read the bounded authoritative state projection for a PR group. */
+  async get(groupId: string): Promise<PrGroupStateView> {
+    const result = await this.client._get<{ view: PrGroupStateView }>(
+      `/api/pr-groups/${encodeURIComponent(groupId)}`,
+    );
+    return result.view;
+  }
+
+  /** Read a bounded page of the append-only PR-group event history. */
+  async events(groupId: string, options: PrGroupEventListOptions = {}): Promise<PrGroupEventPage> {
+    const result = await this.client._get<{ history: PrGroupEventPage }>(
+      `/api/pr-groups/${encodeURIComponent(groupId)}/events`,
+      buildQuery({
+        limit: options.limit,
+        after_sequence: options.after_sequence,
+      }),
+    );
+    return result.history;
+  }
+
+  /** Append a fenced lifecycle event or receipt. */
+  async append(input: AppendPrGroupEventInput): Promise<PrGroupMutationResult> {
+    return this.client._post(
+      `/api/pr-groups/${encodeURIComponent(input.group_id)}/events`,
+      input as unknown as Record<string, unknown>,
+    );
+  }
+
+  /** Fence the prior writer and create or adopt a recovery generation. */
+  async recover(input: RecoverPrGroupInput): Promise<PrGroupMutationResult> {
+    return this.client._post(
+      `/api/pr-groups/${encodeURIComponent(input.group_id)}/recover`,
+      input as unknown as Record<string, unknown>,
+    );
+  }
+}
+
 // ── Main Client ──────────────────────────────────────────────────────────────
 
 export class TodosClient {
@@ -473,6 +530,7 @@ export class TodosClient {
   readonly orgs: OrgsResource;
   readonly webhooks: WebhooksResource;
   readonly templates: TemplatesResource;
+  readonly prGroups: PrGroupsResource;
 
   constructor(options: TodosClientOptions = {}) {
     const localConfig = getLocalApiConfig();
@@ -491,6 +549,7 @@ export class TodosClient {
     this.orgs = new OrgsResource(this);
     this.webhooks = new WebhooksResource(this);
     this.templates = new TemplatesResource(this);
+    this.prGroups = new PrGroupsResource(this);
   }
 
   /** Create a client from TODOS_URL env var */

@@ -1318,4 +1318,360 @@ export const MIGRATIONS = [
 
   INSERT OR IGNORE INTO _migrations (id) VALUES (65);
   `,
+  // Migration 66: Authoritative PR-group execution ledger and fenced writer generations
+  `
+  CREATE TABLE IF NOT EXISTS pr_groups (
+    schema_version INTEGER NOT NULL DEFAULT 1,
+    id TEXT PRIMARY KEY,
+    identity_key TEXT NOT NULL UNIQUE,
+    root_request_id TEXT NOT NULL,
+    repository TEXT NOT NULL,
+    state TEXT NOT NULL,
+    active_attempt_id TEXT,
+    active_generation TEXT,
+    terminal_attempt_id TEXT,
+    terminal_generation TEXT,
+    terminal_outcome TEXT,
+    terminal_head_sha TEXT,
+    terminal_at TEXT,
+    cleanup_eligible_at TEXT,
+    revision INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_pr_groups_identity ON pr_groups(identity_key);
+  CREATE INDEX IF NOT EXISTS idx_pr_groups_root_repository ON pr_groups(root_request_id, repository);
+  CREATE INDEX IF NOT EXISTS idx_pr_groups_active_generation ON pr_groups(active_generation);
+
+  CREATE TABLE IF NOT EXISTS pr_group_attempts (
+    schema_version INTEGER NOT NULL DEFAULT 1,
+    id TEXT PRIMARY KEY,
+    group_id TEXT NOT NULL REFERENCES pr_groups(id) ON DELETE CASCADE,
+    leaf_task_id TEXT NOT NULL,
+    dispatch_attempt TEXT NOT NULL,
+    writer_generation TEXT NOT NULL,
+    previous_attempt_id TEXT REFERENCES pr_group_attempts(id) ON DELETE SET NULL,
+    worktree TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    provider TEXT,
+    provider_run_id TEXT,
+    profile_alias TEXT,
+    status TEXT NOT NULL,
+    admitted_at TEXT NOT NULL,
+    started_at TEXT,
+    last_heartbeat_at TEXT,
+    handed_off_at TEXT,
+    fenced_at TEXT,
+    terminal_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(group_id, leaf_task_id, dispatch_attempt),
+    UNIQUE(group_id, writer_generation)
+  );
+  CREATE INDEX IF NOT EXISTS idx_pr_group_attempts_group ON pr_group_attempts(group_id, created_at, id);
+  CREATE INDEX IF NOT EXISTS idx_pr_group_attempts_generation ON pr_group_attempts(group_id, writer_generation);
+
+  CREATE TABLE IF NOT EXISTS pr_group_events (
+    schema_version INTEGER NOT NULL DEFAULT 1,
+    id TEXT PRIMARY KEY,
+    group_id TEXT NOT NULL REFERENCES pr_groups(id) ON DELETE CASCADE,
+    attempt_id TEXT NOT NULL REFERENCES pr_group_attempts(id) ON DELETE CASCADE,
+    writer_generation TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    state TEXT NOT NULL,
+    message TEXT,
+    head_sha TEXT,
+    receipt_key TEXT,
+    outcome TEXT,
+    metadata TEXT NOT NULL DEFAULT '{}',
+    payload_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(group_id, sequence),
+    UNIQUE(group_id, idempotency_key),
+    UNIQUE(group_id, receipt_key)
+  );
+  CREATE INDEX IF NOT EXISTS idx_pr_group_events_group_sequence ON pr_group_events(group_id, sequence);
+  CREATE INDEX IF NOT EXISTS idx_pr_group_events_attempt ON pr_group_events(attempt_id, sequence);
+  CREATE INDEX IF NOT EXISTS idx_pr_group_events_receipt ON pr_group_events(group_id, receipt_key);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (66);
+  `,
+  // Migration 67: Repair rejected-head PR-group lineage and receipt bindings
+  `
+  ALTER TABLE pr_groups ADD COLUMN leaf_task_id TEXT;
+  ALTER TABLE pr_groups ADD COLUMN branch TEXT;
+  ALTER TABLE pr_groups ADD COLUMN pr_number INTEGER;
+  ALTER TABLE pr_groups ADD COLUMN base_sha TEXT;
+  ALTER TABLE pr_groups ADD COLUMN repair_cycle_count INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE pr_groups ADD COLUMN repair_cycle_limit INTEGER NOT NULL DEFAULT 2;
+  ALTER TABLE pr_group_attempts ADD COLUMN repository TEXT;
+  ALTER TABLE pr_group_attempts ADD COLUMN pr_number INTEGER;
+  ALTER TABLE pr_group_attempts ADD COLUMN base_sha TEXT;
+  ALTER TABLE pr_group_events ADD COLUMN review_receipt_key TEXT;
+  ALTER TABLE pr_group_events ADD COLUMN conditional_merge_receipt_key TEXT;
+  ALTER TABLE pr_group_events ADD COLUMN repository TEXT;
+  ALTER TABLE pr_group_events ADD COLUMN pr_number INTEGER;
+  ALTER TABLE pr_group_events ADD COLUMN base_sha TEXT;
+  ALTER TABLE pr_group_events ADD COLUMN actor_id TEXT;
+  ALTER TABLE pr_group_events ADD COLUMN actor_run_id TEXT;
+  ALTER TABLE pr_group_events ADD COLUMN expected_reviewer_id TEXT;
+  ALTER TABLE pr_group_events ADD COLUMN expected_reviewer_run_id TEXT;
+  ALTER TABLE pr_group_events ADD COLUMN repair_cycle INTEGER;
+  ALTER TABLE pr_group_events ADD COLUMN cleanup_proof TEXT;
+
+  UPDATE pr_groups
+  SET leaf_task_id = COALESCE(leaf_task_id, (
+        SELECT attempt.leaf_task_id
+        FROM pr_group_attempts AS attempt
+        WHERE attempt.group_id = pr_groups.id
+        ORDER BY CASE WHEN attempt.id = pr_groups.active_attempt_id THEN 0 ELSE 1 END,
+                 attempt.created_at ASC, attempt.id ASC
+        LIMIT 1
+      )),
+      branch = COALESCE(branch, (
+        SELECT attempt.branch
+        FROM pr_group_attempts AS attempt
+        WHERE attempt.group_id = pr_groups.id
+        ORDER BY CASE WHEN attempt.id = pr_groups.active_attempt_id THEN 0 ELSE 1 END,
+                 attempt.created_at ASC, attempt.id ASC
+        LIMIT 1
+      ));
+
+  UPDATE pr_group_attempts
+  SET repository = COALESCE(repository, (
+        SELECT groups.repository FROM pr_groups AS groups
+        WHERE groups.id = pr_group_attempts.group_id
+      )),
+      pr_number = COALESCE(pr_number, (
+        SELECT groups.pr_number FROM pr_groups AS groups
+        WHERE groups.id = pr_group_attempts.group_id
+      )),
+      base_sha = COALESCE(base_sha, (
+        SELECT groups.base_sha FROM pr_groups AS groups
+        WHERE groups.id = pr_group_attempts.group_id
+      ));
+
+  UPDATE pr_groups
+  SET pr_number = COALESCE(pr_number, (
+        SELECT attempt.pr_number
+        FROM pr_group_attempts AS attempt
+        WHERE attempt.group_id = pr_groups.id AND attempt.pr_number IS NOT NULL
+        ORDER BY CASE WHEN attempt.id = pr_groups.active_attempt_id THEN 0 ELSE 1 END,
+                 attempt.created_at ASC, attempt.id ASC
+        LIMIT 1
+      )),
+      base_sha = COALESCE(base_sha, (
+        SELECT attempt.base_sha
+        FROM pr_group_attempts AS attempt
+        WHERE attempt.group_id = pr_groups.id AND attempt.base_sha IS NOT NULL
+        ORDER BY CASE WHEN attempt.id = pr_groups.active_attempt_id THEN 0 ELSE 1 END,
+                 attempt.created_at ASC, attempt.id ASC
+        LIMIT 1
+      ));
+
+  UPDATE pr_group_attempts
+  SET pr_number = COALESCE(pr_number, (
+        SELECT groups.pr_number FROM pr_groups AS groups
+        WHERE groups.id = pr_group_attempts.group_id
+      )),
+      base_sha = COALESCE(base_sha, (
+        SELECT groups.base_sha FROM pr_groups AS groups
+        WHERE groups.id = pr_group_attempts.group_id
+      ));
+
+  UPDATE pr_group_events
+  SET repository = COALESCE(repository, (
+        SELECT attempt.repository FROM pr_group_attempts AS attempt
+        WHERE attempt.id = pr_group_events.attempt_id
+      ), (
+        SELECT groups.repository FROM pr_groups AS groups
+        WHERE groups.id = pr_group_events.group_id
+      )),
+      pr_number = COALESCE(pr_number, (
+        SELECT attempt.pr_number FROM pr_group_attempts AS attempt
+        WHERE attempt.id = pr_group_events.attempt_id
+      ), (
+        SELECT groups.pr_number FROM pr_groups AS groups
+        WHERE groups.id = pr_group_events.group_id
+      )),
+      base_sha = COALESCE(base_sha, (
+        SELECT attempt.base_sha FROM pr_group_attempts AS attempt
+        WHERE attempt.id = pr_group_events.attempt_id
+      ), (
+        SELECT groups.base_sha FROM pr_groups AS groups
+        WHERE groups.id = pr_group_events.group_id
+      ));
+
+  INSERT OR IGNORE INTO _migrations (id)
+  SELECT 66
+  WHERE NOT EXISTS (
+    SELECT 1 FROM pr_groups WHERE leaf_task_id IS NULL OR branch IS NULL
+  )
+    AND NOT EXISTS (
+      SELECT 1 FROM pr_group_attempts WHERE repository IS NULL
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM pr_group_events WHERE repository IS NULL
+    );
+  `,
+  // Migration 68: Enforce strict lineage columns and globally unique receipt authority
+  `
+  PRAGMA foreign_keys = OFF;
+  BEGIN IMMEDIATE;
+
+  ALTER TABLE pr_group_events RENAME TO pr_group_events_v66;
+  ALTER TABLE pr_group_attempts RENAME TO pr_group_attempts_v66;
+  ALTER TABLE pr_groups RENAME TO pr_groups_v66;
+
+  CREATE TABLE pr_groups (
+    schema_version INTEGER NOT NULL DEFAULT 1,
+    id TEXT PRIMARY KEY,
+    identity_key TEXT NOT NULL UNIQUE,
+    root_request_id TEXT NOT NULL,
+    repository TEXT NOT NULL,
+    leaf_task_id TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    pr_number INTEGER,
+    base_sha TEXT,
+    state TEXT NOT NULL,
+    active_attempt_id TEXT,
+    active_generation TEXT,
+    repair_cycle_count INTEGER NOT NULL DEFAULT 0,
+    repair_cycle_limit INTEGER NOT NULL DEFAULT 2,
+    terminal_attempt_id TEXT,
+    terminal_generation TEXT,
+    terminal_outcome TEXT,
+    terminal_head_sha TEXT,
+    terminal_at TEXT,
+    cleanup_eligible_at TEXT,
+    revision INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE TABLE pr_group_attempts (
+    schema_version INTEGER NOT NULL DEFAULT 1,
+    id TEXT PRIMARY KEY,
+    group_id TEXT NOT NULL REFERENCES pr_groups(id) ON DELETE CASCADE,
+    leaf_task_id TEXT NOT NULL,
+    dispatch_attempt TEXT NOT NULL,
+    writer_generation TEXT NOT NULL,
+    previous_attempt_id TEXT REFERENCES pr_group_attempts(id) ON DELETE SET NULL,
+    worktree TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    repository TEXT NOT NULL,
+    pr_number INTEGER,
+    base_sha TEXT,
+    provider TEXT,
+    provider_run_id TEXT,
+    profile_alias TEXT,
+    status TEXT NOT NULL,
+    admitted_at TEXT NOT NULL,
+    started_at TEXT,
+    last_heartbeat_at TEXT,
+    handed_off_at TEXT,
+    fenced_at TEXT,
+    terminal_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(group_id, leaf_task_id, dispatch_attempt),
+    UNIQUE(group_id, writer_generation)
+  );
+
+  CREATE TABLE pr_group_events (
+    schema_version INTEGER NOT NULL DEFAULT 1,
+    id TEXT PRIMARY KEY,
+    group_id TEXT NOT NULL REFERENCES pr_groups(id) ON DELETE CASCADE,
+    attempt_id TEXT NOT NULL REFERENCES pr_group_attempts(id) ON DELETE CASCADE,
+    writer_generation TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    state TEXT NOT NULL,
+    message TEXT,
+    head_sha TEXT,
+    receipt_key TEXT UNIQUE,
+    review_receipt_key TEXT,
+    conditional_merge_receipt_key TEXT,
+    outcome TEXT,
+    repository TEXT NOT NULL,
+    pr_number INTEGER,
+    base_sha TEXT,
+    actor_id TEXT,
+    actor_run_id TEXT,
+    expected_reviewer_id TEXT,
+    expected_reviewer_run_id TEXT,
+    repair_cycle INTEGER,
+    ci_proof TEXT,
+    cleanup_proof TEXT,
+    metadata TEXT NOT NULL DEFAULT '{}',
+    payload_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(group_id, sequence),
+    UNIQUE(group_id, idempotency_key)
+  );
+
+  INSERT INTO pr_groups (
+    schema_version,id,identity_key,root_request_id,repository,leaf_task_id,branch,
+    pr_number,base_sha,state,active_attempt_id,active_generation,
+    repair_cycle_count,repair_cycle_limit,terminal_attempt_id,terminal_generation,
+    terminal_outcome,terminal_head_sha,terminal_at,cleanup_eligible_at,
+    revision,created_at,updated_at
+  )
+  SELECT
+    schema_version,id,identity_key,root_request_id,repository,leaf_task_id,branch,
+    pr_number,base_sha,state,active_attempt_id,active_generation,
+    repair_cycle_count,repair_cycle_limit,terminal_attempt_id,terminal_generation,
+    terminal_outcome,terminal_head_sha,terminal_at,cleanup_eligible_at,
+    revision,created_at,updated_at
+  FROM pr_groups_v66;
+
+  INSERT INTO pr_group_attempts (
+    schema_version,id,group_id,leaf_task_id,dispatch_attempt,writer_generation,
+    previous_attempt_id,worktree,branch,repository,pr_number,base_sha,
+    provider,provider_run_id,profile_alias,status,admitted_at,started_at,
+    last_heartbeat_at,handed_off_at,fenced_at,terminal_at,created_at,updated_at
+  )
+  SELECT
+    schema_version,id,group_id,leaf_task_id,dispatch_attempt,writer_generation,
+    previous_attempt_id,worktree,branch,repository,pr_number,base_sha,
+    provider,provider_run_id,profile_alias,status,admitted_at,started_at,
+    last_heartbeat_at,handed_off_at,fenced_at,terminal_at,created_at,updated_at
+  FROM pr_group_attempts_v66;
+
+  INSERT INTO pr_group_events (
+    schema_version,id,group_id,attempt_id,writer_generation,sequence,
+    idempotency_key,event_type,state,message,head_sha,receipt_key,
+    review_receipt_key,conditional_merge_receipt_key,outcome,repository,
+    pr_number,base_sha,actor_id,actor_run_id,expected_reviewer_id,
+    expected_reviewer_run_id,repair_cycle,ci_proof,cleanup_proof,
+    metadata,payload_hash,created_at
+  )
+  SELECT
+    schema_version,id,group_id,attempt_id,writer_generation,sequence,
+    idempotency_key,event_type,state,message,head_sha,receipt_key,
+    review_receipt_key,conditional_merge_receipt_key,outcome,repository,
+    pr_number,base_sha,actor_id,actor_run_id,expected_reviewer_id,
+    expected_reviewer_run_id,repair_cycle,NULL,cleanup_proof,
+    metadata,payload_hash,created_at
+  FROM pr_group_events_v66;
+
+  DROP TABLE pr_group_events_v66;
+  DROP TABLE pr_group_attempts_v66;
+  DROP TABLE pr_groups_v66;
+
+  CREATE UNIQUE INDEX idx_pr_groups_identity ON pr_groups(identity_key);
+  CREATE INDEX idx_pr_groups_root_repository ON pr_groups(root_request_id, repository);
+  CREATE INDEX idx_pr_groups_active_generation ON pr_groups(active_generation);
+  CREATE INDEX idx_pr_group_attempts_group ON pr_group_attempts(group_id, created_at, id);
+  CREATE INDEX idx_pr_group_attempts_generation ON pr_group_attempts(group_id, writer_generation);
+  CREATE INDEX idx_pr_group_events_group_sequence ON pr_group_events(group_id, sequence);
+  CREATE INDEX idx_pr_group_events_attempt ON pr_group_events(attempt_id, sequence);
+  CREATE INDEX idx_pr_group_events_receipt ON pr_group_events(receipt_key);
+
+  INSERT OR IGNORE INTO _migrations (id) VALUES (68);
+  COMMIT;
+  PRAGMA foreign_keys = ON;
+  `,
 ];

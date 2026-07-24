@@ -50,6 +50,40 @@ export interface CreateTemplateInput { "name": string; "title_pattern": string; 
 
 export interface UpdateTemplateInput { "name"?: string; "title_pattern"?: string; "description"?: string | null; "priority"?: "low" | "medium" | "high" | "critical"; "tags"?: Array<string>; "variables"?: Array<Record<string, unknown>>; "project_id"?: string | null; "plan_id"?: string | null; "metadata"?: Record<string, unknown> }
 
+export interface PrGroupCiProof { "provider": string; "provider_run_id": string; "status": "success"; "repository": string; "pr_number": number; "base_sha": string; "head_sha": string }
+
+export interface PrGroupCleanupProof { "worktree_clean": boolean; "provider_reachable": boolean; "provider_head_sha": string; "pr_policy_satisfied": boolean; "terminal_disposition": "merged" | "cancelled" | "failed" | "no_go"; "writer_retired": boolean; "review_receipt_key": string | null; "conditional_merge_receipt_key": string | null; "merge_receipt_key": string | null }
+
+export interface PrGroupRecord { "schema_version": number; "id": string; "identity_key": string; "root_request_id": string; "repository": string; "leaf_task_id": string; "branch": string; "pr_number": number | null; "base_sha": string | null; "state": "admitted" | "started" | "in_progress" | "handed_off" | "review_requested" | "reviewed" | "repair" | "merge_ready" | "merge_not_merged" | "merged" | "cancelled" | "failed" | "no_go" | "cleanup_eligible"; "active_attempt_id": string | null; "active_generation": string | null; "repair_cycle_count": number; "repair_cycle_limit": number; "terminal_attempt_id": string | null; "terminal_generation": string | null; "terminal_outcome": "merged" | "cancelled" | "failed" | "no_go" | null; "terminal_head_sha": string | null; "terminal_at": string | null; "cleanup_eligible_at": string | null; "revision": number; "created_at": string; "updated_at": string }
+
+export interface PrGroupAttemptRecord { "schema_version": number; "id": string; "group_id": string; "leaf_task_id": string; "dispatch_attempt": string; "writer_generation": string; "previous_attempt_id": string | null; "worktree": string; "branch": string; "repository": string; "pr_number": number | null; "base_sha": string | null; "provider": string | null; "provider_run_id": string | null; "profile_alias": string | null; "status": "admitted" | "started" | "in_progress" | "handed_off" | "reviewing" | "repair" | "merge_ready" | "fenced" | "merged" | "cancelled" | "failed" | "no_go"; "admitted_at": string; "started_at": string | null; "last_heartbeat_at": string | null; "handed_off_at": string | null; "fenced_at": string | null; "terminal_at": string | null; "created_at": string; "updated_at": string }
+
+export interface PrGroupEventRecord { "schema_version": number; "id": string; "group_id": string; "attempt_id": string; "writer_generation": string; "sequence": number; "idempotency_key": string; "event_type": "admission" | "started" | "progress" | "heartbeat" | "handoff" | "review_requested" | "review_receipt" | "repair_accepted" | "repair_rejected" | "conditional_merge_receipt" | "merge_outcome" | "recovery" | "cancellation" | "failure" | "cleanup_eligible" | "terminal_outcome"; "state": "admitted" | "started" | "in_progress" | "handed_off" | "review_requested" | "reviewed" | "repair" | "merge_ready" | "merge_not_merged" | "merged" | "cancelled" | "failed" | "no_go" | "cleanup_eligible"; "message": string | null; "head_sha": string | null; "receipt_key": string | null; "review_receipt_key": string | null; "conditional_merge_receipt_key": string | null; "outcome": "approved" | "changes_requested" | "dismissed" | "accepted" | "rejected" | "merged" | "not_merged" | "cancelled" | "failed" | "no_go" | null; "repository": string; "pr_number": number | null; "base_sha": string | null; "actor_id": string | null; "actor_run_id": string | null; "expected_reviewer_id": string | null; "expected_reviewer_run_id": string | null; "repair_cycle": number | null; "ci_proof": PrGroupCiProof | null; "cleanup_proof": PrGroupCleanupProof | null; "metadata": Record<string, unknown>; "payload_hash": string; "created_at": string }
+
+export interface PrGroupWorkRunAdapter { "kind": string; "id": string; "group_id": string; "task_id": string; "dispatch_attempt": string; "writer_generation": string; "previous_run_id": string | null; "worktree": string; "branch": string; "repository": string; "pr_number": number | null; "base_sha": string | null; "provider": string | null; "provider_run_id": string | null; "profile_alias": string | null; "status": string; "admitted_at": string; "terminal_at": string | null }
+
+export interface PrGroupEvidenceRefAdapter { "kind": string; "id": string; "group_id": string; "work_run_id": string; "sequence": number; "evidence_type": string; "repository": string; "pr_number": number | null; "base_sha": string | null; "head_sha": string | null; "receipt_key": string | null; "outcome": "approved" | "changes_requested" | "dismissed" | "accepted" | "rejected" | "merged" | "not_merged" | "cancelled" | "failed" | "no_go" | null; "actor_id": string | null; "actor_run_id": string | null; "payload_hash": string; "created_at": string }
+
+export interface PrGroupProofBundleAdapter { "kind": string; "id": string; "group_id": string; "revision": number; "evidence_ref_ids": Array<string>; "exact_head": string | null; "complete": boolean }
+
+export interface PrGroupDecisionEnvelopeAdapter { "kind": string; "id": string; "group_id": string; "state": string; "active_work_run_id": string | null; "active_writer_generation": string | null; "repair_cycle_count": number; "repair_cycle_limit": number; "terminal_outcome": "merged" | "cancelled" | "failed" | "no_go" | null; "terminal_head_sha": string | null; "cleanup_eligible": boolean; "revision": number }
+
+export interface PrGroupStateView { "schema_version": number; "authoritative": boolean; "authority": "local" | "remote"; "group": PrGroupRecord; "attempts": Array<PrGroupAttemptRecord>; "latest_event": PrGroupEventRecord | null; "review_receipts": Array<PrGroupEventRecord>; "conditional_merge_receipts": Array<PrGroupEventRecord>; "merge_receipts": Array<PrGroupEventRecord>; "cleanup_receipts": Array<PrGroupEventRecord>; "cleanup_eligible": boolean; "adapters": { "work_runs": Array<PrGroupWorkRunAdapter>; "evidence_refs": Array<PrGroupEvidenceRefAdapter>; "proof_bundle": PrGroupProofBundleAdapter; "decision_envelope": PrGroupDecisionEnvelopeAdapter }; "diagnostics": { "event_count": number; "attempts_omitted": boolean; "receipt_history_complete": boolean; "projection_limits": { "attempts": number; "receipts": number } } }
+
+export interface PrGroupStateResponse { "view": PrGroupStateView }
+
+export interface PrGroupEventPage { "schema_version": number; "authoritative": boolean; "authority": "local" | "remote"; "group_id": string; "events": Array<PrGroupEventRecord>; "count": number; "has_more": boolean; "next_sequence": number | null }
+
+export interface PrGroupEventHistoryResponse { "history": PrGroupEventPage }
+
+export interface AdmitPrGroupInput { "root_request_id": string; "repository": string; "leaf_task_id": string; "dispatch_attempt": string; "writer_generation": string; "worktree": string; "branch": string; "pr_number"?: number | null; "base_sha"?: string | null; "provider"?: string | null; "provider_run_id"?: string | null; "profile_alias"?: string | null; "admitted_at"?: string }
+
+export interface RecoverPrGroupInput { "root_request_id": string; "repository": string; "leaf_task_id": string; "expected_attempt_id": string; "dispatch_attempt": string; "expected_generation": string; "writer_generation": string; "worktree": string; "branch": string; "pr_number": number | null; "base_sha": string | null; "provider": string | null; "provider_run_id": string | null; "profile_alias": string | null; "idempotency_key": string; "message"?: string | null; "metadata"?: Record<string, unknown>; "recovered_at"?: string }
+
+export interface AppendPrGroupEventInput { "attempt_id": string; "writer_generation": string; "idempotency_key": string; "event_type": "started" | "progress" | "heartbeat" | "handoff" | "review_requested" | "review_receipt" | "repair_accepted" | "repair_rejected" | "conditional_merge_receipt" | "merge_outcome" | "cancellation" | "failure" | "cleanup_eligible" | "terminal_outcome"; "message"?: string | null; "head_sha"?: string | null; "receipt_key"?: string | null; "review_receipt_key"?: string | null; "conditional_merge_receipt_key"?: string | null; "outcome"?: "approved" | "changes_requested" | "dismissed" | "accepted" | "rejected" | "merged" | "not_merged" | "cancelled" | "failed" | "no_go" | null; "repository"?: string; "pr_number"?: number | null; "base_sha"?: string | null; "actor_id"?: string | null; "actor_run_id"?: string | null; "expected_reviewer_id"?: string | null; "expected_reviewer_run_id"?: string | null; "repair_cycle"?: number | null; "ci_proof"?: PrGroupCiProof | null; "cleanup_proof"?: PrGroupCleanupProof | null; "metadata"?: Record<string, unknown>; "created_at"?: string }
+
+export interface PrGroupMutationResult { "created": boolean; "adopted": boolean; "appended": boolean; "view": PrGroupStateView; "event": PrGroupEventRecord }
+
 export interface TodosV1ClientOptions {
   /** Base URL, e.g. process.env.APP_API_URL. */
   baseUrl: string;
@@ -153,6 +187,51 @@ export class TodosV1Client {
     /** Update a plan */
     async updatePlan(id: string, body: UpdatePlanInput, init?: RequestInit): Promise<{ "plan"?: Plan }> {
       return this.request("PATCH", `/v1/plans/${encodeURIComponent(String(id))}`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Create or idempotently adopt a deterministic PR group attempt */
+    async admitPrGroup(body: AdmitPrGroupInput, init?: RequestInit): Promise<PrGroupMutationResult> {
+      return this.request("POST", `/v1/pr-groups/admit`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Get the authoritative current state of a PR group */
+    async getPrGroupState(id: string, init?: RequestInit): Promise<PrGroupStateResponse> {
+      return this.request("GET", `/v1/pr-groups/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Get a bounded page of authoritative PR group events */
+    async getPrGroupEvents(id: string, query?: { "after_sequence"?: number; "limit"?: number }, init?: RequestInit): Promise<PrGroupEventHistoryResponse> {
+      return this.request("GET", `/v1/pr-groups/${encodeURIComponent(String(id))}/events`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Append a fenced lifecycle event or receipt */
+    async appendPrGroupEvent(id: string, body: AppendPrGroupEventInput, init?: RequestInit): Promise<PrGroupMutationResult> {
+      return this.request("POST", `/v1/pr-groups/${encodeURIComponent(String(id))}/events`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Fence the prior attempt and create or adopt a recovery generation */
+    async recoverPrGroup(id: string, body: RecoverPrGroupInput, init?: RequestInit): Promise<PrGroupMutationResult> {
+      return this.request("POST", `/v1/pr-groups/${encodeURIComponent(String(id))}/recover`, {
         body,
         query: undefined,
         init,

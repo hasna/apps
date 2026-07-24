@@ -1,6 +1,34 @@
 // REST SDK Client (for cross-process/cross-machine use)
 export { TodosClient, createClient } from "./sdk.js";
 export type { TodosClientOptions } from "./sdk.js";
+export {
+  PrGroupHttpClient,
+  PrGroupLedger,
+  PrGroupLedgerError,
+  createLocalPrGroupLedger,
+  deterministicPrGroupAttemptId,
+  deterministicPrGroupId,
+  sanitizePrGroupMetadata,
+} from "./pr-groups/index.js";
+export type {
+  AdmitPrGroupInput,
+  AppendPrGroupEventInput,
+  PrGroupAdapterViews,
+  PrGroupAttemptRecord,
+  PrGroupCiProof,
+  PrGroupCleanupProof,
+  PrGroupDecisionEnvelopeAdapter,
+  PrGroupEventListOptions,
+  PrGroupEventPage,
+  PrGroupEventRecord,
+  PrGroupEvidenceRefAdapter,
+  PrGroupMutationResult,
+  PrGroupProofBundleAdapter,
+  PrGroupRecord,
+  PrGroupStateView,
+  PrGroupWorkRunAdapter,
+  RecoverPrGroupInput,
+} from "./pr-groups/index.js";
 
 // Package capability manifest
 export { TODOS_CAPABILITIES, createCapabilityManifest } from "./capabilities.js";
@@ -32,6 +60,7 @@ export {
   getJsonContract,
   validateJsonContract,
 } from "./contracts.js";
+export { TODOS_AUTHORITATIVE_JSON_PROJECTIONS } from "./json-contracts.js";
 export type {
   CreateJsonContractsManifestOptions,
   JsonContractValidationIssue,

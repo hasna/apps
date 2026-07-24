@@ -203,6 +203,15 @@ describe("stable JSON contracts", () => {
       "saved_search_run_result",
     ]);
     expect(TODOS_JSON_CONTRACTS_MANIFEST.generatedAt).toBe("1970-01-01T00:00:00.000Z");
+    expectValid("pr_group_ci_proof", {
+      provider: "github",
+      provider_run_id: "ci-run-1",
+      status: "success",
+      repository: "hasna/todos",
+      pr_number: 78,
+      base_sha: "a".repeat(40),
+      head_sha: "b".repeat(40),
+    });
   });
 
   test("validates real database objects against their stable output contracts", async () => {

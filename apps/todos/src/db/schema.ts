@@ -2,29 +2,35 @@ import { Database } from "bun:sqlite";
 import { MIGRATIONS } from "./migrations.js";
 
 export function runMigrations(db: Database): void {
+  let strictMigrationFailure: unknown = null;
+  const executeMigration = (migration: string, index: number): void => {
+    try {
+      db.exec(migration);
+    } catch (error) {
+      try {
+        db.exec("ROLLBACK");
+      } catch {
+        // Migration was not running in an explicit transaction.
+      }
+      if (index + 1 >= 68) strictMigrationFailure = error;
+      // Older migrations remain best-effort because ensureSchema repairs them.
+    }
+  };
   // Check current migration level
   try {
     const result = db.query("SELECT MAX(id) as max_id FROM _migrations").get() as { max_id: number | null } | null;
     const currentLevel = result?.max_id ?? 0;
 
     for (let i = currentLevel; i < MIGRATIONS.length; i++) {
-      try {
-        db.exec(MIGRATIONS[i]!);
-      } catch {
-        // Migration partially failed (e.g. ALTER TABLE on existing column).
-        // ensureSchema below will fix any missing pieces.
-      }
+      executeMigration(MIGRATIONS[i]!, i);
     }
   } catch {
     // _migrations table doesn't exist yet, run all migrations
-    for (const migration of MIGRATIONS) {
-      try {
-        db.exec(migration);
-      } catch {
-        // Same — partial failure handled by ensureSchema
-      }
+    for (const [index, migration] of MIGRATIONS.entries()) {
+      executeMigration(migration, index);
     }
   }
+  if (strictMigrationFailure) throw strictMigrationFailure;
 
   // Ensure ALL schema elements exist regardless of migration history.
   // This is the safety net: if any migration partially failed, or if the
@@ -58,6 +64,7 @@ function backfillPlanSlugs(db: Database): void {
       }
     }
   } catch {}
+
 }
 
 export function ensureSchema(db: Database): void {
@@ -1318,6 +1325,261 @@ export function ensureSchema(db: Database): void {
     )`);
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_api_keys_prefix ON api_keys(prefix)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_api_keys_active ON api_keys(revoked_at, expires_at)");
+
+  // Authoritative PR-group execution ledger. Identity and receipt indexes are
+  // durable fences, not advisory cache keys.
+  ensureTable("pr_groups", `
+    CREATE TABLE pr_groups (
+      schema_version INTEGER NOT NULL DEFAULT 1,
+      id TEXT PRIMARY KEY,
+      identity_key TEXT NOT NULL UNIQUE,
+      root_request_id TEXT NOT NULL,
+      repository TEXT NOT NULL,
+      leaf_task_id TEXT NOT NULL,
+      branch TEXT NOT NULL,
+      pr_number INTEGER,
+      base_sha TEXT,
+      state TEXT NOT NULL,
+      active_attempt_id TEXT,
+      active_generation TEXT,
+      repair_cycle_count INTEGER NOT NULL DEFAULT 0,
+      repair_cycle_limit INTEGER NOT NULL DEFAULT 2,
+      terminal_attempt_id TEXT,
+      terminal_generation TEXT,
+      terminal_outcome TEXT,
+      terminal_head_sha TEXT,
+      terminal_at TEXT,
+      cleanup_eligible_at TEXT,
+      revision INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`);
+  ensureIndex("CREATE UNIQUE INDEX IF NOT EXISTS idx_pr_groups_identity ON pr_groups(identity_key)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_pr_groups_root_repository ON pr_groups(root_request_id, repository)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_pr_groups_active_generation ON pr_groups(active_generation)");
+
+  ensureTable("pr_group_attempts", `
+    CREATE TABLE pr_group_attempts (
+      schema_version INTEGER NOT NULL DEFAULT 1,
+      id TEXT PRIMARY KEY,
+      group_id TEXT NOT NULL REFERENCES pr_groups(id) ON DELETE CASCADE,
+      leaf_task_id TEXT NOT NULL,
+      dispatch_attempt TEXT NOT NULL,
+      writer_generation TEXT NOT NULL,
+      previous_attempt_id TEXT REFERENCES pr_group_attempts(id) ON DELETE SET NULL,
+      worktree TEXT NOT NULL,
+      branch TEXT NOT NULL,
+      repository TEXT NOT NULL,
+      pr_number INTEGER,
+      base_sha TEXT,
+      provider TEXT,
+      provider_run_id TEXT,
+      profile_alias TEXT,
+      status TEXT NOT NULL,
+      admitted_at TEXT NOT NULL,
+      started_at TEXT,
+      last_heartbeat_at TEXT,
+      handed_off_at TEXT,
+      fenced_at TEXT,
+      terminal_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(group_id, leaf_task_id, dispatch_attempt),
+      UNIQUE(group_id, writer_generation)
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_pr_group_attempts_group ON pr_group_attempts(group_id, created_at, id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_pr_group_attempts_generation ON pr_group_attempts(group_id, writer_generation)");
+
+  ensureTable("pr_group_events", `
+    CREATE TABLE pr_group_events (
+      schema_version INTEGER NOT NULL DEFAULT 1,
+      id TEXT PRIMARY KEY,
+      group_id TEXT NOT NULL REFERENCES pr_groups(id) ON DELETE CASCADE,
+      attempt_id TEXT NOT NULL REFERENCES pr_group_attempts(id) ON DELETE CASCADE,
+      writer_generation TEXT NOT NULL,
+      sequence INTEGER NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      state TEXT NOT NULL,
+      message TEXT,
+      head_sha TEXT,
+      receipt_key TEXT UNIQUE,
+      review_receipt_key TEXT,
+      conditional_merge_receipt_key TEXT,
+      outcome TEXT,
+      repository TEXT NOT NULL,
+      pr_number INTEGER,
+      base_sha TEXT,
+      actor_id TEXT,
+      actor_run_id TEXT,
+      expected_reviewer_id TEXT,
+      expected_reviewer_run_id TEXT,
+      repair_cycle INTEGER,
+      ci_proof TEXT,
+      cleanup_proof TEXT,
+      metadata TEXT NOT NULL DEFAULT '{}',
+      payload_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(group_id, sequence),
+      UNIQUE(group_id, idempotency_key)
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_pr_group_events_group_sequence ON pr_group_events(group_id, sequence)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_pr_group_events_attempt ON pr_group_events(attempt_id, sequence)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_pr_group_events_receipt ON pr_group_events(receipt_key)");
+  ensureColumn("pr_groups", "leaf_task_id", "TEXT");
+  ensureColumn("pr_groups", "branch", "TEXT");
+  ensureColumn("pr_groups", "pr_number", "INTEGER");
+  ensureColumn("pr_groups", "base_sha", "TEXT");
+  ensureColumn("pr_groups", "repair_cycle_count", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn("pr_groups", "repair_cycle_limit", "INTEGER NOT NULL DEFAULT 2");
+  ensureColumn("pr_group_attempts", "repository", "TEXT");
+  ensureColumn("pr_group_attempts", "pr_number", "INTEGER");
+  ensureColumn("pr_group_attempts", "base_sha", "TEXT");
+  ensureColumn("pr_group_events", "review_receipt_key", "TEXT");
+  ensureColumn("pr_group_events", "conditional_merge_receipt_key", "TEXT");
+  ensureColumn("pr_group_events", "repository", "TEXT");
+  ensureColumn("pr_group_events", "pr_number", "INTEGER");
+  ensureColumn("pr_group_events", "base_sha", "TEXT");
+  ensureColumn("pr_group_events", "actor_id", "TEXT");
+  ensureColumn("pr_group_events", "actor_run_id", "TEXT");
+  ensureColumn("pr_group_events", "expected_reviewer_id", "TEXT");
+  ensureColumn("pr_group_events", "expected_reviewer_run_id", "TEXT");
+  ensureColumn("pr_group_events", "repair_cycle", "INTEGER");
+  ensureColumn("pr_group_events", "ci_proof", "TEXT");
+  ensureColumn("pr_group_events", "cleanup_proof", "TEXT");
+  try {
+    db.exec(`
+      UPDATE pr_groups
+      SET leaf_task_id = COALESCE(leaf_task_id, (
+            SELECT attempt.leaf_task_id
+            FROM pr_group_attempts AS attempt
+            WHERE attempt.group_id = pr_groups.id
+            ORDER BY CASE WHEN attempt.id = pr_groups.active_attempt_id THEN 0 ELSE 1 END,
+                     attempt.created_at ASC, attempt.id ASC
+            LIMIT 1
+          )),
+          branch = COALESCE(branch, (
+            SELECT attempt.branch
+            FROM pr_group_attempts AS attempt
+            WHERE attempt.group_id = pr_groups.id
+            ORDER BY CASE WHEN attempt.id = pr_groups.active_attempt_id THEN 0 ELSE 1 END,
+                     attempt.created_at ASC, attempt.id ASC
+            LIMIT 1
+          ));
+      UPDATE pr_group_attempts
+      SET repository = COALESCE(repository, (
+            SELECT groups.repository FROM pr_groups AS groups
+            WHERE groups.id = pr_group_attempts.group_id
+          )),
+          pr_number = COALESCE(pr_number, (
+            SELECT groups.pr_number FROM pr_groups AS groups
+            WHERE groups.id = pr_group_attempts.group_id
+          )),
+          base_sha = COALESCE(base_sha, (
+            SELECT groups.base_sha FROM pr_groups AS groups
+            WHERE groups.id = pr_group_attempts.group_id
+          ));
+      UPDATE pr_groups
+      SET pr_number = COALESCE(pr_number, (
+            SELECT attempt.pr_number
+            FROM pr_group_attempts AS attempt
+            WHERE attempt.group_id = pr_groups.id AND attempt.pr_number IS NOT NULL
+            ORDER BY CASE WHEN attempt.id = pr_groups.active_attempt_id THEN 0 ELSE 1 END,
+                     attempt.created_at ASC, attempt.id ASC
+            LIMIT 1
+          )),
+          base_sha = COALESCE(base_sha, (
+            SELECT attempt.base_sha
+            FROM pr_group_attempts AS attempt
+            WHERE attempt.group_id = pr_groups.id AND attempt.base_sha IS NOT NULL
+            ORDER BY CASE WHEN attempt.id = pr_groups.active_attempt_id THEN 0 ELSE 1 END,
+                     attempt.created_at ASC, attempt.id ASC
+            LIMIT 1
+          ));
+      UPDATE pr_group_attempts
+      SET pr_number = COALESCE(pr_number, (
+            SELECT groups.pr_number FROM pr_groups AS groups
+            WHERE groups.id = pr_group_attempts.group_id
+          )),
+          base_sha = COALESCE(base_sha, (
+            SELECT groups.base_sha FROM pr_groups AS groups
+            WHERE groups.id = pr_group_attempts.group_id
+          ));
+      UPDATE pr_group_events
+      SET repository = COALESCE(repository, (
+            SELECT attempt.repository FROM pr_group_attempts AS attempt
+            WHERE attempt.id = pr_group_events.attempt_id
+          ), (
+            SELECT groups.repository FROM pr_groups AS groups
+            WHERE groups.id = pr_group_events.group_id
+          )),
+          pr_number = COALESCE(pr_number, (
+            SELECT attempt.pr_number FROM pr_group_attempts AS attempt
+            WHERE attempt.id = pr_group_events.attempt_id
+          ), (
+            SELECT groups.pr_number FROM pr_groups AS groups
+            WHERE groups.id = pr_group_events.group_id
+          )),
+          base_sha = COALESCE(base_sha, (
+            SELECT attempt.base_sha FROM pr_group_attempts AS attempt
+            WHERE attempt.id = pr_group_events.attempt_id
+          ), (
+            SELECT groups.base_sha FROM pr_groups AS groups
+            WHERE groups.id = pr_group_events.group_id
+          ));
+      INSERT OR IGNORE INTO _migrations (id)
+      SELECT 66
+      WHERE NOT EXISTS (
+        SELECT 1 FROM pr_groups WHERE leaf_task_id IS NULL OR branch IS NULL
+      )
+        AND NOT EXISTS (
+          SELECT 1 FROM pr_group_attempts WHERE repository IS NULL
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM pr_group_events WHERE repository IS NULL
+        );
+    `);
+  } catch {}
+
+  const strictColumns = [
+    ["pr_groups", "leaf_task_id"],
+    ["pr_groups", "branch"],
+    ["pr_group_attempts", "repository"],
+    ["pr_group_events", "repository"],
+  ] as const;
+  for (const [table, column] of strictColumns) {
+    const definition = db.query(`PRAGMA table_info(${table})`).all() as Array<{
+      name: string;
+      notnull: number;
+    }>;
+    if (definition.find((entry) => entry.name === column)?.notnull !== 1) {
+      throw new Error(`PR-group schema integrity failure: ${table}.${column} is not NOT NULL`);
+    }
+  }
+  const eventColumns = db.query("PRAGMA table_info(pr_group_events)").all() as Array<{ name: string }>;
+  if (!eventColumns.some((entry) => entry.name === "ci_proof")) {
+    throw new Error("PR-group schema integrity failure: pr_group_events.ci_proof is missing");
+  }
+  const receiptIndexes = db.query("PRAGMA index_list(pr_group_events)").all() as Array<{
+    name: string;
+    unique: number;
+  }>;
+  const hasGlobalReceiptUniqueness = receiptIndexes.some((index) => {
+    if (index.unique !== 1) return false;
+    const columns = db.query(`PRAGMA index_info(${JSON.stringify(index.name)})`).all() as Array<{
+      name: string;
+    }>;
+    return columns.length === 1 && columns[0]?.name === "receipt_key";
+  });
+  if (!hasGlobalReceiptUniqueness) {
+    throw new Error("PR-group schema integrity failure: receipt_key is not globally unique");
+  }
+  const strictMigration = db.query("SELECT 1 AS ok FROM _migrations WHERE id = 68").get() as {
+    ok: number;
+  } | null;
+  if (strictMigration?.ok !== 1) {
+    throw new Error("PR-group schema integrity failure: migration 68 is not recorded");
+  }
 }
 
 export function backfillTaskTags(db: Database): void {

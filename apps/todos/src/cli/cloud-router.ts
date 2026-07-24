@@ -12,6 +12,8 @@ import { resolve as resolvePath } from "node:path";
 import type { Agent, CreatePlanInput, CreateTaskListInput, CreateTemplateInput, Plan, Project, RegisterAgentInput, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList, TaskTemplate, TemplateWithTasks, UpdatePlanInput, UpdateTaskListInput } from "../types/index.js";
 import type { UpdateTemplateInput } from "../storage/interfaces.js";
 import { redactEvidenceText } from "../lib/redaction.js";
+import type { PrGroupEventListOptions, PrGroupEventPage, PrGroupStateView } from "../pr-groups/types.js";
+import { parsePrGroupEventPage, parsePrGroupStateView } from "../pr-groups/http-client.js";
 
 type Env = Record<string, string | undefined>;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -364,6 +366,73 @@ export function isCloudRouting(env: Env = process.env as Env): boolean {
 export function resetTodosCloudClient(): void {
   // Only protocol capabilities are cached, keyed by authority rather than credentials.
   completionCapabilityCache.clear();
+}
+
+function assertRemotePrGroupView(value: unknown, route: string): PrGroupStateView {
+  try {
+    return parsePrGroupStateView(value, "remote", route);
+  } catch (error) {
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} did not return a complete closed authoritative remote projection; ` +
+        "local SQLite fallback is disabled",
+      { cause: error },
+    );
+  }
+}
+
+/** Read an authoritative remote PR-group projection without local fallback. */
+export async function cloudGetPrGroup(client: HasnaStorageClient, groupId: string): Promise<PrGroupStateView> {
+  const route = `/v1/pr-groups/${encodeURIComponent(groupId)}`;
+  const raw = await requiredRemoteRoute(client, route, () =>
+    client.transport.get<unknown>(`/pr-groups/${encodeURIComponent(groupId)}`));
+  if (!raw || typeof raw !== "object" || Array.isArray(raw) ||
+      Object.keys(raw).length !== 1 || !("view" in raw)) {
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned a non-authoritative response envelope; ` +
+        "local SQLite fallback is disabled",
+    );
+  }
+  const view = (raw as { view: unknown }).view;
+  const authoritative = assertRemotePrGroupView(view, route);
+  if (authoritative.group?.id !== groupId) {
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned a different PR-group identity; ` +
+        "local SQLite fallback is disabled",
+    );
+  }
+  return authoritative;
+}
+
+/** Read a bounded authoritative remote PR-group event page without local fallback. */
+export async function cloudPrGroupEvents(
+  client: HasnaStorageClient,
+  groupId: string,
+  options: PrGroupEventListOptions = {},
+): Promise<PrGroupEventPage> {
+  const route = `/v1/pr-groups/${encodeURIComponent(groupId)}/events`;
+  const raw = await requiredRemoteRoute(client, route, () =>
+    client.transport.get<unknown>(`/pr-groups/${encodeURIComponent(groupId)}/events`, {
+      query: {
+        ...(options.limit !== undefined ? { limit: options.limit } : {}),
+        ...(options.after_sequence !== undefined ? { after_sequence: options.after_sequence } : {}),
+      },
+    }));
+  if (!raw || typeof raw !== "object" || Array.isArray(raw) ||
+      Object.keys(raw).length !== 1 || !("history" in raw)) {
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned a non-authoritative response envelope; ` +
+        "local SQLite fallback is disabled",
+    );
+  }
+  try {
+    return parsePrGroupEventPage((raw as { history: unknown }).history, "remote", route, groupId);
+  } catch (error) {
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} did not return a complete closed authoritative remote event page; ` +
+        "local SQLite fallback is disabled",
+      { cause: error },
+    );
+  }
 }
 
 /** Unwrap the `{ task }` envelope the todos `/v1` API returns for single tasks. */

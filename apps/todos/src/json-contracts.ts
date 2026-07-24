@@ -29,9 +29,9 @@ export interface TodosJsonObjectContract {
   stability: TodosJsonStability;
   required: Record<string, TodosJsonFieldContract>;
   optional: Record<string, TodosJsonFieldContract>;
-  additionalProperties: true;
+  additionalProperties: boolean;
   evolution: {
-    additionalFields: "allowed";
+    additionalFields: "allowed" | "forbidden";
     removingRequiredFields: "breaking";
     changingRequiredFieldTypes: "breaking";
     nullableToNonNullable: "breaking";
@@ -43,6 +43,7 @@ export interface TodosJsonContractsManifest {
   generatedAt: string;
   package: TodosJsonContractPackageSource;
   contracts: TodosJsonObjectContract[];
+  authoritativeProjections: TodosJsonObjectContract[];
 }
 
 export interface JsonContractValidationIssue {
@@ -87,12 +88,70 @@ function contract(input: Omit<TodosJsonObjectContract, "additionalProperties" | 
   };
 }
 
+function closedContract(
+  input: Omit<TodosJsonObjectContract, "additionalProperties" | "evolution">,
+): TodosJsonObjectContract {
+  return {
+    ...input,
+    additionalProperties: false,
+    evolution: {
+      additionalFields: "forbidden",
+      removingRequiredFields: "breaking",
+      changingRequiredFieldTypes: "breaking",
+      nullableToNonNullable: "breaking",
+    },
+  };
+}
+
 const idField = field("string", "Stable UUID or short identifier.");
 const nullableIdField = field(["string", "null"], "Stable identifier when attached to another object.", true);
 const isoDateField = field("string", "ISO-8601 timestamp string.");
 const nullableIsoDateField = field(["string", "null"], "ISO-8601 timestamp string, or null when not set.", true);
 const metadataField = field("object", "JSON object metadata. Unknown keys are extension data.");
 const tagsField = field("array", "Array of string tags.");
+
+export const TODOS_AUTHORITATIVE_JSON_PROJECTIONS: TodosJsonObjectContract[] = [
+  closedContract({
+    id: "pr_group_ci_proof",
+    name: "Authoritative PR Group CI Proof",
+    description: "Closed successful provider-CI evidence bound to one repository, PR, base, and exact head before conditional merge authorization.",
+    surfaces: ["api", "sdk"],
+    stability: "stable",
+    required: {
+      provider: field("string", "Authoritative CI provider identity."),
+      provider_run_id: field("string", "Provider-owned CI run or check-suite identity."),
+      status: field("string", "Terminal successful CI status."),
+      repository: field("string", "Canonical repository identity."),
+      pr_number: field("integer", "Concrete pull-request number."),
+      base_sha: field("string", "Exact base commit SHA."),
+      head_sha: field("string", "Exact reviewed and merge-authorized head commit SHA."),
+    },
+    optional: {},
+  }),
+  closedContract({
+    id: "pr_group_state_view",
+    name: "Authoritative PR Group State View",
+    description: "Closed package-owned projection for immutable task-to-PR lineage, repair accounting, append-only receipts, adapters, and diagnostics.",
+    surfaces: ["cli", "api", "sdk"],
+    stability: "stable",
+    required: {
+      schema_version: field("integer", "PR-group ledger schema version."),
+      authoritative: field("boolean", "Always true for package-owned ledger projections."),
+      authority: field("string", "Authority kind: local or remote."),
+      group: field("object", "Immutable PR-group lineage and current durable state."),
+      attempts: field("array", "Bounded writer-generation attempt history."),
+      latest_event: field(["object", "null"], "Latest append-only lifecycle event, or null.", true),
+      review_receipts: field("array", "Exact-head review receipts."),
+      conditional_merge_receipts: field("array", "Sequence-aware conditional merge receipts."),
+      merge_receipts: field("array", "Exact-head merge outcome receipts."),
+      cleanup_receipts: field("array", "Durable cleanup authorization receipts."),
+      cleanup_eligible: field("boolean", "Whether the complete cleanup proof has been accepted."),
+      adapters: field("object", "Closed WorkRun, EvidenceRef, ProofBundle, and DecisionEnvelope projections."),
+      diagnostics: field("object", "Bounded-projection completeness and limit diagnostics."),
+    },
+    optional: {},
+  }),
+];
 
 export const TODOS_JSON_CONTRACTS: TodosJsonObjectContract[] = [
   contract({
@@ -2110,7 +2169,8 @@ function matchesType(value: unknown, expected: readonly TodosJsonFieldType[]): b
 }
 
 export function getJsonContract(contractId: string): TodosJsonObjectContract | null {
-  return TODOS_JSON_CONTRACTS.find((contractItem) => contractItem.id === contractId) ?? null;
+  return [...TODOS_JSON_CONTRACTS, ...TODOS_AUTHORITATIVE_JSON_PROJECTIONS]
+    .find((contractItem) => contractItem.id === contractId) ?? null;
 }
 
 export function validateJsonContract(contractId: string, value: unknown): JsonContractValidationResult {
@@ -2124,6 +2184,11 @@ export function validateJsonContract(contractId: string, value: unknown): JsonCo
     : {};
   const missingRequired: string[] = [];
   const typeMismatches: JsonContractValidationIssue[] = [];
+  const unknownFields = contractItem.additionalProperties
+    ? []
+    : Object.keys(record).filter(
+      (fieldName) => !(fieldName in contractItem.required) && !(fieldName in contractItem.optional),
+    );
 
   for (const [fieldName, fieldContract] of Object.entries(contractItem.required)) {
     if (!(fieldName in record)) {
@@ -2138,7 +2203,7 @@ export function validateJsonContract(contractId: string, value: unknown): JsonCo
   }
 
   return {
-    ok: missingRequired.length === 0 && typeMismatches.length === 0,
+    ok: missingRequired.length === 0 && typeMismatches.length === 0 && unknownFields.length === 0,
     contractId,
     missingRequired,
     typeMismatches,
@@ -2154,6 +2219,7 @@ export function createJsonContractsManifest(
     generatedAt: options.generatedAt ?? new Date().toISOString(),
     package: source(version),
     contracts: TODOS_JSON_CONTRACTS,
+    authoritativeProjections: TODOS_AUTHORITATIVE_JSON_PROJECTIONS,
   };
 }
 

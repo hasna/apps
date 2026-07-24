@@ -341,6 +341,21 @@ export async function startServer(port: number, options?: { open?: boolean; host
         if (authError) return authError;
       }
 
+      // ── API: authoritative local PR-group ledger ──
+      if (path === "/api/pr-groups" || path.startsWith("/api/pr-groups/")) {
+        const [{ handlePrGroupHttpRequest }, { createLocalPrGroupLedger }] = await Promise.all([
+          import("./pr-groups.js"),
+          import("../pr-groups/index.js"),
+        ]);
+        const response = await handlePrGroupHttpRequest(
+          req,
+          url,
+          createLocalPrGroupLedger(db),
+          "/api/pr-groups",
+        );
+        if (response) return response;
+      }
+
       // ── SSE Event Stream (supports optional agent_id/project_id filtering) ──
       if (path === "/api/events" && method === "GET") {
         const res = handlers.handleSseEvents(req, url, ctx);

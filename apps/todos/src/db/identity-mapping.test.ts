@@ -215,7 +215,7 @@ describe("agent identity projection contract", () => {
         name: "legacylabel",
         identity_id: null,
       });
-      expect(migrated.query("SELECT MAX(id) AS id FROM _migrations").get()).toEqual({ id: 65 });
+      expect(migrated.query("SELECT MAX(id) AS id FROM _migrations").get()).toEqual({ id: 68 });
       expect(migrated.query(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agent_identity_source_mappings'",
       ).get()).toEqual({ name: "agent_identity_source_mappings" });

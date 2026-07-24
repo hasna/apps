@@ -23,7 +23,38 @@ export type {
   UpdateTaskInput as TodosV1UpdateTaskInput,
   CreateProjectInput as TodosV1CreateProjectInput,
   CreateTaskCommentInput as TodosV1CreateTaskCommentInput,
+  AdmitPrGroupInput as TodosV1AdmitPrGroupInput,
+  RecoverPrGroupInput as TodosV1RecoverPrGroupInput,
+  AppendPrGroupEventInput as TodosV1AppendPrGroupEventInput,
+  PrGroupCiProof as TodosV1PrGroupCiProof,
+  PrGroupCleanupProof as TodosV1PrGroupCleanupProof,
+  PrGroupRecord as TodosV1PrGroupRecord,
+  PrGroupAttemptRecord as TodosV1PrGroupAttemptRecord,
+  PrGroupEventRecord as TodosV1PrGroupEventRecord,
+  PrGroupStateView as TodosV1PrGroupStateView,
+  PrGroupEventPage as TodosV1PrGroupEventPage,
+  PrGroupMutationResult as TodosV1PrGroupMutationResult,
 } from "./v1.generated.js";
+
+export type {
+  AdmitPrGroupInput,
+  AppendPrGroupEventInput,
+  PrGroupAdapterViews,
+  PrGroupAttemptRecord,
+  PrGroupCiProof,
+  PrGroupCleanupProof,
+  PrGroupDecisionEnvelopeAdapter,
+  PrGroupEventListOptions,
+  PrGroupEventPage,
+  PrGroupEventRecord,
+  PrGroupEvidenceRefAdapter,
+  PrGroupMutationResult,
+  PrGroupProofBundleAdapter,
+  PrGroupRecord,
+  PrGroupStateView,
+  PrGroupWorkRunAdapter,
+  RecoverPrGroupInput,
+} from "../pr-groups/types.js";
 
 export {
   TodosAPIError,
