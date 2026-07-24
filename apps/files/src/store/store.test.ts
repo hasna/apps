@@ -115,6 +115,57 @@ describe("ApiStore route mapping", () => {
     await expect(broken.deleteCollection("col_1")).rejects.toThrow();
   });
 
+  it("swallows a cloud 404 even when the transport throws a *different* HasnaHttpError copy", async () => {
+    // Regression for the `PATCH /sources/:id -> 404` raw leak: `@hasna/contracts`
+    // bundles `HasnaHttpError` separately under `/client` (imported by api-store)
+    // and `/client/storage` (thrown by the storage transport). In the published
+    // tarball those are distinct class identities, so api-store's `instanceof`
+    // check missed the storage transport's 404 and re-threw it as a raw
+    // "Hasna cloud request failed: PATCH /sources/… -> 404". This fake models the
+    // storage-subpath copy: a genuine HasnaHttpError shape that is NOT
+    // `instanceof` the copy api-store imports.
+    class ForeignHasnaHttpError extends Error {
+      readonly status: number;
+      readonly method: string;
+      readonly path: string;
+      readonly body: unknown;
+      constructor(method: string, path: string, status: number, body?: unknown) {
+        super(`Hasna cloud request failed: ${method} ${path} -> ${status}`);
+        this.name = "HasnaHttpError";
+        this.status = status;
+        this.method = method;
+        this.path = path;
+        this.body = body;
+      }
+    }
+    // Sanity: it is a real cross-module mismatch, not the imported class.
+    expect(new ForeignHasnaHttpError("PATCH", "/sources/x", 404) instanceof HasnaHttpError).toBe(false);
+
+    const foreign404: HasnaHttpTransport = {
+      baseUrl: "https://files.hasna.xyz/v1",
+      get: async (path: string) => { throw new ForeignHasnaHttpError("GET", path, 404); },
+      post: async (path: string) => { throw new ForeignHasnaHttpError("POST", path, 404); },
+      put: async (path: string) => { throw new ForeignHasnaHttpError("PUT", path, 404); },
+      patch: async (path: string) => { throw new ForeignHasnaHttpError("PATCH", path, 404); },
+      del: async (path: string) => { throw new ForeignHasnaHttpError("DELETE", path, 404); },
+    } as unknown as HasnaHttpTransport;
+    const store = new ApiStore(createHasnaStorageClient("files", foreign404));
+
+    // enable/disable/rename all route through updateSource -> a graceful null,
+    // never a raw leak.
+    expect(await store.updateSource("src_missing", { enabled: true })).toBeNull();
+    expect(await store.updateSource("src_missing", { name: "x" })).toBeNull();
+    expect(await store.deleteSource("src_missing")).toBe(false);
+
+    // A non-404 from the foreign copy must still propagate (not be masked).
+    const foreign500: HasnaHttpTransport = {
+      ...foreign404,
+      patch: async (path: string) => { throw new ForeignHasnaHttpError("PATCH", path, 500); },
+    } as unknown as HasnaHttpTransport;
+    const broken = new ApiStore(createHasnaStorageClient("files", foreign500));
+    await expect(broken.updateSource("src_1", { name: "x" })).rejects.toThrow();
+  });
+
   it("routes agent registry + activity through /v1 (never local sqlite)", async () => {
     const { transport, calls } = fakeTransport();
     const store = new ApiStore(createHasnaStorageClient("files", transport));

@@ -61,12 +61,35 @@ import type {
 
 const seg = (value: string): string => encodeURIComponent(value);
 
+/**
+ * True when `e` is a Hasna cloud HTTP error carrying `status`.
+ *
+ * A plain `instanceof HasnaHttpError` is not enough: `@hasna/contracts` ships
+ * `HasnaHttpError` from two subpaths — `@hasna/contracts/client` (imported here)
+ * and `@hasna/contracts/client/storage` (the module the {@link HasnaStorageClient}
+ * transport actually throws from). In the published, self-contained tarball those
+ * subpaths are bundled independently, so the storage transport's error is a
+ * *different class identity* than the one imported above and `instanceof` returns
+ * `false`. That let genuine 404s (e.g. `PATCH /sources/:id` when the cloud lacks
+ * the route, or a missing record) escape `orNull`/`deletedOk` and surface to the
+ * user as a raw `Hasna cloud request failed: … -> 404`. We keep `instanceof` as
+ * the fast path and fall back to a structural check that matches either copy.
+ */
+function isHttpError(e: unknown): e is { status: number } {
+  if (e instanceof HasnaHttpError) return typeof e.status === "number";
+  return (
+    e instanceof Error &&
+    e.name === "HasnaHttpError" &&
+    typeof (e as { status?: unknown }).status === "number"
+  );
+}
+
 /** Map a 404 from a raw transport route to `null` (matches storage-client get). */
 async function orNull<T>(p: Promise<T>): Promise<T | null> {
   try {
     return await p;
   } catch (e) {
-    if (e instanceof HasnaHttpError && e.status === 404) return null;
+    if (isHttpError(e) && e.status === 404) return null;
     throw e;
   }
 }
@@ -83,7 +106,7 @@ async function deletedOk(p: Promise<unknown>): Promise<boolean> {
     await p;
     return true;
   } catch (e) {
-    if (e instanceof HasnaHttpError && e.status === 404) return false;
+    if (isHttpError(e) && e.status === 404) return false;
     throw e;
   }
 }
