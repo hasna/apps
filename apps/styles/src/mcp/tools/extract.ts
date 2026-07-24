@@ -1,9 +1,10 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { extractStylesFromUrl, enrichTokensWithAi } from "../../lib/extractor.js";
+import { extractStylesFromUrl, enrichTokensWithAi, type AiEnrichment } from "../../lib/extractor.js";
 import { tokenizeStyles } from "../../lib/tokenizer.js";
 import { transform, type TransformFormat } from "../../lib/transformer.js";
 import { saveKit, getKit, listKits, deleteKit } from "../../lib/kits.js";
+import { pageItems, prettyJson, truncateText } from "../../lib/format.js";
 
 export function registerExtractTools(server: McpServer) {
   server.tool(
@@ -15,8 +16,10 @@ export function registerExtractTools(server: McpServer) {
       save: z.boolean().optional().describe("Save the extracted kit to the database"),
       format: z.enum(["shadcn", "tailwind", "css-vars", "mui", "radix"]).optional().describe("Output format (default: shadcn)"),
       tags: z.array(z.string()).optional().describe("Tags for the saved kit"),
+      include_code: z.boolean().optional().describe("Include generated config code in the response"),
+      verbose: z.boolean().optional().describe("Include richer token/config details"),
     },
-    async ({ url, name, save, format = "shadcn", tags }) => {
+    async ({ url, name, save, format = "shadcn", tags, include_code, verbose }) => {
       try {
         const raw = await extractStylesFromUrl(url);
         const tokens = tokenizeStyles(raw);
@@ -39,20 +42,24 @@ export function registerExtractTools(server: McpServer) {
         return {
           content: [{
             type: "text",
-            text: JSON.stringify({
-              url, extractedAt: raw.extractedAt, enrichment,
+            text: prettyJson({
+              url,
+              extractedAt: raw.extractedAt,
               summary: {
                 colors: tokens.colors.length,
                 namedColors: tokens.colors.filter(c => c.name).length,
-                fonts: tokens.typography.fontFamilies,
-                borderRadii: tokens.borderRadius,
+                fontCount: tokens.typography.fontFamilies.length,
+                fontSample: tokens.typography.fontFamilies.slice(0, 5),
+                borderRadiusCount: tokens.borderRadius.length,
+                borderRadiusSample: tokens.borderRadius.slice(0, 8),
                 shadows: tokens.shadows.length,
-                detectedStyle: enrichment?.detectedStyle,
-                suggestedName: enrichment?.suggestedName,
+                enrichment: summarizeEnrichment(enrichment),
               },
-              code: result.code,
+              ...(include_code || verbose ? { code: result.code } : {}),
+              ...(verbose ? { enrichment, config: result.config, sampleColors: tokens.colors.slice(0, 10) } : {}),
               kit: kit ? { id: kit.id, name: kit.name } : null,
-            }, null, 2),
+              hint: include_code || verbose ? "Code included by request." : "Pass include_code=true for generated config or verbose=true for richer token details.",
+            }),
           }],
         };
       } catch (e) {
@@ -67,17 +74,33 @@ export function registerExtractTools(server: McpServer) {
     {
       search: z.string().optional().describe("Search by name, URL, or tags"),
       tags: z.array(z.string()).optional().describe("Filter by tags"),
+      limit: z.number().int().positive().optional().describe("Maximum kits to return in compact output (default: 20)"),
+      cursor: z.number().int().nonnegative().optional().describe("Zero-based pagination offset"),
+      verbose: z.boolean().optional().describe("Include tags and more token counts"),
     },
-    async ({ search, tags }) => {
+    async ({ search, tags, limit, cursor, verbose }) => {
       const kits = listKits({ search, tags });
+      const page = pageItems(kits, { limit, cursor, defaultLimit: 20, maxLimit: 100 });
       return {
         content: [{
           type: "text",
-          text: JSON.stringify(kits.map((k) => ({
+          text: prettyJson({
+            kits: page.items.map((k) => ({
             id: k.id, name: k.name, url: k.url,
-            tags: k.tags, createdAt: k.createdAt,
-            summary: { colors: k.tokens.colors.length, fonts: k.tokens.typography.fontFamilies, shadows: k.tokens.shadows.length },
-          })), null, 2),
+            createdAt: k.createdAt,
+            summary: {
+              colors: k.tokens.colors.length,
+              fonts: k.tokens.typography.fontFamilies.length,
+              shadows: k.tokens.shadows.length,
+              ...(verbose ? { tags: k.tags, radii: k.tokens.borderRadius.length, spacing: k.tokens.spacing.length } : {}),
+            },
+          })),
+            total: page.total,
+            limit: page.limit,
+            cursor: page.cursor,
+            nextCursor: page.nextCursor,
+            hint: "Use get_kit with verbose=true for full token/raw data.",
+          }),
         }],
       };
     }
@@ -86,11 +109,29 @@ export function registerExtractTools(server: McpServer) {
   server.tool(
     "get_kit",
     "Get a saved style kit by ID",
-    { id: z.string().describe("Kit ID") },
-    async ({ id }) => {
+    {
+      id: z.string().describe("Kit ID"),
+      verbose: z.boolean().optional().describe("Return full token/raw data"),
+    },
+    async ({ id, verbose }) => {
       const kit = getKit(id);
       if (!kit) return { content: [{ type: "text", text: `Kit not found: ${id}` }], isError: true };
-      return { content: [{ type: "text", text: JSON.stringify(kit, null, 2) }] };
+      return { content: [{ type: "text", text: prettyJson(verbose ? kit : {
+        id: kit.id,
+        name: kit.name,
+        url: kit.url,
+        tags: kit.tags,
+        extractedAt: kit.extractedAt,
+        updatedAt: kit.updatedAt,
+        summary: {
+          colors: kit.tokens.colors.length,
+          fonts: kit.tokens.typography.fontFamilies,
+          radii: kit.tokens.borderRadius.length,
+          shadows: kit.tokens.shadows.length,
+        },
+        notes: kit.notes ? truncateText(kit.notes, 160) : undefined,
+        hint: "Pass verbose=true for full token/raw data.",
+      }) }] };
     }
   );
 
@@ -133,7 +174,25 @@ export function registerExtractTools(server: McpServer) {
       if (!kit) return { content: [{ type: "text", text: `Kit not found: ${id}` }], isError: true };
       const profileInput = kitToProfile(kit, name);
       const profile = createProfile(profileInput);
-      return { content: [{ type: "text", text: JSON.stringify(profile, null, 2) }] };
+      return { content: [{ type: "text", text: prettyJson({
+        id: profile.id,
+        name: profile.name,
+        displayName: profile.displayName,
+        category: profile.category,
+        colorKeys: Object.keys(profile.colors).length,
+        componentRuleKeys: Object.keys(profile.componentRules).length,
+        hint: "Use list_profiles/get_active_style verbose paths for more profile details.",
+      }) }] };
     }
   );
+}
+
+function summarizeEnrichment(enrichment: AiEnrichment | null) {
+  if (!enrichment) return null;
+  return {
+    detectedStyle: enrichment.detectedStyle,
+    suggestedName: enrichment.suggestedName,
+    profileDescription: truncateText(enrichment.profileDescription, 160),
+    colorNameCount: Object.keys(enrichment.colorNames).length,
+  };
 }

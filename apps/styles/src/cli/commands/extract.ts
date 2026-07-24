@@ -1,7 +1,7 @@
 import chalk from "chalk";
 import { writeFileSync } from "fs";
 import type { Command } from "commander";
-import { jsonOut, error } from "../../lib/format.js";
+import { jsonOut, error, truncateText } from "../../lib/format.js";
 
 const isTTY = (process.stdout.isTTY ?? false) && (process.stdin.isTTY ?? false);
 
@@ -20,7 +20,9 @@ export function registerExtractCommand(program: Command) {
     .option("--responsive", "Sample at mobile/tablet/desktop viewports")
     .option("--states", "Capture hover/focus state style deltas")
     .option("--audit", "Run WCAG accessibility contrast audit on extracted colors")
-    .action(async (url: string | undefined, opts: { name?: string; save?: boolean; format?: string; output?: string; tags?: string; file?: string; screenshot?: string; pages?: string; responsive?: boolean; states?: boolean; audit?: boolean }) => {
+    .option("-v, --verbose", "Print generated config in addition to the compact summary")
+    .option("--json", "Output full tokens/config JSON")
+    .action(async (url: string | undefined, opts: { name?: string; save?: boolean; format?: string; output?: string; tags?: string; file?: string; screenshot?: string; pages?: string; responsive?: boolean; states?: boolean; audit?: boolean; verbose?: boolean; json?: boolean }) => {
       const { extractStylesFromUrl, extractStylesFromFile, extractStylesFromScreenshot, enrichTokensWithAi } = await import("../../lib/extractor.js");
       const { tokenizeStyles } = await import("../../lib/tokenizer.js");
       const transformMod = await import("../../lib/transformer.js");
@@ -61,47 +63,37 @@ export function registerExtractCommand(program: Command) {
           a11yReport = auditColorContrast(tokens, raw);
         }
 
-        if (isTTY) {
-          console.log(chalk.green("\n✔ Extraction complete\n"));
-          console.log(chalk.bold("  Colors found:   ") + tokens.colors.length);
-          console.log(chalk.bold("  Fonts found:    ") + tokens.typography.fontFamilies.length);
-          console.log(chalk.bold("  Radii found:    ") + tokens.borderRadius.length);
-          console.log(chalk.bold("  Shadows found:  ") + tokens.shadows.length);
-          if (enrichment) {
-            console.log(chalk.bold("  Style detected: ") + chalk.cyan(enrichment.detectedStyle));
-            console.log(chalk.bold("  Suggested name: ") + chalk.cyan(enrichment.suggestedName));
-            console.log(chalk.dim(`  ${enrichment.profileDescription}`));
-          }
-          if (a11yReport) {
-            console.log();
-            const scoreColor = a11yReport.score >= 80 ? chalk.green : a11yReport.score >= 50 ? chalk.yellow : chalk.red;
-            console.log(chalk.bold("  A11y score:     ") + scoreColor(`${a11yReport.score}/100`) + chalk.dim(` (${a11yReport.passCount} pass, ${a11yReport.failCount} fail)`));
-            const fails = a11yReport.pairs.filter((p) => p.level === "fail").slice(0, 3);
-            if (fails.length) {
-              console.log(chalk.dim("  Failing pairs:"));
-              for (const f of fails) console.log(chalk.dim(`    ${f.foreground} on ${f.background} → ${f.ratio}:1`));
-            }
-          }
-          console.log();
-          console.log(chalk.bold(`  Config (${format}):\n`));
-          console.log(result.code);
-        } else {
-          jsonOut({ tokens, code: result.code, config: result.config, format, enrichment, a11y: a11yReport });
-        }
-
+        let savedKit: ReturnType<typeof saveKit> | null = null;
         if (opts.save) {
           if (!opts.name) {
             if (isTTY) console.error(chalk.red("--name is required when using --save"));
             process.exit(1);
           }
           const tags = opts.tags ? opts.tags.split(",").map((t) => t.trim()) : [];
-          const kit = saveKit({ name: opts.name!, url: source, tokens, raw, tags, extractedAt: raw.extractedAt });
-          if (isTTY) console.log(chalk.green(`\n  Saved as "${kit.name}" (${kit.id})`));
+          savedKit = saveKit({ name: opts.name!, url: source, tokens, raw, tags, extractedAt: raw.extractedAt });
         }
 
+        let outputPath: string | null = null;
         if (opts.output) {
           writeFileSync(opts.output, result.code, "utf-8");
-          if (isTTY) console.log(chalk.green(`\n  Written to ${opts.output}`));
+          outputPath = opts.output;
+        }
+
+        const payload = { tokens, code: result.code, config: result.config, format, enrichment, a11y: a11yReport, kit: savedKit ? { id: savedKit.id, name: savedKit.name } : null, output: outputPath };
+        if (opts.json) {
+          jsonOut(payload);
+        } else {
+          writeExtractionSummary({
+            source,
+            format,
+            tokens,
+            enrichment,
+            a11yReport,
+            code: result.code,
+            savedKit,
+            outputPath,
+            showCode: opts.verbose ?? false,
+          });
         }
       } catch (e) {
         error((e as Error).message);
@@ -122,4 +114,51 @@ export function registerExtractCommand(program: Command) {
       });
       await proc.exited;
     });
+}
+
+function writeExtractionSummary(args: {
+  source: string;
+  format: string;
+  tokens: {
+    colors: Array<unknown>;
+    typography: { fontFamilies: string[] };
+    borderRadius: Array<unknown>;
+    shadows: Array<unknown>;
+  };
+  enrichment: { detectedStyle?: string; suggestedName?: string; profileDescription?: string } | null;
+  a11yReport: { score: number; passCount: number; failCount: number; pairs: Array<{ level: string; foreground: string; background: string; ratio: number }> } | null;
+  code: string;
+  savedKit: { id: string; name: string } | null;
+  outputPath: string | null;
+  showCode: boolean;
+}) {
+  console.log(chalk.green("Extraction complete"));
+  console.log(chalk.dim(`Source: ${args.source}`));
+  console.log(`Format: ${args.format}`);
+  console.log(`Tokens: ${args.tokens.colors.length} colors, ${args.tokens.typography.fontFamilies.length} fonts, ${args.tokens.borderRadius.length} radii, ${args.tokens.shadows.length} shadows`);
+
+  if (args.enrichment) {
+    if (args.enrichment.detectedStyle) console.log(`Style detected: ${args.enrichment.detectedStyle}`);
+    if (args.enrichment.suggestedName) console.log(`Suggested name: ${args.enrichment.suggestedName}`);
+    if (args.enrichment.profileDescription) console.log(chalk.dim(truncateText(args.enrichment.profileDescription, 120)));
+  }
+
+  if (args.a11yReport) {
+    console.log(`A11y: ${args.a11yReport.score}/100 (${args.a11yReport.passCount} pass, ${args.a11yReport.failCount} fail)`);
+    const fails = args.a11yReport.pairs.filter((pair) => pair.level === "fail").slice(0, 3);
+    for (const fail of fails) {
+      console.log(chalk.dim(`  fail: ${fail.foreground} on ${fail.background} ${fail.ratio}:1`));
+    }
+  }
+
+  if (args.savedKit) console.log(`Saved kit: ${args.savedKit.name} (${args.savedKit.id})`);
+  if (args.outputPath) console.log(`Written: ${args.outputPath}`);
+  if (args.showCode) {
+    console.log(`\nConfig (${args.format}):\n`);
+    console.log(args.code);
+  } else if (!args.outputPath) {
+    console.log(chalk.dim("Use --verbose to print generated config, --output <file> to write it, or --json for full tokens/config."));
+  } else {
+    console.log(chalk.dim("Use --json for full tokens/config."));
+  }
 }

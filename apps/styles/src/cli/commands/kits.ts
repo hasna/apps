@@ -1,6 +1,7 @@
 import chalk from "chalk";
 import type { Command } from "commander";
-import { jsonOut, error } from "../../lib/format.js";
+import { error, formatTable, jsonOut, pageHint, pageItems, truncateText } from "../../lib/format.js";
+import type { StyleKit } from "../../lib/kits.js";
 
 const isTTY = (process.stdout.isTTY ?? false) && (process.stdin.isTTY ?? false);
 
@@ -11,24 +12,38 @@ export function registerKitsCommands(program: Command) {
     .command("list")
     .description("List all saved style kits")
     .option("-s, --search <query>", "Search by name, URL, or tags")
-    .action(async (opts: { search?: string }) => {
+    .option("--limit <n>", "Max kits to show in compact output")
+    .option("--cursor <n>", "Zero-based offset for compact output pagination")
+    .option("-v, --verbose", "Show token counts and tags")
+    .option("--json", "Output full JSON")
+    .action(async (opts: { search?: string; limit?: string; cursor?: string; verbose?: boolean; json?: boolean }) => {
       const { listKits } = await import("../../lib/kits.js");
       const kits = listKits({ search: opts.search });
-      if (!isTTY) { jsonOut(kits); return; }
+      if (opts.json) { jsonOut(kits); return; }
       if (!kits.length) { console.log(chalk.dim("No kits saved yet. Run: styles extract <url> --save --name <name>")); return; }
-      for (const k of kits) {
-        console.log(`  ${chalk.cyan(k.id.slice(0, 8))}  ${chalk.bold(k.name)}  ${chalk.dim(k.url)}  ${chalk.dim(new Date(k.createdAt).toLocaleDateString())}`);
-      }
+
+      const page = pageItems(kits, { limit: opts.limit, cursor: opts.cursor, defaultLimit: 20, maxLimit: 100 });
+      console.log(chalk.bold(`Style Kits (${kits.length})`));
+      console.log(formatTable(page.items, [
+        { header: "ID", value: (k) => k.id.slice(0, 8), maxWidth: 10 },
+        { header: "Name", value: (k) => k.name, maxWidth: 24 },
+        { header: "URL", value: (k) => k.url, maxWidth: 42 },
+        { header: "Tokens", value: compactKitTokenCounts, maxWidth: 24 },
+        ...(opts.verbose ? [{ header: "Tags", value: (k: StyleKit) => k.tags.join(", "), maxWidth: 36 }] : []),
+      ]));
+      console.log(chalk.dim(pageHint(page, "use `styles kits get <id>` for details")));
     });
 
   kitsCmd
     .command("get <id>")
     .description("Show details of a saved kit")
-    .action(async (id: string) => {
+    .option("-v, --verbose", "Show sample colors and token values")
+    .option("--json", "Output full JSON")
+    .action(async (id: string, opts: { verbose?: boolean; json?: boolean }) => {
       const { getKit } = await import("../../lib/kits.js");
       const kit = getKit(id);
       if (!kit) error(`Kit not found: ${id}`);
-      if (!isTTY) { jsonOut(kit); return; }
+      if (opts.json) { jsonOut(kit); return; }
       console.log(chalk.bold(`\n  ${kit!.name}`));
       console.log(`  URL:      ${kit!.url}`);
       console.log(`  Saved:    ${new Date(kit!.createdAt).toLocaleString()}`);
@@ -37,16 +52,22 @@ export function registerKitsCommands(program: Command) {
       console.log(`  Radii:    ${kit!.tokens.borderRadius.join(", ") || "—"}`);
       console.log(`  Shadows:  ${kit!.tokens.shadows.length}`);
       if (kit!.tags.length) console.log(`  Tags:     ${kit!.tags.join(", ")}`);
+      if (opts.verbose) {
+        const colors = kit!.tokens.colors.slice(0, 8).map((c) => c.name ? `${c.name}:${c.value}` : c.value);
+        if (colors.length) console.log(`  Top colors: ${truncateText(colors.join(", "), 120)}`);
+      }
+      console.log(chalk.dim("  Use --json for full tokens/raw extraction data."));
     });
 
   kitsCmd
     .command("delete <id>")
     .description("Delete a saved kit")
-    .action(async (id: string) => {
+    .option("--json", "Output JSON")
+    .action(async (id: string, opts: { json?: boolean }) => {
       const { deleteKit } = await import("../../lib/kits.js");
       deleteKit(id);
-      if (isTTY) console.log(chalk.green(`  Deleted kit ${id}`));
-      else jsonOut({ ok: true });
+      if (opts.json) jsonOut({ ok: true });
+      else console.log(chalk.green(`  Deleted kit ${id}`));
     });
 
   kitsCmd
@@ -54,7 +75,8 @@ export function registerKitsCommands(program: Command) {
     .description("Export a kit as a config")
     .option("-f, --format <format>", "Format: shadcn|tailwind|css-vars|mui|radix", "shadcn")
     .option("-o, --output <file>", "Write to file")
-    .action(async (id: string, opts: { format?: string; output?: string }) => {
+    .option("--json", "Output config and metadata as JSON")
+    .action(async (id: string, opts: { format?: string; output?: string; json?: boolean }) => {
       const { getKit } = await import("../../lib/kits.js");
       const { transform } = await import("../../lib/transformer.js");
       const kit = getKit(id);
@@ -65,8 +87,8 @@ export function registerKitsCommands(program: Command) {
         writeFileSync(opts.output, result.code, "utf-8");
         if (isTTY) console.log(chalk.green(`Written to ${opts.output}`));
       } else {
-        if (isTTY) console.log(result.code);
-        else jsonOut({ code: result.code, config: result.config, format: opts.format ?? "shadcn" });
+        if (opts.json) jsonOut({ code: result.code, config: result.config, format: opts.format ?? "shadcn" });
+        else console.log(result.code);
       }
     });
 
@@ -95,7 +117,8 @@ export function registerKitsCommands(program: Command) {
   kitsCmd
     .command("diff <idA> <idB>")
     .description("Compare two saved kits and show what changed")
-    .action(async (idA: string, idB: string) => {
+    .option("--json", "Output full JSON")
+    .action(async (idA: string, idB: string, opts: { json?: boolean }) => {
       const { getKit } = await import("../../lib/kits.js");
       const { diffTokens } = await import("../../lib/diff.js");
       const a = getKit(idA);
@@ -103,7 +126,7 @@ export function registerKitsCommands(program: Command) {
       if (!a) error(`Kit not found: ${idA}`);
       if (!b) error(`Kit not found: ${idB}`);
       const diff = diffTokens(a!.tokens, b!.tokens);
-      if (!isTTY) { jsonOut(diff); return; }
+      if (opts.json) { jsonOut(diff); return; }
       console.log(chalk.bold(`\n  ${a!.name} → ${b!.name}\n`));
       console.log(chalk.dim(`  ${diff.summary.description} (${diff.summary.totalChanges} total changes)\n`));
       if (diff.colors.added.length) console.log(chalk.green(`  +${diff.colors.added.length} colors: `) + diff.colors.added.slice(0, 5).map((c) => c.value).join(", "));
@@ -119,14 +142,23 @@ export function registerKitsCommands(program: Command) {
   kitsCmd
     .command("save-as-profile <id> <name>")
     .description("Convert a saved kit into a reusable style profile")
-    .action(async (id: string, name: string) => {
+    .option("--json", "Output full JSON")
+    .action(async (id: string, name: string, opts: { json?: boolean }) => {
       const { getKit, kitToProfile } = await import("../../lib/kits.js");
       const { createProfile } = await import("../../lib/profiles.js");
       const kit = getKit(id);
       if (!kit) error(`Kit not found: ${id}`);
       const profileInput = kitToProfile(kit!, name);
       const profile = createProfile(profileInput);
-      if (isTTY) console.log(chalk.green(`  Created profile "${profile.name}" (${profile.id})`));
-      else jsonOut(profile);
+      if (opts.json) jsonOut(profile);
+      else console.log(chalk.green(`  Created profile "${profile.name}" (${profile.id})`));
     });
+}
+
+function compactKitTokenCounts(kit: StyleKit): string {
+  return [
+    `${kit.tokens.colors.length} colors`,
+    `${kit.tokens.typography.fontFamilies.length} fonts`,
+    `${kit.tokens.shadows.length} shadows`,
+  ].join(", ");
 }

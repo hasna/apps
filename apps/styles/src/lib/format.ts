@@ -7,6 +7,95 @@ export function jsonOut(data: unknown): void {
   process.stdout.write(JSON.stringify(data, null, 2) + "\n");
 }
 
+export function compactJson(data: unknown): string {
+  return JSON.stringify(data);
+}
+
+export function prettyJson(data: unknown): string {
+  return JSON.stringify(data, null, 2);
+}
+
+export function truncateText(value: unknown, maxLength = 80): string {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  if (text.length <= maxLength) return text;
+  return text.slice(0, Math.max(0, maxLength - 3)).trimEnd() + "...";
+}
+
+export function parsePositiveInt(value: string | number | undefined, fallback: number, max = 100): number {
+  const parsed = typeof value === "number" ? value : Number.parseInt(value ?? "", 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(Math.floor(parsed), max);
+}
+
+export function parseCursor(value: string | number | undefined): number {
+  const parsed = typeof value === "number" ? value : Number.parseInt(value ?? "", 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return 0;
+  return Math.floor(parsed);
+}
+
+export interface PageOptions {
+  limit?: string | number;
+  cursor?: string | number;
+  defaultLimit?: number;
+  maxLimit?: number;
+}
+
+export interface Page<T> {
+  items: T[];
+  total: number;
+  limit: number;
+  cursor: number;
+  nextCursor: number | null;
+  hasMore: boolean;
+}
+
+export function pageItems<T>(items: T[], options: PageOptions = {}): Page<T> {
+  const limit = parsePositiveInt(options.limit, options.defaultLimit ?? 20, options.maxLimit ?? 100);
+  const cursor = parseCursor(options.cursor);
+  const page = items.slice(cursor, cursor + limit);
+  const nextCursor = cursor + page.length < items.length ? cursor + page.length : null;
+  return {
+    items: page,
+    total: items.length,
+    limit,
+    cursor,
+    nextCursor,
+    hasMore: nextCursor !== null,
+  };
+}
+
+export interface TableColumn<T> {
+  header: string;
+  value: (item: T) => unknown;
+  maxWidth?: number;
+}
+
+export function formatTable<T>(items: T[], columns: Array<TableColumn<T>>): string {
+  if (items.length === 0) return "";
+
+  const rows = items.map((item) =>
+    columns.map((column) => truncateText(column.value(item), column.maxWidth ?? 40))
+  );
+  const widths = columns.map((column, index) => {
+    const values = rows.map((row) => row[index].length);
+    return Math.max(column.header.length, ...values);
+  });
+
+  const header = columns.map((column, index) => column.header.padEnd(widths[index])).join("  ");
+  const divider = widths.map((width) => "-".repeat(width)).join("  ");
+  const body = rows.map((row) => row.map((value, index) => value.padEnd(widths[index])).join("  "));
+
+  return [header, divider, ...body].join("\n");
+}
+
+export function pageHint(page: Page<unknown>, detailHint?: string): string {
+  const parts = [`showing ${page.items.length}/${page.total}`];
+  if (page.hasMore) parts.push(`next: --cursor ${page.nextCursor}`);
+  if (detailHint) parts.push(detailHint);
+  parts.push("use --json for full machine-readable output");
+  return parts.join("; ");
+}
+
 export function severityColor(sev: string): string {
   switch (sev) {
     case "critical": return chalk.red(sev);

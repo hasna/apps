@@ -1,6 +1,7 @@
 import { resolve } from "path";
+import chalk from "chalk";
 import type { Command } from "commander";
-import { jsonOut } from "../../lib/format.js";
+import { formatTable, jsonOut, pageHint, pageItems } from "../../lib/format.js";
 import {
   STYLES,
   getStyle,
@@ -20,7 +21,11 @@ export function registerMiscCommands(program: Command) {
     .command("list")
     .description("List all available styles")
     .option("-c, --category <cat>", "Filter by category")
-    .action(async (opts: { category?: string }) => {
+    .option("--limit <n>", "Max styles to show in compact output")
+    .option("--cursor <n>", "Zero-based offset for compact output pagination")
+    .option("-v, --verbose", "Show longer descriptions in compact output")
+    .option("--json", "Output full JSON")
+    .action(async (opts: { category?: string; limit?: string; cursor?: string; verbose?: boolean; json?: boolean }) => {
       let styles = STYLES;
 
       if (opts.category) {
@@ -32,7 +37,22 @@ export function registerMiscCommands(program: Command) {
         }
       }
 
-      if (!isTTY) { jsonOut(styles); return; }
+      if (opts.json) { jsonOut(styles); return; }
+
+      if (!isTTY || opts.limit || opts.cursor || opts.verbose) {
+        const page = pageItems(styles, { limit: opts.limit, cursor: opts.cursor, defaultLimit: 20, maxLimit: 100 });
+        console.log(chalk.bold(`Styles (${styles.length})`));
+        if (page.items.length > 0) {
+          console.log(formatTable(page.items, [
+            { header: "Name", value: (s) => s.name, maxWidth: 22 },
+            { header: "Category", value: (s) => s.category, maxWidth: 16 },
+            { header: "Tags", value: (s) => s.tags.slice(0, opts.verbose ? 6 : 3).join(", "), maxWidth: opts.verbose ? 44 : 28 },
+            ...(opts.verbose ? [{ header: "Description", value: (s: typeof styles[number]) => s.description, maxWidth: 96 }] : []),
+          ]));
+        }
+        console.log(chalk.dim(pageHint(page, "use `styles info <name>` or --verbose for details")));
+        return;
+      }
 
       const React = await import("react");
       const { render } = await import("ink");
@@ -46,7 +66,8 @@ export function registerMiscCommands(program: Command) {
   program
     .command("info <name>")
     .description("Show full info for a style")
-    .action((name: string) => {
+    .option("--json", "Output full JSON")
+    .action((name: string, opts: { json?: boolean }) => {
       const { error } = require("../../lib/format.js");
       const style = getStyle(name);
       if (!style) {
@@ -55,9 +76,8 @@ export function registerMiscCommands(program: Command) {
         return;
       }
 
-      if (!isTTY) { jsonOut(style); return; }
+      if (opts.json) { jsonOut(style); return; }
 
-      const chalk = require("chalk");
       console.log();
       console.log(chalk.bold.cyan(style.displayName));
       console.log(chalk.dim(`Category: ${style.category}`));
@@ -68,6 +88,7 @@ export function registerMiscCommands(program: Command) {
       for (const p of style.principles) console.log(`  ${chalk.cyan("•")} ${p}`);
       console.log();
       console.log(chalk.dim("Tags: " + style.tags.join(", ")));
+      console.log(chalk.dim("Use --json for the full machine-readable object."));
       console.log();
     });
 

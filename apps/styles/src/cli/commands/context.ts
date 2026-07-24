@@ -3,7 +3,7 @@ import { resolve, join } from "path";
 import { existsSync, mkdirSync } from "fs";
 import type { Command } from "commander";
 import type { AgentName } from "../../lib/detect.js";
-import { jsonOut, error, formatAgo, statusColor, buildStyleMdContent } from "../../lib/format.js";
+import { formatTable, jsonOut, error, formatAgo, statusColor, buildStyleMdContent } from "../../lib/format.js";
 import { detectProjectPath } from "../../lib/detect.js";
 import { getActiveProfile, getBuiltinStyleProfile, setActiveProfile } from "../../lib/profiles.js";
 import { setPref, listPrefs } from "../../lib/preferences.js";
@@ -29,7 +29,8 @@ export function registerContextCommands(program: Command) {
     .option("-p, --project <path>", "Project path (default: cwd)")
     .option("-g, --global", "Set as global default instead of project-specific")
     .option("--inject-context", "Inject context into CLAUDE.md even if it does not exist yet")
-    .action(async (name: string, opts: { project?: string; global?: boolean; injectContext?: boolean }) => {
+    .option("--json", "Output JSON")
+    .action(async (name: string, opts: { project?: string; global?: boolean; injectContext?: boolean; json?: boolean }) => {
       const { getStyle, findSimilarStyles } = await import("../../lib/registry.js");
       const style = getStyle(name);
       if (!style) {
@@ -42,8 +43,8 @@ export function registerContextCommands(program: Command) {
 
       if (opts.global) {
         setPref("active_profile", profile.id, "global");
-        if (isTTY) console.log(chalk.green(`✔ Global style set to: ${style.displayName}`));
-        else jsonOut({ ok: true, scope: "global", style: name, profileId: profile.id });
+        if (opts.json) jsonOut({ ok: true, scope: "global", style: name, profileId: profile.id });
+        else console.log(chalk.green(`✔ Global style set to: ${style.displayName}`));
         return;
       }
 
@@ -67,12 +68,12 @@ export function registerContextCommands(program: Command) {
         }
       }
 
-      if (isTTY) {
+      if (opts.json) {
+        jsonOut({ ok: true, scope: "project", project: projectPath, style: name, profileId: profile.id });
+      } else {
         console.log(chalk.green(`✔ Active style set to: ${style.displayName}`));
         console.log(chalk.dim(`  Project: ${projectPath}`));
         console.log(chalk.dim(`  Context file written: ${join(projectPath, ".styles", "style.md")}`));
-      } else {
-        jsonOut({ ok: true, scope: "project", project: projectPath, style: name, profileId: profile.id });
       }
     });
 
@@ -84,7 +85,8 @@ export function registerContextCommands(program: Command) {
     .option("-p, --project <path>", "Project path (default: cwd)")
     .option("-s, --style <name>", "Style to activate")
     .option("--inject-context", "Inject context into CLAUDE.md even if it does not exist yet")
-    .action(async (opts: { project?: string; style?: string; injectContext?: boolean }) => {
+    .option("--json", "Output JSON")
+    .action(async (opts: { project?: string; style?: string; injectContext?: boolean; json?: boolean }) => {
       const { getStyle, findSimilarStyles } = await import("../../lib/registry.js");
       const projectPath = resolve(opts.project ?? detectProjectPath());
 
@@ -132,12 +134,12 @@ export function registerContextCommands(program: Command) {
         .filter(([, r]) => r !== null)
         .map(([a]) => a);
 
-      if (isTTY) {
+      if (opts.json) {
+        jsonOut({ ok: true, projectPath, style: opts.style ?? null, hooks: hookResults });
+      } else {
         console.log(chalk.green(`✔ Initialized open-styles for: ${projectPath}`));
         if (opts.style) console.log(chalk.dim(`  Active style: ${opts.style}`));
         if (injectedAgents.length > 0) console.log(chalk.dim(`  Hooks injected for agents: ${injectedAgents.join(", ")}`));
-      } else {
-        jsonOut({ ok: true, projectPath, style: opts.style ?? null, hooks: hookResults });
       }
     });
 
@@ -147,7 +149,9 @@ export function registerContextCommands(program: Command) {
     .command("context")
     .description("Show the active style context for a project (for AI agents)")
     .option("-p, --project <path>", "Project path (default: auto-detect)")
-    .action(async (opts: { project?: string }) => {
+    .option("-v, --verbose", "Show principles, anti-patterns, and preferences")
+    .option("--json", "Output full JSON")
+    .action(async (opts: { project?: string; verbose?: boolean; json?: boolean }) => {
       const projectPath = resolve(opts.project ?? detectProjectPath());
 
       let profile = getActiveProfile(projectPath);
@@ -173,7 +177,12 @@ export function registerContextCommands(program: Command) {
         lastCheckAgo: formatAgo(lastCheck?.run_at),
       };
 
-      if (!isTTY) { jsonOut(result); return; }
+      if (opts.json) { jsonOut(result); return; }
+
+      if (!isTTY || opts.verbose) {
+        writeContextSummary(result, opts.verbose);
+        return;
+      }
 
       console.log();
       console.log(chalk.bold(`Active Style: ${profile.displayName}`));
@@ -209,19 +218,20 @@ export function registerContextCommands(program: Command) {
     .option("-p, --project <path>", "Project path (default: auto-detect)")
     .option("--agent <name>", "Only inject into a specific agent (claude|gemini|codex|opencode|pi)")
     .option("--remove", "Remove the style context block from agent MD files")
-    .action(async (opts: { project?: string; agent?: string; remove?: boolean }) => {
+    .option("--json", "Output JSON")
+    .action(async (opts: { project?: string; agent?: string; remove?: boolean; json?: boolean }) => {
       const projectPath = resolve(opts.project ?? detectProjectPath());
       const agentFilter = opts.agent as AgentName | undefined;
 
       if (opts.remove) {
         if (agentFilter) {
           const result = removeFromAgentMd(projectPath, agentFilter);
-          if (!isTTY) { jsonOut({ ok: true, ...result }); return; }
+          if (opts.json) { jsonOut({ ok: true, ...result }); return; }
           if (result.action === "removed") console.log(chalk.green(`✔ Removed style context from: ${result.path}`));
           else console.log(chalk.dim(`No style context block found in: ${result.path}`));
         } else {
           removeFromAllAgentMds(projectPath);
-          if (!isTTY) { jsonOut({ ok: true, action: "removed-all" }); return; }
+          if (opts.json) { jsonOut({ ok: true, action: "removed-all" }); return; }
           console.log(chalk.green(`✔ Removed style context from all agent MD files`));
         }
         return;
@@ -234,12 +244,12 @@ export function registerContextCommands(program: Command) {
 
       if (agentFilter) {
         const result = injectIntoAgentMd(projectPath, agentFilter, profile, prefsArr);
-        if (!isTTY) { jsonOut({ ok: true, ...result }); return; }
+        if (opts.json) { jsonOut({ ok: true, ...result }); return; }
         if (result.action === "unchanged") console.log(chalk.dim(`Style context already up to date: ${result.path}`));
         else console.log(chalk.green(`✔ Style context ${result.action}: ${result.path}`));
       } else {
         const results = injectIntoAllAgentMds(projectPath, profile, prefsArr);
-        if (!isTTY) { jsonOut({ ok: true, results }); return; }
+        if (opts.json) { jsonOut({ ok: true, results }); return; }
         let anyChange = false;
         for (const [, res] of Object.entries(results)) {
           if (!res) continue;
@@ -249,4 +259,50 @@ export function registerContextCommands(program: Command) {
         if (!anyChange) console.log(chalk.dim("No agent MD files found to inject into. Run `styles init` first."));
       }
     });
+}
+
+function writeContextSummary(
+  result: {
+    projectPath: string;
+    activeStyle: { name: string; displayName: string; category: string };
+    principles: string[];
+    antiPatterns: string[];
+    preferences: Record<string, string>;
+    score: number | null;
+    status: string | null;
+    lastCheckAgo: string | null;
+  },
+  verbose = false,
+): void {
+  console.log(chalk.bold(`Active Style: ${result.activeStyle.displayName}`));
+  console.log(chalk.dim(`Name: ${result.activeStyle.name}`));
+  console.log(chalk.dim(`Category: ${result.activeStyle.category}`));
+  console.log(chalk.dim(`Project: ${result.projectPath}`));
+  console.log(`Principles: ${result.principles.length}`);
+  console.log(`Anti-patterns: ${result.antiPatterns.length}`);
+  console.log(`Preferences: ${Object.keys(result.preferences).length}`);
+  if (result.score !== null) {
+    console.log(`Health: ${result.status} ${result.score}/100 (${result.lastCheckAgo ?? "unknown"})`);
+  }
+
+  if (verbose) {
+    if (result.principles.length > 0) {
+      console.log("\nPrinciples");
+      for (const principle of result.principles) console.log(`  - ${principle}`);
+    }
+    if (result.antiPatterns.length > 0) {
+      console.log("\nAnti-patterns");
+      for (const antiPattern of result.antiPatterns) console.log(`  - ${antiPattern}`);
+    }
+    const prefs = Object.entries(result.preferences);
+    if (prefs.length > 0) {
+      console.log("\nPreferences");
+      console.log(formatTable(prefs, [
+        { header: "Key", value: ([key]) => key, maxWidth: 30 },
+        { header: "Value", value: ([, value]) => value, maxWidth: 72 },
+      ]));
+    }
+  }
+
+  console.log(chalk.dim("Use --verbose for details or --json for the full machine-readable context."));
 }

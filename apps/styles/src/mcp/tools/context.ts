@@ -2,7 +2,7 @@ import { z } from "zod";
 import { resolve, join } from "path";
 import { existsSync } from "fs";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { formatAgo } from "../../lib/format.js";
+import { pageItems, prettyJson, truncateText, formatAgo } from "../../lib/format.js";
 import { getActiveProfile, getBuiltinStyleProfile } from "../../lib/profiles.js";
 import { listPrefs, setPref } from "../../lib/preferences.js";
 import { getDb } from "../../lib/db.js";
@@ -62,10 +62,27 @@ export function registerContextTools(server: McpServer) {
     "Get all preferences for a project or globally",
     {
       project_path: z.string().optional().describe("Absolute project path for project-scoped prefs"),
+      limit: z.number().int().positive().optional().describe("Maximum preferences to return in compact output (default: 20)"),
+      cursor: z.number().int().nonnegative().optional().describe("Zero-based pagination offset"),
+      verbose: z.boolean().optional().describe("Return full, untruncated preference values"),
     },
-    async ({ project_path }) => {
+    async ({ project_path, limit, cursor, verbose }) => {
       const projectPath = project_path ? resolve(project_path) : undefined;
-      return { content: [{ type: "text", text: JSON.stringify(listPrefs(projectPath), null, 2) }] };
+      const prefs = listPrefs(projectPath);
+      const page = pageItems(prefs, { limit, cursor, defaultLimit: 20, maxLimit: 100 });
+      return { content: [{ type: "text", text: prettyJson({
+        preferences: page.items.map((pref) => ({
+          ...pref,
+          value: verbose ? pref.value : truncateText(pref.value, 120),
+        })),
+        total: page.total,
+        limit: page.limit,
+        cursor: page.cursor,
+        nextCursor: page.nextCursor,
+        hint: verbose
+          ? "Full preference values included because verbose=true."
+          : "Values are truncated in compact output. Pass verbose=true for full values.",
+      }) }] };
     }
   );
 
@@ -101,8 +118,9 @@ export function registerContextTools(server: McpServer) {
     {
       template_id: z.string().describe("Template ID to apply"),
       project_path: z.string().describe("Absolute project path"),
+      verbose: z.boolean().optional().describe("Include all created files in the result"),
     },
-    async ({ template_id, project_path }) => {
+    async ({ template_id, project_path, verbose }) => {
       const projectPath = resolve(project_path);
       const result = applyTemplate(template_id, projectPath);
       if (!result.success) {
@@ -111,7 +129,13 @@ export function registerContextTools(server: McpServer) {
           isError: true,
         };
       }
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      return { content: [{ type: "text", text: prettyJson(verbose ? result : {
+        success: result.success,
+        filesCreated: result.filesCreated.length,
+        sampleFiles: result.filesCreated.slice(0, 5),
+        errors: result.errors.slice(0, 5),
+        hint: "Pass verbose=true for the complete file list.",
+      }) }] };
     }
   );
 
@@ -120,8 +144,9 @@ export function registerContextTools(server: McpServer) {
     "Get the full style context for a project — active style, principles, anti-patterns, preferences, and latest health score",
     {
       project_path: z.string().optional().describe("Absolute project path (default: auto-detect from cwd)"),
+      verbose: z.boolean().optional().describe("Include principles, anti-patterns, and preferences"),
     },
-    async ({ project_path }) => {
+    async ({ project_path, verbose }) => {
       const projectPath = resolve(project_path ?? detectProjectPath());
 
       let profile = getActiveProfile(projectPath);
@@ -147,7 +172,17 @@ export function registerContextTools(server: McpServer) {
         lastCheckAgo: formatAgo(lastCheck?.run_at),
       };
 
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      return { content: [{ type: "text", text: prettyJson(verbose ? result : {
+        projectPath,
+        activeStyle: result.activeStyle,
+        principleCount: result.principles.length,
+        antiPatternCount: result.antiPatterns.length,
+        preferenceCount: Object.keys(result.preferences).length,
+        score: result.score,
+        status: result.status,
+        lastCheckAgo: result.lastCheckAgo,
+        hint: "Pass verbose=true for principles, anti-patterns, and preferences.",
+      }) }] };
     }
   );
 

@@ -1,7 +1,7 @@
 import chalk from "chalk";
 import { resolve } from "path";
 import type { Command } from "commander";
-import { jsonOut, severityColor, statusColor, error } from "../../lib/format.js";
+import { formatTable, jsonOut, parsePositiveInt, severityColor, statusColor, truncateText, error } from "../../lib/format.js";
 import { runHealthCheck, checkFile, getDefaultRules } from "../../lib/health.js";
 import { getHealthDiff } from "../../lib/healthdiff.js";
 import { createTasksFromViolations } from "../../lib/taskgen.js";
@@ -11,6 +11,8 @@ import { getFixSuggestions, applyFixes } from "../../lib/fixer.js";
 import { getDb } from "../../lib/db.js";
 
 const isTTY = (process.stdout.isTTY ?? false) && (process.stdin.isTTY ?? false);
+type HealthResult = Awaited<ReturnType<typeof runHealthCheck>>;
+type FileViolation = HealthResult["violations"][number];
 
 export function registerHealthCommand(program: Command) {
   program
@@ -22,7 +24,10 @@ export function registerHealthCommand(program: Command) {
     .option("--create-tasks", "Auto-create todos tasks for violations")
     .option("--since-last", "Only scan files modified since the last health check run")
     .option("--no-cache", "Skip file cache and force full rescan")
-    .action(async (opts: { project?: string; ai?: boolean; watch?: boolean; createTasks?: boolean; sinceLast?: boolean; noCache?: boolean }) => {
+    .option("--limit <n>", "Max violations to show in compact output")
+    .option("-v, --verbose", "Show more violations in compact output")
+    .option("--json", "Output full JSON")
+    .action(async (opts: { project?: string; ai?: boolean; watch?: boolean; createTasks?: boolean; sinceLast?: boolean; noCache?: boolean; limit?: string; verbose?: boolean; json?: boolean }) => {
       const projectPath = resolve(opts.project ?? detectProjectPath());
 
       async function doCheck() {
@@ -56,8 +61,13 @@ export function registerHealthCommand(program: Command) {
           }
         }
 
-        if (!isTTY) {
+        if (opts.json) {
           jsonOut(result);
+          return;
+        }
+
+        if (!isTTY) {
+          writeHealthSummary(result, projectPath, opts);
           return;
         }
 
@@ -113,7 +123,9 @@ export function registerHealthCommand(program: Command) {
     .description("Check a single file for style violations")
     .option("-p, --project <path>", "Project path (default: cwd)")
     .option("-q, --quiet", "Only exit code (0=pass, 1=violations)")
-    .action(async (file: string, opts: { project?: string; quiet?: boolean }) => {
+    .option("--limit <n>", "Max violations to show in compact output")
+    .option("--json", "Output full JSON")
+    .action(async (file: string, opts: { project?: string; quiet?: boolean; limit?: string; json?: boolean }) => {
       const projectPath = resolve(opts.project ?? process.cwd());
       const filePath = resolve(file);
 
@@ -125,7 +137,7 @@ export function registerHealthCommand(program: Command) {
         process.exit(violations.length > 0 ? 1 : 0);
       }
 
-      if (!isTTY) {
+      if (opts.json) {
         jsonOut({ filePath, violations });
         return;
       }
@@ -135,10 +147,7 @@ export function registerHealthCommand(program: Command) {
         return;
       }
 
-      console.log(chalk.yellow(`${file}: ${violations.length} violation(s)`));
-      for (const v of violations) {
-        console.log(`  [${severityColor(v.severity)}] ${chalk.dim(v.rule)}: ${v.message}`);
-      }
+      writeFileViolations(filePath, violations, opts.limit);
       process.exit(1);
     });
 
@@ -146,7 +155,8 @@ export function registerHealthCommand(program: Command) {
     .command("score")
     .description("Show the latest health check score for a project")
     .option("-p, --project <path>", "Project path (default: auto-detect)")
-    .action((opts: { project?: string }) => {
+    .option("--json", "Output JSON")
+    .action((opts: { project?: string; json?: boolean }) => {
       const projectPath = resolve(opts.project ?? detectProjectPath());
       const db = getDb();
 
@@ -167,7 +177,7 @@ export function registerHealthCommand(program: Command) {
 
       if (!lastCheck) {
         const msg = { score: null, status: "unknown", message: "No health check run yet. Run: styles health" };
-        if (!isTTY) { jsonOut(msg); return; }
+        if (opts.json) { jsonOut(msg); return; }
         console.log(chalk.dim("No health check run yet."));
         console.log(chalk.dim("Run: styles health"));
         return;
@@ -181,7 +191,7 @@ export function registerHealthCommand(program: Command) {
         projectPath,
       };
 
-      if (!isTTY) { jsonOut(result); return; }
+      if (opts.json) { jsonOut(result); return; }
       console.log();
       console.log(`Score: ${chalk.bold(String(lastCheck.score))}/100  ${statusColor(lastCheck.status)}`);
       console.log(chalk.dim(`Violations: ${lastCheck.violation_count}`));
@@ -194,11 +204,12 @@ export function registerHealthCommand(program: Command) {
     .command("diff")
     .description("Show health score diff between the last two health check runs")
     .option("-p, --project <path>", "Project path (default: cwd)")
-    .action((opts: { project?: string }) => {
+    .option("--json", "Output full JSON")
+    .action((opts: { project?: string; json?: boolean }) => {
       const projectPath = resolve(opts.project ?? detectProjectPath());
       const diff = getHealthDiff(projectPath);
 
-      if (!isTTY) { jsonOut(diff); return; }
+      if (opts.json) { jsonOut(diff); return; }
 
       if (diff.trend === "no-data") {
         console.log(chalk.dim("No health check history found. Run `styles health` at least twice."));
@@ -247,7 +258,9 @@ export function registerHealthCommand(program: Command) {
     .description("Show fix suggestions for style violations in a file")
     .option("-p, --project <path>", "Project path (default: cwd)")
     .option("--apply", "Auto-apply fixable suggestions to the file")
-    .action(async (file: string, opts: { project?: string; apply?: boolean }) => {
+    .option("--limit <n>", "Max fix suggestions to show")
+    .option("--json", "Output full JSON")
+    .action(async (file: string, opts: { project?: string; apply?: boolean; limit?: string; json?: boolean }) => {
       const projectPath = resolve(opts.project ?? process.cwd());
       const filePath = resolve(file);
 
@@ -264,33 +277,74 @@ export function registerHealthCommand(program: Command) {
 
       const result = { filePath, fixes, applied };
 
-      if (!isTTY) { jsonOut(result); return; }
+      if (opts.json) { jsonOut(result); return; }
 
       if (fixes.length === 0) {
         console.log(chalk.green(`✔ ${file}: No violations to fix`));
         return;
       }
 
-      console.log(chalk.bold(`\n${file}: ${fixes.length} fix suggestion(s)\n`));
-      for (const fix of fixes) {
-        const fixable = fix.autoFixable ? chalk.green("[auto-fixable]") : chalk.dim("[manual]");
-        console.log(`  Line ${chalk.bold(String(fix.line))} ${fixable} ${chalk.dim(fix.rule)}`);
-        console.log(`    ${chalk.dim("Current:")}    ${fix.current.trim()}`);
-        console.log(`    ${chalk.dim("Suggestion:")} ${fix.suggestion}`);
-        if (fix.autoFixable && fix.fixedLine) {
-          console.log(`    ${chalk.dim("Fixed line:")} ${fix.fixedLine.trim()}`);
-        }
-        console.log();
-      }
-
-      if (opts.apply) {
-        if (applied > 0) console.log(chalk.green(`✔ Applied ${applied} auto-fix(es) to ${file}`));
-        else console.log(chalk.dim("No auto-fixable issues found to apply."));
-      } else {
-        const autoCount = fixes.filter((f) => f.autoFixable).length;
-        if (autoCount > 0) console.log(chalk.dim(`Tip: Run with --apply to auto-fix ${autoCount} fixable issue(s).`));
-      }
+      writeFixSummary(file, fixes, applied, opts.limit);
     });
 }
 
 export { registerHealthCommand as registerCheckFileCommand };
+
+function writeHealthSummary(
+  result: HealthResult,
+  projectPath: string,
+  opts: { limit?: string; verbose?: boolean },
+): void {
+  const limit = parsePositiveInt(opts.limit, opts.verbose ? 50 : 10, 100);
+  process.stdout.write(`Health Check: ${result.status}  Score: ${result.score}/100\n`);
+  process.stdout.write(`Project: ${projectPath}\n`);
+  process.stdout.write(`Files scanned: ${result.filesScanned}\n`);
+  process.stdout.write(`Violations: ${result.violations.length}\n`);
+
+  const shown = result.violations.slice(0, limit);
+  if (shown.length > 0) {
+    process.stdout.write("\nTop violations\n");
+    process.stdout.write(formatTable(shown, [
+      { header: "Severity", value: (v) => v.severity, maxWidth: 10 },
+      { header: "File", value: (v) => v.filePath.replace(projectPath + "/", ""), maxWidth: 42 },
+      { header: "Rule", value: (v) => v.rule, maxWidth: 24 },
+      { header: "Message", value: (v) => v.message, maxWidth: opts.verbose ? 96 : 56 },
+    ]) + "\n");
+    if (result.violations.length > shown.length) {
+      process.stdout.write(`... and ${result.violations.length - shown.length} more. Use --limit <n>, --verbose, or --json.\n`);
+    }
+  }
+  process.stdout.write("Use --json for full violation objects.\n");
+}
+
+function writeFileViolations(filePath: string, violations: FileViolation[], limitValue?: string): void {
+  const limit = parsePositiveInt(limitValue, 10, 100);
+  process.stdout.write(`${filePath}: ${violations.length} violation(s)\n`);
+  const shown = violations.slice(0, limit);
+  if (shown.length > 0) {
+    process.stdout.write(formatTable(shown, [
+      { header: "Severity", value: (v) => v.severity, maxWidth: 10 },
+      { header: "Rule", value: (v) => v.rule, maxWidth: 24 },
+      { header: "Message", value: (v) => v.message, maxWidth: 72 },
+    ]) + "\n");
+  }
+  if (violations.length > shown.length) process.stdout.write(`... and ${violations.length - shown.length} more. Use --limit <n> or --json.\n`);
+  process.stdout.write("Use --json for full violation objects.\n");
+}
+
+function writeFixSummary(file: string, fixes: ReturnType<typeof getFixSuggestions>, applied: number, limitValue?: string): void {
+  const limit = parsePositiveInt(limitValue, 10, 100);
+  process.stdout.write(`${file}: ${fixes.length} fix suggestion(s)\n`);
+  if (applied > 0) process.stdout.write(`Applied: ${applied}\n`);
+  const shown = fixes.slice(0, limit);
+  if (shown.length > 0) {
+    process.stdout.write(formatTable(shown, [
+      { header: "Line", value: (f) => f.line, maxWidth: 8 },
+      { header: "Rule", value: (f) => f.rule, maxWidth: 24 },
+      { header: "Mode", value: (f) => f.autoFixable ? "auto" : "manual", maxWidth: 8 },
+      { header: "Suggestion", value: (f) => truncateText(f.suggestion, 72), maxWidth: 72 },
+    ]) + "\n");
+  }
+  if (fixes.length > shown.length) process.stdout.write(`... and ${fixes.length - shown.length} more. Use --limit <n> or --json.\n`);
+  process.stdout.write("Use --json for full fix objects.\n");
+}

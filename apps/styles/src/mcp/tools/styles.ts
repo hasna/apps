@@ -5,9 +5,10 @@ import { fileURLToPath } from "url";
 import { dirname } from "path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { LruCache } from "../../lib/lru-cache.js";
-import { buildStyleMdContent } from "../../lib/format.js";
+import { buildStyleMdContent, pageItems, prettyJson, truncateText } from "../../lib/format.js";
 import {
   STYLES,
+  type StyleMeta,
   getStyle,
   searchStyles,
   getStylesByCategory,
@@ -50,10 +51,24 @@ export function registerStyleTools(server: McpServer) {
     "List all available styles, optionally filtered by category",
     {
       category: z.string().optional().describe("Filter by category (e.g. Minimalist, Brutalist, Corporate)"),
+      limit: z.number().int().positive().optional().describe("Maximum styles to return in compact output (default: 20)"),
+      cursor: z.number().int().nonnegative().optional().describe("Zero-based pagination offset"),
+      verbose: z.boolean().optional().describe("Include longer descriptions and principles"),
     },
-    async ({ category }) => ({
-      content: [{ type: "text", text: JSON.stringify(category ? getStylesByCategory(category) : STYLES, null, 2) }],
-    })
+    async ({ category, limit, cursor, verbose }) => {
+      const styles = category ? getStylesByCategory(category) : STYLES;
+      const page = pageItems(styles, { limit, cursor, defaultLimit: 20, maxLimit: 100 });
+      return {
+        content: [{ type: "text", text: prettyJson({
+          styles: page.items.map((style) => summarizeStyle(style, Boolean(verbose))),
+          total: page.total,
+          limit: page.limit,
+          cursor: page.cursor,
+          nextCursor: page.nextCursor,
+          hint: "Use get_style_info with include_style_md=true for full style details.",
+        }) }],
+      };
+    }
   );
 
   server.tool(
@@ -61,8 +76,10 @@ export function registerStyleTools(server: McpServer) {
     "Get full info for a style including STYLE.md content from disk",
     {
       name: z.string().describe("Style name (e.g. minimalist, brutalist)"),
+      verbose: z.boolean().optional().describe("Include full metadata fields"),
+      include_style_md: z.boolean().optional().describe("Include STYLE.md content from disk"),
     },
-    async ({ name }) => {
+    async ({ name, verbose, include_style_md }) => {
       const style = getStyle(name);
       if (!style) {
         const similar = findSimilarStyles(name);
@@ -71,8 +88,13 @@ export function registerStyleTools(server: McpServer) {
           isError: true,
         };
       }
+      const payload = include_style_md
+        ? { ...style, styleMd: readStyleMd(name), hint: "STYLE.md included because include_style_md=true." }
+        : verbose
+          ? { ...style, hint: "Pass include_style_md=true to include STYLE.md content." }
+          : { ...summarizeStyle(style, true), hint: "Pass verbose=true for full metadata or include_style_md=true for STYLE.md content." };
       return {
-        content: [{ type: "text", text: JSON.stringify({ ...style, styleMd: readStyleMd(name) }, null, 2) }],
+        content: [{ type: "text", text: prettyJson(payload) }],
       };
     }
   );
@@ -82,16 +104,27 @@ export function registerStyleTools(server: McpServer) {
     "Fuzzy search styles by name, description, or tags",
     {
       query: z.string().describe("Search query"),
+      limit: z.number().int().positive().optional().describe("Maximum results to return in compact output (default: 20)"),
+      cursor: z.number().int().nonnegative().optional().describe("Zero-based pagination offset"),
+      verbose: z.boolean().optional().describe("Include longer descriptions and principles"),
     },
-    async ({ query }) => {
+    async ({ query, limit, cursor, verbose }) => {
       const cacheKey = query.toLowerCase().trim();
       let results = searchCache.get(cacheKey);
       if (!results) {
         results = searchStyles(query);
         searchCache.set(cacheKey, results);
       }
+      const page = pageItems(results, { limit, cursor, defaultLimit: 20, maxLimit: 100 });
       return {
-        content: [{ type: "text", text: JSON.stringify(results, null, 2) }],
+        content: [{ type: "text", text: prettyJson({
+          results: page.items.map((style) => summarizeStyle(style, Boolean(verbose))),
+          total: page.total,
+          limit: page.limit,
+          cursor: page.cursor,
+          nextCursor: page.nextCursor,
+          hint: "Use get_style_info for a specific style.",
+        }) }],
       };
     }
   );
@@ -144,8 +177,9 @@ export function registerStyleTools(server: McpServer) {
     "Get the active style profile for a project",
     {
       project_path: z.string().describe("Absolute project path"),
+      verbose: z.boolean().optional().describe("Return the full active profile object"),
     },
-    async ({ project_path }) => {
+    async ({ project_path, verbose }) => {
       const projectPath = resolve(project_path);
       const profile = getActiveProfile(projectPath);
       if (!profile) {
@@ -154,17 +188,32 @@ export function registerStyleTools(server: McpServer) {
           isError: true,
         };
       }
-      return { content: [{ type: "text", text: JSON.stringify(profile, null, 2) }] };
+      return { content: [{ type: "text", text: prettyJson(verbose ? profile : summarizeProfile(profile)) }] };
     }
   );
 
   server.tool(
     "list_profiles",
     "List all custom (user-created) style profiles",
-    {},
-    async () => ({
-      content: [{ type: "text", text: JSON.stringify(listProfiles(), null, 2) }],
-    })
+    {
+      limit: z.number().int().positive().optional().describe("Maximum profiles to return in compact output (default: 20)"),
+      cursor: z.number().int().nonnegative().optional().describe("Zero-based pagination offset"),
+      verbose: z.boolean().optional().describe("Include descriptions, tags, and counts"),
+    },
+    async ({ limit, cursor, verbose }) => {
+      const profiles = listProfiles();
+      const page = pageItems(profiles, { limit, cursor, defaultLimit: 20, maxLimit: 100 });
+      return {
+        content: [{ type: "text", text: prettyJson({
+          profiles: page.items.map((profile) => verbose ? summarizeProfileVerbose(profile) : summarizeProfile(profile)),
+          total: page.total,
+          limit: page.limit,
+          cursor: page.cursor,
+          nextCursor: page.nextCursor,
+          hint: "Use get_active_style or create_profile outputs for specific profile details.",
+        }) }],
+      };
+    }
   );
 
   server.tool(
@@ -184,7 +233,7 @@ export function registerStyleTools(server: McpServer) {
         name, displayName, description: description ?? "", category, principles, antiPatterns,
         typography: {}, colors: {}, componentRules: {}, tags,
       });
-      return { content: [{ type: "text", text: JSON.stringify(profile, null, 2) }] };
+      return { content: [{ type: "text", text: prettyJson(summarizeProfileVerbose(profile)) }] };
     }
   );
 
@@ -228,6 +277,23 @@ export function registerStyleTools(server: McpServer) {
 
   // Resources
   server.resource(
+    "styles-registry-summary",
+    "styles://registry/summary",
+    { description: "Compact styles registry summary as JSON", mimeType: "application/json" },
+    async () => ({
+      contents: [{
+        uri: "styles://registry/summary",
+        mimeType: "application/json",
+        text: prettyJson({
+          styles: STYLES.map((style) => summarizeStyle(style)),
+          total: STYLES.length,
+          hint: "Use styles://registry for the full registry or get_style_info include_style_md=true for STYLE.md.",
+        }),
+      }],
+    })
+  );
+
+  server.resource(
     "styles-registry",
     "styles://registry",
     { description: "Full styles registry as JSON", mimeType: "application/json" },
@@ -237,6 +303,21 @@ export function registerStyleTools(server: McpServer) {
   );
 
   import("@modelcontextprotocol/sdk/server/mcp.js").then(({ ResourceTemplate }) => {
+    server.resource(
+      "style-summary-by-name",
+      new ResourceTemplate("styles://summary/{name}", { list: undefined }),
+      { description: "Compact individual style metadata", mimeType: "application/json" },
+      async (uri, variables) => {
+        const variable = variables.name;
+        const name = Array.isArray(variable) ? variable[0] : variable;
+        const style = getStyle(name);
+        if (!style) {
+          return { contents: [{ uri: uri.toString(), mimeType: "application/json", text: mcpError("STYLE_NOT_FOUND", `Style not found: "${name}"`) }] };
+        }
+        return { contents: [{ uri: uri.toString(), mimeType: "application/json", text: prettyJson(summarizeStyle(style, true)) }] };
+      }
+    );
+
     server.resource(
       "style-by-name",
       new ResourceTemplate("styles://{name}", { list: undefined }),
@@ -252,4 +333,39 @@ export function registerStyleTools(server: McpServer) {
       }
     );
   });
+}
+
+function summarizeStyle(style: StyleMeta, verbose = false) {
+  return {
+    name: style.name,
+    displayName: style.displayName,
+    category: style.category,
+    description: truncateText(style.description, verbose ? 180 : 96),
+    tags: style.tags.slice(0, verbose ? 8 : 4),
+    principleCount: style.principles.length,
+    ...(verbose ? { principles: style.principles.slice(0, 5) } : {}),
+  };
+}
+
+function summarizeProfile(profile: ReturnType<typeof listProfiles>[number]) {
+  return {
+    id: profile.id,
+    name: profile.name,
+    displayName: profile.displayName,
+    category: profile.category,
+    builtin: profile.builtin,
+    principleCount: profile.principles.length,
+    antiPatternCount: profile.antiPatterns.length,
+  };
+}
+
+function summarizeProfileVerbose(profile: ReturnType<typeof listProfiles>[number]) {
+  return {
+    ...summarizeProfile(profile),
+    description: truncateText(profile.description, 180),
+    tags: profile.tags.slice(0, 8),
+    typographyKeys: Object.keys(profile.typography).length,
+    colorKeys: Object.keys(profile.colors).length,
+    componentRuleKeys: Object.keys(profile.componentRules).length,
+  };
 }
