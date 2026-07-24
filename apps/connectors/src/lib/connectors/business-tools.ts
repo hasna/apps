@@ -927,6 +927,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["crm", "billing", "client portal", "project management", "business"],
   },
   {
+    name: "sugarcrm",
+    displayName: "SugarCRM",
+    description: "CRM module CRUD, search, metadata, and OAuth2 REST API access",
+    category: "Business Tools",
+    tags: ["crm", "sales", "sugar"],
+  },
+  {
     name: "swagup",
     displayName: "SwagUp",
     description: "Corporate swag and branded merchandise management platform",
