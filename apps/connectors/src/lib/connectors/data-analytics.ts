@@ -633,6 +633,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["watches", "market-data", "prices"],
   },
   {
+    name: "wappalyzer",
+    displayName: "Wappalyzer",
+    description: "Website technology lookup and enrichment",
+    category: "Data & Analytics",
+    tags: ["technology", "lookup", "enrichment", "seo"],
+  },
+  {
     name: "webscraperio",
     displayName: "WebScraper.io",
     description: "Web scraping and data extraction cloud service",
