@@ -300,7 +300,8 @@ function reportTopLevelError(error: unknown): never {
   const code = (error as { code?: unknown }).code;
   const isCommanderError = error instanceof Error && typeof code === "string" && code.startsWith("commander.");
   if (isCommanderError) {
-    const exitCode = typeof (error as { exitCode?: unknown }).exitCode === "number" ? (error as { exitCode: number }).exitCode : 1;
+    const rawExitCode = (error as { exitCode?: unknown }).exitCode;
+    const exitCode = typeof rawExitCode === "number" ? rawExitCode : 1;
     // Success-exit paths (help/version) already wrote their output to stdout.
     if (exitCode === 0) process.exit(0);
     // Commander usage/validation errors: emit structured JSON under --json,
