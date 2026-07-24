@@ -136,6 +136,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["esign", "documents", "contracts"],
   },
   {
+    name: "vector-legal",
+    displayName: "Vector Legal",
+    description: "Legal document platform",
+    category: "Business Tools",
+    tags: ["legal", "documents", "productivity"],
+  },
+  {
     name: "pipedrive",
     displayName: "Pipedrive",
     description: "Sales CRM and pipeline management",
