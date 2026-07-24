@@ -1137,6 +1137,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["kanban", "open-source", "tasks"],
   },
   {
+    name: "weezevent",
+    displayName: "Weezevent",
+    description: "Event ticketing and participant registration API",
+    category: "Business Tools",
+    tags: ["events", "ticketing", "registration"],
+  },
+  {
     name: "workast",
     displayName: "Workast",
     description: "Task management integrated with Slack",
