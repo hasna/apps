@@ -76,7 +76,7 @@ describe("heartbeat collection", () => {
         trustedLocalMutationEnv: "HASNA_MACHINES_ALLOW_MUTATIONS=1",
         warnings: [],
       });
-      expect(plan.command).toBe("HASNA_MACHINES_ALLOW_MUTATIONS=1 machines heartbeat collect --machine spark01 --machine spark02 --timeout-ms 90000 --fail-on-error --json");
+      expect(plan.command).toBe("HASNA_MACHINES_ALLOW_MUTATIONS=1 machines heartbeat collect --machine spark01 --machine spark02 --timeout-ms 90000 --json");
       expect(plan.command).not.toContain("topology --all");
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -95,8 +95,21 @@ describe("heartbeat collection", () => {
       const plan = buildHeartbeatCollectorCommand();
 
       expect(plan.machines).toEqual(["spark01"]);
-      expect(plan.command).toBe("HASNA_MACHINES_ALLOW_MUTATIONS=1 machines heartbeat collect --machine spark01 --timeout-ms 90000 --fail-on-error --json");
+      expect(plan.command).toBe("HASNA_MACHINES_ALLOW_MUTATIONS=1 machines heartbeat collect --machine spark01 --timeout-ms 90000 --json");
       expect(plan.warnings).toContain("heartbeat_collector_defaulted_to_local_machine_only");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("does not bake the deprecated --fail-on-error flag into the canonical collector command", () => {
+    const dir = setupEmptyTemp("machines-heartbeat-collector-no-deprecated-flag-");
+    try {
+      const explicit = buildHeartbeatCollectorCommand({ machines: ["spark01"] });
+      expect(explicit.command).not.toContain("--fail-on-error");
+
+      const defaulted = buildHeartbeatCollectorCommand();
+      expect(defaulted.command).not.toContain("--fail-on-error");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -112,7 +125,7 @@ describe("heartbeat collection", () => {
       });
 
       expect(plan.machines).toEqual(["spark01", "spark02"]);
-      expect(plan.command).toBe("HASNA_MACHINES_ALLOW_MUTATIONS=1 /opt/machines/bin/machines heartbeat collect --machine spark01 --machine spark02 --timeout-ms 12000 --fail-on-error --json");
+      expect(plan.command).toBe("HASNA_MACHINES_ALLOW_MUTATIONS=1 /opt/machines/bin/machines heartbeat collect --machine spark01 --machine spark02 --timeout-ms 12000 --json");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

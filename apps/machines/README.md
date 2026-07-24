@@ -659,11 +659,12 @@ OpenLoops heartbeat collector loops should install the command emitted by
 targets for one-minute loops; without `--machine`, the planner defaults to the
 local machine only so a slow all-fleet collection cannot outlive the heartbeat
 freshness window. The emitted command uses a 90000ms per-machine timeout,
-fails the loop run when any selected import fails, and includes the trusted
-local mutation environment for the scheduled collector:
+fails the loop run when any selected import fails (`collect` always exits
+non-zero on any failed import), and includes the trusted local mutation
+environment for the scheduled collector:
 
 ```bash
-HASNA_MACHINES_ALLOW_MUTATIONS=1 machines heartbeat collect --machine spark01 --machine spark02 --timeout-ms 90000 --fail-on-error --json
+HASNA_MACHINES_ALLOW_MUTATIONS=1 machines heartbeat collect --machine spark01 --machine spark02 --timeout-ms 90000 --json
 ```
 
 Do not schedule `machines topology --all --json` as the heartbeat collector; it

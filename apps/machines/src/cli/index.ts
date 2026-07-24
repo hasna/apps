@@ -1350,7 +1350,7 @@ heartbeatCommand
   .option("--machine <id...>", "Machine identifier to collect; repeat for multiple machines", collectOptionValues, [])
   .option("--timeout-ms <ms>", "Per-machine command timeout in milliseconds")
   .option("--no-doctor-summary", "Skip doctor summary collection even when the remote agent supports it")
-  .option("--fail-on-error", "Exit non-zero when any selected heartbeat import fails", false)
+  .option("--fail-on-error", "Deprecated: collect now always exits non-zero on any failed import (flag retained for compatibility)", false)
   .option("--approval-token <token>", "Scoped mutation approval token")
   .option("-j, --json", "Print JSON output", false)
   .action((options: { machine?: string[]; timeoutMs?: string; doctorSummary?: boolean; failOnError?: boolean; approvalToken?: string; json?: boolean }, command: Command) => {
@@ -1368,7 +1368,10 @@ heartbeatCommand
       trustedLocalMutation: createTrustedSdkMutationApproval(),
     });
     printCommandResult(results, renderHeartbeatCollect(results), wantsCommandJson(options, command));
-    if (options.failOnError && results.some((result) => result.status !== "imported")) {
+    // collect always exits non-zero on any failed import; --fail-on-error is a
+    // deprecated no-op retained for backwards compatibility.
+    void options.failOnError;
+    if (results.some((result) => result.status !== "imported")) {
       process.exitCode = 1;
     }
   });

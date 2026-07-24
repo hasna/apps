@@ -62,7 +62,9 @@ describe("cli command handling", () => {
       }, { env: baseEnv, now: Date.now(), nonce: "cli-heartbeat-collect" });
       const approved = runCli(["heartbeat", "collect", "--machine", "unknown", "--json", "--approval-token", token], baseEnv);
       expect(approved.stderr).toBe("");
-      expect(approved.status).toBe(0);
+      // collect always exits non-zero on any failed import, without needing the
+      // deprecated --fail-on-error flag.
+      expect(approved.status).toBe(1);
       expect(JSON.parse(approved.stdout)[0]).toMatchObject({
         machineId: "unknown",
         status: "failed",
@@ -96,8 +98,11 @@ describe("cli command handling", () => {
       const text = runCli(["heartbeat", "collector-command", "--machine", "spark01", "--machine", "spark02"], env);
       expect(text.stderr).toBe("");
       expect(text.status).toBe(0);
-      expect(text.stdout.trim()).toBe("HASNA_MACHINES_ALLOW_MUTATIONS=1 machines heartbeat collect --machine spark01 --machine spark02 --timeout-ms 90000 --fail-on-error --json");
+      expect(text.stdout.trim()).toBe("HASNA_MACHINES_ALLOW_MUTATIONS=1 machines heartbeat collect --machine spark01 --machine spark02 --timeout-ms 90000 --json");
       expect(text.stdout).not.toContain("topology --all");
+      // Regression: the blessed OpenLoops command must not bake in the
+      // deprecated --fail-on-error flag.
+      expect(text.stdout).not.toContain("--fail-on-error");
 
       const json = runCli(["heartbeat", "collector-command", "--machine", "spark01", "--machine", "spark02", "--json"], env);
       expect(json.stderr).toBe("");
@@ -105,7 +110,7 @@ describe("cli command handling", () => {
       expect(JSON.parse(json.stdout)).toMatchObject({
         kind: "heartbeat_collector_command",
         loopName: "machine-openmachines-heartbeat-collector",
-        command: "HASNA_MACHINES_ALLOW_MUTATIONS=1 machines heartbeat collect --machine spark01 --machine spark02 --timeout-ms 90000 --fail-on-error --json",
+        command: "HASNA_MACHINES_ALLOW_MUTATIONS=1 machines heartbeat collect --machine spark01 --machine spark02 --timeout-ms 90000 --json",
         machines: ["spark01", "spark02"],
         timeoutMs: 90000,
         trustedLocalMutationEnv: "HASNA_MACHINES_ALLOW_MUTATIONS=1",

@@ -6,6 +6,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-07-24
+
+### Fixed
+
+- `machines heartbeat collector-command` no longer bakes the deprecated
+  `--fail-on-error` flag into the canonical/blessed OpenLoops collector
+  command. `heartbeat collect` now always exits non-zero on any failed
+  import, so failure detection in the trusted loop no longer depends on the
+  flag; `--fail-on-error` is a deprecated no-op retained for backwards
+  compatibility (help text and README updated to match). (#21)
+
 ## [0.1.5] - 2026-07-24
 
 ### Fixed

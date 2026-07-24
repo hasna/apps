@@ -86,13 +86,16 @@ export function buildHeartbeatCollectorCommand(options: HeartbeatCollectorComman
     throw new Error("heartbeat collector timeoutMs must be a positive finite number");
   }
   const machinesCommand = options.machinesCommand?.trim() || "machines";
+  // Do not bake in --fail-on-error: `collect` always exits non-zero on any
+  // failed import, so the flag is a deprecated no-op retained only for
+  // backwards compatibility. Emitting it here would propagate a deprecated flag
+  // into the trusted, blessed OpenLoops automation command.
   const collectArgs = [
     "heartbeat",
     "collect",
     ...machines.flatMap((machine) => ["--machine", machine]),
     "--timeout-ms",
     String(Math.floor(timeoutMs)),
-    "--fail-on-error",
     "--json",
   ];
   const collectCommand = [machinesCommand, ...collectArgs].map(shellArg).join(" ");
