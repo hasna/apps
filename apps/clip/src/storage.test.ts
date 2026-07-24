@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ClipStore, purgeClipStore } from "./storage.js";
@@ -24,6 +24,14 @@ describe("ClipStore", () => {
       expect(record.shareUrl).toBe(`http://lan.test:3741/s/${record.slug}`);
       expect(store.getClip(record.id)?.id).toBe(record.id);
       expect(store.listClips({ limit: 10 })).toHaveLength(1);
+      expect(() => store.createTextClip({ text: "bad expiry", expiresAt: "not-a-date" })).toThrow("valid date");
+      expect(() => store.createBufferClip({
+        buffer: new TextEncoder().encode("bad expiry"),
+        kind: "file",
+        mimeType: "text/plain",
+        expiresAt: "not-a-date",
+      })).toThrow("valid date");
+      expect(readdirSync(store.artifactDir)).toHaveLength(0);
     } finally {
       store.close();
     }
@@ -242,5 +250,58 @@ describe("ClipStore", () => {
     expect(existsSync(dbPath)).toBe(true);
     expect(existsSync(artifactDir)).toBe(true);
     expect(existsSync(join(home, "config.json"))).toBe(true);
+  });
+
+  it("prunes expired shares and orphaned artifacts while keeping non-expired shares", () => {
+    const expiredFile = join(dir, "expired.txt");
+    const activeFile = join(dir, "active.txt");
+    const deletedFile = join(dir, "deleted.txt");
+    writeFileSync(expiredFile, "expired");
+    writeFileSync(activeFile, "active");
+    writeFileSync(deletedFile, "deleted");
+
+    const store = new ClipStore({ homeDir: dir });
+    try {
+      const expired = store.createFileClip({ path: expiredFile, expiresAt: "2000-01-01T00:00:00.000Z" });
+      const expiredText = store.createTextClip({ text: "old text", expiresAt: "2000-01-01T00:00:00.000Z" });
+      const active = store.createFileClip({ path: activeFile, expiresAt: "2999-01-01T00:00:00.000Z" });
+      const deleted = store.createFileClip({ path: deletedFile });
+      expect(store.deleteClip(deleted.id)).toBe(true);
+      const orphanPath = join(store.artifactDir, `${crypto.randomUUID()}.bin`);
+      const unrelatedPath = join(store.artifactDir, "notes.txt");
+      writeFileSync(orphanPath, "orphan");
+      writeFileSync(unrelatedPath, "not a generated clip artifact");
+
+      expect(store.getClip(expired.id)).toBeNull();
+      expect(store.getClip(active.id)?.id).toBe(active.id);
+      expect(store.status()).toMatchObject({ totalActive: 1, expired: 2, deleted: 1 });
+
+      const preview = store.pruneExpiredShares({ now: "2026-01-01T00:00:00.000Z" });
+      expect(preview.dryRun).toBe(true);
+      expect(preview.prunedShares).toBe(0);
+      expect(preview.expiredShares.map((share) => share.id).sort()).toEqual([expired.id, expiredText.id].sort());
+      expect(preview.artifacts.map((artifact) => artifact.path)).toEqual(expect.arrayContaining([
+        expired.artifactPath!,
+        deleted.artifactPath!,
+        orphanPath,
+      ]));
+      expect(existsSync(expired.artifactPath!)).toBe(true);
+      expect(existsSync(active.artifactPath!)).toBe(true);
+      expect(existsSync(orphanPath)).toBe(true);
+      expect(existsSync(unrelatedPath)).toBe(true);
+
+      const applied = store.pruneExpiredShares({ dryRun: false, now: "2026-01-01T00:00:00.000Z" });
+      expect(applied.prunedShares).toBe(2);
+      expect(applied.removedArtifacts).toBe(3);
+      expect(store.getClip(expired.id, { includeDeleted: true })?.deletedAt).toBe("2026-01-01T00:00:00.000Z");
+      expect(store.getClip(active.id)?.id).toBe(active.id);
+      expect(existsSync(expired.artifactPath!)).toBe(false);
+      expect(existsSync(active.artifactPath!)).toBe(true);
+      expect(existsSync(deleted.artifactPath!)).toBe(false);
+      expect(existsSync(orphanPath)).toBe(false);
+      expect(existsSync(unrelatedPath)).toBe(true);
+    } finally {
+      store.close();
+    }
   });
 });

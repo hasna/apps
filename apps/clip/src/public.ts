@@ -63,6 +63,7 @@ export function publicClipRecords(records: ClipRecord[]): Record<string, unknown
 export function publicStorageStatus(status: ClipStorageStatus): Record<string, unknown> {
   return {
     totalActive: status.totalActive,
+    expired: status.expired,
     deleted: status.deleted,
     database: "sqlite",
     artifacts: "local",

@@ -10,10 +10,12 @@ import { ClipClient, createClipClient } from "../sdk.js";
 import { purgeClipStore } from "../storage.js";
 import { buildClipEvidenceRef, buildClipRecordContracts, buildClipResourceRefs } from "../contracts.js";
 import type { ClipContractFormat } from "../contracts.js";
-import type { CaptureAnnotation, CaptureMode, ClipboardHistoryRecord, ClipboardKind, ClipClientOptions, ClipRecord } from "../types.js";
+import type { CaptureAnnotation, CaptureMode, ClipboardHistoryRecord, ClipboardKind, ClipClientOptions, ClipPruneResult, ClipRecord, CreateClipMetadata } from "../types.js";
 import { startClipServer } from "../server/server.js";
 import { compactRecord } from "../util.js";
 import { parseCaptureAnnotations } from "../capture/annotate.js";
+
+type ShareExpiryCliOptions = Pick<CreateClipMetadata, "expiresAt" | "ttl">;
 
 function getPackageVersion(): string {
   try {
@@ -134,6 +136,21 @@ async function outputShareQr(record: ClipRecord): Promise<void> {
   const qr = await renderShareQrCode(record.shareUrl);
   console.log(qr.terminal);
   console.log(qr.payload);
+}
+
+function expiryOptions(opts: ShareExpiryCliOptions): ShareExpiryCliOptions {
+  return {
+    expiresAt: opts.expiresAt,
+    ttl: opts.ttl,
+  };
+}
+
+function formatPruneResult(result: ClipPruneResult): string {
+  const mode = result.dryRun ? "Dry run" : "Pruned";
+  const action = result.dryRun ? "would prune" : "pruned";
+  const artifactCount = result.dryRun ? result.artifacts.length : result.removedArtifacts;
+  const artifactAction = result.dryRun ? "would remove" : "removed";
+  return `${mode}: ${action} ${result.expiredShares.length} expired share(s); ${artifactAction} ${artifactCount} artifact(s).`;
 }
 
 function client(program: Command): ClipClient {
@@ -322,10 +339,12 @@ share
   .argument("<text...>", "Text to share")
   .option("--title <title>", "Share title")
   .option("--contract [type]", "Emit contract JSON: evidence (default), resources, or all")
+  .option("--ttl <duration>", "Expire after a duration such as 30s, 10m, 2h, 7d, or 1w")
+  .option("--expires-at <timestamp>", "Expire at an ISO timestamp")
   .description("Create a text share")
-  .action((parts: string[], opts: { title?: string; contract?: boolean | string }, command: Command) => {
+  .action((parts: string[], opts: { title?: string; contract?: boolean | string } & ShareExpiryCliOptions, command: Command) => {
     try {
-      outputRecord(command, client(command).createTextShare(parts.join(" "), { title: opts.title }), opts.contract);
+      outputRecord(command, client(command).createTextShare(parts.join(" "), { title: opts.title, ...expiryOptions(opts) }), opts.contract);
     } catch (error) {
       handleError(command, error);
     }
@@ -336,10 +355,12 @@ share
   .argument("<path>", "File to import")
   .option("--title <title>", "Share title")
   .option("--contract [type]", "Emit contract JSON: evidence (default), resources, or all")
+  .option("--ttl <duration>", "Expire after a duration such as 30s, 10m, 2h, 7d, or 1w")
+  .option("--expires-at <timestamp>", "Expire at an ISO timestamp")
   .description("Import and share a local file")
-  .action((path: string, opts: { title?: string; contract?: boolean | string }, command: Command) => {
+  .action((path: string, opts: { title?: string; contract?: boolean | string } & ShareExpiryCliOptions, command: Command) => {
     try {
-      outputRecord(command, client(command).importFile(path, { title: opts.title }), opts.contract);
+      outputRecord(command, client(command).importFile(path, { title: opts.title, ...expiryOptions(opts) }), opts.contract);
     } catch (error) {
       handleError(command, error);
     }
@@ -407,6 +428,19 @@ program
       if (!opts.yes) throw new Error("Refusing to uninstall clip data without --yes. This removes the local clip store and config.");
       const result = purgeClipStore({ ...globalOptions(command), confirm: true });
       output(command, result, result.removed ? `Removed clip data at ${result.homeDir}` : `No clip data found at ${result.homeDir}`);
+    } catch (error) {
+      handleError(command, error);
+    }
+  });
+
+program
+  .command("prune")
+  .option("--apply", "Soft-delete expired shares and remove pruneable artifacts")
+  .description("Prune expired shares and orphaned artifacts; previews by default")
+  .action((opts: { apply?: boolean }, command: Command) => {
+    try {
+      const result = client(command).pruneExpiredShares({ dryRun: !opts.apply });
+      output(command, result, formatPruneResult(result));
     } catch (error) {
       handleError(command, error);
     }

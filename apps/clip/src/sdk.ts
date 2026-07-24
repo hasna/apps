@@ -4,9 +4,12 @@ import { captureScreenshot } from "./capture/index.js";
 import { copyTextToClipboard, openLocalTarget } from "./capture/tools.js";
 import { captureClipboardHistory, detectClipboardCapabilities, shareClipboard } from "./clipboard.js";
 import { ClipStore } from "./storage.js";
-import { buildShareUrl, resolveBaseUrl } from "./share.js";
-import type { CaptureAnnotation, CaptureMode, ClipboardHistoryRecord, ClipboardKind, ClipClientOptions, ClipRecord, ClipStatus } from "./types.js";
+import type { PruneExpiredSharesOptions } from "./storage.js";
+import { buildShareUrl, resolveBaseUrl, resolveShareExpiresAt } from "./share.js";
+import type { CaptureAnnotation, CaptureMode, ClipboardHistoryRecord, ClipboardKind, ClipClientOptions, ClipPruneResult, ClipRecord, ClipStatus, CreateClipMetadata } from "./types.js";
 import { detectCaptureCapabilities } from "./capture/index.js";
+
+type ShareCreateOptions = Pick<CreateClipMetadata, "title" | "metadata" | "expiresAt" | "ttl" | "ttlSeconds">;
 
 export class ClipClient {
   readonly options: ClipClientOptions;
@@ -20,7 +23,7 @@ export class ClipClient {
     };
   }
 
-  createTextShare(text: string, options: { title?: string; metadata?: Record<string, unknown> } = {}): ClipRecord {
+  createTextShare(text: string, options: ShareCreateOptions = {}): ClipRecord {
     const store = new ClipStore(this.options);
     try {
       return store.createTextClip({
@@ -29,13 +32,14 @@ export class ClipClient {
         metadata: options.metadata,
         source: "sdk:text",
         baseUrl: this.options.baseUrl,
+        expiresAt: resolveShareExpiresAt(options),
       });
     } finally {
       store.close();
     }
   }
 
-  importFile(path: string, options: { title?: string; metadata?: Record<string, unknown> } = {}): ClipRecord {
+  importFile(path: string, options: ShareCreateOptions = {}): ClipRecord {
     const store = new ClipStore(this.options);
     try {
       return store.createFileClip({
@@ -44,6 +48,7 @@ export class ClipClient {
         metadata: options.metadata,
         source: "sdk:file",
         baseUrl: this.options.baseUrl,
+        expiresAt: resolveShareExpiresAt(options),
       });
     } finally {
       store.close();
@@ -111,6 +116,15 @@ export class ClipClient {
     const store = new ClipStore(this.options);
     try {
       return store.deleteClip(ref);
+    } finally {
+      store.close();
+    }
+  }
+
+  pruneExpiredShares(options: PruneExpiredSharesOptions = {}): ClipPruneResult {
+    const store = new ClipStore(this.options);
+    try {
+      return store.pruneExpiredShares(options);
     } finally {
       store.close();
     }

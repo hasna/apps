@@ -257,4 +257,91 @@ describe("CLI JSON contract", () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
+
+  it("previews prune by default and only deletes expired artifacts with --apply", async () => {
+    const home = mkdtempSync(join(tmpdir(), "clip-cli-prune-"));
+    try {
+      const env = { ...process.env, HASNA_CLIP_HOME: home, CLIP_BASE_URL: "http://127.0.0.1:3741" };
+      const expiredSource = join(home, "expired.txt");
+      const activeSource = join(home, "active.txt");
+      writeFileSync(expiredSource, "expired");
+      writeFileSync(activeSource, "active");
+
+      const expiredShare = Bun.spawn([
+        "bun",
+        "run",
+        "src/cli/index.ts",
+        "--json",
+        "share",
+        "file",
+        expiredSource,
+        "--expires-at",
+        "2000-01-01T00:00:00.000Z",
+      ], { env, stdout: "pipe", stderr: "pipe" });
+      const expiredOut = await new Response(expiredShare.stdout).text();
+      expect(await expiredShare.exited).toBe(0);
+      const expiredRecord = JSON.parse(expiredOut) as { id: string; artifactPath: string };
+
+      const activeShare = Bun.spawn([
+        "bun",
+        "run",
+        "src/cli/index.ts",
+        "--json",
+        "share",
+        "file",
+        activeSource,
+        "--ttl",
+        "1w",
+      ], { env, stdout: "pipe", stderr: "pipe" });
+      const activeOut = await new Response(activeShare.stdout).text();
+      expect(await activeShare.exited).toBe(0);
+      const activeRecord = JSON.parse(activeOut) as { id: string; artifactPath: string; expiresAt: string };
+      expect(new Date(activeRecord.expiresAt).getTime()).toBeGreaterThan(Date.now());
+
+      const orphanPath = join(home, "artifacts", `${crypto.randomUUID()}.bin`);
+      const unrelatedPath = join(home, "artifacts", "notes.txt");
+      writeFileSync(orphanPath, "orphan");
+      writeFileSync(unrelatedPath, "not a generated clip artifact");
+
+      const preview = Bun.spawn(["bun", "run", "src/cli/index.ts", "--json", "prune"], {
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const previewOut = await new Response(preview.stdout).text();
+      expect(await preview.exited).toBe(0);
+      const previewResult = JSON.parse(previewOut) as { dryRun: boolean; expiredShares: Array<{ id: string }>; artifacts: Array<{ path: string }> };
+      expect(previewResult.dryRun).toBe(true);
+      expect(previewResult.expiredShares.map((share) => share.id)).toContain(expiredRecord.id);
+      expect(previewResult.artifacts.map((artifact) => artifact.path)).toEqual(expect.arrayContaining([expiredRecord.artifactPath, orphanPath]));
+      expect(existsSync(expiredRecord.artifactPath)).toBe(true);
+      expect(existsSync(orphanPath)).toBe(true);
+      expect(existsSync(unrelatedPath)).toBe(true);
+
+      const apply = Bun.spawn(["bun", "run", "src/cli/index.ts", "--json", "prune", "--apply"], {
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const applyOut = await new Response(apply.stdout).text();
+      expect(await apply.exited).toBe(0);
+      const applyResult = JSON.parse(applyOut) as { dryRun: boolean; prunedShares: number; removedArtifacts: number };
+      expect(applyResult).toMatchObject({ dryRun: false, prunedShares: 1, removedArtifacts: 2 });
+      expect(existsSync(expiredRecord.artifactPath)).toBe(false);
+      expect(existsSync(orphanPath)).toBe(false);
+      expect(existsSync(unrelatedPath)).toBe(true);
+      expect(existsSync(activeRecord.artifactPath)).toBe(true);
+
+      const list = Bun.spawn(["bun", "run", "src/cli/index.ts", "--json", "list"], {
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const listOut = await new Response(list.stdout).text();
+      expect(await list.exited).toBe(0);
+      expect((JSON.parse(listOut) as Array<{ id: string }>).map((record) => record.id)).toEqual([activeRecord.id]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });

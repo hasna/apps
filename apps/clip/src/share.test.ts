@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { ClipRecord } from "./types.js";
-import { buildShareUrl, normalizeBaseUrl, resolveBaseUrl, withShareUrl } from "./share.js";
+import { buildShareUrl, normalizeBaseUrl, parseShareTtlSeconds, resolveBaseUrl, resolveShareExpiresAt, withShareUrl } from "./share.js";
 
 function restoreEnv(name: string, value: string | undefined): void {
   if (value === undefined) {
@@ -55,6 +55,7 @@ describe("share URL helpers", () => {
       createdAt: "now",
       updatedAt: "now",
       deletedAt: null,
+      expiresAt: null,
     } satisfies ClipRecord;
 
     const withUrl = withShareUrl(record, { baseUrl: "http://clip.test/" });
@@ -63,5 +64,14 @@ describe("share URL helpers", () => {
     expect(withUrl).not.toBe(record);
     expect(withUrl.shareUrl).toBe("http://clip.test/s/space%20slug%2Fwith%20slash");
     expect(record.shareUrl).toBeUndefined();
+  });
+});
+
+describe("share expiry helpers", () => {
+  it("normalizes TTL inputs and rejects ambiguous expiry options", () => {
+    expect(parseShareTtlSeconds("10m")).toBe(600);
+    expect(resolveShareExpiresAt({ ttlSeconds: 60, now: new Date("2026-01-01T00:00:00.000Z") })).toBe("2026-01-01T00:01:00.000Z");
+    expect(() => resolveShareExpiresAt({ ttlSeconds: 0.5 })).toThrow("positive integer");
+    expect(() => resolveShareExpiresAt({ ttl: "1h", expiresAt: "2026-01-01T00:00:00.000Z" })).toThrow("either expiresAt or TTL");
   });
 });
