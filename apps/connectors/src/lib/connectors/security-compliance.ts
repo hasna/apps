@@ -171,6 +171,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["security", "incident response", "soc", "threat analysis", "cybersecurity"],
   },
   {
+    name: "totp",
+    displayName: "Totp",
+    description: "Totp API: codes, events, search, and raw API access",
+    category: "Security & Compliance",
+    tags: ["totp", "security", "authentication", "2fa"],
+  },
+  {
     name: "trellixepo",
     displayName: "Trellix EPO",
     description: "Enterprise security management platform for endpoint protection and threat response",
