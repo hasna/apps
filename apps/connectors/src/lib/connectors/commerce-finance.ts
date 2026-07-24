@@ -542,6 +542,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["accounting", "invoicing", "finance"],
   },
   {
+    name: "ynab",
+    displayName: "YNAB",
+    description: "You Need A Budget — personal finance and budgeting",
+    category: "Commerce & Finance",
+    tags: ["budgeting", "personal-finance", "fintech"],
+  },
+  {
     name: "zohobooks",
     displayName: "Zoho Books",
     description: "Online accounting and financial management",
