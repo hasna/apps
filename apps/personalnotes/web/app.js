@@ -1,74 +1,23 @@
-// ===================== Hasna Notes desktop UI — real notes app =====================
+// ===================== PersonalNotes desktop UI — real notes app =====================
 //
 // This is a REAL notes app rendered from data, in the approved visual
 // style. Data arrives one of two ways:
 //
 //   1. Native macOS host (WKWebView): the Swift shell injects `window.__BOOT__` at
 //      document-start (notes + machines + this machine's id) read from the on-disk
-//      Markdown store, and later calls `window.HasnaNotes.hydrate(boot)` after any
+//      Markdown store, and later calls `window.PersonalNotes.hydrate(boot)` after any
 //      save/create/delete so the UI re-renders from fresh data. Writes are sent back
 //      to Swift via `window.webkit.messageHandlers.notes.postMessage({action,note})`.
 //
-//   2. Plain browser / Playwright: no `__BOOT__`, so we fall back to a small built-in
-//      SAMPLE (notes across two machines) and keep the model in memory — writes just
-//      mutate the in-memory model + re-render, so the whole UI is testable headless.
+//   2. Plain browser / Playwright: no `__BOOT__`, so we boot empty and keep the model
+//      in memory — writes just mutate the in-memory model + re-render, so the whole
+//      UI is testable headless (tests hydrate their own fixtures).
 //
 // No chat/composer/task/diff screens — those are gone. Navigation is hash-free
 // for the editor (selection is in-memory); only Settings uses a hash (#settings) so a
 // screenshot harness can deep-link to it.
 (function () {
   'use strict';
-
-  // ------------------------------------------------------------------ sample data
-  // Used ONLY in a plain browser (no native __BOOT__). 4 notes across 2 machines.
-  function sampleBoot() {
-    const now = Date.now();
-    const iso = ms => new Date(ms).toISOString();
-    return {
-      thisMachine: 'apple03',
-      machines: [
-        { id: 'apple03' },
-        { id: 'machine001' },
-      ],
-      notes: [
-        {
-          id: 's-1', title: 'Welcome to Hasna Notes',
-          body: 'Plain-text Markdown notes, synced across your machines.\n\n' +
-            'Every note is a file on disk — the source of truth. Edit the title or ' +
-            'body and it saves automatically.\n\n' +
-            '- New Note (top of the sidebar) starts a fresh note\n' +
-            '- Search filters as you type\n' +
-            '- Machines lets you see notes across the whole fleet',
-          labels: ['welcome', 'docs'], status: 'active', folder: '',
-          machine: 'apple03', updatedAt: iso(now - 1000 * 60 * 8),
-          createdAt: iso(now - 1000 * 60 * 60 * 26),
-        },
-        {
-          id: 's-2', title: 'Release checklist',
-          body: '## Before shipping\n\n1. Run the full test suite\n2. Scan for secrets\n' +
-            '3. Bump the patch version\n4. Tag the release\n\nNotes round-trip byte-for-byte.',
-          labels: ['release'], status: 'active', folder: '',
-          machine: 'apple03', updatedAt: iso(now - 1000 * 60 * 60 * 5),
-          createdAt: iso(now - 1000 * 60 * 60 * 50),
-        },
-        {
-          id: 's-3', title: 'Meeting notes — fleet sync',
-          body: 'Bidirectional rsync, newest-wins. Each machine ends up with the newest ' +
-            'version of every note. Non-mac and unreachable machines are skipped.',
-          labels: ['meeting', 'sync'], status: 'reviewed', folder: '',
-          machine: 'machine001', updatedAt: iso(now - 1000 * 60 * 60 * 28),
-          createdAt: iso(now - 1000 * 60 * 60 * 72),
-        },
-        {
-          id: 's-4', title: 'Ideas',
-          body: 'A scratchpad of half-formed thoughts. Markdown all the way down.',
-          labels: [], status: 'inbox', folder: '',
-          machine: 'machine001', updatedAt: iso(now - 1000 * 60 * 60 * 96),
-          createdAt: iso(now - 1000 * 60 * 60 * 120),
-        },
-      ],
-    };
-  }
 
   // ------------------------------------------------------------------ model state
   const ALL = '__all__';
@@ -82,13 +31,13 @@
     selectedId: null,     // currently-open note id (or null = empty state)
     machineFilter: ALL,   // ALL or a machine id
     labelFilter: ALL,     // ALL or a label name (UI-only forward-compatible filter)
-    query: '',            // search text
-    screen: 'home',       // 'home' | 'chat' | 'labels' | 'notes' | 'noteslist' | 'settings' | 'compact'
+    screen: 'home',       // 'home' | 'chat' | 'notes' | 'noteslist' | 'settings' | 'compact'
+    settingsReturnScreen: 'home', // screen to restore when leaving Settings via "Back to app"
     statusFilter: 'active', // active | archived | trash | all
-    noteListLimit: 6,     // sidebar Notes list; "View more" opens the full Notes page
-    machineListLimit: 4,  // sidebar Machines list; "View more" opens Settings → Machines
-    recentLimit: 3,       // Home recent cards — kept deliberately light (no inline expand)
+    noteListLimit: 10,    // sidebar Notes list (contract: latest 10); "View more" opens the full Notes page
+    recentLimit: 3,       // Home recent rows — kept deliberately light (no inline expand)
     settings: { trashRetentionDays: 30 },
+    sync: null,           // last sync outcome from the host boot payload (sync-status.json)
     chat: {
       id: 'chat-local',
       status: 'ready',
@@ -100,6 +49,13 @@
       goal: null,
     },
   };
+
+  // Sidebar section collapse state (Notes / Labels) — session-only UI state.
+  const collapsedSections = { notes: false, labels: false };
+  // Machines dropdown open state (top of the sidebar).
+  let machinesMenuOpen = false;
+  // Screen to restore when leaving compact mode (defect 20: never force Home).
+  let compactReturnScreen = 'home';
 
   // Per-note flag: once the user edits a title by hand, never auto-title that note again.
   // Keyed by note id. Lives only in this session (a fresh manual edit re-sets it).
@@ -135,7 +91,10 @@
   function aiHeaders(extra) {
     const headers = Object.assign({ 'Content-Type': 'application/json' }, extra || {});
     const token = ai().token;
-    if (token) headers['X-Hasna-Notes-Token'] = token;
+    if (token) {
+      headers['X-PersonalNotes-Token'] = token;
+      headers['X-Hasna-Notes-Token'] = token; // legacy header; removed next release
+    }
     return headers;
   }
 
@@ -147,43 +106,40 @@
     if (text != null) n.textContent = text;
     return n;
   }
-  function escHtml(s) {
-    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  // Rule 14 / WCAG 2.1.1 — content rows are DIVs (they host nested controls and the
+  // inline rename input, which a <button> could not contain), so each clickable row is
+  // made keyboard-reachable here: Tab focuses it (tabindex=0 + role=button, drawing the
+  // standard :focus-visible ring), Enter/Space activates its click action. Keys arriving
+  // from nested controls (row action buttons, the rename field) are left alone.
+  function keyboardRow(row, label) {
+    row.tabIndex = 0;
+    row.setAttribute('role', 'button');
+    if (label) row.setAttribute('aria-label', label);
+    row.addEventListener('keydown', (e) => {
+      if (e.target !== row) return;                  // a nested control owns its keys
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
+      row.click();
+    });
+    return row;
   }
-
-  // Relative "updated" label, e.g. "just now", "8m ago", "3h ago", "yesterday", "Jun 3".
-  function relTime(iso) {
-    if (!iso) return '';
-    const t = Date.parse(iso);
-    if (isNaN(t)) return '';
-    const diff = Date.now() - t;
-    const min = Math.floor(diff / 60000);
-    if (min < 1) return 'just now';
-    if (min < 60) return min + 'm ago';
-    const hr = Math.floor(min / 60);
-    if (hr < 24) return hr + 'h ago';
-    const day = Math.floor(hr / 24);
-    if (day === 1) return 'yesterday';
-    if (day < 7) return day + 'd ago';
-    const d = new Date(t);
-    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  }
-
-  // Compact relative-age for sidebar note rows: "2h", "Yesterday", "3d", "Jun 3".
-  function relTimeShort(iso) {
+  // The one relative-time formatter. Default: "just now", "8m ago", "3h ago",
+  // "yesterday", "Jun 3". Short (note rows): "now", "8m", "3h", "Yesterday", "Jun 3".
+  function relTime(iso, short) {
     if (!iso) return '';
     const t = Date.parse(iso);
     if (isNaN(t)) return '';
     const min = Math.floor((Date.now() - t) / 60000);
-    if (min < 1) return 'now';
-    if (min < 60) return min + 'm';
+    if (min < 1) return short ? 'now' : 'just now';
+    if (min < 60) return min + 'm' + (short ? '' : ' ago');
     const hr = Math.floor(min / 60);
-    if (hr < 24) return hr + 'h';
+    if (hr < 24) return hr + 'h' + (short ? '' : ' ago');
     const day = Math.floor(hr / 24);
-    if (day === 1) return 'Yesterday';
-    if (day < 7) return day + 'd';
+    if (day === 1) return short ? 'Yesterday' : 'yesterday';
+    if (day < 7) return day + 'd' + (short ? '' : ' ago');
     return new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   }
+  const relTimeShort = iso => relTime(iso, true);
 
   // Labels for a note: forward-compatible — prefer `note.labels`, fall back to `note.tags`.
   function noteLabels(n) {
@@ -206,23 +162,16 @@
 
   function defaultProvenance(machine) {
     const m = machine || state.thisMachine || 'unknown';
+    const row = machineById(m);
     return {
+      rev: 1,
+      machineFriendlyName: (row && row.friendlyName) || '',
       createdByActorType: 'human',
       createdByName: '',
-      sourceMachine: m,
-      sourceMachineFriendlyName: '',
-      originMachine: m,
-      originMachineFriendlyName: '',
-      targetMachineFriendlyName: '',
-      previousMachine: '',
-      openedFrom: '',
-      sourceContext: '',
       archivedAt: '',
       trashedAt: '',
-      trashMachine: '',
       trashExpiresAt: '',
       restoredAt: '',
-      movedAt: '',
     };
   }
 
@@ -244,7 +193,7 @@
     { id: 'bullet-list', label: 'Bullet list', type: 'block', markdown: '- text' },
     { id: 'numbered-list', label: 'Numbered list', type: 'block', markdown: '1. text' },
     { id: 'quote', label: 'Quote', type: 'block', markdown: '> text' },
-    { id: 'code-block', label: 'Code block', type: 'block', markdown: '```\\ntext\\n```' },
+    { id: 'code-block', label: 'Code block', type: 'block', markdown: '```\ntext\n```' },
     { id: 'checklist', label: 'Checklist', type: 'block', markdown: '- [ ] text' },
     { id: 'divider', label: 'Divider', type: 'insert', markdown: '---' },
   ];
@@ -262,11 +211,6 @@
     chatTool('archive_note', 'Archive one note.', false, true),
     chatTool('trash_note', 'Move one note to Trash.', false, true),
     chatTool('restore_note', 'Restore one note.', false, true),
-    chatTool('move_note', 'Move one note to another machine.', false, true),
-    chatTool('list_labels', 'List known labels.', true, false),
-    chatTool('create_label', 'Create an empty label.', false, false),
-    chatTool('update_label', 'Rename a label everywhere.', false, true),
-    chatTool('delete_label', 'Delete a label and remove it from notes.', false, true),
     chatTool('summarize_notes', 'Summarize selected, searched, or all visible notes.', true, false),
     chatTool('find_related_notes', 'Find notes related to a note id or query.', true, false),
     chatTool('consolidate_notes', 'Preview or create a larger consolidated note from several notes.', false, true),
@@ -351,7 +295,11 @@
       }
       return out;
     };
-    let out = String(text || '').replace(/\\([\\`*_{}\[\]()#+\-.!>|])/g, (_, ch) => hold(escapeHTML(ch)));
+    // Strip NUL bytes first: they are the placeholder token delimiter, so pasted
+    // content containing NUL<digit>NUL could otherwise spoof a token and render
+    // another span's (already-sanitized) HTML in its place. NUL is never meaningful
+    // text content — dropping it keeps the token space collision-free.
+    let out = String(text || '').replace(/\u0000/g, '').replace(/\\([\\`*_{}\[\]()#+\-.!>|])/g, (_, ch) => hold(escapeHTML(ch)));
     out = out.replace(/`([^`]+)`/g, (_, code) => hold('<code>' + escapeHTML(code) + '</code>'));
     out = out.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, label) => hold(escapeHTML(label)));
     out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => {
@@ -466,10 +414,11 @@
       return markdownReplaceRange(text, start, end, next, start + 4 + language.length, start + 4 + language.length + body.length);
     }
     if (commandId === 'divider') {
-      const prefix = start > 0 && text[start - 1] !== '\n' ? '\n' : '';
+      // Insert AFTER the selection end — a divider must never replace selected text.
+      const prefix = end > 0 && text[end - 1] !== '\n' ? '\n' : '';
       const suffix = end < text.length && text[end] !== '\n' ? '\n' : '';
       const next = prefix + '---' + suffix;
-      return markdownReplaceRange(text, start, end, next, start + next.length, start + next.length);
+      return markdownReplaceRange(text, end, end, next, end + next.length, end + next.length);
     }
 
     const lr = markdownLineRange(text, start, end);
@@ -501,19 +450,14 @@
     return list.slice().sort((a, b) => Date.parse(b.updatedAt || 0) - Date.parse(a.updatedAt || 0));
   }
 
-	  // Notes after machine-filter + label-filter + search, newest first. The list the user sees.
+	  // Notes after machine-filter + label-filter + status-filter, newest first. The list the user sees.
 	  function visibleNotes() {
-	    const q = state.query.trim().toLowerCase();
 	    return sortNotes(state.notes.filter(n => {
 	      if (state.machineFilter !== ALL && !noteMatchesMachine(n, state.machineFilter)) return false;
 	      if (state.labelFilter !== ALL && noteLabels(n).indexOf(state.labelFilter) < 0) return false;
       if (state.statusFilter === 'active' && (n.status === 'archived' || n.status === 'trash')) return false;
       if (state.statusFilter === 'archived' && n.status !== 'archived') return false;
       if (state.statusFilter === 'trash' && n.status !== 'trash') return false;
-      if (q) {
-        const hay = ((n.title || '') + ' ' + (n.body || '') + ' ' + noteLabels(n).join(' ')).toLowerCase();
-        if (!hay.includes(q)) return false;
-      }
       return true;
     }));
   }
@@ -535,10 +479,6 @@
 	    return machineAliases(machineId).has(note.machine);
 	  }
 
-  function machineCount(id) {
-    return state.notes.filter(n => noteMatchesMachine(n, id) && n.status !== 'trash' && n.status !== 'archived').length;
-  }
-
   function latestISO(values) {
     let latest = '';
     values.forEach(value => {
@@ -558,6 +498,18 @@
 	      m && m.displayName,
 	    ].filter(Boolean).map(String));
 	  }
+
+  // The user-facing machine attribution for a note (vision MUST: every note
+  // shows which machine it belongs to). The note's own frontmatter friendly
+  // name wins; otherwise the machines list (manifest/host-supplied friendly
+  // names) resolves the slug; the raw slug is the last resort.
+  function machineLabelFor(note) {
+    if (!note) return '';
+    if (note.machineFriendlyName) return note.machineFriendlyName;
+    const row = machineById(note.machine);
+    if (row && (row.friendlyName || row.displayName)) return row.friendlyName || row.displayName;
+    return note.machine || '';
+  }
 
   function machineNoteCounts(machineOrId) {
     const aliases = machineAliases(machineOrId);
@@ -585,11 +537,22 @@
 
   function machineDetails(id) {
     const machineId = String(id || '').trim();
-    const source = machineById(machineId) || { id: machineId, slug: machineId, displayName: machineId, source: 'notes' };
+    const source = machineById(machineId) || { id: machineId, slug: machineId, displayName: machineId };
     const counts = machineNoteCounts(source);
+    // Sync facts are never fabricated: `syncedAt`/`capabilities` pass through
+    // from the host/manifest row, and THIS machine's row is overlaid from the
+    // boot `sync` object (the S1 client state) — a configured sync client is
+    // the "notes-sync" capability, its last good run is `syncedAt`.
+    let syncedAt = source.syncedAt || '';
+    let capabilities = Array.isArray(source.capabilities) ? source.capabilities.map(String).filter(Boolean) : [];
+    if (state.sync && state.sync.status && state.sync.status !== 'never'
+        && state.thisMachine && machineAliases(source).has(state.thisMachine)) {
+      syncedAt = latestISO([syncedAt, state.sync.lastSuccessAt]);
+      if (capabilities.indexOf('notes-sync') < 0) capabilities = capabilities.concat('notes-sync');
+    }
     const recentActivityAt = latestISO([
       source.recentActivityAt,
-      source.syncedAt,
+      syncedAt,
       source.lastSeenAt,
       source.updatedAt,
       counts.latestNoteUpdatedAt,
@@ -601,13 +564,9 @@
       friendlyName: source.friendlyName || '',
       status: source.status || (source.online === true ? 'online' : (source.online === false ? 'offline' : 'unknown')),
       online: source.online == null ? null : !!source.online,
-      source: source.source || 'notes',
-      origin: source.origin || '',
+      syncedAt,
+      capabilities,
       recentActivityAt,
-      capabilities: source.capabilities || [],
-      metadata: source.metadata || {},
-      provenance: source.provenance || {},
-      sync: source.sync || {},
     });
   }
 
@@ -618,7 +577,10 @@
       const existing = machineById(n.machine);
       ids.add(existing ? existing.id : n.machine);
     });
-    if (state.thisMachine) ids.add(machineDetails(state.thisMachine).id);
+    // THIS machine joins the list only when it has a real identity: the browser/dev
+    // fallback 'unknown' would otherwise fabricate a bogus "unknown" machine row on an
+    // empty boot (native hosts always inject a real id, so this guard is web-only).
+    if (state.thisMachine && state.thisMachine !== 'unknown') ids.add(machineDetails(state.thisMachine).id);
     return [...ids].map(machineDetails).sort((a, b) => {
       const d = Date.parse(b.recentActivityAt || b.updatedAt || 0) - Date.parse(a.recentActivityAt || a.updatedAt || 0);
       if (d) return d;
@@ -691,15 +653,10 @@
 	    return resolved;
 	  }
 
-	  function clearSearchInput() {
-	    state.query = '';
-	    const si = $('search-input');
-	    if (si) si.value = '';
-	  }
-
 	  function selectMachine(machineId, opts) {
 	    const options = opts || {};
 	    commitEdit();
+	    closeMachinePop();
 	    const isAll = machineId === ALL;
 	    const detail = isAll ? null : machineDetails(machineId);
 	    const target = isAll ? ALL : (detail.id || String(machineId || '').trim());
@@ -708,7 +665,6 @@
 	    state.machineFilter = target;
 	    state.statusFilter = options.statusFilter || 'active';
 	    state.labelFilter = ALL;
-	    clearSearchInput();
 	    state.noteListLimit = 10;
 	    state.screen = 'notes';
 	    showApp();
@@ -731,7 +687,10 @@
 	        view: viewSnapshot(),
 	      },
 	    }));
-	    if (!isAll) requestMachineDetails(target);
+	    // Filtering is purely local: after sync every machine's notes are local
+	    // files, so selecting a machine never round-trips the native bridge. The
+	    // machineDetails bridge remains for explicit details flows
+	    // (machines.requestDetails / Settings machine rows).
 	    render();
 	    return selectedMachine;
 	  }
@@ -807,46 +766,43 @@
     renderSettingsMeta();
     renderHome();
     renderNavActive();
+    renderLabelsPage(); // Settings → Labels management list stays in sync
+    renderSyncStatus(); // Settings → Machines sync row follows every hydrate
+    renderRecPill();    // recording indicator follows the active screen (hidden on Home)
+    syncHeaderScrollEdge(); // header scroll-edge fade tracks the now-visible scroller
   }
 
-  // Labels filter group near the top of the sidebar: "All" + one row per distinct label
+  // Labels filter section in the sidebar: "All" + one row per distinct label
   // (name + count). Selecting a label filters the notes list. Hidden entirely when there
-  // are no labels anywhere, to keep the sidebar compact.
+  // are no labels anywhere, to keep the sidebar compact. Collapsible (section header).
   function renderLabels() {
     const host = $('labels-list');
     const section = $('labels-section');
+    const wrap = $('labels-wrap');
     if (!host) return;
     host.innerHTML = '';
     const labels = allLabels();
     if (labels.length === 0) {
       if (section) section.hidden = true;
+      if (wrap) wrap.hidden = true;
       // If a label filter was active but its label vanished, reset to All.
       if (state.labelFilter !== ALL) state.labelFilter = ALL;
       return;
     }
-    if (section) section.hidden = false;
+    if (section) {
+      section.hidden = false;
+      section.classList.toggle('collapsed', collapsedSections.labels);
+    }
+    if (wrap) wrap.hidden = collapsedSections.labels;
 
     host.appendChild(labelRow(ALL, 'All', state.notes.length));
     labels.forEach(l => host.appendChild(labelRow(l.name, l.name, l.count)));
   }
 
-  function selectLabel(id, options) {
-    const opts = options || {};
-    state.labelFilter = id || ALL;
-    state.noteListLimit = 10;
-    const sel = noteById(state.selectedId);
-    if (sel && state.labelFilter !== ALL && noteLabels(sel).indexOf(state.labelFilter) < 0) {
-      const v = visibleNotes();
-      state.selectedId = v.length ? v[0].id : null;
-    }
-    if (opts.fullPage) showNotesPage();
-    else render();
-    return viewSnapshot();
-  }
-
   function labelRow(id, label, count) {
     const row = el('div', 'label-row');
     row.dataset.label = id;
+    keyboardRow(row, 'Filter notes by label: ' + label);
     if (state.labelFilter === id) row.classList.add('active');
     const left = el('div', 'lr-left');
     const ico = document.createElement('span');
@@ -859,28 +815,45 @@
     row.appendChild(left);
     row.appendChild(el('span', 'lr-count', String(count)));
     row.addEventListener('click', () => {
-      selectLabel(id);
+      state.labelFilter = id;
+      state.noteListLimit = 10;
+      // If the open note is filtered out, drop selection to newest visible.
+      const sel = noteById(state.selectedId);
+      if (sel && state.labelFilter !== ALL && noteLabels(sel).indexOf(state.labelFilter) < 0) {
+        const v = visibleNotes();
+        state.selectedId = v.length ? v[0].id : null;
+      }
+      render();
     });
     return row;
   }
 
-  // Reflect the active sidebar item (Home vs a note selection).
+  // Reflect the active nav item (Home / Archive / Trash in the sidebar, Chat in the header).
   function renderNavActive() {
     const home = $('nav-home');
     if (home) home.classList.toggle('active', state.screen === 'home');
-    const chat = $('nav-chat');
+    const archive = $('nav-archive');
+    if (archive) archive.classList.toggle('active', state.screen === 'noteslist' && state.statusFilter === 'archived');
+    const trash = $('nav-trash');
+    if (trash) trash.classList.toggle('active', state.screen === 'noteslist' && state.statusFilter === 'trash');
+    const chat = $('open-chat');
     if (chat) chat.classList.toggle('active', state.screen === 'chat');
-    const labels = $('nav-labels');
-    if (labels) labels.classList.toggle('active', state.screen === 'labels');
   }
 
-  // Decide which content panel is visible: Home, Chat, Labels, the full Notes page, or the editor.
+  // Decide which content panel is visible: Home, Chat, the full Notes page, or the editor.
   function renderContent() {
     const home = $('home-state');
     const np = $('notes-page');
     const chat = $('chat-page');
-    const labels = $('labels-page-main');
     const ed = $('editor'), empty = $('empty-state'), nomatch = $('nomatch-state');
+    // The editor delete + copy actions live in the content header (traffic-light row)
+    // and are only meaningful while the editor is showing; renderEditor un-hides them.
+    const del = $('note-delete');
+    if (del) del.hidden = true;
+    const copy = $('note-copy');
+    if (copy) copy.hidden = true;
+    // The markdown popover/slash menu belong to the editor surface only.
+    if (state.screen !== 'notes') { closeMdPop(); closeSlashMenu(); }
     const hideEditorStates = () => {
       if (ed) ed.hidden = true;
       if (empty) empty.hidden = true;
@@ -890,7 +863,6 @@
       if (home) home.hidden = false;
       if (np) np.hidden = true;
       if (chat) chat.hidden = true;
-      if (labels) labels.hidden = true;
       hideEditorStates();
       return;
     }
@@ -898,25 +870,14 @@
       if (home) home.hidden = true;
       if (np) np.hidden = true;
       if (chat) chat.hidden = false;
-      if (labels) labels.hidden = true;
       hideEditorStates();
       renderChatPage();
-      return;
-    }
-    if (state.screen === 'labels') {
-      if (home) home.hidden = true;
-      if (np) np.hidden = true;
-      if (chat) chat.hidden = true;
-      if (labels) labels.hidden = false;
-      hideEditorStates();
-      renderLabelsPage();
       return;
     }
     if (state.screen === 'noteslist') {
       if (home) home.hidden = true;
       if (np) np.hidden = false;
       if (chat) chat.hidden = true;
-      if (labels) labels.hidden = true;
       hideEditorStates();
       renderNotesPage();
       return;
@@ -924,11 +885,26 @@
     if (home) home.hidden = true;
     if (np) np.hidden = true;
     if (chat) chat.hidden = true;
-    if (labels) labels.hidden = true;
     renderEditor();
   }
 
-  // Home: recent-notes cards. Quick-note + record wiring is in bind().
+  const COPY_ICON_SVG = '<svg viewBox="0 0 16 16" fill="none"><rect x="5.5" y="5.5" width="8" height="8" rx="1.6" stroke="currentColor" stroke-width="1.3"/><path d="M3.5 10.5h-.5a1 1 0 01-1-1V3a1 1 0 011-1h6.5a1 1 0 011 1v.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>';
+  const CHECK_ICON_SVG = '<svg viewBox="0 0 16 16" fill="none"><path d="M3.5 8.5l3 3 6-6.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const RESTORE_ICON_SVG = '<svg viewBox="0 0 16 16" fill="none"><path d="M3.2 6.6A5.2 5.2 0 118 13.2M3.2 6.6V3.4M3.2 6.6h3.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const TRASH_ICON_SVG = '<svg viewBox="0 0 16 16" fill="none"><path d="M3.4 4.9h9.2M6.5 4.9V3.8a.9.9 0 01.9-.9h1.2a.9.9 0 01.9.9v1.1M4.7 4.9l.55 7.3a.9.9 0 00.9.83h3.7a.9.9 0 00.9-.83l.55-7.3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+  // Icon-only copy feedback: swap the glyph to a checkmark for a beat — no "Copied" text.
+  function copyFeedback(btn) {
+    if (!btn || btn.classList.contains('copied')) return;
+    const original = btn.innerHTML;
+    btn.innerHTML = CHECK_ICON_SVG;
+    btn.classList.add('copied');
+    setTimeout(() => { btn.innerHTML = original; btn.classList.remove('copied'); }, 1100);
+  }
+
+  // Home: recent notes as a FLAT list (no card borders/backgrounds/shadows) with a hover
+  // copy control whose feedback is a checkmark icon only — no "Copied" text. One subtle
+  // light-gray "View all notes" path below the list. Quick-note wiring is in bind().
   function renderHome() {
     const wrap = $('home-recent');
     const host = $('home-cards');
@@ -936,9 +912,9 @@
     const allRecent = sortNotes(state.notes.filter(n => n.status !== 'trash' && n.status !== 'archived'));
     const recent = allRecent.slice(0, state.recentLimit);
     host.innerHTML = '';
-    // "All notes" affordance: only worth showing once there are more than the recent few.
-    const allBtn = $('home-all-notes');
-    if (allBtn) allBtn.hidden = allRecent.length <= state.recentLimit;
+    // The ONE view-all path: only worth showing once there are more than the recent few.
+    const viewAll = $('home-view-all');
+    if (viewAll) viewAll.hidden = allRecent.length <= state.recentLimit;
     if (recent.length === 0) {
       wrap.hidden = true;
       return;
@@ -949,37 +925,29 @@
       const body = n.body || n.content || '';
       card.dataset.noteId = n.id;
       card.dataset.copyText = body;
+      keyboardRow(card, 'Open note: ' + ((n.title && n.title.trim()) || 'Untitled Note'));
       card.appendChild(el('div', 'home-card-title', (n.title && n.title.trim()) || 'Untitled Note'));
       const sub = body.replace(/\s+/g, ' ').trim().slice(0, 72) || 'No content';
       card.appendChild(el('div', 'home-card-sub', sub));
       // Relative time on its own third row so it never crowds the preview text.
       card.appendChild(el('div', 'home-card-meta', relTime(n.updatedAt)));
 
-      // Hover copy button (top-right, absolute → no layout shift) + inline "Copied" tag.
-      const copied = el('span', 'home-card-copied', 'Copied');
+      // Hover copy button (top-right, absolute → no layout shift). Feedback: the copy
+      // glyph swaps to a checkmark for a beat — icon only, no text.
       const copyBtn = el('button', 'home-card-copy');
       copyBtn.type = 'button';
       copyBtn.title = 'Copy note';
-      copyBtn.innerHTML = '<svg viewBox="0 0 16 16" fill="none"><rect x="5.5" y="5.5" width="8" height="8" rx="1.6" stroke="currentColor" stroke-width="1.3"/><path d="M3.5 10.5h-.5a1 1 0 01-1-1V3a1 1 0 011-1h6.5a1 1 0 011 1v.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>';
+      copyBtn.innerHTML = COPY_ICON_SVG;
       copyBtn.addEventListener('click', (ev) => {
         ev.stopPropagation();   // copy without opening the note
         copyToClipboard(body);
-        copied.classList.add('show');
-        copyBtn.classList.add('copied');
-        setTimeout(() => { copied.classList.remove('show'); copyBtn.classList.remove('copied'); }, 1100);
+        copyFeedback(copyBtn);
       });
-      card.appendChild(copied);
       card.appendChild(copyBtn);
 
       card.addEventListener('click', () => selectNote(n.id));
       host.appendChild(card);
     });
-  }
-
-  // Friendly, abbreviated relative time for note rows/cards ("Just now", "3m", "2h",
-  // "Yesterday", "4d", or a short date). Trimmed so it never crowds a row.
-  function noteRowTime(iso) {
-    return relTimeShort(iso) || '';
   }
 
   // ------------------------------------------------------------------ Notes page
@@ -999,13 +967,20 @@
     const input = $('chat-input'); if (input) input.focus();
   }
 
-  function showLabelsPage() {
+  // Trash view: the Notes page constrained to status "trash" (Restore + permanent
+  // Delete via the row actions or the context menu). Archive is the same page for
+  // status "archived" — both make the full note lifecycle reachable from the sidebar.
+  function showStatusList(statusFilter) {
     commitEdit();
-    state.screen = 'labels';
+    state.statusFilter = statusFilter;
+    state.labelFilter = ALL;
+    state.noteListLimit = 10;
+    state.screen = 'noteslist';
     showApp();
     render();
-    const input = $('label-create-input'); if (input) input.focus();
   }
+  function showTrash() { showStatusList('trash'); }
+  function showArchive() { showStatusList('archived'); }
 
   function renderNotesPage() {
     const host = $('np-list');
@@ -1013,26 +988,104 @@
     const emptyEl = $('np-empty');
     if (!host) return;
     host.innerHTML = '';
+    // Single source of truth: the same machine/label/status selector as the
+    // sidebar list (visibleNotes), so the Labels-page "Filter notes" flow
+    // constrains this page too — just without the sidebar's limit.
     const list = visibleNotes();
-    if (countEl) countEl.textContent = list.length === 1 ? '1 note' : list.length + ' notes';
-    if (emptyEl) emptyEl.hidden = list.length !== 0;
+    const titleEl = $('np-title');
+    if (titleEl) titleEl.textContent = state.statusFilter === 'trash' ? 'Trash'
+      : (state.statusFilter === 'archived' ? 'Archived' : 'Notes');
+    if (countEl) {
+      const bits = [list.length === 1 ? '1 note' : list.length + ' notes'];
+      if (state.machineFilter !== ALL) {
+        const m = machineById(state.machineFilter);
+        bits.push((m && m.displayName) || state.machineFilter);
+      }
+      if (state.labelFilter !== ALL) bits.push(state.labelFilter);
+      if (state.statusFilter !== 'active') bits.push(state.statusFilter);
+      countEl.textContent = bits.join(' · ');
+    }
+    if (emptyEl) {
+      emptyEl.hidden = list.length !== 0;
+      emptyEl.textContent = state.statusFilter === 'trash' ? 'Trash is empty'
+        : (state.statusFilter === 'archived' ? 'No archived notes' : 'No notes yet');
+    }
     list.forEach(n => {
       const row = el('div', 'np-row');
       row.dataset.id = n.id;
+      keyboardRow(row, 'Open note: ' + ((n.title && n.title.trim()) || 'Untitled Note'));
       const body = (n.body || n.content || '').replace(/\s+/g, ' ').trim();
       row.appendChild(el('div', 'np-row-title', (n.title && n.title.trim()) || 'Untitled Note'));
       row.appendChild(el('div', 'np-row-sub', body.slice(0, 120) || 'No content'));
-      // Third row: machine + friendly relative time, kept compact and muted.
+      // Third row: machine + friendly relative time, kept compact and muted. Trash rows
+      // add the retention countdown from trashExpiresAt.
       const meta = el('div', 'np-row-meta');
-      const machine = (n.sourceMachineFriendlyName || n.machine || '').trim();
+      const machine = machineLabelFor(n).trim();
       if (machine && machine !== 'unknown') meta.appendChild(el('span', 'np-row-machine', machine));
       const age = relTime(n.updatedAt);
       if (age) meta.appendChild(el('span', 'np-row-age', age));
+      if (n.status === 'trash') {
+        const countdown = trashCountdown(n);
+        if (countdown) meta.appendChild(el('span', 'np-row-expiry', countdown));
+      }
       row.appendChild(meta);
+      row.appendChild(noteRowActions(n));
       row.addEventListener('click', () => selectNote(n.id));
       row.addEventListener('contextmenu', (e) => { e.preventDefault(); openContextMenu(e, n.id); });
       host.appendChild(row);
     });
+  }
+
+  // Effective expiry for a trashed note: the stamped trashExpiresAt, with legacy trash
+  // (trashed before retention stamping existed) falling back to trashedAt + retention.
+  function trashExpiryMs(note) {
+    const explicit = Date.parse(note.trashExpiresAt || '');
+    if (!Number.isNaN(explicit)) return explicit;
+    const trashed = Date.parse(note.trashedAt || '');
+    if (Number.isNaN(trashed)) return NaN;
+    return trashed + Math.max(1, Number(state.settings.trashRetentionDays) || 30) * 86400000;
+  }
+
+  // "Deleted forever in Nd" countdown for a trashed note (empty when no expiry is set).
+  function trashCountdown(note) {
+    const expires = trashExpiryMs(note);
+    if (Number.isNaN(expires)) return '';
+    const days = Math.ceil((expires - Date.now()) / 86400000);
+    if (days <= 0) return 'Deleted forever today';
+    return 'Deleted forever in ' + days + (days === 1 ? ' day' : ' days');
+  }
+
+  // Hover actions on a Notes-page row: copy everywhere; Restore on archived/trashed
+  // rows; permanent Delete on trashed rows (confirmation-gated via deleteNote).
+  function noteRowActions(n) {
+    const actions = el('div', 'np-row-actions');
+    const copyBtn = el('button', 'np-act');
+    copyBtn.type = 'button';
+    copyBtn.title = 'Copy note';
+    copyBtn.innerHTML = COPY_ICON_SVG;
+    copyBtn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      copyToClipboard(n.body || n.content || '');
+      copyFeedback(copyBtn);
+    });
+    actions.appendChild(copyBtn);
+    if (n.status === 'archived' || n.status === 'trash') {
+      const restoreBtn = el('button', 'np-act');
+      restoreBtn.type = 'button';
+      restoreBtn.title = 'Restore';
+      restoreBtn.innerHTML = RESTORE_ICON_SVG;
+      restoreBtn.addEventListener('click', (ev) => { ev.stopPropagation(); restoreNote(n.id); });
+      actions.appendChild(restoreBtn);
+    }
+    if (n.status === 'trash') {
+      const delBtn = el('button', 'np-act np-act-danger');
+      delBtn.type = 'button';
+      delBtn.title = 'Delete permanently';
+      delBtn.innerHTML = TRASH_ICON_SVG;
+      delBtn.addEventListener('click', (ev) => { ev.stopPropagation(); deleteNote(n); });
+      actions.appendChild(delBtn);
+    }
+    return actions;
   }
 
   // ------------------------------------------------------------------ Machines page
@@ -1048,6 +1101,7 @@
       const card = el('div', 'mp-row');
       const left = el('div', 'mp-left');
       const name = (m.displayName || m.id || 'Unknown machine').trim();
+      keyboardRow(card, 'Filter notes by machine: ' + name);
       left.appendChild(el('div', 'mp-name', name));
       const sub = [];
       if (m.platform) sub.push(m.platform);
@@ -1061,6 +1115,37 @@
       card.addEventListener('click', () => { selectMachine(m.id, { reason: 'settings' }); showApp(); });
       host.appendChild(card);
     });
+  }
+
+  // ------------------------------------------------------------------ Sync status row
+  // Settings → Machines shows the last sync outcome (host boot payload `sync`,
+  // read from <data-root>/sync-status.json). Contract: an error status must
+  // NEVER render as the green synced state — auth failures stay visible.
+  function syncStatusLine(sync) {
+    if (!sync || sync.status === 'never' || (!sync.lastSyncAt && sync.status !== 'error')) {
+      return {
+        status: 'off',
+        text: 'Not syncing yet — sign in with "personalnotes auth device", then "personalnotes sync --install-service".',
+      };
+    }
+    let server = String(sync.apiUrl || '');
+    try { server = new URL(sync.apiUrl).host || server; } catch (err) { /* show raw value */ }
+    if (sync.status === 'error') {
+      const last = sync.lastSuccessAt ? ' Last success ' + relTime(sync.lastSuccessAt) + '.' : '';
+      return { status: 'error', text: 'Sync failing — ' + (sync.error || 'unknown error') + '.' + last };
+    }
+    return {
+      status: 'ok',
+      text: 'Synced ' + relTime(sync.lastSyncAt) + (server ? ' · ' + server : ''),
+    };
+  }
+
+  function renderSyncStatus() {
+    const row = $('sync-status-row');
+    if (!row) return;
+    const line = syncStatusLine(state.sync);
+    row.textContent = line.text;
+    row.className = 'sync-status sync-' + line.status;
   }
 
   // ------------------------------------------------------------------ Labels page
@@ -1137,7 +1222,8 @@
       left.appendChild(el('span', 'lp-name', item.name));
       left.appendChild(el('span', 'lp-count', item.count === 1 ? '1 note' : item.count + ' notes'));
       left.addEventListener('click', () => {
-        selectLabel(item.name, { fullPage: true });
+        state.labelFilter = item.name;
+        showNotesPage();
       });
       row.appendChild(left);
       const actions = el('div', 'lp-actions');
@@ -1161,8 +1247,8 @@
     });
   }
 
-  // Clipboard write with a textarea fallback (file:// / older WebKit). No toast — the
-  // home-card shows its own inline "Copied" confirmation.
+  // The one clipboard helper: async clipboard with a textarea fallback (file:// /
+  // older WebKit). Callers add their own feedback (toast or inline "Copied" tag).
   function copyToClipboard(text) {
     const fallback = () => {
       try {
@@ -1188,9 +1274,7 @@
     if (list.length === 0) {
       if (emptySide) {
         emptySide.hidden = false;
-        emptySide.textContent = state.query.trim()
-          ? 'No matching notes'
-          : (state.machineFilter === ALL ? 'No notes' : 'No notes on this machine');
+        emptySide.textContent = state.machineFilter === ALL ? 'No notes' : 'No notes on this machine';
       }
       return;
     }
@@ -1199,6 +1283,7 @@
     list.forEach(n => {
       const row = el('div', 'note-row');
       row.dataset.id = n.id;
+      keyboardRow(row, 'Open note: ' + ((n.title && n.title.trim()) || 'Untitled Note'));
       if (n.id === state.selectedId && state.screen === 'notes') row.classList.add('active');
       const title = el('span', 'note-title', (n.title && n.title.trim()) ? n.title : 'Untitled Note');
       if (!(n.title && n.title.trim())) title.classList.add('untitled');
@@ -1211,12 +1296,6 @@
         row.appendChild(ageEl);
       }
       row.addEventListener('click', () => selectNote(n.id));
-      row.draggable = true;
-      row.addEventListener('dragstart', (ev) => {
-        ev.dataTransfer.setData('application/x-hasna-note-id', n.id);
-        ev.dataTransfer.setData('text/plain', n.id);
-        ev.dataTransfer.effectAllowed = 'move';
-      });
       // Right-click → context menu (Rename / Duplicate / Copy text / Delete).
       row.addEventListener('contextmenu', (e) => { e.preventDefault(); openContextMenu(e, n.id); });
       host.appendChild(row);
@@ -1230,29 +1309,37 @@
     }
   }
 
+  // Machines dropdown (top of the sidebar): a compact filter. The button shows the
+  // current filter (friendly name); the menu lists "All Machines" + one row per machine
+  // (manifest ∪ machines seen in notes). Attribution is informational — no fleet UI.
   function renderMachines() {
     const host = $('machines-list');
     if (!host) return;
+    const label = $('machines-dd-label');
+    if (label) {
+      label.textContent = state.machineFilter === ALL
+        ? 'All Machines'
+        : machineDetails(state.machineFilter).displayName;
+    }
+    const btn = $('machines-dd-btn');
+    if (btn) btn.classList.toggle('open', machinesMenuOpen);
+    host.hidden = !machinesMenuOpen;
     host.innerHTML = '';
 
-    // "All Machines" row first.
+    // "All Machines" row first, then one row per machine (friendly names, note counts).
     host.appendChild(machineRow(ALL, 'All Machines', state.notes.filter(n => n.status !== 'trash' && n.status !== 'archived').length, true));
-
-    // One row per machine. Union of manifest machines + machines seen in notes, so a
-    // note from a machine missing from the manifest still gets a row.
-    const machines = machineDisplays();
-    machines.slice(0, state.machineListLimit).forEach(m => host.appendChild(machineRow(m.id, m.displayName, m.noteCount, false, m)));
-    const more = $('machines-more');
-    if (more) more.hidden = machines.length <= state.machineListLimit;
+    machineDetailsList().forEach(m => host.appendChild(machineRow(m.id, m.displayName, m.noteCount, false, m)));
   }
 
-  function machineDisplays() {
-    return machineDetailsList();
+  function setMachinesMenu(open) {
+    machinesMenuOpen = !!open;
+    renderMachines();
   }
 
   function machineRow(id, label, count, isAll, machine) {
     const row = el('div', 'machine-row');
     row.dataset.machine = id;
+    keyboardRow(row, 'Filter notes by machine: ' + label);
     if (machine && machine.updatedAt) row.dataset.updatedAt = machine.updatedAt;
     if (machine && machine.status) row.dataset.status = machine.status;
     if (machine && machine.online != null) row.dataset.online = String(!!machine.online);
@@ -1269,29 +1356,20 @@
     left.appendChild(ico);
     left.appendChild(el('span', 'mr-name', label));
     row.appendChild(left);
-	    row.appendChild(el('span', 'mr-count', String(count)));
+    row.appendChild(el('span', 'mr-count', String(count)));
 
-	    row.addEventListener('click', () => {
-	      selectMachine(id, { reason: 'sidebar' });
-	    });
-    row.addEventListener('dragover', (ev) => {
-      if (id === ALL) return;
-      if (ev.dataTransfer.types.includes('application/x-hasna-note-id') || ev.dataTransfer.types.includes('text/plain')) {
-        ev.preventDefault();
-        ev.dataTransfer.dropEffect = 'move';
-      }
+    row.addEventListener('click', () => {
+      machinesMenuOpen = false;
+      selectMachine(id, { reason: 'sidebar' });
     });
-    row.addEventListener('drop', (ev) => {
+    row.addEventListener('contextmenu', (e) => {
       if (id === ALL) return;
-      const noteId = ev.dataTransfer.getData('application/x-hasna-note-id') || ev.dataTransfer.getData('text/plain');
-      if (!noteId) return;
-      ev.preventDefault();
-      moveNoteToMachine(noteId, id, machine && machine.friendlyName);
-    });
-    row.addEventListener('contextmenu', () => {
-      if (id === ALL) return;
+      if (e && e.preventDefault) e.preventDefault();
       const detail = machineDetails(id);
       window.dispatchEvent(new CustomEvent('hasna:machine-context', { detail: { machineId: id, machine: detail } }));
+      // Vision f8659e18: right-click a machine SHOWS its details (the event above is
+      // the contracted API; this popover is the user-visible rendering of it).
+      openMachinePop(e, detail);
     });
     return row;
   }
@@ -1300,11 +1378,15 @@
     const editor = $('editor');
     const empty = $('empty-state');
     const nomatch = $('nomatch-state');
+    const del = $('note-delete');
+    const copy = $('note-copy');
     const list = visibleNotes();
     const note = noteById(state.selectedId);
     const selVisible = note && list.some(n => n.id === note.id);
 
-    // Decide which panel shows.
+    // Decide which panel shows. The header delete + copy controls track the editor.
+    if (del) del.hidden = !selVisible;
+    if (copy) copy.hidden = !selVisible;
     if (selVisible) {
       editor.hidden = false; empty.hidden = true; nomatch.hidden = true;
       fillEditor(note);
@@ -1316,13 +1398,17 @@
       // Truly zero notes anywhere.
       empty.hidden = false; nomatch.hidden = true;
     } else if (list.length === 0) {
-      // There are notes, but the current filter/search hides them all.
+      // There are notes, but the current filter/search hides them all. Name the
+      // filter that actually caused the miss — a label/status miss must not claim
+      // "no notes on this machine" (the machine may well own hidden notes).
       empty.hidden = true; nomatch.hidden = false;
       const desc = $('nomatch-desc');
       if (desc) {
-        desc.textContent = state.query.trim()
-          ? 'No notes match “' + state.query.trim() + '”.'
-          : 'No notes on this machine yet.';
+        if (state.statusFilter === 'archived') desc.textContent = 'No archived notes here yet.';
+        else if (state.statusFilter === 'trash') desc.textContent = 'Trash is empty.';
+        else if (state.labelFilter !== ALL) desc.textContent = 'No notes with the label “' + state.labelFilter + '” here.';
+        else if (state.machineFilter !== ALL) desc.textContent = 'No active notes on this machine.';
+        else desc.textContent = 'No notes match the current filters.';
       }
     } else {
       // There ARE visible notes but none selected — select the newest and show it.
@@ -1334,12 +1420,29 @@
   function fillEditor(note) {
     const titleEl = $('editor-title');
     const bodyEl = $('editor-body');
-    // Only overwrite the field value when it differs, so we don't disturb the caret
-    // while the user is typing (render() can be called from machine-filter clicks etc).
-    if (titleEl.value !== note.title) titleEl.value = note.title || '';
-    if (bodyEl.value !== note.body) bodyEl.value = note.body || '';
+    // A different note is taking the editor — any in-flight edit baseline is stale.
+    if (editBase && editBase.id !== note.id) editBase = null;
+    if (editBase) {
+      // In-flight local edits (the host hydrates after EVERY write, including our own
+      // save round-trip): never stomp keystrokes typed inside the save debounce. Only
+      // adopt a field whose content genuinely changed from ANOTHER source — it differs
+      // from what we last committed AND carries a newer updatedAt than our last edit.
+      const externalTitle = note.title !== editBase.title;
+      const externalBody = note.body !== editBase.body;
+      const newer = (Date.parse(note.updatedAt) || 0) > (Date.parse(editBase.updatedAt) || 0);
+      if ((externalTitle || externalBody) && newer) {
+        if (externalTitle && titleEl.value !== note.title) titleEl.value = note.title || '';
+        if (externalBody && bodyEl.value !== note.body) bodyEl.value = note.body || '';
+        editBase = { id: note.id, title: note.title, body: note.body, updatedAt: note.updatedAt };
+      }
+    } else {
+      // Only overwrite the field value when it differs, so we don't disturb the caret
+      // while the user is typing (render() can be called from machine-filter clicks etc).
+      if (titleEl.value !== note.title) titleEl.value = note.title || '';
+      if (bodyEl.value !== note.body) bodyEl.value = note.body || '';
+    }
 
-    $('em-machine').textContent = note.machine || state.thisMachine;
+    $('em-machine').textContent = machineLabelFor(note) || state.thisMachine;
     $('em-updated').textContent = 'updated ' + relTime(note.updatedAt);
 
     const tags = $('em-tags');
@@ -1353,6 +1456,16 @@
 
   // ------------------------------------------------------------------ editor actions
   let saveTimer = null;
+  // Baseline for the note being edited: the content we last committed (or the model
+  // content when typing started) + its updatedAt. fillEditor uses it to tell our own
+  // save echoes apart from genuine external writes, so hydrate() can't wipe keystrokes
+  // still inside the debounce window. Cleared when another note takes the editor.
+  let editBase = null; // { id, title, body, updatedAt }
+  function markEditBase(n) {
+    if (!editBase || editBase.id !== n.id) {
+      editBase = { id: n.id, title: n.title, body: n.body, updatedAt: n.updatedAt };
+    }
+  }
   function scheduleSave() {
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(commitEdit, 600);
@@ -1479,6 +1592,9 @@
       note.titleContentFingerprint = '';
     }
     note.updatedAt = new Date().toISOString();
+    // The committed content is the new baseline: the host's hydrate echo for this save
+    // matches it, so fillEditor won't treat our own write as an external change.
+    editBase = { id: note.id, title: newTitle, body: newBody, updatedAt: note.updatedAt };
     postNative('save', serializeNote(note));
     // Re-render the sidebar (title/order may have changed) but keep editor fields intact.
     renderNotesList();
@@ -1493,22 +1609,14 @@
 	      labels: n.labels || [], tags: n.labels || [],
       status: n.status || 'active', folder: n.folder || '',
       machine: n.machine, updatedAt: n.updatedAt, createdAt: n.createdAt,
+      machineFriendlyName: n.machineFriendlyName || '',
+      rev: Number(n.rev) >= 1 ? Math.floor(Number(n.rev)) : 1,
       createdByActorType: n.createdByActorType || 'human',
       createdByName: n.createdByName || '',
-      sourceMachine: n.sourceMachine || n.machine || state.thisMachine,
-      sourceMachineFriendlyName: n.sourceMachineFriendlyName || '',
-      originMachine: n.originMachine || n.machine || state.thisMachine,
-      originMachineFriendlyName: n.originMachineFriendlyName || '',
-      targetMachineFriendlyName: n.targetMachineFriendlyName || '',
-      previousMachine: n.previousMachine || '',
-      openedFrom: n.openedFrom || '',
-      sourceContext: n.sourceContext || '',
       archivedAt: n.archivedAt || '',
       trashedAt: n.trashedAt || '',
-      trashMachine: n.trashMachine || '',
       trashExpiresAt: n.trashExpiresAt || '',
       restoredAt: n.restoredAt || '',
-      movedAt: n.movedAt || '',
       titleLocked: !!n.titleLocked,
       titleSource: n.titleSource || (isDefaultTitle(n.title) ? 'default' : 'manual'),
       titleContentFingerprint: n.titleContentFingerprint || '',
@@ -1533,9 +1641,8 @@
       state.machineFilter = ALL;
     }
     state.labelFilter = ALL;
+    state.statusFilter = 'active';
     state.noteListLimit = 10;
-    state.query = '';
-    const si = $('search-input'); if (si) si.value = '';
     state.screen = 'notes';
     showApp();
     postNative('create', serializeNote(note));
@@ -1562,13 +1669,15 @@
     };
     state.notes.push(note);
     postNative('create', serializeNote(note));
-    if (!note.titleLocked && body && body.trim()) {
+    if (!note.titleLocked && body && body.trim() && ai().available) {
       requestAutoTitle(note.id, body);
     }
-    // Re-render the sidebar list + home cards, but do NOT change selectedId/screen.
+    // Re-render the sidebar list + home cards (and the Notes page when it is showing),
+    // but do NOT change selectedId/screen.
     renderLabels();
     renderNotesList();
     renderHome();
+    if (state.screen === 'noteslist') renderNotesPage();
     return note;
   }
 
@@ -1580,6 +1689,24 @@
 
   function selectNote(id) {
     commitEdit();              // flush any pending edit before switching away
+    // Reconcile filters so the chosen note is actually visible (Cmd+K search, Home
+    // recent cards, and chat source chips ignore the sidebar filters) — otherwise
+    // renderEditor() silently swaps the selection to the newest visible note.
+    const note = noteById(id);
+    if (note) {
+      if (state.machineFilter !== ALL && !noteMatchesMachine(note, state.machineFilter)) {
+        // Vision bug 9f8fba61: selecting another machine's note must navigate —
+        // jump the machine filter TO the note's own machine (canonical id) and
+        // show it. All machines' notes are local files after sync, so this is a
+        // pure local filter+select. Unattributed notes fall back to All Machines.
+        state.machineFilter = (note.machine && note.machine !== 'unknown')
+          ? machineDetails(note.machine).id
+          : ALL;
+      }
+      if (state.labelFilter !== ALL && noteLabels(note).indexOf(state.labelFilter) < 0) state.labelFilter = ALL;
+      const status = note.status === 'archived' ? 'archived' : (note.status === 'trash' ? 'trash' : 'active');
+      if (state.statusFilter !== 'all' && state.statusFilter !== status) state.statusFilter = status;
+    }
     state.selectedId = id;
     state.screen = 'notes';
     showApp();
@@ -1587,10 +1714,17 @@
   }
 
   // ------------------------------------------------------------------ settings + theme
-  const SETTINGS_TABS = ['appearance', 'machines', 'about'];
+  const SETTINGS_TABS = ['appearance', 'labels', 'machines', 'about'];
   const win = $('window');
 
   function showSettings(tab) {
+    // Flush any pending edit BEFORE the screen flips (commitEdit only writes while
+    // 'notes' is active) — otherwise opening Settings mid-debounce drops the keystrokes.
+    commitEdit();
+    // Remember where the user came from so "Back to app" can restore it — leaving
+    // state.screen stuck on 'settings' made the next render() force the editor over
+    // whatever screen was showing (the flaky-settings symptom).
+    if (state.screen !== 'settings') state.settingsReturnScreen = state.screen;
     state.screen = 'settings';
     win.setAttribute('data-active-shell', 'settings');
     const t = SETTINGS_TABS.indexOf(tab) >= 0 ? tab : 'appearance';
@@ -1601,16 +1735,23 @@
     const page = document.querySelector('.set-page[data-tab="' + t + '"]');
     if (page) page.classList.add('active');
     if (t === 'machines') renderMachinesPage();
+    if (t === 'labels') renderLabelsPage();
+    // The visible header controls differ per shell — refresh the native drag holes.
+    scheduleDragExclusions();
   }
 
   function showApp() {
     win.setAttribute('data-active-shell', 'app');
+    // The visible header controls differ per shell — refresh the native drag holes
+    // (a resize while Settings was open clears the app-shell holes; re-punch them).
+    scheduleDragExclusions();
   }
 
   // Navigate to the Home landing screen (stays in the app shell, shows #home-state).
   function showHome() {
     commitEdit();
     state.screen = 'home';
+    state.statusFilter = 'active'; // leaving Trash via Home resets the status filter
     showApp();
     render();
     const qn = $('qn-input'); if (qn) qn.focus();
@@ -1621,13 +1762,16 @@
   function setCompact(on) {
     if (on) {
       commitEdit();
+      // Remember where the user was so leaving compact restores it (not always Home).
+      if (state.screen !== 'compact') compactReturnScreen = state.screen;
       state.screen = 'compact';
       win.setAttribute('data-active-shell', 'compact');
       postWindow('setCompact', { on: true });
       const ci = $('compact-input'); if (ci) setTimeout(() => ci.focus(), 60);
     } else {
       postWindow('setCompact', { on: false });
-      state.screen = 'home';
+      state.screen = (compactReturnScreen && compactReturnScreen !== 'compact' && compactReturnScreen !== 'settings')
+        ? compactReturnScreen : 'home';
       showApp();
       render();
     }
@@ -1637,7 +1781,11 @@
 
   // Theme: persisted in localStorage, applied as data-theme on <html>. "system"
   // follows the OS via prefers-color-scheme.
-  const THEME_KEY = 'hasna-notes-theme';
+  const THEME_KEY = 'personalnotes-theme';
+  const LEGACY_THEME_KEY = 'hasna-notes-theme'; // pre-rename key; read-only fallback
+  function storedThemePref() {
+    try { return localStorage.getItem(THEME_KEY) || localStorage.getItem(LEGACY_THEME_KEY); } catch (e) { return null; }
+  }
   let mq = null;
   function applyTheme(theme) {
     const root = document.documentElement;
@@ -1652,6 +1800,16 @@
     document.querySelectorAll('.theme-card').forEach(c => {
       c.classList.toggle('theme-selected', c.getAttribute('data-theme') === theme);
     });
+    // Keep the native window backing in sync with the app's own theme preference
+    // (Rule 11 / spec §3.8): the shell pins the window NSAppearance for explicit
+    // 'light'/'dark' (so BrandColor.canvas AND the WKWebView's prefers-color-scheme
+    // resolve to the app theme, not the OS one) and returns to system for 'system'.
+    // No-op in plain browsers.
+    try {
+      if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.window) {
+        window.webkit.messageHandlers.window.postMessage({ action: 'theme', theme: theme, effective: effective });
+      }
+    } catch (err) { /* browser mode */ }
   }
   function setTheme(theme) {
     try { localStorage.setItem(THEME_KEY, theme); } catch (e) {}
@@ -1664,7 +1822,7 @@
     // Re-apply when the OS theme flips, but only while the pref is "system".
     if (!bindSystemWatch._bound) {
       const onChange = () => {
-        const pref = (function () { try { return localStorage.getItem(THEME_KEY); } catch (e) { return null; } })() || 'system';
+        const pref = storedThemePref() || 'system';
         if (pref === 'system') applyTheme('system');
       };
       if (mq.addEventListener) mq.addEventListener('change', onChange);
@@ -1673,8 +1831,7 @@
     }
   }
   function initTheme() {
-    let pref = 'system';
-    try { pref = localStorage.getItem(THEME_KEY) || 'system'; } catch (e) {}
+    const pref = storedThemePref() || 'system';
     bindSystemWatch(pref);
     applyTheme(pref);
   }
@@ -1682,6 +1839,71 @@
   function renderSettingsMeta() {
     const m = $('about-machine'); if (m) m.textContent = state.thisMachine || '—';
     const c = $('about-count'); if (c) c.textContent = String(state.notes.length);
+    // Real version from the native host (window.__VERSION__ = Info.plist values,
+    // see docs/ui-contracts.md "Version Bridge"). Without it (plain browser,
+    // unbundled dev binary) the static #about-version markup is left untouched.
+    const v = $('about-version');
+    const ver = window.__VERSION__ || {};
+    if (v && ver.version) v.textContent = 'Version ' + ver.version + (ver.build ? ' (' + ver.build + ')' : '');
+    renderRetentionRow(); // keep the 7/30/90 picker in sync with boot/API settings
+  }
+
+  // ------------------------------------------------------------- machine details popover
+  // Vision MUST f8659e18: right-clicking a machine row shows its details. Renders
+  // synchronously from the cached machineDetails(id), then refreshes in place when the
+  // async requestMachineDetails(...) bridge answers (native hosts may hold fresher rows).
+  let machinePopId = null;
+
+  function openMachinePop(e, detail) {
+    const pop = $('machine-pop');
+    if (!pop || !detail || !detail.id) return;
+    machinePopId = detail.id;
+    fillMachinePop(pop, detail);
+    pop.hidden = false;
+    // Position at the cursor, clamped to the viewport (same rule as #ctx-menu).
+    const mw = pop.offsetWidth || 260, mh = pop.offsetHeight || 190;
+    let x = (e && e.clientX) || 0, y = (e && e.clientY) || 0;
+    if (x + mw > window.innerWidth - 8) x = Math.max(8, window.innerWidth - mw - 8);
+    if (y + mh > window.innerHeight - 8) y = Math.max(8, window.innerHeight - mh - 8);
+    pop.style.left = x + 'px';
+    pop.style.top = y + 'px';
+    const shownFor = machinePopId;
+    requestMachineDetails(detail.id).then(fresh => {
+      if (pop.hidden || machinePopId !== shownFor || !fresh || fresh.id !== shownFor) return;
+      fillMachinePop(pop, fresh);
+    });
+  }
+
+  function fillMachinePop(pop, m) {
+    pop.innerHTML = '';
+    const head = el('div', 'mp-head');
+    head.appendChild(el('span', 'mp-name', m.displayName || m.id));
+    if (state.thisMachine && machineAliases(m).has(state.thisMachine)) {
+      head.appendChild(el('span', 'mp-badge', 'This machine'));
+    }
+    pop.appendChild(head);
+    const extraCounts = (m.archivedNoteCount || 0) + (m.trashNoteCount || 0);
+    const rows = [
+      ['ID', m.id + (m.slug && m.slug !== m.id ? ' · ' + m.slug : '')],
+      ['Platform', m.platform || '—'],
+      ['Status', m.status || 'unknown'],
+      ['Notes', String(m.noteCount || 0) + ' active' + (extraCounts
+        ? ' · ' + (m.archivedNoteCount || 0) + ' archived · ' + (m.trashNoteCount || 0) + ' in trash' : '')],
+      ['Last activity', m.recentActivityAt ? relTime(m.recentActivityAt) : '—'],
+      ['Last sync', m.syncedAt ? relTime(m.syncedAt) : '—'],
+    ];
+    rows.forEach(pair => {
+      const row = el('div', 'mp-row');
+      row.appendChild(el('span', 'mp-key', pair[0]));
+      row.appendChild(el('span', 'mp-val', pair[1]));
+      pop.appendChild(row);
+    });
+  }
+
+  function closeMachinePop() {
+    const pop = $('machine-pop');
+    if (pop && !pop.hidden) pop.hidden = true;
+    machinePopId = null;
   }
 
   // ------------------------------------------------------------------ context menu (Feature 3)
@@ -1691,6 +1913,17 @@
     const menu = $('ctx-menu');
     if (!menu) return;
     ctxNoteId = noteId;
+    // Status-aware items: Archive only on active notes, Restore only on archived/trashed
+    // ones, and Delete reads "Delete permanently" inside Trash.
+    const note = noteById(noteId);
+    const status = (note && note.status) || 'active';
+    menu.querySelectorAll('.ctx-item[data-act]').forEach(item => {
+      const act = item.getAttribute('data-act');
+      if (act === 'archive') item.hidden = status !== 'active';
+      if (act === 'move') item.hidden = status !== 'active';
+      if (act === 'restore') item.hidden = status === 'active';
+      if (act === 'delete') item.textContent = status === 'trash' ? 'Delete permanently' : 'Delete';
+    });
     menu.hidden = false;
     // Position at the cursor, clamped to the viewport.
     const mw = menu.offsetWidth || 180, mh = menu.offsetHeight || 160;
@@ -1716,19 +1949,22 @@
     if (!note) return;
     if (act === 'rename') startInlineRename(id);
     else if (act === 'duplicate') duplicateNote(note);
+    else if (act === 'move') promptMoveNote(note.id);
     else if (act === 'copy') copyNoteText(note);
     else if (act === 'archive') archiveNote(note.id);
-    else if (act === 'move') promptMoveNote(note.id);
     else if (act === 'restore') restoreNote(note.id);
     else if (act === 'delete') deleteNote(note);
   }
 
   // Inline-rename: swap the row's title span for an input, commit on Enter/blur.
+  // Works on BOTH the sidebar rows (.note-row) and the Notes-page rows (.np-row), so
+  // renaming from the full list is never a silent no-op.
   function startInlineRename(id) {
-    const row = document.querySelector('.note-row[data-id="' + cssEsc(id) + '"]');
+    const esc = cssEsc(id);
+    const row = document.querySelector('.note-row[data-id="' + esc + '"], .np-row[data-id="' + esc + '"]');
     const note = noteById(id);
     if (!row || !note) return;
-    const titleSpan = row.querySelector('.note-title');
+    const titleSpan = row.querySelector('.note-title, .np-row-title');
     if (!titleSpan) return;
     const input = el('input', 'note-rename');
     input.type = 'text';
@@ -1755,6 +1991,7 @@
       }
       renderNotesList();
       renderHome();
+      if (state.screen === 'noteslist') renderNotesPage(); // Notes page shows the result too
     };
     input.addEventListener('keydown', (ev) => {
       if (ev.key === 'Enter') { ev.preventDefault(); commit(true); }
@@ -1782,18 +2019,8 @@
   }
 
   function copyNoteText(note) {
-    const text = note.body || '';
-    const fallback = () => {
-      try {
-        const ta = document.createElement('textarea');
-        ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
-        document.body.appendChild(ta); ta.select();
-        document.execCommand('copy'); document.body.removeChild(ta);
-      } catch (e) { /* ignore */ }
-    };
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(() => toast('Copied to clipboard'), () => { fallback(); toast('Copied to clipboard'); });
-    } else { fallback(); toast('Copied to clipboard'); }
+    copyToClipboard(note.body || '');
+    toast('Copied to clipboard');
   }
 
   function archiveNote(id) {
@@ -1802,7 +2029,6 @@
     note.status = 'archived';
     note.archivedAt = new Date().toISOString();
     note.trashedAt = '';
-    note.trashMachine = '';
     note.trashExpiresAt = '';
     note.updatedAt = new Date().toISOString();
     postNative('archive', serializeNote(note));
@@ -1816,7 +2042,6 @@
     note.status = 'active';
     note.archivedAt = '';
     note.trashedAt = '';
-    note.trashMachine = '';
     note.trashExpiresAt = '';
     note.restoredAt = new Date().toISOString();
     note.updatedAt = note.restoredAt;
@@ -1830,7 +2055,6 @@
     const now = new Date().toISOString();
     note.status = 'trash';
     note.trashedAt = now;
-    note.trashMachine = note.machine || state.thisMachine;
     note.trashExpiresAt = addDaysISO(now, state.settings.trashRetentionDays);
     note.updatedAt = now;
     postNative('trash', serializeNote(note), { confirmed: !!(options && options.confirmed) });
@@ -1851,38 +2075,40 @@
     render();
   }
 
-		  function moveNoteToMachine(id, machine, friendlyName) {
-		    const note = noteById(id);
-		    const requested = String(machine || '').trim();
-		    if (!note || !requested) return null;
-		    const destination = machineDetails(requested);
-		    const target = destination.id || requested;
-		    const targetMachineFriendlyName = friendlyName || destination.friendlyName || destination.displayName || '';
-		    if (noteMatchesMachine(note, target) && note.machine === target) {
-		      selectMachine(target, { noteId: id, reason: 'move' });
-		      return note;
-		    }
-		    if (!note.originMachine) note.originMachine = note.machine || state.thisMachine;
-		    note.previousMachine = note.machine || '';
-		    note.machine = target;
-	    note.targetMachineFriendlyName = targetMachineFriendlyName;
-	    note.movedAt = new Date().toISOString();
-		    note.updatedAt = note.movedAt;
-		    postNative('move', serializeNote(note));
-		    const selectedMachine = selectMachine(target, { noteId: note.id, reason: 'move' });
-		    dispatchNoteEvent('hasna:note-move', note, {
-		      targetMachine: target,
-		      targetMachineFriendlyName,
-		      selectedMachine,
-		      selectedNoteId: state.selectedId,
-		      view: viewSnapshot(),
-		    });
-		    return note;
-		  }
+  // Quick action "move to a machine" (vision 4d696e4b): re-attribute a note to another
+  // machine — a plain informational update of `machine` (+ friendly name) in schema v2.
+  // The same mutation ships in the CLI ("notes move") and MCP (notes_move_to_machine) —
+  // app parity is a vision MUST.
+  function moveNoteToMachine(id, machine, friendlyName) {
+    const note = noteById(id);
+    const requested = String(machine || '').trim();
+    if (!note || !requested) return null;
+    const destination = machineDetails(requested);
+    const target = destination.id || requested;
+    const targetMachineFriendlyName = friendlyName || destination.friendlyName || destination.displayName || '';
+    if (note.machine === target) {
+      selectMachine(target, { noteId: id, reason: 'move' });
+      return note;
+    }
+    note.machine = target;
+    note.machineFriendlyName = targetMachineFriendlyName;
+    note.updatedAt = new Date().toISOString();
+    postNative('move', serializeNote(note));
+    const selectedMachine = selectMachine(target, { noteId: note.id, reason: 'move' });
+    dispatchNoteEvent('hasna:note-move', note, {
+      targetMachine: target,
+      targetMachineFriendlyName,
+      selectedMachine,
+      selectedNoteId: state.selectedId,
+      view: viewSnapshot(),
+    });
+    return note;
+  }
 
   function promptMoveNote(id) {
-    const machines = machineDisplays().filter(m => m.id !== ALL);
-    const target = window.prompt('Move to machine', machines[0] ? machines[0].id : state.thisMachine);
+    const note = noteById(id);
+    const suggestion = machineDetailsList().map(m => m.id).find(m => !note || m !== note.machine);
+    const target = window.prompt('Move to machine', suggestion || state.thisMachine);
     if (target) moveNoteToMachine(id, target);
   }
 
@@ -1900,13 +2126,10 @@
       createdBy: note.createdByName || note.author || 'Unknown',
       createdByActorType: note.createdByActorType || 'human',
       createdAt: note.createdAt,
-      sourceMachine: note.sourceMachine || note.machine,
-      sourceMachineFriendlyName: note.sourceMachineFriendlyName || bootInfo.sourceMachineFriendlyName || '',
-      originMachine: note.originMachine || note.machine,
-      originMachineFriendlyName: note.originMachineFriendlyName || bootInfo.originMachineFriendlyName || '',
+      machine: note.machine,
+      machineFriendlyName: note.machineFriendlyName || bootInfo.machineFriendlyName || '',
       currentMachine: note.machine,
-      openedFrom: note.openedFrom || '',
-      sourceContext: note.sourceContext || '',
+      rev: Number(note.rev) >= 1 ? Math.floor(Number(note.rev)) : 1,
     };
   }
 
@@ -1928,7 +2151,23 @@
 
   function expiredTrashNotes() {
     const now = Date.now();
-    return state.notes.filter(n => n.status === 'trash' && n.trashExpiresAt && Date.parse(n.trashExpiresAt) <= now);
+    return state.notes.filter(n => {
+      if (n.status !== 'trash') return false;
+      const expires = trashExpiryMs(n);
+      return !Number.isNaN(expires) && expires <= now;
+    });
+  }
+
+  // Retention enforcement: on boot and hydrate, purge expired Trash through the same
+  // strong-confirmation gate as the manual API (contract: cleanup MUST keep confirmation
+  // gating). Ask at most once per session — declining must not re-prompt on the hydrate
+  // that follows every save.
+  let trashCleanupPrompted = false;
+  function maybeCleanupExpiredTrash() {
+    if (trashCleanupPrompted) return;
+    if (!expiredTrashNotes().length) return;
+    trashCleanupPrompted = true;
+    cleanupExpiredTrash();
   }
 
   function confirmExpiredTrashCleanup(expired) {
@@ -1956,6 +2195,25 @@
     render();
   }
 
+  // Trash retention setting. Clamps to >= 1 day (0 or negative → 1, like the Swift
+  // side) so a bad value can never silently disable retention; non-numeric input keeps
+  // the 30-day default. Settings → Appearance exposes 7/30/90.
+  function setTrashRetentionDays(days) {
+    const n = Number(days == null ? 30 : days);
+    state.settings.trashRetentionDays = Number.isFinite(n) ? Math.max(1, Math.round(n)) : 30;
+    postNative('settings', state.settings);
+    renderRetentionRow();
+    return Object.assign({}, state.settings);
+  }
+
+  function renderRetentionRow() {
+    const row = $('retention-row');
+    if (!row) return;
+    row.querySelectorAll('.retention-opt').forEach(btn => {
+      btn.classList.toggle('active', Number(btn.getAttribute('data-days')) === Number(state.settings.trashRetentionDays));
+    });
+  }
+
   function noteTitleForConfirm(note) {
     return (note && note.title && note.title.trim()) || 'Untitled Note';
   }
@@ -1979,7 +2237,8 @@
   function deleteNote(note) {
     const permanent = note.status === 'trash';
     if (!confirmNoteDelete(note, { permanent })) return null;
-    if (permanent) { purgeNote(note.id, { confirmed: true }); return; }
+    // Both paths return the serialized note (consistent API result either way).
+    if (permanent) { purgeNote(note.id, { confirmed: true }); return serializeNote(note); }
     trashNote(note, { confirmed: true });
     render();
     return serializeNote(note);
@@ -2007,12 +2266,14 @@
 	  const rec = {
 	    status: 'idle',       // idle | recording | paused | stopping | transcribing | complete | error
 	    mode: 'bounded',      // realtime | bounded
-	    provider: 'bounded',
+	    provider: 'openai-bounded', // contract values: openai | elevenlabs | openai-bounded
     mediaRecorder: null,
     chunks: [],
     stream: null,
     timer: null,
     started: 0,
+    pausedAccumMs: 0,     // total time spent paused (excluded from elapsed)
+    pausedAt: 0,          // Date.now() when the current pause began (0 = not paused)
     busy: false,
     ws: null,
     audioContext: null,
@@ -2031,8 +2292,16 @@
   const nativeRecording = () =>
     !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.recording);
 
+  // Elapsed recording time EXCLUDING paused time (the native status item holds the
+  // timer while paused — the web timer must agree).
+  function recElapsedMs() {
+    if (!rec.started) return 0;
+    const pausedNow = rec.pausedAt ? (Date.now() - rec.pausedAt) : 0;
+    return Math.max(0, Date.now() - rec.started - rec.pausedAccumMs - pausedNow);
+  }
+
   function recElapsed() {
-    const s = rec.started ? Math.floor((Date.now() - rec.started) / 1000) : 0;
+    const s = Math.floor(recElapsedMs() / 1000);
     const m = Math.floor(s / 60);
     return m + ':' + String(s % 60).padStart(2, '0');
   }
@@ -2097,13 +2366,12 @@
 	    if (!extra || !extra.tick) {
 	      const verb = recLifecycleVerb(rec.status);
 	      if (verb) {
-	        const elapsedMs = rec.started ? (Date.now() - rec.started) : 0;
-	        postWindow('recording', { state: verb, status: rec.status, elapsedMs: elapsedMs, progress: recordingSnapshot().progress });
+	        postWindow('recording', { state: verb, status: rec.status, elapsedMs: recElapsedMs(), progress: recordingSnapshot().progress });
 	      }
 	    } else {
 	      // Lightweight ticking update so the menu-bar timer can stay current.
 	      if (rec.status === 'recording') {
-	        postWindow('recording', { state: 'tick', status: rec.status, elapsedMs: rec.started ? (Date.now() - rec.started) : 0, progress: recordingSnapshot().progress });
+	        postWindow('recording', { state: 'tick', status: rec.status, elapsedMs: recElapsedMs(), progress: recordingSnapshot().progress });
 	      }
 	    }
     lastEmittedRecStatus = rec.status;
@@ -2119,12 +2387,13 @@
     }
   }
 
-  // Drive the redesigned record UI: timer INSIDE the circle, stop-square on hover (CSS),
-  // pause/resume side control, the persistent fixed recording pill (every screen), and the
+  // Drive the record UI: timer INSIDE the circle (stop-square revealed on hover, CSS),
+  // inline pause/resume, the minimal top-right indicator on non-Home screens, and the
   // transcript surface. No "Record voice note" / "tap to stop" labels.
 	  function setRecUI(stateName) {
-    // The recording control now lives INSIDE the quick-note pill; pause/stop controls
-    // live in the persistent bottom pill (no duplicate large surface on Home).
+    // Single recording surface: the quick-note composer IS the recorder on Home
+    // (timer in the circle, inline pause, transcript below); everywhere else the
+    // minimal top-right indicator (renderRecPill) carries the controls.
     const wrap = $('qn-form');
     const recBtn = $('rec-btn');
     const timerIn = $('rec-timer-in');
@@ -2150,13 +2419,16 @@
     renderTranscript();
   }
 
-  // The persistent fixed recording pill — visible on EVERY screen whenever recording is
-  // active (independent of data-active-shell). Updates the timer + pause/resume label.
+  // Minimal recording indicator (top-right): recording survives in-app navigation, so
+  // while any OTHER screen is showing this small pill carries the timer + pause/stop.
+  // On Home the composer itself is the single recording surface — no duplicate there.
 	  function renderRecPill() {
 	    const pill = $('rec-pill');
 	    if (!pill) return;
 	    const active = (rec.status === 'recording' || rec.status === 'paused' || rec.status === 'stopping' || rec.status === 'transcribing');
-	    pill.hidden = !active;
+	    const onHomeComposer = state.screen === 'home' &&
+	      (!win || win.getAttribute('data-active-shell') === 'app');
+	    pill.hidden = !active || onHomeComposer;
 	    if (!active) return;
 	    pill.classList.toggle('paused', rec.status === 'paused');
 	    pill.classList.toggle('transcribing', rec.status === 'transcribing');
@@ -2273,7 +2545,16 @@
       (cfg.token ? '&token=' + encodeURIComponent(cfg.token) : '');
     const ws = new WebSocket(wsURL);
     rec.ws = ws;
+    // A socket that neither opens nor errors would leave rec.busy=true forever and the
+    // record button dead — give the connection a hard deadline.
+    const openDeadline = setTimeout(() => {
+      if (rec.ws !== ws || rec.status !== 'idle') return;
+      try { ws.close(); } catch (e) {}
+      failRecording('Realtime transcription did not connect');
+    }, 8000);
     ws.addEventListener('open', () => {
+      clearTimeout(openDeadline);
+      if (rec.ws !== ws) return;   // superseded/cancelled while connecting
       setupRealtimeAudio(stream);
       beginRecordingClock();
     });
@@ -2284,16 +2565,9 @@
         rec.provider = msg.provider || rec.provider;
         emitRecordingState();
 	      } else if (msg.type === 'transcript.delta') {
-	        rec.partialTranscript = msg.text || msg.delta || '';
-	        if (rec.status === 'transcribing') setRecordingProgress('receiving-final-transcript', null);
-	        emitTranscript('hasna:transcript-delta', rec.partialTranscript, msg);
-	        emitRecordingState();
+	        applyTranscript(msg.text || msg.delta || '', false, msg);
 	      } else if (msg.type === 'transcript.completed') {
-	        rec.finalTranscript = [rec.finalTranscript, msg.text || msg.transcript || ''].filter(Boolean).join(' ').trim();
-	        rec.partialTranscript = '';
-	        if (rec.status === 'transcribing') setRecordingProgress('finalizing-transcript', 0.9);
-	        emitTranscript('hasna:transcript-complete', rec.finalTranscript, msg);
-        emitRecordingState();
+	        applyTranscript(msg.text || msg.transcript || '', true, msg);
         if (rec.status === 'transcribing') {
           if (rec.finalizeTimer) { clearTimeout(rec.finalizeTimer); rec.finalizeTimer = null; }
           setTimeout(finishRecordingWithText, 120);
@@ -2303,9 +2577,11 @@
       }
     });
     ws.addEventListener('error', () => {
+      clearTimeout(openDeadline);
       failRecording('Realtime transcription failed');
     });
     ws.addEventListener('close', () => {
+      clearTimeout(openDeadline);
       if (rec.status === 'transcribing') finishRecordingWithText();
     });
   }
@@ -2326,6 +2602,8 @@
 
 	  function beginRecordingClock() {
 	    rec.started = Date.now();
+	    rec.pausedAccumMs = 0;
+	    rec.pausedAt = 0;
 	    rec.status = 'recording';
 	    rec.busy = false;
 	    setRecordingProgress('', null);
@@ -2358,6 +2636,9 @@
     if (rec.status !== 'recording') return;
     if (rec.mediaRecorder && rec.mediaRecorder.state === 'recording') rec.mediaRecorder.pause();
     rec.status = 'paused';
+    // Pause the clock too: mark when the pause began and stop the 500ms tick.
+    rec.pausedAt = Date.now();
+    if (rec.timer) { clearInterval(rec.timer); rec.timer = null; }
     emitRecordingState();
   }
 
@@ -2365,12 +2646,17 @@
     if (rec.status !== 'paused') return;
     if (rec.mediaRecorder && rec.mediaRecorder.state === 'paused') rec.mediaRecorder.resume();
     rec.status = 'recording';
+    // Fold the finished pause into the excluded total and restart the tick.
+    if (rec.pausedAt) { rec.pausedAccumMs += Date.now() - rec.pausedAt; rec.pausedAt = 0; }
+    if (!rec.timer) rec.timer = setInterval(() => { emitRecordingState({ tick: true }); }, 500);
     emitRecordingState();
   }
 
 	  function stopRecording() {
 	    if (rec.status !== 'recording' && rec.status !== 'paused') return;
 	    if (rec.timer) { clearInterval(rec.timer); rec.timer = null; }
+	    // Stopping from paused: close out the open pause so elapsed stays frozen correctly.
+	    if (rec.pausedAt) { rec.pausedAccumMs += Date.now() - rec.pausedAt; rec.pausedAt = 0; }
 	    rec.busy = true;
 	    rec.status = 'stopping';
 	    setRecordingProgress('stopping', 0.2);
@@ -2432,8 +2718,8 @@
     stopStream();
     try { if (rec.ws && rec.ws.readyState === WebSocket.OPEN) rec.ws.close(); } catch (e) {}
 	    if (text) {
-	      quickCreate('', transcriptToNoteBody(text));
-	      toast('Voice note added');
+	      // Voice notes land through the same single quick-capture path as typed ones.
+	      captureQuickNote(transcriptToNoteBody(text), { toast: 'Voice note added' });
 	    } else if (rec.status !== 'error') {
 	      toast('Could not transcribe audio');
 	    }
@@ -2448,6 +2734,8 @@
 	    rec.status = 'idle';
 	    rec.busy = false;
 	    rec.started = 0;
+	    rec.pausedAccumMs = 0;
+	    rec.pausedAt = 0;
 	    rec.mediaRecorder = null;
     rec.ws = null;
     rec.chunks = [];
@@ -2535,6 +2823,183 @@
     setRecUI(rec.status);
   }
 
+  // ------------------------------------------------------------------ markdown UI
+  // The ONLY formatting surfaces (vision 8f9b4bb9): a minimal selection popover
+  // (bold / italic / code / link) over selected editor text, and a "/" slash menu
+  // rendered from markdown.slashCommands(). Both route through editorCommand(...)
+  // (= window.PersonalNotes.editor.command). Explicitly NO toolbar.
+
+  // Approximate the viewport point of a caret index inside the editor textarea by
+  // mirroring its text into a hidden div (textareas expose no selection rects).
+  // Returns null when layout APIs are unavailable (headless harness) — callers then
+  // simply skip positioning.
+  function editorCaretPoint(ta, index) {
+    try {
+      if (!ta.getBoundingClientRect || !window.getComputedStyle) return null;
+      const rect = ta.getBoundingClientRect();
+      const cs = window.getComputedStyle(ta);
+      const mirror = document.createElement('div');
+      ['fontFamily', 'fontSize', 'fontWeight', 'lineHeight', 'letterSpacing',
+        'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'boxSizing',
+        'tabSize'].forEach(prop => { mirror.style[prop] = cs[prop]; });
+      mirror.style.position = 'fixed';
+      mirror.style.visibility = 'hidden';
+      mirror.style.whiteSpace = 'pre-wrap';
+      mirror.style.overflowWrap = 'break-word';
+      mirror.style.width = rect.width + 'px';
+      mirror.textContent = String(ta.value || '').slice(0, index);
+      const marker = document.createElement('span');
+      marker.textContent = '\u200b';
+      mirror.appendChild(marker);
+      document.body.appendChild(mirror);
+      const mirrorRect = mirror.getBoundingClientRect();
+      const markerRect = marker.getBoundingClientRect();
+      document.body.removeChild(mirror);
+      return {
+        x: rect.left + (markerRect.left - mirrorRect.left),
+        y: rect.top + (markerRect.top - mirrorRect.top) - (ta.scrollTop || 0),
+        lineHeight: markerRect.height || 18,
+      };
+    } catch (e) { return null; }
+  }
+
+  // Position a fixed floating element at (x, y), clamped to the viewport.
+  function placeFloating(elm, x, y) {
+    const pad = 8;
+    const w = elm.offsetWidth || 180;
+    const h = elm.offsetHeight || 40;
+    let left = x, top = y;
+    if (window.innerWidth && left + w > window.innerWidth - pad) left = window.innerWidth - w - pad;
+    if (window.innerHeight && top + h > window.innerHeight - pad) top = window.innerHeight - h - pad;
+    elm.style.left = Math.max(pad, left) + 'px';
+    elm.style.top = Math.max(pad, top) + 'px';
+  }
+
+  // ---------- selection popover (bold / italic / code / link) ----------
+  function updateMdPop() {
+    const pop = $('md-pop');
+    const ta = $('editor-body');
+    if (!pop || !ta) return;
+    const note = noteById(state.selectedId);
+    const hasSelection = !!note && state.screen === 'notes' &&
+      Number(ta.selectionEnd) > Number(ta.selectionStart);
+    if (!hasSelection) { pop.hidden = true; return; }
+    pop.hidden = false;
+    const point = editorCaretPoint(ta, Number(ta.selectionStart));
+    if (point) placeFloating(pop, point.x, point.y - (pop.offsetHeight || 34) - 6);
+  }
+  function closeMdPop() {
+    const pop = $('md-pop');
+    if (pop) pop.hidden = true;
+  }
+  function onEditorSelect() {
+    updateMdPop();
+  }
+  function onMdPopButton(e) {
+    if (e) e.preventDefault();
+    const id = e.currentTarget.getAttribute('data-md');
+    if (!id) return;
+    editorCommand(id);
+    closeMdPop();
+    const ta = $('editor-body'); if (ta) ta.focus();
+  }
+  // pointerdown (not click) would blur the textarea and collapse the selection before
+  // the command could read it — swallow it so the selection survives to the click.
+  function onMdPopPointerDown(e) { e.preventDefault(); }
+
+  // ---------- "/" slash menu ----------
+  let slashMenu = { open: false, start: -1, query: '', index: 0, items: [] };
+
+  // A slash trigger is a line that reads exactly "/query" up to the caret.
+  function slashContext(ta) {
+    const caret = Number(ta.selectionStart) || 0;
+    if ((Number(ta.selectionEnd) || 0) !== caret) return null;
+    const value = String(ta.value || '');
+    const lineStart = value.lastIndexOf('\n', caret - 1) + 1;
+    const m = /^\/([a-z0-9-]*)$/i.exec(value.slice(lineStart, caret));
+    if (!m) return null;
+    return { start: lineStart, query: m[1].toLowerCase(), caret };
+  }
+
+  function slashMatches(query) {
+    if (!query) return MARKDOWN_COMMANDS.slice();
+    return MARKDOWN_COMMANDS.filter(cmd =>
+      cmd.id.toLowerCase().indexOf(query) >= 0 || cmd.label.toLowerCase().indexOf(query) >= 0);
+  }
+
+  function updateSlashMenu() {
+    const menu = $('slash-menu');
+    const ta = $('editor-body');
+    if (!menu || !ta) return;
+    const note = noteById(state.selectedId);
+    const ctx = (note && state.screen === 'notes') ? slashContext(ta) : null;
+    const items = ctx ? slashMatches(ctx.query) : [];
+    if (!ctx || !items.length) { closeSlashMenu(); return; }
+    const index = (slashMenu.open && slashMenu.query === ctx.query)
+      ? Math.min(slashMenu.index, items.length - 1) : 0;
+    slashMenu = { open: true, start: ctx.start, query: ctx.query, index, items };
+    renderSlashMenu(menu, ta);
+  }
+
+  function renderSlashMenu(menu, ta) {
+    menu.innerHTML = '';
+    slashMenu.items.forEach((cmd, i) => {
+      const item = el('button', 'slash-item' + (i === slashMenu.index ? ' active' : ''));
+      item.type = 'button';
+      item.dataset.command = cmd.id;
+      item.appendChild(el('span', 'slash-label', cmd.label));
+      // One-line markdown hint (the code-block metadata holds real newlines now).
+      item.appendChild(el('span', 'slash-hint', String(cmd.markdown || '').split('\n')[0]));
+      // pointerdown, not click: apply before the textarea blur can dismiss the menu.
+      item.addEventListener('pointerdown', (ev) => { ev.preventDefault(); applySlashCommand(cmd.id); });
+      menu.appendChild(item);
+    });
+    menu.hidden = false;
+    const point = editorCaretPoint(ta, slashMenu.start);
+    if (point) placeFloating(menu, point.x, point.y + (point.lineHeight || 18) + 4);
+  }
+
+  function closeSlashMenu() {
+    slashMenu = { open: false, start: -1, query: '', index: 0, items: [] };
+    const menu = $('slash-menu');
+    if (menu) menu.hidden = true;
+  }
+
+  function applySlashCommand(commandId) {
+    const ta = $('editor-body');
+    const note = noteById(state.selectedId);
+    if (!ta || !note || !slashMenu.open) return;
+    const start = slashMenu.start;
+    const caret = Number(ta.selectionStart) || 0;
+    closeSlashMenu();
+    if (caret < start) return;
+    // Remove the "/query" trigger text, then apply the command at that spot.
+    ta.value = String(ta.value || '').slice(0, start) + String(ta.value || '').slice(caret);
+    if (typeof ta.setSelectionRange === 'function') ta.setSelectionRange(start, start);
+    else { ta.selectionStart = start; ta.selectionEnd = start; }
+    editorCommand(commandId);
+    ta.focus();
+  }
+
+  function onEditorBodyKeydown(e) {
+    if (!slashMenu.open) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const len = slashMenu.items.length;
+      slashMenu.index = (slashMenu.index + (e.key === 'ArrowDown' ? 1 : -1) + len) % len;
+      const menu = $('slash-menu'); const ta = $('editor-body');
+      if (menu && ta) renderSlashMenu(menu, ta);
+      return;
+    }
+    if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault();
+      const cmd = slashMenu.items[slashMenu.index];
+      if (cmd) applySlashCommand(cmd.id);
+      return;
+    }
+    if (e.key === 'Escape') { e.preventDefault(); closeSlashMenu(); }
+  }
+
   // ------------------------------------------------------------------ event wiring
   let started = false;
 
@@ -2542,6 +3007,7 @@
   function onTitleInput() {
     const n = noteById(state.selectedId);
     if (!n) return;
+    markEditBase(n); // in-flight edit: protect these keystrokes from hydrate
     // If the user typed a non-default title, mark it manual so we never auto-title it.
     const v = $('editor-title').value;
     if (!isDefaultTitle(v)) {
@@ -2556,30 +3022,62 @@
   function onBodyInput() {
     const n = noteById(state.selectedId);
     if (!n) return;
+    markEditBase(n); // in-flight edit: protect these keystrokes from hydrate
     scheduleSave();
     maybeAutoTitle();
+    updateSlashMenu(); // "/" at the start of a line opens the slash menu
+    updateMdPop();     // typing collapses the selection — hide the popover
   }
   function onEditorBlur() { commitEdit(); }
-  function onSearchInput(e) {
-    state.query = e.target.value || '';
-    state.noteListLimit = 10;
-    // If the selected note is filtered out, fall through to newest visible in renderEditor.
-    renderNotesList();
-    renderEditor();
-  }
   function onNewNote(e) { if (e) e.preventDefault(); newNote(); }
   function onDelete(e) { if (e) e.preventDefault(); deleteCurrent(); }
+  // Copy the entire note as Markdown (content-header, editor only): the title as an H1
+  // when the note has a real one, then the Markdown body. Checkmark-icon feedback only.
+  function onCopyNote(e) {
+    if (e) e.preventDefault();
+    const note = noteById(state.selectedId);
+    if (!note) return;
+    const title = (note.title || '').trim();
+    const body = note.body || note.content || '';
+    copyToClipboard(title && !isDefaultTitle(title) ? '# ' + title + '\n\n' + body : body);
+    copyFeedback($('note-copy'));
+  }
   function onOpenHome(e) { if (e) e.preventDefault(); showHome(); }
   function onOpenChat(e) { if (e) e.preventDefault(); showChatPage(); }
-  function onOpenLabels(e) { if (e) e.preventDefault(); showLabelsPage(); }
+  function onOpenTrash(e) { if (e) e.preventDefault(); showTrash(); }
+  function onOpenArchive(e) { if (e) e.preventDefault(); showArchive(); }
+  // Settings → Appearance → Trash: the 7/30/90-day retention picker.
+  function onRetentionOpt(e) {
+    if (e) e.preventDefault();
+    setTrashRetentionDays(Number(e.currentTarget.getAttribute('data-days')));
+  }
   function onMinimize(e) { if (e) e.preventDefault(); setCompact(true); }
   function onCompactExpand(e) { if (e) e.preventDefault(); setCompact(false); }
-  // "View more" under Machines opens the fuller list in Settings → Machines.
-  function onMachinesMore(e) {
+  // The one subtle "view all notes" path under Home's recent list.
+  function onViewAllNotes(e) {
     if (e) e.preventDefault();
-    showSettings('machines');
+    state.statusFilter = 'active';
+    showNotesPage();
   }
-  function onAllNotes(e) { if (e) e.preventDefault(); showNotesPage(); }
+  // Collapsible sidebar sections (Notes / Labels).
+  function onToggleNotesSection(e) {
+    if (e) e.preventDefault();
+    collapsedSections.notes = !collapsedSections.notes;
+    const sec = $('sec-notes');
+    if (sec) sec.classList.toggle('collapsed', collapsedSections.notes);
+    const wrap = $('notes-wrap');
+    if (wrap) wrap.hidden = collapsedSections.notes;
+  }
+  function onToggleLabelsSection(e) {
+    if (e) e.preventDefault();
+    collapsedSections.labels = !collapsedSections.labels;
+    renderLabels();
+  }
+  // Machines dropdown (top of the sidebar).
+  function onMachinesMenuToggle(e) {
+    if (e) e.preventDefault();
+    setMachinesMenu(!machinesMenuOpen);
+  }
   function onChatSubmit(e) {
     if (e) e.preventDefault();
     const input = $('chat-input');
@@ -2598,20 +3096,48 @@
     createLabelLocal(label);
     input.value = '';
   }
-  // Home quick-note submit: create without navigating, clear, toast.
-  function onQuickNote(e) {
-    if (e) e.preventDefault();
-    const inp = $('qn-input'); if (!inp) return;
-    const v = inp.value.trim();
-    if (!v) return;
-    quickCreate(v, '');
+  // The ONE quick-capture path: Home composer, compact window, and voice notes all
+  // create through here. Text is stored as the note BODY (never the title), so previews
+  // show real content and AI auto-title can name the note (3-4 words, cheap model).
+  function captureQuickNote(text, opts) {
+    const body = String(text || '').trim();
+    if (!body) return null;
+    const note = quickCreate('', body);
+    toast((opts && opts.toast) || 'Note added');
+    return note;
+  }
+  // Shared submit for the Home composer + compact window forms.
+  function submitQuickCapture(inputId) {
+    const inp = $(inputId);
+    if (!inp || !captureQuickNote(inp.value)) return;
     inp.value = '';
     inp.focus();
-    updateComposerControls();
-    toast('Note added');
+    if (inputId === 'qn-input') {
+      growComposerInput();
+      updateComposerControls();
+    }
+  }
+  function onQuickNote(e) { if (e) e.preventDefault(); submitQuickCapture('qn-input'); }
+  function onCompactNote(e) { if (e) e.preventDefault(); submitQuickCapture('compact-input'); }
+  // The composer input is a textarea (grows as you type); Enter submits, Shift+Enter
+  // makes a new line.
+  function onQnKeydown(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      submitQuickCapture('qn-input');
+    }
+  }
+  function growComposerInput() {
+    const inp = $('qn-input');
+    if (!inp || typeof inp.scrollHeight !== 'number' || !inp.style) return;
+    inp.style.height = 'auto';
+    inp.style.height = Math.min(inp.scrollHeight, 120) + 'px';
   }
   // Toggle the pill's primary control: typed text → Add (submit); empty → Record.
-  function onQnInput() { updateComposerControls(); }
+  function onQnInput() {
+    growComposerInput();
+    updateComposerControls();
+  }
   function updateComposerControls() {
     const inp = $('qn-input'); const add = $('qn-add'); const recBtn = $('rec-btn');
     if (!inp) return;
@@ -2623,27 +3149,148 @@
     if (add) add.hidden = recActive || !hasText;
     if (recBtn) recBtn.hidden = !recActive && hasText;
   }
-  // Compact quick-note submit: same create-without-navigate + toast.
-  function onCompactNote(e) {
-    if (e) e.preventDefault();
-    const inp = $('compact-input'); if (!inp) return;
-    const v = inp.value.trim();
-    if (!v) return;
-    quickCreate(v, '');
-    inp.value = '';
-    inp.focus();
-    toast('Note added');
+  // ---------- Search popover (Cmd+K) ----------
+  function searchPopOpen() {
+    const pop = $('search-pop');
+    return !!(pop && !pop.hidden);
   }
+  function openSearchPop() {
+    const pop = $('search-pop');
+    if (!pop) return;
+    pop.hidden = false;
+    const input = $('search-pop-input');
+    if (input) { input.value = ''; input.focus(); }
+    renderSearchResults('');
+  }
+  function closeSearchPop() {
+    const pop = $('search-pop');
+    if (pop) pop.hidden = true;
+  }
+  function searchMatches(query) {
+    const q = String(query || '').trim().toLowerCase();
+    return sortNotes(state.notes.filter(n => n.status !== 'trash' && n.status !== 'archived'))
+      .filter(n => {
+        if (!q) return true;
+        const hay = ((n.title || '') + ' ' + (n.body || n.content || '') + ' ' + noteLabels(n).join(' ')).toLowerCase();
+        return hay.includes(q);
+      })
+      .slice(0, 12);
+  }
+  function renderSearchResults(query) {
+    const host = $('search-pop-results');
+    if (!host) return;
+    host.innerHTML = '';
+    const list = searchMatches(query);
+    if (!list.length) {
+      host.appendChild(el('div', 'sp-empty', String(query || '').trim() ? 'No matching notes' : 'No notes'));
+      return;
+    }
+    list.forEach(n => {
+      const row = el('div', 'sp-row');
+      row.dataset.id = n.id;
+      keyboardRow(row, 'Open note: ' + ((n.title && n.title.trim()) || 'Untitled Note'));
+      row.appendChild(el('div', 'sp-title', (n.title && n.title.trim()) || 'Untitled Note'));
+      const body = (n.body || n.content || '').replace(/\s+/g, ' ').trim();
+      row.appendChild(el('div', 'sp-sub', body.slice(0, 90) || 'No content'));
+      row.addEventListener('click', () => {
+        closeSearchPop();
+        selectNote(n.id);
+      });
+      host.appendChild(row);
+    });
+  }
+  function onSearchPopInput(e) {
+    renderSearchResults(e && e.target ? e.target.value : '');
+  }
+  function onSearchPopKeydown(e) {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const first = searchMatches(e.target ? e.target.value : '')[0];
+    if (!first) return;
+    closeSearchPop();
+    selectNote(first.id);
+  }
+
   function onGlobalKeydown(e) {
-    if (e.key === 'Escape') closeContextMenu();
+    // Cmd+K (Ctrl+K outside macOS) toggles the search popover from anywhere.
+    if ((e.metaKey || e.ctrlKey) && String(e.key).toLowerCase() === 'k') {
+      e.preventDefault();
+      if (searchPopOpen()) closeSearchPop();
+      else openSearchPop();
+      return;
+    }
+    if (e.key === 'Escape') {
+      closeContextMenu();
+      closeMachinePop();
+      closeSearchPop();
+      closeMdPop();
+      if (machinesMenuOpen) setMachinesMenu(false);
+    }
   }
   function onGlobalPointerDown(e) {
     const menu = $('ctx-menu');
     if (menu && !menu.hidden && !menu.contains(e.target)) closeContextMenu();
+    const mpop = $('machine-pop');
+    if (mpop && !mpop.hidden && !mpop.contains(e.target)) closeMachinePop();
+    const dd = $('machines-dd');
+    if (machinesMenuOpen && dd && !dd.contains(e.target)) setMachinesMenu(false);
+    const pop = $('search-pop');
+    if (pop && !pop.hidden && e.target === pop) closeSearchPop();
+    const mdPop = $('md-pop');
+    if (mdPop && !mdPop.hidden && !mdPop.contains(e.target)) closeMdPop();
+    const slash = $('slash-menu');
+    if (slash && !slash.hidden && !slash.contains(e.target)) closeSlashMenu();
   }
-  function onWindowScroll() { closeContextMenu(); }
+  // ---- scroll chrome (design spec §3.6/§3.7 — purely presentational) ----
+  // Overlay scrollbars: the thin thumb is invisible at rest and appears while the
+  // scroller is hovered OR actively scrolling — tag the scrolled element with
+  // .scrolling and clear it shortly after the last scroll event (Rule 15).
+  const scrollingTimers = new Map();
+  function markScrolling(node) {
+    if (!node || node.nodeType !== 1) return;
+    node.classList.add('scrolling');
+    clearTimeout(scrollingTimers.get(node));
+    scrollingTimers.set(node, setTimeout(() => {
+      node.classList.remove('scrolling');
+      scrollingTimers.delete(node);
+    }, 700));
+  }
+  // Scroll-edge fade under the content header (Rule 6): .scrolled on #content shows the
+  // soft gradient once page content actually sits beneath the header — never a border.
+  // Only the page-level scrollers drive it; inner scrollers (chat log, transcript) don't.
+  const PAGE_SCROLLERS = '.home,.np-inner,.chat-inner,.editor-scroll';
+  function syncHeaderScrollEdge(fromNode) {
+    const content = $('content');
+    if (!content) return;
+    let el = (fromNode && fromNode.nodeType === 1 && content.contains(fromNode)) ? fromNode : null;
+    if (!el) {
+      for (const s of content.querySelectorAll(PAGE_SCROLLERS)) {
+        if (s.offsetParent !== null) { el = s; break; }   // the visible page scroller
+      }
+    }
+    content.classList.toggle('scrolled', !!el && (el.scrollTop || 0) > 0);
+  }
+  function onWindowScroll(e) {
+    closeContextMenu(); closeMachinePop(); closeMdPop(); closeSlashMenu();
+    const node = (e && e.target && e.target.nodeType === 1) ? e.target : null;
+    markScrolling(node);
+    if (node && node.matches(PAGE_SCROLLERS)) syncHeaderScrollEdge(node);
+    // Sidebar nav scroll-edge fade (Rule 6): rows scrolling under the machines-dropdown
+    // chrome fade out via .nav-scrolled on the sidebar (styles.css .sidebar-top::after).
+    if (node && node.matches('.sidebar-nav')) {
+      const sb = node.closest('.sidebar');
+      if (sb) sb.classList.toggle('nav-scrolled', (node.scrollTop || 0) > 0);
+    }
+  }
   function onOpenSettings(e) { if (e) e.preventDefault(); showSettings('appearance'); }
-  function onSettingsBack(e) { if (e) e.preventDefault(); showApp(); }
+  function onSettingsBack(e) {
+    if (e) e.preventDefault();
+    // Restore the screen the user was on before Settings — screen state stays
+    // authoritative, so the next render() shows the right surface again.
+    state.screen = state.settingsReturnScreen || 'home';
+    showApp();
+    render();
+  }
   function onSettingsTab(e) {
     const item = e.currentTarget;
     const tab = item.getAttribute('data-tab');
@@ -2653,6 +3300,12 @@
   function onThemeCard(e) {
     const card = e.currentTarget;
     setTheme(card.getAttribute('data-theme'));
+  }
+  // Keyboard path for the DIV theme cards (Rule 14): Enter/Space selects like a click.
+  function onThemeCardKey(e) {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    onThemeCard(e);
   }
   // Pause/resume toggles (home record control + the persistent pill share the logic).
   function onRecPauseToggle(e) {
@@ -2665,31 +3318,55 @@
   function bind() {
     const titleEl = $('editor-title'), bodyEl = $('editor-body');
     if (titleEl) { titleEl.addEventListener('input', onTitleInput); titleEl.addEventListener('blur', onEditorBlur); }
-    if (bodyEl) { bodyEl.addEventListener('input', onBodyInput); bodyEl.addEventListener('blur', onEditorBlur); }
-
-    const search = $('search-input');
-    if (search) search.addEventListener('input', onSearchInput);
+    if (bodyEl) {
+      bodyEl.addEventListener('input', onBodyInput);
+      bodyEl.addEventListener('blur', onEditorBlur);
+      // Markdown UI: the selection popover follows the selection; the slash menu
+      // captures arrows/Enter/Escape while open.
+      bodyEl.addEventListener('mouseup', onEditorSelect);
+      bodyEl.addEventListener('keyup', onEditorSelect);
+      bodyEl.addEventListener('select', onEditorSelect);
+      bodyEl.addEventListener('keydown', onEditorBodyKeydown);
+    }
+    document.querySelectorAll('.md-btn[data-md]').forEach(b => {
+      b.addEventListener('click', onMdPopButton);
+      b.addEventListener('pointerdown', onMdPopPointerDown);
+    });
 
     const nn = $('new-note'); if (nn) nn.addEventListener('click', onNewNote);
     const en = $('empty-new'); if (en) en.addEventListener('click', onNewNote);
     const del = $('note-delete'); if (del) del.addEventListener('click', onDelete);
+    const copyNote = $('note-copy'); if (copyNote) copyNote.addEventListener('click', onCopyNote);
 
-    // Home + compact + minimize.
+    // Home + archive + trash + compact + header controls (chat lives next to minimize).
     const home = $('nav-home'); if (home) home.addEventListener('click', onOpenHome);
-    const chatNav = $('nav-chat'); if (chatNav) chatNav.addEventListener('click', onOpenChat);
-    const labelsNav = $('nav-labels'); if (labelsNav) labelsNav.addEventListener('click', onOpenLabels);
+    const archiveNav = $('nav-archive'); if (archiveNav) archiveNav.addEventListener('click', onOpenArchive);
+    const trashNav = $('nav-trash'); if (trashNav) trashNav.addEventListener('click', onOpenTrash);
+    const chatBtn = $('open-chat'); if (chatBtn) chatBtn.addEventListener('click', onOpenChat);
     const winMin = $('win-min'); if (winMin) winMin.addEventListener('click', onMinimize);
     const cExpand = $('compact-expand'); if (cExpand) cExpand.addEventListener('click', onCompactExpand);
     const qnForm = $('qn-form'); if (qnForm) qnForm.addEventListener('submit', onQuickNote);
-    const qnInput = $('qn-input'); if (qnInput) qnInput.addEventListener('input', onQnInput);
+    const qnInput = $('qn-input');
+    if (qnInput) {
+      qnInput.addEventListener('input', onQnInput);
+      qnInput.addEventListener('keydown', onQnKeydown);
+    }
     const cForm = $('compact-form'); if (cForm) cForm.addEventListener('submit', onCompactNote);
     const chatForm = $('chat-form'); if (chatForm) chatForm.addEventListener('submit', onChatSubmit);
     const labelForm = $('label-create-form'); if (labelForm) labelForm.addEventListener('submit', onLabelCreate);
     const recBtn = $('rec-btn'); if (recBtn) recBtn.addEventListener('click', onRecordClick);
+    const qnPause = $('qn-pause'); if (qnPause) qnPause.addEventListener('click', onRecPauseToggle);
     const pillPause = $('rec-pill-pause'); if (pillPause) pillPause.addEventListener('click', onRecPauseToggle);
     const pillStop = $('rec-pill-stop'); if (pillStop) pillStop.addEventListener('click', onRecPillStop);
-    const machinesMore = $('machines-more'); if (machinesMore) machinesMore.addEventListener('click', onMachinesMore);
-    const allNotes = $('home-all-notes'); if (allNotes) allNotes.addEventListener('click', onAllNotes);
+    const viewAll = $('home-view-all'); if (viewAll) viewAll.addEventListener('click', onViewAllNotes);
+    const ddBtn = $('machines-dd-btn'); if (ddBtn) ddBtn.addEventListener('click', onMachinesMenuToggle);
+    const secNotes = $('sec-notes'); if (secNotes) secNotes.addEventListener('click', onToggleNotesSection);
+    const secLabels = $('labels-section'); if (secLabels) secLabels.addEventListener('click', onToggleLabelsSection);
+    const spInput = $('search-pop-input');
+    if (spInput) {
+      spInput.addEventListener('input', onSearchPopInput);
+      spInput.addEventListener('keydown', onSearchPopKeydown);
+    }
 
     // Context menu items + global close handlers.
     document.querySelectorAll('.ctx-item[data-act]').forEach(it => it.addEventListener('click', onCtxAction));
@@ -2704,7 +3381,13 @@
     const openSet = $('open-settings'); if (openSet) openSet.addEventListener('click', onOpenSettings);
     const back = $('settings-back'); if (back) back.addEventListener('click', onSettingsBack);
     document.querySelectorAll('.set-item[data-tab]').forEach(s => s.addEventListener('click', onSettingsTab));
-    document.querySelectorAll('.theme-card[data-theme]').forEach(c => c.addEventListener('click', onThemeCard));
+    document.querySelectorAll('.theme-card[data-theme]').forEach(c => {
+      c.addEventListener('click', onThemeCard);
+      c.tabIndex = 0;                       // DIV cards: keyboard-reachable (Rule 14)
+      c.setAttribute('role', 'button');
+      c.addEventListener('keydown', onThemeCardKey);
+    });
+    document.querySelectorAll('.retention-opt[data-days]').forEach(b => b.addEventListener('click', onRetentionOpt));
 
     initRecButton();
   }
@@ -2712,26 +3395,50 @@
   function unbind() {
     const titleEl = $('editor-title'), bodyEl = $('editor-body');
     if (titleEl) { titleEl.removeEventListener('input', onTitleInput); titleEl.removeEventListener('blur', onEditorBlur); }
-    if (bodyEl) { bodyEl.removeEventListener('input', onBodyInput); bodyEl.removeEventListener('blur', onEditorBlur); }
-    const search = $('search-input'); if (search) search.removeEventListener('input', onSearchInput);
+    if (bodyEl) {
+      bodyEl.removeEventListener('input', onBodyInput);
+      bodyEl.removeEventListener('blur', onEditorBlur);
+      bodyEl.removeEventListener('mouseup', onEditorSelect);
+      bodyEl.removeEventListener('keyup', onEditorSelect);
+      bodyEl.removeEventListener('select', onEditorSelect);
+      bodyEl.removeEventListener('keydown', onEditorBodyKeydown);
+    }
+    document.querySelectorAll('.md-btn[data-md]').forEach(b => {
+      b.removeEventListener('click', onMdPopButton);
+      b.removeEventListener('pointerdown', onMdPopPointerDown);
+    });
     const nn = $('new-note'); if (nn) nn.removeEventListener('click', onNewNote);
     const en = $('empty-new'); if (en) en.removeEventListener('click', onNewNote);
     const del = $('note-delete'); if (del) del.removeEventListener('click', onDelete);
+    const copyNote = $('note-copy'); if (copyNote) copyNote.removeEventListener('click', onCopyNote);
     const home = $('nav-home'); if (home) home.removeEventListener('click', onOpenHome);
-    const chatNav = $('nav-chat'); if (chatNav) chatNav.removeEventListener('click', onOpenChat);
-    const labelsNav = $('nav-labels'); if (labelsNav) labelsNav.removeEventListener('click', onOpenLabels);
+    const archiveNav = $('nav-archive'); if (archiveNav) archiveNav.removeEventListener('click', onOpenArchive);
+    const trashNav = $('nav-trash'); if (trashNav) trashNav.removeEventListener('click', onOpenTrash);
+    const chatBtn = $('open-chat'); if (chatBtn) chatBtn.removeEventListener('click', onOpenChat);
     const winMin = $('win-min'); if (winMin) winMin.removeEventListener('click', onMinimize);
     const cExpand = $('compact-expand'); if (cExpand) cExpand.removeEventListener('click', onCompactExpand);
     const qnForm = $('qn-form'); if (qnForm) qnForm.removeEventListener('submit', onQuickNote);
-    const qnInput = $('qn-input'); if (qnInput) qnInput.removeEventListener('input', onQnInput);
+    const qnInput = $('qn-input');
+    if (qnInput) {
+      qnInput.removeEventListener('input', onQnInput);
+      qnInput.removeEventListener('keydown', onQnKeydown);
+    }
     const cForm = $('compact-form'); if (cForm) cForm.removeEventListener('submit', onCompactNote);
     const chatForm = $('chat-form'); if (chatForm) chatForm.removeEventListener('submit', onChatSubmit);
     const labelForm = $('label-create-form'); if (labelForm) labelForm.removeEventListener('submit', onLabelCreate);
     const recBtn = $('rec-btn'); if (recBtn) recBtn.removeEventListener('click', onRecordClick);
+    const qnPause = $('qn-pause'); if (qnPause) qnPause.removeEventListener('click', onRecPauseToggle);
     const pillPause = $('rec-pill-pause'); if (pillPause) pillPause.removeEventListener('click', onRecPauseToggle);
     const pillStop = $('rec-pill-stop'); if (pillStop) pillStop.removeEventListener('click', onRecPillStop);
-    const machinesMore = $('machines-more'); if (machinesMore) machinesMore.removeEventListener('click', onMachinesMore);
-    const allNotes = $('home-all-notes'); if (allNotes) allNotes.removeEventListener('click', onAllNotes);
+    const viewAll = $('home-view-all'); if (viewAll) viewAll.removeEventListener('click', onViewAllNotes);
+    const ddBtn = $('machines-dd-btn'); if (ddBtn) ddBtn.removeEventListener('click', onMachinesMenuToggle);
+    const secNotes = $('sec-notes'); if (secNotes) secNotes.removeEventListener('click', onToggleNotesSection);
+    const secLabels = $('labels-section'); if (secLabels) secLabels.removeEventListener('click', onToggleLabelsSection);
+    const spInput = $('search-pop-input');
+    if (spInput) {
+      spInput.removeEventListener('input', onSearchPopInput);
+      spInput.removeEventListener('keydown', onSearchPopKeydown);
+    }
     document.querySelectorAll('.ctx-item[data-act]').forEach(it => it.removeEventListener('click', onCtxAction));
     document.removeEventListener('keydown', onGlobalKeydown);
     document.removeEventListener('pointerdown', onGlobalPointerDown, true);
@@ -2739,7 +3446,11 @@
     const openSet = $('open-settings'); if (openSet) openSet.removeEventListener('click', onOpenSettings);
     const back = $('settings-back'); if (back) back.removeEventListener('click', onSettingsBack);
     document.querySelectorAll('.set-item[data-tab]').forEach(s => s.removeEventListener('click', onSettingsTab));
-    document.querySelectorAll('.theme-card[data-theme]').forEach(c => c.removeEventListener('click', onThemeCard));
+    document.querySelectorAll('.theme-card[data-theme]').forEach(c => {
+      c.removeEventListener('click', onThemeCard);
+      c.removeEventListener('keydown', onThemeCardKey);
+    });
+    document.querySelectorAll('.retention-opt[data-days]').forEach(b => b.removeEventListener('click', onRetentionOpt));
   }
 
   // ------------------------------------------------------------------ boot / hydrate
@@ -2756,9 +3467,14 @@
     if (b.settings && Number(b.settings.trashRetentionDays) > 0) {
       state.settings.trashRetentionDays = Number(b.settings.trashRetentionDays);
     }
-    const limit = b.listDefaults && Number(b.listDefaults.limit);
-    state.noteListLimit = limit > 0 ? limit : 6;
-    state.machineListLimit = 4;
+    if (b.sync && typeof b.sync === 'object') state.sync = b.sync;
+    // List defaults apply on the initial boot only (contract: latest 10). The host
+    // hydrates after EVERY write — re-applying here would reset the user's pagination.
+    if (!adopt.booted) {
+      adopt.booted = true;
+      const limit = b.listDefaults && Number(b.listDefaults.limit);
+      state.noteListLimit = limit > 0 ? limit : 10;
+    }
 
     // Keep the open note if it still exists; else newest visible; else null.
     if (!noteById(state.selectedId)) {
@@ -2776,26 +3492,20 @@
       slug: m.slug || m.id || '',
       displayName: m.displayName || m.friendlyName || m.id || m.slug || '',
       friendlyName: m.friendlyName || '',
-      sshAddress: m.sshAddress || m.ssh || m.host || '',
       platform: m.platform || m.os || '',
       status: m.status || (m.online === true ? 'online' : (m.online === false ? 'offline' : 'unknown')),
       online: m.online == null ? null : !!m.online,
-      source: m.source || '',
-      origin: m.origin || '',
       updatedAt: m.updatedAt || '',
       lastSeenAt: m.lastSeenAt || '',
       syncedAt: m.syncedAt || '',
       recentActivityAt: m.recentActivityAt || '',
+      capabilities: Array.isArray(m.capabilities) ? m.capabilities.map(String).filter(Boolean) : [],
       noteCount: Number(m.noteCount || 0),
       activeNoteCount: Number(m.activeNoteCount || m.noteCount || 0),
       archivedNoteCount: Number(m.archivedNoteCount || 0),
       trashNoteCount: Number(m.trashNoteCount || 0),
       totalNoteCount: Number(m.totalNoteCount || m.noteCount || 0),
       latestNoteUpdatedAt: m.latestNoteUpdatedAt || '',
-      capabilities: m.capabilities || [],
-      metadata: m.metadata || {},
-      provenance: m.provenance || {},
-      sync: m.sync || {},
     };
   }
 
@@ -2811,24 +3521,16 @@
       status: n.status || 'active',
       folder: n.folder || '',
       machine: n.machine || 'unknown',
+      machineFriendlyName: n.machineFriendlyName || '',
+      rev: Number(n.rev) >= 1 ? Math.floor(Number(n.rev)) : 1,
       updatedAt: n.updatedAt || new Date().toISOString(),
       createdAt: n.createdAt || n.updatedAt || new Date().toISOString(),
       createdByActorType: n.createdByActorType || 'human',
       createdByName: n.createdByName || '',
-      sourceMachine: n.sourceMachine || n.machine || 'unknown',
-      sourceMachineFriendlyName: n.sourceMachineFriendlyName || '',
-      originMachine: n.originMachine || n.machine || 'unknown',
-      originMachineFriendlyName: n.originMachineFriendlyName || '',
-      targetMachineFriendlyName: n.targetMachineFriendlyName || '',
-      previousMachine: n.previousMachine || '',
-      openedFrom: n.openedFrom || '',
-      sourceContext: n.sourceContext || '',
       archivedAt: n.archivedAt || '',
       trashedAt: n.trashedAt || '',
-      trashMachine: n.trashMachine || '',
       trashExpiresAt: n.trashExpiresAt || '',
       restoredAt: n.restoredAt || '',
-      movedAt: n.movedAt || '',
       info: n.info || null,
       titleLocked: !!n.titleLocked,
       titleSource: n.titleSource || (isDefaultTitle(n.title) ? 'default' : 'manual'),
@@ -2841,6 +3543,7 @@
     adopt(boot);
     render();
     queueAutoTitlesForStaleNotes();
+    maybeCleanupExpiredTrash();
   }
 
   function init() {
@@ -2849,16 +3552,19 @@
     state.screen = 'home';   // Home is the default landing screen.
     showApp();
     initTheme();
-    adopt(window.__BOOT__ || sampleBoot());
+    // No native __BOOT__ (plain browser): boot empty — no demo notes in the bundle.
+    adopt(window.__BOOT__ || {});
     bind();
     render();
     queueAutoTitlesForStaleNotes();
+    maybeCleanupExpiredTrash();
   }
 
   function destroy() {
     if (!started) return;
     unbind();
-    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    if (saveTimer) commitEdit(); // flush — don't drop — a pending debounced autosave
+    editBase = null;
     if (autoTitleTimer) { clearTimeout(autoTitleTimer); autoTitleTimer = null; }
     if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; }
     if (rec.timer) { clearInterval(rec.timer); rec.timer = null; }
@@ -2866,11 +3572,12 @@
     stopStream();
     try { if (rec.ws && rec.ws.readyState === WebSocket.OPEN) rec.ws.close(); } catch (e) {}
     closeContextMenu();
+    closeMachinePop();
     started = false;
   }
 
   // Host → web: control the live recorder from the macOS menu-bar status item.
-  // Contract: window.HasnaNotes.recCommand('stop'|'pause'|'resume').
+  // Contract: window.PersonalNotes.recCommand('stop'|'pause'|'resume').
 	  function recCommand(cmd) {
 	    if (cmd === 'stop') stopRecording();
 	    else if (cmd === 'pause') pauseRecording();
@@ -2913,140 +3620,36 @@
     };
   }
 
-  function chatPlain(note) {
-    return markdownPlainText((note && (note.body || note.content)) || '');
-  }
-
-  function chatSearch(prompt, limit) {
-    const raw = String(prompt || '').trim();
-    const quoted = /["“]([^"”]+)["”]/.exec(raw);
-    const about = /\b(?:about|for|on|related to)\s+(.+)$/i.exec(raw);
-    const query = (quoted && quoted[1]) || (about && about[1]) || raw
-      .replace(/\b(summarize|summary|search|find|notes?|please|show|list|consolidate|organize|combine|all|into|new|larger)\b/gi, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-    const q = query.toLowerCase();
-    const notes = sortNotes(state.notes).filter(note => {
-      if (note.status === 'trash') return false;
-      if (!q) return note.status !== 'archived';
-      return ((note.title || '') + ' ' + (note.body || '') + ' ' + noteLabels(note).join(' ')).toLowerCase().includes(q);
-    });
-    return { query, notes: notes.slice(0, Math.max(1, Number(limit || 10))) };
-  }
-
-  function chatPromptNoteId(prompt, opts) {
-    const explicit = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i.exec(String(prompt || ''));
-    return (explicit && explicit[0]) || (opts && (opts.noteId || opts.selectedNoteId || opts.id)) || state.selectedId || '';
-  }
-
-  function chatStripValue(value) {
-    return String(value || '')
-      .replace(/[?.!]+$/, '')
-      .replace(/\b(?:please|note|this|id|as|with|to|from)\b/gi, ' ')
-      .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/ig, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-  }
-
-  function chatExtractLabel(prompt, opts) {
-    if (opts && opts.label) return String(opts.label).trim();
-    const text = String(prompt || '');
-    const quoted = /\b(?:label|tag|unlabel|untag|remove\s+(?:label|tag))\b[^"“”]*["“]([^"”]+)["”]/i.exec(text);
-    if (quoted) return quoted[1].trim();
-    const m = /\b(?:label|tag|unlabel|untag|remove\s+(?:label|tag))\b\s+(.+)$/i.exec(text);
-    return m ? chatStripValue(m[1]) : '';
-  }
-
-  function chatExtractLabelRename(prompt, opts) {
-    const text = String(prompt || '');
-    const match = /(?:rename|update)\s+label\s+["“]?([^"”]+?)["”]?\s+(?:to|as)\s+["“]?([^"”]+)["”]?$/i.exec(text);
-    return {
-      oldName: (opts && opts.oldName) || (match && match[1] && match[1].trim()) || '',
-      newName: (opts && opts.newName) || (match && match[2] && match[2].trim()) || '',
-    };
-  }
-
-  function chatExtractMachine(prompt, opts) {
-    if (opts && (opts.machine || opts.targetMachine)) return String(opts.machine || opts.targetMachine).trim();
-    const match = /\b(?:to|machine)\s+([A-Za-z0-9._-]+)\b/i.exec(String(prompt || ''));
-    return match ? match[1].trim() : '';
-  }
-
-  function chatExtractUpdate(prompt, opts) {
-    const text = String(prompt || '');
-    const title = opts && opts.title != null ? opts.title : /(?:^|\b)title\s*[:=]\s*([^\n]+)/i.exec(text)?.[1]?.trim();
-    const body = opts && opts.body != null ? opts.body : /(?:^|\b)(?:body|text|content)\s*[:=]\s*([\s\S]+)$/i.exec(text)?.[1]?.trim();
-    if (title != null || body != null) return { title, body };
-    const id = chatPromptNoteId(text, opts || {});
-    const after = id ? text.slice(Math.max(0, text.indexOf(id) + id.length)).trim() : '';
-    const cleaned = after.replace(/^(?:to|with|as|note|body|text|content)\b[:\s-]*/i, '').trim();
-    return cleaned ? { body: cleaned } : {};
-  }
-
-  function chatFriendlyInfo(note) {
-    return Object.assign({ id: note.id, title: note.title || 'Untitled Note' }, noteInfo(note.id) || {});
-  }
-
-  function saveChatNote(note, eventName) {
-    note.updatedAt = new Date().toISOString();
-    postNative('save', serializeNote(note));
-    if (eventName) dispatchNoteEvent(eventName, note);
-    render();
-    return note;
-  }
-
-  function applyChatLabel(note, label, remove, dryRun) {
-    const labels = noteLabels(note);
-    if (dryRun) {
-      return {
-        dryRun: true,
-        preview: { id: note.id, label, action: remove ? 'unassign' : 'assign', beforeLabels: labels },
-        sources: [chatNoteRef(note)],
-      };
-    }
-    note.labels = remove ? labels.filter(item => item.toLowerCase() !== label.toLowerCase()) : Array.from(new Set([...labels, label]));
-    saveChatNote(note, remove ? 'hasna:note-unlabel' : 'hasna:note-label');
-    return { note: chatNoteRef(note), sources: [chatNoteRef(note)] };
-  }
-
-  function chatSummary(notes) {
-    if (!notes.length) return 'No matching notes found.';
-    return 'Summary of ' + notes.length + ' note' + (notes.length === 1 ? '' : 's') + ':\n' +
-      notes.map(note => '- ' + ((note.title && note.title.trim()) || 'Untitled Note') + ': ' + (chatPlain(note).slice(0, 220) || 'No body text.')).join('\n');
-  }
-
-  function chatConsolidatedBody(notes, title) {
-    return '# ' + title + '\n\n' + notes.map(note => {
-      return '## ' + ((note.title && note.title.trim()) || 'Untitled Note') + '\n\n' +
-        ((note.body || '').trim() || '_No note body._') + '\n\n_Source: ' + note.id + '_';
-    }).join('\n\n') + '\n';
-  }
-
-  function addChatToolCall(name, input) {
-    const call = { id: 'tool-' + (state.chat.toolCalls.length + 1), name, input, state: 'call' };
-    state.chat.toolCalls.push(call);
-    emitChat('hasna:chat-tool-call', { toolCall: call });
-    return call;
-  }
-
   function finishChatToolCall(call, result, stateName) {
     call.state = stateName || 'result';
     call.result = result;
     emitChat('hasna:chat-tool-result', { toolCall: call });
   }
 
-  function queueChatApproval(toolName, call, input, preview) {
-    const approval = {
-      id: 'approval-' + toolName + '-' + Date.now(),
-      toolCallId: call.id,
-      toolName,
-      input,
-      preview,
-    };
-    state.chat.pendingConfirmations.push(approval);
-    finishChatToolCall(call, { requiresConfirmation: true, approval, preview }, 'approval-requested');
-    emitChat('hasna:chat-confirmation', { approval });
-    return approval;
+  // Human-readable one-liner for a tool call or approval — users never see raw JSON.
+  function chatActionSummary(name, input) {
+    const data = input || {};
+    const bits = [];
+    if (data.id) {
+      const note = noteById(data.id);
+      bits.push(note ? '“' + ((note.title && note.title.trim()) || 'Untitled Note') + '”' : String(data.id).slice(0, 8));
+    }
+    if (data.title && !data.id) bits.push('“' + String(data.title).slice(0, 60) + '”');
+    if (data.label) bits.push('label “' + data.label + '”');
+    if (data.query) bits.push('“' + String(data.query).slice(0, 60) + '”');
+    return String(name || 'action').replace(/_/g, ' ') + (bits.length ? ' — ' + bits.join(', ') : '');
+  }
+
+  // Short human-readable lines for an approval preview (no JSON payload dumps).
+  function chatPreviewLines(preview) {
+    const p = preview || {};
+    const lines = [];
+    if (p.title) lines.push('Title: ' + String(p.title).slice(0, 80));
+    if (p.fromStatus && p.toStatus) lines.push('Status: ' + p.fromStatus + ' → ' + p.toStatus);
+    if (p.noteCount != null) lines.push('Notes: ' + p.noteCount);
+    const body = (p.after && p.after.bodyPreview) || p.bodyPreview || p.appendText || '';
+    if (body) lines.push(String(body).slice(0, 240));
+    return lines;
   }
 
   function chatMessageText(message) {
@@ -3079,12 +3682,12 @@
     if (!host) return;
     host.innerHTML = '';
     if (!state.chat.messages.length) {
-      host.appendChild(el('div', 'chat-empty', 'No messages'));
+      host.appendChild(el('div', 'chat-empty', ai().available ? 'No messages' : CHAT_UNAVAILABLE));
       return;
     }
     state.chat.messages.forEach(message => {
       const row = el('div', 'chat-msg chat-' + (message.role || 'assistant'));
-      row.appendChild(el('div', 'chat-role', message.role === 'user' ? 'You' : 'Hasna'));
+      row.appendChild(el('div', 'chat-role', message.role === 'user' ? 'You' : 'PersonalNotes'));
       row.appendChild(el('div', 'chat-text', chatMessageText(message)));
       host.appendChild(row);
     });
@@ -3098,11 +3701,9 @@
     host.hidden = state.chat.toolCalls.length === 0;
     state.chat.toolCalls.forEach(call => {
       const row = el('div', 'ct-row');
-      row.appendChild(el('div', 'ct-name', call.name || call.toolName || 'tool'));
+      // Human-readable action line — never raw JSON payloads.
+      row.appendChild(el('div', 'ct-name', chatActionSummary(call.name || call.toolName, call.input)));
       row.appendChild(el('div', 'ct-state', call.state || 'call'));
-      const input = el('pre', 'ct-json', JSON.stringify(call.input || {}, null, 2));
-      row.appendChild(input);
-      if (call.result) row.appendChild(el('pre', 'ct-json ct-result', JSON.stringify(call.result, null, 2).slice(0, 1600)));
       host.appendChild(row);
     });
   }
@@ -3128,8 +3729,11 @@
     host.hidden = state.chat.pendingConfirmations.length === 0;
     state.chat.pendingConfirmations.forEach(approval => {
       const row = el('div', 'ca-row');
-      row.appendChild(el('div', 'ca-title', approval.toolName || 'Approval'));
-      row.appendChild(el('pre', 'ca-preview', JSON.stringify(approval.preview || approval.input || {}, null, 2).slice(0, 1600)));
+      row.appendChild(el('div', 'ca-title', chatActionSummary(approval.toolName, approval.input)));
+      // Human-readable preview lines — never raw JSON payloads.
+      chatPreviewLines(approval.preview || approval.input).forEach(line => {
+        row.appendChild(el('div', 'ca-preview', line));
+      });
       const actions = el('div', 'ca-actions');
       const approve = el('button', 'ca-btn ca-primary', 'Approve');
       approve.type = 'button';
@@ -3174,7 +3778,7 @@
     if (!Array.isArray(labels)) return;
     state.labels = normalizeLabelList(labels);
     renderLabels();
-    if (state.screen === 'labels') renderLabelsPage();
+    renderLabelsPage(); // Settings → Labels management list stays in sync
   }
 
   function mergeChatNote(note) {
@@ -3188,7 +3792,7 @@
     renderNotesList();
     renderHome();
     if (state.screen === 'noteslist') renderNotesPage();
-    if (state.screen === 'labels') renderLabelsPage();
+    renderLabelsPage(); // Settings → Labels management list stays in sync
   }
 
   function mergeChatToolOutput(output) {
@@ -3198,351 +3802,9 @@
     if (Array.isArray(output.sources)) state.chat.sources = output.sources;
   }
 
-  function sendLocalChat(prompt, options) {
-    const text = String(prompt || '').trim();
-    if (!text) return Promise.reject(new Error('prompt_required'));
-    const opts = options || {};
-    const goalObjective = !opts._skipGoalParsing && parseChatGoalCommand(text);
-    if (goalObjective) return sendLocalGoalChat(goalObjective, opts);
-    if (!opts._skipGoalParsing) state.chat.goal = null;
-    const userMessage = { id: 'msg-' + Date.now(), role: 'user', parts: [{ type: 'text', text }] };
-    state.chat.messages.push(userMessage);
-    state.chat.toolCalls = [];
-    state.chat.sources = [];
-    state.chat.pendingConfirmations = [];
-    state.chat.error = '';
-    emitChat('hasna:chat-message', { message: userMessage });
-    setChatStatus('submitted');
-    setChatStatus('streaming');
-
-    return Promise.resolve().then(() => {
-      const lower = text.toLowerCase();
-      const search = chatSearch(text, opts.limit || 10);
-      const id = chatPromptNoteId(text, opts);
-      const note = id ? noteById(id) : null;
-      let answer = '';
-      let sources = [];
-
-      if (/\b(list|show)\b.*\blabels?\b/.test(lower) || /^labels?$/i.test(text)) {
-        const call = addChatToolCall('list_labels', {});
-        const items = allLabels();
-        answer = items.length
-          ? 'Labels:\n' + items.map(item => '- ' + item.name + ' (' + item.count + ')').join('\n')
-          : 'No labels yet.';
-        finishChatToolCall(call, { labels: items.map(item => item.name), items }, 'result');
-      } else if (/\b(create|add|new)\b.*\blabel\b/.test(lower)) {
-        const label = chatExtractLabel(text, opts) || /(?:label)\s+["“]?([^"”]+)["”]?$/i.exec(text)?.[1]?.trim();
-        if (!label) throw new Error('label_required');
-        const call = addChatToolCall('create_label', { name: label });
-        createLabelLocal(label);
-        const items = allLabels();
-        answer = 'Created label "' + label + '".';
-        finishChatToolCall(call, { labels: items.map(item => item.name), items }, 'result');
-      } else if (/\b(rename|update)\b.*\blabel\b/.test(lower)) {
-        const names = chatExtractLabelRename(text, opts);
-        if (!names.oldName || !names.newName) throw new Error('label_rename_args_required');
-        const call = addChatToolCall('update_label', { oldName: names.oldName, newName: names.newName, dryRun: !opts.confirm });
-        const affected = state.notes.filter(note => noteLabels(note).some(label => label.toLowerCase() === names.oldName.toLowerCase()));
-        if (opts.confirm) {
-          renameLabelLocal(names.oldName, names.newName);
-          const items = allLabels();
-          answer = 'Renamed label "' + names.oldName + '" to "' + names.newName + '".';
-          finishChatToolCall(call, { labels: items.map(item => item.name), items }, 'result');
-        } else {
-          queueChatApproval('update_label', call, names, {
-            oldName: names.oldName,
-            newName: names.newName,
-            affectedNoteIds: affected.map(note => note.id),
-          });
-          answer = 'Rename-label preview ready for "' + names.oldName + '".';
-        }
-      } else if (/\b(delete|remove)\b.*\blabel\b/.test(lower)) {
-        const label = chatExtractLabel(text, opts);
-        if (!label) throw new Error('label_required');
-        const call = addChatToolCall('delete_label', { name: label, dryRun: !opts.confirm });
-        const affected = state.notes.filter(note => noteLabels(note).some(item => item.toLowerCase() === label.toLowerCase()));
-        if (opts.confirm) {
-          deleteLabelLocal(label, true);
-          const items = allLabels();
-          answer = 'Deleted label "' + label + '".';
-          finishChatToolCall(call, { labels: items.map(item => item.name), items }, 'result');
-        } else {
-          queueChatApproval('delete_label', call, { name: label }, {
-            name: label,
-            affectedNoteIds: affected.map(note => note.id),
-            affected: affected.length,
-          });
-          answer = 'Delete-label preview ready for "' + label + '".';
-        }
-      } else if (/\b(consolidate|organize|roll up|combine)\b/.test(lower)) {
-        const call = addChatToolCall('consolidate_notes', { query: search.query, dryRun: !opts.confirm });
-        sources = search.notes.map(chatNoteRef);
-        const title = opts.title || 'Consolidated Notes';
-        const body = chatConsolidatedBody(search.notes, title);
-        const approval = {
-          id: 'approval-consolidate-' + Date.now(),
-          toolName: 'consolidate_notes',
-          input: { title, body, labels: ['consolidated'] },
-          preview: { title, noteCount: search.notes.length, bodyPreview: body.slice(0, 1200), sources },
-        };
-        if (opts.confirm) {
-          const note = quickCreate(title, body, {
-            labels: ['consolidated'],
-            createdByActorType: 'agent',
-            createdByName: opts.actorName || 'Hasna Notes Chat',
-            openedFrom: 'chat',
-            sourceContext: text.slice(0, 200),
-          });
-          answer = 'Created consolidated note "' + (note.title || title) + '" from ' + sources.length + ' note(s).';
-          finishChatToolCall(call, { note: chatNoteRef(note), sources }, 'result');
-        } else {
-          approval.toolCallId = call.id;
-          state.chat.pendingConfirmations.push(approval);
-          answer = 'I prepared a consolidation preview from ' + search.notes.length + ' note(s). Approve it to create "' + title + '".';
-          finishChatToolCall(call, { requiresConfirmation: true, approval }, 'approval-requested');
-          emitChat('hasna:chat-confirmation', { approval });
-        }
-      } else if (/\b(summarize|summary|recap)\b/.test(lower)) {
-        const call = addChatToolCall('summarize_notes', { query: search.query });
-        answer = chatSummary(search.notes);
-        sources = search.notes.map(chatNoteRef);
-        finishChatToolCall(call, { summary: answer, sources }, 'result');
-      } else if (/\b(info|metadata|provenance|details)\b/.test(lower) && note) {
-        const call = addChatToolCall('note_info', { id: note.id });
-        const info = chatFriendlyInfo(note);
-        sources = [chatNoteRef(note)];
-        answer = [
-          info.title + ' (' + info.id + ')',
-          'Created by ' + info.createdBy + ' (' + info.createdByActorType + ')',
-          info.createdAt ? 'Created ' + info.createdAt : '',
-          info.currentMachine ? 'Machine ' + info.currentMachine : '',
-          info.openedFrom ? 'Opened from ' + info.openedFrom : '',
-        ].filter(Boolean).join('\n');
-        finishChatToolCall(call, { info, sources }, 'result');
-      } else if (/\b(read|open|show|get)\b/.test(lower) && note) {
-        const call = addChatToolCall('read_note', { id: note.id });
-        sources = [chatNoteRef(note)];
-        answer = '# ' + ((note.title && note.title.trim()) || 'Untitled Note') + '\n\n' + (note.body || '');
-        finishChatToolCall(call, { note: serializeNote(note), sources }, 'result');
-      } else if (/\b(update|edit|replace)\b/.test(lower) && note) {
-        const patch = chatExtractUpdate(text, opts);
-        const call = addChatToolCall('update_note', Object.assign({ id: note.id, dryRun: !opts.confirm }, patch));
-        sources = [chatNoteRef(note)];
-        if (opts.confirm) {
-          if (patch.title != null) note.title = String(patch.title);
-          if (patch.body != null) note.body = String(patch.body);
-          saveChatNote(note, 'hasna:note-update');
-          answer = 'Updated "' + ((note.title && note.title.trim()) || 'Untitled Note') + '".';
-          finishChatToolCall(call, { note: chatNoteRef(note), sources }, 'result');
-        } else {
-          queueChatApproval('update_note', call, Object.assign({ id: note.id }, patch), {
-            id: note.id,
-            before: { title: note.title, bodyPreview: chatPlain(note).slice(0, 240) },
-            after: { title: patch.title == null ? note.title : patch.title, bodyPreview: String(patch.body == null ? note.body : patch.body).slice(0, 240) },
-          });
-          answer = 'Update preview ready for ' + note.id + '.';
-        }
-      } else if (/\bappend\b/.test(lower) && note) {
-        const patch = { text: opts.text || text.replace(/^.*?\bappend\b/i, '').replace(note.id, '').trim() };
-        const call = addChatToolCall('append_note', { id: note.id, text: patch.text, dryRun: !opts.confirm });
-        sources = [chatNoteRef(note)];
-        if (opts.confirm) {
-          note.body = [note.body || '', patch.text].filter(Boolean).join('\n\n');
-          saveChatNote(note, 'hasna:note-update');
-          answer = 'Appended text to "' + ((note.title && note.title.trim()) || 'Untitled Note') + '".';
-          finishChatToolCall(call, { note: chatNoteRef(note), sources }, 'result');
-        } else {
-          queueChatApproval('append_note', call, { id: note.id, text: patch.text }, {
-            id: note.id,
-            appendText: patch.text,
-            resultingLength: (note.body || '').length + patch.text.length + 2,
-          });
-          answer = 'Append preview ready for ' + note.id + '.';
-        }
-      } else if (/\b(unlabel|untag|remove\s+(?:label|tag))\b/.test(lower) && note) {
-        const label = chatExtractLabel(text, opts);
-        const call = addChatToolCall('unlabel_note', { id: note.id, label, dryRun: !!opts.dryRun });
-        const result = applyChatLabel(note, label, true, opts.dryRun);
-        sources = result.sources;
-        answer = result.dryRun ? 'Unlabel preview ready for ' + note.id + '.' : 'Removed label "' + label + '" from "' + ((note.title && note.title.trim()) || 'Untitled Note') + '".';
-        finishChatToolCall(call, result, 'result');
-      } else if (/\b(label|tag)\b/.test(lower) && note) {
-        const label = chatExtractLabel(text, opts);
-        const call = addChatToolCall('label_note', { id: note.id, label, dryRun: !!opts.dryRun });
-        const result = applyChatLabel(note, label, false, opts.dryRun);
-        sources = result.sources;
-        answer = result.dryRun ? 'Label preview ready for ' + note.id + '.' : 'Added label "' + label + '" to "' + ((note.title && note.title.trim()) || 'Untitled Note') + '".';
-        finishChatToolCall(call, result, 'result');
-      } else if (/\bmove\b/.test(lower) && note) {
-        const machine = chatExtractMachine(text, opts);
-        if (!machine) throw new Error('machine_required');
-        const machineName = opts.machineName || '';
-        const call = addChatToolCall('move_note', { id: note.id, machine, machineName, dryRun: !opts.confirm });
-        sources = [chatNoteRef(note)];
-        if (opts.confirm) {
-          const moved = moveNoteToMachine(note.id, machine, machineName);
-          answer = 'Moved "' + ((note.title && note.title.trim()) || 'Untitled Note') + '" to ' + machine + '.';
-          finishChatToolCall(call, { note: chatNoteRef(moved || note), sources: [chatNoteRef(moved || note)] }, 'result');
-        } else {
-          queueChatApproval('move_note', call, { id: note.id, machine, machineName }, {
-            id: note.id,
-            title: note.title,
-            fromMachine: note.machine || '',
-            toMachine: machine,
-            machineName,
-          });
-          answer = 'Move preview ready for ' + note.id + '.';
-        }
-      } else if (/\barchive\b/.test(lower) && note) {
-        const call = addChatToolCall('archive_note', { id: note.id, dryRun: !opts.confirm });
-        sources = [chatNoteRef(note)];
-        if (opts.confirm) {
-          archiveNote(note.id);
-          answer = 'Archived "' + ((note.title && note.title.trim()) || 'Untitled Note') + '".';
-          finishChatToolCall(call, { note: chatNoteRef(note), sources }, 'result');
-        } else {
-          queueChatApproval('archive_note', call, { id: note.id }, { id: note.id, title: note.title, fromStatus: note.status, toStatus: 'archived' });
-          answer = 'Archive preview ready for ' + note.id + '.';
-        }
-      } else if (/\b(trash|delete)\b/.test(lower) && note) {
-        const call = addChatToolCall('trash_note', { id: note.id, dryRun: !opts.confirm });
-        sources = [chatNoteRef(note)];
-        if (opts.confirm) {
-          trashNote(note, { confirmed: true });
-          render();
-          answer = 'Moved "' + ((note.title && note.title.trim()) || 'Untitled Note') + '" to Trash.';
-          finishChatToolCall(call, { note: chatNoteRef(note), sources }, 'result');
-        } else {
-          queueChatApproval('trash_note', call, { id: note.id }, { id: note.id, title: note.title, fromStatus: note.status, toStatus: 'trash' });
-          answer = 'Trash preview ready for ' + note.id + '.';
-        }
-      } else if (/\brestore\b/.test(lower) && note) {
-        const call = addChatToolCall('restore_note', { id: note.id, dryRun: !opts.confirm });
-        sources = [chatNoteRef(note)];
-        if (opts.confirm) {
-          restoreNote(note.id);
-          answer = 'Restored "' + ((note.title && note.title.trim()) || 'Untitled Note') + '".';
-          finishChatToolCall(call, { note: chatNoteRef(note), sources }, 'result');
-        } else {
-          queueChatApproval('restore_note', call, { id: note.id }, { id: note.id, title: note.title, fromStatus: note.status, toStatus: 'active' });
-          answer = 'Restore preview ready for ' + note.id + '.';
-        }
-      } else {
-        const call = addChatToolCall(search.query ? 'search_notes' : 'list_notes', { query: search.query });
-        answer = search.notes.length
-          ? 'Found notes:\n' + search.notes.map(note => '- ' + ((note.title && note.title.trim()) || 'Untitled Note') + ' (' + note.id + ')').join('\n')
-          : 'No matching notes found.';
-        sources = search.notes.map(chatNoteRef);
-        finishChatToolCall(call, { items: sources, sources }, 'result');
-      }
-
-      state.chat.sources = sources;
-      const assistantMessage = { id: 'msg-' + Date.now() + '-assistant', role: 'assistant', parts: [{ type: 'text', text: answer }], metadata: { sources } };
-      state.chat.messages.push(assistantMessage);
-      emitChat('hasna:chat-delta', { text: answer });
-      emitChat('hasna:chat-sources', { sources });
-      emitChat('hasna:chat-message', { message: assistantMessage });
-      const result = { message: assistantMessage, text: answer, sources, pendingConfirmations: state.chat.pendingConfirmations.slice(), toolCalls: state.chat.toolCalls.slice() };
-      emitChat('hasna:chat-finish', result);
-      setChatStatus(state.chat.pendingConfirmations.length ? 'awaiting_confirmation' : 'ready');
-      return result;
-    }).catch(err => {
-      setChatStatus('error', { error: err.message || String(err) });
-      emitChat('hasna:chat-error', { error: err.message || String(err) });
-      throw err;
-    });
-  }
-
   function parseChatGoalCommand(prompt) {
     const m = /^\/goal(?:\s+begin)?\s+([\s\S]+)$/i.exec(String(prompt || '').trim());
     return m ? m[1].trim() : '';
-  }
-
-  function localGoalTerminalText(text) {
-    const value = String(text || '').toLowerCase();
-    if (/\b(needs? (user )?input|need you to|please provide|which note|what label|what machine|which machine)\b/.test(value)) return 'needs_input';
-    if (/\b(blocked|cannot continue|not possible|unable to proceed)\b/.test(value)) return 'blocked';
-    return '';
-  }
-
-  function localGoalComplete(objective, result, stepIndex) {
-    const toolCalls = result.toolCalls || [];
-    const mutating = new Set(['create_note', 'update_note', 'append_note', 'label_note', 'unlabel_note', 'archive_note', 'trash_note', 'restore_note', 'move_note', 'create_label', 'update_label', 'delete_label', 'consolidate_notes']);
-    const mutatingSuccess = toolCalls.some(call => mutating.has(call.name) && call.state === 'result' && !(call.result && (call.result.requiresConfirmation || call.result.dryRun)));
-    if (mutatingSuccess) return true;
-    const readIntent = /\b(summarize|summary|search|find|list|read|show|info|metadata|provenance|related|similar)\b/i.test(objective);
-    const readTool = toolCalls.some(call => ['list_notes', 'search_notes', 'read_note', 'summarize_notes', 'find_related_notes', 'note_info', 'list_labels'].includes(call.name));
-    return readIntent && readTool && stepIndex > 0;
-  }
-
-  function localGoalFollowup(objective, stepNumber, previous) {
-    return [
-      'Continue this Hasna Notes goal until it is achieved, needs user input, or is clearly blocked.',
-      'Goal: ' + objective,
-      'Step ' + stepNumber + ': inspect or use the safest next notes or labels operation. Do not repeat a completed step.',
-      previous && previous.text ? 'Previous result:\n' + previous.text.slice(0, 900) : '',
-    ].filter(Boolean).join('\n');
-  }
-
-  function sendLocalGoalChat(objective, options) {
-    const goal = {
-      id: 'goal-local-' + Date.now(),
-      objective: String(objective || '').trim(),
-      status: 'running',
-      maxSteps: Math.max(1, Number((options && options.maxSteps) || 4)),
-      steps: [],
-    };
-    state.chat.goal = goal;
-    emitChat('hasna:chat-goal-state', { goal });
-    renderChatGoal();
-    let previous = null;
-    let chain = Promise.resolve();
-    for (let i = 0; i < goal.maxSteps; i += 1) {
-      chain = chain.then(done => {
-        if (done) return done;
-        const stepNumber = i + 1;
-        const prompt = i === 0 ? goal.objective : localGoalFollowup(goal.objective, stepNumber, previous);
-        const runningStep = { stepNumber, status: 'running', text: prompt };
-        goal.steps.push(runningStep);
-        emitChat('hasna:chat-goal-state', { goal });
-        renderChatGoal();
-        return sendLocalChat(prompt, Object.assign({}, options || {}, { _skipGoalParsing: true })).then(result => {
-          previous = result;
-          const terminal = localGoalTerminalText(result.text);
-          runningStep.status = result.pendingConfirmations && result.pendingConfirmations.length ? 'needs_input' : (terminal || 'complete');
-          runningStep.text = result.text;
-          runningStep.toolCalls = result.toolCalls || [];
-          if (runningStep.status === 'needs_input') goal.status = 'needs_input';
-          else if (runningStep.status === 'blocked') goal.status = 'blocked';
-          else if (localGoalComplete(goal.objective, result, i)) goal.status = 'done';
-          if (goal.status !== 'running') {
-            state.chat.goal = goal;
-            result.goal = goal;
-            result.mode = 'goal';
-            emitChat('hasna:chat-goal-state', { goal });
-            renderChatPage();
-            return result;
-          }
-          state.chat.goal = goal;
-          emitChat('hasna:chat-goal-state', { goal });
-          renderChatGoal();
-          return null;
-        });
-      });
-    }
-    return chain.then(result => {
-      if (result) return result;
-      goal.status = 'blocked';
-      goal.blocker = 'Stopped after ' + goal.maxSteps + ' goal steps without a clear completion signal.';
-      state.chat.goal = goal;
-      const blocked = previous || { text: goal.blocker, toolCalls: [], sources: [], pendingConfirmations: [] };
-      blocked.text = goal.blocker;
-      blocked.goal = goal;
-      blocked.mode = 'goal';
-      emitChat('hasna:chat-goal-state', { goal });
-      renderChatPage();
-      return blocked;
-    });
   }
 
   function addSidecarApproval(approval, call) {
@@ -3663,7 +3925,7 @@
         selectedNoteId: opts.noteId || opts.selectedNoteId || state.selectedId || '',
         labels: allLabels().map(item => item.name),
         maxSteps: opts.maxSteps || (goalObjective ? 10 : 8),
-        actorName: opts.actorName || 'Hasna Notes Chat',
+        actorName: opts.actorName || 'PersonalNotes Chat',
         goal: goalObjective ? { objective: goalObjective } : undefined,
       }),
     });
@@ -3695,17 +3957,26 @@
     };
   }
 
+  // Chat is sidecar-backed only. When the sidecar is unavailable the chat surface
+  // says so honestly — there is no local fake-AI fallback.
+  const CHAT_UNAVAILABLE = 'AI unavailable — chat needs the AI sidecar.';
+
   function sendChat(prompt, options) {
     const cfg = ai();
-    if (cfg.available && cfg.port && window.fetch) {
-      return sendSidecarChat(prompt, options).catch(err => {
-        state.chat.messages = state.chat.messages.filter(message => !message.sidecarPending);
-        setChatStatus('error', { error: err.message || String(err) });
-        emitChat('hasna:chat-error', { error: err.message || String(err) });
-        return sendLocalChat(prompt, options).then(result => { renderChatPage(); return result; });
-      });
+    if (!cfg.available || !cfg.port || !window.fetch) {
+      setChatStatus('error', { error: CHAT_UNAVAILABLE });
+      emitChat('hasna:chat-error', { error: CHAT_UNAVAILABLE });
+      renderChatPage();
+      return Promise.reject(new Error(CHAT_UNAVAILABLE));
     }
-    return sendLocalChat(prompt, options).then(result => { renderChatPage(); return result; });
+    return sendSidecarChat(prompt, options).catch(err => {
+      state.chat.messages = state.chat.messages.filter(message => !message.sidecarPending);
+      const error = err.message || String(err);
+      setChatStatus('error', { error });
+      emitChat('hasna:chat-error', { error });
+      renderChatPage();
+      throw err;
+    });
   }
 
   async function approveSidecarChat(approval, approved, call) {
@@ -3724,9 +3995,7 @@
         input: Object.assign({}, approval.input || {}, { confirm: true }),
         confirm: true,
         approvalId: approval.id,
-        actorName: 'Hasna Notes Chat',
-        openedFrom: 'chat-approval',
-        sourceContext: approval.id,
+        actorName: 'PersonalNotes Chat',
       }),
     });
     if (!response.ok) throw new Error('approval_failed');
@@ -3740,80 +4009,14 @@
     return out;
   }
 
+  // Every approval originates from the sidecar tool loop; applying it goes back
+  // through the sidecar /tool endpoint (one apply path, no local duplication).
   function approveChat(approvalId, approved) {
     const approval = state.chat.pendingConfirmations.find(item => item.id === approvalId);
     if (!approval) return null;
     state.chat.pendingConfirmations = state.chat.pendingConfirmations.filter(item => item.id !== approvalId);
     const call = state.chat.toolCalls.find(item => item.id === approval.toolCallId);
-    if (approval.sidecar) return approveSidecarChat(approval, approved, call);
-    if (!approved) {
-      if (call) finishChatToolCall(call, { approved: false, approval }, 'cancelled');
-      setChatStatus('ready');
-      emitChat('hasna:chat-finish', { approved: false, approval });
-      return { approved: false, approval };
-    }
-    if (approval.toolName === 'consolidate_notes') {
-      const input = approval.input || {};
-      const note = quickCreate(input.title || 'Consolidated Notes', input.body || '', {
-        labels: input.labels || ['consolidated'],
-        createdByActorType: 'agent',
-        createdByName: 'Hasna Notes Chat',
-        openedFrom: 'chat',
-        sourceContext: approval.id,
-      });
-      const result = { approved: true, note: chatNoteRef(note), approval };
-      if (call) finishChatToolCall(call, result, 'result');
-      else emitChat('hasna:chat-tool-result', { toolCall: { id: approval.id, name: approval.toolName, state: 'result', result } });
-      emitChat('hasna:chat-finish', result);
-      setChatStatus('ready');
-      return result;
-    }
-    const input = approval.input || {};
-    const note = input.id ? noteById(input.id) : null;
-    if (approval.toolName === 'update_label') {
-      renameLabelLocal(input.oldName, input.newName);
-      const items = allLabels();
-      const result = { approved: true, labels: items.map(item => item.name), items, approval };
-      if (call) finishChatToolCall(call, result, 'result');
-      emitChat('hasna:chat-finish', result);
-      setChatStatus('ready');
-      return result;
-    }
-    if (approval.toolName === 'delete_label') {
-      deleteLabelLocal(input.name, true);
-      const items = allLabels();
-      const result = { approved: true, labels: items.map(item => item.name), items, approval };
-      if (call) finishChatToolCall(call, result, 'result');
-      emitChat('hasna:chat-finish', result);
-      setChatStatus('ready');
-      return result;
-    }
-    if (note && approval.toolName === 'update_note') {
-      if (input.title != null) note.title = String(input.title);
-      if (input.body != null) note.body = String(input.body);
-      saveChatNote(note, 'hasna:note-update');
-    } else if (note && approval.toolName === 'append_note') {
-      note.body = [note.body || '', input.text || ''].filter(Boolean).join('\n\n');
-      saveChatNote(note, 'hasna:note-update');
-    } else if (note && approval.toolName === 'archive_note') {
-      archiveNote(note.id);
-    } else if (note && approval.toolName === 'trash_note') {
-      trashNote(note, { confirmed: true });
-      render();
-    } else if (note && approval.toolName === 'restore_note') {
-      restoreNote(note.id);
-    } else if (note && approval.toolName === 'move_note') {
-      moveNoteToMachine(note.id, input.machine, input.machineName);
-    }
-    if (note) {
-      const result = { approved: true, note: chatNoteRef(note), approval };
-      if (call) finishChatToolCall(call, result, 'result');
-      emitChat('hasna:chat-finish', result);
-      setChatStatus('ready');
-      return result;
-    }
-    setChatStatus('ready');
-    return { approved: true, approval };
+    return approveSidecarChat(approval, approved, call);
   }
 
   function clearChat() {
@@ -3824,6 +4027,7 @@
     state.chat.error = '';
     state.chat.goal = null;
     setChatStatus('ready');
+    renderChatPage(); // clear the visible log too, not just the state
     return chatSnapshot();
   }
 
@@ -3855,6 +4059,8 @@
     note.body = result.markdown;
     note.contentFormat = 'markdown';
     note.updatedAt = new Date().toISOString();
+    // Baseline like commitEdit: the hydrate echo of this save must not read as external.
+    editBase = { id: note.id, title: note.title, body: note.body, updatedAt: note.updatedAt };
     postNative('save', serializeNote(note));
     renderNotesList();
     renderHome();
@@ -3864,48 +4070,50 @@
     return result;
   }
 
-  // Streaming transcript hook (contract): onTranscript({recId, text, isFinal}). Appends/
-  // replaces the partial trailing line on each call, commits on isFinal — no layout jank.
-  // The streaming backend may never call this in testing; the surface degrades to empty.
-	  function onTranscript(payload) {
-	    const p = payload || {};
-	    const text = typeof p === 'string' ? p : String(p.text || '');
-	    const isFinal = !!(p && p.isFinal);
-	    if (isFinal) {
-	      rec.finalTranscript = [rec.finalTranscript, text].filter(Boolean).join(' ').trim();
-	      rec.partialTranscript = '';
-	      if (rec.status === 'transcribing') setRecordingProgress('finalizing-transcript', 0.9);
-	      emitTranscript('hasna:transcript-complete', rec.finalTranscript, p);
-	    } else {
-	      rec.partialTranscript = text;   // partial replaces the trailing partial line
-	      if (rec.status === 'transcribing') setRecordingProgress('receiving-final-transcript', null);
-	      emitTranscript('hasna:transcript-delta', rec.partialTranscript, p);
-	    }
-	    emitRecordingState();
-	    renderTranscript();
-	  }
+  // The ONE transcript state path. Both transcript producers — the internal realtime
+  // WebSocket and the host hook below — land here: partial text replaces the trailing
+  // line, final text appends to the committed transcript, events + UI update once.
+  function applyTranscript(text, isFinal, extra) {
+    if (isFinal) {
+      rec.finalTranscript = [rec.finalTranscript, text].filter(Boolean).join(' ').trim();
+      rec.partialTranscript = '';
+      if (rec.status === 'transcribing') setRecordingProgress('finalizing-transcript', 0.9);
+      emitTranscript('hasna:transcript-complete', rec.finalTranscript, extra);
+    } else {
+      rec.partialTranscript = text || '';   // partial replaces the trailing partial line
+      if (rec.status === 'transcribing') setRecordingProgress('receiving-final-transcript', null);
+      emitTranscript('hasna:transcript-delta', rec.partialTranscript, extra);
+    }
+    emitRecordingState(); // setRecUI → renderTranscript keeps the surface in sync
+  }
+
+  // Streaming transcript hook (contract): onTranscript({recId, text, isFinal}). Thin
+  // adapter over applyTranscript — the host path must not duplicate transcript state.
+  function onTranscript(payload) {
+    const p = payload || {};
+    const text = typeof p === 'string' ? p : String(p.text || '');
+    applyTranscript(text, !!(p && p.isFinal), p);
+  }
 
   // Public surface for the native host.
-  window.HasnaNotes = {
+  window.PersonalNotes = {
     hydrate: hydrate,
     destroy: destroy,
     recCommand: recCommand,
     onTranscript: onTranscript,
 	    notes: {
-	      moveToMachine: moveNoteToMachine,
 	      archive: archiveNote,
 		      trash: trashNoteWithConfirmation,
 		      restore: restoreNote,
 	      purge: purgeNoteWithConfirmation,
+      moveToMachine: moveNoteToMachine,
       info: noteInfo,
       setStatusFilter: setStatusFilter,
       cleanupExpiredTrash: cleanupExpiredTrash,
       settings: function () { return Object.assign({}, state.settings); },
       setTrashRetentionDays: function (days) {
-        state.settings.trashRetentionDays = Math.max(1, Number(days || 30));
-        postNative('settings', state.settings);
-	        return Object.assign({}, state.settings);
-	      },
+        return setTrashRetentionDays(days);
+      },
 	    },
 	    machines: {
 	      list: machineDetailsList,
@@ -3914,12 +4122,15 @@
 	      requestDetails: requestMachineDetails,
 	      receiveDetails: receiveMachineDetails,
 	    },
+    sync: {
+      // Last sync outcome from the boot payload (null = host never reported).
+      status: function () { return state.sync ? Object.assign({}, state.sync) : null; },
+    },
     labels: {
       list: function () { return allLabels(); },
       create: createLabelLocal,
       rename: renameLabelLocal,
       delete: function (name, confirmed) { return deleteLabelLocal(name, !!confirmed); },
-      select: selectLabel,
     },
 	    view: {
 	      state: viewSnapshot,
@@ -3954,6 +4165,11 @@
       transcriptBody: transcriptToNoteBody,
     },
   };
+
+  // DEPRECATED (kept for one release): the bridge global was renamed from
+  // window.HasnaNotes to window.PersonalNotes. This alias keeps old hosts and
+  // integrations working; remove it next release. See docs/ui-contracts.md.
+  window.HasnaNotes = window.PersonalNotes;
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init, { once: true });

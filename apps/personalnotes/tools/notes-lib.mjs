@@ -1,15 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import { execFile } from 'node:child_process';
-import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { copyFile, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { existsSync, readFileSync } from 'node:fs';
+import { homedir, hostname } from 'node:os';
 import { dirname, join } from 'node:path';
-import { promisify } from 'node:util';
-
-const execFileAsync = promisify(execFile);
 
 export function dataRoot() {
-  return process.env.HASNA_NOTES_ROOT || join(homedir(), '.hasna', 'apps', 'notes');
+  return process.env.PERSONALNOTES_ROOT || process.env.HASNA_NOTES_ROOT || join(homedir(), '.hasna', 'apps', 'notes');
 }
 
 export function notesDir(root = dataRoot()) {
@@ -30,6 +26,27 @@ function machinesManifestFile() {
 
 export const DEFAULT_TRASH_RETENTION_DAYS = 30;
 export const CONTENT_FORMAT_MARKDOWN = 'markdown';
+
+// Frontmatter schema v2: fixed key set and order. `rev` is a per-note monotonic
+// integer bumped on every local mutation — sync orders note versions by rev, never
+// by updatedAt wall clocks. `machine`/`machineFriendlyName` are plain informational
+// attribution ("which note belongs to what machine"); the retired FleetSync/move
+// provenance keys (sourceMachine, originMachine, previousMachine,
+// targetMachineFriendlyName, openedFrom, sourceContext, trashMachine, movedAt)
+// are v1-only and dropped by `migrateStoreToV2`.
+export const FRONTMATTER_V2_KEYS = [
+  'id', 'title', 'labels', 'status', 'folder', 'contentFormat',
+  'titleLocked', 'titleSource', 'titleContentFingerprint',
+  'rev', 'createdAt', 'updatedAt',
+  'author', 'agent', 'machine', 'machineFriendlyName',
+  'createdByActorType', 'createdByName',
+  'archivedAt', 'trashedAt', 'trashExpiresAt', 'restoredAt',
+];
+
+export function revFrom(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
+}
 
 export function normalizeLabels(labels) {
   const seen = new Set();
@@ -125,8 +142,14 @@ function normalizeCapabilities(value) {
   return [String(value)];
 }
 
+// Any UUID-SHAPED id is accepted as a stable identity (8-4-4-4-12 hex), not just
+// strict RFC-4122 v1-v5: requiring the version/variant nibbles made parseNote
+// reject foreign ids like 11111111-2222-3333-4444-555555555555 and mint a fresh
+// random fallback id on EVERY read (a different id per list call), while the
+// v1→v2 migrator and Swift's Foundation UUID(uuidString:) both accept them.
+// New notes still always get RFC-4122 v4 ids from randomUUID().
 function isUUID(value) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ''));
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value || ''));
 }
 
 function splitTopLevelCommas(s) {
@@ -146,7 +169,22 @@ function splitTopLevelCommas(s) {
 function unquote(value) {
   const v = String(value || '').trim();
   if (v.length >= 2 && v.startsWith('"') && v.endsWith('"')) {
-    return v.slice(1, -1).replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+    // Unescape in a single left-to-right pass (kept in lockstep with
+    // MarkdownStore.unescapeDoubleQuoted). Sequential regex replaces would
+    // fire `\n` on the second backslash of an escaped pair, corrupting e.g.
+    // "C:\\notes" into "C:\" + a real newline. Recognizes `\\`, `\"`, `\n`;
+    // any other `\x` keeps `x`; a trailing lone backslash is kept.
+    const inner = v.slice(1, -1);
+    let out = '';
+    for (let i = 0; i < inner.length; i += 1) {
+      const ch = inner[i];
+      if (ch !== '\\') { out += ch; continue; }
+      const next = inner[i + 1];
+      if (next === undefined) { out += '\\'; break; }
+      i += 1;
+      out += next === 'n' ? '\n' : next;
+    }
+    return out;
   }
   if (v.length >= 2 && v.startsWith("'") && v.endsWith("'")) return v.slice(1, -1);
   return v;
@@ -154,7 +192,11 @@ function unquote(value) {
 
 function yamlScalar(value) {
   const v = String(value ?? '');
-  const needs = !v || /[:#[\],"\n\\]/.test(v) || /^\s|\s$/.test(v);
+  // Kept in lockstep with MarkdownStore.yamlScalar: a value already wrapped in
+  // single quotes (a title typed as `'hello'`) must be double-quoted too, or
+  // unquote would strip the user's quotes on read.
+  const needs = !v || /[:#[\],"\n\\]/.test(v) || /^\s|\s$/.test(v)
+    || (v.length >= 2 && v.startsWith("'") && v.endsWith("'"));
   if (!needs) return v;
   return '"' + v.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n') + '"';
 }
@@ -190,7 +232,7 @@ export const MARKDOWN_COMMANDS = [
   { id: 'bullet-list', label: 'Bullet list', type: 'block', markdown: '- text' },
   { id: 'numbered-list', label: 'Numbered list', type: 'block', markdown: '1. text' },
   { id: 'quote', label: 'Quote', type: 'block', markdown: '> text' },
-  { id: 'code-block', label: 'Code block', type: 'block', markdown: '```\\ntext\\n```' },
+  { id: 'code-block', label: 'Code block', type: 'block', markdown: '```\ntext\n```' },
   { id: 'checklist', label: 'Checklist', type: 'block', markdown: '- [ ] text' },
   { id: 'divider', label: 'Divider', type: 'insert', markdown: '---' },
 ];
@@ -430,10 +472,11 @@ export function applyMarkdownCommand(markdown, input = {}) {
     return replaceRange(text, start, end, next, start + 4 + language.length, start + 4 + language.length + body.length);
   }
   if (commandId === 'divider') {
-    const prefix = start > 0 && text[start - 1] !== '\n' ? '\n' : '';
+    // Insert AFTER the selection end — a divider must never replace selected text.
+    const prefix = end > 0 && text[end - 1] !== '\n' ? '\n' : '';
     const suffix = end < text.length && text[end] !== '\n' ? '\n' : '';
     const next = `${prefix}---${suffix}`;
-    return replaceRange(text, start, end, next, start + next.length, start + next.length);
+    return replaceRange(text, end, end, next, end + next.length, end + next.length);
   }
 
   const [lineStart, lineEnd] = lineRangeForSelection(text, start, end);
@@ -475,27 +518,20 @@ export function parseNote(raw, fallbackID = randomUUID()) {
     titleLocked: fields.titleLocked == null ? undefined : /^(true|1|yes)$/i.test(fields.titleLocked || ''),
     titleContentFingerprint: unquote(fields.titleContentFingerprint || ''),
     contentFormat: unquote(fields.contentFormat || fields.contentType || CONTENT_FORMAT_MARKDOWN),
+    // v2 auto-detect: v1 files (no `rev` key) read as rev 1 without migration.
+    rev: revFrom(fields.rev),
     createdAt: fields.createdAt || new Date().toISOString(),
     updatedAt: fields.updatedAt || fields.createdAt || new Date().toISOString(),
     author: unquote(fields.author || process.env.USER || 'unknown'),
-    agent: unquote(fields.agent || 'hasna-notes-app'),
-    machine: unquote(fields.machine || hostnameFallback()),
+    agent: unquote(fields.agent || 'personalnotes-app'),
+    machine: unquote(fields.machine || machineIdentity()),
+    machineFriendlyName: machineFriendlyNameFromFields(fields),
     createdByActorType: unquote(fields.createdByActorType || ''),
     createdByName: unquote(fields.createdByName || ''),
-    sourceMachine: unquote(fields.sourceMachine || ''),
-    sourceMachineFriendlyName: unquote(fields.sourceMachineFriendlyName || ''),
-    originMachine: unquote(fields.originMachine || ''),
-    originMachineFriendlyName: unquote(fields.originMachineFriendlyName || ''),
-    targetMachineFriendlyName: unquote(fields.targetMachineFriendlyName || ''),
-    previousMachine: unquote(fields.previousMachine || ''),
-    openedFrom: unquote(fields.openedFrom || ''),
-    sourceContext: unquote(fields.sourceContext || ''),
     archivedAt: unquote(fields.archivedAt || ''),
     trashedAt: unquote(fields.trashedAt || ''),
-    trashMachine: unquote(fields.trashMachine || ''),
     trashExpiresAt: unquote(fields.trashExpiresAt || ''),
     restoredAt: unquote(fields.restoredAt || ''),
-    movedAt: unquote(fields.movedAt || ''),
     body,
   });
 }
@@ -503,10 +539,18 @@ export function parseNote(raw, fallbackID = randomUUID()) {
 function noteFromFields(fields) {
   const title = fields.title || 'Untitled Note';
   const titleSource = fields.titleSource || (isDefaultTitle(title) ? 'default' : 'manual');
-  const machine = fields.machine || fields.targetMachine || hostnameFallback();
-  const actorType = fields.createdByActorType || fields.actorType || process.env.HASNA_NOTES_ACTOR_TYPE || 'human';
-  const actorName = fields.createdByName || fields.actorName || process.env.HASNA_NOTES_ACTOR_NAME || fields.author || process.env.USER || 'unknown';
-  const sourceMachine = fields.sourceMachine || process.env.HASNA_NOTES_SOURCE_MACHINE || hostnameFallback();
+  const machine = fields.machine || fields.targetMachine || machineIdentity();
+  // Actor provenance defaults apply ONLY when the field is absent (a new local
+  // note). An explicit empty string — a parsed file or a pulled sync row whose
+  // origin recorded no provenance — is preserved as-is; default-filling it
+  // here made replica frontmatter drift from the origin file on every pull
+  // (and diverges from the Swift store, which preserves the empty value).
+  const actorType = fields.createdByActorType
+    ?? fields.actorType
+    ?? (process.env.HASNA_NOTES_ACTOR_TYPE || 'human');
+  const actorName = fields.createdByName
+    ?? fields.actorName
+    ?? (process.env.HASNA_NOTES_ACTOR_NAME || fields.author || process.env.USER || 'unknown');
   return {
     id: isUUID(fields.id) ? String(fields.id).toLowerCase() : randomUUID(),
     title,
@@ -516,38 +560,65 @@ function noteFromFields(fields) {
     titleLocked: fields.titleLocked == null ? (titleSource === 'manual' && !isDefaultTitle(title)) : !!fields.titleLocked,
     titleSource,
     titleContentFingerprint: fields.titleContentFingerprint || '',
-    contentFormat: CONTENT_FORMAT_MARKDOWN,
+    // Preserve a non-markdown contentFormat through load→save (lockstep with
+    // Note.swift: legacy formats must survive the round trip).
+    contentFormat: fields.contentFormat || CONTENT_FORMAT_MARKDOWN,
+    rev: revFrom(fields.rev),
     createdAt: fields.createdAt || new Date().toISOString(),
     updatedAt: fields.updatedAt || new Date().toISOString(),
     author: fields.author || process.env.USER || 'unknown',
-    agent: fields.agent || 'hasna-notes-app',
+    agent: fields.agent || 'personalnotes-app',
     machine,
+    machineFriendlyName: fields.machineFriendlyName || '',
     createdByActorType: actorType,
     createdByName: actorName,
-    sourceMachine,
-    sourceMachineFriendlyName: fields.sourceMachineFriendlyName || process.env.HASNA_NOTES_SOURCE_MACHINE_NAME || '',
-    originMachine: fields.originMachine || machine,
-    originMachineFriendlyName: fields.originMachineFriendlyName || fields.sourceMachineFriendlyName || '',
-    targetMachineFriendlyName: fields.targetMachineFriendlyName || '',
-    previousMachine: fields.previousMachine || '',
-    openedFrom: fields.openedFrom || '',
-    sourceContext: fields.sourceContext || '',
     archivedAt: fields.archivedAt || '',
     trashedAt: fields.trashedAt || '',
-    trashMachine: fields.trashMachine || '',
     trashExpiresAt: fields.trashExpiresAt || '',
     restoredAt: fields.restoredAt || '',
-    movedAt: fields.movedAt || '',
     body: fields.body || '',
   };
 }
 
-function hostnameFallback() {
-  return process.env.HOSTNAME || 'unknown';
+/// v2 reads `machineFriendlyName` directly; v1 files fall back to the legacy
+/// source/origin friendly names when they described the note's own machine.
+function machineFriendlyNameFromFields(fields) {
+  // An explicit v2 key wins even when empty (matches the Swift parser).
+  if (fields.machineFriendlyName != null) return unquote(fields.machineFriendlyName);
+  const machine = unquote(fields.machine || '');
+  const sourceMachine = unquote(fields.sourceMachine || '');
+  const sourceName = unquote(fields.sourceMachineFriendlyName || '');
+  if (sourceName && (!sourceMachine || sourceMachine === machine)) return sourceName;
+  const originMachine = unquote(fields.originMachine || '');
+  const originName = unquote(fields.originMachineFriendlyName || '');
+  if (originName && originMachine === machine) return originName;
+  return '';
+}
+
+/// Stable machine identity for note attribution — never a cosmetic display
+/// name (the old cosmetic Computer Name drifted from manifest slugs and
+/// fabricated phantom machine rows). Resolution order:
+///   1. $PERSONALNOTES_MACHINE (explicit override),
+///   2. `machine` in the sync client config (~/.config/personalnotes/config.json
+///      or $PERSONALNOTES_CONFIG) — the configured identity,
+///   3. short hostname (pre-first-dot), else 'unknown'.
+export function machineIdentity() {
+  const override = String(process.env.PERSONALNOTES_MACHINE || '').trim();
+  if (override) return override;
+  try {
+    const path = process.env.PERSONALNOTES_CONFIG
+      || join(homedir(), '.config', 'personalnotes', 'config.json');
+    const configured = String(JSON.parse(readFileSync(path, 'utf8')).machine || '').trim();
+    if (configured) return configured;
+  } catch { /* not configured — fall through to the hostname */ }
+  const short = String(hostname() || '').split('.')[0].trim();
+  return short || 'unknown';
 }
 
 export function serializeNote(note) {
   const n = noteFromFields(note);
+  // Schema v2 — key order is FRONTMATTER_V2_KEYS (kept in lockstep with
+  // PersonalNotesCore/MarkdownStore.serialize).
   const lines = [
     '---',
     `id: ${n.id.toLowerCase()}`,
@@ -555,31 +626,23 @@ export function serializeNote(note) {
     `labels: [${normalizeLabels(n.labels).map(yamlScalar).join(', ')}]`,
     `status: ${n.status}`,
     `folder: ${yamlScalar(n.folder)}`,
-    `contentFormat: ${CONTENT_FORMAT_MARKDOWN}`,
+    `contentFormat: ${yamlScalar(n.contentFormat || CONTENT_FORMAT_MARKDOWN)}`,
     `titleLocked: ${n.titleLocked ? 'true' : 'false'}`,
     `titleSource: ${n.titleSource}`,
     `titleContentFingerprint: ${yamlScalar(n.titleContentFingerprint)}`,
+    `rev: ${revFrom(n.rev)}`,
     `createdAt: ${n.createdAt}`,
     `updatedAt: ${n.updatedAt}`,
     `author: ${yamlScalar(n.author)}`,
     `agent: ${yamlScalar(n.agent)}`,
     `machine: ${yamlScalar(n.machine)}`,
+    `machineFriendlyName: ${yamlScalar(n.machineFriendlyName)}`,
     `createdByActorType: ${yamlScalar(n.createdByActorType)}`,
     `createdByName: ${yamlScalar(n.createdByName)}`,
-    `sourceMachine: ${yamlScalar(n.sourceMachine)}`,
-    `sourceMachineFriendlyName: ${yamlScalar(n.sourceMachineFriendlyName)}`,
-    `originMachine: ${yamlScalar(n.originMachine)}`,
-    `originMachineFriendlyName: ${yamlScalar(n.originMachineFriendlyName)}`,
-    `targetMachineFriendlyName: ${yamlScalar(n.targetMachineFriendlyName)}`,
-    `previousMachine: ${yamlScalar(n.previousMachine)}`,
-    `openedFrom: ${yamlScalar(n.openedFrom)}`,
-    `sourceContext: ${yamlScalar(n.sourceContext)}`,
     `archivedAt: ${yamlScalar(n.archivedAt)}`,
     `trashedAt: ${yamlScalar(n.trashedAt)}`,
-    `trashMachine: ${yamlScalar(n.trashMachine)}`,
     `trashExpiresAt: ${yamlScalar(n.trashExpiresAt)}`,
     `restoredAt: ${yamlScalar(n.restoredAt)}`,
-    `movedAt: ${yamlScalar(n.movedAt)}`,
     '---',
   ];
   return lines.join('\n') + '\n' + n.body;
@@ -599,11 +662,20 @@ export async function loadNotes(root = dataRoot()) {
   return notes.sort((a, b) => Date.parse(b.updatedAt || 0) - Date.parse(a.updatedAt || 0));
 }
 
-export async function saveNote(note, root = dataRoot()) {
+export async function saveNote(note, root = dataRoot(), opts = {}) {
   const dir = notesDir(root);
   await mkdir(dir, { recursive: true });
   const n = noteFromFields(note);
   const path = join(dir, `${n.id.toLowerCase()}.md`);
+  if (!opts.preserveRev) {
+    // Every local mutation bumps the per-note monotonic `rev` past whatever is on
+    // disk, so sync can order versions without trusting wall clocks. New files keep
+    // their initial rev (default 1). Sync-applied writes pass `preserveRev: true`.
+    const existingRaw = await readFile(path, 'utf8').catch(() => null);
+    if (existingRaw != null) {
+      n.rev = Math.max(revFrom(n.rev), revFrom(parseNote(existingRaw, n.id).rev)) + 1;
+    }
+  }
   const tmp = join(dir, `.${n.id}.${randomUUID()}.tmp`);
   await writeFile(tmp, serializeNote(n), 'utf8');
   await rename(tmp, path);
@@ -681,7 +753,6 @@ function machineFromEntry(entry) {
     slug,
     displayName,
     friendlyName,
-    sshAddress: pickString(e, ['sshAddress', 'ssh', 'host', 'hostname'], id),
     platform: pickString(e, ['platform', 'os'], 'unknown'),
     status,
     online,
@@ -711,36 +782,16 @@ export function parseMachineManifestJSON(raw) {
   return entries.map(machineFromEntry).filter(Boolean);
 }
 
-async function runMachinesCLI() {
-  const candidates = [
-    process.env.HASNA_MACHINES_CLI,
-    join(homedir(), '.bun', 'bin', 'machines'),
-    '/usr/local/bin/machines',
-    '/opt/homebrew/bin/machines',
-    'machines',
-  ].filter(Boolean);
-  for (const bin of candidates) {
-    try {
-      const { stdout } = await execFileAsync(bin, ['manifest', 'list', '--json'], { timeout: 2500, maxBuffer: 1024 * 1024 });
-      if (stdout && stdout.trim()) return stdout;
-    } catch {}
-  }
-  return null;
-}
-
+/// The optional machine manifest file is the ONLY discovery source (friendly
+/// names/slugs for machine rows). The old FleetSync-era fallback that executed
+/// an external `machines` CLI was removed with the rest of the fleet engine —
+/// missing/unreadable manifest simply yields an empty list and machine rows
+/// come purely from note frontmatter.
 export async function loadMachineManifest(opts = {}) {
   const manifestPath = opts.manifestPath || opts.manifest || machinesManifestFile();
   const raw = await readFile(manifestPath, 'utf8').catch(() => null);
-  if (raw) {
-    try {
-      const machines = parseMachineManifestJSON(raw);
-      if (machines.length) return machines;
-    } catch {}
-  }
-  if (opts.runCLI === false) return [];
-  const cliRaw = await runMachinesCLI();
-  if (!cliRaw) return [];
-  try { return parseMachineManifestJSON(cliRaw); }
+  if (!raw) return [];
+  try { return parseMachineManifestJSON(raw); }
   catch { return []; }
 }
 
@@ -778,7 +829,6 @@ function machineDetailFrom(machine, notes, idOverride = '') {
     slug: machine?.slug || id,
     displayName: machine?.displayName || machine?.friendlyName || id,
     friendlyName: machine?.friendlyName || '',
-    sshAddress: machine?.sshAddress || id,
     platform: machine?.platform || 'unknown',
     status: machine?.status || 'unknown',
     online: machine?.online ?? null,
@@ -811,7 +861,7 @@ export async function listMachineDetails(opts = {}, root = dataRoot()) {
     byId.set(note.machine, detail);
     aliasToId.set(note.machine, note.machine);
   }
-  const local = opts.thisMachine || hostnameFallback();
+  const local = opts.thisMachine || machineIdentity();
   if (local && !aliasToId.has(local) && !byId.has(local)) byId.set(local, machineDetailFrom(null, notes, local));
   const items = [...byId.values()].sort((a, b) => {
     const d = Date.parse(b.recentActivityAt || b.updatedAt || 0) - Date.parse(a.recentActivityAt || a.updatedAt || 0);
@@ -838,22 +888,22 @@ async function mutateNote(id, mutate, root = dataRoot()) {
   if (!note) throw new Error('note_not_found');
   mutate(note);
   note.updatedAt = new Date().toISOString();
-  await saveNote(note, root);
-  return note;
+  // Return the saved copy — saveNote assigns the bumped monotonic rev.
+  return saveNote(note, root);
 }
 
+/// Re-attribute a note to another machine. In schema v2 this is a plain
+/// informational update of `machine` (+ optional friendly name) — no move
+/// provenance trail is kept.
 export async function moveNoteToMachine(id, targetMachine, opts = {}, root = dataRoot()) {
   const target = String(targetMachine || '').trim();
   if (!target) throw new Error('target_machine_required');
   return mutateNote(id, (note) => {
-    if (!note.originMachine) note.originMachine = note.machine;
-    if (!note.originMachineFriendlyName && note.sourceMachineFriendlyName) {
-      note.originMachineFriendlyName = note.sourceMachineFriendlyName;
-    }
-    note.previousMachine = note.machine;
+    const changed = note.machine !== target;
+    const friendlyName = opts.machineFriendlyName || opts.targetMachineFriendlyName || '';
     note.machine = target;
-    note.movedAt = new Date().toISOString();
-    if (opts.targetMachineFriendlyName) note.targetMachineFriendlyName = opts.targetMachineFriendlyName;
+    // A stale friendly name must not describe the old machine.
+    note.machineFriendlyName = friendlyName || (changed ? '' : note.machineFriendlyName);
   }, root);
 }
 
@@ -862,7 +912,6 @@ export async function archiveNote(id, root = dataRoot()) {
     note.status = 'archived';
     note.archivedAt = new Date().toISOString();
     note.trashedAt = '';
-    note.trashMachine = '';
     note.trashExpiresAt = '';
   }, root);
 }
@@ -873,7 +922,6 @@ export async function trashNote(id, opts = {}, root = dataRoot()) {
   return mutateNote(id, (note) => {
     note.status = 'trash';
     note.trashedAt = new Date().toISOString();
-    note.trashMachine = opts.trashMachine || note.machine || hostnameFallback();
     note.trashExpiresAt = addDays(note.trashedAt, retentionDays);
   }, root);
 }
@@ -883,17 +931,21 @@ export async function restoreNote(id, root = dataRoot()) {
     note.status = 'active';
     note.archivedAt = '';
     note.trashedAt = '';
-    note.trashMachine = '';
     note.trashExpiresAt = '';
     note.restoredAt = new Date().toISOString();
   }, root);
 }
 
 export async function purgeExpiredTrash(root = dataRoot(), now = new Date()) {
+  const settings = await loadSettings(root);
   const purged = [];
   for (const note of await loadNotes(root)) {
-    if (note.status !== 'trash' || !note.trashExpiresAt) continue;
-    if (Date.parse(note.trashExpiresAt) <= now.getTime()) {
+    if (note.status !== 'trash') continue;
+    // Legacy trash (no trashExpiresAt stamp) falls back to trashedAt + retention.
+    const expires = note.trashExpiresAt
+      || (note.trashedAt ? addDays(note.trashedAt, settings.trashRetentionDays) : '');
+    if (!expires) continue;
+    if (Date.parse(expires) <= now.getTime()) {
       await deleteNote(note.id, root);
       purged.push(note.id);
     }
@@ -929,9 +981,9 @@ export async function assignLabel(id, label, root = dataRoot()) {
   if (!note) throw new Error('note_not_found');
   note.labels = normalizeLabels([...note.labels, label]);
   note.updatedAt = new Date().toISOString();
-  await saveNote(note, root);
+  const saved = await saveNote(note, root);
   await saveLabelList([...(await loadLabelList(root)), label], root);
-  return note;
+  return saved;
 }
 
 export async function unassignLabel(id, label, root = dataRoot()) {
@@ -940,8 +992,7 @@ export async function unassignLabel(id, label, root = dataRoot()) {
   const key = String(label).toLowerCase();
   note.labels = note.labels.filter(l => l.toLowerCase() !== key);
   note.updatedAt = new Date().toISOString();
-  await saveNote(note, root);
-  return note;
+  return saveNote(note, root);
 }
 
 export function isDefaultTitle(title) {
@@ -984,7 +1035,10 @@ export async function generateTitle(text, opts = {}) {
   if (opts.sidecar) {
     const token = opts.sidecarToken || process.env.HASNA_NOTES_SIDECAR_TOKEN || '';
     const headers = { 'Content-Type': 'application/json' };
-    if (token) headers['X-Hasna-Notes-Token'] = token;
+    if (token) {
+      headers['X-PersonalNotes-Token'] = token;
+      headers['X-Hasna-Notes-Token'] = token; // legacy header; removed next release
+    }
     const res = await fetch(String(opts.sidecar).replace(/\/$/, '') + '/title', {
       method: 'POST',
       headers,
@@ -1002,4 +1056,147 @@ export async function generateTitle(text, opts = {}) {
 export async function getNote(id, root = dataRoot()) {
   const key = String(id || '').toLowerCase();
   return (await loadNotes(root)).find(n => String(n.id).toLowerCase() === key) || null;
+}
+
+// ---------------------------------------------------------------------------
+// Frontmatter v1 -> v2 migration (one-shot, idempotent).
+// ---------------------------------------------------------------------------
+
+/// Rewrite one note document to schema v2 without touching the body bytes.
+/// - v2 files (frontmatter already has `rev`) are returned unchanged.
+/// - Files without frontmatter are returned unchanged (readable as-is).
+/// - v1 files keep every v2 key verbatim (legacy `tags`/`contentType` fold into
+///   `labels`/`contentFormat`), gain `rev: 1`, derive `machineFriendlyName` from
+///   the legacy `sourceMachineFriendlyName`/`originMachineFriendlyName` keys
+///   (when they described the note's own machine — machineFriendlyNameFromFields),
+///   and drop everything else. Dropped keys are reported so the migrator can log
+///   them; keys whose value was folded in are consumed, not reported dropped.
+export function migrateNoteTextToV2(raw) {
+  const text = String(raw || '');
+  const open = /^---\r?\n/.exec(text);
+  if (!open) return { version: 'bare', changed: false, text, dropped: [] };
+
+  // Walk lines manually so the body after the closing delimiter is preserved
+  // byte-for-byte (parseNote normalizes CRLF; the migrator must not).
+  let idx = open[0].length;
+  const fmLines = [];
+  let bodyStart = -1;
+  while (idx <= text.length) {
+    const nl = text.indexOf('\n', idx);
+    const lineEnd = nl < 0 ? text.length : nl;
+    const line = text.slice(idx, lineEnd);
+    const bare = line.endsWith('\r') ? line.slice(0, -1) : line;
+    if (bare === '---') { bodyStart = nl < 0 ? text.length : nl + 1; break; }
+    if (nl < 0) break; // unterminated frontmatter
+    fmLines.push(bare);
+    idx = nl + 1;
+  }
+  if (bodyStart < 0) return { version: 'bare', changed: false, text, dropped: [] };
+
+  const fields = parseFrontmatter(fmLines);
+  if (fields.rev != null && fields.rev !== '') {
+    return { version: 'v2', changed: false, text, dropped: [] };
+  }
+
+  const body = text.slice(bodyStart);
+  const consumed = new Set();
+  // Keys absent in the v1 file are emitted with the SAME deterministic default
+  // the v2 serializer writes, so a migrated file is key-identical to what a
+  // sync replica serializes on another machine (missing keys were permanent
+  // cosmetic cross-device diffs). Non-deterministic keys (id, timestamps,
+  // author, agent, machine) are never fabricated — they stay absent and the
+  // parser fills them at read time.
+  const parsedTitle = unquote(fields.title || 'Untitled Note');
+  const derivedTitleSource = fields.titleSource || (isDefaultTitle(parsedTitle) ? 'default' : 'manual');
+  const defaults = {
+    title: 'title: Untitled Note',
+    labels: 'labels: []',
+    status: 'status: active',
+    folder: 'folder: ""',
+    contentFormat: `contentFormat: ${CONTENT_FORMAT_MARKDOWN}`,
+    titleLocked: `titleLocked: ${derivedTitleSource === 'manual' && !isDefaultTitle(parsedTitle) ? 'true' : 'false'}`,
+    titleSource: `titleSource: ${derivedTitleSource}`,
+    titleContentFingerprint: 'titleContentFingerprint: ""',
+    createdByActorType: 'createdByActorType: ""',
+    createdByName: 'createdByName: ""',
+    archivedAt: 'archivedAt: ""',
+    trashedAt: 'trashedAt: ""',
+    trashExpiresAt: 'trashExpiresAt: ""',
+    restoredAt: 'restoredAt: ""',
+  };
+  const lines = ['---'];
+  for (const key of FRONTMATTER_V2_KEYS) {
+    if (key === 'rev') { lines.push('rev: 1'); continue; }
+    if (key === 'machineFriendlyName') {
+      const friendly = machineFriendlyNameFromFields(fields);
+      consumed.add('machineFriendlyName');
+      // A legacy key whose value was folded in is consumed, not dropped — keep
+      // the "dropped v1 keys" report honest (same as the tags/contentType folds).
+      if (friendly) {
+        if (unquote(fields.sourceMachineFriendlyName || '') === friendly) consumed.add('sourceMachineFriendlyName');
+        if (unquote(fields.originMachineFriendlyName || '') === friendly) consumed.add('originMachineFriendlyName');
+      }
+      lines.push(`machineFriendlyName: ${yamlScalar(friendly)}`);
+      continue;
+    }
+    let value = fields[key];
+    if (value == null && key === 'labels' && fields.tags != null) { value = fields.tags; consumed.add('tags'); }
+    if (value == null && key === 'contentFormat' && fields.contentType != null) { value = fields.contentType; consumed.add('contentType'); }
+    if (value == null) {
+      if (defaults[key]) lines.push(defaults[key]);
+      continue;
+    }
+    consumed.add(key);
+    lines.push(`${key}: ${value}`);
+  }
+  lines.push('---');
+
+  const dropped = Object.keys(fields).filter(key => !consumed.has(key) && !FRONTMATTER_V2_KEYS.includes(key));
+  const next = lines.join('\n') + '\n' + body;
+  return { version: 'v1', changed: next !== text, text: next, dropped };
+}
+
+/// One-shot store migration: upgrade every v1 note file in `<root>/notes/` to
+/// schema v2 in place. Backup-first (originals copied to
+/// `<root>/backup-frontmatter-v1/` once), atomic per file (tmp + rename),
+/// idempotent (v2 files are skipped), body preserved byte-for-byte.
+export async function migrateStoreToV2(root = dataRoot(), opts = {}) {
+  const dir = notesDir(root);
+  const backupDir = join(root, 'backup-frontmatter-v1');
+  const files = (await readdir(dir).catch(() => [])).filter(f => f.endsWith('.md')).sort();
+  const summary = {
+    root, backupDir, dryRun: !!opts.dryRun,
+    scanned: 0, migrated: 0, alreadyV2: 0, skipped: 0,
+    droppedKeys: {}, files: [],
+  };
+  for (const file of files) {
+    const path = join(dir, file);
+    const raw = await readFile(path, 'utf8').catch(() => null);
+    if (raw == null) continue;
+    summary.scanned += 1;
+    const result = migrateNoteTextToV2(raw);
+    if (result.version === 'v2') { summary.alreadyV2 += 1; continue; }
+    if (result.version === 'bare' || !result.changed) {
+      summary.skipped += 1;
+      summary.files.push({ file, action: 'skipped', reason: result.version });
+      continue;
+    }
+    for (const key of result.dropped) {
+      summary.droppedKeys[key] = (summary.droppedKeys[key] || 0) + 1;
+    }
+    if (opts.dryRun) {
+      summary.migrated += 1;
+      summary.files.push({ file, action: 'would-migrate', dropped: result.dropped });
+      continue;
+    }
+    await mkdir(backupDir, { recursive: true });
+    const backupPath = join(backupDir, file);
+    if (!existsSync(backupPath)) await copyFile(path, backupPath);
+    const tmp = join(dir, `.${file}.${randomUUID()}.tmp`);
+    await writeFile(tmp, result.text, 'utf8');
+    await rename(tmp, path);
+    summary.migrated += 1;
+    summary.files.push({ file, action: 'migrated', dropped: result.dropped });
+  }
+  return summary;
 }

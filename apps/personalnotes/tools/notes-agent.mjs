@@ -77,7 +77,7 @@ export const CHAT_TOOL_SCHEMAS = [
   toolSchema('archive_note', 'Archive one note. Requires confirmation.', { id: { type: 'string' } }, { required: ['id'], mutates: true, requiresConfirmation: true }),
   toolSchema('trash_note', 'Move one note to Trash. Requires confirmation.', { id: { type: 'string' } }, { required: ['id'], mutates: true, requiresConfirmation: true }),
   toolSchema('restore_note', 'Restore one archived or trashed note. Requires confirmation.', { id: { type: 'string' } }, { required: ['id'], mutates: true, requiresConfirmation: true }),
-  toolSchema('move_note', 'Move one note to another machine while preserving origin metadata. Requires confirmation.', {
+  toolSchema('move_note', 'Re-attribute one note to another machine (informational machine + friendly name). Requires confirmation.', {
     id: { type: 'string' },
     machine: { type: 'string' },
     machineName: { type: 'string' },
@@ -173,13 +173,10 @@ export function noteInfo(note) {
     createdByActorType: note.createdByActorType || 'human',
     createdAt: note.createdAt || '',
     updatedAt: note.updatedAt || '',
-    sourceMachine: note.sourceMachine || '',
-    sourceMachineFriendlyName: note.sourceMachineFriendlyName || '',
-    originMachine: note.originMachine || note.machine || '',
-    originMachineFriendlyName: note.originMachineFriendlyName || '',
+    machine: note.machine || '',
+    machineFriendlyName: note.machineFriendlyName || '',
     currentMachine: note.machine || '',
-    openedFrom: note.openedFrom || '',
-    sourceContext: note.sourceContext || '',
+    rev: Number(note.rev) >= 1 ? Math.floor(Number(note.rev)) : 1,
   };
 }
 
@@ -256,14 +253,10 @@ async function withPreview(toolName, args, options, previewFactory, execute) {
   return execute();
 }
 
-function sourceContext(options) {
+function actorProvenance(options) {
   return {
     actorType: options.actorType || 'agent',
-    actorName: options.actorName || process.env.HASNA_NOTES_ACTOR_NAME || 'Hasna Notes Agent',
-    openedFrom: options.openedFrom || 'agent',
-    sourceContext: options.sourceContext || 'hasna-notes-agent',
-    sourceMachine: options.sourceMachine || process.env.HASNA_NOTES_SOURCE_MACHINE,
-    sourceMachineFriendlyName: options.sourceMachineFriendlyName || process.env.HASNA_NOTES_SOURCE_MACHINE_NAME,
+    actorName: options.actorName || process.env.HASNA_NOTES_ACTOR_NAME || 'PersonalNotes Agent',
   };
 }
 
@@ -321,7 +314,7 @@ export async function executeNotesAgentTool(toolName, args = {}, options = {}) {
         labels,
         targetMachine: args.targetMachine || '',
         bodyPreview: String(args.body || '').slice(0, 240),
-        provenance: sourceContext(options),
+        provenance: actorProvenance(options),
       });
     }
     const note = await saveNote({
@@ -331,12 +324,8 @@ export async function executeNotesAgentTool(toolName, args = {}, options = {}) {
       machine: args.targetMachine,
       createdAt: now,
       updatedAt: now,
-      createdByActorType: sourceContext(options).actorType,
-      createdByName: sourceContext(options).actorName,
-      openedFrom: sourceContext(options).openedFrom,
-      sourceContext: sourceContext(options).sourceContext,
-      sourceMachine: sourceContext(options).sourceMachine,
-      sourceMachineFriendlyName: sourceContext(options).sourceMachineFriendlyName,
+      createdByActorType: actorProvenance(options).actorType,
+      createdByName: actorProvenance(options).actorName,
       titleLocked: !!String(args.title || '').trim(),
       titleSource: String(args.title || '').trim() ? 'manual' : 'default',
     }, root);
@@ -370,8 +359,8 @@ export async function executeNotesAgentTool(toolName, args = {}, options = {}) {
       if (args.folder != null) note.folder = String(args.folder || '');
       if (args.status != null) note.status = normalizeStatus(args.status, note.status || 'active');
       note.updatedAt = new Date().toISOString();
-      await saveNote(note, root);
-      return { note, sources: [noteReference(note)] };
+      const saved = await saveNote(note, root);
+      return { note: saved, sources: [noteReference(saved)] };
     });
   }
 
@@ -386,8 +375,8 @@ export async function executeNotesAgentTool(toolName, args = {}, options = {}) {
     }), async () => {
       note.body = [note.body || '', text].filter(Boolean).join('\n\n');
       note.updatedAt = new Date().toISOString();
-      await saveNote(note, root);
-      return { note, sources: [noteReference(note)] };
+      const saved = await saveNote(note, root);
+      return { note: saved, sources: [noteReference(saved)] };
     });
   }
 
@@ -439,7 +428,7 @@ export async function executeNotesAgentTool(toolName, args = {}, options = {}) {
       toMachine: machine,
       machineName: args.machineName || '',
     }), async () => {
-      const changed = await moveNoteToMachine(note.id, machine, { targetMachineFriendlyName: args.machineName }, root);
+      const changed = await moveNoteToMachine(note.id, machine, { machineFriendlyName: args.machineName }, root);
       return { note: changed, sources: [noteReference(changed)] };
     });
   }
@@ -536,12 +525,8 @@ export async function executeNotesAgentTool(toolName, args = {}, options = {}) {
         labels: normalizeLabels(args.labels || ['consolidated']),
         createdAt: now,
         updatedAt: now,
-        createdByActorType: sourceContext(options).actorType,
-        createdByName: sourceContext(options).actorName,
-        openedFrom: sourceContext(options).openedFrom,
-        sourceContext: sourceContext(options).sourceContext,
-        sourceMachine: sourceContext(options).sourceMachine,
-        sourceMachineFriendlyName: sourceContext(options).sourceMachineFriendlyName,
+        createdByActorType: actorProvenance(options).actorType,
+        createdByName: actorProvenance(options).actorName,
         titleLocked: true,
         titleSource: 'manual',
       }, root);
@@ -636,7 +621,7 @@ function goalTerminalFromText(text) {
 function goalFollowupPrompt(objective, stepNumber, previous) {
   const prior = previous?.text ? `\nPrevious result:\n${previous.text.slice(0, 1200)}` : '';
   return [
-    `Continue this Hasna Notes goal until it is achieved, needs user input, or is clearly blocked.`,
+    `Continue this PersonalNotes goal until it is achieved, needs user input, or is clearly blocked.`,
     `Goal: ${objective}`,
     `Step ${stepNumber}: inspect or use the safest next note/label operation. Do not repeat a completed step.${prior}`,
   ].join('\n');
@@ -798,8 +783,7 @@ export async function runNotesAgent(prompt, options = {}) {
       `${info.title} (${info.id})`,
       `Created by ${info.createdBy} (${info.createdByActorType})`,
       info.createdAt ? `Created ${info.createdAt}` : '',
-      info.currentMachine ? `Machine ${info.currentMachine}` : '',
-      info.openedFrom ? `Opened from ${info.openedFrom}` : '',
+      info.currentMachine ? `Machine ${info.machineFriendlyName || info.currentMachine}` : '',
     ].filter(Boolean).join('\n');
   } else if (/\b(read|open|show|get)\b/.test(lower) && id) {
     result = await runTool('read_note', { id }, options, toolCalls);

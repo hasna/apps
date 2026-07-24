@@ -5,3 +5,4 @@ dist/
 node_modules/
 ai-sidecar/node_modules/
 tools/shots/
+.hasna/

@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "hasna-notes-ai-sidecar",
+      "name": "personalnotes-ai-sidecar",
       "dependencies": {
         "@ai-sdk/openai": "3.0.71",
         "ai": "6.0.205",
