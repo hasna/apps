@@ -13,7 +13,15 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { getStore } from "../../lib/store/index.js";
 import { resolveIdentity } from "../../lib/identity.js";
+import { assertNoSensitiveContent, redactSensitiveText } from "../../lib/content-safety.js";
 import { compactQueriedMessages, compactWindowedChannels, jsonText, resolveMcpWindow } from "../compact.js";
+
+function toolError(error: unknown, fallback: string) {
+  return {
+    content: [{ type: "text" as const, text: error instanceof Error ? error.message : fallback }],
+    isError: true,
+  };
+}
 
 export function registerChannelTools(server: McpServer): void {
 
@@ -95,23 +103,34 @@ export function registerChannelTools(server: McpServer): void {
     const { from: fromParam, channel, content, priority, blocking } = args;
     const from = resolveIdentity(fromParam);
 
+    try {
+      assertNoSensitiveContent(channel, "Message channel");
+    } catch (error) {
+      return toolError(error, "Failed to send channel message.");
+    }
+
     const sp = await store.getChannel(channel);
     if (!sp) {
       return {
-        content: [{ type: "text", text: `channel "${channel}" not found` }],
+        content: [{ type: "text", text: "channel not found" }],
         isError: true,
       };
     }
 
-    const msg = await store.sendMessage({
-      from,
-      to: channel,
-      content,
-      channel,
-      session_id: `channel:${channel}`,
-      priority,
-      blocking,
-    });
+    let msg;
+    try {
+      msg = await store.sendMessage({
+        from,
+        to: channel,
+        content,
+        channel,
+        session_id: `channel:${channel}`,
+        priority,
+        blocking,
+      });
+    } catch (error) {
+      return toolError(error, "Failed to send channel message.");
+    }
 
     return {
       content: [{ type: "text", text: JSON.stringify(msg) }],
@@ -445,13 +464,14 @@ export function registerChannelTools(server: McpServer): void {
 
     for (const m of rows) {
       const from = m.from_agent;
+      const content = redactSensitiveText(m.content);
       agents.add(from);
       agentCounts[from] = (agentCounts[from] ?? 0) + 1;
       if (m.blocking) {
-        blockers.push({ id: m.id, from, content: m.content.slice(0, 150), created_at: m.created_at });
+        blockers.push({ id: m.id, from, content: content.slice(0, 150), created_at: m.created_at });
       }
       // Count @mentions
-      const mentionedAgents = m.content.match(/@([a-zA-Z0-9_-]+)/g) ?? [];
+      const mentionedAgents = content.match(/@([a-zA-Z0-9_-]+)/g) ?? [];
       for (const mention of mentionedAgents) {
         const a = mention.slice(1).toLowerCase();
         mentions[a] = (mentions[a] ?? 0) + 1;
@@ -480,7 +500,7 @@ export function registerChannelTools(server: McpServer): void {
     if (highPri.length > 0) {
       parts.push(`\n🔴 High priority (${highPri.length}):`);
       for (const m of highPri) {
-        parts.push(`  • [${m.priority}] ${m.from_agent}: ${m.content.slice(0, 100)}`);
+        parts.push(`  • [${m.priority}] ${m.from_agent}: ${redactSensitiveText(m.content).slice(0, 100)}`);
       }
     }
 

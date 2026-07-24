@@ -3,7 +3,7 @@ import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
-import { closeDb } from "../lib/db.js";
+import { closeDb, getDb } from "../lib/db.js";
 import { readMessages, sendMessage } from "../lib/messages.js";
 import { createChannel } from "../lib/channels.js";
 import { readChannelNotifications, subscribeToChannelNotifications } from "../lib/channel-notifications.js";
@@ -12,6 +12,18 @@ import { registerChannelBridge, setSessionAgent, setClaudeSessionId, getSessionA
 
 function createTestDbPath(): string {
   return join(tmpdir(), `conversations-channel-${Date.now()}-${Math.random().toString(16).slice(2)}.db`);
+}
+
+function syntheticDatabaseUrl(): string {
+  return ["postgres", "://", "bridge_user:synthetic-password", "@db.example.invalid/app"].join("");
+}
+
+function insertLegacyChannelMessage(channel: string, content: string): number {
+  const result = getDb().prepare(`
+    INSERT INTO messages (session_id, from_agent, to_agent, channel, content)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(`channel:${channel}`, "legacy-sender", channel, channel, content);
+  return Number(result.lastInsertRowid);
 }
 
 async function waitFor(check: () => boolean, timeoutMs = 1500): Promise<void> {
@@ -82,6 +94,39 @@ describe("channel bridge delivery", () => {
       expect(delivered[0].params.content).toContain("alice posted in #notify-bridge");
       expect(delivered[0].params.content).toContain("Preview only for channel message");
       expect(readChannelNotifications({ agent: "watcher", unread_only: true })).toHaveLength(0);
+    } finally {
+      stop();
+    }
+  });
+
+  test("channel blurbs redact legacy sensitive notification previews", async () => {
+    const blocked = syntheticDatabaseUrl();
+    process.env.CONVERSATIONS_DB_PATH = createTestDbPath();
+    closeDb();
+
+    createChannel("notify-bridge-redact", "creator");
+    subscribeToChannelNotifications("notify-bridge-redact", "watcher", { preview_chars: 120 });
+    setSessionAgent("watcher", "claude-session-channel-redact");
+
+    const delivered: Array<{ method: string; params: any }> = [];
+    const stop = registerChannelBridge({
+      server: {
+        registerCapabilities() {},
+        async notification(payload: { method: string; params: any }) {
+          delivered.push(payload);
+        },
+      },
+    } as any, {
+      pollIntervalMs: 20,
+      startDelayMs: 0,
+    });
+
+    try {
+      insertLegacyChannelMessage("notify-bridge-redact", `legacy ${blocked}`);
+      await waitFor(() => delivered.length === 1);
+
+      expect(delivered[0].params.content).toContain("[REDACTED:DATABASE URL]");
+      expect(delivered[0].params.content).not.toContain(blocked);
     } finally {
       stop();
     }

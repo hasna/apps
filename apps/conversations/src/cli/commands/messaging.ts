@@ -31,6 +31,12 @@ export function formatDigestContinuationCommand(result: Pick<DigestResult, "chan
   return parts.join(" ");
 }
 
+function failCommand(error: unknown, fallback: string): never {
+  console.error(chalk.red(error instanceof Error ? error.message : fallback));
+  closeDb();
+  process.exit(1);
+}
+
 export function registerMessagingCommands(program: Command): void {
   // ---- send ----
   program
@@ -76,19 +82,24 @@ export function registerMessagingCommands(program: Command): void {
         }
       }
 
-      const msg = await await getStore().sendMessage({
-        from,
-        to: to || from,
-        channel: channel || undefined,
-        content,
-        session_id: session,
-        priority: opts.priority,
-        working_dir: opts.workingDir,
-        repository: opts.repository,
-        branch: opts.branch,
-        metadata,
-        blocking: opts.blocking,
-      });
+      let msg;
+      try {
+        msg = await getStore().sendMessage({
+          from,
+          to: to || from,
+          channel: channel || undefined,
+          content,
+          session_id: session,
+          priority: opts.priority,
+          working_dir: opts.workingDir,
+          repository: opts.repository,
+          branch: opts.branch,
+          metadata,
+          blocking: opts.blocking,
+        });
+      } catch (error) {
+        return failCommand(error, "Failed to send message.");
+      }
 
       if (opts.json) {
         console.log(JSON.stringify(msg, null, 2));
@@ -390,14 +401,19 @@ export function registerMessagingCommands(program: Command): void {
       const to = channel
         ? channel
         : (original.from_agent === from ? original.to_agent : original.from_agent);
-      const msg = await await getStore().sendMessage({
-        from,
-        to,
-        content,
-        session_id: original.session_id,
-        priority: opts.priority,
-        channel,
-      });
+      let msg;
+      try {
+        msg = await getStore().sendMessage({
+          from,
+          to,
+          content,
+          session_id: original.session_id,
+          priority: opts.priority,
+          channel,
+        });
+      } catch (error) {
+        return failCommand(error, "Failed to send reply.");
+      }
 
       if (opts.json) {
         console.log(JSON.stringify(msg, null, 2));
@@ -483,7 +499,12 @@ export function registerMessagingCommands(program: Command): void {
         emitCliError("New content cannot be empty.", opts);
       }
 
-      const msg = await await getStore().editMessage(id, agent, content);
+      let msg;
+      try {
+        msg = await getStore().editMessage(id, agent, content);
+      } catch (error) {
+        return failCommand(error, "Failed to edit message.");
+      }
 
       if (opts.json) {
         console.log(JSON.stringify(msg, null, 2));

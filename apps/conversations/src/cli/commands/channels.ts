@@ -5,6 +5,7 @@ import chalk from "chalk";
 import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { previewText, windowItems } from "../../lib/compact-output.js";
+import { assertNoSensitiveContent } from "../../lib/content-safety.js";
 import { getCliWindow, pageFromQuery, printCompactFooter, queryLimitFor } from "../compact.js";
 import { printMessageEntry } from "../message-output.js";
 
@@ -43,6 +44,12 @@ export function channelClassOf(metadata: Record<string, unknown> | null | undefi
   if (!schema || typeof schema !== "object" || Array.isArray(schema)) return null;
   const channelClass = (schema as Record<string, unknown>).class;
   return typeof channelClass === "string" && channelClass.trim() ? channelClass : null;
+}
+
+function failCommand(error: unknown, fallback: string): never {
+  console.error(chalk.red(error instanceof Error ? error.message : fallback));
+  closeDb();
+  process.exit(1);
 }
 
 export function registerChannelCommands(program: Command): void {
@@ -310,20 +317,31 @@ export function registerChannelCommands(program: Command): void {
         process.exit(1);
       }
 
+      try {
+        assertNoSensitiveContent(channelArg, "Message channel");
+      } catch (error) {
+        return failCommand(error, "Failed to send channel message.");
+      }
+
       const sp = await getStore().getChannel(channelArg);
       if (!sp) {
-        console.error(chalk.red(`Channel #${channelArg} not found.`));
+        console.error(chalk.red("Channel not found."));
         process.exit(1);
       }
 
-      const msg = await await getStore().sendMessage({
-        from,
-        to: channelArg,
-        content,
-        channel: channelArg,
-        session_id: `channel:${channelArg}`,
-        priority: opts.priority,
-      });
+      let msg;
+      try {
+        msg = await getStore().sendMessage({
+          from,
+          to: channelArg,
+          content,
+          channel: channelArg,
+          session_id: `channel:${channelArg}`,
+          priority: opts.priority,
+        });
+      } catch (error) {
+        return failCommand(error, "Failed to send channel message.");
+      }
 
       if (opts.json) {
         console.log(JSON.stringify(msg, null, 2));

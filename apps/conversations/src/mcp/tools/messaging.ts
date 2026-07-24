@@ -13,6 +13,13 @@ import { getStore } from "../../lib/store/index.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { compactQueriedMessages, compactQueriedSearchMessages, compactWindowedSessions, jsonText, resolveMcpWindow } from "../compact.js";
 
+function toolError(error: unknown, fallback: string) {
+  return {
+    content: [{ type: "text" as const, text: error instanceof Error ? error.message : fallback }],
+    isError: true,
+  };
+}
+
 export function registerMessagingTools(
   server: McpServer,
   resolveProjectId: (explicitProjectId: string | undefined, agentId: string) => Promise<string | undefined>,
@@ -37,15 +44,20 @@ export function registerMessagingTools(
     const to = toParam || to_agent; // Accept both "to" and "to_agent"
     const from = resolveIdentity(fromParam);
 
-    const msg = await await getStore().sendMessage({
-      from,
-      to: target_session_id ? `session:${target_session_id}` : to,
-      content,
-      priority,
-      blocking,
-      project_id,
-      metadata: target_session_id ? { target_session_id } : undefined,
-    });
+    let msg;
+    try {
+      msg = await getStore().sendMessage({
+        from,
+        to: target_session_id ? `session:${target_session_id}` : to,
+        content,
+        priority,
+        blocking,
+        project_id,
+        metadata: target_session_id ? { target_session_id } : undefined,
+      });
+    } catch (error) {
+      return toolError(error, "Failed to send message.");
+    }
 
     return {
       content: [{ type: "text", text: JSON.stringify(msg) }],
@@ -84,13 +96,18 @@ export function registerMessagingTools(
     }
 
     // Use session:<target_session_id> as the to field and store the real target in metadata
-    const msg = await await getStore().sendMessage({
-      from,
-      to: `session:${target_session_id}`,
-      content,
-      priority,
-      metadata: { target_session_id },
-    });
+    let msg;
+    try {
+      msg = await getStore().sendMessage({
+        from,
+        to: `session:${target_session_id}`,
+        content,
+        priority,
+        metadata: { target_session_id },
+      });
+    } catch (error) {
+      return toolError(error, "Failed to send session message.");
+    }
 
     return {
       content: [{ type: "text", text: JSON.stringify(msg) }],
@@ -201,14 +218,19 @@ export function registerMessagingTools(
     const channel =
       original.channel ||
       (original.session_id?.startsWith("channel:") ? original.session_id.slice(6) : undefined);
-    const msg = await await getStore().sendMessage({
-      from,
-      to: channel ?? (original.from_agent === from ? original.to_agent : original.from_agent),
-      content,
-      session_id: original.session_id,
-      channel,
-      reply_to: message_id,  // thread linkage
-    });
+    let msg;
+    try {
+      msg = await getStore().sendMessage({
+        from,
+        to: channel ?? (original.from_agent === from ? original.to_agent : original.from_agent),
+        content,
+        session_id: original.session_id,
+        channel,
+        reply_to: message_id,  // thread linkage
+      });
+    } catch (error) {
+      return toolError(error, "Failed to send reply.");
+    }
 
     return {
       content: [{ type: "text", text: JSON.stringify(msg) }],
@@ -412,7 +434,12 @@ export function registerMessagingTools(
   }, async (args: Record<string, any>) => {
     const { from: fromParam, id, content } = args;
     const agent = resolveIdentity(fromParam);
-    const msg = await await getStore().editMessage(id, agent, content);
+    let msg;
+    try {
+      msg = await getStore().editMessage(id, agent, content);
+    } catch (error) {
+      return toolError(error, "Failed to edit message.");
+    }
 
     if (!msg) {
       return {
@@ -511,7 +538,7 @@ export function registerMessagingTools(
         const msg = await await getStore().sendMessage({ from, to: channel, content, channel, priority });
         results.push({ channel, id: msg.id });
       } catch (e) {
-        errors.push(`${channel}: ${e instanceof Error ? e.message : String(e)}`);
+        errors.push(e instanceof Error ? e.message : "Failed to send broadcast message.");
       }
     }
 

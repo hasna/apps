@@ -1,6 +1,7 @@
 import { getDb } from "./db.js";
 import type { Message } from "../types.js";
 import { extractTopics, type TopicWeight } from "./topics.js";
+import { redactSensitiveText } from "./content-safety.js";
 
 export interface ConversationSummary {
   session_id: string;
@@ -19,6 +20,10 @@ export interface ConversationSummary {
 
 export interface SummaryOptions {
   limit?: number;
+}
+
+function redactedSnippet(content: unknown, maxChars: number): string {
+  return redactSensitiveText(String(content ?? "")).slice(0, maxChars);
 }
 
 /**
@@ -52,7 +57,7 @@ export function getConversationSummary(sessionOrChannel: string, opts?: SummaryO
   const dateRange = { first: dates[0], last: dates[dates.length - 1] };
 
   // Topics
-  const allContent = messages.map((m) => m.content as string).join("\n");
+  const allContent = messages.map((m) => redactSensitiveText(m.content as string)).join("\n");
   const topics = extractTopics(allContent, 10);
 
   // Key messages: high priority, pinned, most reactions, most replies
@@ -65,7 +70,7 @@ export function getConversationSummary(sessionOrChannel: string, opts?: SummaryO
       keyMessages.push({
         id: m.id as number,
         from: m.from_agent as string,
-        content: (m.content as string).slice(0, 200),
+        content: redactedSnippet(m.content, 200),
         reason: `${priority} priority`,
       });
     }
@@ -73,7 +78,7 @@ export function getConversationSummary(sessionOrChannel: string, opts?: SummaryO
       keyMessages.push({
         id: m.id as number,
         from: m.from_agent as string,
-        content: (m.content as string).slice(0, 200),
+        content: redactedSnippet(m.content, 200),
         reason: "blocking message",
       });
     }
@@ -85,7 +90,7 @@ export function getConversationSummary(sessionOrChannel: string, opts?: SummaryO
       keyMessages.push({
         id: m.id as number,
         from: m.from_agent as string,
-        content: (m.content as string).slice(0, 200),
+        content: redactedSnippet(m.content, 200),
         reason: "pinned",
       });
     }
@@ -105,7 +110,7 @@ export function getConversationSummary(sessionOrChannel: string, opts?: SummaryO
         keyMessages.push({
           id: r.message_id,
           from: m.from_agent as string,
-          content: (m.content as string).slice(0, 200),
+          content: redactedSnippet(m.content, 200),
           reason: `${r.c} reaction(s)`,
         });
       }
@@ -126,7 +131,7 @@ export function getConversationSummary(sessionOrChannel: string, opts?: SummaryO
     .map((m) => ({
       id: m.id as number,
       from: m.from_agent as string,
-      content: (m.content as string).slice(0, 200),
+      content: redactedSnippet(m.content, 200),
       created_at: m.created_at as string,
     }));
 

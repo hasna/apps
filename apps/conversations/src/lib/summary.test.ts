@@ -3,12 +3,33 @@ import { getConversationSummary } from "./summary";
 import { sendMessage, pinMessage } from "./messages";
 import { addReaction } from "./reactions";
 import { createChannel } from "./channels";
-import { closeDb } from "./db";
+import { closeDb, getDb } from "./db";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
 const TEST_DB = join(tmpdir(), `conversations-test-summary-${Date.now()}.db`);
+
+function syntheticDatabaseUrl(): string {
+  return ["postgres", "://", "summary_user:synthetic-password", "@db.example.invalid/app"].join("");
+}
+
+function insertLegacyMessage(content: string, opts?: { session_id?: string; channel?: string; priority?: string; blocking?: boolean; pinned_at?: string }): number {
+  const result = getDb().prepare(`
+    INSERT INTO messages (session_id, from_agent, to_agent, channel, content, priority, blocking, pinned_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    opts?.session_id ?? "legacy-summary",
+    "legacy-from",
+    opts?.channel ?? "legacy-to",
+    opts?.channel ?? null,
+    content,
+    opts?.priority ?? "normal",
+    opts?.blocking ? 1 : 0,
+    opts?.pinned_at ?? null,
+  );
+  return Number(result.lastInsertRowid);
+}
 
 beforeEach(() => {
   process.env.CONVERSATIONS_DB_PATH = TEST_DB;
@@ -83,5 +104,18 @@ describe("getConversationSummary", () => {
     const summary = getConversationSummary("summary-channel");
     expect(summary).toBeTruthy();
     expect(summary!.message_count).toBe(2);
+  });
+
+  test("redacts legacy sensitive content in key messages and blockers", () => {
+    const blocked = syntheticDatabaseUrl();
+    insertLegacyMessage(`urgent ${blocked}`, { session_id: "legacy-summary", priority: "urgent" });
+    insertLegacyMessage(`blocked ${blocked}`, { session_id: "legacy-summary", blocking: true });
+    insertLegacyMessage(`pinned ${blocked}`, { session_id: "legacy-summary", pinned_at: new Date().toISOString() });
+
+    const summary = getConversationSummary("legacy-summary");
+    const serialized = JSON.stringify(summary);
+
+    expect(serialized).toContain("[REDACTED:DATABASE_URL]");
+    expect(serialized).not.toContain(blocked);
   });
 });

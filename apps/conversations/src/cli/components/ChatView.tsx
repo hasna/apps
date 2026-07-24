@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { Box, Text, useInput } from "ink";
 import TextInput from "ink-text-input";
 import { readMessages, sendMessage, markSessionRead, markChannelRead } from "../../lib/messages.js";
+import { SensitiveContentError } from "../../lib/content-safety.js";
 import { startPolling } from "../../lib/poll.js";
 import { MessageBubble } from "./MessageBubble.js";
 import type { Message } from "../../types.js";
@@ -16,9 +17,63 @@ interface ChatViewProps {
   channelName?: string;
 }
 
+interface ChatViewSubmitOptions {
+  agent: string;
+  sessionId?: string;
+  recipient?: string;
+  channelName?: string;
+}
+
+export type ChatViewSubmitResult =
+  | { ok: true; message: Message }
+  | { ok: false; error: string };
+
+function chatViewSendError(error: unknown): string {
+  if (error instanceof SensitiveContentError) {
+    return "Message blocked by sensitive-content controls.";
+  }
+  return "Unable to send message.";
+}
+
+export function submitChatViewMessage(
+  { agent, sessionId, recipient, channelName }: ChatViewSubmitOptions,
+  value: string
+): ChatViewSubmitResult {
+  const content = value.trim();
+  if (!content) return { ok: false, error: "" };
+
+  try {
+    if (channelName) {
+      return {
+        ok: true,
+        message: sendMessage({
+          from: agent,
+          to: channelName,
+          content,
+          channel: channelName,
+          session_id: `channel:${channelName}`,
+        }),
+      };
+    }
+
+    return {
+      ok: true,
+      message: sendMessage({
+        from: agent,
+        to: recipient || agent,
+        content,
+        session_id: sessionId,
+      }),
+    };
+  } catch (error) {
+    return { ok: false, error: chatViewSendError(error) };
+  }
+}
+
 export function ChatView({ agent, onBack, sessionId: initialSessionId, recipient, channelName }: ChatViewProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
+  const [sendError, setSendError] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState(initialSessionId);
   const isChannel = !!channelName;
   const seenIds = useRef<Set<number>>(new Set());
@@ -84,30 +139,20 @@ export function ChatView({ agent, onBack, sessionId: initialSessionId, recipient
   const handleSubmit = (value: string) => {
     if (!value.trim()) return;
 
-    if (isChannel && channelName) {
-      const msg = sendMessage({
-        from: agent,
-        to: channelName,
-        content: value.trim(),
-        channel: channelName,
-        session_id: `channel:${channelName}`,
-      });
-      seenIds.current.add(msg.id);
-      setMessages((prev) => [...prev, msg]);
-    } else {
-      const to = recipient || agent;
-      const msg = sendMessage({
-        from: agent,
-        to,
-        content: value.trim(),
-        session_id: sessionId,
-      });
-      seenIds.current.add(msg.id);
-      setMessages((prev) => [...prev, msg]);
-      // For new conversations, capture the real session ID from the first message
-      if (!sessionId) {
-        setSessionId(msg.session_id);
-      }
+    const result = submitChatViewMessage({ agent, sessionId, recipient, channelName }, value);
+    if (!result.ok) {
+      setSendError(result.error || "Unable to send message.");
+      setInput("");
+      return;
+    }
+
+    const msg = result.message;
+    seenIds.current.add(msg.id);
+    setMessages((prev) => [...prev, msg]);
+    setSendError(null);
+    // For new conversations, capture the real session ID from the first message
+    if (!isChannel && !sessionId) {
+      setSessionId(msg.session_id);
     }
 
     setInput("");
@@ -141,6 +186,12 @@ export function ChatView({ agent, onBack, sessionId: initialSessionId, recipient
           ))
         )}
       </Box>
+
+      {sendError ? (
+        <Box marginTop={1}>
+          <Text color="red">{sendError}</Text>
+        </Box>
+      ) : null}
 
       <Box marginTop={1}>
         <Text color={isChannel ? "magenta" : "cyan"}>{prompt}: </Text>

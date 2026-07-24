@@ -1,11 +1,12 @@
 import { getDb } from "./db.js";
 import type { ChannelNotification, ChannelNotificationSubscription } from "../types.js";
 import { normalizeChannelName } from "./channel-names.js";
+import { redactSensitiveText } from "./content-safety.js";
 
 const DEFAULT_PREVIEW_CHARS = 140;
 
 export function buildMessagePreview(content: string, maxChars = DEFAULT_PREVIEW_CHARS): string {
-  const normalized = content
+  const normalized = redactSensitiveText(content)
     .replace(/[*#`~_>\-]/g, " ")
     .replace(/\s+/g, " ")
     .trim();

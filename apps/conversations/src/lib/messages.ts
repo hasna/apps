@@ -1,11 +1,12 @@
 import { getDb, getDataDir } from "./db.js";
 import type { Message, Attachment, SendMessageOptions, ReadMessagesOptions, SearchMessagesOptions, SearchResult } from "../types.js";
 import { createHash, randomUUID } from "crypto";
-import { mkdirSync, copyFileSync, statSync, existsSync, realpathSync } from "fs";
+import { mkdirSync, copyFileSync, closeSync, openSync, readSync, statSync, existsSync, realpathSync } from "fs";
 import { join, basename, resolve } from "path";
 import { fireWebhooks } from "./webhooks.js";
 import { normalizeChannelName } from "./channel-names.js";
 import { markChannelNotificationsRead } from "./channel-notifications.js";
+import { assertNoSensitiveContent, assertNoSensitiveValue, redactSensitiveText, redactSensitiveValue } from "./content-safety.js";
 
 /** Strip null/undefined fields from a message for compact output. */
 export function compactMessage(msg: Message): Partial<Message> {
@@ -45,7 +46,7 @@ export function parseMessage(row: Record<string, unknown>): Message {
   const replyToRaw = row.reply_to === undefined || row.reply_to === null ? null : Number(row.reply_to);
   const replyCount = row.reply_count === undefined || row.reply_count === null ? undefined : Number(row.reply_count);
 
-  return {
+  return redactMessage({
     ...row,
     id,
     metadata,
@@ -53,12 +54,44 @@ export function parseMessage(row: Record<string, unknown>): Message {
     blocking: !!row.blocking,
     reply_to: replyToRaw || null,
     ...(replyCount === undefined ? {} : { reply_count: replyCount }),
-  } as Message;
+  } as Message);
+}
+
+function redactMessage<T extends Message>(message: T): T {
+  return redactSensitiveValue(message);
+}
+
+function buildSearchSnippet(message: Message): string | null {
+  if (!message.content) return null;
+  const normalized = message.content.replace(/\s+/g, " ").trim();
+  if (!normalized) return null;
+  return normalized.length > 320 ? `${normalized.slice(0, 317)}...` : normalized;
 }
 
 function getAttachmentsDir(): string {
   if (process.env.CONVERSATIONS_ATTACHMENTS_DIR) return process.env.CONVERSATIONS_ATTACHMENTS_DIR;
   return join(getDataDir(), "attachments");
+}
+
+const ATTACHMENT_SCAN_CHUNK_BYTES = 64 * 1024;
+const ATTACHMENT_SCAN_CARRY_CHARS = 8192;
+
+function assertAttachmentContentSafe(path: string): void {
+  const fd = openSync(path, "r");
+  const buffer = Buffer.allocUnsafe(ATTACHMENT_SCAN_CHUNK_BYTES);
+  let carry = "";
+
+  try {
+    while (true) {
+      const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
+      if (bytesRead <= 0) break;
+      const text = carry + buffer.subarray(0, bytesRead).toString("utf8");
+      assertNoSensitiveContent(text, "Message attachment content");
+      carry = text.slice(-ATTACHMENT_SCAN_CARRY_CHARS);
+    }
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /** Validate attachment source path and name to prevent arbitrary file read and path traversal. */
@@ -78,6 +111,7 @@ function validateAttachment(sourcePath: string, name: string): { safeSource: str
   if (!safeName || safeName.startsWith(".")) {
     throw new Error(`Invalid attachment name: ${name}`);
   }
+  assertAttachmentContentSafe(real);
   return { safeSource: real, safeName };
 }
 
@@ -127,8 +161,37 @@ function checkRateLimit(agentId: string): void {
   }
 }
 
+function assertNoSensitiveSendFields(opts: SendMessageOptions, serializedMetadata: string | null): void {
+  assertNoSensitiveContent(opts.content, "Message content");
+
+  const persistedStrings: Array<[string, string | undefined]> = [
+    ["Message sender", opts.from],
+    ["Message recipient", opts.to],
+    ["Message session", opts.session_id],
+    ["Message channel", opts.channel],
+    ["Message project", opts.project_id],
+    ["Message working directory", opts.working_dir],
+    ["Message repository", opts.repository],
+    ["Message branch", opts.branch],
+  ];
+
+  for (const [context, value] of persistedStrings) {
+    if (value) assertNoSensitiveContent(value, context);
+  }
+
+  if (opts.metadata) assertNoSensitiveValue(opts.metadata, "Message metadata");
+  if (serializedMetadata) assertNoSensitiveContent(serializedMetadata, "Message metadata");
+
+  for (const attachment of opts.attachments ?? []) {
+    assertNoSensitiveContent(attachment.name, "Message attachment name");
+    assertNoSensitiveContent(attachment.source_path, "Message attachment path");
+  }
+}
+
 export function sendMessage(opts: SendMessageOptions): Message {
   assertMessageSize(opts.content);
+  const metadata = opts.metadata ? JSON.stringify(opts.metadata) ?? null : null;
+  assertNoSensitiveSendFields(opts, metadata);
 
   checkRateLimit(opts.from);
 
@@ -143,7 +206,6 @@ export function sendMessage(opts: SendMessageOptions): Message {
     ? `channel:${channelName}`
     : explicitSession ?? `${[opts.from, opts.to].sort().join("-")}-${randomUUID().slice(0, 8)}`;
   const toAgent = channelName ?? opts.to;
-  const metadata = opts.metadata ? JSON.stringify(opts.metadata) : null;
   const normalizedPriority = (opts.priority === "low" || opts.priority === "normal" || opts.priority === "high" || opts.priority === "urgent")
     ? opts.priority
     : "normal";
@@ -954,7 +1016,7 @@ export function exportMessages(opts?: ExportMessagesOptions): string {
         escapeCsvField(m.from_agent),
         escapeCsvField(m.to_agent),
         escapeCsvField(m.channel),
-        escapeCsvField(m.content),
+        escapeCsvField(redactSensitiveText(m.content)),
         escapeCsvField(m.priority),
         escapeCsvField(m.created_at),
         escapeCsvField(m.read_at),
@@ -975,6 +1037,7 @@ export function deleteMessage(id: number, agent: string): boolean {
 
 export function editMessage(id: number, agent: string, newContent: string): Message | null {
   assertMessageSize(newContent);
+  assertNoSensitiveContent(newContent, "Message content");
 
   const db = getDb();
   const stmt = db.prepare(
@@ -1126,7 +1189,7 @@ export function searchMessages(opts: SearchMessagesOptions): SearchResult[] {
       const pinnedBoost = msg.pinned_at ? 20 : 0;
       const blockingBoost = msg.blocking ? 15 : 0;
       const relevance_score = Math.round((ftsScore * priorityBoost + pinnedBoost + blockingBoost) * 100) / 100;
-      return { ...msg, snippet: (row.snippet as string) || null, relevance_score };
+      return { ...msg, snippet: buildSearchSnippet(msg), relevance_score };
     });
   } catch {
     // Fallback to LIKE if FTS not available
@@ -1150,7 +1213,7 @@ export function searchMessages(opts: SearchMessagesOptions): SearchResult[] {
 
   return rows.map((row) => {
     const msg = parseMessage(row);
-    return { ...msg, snippet: null, relevance_score: 0 };
+    return { ...msg, snippet: buildSearchSnippet(msg), relevance_score: 0 };
   });
 }
 

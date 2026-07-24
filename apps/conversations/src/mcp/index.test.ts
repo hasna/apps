@@ -2,7 +2,7 @@ import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { server } from "./index.js";
-import { closeDb } from "../lib/db.js";
+import { closeDb, getDb } from "../lib/db.js";
 import { sendMessage, readMessages } from "../lib/messages.js";
 import { createChannel } from "../lib/channels.js";
 import { resolveIdentity } from "../lib/identity.js";
@@ -13,6 +13,18 @@ import { join } from "path";
 
 const TEST_DB = join(tmpdir(), `conversations-test-mcp-${Date.now()}.db`);
 let client: Client;
+
+function syntheticDatabaseUrl(): string {
+  return ["postgres", "://", "mcp_user:synthetic-password", "@db.example.invalid/app"].join("");
+}
+
+function insertLegacyChannelMessage(channel: string, content: string, opts?: { priority?: string; blocking?: boolean }): number {
+  const result = getDb().prepare(`
+    INSERT INTO messages (session_id, from_agent, to_agent, channel, content, priority, blocking)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(`channel:${channel}`, "legacy-from", channel, channel, content, opts?.priority ?? "normal", opts?.blocking ? 1 : 0);
+  return Number(result.lastInsertRowid);
+}
 
 beforeAll(async () => {
   process.env.CONVERSATIONS_DB_PATH = TEST_DB;
@@ -88,6 +100,35 @@ describe("send_message from parameter", () => {
     const msg = parseResult(result as any) as any;
     expect(msg.from_agent).toBe("explicit-agent");
     delete process.env.CONVERSATIONS_AGENT_ID;
+  });
+
+  test("blocks sensitive content without echoing the value", async () => {
+    const blocked = syntheticDatabaseUrl();
+    const result = await client.callTool({
+      name: "send_message",
+      arguments: { from: "agent-alpha", to: "agent-beta", content: `blocked ${blocked}` },
+    }) as any;
+    const text = (result.content[0] as { type: string; text: string }).text;
+
+    expect(result.isError).toBe(true);
+    expect(text).toContain("sensitive content detected");
+    expect(text).not.toContain(blocked);
+    expect(readMessages({ to: "agent-beta" }).some((message) => message.content.includes(blocked))).toBe(false);
+  });
+
+  test("blocks sensitive session-target metadata without echoing the value", async () => {
+    const blocked = syntheticDatabaseUrl();
+    const result = await client.callTool({
+      name: "send_to_session",
+      arguments: { from: "agent-alpha", target_session_id: blocked, content: "metadata route should be checked" },
+    }) as any;
+    const text = (result.content[0] as { type: string; text: string }).text;
+    const persisted = JSON.stringify(readMessages());
+
+    expect(result.isError).toBe(true);
+    expect(text).toContain("sensitive content detected");
+    expect(text).not.toContain(blocked);
+    expect(persisted).not.toContain(blocked);
   });
 });
 
@@ -190,6 +231,33 @@ describe("send_to_channel from parameter", () => {
     const msg = parseResult(result as any) as any;
     expect(msg.from_agent).toBe(autoName);
   });
+
+  test("blocks sensitive channel input without echoing the value", async () => {
+    const blocked = syntheticDatabaseUrl();
+    const result = await client.callTool({
+      name: "send_to_channel",
+      arguments: { from: "channel-sender", channel: blocked, content: "channel should be checked" },
+    }) as any;
+    const text = (result.content[0] as { type: string; text: string }).text;
+
+    expect(result.isError).toBe(true);
+    expect(text).toContain("sensitive content detected");
+    expect(text).not.toContain(blocked);
+  });
+
+  test("broadcast blocks sensitive channel input without echoing the value", async () => {
+    const blocked = syntheticDatabaseUrl();
+    const result = await client.callTool({
+      name: "broadcast",
+      arguments: { from: "channel-sender", channels: [blocked], content: "broadcast should be checked" },
+    }) as any;
+    const text = (result.content[0] as { type: string; text: string }).text;
+    const data = JSON.parse(text);
+
+    expect(text).not.toContain(blocked);
+    expect(data.sent).toHaveLength(0);
+    expect(data.errors[0]).toContain("sensitive content detected");
+  });
 });
 
 describe("channel notification tools", () => {
@@ -263,6 +331,25 @@ describe("channel notification tools", () => {
 
     expect(message.id).toBe(sent.id);
     expect(message.content).toBe(fullContent);
+  });
+
+  test("read channel notifications redacts legacy sensitive preview content", async () => {
+    const blocked = syntheticDatabaseUrl();
+    createChannel("notify-channel-redact", "creator");
+    await client.callTool({
+      name: "subscribe_channel_notifications",
+      arguments: { from: "notify-agent-redact", channel: "notify-channel-redact", preview_chars: 120 },
+    });
+
+    insertLegacyChannelMessage("notify-channel-redact", `legacy ${blocked}`);
+    const result = parseResult(await client.callTool({
+      name: "read_channel_notifications",
+      arguments: { from: "notify-agent-redact", unread_only: true },
+    }) as any) as any;
+    const serialized = JSON.stringify(result);
+
+    expect(serialized).toContain("[REDACTED:DATABASE URL]");
+    expect(serialized).not.toContain(blocked);
   });
 });
 
@@ -349,6 +436,24 @@ describe("channel notification subscription tools", () => {
     });
     const afterReadPayload = parseResult(afterReadResult as any) as any;
     expect(afterReadPayload.count).toBe(0);
+  });
+});
+
+describe("channel review tools", () => {
+  test("summarize_channel redacts legacy sensitive blocker and priority content", async () => {
+    const blocked = syntheticDatabaseUrl();
+    createChannel("review-redact", "creator");
+    insertLegacyChannelMessage("review-redact", `blocking ${blocked}`, { blocking: true });
+    insertLegacyChannelMessage("review-redact", `urgent ${blocked}`, { priority: "urgent" });
+
+    const result = await client.callTool({
+      name: "summarize_channel",
+      arguments: { channel: "review-redact", since: "1970-01-01T00:00:00.000Z", limit: 10 },
+    }) as any;
+    const text = (result.content[0] as { type: string; text: string }).text;
+
+    expect(text).toContain("[REDACTED:DATABASE_URL]");
+    expect(text).not.toContain(blocked);
   });
 });
 

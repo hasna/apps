@@ -79,6 +79,9 @@ function makeFakeClient() {
       if (/SELECT name FROM channels WHERE name/i.test(sql)) {
         return channels[(p as any[])[0]] ? { name: (p as any[])[0] } : null;
       }
+      if (/SELECT \* FROM messages WHERE id/i.test(sql)) {
+        return messages.find((row) => row.id === (p as any[])[0]) ?? null;
+      }
       if (/FROM channels c WHERE c\.name/i.test(sql) || /SELECT \* FROM channels WHERE name/i.test(sql) || /SELECT name, description/i.test(sql)) {
         const row = channels[(p as any[])[0]];
         return row
@@ -114,9 +117,15 @@ function makeFakeClient() {
 }
 
 const SIGNING = "test-signing-secret-0123456789";
+let activeFakeClient: ReturnType<typeof makeFakeClient> | null = null;
+
+function syntheticDatabaseUrl(): string {
+  return ["postgres", "://", "api_user:synthetic-password", "@db.example.invalid/app"].join("");
+}
 
 function makeDeps(): ApiServerDeps {
   const client = makeFakeClient();
+  activeFakeClient = client;
   const keys = new ApiKeyStore(client as any);
   const verifier = verifyApiKey({ app: "conversations", signingSecret: SIGNING, isRevoked: async () => false });
   return { client: client as any, keys, verifier };
@@ -337,6 +346,58 @@ describe("conversations-serve", () => {
   test("GET /v1/messages?count=1 returns a numeric count", async () => {
     const b = await (await fetch(`${base}/v1/messages?count=1`, { headers: { "x-api-key": rwKey } })).json();
     expect(typeof b.count).toBe("number");
+  });
+
+  test("POST /v1/messages blocks sensitive content without echoing it", async () => {
+    const blocked = syntheticDatabaseUrl();
+    const r = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ from: "a", to: "b", content: `blocked ${blocked}` }),
+    });
+    const text = await r.text();
+
+    expect(r.status).toBe(400);
+    expect(text).toContain("sensitive content detected");
+    expect(text).not.toContain(blocked);
+  });
+
+  test("POST /v1/messages blocks sensitive persisted routing fields without echoing them", async () => {
+    const blocked = syntheticDatabaseUrl();
+    const r = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ from: "a", to: blocked, content: "safe body" }),
+    });
+    const text = await r.text();
+
+    expect(r.status).toBe(400);
+    expect(text).toContain("sensitive content detected");
+    expect(text).not.toContain(blocked);
+  });
+
+  test("GET /v1/messages redacts sensitive legacy content", async () => {
+    const blocked = syntheticDatabaseUrl();
+    const sent = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ from: "a", to: "b", content: "safe before legacy mutation" }),
+    });
+    const created = await sent.json() as any;
+    // Mutate the fake backing store through the route's own insert path shape.
+    await activeFakeClient!.get(
+      `INSERT INTO messages (session_id, from_agent, to_agent, channel, project_id, content, priority, blocking)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       RETURNING id`,
+      ["legacy", "legacy", "b", null, null, `legacy ${blocked}`, "normal", false],
+    );
+
+    const listText = await (await fetch(`${base}/v1/messages`, { headers: { "x-api-key": rwKey } })).text();
+    const getText = await (await fetch(`${base}/v1/messages/${created.message.id}`, { headers: { "x-api-key": rwKey } })).text();
+
+    expect(listText).toContain("[REDACTED:DATABASE_URL]");
+    expect(listText).not.toContain(blocked);
+    expect(getText).not.toContain(blocked);
   });
 
   test("GET /v1/openapi.json is served for SDK discovery", async () => {

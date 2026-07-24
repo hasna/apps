@@ -25,6 +25,7 @@ import { version as pkgVersion } from "../../package.json";
 import { openapiSpec } from "./openapi.js";
 import { normalizeChannelName } from "../lib/channel-names.js";
 import { extractTopics } from "../lib/topic-extract.js";
+import { assertNoSensitiveContent, redactSensitiveValue } from "../lib/content-safety.js";
 
 export const APP = "conversations";
 const SCOPE_READ = `${APP}:read`;
@@ -42,6 +43,14 @@ function json(data: unknown, status = 200, extra?: Record<string, string>): Resp
     status,
     headers: { "Content-Type": "application/json; charset=utf-8", ...SECURITY_HEADERS, ...(extra || {}) },
   });
+}
+
+function redactResponse<T>(data: T): T {
+  return redactSensitiveValue(data);
+}
+
+function assertNoSensitiveOptionalText(value: string | undefined, context: string): void {
+  if (value) assertNoSensitiveContent(value, context);
 }
 
 function signingSecret(): string {
@@ -538,7 +547,7 @@ export function startApiServer(options: StartApiServerOptions = {}) {
               "WWW-Authenticate": "Bearer",
             });
           }
-          return handleV1(path, method, req, url, deps, decision.principal.agent);
+          return await handleV1(path, method, req, url, deps, decision.principal.agent);
         }
 
         return json({ error: "Not found" }, 404);
@@ -632,7 +641,7 @@ async function handleV1(
        FROM messages ${where} ORDER BY created_at ${order}, id ${order} LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
       params,
     );
-    return json({ messages: rows });
+    return json({ messages: redactResponse(rows) });
   }
 
   // ---- mark messages read (per-agent receipts + global read_at) ----
@@ -863,6 +872,7 @@ async function handleV1(
     // A channel message addresses the channel itself; a DM needs an explicit `to`.
     const toAgent = channelName ?? str(body.to);
     if (!from || !toAgent || !content) return json({ error: "from, to (or channel), and content are required" }, 400);
+    assertNoSensitiveContent(content, "Message content");
     const projectId = str(body.project_id);
     // Mirror the local sendMessage session derivation so channel history and
     // notifications group identically on the cloud.
@@ -871,6 +881,11 @@ async function handleV1(
       : str(body.session_id) ?? `${[from, toAgent].sort().join("-")}-${randomUUID().slice(0, 8)}`;
     let priority = str(body.priority)?.toLowerCase() ?? "normal";
     if (!VALID_PRIORITIES.includes(priority)) return json({ error: "Invalid priority" }, 400);
+    assertNoSensitiveContent(from, "Message sender");
+    assertNoSensitiveContent(toAgent, "Message recipient");
+    assertNoSensitiveOptionalText(channelName ?? undefined, "Message channel");
+    assertNoSensitiveOptionalText(projectId, "Message project");
+    assertNoSensitiveContent(sessionId, "Message session");
     const blocking = body.blocking === true;
     const row = await client.get<{ id: number }>(
       `INSERT INTO messages (session_id, from_agent, to_agent, channel, project_id, content, priority, blocking)
@@ -883,7 +898,7 @@ async function handleV1(
     if (channelName && row?.id != null) {
       try { await processMentions(client, Number(row.id), from, channelName, content); } catch { /* best-effort */ }
     }
-    return json({ message: row }, 201);
+    return json({ message: redactResponse(row) }, 201);
   }
 
   // ---- bulk message ingest (backfill local -> cloud to parity) ----
@@ -1084,7 +1099,7 @@ async function handleV1(
     if (method === "GET") {
       const row = await client.get(`SELECT * FROM messages WHERE id = $1`, [id]);
       if (!row) return json({ error: "Message not found" }, 404);
-      return json({ message: row });
+      return json({ message: redactResponse(row) });
     }
     if (method === "PATCH") {
       // Edit content — only the original sender may edit; stamps edited_at.

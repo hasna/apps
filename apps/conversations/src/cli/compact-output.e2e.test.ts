@@ -26,6 +26,10 @@ function runCli(args: string[], agent: string) {
   };
 }
 
+function syntheticDatabaseUrl(): string {
+  return ["postgres", "://", "cli_user:synthetic-password", "@db.example.invalid/app"].join("");
+}
+
 describe("compact CLI output", () => {
   afterAll(() => {
     try { unlinkSync(TEST_DB); } catch {}
@@ -66,5 +70,54 @@ describe("compact CLI output", () => {
     const messages = JSON.parse(unread.stdout);
     expect(messages).toHaveLength(1);
     expect(messages[0].content).toBe("second page message");
+  });
+
+  test("send exits nonzero for sensitive content without echoing the value", () => {
+    const blocked = syntheticDatabaseUrl();
+    const send = runCli(["send", `blocked ${blocked}`, "--to", "blocked-target"], "alice");
+
+    expect(send.exitCode).not.toBe(0);
+    expect(send.stderr).toContain("sensitive content detected");
+    expect(send.stderr).not.toContain(blocked);
+
+    const read = runCli(["read", "--to", "blocked-target", "--json"], "blocked-target");
+    expect(read.exitCode).toBe(0);
+    expect(JSON.parse(read.stdout)).toHaveLength(0);
+  });
+
+  test("send exits nonzero for sensitive metadata without echoing the value", () => {
+    const blocked = syntheticDatabaseUrl();
+    const send = runCli([
+      "send",
+      "metadata should be checked",
+      "--to",
+      "metadata-blocked",
+      "--metadata",
+      JSON.stringify({ dsn: blocked }),
+    ], "alice");
+
+    expect(send.exitCode).not.toBe(0);
+    expect(send.stderr).toContain("sensitive content detected");
+    expect(send.stderr).not.toContain(blocked);
+
+    const read = runCli(["read", "--to", "metadata-blocked", "--json"], "metadata-blocked");
+    expect(read.exitCode).toBe(0);
+    expect(JSON.parse(read.stdout)).toHaveLength(0);
+  });
+
+  test("channel send exits nonzero for sensitive channel input without echoing the value", () => {
+    const blocked = syntheticDatabaseUrl();
+    const send = runCli(["channel", "send", blocked, "channel should be checked"], "alice");
+
+    expect(send.exitCode).not.toBe(0);
+    expect(send.stderr).toContain("sensitive content detected");
+    expect(send.stderr).not.toContain(blocked);
+  });
+
+  test("send exits nonzero for truncated metadata JSON", () => {
+    const send = runCli(["send", "metadata parse check", "--to", "metadata-target", "--metadata", "{\"broken\":"], "alice");
+
+    expect(send.exitCode).not.toBe(0);
+    expect(send.stderr).toContain("Invalid --metadata JSON.");
   });
 });

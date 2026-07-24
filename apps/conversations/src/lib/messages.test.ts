@@ -3,11 +3,66 @@ import { sendMessage, readMessages, readDigest, markRead, markReadByIds, markSes
 import { createChannel, joinChannel } from "./channels";
 import { readChannelNotifications, subscribeToChannelNotifications } from "./channel-notifications";
 import { closeDb, getDb } from "./db";
+import { redactSensitiveText } from "./content-safety";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
 const TEST_DB = join(tmpdir(), `conversations-test-msg-${Date.now()}.db`);
+
+function syntheticPrivateKey(): string {
+  return [
+    "-----BEGIN " + "PRIVATE KEY-----",
+    "not-a-real-key-material",
+    "-----END " + "PRIVATE KEY-----",
+  ].join("\n");
+}
+
+function syntheticUnterminatedPrivateKey(): string {
+  return [
+    "-----BEGIN " + "PRIVATE KEY-----",
+    "not-real-unterminated-key-material",
+  ].join("\n");
+}
+
+function syntheticCloudKey(): string {
+  return "AKIA" + "A".repeat(16);
+}
+
+function syntheticBearerToken(): string {
+  return "Bearer " + "b".repeat(32);
+}
+
+function syntheticPat(): string {
+  return "gh" + "p_" + "c".repeat(36);
+}
+
+function syntheticDatabaseUrl(): string {
+  return ["postgres", "://", "app_user:synthetic-password", "@db.example.invalid/app"].join("");
+}
+
+function syntheticCloudSecretValue(): string {
+  return "s".repeat(32);
+}
+
+function cloudSecretKeyName(): string {
+  return ["AWS", "SECRET", "ACCESS", "KEY"].join("_");
+}
+
+function syntheticEnvDump(): string {
+  return [
+    "APP_MODE=development",
+    "SERVICE_HOST=localhost",
+    "FEATURE_FLAG=enabled",
+  ].join("\n");
+}
+
+function insertLegacyMessage(content: string, metadata?: Record<string, unknown>): void {
+  getDb().prepare(`
+    INSERT INTO messages (session_id, from_agent, to_agent, content, metadata)
+    VALUES (?, ?, ?, ?, ?)
+  `).run("legacy-session", "legacy-from", "legacy-to", content, metadata ? JSON.stringify(metadata) : null);
+}
 
 beforeEach(() => {
   process.env.CONVERSATIONS_DB_PATH = TEST_DB;
@@ -92,6 +147,77 @@ describe("sendMessage", () => {
     expect(msg.working_dir).toBe("/tmp");
     expect(msg.repository).toBe("my-repo");
     expect(msg.branch).toBe("main");
+  });
+
+  for (const [label, fixture] of [
+    ["private keys", syntheticPrivateKey],
+    ["cloud keys", syntheticCloudKey],
+    ["bearer tokens", syntheticBearerToken],
+    ["personal access tokens", syntheticPat],
+    ["database URLs", syntheticDatabaseUrl],
+    ["multiline env dumps", syntheticEnvDump],
+  ] as const) {
+    test(`blocks ${label} before persistence`, () => {
+      expect(() => sendMessage({ from: "alice", to: "bob", content: `please do not send\n${fixture()}` }))
+        .toThrow(/sensitive content detected/);
+      expect(readMessages()).toHaveLength(0);
+    });
+  }
+
+  test("blocks sensitive metadata before persistence", () => {
+    const blocked = syntheticDatabaseUrl();
+    expect(() => sendMessage({
+      from: "alice",
+      to: "bob",
+      content: "metadata should be checked too",
+      metadata: { nested: { dsn: blocked } },
+    })).toThrow(/sensitive content detected/);
+    expect(readMessages()).toHaveLength(0);
+  });
+
+  test("blocks sensitive serialized metadata before persistence", () => {
+    const blocked = syntheticDatabaseUrl();
+    const metadata = {
+      toJSON: () => ({ dsn: blocked }),
+    } as unknown as Record<string, unknown>;
+
+    expect(() => sendMessage({
+      from: "alice",
+      to: "bob",
+      content: "serialized metadata should be checked too",
+      metadata,
+    })).toThrow(/sensitive content detected/);
+    expect(readMessages()).toHaveLength(0);
+  });
+
+  test("blocks label-based metadata secrets before persistence", () => {
+    expect(() => sendMessage({
+      from: "alice",
+      to: "bob",
+      content: "metadata labels should be checked too",
+      metadata: { [cloudSecretKeyName()]: syntheticCloudSecretValue() },
+    })).toThrow(/sensitive content detected/);
+    expect(readMessages()).toHaveLength(0);
+  });
+
+  test("blocks nested label-based metadata secrets before persistence", () => {
+    expect(() => sendMessage({
+      from: "alice",
+      to: "bob",
+      content: "nested metadata labels should be checked too",
+      metadata: { [cloudSecretKeyName()]: { value: syntheticCloudSecretValue() } },
+    })).toThrow(/sensitive content detected/);
+    expect(readMessages()).toHaveLength(0);
+  });
+
+  test("blocks sensitive persisted context fields before persistence", () => {
+    expect(() => sendMessage({
+      from: "alice",
+      to: "bob",
+      content: "context fields should be checked too",
+      branch: syntheticPat(),
+    })).toThrow(/sensitive content detected/);
+    expect(readMessages()).toHaveLength(0);
   });
 
   test("null metadata when not provided", () => {
@@ -183,6 +309,25 @@ describe("readMessages", () => {
     sendMessage({ from: "a", to: "b", content: "new" });
     const msgs = readMessages({ since });
     expect(msgs.length).toBeGreaterThanOrEqual(0); // Timing-dependent
+  });
+
+  test("redacts legacy sensitive content from read, show, search, and digest paths", () => {
+    const blocked = syntheticDatabaseUrl();
+    insertLegacyMessage(`legacy ${blocked}`, { nested: { dsn: blocked } });
+
+    const read = readMessages({ to: "legacy-to" });
+    expect(read).toHaveLength(1);
+    expect(JSON.stringify(read)).not.toContain(blocked);
+    expect(read[0].content).toContain("[REDACTED:DATABASE_URL]");
+
+    const shown = getMessageById(read[0].id);
+    expect(JSON.stringify(shown)).not.toContain(blocked);
+
+    const searched = searchMessages({ query: "legacy" });
+    expect(JSON.stringify(searched)).not.toContain(blocked);
+
+    const digest = readDigest({ to: "legacy-to" });
+    expect(JSON.stringify(digest)).not.toContain(blocked);
   });
 });
 
@@ -309,6 +454,36 @@ describe("exportMessages", () => {
     expect(parsed[1].content).toBe("world");
   });
 
+  test("redacts sensitive content in JSON exports", () => {
+    const legacyContent = `legacy DSN ${syntheticDatabaseUrl()}`;
+    const legacyMetadata = { authorization: syntheticBearerToken(), [cloudSecretKeyName()]: { value: syntheticCloudSecretValue() } };
+    insertLegacyMessage(legacyContent, legacyMetadata);
+
+    const result = exportMessages();
+    const parsed = JSON.parse(result);
+    const serialized = JSON.stringify(parsed);
+
+    expect(parsed[0].content).toContain("[REDACTED:DATABASE_URL]");
+    expect(serialized).toContain("[REDACTED:BEARER_TOKEN]");
+    expect(serialized).toContain("[REDACTED:CLOUD_KEY]");
+    expect(serialized).not.toContain(syntheticDatabaseUrl());
+    expect(serialized).not.toContain(syntheticBearerToken());
+    expect(serialized).not.toContain(syntheticCloudSecretValue());
+  });
+
+  test("redacts unterminated private key blocks through EOF", () => {
+    const blocked = syntheticUnterminatedPrivateKey();
+    const material = "not-real-unterminated-key-material";
+    insertLegacyMessage(`legacy ${blocked}`);
+
+    expect(redactSensitiveText(blocked)).toContain("[REDACTED:PRIVATE_KEY]");
+    expect(redactSensitiveText(blocked)).not.toContain(material);
+
+    const exported = exportMessages();
+    expect(exported).toContain("[REDACTED:PRIVATE_KEY]");
+    expect(exported).not.toContain(material);
+  });
+
   test("returns CSV with headers", () => {
     sendMessage({ from: "alice", to: "bob", content: "hello" });
     const result = exportMessages({ format: "csv" });
@@ -318,6 +493,15 @@ describe("exportMessages", () => {
     expect(lines[1]).toContain("alice");
     expect(lines[1]).toContain("bob");
     expect(lines[1]).toContain("hello");
+  });
+
+  test("redacts sensitive content in CSV exports", () => {
+    insertLegacyMessage(`legacy token ${syntheticPat()}`);
+
+    const result = exportMessages({ format: "csv" });
+
+    expect(result).toContain("[REDACTED:PAT]");
+    expect(result).not.toContain(syntheticPat());
   });
 
   test("filters by channel", () => {
@@ -391,6 +575,14 @@ describe("deleteMessage", () => {
 });
 
 describe("editMessage", () => {
+  test("blocks sensitive content before updating", () => {
+    const msg = sendMessage({ from: "alice", to: "bob", content: "original" });
+
+    expect(() => editMessage(msg.id, "alice", `new ${syntheticBearerToken()}`))
+      .toThrow(/sensitive content detected/);
+    expect(getMessageById(msg.id)?.content).toBe("original");
+  });
+
   test("edits own message and sets edited_at", () => {
     const msg = sendMessage({ from: "alice", to: "bob", content: "original" });
     const edited = editMessage(msg.id, "alice", "updated");
@@ -774,9 +966,38 @@ describe("attachments", () => {
     expect(msg.attachments![1].mime_type).toBe("image/png");
   });
 
+  test("sends large safe attachment with chunked scanning", () => {
+    const srcFile = join(TEMP_DIR, "large.txt");
+    writeFileSync(srcFile, "safe attachment content\n".repeat(5000));
+
+    const msg = sendMessage({
+      from: "alice",
+      to: "bob",
+      content: "large file",
+      attachments: [{ name: "large.txt", source_path: srcFile }],
+    });
+
+    expect(msg.attachments).toBeTruthy();
+    expect(msg.attachments![0].size).toBeGreaterThan(64 * 1024);
+  });
+
   test("message without attachments has null attachments field", () => {
     const msg = sendMessage({ from: "alice", to: "bob", content: "no files" });
     expect(msg.attachments).toBeNull();
+  });
+
+  test("does not persist message when attachment content is sensitive", () => {
+    const srcFile = join(TEMP_DIR, "leaky.txt");
+    writeFileSync(srcFile, `attachment ${syntheticDatabaseUrl()}`);
+
+    expect(() => sendMessage({
+      from: "alice",
+      to: "bob",
+      content: "bad attachment content",
+      attachments: [{ name: "leaky.txt", source_path: srcFile }],
+    })).toThrow(/sensitive content detected/);
+
+    expect(readMessages()).toHaveLength(0);
   });
 
   test("does not persist message when attachment source is missing", () => {
