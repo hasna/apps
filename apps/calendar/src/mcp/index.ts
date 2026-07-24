@@ -1,15 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import {
-  createOrg, getOrg, getOrgBySlug, listOrgs,
-  registerAgent, getAgent, getAgentByName, listAgents, heartbeat as agentHeartbeat,
-  createCalendar, listCalendars,
-  createEvent, getEvent, listEvents, updateEvent, deleteEvent, findConflicts, searchEvents,
-  createAttendee, getAttendeesForEvent, updateAttendee,
-  getAvailabilityForAgent, upsertAgentAvailability,
-  createMembership, getMembershipsForOrg, getOrgsForAgent,
-} from "../index.js";
+import { getStore } from "../store/index.js";
+import type { Org, Agent, Calendar, Event, EventAttendee, Availability, OrgMembership } from "../types/index.js";
 import { parseHttpArgv, resolveMcpHttpPort } from "./http.js";
 
 const packageJson = await Bun.file(new URL("../../package.json", import.meta.url)).json() as { version: string };
@@ -32,7 +25,7 @@ export function buildServer(): McpServer {
       description: z.string().optional(),
     },
     async ({ name, slug, description }) => {
-      const org = createOrg({ name, slug, description });
+      const org = await getStore().createOrg({ name, slug, description });
       return { content: [{ type: "text", text: JSON.stringify(org) }] };
     },
   );
@@ -41,7 +34,7 @@ export function buildServer(): McpServer {
     "List all organizations",
     pageArgsSchema(),
     async (input) => {
-      const orgs = listOrgs();
+      const orgs = await getStore().listOrgs();
       return toolResult(compactPage(orgs, input, compactOrg, "Set verbose=true or call get_org for full records."));
     },
   );
@@ -50,7 +43,7 @@ export function buildServer(): McpServer {
     "Get an org by ID or slug",
     { idOrSlug: z.string().describe("Org ID or slug") },
     async ({ idOrSlug }) => {
-      const org = getOrg(idOrSlug) || getOrgBySlug(idOrSlug);
+      const org = await getStore().getOrg(idOrSlug);
       if (!org) return { content: [{ type: "text", text: "Org not found" }], isError: true };
       return { content: [{ type: "text", text: JSON.stringify(org) }] };
     },
@@ -68,7 +61,7 @@ export function buildServer(): McpServer {
       org_id: z.string().optional(),
     },
     async (input) => {
-      const agent = registerAgent(input);
+      const agent = await getStore().registerAgent(input);
       return { content: [{ type: "text", text: JSON.stringify(agent) }] };
     },
   );
@@ -77,7 +70,7 @@ export function buildServer(): McpServer {
     "List all registered agents",
     pageArgsSchema(),
     async (input) => {
-      return toolResult(compactPage(listAgents(), input, compactAgent, "Set verbose=true for session/capability fields."));
+      return toolResult(compactPage(await getStore().listAgents(), input, compactAgent, "Set verbose=true for session/capability fields."));
     },
   );
 
@@ -85,9 +78,8 @@ export function buildServer(): McpServer {
     "Update agent last_seen_at timestamp",
     { name: z.string().describe("Agent name") },
     async ({ name }) => {
-      const agent = getAgentByName(name);
+      const agent = await getStore().heartbeatAgent(name);
       if (!agent) return { content: [{ type: "text", text: "Agent not found" }], isError: true };
-      agentHeartbeat(agent.id);
       return { content: [{ type: "text", text: `Heartbeat updated for ${name}` }] };
     },
   );
@@ -106,7 +98,7 @@ export function buildServer(): McpServer {
       visibility: z.enum(["public", "org", "private"]).optional(),
     },
     async (input) => {
-      const cal = createCalendar({ ...input, timezone: input.timezone || "UTC", visibility: input.visibility || "org" });
+      const cal = await getStore().createCalendar({ ...input, timezone: input.timezone || "UTC", visibility: input.visibility || "org" });
       return { content: [{ type: "text", text: JSON.stringify(cal) }] };
     },
   );
@@ -115,7 +107,7 @@ export function buildServer(): McpServer {
     "List calendars, optionally filtered by org",
     { org_id: z.string().optional(), ...pageArgsSchema() },
     async ({ org_id, ...page }) => {
-      return toolResult(compactPage(listCalendars(org_id), page, compactCalendar, "Set verbose=true for descriptions/metadata."));
+      return toolResult(compactPage(await getStore().listCalendars(org_id), page, compactCalendar, "Set verbose=true for descriptions/metadata."));
     },
   );
 
@@ -141,7 +133,7 @@ export function buildServer(): McpServer {
       created_by: z.string().optional().describe("Agent ID of creator"),
     },
     async (input) => {
-      const evt = createEvent({ ...input, timezone: input.timezone || "UTC", status: input.status || "confirmed", busy_type: input.busy_type || "busy", visibility: input.visibility || "default" });
+      const evt = await getStore().createEvent({ ...input, timezone: input.timezone || "UTC", status: input.status || "confirmed", busy_type: input.busy_type || "busy", visibility: input.visibility || "default" });
       return { content: [{ type: "text", text: JSON.stringify(evt) }] };
     },
   );
@@ -158,7 +150,7 @@ export function buildServer(): McpServer {
       verbose: z.boolean().optional().describe("Return full records for the selected page"),
     },
     async ({ limit, cursor, verbose, ...filter }) => {
-      return toolResult(compactPage(listEvents(filter), { limit, cursor, verbose }, compactEvent, "Set verbose=true or call get_event for full event records."));
+      return toolResult(compactPage(await getStore().listEvents(filter), { limit, cursor, verbose }, compactEvent, "Set verbose=true or call get_event for full event records."));
     },
   );
 
@@ -166,9 +158,9 @@ export function buildServer(): McpServer {
     "Get event details including attendees",
     { id: z.string().describe("Event ID") },
     async ({ id }) => {
-      const evt = getEvent(id);
-      if (!evt) return { content: [{ type: "text", text: "Event not found" }], isError: true };
-      return { content: [{ type: "text", text: JSON.stringify(evt) }] };
+      const result = await getStore().getEventWithAttendees(id);
+      if (!result) return { content: [{ type: "text", text: "Event not found" }], isError: true };
+      return { content: [{ type: "text", text: JSON.stringify(result) }] };
     },
   );
 
@@ -185,7 +177,7 @@ export function buildServer(): McpServer {
       recurrence_rule: z.string().nullable().optional(),
     },
     async ({ id, ...rest }) => {
-      const evt = updateEvent(id, rest);
+      const evt = await getStore().updateEvent(id, rest);
       return { content: [{ type: "text", text: JSON.stringify(evt) }] };
     },
   );
@@ -194,7 +186,7 @@ export function buildServer(): McpServer {
     "Delete an event",
     { id: z.string().describe("Event ID") },
     async ({ id }) => {
-      const ok = deleteEvent(id);
+      const ok = await getStore().deleteEvent(id);
       return { content: [{ type: "text", text: ok ? "Deleted" : "Not found" }] };
     },
   );
@@ -207,7 +199,7 @@ export function buildServer(): McpServer {
       ...pageArgsSchema(),
     },
     async ({ query, org_id, ...page }) => {
-      return toolResult(compactPage(searchEvents(query, org_id), page, compactEvent, "Set verbose=true or call get_event for full event records."));
+      return toolResult(compactPage(await getStore().searchEvents(query, org_id), page, compactEvent, "Set verbose=true or call get_event for full event records."));
     },
   );
 
@@ -220,7 +212,7 @@ export function buildServer(): McpServer {
       ...pageArgsSchema(),
     },
     async ({ calendar_id, start, end, ...page }) => {
-      return toolResult(compactPage(findConflicts(calendar_id, { start, end }), page, compactEvent, "Set verbose=true or call get_event for full event records."));
+      return toolResult(compactPage(await getStore().findConflicts(calendar_id, { start, end }), page, compactEvent, "Set verbose=true or call get_event for full event records."));
     },
   );
 
@@ -236,7 +228,7 @@ export function buildServer(): McpServer {
       required: z.boolean().optional().default(true),
     },
     async (input) => {
-      return { content: [{ type: "text", text: JSON.stringify(createAttendee(input)) }] };
+      return { content: [{ type: "text", text: JSON.stringify(await getStore().createAttendee(input)) }] };
     },
   );
 
@@ -244,7 +236,7 @@ export function buildServer(): McpServer {
     "List all attendees for an event",
     { event_id: z.string().describe("Event ID"), ...pageArgsSchema() },
     async ({ event_id, ...page }) => {
-      return toolResult(compactPage(getAttendeesForEvent(event_id), page, compactAttendee, "Set verbose=true for response comments."));
+      return toolResult(compactPage(await getStore().getAttendeesForEvent(event_id), page, compactAttendee, "Set verbose=true for response comments."));
     },
   );
 
@@ -256,7 +248,7 @@ export function buildServer(): McpServer {
       comment: z.string().optional(),
     },
     async ({ attendee_id, status, comment }) => {
-      return { content: [{ type: "text", text: JSON.stringify(updateAttendee(attendee_id, { status, response_comment: comment || null })) }] };
+      return { content: [{ type: "text", text: JSON.stringify(await getStore().updateAttendee(attendee_id, { status, response_comment: comment || null })) }] };
     },
   );
 
@@ -272,7 +264,7 @@ export function buildServer(): McpServer {
       end_time: z.string().describe("HH:mm"),
     },
     async ({ agent_id, org_id, day_of_week, start_time, end_time }) => {
-      return { content: [{ type: "text", text: JSON.stringify(upsertAgentAvailability(agent_id, org_id, day_of_week, start_time, end_time)) }] };
+      return { content: [{ type: "text", text: JSON.stringify(await getStore().upsertAgentAvailability(agent_id, org_id, day_of_week, start_time, end_time)) }] };
     },
   );
 
@@ -284,7 +276,7 @@ export function buildServer(): McpServer {
       ...pageArgsSchema(),
     },
     async ({ agent_id, org_id, ...page }) => {
-      return toolResult(compactPage(getAvailabilityForAgent(agent_id, org_id), page, compactAvailability, "Set verbose=true for IDs and timestamps."));
+      return toolResult(compactPage(await getStore().getAvailabilityForAgent(agent_id, org_id), page, compactAvailability, "Set verbose=true for IDs and timestamps."));
     },
   );
 
@@ -298,7 +290,7 @@ export function buildServer(): McpServer {
       role: z.enum(["admin", "member", "service"]).optional(),
     },
     async (input) => {
-      return { content: [{ type: "text", text: JSON.stringify(createMembership(input)) }] };
+      return { content: [{ type: "text", text: JSON.stringify(await getStore().createMembership(input)) }] };
     },
   );
 
@@ -306,7 +298,7 @@ export function buildServer(): McpServer {
     "List all members of an org",
     { org_id: z.string(), ...pageArgsSchema() },
     async ({ org_id, ...page }) => {
-      return toolResult(compactPage(getMembershipsForOrg(org_id), page, compactMembership, "Set verbose=true for membership IDs."));
+      return toolResult(compactPage(await getStore().getMembershipsForOrg(org_id), page, compactMembership, "Set verbose=true for membership IDs."));
     },
   );
 
@@ -319,13 +311,15 @@ export function buildServer(): McpServer {
       ...pageArgsSchema(),
     },
     async ({ agent_id, ...page }) => {
-      const agent = getAgentByName(agent_id) || getAgent(agent_id);
+      const store = getStore();
+      const agent = await store.getAgent(agent_id);
       if (!agent) return { content: [{ type: "text", text: `Agent not found: ${agent_id}` }], isError: true };
-      agentHeartbeat(agent.id);
-      const orgs = getOrgsForAgent(agent.id);
-      const calendars = orgs.length > 0 ? listCalendars(orgs[0]!.org_id) : [];
+      await store.heartbeatAgent(agent.id);
+      const orgs = await store.getOrgsForAgent(agent.id);
+      const orgId = orgs.length > 0 ? orgs[0]!.org_id : undefined;
+      const calendars = orgId ? await store.listCalendars(orgId) : [];
       const now = new Date().toISOString();
-      const events = calendars.length > 0 ? listEvents({ org_id: orgs[0]!.org_id, after: now }) : [];
+      const events = (orgId && calendars.length > 0) ? await store.listEvents({ org_id: orgId, after: now }) : [];
       return toolResult({
         agent: page.verbose ? agent : compactAgent(agent),
         orgs: compactPage(orgs, page, compactMembership, "Set verbose=true for full membership records."),
@@ -374,19 +368,19 @@ function compactText(value: string | null | undefined, max = 80): string | null 
   return text.length > max ? `${text.slice(0, Math.max(0, max - 3))}...` : text;
 }
 
-function compactOrg(org: ReturnType<typeof listOrgs>[number]) {
+function compactOrg(org: Org) {
   return { id: org.id, slug: org.slug, name: org.name, description: compactText(org.description) };
 }
 
-function compactAgent(agent: ReturnType<typeof listAgents>[number]) {
+function compactAgent(agent: Agent) {
   return { id: agent.id, name: agent.name, status: agent.status, role: agent.role, last_seen_at: agent.last_seen_at };
 }
 
-function compactCalendar(calendar: ReturnType<typeof listCalendars>[number]) {
+function compactCalendar(calendar: Calendar) {
   return { id: calendar.id, slug: calendar.slug, name: calendar.name, org_id: calendar.org_id, timezone: calendar.timezone, visibility: calendar.visibility };
 }
 
-function compactEvent(event: ReturnType<typeof listEvents>[number]) {
+function compactEvent(event: Event) {
   return {
     id: event.id,
     title: compactText(event.title, 80),
@@ -398,15 +392,15 @@ function compactEvent(event: ReturnType<typeof listEvents>[number]) {
   };
 }
 
-function compactAttendee(attendee: ReturnType<typeof getAttendeesForEvent>[number]) {
+function compactAttendee(attendee: EventAttendee) {
   return { id: attendee.id, agent_id: attendee.agent_id, display_name: attendee.display_name, email: attendee.email, status: attendee.status, required: attendee.required };
 }
 
-function compactAvailability(availability: ReturnType<typeof getAvailabilityForAgent>[number]) {
+function compactAvailability(availability: Availability) {
   return { id: availability.id, agent_id: availability.agent_id, org_id: availability.org_id, day_of_week: availability.day_of_week, start_time: availability.start_time, end_time: availability.end_time };
 }
 
-function compactMembership(membership: ReturnType<typeof getMembershipsForOrg>[number]) {
+function compactMembership(membership: OrgMembership) {
   return { id: membership.id, org_id: membership.org_id, agent_id: membership.agent_id, role: membership.role };
 }
 

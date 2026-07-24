@@ -164,14 +164,31 @@ export function findAgentConflicts(agentId: string, range: TimeRange, excludeEve
 
 // ── FTS search ───────────────────────────────────────────────────────────────
 
+/**
+ * Turn free-text into a safe FTS5 MATCH expression. Raw user input can contain
+ * characters FTS5 parses as query syntax — a hyphen is a NOT, a colon is a
+ * column filter, and a bareword like `xyz` after a hyphen is read as a column
+ * name — which is why an unquoted `meeting-xyz` crashes with
+ * `no such column: xyz`. We extract alphanumeric barewords and wrap each as a
+ * quoted string term joined by implicit AND, which is literal and never a
+ * syntax/injection hazard. Returns "" when there is no searchable token.
+ */
+function toFtsMatchQuery(query: string): string {
+  const tokens = query.match(/[\p{L}\p{N}]+/gu);
+  if (!tokens || tokens.length === 0) return "";
+  return tokens.map((token) => `"${token}"`).join(" ");
+}
+
 export function searchEvents(query: string, orgId?: string, db?: Database): Event[] {
   db = db || getDatabase();
+  const match = toFtsMatchQuery(query);
+  if (!match) return [];
   const rows = db.query(
     `SELECT e.* FROM events e
      INNER JOIN events_fts f ON f.rowid = e.rowid
      WHERE events_fts MATCH ?
      ${orgId ? "AND e.org_id = ?" : ""}`,
-  ).all(query, ...(orgId ? [orgId] : []));
+  ).all(match, ...(orgId ? [orgId] : []));
 
   return (rows as any[])
     .map(rowToEvent)

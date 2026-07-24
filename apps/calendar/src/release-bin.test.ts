@@ -199,7 +199,7 @@ describe("release bin artifacts", () => {
     });
 
     try {
-      const response = await waitForHealth(`http://127.0.0.1:${port}/api/health`);
+      const response = await waitForHealth(`http://127.0.0.1:${port}/health`);
       const health = await response.json() as { status?: string };
       expect(health.status).toBe("ok");
     } finally {
