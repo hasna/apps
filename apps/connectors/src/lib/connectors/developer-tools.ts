@@ -962,6 +962,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["bug-tracking", "issues", "project-management", "development", "qa"],
   },
   {
+    name: "smol-machines",
+    displayName: "smol machines",
+    description: "Portable microVM runtime — smolvm HTTP API lifecycle",
+    category: "Developer Tools",
+    tags: ["microvm", "smolvm", "infrastructure", "runtime"],
+  },
+  {
     name: "simplelocalize",
     displayName: "SimpleLocalize",
     description: "Translation management and app localization platform",
