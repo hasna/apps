@@ -1,4 +1,4 @@
-// Screenshot harness for the Hasna Notes web UI.
+// Screenshot harness for the PersonalNotes web UI.
 // Renders each screen at retina scale and writes PNGs for visual review.
 //
 // The notes app is data-driven and (mostly) hash-free: selection, machine-filter and
@@ -7,13 +7,17 @@
 // the result. It uses the in-browser SAMPLE data (no native __BOOT__).
 //
 // Usage:
-//   PLAYWRIGHT_BROWSERS_PATH=/home/hasna/.cache/ms-playwright \
+//   PLAYWRIGHT_BROWSERS_PATH=~/.cache/ms-playwright \
 //   node tools/shoot.mjs [screen ...]
 //
 // Screens: notes, machines, settings, native (body.native top-inset check).
 // With no args it shoots them all. Output: tools/shots/<screen>.png
-import playwright from '/home/hasna/.bun/install/global/node_modules/playwright/index.js'
-const { chromium } = playwright
+//
+// Playwright is not a dependency of this repo. Install it locally (`npm i -D playwright`)
+// or point PLAYWRIGHT_MODULE at an existing install, e.g.:
+//   PLAYWRIGHT_MODULE=/path/to/node_modules/playwright/index.js
+const playwrightModule = await import(process.env.PLAYWRIGHT_MODULE || 'playwright')
+const { chromium } = playwrightModule.default ?? playwrightModule
 import { fileURLToPath } from 'url'
 import { dirname, resolve } from 'path'
 import { mkdirSync } from 'fs'
@@ -40,7 +44,9 @@ const SCREENS = [
 const want = process.argv.slice(2)
 const screens = want.length ? want : SCREENS
 
-const browser = await chromium.launch()
+// Headless Chromium passes --hide-scrollbars by default, which would blank the overlay
+// scrollbar evidence shots (spec §3.6) — drop that one default arg.
+const browser = await chromium.launch({ ignoreDefaultArgs: ['--hide-scrollbars'] })
 
 // Inject a fake recording-active state into the running app so the timer-in-circle, the
 // pause control, the persistent pill and (optionally) the transcript surface can be
@@ -56,10 +62,17 @@ async function fakeRecording(page, { paused = false, transcript = null } = {}) {
     // Reach into the module via the exposed surface where possible; fall back to DOM.
     const timerIn = document.getElementById('rec-timer-in')
     if (timerIn) timerIn.textContent = '0:42'
-    // Persistent pill — fixed, on every screen.
+    // Persistent pill — every screen EXCEPT the Home composer, mirroring the app's
+    // renderRecPill() rule exactly (05007066: the composer is the single recording
+    // surface on Home — forcing the pill there faked an app-impossible duplicate).
     const pill = document.getElementById('rec-pill')
     if (pill) {
-      pill.hidden = false
+      const view = (window.PersonalNotes && window.PersonalNotes.view && window.PersonalNotes.view.state)
+        ? window.PersonalNotes.view.state() : { screen: 'home' }
+      const winEl = document.getElementById('window')
+      const onHomeComposer = view.screen === 'home' &&
+        (!winEl || winEl.getAttribute('data-active-shell') === 'app')
+      pill.hidden = onHomeComposer
       pill.classList.toggle('paused', !!opts.paused)
       const t = document.getElementById('rec-pill-timer'); if (t) t.textContent = '0:42'
       const pp = document.getElementById('rec-pill-pause'); if (pp) pp.title = opts.paused ? 'Resume' : 'Pause'
@@ -83,13 +96,13 @@ async function manyNotesBoot(page) {
     const iso = (ms) => new Date(ms).toISOString()
     const labels = ['welcome', 'docs', 'release', 'meeting', 'sync', 'ideas', 'todo']
     const machines = []
-    for (let i = 0; i < 14; i++) machines.push({ id: 'machine' + String(i).padStart(3, '0') })
+    for (let i = 0; i < 14; i++) machines.push({ id: 'device-' + String(i).padStart(2, '0') })
     const notes = []
     for (let i = 0; i < 22; i++) {
       notes.push({
         id: 'n-' + i,
         title: ['Release checklist', 'Meeting notes — fleet sync', 'Ideas for the roadmap',
-          'Welcome to Hasna Notes', 'Quarterly planning thoughts', 'Bug triage list'][i % 6] + ' ' + (i + 1),
+          'Welcome to PersonalNotes', 'Quarterly planning thoughts', 'Bug triage list'][i % 6] + ' ' + (i + 1),
         body: 'Some note body content number ' + i + ' with a few words to preview.',
         labels: [labels[i % labels.length]],
         status: 'active', folder: '',
@@ -98,7 +111,7 @@ async function manyNotesBoot(page) {
         createdAt: iso(now - i * 1000 * 60 * 60),
       })
     }
-    window.__BOOT__ = { thisMachine: 'machine000', machines, notes }
+    window.__BOOT__ = { thisMachine: 'device-00', machines, notes }
     window.__AI__ = { port: 8765, available: true }
   })
 }
@@ -131,7 +144,7 @@ async function darkPage(aiAvailable = true) {
   const ctx = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: SCALE, colorScheme: 'dark' })
   const page = await ctx.newPage()
   await page.addInitScript((available) => {
-    try { localStorage.setItem('hasna-notes-theme', 'dark') } catch (e) {}
+    try { localStorage.setItem('personalnotes-theme', 'dark') } catch (e) {}
     window.__AI__ = { port: 8765, available: available }
   }, aiAvailable)
   await page.goto(indexURL, { waitUntil: 'networkidle' })
@@ -156,8 +169,8 @@ for (const s of screens) {
     await ctx.close()
   } else if (s === 'machines') {
     const { ctx, page } = await freshPage()
-    // Click a specific machine row (machine001) to filter the notes list.
-    const m = page.locator('.machine-row[data-machine="machine001"]')
+    // Click a specific machine row (device-01) to filter the notes list.
+    const m = page.locator('.machine-row[data-machine="device-01"]')
     if (await m.count()) await m.click()
     await page.waitForTimeout(150)
     await shoot(page, 'machines')
@@ -175,7 +188,7 @@ for (const s of screens) {
     await manyNotesBoot(page)
     await page.goto(indexURL, { waitUntil: 'networkidle' })
     await page.waitForTimeout(200)
-    await page.locator('#home-all-notes').click()
+    await page.locator('#home-view-all').click()
     await page.waitForTimeout(200)
     await shoot(page, 'noteslist')
     await ctx.close()
@@ -244,14 +257,15 @@ for (const s of screens) {
     await shoot(page, 'home-noai')
     await ctx.close()
   } else if (s === 'ctxmenu') {
-    // Open the right-click context menu on a note row.
-    const { ctx, page } = await freshPage(false, true)
-    // Switch to the notes screen first by clicking a note, then right-click a row.
+    // Open the right-click context menu on a note row (seed notes so rows exist).
+    const ctx = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: SCALE })
+    const page = await ctx.newPage()
+    await manyNotesBoot(page)
+    await page.goto(indexURL, { waitUntil: 'networkidle' })
+    await page.waitForTimeout(200)
     const rows = page.locator('.note-row')
     if (await rows.count()) {
-      const row = rows.nth(1)
-      const box = await row.boundingBox()
-      await row.click({ button: 'right' })
+      await rows.nth(1).click({ button: 'right' })
       await page.waitForTimeout(150)
     }
     await shoot(page, 'ctxmenu')

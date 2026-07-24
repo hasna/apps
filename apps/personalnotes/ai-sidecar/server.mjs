@@ -1,4 +1,4 @@
-// Hasna Notes — local AI sidecar.
+// PersonalNotes — local AI sidecar.
 //
 // A tiny dependency-light HTTP server (Node's built-in `http`, no framework) that the
 // macOS host spawns on launch. It exposes local AI capabilities to the file:// renderer,
@@ -110,7 +110,7 @@ const pendingApprovals = new Map();
 // Apply the loopback-CORS headers to every response (incl. errors and preflight).
 function cors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Hasna-Notes-Token, Authorization');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-PersonalNotes-Token, X-Hasna-Notes-Token, Authorization');
   res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
 }
 
@@ -127,8 +127,10 @@ function safeTokenEqual(value) {
 }
 
 function tokenFromRequest(req, urlObj) {
-  const header = req.headers['x-hasna-notes-token'];
+  const header = req.headers['x-personalnotes-token'];
   if (typeof header === 'string' && header) return header;
+  const legacyHeader = req.headers['x-hasna-notes-token']; // legacy header; removed next release
+  if (typeof legacyHeader === 'string' && legacyHeader) return legacyHeader;
   const auth = req.headers.authorization || '';
   const bearer = /^Bearer\s+(.+)$/i.exec(auth);
   if (bearer) return bearer[1];
@@ -236,9 +238,7 @@ function noteAgentTools(context = {}) {
         const result = await executeNotesAgentTool(schema.name, safeInput, {
           ...context,
           actorType: 'agent',
-          actorName: context.actorName || process.env.HASNA_NOTES_ACTOR_NAME || 'Hasna Notes Chat',
-          openedFrom: context.openedFrom || 'sidecar-chat',
-          sourceContext: context.sourceContext || 'ai-sdk-chat',
+          actorName: context.actorName || process.env.HASNA_NOTES_ACTOR_NAME || 'PersonalNotes Chat',
           confirmWrites: false,
         });
         rememberApproval(result);
@@ -399,7 +399,7 @@ function snapshotTools(notes) {
   };
   return {
     search_notes: tool({
-      description: 'Search the provided Hasna Notes snapshot.',
+      description: 'Search the provided PersonalNotes snapshot.',
       inputSchema: jsonSchema({
         type: 'object',
         properties: { query: { type: 'string' }, limit: { type: 'number' } },
@@ -411,7 +411,7 @@ function snapshotTools(notes) {
       },
     }),
     read_note: tool({
-      description: 'Read one note body from the provided Hasna Notes snapshot.',
+      description: 'Read one note body from the provided PersonalNotes snapshot.',
       inputSchema: jsonSchema({
         type: 'object',
         properties: { id: { type: 'string' } },
@@ -497,7 +497,7 @@ async function handleChat(req, res) {
         ].join('\n')
       : '';
     const instructions =
-      'You are Hasna Notes Chat, an agentic local notes assistant. Coordinate internally as Planner, Notes Operator, Label Curator, and Safety Reviewer. ' +
+      'You are PersonalNotes Chat, an agentic local notes assistant. Coordinate internally as Planner, Notes Operator, Label Curator, and Safety Reviewer. ' +
       'Use tools for note facts and cite note titles/ids. Prefer narrow, reversible operations. Destructive, broad, or cross-machine changes must stay as approval previews unless the host later confirms them. ' +
       'Never claim a write happened when a tool returned requiresConfirmation/dryRun.' +
       selectedNote + labelContext + goalInstructions;
@@ -506,8 +506,6 @@ async function handleChat(req, res) {
       instructions,
       tools: body.snapshotOnly ? snapshotTools(notes) : noteAgentTools({
         actorName: body.actorName,
-        openedFrom: goal ? 'sidecar-goal' : 'sidecar-chat',
-        sourceContext: goal ? goalObjective : rawPrompt.slice(0, 300),
       }),
       stopWhen: stepCountIs(maxSteps),
       temperature: 0.2,
@@ -578,9 +576,7 @@ async function handleTool(req, res) {
   try {
     const result = await executeNotesAgentTool(name, input, {
       actorType: 'agent',
-      actorName: body.actorName || process.env.HASNA_NOTES_ACTOR_NAME || 'Hasna Notes Chat',
-      openedFrom: body.openedFrom || 'sidecar-chat-approval',
-      sourceContext: body.sourceContext || name,
+      actorName: body.actorName || process.env.HASNA_NOTES_ACTOR_NAME || 'PersonalNotes Chat',
       dryRun: !!body.dryRun,
       confirmWrites: !!body.confirm,
     });

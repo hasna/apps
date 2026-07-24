@@ -2,35 +2,30 @@
 import PackageDescription
 
 let package = Package(
-    name: "OpenNotes",
+    name: "PersonalNotes",
     platforms: [.macOS("26.0")],
     products: [
-        .library(name: "OpenNotesCore", targets: ["OpenNotesCore"]),
+        .library(name: "PersonalNotesCore", targets: ["PersonalNotesCore"]),
     ],
     targets: [
         .target(
-            name: "OpenNotesCore",
-            path: "Sources/OpenNotesCore"
-        ),
-        .executableTarget(
-            name: "OpenNotes",
-            dependencies: ["OpenNotesCore"],
-            path: "Sources/OpenNotes"
+            name: "PersonalNotesCore",
+            path: "Sources/PersonalNotesCore"
         ),
         // CLI smoke test for the markdown store. Used as the verification harness
         // because XCTest / swift-testing are unavailable under Command Line Tools.
         .executableTarget(
-            name: "OpenNotesSmoke",
-            dependencies: ["OpenNotesCore"],
-            path: "Sources/OpenNotesSmoke"
+            name: "PersonalNotesSmoke",
+            dependencies: ["PersonalNotesCore"],
+            path: "Sources/PersonalNotesSmoke"
         ),
         // Native macOS shell (WKWebView) hosting the bundled web UI.
-        // Depends on OpenNotesCore so it can read/write the on-disk Markdown notes
+        // Depends on PersonalNotesCore so it can read/write the on-disk Markdown notes
         // store and bridge real note data into the web UI.
         .executableTarget(
-            name: "HasnaNotesApp",
-            dependencies: ["OpenNotesCore"],
-            path: "Sources/HasnaNotesApp"
+            name: "PersonalNotesApp",
+            dependencies: ["PersonalNotesCore"],
+            path: "Sources/PersonalNotesApp"
         ),
     ]
 )
