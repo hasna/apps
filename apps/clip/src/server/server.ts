@@ -1,6 +1,13 @@
 import { existsSync, readFileSync } from "node:fs";
 import { extname } from "node:path";
 import { Buffer } from "node:buffer";
+import {
+  createAccessProtection,
+  metadataWithAccessProtection,
+  readAccessProtection,
+  verifyAccessCredential,
+} from "../access.js";
+import type { AccessProtectionKind, AccessProtectionMetadata } from "../access.js";
 import { captureScreenshot } from "../capture/index.js";
 import { CaptureAnnotationError, parseCaptureAnnotations } from "../capture/annotate.js";
 import { shareClipboard } from "../clipboard.js";
@@ -52,6 +59,56 @@ function authorized(req: Request, options: ClipServerOptions): boolean {
   if (!token) return true;
   const header = req.headers.get("authorization") ?? "";
   return header === `Bearer ${token}`;
+}
+
+function parseCreateAccessProtection(body: Record<string, unknown>):
+  | { ok: true; protection?: AccessProtectionMetadata }
+  | { ok: false; response: Response } {
+  const hasAccessToken = body["accessToken"] !== undefined;
+  const hasPassword = body["password"] !== undefined;
+  if (hasAccessToken && hasPassword) {
+    return { ok: false, response: jsonResponse({ error: "Use either accessToken or password, not both" }, 400) };
+  }
+  if (!hasAccessToken && !hasPassword) return { ok: true };
+
+  const kind: AccessProtectionKind = hasAccessToken ? "token" : "password";
+  const value = hasAccessToken ? body["accessToken"] : body["password"];
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return { ok: false, response: jsonResponse({ error: `${hasAccessToken ? "accessToken" : "password"} must be a non-empty string` }, 400) };
+  }
+  return { ok: true, protection: createAccessProtection(kind, value) };
+}
+
+function firstQueryParam(url: URL, names: string[]): string | undefined {
+  for (const name of names) {
+    const value = url.searchParams.get(name);
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function bearerCredential(req: Request): string | undefined {
+  const authorization = req.headers.get("authorization");
+  if (!authorization) return undefined;
+  const match = /^Bearer\s+(.+)$/i.exec(authorization);
+  return match?.[1];
+}
+
+function requestCredential(req: Request, url: URL, kind: AccessProtectionKind): string | undefined {
+  if (kind === "token") {
+    return req.headers.get("x-clip-access-token")
+      ?? bearerCredential(req)
+      ?? firstQueryParam(url, ["accessToken", "access_token", "token"]);
+  }
+  return req.headers.get("x-clip-password") ?? firstQueryParam(url, ["password"]);
+}
+
+function requireShareAccess(record: ClipRecord, req: Request, url: URL): Response | null {
+  const protection = readAccessProtection(record.metadata);
+  if (!protection) return null;
+  const credential = requestCredential(req, url, protection.kind);
+  if (credential && verifyAccessCredential(protection, credential)) return null;
+  return jsonResponse({ error: "Share access credential required" }, 401);
 }
 
 // Mime types that are safe to serve inline from the share origin. Anything
@@ -211,6 +268,8 @@ export async function handleClipHttpRequest(req: Request, options: ClipServerOpt
 
     if (req.method === "POST" && path === "/api/shares") {
       const body = await requestJson(req);
+      const accessProtection = parseCreateAccessProtection(body);
+      if (!accessProtection.ok) return accessProtection.response;
       const store = new ClipStore(storeOptions(options));
       try {
         if (typeof body["filePath"] === "string") {
@@ -231,17 +290,18 @@ export async function handleClipHttpRequest(req: Request, options: ClipServerOpt
             mimeType,
             source: "server:upload",
             extension: extensionForMime(mimeType),
-            metadata: { upload: true },
+            metadata: metadataWithAccessProtection({ upload: true }, accessProtection.protection),
             baseUrl: options.baseUrl,
-          })), 201);
+          }), { authorized: true }), 201);
         }
         if (typeof body["text"] === "string") {
           return jsonResponse(publicClipRecord(store.createTextClip({
             text: body["text"],
             title: typeof body["title"] === "string" ? body["title"] : undefined,
             source: "server:text",
+            metadata: metadataWithAccessProtection({}, accessProtection.protection),
             baseUrl: options.baseUrl,
-          })), 201);
+          }), { authorized: true }), 201);
         }
         return jsonResponse({ error: "Expected text or dataBase64" }, 400);
       } finally {
@@ -288,7 +348,10 @@ export async function handleClipHttpRequest(req: Request, options: ClipServerOpt
       const ref = parts[2];
       if (req.method === "GET") {
         const record = getRecord(ref, options);
-        return record ? jsonResponse(publicClipRecord(record)) : jsonResponse({ error: "Share not found" }, 404);
+        if (!record) return jsonResponse({ error: "Share not found" }, 404);
+        const denied = requireShareAccess(record, req, url);
+        if (denied) return denied;
+        return jsonResponse(publicClipRecord(record, { authorized: true }));
       }
       if (req.method === "DELETE") {
         const store = new ClipStore(storeOptions(options));
@@ -303,6 +366,8 @@ export async function handleClipHttpRequest(req: Request, options: ClipServerOpt
     if (parts[0] === "s" && parts[1]) {
       const record = getRecord(parts[1], options);
       if (!record) return jsonResponse({ error: "Share not found" }, 404);
+      const denied = requireShareAccess(record, req, url);
+      if (denied) return denied;
       if (parts[2] === "raw") return rawResponse(record);
       return previewHtml(record);
     }

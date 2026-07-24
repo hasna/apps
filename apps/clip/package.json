@@ -1,6 +1,6 @@
 {
   "name": "@hasna/clip",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Local and self-hosted screenshot and clipboard sharing with CLI, SDK, MCP, HTTP API, and a macOS menu bar app",
   "type": "module",
   "repository": {

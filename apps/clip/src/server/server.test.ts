@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ClipStore } from "../storage.js";
+import { buildShareAccessUrl } from "../share.js";
 import { handleClipHttpRequest, startClipServer } from "./server.js";
 
 describe("HTTP server routes", () => {
@@ -27,6 +28,125 @@ describe("HTTP server routes", () => {
       const missing = await handleClipHttpRequest(new Request("http://x/nope"), { clientOptions: { homeDir: dir } });
       expect(missing.status).toBe(404);
       expect(await missing.json()).toEqual({ error: "Not found" });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("requires the access token for protected text shares", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clip-server-token-"));
+    const accessToken = ["allow", "token"].join("-");
+    try {
+      const options = { clientOptions: { homeDir: dir }, baseUrl: "http://test.local" };
+      const create = await handleClipHttpRequest(new Request("http://x/api/shares", {
+        method: "POST",
+        body: JSON.stringify({ text: "protected text body", title: "Token Share", accessToken }),
+      }), options);
+      expect(create.status).toBe(201);
+      const createdText = await create.text();
+      const record = JSON.parse(createdText) as { slug: string; shareUrl: string; protected?: boolean; text?: string };
+      expect(record.protected).toBe(true);
+      expect(record.text).toBe("protected text body");
+      expect(record.shareUrl).toBe(`http://test.local/s/${record.slug}`);
+      expect(record.shareUrl).not.toContain(accessToken);
+      expect(createdText).not.toContain(accessToken);
+
+      const protectedUrl = buildShareAccessUrl({ slug: record.slug }, { accessToken }, { baseUrl: "http://test.local" });
+      expect(protectedUrl).toBe(`http://test.local/s/${record.slug}?token=${encodeURIComponent(accessToken)}`);
+
+      const listed = await handleClipHttpRequest(new Request("http://x/api/shares"), options);
+      expect(listed.status).toBe(200);
+      const listedText = await listed.text();
+      const listedPayload = JSON.parse(listedText) as { shares: Array<{ slug: string; protected?: boolean; text: string | null; sha256: string }> };
+      expect(listedPayload.shares[0]?.slug).toBe(record.slug);
+      expect(listedPayload.shares[0]?.protected).toBe(true);
+      expect(listedPayload.shares[0]?.text).toBeNull();
+      expect(listedPayload.shares[0]?.sha256).toBe("[redacted]");
+      expect(listedText).not.toContain("protected text body");
+      expect(listedText).not.toContain(accessToken);
+
+      const deniedShow = await handleClipHttpRequest(new Request(`http://x/api/shares/${record.slug}`), options);
+      expect(deniedShow.status).toBe(401);
+      const deniedText = await deniedShow.text();
+      expect(deniedText).not.toContain("protected text body");
+      expect(deniedText).not.toContain(accessToken);
+
+      const wrongShow = await handleClipHttpRequest(new Request(`http://x/api/shares/${record.slug}`, {
+        headers: { "X-Clip-Access-Token": "wrong" },
+      }), options);
+      expect(wrongShow.status).toBe(401);
+
+      const allowedShow = await handleClipHttpRequest(new Request(`http://x/api/shares/${record.slug}`, {
+        headers: { "X-Clip-Access-Token": accessToken },
+      }), options);
+      expect(allowedShow.status).toBe(200);
+      expect((await allowedShow.json() as { text: string }).text).toBe("protected text body");
+
+      const deniedPreview = await handleClipHttpRequest(new Request(`http://x/s/${record.slug}`), options);
+      expect(deniedPreview.status).toBe(401);
+
+      const allowedPreview = await handleClipHttpRequest(new Request(`http://x/s/${record.slug}?token=${encodeURIComponent(accessToken)}`), options);
+      expect(allowedPreview.status).toBe(200);
+      const previewText = await allowedPreview.text();
+      expect(previewText).toContain("protected text body");
+      expect(previewText).not.toContain(accessToken);
+
+      const deniedRaw = await handleClipHttpRequest(new Request(`http://x/s/${record.slug}/raw`), options);
+      expect(deniedRaw.status).toBe(401);
+
+      const allowedRaw = await handleClipHttpRequest(new Request(`http://x/s/${record.slug}/raw`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      }), options);
+      expect(allowedRaw.status).toBe(200);
+      expect(await allowedRaw.text()).toBe("protected text body");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("requires the password for protected uploaded shares", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clip-server-password-"));
+    const password = ["open", "share"].join("-");
+    try {
+      const options = { clientOptions: { homeDir: dir }, baseUrl: "http://test.local" };
+      const created = await handleClipHttpRequest(new Request("http://x/api/shares", {
+        method: "POST",
+        body: JSON.stringify({
+          dataBase64: Buffer.from("protected upload", "utf8").toString("base64"),
+          mimeType: "text/plain",
+          title: "Upload",
+          password,
+        }),
+      }), options);
+      expect(created.status).toBe(201);
+      const createdText = await created.text();
+      const record = JSON.parse(createdText) as { slug: string; protected?: boolean; metadata: Record<string, unknown> };
+      expect(record.protected).toBe(true);
+      expect(record.metadata["clipAccessProtection"]).toBeUndefined();
+      expect(createdText).not.toContain(password);
+      const store = new ClipStore({ homeDir: dir, baseUrl: "http://test.local" });
+      const stored = store.getClip(record.slug);
+      store.close();
+      const storedMetadataText = JSON.stringify(stored?.metadata ?? {});
+      expect(storedMetadataText).toContain("\"algorithm\":\"scrypt\"");
+      expect(storedMetadataText).not.toContain(password);
+
+      const deniedRaw = await handleClipHttpRequest(new Request(`http://x/s/${record.slug}/raw`), options);
+      expect(deniedRaw.status).toBe(401);
+      expect(await deniedRaw.text()).not.toContain("protected upload");
+
+      const wrongRaw = await handleClipHttpRequest(new Request(`http://x/s/${record.slug}/raw?password=wrong`), options);
+      expect(wrongRaw.status).toBe(401);
+
+      const allowedRaw = await handleClipHttpRequest(new Request(`http://x/s/${record.slug}/raw`, {
+        headers: { "X-Clip-Password": password },
+      }), options);
+      expect(allowedRaw.status).toBe(200);
+      expect(await allowedRaw.text()).toBe("protected upload");
+
+      const allowedViaQuery = await handleClipHttpRequest(new Request(`http://x/api/shares/${record.slug}?password=${encodeURIComponent(password)}`), options);
+      expect(allowedViaQuery.status).toBe(200);
+      expect((await allowedViaQuery.json() as { hasArtifact: boolean }).hasArtifact).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

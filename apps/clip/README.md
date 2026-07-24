@@ -102,6 +102,15 @@ Useful routes:
 - `GET /s/:slug`
 - `GET /s/:slug/raw`
 
+Share protection is opt-in per share. `POST /api/shares` accepts either
+`accessToken` or `password` alongside `text` or `dataBase64`; protected shares
+must be fetched with `X-Clip-Access-Token`, `Authorization: Bearer <token>`,
+`X-Clip-Password`, or an explicit `?token=` / `?password=` query parameter.
+The server stores only salted verification material and does not return raw
+credentials in public share responses. Prefer headers when possible; query
+parameters are intended for explicit browser-link convenience and may be visible
+to browser history or upstream access logs outside `clip-serve`.
+
 ## MCP
 
 ```bash

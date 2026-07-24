@@ -1,6 +1,10 @@
 import { DEFAULT_PORT } from "./paths.js";
 import type { ClipClientOptions, ClipRecord } from "./types.js";
 
+export type ShareAccessCredential =
+  | { accessToken: string }
+  | { password: string };
+
 export function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "");
 }
@@ -15,6 +19,20 @@ export function resolveBaseUrl(options: ClipClientOptions = {}): string {
 
 export function buildShareUrl(record: Pick<ClipRecord, "slug">, options: ClipClientOptions = {}): string {
   return `${resolveBaseUrl(options)}/s/${encodeURIComponent(record.slug)}`;
+}
+
+export function buildShareAccessUrl(
+  record: Pick<ClipRecord, "slug">,
+  credential: ShareAccessCredential,
+  options: ClipClientOptions = {},
+): string {
+  const url = new URL(buildShareUrl(record, options));
+  if ("accessToken" in credential) {
+    url.searchParams.set("token", credential.accessToken);
+  } else {
+    url.searchParams.set("password", credential.password);
+  }
+  return url.toString();
 }
 
 export function withShareUrl(record: ClipRecord, options: ClipClientOptions = {}): ClipRecord {
