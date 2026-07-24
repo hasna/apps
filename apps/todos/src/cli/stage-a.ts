@@ -166,8 +166,12 @@ function isMetadataInvocation(args: string[], invocation: ParsedInvocation): boo
   if (!invocation.command) {
     return args.length === 0 || invocation.metadataFlags.size > 0;
   }
-  if ((invocation.command === "manual" || invocation.command === "completions" || invocation.command === "completion") &&
-      invocation.commandArgs.length === 0) return true;
+  // Shell-completion generation (`completions <shell>` / `completion <shell>`) is
+  // pure static output that never touches the DB or network, so every form of it
+  // — with or without a shell argument — is a diagnostic invocation that must
+  // succeed offline in remote mode.
+  if (invocation.command === "completions" || invocation.command === "completion") return true;
+  if (invocation.command === "manual" && invocation.commandArgs.length === 0) return true;
   if (invocation.command === "help" && invocation.commandArgs.every((arg) => !arg.startsWith("-"))) return true;
   if (invocation.command === "config") {
     return isReadOnlyConfigInvocation(invocation) ||

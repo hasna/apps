@@ -251,6 +251,27 @@ describe("remote CLI entrypoint authority boundary", () => {
     }
   });
 
+  test("shell-completion generation stays diagnostic in remote mode even with a shell argument", () => {
+    for (const args of [
+      ["completions", "bash"],
+      ["completions", "zsh"],
+      ["completions", "fish"],
+      ["completion", "bash"],
+      ["completion", "zsh"],
+      ["completion", "fish"],
+    ]) {
+      const result = initializeTodosCliAuthority(args, {
+        HASNA_TODOS_STORAGE_MODE: "remote",
+        HASNA_TODOS_API_URL: "https://authority.invalid",
+        HASNA_TODOS_API_KEY: "fixture-remote-key",
+      });
+      expect(result).toEqual({
+        route: "remote-diagnostic",
+        v1_base_url: "https://authority.invalid/v1",
+      });
+    }
+  });
+
   test("built Stage-A adversarial invocations leave synthetic cwd and HOME byte-for-byte absent", async () => {
     const requests: string[] = [];
     const server = Bun.serve({
