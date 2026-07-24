@@ -871,6 +871,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ai", "biology", "imputation", "research"],
   },
   {
+    name: "stagehand",
+    displayName: "Stagehand",
+    description: "Browserbase-hosted AI browser automation sessions",
+    category: "AI & ML",
+    tags: ["ai", "browser-automation", "agents", "browserbase"],
+  },
+  {
     name: "studiobyai21labs",
     displayName: "Studio by AI21 Labs",
     description: "AI writing and language models API by AI21 Labs",
