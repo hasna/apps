@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.46] - 2026-07-24
+
+### Fixed
+
+- **Reconcile `main` to the published npm line.** `main`'s `package.json` was stamped
+  `1.3.41` while npm `latest` was `1.3.45`. Versions `1.3.43`, `1.3.44`, and `1.3.45` were
+  published on 2026-07-24 (13:47–14:15 UTC) by hand-bumping `package.json` in the registry-drain
+  working tree and running `npm publish` **without committing or tagging the bump** — so no git
+  ref carried `1.3.43`–`1.3.45`. Verification confirmed the published `1.3.45` artifact is a
+  strict subset of `main` (HEAD = #330 registry drain): published `package.json` is byte-identical
+  to `main` except the version field (same deps incl. `@hasna/cloud`/`pg`, same scripts, exports,
+  bin), `README.md` is identical, and every connector shipped in `1.3.45` (1148 dirs) is present
+  in `main` (1149; `main` additionally has `connect-googleads`). No published behavior was
+  missing from `main`, so no source merge was required — only the version needed to move above
+  the published line. Bumped to `1.3.46` and tagged so `main` == npm going forward and the next
+  publish is monotonic. (The `codewith/no-cloud-connectors` branch @ `1.3.42`, which removed the
+  cloud runtime, is a superseded experiment — npm `1.3.45` re-includes `@hasna/cloud` — and is
+  intentionally NOT merged.)
+
 ### Added
 
 - Registry integration: added 111 net-new connectors in a single batch, consolidating
