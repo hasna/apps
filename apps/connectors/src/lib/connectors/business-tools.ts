@@ -1367,4 +1367,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Business Tools",
     tags: ["maintenance", "aircraft", "work-orders", "cmms"],
   },
+  {
+    name: "zotero",
+    displayName: "Zotero",
+    description: "Bibliography and reference library API for items, collections, and attachments",
+    category: "Business Tools",
+    tags: ["bibliography", "citations", "research", "library", "references"],
+  },
 ];
