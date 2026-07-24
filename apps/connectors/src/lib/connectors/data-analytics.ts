@@ -647,6 +647,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["scraping", "data", "extraction"],
   },
   {
+    name: "webpagetest",
+    displayName: "WebPageTest",
+    description: "Web performance testing platform",
+    category: "Data & Analytics",
+    tags: ["performance", "web", "monitoring"],
+  },
+  {
     name: "wikipedia",
     displayName: "Wikipedia",
     description: "Free encyclopedia with article search and content retrieval",
