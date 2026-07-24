@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.0.6
+
+- Make human-readable `ui list`, `ui events list`, and `ui webhooks list`
+  output compact by default so agent terminals are not flooded with full
+  records.
+- Add progressive detail paths: `--limit`, `--cursor`, `--verbose`,
+  `show`/`inspect` for a single record, and `--json` for full
+  machine-readable output (bare `--json` list stays a complete array; explicit
+  `--limit`/`--cursor` page the JSON).
+- Redact sensitive event fields in human, verbose, replay, and JSON display
+  even when stored events were persisted raw.
+
 ## 0.0.5
 
 - Resolve the ui.sh content mirror from the current project directory (or

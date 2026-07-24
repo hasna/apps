@@ -1,5 +1,6 @@
 import {
   EventsClient,
+  redactSensitiveKeys,
   sanitizeChannelForOutput,
   sanitizeChannelsForOutput,
   type ChannelConfig,
@@ -55,6 +56,14 @@ function print(value: unknown, json: boolean, text: string): void {
   else console.log(text);
 }
 
+function redactEvents(events: Awaited<ReturnType<EventsClient["listEvents"]>>) {
+  return events.map((event) => redactSensitiveKeys(event));
+}
+
+function redactReplayResult(result: Awaited<ReturnType<EventsClient["replay"]>>) {
+  return { ...result, events: redactEvents(result.events) };
+}
+
 function parseEventInput(type: string, args: string[]): EventInput {
   return {
     source: takeOption(args, "--source") ?? "ui",
@@ -94,7 +103,7 @@ async function handleEvents(client: EventsClient, command: string | undefined, t
 
   if (command === "list") {
     const events = await client.listEvents();
-    print(events, json, events.length ? events.map((event) => `${event.time}\t${event.source}\t${event.type}`).join("\n") : "No events recorded.");
+    print(redactEvents(events), json, events.length ? events.map((event) => `${event.time}\t${event.source}\t${event.type}`).join("\n") : "No events recorded.");
     return;
   }
 
@@ -107,7 +116,7 @@ async function handleEvents(client: EventsClient, command: string | undefined, t
       type: takeOption(args, "--type"),
       dryRun,
     });
-    print(result, json, `replayed ${result.events.length} event(s)`);
+    print(redactReplayResult(result), json, `replayed ${result.events.length} event(s)`);
     return;
   }
 

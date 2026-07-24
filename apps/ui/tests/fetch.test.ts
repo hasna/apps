@@ -70,6 +70,44 @@ describe("missing content mirror guidance", () => {
   });
 });
 
+describe("ui list CLI", () => {
+  test("caps human output and pages json when requested", () => {
+    const human = Bun.spawnSync({
+      cmd: ["bun", "run", "src/cli.ts", "list", "--limit", "3"],
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(human.exitCode).toBe(0);
+    expect(human.stdout.toString().trim().split("\n")).toHaveLength(3);
+    expect(human.stderr.toString()).toContain("3 of");
+    expect(human.stderr.toString()).toContain("--cursor 3");
+
+    const json = Bun.spawnSync({
+      cmd: ["bun", "run", "src/cli.ts", "list", "--limit=2", "--cursor=2", "--json"],
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(json.exitCode).toBe(0);
+    expect(JSON.parse(json.stdout.toString())).toHaveLength(2);
+
+    const missing = Bun.spawnSync({
+      cmd: ["bun", "run", "src/cli.ts", "list", "--limit"],
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(missing.exitCode).toBe(1);
+    expect(missing.stderr.toString()).toContain("--limit requires a value");
+
+    const emptyEquals = Bun.spawnSync({
+      cmd: ["bun", "run", "src/cli.ts", "list", "--limit="],
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(emptyEquals.exitCode).toBe(1);
+    expect(emptyEquals.stderr.toString()).toContain("--limit requires a value");
+  });
+});
+
 describe("content tree completeness", () => {
   test("index.json mirrors the full resource set (>= 40)", async () => {
     const idx = (await Bun.file(join(CONTENT, "index.json")).json()) as Record<string, string>;

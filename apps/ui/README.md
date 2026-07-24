@@ -23,7 +23,7 @@ user-managed local mirror under `content/` and can be deleted or regenerated.
 | Fetch shim | `src/fetch.ts` | Offline resource fetch (reads `content/`) |
 | Picker | `src/picker.ts` → `public/ui-picker.js` | Self-contained variant picker (`data-uidotsh-*` contract), ~9 KB, zero deps |
 | Server | `src/server.ts` | Serves a demo, the picker, and an HTTP fetch shim |
-| CLI | `src/cli.ts` (`ui`) | `ui fetch <uri…>`, `ui list`, `ui serve [port]` |
+| CLI | `src/cli.ts` (`ui`) | `ui fetch <uri…>`, `ui list`, `ui serve [port]`, `ui events`, `ui webhooks` |
 | Demo | `src/demo.ts` | Three hero variants for picker comparison |
 
 ## Install
@@ -55,6 +55,21 @@ ui list
 
 By default the CLI reads `./content` from the current project directory. Set
 `HASNA_UI_CONTENT_DIR=/path/to/content` when the mirror lives somewhere else.
+
+## CLI output
+
+Human-readable list commands are compact by default so agent terminals do not
+fill with huge records. Use `--limit <n>` and `--cursor <n>` to page through
+rows, `--verbose` for extra columns, `show`/`inspect` for one record, and
+`--json` when a script needs full machine-readable data.
+
+```sh
+ui list --limit 20
+ui events list --limit 20 --verbose
+ui events show <event-id>
+ui webhooks list --limit 20
+ui webhooks inspect <channel-id> --json
+```
 
 ## The variant picker
 
