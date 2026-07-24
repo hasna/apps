@@ -146,6 +146,29 @@ describe("AWS dry-run planning", () => {
     ]);
   });
 
+  it("awaits the local metadata read so the push plan cannot leak a pending store call", async () => {
+    // Regression for aws-push-dryrun-hang: pushSecret's dry-run branch used to call
+    // getLocalMetadata(key) WITHOUT awaiting it, so `metadata` was always a (truthy)
+    // Promise. That made the `Secret not found` guard dead code AND — in cloud/api
+    // mode, where getLocalMetadata performs an HTTP round trip — left an in-flight
+    // socket that kept the event loop alive, so the keyless `aws push --dry-run`
+    // plan-all path never exited. If the read is properly awaited, a dry-run push of
+    // a key that does not exist locally must reject instead of returning a plan.
+    setAwsClientFactoryForTests(() => ({
+      send: async () => {
+        throw new Error("dry-run must not send");
+      },
+    }));
+
+    await expect(
+      pushSecret("hasna/xyz/opensource/files/prod/does-not-exist", {
+        dryRun: true,
+        profile: "hasna-xyz-infra",
+        prefix: "test-prefix",
+      })
+    ).rejects.toThrow("Secret not found");
+  });
+
   it("plans sync with metadata-only local reads and remote ListSecrets", async () => {
     const sent: string[] = [];
     setAwsClientFactoryForTests(() => ({
