@@ -463,6 +463,23 @@ describe("loops CLI", () => {
     expect(JSON.stringify(bundle)).not.toContain("very-secret-value");
   });
 
+  test("export --dry-run previews a bundle without --file", () => {
+    const dataDir = freshDataDir("loops-cli-export-dry-run-nofile-");
+    const create = runCli(dataDir, ["create", "command", "preview-loop", "--at", futureAt(), "--cmd", "true"]);
+    expect(create.status).toBe(0);
+
+    const preview = runCli(dataDir, ["--json", "export", "--dry-run"]);
+    expect(preview.status).toBe(0);
+    const value = JSON.parse(preview.stdout);
+    expect(value).toMatchObject({ ok: true, dryRun: true, file: null });
+    expect(value.bundle).toBeDefined();
+
+    // without --dry-run, --file remains required
+    const missing = runCli(dataDir, ["--json", "export"]);
+    expect(missing.status).toBe(1);
+    expect(missing.stderr).toContain("--file");
+  });
+
   test("self-hosted migrate preview reports blocked unsupported rows without tokens", () => {
     const dataDir = freshDataDir("loops-cli-self-hosted-migrate-");
     const create = runCli(dataDir, ["create", "command", "remote-loop", "--at", futureAt(), "--cmd", "true"]);

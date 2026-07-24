@@ -816,12 +816,15 @@ selfHosted
 program
   .command("export")
   .description("export a local Loops migration bundle")
-  .requiredOption("--file <path>", "write bundle JSON to this path")
+  .option("--file <path>", "write bundle JSON to this path (required unless --dry-run)")
   .option("--dry-run", "preview the bundle without writing the file")
   .option("--no-runs", "omit loop run history from the bundle")
   .option("--allow-redacted", "write a redacted non-importable bundle when env/secrets must be removed")
   .option("--json", "print JSON")
   .action(runAction((opts) => {
+    if (!opts.dryRun && !opts.file) {
+      throw new ValidationError("--file <path> is required unless --dry-run is used");
+    }
     const store = new Store();
     try {
       const bundle = exportLoopsMigrationBundle(store, { includeRuns: opts.runs });
@@ -832,12 +835,13 @@ program
       const output = {
         ok: true,
         dryRun: Boolean(opts.dryRun),
-        file: opts.file,
+        file: opts.file ?? null,
         bundle: publicMigrationBundle(bundle),
       };
       if (isJson() || opts.json) console.log(JSON.stringify(output, null, 2));
       else {
-        console.log(`${opts.dryRun ? "would export" : "exported"} ${opts.file} workflows=${bundle.counts.workflows} loops=${bundle.counts.loops} runs=${bundle.counts.runs}`);
+        const target = opts.file ?? "(no file)";
+        console.log(`${opts.dryRun ? "would export" : "exported"} ${target} workflows=${bundle.counts.workflows} loops=${bundle.counts.loops} runs=${bundle.counts.runs}`);
         for (const warning of bundle.warnings) console.log(`warn ${warning}`);
       }
     } finally {
