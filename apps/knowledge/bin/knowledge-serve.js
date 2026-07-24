@@ -630,6 +630,7 @@ var HASNA_KNOWLEDGE_APP_PATH = join(".hasna", "knowledge");
 var LEGACY_HASNA_KNOWLEDGE_APP_PATH = join(".hasna", "apps", "knowledge");
 
 // src/store.ts
+var heldLockPaths = new Set;
 function makeId() {
   return `k_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }

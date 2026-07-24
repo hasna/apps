@@ -23374,18 +23374,146 @@ function knowledgeRegistryContract(input) {
 // src/store.ts
 import { readFileSync as readFileSync3, writeFileSync as writeFileSync2, existsSync as existsSync2, renameSync, unlinkSync } from "fs";
 import { randomUUID } from "crypto";
+import { join as join2 } from "path";
 function defaultStorePath() {
   return workspaceForHome(globalKnowledgeHome()).jsonStorePath;
 }
 function ensureStore(path) {
+  if (path === defaultStorePath() && existsSync2(legacyGlobalStorePath())) {
+    importLegacyGlobalStore();
+  }
   if (!existsSync2(path)) {
     ensureParentDir(path);
-    if (path === defaultStorePath() && existsSync2(legacyGlobalStorePath())) {
-      writeFileSync2(path, readFileSync3(legacyGlobalStorePath(), "utf8"));
+    writeFileSync2(path, `${JSON.stringify({ items: [] }, null, 2)}
+`);
+  }
+}
+function timestampForPath(now) {
+  return now.toISOString().replace(/[:.]/g, "-");
+}
+function storeIdentityKeys(item) {
+  const keys = [`id:${item.id}`];
+  if (typeof item.short_id === "string" && item.short_id.length > 0) {
+    keys.push(`short_id:${item.short_id}`);
+  }
+  return keys;
+}
+function indexStoreItems(items) {
+  const index = new Set;
+  for (const item of items) {
+    for (const key of storeIdentityKeys(item))
+      index.add(key);
+  }
+  return index;
+}
+function storeContainsItem(index, item) {
+  return storeIdentityKeys(item).some((key) => index.has(key));
+}
+function writeJsonFile(path, value) {
+  ensureParentDir(path);
+  writeFileSync2(path, `${JSON.stringify(value, null, 2)}
+`);
+}
+function readStoreFileForImport(path) {
+  const value = JSON.parse(readFileSync3(path, "utf8"));
+  if (!value || typeof value !== "object" || !Array.isArray(value.items)) {
+    return { store: { items: [] }, skippedInvalid: 0 };
+  }
+  const store = { items: [] };
+  let skippedInvalid = 0;
+  for (const item of value.items) {
+    if (item && typeof item === "object" && typeof item.id === "string" && item.id.length > 0) {
+      store.items.push(item);
     } else {
-      writeFileSync2(path, JSON.stringify({ items: [] }, null, 2));
+      skippedInvalid += 1;
     }
   }
+  return { store, skippedInvalid };
+}
+function importLegacyGlobalStore(options = {}) {
+  if (options.dryRun === true)
+    return importLegacyGlobalStoreUnlocked(options);
+  return withLock(defaultStorePath(), () => importLegacyGlobalStoreUnlocked(options), { createParent: true });
+}
+function importLegacyGlobalStoreUnlocked(options = {}) {
+  const dryRun = options.dryRun === true;
+  const now = options.now ?? new Date;
+  const workspace = workspaceForHome(globalKnowledgeHome());
+  const legacyPath = legacyGlobalStorePath();
+  const canonicalPath = workspace.jsonStorePath;
+  const legacyExists = existsSync2(legacyPath);
+  const canonicalExisted = existsSync2(canonicalPath);
+  const result = {
+    ok: true,
+    dry_run: dryRun,
+    legacy_path: legacyPath,
+    canonical_path: canonicalPath,
+    legacy_exists: legacyExists,
+    canonical_existed: canonicalExisted,
+    canonical_created: false,
+    would_create_canonical: false,
+    imported: 0,
+    skipped_existing: 0,
+    skipped_invalid: 0,
+    backup_path: null,
+    report_path: null,
+    errors: [],
+    message: legacyExists ? "Legacy global store already imported" : "No legacy global store found"
+  };
+  if (!legacyExists)
+    return result;
+  let legacyStore;
+  try {
+    const legacy = readStoreFileForImport(legacyPath);
+    legacyStore = legacy.store;
+    result.skipped_invalid = legacy.skippedInvalid;
+  } catch (error) {
+    result.ok = false;
+    result.errors.push(`Could not read legacy store: ${error instanceof Error ? error.message : String(error)}`);
+    result.message = "Legacy global store import failed";
+    return result;
+  }
+  let canonicalStore = { items: [] };
+  if (canonicalExisted) {
+    try {
+      canonicalStore = readStoreFileForImport(canonicalPath).store;
+    } catch (error) {
+      result.ok = false;
+      result.errors.push(`Could not read canonical store: ${error instanceof Error ? error.message : String(error)}`);
+      result.message = "Legacy global store import failed";
+      return result;
+    }
+  }
+  const index = indexStoreItems(canonicalStore.items);
+  const merged = { items: [...canonicalStore.items] };
+  for (const item of legacyStore.items) {
+    if (!item?.id) {
+      result.skipped_invalid += 1;
+      continue;
+    }
+    if (storeContainsItem(index, item)) {
+      result.skipped_existing += 1;
+      continue;
+    }
+    merged.items.push(item);
+    for (const key of storeIdentityKeys(item))
+      index.add(key);
+    result.imported += 1;
+  }
+  result.would_create_canonical = !canonicalExisted && result.imported > 0;
+  result.canonical_created = !dryRun && result.would_create_canonical;
+  result.message = result.imported > 0 ? `Imported ${result.imported} legacy item(s) into canonical knowledge store` : "Legacy global store already imported";
+  if (dryRun || result.imported === 0)
+    return result;
+  const suffix = `${timestampForPath(now)}-${randomUUID().slice(0, 8)}`;
+  if (canonicalExisted) {
+    result.backup_path = join2(workspace.exportsDir, `legacy-open-knowledge-db-before-import-${suffix}.json`);
+    writeJsonFile(result.backup_path, canonicalStore);
+  }
+  writeJsonFile(canonicalPath, merged);
+  result.report_path = join2(workspace.runsDir, `legacy-open-knowledge-import-${suffix}.json`);
+  writeJsonFile(result.report_path, result);
+  return result;
 }
 function loadStoreIfExists(path) {
   if (!existsSync2(path))
@@ -23400,6 +23528,7 @@ function loadStoreIfExists(path) {
 function lockPath(path) {
   return `${path}.lock`;
 }
+var heldLockPaths = new Set;
 function acquireLock(lockPath2, ownerId) {
   const maxWait = 5000;
   const interval = 50;
@@ -23447,12 +23576,16 @@ function saveStore(path, store) {
 function withLock(path, fn, options = {}) {
   const owner = randomUUID();
   const lpath = lockPath(path);
+  if (heldLockPaths.has(lpath))
+    return fn();
   if (options.createParent)
     ensureParentDir(lpath);
   acquireLock(lpath, owner);
+  heldLockPaths.add(lpath);
   try {
     return fn();
   } finally {
+    heldLockPaths.delete(lpath);
     releaseLock(lpath, owner);
   }
 }
@@ -23906,7 +24039,7 @@ async function startKnowledgeServe(options = {}) {
 
 // src/artifact-store.ts
 import { existsSync as existsSync3, mkdirSync as mkdirSync2, readFileSync as readFileSync5, statSync, writeFileSync as writeFileSync3 } from "fs";
-import { dirname as dirname2, join as join2, relative, sep } from "path";
+import { dirname as dirname2, join as join3, relative, sep } from "path";
 import { pathToFileURL } from "url";
 function normalizeArtifactKey(key) {
   const raw = key.replace(/\\/g, "/").trim();
@@ -23949,7 +24082,7 @@ class LocalArtifactStore {
   }
   async put(entry) {
     const key = normalizeArtifactKey(entry.key);
-    const path = join2(this.root, key);
+    const path = join3(this.root, key);
     assertInside(this.root, path);
     mkdirSync2(dirname2(path), { recursive: true });
     writeFileSync3(path, entry.body);
@@ -23957,13 +24090,13 @@ class LocalArtifactStore {
   }
   async getText(key) {
     const normalizedKey = normalizeArtifactKey(key);
-    const path = join2(this.root, normalizedKey);
+    const path = join3(this.root, normalizedKey);
     assertInside(this.root, path);
     return readFileSync5(path, "utf8");
   }
   async exists(key) {
     const normalizedKey = normalizeArtifactKey(key);
-    const path = join2(this.root, normalizedKey);
+    const path = join3(this.root, normalizedKey);
     assertInside(this.root, path);
     return existsSync3(path);
   }
@@ -24072,7 +24205,7 @@ import { createHash as createHash19 } from "crypto";
 import { spawnSync as spawnSync2 } from "child_process";
 import { existsSync as existsSync13, readFileSync as readFileSync14 } from "fs";
 import { hostname as hostname5 } from "os";
-import { join as join6, resolve as resolve5 } from "path";
+import { join as join7, resolve as resolve5 } from "path";
 
 // src/app-wiki.ts
 import { createHash as createHash7, randomUUID as randomUUID4 } from "crypto";
@@ -24084,7 +24217,7 @@ import { pathToFileURL as pathToFileURL2 } from "url";
 // src/auth.ts
 import { existsSync as existsSync4, mkdirSync as mkdirSync3, readFileSync as readFileSync6, unlinkSync as unlinkSync2, writeFileSync as writeFileSync4 } from "fs";
 import { homedir as homedir2 } from "os";
-import { dirname as dirname3, join as join3 } from "path";
+import { dirname as dirname3, join as join4 } from "path";
 var DEFAULT_KNOWLEDGE_API_URL = "https://knowledge.md";
 function normalizeKnowledgeApiOrigin(apiUrl) {
   const url = new URL(apiUrl);
@@ -24104,8 +24237,8 @@ function normalizeKnowledgeApiOrigin(apiUrl) {
 function knowledgeAuthPath(env = process.env) {
   if (env.HASNA_KNOWLEDGE_AUTH_PATH)
     return env.HASNA_KNOWLEDGE_AUTH_PATH;
-  const root = env.HASNA_KNOWLEDGE_AUTH_DIR ?? join3(homedir2(), ".hasna", "knowledge");
-  return join3(root, "auth.json");
+  const root = env.HASNA_KNOWLEDGE_AUTH_DIR ?? join4(homedir2(), ".hasna", "knowledge");
+  return join4(root, "auth.json");
 }
 function resolveKnowledgeApiUrl(config, env = process.env) {
   return normalizeKnowledgeApiOrigin(env.KNOWLEDGE_API_URL ?? config?.hosted?.api_url ?? DEFAULT_KNOWLEDGE_API_URL);
@@ -32356,7 +32489,7 @@ async function refreshEmbeddingIndex(options) {
 // src/rules-provenance.ts
 import { createHash as createHash14 } from "crypto";
 import { existsSync as existsSync10, lstatSync, readdirSync, readFileSync as readFileSync12, statSync as statSync2 } from "fs";
-import { basename as basename4, extname, join as join4, relative as relative4, resolve as resolve4, sep as sep4 } from "path";
+import { basename as basename4, extname, join as join5, relative as relative4, resolve as resolve4, sep as sep4 } from "path";
 import { pathToFileURL as pathToFileURL3 } from "url";
 var DEFAULT_MAX_ITEMS2 = 100;
 var DEFAULT_EVIDENCE_LIMIT = 25;
@@ -32585,7 +32718,7 @@ function walkRuleDirectory(input) {
   if (input.depth > input.maxDepth)
     return;
   for (const dirent of readdirSync(input.basePath, { withFileTypes: true })) {
-    const absPath = join4(input.basePath, dirent.name);
+    const absPath = join5(input.basePath, dirent.name);
     const rel = relativePath(rootBasePath, absPath);
     if (dirent.isSymbolicLink())
       continue;
@@ -34068,7 +34201,7 @@ import {
   rmSync,
   writeFileSync as writeFileSync5
 } from "fs";
-import { dirname as dirname4, join as join5, relative as relative5 } from "path";
+import { dirname as dirname4, join as join6, relative as relative5 } from "path";
 function walkFiles(root, base = root) {
   if (!existsSync12(root))
     return [];
@@ -34077,7 +34210,7 @@ function walkFiles(root, base = root) {
     return [relative5(base, root) || "."];
   if (!stat.isDirectory())
     return [];
-  return readdirSync2(root).flatMap((entry) => walkFiles(join5(root, entry), base)).sort();
+  return readdirSync2(root).flatMap((entry) => walkFiles(join6(root, entry), base)).sort();
 }
 function hashFiles(root, files) {
   if (files.length === 0)
@@ -34085,7 +34218,7 @@ function hashFiles(root, files) {
   const tree = createHash18("sha256");
   let bytes = 0;
   for (const file2 of files) {
-    const path = join5(root, file2);
+    const path = join6(root, file2);
     const body = readFileSync13(path);
     const fileHash = createHash18("sha256").update(body).digest("hex");
     bytes += body.byteLength;
@@ -34193,7 +34326,7 @@ function prepareLegacyTombstoneDirectory(home) {
     if (file2 === "TOMBSTONE.md" || file2 === "migration.json")
       continue;
     try {
-      rmSync(join5(home, file2), { recursive: true, force: false });
+      rmSync(join6(home, file2), { recursive: true, force: false });
     } catch (error51) {
       if (!isRetriableFsLock(error51) || !file2.startsWith("knowledge.db"))
         throw error51;
@@ -34233,7 +34366,7 @@ function isMigrationTombstone(workspace, summary, currentHome) {
   if (summary.files.some((file2) => !isRetainedTombstoneFile(file2)))
     return false;
   try {
-    const metadata = JSON.parse(readFileSync13(join5(workspace.home, "migration.json"), "utf8"));
+    const metadata = JSON.parse(readFileSync13(join6(workspace.home, "migration.json"), "utf8"));
     return metadata.new_path === currentHome && typeof metadata.backup_path === "string";
   } catch {
     return false;
@@ -34284,7 +34417,7 @@ function migrateLegacyKnowledgeWorkspace(options) {
       current_home: options.current.home,
       legacy_home: options.legacy.home,
       backup_home: null,
-      tombstone_path: join5(options.legacy.home, "TOMBSTONE.md"),
+      tombstone_path: join6(options.legacy.home, "TOMBSTONE.md"),
       legacy_before: legacyBefore,
       current_before: currentBefore,
       backup_after: null,
@@ -34312,7 +34445,7 @@ function migrateLegacyKnowledgeWorkspace(options) {
       current_home: options.current.home,
       legacy_home: options.legacy.home,
       backup_home: `${options.legacy.home}.backup-${migrationTimestamp(now)}`,
-      tombstone_path: join5(options.legacy.home, "TOMBSTONE.md"),
+      tombstone_path: join6(options.legacy.home, "TOMBSTONE.md"),
       legacy_before: legacyBefore,
       current_before: currentBefore,
       backup_after: null,
@@ -34344,7 +34477,7 @@ function migrateLegacyKnowledgeWorkspace(options) {
   const currentAfter = summarizeWorkspaceTree(options.current);
   checks3.migrated_matches_backup = summariesMatch(backupAfter, currentAfter);
   mkdirSync4(options.legacy.home, { recursive: true });
-  const tombstonePath = join5(options.legacy.home, "TOMBSTONE.md");
+  const tombstonePath = join6(options.legacy.home, "TOMBSTONE.md");
   writeFileSync5(tombstonePath, [
     "# Migrated OpenKnowledge Workspace",
     "",
@@ -34357,7 +34490,7 @@ function migrateLegacyKnowledgeWorkspace(options) {
     ""
   ].join(`
 `));
-  writeFileSync5(join5(options.legacy.home, "migration.json"), `${JSON.stringify({
+  writeFileSync5(join6(options.legacy.home, "migration.json"), `${JSON.stringify({
     migrated_at: now.toISOString(),
     approved_by: options.approvedBy,
     new_path: options.current.home,
@@ -34391,7 +34524,7 @@ function migrateLegacyKnowledgeWorkspace(options) {
 // src/service.ts
 function resolvePeerWorkspace(input) {
   const target = resolve5(input);
-  if (existsSync13(join6(target, "knowledge.db")) || existsSync13(join6(target, "config.json"))) {
+  if (existsSync13(join7(target, "knowledge.db")) || existsSync13(join7(target, "config.json"))) {
     return ensureKnowledgeWorkspace(target);
   }
   return ensureKnowledgeWorkspace(workspaceForHome(projectKnowledgeHome(target)).home);

@@ -38,6 +38,23 @@ the local SQLite FTS behavior shipped in Stage 1 (#29).
   phrase adjacency, `total` reflecting the FTS predicate, and sqlite-vs-pg
   equivalence over the shared corpus.
 
+## 0.2.90
+
+Fix the unsafe legacy global-store migration. `ensureStore` previously copied
+`~/.open-knowledge/db.json` verbatim over the canonical `~/.hasna/knowledge/db.json`
+on first global use, which could clobber an existing canonical store.
+
+- Replace the raw first-use copy with a safe merge: canonical records win on `id`/`short_id`
+  collisions, the legacy file is treated as a read-only source (never moved/rewritten/deleted),
+  invalid records are counted and skipped.
+- Add `knowledge storage import-legacy [--dry-run] [--scope global] [--json]` for explicit
+  preview/import with import reports (under `runs/`) and pre-import backups (under `exports/`)
+  when an existing canonical store changes. The command is global-only and rejects other scopes.
+- Make `withLock` reentrant within a single process so an import invoked while the caller
+  already holds the canonical store lock does not self-deadlock.
+- Add focused CLI tests: dry-run preview, project-scope rejection, existing-canonical merge/
+  no-overwrite/idempotent re-run, and reentrant-lock import.
+
 ## 0.2.89
 
 Harden public npm package contents so internal docs never ship. The published

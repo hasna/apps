@@ -33,6 +33,10 @@ function runCli(args: string[], cwd?: string, env?: Record<string, string>) {
   });
 }
 
+function homeEnv(home: string): Record<string, string> {
+  return { HOME: home, USERPROFILE: home };
+}
+
 function runCliWithInput(args: string[], input: string, cwd?: string, env?: Record<string, string>) {
   const result = spawnSync('bun', [CLI, ...args], {
     cwd,
@@ -835,6 +839,212 @@ describe('knowledge cli', () => {
     const out = JSON.parse(new TextDecoder().decode(list.stdout));
     expect(out.total).toBe(1);
     expect(out.items[0].title).toBe('Canonical item');
+  });
+
+  test('storage import-legacy dry-run previews without creating canonical store', () => {
+    const home = mkdtempSync(join(tmpdir(), 'ok-legacy-dry-run-'));
+    const legacyDir = join(home, '.open-knowledge');
+    const canonicalPath = join(home, '.hasna', 'knowledge', 'db.json');
+    mkdirSync(legacyDir, { recursive: true });
+    const legacyPayload = `${JSON.stringify({
+      items: [
+        {
+          id: 'k_legacy_preview',
+          short_id: 'legacy_prev',
+          title: 'Legacy preview item',
+          content: 'Preview only.',
+          tags: ['legacy'],
+          metadata: {},
+          archived: false,
+          created_at: '2026-06-08T00:00:00.000Z',
+          updated_at: '2026-06-08T00:00:00.000Z',
+        },
+        {
+          title: 'Invalid legacy item without id',
+          content: 'This should be reported and skipped.',
+        },
+      ],
+    }, null, 2)}\n`;
+    writeFileSync(join(legacyDir, 'db.json'), legacyPayload);
+
+    const preview = runCli(['storage', 'import-legacy', '--dry-run', '--json'], undefined, homeEnv(home));
+    expect(preview.exitCode).toBe(0);
+    const out = JSON.parse(new TextDecoder().decode(preview.stdout));
+    expect(out).toMatchObject({
+      ok: true,
+      dry_run: true,
+      legacy_exists: true,
+      canonical_existed: false,
+      canonical_created: false,
+      would_create_canonical: true,
+      imported: 1,
+      skipped_existing: 0,
+      skipped_invalid: 1,
+    });
+    expect(out.backup_path).toBeNull();
+    expect(out.report_path).toBeNull();
+    expect(existsSync(canonicalPath)).toBe(false);
+    expect(readFileSync(join(legacyDir, 'db.json'), 'utf8')).toBe(legacyPayload);
+  });
+
+  test('storage import-legacy rejects project scope without touching global store', () => {
+    const home = mkdtempSync(join(tmpdir(), 'ok-legacy-scope-home-'));
+    const dir = mkdtempSync(join(tmpdir(), 'ok-legacy-scope-project-'));
+    const rejected = runCli(['storage', 'import-legacy', '--scope', 'project', '--json'], dir, homeEnv(home));
+    expect(rejected.exitCode).toBe(1);
+    expect(new TextDecoder().decode(rejected.stderr)).toContain('only supports --scope global');
+    expect(existsSync(join(home, '.hasna', 'knowledge', 'db.json'))).toBe(false);
+    expect(existsSync(join(dir, '.hasna', 'knowledge'))).toBe(false);
+  });
+
+  test('storage import-legacy merges into existing canonical store safely', () => {
+    const home = mkdtempSync(join(tmpdir(), 'ok-legacy-merge-'));
+    const legacyDir = join(home, '.open-knowledge');
+    const canonicalDir = join(home, '.hasna', 'knowledge');
+    const legacyPath = join(legacyDir, 'db.json');
+    const canonicalPath = join(canonicalDir, 'db.json');
+    mkdirSync(legacyDir, { recursive: true });
+    mkdirSync(canonicalDir, { recursive: true });
+
+    const legacyPayload = `${JSON.stringify({
+      items: [
+        {
+          id: 'k_legacy_only',
+          short_id: 'legacy_only',
+          title: 'Legacy only item',
+          content: 'This item should be imported.',
+          tags: ['legacy'],
+          metadata: {},
+          archived: false,
+          created_at: '2026-06-08T00:00:00.000Z',
+          updated_at: '2026-06-08T00:00:00.000Z',
+        },
+        {
+          id: 'k_conflict',
+          short_id: 'conflict',
+          title: 'Legacy conflict title',
+          content: 'This must not overwrite canonical data.',
+          tags: ['legacy'],
+          metadata: {},
+          archived: false,
+          created_at: '2026-06-08T00:00:00.000Z',
+          updated_at: '2026-06-08T00:00:00.000Z',
+        },
+      ],
+    }, null, 2)}\n`;
+    writeFileSync(legacyPath, legacyPayload);
+    writeFileSync(canonicalPath, `${JSON.stringify({
+      items: [
+        {
+          id: 'k_canonical_only',
+          short_id: 'canonical_o',
+          title: 'Canonical only item',
+          content: 'Already canonical.',
+          tags: ['canonical'],
+          metadata: {},
+          archived: false,
+          created_at: '2026-06-09T00:00:00.000Z',
+          updated_at: '2026-06-09T00:00:00.000Z',
+        },
+        {
+          id: 'k_conflict',
+          short_id: 'conflict',
+          title: 'Canonical conflict title',
+          content: 'Canonical data wins.',
+          tags: ['canonical'],
+          metadata: {},
+          archived: false,
+          created_at: '2026-06-09T00:00:00.000Z',
+          updated_at: '2026-06-09T00:00:00.000Z',
+        },
+      ],
+    }, null, 2)}\n`);
+
+    const imported = runCli(['storage', 'import-legacy', '--json'], undefined, homeEnv(home));
+    expect(imported.exitCode).toBe(0);
+    const importOut = JSON.parse(new TextDecoder().decode(imported.stdout));
+    expect(importOut).toMatchObject({
+      ok: true,
+      dry_run: false,
+      legacy_exists: true,
+      canonical_existed: true,
+      canonical_created: false,
+      imported: 1,
+      skipped_existing: 1,
+    });
+    expect(importOut.backup_path).toBeString();
+    expect(importOut.report_path).toBeString();
+    expect(existsSync(importOut.backup_path)).toBe(true);
+    expect(existsSync(importOut.report_path)).toBe(true);
+
+    const merged = JSON.parse(readFileSync(canonicalPath, 'utf8'));
+    expect(merged.items).toHaveLength(3);
+    expect(merged.items.find((item: any) => item.id === 'k_legacy_only')?.title).toBe('Legacy only item');
+    expect(merged.items.find((item: any) => item.id === 'k_conflict')?.title).toBe('Canonical conflict title');
+    expect(JSON.parse(readFileSync(importOut.backup_path, 'utf8')).items).toHaveLength(2);
+    expect(JSON.parse(readFileSync(importOut.report_path, 'utf8')).imported).toBe(1);
+    expect(readFileSync(legacyPath, 'utf8')).toBe(legacyPayload);
+
+    const second = runCli(['storage', 'import-legacy', '--json'], undefined, homeEnv(home));
+    expect(second.exitCode).toBe(0);
+    const secondOut = JSON.parse(new TextDecoder().decode(second.stdout));
+    expect(secondOut).toMatchObject({
+      ok: true,
+      imported: 0,
+      skipped_existing: 2,
+      backup_path: null,
+      report_path: null,
+    });
+    expect(JSON.parse(readFileSync(canonicalPath, 'utf8')).items).toHaveLength(3);
+    expect(readFileSync(legacyPath, 'utf8')).toBe(legacyPayload);
+  });
+
+  test('storage import-legacy can run while caller holds canonical store lock', () => {
+    const home = mkdtempSync(join(tmpdir(), 'ok-legacy-reentrant-'));
+    const legacyDir = join(home, '.open-knowledge');
+    const canonicalDir = join(home, '.hasna', 'knowledge');
+    const canonicalPath = join(canonicalDir, 'db.json');
+    mkdirSync(legacyDir, { recursive: true });
+    mkdirSync(canonicalDir, { recursive: true });
+    writeFileSync(join(legacyDir, 'db.json'), `${JSON.stringify({
+      items: [{
+        id: 'k_legacy_reentrant',
+        short_id: 'legacy_reent',
+        title: 'Legacy item imported under lock',
+        content: 'The import should reuse the held process lock.',
+        tags: ['legacy'],
+        metadata: {},
+        archived: false,
+        created_at: '2026-06-08T00:00:00.000Z',
+        updated_at: '2026-06-08T00:00:00.000Z',
+      }],
+    }, null, 2)}\n`);
+    writeFileSync(canonicalPath, `${JSON.stringify({ items: [] }, null, 2)}\n`);
+
+    const script = `
+      import { importLegacyGlobalStore, withLock } from ${JSON.stringify(pathToFileURL(join(__dirname, '..', 'src', 'store.ts')).href)};
+      const canonicalPath = ${JSON.stringify(canonicalPath)};
+      let result;
+      withLock(canonicalPath, () => {
+        result = importLegacyGlobalStore();
+      });
+      console.log(JSON.stringify(result));
+    `;
+    const child = Bun.spawnSync(['bun', '-e', script], {
+      env: { ...process.env, ...homeEnv(home) },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    expect(child.exitCode).toBe(0);
+    const importOut = JSON.parse(new TextDecoder().decode(child.stdout));
+    expect(importOut).toMatchObject({
+      ok: true,
+      imported: 1,
+      skipped_existing: 0,
+    });
+
+    const merged = JSON.parse(readFileSync(canonicalPath, 'utf8'));
+    expect(merged.items.map((item: any) => item.id)).toContain('k_legacy_reentrant');
   });
 
   test('storage migration safely moves legacy app workspace to canonical knowledge path', () => {
