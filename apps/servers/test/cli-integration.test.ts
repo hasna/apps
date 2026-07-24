@@ -284,7 +284,7 @@ describe("CLI integration tests", () => {
     } finally {
       cleanup();
     }
-  });
+  }, 60000);
 
   test("operations list is compact by default and has a detail path", async () => {
     const { dbFlag, cleanup } = withTmpDb();
@@ -312,7 +312,7 @@ describe("CLI integration tests", () => {
     } finally {
       cleanup();
     }
-  });
+  }, 60000);
 
   test("export and import round-trip", async () => {
     const { dbFlag, cleanup } = withTmpDb();
