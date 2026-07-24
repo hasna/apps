@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.5.8] - 2026-07-24
+
+### Security
+- **Removed internal Hasna infrastructure identifiers from the published package.** Deleted `docs/CUTOVER-RUNBOOK.md`, an internal ops runbook that had no place in a public package: it contained a real AWS account ID, the full RDS endpoint DNS hostname, a bastion EC2 instance ID, Secrets Manager paths, and an internal chat channel name. Also removed the stale "Storage Sync" section from `README.md`, which documented the long-removed `conversations storage status/push/pull` CLI commands and leaked the production RDS cluster name and the runtime Secrets Manager path. The current self-hosted database configuration is documented, without internal identifiers, under "Self-hosted HTTP API". The high-severity runtime leak reported for earlier releases (canonical RDS cluster/secret-path baked into `getCanonicalConversationsRdsConfig` and surfaced by `conversations storage status`) no longer exists — that code path was removed in the 0.5.x store refactor. Note: the self-hosted client-flip default host still resolves to `https://<app>.hasna.xyz` via the vendored `@hasna/contracts` transport; that is an intentional product default (not a secret) and is tracked as a separate `@hasna/contracts` follow-up.
+
 ### Fixed
 - `conversations react <id> <emoji>` on a nonexistent message now fails cleanly with `Message #<id> not found.` (exit 1), matching sibling commands (`show`, `receipts`), instead of leaking a raw server error / HTTP 500 or silently inserting an orphan reaction row. The `react` CLI now pre-checks existence via the active store (`getStore().getMessageById`), so it is correct in both local and self-hosted/cloud modes; `addReaction()` also validates message existence and throws a typed `MessageNotFoundError` as a single source of truth for all consumers (CLI, MCP, SDK).
 
