@@ -1865,7 +1865,11 @@ async function run(argv: string[]): Promise<void> {
 if (import.meta.main) {
   run(process.argv.slice(2)).catch((error) => {
     const message = error instanceof Error ? error.message : String(error);
-    log('error', 'CLI error', { message, stack: error instanceof Error ? error.stack : undefined });
+    // Keep the internal stack (which includes the bundled bin path and minified
+    // function names) behind debug logging. Usage/validation and other expected
+    // errors should present a plain message only. Set DEBUG=1 or LOG_LEVEL=debug
+    // to surface the full diagnostic for troubleshooting.
+    log('debug', 'CLI error', { message, stack: error instanceof Error ? error.stack : undefined });
     console.error(`Error: ${message}`);
     process.exitCode = 1;
   });

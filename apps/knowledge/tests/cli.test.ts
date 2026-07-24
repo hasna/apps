@@ -368,6 +368,27 @@ describe('knowledge cli', () => {
     expect(err).toContain("Did you mean 'list'");
   });
 
+  test('usage/validation errors do not leak an internal stack trace', () => {
+    // Regression: usage/validation errors previously logged the full Error stack
+    // (bundled bin path + minified function names) to stderr. They must show only
+    // a plain message on the default (non-debug) path.
+    const result = runCli(['add'], undefined, { DEBUG: '', LOG_LEVEL: 'info' });
+    expect(result.exitCode).toBe(1);
+    const err = new TextDecoder().decode(result.stderr);
+    expect(err).toContain('Usage: knowledge add <title> <content>');
+    expect(err).not.toContain('CLI error');
+    expect(err).not.toContain('"stack"');
+    expect(err).not.toMatch(/\n\s+at\s/);
+    expect(err).not.toContain('cli.ts');
+
+    // Debug logging may still surface the diagnostic (with stack) for troubleshooting.
+    const debug = runCli(['add'], undefined, { DEBUG: '1' });
+    expect(debug.exitCode).toBe(1);
+    const debugErr = new TextDecoder().decode(debug.stderr);
+    expect(debugErr).toContain('CLI error');
+    expect(debugErr).toContain('"stack"');
+  });
+
   test('add/list/get/update/archive/restore/untag/delete flow with json and confirmation', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-cli-'));
     const store = join(dir, 'db.json');
