@@ -36,7 +36,7 @@ export function bulkCreateTasks(
   inputs: BulkCreateTaskInput[],
   db?: Database,
 ): { created: { temp_id: string | null; id: string; short_id: string | null; title: string }[] } {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const tempIdToRealId = new Map<string, string>();
   const created: { temp_id: string | null; id: string; short_id: string | null; title: string }[] = [];
 
@@ -73,7 +73,7 @@ export function bulkUpdateTasks(
   updates: { status?: Task["status"]; priority?: Task["priority"]; assigned_to?: string; tags?: string[] },
   db?: Database,
 ): { updated: number; failed: { id: string; error: string }[] } {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   let updated = 0;
   const failed: { id: string; error: string }[] = [];
 
@@ -102,7 +102,7 @@ export function bulkDeleteTasks(
   force = false,
   db?: Database,
 ): { deleted: number; skipped: number; failed: { id: string; error: string }[] } {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   let deleted = 0;
   let skipped = 0;
   const failed: { id: string; error: string }[] = [];
@@ -139,7 +139,7 @@ export function archiveTasks(options: {
   older_than_days?: number;
   status?: TaskStatus[];
 }, db?: Database): { archived: number } {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const conditions: string[] = ["archived_at IS NULL"];
   const params: SQLQueryBindings[] = [];
 
@@ -178,7 +178,7 @@ export function archiveCompletedTasks(days = 7, projectId?: string, db?: Databas
 }
 
 export function getArchivedTasks(opts: { project_id?: string; limit?: number } = {}, db?: Database): Task[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const conditions = ["archived_at IS NOT NULL"];
   const params: SQLQueryBindings[] = [];
   if (opts.project_id) {
@@ -200,13 +200,13 @@ export function getArchivedTasks(opts: { project_id?: string; limit?: number } =
  * Unarchive (restore) a specific task.
  */
 export function unarchiveTask(id: string, db?: Database): Task | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   d.run("UPDATE tasks SET archived_at = NULL WHERE id = ?", [id]);
   return getTask(id, d);
 }
 
 export function getOverdueTasks(projectId?: string, db?: Database, at: Date = new Date()): Task[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const nowStr = at.toISOString();
   let query = `SELECT * FROM tasks WHERE archived_at IS NULL AND due_at IS NOT NULL AND due_at < ? AND status NOT IN ('completed', 'cancelled', 'failed')`;
   const params: any[] = [nowStr];
@@ -227,7 +227,7 @@ export function getEscalatedTasks(
   db?: Database,
   at: Date = new Date(),
 ): EscalatedTask[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const nowMs = at.getTime();
   const conditions = [
     "archived_at IS NULL",
@@ -282,7 +282,7 @@ export function notifyUpcomingDeadlines(
   opts: { hours?: number; project_id?: string; agent_id?: string } = {},
   db?: Database,
 ): Task[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const hours = opts.hours ?? 24;
   const start = new Date().toISOString();
   const end = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
@@ -309,7 +309,7 @@ export function notifyUpcomingDeadlines(
 }
 
 export function getBlockedTasks(projectId?: string, db?: Database): Array<Task & { blocked_by: string[] }> {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const params: SQLQueryBindings[] = [];
   let projectClause = "";
   if (projectId) {
@@ -336,7 +336,7 @@ export function getBlockedTasks(projectId?: string, db?: Database): Array<Task &
 }
 
 export function getBlockingTasks(projectId?: string, db?: Database): Array<Task & { blocking_count: number }> {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const params: SQLQueryBindings[] = [];
   let projectClause = "";
   if (projectId) {
@@ -453,7 +453,7 @@ function recalculateTaskActualMinutes(taskId: string, db: Database): number {
 }
 
 export function logTime(input: LogTimeInput, db?: Database): TaskTimeLog {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   if (!getTask(input.task_id, d)) throw new Error(`Task not found: ${input.task_id}`);
   const id = uuid();
   const ts = now();
@@ -479,12 +479,12 @@ export function logTime(input: LogTimeInput, db?: Database): TaskTimeLog {
 }
 
 export function getTimeLogs(taskId: string, db?: Database): TaskTimeLog[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return d.query(`SELECT * FROM task_time_logs WHERE task_id = ? ORDER BY created_at DESC`).all(taskId) as TaskTimeLog[];
 }
 
 export function startFocusSession(input: StartFocusSessionInput, db?: Database): FocusSession {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   if (input.task_id && !getTask(input.task_id, d)) throw new Error(`Task not found: ${input.task_id}`);
   const id = uuid();
   const ts = now();
@@ -514,13 +514,13 @@ export function startFocusSession(input: StartFocusSessionInput, db?: Database):
 }
 
 export function getFocusSession(id: string, db?: Database): FocusSession | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query("SELECT * FROM focus_sessions WHERE id = ?").get(id) as FocusSessionRow | null;
   return row ? rowToFocusSession(row) : null;
 }
 
 export function listFocusSessions(query: FocusSessionQuery = {}, db?: Database): FocusSession[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const conditions: string[] = [];
   const params: SQLQueryBindings[] = [];
   if (query.task_id) { conditions.push("task_id = ?"); params.push(query.task_id); }
@@ -541,7 +541,7 @@ export function listFocusSessions(query: FocusSessionQuery = {}, db?: Database):
 }
 
 export function pauseFocusSession(id: string, pausedAt?: string, db?: Database): FocusSession {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const session = getFocusSession(id, d);
   if (!session) throw new Error(`Focus session not found: ${id}`);
   if (session.status !== "active") throw new Error(`Focus session is ${session.status}, not active`);
@@ -556,7 +556,7 @@ export function pauseFocusSession(id: string, pausedAt?: string, db?: Database):
 }
 
 export function resumeFocusSession(id: string, resumedAt?: string, db?: Database): FocusSession {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const session = getFocusSession(id, d);
   if (!session) throw new Error(`Focus session not found: ${id}`);
   if (session.status !== "paused") throw new Error(`Focus session is ${session.status}, not paused`);
@@ -570,7 +570,7 @@ export function resumeFocusSession(id: string, resumedAt?: string, db?: Database
 }
 
 export function stopFocusSession(input: StopFocusSessionInput, db?: Database): FocusSession {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const session = getFocusSession(input.id, d);
   if (!session) throw new Error(`Focus session not found: ${input.id}`);
   if (session.status === "completed" || session.status === "cancelled") return session;
@@ -601,7 +601,7 @@ export function stopFocusSession(input: StopFocusSessionInput, db?: Database): F
 }
 
 export function getIdleFocusSessionPrompts(opts: { agent_id?: string; now?: string | Date } = {}, db?: Database): IdleFocusSessionPrompt[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const nowDate = opts.now ? new Date(opts.now) : new Date();
   const sessions = listFocusSessions({ agent_id: opts.agent_id, status: "active", include_completed: false }, d);
   return sessions.flatMap((session) => {
@@ -617,7 +617,7 @@ export function getIdleFocusSessionPrompts(opts: { agent_id?: string; now?: stri
 }
 
 export function getTimeReport(opts?: { project_id?: string; plan_id?: string; agent_id?: string; since?: string; include_open?: boolean }, db?: Database): TimeReportEntry[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const conditions = opts?.include_open ? ["1 = 1"] : ["t.status = 'completed'"];
   const params: SQLQueryBindings[] = [];
   if (opts?.project_id) { conditions.push("t.project_id = ?"); params.push(opts.project_id); }
@@ -650,7 +650,7 @@ export function getTimeReport(opts?: { project_id?: string; plan_id?: string; ag
 // ── Task Watchers ──────────────────────────────────────────────────────────────
 
 export function watchTask(taskId: string, agentId: string, db?: Database): TaskWatcher {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const id = uuid();
   const ts = now();
   d.run(
@@ -662,13 +662,13 @@ export function watchTask(taskId: string, agentId: string, db?: Database): TaskW
 }
 
 export function unwatchTask(taskId: string, agentId: string, db?: Database): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const result = d.run(`DELETE FROM task_watchers WHERE task_id = ? AND agent_id = ?`, [taskId, agentId]);
   return result.changes > 0;
 }
 
 export function getTaskWatchers(taskId: string, db?: Database): TaskWatcher[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return d.query(`SELECT * FROM task_watchers WHERE task_id = ?`).all(taskId) as TaskWatcher[];
 }
 
@@ -682,7 +682,7 @@ export function notifyWatchers(taskId: string, event: string, data: Record<strin
  * Log cost (tokens + USD) to a task. Accumulates — does not replace.
  */
 export function logCost(taskId: string, tokens: number, usd: number, db?: Database): void {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   d.run(
     "UPDATE tasks SET cost_tokens = cost_tokens + ?, cost_usd = cost_usd + ?, updated_at = ? WHERE id = ?",
     [tokens, usd, now(), taskId],

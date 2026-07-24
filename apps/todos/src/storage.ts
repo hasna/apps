@@ -1,3 +1,4 @@
+/** Public Stage-A storage surface: only local role-guarded operations. */
 export type {
   MaybePromise,
   ActiveWorkItem,
@@ -23,7 +24,7 @@ export type {
   TodosTaskStore,
   TodosTemplateStore,
   UpdateTemplateInput,
-} from "./storage/index.js";
+} from "./storage/interfaces.js";
 export {
   CANONICAL_TODOS_RDS_CLUSTER,
   CANONICAL_TODOS_RDS_DATABASE,
@@ -32,48 +33,10 @@ export {
   TODOS_STORAGE_ENV,
   TODOS_STORAGE_FALLBACK_ENV,
   TODOS_STORAGE_TABLES,
+  TodosHostedStorageUnavailableError,
+  assertTodosLocalStorageRole,
   assertTodosRemoteStorageConfig,
   assertTodosShadowConfig,
-  isTodosShadowEnabled,
-  getTodosStorageShadowEnvName,
-  createLocalSqliteTodosStorageAdapter,
-  createHybridTodosStorageAdapter,
-  createShadowTodosStorageAdapter,
-  TodosShadowOutbox,
-  createTodosShadowOutbox,
-  installShadowOutboxSchema,
-  maybeInstallShadowCapture,
-  getRuntimeShadowOutbox,
-  startRuntimeShadowDrain,
-  registerShadowExitFlush,
-  closeRuntimeShadowCloud,
-  createTodosCloudQueryClient,
-  createTodosCloudQueryClientFromEnv,
-  TodosShadowMirror,
-  createTodosStorageAdapter,
-  exportSqliteTodosStorageSnapshot,
-  importSqliteTodosStorageSnapshot,
-  isTodosRemoteStorageEnabled,
-  loadTodosStorageConfig,
-  parseStorageMode,
-  planRunArtifactsS3Sync,
-  createPostgresTodosStorageAdapter,
-  createPostgresTodosSyncStore,
-  createTodosS3ArtifactStore,
-  COMMENT_REDACTION_BACKFILL_CONFIRMATION,
-  backfillPostgresCommentRedaction,
-  isCommentRedactionBackfillComplete,
-  ensurePostgresScopedSlugUniqueIndexes,
-  PostgresScopedSlugIndexBuildError,
-  PostgresScopedSlugMigrationConflictError,
-  postgresTodosCommentCursorIndexSql,
-  postgresTodosScopedSlugPreflightSql,
-  postgresTodosScopedSlugIndexStatusSql,
-  postgresTodosScopedSlugUniqueIndexSql,
-  postgresTodosSyncSchemaSql,
-  signAwsV4Request,
-  uploadRunArtifactsToS3,
-  downloadRunArtifactsFromS3,
   getCanonicalTodosRdsConfig,
   getStorageDatabaseEnv,
   getStorageDatabaseUrl,
@@ -82,60 +45,130 @@ export {
   getTodosStorageDatabaseUrl,
   getTodosStorageEnvName,
   getTodosStorageMode,
+  getTodosStorageShadowEnvName,
+  isTodosRemoteStorageEnabled,
+  isTodosShadowEnabled,
+  loadStorageConfig,
+  loadTodosStorageConfig,
+  normalizeTodosStorageMode,
+  parseStorageMode,
+  resolveTodosStorageRole,
+} from "./storage/config.js";
+export {
+  COMMENT_REDACTION_BACKFILL_CONFIRMATION,
+  isCommentRedactionBackfillComplete,
+} from "./storage/comment-redaction-contract.js";
+export {
+  DEFAULT_TODOS_POSTGRES_CURSOR_TABLE,
+  DEFAULT_TODOS_POSTGRES_SYNC_TABLE,
+  PostgresScopedSlugIndexBuildError,
+  PostgresScopedSlugMigrationConflictError,
+  postgresTodosCommentCursorIndexSql,
+  postgresTodosScopedSlugIndexStatusSql,
+  postgresTodosScopedSlugPreflightSql,
+  postgresTodosScopedSlugUniqueIndexSql,
+  postgresTodosSyncSchemaSql,
+} from "./storage/postgres-contracts.js";
+export {
   buildS3ObjectKey,
   buildS3ObjectUrl,
-  loadStorageConfig,
-} from "./storage/index.js";
-export type { CreateLocalSqliteTodosStorageAdapterOptions } from "./storage/index.js";
-export type {
-  CreateShadowTodosStorageAdapterOptions,
-  ShadowTodosStorageAdapter,
-  TodosShadowMirrorEvent,
-  TodosShadowMirrorMetrics,
-  CreateTodosShadowOutboxOptions,
-  TodosShadowOutboxEvent,
-  TodosShadowOutboxStats,
-  CreateTodosCloudQueryClientOptions,
-  TodosCloudQueryClient,
-} from "./storage/index.js";
+  signAwsV4Request,
+} from "./storage/stage-a-public-helpers.js";
+export { createLocalSqliteTodosStorageAdapter } from "./storage/local-sqlite-public.js";
+export { createTodosStorageAdapter } from "./storage/factory.js";
+export {
+  TodosShadowMirror,
+  TodosShadowOutbox,
+  backfillPostgresCommentRedaction,
+  closeRuntimeShadowCloud,
+  createHybridTodosStorageAdapter,
+  createPostgresTodosStorageAdapter,
+  createPostgresTodosSyncStore,
+  createShadowTodosStorageAdapter,
+  createTodosCloudQueryClient,
+  createTodosCloudQueryClientFromEnv,
+  createTodosS3ArtifactStore,
+  createTodosShadowOutbox,
+  downloadRunArtifactsFromS3,
+  ensurePostgresScopedSlugUniqueIndexes,
+  getRuntimeShadowOutbox,
+  installShadowOutboxSchema,
+  maybeInstallShadowCapture,
+  planRunArtifactsS3Sync,
+  registerShadowExitFlush,
+  startRuntimeShadowDrain,
+  uploadRunArtifactsToS3,
+} from "./storage/stage-a-public-stubs.js";
+export {
+  exportSqliteTodosStorageSnapshot,
+  importSqliteTodosStorageSnapshot,
+} from "./storage/sqlite-snapshot.js";
+export type { CreateLocalSqliteTodosStorageAdapterOptions } from "./storage/local-sqlite-public.js";
+export type { CreateTodosStorageAdapterOptions } from "./storage/factory.js";
 export type {
   CanonicalTodosRdsConfig,
-  CommentRedactionBackfillOptions,
-  CommentRedactionBackfillResult,
-  CreateHybridTodosStorageAdapterOptions,
-  CreatePostgresTodosStorageAdapterOptions,
-  CreatePostgresTodosSyncStoreOptions,
-  CreateTodosStorageAdapterOptions,
-  DownloadRunArtifactsFromS3Options,
-  HybridTodosRemoteSync,
-  HybridTodosStorageAdapter,
-  HybridTodosStorageSyncResult,
-  PostgresTodosSyncPushResult,
-  PostgresScopedSlugConflict,
-  PostgresScopedSlugIndexStatus,
-  PlanRunArtifactsS3SyncOptions,
-  PullPostgresTodosSnapshotOptions,
-  PutTodosS3ObjectInput,
-  SignAwsV4RequestInput,
-  SignedAwsV4Request,
-  TodosAwsCredentials,
-  TodosPostgresQueryClient,
-  TodosPostgresQueryResult,
-  TodosPostgresSyncRecordRow,
-  TodosPostgresSyncRecordType,
   TodosPostgresStorageConfig,
   TodosS3StorageConfig,
-  TodosS3ArtifactStore,
-  TodosS3ArtifactStoreOptions,
-  TodosS3ObjectRef,
-  TodosRunArtifactRemoteRef,
-  TodosRunArtifactSyncFilter,
-  TodosRunArtifactSyncPlan,
-  TodosRunArtifactSyncResult,
   TodosStorageConfig,
   TodosStorageEnv,
   TodosStorageMode,
   TodosStorageTable,
   TodosSyncConfig,
+} from "./storage/config.js";
+export type {
+  CreateShadowTodosStorageAdapterOptions,
+  ShadowTodosStorageAdapter,
+  TodosShadowMirrorEvent,
+  TodosShadowMirrorMetrics,
+} from "./storage/shadow.js";
+export type {
+  CreateTodosShadowOutboxOptions,
+  TodosShadowOutboxEvent,
+  TodosShadowOutboxStats,
+} from "./storage/shadow-outbox.js";
+export type {
+  CreateTodosCloudQueryClientOptions,
+  TodosCloudQueryClient,
+} from "./storage/cloud-client.js";
+export type {
+  CommentRedactionBackfillOptions,
+  CommentRedactionBackfillResult,
+} from "./storage/comment-redaction-contract.js";
+export type {
+  CreateHybridTodosStorageAdapterOptions,
+  HybridTodosRemoteSync,
+  HybridTodosStorageAdapter,
+  HybridTodosStorageSyncResult,
+} from "./storage/hybrid.js";
+export type { CreatePostgresTodosStorageAdapterOptions } from "./storage/postgres-adapter.js";
+export type {
+  CreatePostgresTodosSyncStoreOptions,
+  PostgresTodosSyncPushResult,
+  PullPostgresTodosSnapshotOptions,
+  TodosPostgresQueryClient,
+  TodosPostgresQueryResult,
+  TodosPostgresSyncRecordRow,
+  TodosPostgresSyncRecordType,
+} from "./storage/postgres-sync.js";
+export type {
+  PostgresScopedSlugConflict,
+  PostgresScopedSlugIndexStatus,
+} from "./storage/postgres-contracts.js";
+export type {
+  PutTodosS3ObjectInput,
+  SignAwsV4RequestInput,
+  SignedAwsV4Request,
+  TodosAwsCredentials,
+  TodosS3ArtifactStore,
+  TodosS3ArtifactStoreOptions,
+  TodosS3ObjectRef,
+} from "./storage/s3-artifacts.js";
+export type {
+  DownloadRunArtifactsFromS3Options,
+  PlanRunArtifactsS3SyncOptions,
+  TodosRunArtifactRemoteRef,
+  TodosRunArtifactSyncFilter,
+  TodosRunArtifactSyncPlan,
+  TodosRunArtifactSyncResult,
   UploadRunArtifactsToS3Options,
-} from "./storage/index.js";
+} from "./storage/s3-artifact-sync.js";

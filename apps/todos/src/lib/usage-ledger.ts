@@ -283,7 +283,7 @@ function buildQuota(options: UsageLedgerOptions, report: Omit<UsageLedgerReport,
 }
 
 export function createLocalUsageLedger(options: UsageLedgerOptions = {}, db?: Database): UsageLedgerReport {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const generatedAt = options.generated_at || new Date().toISOString();
 
   const taskWhere: string[] = [];

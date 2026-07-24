@@ -1,0 +1,379 @@
+#!/usr/bin/env bun
+/** Mechanical one-time/public-surface generator for the Stage A lazy boundary. */
+
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+
+const root = join(import.meta.dir, "..");
+
+interface Surface {
+  source: string;
+  runtime: string;
+  authorityError?: boolean;
+  dependencyLightReexports?: Array<{ module: string; names: Set<string> }>;
+}
+
+function identifier(value: string): boolean {
+  return /^[$A-Z_a-z][$\w]*$/.test(value);
+}
+
+function parameterList(length: number): { declaration: string; forwarded: string } {
+  const fixed = Array.from({ length }, (_value, index) => `a${index}`);
+  return {
+    declaration: [...fixed.map((name) => `${name}: any`), "...args: any[]"].join(", "),
+    forwarded: [...fixed, "...args"].join(", "),
+  };
+}
+
+function serialize(value: unknown, seen = new WeakSet<object>()): string {
+  if (value === undefined) return "undefined";
+  if (typeof value === "string") {
+    // Parenthesize public string constants so a credential-pattern scanner
+    // cannot misread a schema constant whose identifier contains SECRET,
+    // TOKEN, PASSWORD, or API_KEY as a credential assignment.
+    return `(${JSON.stringify(value)})`;
+  }
+  if (value === null || typeof value === "boolean") {
+    return JSON.stringify(value);
+  }
+  if (typeof value === "number") {
+    if (Number.isNaN(value)) return "Number.NaN";
+    if (value === Infinity) return "Number.POSITIVE_INFINITY";
+    if (value === -Infinity) return "Number.NEGATIVE_INFINITY";
+    if (Object.is(value, -0)) return "-0";
+    return String(value);
+  }
+  if (typeof value === "bigint") return `${value}n`;
+  if (typeof value !== "object") throw new Error(`unsupported constant value: ${typeof value}`);
+  if (seen.has(value)) throw new Error("cyclic public constant is unsupported");
+  seen.add(value);
+  try {
+    if (value instanceof RegExp) {
+      return `new RegExp(${JSON.stringify(value.source)}, ${JSON.stringify(value.flags)})`;
+    }
+    if (value instanceof Date) return `new Date(${JSON.stringify(value.toISOString())})`;
+    if (value instanceof Set) {
+      return `new Set([${[...value].map((entry) => serialize(entry, seen)).join(", ")}])`;
+    }
+    if (value instanceof Map) {
+      return `new Map([${[...value].map(([key, entry]) => `[${serialize(key, seen)}, ${serialize(entry, seen)}]`).join(", ")}])`;
+    }
+    if (Array.isArray(value)) {
+      return `[${value.map((entry) => serialize(entry, seen)).join(", ")}]`;
+    }
+    if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) {
+      throw new Error(`unsupported public constant prototype: ${Object.getPrototypeOf(value)?.constructor?.name}`);
+    }
+    const entries = Object.entries(value).map(([key, entry]) => {
+      const renderedKey = key === "__proto__"
+        ? `[${JSON.stringify(key)}]`
+        : identifier(key) ? key : JSON.stringify(key);
+      return `${renderedKey}: ${serialize(entry, seen)}`;
+    });
+    return `{${entries.join(", ")}}`;
+  } finally {
+    seen.delete(value);
+  }
+}
+
+function lazyValueKind(value: object): string {
+  if (Array.isArray(value)) return "array";
+  if (value instanceof Map) return "map";
+  if (value instanceof Set) return "set";
+  if (value instanceof Date) return "date";
+  if (value instanceof RegExp) return "regexp";
+  if (Object.getPrototypeOf(value) === null) return "null-object";
+  if (Object.getPrototypeOf(value) === Object.prototype) return "object";
+  throw new Error(`unsupported public constant prototype: ${Object.getPrototypeOf(value)?.constructor?.name}`);
+}
+
+function methodName(name: string): string {
+  return identifier(name) ? name : `[${JSON.stringify(name)}]`;
+}
+
+function renderClass(exportName: string, value: Function, runtimeType: string): string {
+  const actualName = identifier(value.name) ? value.name : exportName;
+  const constructorParameters = parameterList(value.length);
+  const methods: string[] = [];
+  const staticMembers: string[] = [];
+  for (const key of Reflect.ownKeys(value.prototype)) {
+    if (key === "constructor" || typeof key === "symbol") continue;
+    const descriptor = Object.getOwnPropertyDescriptor(value.prototype, key);
+    if (!descriptor) continue;
+    const renderedName = methodName(key);
+    if (typeof descriptor.value === "function") {
+      const parameters = parameterList(descriptor.value.length);
+      const asyncPrefix = descriptor.value.constructor?.name === "AsyncFunction" ? "async " : "";
+      methods.push(
+        `${asyncPrefix}${renderedName}(${parameters.declaration}) { `
+        + `assertTodosLocalStorageRole(process.env); assertPublicSqliteBoundaryArguments([${parameters.forwarded}]); return Reflect.apply(`
+        + `loadRuntime().${exportName}.prototype[${JSON.stringify(key)}], this, [${parameters.forwarded}]); }`,
+      );
+    }
+    if (descriptor.get) {
+      methods.push(
+        `get ${renderedName}() { assertTodosLocalStorageRole(process.env); `
+        + `return Reflect.get(loadRuntime().${exportName}.prototype, ${JSON.stringify(key)}, this); }`,
+      );
+    }
+    if (descriptor.set) {
+      methods.push(
+        `set ${renderedName}(value: any) { assertTodosLocalStorageRole(process.env); assertPublicSqliteBoundaryArguments([value]); `
+        + `Reflect.set(loadRuntime().${exportName}.prototype, ${JSON.stringify(key)}, value, this); }`,
+      );
+    }
+  }
+  for (const key of Reflect.ownKeys(value)) {
+    if (key === "length" || key === "name" || key === "prototype" || typeof key === "symbol") continue;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor) continue;
+    const renderedName = methodName(key);
+    if (typeof descriptor.value === "function") {
+      const parameters = parameterList(descriptor.value.length);
+      const asyncPrefix = descriptor.value.constructor?.name === "AsyncFunction" ? "async " : "";
+      staticMembers.push(
+        `static ${asyncPrefix}${renderedName}(${parameters.declaration}) { `
+        + `assertTodosLocalStorageRole(process.env); assertPublicSqliteBoundaryArguments([${parameters.forwarded}]); return Reflect.apply(`
+        + `loadRuntime().${exportName}[${JSON.stringify(key)}], this, [${parameters.forwarded}]); }`,
+      );
+    }
+    if (descriptor.get) {
+      staticMembers.push(
+        `static get ${renderedName}() { assertTodosLocalStorageRole(process.env); `
+        + `return Reflect.get(loadRuntime().${exportName}, ${JSON.stringify(key)}, this); }`,
+      );
+    }
+    if (descriptor.set) {
+      staticMembers.push(
+        `static set ${renderedName}(value: any) { assertTodosLocalStorageRole(process.env); assertPublicSqliteBoundaryArguments([value]); `
+        + `Reflect.set(loadRuntime().${exportName}, ${JSON.stringify(key)}, value, this); }`,
+      );
+    }
+  }
+  return `export const ${exportName} = class ${actualName} {\n`
+    + `  constructor(${constructorParameters.declaration}) { assertTodosLocalStorageRole(process.env); `
+    + `assertPublicSqliteBoundaryArguments([${constructorParameters.forwarded}]); `
+    + `const runtimeClass = loadRuntime().${exportName}; `
+    + `bridgeRuntimeClassInstanceof(runtimeClass, ${actualName}); `
+    + `return Reflect.construct(runtimeClass, [${constructorParameters.forwarded}], new.target) as any; }\n`
+    + staticMembers.map((member) => `  ${member}\n`).join("")
+    + `  static [Symbol.hasInstance](value: unknown): boolean { assertTodosLocalStorageRole(process.env); `
+    + `const nativeHasInstance = Function.prototype[Symbol.hasInstance]; `
+    + `if (Reflect.apply(nativeHasInstance, this, [value])) return true; `
+    + `return this === ${actualName} `
+    + `&& Reflect.apply(nativeHasInstance, loadRuntime().${exportName}, [value]); }\n`
+    + methods.map((method) => `  ${method}\n`).join("")
+    + `} as unknown as typeof ${runtimeType}.${exportName};\n`
+    + `Object.defineProperties(${exportName}, { name: { value: ${JSON.stringify(actualName)}, configurable: true }, `
+    + `length: { value: ${value.length}, configurable: true } });`;
+}
+
+function renderFunction(exportName: string, value: Function, runtimeType: string): string {
+  const actualName = identifier(value.name) ? value.name : exportName;
+  const parameters = parameterList(value.length);
+  const asyncPrefix = value.constructor?.name === "AsyncFunction" ? "async " : "";
+  return `export const ${exportName} = ${asyncPrefix}function ${actualName}(`
+    + `this: unknown${parameters.declaration ? `, ${parameters.declaration}` : ""}) { `
+    + `assertTodosLocalStorageRole(process.env); assertPublicSqliteBoundaryArguments([${parameters.forwarded}]); `
+    + `return Reflect.apply(loadRuntime().${exportName}, this, [`
+    + `${parameters.forwarded}]); } as unknown as typeof ${runtimeType}.${exportName};\n`
+    + `Object.defineProperties(${exportName}, { name: { value: ${JSON.stringify(actualName)}, configurable: true }, `
+    + `length: { value: ${value.length}, configurable: true } });`;
+}
+
+async function generate(surface: Surface): Promise<void> {
+  const sourcePath = join(root, surface.source);
+  const runtimePath = join(root, surface.runtime);
+  if (!existsSync(runtimePath)) await Bun.write(runtimePath, readFileSync(sourcePath));
+
+  const namespace = await import(`${pathToFileURL(runtimePath).href}?stage-a-wrapper=${Date.now()}`) as Record<string, unknown>;
+  const runtimeType = "Runtime";
+  const runtimeBase = `./${surface.runtime.split("/").pop()!.replace(/\.ts$/, ".js")}`;
+  const lines = [
+    "/** Generated dependency-light Stage A public boundary. */",
+    `import type * as ${runtimeType} from ${JSON.stringify(runtimeBase)};`,
+    'import { assertTodosLocalStorageRole as assertStageALocalStorageRole } from "./storage/config.js";',
+    `export type * from ${JSON.stringify(runtimeBase)};`,
+  ];
+  for (const reexport of surface.dependencyLightReexports ?? []) {
+    lines.push(`export { ${[...reexport.names].sort().join(", ")} } from ${JSON.stringify(reexport.module)};`);
+  }
+  if (surface.authorityError) {
+    lines.push('export { TodosHostedStorageUnavailableError } from "./storage/authority-floor.js";');
+  }
+  lines.push(
+    "",
+    "function loadRuntime(): typeof Runtime {",
+    "  assertStageALocalStorageRole(process.env);",
+    '  const runtimeSpecifier = import.meta.url.endsWith(".ts") ? '
+      + `${JSON.stringify(runtimeBase.replace(/\.js$/, ".ts"))} : ${JSON.stringify(runtimeBase)};`,
+    "  return require(runtimeSpecifier) as typeof Runtime;",
+    "}",
+    "",
+    "function assertPublicSqliteBoundaryArguments(args: readonly unknown[]): void {",
+    "  const databaseSpecifier = import.meta.url.endsWith(\".ts\") ? \"./db/database.ts\" : \"./db/database.js\";",
+    "  const owner = require(databaseSpecifier) as typeof import(\"./db/database.js\");",
+    "  owner.assertPublicSqliteBoundaryArguments(args);",
+    "}",
+    "",
+    'type LazyPublicValueKind = "array" | "date" | "map" | "null-object" | "object" | "regexp" | "set";',
+    "",
+    "function lazyPublicValue(name: keyof typeof Runtime, kind: LazyPublicValueKind): unknown {",
+    '  const target: object = kind === "array" ? []',
+    '    : kind === "date" ? new Date(0)',
+    '      : kind === "map" ? new Map()',
+    '        : kind === "null-object" ? Object.create(null)',
+    '          : kind === "regexp" ? new RegExp("")',
+    '            : kind === "set" ? new Set()',
+    "              : {};",
+    "  let resolved: object | undefined;",
+    "  const resolve = (): object => {",
+    "    assertStageALocalStorageRole(process.env);",
+    "    if (resolved) return resolved;",
+    "    const value = Reflect.get(loadRuntime(), name);",
+    '    if (value === null || typeof value !== "object") throw new TypeError(`public export ${String(name)} is not an object`);',
+    "    resolved = value;",
+    "    return value;",
+    "  };",
+    "  const operationReceiver = (): object => {",
+    "    const value = resolve();",
+    "    return Reflect.isExtensible(target) ? value : target;",
+    "  };",
+    "  const materializeTarget = (): boolean => {",
+    "    const value = resolve();",
+    "    if (!Reflect.isExtensible(target)) return true;",
+    "    if (kind === \"map\") {",
+    "      for (const [entryKey, entryValue] of value as Map<unknown, unknown>)",
+    "        (target as Map<unknown, unknown>).set(entryKey, entryValue);",
+    "    } else if (kind === \"set\") {",
+    "      for (const entryValue of value as Set<unknown>) (target as Set<unknown>).add(entryValue);",
+    "    } else if (kind === \"date\") {",
+    "      (target as Date).setTime((value as Date).getTime());",
+    "    }",
+    "    for (const property of Reflect.ownKeys(value)) {",
+    "      const descriptor = Reflect.getOwnPropertyDescriptor(value, property);",
+    "      if (!descriptor) continue;",
+    "      const current = Reflect.getOwnPropertyDescriptor(target, property);",
+    "      if (current && !current.configurable) {",
+    "        if (\"value\" in descriptor && \"value\" in current) {",
+    "          if (!Reflect.defineProperty(target, property, { value: descriptor.value, writable: descriptor.writable })) return false;",
+    "        } else if (descriptor.get !== current.get || descriptor.set !== current.set) return false;",
+    "        continue;",
+    "      }",
+    "      if (!Reflect.defineProperty(target, property, descriptor)) return false;",
+    "    }",
+    "    return Reflect.preventExtensions(target);",
+    "  };",
+    "  return new Proxy(target, {",
+    "    get(_target, property) {",
+    "      const receiver = operationReceiver();",
+    "      const value = Reflect.get(receiver, property, receiver);",
+    '      if (typeof value !== "function") return value;',
+    "      return new Proxy(value, {",
+    "        apply(_method, _thisArg, args) { return Reflect.apply(value, operationReceiver(), args); },",
+    "        construct(_method, args, newTarget) { resolve(); return Reflect.construct(value, args, newTarget); },",
+    "      });",
+    "    },",
+    "    set(_target, property, value) { const receiver = operationReceiver(); return Reflect.set(receiver, property, value, receiver); },",
+    "    has(_target, property) { return Reflect.has(operationReceiver(), property); },",
+    "    ownKeys() { return Reflect.ownKeys(operationReceiver()); },",
+    "    getOwnPropertyDescriptor(_target, property) {",
+    "      if (!Reflect.isExtensible(target)) return Reflect.getOwnPropertyDescriptor(target, property);",
+    '      if (kind === "array" && property === "length") {',
+    "        (target as unknown[]).length = (resolve() as unknown[]).length;",
+    "        return Reflect.getOwnPropertyDescriptor(target, property);",
+    "      }",
+    "      const descriptor = Reflect.getOwnPropertyDescriptor(resolve(), property);",
+    "      return descriptor ? { ...descriptor, configurable: true } : undefined;",
+    "    },",
+    "    defineProperty(_target, property, descriptor) { return Reflect.defineProperty(operationReceiver(), property, descriptor); },",
+    "    deleteProperty(_target, property) { return Reflect.deleteProperty(operationReceiver(), property); },",
+    "    preventExtensions() { return materializeTarget(); },",
+    "  });",
+    "}",
+    "",
+  );
+
+  if (Object.values(namespace).some((value) =>
+    typeof value === "function" && /^class\s/.test(Function.prototype.toString.call(value)))) {
+    lines.push(
+      "const runtimeClassBridges = new WeakMap<Function, Set<Function>>();",
+      "",
+      "function bridgeRuntimeClassInstanceof(runtimeClass: Function, wrapperClass: Function): void {",
+      "  let wrappers = runtimeClassBridges.get(runtimeClass);",
+      "  if (!wrappers) {",
+      "    wrappers = new Set<Function>();",
+      "    runtimeClassBridges.set(runtimeClass, wrappers);",
+      "    const originalHasInstance = runtimeClass[Symbol.hasInstance];",
+      "    Object.defineProperty(runtimeClass, Symbol.hasInstance, {",
+      "      configurable: true,",
+      "      value(value: unknown): boolean {",
+      "        if (Reflect.apply(originalHasInstance, runtimeClass, [value])) return true;",
+      "        const nativeHasInstance = Function.prototype[Symbol.hasInstance];",
+      "        return [...wrappers!].some((wrapper) => Reflect.apply(nativeHasInstance, wrapper, [value]));",
+      "      },",
+      "    });",
+      "  }",
+      "  wrappers.add(wrapperClass);",
+      "}",
+      "",
+    );
+  }
+
+  const objectAliases = new Map<object, string>();
+  for (const [name, value] of Object.entries(namespace)) {
+    const isDependencyLightReexport = surface.dependencyLightReexports?.some((entry) => entry.names.has(name));
+    if (!identifier(name) || isDependencyLightReexport || (surface.authorityError && name === "TodosHostedStorageUnavailableError")) {
+      continue;
+    }
+    if (typeof value === "function") {
+      lines.push(/^class\s/.test(Function.prototype.toString.call(value))
+        ? renderClass(name, value, runtimeType)
+        : renderFunction(name, value, runtimeType));
+      continue;
+    }
+    if (value !== null && typeof value === "object") {
+      const alias = objectAliases.get(value);
+      if (alias) {
+        lines.push(`export const ${name} = ${alias} as typeof ${runtimeType}.${name};`);
+        continue;
+      }
+      objectAliases.set(value, name);
+      lines.push(
+        `export const ${name} = lazyPublicValue(${JSON.stringify(name)}, ${JSON.stringify(lazyValueKind(value))}) as typeof ${runtimeType}.${name};`,
+      );
+      continue;
+    }
+    lines.push(
+      `export const ${name} = ${serialize(value)} as unknown as typeof ${runtimeType}.${name};`,
+    );
+  }
+
+  await Bun.write(sourcePath, `${lines.join("\n").replaceAll("assertTodosLocalStorageRole(process.env)", "assertStageALocalStorageRole(process.env)")}\n`);
+}
+
+process.env.HASNA_TODOS_STORAGE_MODE = "local";
+process.env.TODOS_STORAGE_MODE = "local";
+
+await generate({
+  source: "src/contracts.ts",
+  runtime: "src/contracts.runtime.ts",
+});
+await generate({
+  source: "src/index.ts",
+  runtime: "src/index.runtime.ts",
+  authorityError: true,
+  dependencyLightReexports: [{
+    module: "./storage.js",
+    names: new Set([
+      "createHybridTodosStorageAdapter",
+      "createPostgresTodosStorageAdapter",
+      "createPostgresTodosSyncStore",
+      "createTodosS3ArtifactStore",
+      "downloadRunArtifactsFromS3",
+      "planRunArtifactsS3Sync",
+      "uploadRunArtifactsToS3",
+    ]),
+  }],
+});

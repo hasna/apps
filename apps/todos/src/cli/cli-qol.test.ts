@@ -531,7 +531,7 @@ describe("CLI QoL commands", () => {
       errorOutput = e.stderr?.toString() || e.message || "";
     }
     expect(thrown).toBe(true);
-    expect(errorOutput).toContain("Invalid --limit value");
+    expect(errorOutput).toContain("--limit must be a positive integer");
   });
 
   it("list should reject invalid --sort values", () => {
@@ -637,7 +637,10 @@ describe("CLI QoL commands", () => {
         run(`update ${t.id} ${combo} --json`);
       } catch (e: any) {
         thrown = true;
-        errorOutput = e.stderr?.toString() || e.message || "";
+        errorOutput = [e.stdout, e.stderr, e.message]
+          .map((value) => value?.toString() ?? "")
+          .filter(Boolean)
+          .join("\n");
       }
       expect(thrown).toBe(true);
       expect(errorOutput).toContain("not both");

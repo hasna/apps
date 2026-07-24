@@ -23,7 +23,7 @@ export async function executeDispatch(
   opts: { dryRun?: boolean; confirmBusy?: boolean; formatOpts?: import("./dispatch-formatter.ts").FormatOpts } = {},
   db?: Database,
 ): Promise<void> {
-  const _db = db ?? getDatabase();
+  const _db = getDatabase(db);
 
   let message = dispatch.message;
 
@@ -90,7 +90,7 @@ export async function runDueDispatches(
   opts: { dryRun?: boolean; confirmBusy?: boolean } = {},
   db?: Database,
 ): Promise<number> {
-  const _db = db ?? getDatabase();
+  const _db = getDatabase(db);
   const due = getDueDispatches(_db);
 
   let count = 0;
@@ -115,7 +115,7 @@ export async function dispatchToMultiple(
   opts: { dryRun?: boolean; confirmBusy?: boolean } = {},
   db?: Database,
 ): Promise<Dispatch[]> {
-  const _db = db ?? getDatabase();
+  const _db = getDatabase(db);
   const { createDispatch } = await import("../db/dispatches.js");
   const { targets, stagger_ms = 500, ...baseInput } = input;
 

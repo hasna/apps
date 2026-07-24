@@ -63,7 +63,7 @@ export function searchTasks(
     ? { query: options || undefined, project_id: projectId, task_list_id: taskListId }
     : options;
 
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   clearExpiredLocks(d);
 
   const params: SQLQueryBindings[] = [];

@@ -227,7 +227,7 @@ export function createRisk(input: CreateRiskInput, db?: Database): ProjectRiskRe
   assertSeverity(severity);
   assertProbability(probability);
 
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const timestamp = now();
   const id = uuid();
   const closedAt = status === "resolved" || status === "accepted" ? timestamp : null;
@@ -260,14 +260,14 @@ export function createRisk(input: CreateRiskInput, db?: Database): ProjectRiskRe
 }
 
 export function getRisk(id: string, db?: Database): ProjectRiskRecord | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const resolved = resolveKnownId("project_risks", id, d) || id;
   const row = d.query("SELECT * FROM project_risks WHERE id = ?").get(resolved) as ProjectRiskRow | null;
   return row ? rowToRisk(row) : null;
 }
 
 export function updateRisk(id: string, input: UpdateRiskInput, db?: Database): ProjectRiskRecord {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const current = getRisk(id, d);
   if (!current) throw new Error(`Risk not found: ${id}`);
   const resolved = current.id;
@@ -330,7 +330,7 @@ function buildRiskFilters(options: ListRisksOptions, db: Database): { where: str
 }
 
 export function listRisks(options: ListRisksOptions = {}, db?: Database): ProjectRiskRecord[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const { where, params } = buildRiskFilters(options, d);
   params.push(clampLimit(options.limit));
   return (d.query(`SELECT * FROM project_risks ${where} ORDER BY due_at IS NULL, due_at ASC, updated_at DESC LIMIT ?`).all(...params) as ProjectRiskRow[])
@@ -368,7 +368,7 @@ function calculateDependencyDepth(taskIds: Set<string>, db: Database): number {
 }
 
 function scoreHealth(scope: "plan" | "project", scopeId: string, db?: Database): ProjectHealthReport {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const generatedAt = now();
   const scopeInfo = scopeCondition(scope, scopeId, d);
   const tasks = d.query(`SELECT id, short_id, title, status, due_at FROM tasks WHERE ${scopeInfo.where}`).all(scopeInfo.id) as TaskHealthRow[];

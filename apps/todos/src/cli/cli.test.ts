@@ -3,11 +3,10 @@ import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { getDatabase, closeDatabase, resetDatabase } from "../db/database.js";
+import { getDatabase, closeDatabase, openLocalSqliteDatabase, resetDatabase } from "../db/database.js";
 import { createTask } from "../db/tasks.js";
 import { createTaskList } from "../db/task-lists.js";
 import { createProject } from "../db/projects.js";
-import { runMigrations } from "../db/schema.js";
 import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
 
 let testRoot = "";
@@ -513,8 +512,7 @@ describe("CLI integration", () => {
     const dbPath = join(testRoot, "large-doctor-routing.db");
     const projectDir = join(testRoot, "large-doctor-project");
     mkdirSync(projectDir, { recursive: true });
-    const seedDb = new Database(dbPath);
-    runMigrations(seedDb);
+    const seedDb = openLocalSqliteDatabase(dbPath);
     try {
       const project = createProject({ name: "LargeDoctor", path: projectDir }, seedDb);
       createTaskList({ name: "LargeDoctor list", slug: project.task_list_id!, project_id: project.id }, seedDb);
@@ -1036,7 +1034,10 @@ describe("CLI integration", () => {
       "readable-artifact-plan",
     ], dbPath);
     expect(duplicate.exitCode).toBe(1);
-    expect(duplicate.stderr).toContain("Plan slug already exists in this scope: readable-artifact-plan");
+    expect(duplicate.stderr).toBe("");
+    expect(JSON.parse(duplicate.stdout)).toEqual({
+      error: "Plan slug already exists in this scope: readable-artifact-plan",
+    });
   });
 
   it("should create and export local retrospectives from the CLI", async () => {
@@ -2086,7 +2087,7 @@ describe("CLI integration", () => {
     try { unlinkSync(dbPath); } catch {}
   });
 
-  it("should report missing HTTP authority settings without using native remote adapters", async () => {
+  it("should report configured remote intent without activating hosted authority", async () => {
     const dbPath = "/tmp/test-cli-storage-remote.db";
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
@@ -2104,25 +2105,25 @@ describe("CLI integration", () => {
       TODOS_S3_BUCKET: "",
     });
 
-    expect(status.exitCode).toBe(1);
+    expect(status.exitCode).toBe(0);
     const payload = JSON.parse(status.stdout);
     expect(payload.mode).toBe("remote");
-    expect(payload.remote_enabled).toBe(true);
-    expect(payload.transport).toBe("http-v1");
-    expect(payload.database.configured).toBe(false);
-    expect(payload.database.redacted_url).toBeNull();
-    expect(payload.object_storage.configured).toBe(false);
-    expect(payload.remote_authority).toMatchObject({
-      selected: true,
-      ok: false,
-      api_url_configured: false,
-      api_key_configured: false,
-      local_fallback: false,
+    expect(payload.remote_configured).toBe(true);
+    expect(payload.remote_enabled).toBe(false);
+    expect(payload.runtime_enabled).toBe(false);
+    expect(payload.database.configured).toBe(true);
+    expect(payload.database.redacted_url).toContain("***:***@rds.example.invalid");
+    expect(payload.database.redacted_url).not.toContain("todo_user");
+    expect(payload.database.redacted_url).not.toContain("super-secret");
+    expect(payload.canonical.runtimeSecretPath).toBe("hasna/xyz/opensource/todos/prod/rds");
+    expect(payload.canonical.primaryEnv).toBe("HASNA_TODOS_DATABASE_URL");
+    expect(payload.object_storage).toMatchObject({
+      configured: true,
+      bucket: "hasna-opensource-todos-prod",
+      prefix: "todos/prod/",
+      region: "us-east-1",
     });
-    expect(payload.issues).toEqual(expect.arrayContaining([
-      expect.stringContaining("REMOTE_API_URL_MISSING"),
-      expect.stringContaining("REMOTE_API_KEY_MISSING"),
-    ]));
+    expect(payload.issues).toEqual([]);
     expect(status.stdout).not.toContain("todo_user");
     expect(status.stdout).not.toContain("super-secret");
     expect(payload.no_network).toBe(true);
@@ -2145,10 +2146,16 @@ describe("CLI integration", () => {
       TODOS_S3_BUCKET: "",
     });
 
-    expect(plan.exitCode).toBe(1);
-    expect(plan.stdout).toBe("");
-    expect(plan.stderr).toContain("REMOTE_COMMAND_UNSUPPORTED");
-    expect(plan.stderr).toContain("local SQLite fallback is disabled");
+    expect(plan.exitCode).toBe(0);
+    const payload = JSON.parse(plan.stdout);
+    expect(payload.dry_run).toBe(true);
+    expect(payload.no_network).toBe(true);
+    expect(payload.status.mode).toBe("hybrid");
+    expect(payload.postgres.required).toBe(false);
+    expect(payload.postgres.configured_intent).toBe(true);
+    expect(payload.postgres.configured).toBe(true);
+    expect(payload.postgres.schema_sql.join("\n")).toContain("CREATE TABLE IF NOT EXISTS todos_sync_records");
+    expect(payload.steps).toContain("Defer Postgres, S3, shadow, migration, and backfill execution to authority-enabled Stage B");
 
     try { unlinkSync(dbPath); } catch {}
   });
@@ -2385,7 +2392,10 @@ describe("CLI integration", () => {
 
     const locked = await runCli(["bridge-import", bundlePath, "--json"], targetDb, env);
     expect(locked.exitCode).not.toBe(0);
-    expect(locked.stderr).toContain("Bridge bundle is encrypted");
+    expect(locked.stderr).toBe("");
+    expect(JSON.parse(locked.stdout)).toEqual({
+      error: "Bridge bundle is encrypted. Re-run with --decrypt and the configured key environment variable set.",
+    });
 
     const applied = await runCli(["bridge-import", bundlePath, "--decrypt", "--apply", "--json"], targetDb, env);
     expect(applied.exitCode).toBe(0);

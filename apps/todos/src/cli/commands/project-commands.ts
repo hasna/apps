@@ -25,7 +25,20 @@ import {
 } from "../../lib/saved-search-views.js";
 import { defaultSyncAgents, syncWithAgent, syncWithAgents } from "../../lib/sync.js";
 import { getAgentTaskListId } from "../../lib/config.js";
-import { autoProject, autoDetectProject, handleError, output, formatTaskLine, normalizeStatus, resolveExplicitProject, resolveTaskId, resolveTaskIdForCommand } from "../helpers.js";
+import {
+  autoProject,
+  autoDetectProject,
+  handleError,
+  output,
+  formatTaskLine,
+  normalizeStatus,
+  resolveExplicitProject,
+  resolveTaskId,
+  resolveTaskIdForCommand,
+  parsePositiveSafeInteger,
+  parsePositiveSafeIntegerOr,
+  parseOptionalPositiveSafeInteger,
+} from "../helpers.js";
 import { redactBroadOutput, redactBroadTasks } from "../output-redaction.js";
 
 function collectOption(value: string, previous: string[] = []): string[] {
@@ -134,7 +147,7 @@ function buildSearchFilters(query: string | undefined, opts: any, projectId?: st
     is_blocked: opts.blocked ? true : undefined,
     depends_on: opts.dependsOn,
     blocks: opts.blocks,
-    limit: opts.limit ? Number(opts.limit) : undefined,
+    limit: parseOptionalPositiveSafeInteger(opts.limit, "--limit"),
     local_fields: labels || opts.fieldOwner || opts.fieldArea || opts.fieldSeverity || customFields
       ? {
         labels,
@@ -149,7 +162,13 @@ function buildSearchFilters(query: string | undefined, opts: any, projectId?: st
   return Object.fromEntries(Object.entries(filters).filter(([, value]) => value !== undefined)) as SavedSearchFilters;
 }
 
-export function registerProjectCommands(program: Command) {
+export interface ProjectCommandDependencies {
+  /** Test/embedding seam; the shipped runtime omits this and remains Stage-A gated. */
+  getCloudClient?: typeof getTodosCloudClient;
+}
+
+export function registerProjectCommands(program: Command, dependencies: ProjectCommandDependencies = {}) {
+  const getCloudClient = dependencies.getCloudClient ?? getTodosCloudClient;
   program
     .command("project-bootstrap [path]")
     .description("Discover a local workspace and initialize project task state")
@@ -202,14 +221,14 @@ export function registerProjectCommands(program: Command) {
     .option("--pct <percent>", "Progress percentage (0-100) to record alongside the note")
     .action(async (id: string, text: string, opts: { pct?: string }) => {
       const globalOpts = program.opts();
-      const cloud = getTodosCloudClient();
+      const cloud = getCloudClient();
       const resolvedId = await resolveTaskIdForCommand(id, cloud);
       let content = text;
       let progressPct: number | undefined;
       if (opts.pct !== undefined) {
-        const pct = parseInt(opts.pct, 10);
-        if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
-          console.error(chalk.red("--pct must be a number between 0 and 100"));
+        const pct = parsePositiveSafeInteger(opts.pct, "--pct");
+        if (pct > 100) {
+          console.error(chalk.red("--pct must be a positive integer between 1 and 100"));
           process.exit(1);
         }
         content = `[progress ${pct}%] ${text}`;
@@ -444,7 +463,7 @@ export function registerProjectCommands(program: Command) {
     .option("--direction <direction>", "Graph direction: up, down, or both", "both")
     .action(async (id: string, opts) => {
       const globalOpts = program.opts();
-      const cloud = getTodosCloudClient();
+      const cloud = getCloudClient();
 
       // self_hosted cloud routing: dependency edges live on the SHARED dataset.
       // The previous path read LOCAL sqlite and 404'd cloud tasks. The recursive
@@ -573,7 +592,7 @@ export function registerProjectCommands(program: Command) {
     .option("--task-list-id <id>", "Custom task list ID (with --add)")
     .action(async (opts) => {
       const globalOpts = program.opts();
-      const cloud = getTodosCloudClient();
+      const cloud = getCloudClient();
 
       if (opts.show) {
         const project = cloud ? await cloudResolveProject(cloud, opts.show) : resolveExplicitProject(opts.show);
@@ -709,7 +728,7 @@ export function registerProjectCommands(program: Command) {
         }
 
         const { createTodosProjectPanel } = await import("../../lib/project-panel.js");
-        const limit = opts.limit ? Number(opts.limit) : 20;
+        const limit = parsePositiveSafeIntegerOr(opts.limit, 20, "--limit");
         const panel = createTodosProjectPanel(project.id, { limit });
         if (opts.json || opts.contract || globalOpts.json) {
           output(panel, true);
@@ -736,7 +755,7 @@ export function registerProjectCommands(program: Command) {
       const globalOpts = program.opts();
       const useJson = opts.json || globalOpts.json;
       try {
-        const cloud = getTodosCloudClient();
+        const cloud = getCloudClient();
         let result;
         if (cloud) {
           result = await cloudRenameProject(cloud, idOrSlug, newSlug, opts.name);
@@ -935,7 +954,7 @@ export function registerProjectCommands(program: Command) {
           ? opts.pattern.split(",").map((t: string) => t.trim().toUpperCase()) as typeof EXTRACT_TAGS[number][]
           : undefined;
         const taskListId = opts.list ? resolveTaskListId(opts.list) : undefined;
-        const maxRuns = opts.maxRuns ? parseInt(opts.maxRuns, 10) : 1;
+        const maxRuns = parsePositiveSafeIntegerOr(opts.maxRuns, 1, "--max-runs");
         const result = await watchSourceTodos({
           path: resolve(scanPath),
           patterns,
@@ -951,7 +970,7 @@ export function registerProjectCommands(program: Command) {
           include_index: true,
           once: opts.once !== false,
           max_runs: maxRuns,
-          interval_ms: parseInt(opts.interval, 10),
+          interval_ms: parsePositiveSafeInteger(opts.interval, "--interval"),
         });
 
         if (globalOpts.json) {

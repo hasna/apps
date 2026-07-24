@@ -2,10 +2,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Database } from "bun:sqlite";
-import { closeDatabase, getDatabase, resetDatabase } from "../db/database.js";
+import type { Database } from "bun:sqlite";
+import { closeDatabase, getDatabase, openLocalSqliteDatabase, resetDatabase } from "../db/database.js";
 import { listMachineLocalPaths, removeMachineLocalPath, setMachineLocalPath } from "../db/projects.js";
-import { runMigrations } from "../db/schema.js";
 import {
   addTaskRunArtifact,
   getTaskRunLedger,
@@ -20,46 +19,56 @@ import {
   STORAGE_TABLES,
   TODOS_STORAGE_ENV,
   TODOS_STORAGE_FALLBACK_ENV,
-  buildS3ObjectKey,
-  createHybridTodosStorageAdapter,
-  createPostgresTodosSyncStore,
-  createPostgresTodosStorageAdapter,
   createLocalSqliteTodosStorageAdapter,
-  createTodosS3ArtifactStore,
   createTodosStorageAdapter,
-  downloadRunArtifactsFromS3,
   getCanonicalTodosRdsConfig,
   getStorageDatabaseEnv,
   getStorageDatabaseUrl,
   getStorageMode,
   loadTodosStorageConfig,
   loadStorageConfig,
+  TodosHostedStorageUnavailableError,
+  type TodosAuditStore,
+  type TodosStorageAdapter,
+  type TodosStorageContext,
+  type TodosStorageSnapshot,
+} from "../storage.js";
+import {
+  buildS3ObjectKey,
+  createTodosS3ArtifactStore,
+  signAwsV4Request,
+} from "./s3-artifacts.js";
+import {
+  createHybridTodosStorageAdapter,
+  type HybridTodosStorageAdapter,
+} from "./hybrid.js";
+import { createPostgresTodosStorageAdapter } from "./postgres-adapter.js";
+import {
+  createPostgresTodosSyncStore,
   ensurePostgresScopedSlugUniqueIndexes,
   postgresTodosCommentCursorIndexSql,
   postgresTodosScopedSlugIndexStatusSql,
   postgresTodosScopedSlugPreflightSql,
   postgresTodosScopedSlugUniqueIndexSql,
   postgresTodosSyncSchemaSql,
-  signAwsV4Request,
-  uploadRunArtifactsToS3,
-  type HybridTodosStorageAdapter,
-  type TodosAuditStore,
   type TodosPostgresQueryClient,
-  type TodosStorageAdapter,
-  type TodosStorageContext,
-  type TodosStorageSnapshot,
-} from "../storage.js";
+} from "./postgres-sync.js";
+import {
+  downloadRunArtifactsFromS3,
+  uploadRunArtifactsToS3,
+} from "./s3-artifact-sync.js";
 import { s3CredentialsFromEnv } from "../cli/commands/storage-commands.js";
-import { handleV1Request, type V1RequestDependencies } from "../server/v1.js";
+import { dispatchV1Request, type V1RequestDependencies } from "../server/v1.js";
 import type { ApiKeyVerifier } from "@hasna/contracts/auth";
 import type { TaskComment } from "../types/index.js";
 
 let db: Database;
+const LOCAL_TEST_ENV = { HASNA_TODOS_STORAGE_MODE: "local" } as const;
 
 beforeEach(() => {
   process.env["TODOS_DB_PATH"] = ":memory:";
   resetDatabase();
-  db = getDatabase();
+  db = getDatabase(undefined, LOCAL_TEST_ENV);
 });
 
 afterEach(() => {
@@ -255,9 +264,7 @@ describe("storage adapter contracts", () => {
     await source.audit.logTaskChange(task.id, "test", "status", "pending", "in_progress", "snapshot-agent");
 
     const snapshot = await source.sync.exportSnapshot!();
-    const targetDb = new Database(":memory:");
-    targetDb.run("PRAGMA foreign_keys = ON");
-    runMigrations(targetDb);
+    const targetDb = openLocalSqliteDatabase(":memory:", LOCAL_TEST_ENV);
     try {
       const target = createLocalSqliteTodosStorageAdapter({ db: targetDb });
       const imported = await target.sync.importSnapshot!(snapshot);
@@ -294,9 +301,7 @@ describe("storage adapter contracts", () => {
     snapshot.projects[0] = { ...snapshot.projects[0]!, task_list_id: "Bad Project Slug !!" };
     snapshot.taskLists[0] = { ...snapshot.taskLists[0]!, slug: "Bad List Slug !!" };
 
-    const targetDb = new Database(":memory:");
-    targetDb.run("PRAGMA foreign_keys = ON");
-    runMigrations(targetDb);
+    const targetDb = openLocalSqliteDatabase(":memory:", LOCAL_TEST_ENV);
     try {
       const target = createLocalSqliteTodosStorageAdapter({ db: targetDb });
       const imported = await target.sync.importSnapshot!(snapshot);
@@ -359,9 +364,7 @@ describe("storage adapter contracts", () => {
       : project);
     snapshot.taskLists = snapshot.taskLists.map((list) => ({ ...list, project_id: null }));
 
-    const targetDb = new Database(":memory:");
-    targetDb.run("PRAGMA foreign_keys = ON");
-    runMigrations(targetDb);
+    const targetDb = openLocalSqliteDatabase(":memory:", LOCAL_TEST_ENV);
     try {
       const target = createLocalSqliteTodosStorageAdapter({ db: targetDb });
       const imported = await target.sync.importSnapshot!(snapshot);
@@ -407,9 +410,7 @@ describe("storage adapter contracts", () => {
     const sourceTask = await source.tasks.create({ title: "Valid prefix row must not import" });
     const snapshot = await source.sync.exportSnapshot!();
 
-    const targetDb = new Database(":memory:");
-    targetDb.run("PRAGMA foreign_keys = ON");
-    runMigrations(targetDb);
+    const targetDb = openLocalSqliteDatabase(":memory:", LOCAL_TEST_ENV);
     try {
       const target = createLocalSqliteTodosStorageAdapter({ db: targetDb });
       await target.projects.create({
@@ -459,9 +460,7 @@ describe("storage adapter contracts", () => {
       tags: ["tombstone"],
     });
     const initialSnapshot = await source.sync.exportSnapshot!();
-    const targetDb = new Database(":memory:");
-    targetDb.run("PRAGMA foreign_keys = ON");
-    runMigrations(targetDb);
+    const targetDb = openLocalSqliteDatabase(":memory:", LOCAL_TEST_ENV);
     try {
       const target = createLocalSqliteTodosStorageAdapter({ db: targetDb });
       await target.sync.importSnapshot!(initialSnapshot);
@@ -491,9 +490,7 @@ describe("storage adapter contracts", () => {
     const source = createLocalSqliteTodosStorageAdapter({ db });
     const task = await source.tasks.create({ title: "Stale remote task" });
     const staleSnapshot = await source.sync.exportSnapshot!();
-    const targetDb = new Database(":memory:");
-    targetDb.run("PRAGMA foreign_keys = ON");
-    runMigrations(targetDb);
+    const targetDb = openLocalSqliteDatabase(":memory:", LOCAL_TEST_ENV);
     try {
       const target = createLocalSqliteTodosStorageAdapter({ db: targetDb });
       await target.sync.importSnapshot!(staleSnapshot);
@@ -518,9 +515,7 @@ describe("storage adapter contracts", () => {
     const plan = await source.plans.create({ name: "Delete Plan", project_id: project.id, task_list_id: taskList.id });
     const template = await source.templates.create({ name: "Delete Template", title_pattern: "Delete task", project_id: project.id });
     const initialSnapshot = await source.sync.exportSnapshot!();
-    const targetDb = new Database(":memory:");
-    targetDb.run("PRAGMA foreign_keys = ON");
-    runMigrations(targetDb);
+    const targetDb = openLocalSqliteDatabase(":memory:", LOCAL_TEST_ENV);
     try {
       const target = createLocalSqliteTodosStorageAdapter({ db: targetDb });
       await target.sync.importSnapshot!(initialSnapshot);
@@ -552,16 +547,23 @@ describe("storage adapter contracts", () => {
     }
   });
 
-  test("loads local storage by default and ignores legacy hosted env names", () => {
+  test("loads local storage by default and ignores unsupported legacy hosted env names", () => {
     const config = loadTodosStorageConfig({
       TODOS_MODE: "remote",
       TODOS_API_URL: "https://todos.example.test/api",
-      HASNA_TODOS_DATABASE_URL: "postgres://remote/ignored-until-mode-is-explicit",
     });
 
     expect(config.mode).toBe("local");
-    expect(config.database?.url).toBe("postgres://remote/ignored-until-mode-is-explicit");
+    expect(config.database).toBeUndefined();
     expect(createTodosStorageAdapter({ config, local: { db } }).kind).toBe("sqlite");
+  });
+
+  test("fails closed when a supported service DSN is present without an explicit mode", () => {
+    expect(() => loadTodosStorageConfig({
+      TODOS_MODE: "remote",
+      TODOS_API_URL: "https://todos.example.test/api",
+      HASNA_TODOS_DATABASE_URL: "postgres://synthetic.invalid/todos",
+    })).toThrow(TodosHostedStorageUnavailableError);
   });
 
   test("parses explicit native remote RDS and S3 config", () => {
@@ -650,27 +652,23 @@ describe("storage adapter contracts", () => {
     expect(CANONICAL_TODOS_RDS_RUNTIME_PATH).toBe("hasna/xyz/opensource/todos/prod/rds");
   });
 
-  test("rejects remote mode when no remote adapter or Postgres client is supplied", () => {
+  test("Stage-A convenience factory rejects remote mode even with an injected adapter", () => {
     const config = loadTodosStorageConfig({
       HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_DATABASE_URL: "postgres://todos@rds.example/todos",
     });
 
-    expect(() => createTodosStorageAdapter({ config, local: { db } })).toThrow("remote storage requires");
-    expect(createTodosStorageAdapter({ config, remoteAdapter: fakeRemoteAdapter() }).kind).toBe("postgres");
+    expect(() => createTodosStorageAdapter({ config, local: { db } }))
+      .toThrow("HOSTED_AUTHORITY_UNAVAILABLE");
+    expect(() => createTodosStorageAdapter({ config, remoteAdapter: fakeRemoteAdapter() }))
+      .toThrow("HOSTED_AUTHORITY_UNAVAILABLE");
   });
 
-  test("builds a pure remote Postgres adapter from native config and caller-provided client", async () => {
+  test("direct operator constructor builds a pure remote Postgres adapter", async () => {
     const postgres = createMemoryPostgresClient();
-    const config = loadTodosStorageConfig({
-      HASNA_TODOS_STORAGE_MODE: "remote",
-      HASNA_TODOS_DATABASE_URL: "postgres://todos@rds.example/todos",
-    });
-    const adapter = createTodosStorageAdapter({
-      config,
-      local: { db },
-      postgresClient: postgres.client,
-      hybrid: { sourceMachineId: "apple06" },
+    const adapter = createPostgresTodosStorageAdapter({
+      client: postgres.client,
+      sourceMachineId: "apple06",
     });
 
     const project = await adapter.projects.create(
@@ -814,6 +812,28 @@ describe("storage adapter contracts", () => {
       expect.objectContaining({ task_id: task.id, machine_id: "spark01" }),
     ]);
     expect(postgres.calls.some((call) => call.values?.includes("spark01"))).toBe(true);
+  });
+
+  test("Postgres task updates preserve omitted task_list_id and apply an explicit null clear", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({
+      client: postgres.client,
+      sourceMachineId: "spark01",
+    });
+    const task = await adapter.tasks.create({ title: "List clear", task_list_id: "list-one" });
+
+    const omitted = await adapter.tasks.update(task.id, {
+      title: "List preserved",
+      version: task.version,
+    });
+    expect(omitted.task_list_id).toBe("list-one");
+
+    const cleared = await adapter.tasks.update(task.id, {
+      task_list_id: null,
+      version: omitted.version,
+    });
+    expect(cleared.task_list_id).toBeNull();
+    expect(await adapter.tasks.get(task.id)).toMatchObject({ task_list_id: null });
   });
 
   test("renames a Postgres project and canonical list with one atomic idempotent statement", async () => {
@@ -1103,7 +1123,7 @@ describe("storage adapter contracts", () => {
     await expect(Promise.resolve(adapter.verifications!.add({ task_id: "nope", command: "x" }))).rejects.toThrow(/not found/);
   });
 
-  test("v1 comments persist through a reopened Postgres adapter and redact new and historical content", async () => {
+  test("direct V1 aliases cannot reach Postgres adapters while adapter comments stay redacted and durable", async () => {
     const { client, calls } = createMemoryPostgresClient();
     const adapter = createPostgresTodosStorageAdapter({ client, service: "todos" });
     const task = await adapter.tasks.create({ title: "V1 comment persistence" });
@@ -1121,35 +1141,33 @@ describe("storage adapter contracts", () => {
         },
       }),
     };
-    const dependencies = (storage: TodosStorageAdapter): V1RequestDependencies => ({
+    const dependencies: V1RequestDependencies = {
       getVerifier: () => verifier,
       ensureSchema: async () => {},
-      getStorageAdapter: () => storage,
-    });
-    const request = async (method: string, path: string, body?: Record<string, unknown>, storage = adapter) => {
-      const url = new URL(`https://todos.test${path}`);
-      const response = await handleV1Request(
-        new Request(url, {
-          method,
-          headers: { "content-type": "application/json", authorization: "Bearer synthetic-test-key" },
-          body: body ? JSON.stringify(body) : undefined,
-        }),
-        url,
-        dependencies(storage),
-      );
-      if (!response) throw new Error(`Expected ${path} to be handled by v1`);
-      return response;
+      getStorageAdapter: () => adapter,
     };
+    const requestUrl = new URL(`https://todos.test/v1/tasks/${task.id}/comments`);
+    const callsBeforeDispatch = calls.length;
+    const denied = await dispatchV1Request(
+      new Request(requestUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: "Bearer synthetic-test-key" },
+        body: JSON.stringify({ content: "must remain unreachable" }),
+      }),
+      requestUrl,
+      dependencies,
+    );
+    expect(denied?.status).toBe(503);
+    expect(calls).toHaveLength(callsBeforeDispatch);
 
-    const first = await request("POST", `/v1/tasks/${task.id}/comments`, { content: "first safe comment" });
-    expect(first.status).toBe(201);
-    const firstComment = (await first.json() as { comment: { id: string; content: string } }).comment;
-    await Bun.sleep(2);
-    const second = await request("POST", `/v1/tasks/${task.id}/comments`, {
+    const firstComment = await adapter.audit.addComment({
+      task_id: task.id,
+      content: "first safe comment",
+    });
+    const secondComment = await adapter.audit.addComment({
+      task_id: task.id,
       content: "Bearer abcdefghijklmnop should redact",
     });
-    expect(second.status).toBe(201);
-    const secondComment = (await second.json() as { comment: { id: string; content: string } }).comment;
     expect(secondComment.content).toContain("[REDACTED]");
 
     const commentWrites = calls.filter((call) => call.sql.includes("INSERT INTO todos_sync_records") && call.values?.[1] === "comments");
@@ -1158,14 +1176,11 @@ describe("storage adapter contracts", () => {
     expect((commentWrites[1]!.values?.[3] as { content: string }).content).not.toContain("abcdefghijklmnop");
 
     const reopened = createPostgresTodosStorageAdapter({ client, service: "todos" });
-    const persisted = await request("GET", `/v1/tasks/${task.id}/comments`, undefined, reopened);
-    expect(persisted.status).toBe(200);
-    const persistedBody = await persisted.json() as { comments: Array<{ content: string }>; count: number };
-    expect(persistedBody.count).toBe(2);
-    expect(persistedBody.comments.map((comment) => comment.content)).toEqual([
+    const persisted = await reopened.audit.getCommentsPage!(task.id, { limit: 10 });
+    expect(persisted.map((comment) => comment.content)).toEqual(expect.arrayContaining([
       "first safe comment",
       "Bearer [REDACTED] should redact",
-    ]);
+    ]));
 
     const historical = {
       id: "historical-comment",
@@ -1181,86 +1196,10 @@ describe("storage adapter contracts", () => {
       "INSERT INTO todos_sync_records RETURNING object_id",
       ["todos", "comments", historical.id, historical, historical.created_at, null, null],
     );
-    const historicalRead = await request("GET", `/v1/tasks/${task.id}/comments`, undefined, reopened);
-    const historicalBody = await historicalRead.json() as {
-      comments: Array<{ id: string; content: string }>;
-      count: number;
-      has_more?: boolean;
-    };
-    expect(historicalBody).toMatchObject({ count: 3 });
-    expect(historicalBody.has_more).toBe(false);
-    const safeHistorical = historicalBody.comments.find((comment) => comment.id === historical.id);
+    const historicalRead = await reopened.audit.getCommentsPage!(task.id, { limit: 10 });
+    const safeHistorical = historicalRead.find((comment) => comment.id === historical.id);
     expect(safeHistorical?.content).toContain("[REDACTED]");
     expect(safeHistorical?.content).not.toContain("abcdefghijklmnop");
-
-    const firstPageResponse = await request("GET", `/v1/tasks/${task.id}/comments?limit=2`, undefined, reopened);
-    const firstPage = await firstPageResponse.json() as {
-      comments: Array<{ id: string }>;
-      count: number;
-      has_more: boolean;
-      next_cursor: string | null;
-    };
-    expect(firstPage).toMatchObject({ count: 2, has_more: true });
-    expect(firstPage.comments.map((comment) => comment.id)).toEqual([firstComment.id, secondComment.id]);
-    expect(firstPage.next_cursor).toEqual(expect.any(String));
-
-    const secondPageResponse = await request(
-      "GET",
-      `/v1/tasks/${task.id}/comments?limit=2&cursor=${encodeURIComponent(firstPage.next_cursor!)}`,
-      undefined,
-      reopened,
-    );
-    const secondPage = await secondPageResponse.json() as {
-      comments: Array<{ id: string }>;
-      count: number;
-      has_more: boolean;
-      next_cursor: string | null;
-    };
-    expect(secondPage.comments.map((comment) => comment.id)).toContain(historical.id);
-    expect(secondPage).toMatchObject({ count: 1, has_more: false, next_cursor: null });
-    expect(new Set([...firstPage.comments, ...secondPage.comments].map((comment) => comment.id)).size)
-      .toBe(firstPage.comments.length + secondPage.comments.length);
-
-    for (const query of [
-      "limit=0",
-      "limit=501",
-      "limit=1.5",
-      "limit=not-a-number",
-      "cursor=not-a-cursor",
-      `cursor=${"a".repeat(1_025)}`,
-    ]) {
-      const invalid = await request("GET", `/v1/tasks/${task.id}/comments?${query}`, undefined, reopened);
-      expect(invalid.status).toBe(400);
-    }
-
-    const predecessorAdapter: TodosStorageAdapter = {
-      ...reopened,
-      audit: {
-        ...reopened.audit,
-        getComments: () => Array.from({ length: 501 }, (_, index): TaskComment => ({
-          id: `legacy-${index}`,
-          task_id: task.id,
-          agent_id: null,
-          session_id: null,
-          content: "safe",
-          type: "comment",
-          progress_pct: null,
-          created_at: "2026-07-10T00:00:00.000Z",
-        })),
-        getCommentsPage: undefined,
-      },
-    };
-    const upgradeRequired = await request("GET", `/v1/tasks/${task.id}/comments`, undefined, predecessorAdapter);
-    expect(upgradeRequired.status).toBe(426);
-    expect(await upgradeRequired.json()).toMatchObject({ error: expect.stringMatching(/upgrade/i) });
-    const adapterUpgradeRequired = await request(
-      "GET",
-      `/v1/tasks/${task.id}/comments?limit=2`,
-      undefined,
-      predecessorAdapter,
-    );
-    expect(adapterUpgradeRequired.status).toBe(426);
-    expect(await adapterUpgradeRequired.json()).toMatchObject({ error: expect.stringMatching(/adapter.*upgrade/i) });
 
     calls.length = 0;
     await reopened.audit.getCommentsPage!(task.id, { limit: 2 });
@@ -1634,7 +1573,7 @@ describe("storage adapter contracts", () => {
     expect(updated.version).toBe(task.version + 1);
   });
 
-  test("builds a hybrid local plus Postgres sync adapter from native config", async () => {
+  test("direct operator constructor builds a hybrid local plus Postgres sync adapter", async () => {
     const calls: Array<{ sql: string; values?: readonly unknown[] }> = [];
     const client = {
       async query(sql: string, values?: readonly unknown[]) {
@@ -1663,15 +1602,10 @@ describe("storage adapter contracts", () => {
         return { rows: [] };
       },
     };
-    const config = loadTodosStorageConfig({
-      HASNA_TODOS_STORAGE_MODE: "hybrid",
-      HASNA_TODOS_DATABASE_URL: "postgres://todos@rds.example/todos",
-    });
-    const adapter = createTodosStorageAdapter({
-      config,
+    const adapter = createHybridTodosStorageAdapter({
       local: { db },
       postgresClient: client,
-      hybrid: { sourceMachineId: "apple06" },
+      sourceMachineId: "apple06",
     }) as HybridTodosStorageAdapter;
 
     await adapter.tasks.create({
@@ -1693,13 +1627,14 @@ describe("storage adapter contracts", () => {
     expect(calls.some((call) => call.values?.includes("apple06"))).toBe(true);
   });
 
-  test("rejects remote mode without the required Postgres database URL", () => {
+  test("Stage-A convenience factory rejects remote mode even without a DSN", () => {
     const config = loadTodosStorageConfig({
       HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_S3_BUCKET: "hasna-xyz-opensource-todos-prod",
     });
 
-    expect(() => createTodosStorageAdapter({ config, local: { db } })).toThrow("HASNA_TODOS_DATABASE_URL is required");
+    expect(() => createTodosStorageAdapter({ config, local: { db } }))
+      .toThrow("HOSTED_AUTHORITY_UNAVAILABLE");
   });
 
   test("defines RDS-friendly Postgres sync schema without unsafe identifiers", () => {

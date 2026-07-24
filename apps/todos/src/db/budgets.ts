@@ -26,7 +26,7 @@ export function setBudget(
   opts: { max_concurrent?: number; max_cost_usd?: number | null; max_task_minutes?: number | null; period_hours?: number },
   db?: Database,
 ): AgentBudget {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const timestamp = now();
   d.run(
     `INSERT INTO agent_budgets (agent_id, max_concurrent, max_cost_usd, max_task_minutes, period_hours, created_at, updated_at)
@@ -44,12 +44,12 @@ export function setBudget(
 }
 
 export function getBudget(agentId: string, db?: Database): AgentBudget | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return d.query("SELECT * FROM agent_budgets WHERE agent_id = ?").get(agentId) as AgentBudget | null;
 }
 
 export function checkBudget(agentId: string, db?: Database): BudgetCheck {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const budget = getBudget(agentId, d);
   if (!budget) return { allowed: true, current_concurrent: 0, max_concurrent: 999 };
 

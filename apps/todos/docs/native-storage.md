@@ -4,58 +4,66 @@
 artifact files without network access, hosted credentials, SaaS accounts, or a
 shared cloud runtime package.
 
-Remote storage is explicit and repo-native. Internal Hasna deployments and
-future SaaS wrappers should configure it through `HASNA_TODOS_*` variables and
-provide the matching Postgres/S3 clients through the public `./storage` package
-export.
+Runtime status: disabled in Stage A. Remote configuration values express
+hosted intent, but no public Postgres, S3, hybrid, sync, or hosted-authority
+adapter executes in this stage.
+
+The tracked container configuration is containment-only and starts the help
+surface rather than a listener. `/health` is reserved for process liveness;
+`/ready` remains unavailable with 503 for hosted intent. Stage B defers RDS,
+migration, and hosted runtime activation pending a new reviewed authority gate.
 
 ## Modes
 
 - `HASNA_TODOS_STORAGE_MODE=local`: default local SQLite/file behavior.
-- `HASNA_TODOS_STORAGE_MODE=remote`: ordinary CLI coordination commands use the
-  configured authenticated Todos `/v1` HTTP authority. The public storage
-  library can separately construct an injected Postgres adapter for server-side
-  integrations.
-- `HASNA_TODOS_STORAGE_MODE=hybrid`: use a local plus remote adapter with
-  explicit sync behavior.
+- `HASNA_TODOS_STORAGE_MODE=remote`: declare hosted intent; Stage A fails
+  closed before constructing an adapter or datastore client.
+- `HASNA_TODOS_STORAGE_MODE=hybrid`: declare hosted intent; Stage A fails
+  closed before local or remote datastore access.
 
 Legacy hosted API toggles are not storage selectors. They must not change the
 local CLI default.
 
-## CLI Remote HTTP Authority
+## Stage A Hosted Authority Boundary
 
-The open CLI remote route uses only these canonical settings:
+Remote and hybrid mode currently express hosted intent, but Stage A does not
+contain a trusted positive authority resolver. Public CLI, SDK, MCP, server,
+operator, and `/v1` datastore paths therefore fail closed before datastore or
+request-body access:
 
-| Setting | Purpose |
-| --- | --- |
-| `HASNA_TODOS_STORAGE_MODE` | Set to `remote`, `self_hosted`, `cloud`, or `hybrid` to select authenticated HTTP. |
-| `HASNA_TODOS_API_URL` | Self-hosted Todos authority root, or the same root ending in `/v1`. |
-| `HASNA_TODOS_API_KEY` | API key supplied to the authority as a bearer credential. |
+- ordinary untrusted or missing authority returns typed `503`
+  `HOSTED_AUTHORITY_UNAVAILABLE`;
+- caller-forged authority headers or dedicated query claims return `400`
+  `CALLER_AUTHORITY_REJECTED`;
+- Stage A does not manufacture a `403` path. A trusted principal with zero
+  grants belongs to the later Access/Orgs integration and can return `403` only
+  after that trusted resolver exists.
 
-The URL must use HTTPS, except for loopback development authorities. Userinfo,
-query strings, fragments, redirects, `/api/v1`, and non-root custom paths are
-rejected. The CLI does not infer an authority from `TODOS_URL`, does not use a
-private SaaS route, and does not send the bearer credential across redirects.
+Local mode remains the explicit SQLite path. The redacted `storage status` and
+`storage sync-plan` diagnostics remain available without network or datastore
+I/O; they do not confer hosted authority.
 
-Remote selection is fail-closed. A missing URL or key, conflicting mode
-selectors, an incompatible collection route, authentication failure, timeout,
-or server failure is reported with a `REMOTE_*` diagnostic before local SQLite
-can open. A resource-level 404 remains a normal not-found result. There is no
-SQLite or Postgres fallback for a remote CLI invocation.
+Status separates intent from capability: `remote_configured` may be `true`
+when a remote mode or URL was supplied, while `remote_enabled` and
+`runtime_enabled` are always `false` in Stage A. A sync plan is documentation,
+not an executable migration, shadow, backfill, or cutover path.
 
-The supported coordination surface includes storage/status diagnostics,
-projects, task lists, project-scoped plans, task create/upsert/list/show/update,
-task-list and plan moves, comments, start/complete/delete, and next/claim. A
-command without a safe `/v1` equivalent exits with `REMOTE_COMMAND_UNSUPPORTED`
-before local helpers run.
+The live `/v1` OpenAPI contract documents only the actual `400` forged-claim
+and `503` unavailable-authority outcomes. It advertises no authenticated
+success response. Trusted authority resolution belongs to a future stage.
 
-`todos storage status --json` is a configuration-only diagnostic. In remote
-mode it reports the redacted `/v1` base, URL/key presence, HTTP transport, and
-the disabled local fallback without opening a database or making a network
-request. `todos health` and `todos doctor` authenticate against the required
-remote routes.
+## Future-positive contract (not live)
 
-## Native AWS Configuration
+Positive request/response schemas and adapter types are retained for a later
+authority-enabled stage and for forward design compatibility. They are not
+served as the live OpenAPI document and do not enable remote execution. The
+future stage must integrate a trusted authority resolver before those schemas
+or adapters can become executable.
+
+## Deferred Native AWS Configuration Vocabulary
+
+The following names are reserved for future-positive integration and for
+redacted diagnostics. Setting them in Stage A does not enable an adapter:
 
 - `HASNA_TODOS_DATABASE_URL`: Postgres connection string for RDS-backed task
   state.
@@ -71,52 +79,46 @@ remote routes.
 - `HASNA_TODOS_SYNC_BATCH_SIZE`: positive integer, defaults to `500`.
 - `HASNA_TODOS_SYNC_DRY_RUN`: boolean sync preview flag.
 
-Plain local-development fallbacks are accepted with the same names minus the
+Plain fallback aliases are recognized with the same names minus the
 `HASNA_` prefix, for example `TODOS_STORAGE_MODE`, `TODOS_DATABASE_URL`, and
-`TODOS_S3_BUCKET`. Public docs and wrappers should still prefer the canonical
-`HASNA_TODOS_*` names.
+`TODOS_S3_BUCKET`. They do not bypass the Stage A boundary.
 
-Production secrets should follow the broader open package convention:
+If a future deployment enables this contract, production secret identifiers
+are expected to follow the broader open package convention:
 
 - `hasna/xyz/opensource/todos/prod/env`
 - `hasna/xyz/opensource/todos/prod/rds`
 - `hasna/xyz/opensource/todos/prod/s3`
 
-The canonical production RDS target is the shared Hasna XYZ infra apps
+The deferred production RDS design references the shared Hasna XYZ infra apps
 Postgres cluster `hasna-xyz-infra-apps-prod-postgres`, database `todos`, and
-runtime secret `hasna/xyz/opensource/todos/prod/rds`. Runtime wiring should set
-`HASNA_TODOS_DATABASE_URL` from that secret. `TODOS_DATABASE_URL` is only a
-plain fallback for local development or wrappers that have not yet migrated.
+runtime secret `hasna/xyz/opensource/todos/prod/rds`. Stage A does not load that
+secret or connect to that target.
 
 A SaaS wrapper owns tenant state, billing, accounts, deployment, observability,
 and production secret wiring. The open package owns local storage, the public
-storage contract, local tests, and explicit remote adapter interfaces.
+storage contract, local tests, and deferred remote adapter type interfaces.
 
-## Public Adapter Exports
+## Public Storage Exports in Stage A
 
-The public `@hasna/todos/storage` export now includes:
+The active public storage contract includes local configuration metadata and
+SQLite snapshot helpers:
 
-- `loadTodosStorageConfig` and `createTodosStorageAdapter` for mode selection.
+- `loadTodosStorageConfig` for mode inspection and redacted diagnostics.
 - `STORAGE_TABLES`, `TODOS_STORAGE_ENV`, and `TODOS_STORAGE_FALLBACK_ENV` for
   wrapper provenance and explicit env mapping.
 - `exportSqliteTodosStorageSnapshot` and `importSqliteTodosStorageSnapshot`
   for local SQLite state movement without a hosted service.
-- `createHybridTodosStorageAdapter` for local SQLite CRUD with explicit
-  Postgres-backed remote snapshot push/pull.
-- `createPostgresTodosStorageAdapter` for pure remote CRUD backed by the same
-  Postgres JSONB sync records and a caller-provided query client.
-- `createPostgresTodosSyncStore` for RDS-backed snapshot push/pull and
-  cross-machine sync cursors through a caller-provided Postgres query client.
-- `createTodosS3ArtifactStore` for S3 object reads/writes/deletes through
-  signed `fetch` requests and caller-provided credentials.
-- `uploadRunArtifactsToS3` and `downloadRunArtifactsFromS3` for syncing
-  locally stored `task_run_artifacts` bytes to and from S3 while keeping the
-  local artifact metadata rows as the source of truth.
 
-These exports are dependency-light by design. The open package does not bundle
-platform billing, tenant tables, deployment code, or a cloud SDK. Internal
-deployments and wrappers can provide `pg` clients, credentials, and secret
-loading from their own runtime.
+Remote and hybrid public names remain link-compatible Stage-A stubs. Their
+function names, method names, and JavaScript arities match the prior public
+surface, but every call throws the typed hosted-authority-unavailable error
+before dependency, network, or datastore access. `createTodosStorageAdapter`
+returns a local adapter only for explicit local mode and otherwise fails closed.
+
+The open package does not bundle platform billing, tenant tables, deployment
+code, or a cloud SDK. Future wrappers may provide clients and secret loading
+only after trusted authority enablement.
 
 ## Local Plan Markdown Artifacts
 
@@ -192,61 +194,25 @@ frontmatter/task comments. The CLI does not silently treat the Markdown file as
 authoritative when conflicts exist; agents should resolve the conflict through
 the CLI or an explicit migration task.
 
-## Hybrid Sync Shape
+## Deferred Hybrid Sync Shape
 
-`HASNA_TODOS_STORAGE_MODE=hybrid` can now build a local-plus-remote adapter when
-the caller passes a Postgres-style query client or sync store:
+The future-positive hybrid design reserves local snapshot export/import,
+remote push/pull, and pull-then-push synchronization. In Stage A,
+`HASNA_TODOS_STORAGE_MODE=hybrid` selects containment, not this design, and the
+stub rejects before inspecting a supplied query client or sync store.
 
-- Local CRUD stays SQLite-backed and works offline.
-- `adapter.sync.exportSnapshot()` and `adapter.sync.importSnapshot()` move the
-  storage-level SQLite snapshot.
-- `adapter.remote.pushSnapshot()` writes the local snapshot into Postgres sync
-  records.
-- `adapter.remote.pullSnapshot()` reads Postgres sync records and imports them
-  into local SQLite.
-- `adapter.remote.syncOnce()` pulls first, then pushes the merged local
-  snapshot.
+## Deferred Remote CRUD Shape
 
-This is the open-package boundary. SaaS tenant wrappers can be added on top
-without changing the local default or depending on a shared cloud package.
+The future-positive remote design reserves repo-owned JSONB sync records and a
+caller-provided Postgres query client. In Stage A,
+`HASNA_TODOS_STORAGE_MODE=remote` rejects before client or datastore access.
 
-## Remote CRUD Shape
+## Deferred S3 Artifact Sync
 
-`HASNA_TODOS_STORAGE_MODE=remote` can now build a pure Postgres adapter when the
-caller passes a Postgres-style query client to `createTodosStorageAdapter`:
+S3 artifact upload/download shapes are preserved for a future authority-enabled
+stage. Their Stage-A public functions are non-networking stubs that reject
+before reading credentials, local artifact rows, or object storage.
 
-- CRUD uses the repo-owned `todos_sync_records` JSONB table rather than SaaS
-  tenant tables.
-- The package does not import `pg`; wrappers or internal deployments provide
-  the connected client.
-- `createPostgresTodosStorageAdapter` is also exported directly for callers
-  that want to bypass mode selection.
-- Local SQLite remains the default unless `HASNA_TODOS_STORAGE_MODE` is set
-  explicitly.
-
-## S3 Artifact Sync
-
-Run artifacts recorded with local stored content can now be pushed to S3 through
-the public storage helpers:
-
-- `uploadRunArtifactsToS3({ store, db, filter })` verifies the local
-  content-addressed artifact bytes, uploads them using `createTodosS3ArtifactStore`,
-  and stores a `remote_artifact_store` reference on the `task_run_artifacts`
-  metadata row.
-- `downloadRunArtifactsFromS3({ store, db, filter })` reads that remote
-  reference, downloads the object, verifies the checksum, and restores the local
-  content-addressed file.
-
-The helper only needs a caller-provided S3 store. Credentials, secret loading,
-tenant scoping, and production scheduling remain outside the open package.
-
-The CLI exposes the same boundary:
-
-- `todos storage artifacts upload --run-id <id> --json` previews uploadable
-  local artifact bytes without network access.
-- `todos storage artifacts download --run-id <id> --json` previews remote
-  restore work without network access.
-- Add `--apply` to perform the S3 operation. Apply mode requires
-  `HASNA_TODOS_S3_BUCKET` plus `HASNA_TODOS_S3_ACCESS_KEY_ID` and
-  `HASNA_TODOS_S3_SECRET_ACCESS_KEY`; `HASNA_TODOS_S3_SESSION_TOKEN` is
-  optional.
+The CLI may report bounded, redacted, no-network previews. Any apply request is
+denied in Stage A and cannot be converted into an S3 operation by supplying
+configuration or caller authority claims.

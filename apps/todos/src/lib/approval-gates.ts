@@ -142,7 +142,7 @@ function writeGate(
   decision?: { decided_by?: string; decided_at?: string; note?: string; reason?: string },
   db?: Database,
 ): ApprovalGate {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   ensureTask(input.task_id, d);
   const step = stepForGate(input.gate);
   const existing = getCheckpoint(input.task_id, step, d);
@@ -183,7 +183,7 @@ function currentGate(taskId: string, gate: string, db: Database): ApprovalGate |
 }
 
 export function requestApprovalGate(input: RequestApprovalGateInput, db?: Database): ApprovalGate {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const existing = currentGate(input.task_id, input.gate, d);
   if (existing && existing.status !== "pending") {
     throw new Error(`Approval gate ${input.gate} is already ${existing.status}`);
@@ -194,7 +194,7 @@ export function requestApprovalGate(input: RequestApprovalGateInput, db?: Databa
 }
 
 export function approveApprovalGate(input: DecideApprovalGateInput, db?: Database): ApprovalGate {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const existing = currentGate(input.task_id, input.gate, d);
   if (!existing) throw new Error(`Approval gate not found: ${input.gate}`);
   if (existing.status !== "pending") throw new Error(`Approval gate ${input.gate} is already ${existing.status}`);
@@ -214,7 +214,7 @@ export function approveApprovalGate(input: DecideApprovalGateInput, db?: Databas
 }
 
 export function rejectApprovalGate(input: DecideApprovalGateInput, db?: Database): ApprovalGate {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const existing = currentGate(input.task_id, input.gate, d);
   if (!existing) throw new Error(`Approval gate not found: ${input.gate}`);
   if (existing.status !== "pending") throw new Error(`Approval gate ${input.gate} is already ${existing.status}`);
@@ -233,7 +233,7 @@ export function rejectApprovalGate(input: DecideApprovalGateInput, db?: Database
 }
 
 export function expireApprovalGate(input: DecideApprovalGateInput, db?: Database): ApprovalGate {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const existing = currentGate(input.task_id, input.gate, d);
   if (!existing) throw new Error(`Approval gate not found: ${input.gate}`);
   if (existing.status !== "pending") throw new Error(`Approval gate ${input.gate} is already ${existing.status}`);
@@ -252,7 +252,7 @@ export function expireApprovalGate(input: DecideApprovalGateInput, db?: Database
 }
 
 export function listApprovalGates(taskId: string, db?: Database): ApprovalGate[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   ensureTask(taskId, d);
   return getTaskCheckpoints(taskId, d)
     .filter((checkpoint) => checkpoint.data["approval_gate"] === true || checkpoint.step.startsWith("approval:"))
@@ -260,7 +260,7 @@ export function listApprovalGates(taskId: string, db?: Database): ApprovalGate[]
 }
 
 export function checkApprovalGate(taskId: string, gateName: string, db?: Database): CheckApprovalGateResult {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   ensureTask(taskId, d);
   const gate = currentGate(taskId, gateName, d);
   const reasons: string[] = [];

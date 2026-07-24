@@ -44,7 +44,7 @@ function resolveTemplateId(id: string, d: Database): string | null {
 }
 
 export function createTemplate(input: CreateTemplateInput, db?: Database): TaskTemplate {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const id = uuid();
   const machineId = currentStorageMachineId(d);
   d.run(
@@ -65,7 +65,7 @@ export function createTemplate(input: CreateTemplateInput, db?: Database): TaskT
 }
 
 export function getTemplate(id: string, db?: Database): TaskTemplate | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const resolved = resolveTemplateId(id, d);
   if (!resolved) return null;
   const row = d.query("SELECT * FROM task_templates WHERE id = ?").get(resolved);
@@ -73,12 +73,12 @@ export function getTemplate(id: string, db?: Database): TaskTemplate | null {
 }
 
 export function listTemplates(db?: Database): TaskTemplate[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   return (d.query("SELECT * FROM task_templates ORDER BY name").all()).map(rowToTemplate);
 }
 
 export function deleteTemplate(id: string, db?: Database): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const resolved = resolveTemplateId(id, d);
   if (!resolved) return false;
   const template = getTemplate(resolved, d);
@@ -94,7 +94,7 @@ export function deleteTemplate(id: string, db?: Database): boolean {
 }
 
 export function updateTemplate(id: string, updates: UpdateTemplateInput, db?: Database): TaskTemplate | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const resolved = resolveTemplateId(id, d);
   if (!resolved) return null;
 
@@ -160,7 +160,7 @@ export function taskFromTemplate(templateId: string, overrides: Partial<CreateTa
 
 /** Add tasks to a template, replacing any existing template tasks */
 export function addTemplateTasks(templateId: string, tasks: TemplateTaskInput[], db?: Database): TemplateTask[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
 
   // Verify template exists
   const template = getTemplate(templateId, d);
@@ -201,7 +201,7 @@ export function addTemplateTasks(templateId: string, tasks: TemplateTaskInput[],
 
 /** Get a template with all its associated tasks, ordered by position */
 export function getTemplateWithTasks(id: string, db?: Database): TemplateWithTasks | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const template = getTemplate(id, d);
   if (!template) return null;
 
@@ -213,7 +213,7 @@ export function getTemplateWithTasks(id: string, db?: Database): TemplateWithTas
 
 /** Get just the template tasks for a given template ID */
 export function getTemplateTasks(templateId: string, db?: Database): TemplateTask[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const resolved = resolveTemplateId(templateId, d);
   if (!resolved) return [];
   const rows = d.query("SELECT * FROM template_tasks WHERE template_id = ? ORDER BY position").all(resolved) as any[];
@@ -299,7 +299,7 @@ export interface TemplateExport {
 
 /** Export a template as a full JSON-serializable object */
 export function exportTemplate(id: string, db?: Database): TemplateExport {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const template = getTemplateWithTasks(id, d);
   if (!template) throw new Error(`Template not found: ${id}`);
 
@@ -330,7 +330,7 @@ export function exportTemplate(id: string, db?: Database): TemplateExport {
 
 /** Import a template from a JSON object, generating new IDs */
 export function importTemplate(json: TemplateExport, db?: Database): TaskTemplate {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
 
   const taskInputs: TemplateTaskInput[] = (json.tasks || []).map(t => ({
     title_pattern: t.title_pattern,
@@ -362,7 +362,7 @@ export function importTemplate(json: TemplateExport, db?: Database): TaskTemplat
 
 /** Get a specific version of a template */
 export function getTemplateVersion(id: string, version: number, db?: Database): TemplateVersion | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const resolved = resolveTemplateId(id, d);
   if (!resolved) return null;
   const row = d.query(
@@ -373,7 +373,7 @@ export function getTemplateVersion(id: string, version: number, db?: Database): 
 
 /** List all versions of a template */
 export function listTemplateVersions(id: string, db?: Database): TemplateVersion[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const resolved = resolveTemplateId(id, d);
   if (!resolved) return [];
   return d.query(
@@ -436,7 +436,7 @@ export function tasksFromTemplate(
   db?: Database,
   _visitedTemplateIds?: Set<string>,
 ): Task[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const template = getTemplateWithTasks(templateId, d);
   if (!template) throw new Error(`Template not found: ${templateId}`);
 
@@ -552,7 +552,7 @@ export function previewTemplate(
   variables?: Record<string, string>,
   db?: Database,
 ): TemplatePreview {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const template = getTemplateWithTasks(templateId, d);
   if (!template) throw new Error(`Template not found: ${templateId}`);
 

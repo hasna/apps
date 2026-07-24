@@ -68,7 +68,7 @@ export interface MaterializePlanInput {
 
 
 export function resolvePlanRef(planRef: string, db?: Database): string | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const byId = getPlan(planRef, d);
   if (byId) return byId.id;
   const normalized = planRef.toLowerCase();
@@ -95,7 +95,7 @@ function getExecutionMode(planId: string, db: Database): PlanExecutionMode {
 }
 
 export function attachPlanToProject(input: AttachPlanInput, db?: Database): PlanExecutionManifest {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const plan = getPlan(input.plan_id, d);
   if (!plan) throw new Error(`Plan not found: ${input.plan_id}`);
 
@@ -143,7 +143,7 @@ export function attachPlanToProject(input: AttachPlanInput, db?: Database): Plan
 }
 
 export function materializePlanSteps(input: MaterializePlanInput, db?: Database): PlanExecutionManifest {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const plan = getPlan(input.plan_id, d);
   if (!plan) throw new Error(`Plan not found: ${input.plan_id}`);
   if (input.steps.length === 0) throw new Error("At least one plan step is required");
@@ -193,7 +193,7 @@ export function materializePlanSteps(input: MaterializePlanInput, db?: Database)
 }
 
 export function getPlanExecutionState(planRef: string, db?: Database): PlanExecutionState | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const planId = resolvePlanRef(planRef, d);
   if (!planId) return null;
 
@@ -236,7 +236,7 @@ export function getPlanExecutionState(planRef: string, db?: Database): PlanExecu
 }
 
 export function claimPlanStep(planRef: string, agentId: string, db?: Database): Task | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const planId = resolvePlanRef(planRef, d);
   if (!planId) return null;
 
@@ -272,7 +272,7 @@ export function createPlanWithSteps(
   opts: { project_id?: string; execution_mode?: PlanExecutionMode; agent_id?: string } = {},
   db?: Database,
 ): PlanExecutionManifest {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const plan = createPlan({
     name,
     project_id: opts.project_id,

@@ -45,6 +45,10 @@ export type ReleaseProvenance = {
   gitCommit?: string;
   gitTree?: string;
   sourceTreeSha256?: string;
+  candidateBaseRef?: string;
+  candidateDigest?: string;
+  trackedBinaryDiffSha256?: string;
+  untrackedPathSetSha256?: string;
   generatedAt?: string;
 };
 
@@ -70,6 +74,10 @@ export type TrackedWorktreeProof = {
   actualMode: string | null;
   actualObject: string | null;
 };
+
+export type ReleaseCandidateIdentity = Required<Pick<ReleaseProvenance,
+  "candidateBaseRef" | "candidateDigest" | "trackedBinaryDiffSha256" | "untrackedPathSetSha256"
+>>;
 
 export type InstallSmokeCommand = {
   command: string;
@@ -126,11 +134,10 @@ const FORBIDDEN_TEXT_PATTERNS: RegExp[] = [
   new RegExp(`platform${"-"}todos`, "i"),
 ];
 
-const SECRET_PATTERNS: RegExp[] = [
-  /AKIA[0-9A-Z]{16}/,
-  /ASIA[0-9A-Z]{16}/,
-  /-----BEGIN (RSA |EC |OPENSSH |)PRIVATE KEY-----/,
-  /\b[A-Za-z0-9_]*(?:API_KEY|SECRET|TOKEN|PASSWORD)[A-Za-z0-9_]*\s*=\s*['"][^'"\r\n]{12,}/,
+const PRODUCER_ABSOLUTE_PATH_PATTERNS: RegExp[] = [
+  /\/home\/[^/\s"']+\/\.hasna\/repos\/worktrees\//,
+  /\/Users\/[^/\s"']+\//,
+  /[A-Za-z]:\\Users\\[^\\\s"']+\\/i,
 ];
 
 const INSTALL_SMOKE_COMMANDS: InstallSmokeCommand[] = [
@@ -215,17 +222,40 @@ export function validateSdkPackageMetadata(packageJson: PackageJson): ReleaseGat
   return failures;
 }
 
-export function validatePublicTextSurfaces(files: TextFile[]): ReleaseGateFailure[] {
+function validateFileContents(
+  files: TextFile[],
+  includeLowConfidenceSecretPatterns: boolean,
+): ReleaseGateFailure[] {
   const failures: ReleaseGateFailure[] = [];
   for (const file of files) {
+    for (const pattern of PRODUCER_ABSOLUTE_PATH_PATTERNS) {
+      addIf(failures, pattern.test(file.text), "producer-path", `${file.path} contains a build-machine absolute path`);
+    }
     for (const pattern of FORBIDDEN_TEXT_PATTERNS) {
       addIf(failures, pattern.test(file.text), "public-text-boundary", `${file.path} matches forbidden pattern ${pattern}`);
     }
-    for (const pattern of SECRET_PATTERNS) {
-      addIf(failures, pattern.test(file.text), "secret-scan", `${file.path} looks like it contains a secret`);
+    const secretScan = scanTextForSecrets(file.text);
+    for (const match of secretScan.matches) {
+      if (!includeLowConfidenceSecretPatterns && isLowConfidenceSecretPattern(match.pattern)) continue;
+      failures.push({
+        check: "secret-scan",
+        message: `${file.path}:${match.line} credential category ${match.pattern}`,
+      });
     }
   }
 
+  return failures;
+}
+
+export function validatePublicFileContents(files: TextFile[]): ReleaseGateFailure[] {
+  return validateFileContents(files, true);
+}
+
+export function validatePackedFileContents(files: TextFile[]): ReleaseGateFailure[] {
+  return validateFileContents(files, false);
+}
+
+function validateReadmeInstall(files: TextFile[], failures: ReleaseGateFailure[]): void {
   const readme = files.find((file) => file.path === "README.md" || file.path.endsWith("/README.md"))?.text ?? "";
   addIf(
     failures,
@@ -233,7 +263,17 @@ export function validatePublicTextSurfaces(files: TextFile[]): ReleaseGateFailur
     "readme-install",
     "README.md must document bun install -g @hasna/todos",
   );
+}
 
+export function validatePublicTextSurfaces(files: TextFile[]): ReleaseGateFailure[] {
+  const failures = validatePublicFileContents(files);
+  validateReadmeInstall(files, failures);
+  return failures;
+}
+
+export function validatePackedTextSurfaces(files: TextFile[]): ReleaseGateFailure[] {
+  const failures = validatePackedFileContents(files);
+  validateReadmeInstall(files, failures);
   return failures;
 }
 
@@ -328,9 +368,17 @@ export function validatePackedProvenanceMetadata(
 export function validateReleaseProvenanceMetadata(
   provenance: ReleaseProvenance,
   packageJson: PackageJson,
-  expectedSource?: ReleaseSourceIdentity,
+  expectedIdentity?: ReleaseSourceIdentity | ReleaseCandidateIdentity,
+  expectedCandidateIdentity?: ReleaseCandidateIdentity,
 ): ReleaseGateFailure[] {
   const failures: ReleaseGateFailure[] = [];
+  const expectedSource = expectedIdentity && "gitTree" in expectedIdentity
+    ? expectedIdentity as ReleaseSourceIdentity
+    : undefined;
+  const expectedCandidate = expectedCandidateIdentity
+    ?? (expectedIdentity && "candidateDigest" in expectedIdentity
+      ? expectedIdentity as ReleaseCandidateIdentity
+      : undefined);
   addIf(
     failures,
     provenance.packageName !== PACKAGE_NAME,
@@ -367,6 +415,45 @@ export function validateReleaseProvenanceMetadata(
     "provenance-source-hash",
     "release provenance sourceTreeSha256 must be a 64-character SHA-256 digest",
   );
+  addIf(
+    failures,
+    !provenance.candidateBaseRef || !/^[0-9a-f]{40}$/i.test(provenance.candidateBaseRef),
+    "provenance-candidate-base",
+    "release provenance candidateBaseRef must be a 40-character commit SHA",
+  );
+  addIf(
+    failures,
+    !provenance.candidateDigest || !/^[0-9a-f]{64}$/i.test(provenance.candidateDigest),
+    "provenance-candidate-digest",
+    "release provenance candidateDigest must bind the canonical dirty and untracked candidate bytes",
+  );
+  addIf(
+    failures,
+    !provenance.trackedBinaryDiffSha256 || !/^[0-9a-f]{64}$/i.test(provenance.trackedBinaryDiffSha256),
+    "provenance-tracked-diff",
+    "release provenance trackedBinaryDiffSha256 must be a SHA-256 digest",
+  );
+  addIf(
+    failures,
+    !provenance.untrackedPathSetSha256 || !/^[0-9a-f]{64}$/i.test(provenance.untrackedPathSetSha256),
+    "provenance-untracked-paths",
+    "release provenance untrackedPathSetSha256 must be a SHA-256 digest",
+  );
+  if (expectedCandidate) {
+    for (const key of [
+      "candidateBaseRef",
+      "candidateDigest",
+      "trackedBinaryDiffSha256",
+      "untrackedPathSetSha256",
+    ] as const) {
+      addIf(
+        failures,
+        provenance[key] !== expectedCandidate[key],
+        `provenance-${key}`,
+        `release provenance ${key} does not match the current candidate bytes`,
+      );
+    }
+  }
   addIf(
     failures,
     !provenance.generatedAt || Number.isNaN(Date.parse(provenance.generatedAt)),
@@ -644,6 +731,9 @@ export function validateReleaseArtifactIntegrity(
 
 export function validateNpmView(packageName: string, rawJson: string): ReleaseGateFailure[] {
   const failures: ReleaseGateFailure[] = [];
+  if (Buffer.byteLength(rawJson) > 4 * 1024 * 1024) {
+    return [{ check: "npm-view", message: "npm view JSON exceeds the structured-input limit" }];
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(rawJson);
@@ -727,3 +817,4 @@ function wordPattern(word: string): RegExp {
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+import { isLowConfidenceSecretPattern, scanTextForSecrets } from "./secret-redaction.js";

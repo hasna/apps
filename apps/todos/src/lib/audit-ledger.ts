@@ -238,7 +238,7 @@ function toLedgerEntries(rows: RawLedgerRow[]): LocalAuditLedgerEntry[] {
 }
 
 export function getLocalAuditLedger(input: LocalAuditLedgerInput = {}, db?: Database): LocalAuditLedger {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const scope = resolveScope(input, d);
   const rows = runScopedRows(d, {
     project_id: scope.project_id ?? undefined,

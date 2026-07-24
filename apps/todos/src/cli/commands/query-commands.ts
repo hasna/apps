@@ -58,7 +58,17 @@ import {
 } from "../../lib/workflow-states.js";
 import { createLocalReport, renderLocalReportMarkdown } from "../../lib/local-reports.js";
 import type { BoardLane, BoardScope, CalendarEventKind, TaskPriority } from "../../types/index.js";
-import { autoProject, handleError, output, formatTaskLine, resolveTaskId, resolveExplicitProject } from "../helpers.js";
+import {
+  autoProject,
+  handleError,
+  output,
+  formatTaskLine,
+  resolveTaskId,
+  resolveExplicitProject,
+  parseOptionalPositiveSafeInteger,
+  parsePositiveSafeInteger,
+  parsePositiveSafeIntegerOr,
+} from "../helpers.js";
 import {
   getTodosCloudClient,
   cloudGetStats,
@@ -200,11 +210,9 @@ function parseBoardLane(value: string, position: number): BoardLane {
     process.exit(1);
   }
   const name = labelPart.trim();
-  const wipLimit = limitRaw === undefined || limitRaw === "" ? null : parseInt(limitRaw, 10);
-  if (wipLimit !== null && (!Number.isFinite(wipLimit) || wipLimit < 1)) {
-    console.error(chalk.red("lane WIP limit must be a positive integer"));
-    process.exit(1);
-  }
+  const wipLimit = limitRaw === undefined || limitRaw === ""
+    ? null
+    : parsePositiveSafeInteger(limitRaw, "lane WIP limit");
   return {
     id: name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || `lane-${position + 1}`,
     name,
@@ -259,7 +267,7 @@ export function registerQueryCommands(program: Command) {
       const report = resolveMentions({
         mentions,
         workspace: opts.workspace || globalOpts.project || process.cwd(),
-        max_symbol_matches: Number.parseInt(opts.maxSymbolMatches || "20", 10),
+        max_symbol_matches: parsePositiveSafeIntegerOr(opts.maxSymbolMatches, 20, "--max-symbol-matches"),
       });
       if (opts.json || globalOpts.json) {
         output(report, true);
@@ -350,7 +358,7 @@ export function registerQueryCommands(program: Command) {
         if (pid) filters.project_id = pid;
       }
       const task = opts.stealStale
-        ? (await import("../../db/tasks.js")).claimOrSteal(agent, { ...filters, stale_minutes: parseInt(opts.staleMinutes, 10) }, db)?.task ?? null
+        ? (await import("../../db/tasks.js")).claimOrSteal(agent, { ...filters, stale_minutes: parsePositiveSafeInteger(opts.staleMinutes, "--stale-minutes") }, db)?.task ?? null
         : claimNextTask(agent, Object.keys(filters).length ? filters : undefined, db);
       if (!task) {
         if (json) { console.log(JSON.stringify(null)); return; }
@@ -370,7 +378,7 @@ export function registerQueryCommands(program: Command) {
     .action(async (agent, opts) => {
       const globalOpts = program.opts();
       const { stealTask } = await import("../../db/tasks.js");
-      const task = stealTask(agent, { stale_minutes: parseInt(opts.staleMinutes, 10), project_id: opts.project });
+      const task = stealTask(agent, { stale_minutes: parsePositiveSafeInteger(opts.staleMinutes, "--stale-minutes"), project_id: opts.project });
       if (!task) { console.log(chalk.dim("No stale tasks available to steal.")); return; }
       if (globalOpts.json) { output(task, true); return; }
       console.log(chalk.green(`Stolen: ${task.short_id || task.id.slice(0, 8)} | ${task.priority} | ${task.title}`));
@@ -461,8 +469,8 @@ export function registerQueryCommands(program: Command) {
       const globalOpts = program.opts();
       const cloud = getTodosCloudClient();
       const recap = cloud
-        ? await cloudRecap(cloud, parseInt(opts.hours, 10), opts.project)
-        : getRecap(parseInt(opts.hours, 10), opts.project);
+        ? await cloudRecap(cloud, parsePositiveSafeInteger(opts.hours, "--hours"), opts.project)
+        : getRecap(parsePositiveSafeInteger(opts.hours, "--hours"), opts.project);
       if (globalOpts.json) { output(recap, true); return; }
 
       console.log(chalk.bold(`\nRecap — last ${recap.hours} hours (since ${new Date(recap.since).toLocaleString()})\n`));
@@ -639,8 +647,8 @@ export function registerQueryCommands(program: Command) {
       if (opts.project) filters.project_id = opts.project;
       const cloud = getTodosCloudClient();
       const tasks = cloud
-        ? await cloudStaleTasks(cloud, parseInt(opts.minutes, 10), Object.keys(filters).length ? (filters as never) : {})
-        : getStaleTasks(parseInt(opts.minutes, 10), Object.keys(filters).length ? filters : undefined, db);
+        ? await cloudStaleTasks(cloud, parsePositiveSafeInteger(opts.minutes, "--minutes"), Object.keys(filters).length ? (filters as never) : {})
+        : getStaleTasks(parsePositiveSafeInteger(opts.minutes, "--minutes"), Object.keys(filters).length ? filters : undefined, db);
       if (json) { console.log(JSON.stringify(tasks, null, 2)); return; }
       if (tasks.length === 0) { console.log(chalk.dim("No stale tasks.")); return; }
       console.log(chalk.bold(`Stale tasks (${tasks.length}):`));
@@ -664,9 +672,9 @@ export function registerQueryCommands(program: Command) {
       const db = getDatabase();
       const projectId = opts.project ? resolvePartialId(db, "projects", opts.project) ?? opts.project : autoProject(globalOpts) ?? undefined;
       const result = redistributeStaleTasks(agent, {
-        max_age_minutes: parseInt(opts.maxAge, 10),
+        max_age_minutes: parsePositiveSafeInteger(opts.maxAge, "--max-age"),
         project_id: projectId,
-        limit: opts.limit ? parseInt(opts.limit, 10) : undefined,
+        limit: parseOptionalPositiveSafeInteger(opts.limit, "--limit"),
       }, db);
       if (opts.json || globalOpts.json) { console.log(JSON.stringify(result, null, 2)); return; }
       console.log(chalk.bold(`Released ${result.released.length} stale task(s).`));
@@ -784,7 +792,7 @@ export function registerQueryCommands(program: Command) {
     .action(async (opts) => {
       const globalOpts = program.opts();
       const db = getDatabase();
-      const days = parseInt(opts.days, 10);
+      const days = parsePositiveSafeInteger(opts.days, "--days");
       const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
       const projectId = opts.project || autoProject(globalOpts);
 
@@ -933,7 +941,7 @@ export function registerQueryCommands(program: Command) {
     .option("--project <id>", "Scope to a single project (id, slug, or path)")
     .option("--tag <tag>", "Scope to tasks carrying this tag")
     .option("--status <statuses>", "Comma-separated statuses to inspect (default: pending,in_progress)")
-    .option("--shard <index/total>", "Deterministic project-stable shard, e.g. 0/6")
+    .option("--shard <index/total>", "Deterministic project-stable one-based shard, e.g. 1/6")
     .option("--include-archived", "Include archived tasks")
     .option("--no-verify-project-root", "Skip machine-local project-root existence checks")
     .option("--limit <n>", "Cap the number of tasks inspected")
@@ -965,10 +973,11 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
       let shardTotal: number | undefined;
       if (opts.shard) {
         const m = /^(\d+)\/(\d+)$/.exec(String(opts.shard).trim());
-        if (!m) { console.error(chalk.red("--shard must be <index>/<total>, e.g. 0/6")); process.exit(2); }
-        shardIndex = parseInt(m[1]!, 10);
-        shardTotal = parseInt(m[2]!, 10);
-        if (shardTotal < 1 || shardIndex >= shardTotal) { console.error(chalk.red("--shard: index must be < total and total >= 1")); process.exit(2); }
+        if (!m) { console.error(chalk.red("--shard must be <index>/<total>, e.g. 1/6")); process.exit(2); }
+        const oneBasedShardIndex = parsePositiveSafeInteger(m[1]!, "--shard index");
+        shardTotal = parsePositiveSafeInteger(m[2]!, "--shard total");
+        if (oneBasedShardIndex > shardTotal) { console.error(chalk.red("--shard: index must be <= total")); process.exit(2); }
+        shardIndex = oneBasedShardIndex - 1;
       }
 
       let statuses: string[] | undefined;
@@ -989,8 +998,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
 
       let limit: number | undefined;
       if (opts.limit !== undefined) {
-        limit = parseInt(opts.limit, 10);
-        if (!Number.isFinite(limit) || limit < 1) { console.error(chalk.red("--limit must be a positive integer")); process.exit(2); }
+        limit = parsePositiveSafeInteger(opts.limit, "--limit");
       }
 
       const result = runRoutingDoctor({
@@ -1162,7 +1170,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .action(async (opts) => {
       const globalOpts = program.opts();
       const db = getDatabase();
-      const days = parseInt(opts.days, 10);
+      const days = parsePositiveSafeInteger(opts.days, "--days");
       const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
       const projectId = opts.project || autoProject(globalOpts);
 
@@ -1434,7 +1442,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
       const escalations = (cloud
         ? await cloudEscalatedTasks(cloud, { project_id: projectId, agent_id: opts.agent })
         : getEscalatedTasks({ project_id: projectId, agent_id: opts.agent })
-      ).slice(0, parseInt(opts.limit, 10));
+      ).slice(0, parsePositiveSafeInteger(opts.limit, "--limit"));
       if (opts.json || globalOpts.json) {
         console.log(JSON.stringify(escalations));
         return;
@@ -1519,7 +1527,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
       const db = getDatabase();
       const cloud = getTodosCloudClient();
       const { getRecentActivity } = await import("../../db/audit.js");
-      const numDays = parseInt(opts.days, 10);
+      const numDays = parsePositiveSafeInteger(opts.days, "--days");
       const entries: any[] = cloud ? await cloudRecentActivity(cloud, 5000) : getRecentActivity(5000, db);
       const now = new Date();
       const dayStats: { date: string; completed: number; created: number; failed: number }[] = [];
@@ -1568,8 +1576,8 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
       const cloud = getTodosCloudClient();
       const { getRecentActivity } = await import("../../db/audit.js");
       const entries: any[] = cloud
-        ? await cloudRecentActivity(cloud, parseInt(opts.limit, 10))
-        : getRecentActivity(parseInt(opts.limit, 10), db);
+        ? await cloudRecentActivity(cloud, parsePositiveSafeInteger(opts.limit, "--limit"))
+        : getRecentActivity(parsePositiveSafeInteger(opts.limit, "--limit"), db);
       if (opts.json || globalOpts.json) {
         console.log(JSON.stringify(entries));
         return;
@@ -1615,7 +1623,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .option("--since <iso>", "Only include entries at or after this ISO timestamp")
     .option("--until <iso>", "Only include entries at or before this ISO timestamp")
     .option("--limit <n>", "Number of entries", "50")
-    .option("--offset <n>", "Entries to skip", "0")
+    .option("--offset <n>", "Entries to skip; omitted starts at the first entry")
     .option("--order <order>", "Sort order: asc or desc", "desc")
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
@@ -1625,8 +1633,8 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
         const cloudOptions = {
           since: opts.since,
           until: opts.until,
-          limit: parseInt(opts.limit, 10),
-          offset: parseInt(opts.offset, 10),
+          limit: parsePositiveSafeInteger(opts.limit, "--limit"),
+          offset: opts.offset === undefined ? 0 : parsePositiveSafeInteger(opts.offset, "--offset"),
           order: (opts.order === "asc" ? "asc" : "desc") as "asc" | "desc",
           ...(opts.task ? { entity_type: "task" as const, entity_id: opts.task } : {}),
           ...(opts.project ? { entity_type: "project" as const, entity_id: opts.project } : {}),
@@ -1658,8 +1666,8 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
       const options: Parameters<typeof getLocalActivityTimeline>[0] = {
         since: opts.since,
         until: opts.until,
-        limit: parseInt(opts.limit, 10),
-        offset: parseInt(opts.offset, 10),
+        limit: parsePositiveSafeInteger(opts.limit, "--limit"),
+        offset: opts.offset === undefined ? 0 : parsePositiveSafeInteger(opts.offset, "--offset"),
         order: opts.order === "asc" ? "asc" : "desc",
       };
       if (opts.task) {
@@ -1723,7 +1731,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
           sourceStores,
           include,
           exclude,
-          limit: parseInt(opts.limit, 10),
+          limit: parsePositiveSafeInteger(opts.limit, "--limit"),
         });
         if (opts.json || globalOpts.json) {
           console.log(JSON.stringify(result));
@@ -1767,7 +1775,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
           return getBlockingDeps(t.id, db).length === 0;
         });
       }
-      const limited = ready.slice(0, parseInt(opts.limit, 10));
+      const limited = ready.slice(0, parsePositiveSafeInteger(opts.limit, "--limit"));
       if (opts.json || globalOpts.json) {
         if (cloud) {
           console.log(JSON.stringify(limited));
@@ -1903,7 +1911,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
           agent_id: opts.agent || globalOpts.agent || undefined,
           since: opts.since,
           until: opts.until,
-          limit: Number(opts.limit),
+          limit: parsePositiveSafeInteger(opts.limit, "--limit"),
         });
         if (opts.json || globalOpts.json || opts.format === "json") {
           output(report, true);
@@ -1997,7 +2005,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
             project_id: projectId,
             recovered_by: globalOpts.agent || actor,
             reason: opts.reason,
-            limit: parseInt(opts.limit, 10),
+            limit: parsePositiveSafeInteger(opts.limit, "--limit"),
           }, db);
           if (opts.json || globalOpts.json) { console.log(JSON.stringify(handoff)); return; }
           console.log(chalk.green(`  ✓ Recovery handoff created for ${actor}`));
@@ -2029,7 +2037,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
           project_id: projectId,
           agent_id: opts.agent && !opts.unreadFor ? opts.agent : undefined,
           unread_for: opts.unreadFor,
-          limit: parseInt(opts.limit, 10),
+          limit: parsePositiveSafeInteger(opts.limit, "--limit"),
         }, db);
         if (opts.json || globalOpts.json) { console.log(JSON.stringify(handoffs)); return; }
         if (handoffs.length === 0) { console.log(chalk.dim("  No handoffs yet.")); return; }
@@ -2235,19 +2243,19 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
         agent_id: globalOpts.agent,
         profile: opts.profile,
         run_id: opts.run,
-        comment_limit: Number(opts.comments),
-        file_limit: Number(opts.files),
-        verification_limit: Number(opts.verifications),
-        run_limit: Number(opts.runs),
-        dependency_limit: Number(opts.dependencies),
-        plan_task_limit: Number(opts.planTasks),
-        max_text_chars: Number(opts.maxText),
-        summary_char_limit: Number(opts.summaryChars),
-        token_budget: opts.tokenBudget ? Number(opts.tokenBudget) : undefined,
+        comment_limit: parsePositiveSafeInteger(opts.comments, "--comments"),
+        file_limit: parsePositiveSafeInteger(opts.files, "--files"),
+        verification_limit: parsePositiveSafeInteger(opts.verifications, "--verifications"),
+        run_limit: parsePositiveSafeInteger(opts.runs, "--runs"),
+        dependency_limit: parsePositiveSafeInteger(opts.dependencies, "--dependencies"),
+        plan_task_limit: parsePositiveSafeInteger(opts.planTasks, "--plan-tasks"),
+        max_text_chars: parsePositiveSafeInteger(opts.maxText, "--max-text"),
+        summary_char_limit: parsePositiveSafeInteger(opts.summaryChars, "--summary-chars"),
+        token_budget: parseOptionalPositiveSafeInteger(opts.tokenBudget, "--token-budget"),
         include_sections: opts.include ? String(opts.include).split(",") : undefined,
         exclude_sections: opts.exclude ? String(opts.exclude).split(",") : undefined,
         compact: Boolean(opts.compact) || String(format).startsWith("compact-"),
-        stale_after_hours: Number(opts.staleAfterHours),
+        stale_after_hours: parsePositiveSafeInteger(opts.staleAfterHours, "--stale-after-hours"),
       });
       console.log(renderAgentContextPack(pack, format, Boolean(opts.compact)));
     });
@@ -2285,7 +2293,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
           include_runs: opts.runs,
           include_sla: opts.sla,
           include_local: opts.local,
-          limit: Number(opts.limit),
+          limit: parsePositiveSafeInteger(opts.limit, "--limit"),
         });
         if (opts.json || globalOpts.json) { output(events, true); return; }
         if (events.length === 0) { console.log(chalk.dim("No calendar events.")); return; }
@@ -2416,15 +2424,15 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
           project_id: resolveProjectOption(opts.project || globalOpts.project),
           agent_id: opts.agent || globalOpts.agent,
           now: opts.now,
-          due_within_minutes: Number(opts.dueWithinMinutes),
-          stale_minutes: Number(opts.staleMinutes),
+          due_within_minutes: parsePositiveSafeInteger(opts.dueWithinMinutes, "--due-within-minutes"),
+          stale_minutes: parsePositiveSafeInteger(opts.staleMinutes, "--stale-minutes"),
           run_since: opts.runSince,
           include_runs: opts.runs,
           include_calendar: opts.calendar,
           emit_hooks: Boolean(opts.emitHooks),
           evaluate_terminal: Boolean(opts.terminal),
           quiet_hours: parseQuietHoursOption(opts.quietHours, opts.quietTimezone),
-          limit: Number(opts.limit),
+          limit: parsePositiveSafeInteger(opts.limit, "--limit"),
         });
         if (opts.json || globalOpts.json) { output(result, true); return; }
         if (result.alerts.length === 0) {
@@ -2619,7 +2627,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
           task_id: resolveTaskId(taskId),
           run_id: resolveOptionalId("task_runs", opts.run),
           agent_id: opts.agent || globalOpts.agent,
-          minutes: Number(minutes),
+          minutes: parsePositiveSafeInteger(minutes, "minutes"),
           started_at: opts.startedAt,
           ended_at: opts.endedAt,
           notes: opts.notes,
@@ -2652,7 +2660,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
           agent_id: opts.agent || globalOpts.agent,
           title: opts.title,
           started_at: opts.startedAt,
-          idle_after_minutes: opts.idleAfter ? Number(opts.idleAfter) : undefined,
+          idle_after_minutes: parseOptionalPositiveSafeInteger(opts.idleAfter, "--idle-after"),
           notes: opts.notes,
         });
         if (opts.json || globalOpts.json) { output(session, true); return; }
@@ -2734,7 +2742,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
           agent_id: opts.agent,
           status: opts.status,
           include_completed: Boolean(opts.all),
-          limit: Number(opts.limit),
+          limit: parsePositiveSafeInteger(opts.limit, "--limit"),
         });
         if (opts.json || program.opts().json) { output(sessions, true); return; }
         if (sessions.length === 0) { console.log(chalk.dim("No focus sessions.")); return; }
@@ -2880,7 +2888,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
             parseJsonObjectOption(opts.custom, "--custom"),
             parseFieldPairs(opts.field),
           ),
-          limit: Number(opts.limit),
+          limit: parsePositiveSafeInteger(opts.limit, "--limit"),
         };
         const tasks = queryTasksByLocalFields(query);
         if (opts.json || globalOpts.json) { output({ tasks, count: tasks.length }, true); return; }
@@ -2952,7 +2960,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
           project_id: resolveProjectOption(opts.project),
           task_list_id: opts.taskList,
           project_path: opts.projectPath || globalOpts.project || process.cwd(),
-          limit: Number(opts.limit),
+          limit: parsePositiveSafeInteger(opts.limit, "--limit"),
         });
         if (opts.json || globalOpts.json) { output(result, true); return; }
         if (result.tasks.length === 0) {
@@ -2982,7 +2990,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
           project_id: resolveProjectOption(opts.project),
           task_list_id: opts.taskList,
           project_path: opts.projectPath || globalOpts.project || process.cwd(),
-          limit: Number(opts.limit),
+          limit: parsePositiveSafeInteger(opts.limit, "--limit"),
         });
         if (opts.json || globalOpts.json) { output(report, true); return; }
         console.log(`${report.applied ? "Migrated" : "Would migrate"} ${report.applied ? report.migrated_count : report.pending_count} tasks.`);
@@ -3007,7 +3015,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
       try {
         const candidates = findDuplicateTasks({
           threshold: Number(opts.threshold),
-          limit: Number(opts.limit),
+          limit: parsePositiveSafeInteger(opts.limit, "--limit"),
           include_archived: Boolean(opts.includeArchived),
         });
         if (opts.json || globalOpts.json) { output({ candidates, count: candidates.length }, true); return; }
@@ -3294,7 +3302,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .action(async (opts) => {
       const globalOpts = program.opts();
       const { listInboxItems } = await import("../../db/inbox.js");
-      const items = listInboxItems({ status: opts.status, source_type: opts.sourceType, limit: Number.parseInt(opts.limit, 10) });
+      const items = listInboxItems({ status: opts.status, source_type: opts.sourceType, limit: parsePositiveSafeInteger(opts.limit, "--limit") });
       if (opts.json || globalOpts.json) { output(items, true); return; }
       if (items.length === 0) {
         console.log(chalk.dim("No inbox items."));

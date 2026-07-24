@@ -1,5 +1,14 @@
 import type { TodosPostgresQueryClient, TodosPostgresQueryResult } from "./postgres-sync.js";
-import { getTodosStorageDatabaseUrl, type TodosStorageEnv } from "./config.js";
+import {
+  assertTodosLocalStorageRole,
+  getTodosStorageDatabaseUrl,
+  type TodosStorageEnv,
+} from "./config.js";
+import { assertTodosStageARemoteAccessFloor } from "./authority-floor.js";
+
+function assertStageARemoteClientAuthority(): void {
+  assertTodosStageARemoteAccessFloor();
+}
 
 /**
  * A live Postgres query client for the shadow mirror and divergence diagnostics.
@@ -54,6 +63,10 @@ export function createTodosCloudQueryClient(
   url: string,
   options: CreateTodosCloudQueryClientOptions = {},
 ): TodosCloudQueryClient {
+  // Stage A has no trusted hosted principal or tenant/project grants. This
+  // floor deliberately precedes URL/options reads and Bun.SQL construction.
+  assertStageARemoteClientAuthority();
+  assertTodosLocalStorageRole(process.env);
   const SQL = resolveBunSql();
   const sql = new SQL(url, {
     max: options.max ?? 2,
@@ -66,10 +79,12 @@ export function createTodosCloudQueryClient(
       text: string,
       values: readonly unknown[] = [],
     ): Promise<TodosPostgresQueryResult<T>> {
+      assertStageARemoteClientAuthority();
       const result = await sql.unsafe(text, values.length ? [...values] : []);
       return { rows: toRows<T>(result) };
     },
     async close(): Promise<void> {
+      assertStageARemoteClientAuthority();
       if (typeof sql.end === "function") await sql.end();
       else if (typeof sql.close === "function") await sql.close();
     },
@@ -85,7 +100,15 @@ export function createTodosCloudQueryClientFromEnv(
   env: TodosStorageEnv = process.env,
   options: CreateTodosCloudQueryClientOptions = {},
 ): TodosCloudQueryClient | null {
+  assertStageARemoteClientAuthority();
+  assertTodosLocalStorageRole(process.env);
+  assertTodosLocalStorageRole(env);
   const url = getTodosStorageDatabaseUrl(env);
   if (!url) return null;
   return createTodosCloudQueryClient(url, options);
 }
+/**
+ * Explicit low-level Postgres operator client. Stage-A product entrypoints must
+ * never select this constructor automatically; their containment is enforced at
+ * CLI/API/MCP/server/shadow boundaries and in the convenience storage factory.
+ */

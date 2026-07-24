@@ -8,14 +8,14 @@ import {
   listRetrospectives,
   renderRetrospectiveMarkdown,
 } from "../../db/retrospectives.js";
-import { handleError, output } from "../helpers.js";
+import { handleError, output, parseOptionalPositiveSafeInteger } from "../helpers.js";
 
 function commonFilters(opts: Record<string, any>) {
   return {
     project_id: opts.project,
     plan_id: opts.plan,
     agent_id: opts.agent,
-    limit: opts.limit ? Number.parseInt(opts.limit, 10) : undefined,
+    limit: parseOptionalPositiveSafeInteger(opts.limit, "--limit"),
   };
 }
 

@@ -58,7 +58,7 @@ export interface SaveSnapshotInput {
 }
 
 export function saveSnapshot(input: SaveSnapshotInput, db?: Database): ContextSnapshot {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const id = uuid();
   const timestamp = now();
   d.run(
@@ -81,7 +81,7 @@ export function saveSnapshot(input: SaveSnapshotInput, db?: Database): ContextSn
 }
 
 export function getLatestSnapshot(agentId?: string, taskId?: string, db?: Database): ContextSnapshot | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const conditions: string[] = [];
   const params: string[] = [];
   if (agentId) { conditions.push("agent_id = ?"); params.push(agentId); }
@@ -93,7 +93,7 @@ export function getLatestSnapshot(agentId?: string, taskId?: string, db?: Databa
 }
 
 export function listSnapshots(opts: { agent_id?: string; task_id?: string; project_id?: string; limit?: number }, db?: Database): ContextSnapshot[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const conditions: string[] = [];
   const params: any[] = [];
   if (opts.agent_id) { conditions.push("agent_id = ?"); params.push(opts.agent_id); }

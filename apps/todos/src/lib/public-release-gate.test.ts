@@ -146,6 +146,32 @@ describe("public release gate", () => {
     expect(publishedFailures.map((failure) => failure.check)).toContain("public-text-boundary");
   });
 
+  test("uses the centralized credential scanner without exposing source characters", () => {
+    const token = ["npm", "_", "SyntheticReleaseFixtureValue123456789012345"].join("");
+    const failures = validatePublicTextSurfaces([
+      { path: "README.md", text: `bun install -g @hasna/todos\n${token}` },
+    ]);
+    const scanFailure = failures.find((failure) => failure.check === "secret-scan");
+
+    expect(scanFailure).toBeDefined();
+    expect(scanFailure?.message).toContain("npm_token");
+    expect(scanFailure?.message).toMatch(/README\.md:\d+/);
+    expect(scanFailure?.message).not.toContain(token.slice(0, 12));
+  });
+
+  test("keeps generic credential assignments terminal on public source surfaces", () => {
+    const failures = validatePublicTextSurfaces([
+      {
+        path: "README.md",
+        text: "bun install -g @hasna/todos\napi_key = runtimeConfigurationValue\n",
+      },
+    ]);
+
+    expect(failures.some((failure) =>
+      failure.check === "secret-scan" && failure.message.includes("generic_credential_assignment")
+    )).toBe(true);
+  });
+
   test("checks generated npm package contents", () => {
     expect(
       validatePackedPackageFiles([
@@ -242,6 +268,10 @@ describe("public release gate", () => {
       gitCommit: "0123456789abcdef0123456789abcdef01234567",
       gitTree: "89abcdef0123456789abcdef0123456789abcdef",
       sourceTreeSha256: "a".repeat(64),
+      candidateBaseRef: "0123456789abcdef0123456789abcdef01234567",
+      candidateDigest: "a".repeat(64),
+      trackedBinaryDiffSha256: "b".repeat(64),
+      untrackedPathSetSha256: "c".repeat(64),
       generatedAt: "2026-05-21T00:00:00.000Z",
     }, rootPackage, {
       gitCommit: "0123456789abcdef0123456789abcdef01234567",
@@ -251,8 +281,11 @@ describe("public release gate", () => {
 
     expect(validateReleaseProvenanceMetadata({}, rootPackage).map((failure) => failure.check)).toContain("provenance-git-commit");
     expect(validatePackedProvenanceMetadata({ ...rootPackage, version: "0.11.40" }, rootPackage).map((failure) => failure.check)).toContain("packed-version");
+    expect(validateReleaseProvenanceMetadata({}, rootPackage).map((failure) => failure.check)).toContain("provenance-candidate-digest");
     expect(validateNpmView("@hasna/todos", JSON.stringify({ name: "@hasna/todos", version: "0.11.40" }))).toEqual([]);
     expect(validateNpmView("@hasna/todos", JSON.stringify({ name: "@scope/other" }))).not.toEqual([]);
+    expect(validateNpmView("@hasna/todos", `{"name":"@hasna/todos","padding":"${"x".repeat(4 * 1024 * 1024)}"}`))
+      .toEqual([{ check: "npm-view", message: "npm view JSON exceeds the structured-input limit" }]);
   });
 
   test("rejects dirty release inputs and mismatched artifact integrity", () => {
@@ -340,6 +373,35 @@ describe("public release gate", () => {
       const failures = scanExtractedPackedFiles([{ path: "dist/cli/index.js" }], root, jpeg);
       expect(failures.map((failure) => failure.check)).toContain("public-text-boundary");
       expect(failures.map((failure) => failure.check)).not.toContain("pack-read");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("records generic packed assignments as non-terminal while retaining high-confidence detection", () => {
+    const root = mkdtempSync(join(tmpdir(), "todos-packed-confidence-"));
+    try {
+      mkdirSync(join(root, "package", "dist"), { recursive: true });
+      writeFileSync(join(root, "package", "README.md"), "bun install -g @hasna/todos\n");
+      writeFileSync(join(root, "package", "dist", "index.js"), "api_key = runtimeConfigurationValue\n");
+      const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xdb, 0x00, 0xff, 0xd9]);
+      const packedFiles = [{ path: "README.md" }, { path: "dist/index.js" }];
+
+      expect(scanExtractedPackedFiles(packedFiles, root, jpeg)).toEqual([]);
+
+      const token = ["npm", "_", "SyntheticPackedConfidenceFixture1234567890"].join("");
+      writeFileSync(join(root, "package", "dist", "index.js"), `${token}\n`);
+      expect(scanExtractedPackedFiles(packedFiles, root, jpeg).some((failure) =>
+        failure.check === "secret-scan" && failure.message.includes("npm_token")
+      )).toBe(true);
+
+      writeFileSync(
+        join(root, "package", "dist", "index.js"),
+        "const generatedDefault = '/home/build/.hasna/repos/worktrees/todos-v2';\n",
+      );
+      expect(scanExtractedPackedFiles(packedFiles, root, jpeg).some((failure) =>
+        failure.check === "producer-path"
+      )).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -459,6 +521,10 @@ describe("public release gate", () => {
       gitCommit: "0".repeat(40),
       gitTree: "1".repeat(40),
       sourceTreeSha256: "2".repeat(64),
+      candidateBaseRef: "6".repeat(40),
+      candidateDigest: "7".repeat(64),
+      trackedBinaryDiffSha256: "8".repeat(64),
+      untrackedPathSetSha256: "9".repeat(64),
       generatedAt: "2026-07-18T00:00:00.000Z",
     };
     const failures = validateReleaseProvenanceMetadata(provenance, rootPackage, {

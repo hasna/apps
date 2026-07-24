@@ -7,11 +7,21 @@
 import { existsSync } from "fs";
 import { join, dirname, extname } from "path";
 import { fileURLToPath } from "url";
-import { getDatabase } from "../db/database.js";
-import { hasActiveApiKeys, verifyApiKey, safeEqualStrings } from "../db/api-keys.js";
 import type { Task } from "../types/index.js";
 import type { RouteContext, FilteredClient } from "./routes.js";
-import * as handlers from "./routes.js";
+import {
+  containHostedDatastoreSurface,
+  hostedReadinessResponse,
+} from "./hosted-authority.js";
+import {
+  assertTodosLocalStorageRole,
+  readStageADataProperty,
+  resolveTodosStorageRole,
+  snapshotTodosStorageEnvironment,
+  TodosHostedStorageUnavailableError,
+  type TodosStorageRoleResolution,
+} from "../storage/config.js";
+import { classifyTodosServerPostContainmentDispatch } from "./stage-a-dispatch.js";
 
 // Resolve the dashboard dist directory — check multiple locations
 function resolveDashboardDir(): string {
@@ -70,15 +80,25 @@ function getProvidedApiKey(req: Request): string | null {
 }
 
 /** Check API key auth — returns a Response if unauthorized, null if OK */
-function checkAuth(req: Request, apiKey: string | null): Response | null {
-  const generatedKeysEnabled = hasActiveApiKeys();
+interface ApiKeyDependencies {
+  hasActiveApiKeys(): boolean;
+  verifyApiKey(value: string): unknown;
+  safeEqualStrings(left: string, right: string): boolean;
+}
+
+function checkAuth(
+  req: Request,
+  apiKey: string | null,
+  dependencies: ApiKeyDependencies,
+): Response | null {
+  const generatedKeysEnabled = dependencies.hasActiveApiKeys();
   if (!apiKey && !generatedKeysEnabled) return null; // no key configured, skip auth
 
   const provided = getProvidedApiKey(req);
   // Constant-time compare for the static env/CLI key — avoids a timing oracle
   // that a plain `===` short-circuit would expose.
-  const matchesEnvKey = Boolean(apiKey && provided && safeEqualStrings(provided, apiKey));
-  const matchesGeneratedKey = Boolean(provided && verifyApiKey(provided));
+  const matchesEnvKey = Boolean(apiKey && provided && dependencies.safeEqualStrings(provided, apiKey));
+  const matchesGeneratedKey = Boolean(provided && dependencies.verifyApiKey(provided));
   if (!matchesEnvKey && !matchesGeneratedKey) {
     return new Response(JSON.stringify({ error: "Unauthorized" }), {
       status: 401,
@@ -88,10 +108,10 @@ function checkAuth(req: Request, apiKey: string | null): Response | null {
   return null;
 }
 
-/** Simple in-memory rate limiter — tracks requests per IP per window */
-const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+/** Simple in-memory rate limiter — tracks requests per IP per window. */
+type RateLimitMap = Map<string, { count: number; resetAt: number }>;
 const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
-const RATE_LIMIT_MAX = Number.parseInt(process.env["TODOS_RATE_LIMIT_MAX"] || "120", 10); // requests per window
+const DEFAULT_RATE_LIMIT_MAX = 120;
 
 /**
  * Resolve the rate-limit bucket key for a request.
@@ -104,11 +124,11 @@ const RATE_LIMIT_MAX = Number.parseInt(process.env["TODOS_RATE_LIMIT_MAX"] || "1
  * when the operator explicitly opts in via TODOS_TRUST_PROXY (i.e. the server
  * actually sits behind a trusted reverse proxy that sets them).
  */
-function resolveClientIp(
+export function resolveClientIp(
   req: Request,
   server: { requestIP(req: Request): { address: string } | null },
+  trustProxy: boolean,
 ): string {
-  const trustProxy = process.env["TODOS_TRUST_PROXY"] === "1" || process.env["TODOS_TRUST_PROXY"] === "true";
   if (trustProxy) {
     const forwarded = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
       || req.headers.get("x-real-ip")?.trim();
@@ -117,7 +137,11 @@ function resolveClientIp(
   return server.requestIP(req)?.address || "unknown";
 }
 
-function checkRateLimit(ip: string): { allowed: boolean; retryAfter?: number } {
+function checkRateLimit(
+  rateLimitMap: RateLimitMap,
+  ip: string,
+  max = DEFAULT_RATE_LIMIT_MAX,
+): { allowed: boolean; retryAfter?: number } {
   const now = Date.now();
   const entry = rateLimitMap.get(ip);
   if (!entry || now > entry.resetAt) {
@@ -125,7 +149,7 @@ function checkRateLimit(ip: string): { allowed: boolean; retryAfter?: number } {
     return { allowed: true };
   }
   entry.count++;
-  if (entry.count > RATE_LIMIT_MAX) {
+  if (entry.count > max) {
     return { allowed: false, retryAfter: Math.ceil((entry.resetAt - now) / 1000) };
   }
   return { allowed: true };
@@ -184,19 +208,147 @@ export function taskToSummary(task: Task, fields?: string[]) {
   return Object.fromEntries(fields.map(f => [f, (full as Record<string, unknown>)[f] ?? null]));
 }
 
-export async function startServer(port: number, options?: { open?: boolean; host?: string; apiKey?: string }): Promise<void> {
-  const shouldOpen = options?.open ?? true;
-  const apiKey = options?.apiKey || process.env.TODOS_API_KEY || null;
+export interface StartServerOptions {
+  open?: boolean;
+  host?: string;
+  apiKey?: string;
+  environment?: NodeJS.ProcessEnv;
+}
 
-  // Initialize database
-  const db = getDatabase();
+export interface ResolvedStartServerOptions {
+  shouldOpen: boolean;
+  hostname: string;
+  apiKey: string | null;
+  trustProxy: boolean;
+  environment: NodeJS.ProcessEnv;
+  storageRole: TodosStorageRoleResolution;
+}
 
-  // Durable dual-write shadow: capture triggers are installed at getDatabase();
-  // this long-running server also drains the outbox to cloud Postgres.
-  try {
-    const { startRuntimeShadowDrain } = await import("../storage/shadow-runtime.js");
-    startRuntimeShadowDrain(db);
-  } catch { /* shadow disabled or unavailable — local writes stay durable */ }
+function trustProxyFromEnvironment(environment: NodeJS.ProcessEnv): boolean {
+  const value = environment.TODOS_TRUST_PROXY?.trim().toLowerCase();
+  return value === "1" || value === "true";
+}
+
+/** Resolve process role before touching caller-owned options. */
+export function resolveStartServerOptions(
+  options?: StartServerOptions,
+): ResolvedStartServerOptions {
+  const processEnvironment = snapshotTodosStorageEnvironment(process.env);
+  const processRole = resolveTodosStorageRole(processEnvironment);
+  if (processRole.role !== "local") {
+    return Object.freeze({
+      shouldOpen: false,
+      hostname: "127.0.0.1",
+      apiKey: null,
+      trustProxy: trustProxyFromEnvironment(processEnvironment),
+      environment: processEnvironment,
+      storageRole: processRole,
+    });
+  }
+
+  if (!options) {
+    return Object.freeze({
+      shouldOpen: true,
+      hostname: "127.0.0.1",
+      apiKey: processEnvironment.TODOS_API_KEY || null,
+      trustProxy: trustProxyFromEnvironment(processEnvironment),
+      environment: processEnvironment,
+      storageRole: processRole,
+    });
+  }
+
+  const suppliedEnvironment = readStageADataProperty(options, "environment");
+  if (
+    suppliedEnvironment !== undefined &&
+    (suppliedEnvironment === null || typeof suppliedEnvironment !== "object")
+  ) {
+    throw new TodosHostedStorageUnavailableError("unreadable_options");
+  }
+  const environment = suppliedEnvironment === undefined
+    ? processEnvironment
+    : snapshotTodosStorageEnvironment(suppliedEnvironment);
+  const storageRole = resolveTodosStorageRole(environment);
+  if (storageRole.role !== "local") {
+    return Object.freeze({
+      shouldOpen: false,
+      hostname: "127.0.0.1",
+      apiKey: null,
+      trustProxy: trustProxyFromEnvironment(environment),
+      environment,
+      storageRole,
+    });
+  }
+
+  const open = readStageADataProperty(options, "open");
+  const host = readStageADataProperty(options, "host");
+  const explicitApiKey = readStageADataProperty(options, "apiKey");
+  if (open !== undefined && typeof open !== "boolean") {
+    throw new TodosHostedStorageUnavailableError("unreadable_options");
+  }
+  if (host !== undefined && typeof host !== "string") {
+    throw new TodosHostedStorageUnavailableError("unreadable_options");
+  }
+  if (explicitApiKey !== undefined && typeof explicitApiKey !== "string") {
+    throw new TodosHostedStorageUnavailableError("unreadable_options");
+  }
+  return Object.freeze({
+    shouldOpen: open ?? true,
+    hostname: host || "127.0.0.1",
+    apiKey: explicitApiKey || environment.TODOS_API_KEY || null,
+    trustProxy: trustProxyFromEnvironment(environment),
+    environment,
+    storageRole,
+  });
+}
+
+export async function startServer(port: number, options?: StartServerOptions): Promise<void> {
+  const {
+    shouldOpen,
+    hostname,
+    apiKey,
+    trustProxy,
+    environment,
+    storageRole: initialStorageRole,
+  } = resolveStartServerOptions(options);
+
+  // Process authority is the startup floor, including for callers that import
+  // this module directly. Hosted or invalid intent must reject before route or
+  // database imports, dashboard probing, listener setup, sockets, CORS/rate
+  // state, or Bun.serve. Because startServer is async, this remains a rejected
+  // Promise rather than a synchronous throw for public API compatibility.
+  if (initialStorageRole.role !== "local") {
+    throw new TodosHostedStorageUnavailableError(initialStorageRole.reason);
+  }
+
+  let handlers: typeof import("./routes.js") | null = null;
+  let apiKeyDependencies: ApiKeyDependencies | null = null;
+
+  // Local/self-hosted mode is explicit. A remote service must not initialize
+  // SQLite or its shadow drain before hosted authority is available.
+  if (initialStorageRole.role === "local") {
+    const [databaseModule, routesModule, apiKeyModule] = await Promise.all([
+      import("../db/database.js"),
+      import("./routes.js"),
+      import("../db/api-keys.js"),
+    ]);
+    handlers = routesModule;
+    apiKeyDependencies = apiKeyModule;
+    const { getDatabase } = databaseModule;
+    const db = getDatabase(undefined, environment);
+    try {
+      const { startRuntimeShadowDrain } = await import("../storage/shadow-runtime.js");
+      assertTodosLocalStorageRole(process.env);
+      assertTodosLocalStorageRole(environment);
+      startRuntimeShadowDrain(db, environment);
+    } catch (error) {
+      if (error instanceof TodosHostedStorageUnavailableError) throw error;
+      /* shadow disabled or unavailable — local writes stay durable */
+    }
+  }
+
+  // Per-listener mutable state is allocated only after local authority and the
+  // authorized dependency graph are established.
+  const rateLimitMap: RateLimitMap = new Map();
 
   // SSE event stream — clients subscribe to /api/events
   const sseClients = new Set<ReadableStreamDefaultController>();
@@ -226,10 +378,10 @@ export async function startServer(port: number, options?: { open?: boolean; host
     for (const client of deadFiltered) filteredSseClients.delete(client);
   }
 
-  const dashboardDir = resolveDashboardDir();
-  const dashboardExists = existsSync(dashboardDir);
+  const dashboardDir = initialStorageRole.role === "local" ? resolveDashboardDir() : "";
+  const dashboardExists = initialStorageRole.role === "local" && existsSync(dashboardDir);
 
-  if (!dashboardExists) {
+  if (initialStorageRole.role === "local" && !dashboardExists) {
     console.error(`\nDashboard not found at: ${dashboardDir}`);
     console.error(`Run this to build it:\n`);
     console.error(`  cd dashboard && bun install && bun run build\n`);
@@ -246,14 +398,32 @@ export async function startServer(port: number, options?: { open?: boolean; host
     apiKey,
   };
 
-  const hostname = options?.host || "127.0.0.1";
+  assertTodosLocalStorageRole(process.env);
+  assertTodosLocalStorageRole(environment);
   const server = Bun.serve({
     port,
     hostname,
     async fetch(req, server) {
+      // Unified authority floor: this is deliberately the first request action.
+      // It precedes URL/header/CORS parsing, rate history, dynamic imports,
+      // authentication, body reads, and every datastore dependency.
+      const hostedContainment = await containHostedDatastoreSurface(req, environment);
+      if (hostedContainment) return hostedContainment;
+
       const url = new URL(req.url);
       const path = url.pathname;
       const method = req.method;
+      const dispatchFamily = classifyTodosServerPostContainmentDispatch(method, path);
+
+      // Unknown sensitive paths and unsupported methods terminate before
+      // request headers, rate state, auth, transports, or datastore handlers.
+      if (dispatchFamily === "sensitive-not-found") {
+        return json({ error: "Not found", code: "ROUTE_NOT_FOUND" }, 404);
+      }
+      if (dispatchFamily === "sensitive-method-not-allowed") {
+        return json({ error: "method_not_allowed", code: "METHOD_NOT_ALLOWED" }, 405);
+      }
+
       const reqOrigin = req.headers.get("origin") || undefined;
       const corsHeaders = reqOrigin && (reqOrigin === `http://localhost:${port}` || reqOrigin === "http://localhost:0")
         ? {
@@ -267,7 +437,7 @@ export async function startServer(port: number, options?: { open?: boolean; host
       const jsonWithCors = (data: unknown, status = 200) => json(data, status, corsHeaders);
 
       // ── CORS preflight (no state change, no auth) ──
-      if (method === "OPTIONS") {
+      if (dispatchFamily === "generic-options") {
         return new Response(null, {
           headers: corsHeaders || {
             "Vary": "Origin",
@@ -277,8 +447,12 @@ export async function startServer(port: number, options?: { open?: boolean; host
 
       // ── Rate limiting (ALL requests, including /mcp and /health) ──
       // Keyed on the real socket peer, not spoofable client headers.
-      const ip = resolveClientIp(req, server);
-      const rl = checkRateLimit(ip);
+      const ip = resolveClientIp(req, server, trustProxy);
+      const configuredRateLimit = Number(environment["TODOS_RATE_LIMIT_MAX"] ?? DEFAULT_RATE_LIMIT_MAX);
+      const rateLimitMax = Number.isSafeInteger(configuredRateLimit) && configuredRateLimit > 0
+        ? configuredRateLimit
+        : DEFAULT_RATE_LIMIT_MAX;
+      const rl = checkRateLimit(rateLimitMap, ip, rateLimitMax);
       if (!rl.allowed) {
         return new Response(JSON.stringify({ error: "Too many requests", retry_after: rl.retryAfter }), {
           status: 429,
@@ -287,24 +461,16 @@ export async function startServer(port: number, options?: { open?: boolean; host
       }
 
       // ── Service surface probes (unauthenticated): /health /ready /version ──
-      if ((path === "/health" || path === "/ready" || path === "/version") && method === "GET") {
+      if (dispatchFamily === "service-probe") {
         const { getPackageVersion } = await import("../lib/package-version.js");
-        const { isCloudModeEnabled, pingCloud } = await import("./cloud.js");
-        const mode = isCloudModeEnabled() ? "remote" : "local";
+        const mode = resolveTodosStorageRole(environment).role === "local" ? "local" : "remote";
         const version = getPackageVersion();
         if (path === "/version") {
           return Response.json({ status: "ok", version, mode, name: "todos" });
         }
         if (path === "/ready") {
           if (mode === "remote") {
-            try {
-              await pingCloud();
-            } catch (e) {
-              return Response.json(
-                { status: "unavailable", version, mode, error: (e as Error).message },
-                { status: 503 },
-              );
-            }
+            return hostedReadinessResponse(version, mode);
           }
           return Response.json({ status: "ready", version, mode });
         }
@@ -312,32 +478,37 @@ export async function startServer(port: number, options?: { open?: boolean; host
       }
 
       // ── OpenAPI document (unauthenticated; source of truth for the SDK) ──
-      if ((path === "/openapi.json" || path === "/v1/openapi.json") && method === "GET") {
+      if (dispatchFamily === "openapi-probe") {
         const { buildV1OpenApiDocument } = await import("./openapi.js");
         return Response.json(buildV1OpenApiDocument());
       }
 
       // ── Versioned cloud API (/v1/*): A1 pure-remote, self-authenticating ──
-      if (path === "/v1" || path.startsWith("/v1/")) {
+      if (dispatchFamily === "v1-dispatch") {
         const { handleV1Request } = await import("./v1.js");
-        const res = await handleV1Request(req, url);
+        const res = await handleV1Request(req, url, { environment });
         if (res) return res;
+      }
+
+      // A hosted process intentionally did not import local routes, API-key
+      // storage, or SQLite. Only the explicit probes above survive Stage A.
+      if (!handlers || !apiKeyDependencies) {
+        return json({ error: "Not Found" }, 404);
       }
 
       // ── MCP Streamable HTTP (shared long-lived server) ──
       // Gated by the SAME auth check as /api/* — otherwise the MCP transport is
       // an unauthenticated create/update/delete backdoor around the REST auth.
-      if (path === "/mcp") {
-        const authError = checkAuth(req, apiKey);
+      if (dispatchFamily === "mcp-runtime") {
+        const authError = checkAuth(req, apiKey, apiKeyDependencies);
         if (authError) return authError;
         const { handleMcpHttpRequest } = await import("../mcp/http.js");
-        const { buildServer } = await import("../mcp/index.js");
-        return handleMcpHttpRequest(req, buildServer);
+        return handleMcpHttpRequest(req);
       }
 
       // ── API key auth (all /api/* routes) ──
       if (path.startsWith("/api/")) {
-        const authError = checkAuth(req, apiKey);
+        const authError = checkAuth(req, apiKey, apiKeyDependencies);
         if (authError) return authError;
       }
 

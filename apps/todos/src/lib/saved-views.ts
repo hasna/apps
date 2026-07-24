@@ -72,7 +72,7 @@ export function createSavedView(
   input: { name: string; entity_type?: SearchEntityType; filters?: Record<string, unknown>; slug?: string },
   db?: Database,
 ): SavedView {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const id = uuid();
   const ts = now();
   const slug = input.slug ?? slugify(input.name);
@@ -87,19 +87,19 @@ export function createSavedView(
 }
 
 export function getSavedView(idOrSlug: string, db?: Database): SavedView | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query("SELECT * FROM saved_views WHERE id = ? OR slug = ?").get(idOrSlug, idOrSlug) as Record<string, unknown> | null;
   return row ? rowToView(row) : null;
 }
 
 export function listSavedViews(db?: Database): SavedView[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const rows = d.query("SELECT * FROM saved_views ORDER BY name ASC").all() as Record<string, unknown>[];
   return rows.map(rowToView);
 }
 
 export function deleteSavedView(idOrSlug: string, db?: Database): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const result = d.run("DELETE FROM saved_views WHERE id = ? OR slug = ?", [idOrSlug, idOrSlug]);
   return result.changes > 0;
 }
@@ -120,7 +120,7 @@ function taskToHit(task: Task, query: string, index: number): SearchHit {
 }
 
 export function unifiedSearch(input: UnifiedSearchInput = {}, db?: Database): UnifiedSearchResult {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const query = input.query?.trim() ?? "";
   const types = input.entity_types ?? ["task"];
   const limit = input.limit ?? 50;

@@ -154,7 +154,7 @@ function buildCommands(plan: Omit<BranchWorkPlan, "commands">): string[] {
 }
 
 export function createBranchWorkPlan(input: CreateBranchWorkPlanInput, db?: Database): BranchWorkPlan {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const branch = normalizeBranch(input.branch);
   const baseBranch = normalizeBranch(input.base_branch || "main");
   const root = input.root || process.cwd();

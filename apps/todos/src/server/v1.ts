@@ -1,23 +1,102 @@
 /**
- * Versioned `/v1` HTTP API for `todos-serve` (A1 pure-remote).
+ * Versioned `/v1` HTTP API for `todos-serve`.
  *
- * Every handler goes through the repo-native Postgres storage adapter
- * (`getCloudStorageAdapter`) which reads/writes the shared RDS directly. Auth is
- * enforced by the contracts API-key verifier: reads require `todos:read`, writes
- * require `todos:write` (a `todos:*` key satisfies both). This is a real wrapper
- * over the core storage lib — there are NO stubs; unimplemented routes 404.
+ * Stage A mounts a constant hosted-authority floor in {@link handleV1Request}:
+ * ordinary untrusted requests return typed 503 and caller-forged authority
+ * channels return 400 before verifier, schema, storage, or request-body access.
+ * The retained {@link dispatchV1Request} implementation is an unmounted pure
+ * dispatcher used for route/storage parity tests. A trusted-principal with zero
+ * grants can become 403 only after the later Access/Orgs resolver integration;
+ * Stage A intentionally has no synthetic positive authority resolver.
  */
 import { LockError, ProjectNotFoundError, ResourceConflictError } from "../types/index.js";
 import type { CreatePlanInput, CreateProjectInput, CreateTaskInput, CreateTaskListInput, RenameProjectInput, TaskComment, UpdateTaskInput, UpdateTaskListInput } from "../types/index.js";
-import type { TodosStorageContext, TodosStorageSnapshot, TodosTaskCompletionOptions } from "../storage/interfaces.js";
-import { getCloudStorageAdapter, getCloudVerifier, ensureCloudSchema } from "./cloud.js";
+import type {
+  TodosStorageAdapter,
+  TodosStorageContext,
+  TodosStorageSnapshot,
+  TodosTaskCompletionOptions,
+} from "../storage/interfaces.js";
 import { redactEvidenceText } from "../lib/redaction.js";
 import { isCanonicalSlug, normalizeSlug } from "../lib/slugs.js";
+import {
+  containHostedDatastoreSurface,
+  hostedUnavailableResponse,
+} from "./hosted-authority.js";
+import {
+  assertTodosLocalStorageRole,
+  resolveTodosStorageRole,
+  TodosHostedStorageUnavailableError,
+} from "../storage/config.js";
 
 export interface V1RequestDependencies {
-  getVerifier?: typeof getCloudVerifier;
-  ensureSchema?: typeof ensureCloudSchema;
-  getStorageAdapter?: typeof getCloudStorageAdapter;
+  getVerifier?: typeof import("./cloud.js")["getCloudVerifier"];
+  ensureSchema?: typeof import("./cloud.js")["ensureCloudSchema"];
+  getStorageAdapter?: typeof import("./cloud.js")["getCloudStorageAdapter"];
+  environment?: NodeJS.ProcessEnv;
+}
+
+export interface LocalV1DispatchOptions {
+  storageAdapter: TodosStorageAdapter;
+  principal?: {
+    agent: string | null;
+    scopes: string[];
+  };
+}
+
+const localV1DispatchDependencies = new WeakSet<object>();
+
+function snapshotLocalAdapter(adapter: TodosStorageAdapter): TodosStorageAdapter {
+  const snapshot: Record<PropertyKey, unknown> = Object.create(null);
+  for (const key of Reflect.ownKeys(adapter)) {
+    const descriptor = Object.getOwnPropertyDescriptor(adapter, key);
+    if (!descriptor || !("value" in descriptor)) continue;
+    const value = descriptor.value;
+    snapshot[key] = value && typeof value === "object" && !Array.isArray(value)
+      ? Object.freeze({ ...value })
+      : value;
+  }
+  return Object.freeze(snapshot) as unknown as TodosStorageAdapter;
+}
+
+/**
+ * Construct the local-SQLite-only dependency bundle used by route-parity tests.
+ * The returned capability can never carry a Postgres/cloud adapter, and it is
+ * intentionally not part of any package export map.
+ */
+export async function createLocalV1DispatchDependencies(
+  options: LocalV1DispatchOptions,
+): Promise<V1RequestDependencies> {
+  assertTodosLocalStorageRole(process.env);
+  const { isLocalSqliteTodosStorageAdapter } = await import("../storage/local-sqlite.js");
+  const storageAdapter = options.storageAdapter;
+  if (!isLocalSqliteTodosStorageAdapter(storageAdapter)) {
+    throw new TodosHostedStorageUnavailableError("authority_resolver_unavailable");
+  }
+  const protectedAdapter = snapshotLocalAdapter(storageAdapter);
+  const suppliedPrincipal = options.principal;
+  const principal = Object.freeze({
+    agent: suppliedPrincipal?.agent ?? null,
+    scopes: Object.freeze([...(suppliedPrincipal?.scopes ?? ["todos:*"])]),
+  });
+  const dependencies: V1RequestDependencies = Object.freeze({
+    ensureSchema: async () => {},
+    getStorageAdapter: () => protectedAdapter,
+    getVerifier: () => ({
+      app: "todos",
+      authenticate: async () => ({
+        ok: true,
+        principal: {
+          kid: "local-v1-parity",
+          app: "todos",
+          agent: principal.agent,
+          scopes: [...principal.scopes],
+        },
+      }),
+    }) as unknown as ReturnType<NonNullable<V1RequestDependencies["getVerifier"]>>,
+  });
+  localV1DispatchDependencies.add(dependencies);
+  return dependencies;
 }
 
 const JSON_HEADERS = { "Content-Type": "application/json" } as const;
@@ -252,17 +331,55 @@ export async function handleV1Request(
   url: URL,
   dependencies: V1RequestDependencies = {},
 ): Promise<Response | null> {
+  void url;
+  // The real process role is checked before the caller-supplied dependency
+  // object or URL. A hosted process has no reason to inspect either object.
+  const processRole = resolveTodosStorageRole(process.env);
+  if (processRole.role !== "local") {
+    return containHostedDatastoreSurface(req, process.env);
+  }
+
+  let environment: NodeJS.ProcessEnv | undefined;
+  try {
+    environment = Reflect.get(dependencies, "environment") as NodeJS.ProcessEnv | undefined;
+  } catch {
+    return hostedUnavailableResponse();
+  }
+  return containHostedDatastoreSurface(req, environment ?? process.env);
+}
+
+/**
+ * Pure internal route dispatcher retained for route/storage parity tests.
+ * Deployed entrypoints call {@link handleV1Request}; this dispatcher is not a
+ * storage-role inference mechanism and is not mounted by the server.
+ */
+export async function dispatchV1Request(
+  req: Request,
+  url: URL,
+  dependencies: V1RequestDependencies = {},
+): Promise<Response | null> {
+  // Direct imports are callable product surface too. Process authority must be
+  // resolved before touching request/URL/dependency proxies or loading cloud.
+  if (resolveTodosStorageRole(process.env).role !== "local") {
+    return hostedUnavailableResponse();
+  }
+  // Local process authority cannot be promoted into hosted authority by an
+  // injected verifier, cloud adapter, or an imported dispatcher alias. Only a
+  // module-issued bundle proven to contain the local SQLite adapter may reach
+  // the retained route-parity core below.
+  if (!localV1DispatchDependencies.has(dependencies)) {
+    return hostedUnavailableResponse();
+  }
   const path = url.pathname;
   if (path !== "/v1" && !path.startsWith("/v1/")) return null;
 
   const method = req.method.toUpperCase();
   const isWrite = method !== "GET" && method !== "HEAD";
   const requiredScopes = [isWrite ? "todos:write" : "todos:read"];
-
   // ── Auth (contracts API-key verifier) ──
   let verifier;
   try {
-    verifier = (dependencies.getVerifier ?? getCloudVerifier)();
+    verifier = dependencies.getVerifier!();
   } catch (e) {
     return error(503, (e as Error).message);
   }
@@ -273,8 +390,8 @@ export async function handleV1Request(
   const principal = decision.principal;
 
   // Schema is idempotently ensured on the first authenticated request.
-  await (dependencies.ensureSchema ?? ensureCloudSchema)();
-  const store = (dependencies.getStorageAdapter ?? getCloudStorageAdapter)();
+  await dependencies.ensureSchema!();
+  const store = dependencies.getStorageAdapter!();
 
   const segments = path.split("/").filter(Boolean); // ["v1", resource, id?, action?, subId?]
   const resource = segments[1];

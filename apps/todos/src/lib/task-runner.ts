@@ -68,7 +68,7 @@ export class TaskRunner {
     this.retryStrategy = opts.retry_strategy ?? { type: "none" };
     this.heartbeatIntervalMs = opts.heartbeat_interval_ms ?? 30_000;
     this.checkpointOnError = opts.checkpoint_on_error ?? true;
-    this.db = db || getDatabase();
+    this.db = getDatabase(db);
   }
 
   abort() {

@@ -10,7 +10,7 @@ export interface BurndownData {
 }
 
 export function getBurndown(opts: { plan_id?: string; project_id?: string; task_list_id?: string }, db?: Database): BurndownData {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const conditions: string[] = [];
   const params: any[] = [];
 

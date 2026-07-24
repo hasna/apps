@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import chalk from "chalk";
-import { handleError, output } from "../helpers.js";
+import { handleError, output, parseOptionalPositiveSafeInteger } from "../helpers.js";
 import type { LocalSnapshotType } from "../../lib/local-snapshots.js";
 
 function splitTypes(value?: string): LocalSnapshotType[] | undefined {
@@ -12,9 +12,7 @@ function splitTypes(value?: string): LocalSnapshotType[] | undefined {
 }
 
 function parseLimit(value?: string): number | undefined {
-  if (!value) return undefined;
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  return parseOptionalPositiveSafeInteger(value, "--limit");
 }
 
 export function registerLocalSnapshotCommands(program: Command) {

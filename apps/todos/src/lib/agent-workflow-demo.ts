@@ -124,7 +124,7 @@ export function runAgentWorkflowDemo(options: RunAgentWorkflowDemoOptions = {}):
     db_path = dbHandle.db_path;
   }
 
-  const d = options.db ?? getDatabase();
+  const d = getDatabase(options.db);
   const steps: DemoStep[] = [];
   const agentName = options.agent_name ?? DEMO_DEFAULT_AGENT;
   const projectName = options.project_name ?? DEMO_DEFAULT_PROJECT;

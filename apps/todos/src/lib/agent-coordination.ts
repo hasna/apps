@@ -79,7 +79,7 @@ export function acquireTaskLease(
   ttlMinutes = DEFAULT_LEASE_MINUTES,
   db?: Database,
 ): LeaseAcquireResult {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const lock = lockTask(taskId, agentId, d);
 
   if (!lock.success) {
@@ -107,7 +107,7 @@ export function acquireTaskLease(
 }
 
 export function renewTaskLease(taskId: string, agentId: string, ttlMinutes = DEFAULT_LEASE_MINUTES, db?: Database): TaskLease {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const lease = d.query("SELECT * FROM task_leases WHERE task_id = ?").get(taskId) as LeaseRow | null;
 
   if (!lease || lease.agent_id !== agentId) {
@@ -128,7 +128,7 @@ export function renewTaskLease(taskId: string, agentId: string, ttlMinutes = DEF
 }
 
 export function releaseTaskLease(taskId: string, agentId: string, db?: Database): boolean {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const lease = d.query("SELECT * FROM task_leases WHERE task_id = ?").get(taskId) as LeaseRow | null;
   if (lease && lease.agent_id !== agentId) {
     throw new LockError(taskId, lease.agent_id);
@@ -147,7 +147,7 @@ export function stealTaskLease(
   options: { force?: boolean; stale_minutes?: number; reason?: string } = {},
   db?: Database,
 ): LeaseAcquireResult {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const task = getTask(taskId, d);
   if (!task) throw new Error(`Task not found: ${taskId}`);
 
@@ -206,13 +206,13 @@ export function stealTaskLease(
 }
 
 export function listExpiredLeases(db?: Database): TaskLease[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const ts = now();
   return (d.query("SELECT * FROM task_leases WHERE expires_at < ?").all(ts) as LeaseRow[]).map(rowToLease);
 }
 
 export function listActiveLeases(agentId?: string, db?: Database): TaskLease[] {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const ts = now();
   if (agentId) {
     return (d.query("SELECT * FROM task_leases WHERE agent_id = ? AND expires_at >= ?").all(agentId, ts) as LeaseRow[]).map(rowToLease);
@@ -224,7 +224,7 @@ export function recoverStaleLeases(
   options: { reclaim_agent?: string; stale_minutes?: number } = {},
   db?: Database,
 ): StaleRecoveryResult {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const recovered: StaleRecoveryResult["recovered"] = [];
 
   for (const lease of listExpiredLeases(d)) {
@@ -258,7 +258,7 @@ export function recoverStaleLeases(
 }
 
 export function getTaskLease(taskId: string, db?: Database): TaskLease | null {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const row = d.query("SELECT * FROM task_leases WHERE task_id = ?").get(taskId) as LeaseRow | null;
   return row ? rowToLease(row) : null;
 }

@@ -43,7 +43,7 @@ export function getStatus(
   options?: { explain_blocked?: boolean },
   db?: Database,
 ): StatusSummary {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
 
   const pending = countTasks({ ...filters, status: "pending" }, d);
   const in_progress = countTasks({ ...filters, status: "in_progress" }, d);
@@ -105,7 +105,7 @@ export function decomposeTasks(
   options?: { depends_on_prev?: boolean },
   db?: Database,
 ): { parent: Task; subtasks: Task[] } {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const parent = getTask(parentId, d);
   if (!parent) throw new TaskNotFoundError(parentId);
 
@@ -146,7 +146,7 @@ export function setTaskStatus(
   _agentId?: string,
   db?: Database,
 ): Task {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   for (let attempt = 0; attempt < 3; attempt++) {
     const task = getTask(id, d);
     if (!task) throw new TaskNotFoundError(id);
@@ -178,7 +178,7 @@ export function setTaskPriority(
   _agentId?: string,
   db?: Database,
 ): Task {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   for (let attempt = 0; attempt < 3; attempt++) {
     const task = getTask(id, d);
     if (!task) throw new TaskNotFoundError(id);
@@ -198,7 +198,7 @@ export function redistributeStaleTasks(
   options?: { max_age_minutes?: number; project_id?: string; limit?: number },
   db?: Database,
 ): { released: Task[]; claimed: Task | null } {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const maxAge = options?.max_age_minutes ?? 60;
   const stale = getStaleTasks(maxAge, options?.project_id ? { project_id: options.project_id } : undefined, d);
   const limited = options?.limit ? stale.slice(0, options.limit) : stale;
@@ -227,7 +227,7 @@ export function getTaskStats(
   filters?: { project_id?: string; task_list_id?: string; agent_id?: string },
   db?: Database,
 ): { total: number; by_status: Record<string, number>; by_priority: Record<string, number>; completion_rate: number; by_agent: Record<string, number> } {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const conditions: string[] = [];
   const params: SQLQueryBindings[] = [];
 

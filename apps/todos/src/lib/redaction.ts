@@ -15,6 +15,11 @@ const DEFAULT_SECRET_PATTERNS: SecretPattern[] = [
   { name: "aws-access-key", regex: /\b(AKIA|ASIA)[0-9A-Z]{16}\b/g, replacement: "[REDACTED_AWS_KEY]" },
   { name: "private-key", regex: /-----BEGIN (?:RSA |EC |OPENSSH |)PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH |)PRIVATE KEY-----/g, replacement: "[REDACTED_PRIVATE_KEY]" },
   { name: "openai-token", regex: /\bsk-[A-Za-z0-9_-]{12,}\b/g, replacement: "[REDACTED_TOKEN]" },
+  {
+    name: "authorization-credential",
+    regex: /\b((?:proxy-)?authorization)\s*[:=]\s*(?:basic|bearer)\s+[A-Za-z0-9._~+/=-]{8,}/gi,
+    replacement: "$1: [REDACTED]",
+  },
   { name: "env-secret-assignment", regex: /\b([A-Za-z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD)[A-Za-z0-9_]*)\s*=\s*['"]?[^'"\s]{8,}/gi, replacement: "$1=[REDACTED]" },
   { name: "bearer-token", regex: /\b(bearer)\s+[A-Za-z0-9._~+/=-]{12,}/gi, replacement: "$1 [REDACTED]" },
 ];

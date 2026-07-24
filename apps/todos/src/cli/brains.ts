@@ -18,6 +18,7 @@ import {
   clearActiveModel,
   DEFAULT_MODEL,
 } from "../lib/model-config.js";
+import { parsePositiveSafeInteger } from "../lib/positive-safe-integer.js";
 
 // ============================================================================
 // Helpers
@@ -48,7 +49,7 @@ export function makeBrainsCommand(): Command {
   brains
     .command("gather")
     .description("Gather training data from tasks and write to JSONL")
-    .option("--limit <n>", "Maximum number of examples to gather", parseInt)
+    .option("--limit <n>", "Maximum number of examples to gather", (value) => parsePositiveSafeInteger(value, "--limit"))
     .option("--since <date>", "Only include tasks created since this date (ISO 8601)")
     .option("--output <dir>", "Output directory (default: ~/.hasna/todos/training/)")
     .option("--json", "Output result summary as JSON")

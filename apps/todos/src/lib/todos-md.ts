@@ -232,7 +232,7 @@ export function importTodosMarkdown(
   options: ImportTodosMarkdownOptions = {},
   db?: Database,
 ): TodosMarkdownImportResult {
-  const d = db || getDatabase();
+  const d = getDatabase(db);
   const dryRun = options.dryRun !== false;
   const embedded = extractEmbeddedBridge(markdown);
   if (embedded) {
