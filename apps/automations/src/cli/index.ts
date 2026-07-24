@@ -15,6 +15,13 @@ import {
   type WebhookEventMapping,
   type WebhookSignatureConfig,
 } from "../index.js";
+import {
+  LAUNCH_FOLLOWUP_RECIPE_PACK,
+  launchFollowupRecipePack,
+  listLaunchFollowupRecipes,
+  writeRecipePack,
+  type LaunchFollowupOptions,
+} from "../recipes/launch-followup.js";
 
 interface ParsedArgs {
   json: boolean;
@@ -76,6 +83,9 @@ export async function runAutomationsCli(argv = Bun.argv.slice(2), options: RunAu
     if (command === "webhooks") {
       return runWebhooksCommand(parsed, options);
     }
+    if (command === "recipes") {
+      return await runRecipesCommand(parsed, options);
+    }
     if (command === "runtimes") {
       output(parsed, listDefaultRuntimeBindings(), () => console.log(JSON.stringify(listDefaultRuntimeBindings(), null, 2)));
       return 0;
@@ -90,6 +100,101 @@ export async function runAutomationsCli(argv = Bun.argv.slice(2), options: RunAu
     }
     return 1;
   }
+}
+
+async function runRecipesCommand(parsed: ParsedArgs, options: RunAutomationsCliOptions): Promise<number> {
+  const subcommand = parsed.rest[1];
+  if (!subcommand || subcommand === "--help" || subcommand === "-h") {
+    printRecipesHelp(options);
+    return subcommand ? 0 : 1;
+  }
+
+  if (subcommand === "list") {
+    const recipes = listLaunchFollowupRecipes();
+    output(parsed, recipes, () => console.log(JSON.stringify(recipes, null, 2)));
+    return 0;
+  }
+
+  if (subcommand === "render") {
+    const args = parsed.rest.slice(2);
+    const pack = args[0];
+    if (!pack || pack === "--help" || pack === "-h") {
+      printRecipesHelp(options);
+      return pack ? 0 : 1;
+    }
+    if (pack !== LAUNCH_FOLLOWUP_RECIPE_PACK) {
+      throw new Error(`Unknown recipe pack: ${pack} (expected ${LAUNCH_FOLLOWUP_RECIPE_PACK})`);
+    }
+    const rest = args.slice(1);
+    const appId = takeOption(rest, "--app-id");
+    const packageName = takeOption(rest, "--package");
+    const version = takeOption(rest, "--app-version") ?? takeOption(rest, "--release-version");
+    const outDir = takeOption(rest, "--out");
+    const create = takeFlag(rest, "--create");
+    if (!appId || !packageName || !version) {
+      throw new Error("recipes render requires --app-id, --package, and --app-version");
+    }
+    const recipeOptions: LaunchFollowupOptions = {
+      appId,
+      package: packageName,
+      version,
+      campaignId: takeOption(rest, "--campaign-id"),
+      audienceId: takeOption(rest, "--audience-id"),
+      mailerySequenceId: takeOption(rest, "--sequence-id"),
+      uptimeMonitorId: takeOption(rest, "--monitor-id"),
+      releasedAt: takeOption(rest, "--released-at"),
+      watchWindowHours: numberOption(takeOption(rest, "--watch-window-hours")),
+      engagementThreshold: numberOption(takeOption(rest, "--engagement-threshold")),
+    };
+    const specs = launchFollowupRecipePack(recipeOptions);
+
+    let files: string[] = [];
+    if (outDir) {
+      files = await writeRecipePack(outDir, specs);
+    }
+
+    const created: string[] = [];
+    if (create) {
+      const store = new AutomationsStore();
+      try {
+        for (const spec of specs) {
+          created.push(store.createAutomation(spec).id);
+        }
+      } finally {
+        store.close();
+      }
+    }
+
+    const result = { pack, specs: specs.map((spec) => spec.id), files, created, rendered: specs };
+    output(parsed, result, () => console.log(JSON.stringify(result, null, 2)));
+    return 0;
+  }
+
+  throw new Error(`Unknown recipes command: ${subcommand}`);
+}
+
+function numberOption(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) throw new Error(`Expected a number, got: ${value}`);
+  return parsed;
+}
+
+function printRecipesHelp(options: RunAutomationsCliOptions = {}): void {
+  const name = programName(options);
+  console.log(`${name} recipes
+
+Usage:
+  ${name} [--json] recipes list
+  ${name} [--dir <path>] [--json] recipes render launch-followup --app-id <appId> --package <npm-name> --app-version <semver> \\
+      [--campaign-id <id>] [--audience-id <id>] [--sequence-id <id>] [--monitor-id <id>] \\
+      [--released-at <iso>] [--watch-window-hours <n>] [--engagement-threshold <n>] \\
+      [--out <dir>] [--create]
+
+The launch-followup pack renders T+1/T+3/T+7 engagement checks, a non-engaged
+mailery follow-up enrollment, and a release-anchored uptime regression
+watch-window as automation spec files. --out writes one JSON file per spec;
+--create also registers them in the local store.`);
 }
 
 function runWebhooksCommand(parsed: ParsedArgs, options: RunAutomationsCliOptions): number {
@@ -557,6 +662,8 @@ Usage:
   ${name} [--dir <path>] [--json] queue claim [--runner <id>]
   ${name} [--dir <path>] [--json] webhooks create <automation-id> --source <source> --type <type>
   ${name} [--dir <path>] [--json] webhooks list
+  ${name} [--json] recipes list
+  ${name} [--dir <path>] [--json] recipes render launch-followup --app-id <appId> --package <npm-name> --app-version <semver> [--out <dir>] [--create]
   ${name} [--dir <path>] [--json] runtimes
 
 Environment:

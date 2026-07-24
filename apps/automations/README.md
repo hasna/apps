@@ -40,6 +40,8 @@ automations --json dlq replay <action-id>
 automations --json webhooks create tickets.escalate-critical --id tickets --path /webhooks/tickets --source open-events --type ticket.created --data-path data --dedupe-key-header X-Hasna-Event-Id --secret-ref secret://automations/webhooks/tickets
 automations --json webhooks event tickets --body-json '{"data":{"priority":"critical"}}' --header X-Hasna-Event-Id:evt_1
 automations --json webhooks test tickets --body-json '{"data":{"priority":"critical"}}' --header X-Hasna-Event-Id:evt_1
+automations --json recipes list
+automations --json recipes render launch-followup --app-id open-todos --package @hasna/todos --app-version 1.2.3 --out ./specs --create
 automations --json runtimes
 automations-daemon --json status
 automations-daemon --json run
@@ -83,6 +85,34 @@ The OpenLoops handoff check is intentionally dry-run only: it validates the
 `automations --json webhooks event ...` envelope and records the exact
 `loops --json events handle generic` command that an operator would run, without
 creating OpenLoops workflow runs.
+
+## Launch follow-up recipe pack
+
+`automations recipes render launch-followup ...` renders a release-anchored
+pack of automation spec templates (distribution apps plan): T+1/T+3/T+7
+engagement checks (announce report with a threshold-gated low-engagement task
+→ engagement event), enrollment of non-engaged recipients into a mailery
+follow-up sequence (policy-gated, suppression-respecting), and an uptime
+regression watch-window opened on `release.published`. `--out <dir>` writes
+one JSON spec file per recipe and `--create` registers them in the local
+store. Programmatic access:
+`import { launchFollowupRecipePack } from "@hasna/automations/recipes"`.
+
+Platform semantics the pack is written against:
+
+- **Step conditions**: the control plane enqueues every step of a matched
+  automation and gates dispatch only on `dependsOn` success.
+  `AutomationActionStep.when` is NOT evaluated anywhere today — treat it as
+  advisory metadata pending runner support. The pack therefore places all
+  conditional behavior (engagement thresholds via `onLowEngagement`,
+  regression detection via `onRegression`) in the input contract of the
+  action that owns the data, never in unconditional dependent steps.
+- **Schedule triggers**: `schedule.release-offset` triggers are not matched
+  by the event pipeline and no scheduler exists yet; the four
+  schedule-triggered specs register cleanly but stay inert until the
+  follow-up scheduler lane lands. The event-triggered uptime watch
+  (`release.published`) becomes live as soon as its
+  `uptime.watch-window.open` action is implemented in the action layer.
 
 ## Boundaries
 

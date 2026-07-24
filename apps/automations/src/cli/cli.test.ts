@@ -510,4 +510,52 @@ describe("automations CLI", () => {
       delete process.env.HASNA_AUTOMATIONS_DIR;
     }
   });
+
+  test("lists, renders, validates, and registers the launch follow-up recipe pack", async () => {
+    const list = await runCli(["recipes", "list"]);
+    expect(list.exitCode).toBe(0);
+    const recipes = JSON.parse(list.stdout) as Array<{ pack: string; name: string }>;
+    expect(recipes).toHaveLength(5);
+    expect(recipes.map((recipe) => recipe.name)).toContain("uptime-watch");
+
+    const outDir = join(dataDir, "recipes-out");
+    const render = await runCli([
+      "recipes",
+      "render",
+      "launch-followup",
+      "--app-id",
+      "open-todos",
+      "--package",
+      "@hasna/todos",
+      "--app-version",
+      "1.2.3",
+      "--out",
+      outDir,
+      "--create",
+    ]);
+    expect(render.exitCode).toBe(0);
+    const rendered = JSON.parse(render.stdout) as { specs: string[]; files: string[]; created: string[] };
+    expect(rendered.specs).toHaveLength(5);
+    expect(rendered.files).toHaveLength(5);
+    expect(rendered.created).toEqual(rendered.specs);
+
+    // Rendered files pass the existing `validate` command (loader path).
+    for (const file of rendered.files) {
+      const validated = await runCli(["validate", file]);
+      expect(validated.exitCode).toBe(0);
+      expect(JSON.parse(validated.stdout).valid).toBe(true);
+    }
+
+    // Registered automations are listed by the store-backed `list` command.
+    const listed = await runCli(["list"]);
+    const automations = JSON.parse(listed.stdout) as Array<{ id: string }>;
+    expect(automations.map((automation) => automation.id).sort()).toEqual([...rendered.specs].sort());
+
+    const missing = await runCli(["recipes", "render", "launch-followup", "--app-id", "open-todos"]);
+    expect(missing.exitCode).toBe(1);
+    expect(missing.stderr).toContain("--package");
+
+    const unknown = await runCli(["recipes", "render", "unknown-pack", "--app-id", "a", "--package", "b", "--app-version", "1.0.0"]);
+    expect(unknown.exitCode).toBe(1);
+  });
 });

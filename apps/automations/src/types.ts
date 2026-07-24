@@ -131,6 +131,13 @@ export interface AutomationActionStep {
   manifestVersion?: string;
   input?: JsonValue;
   dependsOn?: string[];
+  /**
+   * ADVISORY ONLY: `when` is not evaluated by the control plane today —
+   * steps are enqueued unconditionally and dispatch is gated solely on
+   * `dependsOn` success. Pending runner support, do not rely on `when` for
+   * conditional behavior; put conditions in the owning action's input
+   * contract instead.
+   */
   when?: JsonObject;
   approval?: ActionQueueApprovalRequirement;
   approvalGate?: AutomationApprovalGateTemplate;

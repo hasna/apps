@@ -31,3 +31,21 @@ export {
   type AutomationRunContractOptions,
   type EvidenceRefContractOptions,
 } from "./lib/contracts.js";
+export {
+  ANNOUNCEMENT_ANCHOR_EVENT_TYPE,
+  ENGAGEMENT_CHECK_OFFSET_DAYS,
+  LAUNCH_FOLLOWUP_RECIPE_PACK,
+  LAUNCH_FOLLOWUP_RECIPE_VERSION,
+  RELEASE_ANCHOR_EVENT_TYPE,
+  engagementCheckRecipe,
+  followupEnrollmentRecipe,
+  launchFollowupRecipePack,
+  listLaunchFollowupRecipes,
+  loadRecipeSpecFile,
+  recipeSpecFileName,
+  uptimeWatchWindowRecipe,
+  writeRecipePack,
+  type EngagementCheckOffset,
+  type LaunchFollowupOptions,
+  type RecipeDescriptor,
+} from "./recipes/launch-followup.js";
