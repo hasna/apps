@@ -14,6 +14,8 @@ export interface HybridSearchOptions extends EmbeddingRuntimeOptions {
   legacyStorePath?: string;
   query: string;
   limit?: number;
+  /** Zero-based result offset for stable pagination over the ranked list. */
+  offset?: number;
   semantic?: boolean;
   config?: KnowledgeConfig;
 }
@@ -21,6 +23,7 @@ export interface HybridSearchOptions extends EmbeddingRuntimeOptions {
 export interface HybridSearchResult {
   query: string;
   limit: number;
+  offset: number;
   mode: {
     keyword: true;
     catalog: true;
@@ -153,9 +156,117 @@ function queryTerms(query: string): string[] {
   return unique(terms.filter((term) => term.length > 0)).slice(0, 16);
 }
 
-function ftsQueryForTerms(terms: string[]): string | null {
-  if (terms.length === 0) return null;
-  return terms.map((term) => `${term}*`).join(' OR ');
+interface ParsedQueryToken {
+  type: 'term' | 'phrase' | 'or';
+  /** Normalized, lower-cased word(s); phrases keep interior spaces. */
+  value: string;
+  negate: boolean;
+  /** Explicit trailing `*` prefix request on a bare term. */
+  prefix: boolean;
+}
+
+function normalizeWords(raw: string): string[] {
+  return raw.normalize('NFKC').toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [];
+}
+
+/**
+ * Parse a user query into structured tokens supporting:
+ *   - default AND across terms,
+ *   - "quoted phrases" (adjacency),
+ *   - trailing `prefix*`,
+ *   - `OR` / `|` operators, and `NOT` / leading `-` negation.
+ * Everything is defensively re-tokenized so only FTS5-safe barewords/phrases
+ * reach the MATCH string.
+ */
+function parseSearchQuery(query: string): ParsedQueryToken[] {
+  const tokens: ParsedQueryToken[] = [];
+  const segment = /"([^"]*)"|(\S+)/g;
+  let match: RegExpExecArray | null;
+  let pendingNegate = false;
+  while ((match = segment.exec(query)) !== null) {
+    if (match[1] !== undefined) {
+      const words = normalizeWords(match[1]);
+      if (words.length > 0) {
+        tokens.push({ type: 'phrase', value: words.join(' '), negate: pendingNegate, prefix: false });
+      }
+      pendingNegate = false;
+      continue;
+    }
+    let raw = match[2] ?? '';
+    if (raw === 'OR' || raw === '||' || raw === '|') {
+      tokens.push({ type: 'or', value: '', negate: false, prefix: false });
+      continue;
+    }
+    if (raw === 'AND' || raw === '&&') continue; // AND is the default join
+    if (raw === 'NOT') { pendingNegate = true; continue; }
+    let negate = pendingNegate;
+    pendingNegate = false;
+    if (raw.startsWith('-') && raw.length > 1) { negate = true; raw = raw.slice(1); }
+    let prefix = false;
+    if (raw.endsWith('*')) { prefix = true; raw = raw.slice(0, -1); }
+    const words = normalizeWords(raw);
+    if (words.length === 0) continue;
+    tokens.push({
+      type: words.length > 1 ? 'phrase' : 'term',
+      value: words.join(' '),
+      negate,
+      prefix,
+    });
+  }
+  return tokens.slice(0, 24);
+}
+
+function tokenToFragment(token: ParsedQueryToken): string {
+  if (token.type === 'phrase') return `"${token.value}"`;
+  // Bare single terms default to prefix matching to preserve recall; an
+  // explicit `*` is honored identically.
+  return `"${token.value}"*`;
+}
+
+export interface FtsMatchExpressions {
+  /** Precise expression: positive terms AND-joined (unless `OR` is explicit). */
+  and: string | null;
+  /**
+   * Recall expression: positive terms OR-joined. Used as a fallback when the
+   * AND expression yields nothing, so natural-language questions (whose terms
+   * rarely all co-occur in one chunk) still retrieve. Null when identical to
+   * `and` (single positive term or explicit boolean already), letting callers
+   * skip a redundant second query.
+   */
+  or: string | null;
+}
+
+/**
+ * Build FTS5 MATCH expressions from a query. Positive terms are AND-joined by
+ * default (precision); `OR` inserts an explicit disjunction; negations attach as
+ * `NOT frag` (skipped when no positive term precedes them, since NOT cannot lead
+ * an expression). A parallel OR-joined expression is returned for recall
+ * fallback.
+ */
+function buildFtsMatch(query: string): FtsMatchExpressions {
+  const tokens = parseSearchQuery(query);
+  const positives = tokens.filter((t) => t.type !== 'or' && !t.negate);
+  if (positives.length === 0) return { and: null, or: null };
+
+  const compose = (defaultOp: 'AND' | 'OR'): string | null => {
+    let expr = '';
+    let pendingOr = false;
+    const negations: string[] = [];
+    for (const token of tokens) {
+      if (token.type === 'or') { pendingOr = true; continue; }
+      const fragment = tokenToFragment(token);
+      if (token.negate) { negations.push(fragment); continue; }
+      if (expr.length === 0) expr = fragment;
+      else expr = pendingOr ? `${expr} OR ${fragment}` : `${expr} ${defaultOp} ${fragment}`;
+      pendingOr = false;
+    }
+    for (const negation of negations) expr = `(${expr}) NOT ${negation}`;
+    return expr.length > 0 ? expr : null;
+  };
+
+  const and = compose('AND');
+  const or = compose('OR');
+  return { and, or: or !== and ? or : null };
 }
 
 function escapeLikeTerm(term: string): string {
@@ -222,6 +333,16 @@ function provenanceForChunk(row: FtsChunkRow): SearchProvenance | null {
 
 function selectFtsChunks(db: Database, ftsQuery: string | null, limit: number): FtsChunkRow[] {
   if (!ftsQuery) return [];
+  try {
+    return runFtsChunkQuery(db, ftsQuery, limit);
+  } catch {
+    // A malformed MATCH expression must never abort the whole search; degrade to
+    // no keyword hits rather than throwing (catalog/semantic lanes still run).
+    return [];
+  }
+}
+
+function runFtsChunkQuery(db: Database, ftsQuery: string, limit: number): FtsChunkRow[] {
   return db.query<FtsChunkRow, [string, number]>(
     `SELECT
        chunks_fts.chunk_id,
@@ -244,7 +365,7 @@ function selectFtsChunks(db: Database, ftsQuery: string | null, limit: number): 
        wp.content_hash AS wiki_content_hash,
        wp.status AS wiki_status,
        wp.metadata_json AS wiki_metadata_json,
-       bm25(chunks_fts) AS rank
+       bm25(chunks_fts, 0.0, 1.0, 5.0, 3.0) AS rank
      FROM chunks_fts
      JOIN chunks c ON c.id = chunks_fts.chunk_id
      LEFT JOIN source_revisions sr ON sr.id = c.source_revision_id
@@ -491,8 +612,10 @@ export async function hybridSearch(options: HybridSearchOptions): Promise<Hybrid
   const query = options.query.trim();
   if (!query) throw new Error('Search query is required.');
   const limit = Math.max(1, Math.min(options.limit ?? 10, 100));
+  const offset = Math.max(0, Math.floor(options.offset ?? 0));
+  const window = offset + limit;
   const terms = queryTerms(query);
-  const ftsQuery = ftsQueryForTerms(terms);
+  const ftsMatch = buildFtsMatch(query);
   const semanticEnabled = options.semantic === true || options.fake === true || Boolean(options.modelRef);
   const warnings: string[] = [];
   let semanticProvider: string | null = null;
@@ -506,13 +629,19 @@ export async function hybridSearch(options: HybridSearchOptions): Promise<Hybrid
   migrateKnowledgeDb(options.dbPath);
   const db = openKnowledgeDb(options.dbPath);
   try {
-    const ftsRows = selectFtsChunks(db, ftsQuery, Math.max(limit * 3, 20));
+    const ftsDepth = Math.max(window * 3, 20);
+    let ftsRows = selectFtsChunks(db, ftsMatch.and, ftsDepth);
+    // AND-first for precision; fall back to OR for recall when nothing matches
+    // all terms (e.g. natural-language questions from ask()/context.pack()).
+    if (ftsRows.length === 0 && ftsMatch.or) {
+      ftsRows = selectFtsChunks(db, ftsMatch.or, ftsDepth);
+    }
     keywordCount = ftsRows.length;
     ftsRows.forEach((row, index) => mergeResult(merged, chunkResult(row, scoreFromRank(row.rank, index))));
 
-    const wikiRows = selectWikiPages(db, terms, Math.max(limit, 10));
-    const indexRows = selectKnowledgeIndexes(db, terms, Math.max(limit, 10));
-    const legacyRows = selectLegacyItems(options.legacyStorePath, terms, Math.max(limit, 10));
+    const wikiRows = selectWikiPages(db, terms, Math.max(window, 10));
+    const indexRows = selectKnowledgeIndexes(db, terms, Math.max(window, 10));
+    const legacyRows = selectLegacyItems(options.legacyStorePath, terms, Math.max(window, 10));
     catalogCount = wikiRows.length + indexRows.length;
     keywordCount += legacyRows.length;
     legacyRows.forEach(({ item, score }) => mergeResult(merged, legacyItemResult(item, score)));
@@ -527,7 +656,7 @@ export async function hybridSearch(options: HybridSearchOptions): Promise<Hybrid
       const semantic = await searchVectorIndex({
         dbPath: options.dbPath,
         query,
-        limit: Math.max(limit * 3, 20),
+        limit: Math.max(window * 3, 20),
         config: options.config,
         env: options.env,
         modelRef: options.modelRef,
@@ -572,10 +701,12 @@ export async function hybridSearch(options: HybridSearchOptions): Promise<Hybrid
     }
   }
 
-  const results = sortResults(Array.from(merged.values())).slice(0, limit);
+  const ranked = sortResults(Array.from(merged.values()));
+  const results = ranked.slice(offset, offset + limit);
   return {
     query,
     limit,
+    offset,
     mode: {
       keyword: true,
       catalog: true,
@@ -615,17 +746,19 @@ export async function hybridSearchItems(
   const query = options.query.trim();
   if (!query) throw new Error('Search query is required.');
   const limit = Math.max(1, Math.min(options.limit ?? 10, 100));
+  const offset = Math.max(0, Math.floor(options.offset ?? 0));
   const terms = queryTerms(query);
   const semanticEnabled = options.semantic === true || options.fake === true || Boolean(options.modelRef);
   const merged = new Map<string, HybridSearchEntry>();
-  const itemRows = selectItems(items, terms, Math.max(limit, 10));
+  const itemRows = selectItems(items, terms, Math.max(offset + limit, 10));
   itemRows.forEach(({ item, score }) => mergeResult(merged, legacyItemResult(item, score)));
   const warnings = [...baseWarnings];
   if (semanticEnabled) warnings.push('semantic_search_requires_local_catalog');
-  const results = sortResults(Array.from(merged.values())).slice(0, limit);
+  const results = sortResults(Array.from(merged.values())).slice(offset, offset + limit);
   return {
     query,
     limit,
+    offset,
     mode: {
       keyword: true,
       catalog: true,
