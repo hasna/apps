@@ -8,6 +8,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `projects sessions` with no target now reports recent project start sessions
+  aggregated across all projects instead of failing with
+  `Project not found` when the current directory is not a registered project.
+  The `[target]` argument stays optional as documented.
 - `projects events record` now fails fast with a clear
   `Recording project audit events is a local-only operation and is not available
   in api/cloud mode.` message when a cloud/self-hosted backend is active, instead
@@ -16,6 +20,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   expose). Recording custom audit events is a machine-local write; the cloud API
   serves only `GET /projects/:id/events`. This makes the command consistent with
   the sibling registry commands' cloud awareness.
+
+### Added
+
+- `listStartedWorkspaceEvents()` DB helper and `buildRecentSessionsPayload()`
+  render builder to surface `started` events across every project in one query.
+
+### Tests
+
+- Added regression coverage for the no-target `projects sessions` CLI path and
+  the cross-project recent-sessions render payload.
 
 ## [0.1.84] - 2026-07-07
 
