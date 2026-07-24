@@ -1,0 +1,54 @@
+{
+  "name": "@hasna/personalnotes",
+  "version": "0.1.0",
+  "description": "Personal Notes OSS core — headless notes engine with four surfaces: HTTP API (primary), CLI, MCP, and a generated SDK. Markdown on disk is the contract.",
+  "type": "module",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/personalnotes.git"
+  },
+  "bin": {
+    "personalnotes": "cli/hasna-notes.mjs",
+    "personalnotes-mcp": "mcp/hasna-notes-mcp.mjs",
+    "personalnotes-serve": "src/server/index.mjs"
+  },
+  "exports": {
+    ".": "./src/index.mjs",
+    "./sdk": {
+      "bun": "./src/sdk/index.ts",
+      "types": "./dist/sdk/index.d.ts",
+      "import": "./dist/sdk/index.js"
+    },
+    "./server": "./src/server/router.mjs",
+    "./openapi": "./src/server/openapi.mjs",
+    "./mode": "./src/lib/mode.mjs"
+  },
+  "files": [
+    "src",
+    "cli",
+    "mcp",
+    "tools",
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "serve": "bun src/server/index.mjs",
+    "test": "bun test",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "gen:sdk": "bun run scripts/generate-sdk.mjs",
+    "gen:sdk:check": "bun run scripts/generate-sdk.mjs --check",
+    "build": "bun build ./src/sdk/index.ts --outdir dist/sdk --target node && tsc -p tsconfig.json --emitDeclarationOnly --outDir dist/sdk"
+  },
+  "devDependencies": {
+    "@hasna/contracts": "0.5.2",
+    "typescript": "5.6.3"
+  },
+  "engines": {
+    "bun": ">=1.1.0",
+    "node": ">=20"
+  }
+}

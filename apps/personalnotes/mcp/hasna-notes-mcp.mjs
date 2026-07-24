@@ -1,33 +1,38 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
+// Pure compute + local-only helpers stay on the in-process domain layer.
 import {
   MARKDOWN_COMMANDS,
   applyMarkdownCommand,
-  archiveNote,
-  assignLabel,
   contentFingerprint,
-  deleteLabelEverywhere,
-  deleteNote,
   generateTitle,
   getMachineDetails,
-  getNote,
   listMachineDetails,
+  markdownPlainText,
+  moveNoteToMachine,
+  normalizeLabels,
+  renderMarkdownSafe,
+} from '../tools/notes-lib.mjs';
+// Storage operations flow through the backend facade so MCP talks to the HTTP API when
+// HASNA_NOTES_API_URL is configured, and to the local filesystem otherwise.
+import {
+  archiveNote,
+  assignLabel,
+  deleteLabelEverywhere,
+  deleteNote,
+  getNote,
   listNotes,
   loadLabelList,
   loadNotes,
   loadSettings,
-  markdownPlainText,
-  moveNoteToMachine,
-  normalizeLabels,
   purgeExpiredTrash,
   renameLabel,
   restoreNote,
   saveLabelList,
   saveNote,
   saveSettings,
-  renderMarkdownSafe,
   trashNote,
   unassignLabel,
-} from '../tools/notes-lib.mjs';
+} from '../src/lib/notes-backend.mjs';
 import {
   CHAT_TOOL_SCHEMAS,
   executeNotesAgentTool,
