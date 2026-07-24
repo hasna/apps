@@ -160,8 +160,8 @@ Env-file bridge
 
 AWS Secrets Manager sync
   Preview metadata-only actions with profile/default-chain credentials:
-    AWS_PROFILE=hasna-xyz-infra secrets aws sync --dry-run
-    secrets aws push hasna/xyz/opensource/files/prod/s3 --profile hasna-xyz-infra --dry-run
+    AWS_PROFILE=your-aws-profile secrets aws sync --dry-run
+    secrets aws push example/app/prod/s3 --profile your-aws-profile --dry-run
 
   Legacy static-key aws.json behavior remains supported:
     secrets aws configure

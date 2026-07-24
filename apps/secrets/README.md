@@ -76,7 +76,7 @@ reference value is the same slash-delimited key used by this vault:
 
 ```json
 {
-  "secretRef": "hasna/xyz/opensource/connectors/prod/github",
+  "secretRef": "example/connectors/prod/github",
   "scope": "repo:issues:write",
   "reason": "Create a GitHub issue from an approved automation action"
 }
@@ -174,26 +174,24 @@ taxonomies such as `connector`, `website`, and `platform` are rejected under
 `hasna/xyz/`. App names should omit repo prefixes such as `open-`, `iapp-`,
 `cweb-`, and `project-`.
 
-Examples:
+Examples (illustrative placeholders only — substitute your own resource names;
+no real production resource names are shipped in this package):
 
 ```text
-hasna/xyz/opensource/files/prod/rds
-hasna/xyz/internalapp/news/prod/env
-hasna/xyz/infra/apps/prod/postgres/master
+hasna/xyz/opensource/example-app/dev/api_key
+hasna/xyz/infra/example-group/dev/postgres/master
 ```
-
-Operator runbook:
-`docs/hasna-xyz-canonical-secrets-runbook-2026-06-08.md`.
 
 ## AWS Secrets Manager Sync
 
 `secrets aws` can use the legacy static-key config written by
-`secrets aws configure`, or AWS profile/default-chain credentials:
+`secrets aws configure`, or AWS profile/default-chain credentials. Supply your
+own AWS profile and secret paths — none are hardcoded:
 
 ```bash
-AWS_PROFILE=hasna-xyz-infra secrets aws sync --dry-run
-secrets aws push hasna/xyz/opensource/files/prod/s3 --profile hasna-xyz-infra --dry-run
-secrets aws sync --credential-mode role --role-arn arn:aws:iam::123456789012:role/example --source-profile hasna-xyz-infra --dry-run
+AWS_PROFILE=your-aws-profile secrets aws sync --dry-run
+secrets aws push example/app/prod/s3 --profile your-aws-profile --dry-run
+secrets aws sync --credential-mode role --role-arn arn:aws:iam::123456789012:role/example --source-profile your-aws-profile --dry-run
 ```
 
 Credential source precedence is command flags, `HASNA_SECRETS_AWS_*`
@@ -382,13 +380,13 @@ secrets storage sync
 The remote storage URL can also be provided as the short non-deprecated fallback
 `SECRETS_DATABASE_URL`.
 
-Canonical production storage uses database `secrets` on RDS instance
-`hasna-xyz-infra-apps-prod-postgres`. Runtime credentials are stored in AWS
-Secrets Manager at `hasna/xyz/opensource/secrets/prod/rds`; load its
-`database_url` value into `HASNA_SECRETS_DATABASE_URL`. `SECRETS_DATABASE_URL`
-remains supported as a rollback/local fallback. Do not print rows or values from
-the canonical database; status commands expose only redacted URLs, table names,
-and non-secret metadata.
+For a managed deployment, point `HASNA_SECRETS_DATABASE_URL` at your own
+Postgres/RDS database. Deployment-specific infrastructure identifiers (the
+database cluster name and the AWS Secrets Manager path that holds the runtime
+`database_url`) are supplied by your hosting layer — this package ships no real
+cluster names or secrets-manager paths. `SECRETS_DATABASE_URL` remains supported
+as a rollback/local fallback. Do not print rows or values from the database;
+status commands expose only redacted URLs, table names, and non-secret metadata.
 
 MCP exposes the same flow through `storage_status`, `storage_push`,
 `storage_pull`, and `storage_sync`.

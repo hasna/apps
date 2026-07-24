@@ -68,12 +68,12 @@ describe("AWS credential resolution", () => {
   });
 
   it("uses AWS_PROFILE/default-chain when no static config exists", async () => {
-    process.env.AWS_PROFILE = "hasna-xyz-infra";
+    process.env.AWS_PROFILE = "example-aws-profile";
 
     const resolved = resolveAwsConfig({}, null);
 
     expect(resolved.credentialMode).toBe("profile");
-    expect(resolved.profile).toBe("hasna-xyz-infra");
+    expect(resolved.profile).toBe("example-aws-profile");
     expect(resolved.region).toBe("us-east-1");
   });
 
@@ -123,14 +123,14 @@ describe("AWS dry-run planning", () => {
         throw new Error("dry-run must not send");
       },
     }));
-    await setSecret("hasna/xyz/opensource/files/prod/s3", "secret-value", "credential");
+    await setSecret("example/app/prod/s3", "secret-value", "credential");
     getDb()
       .prepare("UPDATE secrets SET value = ? WHERE key = ?")
-      .run("enc:v1:malformed", "hasna/xyz/opensource/files/prod/s3");
+      .run("enc:v1:malformed", "example/app/prod/s3");
 
-    const plan = await pushSecret("hasna/xyz/opensource/files/prod/s3", {
+    const plan = await pushSecret("example/app/prod/s3", {
       dryRun: true,
-      profile: "hasna-xyz-infra",
+      profile: "example-aws-profile",
       prefix: "test-prefix",
     });
 
@@ -139,8 +139,8 @@ describe("AWS dry-run planning", () => {
     expect(plan?.actions).toEqual([
       expect.objectContaining({
         action: "push",
-        key: "hasna/xyz/opensource/files/prod/s3",
-        awsName: "test-prefix/hasna/xyz/opensource/files/prod/s3",
+        key: "example/app/prod/s3",
+        awsName: "test-prefix/example/app/prod/s3",
         mutation: "none",
       }),
     ]);
@@ -176,18 +176,18 @@ describe("AWS dry-run planning", () => {
         sent.push(command?.constructor?.name ?? "UnknownCommand");
         return {
           SecretList: [
-            { Name: "hasna/xyz/opensource/files/prod/s3" },
-            { Name: "hasna/xyz/opensource/files/prod/rds" },
+            { Name: "example/app/prod/s3" },
+            { Name: "example/app/prod/rds" },
           ],
         };
       },
     }));
-    await setSecret("hasna/xyz/opensource/files/prod/s3", "secret-value", "credential");
+    await setSecret("example/app/prod/s3", "secret-value", "credential");
     getDb()
       .prepare("UPDATE secrets SET value = ? WHERE key = ?")
-      .run("enc:v1:malformed", "hasna/xyz/opensource/files/prod/s3");
+      .run("enc:v1:malformed", "example/app/prod/s3");
 
-    const result = await syncAll({ dryRun: true, profile: "hasna-xyz-infra" });
+    const result = await syncAll({ dryRun: true, profile: "example-aws-profile" });
 
     expect(sent).toEqual(["ListSecretsCommand"]);
     expect(result.pushed).toEqual([]);
@@ -195,7 +195,7 @@ describe("AWS dry-run planning", () => {
     expect(result.plan?.actions).toContainEqual(
       expect.objectContaining({
         action: "pull",
-        key: "hasna/xyz/opensource/files/prod/rds",
+        key: "example/app/prod/rds",
         mutation: "none",
       })
     );
@@ -212,8 +212,8 @@ describe("AWS live sync (non-dry-run)", () => {
         if (name === "ListSecretsCommand") {
           return {
             SecretList: [
-              { Name: "hasna/xyz/opensource/files/prod/s3" },
-              { Name: "hasna/xyz/opensource/files/prod/rds" },
+              { Name: "example/app/prod/s3" },
+              { Name: "example/app/prod/rds" },
             ],
           };
         }
@@ -224,15 +224,15 @@ describe("AWS live sync (non-dry-run)", () => {
       },
     }));
 
-    await setSecret("hasna/xyz/opensource/files/prod/s3", "local-value", "credential");
+    await setSecret("example/app/prod/s3", "local-value", "credential");
 
-    const result = await syncAll({ profile: "hasna-xyz-infra" });
+    const result = await syncAll({ profile: "example-aws-profile" });
 
     expect(result.errors).toEqual([]);
-    expect(result.pushed).toEqual(["hasna/xyz/opensource/files/prod/s3"]);
-    expect(result.pulled).toEqual(["hasna/xyz/opensource/files/prod/rds"]);
+    expect(result.pushed).toEqual(["example/app/prod/s3"]);
+    expect(result.pulled).toEqual(["example/app/prod/rds"]);
 
-    const pulled = await _store.getSecret("hasna/xyz/opensource/files/prod/rds");
+    const pulled = await _store.getSecret("example/app/prod/rds");
     expect(pulled?.value).toBe("remote-value");
   });
 });

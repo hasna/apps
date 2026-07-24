@@ -124,8 +124,8 @@ describe("exposure scanner", () => {
     writeFileSync(
       join(testDir, "constants.ts"),
       [
-        'export const CANONICAL_SECRETS_RDS_CLUSTER = "hasna-xyz-infra-apps-prod-postgres";',
-        'export const CANONICAL_SECRETS_RDS_SECRET_PATH = "hasna/xyz/opensource/secrets/prod/rds";',
+        'export const CANONICAL_SECRETS_RDS_CLUSTER = "example-apps-prod-postgres";',
+        'export const CANONICAL_SECRETS_RDS_SECRET_PATH = "example/secrets/prod/rds";',
       ].join("\n"),
     );
 
