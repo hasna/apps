@@ -442,7 +442,19 @@ switch (command) {
   case "get": {
     const [key] = positional;
     if (!key) { console.error("Usage: secrets get <key>"); process.exit(1); }
-    const entry = await store().getSecret(key);
+    let entry;
+    try {
+      entry = await store().getSecret(key);
+    } catch (e: any) {
+      // A single-key read is strict: ApiStore.getSecret maps 404 to `undefined`
+      // (handled as "Not found" below) but RETHROWS every other failure — e.g. a
+      // server-side decrypt 500. Catch it here so the CLI prints a clean one-line
+      // error and exits non-zero, instead of leaking a raw HasnaHttpError stack
+      // trace + internal frames (matches the export-env "Skipped unreadable" path).
+      // The message is value-free (method/path/status only); never log the value.
+      console.error(`Unable to read secret "${key}": ${e?.message ?? String(e)}`);
+      process.exit(1);
+    }
     if (!entry) { console.error(`Not found: ${key}`); process.exit(1); }
     if (process.stdout.isTTY) {
       console.log(formatEntry(entry, true));
