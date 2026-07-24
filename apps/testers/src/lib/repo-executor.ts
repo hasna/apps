@@ -2,7 +2,7 @@
 // Runs discovered specs through the repo's own Playwright install,
 // captures results and maps them onto the existing Run/Result model.
 
-import { execSync } from "child_process";
+import { execSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import { createRun, updateRun, createResult, updateResult, createScenario, listScenarios } from "../store/index.js";
@@ -96,37 +96,40 @@ function runPlaywright(
 ): { exitCode: number | null; stdout: string; stderr: string; durationMs: number } {
   const cmd = resolvePlaywrightCmd(repoPath);
   const args = buildPlaywrightArgs(specFiles, extraArgs);
+  const command = cmd[0]!;
+  const spawnArgs = [...cmd.slice(1), ...args];
 
   const startTime = Date.now();
 
-  try {
-    // Use --reporter=line for terminal output, also get JSON via --reporter=json
-    const result = execSync(`${cmd.join(" ")} ${args.join(" ")}`, {
-      cwd: workingDir,
-      encoding: "utf-8",
-      timeout: timeoutMs,
-      maxBuffer: 50 * 1024 * 1024, // 50MB
-      env: { ...process.env, CI: "1" },
-    }).toString();
+  // Run without a shell (shell: false) so spec filenames and extra args are
+  // passed as literal argv entries — never interpreted as shell metacharacters.
+  const result = spawnSync(command, spawnArgs, {
+    cwd: workingDir,
+    encoding: "utf-8",
+    timeout: timeoutMs,
+    maxBuffer: 50 * 1024 * 1024, // 50MB
+    env: { ...process.env, CI: "1" },
+    shell: false,
+  });
 
-    return {
-      exitCode: 0,
-      stdout: result,
-      stderr: "",
-      durationMs: Date.now() - startTime,
-    };
-  } catch (err: any) {
-    const stdout = err.stdout?.toString() ?? "";
-    const stderr = err.stderr?.toString() ?? "";
-    const exitCode = err.status ?? err.code ?? -1;
+  const stdout = result.stdout?.toString() ?? "";
+  const stderr = result.stderr?.toString() ?? "";
 
+  if (result.error) {
     return {
-      exitCode: typeof exitCode === "number" ? exitCode : -1,
+      exitCode: typeof result.status === "number" ? result.status : null,
       stdout,
-      stderr,
+      stderr: stderr || result.error.message,
       durationMs: Date.now() - startTime,
     };
   }
+
+  return {
+    exitCode: typeof result.status === "number" ? result.status : null,
+    stdout,
+    stderr,
+    durationMs: Date.now() - startTime,
+  };
 }
 
 function parsePlaywrightJsonOutput(stdout: string, _stderr: string): RepoRunSpecResult["testResults"] {
@@ -212,10 +215,9 @@ function collectTestsFromSuite(suite: any, results: RepoRunSpecResult["testResul
   }
 }
 
-function determineSpecStatus(exitCode: number | null, testResults: RepoRunSpecResult["testResults"]): RepoRunSpecResult["status"] {
+function determineSpecStatus(exitCode: number | null, _testResults: RepoRunSpecResult["testResults"]): RepoRunSpecResult["status"] {
   if (exitCode === null) return "error";
   if (exitCode === 0) return "passed";
-  if (testResults.length > 0 && testResults.every((t) => t.status === "passed")) return "passed";
   if (exitCode > 128) return "error"; // signal/timeout
   return "failed";
 }
