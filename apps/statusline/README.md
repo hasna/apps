@@ -21,8 +21,9 @@ That's it — Claude Code picks it up on the next status refresh (no restart nee
 
 ## Segments
 
-`statusline list` shows every segment and whether it is enabled in your config. The
-table below is the full catalog — all 18 segment ids from `src/segments/index.ts`.
+`statusline list` shows a compact, enabled-first summary of your segments (use
+`statusline list --all` for every row). The table below is the full catalog — all 18
+segment ids from `src/segments/index.ts`.
 
 `renderLine` walks your configured segment order, renders each one, and **drops**
 anything that returns `null` or throws. A failed segment never breaks the host UI.
@@ -61,32 +62,51 @@ With the test fixture transcript (100k input-side tokens on a 1m window), expect
 
 ### Quick reference from `statusline list`
 
+`statusline list` is compact by default so it stays friendly in agent terminals —
+enabled segments first, capped rows, and hints for the detail paths:
+
 ```
-  [x] machine            Machine hostname (short)
-  [x] project            Project name with current Git branch
-  [ ] project-name       Project name (omitted when unavailable)
-  [ ] git-branch         Current Git branch (omitted when unavailable)
-  [x] commit-age         Time since last commit (compact)
-  [x] loc                Lines of code tracked by Git (compact)
-  [ ] current-dir        Current working directory (basename)
-  [ ] model              Current model name
-  [x] model-context      Model name with context-size tag (e.g. [1m])
-  [ ] context-used       Percentage of context window used (omitted when unknown)
-  [x] context-remaining  Percentage of context window remaining (omitted when unknown)
-  [ ] used-tokens        Total tokens in the context window (omitted when unknown)
-  [x] cost               Session cost in USD (omitted when zero)
-  [ ] duration           Session wall-clock duration
-  [ ] lines-changed      Lines added/removed this session (omitted when zero)
-  [ ] output-style       Active output style (omitted when default)
-  [ ] agent-version      Host agent version (e.g. Claude Code version)
-  [ ] session-id         Session identifier (short)
+Segments: 7 enabled / 18 total (showing 12 of 18)
+state  default  id
+on     yes      machine
+on     yes      project
+on     yes      commit-age
+on     yes      loc
+on     yes      model-context
+on     yes      context-remaining
+on     yes      cost
+off    no       project-name
+off    no       git-branch
+off    no       current-dir
+off    no       model
+off    no       context-used
+Hint: use `--all` for all matching rows, `statusline show <id>` for details, `--verbose` for descriptions, `--json` for machines.
 ```
 
-Column padding in `statusline list` is display-only — it does not affect statusbar width.
+Use gradual disclosure when you need more:
+
+```bash
+statusline list --verbose             # include descriptions, still capped
+statusline list --all --verbose       # include every row with descriptions
+statusline list --all                 # show every segment row
+statusline list --limit 5             # cap rows explicitly
+statusline list --enabled             # only enabled segments
+statusline list --disabled            # only disabled segments
+statusline list --search token        # filter by id or description
+statusline list --json                # structured output for tooling
+statusline show model-context         # full details for one segment
+statusline inspect used-tokens --json # JSON detail path
+```
+
+`statusline list --json` returns `{ total, matching, showing, limited, segments, next }`.
+Each segment has `{ id, description, enabled, defaultEnabled }`; `next` is `null`
+unless the result is limited. Column padding is display-only — it does not affect
+statusbar width.
 
 ## Usage
 
 ```bash
+statusline list                          # compact segment summary
 statusline enable used-tokens duration    # turn segments on (appended at the end)
 statusline disable loc                    # turn segments off
 statusline order machine project model-context cost   # exact order = enabled set
