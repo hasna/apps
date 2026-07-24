@@ -28,7 +28,7 @@ afterEach(() => {
 });
 
 describe("createConversationsProjectPanel", () => {
-  test("emits a contract-valid project conversation panel without full message bodies", () => {
+  test("emits a contract-valid project conversation panel without full message bodies", async () => {
     const project = createProject({ name: "Swiss Bank Account", created_by: "alice" });
     createChannel("iproj-swiss-bank-account", "alice", {
       project_id: project.id,
@@ -53,7 +53,7 @@ describe("createConversationsProjectPanel", () => {
       blocking: true,
     });
 
-    const panel = createConversationsProjectPanel("Swiss Bank Account", { limit: 1 });
+    const panel = await createConversationsProjectPanel("Swiss Bank Account", { limit: 1 });
 
     expect(panel.schema).toBe("hasna.project_panel.v1");
     expect(panel.projectId).toBe("swiss-bank-account");
@@ -68,7 +68,7 @@ describe("createConversationsProjectPanel", () => {
     expect(panel.resourceRefs.some((ref) => ref.uri === "conversation://channel/iproj-swiss-bank-account")).toBe(true);
   });
 
-  test("falls back to #iproj-prefixed channels when no conversations project row exists", () => {
+  test("falls back to #iproj-prefixed channels when no conversations project row exists", async () => {
     createChannel("#iproj-swiss-bank-account", "alice");
     sendMessage({
       from: "alice",
@@ -77,7 +77,7 @@ describe("createConversationsProjectPanel", () => {
       content: "Project channel exists before project registry mapping.",
     });
 
-    const panel = createConversationsProjectPanel("Swiss Bank Account");
+    const panel = await createConversationsProjectPanel("Swiss Bank Account");
 
     expect(panel.projectId).toBe("swiss-bank-account");
     expect(panel.state).toBe("ready");
@@ -86,7 +86,7 @@ describe("createConversationsProjectPanel", () => {
     expect(panel.items[0].resourceRefs.some((ref) => ref.uri === "conversation://channel/iproj-swiss-bank-account")).toBe(true);
   });
 
-  test("includes channel-scoped messages when a project row exists but messages have no project_id", () => {
+  test("includes channel-scoped messages when a project row exists but messages have no project_id", async () => {
     const project = createProject({ name: "Swiss Bank Account", created_by: "alice" });
     createChannel("iproj-swiss-bank-account", "alice", { project_id: project.id });
     sendMessage({
@@ -96,7 +96,7 @@ describe("createConversationsProjectPanel", () => {
       content: "Channel-only project update.",
     });
 
-    const panel = createConversationsProjectPanel(project.id);
+    const panel = await createConversationsProjectPanel(project.id);
 
     expect(panel.state).toBe("ready");
     expect(panel.metrics.find((metric) => metric.id === "messages")?.value).toBe(1);

@@ -1,7 +1,6 @@
 import type { Command } from "commander";
+import { getStore } from "../../lib/store/index.js";
 import chalk from "chalk";
-import { getMessageById, getReadReceipts, getMessageReadStatus } from "../../lib/messages.js";
-import { getChannel } from "../../lib/channels.js";
 import { closeDb } from "../../lib/db.js";
 import { normalizeChannelName } from "../../lib/channel-names.js";
 
@@ -12,14 +11,14 @@ export function registerReceiptCommands(program: Command): void {
     .argument("<message-id>", "Message ID")
     .option("--channel <name>", "Channel name — include members who have not read the message")
     .option("-j, --json", "Output as JSON")
-    .action((messageId, opts) => {
+    .action(async (messageId, opts) => {
       const id = Number(typeof messageId === "string" ? messageId.trim() : messageId);
       if (!Number.isInteger(id) || id <= 0) {
         console.error(chalk.red("Message ID must be a positive integer."));
         process.exit(1);
       }
 
-      const message = getMessageById(id);
+      const message = await getStore().getMessageById(id);
       if (!message) {
         console.error(chalk.red(`Message #${id} not found.`));
         process.exit(1);
@@ -32,7 +31,7 @@ export function registerReceiptCommands(program: Command): void {
       }
 
       if (channelArg) {
-        if (!getChannel(channelArg)) {
+        if (!await getStore().getChannel(channelArg)) {
           console.error(chalk.red(`Channel #${channelArg} not found.`));
           process.exit(1);
         }
@@ -41,7 +40,7 @@ export function registerReceiptCommands(program: Command): void {
           console.error(chalk.red(`Message #${id} does not belong to channel #${normalizedChannel}.`));
           process.exit(1);
         }
-        const status = getMessageReadStatus(id, channelArg);
+        const status = await getStore().getMessageReadStatus(id, channelArg);
         if (opts.json) {
           console.log(JSON.stringify({ message_id: id, channel: channelArg, ...status, read_count: status.receipts.length, unread_count: status.unread_by.length }, null, 2));
         } else {
@@ -54,7 +53,7 @@ export function registerReceiptCommands(program: Command): void {
           }
         }
       } else {
-        const receipts = getReadReceipts(id);
+        const receipts = await getStore().getReadReceipts(id);
         if (opts.json) {
           console.log(JSON.stringify({ message_id: id, receipts, count: receipts.length }, null, 2));
         } else if (receipts.length === 0) {

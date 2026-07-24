@@ -1,19 +1,12 @@
 import type { Command } from "commander";
+import { getStore } from "../../lib/store/index.js";
 import chalk from "chalk";
-import { readMessages } from "../../lib/messages.js";
-import { listSessions } from "../../lib/sessions.js";
-import { getDb, getDbPath, closeDb } from "../../lib/db.js";
+import { getDbPath, closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
-import { heartbeat, listAgents } from "../../lib/presence.js";
-import { addReaction, removeReaction, getReactionSummary } from "../../lib/reactions.js";
-import { listHotSessions } from "../../lib/hot.js";
-import { getChannelTopics, getSessionTopics, getTrendingTopics } from "../../lib/topics.js";
-import { getConversationSummary } from "../../lib/summary.js";
-import { buildGraph, getAgentNetwork, getGraphStats } from "../../lib/graph.js";
-import { listChannelNotificationSubscriptions, readChannelNotifications } from "../../lib/channel-notifications.js";
 import { windowItems } from "../../lib/compact-output.js";
+import { isCloudStore, cloudApiUrl } from "../../lib/store/index.js";
+import { checkForUpdate } from "../../lib/version-check.js";
 import { getCliWindow, printCompactFooter } from "../compact.js";
-import pkg from "../../../package.json";
 
 export function registerAnalyticsCommands(program: Command): void {
   // ---- graph ----
@@ -23,8 +16,8 @@ export function registerAnalyticsCommands(program: Command): void {
     .command("build")
     .description("Build/rebuild knowledge graph from messages, channels, projects")
     .option("-j, --json", "Output as JSON")
-    .action((opts) => {
-      const result = buildGraph();
+    .action(async (opts) => {
+      const result = await getStore().buildGraph();
       if (opts.json) {
         console.log(JSON.stringify(result, null, 2));
       } else {
@@ -37,8 +30,8 @@ export function registerAnalyticsCommands(program: Command): void {
     .command("stats")
     .description("Show knowledge graph statistics")
     .option("-j, --json", "Output as JSON")
-    .action((opts) => {
-      const stats = getGraphStats();
+    .action(async (opts) => {
+      const stats = await getStore().getGraphStats();
       if (opts.json) {
         console.log(JSON.stringify(stats, null, 2));
       } else {
@@ -55,8 +48,8 @@ export function registerAnalyticsCommands(program: Command): void {
     .description("Show an agent's communication network")
     .argument("<name>", "Agent name")
     .option("-j, --json", "Output as JSON")
-    .action((name, opts) => {
-      const network = getAgentNetwork(name);
+    .action(async (name, opts) => {
+      const network = await getStore().getAgentNetwork(name);
       if (opts.json) {
         console.log(JSON.stringify(network, null, 2));
       } else {
@@ -86,8 +79,8 @@ export function registerAnalyticsCommands(program: Command): void {
     .description("Get a structured summary of a conversation")
     .argument("<target>", "Session ID or channel name")
     .option("-j, --json", "Output as JSON")
-    .action((target, opts) => {
-      const summary = getConversationSummary(target);
+    .action(async (target, opts) => {
+      const summary = await getStore().getConversationSummary(target);
       if (!summary) {
         console.error(chalk.red(`No messages found for "${target}"`));
         process.exit(1);
@@ -131,14 +124,14 @@ export function registerAnalyticsCommands(program: Command): void {
     .option("--session <id>", "Topics for a specific session")
     .option("--hours <n>", "Trending topics in last N hours", parseInt)
     .option("-j, --json", "Output as JSON")
-    .action((opts) => {
+    .action(async (opts) => {
       let topics;
       if (opts.channel) {
-        topics = getChannelTopics(opts.channel);
+        topics = await getStore().getChannelTopics(opts.channel);
       } else if (opts.session) {
-        topics = getSessionTopics(opts.session);
+        topics = await getStore().getSessionTopics(opts.session);
       } else {
-        topics = getTrendingTopics({ hours: opts.hours ?? 24 });
+        topics = await getStore().getTrendingTopics({ hours: opts.hours ?? 24 });
       }
 
       if (opts.json) {
@@ -166,8 +159,8 @@ export function registerAnalyticsCommands(program: Command): void {
     .option("--min-score <n>", "Minimum hotness score", parseInt)
     .option("--channel <name>", "Filter by channel")
     .option("-j, --json", "Output as JSON")
-    .action((opts) => {
-      const sessions = listHotSessions({
+    .action(async (opts) => {
+      const sessions = await getStore().listHotSessions({
         limit: opts.limit ?? 10,
         min_score: opts.minScore,
         channel: opts.channel,
@@ -199,37 +192,30 @@ export function registerAnalyticsCommands(program: Command): void {
     .description("One-shot session boot context for agents: online agents, unread DMs, channels, recent activity")
     .option("--limit <n>", "Max rows per section", parseInt)
     .option("-j, --json", "Output as JSON")
-    .action((opts) => {
+    .action(async (opts) => {
       const agent = resolveIdentity();
-      heartbeat(agent);
-      const db = getDb();
+      const store = getStore();
+      await store.heartbeat(agent);
       const window = getCliWindow({ limit: opts.limit });
 
       // Online agents
-      const onlineAgents = listAgents({ online_only: true });
+      const onlineAgents = await store.listAgents({ online_only: true });
 
       // Unread DMs
-      const unreadDMs = readMessages({ to: agent, unread_only: true, limit: 5 });
+      const unreadDMs = await store.readMessages({ to: agent, unread_only: true, limit: 5 });
 
-      // Channels I'm in
-      const myChannels = db.prepare(`
-        SELECT s.name, s.description,
-          (SELECT COUNT(*) FROM messages m WHERE m.channel = s.name AND m.read_at IS NULL) as unread
-        FROM channels s
-        JOIN channel_members sm ON sm.channel = s.name
-        WHERE sm.agent = ?
-        ORDER BY s.name
-      `).all(agent) as { name: string; description: string | null; unread: number }[];
+      // Channels I'm in (with per-channel unread counts) — routed through the Store
+      const myChannels = await store.getMemberChannels(agent);
 
-      const subscriptions = listChannelNotificationSubscriptions(agent);
-      const channelNotifications = readChannelNotifications({
+      const subscriptions = await store.listChannelNotificationSubscriptions(agent);
+      const channelNotifications = await store.readChannelNotifications({
         agent,
         unread_only: true,
         limit: 5,
       });
 
       // Recent DMs (last 3 messages to me)
-      const recentDMs = readMessages({ to: agent, limit: 3 });
+      const recentDMs = await store.readMessages({ to: agent, limit: 3 });
 
       const context = {
         agent,
@@ -314,8 +300,8 @@ export function registerAnalyticsCommands(program: Command): void {
     .option("--limit <n>", "Max sessions to show", parseInt)
     .option("--cursor <n>", "Skip first N sessions for pagination", parseInt)
     .option("-j, --json", "Output as JSON")
-    .action((opts) => {
-      const sessions = listSessions(opts.agent);
+    .action(async (opts) => {
+      const sessions = await getStore().listSessions(opts.agent);
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
       const page = windowItems(sessions, window);
 
@@ -350,21 +336,38 @@ export function registerAnalyticsCommands(program: Command): void {
     .command("status")
     .description("Show database stats")
     .option("-j, --json", "Output as JSON")
-    .action((opts) => {
-      const db = getDb();
-      const dbPath = getDbPath();
-      const totalMessages = (db.prepare("SELECT COUNT(*) as count FROM messages").get() as { count: number }).count;
-      const totalSessions = (db.prepare("SELECT COUNT(DISTINCT session_id) as count FROM messages").get() as { count: number }).count;
-      const totalUnread = (db.prepare("SELECT COUNT(*) as count FROM messages WHERE read_at IS NULL").get() as { count: number }).count;
-      const totalChannels = (db.prepare("SELECT COUNT(*) as count FROM channels").get() as { count: number }).count;
-      const totalProjects = (db.prepare("SELECT COUNT(*) as count FROM projects").get() as { count: number }).count;
+    .action(async (opts) => {
+      // ONE path through the Store: counts come from whichever transport the client
+      // is flipped to (LocalStore sqlite or the self_hosted/cloud API), so operators
+      // verifying a flip see the store agents actually read/write — never raw sqlite,
+      // never the stale local db while cloud is active.
+      const store = getStore();
+      const cloud = isCloudStore();
 
-      const stats = {
-        db_path: dbPath,
+      const [totalMessages, sessions, channels, projects, totalUnread] = await Promise.all([
+        store.countMessages(),
+        store.listSessions(),
+        store.listChannels({ include_archived: true }),
+        store.listProjects(),
+        store.countMessages({ unread_only: true }),
+      ]);
+
+      const stats: {
+        mode: "self_hosted" | "local";
+        api_url?: string | null;
+        db_path?: string;
+        total_messages: number;
+        total_sessions: number;
+        total_channels: number;
+        total_projects: number;
+        unread_messages: number;
+      } = {
+        mode: cloud ? "self_hosted" : "local",
+        ...(cloud ? { api_url: cloudApiUrl() } : { db_path: getDbPath() }),
         total_messages: totalMessages,
-        total_sessions: totalSessions,
-        total_channels: totalChannels,
-        total_projects: totalProjects,
+        total_sessions: sessions.length,
+        total_channels: channels.length,
+        total_projects: projects.length,
         unread_messages: totalUnread,
       };
 
@@ -372,10 +375,16 @@ export function registerAnalyticsCommands(program: Command): void {
         console.log(JSON.stringify(stats, null, 2));
       } else {
         console.log(chalk.bold("Conversations Status"));
-        console.log(`  DB Path:    ${stats.db_path}`);
+        if (cloud) {
+          console.log(`  Mode:       self_hosted (cloud API)`);
+          console.log(`  API URL:    ${stats.api_url ?? "(set)"}`);
+        } else {
+          console.log(`  Mode:       local`);
+          console.log(`  DB Path:    ${stats.db_path}`);
+        }
         console.log(`  Messages:   ${stats.total_messages}`);
         console.log(`  Sessions:   ${stats.total_sessions}`);
-        console.log(`  Channels:     ${stats.total_channels}`);
+        console.log(`  Channels:   ${stats.total_channels}`);
         console.log(`  Projects:   ${stats.total_projects}`);
         console.log(`  Unread:     ${stats.unread_messages}`);
       }
@@ -390,24 +399,13 @@ export function registerAnalyticsCommands(program: Command): void {
     .action(async (opts) => {
       const checks: { name: string; ok: boolean; message: string }[] = [];
 
-      // 1. DB accessible
+      // 1. Storage health — routed through the Store so this reflects the transport
+      //    the client is flipped to (local sqlite opens + WAL, or cloud API reach +
+      //    auth). No CLI command touches sqlite directly.
       try {
-        const db = getDb();
-        db.prepare("SELECT 1").get();
-        const dbPath = getDbPath();
-        checks.push({ name: "Database", ok: true, message: `OK — ${dbPath}` });
+        checks.push(...(await getStore().health()));
       } catch (e: any) {
-        checks.push({ name: "Database", ok: false, message: `Cannot open DB: ${e.message}` });
-      }
-
-      // 2. WAL mode
-      try {
-        const db = getDb();
-        const mode = db.prepare("PRAGMA journal_mode").get() as { journal_mode: string };
-        const isWal = mode.journal_mode === "wal";
-        checks.push({ name: "WAL mode", ok: isWal, message: isWal ? "OK — WAL mode enabled" : `WARNING — journal_mode is ${mode.journal_mode}` });
-      } catch {
-        checks.push({ name: "WAL mode", ok: false, message: "Could not check WAL mode" });
+        checks.push({ name: "Storage", ok: false, message: `Health check failed: ${e.message}` });
       }
 
       // 3. MCP binary on PATH
@@ -420,16 +418,16 @@ export function registerAnalyticsCommands(program: Command): void {
         checks.push({ name: "MCP binary", ok: false, message: "Could not check MCP binary" });
       }
 
-      // 4. npm version check
-      try {
-        const current = pkg.version;
-        const res = await fetch("https://registry.npmjs.org/@hasna/conversations/latest");
-        const data = await res.json() as { version: string };
-        const latest = data.version;
-        const upToDate = current === latest;
-        checks.push({ name: "npm version", ok: upToDate, message: upToDate ? `OK — v${current} (latest)` : `Update available: v${current} → v${latest} — run: bun install -g @hasna/conversations@latest` });
-      } catch {
-        checks.push({ name: "npm version", ok: true, message: "Could not check npm registry (offline?)" });
+      // 4. npm version check (registry probe via shared helper — never a raw fetch here)
+      {
+        const info = await checkForUpdate();
+        if (info.latest === null) {
+          checks.push({ name: "npm version", ok: true, message: "Could not check npm registry (offline?)" });
+        } else if (info.updateAvailable) {
+          checks.push({ name: "npm version", ok: false, message: `Update available: v${info.current} → v${info.latest} — run: bun install -g @hasna/conversations@latest` });
+        } else {
+          checks.push({ name: "npm version", ok: true, message: `OK — v${info.current} (latest)` });
+        }
       }
 
       // 5. Webhook config validity
@@ -482,9 +480,9 @@ export function registerAnalyticsCommands(program: Command): void {
     .argument("<emoji>", "Emoji to react with")
     .option("--from <agent>", "Agent identity override")
     .option("-j, --json", "Output as JSON")
-    .action((id, emoji, opts) => {
+    .action(async (id, emoji, opts) => {
       const agent = resolveIdentity(opts.from);
-      const reaction = addReaction(id, agent, emoji);
+      const reaction = await getStore().addReaction(id, agent, emoji);
       if (opts.json) {
         console.log(JSON.stringify(reaction, null, 2));
       } else {
@@ -501,9 +499,9 @@ export function registerAnalyticsCommands(program: Command): void {
     .argument("<emoji>", "Emoji to remove")
     .option("--from <agent>", "Agent identity override")
     .option("-j, --json", "Output as JSON")
-    .action((id, emoji, opts) => {
+    .action(async (id, emoji, opts) => {
       const agent = resolveIdentity(opts.from);
-      const removed = removeReaction(id, agent, emoji);
+      const removed = await getStore().removeReaction(id, agent, emoji);
       if (opts.json) {
         console.log(JSON.stringify({ removed }, null, 2));
       } else {
@@ -522,8 +520,8 @@ export function registerAnalyticsCommands(program: Command): void {
     .description("Show emoji reactions on a message")
     .argument("<id>", "Message ID", parseInt)
     .option("-j, --json", "Output as JSON")
-    .action((id, opts) => {
-      const summary = getReactionSummary(id);
+    .action(async (id, opts) => {
+      const summary = await getStore().getReactionSummary(id);
       if (opts.json) {
         console.log(JSON.stringify(summary, null, 2));
       } else {

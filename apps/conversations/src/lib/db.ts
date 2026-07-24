@@ -1087,3 +1087,38 @@ export function closeDb(): void {
     db = null;
   }
 }
+
+/**
+ * On-box SQLite health probe for the `doctor` diagnostic. This is the ONLY place
+ * outside the domain helpers that reaches for the raw handle, and it is confined
+ * to the db module (never a CLI command) so the Store abstraction stays intact:
+ * {@link LocalStore.health} delegates here, {@link ApiStore.health} pings the API
+ * instead. Verifies the local db opens and reports WAL mode.
+ */
+export function localHealthChecks(): { name: string; ok: boolean; message: string }[] {
+  const checks: { name: string; ok: boolean; message: string }[] = [];
+
+  try {
+    const handle = getDb();
+    handle.prepare("SELECT 1").get();
+    checks.push({ name: "Database", ok: true, message: `OK — ${getDbPath()}` });
+  } catch (e) {
+    checks.push({ name: "Database", ok: false, message: `Cannot open DB: ${(e as Error).message}` });
+    return checks; // WAL check is meaningless if the db won't open
+  }
+
+  try {
+    const handle = getDb();
+    const mode = handle.prepare("PRAGMA journal_mode").get() as { journal_mode: string };
+    const isWal = mode.journal_mode === "wal";
+    checks.push({
+      name: "WAL mode",
+      ok: isWal,
+      message: isWal ? "OK — WAL mode enabled" : `WARNING — journal_mode is ${mode.journal_mode}`,
+    });
+  } catch {
+    checks.push({ name: "WAL mode", ok: false, message: "Could not check WAL mode" });
+  }
+
+  return checks;
+}

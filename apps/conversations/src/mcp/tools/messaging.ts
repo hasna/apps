@@ -7,14 +7,15 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { sendMessage, readMessages, readDigest, markRead, markReadByIds, markChannelRead, getMessageById, searchMessages, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, markUnreadByIds } from "../../lib/messages.js";
-import { listSessions } from "../../lib/sessions.js";
+import { getStore } from "../../lib/store/index.js";
+// Reads/writes route through getStore(): ApiStore when HASNA_CONVERSATIONS_API_URL
+// + _API_KEY are set (self_hosted/cloud), else LocalStore.
 import { resolveIdentity } from "../../lib/identity.js";
 import { compactQueriedMessages, compactQueriedSearchMessages, compactWindowedSessions, jsonText, resolveMcpWindow } from "../compact.js";
 
 export function registerMessagingTools(
   server: McpServer,
-  resolveProjectId: (explicitProjectId: string | undefined, agentId: string) => string | undefined,
+  resolveProjectId: (explicitProjectId: string | undefined, agentId: string) => Promise<string | undefined>,
 ): void {
 
   // Per-(sender, session) rate limiter for session-targeted injections
@@ -36,7 +37,7 @@ export function registerMessagingTools(
     const to = toParam || to_agent; // Accept both "to" and "to_agent"
     const from = resolveIdentity(fromParam);
 
-    const msg = sendMessage({
+    const msg = await await getStore().sendMessage({
       from,
       to: target_session_id ? `session:${target_session_id}` : to,
       content,
@@ -83,7 +84,7 @@ export function registerMessagingTools(
     }
 
     // Use session:<target_session_id> as the to field and store the real target in metadata
-    const msg = sendMessage({
+    const msg = await await getStore().sendMessage({
       from,
       to: `session:${target_session_id}`,
       content,
@@ -121,16 +122,16 @@ export function registerMessagingTools(
     const agent = resolveIdentity(args.from);
     const window = resolveMcpWindow(args);
     const verbose = args.verbose === true;
-    const messages = readMessages({
+    const messages = await await getStore().readMessages({
       ...args,
       limit: verbose ? args.limit : window.limit + 1,
       offset: verbose ? (args.offset ?? args.cursor) : window.offset,
-      project_id: args.project_id ?? resolveProjectId(undefined, agent),
+      project_id: args.project_id ?? (await resolveProjectId(undefined, agent)),
     });
 
     if (args.mark_read !== false && messages.length > 0) {
       const visible = verbose ? messages : messages.slice(0, window.limit);
-      markReadByIds(visible.map((m) => m.id), agent);
+      await await getStore().markReadByIds(visible.map((m) => m.id), agent);
     }
 
     const payload = verbose
@@ -147,7 +148,7 @@ export function registerMessagingTools(
       id: z.coerce.number().describe("Numeric message ID to fetch"),
     },
   }, async (args: Record<string, any>) => {
-    const message = getMessageById(args.id);
+    const message = await await getStore().getMessageById(args.id);
     if (!message) {
       return {
         content: [{ type: "text", text: `Message #${args.id} not found` }],
@@ -170,7 +171,7 @@ export function registerMessagingTools(
     },
   }, async (args: Record<string, any>) => {
     const { agent } = args;
-    const sessions = listSessions(agent);
+    const sessions = await getStore().listSessions(agent);
 
     return {
       content: [{ type: "text", text: jsonText(args.verbose ? sessions : compactWindowedSessions(sessions, args)) }],
@@ -188,7 +189,7 @@ export function registerMessagingTools(
   }, async (args: Record<string, any>) => {
     const { from: fromParam, message_id: mid, reply_to, content } = args;
     const message_id = mid || reply_to;
-    const original = getMessageById(message_id);
+    const original = await await getStore().getMessageById(message_id);
     if (!original) {
       return {
         content: [{ type: "text", text: `Message #${message_id} not found` }],
@@ -200,7 +201,7 @@ export function registerMessagingTools(
     const channel =
       original.channel ||
       (original.session_id?.startsWith("channel:") ? original.session_id.slice(6) : undefined);
-    const msg = sendMessage({
+    const msg = await await getStore().sendMessage({
       from,
       to: channel ?? (original.from_agent === from ? original.to_agent : original.from_agent),
       content,
@@ -227,9 +228,9 @@ export function registerMessagingTools(
     let count: number;
 
     if (all) {
-      count = markAllRead(agent);
+      count = await await getStore().markAllRead(agent);
     } else if (ids && ids.length > 0) {
-      count = markRead(ids, agent);
+      count = await await getStore().markRead(ids, agent);
     } else {
       return {
         content: [{ type: "text", text: "provide ids or set all=true" }],
@@ -253,7 +254,7 @@ export function registerMessagingTools(
       return { content: [{ type: "text", text: "Provide message_id or ids" }], isError: true };
     }
     const ids: number[] = args.ids ?? (args.message_id ? [args.message_id] : []);
-    const count = markUnreadByIds(ids);
+    const count = await await getStore().markUnreadByIds(ids);
     return { content: [{ type: "text", text: JSON.stringify({ marked_unread: count }) }] };
   });
 
@@ -265,7 +266,7 @@ export function registerMessagingTools(
     },
   }, async (args: Record<string, any>) => {
     const { channel, from: fromParam } = args;
-    const count = markChannelRead(channel, fromParam);
+    const count = await await getStore().markChannelRead(channel, fromParam);
     return {
       content: [{ type: "text", text: JSON.stringify({ channel, marked_read: count }) }],
     };
@@ -289,7 +290,7 @@ export function registerMessagingTools(
     const { query, channel, from, to, since, until, sort } = args;
     const window = resolveMcpWindow(args);
     const verbose = args.verbose === true;
-    const results = searchMessages({
+    const results = await await getStore().searchMessages({
       query,
       channel,
       from,
@@ -321,7 +322,7 @@ export function registerMessagingTools(
     },
   }, async (args: Record<string, any>) => {
     const { channel, session_id, from, since, until, format } = args;
-    const result = exportMessages({ channel, session_id, from, since, until, format });
+    const result = await getStore().exportMessages({ channel, session_id, from, since, until, format });
 
     return {
       content: [{ type: "text", text: result }],
@@ -354,7 +355,7 @@ export function registerMessagingTools(
     }
     let result;
     try {
-      result = readDigest({
+      result = await await getStore().readDigest({
         channel,
         session_id,
         to,
@@ -365,7 +366,7 @@ export function registerMessagingTools(
         unread_only,
         mark_read,
         reader: mark_read ? agent : undefined,
-        project_id: project_id ?? resolveProjectId(undefined, agent),
+        project_id: project_id ?? (await resolveProjectId(undefined, agent)),
       });
     } catch (error) {
       return {
@@ -387,7 +388,7 @@ export function registerMessagingTools(
   }, async (args: Record<string, any>) => {
     const { from: fromParam, id } = args;
     const agent = resolveIdentity(fromParam);
-    const deleted = deleteMessage(id, agent);
+    const deleted = await await getStore().deleteMessage(id, agent);
 
     if (!deleted) {
       return {
@@ -411,7 +412,7 @@ export function registerMessagingTools(
   }, async (args: Record<string, any>) => {
     const { from: fromParam, id, content } = args;
     const agent = resolveIdentity(fromParam);
-    const msg = editMessage(id, agent, content);
+    const msg = await await getStore().editMessage(id, agent, content);
 
     if (!msg) {
       return {
@@ -431,7 +432,7 @@ export function registerMessagingTools(
       id: z.coerce.number(),
     },
   }, async ({ id }) => {
-    const msg = pinMessage(id);
+    const msg = await await getStore().pinMessage(id);
 
     if (!msg) {
       return {
@@ -451,7 +452,7 @@ export function registerMessagingTools(
       id: z.coerce.number(),
     },
   }, async ({ id }) => {
-    const msg = unpinMessage(id);
+    const msg = await await getStore().unpinMessage(id);
 
     if (!msg) {
       return {
@@ -478,7 +479,7 @@ export function registerMessagingTools(
     const { channel, session_id } = args;
     const window = resolveMcpWindow(args);
     const verbose = args.verbose === true;
-    const messages = getPinnedMessages({
+    const messages = await await getStore().getPinnedMessages({
       channel,
       session_id,
       limit: verbose ? args.limit : window.limit + 1,
@@ -507,7 +508,7 @@ export function registerMessagingTools(
 
     for (const channel of (channels as string[])) {
       try {
-        const msg = sendMessage({ from, to: channel, content, channel, priority });
+        const msg = await await getStore().sendMessage({ from, to: channel, content, channel, priority });
         results.push({ channel, id: msg.id });
       } catch (e) {
         errors.push(`${channel}: ${e instanceof Error ? e.message : String(e)}`);

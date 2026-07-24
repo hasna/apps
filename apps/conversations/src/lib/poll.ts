@@ -1,5 +1,11 @@
-import { useState, useEffect } from "react";
-import { readMessages } from "./messages.js";
+// Live message polling. Routes EVERY read through the active Store (getStore),
+// so `conversations watch` and the interactive TUI surface new messages from
+// whichever transport is active — on-box SQLite (LocalStore) or the
+// self_hosted/cloud HTTP API (ApiStore). Nothing here touches sqlite directly;
+// reading the local db while the client was flipped to the cloud was the
+// split-brain bug this eliminates.
+
+import { getStore } from "./store/index.js";
 import type { Message } from "../types.js";
 
 export interface PollOptions {
@@ -11,33 +17,46 @@ export interface PollOptions {
 }
 
 /**
- * Start polling for new messages. Returns a stop function.
+ * Start polling for new messages. Returns a stop function. Reads flow through
+ * the active {@link getStore} transport, so the same loop works in local and
+ * cloud modes.
  */
 export function startPolling(opts: PollOptions): { stop: () => void } {
   const interval = opts.interval_ms ?? 200;
+  const store = getStore();
   let stopped = false;
   let inFlight = false;
   let lastSeenId = 0;
 
-  const seedLastSeen = () => {
-    const latest = readMessages({
+  // Seed lastSeenId at call time so we never replay messages that already
+  // existed when watching began. The read is issued synchronously (the local
+  // transport resolves inline; the cloud transport on the next tick) and every
+  // poll awaits it before querying, keeping the "only NEW messages" contract in
+  // both modes.
+  const seeded = store
+    .readMessages({
       session_id: opts.session_id,
       to: opts.to_agent,
       channel: opts.channel,
       order: "desc",
       limit: 1,
+    })
+    .then((latest) => {
+      if (latest.length > 0 && latest[0].id > lastSeenId) lastSeenId = latest[0].id;
+    })
+    .catch(() => {
+      // A failed seed just means the first poll starts from id 0; never fatal.
     });
-    if (latest.length > 0) {
-      lastSeenId = latest[0].id;
-    }
-  };
 
-  const poll = () => {
+  const poll = async () => {
     if (stopped || inFlight) return;
     inFlight = true;
 
     try {
-      const messages = readMessages({
+      await seeded;
+      if (stopped) return;
+
+      const messages = await store.readMessages({
         session_id: opts.session_id,
         to: opts.to_agent,
         channel: opts.channel,
@@ -58,8 +77,9 @@ export function startPolling(opts: PollOptions): { stop: () => void } {
     }
   };
 
-  seedLastSeen();
-  const timer = setInterval(poll, interval);
+  const timer = setInterval(() => {
+    void poll();
+  }, interval);
 
   return {
     stop: () => {
@@ -67,52 +87,4 @@ export function startPolling(opts: PollOptions): { stop: () => void } {
       clearInterval(timer);
     },
   };
-}
-
-/**
- * React hook for polling messages in a session.
- */
-export function useMessages(sessionId: string, agent?: string): Message[] {
-  const [messages, setMessages] = useState<Message[]>([]);
-
-  useEffect(() => {
-    const existing = readMessages({ session_id: sessionId });
-    setMessages(existing);
-
-    const { stop } = startPolling({
-      session_id: sessionId,
-      interval_ms: 200,
-      on_messages: (newMessages) => {
-        setMessages((prev) => [...prev, ...newMessages]);
-      },
-    });
-
-    return stop;
-  }, [sessionId, agent]);
-
-  return messages;
-}
-
-/**
- * React hook for polling messages in a channel.
- */
-export function useChannelMessages(channelName: string): Message[] {
-  const [messages, setMessages] = useState<Message[]>([]);
-
-  useEffect(() => {
-    const existing = readMessages({ channel: channelName });
-    setMessages(existing);
-
-    const { stop } = startPolling({
-      channel: channelName,
-      interval_ms: 200,
-      on_messages: (newMessages) => {
-        setMessages((prev) => [...prev, ...newMessages]);
-      },
-    });
-
-    return stop;
-  }, [channelName]);
-
-  return messages;
 }

@@ -1,8 +1,24 @@
 # conversations-serve — ARM64 / Bun runtime image for the self_hosted service.
 # PURE REMOTE (Amendment A1): the serve process talks to the shared cloud
 # Postgres directly. No SQLite, no local state.
-FROM oven/bun:1 AS base
+#
+# Base image: AWS's credential-free ECR Public mirror of the Debian Official
+# Image, with a pinned Bun installed via the official installer. oven/bun:1 is
+# itself Debian-based, so this is functionally equivalent — but it avoids
+# docker.io, whose anonymous pull rate limit (HTTP 429) reliably fails the
+# shared-IP CodeBuild fleet builder.
+FROM public.ecr.aws/docker/library/debian:bookworm-slim AS base
 WORKDIR /app
+
+# ---- bun runtime ----
+ENV BUN_INSTALL=/usr/local/bun
+ENV PATH=$BUN_INSTALL/bin:$PATH
+ARG BUN_VERSION=1.3.13
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl unzip ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
+ && bun --version
 
 # ---- deps (cached) ----
 COPY package.json bun.lock ./
