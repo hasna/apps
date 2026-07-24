@@ -17,6 +17,7 @@ import { registerAnalyticsCommands } from "./commands/analytics.js";
 import { registerReceiptCommands } from "./commands/receipts.js";
 import { registerLockCommands } from "./commands/locks.js";
 import { registerTmuxCommands } from "./commands/tmux.js";
+import { registerAdminCommands } from "./commands/admin.js";
 import pkg from "../../package.json";
 
 const program = new Command();
@@ -35,6 +36,7 @@ registerAnalyticsCommands(program);
 registerReceiptCommands(program);
 registerLockCommands(program);
 registerTmuxCommands(program);
+registerAdminCommands(program);
 
 // ---- mcp ----
 program

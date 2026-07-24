@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.5.9] - 2026-07-24
+
+### Added
+- **Audited local-SQLite message redaction: `conversations admin redact-messages [ids...]`.** Redacts known credential-shaped messages by id without ever printing message bodies. Dry-run is the default; live mutation (`--apply`) is gated on `--backup-confirmed`, `--dry-run-confirmed`, and an owner `--authority <ref>`. On apply it overwrites `content`, `metadata`, and attachment references, deletes managed attachment files (path-traversal-safe: only files under the message's managed attachments dir are removed), scrubs the FTS/export surfaces, records a hashed audit row in `message_redaction_audit`, and clears SQLite residual storage via `secure_delete` + `wal_checkpoint(TRUNCATE)` + `VACUUM`. Exposed programmatically as `redactMessagesById`. The tool is on-box SQLite maintenance only: it refuses to run when the station is flipped to cloud/self_hosted mode (`isCloudStore()`), so a security remediation is never silently applied to an empty local DB while the real data lives in the cloud store.
+
 ## [0.5.8] - 2026-07-24
 
 ### Security

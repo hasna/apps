@@ -35,3 +35,12 @@ export {
   createConversationsProjectPanel,
   type ConversationsProjectPanelOptions,
 } from "./lib/project-panel.js";
+
+// Audited admin redaction tooling (local SQLite maintenance; CLI: `conversations admin redact-messages`).
+export { redactMessagesById } from "./lib/admin-redaction.js";
+export type {
+  RedactMessagesOptions,
+  RedactMessagesResult,
+  RedactionClass,
+  RedactionMessageReport,
+} from "./lib/admin-redaction.js";
