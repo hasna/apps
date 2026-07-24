@@ -518,6 +518,13 @@ export interface UpdateTaskInput {
 }
 
 export interface TaskFilter {
+  /**
+   * Full-text search query. On Postgres (self-hosted/cloud) this drives a
+   * weighted tsvector `websearch_to_tsquery` match with a pg_trgm word-similarity
+   * fuzzy fallback, ranked by `ts_rank_cd`. On SQLite the equivalent FTS5 path is
+   * `searchTasks` in src/lib/search.ts. A lone "*" means "match everything".
+   */
+  query?: string;
   project_id?: string;
   parent_id?: string | null;
   plan_id?: string;

@@ -377,6 +377,7 @@ function unwrapTask(raw: unknown): Task {
 /** Map a local TaskFilter onto the query params the `/v1/tasks` list route honors. */
 function toListQuery(filter: TaskFilter = {}): Record<string, string | number> {
   const query: Record<string, string | number> = {};
+  if (filter.query) query["q"] = filter.query;
   if (filter.status) query["status"] = Array.isArray(filter.status) ? filter.status.join(",") : filter.status;
   if (filter.priority) query["priority"] = Array.isArray(filter.priority) ? filter.priority.join(",") : filter.priority;
   if (filter.project_id) query["project_id"] = filter.project_id;
