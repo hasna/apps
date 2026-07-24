@@ -38,6 +38,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["cdn", "dns", "edge"],
   },
   {
+    name: "cloudflare-workers",
+    displayName: "Cloudflare Workers",
+    description: "Cloudflare Workers REST API connector for scripts, multipart uploads, routes, deployments, versions, secrets, cron schedules, tails, subdomains, beta Workers, and scoped raw account or zone requests",
+    category: "Developer Tools",
+    tags: ["cloudflare", "workers", "serverless", "edge", "deployments", "developer-tools"],
+  },
+  {
     name: "googlecloud",
     displayName: "Google Cloud",
     description: "GCP services and APIs",
