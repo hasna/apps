@@ -675,6 +675,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["books", "ratings", "data"],
   },
   {
+    name: "zoho-analytics",
+    displayName: "Zoho Analytics",
+    description: "BI and analytics platform for dashboards, reports, and data blending",
+    category: "Data & Analytics",
+    tags: ["analytics", "bi", "zoho", "dashboards"],
+  },
+  {
     name: "zenrows",
     displayName: "ZenRows",
     description: "Web scraping API with anti-bot bypass",
