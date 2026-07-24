@@ -259,7 +259,7 @@ async function withPreview(toolName, args, options, previewFactory, execute) {
 function sourceContext(options) {
   return {
     actorType: options.actorType || 'agent',
-    actorName: options.actorName || process.env.HASNA_NOTES_ACTOR_NAME || 'Hasna Notes Agent',
+    actorName: options.actorName || process.env.HASNA_NOTES_ACTOR_NAME || 'Personal Notes Agent',
     openedFrom: options.openedFrom || 'agent',
     sourceContext: options.sourceContext || 'hasna-notes-agent',
     sourceMachine: options.sourceMachine || process.env.HASNA_NOTES_SOURCE_MACHINE,
@@ -636,7 +636,7 @@ function goalTerminalFromText(text) {
 function goalFollowupPrompt(objective, stepNumber, previous) {
   const prior = previous?.text ? `\nPrevious result:\n${previous.text.slice(0, 1200)}` : '';
   return [
-    `Continue this Hasna Notes goal until it is achieved, needs user input, or is clearly blocked.`,
+    `Continue this Personal Notes goal until it is achieved, needs user input, or is clearly blocked.`,
     `Goal: ${objective}`,
     `Step ${stepNumber}: inspect or use the safest next note/label operation. Do not repeat a completed step.${prior}`,
   ].join('\n');

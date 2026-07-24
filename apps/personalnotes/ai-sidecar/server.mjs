@@ -1,4 +1,4 @@
-// Hasna Notes — local AI sidecar.
+// Personal Notes — local AI sidecar.
 //
 // A tiny dependency-light HTTP server (Node's built-in `http`, no framework) that the
 // macOS host spawns on launch. It exposes local AI capabilities to the file:// renderer,
@@ -236,7 +236,7 @@ function noteAgentTools(context = {}) {
         const result = await executeNotesAgentTool(schema.name, safeInput, {
           ...context,
           actorType: 'agent',
-          actorName: context.actorName || process.env.HASNA_NOTES_ACTOR_NAME || 'Hasna Notes Chat',
+          actorName: context.actorName || process.env.HASNA_NOTES_ACTOR_NAME || 'Personal Notes Chat',
           openedFrom: context.openedFrom || 'sidecar-chat',
           sourceContext: context.sourceContext || 'ai-sdk-chat',
           confirmWrites: false,
@@ -399,7 +399,7 @@ function snapshotTools(notes) {
   };
   return {
     search_notes: tool({
-      description: 'Search the provided Hasna Notes snapshot.',
+      description: 'Search the provided Personal Notes snapshot.',
       inputSchema: jsonSchema({
         type: 'object',
         properties: { query: { type: 'string' }, limit: { type: 'number' } },
@@ -411,7 +411,7 @@ function snapshotTools(notes) {
       },
     }),
     read_note: tool({
-      description: 'Read one note body from the provided Hasna Notes snapshot.',
+      description: 'Read one note body from the provided Personal Notes snapshot.',
       inputSchema: jsonSchema({
         type: 'object',
         properties: { id: { type: 'string' } },
@@ -497,7 +497,7 @@ async function handleChat(req, res) {
         ].join('\n')
       : '';
     const instructions =
-      'You are Hasna Notes Chat, an agentic local notes assistant. Coordinate internally as Planner, Notes Operator, Label Curator, and Safety Reviewer. ' +
+      'You are Personal Notes Chat, an agentic local notes assistant. Coordinate internally as Planner, Notes Operator, Label Curator, and Safety Reviewer. ' +
       'Use tools for note facts and cite note titles/ids. Prefer narrow, reversible operations. Destructive, broad, or cross-machine changes must stay as approval previews unless the host later confirms them. ' +
       'Never claim a write happened when a tool returned requiresConfirmation/dryRun.' +
       selectedNote + labelContext + goalInstructions;
@@ -578,7 +578,7 @@ async function handleTool(req, res) {
   try {
     const result = await executeNotesAgentTool(name, input, {
       actorType: 'agent',
-      actorName: body.actorName || process.env.HASNA_NOTES_ACTOR_NAME || 'Hasna Notes Chat',
+      actorName: body.actorName || process.env.HASNA_NOTES_ACTOR_NAME || 'Personal Notes Chat',
       openedFrom: body.openedFrom || 'sidecar-chat-approval',
       sourceContext: body.sourceContext || name,
       dryRun: !!body.dryRun,

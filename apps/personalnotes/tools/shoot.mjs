@@ -1,4 +1,4 @@
-// Screenshot harness for the Hasna Notes web UI.
+// Screenshot harness for the Personal Notes web UI.
 // Renders each screen at retina scale and writes PNGs for visual review.
 //
 // The notes app is data-driven and (mostly) hash-free: selection, machine-filter and
@@ -89,7 +89,7 @@ async function manyNotesBoot(page) {
       notes.push({
         id: 'n-' + i,
         title: ['Release checklist', 'Meeting notes — fleet sync', 'Ideas for the roadmap',
-          'Welcome to Hasna Notes', 'Quarterly planning thoughts', 'Bug triage list'][i % 6] + ' ' + (i + 1),
+          'Welcome to Personal Notes', 'Quarterly planning thoughts', 'Bug triage list'][i % 6] + ' ' + (i + 1),
         body: 'Some note body content number ' + i + ' with a few words to preview.',
         labels: [labels[i % labels.length]],
         status: 'active', folder: '',

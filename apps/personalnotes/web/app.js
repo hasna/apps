@@ -1,4 +1,4 @@
-// ===================== Hasna Notes desktop UI — real notes app =====================
+// ===================== Personal Notes desktop UI — real notes app =====================
 //
 // This is a REAL notes app rendered from data, in the approved visual
 // style. Data arrives one of two ways:
@@ -32,7 +32,7 @@
       ],
       notes: [
         {
-          id: 's-1', title: 'Welcome to Hasna Notes',
+          id: 's-1', title: 'Welcome to Personal Notes',
           body: 'Plain-text Markdown notes, synced across your machines.\n\n' +
             'Every note is a file on disk — the source of truth. Edit the title or ' +
             'body and it saves automatically.\n\n' +
@@ -3289,7 +3289,7 @@
           const note = quickCreate(title, body, {
             labels: ['consolidated'],
             createdByActorType: 'agent',
-            createdByName: opts.actorName || 'Hasna Notes Chat',
+            createdByName: opts.actorName || 'Personal Notes Chat',
             openedFrom: 'chat',
             sourceContext: text.slice(0, 200),
           });
@@ -3477,7 +3477,7 @@
 
   function localGoalFollowup(objective, stepNumber, previous) {
     return [
-      'Continue this Hasna Notes goal until it is achieved, needs user input, or is clearly blocked.',
+      'Continue this Personal Notes goal until it is achieved, needs user input, or is clearly blocked.',
       'Goal: ' + objective,
       'Step ' + stepNumber + ': inspect or use the safest next notes or labels operation. Do not repeat a completed step.',
       previous && previous.text ? 'Previous result:\n' + previous.text.slice(0, 900) : '',
@@ -3663,7 +3663,7 @@
         selectedNoteId: opts.noteId || opts.selectedNoteId || state.selectedId || '',
         labels: allLabels().map(item => item.name),
         maxSteps: opts.maxSteps || (goalObjective ? 10 : 8),
-        actorName: opts.actorName || 'Hasna Notes Chat',
+        actorName: opts.actorName || 'Personal Notes Chat',
         goal: goalObjective ? { objective: goalObjective } : undefined,
       }),
     });
@@ -3724,7 +3724,7 @@
         input: Object.assign({}, approval.input || {}, { confirm: true }),
         confirm: true,
         approvalId: approval.id,
-        actorName: 'Hasna Notes Chat',
+        actorName: 'Personal Notes Chat',
         openedFrom: 'chat-approval',
         sourceContext: approval.id,
       }),
@@ -3757,7 +3757,7 @@
       const note = quickCreate(input.title || 'Consolidated Notes', input.body || '', {
         labels: input.labels || ['consolidated'],
         createdByActorType: 'agent',
-        createdByName: 'Hasna Notes Chat',
+        createdByName: 'Personal Notes Chat',
         openedFrom: 'chat',
         sourceContext: approval.id,
       });

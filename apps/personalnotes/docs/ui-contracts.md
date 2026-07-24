@@ -1,4 +1,4 @@
-# Hasna Notes Integration Contracts
+# Personal Notes Integration Contracts
 
 This document is the functionality contract for the web/native UI lane.
 

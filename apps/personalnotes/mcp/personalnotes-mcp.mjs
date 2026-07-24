@@ -38,7 +38,7 @@ import {
 const tools = [
   {
     name: 'notes_list',
-    description: 'List latest Hasna Notes with optional pagination and filters.',
+    description: 'List latest Personal Notes with optional pagination and filters.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -143,7 +143,7 @@ const tools = [
   },
   {
     name: 'settings_get',
-    description: 'Read Hasna Notes settings.',
+    description: 'Read Personal Notes settings.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
@@ -172,7 +172,7 @@ const tools = [
   },
   {
     name: 'markdown_render',
-    description: 'Render Markdown to sanitized safe HTML using the Hasna Notes restricted subset.',
+    description: 'Render Markdown to sanitized safe HTML using the Personal Notes restricted subset.',
     inputSchema: { type: 'object', properties: { markdown: { type: 'string' }, id: { type: 'string' } } },
   },
   {
@@ -199,7 +199,7 @@ const tools = [
   },
   {
     name: 'labels_list',
-    description: 'List all labels known to Hasna Notes.',
+    description: 'List all labels known to Personal Notes.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
@@ -256,12 +256,12 @@ const tools = [
   },
   {
     name: 'agent_tools',
-    description: 'List Hasna Notes chat/agent tool schemas, safety flags, and confirmation requirements.',
+    description: 'List Personal Notes chat/agent tool schemas, safety flags, and confirmation requirements.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'agent_run',
-    description: 'Run the Hasna Notes tool-capable agent headlessly over notes. Broad/destructive writes preview unless confirm is true.',
+    description: 'Run the Personal Notes tool-capable agent headlessly over notes. Broad/destructive writes preview unless confirm is true.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -278,7 +278,7 @@ const tools = [
   },
   {
     name: 'agent_goal',
-    description: 'Run a simple Hasna Notes goal loop until done, user input/approval is needed, blocked, or maxSteps is reached.',
+    description: 'Run a simple Personal Notes goal loop until done, user input/approval is needed, blocked, or maxSteps is reached.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -295,7 +295,7 @@ const tools = [
   },
   {
     name: 'agent_tool_call',
-    description: 'Execute one Hasna Notes agent tool directly. Confirmation-gated tools return a preview unless confirm is true.',
+    description: 'Execute one Personal Notes agent tool directly. Confirmation-gated tools return a preview unless confirm is true.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -407,7 +407,7 @@ async function handle(msg) {
         result: {
           protocolVersion: params?.protocolVersion || '2024-11-05',
           capabilities: { tools: {} },
-          serverInfo: { name: 'hasna-notes', version: '1.0.0' },
+          serverInfo: { name: 'personalnotes', version: '1.0.0' },
         },
       });
     }

@@ -1,0 +1,54 @@
+{
+  "name": "@hasna/personalnotes",
+  "version": "0.1.0",
+  "description": "Personal Notes — the open-source core (CLI, MCP, and local serve surface) for a Markdown-first notes store. User-hosted, or run as Personal Notes Cloud.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Hasna",
+  "homepage": "https://github.com/hasna/personalnotes#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/personalnotes.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hasna/personalnotes/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "personalnotes": "cli/personalnotes.mjs",
+    "personalnotes-mcp": "mcp/personalnotes-mcp.mjs",
+    "personalnotes-serve": "ai-sidecar/server.mjs"
+  },
+  "files": [
+    "cli/",
+    "mcp/",
+    "tools/notes-lib.mjs",
+    "tools/notes-agent.mjs",
+    "ai-sidecar/server.mjs",
+    "ai-sidecar/package.json",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "test": "bun test ./test/pn-rename.test.mjs",
+    "test:node": "node --test test/notes-functionality.test.mjs"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "3.0.71",
+    "ai": "6.0.205",
+    "ws": "8.18.3"
+  },
+  "keywords": [
+    "notes",
+    "markdown",
+    "cli",
+    "mcp",
+    "personal-notes",
+    "hasna"
+  ]
+}

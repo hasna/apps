@@ -39,37 +39,37 @@ import {
 const DEFAULT_LIMIT = 10;
 
 function usage() {
-  return `Hasna Notes CLI
+  return `Personal Notes CLI
 
 Usage:
-  hasna-notes list [--json] [--limit 10] [--offset 0] [--label name] [--machine id] [--query text]
-  hasna-notes get <id> [--json]
-  hasna-notes create [--title text] [--body text | --body-file path] [--label name ...] [--actor-type agent] [--actor-name name] [--target-machine id] [--opened-from text] [--json]
-  hasna-notes delete <id> [--permanent] [--yes|--force]
-  hasna-notes archive <id>
-  hasna-notes trash <id> [--retention-days 30] [--yes|--force]
-  hasna-notes restore <id>
-  hasna-notes purge <id> [--yes|--force]
-  hasna-notes cleanup-trash [--yes|--force]
-  hasna-notes move <id> <machine>
-  hasna-notes machines list [--json]
-  hasna-notes machines details <machine> [--json]
-  hasna-notes markdown commands [--json]
-  hasna-notes markdown render <id> [--json]
-  hasna-notes markdown plain-text <id> [--json]
-  hasna-notes markdown apply-command <command-id> --text markdown [--selection-start n] [--selection-end n] [--url href] [--json]
-  hasna-notes agent "prompt" [--json] [--yes] [--dry-run] [--actor-name name]
-  hasna-notes chat "/goal organize renewal notes" [--json] [--yes]
-  hasna-notes agent tools [--json]
-  hasna-notes settings get [--json]
-  hasna-notes settings set-trash-retention <days> [--json]
-  hasna-notes labels list [--json]
-  hasna-notes labels create <name>
-  hasna-notes labels rename <old> <new>
-  hasna-notes labels delete <name>
-  hasna-notes labels assign <note-id> <name>
-  hasna-notes labels unassign <note-id> <name>
-  hasna-notes title <id> [--apply] [--force] [--sidecar http://127.0.0.1:8765] [--sidecar-token token] [--json]
+  personalnotes list [--json] [--limit 10] [--offset 0] [--label name] [--machine id] [--query text]
+  personalnotes get <id> [--json]
+  personalnotes create [--title text] [--body text | --body-file path] [--label name ...] [--actor-type agent] [--actor-name name] [--target-machine id] [--opened-from text] [--json]
+  personalnotes delete <id> [--permanent] [--yes|--force]
+  personalnotes archive <id>
+  personalnotes trash <id> [--retention-days 30] [--yes|--force]
+  personalnotes restore <id>
+  personalnotes purge <id> [--yes|--force]
+  personalnotes cleanup-trash [--yes|--force]
+  personalnotes move <id> <machine>
+  personalnotes machines list [--json]
+  personalnotes machines details <machine> [--json]
+  personalnotes markdown commands [--json]
+  personalnotes markdown render <id> [--json]
+  personalnotes markdown plain-text <id> [--json]
+  personalnotes markdown apply-command <command-id> --text markdown [--selection-start n] [--selection-end n] [--url href] [--json]
+  personalnotes agent "prompt" [--json] [--yes] [--dry-run] [--actor-name name]
+  personalnotes chat "/goal organize renewal notes" [--json] [--yes]
+  personalnotes agent tools [--json]
+  personalnotes settings get [--json]
+  personalnotes settings set-trash-retention <days> [--json]
+  personalnotes labels list [--json]
+  personalnotes labels create <name>
+  personalnotes labels rename <old> <new>
+  personalnotes labels delete <name>
+  personalnotes labels assign <note-id> <name>
+  personalnotes labels unassign <note-id> <name>
+  personalnotes title <id> [--apply] [--force] [--sidecar http://127.0.0.1:8765] [--sidecar-token token] [--json]
 
 Data root defaults to ${dataRoot()} and can be overridden with HASNA_NOTES_ROOT.`;
 }
@@ -504,7 +504,7 @@ async function commandAgent(args, opts) {
     yes: !!opts.yes,
     confirmWrites: !!opts.yes,
     dryRun: !!opts['dry-run'],
-    actorName: opts['actor-name'] || process.env.HASNA_NOTES_ACTOR_NAME || 'Hasna Notes CLI Agent',
+    actorName: opts['actor-name'] || process.env.HASNA_NOTES_ACTOR_NAME || 'Personal Notes CLI Agent',
     actorType: opts['actor-type'] || 'agent',
     openedFrom: opts['opened-from'] || 'cli-agent',
     sourceContext: opts['source-context'] || prompt.slice(0, 200),
@@ -555,6 +555,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  process.stderr.write(`hasna-notes: ${err.message || err}\n`);
+  process.stderr.write(`personalnotes: ${err.message || err}\n`);
   process.exitCode = 1;
 });
