@@ -174,4 +174,87 @@ describe("CLI JSON contract", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("emits additive evidence and resource contracts when requested", async () => {
+    const home = mkdtempSync(join(tmpdir(), "clip-cli-contracts-"));
+    try {
+      const env = { ...process.env, HASNA_CLIP_HOME: home, CLIP_BASE_URL: "http://127.0.0.1:3741" };
+      const share = Bun.spawn(["bun", "run", "src/cli/index.ts", "share", "text", "hello", "--contract"], {
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const shareOut = await new Response(share.stdout).text();
+      expect(await share.exited).toBe(0);
+      const evidence = JSON.parse(shareOut) as { schema: string; kind: string; resourceRefs: Array<{ kind: string; uri?: string }> };
+      expect(evidence.schema).toBe("hasna.evidence_ref.v1");
+      expect(evidence.kind).toBe("url");
+      expect(evidence.resourceRefs).toHaveLength(1);
+      expect(evidence.resourceRefs[0]?.kind).toBe("url");
+
+      const list = Bun.spawn(["bun", "run", "src/cli/index.ts", "list", "--contract", "resources"], {
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const listOut = await new Response(list.stdout).text();
+      expect(await list.exited).toBe(0);
+      const resources = JSON.parse(listOut) as Array<{ schema: string; kind: string; uri?: string }>;
+      expect(resources).toHaveLength(1);
+      expect(resources[0]?.schema).toBe("hasna.resource_ref.v1");
+      expect(resources[0]?.kind).toBe("url");
+      expect(resources[0]?.uri).toStartWith("http://127.0.0.1:3741/s/");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps show output unchanged unless a contract flag is present", async () => {
+    const home = mkdtempSync(join(tmpdir(), "clip-cli-show-"));
+    try {
+      const env = { ...process.env, HASNA_CLIP_HOME: home, CLIP_BASE_URL: "http://127.0.0.1:3741" };
+      const share = Bun.spawn(["bun", "run", "src/cli/index.ts", "--json", "share", "text", "show me"], {
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const shareOut = await new Response(share.stdout).text();
+      expect(await share.exited).toBe(0);
+      const record = JSON.parse(shareOut) as { slug: string; text: string };
+
+      const show = Bun.spawn(["bun", "run", "src/cli/index.ts", "show", record.slug], {
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const showOut = await new Response(show.stdout).text();
+      expect(await show.exited).toBe(0);
+      expect(showOut).toStartWith("{\n");
+      expect((JSON.parse(showOut) as { slug: string; text: string }).text).toBe("show me");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("does not expose local file paths through contract output", async () => {
+    const home = mkdtempSync(join(tmpdir(), "clip-cli-file-contract-"));
+    try {
+      const file = join(home, "private-source.txt");
+      writeFileSync(file, "private bytes");
+      const env = { ...process.env, HASNA_CLIP_HOME: home, CLIP_BASE_URL: "http://127.0.0.1:3741" };
+      const share = Bun.spawn(["bun", "run", "src/cli/index.ts", "share", "file", file, "--contract", "all"], {
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const shareOut = await new Response(share.stdout).text();
+      expect(await share.exited).toBe(0);
+      expect(shareOut).not.toContain(file);
+      expect(shareOut).not.toContain("artifactPath");
+      expect(shareOut).toContain("hasna.evidence_ref.v1");
+      expect(shareOut).toContain("hasna.resource_ref.v1");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });

@@ -8,6 +8,8 @@ import { DEFAULT_PORT, resolveConfigPath } from "../paths.js";
 import { renderShareQrCode } from "../qr.js";
 import { ClipClient, createClipClient } from "../sdk.js";
 import { purgeClipStore } from "../storage.js";
+import { buildClipEvidenceRef, buildClipRecordContracts, buildClipResourceRefs } from "../contracts.js";
+import type { ClipContractFormat } from "../contracts.js";
 import type { CaptureAnnotation, CaptureMode, ClipboardHistoryRecord, ClipboardKind, ClipClientOptions, ClipRecord } from "../types.js";
 import { startClipServer } from "../server/server.js";
 import { compactRecord } from "../util.js";
@@ -77,8 +79,49 @@ function output(program: Command, data: unknown, formatted: string): void {
   console.log(formatted);
 }
 
-function outputRecord(program: Command, record: ClipRecord): void {
+function normalizeContractFormat(value: unknown): ClipContractFormat | null {
+  if (value === undefined || value === false) return null;
+  if (value === true) return "evidence";
+  const normalized = String(value).trim().toLowerCase();
+  if (!normalized || normalized === "true" || normalized === "evidence" || normalized === "evidence-ref" || normalized === "evidence_ref") {
+    return "evidence";
+  }
+  if (normalized === "resources" || normalized === "resource" || normalized === "resource-refs" || normalized === "resource_ref") {
+    return "resources";
+  }
+  if (normalized === "all" || normalized === "bundle") return "all";
+  throw new Error(`Unknown contract type '${String(value)}'. Use evidence, resources, or all.`);
+}
+
+function contractForRecord(record: ClipRecord, format: ClipContractFormat): unknown {
+  if (format === "evidence") return buildClipEvidenceRef(record);
+  if (format === "resources") return buildClipResourceRefs(record);
+  return buildClipRecordContracts(record);
+}
+
+function outputContract(data: unknown): void {
+  console.log(JSON.stringify(data));
+}
+
+function outputRecord(program: Command, record: ClipRecord, contract?: unknown): void {
+  const format = normalizeContractFormat(contract);
+  if (format) {
+    outputContract(contractForRecord(record, format));
+    return;
+  }
   output(program, record, compactRecord(record));
+}
+
+function outputRecords(program: Command, records: ClipRecord[], formatted: string, contract?: unknown): void {
+  const format = normalizeContractFormat(contract);
+  if (format) {
+    const payload = format === "resources"
+      ? records.flatMap((record) => buildClipResourceRefs(record))
+      : records.map((record) => contractForRecord(record, format));
+    outputContract(payload);
+    return;
+  }
+  output(program, records, formatted);
 }
 
 function compactHistoryRecord(value: ClipboardHistoryRecord): string {
@@ -178,16 +221,17 @@ program
   .option("--box <x,y,width,height>", "Draw a box annotation before sharing", collectOption, [])
   .option("--blur <x,y,width,height>", "Blur a region before sharing", collectOption, [])
   .option("--arrow <x1,y1,x2,y2>", "Draw an arrow annotation before sharing", collectOption, [])
+  .option("--contract [type]", "Emit contract JSON: evidence (default), resources, or all")
   .description("Capture a screenshot with best-effort OS tools")
   .action(async (
     mode: CaptureMode,
-    opts: { title?: string; copyLink?: boolean; annotation?: string[]; crop?: string[]; box?: string[]; blur?: string[]; arrow?: string[] },
+    opts: { title?: string; copyLink?: boolean; annotation?: string[]; crop?: string[]; box?: string[]; blur?: string[]; arrow?: string[]; contract?: boolean | string },
     command: Command,
   ) => {
     try {
       const record = await client(command).captureScreenshot(mode, { title: opts.title, annotations: parseCaptureAnnotationFlags() });
       if (opts.copyLink) await client(command).copyLink(record.id);
-      outputRecord(command, record);
+      outputRecord(command, record, opts.contract);
     } catch (error) {
       handleError(command, error);
     }
@@ -198,12 +242,13 @@ program
   .option("--kind <kind>", "auto, text, image, or file", "auto")
   .option("--title <title>", "Share title")
   .option("--copy-link", "Copy the share URL after sharing")
+  .option("--contract [type]", "Emit contract JSON: evidence (default), resources, or all")
   .description("Share clipboard text, image, or file content")
-  .action(async (opts: { kind: ClipboardKind; title?: string; copyLink?: boolean }, command: Command) => {
+  .action(async (opts: { kind: ClipboardKind; title?: string; copyLink?: boolean; contract?: boolean | string }, command: Command) => {
     try {
       const record = await client(command).shareClipboard(opts.kind, { title: opts.title });
       if (opts.copyLink) await client(command).copyLink(record.id);
-      outputRecord(command, record);
+      outputRecord(command, record, opts.contract);
     } catch (error) {
       handleError(command, error);
     }
@@ -276,10 +321,11 @@ share
   .command("text")
   .argument("<text...>", "Text to share")
   .option("--title <title>", "Share title")
+  .option("--contract [type]", "Emit contract JSON: evidence (default), resources, or all")
   .description("Create a text share")
-  .action((parts: string[], opts: { title?: string }, command: Command) => {
+  .action((parts: string[], opts: { title?: string; contract?: boolean | string }, command: Command) => {
     try {
-      outputRecord(command, client(command).createTextShare(parts.join(" "), { title: opts.title }));
+      outputRecord(command, client(command).createTextShare(parts.join(" "), { title: opts.title }), opts.contract);
     } catch (error) {
       handleError(command, error);
     }
@@ -289,10 +335,11 @@ share
   .command("file")
   .argument("<path>", "File to import")
   .option("--title <title>", "Share title")
+  .option("--contract [type]", "Emit contract JSON: evidence (default), resources, or all")
   .description("Import and share a local file")
-  .action((path: string, opts: { title?: string }, command: Command) => {
+  .action((path: string, opts: { title?: string; contract?: boolean | string }, command: Command) => {
     try {
-      outputRecord(command, client(command).importFile(path, { title: opts.title }));
+      outputRecord(command, client(command).importFile(path, { title: opts.title }), opts.contract);
     } catch (error) {
       handleError(command, error);
     }
@@ -302,11 +349,12 @@ program
   .command("list")
   .option("--limit <n>", "Maximum rows", "25")
   .option("--deleted", "Include deleted rows")
+  .option("--contract [type]", "Emit contract JSON: evidence (default), resources, or all")
   .description("List recent shares")
-  .action((opts: { limit: string; deleted?: boolean }, command: Command) => {
+  .action((opts: { limit: string; deleted?: boolean; contract?: boolean | string }, command: Command) => {
     try {
       const records = client(command).listShares({ limit: Number.parseInt(opts.limit, 10), includeDeleted: opts.deleted });
-      output(command, records, records.map(compactRecord).join("\n") || "No shares");
+      outputRecords(command, records, records.map(compactRecord).join("\n") || "No shares", opts.contract);
     } catch (error) {
       handleError(command, error);
     }
@@ -316,11 +364,17 @@ program
   .command("show")
   .argument("<id-or-slug>")
   .option("--qr", "Render the share URL as a terminal QR code")
+  .option("--contract [type]", "Emit contract JSON: evidence (default), resources, or all")
   .description("Show one share")
-  .action(async (ref: string, opts: { qr?: boolean }, command: Command) => {
+  .action(async (ref: string, opts: { qr?: boolean; contract?: boolean | string }, command: Command) => {
     try {
       const record = client(command).getShare(ref);
       if (!record) throw new Error(`Share not found: ${ref}`);
+      const format = normalizeContractFormat(opts.contract);
+      if (format) {
+        outputContract(contractForRecord(record, format));
+        return;
+      }
       if (opts.qr && !isJson(command)) {
         await outputShareQr(record);
         return;

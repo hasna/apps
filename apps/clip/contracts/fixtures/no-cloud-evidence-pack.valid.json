@@ -1,0 +1,44 @@
+{
+  "schema": "hasna.no_cloud_evidence_pack.v1",
+  "id": "no_cloud_open_clip_source_tree",
+  "createdAt": "2026-07-05T20:30:31.400Z",
+  "subject": {
+    "kind": "repo",
+    "id": "@hasna/clip",
+    "uri": "repo://@hasna/clip",
+    "tags": []
+  },
+  "packageName": "@hasna/clip",
+  "packageVersion": "0.1.0",
+  "scanMode": "source_tree",
+  "status": "succeeded",
+  "verdict": "passed",
+  "checks": [
+    {
+      "id": "package_manifest",
+      "kind": "package_manifest",
+      "status": "succeeded",
+      "target": "repo://@hasna/clip#package_manifest",
+      "evidenceRefs": [],
+      "findings": []
+    },
+    {
+      "id": "lockfile",
+      "kind": "lockfile",
+      "status": "succeeded",
+      "target": "repo://@hasna/clip#lockfile",
+      "evidenceRefs": [],
+      "findings": []
+    },
+    {
+      "id": "source_runtime",
+      "kind": "source_import",
+      "status": "succeeded",
+      "target": "repo://@hasna/clip#source_runtime",
+      "evidenceRefs": [],
+      "findings": []
+    }
+  ],
+  "findings": [],
+  "evidenceRefs": []
+}
