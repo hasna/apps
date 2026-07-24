@@ -6,12 +6,81 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-07-24
+
 ### Fixed
 
 - `machines manifest` subcommands (`init`, `path`, `list`, `validate`,
   `bootstrap`, `get`, `remove`, `add`) now accept the standard `-j/--json`
   flag instead of hard-failing with `error: unknown option '--json'`, so
   uniform `--json` tooling no longer breaks on the manifest command group.
+  (#19)
+- `machines screen-credentials --all --json` no longer exits non-zero when a
+  discovered machine is unroutable: a listing that returns data for at least
+  one machine now succeeds, unroutable machines are surfaced per-entry, and a
+  new `--strict` flag restores full fail-closed behaviour. (#18)
+- CLI error and usage-validation paths now emit structured
+  `{ ok: false, error, code }` under `-j/--json` (screen-credentials with
+  neither `--machine` nor `--all`; `workspace resolve`/`workspace doctor`
+  missing `--machine`; `backup` with no resolvable S3 bucket; `db migrate`
+  in cloud mode with no database URL) instead of writing plain text or
+  Commander's default usage errors that broke JSON consumers. (#20)
+- `machines ops db-integrity` now bounds total quick_check work with an
+  effective time budget (default 20s, `--max-total-ms`), reporting remaining
+  databases as `skipped_budget` instead of hanging past the deadline on
+  stations with hundreds of SQLite files. (#22)
+
+### Note
+
+- Version reconciliation: this release restores the committed version line to
+  match the published npm `latest`. Versions `0.1.0`–`0.1.4` were published to
+  npm from the `main` line on 2026-07-08 but the accompanying `package.json`
+  bumps, CHANGELOG entries, and git tags were never committed back. The
+  `[0.1.0]`–`[0.1.4]` entries below are backfilled from the merged feature
+  commits; `0.1.5` is the first release cut with fully committed provenance.
+
+## [0.1.4] - 2026-07-08
+
+### Added
+
+- Cloud machine registry CRUD routes to the hosted control plane
+  (`/v1/machines`) when running in `self_hosted` mode, so registry reads and
+  writes go through the shared control plane rather than local-only state.
+  (#15)
+
+## [0.1.3] - 2026-07-08
+
+### Fixed
+
+- Fleet env-flip API client operates correctly in `self_hosted` mode across
+  all 25 apps, with atomic `--all-machines` application. (#14)
+
+## [0.1.2] - 2026-07-08
+
+_Published from the `main` line on 2026-07-08 as part of the self-host / fleet
+control-plane rollout. No standalone changelog entry was recorded at publish
+time; the feature set is captured under `[0.1.0]`–`[0.1.4]`._
+
+## [0.1.1] - 2026-07-08
+
+_Published from the `main` line on 2026-07-08 as part of the self-host / fleet
+control-plane rollout. No standalone changelog entry was recorded at publish
+time; the feature set is captured under `[0.1.0]`–`[0.1.4]`._
+
+## [0.1.0] - 2026-07-08
+
+### Added
+
+- Self-host machines control plane: `machines serve /v1`, the machines SDK,
+  cloud runtime storage, and deploy support, enabling a `self_hosted`
+  deployment of the machine fleet control plane. (#13)
+- Fleet env-flip mechanism to move machines between `local` and `cloud`
+  runtime modes with canary rollout. (#9)
+
+### Changed
+
+- Documented the interim per-machine RDS tunnel rollout step and the verifier
+  contract note for the fleet flip. (#11)
 
 ## [0.0.63] - 2026-07-04
 
