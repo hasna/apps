@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.2.7
+
+- feat(cli): compact human output by default across shortlinks-owned
+  list/detail/status/setup commands (`link list/get`, `domain list/get/setup`,
+  `stats`, `doctor`, `config show`, `cloudflare`, `local`). Long URLs/text are
+  truncated, human rows are capped, and each command prints the next command to
+  use for details. Machine output is unchanged: `--json` still returns full
+  objects; `--verbose` prints the full object for human debugging; `--limit`
+  controls row caps.
+- feat(cli): bound external `domains` passthrough output (`domain check/buy`)
+  by default; `--verbose`/`--json` still expose the full command output.
+- feat(events): replace the generic `@hasna/events` command registration with
+  shortlinks-owned compact wrappers so `events list` and `webhooks list` are
+  capped by default (part of the fleet-wide compact-CLI-output initiative).
+- test(cli): make the CLI test harness hermetic — neutralize any ambient cloud
+  client-flip (`HASNA_SHORTLINKS_MODE`/`STORAGE_MODE` + `API_URL` + `API_KEY`)
+  so `bun test` always exercises the on-box LocalStore and never touches the
+  real shortlinks cloud API on a self_hosted-configured machine.
+
 ## 0.2.6
 
 - chore(reconcile): reconcile `main` to the published npm line. `main` had

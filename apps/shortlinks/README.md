@@ -71,6 +71,41 @@ Errors are emitted as:
 { "error": "message" }
 ```
 
+## Compact Defaults and Details
+
+Human output is compact by default so agent terminals do not fill with full
+records. List and status commands show essential fields, truncate long URLs or
+text, cap human rows, and print the next command to use for details.
+
+Use these gradual disclosure paths when you need more:
+
+```bash
+shortlinks link list --limit 50
+shortlinks link get home --verbose
+shortlinks stats home --verbose
+shortlinks doctor --verbose
+shortlinks domain check has.na --verbose
+shortlinks events list --limit 50
+shortlinks webhooks list --limit 50
+shortlinks --json link get home
+```
+
+`--json` remains the machine-readable path and keeps full objects where commands
+already returned them. Prefer `--json` for automation and `--verbose` for human
+debugging.
+
+Example compact output:
+
+```text
+https://has.na/home -> https://example.com/landing-page-with-a-very-long-path... active
+Showing 1 link(s).
+Use `shortlinks link get <slug>` for details.
+```
+
+Before this behavior, detail/status commands such as `shortlinks link get home`,
+`shortlinks stats home`, and `shortlinks doctor` printed full JSON-like objects
+by default.
+
 ## CLI
 
 ```bash
