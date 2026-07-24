@@ -1,0 +1,26 @@
+{
+  "name": "@hasna/personalnotes",
+  "version": "0.1.0",
+  "description": "Personal Notes OSS core: headless notes service (HTTP API + CLI + MCP + SDK) with dual SQLite/Postgres storage and a multi-tenancy backend.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/personalnotes.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "bin": {
+    "personalnotes": "cli/hasna-notes.mjs",
+    "personalnotes-mcp": "mcp/hasna-notes-mcp.mjs",
+    "personalnotes-serve": "dist/server/index.js"
+  },
+  "scripts": {
+    "check:contracts": "bun scripts/check-contract-conformance.mjs",
+    "test": "bun test scripts/check-contract-conformance.test.mjs"
+  },
+  "devDependencies": {
+    "@hasna/contracts": "0.5.2"
+  }
+}

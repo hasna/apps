@@ -1,0 +1,69 @@
+{
+  "$schema": "./node_modules/@hasna/contracts/dist/hasna.contract.schema.json",
+  "schema": "hasna.service_contract.v1",
+  "name": "personalnotes",
+  "class": "service",
+  "contractVersion": "v1",
+  "kitVersion": "0.5.2",
+  "description": "Personal Notes OSS core: headless notes service (HTTP API primary + CLI + MCP + generated SDK) with dual SQLite/Postgres storage and a multi-tenancy backend. Deployment modes local, self-hosted, and cloud; self-hosted runs personalnotes-serve against operator-owned Postgres with API-key auth.",
+  "bins": ["personalnotes", "personalnotes-mcp", "personalnotes-serve"],
+  "deploymentModes": ["local", "self-hosted", "cloud"],
+  "serviceSurfaces": [
+    {
+      "name": "http",
+      "status": "deferred",
+      "deferReason": "The HTTP API/serve, CLI, MCP, and SDK surface implementations are delivered by the sibling api/cli/mcp/sdk workstreams; this contracts workstream establishes the manifest and the check:contracts conformance gate.",
+      "bin": "personalnotes-serve",
+      "mcpBin": "personalnotes-mcp",
+      "authMode": "api-key",
+      "deploymentModes": ["self-hosted", "cloud"],
+      "health": { "method": "GET", "path": "/health", "public": true },
+      "readiness": { "method": "GET", "path": "/ready", "public": true },
+      "version": { "method": "GET", "path": "/version", "public": true },
+      "apiBasePath": "/v1",
+      "openApiPath": "/openapi.json",
+      "readinessGates": [
+        {
+          "id": "api-key-auth-negative",
+          "kind": "auth",
+          "required": true,
+          "status": "pending",
+          "summary": "Protected /v1 routes must fail closed without a valid tenant-bound API key (asserted by the api workstream)."
+        },
+        {
+          "id": "storage-duality",
+          "kind": "storage",
+          "required": true,
+          "status": "pending",
+          "summary": "SQLite default plus operator Postgres via HASNA_PERSONALNOTES_DATABASE_URL, proven by the env-gated live-PG suite (asserted by the storage workstream)."
+        }
+      ]
+    }
+  ],
+  "storage": {
+    "mode": "local",
+    "envPrefix": "HASNA_PERSONALNOTES_",
+    "sqlitePath": "~/.hasna/personalnotes/personalnotes.db"
+  },
+  "metadata": {
+    "hosting": ["user-hosted", "hasna-saas"],
+    "storage": {
+      "engines": ["sqlite", "postgres"],
+      "pgTestGate": {
+        "env": "PERSONALNOTES_TEST_DATABASE_URL",
+        "command": "bun test src/lib/storage/postgres*.test.ts"
+      }
+    },
+    "surfaces": [
+      { "kind": "cli", "bin": "personalnotes", "status": "deferred" },
+      { "kind": "mcp", "bin": "personalnotes-mcp", "status": "deferred" },
+      { "kind": "http", "bin": "personalnotes-serve", "apiBasePath": "/v1", "openApiPath": "/openapi.json", "status": "deferred" },
+      { "kind": "sdk", "exportSubpath": "./sdk", "generatedFrom": "/openapi.json", "status": "deferred" }
+    ],
+    "contractsGapSpec": {
+      "kitBaseline": "0.5.2",
+      "note": "hosting, storage.engines, and per-surface kind (including sdk) are recorded under metadata because @hasna/contracts 0.5.2 uses a strict schema that does not yet host them as first-class fields. Promote to top-level fields once the hasna-contracts-gap-spec schema vNext lands. See knowledge hasna-contracts-gap-spec."
+    },
+    "publicManifestPolicy": "Public OSS manifest: storage capability is expressed via engines[] plus envPrefix only. Concrete database credential references stay private-tier (platform control-plane config, infra terraform, and the deploy SSM manifest); they never appear in this public repo."
+  }
+}
