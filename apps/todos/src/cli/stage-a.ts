@@ -205,8 +205,13 @@ function commandSupportsRemote(invocation: ParsedInvocation): boolean {
         !hasOption(args, "--stale-minutes") && !hasOption(args, "--steal-stale");
     case "status":
       return !invocation.globalOptions.has("--agent") && !hasOption(args, "--agent");
+    // `deps <id>` (read edges), `--needs`/`--remove` (write edges), and the
+    // presentation-only `--graph`/`--direction` flags are all serviced remotely:
+    // the cloud handler renders the shared dependency/blocked-by edges and, since
+    // the recursive graph is a local-only view, gracefully falls back to those
+    // same flat edges for `--graph`/`--direction` instead of failing closed.
     case "deps":
-      return !hasOption(args, "--graph") && !hasOption(args, "--direction");
+      return true;
     case "bulk": {
       const action = positionalArgs(args)[0];
       return Boolean(action && ["done", "complete", "start", "delete"].includes(action)) &&
