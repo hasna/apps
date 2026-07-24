@@ -73,6 +73,42 @@ function requireLocalTransport(command: string): void {
   }
 }
 
+/**
+ * True when `error` is a @hasna/contracts `HasnaHttpError` for `status`. Matched
+ * by public shape (name + numeric `status`) rather than `instanceof`: the storage
+ * client bundles its own copy of the error class, so the constructor it throws is
+ * a different identity than any importable `HasnaHttpError` — `instanceof` is
+ * unreliable across that boundary.
+ */
+function isCloudHttpStatus(error: unknown, status: number): boolean {
+  return (
+    error instanceof Error &&
+    error.name === "HasnaHttpError" &&
+    Number((error as { status?: unknown }).status) === status
+  );
+}
+
+/**
+ * Run a cloud data-plane read whose `/v1` route a given self-hosted service
+ * version may not expose yet. A supported service returns the data; an older one
+ * returns 404 for the route. In the 404 case, emit a clean guard-style message
+ * (matching the on-box refusals other commands emit) and exit, instead of
+ * leaking the raw transport error (`Hasna cloud request failed: … -> 404`) that
+ * `parseAsync().catch` would otherwise surface. Any other failure propagates
+ * unchanged so real errors are never swallowed.
+ */
+async function cloudDataPlaneRead<T>(command: string, read: () => Promise<T>): Promise<T> {
+  try {
+    return await read();
+  } catch (error) {
+    if (isCloudHttpStatus(error, 404)) {
+      console.error(chalk.red(`${command} is unavailable on the connected self-hosted service (endpoint not found); upgrade the service to a version that supports it, or run in local mode.`));
+      process.exit(1);
+    }
+    throw error;
+  }
+}
+
 program
   .name("files")
   .description("Agent-first file management — index, sync, search, and retrieve files across local, S3, and Google Drive sources")
@@ -1831,8 +1867,10 @@ program
     }
 
     // Data-plane read: routed through the Store so api mode reports the cloud's
-    // recent activity, not the local island.
-    const files = await store().recentFiles(opts.agent, limit);
+    // recent activity, not the local island. A self-hosted service that predates
+    // the `/v1/files/recent` route returns 404 — degrade gracefully rather than
+    // leaking the raw transport error.
+    const files = await cloudDataPlaneRead("files recent", () => store().recentFiles(opts.agent, limit));
     if (opts.json) { console.log(JSON.stringify(files, null, 2)); return; }
     for (const f of files) {
       console.log(`${chalk.bold(f.id)}  ${chalk.cyan(f.name)}  ${formatSize(f.size)}  ${chalk.dim(f.last_touched ?? f.indexed_at)}`);
