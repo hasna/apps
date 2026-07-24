@@ -395,6 +395,46 @@ describe("remote CLI entrypoint authority boundary", () => {
     }
   }, 45_000);
 
+  test("built help and manual advertise only remote-executable commands", async () => {
+    const env = {
+      PATH: process.env.PATH ?? "",
+      BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
+      HOME: mkdtempSync(join(tmpdir(), "todos-remote-help-")),
+      LANG: "C.UTF-8",
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_URL: "https://authority.invalid",
+      HASNA_TODOS_API_KEY: "fixture-remote-key",
+    };
+    tempRoots.push(env.HOME);
+
+    const localOnly = [...getTodosCliCommandCapabilityMatrix()]
+      .filter(([, owner]) => owner === "local-only")
+      .map(([command]) => command);
+
+    const manual = await runCli(executable, ["manual", "--json"], env);
+    expect(manual.exitCode).toBe(0);
+    const parsed = JSON.parse(manual.stdout) as {
+      local_only: boolean;
+      examples: string[];
+      commands: { path: string[] }[];
+    };
+    const advertised = parsed.commands.map((entry) => entry.path[0] ?? "");
+    // Regression: no advertised command may be one Stage A rejects at runtime.
+    expect(advertised.filter((name) => localOnly.includes(name))).toEqual([]);
+    for (const name of ["status", "list", "add"]) expect(advertised).toContain(name);
+    for (const name of ["ready", "usage", "burndown", "summary", "verify-providers"]) {
+      expect(advertised).not.toContain(name);
+    }
+    expect(parsed.local_only).toBe(false);
+    expect(parsed.examples.some((example) => example.startsWith("todos ready"))).toBe(false);
+
+    const help = await runCli(executable, ["--help"], env);
+    expect(help.exitCode).toBe(0);
+    expect(help.stdout).not.toMatch(/\bburndown\b/);
+    expect(help.stdout).not.toMatch(/\bverify-providers\b/);
+    expect(help.stdout).toMatch(/\bstatus\b/);
+  });
+
   test("built status command uses /v1 and never opens the local or Postgres adapter", async () => {
     const requests: Array<{ method: string; path: string; authorization: string | null }> = [];
     const server = Bun.serve({

@@ -22,7 +22,7 @@ export interface CliManual {
   title: string;
   synopsis: string;
   package_name: string;
-  local_only: true;
+  local_only: boolean;
   install: string[];
   update: string[];
   completion_shells: CompletionShell[];
@@ -85,19 +85,42 @@ export function collectCliCommandEntries(program: Command, prefix: string[] = []
   return entries;
 }
 
-export function createCliManual(program: Command): CliManual {
+export interface CreateCliManualOptions {
+  /**
+   * Predicate deciding whether a top-level command is advertised in the manual.
+   * Defaults to advertising everything (local route). In a remote route the
+   * caller passes the authority visibility predicate so the manual never
+   * documents commands the CLI will reject at runtime.
+   */
+  isCommandVisible?: (topLevelCommand: string) => boolean;
+  /** Whether the resolved route serves entirely from local state. */
+  localOnly?: boolean;
+}
+
+function exampleCommand(example: string): string | undefined {
+  // Examples are shaped as "todos <command> ...".
+  return example.split(/\s+/).filter(Boolean)[1];
+}
+
+export function createCliManual(program: Command, options: CreateCliManualOptions = {}): CliManual {
+  const isVisible = options.isCommandVisible ?? (() => true);
+  const commands = collectCliCommandEntries(program).filter((entry) => isVisible(entry.path[0] ?? ""));
+  const examples = CORE_EXAMPLES.filter((example) => {
+    const command = exampleCommand(example);
+    return command ? isVisible(command) : true;
+  });
   return {
     title: "todos(1)",
     synopsis: "todos [global options] <command> [command options]",
     package_name: "@hasna/todos",
-    local_only: true,
+    local_only: options.localOnly ?? true,
     install: ["bun install -g @hasna/todos"],
     update: ["bun install -g @hasna/todos", "todos upgrade"],
     completion_shells: COMPLETION_SHELLS,
-    examples: CORE_EXAMPLES,
+    examples,
     json_contracts: JSON_CONTRACTS,
     error_codes: ERROR_CODES,
-    commands: collectCliCommandEntries(program),
+    commands,
   };
 }
 
@@ -199,8 +222,12 @@ function commandOptions(program: Command, entry: CliCommandEntry): string[] {
   return optionFlags([...program.options.map(optionEntry), ...entry.options]);
 }
 
-export function generateCompletionScript(program: Command, shell: CompletionShell): string {
-  const entries = collectCliCommandEntries(program);
+export function generateCompletionScript(
+  program: Command,
+  shell: CompletionShell,
+  isCommandVisible: (topLevelCommand: string) => boolean = () => true,
+): string {
+  const entries = collectCliCommandEntries(program).filter((entry) => isCommandVisible(entry.path[0] ?? ""));
   const roots = rootCommandNames(entries);
 
   if (shell === "bash") {

@@ -1,3 +1,4 @@
+import { Command, Help } from "commander";
 import {
   getTodosCloudClient,
   getTodosRemoteAuthorityConfigStatus,
@@ -83,6 +84,41 @@ for (const [canonical, aliases] of Object.entries(TODOS_CLI_COMMAND_ALIASES)) {
 
 export function getTodosCliCommandCapabilityMatrix(): ReadonlyMap<string, TodosCliCommandOwner> {
   return COMMAND_CAPABILITY_MATRIX;
+}
+
+/**
+ * Whether a top-level command should be advertised (help/manual/completions) for
+ * a resolved authority route. In a remote route the CLI fails closed on
+ * `local-only` commands (Stage A throws REMOTE_COMMAND_UNSUPPORTED), so the help
+ * surface must not advertise commands it will reject. Diagnostic and remote-http
+ * owners stay visible. Commands with no capability owner (e.g. optional
+ * dynamically-registered families) self-gate at runtime and remain visible.
+ */
+export function isTodosCliCommandVisibleForRoute(
+  command: string,
+  route: TodosCliAuthorityInitialization["route"],
+): boolean {
+  if (route === "local") return true;
+  const owner = COMMAND_CAPABILITY_MATRIX.get(command);
+  if (!owner) return true;
+  return owner !== "local-only";
+}
+
+/**
+ * Filter the commander help output so it only lists top-level commands the given
+ * authority route can execute. This keeps `todos --help` honest without
+ * unregistering commands, so Stage A remains the single source of truth for
+ * execution gating and error messaging.
+ */
+export function applyTodosCliHelpVisibility(program: Command, route: TodosCliAuthorityInitialization["route"]): void {
+  if (route === "local") return;
+  program.configureHelp({
+    visibleCommands(this: Help, command: Command): Command[] {
+      return Help.prototype.visibleCommands
+        .call(this, command)
+        .filter((subcommand) => isTodosCliCommandVisibleForRoute(subcommand.name(), route));
+    },
+  });
 }
 
 const GLOBAL_OPTIONS_WITH_VALUES = new Set(["--project", "--agent", "--session"]);

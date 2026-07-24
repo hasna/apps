@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
 import { getPackageVersion } from "../lib/package-version.js";
-import { initializeTodosCliAuthority } from "./stage-a.js";
+import { applyTodosCliHelpVisibility, initializeTodosCliAuthority, type TodosCliAuthorityInitialization } from "./stage-a.js";
 
 const program = new Command();
 
@@ -109,8 +109,9 @@ program
 // Validate and select remote HTTP authority before importing command modules.
 // Those modules expose local helpers, so loading them before this boundary made
 // packaged remote invocations hit the native adapter containment first.
+let authority: TodosCliAuthorityInitialization;
 try {
-  initializeTodosCliAuthority();
+  authority = initializeTodosCliAuthority();
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
@@ -206,7 +207,12 @@ registerLocalBackupCommands(program);
 registerStorageCommands(program);
 registerScaleHardeningCommands(program);
 await registerOptionalEventsCommands(program);
-registerHelpCommands(program);
+registerHelpCommands(program, authority.route);
+
+// In a remote authority route the CLI fails closed on local-only commands
+// (Stage A throws REMOTE_COMMAND_UNSUPPORTED). Hide those commands from the
+// `todos --help` catalog so the advertised surface matches what actually runs.
+applyTodosCliHelpVisibility(program, authority.route);
 
 // Single top-level guard: any error thrown from an async action handler (e.g. a
 // TaskNotFoundError when a full UUID references a task absent from the local
