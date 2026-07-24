@@ -7,6 +7,7 @@ export interface KnowledgeProjectPanelOptions {
     limit?: number;
     storePath?: string;
     includeArchived?: boolean;
+    allowGlobal?: boolean;
 }
 export declare function createKnowledgeProjectPanel(projectRef: string, options?: KnowledgeProjectPanelOptions): ProjectPanel;
 export declare function formatKnowledgeProjectPanel(panel: ProjectPanel): string;

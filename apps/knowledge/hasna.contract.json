@@ -4,13 +4,12 @@
   "class": "service",
   "contractVersion": "v1",
   "kitVersion": "0.4.1",
-  "description": "Agent-friendly knowledge store. CLI + MCP + HTTP API (knowledge-serve) + generated SDK. Local mode uses SQLite at ~/.hasna/knowledge/knowledge.db; cloud mode (HASNA_KNOWLEDGE_STORAGE_MODE=cloud) is PURE REMOTE per Amendment A1: the serve process reads/writes the shared cloud Postgres directly and stores artifacts in S3, with API-key auth via @hasna/contracts.",
+  "description": "Stage-A local knowledge store with CLI, MCP, contained HTTP metadata, and a generated SDK. Executable storage is limited to the local SQLite workspace at ~/.hasna/knowledge/knowledge.db; hosted and cloud execution remain contained.",
   "bins": ["knowledge", "knowledge-mcp", "knowledge-serve"],
   "storage": {
     "mode": "local",
     "envPrefix": "HASNA_KNOWLEDGE_",
     "aliasEnvPrefix": "KNOWLEDGE_",
-    "databaseUrlSecretRef": "hasna/oss/knowledge/database-url",
     "sqlitePath": "~/.hasna/knowledge/knowledge.db"
   },
   "metadata": {
@@ -21,14 +20,14 @@
       "versionPath": "/version",
       "openapiPath": "/openapi.json",
       "apiVersion": "v1",
-      "auth": "api-key",
-      "signingSecretSecretRef": "hasna/oss/knowledge/api-key-signing-secret",
-      "migrationCommand": ["bun", "scripts/apply-cloud-migrations.mjs"],
-      "ownerDatabaseUrlSecretRef": "hasna/oss/knowledge/database-url-owner"
+      "auth": "contained"
     },
     "client": {
-      "apiUrlEnv": "KNOWLEDGE_API_URL",
-      "apiKeyEnv": "KNOWLEDGE_API_KEY"
+      "apiUrlEnv": "KNOWLEDGE_API_URL"
+    },
+    "cloud": {
+      "state": "contained",
+      "executable": false
     }
   }
 }

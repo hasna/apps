@@ -1,8 +1,10 @@
-import type { Database } from 'bun:sqlite';
+import type { KnowledgeDatabase as Database } from './knowledge-db';
 import { migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
 import { sourceProvenance, type KnowledgeProvenance } from './provenance';
+import { parseBoundedJsonData } from './input-limits';
 import { catalogSourceUriForRef, parseSourceRef, revisionIdForSourceRef } from './source-ref';
 import { assertWriteAllowed, recordAuditEvent, type SafetyPolicy } from './safety';
+import { assertContainedSourceGraph } from './public-guard';
 
 export interface SourceResolveOptions {
   dbPath: string;
@@ -131,9 +133,10 @@ interface DbChunkRow {
 function parseJsonObject(value: string | null | undefined): Record<string, unknown> {
   if (!value) return {};
   try {
-    const parsed = JSON.parse(value);
+    const parsed = parseBoundedJsonData<unknown>(value, 'Persisted source metadata');
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
-  } catch {
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
     return {};
   }
 }
@@ -230,6 +233,7 @@ function selectChunks(db: Database, revisionId: string | null, limit: number): D
 }
 
 export async function resolveOpenFilesSource(options: SourceResolveOptions): Promise<SourceResolveResult> {
+  assertContainedSourceGraph(options);
   const purpose = options.purpose ?? 'knowledge_answer';
   const limit = Math.max(0, Math.min(options.limit ?? 10, 100));
   const resolvedAt = (options.now ?? new Date()).toISOString();

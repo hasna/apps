@@ -40,8 +40,9 @@ The future hosted/SaaS wrapper owns:
 - Remote job orchestration for ingestion, embedding, web search, compile, lint,
   and sync runs.
 
-The OSS package must stay useful without a hosted account. Hosted mode should be
-an optional remote client over explicit API contracts.
+The OSS package must stay useful without a hosted account. In a future stage, a
+separate hosted wrapper may provide an optional remote client over explicit API
+contracts; hosted execution in this Stage-A package is unavailable.
 
 The detailed hosted boundary is specified in
 [`hosted-wrapper-responsibilities.md`](./hosted-wrapper-responsibilities.md).
@@ -51,17 +52,17 @@ bucket provisioning, secrets, queues, billing, admin controls, observability, an
 the hosted web UI.
 
 Multi-machine sync is specified in
-[`machine-sync-schema.md`](./machine-sync-schema.md). The sync contract keeps
-machine discovery optional through `@hasna/machines`, stores scalable sync state
-in SQLite/Postgres/object storage, and keeps raw source bytes in `open-files`.
+[`machine-sync-schema.md`](./machine-sync-schema.md). Stage A keeps machine
+discovery optional through `@hasna/machines`, stores sync state in local SQLite
+and anchored local artifacts, and keeps raw source bytes in `open-files`. The
+retained schema describes future Postgres and object-storage adapters only.
 
-The local hosted-aware contract follows the `open-skills` pattern: `mode` is
-`local` by default, `setup --mode hosted` records `hosted.api_url`, env vars
-`KNOWLEDGE_API_URL` and `KNOWLEDGE_API_KEY` can override local config, and
-credentials live outside project state in `~/.hasna/knowledge/auth.json`.
-`remote contracts` publishes the registry/search/ask/build/sync/status/logs and
-artifact endpoints that a SaaS wrapper can implement. Local use, local search,
-and local artifact generation do not require this remote API.
+The Stage-A runtime executes only explicit local mode. `setup --mode hosted`,
+`KNOWLEDGE_API_URL`, `KNOWLEDGE_API_KEY`, the auth-file name, and
+`remote contracts` are retained compatibility metadata: they select typed
+containment before config, auth, workspace, provider, or network activity. A
+future SaaS wrapper may implement the documented registry/search/ask/build/
+sync/status/logs and artifact endpoint shapes.
 
 ## Local Workspace
 
@@ -92,8 +93,8 @@ workspace they describe.
 
 ## Source References
 
-`knowledge` stores references, not raw source bytes. Supported source ref
-forms:
+`knowledge` stores references, not raw source bytes. Recognized metadata ref
+forms include:
 
 ```text
 open-files://file/<file_id>
@@ -106,8 +107,9 @@ https://example.com/page
 
 For durable company knowledge, `open-files://` is preferred because it can carry
 file revisions, hashes, extraction state, permissions, and storage metadata.
-Direct `s3://`, `file://`, and `https://` refs are useful for bootstrap and
-interop, but should be normalized into source records when possible.
+Stage A ingestion accepts only an anchored local `file://` ref. S3 and web refs
+remain opaque compatibility metadata and are rejected before provider,
+credential, network, database, or workspace activity.
 
 ## Provenance Contract
 
@@ -138,21 +140,23 @@ enforces the read-only purpose labels imported from `open-files`, returns source
 metadata, selected revision metadata, derived chunks, and citation evidence, and
 records an audit event. It never returns raw bytes or storage credentials.
 
-`ingest source` uses the same boundary for indexing. It accepts `open-files://`,
-`file://`, `s3://`, and `https://` refs, applies S3/web safety gates, converts
-allowed extracted text into redacted chunks with offsets, records hashes and
-revisions, and stores only derived knowledge records.
+`ingest source` accepts only an anchored local `file://` ref, converts its text
+into redacted chunks with offsets, records hashes and revisions, and stores only
+derived knowledge records. Cataloged `open-files://` refs remain resolver-only;
+S3, web, unknown, and remote extracted-text inputs fail closed before reads or
+mutation.
 
 In future hosted mode, the same result shape can be backed by a remote
 open-files resolver API. The local OSS package should keep using the shared
 service boundary so CLI, MCP, and SaaS wrappers do not grow separate permission
 logic.
 
-## Remote And S3 Mode
+## Future Remote And S3 Compatibility
 
 Local mode writes artifacts to `.hasna/knowledge`.
 
-Remote/cloud mode can store generated knowledge artifacts in S3:
+The retained schema can describe where a future hosted wrapper might store
+generated knowledge artifacts. Stage A cannot read or write this S3 prefix:
 
 ```text
 s3://<knowledge-bucket>/<org>/<project>/knowledge/
@@ -171,11 +175,8 @@ path-compatible prefix:
 s3://example-knowledge-prod/.hasna/knowledge/
 ```
 
-The app config can be materialized with:
-
-```bash
-knowledge setup --mode hosted --canonical-example --scope project --json
-```
+Hosted setup options are compatibility metadata in Stage A and return typed
+containment rather than materializing an executable remote configuration.
 
 The canonical metadata-only secret paths are:
 
@@ -188,9 +189,9 @@ example/knowledge/prod/s3
 `example/knowledge/prod/rds` is reserved for a future hosted
 runtime database if the wrapper provisions one.
 
-Raw files still route through `open-files`. Knowledge S3 storage is for derived
-artifacts such as wiki pages, index shards, schema versions, logs, exports, and
-run outputs.
+Raw files still route through `open-files`. A future hosted wrapper may use
+object storage only for derived artifacts such as wiki pages, index shards,
+schema versions, logs, exports, and run outputs.
 
 The storage contract is inspectable through:
 
@@ -199,10 +200,10 @@ knowledge storage status --scope project --json
 ```
 
 That contract names the local app path, SQLite catalog, generated artifact
-classes, S3 bucket/prefix when configured, and the source ownership rule that
-raw source bytes stay in `open-files`. The `storage_objects` table catalogs
-generated artifacts by URI, kind, hash, size, and metadata so local mode and
-remote/S3 mode share the same DB-facing shape.
+classes, contained S3 compatibility metadata, and the source ownership rule
+that raw source bytes stay in `open-files`. The `storage_objects` table catalogs
+generated artifacts by URI, kind, hash, size, and metadata; a future hosted
+wrapper may preserve that DB-facing shape.
 
 ## Wiki Model
 
@@ -241,7 +242,8 @@ wiki/
 
 The database catalog tracks every schema, index shard, log partition, wiki page,
 source citation, and generated artifact. Markdown remains the readable layer;
-SQLite/Postgres and object storage carry the scalable catalog.
+Stage A uses local SQLite and anchored local artifacts. Postgres and object
+storage are future-wrapper schema targets and are not executable here.
 
 The first compile/write loop is local and approval-gated. `wiki compile`
 generates cited pages from derived source chunks, creates concept backlinks,
@@ -294,13 +296,16 @@ project-scope JSON resources at `knowledge://project/config`,
 reads for individual items, sources, wiki pages, indexes, runs, and decisions.
 These resources expose derived chunks, generated wiki artifacts, citations, run
 ledgers, and storage/index metadata without exposing raw source bytes.
+During Stage A, `knowledge_web_search` is a metadata-compatible schema whose
+execution, including fake mode, always returns typed containment.
 
 Index freshness is explicit. `reindex_queue` tracks missing or stale embedding
 work, `knowledge reindex status|enqueue|embeddings` operates the local
 queue, and MCP exposes the same controls through `ok_reindex_status`,
-`ok_reindex_enqueue`, and `ok_reindex_embeddings`. Hosted mode can map the same
-contract to worker queues, S3/object artifact sync, Postgres/pgvector, or a
-managed vector index while preserving the local command shape.
+`ok_reindex_enqueue`, and `ok_reindex_embeddings`. A future hosted wrapper may
+map the same contract to worker queues, object artifact sync,
+Postgres/pgvector, or a managed vector index while preserving the local command
+shape; none of those transports are executable in Stage A.
 
 ## Agent Workflow
 
@@ -314,7 +319,8 @@ The command should:
 
 1. Search existing wiki and indexed source chunks.
 2. Resolve deeper read-only source content through `open-files` if needed.
-3. Optionally use provider-native web search.
+3. Treat provider-native web search as unavailable during Stage A; a future
+   hosted authority may implement the retained schema.
 4. Produce an answer with citations.
 5. Propose durable wiki/index/schema/log updates.
 6. Write generated artifacts only after approval or in an explicitly approved
@@ -328,12 +334,11 @@ returns a local citation draft by default, optionally calls AI SDK generation vi
 `--generate`, records `runs`, `run_events`, and `provider_usage`, and only
 proposes durable wiki updates until the wiki compile/write task owns writes.
 
-Provider-native web search is exposed separately as
-`knowledge web search <query>` and MCP `ok_web_search`. Real network access
-is safety-gated; OpenAI and Anthropic use provider web-search tools through AI
-SDK, while DeepSeek remains a future fallback/external-search path. Returned web
-snippets can optionally be filed as read-only `web` source refs for later local
-search and citation.
+Provider-native web-search command and MCP schemas are retained separately as
+`knowledge web search <query>`, `knowledge_web_search`, and `ok_web_search` for
+base compatibility. Stage-A execution is unavailable, including fake mode and
+result filing. Provider configuration, environment settings, and command
+options cannot enable provider or network access.
 
 ## Provider Registry
 

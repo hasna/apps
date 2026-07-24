@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
-import type { Database } from 'bun:sqlite';
+import type { KnowledgeDatabase as Database } from './knowledge-db';
 import { migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
 import { retrieveKnowledgeContext, type RetrievalCitation, type RetrievalOptions } from './retrieval';
 import { redactSecrets, type SafetyPolicy } from './safety';
 import type { KnowledgeConfig } from './workspace';
+import { parseBoundedJsonData } from './input-limits';
 
 export type KnowledgeContextPackSource = 'search' | 'loops' | 'runs';
 export type KnowledgeContextPackPurpose = 'agent_context' | 'proposal';
@@ -170,9 +171,10 @@ function truncateText(value: string, maxChars: number): string {
 function parseJsonObject(value: string | null | undefined): Record<string, unknown> {
   if (!value) return {};
   try {
-    const parsed = JSON.parse(value);
+    const parsed = parseBoundedJsonData<unknown>(value, 'Persisted context metadata');
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
-  } catch {
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
     return {};
   }
 }

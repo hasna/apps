@@ -8,44 +8,58 @@ on:
 
 jobs:
   test:
+    env:
+      BUN_CONFIG_INSTALL_AUTO: disable
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
-        runtime: [bun, node]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.3.13
 
-      - name: Setup Node
-        if: matrix.runtime == 'node'
-        uses: actions/setup-node@v4
-        with:
-          node-version: latest
-
       - name: Install dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
+
+      - name: Verify committed generated artifacts before build
+        run: bun scripts/verify-generated-artifacts.mjs
 
       - name: Run tests
         run: bun test
 
-      - name: Verify generated artifacts
-        run: bun run build && bun scripts/verify-generated-artifacts.mjs
+      - name: Typecheck
+        run: bun node_modules/typescript/bin/tsc --noEmit
 
-  test-matrix:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        runtime: [bun]
-    runs-on: ${{ matrix.os }}
+      - name: Typecheck pinned public compatibility declarations
+        run: bun scripts/check-declaration-compatibility.mjs
+
+      - name: Build and reverify generated artifacts
+        run: |
+          bun scripts/build.mjs
+          bun scripts/verify-generated-artifacts.mjs
+          git diff --exit-code -- src/generated dist bin generated-artifacts.json repository-generated-artifacts.json
+          test -z "$(git ls-files --others --exclude-standard -- src/generated dist bin generated-artifacts.json repository-generated-artifacts.json)"
+
+      - name: Verify local package extraction boundary
+        run: bun scripts/check-package-extraction.mjs
+
+      - name: Verify exact checked-in bytes across clean roots, dependency topologies, and umasks
+        if: runner.os == 'Linux'
+        run: bun scripts/check-build-determinism.mjs
+
+  windows-containment:
+    env:
+      BUN_CONFIG_INSTALL_AUTO: disable
+    runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.3.13
-      - run: bun install
-      - run: bun test --timeout 20000
+      - run: bun install --frozen-lockfile
+      - name: Verify unsupported-platform fail-closed contract
+        run: bun test tests/windows-platform-containment.test.ts --timeout 20000

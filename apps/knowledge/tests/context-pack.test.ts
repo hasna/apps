@@ -112,7 +112,7 @@ describe('bounded knowledge agent context packs', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-search-ref-redaction-pack-'));
     const dbPath = join(dir, 'knowledge.db');
     const safetyPolicy = safetyFor(dir);
-    const secretUrl = 'https://evidence.example/doc?token=sk-testsecretkeyvalue1234567890&ok=1';
+    const secretUrl = 'file:///tmp/knowledge-evidence-doc?token=fixture-redaction-marker&ok=1';
 
     await ingestOpenFilesManifestItems({
       dbPath,
@@ -140,9 +140,9 @@ describe('bounded knowledge agent context packs', () => {
 
     expect(JSON.stringify(pack)).not.toContain('sk-testsecretkeyvalue');
     expect(pack.citations[0]).toMatchObject({
-      ref: 'https://evidence.example/doc',
-      source_ref: 'https://evidence.example/doc',
-      source_uri: 'https://evidence.example/doc',
+      ref: 'file:///tmp/knowledge-evidence-doc',
+      source_ref: 'file:///tmp/knowledge-evidence-doc',
+      source_uri: 'file:///tmp/knowledge-evidence-doc',
     });
   });
 

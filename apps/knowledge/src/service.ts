@@ -4,8 +4,10 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join, resolve } from 'node:path';
+import { AnchoredFilesystemError, readAnchoredRegularFileSnapshot } from './anchored-fs';
 import {
   assertAppWikiWriteAllowed,
+  assertAppWikiReadAllowed,
   getAppWikiNote,
   ingestAppWikiSourceRef,
   initAppWikiScope,
@@ -37,7 +39,11 @@ import {
   type EmbeddingSearchOptions,
 } from './embeddings';
 import { consumeOpenFilesOutbox } from './outbox-consume';
-import { getKnowledgeDbStats, migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
+import {
+  getKnowledgeDbStats,
+  migrateKnowledgeDb,
+  openKnowledgeDb,
+} from './knowledge-db';
 import { ingestOpenFilesManifest } from './manifest-ingest';
 import {
   discoverKnowledgeMachineTopology,
@@ -96,13 +102,16 @@ import { ensureStore, type KnowledgeItem } from './store';
 import { initializeWikiLayout, recordWikiLayoutCatalog } from './wiki-layout';
 import {
   canonicalExampleKnowledgeStorage,
+  canonicalKnowledgeScope,
   defaultKnowledgeConfig,
   ensureKnowledgeWorkspace,
+  ensureTrustedKnowledgeWorkspace,
   legacyGlobalStorePath,
   projectKnowledgeHome,
   readKnowledgeConfig,
   resolveLegacyScopedWorkspace,
   resolveScopedWorkspace,
+  trustedKnowledgeWorkspaceIdentity,
   workspaceForHome,
   writeKnowledgeConfig,
   type KnowledgeConfig,
@@ -112,11 +121,155 @@ import {
   migrateLegacyKnowledgeWorkspace,
   type KnowledgeLegacyWorkspaceMigrationResult,
 } from './workspace-migration';
+import {
+  assertKnowledgeLocalRuntime,
+  assertKnowledgeLocalRuntimeWithConfig,
+  configContainmentError,
+  readKnowledgeConfiguredMode,
+  type KnowledgeRuntimeEnv,
+  type KnowledgeRuntimeResolution,
+  type KnowledgeRuntimeSurface,
+} from './runtime-role';
+import {
+  assertClassifiedSourceReference,
+  assertContainedSourceGraph,
+  assertPublicInvocation,
+  safePublicProperty,
+} from './public-guard';
+import { MAX_INGEST_BODY_BYTES, parseBoundedJsonData } from './input-limits';
 
 export interface KnowledgeServiceOptions {
   scope?: string;
   cwd?: string;
 }
+
+interface KnowledgeServiceRuntimeOptions extends KnowledgeServiceOptions {
+  env?: KnowledgeRuntimeEnv;
+  runtimeSurface?: KnowledgeRuntimeSurface;
+}
+
+interface KnowledgeServiceIdentity {
+  readonly role: 'local';
+  readonly scope: ReturnType<typeof canonicalKnowledgeScope>;
+  readonly projectRoot: string | null;
+  readonly workspaceHome: string;
+  readonly workspaceKey: string;
+  readonly workspace: KnowledgeWorkspace;
+  readonly revalidate: () => KnowledgeRuntimeResolution;
+}
+
+const knowledgeServiceIdentities = new WeakMap<object, KnowledgeServiceIdentity>();
+
+function trustedKnowledgeServiceIdentity(service: KnowledgeService): KnowledgeServiceIdentity {
+  const identity = knowledgeServiceIdentities.get(service);
+  if (!identity) {
+    throw new Error('Global knowledge reads require a trusted owning Knowledge service.');
+  }
+  return identity;
+}
+
+function resolveKnowledgeServiceWorkspace(
+  scope: string,
+  cwd: string | undefined,
+  surface: KnowledgeRuntimeSurface,
+): KnowledgeWorkspace {
+  try {
+    return resolveScopedWorkspace(scope, cwd);
+  } catch {
+    throw configContainmentError('workspace identity is not canonical', surface);
+  }
+}
+
+export function assertKnowledgeServiceForProjectPanel(
+  service: KnowledgeService,
+  options: { scope: string; cwd?: string },
+): void {
+  if (!service || typeof service !== 'object') {
+    throw new Error('Project panel requires a trusted knowledge service from the owning runtime.');
+  }
+  const identity = knowledgeServiceIdentities.get(service);
+  if (!identity) {
+    throw new Error('Project panel requires a trusted knowledge service from the owning runtime.');
+  }
+  const scope = canonicalKnowledgeScope(options.scope, 'project');
+  if (identity.role !== 'local' || identity.scope !== scope) {
+    throw new Error('Project panel service role or scope does not match the owning runtime.');
+  }
+  const resolution = identity.revalidate();
+  if (resolution.role !== identity.role) {
+    throw new Error('Project panel service runtime role changed after construction.');
+  }
+  const currentIdentity = trustedKnowledgeWorkspaceIdentity(identity.workspace);
+  if (
+    currentIdentity.key !== identity.workspaceKey
+    || currentIdentity.home !== identity.workspaceHome
+    || currentIdentity.projectRoot !== identity.projectRoot
+  ) {
+    throw new Error('Project panel service workspace identity changed after construction.');
+  }
+  if (options.cwd !== undefined) {
+    const expected = trustedKnowledgeWorkspaceIdentity(resolveScopedWorkspace(scope, options.cwd));
+    if (expected.key !== identity.workspaceKey) {
+      throw new Error('Project panel service does not belong to the requested project workspace identity.');
+    }
+  }
+}
+
+export function explicitOwnGlobalReadAuthority(
+  scope: string,
+  options: { allowGlobal?: boolean } | undefined,
+): boolean | undefined {
+  let descriptor: PropertyDescriptor | undefined;
+  try {
+    descriptor = options && typeof options === 'object'
+      ? Object.getOwnPropertyDescriptor(options, 'allowGlobal')
+      : undefined;
+  } catch {
+    throw new Error('Global knowledge reads require an explicit own allowGlobal=true data property (--allow-global on CLI).');
+  }
+  if (scope === 'global' && (
+    !descriptor
+    || !('value' in descriptor)
+    || descriptor.value !== true
+  )) {
+    throw new Error('Global knowledge reads require an explicit own allowGlobal=true data property (--allow-global on CLI).');
+  }
+  return descriptor && 'value' in descriptor
+    ? descriptor.value as boolean | undefined
+    : undefined;
+}
+
+function explicitOwnAppWikiAllowGlobal(
+  scope: string,
+  options: { allowGlobal?: boolean } | undefined,
+): boolean | undefined {
+  let descriptor: PropertyDescriptor | undefined;
+  try {
+    descriptor = options && typeof options === 'object'
+      ? Object.getOwnPropertyDescriptor(options, 'allowGlobal')
+      : undefined;
+  } catch {
+    throw new Error('Global app-wiki access requires an explicit own allowGlobal=true data property.');
+  }
+  if (scope === 'global' && (!descriptor || !('value' in descriptor) || descriptor.value !== true)) {
+    throw new Error('Global app-wiki access requires an explicit own allowGlobal=true data property.');
+  }
+  return descriptor && 'value' in descriptor
+    ? descriptor.value as boolean | undefined
+    : undefined;
+}
+
+const GLOBAL_READ_OPERATION_OPTION_INDEX = Object.freeze(new Map<string, number>([
+  ['inventory', 0],
+  ['listAppWikiNotes', 0],
+  ['getAppWikiNote', 1],
+  ['searchAppWiki', 0],
+  ['queryAppWiki', 0],
+  ['search', 0],
+  ['retrieveContext', 0],
+  ['contextPack', 0],
+  ['runPrompt', 0],
+]));
 
 export interface KnowledgePathsResult {
   ok: true;
@@ -143,6 +296,7 @@ export interface KnowledgeInventoryOptions {
   limit?: number;
   storePath?: string;
   includeArchived?: boolean;
+  allowGlobal?: boolean;
 }
 
 export interface KnowledgeInventoryLegacyItem {
@@ -819,17 +973,37 @@ function readLegacyInventoryStore(path: string): {
   read_error: string | null;
   items: KnowledgeItem[];
 } {
-  if (!existsSync(path)) return { exists: false, read_error: null, items: [] };
+  const resolvedPath = resolve(path);
+  let snapshot: ReturnType<typeof readAnchoredRegularFileSnapshot>;
+  for (let attempt = 0; attempt < 16; attempt += 1) {
+    try {
+      snapshot = readAnchoredRegularFileSnapshot(resolvedPath, MAX_INGEST_BODY_BYTES);
+      break;
+    } catch (error) {
+      const retryable = error instanceof AnchoredFilesystemError
+        && (
+          error.message === 'anchored regular file identity or contents changed during the bounded snapshot read'
+          || error.message === 'file identity changed while it was opened'
+        );
+      const racedWithMissingName = (error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT';
+      if ((!retryable && !racedWithMissingName) || attempt === 15) throw error;
+    }
+  }
+  if (!snapshot) return { exists: false, read_error: null, items: [] };
   try {
-    const parsed = JSON.parse(readFileSync(path, 'utf8')) as { items?: unknown };
+    const parsed = parseBoundedJsonData<{ items?: unknown }>(
+      snapshot.content,
+      'Persisted legacy knowledge store',
+    );
     if (!parsed || !Array.isArray(parsed.items)) {
       return { exists: true, read_error: 'invalid_store_shape', items: [] };
     }
     return { exists: true, read_error: null, items: parsed.items as KnowledgeItem[] };
   } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
     return {
       exists: true,
-      read_error: error instanceof Error ? error.message : String(error),
+      read_error: 'invalid_json',
       items: [],
     };
   }
@@ -850,7 +1024,7 @@ function legacyInventoryItem(item: KnowledgeItem): KnowledgeInventoryLegacyItem 
   };
 }
 
-function emptyKnowledgeDbStats(): ReturnType<typeof getKnowledgeDbStats> {
+function emptyKnowledgeDbStats(): import('./knowledge-db').KnowledgeDbStats {
   return {
     schema_version: 0,
     sources: 0,
@@ -1286,7 +1460,7 @@ function artifactManifestStatus(dbPath: string, storage: StorageContract): Knowl
     const missingSize = rows.length - withSize;
     const missingModifiedAt = rows.length - withModifiedAt - invalidModifiedAt;
     const missingProvenance = rows.length - withProvenance;
-    const missingProvenanceArtifactKey = withProvenance - withProvenanceArtifactKey;
+    const missingProvenanceField = withProvenance - withProvenanceArtifactKey;
     const mismatchedPrefix = rows.length - matchingPrefix;
     const warnings = [
       missingHash > 0 ? `artifact_manifest_missing_hash:${missingHash}` : null,
@@ -1296,7 +1470,7 @@ function artifactManifestStatus(dbPath: string, storage: StorageContract): Knowl
       prefixedKey > 0 ? `artifact_manifest_s3_key_contains_storage_prefix:${prefixedKey}` : null,
       invalidModifiedAt > 0 ? `artifact_manifest_invalid_modified_at:${invalidModifiedAt}` : null,
       missingProvenance > 0 ? `artifact_manifest_missing_provenance:${missingProvenance}` : null,
-      missingProvenanceArtifactKey > 0 ? `artifact_manifest_missing_provenance_artifact_key:${missingProvenanceArtifactKey}` : null,
+      missingProvenanceField > 0 ? `artifact_manifest_missing_provenance_artifact_key:${missingProvenanceField}` : null,
       provenanceArtifactKeyMismatches > 0 ? `artifact_manifest_provenance_key_mismatch:${provenanceArtifactKeyMismatches}` : null,
       rawPayloadSentinelHits > 0 ? `artifact_manifest_raw_payload_sentinels:${rawPayloadSentinelHits}` : null,
     ].filter((entry): entry is string => Boolean(entry));
@@ -1329,7 +1503,7 @@ function artifactManifestStatus(dbPath: string, storage: StorageContract): Knowl
         with_provenance: withProvenance,
         missing_provenance: missingProvenance,
         with_artifact_key: withProvenanceArtifactKey,
-        missing_artifact_key: missingProvenanceArtifactKey,
+        missing_artifact_key: missingProvenanceField,
         artifact_key_mismatches: provenanceArtifactKeyMismatches,
         generated_from: [...generatedFrom.entries()]
           .map(([value, count]) => ({ value, count }))
@@ -1354,7 +1528,7 @@ function artifactManifestStatus(dbPath: string, storage: StorageContract): Knowl
         hash_algorithm: 'sha256',
         portable_keys: prefixedKey === 0 && missingKey === 0,
         tracks_modified_time: withModifiedAt > 0 && invalidModifiedAt === 0,
-        preserves_provenance: missingProvenance === 0 && missingProvenanceArtifactKey === 0 && provenanceArtifactKeyMismatches === 0,
+        preserves_provenance: missingProvenance === 0 && missingProvenanceField === 0 && provenanceArtifactKeyMismatches === 0,
       },
       raw_payload_sentinel_hits: rawPayloadSentinelHits,
       warnings,
@@ -1556,22 +1730,158 @@ function normalizeMode(value: string | undefined): KnowledgeConfig['mode'] | und
   throw new Error('Invalid setup mode. Use hosted or local.');
 }
 
+function assertLocalSourceInput(input: string): void {
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(input)?.[1]?.toLowerCase();
+  if (scheme) assertClassifiedSourceReference(input, { surface: 'public-api' });
+}
+
 export class KnowledgeService {
+  private readonly options: KnowledgeServiceRuntimeOptions;
+  private readonly constructorWorkspace: KnowledgeWorkspace;
   private ensuredWorkspace?: KnowledgeWorkspace;
   private cachedConfig?: KnowledgeConfig;
 
-  constructor(private readonly options: KnowledgeServiceOptions = {}) {}
+  constructor(options: KnowledgeServiceOptions = {}) {
+    if (new.target !== KnowledgeService) {
+      throw new Error('Trusted knowledge services must use the owning runtime constructor directly.');
+    }
+    // Ambient intent is resolved before any supplied option/property access.
+    assertPublicInvocation();
+    const scope = canonicalKnowledgeScope(safePublicProperty(options, 'scope', 'sdk'));
+    const cwd = safePublicProperty(options, 'cwd', 'sdk');
+    const runtimeOptions = options as KnowledgeServiceRuntimeOptions;
+    const env = safePublicProperty(runtimeOptions, 'env', 'sdk');
+    const runtimeSurface = safePublicProperty(runtimeOptions, 'runtimeSurface', 'sdk');
+    const unsupportedConfig = safePublicProperty(
+      options as KnowledgeServiceOptions & { config?: unknown },
+      'config',
+      'sdk',
+    );
+    // Environment maps are inspected only through the allowlisted role keys
+    // below. Traversing every ambient environment entry would both exceed the
+    // public option boundary and reject Bun's ordinary process.env object.
+    assertPublicInvocation([scope, cwd, runtimeSurface, unsupportedConfig], { surface: 'sdk' });
+    this.options = Object.freeze({
+      scope,
+      cwd: typeof cwd === 'string' ? cwd : process.cwd(),
+      env: env && typeof env === 'object' ? env as KnowledgeRuntimeEnv : undefined,
+      runtimeSurface: typeof runtimeSurface === 'string'
+        ? runtimeSurface as KnowledgeRuntimeSurface
+        : undefined,
+    });
+    const initialWorkspace = resolveKnowledgeServiceWorkspace(
+      this.options.scope,
+      this.options.cwd,
+      this.options.runtimeSurface ?? 'sdk',
+    );
+    this.constructorWorkspace = initialWorkspace;
+    const initialWorkspaceIdentity = trustedKnowledgeWorkspaceIdentity(initialWorkspace);
+    let configRequired = false;
+    let identityInvalidated = false;
+    const revalidate = (
+      operation = 'service',
+      args: readonly unknown[] = [],
+    ): KnowledgeRuntimeResolution => {
+      const globalReadOptionIndex = GLOBAL_READ_OPERATION_OPTION_INDEX.get(operation);
+      if (this.options.scope === 'global' && globalReadOptionIndex !== undefined) {
+        explicitOwnGlobalReadAuthority(
+          this.options.scope,
+          args[globalReadOptionIndex] as { allowGlobal?: boolean } | undefined,
+        );
+      }
+      assertPublicInvocation(args, { surface: this.options.runtimeSurface ?? 'sdk' });
+      if (identityInvalidated) {
+        throw new Error('Knowledge service workspace identity was permanently invalidated.');
+      }
+      try {
+        const currentIdentity = trustedKnowledgeWorkspaceIdentity(initialWorkspace);
+        if (
+          currentIdentity.key !== initialWorkspaceIdentity.key
+          || currentIdentity.home !== initialWorkspaceIdentity.home
+          || currentIdentity.projectRoot !== initialWorkspaceIdentity.projectRoot
+        ) {
+          throw new Error('Knowledge service workspace identity changed after construction.');
+        }
+      } catch (error) {
+        identityInvalidated = true;
+        throw new Error(
+          `Knowledge service workspace identity was permanently invalidated: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      const setupInput = operation === 'setup' && args[0] && typeof args[0] === 'object'
+        ? args[0] as { mode?: string; apiUrl?: string; canonicalExample?: boolean }
+        : undefined;
+      const hostedRequested = operation === 'authStatus'
+        || operation === 'saveAuth'
+        || operation === 'clearAuth'
+        || operation === 'remoteClient'
+        || Boolean(setupInput?.apiUrl)
+        || Boolean(setupInput?.canonicalExample);
+      return assertKnowledgeLocalRuntimeWithConfig({
+        surface: this.options.runtimeSurface ?? 'sdk',
+        env: this.options.env ?? process.env,
+        explicitMode: setupInput?.mode,
+        hostedRequested,
+      }, () => {
+        const mode = readKnowledgeConfiguredMode(
+          initialWorkspace.configPath,
+          undefined,
+          configRequired,
+        );
+        if (mode !== undefined) configRequired = true;
+        return mode;
+      });
+    };
+    revalidate();
+    const proxy = new Proxy(this, {
+      get: (target, property) => {
+        let owner: object | null = target;
+        let descriptor: PropertyDescriptor | undefined;
+        while (owner && !descriptor) {
+          descriptor = Object.getOwnPropertyDescriptor(owner, property);
+          owner = Object.getPrototypeOf(owner);
+        }
+        if (descriptor && 'value' in descriptor && typeof descriptor.value === 'function') {
+          const value = descriptor.value;
+          return (...args: unknown[]) => {
+            revalidate(String(property), args);
+            return Reflect.apply(value, target, args);
+          };
+        }
+        revalidate(`get:${String(property)}`);
+        return Reflect.get(target, property, target);
+      },
+      set: () => false,
+      defineProperty: () => false,
+      deleteProperty: () => false,
+      setPrototypeOf: () => false,
+    });
+    const serviceIdentity = Object.freeze({
+      role: 'local',
+      scope,
+      projectRoot: initialWorkspaceIdentity.projectRoot,
+      workspaceHome: initialWorkspaceIdentity.home,
+      workspaceKey: initialWorkspaceIdentity.key,
+      workspace: initialWorkspace,
+      revalidate: () => revalidate('project-panel'),
+    });
+    knowledgeServiceIdentities.set(this, serviceIdentity);
+    knowledgeServiceIdentities.set(proxy, serviceIdentity);
+    return proxy;
+  }
 
   get scope(): string {
     return this.options.scope ?? 'global';
   }
 
   get workspace(): KnowledgeWorkspace {
-    return this.ensuredWorkspace ?? resolveScopedWorkspace(this.options.scope, this.options.cwd);
+    return this.ensuredWorkspace ?? this.constructorWorkspace;
   }
 
   ensureWorkspace(): KnowledgeWorkspace {
-    if (!this.ensuredWorkspace) this.ensuredWorkspace = ensureKnowledgeWorkspace(this.workspace.home);
+    if (!this.ensuredWorkspace) {
+      this.ensuredWorkspace = ensureTrustedKnowledgeWorkspace(this.workspace);
+    }
     return this.ensuredWorkspace;
   }
 
@@ -1581,11 +1891,19 @@ export class KnowledgeService {
 
   config(options: { ensure?: boolean } = {}): KnowledgeConfig {
     const workspace = options.ensure ? this.ensureWorkspace() : this.workspace;
-    if (!this.cachedConfig || options.ensure || existsSync(workspace.configPath)) {
-      this.cachedConfig = existsSync(workspace.configPath)
-        ? readKnowledgeConfig(workspace.configPath)
-        : defaultKnowledgeConfig();
-    }
+    const configuredMode = readKnowledgeConfiguredMode(
+      workspace.configPath,
+      undefined,
+      Boolean(this.ensuredWorkspace),
+    );
+    assertKnowledgeLocalRuntime({
+      surface: this.options.runtimeSurface ?? 'sdk',
+      env: this.options.env ?? process.env,
+      configMode: configuredMode,
+    });
+    this.cachedConfig = configuredMode === undefined
+      ? defaultKnowledgeConfig()
+      : readKnowledgeConfig(workspace.configPath);
     return this.cachedConfig;
   }
 
@@ -1594,7 +1912,17 @@ export class KnowledgeService {
   }
 
   artifactStore() {
-    return createArtifactStore(this.config(), this.ensureWorkspace());
+    const workspace = this.ensureWorkspace();
+    return (createArtifactStore as unknown as (
+      config: KnowledgeConfig,
+      workspace: KnowledgeWorkspace,
+      boundary: Record<string, unknown>,
+    ) => ReturnType<typeof createArtifactStore>)(this.config(), workspace, {
+      env: this.options.env ?? process.env,
+      surface: this.options.runtimeSurface ?? 'sdk',
+      readConfigMode: () => readKnowledgeConfiguredMode(workspace.configPath, undefined, true),
+      requireConfig: true,
+    });
   }
 
   storageContract(): StorageContract {
@@ -1661,6 +1989,7 @@ export class KnowledgeService {
   }
 
   authStatus(env: Record<string, string | undefined> = process.env): KnowledgeAuthStatus {
+    assertKnowledgeLocalRuntime({ surface: this.options.runtimeSurface ?? 'sdk', env, hostedRequested: true });
     return knowledgeAuthStatus(this.config(), env);
   }
 
@@ -1672,6 +2001,7 @@ export class KnowledgeService {
     userId?: string;
     apiUrl?: string;
   }, env: Record<string, string | undefined> = process.env) {
+    assertKnowledgeLocalRuntime({ surface: this.options.runtimeSurface ?? 'sdk', env, hostedRequested: true });
     const apiUrl = input.apiUrl ?? this.config().hosted?.api_url;
     return saveKnowledgeAuth({
       api_key: input.apiKey,
@@ -1684,6 +2014,7 @@ export class KnowledgeService {
   }
 
   clearAuth(env: Record<string, string | undefined> = process.env) {
+    assertKnowledgeLocalRuntime({ surface: this.options.runtimeSurface ?? 'sdk', env, hostedRequested: true });
     return clearKnowledgeAuth(env);
   }
 
@@ -1698,6 +2029,7 @@ export class KnowledgeService {
   }
 
   remoteClient(env: Record<string, string | undefined> = process.env): RemoteKnowledgeClient | null {
+    assertKnowledgeLocalRuntime({ surface: this.options.runtimeSurface ?? 'sdk', env, hostedRequested: true });
     return RemoteKnowledgeClient.fromConfig(this.config(), env);
   }
 
@@ -1729,13 +2061,16 @@ export class KnowledgeService {
     return migrateKnowledgeDb(this.ensureWorkspace().knowledgeDbPath);
   }
 
-  dbStats() {
+  dbStats(): import('./knowledge-db').KnowledgeDbStats {
     const workspace = this.workspace;
     if (!existsSync(workspace.knowledgeDbPath)) return emptyKnowledgeDbStats();
     return getKnowledgeDbStats(workspace.knowledgeDbPath);
   }
 
   inventory(options: KnowledgeInventoryOptions = {}): KnowledgeInventoryResult {
+    const identity = trustedKnowledgeServiceIdentity(this);
+    explicitOwnGlobalReadAuthority(identity.scope, options);
+    identity.revalidate();
     const workspace = this.workspace;
     const limit = inventoryLimit(options.limit);
     const storePath = options.storePath ?? workspace.jsonStorePath;
@@ -2057,36 +2392,38 @@ export class KnowledgeService {
     }
   }
 
-  private assertAppWikiWrite(allowGlobal?: boolean): void {
+  private assertAppWikiWrite(options: { allowGlobal?: boolean }): boolean | undefined {
+    const allowGlobal = explicitOwnAppWikiAllowGlobal(this.scope, options);
     assertAppWikiWriteAllowed({
       scope: this.scope,
       workspace: this.workspace,
       safetyPolicy: this.safetyPolicy(),
       allowGlobal,
     });
+    return allowGlobal;
   }
 
   async initAppWiki(options: KnowledgeAppWikiWriteOptions = {}): Promise<KnowledgeAppWikiInitResult> {
-    this.assertAppWikiWrite(options.allowGlobal);
+    const allowGlobal = this.assertAppWikiWrite(options);
     const workspace = this.ensureWorkspace();
     return initAppWikiScope({
       scope: this.scope,
       workspace,
       store: this.artifactStore(),
       safetyPolicy: this.safetyPolicy(),
-      allowGlobal: options.allowGlobal,
+      allowGlobal,
     });
   }
 
   async addAppWikiNote(options: KnowledgeAppWikiNoteInput): Promise<KnowledgeAppWikiNoteResult> {
-    this.assertAppWikiWrite(options.allowGlobal);
+    const allowGlobal = this.assertAppWikiWrite(options);
     const workspace = this.ensureWorkspace();
     return writeAppWikiNote({
       scope: this.scope,
       workspace,
       store: this.artifactStore(),
       safetyPolicy: this.safetyPolicy(),
-      allowGlobal: options.allowGlobal,
+      allowGlobal,
       title: options.title,
       content: options.content,
       tags: options.tags,
@@ -2096,20 +2433,38 @@ export class KnowledgeService {
     });
   }
 
-  listAppWikiNotes(options: { limit?: number } = {}): KnowledgeAppWikiNote[] {
+  listAppWikiNotes(options: { limit?: number; allowGlobal?: boolean } = {}): KnowledgeAppWikiNote[] {
+    const allowGlobal = explicitOwnGlobalReadAuthority(this.scope, options);
     const workspace = this.workspace;
+    assertAppWikiReadAllowed({
+      scope: this.scope,
+      workspace,
+      allowGlobal,
+    });
     if (!existsSync(workspace.knowledgeDbPath)) return [];
     return listAppWikiNotes({
       dbPath: workspace.knowledgeDbPath,
+      scope: this.scope,
+      workspace,
+      allowGlobal,
       limit: options.limit,
     });
   }
 
-  async getAppWikiNote(id: string, options: { includeContent?: boolean } = {}): Promise<KnowledgeAppWikiNoteReadResult | null> {
+  async getAppWikiNote(id: string, options: { includeContent?: boolean; allowGlobal?: boolean } = {}): Promise<KnowledgeAppWikiNoteReadResult | null> {
+    const allowGlobal = explicitOwnGlobalReadAuthority(this.scope, options);
     const workspace = this.workspace;
+    assertAppWikiReadAllowed({
+      scope: this.scope,
+      workspace,
+      allowGlobal,
+    });
     if (!existsSync(workspace.knowledgeDbPath)) return null;
     return getAppWikiNote({
       dbPath: workspace.knowledgeDbPath,
+      scope: this.scope,
+      workspace,
+      allowGlobal,
       store: this.artifactStore(),
       id,
       includeContent: options.includeContent,
@@ -2117,24 +2472,39 @@ export class KnowledgeService {
   }
 
   async addAppWikiSourceRef(options: KnowledgeAppWikiSourceInput) {
-    this.assertAppWikiWrite(options.allowGlobal);
+    assertContainedSourceGraph(options, 'public-api');
+    const sourceRef = safePublicProperty(options, 'sourceRef', 'public-api');
+    assertClassifiedSourceReference(sourceRef, { surface: 'public-api' });
+    const allowGlobal = this.assertAppWikiWrite(options);
     const workspace = this.ensureWorkspace();
     return ingestAppWikiSourceRef({
       scope: this.scope,
       workspace,
-      sourceRef: options.sourceRef,
+      sourceRef,
       purpose: options.purpose,
       config: this.config(),
       safetyPolicy: this.safetyPolicy(),
-      allowGlobal: options.allowGlobal,
+      allowGlobal,
     });
   }
 
-  async searchAppWiki(options: Omit<HybridSearchOptions, 'dbPath' | 'config'>) {
+  async searchAppWiki(options: Omit<HybridSearchOptions, 'dbPath' | 'config'> & { allowGlobal?: boolean }) {
+    const allowGlobal = explicitOwnGlobalReadAuthority(this.scope, options);
+    assertAppWikiReadAllowed({
+      scope: this.scope,
+      workspace: this.workspace,
+      allowGlobal,
+    });
     return this.search(options);
   }
 
-  async queryAppWiki(options: Omit<RetrievalOptions, 'dbPath' | 'config'>) {
+  async queryAppWiki(options: Omit<RetrievalOptions, 'dbPath' | 'config'> & { allowGlobal?: boolean }) {
+    const allowGlobal = explicitOwnGlobalReadAuthority(this.scope, options);
+    assertAppWikiReadAllowed({
+      scope: this.scope,
+      workspace: this.workspace,
+      allowGlobal,
+    });
     return this.retrieveContext(options);
   }
 
@@ -2196,7 +2566,8 @@ export class KnowledgeService {
   }
 
   async ingestManifest(input: string) {
-    const workspace = this.ensureWorkspace();
+    assertLocalSourceInput(input);
+    const workspace = this.workspace;
     return ingestOpenFilesManifest({
       dbPath: workspace.knowledgeDbPath,
       input,
@@ -2206,6 +2577,7 @@ export class KnowledgeService {
   }
 
   async ingestSource(sourceRef: string, purpose?: string) {
+    assertClassifiedSourceReference(sourceRef, { surface: 'public-api' });
     const workspace = this.ensureWorkspace();
     return ingestSourceRef({
       dbPath: workspace.knowledgeDbPath,
@@ -2235,6 +2607,7 @@ export class KnowledgeService {
   }
 
   async resolveSource(sourceRef: string, options: { purpose?: string; limit?: number } = {}) {
+    assertClassifiedSourceReference(sourceRef, { allowStored: true, surface: 'public-api' });
     const workspace = this.ensureWorkspace();
     return resolveOpenFilesSource({
       dbPath: workspace.knowledgeDbPath,
@@ -2246,6 +2619,7 @@ export class KnowledgeService {
   }
 
   async consumeOutbox(input: string) {
+    assertLocalSourceInput(input);
     const workspace = this.ensureWorkspace();
     return consumeOpenFilesOutbox({
       dbPath: workspace.knowledgeDbPath,
@@ -2324,7 +2698,8 @@ export class KnowledgeService {
     });
   }
 
-  async search(options: Omit<HybridSearchOptions, 'dbPath' | 'config'>) {
+  async search(options: Omit<HybridSearchOptions, 'dbPath' | 'config'> & { allowGlobal?: boolean }) {
+    explicitOwnGlobalReadAuthority(this.scope, options);
     const workspace = this.workspace;
     const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
     if (!existsSync(workspace.knowledgeDbPath)) {
@@ -2349,7 +2724,8 @@ export class KnowledgeService {
     });
   }
 
-  async retrieveContext(options: Omit<RetrievalOptions, 'dbPath' | 'config'>) {
+  async retrieveContext(options: Omit<RetrievalOptions, 'dbPath' | 'config'> & { allowGlobal?: boolean }) {
+    explicitOwnGlobalReadAuthority(this.scope, options);
     const workspace = this.workspace;
     const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
     if (!existsSync(workspace.knowledgeDbPath)) {
@@ -2378,6 +2754,9 @@ export class KnowledgeService {
   }
 
   async contextPack(options: Omit<KnowledgeAgentContextPackOptions, 'dbPath' | 'config' | 'safetyPolicy'>) {
+    const identity = trustedKnowledgeServiceIdentity(this);
+    explicitOwnGlobalReadAuthority(identity.scope, options);
+    identity.revalidate();
     const workspace = this.workspace;
     const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
     if (!existsSync(workspace.knowledgeDbPath)) {
@@ -2405,7 +2784,10 @@ export class KnowledgeService {
     });
   }
 
-  async runPrompt(options: Omit<KnowledgePromptOptions, 'dbPath' | 'config'>) {
+  async runPrompt(options: Omit<KnowledgePromptOptions, 'dbPath' | 'config' | 'scope'> & { allowGlobal?: boolean }) {
+    const identity = trustedKnowledgeServiceIdentity(this);
+    explicitOwnGlobalReadAuthority(identity.scope, options);
+    identity.revalidate();
     const workspace = this.ensureWorkspace();
     const legacyStorePath = options.legacyStorePath ?? workspace.jsonStorePath;
     if (!options.legacyStorePath) ensureStore(legacyStorePath);
@@ -2418,13 +2800,7 @@ export class KnowledgeService {
   }
 
   async webSearch(options: Omit<WebSearchOptions, 'dbPath' | 'config' | 'safetyPolicy'>) {
-    const workspace = this.ensureWorkspace();
-    return runProviderWebSearch({
-      ...options,
-      dbPath: workspace.knowledgeDbPath,
-      config: this.config(),
-      safetyPolicy: this.safetyPolicy(),
-    });
+    return runProviderWebSearch(undefined as unknown as WebSearchOptions);
   }
 
   async machineTopology(options: Omit<KnowledgeMachineTopologyOptions, 'knowledge'> = {}) {
@@ -2915,7 +3291,15 @@ export class KnowledgeService {
     migrateKnowledgeDb(peerWorkspace.knowledgeDbPath);
     const peerConfig = readKnowledgeConfig(peerWorkspace.configPath);
     const peerStorage = resolveStorageContract(peerConfig, peerWorkspace, this.scope);
-    const peerStore = createArtifactStore(peerConfig, peerWorkspace);
+    const peerStore = (createArtifactStore as unknown as (
+      config: KnowledgeConfig,
+      workspace: KnowledgeWorkspace,
+      boundary: Record<string, unknown>,
+    ) => ReturnType<typeof createArtifactStore>)(peerConfig, peerWorkspace, {
+      env: this.options.env ?? process.env,
+      surface: this.options.runtimeSurface ?? 'sdk',
+      readConfigMode: () => readKnowledgeConfiguredMode(peerWorkspace.configPath),
+    });
     const localMachineId = options.machineId ?? workspaceMachineId(localWorkspace);
     const peerMachineId = workspaceMachineId(peerWorkspace);
     const resolvedWorkspace = await resolveKnowledgeMachineWorkspace({
@@ -2992,6 +3376,8 @@ export class KnowledgeService {
     return result;
   }
 }
+
+Object.freeze(KnowledgeService.prototype);
 
 export function createKnowledgeService(options: KnowledgeServiceOptions = {}): KnowledgeService {
   return new KnowledgeService(options);

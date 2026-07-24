@@ -1,4 +1,4 @@
-import type { Database } from 'bun:sqlite';
+import type { KnowledgeDatabase as Database } from './knowledge-db';
 import { REMOTE_KNOWLEDGE_CONTRACT_VERSION } from './remote-client';
 import type { KnowledgeConfig, KnowledgeWorkspace } from './workspace';
 import { EXAMPLE_KNOWLEDGE_CANONICAL } from './workspace';

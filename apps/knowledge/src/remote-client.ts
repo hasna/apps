@@ -1,5 +1,5 @@
-import { getKnowledgeApiKey, resolveKnowledgeApiUrl } from './auth';
 import type { KnowledgeConfig } from './workspace';
+import { KnowledgeContainmentError } from './runtime-role';
 
 export const REMOTE_KNOWLEDGE_CONTRACT_VERSION = 1 as const;
 
@@ -187,82 +187,66 @@ export function knowledgeRegistryContract(input: {
 }
 
 export class RemoteKnowledgeClient {
-  constructor(
-    private readonly apiKey: string,
-    private readonly apiUrl: string,
-  ) {}
+  declare private readonly apiKey: string;
+  declare private readonly apiUrl: string;
 
-  static fromConfig(config?: KnowledgeConfig, env: Record<string, string | undefined> = process.env): RemoteKnowledgeClient | null {
-    const key = getKnowledgeApiKey(env);
-    if (!key.apiKey) return null;
-    return new RemoteKnowledgeClient(key.apiKey, resolveKnowledgeApiUrl(config, env));
+  constructor(apiKey: string, apiUrl: string) {
+    containedRemoteClient();
   }
 
-  private async request(path: string, options: RequestInit = {}): Promise<Response> {
-    return fetch(`${this.apiUrl}${path}`, {
-      ...options,
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        'Content-Type': 'application/json',
-        ...options.headers,
-      },
-    });
+  static fromConfig(
+    config?: KnowledgeConfig,
+    env?: Record<string, string | undefined>,
+  ): RemoteKnowledgeClient | null;
+  static fromConfig(config?: KnowledgeConfig): RemoteKnowledgeClient | null {
+    return containedRemoteClient();
+  }
+
+  private request(path: string, options?: RequestInit): Promise<Response>;
+  private async request(path: string): Promise<Response> {
+    return containedRemoteClient();
   }
 
   async registry(): Promise<RemoteKnowledgeRegistryContract> {
-    const response = await this.request('/api/v1/knowledge/registry');
-    return response.json() as Promise<RemoteKnowledgeRegistryContract>;
+    return containedRemoteClient();
   }
 
   async search(request: RemoteKnowledgeSearchRequest): Promise<RemoteKnowledgeRunContract> {
-    const response = await this.request('/api/v1/knowledge/search', {
-      method: 'POST',
-      body: JSON.stringify(request),
-    });
-    return normalizeRemoteKnowledgeRunContract(await response.json(), { type: 'search', query: request.query });
+    return containedRemoteClient();
   }
 
   async ask(request: RemoteKnowledgePromptRequest): Promise<RemoteKnowledgeRunContract> {
-    const response = await this.request('/api/v1/knowledge/ask', {
-      method: 'POST',
-      body: JSON.stringify(request),
-    });
-    return normalizeRemoteKnowledgeRunContract(await response.json(), { type: 'ask', prompt: request.prompt });
+    return containedRemoteClient();
   }
 
   async build(request: RemoteKnowledgePromptRequest): Promise<RemoteKnowledgeRunContract> {
-    const response = await this.request('/api/v1/knowledge/build', {
-      method: 'POST',
-      body: JSON.stringify(request),
-    });
-    return normalizeRemoteKnowledgeRunContract(await response.json(), { type: 'build', prompt: request.prompt });
+    return containedRemoteClient();
   }
 
-  async sync(request: RemoteKnowledgeSyncRequest = {}): Promise<RemoteKnowledgeRunContract> {
-    const response = await this.request('/api/v1/knowledge/sync', {
-      method: 'POST',
-      body: JSON.stringify(request),
-    });
-    return normalizeRemoteKnowledgeRunContract(await response.json(), { type: 'sync' });
+  async sync(request?: RemoteKnowledgeSyncRequest): Promise<RemoteKnowledgeRunContract>;
+  async sync(): Promise<RemoteKnowledgeRunContract> {
+    return containedRemoteClient();
   }
 
   async runStatus(runId: string): Promise<RemoteKnowledgeRunContract | null> {
-    const response = await this.request(`/api/v1/knowledge/runs/${encodeURIComponent(runId)}`);
-    if (!response.ok) return null;
-    return normalizeRemoteKnowledgeRunContract(await response.json(), { id: runId, type: 'status' });
+    return containedRemoteClient();
   }
 
   async runLogs(runId: string): Promise<RemoteKnowledgeLogEntry[]> {
-    const response = await this.request(`/api/v1/knowledge/runs/${encodeURIComponent(runId)}/logs`);
-    if (!response.ok) return [];
-    const payload = await response.json();
-    return Array.isArray(payload) ? payload as RemoteKnowledgeLogEntry[] : [];
+    return containedRemoteClient();
   }
 
   async runArtifacts(runId: string): Promise<RemoteKnowledgeArtifact[]> {
-    const response = await this.request(`/api/v1/knowledge/runs/${encodeURIComponent(runId)}/artifacts`);
-    if (!response.ok) return [];
-    const payload = await response.json();
-    return Array.isArray(payload) ? payload as RemoteKnowledgeArtifact[] : [];
+    return containedRemoteClient();
   }
+}
+
+function containedRemoteClient(): never {
+  throw new KnowledgeContainmentError(
+    'KNOWLEDGE_HOSTED_CONTAINED',
+    503,
+    'hosted-client',
+    'public-api',
+    'remote Knowledge clients are unavailable during Stage A',
+  );
 }

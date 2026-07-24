@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { relative, resolve, sep } from 'node:path';
-import type { Database } from 'bun:sqlite';
+import type { KnowledgeDatabase as Database } from './knowledge-db';
 import type { KnowledgeConfig, KnowledgeWorkspace } from './workspace';
+import { KnowledgeContainmentError } from './runtime-role';
 
 export type SafetyDecision = 'allow' | 'deny' | 'requires_approval';
 
@@ -113,21 +114,24 @@ export function assertWriteAllowed(targetPath: string, policy: SafetyPolicy): vo
   }
 }
 
-export function assertS3ReadAllowed(uri: string, policy: SafetyPolicy): void {
-  const parsed = new URL(uri);
-  const bucket = parsed.hostname;
-  if (!policy.network.s3ReadsEnabled) {
-    throw new Error('Safety policy denied S3 read. Set safety.network.s3_reads_enabled=true or HASNA_KNOWLEDGE_ALLOW_S3_READS=1.');
-  }
-  if (!policy.network.allowedS3Buckets.includes(bucket)) {
-    throw new Error(`Safety policy denied S3 bucket "${bucket}". Add it to safety.network.allowed_s3_buckets or HASNA_KNOWLEDGE_ALLOWED_S3_BUCKETS.`);
-  }
+export function assertS3ReadAllowed(_uri: string, _policy: SafetyPolicy): never {
+  throw new KnowledgeContainmentError(
+    'KNOWLEDGE_HOSTED_CONTAINED',
+    503,
+    'hosted-client',
+    'public-api',
+    'S3 reads are unavailable during Stage A before safety policy inspection',
+  );
 }
 
 export function assertWebSearchAllowed(policy: SafetyPolicy): void {
-  if (!policy.network.webSearchEnabled) {
-    throw new Error('Safety policy denied web search. Set safety.network.web_search_enabled=true or HASNA_KNOWLEDGE_WEB_SEARCH=1.');
-  }
+  throw new KnowledgeContainmentError(
+    'KNOWLEDGE_HOSTED_CONTAINED',
+    503,
+    'hosted-client',
+    'public-api',
+    'web search is unavailable during Stage A before safety policy inspection',
+  );
 }
 
 const REDACTION_PATTERNS: Array<{ type: string; severity: RedactionFinding['severity']; regex: RegExp; replacement: string }> = [

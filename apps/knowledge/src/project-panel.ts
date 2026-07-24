@@ -5,7 +5,15 @@ import {
   type ProjectPanelInput,
   type ResourceKind,
 } from '@hasna/contracts';
-import { createKnowledgeService, type KnowledgeInventoryResult, type KnowledgeService } from './service';
+import {
+  assertKnowledgeServiceForProjectPanel,
+  createKnowledgeService,
+  explicitOwnGlobalReadAuthority,
+  type KnowledgeInventoryResult,
+  type KnowledgeService,
+} from './service';
+import { assertPublicInvocation } from './public-guard';
+import { canonicalKnowledgeScope } from './workspace';
 
 const SOURCE_PACKAGE = '@hasna/knowledge';
 
@@ -16,6 +24,7 @@ export interface KnowledgeProjectPanelOptions {
   limit?: number;
   storePath?: string;
   includeArchived?: boolean;
+  allowGlobal?: boolean;
 }
 
 function clampLimit(limit: number | undefined): number {
@@ -205,14 +214,19 @@ function inventoryItems(inventory: KnowledgeInventoryResult, limit: number): Pro
 }
 
 export function createKnowledgeProjectPanel(projectRef: string, options: KnowledgeProjectPanelOptions = {}): ProjectPanel {
+  assertPublicInvocation([options], { surface: 'sdk' });
+  const scope = canonicalKnowledgeScope(options.scope, 'project');
+  const allowGlobal = explicitOwnGlobalReadAuthority(scope, options);
   const limit = clampLimit(options.limit);
   const generatedAt = new Date().toISOString();
   const projectId = slugify(projectRef);
-  const service = options.service ?? createKnowledgeService({ scope: options.scope ?? 'project', cwd: options.cwd });
+  const service = options.service ?? createKnowledgeService({ scope, cwd: options.cwd });
+  assertKnowledgeServiceForProjectPanel(service, { scope, cwd: options.cwd });
   const inventory = service.inventory({
     limit,
     storePath: options.storePath,
     includeArchived: options.includeArchived,
+    allowGlobal,
   });
   const latest = latestTimestamp(inventory);
   const freshness = freshnessFor(latest);

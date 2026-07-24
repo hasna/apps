@@ -22,6 +22,13 @@ export interface KnowledgeServiceOptions {
     scope?: string;
     cwd?: string;
 }
+export declare function assertKnowledgeServiceForProjectPanel(service: KnowledgeService, options: {
+    scope: string;
+    cwd?: string;
+}): void;
+export declare function explicitOwnGlobalReadAuthority(scope: string, options: {
+    allowGlobal?: boolean;
+} | undefined): boolean | undefined;
 export interface KnowledgePathsResult {
     ok: true;
     scope: string;
@@ -46,6 +53,7 @@ export interface KnowledgeInventoryOptions {
     limit?: number;
     storePath?: string;
     includeArchived?: boolean;
+    allowGlobal?: boolean;
 }
 export interface KnowledgeInventoryLegacyItem {
     id: string;
@@ -351,6 +359,7 @@ export type KnowledgeSyncConflictResolveResult = {
 };
 export declare class KnowledgeService {
     private readonly options;
+    private readonly constructorWorkspace;
     private ensuredWorkspace?;
     private cachedConfig?;
     constructor(options?: KnowledgeServiceOptions);
@@ -391,20 +400,26 @@ export declare class KnowledgeService {
         path: string;
         schema_version: number;
     };
-    dbStats(): import("./knowledge-db").KnowledgeDbStats;
+    dbStats(): import('./knowledge-db').KnowledgeDbStats;
     inventory(options?: KnowledgeInventoryOptions): KnowledgeInventoryResult;
     private assertAppWikiWrite;
     initAppWiki(options?: KnowledgeAppWikiWriteOptions): Promise<KnowledgeAppWikiInitResult>;
     addAppWikiNote(options: KnowledgeAppWikiNoteInput): Promise<KnowledgeAppWikiNoteResult>;
     listAppWikiNotes(options?: {
         limit?: number;
+        allowGlobal?: boolean;
     }): KnowledgeAppWikiNote[];
     getAppWikiNote(id: string, options?: {
         includeContent?: boolean;
+        allowGlobal?: boolean;
     }): Promise<KnowledgeAppWikiNoteReadResult | null>;
     addAppWikiSourceRef(options: KnowledgeAppWikiSourceInput): Promise<import("./source-ingest").SourceIngestResult>;
-    searchAppWiki(options: Omit<HybridSearchOptions, 'dbPath' | 'config'>): Promise<HybridSearchResult>;
-    queryAppWiki(options: Omit<RetrievalOptions, 'dbPath' | 'config'>): Promise<KnowledgeContextPack>;
+    searchAppWiki(options: Omit<HybridSearchOptions, 'dbPath' | 'config'> & {
+        allowGlobal?: boolean;
+    }): Promise<HybridSearchResult>;
+    queryAppWiki(options: Omit<RetrievalOptions, 'dbPath' | 'config'> & {
+        allowGlobal?: boolean;
+    }): Promise<KnowledgeContextPack>;
     initWiki(): Promise<import("./wiki-layout").WikiLayoutInitResult>;
     compileWiki(options?: Omit<WikiCompileOptions, 'dbPath' | 'store'>): Promise<import("./wiki-compiler").WikiCompileResult>;
     fileAnswer(options: {
@@ -437,10 +452,16 @@ export declare class KnowledgeService {
     embeddingStatus(): import("./embeddings").EmbeddingStatusResult;
     indexEmbeddings(options?: Omit<EmbeddingIndexOptions, 'dbPath' | 'config'>): Promise<import("./embeddings").EmbeddingIndexResult>;
     semanticSearch(options: Omit<EmbeddingSearchOptions, 'dbPath' | 'config'>): Promise<import("./embeddings").SemanticSearchResult>;
-    search(options: Omit<HybridSearchOptions, 'dbPath' | 'config'>): Promise<HybridSearchResult>;
-    retrieveContext(options: Omit<RetrievalOptions, 'dbPath' | 'config'>): Promise<KnowledgeContextPack>;
+    search(options: Omit<HybridSearchOptions, 'dbPath' | 'config'> & {
+        allowGlobal?: boolean;
+    }): Promise<HybridSearchResult>;
+    retrieveContext(options: Omit<RetrievalOptions, 'dbPath' | 'config'> & {
+        allowGlobal?: boolean;
+    }): Promise<KnowledgeContextPack>;
     contextPack(options: Omit<KnowledgeAgentContextPackOptions, 'dbPath' | 'config' | 'safetyPolicy'>): Promise<KnowledgeAgentContextPack>;
-    runPrompt(options: Omit<KnowledgePromptOptions, 'dbPath' | 'config'>): Promise<import("./agent").KnowledgePromptResult>;
+    runPrompt(options: Omit<KnowledgePromptOptions, 'dbPath' | 'config' | 'scope'> & {
+        allowGlobal?: boolean;
+    }): Promise<import("./agent").KnowledgePromptResult>;
     webSearch(options: Omit<WebSearchOptions, 'dbPath' | 'config' | 'safetyPolicy'>): Promise<import("./web-search").WebSearchResult>;
     machineTopology(options?: Omit<KnowledgeMachineTopologyOptions, 'knowledge'>): Promise<import("./machines").KnowledgeMachineTopology>;
     machinePreflight(options?: Omit<KnowledgeMachinePreflightOptions, 'knowledge'>): Promise<import("./machines").KnowledgeMachinePreflightReport>;
