@@ -518,7 +518,16 @@ async function run(argv: string[]): Promise<void> {
 
   let command = resolveCommand(positional[0]);
   let commandArgOffset = 1;
-  if (invokedAsKnowledge() && command && !COMMANDS.includes(command)) {
+  // Natural-language shorthand: when invoked as the `knowledge` bin, a multi-word prompt
+  // is treated as `knowledge ask <prompt>` — whether passed as separate words
+  // (`knowledge how do I cite the handbook`, multiple positionals) or as a single quoted
+  // string (`knowledge "How do we cite the handbook?"`, one positional containing spaces;
+  // the canonical documented form). A single bare token with no whitespace is almost always
+  // a mistyped command (`knowledge lst`, `knowledge boguscmd`), so it is NOT remapped — it
+  // falls through to the unknown-command handler below and exits non-zero, instead of
+  // silently running an ask/build search and returning false success to scripts.
+  const looksLikeNaturalLanguage = positional.length > 1 || /\s/.test(command);
+  if (invokedAsKnowledge() && command && !COMMANDS.includes(command) && looksLikeNaturalLanguage) {
     command = 'ask';
     commandArgOffset = 0;
   }

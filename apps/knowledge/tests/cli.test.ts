@@ -400,6 +400,51 @@ describe('knowledge cli', () => {
     expect(err).toContain("Did you mean 'list'");
   });
 
+  test('knowledge bin rejects unknown single-token command instead of running ask', () => {
+    // Regression: when invoked as the `knowledge` bin, an unknown top-level command
+    // (`knowledge boguscmd`, `knowledge lst`) was silently remapped to an ask/build
+    // search prompt and exited 0, returning false success to scripts. It must now fail.
+    for (const bogus of ['boguscmd', 'lst']) {
+      const result = runKnowledgeBin([bogus]);
+      expect(result.exitCode).toBe(1);
+      const out = new TextDecoder().decode(result.stdout);
+      const err = new TextDecoder().decode(result.stderr);
+      expect(out).not.toContain('Prepared citation context draft');
+      expect(err).toContain(`Unknown command: ${bogus}`);
+    }
+    // The `lst` typo should also surface the levenshtein suggestion.
+    const typo = runKnowledgeBin(['lst']);
+    expect(new TextDecoder().decode(typo.stderr)).toContain("Did you mean 'list'");
+  }, 20000);
+
+  test('knowledge bin keeps multi-word natural-language ask shorthand', () => {
+    // The documented `knowledge <prompt>` shorthand for multi-word prompts must still
+    // route to ask/build so genuine natural-language queries keep working. Use an
+    // isolated HOME so the ask searches an empty store (fast, deterministic) rather
+    // than the operator's real global knowledge DB.
+    const dir = mkdtempSync(join(tmpdir(), 'ok-nl-ask-'));
+    const home = mkdtempSync(join(tmpdir(), 'ok-nl-ask-home-'));
+    const result = runKnowledgeBin(['how', 'do', 'I', 'cite', 'sources', '--scope', 'project', '--json'], dir, isolatedHomeEnv(home));
+    expect(result.exitCode).toBe(0);
+    const out = JSON.parse(new TextDecoder().decode(result.stdout));
+    expect(out.ok).toBe(true);
+    expect(out.prompt).toBe('how do I cite sources');
+  }, 20000);
+
+  test('knowledge bin keeps quoted single-token natural-language ask shorthand', () => {
+    // Regression guard: the canonical documented form passes the whole prompt as one
+    // quoted argument (`knowledge "How do we cite handbook policy?"`), so it arrives as a
+    // single positional token that CONTAINS whitespace. It must still route to ask/build
+    // (not be rejected as an unknown single-token command).
+    const dir = mkdtempSync(join(tmpdir(), 'ok-nl-ask-quoted-'));
+    const home = mkdtempSync(join(tmpdir(), 'ok-nl-ask-quoted-home-'));
+    const result = runKnowledgeBin(['How do we cite handbook policy?', '--scope', 'project', '--json'], dir, isolatedHomeEnv(home));
+    expect(result.exitCode).toBe(0);
+    const out = JSON.parse(new TextDecoder().decode(result.stdout));
+    expect(out.ok).toBe(true);
+    expect(out.prompt).toBe('How do we cite handbook policy?');
+  }, 20000);
+
   test('usage/validation errors do not leak an internal stack trace', () => {
     // Regression: usage/validation errors previously logged the full Error stack
     // (bundled bin path + minified function names) to stderr. They must show only
