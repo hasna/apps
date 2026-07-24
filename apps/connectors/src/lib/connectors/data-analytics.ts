@@ -3,6 +3,13 @@ import type { ConnectorMeta } from "../registry.js";
 // Data & Analytics
 export const connectors: ConnectorMeta[] = [
   {
+    name: "superset",
+    displayName: "Apache Superset",
+    description: "Open-source BI and data exploration platform",
+    category: "Data & Analytics",
+    tags: ["bi", "analytics", "dashboards", "sql", "open-source"],
+  },
+  {
     name: "exa",
     displayName: "Exa",
     description: "AI-powered web search",
