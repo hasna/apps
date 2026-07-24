@@ -778,8 +778,9 @@ export async function cloudAddComment(
   const comment = raw && typeof raw === "object" && "comment" in (raw as Record<string, unknown>)
     ? (raw as { comment: unknown }).comment
     : raw;
-  if (!isTaskComment(comment)) throw new Error("Invalid cloud comment response");
-  return redactComment(comment);
+  const normalized = normalizeTaskComment(comment);
+  if (!normalized) throw new Error("Invalid cloud comment response");
+  return redactComment(normalized);
 }
 
 export interface CloudCommentPage {
@@ -841,11 +842,24 @@ export async function cloudListComments(
     ? (raw as { comments?: unknown; count?: unknown; has_more?: unknown; next_cursor?: unknown })
     : null;
   const candidate = Array.isArray(raw) ? raw : envelope?.comments;
-  if (!Array.isArray(candidate) || !candidate.every(isTaskComment)) {
+  if (!Array.isArray(candidate)) {
     throw new Error("Invalid cloud comments response");
   }
+  // Normalize every comment into the canonical shape. A comment is rejected only
+  // when its immutable identity/content fields (id, task_id, content, created_at)
+  // are missing or mistyped — a genuinely malformed response. Optional metadata
+  // (agent_id, session_id, type, progress_pct) is defaulted to null/"comment",
+  // mirroring the server's own `?? null` / `?? "comment"` write-side defaulting,
+  // so a single legacy or predecessor-version comment row that predates one of
+  // those columns cannot fail-close the entire task read (e.g. `inspect --agent`,
+  // which resolves a long-lived in-progress task that accumulated such rows).
+  const parsed: TaskComment[] = candidate.map((item) => {
+    const comment = normalizeTaskComment(item);
+    if (!comment) throw new Error("Invalid cloud comments response");
+    return redactComment(comment);
+  });
   if (envelope?.count !== undefined &&
-      (!Number.isSafeInteger(envelope.count) || (envelope.count as number) < 0 || envelope.count !== candidate.length)) {
+      (!Number.isSafeInteger(envelope.count) || (envelope.count as number) < 0 || envelope.count !== parsed.length)) {
     throw new Error("Invalid cloud comments response count");
   }
   const hasHasMore = envelope ? Object.prototype.hasOwnProperty.call(envelope, "has_more") : false;
@@ -854,17 +868,17 @@ export async function cloudListComments(
   const paginationSupported = hasHasMore && hasNextCursor;
 
   if (!paginationSupported) {
-    const comments = candidate.slice(-limit).map(redactComment);
+    const comments = parsed.slice(-limit);
     return {
       comments,
       count: comments.length,
-      has_more: candidate.length > limit,
+      has_more: parsed.length > limit,
       next_cursor: null,
       limit,
       pagination_supported: false,
     };
   }
-  if (candidate.length > limit) throw new Error("Invalid cloud comments response: page exceeds requested limit");
+  if (parsed.length > limit) throw new Error("Invalid cloud comments response: page exceeds requested limit");
 
   const hasMore = envelope!.has_more;
   const nextCursor = envelope!.next_cursor;
@@ -875,8 +889,8 @@ export async function cloudListComments(
     throw new Error("Invalid cloud comments pagination response");
   }
   return {
-    comments: candidate.map(redactComment),
-    count: candidate.length,
+    comments: parsed,
+    count: parsed.length,
     has_more: hasMore,
     next_cursor: nextCursor,
     limit,
@@ -884,17 +898,38 @@ export async function cloudListComments(
   };
 }
 
-function isTaskComment(value: unknown): value is TaskComment {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+/**
+ * Coerce an untrusted server payload into the canonical {@link TaskComment}
+ * shape, or return `null` when it is genuinely malformed. The immutable
+ * identity/content fields (`id`, `task_id`, `content`, `created_at`) are
+ * required and must be strings — their absence means the response is corrupt.
+ * The optional metadata fields are tolerant by design: a missing, null, or
+ * wrong-typed `agent_id`/`session_id`/`progress_pct` collapses to `null` and an
+ * absent/unknown `type` collapses to `"comment"`, matching the server's own
+ * write-side defaulting. This keeps the reader from fail-closing an entire task
+ * read because one legacy or predecessor-version comment row omitted a column
+ * that was added later. Content is left untouched here and redacted by callers.
+ */
+function normalizeTaskComment(value: unknown): TaskComment | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const comment = value as Record<string, unknown>;
-  return typeof comment["id"] === "string"
-    && typeof comment["task_id"] === "string"
-    && (comment["agent_id"] === null || typeof comment["agent_id"] === "string")
-    && (comment["session_id"] === null || typeof comment["session_id"] === "string")
-    && typeof comment["content"] === "string"
-    && (comment["type"] === "comment" || comment["type"] === "progress" || comment["type"] === "note")
-    && (comment["progress_pct"] === null || typeof comment["progress_pct"] === "number")
-    && typeof comment["created_at"] === "string";
+  if (typeof comment["id"] !== "string"
+    || typeof comment["task_id"] !== "string"
+    || typeof comment["content"] !== "string"
+    || typeof comment["created_at"] !== "string") {
+    return null;
+  }
+  const type = comment["type"];
+  return {
+    id: comment["id"],
+    task_id: comment["task_id"],
+    agent_id: typeof comment["agent_id"] === "string" ? comment["agent_id"] : null,
+    session_id: typeof comment["session_id"] === "string" ? comment["session_id"] : null,
+    content: comment["content"],
+    type: type === "progress" || type === "note" ? type : "comment",
+    progress_pct: typeof comment["progress_pct"] === "number" ? comment["progress_pct"] : null,
+    created_at: comment["created_at"],
+  };
 }
 
 function redactComment(comment: TaskComment): TaskComment {

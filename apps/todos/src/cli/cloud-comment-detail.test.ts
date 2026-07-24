@@ -348,6 +348,81 @@ describe("cloud task detail comments", () => {
     }
   });
 
+  test("inspect --agent tolerates legacy comment rows that omit optional metadata columns", async () => {
+    // Regression: the hardened comment parser required agent_id/session_id/type/
+    // progress_pct on every row, so `inspect --agent` (which resolves a long-lived
+    // in-progress task that accumulated predecessor-version comment rows) crashed
+    // with "Invalid cloud comments response", while `inspect <id>` on a task whose
+    // comments were all freshly written kept working. The reader must default the
+    // optional metadata instead of fail-closing the whole task read.
+    const requests: string[] = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        requests.push(`${request.method} ${url.pathname}${url.search}`);
+        if (url.pathname === "/v1/tasks" && request.method === "GET") {
+          // Agent-resolution path: current in-progress task for --agent.
+          return Response.json({ tasks: [taskFixture({ status: "in_progress", assigned_to: "fleet" })], count: 1, total: 1 });
+        }
+        if (url.pathname === `/v1/tasks/${TASK_ID}` && request.method === "GET") {
+          return Response.json({ task: taskFixture({ status: "in_progress", assigned_to: "fleet" }) });
+        }
+        if (url.pathname === `/v1/tasks/${TASK_ID}/comments` && request.method === "GET") {
+          return Response.json({
+            comments: [
+              // Legacy row: predates the session_id/type/progress_pct columns.
+              { id: "legacy-1", task_id: TASK_ID, content: "legacy note", created_at: "2026-07-10T00:00:00.000Z" },
+              // Current row: fully populated.
+              {
+                id: "current-1",
+                task_id: TASK_ID,
+                agent_id: "fleet",
+                session_id: null,
+                content: "progress update",
+                type: "progress",
+                progress_pct: 40,
+                created_at: "2026-07-10T00:01:00.000Z",
+              },
+            ],
+            count: 2,
+            has_more: false,
+            next_cursor: null,
+          });
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-inspect-agent-legacy-"));
+    tempRoots.push(root);
+    const baseUrl = `http://127.0.0.1:${server.port}`;
+    try {
+      const inspect = await runCli(["--json", "--agent", "fleet", "inspect"], root, baseUrl);
+      expect(inspect.stderr).toBe("");
+      expect(inspect.exitCode).toBe(0);
+      const task = JSON.parse(inspect.stdout);
+      expect(task.id).toBe(TASK_ID);
+      expect(task.comments).toHaveLength(2);
+      // Legacy row is normalized to canonical defaults rather than rejected.
+      expect(task.comments[0]).toMatchObject({
+        id: "legacy-1",
+        agent_id: null,
+        session_id: null,
+        type: "comment",
+        progress_pct: null,
+      });
+      expect(task.comments[1]).toMatchObject({ id: "current-1", type: "progress", progress_pct: 40 });
+      expect(requests).toEqual([
+        "GET /v1/tasks?status=in_progress&assigned_to=fleet&limit=1",
+        `GET /v1/tasks/${TASK_ID}`,
+        `GET /v1/tasks/${TASK_ID}/comments?limit=100`,
+      ]);
+    } finally {
+      server.stop(true);
+    }
+  });
+
   test("a missing cloud task does not issue a comments request", async () => {
     const requests: string[] = [];
     const server = Bun.serve({
