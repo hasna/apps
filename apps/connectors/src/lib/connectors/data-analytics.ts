@@ -52,6 +52,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["database", "spreadsheet"],
   },
   {
+    name: "spreadsheet-file",
+    displayName: "SpreadsheetFile",
+    description: "Spreadsheet workflow node",
+    category: "Data & Analytics",
+    tags: ["spreadsheet", "workflow", "files"],
+  },
+  {
     name: "segment",
     displayName: "Segment",
     description: "Customer data platform",
