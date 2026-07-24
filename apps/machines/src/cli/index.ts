@@ -570,7 +570,7 @@ function renderDbIntegrityReport(result: CriticalDbIntegrityReport): string {
     : "";
   const report = result.artifacts.find((artifact) => artifact.kind === "report")?.ref;
   return [
-    `machine_data_db_integrity ok=${result.ok} discovered=${result.summary.discovered} checked=${result.summary.checked} failed=${result.summary.failed} skipped=${result.summary.skipped} truncated=${result.summary.truncated}${report ? ` report=${report}` : ""}${taskActions}`,
+    `machine_data_db_integrity ok=${result.ok} discovered=${result.summary.discovered} checked=${result.summary.checked} failed=${result.summary.failed} skipped=${result.summary.skipped} truncated=${result.summary.truncated} budget_ms=${result.bounds.max_total_ms}${report ? ` report=${report}` : ""}${taskActions}`,
     ...result.findings
       .filter((finding) => finding.status === "failed")
       .slice(0, 5)
@@ -2111,6 +2111,7 @@ opsCommand
   .option("--max-size-bytes <n>", "Skip database files larger than this many bytes")
   .option("--max-depth <n>", "Maximum directory depth to scan")
   .option("--quick-check-timeout-ms <n>", "Timeout per sqlite quick_check")
+  .option("--max-total-ms <n>", "Overall wall-clock budget for all quick_check probes; databases still pending when it is exhausted are reported as skipped_budget")
   .option("--sqlite-bin <path>", "sqlite3 executable to use for bounded quick_check probes", "sqlite3")
   .option("--report-dir <path>", "Write private JSON evidence to this directory")
   .option("--upsert-tasks", "Create deduped todos tasks for failed integrity checks", false)
@@ -2126,6 +2127,7 @@ opsCommand
     maxSizeBytes?: string;
     maxDepth?: string;
     quickCheckTimeoutMs?: string;
+    maxTotalMs?: string;
     sqliteBin?: string;
     reportDir?: string;
     upsertTasks?: boolean;
@@ -2142,6 +2144,7 @@ opsCommand
       maxSizeBytes: options.maxSizeBytes ? parseIntegerOption(options.maxSizeBytes, "max-size-bytes", { min: 1 }) : undefined,
       maxDepth: options.maxDepth ? parseIntegerOption(options.maxDepth, "max-depth", { min: 1 }) : undefined,
       quickCheckTimeoutMs: options.quickCheckTimeoutMs ? parseIntegerOption(options.quickCheckTimeoutMs, "quick-check-timeout-ms", { min: 1 }) : undefined,
+      maxTotalMs: options.maxTotalMs ? parseIntegerOption(options.maxTotalMs, "max-total-ms", { min: 1 }) : undefined,
       sqliteBin: options.sqliteBin,
       reportDir: options.reportDir,
     });

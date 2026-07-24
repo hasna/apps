@@ -57,7 +57,7 @@ export type MachineDataTodosCommandRunner = (args: string[]) => MachineDataTodos
 export interface CriticalDbIntegrityFinding {
   path: string;
   size_bytes: number;
-  status: "ok" | "failed" | "skipped_large" | "skipped_max_dbs";
+  status: "ok" | "failed" | "skipped_large" | "skipped_max_dbs" | "skipped_budget";
   check_tool: "sqlite3" | "none";
   message: string | null;
   fingerprint: string;
@@ -87,6 +87,7 @@ export interface CriticalDbIntegrityReport {
     max_size_bytes: number;
     max_depth: number;
     quick_check_timeout_ms: number;
+    max_total_ms: number;
   };
 }
 
@@ -96,6 +97,7 @@ export interface DbIntegrityOptions {
   maxSizeBytes?: number;
   maxDepth?: number;
   quickCheckTimeoutMs?: number;
+  maxTotalMs?: number;
   reportDir?: string;
   sqliteBin?: string;
 }
@@ -161,6 +163,11 @@ const DEFAULT_SNAPSHOT_MAX_DBS = 200;
 const DEFAULT_DB_MAX_DEPTH = 12;
 const DEFAULT_SNAPSHOT_MAX_DEPTH = 4;
 const DEFAULT_QUICK_CHECK_TIMEOUT_MS = 45_000;
+// Overall wall-clock budget for the check loop so the default (unbounded-discovery)
+// invocation always completes within bounded time instead of hanging callers that run
+// the documented default command. Once exhausted, remaining discovered databases are
+// reported as skipped_budget rather than checked.
+const DEFAULT_DB_TIME_BUDGET_MS = 20_000;
 const DEFAULT_KEEP_DAYS = 14;
 const DEFAULT_TASK_MAX_ACTIONS = 10;
 const MAX_TRUNCATED_ENTRIES = 20;
@@ -176,6 +183,8 @@ export function getCriticalDbIntegrityReport(options: DbIntegrityOptions = {}): 
   const maxSizeBytes = normalizePositiveInteger(options.maxSizeBytes, DEFAULT_DB_MAX_SIZE_BYTES);
   const maxDepth = normalizePositiveInteger(options.maxDepth, DEFAULT_DB_MAX_DEPTH);
   const quickCheckTimeoutMs = normalizePositiveInteger(options.quickCheckTimeoutMs, DEFAULT_QUICK_CHECK_TIMEOUT_MS);
+  const maxTotalMs = normalizePositiveInteger(options.maxTotalMs, DEFAULT_DB_TIME_BUDGET_MS);
+  const deadline = Date.now() + maxTotalMs;
   const files = discoverDbFiles(roots, { maxDbs, maxDepth, skipDirs: DB_INTEGRITY_SKIP_DIRS });
   const findings: CriticalDbIntegrityFinding[] = [];
   const sqlite = checkSqliteTool(options.sqliteBin);
@@ -195,10 +204,26 @@ export function getCriticalDbIntegrityReport(options: DbIntegrityOptions = {}): 
       sqliteUnavailableCount += 1;
       continue;
     }
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      findings.push(dbFinding(entry.path, size, "skipped_budget", "none", `time budget ${maxTotalMs}ms exhausted before check`));
+      continue;
+    }
+    // Cap each probe by the remaining total budget so a single slow/hung database
+    // cannot push the overall run past the deadline.
+    const probeTimeoutMs = Math.min(quickCheckTimeoutMs, remainingMs);
+    const budgetCapped = probeTimeoutMs < quickCheckTimeoutMs;
     const check = quickCheckSqlite(entry.path, {
       sqliteBin: sqlite.bin,
-      timeoutMs: quickCheckTimeoutMs,
+      timeoutMs: probeTimeoutMs,
     });
+    // A probe that timed out only because the remaining budget shortened its window
+    // was never given its full per-database allowance, so defer it as skipped_budget
+    // instead of raising a false integrity failure.
+    if (check.timedOut && budgetCapped) {
+      findings.push(dbFinding(entry.path, size, "skipped_budget", "none", `time budget ${maxTotalMs}ms exhausted during check (probed ${probeTimeoutMs}ms of ${quickCheckTimeoutMs}ms allowance)`));
+      continue;
+    }
     findings.push(dbFinding(
       entry.path,
       size,
@@ -237,6 +262,7 @@ export function getCriticalDbIntegrityReport(options: DbIntegrityOptions = {}): 
       max_size_bytes: maxSizeBytes,
       max_depth: maxDepth,
       quick_check_timeout_ms: quickCheckTimeoutMs,
+      max_total_ms: maxTotalMs,
     },
   };
   writeReportIfRequested(report, options.reportDir, "critical-db-integrity");
@@ -493,7 +519,7 @@ function discoverDbFiles(roots: string[], options: { maxDbs: number; maxDepth: n
   return { entries, discovered, truncated };
 }
 
-function quickCheckSqlite(path: string, options: { sqliteBin?: string; timeoutMs: number }): { ok: boolean; tool: "sqlite3" | "none"; message: string } {
+function quickCheckSqlite(path: string, options: { sqliteBin?: string; timeoutMs: number }): { ok: boolean; tool: "sqlite3" | "none"; message: string; timedOut: boolean } {
   const bin = options.sqliteBin ?? "sqlite3";
   const result = spawnSync(bin, [path, "PRAGMA quick_check;"], {
     encoding: "utf8",
@@ -502,10 +528,12 @@ function quickCheckSqlite(path: string, options: { sqliteBin?: string; timeoutMs
     stdio: ["ignore", "pipe", "pipe"],
   });
   if (result.error && (result.error as NodeJS.ErrnoException).code === "ENOENT") {
-    return { ok: false, tool: "none", message: `${bin} unavailable` };
+    return { ok: false, tool: "none", message: `${bin} unavailable`, timedOut: false };
   }
+  // spawnSync kills the child with killSignal (SIGTERM) on timeout and sets error.code=ETIMEDOUT.
+  const timedOut = (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT" || result.signal === "SIGTERM";
   const output = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim();
-  return { ok: result.status === 0 && output === "ok", tool: "sqlite3", message: compactMessage(output || result.error?.message || `sqlite3 exited ${result.status}`) };
+  return { ok: result.status === 0 && output === "ok", tool: "sqlite3", message: compactMessage(output || result.error?.message || `sqlite3 exited ${result.status}`), timedOut };
 }
 
 function checkSqliteTool(sqliteBin?: string): { ok: true; bin: string } | { ok: false; bin: string; message: string } {

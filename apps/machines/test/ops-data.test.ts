@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -200,6 +200,51 @@ describe("machine data ops producers", () => {
     expect(result.summary.truncated).toBe(true);
     expect(result.findings.filter((finding) => finding.status === "skipped_max_dbs").length).toBeLessThanOrEqual(20);
     expect(result.findings.length).toBeLessThanOrEqual(21);
+  });
+
+  test("bounds total quick_check work with an effective time budget so the default run cannot hang", () => {
+    const dir = tempRoot("machines-db-budget");
+    // A fake sqlite3 that answers -version instantly but sleeps ~500ms on every
+    // quick_check, standing in for slow probes over many real databases.
+    const fakeSqlite = join(dir, "slow-sqlite3.sh");
+    writeFileSync(
+      fakeSqlite,
+      [
+        "#!/usr/bin/env bash",
+        'for arg in "$@"; do',
+        '  if [ "$arg" = "-version" ]; then echo "3.0.0 fake"; exit 0; fi',
+        "done",
+        "sleep 0.5",
+        "echo ok",
+        "exit 0",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(fakeSqlite, 0o755);
+    for (let index = 0; index < 6; index += 1) sqliteDb(join(dir, `db-${index}.db`));
+
+    const started = Date.now();
+    const result = getCriticalDbIntegrityReport({
+      roots: [dir],
+      sqliteBin: fakeSqlite,
+      maxTotalMs: 900,
+    });
+    const elapsed = Date.now() - started;
+
+    // The effective cap is reported...
+    expect(result.bounds.max_total_ms).toBe(900);
+    // ...at least one database is deferred once the budget is exhausted instead of
+    // being probed unconditionally (the pre-fix behavior probed all six)...
+    const budgetSkipped = result.findings.filter((finding) => finding.status === "skipped_budget").length;
+    expect(budgetSkipped).toBeGreaterThan(0);
+    expect(result.summary.discovered).toBe(6);
+    expect(result.summary.checked).toBeLessThan(6);
+    // ...a probe truncated by the budget is deferred, never reported as a false
+    // integrity failure...
+    expect(result.summary.failed).toBe(0);
+    expect(result.findings.every((finding) => finding.status !== "failed")).toBe(true);
+    // ...and the whole run stays within bounded time (unbounded would be ~3s for six probes).
+    expect(elapsed).toBeLessThan(2000);
   });
 
   test("retention removes only timestamp-shaped snapshot directories", () => {
