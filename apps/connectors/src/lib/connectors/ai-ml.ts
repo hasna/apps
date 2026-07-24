@@ -1039,6 +1039,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["transcription", "meetings", "ai"],
   },
   {
+    name: "wandb",
+    displayName: "Weights & Biases",
+    description: "ML experiment tracking and run management via GraphQL",
+    category: "AI & ML",
+    tags: ["ml", "experiments", "tracking"],
+  },
+  {
     name: "wato",
     displayName: "Wato",
     description: "Shared agent memories, workflows, tools, and artifacts",
