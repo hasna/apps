@@ -20,6 +20,7 @@ import { dispatchWebhook } from "./webhooks.js";
 import { taskFromTemplate } from "./templates.js";
 import { createTask, getTask, rowToTask } from "./task-crud.js";
 import { getTaskDependencies } from "./task-graph.js";
+import { sanitizePreWriteText, sanitizePreWriteValue } from "../lib/prewrite-secrets.js";
 
 // Maximum depth for template-spawned task chains to prevent infinite loops
 const MAX_SPAWN_DEPTH = 10;
@@ -138,7 +139,13 @@ export function completeTask(
   checkCompletionGuard(task, agentId || null, d);
 
   // Extract evidence fields (everything except skip_recurrence and confidence)
-  const evidence = options ? { files_changed: options.files_changed, test_results: options.test_results, commit_hash: options.commit_hash, notes: options.notes, attachment_ids: options.attachment_ids } : undefined;
+  const evidence = options ? sanitizePreWriteValue({
+    files_changed: options.files_changed,
+    test_results: options.test_results,
+    commit_hash: options.commit_hash,
+    notes: options.notes,
+    attachment_ids: options.attachment_ids,
+  }, "task.completion_evidence") : undefined;
   const hasEvidence = evidence && (evidence.files_changed || evidence.test_results || evidence.commit_hash || evidence.notes || evidence.attachment_ids);
 
   // Build completion metadata (evidence + confidence)
@@ -162,7 +169,7 @@ export function completeTask(
   // Perform both updates atomically in a transaction with optimistic locking
   const tx = d.transaction(() => {
     if (hasMeta) {
-      const meta = { ...task.metadata, ...completionMeta };
+      const meta = sanitizePreWriteValue({ ...task.metadata, ...completionMeta }, "task.metadata");
       const metaResult = d.run(
         "UPDATE tasks SET metadata = ?, version = version + 1, updated_at = ? WHERE id = ? AND version = ?",
         [JSON.stringify(meta), timestamp, id, task.version],
@@ -532,18 +539,21 @@ export function failTask(
   const databasePath = databasePathFromDatabase(d);
   const task = getTask(id, d);
   if (!task) throw new TaskNotFoundError(id);
+  const safeReason = sanitizePreWriteText(reason || "Unknown failure", "task.failure.reason");
+  const safeErrorCode = options?.error_code ? sanitizePreWriteText(options.error_code, "task.failure.error_code") : null;
 
   // Store failure info in metadata
   const meta: Record<string, unknown> = {
     ...task.metadata,
     _failure: {
-      reason: reason || "Unknown failure",
-      error_code: options?.error_code || null,
+      reason: safeReason,
+      error_code: safeErrorCode,
       failed_by: agentId || null,
       failed_at: now(),
       retry_requested: options?.retry || false,
     },
   };
+  const safeMeta = sanitizePreWriteValue(meta, "task.failure.metadata");
 
   const timestamp = now();
   // M4: guard the write with the expected version (optimistic lock) so a
@@ -553,7 +563,7 @@ export function failTask(
     const res = d.run(
       `UPDATE tasks SET status = 'failed', locked_by = NULL, locked_at = NULL, metadata = ?, version = version + 1, updated_at = ?
        WHERE id = ? AND version = ?`,
-      [JSON.stringify(meta), timestamp, id, task.version],
+      [JSON.stringify(safeMeta), timestamp, id, task.version],
     );
     if (res.changes === 0) {
       const current = getTask(id, d);
@@ -567,15 +577,15 @@ export function failTask(
     status: "failed" as const,
     locked_by: null,
     locked_at: null,
-    metadata: meta,
+    metadata: safeMeta,
     version: task.version + 1,
     updated_at: timestamp,
   };
   logTaskChange(id, "fail", "status", task.status, "failed", agentId || null, d);
-  const failurePayload = taskEventData(failedTask, { reason, error_code: options?.error_code, agent_id: agentId });
+  const failurePayload = taskEventData(failedTask, { reason: safeReason, error_code: safeErrorCode, agent_id: agentId });
   dispatchWebhook("task.failed", failurePayload, d).catch(() => {});
   emitLocalEventHooksQuiet({ type: "task.failed", payload: failurePayload, databasePath });
-  emitSharedTaskEventQuiet({ type: "task.failed", task: failedTask, data: { reason, error_code: options?.error_code, agent_id: agentId }, severity: "warning", databasePath });
+  emitSharedTaskEventQuiet({ type: "task.failed", task: failedTask, data: { reason: safeReason, error_code: safeErrorCode, agent_id: agentId }, severity: "warning", databasePath });
 
   // Auto-retry: create a new pending copy with exponential backoff
   let retryTask: Task | undefined;
@@ -586,7 +596,7 @@ export function failTask(
     if (retryCount > maxRetries) {
       // Exceeded max retries — don't create retry copy, add to metadata
       d.run("UPDATE tasks SET metadata = ? WHERE id = ?", [
-        JSON.stringify({ ...meta, _retry_exhausted: { retry_count: retryCount - 1, max_retries: maxRetries } }),
+        JSON.stringify(sanitizePreWriteValue({ ...safeMeta, _retry_exhausted: { retry_count: retryCount - 1, max_retries: maxRetries } }, "task.retry_exhausted.metadata")),
         id,
       ]);
     } else {
@@ -609,7 +619,7 @@ export function failTask(
         plan_id: task.plan_id ?? undefined,
         assigned_to: task.assigned_to ?? undefined,
         tags: task.tags,
-        metadata: { ...task.metadata, _retry: { original_id: task.id, retry_count: retryCount, max_retries: maxRetries, retry_after: retryAfter, failure_reason: reason } },
+        metadata: { ...task.metadata, _retry: { original_id: task.id, retry_count: retryCount, max_retries: maxRetries, retry_after: retryAfter, failure_reason: safeReason } },
         estimated_minutes: task.estimated_minutes ?? undefined,
         recurrence_rule: task.recurrence_rule ?? undefined,
         due_at: retryAfter,

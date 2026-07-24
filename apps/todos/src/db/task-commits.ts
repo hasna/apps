@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { getDatabase, now, uuid } from "./database.js";
+import { sanitizePreWriteText, sanitizePreWriteValue } from "../lib/prewrite-secrets.js";
 
 export interface CiSnapshot {
   status: string;
@@ -149,8 +150,16 @@ export function linkTaskToCommit(input: LinkTaskToCommitInput, db?: Database): T
 
   const existing = d.query("SELECT * FROM task_commits WHERE task_id = ? AND sha = ?").get(input.task_id, input.sha) as TaskCommitRow | null;
 
-  const ciJson = input.ci_snapshot ? JSON.stringify(input.ci_snapshot) : null;
-  const traceJson = input.traceability ? JSON.stringify(input.traceability) : null;
+  const ciJson = input.ci_snapshot ? JSON.stringify(sanitizePreWriteValue(input.ci_snapshot, "commit.ci_snapshot")) : null;
+  const traceJson = input.traceability ? JSON.stringify(sanitizePreWriteValue(input.traceability, "commit.traceability")) : null;
+  const message = input.message ? sanitizePreWriteText(input.message, "commit.message") : null;
+  const author = input.author ? sanitizePreWriteText(input.author, "commit.author") : null;
+  const filesChanged = input.files_changed ? JSON.stringify(sanitizePreWriteValue(input.files_changed, "commit.files_changed")) : null;
+  const branch = input.branch ? sanitizePreWriteText(input.branch, "commit.branch") : null;
+  const prUrl = input.pr_url ? sanitizePreWriteText(input.pr_url, "commit.pr_url") : null;
+  const prState = input.pr_state ? sanitizePreWriteText(input.pr_state, "commit.pr_state") : null;
+  const releaseTag = input.release_tag ? sanitizePreWriteText(input.release_tag, "commit.release_tag") : null;
+  const repoPath = input.repo_path ? sanitizePreWriteText(input.repo_path, "commit.repo_path") : null;
 
   if (existing) {
     d.run(
@@ -169,17 +178,17 @@ export function linkTaskToCommit(input: LinkTaskToCommitInput, db?: Database): T
         traceability = COALESCE(?, traceability)
        WHERE id = ?`,
       [
-        input.message ?? null,
-        input.author ?? null,
-        input.files_changed ? JSON.stringify(input.files_changed) : null,
+        message,
+        author,
+        filesChanged,
         input.committed_at ?? null,
-        input.branch ?? null,
-        input.pr_url ?? null,
+        branch,
+        prUrl,
         input.pr_number ?? null,
-        input.pr_state ?? null,
+        prState,
         ciJson,
-        input.release_tag ?? null,
-        input.repo_path ?? null,
+        releaseTag,
+        repoPath,
         traceJson,
         existing.id,
       ],
@@ -197,17 +206,17 @@ export function linkTaskToCommit(input: LinkTaskToCommitInput, db?: Database): T
       id,
       input.task_id,
       input.sha,
-      input.message ?? null,
-      input.author ?? null,
-      input.files_changed ? JSON.stringify(input.files_changed) : null,
+      message,
+      author,
+      filesChanged,
       input.committed_at ?? null,
-      input.branch ?? null,
-      input.pr_url ?? null,
+      branch,
+      prUrl,
       input.pr_number ?? null,
-      input.pr_state ?? null,
+      prState,
       ciJson,
-      input.release_tag ?? null,
-      input.repo_path ?? null,
+      releaseTag,
+      repoPath,
       traceJson ?? "{}",
       now(),
     ],
@@ -248,15 +257,18 @@ export interface LinkTaskGitRefInput {
 export function linkTaskGitRef(input: LinkTaskGitRefInput, db?: Database): TaskGitRef {
   const d = db || getDatabase();
   const timestamp = now();
-  const metadata = JSON.stringify(input.metadata || {});
+  const metadata = JSON.stringify(sanitizePreWriteValue(input.metadata || {}, "git_ref.metadata"));
+  const name = sanitizePreWriteText(input.name, "git_ref.name");
+  const url = input.url ? sanitizePreWriteText(input.url, "git_ref.url") : null;
+  const provider = input.provider ? sanitizePreWriteText(input.provider, "git_ref.provider") : null;
   const existing = d
     .query("SELECT * FROM task_git_refs WHERE task_id = ? AND ref_type = ? AND name = ?")
-    .get(input.task_id, input.ref_type, input.name) as TaskGitRefRow | null;
+    .get(input.task_id, input.ref_type, name) as TaskGitRefRow | null;
 
   if (existing) {
     d.run(
       "UPDATE task_git_refs SET url = COALESCE(?, url), provider = COALESCE(?, provider), metadata = ?, updated_at = ? WHERE id = ?",
-      [input.url ?? null, input.provider ?? null, metadata, timestamp, existing.id],
+      [url, provider, metadata, timestamp, existing.id],
     );
     return rowToGitRef(d.query("SELECT * FROM task_git_refs WHERE id = ?").get(existing.id) as TaskGitRefRow);
   }
@@ -264,7 +276,7 @@ export function linkTaskGitRef(input: LinkTaskGitRefInput, db?: Database): TaskG
   const id = uuid();
   d.run(
     "INSERT INTO task_git_refs (id, task_id, ref_type, name, url, provider, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    [id, input.task_id, input.ref_type, input.name, input.url ?? null, input.provider ?? null, metadata, timestamp, timestamp],
+    [id, input.task_id, input.ref_type, name, url, provider, metadata, timestamp, timestamp],
   );
   return rowToGitRef(d.query("SELECT * FROM task_git_refs WHERE id = ?").get(id) as TaskGitRefRow);
 }
@@ -297,15 +309,18 @@ export function addTaskVerification(input: AddTaskVerificationInput, db?: Databa
   const d = db || getDatabase();
   const id = uuid();
   const runAt = input.run_at || now();
+  const command = sanitizePreWriteText(input.command, "verification.command");
+  const outputSummary = input.output_summary ? sanitizePreWriteText(input.output_summary, "verification.output_summary") : null;
+  const artifactPath = input.artifact_path ? sanitizePreWriteText(input.artifact_path, "verification.artifact_path") : null;
   d.run(
     "INSERT INTO task_verifications (id, task_id, command, status, output_summary, artifact_path, agent_id, run_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     [
       id,
       input.task_id,
-      input.command,
+      command,
       input.status || "unknown",
-      input.output_summary ?? null,
-      input.artifact_path ?? null,
+      outputSummary,
+      artifactPath,
       input.agent_id ?? null,
       runAt,
       now(),

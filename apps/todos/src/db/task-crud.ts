@@ -22,6 +22,7 @@ import { logTaskChange } from "./audit.js";
 import { dispatchWebhook } from "./webhooks.js";
 import { getChecklist } from "./checklists.js";
 import { currentStorageMachineId, recordStorageTombstone } from "./storage-tombstones.js";
+import { sanitizePreWriteText, sanitizePreWriteValue } from "../lib/prewrite-secrets.js";
 
 // Re-export helpers for use by other modules
 export function rowToTask(row: TaskRow): Task {
@@ -63,7 +64,31 @@ function addMetadataConditions(
   }
 }
 
+function sanitizeCreateTaskInput(input: CreateTaskInput): CreateTaskInput {
+  return {
+    ...input,
+    title: sanitizePreWriteText(input.title, "task.title"),
+    description: input.description !== undefined
+      ? sanitizePreWriteText(input.description, "task.description")
+      : undefined,
+    tags: input.tags !== undefined ? sanitizePreWriteValue(input.tags, "task.tags") : undefined,
+    metadata: input.metadata !== undefined ? sanitizePreWriteValue(input.metadata, "task.metadata") : undefined,
+    reason: input.reason !== undefined ? sanitizePreWriteText(input.reason, "task.reason") : undefined,
+  };
+}
+
+function sanitizeUpdateTaskInput(input: UpdateTaskInput): UpdateTaskInput {
+  return {
+    ...input,
+    title: input.title !== undefined ? sanitizePreWriteText(input.title, "task.title") : undefined,
+    description: input.description !== undefined ? sanitizePreWriteText(input.description, "task.description") : undefined,
+    tags: input.tags !== undefined ? sanitizePreWriteValue(input.tags, "task.tags") : undefined,
+    metadata: input.metadata !== undefined ? sanitizePreWriteValue(input.metadata, "task.metadata") : undefined,
+  };
+}
+
 export function createTask(input: CreateTaskInput, db?: Database): Task {
+  input = sanitizeCreateTaskInput(input);
   const d = db || getDatabase();
   const timestamp = now();
   const tags = input.tags || [];
@@ -546,6 +571,7 @@ export function updateTask(
   if (task.version !== input.version) {
     throw new VersionConflictError(id, input.version, task.version);
   }
+  input = sanitizeUpdateTaskInput(input);
 
   const timestamp = now();
   const completionTimestamp = input.completed_at ?? timestamp;

@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { loadConfig, saveConfig, type LocalEncryptionProfileConfig } from "./config.js";
 import { redactValue } from "./redaction.js";
+import { sanitizePreWriteValue, scanPreWriteText } from "./prewrite-secrets.js";
 
 export const TODOS_ENCRYPTED_VALUE_KIND = "hasna.todos.encrypted-value";
 export const TODOS_ENCRYPTED_BRIDGE_KIND = "hasna.todos.encrypted-bridge";
@@ -221,6 +222,9 @@ export function looksSensitiveKey(key: string): boolean {
 }
 
 export function encryptSensitiveFields(value: unknown, options: { profile?: string; env?: NodeJS.ProcessEnv } = {}): unknown {
+  if (typeof value === "string") {
+    return scanPreWriteText(value, "encrypted_export.string").clean ? value : encryptValue(value, options);
+  }
   if (!value || typeof value !== "object") return value;
   if (Array.isArray(value)) return value.map((item) => encryptSensitiveFields(item, options));
   const out: Record<string, unknown> = {};
@@ -318,12 +322,13 @@ export function applyExportProfile(
   const warnings: string[] = [];
   if (profile === "plaintext") {
     if (!options.acknowledge_plaintext) {
-      warnings.push("Export profile 'plaintext' includes unredacted data; pass acknowledge_plaintext=true to confirm.");
+      throw new Error("Export profile 'plaintext' includes unredacted data; pass acknowledge_plaintext=true to confirm, or use the redacted/encrypted profiles.");
     }
+    warnings.push("Export profile 'plaintext' includes unredacted data; prefer encrypted exports for sensitive task evidence.");
     return { profile, data, warnings };
   }
   if (profile === "encrypted") {
     return { profile, data: encryptSensitiveFields(data, { profile: DEFAULT_ENCRYPTION_PROFILE, env: options.env }), warnings };
   }
-  return { profile, data: redactValue(data), warnings };
+  return { profile, data: sanitizePreWriteValue(redactValue(data), "export.redacted"), warnings };
 }

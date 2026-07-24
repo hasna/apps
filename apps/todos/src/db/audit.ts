@@ -2,6 +2,11 @@ import type { Database } from "bun:sqlite";
 import type { TaskHistory } from "../types/index.js";
 import { getDatabase, now, uuid } from "./database.js";
 import { currentStorageMachineId } from "./storage-tombstones.js";
+import { sanitizePreWriteText } from "../lib/prewrite-secrets.js";
+
+function sanitizeHistoryValue(value: string | null | undefined, context: string): string | null {
+  return value === undefined || value === null ? null : sanitizePreWriteText(String(value), context);
+}
 
 export function logTaskChange(
   taskId: string,
@@ -16,10 +21,12 @@ export function logTaskChange(
   const id = uuid();
   const timestamp = now();
   const machineId = currentStorageMachineId(d);
+  const safeOldValue = sanitizeHistoryValue(oldValue, "task_history.old_value");
+  const safeNewValue = sanitizeHistoryValue(newValue, "task_history.new_value");
   d.run(
     `INSERT INTO task_history (id, task_id, action, field, old_value, new_value, agent_id, created_at, machine_id)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, taskId, action, field || null, oldValue ?? null, newValue ?? null, agentId || null, timestamp, machineId],
+    [id, taskId, action, field || null, safeOldValue, safeNewValue, agentId || null, timestamp, machineId],
   );
 
   try {
@@ -29,15 +36,15 @@ export function logTaskChange(
       entity_id: taskId,
       action,
       field,
-      old_value: oldValue ?? null,
-      new_value: newValue ?? null,
+      old_value: safeOldValue,
+      new_value: safeNewValue,
       actor_id: agentId ?? undefined,
     }, d);
   } catch {
     /* activity_log table may not exist in legacy DBs until migration */
   }
 
-  return { id, task_id: taskId, action, field: field || null, old_value: oldValue ?? null, new_value: newValue ?? null, agent_id: agentId || null, created_at: timestamp, machine_id: machineId };
+  return { id, task_id: taskId, action, field: field || null, old_value: safeOldValue, new_value: safeNewValue, agent_id: agentId || null, created_at: timestamp, machine_id: machineId };
 }
 
 export function getTaskHistory(taskId: string, db?: Database): TaskHistory[] {

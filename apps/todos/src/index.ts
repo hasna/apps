@@ -897,6 +897,21 @@ export {
   REDACTION_PLACEHOLDER,
 } from "./lib/secret-redaction.js";
 export type { SecretMatch, SecretScanResult, RedactionOptions, SecretPattern } from "./lib/secret-redaction.js";
+export {
+  PREWRITE_SECRET_SCAN_SCHEMA,
+  PreWriteSecretError,
+  assertPreWriteTextClean,
+  redactPreWriteText,
+  sanitizePreWriteJsonString,
+  sanitizePreWriteText,
+  sanitizePreWriteValue,
+  scanPreWriteText,
+} from "./lib/prewrite-secrets.js";
+export type {
+  PreWriteSecretFinding,
+  PreWriteSecretMode,
+  PreWriteSecretScanResult,
+} from "./lib/prewrite-secrets.js";
 
 // Access profiles
 export {

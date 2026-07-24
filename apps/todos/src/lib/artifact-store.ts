@@ -3,7 +3,8 @@ import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } 
 import { basename, dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { getDatabasePath } from "../db/database.js";
-import { redactEvidenceText, redactValue } from "./redaction.js";
+import { redactValue } from "./redaction.js";
+import { sanitizePreWriteText } from "./prewrite-secrets.js";
 
 export type ArtifactIntegrityStatus = "ok" | "missing" | "mismatch" | "metadata_only";
 export type ArtifactRedactionStatus = "clean" | "redacted" | "binary_or_unknown";
@@ -126,7 +127,7 @@ export function storeArtifactContent(input: StoreArtifactContentInput): StoredAr
   const sourcePath = resolve(input.path);
   if (!existsSync(sourcePath)) return null;
   const sourceStat = statSync(sourcePath);
-  if (!sourceStat.isFile()) throw new Error(`Artifact path is not a file: ${input.path}`);
+  if (!sourceStat.isFile()) throw new Error(`Artifact path is not a file: ${sanitizePreWriteText(input.path, "artifact.path")}`);
 
   const sourceBuffer = readFileSync(sourcePath);
   const sourceSha = sha256(sourceBuffer);
@@ -134,7 +135,7 @@ export function storeArtifactContent(input: StoreArtifactContentInput): StoredAr
   let storedBuffer = sourceBuffer;
   let redactionStatus: ArtifactRedactionStatus = textLike ? "clean" : "binary_or_unknown";
   if (textLike) {
-    const redactedText = redactEvidenceText(sourceBuffer.toString("utf8"));
+    const redactedText = sanitizePreWriteText(sourceBuffer.toString("utf8"), "artifact.content");
     storedBuffer = Buffer.from(redactedText);
     if (!storedBuffer.equals(sourceBuffer)) redactionStatus = "redacted";
   }
@@ -168,7 +169,7 @@ export function storeArtifactContent(input: StoreArtifactContentInput): StoredAr
         expires_at: retentionDays === null ? null : retentionExpiresAt(createdAt, retentionDays),
       },
       source: {
-        path: input.path,
+        path: sanitizePreWriteText(input.path, "artifact.source_path"),
         size_bytes: sourceBuffer.length,
         sha256: sourceSha,
       },

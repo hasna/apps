@@ -968,7 +968,7 @@ export function registerProjectCommands(program: Command) {
     .option("-o, --output <path>", "Write export output to a file")
     .option("--encrypt", "Encrypt bridge exports with a local encryption profile")
     .option("--encryption-profile <name>", "Encryption profile name", "default")
-    .option("--allow-plaintext-sensitive", "Suppress plaintext bridge export warning")
+    .option("--allow-plaintext-sensitive", "Deprecated; bridge exports are redacted unless --encrypt is used")
     .action(async (opts) => {
       const { listTasks } = await import("../../db/tasks.js");
       const globalOpts = program.opts();
@@ -986,7 +986,10 @@ export function registerProjectCommands(program: Command) {
         const { createLocalBridgeBundle } = await import("../../lib/local-bridge.js");
         const { createEncryptedBridgeBundle } = await import("../../lib/local-encryption.js");
         const { emitLocalEventHooksQuiet } = await import("../../lib/event-hooks.js");
-        const bundle = createLocalBridgeBundle({ project_id: projectId ?? undefined });
+        const bundle = createLocalBridgeBundle({
+          project_id: projectId ?? undefined,
+          redaction: opts.encrypt ? "unsafe_plaintext" : "redacted",
+        });
         const exported = opts.encrypt
           ? createEncryptedBridgeBundle(bundle, { profile: opts.encryptionProfile })
           : bundle;
@@ -994,7 +997,7 @@ export function registerProjectCommands(program: Command) {
         await writeOutput(json);
         emitLocalEventHooksQuiet({ type: "export.finished", payload: { format: "bridge", encrypted: Boolean(opts.encrypt), project_id: projectId, output: opts.output ? resolve(opts.output) : null, stats: bundle.stats } });
         if (!opts.encrypt && !opts.allowPlaintextSensitive) {
-          console.error(chalk.yellow("Warning: bridge exports are plaintext JSON. Use --encrypt for sensitive metadata, evidence, and artifact bundles."));
+          console.error(chalk.dim("Bridge export redacted sensitive fields. Use --encrypt for an encrypted local bundle when a lossless legacy snapshot is required."));
         }
         if (opts.output && !globalOpts.json) {
           console.log(chalk.green(`${opts.encrypt ? "Encrypted bridge export" : "Bridge export"} written to ${resolve(opts.output)}`));

@@ -16,6 +16,7 @@ import { exportArtifacts } from "../db/artifacts.js";
 import { listVerificationRecords } from "./verification-providers.js";
 import { applyExportProfile, assertExportProfileAllowed, type ExportProfile } from "./local-encryption.js";
 import { redactExportRecord } from "./secret-redaction.js";
+import { sanitizePreWriteText, sanitizePreWriteValue } from "./prewrite-secrets.js";
 import type { Plan, Project, Task, TaskComment, TaskDependency } from "../types/index.js";
 
 export const BUNDLE_SCHEMA = "todos.bundle.v1";
@@ -430,12 +431,14 @@ function upsertTask(raw: Record<string, unknown>, d: Database): "created" | "upd
     `UPDATE tasks SET title = ?, description = ?, status = ?, priority = ?, tags = ?, metadata = ?, version = ?, updated_at = ?
      WHERE id = ?`,
     [
-      raw.title ?? existing.title,
-      raw.description ?? existing.description,
+      sanitizePreWriteText(String(raw.title ?? existing.title), "import.task.title"),
+      raw.description !== undefined
+        ? sanitizePreWriteText(String(raw.description ?? ""), "import.task.description")
+        : existing.description,
       raw.status ?? existing.status,
       raw.priority ?? existing.priority,
-      JSON.stringify(raw.tags ?? existing.tags),
-      JSON.stringify(redactExportRecord((raw.metadata ?? existing.metadata) as Record<string, unknown>)),
+      JSON.stringify(sanitizePreWriteValue(raw.tags ?? existing.tags, "import.task.tags")),
+      JSON.stringify(redactExportRecord(sanitizePreWriteValue((raw.metadata ?? existing.metadata) as Record<string, unknown>, "import.task.metadata"))),
       raw.version ?? existing.version,
       raw.updated_at ?? now(),
       id,
@@ -456,7 +459,7 @@ function upsertComment(raw: Record<string, unknown>, d: Database): "created" | "
       raw.task_id,
       raw.agent_id ?? null,
       raw.session_id ?? null,
-      raw.content,
+      raw.content === undefined || raw.content === null ? null : sanitizePreWriteText(String(raw.content), "import.comment.content"),
       raw.type ?? "comment",
       raw.progress_pct ?? null,
       raw.created_at ?? now(),
@@ -584,6 +587,6 @@ No automatic cloud calls are made from the OSS package.
 Each sync preview includes \`version_mismatch\` and timestamp conflicts with suggested resolution.
 
 ## Export profiles
-Use \`redacted\` (default), \`encrypted\`, or \`plaintext\` (requires acknowledgement).
+Use \`redacted\` (default) or \`encrypted\` for sensitive data. Plaintext exports require an explicit acknowledgement and should not be used for task evidence.
 `;
 }

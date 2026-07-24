@@ -7,6 +7,7 @@ import { hostname } from "node:os";
 import type { Database } from "bun:sqlite";
 import { getDatabase, now, uuid } from "../db/database.js";
 import { redactText, redactExportRecord } from "./secret-redaction.js";
+import { sanitizePreWriteText, sanitizePreWriteValue } from "./prewrite-secrets.js";
 
 export const ACTIVITY_LOG_SCHEMA = "todos.activity_log.v1";
 
@@ -107,6 +108,9 @@ export function logActivity(input: LogActivityInput, db?: Database): ActivityRec
   const id = uuid();
   const ts = input.created_at ?? now();
   const machineId = input.machine_id ?? getMachineId();
+  const oldValue = input.old_value == null ? null : sanitizePreWriteText(input.old_value, "activity.old_value");
+  const newValue = input.new_value == null ? null : sanitizePreWriteText(input.new_value, "activity.new_value");
+  const metadata = sanitizePreWriteValue(input.metadata ?? {}, "activity.metadata");
 
   d.run(
     `INSERT INTO activity_log (
@@ -119,12 +123,12 @@ export function logActivity(input: LogActivityInput, db?: Database): ActivityRec
       input.entity_id,
       input.action,
       input.field ?? null,
-      input.old_value ?? null,
-      input.new_value ?? null,
+      oldValue,
+      newValue,
       input.actor_id ?? null,
       input.session_id ?? null,
       machineId,
-      JSON.stringify(input.metadata ?? {}),
+      JSON.stringify(metadata),
       ts,
     ],
   );

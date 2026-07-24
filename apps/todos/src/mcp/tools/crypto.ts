@@ -42,7 +42,7 @@ export function registerCryptoTools(server: McpServer, { shouldRegisterTool, for
   if (shouldRegisterTool("apply_export_profile")) {
     server.tool(
       "apply_export_profile",
-      "Apply secure export profile (redacted, encrypted, plaintext) to data bundle.",
+      "Apply secure export profile (redacted, encrypted, plaintext with explicit acknowledgement) to data bundle.",
       {
         data: z.record(z.unknown()),
         profile: z.enum(["redacted", "encrypted", "plaintext"]),

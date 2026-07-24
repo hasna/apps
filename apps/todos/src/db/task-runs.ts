@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import { storeArtifactContent, verifyStoredArtifact, type ArtifactIntegrityReport } from "../lib/artifact-store.js";
 import { databasePathFromDatabase } from "../lib/event-emission-safety.js";
 import { emitLocalEventHooksQuiet } from "../lib/event-hooks.js";
-import { redactEvidenceText, redactValue } from "../lib/redaction.js";
+import { sanitizePreWriteText, sanitizePreWriteValue } from "../lib/prewrite-secrets.js";
 import { TaskNotFoundError } from "../types/index.js";
 import { addComment } from "./comments.js";
 import { getDatabase, now, uuid } from "./database.js";
@@ -319,9 +319,9 @@ export function startTaskRun(input: StartTaskRunInput, db?: Database): TaskRun {
       id,
       input.task_id,
       input.agent_id ?? null,
-      input.title ? redactEvidenceText(input.title) : null,
-      input.summary ? redactEvidenceText(input.summary) : null,
-      JSON.stringify(redactValue(input.metadata || {})),
+      input.title ? sanitizePreWriteText(input.title, "run.title") : null,
+      input.summary ? sanitizePreWriteText(input.summary, "run.summary") : null,
+      JSON.stringify(sanitizePreWriteValue(input.metadata || {}, "run.metadata")),
       timestamp,
       timestamp,
       timestamp,
@@ -396,7 +396,7 @@ export function beginTaskRunTransaction(
     };
   }
 
-  const metadata = redactValue({
+  const metadata = sanitizePreWriteValue({
     ...(input.metadata || {}),
     loop_transaction: {
       schema_version: LOOP_RUN_TRANSACTION_SCHEMA_VERSION,
@@ -482,15 +482,15 @@ export function addTaskRunEvent(input: AddTaskRunEventInput, db?: Database): Tas
       run.id,
       run.task_id,
       input.event_type,
-      input.message ? redactEvidenceText(input.message) : null,
-      JSON.stringify(redactValue(input.data || {})),
+      input.message ? sanitizePreWriteText(input.message, "run_event.message") : null,
+      JSON.stringify(sanitizePreWriteValue(input.data || {}, "run_event.data")),
       input.agent_id ?? run.agent_id,
       timestamp,
     ],
   );
 
   if (input.event_type === "comment" && input.message) {
-    addComment({ task_id: run.task_id, content: redactEvidenceText(input.message), type: "comment", agent_id: input.agent_id ?? run.agent_id ?? undefined }, d);
+    addComment({ task_id: run.task_id, content: sanitizePreWriteText(input.message, "run_event.comment"), type: "comment", agent_id: input.agent_id ?? run.agent_id ?? undefined }, d);
   }
 
   return rowToEvent(d.query("SELECT * FROM task_run_events WHERE id = ?").get(id) as TaskRunEventRow);
@@ -519,9 +519,9 @@ export function addTaskRunCommand(input: AddTaskRunCommandInput, db?: Database):
   const id = uuid();
   const status = input.status || "unknown";
   const timestamp = now();
-  const command = redactEvidenceText(input.command);
-  const outputSummary = input.output_summary ? redactEvidenceText(input.output_summary) : null;
-  const artifactPath = input.artifact_path ? redactEvidenceText(input.artifact_path) : null;
+  const command = sanitizePreWriteText(input.command, "run_command.command");
+  const outputSummary = input.output_summary ? sanitizePreWriteText(input.output_summary, "run_command.output_summary") : null;
+  const artifactPath = input.artifact_path ? sanitizePreWriteText(input.artifact_path, "run_command.artifact_path") : null;
 
   d.run(
     "INSERT INTO task_run_commands (id, run_id, task_id, command, status, exit_code, output_summary, artifact_path, agent_id, started_at, completed_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -591,7 +591,7 @@ export function addTaskRunFile(input: AddTaskRunFileInput, db?: Database): TaskF
     task_id: run.task_id,
     path: input.path,
     status: input.status || "modified",
-    note: input.note ? redactEvidenceText(input.note) : undefined,
+    note: input.note ? sanitizePreWriteText(input.note, "run_file.note") : undefined,
     agent_id: input.agent_id ?? run.agent_id ?? undefined,
   }, d);
   addTaskRunEvent({
@@ -624,9 +624,9 @@ export function addTaskRunArtifact(input: AddTaskRunArtifactInput, db?: Database
   if (!run) throw new Error(`Run not found: ${input.run_id}`);
   const id = uuid();
   const timestamp = now();
-  const path = redactEvidenceText(input.path);
-  const description = input.description ? redactEvidenceText(input.description) : null;
-  const metadata = redactValue(input.metadata || {});
+  const path = sanitizePreWriteText(input.path, "run_artifact.path");
+  const description = input.description ? sanitizePreWriteText(input.description, "run_artifact.description") : null;
+  const metadata = sanitizePreWriteValue(input.metadata || {}, "run_artifact.metadata");
   let sizeBytes = input.size_bytes ?? null;
   let digest = input.sha256 ?? null;
   const stored = input.store_content !== false
@@ -637,7 +637,7 @@ export function addTaskRunArtifact(input: AddTaskRunArtifactInput, db?: Database
     digest = stored.sha256;
     metadata["artifact_store"] = stored.store;
   } else if (input.store_content === true) {
-    throw new Error(`Artifact file not found: ${input.path}`);
+    throw new Error(`Artifact file not found: ${path}`);
   }
   d.run(
     "INSERT INTO task_run_artifacts (id, run_id, task_id, path, artifact_type, description, size_bytes, sha256, metadata, agent_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -691,7 +691,7 @@ export function finishTaskRun(input: FinishTaskRunInput, db?: Database): TaskRun
   const run = getTaskRun(runId, d);
   if (!run) throw new Error(`Run not found: ${input.run_id}`);
   const timestamp = input.completed_at || now();
-  const summary = input.summary ? redactEvidenceText(input.summary) : null;
+  const summary = input.summary ? sanitizePreWriteText(input.summary, "run.summary") : null;
   d.run(
     "UPDATE task_runs SET status = ?, summary = COALESCE(?, summary), completed_at = ?, updated_at = ? WHERE id = ?",
     [input.status, summary, timestamp, timestamp, run.id],
