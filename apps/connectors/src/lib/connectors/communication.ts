@@ -521,6 +521,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["alerting", "incidents", "mobile", "notifications", "on-call"],
   },
   {
+    name: "textit",
+    displayName: "TextIt",
+    description: "RapidPro messaging platform for SMS flows, contacts, and campaign automation",
+    category: "Communication",
+    tags: ["sms", "messaging", "flows", "automation", "rapidpro"],
+  },
+  {
     name: "textmagic",
     displayName: "Textmagic",
     description: "Business SMS platform for sending bulk text messages and two-way communication",
