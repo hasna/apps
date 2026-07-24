@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "base_commit": "e1eed58db9157f150eefc4d2a29810199ecc9b46",
+  "constants": {
+    "storage.KIT_VERSION": "0.4.0"
+  },
+  "instances": {
+    "root.NoteRepo": {
+      "own_keys": ["client"],
+      "descriptors": {
+        "client": {
+          "value": null,
+          "value_kind": "undefined",
+          "enumerable": true,
+          "configurable": true,
+          "writable": true
+        }
+      }
+    },
+    "storage.MigrationLedger": {
+      "own_keys": ["client", "ledgerTable", "migrations"],
+      "descriptors": {
+        "client": {
+          "value": null,
+          "value_kind": "undefined",
+          "enumerable": true,
+          "configurable": true,
+          "writable": true
+        },
+        "ledgerTable": {
+          "value": null,
+          "value_kind": "undefined",
+          "enumerable": true,
+          "configurable": true,
+          "writable": true
+        },
+        "migrations": {
+          "value": null,
+          "value_kind": "undefined",
+          "enumerable": true,
+          "configurable": true,
+          "writable": true
+        }
+      }
+    }
+  }
+}

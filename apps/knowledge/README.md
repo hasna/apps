@@ -14,16 +14,33 @@ project workspace under `.hasna/knowledge`, initializes a versioned
 CLI and MCP workspace operations share a `KnowledgeService` facade for config,
 safety policy, artifact storage, DB/wiki setup, source ingestion, source
 resolution, and outbox consumption. That keeps local project mode and future
-remote/S3-backed wrappers on the same service contracts.
+remote/object-storage wrappers on the same service contracts.
+
+## Temporary Stage-A containment
+
+Only explicit local operation is currently executable. Hosted setup, auth,
+remote clients, S3 artifact storage, public Postgres constructors/migrations,
+and public storage sync are deliberately contained. Their historical named
+exports still link, but return a deterministic typed `503`
+`KNOWLEDGE_HOSTED_CONTAINED` (or `KNOWLEDGE_OPERATOR_REQUIRED` for supervised
+migration/sync boundaries) before filesystem, auth-store, network, provider,
+S3, or Postgres I/O. Callers cannot turn hosted intent into local intent by
+passing an empty or partial environment map.
+
+`knowledge-serve` exposes liveness, version, and OpenAPI metadata only.
+`GET /ready` is `503` with `status: "unavailable"` and a separate numeric
+`http_status`. Data routes evaluate trusted server-side project authority
+before authentication: missing/untrusted authority is `503`, trusted authority
+with zero grants is `403`, and positive hosted authority remains disabled with
+`503`. Request headers, query parameters, and bodies are not authority.
 
 ## Install
 
-```bash
-# Bun
-bun add -g @hasna/knowledge
+The shipped CLI, libraries, and generated bins require Bun 1.3.13 or newer;
+The local catalog uses `bun:sqlite`; Bun is the only advertised runtime.
 
-# npm
-npm install -g @hasna/knowledge
+```bash
+bun add -g @hasna/knowledge
 ```
 
 Or run directly:
@@ -78,7 +95,7 @@ const knowledge = createKnowledgeClient({
   cwd: process.cwd(),
 });
 
-await knowledge.setup({ mode: 'hosted', canonicalExample: true });
+await knowledge.setup({ mode: 'local' });
 await knowledge.ingest.source('file:///absolute/path/to/handbook.md', 'knowledge_index');
 
 const results = await knowledge.search({
@@ -101,18 +118,23 @@ helpers, source-ref helpers, storage contracts, search/retrieval types,
 provider helpers, and remote contract types. CLI and MCP entrypoints remain
 available as package bins.
 
-Database storage sync helpers are also available from
-`@hasna/knowledge/storage` for SaaS wrappers and deployment tooling.
+Database storage compatibility names are also available from
+`@hasna/knowledge/storage`, but public Postgres/sync execution is contained in
+Stage A. No published bin or public API can resolve a DSN, connect, or migrate;
+future positive operator authority is explicitly deferred.
 The top-level SDK also exposes `knowledge.sync.status()`,
 `knowledge.sync.snapshot()`, `knowledge.sync.conflicts()`, and
 `knowledge.sync.machines()` for app-native sync inspection.
 
 The SDK uses the same `.hasna/knowledge` project workspace as the CLI. In
 local mode it writes the SQLite catalog and generated artifacts under that path.
-In hosted/canonical mode it can point generated artifacts at S3 while keeping
-raw source ownership outside knowledge. Source files remain referenced via
-`open-files://`, `file://`, `s3://`, or web refs; knowledge stores derived
-chunks, citations, indexes, run logs, and generated wiki artifacts.
+Future hosted/canonical mode can point generated artifacts at S3 while keeping
+raw source ownership outside knowledge; that mode is not executable in Stage A.
+Source metadata can retain `open-files://`, `file://`, `s3://`, or web refs,
+but public Stage-A ingestion reads only anchored local files. Indexed local
+`open-files` chunks remain available through the read-only resolver, not public
+ingestion. Remote refs remain opaque metadata and fail closed before provider
+imports, credential discovery, network reads, or workspace mutation.
 
 ## Quick Start
 
@@ -147,7 +169,7 @@ knowledge export --format jsonl
 # Show resolved workspace paths
 knowledge paths --scope project --json
 
-# Inspect local/S3 artifact storage and source ownership
+# Inspect explicit-local artifact storage and source ownership metadata
 knowledge storage status --scope project --json
 
 # Inspect optional machine topology for future sync
@@ -163,7 +185,7 @@ knowledge sync dry-run --peer-workspace /path/to/peer/repo --scope project --jso
 knowledge sync push --peer-workspace /path/to/peer/repo --scope project --json
 knowledge sync dry-run --machine linux-node-a --peer-workspace /workspace/open-knowledge --scope project --json
 
-# Configure optional hosted mode and inspect remote contracts
+# Stage-A negative examples: each is contained before config/auth/network I/O
 knowledge setup --mode hosted --api-url https://knowledge.hasna.xyz --scope project --json
 knowledge auth whoami --scope project --json
 knowledge remote contracts --scope project --json
@@ -171,11 +193,11 @@ knowledge remote contracts --scope project --json
 # Initialize the project SQLite catalog
 knowledge db init --scope project
 
-# Inspect optional PostgreSQL sync for knowledge.db
+# Inspect local storage status (public PostgreSQL sync remains contained)
 knowledge db storage status --scope project --json
 
-# Push selected catalog tables when HASNA_KNOWLEDGE_DATABASE_URL is configured
-HASNA_KNOWLEDGE_DATABASE_URL=postgres://... knowledge db storage push --scope project --tables sources,chunks --json
+# Stage-A negative example: public storage push is a contained compatibility command
+knowledge db storage push --scope project --tables sources,chunks --json
 
 # Initialize scalable wiki/schema/index/log artifacts
 knowledge wiki init --scope project
@@ -226,15 +248,17 @@ knowledge proposals context --from loops --topic "release proposal" --since 7d -
 knowledge ask "How do we cite handbook policy?" --scope project --json
 knowledge "How do we cite handbook policy?" --scope project --json
 
-# Provider-native web search, safety-gated for real network access
-HASNA_KNOWLEDGE_WEB_SEARCH=1 knowledge web search "latest AI SDK web search" --provider openai --json
+# Inspect the base-compatible web-search command metadata
+# Execution, including --fake, is unavailable during Stage A.
+knowledge web --help
 ```
 
 ## Guides
 
 - [Company wiki workflow](docs/examples/company-wiki-workflow.md): an end-to-end
   local workflow for open-files manifests, search, prompt runs, cited wiki
-  pages, linting, reindexing, MCP, and optional hosted/S3 mode.
+  pages, linting, reindexing, and MCP. Hosted/S3 examples describe a future
+  wrapper contract and remain contained in Stage A.
 - [App project wiki standard](docs/examples/app-project-wiki-standard.md):
   SDK/CLI workflow for scoped app notes, source refs, and guarded global writes.
 - [JSON to SQLite migration](docs/migration/json-to-sqlite.md): how legacy
@@ -261,6 +285,7 @@ Add a new knowledge item.
 ### list
 ```bash
 knowledge list|ls [options]
+knowledge list --scope global --allow-global --json
 ```
 List compatibility JSON-store items with pagination, search, and tag filtering.
 Use `knowledge inventory` or `knowledge search` when an agent needs the
@@ -278,7 +303,8 @@ state, or keyword retrieval across active compatibility notes too.
 
 ### inventory
 ```bash
-knowledge inventory [--scope local|global|project] [--limit <n>] [--include-archived] [--json]
+knowledge inventory [--scope local|global|project] [--allow-global] [--limit <n>] [--include-archived] [--json]
+knowledge inventory --scope global --allow-global --json
 ```
 Show a capped, unified local inventory across the compatibility JSON item
 store, the SQLite catalog, indexed source refs, source/wiki chunks, generated
@@ -290,6 +316,7 @@ dumping every raw chunk body.
 ### get
 ```bash
 knowledge get --id <id>
+knowledge get --id <id> --scope global --allow-global --json
 ```
 Retrieve a single item by ID.
 
@@ -351,12 +378,13 @@ knowledge storage validate [--scope project] [--json]
 knowledge storage repair-artifact-keys [--approve-write --approved-by <name>] [--scope project] [--json]
 knowledge storage migrate-legacy-path [--approve-write --approved-by <name>] [--scope project] [--json]
 ```
-Show the storage contract for local or S3-backed generated artifacts. Local mode
-uses `.hasna/knowledge` for config, SQLite, indexes, wiki artifacts, logs,
-runs, and exports. S3 mode stores generated artifacts under the configured
-knowledge bucket/prefix while `open-files` remains the source of truth for raw
-source bytes. The command also reports artifact classes, allowed source ref
-schemes, and warnings for non-scalable or unsafe config.
+Show the local storage contract and inspect compatibility metadata for a future
+S3-backed generated-artifact wrapper. Local mode uses `.hasna/knowledge` for
+config, SQLite, indexes, wiki artifacts, logs, runs, and exports. Stage A does
+not write S3 config or construct an S3 artifact client; S3 setup and artifact
+operations return typed containment before credential-provider or object I/O.
+The command also reports artifact classes, allowed source-ref schemes, and
+warnings for non-scalable or unsafe config.
 
 Fleet setup evidence follows the same boundary. `storage status --json`
 includes `private_fleet_boundary`, which names `open-machines` as the manifest
@@ -516,11 +544,17 @@ remote `knowledge sync export/import` commands. The remote machine must have a
 compatible published `knowledge` CLI on PATH, and `--peer-workspace` should be
 the remote repo root or remote `.hasna/knowledge` path.
 
-This command is separate from `knowledge db storage sync`: `sync` owns
-knowledge semantics and conflict visibility, while `db storage sync` moves
-SQLite catalog rows to or from PostgreSQL using the open-core storage contract.
+This command is separate from `knowledge db storage sync`: `sync` owns local
+knowledge semantics and conflict visibility. Public database storage sync is a
+zero-I/O Stage-A compatibility surface. No published migration bin or public
+storage path can reach PostgreSQL; positive operator authority is deferred.
 
 ### setup / auth / remote
+
+Only the first command below is currently executable. The remaining commands
+are retained compatibility syntax and return typed Stage-A containment without
+writing config/auth state or constructing a remote client.
+
 ```bash
 knowledge setup --mode local [--scope project] [--json]
 knowledge setup --mode hosted [--api-url https://knowledge.hasna.xyz] [--scope project] [--json]
@@ -531,12 +565,10 @@ knowledge auth logout [--scope project] [--json]
 knowledge remote status [--scope project] [--json]
 knowledge remote contracts [--scope project] [--json]
 ```
-Hosted mode mirrors the `open-skills` open-core pattern: the OSS package stays
-local-first, while `hosted.api_url`, `KNOWLEDGE_API_URL`, and
-`KNOWLEDGE_API_KEY` define an optional remote client boundary. Credentials are
-stored locally in `~/.hasna/knowledge/auth.json` or supplied by env vars.
-`remote contracts` prints the typed registry/search/ask/build/sync/status/logs
-and artifact API contract that a future SaaS wrapper can implement.
+The hosted variables and auth-file contract are reserved for a later authority
+stage. In Stage A they select containment; they do not trigger auth-file reads,
+writes, fallback to local storage, or network requests. The OpenAPI document
+describes the typed pre-auth `403`/`503` data-route behavior for future wrappers.
 
 ### db
 ```bash
@@ -551,12 +583,12 @@ knowledge db storage sync [--tables sources,chunks] [--scope project] [--json]
 Initialize or inspect the versioned SQLite catalog at
 `.hasna/knowledge/knowledge.db`.
 
-`db storage` is separate from `knowledge storage`: it syncs durable catalog rows
-between local SQLite and PostgreSQL. Configure it with
-`HASNA_KNOWLEDGE_DATABASE_URL` or fallback `KNOWLEDGE_DATABASE_URL`. Optional
-mode env vars are `HASNA_KNOWLEDGE_STORAGE_MODE` and
-`KNOWLEDGE_STORAGE_MODE`, with `local`, `hybrid`, or `remote` values.
-The sync table list excludes local derived FTS indexes such as `chunks_fts`.
+`db storage` retains its historical command and type shapes, but public
+PostgreSQL migration/sync is unavailable and contained in Stage A. Database
+URLs and cloud/remote mode aliases do not grant authority or cause a local
+fallback. Historical migration, ledger, DSN-resolution, and sync shapes are
+deterministic zero-I/O compatibility stubs; no published path exposes those
+private capabilities.
 
 ### wiki
 ```bash
@@ -602,27 +634,28 @@ raw source retrieval remains owned by `open-files`.
 
 ### ingest
 ```bash
-knowledge ingest manifest <file|s3://bucket/key> [--scope project] [--json]
+knowledge ingest manifest <local-file> [--scope project] [--json]
 knowledge ingest source <source-ref> [--purpose knowledge_index] [--scope project] [--json]
 ```
 Import an open-files JSON or JSONL source manifest into `knowledge.db`. This
 upserts sources and source revisions, stores hash/MIME/status/permission
 metadata, and chunks embedded extracted text when the manifest includes it.
 
-`ingest source` accepts `open-files://`, `file://`, `s3://`, and `https://`
-refs. It reads source content through a read-only boundary, redacts known
-secrets before storage, records hashes/revisions, and stores only derived chunks
-and citation spans. Web and S3 reads remain opt-in through the safety policy.
-For `open-files://` refs, the source must already be present in the local
-knowledge catalog through a manifest or extracted-text ref until the open-files
-resolver API lands.
+`ingest source` reads anchored `file://` refs only. It redacts known secrets
+before storage, records hashes/revisions, and stores only derived chunks and
+citation spans. Indexed `open-files://` chunks remain available through
+`source resolve`; stored refs are not accepted as ingestion authority. `s3://`,
+`http://`, `https://`, unknown schemes, and remote extracted-text refs are
+denied before provider imports, credential discovery, body reads, or
+database/workspace mutation. Positive stored- or remote-source ingestion
+authority is explicitly deferred beyond Stage A.
 
 ### reindex
 ```bash
 knowledge reindex status [--model openai:text-embedding-3-small] [--scope project] [--json]
 knowledge reindex enqueue [--model openai:text-embedding-3-small] [--scope project] [--json]
 knowledge reindex embeddings [--full] [--limit <n>] [--model openai:text-embedding-3-small] [--scope project] [--json]
-knowledge reindex outbox <file|s3://bucket/key> [--scope project] [--json]
+knowledge reindex outbox <local-file> [--scope project] [--json]
 ```
 Inspect and operate index refresh work. `reindex status` reports missing
 embedding rows, stale revisions, queued jobs, and vector counts. `reindex
@@ -634,8 +667,8 @@ marks completed queue rows; `--full` first clears `chunk_embeddings` and
 `reindex outbox` consumes open-files JSON or JSONL change events. This
 invalidates matching source chunks and embeddings by source ref, revision, or
 hash, updates permission/path/delete metadata, and records a local run ledger.
-Outbox inputs can be local files or allowed S3 objects, but raw source files
-remain owned by `open-files`.
+Outbox inputs are anchored local files in Stage A. S3 and web inputs remain
+contained, and raw source files remain owned by `open-files`.
 
 Compatibility notes created by `knowledge add` live in the JSON item store.
 They are returned by `knowledge search` and `knowledge search --context` through
@@ -647,6 +680,7 @@ only refreshes SQLite source/wiki chunks and vector rows.
 knowledge search <query> [--scope project] [--limit <n>] [--json]
 knowledge search <query> --semantic [--model openai:text-embedding-3-small] [--scope project] [--json]
 knowledge search <query> --context [--semantic] [--scope project] [--json]
+knowledge search <query> --scope global --allow-global --json
 ```
 Run hybrid search over active JSON-store notes, `chunks_fts`, generated wiki
 chunks, wiki/index catalog rows, and optional vector results. The default path
@@ -663,8 +697,8 @@ assembled citations, freshness and permission notes, graph evidence from
 
 ### context pack / proposals context
 ```bash
-knowledge context pack <query> [--from search|runs|loops] [--max-tokens <n>] [--max-items <n>] [--scope project] [--json]
-knowledge proposals context --from loops --topic <text> [--since <duration|ISO>] [--dedupe] [--max-tokens <n>] [--scope project] [--json]
+knowledge context pack <query> [--from search|runs|loops] [--max-tokens <n>] [--max-items <n>] [--scope local|global|project] [--allow-global] [--json]
+knowledge proposals context --from loops --topic <text> [--since <duration|ISO>] [--dedupe] [--max-tokens <n>] [--scope local|global|project] [--allow-global] [--json]
 ```
 Return compact deterministic JSON bundles for agents and loops. Packs are
 read-only dry runs: they include bounded evidence previews, citation ids,
@@ -693,13 +727,12 @@ intent, but durable wiki writes remain deferred to the wiki compile/write task.
 ```bash
 knowledge web search <query> [--provider openai|anthropic] [--model provider:model] [--domain <domain>] [--file-results] [--scope project] [--json]
 ```
-Run provider-native hosted web search and return cited web sources. Real network
-search is disabled unless `safety.network.web_search_enabled=true` or
-`HASNA_KNOWLEDGE_WEB_SEARCH=1` is set. OpenAI uses the AI SDK OpenAI
-`tools.webSearch` path; Anthropic uses its provider web-search tool when
-available. `--file-results` stores returned snippets as read-only `web` source
-refs in `knowledge.db` so later local search can cite them. `--fake` returns
-deterministic offline sources for tests.
+The command, option names, and MCP schemas are retained solely for exact base
+compatibility. Web-search execution is unavailable during Stage A, including
+fake mode. Provider configuration, safety settings, environment variables,
+`--fake`, and `--file-results` cannot enable it. Every execution attempt returns
+typed containment before query or option inspection, environment reads,
+provider or database construction, workspace access, or network activity.
 
 ### safety
 ```bash
@@ -710,8 +743,9 @@ knowledge safety audit [--scope project] [--json]
 knowledge safety redact <text> [--scope project] [--json]
 ```
 Inspect and operate the local safety model. Source reads are read-only by
-default, web search and S3 reads are opt-in, generated writes require approval
-by default, and known secret patterns are redacted before chunk storage.
+default, web search and S3 reads are unavailable during Stage A, generated
+writes require approval by default, and known secret patterns are redacted
+before chunk storage.
 
 ### providers
 ```bash
@@ -754,6 +788,7 @@ knowledge help [command]
 | `--json` | Output raw JSON |
 | `--store <path>` | Override store path |
 | `--scope global\|project\|local` | Select global app workspace or project workspace |
+| `--allow-global` | Explicitly allow global inventory, list, get, search, and context-pack reads |
 | `--version, -v` | Show version |
 | `--help, -h` | Show help |
 
@@ -788,9 +823,10 @@ The stable agent-facing MCP tools are:
   when `approve_write=true`.
 - `knowledge_get`: read an item, indexed source, wiki page, run, index, or
   decision by id.
-- `knowledge_ingest`: ingest an open-files/S3/file/web source ref or open-files
-  manifest into the derived catalog.
-- `knowledge_web_search`: run safety-gated provider-native web search.
+- `knowledge_ingest`: ingest an anchored local file or bounded local manifest;
+  stored and remote refs are contained in Stage A.
+- `knowledge_web_search`: expose the base-compatible schema but return typed
+  containment for all Stage-A execution, including fake mode.
 - `knowledge_lint`: lint generated wiki pages for citation/source issues.
 - `knowledge_run_status`: list recent runs or inspect one run ledger.
 - `knowledge_storage`: inspect the local/S3/hosted storage contract.
@@ -816,9 +852,9 @@ The stable agent-facing MCP tools are:
   proposals with citations and explicit approval gating.
 - `knowledge_sync_peer`: dry-run, pull, push, or bidirectionally sync with a
   local peer workspace.
-- `storage_status`, `storage_push`, `storage_pull`, `storage_sync`: inspect or
-  sync the SQLite catalog with PostgreSQL using the standard open-core storage
-  env contract.
+- `storage_status`, `storage_push`, `storage_pull`, `storage_sync`: historical
+  compatibility names that return deterministic Stage-A containment; they do
+  not resolve a DSN, connect to PostgreSQL, migrate, push, pull, or sync.
 
 Compatibility and lower-level tools remain available with the `ok_*` prefix:
 item tools (`ok_add`, `ok_list`, `ok_get`, `ok_update`, `ok_delete`,
@@ -866,10 +902,11 @@ only the indexed, derived knowledge catalog. The resolver enforces read-only
 purpose labels from source permissions, returns chunk citation evidence, writes
 an audit event, and keeps bytes/storage credentials inside `open-files`.
 
-`knowledge ingest source` can also build derived chunks from an allowed
-source ref. It does not copy raw files into the knowledge workspace; local file,
-S3, web, and open-files inputs are converted into redacted chunks with offsets,
-hashes, revision metadata, and FTS rows.
+`knowledge ingest source` can build derived chunks only from an anchored local
+file. Already-indexed open-files records remain available through the read-only
+resolver, not ingestion. It does not copy raw files into the knowledge
+workspace. Stored, S3, web, unknown-scheme, and remote extracted-text inputs are
+rejected before reads or mutation.
 
 Chunks, resolver results, generated wiki pages, and index records carry
 provenance metadata: source owner, source ref/URI, revision/hash, chunk offsets,
@@ -887,18 +924,24 @@ AI SDK v6 provider support through `ai`, `@ai-sdk/openai`,
 `@ai-sdk/anthropic`, and `@ai-sdk/deepseek`, but does not call providers until a
 prompt, embedding, or agent command explicitly requests a model.
 
-Generated knowledge artifacts can be stored locally under
-`.hasna/knowledge/artifacts` or through the S3 artifact-store adapter.
-For example production, `knowledge setup --mode hosted
---canonical-example --scope project --json` configures generated artifacts
-under `s3://example-knowledge-prod/.hasna/knowledge/` and
-keeps `open-files` as the raw-source owner.
+Generated knowledge artifacts can currently be stored locally under
+`.hasna/knowledge/artifacts`. The S3 artifact-store name and canonical hosted
+setup syntax are compatibility contracts only in Stage A: they fail before SDK
+imports, credential-provider construction, config writes, or object requests.
+An already-created local artifact store rechecks its supplied environment and
+the complete persisted config before every put/get/delete operation, so a
+later hosted or S3 transition revokes access immediately.
 
 The default safety policy allows writes only under the resolved
-`.hasna/knowledge` workspace. S3 manifest/outbox reads require
-`safety.network.s3_reads_enabled=true` and an allowed bucket in config, or the
-equivalent `HASNA_KNOWLEDGE_ALLOW_S3_READS=1` and
-`HASNA_KNOWLEDGE_ALLOWED_S3_BUCKETS=bucket-a,bucket-b` environment variables.
+`.hasna/knowledge` workspace. Stage A does not recognize a safety-policy flag or
+environment value as authority for S3 manifest, outbox, source, or artifact
+reads; those compatibility paths remain fail-closed.
+
+Local filesystem anchoring is supported on Linux and macOS. Windows is an
+explicitly unsupported Stage-A platform for local workspace and artifact I/O:
+operations fail before opening `/`, probing descriptor paths, creating a
+directory, or mutating a file. The Windows CI lane verifies this deterministic
+containment contract; positive Windows anchoring is deferred.
 
 ## JSON Output
 
@@ -935,7 +978,11 @@ knowledge-mcp --http --port 8819
 MCP_HTTP=1 knowledge-mcp
 ```
 
+The MCP HTTP listener is loopback-only (`127.0.0.1` by default); callers cannot
+override it to a non-loopback interface.
+
 - Health: `GET http://127.0.0.1:8819/health`
-- MCP: `POST http://127.0.0.1:8819/mcp`
+- Readiness: `GET http://127.0.0.1:8819/ready` (typed `503` while contained)
+- MCP: `POST http://127.0.0.1:8819/mcp` (typed `503` while contained)
 
 Stdio remains the default when no `--http` flag is passed.

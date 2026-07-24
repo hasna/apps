@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
-import type { Database } from 'bun:sqlite';
+import type { KnowledgeDatabase as Database } from './knowledge-db';
 import { DEFAULT_KNOWLEDGE_API_URL, normalizeKnowledgeApiOrigin } from './auth';
 import { REMOTE_KNOWLEDGE_CONTRACT_VERSION } from './remote-client';
 import type { KnowledgeConfig, KnowledgeWorkspace } from './workspace';
 import { HASNA_KNOWLEDGE_APP_PATH, EXAMPLE_KNOWLEDGE_CANONICAL } from './workspace';
+import { knowledgeConfigValidationIssue } from './runtime-role';
 
 export interface StorageArtifactClass {
   kind: string;
@@ -306,6 +307,8 @@ export function resolveStorageContract(
 export function validateStorageConfig(config: KnowledgeConfig, workspace: KnowledgeWorkspace): StorageValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
+  const configIssue = knowledgeConfigValidationIssue(config);
+  if (configIssue) errors.push(configIssue);
 
   if (!workspace.home.endsWith(HASNA_KNOWLEDGE_APP_PATH)) {
     warnings.push(`Workspace home does not end with ${HASNA_KNOWLEDGE_APP_PATH}: ${workspace.home}`);
@@ -314,11 +317,11 @@ export function validateStorageConfig(config: KnowledgeConfig, workspace: Knowle
   if (config.storage.type === 's3') {
     if (!config.storage.s3?.bucket) errors.push('storage.s3.bucket is required when storage.type is s3.');
     if (!config.storage.s3?.prefix) warnings.push('storage.s3.prefix is empty; generated knowledge artifacts will be written at the bucket root.');
-    if (config.mode === 'local') warnings.push('storage.type is s3 while mode is local; this is valid for BYO S3, but hosted wrappers should set mode to hosted.');
+    if (config.mode === 'local') errors.push('storage.type s3 is forbidden while mode is local.');
   }
 
   if (config.storage.type === 'local' && config.storage.s3) {
-    warnings.push('storage.s3 is configured but ignored while storage.type is local.');
+    errors.push('storage.s3 is forbidden while storage.type is local.');
   }
 
   if (config.sources.preferred_ref !== 'open-files') {

@@ -17,13 +17,12 @@ describe('knowledge cloud-store resolver (self_hosted client flip)', () => {
     expect(resolveKnowledgeCloudStore(CLEAN_ENV)).toBeNull();
   });
 
-  test('returns null (local) when mode=local even with API url+key present', () => {
-    const store = resolveKnowledgeCloudStore({
+  test('rejects conflicting local mode plus active hosted HTTP intent', () => {
+    expect(() => resolveKnowledgeCloudStore({
       HASNA_KNOWLEDGE_STORAGE_MODE: 'local',
       HASNA_KNOWLEDGE_API_URL: 'https://knowledge.hasna.xyz',
-      HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
-    } as NodeJS.ProcessEnv);
-    expect(store).toBeNull();
+      HASNA_KNOWLEDGE_API_KEY: 'synthetic-stage-a-key',
+    } as NodeJS.ProcessEnv)).toThrow('KNOWLEDGE_RUNTIME_INTENT_INVALID');
   });
 
   test('throws (never silent local drift) when self_hosted requested but API key missing', () => {
@@ -35,51 +34,37 @@ describe('knowledge cloud-store resolver (self_hosted client flip)', () => {
     ).toThrow();
   });
 
-  test('resolves a cloud-http store pointed at <app>.hasna.xyz/v1 when self_hosted + url + key', () => {
-    const store = resolveKnowledgeCloudStore({
+  test('contains explicit self-hosted intent before constructing an HTTP client', () => {
+    expect(() => resolveKnowledgeCloudStore({
       HASNA_KNOWLEDGE_STORAGE_MODE: 'self_hosted',
       HASNA_KNOWLEDGE_API_URL: 'https://knowledge.hasna.xyz',
-      HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
-    } as NodeJS.ProcessEnv);
-    expect(store).not.toBeNull();
-    expect(store!.baseUrl).toBe('https://knowledge.hasna.xyz/v1');
+      HASNA_KNOWLEDGE_API_KEY: 'synthetic-stage-a-key',
+    } as NodeJS.ProcessEnv)).toThrow('KNOWLEDGE_HOSTED_CONTAINED');
   });
 
-  test('routes to cloud when ONLY API url+key are set (fleet-flip writes no STORAGE_MODE)', () => {
-    // Regression: the machines flip writes exactly two vars per app
-    // (HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY) and no STORAGE_MODE.
-    // Presence of both must trigger the cloud-http client, else the installed
-    // CLI silently keeps reading the local db.json even with the flip applied.
-    const store = resolveKnowledgeCloudStore({
+  test('contains complete hosted HTTP intent without an explicit mode', () => {
+    expect(() => resolveKnowledgeCloudStore({
       HASNA_KNOWLEDGE_API_URL: 'https://knowledge.hasna.xyz',
-      HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
-    } as NodeJS.ProcessEnv);
-    expect(store).not.toBeNull();
-    expect(store!.baseUrl).toBe('https://knowledge.hasna.xyz/v1');
+      HASNA_KNOWLEDGE_API_KEY: 'synthetic-stage-a-key',
+    } as NodeJS.ProcessEnv)).toThrow('KNOWLEDGE_HOSTED_CONTAINED');
   });
 
-  test('stays local when only the API url is set (key missing -> not both)', () => {
-    expect(
-      resolveKnowledgeCloudStore({
+  test('rejects partial API URL intent', () => {
+    expect(() => resolveKnowledgeCloudStore({
         HASNA_KNOWLEDGE_API_URL: 'https://knowledge.hasna.xyz',
-      } as NodeJS.ProcessEnv),
-    ).toBeNull();
+    } as NodeJS.ProcessEnv)).toThrow('KNOWLEDGE_RUNTIME_INTENT_INVALID');
   });
 
-  test('stays local when only the API key is set (url missing -> not both)', () => {
-    expect(
-      resolveKnowledgeCloudStore({
-        HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
-      } as NodeJS.ProcessEnv),
-    ).toBeNull();
+  test('rejects partial API key intent', () => {
+    expect(() => resolveKnowledgeCloudStore({
+      HASNA_KNOWLEDGE_API_KEY: 'synthetic-stage-a-key',
+    } as NodeJS.ProcessEnv)).toThrow('KNOWLEDGE_RUNTIME_INTENT_INVALID');
   });
 
-  test('defaults the base URL to https://knowledge.hasna.xyz/v1 when only mode+key set', () => {
-    const store = resolveKnowledgeCloudStore({
+  test('rejects explicit hosted aliases when their HTTP config is incomplete', () => {
+    expect(() => resolveKnowledgeCloudStore({
       HASNA_KNOWLEDGE_STORAGE_MODE: 'self_hosted',
-      HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
-    } as NodeJS.ProcessEnv);
-    expect(store).not.toBeNull();
-    expect(store!.baseUrl).toBe('https://knowledge.hasna.xyz/v1');
+      HASNA_KNOWLEDGE_API_KEY: 'synthetic-stage-a-key',
+    } as NodeJS.ProcessEnv)).toThrow('KNOWLEDGE_RUNTIME_INTENT_INVALID');
   });
 });

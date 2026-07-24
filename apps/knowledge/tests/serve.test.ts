@@ -1,187 +1,195 @@
 import { describe, expect, test } from 'bun:test';
-import { mintApiKey } from '@hasna/contracts/auth';
-import { verifyApiKey } from '@hasna/contracts/auth';
-import { ApiKeyStore } from '@hasna/contracts/auth';
-import { createServeHandler, knowledgeOpenApi, normalizeCloudDatabaseUrl } from '../src/serve.ts';
+import {
+  createServeHandler,
+  knowledgeOpenApi,
+  normalizeCloudDatabaseUrl as normalizeSourceCloudDatabaseUrl,
+  startKnowledgeServe,
+  type ServeDeps,
+} from '../src/serve.ts';
+import {
+  normalizeCloudDatabaseUrl as normalizeBuiltCloudDatabaseUrl,
+} from '../dist/serve.js';
 
-const SIGNING = 'test-signing-secret-not-a-real-key';
-
-// In-memory query client shim implementing the subset the serve/store use.
-function makeMemoryClient() {
-  const rows: Record<string, Record<string, unknown>>[] = [] as any;
-  const items = new Map<string, Record<string, unknown>>();
-  const apiKeys = new Map<string, Record<string, unknown>>();
-
-  const client: any = {
-    async query(sql: string, params: unknown[] = []) {
-      return runSql(sql, params);
-    },
-    async many(sql: string, params: unknown[] = []) {
-      return (await runSql(sql, params)).rows;
-    },
-    async get(sql: string, params: unknown[] = []) {
-      return (await runSql(sql, params)).rows[0] ?? null;
-    },
-    async one(sql: string, params: unknown[] = []) {
-      const r = (await runSql(sql, params)).rows[0];
-      if (!r) throw new Error('no rows');
-      return r;
-    },
-    async execute(sql: string, params: unknown[] = []) {
-      await runSql(sql, params);
-    },
-    async close() {},
-    get pool() {
-      return {} as any;
-    },
-  };
-
-  async function runSql(sql: string, params: unknown[] = []) {
-    const s = sql.trim().toLowerCase();
-    // health/ready probe
-    if (s.startsWith('select 1')) return { rows: [{ '?column?': 1 }], rowCount: 1 };
-    // api_keys store: findByKid / isRevoked etc — treat all unknown kids as absent (not revoked)
-    if (s.includes('from api_keys')) return { rows: [], rowCount: 0 };
-    if (s.startsWith('update api_keys')) return { rows: [], rowCount: 0 };
-    if (s.startsWith('insert into api_keys')) return { rows: [], rowCount: 0 };
-    // knowledge_items
-    if (s.startsWith('insert into knowledge_items')) {
-      const [id, short_id, title, content, url, tags, metadata] = params as any[];
-      const now = new Date().toISOString();
-      const row = {
-        id,
-        short_id,
-        title,
-        content,
-        url,
-        tags,
-        metadata,
-        archived: false,
-        created_at: now,
-        updated_at: now,
-      };
-      items.set(id, row);
-      return { rows: [row], rowCount: 1 };
-    }
-    if (s.startsWith('select count(*)') && s.includes('knowledge_items')) {
-      return { rows: [{ count: String(items.size) }], rowCount: 1 };
-    }
-    if (s.startsWith('select * from knowledge_items where')) {
-      const key = params[0];
-      const found = [...items.values()].find((r) => r.id === key || r.short_id === key);
-      return { rows: found ? [found] : [], rowCount: found ? 1 : 0 };
-    }
-    if (s.startsWith('select * from knowledge_items')) {
-      return { rows: [...items.values()], rowCount: items.size };
-    }
-    if (s.startsWith('update knowledge_items')) {
-      const id = params[params.length - 1];
-      const row = items.get(id as string);
-      if (!row) return { rows: [], rowCount: 0 };
-      // naive: apply title/content when present in the sql
-      const updated = { ...row, updated_at: new Date().toISOString() };
-      // apply provided columns heuristically by matching set clause order is complex;
-      // for the test we just bump content/tags if provided
-      items.set(id as string, updated);
-      return { rows: [updated], rowCount: 1 };
-    }
-    if (s.startsWith('delete from knowledge_items')) {
-      items.delete(params[0] as string);
-      return { rows: [], rowCount: 1 };
-    }
-    return { rows: [], rowCount: 0 };
+function tripwireDeps(overrides: Partial<ServeDeps> & { authority?: unknown } = {}) {
+  const calls = { client: 0, verifier: 0, store: 0 };
+  const deps: Record<string, unknown> = { version: '0.0.0-test', ...overrides };
+  for (const key of ['client', 'verifier', 'store'] as const) {
+    Object.defineProperty(deps, key, {
+      enumerable: true,
+      get() {
+        calls[key] += 1;
+        throw new Error(`forbidden ${key} construction`);
+      },
+    });
   }
-
-  return client;
+  return { calls, deps: deps as unknown as ServeDeps };
 }
 
-function keyFor(scopes: string[]): string {
-  return mintApiKey({ app: 'knowledge', scopes, signingSecret: SIGNING }).token;
+async function body(response: Response): Promise<Record<string, unknown>> {
+  return response.json() as Promise<Record<string, unknown>>;
 }
 
-function buildHandler() {
-  const client = makeMemoryClient();
-  const store = new ApiKeyStore(client);
-  const verifier = verifyApiKey({ app: 'knowledge', signingSecret: SIGNING, isRevoked: store.isRevoked });
-  return createServeHandler({ client, verifier, store, version: '9.9.9' });
-}
+describe('knowledge-serve Stage-A containment', () => {
+  test('source and dist database URL compatibility is a fixed zero-read stub', () => {
+    const cases = [
+      {
+        env: { HASNA_KNOWLEDGE_DATABASE_URL: 'postgres://synthetic.invalid/knowledge?sslmode=require' },
+      },
+      {
+        env: { KNOWLEDGE_DATABASE_URL: 'postgres://synthetic.invalid/knowledge?sslmode=prefer' },
+      },
+    ];
 
-describe('knowledge-serve', () => {
-  test('health/ready/version are public and shaped', async () => {
-    const h = buildHandler();
-    for (const path of ['/health', '/version', '/ready']) {
-      const res = await h(new Request(`http://x${path}`));
-      expect(res.status).toBe(200);
-      const body = (await res.json()) as { status: string; version: string; mode: string };
-      expect(body.version).toBe('9.9.9');
-      expect(body.mode).toBe('cloud');
-      expect(typeof body.status).toBe('string');
+    for (const normalize of [normalizeSourceCloudDatabaseUrl, normalizeBuiltCloudDatabaseUrl]) {
+      for (const scenario of cases) {
+        const env = { ...scenario.env };
+        const before = { ...env };
+        expect(normalize(env)).toBeUndefined();
+        expect(env).toEqual(before);
+      }
+      let reads = 0;
+      const hostileEnv = new Proxy({}, {
+        get() { reads += 1; throw new Error('env get tripwire'); },
+        getOwnPropertyDescriptor() { reads += 1; throw new Error('env descriptor tripwire'); },
+        getPrototypeOf() { reads += 1; throw new Error('env prototype tripwire'); },
+      });
+      expect(normalize(hostileEnv)).toBeUndefined();
+      expect(reads).toBe(0);
     }
   });
 
-  test('openapi.json is served and covers notes ops', async () => {
-    const h = buildHandler();
-    const res = await h(new Request('http://x/openapi.json'));
-    expect(res.status).toBe(200);
-    const spec = (await res.json()) as { paths: Record<string, unknown> };
-    expect(Object.keys(spec.paths)).toContain('/v1/notes');
-    expect(Object.keys(spec.paths)).toContain('/v1/notes/{id}');
+  test('pure liveness, version, and OpenAPI metadata remain available', async () => {
+    const { deps, calls } = tripwireDeps();
+    const handler = createServeHandler(deps);
+
+    const health = await handler(new Request('http://localhost/health'));
+    expect(health.status).toBe(200);
+    expect(await body(health)).toMatchObject({ status: 'ok', mode: 'contained' });
+
+    const version = await handler(new Request('http://localhost/version'));
+    expect(version.status).toBe(200);
+
+    const openapi = await handler(new Request('http://localhost/openapi.json'));
+    expect(openapi.status).toBe(200);
+    expect(await body(openapi)).toHaveProperty('openapi', '3.0.3');
+    expect(calls).toEqual({ client: 0, verifier: 0, store: 0 });
   });
 
-  test('unauthenticated /v1 requests are rejected', async () => {
-    const h = buildHandler();
-    const res = await h(new Request('http://x/v1/notes'));
-    expect(res.status).toBe(401);
+  test('/ready is always 503 while contained and touches no dependency', async () => {
+    const { deps, calls } = tripwireDeps({
+      authority: { trust: 'trusted', projectGrants: ['synthetic-project'] },
+    });
+    const response = await createServeHandler(deps)(new Request('http://localhost/ready'));
+    expect(response.status).toBe(503);
+    expect(await body(response)).toMatchObject({
+      code: 'KNOWLEDGE_POSITIVE_AUTHORITY_DISABLED',
+      status: 'unavailable',
+      http_status: 503,
+    });
+    expect(calls).toEqual({ client: 0, verifier: 0, store: 0 });
   });
 
-  test('a token for another app is rejected', async () => {
-    const h = buildHandler();
-    const foreign = mintApiKey({ app: 'todos', scopes: ['todos:read'], signingSecret: SIGNING }).token;
-    const res = await h(new Request('http://x/v1/notes', { headers: { 'x-api-key': foreign } }));
-    expect(res.status).toBe(401);
+  const dataRequests = [
+    new Request('http://localhost/v1/registry'),
+    new Request('http://localhost/v1/notes'),
+    new Request('http://localhost/v1/notes', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'synthetic' }),
+    }),
+    new Request('http://localhost/v1/notes/synthetic-id'),
+    new Request('http://localhost/v1/notes/synthetic-id', { method: 'PATCH', body: '{}' }),
+    new Request('http://localhost/v1/notes/synthetic-id', { method: 'DELETE' }),
+  ];
+
+  test('missing and untrusted authority return 503 across every data route', async () => {
+    for (const authority of [undefined, { trust: 'untrusted' as const }]) {
+      for (const request of dataRequests) {
+        const { deps, calls } = tripwireDeps({ authority });
+        const response = await createServeHandler(deps)(request.clone());
+        expect(response.status).toBe(503);
+        expect(await body(response)).toMatchObject({
+          code: 'KNOWLEDGE_AUTHORITY_UNAVAILABLE',
+          status: 503,
+        });
+        expect(calls).toEqual({ client: 0, verifier: 0, store: 0 });
+      }
+    }
   });
 
-  test('read scope cannot write', async () => {
-    const h = buildHandler();
-    const res = await h(
-      new Request('http://x/v1/notes', {
+  test('trusted authority with zero project grants returns 403 before auth/store', async () => {
+    const { deps, calls } = tripwireDeps({
+      authority: { trust: 'trusted', projectGrants: [] },
+    });
+    const response = await createServeHandler(deps)(new Request('http://localhost/v1/notes'));
+    expect(response.status).toBe(403);
+    expect(await body(response)).toMatchObject({
+      code: 'KNOWLEDGE_PROJECT_FORBIDDEN',
+      status: 403,
+    });
+    expect(calls).toEqual({ client: 0, verifier: 0, store: 0 });
+  });
+
+  test('positive trusted authority remains disabled before auth/store', async () => {
+    const { deps, calls } = tripwireDeps({
+      authority: { trust: 'trusted', projectGrants: ['synthetic-project'] },
+    });
+    const response = await createServeHandler(deps)(new Request('http://localhost/v1/notes'));
+    expect(response.status).toBe(503);
+    expect(await body(response)).toMatchObject({
+      code: 'KNOWLEDGE_POSITIVE_AUTHORITY_DISABLED',
+      status: 503,
+    });
+    expect(calls).toEqual({ client: 0, verifier: 0, store: 0 });
+  });
+
+  test('caller authority claims in headers, query, and body are inert data', async () => {
+    const { deps, calls } = tripwireDeps();
+    const response = await createServeHandler(deps)(new Request(
+      'http://localhost/v1/notes?tenant_id=caller-tenant&project_id=caller-project',
+      {
         method: 'POST',
-        headers: { 'x-api-key': keyFor(['knowledge:read']), 'content-type': 'application/json' },
-        body: JSON.stringify({ title: 'nope' }),
-      }),
-    );
-    expect(res.status).toBe(403);
+        headers: {
+          'content-type': 'application/json',
+          'x-tenant-id': 'caller-tenant',
+          'x-project-id': 'caller-project',
+        },
+        body: JSON.stringify({
+          title: 'synthetic',
+          metadata: { tenant_id: 'caller-tenant', project_id: 'caller-project' },
+        }),
+      },
+    ));
+    expect(response.status).toBe(503);
+    expect(await body(response)).toMatchObject({ code: 'KNOWLEDGE_AUTHORITY_UNAVAILABLE' });
+    expect(calls).toEqual({ client: 0, verifier: 0, store: 0 });
   });
 
-  test('authenticated create + get roundtrip', async () => {
-    const h = buildHandler();
-    const key = keyFor(['knowledge:read', 'knowledge:write']);
-    const created = await h(
-      new Request('http://x/v1/notes', {
-        method: 'POST',
-        headers: { 'x-api-key': key, 'content-type': 'application/json' },
-        body: JSON.stringify({ title: 'hello', content: 'world', tags: ['a'] }),
-      }),
-    );
-    expect(created.status).toBe(201);
-    const note = (await created.json()) as { id: string; title: string };
-    expect(note.title).toBe('hello');
-
-    const got = await h(new Request(`http://x/v1/notes/${note.id}`, { headers: { 'x-api-key': key } }));
-    expect(got.status).toBe(200);
-    const fetched = (await got.json()) as { id: string };
-    expect(fetched.id).toBe(note.id);
+  test('OpenAPI remains deterministic metadata', () => {
+    const doc = knowledgeOpenApi('9.9.9') as { info: { version: string }; paths: Record<string, unknown> };
+    expect(doc.info.version).toBe('9.9.9');
+    expect(doc.paths).toHaveProperty('/v1/notes');
+    expect(doc.paths).toHaveProperty('/v1/notes/{id}');
   });
 
-  test('normalizeCloudDatabaseUrl appends libpq-compat for require', () => {
-    const env: NodeJS.ProcessEnv = { HASNA_KNOWLEDGE_DATABASE_URL: 'postgres://u:p@h:5432/db?sslmode=require' };
-    const out = normalizeCloudDatabaseUrl(env);
-    expect(out).toContain('uselibpqcompat=true');
-    expect(env.HASNA_KNOWLEDGE_DATABASE_URL).toContain('uselibpqcompat=true');
-  });
-
-  test('openapi document version is threaded through', () => {
-    const spec = knowledgeOpenApi('1.2.3') as { info: { version: string } };
-    expect(spec.info.version).toBe('1.2.3');
+  test('black-box server startup constructs only contained liveness routes', async () => {
+    const running = await startKnowledgeServe({
+      hostname: '127.0.0.1',
+      port: 0,
+      version: '0.0.0-test',
+      env: {},
+    } as never);
+    try {
+      const baseUrl = `http://${running.hostname}:${running.port}`;
+      const health = await fetch(`${baseUrl}/health`);
+      expect(health.status).toBe(200);
+      const ready = await fetch(`${baseUrl}/ready`);
+      expect(ready.status).toBe(503);
+      const data = await fetch(`${baseUrl}/v1/notes`);
+      expect(data.status).toBe(503);
+      expect(await body(data)).toMatchObject({ code: 'KNOWLEDGE_AUTHORITY_UNAVAILABLE' });
+    } finally {
+      await running.stop();
+    }
   });
 });

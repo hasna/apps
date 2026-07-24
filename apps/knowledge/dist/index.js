@@ -16,6 +16,5264 @@ var __export = (target, all) => {
 var __esm = (fn, res) => () => (fn && (res = fn(fn = 0)), res);
 var __require = import.meta.require;
 
+// src/anchored-fs.ts
+import {
+  closeSync,
+  constants,
+  existsSync,
+  fchmodSync,
+  fstatSync,
+  fsyncSync,
+  linkSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  opendirSync,
+  readSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync
+} from "fs";
+import { createHash, randomUUID } from "crypto";
+import { basename, dirname, isAbsolute, normalize, resolve, sep } from "path";
+function fail(detail) {
+  throw new AnchoredFilesystemError(detail);
+}
+function errno(error) {
+  return error?.code;
+}
+function assertAnchoredFilesystemPlatform(platform = process.platform) {
+  if (platform !== "linux" && platform !== "darwin") {
+    fail(`directory-FD anchoring is unsupported on ${platform}; local filesystem access is disabled`);
+  }
+}
+function fdBase() {
+  assertAnchoredFilesystemPlatform();
+  if (typeof constants.O_NOFOLLOW !== "number" || typeof constants.O_DIRECTORY !== "number") {
+    return fail("directory-FD anchoring is unavailable on this platform");
+  }
+  if (existsSync("/proc/self/fd"))
+    return "/proc/self/fd";
+  if (existsSync("/dev/fd"))
+    return "/dev/fd";
+  return fail("directory-FD anchoring is unavailable on this platform");
+}
+function fireTestHook(event, detail) {
+  anchoredFsTestHook?.(event, detail);
+}
+function artifactLockNow() {
+  return anchoredArtifactLockTestControl?.monotonicNow?.() ?? Number(process.hrtime.bigint() / 1000000n);
+}
+function waitForArtifactLock(milliseconds) {
+  if (anchoredArtifactLockTestControl?.wait) {
+    anchoredArtifactLockTestControl.wait(milliseconds);
+    return;
+  }
+  const waitCell = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+  Atomics.wait(waitCell, 0, 0, milliseconds);
+}
+function awaitArtifactLockRetry(start) {
+  const elapsed = artifactLockNow() - start;
+  if (!Number.isFinite(elapsed) || elapsed < 0)
+    fail("artifact key lock monotonic clock is invalid");
+  if (elapsed >= ARTIFACT_LOCK_WAIT_MS) {
+    fail(`artifact same-key forward-progress lock could not be acquired after ${ARTIFACT_LOCK_WAIT_MS}ms`);
+  }
+  waitForArtifactLock(Math.min(ARTIFACT_LOCK_RETRY_MS, ARTIFACT_LOCK_WAIT_MS - elapsed));
+}
+function artifactLockName(key) {
+  return `.knowledge-artifact-lock-${createHash("sha256").update(key).digest("hex")}`;
+}
+function artifactLockCandidateName(name, record) {
+  return `${name}.candidate.${record.pid}.${record.token}`;
+}
+function artifactLockWitnessName(name, record) {
+  return `${name}.witness.${record.pid}.${record.token}`;
+}
+function artifactLockTransitionIdentity(name, entry) {
+  for (const kind of ["candidate", "witness", "recovery"]) {
+    const prefix = `${name}.${kind}.`;
+    if (!entry.startsWith(prefix))
+      continue;
+    const rest = entry.slice(prefix.length);
+    const separator = rest.indexOf(".");
+    if (separator <= 0)
+      return;
+    const pid = Number(rest.slice(0, separator));
+    const token = rest.slice(separator + 1);
+    if (!Number.isSafeInteger(pid) || pid <= 0 || !/^[A-Za-z0-9_-]{1,128}$/.test(token))
+      return;
+    return { kind, pid, token };
+  }
+  return;
+}
+function artifactDirectoryNames(rootFd, prefix = "") {
+  const output = [];
+  const directory = opendirSync(fdPath(rootFd));
+  try {
+    for (;; ) {
+      const entry = directory.readSync();
+      if (!entry)
+        break;
+      if (prefix && !entry.name.startsWith(prefix))
+        continue;
+      if (output.length >= MAX_ANCHORED_ARTIFACT_NODES) {
+        fail(`artifact root exceeds ${MAX_ANCHORED_ARTIFACT_NODES} entries`);
+      }
+      output.push(entry.name);
+    }
+  } finally {
+    directory.closeSync();
+  }
+  return output.sort();
+}
+function assertArtifactLockStat(stat, links) {
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== links || (stat.mode & 511) !== 384 || stat.size <= 0 || stat.size > MAX_ARTIFACT_LOCK_BYTES) {
+    fail("artifact key lock identity, mode, links, or size is invalid");
+  }
+}
+function artifactLockStatIsSafeTransition(stat, links) {
+  const transitionalLinkCount = links === 1 ? stat.nlink === 0 || stat.nlink === 2 : links === 2 ? stat.nlink === 0 || stat.nlink === 1 : false;
+  return stat.isFile() && !stat.isSymbolicLink() && transitionalLinkCount && (stat.mode & 511) === 384 && stat.size > 0 && stat.size <= MAX_ARTIFACT_LOCK_BYTES;
+}
+function sameArtifactLockStat(left, right) {
+  return left.dev === right.dev && left.ino === right.ino && left.size === right.size && left.mode === right.mode && left.nlink === right.nlink;
+}
+function parseArtifactLockRecord(text) {
+  let value;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return fail("artifact key lock record is invalid");
+  }
+  const record = value;
+  if (!record || Object.keys(record).sort().join(",") !== "pid,token,version" || record.version !== 1 || !Number.isSafeInteger(record.pid) || (record.pid ?? 0) <= 0 || typeof record.token !== "string" || record.token.length < 1 || record.token.length > 128) {
+    return fail("artifact key lock record is invalid");
+  }
+  return Object.freeze({ version: 1, pid: record.pid, token: record.token });
+}
+function readArtifactLockSnapshot(rootFd, name, links = 1, tolerateContention = false) {
+  const before = lstatChild(rootFd, name);
+  if (!before)
+    return;
+  if (tolerateContention && artifactLockStatIsSafeTransition(before, links))
+    return;
+  assertArtifactLockStat(before, links);
+  let fd;
+  try {
+    try {
+      fd = openSync(fdPath(rootFd, name), FILE_READ_FLAGS);
+    } catch (error) {
+      if (tolerateContention && errno(error) === "ENOENT")
+        return;
+      throw error;
+    }
+    const opened = fstatSync(fd);
+    if (tolerateContention && artifactLockStatIsSafeTransition(opened, links))
+      return;
+    assertArtifactLockStat(opened, links);
+    if (!sameArtifactLockStat(before, opened)) {
+      if (tolerateContention)
+        return;
+      fail("artifact key lock changed while opening");
+    }
+    const buffer = Buffer.alloc(opened.size + 1);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      const count = readSync(fd, buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+      if (count === 0)
+        break;
+      bytesRead += count;
+    }
+    const after = fstatSync(fd);
+    const named = lstatChild(rootFd, name);
+    if (tolerateContention && (!named || artifactLockStatIsSafeTransition(after, links) || artifactLockStatIsSafeTransition(named, links)))
+      return;
+    if (bytesRead !== opened.size || !named || !sameArtifactLockStat(opened, after) || !sameArtifactLockStat(opened, named)) {
+      if (tolerateContention && bytesRead === opened.size && after.isFile() && !after.isSymbolicLink() && named?.isFile() && !named.isSymbolicLink() && (after.mode & 511) === 384 && (named.mode & 511) === 384 && after.size > 0 && after.size <= MAX_ARTIFACT_LOCK_BYTES && named.size > 0 && named.size <= MAX_ARTIFACT_LOCK_BYTES)
+        return;
+      fail("artifact key lock identity or contents changed during inspection");
+    }
+    const text = buffer.subarray(0, bytesRead).toString("utf8");
+    return Object.freeze({ record: parseArtifactLockRecord(text), text, stat: opened });
+  } finally {
+    if (fd !== undefined)
+      closeSync(fd);
+  }
+}
+function artifactLockOwnerIsDead(pid) {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return errno(error) === "ESRCH";
+  }
+}
+function removeArtifactLockSnapshot(rootFd, name, expected) {
+  const current = readArtifactLockSnapshot(rootFd, name);
+  if (!current || !sameArtifactLockStat(current.stat, expected.stat) || current.text !== expected.text) {
+    return false;
+  }
+  const witness = artifactLockWitnessName(name, expected.record);
+  let witnessed = false;
+  try {
+    try {
+      linkSync(fdPath(rootFd, name), fdPath(rootFd, witness));
+      witnessed = true;
+    } catch (error) {
+      if (errno(error) === "ENOENT" || errno(error) === "EEXIST")
+        return false;
+      throw error;
+    }
+    const named = readArtifactLockSnapshot(rootFd, name, 2);
+    const linked = readArtifactLockSnapshot(rootFd, witness, 2);
+    if (!named || !linked || named.stat.dev !== expected.stat.dev || named.stat.ino !== expected.stat.ino || linked.stat.dev !== expected.stat.dev || linked.stat.ino !== expected.stat.ino || named.text !== expected.text || linked.text !== expected.text)
+      return false;
+    unlinkSync(fdPath(rootFd, name));
+    const remaining = readArtifactLockSnapshot(rootFd, witness, 1);
+    if (!remaining || remaining.text !== expected.text) {
+      fail("artifact key lock witness changed during removal");
+    }
+    unlinkSync(fdPath(rootFd, witness));
+    witnessed = false;
+    return true;
+  } finally {
+    if (witnessed) {
+      try {
+        unlinkSync(fdPath(rootFd, witness));
+      } catch {}
+    }
+  }
+}
+function assertArtifactTransitionStat(stat, allowedLinks) {
+  if (!stat.isFile() || stat.isSymbolicLink() || !allowedLinks.includes(stat.nlink) || (stat.mode & 511) !== 384 || stat.size < 0 || stat.size > MAX_ARTIFACT_LOCK_BYTES) {
+    fail("artifact key lock transition identity, mode, links, or size is invalid");
+  }
+}
+function sameArtifactLockInode(left, right) {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+function removeDeadArtifactTransitionEntry(rootFd, name, expected) {
+  const quarantine = `.knowledge-artifact-transition-cleanup-${process.pid}-${randomUUID()}`;
+  let moved = false;
+  try {
+    renameSync(fdPath(rootFd, name), fdPath(rootFd, quarantine));
+    moved = true;
+    const current = lstatChild(rootFd, quarantine);
+    if (!current || !sameArtifactLockInode(current, expected)) {
+      if (!lstatChild(rootFd, name)) {
+        try {
+          renameSync(fdPath(rootFd, quarantine), fdPath(rootFd, name));
+        } catch {}
+      }
+      moved = false;
+      return false;
+    }
+    unlinkSync(fdPath(rootFd, quarantine));
+    moved = false;
+    fsyncSync(rootFd);
+    return true;
+  } catch (error) {
+    if (errno(error) === "ENOENT")
+      return false;
+    throw error;
+  } finally {
+    if (moved && !lstatChild(rootFd, name)) {
+      try {
+        renameSync(fdPath(rootFd, quarantine), fdPath(rootFd, name));
+      } catch {}
+    }
+  }
+}
+function recoverArtifactLockTransition(rootFd, name) {
+  const finalStat = lstatChild(rootFd, name);
+  if (finalStat) {
+    if (finalStat.nlink === 1)
+      return "clear";
+    if (finalStat.nlink !== 2) {
+      assertArtifactLockStat(finalStat, 1);
+      return "clear";
+    }
+    const final = readArtifactLockSnapshot(rootFd, name, 2, true);
+    if (!final) {
+      const refreshed = lstatChild(rootFd, name);
+      if (!refreshed || refreshed.nlink === 1)
+        return "retry";
+      assertArtifactLockStat(refreshed, 2);
+      return "busy";
+    }
+    const siblings = [
+      artifactLockCandidateName(name, final.record),
+      artifactLockWitnessName(name, final.record)
+    ].filter((entry) => lstatChild(rootFd, entry) !== undefined);
+    if (siblings.length !== 1) {
+      const refreshed = lstatChild(rootFd, name);
+      if (!refreshed || refreshed.nlink === 1)
+        return "retry";
+      assertArtifactLockStat(refreshed, 2);
+      fail("artifact key lock transition has no unique publication witness");
+    }
+    const sibling = readArtifactLockSnapshot(rootFd, siblings[0], 2, true);
+    if (!sibling) {
+      const refreshed = lstatChild(rootFd, name);
+      if (!refreshed || refreshed.nlink === 1)
+        return "retry";
+      assertArtifactLockStat(refreshed, 2);
+      return "busy";
+    }
+    if (!sameArtifactLockInode(final.stat, sibling.stat) || final.text !== sibling.text) {
+      fail("artifact key lock transition witness does not match the canonical lock");
+    }
+    if (!artifactLockOwnerIsDead(final.record.pid))
+      return "busy";
+    unlinkSync(fdPath(rootFd, name));
+    const remaining = readArtifactLockSnapshot(rootFd, siblings[0], 1);
+    if (!remaining || !sameArtifactLockInode(final.stat, remaining.stat) || remaining.text !== final.text)
+      fail("artifact key lock transition changed while reclaiming a dead owner");
+    unlinkSync(fdPath(rootFd, siblings[0]));
+    fsyncSync(rootFd);
+    return "retry";
+  }
+  const transitionEntries = artifactDirectoryNames(rootFd, `${name}.`).map((entry) => {
+    const parsed = artifactLockTransitionIdentity(name, entry);
+    if (!parsed)
+      fail("artifact key lock transition name is invalid");
+    return { entry, parsed };
+  });
+  if (transitionEntries.length === 0)
+    return "clear";
+  let busy = false;
+  let removed = false;
+  for (const transition of transitionEntries) {
+    const stat = lstatChild(rootFd, transition.entry);
+    if (!stat)
+      continue;
+    assertArtifactTransitionStat(stat, [1, 2]);
+    if (!artifactLockOwnerIsDead(transition.parsed.pid)) {
+      busy = true;
+      continue;
+    }
+    if (stat.nlink === 2) {
+      const peer = transitionEntries.find((candidate) => {
+        if (candidate.entry === transition.entry)
+          return false;
+        const peerStat2 = lstatChild(rootFd, candidate.entry);
+        return Boolean(peerStat2 && sameArtifactLockInode(stat, peerStat2));
+      });
+      if (!peer)
+        fail("artifact key lock dead transition lost its paired name");
+      const peerStat = lstatChild(rootFd, peer.entry);
+      if (!peerStat)
+        continue;
+      assertArtifactTransitionStat(peerStat, [2]);
+      if (peer.parsed.pid !== transition.parsed.pid || peer.parsed.token !== transition.parsed.token)
+        fail("artifact key lock dead transition identity is inconsistent");
+      unlinkSync(fdPath(rootFd, transition.entry));
+      const last = lstatChild(rootFd, peer.entry);
+      if (!last || !sameArtifactLockInode(stat, last) || last.nlink !== 1) {
+        fail("artifact key lock dead transition changed during paired cleanup");
+      }
+      unlinkSync(fdPath(rootFd, peer.entry));
+      removed = true;
+      continue;
+    }
+    if (removeDeadArtifactTransitionEntry(rootFd, transition.entry, stat))
+      removed = true;
+  }
+  if (removed) {
+    fsyncSync(rootFd);
+    return "retry";
+  }
+  return busy ? "busy" : "clear";
+}
+function acquireArtifactKeyLock(rootFd, key) {
+  const name = artifactLockName(key);
+  const start = artifactLockNow();
+  for (;; ) {
+    const transition = recoverArtifactLockTransition(rootFd, name);
+    if (transition === "retry")
+      continue;
+    if (transition === "busy") {
+      awaitArtifactLockRetry(start);
+      continue;
+    }
+    const observedStat = lstatChild(rootFd, name);
+    if (observedStat) {
+      const observed = readArtifactLockSnapshot(rootFd, name, 1, true);
+      if (observed && artifactLockOwnerIsDead(observed.record.pid)) {
+        if (removeArtifactLockSnapshot(rootFd, name, observed))
+          continue;
+      }
+      awaitArtifactLockRetry(start);
+      continue;
+    }
+    const record = Object.freeze({ version: 1, pid: process.pid, token: randomUUID() });
+    const text = `${JSON.stringify(record)}
+`;
+    const candidate = artifactLockCandidateName(name, record);
+    let fd;
+    let created;
+    let published = false;
+    try {
+      fd = openSync(fdPath(rootFd, candidate), constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 384);
+      fchmodSync(fd, 384);
+      writeFileSync(fd, text);
+      fsyncSync(fd);
+      created = fstatSync(fd);
+      assertArtifactLockStat(created, 1);
+      try {
+        linkSync(fdPath(rootFd, candidate), fdPath(rootFd, name));
+        published = true;
+      } catch (error) {
+        if (errno(error) !== "EEXIST")
+          throw error;
+      }
+      if (published) {
+        assertArtifactLockStat(fstatSync(fd), 2);
+        const publishedLock = readArtifactLockSnapshot(rootFd, name, 2);
+        const publishedCandidate = readArtifactLockSnapshot(rootFd, candidate, 2);
+        if (!publishedLock || !publishedCandidate || !sameArtifactLockInode(publishedLock.stat, publishedCandidate.stat) || publishedLock.text !== text || publishedCandidate.text !== text)
+          fail("artifact key lock hard-link publication could not be verified");
+        unlinkSync(fdPath(rootFd, candidate));
+        fsyncSync(rootFd);
+        const owned = fstatSync(fd);
+        assertArtifactLockStat(owned, 1);
+        const named = readArtifactLockSnapshot(rootFd, name);
+        if (!named || named.stat.dev !== owned.dev || named.stat.ino !== owned.ino || named.text !== text)
+          fail("artifact key lock publication could not be verified");
+        const result = Object.freeze({ ...named, fd, name });
+        fd = undefined;
+        return result;
+      }
+    } finally {
+      if (fd !== undefined) {
+        try {
+          const currentCandidate = lstatChild(rootFd, candidate);
+          if (currentCandidate && created && currentCandidate.dev === created.dev && currentCandidate.ino === created.ino)
+            unlinkSync(fdPath(rootFd, candidate));
+        } catch {}
+        if (published && created) {
+          try {
+            const current2 = readArtifactLockSnapshot(rootFd, name);
+            if (current2 && current2.stat.dev === created.dev && current2.stat.ino === created.ino && current2.text === text)
+              removeArtifactLockSnapshot(rootFd, name, current2);
+          } catch {}
+        }
+        closeSync(fd);
+      }
+    }
+    const recovered = recoverArtifactLockTransition(rootFd, name);
+    if (recovered === "retry")
+      continue;
+    if (recovered === "busy") {
+      awaitArtifactLockRetry(start);
+      continue;
+    }
+    const current = readArtifactLockSnapshot(rootFd, name, 1, true);
+    if (current && artifactLockOwnerIsDead(current.record.pid)) {
+      if (removeArtifactLockSnapshot(rootFd, name, current))
+        continue;
+    }
+    awaitArtifactLockRetry(start);
+  }
+}
+function releaseArtifactKeyLock(rootFd, lock) {
+  try {
+    const opened = fstatSync(lock.fd);
+    const current = readArtifactLockSnapshot(rootFd, lock.name);
+    if (current && opened.dev === lock.stat.dev && opened.ino === lock.stat.ino && current.stat.dev === lock.stat.dev && current.stat.ino === lock.stat.ino && current.text === lock.text) {
+      removeArtifactLockSnapshot(rootFd, lock.name, current);
+    }
+  } finally {
+    closeSync(lock.fd);
+  }
+}
+function fdPath(fd, name) {
+  const base = `${fdBase()}/${fd}`;
+  return name === undefined ? base : `${base}/${name}`;
+}
+function identity(stat) {
+  return { dev: stat.dev, ino: stat.ino, mode: stat.mode & 511 };
+}
+function sameIdentity(left, right) {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+function sameIdentityAndMode(left, right) {
+  return sameIdentity(left, right) && left.mode === right.mode;
+}
+function assertDirectoryStat(stat, detail) {
+  if (!stat.isDirectory() || stat.isSymbolicLink())
+    fail(detail);
+}
+function assertRegularStat(stat, detail) {
+  if (!stat.isFile() || stat.isSymbolicLink())
+    fail(detail);
+}
+function absoluteSegments(path) {
+  if (!isAbsolute(path) || normalize(path) !== path || resolve(path) !== path) {
+    return fail("anchored path must be absolute and traversal-free");
+  }
+  return path.split(sep).filter(Boolean);
+}
+function relativeSegments(path) {
+  if (!path || isAbsolute(path) || path.includes("\x00")) {
+    return fail("anchored relative path is invalid");
+  }
+  const segments = path.replace(/\\/g, "/").split("/");
+  if (segments.some((part) => !part || part === "." || part === "..")) {
+    return fail("anchored relative path contains an unsafe component");
+  }
+  return segments;
+}
+function openDirectoryPath(path, create, mode = 448) {
+  assertAnchoredFilesystemPlatform();
+  const segments = absoluteSegments(path);
+  let current;
+  try {
+    current = openSync("/", DIRECTORY_FLAGS);
+    for (const segment of segments) {
+      const child = fdPath(current, segment);
+      if (create) {
+        try {
+          mkdirSync(child, { mode });
+        } catch (error) {
+          if (errno(error) !== "EEXIST")
+            throw error;
+        }
+      }
+      let next;
+      try {
+        next = openSync(child, DIRECTORY_FLAGS);
+        assertDirectoryStat(fstatSync(next), "opened path component is not a directory");
+      } catch (error) {
+        if (next !== undefined)
+          closeSync(next);
+        if (errno(error) === "ENOENT")
+          throw error;
+        if (error instanceof AnchoredFilesystemError)
+          throw error;
+        return fail("directory component could not be opened without following links");
+      }
+      const previous = current;
+      current = next;
+      closeSync(previous);
+    }
+    const result = current;
+    current = undefined;
+    return result;
+  } finally {
+    if (current !== undefined)
+      closeSync(current);
+  }
+}
+function pathDirectoryIdentity(path) {
+  let fd;
+  try {
+    fd = openDirectoryPath(path, false);
+    return identity(fstatSync(fd));
+  } catch (error) {
+    if (errno(error) === "ENOENT")
+      return;
+    throw error;
+  } finally {
+    if (fd !== undefined)
+      closeSync(fd);
+  }
+}
+function assertDirectoryName(path, expected) {
+  const current = pathDirectoryIdentity(path);
+  if (!current || !sameIdentityAndMode(current, expected)) {
+    fail("anchored directory identity or confidentiality mode changed during the operation");
+  }
+}
+function assertExactMode(stat, expectedMode, detail) {
+  if ((stat.mode & 511) !== expectedMode)
+    fail(detail);
+}
+function assertArtifactFileStat(stat, detail) {
+  assertRegularStat(stat, detail);
+  if (stat.nlink !== 1)
+    fail("artifact file has multiple hard links");
+  assertExactMode(stat, 384, "artifact file confidentiality mode must be exactly 0600");
+}
+function lstatChild(fd, name) {
+  try {
+    return lstatSync(fdPath(fd, name));
+  } catch (error) {
+    if (errno(error) === "ENOENT")
+      return;
+    throw error;
+  }
+}
+function openChildDirectory(parentFd, name, create, emitTestHook = true) {
+  const child = fdPath(parentFd, name);
+  if (create) {
+    try {
+      mkdirSync(child, { mode: 448 });
+    } catch (error) {
+      if (errno(error) !== "EEXIST")
+        throw error;
+    }
+  }
+  if (emitTestHook)
+    fireTestHook("artifact-before-component-open", name);
+  let fd;
+  try {
+    fd = openSync(child, DIRECTORY_FLAGS);
+    const opened = fstatSync(fd);
+    assertDirectoryStat(opened, "artifact path component is not a directory");
+    assertExactMode(opened, 448, "artifact directory confidentiality mode must be exactly 0700");
+    const result = fd;
+    fd = undefined;
+    return result;
+  } catch (error) {
+    if (error instanceof AnchoredFilesystemError || errno(error) === "ENOENT")
+      throw error;
+    return fail("artifact path component could not be opened without following links");
+  } finally {
+    if (fd !== undefined)
+      closeSync(fd);
+  }
+}
+
+class RelativeParentHandle {
+  rootFd;
+  fd;
+  rootIdentity;
+  components;
+  closed = false;
+  constructor(rootFd, parts, create) {
+    this.rootFd = rootFd;
+    this.rootIdentity = Object.freeze(identity(fstatSync(rootFd)));
+    const components = [];
+    let current = openSync(fdPath(rootFd, "."), DIRECTORY_FLAGS);
+    try {
+      for (const part of parts) {
+        const next = openChildDirectory(current, part, create);
+        closeSync(current);
+        current = next;
+        components.push(Object.freeze({
+          name: part,
+          identity: Object.freeze(identity(fstatSync(current)))
+        }));
+      }
+      this.fd = current;
+      this.components = Object.freeze(components);
+      this.verify();
+      current = -1;
+    } finally {
+      if (current >= 0)
+        closeSync(current);
+    }
+  }
+  descriptor() {
+    if (this.closed)
+      fail("artifact parent handle is closed");
+    return this.fd;
+  }
+  openCanonical() {
+    const root = fstatSync(this.rootFd);
+    assertDirectoryStat(root, "artifact root descriptor is no longer a directory");
+    if (!sameIdentityAndMode(identity(root), this.rootIdentity)) {
+      fail("artifact root descriptor identity changed");
+    }
+    let current = openSync(fdPath(this.rootFd, "."), DIRECTORY_FLAGS);
+    try {
+      for (const component of this.components) {
+        const next = openChildDirectory(current, component.name, false, false);
+        closeSync(current);
+        current = next;
+        const opened = identity(fstatSync(current));
+        if (!sameIdentityAndMode(opened, component.identity)) {
+          fail("artifact path component identity changed after it was opened");
+        }
+      }
+      const result = current;
+      current = -1;
+      return result;
+    } finally {
+      if (current >= 0)
+        closeSync(current);
+    }
+  }
+  verifyDescriptor() {
+    const opened = identity(fstatSync(this.descriptor()));
+    const expected = this.components.at(-1)?.identity ?? this.rootIdentity;
+    if (!sameIdentityAndMode(opened, expected)) {
+      fail("artifact parent descriptor identity changed");
+    }
+  }
+  verify() {
+    this.verifyDescriptor();
+    const canonical = this.openCanonical();
+    try {
+      const opened = identity(fstatSync(canonical));
+      const descriptor = identity(fstatSync(this.descriptor()));
+      if (!sameIdentityAndMode(opened, descriptor)) {
+        fail("artifact parent is no longer reachable through its canonical component names");
+      }
+    } finally {
+      closeSync(canonical);
+    }
+  }
+  close() {
+    if (this.closed)
+      return;
+    closeSync(this.fd);
+    this.closed = true;
+  }
+}
+function openRelativeParent(rootFd, parts, create) {
+  return new RelativeParentHandle(rootFd, parts, create);
+}
+function verifyCanonicalInstalledTemporary(parent, name, temporaryFd, expectedBody, expectedMode) {
+  parent.verify();
+  const canonical = parent.openCanonical();
+  try {
+    return verifyInstalledTemporary(canonical, name, temporaryFd, expectedBody, expectedMode, 1);
+  } finally {
+    closeSync(canonical);
+  }
+}
+function verifyCanonicalArtifactRead(parent, name, expected) {
+  parent.verify();
+  const canonical = parent.openCanonical();
+  let fd;
+  try {
+    fd = openVerifiedRegular(canonical, name, FILE_READ_FLAGS);
+    const opened = fstatSync(fd);
+    assertArtifactFileStat(opened, "canonical artifact read target is not a regular file");
+    if (!sameIdentity(identity(opened), identity(expected)) || opened.size !== expected.size || opened.mtimeMs !== expected.mtimeMs || opened.ctimeMs !== expected.ctimeMs)
+      fail("artifact read result no longer matches the canonical component path");
+  } finally {
+    if (fd !== undefined)
+      closeSync(fd);
+    closeSync(canonical);
+  }
+  parent.verify();
+}
+function openVerifiedRegular(parentFd, name, flags) {
+  const before = lstatChild(parentFd, name);
+  if (!before) {
+    const missing = new Error(`ENOENT: no such file, open '${name}'`);
+    missing.code = "ENOENT";
+    throw missing;
+  }
+  assertRegularStat(before, "anchored file must be a non-symlink regular file");
+  let fd;
+  try {
+    fd = openSync(fdPath(parentFd, name), flags | constants.O_NOFOLLOW);
+    const opened = fstatSync(fd);
+    assertRegularStat(opened, "opened file must be regular");
+    const named = lstatChild(parentFd, name);
+    if (!named || !sameIdentity(identity(opened), identity(named))) {
+      fail("file identity changed while it was opened");
+    }
+    const result = fd;
+    fd = undefined;
+    return result;
+  } catch (error) {
+    if (error instanceof AnchoredFilesystemError || errno(error) === "ENOENT")
+      throw error;
+    return fail("file could not be opened without following links");
+  } finally {
+    if (fd !== undefined)
+      closeSync(fd);
+  }
+}
+function createTemporary(parentFd, mode) {
+  const name = `.knowledge-tmp-${process.pid}-${randomUUID()}`;
+  let fd;
+  try {
+    fd = openSync(fdPath(parentFd, name), constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, mode);
+    fchmodSync(fd, mode);
+    const result = { fd, name };
+    fd = undefined;
+    return result;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        const opened = fstatSync(fd);
+        const named = lstatChild(parentFd, name);
+        if (named && sameIdentity(identity(opened), identity(named))) {
+          unlinkSync(fdPath(parentFd, name));
+        }
+      } catch {}
+      closeSync(fd);
+    }
+  }
+}
+function readExactFileDescriptor(fd, size) {
+  const buffer = Buffer.alloc(size + 1);
+  let bytesRead = 0;
+  while (bytesRead < buffer.length) {
+    const count = readSync(fd, buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+    if (count === 0)
+      break;
+    bytesRead += count;
+  }
+  if (bytesRead !== size)
+    fail("installed file content size changed during final verification");
+  return buffer.subarray(0, bytesRead);
+}
+function verifyInstalledTemporary(parentFd, name, temporaryFd, expectedBody, expectedMode, expectedLinks) {
+  const temporary = fstatSync(temporaryFd);
+  assertRegularStat(temporary, "temporary install inode is not a regular file");
+  assertExactMode(temporary, expectedMode, "temporary install mode changed");
+  if (temporary.nlink !== expectedLinks)
+    fail("temporary install hard-link count changed");
+  const expected = typeof expectedBody === "string" ? Buffer.from(expectedBody) : Buffer.from(expectedBody);
+  if (temporary.size !== expected.byteLength)
+    fail("temporary install size changed");
+  let finalFd;
+  try {
+    finalFd = openVerifiedRegular(parentFd, name, FILE_READ_FLAGS);
+    const opened = fstatSync(finalFd);
+    const named = lstatChild(parentFd, name);
+    if (!named || !opened.isFile() || opened.isSymbolicLink() || !named.isFile() || named.isSymbolicLink() || opened.nlink !== expectedLinks || named.nlink !== expectedLinks || !sameIdentity(identity(temporary), identity(opened)) || !sameIdentity(identity(temporary), identity(named)) || (opened.mode & 511) !== expectedMode || (named.mode & 511) !== expectedMode || opened.size !== expected.byteLength || named.size !== expected.byteLength) {
+      fail("installed file identity, type, mode, or size does not match the intended temporary inode");
+    }
+    const actual = readExactFileDescriptor(finalFd, opened.size);
+    const after = fstatSync(finalFd);
+    if (!actual.equals(expected) || !sameIdentity(identity(opened), identity(after)) || after.size !== opened.size || after.nlink !== expectedLinks) {
+      fail("installed file content does not match the intended temporary inode");
+    }
+    return named;
+  } finally {
+    if (finalFd !== undefined)
+      closeSync(finalFd);
+  }
+}
+function previousGenerationName(kind, target) {
+  return `.knowledge-${kind}-previous-${createHash("sha256").update(target).digest("hex")}`;
+}
+function recoverDeadRegularTemporaries(parentFd, expectedMode, maxBytes) {
+  for (const entry of artifactDirectoryNames(parentFd, ".knowledge-tmp-")) {
+    const matched = /^\.knowledge-tmp-(\d+)-[A-Za-z0-9-]+$/.exec(entry);
+    if (!matched)
+      fail("regular-file temporary generation name is invalid");
+    const pid = Number(matched[1]);
+    if (!Number.isSafeInteger(pid) || pid <= 0)
+      fail("regular-file temporary owner is invalid");
+    const stat = lstatChild(parentFd, entry);
+    if (!stat)
+      continue;
+    assertRecoverableGenerationStat(stat, expectedMode, maxBytes, [1, 2], "regular-file temporary generation");
+    if (!artifactLockOwnerIsDead(pid))
+      continue;
+    if (!removeDeadArtifactTransitionEntry(parentFd, entry, stat)) {
+      fail("dead regular-file temporary generation changed during recovery");
+    }
+  }
+}
+function assertRecoverableGenerationStat(stat, expectedMode, maxBytes, allowedLinks, detail) {
+  assertRegularStat(stat, detail);
+  assertExactMode(stat, expectedMode, `${detail} confidentiality mode changed`);
+  if (!allowedLinks.includes(stat.nlink))
+    fail(`${detail} hard-link count is invalid`);
+  if (stat.size < 0 || stat.size > maxBytes)
+    fail(`${detail} exceeds its byte hard limit`);
+}
+function recoverRegularGeneration(parentFd, target, kind, expectedMode, maxBytes) {
+  recoverDeadRegularTemporaries(parentFd, expectedMode, maxBytes);
+  const backup = previousGenerationName(kind, target);
+  const current = lstatChild(parentFd, target);
+  const previous = lstatChild(parentFd, backup);
+  if (!previous)
+    return backup;
+  assertRecoverableGenerationStat(previous, expectedMode, maxBytes, [1, 2, 3], `${kind} previous generation`);
+  if (!current) {
+    if (previous.nlink !== 1 && previous.nlink !== 2) {
+      fail(`${kind} previous generation transition is incomplete`);
+    }
+    const expectedLinks = previous.nlink;
+    renameSync(fdPath(parentFd, backup), fdPath(parentFd, target));
+    fsyncSync(parentFd);
+    const restored = lstatChild(parentFd, target);
+    if (!restored)
+      fail(`${kind} previous generation could not be restored`);
+    assertRecoverableGenerationStat(restored, expectedMode, maxBytes, [expectedLinks], `${kind} restored generation`);
+    return backup;
+  }
+  assertRecoverableGenerationStat(current, expectedMode, maxBytes, [1, 2, 3], `${kind} canonical generation`);
+  if (sameIdentity(identity(current), identity(previous))) {
+    if (current.nlink !== previous.nlink || current.nlink !== 2 && current.nlink !== 3) {
+      fail(`${kind} pre-install generation transition has an invalid link count`);
+    }
+    const expectedLinks = current.nlink - 1;
+    unlinkSync(fdPath(parentFd, backup));
+    const recovered = lstatChild(parentFd, target);
+    if (!recovered)
+      fail(`${kind} canonical generation disappeared during recovery`);
+    assertRecoverableGenerationStat(recovered, expectedMode, maxBytes, [expectedLinks], `${kind} recovered canonical generation`);
+  } else {
+    if (current.nlink !== 1 || previous.nlink !== 1 && previous.nlink !== 2) {
+      fail(`${kind} post-install generation transition has an invalid link count`);
+    }
+    unlinkSync(fdPath(parentFd, backup));
+    const recovered = lstatChild(parentFd, target);
+    if (!recovered)
+      fail(`${kind} canonical generation disappeared during recovery`);
+    assertRecoverableGenerationStat(recovered, expectedMode, maxBytes, [1], `${kind} recovered canonical generation`);
+  }
+  fsyncSync(parentFd);
+  return backup;
+}
+function rollbackAtomicTemporaryInstall(parentFd, target, temporaryFd, temporary, backup, renamed) {
+  const intended = fstatSync(temporaryFd);
+  if (!renamed) {
+    const current2 = lstatChild(parentFd, target);
+    const previous2 = backup ? lstatChild(parentFd, backup) : undefined;
+    if (previous2) {
+      if (current2 && sameIdentity(identity(current2), identity(previous2))) {
+        try {
+          unlinkSync(fdPath(parentFd, backup));
+        } catch {}
+      } else if (!current2) {
+        try {
+          renameSync(fdPath(parentFd, backup), fdPath(parentFd, target));
+        } catch {}
+      }
+    }
+    if (temporary && lstatChild(parentFd, temporary)) {
+      try {
+        unlinkSync(fdPath(parentFd, temporary));
+      } catch {}
+    }
+    try {
+      fsyncSync(parentFd);
+    } catch {}
+    return;
+  }
+  const current = lstatChild(parentFd, target);
+  const previous = backup ? lstatChild(parentFd, backup) : undefined;
+  if (current && sameIdentity(identity(current), identity(intended))) {
+    if (previous) {
+      try {
+        renameSync(fdPath(parentFd, backup), fdPath(parentFd, target));
+      } catch {}
+    } else {
+      try {
+        unlinkSync(fdPath(parentFd, target));
+      } catch {}
+    }
+  } else if (current && previous) {
+    const conflict = `.knowledge-conflict-${process.pid}-${randomUUID()}`;
+    let linked = false;
+    try {
+      linkSync(fdPath(parentFd, target), fdPath(parentFd, conflict));
+      linked = true;
+      const named = lstatChild(parentFd, target);
+      const preserved = lstatChild(parentFd, conflict);
+      if (!named || !preserved || !sameIdentity(identity(current), identity(named)) || !sameIdentity(identity(current), identity(preserved)))
+        fail("racing replacement target changed while preserving rollback conflict");
+      renameSync(fdPath(parentFd, backup), fdPath(parentFd, target));
+      linked = false;
+    } catch {
+      if (linked) {
+        try {
+          unlinkSync(fdPath(parentFd, conflict));
+        } catch {}
+      }
+    }
+  } else if (!current && previous) {
+    try {
+      renameSync(fdPath(parentFd, backup), fdPath(parentFd, target));
+    } catch {}
+  }
+  if (temporary && lstatChild(parentFd, temporary)) {
+    try {
+      unlinkSync(fdPath(parentFd, temporary));
+    } catch {}
+  }
+  try {
+    fsyncSync(parentFd);
+  } catch {}
+}
+function restoreRegularBackup(parentFd, backup, target) {
+  if (!lstatChild(parentFd, backup) || lstatChild(parentFd, target))
+    return;
+  try {
+    linkSync(fdPath(parentFd, backup), fdPath(parentFd, target));
+    unlinkSync(fdPath(parentFd, backup));
+  } catch {}
+}
+function ensureAnchoredDirectory(path, mode = 448) {
+  let fd;
+  try {
+    fd = openDirectoryPath(path, true, mode);
+    const opened = fstatSync(fd);
+    assertDirectoryStat(opened, "anchored path is not a directory");
+    assertExactMode(opened, mode, `anchored directory confidentiality mode must be exactly ${mode.toString(8)}`);
+    return identity(opened);
+  } finally {
+    if (fd !== undefined)
+      closeSync(fd);
+  }
+}
+
+class AnchoredDirectoryHandle {
+  path;
+  identity;
+  fd;
+  constructor(path) {
+    this.path = path;
+    const fd = openDirectoryPath(path, false);
+    try {
+      const opened = fstatSync(fd);
+      assertDirectoryStat(opened, "anchored parent handle is not a directory");
+      this.identity = Object.freeze(identity(opened));
+      assertDirectoryName(path, this.identity);
+      this.fd = fd;
+    } catch (error) {
+      closeSync(fd);
+      throw error;
+    }
+  }
+  descriptor() {
+    if (this.fd === undefined)
+      fail("anchored parent handle is closed");
+    return this.fd;
+  }
+  safeName(name) {
+    const parts = relativeSegments(name);
+    if (parts.length !== 1)
+      fail("anchored child name must contain exactly one safe component");
+    return parts[0];
+  }
+  child(name) {
+    return fdPath(this.descriptor(), this.safeName(name));
+  }
+  verifyDescriptor() {
+    const descriptor = this.descriptor();
+    const stat = fstatSync(descriptor);
+    assertDirectoryStat(stat, "anchored parent descriptor is no longer a directory");
+    const opened = identity(stat);
+    if (!sameIdentityAndMode(opened, this.identity))
+      fail("anchored parent descriptor identity changed");
+  }
+  verify() {
+    this.verifyDescriptor();
+    assertDirectoryName(this.path, this.identity);
+  }
+  lstat(name) {
+    return lstatChild(this.descriptor(), this.safeName(name));
+  }
+  open(name, flags, mode) {
+    const safeName = this.safeName(name);
+    return openSync(fdPath(this.descriptor(), safeName), flags | constants.O_NOFOLLOW, mode);
+  }
+  link(source, target) {
+    linkSync(this.child(source), this.child(target));
+  }
+  rename(source, target) {
+    renameSync(this.child(source), this.child(target));
+  }
+  unlink(name) {
+    unlinkSync(this.child(name));
+  }
+  entries(prefix = "") {
+    this.verifyDescriptor();
+    const output = [];
+    const directory = opendirSync(fdPath(this.descriptor()));
+    try {
+      for (;; ) {
+        const entry = directory.readSync();
+        if (!entry)
+          break;
+        if (prefix && !entry.name.startsWith(prefix))
+          continue;
+        if (output.length >= MAX_ANCHORED_ARTIFACT_NODES) {
+          fail(`anchored directory exceeds ${MAX_ANCHORED_ARTIFACT_NODES} entries`);
+        }
+        output.push(entry.name);
+      }
+    } finally {
+      directory.closeSync();
+    }
+    return output.sort();
+  }
+  sync() {
+    fsyncSync(this.descriptor());
+  }
+  close() {
+    if (this.fd === undefined)
+      return;
+    closeSync(this.fd);
+    this.fd = undefined;
+  }
+}
+function mutableFileSnapshot(stat) {
+  return Object.freeze({
+    dev: stat.dev,
+    ino: stat.ino,
+    mode: stat.mode & 511,
+    size: stat.size,
+    nlink: stat.nlink,
+    mtimeMs: stat.mtimeMs,
+    ctimeMs: stat.ctimeMs
+  });
+}
+function sameMutableFileSnapshot(left, right) {
+  return left.dev === right.dev && left.ino === right.ino && left.mode === right.mode && left.size === right.size && left.nlink === right.nlink && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
+}
+
+class AnchoredMutableFileHandle {
+  parent;
+  name;
+  descriptorPath;
+  initial;
+  fd;
+  constructor(parent, name, fd) {
+    this.parent = parent;
+    this.name = name;
+    this.fd = fd;
+    this.descriptorPath = fdPath(fd);
+    this.initial = this.verifyIdentity();
+  }
+  descriptor() {
+    if (this.fd === undefined)
+      fail("anchored file handle is closed");
+    return this.fd;
+  }
+  snapshot() {
+    return mutableFileSnapshot(fstatSync(this.descriptor()));
+  }
+  verifyIdentity() {
+    this.parent.verify();
+    const opened = fstatSync(this.descriptor());
+    const named = this.parent.lstat(this.name);
+    if (!opened.isFile() || opened.isSymbolicLink() || opened.nlink !== 1 || !named || !named.isFile() || named.isSymbolicLink() || named.nlink !== 1 || opened.dev !== named.dev || opened.ino !== named.ino || (opened.mode & 511) !== (named.mode & 511)) {
+      fail("anchored database identity must remain one canonical regular file");
+    }
+    return mutableFileSnapshot(opened);
+  }
+  verifyUnchanged(expected) {
+    const current = this.verifyIdentity();
+    if (!sameMutableFileSnapshot(current, expected)) {
+      fail("anchored database identity or contents changed before the next operation");
+    }
+    return current;
+  }
+  close() {
+    if (this.fd !== undefined) {
+      closeSync(this.fd);
+      this.fd = undefined;
+    }
+    this.parent.close();
+  }
+}
+function openAnchoredMutableRegularFile(path, options = {}) {
+  const parent = new AnchoredDirectoryHandle(dirname(path));
+  const name = basename(path);
+  let fd;
+  try {
+    const existing = parent.lstat(name);
+    if (existing) {
+      assertRegularStat(existing, "anchored database target must be a non-symlink regular file");
+      if (existing.nlink !== 1)
+        fail("anchored database target must not have hard links");
+      fd = parent.open(name, constants.O_RDWR);
+    } else {
+      if (options.create !== true) {
+        const missing = new Error(`ENOENT: no such file, open '${name}'`);
+        missing.code = "ENOENT";
+        throw missing;
+      }
+      fd = parent.open(name, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL, options.mode ?? 384);
+      fchmodSync(fd, options.mode ?? 384);
+      fsyncSync(fd);
+      parent.sync();
+    }
+    const handle = new AnchoredMutableFileHandle(parent, name, fd);
+    fd = undefined;
+    return handle;
+  } catch (error) {
+    if (fd !== undefined)
+      closeSync(fd);
+    parent.close();
+    throw error;
+  }
+}
+function readAnchoredRegularFileSnapshot(path, maxBytes = MAX_ANCHORED_CONFIG_BYTES) {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > MAX_ANCHORED_ARTIFACT_BYTES) {
+    return fail("anchored regular file byte limit is invalid");
+  }
+  const parent = dirname(path);
+  let parentFd;
+  let fileFd;
+  try {
+    try {
+      parentFd = openDirectoryPath(parent, false);
+    } catch (error) {
+      if (errno(error) === "ENOENT")
+        return;
+      throw error;
+    }
+    const parentIdentity = identity(fstatSync(parentFd));
+    if (!lstatChild(parentFd, basename(path)))
+      return;
+    fileFd = openVerifiedRegular(parentFd, basename(path), FILE_READ_FLAGS);
+    const opened = fstatSync(fileFd);
+    if (opened.size > maxBytes)
+      fail(`anchored regular file exceeds the ${maxBytes} byte hard limit`);
+    fireTestHook("snapshot-before-read", path);
+    const buffer = Buffer.alloc(opened.size + 1);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      const count = readSync(fileFd, buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+      if (count === 0)
+        break;
+      bytesRead += count;
+    }
+    fireTestHook("snapshot-after-read", path);
+    if (bytesRead > maxBytes) {
+      fail(`anchored regular file exceeds the ${maxBytes} byte hard limit`);
+    }
+    const after = fstatSync(fileFd);
+    const named = lstatChild(parentFd, basename(path));
+    if (bytesRead !== opened.size || opened.nlink !== 1 || after.nlink !== 1 || !named || !named.isFile() || named.isSymbolicLink() || named.nlink !== 1 || !sameIdentity(identity(opened), identity(after)) || !sameIdentity(identity(opened), identity(named)) || named.mode !== opened.mode || after.size !== opened.size || named.size !== opened.size || after.mtimeMs !== opened.mtimeMs || after.ctimeMs !== opened.ctimeMs || named.mtimeMs !== opened.mtimeMs || named.ctimeMs !== opened.ctimeMs) {
+      fail("anchored regular file identity or contents changed during the bounded snapshot read");
+    }
+    const content = buffer.subarray(0, bytesRead).toString("utf8");
+    assertDirectoryName(parent, parentIdentity);
+    return { content, identity: identity(opened) };
+  } finally {
+    if (fileFd !== undefined)
+      closeSync(fileFd);
+    if (parentFd !== undefined)
+      closeSync(parentFd);
+  }
+}
+function writeAnchoredRegularFile(path, body, mode = 384) {
+  const parent = dirname(path);
+  ensureAnchoredDirectory(parent);
+  let parentFd;
+  let keyLock;
+  let temporaryFd;
+  let temporary = "";
+  let backup = "";
+  let renamed = false;
+  let installed = false;
+  try {
+    parentFd = openDirectoryPath(parent, false);
+    const parentIdentity = identity(fstatSync(parentFd));
+    keyLock = acquireArtifactKeyLock(parentFd, `config:${basename(path)}`);
+    backup = recoverRegularGeneration(parentFd, basename(path), "config", mode, MAX_ANCHORED_CONFIG_BYTES);
+    const current = lstatChild(parentFd, basename(path));
+    if (current) {
+      assertRegularStat(current, "replacement target must be a regular file");
+      if (current.nlink !== 1 && current.nlink !== 2) {
+        fail("replacement target has an unsupported hard-link count");
+      }
+    }
+    ({ fd: temporaryFd, name: temporary } = createTemporary(parentFd, mode));
+    writeFileSync(temporaryFd, body);
+    fsyncSync(temporaryFd);
+    fireTestHook("config-before-parent-check", path);
+    assertDirectoryName(parent, parentIdentity);
+    if (current) {
+      fireTestHook("config-before-target-move", path);
+      if (lstatChild(parentFd, backup))
+        fail("config previous generation name is unexpectedly occupied");
+      linkSync(fdPath(parentFd, basename(path)), fdPath(parentFd, backup));
+      const moved = lstatChild(parentFd, backup);
+      const named = lstatChild(parentFd, basename(path));
+      if (!moved || !named || moved.nlink !== current.nlink + 1 || named.nlink !== current.nlink + 1 || !sameIdentity(identity(current), identity(moved)) || !sameIdentity(identity(current), identity(named))) {
+        if (moved && named && sameIdentity(identity(moved), identity(named))) {
+          try {
+            unlinkSync(fdPath(parentFd, backup));
+          } catch {}
+        }
+        fail("replacement target identity changed before commit");
+      }
+      fsyncSync(parentFd);
+    }
+    if (current) {
+      renameSync(fdPath(parentFd, temporary), fdPath(parentFd, basename(path)));
+      temporary = "";
+      renamed = true;
+    } else {
+      try {
+        linkSync(fdPath(parentFd, temporary), fdPath(parentFd, basename(path)));
+      } catch {
+        fail("replacement target changed before no-clobber install");
+      }
+      renamed = true;
+      verifyInstalledTemporary(parentFd, basename(path), temporaryFd, body, mode, 2);
+      unlinkSync(fdPath(parentFd, temporary));
+      temporary = "";
+    }
+    fsyncSync(parentFd);
+    fireTestHook("config-before-final-verify", path);
+    verifyInstalledTemporary(parentFd, basename(path), temporaryFd, body, mode, 1);
+    if (current) {
+      unlinkSync(fdPath(parentFd, backup));
+    }
+    fsyncSync(parentFd);
+    verifyInstalledTemporary(parentFd, basename(path), temporaryFd, body, mode, 1);
+    assertDirectoryName(parent, parentIdentity);
+    installed = true;
+  } finally {
+    if (parentFd !== undefined) {
+      if (!installed && temporaryFd !== undefined) {
+        rollbackAtomicTemporaryInstall(parentFd, basename(path), temporaryFd, temporary, backup, renamed);
+      }
+      if (temporary && lstatChild(parentFd, temporary))
+        unlinkSync(fdPath(parentFd, temporary));
+      if (temporaryFd !== undefined)
+        closeSync(temporaryFd);
+      if (keyLock !== undefined)
+        releaseArtifactKeyLock(parentFd, keyLock);
+      closeSync(parentFd);
+    } else if (temporaryFd !== undefined) {
+      closeSync(temporaryFd);
+    }
+  }
+}
+
+class AnchoredArtifactDirectory {
+  path;
+  expected;
+  constructor(path) {
+    this.path = path;
+    this.expected = ensureAnchoredDirectory(path);
+  }
+  openRoot() {
+    let fd;
+    try {
+      fd = openDirectoryPath(this.path, false);
+      const opened = identity(fstatSync(fd));
+      if (!sameIdentityAndMode(opened, this.expected) || opened.mode !== 448) {
+        return fail("artifact root identity or confidentiality mode changed");
+      }
+      assertDirectoryName(this.path, this.expected);
+      const result = fd;
+      fd = undefined;
+      return result;
+    } finally {
+      if (fd !== undefined)
+        closeSync(fd);
+    }
+  }
+  put(relativePath, body) {
+    const bodyBytes = typeof body === "string" ? Buffer.byteLength(body) : body.byteLength;
+    if (bodyBytes > MAX_ANCHORED_ARTIFACT_BYTES) {
+      fail(`artifact body exceeds ${MAX_ANCHORED_ARTIFACT_BYTES} bytes`);
+    }
+    const parts = relativeSegments(relativePath);
+    const lockKey = parts.join("/");
+    const name = parts.pop();
+    let rootFd;
+    let keyLock;
+    let parent;
+    let fileFd;
+    let temporary = "";
+    let backup = "";
+    let renamed = false;
+    let installed = false;
+    try {
+      rootFd = this.openRoot();
+      keyLock = acquireArtifactKeyLock(rootFd, lockKey);
+      parent = openRelativeParent(rootFd, parts, true);
+      backup = recoverRegularGeneration(parent.fd, name, "artifact", 384, MAX_ANCHORED_ARTIFACT_BYTES);
+      parent.verify();
+      const current = lstatChild(parent.fd, name);
+      if (current) {
+        assertRegularStat(current, "artifact target must be a regular file");
+        if (current.nlink !== 1 && current.nlink !== 2) {
+          fail("artifact target has an unsupported hard-link count");
+        }
+      }
+      const created = createTemporary(parent.fd, 384);
+      fileFd = created.fd;
+      temporary = created.name;
+      writeFileSync(fileFd, body);
+      fsyncSync(fileFd);
+      parent.verify();
+      assertDirectoryName(this.path, this.expected);
+      if (current) {
+        if (lstatChild(parent.fd, backup))
+          fail("artifact previous generation name is unexpectedly occupied");
+        linkSync(fdPath(parent.fd, name), fdPath(parent.fd, backup));
+        const moved = lstatChild(parent.fd, backup);
+        const named = lstatChild(parent.fd, name);
+        if (!moved || !named || moved.nlink !== current.nlink + 1 || named.nlink !== current.nlink + 1 || !sameIdentity(identity(current), identity(moved)) || !sameIdentity(identity(current), identity(named))) {
+          if (moved && named && sameIdentity(identity(moved), identity(named))) {
+            try {
+              unlinkSync(fdPath(parent.fd, backup));
+            } catch {}
+          }
+          fail("artifact target identity changed before replacement");
+        }
+        fsyncSync(parent.fd);
+      }
+      parent.verify();
+      fireTestHook("artifact-before-atomic-install", relativePath);
+      if (current) {
+        renameSync(fdPath(parent.fd, temporary), fdPath(parent.fd, name));
+        temporary = "";
+        renamed = true;
+      } else {
+        try {
+          linkSync(fdPath(parent.fd, temporary), fdPath(parent.fd, name));
+        } catch {
+          fail("artifact target changed before no-clobber install");
+        }
+        renamed = true;
+        verifyInstalledTemporary(parent.fd, name, fileFd, body, 384, 2);
+        unlinkSync(fdPath(parent.fd, temporary));
+        temporary = "";
+      }
+      parent.verify();
+      fsyncSync(parent.fd);
+      fireTestHook("artifact-before-final-verify", relativePath);
+      const written = verifyCanonicalInstalledTemporary(parent, name, fileFd, body, 384);
+      if (current) {
+        unlinkSync(fdPath(parent.fd, backup));
+      }
+      fsyncSync(parent.fd);
+      verifyCanonicalInstalledTemporary(parent, name, fileFd, body, 384);
+      assertDirectoryName(this.path, this.expected);
+      installed = true;
+      return { modifiedAt: written.mtime };
+    } finally {
+      if (parent !== undefined) {
+        if (!installed && fileFd !== undefined) {
+          rollbackAtomicTemporaryInstall(parent.fd, name, fileFd, temporary, backup, renamed);
+        }
+        if (temporary && lstatChild(parent.fd, temporary))
+          unlinkSync(fdPath(parent.fd, temporary));
+        if (fileFd !== undefined)
+          closeSync(fileFd);
+        parent.close();
+      } else if (fileFd !== undefined) {
+        closeSync(fileFd);
+      }
+      if (keyLock !== undefined && rootFd !== undefined) {
+        releaseArtifactKeyLock(rootFd, keyLock);
+      }
+      if (rootFd !== undefined)
+        closeSync(rootFd);
+    }
+  }
+  read(relativePath) {
+    const parts = relativeSegments(relativePath);
+    const lockKey = parts.join("/");
+    const name = parts.pop();
+    let rootFd;
+    let keyLock;
+    let parent;
+    let fileFd;
+    try {
+      rootFd = this.openRoot();
+      keyLock = acquireArtifactKeyLock(rootFd, lockKey);
+      parent = openRelativeParent(rootFd, parts, false);
+      recoverRegularGeneration(parent.fd, name, "artifact", 384, MAX_ANCHORED_ARTIFACT_BYTES);
+      parent.verify();
+      fileFd = openVerifiedRegular(parent.fd, name, FILE_READ_FLAGS);
+      const opened = fstatSync(fileFd);
+      assertArtifactFileStat(opened, "artifact read target is not a regular file");
+      if (opened.size > MAX_ANCHORED_ARTIFACT_BYTES) {
+        fail(`artifact body exceeds ${MAX_ANCHORED_ARTIFACT_BYTES} bytes`);
+      }
+      fireTestHook("artifact-before-read", relativePath);
+      const buffer = Buffer.alloc(opened.size + 1);
+      let bytesRead = 0;
+      while (bytesRead < buffer.length) {
+        const count = readSync(fileFd, buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+        if (count === 0)
+          break;
+        bytesRead += count;
+      }
+      if (bytesRead > MAX_ANCHORED_ARTIFACT_BYTES) {
+        fail(`artifact body exceeds ${MAX_ANCHORED_ARTIFACT_BYTES} bytes`);
+      }
+      const after = fstatSync(fileFd);
+      assertArtifactFileStat(after, "artifact read target changed during the read");
+      if (bytesRead !== opened.size || after.size !== opened.size || after.mtimeMs !== opened.mtimeMs || after.ctimeMs !== opened.ctimeMs) {
+        fail("artifact read target changed during the bounded read");
+      }
+      const named = lstatChild(parent.fd, name);
+      if (!named)
+        fail("artifact read target disappeared during the bounded read");
+      assertArtifactFileStat(named, "artifact read target changed during the bounded read");
+      if (!sameIdentity(identity(opened), identity(named)) || named.size !== opened.size || named.mtimeMs !== opened.mtimeMs || named.ctimeMs !== opened.ctimeMs) {
+        fail("artifact read target identity changed during the bounded read");
+      }
+      const output = buffer.subarray(0, bytesRead).toString("utf8");
+      if (Buffer.byteLength(output, "utf8") > MAX_ANCHORED_ARTIFACT_BYTES) {
+        fail(`artifact body exceeds ${MAX_ANCHORED_ARTIFACT_BYTES} encoded bytes`);
+      }
+      verifyCanonicalArtifactRead(parent, name, opened);
+      assertDirectoryName(this.path, this.expected);
+      return output;
+    } finally {
+      if (fileFd !== undefined)
+        closeSync(fileFd);
+      if (parent !== undefined)
+        parent.close();
+      if (keyLock !== undefined && rootFd !== undefined)
+        releaseArtifactKeyLock(rootFd, keyLock);
+      if (rootFd !== undefined)
+        closeSync(rootFd);
+    }
+  }
+  exists(relativePath) {
+    const parts = relativeSegments(relativePath);
+    const lockKey = parts.join("/");
+    const name = parts.pop();
+    let rootFd;
+    let keyLock;
+    let parent;
+    let fileFd;
+    try {
+      rootFd = this.openRoot();
+      keyLock = acquireArtifactKeyLock(rootFd, lockKey);
+      try {
+        parent = openRelativeParent(rootFd, parts, false);
+      } catch (error) {
+        if (errno(error) === "ENOENT")
+          return false;
+        throw error;
+      }
+      recoverRegularGeneration(parent.fd, name, "artifact", 384, MAX_ANCHORED_ARTIFACT_BYTES);
+      parent.verify();
+      if (!lstatChild(parent.fd, name))
+        return false;
+      fileFd = openVerifiedRegular(parent.fd, name, FILE_READ_FLAGS);
+      const opened = fstatSync(fileFd);
+      assertArtifactFileStat(opened, "artifact exists target is not a regular file");
+      verifyCanonicalArtifactRead(parent, name, opened);
+      assertDirectoryName(this.path, this.expected);
+      return true;
+    } finally {
+      if (fileFd !== undefined)
+        closeSync(fileFd);
+      if (parent !== undefined)
+        parent.close();
+      if (keyLock !== undefined && rootFd !== undefined)
+        releaseArtifactKeyLock(rootFd, keyLock);
+      if (rootFd !== undefined)
+        closeSync(rootFd);
+    }
+  }
+  delete(relativePath) {
+    const parts = relativeSegments(relativePath);
+    const lockKey = parts.join("/");
+    const name = parts.pop();
+    let rootFd;
+    let keyLock;
+    let parent;
+    let quarantine = "";
+    try {
+      rootFd = this.openRoot();
+      keyLock = acquireArtifactKeyLock(rootFd, lockKey);
+      try {
+        parent = openRelativeParent(rootFd, parts, false);
+      } catch (error) {
+        if (errno(error) === "ENOENT")
+          return;
+        throw error;
+      }
+      recoverRegularGeneration(parent.fd, name, "artifact", 384, MAX_ANCHORED_ARTIFACT_BYTES);
+      parent.verify();
+      const current = lstatChild(parent.fd, name);
+      if (!current)
+        return;
+      assertArtifactFileStat(current, "artifact delete target must be a regular file");
+      quarantine = `.knowledge-delete-${process.pid}-${randomUUID()}`;
+      renameSync(fdPath(parent.fd, name), fdPath(parent.fd, quarantine));
+      const moved = lstatChild(parent.fd, quarantine);
+      if (!moved || moved.nlink !== 1 || !sameIdentity(identity(current), identity(moved))) {
+        restoreRegularBackup(parent.fd, quarantine, name);
+        fail("artifact delete target identity changed");
+      }
+      parent.verify();
+      unlinkSync(fdPath(parent.fd, quarantine));
+      quarantine = "";
+      fsyncSync(parent.fd);
+      parent.verify();
+      assertDirectoryName(this.path, this.expected);
+    } finally {
+      if (parent !== undefined) {
+        if (quarantine)
+          restoreRegularBackup(parent.fd, quarantine, name);
+        parent.close();
+      }
+      if (keyLock !== undefined && rootFd !== undefined)
+        releaseArtifactKeyLock(rootFd, keyLock);
+      if (rootFd !== undefined)
+        closeSync(rootFd);
+    }
+  }
+  list(prefix = "") {
+    const prefixParts = prefix ? relativeSegments(prefix) : [];
+    let rootFd;
+    let start;
+    try {
+      rootFd = this.openRoot();
+      try {
+        start = openRelativeParent(rootFd, prefixParts, false);
+      } catch (error) {
+        if (errno(error) === "ENOENT")
+          return [];
+        throw error;
+      }
+      const output = [];
+      let visited = 0;
+      const visit = (directoryFd, pathParts) => {
+        const entries = [];
+        const directory = opendirSync(fdPath(directoryFd));
+        try {
+          for (;; ) {
+            const entry = directory.readSync();
+            if (!entry)
+              break;
+            if (++visited > MAX_ANCHORED_ARTIFACT_NODES) {
+              fail(`artifact tree exceeds ${MAX_ANCHORED_ARTIFACT_NODES} nodes`);
+            }
+            entries.push(entry.name);
+          }
+        } finally {
+          directory.closeSync();
+        }
+        for (const entry of entries.sort()) {
+          if (entry.startsWith(".knowledge-artifact-lock-") || entry.startsWith(".knowledge-artifact-transition-cleanup-") || entry.startsWith(".knowledge-artifact-previous-") || entry.startsWith(".knowledge-tmp-") || entry.startsWith(".knowledge-delete-") || entry.startsWith(".knowledge-conflict-"))
+            continue;
+          const stat = lstatChild(directoryFd, entry);
+          if (!stat)
+            fail("artifact entry changed while listing");
+          if (stat.isSymbolicLink())
+            fail("artifact list encountered a symlink");
+          if (stat.isDirectory()) {
+            const child = openRelativeParent(rootFd, [...pathParts, entry], false);
+            try {
+              child.verify();
+              visit(child.fd, [...pathParts, entry]);
+              child.verify();
+            } finally {
+              child.close();
+            }
+          } else if (stat.isFile()) {
+            const fileFd = openVerifiedRegular(directoryFd, entry, FILE_READ_FLAGS);
+            try {
+              assertArtifactFileStat(fstatSync(fileFd), "artifact list encountered a non-regular file");
+            } catch (error) {
+              closeSync(fileFd);
+              throw error;
+            }
+            closeSync(fileFd);
+            output.push([...pathParts, entry].join("/"));
+          } else {
+            fail("artifact list encountered a non-regular entry");
+          }
+        }
+      };
+      start.verify();
+      visit(start.fd, prefixParts);
+      start.verify();
+      assertDirectoryName(this.path, this.expected);
+      return output;
+    } finally {
+      if (start !== undefined)
+        start.close();
+      if (rootFd !== undefined)
+        closeSync(rootFd);
+    }
+  }
+}
+var AnchoredFilesystemError, DIRECTORY_FLAGS, FILE_READ_FLAGS, MAX_ANCHORED_CONFIG_BYTES = 1048576, MAX_ANCHORED_ARTIFACT_BYTES = 8388608, MAX_ANCHORED_ARTIFACT_NODES = 4096, ANCHORED_FILESYSTEM_SUPPORT, anchoredFsTestHook, anchoredArtifactLockTestControl, ARTIFACT_LOCK_WAIT_MS = 5000, ARTIFACT_LOCK_RETRY_MS = 10, MAX_ARTIFACT_LOCK_BYTES = 4096;
+var init_anchored_fs = __esm(() => {
+  AnchoredFilesystemError = class AnchoredFilesystemError extends Error {
+    name = "AnchoredFilesystemError";
+  };
+  DIRECTORY_FLAGS = constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW;
+  FILE_READ_FLAGS = constants.O_RDONLY | constants.O_NOFOLLOW;
+  ANCHORED_FILESYSTEM_SUPPORT = Object.freeze({
+    supportedPlatforms: ["linux", "darwin"],
+    unsupportedBehavior: "fail-closed-before-filesystem-io"
+  });
+});
+
+// src/input-limits.ts
+import { isProxy } from "util/types";
+function cloneBoundedDataGraph(value, options = {}) {
+  const label = options.label === "Provider response" ? "Provider response" : options.label === "Stored data" ? "Stored data" : "Input";
+  const maxBytes = options.maxBytes ?? MAX_INGEST_BODY_BYTES;
+  if (!Number.isInteger(maxBytes) || maxBytes < 0 || maxBytes > MAX_INGEST_BODY_BYTES) {
+    throw new Error(`${label} byte limit must be between 0 and ${MAX_INGEST_BODY_BYTES}.`);
+  }
+  const active = new WeakSet;
+  const clones = new WeakMap;
+  const completedExpansionBytes = new WeakMap;
+  let nodes = 0;
+  let properties = 0;
+  const boundedAdd = (left, right) => {
+    const total = left + right;
+    if (total > maxBytes) {
+      throw new Error(`${label} exceeds the ${maxBytes} byte hard limit.`);
+    }
+    return total;
+  };
+  const primitiveBytes = (entry) => {
+    const serialized = JSON.stringify(entry);
+    if (serialized === undefined) {
+      throw new Error(`${label} contains unsupported non-data values.`);
+    }
+    const bytes = Buffer.byteLength(serialized);
+    if (bytes > maxBytes) {
+      throw new Error(`${label} exceeds the ${maxBytes} byte hard limit.`);
+    }
+    return bytes;
+  };
+  const clone = (entry, depth) => {
+    if (entry === undefined) {
+      throw new Error(`${label} contains undefined, which is not JSON data.`);
+    }
+    if (entry === null || typeof entry === "boolean") {
+      return {
+        value: entry,
+        expansionBytes: primitiveBytes(entry)
+      };
+    }
+    if (typeof entry === "string") {
+      return { value: entry, expansionBytes: primitiveBytes(entry) };
+    }
+    if (typeof entry === "number") {
+      if (!Number.isFinite(entry))
+        throw new Error(`${label} contains a non-finite number.`);
+      return { value: entry, expansionBytes: primitiveBytes(entry) };
+    }
+    if (typeof entry !== "object") {
+      throw new Error(`${label} contains unsupported non-data values.`);
+    }
+    if (isProxy(entry))
+      throw new Error(`${label} proxy inputs are unsupported.`);
+    if (active.has(entry))
+      throw new Error(`${label} cyclic graphs are unsupported.`);
+    const existing = clones.get(entry);
+    if (existing) {
+      const expansionBytes2 = completedExpansionBytes.get(entry);
+      if (expansionBytes2 === undefined) {
+        throw new Error(`${label} cyclic graphs are unsupported.`);
+      }
+      return { value: existing, expansionBytes: expansionBytes2 };
+    }
+    if (++nodes > MAX_JSON_NODES) {
+      throw new Error(`${label} exceeds the ${MAX_JSON_NODES} node hard limit.`);
+    }
+    if (depth > MAX_JSON_DEPTH) {
+      throw new Error(`${label} exceeds the ${MAX_JSON_DEPTH} level depth hard limit.`);
+    }
+    const array = Array.isArray(entry);
+    const prototype = Object.getPrototypeOf(entry);
+    if (array && prototype !== Array.prototype || !array && prototype !== Object.prototype && prototype !== null) {
+      throw new Error(`${label} custom prototypes are unsupported.`);
+    }
+    if (array && entry.length > MAX_INGEST_BATCH_ITEMS) {
+      throw new Error(`${label} array exceeds the ${MAX_INGEST_BATCH_ITEMS} item hard limit.`);
+    }
+    let keys;
+    try {
+      keys = Reflect.ownKeys(entry);
+    } catch {
+      throw new Error(`${label} properties could not be enumerated safely.`);
+    }
+    let dataKeys;
+    if (array) {
+      const expectedKeys = new Set(["length"]);
+      for (let index = 0;index < entry.length; index += 1) {
+        expectedKeys.add(String(index));
+      }
+      for (let index = 0;index < entry.length; index += 1) {
+        if (!keys.includes(String(index))) {
+          throw new Error(`${label} sparse arrays are unsupported.`);
+        }
+      }
+      if (keys.length !== expectedKeys.size || keys.some((key) => typeof key !== "string" || !expectedKeys.has(key))) {
+        throw new Error(`${label} array own keys must be exactly canonical dense indexes and length.`);
+      }
+      let lengthDescriptor;
+      try {
+        lengthDescriptor = Object.getOwnPropertyDescriptor(entry, "length");
+      } catch {
+        throw new Error(`${label} property descriptors could not be inspected safely.`);
+      }
+      if (!lengthDescriptor || !("value" in lengthDescriptor) || lengthDescriptor.value !== entry.length || lengthDescriptor.writable !== true || lengthDescriptor.enumerable !== false || lengthDescriptor.configurable !== false) {
+        throw new Error(`${label} array length descriptor is noncanonical.`);
+      }
+      for (let index = 0;index < entry.length; index += 1) {
+        let descriptor;
+        try {
+          descriptor = Object.getOwnPropertyDescriptor(entry, String(index));
+        } catch {
+          throw new Error(`${label} property descriptors could not be inspected safely.`);
+        }
+        if (!descriptor)
+          throw new Error(`${label} sparse arrays are unsupported.`);
+        if (!("value" in descriptor))
+          throw new Error(`${label} accessor properties are unsupported.`);
+        if (descriptor.enumerable !== true || descriptor.writable !== true || descriptor.configurable !== true) {
+          throw new Error(`${label} array index descriptor is noncanonical.`);
+        }
+      }
+      dataKeys = Array.from({ length: entry.length }, (_, index) => String(index));
+    } else {
+      dataKeys = keys;
+    }
+    if (!array && dataKeys.length > MAX_JSON_OBJECT_PROPERTIES) {
+      throw new Error(`${label} object exceeds the ${MAX_JSON_OBJECT_PROPERTIES} property hard limit.`);
+    }
+    properties += dataKeys.length;
+    if (properties > MAX_JSON_PROPERTIES) {
+      throw new Error(`${label} exceeds the ${MAX_JSON_PROPERTIES} property hard limit.`);
+    }
+    const target = array ? new Array(entry.length) : Object.create(null);
+    clones.set(entry, target);
+    active.add(entry);
+    let expansionBytes = 2;
+    for (const key of dataKeys) {
+      if (typeof key !== "string")
+        throw new Error(`${label} symbol properties are unsupported.`);
+      if (DANGEROUS_DATA_KEYS.has(key)) {
+        throw new Error(`${label} contains a dangerous key.`);
+      }
+      if (Buffer.byteLength(key) > MAX_JSON_KEY_BYTES) {
+        throw new Error(`${label} exceeds the ${MAX_JSON_KEY_BYTES} key byte hard limit.`);
+      }
+      let descriptor;
+      try {
+        descriptor = Object.getOwnPropertyDescriptor(entry, key);
+      } catch {
+        throw new Error(`${label} property descriptors could not be inspected safely.`);
+      }
+      if (!descriptor || !("value" in descriptor)) {
+        throw new Error(`${label} accessor properties are unsupported.`);
+      }
+      if (!array && descriptor.enumerable !== true) {
+        throw new Error(`${label} non-enumerable object properties are unsupported.`);
+      }
+      const cloned = clone(descriptor.value, depth + 1);
+      const separatorBytes = expansionBytes === 2 ? 0 : 1;
+      expansionBytes = boundedAdd(expansionBytes, separatorBytes);
+      if (!array) {
+        expansionBytes = boundedAdd(expansionBytes, Buffer.byteLength(JSON.stringify(key)) + 1);
+      }
+      expansionBytes = boundedAdd(expansionBytes, cloned.expansionBytes);
+      Object.defineProperty(target, array ? Number(key) : key, {
+        value: cloned.value,
+        enumerable: true,
+        writable: true,
+        configurable: true
+      });
+    }
+    active.delete(entry);
+    completedExpansionBytes.set(entry, expansionBytes);
+    return { value: target, expansionBytes };
+  };
+  return clone(value, 0).value;
+}
+function hardLimit(requested, fallback, maximum, label) {
+  const value = requested ?? fallback;
+  if (!Number.isInteger(value) || value < 0 || value > maximum) {
+    throw new Error(`${label} must be an integer between 0 and ${maximum}.`);
+  }
+  return value;
+}
+function assertBoundedJsonText(text, maxArrayItems = MAX_INGEST_BATCH_ITEMS, maxTopLevelValues = maxArrayItems) {
+  const bytes = Buffer.byteLength(text);
+  if (bytes > MAX_INGEST_BODY_BYTES) {
+    throw new Error(`Input exceeds the ${MAX_INGEST_BODY_BYTES} byte hard limit.`);
+  }
+  let inString = false;
+  let escaped = false;
+  let depth = 0;
+  let structural = 0;
+  let properties = 0;
+  let nodes = 0;
+  let topLevelValues = 0;
+  const frames = [];
+  let topLevelValueActive = false;
+  const markArrayValue = () => {
+    const frame = frames.at(-1);
+    if (frame?.kind !== "array" || !frame.expectsValue)
+      return;
+    frame.expectsValue = false;
+    if (++frame.items > maxArrayItems) {
+      throw new Error(`Input array exceeds the ${maxArrayItems} item hard limit.`);
+    }
+  };
+  for (let index = 0;index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaped)
+        escaped = false;
+      else if (char === "\\")
+        escaped = true;
+      else if (char === '"')
+        inString = false;
+      continue;
+    }
+    if (/\s/.test(char))
+      continue;
+    if (depth === 0 && !topLevelValueActive) {
+      topLevelValueActive = true;
+      if (++topLevelValues > maxTopLevelValues) {
+        throw new Error(`Input exceeds the ${maxTopLevelValues} top-level item hard limit.`);
+      }
+    }
+    if (char === '"') {
+      markArrayValue();
+      inString = true;
+      continue;
+    }
+    if (char === "{" || char === "[") {
+      markArrayValue();
+      structural += 1;
+      depth += 1;
+      if (++nodes > MAX_JSON_NODES) {
+        throw new Error(`Input exceeds the ${MAX_JSON_NODES} node hard limit.`);
+      }
+      if (depth > MAX_JSON_DEPTH)
+        throw new Error(`Input exceeds the ${MAX_JSON_DEPTH} level JSON depth limit.`);
+      frames.push(char === "[" ? { kind: "array", items: 0, expectsValue: true } : { kind: "object", properties: 0 });
+    } else if (char === "}" || char === "]") {
+      frames.pop();
+      depth -= 1;
+      if (depth === 0)
+        topLevelValueActive = false;
+    } else if (char === "," || char === ":") {
+      structural += 1;
+      const frame = frames.at(-1);
+      if (char === "," && frame?.kind === "array")
+        frame.expectsValue = true;
+      if (char === ":" && frame?.kind === "object") {
+        if (++frame.properties > MAX_JSON_OBJECT_PROPERTIES) {
+          throw new Error(`Input object exceeds the ${MAX_JSON_OBJECT_PROPERTIES} property hard limit.`);
+        }
+        if (++properties > MAX_JSON_PROPERTIES) {
+          throw new Error(`Input exceeds the ${MAX_JSON_PROPERTIES} property hard limit.`);
+        }
+      }
+    } else {
+      markArrayValue();
+    }
+    if (structural > MAX_JSON_STRUCTURAL_TOKENS) {
+      throw new Error(`Input exceeds the ${MAX_JSON_STRUCTURAL_TOKENS} structural-token hard limit.`);
+    }
+  }
+}
+function parseBoundedJsonData(text, label = "Persisted JSON", maxArrayItems = MAX_INGEST_BATCH_ITEMS, maxTopLevelValues = 1) {
+  assertBoundedJsonText(text, maxArrayItems, maxTopLevelValues);
+  return cloneBoundedDataGraph(JSON.parse(text), {
+    label,
+    maxBytes: MAX_INGEST_BODY_BYTES
+  });
+}
+var MAX_INGEST_BODY_BYTES = 8388608, MAX_INGEST_BATCH_ITEMS = 4096, MAX_JSON_STRUCTURAL_TOKENS = 65536, MAX_JSON_PROPERTIES = 32768, MAX_JSON_DEPTH = 64, MAX_JSON_OBJECT_PROPERTIES = 256, MAX_JSON_NODES = 4096, MAX_JSON_KEY_BYTES = 16384, DANGEROUS_DATA_KEYS;
+var init_input_limits = __esm(() => {
+  DANGEROUS_DATA_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+});
+
+// src/runtime-role.ts
+import { existsSync as existsSync2, readFileSync } from "fs";
+import { isProxy as isProxy2 } from "util/types";
+function configGraphIssue(root) {
+  const seen = new WeakSet;
+  const pending = [root];
+  let nodes = 0;
+  let properties = 0;
+  let bytes = 0;
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (typeof value === "string") {
+      bytes += Buffer.byteLength(value);
+      if (bytes > MAX_CONFIG_BYTES)
+        return "config exceeds the aggregate byte limit";
+      continue;
+    }
+    if (!value || typeof value !== "object")
+      continue;
+    if (isProxy2(value))
+      return "config proxy inputs are unsupported";
+    if (seen.has(value))
+      continue;
+    let prototype;
+    try {
+      prototype = Object.getPrototypeOf(value);
+    } catch {
+      return "config prototype could not be inspected safely";
+    }
+    if (Array.isArray(value) && prototype !== Array.prototype || !Array.isArray(value) && prototype !== Object.prototype && prototype !== null) {
+      return "config custom prototypes are unsupported";
+    }
+    if (++nodes > MAX_CONFIG_NODES)
+      return "config exceeds the aggregate node limit";
+    seen.add(value);
+    if (Array.isArray(value) && value.length > MAX_CONFIG_ARRAY_ITEMS) {
+      return "config array exceeds the aggregate item limit";
+    }
+    let keys;
+    try {
+      keys = Reflect.ownKeys(value);
+    } catch {
+      return "config properties could not be enumerated safely";
+    }
+    properties += keys.length;
+    if (properties > MAX_CONFIG_PROPERTIES)
+      return "config exceeds the aggregate property limit";
+    for (const key of keys) {
+      let descriptor;
+      try {
+        descriptor = Object.getOwnPropertyDescriptor(value, key);
+      } catch {
+        return "config property descriptors could not be inspected safely";
+      }
+      if (!descriptor || !("value" in descriptor))
+        return "config accessor properties are unsupported";
+      pending.push(descriptor.value);
+    }
+  }
+  return null;
+}
+function configRecord(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
+}
+function safeRelativePath(value) {
+  if (typeof value !== "string" || !value.trim() || value.includes("\x00") || value.startsWith("/") || value.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(value)) {
+    return false;
+  }
+  const segments = value.replace(/\\/g, "/").split("/");
+  return segments.every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+}
+function optionalStringIssue(record, key, label, allowEmpty = false) {
+  const value = record[key];
+  if (value === undefined)
+    return null;
+  if (typeof value !== "string" || !allowEmpty && !value.trim()) {
+    return `${label} must be ${allowEmpty ? "a string" : "a non-empty string"} when present`;
+  }
+  return null;
+}
+function optionalBooleanIssue(record, key, label) {
+  const value = record[key];
+  return value === undefined || typeof value === "boolean" ? null : `${label} must be a boolean when present`;
+}
+function optionalPositiveIntegerIssue(record, key, label) {
+  const value = record[key];
+  return value === undefined || typeof value === "number" && Number.isInteger(value) && value > 0 ? null : `${label} must be a positive integer when present`;
+}
+function knowledgeConfigValidationIssue(value) {
+  let cloned;
+  try {
+    cloned = cloneBoundedDataGraph(value, {
+      label: "config",
+      maxBytes: MAX_CONFIG_BYTES
+    });
+  } catch (error) {
+    return error instanceof Error ? error.message : "config could not be cloned safely";
+  }
+  const graphIssue = configGraphIssue(cloned);
+  if (graphIssue)
+    return graphIssue;
+  const config = configRecord(cloned);
+  if (!config)
+    return "config root must be an object";
+  if (config.version !== 1)
+    return "config version must be 1";
+  if (config.mode !== "local" && config.mode !== "hosted") {
+    return "config mode must be exactly local or hosted";
+  }
+  const storage = configRecord(config.storage);
+  if (!storage)
+    return "config storage must be an object";
+  if (storage.type !== "local" && storage.type !== "s3") {
+    return "config storage.type must be local or s3";
+  }
+  if (config.mode === "local" && storage.type === "s3") {
+    return "config mode local must not select S3 storage";
+  }
+  if (!safeRelativePath(storage.artifacts_root)) {
+    return "config storage.artifacts_root must be a safe relative path";
+  }
+  if (storage.type === "s3") {
+    const s3 = configRecord(storage.s3);
+    if (!s3 || typeof s3.bucket !== "string" || !s3.bucket.trim()) {
+      return "config S3 storage requires a non-empty bucket";
+    }
+  }
+  if (storage.type === "local" && storage.s3 !== undefined) {
+    return "config local storage must not include storage.s3";
+  }
+  if (storage.s3 !== undefined) {
+    const s3 = configRecord(storage.s3);
+    if (!s3)
+      return "config storage.s3 must be an object when present";
+    for (const [key, label, allowEmpty] of [
+      ["bucket", "config storage.s3.bucket", false],
+      ["prefix", "config storage.s3.prefix", true],
+      ["region", "config storage.s3.region", false],
+      ["profile", "config storage.s3.profile", false],
+      ["kms_key_id", "config storage.s3.kms_key_id", false]
+    ]) {
+      const issue = optionalStringIssue(s3, key, label, allowEmpty);
+      if (issue)
+        return issue;
+    }
+    const attemptsIssue = optionalPositiveIntegerIssue(s3, "max_attempts", "config storage.s3.max_attempts");
+    if (attemptsIssue)
+      return attemptsIssue;
+    if (s3.server_side_encryption !== undefined && s3.server_side_encryption !== "AES256" && s3.server_side_encryption !== "aws:kms") {
+      return "config storage.s3.server_side_encryption must be AES256 or aws:kms when present";
+    }
+  }
+  const sources = configRecord(config.sources);
+  if (!sources || sources.preferred_ref !== "open-files") {
+    return "config sources.preferred_ref must be open-files";
+  }
+  if (!Array.isArray(sources.allowed_schemes) || sources.allowed_schemes.some((entry) => typeof entry !== "string" || !entry.trim())) {
+    return "config sources.allowed_schemes must be an array of non-empty strings";
+  }
+  for (const key of ["hosted", "embeddings", "providers", "safety"]) {
+    if (config[key] !== undefined && !configRecord(config[key])) {
+      return `config ${key} must be an object when present`;
+    }
+  }
+  const hosted = configRecord(config.hosted);
+  if (hosted?.api_url !== undefined && (typeof hosted.api_url !== "string" || !hosted.api_url.trim())) {
+    return "config hosted.api_url must be a non-empty string when present";
+  }
+  const embeddings = configRecord(config.embeddings);
+  if (embeddings) {
+    const modelIssue = optionalStringIssue(embeddings, "default_model", "config embeddings.default_model");
+    if (modelIssue)
+      return modelIssue;
+    for (const key of ["dimensions", "batch_size", "max_parallel_calls"]) {
+      const issue = optionalPositiveIntegerIssue(embeddings, key, `config embeddings.${key}`);
+      if (issue)
+        return issue;
+    }
+  }
+  const providers = configRecord(config.providers);
+  if (providers) {
+    const modelIssue = optionalStringIssue(providers, "default_model", "config providers.default_model");
+    if (modelIssue)
+      return modelIssue;
+    if (providers.aliases !== undefined) {
+      const aliases = configRecord(providers.aliases);
+      if (!aliases || Object.entries(aliases).some(([key, value2]) => !key.trim() || typeof value2 !== "string" || !value2.trim())) {
+        return "config providers.aliases must map non-empty names to non-empty strings";
+      }
+    }
+    for (const providerName of ["openai", "anthropic", "deepseek"]) {
+      if (providers[providerName] === undefined)
+        continue;
+      const provider = configRecord(providers[providerName]);
+      if (!provider)
+        return `config providers.${providerName} must be an object when present`;
+      for (const key of ["api_key_env", "base_url", "default_model"]) {
+        const issue = optionalStringIssue(provider, key, `config providers.${providerName}.${key}`);
+        if (issue)
+          return issue;
+      }
+    }
+  }
+  const safety = configRecord(config.safety);
+  if (safety) {
+    if (safety.network !== undefined) {
+      const network = configRecord(safety.network);
+      if (!network)
+        return "config safety.network must be an object when present";
+      for (const key of ["web_search_enabled", "s3_reads_enabled"]) {
+        const issue = optionalBooleanIssue(network, key, `config safety.network.${key}`);
+        if (issue)
+          return issue;
+      }
+      if (network.allowed_s3_buckets !== undefined && (!Array.isArray(network.allowed_s3_buckets) || network.allowed_s3_buckets.some((entry) => typeof entry !== "string" || !entry.trim()))) {
+        return "config safety.network.allowed_s3_buckets must be an array of non-empty strings";
+      }
+    }
+    if (safety.redaction !== undefined) {
+      const redaction = configRecord(safety.redaction);
+      if (!redaction)
+        return "config safety.redaction must be an object when present";
+      const issue = optionalBooleanIssue(redaction, "enabled", "config safety.redaction.enabled");
+      if (issue)
+        return issue;
+    }
+    if (safety.approvals !== undefined) {
+      const approvals = configRecord(safety.approvals);
+      if (!approvals)
+        return "config safety.approvals must be an object when present";
+      const issue = optionalBooleanIssue(approvals, "generated_writes_require_approval", "config safety.approvals.generated_writes_require_approval");
+      if (issue)
+        return issue;
+    }
+  }
+  return null;
+}
+function configContainmentError(detail, surface = "public-api") {
+  return new KnowledgeContainmentError("KNOWLEDGE_CONFIG_INVALID", 503, "invalid", surface, `${detail}; no Knowledge write or data-plane I/O was attempted`);
+}
+function assertValidKnowledgeConfig(value, surface = "public-api") {
+  const issue = knowledgeConfigValidationIssue(value);
+  if (issue)
+    throw configContainmentError(issue, surface);
+}
+function readRegularConfigTextNoFollow(path) {
+  try {
+    return readAnchoredRegularFileSnapshot(path, MAX_CONFIG_BYTES)?.content;
+  } catch (error) {
+    if (error instanceof AnchoredFilesystemError) {
+      throw configContainmentError(error.message);
+    }
+    throw configContainmentError("config could not be opened through its anchored directory");
+  }
+}
+function readValidatedKnowledgeConfig(configPath, fs = roleFs) {
+  let raw;
+  if (fs === roleFs) {
+    raw = readRegularConfigTextNoFollow(configPath);
+  } else {
+    if (!fs.existsSync(configPath))
+      return;
+    raw = fs.readFileSync(configPath, "utf8");
+  }
+  if (raw === undefined)
+    return;
+  if (Buffer.byteLength(raw) > MAX_CONFIG_BYTES) {
+    throw configContainmentError(`config exceeds the ${MAX_CONFIG_BYTES} byte hard limit`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw configContainmentError("config JSON is malformed");
+  }
+  assertValidKnowledgeConfig(parsed);
+  return parsed;
+}
+function normalizeMode(value) {
+  const normalized = value.trim().toLowerCase().replace(/-/g, "_");
+  if (normalized === "local" || normalized === "offline" || normalized === "standalone" || normalized === "desktop")
+    return "local";
+  if (normalized === "cloud" || normalized === "hosted" || normalized === "hosted_client" || normalized === "hosted_server" || normalized === "self_hosted" || normalized === "remote" || normalized === "hybrid")
+    return "hosted";
+  return null;
+}
+function normalizeBooleanMode(value) {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on")
+    return "hosted";
+  if (normalized === "false" || normalized === "0" || normalized === "no" || normalized === "off")
+    return "local";
+  return null;
+}
+function environmentLayers(supplied) {
+  const ambient = process.env;
+  if (!supplied || supplied === ambient)
+    return [{ name: "ambient", env: ambient }];
+  return [
+    { name: "ambient", env: ambient },
+    { name: "supplied", env: supplied }
+  ];
+}
+function safeEnvironmentValue(layer, key, addIssue) {
+  try {
+    let owner = layer.env;
+    let raw;
+    while (owner) {
+      if (isProxy2(owner)) {
+        addIssue(`unreadable-env:${layer.name}:${key}`);
+        return;
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(owner, key);
+      if (descriptor) {
+        if (!("value" in descriptor)) {
+          addIssue(`unreadable-env:${layer.name}:${key}`);
+          return;
+        }
+        raw = descriptor.value;
+        break;
+      }
+      owner = Object.getPrototypeOf(owner);
+    }
+    if (raw === undefined || raw === null || raw === "")
+      return;
+    if (typeof raw !== "string") {
+      addIssue(`non-string-env:${layer.name}:${key}`);
+      return;
+    }
+    return raw.trim() || undefined;
+  } catch {
+    addIssue(`unreadable-env:${layer.name}:${key}`);
+    return;
+  }
+}
+function environmentSignals(layers, keys, addIssue) {
+  const entries = [];
+  for (const layer of layers) {
+    for (const key of keys) {
+      const value = safeEnvironmentValue(layer, key, addIssue);
+      if (value)
+        entries.push({ source: `${layer.name}:${key}`, value });
+    }
+  }
+  return entries;
+}
+function distinctSignalValues(entries) {
+  return new Set(entries.map(({ value }) => value)).size;
+}
+function resolveKnowledgeRuntimeRole(intent = {}) {
+  const layers = environmentLayers(intent.env);
+  const surface = intent.surface ?? "public-api";
+  const signals = [];
+  const issues = [];
+  const modeSignals = [];
+  const addIssue = (issue) => {
+    if (!issues.includes(issue))
+      issues.push(issue);
+  };
+  const collectMode = (source, value, normalize2 = normalizeMode) => {
+    const trimmed = value?.trim();
+    if (!trimmed)
+      return;
+    signals.push(source);
+    const mode = normalize2(trimmed);
+    if (!mode)
+      addIssue(`unknown-mode:${source}`);
+    else
+      modeSignals.push({ source, mode });
+  };
+  collectMode("explicit-mode", intent.explicitMode);
+  collectMode("config-mode", intent.configMode);
+  for (const layer of layers) {
+    for (const key of MODE_KEYS) {
+      collectMode(`${layer.name}:${key}`, safeEnvironmentValue(layer, key, addIssue));
+    }
+    for (const key of ROLE_KEYS) {
+      collectMode(`${layer.name}:${key}`, safeEnvironmentValue(layer, key, addIssue));
+    }
+    for (const key of HOSTED_BOOLEAN_KEYS) {
+      collectMode(`${layer.name}:${key}`, safeEnvironmentValue(layer, key, addIssue), normalizeBooleanMode);
+    }
+  }
+  const apiUrls = environmentSignals(layers, API_URL_KEYS, addIssue);
+  const apiKeys = environmentSignals(layers, API_KEY_KEYS, addIssue);
+  const databaseUrls = environmentSignals(layers, DATABASE_URL_KEYS, addIssue);
+  signals.push(...apiUrls.map(({ source }) => source), ...apiKeys.map(({ source }) => source), ...databaseUrls.map(({ source }) => source));
+  if (distinctSignalValues(apiUrls) > 1)
+    addIssue("conflicting-api-url-aliases");
+  if (distinctSignalValues(apiKeys) > 1)
+    addIssue("conflicting-api-key-aliases");
+  if (distinctSignalValues(databaseUrls) > 1)
+    addIssue("conflicting-database-url-aliases");
+  for (const layer of layers) {
+    const layerUrls = environmentSignals([layer], API_URL_KEYS, addIssue);
+    const layerKeys = environmentSignals([layer], API_KEY_KEYS, addIssue);
+    if (layerUrls.length > 0 !== layerKeys.length > 0)
+      addIssue(`partial-http-intent:${layer.name}`);
+  }
+  const distinctModes = new Set(modeSignals.map(({ mode }) => mode));
+  if (distinctModes.size > 1)
+    addIssue("conflicting-modes");
+  const explicitLocal = modeSignals.some(({ mode }) => mode === "local");
+  const explicitHosted = modeSignals.some(({ mode }) => mode === "hosted");
+  const activeHostedSignal = apiUrls.length > 0 || apiKeys.length > 0 || databaseUrls.length > 0 || Boolean(intent.hostedRequested);
+  const hasApiUrl = apiUrls.length > 0;
+  const hasApiKey = apiKeys.length > 0;
+  if (hasApiUrl !== hasApiKey)
+    addIssue("partial-http-intent");
+  if (!explicitHosted && databaseUrls.length > 0)
+    addIssue("database-url-without-hosted-mode");
+  if (explicitLocal && activeHostedSignal)
+    addIssue("local-hosted-conflict");
+  const surfaceIsServer = surface === "server";
+  const surfaceIsOperator = surface === "operator-migration";
+  if (surfaceIsServer && explicitLocal)
+    addIssue("server-local-conflict");
+  if (surfaceIsOperator)
+    addIssue("operator-capability-required");
+  const hosted = explicitHosted || Boolean(intent.hostedRequested) || hasApiUrl && hasApiKey || surfaceIsServer;
+  if (hosted && intent.localStoreOverride)
+    addIssue("hosted-local-store-conflict");
+  if (issues.length > 0) {
+    return { role: "invalid", surface, source: "invalid", signals, issues };
+  }
+  if (hosted) {
+    return {
+      role: surfaceIsServer ? "hosted-server" : "hosted-client",
+      surface,
+      source: explicitHosted ? "mode" : intent.hostedRequested ? "operation" : surfaceIsServer ? "surface" : "http-config",
+      signals,
+      issues
+    };
+  }
+  return {
+    role: "local",
+    surface,
+    source: explicitLocal ? "mode" : "legacy-default",
+    signals,
+    issues
+  };
+}
+function assertKnowledgeLocalRuntimeWithConfig(intent, readConfigMode) {
+  return assertKnowledgeLocalRuntime(resolveKnowledgeRuntimeRoleWithConfig(intent, readConfigMode));
+}
+function resolveKnowledgeRuntimeRoleWithConfig(intent, readConfigMode) {
+  const preliminary = resolveKnowledgeRuntimeRole(intent);
+  if (preliminary.role !== "local")
+    return preliminary;
+  return resolveKnowledgeRuntimeRole({ ...intent, configMode: readConfigMode() });
+}
+function assertKnowledgeLocalRuntimeForConfigPath(intent, configPath, fs = roleFs, required = false) {
+  return assertKnowledgeLocalRuntimeWithConfig(intent, () => readKnowledgeConfiguredMode(configPath, fs, required));
+}
+function containmentErrorFor(resolution) {
+  if (resolution.role === "invalid") {
+    if (resolution.issues.includes("unknown-mode:config-mode")) {
+      return configContainmentError("persisted or supplied config is structurally invalid", resolution.surface);
+    }
+    return new KnowledgeContainmentError("KNOWLEDGE_RUNTIME_INTENT_INVALID", 503, resolution.role, resolution.surface, "runtime intent is incomplete, unknown, or conflicting; no Knowledge I/O was attempted");
+  }
+  if (resolution.role === "operator-migration") {
+    return new KnowledgeContainmentError("KNOWLEDGE_OPERATOR_REQUIRED", 503, resolution.role, resolution.surface, "operator-only operation is unavailable through this public boundary");
+  }
+  return new KnowledgeContainmentError("KNOWLEDGE_HOSTED_CONTAINED", 503, resolution.role, resolution.surface, "hosted Knowledge access is disabled until trusted project authority is available");
+}
+function assertKnowledgeLocalRuntime(intentOrResolution = {}) {
+  const resolution = "role" in intentOrResolution ? intentOrResolution : resolveKnowledgeRuntimeRole(intentOrResolution);
+  if (resolution.role !== "local")
+    throw containmentErrorFor(resolution);
+  return resolution;
+}
+function readKnowledgeConfiguredMode(configPath, fs = roleFs, required = false) {
+  try {
+    const parsed = readValidatedKnowledgeConfig(configPath, fs);
+    if (!parsed)
+      return required ? INVALID_CONFIG_MODE : undefined;
+    return configuredModeFromValidatedConfig(parsed);
+  } catch {
+    return INVALID_CONFIG_MODE;
+  }
+}
+function configuredModeFromValidatedConfig(parsed) {
+  const storage = parsed.storage;
+  return parsed.mode === "hosted" || storage.type === "s3" ? "hosted" : "local";
+}
+function authorityContainmentError(authority, surface = "server") {
+  if (!authority || authority.trust === "missing" || authority.trust === "untrusted") {
+    return new KnowledgeContainmentError("KNOWLEDGE_AUTHORITY_UNAVAILABLE", 503, "hosted-server", surface, "trusted tenant and project authority is unavailable");
+  }
+  if (authority.projectGrants.length === 0) {
+    return new KnowledgeContainmentError("KNOWLEDGE_PROJECT_FORBIDDEN", 403, "hosted-server", surface, "the trusted principal has no Knowledge project grant");
+  }
+  return new KnowledgeContainmentError("KNOWLEDGE_POSITIVE_AUTHORITY_DISABLED", 503, "hosted-server", surface, "positive hosted access is intentionally disabled during Stage A");
+}
+var roleFs, INVALID_CONFIG_MODE = "__invalid_config__", MAX_CONFIG_ARRAY_ITEMS = 4096, MAX_CONFIG_PROPERTIES = 4096, MAX_CONFIG_NODES = 2048, MAX_CONFIG_BYTES = 1048576, MODE_KEYS, ROLE_KEYS, HOSTED_BOOLEAN_KEYS, API_URL_KEYS, API_KEY_KEYS, DATABASE_URL_KEYS, MAX_KNOWLEDGE_DIAGNOSTIC_BYTES = 384, CONTAINMENT_MESSAGES, KnowledgeContainmentError;
+var init_runtime_role = __esm(() => {
+  init_anchored_fs();
+  init_input_limits();
+  roleFs = {
+    existsSync: existsSync2,
+    readFileSync
+  };
+  MODE_KEYS = [
+    "HASNA_KNOWLEDGE_STORAGE_MODE",
+    "KNOWLEDGE_STORAGE_MODE",
+    "HASNA_KNOWLEDGE_MODE",
+    "KNOWLEDGE_MODE"
+  ];
+  ROLE_KEYS = [
+    "CODEWITH_RUNTIME_ROLE",
+    "CODEWITH_EXECUTION_ROLE",
+    "CODEWITH_AGENT_ROLE",
+    "CODEWITH_ROLE",
+    "KNOWLEDGE_RUNTIME_ROLE",
+    "KNOWLEDGE_EXECUTION_ROLE",
+    "KNOWLEDGE_AGENT_ROLE",
+    "KNOWLEDGE_ROLE"
+  ];
+  HOSTED_BOOLEAN_KEYS = [
+    "CODEWITH_HOSTED",
+    "KNOWLEDGE_HOSTED"
+  ];
+  API_URL_KEYS = [
+    "HASNA_KNOWLEDGE_API_URL",
+    "HASNA_KNOWLEDGE_API_BASE_URL",
+    "KNOWLEDGE_API_URL",
+    "KNOWLEDGE_API_BASE_URL",
+    "OPEN_KNOWLEDGE_API_URL"
+  ];
+  API_KEY_KEYS = [
+    "HASNA_KNOWLEDGE_API_KEY",
+    "KNOWLEDGE_API_KEY",
+    "OPEN_KNOWLEDGE_API_KEY"
+  ];
+  DATABASE_URL_KEYS = [
+    "HASNA_KNOWLEDGE_DATABASE_URL",
+    "KNOWLEDGE_DATABASE_URL",
+    "HASNA_KNOWLEDGE_DATABASE_URL_OWNER"
+  ];
+  CONTAINMENT_MESSAGES = {
+    KNOWLEDGE_RUNTIME_INTENT_INVALID: "runtime intent was rejected before Knowledge I/O",
+    KNOWLEDGE_CONFIG_INVALID: "configuration was rejected before Knowledge I/O",
+    KNOWLEDGE_HOSTED_CONTAINED: "hosted capability is unavailable during Stage A",
+    KNOWLEDGE_AUTHORITY_UNAVAILABLE: "trusted authority is unavailable during Stage A",
+    KNOWLEDGE_PROJECT_FORBIDDEN: "project authority denied Knowledge access",
+    KNOWLEDGE_POSITIVE_AUTHORITY_DISABLED: "positive hosted authority is disabled during Stage A",
+    KNOWLEDGE_OPERATOR_REQUIRED: "operator capability is required for this operation"
+  };
+  KnowledgeContainmentError = class KnowledgeContainmentError extends Error {
+    code;
+    status;
+    role;
+    surface;
+    name = "KnowledgeContainmentError";
+    constructor(code, status, role, surface, _detail) {
+      const message = `${code}: ${CONTAINMENT_MESSAGES[code]}`;
+      super(Buffer.byteLength(message) <= MAX_KNOWLEDGE_DIAGNOSTIC_BYTES ? message : `${code}: contained`);
+      this.code = code;
+      this.status = status;
+      this.role = role;
+      this.surface = surface;
+    }
+    toJSON() {
+      const payload = {
+        ok: false,
+        code: this.code,
+        status: this.status,
+        role: this.role,
+        surface: this.surface,
+        message: this.message
+      };
+      if (Buffer.byteLength(JSON.stringify(payload)) > MAX_KNOWLEDGE_DIAGNOSTIC_BYTES) {
+        return { ...payload, message: `${this.code}: contained` };
+      }
+      return payload;
+    }
+  };
+});
+
+// src/workspace.ts
+import { homedir } from "os";
+import { lstatSync as lstatSync2, realpathSync } from "fs";
+import { basename as basename2, dirname as dirname2, isAbsolute as isAbsolute2, join, normalize as normalize2, resolve as resolve2 } from "path";
+function canonicalKnowledgeScope(scope, defaultScope = "global") {
+  const candidate = scope === undefined ? defaultScope : scope;
+  if (typeof candidate !== "string" || !CANONICAL_KNOWLEDGE_SCOPES.has(candidate)) {
+    throw new Error("Invalid knowledge scope. Use exactly global, local, or project.");
+  }
+  return candidate;
+}
+function errno2(error) {
+  return error?.code;
+}
+function assertCanonicalAuthorityPath(path, label) {
+  if (typeof path !== "string" || path.includes("\x00") || !isAbsolute2(path) || normalize2(path) !== path || resolve2(path) !== path) {
+    throw new Error(`${label} must be an absolute normalized canonical path.`);
+  }
+  if (path.normalize("NFC") !== path || path.normalize("NFKC") !== path) {
+    throw new Error(`${label} must use an exact canonical Unicode path.`);
+  }
+  let existing = path;
+  let stat;
+  for (;; ) {
+    try {
+      stat = lstatSync2(existing);
+      break;
+    } catch (error) {
+      if (errno2(error) !== "ENOENT")
+        throw error;
+      const parent = dirname2(existing);
+      if (parent === existing)
+        throw new Error(`${label} has no canonical filesystem ancestor.`);
+      existing = parent;
+    }
+  }
+  if (stat.isSymbolicLink() || realpathSync.native(existing) !== existing) {
+    throw new Error(`${label} must not use a symlink, case, or path alias.`);
+  }
+  return path;
+}
+function nearestCanonicalDirectoryIdentity(path, label) {
+  assertCanonicalAuthorityPath(path, label);
+  let existing = path;
+  for (;; ) {
+    try {
+      const stat = lstatSync2(existing);
+      if (!stat.isDirectory() || stat.isSymbolicLink() || realpathSync.native(existing) !== existing) {
+        throw new Error(`${label} must have one exact canonical directory authority parent.`);
+      }
+      return {
+        path: existing,
+        identity: Object.freeze({ dev: stat.dev, ino: stat.ino })
+      };
+    } catch (error) {
+      if (errno2(error) !== "ENOENT")
+        throw error;
+      const parent = dirname2(existing);
+      if (parent === existing)
+        throw new Error(`${label} has no canonical directory authority parent.`);
+      existing = parent;
+    }
+  }
+}
+function canonicalExistingDirectory(path, label) {
+  const canonical = assertCanonicalAuthorityPath(path, label);
+  const stat = lstatSync2(canonical);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || realpathSync.native(canonical) !== canonical) {
+    throw new Error(`${label} must identify one exact canonical directory.`);
+  }
+  return canonical;
+}
+function existingDirectoryIdentity(path, label) {
+  assertCanonicalAuthorityPath(path, label);
+  let stat;
+  try {
+    stat = lstatSync2(path);
+  } catch (error) {
+    if (errno2(error) === "ENOENT")
+      return;
+    throw error;
+  }
+  if (!stat.isDirectory() || stat.isSymbolicLink() || realpathSync.native(path) !== path) {
+    throw new Error(`${label} must identify one exact canonical directory.`);
+  }
+  return Object.freeze({ dev: stat.dev, ino: stat.ino });
+}
+function sameDirectoryIdentity(left, right) {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+function workspaceShape(canonicalHome) {
+  return {
+    home: canonicalHome,
+    configPath: join(canonicalHome, "config.json"),
+    jsonStorePath: join(canonicalHome, "db.json"),
+    knowledgeDbPath: join(canonicalHome, "knowledge.db"),
+    artifactsDir: join(canonicalHome, "artifacts"),
+    cacheDir: join(canonicalHome, "cache"),
+    exportsDir: join(canonicalHome, "exports"),
+    indexesDir: join(canonicalHome, "indexes"),
+    logsDir: join(canonicalHome, "logs"),
+    runsDir: join(canonicalHome, "runs"),
+    schemasDir: join(canonicalHome, "schemas"),
+    wikiDir: join(canonicalHome, "wiki")
+  };
+}
+function trustedWorkspace(home, scope, projectRoot) {
+  const canonicalHome = assertCanonicalAuthorityPath(home, "Knowledge workspace home");
+  const workspace = Object.freeze(workspaceShape(canonicalHome));
+  const identity2 = Object.freeze({
+    scope,
+    projectRoot,
+    home: canonicalHome,
+    key: `${scope ?? "custom"}\x00${projectRoot ?? ""}\x00${canonicalHome}`
+  });
+  const projectRootIdentity = projectRoot ? existingDirectoryIdentity(projectRoot, "Knowledge project root") : undefined;
+  if (projectRoot && !projectRootIdentity) {
+    throw new Error("Knowledge project root must remain an existing canonical directory.");
+  }
+  const authorityParent = nearestCanonicalDirectoryIdentity(canonicalHome, "Knowledge workspace home");
+  trustedWorkspaceIdentities.set(workspace, {
+    identity: identity2,
+    projectRootIdentity,
+    authorityParentPath: authorityParent.path,
+    authorityParentIdentity: authorityParent.identity,
+    homeIdentity: existingDirectoryIdentity(canonicalHome, "Knowledge workspace home"),
+    revoked: false
+  });
+  return workspace;
+}
+function trustedKnowledgeWorkspaceIdentity(workspace) {
+  if (!workspace || typeof workspace !== "object") {
+    throw new Error("A trusted workspace identity is required.");
+  }
+  const state = trustedWorkspaceIdentities.get(workspace);
+  if (!state || !Object.isFrozen(workspace)) {
+    throw new Error("A trusted workspace identity from the canonical constructor is required.");
+  }
+  if (state.revoked) {
+    throw new Error("Knowledge workspace identity was permanently invalidated.");
+  }
+  const { identity: identity2 } = state;
+  try {
+    const expected = workspaceShape(identity2.home);
+    for (const field of WORKSPACE_FIELDS) {
+      const descriptor = Object.getOwnPropertyDescriptor(workspace, field);
+      if (!descriptor || !("value" in descriptor) || descriptor.value !== expected[field] || descriptor.writable !== false || descriptor.configurable !== false) {
+        throw new Error("Trusted workspace identity fields changed after construction.");
+      }
+    }
+    const currentAuthorityParent = existingDirectoryIdentity(state.authorityParentPath, "Knowledge workspace authority parent");
+    if (!currentAuthorityParent || !sameDirectoryIdentity(state.authorityParentIdentity, currentAuthorityParent)) {
+      throw new Error("Knowledge workspace canonical parent identity changed after construction.");
+    }
+    const currentHomeIdentity = existingDirectoryIdentity(identity2.home, "Knowledge workspace home");
+    if (state.homeIdentity) {
+      if (!currentHomeIdentity || !sameDirectoryIdentity(state.homeIdentity, currentHomeIdentity)) {
+        throw new Error("Knowledge workspace directory identity changed after construction.");
+      }
+    } else if (currentHomeIdentity) {
+      state.homeIdentity = currentHomeIdentity;
+    }
+    if (identity2.projectRoot) {
+      const currentProjectRootIdentity = existingDirectoryIdentity(identity2.projectRoot, "Knowledge project root");
+      if (!state.projectRootIdentity || !currentProjectRootIdentity || !sameDirectoryIdentity(state.projectRootIdentity, currentProjectRootIdentity)) {
+        throw new Error("Knowledge project root identity changed after construction.");
+      }
+    }
+    return identity2;
+  } catch (error) {
+    state.revoked = true;
+    throw error;
+  }
+}
+function assertKnowledgeWorkspaceScope(workspace, scope) {
+  const identity2 = trustedKnowledgeWorkspaceIdentity(workspace);
+  if (identity2.scope !== scope) {
+    throw new Error("Knowledge workspace identity does not match the requested scope.");
+  }
+  return identity2;
+}
+function canonicalExampleKnowledgeStorage() {
+  return {
+    type: "s3",
+    artifacts_root: "artifacts",
+    s3: {
+      bucket: EXAMPLE_KNOWLEDGE_CANONICAL.s3.bucket,
+      prefix: EXAMPLE_KNOWLEDGE_CANONICAL.s3.prefix,
+      region: EXAMPLE_KNOWLEDGE_CANONICAL.s3.region,
+      profile: EXAMPLE_KNOWLEDGE_CANONICAL.s3.profile,
+      server_side_encryption: EXAMPLE_KNOWLEDGE_CANONICAL.s3.server_side_encryption
+    }
+  };
+}
+function legacyGlobalStorePath() {
+  return join(homedir(), ".open-knowledge", "db.json");
+}
+function globalKnowledgeHome() {
+  return join(homedir(), ".hasna", "knowledge");
+}
+function projectKnowledgeHome(cwd = process.cwd()) {
+  return resolve2(cwd, HASNA_KNOWLEDGE_APP_PATH);
+}
+function legacyGlobalKnowledgeHome() {
+  return join(homedir(), LEGACY_HASNA_KNOWLEDGE_APP_PATH);
+}
+function legacyProjectKnowledgeHome(cwd = process.cwd()) {
+  return resolve2(cwd, LEGACY_HASNA_KNOWLEDGE_APP_PATH);
+}
+function resolveLegacyScopedWorkspace(scope, cwd = process.cwd()) {
+  const canonicalScope = canonicalKnowledgeScope(scope);
+  if (canonicalScope === "project" || canonicalScope === "local") {
+    return workspaceForHome(legacyProjectKnowledgeHome(cwd));
+  }
+  return workspaceForHome(legacyGlobalKnowledgeHome());
+}
+function workspaceForHome(home) {
+  return trustedWorkspace(home, null, null);
+}
+function defaultKnowledgeConfig() {
+  return {
+    version: 1,
+    mode: "local",
+    hosted: {
+      api_url: "https://knowledge.hasna.xyz"
+    },
+    storage: {
+      type: "local",
+      artifacts_root: "artifacts"
+    },
+    sources: {
+      preferred_ref: "open-files",
+      allowed_schemes: ["open-files", "s3", "file", "https", "http"]
+    },
+    providers: {
+      default_model: "openai:gpt-5.2",
+      aliases: {
+        fast: "openai:gpt-5-mini",
+        reasoning: "anthropic:claude-opus-4-6",
+        sonnet: "anthropic:claude-sonnet-4-6",
+        deepseek: "deepseek:deepseek-chat",
+        "deepseek-reasoning": "deepseek:deepseek-reasoner"
+      },
+      openai: {
+        api_key_env: "OPENAI_API_KEY",
+        default_model: "gpt-5.2"
+      },
+      anthropic: {
+        api_key_env: "ANTHROPIC_API_KEY",
+        default_model: "claude-sonnet-4-6"
+      },
+      deepseek: {
+        api_key_env: "DEEPSEEK_API_KEY",
+        default_model: "deepseek-chat"
+      }
+    },
+    embeddings: {
+      default_model: "openai:text-embedding-3-small",
+      dimensions: 1536,
+      batch_size: 64,
+      max_parallel_calls: 4
+    },
+    safety: {
+      network: {
+        web_search_enabled: false,
+        s3_reads_enabled: false,
+        allowed_s3_buckets: []
+      },
+      redaction: {
+        enabled: true
+      },
+      approvals: {
+        generated_writes_require_approval: true
+      }
+    }
+  };
+}
+function ensureKnowledgeWorkspace(home) {
+  const workspace = workspaceForHome(home);
+  return ensureTrustedKnowledgeWorkspace(workspace);
+}
+function ensureTrustedKnowledgeWorkspace(workspace) {
+  trustedKnowledgeWorkspaceIdentity(workspace);
+  const persisted = readValidatedKnowledgeConfig(workspace.configPath);
+  const config = persisted ? persisted : defaultKnowledgeConfig();
+  assertKnowledgeLocalRuntime({
+    surface: "public-api",
+    env: {},
+    configMode: config.mode
+  });
+  if (!persisted)
+    writeKnowledgeConfig(workspace.configPath, config);
+  for (const dir of [
+    workspace.artifactsDir,
+    workspace.cacheDir,
+    workspace.exportsDir,
+    workspace.indexesDir,
+    workspace.logsDir,
+    workspace.runsDir,
+    workspace.schemasDir,
+    workspace.wikiDir
+  ]) {
+    try {
+      ensureAnchoredDirectory(dir);
+    } catch (error) {
+      if (error instanceof AnchoredFilesystemError) {
+        throw configContainmentError(`workspace directory containment failed: ${error.message}`);
+      }
+      throw error;
+    }
+  }
+  trustedKnowledgeWorkspaceIdentity(workspace);
+  return workspace;
+}
+function resolveScopedWorkspace(scope, cwd = process.cwd()) {
+  const canonicalScope = canonicalKnowledgeScope(scope);
+  if (canonicalScope === "project" || canonicalScope === "local") {
+    const projectRoot = canonicalExistingDirectory(cwd, "Knowledge project root");
+    return trustedWorkspace(projectKnowledgeHome(projectRoot), canonicalScope, projectRoot);
+  }
+  return trustedWorkspace(join(homedir(), ".hasna", "knowledge"), canonicalScope, null);
+}
+function ensureParentDir(path) {
+  try {
+    ensureAnchoredDirectory(dirname2(path));
+  } catch (error) {
+    if (error instanceof AnchoredFilesystemError) {
+      throw configContainmentError(`parent directory containment failed: ${error.message}`);
+    }
+    throw error;
+  }
+}
+function trustedConfigPath(path) {
+  if (!isAbsolute2(path) || normalize2(path) !== path || resolve2(path) !== path) {
+    throw configContainmentError("config path must be absolute and traversal-free");
+  }
+  if (basename2(path) !== "config.json") {
+    throw configContainmentError("config filename must be config.json");
+  }
+  const home = dirname2(path);
+  if (basename2(home) !== "knowledge") {
+    throw configContainmentError("config must be inside a Knowledge workspace");
+  }
+  const parent = dirname2(home);
+  const hasnaDir = basename2(parent) === ".hasna" ? parent : basename2(parent) === "apps" && basename2(dirname2(parent)) === ".hasna" ? dirname2(parent) : "";
+  if (!hasnaDir)
+    throw configContainmentError("config must be inside a trusted .hasna workspace");
+  const root = dirname2(hasnaDir);
+  return { path, home, hasnaDir, root };
+}
+function ensureTrustedConfigHome(info) {
+  try {
+    ensureAnchoredDirectory(info.home);
+  } catch (error) {
+    if (error instanceof AnchoredFilesystemError) {
+      throw configContainmentError(`config parent containment failed: ${error.message}`);
+    }
+    throw error;
+  }
+}
+function readKnowledgeConfig(path) {
+  trustedConfigPath(path);
+  const config = readValidatedKnowledgeConfig(path);
+  if (!config)
+    throw configContainmentError("config does not exist");
+  return config;
+}
+function writeKnowledgeConfig(path, config) {
+  assertValidKnowledgeConfig(config);
+  assertKnowledgeLocalRuntime({
+    surface: "public-api",
+    env: {},
+    configMode: config.mode,
+    hostedRequested: config.storage.type === "s3"
+  });
+  const info = trustedConfigPath(path);
+  const current = readValidatedKnowledgeConfig(path);
+  if (current) {
+    assertKnowledgeLocalRuntime({
+      surface: "public-api",
+      env: {},
+      configMode: current.mode,
+      hostedRequested: current.storage.type === "s3"
+    });
+  }
+  ensureTrustedConfigHome(info);
+  try {
+    writeAnchoredRegularFile(path, `${JSON.stringify(config, null, 2)}
+`);
+  } catch (error) {
+    if (error instanceof AnchoredFilesystemError) {
+      throw configContainmentError(`atomic anchored config write failed: ${error.message}`);
+    }
+    throw error;
+  }
+}
+var HASNA_KNOWLEDGE_APP_PATH, LEGACY_HASNA_KNOWLEDGE_APP_PATH, CANONICAL_KNOWLEDGE_SCOPES, WORKSPACE_FIELDS, trustedWorkspaceIdentities, EXAMPLE_KNOWLEDGE_CANONICAL;
+var init_workspace = __esm(() => {
+  init_anchored_fs();
+  init_runtime_role();
+  HASNA_KNOWLEDGE_APP_PATH = join(".hasna", "knowledge");
+  LEGACY_HASNA_KNOWLEDGE_APP_PATH = join(".hasna", "apps", "knowledge");
+  CANONICAL_KNOWLEDGE_SCOPES = new Set(["global", "local", "project"]);
+  WORKSPACE_FIELDS = [
+    "home",
+    "configPath",
+    "jsonStorePath",
+    "knowledgeDbPath",
+    "artifactsDir",
+    "cacheDir",
+    "exportsDir",
+    "indexesDir",
+    "logsDir",
+    "runsDir",
+    "schemasDir",
+    "wikiDir"
+  ];
+  trustedWorkspaceIdentities = new WeakMap;
+  EXAMPLE_KNOWLEDGE_CANONICAL = {
+    division: "xyz",
+    app_type: "opensource",
+    app: "knowledge",
+    env: "prod",
+    local_path: HASNA_KNOWLEDGE_APP_PATH,
+    s3: {
+      bucket: "example-knowledge-prod",
+      region: "us-east-1",
+      profile: "example-infra",
+      prefix: ".hasna/knowledge",
+      server_side_encryption: "AES256"
+    },
+    secrets: {
+      env: "example/knowledge/prod/env",
+      aws: "example/knowledge/prod/aws",
+      s3: "example/knowledge/prod/s3",
+      rds: null,
+      future_rds: "example/knowledge/prod/rds"
+    },
+    source_owner: "open-files",
+    evidence_doc: "docs/canonical-secrets-bootstrap-2026-06-08.md"
+  };
+});
+
+// src/knowledge-db.ts
+import { Database as BunDatabase } from "bun:sqlite";
+function fireKnowledgeDbTestHook(event, path) {
+  knowledgeDbTestHook?.(event, path);
+}
+function anchoredDatabase(db, anchor) {
+  let closed = false;
+  const proxy = new Proxy(db, {
+    get(target, property) {
+      if (property === "close") {
+        return (throwOnError) => {
+          if (closed)
+            return;
+          closed = true;
+          try {
+            return Reflect.apply(Reflect.get(target, property, target), target, [throwOnError]);
+          } finally {
+            anchor.close();
+          }
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+    set: () => false,
+    defineProperty: () => false,
+    deleteProperty: () => false,
+    setPrototypeOf: () => false
+  });
+  databaseAnchors.set(proxy, anchor);
+  return proxy;
+}
+function databaseAnchor(db) {
+  const anchor = databaseAnchors.get(db);
+  if (!anchor)
+    throw new Error("Knowledge database is not bound to an anchored file identity.");
+  return anchor;
+}
+function verifyKnowledgeDbIdentity(db, expected) {
+  const anchor = databaseAnchor(db);
+  return expected ? anchor.verifyUnchanged(expected) : anchor.verifyIdentity();
+}
+function openKnowledgeDbAnchored(path, options = {}) {
+  if (options.ensureParent !== false)
+    ensureParentDir(path);
+  const anchor = openAnchoredMutableRegularFile(path, { create: true, mode: 384 });
+  const beforeConstructor = anchor.initial;
+  let raw;
+  let wrapped;
+  try {
+    fireKnowledgeDbTestHook("database-before-constructor", path);
+    anchor.verifyUnchanged(beforeConstructor);
+    raw = new BunDatabase(anchor.descriptorPath);
+    const db = anchoredDatabase(raw, anchor);
+    wrapped = db;
+    raw = undefined;
+    verifyKnowledgeDbIdentity(db);
+    db.exec("PRAGMA foreign_keys = ON;");
+    db.exec("PRAGMA busy_timeout = 5000;");
+    verifyKnowledgeDbIdentity(db);
+    wrapped = undefined;
+    return db;
+  } catch (error) {
+    if (wrapped)
+      wrapped.close();
+    else
+      try {
+        raw?.close();
+      } finally {
+        anchor.close();
+      }
+    throw error;
+  }
+}
+function openKnowledgeDb(path) {
+  return openKnowledgeDbAnchored(path);
+}
+function migrateOpenKnowledgeDb(db) {
+  db.exec(MIGRATION_1);
+  if (getSchemaVersion(db) < 2)
+    db.exec(MIGRATION_2);
+  if (getSchemaVersion(db) < 3)
+    db.exec(MIGRATION_3);
+  if (getSchemaVersion(db) < 4)
+    db.exec(MIGRATION_4);
+  if (getSchemaVersion(db) < 5)
+    db.exec(MIGRATION_5);
+  if (getSchemaVersion(db) < 6)
+    db.exec(MIGRATION_6);
+  if (needsMigration7(db))
+    applyMigration7(db);
+  if (needsMigration8(db))
+    applyMigration8(db);
+  return getSchemaVersion(db);
+}
+function openMigratedKnowledgeDb(path, options = {}) {
+  const db = openKnowledgeDbAnchored(path, options);
+  try {
+    const beforeMigration = verifyKnowledgeDbIdentity(db);
+    fireKnowledgeDbTestHook("database-before-migration", path);
+    verifyKnowledgeDbIdentity(db, beforeMigration);
+    migrateOpenKnowledgeDb(db);
+    verifyKnowledgeDbIdentity(db);
+    return db;
+  } catch (error) {
+    db.close();
+    throw error;
+  }
+}
+function migrateKnowledgeDb(path) {
+  const db = openMigratedKnowledgeDb(path);
+  try {
+    return { path, schema_version: getSchemaVersion(db) };
+  } finally {
+    db.close();
+  }
+}
+function getSchemaVersion(db) {
+  const row = db.query("SELECT MAX(version) AS version FROM schema_versions").get();
+  return row?.version ?? 0;
+}
+function count(db, table) {
+  const row = db.query(`SELECT COUNT(*) AS n FROM ${table}`).get();
+  return row?.n ?? 0;
+}
+function quoteIdentifier(identifier) {
+  return `"${identifier.replaceAll('"', '""')}"`;
+}
+function tableExists(db, table) {
+  const row = db.query("SELECT name FROM sqlite_master WHERE type IN ('table', 'virtual') AND name = ?").get(table);
+  return Boolean(row);
+}
+function columnExists(db, table, column) {
+  if (!tableExists(db, table))
+    return false;
+  const columns = db.query(`PRAGMA table_info(${quoteIdentifier(table)})`).all();
+  return columns.some((row) => row.name === column);
+}
+function ensureColumn(db, table, column, definition) {
+  if (!columnExists(db, table, column)) {
+    db.exec(`ALTER TABLE ${quoteIdentifier(table)} ADD COLUMN ${quoteIdentifier(column)} ${definition};`);
+  }
+}
+function needsMigration7(db) {
+  return getSchemaVersion(db) < 7 || !columnExists(db, "knowledge_sync_changes", "logical_clock") || !columnExists(db, "knowledge_sync_changes", "bundle_id") || !tableExists(db, "knowledge_sync_table_clocks") || !tableExists(db, "knowledge_sync_imports");
+}
+function applyMigration7(db) {
+  if (!tableExists(db, "knowledge_sync_changes"))
+    db.exec(MIGRATION_6);
+  ensureColumn(db, "knowledge_sync_changes", "logical_clock", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "knowledge_sync_changes", "bundle_id", "TEXT");
+  db.exec(MIGRATION_7_TABLES_AND_INDEXES);
+}
+function needsMigration8(db) {
+  return getSchemaVersion(db) < 8 || !columnExists(db, "wiki_pages", "valid_from") || !columnExists(db, "wiki_pages", "valid_to") || !columnExists(db, "wiki_pages", "supersedes") || !columnExists(db, "wiki_pages", "superseded_by") || !columnExists(db, "wiki_pages", "confidence") || !columnExists(db, "wiki_pages", "last_verified_at");
+}
+function applyMigration8(db) {
+  if (!tableExists(db, "wiki_pages"))
+    db.exec(MIGRATION_1);
+  ensureColumn(db, "wiki_pages", "valid_from", "TEXT");
+  ensureColumn(db, "wiki_pages", "valid_to", "TEXT");
+  ensureColumn(db, "wiki_pages", "supersedes", "TEXT");
+  ensureColumn(db, "wiki_pages", "superseded_by", "TEXT");
+  ensureColumn(db, "wiki_pages", "confidence", "REAL");
+  ensureColumn(db, "wiki_pages", "last_verified_at", "TEXT");
+  db.exec(`
+    UPDATE wiki_pages
+    SET valid_from = COALESCE(valid_from, created_at),
+        last_verified_at = COALESCE(last_verified_at, updated_at),
+        confidence = COALESCE(confidence, 0.8)
+    WHERE valid_from IS NULL OR last_verified_at IS NULL OR confidence IS NULL;
+  `);
+  db.exec(MIGRATION_8_TABLES_AND_INDEXES);
+}
+function getKnowledgeDbStats(path) {
+  const db = openKnowledgeDb(path);
+  try {
+    return {
+      schema_version: getSchemaVersion(db),
+      sources: count(db, "sources"),
+      source_revisions: count(db, "source_revisions"),
+      chunks: count(db, "chunks"),
+      wiki_pages: count(db, "wiki_pages"),
+      citations: count(db, "citations"),
+      indexes: count(db, "knowledge_indexes"),
+      runs: count(db, "runs"),
+      run_events: count(db, "run_events"),
+      redaction_findings: count(db, "redaction_findings"),
+      audit_events: count(db, "audit_events"),
+      approval_gates: count(db, "approval_gates"),
+      storage_objects: count(db, "storage_objects"),
+      embeddings: count(db, "chunk_embeddings"),
+      vector_entries: count(db, "vector_index_entries"),
+      reindex_queue: count(db, "reindex_queue"),
+      knowledge_machines: count(db, "knowledge_machines"),
+      sync_snapshots: count(db, "knowledge_sync_snapshots"),
+      sync_changes: count(db, "knowledge_sync_changes"),
+      sync_conflicts: count(db, "knowledge_sync_conflicts"),
+      sync_table_clocks: count(db, "knowledge_sync_table_clocks"),
+      sync_imports: count(db, "knowledge_sync_imports")
+    };
+  } finally {
+    db.close();
+  }
+}
+var CURRENT_SCHEMA_VERSION = 8, knowledgeDbTestHook, MIGRATION_1 = `
+PRAGMA journal_mode = WAL;
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS schema_versions (
+  version INTEGER PRIMARY KEY,
+  applied_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sources (
+  id TEXT PRIMARY KEY,
+  uri TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL,
+  title TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  acl_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS source_revisions (
+  id TEXT PRIMARY KEY,
+  source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+  revision TEXT NOT NULL,
+  hash TEXT,
+  extracted_text_uri TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  UNIQUE(source_id, revision)
+);
+
+CREATE TABLE IF NOT EXISTS chunks (
+  id TEXT PRIMARY KEY,
+  source_revision_id TEXT REFERENCES source_revisions(id) ON DELETE CASCADE,
+  wiki_page_id TEXT,
+  kind TEXT NOT NULL,
+  ordinal INTEGER NOT NULL,
+  text TEXT NOT NULL,
+  token_count INTEGER,
+  start_offset INTEGER,
+  end_offset INTEGER,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS chunk_embeddings (
+  id TEXT PRIMARY KEY,
+  chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  dimensions INTEGER NOT NULL,
+  vector_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(chunk_id, provider, model)
+);
+
+CREATE TABLE IF NOT EXISTS wiki_pages (
+  id TEXT PRIMARY KEY,
+  path TEXT NOT NULL UNIQUE,
+  title TEXT NOT NULL,
+  artifact_uri TEXT,
+  content_hash TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS wiki_backlinks (
+  from_page_id TEXT NOT NULL REFERENCES wiki_pages(id) ON DELETE CASCADE,
+  to_page_id TEXT NOT NULL REFERENCES wiki_pages(id) ON DELETE CASCADE,
+  label TEXT,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(from_page_id, to_page_id)
+);
+
+CREATE TABLE IF NOT EXISTS citations (
+  id TEXT PRIMARY KEY,
+  wiki_page_id TEXT REFERENCES wiki_pages(id) ON DELETE CASCADE,
+  chunk_id TEXT REFERENCES chunks(id) ON DELETE SET NULL,
+  source_uri TEXT NOT NULL,
+  quote TEXT,
+  start_offset INTEGER,
+  end_offset INTEGER,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_indexes (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  artifact_uri TEXT,
+  shard_key TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(kind, name, shard_key)
+);
+
+CREATE TABLE IF NOT EXISTS runs (
+  id TEXT PRIMARY KEY,
+  type TEXT NOT NULL,
+  prompt TEXT,
+  status TEXT NOT NULL,
+  provider TEXT,
+  model TEXT,
+  cost_tokens INTEGER NOT NULL DEFAULT 0,
+  cost_usd REAL NOT NULL DEFAULT 0,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS run_events (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  level TEXT NOT NULL,
+  event TEXT NOT NULL,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS provider_usage (
+  id TEXT PRIMARY KEY,
+  run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  cost_usd REAL NOT NULL DEFAULT 0,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS redaction_findings (
+  id TEXT PRIMARY KEY,
+  source_uri TEXT,
+  run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+  severity TEXT NOT NULL,
+  finding_type TEXT NOT NULL,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS storage_objects (
+  id TEXT PRIMARY KEY,
+  artifact_uri TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL,
+  content_type TEXT,
+  hash TEXT,
+  size_bytes INTEGER,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+  text,
+  title,
+  source_uri,
+  content='',
+  tokenize='porter unicode61'
+);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (1, datetime('now'));
+`, MIGRATION_2 = `
+DROP TABLE IF EXISTS chunks_fts;
+
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+  chunk_id UNINDEXED,
+  text,
+  title,
+  source_uri,
+  tokenize='porter unicode61'
+);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (2, datetime('now'));
+`, MIGRATION_3 = `
+CREATE TABLE IF NOT EXISTS audit_events (
+  id TEXT PRIMARY KEY,
+  event_type TEXT NOT NULL,
+  action TEXT NOT NULL,
+  target_uri TEXT,
+  decision TEXT NOT NULL,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS approval_gates (
+  id TEXT PRIMARY KEY,
+  action TEXT NOT NULL,
+  target_uri TEXT,
+  status TEXT NOT NULL,
+  reason TEXT,
+  approved_by TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_action ON audit_events(action);
+CREATE INDEX IF NOT EXISTS idx_audit_events_target ON audit_events(target_uri);
+CREATE INDEX IF NOT EXISTS idx_audit_events_created ON audit_events(created_at);
+CREATE INDEX IF NOT EXISTS idx_approval_gates_action ON approval_gates(action);
+CREATE INDEX IF NOT EXISTS idx_approval_gates_status ON approval_gates(status);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (3, datetime('now'));
+`, MIGRATION_4 = `
+CREATE TABLE IF NOT EXISTS vector_index_entries (
+  id TEXT PRIMARY KEY,
+  chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
+  source_revision_id TEXT REFERENCES source_revisions(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  dimensions INTEGER NOT NULL,
+  vector_json TEXT NOT NULL,
+  vector_norm REAL NOT NULL,
+  source_uri TEXT,
+  source_ref TEXT,
+  revision TEXT,
+  hash TEXT,
+  start_offset INTEGER,
+  end_offset INTEGER,
+  token_count INTEGER,
+  status TEXT NOT NULL DEFAULT 'active',
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(chunk_id, provider, model)
+);
+
+CREATE INDEX IF NOT EXISTS idx_vector_index_provider_model ON vector_index_entries(provider, model);
+CREATE INDEX IF NOT EXISTS idx_vector_index_source_revision ON vector_index_entries(source_revision_id);
+CREATE INDEX IF NOT EXISTS idx_vector_index_source_uri ON vector_index_entries(source_uri);
+CREATE INDEX IF NOT EXISTS idx_vector_index_status ON vector_index_entries(status);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (4, datetime('now'));
+`, MIGRATION_5 = `
+CREATE TABLE IF NOT EXISTS reindex_queue (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  source_uri TEXT,
+  reason TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(kind, target_id, reason)
+);
+
+CREATE INDEX IF NOT EXISTS idx_reindex_queue_status ON reindex_queue(status);
+CREATE INDEX IF NOT EXISTS idx_reindex_queue_kind_target ON reindex_queue(kind, target_id);
+CREATE INDEX IF NOT EXISTS idx_reindex_queue_source_uri ON reindex_queue(source_uri);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (5, datetime('now'));
+`, MIGRATION_6 = `
+CREATE TABLE IF NOT EXISTS knowledge_machines (
+  machine_id TEXT PRIMARY KEY,
+  hostname TEXT,
+  platform TEXT,
+  user_label TEXT,
+  workspace_home TEXT,
+  tailscale_dns TEXT,
+  tailscale_ips_json TEXT NOT NULL DEFAULT '[]',
+  ssh_target TEXT,
+  last_seen_at TEXT,
+  capabilities_json TEXT NOT NULL DEFAULT '{}',
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_sync_snapshots (
+  id TEXT PRIMARY KEY,
+  machine_id TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  workspace_home TEXT NOT NULL,
+  sqlite_schema_version INTEGER NOT NULL,
+  artifact_root_uri TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  tables_json TEXT NOT NULL,
+  artifact_hashes_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_sync_changes (
+  id TEXT PRIMARY KEY,
+  origin_machine_id TEXT NOT NULL,
+  updated_by_machine_id TEXT NOT NULL,
+  entity_kind TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  operation TEXT NOT NULL,
+  base_hash TEXT,
+  next_hash TEXT,
+  source_ref TEXT,
+  source_revision_id TEXT,
+  artifact_uri TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_sync_conflicts (
+  id TEXT PRIMARY KEY,
+  entity_kind TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  local_machine_id TEXT NOT NULL,
+  remote_machine_id TEXT NOT NULL,
+  local_hash TEXT,
+  remote_hash TEXT,
+  base_hash TEXT,
+  status TEXT NOT NULL,
+  resolution_strategy TEXT,
+  proposed_patch_uri TEXT,
+  approved_by TEXT,
+  resolved_at TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_machines_last_seen ON knowledge_machines(last_seen_at);
+CREATE INDEX IF NOT EXISTS idx_sync_snapshots_machine_created ON knowledge_sync_snapshots(machine_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_sync_snapshots_hash ON knowledge_sync_snapshots(content_hash);
+CREATE INDEX IF NOT EXISTS idx_sync_changes_entity ON knowledge_sync_changes(entity_kind, entity_id);
+CREATE INDEX IF NOT EXISTS idx_sync_changes_origin ON knowledge_sync_changes(origin_machine_id);
+CREATE INDEX IF NOT EXISTS idx_sync_changes_created ON knowledge_sync_changes(created_at);
+CREATE INDEX IF NOT EXISTS idx_sync_conflicts_status ON knowledge_sync_conflicts(status);
+CREATE INDEX IF NOT EXISTS idx_sync_conflicts_entity ON knowledge_sync_conflicts(entity_kind, entity_id);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (6, datetime('now'));
+`, MIGRATION_7_TABLES_AND_INDEXES = `
+CREATE TABLE IF NOT EXISTS knowledge_sync_table_clocks (
+  table_name TEXT NOT NULL,
+  machine_id TEXT NOT NULL,
+  logical_clock INTEGER NOT NULL DEFAULT 0,
+  high_water_hash TEXT,
+  high_water_bundle_id TEXT,
+  origin_machine_id TEXT,
+  updated_by_machine_id TEXT,
+  last_applied_at TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(table_name, machine_id)
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_sync_imports (
+  bundle_id TEXT PRIMARY KEY,
+  source_machine_id TEXT NOT NULL,
+  target_machine_id TEXT NOT NULL,
+  direction TEXT NOT NULL,
+  status TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  table_clocks_json TEXT NOT NULL,
+  tables_json TEXT NOT NULL,
+  generated_at TEXT NOT NULL,
+  applied_at TEXT NOT NULL,
+  metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_sync_changes_bundle ON knowledge_sync_changes(bundle_id);
+CREATE INDEX IF NOT EXISTS idx_sync_changes_clock ON knowledge_sync_changes(entity_kind, logical_clock);
+CREATE INDEX IF NOT EXISTS idx_sync_table_clocks_machine ON knowledge_sync_table_clocks(machine_id);
+CREATE INDEX IF NOT EXISTS idx_sync_table_clocks_updated ON knowledge_sync_table_clocks(updated_at);
+CREATE INDEX IF NOT EXISTS idx_sync_imports_source ON knowledge_sync_imports(source_machine_id, applied_at);
+CREATE INDEX IF NOT EXISTS idx_sync_imports_target ON knowledge_sync_imports(target_machine_id, applied_at);
+CREATE INDEX IF NOT EXISTS idx_sync_imports_status ON knowledge_sync_imports(status);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (7, datetime('now'));
+`, MIGRATION_8_TABLES_AND_INDEXES = `
+CREATE INDEX IF NOT EXISTS idx_wiki_pages_lifecycle_status ON wiki_pages(status, valid_to);
+CREATE INDEX IF NOT EXISTS idx_wiki_pages_last_verified ON wiki_pages(last_verified_at);
+CREATE INDEX IF NOT EXISTS idx_wiki_pages_supersedes ON wiki_pages(supersedes);
+CREATE INDEX IF NOT EXISTS idx_wiki_pages_superseded_by ON wiki_pages(superseded_by);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (8, datetime('now'));
+`, databaseAnchors;
+var init_knowledge_db = __esm(() => {
+  init_workspace();
+  init_anchored_fs();
+  databaseAnchors = new WeakMap;
+});
+
+// src/provenance.ts
+function isStaleStatus(status) {
+  return ["deleted", "stale", "invalidated", "reindex_required"].includes((status ?? "").toLowerCase());
+}
+function sourceProvenance(input) {
+  const status = input.status ?? null;
+  return {
+    source_owner: "open-files",
+    source_ref: input.source_ref ?? null,
+    source_uri: input.source_uri ?? null,
+    source_kind: input.source_kind ?? null,
+    source_revision_id: input.source_revision_id ?? null,
+    revision: input.revision ?? null,
+    hash: input.hash ?? null,
+    chunk_id: input.chunk_id ?? null,
+    start_offset: input.start_offset ?? null,
+    end_offset: input.end_offset ?? null,
+    status,
+    read_only: true,
+    citation_required: true,
+    resolver: input.resolver ?? null,
+    stale: isStaleStatus(status)
+  };
+}
+function generatedArtifactProvenance(input) {
+  return {
+    source_owner: "open-files",
+    generated_from: input.generated_from,
+    artifact_key: input.artifact_key,
+    source_refs: input.source_refs ?? [],
+    read_only_sources: true,
+    citation_required: input.citation_required ?? true,
+    raw_source_bytes_stored_in_open_knowledge: false
+  };
+}
+function withProvenance(metadata, provenance) {
+  return {
+    ...metadata,
+    provenance
+  };
+}
+
+// src/public-guard.ts
+import { dirname as dirname4, join as join3 } from "path";
+import { isProxy as isProxy3 } from "util/types";
+function invalidPublicInput(detail, surface) {
+  throw new KnowledgeContainmentError("KNOWLEDGE_RUNTIME_INTENT_INVALID", 503, "invalid", surface, `${detail}; supplied values were contained before Knowledge I/O`);
+}
+function safeKeys(value, surface) {
+  if (isProxy3(value)) {
+    return invalidPublicInput("public proxy inputs are unsupported", surface);
+  }
+  try {
+    const keys = Reflect.ownKeys(value);
+    if (!Array.isArray(value) && keys.length > MAX_PUBLIC_OBJECT_PROPERTIES) {
+      return invalidPublicInput("public object exceeds the per-object property limit", surface);
+    }
+    return keys;
+  } catch {
+    return invalidPublicInput("public options could not be enumerated safely", surface);
+  }
+}
+function safePublicProperty(value, key, surface = "public-api") {
+  try {
+    if (isProxy3(value)) {
+      return invalidPublicInput("public proxy inputs are unsupported", surface);
+    }
+    let owner = value;
+    while (owner) {
+      const descriptor = Object.getOwnPropertyDescriptor(owner, key);
+      if (descriptor) {
+        if (!("value" in descriptor)) {
+          return invalidPublicInput("public option uses an unsupported accessor", surface);
+        }
+        return descriptor.value;
+      }
+      owner = Object.getPrototypeOf(owner);
+    }
+    return;
+  } catch {
+    return invalidPublicInput("public option could not be read safely", surface);
+  }
+}
+function assertDensePublicArray(value, surface) {
+  for (let index = 0;index < value.length; index += 1) {
+    let descriptor;
+    try {
+      descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    } catch {
+      return invalidPublicInput("public array descriptors could not be inspected safely", surface);
+    }
+    if (!descriptor)
+      return invalidPublicInput("public sparse arrays are unsupported", surface);
+    if (!("value" in descriptor)) {
+      return invalidPublicInput("public array accessors are unsupported", surface);
+    }
+  }
+}
+function asObject(value) {
+  return value !== null && typeof value === "object" ? value : undefined;
+}
+function stringValue2(value, label, surface) {
+  if (typeof value !== "string" || !value.trim()) {
+    return invalidPublicInput(`${label} must be a non-empty string`, surface);
+  }
+  return value;
+}
+function classifyStorage(value, classification, surface) {
+  const storage = asObject(value);
+  if (!storage || Array.isArray(storage)) {
+    throw configContainmentError("present storage must be an object", surface);
+  }
+  const type = safePublicProperty(storage, "type", surface);
+  const artifactsRoot = safePublicProperty(storage, "artifacts_root", surface);
+  const s3 = safePublicProperty(storage, "s3", surface);
+  if (type !== "local" && type !== "s3") {
+    throw configContainmentError("present storage.type must be local or s3", surface);
+  }
+  if (typeof artifactsRoot !== "string" || !artifactsRoot.trim()) {
+    throw configContainmentError("present storage.artifacts_root must be a non-empty string", surface);
+  }
+  if (type === "local" && s3 !== undefined) {
+    throw configContainmentError("local storage must not include storage.s3", surface);
+  }
+  if (type === "s3") {
+    classification.hostedRequested = true;
+    const s3Object = asObject(s3);
+    if (!s3Object || Array.isArray(s3Object)) {
+      throw configContainmentError("S3 storage requires a storage.s3 object", surface);
+    }
+    stringValue2(safePublicProperty(s3Object, "bucket", surface), "storage.s3.bucket", surface);
+  }
+}
+function classifyStore(value, classification, surface) {
+  const store = asObject(value);
+  if (!store)
+    return;
+  const type = safePublicProperty(store, "type", surface);
+  if (type === "s3")
+    classification.hostedRequested = true;
+  else if (type !== undefined && type !== "local") {
+    return invalidPublicInput("present store.type is unknown", surface);
+  }
+}
+function addPath(classification, value) {
+  if (typeof value === "string" && value.length > 0 && !classification.configPaths.includes(value)) {
+    classification.configPaths.push(value);
+  }
+}
+function classifyValues(values, surface) {
+  const result = {
+    envs: [],
+    configModes: [],
+    configPaths: [],
+    hostedRequested: false
+  };
+  const seen = new WeakSet;
+  let visited = 0;
+  let properties = 0;
+  let bytes = 0;
+  const accountValue = (value) => {
+    if (typeof value === "string")
+      bytes += Buffer.byteLength(value);
+    else if (ArrayBuffer.isView(value))
+      bytes += value.byteLength;
+    if (bytes > MAX_PUBLIC_BYTES) {
+      return invalidPublicInput("public options exceed the aggregate byte limit", surface);
+    }
+  };
+  const visit = (value, depth, parentKey) => {
+    accountValue(value);
+    if (ArrayBuffer.isView(value))
+      return;
+    const object = asObject(value);
+    if (!object || seen.has(object))
+      return;
+    if (isProxy3(object))
+      return invalidPublicInput("public proxy inputs are unsupported", surface);
+    if (Array.isArray(object)) {
+      if (object.length > MAX_PUBLIC_ARRAY_ITEMS) {
+        return invalidPublicInput("public array exceeds the aggregate item limit", surface);
+      }
+      assertDensePublicArray(object, surface);
+    }
+    if (depth > MAX_CLASSIFIER_DEPTH || ++visited > MAX_PUBLIC_NODES) {
+      return invalidPublicInput("public options exceed the bounded classifier limit", surface);
+    }
+    seen.add(object);
+    const normalizedParentKey = parentKey?.toLowerCase();
+    if (normalizedParentKey === "storage")
+      classifyStorage(object, result, surface);
+    if (normalizedParentKey?.endsWith("store"))
+      classifyStore(object, result, surface);
+    const keys = safeKeys(object, surface);
+    properties += keys.length;
+    if (properties > MAX_PUBLIC_TOTAL_PROPERTIES) {
+      return invalidPublicInput("public options exceed the aggregate property limit", surface);
+    }
+    for (const key of keys) {
+      if (typeof key !== "string")
+        continue;
+      const child = safePublicProperty(object, key, surface);
+      if (key === "env") {
+        const env = asObject(child);
+        if (!env || Array.isArray(env)) {
+          return invalidPublicInput("public env must be an object when present", surface);
+        }
+        result.envs.push(env);
+        continue;
+      }
+      if (key === "configPath")
+        addPath(result, child);
+      if (key === "dbPath" || key === "targetDbPath") {
+        if (typeof child === "string" && child)
+          addPath(result, join3(dirname4(child), "config.json"));
+      }
+      if (key === "workspaceHome" || key === "targetWorkspaceHome") {
+        if (typeof child === "string" && child)
+          addPath(result, join3(child, "config.json"));
+      }
+      if (key === "mode" && (depth === 0 || parentKey === "config")) {
+        if (typeof child !== "string") {
+          return invalidPublicInput("public mode must be a string when present", surface);
+        }
+        result.configModes.push(child);
+      }
+      if (key === "hostedRequested" && child === true)
+        result.hostedRequested = true;
+      if (key === "storage_type" && child === "s3")
+        result.hostedRequested = true;
+      if (OPAQUE_KEYS.has(key))
+        accountValue(child);
+      else
+        visit(child, depth + 1, key);
+    }
+  };
+  for (const value of values)
+    visit(value, 0);
+  return result;
+}
+function remoteSourceContained(detail, surface) {
+  throw new KnowledgeContainmentError("KNOWLEDGE_HOSTED_CONTAINED", 503, "hosted-client", surface, `${detail}; source access was denied before implementation loading or body reads`);
+}
+function assertClassifiedSourceReference(sourceRef, options = {}) {
+  const surface = options.surface ?? "public-api";
+  if (typeof sourceRef !== "string" || !sourceRef.trim()) {
+    return invalidPublicInput("source reference must be a non-empty string", surface);
+  }
+  if (Buffer.byteLength(sourceRef) > 16384) {
+    return invalidPublicInput("source reference exceeds the byte limit", surface);
+  }
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(sourceRef)?.[1]?.toLowerCase();
+  if (!scheme)
+    return invalidPublicInput("source reference must use an explicit local file URI", surface);
+  if (scheme === "file") {
+    let parsed;
+    try {
+      parsed = new URL(sourceRef);
+      if (parsed.protocol !== "file:")
+        throw new Error("not file");
+    } catch {
+      return invalidPublicInput("source file URI is malformed", surface);
+    }
+    if (parsed.hostname && parsed.hostname !== "localhost") {
+      return remoteSourceContained("remote-host file URIs are unavailable during Stage A", surface);
+    }
+    return;
+  }
+  if (scheme === "open-files" && options.allowStored)
+    return;
+  return remoteSourceContained("remote source scheme is unavailable during Stage A", surface);
+}
+function decodeSourceKey(key, surface) {
+  if (Buffer.byteLength(key) > 256) {
+    return invalidPublicInput("source field label exceeds the byte limit", surface);
+  }
+  let decoded;
+  try {
+    decoded = decodeURIComponent(key);
+  } catch {
+    return invalidPublicInput("source field label encoding is invalid", surface);
+  }
+  if (/%[0-9a-f]{2}/i.test(decoded)) {
+    return invalidPublicInput("repeated source field label encoding is unsupported", surface);
+  }
+  return decoded;
+}
+function sourceKeyCategory(key, surface) {
+  const normalized = normalizeSourceKey(decodeSourceKey(key, surface));
+  const compact = normalized.replace(/_/g, "");
+  if (SOURCE_REFERENCE_KEYS.has(normalized) || /(?:url|uri|ref)$/.test(compact))
+    return "reference";
+  if (/(?:urls|uris|refs)$/.test(compact))
+    return "references";
+  if (/(?:dsn|host|domain)$/.test(compact))
+    return "remote";
+  if (/(?:path|pathname)$/.test(compact))
+    return "path";
+  return "other";
+}
+function assertContainedSourceGraphInternal(value, surface, opaqueKeys) {
+  const seen = new WeakSet;
+  let nodes = 0;
+  let properties = 0;
+  let bytes = 0;
+  const visit = (entry, depth) => {
+    if (typeof entry === "string") {
+      bytes += Buffer.byteLength(entry);
+      if (bytes > MAX_PUBLIC_BYTES) {
+        return invalidPublicInput("source graph exceeds the aggregate byte limit", surface);
+      }
+      return;
+    }
+    if (ArrayBuffer.isView(entry)) {
+      bytes += entry.byteLength;
+      if (bytes > MAX_PUBLIC_BYTES) {
+        return invalidPublicInput("source graph exceeds the aggregate byte limit", surface);
+      }
+      return;
+    }
+    const object = asObject(entry);
+    if (!object || seen.has(object))
+      return;
+    if (isProxy3(object))
+      return invalidPublicInput("source graph proxy inputs are unsupported", surface);
+    if (Array.isArray(object)) {
+      if (object.length > MAX_PUBLIC_ARRAY_ITEMS) {
+        return invalidPublicInput("source graph array exceeds the aggregate item limit", surface);
+      }
+      assertDensePublicArray(object, surface);
+    }
+    if (depth > MAX_CLASSIFIER_DEPTH || ++nodes > MAX_PUBLIC_NODES) {
+      return invalidPublicInput("source graph exceeds the aggregate node or depth limit", surface);
+    }
+    seen.add(object);
+    const keys = safeKeys(object, surface);
+    properties += keys.length;
+    if (properties > MAX_PUBLIC_TOTAL_PROPERTIES) {
+      return invalidPublicInput("source graph exceeds the aggregate property limit", surface);
+    }
+    for (const key of keys) {
+      if (typeof key !== "string")
+        continue;
+      const child = safePublicProperty(object, key, surface);
+      const normalizedKey = normalizeSourceKey(decodeSourceKey(key, surface));
+      const category = sourceKeyCategory(key, surface);
+      if (category === "reference" && child !== undefined && child !== null) {
+        assertClassifiedSourceReference(child, { allowStored: true, surface });
+      }
+      if (category === "references" && child !== undefined && child !== null) {
+        if (!Array.isArray(child)) {
+          return invalidPublicInput("source reference collection must be an array", surface);
+        }
+        assertDensePublicArray(child, surface);
+        for (let index = 0;index < child.length; index += 1) {
+          assertClassifiedSourceReference(safePublicProperty(child, String(index), surface), { allowStored: true, surface });
+        }
+      }
+      if (category === "remote" && child !== undefined && child !== null) {
+        return remoteSourceContained("remote source field is unavailable during Stage A", surface);
+      }
+      if (category === "path" && typeof child === "string" && /^[a-z][a-z0-9+.-]*:/i.test(child)) {
+        assertClassifiedSourceReference(child, { allowStored: true, surface });
+      }
+      if (opaqueKeys?.has(normalizedKey))
+        continue;
+      visit(child, depth + 1);
+    }
+  };
+  visit(value, 0);
+  assertPublicInvocation([value], { surface });
+}
+function assertContainedSourceGraph(value, surface = "public-api") {
+  assertContainedSourceGraphInternal(value, surface, SOURCE_GRAPH_RUNTIME_OPAQUE_KEYS);
+}
+function assertContainedSourceDataGraph(value, surface = "public-api") {
+  assertContainedSourceGraphInternal(value, surface, undefined);
+}
+function normalizeSourceKey(key) {
+  return key.replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2").replace(/([a-z0-9])([A-Z])/g, "$1_$2").replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "").toLowerCase();
+}
+function assertPublicInvocation(values = [], options = {}) {
+  const surface = options.surface ?? "public-api";
+  assertKnowledgeLocalRuntime({ surface, env: process.env });
+  const classification = classifyValues(values, surface);
+  const distinctModes = [...new Set(classification.configModes)];
+  if (distinctModes.length > 1) {
+    return invalidPublicInput("public options contain conflicting config modes", surface);
+  }
+  const intent = {
+    surface,
+    configMode: distinctModes[0],
+    hostedRequested: classification.hostedRequested
+  };
+  assertKnowledgeLocalRuntime(intent);
+  for (const env of classification.envs) {
+    assertKnowledgeLocalRuntime({ ...intent, env });
+  }
+  const configPaths = [...classification.configPaths];
+  if (options.explicitConfigPath && !configPaths.includes(options.explicitConfigPath)) {
+    configPaths.push(options.explicitConfigPath);
+  }
+  for (const configPath of configPaths) {
+    assertKnowledgeLocalRuntimeForConfigPath({ ...intent, env: classification.envs[0] ?? process.env }, configPath, undefined, options.requireConfig);
+  }
+}
+function denyPublicAuth() {
+  throw new KnowledgeContainmentError("KNOWLEDGE_HOSTED_CONTAINED", 503, "hosted-client", "public-api", "public root authentication is disabled during Stage A before auth options or paths are inspected");
+}
+var MAX_CLASSIFIER_DEPTH = 12, MAX_PUBLIC_ARRAY_ITEMS = 4096, MAX_PUBLIC_OBJECT_PROPERTIES = 256, MAX_PUBLIC_TOTAL_PROPERTIES = 8192, MAX_PUBLIC_NODES = 4096, MAX_PUBLIC_BYTES = 8388608, OPAQUE_KEYS, SOURCE_REFERENCE_KEYS, SOURCE_GRAPH_RUNTIME_OPAQUE_KEYS;
+var init_public_guard = __esm(() => {
+  init_runtime_role();
+  OPAQUE_KEYS = new Set([
+    "body",
+    "client",
+    "executor",
+    "pool",
+    "remote",
+    "service"
+  ]);
+  SOURCE_REFERENCE_KEYS = new Set([
+    "source_ref",
+    "source_uri",
+    "source_url",
+    "uri",
+    "url",
+    "ref",
+    "extracted_text_ref",
+    "extracted_text_uri",
+    "text_ref"
+  ]);
+  SOURCE_GRAPH_RUNTIME_OPAQUE_KEYS = new Set([
+    "client",
+    "config",
+    "env",
+    "executor",
+    "pool",
+    "remote",
+    "safety_policy",
+    "service",
+    "store",
+    "workspace"
+  ]);
+});
+
+// src/source-ref.ts
+import { fileURLToPath } from "url";
+function assertNonEmpty(value, message) {
+  if (!value)
+    throw new Error(message);
+  return value;
+}
+function parseOpenFilesRef(uri) {
+  const withoutScheme = uri.slice("open-files://".length);
+  const parts = withoutScheme.split("/").filter(Boolean);
+  const entity = parts[0];
+  if (entity !== "file" && entity !== "source") {
+    throw new Error("Invalid open-files ref. Expected open-files://file/<id>, open-files://file/<id>/revision/<revision_id>, or open-files://source/<id>/path/<path>.");
+  }
+  const id = assertNonEmpty(parts[1], "Invalid open-files ref. Missing id.");
+  if (entity === "file") {
+    if (parts.length === 2)
+      return { kind: "open-files", uri, entity, id };
+    if (parts[2] === "revision" && parts[3] && parts.length === 4) {
+      return { kind: "open-files", uri, entity, id, revision_id: decodeURIComponent(parts[3]) };
+    }
+    throw new Error("Invalid open-files file ref. Expected open-files://file/<id>/revision/<revision_id>.");
+  }
+  const pathIndex = parts.indexOf("path");
+  const path = pathIndex >= 0 ? decodeURIComponent(parts.slice(pathIndex + 1).join("/")) : undefined;
+  return { kind: "open-files", uri, entity, id, path };
+}
+function parseS3Ref(uri) {
+  const parsed = new URL(uri);
+  const bucket = assertNonEmpty(parsed.hostname, "Invalid s3 ref. Missing bucket.");
+  const key = decodeURIComponent(parsed.pathname.replace(/^\/+/, ""));
+  if (!key)
+    throw new Error("Invalid s3 ref. Missing object key.");
+  return { kind: "s3", uri, bucket, key };
+}
+function parseFileRef(uri) {
+  return { kind: "file", uri, path: fileURLToPath(uri) };
+}
+function parseWebRef(uri) {
+  const parsed = new URL(uri);
+  return { kind: "web", uri, url: parsed.toString() };
+}
+function parseSourceRef(uri) {
+  if (uri.startsWith("open-files://"))
+    return parseOpenFilesRef(uri);
+  if (uri.startsWith("s3://"))
+    return parseS3Ref(uri);
+  if (uri.startsWith("file://"))
+    return parseFileRef(uri);
+  if (uri.startsWith("https://") || uri.startsWith("http://"))
+    return parseWebRef(uri);
+  throw new Error(`Unsupported source ref scheme: ${uri}`);
+}
+function catalogSourceUriForRef(uri, parsed = parseSourceRef(uri)) {
+  if (parsed.kind === "open-files" && parsed.entity === "file" && parsed.revision_id) {
+    return uri.replace(/\/revision\/[^/]+$/, "");
+  }
+  return uri;
+}
+function revisionIdForSourceRef(uri) {
+  const parsed = parseSourceRef(uri);
+  return parsed.kind === "open-files" && parsed.entity === "file" ? parsed.revision_id ?? null : null;
+}
+function isSupportedSourceRef(uri) {
+  try {
+    parseSourceRef(uri);
+    return true;
+  } catch {
+    return false;
+  }
+}
+var init_source_ref = () => {};
+
+// src/safety.ts
+import { createHash as createHash4, randomUUID as randomUUID3 } from "crypto";
+import { relative, resolve as resolve4, sep as sep2 } from "path";
+function envEnabled(name) {
+  const value = process.env[name];
+  return value === "1" || value === "true" || value === "yes";
+}
+function resolveSafetyPolicy(config, workspace) {
+  const extended = config;
+  const configuredBuckets = new Set(extended.safety?.network?.allowed_s3_buckets ?? []);
+  if (config.storage.type === "s3" && config.storage.s3?.bucket)
+    configuredBuckets.add(config.storage.s3.bucket);
+  if (process.env.HASNA_KNOWLEDGE_ALLOWED_S3_BUCKETS) {
+    for (const bucket of process.env.HASNA_KNOWLEDGE_ALLOWED_S3_BUCKETS.split(",").map((entry) => entry.trim()).filter(Boolean)) {
+      configuredBuckets.add(bucket);
+    }
+  }
+  return {
+    mode: config.mode,
+    allowWriteRoots: [
+      workspace.home,
+      workspace.artifactsDir,
+      workspace.cacheDir,
+      workspace.exportsDir,
+      workspace.indexesDir,
+      workspace.logsDir,
+      workspace.runsDir,
+      workspace.schemasDir,
+      workspace.wikiDir
+    ].map((entry) => resolve4(entry)),
+    readOnlySourceAccess: true,
+    network: {
+      webSearchEnabled: extended.safety?.network?.web_search_enabled ?? envEnabled("HASNA_KNOWLEDGE_WEB_SEARCH"),
+      s3ReadsEnabled: extended.safety?.network?.s3_reads_enabled ?? envEnabled("HASNA_KNOWLEDGE_ALLOW_S3_READS"),
+      allowedS3Buckets: [...configuredBuckets].sort()
+    },
+    redaction: {
+      enabled: extended.safety?.redaction?.enabled ?? true
+    },
+    approvals: {
+      generatedWritesRequireApproval: extended.safety?.approvals?.generated_writes_require_approval ?? true
+    }
+  };
+}
+function isInside(root, target) {
+  const rel = relative(root, target);
+  return rel === "" || !rel.startsWith("..") && rel !== ".." && !rel.startsWith(`..${sep2}`);
+}
+function assertWriteAllowed(targetPath, policy) {
+  const resolved = resolve4(targetPath);
+  if (!policy.allowWriteRoots.some((root) => isInside(root, resolved))) {
+    throw new Error(`Safety policy denied write outside .hasna/knowledge: ${targetPath}`);
+  }
+}
+function redactSecrets(text, policy) {
+  if (policy && !policy.redaction.enabled)
+    return { text, findings: [] };
+  let output = text;
+  const findings = [];
+  for (const pattern of REDACTION_PATTERNS) {
+    output = output.replace(pattern.regex, (match, ...args) => {
+      const offset = typeof args.at(-2) === "number" ? args.at(-2) : output.indexOf(match);
+      findings.push({
+        type: pattern.type,
+        severity: pattern.severity,
+        start: Math.max(0, offset),
+        end: Math.max(0, offset + match.length)
+      });
+      return pattern.replacement;
+    });
+  }
+  return { text: output, findings };
+}
+function auditId(input) {
+  return `audit_${createHash4("sha256").update(`${input.event_type}\x00${input.action}\x00${input.target_uri ?? ""}\x00${input.created_at ?? ""}\x00${JSON.stringify(input.metadata ?? {})}\x00${randomUUID3()}`).digest("hex").slice(0, 24)}`;
+}
+function truncateAuditMetadata(value, depth = 0) {
+  if (depth > 6)
+    return "[Truncated:depth]";
+  if (typeof value === "string") {
+    return value.length > 1000 ? `${value.slice(0, 1000)}...[Truncated:${value.length - 1000} chars]` : value;
+  }
+  if (typeof value === "number" || typeof value === "boolean" || value === null || value === undefined)
+    return value;
+  if (Array.isArray(value)) {
+    const entries = value.slice(0, 25).map((entry) => truncateAuditMetadata(entry, depth + 1));
+    if (value.length > 25)
+      entries.push(`[Truncated:${value.length - 25} items]`);
+    return entries;
+  }
+  if (typeof value === "object") {
+    const output = {};
+    const entries = Object.entries(value).slice(0, 50);
+    for (const [key, entry] of entries)
+      output[key] = truncateAuditMetadata(entry, depth + 1);
+    const total = Object.keys(value).length;
+    if (total > entries.length)
+      output.__truncated_keys = total - entries.length;
+    return output;
+  }
+  return String(value);
+}
+function recordAuditEvent(db, input) {
+  const createdAt = input.created_at ?? new Date().toISOString();
+  const metadata = truncateAuditMetadata(input.metadata ?? {});
+  const id = auditId({ ...input, metadata, created_at: createdAt });
+  db.run(`INSERT INTO audit_events (id, event_type, action, target_uri, decision, metadata_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`, [
+    id,
+    input.event_type,
+    input.action,
+    input.target_uri ?? null,
+    input.decision,
+    JSON.stringify(metadata),
+    createdAt
+  ]);
+  return id;
+}
+function recordRedactionFindings(db, input) {
+  const createdAt = input.created_at ?? new Date().toISOString();
+  for (const finding of input.findings) {
+    db.run(`INSERT INTO redaction_findings (id, source_uri, run_id, severity, finding_type, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`, [
+      `redact_${randomUUID3()}`,
+      input.source_uri ?? null,
+      input.run_id ?? null,
+      finding.severity,
+      finding.type,
+      JSON.stringify({ ...input.metadata ?? {}, start: finding.start, end: finding.end }),
+      createdAt
+    ]);
+  }
+  return input.findings.length;
+}
+var REDACTION_PATTERNS, COMMON_BARE_TOKEN_PATTERNS;
+var init_safety = __esm(() => {
+  init_runtime_role();
+  REDACTION_PATTERNS = [
+    { type: "private_key_block", severity: "high", regex: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, replacement: "[REDACTED:private_key_block]" },
+    { type: "secret_assignment", severity: "high", regex: /\b(?:api[_-]?key|secret|token|password)\s*[:=]\s*['"]?[^'"\s]{8,}/gi, replacement: "[REDACTED:secret_assignment]" },
+    { type: "openai_api_key", severity: "high", regex: /\bsk-[A-Za-z0-9_-]{20,}\b/g, replacement: "[REDACTED:openai_api_key]" },
+    { type: "anthropic_api_key", severity: "high", regex: new RegExp(`\\b${["sk", "ant"].join("-")}-[A-Za-z0-9_-]{20,}\\b`, "g"), replacement: "[REDACTED:anthropic_api_key]" },
+    { type: "aws_access_key_id", severity: "high", regex: /\bA(?:KIA|SIA)[A-Z0-9]{16}\b/g, replacement: "[REDACTED:aws_access_key_id]" }
+  ];
+  COMMON_BARE_TOKEN_PATTERNS = [
+    { type: "github_token", severity: "high", regex: /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g, replacement: "[REDACTED:github_token]" },
+    { type: "github_pat_token", severity: "high", regex: /\bgithub[_]pat[_][A-Za-z0-9_]{20,}\b/g, replacement: "[REDACTED:github_pat_token]" },
+    { type: "package_registry_token", severity: "high", regex: /\bnpm_[A-Za-z0-9_-]{20,}\b/g, replacement: "[REDACTED:package_registry_token]" },
+    { type: "context7_token", severity: "high", regex: /\bctx7sk[-][A-Za-z0-9_-]{10,}\b/g, replacement: "[REDACTED:context7_token]" },
+    { type: "xai_api_key", severity: "high", regex: /\bxai[-][A-Za-z0-9_-]{20,}\b/g, replacement: "[REDACTED:xai_api_key]" },
+    { type: "google_api_key", severity: "high", regex: /\bAIza[A-Za-z0-9_-]{20,}\b/g, replacement: "[REDACTED:google_api_key]" }
+  ];
+  REDACTION_PATTERNS.push(...COMMON_BARE_TOKEN_PATTERNS);
+});
+
+// src/manifest-ingest.ts
+var exports_manifest_ingest = {};
+__export(exports_manifest_ingest, {
+  normalizedManifestItemUtf8Bytes: () => normalizedManifestItemUtf8Bytes,
+  ingestOpenFilesManifestItems: () => ingestOpenFilesManifestItems,
+  ingestOpenFilesManifest: () => ingestOpenFilesManifest,
+  MAX_NORMALIZED_MANIFEST_ITEM_BYTES: () => MAX_NORMALIZED_MANIFEST_ITEM_BYTES,
+  MAX_NORMALIZED_MANIFEST_AGGREGATE_BYTES: () => MAX_NORMALIZED_MANIFEST_AGGREGATE_BYTES
+});
+import { createHash as createHash5 } from "crypto";
+import { basename as basename4, resolve as resolve5 } from "path";
+import { fileURLToPath as fileURLToPath2 } from "url";
+function stableId(prefix, value) {
+  return `${prefix}_${createHash5("sha256").update(value).digest("hex").slice(0, 20)}`;
+}
+function asObject2(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
+}
+function asString(value) {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+function asNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+function buildSourceRefFromItem(item) {
+  const explicit = asString(item.source_ref) ?? asString(item.source_uri) ?? asString(item.uri);
+  if (explicit)
+    return explicit;
+  const fileId = asString(item.file_id);
+  if (fileId) {
+    const revision = asString(item.revision_id) ?? asString(item.revision);
+    const fileRef = `open-files://file/${encodeURIComponent(fileId)}`;
+    return revision ? `${fileRef}/revision/${encodeURIComponent(revision)}` : fileRef;
+  }
+  const sourceId = asString(item.source_id);
+  const path = asString(item.path);
+  if (sourceId && path) {
+    return `open-files://source/${encodeURIComponent(sourceId)}/path/${encodeURIComponent(path)}`;
+  }
+  throw new Error("Manifest item is missing source_ref, file_id, or source_id/path.");
+}
+function baseSourceUri(sourceRef, parsed) {
+  if (parsed.kind === "open-files" && parsed.entity === "file" && parsed.revision_id) {
+    return sourceRef.replace(/\/revision\/[^/]+$/, "");
+  }
+  return sourceRef;
+}
+function textFromItem(item) {
+  const direct = asString(item.extracted_text) ?? asString(item.text) ?? asString(item.content_text) ?? asString(item.markdown);
+  if (direct !== undefined)
+    return direct;
+  const content = item.content;
+  return typeof content === "string" ? content : null;
+}
+function extractedTextUriFromItem(item) {
+  const direct = asString(item.extracted_text_ref) ?? asString(item.extracted_text_uri) ?? asString(item.text_ref);
+  if (direct)
+    return direct;
+  const content = asObject2(item.content);
+  return asString(content?.extracted_text_ref) ?? asString(content?.extracted_text_uri) ?? null;
+}
+function titleFromItem(item) {
+  const path = asString(item.path);
+  return asString(item.title) ?? asString(item.name) ?? (path ? basename4(path) : null);
+}
+function hashFromItem(item) {
+  return asString(item.hash) ?? asString(item.checksum) ?? asString(item.sha256) ?? null;
+}
+function normalizeMetadataKey(key) {
+  return key.toLowerCase().replace(/[\s-]+/g, "_");
+}
+function sanitizeManifestMetadataValue(value) {
+  if (Array.isArray(value))
+    return value.map((entry) => sanitizeManifestMetadataValue(entry));
+  const object = asObject2(value);
+  if (!object)
+    return value;
+  const sanitized = {};
+  for (const [key, nestedValue] of Object.entries(object)) {
+    if (OMIT_MANIFEST_METADATA_KEYS.has(normalizeMetadataKey(key)))
+      continue;
+    sanitized[key] = sanitizeManifestMetadataValue(nestedValue);
+  }
+  return sanitized;
+}
+function revisionFromItem(item, parsed, hash) {
+  const revision = asString(item.revision_id) ?? asString(item.revision) ?? asString(item.version_id) ?? (parsed.kind === "open-files" ? parsed.revision_id : undefined) ?? hash ?? asString(item.updated_at);
+  return revision ?? "current";
+}
+function metadataFromItem(item, normalized) {
+  const metadata = {};
+  for (const [key, value] of Object.entries(item)) {
+    if (OMIT_MANIFEST_METADATA_KEYS.has(normalizeMetadataKey(key)))
+      continue;
+    metadata[key] = sanitizeManifestMetadataValue(value);
+  }
+  metadata.source_ref = normalized.sourceRef;
+  metadata.source_uri = normalized.sourceUri;
+  metadata.status = normalized.status;
+  return metadata;
+}
+function normalizeManifestItem(item, now) {
+  const sourceRef = buildSourceRefFromItem(item);
+  const parsed = parseSourceRef(sourceRef);
+  const sourceUri = baseSourceUri(sourceRef, parsed);
+  const hash = hashFromItem(item);
+  const status = asString(item.status) ?? "active";
+  return {
+    raw: item,
+    sourceRef,
+    sourceUri,
+    kind: parsed.kind,
+    title: titleFromItem(item),
+    revision: revisionFromItem(item, parsed, hash),
+    hash,
+    extractedTextUri: extractedTextUriFromItem(item),
+    text: textFromItem(item),
+    metadata: metadataFromItem(item, { sourceRef, sourceUri, status }),
+    acl: item.permissions ?? item.acl ?? {},
+    status,
+    updatedAt: asString(item.updated_at) ?? now
+  };
+}
+function normalizedManifestItemUtf8Bytes(item, now = "2000-01-01T00:00:00.000Z") {
+  return Buffer.byteLength(JSON.stringify(normalizeManifestItem(item, now)), "utf8");
+}
+function assertNormalizedManifestBounds(items) {
+  let aggregateBytes = 2;
+  for (let index = 0;index < items.length; index += 1) {
+    const itemBytes = Buffer.byteLength(JSON.stringify(items[index]), "utf8");
+    if (itemBytes > MAX_NORMALIZED_MANIFEST_ITEM_BYTES) {
+      throw new Error(`Normalized manifest item ${index} exceeds the ${MAX_NORMALIZED_MANIFEST_ITEM_BYTES} byte hard limit.`);
+    }
+    const addedBytes = itemBytes + (index === 0 ? 0 : 1);
+    if (aggregateBytes > MAX_NORMALIZED_MANIFEST_AGGREGATE_BYTES - addedBytes) {
+      throw new Error(`Normalized manifest aggregate exceeds the ${MAX_NORMALIZED_MANIFEST_AGGREGATE_BYTES} byte hard limit.`);
+    }
+    aggregateBytes += addedBytes;
+  }
+}
+function parseManifestText(text) {
+  const trimmed = text.trim();
+  if (!trimmed)
+    return [];
+  if (trimmed.startsWith("[")) {
+    const parsed = JSON.parse(trimmed);
+    if (!Array.isArray(parsed))
+      throw new Error("Manifest array parse failed.");
+    return parsed.map((entry) => {
+      const item = asObject2(entry);
+      if (!item)
+        throw new Error("Manifest array entries must be objects.");
+      return item;
+    });
+  }
+  if (trimmed.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      const object = asObject2(parsed);
+      if (!object)
+        throw new Error("Manifest object parse failed.");
+      if (Array.isArray(object.items)) {
+        return object.items.map((entry) => {
+          const item = asObject2(entry);
+          if (!item)
+            throw new Error("Manifest items entries must be objects.");
+          return item;
+        });
+      }
+      if ("source_ref" in object || "source_uri" in object || "file_id" in object)
+        return [object];
+    } catch (error) {
+      const lines = trimmed.split(/\r?\n/).filter((line) => line.trim().length > 0);
+      if (lines.length <= 1)
+        throw error;
+      return lines.map((line) => {
+        const item = asObject2(JSON.parse(line));
+        if (!item)
+          throw new Error("Manifest JSONL entries must be objects.");
+        return item;
+      });
+    }
+  }
+  return trimmed.split(/\r?\n/).filter((line) => line.trim().length > 0).map((line) => {
+    const item = asObject2(JSON.parse(line));
+    if (!item)
+      throw new Error("Manifest JSONL entries must be objects.");
+    return item;
+  });
+}
+async function readManifestInput(input, maxInputBytes = DEFAULT_MAX_MANIFEST_INPUT_BYTES, maxItems = DEFAULT_MAX_MANIFEST_ITEMS) {
+  const limit = hardLimit(maxInputBytes, DEFAULT_MAX_MANIFEST_INPUT_BYTES, MAX_INGEST_BODY_BYTES, "maxInputBytes");
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(input)?.[1]?.toLowerCase();
+  if (scheme && scheme !== "file") {
+    assertClassifiedSourceReference(input);
+  }
+  const path = scheme === "file" ? fileURLToPath2(input) : resolve5(input);
+  const snapshot = readAnchoredRegularFileSnapshot(path, limit);
+  if (!snapshot)
+    throw new Error(`Manifest not found: ${path}`);
+  assertBoundedJsonText(snapshot.content, maxItems, maxItems);
+  return snapshot.content;
+}
+function chunkText(text, maxChars, overlapChars) {
+  const normalized = text.replace(/\r\n/g, `
+`);
+  if (!normalized.trim())
+    return [];
+  const chunks = [];
+  let start = 0;
+  let iterations = 0;
+  while (start < normalized.length) {
+    if (++iterations > MAX_INGEST_BATCH_ITEMS) {
+      throw new Error(`Manifest chunking exceeds the ${MAX_INGEST_BATCH_ITEMS} iteration hard limit.`);
+    }
+    const hardEnd = Math.min(normalized.length, start + maxChars);
+    let end = hardEnd;
+    if (hardEnd < normalized.length) {
+      const paragraphBreak = normalized.lastIndexOf(`
+
+`, hardEnd);
+      const sentenceBreak = normalized.lastIndexOf(". ", hardEnd);
+      const candidate = Math.max(paragraphBreak, sentenceBreak);
+      if (candidate > start + Math.floor(maxChars * 0.5))
+        end = candidate + (candidate === paragraphBreak ? 2 : 1);
+    }
+    const chunk = normalized.slice(start, end).trim();
+    if (chunk) {
+      chunks.push({
+        ordinal: chunks.length,
+        text: chunk,
+        startOffset: start,
+        endOffset: end
+      });
+    }
+    if (end >= normalized.length)
+      break;
+    const nextStart = end - overlapChars;
+    if (!Number.isSafeInteger(nextStart) || nextStart <= start) {
+      throw new Error("Manifest chunking failed to make monotonic progress.");
+    }
+    start = nextStart;
+  }
+  return chunks;
+}
+function estimateTokenCount(text) {
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  return Math.max(1, Math.ceil(words * 1.25));
+}
+function deleteChunksForRevision(db, sourceRevisionId) {
+  const rows = db.query("SELECT id FROM chunks WHERE source_revision_id = ?").all(sourceRevisionId);
+  for (const row of rows) {
+    db.run("DELETE FROM chunks_fts WHERE chunk_id = ?", [row.id]);
+  }
+  db.run("DELETE FROM chunks WHERE source_revision_id = ?", [sourceRevisionId]);
+  return rows.length;
+}
+function upsertSource(db, item, now) {
+  const sourceId = stableId("src", item.sourceUri);
+  db.run(`INSERT INTO sources (id, uri, kind, title, metadata_json, acl_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(uri) DO UPDATE SET
+       kind = excluded.kind,
+       title = excluded.title,
+       metadata_json = excluded.metadata_json,
+       acl_json = excluded.acl_json,
+       updated_at = excluded.updated_at`, [
+    sourceId,
+    item.sourceUri,
+    item.kind,
+    item.title,
+    JSON.stringify(item.metadata),
+    JSON.stringify(item.acl ?? {}),
+    now,
+    item.updatedAt
+  ]);
+  const row = db.query("SELECT id FROM sources WHERE uri = ?").get(item.sourceUri);
+  if (!row)
+    throw new Error(`Failed to upsert source: ${item.sourceUri}`);
+  return row.id;
+}
+function upsertRevision(db, sourceId, item, now) {
+  const revisionId = stableId("rev", `${sourceId}\x00${item.revision}`);
+  db.run(`INSERT INTO source_revisions (id, source_id, revision, hash, extracted_text_uri, metadata_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(source_id, revision) DO UPDATE SET
+       hash = excluded.hash,
+       extracted_text_uri = excluded.extracted_text_uri,
+       metadata_json = excluded.metadata_json`, [
+    revisionId,
+    sourceId,
+    item.revision,
+    item.hash,
+    item.extractedTextUri,
+    JSON.stringify(item.metadata),
+    now
+  ]);
+  const row = db.query("SELECT id FROM source_revisions WHERE source_id = ? AND revision = ?").get(sourceId, item.revision);
+  if (!row)
+    throw new Error(`Failed to upsert source revision: ${item.sourceRef}`);
+  return row.id;
+}
+function insertChunks(db, sourceRevisionId, item, now, maxChars, overlapChars, safetyPolicy) {
+  if (!item.text || item.status.toLowerCase() === "deleted")
+    return { chunksInserted: 0, redactions: 0 };
+  const redacted = redactSecrets(item.text, safetyPolicy);
+  if (redacted.findings.length > 0) {
+    recordRedactionFindings(db, {
+      source_uri: item.sourceUri,
+      findings: redacted.findings,
+      metadata: { source_ref: item.sourceRef, revision: item.revision },
+      created_at: now
+    });
+    recordAuditEvent(db, {
+      event_type: "redaction",
+      action: "source_text_redact",
+      target_uri: item.sourceUri,
+      decision: "redacted",
+      metadata: { findings: redacted.findings.length, source_ref: item.sourceRef, revision: item.revision },
+      created_at: now
+    });
+  }
+  const chunks = chunkText(redacted.text, maxChars, overlapChars);
+  for (const chunk of chunks) {
+    const chunkId = stableId("chk", `${sourceRevisionId}\x00${chunk.ordinal}\x00${chunk.text}`);
+    const provenance = sourceProvenance({
+      source_ref: item.sourceRef,
+      source_uri: item.sourceUri,
+      source_kind: item.kind,
+      source_revision_id: sourceRevisionId,
+      revision: item.revision,
+      hash: item.hash,
+      chunk_id: chunkId,
+      start_offset: chunk.startOffset,
+      end_offset: chunk.endOffset,
+      status: item.status,
+      resolver: "open-files-read-only"
+    });
+    const metadata = withProvenance({
+      source_ref: item.sourceRef,
+      source_uri: item.sourceUri,
+      source_kind: item.kind,
+      source_revision_id: sourceRevisionId,
+      revision: item.revision,
+      hash: item.hash,
+      status: item.status,
+      path: asString(item.raw.path) ?? null,
+      mime: asString(item.raw.mime) ?? asString(item.raw.content_type) ?? null,
+      size: asNumber(item.raw.size) ?? null
+    }, provenance);
+    db.run(`INSERT INTO chunks (id, source_revision_id, kind, ordinal, text, token_count, start_offset, end_offset, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+      chunkId,
+      sourceRevisionId,
+      "source",
+      chunk.ordinal,
+      chunk.text,
+      estimateTokenCount(chunk.text),
+      chunk.startOffset,
+      chunk.endOffset,
+      JSON.stringify(metadata),
+      now
+    ]);
+    db.run("INSERT INTO chunks_fts (chunk_id, text, title, source_uri) VALUES (?, ?, ?, ?)", [chunkId, chunk.text, item.title ?? "", item.sourceUri]);
+  }
+  return { chunksInserted: chunks.length, redactions: redacted.findings.length };
+}
+async function ingestOpenFilesManifest(options) {
+  const now = options.now ?? new Date;
+  const maxItems = hardLimit(options.maxItems, DEFAULT_MAX_MANIFEST_ITEMS, MAX_INGEST_BATCH_ITEMS, "maxItems");
+  if (options.safetyPolicy)
+    assertWriteAllowed(options.dbPath, options.safetyPolicy);
+  const text = await readManifestInput(options.input, options.maxInputBytes, maxItems);
+  const items = cloneBoundedDataGraph(parseManifestText(text), {
+    label: "Manifest data",
+    maxBytes: MAX_INGEST_BODY_BYTES
+  });
+  if (items.length > maxItems) {
+    throw new Error(`Manifest contains too many items: ${items.length} exceeds ${maxItems} item limit.`);
+  }
+  assertContainedSourceDataGraph(items);
+  return ingestOpenFilesManifestItems({
+    dbPath: options.dbPath,
+    items,
+    sourceLabel: options.input,
+    safetyPolicy: options.safetyPolicy,
+    now,
+    maxChunkChars: options.maxChunkChars,
+    chunkOverlapChars: options.chunkOverlapChars,
+    maxItems: options.maxItems
+  });
+}
+async function ingestOpenFilesManifestItems(options) {
+  const now = (options.now ?? new Date).toISOString();
+  const maxChunkChars = hardLimit(options.maxChunkChars, 4000, MAX_INGEST_BODY_BYTES, "maxChunkChars");
+  const chunkOverlapChars = hardLimit(options.chunkOverlapChars, 200, MAX_INGEST_BODY_BYTES, "chunkOverlapChars");
+  const maxItems = hardLimit(options.maxItems, DEFAULT_MAX_MANIFEST_ITEMS, MAX_INGEST_BATCH_ITEMS, "maxItems");
+  if (maxChunkChars < 500)
+    throw new Error("maxChunkChars must be at least 500.");
+  if (chunkOverlapChars < 0 || chunkOverlapChars >= maxChunkChars)
+    throw new Error("chunkOverlapChars must be less than maxChunkChars.");
+  const items = cloneBoundedDataGraph(options.items, {
+    label: "Manifest items",
+    maxBytes: MAX_INGEST_BODY_BYTES
+  });
+  if (items.length > maxItems) {
+    throw new Error(`Manifest contains too many items: ${items.length} exceeds ${maxItems} item limit.`);
+  }
+  assertContainedSourceDataGraph(items);
+  const normalizedItems = items.map((raw) => normalizeManifestItem(raw, now));
+  assertNormalizedManifestBounds(normalizedItems);
+  if (options.safetyPolicy)
+    assertWriteAllowed(options.dbPath, options.safetyPolicy);
+  migrateKnowledgeDb(options.dbPath);
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    const result = db.transaction(() => {
+      const seenSources = new Set;
+      const seenRevisions = new Set;
+      let chunksInserted = 0;
+      let chunksDeleted = 0;
+      let redactions = 0;
+      let skipped = 0;
+      const preview = [];
+      recordAuditEvent(db, {
+        event_type: "source_read",
+        action: options.readAction ?? (options.sourceLabel.startsWith("s3://") ? "s3_manifest_read" : "local_manifest_read"),
+        target_uri: options.sourceLabel,
+        decision: "allow",
+        metadata: { items: items.length, read_only: true },
+        created_at: now
+      });
+      for (const item of normalizedItems) {
+        if (preview.length < DEFAULT_MANIFEST_PREVIEW_ITEMS) {
+          preview.push({
+            source_ref: item.sourceRef,
+            title: item.title,
+            status: item.status,
+            has_text: Boolean(item.text)
+          });
+        }
+        const sourceId = upsertSource(db, item, now);
+        const revisionId = upsertRevision(db, sourceId, item, now);
+        seenSources.add(sourceId);
+        seenRevisions.add(revisionId);
+        if (item.text || item.status.toLowerCase() === "deleted") {
+          chunksDeleted += deleteChunksForRevision(db, revisionId);
+        }
+        const inserted = insertChunks(db, revisionId, item, now, maxChunkChars, chunkOverlapChars, options.safetyPolicy);
+        chunksInserted += inserted.chunksInserted;
+        redactions += inserted.redactions;
+      }
+      recordAuditEvent(db, {
+        event_type: "write",
+        action: "knowledge_manifest_ingest",
+        target_uri: options.dbPath,
+        decision: "allow",
+        metadata: { items: items.length, sources: seenSources.size, revisions: seenRevisions.size, chunks_inserted: chunksInserted, redactions },
+        created_at: now
+      });
+      return {
+        path: options.sourceLabel,
+        db_path: options.dbPath,
+        items_seen: items.length,
+        sources_upserted: seenSources.size,
+        revisions_upserted: seenRevisions.size,
+        chunks_inserted: chunksInserted,
+        chunks_deleted: chunksDeleted,
+        redactions,
+        skipped,
+        items_preview: preview
+      };
+    })();
+    return result;
+  } finally {
+    db.close();
+  }
+}
+var DEFAULT_MAX_MANIFEST_INPUT_BYTES, DEFAULT_MAX_MANIFEST_ITEMS, DEFAULT_MANIFEST_PREVIEW_ITEMS = 10, MAX_NORMALIZED_MANIFEST_ITEM_BYTES = 1048576, MAX_NORMALIZED_MANIFEST_AGGREGATE_BYTES, OMIT_MANIFEST_METADATA_KEYS;
+var init_manifest_ingest = __esm(() => {
+  init_knowledge_db();
+  init_anchored_fs();
+  init_input_limits();
+  init_public_guard();
+  init_source_ref();
+  init_safety();
+  DEFAULT_MAX_MANIFEST_INPUT_BYTES = MAX_INGEST_BODY_BYTES;
+  DEFAULT_MAX_MANIFEST_ITEMS = MAX_INGEST_BATCH_ITEMS;
+  MAX_NORMALIZED_MANIFEST_AGGREGATE_BYTES = MAX_INGEST_BODY_BYTES;
+  OMIT_MANIFEST_METADATA_KEYS = new Set([
+    "text",
+    "content",
+    "content_text",
+    "extracted_text",
+    "markdown",
+    "raw",
+    "raw_text",
+    "raw_bytes",
+    "raw_content",
+    "raw_body",
+    "raw_file",
+    "source_raw",
+    "source_raw_bytes",
+    "source_bytes",
+    "source_content",
+    "source_body",
+    "file_bytes",
+    "file_content",
+    "content_bytes",
+    "content_base64",
+    "document_bytes",
+    "document_content",
+    "document_base64",
+    "binary",
+    "binary_content",
+    "binary_base64",
+    "bytes",
+    "body",
+    "blob",
+    "data",
+    "payload"
+  ]);
+});
+
+// src/source-resolver.ts
+function parseJsonObject(value) {
+  if (!value)
+    return {};
+  try {
+    const parsed = parseBoundedJsonData(value, "Persisted source metadata");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch (error) {
+    if (!(error instanceof SyntaxError))
+      throw error;
+    return {};
+  }
+}
+function metadataString(metadata, keys) {
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === "string" && value.length > 0)
+      return value;
+  }
+  return null;
+}
+function metadataNumber(metadata, keys) {
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === "number" && Number.isFinite(value))
+      return value;
+  }
+  return null;
+}
+function assertPurposeAllowed(permissions, purpose) {
+  const mode2 = permissions.mode;
+  if (typeof mode2 === "string" && mode2 !== "read_only") {
+    throw new Error(`Source resolver denied ${purpose}. Permission mode is ${mode2}, expected read_only.`);
+  }
+  const denied = permissions.denied_purposes;
+  if (Array.isArray(denied) && denied.includes(purpose)) {
+    throw new Error(`Source resolver denied ${purpose}. Purpose is explicitly denied.`);
+  }
+  const allowed = permissions.allowed_purposes;
+  if (Array.isArray(allowed) && allowed.length > 0 && !allowed.includes(purpose)) {
+    throw new Error(`Source resolver denied ${purpose}. Allowed purposes: ${allowed.join(", ")}`);
+  }
+}
+function sourceRevisionRef(sourceUri, revision, fallback) {
+  if (!revision)
+    return fallback;
+  try {
+    const parsed = parseSourceRef(sourceUri);
+    if (parsed.kind === "open-files" && parsed.entity === "file") {
+      return `${sourceUri}/revision/${encodeURIComponent(revision.revision)}`;
+    }
+  } catch {
+    return fallback;
+  }
+  return fallback;
+}
+function selectSource(db, sourceUri, requestedRef) {
+  return db.query(`SELECT id, uri, kind, title, metadata_json, acl_json, updated_at
+     FROM sources
+     WHERE uri = ? OR uri = ?
+     ORDER BY CASE WHEN uri = ? THEN 0 ELSE 1 END
+     LIMIT 1`).get(sourceUri, requestedRef, sourceUri) ?? null;
+}
+function selectRevision(db, sourceId, revisionId) {
+  if (revisionId) {
+    return db.query(`SELECT id, revision, hash, extracted_text_uri, metadata_json, created_at
+       FROM source_revisions
+       WHERE source_id = ? AND revision = ?
+       LIMIT 1`).get(sourceId, revisionId) ?? null;
+  }
+  return db.query(`SELECT id, revision, hash, extracted_text_uri, metadata_json, created_at
+     FROM source_revisions
+     WHERE source_id = ?
+     ORDER BY created_at DESC, revision DESC
+     LIMIT 1`).get(sourceId) ?? null;
+}
+function countChunks(db, revisionId) {
+  if (!revisionId)
+    return 0;
+  const row = db.query("SELECT COUNT(*) AS n FROM chunks WHERE source_revision_id = ?").get(revisionId);
+  return row?.n ?? 0;
+}
+function selectChunks(db, revisionId, limit) {
+  if (!revisionId || limit <= 0)
+    return [];
+  return db.query(`SELECT id, kind, ordinal, text, token_count, start_offset, end_offset, metadata_json
+     FROM chunks
+     WHERE source_revision_id = ?
+     ORDER BY ordinal ASC
+     LIMIT ?`).all(revisionId, limit);
+}
+async function resolveOpenFilesSource(options) {
+  assertContainedSourceGraph(options);
+  const purpose = options.purpose ?? "knowledge_answer";
+  const limit = Math.max(0, Math.min(options.limit ?? 10, 100));
+  const resolvedAt = (options.now ?? new Date).toISOString();
+  const parsed = parseSourceRef(options.sourceRef);
+  const sourceUri = catalogSourceUriForRef(options.sourceRef, parsed);
+  const requestedRevision = revisionIdForSourceRef(options.sourceRef);
+  if (options.safetyPolicy) {
+    if (!options.safetyPolicy.readOnlySourceAccess)
+      throw new Error("Safety policy denied source resolution.");
+    assertWriteAllowed(options.dbPath, options.safetyPolicy);
+  }
+  migrateKnowledgeDb(options.dbPath);
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    return db.transaction(() => {
+      const source = selectSource(db, sourceUri, options.sourceRef);
+      if (!source) {
+        recordAuditEvent(db, {
+          event_type: "source_read",
+          action: "open_files_resolve_missing",
+          target_uri: options.sourceRef,
+          decision: "allow",
+          metadata: { purpose, read_only: true, source_uri: sourceUri },
+          created_at: resolvedAt
+        });
+        return {
+          source_ref: options.sourceRef,
+          source_uri: sourceUri,
+          purpose,
+          read_only: true,
+          resolved: false,
+          resolver: {
+            name: "open-files-read-only",
+            mode: "local_catalog",
+            contract: "open-files-knowledge-source-v1"
+          },
+          source: null,
+          revision: null,
+          content: {
+            mime: null,
+            size: null,
+            hash: null,
+            text_available: false,
+            chunks_total: 0,
+            chunks_returned: 0,
+            char_count_returned: 0,
+            extracted_text_ref: null,
+            bytes_available: false,
+            bytes_exposed: false
+          },
+          chunks: [],
+          citations: []
+        };
+      }
+      const sourceMetadata = parseJsonObject(source.metadata_json);
+      const permissions = parseJsonObject(source.acl_json);
+      try {
+        assertPurposeAllowed(permissions, purpose);
+      } catch (error) {
+        recordAuditEvent(db, {
+          event_type: "source_read",
+          action: "open_files_resolve",
+          target_uri: options.sourceRef,
+          decision: "deny",
+          metadata: {
+            purpose,
+            read_only: true,
+            source_uri: source.uri,
+            error: error instanceof Error ? error.message : String(error)
+          },
+          created_at: resolvedAt
+        });
+        throw error;
+      }
+      const revision = selectRevision(db, source.id, requestedRevision);
+      const revisionMetadata = parseJsonObject(revision?.metadata_json);
+      const totalChunks = countChunks(db, revision?.id ?? null);
+      const rows = selectChunks(db, revision?.id ?? null, limit);
+      const effectiveSourceRef = sourceRevisionRef(source.uri, revision, options.sourceRef);
+      const chunks = rows.map((row) => {
+        const metadata = parseJsonObject(row.metadata_json);
+        const evidence = {
+          resolver: "open-files-read-only",
+          mode: "local_catalog",
+          purpose,
+          read_only: true,
+          source_ref: metadataString(metadata, ["source_ref"]) ?? effectiveSourceRef,
+          source_uri: source.uri,
+          source_revision_id: revision?.id ?? null,
+          revision: revision?.revision ?? null,
+          hash: revision?.hash ?? metadataString(metadata, ["hash"]),
+          chunk_id: row.id,
+          start_offset: row.start_offset,
+          end_offset: row.end_offset,
+          resolved_at: resolvedAt
+        };
+        const provenance = sourceProvenance({
+          source_ref: evidence.source_ref,
+          source_uri: evidence.source_uri,
+          source_kind: source.kind,
+          source_revision_id: evidence.source_revision_id,
+          revision: evidence.revision,
+          hash: evidence.hash,
+          chunk_id: row.id,
+          start_offset: row.start_offset,
+          end_offset: row.end_offset,
+          status: metadataString(metadata, ["status"]),
+          resolver: evidence.resolver
+        });
+        return {
+          id: row.id,
+          kind: row.kind,
+          ordinal: row.ordinal,
+          text: row.text,
+          token_count: row.token_count,
+          start_offset: row.start_offset,
+          end_offset: row.end_offset,
+          metadata,
+          evidence,
+          provenance
+        };
+      });
+      const citations = chunks.map((chunk) => ({
+        source_ref: chunk.evidence.source_ref,
+        source_uri: source.uri,
+        chunk_id: chunk.id,
+        quote: chunk.text.slice(0, 500),
+        start_offset: chunk.start_offset,
+        end_offset: chunk.end_offset,
+        evidence: chunk.evidence,
+        provenance: chunk.provenance
+      }));
+      recordAuditEvent(db, {
+        event_type: "source_read",
+        action: "open_files_resolve",
+        target_uri: options.sourceRef,
+        decision: "allow",
+        metadata: {
+          purpose,
+          read_only: true,
+          source_uri: source.uri,
+          revision: revision?.revision ?? null,
+          chunks_returned: chunks.length,
+          chunks_total: totalChunks
+        },
+        created_at: resolvedAt
+      });
+      const mime = metadataString(sourceMetadata, ["mime", "content_type"]) ?? metadataString(revisionMetadata, ["mime", "content_type"]);
+      const size = metadataNumber(sourceMetadata, ["size", "size_bytes"]) ?? metadataNumber(revisionMetadata, ["size", "size_bytes"]);
+      return {
+        source_ref: effectiveSourceRef,
+        source_uri: source.uri,
+        purpose,
+        read_only: true,
+        resolved: true,
+        resolver: {
+          name: "open-files-read-only",
+          mode: "local_catalog",
+          contract: "open-files-knowledge-source-v1"
+        },
+        source: {
+          id: source.id,
+          uri: source.uri,
+          kind: source.kind,
+          title: source.title,
+          metadata: sourceMetadata,
+          permissions,
+          updated_at: source.updated_at
+        },
+        revision: revision ? {
+          id: revision.id,
+          revision: revision.revision,
+          hash: revision.hash,
+          extracted_text_uri: revision.extracted_text_uri,
+          metadata: revisionMetadata,
+          created_at: revision.created_at,
+          reindex_required: revisionMetadata.reindex_required === true
+        } : null,
+        content: {
+          mime,
+          size,
+          hash: revision?.hash ?? metadataString(sourceMetadata, ["hash", "checksum", "sha256"]),
+          text_available: totalChunks > 0,
+          chunks_total: totalChunks,
+          chunks_returned: chunks.length,
+          char_count_returned: chunks.reduce((sum, chunk) => sum + chunk.text.length, 0),
+          extracted_text_ref: revision?.extracted_text_uri ?? metadataString(revisionMetadata, ["extracted_text_ref", "extracted_text_uri"]),
+          bytes_available: false,
+          bytes_exposed: false
+        },
+        chunks,
+        citations
+      };
+    })();
+  } finally {
+    db.close();
+  }
+}
+var init_source_resolver = __esm(() => {
+  init_knowledge_db();
+  init_input_limits();
+  init_source_ref();
+  init_safety();
+  init_public_guard();
+});
+
+// src/source-ingest.ts
+var exports_source_ingest = {};
+__export(exports_source_ingest, {
+  ingestSourceRef: () => ingestSourceRef
+});
+import { createHash as createHash6 } from "crypto";
+import { basename as basename5 } from "path";
+function sha256Text(text) {
+  return `sha256:${createHash6("sha256").update(text).digest("hex")}`;
+}
+function titleForRef(parsed) {
+  if (parsed.kind === "file")
+    return basename5(parsed.path);
+  if (parsed.kind === "s3")
+    return basename5(parsed.key);
+  if (parsed.kind === "web")
+    return basename5(new URL(parsed.url).pathname) || parsed.url;
+  return parsed.path ? basename5(parsed.path) : parsed.id;
+}
+async function readDirectSourceText(parsed, config, safetyPolicy) {
+  if (parsed.kind === "file") {
+    const snapshot = readAnchoredRegularFileSnapshot(parsed.path, MAX_INGEST_BODY_BYTES);
+    if (!snapshot)
+      throw new Error(`Source file not found: ${parsed.path}`);
+    const text = snapshot.content;
+    return {
+      text,
+      contentSource: "file",
+      title: titleForRef(parsed),
+      mime: "text/plain",
+      size: text.length,
+      hash: sha256Text(text),
+      revision: null,
+      extractedTextRef: null,
+      metadata: { path: parsed.path },
+      permissions: { mode: "read_only" }
+    };
+  }
+  assertClassifiedSourceReference(parsed.uri);
+  throw new Error(`Direct source reading is contained for ${parsed.kind} references.`);
+}
+async function readTextRef(uri, config, safetyPolicy) {
+  assertClassifiedSourceReference(uri);
+  const parsed = parseSourceRef(uri);
+  const direct = await readDirectSourceText(parsed, config, safetyPolicy);
+  return { text: direct.text, contentSource: "extracted_text_ref" };
+}
+async function readOpenFilesSourceText(options) {
+  const resolved = await resolveOpenFilesSource({
+    dbPath: options.dbPath,
+    sourceRef: options.sourceRef,
+    purpose: options.purpose ?? "knowledge_index",
+    limit: 100,
+    safetyPolicy: options.safetyPolicy,
+    now: options.now
+  });
+  if (!resolved.resolved) {
+    throw new Error("Open-files source is not in the local knowledge catalog. Ingest an open-files manifest first or use the open-files resolver API.");
+  }
+  if (resolved.revision?.extracted_text_uri && !resolved.content.text_available) {
+    const textRef = await readTextRef(resolved.revision.extracted_text_uri, options.config, options.safetyPolicy);
+    return {
+      text: textRef.text,
+      contentSource: textRef.contentSource,
+      title: resolved.source?.title ?? null,
+      mime: resolved.content.mime,
+      size: textRef.text.length,
+      hash: resolved.revision.hash ?? sha256Text(textRef.text),
+      revision: resolved.revision.revision,
+      extractedTextRef: resolved.revision.extracted_text_uri,
+      metadata: resolved.source?.metadata ?? {},
+      permissions: resolved.source?.permissions ?? { mode: "read_only" }
+    };
+  }
+  if (resolved.chunks.length === 0) {
+    throw new Error("Open-files source has no extracted text chunks yet. Ingest an open-files manifest with extracted_text or extracted_text_ref first.");
+  }
+  if (resolved.content.chunks_total > MAX_INGEST_BATCH_ITEMS || resolved.chunks.length > MAX_INGEST_BATCH_ITEMS) {
+    throw new Error(`Resolved source exceeds the ${MAX_INGEST_BATCH_ITEMS} chunk hard limit.`);
+  }
+  let joinedBytes = 0;
+  const parts = [];
+  for (const chunk of resolved.chunks) {
+    if (typeof chunk.text !== "string")
+      throw new Error("Resolved source chunk text must be a string.");
+    joinedBytes += Buffer.byteLength(chunk.text) + (parts.length === 0 ? 0 : 2);
+    if (joinedBytes > MAX_INGEST_BODY_BYTES) {
+      throw new Error(`Resolved source exceeds the ${MAX_INGEST_BODY_BYTES} joined byte hard limit.`);
+    }
+    parts.push(chunk.text);
+  }
+  const text = parts.join(`
+
+`);
+  return {
+    text,
+    contentSource: "catalog_chunks",
+    title: resolved.source?.title ?? null,
+    mime: resolved.content.mime,
+    size: text.length,
+    hash: resolved.revision?.hash ?? sha256Text(text),
+    revision: resolved.revision?.revision ?? null,
+    extractedTextRef: resolved.revision?.extracted_text_uri ?? null,
+    metadata: resolved.source?.metadata ?? {},
+    permissions: resolved.source?.permissions ?? { mode: "read_only" }
+  };
+}
+function manifestItemForSource(sourceRef, parsed, resolved, purpose) {
+  const hash = resolved.hash ?? sha256Text(resolved.text);
+  const metadata = {
+    ...resolved.metadata,
+    source_ref: sourceRef,
+    content_source: resolved.contentSource,
+    read_only: true
+  };
+  const item = {
+    source_ref: sourceRef,
+    name: resolved.title ?? titleForRef(parsed),
+    mime: resolved.mime ?? "text/plain",
+    size: resolved.size ?? resolved.text.length,
+    hash,
+    revision: resolved.revision ?? hash,
+    status: "active",
+    updated_at: new Date().toISOString(),
+    permissions: {
+      mode: "read_only",
+      allowed_purposes: [purpose],
+      ...resolved.permissions
+    },
+    metadata,
+    extracted_text_ref: resolved.extractedTextRef,
+    extracted_text: resolved.text
+  };
+  if (parsed.kind === "open-files") {
+    if (parsed.entity === "file")
+      item.file_id = parsed.id;
+    if (parsed.entity === "source") {
+      item.source_id = parsed.id;
+      item.path = parsed.path;
+    }
+  }
+  if (parsed.kind === "file")
+    item.path = parsed.path;
+  if (parsed.kind === "s3")
+    item.path = parsed.key;
+  if (parsed.kind === "web")
+    item.url = parsed.url;
+  return item;
+}
+async function ingestSourceRef(options) {
+  assertContainedSourceGraph(options);
+  assertClassifiedSourceReference(options.sourceRef, { allowStored: true });
+  const purpose = options.purpose ?? "knowledge_index";
+  const parsed = parseSourceRef(options.sourceRef);
+  const resolved = parsed.kind === "open-files" ? await readOpenFilesSourceText(options) : await readDirectSourceText(parsed, options.config, options.safetyPolicy);
+  const item = manifestItemForSource(options.sourceRef, parsed, resolved, purpose);
+  const result = await ingestOpenFilesManifestItems({
+    dbPath: options.dbPath,
+    items: [item],
+    sourceLabel: options.sourceRef,
+    readAction: "source_ref_ingest_read",
+    safetyPolicy: options.safetyPolicy,
+    now: options.now
+  });
+  return {
+    ...result,
+    source_ref: options.sourceRef,
+    content_source: resolved.contentSource,
+    read_only: true,
+    hash: String(item.hash)
+  };
+}
+var init_source_ingest = __esm(() => {
+  init_manifest_ingest();
+  init_anchored_fs();
+  init_input_limits();
+  init_public_guard();
+  init_source_ref();
+  init_source_resolver();
+});
+
 // node_modules/zod/v4/core/core.js
 function $constructor(name, initializer, params) {
   function init(inst, def) {
@@ -120,7 +5378,7 @@ __export(exports_util, {
   objectClone: () => objectClone,
   numKeys: () => numKeys,
   nullish: () => nullish,
-  normalizeParams: () => normalizeParams2,
+  normalizeParams: () => normalizeParams,
   mergeDefs: () => mergeDefs,
   merge: () => merge,
   jsonStringifyReplacer: () => jsonStringifyReplacer,
@@ -336,7 +5594,7 @@ function clone(inst, def, params) {
     cl._zod.parent = inst;
   return cl;
 }
-function normalizeParams2(_params) {
+function normalizeParams(_params) {
   const params = _params;
   if (!params)
     return {};
@@ -2888,7 +8146,7 @@ var init_schemas = __esm(() => {
             })));
           }
         }
-        
+
         if (${id}.value === undefined) {
           if (${k} in input) {
             newResult[${k}] = undefined;
@@ -2896,7 +8154,7 @@ var init_schemas = __esm(() => {
         } else {
           newResult[${k}] = ${id}.value;
         }
-        
+
       `);
         } else if (!isOptionalIn) {
           doc.write(`
@@ -2933,7 +8191,7 @@ var init_schemas = __esm(() => {
             path: iss.path ? [${k}, ...iss.path] : [${k}]
           })));
         }
-        
+
         if (${id}.value === undefined) {
           if (${k} in input) {
             newResult[${k}] = undefined;
@@ -2941,7 +8199,7 @@ var init_schemas = __esm(() => {
         } else {
           newResult[${k}] = ${id}.value;
         }
-        
+
       `);
         }
       }
@@ -10086,14 +15344,14 @@ var init_registries = __esm(() => {
 function _string(Class2, params) {
   return new Class2({
     type: "string",
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _coercedString(Class2, params) {
   return new Class2({
     type: "string",
     coerce: true,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _email(Class2, params) {
@@ -10102,7 +15360,7 @@ function _email(Class2, params) {
     format: "email",
     check: "string_format",
     abort: false,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _guid(Class2, params) {
@@ -10111,7 +15369,7 @@ function _guid(Class2, params) {
     format: "guid",
     check: "string_format",
     abort: false,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _uuid(Class2, params) {
@@ -10120,7 +15378,7 @@ function _uuid(Class2, params) {
     format: "uuid",
     check: "string_format",
     abort: false,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _uuidv4(Class2, params) {
@@ -10130,7 +15388,7 @@ function _uuidv4(Class2, params) {
     check: "string_format",
     abort: false,
     version: "v4",
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _uuidv6(Class2, params) {
@@ -10140,7 +15398,7 @@ function _uuidv6(Class2, params) {
     check: "string_format",
     abort: false,
     version: "v6",
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _uuidv7(Class2, params) {
@@ -10150,7 +15408,7 @@ function _uuidv7(Class2, params) {
     check: "string_format",
     abort: false,
     version: "v7",
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _url(Class2, params) {
@@ -10159,7 +15417,7 @@ function _url(Class2, params) {
     format: "url",
     check: "string_format",
     abort: false,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _emoji2(Class2, params) {
@@ -10168,7 +15426,7 @@ function _emoji2(Class2, params) {
     format: "emoji",
     check: "string_format",
     abort: false,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _nanoid(Class2, params) {
@@ -10177,7 +15435,7 @@ function _nanoid(Class2, params) {
     format: "nanoid",
     check: "string_format",
     abort: false,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _cuid(Class2, params) {
@@ -10186,7 +15444,7 @@ function _cuid(Class2, params) {
     format: "cuid",
     check: "string_format",
     abort: false,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _cuid2(Class2, params) {
@@ -10195,7 +15453,7 @@ function _cuid2(Class2, params) {
     format: "cuid2",
     check: "string_format",
     abort: false,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _ulid(Class2, params) {
@@ -10204,7 +15462,7 @@ function _ulid(Class2, params) {
     format: "ulid",
     check: "string_format",
     abort: false,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _xid(Class2, params) {
@@ -10213,7 +15471,7 @@ function _xid(Class2, params) {
     format: "xid",
     check: "string_format",
     abort: false,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _ksuid(Class2, params) {
@@ -10222,7 +15480,7 @@ function _ksuid(Class2, params) {
     format: "ksuid",
     check: "string_format",
     abort: false,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _ipv4(Class2, params) {
@@ -10231,7 +15489,7 @@ function _ipv4(Class2, params) {
     format: "ipv4",
     check: "string_format",
     abort: false,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _ipv6(Class2, params) {
@@ -10240,7 +15498,7 @@ function _ipv6(Class2, params) {
     format: "ipv6",
     check: "string_format",
     abort: false,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _mac(Class2, params) {
@@ -10249,7 +15507,7 @@ function _mac(Class2, params) {
     format: "mac",
     check: "string_format",
     abort: false,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _cidrv4(Class2, params) {
@@ -10258,7 +15516,7 @@ function _cidrv4(Class2, params) {
     format: "cidrv4",
     check: "string_format",
     abort: false,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _cidrv6(Class2, params) {
@@ -10267,7 +15525,7 @@ function _cidrv6(Class2, params) {
     format: "cidrv6",
     check: "string_format",
     abort: false,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _base64(Class2, params) {
@@ -10276,7 +15534,7 @@ function _base64(Class2, params) {
     format: "base64",
     check: "string_format",
     abort: false,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _base64url(Class2, params) {
@@ -10285,7 +15543,7 @@ function _base64url(Class2, params) {
     format: "base64url",
     check: "string_format",
     abort: false,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _e164(Class2, params) {
@@ -10294,7 +15552,7 @@ function _e164(Class2, params) {
     format: "e164",
     check: "string_format",
     abort: false,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _jwt(Class2, params) {
@@ -10303,7 +15561,7 @@ function _jwt(Class2, params) {
     format: "jwt",
     check: "string_format",
     abort: false,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _isoDateTime(Class2, params) {
@@ -10314,7 +15572,7 @@ function _isoDateTime(Class2, params) {
     offset: false,
     local: false,
     precision: null,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _isoDate(Class2, params) {
@@ -10322,7 +15580,7 @@ function _isoDate(Class2, params) {
     type: "string",
     format: "date",
     check: "string_format",
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _isoTime(Class2, params) {
@@ -10331,7 +15589,7 @@ function _isoTime(Class2, params) {
     format: "time",
     check: "string_format",
     precision: null,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _isoDuration(Class2, params) {
@@ -10339,14 +15597,14 @@ function _isoDuration(Class2, params) {
     type: "string",
     format: "duration",
     check: "string_format",
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _number(Class2, params) {
   return new Class2({
     type: "number",
     checks: [],
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _coercedNumber(Class2, params) {
@@ -10354,7 +15612,7 @@ function _coercedNumber(Class2, params) {
     type: "number",
     coerce: true,
     checks: [],
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _int(Class2, params) {
@@ -10363,7 +15621,7 @@ function _int(Class2, params) {
     check: "number_format",
     abort: false,
     format: "safeint",
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _float32(Class2, params) {
@@ -10372,7 +15630,7 @@ function _float32(Class2, params) {
     check: "number_format",
     abort: false,
     format: "float32",
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _float64(Class2, params) {
@@ -10381,7 +15639,7 @@ function _float64(Class2, params) {
     check: "number_format",
     abort: false,
     format: "float64",
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _int32(Class2, params) {
@@ -10390,7 +15648,7 @@ function _int32(Class2, params) {
     check: "number_format",
     abort: false,
     format: "int32",
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _uint32(Class2, params) {
@@ -10399,33 +15657,33 @@ function _uint32(Class2, params) {
     check: "number_format",
     abort: false,
     format: "uint32",
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _boolean(Class2, params) {
   return new Class2({
     type: "boolean",
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _coercedBoolean(Class2, params) {
   return new Class2({
     type: "boolean",
     coerce: true,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _bigint(Class2, params) {
   return new Class2({
     type: "bigint",
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _coercedBigint(Class2, params) {
   return new Class2({
     type: "bigint",
     coerce: true,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _int64(Class2, params) {
@@ -10434,7 +15692,7 @@ function _int64(Class2, params) {
     check: "bigint_format",
     abort: false,
     format: "int64",
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _uint64(Class2, params) {
@@ -10443,25 +15701,25 @@ function _uint64(Class2, params) {
     check: "bigint_format",
     abort: false,
     format: "uint64",
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _symbol(Class2, params) {
   return new Class2({
     type: "symbol",
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _undefined2(Class2, params) {
   return new Class2({
     type: "undefined",
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _null2(Class2, params) {
   return new Class2({
     type: "null",
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _any(Class2) {
@@ -10477,38 +15735,38 @@ function _unknown(Class2) {
 function _never(Class2, params) {
   return new Class2({
     type: "never",
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _void(Class2, params) {
   return new Class2({
     type: "void",
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _date(Class2, params) {
   return new Class2({
     type: "date",
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _coercedDate(Class2, params) {
   return new Class2({
     type: "date",
     coerce: true,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _nan(Class2, params) {
   return new Class2({
     type: "nan",
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _lt(value, params) {
   return new $ZodCheckLessThan({
     check: "less_than",
-    ...normalizeParams2(params),
+    ...normalizeParams(params),
     value,
     inclusive: false
   });
@@ -10516,7 +15774,7 @@ function _lt(value, params) {
 function _lte(value, params) {
   return new $ZodCheckLessThan({
     check: "less_than",
-    ...normalizeParams2(params),
+    ...normalizeParams(params),
     value,
     inclusive: true
   });
@@ -10524,7 +15782,7 @@ function _lte(value, params) {
 function _gt(value, params) {
   return new $ZodCheckGreaterThan({
     check: "greater_than",
-    ...normalizeParams2(params),
+    ...normalizeParams(params),
     value,
     inclusive: false
   });
@@ -10532,7 +15790,7 @@ function _gt(value, params) {
 function _gte(value, params) {
   return new $ZodCheckGreaterThan({
     check: "greater_than",
-    ...normalizeParams2(params),
+    ...normalizeParams(params),
     value,
     inclusive: true
   });
@@ -10552,35 +15810,35 @@ function _nonnegative(params) {
 function _multipleOf(value, params) {
   return new $ZodCheckMultipleOf({
     check: "multiple_of",
-    ...normalizeParams2(params),
+    ...normalizeParams(params),
     value
   });
 }
 function _maxSize(maximum, params) {
   return new $ZodCheckMaxSize({
     check: "max_size",
-    ...normalizeParams2(params),
+    ...normalizeParams(params),
     maximum
   });
 }
 function _minSize(minimum, params) {
   return new $ZodCheckMinSize({
     check: "min_size",
-    ...normalizeParams2(params),
+    ...normalizeParams(params),
     minimum
   });
 }
 function _size(size, params) {
   return new $ZodCheckSizeEquals({
     check: "size_equals",
-    ...normalizeParams2(params),
+    ...normalizeParams(params),
     size
   });
 }
 function _maxLength(maximum, params) {
   const ch = new $ZodCheckMaxLength({
     check: "max_length",
-    ...normalizeParams2(params),
+    ...normalizeParams(params),
     maximum
   });
   return ch;
@@ -10588,14 +15846,14 @@ function _maxLength(maximum, params) {
 function _minLength(minimum, params) {
   return new $ZodCheckMinLength({
     check: "min_length",
-    ...normalizeParams2(params),
+    ...normalizeParams(params),
     minimum
   });
 }
 function _length(length, params) {
   return new $ZodCheckLengthEquals({
     check: "length_equals",
-    ...normalizeParams2(params),
+    ...normalizeParams(params),
     length
   });
 }
@@ -10603,7 +15861,7 @@ function _regex(pattern, params) {
   return new $ZodCheckRegex({
     check: "string_format",
     format: "regex",
-    ...normalizeParams2(params),
+    ...normalizeParams(params),
     pattern
   });
 }
@@ -10611,21 +15869,21 @@ function _lowercase(params) {
   return new $ZodCheckLowerCase({
     check: "string_format",
     format: "lowercase",
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _uppercase(params) {
   return new $ZodCheckUpperCase({
     check: "string_format",
     format: "uppercase",
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _includes(includes, params) {
   return new $ZodCheckIncludes({
     check: "string_format",
     format: "includes",
-    ...normalizeParams2(params),
+    ...normalizeParams(params),
     includes
   });
 }
@@ -10633,7 +15891,7 @@ function _startsWith(prefix, params) {
   return new $ZodCheckStartsWith({
     check: "string_format",
     format: "starts_with",
-    ...normalizeParams2(params),
+    ...normalizeParams(params),
     prefix
   });
 }
@@ -10641,7 +15899,7 @@ function _endsWith(suffix, params) {
   return new $ZodCheckEndsWith({
     check: "string_format",
     format: "ends_with",
-    ...normalizeParams2(params),
+    ...normalizeParams(params),
     suffix
   });
 }
@@ -10650,14 +15908,14 @@ function _property(property, schema, params) {
     check: "property",
     property,
     schema,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _mime(types, params) {
   return new $ZodCheckMimeType({
     check: "mime_type",
     mime: types,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _overwrite(tx) {
@@ -10685,14 +15943,14 @@ function _array(Class2, element, params) {
   return new Class2({
     type: "array",
     element,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _union(Class2, options, params) {
   return new Class2({
     type: "union",
     options,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _xor(Class2, options, params) {
@@ -10700,7 +15958,7 @@ function _xor(Class2, options, params) {
     type: "union",
     options,
     inclusive: false,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _discriminatedUnion(Class2, discriminator, options, params) {
@@ -10708,7 +15966,7 @@ function _discriminatedUnion(Class2, discriminator, options, params) {
     type: "union",
     options,
     discriminator,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _intersection(Class2, left, right) {
@@ -10726,7 +15984,7 @@ function _tuple(Class2, items, _paramsOrRest, _params) {
     type: "tuple",
     items,
     rest,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _record(Class2, keyType, valueType, params) {
@@ -10734,7 +15992,7 @@ function _record(Class2, keyType, valueType, params) {
     type: "record",
     keyType,
     valueType,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _map(Class2, keyType, valueType, params) {
@@ -10742,14 +16000,14 @@ function _map(Class2, keyType, valueType, params) {
     type: "map",
     keyType,
     valueType,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _set(Class2, valueType, params) {
   return new Class2({
     type: "set",
     valueType,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _enum(Class2, values, params) {
@@ -10757,27 +16015,27 @@ function _enum(Class2, values, params) {
   return new Class2({
     type: "enum",
     entries,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _nativeEnum(Class2, entries, params) {
   return new Class2({
     type: "enum",
     entries,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _literal(Class2, value, params) {
   return new Class2({
     type: "literal",
     values: Array.isArray(value) ? value : [value],
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _file(Class2, params) {
   return new Class2({
     type: "file",
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _transform(Class2, fn) {
@@ -10811,7 +16069,7 @@ function _nonoptional(Class2, innerType, params) {
   return new Class2({
     type: "nonoptional",
     innerType,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _success(Class2, innerType) {
@@ -10844,7 +16102,7 @@ function _templateLiteral(Class2, parts, params) {
   return new Class2({
     type: "template_literal",
     parts,
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
 }
 function _lazy(Class2, getter) {
@@ -10860,7 +16118,7 @@ function _promise(Class2, innerType) {
   });
 }
 function _custom(Class2, fn, _params) {
-  const norm = normalizeParams2(_params);
+  const norm = normalizeParams(_params);
   norm.abort ?? (norm.abort = true);
   const schema = new Class2({
     type: "custom",
@@ -10875,7 +16133,7 @@ function _refine(Class2, fn, _params) {
     type: "custom",
     check: "custom",
     fn,
-    ...normalizeParams2(_params)
+    ...normalizeParams(_params)
   });
   return schema;
 }
@@ -10902,7 +16160,7 @@ function _superRefine(fn, params) {
 function _check(fn, params) {
   const ch = new $ZodCheck({
     check: "custom",
-    ...normalizeParams2(params)
+    ...normalizeParams(params)
   });
   ch._zod.check = fn;
   return ch;
@@ -10930,7 +16188,7 @@ function meta(metadata) {
   return ch;
 }
 function _stringbool(Classes, _params) {
-  const params = normalizeParams2(_params);
+  const params = normalizeParams(_params);
   let truthyArray = params.truthy ?? ["true", "1", "yes", "on", "y", "enabled"];
   let falsyArray = params.falsy ?? ["false", "0", "no", "off", "n", "disabled"];
   if (params.case !== "sensitive") {
@@ -10980,9 +16238,9 @@ function _stringbool(Classes, _params) {
   return codec;
 }
 function _stringFormat(Class2, format, fnOrRegex, _params = {}) {
-  const params = normalizeParams2(_params);
+  const params = normalizeParams(_params);
   const def = {
-    ...normalizeParams2(_params),
+    ...normalizeParams(_params),
     check: "string_format",
     type: "string",
     format,
@@ -14886,1440 +20144,410 @@ var init_zod = __esm(() => {
   zod_default = exports_external;
 });
 
-// src/knowledge-db.ts
-import { Database } from "bun:sqlite";
-
-// src/workspace.ts
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { homedir } from "os";
-import { dirname, join, resolve } from "path";
-var HASNA_KNOWLEDGE_APP_PATH = join(".hasna", "knowledge");
-var LEGACY_HASNA_KNOWLEDGE_APP_PATH = join(".hasna", "apps", "knowledge");
-var EXAMPLE_KNOWLEDGE_CANONICAL = {
-  division: "xyz",
-  app_type: "opensource",
-  app: "knowledge",
-  env: "prod",
-  local_path: HASNA_KNOWLEDGE_APP_PATH,
-  s3: {
-    bucket: "example-knowledge-prod",
-    region: "us-east-1",
-    profile: "example-infra",
-    prefix: ".hasna/knowledge",
-    server_side_encryption: "AES256"
-  },
-  secrets: {
-    env: "example/knowledge/prod/env",
-    aws: "example/knowledge/prod/aws",
-    s3: "example/knowledge/prod/s3",
-    rds: null,
-    future_rds: "example/knowledge/prod/rds"
-  },
-  source_owner: "open-files",
-  evidence_doc: "docs/canonical-secrets-bootstrap-2026-06-08.md"
-};
-function canonicalExampleKnowledgeStorage() {
+// src/outbox-consume.ts
+var exports_outbox_consume = {};
+__export(exports_outbox_consume, {
+  mergeOutboxMetadata: () => mergeOutboxMetadata,
+  consumeOpenFilesOutbox: () => consumeOpenFilesOutbox
+});
+import { createHash as createHash12, randomUUID as randomUUID8 } from "crypto";
+import { basename as basename6, resolve as resolve8 } from "path";
+import { fileURLToPath as fileURLToPath4 } from "url";
+function stableId6(prefix, value) {
+  return `${prefix}_${createHash12("sha256").update(value).digest("hex").slice(0, 20)}`;
+}
+function asObject3(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
+}
+function asString2(value) {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+function buildSourceRef(event) {
+  const explicit = asString2(event.source_ref) ?? asString2(event.source_uri) ?? asString2(event.uri);
+  if (explicit)
+    return explicit;
+  const fileId = asString2(event.file_id);
+  if (fileId) {
+    const revision = asString2(event.revision_id) ?? asString2(event.revision);
+    const fileRef = `open-files://file/${encodeURIComponent(fileId)}`;
+    return revision ? `${fileRef}/revision/${encodeURIComponent(revision)}` : fileRef;
+  }
+  const sourceId = asString2(event.source_id);
+  const path = asString2(event.path);
+  if (sourceId && path) {
+    return `open-files://source/${encodeURIComponent(sourceId)}/path/${encodeURIComponent(path)}`;
+  }
+  throw new Error("Outbox event is missing source_ref, file_id, or source_id/path.");
+}
+function baseSourceUri2(sourceRef, parsed) {
+  if (parsed.kind === "open-files" && parsed.entity === "file" && parsed.revision_id) {
+    return sourceRef.replace(/\/revision\/[^/]+$/, "");
+  }
+  return sourceRef;
+}
+function hashFromEvent(event) {
+  return asString2(event.hash) ?? asString2(event.checksum) ?? asString2(event.sha256) ?? null;
+}
+function revisionFromEvent(event, parsed, hash2) {
+  return asString2(event.revision_id) ?? asString2(event.revision) ?? asString2(event.version_id) ?? (parsed.kind === "open-files" ? parsed.revision_id : undefined) ?? hash2 ?? null;
+}
+function previousRevisionFromEvent(event) {
+  return asString2(event.previous_revision_id) ?? asString2(event.previous_revision) ?? asString2(event.previous_version_id) ?? null;
+}
+function eventType(event) {
+  return (asString2(event.event_type) ?? asString2(event.event) ?? asString2(event.type) ?? asString2(event.action) ?? asString2(event.change_type) ?? "changed").toLowerCase();
+}
+function titleFromEvent(event) {
+  const path = asString2(event.path);
+  return asString2(event.title) ?? asString2(event.name) ?? (path ? basename6(path) : null);
+}
+function normalizeEvent(event, now) {
+  const sourceRef = buildSourceRef(event);
+  const parsed = parseSourceRef(sourceRef);
+  const hash2 = hashFromEvent(event);
   return {
-    type: "s3",
-    artifacts_root: "artifacts",
-    s3: {
-      bucket: EXAMPLE_KNOWLEDGE_CANONICAL.s3.bucket,
-      prefix: EXAMPLE_KNOWLEDGE_CANONICAL.s3.prefix,
-      region: EXAMPLE_KNOWLEDGE_CANONICAL.s3.region,
-      profile: EXAMPLE_KNOWLEDGE_CANONICAL.s3.profile,
-      server_side_encryption: EXAMPLE_KNOWLEDGE_CANONICAL.s3.server_side_encryption
-    }
+    raw: event,
+    eventType: eventType(event),
+    sourceRef,
+    sourceUri: baseSourceUri2(sourceRef, parsed),
+    kind: parsed.kind,
+    title: titleFromEvent(event),
+    revision: revisionFromEvent(event, parsed, hash2),
+    previousRevision: previousRevisionFromEvent(event),
+    hash: hash2,
+    status: asString2(event.status)?.toLowerCase() ?? null,
+    updatedAt: asString2(event.updated_at) ?? now,
+    acl: event.permissions ?? event.acl ?? undefined
   };
 }
-function legacyGlobalStorePath() {
-  return join(homedir(), ".open-knowledge", "db.json");
-}
-function globalKnowledgeHome() {
-  return join(homedir(), ".hasna", "knowledge");
-}
-function projectKnowledgeHome(cwd = process.cwd()) {
-  return resolve(cwd, HASNA_KNOWLEDGE_APP_PATH);
-}
-function legacyGlobalKnowledgeHome() {
-  return join(homedir(), LEGACY_HASNA_KNOWLEDGE_APP_PATH);
-}
-function legacyProjectKnowledgeHome(cwd = process.cwd()) {
-  return resolve(cwd, LEGACY_HASNA_KNOWLEDGE_APP_PATH);
-}
-function resolveLegacyScopedWorkspace(scope, cwd = process.cwd()) {
-  if (scope === "project" || scope === "local") {
-    return workspaceForHome(legacyProjectKnowledgeHome(cwd));
-  }
-  return workspaceForHome(legacyGlobalKnowledgeHome());
-}
-function workspaceForHome(home) {
-  return {
-    home,
-    configPath: join(home, "config.json"),
-    jsonStorePath: join(home, "db.json"),
-    knowledgeDbPath: join(home, "knowledge.db"),
-    artifactsDir: join(home, "artifacts"),
-    cacheDir: join(home, "cache"),
-    exportsDir: join(home, "exports"),
-    indexesDir: join(home, "indexes"),
-    logsDir: join(home, "logs"),
-    runsDir: join(home, "runs"),
-    schemasDir: join(home, "schemas"),
-    wikiDir: join(home, "wiki")
-  };
-}
-function defaultKnowledgeConfig() {
-  return {
-    version: 1,
-    mode: "local",
-    hosted: {
-      api_url: "https://knowledge.hasna.xyz"
-    },
-    storage: {
-      type: "local",
-      artifacts_root: "artifacts"
-    },
-    sources: {
-      preferred_ref: "open-files",
-      allowed_schemes: ["open-files", "s3", "file", "https", "http"]
-    },
-    providers: {
-      default_model: "openai:gpt-5.2",
-      aliases: {
-        fast: "openai:gpt-5-mini",
-        reasoning: "anthropic:claude-opus-4-6",
-        sonnet: "anthropic:claude-sonnet-4-6",
-        deepseek: "deepseek:deepseek-chat",
-        "deepseek-reasoning": "deepseek:deepseek-reasoner"
-      },
-      openai: {
-        api_key_env: "OPENAI_API_KEY",
-        default_model: "gpt-5.2"
-      },
-      anthropic: {
-        api_key_env: "ANTHROPIC_API_KEY",
-        default_model: "claude-sonnet-4-6"
-      },
-      deepseek: {
-        api_key_env: "DEEPSEEK_API_KEY",
-        default_model: "deepseek-chat"
-      }
-    },
-    embeddings: {
-      default_model: "openai:text-embedding-3-small",
-      dimensions: 1536,
-      batch_size: 64,
-      max_parallel_calls: 4
-    },
-    safety: {
-      network: {
-        web_search_enabled: false,
-        s3_reads_enabled: false,
-        allowed_s3_buckets: []
-      },
-      redaction: {
-        enabled: true
-      },
-      approvals: {
-        generated_writes_require_approval: true
-      }
-    }
-  };
-}
-function ensureKnowledgeWorkspace(home) {
-  const workspace = workspaceForHome(home);
-  mkdirSync(workspace.home, { recursive: true });
-  for (const dir of [
-    workspace.artifactsDir,
-    workspace.cacheDir,
-    workspace.exportsDir,
-    workspace.indexesDir,
-    workspace.logsDir,
-    workspace.runsDir,
-    workspace.schemasDir,
-    workspace.wikiDir
-  ]) {
-    mkdirSync(dir, { recursive: true });
-  }
-  if (!existsSync(workspace.configPath)) {
-    writeFileSync(workspace.configPath, `${JSON.stringify(defaultKnowledgeConfig(), null, 2)}
-`);
-  }
-  return workspace;
-}
-function resolveScopedWorkspace(scope, cwd = process.cwd()) {
-  if (scope === "project" || scope === "local") {
-    return workspaceForHome(projectKnowledgeHome(cwd));
-  }
-  return workspaceForHome(globalKnowledgeHome());
-}
-function ensureParentDir(path) {
-  mkdirSync(dirname(path), { recursive: true });
-}
-function readKnowledgeConfig(path) {
-  const raw = readFileSync(path, "utf8");
-  return JSON.parse(raw);
-}
-function writeKnowledgeConfig(path, config) {
-  ensureParentDir(path);
-  writeFileSync(path, `${JSON.stringify(config, null, 2)}
-`);
-}
-
-// src/knowledge-db.ts
-var CURRENT_SCHEMA_VERSION = 8;
-var MIGRATION_1 = `
-PRAGMA journal_mode = WAL;
-PRAGMA foreign_keys = ON;
-
-CREATE TABLE IF NOT EXISTS schema_versions (
-  version INTEGER PRIMARY KEY,
-  applied_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS sources (
-  id TEXT PRIMARY KEY,
-  uri TEXT NOT NULL UNIQUE,
-  kind TEXT NOT NULL,
-  title TEXT,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  acl_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS source_revisions (
-  id TEXT PRIMARY KEY,
-  source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
-  revision TEXT NOT NULL,
-  hash TEXT,
-  extracted_text_uri TEXT,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  UNIQUE(source_id, revision)
-);
-
-CREATE TABLE IF NOT EXISTS chunks (
-  id TEXT PRIMARY KEY,
-  source_revision_id TEXT REFERENCES source_revisions(id) ON DELETE CASCADE,
-  wiki_page_id TEXT,
-  kind TEXT NOT NULL,
-  ordinal INTEGER NOT NULL,
-  text TEXT NOT NULL,
-  token_count INTEGER,
-  start_offset INTEGER,
-  end_offset INTEGER,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS chunk_embeddings (
-  id TEXT PRIMARY KEY,
-  chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
-  provider TEXT NOT NULL,
-  model TEXT NOT NULL,
-  dimensions INTEGER NOT NULL,
-  vector_json TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  UNIQUE(chunk_id, provider, model)
-);
-
-CREATE TABLE IF NOT EXISTS wiki_pages (
-  id TEXT PRIMARY KEY,
-  path TEXT NOT NULL UNIQUE,
-  title TEXT NOT NULL,
-  artifact_uri TEXT,
-  content_hash TEXT,
-  status TEXT NOT NULL DEFAULT 'active',
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS wiki_backlinks (
-  from_page_id TEXT NOT NULL REFERENCES wiki_pages(id) ON DELETE CASCADE,
-  to_page_id TEXT NOT NULL REFERENCES wiki_pages(id) ON DELETE CASCADE,
-  label TEXT,
-  created_at TEXT NOT NULL,
-  PRIMARY KEY(from_page_id, to_page_id)
-);
-
-CREATE TABLE IF NOT EXISTS citations (
-  id TEXT PRIMARY KEY,
-  wiki_page_id TEXT REFERENCES wiki_pages(id) ON DELETE CASCADE,
-  chunk_id TEXT REFERENCES chunks(id) ON DELETE SET NULL,
-  source_uri TEXT NOT NULL,
-  quote TEXT,
-  start_offset INTEGER,
-  end_offset INTEGER,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS knowledge_indexes (
-  id TEXT PRIMARY KEY,
-  kind TEXT NOT NULL,
-  name TEXT NOT NULL,
-  artifact_uri TEXT,
-  shard_key TEXT,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  UNIQUE(kind, name, shard_key)
-);
-
-CREATE TABLE IF NOT EXISTS runs (
-  id TEXT PRIMARY KEY,
-  type TEXT NOT NULL,
-  prompt TEXT,
-  status TEXT NOT NULL,
-  provider TEXT,
-  model TEXT,
-  cost_tokens INTEGER NOT NULL DEFAULT 0,
-  cost_usd REAL NOT NULL DEFAULT 0,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS run_events (
-  id TEXT PRIMARY KEY,
-  run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-  level TEXT NOT NULL,
-  event TEXT NOT NULL,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS provider_usage (
-  id TEXT PRIMARY KEY,
-  run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
-  provider TEXT NOT NULL,
-  model TEXT NOT NULL,
-  input_tokens INTEGER NOT NULL DEFAULT 0,
-  output_tokens INTEGER NOT NULL DEFAULT 0,
-  cost_usd REAL NOT NULL DEFAULT 0,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS redaction_findings (
-  id TEXT PRIMARY KEY,
-  source_uri TEXT,
-  run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
-  severity TEXT NOT NULL,
-  finding_type TEXT NOT NULL,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS storage_objects (
-  id TEXT PRIMARY KEY,
-  artifact_uri TEXT NOT NULL UNIQUE,
-  kind TEXT NOT NULL,
-  content_type TEXT,
-  hash TEXT,
-  size_bytes INTEGER,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-
-CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
-  text,
-  title,
-  source_uri,
-  content='',
-  tokenize='porter unicode61'
-);
-
-INSERT OR IGNORE INTO schema_versions(version, applied_at)
-VALUES (1, datetime('now'));
-`;
-var MIGRATION_2 = `
-DROP TABLE IF EXISTS chunks_fts;
-
-CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
-  chunk_id UNINDEXED,
-  text,
-  title,
-  source_uri,
-  tokenize='porter unicode61'
-);
-
-INSERT OR IGNORE INTO schema_versions(version, applied_at)
-VALUES (2, datetime('now'));
-`;
-var MIGRATION_3 = `
-CREATE TABLE IF NOT EXISTS audit_events (
-  id TEXT PRIMARY KEY,
-  event_type TEXT NOT NULL,
-  action TEXT NOT NULL,
-  target_uri TEXT,
-  decision TEXT NOT NULL,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS approval_gates (
-  id TEXT PRIMARY KEY,
-  action TEXT NOT NULL,
-  target_uri TEXT,
-  status TEXT NOT NULL,
-  reason TEXT,
-  approved_by TEXT,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_audit_events_action ON audit_events(action);
-CREATE INDEX IF NOT EXISTS idx_audit_events_target ON audit_events(target_uri);
-CREATE INDEX IF NOT EXISTS idx_audit_events_created ON audit_events(created_at);
-CREATE INDEX IF NOT EXISTS idx_approval_gates_action ON approval_gates(action);
-CREATE INDEX IF NOT EXISTS idx_approval_gates_status ON approval_gates(status);
-
-INSERT OR IGNORE INTO schema_versions(version, applied_at)
-VALUES (3, datetime('now'));
-`;
-var MIGRATION_4 = `
-CREATE TABLE IF NOT EXISTS vector_index_entries (
-  id TEXT PRIMARY KEY,
-  chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
-  source_revision_id TEXT REFERENCES source_revisions(id) ON DELETE CASCADE,
-  provider TEXT NOT NULL,
-  model TEXT NOT NULL,
-  dimensions INTEGER NOT NULL,
-  vector_json TEXT NOT NULL,
-  vector_norm REAL NOT NULL,
-  source_uri TEXT,
-  source_ref TEXT,
-  revision TEXT,
-  hash TEXT,
-  start_offset INTEGER,
-  end_offset INTEGER,
-  token_count INTEGER,
-  status TEXT NOT NULL DEFAULT 'active',
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  UNIQUE(chunk_id, provider, model)
-);
-
-CREATE INDEX IF NOT EXISTS idx_vector_index_provider_model ON vector_index_entries(provider, model);
-CREATE INDEX IF NOT EXISTS idx_vector_index_source_revision ON vector_index_entries(source_revision_id);
-CREATE INDEX IF NOT EXISTS idx_vector_index_source_uri ON vector_index_entries(source_uri);
-CREATE INDEX IF NOT EXISTS idx_vector_index_status ON vector_index_entries(status);
-
-INSERT OR IGNORE INTO schema_versions(version, applied_at)
-VALUES (4, datetime('now'));
-`;
-var MIGRATION_5 = `
-CREATE TABLE IF NOT EXISTS reindex_queue (
-  id TEXT PRIMARY KEY,
-  kind TEXT NOT NULL,
-  target_id TEXT NOT NULL,
-  source_uri TEXT,
-  reason TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending',
-  attempts INTEGER NOT NULL DEFAULT 0,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  UNIQUE(kind, target_id, reason)
-);
-
-CREATE INDEX IF NOT EXISTS idx_reindex_queue_status ON reindex_queue(status);
-CREATE INDEX IF NOT EXISTS idx_reindex_queue_kind_target ON reindex_queue(kind, target_id);
-CREATE INDEX IF NOT EXISTS idx_reindex_queue_source_uri ON reindex_queue(source_uri);
-
-INSERT OR IGNORE INTO schema_versions(version, applied_at)
-VALUES (5, datetime('now'));
-`;
-var MIGRATION_6 = `
-CREATE TABLE IF NOT EXISTS knowledge_machines (
-  machine_id TEXT PRIMARY KEY,
-  hostname TEXT,
-  platform TEXT,
-  user_label TEXT,
-  workspace_home TEXT,
-  tailscale_dns TEXT,
-  tailscale_ips_json TEXT NOT NULL DEFAULT '[]',
-  ssh_target TEXT,
-  last_seen_at TEXT,
-  capabilities_json TEXT NOT NULL DEFAULT '{}',
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS knowledge_sync_snapshots (
-  id TEXT PRIMARY KEY,
-  machine_id TEXT NOT NULL,
-  scope TEXT NOT NULL,
-  workspace_home TEXT NOT NULL,
-  sqlite_schema_version INTEGER NOT NULL,
-  artifact_root_uri TEXT NOT NULL,
-  content_hash TEXT NOT NULL,
-  tables_json TEXT NOT NULL,
-  artifact_hashes_json TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS knowledge_sync_changes (
-  id TEXT PRIMARY KEY,
-  origin_machine_id TEXT NOT NULL,
-  updated_by_machine_id TEXT NOT NULL,
-  entity_kind TEXT NOT NULL,
-  entity_id TEXT NOT NULL,
-  operation TEXT NOT NULL,
-  base_hash TEXT,
-  next_hash TEXT,
-  source_ref TEXT,
-  source_revision_id TEXT,
-  artifact_uri TEXT,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS knowledge_sync_conflicts (
-  id TEXT PRIMARY KEY,
-  entity_kind TEXT NOT NULL,
-  entity_id TEXT NOT NULL,
-  local_machine_id TEXT NOT NULL,
-  remote_machine_id TEXT NOT NULL,
-  local_hash TEXT,
-  remote_hash TEXT,
-  base_hash TEXT,
-  status TEXT NOT NULL,
-  resolution_strategy TEXT,
-  proposed_patch_uri TEXT,
-  approved_by TEXT,
-  resolved_at TEXT,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_knowledge_machines_last_seen ON knowledge_machines(last_seen_at);
-CREATE INDEX IF NOT EXISTS idx_sync_snapshots_machine_created ON knowledge_sync_snapshots(machine_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_sync_snapshots_hash ON knowledge_sync_snapshots(content_hash);
-CREATE INDEX IF NOT EXISTS idx_sync_changes_entity ON knowledge_sync_changes(entity_kind, entity_id);
-CREATE INDEX IF NOT EXISTS idx_sync_changes_origin ON knowledge_sync_changes(origin_machine_id);
-CREATE INDEX IF NOT EXISTS idx_sync_changes_created ON knowledge_sync_changes(created_at);
-CREATE INDEX IF NOT EXISTS idx_sync_conflicts_status ON knowledge_sync_conflicts(status);
-CREATE INDEX IF NOT EXISTS idx_sync_conflicts_entity ON knowledge_sync_conflicts(entity_kind, entity_id);
-
-INSERT OR IGNORE INTO schema_versions(version, applied_at)
-VALUES (6, datetime('now'));
-`;
-var MIGRATION_7_TABLES_AND_INDEXES = `
-CREATE TABLE IF NOT EXISTS knowledge_sync_table_clocks (
-  table_name TEXT NOT NULL,
-  machine_id TEXT NOT NULL,
-  logical_clock INTEGER NOT NULL DEFAULT 0,
-  high_water_hash TEXT,
-  high_water_bundle_id TEXT,
-  origin_machine_id TEXT,
-  updated_by_machine_id TEXT,
-  last_applied_at TEXT,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  PRIMARY KEY(table_name, machine_id)
-);
-
-CREATE TABLE IF NOT EXISTS knowledge_sync_imports (
-  bundle_id TEXT PRIMARY KEY,
-  source_machine_id TEXT NOT NULL,
-  target_machine_id TEXT NOT NULL,
-  direction TEXT NOT NULL,
-  status TEXT NOT NULL,
-  content_hash TEXT NOT NULL,
-  table_clocks_json TEXT NOT NULL,
-  tables_json TEXT NOT NULL,
-  generated_at TEXT NOT NULL,
-  applied_at TEXT NOT NULL,
-  metadata_json TEXT NOT NULL DEFAULT '{}'
-);
-
-CREATE INDEX IF NOT EXISTS idx_sync_changes_bundle ON knowledge_sync_changes(bundle_id);
-CREATE INDEX IF NOT EXISTS idx_sync_changes_clock ON knowledge_sync_changes(entity_kind, logical_clock);
-CREATE INDEX IF NOT EXISTS idx_sync_table_clocks_machine ON knowledge_sync_table_clocks(machine_id);
-CREATE INDEX IF NOT EXISTS idx_sync_table_clocks_updated ON knowledge_sync_table_clocks(updated_at);
-CREATE INDEX IF NOT EXISTS idx_sync_imports_source ON knowledge_sync_imports(source_machine_id, applied_at);
-CREATE INDEX IF NOT EXISTS idx_sync_imports_target ON knowledge_sync_imports(target_machine_id, applied_at);
-CREATE INDEX IF NOT EXISTS idx_sync_imports_status ON knowledge_sync_imports(status);
-
-INSERT OR IGNORE INTO schema_versions(version, applied_at)
-VALUES (7, datetime('now'));
-`;
-var MIGRATION_8_TABLES_AND_INDEXES = `
-CREATE INDEX IF NOT EXISTS idx_wiki_pages_lifecycle_status ON wiki_pages(status, valid_to);
-CREATE INDEX IF NOT EXISTS idx_wiki_pages_last_verified ON wiki_pages(last_verified_at);
-CREATE INDEX IF NOT EXISTS idx_wiki_pages_supersedes ON wiki_pages(supersedes);
-CREATE INDEX IF NOT EXISTS idx_wiki_pages_superseded_by ON wiki_pages(superseded_by);
-
-INSERT OR IGNORE INTO schema_versions(version, applied_at)
-VALUES (8, datetime('now'));
-`;
-function openKnowledgeDb(path) {
-  ensureParentDir(path);
-  const db = new Database(path);
-  db.exec("PRAGMA foreign_keys = ON;");
-  db.exec("PRAGMA busy_timeout = 5000;");
-  return db;
-}
-function migrateKnowledgeDb(path) {
-  const db = openKnowledgeDb(path);
-  try {
-    db.exec(MIGRATION_1);
-    if (getSchemaVersion(db) < 2)
-      db.exec(MIGRATION_2);
-    if (getSchemaVersion(db) < 3)
-      db.exec(MIGRATION_3);
-    if (getSchemaVersion(db) < 4)
-      db.exec(MIGRATION_4);
-    if (getSchemaVersion(db) < 5)
-      db.exec(MIGRATION_5);
-    if (getSchemaVersion(db) < 6)
-      db.exec(MIGRATION_6);
-    if (needsMigration7(db))
-      applyMigration7(db);
-    if (needsMigration8(db))
-      applyMigration8(db);
-    return { path, schema_version: getSchemaVersion(db) };
-  } finally {
-    db.close();
-  }
-}
-function getSchemaVersion(db) {
-  const row = db.query("SELECT MAX(version) AS version FROM schema_versions").get();
-  return row?.version ?? 0;
-}
-function count(db, table) {
-  const row = db.query(`SELECT COUNT(*) AS n FROM ${table}`).get();
-  return row?.n ?? 0;
-}
-function quoteIdentifier(identifier) {
-  return `"${identifier.replaceAll('"', '""')}"`;
-}
-function tableExists(db, table) {
-  const row = db.query("SELECT name FROM sqlite_master WHERE type IN ('table', 'virtual') AND name = ?").get(table);
-  return Boolean(row);
-}
-function columnExists(db, table, column) {
-  if (!tableExists(db, table))
-    return false;
-  const columns = db.query(`PRAGMA table_info(${quoteIdentifier(table)})`).all();
-  return columns.some((row) => row.name === column);
-}
-function ensureColumn(db, table, column, definition) {
-  if (!columnExists(db, table, column)) {
-    db.exec(`ALTER TABLE ${quoteIdentifier(table)} ADD COLUMN ${quoteIdentifier(column)} ${definition};`);
-  }
-}
-function needsMigration7(db) {
-  return getSchemaVersion(db) < 7 || !columnExists(db, "knowledge_sync_changes", "logical_clock") || !columnExists(db, "knowledge_sync_changes", "bundle_id") || !tableExists(db, "knowledge_sync_table_clocks") || !tableExists(db, "knowledge_sync_imports");
-}
-function applyMigration7(db) {
-  if (!tableExists(db, "knowledge_sync_changes"))
-    db.exec(MIGRATION_6);
-  ensureColumn(db, "knowledge_sync_changes", "logical_clock", "INTEGER NOT NULL DEFAULT 0");
-  ensureColumn(db, "knowledge_sync_changes", "bundle_id", "TEXT");
-  db.exec(MIGRATION_7_TABLES_AND_INDEXES);
-}
-function needsMigration8(db) {
-  return getSchemaVersion(db) < 8 || !columnExists(db, "wiki_pages", "valid_from") || !columnExists(db, "wiki_pages", "valid_to") || !columnExists(db, "wiki_pages", "supersedes") || !columnExists(db, "wiki_pages", "superseded_by") || !columnExists(db, "wiki_pages", "confidence") || !columnExists(db, "wiki_pages", "last_verified_at");
-}
-function applyMigration8(db) {
-  if (!tableExists(db, "wiki_pages"))
-    db.exec(MIGRATION_1);
-  ensureColumn(db, "wiki_pages", "valid_from", "TEXT");
-  ensureColumn(db, "wiki_pages", "valid_to", "TEXT");
-  ensureColumn(db, "wiki_pages", "supersedes", "TEXT");
-  ensureColumn(db, "wiki_pages", "superseded_by", "TEXT");
-  ensureColumn(db, "wiki_pages", "confidence", "REAL");
-  ensureColumn(db, "wiki_pages", "last_verified_at", "TEXT");
-  db.exec(`
-    UPDATE wiki_pages
-    SET valid_from = COALESCE(valid_from, created_at),
-        last_verified_at = COALESCE(last_verified_at, updated_at),
-        confidence = COALESCE(confidence, 0.8)
-    WHERE valid_from IS NULL OR last_verified_at IS NULL OR confidence IS NULL;
-  `);
-  db.exec(MIGRATION_8_TABLES_AND_INDEXES);
-}
-function getKnowledgeDbStats(path) {
-  const db = openKnowledgeDb(path);
-  try {
-    return {
-      schema_version: getSchemaVersion(db),
-      sources: count(db, "sources"),
-      source_revisions: count(db, "source_revisions"),
-      chunks: count(db, "chunks"),
-      wiki_pages: count(db, "wiki_pages"),
-      citations: count(db, "citations"),
-      indexes: count(db, "knowledge_indexes"),
-      runs: count(db, "runs"),
-      run_events: count(db, "run_events"),
-      redaction_findings: count(db, "redaction_findings"),
-      audit_events: count(db, "audit_events"),
-      approval_gates: count(db, "approval_gates"),
-      storage_objects: count(db, "storage_objects"),
-      embeddings: count(db, "chunk_embeddings"),
-      vector_entries: count(db, "vector_index_entries"),
-      reindex_queue: count(db, "reindex_queue"),
-      knowledge_machines: count(db, "knowledge_machines"),
-      sync_snapshots: count(db, "knowledge_sync_snapshots"),
-      sync_changes: count(db, "knowledge_sync_changes"),
-      sync_conflicts: count(db, "knowledge_sync_conflicts"),
-      sync_table_clocks: count(db, "knowledge_sync_table_clocks"),
-      sync_imports: count(db, "knowledge_sync_imports")
-    };
-  } finally {
-    db.close();
-  }
-}
-
-// src/db/pg-migrations.ts
-var PG_MIGRATIONS = [
-  `CREATE TABLE IF NOT EXISTS sources (
-    id TEXT PRIMARY KEY,
-    uri TEXT NOT NULL UNIQUE,
-    kind TEXT NOT NULL,
-    title TEXT,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    acl_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS wiki_pages (
-    id TEXT PRIMARY KEY,
-    path TEXT NOT NULL UNIQUE,
-    title TEXT NOT NULL,
-    artifact_uri TEXT,
-    content_hash TEXT,
-    status TEXT NOT NULL DEFAULT 'active',
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS source_revisions (
-    id TEXT PRIMARY KEY,
-    source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
-    revision TEXT NOT NULL,
-    hash TEXT,
-    extracted_text_uri TEXT,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    UNIQUE(source_id, revision)
-  )`,
-  `CREATE TABLE IF NOT EXISTS chunks (
-    id TEXT PRIMARY KEY,
-    source_revision_id TEXT REFERENCES source_revisions(id) ON DELETE CASCADE,
-    wiki_page_id TEXT REFERENCES wiki_pages(id) ON DELETE CASCADE,
-    kind TEXT NOT NULL,
-    ordinal INTEGER NOT NULL,
-    text TEXT NOT NULL,
-    token_count INTEGER,
-    start_offset INTEGER,
-    end_offset INTEGER,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS chunk_embeddings (
-    id TEXT PRIMARY KEY,
-    chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
-    provider TEXT NOT NULL,
-    model TEXT NOT NULL,
-    dimensions INTEGER NOT NULL,
-    vector_json TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    UNIQUE(chunk_id, provider, model)
-  )`,
-  `CREATE TABLE IF NOT EXISTS wiki_backlinks (
-    from_page_id TEXT NOT NULL REFERENCES wiki_pages(id) ON DELETE CASCADE,
-    to_page_id TEXT NOT NULL REFERENCES wiki_pages(id) ON DELETE CASCADE,
-    label TEXT,
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    PRIMARY KEY(from_page_id, to_page_id)
-  )`,
-  `CREATE TABLE IF NOT EXISTS citations (
-    id TEXT PRIMARY KEY,
-    wiki_page_id TEXT REFERENCES wiki_pages(id) ON DELETE CASCADE,
-    chunk_id TEXT REFERENCES chunks(id) ON DELETE SET NULL,
-    source_uri TEXT NOT NULL,
-    quote TEXT,
-    start_offset INTEGER,
-    end_offset INTEGER,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS knowledge_indexes (
-    id TEXT PRIMARY KEY,
-    kind TEXT NOT NULL,
-    name TEXT NOT NULL,
-    artifact_uri TEXT,
-    shard_key TEXT,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text,
-    UNIQUE(kind, name, shard_key)
-  )`,
-  `CREATE TABLE IF NOT EXISTS runs (
-    id TEXT PRIMARY KEY,
-    type TEXT NOT NULL,
-    prompt TEXT,
-    status TEXT NOT NULL,
-    provider TEXT,
-    model TEXT,
-    cost_tokens INTEGER NOT NULL DEFAULT 0,
-    cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS run_events (
-    id TEXT PRIMARY KEY,
-    run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-    level TEXT NOT NULL,
-    event TEXT NOT NULL,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS provider_usage (
-    id TEXT PRIMARY KEY,
-    run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
-    provider TEXT NOT NULL,
-    model TEXT NOT NULL,
-    input_tokens INTEGER NOT NULL DEFAULT 0,
-    output_tokens INTEGER NOT NULL DEFAULT 0,
-    cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS redaction_findings (
-    id TEXT PRIMARY KEY,
-    source_uri TEXT,
-    run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
-    severity TEXT NOT NULL,
-    finding_type TEXT NOT NULL,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS storage_objects (
-    id TEXT PRIMARY KEY,
-    artifact_uri TEXT NOT NULL UNIQUE,
-    kind TEXT NOT NULL,
-    content_type TEXT,
-    hash TEXT,
-    size_bytes INTEGER,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS audit_events (
-    id TEXT PRIMARY KEY,
-    event_type TEXT NOT NULL,
-    action TEXT NOT NULL,
-    target_uri TEXT,
-    decision TEXT NOT NULL,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS approval_gates (
-    id TEXT PRIMARY KEY,
-    action TEXT NOT NULL,
-    target_uri TEXT,
-    status TEXT NOT NULL,
-    reason TEXT,
-    approved_by TEXT,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS vector_index_entries (
-    id TEXT PRIMARY KEY,
-    chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
-    source_revision_id TEXT REFERENCES source_revisions(id) ON DELETE CASCADE,
-    provider TEXT NOT NULL,
-    model TEXT NOT NULL,
-    dimensions INTEGER NOT NULL,
-    vector_json TEXT NOT NULL,
-    vector_norm DOUBLE PRECISION NOT NULL,
-    source_uri TEXT,
-    source_ref TEXT,
-    revision TEXT,
-    hash TEXT,
-    start_offset INTEGER,
-    end_offset INTEGER,
-    token_count INTEGER,
-    status TEXT NOT NULL DEFAULT 'active',
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text,
-    UNIQUE(chunk_id, provider, model)
-  )`,
-  `CREATE TABLE IF NOT EXISTS reindex_queue (
-    id TEXT PRIMARY KEY,
-    kind TEXT NOT NULL,
-    target_id TEXT NOT NULL,
-    source_uri TEXT,
-    reason TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',
-    attempts INTEGER NOT NULL DEFAULT 0,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text,
-    UNIQUE(kind, target_id, reason)
-  )`,
-  `CREATE TABLE IF NOT EXISTS knowledge_machines (
-    machine_id TEXT PRIMARY KEY,
-    hostname TEXT,
-    platform TEXT,
-    user_label TEXT,
-    workspace_home TEXT,
-    tailscale_dns TEXT,
-    tailscale_ips_json TEXT NOT NULL DEFAULT '[]',
-    ssh_target TEXT,
-    last_seen_at TEXT,
-    capabilities_json TEXT NOT NULL DEFAULT '{}',
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS knowledge_sync_snapshots (
-    id TEXT PRIMARY KEY,
-    machine_id TEXT NOT NULL,
-    scope TEXT NOT NULL,
-    workspace_home TEXT NOT NULL,
-    sqlite_schema_version INTEGER NOT NULL,
-    artifact_root_uri TEXT NOT NULL,
-    content_hash TEXT NOT NULL,
-    tables_json TEXT NOT NULL,
-    artifact_hashes_json TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS knowledge_sync_changes (
-    id TEXT PRIMARY KEY,
-    origin_machine_id TEXT NOT NULL,
-    updated_by_machine_id TEXT NOT NULL,
-    entity_kind TEXT NOT NULL,
-    entity_id TEXT NOT NULL,
-    operation TEXT NOT NULL,
-    base_hash TEXT,
-    next_hash TEXT,
-    source_ref TEXT,
-    source_revision_id TEXT,
-    artifact_uri TEXT,
-    logical_clock INTEGER NOT NULL DEFAULT 0,
-    bundle_id TEXT,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `ALTER TABLE knowledge_sync_changes ADD COLUMN IF NOT EXISTS logical_clock INTEGER NOT NULL DEFAULT 0`,
-  `ALTER TABLE knowledge_sync_changes ADD COLUMN IF NOT EXISTS bundle_id TEXT`,
-  `CREATE TABLE IF NOT EXISTS knowledge_sync_conflicts (
-    id TEXT PRIMARY KEY,
-    entity_kind TEXT NOT NULL,
-    entity_id TEXT NOT NULL,
-    local_machine_id TEXT NOT NULL,
-    remote_machine_id TEXT NOT NULL,
-    local_hash TEXT,
-    remote_hash TEXT,
-    base_hash TEXT,
-    status TEXT NOT NULL,
-    resolution_strategy TEXT,
-    proposed_patch_uri TEXT,
-    approved_by TEXT,
-    resolved_at TEXT,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS knowledge_sync_table_clocks (
-    table_name TEXT NOT NULL,
-    machine_id TEXT NOT NULL,
-    logical_clock INTEGER NOT NULL DEFAULT 0,
-    high_water_hash TEXT,
-    high_water_bundle_id TEXT,
-    origin_machine_id TEXT,
-    updated_by_machine_id TEXT,
-    last_applied_at TEXT,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text,
-    PRIMARY KEY(table_name, machine_id)
-  )`,
-  `CREATE TABLE IF NOT EXISTS knowledge_sync_imports (
-    bundle_id TEXT PRIMARY KEY,
-    source_machine_id TEXT NOT NULL,
-    target_machine_id TEXT NOT NULL,
-    direction TEXT NOT NULL,
-    status TEXT NOT NULL,
-    content_hash TEXT NOT NULL,
-    table_clocks_json TEXT NOT NULL,
-    tables_json TEXT NOT NULL,
-    generated_at TEXT NOT NULL,
-    applied_at TEXT NOT NULL,
-    metadata_json TEXT NOT NULL DEFAULT '{}'
-  )`,
-  `CREATE INDEX IF NOT EXISTS idx_source_revisions_source ON source_revisions(source_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_chunks_source_revision ON chunks(source_revision_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_chunks_wiki_page ON chunks(wiki_page_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_citations_wiki_page ON citations(wiki_page_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_citations_chunk ON citations(chunk_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_run_events_run ON run_events(run_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_provider_usage_run ON provider_usage(run_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_audit_events_action ON audit_events(action)`,
-  `CREATE INDEX IF NOT EXISTS idx_audit_events_target ON audit_events(target_uri)`,
-  `CREATE INDEX IF NOT EXISTS idx_audit_events_created ON audit_events(created_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_approval_gates_action ON approval_gates(action)`,
-  `CREATE INDEX IF NOT EXISTS idx_approval_gates_status ON approval_gates(status)`,
-  `CREATE INDEX IF NOT EXISTS idx_vector_index_provider_model ON vector_index_entries(provider, model)`,
-  `CREATE INDEX IF NOT EXISTS idx_vector_index_source_revision ON vector_index_entries(source_revision_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_vector_index_source_uri ON vector_index_entries(source_uri)`,
-  `CREATE INDEX IF NOT EXISTS idx_vector_index_status ON vector_index_entries(status)`,
-  `CREATE INDEX IF NOT EXISTS idx_reindex_queue_status ON reindex_queue(status)`,
-  `CREATE INDEX IF NOT EXISTS idx_reindex_queue_kind_target ON reindex_queue(kind, target_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_reindex_queue_source_uri ON reindex_queue(source_uri)`,
-  `CREATE INDEX IF NOT EXISTS idx_knowledge_machines_last_seen ON knowledge_machines(last_seen_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_snapshots_machine_created ON knowledge_sync_snapshots(machine_id, created_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_snapshots_hash ON knowledge_sync_snapshots(content_hash)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_changes_entity ON knowledge_sync_changes(entity_kind, entity_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_changes_origin ON knowledge_sync_changes(origin_machine_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_changes_created ON knowledge_sync_changes(created_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_changes_bundle ON knowledge_sync_changes(bundle_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_changes_clock ON knowledge_sync_changes(entity_kind, logical_clock)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_conflicts_status ON knowledge_sync_conflicts(status)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_conflicts_entity ON knowledge_sync_conflicts(entity_kind, entity_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_table_clocks_machine ON knowledge_sync_table_clocks(machine_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_table_clocks_updated ON knowledge_sync_table_clocks(updated_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_imports_source ON knowledge_sync_imports(source_machine_id, applied_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_imports_target ON knowledge_sync_imports(target_machine_id, applied_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_imports_status ON knowledge_sync_imports(status)`,
-  `CREATE TABLE IF NOT EXISTS knowledge_items (
-    id TEXT PRIMARY KEY,
-    short_id TEXT,
-    title TEXT NOT NULL,
-    content TEXT NOT NULL DEFAULT '',
-    url TEXT,
-    tags JSONB NOT NULL DEFAULT '[]'::jsonb,
-    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-    archived BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_short_id ON knowledge_items(short_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_archived ON knowledge_items(archived)`,
-  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_created ON knowledge_items(created_at)`
-];
-
-// src/generated/storage-kit/mode.ts
-var DEPRECATED_STORAGE_MODE_ALIASES = [
-  "remote",
-  "hybrid",
-  "self_hosted"
-];
-function normalizeStorageMode(value) {
-  const normalized = value.trim().toLowerCase().replace(/-/g, "_");
-  if (normalized === "local")
-    return { mode: "local", deprecatedAlias: null };
-  if (normalized === "cloud")
-    return { mode: "cloud", deprecatedAlias: null };
-  if (DEPRECATED_STORAGE_MODE_ALIASES.includes(normalized)) {
-    return { mode: "cloud", deprecatedAlias: normalized };
-  }
-  throw new Error(`Unknown storage mode: ${value}. Use local or cloud.`);
-}
-function envToken(name) {
-  return name.toUpperCase().replace(/-/g, "_");
-}
-function storageEnvKeys(name) {
-  const token = envToken(name);
-  return {
-    modeKeys: [`HASNA_${token}_STORAGE_MODE`, `${token}_STORAGE_MODE`],
-    databaseUrlKeys: [`HASNA_${token}_DATABASE_URL`, `${token}_DATABASE_URL`]
-  };
-}
-function firstEnv(env, keys) {
-  for (const key of keys) {
-    const value = env[key]?.trim();
-    if (value)
-      return { key, value };
-  }
-  return null;
-}
-function resolveStorageMode(name, env = process.env) {
-  const { modeKeys, databaseUrlKeys } = storageEnvKeys(name);
-  const dbHit = firstEnv(env, databaseUrlKeys);
-  const databaseUrlPresent = Boolean(dbHit);
-  const databaseUrlSource = dbHit ? dbHit.key : null;
-  const modeHit = firstEnv(env, modeKeys);
-  if (!modeHit) {
-    return {
-      mode: "local",
-      source: "default",
-      deprecatedAlias: null,
-      databaseUrlPresent,
-      databaseUrlSource,
-      warning: null
-    };
-  }
-  const { mode, deprecatedAlias } = normalizeStorageMode(modeHit.value);
-  const warnings = [];
-  if (deprecatedAlias) {
-    warnings.push(`Deprecated storage mode '${deprecatedAlias}' from ${modeHit.key} is treated as 'cloud'. Set ${modeKeys[0]}=cloud instead.`);
-  }
-  if (mode === "cloud" && !databaseUrlPresent) {
-    warnings.push(`cloud mode needs ${databaseUrlKeys[0]} (PURE REMOTE: reads and writes go to cloud Postgres).`);
-  }
-  if (modeHit.key !== modeKeys[0]) {
-    warnings.push(`Using alias env ${modeHit.key}; the canonical key is ${modeKeys[0]}.`);
-  }
-  return {
-    mode,
-    source: modeHit.key,
-    deprecatedAlias,
-    databaseUrlPresent,
-    databaseUrlSource,
-    warning: warnings.length > 0 ? warnings.join(" ") : null
-  };
-}
-function resolveDatabaseUrl(name, env = process.env) {
-  const { databaseUrlKeys } = storageEnvKeys(name);
-  const hit = firstEnv(env, databaseUrlKeys);
-  return hit ? hit.value : null;
-}
-// src/generated/storage-kit/tls.ts
-import { readFileSync as readFileSync2 } from "fs";
-function sslModeFromConnectionString(connectionString) {
-  const queryStart = connectionString.indexOf("?");
-  const params = new URLSearchParams(queryStart === -1 ? "" : connectionString.slice(queryStart + 1));
-  const sslmode = params.get("sslmode")?.trim().toLowerCase();
-  if (sslmode) {
-    switch (sslmode) {
-      case "disable":
-      case "prefer":
-      case "require":
-      case "verify-ca":
-      case "verify-full":
-        return sslmode;
-      case "allow":
-        return "prefer";
-      default:
-        throw new Error(`Unknown sslmode '${sslmode}' in connection string.`);
-    }
-  }
-  const ssl = params.get("ssl")?.trim().toLowerCase();
-  if (ssl && ["1", "true", "yes", "on", "require"].includes(ssl))
-    return "require";
-  return "disable";
-}
-function loadCaBundle(options) {
-  const env = options.env ?? process.env;
-  if (options.ca && options.ca.trim())
-    return options.ca;
-  const path = options.caCertPath ?? env.PGSSLROOTCERT ?? env.NODE_EXTRA_CA_CERTS;
-  if (path && path.trim())
-    return readFileSync2(path.trim(), "utf8");
-  return null;
-}
-function resolveTlsConfig(connectionString, options = {}) {
-  const mode = sslModeFromConnectionString(connectionString);
-  if (mode === "disable") {
-    return;
-  }
-  const ca = loadCaBundle(options);
-  if (mode === "prefer" || mode === "require") {
-    return ca ? { rejectUnauthorized: false, ca } : { rejectUnauthorized: false };
-  }
-  if (!ca) {
-    throw new Error(`sslmode=${mode} requires a CA bundle. Set PGSSLROOTCERT (or pass caCertPath/ca) to the ` + `Amazon RDS global bundle: https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem`);
-  }
-  return { rejectUnauthorized: true, ca };
-}
-// src/generated/storage-kit/query.ts
-function wrapExecutor(executor) {
-  return {
-    async query(sql, params) {
-      const result = await executor.query(sql, params);
-      return { rows: result.rows, rowCount: result.rowCount ?? result.rows.length };
-    },
-    async many(sql, params) {
-      const result = await executor.query(sql, params);
-      return result.rows;
-    },
-    async get(sql, params) {
-      const result = await executor.query(sql, params);
-      return result.rows[0] ?? null;
-    },
-    async one(sql, params) {
-      const result = await executor.query(sql, params);
-      if (result.rows.length !== 1) {
-        throw new Error(`Expected exactly one row, got ${result.rows.length}.`);
-      }
-      return result.rows[0];
-    },
-    async execute(sql, params) {
-      await executor.query(sql, params);
-    }
-  };
-}
-function createQueryClient(pool) {
-  const base = wrapExecutor(pool);
-  return {
-    ...base,
-    pool,
-    async transaction(fn) {
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        const result = await fn(wrapExecutor(client));
-        await client.query("COMMIT");
-        return result;
-      } catch (error) {
-        try {
-          await client.query("ROLLBACK");
-        } catch {}
-        throw error;
-      } finally {
-        client.release();
-      }
-    },
-    async close() {
-      await pool.end();
-    }
-  };
-}
-// src/generated/storage-kit/pool.ts
-import pg from "pg";
-function createPgPool(options) {
-  const ssl = resolveTlsConfig(options.connectionString, {
-    ...options.ca !== undefined ? { ca: options.ca } : {},
-    ...options.caCertPath !== undefined ? { caCertPath: options.caCertPath } : {},
-    ...options.env !== undefined ? { env: options.env } : {}
-  });
-  const config = { connectionString: options.connectionString };
-  if (ssl !== undefined)
-    config.ssl = ssl;
-  if (options.max !== undefined)
-    config.max = options.max;
-  if (options.idleTimeoutMillis !== undefined)
-    config.idleTimeoutMillis = options.idleTimeoutMillis;
-  if (options.connectionTimeoutMillis !== undefined)
-    config.connectionTimeoutMillis = options.connectionTimeoutMillis;
-  if (options.applicationName !== undefined)
-    config.application_name = options.applicationName;
-  return new pg.Pool(config);
-}
-function createCloudPoolFromEnv(appName, options = {}) {
-  const env = options.env ?? process.env;
-  const resolution = resolveStorageMode(appName, env);
-  if (resolution.mode !== "cloud") {
-    throw new Error(`createCloudPoolFromEnv requires ${appName} storage mode 'cloud', got '${resolution.mode}'. ` + `Set HASNA_${appName.toUpperCase().replace(/-/g, "_")}_STORAGE_MODE=cloud.`);
-  }
-  const connectionString = resolveDatabaseUrl(appName, env);
-  if (!connectionString) {
-    throw new Error(`cloud mode for ${appName} needs a database URL. Set ` + `HASNA_${appName.toUpperCase().replace(/-/g, "_")}_DATABASE_URL.`);
-  }
-  const pool = createPgPool({
-    connectionString,
-    ...options.ca !== undefined ? { ca: options.ca } : {},
-    ...options.caCertPath !== undefined ? { caCertPath: options.caCertPath } : {},
-    env,
-    ...options.max !== undefined ? { max: options.max } : {},
-    ...options.idleTimeoutMillis !== undefined ? { idleTimeoutMillis: options.idleTimeoutMillis } : {},
-    ...options.connectionTimeoutMillis !== undefined ? { connectionTimeoutMillis: options.connectionTimeoutMillis } : {},
-    ...options.applicationName !== undefined ? { applicationName: options.applicationName } : {}
-  });
-  return {
-    client: createQueryClient(pool),
-    connectionSource: resolution.databaseUrlSource ?? "unknown"
-  };
-}
-// src/generated/storage-kit/migrations.ts
-import { createHash } from "crypto";
-var DEFAULT_MIGRATION_LEDGER_TABLE = "schema_migrations";
-function checksumSql(sql) {
-  const normalized = sql.trim().replace(/\r\n/g, `
-`);
-  return `sha256:${createHash("sha256").update(normalized).digest("hex")}`;
-}
-function defineMigration(id, sql) {
-  return Object.freeze({ id, sql: sql.trim(), checksum: checksumSql(sql) });
-}
-function hasTransaction(client) {
-  return typeof client.transaction === "function";
-}
-
-class MigrationLedger {
-  client;
-  migrations;
-  ledgerTable;
-  constructor(client, migrations, options = {}) {
-    this.client = client;
-    this.migrations = migrations;
-    this.ledgerTable = options.ledgerTable ?? DEFAULT_MIGRATION_LEDGER_TABLE;
-    const seen = new Set;
-    for (const migration of migrations) {
-      if (seen.has(migration.id))
-        throw new Error(`Duplicate migration id: ${migration.id}`);
-      seen.add(migration.id);
-    }
-  }
-  async ensureLedger() {
-    await this.client.execute(`CREATE TABLE IF NOT EXISTS ${this.ledgerTable} (
-         id TEXT PRIMARY KEY,
-         checksum TEXT NOT NULL,
-         applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
-       )`);
-  }
-  async listApplied() {
-    await this.ensureLedger();
-    return this.readApplied();
-  }
-  async readApplied() {
-    const rows = await this.client.many(`SELECT id, checksum, applied_at FROM ${this.ledgerTable} ORDER BY id ASC`);
-    return rows.map((row) => ({
-      id: row.id,
-      checksum: row.checksum,
-      appliedAt: row.applied_at instanceof Date ? row.applied_at.toISOString() : String(row.applied_at)
-    }));
-  }
-  buildPlan(applied) {
-    const known = new Set(this.migrations.map((m) => m.id));
-    for (const row of applied) {
-      if (!known.has(row.id)) {
-        throw new Error(`Applied migration '${row.id}' is not recognized by this build (downgrade?).`);
-      }
-    }
-    const appliedById = new Map(applied.map((row) => [row.id, row]));
-    for (const migration of this.migrations) {
-      const existing = appliedById.get(migration.id);
-      if (existing && existing.checksum !== migration.checksum) {
-        throw new Error(`Migration checksum mismatch for '${migration.id}': the SQL changed after it was applied.`);
-      }
-    }
-    return this.migrations.map((migration) => ({
-      migration,
-      state: appliedById.has(migration.id) ? "already_applied" : "pending"
-    }));
-  }
-  async migrate(opts = {}) {
-    const dryRun = opts.dryRun === true;
-    await this.ensureLedger();
-    const applied = await this.readApplied();
-    const plan = this.buildPlan(applied);
-    if (dryRun)
-      return { dryRun, applied, plan };
-    for (const item of plan) {
-      if (item.state === "already_applied")
-        continue;
-      await this.applyPendingMigration(item.migration);
-    }
-    return { dryRun, applied: await this.readApplied(), plan };
-  }
-  async applyPendingMigration(migration) {
-    const apply = async (client) => {
-      await client.execute(migration.sql);
-      await client.execute(`INSERT INTO ${this.ledgerTable} (id, checksum, applied_at) VALUES ($1, $2, now())`, [migration.id, migration.checksum]);
-    };
-    if (hasTransaction(this.client)) {
-      await this.client.transaction(apply);
-      return;
-    }
-    await this.client.execute("BEGIN");
-    try {
-      await apply(this.client);
-      await this.client.execute("COMMIT");
-    } catch (error) {
-      try {
-        await this.client.execute("ROLLBACK");
-      } catch {}
-      throw error;
-    }
-  }
-}
-function createMigrationLedger(client, migrations, options = {}) {
-  return new MigrationLedger(client, migrations, options);
-}
-// src/generated/storage-kit/health.ts
-async function checkHealth(client) {
-  const start = Date.now();
-  try {
-    await client.get("SELECT 1 AS ok");
-    return { ok: true, latencyMs: Date.now() - start };
-  } catch (error) {
-    return {
-      ok: false,
-      latencyMs: Date.now() - start,
-      error: error instanceof Error ? error.message : String(error)
-    };
-  }
-}
-async function checkReady(client, migrations, options = {}) {
-  const start = Date.now();
-  try {
-    const ledger = new MigrationLedger(client, migrations, options);
-    const result = await ledger.migrate({ dryRun: true });
-    const pending = result.plan.filter((item) => item.state === "pending").map((item) => item.migration.id);
-    return { ok: pending.length === 0, latencyMs: Date.now() - start, pendingMigrations: pending };
-  } catch (error) {
-    return {
-      ok: false,
-      latencyMs: Date.now() - start,
-      pendingMigrations: [],
-      error: error instanceof Error ? error.message : String(error)
-    };
-  }
-}
-
-// src/generated/storage-kit/index.ts
-var KIT_VERSION = "0.4.0";
-
-// src/db/remote-storage.ts
-var KNOWLEDGE_APP_NAME = "knowledge";
-function translatePlaceholders(sql) {
-  let index = 0;
-  return sql.replace(/\?/g, () => `$${++index}`);
-}
-function normalizeParams(params) {
-  const flat = params.length === 1 && Array.isArray(params[0]) ? params[0] : params;
-  return flat.map((value) => value === undefined ? null : value);
-}
-
-class PgAdapterAsync {
-  client;
-  constructor(connectionString) {
-    const pool2 = createPgPool({
-      connectionString,
-      applicationName: "@hasna/knowledge"
+function parseOutboxText(text) {
+  const trimmed = text.trim();
+  if (!trimmed)
+    return [];
+  if (trimmed.startsWith("[")) {
+    const parsed = JSON.parse(trimmed);
+    if (!Array.isArray(parsed))
+      throw new Error("Outbox array parse failed.");
+    return parsed.map((entry) => {
+      const event = asObject3(entry);
+      if (!event)
+        throw new Error("Outbox array entries must be objects.");
+      return event;
     });
-    this.client = createQueryClient(pool2);
   }
-  get pool() {
-    return this.client.pool;
+  if (trimmed.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      const object2 = asObject3(parsed);
+      if (!object2)
+        throw new Error("Outbox object parse failed.");
+      if (Array.isArray(object2.events)) {
+        return object2.events.map((entry) => {
+          const event = asObject3(entry);
+          if (!event)
+            throw new Error("Outbox events entries must be objects.");
+          return event;
+        });
+      }
+      if ("source_ref" in object2 || "source_uri" in object2 || "file_id" in object2)
+        return [object2];
+    } catch (error51) {
+      const lines = trimmed.split(/\r?\n/).filter((line) => line.trim().length > 0);
+      if (lines.length <= 1)
+        throw error51;
+      return lines.map((line) => {
+        const event = asObject3(JSON.parse(line));
+        if (!event)
+          throw new Error("Outbox JSONL entries must be objects.");
+        return event;
+      });
+    }
   }
-  async run(sql, ...params) {
-    const result = await this.client.query(translatePlaceholders(sql), normalizeParams(params));
-    return { changes: result.rowCount };
+  return trimmed.split(/\r?\n/).filter((line) => line.trim().length > 0).map((line) => {
+    const event = asObject3(JSON.parse(line));
+    if (!event)
+      throw new Error("Outbox JSONL entries must be objects.");
+    return event;
+  });
+}
+async function readOutboxInput(input) {
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(input)?.[1]?.toLowerCase();
+  if (scheme && scheme !== "file")
+    assertClassifiedSourceReference(input);
+  const path = scheme === "file" ? fileURLToPath4(input) : resolve8(input);
+  const snapshot = readAnchoredRegularFileSnapshot(path, MAX_INGEST_BODY_BYTES);
+  if (!snapshot)
+    throw new Error(`Outbox not found: ${path}`);
+  assertBoundedJsonText(snapshot.content, MAX_INGEST_BATCH_ITEMS, MAX_INGEST_BATCH_ITEMS);
+  return snapshot.content;
+}
+function mergeOutboxMetadata(existing, patch) {
+  const parsed = existing !== null && existing !== undefined ? parseBoundedJsonData(existing, "Stored data", MAX_INGEST_BATCH_ITEMS, 1) : Object.create(null);
+  const base = asObject3(parsed);
+  if (!base) {
+    throw new Error("Stored outbox metadata must be a JSON object.");
   }
-  async all(sql, ...params) {
-    const result = await this.client.query(translatePlaceholders(sql), normalizeParams(params));
-    return result.rows;
+  const boundedPatch = cloneBoundedDataGraph(patch, {
+    label: "Input",
+    maxBytes: MAX_INGEST_BODY_BYTES
+  });
+  if (!asObject3(boundedPatch)) {
+    throw new Error("Outbox metadata patch must be a JSON object.");
   }
-  async get(sql, ...params) {
-    return this.client.get(translatePlaceholders(sql), normalizeParams(params));
+  const merged = Object.create(null);
+  for (const [key, value] of Object.entries(base))
+    merged[key] = value;
+  for (const [key, value] of Object.entries(boundedPatch))
+    merged[key] = value;
+  const canonical = cloneBoundedDataGraph(merged, {
+    label: "Input",
+    maxBytes: MAX_INGEST_BODY_BYTES
+  });
+  const serialized = JSON.stringify(canonical);
+  if (Buffer.byteLength(serialized, "utf8") > MAX_INGEST_BODY_BYTES) {
+    throw new Error(`Outbox metadata exceeds the ${MAX_INGEST_BODY_BYTES} byte hard limit.`);
   }
-  async close() {
-    await this.client.close();
+  return serialized;
+}
+function ensureSource(db, event, now) {
+  const id = stableId6("src", event.sourceUri);
+  db.run(`INSERT INTO sources (id, uri, kind, title, metadata_json, acl_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(uri) DO UPDATE SET
+       kind = excluded.kind,
+       title = COALESCE(excluded.title, sources.title),
+       updated_at = excluded.updated_at`, [
+    id,
+    event.sourceUri,
+    event.kind,
+    event.title,
+    JSON.stringify({ source_ref: event.sourceRef, source_uri: event.sourceUri, status: event.status, last_outbox_event: event.eventType }),
+    JSON.stringify(event.acl ?? {}),
+    now,
+    event.updatedAt
+  ]);
+  const row = db.query("SELECT id, metadata_json, acl_json FROM sources WHERE uri = ?").get(event.sourceUri);
+  if (!row)
+    throw new Error(`Failed to upsert source for outbox event: ${event.sourceUri}`);
+  const patch = {
+    source_ref: event.sourceRef,
+    source_uri: event.sourceUri,
+    last_outbox_event: event.eventType,
+    last_outbox_at: event.updatedAt
+  };
+  if (event.status)
+    patch.status = event.status;
+  if (asString2(event.raw.path))
+    patch.path = event.raw.path;
+  db.run("UPDATE sources SET metadata_json = ?, acl_json = CASE WHEN ? IS NULL THEN acl_json ELSE ? END, updated_at = ? WHERE id = ?", [
+    mergeOutboxMetadata(row.metadata_json, patch),
+    event.acl === undefined ? null : JSON.stringify(event.acl),
+    event.acl === undefined ? null : JSON.stringify(event.acl),
+    event.updatedAt,
+    row.id
+  ]);
+  return row.id;
+}
+function ensureRevision(db, sourceId, event, now) {
+  if (!event.revision)
+    return null;
+  const id = stableId6("rev", `${sourceId}\x00${event.revision}`);
+  const metadata = {
+    source_ref: event.sourceRef,
+    source_uri: event.sourceUri,
+    status: event.status,
+    last_outbox_event: event.eventType,
+    reindex_required: true
+  };
+  db.run(`INSERT INTO source_revisions (id, source_id, revision, hash, extracted_text_uri, metadata_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(source_id, revision) DO UPDATE SET
+       hash = COALESCE(excluded.hash, source_revisions.hash),
+       metadata_json = excluded.metadata_json`, [id, sourceId, event.revision, event.hash, asString2(event.raw.extracted_text_ref) ?? null, JSON.stringify(metadata), now]);
+  const row = db.query("SELECT id FROM source_revisions WHERE source_id = ? AND revision = ?").get(sourceId, event.revision);
+  return row?.id ?? null;
+}
+function revisionIdsForEvent(db, sourceId, event) {
+  if (event.previousRevision) {
+    const previous = db.query("SELECT id FROM source_revisions WHERE source_id = ? AND revision = ?").all(sourceId, event.previousRevision).map((row) => row.id);
+    if (previous.length > 0)
+      return previous;
+  }
+  if (event.revision) {
+    return db.query("SELECT id FROM source_revisions WHERE source_id = ? AND revision = ?").all(sourceId, event.revision).map((row) => row.id);
+  }
+  if (event.hash) {
+    return db.query("SELECT id FROM source_revisions WHERE source_id = ? AND hash = ?").all(sourceId, event.hash).map((row) => row.id);
+  }
+  return db.query("SELECT id FROM source_revisions WHERE source_id = ?").all(sourceId).map((row) => row.id);
+}
+function invalidateRevision(db, revisionId) {
+  const chunks = db.query("SELECT id FROM chunks WHERE source_revision_id = ?").all(revisionId);
+  let embeddingsDeleted = 0;
+  let vectorEntriesDeleted = 0;
+  for (const chunk of chunks) {
+    const row = db.query("SELECT COUNT(*) AS n FROM chunk_embeddings WHERE chunk_id = ?").get(chunk.id);
+    embeddingsDeleted += row?.n ?? 0;
+    const vectorRow = db.query("SELECT COUNT(*) AS n FROM vector_index_entries WHERE chunk_id = ?").get(chunk.id);
+    vectorEntriesDeleted += vectorRow?.n ?? 0;
+    db.run("DELETE FROM vector_index_entries WHERE chunk_id = ?", [chunk.id]);
+    db.run("DELETE FROM chunk_embeddings WHERE chunk_id = ?", [chunk.id]);
+    db.run("DELETE FROM chunks_fts WHERE chunk_id = ?", [chunk.id]);
+  }
+  db.run("DELETE FROM chunks WHERE source_revision_id = ?", [revisionId]);
+  const revision = db.query("SELECT metadata_json FROM source_revisions WHERE id = ?").get(revisionId);
+  db.run("UPDATE source_revisions SET metadata_json = ? WHERE id = ?", [mergeOutboxMetadata(revision?.metadata_json, { reindex_required: true, invalidated_at: new Date().toISOString() }), revisionId]);
+  return { chunksDeleted: chunks.length, embeddingsDeleted, vectorEntriesDeleted };
+}
+function isDeleteEvent(eventType2, status) {
+  return status === "deleted" || ["delete", "deleted", "remove", "removed"].includes(eventType2);
+}
+function isMoveEvent(eventType2) {
+  return ["move", "moved", "rename", "renamed", "path_changed", "canonical_key_changed"].includes(eventType2);
+}
+function isPermissionEvent(eventType2) {
+  return ["permission", "permissions", "permission_changed", "acl_changed", "acl_revoked"].includes(eventType2);
+}
+async function consumeOpenFilesOutbox(options) {
+  const now = (options.now ?? new Date).toISOString();
+  const maxEvents = MAX_INGEST_BATCH_ITEMS;
+  if (options.safetyPolicy)
+    assertWriteAllowed(options.dbPath, options.safetyPolicy);
+  const text = await readOutboxInput(options.input);
+  const events = parseOutboxText(text);
+  if (events.length > maxEvents) {
+    throw new Error(`Outbox contains too many events: ${events.length} exceeds ${maxEvents} event limit.`);
+  }
+  assertContainedSourceDataGraph(events);
+  const normalizedEvents = events.map((event) => normalizeEvent(event, now));
+  migrateKnowledgeDb(options.dbPath);
+  const db = openKnowledgeDb(options.dbPath);
+  const runId = `run_${randomUUID8()}`;
+  try {
+    return db.transaction(() => {
+      db.run(`INSERT INTO runs (id, type, prompt, status, provider, model, metadata_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+        runId,
+        "open-files-outbox",
+        options.input,
+        "completed",
+        "local",
+        "open-files-outbox",
+        JSON.stringify({ path: options.input, events: events.length }),
+        now,
+        now
+      ]);
+      const sourcesTouched = new Set;
+      const revisionsTouched = new Set;
+      let chunksDeleted = 0;
+      let embeddingsDeleted = 0;
+      let vectorEntriesDeleted = 0;
+      let staleRevisions = 0;
+      let deletedSources = 0;
+      let movedSources = 0;
+      let permissionUpdates = 0;
+      recordAuditEvent(db, {
+        event_type: "source_read",
+        action: options.input.startsWith("s3://") ? "s3_outbox_read" : "local_outbox_read",
+        target_uri: options.input,
+        decision: "allow",
+        metadata: { events: events.length, read_only: true },
+        created_at: now
+      });
+      normalizedEvents.forEach((event, index) => {
+        const sourceId = ensureSource(db, event, now);
+        sourcesTouched.add(sourceId);
+        const createdRevisionId = ensureRevision(db, sourceId, event, now);
+        if (createdRevisionId)
+          revisionsTouched.add(createdRevisionId);
+        const affectedRevisionIds = revisionIdsForEvent(db, sourceId, event);
+        for (const revisionId of affectedRevisionIds) {
+          revisionsTouched.add(revisionId);
+          const invalidation = invalidateRevision(db, revisionId);
+          chunksDeleted += invalidation.chunksDeleted;
+          embeddingsDeleted += invalidation.embeddingsDeleted;
+          vectorEntriesDeleted += invalidation.vectorEntriesDeleted;
+          staleRevisions += 1;
+        }
+        if (isDeleteEvent(event.eventType, event.status))
+          deletedSources += 1;
+        if (isMoveEvent(event.eventType))
+          movedSources += 1;
+        if (isPermissionEvent(event.eventType) || event.acl !== undefined)
+          permissionUpdates += 1;
+        db.run(`INSERT INTO run_events (id, run_id, level, event, metadata_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)`, [
+          stableId6("evt", `${runId}\x00${index}\x00${event.sourceRef}\x00${event.eventType}`),
+          runId,
+          "info",
+          event.eventType,
+          JSON.stringify({
+            source_ref: event.sourceRef,
+            source_uri: event.sourceUri,
+            revision: event.revision,
+            hash: event.hash,
+            status: event.status,
+            affected_revisions: affectedRevisionIds.length
+          }),
+          event.updatedAt
+        ]);
+      });
+      db.run(`INSERT INTO provider_usage (id, run_id, provider, model, input_tokens, output_tokens, cost_usd, metadata_json, created_at)
+         VALUES (?, ?, ?, ?, 0, 0, 0, ?, ?)`, [
+        stableId6("usage", runId),
+        runId,
+        "local",
+        "open-files-outbox",
+        JSON.stringify({ note: "No model provider used for outbox invalidation." }),
+        now
+      ]);
+      recordAuditEvent(db, {
+        event_type: "write",
+        action: "knowledge_outbox_invalidation",
+        target_uri: options.dbPath,
+        decision: "allow",
+        metadata: {
+          run_id: runId,
+          events: events.length,
+          sources: sourcesTouched.size,
+          revisions: revisionsTouched.size,
+          chunks_deleted: chunksDeleted,
+          embeddings_deleted: embeddingsDeleted,
+          vector_entries_deleted: vectorEntriesDeleted
+        },
+        created_at: now
+      });
+      return {
+        path: options.input,
+        db_path: options.dbPath,
+        run_id: runId,
+        events_seen: events.length,
+        sources_touched: sourcesTouched.size,
+        revisions_touched: revisionsTouched.size,
+        chunks_deleted: chunksDeleted,
+        embeddings_deleted: embeddingsDeleted,
+        vector_entries_deleted: vectorEntriesDeleted,
+        stale_revisions: staleRevisions,
+        deleted_sources: deletedSources,
+        moved_sources: movedSources,
+        permission_updates: permissionUpdates
+      };
+    })();
+  } finally {
+    db.close();
   }
 }
-function createKnowledgeCloudClient() {
-  return createCloudPoolFromEnv(KNOWLEDGE_APP_NAME, { applicationName: "@hasna/knowledge" }).client;
-}
+var init_outbox_consume = __esm(() => {
+  init_knowledge_db();
+  init_anchored_fs();
+  init_input_limits();
+  init_public_guard();
+  init_source_ref();
+  init_safety();
+});
 
 // src/db/storage-sync.ts
+init_runtime_role();
 var STORAGE_TABLES = [
   "sources",
   "wiki_pages",
@@ -16346,768 +20574,815 @@ var STORAGE_TABLES = [
   "knowledge_sync_imports"
 ];
 var KNOWLEDGE_STORAGE_TABLES = STORAGE_TABLES;
-var DEPRECATED_CLOUD_ALIASES = ["remote", "hybrid", "self_hosted"];
 var KNOWLEDGE_STORAGE_ENV = "HASNA_KNOWLEDGE_DATABASE_URL";
 var KNOWLEDGE_STORAGE_FALLBACK_ENV = "KNOWLEDGE_DATABASE_URL";
 var KNOWLEDGE_STORAGE_MODE_ENV = "HASNA_KNOWLEDGE_STORAGE_MODE";
 var KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV = "KNOWLEDGE_STORAGE_MODE";
 var STORAGE_DATABASE_ENV = [KNOWLEDGE_STORAGE_ENV, KNOWLEDGE_STORAGE_FALLBACK_ENV];
 var STORAGE_MODE_ENV = [KNOWLEDGE_STORAGE_MODE_ENV, KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV];
-var PRIMARY_KEYS = {
-  sources: ["id"],
-  wiki_pages: ["id"],
-  source_revisions: ["id"],
-  chunks: ["id"],
-  chunk_embeddings: ["id"],
-  wiki_backlinks: ["from_page_id", "to_page_id"],
-  citations: ["id"],
-  knowledge_indexes: ["id"],
-  runs: ["id"],
-  run_events: ["id"],
-  provider_usage: ["id"],
-  redaction_findings: ["id"],
-  storage_objects: ["id"],
-  audit_events: ["id"],
-  approval_gates: ["id"],
-  vector_index_entries: ["id"],
-  reindex_queue: ["id"],
-  knowledge_machines: ["machine_id"],
-  knowledge_sync_snapshots: ["id"],
-  knowledge_sync_changes: ["id"],
-  knowledge_sync_conflicts: ["id"],
-  knowledge_sync_table_clocks: ["table_name", "machine_id"],
-  knowledge_sync_imports: ["bundle_id"]
-};
-function readEnv(name) {
-  const value = process.env[name]?.trim();
-  return value || undefined;
-}
-function normalizeStorageMode2(value) {
-  const normalized = value?.trim().toLowerCase().replace(/-/g, "_");
-  if (normalized === "local")
-    return "local";
-  if (normalized === "cloud")
-    return "cloud";
-  if (normalized && DEPRECATED_CLOUD_ALIASES.includes(normalized))
-    return "cloud";
-  return;
-}
-function openScopedDb(options = {}) {
-  const workspace = ensureKnowledgeWorkspace(resolveScopedWorkspace(options.scope, options.cwd).home);
-  migrateKnowledgeDb(workspace.knowledgeDbPath);
-  return {
-    db: openKnowledgeDb(workspace.knowledgeDbPath),
-    path: workspace.knowledgeDbPath,
-    scope: options.scope ?? "global"
-  };
+function containedStorage() {
+  throw new KnowledgeContainmentError("KNOWLEDGE_HOSTED_CONTAINED", 503, "hosted-client", "public-api", "database synchronization is unavailable during Stage A");
 }
 function getStorageDatabaseEnvName() {
-  for (const name of STORAGE_DATABASE_ENV) {
-    if (readEnv(name))
-      return name;
-  }
   return null;
 }
 function getStorageDatabaseEnv() {
-  const name = getStorageDatabaseEnvName();
-  return name ? { name } : null;
+  return null;
 }
 function getStorageDatabaseUrl() {
-  const env = getStorageDatabaseEnv();
-  return env ? readEnv(env.name) ?? null : null;
+  return null;
 }
 function getStorageMode() {
-  const mode2 = normalizeStorageMode2(readEnv(KNOWLEDGE_STORAGE_MODE_ENV)) ?? normalizeStorageMode2(readEnv(KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV));
-  if (mode2)
-    return mode2;
   return "local";
 }
 async function getStoragePg() {
-  const url = getStorageDatabaseUrl();
-  if (!url) {
-    throw new Error("Missing HASNA_KNOWLEDGE_DATABASE_URL or KNOWLEDGE_DATABASE_URL");
-  }
-  return new PgAdapterAsync(url);
+  return containedStorage();
 }
 async function runStorageMigrations(remote) {
-  await remote.run("CREATE EXTENSION IF NOT EXISTS pgcrypto");
-  for (const sql of PG_MIGRATIONS)
-    await remote.run(sql);
+  return containedStorage();
 }
-async function storagePush(options = {}) {
-  const remote = options.remote ?? await getStoragePg();
-  const ownsRemote = !options.remote;
-  const local = openScopedDb(options);
-  try {
-    await runStorageMigrations(remote);
-    const results = [];
-    for (const table of resolveTables(options.tables)) {
-      results.push(await pushTable(local.db, remote, table));
-    }
-    recordSyncMeta(local.db, "push", results);
-    return results;
-  } finally {
-    local.db.close();
-    if (ownsRemote)
-      await remote.close();
-  }
+async function storagePush() {
+  return containedStorage();
 }
-async function storagePull(options = {}) {
-  const remote = options.remote ?? await getStoragePg();
-  const ownsRemote = !options.remote;
-  const local = openScopedDb(options);
-  try {
-    await runStorageMigrations(remote);
-    const results = [];
-    for (const table of resolveTables(options.tables)) {
-      results.push(await pullTable(remote, local.db, table));
-    }
-    recordSyncMeta(local.db, "pull", results);
-    return results;
-  } finally {
-    local.db.close();
-    if (ownsRemote)
-      await remote.close();
-  }
+async function storagePull() {
+  return containedStorage();
 }
-async function storageSync(options = {}) {
-  const pull = await storagePull(options);
-  const push = await storagePush(options);
-  return { pull, push };
+async function storageSync() {
+  return containedStorage();
 }
-function getSyncMetaAll(options = {}) {
-  const local = openScopedDb(options);
-  try {
-    ensureSyncMetaTable(local.db);
-    return local.db.query("SELECT table_name, last_synced_at, direction FROM _knowledge_sync_meta ORDER BY table_name, direction").all();
-  } finally {
-    local.db.close();
-  }
+function getSyncMetaAll() {
+  return [];
 }
-function getStorageStatus(options = {}) {
-  const activeEnv = getStorageDatabaseEnv();
-  const local = openScopedDb(options);
-  try {
-    ensureSyncMetaTable(local.db);
-    const sync = local.db.query("SELECT table_name, last_synced_at, direction FROM _knowledge_sync_meta ORDER BY table_name, direction").all();
-    return {
-      configured: Boolean(activeEnv),
-      mode: getStorageMode(),
-      env: STORAGE_DATABASE_ENV,
-      activeEnv: activeEnv?.name ?? null,
-      service: "knowledge",
-      scope: local.scope,
-      databasePath: local.path,
-      tables: STORAGE_TABLES,
-      sync
-    };
-  } finally {
-    local.db.close();
-  }
+function getStorageStatus() {
+  return {
+    configured: false,
+    mode: "local",
+    env: STORAGE_DATABASE_ENV,
+    activeEnv: null,
+    service: "knowledge",
+    scope: "contained",
+    databasePath: "[contained-zero-io]",
+    tables: STORAGE_TABLES,
+    sync: []
+  };
 }
 function resolveTables(tables) {
+  assertKnowledgeLocalRuntime({ surface: "public-api", env: process.env });
   if (!tables || tables.length === 0)
     return [...STORAGE_TABLES];
   const allowed = new Set(STORAGE_TABLES);
   const requested = tables.map((table) => table.trim()).filter(Boolean);
   const invalid = requested.filter((table) => !allowed.has(table));
   if (invalid.length > 0)
-    throw new Error(`Unknown knowledge sync table(s): ${invalid.join(", ")}`);
+    throw new Error("Unknown knowledge sync table selection.");
   return requested;
 }
 function parseStorageTables(value) {
+  assertKnowledgeLocalRuntime({ surface: "public-api", env: process.env });
   if (!value)
     return;
   return resolveTables(Array.isArray(value) ? value : value.split(","));
 }
-async function pushTable(db, remote, table) {
-  const result = { table, rowsRead: 0, rowsWritten: 0, errors: [] };
-  try {
-    if (!tableExists2(db, table))
-      return result;
-    const rows = db.query(`SELECT * FROM ${quoteIdent(table)}`).all();
-    result.rowsRead = rows.length;
-    if (rows.length === 0)
-      return result;
-    const remoteColumns = await getRemoteColumns(remote, table);
-    const columns = filterRemoteColumns(remoteColumns, Object.keys(rows[0]));
-    result.rowsWritten = await upsertPg(remote, table, columns, rows, remoteColumns);
-  } catch (error) {
-    result.errors.push(error instanceof Error ? error.message : String(error));
-  }
-  return result;
-}
-async function pullTable(remote, db, table) {
-  const result = { table, rowsRead: 0, rowsWritten: 0, errors: [] };
-  try {
-    if (!tableExists2(db, table))
-      return result;
-    const rows = await remote.all(`SELECT * FROM ${quoteIdent(table)}`);
-    result.rowsRead = rows.length;
-    if (rows.length === 0)
-      return result;
-    const columns = filterLocalColumns(db, table, Object.keys(rows[0]));
-    result.rowsWritten = upsertSqlite(db, table, columns, rows);
-  } catch (error) {
-    result.errors.push(error instanceof Error ? error.message : String(error));
-  }
-  return result;
-}
-async function getRemoteColumns(remote, table) {
-  const rows = await remote.all("SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name = ?", table);
-  return new Map(rows.map((row) => [row.column_name, row.data_type]));
-}
-function filterRemoteColumns(remoteColumns, columns) {
-  if (remoteColumns.size === 0)
-    return columns;
-  return columns.filter((column) => remoteColumns.has(column));
-}
-function filterLocalColumns(db, table, columns) {
-  const rows = db.query(`PRAGMA table_info(${quoteIdent(table)})`).all();
-  const allowed = new Set(rows.map((row) => row.name));
-  return columns.filter((column) => allowed.has(column));
-}
-async function upsertPg(remote, table, columns, rows, remoteColumns) {
-  if (columns.length === 0)
-    return 0;
-  const primaryKeys = PRIMARY_KEYS[table];
-  const columnList = columns.map(quoteIdent).join(", ");
-  const placeholders = columns.map(() => "?").join(", ");
-  const keyList = primaryKeys.map(quoteIdent).join(", ");
-  const updateColumns = columns.filter((column) => !primaryKeys.includes(column));
-  const fallbackKey = primaryKeys[0];
-  const setClause = updateColumns.length > 0 ? updateColumns.map((column) => `${quoteIdent(column)} = EXCLUDED.${quoteIdent(column)}`).join(", ") : `${quoteIdent(fallbackKey)} = EXCLUDED.${quoteIdent(fallbackKey)}`;
-  for (const row of rows) {
-    await remote.run(`INSERT INTO ${quoteIdent(table)} (${columnList}) VALUES (${placeholders})
-       ON CONFLICT (${keyList}) DO UPDATE SET ${setClause}`, ...columns.map((column) => coerceForPg(row[column], remoteColumns.get(column))));
-  }
-  return rows.length;
-}
-function upsertSqlite(db, table, columns, rows) {
-  if (columns.length === 0)
-    return 0;
-  const primaryKeys = PRIMARY_KEYS[table];
-  const columnList = columns.map(quoteIdent).join(", ");
-  const placeholders = columns.map(() => "?").join(", ");
-  const keyList = primaryKeys.map(quoteIdent).join(", ");
-  const updateColumns = columns.filter((column) => !primaryKeys.includes(column));
-  const fallbackKey = primaryKeys[0];
-  const setClause = updateColumns.length > 0 ? updateColumns.map((column) => `${quoteIdent(column)} = excluded.${quoteIdent(column)}`).join(", ") : `${quoteIdent(fallbackKey)} = excluded.${quoteIdent(fallbackKey)}`;
-  const statement = db.query(`INSERT INTO ${quoteIdent(table)} (${columnList}) VALUES (${placeholders})
-     ON CONFLICT (${keyList}) DO UPDATE SET ${setClause}`);
-  const insert = db.transaction((batch) => {
-    for (const row of batch)
-      statement.run(...columns.map((column) => coerceForSqlite(row[column])));
-  });
-  insert(rows);
-  return rows.length;
-}
-function recordSyncMeta(db, direction, results) {
-  ensureSyncMetaTable(db);
-  const now = new Date().toISOString();
-  const statement = db.query(`
-    INSERT INTO _knowledge_sync_meta (table_name, last_synced_at, direction)
-    VALUES (?, ?, ?)
-    ON CONFLICT(table_name, direction) DO UPDATE SET last_synced_at = excluded.last_synced_at
-  `);
-  for (const result of results) {
-    if (result.errors.length > 0)
-      continue;
-    statement.run(result.table, now, direction);
-  }
-}
-function ensureSyncMetaTable(db) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS _knowledge_sync_meta (
-      table_name TEXT NOT NULL,
-      last_synced_at TEXT,
-      direction TEXT NOT NULL CHECK(direction IN ('push', 'pull')),
-      PRIMARY KEY (table_name, direction)
-    )
-  `);
-}
-function tableExists2(db, table) {
-  const row = db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table);
-  return Boolean(row);
-}
-function quoteIdent(identifier) {
-  return `"${identifier.replace(/"/g, '""')}"`;
-}
-function coerceForPg(value, dataType) {
-  if (value === undefined || value === null)
-    return null;
-  if (dataType === "boolean") {
-    if (typeof value === "boolean")
-      return value;
-    if (typeof value === "number")
-      return value !== 0;
-    if (typeof value === "string")
-      return value === "1" || value.toLowerCase() === "true";
-  }
-  if (value instanceof Date)
-    return value.toISOString();
-  if (Buffer.isBuffer(value) || value instanceof Uint8Array)
-    return value;
-  if (typeof value === "object")
-    return JSON.stringify(value);
-  return value;
-}
-function coerceForSqlite(value) {
-  if (value === undefined || value === null)
-    return null;
-  if (typeof value === "string" || typeof value === "number" || typeof value === "bigint" || typeof value === "boolean")
-    return value;
-  if (value instanceof Date)
-    return value.toISOString();
-  if (Buffer.isBuffer(value) || value instanceof Uint8Array)
-    return value;
-  if (typeof value === "object")
-    return JSON.stringify(value);
-  return String(value);
-}
-// src/serve.ts
-import { readFileSync as readFileSync5 } from "fs";
-
-// node_modules/@hasna/contracts/dist/auth/index.js
-import { createHash as createHash2, createHmac, randomBytes, timingSafeEqual } from "crypto";
-var API_KEY_TOKEN_VERSION = 1;
-var API_KEY_NAMESPACE = "hasna";
-var TOKEN_PATTERN = /^hasna_([a-z][a-z0-9-]*)_([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/;
-var DEFAULT_API_KEY_TTL_SECONDS = 90 * 24 * 60 * 60;
-function toBuffer(secret) {
-  return typeof secret === "string" ? Buffer.from(secret, "utf8") : secret;
-}
-function hmac(signingSecret, message) {
-  return createHmac("sha256", toBuffer(signingSecret)).update(message, "utf8").digest();
-}
-function apiKeyPrefix(app) {
-  return `${API_KEY_NAMESPACE}_${app}_`;
-}
-function parseApiKey(token) {
-  if (typeof token !== "string")
-    return null;
-  const match = TOKEN_PATTERN.exec(token);
-  if (!match)
-    return null;
-  const [, app, body, sig] = match;
-  if (!app || !body || !sig)
-    return null;
-  let claims;
-  try {
-    claims = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
-  } catch {
-    return null;
-  }
-  if (typeof claims !== "object" || claims === null || typeof claims.kid !== "string" || typeof claims.app !== "string" || !Array.isArray(claims.scopes)) {
-    return null;
-  }
-  return { app, body, sig, claims };
-}
-function verifyApiKeyToken(token, options) {
-  const parsed = parseApiKey(token);
-  if (!parsed) {
-    return { ok: false, reason: "malformed", message: "Token is malformed." };
-  }
-  const { app, body, sig, claims } = parsed;
-  if (claims.v !== API_KEY_TOKEN_VERSION) {
-    return { ok: false, reason: "unsupported_version", message: `Unsupported token version ${claims.v}.` };
-  }
-  if (claims.app !== app) {
-    return { ok: false, reason: "app_mismatch", message: "Token prefix app does not match claims." };
-  }
-  if (options.expectedApp !== undefined && app !== options.expectedApp) {
-    return { ok: false, reason: "app_mismatch", message: `Token is for app '${app}', expected '${options.expectedApp}'.` };
-  }
-  const expected = hmac(options.signingSecret, `${apiKeyPrefix(app)}${body}`);
-  let provided;
-  try {
-    provided = Buffer.from(sig, "base64url");
-  } catch {
-    return { ok: false, reason: "bad_signature", message: "Signature is not valid base64url." };
-  }
-  if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
-    return { ok: false, reason: "bad_signature", message: "Signature verification failed." };
-  }
-  const now = Math.floor((options.nowMs ?? Date.now()) / 1000);
-  const leeway = options.leewaySeconds ?? 0;
-  if (typeof claims.iat === "number" && now + leeway < claims.iat) {
-    return { ok: false, reason: "not_yet_valid", message: "Token is not yet valid." };
-  }
-  if (claims.exp !== null && typeof claims.exp === "number" && now - leeway >= claims.exp) {
-    return { ok: false, reason: "expired", message: "Token has expired." };
-  }
-  if (options.requiredScopes && options.requiredScopes.length > 0) {
-    const granted = claims.scopes;
-    const satisfies = (required) => granted.some((g) => {
-      if (g === "*")
-        return true;
-      const gi = g.indexOf(":");
-      const ri = required.indexOf(":");
-      if (gi < 0 || ri < 0)
-        return false;
-      const gApp = g.slice(0, gi);
-      const gAction = g.slice(gi + 1);
-      const rApp = required.slice(0, ri);
-      const rAction = required.slice(ri + 1);
-      return (gApp === "*" || gApp === rApp) && (gAction === "*" || gAction === rAction);
-    });
-    for (const required of options.requiredScopes) {
-      if (!satisfies(required)) {
-        return { ok: false, reason: "insufficient_scope", message: `Missing required scope '${required}'.` };
-      }
-    }
-  }
-  return { ok: true, claims, kid: claims.kid, app };
-}
-var DEFAULT_API_KEYS_TABLE = "api_keys";
-function createTableSql(table) {
-  return `CREATE TABLE IF NOT EXISTS ${table} (
-    kid TEXT PRIMARY KEY,
-    app TEXT NOT NULL,
-    agent TEXT,
-    scopes JSONB NOT NULL,
-    token_hash TEXT NOT NULL UNIQUE,
-    issued_at TIMESTAMPTZ NOT NULL,
-    expires_at TIMESTAMPTZ,
-    revoked_at TIMESTAMPTZ,
-    revoked_reason TEXT,
-    last_used_at TIMESTAMPTZ,
-    created_by TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-  )`;
-}
-function apiKeyMigrations(table = DEFAULT_API_KEYS_TABLE) {
-  return [
-    { id: `hasna_auth_0001_${table}`, sql: createTableSql(table) },
-    {
-      id: `hasna_auth_0002_${table}_indexes`,
-      sql: `CREATE INDEX IF NOT EXISTS ${table}_app_idx ON ${table} (app);
-            CREATE INDEX IF NOT EXISTS ${table}_token_hash_idx ON ${table} (token_hash);`
-    }
-  ];
-}
-function toIso(value) {
-  if (value === null || value === undefined)
-    return null;
-  if (value instanceof Date)
-    return value.toISOString();
-  return new Date(String(value)).toISOString();
-}
-function parseScopes(value) {
-  if (Array.isArray(value))
-    return value.map((v) => String(v));
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value);
-      return Array.isArray(parsed) ? parsed.map((v) => String(v)) : [];
-    } catch {
-      return [];
-    }
-  }
-  return [];
-}
-function rowToRecord(row) {
-  return {
-    kid: String(row.kid),
-    app: String(row.app),
-    agent: row.agent === null || row.agent === undefined ? null : String(row.agent),
-    scopes: parseScopes(row.scopes),
-    tokenHash: String(row.token_hash),
-    issuedAt: toIso(row.issued_at) ?? new Date(0).toISOString(),
-    expiresAt: toIso(row.expires_at),
-    revokedAt: toIso(row.revoked_at),
-    revokedReason: row.revoked_reason === null || row.revoked_reason === undefined ? null : String(row.revoked_reason),
-    lastUsedAt: toIso(row.last_used_at),
-    createdBy: row.created_by === null || row.created_by === undefined ? null : String(row.created_by)
-  };
+// src/db/remote-storage.ts
+init_runtime_role();
+var KNOWLEDGE_APP_NAME = "knowledge";
+function containedRemoteStorage() {
+  throw new KnowledgeContainmentError("KNOWLEDGE_HOSTED_CONTAINED", 503, "hosted-client", "public-api", "remote database clients are unavailable during Stage A");
 }
 
-class ApiKeyStore {
-  client;
-  table;
-  constructor(client, options = {}) {
-    this.client = client;
-    this.table = options.table ?? DEFAULT_API_KEYS_TABLE;
-    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(this.table)) {
-      throw new Error(`Invalid api-keys table name '${this.table}'.`);
-    }
+class PgAdapterAsync {
+  constructor(connectionString) {
+    containedRemoteStorage();
   }
-  migrations() {
-    return apiKeyMigrations(this.table);
+  get pool() {
+    return containedRemoteStorage();
   }
-  async ensureSchema() {
-    for (const migration of this.migrations()) {
-      await this.client.execute(migration.sql);
-    }
+  async run(sql, ...params) {
+    return containedRemoteStorage();
   }
-  async insert(input) {
-    await this.client.execute(`INSERT INTO ${this.table}
-         (kid, app, agent, scopes, token_hash, issued_at, expires_at, created_by)
-       VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)`, [
-      input.kid,
-      input.app,
-      input.agent ?? null,
-      JSON.stringify(input.scopes),
-      input.tokenHash,
-      input.issuedAt.toISOString(),
-      input.expiresAt ? input.expiresAt.toISOString() : null,
-      input.createdBy ?? null
-    ]);
+  async all(sql, ...params) {
+    return containedRemoteStorage();
   }
-  async insertMinted(minted, createdBy) {
-    const claims = minted.claims;
-    await this.insert({
-      kid: minted.kid,
-      app: claims.app,
-      agent: claims.agent ?? null,
-      scopes: claims.scopes,
-      tokenHash: minted.tokenHash,
-      issuedAt: new Date(claims.iat * 1000),
-      expiresAt: claims.exp === null ? null : new Date(claims.exp * 1000),
-      createdBy: createdBy ?? null
-    });
+  async get(sql, ...params) {
+    return containedRemoteStorage();
   }
-  async findByKid(kid) {
-    const row = await this.client.get(`SELECT * FROM ${this.table} WHERE kid = $1`, [kid]);
-    return row ? rowToRecord(row) : null;
-  }
-  async findByTokenHash(tokenHash) {
-    const row = await this.client.get(`SELECT * FROM ${this.table} WHERE token_hash = $1`, [tokenHash]);
-    return row ? rowToRecord(row) : null;
-  }
-  isRevoked = async (kid) => {
-    const row = await this.client.get(`SELECT revoked_at FROM ${this.table} WHERE kid = $1`, [kid]);
-    if (!row)
-      return false;
-    return row.revoked_at !== null && row.revoked_at !== undefined;
-  };
-  async status(kid, nowMs = Date.now()) {
-    const record = await this.findByKid(kid);
-    if (!record)
-      return "unknown";
-    if (record.revokedAt)
-      return "revoked";
-    if (record.expiresAt && new Date(record.expiresAt).getTime() <= nowMs)
-      return "expired";
-    return "active";
-  }
-  statusChecker() {
-    return async (kid) => {
-      const status = await this.status(kid);
-      return status !== "active";
-    };
-  }
-  async revoke(kid, reason, atMs = Date.now()) {
-    const row = await this.client.get(`UPDATE ${this.table}
-          SET revoked_at = COALESCE(revoked_at, $2), revoked_reason = COALESCE(revoked_reason, $3)
-        WHERE kid = $1
-      RETURNING kid`, [kid, new Date(atMs).toISOString(), reason ?? null]);
-    return row !== null;
-  }
-  async touchLastUsed(kid, atMs = Date.now()) {
-    await this.client.execute(`UPDATE ${this.table} SET last_used_at = $2 WHERE kid = $1`, [
-      kid,
-      new Date(atMs).toISOString()
-    ]);
-  }
-  async list(options = {}) {
-    const clauses = [];
-    const params = [];
-    if (options.app) {
-      params.push(options.app);
-      clauses.push(`app = $${params.length}`);
-    }
-    if (!options.includeRevoked) {
-      clauses.push("revoked_at IS NULL");
-    }
-    const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
-    const rows = await this.client.many(`SELECT * FROM ${this.table} ${where} ORDER BY issued_at DESC`);
-    return rows.map(rowToRecord);
-  }
-  async revokedKids() {
-    const rows = await this.client.many(`SELECT kid FROM ${this.table} WHERE revoked_at IS NOT NULL`);
-    return rows.map((row) => String(row.kid));
+  async close() {
+    return containedRemoteStorage();
   }
 }
-function readHeader(source, name) {
-  const lower = name.toLowerCase();
-  if (typeof source === "function") {
-    return source(name) ?? source(lower) ?? null;
-  }
-  if (typeof Headers !== "undefined" && source instanceof Headers) {
-    return source.get(name);
-  }
-  const record = source;
-  const value = record[name] ?? record[lower] ?? record[name.toUpperCase()];
-  if (Array.isArray(value))
-    return value[0] ?? null;
-  return value ?? null;
+function createKnowledgeCloudClient() {
+  return containedRemoteStorage();
 }
-function extractToken(source, headerName = "x-api-key", scheme = "Bearer") {
-  const direct = readHeader(source, headerName);
-  if (direct && direct.trim().length > 0)
-    return direct.trim();
-  const authz = readHeader(source, "authorization");
-  if (authz) {
-    const prefix = `${scheme} `;
-    if (authz.toLowerCase().startsWith(prefix.toLowerCase())) {
-      const token = authz.slice(prefix.length).trim();
-      if (token.length > 0)
-        return token;
-    }
-  }
+// src/db/pg-migrations.ts
+var PG_MIGRATIONS = [];
+// src/generated/storage-kit/mode.ts
+init_runtime_role();
+function containedMode() {
+  throw new KnowledgeContainmentError("KNOWLEDGE_HOSTED_CONTAINED", 503, "hosted-client", "public-api", "storage mode capability is unavailable during Stage A");
+}
+function normalizeStorageMode(value) {
+  return containedMode();
+}
+function storageEnvKeys(name) {
+  return containedMode();
+}
+function resolveStorageMode(name) {
+  return containedMode();
+}
+function resolveDatabaseUrl(name) {
   return null;
 }
-function verifyApiKey(options) {
-  if (!options.app)
-    throw new Error("verifyApiKey requires an 'app' slug.");
-  if (!options.signingSecret) {
-    throw new Error("verifyApiKey requires a 'signingSecret'. Set it from HASNA_<APP>_API_SIGNING_KEY.");
-  }
-  const headerName = options.headerName ?? "x-api-key";
-  const scheme = options.scheme ?? "Bearer";
-  const clock = options.nowMs ?? (() => Date.now());
-  async function emit(event) {
-    if (!options.audit)
-      return;
-    try {
-      await options.audit(event);
-    } catch {}
-  }
-  async function authenticate(headers, context = {}) {
-    const method = context.method ?? null;
-    const path = context.path ?? null;
-    const requiredScopes = [...options.requiredScopes ?? [], ...context.requiredScopes ?? []];
-    const at = new Date(clock()).toISOString();
-    const token = extractToken(headers, headerName, scheme);
-    if (!token) {
-      const decision = {
-        ok: false,
-        status: 401,
-        reason: "missing_token",
-        message: `Missing API key. Send it as '${headerName}: <key>' or 'Authorization: ${scheme} <key>'.`
-      };
-      await emit({ outcome: "deny", app: options.app, kid: null, reason: "missing_token", scopesRequired: requiredScopes, method, path, status: 401, at });
-      return decision;
-    }
-    const verified = verifyApiKeyToken(token, {
-      signingSecret: options.signingSecret,
-      expectedApp: options.app,
-      nowMs: clock(),
-      ...options.leewaySeconds !== undefined ? { leewaySeconds: options.leewaySeconds } : {},
-      requiredScopes
-    });
-    if (!verified.ok) {
-      const status = verified.reason === "insufficient_scope" ? 403 : 401;
-      await emit({ outcome: "deny", app: options.app, kid: null, reason: verified.reason, scopesRequired: requiredScopes, method, path, status, at });
-      return { ok: false, status, reason: verified.reason, message: verified.message };
-    }
-    if (options.isRevoked) {
-      const revoked = await options.isRevoked(verified.kid);
-      if (revoked) {
-        await emit({ outcome: "deny", app: options.app, kid: verified.kid, reason: "revoked", scopesRequired: requiredScopes, method, path, status: 401, at });
-        return { ok: false, status: 401, reason: "revoked", message: "API key has been revoked." };
-      }
-    }
-    const principal = {
-      kid: verified.kid,
-      app: verified.app,
-      scopes: verified.claims.scopes,
-      agent: verified.claims.agent ?? null,
-      claims: verified.claims
-    };
-    await emit({ outcome: "allow", app: options.app, kid: verified.kid, reason: null, scopesRequired: requiredScopes, method, path, status: 200, at });
-    return { ok: true, status: 200, principal };
-  }
-  return { authenticate, app: options.app };
+// src/generated/storage-kit/tls.ts
+init_runtime_role();
+function containedTls() {
+  throw new KnowledgeContainmentError("KNOWLEDGE_HOSTED_CONTAINED", 503, "hosted-client", "public-api", "database TLS capability is unavailable during Stage A");
+}
+function resolveTlsConfig(connectionString) {
+  return containedTls();
+}
+// src/generated/storage-kit/query.ts
+init_runtime_role();
+function containedQuery() {
+  throw new KnowledgeContainmentError("KNOWLEDGE_HOSTED_CONTAINED", 503, "hosted-client", "public-api", "query clients are unavailable during Stage A");
+}
+function wrapExecutor(executor) {
+  return containedQuery();
+}
+function createQueryClient(pool) {
+  return containedQuery();
+}
+// src/generated/storage-kit/pool.ts
+init_runtime_role();
+function containedPool() {
+  throw new KnowledgeContainmentError("KNOWLEDGE_HOSTED_CONTAINED", 503, "hosted-client", "public-api", "database pool construction is unavailable during Stage A");
+}
+function createPgPool(options) {
+  return containedPool();
+}
+function createCloudPoolFromEnv(appName) {
+  return containedPool();
+}
+// src/generated/storage-kit/migrations.ts
+init_runtime_role();
+function checksumSql(sql) {
+  return "0000000000000000000000000000000000000000000000000000000000000000";
+}
+function defineMigration(id, sql) {
+  return Object.freeze(Object.create(null));
+}
+function containedMigration() {
+  throw new KnowledgeContainmentError("KNOWLEDGE_HOSTED_CONTAINED", 503, "hosted-client", "public-api", "migration execution is unavailable during Stage A");
 }
 
+class MigrationLedger {
+  constructor(client, migrations, options = {}) {
+    for (const key of ["client", "migrations", "ledgerTable"]) {
+      Object.defineProperty(this, key, {
+        value: undefined,
+        enumerable: true,
+        configurable: true,
+        writable: true
+      });
+    }
+  }
+  async ensureLedger() {
+    return containedMigration();
+  }
+  async listApplied() {
+    return containedMigration();
+  }
+  async readApplied() {
+    return containedMigration();
+  }
+  buildPlan(applied) {
+    return containedMigration();
+  }
+  async migrate() {
+    return containedMigration();
+  }
+  async applyPendingMigration(migration) {
+    return containedMigration();
+  }
+}
+function createMigrationLedger(client, migrations, options = {}) {
+  return new MigrationLedger(client, migrations, options);
+}
+// src/generated/storage-kit/health.ts
+init_runtime_role();
+function containedHealth() {
+  throw new KnowledgeContainmentError("KNOWLEDGE_HOSTED_CONTAINED", 503, "hosted-client", "public-api", "database health checks are unavailable during Stage A");
+}
+async function checkHealth(client) {
+  return containedHealth();
+}
+async function checkReady(client, migrations) {
+  return containedHealth();
+}
+
+// src/generated/storage-kit/index.ts
+var KIT_VERSION = "0.4.0";
+// src/serve.ts
+init_runtime_role();
+import { readFileSync as readFileSync2 } from "fs";
+var KNOWLEDGE_SERVE_APP = "knowledge";
+function normalizeCloudDatabaseUrl() {
+  return;
+}
+function resolveVersion() {
+  if (process.env.HASNA_KNOWLEDGE_VERSION)
+    return process.env.HASNA_KNOWLEDGE_VERSION;
+  try {
+    const url = new URL("../package.json", import.meta.url);
+    const pkg = JSON.parse(readFileSync2(url, "utf8"));
+    return pkg.version ?? "0.0.0";
+  } catch {
+    return process.env.npm_package_version ?? "0.0.0";
+  }
+}
+function containedNoteRepo() {
+  throw authorityContainmentError(undefined, "server");
+}
+
+class NoteRepo {
+  constructor(client) {
+    Object.defineProperty(this, "client", {
+      value: undefined,
+      enumerable: true,
+      configurable: true,
+      writable: true
+    });
+  }
+  async create(input) {
+    return containedNoteRepo();
+  }
+  async list() {
+    return containedNoteRepo();
+  }
+  async get(idOrShort) {
+    return containedNoteRepo();
+  }
+  async update(idOrShort, patch) {
+    return containedNoteRepo();
+  }
+  async delete(idOrShort) {
+    return containedNoteRepo();
+  }
+}
+function knowledgeOpenApi(version) {
+  const containmentResponseRefs = {
+    "403": { $ref: "#/components/responses/KnowledgeProjectForbidden" },
+    "503": { $ref: "#/components/responses/KnowledgeUnavailable" }
+  };
+  const stageAOperation = {
+    description: "Disabled during Stage A. Project-authority containment is evaluated before authentication; future positive authority is explicitly deferred.",
+    deprecated: true,
+    security: [],
+    "x-knowledge-stage-a-containment": "pre-auth",
+    "x-knowledge-operation-enabled": false
+  };
+  const noteSchema = {
+    type: "object",
+    properties: {
+      id: { type: "string" },
+      short_id: { type: "string", nullable: true },
+      title: { type: "string" },
+      content: { type: "string" },
+      url: { type: "string", nullable: true },
+      tags: { type: "array", items: { type: "string" } },
+      metadata: { type: "object", additionalProperties: true },
+      archived: { type: "boolean" },
+      created_at: { type: "string" },
+      updated_at: { type: "string" }
+    },
+    required: ["id", "title", "content", "tags", "archived", "created_at", "updated_at"]
+  };
+  const noteInput = {
+    type: "object",
+    properties: {
+      title: { type: "string" },
+      content: { type: "string" },
+      url: { type: "string", nullable: true },
+      tags: { type: "array", items: { type: "string" } },
+      metadata: { type: "object", additionalProperties: true }
+    },
+    required: ["title"]
+  };
+  const notePatch = {
+    type: "object",
+    properties: {
+      title: { type: "string" },
+      content: { type: "string" },
+      url: { type: "string", nullable: true },
+      tags: { type: "array", items: { type: "string" } },
+      metadata: { type: "object", additionalProperties: true },
+      archived: { type: "boolean" }
+    }
+  };
+  return {
+    openapi: "3.0.3",
+    info: {
+      title: "Knowledge",
+      version,
+      description: "@hasna/knowledge Stage-A contained HTTP API; data operations fail before authentication or datastore access."
+    },
+    components: {
+      securitySchemes: { apiKey: { type: "apiKey", in: "header", name: "x-api-key" } },
+      schemas: {
+        Note: noteSchema,
+        NoteInput: noteInput,
+        NotePatch: notePatch,
+        NoteList: {
+          type: "object",
+          properties: {
+            items: { type: "array", items: { $ref: "#/components/schemas/Note" } },
+            total: { type: "integer" }
+          },
+          required: ["items", "total"]
+        },
+        KnowledgeContainmentResponse: {
+          type: "object",
+          properties: {
+            ok: { type: "boolean", enum: [false] },
+            code: {
+              type: "string",
+              enum: [
+                "KNOWLEDGE_AUTHORITY_UNAVAILABLE",
+                "KNOWLEDGE_PROJECT_FORBIDDEN",
+                "KNOWLEDGE_POSITIVE_AUTHORITY_DISABLED"
+              ]
+            },
+            status: { type: "integer", enum: [403, 503] },
+            role: { type: "string", enum: ["hosted-server"] },
+            surface: { type: "string", enum: ["server"] },
+            message: { type: "string" }
+          },
+          required: ["ok", "code", "status", "role", "surface", "message"]
+        }
+      },
+      responses: {
+        KnowledgeProjectForbidden: {
+          description: "Trusted server-side authority has zero Knowledge project grants; evaluated before authentication.",
+          content: {
+            "application/json": { schema: { $ref: "#/components/schemas/KnowledgeContainmentResponse" } }
+          }
+        },
+        KnowledgeUnavailable: {
+          description: "Authority is missing or untrusted, or positive hosted authority remains disabled; evaluated before authentication.",
+          content: {
+            "application/json": { schema: { $ref: "#/components/schemas/KnowledgeContainmentResponse" } }
+          }
+        }
+      }
+    },
+    security: [],
+    paths: {
+      "/v1/notes": {
+        get: {
+          ...stageAOperation,
+          operationId: "listNotes",
+          summary: "List knowledge items",
+          parameters: [
+            { name: "limit", in: "query", schema: { type: "integer" } },
+            { name: "offset", in: "query", schema: { type: "integer" } },
+            { name: "search", in: "query", schema: { type: "string" } }
+          ],
+          responses: {
+            ...containmentResponseRefs
+          }
+        },
+        post: {
+          ...stageAOperation,
+          operationId: "createNote",
+          summary: "Create a knowledge item",
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/NoteInput" } } }
+          },
+          responses: {
+            ...containmentResponseRefs
+          }
+        }
+      },
+      "/v1/notes/{id}": {
+        get: {
+          ...stageAOperation,
+          operationId: "getNote",
+          summary: "Fetch a knowledge item",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: {
+            ...containmentResponseRefs
+          }
+        },
+        patch: {
+          ...stageAOperation,
+          operationId: "updateNote",
+          summary: "Update a knowledge item",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/NotePatch" } } }
+          },
+          responses: {
+            ...containmentResponseRefs
+          }
+        },
+        delete: {
+          ...stageAOperation,
+          operationId: "deleteNote",
+          summary: "Delete a knowledge item",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: {
+            ...containmentResponseRefs
+          }
+        }
+      },
+      "/v1/registry": {
+        get: {
+          ...stageAOperation,
+          operationId: "getRegistry",
+          summary: "Knowledge registry contract",
+          responses: {
+            ...containmentResponseRefs
+          }
+        }
+      }
+    }
+  };
+}
+
+class HttpError extends Error {
+  status;
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+function json(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" }
+  });
+}
+function createServeHandler(deps) {
+  const internalDeps = deps;
+  const mode2 = "contained";
+  return async (req) => {
+    const url = new URL(req.url);
+    const path = url.pathname.replace(/\/+$/, "") || "/";
+    const method = req.method.toUpperCase();
+    try {
+      if (path === "/health" && method === "GET") {
+        return json({ status: "ok", version: deps.version, mode: mode2 });
+      }
+      if (path === "/version" && method === "GET") {
+        return json({ status: "ok", version: deps.version, mode: mode2 });
+      }
+      if (path === "/ready" && method === "GET") {
+        const error = authorityContainmentError(internalDeps.authority, "server");
+        const { status: httpStatus, ...containment } = error.toJSON();
+        return json({
+          status: "unavailable",
+          http_status: httpStatus,
+          version: deps.version,
+          mode: mode2,
+          ...containment
+        }, 503);
+      }
+      if (path === "/openapi.json" && method === "GET") {
+        return json(knowledgeOpenApi(deps.version));
+      }
+      if (path === "/v1/registry" || path === "/v1/notes" || path.startsWith("/v1/notes/")) {
+        const error = authorityContainmentError(internalDeps.authority, "server");
+        return json(error.toJSON(), error.status);
+      }
+      return json({ error: "not_found", path }, 404);
+    } catch (error) {
+      if (error instanceof HttpError) {
+        const reason = error.status === 401 || error.status === 403 ? "unauthorized" : "error";
+        return json({ error: reason, message: error.message }, error.status);
+      }
+      const message = error instanceof Error ? error.message : "internal error";
+      return json({ error: "internal", message }, 500);
+    }
+  };
+}
+async function startKnowledgeServe(options = {}) {
+  const runtimeOptions = options;
+  const env = options.env ?? process.env;
+  const port = options.port ?? Number(env.PORT ?? env.HASNA_KNOWLEDGE_SERVE_PORT ?? 8080);
+  const hostname = options.hostname ?? env.HOST ?? "0.0.0.0";
+  const version = runtimeOptions.version ?? resolveVersion();
+  const handler = createServeHandler({
+    client: undefined,
+    verifier: undefined,
+    store: undefined,
+    version
+  });
+  const BunGlobal = globalThis.Bun;
+  if (!BunGlobal?.serve) {
+    throw new Error("knowledge-serve requires the Bun runtime (Bun.serve unavailable).");
+  }
+  const server = BunGlobal.serve({ port, hostname, fetch: handler });
+  console.log(`[knowledge-serve] listening on http://${hostname}:${server.port} (mode=contained, version=${version})`);
+  return {
+    port: server.port,
+    hostname,
+    stop: async () => {
+      server.stop();
+    }
+  };
+}
+
+// src/artifact-store.ts
+init_anchored_fs();
+init_workspace();
+init_runtime_role();
+import { basename as basename3, dirname as dirname3, isAbsolute as isAbsolute3, join as join2, normalize as normalize3, resolve as resolve3 } from "path";
+import { pathToFileURL } from "url";
+import { createHash as createHash2 } from "crypto";
+var localArtifactStates = new WeakMap;
+var artifactStoreWorkspaceIdentities = new WeakMap;
+function localArtifactState(store) {
+  const state = localArtifactStates.get(store);
+  if (!state)
+    throw configContainmentError("local artifact authority is unavailable");
+  return state;
+}
+function assertArtifactStoreMatchesWorkspace(store, workspace) {
+  if (!store || typeof store !== "object") {
+    throw new Error("A trusted artifact store from the owning workspace is required.");
+  }
+  const storeIdentity = artifactStoreWorkspaceIdentities.get(store);
+  const workspaceIdentity = trustedKnowledgeWorkspaceIdentity(workspace);
+  if (!storeIdentity || !Object.isFrozen(store) || storeIdentity.key !== workspaceIdentity.key || storeIdentity.home !== workspaceIdentity.home || storeIdentity.scope !== workspaceIdentity.scope || storeIdentity.projectRoot !== workspaceIdentity.projectRoot) {
+    throw new Error("Trusted artifact store identity does not match the workspace identity.");
+  }
+}
+function normalizeArtifactKey(key) {
+  const raw = key.replace(/\\/g, "/").trim();
+  if (!raw || raw.startsWith("/")) {
+    throw new Error("Invalid artifact key.");
+  }
+  const segments = raw.split("/").filter(Boolean);
+  if (segments.length === 0 || segments.some((segment) => segment === "." || segment === "..")) {
+    throw new Error("Invalid artifact key.");
+  }
+  return segments.join("/");
+}
+function readConfigFingerprint(configPath, surface) {
+  try {
+    const snapshot = readAnchoredRegularFileSnapshot(configPath);
+    if (!snapshot)
+      return;
+    let parsed;
+    try {
+      parsed = JSON.parse(snapshot.content);
+    } catch {
+      throw configContainmentError("config JSON is malformed", surface);
+    }
+    assertValidKnowledgeConfig(parsed, surface);
+    const config = parsed;
+    return {
+      identity: snapshot.identity,
+      hash: createHash2("sha256").update(snapshot.content).digest("hex"),
+      mode: config.storage.type === "s3" ? "hosted" : config.mode
+    };
+  } catch (error) {
+    if (error instanceof AnchoredFilesystemError) {
+      throw configContainmentError(`config anchoring failed: ${error.message}`, surface);
+    }
+    throw error;
+  }
+}
+function sameConfigFingerprint(expected, current) {
+  return Boolean(current && current.identity.dev === expected.identity.dev && current.identity.ino === expected.identity.ino && current.identity.mode === expected.identity.mode && current.hash === expected.hash);
+}
+
+class LocalArtifactStore {
+  root;
+  type = "local";
+  canRead = true;
+  canWrite = true;
+  constructor(root) {
+    assertKnowledgeLocalRuntime({ surface: "public-api", env: process.env });
+    const boundary = arguments[1] ?? {};
+    if (boundary.requireConfig === true && boundary.configPath === undefined) {
+      throw configContainmentError("local artifact authority requires an explicit trusted config path", boundary.surface ?? "public-api");
+    }
+    if (boundary.configPath !== undefined && (!isAbsolute3(boundary.configPath) || normalize3(boundary.configPath) !== boundary.configPath || resolve3(boundary.configPath) !== boundary.configPath || basename3(boundary.configPath) !== "config.json")) {
+      throw configContainmentError("local artifact authority config path must be an absolute normalized config.json path", boundary.surface ?? "public-api");
+    }
+    this.root = root;
+    const configPath = boundary.configPath ?? (basename3(root) === "artifacts" ? join2(dirname3(root), "config.json") : undefined);
+    const intent = {
+      surface: boundary.surface ?? "public-api",
+      env: boundary.env ?? process.env
+    };
+    assertKnowledgeLocalRuntime(intent);
+    const configBaseline = configPath ? readConfigFingerprint(configPath, boundary.surface ?? "public-api") : undefined;
+    if (boundary.requireConfig === true && !configBaseline) {
+      throw configContainmentError("local artifact authority requires a current trusted config", boundary.surface ?? "public-api");
+    }
+    const readConfigMode = boundary.readConfigMode;
+    assertLocalArtifactRuntime({
+      boundary,
+      readConfigMode,
+      configPath,
+      configBaseline,
+      artifacts: undefined
+    });
+    let artifacts;
+    try {
+      artifacts = new AnchoredArtifactDirectory(root);
+    } catch (error) {
+      localArtifactFilesystemError(error, boundary);
+    }
+    localArtifactStates.set(this, {
+      boundary,
+      readConfigMode,
+      configPath,
+      configBaseline,
+      artifacts
+    });
+  }
+  async put(entry) {
+    const state = localArtifactState(this);
+    assertLocalArtifactRuntime(state);
+    const key = normalizeArtifactKey(entry.key);
+    const result = withLocalArtifactAnchor(state, () => state.artifacts.put(key, entry.body));
+    return {
+      key,
+      uri: pathToFileURL(join2(this.root, key)).href,
+      modified_at: result.modifiedAt.toISOString()
+    };
+  }
+  async getText(key) {
+    const state = localArtifactState(this);
+    assertLocalArtifactRuntime(state);
+    const normalizedKey = normalizeArtifactKey(key);
+    return withLocalArtifactAnchor(state, () => state.artifacts.read(normalizedKey));
+  }
+  async exists(key) {
+    const state = localArtifactState(this);
+    assertLocalArtifactRuntime(state);
+    const normalizedKey = normalizeArtifactKey(key);
+    return withLocalArtifactAnchor(state, () => state.artifacts.exists(normalizedKey));
+  }
+}
+function localArtifactFilesystemError(error, boundary) {
+  if (error instanceof AnchoredFilesystemError) {
+    throw configContainmentError("local artifact filesystem containment failed", boundary.surface ?? "public-api");
+  }
+  throw error;
+}
+function withLocalArtifactAnchor(state, operation) {
+  try {
+    return operation();
+  } catch (error) {
+    return localArtifactFilesystemError(error, state.boundary);
+  }
+}
+function assertLocalArtifactRuntime(state) {
+  const intent = {
+    surface: state.boundary.surface ?? "public-api",
+    env: state.boundary.env ?? process.env
+  };
+  assertKnowledgeLocalRuntime(intent);
+  if (state.configPath) {
+    const current = readConfigFingerprint(state.configPath, intent.surface);
+    if (state.configBaseline && !sameConfigFingerprint(state.configBaseline, current)) {
+      throw configContainmentError("local artifact authority was revoked because its trusted config was deleted or replaced", intent.surface);
+    }
+    if (current) {
+      assertKnowledgeLocalRuntime({ ...intent, configMode: current.mode });
+    } else if (state.boundary.requireConfig) {
+      throw configContainmentError("local artifact authority requires a current trusted config", intent.surface);
+    }
+  }
+  if (state.readConfigMode) {
+    assertKnowledgeLocalRuntimeWithConfig(intent, state.readConfigMode);
+  }
+}
+
+class S3ArtifactStore {
+  type = "s3";
+  canRead = true;
+  canWrite = true;
+  constructor(options) {
+    containedS3ArtifactStore();
+  }
+  async getClient() {
+    return containedS3ArtifactStore();
+  }
+  objectKey(key) {
+    return containedS3ArtifactStore();
+  }
+  async put(entry) {
+    return containedS3ArtifactStore();
+  }
+  async getText(key) {
+    return containedS3ArtifactStore();
+  }
+  async exists(key) {
+    return containedS3ArtifactStore();
+  }
+}
+function containedS3ArtifactStore() {
+  return assertKnowledgeLocalRuntime({
+    surface: "public-api",
+    env: {},
+    hostedRequested: true
+  });
+}
+Object.freeze(LocalArtifactStore.prototype);
+Object.freeze(S3ArtifactStore.prototype);
+function createArtifactStore(config, workspace) {
+  const boundary = arguments[2] ?? {};
+  const surface = boundary.surface ?? "public-api";
+  const env = boundary.env ?? process.env;
+  assertKnowledgeLocalRuntime({ surface, env });
+  assertValidKnowledgeConfig(config, surface);
+  const workspaceIdentity = trustedKnowledgeWorkspaceIdentity(workspace);
+  const readConfigMode = boundary.readConfigMode ?? (() => readKnowledgeConfiguredMode(workspace.configPath, undefined, boundary.requireConfig ?? false));
+  assertKnowledgeLocalRuntimeWithConfig({
+    surface,
+    env,
+    configMode: config.mode,
+    hostedRequested: config.storage.type === "s3"
+  }, readConfigMode);
+  if (config.storage.type === "s3") {
+    return new S3ArtifactStore(config.storage.s3);
+  }
+  const store = new LocalArtifactStore(workspace.artifactsDir, {
+    ...boundary,
+    configPath: boundary.configPath ?? workspace.configPath,
+    readConfigMode
+  });
+  artifactStoreWorkspaceIdentities.set(store, workspaceIdentity);
+  Object.freeze(store);
+  return store;
+}
+
+// src/service.ts
+init_anchored_fs();
+import { createHash as createHash19 } from "crypto";
+import { spawnSync as spawnSync2 } from "child_process";
+import { existsSync as existsSync7 } from "fs";
+import { hostname as hostname5 } from "os";
+import { join as join6, resolve as resolve11 } from "path";
+
+// src/app-wiki.ts
+import { createHash as createHash7, randomUUID as randomUUID4 } from "crypto";
+import { lstatSync as lstatSync3, realpathSync as realpathSync2 } from "fs";
+
+// src/storage-contract.ts
+import { createHash as createHash3, randomUUID as randomUUID2 } from "crypto";
+import { pathToFileURL as pathToFileURL2 } from "url";
+
 // src/auth.ts
-import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync3, unlinkSync, writeFileSync as writeFileSync2 } from "fs";
-import { homedir as homedir2 } from "os";
-import { dirname as dirname2, join as join2 } from "path";
+init_runtime_role();
 var DEFAULT_KNOWLEDGE_API_URL = "https://knowledge.hasna.xyz";
+function containedAuth() {
+  throw new KnowledgeContainmentError("KNOWLEDGE_HOSTED_CONTAINED", 503, "hosted-client", "public-api", "authentication storage is unavailable during Stage A");
+}
 function normalizeKnowledgeApiOrigin(apiUrl) {
   const url = new URL(apiUrl);
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error("Knowledge API URL must use http or https.");
   }
   const pathname = url.pathname.replace(/\/+$/, "");
-  if (pathname === "/api" || pathname === "/api/v1") {
+  if (pathname === "/api" || pathname === "/api/v1")
     url.pathname = "/";
-  } else if (pathname.endsWith("/api/v1")) {
+  else if (pathname.endsWith("/api/v1"))
     url.pathname = pathname.slice(0, -"/api/v1".length) || "/";
-  } else if (pathname.endsWith("/api")) {
+  else if (pathname.endsWith("/api"))
     url.pathname = pathname.slice(0, -"/api".length) || "/";
-  }
   return url.toString().replace(/\/+$/, "");
 }
-function knowledgeAuthPath(env = process.env) {
-  if (env.HASNA_KNOWLEDGE_AUTH_PATH)
-    return env.HASNA_KNOWLEDGE_AUTH_PATH;
-  const root = env.HASNA_KNOWLEDGE_AUTH_DIR ?? join2(homedir2(), ".hasna", "knowledge");
-  return join2(root, "auth.json");
+function knowledgeAuthPath() {
+  return containedAuth();
 }
-function resolveKnowledgeApiUrl(config, env = process.env) {
-  return normalizeKnowledgeApiOrigin(env.KNOWLEDGE_API_URL ?? config?.hosted?.api_url ?? DEFAULT_KNOWLEDGE_API_URL);
+function resolveKnowledgeApiUrl(config) {
+  return containedAuth();
 }
-function getKnowledgeAuth(env = process.env) {
-  try {
-    const path = knowledgeAuthPath(env);
-    if (!existsSync2(path))
-      return null;
-    const parsed = JSON.parse(readFileSync3(path, "utf8"));
-    return typeof parsed.api_key === "string" && parsed.api_key.length > 0 ? parsed : null;
-  } catch {
-    return null;
-  }
+function getKnowledgeAuth() {
+  return containedAuth();
 }
-function saveKnowledgeAuth(auth, env = process.env) {
-  const path = knowledgeAuthPath(env);
-  const stored = {
-    ...auth,
-    api_url: auth.api_url ? normalizeKnowledgeApiOrigin(auth.api_url) : undefined,
-    created_at: auth.created_at ?? new Date().toISOString()
-  };
-  mkdirSync2(dirname2(path), { recursive: true, mode: 448 });
-  writeFileSync2(path, `${JSON.stringify(stored, null, 2)}
-`, { mode: 384 });
-  return stored;
+function saveKnowledgeAuth(auth) {
+  return containedAuth();
 }
-function clearKnowledgeAuth(env = process.env) {
-  try {
-    unlinkSync(knowledgeAuthPath(env));
-    return true;
-  } catch {
-    return false;
-  }
+function clearKnowledgeAuth() {
+  return containedAuth();
 }
-function getKnowledgeApiKey(env = process.env) {
-  if (env.KNOWLEDGE_API_KEY)
-    return { apiKey: env.KNOWLEDGE_API_KEY, source: "env" };
-  if (env.HASNA_KNOWLEDGE_API_KEY)
-    return { apiKey: env.HASNA_KNOWLEDGE_API_KEY, source: "env" };
-  const auth = getKnowledgeAuth(env);
-  return auth?.api_key ? { apiKey: auth.api_key, source: "file" } : { apiKey: null, source: "none" };
+function getKnowledgeApiKey() {
+  return containedAuth();
 }
-function knowledgeAuthStatus(config, env = process.env) {
-  const auth = getKnowledgeAuth(env);
-  const key = getKnowledgeApiKey(env);
-  const apiUrl = env.KNOWLEDGE_API_URL ? resolveKnowledgeApiUrl(config, env) : auth?.api_url ? normalizeKnowledgeApiOrigin(auth.api_url) : resolveKnowledgeApiUrl(config, env);
-  return {
-    authenticated: Boolean(key.apiKey),
-    source: key.source,
-    api_url: apiUrl,
-    auth_path: knowledgeAuthPath(env),
-    email: key.source === "file" ? auth?.email ?? null : null,
-    org_id: key.source === "file" ? auth?.org_id ?? null : null,
-    org_slug: key.source === "file" ? auth?.org_slug ?? null : null,
-    user_id: key.source === "file" ? auth?.user_id ?? null : null,
-    api_key_present: Boolean(key.apiKey)
-  };
+function knowledgeAuthStatus(config) {
+  return containedAuth();
 }
 
 // src/remote-client.ts
+init_runtime_role();
 var REMOTE_KNOWLEDGE_CONTRACT_VERSION = 1;
 function isRecord(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -17189,754 +21464,47 @@ function knowledgeRegistryContract(input) {
 }
 
 class RemoteKnowledgeClient {
-  apiKey;
-  apiUrl;
   constructor(apiKey, apiUrl) {
-    this.apiKey = apiKey;
-    this.apiUrl = apiUrl;
+    containedRemoteClient();
   }
-  static fromConfig(config, env = process.env) {
-    const key = getKnowledgeApiKey(env);
-    if (!key.apiKey)
-      return null;
-    return new RemoteKnowledgeClient(key.apiKey, resolveKnowledgeApiUrl(config, env));
+  static fromConfig(config) {
+    return containedRemoteClient();
   }
-  async request(path, options = {}) {
-    return fetch(`${this.apiUrl}${path}`, {
-      ...options,
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        "Content-Type": "application/json",
-        ...options.headers
-      }
-    });
+  async request(path) {
+    return containedRemoteClient();
   }
   async registry() {
-    const response = await this.request("/api/v1/knowledge/registry");
-    return response.json();
+    return containedRemoteClient();
   }
   async search(request) {
-    const response = await this.request("/api/v1/knowledge/search", {
-      method: "POST",
-      body: JSON.stringify(request)
-    });
-    return normalizeRemoteKnowledgeRunContract(await response.json(), { type: "search", query: request.query });
+    return containedRemoteClient();
   }
   async ask(request) {
-    const response = await this.request("/api/v1/knowledge/ask", {
-      method: "POST",
-      body: JSON.stringify(request)
-    });
-    return normalizeRemoteKnowledgeRunContract(await response.json(), { type: "ask", prompt: request.prompt });
+    return containedRemoteClient();
   }
   async build(request) {
-    const response = await this.request("/api/v1/knowledge/build", {
-      method: "POST",
-      body: JSON.stringify(request)
-    });
-    return normalizeRemoteKnowledgeRunContract(await response.json(), { type: "build", prompt: request.prompt });
+    return containedRemoteClient();
   }
-  async sync(request = {}) {
-    const response = await this.request("/api/v1/knowledge/sync", {
-      method: "POST",
-      body: JSON.stringify(request)
-    });
-    return normalizeRemoteKnowledgeRunContract(await response.json(), { type: "sync" });
+  async sync() {
+    return containedRemoteClient();
   }
   async runStatus(runId) {
-    const response = await this.request(`/api/v1/knowledge/runs/${encodeURIComponent(runId)}`);
-    if (!response.ok)
-      return null;
-    return normalizeRemoteKnowledgeRunContract(await response.json(), { id: runId, type: "status" });
+    return containedRemoteClient();
   }
   async runLogs(runId) {
-    const response = await this.request(`/api/v1/knowledge/runs/${encodeURIComponent(runId)}/logs`);
-    if (!response.ok)
-      return [];
-    const payload = await response.json();
-    return Array.isArray(payload) ? payload : [];
+    return containedRemoteClient();
   }
   async runArtifacts(runId) {
-    const response = await this.request(`/api/v1/knowledge/runs/${encodeURIComponent(runId)}/artifacts`);
-    if (!response.ok)
-      return [];
-    const payload = await response.json();
-    return Array.isArray(payload) ? payload : [];
+    return containedRemoteClient();
   }
 }
-
-// src/store.ts
-import { readFileSync as readFileSync4, writeFileSync as writeFileSync3, existsSync as existsSync3, renameSync, unlinkSync as unlinkSync2 } from "fs";
-import { randomUUID } from "crypto";
-function defaultStorePath() {
-  return workspaceForHome(globalKnowledgeHome()).jsonStorePath;
+function containedRemoteClient() {
+  throw new KnowledgeContainmentError("KNOWLEDGE_HOSTED_CONTAINED", 503, "hosted-client", "public-api", "remote Knowledge clients are unavailable during Stage A");
 }
-function ensureStore(path) {
-  if (!existsSync3(path)) {
-    ensureParentDir(path);
-    if (path === defaultStorePath() && existsSync3(legacyGlobalStorePath())) {
-      writeFileSync3(path, readFileSync4(legacyGlobalStorePath(), "utf8"));
-    } else {
-      writeFileSync3(path, JSON.stringify({ items: [] }, null, 2));
-    }
-  }
-}
-function loadStoreIfExists(path) {
-  if (!existsSync3(path))
-    return { exists: false, items: [] };
-  const raw = readFileSync4(path, "utf8");
-  const parsed = JSON.parse(raw);
-  if (!parsed || !Array.isArray(parsed.items)) {
-    return { exists: true, items: [] };
-  }
-  return { exists: true, items: parsed.items };
-}
-function lockPath(path) {
-  return `${path}.lock`;
-}
-function acquireLock(lockPath2, ownerId) {
-  const maxWait = 5000;
-  const interval = 50;
-  const start = Date.now();
-  while (Date.now() - start < maxWait) {
-    try {
-      if (!existsSync3(lockPath2)) {
-        writeFileSync3(lockPath2, JSON.stringify({ owner: ownerId, ts: Date.now() }));
-        return;
-      }
-      const lock = JSON.parse(readFileSync4(lockPath2, "utf8"));
-      if (Date.now() - lock.ts > 1e4) {
-        unlinkSync2(lockPath2);
-      }
-    } catch {}
-    const start2 = Date.now();
-    while (Date.now() - start2 < interval) {}
-  }
-  throw new Error(`Could not acquire lock on ${lockPath2} after ${maxWait}ms`);
-}
-function releaseLock(lockPath2, ownerId) {
-  try {
-    if (existsSync3(lockPath2)) {
-      const lock = JSON.parse(readFileSync4(lockPath2, "utf8"));
-      if (lock.owner === ownerId) {
-        unlinkSync2(lockPath2);
-      }
-    }
-  } catch {}
-}
-function saveStore(path, store) {
-  const tmp = `${path}.tmp.${randomUUID()}`;
-  writeFileSync3(tmp, JSON.stringify(store, null, 2));
-  renameSync(tmp, path);
-}
-function withLock(path, fn, options = {}) {
-  const owner = randomUUID();
-  const lpath = lockPath(path);
-  if (options.createParent)
-    ensureParentDir(lpath);
-  acquireLock(lpath, owner);
-  try {
-    return fn();
-  } finally {
-    releaseLock(lpath, owner);
-  }
-}
-function makeId() {
-  return `k_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-}
-function makeShortId(id) {
-  return id.replace(/^k_/, "").slice(0, 12);
-}
-
-// src/serve.ts
-var KNOWLEDGE_SERVE_APP = "knowledge";
-function normalizeCloudDatabaseUrl(env = process.env) {
-  const key = "HASNA_KNOWLEDGE_DATABASE_URL";
-  const url = env[key] ?? env.KNOWLEDGE_DATABASE_URL;
-  if (!url)
-    return url;
-  const lower = url.toLowerCase();
-  const needsCompat = (lower.includes("sslmode=require") || lower.includes("sslmode=prefer")) && !lower.includes("uselibpqcompat");
-  if (!needsCompat)
-    return url;
-  const updated = url.includes("?") ? `${url}&uselibpqcompat=true` : `${url}?uselibpqcompat=true`;
-  env[key] = updated;
-  return updated;
-}
-function resolveVersion() {
-  if (process.env.HASNA_KNOWLEDGE_VERSION)
-    return process.env.HASNA_KNOWLEDGE_VERSION;
-  try {
-    const url = new URL("../package.json", import.meta.url);
-    const pkg = JSON.parse(readFileSync5(url, "utf8"));
-    return pkg.version ?? "0.0.0";
-  } catch {
-    return process.env.npm_package_version ?? "0.0.0";
-  }
-}
-function resolveSigningSecret(env = process.env) {
-  const secret = env.HASNA_KNOWLEDGE_API_SIGNING_KEY ?? env.API_KEY_SIGNING_SECRET ?? env.HASNA_API_SIGNING_KEY;
-  if (!secret) {
-    throw new Error("knowledge-serve requires an API signing secret: set HASNA_KNOWLEDGE_API_SIGNING_KEY " + "(or API_KEY_SIGNING_SECRET / HASNA_API_SIGNING_KEY).");
-  }
-  return secret;
-}
-function rowToItem(row) {
-  const parseJson = (value, fallback) => {
-    if (value == null)
-      return fallback;
-    if (typeof value === "string") {
-      try {
-        return JSON.parse(value);
-      } catch {
-        return fallback;
-      }
-    }
-    return value;
-  };
-  return {
-    id: String(row.id),
-    short_id: row.short_id ?? null,
-    title: String(row.title ?? ""),
-    content: String(row.content ?? ""),
-    url: row.url ?? null,
-    tags: parseJson(row.tags, []),
-    metadata: parseJson(row.metadata, {}),
-    archived: Boolean(row.archived),
-    created_at: String(row.created_at),
-    updated_at: String(row.updated_at)
-  };
-}
-
-class NoteRepo {
-  client;
-  constructor(client) {
-    this.client = client;
-  }
-  async create(input) {
-    if (!input.title || typeof input.title !== "string") {
-      throw new HttpError(400, "title is required");
-    }
-    const id = makeId();
-    const now = new Date().toISOString();
-    const row = await this.client.get(`INSERT INTO knowledge_items (id, short_id, title, content, url, tags, metadata, archived, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,FALSE,$8,$9)
-       RETURNING *`, [
-      id,
-      makeShortId(id),
-      input.title,
-      input.content ?? "",
-      input.url ?? null,
-      JSON.stringify(input.tags ?? []),
-      JSON.stringify(input.metadata ?? {}),
-      now,
-      now
-    ]);
-    return rowToItem(row);
-  }
-  async list(options = {}) {
-    const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
-    const offset = Math.max(options.offset ?? 0, 0);
-    const where = [];
-    const params = [];
-    if (!options.includeArchived)
-      where.push("archived = FALSE");
-    if (options.search) {
-      params.push(`%${options.search}%`);
-      where.push(`(title ILIKE $${params.length} OR content ILIKE $${params.length})`);
-    }
-    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
-    const totalRow = await this.client.get(`SELECT count(*)::text AS count FROM knowledge_items ${whereSql}`, params);
-    const rows = await this.client.many(`SELECT * FROM knowledge_items ${whereSql} ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`, params);
-    return { items: rows.map(rowToItem), total: Number(totalRow?.count ?? 0) };
-  }
-  async get(idOrShort) {
-    const row = await this.client.get(`SELECT * FROM knowledge_items WHERE id = $1 OR short_id = $1 LIMIT 1`, [idOrShort]);
-    return row ? rowToItem(row) : null;
-  }
-  async update(idOrShort, patch) {
-    const existing = await this.get(idOrShort);
-    if (!existing)
-      return null;
-    const sets = [];
-    const params = [];
-    const push = (col, val, cast = "") => {
-      params.push(val);
-      sets.push(`${col} = $${params.length}${cast}`);
-    };
-    if (patch.title !== undefined)
-      push("title", patch.title);
-    if (patch.content !== undefined)
-      push("content", patch.content);
-    if (patch.url !== undefined)
-      push("url", patch.url);
-    if (patch.tags !== undefined)
-      push("tags", JSON.stringify(patch.tags), "::jsonb");
-    if (patch.metadata !== undefined)
-      push("metadata", JSON.stringify(patch.metadata), "::jsonb");
-    if (patch.archived !== undefined)
-      push("archived", patch.archived);
-    push("updated_at", new Date().toISOString());
-    params.push(existing.id);
-    const row = await this.client.get(`UPDATE knowledge_items SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING *`, params);
-    return row ? rowToItem(row) : null;
-  }
-  async delete(idOrShort) {
-    const existing = await this.get(idOrShort);
-    if (!existing)
-      return false;
-    await this.client.execute(`DELETE FROM knowledge_items WHERE id = $1`, [existing.id]);
-    return true;
-  }
-}
-function knowledgeOpenApi(version) {
-  const noteSchema = {
-    type: "object",
-    properties: {
-      id: { type: "string" },
-      short_id: { type: "string", nullable: true },
-      title: { type: "string" },
-      content: { type: "string" },
-      url: { type: "string", nullable: true },
-      tags: { type: "array", items: { type: "string" } },
-      metadata: { type: "object", additionalProperties: true },
-      archived: { type: "boolean" },
-      created_at: { type: "string" },
-      updated_at: { type: "string" }
-    },
-    required: ["id", "title", "content", "tags", "archived", "created_at", "updated_at"]
-  };
-  const noteInput = {
-    type: "object",
-    properties: {
-      title: { type: "string" },
-      content: { type: "string" },
-      url: { type: "string", nullable: true },
-      tags: { type: "array", items: { type: "string" } },
-      metadata: { type: "object", additionalProperties: true }
-    },
-    required: ["title"]
-  };
-  const notePatch = {
-    type: "object",
-    properties: {
-      title: { type: "string" },
-      content: { type: "string" },
-      url: { type: "string", nullable: true },
-      tags: { type: "array", items: { type: "string" } },
-      metadata: { type: "object", additionalProperties: true },
-      archived: { type: "boolean" }
-    }
-  };
-  return {
-    openapi: "3.0.3",
-    info: { title: "Knowledge", version, description: "@hasna/knowledge self-hosted HTTP API" },
-    components: {
-      securitySchemes: { apiKey: { type: "apiKey", in: "header", name: "x-api-key" } },
-      schemas: {
-        Note: noteSchema,
-        NoteInput: noteInput,
-        NotePatch: notePatch,
-        NoteList: {
-          type: "object",
-          properties: {
-            items: { type: "array", items: { $ref: "#/components/schemas/Note" } },
-            total: { type: "integer" }
-          },
-          required: ["items", "total"]
-        }
-      }
-    },
-    security: [{ apiKey: [] }],
-    paths: {
-      "/v1/notes": {
-        get: {
-          operationId: "listNotes",
-          summary: "List knowledge items",
-          parameters: [
-            { name: "limit", in: "query", schema: { type: "integer" } },
-            { name: "offset", in: "query", schema: { type: "integer" } },
-            { name: "search", in: "query", schema: { type: "string" } }
-          ],
-          responses: {
-            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/NoteList" } } } }
-          }
-        },
-        post: {
-          operationId: "createNote",
-          summary: "Create a knowledge item",
-          requestBody: {
-            required: true,
-            content: { "application/json": { schema: { $ref: "#/components/schemas/NoteInput" } } }
-          },
-          responses: {
-            "201": { content: { "application/json": { schema: { $ref: "#/components/schemas/Note" } } } }
-          }
-        }
-      },
-      "/v1/notes/{id}": {
-        get: {
-          operationId: "getNote",
-          summary: "Fetch a knowledge item",
-          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-          responses: {
-            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/Note" } } } }
-          }
-        },
-        patch: {
-          operationId: "updateNote",
-          summary: "Update a knowledge item",
-          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-          requestBody: {
-            required: true,
-            content: { "application/json": { schema: { $ref: "#/components/schemas/NotePatch" } } }
-          },
-          responses: {
-            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/Note" } } } }
-          }
-        },
-        delete: {
-          operationId: "deleteNote",
-          summary: "Delete a knowledge item",
-          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-          responses: { "204": {} }
-        }
-      },
-      "/v1/registry": {
-        get: {
-          operationId: "getRegistry",
-          summary: "Knowledge registry contract",
-          responses: {
-            "200": { content: { "application/json": { schema: { type: "object", additionalProperties: true } } } }
-          }
-        }
-      }
-    }
-  };
-}
-
-class HttpError extends Error {
-  status;
-  constructor(status, message) {
-    super(message);
-    this.status = status;
-  }
-}
-function json(body, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" }
-  });
-}
-function createServeHandler(deps) {
-  const repo = new NoteRepo(deps.client);
-  const mode2 = "cloud";
-  const authOrThrow = async (req, requiredScopes) => {
-    const url = new URL(req.url);
-    const decision = await deps.verifier.authenticate(req.headers, {
-      method: req.method,
-      path: url.pathname,
-      requiredScopes
-    });
-    if (decision.ok === false) {
-      throw new HttpError(decision.status, decision.message);
-    }
-    deps.store.touchLastUsed(decision.principal.kid).catch(() => {});
-    return decision.principal;
-  };
-  return async (req) => {
-    const url = new URL(req.url);
-    const path = url.pathname.replace(/\/+$/, "") || "/";
-    const method = req.method.toUpperCase();
-    try {
-      if (path === "/health" && method === "GET") {
-        return json({ status: "ok", version: deps.version, mode: mode2 });
-      }
-      if (path === "/version" && method === "GET") {
-        return json({ status: "ok", version: deps.version, mode: mode2 });
-      }
-      if (path === "/ready" && method === "GET") {
-        try {
-          await deps.client.query("SELECT 1");
-          return json({ status: "ready", version: deps.version, mode: mode2 });
-        } catch {
-          return json({ status: "unavailable", version: deps.version, mode: mode2 }, 503);
-        }
-      }
-      if (path === "/openapi.json" && method === "GET") {
-        return json(knowledgeOpenApi(deps.version));
-      }
-      if (path === "/v1/registry" && method === "GET") {
-        await authOrThrow(req, ["knowledge:read"]);
-        return json(knowledgeRegistryContract({
-          mode: "hosted",
-          sourceSchemes: ["open-files", "s3", "web", "file"],
-          storageType: "s3",
-          artifactUriPrefix: process.env.HASNA_KNOWLEDGE_S3_PREFIX ?? null
-        }));
-      }
-      if (path === "/v1/notes") {
-        if (method === "GET") {
-          await authOrThrow(req, ["knowledge:read"]);
-          const result = await repo.list({
-            limit: url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : undefined,
-            offset: url.searchParams.has("offset") ? Number(url.searchParams.get("offset")) : undefined,
-            search: url.searchParams.get("search") ?? undefined,
-            includeArchived: url.searchParams.get("includeArchived") === "true"
-          });
-          return json(result);
-        }
-        if (method === "POST") {
-          await authOrThrow(req, ["knowledge:write"]);
-          const body = await req.json().catch(() => ({}));
-          const item = await repo.create(body);
-          return json(item, 201);
-        }
-        return json({ error: "method_not_allowed" }, 405);
-      }
-      const noteMatch = path.match(/^\/v1\/notes\/([^/]+)$/);
-      if (noteMatch) {
-        const id = decodeURIComponent(noteMatch[1]);
-        if (method === "GET") {
-          await authOrThrow(req, ["knowledge:read"]);
-          const item = await repo.get(id);
-          return item ? json(item) : json({ error: "not_found" }, 404);
-        }
-        if (method === "PATCH") {
-          await authOrThrow(req, ["knowledge:write"]);
-          const body = await req.json().catch(() => ({}));
-          const item = await repo.update(id, body);
-          return item ? json(item) : json({ error: "not_found" }, 404);
-        }
-        if (method === "DELETE") {
-          await authOrThrow(req, ["knowledge:write"]);
-          const ok = await repo.delete(id);
-          return ok ? new Response(null, { status: 204 }) : json({ error: "not_found" }, 404);
-        }
-        return json({ error: "method_not_allowed" }, 405);
-      }
-      return json({ error: "not_found", path }, 404);
-    } catch (error) {
-      if (error instanceof HttpError) {
-        const reason = error.status === 401 || error.status === 403 ? "unauthorized" : "error";
-        return json({ error: reason, message: error.message }, error.status);
-      }
-      const message = error instanceof Error ? error.message : "internal error";
-      return json({ error: "internal", message }, 500);
-    }
-  };
-}
-async function startKnowledgeServe(options = {}) {
-  const env = options.env ?? process.env;
-  const port = options.port ?? Number(env.PORT ?? env.HASNA_KNOWLEDGE_SERVE_PORT ?? 8080);
-  const hostname = options.hostname ?? env.HOST ?? "0.0.0.0";
-  const version = resolveVersion();
-  normalizeCloudDatabaseUrl(env);
-  const client = createKnowledgeCloudClient();
-  const store = new ApiKeyStore(client);
-  const verifier = verifyApiKey({
-    app: KNOWLEDGE_SERVE_APP,
-    signingSecret: resolveSigningSecret(env),
-    isRevoked: store.isRevoked,
-    audit: (e) => {
-      if (e.outcome === "deny") {
-        console.warn(`[knowledge-serve] auth deny kid=${e.kid ?? "-"} reason=${e.reason} ${e.method} ${e.path}`);
-      }
-    }
-  });
-  const handler = createServeHandler({ client, verifier, store, version });
-  const BunGlobal = globalThis.Bun;
-  if (!BunGlobal?.serve) {
-    throw new Error("knowledge-serve requires the Bun runtime (Bun.serve unavailable).");
-  }
-  const server = BunGlobal.serve({ port, hostname, fetch: handler });
-  console.log(`[knowledge-serve] listening on http://${hostname}:${server.port} (mode=cloud, version=${version})`);
-  return {
-    port: server.port,
-    hostname,
-    stop: async () => {
-      server.stop();
-      await client.close();
-    }
-  };
-}
-
-// src/artifact-store.ts
-import { existsSync as existsSync4, mkdirSync as mkdirSync3, readFileSync as readFileSync6, statSync, writeFileSync as writeFileSync4 } from "fs";
-import { dirname as dirname3, join as join3, relative, sep } from "path";
-import { pathToFileURL } from "url";
-function normalizeArtifactKey(key) {
-  const raw = key.replace(/\\/g, "/").trim();
-  if (!raw || raw.startsWith("/")) {
-    throw new Error(`Invalid artifact key: ${key}`);
-  }
-  const segments = raw.split("/").filter(Boolean);
-  if (segments.length === 0 || segments.some((segment) => segment === "." || segment === "..")) {
-    throw new Error(`Invalid artifact key: ${key}`);
-  }
-  return segments.join("/");
-}
-function assertInside(root, target) {
-  const rel = relative(root, target);
-  if (rel.startsWith("..") || rel === ".." || rel.startsWith(`..${sep}`)) {
-    throw new Error(`Artifact path escapes root: ${target}`);
-  }
-}
-function s3UserMetadata(metadata) {
-  if (!metadata)
-    return;
-  const output = {};
-  for (const [key, value] of Object.entries(metadata)) {
-    if (typeof value === "string")
-      output[key] = value;
-    else if (typeof value === "number" || typeof value === "boolean")
-      output[key] = String(value);
-  }
-  return Object.keys(output).length > 0 ? output : undefined;
-}
-
-class LocalArtifactStore {
-  root;
-  type = "local";
-  canRead = true;
-  canWrite = true;
-  constructor(root) {
-    this.root = root;
-    mkdirSync3(root, { recursive: true });
-  }
-  async put(entry) {
-    const key = normalizeArtifactKey(entry.key);
-    const path = join3(this.root, key);
-    assertInside(this.root, path);
-    mkdirSync3(dirname3(path), { recursive: true });
-    writeFileSync4(path, entry.body);
-    return { key, uri: pathToFileURL(path).href, modified_at: statSync(path).mtime.toISOString() };
-  }
-  async getText(key) {
-    const normalizedKey = normalizeArtifactKey(key);
-    const path = join3(this.root, normalizedKey);
-    assertInside(this.root, path);
-    return readFileSync6(path, "utf8");
-  }
-  async exists(key) {
-    const normalizedKey = normalizeArtifactKey(key);
-    const path = join3(this.root, normalizedKey);
-    assertInside(this.root, path);
-    return existsSync4(path);
-  }
-}
-
-class S3ArtifactStore {
-  options;
-  type = "s3";
-  canRead = true;
-  canWrite = true;
-  client;
-  constructor(options) {
-    this.options = options;
-    this.client = options.client;
-  }
-  async getClient() {
-    if (this.client)
-      return this.client;
-    const [{ S3Client }, { fromIni }] = await Promise.all([
-      import("@aws-sdk/client-s3"),
-      import("@aws-sdk/credential-providers")
-    ]);
-    this.client = new S3Client({
-      region: this.options.region,
-      credentials: this.options.profile ? fromIni({ profile: this.options.profile }) : undefined,
-      maxAttempts: this.options.max_attempts
-    });
-    return this.client;
-  }
-  objectKey(key) {
-    const normalizedKey = normalizeArtifactKey(key);
-    const prefix = this.options.prefix ? normalizeArtifactKey(this.options.prefix) : "";
-    return prefix ? `${prefix}/${normalizedKey}` : normalizedKey;
-  }
-  async put(entry) {
-    const [{ PutObjectCommand }, client] = await Promise.all([
-      import("@aws-sdk/client-s3"),
-      this.getClient()
-    ]);
-    const logicalKey = normalizeArtifactKey(entry.key);
-    const key = this.objectKey(logicalKey);
-    await client.send(new PutObjectCommand({
-      Bucket: this.options.bucket,
-      Key: key,
-      Body: entry.body,
-      ContentType: entry.content_type,
-      Metadata: s3UserMetadata(entry.metadata),
-      ServerSideEncryption: this.options.server_side_encryption,
-      SSEKMSKeyId: this.options.kms_key_id
-    }));
-    return { key: logicalKey, uri: `s3://${this.options.bucket}/${key}`, modified_at: new Date().toISOString() };
-  }
-  async getText(key) {
-    const [{ GetObjectCommand }, client] = await Promise.all([
-      import("@aws-sdk/client-s3"),
-      this.getClient()
-    ]);
-    const objectKey = this.objectKey(key);
-    const response = await client.send(new GetObjectCommand({
-      Bucket: this.options.bucket,
-      Key: objectKey
-    }));
-    if (!response.Body)
-      return "";
-    return await response.Body.transformToString();
-  }
-  async exists(key) {
-    const [{ HeadObjectCommand }, client] = await Promise.all([
-      import("@aws-sdk/client-s3"),
-      this.getClient()
-    ]);
-    const objectKey = this.objectKey(key);
-    try {
-      await client.send(new HeadObjectCommand({
-        Bucket: this.options.bucket,
-        Key: objectKey
-      }));
-      return true;
-    } catch (error) {
-      const name = error instanceof Error ? error.name : "";
-      if (name === "NotFound" || name === "NoSuchKey" || name === "NotFoundError")
-        return false;
-      throw error;
-    }
-  }
-}
-function createArtifactStore(config, workspace) {
-  if (config.storage.type === "s3") {
-    if (!config.storage.s3?.bucket)
-      throw new Error("S3 artifact storage requires storage.s3.bucket");
-    return new S3ArtifactStore({
-      bucket: config.storage.s3.bucket,
-      prefix: config.storage.s3.prefix,
-      region: config.storage.s3.region,
-      profile: config.storage.s3.profile,
-      max_attempts: config.storage.s3.max_attempts,
-      server_side_encryption: config.storage.s3.server_side_encryption,
-      kms_key_id: config.storage.s3.kms_key_id
-    });
-  }
-  return new LocalArtifactStore(workspace.artifactsDir);
-}
-
-// src/service.ts
-import { createHash as createHash19 } from "crypto";
-import { spawnSync as spawnSync2 } from "child_process";
-import { existsSync as existsSync12, readFileSync as readFileSync14 } from "fs";
-import { hostname as hostname5 } from "os";
-import { join as join6, resolve as resolve5 } from "path";
-
-// src/app-wiki.ts
-import { createHash as createHash7, randomUUID as randomUUID4 } from "crypto";
 
 // src/storage-contract.ts
-import { createHash as createHash3, randomUUID as randomUUID2 } from "crypto";
-import { pathToFileURL as pathToFileURL2 } from "url";
+init_workspace();
+init_runtime_role();
 var GENERATED_ARTIFACTS = [
   {
     kind: "schema",
@@ -18115,6 +21683,9 @@ function resolveStorageContract(config, workspace, scope = "global") {
 function validateStorageConfig(config, workspace) {
   const errors = [];
   const warnings = [];
+  const configIssue = knowledgeConfigValidationIssue(config);
+  if (configIssue)
+    errors.push(configIssue);
   if (!workspace.home.endsWith(HASNA_KNOWLEDGE_APP_PATH)) {
     warnings.push(`Workspace home does not end with ${HASNA_KNOWLEDGE_APP_PATH}: ${workspace.home}`);
   }
@@ -18124,10 +21695,10 @@ function validateStorageConfig(config, workspace) {
     if (!config.storage.s3?.prefix)
       warnings.push("storage.s3.prefix is empty; generated knowledge artifacts will be written at the bucket root.");
     if (config.mode === "local")
-      warnings.push("storage.type is s3 while mode is local; this is valid for BYO S3, but hosted wrappers should set mode to hosted.");
+      errors.push("storage.type s3 is forbidden while mode is local.");
   }
   if (config.storage.type === "local" && config.storage.s3) {
-    warnings.push("storage.s3 is configured but ignored while storage.type is local.");
+    errors.push("storage.s3 is forbidden while storage.type is local.");
   }
   if (config.sources.preferred_ref !== "open-files") {
     warnings.push("sources.preferred_ref should stay open-files for durable company knowledge.");
@@ -18176,1302 +21747,13 @@ function recordStorageObjects(db, objects, now = new Date) {
   insert(objects);
 }
 
-// src/provenance.ts
-function isStaleStatus(status) {
-  return ["deleted", "stale", "invalidated", "reindex_required"].includes((status ?? "").toLowerCase());
-}
-function sourceProvenance(input) {
-  const status = input.status ?? null;
-  return {
-    source_owner: "open-files",
-    source_ref: input.source_ref ?? null,
-    source_uri: input.source_uri ?? null,
-    source_kind: input.source_kind ?? null,
-    source_revision_id: input.source_revision_id ?? null,
-    revision: input.revision ?? null,
-    hash: input.hash ?? null,
-    chunk_id: input.chunk_id ?? null,
-    start_offset: input.start_offset ?? null,
-    end_offset: input.end_offset ?? null,
-    status,
-    read_only: true,
-    citation_required: true,
-    resolver: input.resolver ?? null,
-    stale: isStaleStatus(status)
-  };
-}
-function generatedArtifactProvenance(input) {
-  return {
-    source_owner: "open-files",
-    generated_from: input.generated_from,
-    artifact_key: input.artifact_key,
-    source_refs: input.source_refs ?? [],
-    read_only_sources: true,
-    citation_required: input.citation_required ?? true,
-    raw_source_bytes_stored_in_open_knowledge: false
-  };
-}
-function withProvenance(metadata, provenance) {
-  return {
-    ...metadata,
-    provenance
-  };
-}
-
-// src/source-ingest.ts
-import { createHash as createHash6 } from "crypto";
-import { existsSync as existsSync6, readFileSync as readFileSync8 } from "fs";
-import { basename as basename2 } from "path";
-
-// src/manifest-ingest.ts
-import { createHash as createHash5 } from "crypto";
-import { existsSync as existsSync5, readFileSync as readFileSync7 } from "fs";
-import { basename } from "path";
-
-// src/source-ref.ts
-import { fileURLToPath } from "url";
-function assertNonEmpty(value, message) {
-  if (!value)
-    throw new Error(message);
-  return value;
-}
-function parseOpenFilesRef(uri) {
-  const withoutScheme = uri.slice("open-files://".length);
-  const parts = withoutScheme.split("/").filter(Boolean);
-  const entity = parts[0];
-  if (entity !== "file" && entity !== "source") {
-    throw new Error("Invalid open-files ref. Expected open-files://file/<id>, open-files://file/<id>/revision/<revision_id>, or open-files://source/<id>/path/<path>.");
-  }
-  const id = assertNonEmpty(parts[1], "Invalid open-files ref. Missing id.");
-  if (entity === "file") {
-    if (parts.length === 2)
-      return { kind: "open-files", uri, entity, id };
-    if (parts[2] === "revision" && parts[3] && parts.length === 4) {
-      return { kind: "open-files", uri, entity, id, revision_id: decodeURIComponent(parts[3]) };
-    }
-    throw new Error("Invalid open-files file ref. Expected open-files://file/<id>/revision/<revision_id>.");
-  }
-  const pathIndex = parts.indexOf("path");
-  const path = pathIndex >= 0 ? decodeURIComponent(parts.slice(pathIndex + 1).join("/")) : undefined;
-  return { kind: "open-files", uri, entity, id, path };
-}
-function parseS3Ref(uri) {
-  const parsed = new URL(uri);
-  const bucket = assertNonEmpty(parsed.hostname, "Invalid s3 ref. Missing bucket.");
-  const key = decodeURIComponent(parsed.pathname.replace(/^\/+/, ""));
-  if (!key)
-    throw new Error("Invalid s3 ref. Missing object key.");
-  return { kind: "s3", uri, bucket, key };
-}
-function parseFileRef(uri) {
-  return { kind: "file", uri, path: fileURLToPath(uri) };
-}
-function parseWebRef(uri) {
-  const parsed = new URL(uri);
-  return { kind: "web", uri, url: parsed.toString() };
-}
-function parseSourceRef(uri) {
-  if (uri.startsWith("open-files://"))
-    return parseOpenFilesRef(uri);
-  if (uri.startsWith("s3://"))
-    return parseS3Ref(uri);
-  if (uri.startsWith("file://"))
-    return parseFileRef(uri);
-  if (uri.startsWith("https://") || uri.startsWith("http://"))
-    return parseWebRef(uri);
-  throw new Error(`Unsupported source ref scheme: ${uri}`);
-}
-function catalogSourceUriForRef(uri, parsed = parseSourceRef(uri)) {
-  if (parsed.kind === "open-files" && parsed.entity === "file" && parsed.revision_id) {
-    return uri.replace(/\/revision\/[^/]+$/, "");
-  }
-  return uri;
-}
-function revisionIdForSourceRef(uri) {
-  const parsed = parseSourceRef(uri);
-  return parsed.kind === "open-files" && parsed.entity === "file" ? parsed.revision_id ?? null : null;
-}
-function isSupportedSourceRef(uri) {
-  try {
-    parseSourceRef(uri);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// src/safety.ts
-import { createHash as createHash4, randomUUID as randomUUID3 } from "crypto";
-import { relative as relative2, resolve as resolve2, sep as sep2 } from "path";
-function envEnabled(name) {
-  const value = process.env[name];
-  return value === "1" || value === "true" || value === "yes";
-}
-function resolveSafetyPolicy(config, workspace) {
-  const extended = config;
-  const configuredBuckets = new Set(extended.safety?.network?.allowed_s3_buckets ?? []);
-  if (config.storage.type === "s3" && config.storage.s3?.bucket)
-    configuredBuckets.add(config.storage.s3.bucket);
-  if (process.env.HASNA_KNOWLEDGE_ALLOWED_S3_BUCKETS) {
-    for (const bucket of process.env.HASNA_KNOWLEDGE_ALLOWED_S3_BUCKETS.split(",").map((entry) => entry.trim()).filter(Boolean)) {
-      configuredBuckets.add(bucket);
-    }
-  }
-  return {
-    mode: config.mode,
-    allowWriteRoots: [
-      workspace.home,
-      workspace.artifactsDir,
-      workspace.cacheDir,
-      workspace.exportsDir,
-      workspace.indexesDir,
-      workspace.logsDir,
-      workspace.runsDir,
-      workspace.schemasDir,
-      workspace.wikiDir
-    ].map((entry) => resolve2(entry)),
-    readOnlySourceAccess: true,
-    network: {
-      webSearchEnabled: extended.safety?.network?.web_search_enabled ?? envEnabled("HASNA_KNOWLEDGE_WEB_SEARCH"),
-      s3ReadsEnabled: extended.safety?.network?.s3_reads_enabled ?? envEnabled("HASNA_KNOWLEDGE_ALLOW_S3_READS"),
-      allowedS3Buckets: [...configuredBuckets].sort()
-    },
-    redaction: {
-      enabled: extended.safety?.redaction?.enabled ?? true
-    },
-    approvals: {
-      generatedWritesRequireApproval: extended.safety?.approvals?.generated_writes_require_approval ?? true
-    }
-  };
-}
-function isInside(root, target) {
-  const rel = relative2(root, target);
-  return rel === "" || !rel.startsWith("..") && rel !== ".." && !rel.startsWith(`..${sep2}`);
-}
-function assertWriteAllowed(targetPath, policy) {
-  const resolved = resolve2(targetPath);
-  if (!policy.allowWriteRoots.some((root) => isInside(root, resolved))) {
-    throw new Error(`Safety policy denied write outside .hasna/knowledge: ${targetPath}`);
-  }
-}
-function assertS3ReadAllowed(uri, policy) {
-  const parsed = new URL(uri);
-  const bucket = parsed.hostname;
-  if (!policy.network.s3ReadsEnabled) {
-    throw new Error("Safety policy denied S3 read. Set safety.network.s3_reads_enabled=true or HASNA_KNOWLEDGE_ALLOW_S3_READS=1.");
-  }
-  if (!policy.network.allowedS3Buckets.includes(bucket)) {
-    throw new Error(`Safety policy denied S3 bucket "${bucket}". Add it to safety.network.allowed_s3_buckets or HASNA_KNOWLEDGE_ALLOWED_S3_BUCKETS.`);
-  }
-}
-function assertWebSearchAllowed(policy) {
-  if (!policy.network.webSearchEnabled) {
-    throw new Error("Safety policy denied web search. Set safety.network.web_search_enabled=true or HASNA_KNOWLEDGE_WEB_SEARCH=1.");
-  }
-}
-var REDACTION_PATTERNS = [
-  { type: "private_key_block", severity: "high", regex: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, replacement: "[REDACTED:private_key_block]" },
-  { type: "secret_assignment", severity: "high", regex: /\b(?:api[_-]?key|secret|token|password)\s*[:=]\s*['"]?[^'"\s]{8,}/gi, replacement: "[REDACTED:secret_assignment]" },
-  { type: "openai_api_key", severity: "high", regex: /\bsk-[A-Za-z0-9_-]{20,}\b/g, replacement: "[REDACTED:openai_api_key]" },
-  { type: "anthropic_api_key", severity: "high", regex: new RegExp(`\\b${["sk", "ant"].join("-")}-[A-Za-z0-9_-]{20,}\\b`, "g"), replacement: "[REDACTED:anthropic_api_key]" },
-  { type: "aws_access_key_id", severity: "high", regex: /\bA(?:KIA|SIA)[A-Z0-9]{16}\b/g, replacement: "[REDACTED:aws_access_key_id]" }
-];
-function redactSecrets(text, policy) {
-  if (policy && !policy.redaction.enabled)
-    return { text, findings: [] };
-  let output = text;
-  const findings = [];
-  for (const pattern of REDACTION_PATTERNS) {
-    output = output.replace(pattern.regex, (match, ...args) => {
-      const offset = typeof args.at(-2) === "number" ? args.at(-2) : output.indexOf(match);
-      findings.push({
-        type: pattern.type,
-        severity: pattern.severity,
-        start: Math.max(0, offset),
-        end: Math.max(0, offset + match.length)
-      });
-      return pattern.replacement;
-    });
-  }
-  return { text: output, findings };
-}
-function auditId(input) {
-  return `audit_${createHash4("sha256").update(`${input.event_type}\x00${input.action}\x00${input.target_uri ?? ""}\x00${input.created_at ?? ""}\x00${JSON.stringify(input.metadata ?? {})}\x00${randomUUID3()}`).digest("hex").slice(0, 24)}`;
-}
-function truncateAuditMetadata(value, depth = 0) {
-  if (depth > 6)
-    return "[Truncated:depth]";
-  if (typeof value === "string") {
-    return value.length > 1000 ? `${value.slice(0, 1000)}...[Truncated:${value.length - 1000} chars]` : value;
-  }
-  if (typeof value === "number" || typeof value === "boolean" || value === null || value === undefined)
-    return value;
-  if (Array.isArray(value)) {
-    const entries = value.slice(0, 25).map((entry) => truncateAuditMetadata(entry, depth + 1));
-    if (value.length > 25)
-      entries.push(`[Truncated:${value.length - 25} items]`);
-    return entries;
-  }
-  if (typeof value === "object") {
-    const output = {};
-    const entries = Object.entries(value).slice(0, 50);
-    for (const [key, entry] of entries)
-      output[key] = truncateAuditMetadata(entry, depth + 1);
-    const total = Object.keys(value).length;
-    if (total > entries.length)
-      output.__truncated_keys = total - entries.length;
-    return output;
-  }
-  return String(value);
-}
-function recordAuditEvent(db, input) {
-  const createdAt = input.created_at ?? new Date().toISOString();
-  const metadata = truncateAuditMetadata(input.metadata ?? {});
-  const id = auditId({ ...input, metadata, created_at: createdAt });
-  db.run(`INSERT INTO audit_events (id, event_type, action, target_uri, decision, metadata_json, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`, [
-    id,
-    input.event_type,
-    input.action,
-    input.target_uri ?? null,
-    input.decision,
-    JSON.stringify(metadata),
-    createdAt
-  ]);
-  return id;
-}
-function recordRedactionFindings(db, input) {
-  const createdAt = input.created_at ?? new Date().toISOString();
-  for (const finding of input.findings) {
-    db.run(`INSERT INTO redaction_findings (id, source_uri, run_id, severity, finding_type, metadata_json, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`, [
-      `redact_${randomUUID3()}`,
-      input.source_uri ?? null,
-      input.run_id ?? null,
-      finding.severity,
-      finding.type,
-      JSON.stringify({ ...input.metadata ?? {}, start: finding.start, end: finding.end }),
-      createdAt
-    ]);
-  }
-  return input.findings.length;
-}
-var COMMON_BARE_TOKEN_PATTERNS = [
-  { type: "github_token", severity: "high", regex: /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g, replacement: "[REDACTED:github_token]" },
-  { type: "github_pat_token", severity: "high", regex: /\bgithub[_]pat[_][A-Za-z0-9_]{20,}\b/g, replacement: "[REDACTED:github_pat_token]" },
-  { type: "package_registry_token", severity: "high", regex: /\bnpm_[A-Za-z0-9_-]{20,}\b/g, replacement: "[REDACTED:package_registry_token]" },
-  { type: "context7_token", severity: "high", regex: /\bctx7sk[-][A-Za-z0-9_-]{10,}\b/g, replacement: "[REDACTED:context7_token]" },
-  { type: "xai_api_key", severity: "high", regex: /\bxai[-][A-Za-z0-9_-]{20,}\b/g, replacement: "[REDACTED:xai_api_key]" },
-  { type: "google_api_key", severity: "high", regex: /\bAIza[A-Za-z0-9_-]{20,}\b/g, replacement: "[REDACTED:google_api_key]" }
-];
-REDACTION_PATTERNS.push(...COMMON_BARE_TOKEN_PATTERNS);
-
-// src/manifest-ingest.ts
-var DEFAULT_MAX_MANIFEST_INPUT_BYTES = 20 * 1024 * 1024;
-var DEFAULT_MAX_MANIFEST_ITEMS = 1e4;
-var DEFAULT_MANIFEST_PREVIEW_ITEMS = 10;
-function stableId(prefix, value) {
-  return `${prefix}_${createHash5("sha256").update(value).digest("hex").slice(0, 20)}`;
-}
-function asObject(value) {
-  return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
-}
-function asString(value) {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-function asNumber(value) {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-function buildSourceRefFromItem(item) {
-  const explicit = asString(item.source_ref) ?? asString(item.source_uri) ?? asString(item.uri);
-  if (explicit)
-    return explicit;
-  const fileId = asString(item.file_id);
-  if (fileId) {
-    const revision = asString(item.revision_id) ?? asString(item.revision);
-    const fileRef = `open-files://file/${encodeURIComponent(fileId)}`;
-    return revision ? `${fileRef}/revision/${encodeURIComponent(revision)}` : fileRef;
-  }
-  const sourceId = asString(item.source_id);
-  const path = asString(item.path);
-  if (sourceId && path) {
-    return `open-files://source/${encodeURIComponent(sourceId)}/path/${encodeURIComponent(path)}`;
-  }
-  throw new Error("Manifest item is missing source_ref, file_id, or source_id/path.");
-}
-function baseSourceUri(sourceRef, parsed) {
-  if (parsed.kind === "open-files" && parsed.entity === "file" && parsed.revision_id) {
-    return sourceRef.replace(/\/revision\/[^/]+$/, "");
-  }
-  return sourceRef;
-}
-function textFromItem(item) {
-  const direct = asString(item.extracted_text) ?? asString(item.text) ?? asString(item.content_text) ?? asString(item.markdown);
-  if (direct !== undefined)
-    return direct;
-  const content = item.content;
-  return typeof content === "string" ? content : null;
-}
-function extractedTextUriFromItem(item) {
-  const direct = asString(item.extracted_text_ref) ?? asString(item.extracted_text_uri) ?? asString(item.text_ref);
-  if (direct)
-    return direct;
-  const content = asObject(item.content);
-  return asString(content?.extracted_text_ref) ?? asString(content?.extracted_text_uri) ?? null;
-}
-function titleFromItem(item) {
-  const path = asString(item.path);
-  return asString(item.title) ?? asString(item.name) ?? (path ? basename(path) : null);
-}
-function hashFromItem(item) {
-  return asString(item.hash) ?? asString(item.checksum) ?? asString(item.sha256) ?? null;
-}
-var OMIT_MANIFEST_METADATA_KEYS = new Set([
-  "text",
-  "content",
-  "content_text",
-  "extracted_text",
-  "markdown",
-  "raw",
-  "raw_text",
-  "raw_bytes",
-  "raw_content",
-  "raw_body",
-  "raw_file",
-  "source_raw",
-  "source_raw_bytes",
-  "source_bytes",
-  "source_content",
-  "source_body",
-  "file_bytes",
-  "file_content",
-  "content_bytes",
-  "content_base64",
-  "document_bytes",
-  "document_content",
-  "document_base64",
-  "binary",
-  "binary_content",
-  "binary_base64",
-  "bytes",
-  "body",
-  "blob",
-  "data",
-  "payload"
-]);
-function normalizeMetadataKey(key) {
-  return key.toLowerCase().replace(/[\s-]+/g, "_");
-}
-function sanitizeManifestMetadataValue(value) {
-  if (Array.isArray(value))
-    return value.map((entry) => sanitizeManifestMetadataValue(entry));
-  const object = asObject(value);
-  if (!object)
-    return value;
-  const sanitized = {};
-  for (const [key, nestedValue] of Object.entries(object)) {
-    if (OMIT_MANIFEST_METADATA_KEYS.has(normalizeMetadataKey(key)))
-      continue;
-    sanitized[key] = sanitizeManifestMetadataValue(nestedValue);
-  }
-  return sanitized;
-}
-function revisionFromItem(item, parsed, hash) {
-  const revision = asString(item.revision_id) ?? asString(item.revision) ?? asString(item.version_id) ?? (parsed.kind === "open-files" ? parsed.revision_id : undefined) ?? hash ?? asString(item.updated_at);
-  return revision ?? "current";
-}
-function metadataFromItem(item, normalized) {
-  const metadata = {};
-  for (const [key, value] of Object.entries(item)) {
-    if (OMIT_MANIFEST_METADATA_KEYS.has(normalizeMetadataKey(key)))
-      continue;
-    metadata[key] = sanitizeManifestMetadataValue(value);
-  }
-  metadata.source_ref = normalized.sourceRef;
-  metadata.source_uri = normalized.sourceUri;
-  metadata.status = normalized.status;
-  return metadata;
-}
-function normalizeManifestItem(item, now) {
-  const sourceRef = buildSourceRefFromItem(item);
-  const parsed = parseSourceRef(sourceRef);
-  const sourceUri = baseSourceUri(sourceRef, parsed);
-  const hash = hashFromItem(item);
-  const status = asString(item.status) ?? "active";
-  return {
-    raw: item,
-    sourceRef,
-    sourceUri,
-    kind: parsed.kind,
-    title: titleFromItem(item),
-    revision: revisionFromItem(item, parsed, hash),
-    hash,
-    extractedTextUri: extractedTextUriFromItem(item),
-    text: textFromItem(item),
-    metadata: metadataFromItem(item, { sourceRef, sourceUri, status }),
-    acl: item.permissions ?? item.acl ?? {},
-    status,
-    updatedAt: asString(item.updated_at) ?? now
-  };
-}
-function parseManifestText(text) {
-  const trimmed = text.trim();
-  if (!trimmed)
-    return [];
-  if (trimmed.startsWith("[")) {
-    const parsed = JSON.parse(trimmed);
-    if (!Array.isArray(parsed))
-      throw new Error("Manifest array parse failed.");
-    return parsed.map((entry) => {
-      const item = asObject(entry);
-      if (!item)
-        throw new Error("Manifest array entries must be objects.");
-      return item;
-    });
-  }
-  if (trimmed.startsWith("{")) {
-    try {
-      const parsed = JSON.parse(trimmed);
-      const object = asObject(parsed);
-      if (!object)
-        throw new Error("Manifest object parse failed.");
-      if (Array.isArray(object.items)) {
-        return object.items.map((entry) => {
-          const item = asObject(entry);
-          if (!item)
-            throw new Error("Manifest items entries must be objects.");
-          return item;
-        });
-      }
-      if ("source_ref" in object || "source_uri" in object || "file_id" in object)
-        return [object];
-    } catch (error) {
-      const lines = trimmed.split(/\r?\n/).filter((line) => line.trim().length > 0);
-      if (lines.length <= 1)
-        throw error;
-      return lines.map((line) => {
-        const item = asObject(JSON.parse(line));
-        if (!item)
-          throw new Error("Manifest JSONL entries must be objects.");
-        return item;
-      });
-    }
-  }
-  return trimmed.split(/\r?\n/).filter((line) => line.trim().length > 0).map((line) => {
-    const item = asObject(JSON.parse(line));
-    if (!item)
-      throw new Error("Manifest JSONL entries must be objects.");
-    return item;
-  });
-}
-async function readS3Text(uri, config, safetyPolicy) {
-  const parsed = new URL(uri);
-  const bucket = parsed.hostname;
-  const key = decodeURIComponent(parsed.pathname.replace(/^\/+/, ""));
-  if (!bucket || !key)
-    throw new Error(`Invalid S3 manifest URI: ${uri}`);
-  if (safetyPolicy)
-    assertS3ReadAllowed(uri, safetyPolicy);
-  const [{ S3Client, GetObjectCommand }, { fromIni }] = await Promise.all([
-    import("@aws-sdk/client-s3"),
-    import("@aws-sdk/credential-providers")
-  ]);
-  const s3Config = config?.storage.type === "s3" && config.storage.s3?.bucket === bucket ? config.storage.s3 : undefined;
-  const client = new S3Client({
-    region: s3Config?.region,
-    credentials: s3Config?.profile ? fromIni({ profile: s3Config.profile }) : undefined,
-    maxAttempts: s3Config?.max_attempts
-  });
-  const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
-  if (!response.Body)
-    return "";
-  return await response.Body.transformToString();
-}
-async function readManifestInput(input, config, safetyPolicy, maxInputBytes = DEFAULT_MAX_MANIFEST_INPUT_BYTES) {
-  const text = input.startsWith("s3://") ? await readS3Text(input, config, safetyPolicy) : (() => {
-    if (!existsSync5(input))
-      throw new Error(`Manifest not found: ${input}`);
-    return readFileSync7(input, "utf8");
-  })();
-  const bytes = Buffer.byteLength(text);
-  if (bytes > maxInputBytes) {
-    throw new Error(`Manifest input is too large: ${bytes} bytes exceeds ${maxInputBytes} byte limit.`);
-  }
-  return text;
-}
-function chunkText(text, maxChars, overlapChars) {
-  const normalized = text.replace(/\r\n/g, `
-`);
-  if (!normalized.trim())
-    return [];
-  const chunks = [];
-  let start = 0;
-  while (start < normalized.length) {
-    const hardEnd = Math.min(normalized.length, start + maxChars);
-    let end = hardEnd;
-    if (hardEnd < normalized.length) {
-      const paragraphBreak = normalized.lastIndexOf(`
-
-`, hardEnd);
-      const sentenceBreak = normalized.lastIndexOf(". ", hardEnd);
-      const candidate = Math.max(paragraphBreak, sentenceBreak);
-      if (candidate > start + Math.floor(maxChars * 0.5))
-        end = candidate + (candidate === paragraphBreak ? 2 : 1);
-    }
-    const chunk = normalized.slice(start, end).trim();
-    if (chunk) {
-      chunks.push({
-        ordinal: chunks.length,
-        text: chunk,
-        startOffset: start,
-        endOffset: end
-      });
-    }
-    if (end >= normalized.length)
-      break;
-    start = Math.max(0, end - overlapChars);
-  }
-  return chunks;
-}
-function estimateTokenCount(text) {
-  const words = text.trim().split(/\s+/).filter(Boolean).length;
-  return Math.max(1, Math.ceil(words * 1.25));
-}
-function deleteChunksForRevision(db, sourceRevisionId) {
-  const rows = db.query("SELECT id FROM chunks WHERE source_revision_id = ?").all(sourceRevisionId);
-  for (const row of rows) {
-    db.run("DELETE FROM chunks_fts WHERE chunk_id = ?", [row.id]);
-  }
-  db.run("DELETE FROM chunks WHERE source_revision_id = ?", [sourceRevisionId]);
-  return rows.length;
-}
-function upsertSource(db, item, now) {
-  const sourceId = stableId("src", item.sourceUri);
-  db.run(`INSERT INTO sources (id, uri, kind, title, metadata_json, acl_json, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(uri) DO UPDATE SET
-       kind = excluded.kind,
-       title = excluded.title,
-       metadata_json = excluded.metadata_json,
-       acl_json = excluded.acl_json,
-       updated_at = excluded.updated_at`, [
-    sourceId,
-    item.sourceUri,
-    item.kind,
-    item.title,
-    JSON.stringify(item.metadata),
-    JSON.stringify(item.acl ?? {}),
-    now,
-    item.updatedAt
-  ]);
-  const row = db.query("SELECT id FROM sources WHERE uri = ?").get(item.sourceUri);
-  if (!row)
-    throw new Error(`Failed to upsert source: ${item.sourceUri}`);
-  return row.id;
-}
-function upsertRevision(db, sourceId, item, now) {
-  const revisionId = stableId("rev", `${sourceId}\x00${item.revision}`);
-  db.run(`INSERT INTO source_revisions (id, source_id, revision, hash, extracted_text_uri, metadata_json, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(source_id, revision) DO UPDATE SET
-       hash = excluded.hash,
-       extracted_text_uri = excluded.extracted_text_uri,
-       metadata_json = excluded.metadata_json`, [
-    revisionId,
-    sourceId,
-    item.revision,
-    item.hash,
-    item.extractedTextUri,
-    JSON.stringify(item.metadata),
-    now
-  ]);
-  const row = db.query("SELECT id FROM source_revisions WHERE source_id = ? AND revision = ?").get(sourceId, item.revision);
-  if (!row)
-    throw new Error(`Failed to upsert source revision: ${item.sourceRef}`);
-  return row.id;
-}
-function insertChunks(db, sourceRevisionId, item, now, maxChars, overlapChars, safetyPolicy) {
-  if (!item.text || item.status.toLowerCase() === "deleted")
-    return { chunksInserted: 0, redactions: 0 };
-  const redacted = redactSecrets(item.text, safetyPolicy);
-  if (redacted.findings.length > 0) {
-    recordRedactionFindings(db, {
-      source_uri: item.sourceUri,
-      findings: redacted.findings,
-      metadata: { source_ref: item.sourceRef, revision: item.revision },
-      created_at: now
-    });
-    recordAuditEvent(db, {
-      event_type: "redaction",
-      action: "source_text_redact",
-      target_uri: item.sourceUri,
-      decision: "redacted",
-      metadata: { findings: redacted.findings.length, source_ref: item.sourceRef, revision: item.revision },
-      created_at: now
-    });
-  }
-  const chunks = chunkText(redacted.text, maxChars, overlapChars);
-  for (const chunk of chunks) {
-    const chunkId = stableId("chk", `${sourceRevisionId}\x00${chunk.ordinal}\x00${chunk.text}`);
-    const provenance = sourceProvenance({
-      source_ref: item.sourceRef,
-      source_uri: item.sourceUri,
-      source_kind: item.kind,
-      source_revision_id: sourceRevisionId,
-      revision: item.revision,
-      hash: item.hash,
-      chunk_id: chunkId,
-      start_offset: chunk.startOffset,
-      end_offset: chunk.endOffset,
-      status: item.status,
-      resolver: "open-files-read-only"
-    });
-    const metadata = withProvenance({
-      source_ref: item.sourceRef,
-      source_uri: item.sourceUri,
-      source_kind: item.kind,
-      source_revision_id: sourceRevisionId,
-      revision: item.revision,
-      hash: item.hash,
-      status: item.status,
-      path: asString(item.raw.path) ?? null,
-      mime: asString(item.raw.mime) ?? asString(item.raw.content_type) ?? null,
-      size: asNumber(item.raw.size) ?? null
-    }, provenance);
-    db.run(`INSERT INTO chunks (id, source_revision_id, kind, ordinal, text, token_count, start_offset, end_offset, metadata_json, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-      chunkId,
-      sourceRevisionId,
-      "source",
-      chunk.ordinal,
-      chunk.text,
-      estimateTokenCount(chunk.text),
-      chunk.startOffset,
-      chunk.endOffset,
-      JSON.stringify(metadata),
-      now
-    ]);
-    db.run("INSERT INTO chunks_fts (chunk_id, text, title, source_uri) VALUES (?, ?, ?, ?)", [chunkId, chunk.text, item.title ?? "", item.sourceUri]);
-  }
-  return { chunksInserted: chunks.length, redactions: redacted.findings.length };
-}
-async function ingestOpenFilesManifest(options) {
-  const now = options.now ?? new Date;
-  if (options.safetyPolicy)
-    assertWriteAllowed(options.dbPath, options.safetyPolicy);
-  migrateKnowledgeDb(options.dbPath);
-  const text = await readManifestInput(options.input, options.config, options.safetyPolicy, options.maxInputBytes);
-  const items = parseManifestText(text);
-  const maxItems = options.maxItems ?? DEFAULT_MAX_MANIFEST_ITEMS;
-  if (items.length > maxItems) {
-    throw new Error(`Manifest contains too many items: ${items.length} exceeds ${maxItems} item limit.`);
-  }
-  return ingestOpenFilesManifestItems({
-    dbPath: options.dbPath,
-    items,
-    sourceLabel: options.input,
-    safetyPolicy: options.safetyPolicy,
-    now,
-    maxChunkChars: options.maxChunkChars,
-    chunkOverlapChars: options.chunkOverlapChars,
-    maxItems: options.maxItems
-  });
-}
-async function ingestOpenFilesManifestItems(options) {
-  const now = (options.now ?? new Date).toISOString();
-  const maxChunkChars = options.maxChunkChars ?? 4000;
-  const chunkOverlapChars = options.chunkOverlapChars ?? 200;
-  const maxItems = options.maxItems ?? DEFAULT_MAX_MANIFEST_ITEMS;
-  if (maxChunkChars < 500)
-    throw new Error("maxChunkChars must be at least 500.");
-  if (chunkOverlapChars < 0 || chunkOverlapChars >= maxChunkChars)
-    throw new Error("chunkOverlapChars must be less than maxChunkChars.");
-  if (options.items.length > maxItems) {
-    throw new Error(`Manifest contains too many items: ${options.items.length} exceeds ${maxItems} item limit.`);
-  }
-  if (options.safetyPolicy)
-    assertWriteAllowed(options.dbPath, options.safetyPolicy);
-  migrateKnowledgeDb(options.dbPath);
-  const db = openKnowledgeDb(options.dbPath);
-  try {
-    const result = db.transaction(() => {
-      const seenSources = new Set;
-      const seenRevisions = new Set;
-      let chunksInserted = 0;
-      let chunksDeleted = 0;
-      let redactions = 0;
-      let skipped = 0;
-      const preview = [];
-      recordAuditEvent(db, {
-        event_type: "source_read",
-        action: options.readAction ?? (options.sourceLabel.startsWith("s3://") ? "s3_manifest_read" : "local_manifest_read"),
-        target_uri: options.sourceLabel,
-        decision: "allow",
-        metadata: { items: options.items.length, read_only: true },
-        created_at: now
-      });
-      for (const raw of options.items) {
-        const item = normalizeManifestItem(raw, now);
-        if (preview.length < DEFAULT_MANIFEST_PREVIEW_ITEMS) {
-          preview.push({
-            source_ref: item.sourceRef,
-            title: item.title,
-            status: item.status,
-            has_text: Boolean(item.text)
-          });
-        }
-        const sourceId = upsertSource(db, item, now);
-        const revisionId = upsertRevision(db, sourceId, item, now);
-        seenSources.add(sourceId);
-        seenRevisions.add(revisionId);
-        if (item.text || item.status.toLowerCase() === "deleted") {
-          chunksDeleted += deleteChunksForRevision(db, revisionId);
-        }
-        const inserted = insertChunks(db, revisionId, item, now, maxChunkChars, chunkOverlapChars, options.safetyPolicy);
-        chunksInserted += inserted.chunksInserted;
-        redactions += inserted.redactions;
-      }
-      recordAuditEvent(db, {
-        event_type: "write",
-        action: "knowledge_manifest_ingest",
-        target_uri: options.dbPath,
-        decision: "allow",
-        metadata: { items: options.items.length, sources: seenSources.size, revisions: seenRevisions.size, chunks_inserted: chunksInserted, redactions },
-        created_at: now
-      });
-      return {
-        path: options.sourceLabel,
-        db_path: options.dbPath,
-        items_seen: options.items.length,
-        sources_upserted: seenSources.size,
-        revisions_upserted: seenRevisions.size,
-        chunks_inserted: chunksInserted,
-        chunks_deleted: chunksDeleted,
-        redactions,
-        skipped,
-        items_preview: preview
-      };
-    })();
-    return result;
-  } finally {
-    db.close();
-  }
-}
-
-// src/source-resolver.ts
-function parseJsonObject(value) {
-  if (!value)
-    return {};
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-function metadataString(metadata, keys) {
-  for (const key of keys) {
-    const value = metadata[key];
-    if (typeof value === "string" && value.length > 0)
-      return value;
-  }
-  return null;
-}
-function metadataNumber(metadata, keys) {
-  for (const key of keys) {
-    const value = metadata[key];
-    if (typeof value === "number" && Number.isFinite(value))
-      return value;
-  }
-  return null;
-}
-function assertPurposeAllowed(permissions, purpose) {
-  const mode2 = permissions.mode;
-  if (typeof mode2 === "string" && mode2 !== "read_only") {
-    throw new Error(`Source resolver denied ${purpose}. Permission mode is ${mode2}, expected read_only.`);
-  }
-  const denied = permissions.denied_purposes;
-  if (Array.isArray(denied) && denied.includes(purpose)) {
-    throw new Error(`Source resolver denied ${purpose}. Purpose is explicitly denied.`);
-  }
-  const allowed = permissions.allowed_purposes;
-  if (Array.isArray(allowed) && allowed.length > 0 && !allowed.includes(purpose)) {
-    throw new Error(`Source resolver denied ${purpose}. Allowed purposes: ${allowed.join(", ")}`);
-  }
-}
-function sourceRevisionRef(sourceUri, revision, fallback) {
-  if (!revision)
-    return fallback;
-  try {
-    const parsed = parseSourceRef(sourceUri);
-    if (parsed.kind === "open-files" && parsed.entity === "file") {
-      return `${sourceUri}/revision/${encodeURIComponent(revision.revision)}`;
-    }
-  } catch {
-    return fallback;
-  }
-  return fallback;
-}
-function selectSource(db, sourceUri, requestedRef) {
-  return db.query(`SELECT id, uri, kind, title, metadata_json, acl_json, updated_at
-     FROM sources
-     WHERE uri = ? OR uri = ?
-     ORDER BY CASE WHEN uri = ? THEN 0 ELSE 1 END
-     LIMIT 1`).get(sourceUri, requestedRef, sourceUri) ?? null;
-}
-function selectRevision(db, sourceId, revisionId) {
-  if (revisionId) {
-    return db.query(`SELECT id, revision, hash, extracted_text_uri, metadata_json, created_at
-       FROM source_revisions
-       WHERE source_id = ? AND revision = ?
-       LIMIT 1`).get(sourceId, revisionId) ?? null;
-  }
-  return db.query(`SELECT id, revision, hash, extracted_text_uri, metadata_json, created_at
-     FROM source_revisions
-     WHERE source_id = ?
-     ORDER BY created_at DESC, revision DESC
-     LIMIT 1`).get(sourceId) ?? null;
-}
-function countChunks(db, revisionId) {
-  if (!revisionId)
-    return 0;
-  const row = db.query("SELECT COUNT(*) AS n FROM chunks WHERE source_revision_id = ?").get(revisionId);
-  return row?.n ?? 0;
-}
-function selectChunks(db, revisionId, limit) {
-  if (!revisionId || limit <= 0)
-    return [];
-  return db.query(`SELECT id, kind, ordinal, text, token_count, start_offset, end_offset, metadata_json
-     FROM chunks
-     WHERE source_revision_id = ?
-     ORDER BY ordinal ASC
-     LIMIT ?`).all(revisionId, limit);
-}
-async function resolveOpenFilesSource(options) {
-  const purpose = options.purpose ?? "knowledge_answer";
-  const limit = Math.max(0, Math.min(options.limit ?? 10, 100));
-  const resolvedAt = (options.now ?? new Date).toISOString();
-  const parsed = parseSourceRef(options.sourceRef);
-  const sourceUri = catalogSourceUriForRef(options.sourceRef, parsed);
-  const requestedRevision = revisionIdForSourceRef(options.sourceRef);
-  if (options.safetyPolicy) {
-    if (!options.safetyPolicy.readOnlySourceAccess)
-      throw new Error("Safety policy denied source resolution.");
-    assertWriteAllowed(options.dbPath, options.safetyPolicy);
-  }
-  migrateKnowledgeDb(options.dbPath);
-  const db = openKnowledgeDb(options.dbPath);
-  try {
-    return db.transaction(() => {
-      const source = selectSource(db, sourceUri, options.sourceRef);
-      if (!source) {
-        recordAuditEvent(db, {
-          event_type: "source_read",
-          action: "open_files_resolve_missing",
-          target_uri: options.sourceRef,
-          decision: "allow",
-          metadata: { purpose, read_only: true, source_uri: sourceUri },
-          created_at: resolvedAt
-        });
-        return {
-          source_ref: options.sourceRef,
-          source_uri: sourceUri,
-          purpose,
-          read_only: true,
-          resolved: false,
-          resolver: {
-            name: "open-files-read-only",
-            mode: "local_catalog",
-            contract: "open-files-knowledge-source-v1"
-          },
-          source: null,
-          revision: null,
-          content: {
-            mime: null,
-            size: null,
-            hash: null,
-            text_available: false,
-            chunks_total: 0,
-            chunks_returned: 0,
-            char_count_returned: 0,
-            extracted_text_ref: null,
-            bytes_available: false,
-            bytes_exposed: false
-          },
-          chunks: [],
-          citations: []
-        };
-      }
-      const sourceMetadata = parseJsonObject(source.metadata_json);
-      const permissions = parseJsonObject(source.acl_json);
-      try {
-        assertPurposeAllowed(permissions, purpose);
-      } catch (error) {
-        recordAuditEvent(db, {
-          event_type: "source_read",
-          action: "open_files_resolve",
-          target_uri: options.sourceRef,
-          decision: "deny",
-          metadata: {
-            purpose,
-            read_only: true,
-            source_uri: source.uri,
-            error: error instanceof Error ? error.message : String(error)
-          },
-          created_at: resolvedAt
-        });
-        throw error;
-      }
-      const revision = selectRevision(db, source.id, requestedRevision);
-      const revisionMetadata = parseJsonObject(revision?.metadata_json);
-      const totalChunks = countChunks(db, revision?.id ?? null);
-      const rows = selectChunks(db, revision?.id ?? null, limit);
-      const effectiveSourceRef = sourceRevisionRef(source.uri, revision, options.sourceRef);
-      const chunks = rows.map((row) => {
-        const metadata = parseJsonObject(row.metadata_json);
-        const evidence = {
-          resolver: "open-files-read-only",
-          mode: "local_catalog",
-          purpose,
-          read_only: true,
-          source_ref: metadataString(metadata, ["source_ref"]) ?? effectiveSourceRef,
-          source_uri: source.uri,
-          source_revision_id: revision?.id ?? null,
-          revision: revision?.revision ?? null,
-          hash: revision?.hash ?? metadataString(metadata, ["hash"]),
-          chunk_id: row.id,
-          start_offset: row.start_offset,
-          end_offset: row.end_offset,
-          resolved_at: resolvedAt
-        };
-        const provenance = sourceProvenance({
-          source_ref: evidence.source_ref,
-          source_uri: evidence.source_uri,
-          source_kind: source.kind,
-          source_revision_id: evidence.source_revision_id,
-          revision: evidence.revision,
-          hash: evidence.hash,
-          chunk_id: row.id,
-          start_offset: row.start_offset,
-          end_offset: row.end_offset,
-          status: metadataString(metadata, ["status"]),
-          resolver: evidence.resolver
-        });
-        return {
-          id: row.id,
-          kind: row.kind,
-          ordinal: row.ordinal,
-          text: row.text,
-          token_count: row.token_count,
-          start_offset: row.start_offset,
-          end_offset: row.end_offset,
-          metadata,
-          evidence,
-          provenance
-        };
-      });
-      const citations = chunks.map((chunk) => ({
-        source_ref: chunk.evidence.source_ref,
-        source_uri: source.uri,
-        chunk_id: chunk.id,
-        quote: chunk.text.slice(0, 500),
-        start_offset: chunk.start_offset,
-        end_offset: chunk.end_offset,
-        evidence: chunk.evidence,
-        provenance: chunk.provenance
-      }));
-      recordAuditEvent(db, {
-        event_type: "source_read",
-        action: "open_files_resolve",
-        target_uri: options.sourceRef,
-        decision: "allow",
-        metadata: {
-          purpose,
-          read_only: true,
-          source_uri: source.uri,
-          revision: revision?.revision ?? null,
-          chunks_returned: chunks.length,
-          chunks_total: totalChunks
-        },
-        created_at: resolvedAt
-      });
-      const mime = metadataString(sourceMetadata, ["mime", "content_type"]) ?? metadataString(revisionMetadata, ["mime", "content_type"]);
-      const size = metadataNumber(sourceMetadata, ["size", "size_bytes"]) ?? metadataNumber(revisionMetadata, ["size", "size_bytes"]);
-      return {
-        source_ref: effectiveSourceRef,
-        source_uri: source.uri,
-        purpose,
-        read_only: true,
-        resolved: true,
-        resolver: {
-          name: "open-files-read-only",
-          mode: "local_catalog",
-          contract: "open-files-knowledge-source-v1"
-        },
-        source: {
-          id: source.id,
-          uri: source.uri,
-          kind: source.kind,
-          title: source.title,
-          metadata: sourceMetadata,
-          permissions,
-          updated_at: source.updated_at
-        },
-        revision: revision ? {
-          id: revision.id,
-          revision: revision.revision,
-          hash: revision.hash,
-          extracted_text_uri: revision.extracted_text_uri,
-          metadata: revisionMetadata,
-          created_at: revision.created_at,
-          reindex_required: revisionMetadata.reindex_required === true
-        } : null,
-        content: {
-          mime,
-          size,
-          hash: revision?.hash ?? metadataString(sourceMetadata, ["hash", "checksum", "sha256"]),
-          text_available: totalChunks > 0,
-          chunks_total: totalChunks,
-          chunks_returned: chunks.length,
-          char_count_returned: chunks.reduce((sum, chunk) => sum + chunk.text.length, 0),
-          extracted_text_ref: revision?.extracted_text_uri ?? metadataString(revisionMetadata, ["extracted_text_ref", "extracted_text_uri"]),
-          bytes_available: false,
-          bytes_exposed: false
-        },
-        chunks,
-        citations
-      };
-    })();
-  } finally {
-    db.close();
-  }
-}
-
-// src/source-ingest.ts
-function sha256Text(text) {
-  return `sha256:${createHash6("sha256").update(text).digest("hex")}`;
-}
-function stripHtml(html) {
-  return html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/\s+\n/g, `
-`).replace(/\n\s+/g, `
-`).replace(/[ \t]{2,}/g, " ").trim();
-}
-async function readS3Text2(uri, config, safetyPolicy) {
-  const parsed = new URL(uri);
-  const bucket = parsed.hostname;
-  const key = decodeURIComponent(parsed.pathname.replace(/^\/+/, ""));
-  if (!bucket || !key)
-    throw new Error(`Invalid S3 source URI: ${uri}`);
-  if (safetyPolicy)
-    assertS3ReadAllowed(uri, safetyPolicy);
-  const [{ S3Client, GetObjectCommand }, { fromIni }] = await Promise.all([
-    import("@aws-sdk/client-s3"),
-    import("@aws-sdk/credential-providers")
-  ]);
-  const s3Config = config?.storage.type === "s3" && config.storage.s3?.bucket === bucket ? config.storage.s3 : undefined;
-  const client = new S3Client({
-    region: s3Config?.region,
-    credentials: s3Config?.profile ? fromIni({ profile: s3Config.profile }) : undefined,
-    maxAttempts: s3Config?.max_attempts
-  });
-  const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
-  if (!response.Body)
-    return "";
-  return await response.Body.transformToString();
-}
-async function readWebText(uri, safetyPolicy) {
-  if (safetyPolicy)
-    assertWebSearchAllowed(safetyPolicy);
-  const response = await fetch(uri, {
-    headers: {
-      accept: "text/markdown,text/plain,text/html,application/json;q=0.8,*/*;q=0.5",
-      "user-agent": "@hasna/knowledge source-ingest"
-    }
-  });
-  if (!response.ok)
-    throw new Error(`Web source read failed ${response.status}: ${uri}`);
-  const mime = response.headers.get("content-type");
-  const body = await response.text();
-  return { text: mime?.includes("html") ? stripHtml(body) : body, mime };
-}
-function titleForRef(parsed) {
-  if (parsed.kind === "file")
-    return basename2(parsed.path);
-  if (parsed.kind === "s3")
-    return basename2(parsed.key);
-  if (parsed.kind === "web")
-    return basename2(new URL(parsed.url).pathname) || parsed.url;
-  return parsed.path ? basename2(parsed.path) : parsed.id;
-}
-async function readDirectSourceText(parsed, config, safetyPolicy) {
-  if (parsed.kind === "file") {
-    if (!existsSync6(parsed.path))
-      throw new Error(`Source file not found: ${parsed.path}`);
-    const text = readFileSync8(parsed.path, "utf8");
-    return {
-      text,
-      contentSource: "file",
-      title: titleForRef(parsed),
-      mime: "text/plain",
-      size: text.length,
-      hash: sha256Text(text),
-      revision: null,
-      extractedTextRef: null,
-      metadata: { path: parsed.path },
-      permissions: { mode: "read_only" }
-    };
-  }
-  if (parsed.kind === "s3") {
-    const text = await readS3Text2(parsed.uri, config, safetyPolicy);
-    return {
-      text,
-      contentSource: "s3",
-      title: titleForRef(parsed),
-      mime: "text/plain",
-      size: text.length,
-      hash: sha256Text(text),
-      revision: null,
-      extractedTextRef: null,
-      metadata: { bucket: parsed.bucket, key: parsed.key },
-      permissions: { mode: "read_only" }
-    };
-  }
-  if (parsed.kind === "web") {
-    const web = await readWebText(parsed.url, safetyPolicy);
-    return {
-      text: web.text,
-      contentSource: "web",
-      title: titleForRef(parsed),
-      mime: web.mime,
-      size: web.text.length,
-      hash: sha256Text(web.text),
-      revision: null,
-      extractedTextRef: null,
-      metadata: { url: parsed.url },
-      permissions: { mode: "read_only" }
-    };
-  }
-  throw new Error(`Direct source reading is not available for ${parsed.uri}`);
-}
-async function readTextRef(uri, config, safetyPolicy) {
-  if (uri.startsWith("open-files://")) {
-    throw new Error("Open-files extracted text refs require an open-files resolver API. Ingest an open-files manifest with extracted_text or an extracted_text_ref using file://, s3://, or https://.");
-  }
-  const parsed = parseSourceRef(uri);
-  const direct = await readDirectSourceText(parsed, config, safetyPolicy);
-  return { text: direct.text, contentSource: "extracted_text_ref" };
-}
-async function readOpenFilesSourceText(options) {
-  const resolved = await resolveOpenFilesSource({
-    dbPath: options.dbPath,
-    sourceRef: options.sourceRef,
-    purpose: options.purpose ?? "knowledge_index",
-    limit: 100,
-    safetyPolicy: options.safetyPolicy,
-    now: options.now
-  });
-  if (!resolved.resolved) {
-    throw new Error("Open-files source is not in the local knowledge catalog. Ingest an open-files manifest first or use the open-files resolver API.");
-  }
-  if (resolved.revision?.extracted_text_uri && !resolved.content.text_available) {
-    const textRef = await readTextRef(resolved.revision.extracted_text_uri, options.config, options.safetyPolicy);
-    return {
-      text: textRef.text,
-      contentSource: textRef.contentSource,
-      title: resolved.source?.title ?? null,
-      mime: resolved.content.mime,
-      size: textRef.text.length,
-      hash: resolved.revision.hash ?? sha256Text(textRef.text),
-      revision: resolved.revision.revision,
-      extractedTextRef: resolved.revision.extracted_text_uri,
-      metadata: resolved.source?.metadata ?? {},
-      permissions: resolved.source?.permissions ?? { mode: "read_only" }
-    };
-  }
-  if (resolved.chunks.length === 0) {
-    throw new Error("Open-files source has no extracted text chunks yet. Ingest an open-files manifest with extracted_text or extracted_text_ref first.");
-  }
-  const text = resolved.chunks.map((chunk) => chunk.text).join(`
-
-`);
-  return {
-    text,
-    contentSource: "catalog_chunks",
-    title: resolved.source?.title ?? null,
-    mime: resolved.content.mime,
-    size: text.length,
-    hash: resolved.revision?.hash ?? sha256Text(text),
-    revision: resolved.revision?.revision ?? null,
-    extractedTextRef: resolved.revision?.extracted_text_uri ?? null,
-    metadata: resolved.source?.metadata ?? {},
-    permissions: resolved.source?.permissions ?? { mode: "read_only" }
-  };
-}
-function manifestItemForSource(sourceRef, parsed, resolved, purpose) {
-  const hash = resolved.hash ?? sha256Text(resolved.text);
-  const metadata = {
-    ...resolved.metadata,
-    source_ref: sourceRef,
-    content_source: resolved.contentSource,
-    read_only: true
-  };
-  const item = {
-    source_ref: sourceRef,
-    name: resolved.title ?? titleForRef(parsed),
-    mime: resolved.mime ?? "text/plain",
-    size: resolved.size ?? resolved.text.length,
-    hash,
-    revision: resolved.revision ?? hash,
-    status: "active",
-    updated_at: new Date().toISOString(),
-    permissions: {
-      mode: "read_only",
-      allowed_purposes: [purpose],
-      ...resolved.permissions
-    },
-    metadata,
-    extracted_text_ref: resolved.extractedTextRef,
-    extracted_text: resolved.text
-  };
-  if (parsed.kind === "open-files") {
-    if (parsed.entity === "file")
-      item.file_id = parsed.id;
-    if (parsed.entity === "source") {
-      item.source_id = parsed.id;
-      item.path = parsed.path;
-    }
-  }
-  if (parsed.kind === "file")
-    item.path = parsed.path;
-  if (parsed.kind === "s3")
-    item.path = parsed.key;
-  if (parsed.kind === "web")
-    item.url = parsed.url;
-  return item;
-}
-async function ingestSourceRef(options) {
-  const purpose = options.purpose ?? "knowledge_index";
-  const parsed = parseSourceRef(options.sourceRef);
-  const resolved = parsed.kind === "open-files" ? await readOpenFilesSourceText(options) : await readDirectSourceText(parsed, options.config, options.safetyPolicy);
-  const item = manifestItemForSource(options.sourceRef, parsed, resolved, purpose);
-  const result = await ingestOpenFilesManifestItems({
-    dbPath: options.dbPath,
-    items: [item],
-    sourceLabel: options.sourceRef,
-    readAction: "source_ref_ingest_read",
-    safetyPolicy: options.safetyPolicy,
-    now: options.now
-  });
-  return {
-    ...result,
-    source_ref: options.sourceRef,
-    content_source: resolved.contentSource,
-    read_only: true,
-    hash: String(item.hash)
-  };
-}
-
 // src/app-wiki.ts
+init_knowledge_db();
+init_source_ingest();
+init_public_guard();
+init_input_limits();
+init_safety();
+init_workspace();
 function stableId2(prefix, value) {
   return `${prefix}_${createHash7("sha256").update(value).digest("hex").slice(0, 20)}`;
 }
@@ -19483,9 +21765,11 @@ function parseJsonObject2(value) {
   if (!value)
     return {};
   try {
-    const parsed = JSON.parse(value);
+    const parsed = parseBoundedJsonData(value, "Persisted app-wiki metadata");
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-  } catch {
+  } catch (error) {
+    if (!(error instanceof SyntaxError))
+      throw error;
     return {};
   }
 }
@@ -19525,8 +21809,58 @@ function noteBody(input) {
   return sections.join(`
 `);
 }
-async function writeArtifact(store, entry) {
-  const written = await store.put(entry);
+function explicitOwnGlobalAuthority(options) {
+  let descriptor;
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(options, "allowGlobal");
+  } catch {
+    throw new Error("Global app-wiki access requires an explicit own allowGlobal=true data property.");
+  }
+  return Boolean(descriptor && "value" in descriptor && descriptor.value === true);
+}
+function appWikiAuthority(options, requireStore = false) {
+  if (!options || typeof options !== "object") {
+    throw new Error("App-wiki access requires explicit trusted options.");
+  }
+  const scope = canonicalKnowledgeScope(safePublicProperty(options, "scope", "public-api"));
+  if (scope === "global" && !explicitOwnGlobalAuthority(options)) {
+    throw new Error("Global app-wiki access requires an explicit own allowGlobal=true data property.");
+  }
+  const workspace = safePublicProperty(options, "workspace", "public-api");
+  const dbPath = safePublicProperty(options, "dbPath", "public-api");
+  const store = safePublicProperty(options, "store", "public-api");
+  assertKnowledgeWorkspaceScope(workspace, scope);
+  if (dbPath !== undefined && dbPath !== workspace.knowledgeDbPath) {
+    throw new Error("App-wiki database path does not match the trusted workspace identity.");
+  }
+  if (requireStore && !store) {
+    throw new Error("A trusted artifact store from the owning workspace is required.");
+  }
+  if (store)
+    assertArtifactStoreMatchesWorkspace(store, workspace);
+  return Object.freeze({ scope, workspace, store });
+}
+function revalidateAppWikiAuthority(authority) {
+  assertKnowledgeWorkspaceScope(authority.workspace, authority.scope);
+  if (authority.store)
+    assertArtifactStoreMatchesWorkspace(authority.store, authority.workspace);
+  try {
+    const stat = lstatSync3(authority.workspace.knowledgeDbPath);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || realpathSync2.native(authority.workspace.knowledgeDbPath) !== authority.workspace.knowledgeDbPath) {
+      throw new Error("App-wiki database identity must be one canonical regular file.");
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT")
+      throw error;
+  }
+}
+function assertAppWikiReadAllowed(options) {
+  appWikiAuthority(options);
+}
+async function writeArtifact(authority, entry) {
+  revalidateAppWikiAuthority(authority);
+  const written = await authority.store.put(entry);
+  revalidateAppWikiAuthority(authority);
   return {
     key: written.key,
     uri: written.uri,
@@ -19539,18 +21873,19 @@ async function writeArtifact(store, entry) {
     }
   };
 }
-async function appendLog(store, event, now) {
+async function appendLog(authority, event, now) {
   const year = String(now.getUTCFullYear());
   const month = String(now.getUTCMonth() + 1).padStart(2, "0");
   const day = String(now.getUTCDate()).padStart(2, "0");
   const key = `logs/${year}/${month}/${day}.jsonl`;
   let existing = "";
   try {
-    existing = await store.getText(key);
+    revalidateAppWikiAuthority(authority);
+    existing = await authority.store.getText(key);
   } catch {
     existing = "";
   }
-  return writeArtifact(store, {
+  return writeArtifact(authority, {
     key,
     body: `${existing}${JSON.stringify(event)}
 `,
@@ -19711,52 +22046,60 @@ function upsertNotePage(db, input) {
     input.artifactUri
   ]);
 }
+function appWikiWriteAuthority(options, requireStore = false) {
+  const authority = appWikiAuthority(options);
+  if (authority.workspace.home.includes("/.husna/") || authority.workspace.home.endsWith("/.husna")) {
+    throw new Error(`Refusing app-wiki writes to legacy .husna path: ${authority.workspace.home}`);
+  }
+  if (authority.workspace.home.includes("/.hasna/apps/knowledge")) {
+    throw new Error(`Refusing app-wiki writes to legacy .hasna/apps/knowledge path: ${authority.workspace.home}`);
+  }
+  const safetyPolicy = safePublicProperty(options, "safetyPolicy", "public-api");
+  if (safetyPolicy)
+    assertWriteAllowed(authority.workspace.knowledgeDbPath, safetyPolicy);
+  if (requireStore && !authority.store) {
+    throw new Error("A trusted artifact store from the owning workspace is required.");
+  }
+  return authority;
+}
 function assertAppWikiWriteAllowed(options) {
-  if (options.scope === "global" && options.allowGlobal !== true) {
-    throw new Error("Global app-wiki writes require allowGlobal=true or CLI --allow-global.");
-  }
-  if (options.workspace.home.includes("/.husna/") || options.workspace.home.endsWith("/.husna")) {
-    throw new Error(`Refusing app-wiki writes to legacy .husna path: ${options.workspace.home}`);
-  }
-  if (options.workspace.home.includes("/.hasna/apps/knowledge")) {
-    throw new Error(`Refusing app-wiki writes to legacy .hasna/apps/knowledge path: ${options.workspace.home}`);
-  }
-  if (options.safetyPolicy)
-    assertWriteAllowed(options.workspace.knowledgeDbPath, options.safetyPolicy);
+  appWikiWriteAuthority(options);
 }
 async function initAppWikiScope(options) {
-  assertAppWikiWriteAllowed(options);
-  const migration = migrateKnowledgeDb(options.workspace.knowledgeDbPath);
-  const db = openKnowledgeDb(options.workspace.knowledgeDbPath);
+  const authority = appWikiWriteAuthority(options, true);
+  revalidateAppWikiAuthority(authority);
+  const db = openMigratedKnowledgeDb(authority.workspace.knowledgeDbPath, { ensureParent: false });
   try {
+    revalidateAppWikiAuthority(authority);
+    const schemaVersion = getSchemaVersion(db);
     recordAuditEvent(db, {
       event_type: "write",
       action: "app_wiki_init",
-      target_uri: options.workspace.home,
+      target_uri: authority.workspace.home,
       decision: "allow",
       metadata: {
-        scope: options.scope,
-        store_type: options.store.type,
+        scope: authority.scope,
+        store_type: authority.store.type,
         app_path: ".hasna/knowledge"
       },
       created_at: (options.now ?? new Date).toISOString()
     });
+    return {
+      ok: true,
+      scope: authority.scope,
+      workspace_home: authority.workspace.home,
+      knowledge_db_path: authority.workspace.knowledgeDbPath,
+      schema_version: schemaVersion,
+      store_type: authority.store.type,
+      global_write_allowed: authority.scope === "global",
+      message: `Initialized app wiki scope at ${authority.workspace.home}`
+    };
   } finally {
     db.close();
   }
-  return {
-    ok: true,
-    scope: options.scope,
-    workspace_home: options.workspace.home,
-    knowledge_db_path: options.workspace.knowledgeDbPath,
-    schema_version: migration.schema_version,
-    store_type: options.store.type,
-    global_write_allowed: options.scope === "global" && options.allowGlobal === true,
-    message: `Initialized app wiki scope at ${options.workspace.home}`
-  };
 }
 async function writeAppWikiNote(options) {
-  assertAppWikiWriteAllowed(options);
+  const authority = appWikiWriteAuthority(options, true);
   const nowDate = options.now ?? new Date;
   const now = nowDate.toISOString();
   const tags = uniqueStrings(options.tags);
@@ -19774,27 +22117,27 @@ async function writeAppWikiNote(options) {
     artifact_key: path,
     source_refs: sourceRefs
   });
-  const artifact = await writeArtifact(options.store, {
+  const artifact = await writeArtifact(authority, {
     key: path,
     body,
     content_type: "text/markdown",
     metadata: {
       generated_from: "app_wiki_note",
       provenance,
-      scope: options.scope,
+      scope: authority.scope,
       tags: tags.join(","),
       source_refs: sourceRefs.join(",")
     }
   });
-  const log = await appendLog(options.store, {
+  const log = await appendLog(authority, {
     ts: now,
     event: "app_wiki_note_written",
     page_key: path,
     source_refs: sourceRefs,
     tags
   }, nowDate);
-  migrateKnowledgeDb(options.workspace.knowledgeDbPath);
-  const db = openKnowledgeDb(options.workspace.knowledgeDbPath);
+  revalidateAppWikiAuthority(authority);
+  const db = openMigratedKnowledgeDb(authority.workspace.knowledgeDbPath, { ensureParent: false });
   try {
     const pageId = stableId2("wiki", path);
     const metadata = noteMetadata({
@@ -19804,7 +22147,9 @@ async function writeAppWikiNote(options) {
       provenance,
       metadata: options.metadata
     });
+    revalidateAppWikiAuthority(authority);
     recordStorageObjects(db, [artifact, log], nowDate);
+    revalidateAppWikiAuthority(authority);
     upsertNotePage(db, {
       pageId,
       path,
@@ -19815,7 +22160,9 @@ async function writeAppWikiNote(options) {
       metadata,
       now
     });
+    revalidateAppWikiAuthority(authority);
     const citationsWritten = replaceNoteCitations(db, pageId, sourceRefs, now);
+    revalidateAppWikiAuthority(authority);
     upsertNoteIndex(db, {
       title: options.title,
       path,
@@ -19825,26 +22172,28 @@ async function writeAppWikiNote(options) {
       sourceRefs,
       now
     });
+    revalidateAppWikiAuthority(authority);
     recordAuditEvent(db, {
       event_type: "write",
       action: "app_wiki_note_write",
       target_uri: artifact.uri,
       decision: "allow",
       metadata: {
-        scope: options.scope,
+        scope: authority.scope,
         path,
         source_refs: sourceRefs,
         tags
       },
       created_at: now
     });
+    revalidateAppWikiAuthority(authority);
     const row = db.query("SELECT id, path, title, artifact_uri, content_hash, metadata_json, created_at, updated_at FROM wiki_pages WHERE id = ?").get(pageId);
     if (!row)
       throw new Error(`Failed to write app wiki note: ${path}`);
     return {
       ok: true,
-      scope: options.scope,
-      workspace_home: options.workspace.home,
+      scope: authority.scope,
+      workspace_home: authority.workspace.home,
       note: noteRecord(row),
       artifact_uri: artifact.uri,
       content_hash: artifact.hash ?? "",
@@ -19858,12 +22207,14 @@ async function writeAppWikiNote(options) {
   }
 }
 function listAppWikiNotes(options) {
+  const authority = appWikiAuthority(options);
   const limit = Math.max(1, Math.min(options.limit ?? 50, 200));
-  if (!options.dbPath)
+  if (!authority.workspace.knowledgeDbPath)
     return [];
-  migrateKnowledgeDb(options.dbPath);
-  const db = openKnowledgeDb(options.dbPath);
+  revalidateAppWikiAuthority(authority);
+  const db = openMigratedKnowledgeDb(authority.workspace.knowledgeDbPath, { ensureParent: false });
   try {
+    revalidateAppWikiAuthority(authority);
     return db.query(`SELECT id, path, title, artifact_uri, content_hash, metadata_json, created_at, updated_at
        FROM wiki_pages
        WHERE status = 'active'
@@ -19876,9 +22227,11 @@ function listAppWikiNotes(options) {
   }
 }
 async function getAppWikiNote(options) {
-  migrateKnowledgeDb(options.dbPath);
-  const db = openKnowledgeDb(options.dbPath);
+  const authority = appWikiAuthority(options, true);
+  revalidateAppWikiAuthority(authority);
+  const db = openMigratedKnowledgeDb(authority.workspace.knowledgeDbPath, { ensureParent: false });
   try {
+    revalidateAppWikiAuthority(authority);
     const row = db.query(`SELECT id, path, title, artifact_uri, content_hash, metadata_json, created_at, updated_at
        FROM wiki_pages
        WHERE (id = ? OR path = ?)
@@ -19886,6 +22239,7 @@ async function getAppWikiNote(options) {
          AND metadata_json LIKE '%"app_wiki":true%'`).get(options.id, options.id);
     if (!row)
       return null;
+    revalidateAppWikiAuthority(authority);
     const citations = db.query(`SELECT id, chunk_id, source_uri, quote, start_offset, end_offset, metadata_json, created_at
        FROM citations
        WHERE wiki_page_id = ?
@@ -19897,10 +22251,13 @@ async function getAppWikiNote(options) {
     let content = null;
     if (options.includeContent !== false) {
       try {
-        content = await options.store.getText(row.path);
+        revalidateAppWikiAuthority(authority);
+        content = await authority.store.getText(row.path);
       } catch {
+        revalidateAppWikiAuthority(authority);
         content = null;
       }
+      revalidateAppWikiAuthority(authority);
     }
     return {
       ok: true,
@@ -19913,21 +22270,29 @@ async function getAppWikiNote(options) {
   }
 }
 async function ingestAppWikiSourceRef(options) {
-  assertAppWikiWriteAllowed(options);
-  return ingestSourceRef({
-    dbPath: options.workspace.knowledgeDbPath,
-    sourceRef: options.sourceRef,
+  assertContainedSourceGraph(options, "public-api");
+  const sourceRef = safePublicProperty(options, "sourceRef", "public-api");
+  if (typeof sourceRef !== "string")
+    throw new Error("sourceRef must be a string.");
+  const authority = appWikiWriteAuthority(options);
+  revalidateAppWikiAuthority(authority);
+  const result = await ingestSourceRef({
+    dbPath: authority.workspace.knowledgeDbPath,
+    sourceRef,
     purpose: options.purpose ?? "knowledge_index",
     config: options.config,
     safetyPolicy: options.safetyPolicy
   });
+  revalidateAppWikiAuthority(authority);
+  return result;
 }
 
 // src/agent.ts
-import { randomUUID as randomUUID6 } from "crypto";
+init_knowledge_db();
+import { randomUUID as randomUUID5 } from "crypto";
 
 // src/providers.ts
-import { randomUUID as randomUUID5 } from "crypto";
+init_runtime_role();
 var DEFAULT_PROVIDER_SETTINGS = {
   openai: {
     api_key_env: "OPENAI_API_KEY",
@@ -20049,46 +22414,17 @@ function providerStatus(config, env = process.env) {
     models: listModelRegistry(config)
   };
 }
-function assertProviderCredentials(provider, config, env = process.env) {
-  const status = providerCredentialStatus(config, env).find((entry) => entry.provider === provider);
-  if (!status)
-    throw new Error(`Unsupported AI provider: ${provider}`);
-  if (!status.configured)
-    throw new Error(`Missing ${status.api_key_env} for ${provider}. Set the env var to use this provider.`);
-  return status;
+function assertProviderCredentials(provider) {
+  return containedProvider();
 }
-async function defaultFactory(provider) {
-  if (provider === "openai") {
-    const { createOpenAI } = await import("@ai-sdk/openai");
-    return createOpenAI;
-  }
-  if (provider === "anthropic") {
-    const { createAnthropic } = await import("@ai-sdk/anthropic");
-    return createAnthropic;
-  }
-  const { createDeepSeek } = await import("@ai-sdk/deepseek");
-  return createDeepSeek;
+function containedProvider() {
+  throw new KnowledgeContainmentError("KNOWLEDGE_HOSTED_CONTAINED", 503, "hosted-client", "public-api", "provider construction is unavailable during Stage A");
 }
-async function createAiSdkProviderRegistry(options = {}) {
-  const { createProviderRegistry } = await import("ai");
-  const env = options.env ?? process.env;
-  const providers = {};
-  for (const provider of Object.keys(DEFAULT_PROVIDER_SETTINGS)) {
-    const settings = providerSettings(options.config, provider);
-    const apiKey = env[settings.api_key_env];
-    if (!apiKey)
-      continue;
-    const factory = options.factories?.[provider] ?? await defaultFactory(provider);
-    providers[provider] = factory({ apiKey, baseURL: settings.base_url });
-  }
-  return createProviderRegistry(providers);
+async function createAiSdkProviderRegistry() {
+  return containedProvider();
 }
-async function languageModelFor(aliasOrRef, options = {}) {
-  const modelRef = resolveModelRef(aliasOrRef, options.config);
-  const parsed = parseModelRef(modelRef);
-  assertProviderCredentials(parsed.provider, options.config, options.env);
-  const registry = await createAiSdkProviderRegistry(options);
-  return registry.languageModel(modelRef);
+async function languageModelFor(aliasOrRef) {
+  return containedProvider();
 }
 function usageNumber(usage, keys) {
   for (const key of keys) {
@@ -20112,31 +22448,20 @@ function normalizeAiSdkUsage(input) {
     }
   };
 }
-function recordProviderUsage(db, input) {
-  const id = `usage_${randomUUID5()}`;
-  db.run(`INSERT INTO provider_usage (id, run_id, provider, model, input_tokens, output_tokens, cost_usd, metadata_json, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-    id,
-    input.run_id ?? null,
-    input.provider,
-    input.model,
-    input.input_tokens,
-    input.output_tokens,
-    input.cost_usd,
-    JSON.stringify(input.metadata),
-    input.created_at ?? new Date().toISOString()
-  ]);
-  return id;
-}
 
 // src/retrieval.ts
+init_knowledge_db();
 import { createHash as createHash9 } from "crypto";
 
 // src/search.ts
-import { existsSync as existsSync7, readFileSync as readFileSync9 } from "fs";
+init_anchored_fs();
+init_knowledge_db();
+import { resolve as resolve6 } from "path";
 
 // src/embeddings.ts
+init_knowledge_db();
 import { createHash as createHash8 } from "crypto";
+init_input_limits();
 var DEFAULT_EMBEDDING_MODEL_REF = "openai:text-embedding-3-small";
 var DEFAULT_EMBEDDING_DIMENSIONS = 1536;
 function embeddingConfig(config) {
@@ -20149,9 +22474,11 @@ function parseJsonObject3(value) {
   if (!value)
     return {};
   try {
-    const parsed = JSON.parse(value);
+    const parsed = parseBoundedJsonData(value, "Persisted embedding metadata");
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-  } catch {
+  } catch (error) {
+    if (!(error instanceof SyntaxError))
+      throw error;
     return {};
   }
 }
@@ -20472,13 +22799,16 @@ async function searchVectorIndex(options) {
 }
 
 // src/search.ts
+init_input_limits();
 function parseJsonObject4(value) {
   if (!value)
     return {};
   try {
-    const parsed = JSON.parse(value);
+    const parsed = parseBoundedJsonData(value, "Persisted search metadata");
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-  } catch {
+  } catch (error) {
+    if (!(error instanceof SyntaxError))
+      throw error;
     return {};
   }
 }
@@ -20624,16 +22954,21 @@ function selectKnowledgeIndexes(db, terms, limit) {
      LIMIT ?`).all(...likeParams(terms, fields.length), limit);
 }
 function readLegacyItems(path) {
-  if (!path || !existsSync7(path))
+  if (!path)
+    return [];
+  const snapshot = readAnchoredRegularFileSnapshot(resolve6(path), MAX_INGEST_BODY_BYTES);
+  if (!snapshot)
     return [];
   try {
-    const parsed = JSON.parse(readFileSync9(path, "utf8"));
+    const parsed = parseBoundedJsonData(snapshot.content, "Persisted legacy knowledge store");
     if (!parsed || !Array.isArray(parsed.items))
       return [];
     return parsed.items.filter((item) => {
       return Boolean(item && typeof item === "object" && typeof item.id === "string" && typeof item.title === "string" && typeof item.content === "string");
     });
-  } catch {
+  } catch (error) {
+    if (!(error instanceof SyntaxError))
+      throw error;
     return [];
   }
 }
@@ -20647,10 +22982,10 @@ function legacyItemHaystack(item) {
     ...item.tags ?? []
   ].filter((value) => typeof value === "string" && value.length > 0).join(" ").toLowerCase();
 }
-function selectLegacyItems(path, terms, limit) {
+function selectLegacyItems(items, terms, limit) {
   if (terms.length === 0)
     return [];
-  return readLegacyItems(path).filter((item) => item.archived !== true).map((item) => ({ item, haystack: legacyItemHaystack(item) })).filter(({ haystack }) => terms.some((term) => haystack.includes(term))).map(({ item, haystack }) => ({ item, score: catalogScore(haystack, terms) })).sort((a, b) => b.score - a.score || a.item.id.localeCompare(b.item.id)).slice(0, limit);
+  return items.filter((item) => item.archived !== true).map((item) => ({ item, haystack: legacyItemHaystack(item) })).filter(({ haystack }) => terms.some((term) => haystack.includes(term))).map(({ item, haystack }) => ({ item, score: catalogScore(haystack, terms) })).sort((a, b) => b.score - a.score || a.item.id.localeCompare(b.item.id)).slice(0, limit);
 }
 function chunkResult(row, keywordScore) {
   const metadata = parseJsonObject4(row.chunk_metadata_json);
@@ -20812,6 +23147,7 @@ async function hybridSearch(options) {
   let catalogCount = 0;
   let semanticCount = 0;
   const merged = new Map;
+  const legacyItems = readLegacyItems(options.legacyStorePath);
   migrateKnowledgeDb(options.dbPath);
   const db = openKnowledgeDb(options.dbPath);
   try {
@@ -20820,7 +23156,7 @@ async function hybridSearch(options) {
     ftsRows.forEach((row, index) => mergeResult(merged, chunkResult(row, scoreFromRank(row.rank, index))));
     const wikiRows = selectWikiPages(db, terms, Math.max(limit, 10));
     const indexRows = selectKnowledgeIndexes(db, terms, Math.max(limit, 10));
-    const legacyRows = selectLegacyItems(options.legacyStorePath, terms, Math.max(limit, 10));
+    const legacyRows = selectLegacyItems(legacyItems, terms, Math.max(limit, 10));
     catalogCount = wikiRows.length + indexRows.length;
     keywordCount += legacyRows.length;
     legacyRows.forEach(({ item, score }) => mergeResult(merged, legacyItemResult(item, score)));
@@ -20908,7 +23244,7 @@ async function hybridSearchLegacyStore(options) {
   const terms = queryTerms(query2);
   const semanticEnabled = options.semantic === true || options.fake === true || Boolean(options.modelRef);
   const merged = new Map;
-  const legacyRows = selectLegacyItems(options.legacyStorePath, terms, Math.max(limit, 10));
+  const legacyRows = selectLegacyItems(readLegacyItems(options.legacyStorePath), terms, Math.max(limit, 10));
   legacyRows.forEach(({ item, score }) => mergeResult(merged, legacyItemResult(item, score)));
   const warnings = ["knowledge_db_missing"];
   if (semanticEnabled)
@@ -21247,7 +23583,7 @@ function addRunEvent(dbPath, input) {
   try {
     db.run(`INSERT INTO run_events (id, run_id, level, event, metadata_json, created_at)
        VALUES (?, ?, ?, ?, ?, ?)`, [
-      `evt_${randomUUID6()}`,
+      `evt_${randomUUID5()}`,
       input.runId,
       input.level,
       input.event,
@@ -21278,16 +23614,18 @@ function updateRun(dbPath, input) {
 function recordUsage(dbPath, runId, usage, provider, model, now, metadata = {}) {
   const db = openKnowledgeDb(dbPath);
   try {
-    recordProviderUsage(db, {
-      run_id: runId,
+    db.run(`INSERT INTO provider_usage (id, run_id, provider, model, input_tokens, output_tokens, cost_usd, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+      `usage_${randomUUID5()}`,
+      runId,
       provider,
       model,
-      input_tokens: usage.input_tokens,
-      output_tokens: usage.output_tokens,
-      cost_usd: usage.cost_usd,
-      metadata,
-      created_at: now
-    });
+      usage.input_tokens,
+      usage.output_tokens,
+      usage.cost_usd,
+      JSON.stringify(metadata),
+      now
+    ]);
   } finally {
     db.close();
   }
@@ -21297,7 +23635,7 @@ async function runKnowledgePrompt(options) {
   if (!prompt)
     throw new Error("Knowledge prompt is required.");
   const now = (options.now ?? new Date).toISOString();
-  const runId = `run_${randomUUID6()}`;
+  const runId = `run_${randomUUID5()}`;
   const modelRef = resolveModelRef(options.modelRef ?? "default", options.config);
   const parsed = parseModelRef(modelRef);
   migrateKnowledgeDb(options.dbPath);
@@ -21450,7 +23788,10 @@ ${answer}`;
 }
 
 // src/context-pack.ts
+init_knowledge_db();
 import { createHash as createHash10 } from "crypto";
+init_safety();
+init_input_limits();
 var DEFAULT_MAX_TOKENS = 1200;
 var DEFAULT_MAX_ITEMS = 6;
 var MAX_MAX_TOKENS = 12000;
@@ -21478,9 +23819,11 @@ function parseJsonObject5(value) {
   if (!value)
     return {};
   try {
-    const parsed = JSON.parse(value);
+    const parsed = parseBoundedJsonData(value, "Persisted context metadata");
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-  } catch {
+  } catch (error) {
+    if (!(error instanceof SyntaxError))
+      throw error;
     return {};
   }
 }
@@ -22024,14 +24367,17 @@ async function buildKnowledgeAgentContextPack(options) {
 }
 
 // src/conflict-agent.ts
-import { randomUUID as randomUUID8 } from "crypto";
+init_knowledge_db();
+import { randomUUID as randomUUID7 } from "crypto";
 
 // src/sync.ts
-import { createHash as createHash11, randomUUID as randomUUID7 } from "crypto";
-import { existsSync as existsSync8, readFileSync as readFileSync10 } from "fs";
+init_knowledge_db();
+import { createHash as createHash11, randomUUID as randomUUID6 } from "crypto";
+import { existsSync as existsSync3, readFileSync as readFileSync3 } from "fs";
 import { hostname } from "os";
-import { fileURLToPath as fileURLToPath2 } from "url";
-import { relative as relative3, resolve as resolve3, sep as sep3 } from "path";
+import { fileURLToPath as fileURLToPath3 } from "url";
+import { relative as relative2, resolve as resolve7, sep as sep3 } from "path";
+init_input_limits();
 var KNOWLEDGE_SYNC_TABLES = [
   "sources",
   "wiki_pages",
@@ -22059,7 +24405,7 @@ var KNOWLEDGE_SYNC_TABLES = [
 ];
 var KNOWLEDGE_SYNC_PROTOCOL_VERSION = 2;
 var KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION = 1;
-var PRIMARY_KEYS2 = {
+var PRIMARY_KEYS = {
   sources: ["id"],
   wiki_pages: ["id"],
   source_revisions: ["id"],
@@ -22094,7 +24440,7 @@ function nowIso(now = new Date) {
   return now.toISOString();
 }
 function makeSyncId(prefix) {
-  return `${prefix}_${Date.now().toString(36)}_${randomUUID7().slice(0, 8)}`;
+  return `${prefix}_${Date.now().toString(36)}_${randomUUID6().slice(0, 8)}`;
 }
 function defaultSyncMachineId(input) {
   const explicit = input?.trim();
@@ -22120,15 +24466,17 @@ function count2(db, table) {
 }
 function parseJson(value, fallback) {
   try {
-    return JSON.parse(value);
-  } catch {
+    return parseBoundedJsonData(value, "Persisted sync JSON");
+  } catch (error) {
+    if (!(error instanceof SyntaxError))
+      throw error;
     return fallback;
   }
 }
-function quoteIdent2(identifier) {
+function quoteIdent(identifier) {
   return `"${identifier.replace(/"/g, '""')}"`;
 }
-function coerceForSqlite2(value) {
+function coerceForSqlite(value) {
   if (value === undefined || value === null)
     return null;
   if (typeof value === "string" || typeof value === "number" || typeof value === "bigint" || typeof value === "boolean")
@@ -22142,17 +24490,17 @@ function coerceForSqlite2(value) {
   return String(value);
 }
 function filterExistingTables(db, tables) {
-  return tables.filter((table) => tableExists3(db, table));
+  return tables.filter((table) => tableExists2(db, table));
 }
-function tableExists3(db, table) {
+function tableExists2(db, table) {
   const row = db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table);
   return Boolean(row);
 }
 function localColumns(db, table) {
-  const rows = db.query(`PRAGMA table_info(${quoteIdent2(table)})`).all();
+  const rows = db.query(`PRAGMA table_info(${quoteIdent(table)})`).all();
   return new Set(rows.map((row) => row.name));
 }
-function filterLocalColumns2(db, table, columns) {
+function filterLocalColumns(db, table, columns) {
   const allowed = localColumns(db, table);
   return columns.filter((column) => allowed.has(column));
 }
@@ -22167,7 +24515,7 @@ function resolveSyncTables(tables) {
   return requested;
 }
 function rowKey(table, row) {
-  const primaryKeys = PRIMARY_KEYS2[table];
+  const primaryKeys = PRIMARY_KEYS[table];
   return primaryKeys.map((key) => `${key}=${JSON.stringify(row[key] ?? null)}`).join("&");
 }
 var RAW_PAYLOAD_METADATA_KEYS = new Set([
@@ -22219,9 +24567,9 @@ function rowHash(row, artifactUriToKey = new Map) {
   return hashValue(normalizeRowForHash(row, artifactUriToKey));
 }
 function tableRows(db, table) {
-  if (!tableExists3(db, table))
+  if (!tableExists2(db, table))
     return [];
-  return db.query(`SELECT * FROM ${quoteIdent2(table)} ORDER BY rowid ASC`).all();
+  return db.query(`SELECT * FROM ${quoteIdent(table)} ORDER BY rowid ASC`).all();
 }
 function tableContentHash(table, rows, artifactUriToKey = new Map) {
   return hashValue(rows.map((row) => ({
@@ -22233,7 +24581,7 @@ function tableClock(db, table, machineId) {
   return db.query("SELECT * FROM knowledge_sync_table_clocks WHERE table_name = ? AND machine_id = ?").get(table, machineId) ?? null;
 }
 function listTableClocks(db) {
-  if (!tableExists3(db, "knowledge_sync_table_clocks"))
+  if (!tableExists2(db, "knowledge_sync_table_clocks"))
     return [];
   return db.query("SELECT * FROM knowledge_sync_table_clocks ORDER BY table_name ASC, machine_id ASC").all();
 }
@@ -22333,27 +24681,27 @@ function staleIncomingClock(existing, incoming) {
 function upsertSqliteRows(db, table, rows) {
   if (rows.length === 0)
     return 0;
-  const columns = filterLocalColumns2(db, table, Object.keys(rows[0]));
+  const columns = filterLocalColumns(db, table, Object.keys(rows[0]));
   if (columns.length === 0)
     return 0;
-  const primaryKeys = PRIMARY_KEYS2[table];
-  const columnList = columns.map(quoteIdent2).join(", ");
+  const primaryKeys = PRIMARY_KEYS[table];
+  const columnList = columns.map(quoteIdent).join(", ");
   const placeholders2 = columns.map(() => "?").join(", ");
-  const keyList = primaryKeys.map(quoteIdent2).join(", ");
+  const keyList = primaryKeys.map(quoteIdent).join(", ");
   const updateColumns = columns.filter((column) => !primaryKeys.includes(column));
   const fallbackKey = primaryKeys[0];
-  const setClause = updateColumns.length > 0 ? updateColumns.map((column) => `${quoteIdent2(column)} = excluded.${quoteIdent2(column)}`).join(", ") : `${quoteIdent2(fallbackKey)} = excluded.${quoteIdent2(fallbackKey)}`;
-  const statement = db.query(`INSERT INTO ${quoteIdent2(table)} (${columnList}) VALUES (${placeholders2})
+  const setClause = updateColumns.length > 0 ? updateColumns.map((column) => `${quoteIdent(column)} = excluded.${quoteIdent(column)}`).join(", ") : `${quoteIdent(fallbackKey)} = excluded.${quoteIdent(fallbackKey)}`;
+  const statement = db.query(`INSERT INTO ${quoteIdent(table)} (${columnList}) VALUES (${placeholders2})
      ON CONFLICT (${keyList}) DO UPDATE SET ${setClause}`);
   const insert = db.transaction((batch) => {
     for (const row of batch)
-      statement.run(...columns.map((column) => coerceForSqlite2(row[column])));
+      statement.run(...columns.map((column) => coerceForSqlite(row[column])));
   });
   insert(rows);
   return rows.length;
 }
 function parseRowKeyValues(table, key) {
-  const primaryKeys = PRIMARY_KEYS2[table];
+  const primaryKeys = PRIMARY_KEYS[table];
   const values = [];
   let rest = key;
   for (let index = 0;index < primaryKeys.length; index += 1) {
@@ -22367,7 +24715,7 @@ function parseRowKeyValues(table, key) {
     const markerIndex = marker ? remaining.indexOf(marker) : -1;
     const encoded = markerIndex >= 0 ? remaining.slice(0, markerIndex) : remaining;
     try {
-      values.push(JSON.parse(encoded));
+      values.push(parseBoundedJsonData(encoded, "Persisted sync binding"));
     } catch {
       return null;
     }
@@ -22376,10 +24724,10 @@ function parseRowKeyValues(table, key) {
   return rest.length === 0 ? values : null;
 }
 function primaryKeyWhereClause(table) {
-  return PRIMARY_KEYS2[table].map((key) => `${quoteIdent2(key)} = ?`).join(" AND ");
+  return PRIMARY_KEYS[table].map((key) => `${quoteIdent(key)} = ?`).join(" AND ");
 }
 function latestImportedRowHashes(db, table, sourceMachineId) {
-  if (!tableExists3(db, "knowledge_sync_changes"))
+  if (!tableExists2(db, "knowledge_sync_changes"))
     return new Map;
   const rows = db.query(`SELECT entity_id, next_hash
      FROM knowledge_sync_changes
@@ -22391,13 +24739,13 @@ function latestImportedRowHashes(db, table, sourceMachineId) {
   return latest;
 }
 function removeChunkDerivedRows(db, chunkId) {
-  if (tableExists3(db, "chunks_fts"))
+  if (tableExists2(db, "chunks_fts"))
     db.query("DELETE FROM chunks_fts WHERE chunk_id = ?").run(chunkId);
-  if (tableExists3(db, "chunk_embeddings"))
+  if (tableExists2(db, "chunk_embeddings"))
     db.query("DELETE FROM chunk_embeddings WHERE chunk_id = ?").run(chunkId);
-  if (tableExists3(db, "vector_index_entries"))
+  if (tableExists2(db, "vector_index_entries"))
     db.query("DELETE FROM vector_index_entries WHERE chunk_id = ?").run(chunkId);
-  if (tableExists3(db, "citations"))
+  if (tableExists2(db, "citations"))
     db.query("DELETE FROM citations WHERE chunk_id = ?").run(chunkId);
 }
 function deleteSqliteRowByKey(db, table, key) {
@@ -22405,16 +24753,16 @@ function deleteSqliteRowByKey(db, table, key) {
   if (!values)
     return false;
   const where = primaryKeyWhereClause(table);
-  const existing = db.query(`SELECT * FROM ${quoteIdent2(table)} WHERE ${where} LIMIT 1`).get(...values);
+  const existing = db.query(`SELECT * FROM ${quoteIdent(table)} WHERE ${where} LIMIT 1`).get(...values);
   if (!existing)
     return false;
   if (table === "chunks" && typeof existing.id === "string")
     removeChunkDerivedRows(db, existing.id);
-  db.query(`DELETE FROM ${quoteIdent2(table)} WHERE ${where}`).run(...values);
+  db.query(`DELETE FROM ${quoteIdent(table)} WHERE ${where}`).run(...values);
   return true;
 }
 function refreshChunkFtsRows(db, rows) {
-  if (!tableExists3(db, "chunks_fts"))
+  if (!tableExists2(db, "chunks_fts"))
     return;
   for (const row of rows) {
     const chunkId = typeof row.id === "string" ? row.id : null;
@@ -22445,8 +24793,8 @@ function refreshDerivedRowsForImport(db, table, rows) {
   if (table === "chunks")
     refreshChunkFtsRows(db, rows);
 }
-function assertInside2(root, target) {
-  const rel = relative3(root, target);
+function assertInside(root, target) {
+  const rel = relative2(root, target);
   return rel !== ".." && !rel.startsWith("..") && !rel.startsWith(`..${sep3}`);
 }
 function keyForArtifactRow(row, artifactsDir) {
@@ -22456,12 +24804,12 @@ function keyForArtifactRow(row, artifactsDir) {
   if (!row.artifact_uri.startsWith("file://"))
     return null;
   try {
-    const path = fileURLToPath2(row.artifact_uri);
-    const root = resolve3(artifactsDir);
-    const target = resolve3(path);
-    if (!assertInside2(root, target))
+    const path = fileURLToPath3(row.artifact_uri);
+    const root = resolve7(artifactsDir);
+    const target = resolve7(path);
+    if (!assertInside(root, target))
       return null;
-    const rel = relative3(root, target).replace(/\\/g, "/");
+    const rel = relative2(root, target).replace(/\\/g, "/");
     return rel ? normalizeArtifactKey(rel) : null;
   } catch {
     return null;
@@ -22490,7 +24838,7 @@ function canReferenceExistingS3Artifact(artifact, targetStorage) {
   return artifact.artifact_uri.startsWith("s3://") && targetStorage.artifact_store.type === "s3" && artifact.artifact_uri.startsWith(targetStorage.artifact_store.uri_prefix);
 }
 function tableCounts(db) {
-  return Object.fromEntries(KNOWLEDGE_SYNC_TABLES.map((table) => [table, tableExists3(db, table) ? count2(db, table) : 0]));
+  return Object.fromEntries(KNOWLEDGE_SYNC_TABLES.map((table) => [table, tableExists2(db, table) ? count2(db, table) : 0]));
 }
 function artifactHashes(db) {
   return db.query(`SELECT artifact_uri, kind, hash, size_bytes
@@ -22528,9 +24876,11 @@ function parseJsonRecord(value) {
   if (!value)
     return {};
   try {
-    const parsed = JSON.parse(value);
+    const parsed = parseBoundedJsonData(value, "Persisted sync metadata");
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-  } catch {
+  } catch (error) {
+    if (!(error instanceof SyntaxError))
+      throw error;
     return {};
   }
 }
@@ -22538,9 +24888,11 @@ function parseJsonArray(value) {
   if (!value)
     return [];
   try {
-    const parsed = JSON.parse(value);
+    const parsed = parseBoundedJsonData(value, "Persisted sync array");
     return Array.isArray(parsed) ? parsed : [];
-  } catch {
+  } catch (error) {
+    if (!(error instanceof SyntaxError))
+      throw error;
     return [];
   }
 }
@@ -22819,9 +25171,9 @@ function createKnowledgeSyncBundle(options) {
       const artifact = { ...row, key };
       if (options.includeArtifactContent !== false && key && row.artifact_uri.startsWith("file://")) {
         try {
-          const path = fileURLToPath2(row.artifact_uri);
-          if (existsSync8(path))
-            artifact.content_base64 = readFileSync10(path).toString("base64");
+          const path = fileURLToPath3(row.artifact_uri);
+          if (existsSync3(path))
+            artifact.content_base64 = readFileSync3(path).toString("base64");
           else
             warnings.push(`artifact_missing:${row.artifact_uri}`);
         } catch (error) {
@@ -22835,7 +25187,7 @@ function createKnowledgeSyncBundle(options) {
     const sourceArtifactUriToKey = artifactUriToKey(artifacts);
     const tables = requestedTables.filter((table) => !TABLE_SYNC_EXCLUDES.has(table)).map((table) => ({
       table,
-      primary_keys: PRIMARY_KEYS2[table],
+      primary_keys: PRIMARY_KEYS[table],
       rows: tableRows(db, table)
     }));
     const tableClocks = tables.map((table) => prepareExportTableClock(db, {
@@ -22961,8 +25313,8 @@ async function materializeArtifacts(options) {
     missing_content: 0
   };
   for (const artifact of options.bundle.artifacts) {
-    const identity = artifactIdentity(artifact);
-    const target = targetArtifacts.get(identity);
+    const identity2 = artifactIdentity(artifact);
+    const target = targetArtifacts.get(identity2);
     if (target && artifactFingerprint(target) === artifactFingerprint(artifact)) {
       if (target.artifact_uri)
         uriMap.set(artifact.artifact_uri, target.artifact_uri);
@@ -22972,7 +25324,7 @@ async function materializeArtifacts(options) {
     if (target && artifactFingerprint(target) !== artifactFingerprint(artifact)) {
       const conflict = {
         entityKind: "storage_object",
-        entityId: identity,
+        entityId: identity2,
         localMachineId: options.localMachineId,
         remoteMachineId: options.bundle.source.machine_id ?? "unknown",
         localHash: artifactFingerprint(target),
@@ -23242,7 +25594,7 @@ async function applyKnowledgeSyncBundle(options) {
     for (const sourceTable of options.bundle.tables) {
       if (sourceTable.table === "storage_objects" || TABLE_SYNC_EXCLUDES.has(sourceTable.table))
         continue;
-      if (!tableExists3(db, sourceTable.table))
+      if (!tableExists2(db, sourceTable.table))
         continue;
       const incomingClock = bundleTableClock(options.bundle, sourceTable.table);
       const existingClock = tableClock(db, sourceTable.table, sourceMachineId);
@@ -23648,13 +26000,13 @@ function conflictTable(value) {
 }
 function catalogRowForConflict(db, conflict) {
   const table = conflictTable(conflict.entity_kind);
-  if (!table || !tableExists3(db, table))
+  if (!table || !tableExists2(db, table))
     return null;
   const values = parseRowKeyValues(table, conflict.entity_id);
   if (!values)
     return null;
   const where = primaryKeyWhereClause(table);
-  return db.query(`SELECT * FROM ${quoteIdent2(table)} WHERE ${where} LIMIT 1`).get(...values);
+  return db.query(`SELECT * FROM ${quoteIdent(table)} WHERE ${where} LIMIT 1`).get(...values);
 }
 function rowFromMetadata(metadata, keys) {
   for (const key of keys) {
@@ -23846,6 +26198,7 @@ function syncTablesFromSnapshot(snapshot) {
 function syncArtifactsFromSnapshot(snapshot) {
   return parseJson(snapshot.artifact_hashes_json, []);
 }
+var KNOWLEDGE_SYNC_SCHEMA_VERSION = CURRENT_SCHEMA_VERSION;
 
 // src/conflict-agent.ts
 function estimateTokens2(value) {
@@ -23896,7 +26249,7 @@ function addConflictRunEvent(options) {
   try {
     db.run(`INSERT INTO run_events (id, run_id, level, event, metadata_json, created_at)
        VALUES (?, ?, ?, ?, ?, ?)`, [
-      `event_${randomUUID8()}`,
+      `event_${randomUUID7()}`,
       options.runId,
       options.level,
       options.event,
@@ -23910,11 +26263,18 @@ function addConflictRunEvent(options) {
 function recordUsage2(dbPath, runId, usage, now) {
   const db = openKnowledgeDb(dbPath);
   try {
-    recordProviderUsage(db, {
-      ...usage,
-      run_id: runId,
-      created_at: now
-    });
+    db.run(`INSERT INTO provider_usage (id, run_id, provider, model, input_tokens, output_tokens, cost_usd, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+      `usage_${randomUUID7()}`,
+      runId,
+      usage.provider,
+      usage.model,
+      usage.input_tokens,
+      usage.output_tokens,
+      usage.cost_usd,
+      JSON.stringify(usage.metadata),
+      now
+    ]);
   } finally {
     db.close();
   }
@@ -23982,7 +26342,7 @@ async function proposeKnowledgeSyncConflictResolutionWithAi(options) {
   const evidence = getKnowledgeSyncConflictEvidence(options.dbPath, options.id);
   const resolvedModelRef = resolveModelRef(options.modelRef ?? "default", options.config);
   const parsed = parseModelRef(resolvedModelRef);
-  const runId = `run_${randomUUID8()}`;
+  const runId = `run_${randomUUID7()}`;
   const prompt = promptForConflict({ deterministic, evidence });
   insertConflictRun({
     dbPath: options.dbPath,
@@ -24143,393 +26503,13 @@ async function proposeKnowledgeSyncConflictResolutionWithAi(options) {
   };
 }
 
-// src/outbox-consume.ts
-import { createHash as createHash12, randomUUID as randomUUID9 } from "crypto";
-import { existsSync as existsSync9, readFileSync as readFileSync11 } from "fs";
-import { basename as basename3 } from "path";
-function stableId6(prefix, value) {
-  return `${prefix}_${createHash12("sha256").update(value).digest("hex").slice(0, 20)}`;
-}
-function asObject2(value) {
-  return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
-}
-function asString2(value) {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-function buildSourceRef(event) {
-  const explicit = asString2(event.source_ref) ?? asString2(event.source_uri) ?? asString2(event.uri);
-  if (explicit)
-    return explicit;
-  const fileId = asString2(event.file_id);
-  if (fileId) {
-    const revision = asString2(event.revision_id) ?? asString2(event.revision);
-    const fileRef = `open-files://file/${encodeURIComponent(fileId)}`;
-    return revision ? `${fileRef}/revision/${encodeURIComponent(revision)}` : fileRef;
-  }
-  const sourceId = asString2(event.source_id);
-  const path = asString2(event.path);
-  if (sourceId && path) {
-    return `open-files://source/${encodeURIComponent(sourceId)}/path/${encodeURIComponent(path)}`;
-  }
-  throw new Error("Outbox event is missing source_ref, file_id, or source_id/path.");
-}
-function baseSourceUri2(sourceRef, parsed) {
-  if (parsed.kind === "open-files" && parsed.entity === "file" && parsed.revision_id) {
-    return sourceRef.replace(/\/revision\/[^/]+$/, "");
-  }
-  return sourceRef;
-}
-function hashFromEvent(event) {
-  return asString2(event.hash) ?? asString2(event.checksum) ?? asString2(event.sha256) ?? null;
-}
-function revisionFromEvent(event, parsed, hash2) {
-  return asString2(event.revision_id) ?? asString2(event.revision) ?? asString2(event.version_id) ?? (parsed.kind === "open-files" ? parsed.revision_id : undefined) ?? hash2 ?? null;
-}
-function previousRevisionFromEvent(event) {
-  return asString2(event.previous_revision_id) ?? asString2(event.previous_revision) ?? asString2(event.previous_version_id) ?? null;
-}
-function eventType(event) {
-  return (asString2(event.event_type) ?? asString2(event.event) ?? asString2(event.type) ?? asString2(event.action) ?? asString2(event.change_type) ?? "changed").toLowerCase();
-}
-function titleFromEvent(event) {
-  const path = asString2(event.path);
-  return asString2(event.title) ?? asString2(event.name) ?? (path ? basename3(path) : null);
-}
-function normalizeEvent(event, now) {
-  const sourceRef = buildSourceRef(event);
-  const parsed = parseSourceRef(sourceRef);
-  const hash2 = hashFromEvent(event);
-  return {
-    raw: event,
-    eventType: eventType(event),
-    sourceRef,
-    sourceUri: baseSourceUri2(sourceRef, parsed),
-    kind: parsed.kind,
-    title: titleFromEvent(event),
-    revision: revisionFromEvent(event, parsed, hash2),
-    previousRevision: previousRevisionFromEvent(event),
-    hash: hash2,
-    status: asString2(event.status)?.toLowerCase() ?? null,
-    updatedAt: asString2(event.updated_at) ?? now,
-    acl: event.permissions ?? event.acl ?? undefined
-  };
-}
-function parseOutboxText(text) {
-  const trimmed = text.trim();
-  if (!trimmed)
-    return [];
-  if (trimmed.startsWith("[")) {
-    const parsed = JSON.parse(trimmed);
-    if (!Array.isArray(parsed))
-      throw new Error("Outbox array parse failed.");
-    return parsed.map((entry) => {
-      const event = asObject2(entry);
-      if (!event)
-        throw new Error("Outbox array entries must be objects.");
-      return event;
-    });
-  }
-  if (trimmed.startsWith("{")) {
-    try {
-      const parsed = JSON.parse(trimmed);
-      const object2 = asObject2(parsed);
-      if (!object2)
-        throw new Error("Outbox object parse failed.");
-      if (Array.isArray(object2.events)) {
-        return object2.events.map((entry) => {
-          const event = asObject2(entry);
-          if (!event)
-            throw new Error("Outbox events entries must be objects.");
-          return event;
-        });
-      }
-      if ("source_ref" in object2 || "source_uri" in object2 || "file_id" in object2)
-        return [object2];
-    } catch (error51) {
-      const lines = trimmed.split(/\r?\n/).filter((line) => line.trim().length > 0);
-      if (lines.length <= 1)
-        throw error51;
-      return lines.map((line) => {
-        const event = asObject2(JSON.parse(line));
-        if (!event)
-          throw new Error("Outbox JSONL entries must be objects.");
-        return event;
-      });
-    }
-  }
-  return trimmed.split(/\r?\n/).filter((line) => line.trim().length > 0).map((line) => {
-    const event = asObject2(JSON.parse(line));
-    if (!event)
-      throw new Error("Outbox JSONL entries must be objects.");
-    return event;
-  });
-}
-async function readS3Text3(uri, config2, safetyPolicy) {
-  const parsed = new URL(uri);
-  const bucket = parsed.hostname;
-  const key = decodeURIComponent(parsed.pathname.replace(/^\/+/, ""));
-  if (!bucket || !key)
-    throw new Error(`Invalid S3 outbox URI: ${uri}`);
-  if (safetyPolicy)
-    assertS3ReadAllowed(uri, safetyPolicy);
-  const [{ S3Client, GetObjectCommand }, { fromIni }] = await Promise.all([
-    import("@aws-sdk/client-s3"),
-    import("@aws-sdk/credential-providers")
-  ]);
-  const s3Config = config2?.storage.type === "s3" && config2.storage.s3?.bucket === bucket ? config2.storage.s3 : undefined;
-  const client = new S3Client({
-    region: s3Config?.region,
-    credentials: s3Config?.profile ? fromIni({ profile: s3Config.profile }) : undefined,
-    maxAttempts: s3Config?.max_attempts
-  });
-  const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
-  if (!response.Body)
-    return "";
-  return await response.Body.transformToString();
-}
-async function readOutboxInput(input, config2, safetyPolicy) {
-  if (input.startsWith("s3://"))
-    return readS3Text3(input, config2, safetyPolicy);
-  if (!existsSync9(input))
-    throw new Error(`Outbox not found: ${input}`);
-  return readFileSync11(input, "utf8");
-}
-function mergeJson(existing, patch) {
-  let base = {};
-  if (existing) {
-    try {
-      base = asObject2(JSON.parse(existing)) ?? {};
-    } catch {
-      base = {};
-    }
-  }
-  return JSON.stringify({ ...base, ...patch });
-}
-function ensureSource(db, event, now) {
-  const id = stableId6("src", event.sourceUri);
-  db.run(`INSERT INTO sources (id, uri, kind, title, metadata_json, acl_json, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(uri) DO UPDATE SET
-       kind = excluded.kind,
-       title = COALESCE(excluded.title, sources.title),
-       updated_at = excluded.updated_at`, [
-    id,
-    event.sourceUri,
-    event.kind,
-    event.title,
-    JSON.stringify({ source_ref: event.sourceRef, source_uri: event.sourceUri, status: event.status, last_outbox_event: event.eventType }),
-    JSON.stringify(event.acl ?? {}),
-    now,
-    event.updatedAt
-  ]);
-  const row = db.query("SELECT id, metadata_json, acl_json FROM sources WHERE uri = ?").get(event.sourceUri);
-  if (!row)
-    throw new Error(`Failed to upsert source for outbox event: ${event.sourceUri}`);
-  const patch = {
-    source_ref: event.sourceRef,
-    source_uri: event.sourceUri,
-    last_outbox_event: event.eventType,
-    last_outbox_at: event.updatedAt
-  };
-  if (event.status)
-    patch.status = event.status;
-  if (asString2(event.raw.path))
-    patch.path = event.raw.path;
-  db.run("UPDATE sources SET metadata_json = ?, acl_json = CASE WHEN ? IS NULL THEN acl_json ELSE ? END, updated_at = ? WHERE id = ?", [
-    mergeJson(row.metadata_json, patch),
-    event.acl === undefined ? null : JSON.stringify(event.acl),
-    event.acl === undefined ? null : JSON.stringify(event.acl),
-    event.updatedAt,
-    row.id
-  ]);
-  return row.id;
-}
-function ensureRevision(db, sourceId, event, now) {
-  if (!event.revision)
-    return null;
-  const id = stableId6("rev", `${sourceId}\x00${event.revision}`);
-  const metadata = {
-    source_ref: event.sourceRef,
-    source_uri: event.sourceUri,
-    status: event.status,
-    last_outbox_event: event.eventType,
-    reindex_required: true
-  };
-  db.run(`INSERT INTO source_revisions (id, source_id, revision, hash, extracted_text_uri, metadata_json, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(source_id, revision) DO UPDATE SET
-       hash = COALESCE(excluded.hash, source_revisions.hash),
-       metadata_json = excluded.metadata_json`, [id, sourceId, event.revision, event.hash, asString2(event.raw.extracted_text_ref) ?? null, JSON.stringify(metadata), now]);
-  const row = db.query("SELECT id FROM source_revisions WHERE source_id = ? AND revision = ?").get(sourceId, event.revision);
-  return row?.id ?? null;
-}
-function revisionIdsForEvent(db, sourceId, event) {
-  if (event.previousRevision) {
-    const previous = db.query("SELECT id FROM source_revisions WHERE source_id = ? AND revision = ?").all(sourceId, event.previousRevision).map((row) => row.id);
-    if (previous.length > 0)
-      return previous;
-  }
-  if (event.revision) {
-    return db.query("SELECT id FROM source_revisions WHERE source_id = ? AND revision = ?").all(sourceId, event.revision).map((row) => row.id);
-  }
-  if (event.hash) {
-    return db.query("SELECT id FROM source_revisions WHERE source_id = ? AND hash = ?").all(sourceId, event.hash).map((row) => row.id);
-  }
-  return db.query("SELECT id FROM source_revisions WHERE source_id = ?").all(sourceId).map((row) => row.id);
-}
-function invalidateRevision(db, revisionId) {
-  const chunks = db.query("SELECT id FROM chunks WHERE source_revision_id = ?").all(revisionId);
-  let embeddingsDeleted = 0;
-  let vectorEntriesDeleted = 0;
-  for (const chunk of chunks) {
-    const row = db.query("SELECT COUNT(*) AS n FROM chunk_embeddings WHERE chunk_id = ?").get(chunk.id);
-    embeddingsDeleted += row?.n ?? 0;
-    const vectorRow = db.query("SELECT COUNT(*) AS n FROM vector_index_entries WHERE chunk_id = ?").get(chunk.id);
-    vectorEntriesDeleted += vectorRow?.n ?? 0;
-    db.run("DELETE FROM vector_index_entries WHERE chunk_id = ?", [chunk.id]);
-    db.run("DELETE FROM chunk_embeddings WHERE chunk_id = ?", [chunk.id]);
-    db.run("DELETE FROM chunks_fts WHERE chunk_id = ?", [chunk.id]);
-  }
-  db.run("DELETE FROM chunks WHERE source_revision_id = ?", [revisionId]);
-  const revision = db.query("SELECT metadata_json FROM source_revisions WHERE id = ?").get(revisionId);
-  db.run("UPDATE source_revisions SET metadata_json = ? WHERE id = ?", [mergeJson(revision?.metadata_json, { reindex_required: true, invalidated_at: new Date().toISOString() }), revisionId]);
-  return { chunksDeleted: chunks.length, embeddingsDeleted, vectorEntriesDeleted };
-}
-function isDeleteEvent(eventType2, status) {
-  return status === "deleted" || ["delete", "deleted", "remove", "removed"].includes(eventType2);
-}
-function isMoveEvent(eventType2) {
-  return ["move", "moved", "rename", "renamed", "path_changed", "canonical_key_changed"].includes(eventType2);
-}
-function isPermissionEvent(eventType2) {
-  return ["permission", "permissions", "permission_changed", "acl_changed", "acl_revoked"].includes(eventType2);
-}
-async function consumeOpenFilesOutbox(options) {
-  const now = (options.now ?? new Date).toISOString();
-  if (options.safetyPolicy)
-    assertWriteAllowed(options.dbPath, options.safetyPolicy);
-  migrateKnowledgeDb(options.dbPath);
-  const text = await readOutboxInput(options.input, options.config, options.safetyPolicy);
-  const events = parseOutboxText(text);
-  const db = openKnowledgeDb(options.dbPath);
-  const runId = `run_${randomUUID9()}`;
-  try {
-    return db.transaction(() => {
-      db.run(`INSERT INTO runs (id, type, prompt, status, provider, model, metadata_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-        runId,
-        "open-files-outbox",
-        options.input,
-        "completed",
-        "local",
-        "open-files-outbox",
-        JSON.stringify({ path: options.input, events: events.length }),
-        now,
-        now
-      ]);
-      const sourcesTouched = new Set;
-      const revisionsTouched = new Set;
-      let chunksDeleted = 0;
-      let embeddingsDeleted = 0;
-      let vectorEntriesDeleted = 0;
-      let staleRevisions = 0;
-      let deletedSources = 0;
-      let movedSources = 0;
-      let permissionUpdates = 0;
-      recordAuditEvent(db, {
-        event_type: "source_read",
-        action: options.input.startsWith("s3://") ? "s3_outbox_read" : "local_outbox_read",
-        target_uri: options.input,
-        decision: "allow",
-        metadata: { events: events.length, read_only: true },
-        created_at: now
-      });
-      events.forEach((raw, index) => {
-        const event = normalizeEvent(raw, now);
-        const sourceId = ensureSource(db, event, now);
-        sourcesTouched.add(sourceId);
-        const createdRevisionId = ensureRevision(db, sourceId, event, now);
-        if (createdRevisionId)
-          revisionsTouched.add(createdRevisionId);
-        const affectedRevisionIds = revisionIdsForEvent(db, sourceId, event);
-        for (const revisionId of affectedRevisionIds) {
-          revisionsTouched.add(revisionId);
-          const invalidation = invalidateRevision(db, revisionId);
-          chunksDeleted += invalidation.chunksDeleted;
-          embeddingsDeleted += invalidation.embeddingsDeleted;
-          vectorEntriesDeleted += invalidation.vectorEntriesDeleted;
-          staleRevisions += 1;
-        }
-        if (isDeleteEvent(event.eventType, event.status))
-          deletedSources += 1;
-        if (isMoveEvent(event.eventType))
-          movedSources += 1;
-        if (isPermissionEvent(event.eventType) || event.acl !== undefined)
-          permissionUpdates += 1;
-        db.run(`INSERT INTO run_events (id, run_id, level, event, metadata_json, created_at)
-           VALUES (?, ?, ?, ?, ?, ?)`, [
-          stableId6("evt", `${runId}\x00${index}\x00${event.sourceRef}\x00${event.eventType}`),
-          runId,
-          "info",
-          event.eventType,
-          JSON.stringify({
-            source_ref: event.sourceRef,
-            source_uri: event.sourceUri,
-            revision: event.revision,
-            hash: event.hash,
-            status: event.status,
-            affected_revisions: affectedRevisionIds.length
-          }),
-          event.updatedAt
-        ]);
-      });
-      db.run(`INSERT INTO provider_usage (id, run_id, provider, model, input_tokens, output_tokens, cost_usd, metadata_json, created_at)
-         VALUES (?, ?, ?, ?, 0, 0, 0, ?, ?)`, [
-        stableId6("usage", runId),
-        runId,
-        "local",
-        "open-files-outbox",
-        JSON.stringify({ note: "No model provider used for outbox invalidation." }),
-        now
-      ]);
-      recordAuditEvent(db, {
-        event_type: "write",
-        action: "knowledge_outbox_invalidation",
-        target_uri: options.dbPath,
-        decision: "allow",
-        metadata: {
-          run_id: runId,
-          events: events.length,
-          sources: sourcesTouched.size,
-          revisions: revisionsTouched.size,
-          chunks_deleted: chunksDeleted,
-          embeddings_deleted: embeddingsDeleted,
-          vector_entries_deleted: vectorEntriesDeleted
-        },
-        created_at: now
-      });
-      return {
-        path: options.input,
-        db_path: options.dbPath,
-        run_id: runId,
-        events_seen: events.length,
-        sources_touched: sourcesTouched.size,
-        revisions_touched: revisionsTouched.size,
-        chunks_deleted: chunksDeleted,
-        embeddings_deleted: embeddingsDeleted,
-        vector_entries_deleted: vectorEntriesDeleted,
-        stale_revisions: staleRevisions,
-        deleted_sources: deletedSources,
-        moved_sources: movedSources,
-        permission_updates: permissionUpdates
-      };
-    })();
-  } finally {
-    db.close();
-  }
-}
+// src/service.ts
+init_outbox_consume();
+init_knowledge_db();
+init_manifest_ingest();
 
 // src/machines.ts
+init_workspace();
 import { spawnSync } from "child_process";
 import { hostname as hostname4, platform, userInfo } from "os";
 var KNOWLEDGE_MACHINES_ADAPTER_CONTRACT_VERSION = 1;
@@ -25743,8 +27723,13 @@ function createKnowledgeMachinesAdapter(defaults = {}) {
   };
 }
 
+// src/service.ts
+init_source_ingest();
+init_source_resolver();
+
 // src/reindex.ts
-import { createHash as createHash13, randomUUID as randomUUID10 } from "crypto";
+import { createHash as createHash13, randomUUID as randomUUID9 } from "crypto";
+init_knowledge_db();
 function stableId7(prefix, value) {
   return `${prefix}_${createHash13("sha256").update(value).digest("hex").slice(0, 20)}`;
 }
@@ -25868,7 +27853,7 @@ function completeIndexedQueueItems(dbPath, options, now) {
 async function refreshEmbeddingIndex(options) {
   migrateKnowledgeDb(options.dbPath);
   const now = (options.now ?? new Date).toISOString();
-  const runId = `run_${randomUUID10()}`;
+  const runId = `run_${randomUUID9()}`;
   const deleted = options.full ? clearEmbeddingIndex(options.dbPath) : { embeddings: 0, vectorEntries: 0 };
   const queued = enqueueMissingEmbeddings({ ...options, reason: options.full ? "full_embedding_rebuild" : "missing_embedding" });
   const db = openKnowledgeDb(options.dbPath);
@@ -25909,7 +27894,7 @@ async function refreshEmbeddingIndex(options) {
     ]);
     doneDb.run(`INSERT INTO run_events (id, run_id, level, event, metadata_json, created_at)
        VALUES (?, ?, ?, ?, ?, ?)`, [
-      `evt_${randomUUID10()}`,
+      `evt_${randomUUID9()}`,
       runId,
       "info",
       "embedding_refresh_completed",
@@ -25931,10 +27916,971 @@ async function refreshEmbeddingIndex(options) {
 }
 
 // src/rules-provenance.ts
-import { createHash as createHash14 } from "crypto";
-import { existsSync as existsSync10, lstatSync, readdirSync, readFileSync as readFileSync12, statSync as statSync2 } from "fs";
-import { basename as basename4, extname, join as join4, relative as relative4, resolve as resolve4, sep as sep4 } from "path";
+init_manifest_ingest();
+import { createHash as createHash15 } from "crypto";
+import { existsSync as existsSync5, lstatSync as lstatSync4, readdirSync, readFileSync as readFileSync4, statSync } from "fs";
+import { basename as basename8, extname, join as join4, relative as relative3, resolve as resolve10, sep as sep4 } from "path";
 import { pathToFileURL as pathToFileURL3 } from "url";
+
+// src/store.ts
+init_workspace();
+init_anchored_fs();
+init_input_limits();
+import {
+  closeSync as closeSync2,
+  constants as constants2,
+  existsSync as existsSync4,
+  fchmodSync as fchmodSync2,
+  fstatSync as fstatSync2,
+  fsyncSync as fsyncSync2,
+  readSync as readSync2,
+  renameSync as renameSync2,
+  writeFileSync as writeFileSync2,
+  writeSync
+} from "fs";
+import { createHash as createHash14, randomUUID as randomUUID10 } from "crypto";
+import { basename as basename7, dirname as dirname5, resolve as resolve9 } from "path";
+function defaultStorePath() {
+  return workspaceForHome(globalKnowledgeHome()).jsonStorePath;
+}
+function ensureStore(path) {
+  const active = activeStoreLock(path);
+  if (!active && existsSync4(resolve9(dirname5(path), storePreviousGenerationName(basename7(path))))) {
+    withLock(path, () => ensureStore(path), { createParent: true });
+    return;
+  }
+  const exists = active ? readLockedStoreText(active) !== undefined : existsSync4(path);
+  if (!exists) {
+    if (!active)
+      ensureParentDir(path);
+    let initial;
+    if (path === defaultStorePath() && existsSync4(legacyGlobalStorePath())) {
+      const legacy = readAnchoredRegularFileSnapshot(resolve9(legacyGlobalStorePath()), MAX_INGEST_BODY_BYTES);
+      if (!legacy)
+        throw new Error("Legacy knowledge store disappeared during migration.");
+      parseBoundedJsonData(legacy.content, "Legacy knowledge store");
+      initial = legacy.content;
+    } else {
+      initial = JSON.stringify({ items: [] }, null, 2);
+    }
+    if (active)
+      writeLockedStoreText(active, initial);
+    else
+      writeFileSync2(path, initial);
+  }
+}
+function loadStoreIfExists(path) {
+  const active = activeStoreLock(path);
+  if (!active && existsSync4(resolve9(dirname5(path), storePreviousGenerationName(basename7(path))))) {
+    return withLock(path, () => loadStoreIfExists(path));
+  }
+  if (!active && !existsSync4(path))
+    return { exists: false, items: [] };
+  const raw = active ? readLockedStoreText(active) : readAnchoredRegularFileSnapshot(resolve9(path), MAX_INGEST_BODY_BYTES)?.content;
+  if (raw === undefined)
+    return { exists: false, items: [] };
+  const parsed = parseBoundedJsonData(raw, "Persisted knowledge store");
+  if (!parsed || !Array.isArray(parsed.items)) {
+    return { exists: true, items: [] };
+  }
+  return { exists: true, items: parsed.items };
+}
+function lockPath(path) {
+  return `${path}.lock`;
+}
+function logicalLockName(storePath) {
+  const digest = createHash14("sha256").update(storePath).digest("hex");
+  return `.knowledge-store-logical-${digest}.lock`;
+}
+function storePreviousGenerationName(storeName) {
+  return `.knowledge-store-previous-${createHash14("sha256").update(storeName).digest("hex")}`;
+}
+var MAX_LOCK_BYTES = 65536;
+var LOCK_WAIT_MS = 5000;
+var LOCK_RETRY_MS = 50;
+var storeLockTestControl;
+var activeStoreLocks = new Map;
+function lockErrno(error51) {
+  return error51?.code;
+}
+function monotonicNow() {
+  return storeLockTestControl?.monotonicNow?.() ?? Number(process.hrtime.bigint() / 1000000n);
+}
+function waitMonotonically(milliseconds) {
+  if (storeLockTestControl?.wait) {
+    storeLockTestControl.wait(milliseconds);
+    return;
+  }
+  const waitCell = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+  Atomics.wait(waitCell, 0, 0, milliseconds);
+}
+function fireLockTestEvent(event, record2, path) {
+  storeLockTestControl?.onEvent?.(event, Object.freeze({
+    path,
+    owner: record2.owner,
+    token: record2.token,
+    pid: record2.pid
+  }));
+}
+function activeStoreLock(path) {
+  return activeStoreLocks.get(resolve9(path));
+}
+function awaitLogicalStoreLock(storePath) {
+  const start = monotonicNow();
+  while (activeStoreLocks.has(storePath)) {
+    const elapsed = monotonicNow() - start;
+    if (!Number.isFinite(elapsed) || elapsed < 0) {
+      throw new Error("Knowledge lock monotonic clock is invalid.");
+    }
+    if (elapsed >= LOCK_WAIT_MS) {
+      throw new Error(`Could not acquire lock on ${storePath} after ${LOCK_WAIT_MS}ms`);
+    }
+    waitMonotonically(Math.min(LOCK_RETRY_MS, LOCK_WAIT_MS - elapsed));
+  }
+}
+function assertStoreStat(stat, label) {
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) {
+    throw new Error(`${label} must remain one exact non-symlink regular file.`);
+  }
+  if (stat.size < 0 || stat.size > MAX_INGEST_BODY_BYTES) {
+    throw new Error(`${label} exceeds the ${MAX_INGEST_BODY_BYTES} byte hard limit.`);
+  }
+}
+function sameStoreStat(left, right) {
+  return left.dev === right.dev && left.ino === right.ino && left.size === right.size && left.mode === right.mode && left.nlink === right.nlink && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
+}
+function assertStoreGenerationStat(stat, allowedLinks, label) {
+  if (!stat.isFile() || stat.isSymbolicLink() || !allowedLinks.includes(stat.nlink)) {
+    throw new Error(`${label} must remain an exact non-symlink regular file generation.`);
+  }
+  if (stat.size < 0 || stat.size > MAX_INGEST_BODY_BYTES) {
+    throw new Error(`${label} exceeds the ${MAX_INGEST_BODY_BYTES} byte hard limit.`);
+  }
+}
+function readStoreGeneration(parent, name, expectedLinks, label) {
+  parent.verify();
+  const before = parent.lstat(name);
+  if (!before)
+    return;
+  assertStoreGenerationStat(before, [expectedLinks], label);
+  let fd;
+  try {
+    fd = parent.open(name, constants2.O_RDONLY);
+    const opened = fstatSync2(fd);
+    assertStoreGenerationStat(opened, [expectedLinks], label);
+    if (opened.dev !== before.dev || opened.ino !== before.ino) {
+      throw new Error(`${label} identity changed while opening.`);
+    }
+    const buffer = Buffer.alloc(opened.size + 1);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      const count3 = readSync2(fd, buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+      if (count3 === 0)
+        break;
+      bytesRead += count3;
+    }
+    const after = fstatSync2(fd);
+    const named = parent.lstat(name);
+    parent.verify();
+    if (bytesRead !== opened.size || !named || !sameStoreStat(opened, after) || !sameStoreStat(opened, named))
+      throw new Error(`${label} identity or contents changed during validation.`);
+    const text = buffer.subarray(0, bytesRead).toString("utf8");
+    const parsed = parseBoundedJsonData(text, label);
+    if (!parsed || !Array.isArray(parsed.items)) {
+      throw new Error(`${label} is not a complete Knowledge store generation.`);
+    }
+    return { text, stat: opened };
+  } finally {
+    if (fd !== undefined)
+      closeSync2(fd);
+  }
+}
+function recoverDeadStoreTemporaries(active) {
+  const { parent, storeName } = active;
+  const prefix = `${storeName}.tmp.`;
+  for (const entry of parent.entries(prefix)) {
+    const suffix = entry.slice(prefix.length);
+    const separator = suffix.indexOf(".");
+    const pid = Number(separator > 0 ? suffix.slice(0, separator) : "");
+    const token = separator > 0 ? suffix.slice(separator + 1) : "";
+    if (!Number.isSafeInteger(pid) || pid <= 0 || !/^[A-Za-z0-9-]{1,128}$/.test(token))
+      throw new Error("Knowledge store temporary generation name is invalid.");
+    const stat = parent.lstat(entry);
+    if (!stat)
+      continue;
+    assertStoreGenerationStat(stat, [1, 2], "Knowledge store temporary generation");
+    if ((stat.mode & 511) !== 384) {
+      throw new Error("Knowledge store temporary generation mode must be exactly 0600.");
+    }
+    if (!processIsDead(pid))
+      continue;
+    if (!removeDeadLockTransitionEntry(parent, entry, stat)) {
+      throw new Error("Dead Knowledge store temporary generation changed during recovery.");
+    }
+  }
+}
+function recoverLockedStoreGeneration(active) {
+  const { parent, storeName } = active;
+  parent.verify();
+  recoverDeadStoreTemporaries(active);
+  const previousName = storePreviousGenerationName(storeName);
+  const currentStat = parent.lstat(storeName);
+  const previousStat = parent.lstat(previousName);
+  if (!previousStat)
+    return;
+  assertStoreGenerationStat(previousStat, [1, 2], "Previous Knowledge store generation");
+  if (!currentStat) {
+    if (previousStat.nlink !== 1) {
+      throw new Error("Previous Knowledge store generation has an incomplete link transition.");
+    }
+    readStoreGeneration(parent, previousName, 1, "Previous Knowledge store generation");
+    parent.rename(previousName, storeName);
+    parent.sync();
+    readStoreGeneration(parent, storeName, 1, "Restored Knowledge store generation");
+    return;
+  }
+  assertStoreGenerationStat(currentStat, [1, 2], "Canonical Knowledge store generation");
+  if (currentStat.dev === previousStat.dev && currentStat.ino === previousStat.ino) {
+    if (currentStat.nlink !== 2 || previousStat.nlink !== 2) {
+      throw new Error("Knowledge store pre-install generation transition is invalid.");
+    }
+    readStoreGeneration(parent, storeName, 2, "Canonical Knowledge store generation");
+    readStoreGeneration(parent, previousName, 2, "Previous Knowledge store generation");
+    parent.unlink(previousName);
+  } else {
+    if (currentStat.nlink !== 1 || previousStat.nlink !== 1) {
+      throw new Error("Knowledge store post-install generation transition is invalid.");
+    }
+    readStoreGeneration(parent, storeName, 1, "Canonical Knowledge store generation");
+    readStoreGeneration(parent, previousName, 1, "Previous Knowledge store generation");
+    parent.unlink(previousName);
+  }
+  parent.sync();
+  parent.verify();
+}
+function readLockedStoreText(active) {
+  const { parent, storeName } = active;
+  recoverLockedStoreGeneration(active);
+  parent.verify();
+  const before = parent.lstat(storeName);
+  if (!before)
+    return;
+  assertStoreStat(before, "Locked Knowledge store");
+  let fd;
+  try {
+    fd = parent.open(storeName, constants2.O_RDONLY);
+    const opened = fstatSync2(fd);
+    assertStoreStat(opened, "Opened locked Knowledge store");
+    if (opened.dev !== before.dev || opened.ino !== before.ino) {
+      throw new Error("Locked Knowledge store identity changed while opening.");
+    }
+    const buffer = Buffer.alloc(opened.size + 1);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      const count3 = readSync2(fd, buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+      if (count3 === 0)
+        break;
+      bytesRead += count3;
+    }
+    const after = fstatSync2(fd);
+    const named = parent.lstat(storeName);
+    parent.verify();
+    if (bytesRead !== opened.size || !named || !sameStoreStat(opened, after) || !sameStoreStat(opened, named)) {
+      throw new Error("Locked Knowledge store identity or contents changed during read.");
+    }
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } finally {
+    if (fd !== undefined)
+      closeSync2(fd);
+  }
+}
+function verifyInstalledStore(active, temporaryFd, body, expectedLinks) {
+  const expected = Buffer.from(body);
+  const temporary = fstatSync2(temporaryFd);
+  if (!temporary.isFile() || temporary.isSymbolicLink() || temporary.nlink !== expectedLinks || (temporary.mode & 511) !== 384 || temporary.size !== expected.byteLength) {
+    throw new Error("Installed store temporary inode changed before final verification.");
+  }
+  let fd;
+  try {
+    fd = active.parent.open(active.storeName, constants2.O_RDONLY);
+    const opened = fstatSync2(fd);
+    const named = active.parent.lstat(active.storeName);
+    if (!named || !opened.isFile() || opened.isSymbolicLink() || !named.isFile() || named.isSymbolicLink() || opened.dev !== temporary.dev || opened.ino !== temporary.ino || named.dev !== temporary.dev || named.ino !== temporary.ino || opened.nlink !== expectedLinks || named.nlink !== expectedLinks || (opened.mode & 511) !== 384 || (named.mode & 511) !== 384 || opened.size !== expected.byteLength || named.size !== expected.byteLength) {
+      throw new Error("Installed store identity, mode, or size does not match the intended inode.");
+    }
+    const actual = Buffer.alloc(expected.byteLength + 1);
+    let bytesRead = 0;
+    while (bytesRead < actual.length) {
+      const count3 = readSync2(fd, actual, bytesRead, actual.length - bytesRead, bytesRead);
+      if (count3 === 0)
+        break;
+      bytesRead += count3;
+    }
+    if (bytesRead !== expected.byteLength || !actual.subarray(0, bytesRead).equals(expected)) {
+      throw new Error("Installed store contents do not match the intended inode.");
+    }
+  } finally {
+    if (fd !== undefined)
+      closeSync2(fd);
+  }
+}
+function rollbackLockedStoreInstall(active, temporaryFd, temporary, backup, renamed) {
+  const intended = fstatSync2(temporaryFd);
+  if (!renamed) {
+    const named2 = active.parent.lstat(active.storeName);
+    const previous2 = active.parent.lstat(backup);
+    if (previous2) {
+      if (named2 && named2.dev === previous2.dev && named2.ino === previous2.ino) {
+        active.parent.unlink(backup);
+      } else if (!named2) {
+        active.parent.rename(backup, active.storeName);
+      }
+    }
+    if (temporary && active.parent.lstat(temporary))
+      active.parent.unlink(temporary);
+    active.parent.sync();
+    return;
+  }
+  const named = active.parent.lstat(active.storeName);
+  const previous = backup ? active.parent.lstat(backup) : undefined;
+  if (named && named.dev === intended.dev && named.ino === intended.ino) {
+    if (previous) {
+      active.parent.rename(backup, active.storeName);
+    } else {
+      active.parent.unlink(active.storeName);
+    }
+  } else if (named && previous) {
+    const conflict = `.knowledge-conflict-${process.pid}-${randomUUID10()}`;
+    let linked = false;
+    try {
+      active.parent.link(active.storeName, conflict);
+      linked = true;
+      const current = active.parent.lstat(active.storeName);
+      const preserved = active.parent.lstat(conflict);
+      if (!current || !preserved || current.dev !== named.dev || current.ino !== named.ino || preserved.dev !== named.dev || preserved.ino !== named.ino)
+        throw new Error("Racing Knowledge store target changed while preserving rollback conflict.");
+      active.parent.rename(backup, active.storeName);
+      linked = false;
+    } catch {
+      if (linked) {
+        try {
+          active.parent.unlink(conflict);
+        } catch {}
+      }
+    }
+  } else if (!named && previous) {
+    active.parent.rename(backup, active.storeName);
+  }
+  if (temporary && active.parent.lstat(temporary))
+    active.parent.unlink(temporary);
+  active.parent.sync();
+}
+function writeLockedStoreText(active, body) {
+  const { parent, storeName } = active;
+  recoverLockedStoreGeneration(active);
+  parent.verify();
+  const current = parent.lstat(storeName);
+  if (current)
+    assertStoreStat(current, "Locked Knowledge store replacement target");
+  let temporary = `${storeName}.tmp.${process.pid}.${randomUUID10()}`;
+  const backup = storePreviousGenerationName(storeName);
+  let fd;
+  let renamed = false;
+  let installed = false;
+  try {
+    fd = parent.open(temporary, constants2.O_RDWR | constants2.O_CREAT | constants2.O_EXCL, 384);
+    fchmodSync2(fd, 384);
+    writeFileSync2(fd, body);
+    fsyncSync2(fd);
+    parent.verify();
+    if (current) {
+      if (parent.lstat(backup)) {
+        throw new Error("Knowledge store previous generation name is unexpectedly occupied.");
+      }
+      parent.link(storeName, backup);
+      const moved = parent.lstat(backup);
+      const named = parent.lstat(storeName);
+      if (!moved || !named || moved.nlink !== 2 || named.nlink !== 2 || moved.dev !== current.dev || moved.ino !== current.ino || named.dev !== current.dev || named.ino !== current.ino) {
+        if (moved && named && moved.dev === named.dev && moved.ino === named.ino) {
+          try {
+            parent.unlink(backup);
+          } catch {}
+        }
+        throw new Error("Locked Knowledge store replacement identity changed before install.");
+      }
+      parent.sync();
+    }
+    fireLockTestEvent("before-store-atomic-install", active.ownership.record, active.storePath);
+    if (current) {
+      parent.rename(temporary, storeName);
+      temporary = "";
+      renamed = true;
+    } else {
+      try {
+        parent.link(temporary, storeName);
+      } catch {
+        throw new Error("Locked Knowledge store target changed before no-clobber install.");
+      }
+      renamed = true;
+      verifyInstalledStore(active, fd, body, 2);
+      parent.unlink(temporary);
+      temporary = "";
+    }
+    parent.sync();
+    fireLockTestEvent("before-store-final-verify", active.ownership.record, active.storePath);
+    verifyInstalledStore(active, fd, body, 1);
+    if (current)
+      parent.unlink(backup);
+    parent.sync();
+    parent.verify();
+    verifyInstalledStore(active, fd, body, 1);
+    installed = true;
+  } finally {
+    if (fd !== undefined) {
+      if (!installed) {
+        try {
+          parent.verifyDescriptor();
+          rollbackLockedStoreInstall(active, fd, temporary, backup, renamed);
+        } catch {}
+      }
+      closeSync2(fd);
+    }
+  }
+}
+function lockIdentity(stat) {
+  return {
+    dev: stat.dev,
+    ino: stat.ino,
+    mode: stat.mode & 511,
+    size: stat.size
+  };
+}
+function sameLockIdentity(left, right) {
+  return left.dev === right.dev && left.ino === right.ino && left.mode === right.mode && left.size === right.size;
+}
+function assertLockStat(stat, expectedLinks) {
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    throw new Error("Knowledge lock must be an exact non-symlink regular file.");
+  }
+  if (stat.nlink !== expectedLinks) {
+    throw new Error("Knowledge lock identity has an unexpected hard-link count.");
+  }
+  if ((stat.mode & 511) !== 384) {
+    throw new Error("Knowledge lock confidentiality mode must be exactly 0600.");
+  }
+  if (stat.size <= 0 || stat.size > MAX_LOCK_BYTES) {
+    throw new Error(`Knowledge lock exceeds the ${MAX_LOCK_BYTES} byte hard limit.`);
+  }
+}
+function parseLockRecord(text) {
+  const parsed = parseBoundedJsonData(text, "Knowledge lock");
+  if (!parsed || Object.keys(parsed).sort().join(",") !== "owner,pid,token,version" || parsed.version !== 1 || typeof parsed.owner !== "string" || parsed.owner.length === 0 || parsed.owner.length > 128 || typeof parsed.token !== "string" || parsed.token.length === 0 || parsed.token.length > 128 || !Number.isSafeInteger(parsed.pid) || (parsed.pid ?? 0) <= 0) {
+    throw new Error("Knowledge lock record is invalid.");
+  }
+  return Object.freeze({
+    version: 1,
+    owner: parsed.owner,
+    token: parsed.token,
+    pid: parsed.pid
+  });
+}
+function lockCandidateName(name, record2) {
+  return `${name}.candidate.${record2.pid}.${record2.token}`;
+}
+function lockWitnessName(name, record2) {
+  return `${name}.witness.${record2.pid}.${record2.token}`;
+}
+function lockTransitionIdentity(name, entry) {
+  for (const kind of ["candidate", "witness"]) {
+    const prefix = `${name}.${kind}.`;
+    if (!entry.startsWith(prefix))
+      continue;
+    const rest = entry.slice(prefix.length);
+    const separator = rest.indexOf(".");
+    if (separator <= 0)
+      return;
+    const pid = Number(rest.slice(0, separator));
+    const token = rest.slice(separator + 1);
+    if (!Number.isSafeInteger(pid) || pid <= 0 || !/^[A-Za-z0-9_-]{1,128}$/.test(token))
+      return;
+    return { kind, pid, token };
+  }
+  return;
+}
+function assertLockTransitionStat(stat, allowedLinks) {
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    throw new Error("Knowledge lock transition must be an exact non-symlink regular file.");
+  }
+  if (!allowedLinks.includes(stat.nlink)) {
+    throw new Error("Knowledge lock transition has an unexpected hard-link count.");
+  }
+  if ((stat.mode & 511) !== 384) {
+    throw new Error("Knowledge lock transition confidentiality mode must be exactly 0600.");
+  }
+  if (stat.size < 0 || stat.size > MAX_LOCK_BYTES) {
+    throw new Error(`Knowledge lock transition exceeds the ${MAX_LOCK_BYTES} byte hard limit.`);
+  }
+}
+function removeDeadLockTransitionEntry(parent, name, expected) {
+  const quarantine = `.knowledge-lock-transition-cleanup-${process.pid}-${randomUUID10()}`;
+  let moved = false;
+  try {
+    parent.rename(name, quarantine);
+    moved = true;
+    const current = parent.lstat(quarantine);
+    if (!current || current.dev !== expected.dev || current.ino !== expected.ino) {
+      if (!parent.lstat(name)) {
+        try {
+          parent.rename(quarantine, name);
+        } catch {}
+      }
+      moved = false;
+      return false;
+    }
+    parent.unlink(quarantine);
+    moved = false;
+    parent.sync();
+    return true;
+  } catch (error51) {
+    if (lockErrno(error51) === "ENOENT")
+      return false;
+    throw error51;
+  } finally {
+    if (moved && !parent.lstat(name)) {
+      try {
+        parent.rename(quarantine, name);
+      } catch {}
+    }
+  }
+}
+function recoverLockTransition(parent, name) {
+  parent.verify();
+  const finalStat = parent.lstat(name);
+  if (finalStat) {
+    if (finalStat.nlink === 1)
+      return "clear";
+    if (finalStat.nlink !== 2) {
+      assertLockStat(finalStat, 1);
+      return "clear";
+    }
+    const final = readLockSnapshot(parent, name, 2);
+    if (!final)
+      throw new Error("Knowledge lock transition disappeared during recovery.");
+    const siblings = [
+      lockCandidateName(name, final.record),
+      lockWitnessName(name, final.record)
+    ].filter((entry) => parent.lstat(entry) !== undefined);
+    if (siblings.length !== 1) {
+      throw new Error("Knowledge lock transition has no unique publication witness.");
+    }
+    const sibling = readLockSnapshot(parent, siblings[0], 2);
+    if (!sibling || !sameLockIdentity(sibling.identity, final.identity) || sibling.text !== final.text)
+      throw new Error("Knowledge lock transition witness does not match the canonical lock.");
+    if (!processIsDead(final.record.pid))
+      return "busy";
+    parent.unlink(name);
+    const remaining = readLockSnapshot(parent, siblings[0], 1);
+    if (!remaining || !sameLockIdentity(remaining.identity, final.identity) || remaining.text !== final.text)
+      throw new Error("Knowledge lock transition changed while reclaiming a dead owner.");
+    parent.unlink(siblings[0]);
+    parent.sync();
+    return "retry";
+  }
+  const transitions = parent.entries(`${name}.`).map((entry) => {
+    const parsed = lockTransitionIdentity(name, entry);
+    if (!parsed)
+      throw new Error("Knowledge lock transition name is invalid.");
+    return { entry, parsed };
+  });
+  if (transitions.length === 0)
+    return "clear";
+  let busy = false;
+  let removed = false;
+  for (const transition of transitions) {
+    const stat = parent.lstat(transition.entry);
+    if (!stat)
+      continue;
+    assertLockTransitionStat(stat, [1, 2]);
+    if (!processIsDead(transition.parsed.pid)) {
+      busy = true;
+      continue;
+    }
+    if (stat.nlink === 2) {
+      const peer = transitions.find((candidate) => {
+        if (candidate.entry === transition.entry)
+          return false;
+        const peerStat2 = parent.lstat(candidate.entry);
+        return Boolean(peerStat2 && peerStat2.dev === stat.dev && peerStat2.ino === stat.ino);
+      });
+      if (!peer)
+        throw new Error("Knowledge lock dead transition lost its paired name.");
+      const peerStat = parent.lstat(peer.entry);
+      if (!peerStat)
+        continue;
+      assertLockTransitionStat(peerStat, [2]);
+      if (peer.parsed.pid !== transition.parsed.pid || peer.parsed.token !== transition.parsed.token)
+        throw new Error("Knowledge lock dead transition identity is inconsistent.");
+      parent.unlink(transition.entry);
+      const last = parent.lstat(peer.entry);
+      if (!last || last.dev !== stat.dev || last.ino !== stat.ino || last.nlink !== 1) {
+        throw new Error("Knowledge lock dead transition changed during paired cleanup.");
+      }
+      parent.unlink(peer.entry);
+      removed = true;
+      continue;
+    }
+    if (removeDeadLockTransitionEntry(parent, transition.entry, stat))
+      removed = true;
+  }
+  if (removed) {
+    parent.sync();
+    return "retry";
+  }
+  return busy ? "busy" : "clear";
+}
+function verifyLockParent(parent, requireNamedParent) {
+  if (requireNamedParent)
+    parent.verify();
+  else
+    parent.verifyDescriptor();
+}
+function readLockSnapshot(parent, name, expectedLinks = 1, requireNamedParent = true) {
+  verifyLockParent(parent, requireNamedParent);
+  let before;
+  try {
+    before = parent.lstat(name);
+    if (!before)
+      return;
+  } catch (error51) {
+    if (lockErrno(error51) === "ENOENT")
+      return;
+    throw error51;
+  }
+  assertLockStat(before, expectedLinks);
+  let fd;
+  try {
+    try {
+      fd = parent.open(name, constants2.O_RDONLY);
+    } catch (error51) {
+      if (lockErrno(error51) === "ENOENT")
+        return;
+      throw new Error("Knowledge lock could not be opened without following links.");
+    }
+    const opened = fstatSync2(fd);
+    assertLockStat(opened, expectedLinks);
+    if (!sameLockIdentity(lockIdentity(before), lockIdentity(opened))) {
+      throw new Error("Knowledge lock identity changed while opening.");
+    }
+    const buffer = Buffer.alloc(opened.size + 1);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      const count3 = readSync2(fd, buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+      if (count3 === 0)
+        break;
+      bytesRead += count3;
+    }
+    const after = fstatSync2(fd);
+    verifyLockParent(parent, requireNamedParent);
+    const named = parent.lstat(name);
+    if (!named)
+      return;
+    assertLockStat(after, expectedLinks);
+    assertLockStat(named, expectedLinks);
+    const identity2 = lockIdentity(opened);
+    if (bytesRead !== opened.size || !sameLockIdentity(identity2, lockIdentity(after)) || !sameLockIdentity(identity2, lockIdentity(named))) {
+      throw new Error("Knowledge lock identity or contents changed during inspection.");
+    }
+    const text = buffer.subarray(0, bytesRead).toString("utf8");
+    return Object.freeze({ record: parseLockRecord(text), text, identity: identity2 });
+  } finally {
+    if (fd !== undefined)
+      closeSync2(fd);
+  }
+}
+function createLock(parent, name, path, owner, token) {
+  const record2 = Object.freeze({ version: 1, owner, token, pid: process.pid });
+  const text = `${JSON.stringify(record2)}
+`;
+  const candidate = lockCandidateName(name, record2);
+  let fd;
+  let createdIdentity;
+  let createdInode;
+  let published = false;
+  let lostRace = false;
+  try {
+    fireLockTestEvent("before-create", record2, path);
+    parent.verify();
+    try {
+      fd = parent.open(candidate, constants2.O_RDWR | constants2.O_CREAT | constants2.O_EXCL, 384);
+    } catch (error51) {
+      if (lockErrno(error51) === "EEXIST")
+        return;
+      throw error51;
+    }
+    fchmodSync2(fd, 384);
+    const created = fstatSync2(fd);
+    createdInode = { dev: created.dev, ino: created.ino };
+    fireLockTestEvent("after-lock-candidate-create", record2, path);
+    const encoded = Buffer.from(text);
+    const split = Math.max(1, Math.floor(encoded.byteLength / 2));
+    writeSync(fd, encoded, 0, split, 0);
+    fireLockTestEvent("after-lock-candidate-partial-write", record2, path);
+    writeSync(fd, encoded, split, encoded.byteLength - split, split);
+    fsyncSync2(fd);
+    const opened = fstatSync2(fd);
+    assertLockStat(opened, 1);
+    createdIdentity = lockIdentity(opened);
+    const candidateSnapshot = readLockSnapshot(parent, candidate);
+    if (!candidateSnapshot || !sameLockIdentity(candidateSnapshot.identity, createdIdentity) || candidateSnapshot.text !== text) {
+      throw new Error("Knowledge lock candidate identity could not be verified.");
+    }
+    try {
+      parent.link(candidate, name);
+      published = true;
+    } catch (error51) {
+      if (lockErrno(error51) !== "EEXIST")
+        throw error51;
+      lostRace = true;
+    }
+    if (lostRace)
+      return;
+    fireLockTestEvent("after-lock-publication", record2, path);
+    const publishedCandidate = readLockSnapshot(parent, candidate, 2);
+    const publishedLock = readLockSnapshot(parent, name, 2);
+    if (!publishedCandidate || !publishedLock || !sameLockIdentity(publishedCandidate.identity, createdIdentity) || !sameLockIdentity(publishedLock.identity, createdIdentity) || publishedCandidate.text !== text || publishedLock.text !== text) {
+      throw new Error("Knowledge lock hard-link publication could not be verified.");
+    }
+    parent.unlink(candidate);
+    parent.sync();
+    const owned = fstatSync2(fd);
+    assertLockStat(owned, 1);
+    closeSync2(fd);
+    fd = undefined;
+    const snapshot = readLockSnapshot(parent, name);
+    if (!snapshot || !sameLockIdentity(snapshot.identity, createdIdentity) || snapshot.text !== text)
+      throw new Error("Knowledge lock creation identity could not be verified.");
+    fireLockTestEvent("after-create", record2, path);
+    parent.verify();
+    return Object.freeze({ ...snapshot, path, name });
+  } catch (error51) {
+    if (createdInode) {
+      try {
+        const candidateStat = parent.lstat(candidate);
+        if (candidateStat && candidateStat.dev === createdInode.dev && candidateStat.ino === createdInode.ino)
+          parent.unlink(candidate);
+      } catch {}
+      try {
+        const named = parent.lstat(name);
+        if (named && named.dev === createdInode.dev && named.ino === createdInode.ino)
+          parent.unlink(name);
+      } catch {}
+      try {
+        parent.sync();
+      } catch {}
+    }
+    throw error51;
+  } finally {
+    if (fd !== undefined) {
+      if (createdInode) {
+        try {
+          const candidateStat = parent.lstat(candidate);
+          if (candidateStat && candidateStat.dev === createdInode.dev && candidateStat.ino === createdInode.ino)
+            parent.unlink(candidate);
+        } catch {}
+        if (published) {
+          try {
+            const named = parent.lstat(name);
+            if (named && named.dev === createdInode.dev && named.ino === createdInode.ino)
+              parent.unlink(name);
+          } catch {}
+        }
+      }
+      try {
+        parent.sync();
+      } catch {}
+      closeSync2(fd);
+    }
+  }
+}
+function processIsDead(pid) {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error51) {
+    return lockErrno(error51) === "ESRCH";
+  }
+}
+function removeExactLock(parent, name, path, expected, requireNamedParent = true) {
+  verifyLockParent(parent, requireNamedParent);
+  const current = readLockSnapshot(parent, name, 1, requireNamedParent);
+  if (!current || !sameLockIdentity(current.identity, expected.identity) || current.text !== expected.text)
+    return false;
+  const witness = lockWitnessName(name, expected.record);
+  let witnessed = false;
+  try {
+    fireLockTestEvent("before-witness-link", current.record, path);
+    verifyLockParent(parent, requireNamedParent);
+    try {
+      parent.link(name, witness);
+      witnessed = true;
+    } catch (error51) {
+      if (lockErrno(error51) === "ENOENT" || lockErrno(error51) === "EEXIST")
+        return false;
+      throw error51;
+    }
+    const named = readLockSnapshot(parent, name, 2, requireNamedParent);
+    const linked = readLockSnapshot(parent, witness, 2, requireNamedParent);
+    if (!named || !linked || !sameLockIdentity(named.identity, expected.identity) || !sameLockIdentity(linked.identity, expected.identity) || named.text !== expected.text || linked.text !== expected.text)
+      return false;
+    fireLockTestEvent("before-owned-unlink", current.record, path);
+    verifyLockParent(parent, requireNamedParent);
+    parent.unlink(name);
+    const remaining = readLockSnapshot(parent, witness, 1, requireNamedParent);
+    if (!remaining || !sameLockIdentity(remaining.identity, expected.identity) || remaining.text !== expected.text) {
+      throw new Error("Knowledge lock ownership witness changed during removal.");
+    }
+    verifyLockParent(parent, requireNamedParent);
+    parent.unlink(witness);
+    witnessed = false;
+    return true;
+  } finally {
+    if (witnessed) {
+      try {
+        parent.unlink(witness);
+      } catch {}
+    }
+  }
+}
+function acquireLock(parent, name, path, owner, token) {
+  const start = monotonicNow();
+  for (;; ) {
+    parent.verify();
+    const transition = recoverLockTransition(parent, name);
+    if (transition === "retry")
+      continue;
+    if (transition === "busy") {
+      const elapsed2 = monotonicNow() - start;
+      if (!Number.isFinite(elapsed2) || elapsed2 < 0) {
+        throw new Error("Knowledge lock monotonic clock is invalid.");
+      }
+      if (elapsed2 >= LOCK_WAIT_MS) {
+        throw new Error(`Could not acquire lock on ${path} after ${LOCK_WAIT_MS}ms`);
+      }
+      waitMonotonically(Math.min(LOCK_RETRY_MS, LOCK_WAIT_MS - elapsed2));
+      continue;
+    }
+    const created = createLock(parent, name, path, owner, token);
+    if (created) {
+      parent.verify();
+      return Object.freeze({ ...created, parent });
+    }
+    parent.verify();
+    const recovered = recoverLockTransition(parent, name);
+    if (recovered === "retry")
+      continue;
+    if (recovered === "busy") {
+      const elapsed2 = monotonicNow() - start;
+      if (!Number.isFinite(elapsed2) || elapsed2 < 0) {
+        throw new Error("Knowledge lock monotonic clock is invalid.");
+      }
+      if (elapsed2 >= LOCK_WAIT_MS) {
+        throw new Error(`Could not acquire lock on ${path} after ${LOCK_WAIT_MS}ms`);
+      }
+      waitMonotonically(Math.min(LOCK_RETRY_MS, LOCK_WAIT_MS - elapsed2));
+      continue;
+    }
+    const current = readLockSnapshot(parent, name);
+    if (current && processIsDead(current.record.pid)) {
+      fireLockTestEvent("before-stale-remove", current.record, path);
+      parent.verify();
+      if (removeExactLock(parent, name, path, current))
+        continue;
+    }
+    const elapsed = monotonicNow() - start;
+    if (!Number.isFinite(elapsed) || elapsed < 0) {
+      throw new Error("Knowledge lock monotonic clock is invalid.");
+    }
+    if (elapsed >= LOCK_WAIT_MS) {
+      throw new Error(`Could not acquire lock on ${path} after ${LOCK_WAIT_MS}ms`);
+    }
+    waitMonotonically(Math.min(LOCK_RETRY_MS, LOCK_WAIT_MS - elapsed));
+  }
+}
+function releaseLock(ownership) {
+  fireLockTestEvent("before-release", ownership.record, ownership.path);
+  try {
+    ownership.parent.verifyDescriptor();
+    const current = readLockSnapshot(ownership.parent, ownership.name, 1, false);
+    if (!current || current.record.owner !== ownership.record.owner || current.record.token !== ownership.record.token || current.record.pid !== ownership.record.pid || !sameLockIdentity(current.identity, ownership.identity) || current.text !== ownership.text)
+      return;
+    removeExactLock(ownership.parent, ownership.name, ownership.path, current, false);
+  } catch {}
+}
+function saveStore(path, store) {
+  const bounded = cloneBoundedDataGraph(store, {
+    label: "Knowledge store",
+    maxBytes: MAX_INGEST_BODY_BYTES
+  });
+  if (!Array.isArray(bounded.items) || bounded.items.length > MAX_INGEST_BATCH_ITEMS) {
+    throw new Error(`Knowledge store exceeds the ${MAX_INGEST_BATCH_ITEMS} item hard limit.`);
+  }
+  const encoded = JSON.stringify(bounded, null, 2);
+  if (Buffer.byteLength(encoded) > MAX_INGEST_BODY_BYTES) {
+    throw new Error(`Knowledge store exceeds the ${MAX_INGEST_BODY_BYTES} byte hard limit.`);
+  }
+  const active = activeStoreLock(path);
+  if (active) {
+    writeLockedStoreText(active, encoded);
+    return;
+  }
+  const tmp = `${path}.tmp.${randomUUID10()}`;
+  writeFileSync2(tmp, encoded);
+  renameSync2(tmp, path);
+}
+function withLock(path, fn, options = {}) {
+  const owner = randomUUID10();
+  const token = randomUUID10();
+  const storePath = resolve9(path);
+  const lpath = lockPath(storePath);
+  awaitLogicalStoreLock(storePath);
+  if (options.createParent)
+    ensureParentDir(lpath);
+  const parentPath = dirname5(lpath);
+  const logicalParentPath = dirname5(parentPath);
+  const logicalName = logicalLockName(storePath);
+  const logicalPath = resolve9(logicalParentPath, logicalName);
+  const logicalParent = new AnchoredDirectoryHandle(logicalParentPath);
+  let parent;
+  let logicalOwnership;
+  let ownership;
+  let active;
+  try {
+    parent = new AnchoredDirectoryHandle(parentPath);
+    logicalOwnership = acquireLock(logicalParent, logicalName, logicalPath, owner, token);
+    parent.verify();
+    ownership = acquireLock(parent, basename7(lpath), lpath, owner, token);
+    active = Object.freeze({
+      storePath,
+      storeName: basename7(storePath),
+      parent,
+      ownership
+    });
+    activeStoreLocks.set(storePath, active);
+    return fn();
+  } finally {
+    if (active && activeStoreLocks.get(storePath) === active)
+      activeStoreLocks.delete(storePath);
+    if (ownership)
+      releaseLock(ownership);
+    parent?.close();
+    if (logicalOwnership)
+      releaseLock(logicalOwnership);
+    logicalParent.close();
+  }
+}
+
+// src/rules-provenance.ts
+init_safety();
 var DEFAULT_MAX_ITEMS2 = 100;
 var DEFAULT_EVIDENCE_LIMIT = 25;
 var DEFAULT_MAX_BYTES_PER_FILE = 256 * 1024;
@@ -25963,17 +28909,17 @@ var SKIP_DIRECTORIES = new Set([
 var SENSITIVE_PATH_RE = /(^|[._-])(secret|secrets|token|tokens|credential|credentials|password|passwd|private[_-]?key|id_rsa)([._-]|$)/i;
 var SELECTED_PROMPT_OR_PLAN_RE = /(agent|rule|rules|instruction|instructions|global|operating|standard|knowledge)/i;
 function sha256Text2(text) {
-  return `sha256:${createHash14("sha256").update(text).digest("hex")}`;
+  return `sha256:${createHash15("sha256").update(text).digest("hex")}`;
 }
 function sha256Bytes(bytes) {
-  return `sha256:${createHash14("sha256").update(bytes).digest("hex")}`;
+  return `sha256:${createHash15("sha256").update(bytes).digest("hex")}`;
 }
 function normalizePath(value) {
   return value.split(sep4).join("/");
 }
 function relativePath(root, absPath) {
-  const rel = relative4(root, absPath);
-  return rel ? normalizePath(rel) : basename4(absPath);
+  const rel = relative3(root, absPath);
+  return rel ? normalizePath(rel) : basename8(absPath);
 }
 function isTextSource(path) {
   return TEXT_EXTENSIONS.has(extname(path).toLowerCase());
@@ -26025,7 +28971,7 @@ function ruleSpecs() {
         tags: ["global-rules", "codewith", "agent-instructions"],
         include: (path) => {
           const normalized = normalizePath(path);
-          const name = basename4(normalized);
+          const name = basename8(normalized);
           if (ROOT_RULE_DOCS.has(name) || normalized === "config.toml")
             return true;
           if (normalized.endsWith("/SKILL.md"))
@@ -26060,7 +29006,7 @@ function ruleSpecs() {
         tags: ["global-rules", "codex", "agent-instructions"],
         include: (path) => {
           const normalized = normalizePath(path);
-          const name = basename4(normalized);
+          const name = basename8(normalized);
           if (ROOT_RULE_DOCS.has(name) || name === "config.toml")
             return true;
           return /^(rules|instructions|prompts)\//.test(normalized) && isTextSource(normalized);
@@ -26128,12 +29074,12 @@ function ruleSpecs() {
 function collectFiles(root, skipped) {
   const candidates = new Map;
   for (const entry of ruleSpecs()) {
-    const basePath = resolve4(root, entry.base);
-    if (!existsSync10(basePath))
+    const basePath = resolve10(root, entry.base);
+    if (!existsSync5(basePath))
       continue;
-    const rootStats = statSync2(basePath);
+    const rootStats = statSync(basePath);
     if (rootStats.isFile()) {
-      const rel = basename4(basePath);
+      const rel = basename8(basePath);
       if (entry.spec.include(rel)) {
         candidates.set(basePath, {
           ...entry.spec,
@@ -26184,7 +29130,7 @@ function walkRuleDirectory(input) {
     }
     if (!dirent.isFile())
       continue;
-    const sourceRelativePath = relativePath(resolve4(rootBasePath), absPath);
+    const sourceRelativePath = relativePath(resolve10(rootBasePath), absPath);
     if (hasSensitivePathPart(sourceRelativePath)) {
       input.skipped.push({ source_family: input.spec.family, source_path: absPath, reason: "sensitive_path" });
       continue;
@@ -26211,7 +29157,7 @@ ${item.content.slice(0, 500)}`.toLowerCase();
 function manifestItemForRecord(record2, text) {
   const ruleProvenance = {
     source_path: record2.source_path,
-    source_path_ref: record2.source_path_ref,
+    source_path_ref: record2.source_ref,
     source_ref: record2.source_ref,
     owner: record2.owner,
     scope: record2.scope,
@@ -26238,7 +29184,7 @@ function manifestItemForRecord(record2, text) {
     },
     rule_provenance: ruleProvenance,
     source_family: record2.source_family,
-    source_path_ref: record2.source_path_ref,
+    source_path_ref: record2.source_ref,
     owner: record2.owner,
     scope: record2.scope,
     precedence: record2.precedence,
@@ -26249,14 +29195,14 @@ function manifestItemForRecord(record2, text) {
   };
 }
 function prepareFileRecord(input) {
-  const stats = lstatSync(input.candidate.absPath);
+  const stats = lstatSync4(input.candidate.absPath);
   const sourcePath = input.candidate.absPath;
   const sourcePathRef = relativePath(input.root, sourcePath);
   if (stats.size > input.maxBytesPerFile) {
     const sourceRef2 = pathToFileURL3(sourcePath).href;
     const evidence2 = {
       source_family: input.candidate.family,
-      title: basename4(sourcePath),
+      title: basename8(sourcePath),
       source_path: sourcePath,
       source_path_ref: sourcePathRef,
       source_ref: sourceRef2,
@@ -26278,7 +29224,7 @@ function prepareFileRecord(input) {
     };
     return { evidence: evidence2, text: "", manifest: null };
   }
-  const bytes = readFileSync12(sourcePath);
+  const bytes = readFileSync4(sourcePath);
   const rawText = bytes.toString("utf8");
   const redacted = redactSecrets(rawText, input.safetyPolicy);
   const highSeverity = redacted.findings.some((finding) => finding.severity === "high");
@@ -26288,7 +29234,7 @@ function prepareFileRecord(input) {
   const lines = lineCount(redacted.text);
   const evidence = {
     source_family: input.candidate.family,
-    title: basename4(sourcePath),
+    title: basename8(sourcePath),
     source_path: sourcePath,
     source_path_ref: sourcePathRef,
     source_ref: sourceRef,
@@ -26352,7 +29298,7 @@ function prepareLegacyRecord(input) {
   };
 }
 function deprecateLegacyNotes(input) {
-  if (!input.legacyStorePath || !existsSync10(input.legacyStorePath))
+  if (!input.legacyStorePath || !existsSync5(input.legacyStorePath))
     return 0;
   const byId = new Map(input.records.filter((record2) => record2.legacy_json_id && record2.importable).map((record2) => [record2.legacy_json_id, record2]));
   if (byId.size === 0)
@@ -26389,7 +29335,7 @@ function deprecateLegacyNotes(input) {
   });
 }
 async function importRulesProvenance(options = {}) {
-  const root = resolve4(options.root ?? process.cwd());
+  const root = resolve10(options.root ?? process.cwd());
   const scope = options.scope ?? "global";
   const owner = options.owner ?? "global-agent-rules-standard";
   const dryRun = options.dryRun !== false;
@@ -26481,259 +29427,22 @@ async function importRulesProvenance(options = {}) {
   };
 }
 
+// src/service.ts
+init_safety();
+
 // src/web-search.ts
-import { createHash as createHash15, randomUUID as randomUUID11 } from "crypto";
-function stableHash(value) {
-  return `sha256:${createHash15("sha256").update(value).digest("hex")}`;
-}
-function estimateTokens3(text) {
-  const words = text.trim().split(/\s+/).filter(Boolean).length;
-  return Math.max(1, Math.ceil(words * 1.25));
-}
-function asRecord2(value) {
-  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
-}
-function asString4(value) {
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-function sourceFromRecord(value) {
-  const record2 = asRecord2(value);
-  const url2 = asString4(record2.url) ?? asString4(record2.uri) ?? asString4(record2.sourceUrl);
-  if (!url2)
-    return null;
-  return {
-    url: url2,
-    title: asString4(record2.title) ?? asString4(record2.name),
-    snippet: asString4(record2.snippet) ?? asString4(record2.text) ?? asString4(record2.description),
-    provider_metadata: record2
-  };
-}
-function collectSources(value, output) {
-  if (Array.isArray(value)) {
-    for (const entry of value)
-      collectSources(entry, output);
-    return;
-  }
-  const source = sourceFromRecord(value);
-  if (source)
-    output.set(source.url, source);
-  const record2 = asRecord2(value);
-  for (const key of ["sources", "results", "citations", "annotations", "output"]) {
-    if (record2[key])
-      collectSources(record2[key], output);
-  }
-}
-function fakeSources(query2, limit) {
-  return Array.from({ length: Math.min(limit, 3) }, (_, index) => ({
-    url: `https://example.com/knowledge-web-${index + 1}`,
-    title: `Fake web source ${index + 1}`,
-    snippet: `Deterministic web-search fixture for "${query2}"`,
-    provider_metadata: { fake: true, rank: index + 1 }
-  }));
-}
-async function openAiWebSearch(input) {
-  const { generateText } = await import("ai");
-  const { createOpenAI } = await import("@ai-sdk/openai");
-  const settings = providerSettings(input.config, "openai");
-  const openai = createOpenAI({
-    apiKey: input.env[settings.api_key_env],
-    baseURL: settings.base_url
-  });
-  const webSearch = openai.tools?.webSearch;
-  if (!webSearch)
-    throw new Error("OpenAI provider does not expose tools.webSearch.");
-  return generateText({
-    model: openai(input.model),
-    prompt: input.query,
-    tools: {
-      web_search: webSearch({
-        externalWebAccess: true,
-        searchContextSize: "medium",
-        ...input.domains.length > 0 ? { allowedDomains: input.domains } : {}
-      })
-    },
-    toolChoice: { type: "tool", toolName: "web_search" }
-  });
-}
-async function anthropicWebSearch(input) {
-  const { generateText } = await import("ai");
-  const { createAnthropic } = await import("@ai-sdk/anthropic");
-  const settings = providerSettings(input.config, "anthropic");
-  const anthropic = createAnthropic({
-    apiKey: input.env[settings.api_key_env],
-    baseURL: settings.base_url
-  });
-  const factory = anthropic.tools?.webSearch_20250305 ?? anthropic.tools?.webSearch;
-  if (!factory)
-    throw new Error("Anthropic provider does not expose a web search tool.");
-  return generateText({
-    model: anthropic(input.model),
-    prompt: input.query,
-    tools: {
-      web_search: factory({
-        maxUses: input.maxUses,
-        ...input.domains.length > 0 ? { allowedDomains: input.domains } : {}
-      })
-    }
-  });
-}
-async function fileWebSources(options, sources, now) {
-  if (!options.fileResults || sources.length === 0)
-    return 0;
-  const items = sources.map((source) => {
-    const text = [source.title, source.snippet, source.url].filter(Boolean).join(`
-`);
-    const hash2 = stableHash(text);
-    return {
-      source_ref: source.url,
-      name: source.title ?? source.url,
-      url: source.url,
-      mime: "text/plain",
-      hash: hash2,
-      revision: hash2,
-      status: "active",
-      updated_at: now,
-      permissions: { mode: "read_only", allowed_purposes: ["knowledge_answer", "knowledge_index"] },
-      metadata: {
-        source_ref: source.url,
-        content_source: "provider_web_search",
-        provider_metadata: source.provider_metadata
-      },
-      extracted_text: text
-    };
-  });
-  const result = await ingestOpenFilesManifestItems({
-    dbPath: options.dbPath,
-    items,
-    sourceLabel: `web-search:${options.query}`,
-    readAction: "provider_web_search_file_results",
-    safetyPolicy: options.safetyPolicy,
-    now: new Date(now)
-  });
-  return result.sources_upserted;
+init_runtime_role();
+function containedWebSearch() {
+  throw new KnowledgeContainmentError("KNOWLEDGE_HOSTED_CONTAINED", 503, "hosted-client", "public-api", "provider web search is unavailable through the Stage-A public package");
 }
 async function runProviderWebSearch(options) {
-  const query2 = options.query.trim();
-  if (!query2)
-    throw new Error("Web search query is required.");
-  const env = options.env ?? process.env;
-  const now = (options.now ?? new Date).toISOString();
-  const limit = Math.max(1, Math.min(options.limit ?? 5, 20));
-  const maxUses = Math.max(1, Math.min(options.maxUses ?? 3, 10));
-  const domains = options.domains ?? [];
-  const modelRef = resolveModelRef(options.modelRef ?? (options.provider ? `${options.provider}:${providerSettings(options.config, options.provider).default_model}` : "default"), options.config);
-  const parsed = parseModelRef(modelRef);
-  const provider = options.provider ?? parsed.provider;
-  const model = parsed.provider === provider ? parsed.model : providerSettings(options.config, provider).default_model;
-  const runId = `run_${randomUUID11()}`;
-  if (!options.fake && options.safetyPolicy)
-    assertWebSearchAllowed(options.safetyPolicy);
-  if (!options.fake && provider !== "openai" && provider !== "anthropic") {
-    throw new Error(`Provider ${provider} does not expose native web search yet.`);
-  }
-  if (!options.fake)
-    assertProviderCredentials(provider, options.config, env);
-  migrateKnowledgeDb(options.dbPath);
-  const db = openKnowledgeDb(options.dbPath);
-  try {
-    db.run(`INSERT INTO runs (id, type, prompt, status, provider, model, metadata_json, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-      runId,
-      "provider-web-search",
-      query2,
-      "running",
-      provider,
-      model,
-      JSON.stringify({ domains, max_uses: maxUses, fake: options.fake === true }),
-      now,
-      now
-    ]);
-    recordAuditEvent(db, {
-      event_type: "source_read",
-      action: options.fake ? "fake_provider_web_search" : "provider_web_search",
-      target_uri: query2,
-      decision: "allow",
-      metadata: { provider, model, domains, max_uses: maxUses },
-      created_at: now
-    });
-  } finally {
-    db.close();
-  }
-  let answer = "";
-  let sources = [];
-  let usage = { input_tokens: estimateTokens3(query2), output_tokens: 0, cost_usd: 0 };
-  const warnings = [];
-  if (options.fake) {
-    sources = fakeSources(query2, limit);
-    answer = `Fake web search answer for: ${query2}`;
-    usage.output_tokens = estimateTokens3(answer);
-  } else {
-    const result = provider === "openai" ? await openAiWebSearch({ query: query2, model, config: options.config, env, maxUses, domains }) : await anthropicWebSearch({ query: query2, model, config: options.config, env, maxUses, domains });
-    answer = result.text;
-    const collected = new Map;
-    collectSources(result.sources, collected);
-    collectSources(result.toolResults, collected);
-    sources = Array.from(collected.values()).slice(0, limit);
-    const normalized = normalizeAiSdkUsage({
-      provider,
-      model,
-      usage: result.usage,
-      providerMetadata: result.providerMetadata
-    });
-    usage = {
-      input_tokens: normalized.input_tokens,
-      output_tokens: normalized.output_tokens,
-      cost_usd: normalized.cost_usd
-    };
-  }
-  const filedSources = await fileWebSources(options, sources, now);
-  const writeDb = openKnowledgeDb(options.dbPath);
-  try {
-    writeDb.run(`UPDATE runs SET status = ?, metadata_json = ?, updated_at = ? WHERE id = ?`, [
-      "completed",
-      JSON.stringify({ domains, max_uses: maxUses, sources: sources.length, filed_sources: filedSources, fake: options.fake === true }),
-      now,
-      runId
-    ]);
-    writeDb.run(`INSERT INTO run_events (id, run_id, level, event, metadata_json, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`, [
-      `evt_${randomUUID11()}`,
-      runId,
-      "info",
-      "provider_web_search_completed",
-      JSON.stringify({ sources: sources.length, filed_sources: filedSources }),
-      now
-    ]);
-    recordProviderUsage(writeDb, {
-      run_id: runId,
-      provider,
-      model,
-      input_tokens: usage.input_tokens,
-      output_tokens: usage.output_tokens,
-      cost_usd: usage.cost_usd,
-      metadata: { web_search: true, sources: sources.length, filed_sources: filedSources },
-      created_at: now
-    });
-  } finally {
-    writeDb.close();
-  }
-  if (sources.length === 0)
-    warnings.push("no_web_sources_returned");
-  return {
-    run_id: runId,
-    query: query2,
-    provider,
-    model,
-    answer,
-    sources,
-    filed_sources: filedSources,
-    usage,
-    warnings
-  };
+  return containedWebSearch();
 }
 
 // src/wiki-compiler.ts
-import { createHash as createHash16, randomUUID as randomUUID12 } from "crypto";
+import { createHash as createHash16, randomUUID as randomUUID11 } from "crypto";
+init_knowledge_db();
+init_input_limits();
 function stableId8(prefix, value) {
   return `${prefix}_${createHash16("sha256").update(value).digest("hex").slice(0, 20)}`;
 }
@@ -26756,9 +29465,11 @@ function parseJsonObject6(value) {
   if (!value)
     return {};
   try {
-    const parsed = JSON.parse(value);
+    const parsed = parseBoundedJsonData(value, "Persisted wiki metadata");
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-  } catch {
+  } catch (error51) {
+    if (!(error51 instanceof SyntaxError))
+      throw error51;
     return {};
   }
 }
@@ -26939,7 +29650,7 @@ function replacePageCitations(db, pageId, citations, now) {
   for (const citation of citations) {
     db.run(`INSERT INTO citations (id, wiki_page_id, chunk_id, source_uri, quote, start_offset, end_offset, metadata_json, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-      stableId8("cit", `${pageId}\x00${citation.source_uri}\x00${citation.chunk_id ?? randomUUID12()}`),
+      stableId8("cit", `${pageId}\x00${citation.source_uri}\x00${citation.chunk_id ?? randomUUID11()}`),
       pageId,
       citation.chunk_id,
       citation.source_uri,
@@ -27313,7 +30024,7 @@ function agentSchemaTemplate() {
 ## Query Rules
 
 - Search wiki pages first, then source chunks, then deeper read-only source refs.
-- Use web search only when requested or when current external context is required.
+- Web search, including fake mode, is unavailable during Stage A; retained schemas are metadata only.
 - File useful answers back into the wiki only after approval or approved auto-write mode.
 
 ## Lint Rules
@@ -27484,27 +30195,31 @@ function recordWikiLayoutCatalog(db, artifacts, now = new Date) {
   }
 }
 
+// src/service.ts
+init_workspace();
+
 // src/workspace-migration.ts
+init_workspace();
 import { createHash as createHash18 } from "crypto";
-import { Database as Database2 } from "bun:sqlite";
+import { Database } from "bun:sqlite";
 import {
   cpSync,
-  existsSync as existsSync11,
-  lstatSync as lstatSync2,
-  mkdirSync as mkdirSync4,
+  existsSync as existsSync6,
+  lstatSync as lstatSync5,
+  mkdirSync as mkdirSync2,
   readdirSync as readdirSync2,
-  readFileSync as readFileSync13,
-  renameSync as renameSync2,
+  readFileSync as readFileSync5,
+  renameSync as renameSync3,
   rmSync,
-  writeFileSync as writeFileSync5
+  writeFileSync as writeFileSync3
 } from "fs";
-import { dirname as dirname4, join as join5, relative as relative5 } from "path";
+import { dirname as dirname6, join as join5, relative as relative4 } from "path";
 function walkFiles(root, base = root) {
-  if (!existsSync11(root))
+  if (!existsSync6(root))
     return [];
-  const stat = lstatSync2(root);
+  const stat = lstatSync5(root);
   if (stat.isFile())
-    return [relative5(base, root) || "."];
+    return [relative4(base, root) || "."];
   if (!stat.isDirectory())
     return [];
   return readdirSync2(root).flatMap((entry) => walkFiles(join5(root, entry), base)).sort();
@@ -27516,7 +30231,7 @@ function hashFiles(root, files) {
   let bytes = 0;
   for (const file2 of files) {
     const path = join5(root, file2);
-    const body = readFileSync13(path);
+    const body = readFileSync5(path);
     const fileHash = createHash18("sha256").update(body).digest("hex");
     bytes += body.byteLength;
     tree.update(file2);
@@ -27527,16 +30242,16 @@ function hashFiles(root, files) {
   return { sha256: tree.digest("hex"), bytes };
 }
 function jsonItemCount(path) {
-  if (!existsSync11(path))
+  if (!existsSync6(path))
     return null;
-  const parsed = JSON.parse(readFileSync13(path, "utf8"));
+  const parsed = JSON.parse(readFileSync5(path, "utf8"));
   return Array.isArray(parsed.items) ? parsed.items.length : null;
 }
 function sqliteSummary(path) {
-  if (!existsSync11(path)) {
+  if (!existsSync6(path)) {
     return { exists: false, integrity_check: null, table_counts: {} };
   }
-  const db = new Database2(path, { readonly: true });
+  const db = new Database(path, { readonly: true });
   try {
     const integrity = db.query("PRAGMA integrity_check").get();
     const integrityCheck = integrity ? Object.values(integrity)[0] ?? null : null;
@@ -27559,14 +30274,14 @@ function summarizeWorkspaceTree(workspace) {
   const artifactHash = hashFiles(workspace.artifactsDir, artifactFiles);
   return {
     path: workspace.home,
-    exists: existsSync11(workspace.home),
+    exists: existsSync6(workspace.home),
     file_count: files.length,
     total_bytes: treeHash.bytes,
     tree_sha256: treeHash.sha256,
     json_items: jsonItemCount(workspace.jsonStorePath),
     sqlite: sqliteSummary(workspace.knowledgeDbPath),
     artifacts: {
-      exists: existsSync11(workspace.artifactsDir),
+      exists: existsSync6(workspace.artifactsDir),
       file_count: artifactFiles.length,
       total_bytes: artifactHash.bytes,
       tree_sha256: artifactHash.sha256
@@ -27583,7 +30298,7 @@ function isDefaultScaffold(workspace, summary) {
   if (!summary.files.includes("config.json"))
     return true;
   try {
-    return JSON.stringify(JSON.parse(readFileSync13(workspace.configPath, "utf8"))) === JSON.stringify(defaultKnowledgeConfig());
+    return JSON.stringify(JSON.parse(readFileSync5(workspace.configPath, "utf8"))) === JSON.stringify(defaultKnowledgeConfig());
   } catch {
     return false;
   }
@@ -27632,7 +30347,7 @@ function prepareLegacyTombstoneDirectory(home) {
 }
 function moveWorkspace(sourceHome, targetHome) {
   try {
-    renameSync2(sourceHome, targetHome);
+    renameSync3(sourceHome, targetHome);
     return;
   } catch (error51) {
     cpSync(sourceHome, targetHome, {
@@ -27663,7 +30378,7 @@ function isMigrationTombstone(workspace, summary, currentHome) {
   if (summary.files.some((file2) => !isRetainedTombstoneFile(file2)))
     return false;
   try {
-    const metadata = JSON.parse(readFileSync13(join5(workspace.home, "migration.json"), "utf8"));
+    const metadata = JSON.parse(readFileSync5(join5(workspace.home, "migration.json"), "utf8"));
     return metadata.new_path === currentHome && typeof metadata.backup_path === "string";
   } catch {
     return false;
@@ -27753,8 +30468,8 @@ function migrateLegacyKnowledgeWorkspace(options) {
     };
   }
   const backupHome = `${options.legacy.home}.backup-${migrationTimestamp(now)}`;
-  mkdirSync4(dirname4(options.current.home), { recursive: true });
-  mkdirSync4(dirname4(backupHome), { recursive: true });
+  mkdirSync2(dirname6(options.current.home), { recursive: true });
+  mkdirSync2(dirname6(backupHome), { recursive: true });
   cpSync(options.legacy.home, backupHome, {
     recursive: true,
     force: false,
@@ -27773,9 +30488,9 @@ function migrateLegacyKnowledgeWorkspace(options) {
   moveWorkspace(options.legacy.home, options.current.home);
   const currentAfter = summarizeWorkspaceTree(options.current);
   checks3.migrated_matches_backup = summariesMatch(backupAfter, currentAfter);
-  mkdirSync4(options.legacy.home, { recursive: true });
+  mkdirSync2(options.legacy.home, { recursive: true });
   const tombstonePath = join5(options.legacy.home, "TOMBSTONE.md");
-  writeFileSync5(tombstonePath, [
+  writeFileSync3(tombstonePath, [
     "# Migrated OpenKnowledge Workspace",
     "",
     `Migrated at: ${now.toISOString()}`,
@@ -27787,7 +30502,7 @@ function migrateLegacyKnowledgeWorkspace(options) {
     ""
   ].join(`
 `));
-  writeFileSync5(join5(options.legacy.home, "migration.json"), `${JSON.stringify({
+  writeFileSync3(join5(options.legacy.home, "migration.json"), `${JSON.stringify({
     migrated_at: now.toISOString(),
     approved_by: options.approvedBy,
     new_path: options.current.home,
@@ -27797,7 +30512,7 @@ function migrateLegacyKnowledgeWorkspace(options) {
     current_after: currentAfter
   }, null, 2)}
 `);
-  checks3.tombstone_written = existsSync11(tombstonePath);
+  checks3.tombstone_written = existsSync6(tombstonePath);
   const ok = checks3.backup_matches_legacy && checks3.migrated_matches_backup && checks3.tombstone_written;
   return {
     ok,
@@ -27819,9 +30534,88 @@ function migrateLegacyKnowledgeWorkspace(options) {
 }
 
 // src/service.ts
+init_runtime_role();
+init_public_guard();
+init_input_limits();
+var knowledgeServiceIdentities = new WeakMap;
+function trustedKnowledgeServiceIdentity(service) {
+  const identity2 = knowledgeServiceIdentities.get(service);
+  if (!identity2) {
+    throw new Error("Global knowledge reads require a trusted owning Knowledge service.");
+  }
+  return identity2;
+}
+function resolveKnowledgeServiceWorkspace(scope, cwd, surface) {
+  try {
+    return resolveScopedWorkspace(scope, cwd);
+  } catch {
+    throw configContainmentError("workspace identity is not canonical", surface);
+  }
+}
+function assertKnowledgeServiceForProjectPanel(service, options) {
+  if (!service || typeof service !== "object") {
+    throw new Error("Project panel requires a trusted knowledge service from the owning runtime.");
+  }
+  const identity2 = knowledgeServiceIdentities.get(service);
+  if (!identity2) {
+    throw new Error("Project panel requires a trusted knowledge service from the owning runtime.");
+  }
+  const scope = canonicalKnowledgeScope(options.scope, "project");
+  if (identity2.role !== "local" || identity2.scope !== scope) {
+    throw new Error("Project panel service role or scope does not match the owning runtime.");
+  }
+  const resolution = identity2.revalidate();
+  if (resolution.role !== identity2.role) {
+    throw new Error("Project panel service runtime role changed after construction.");
+  }
+  const currentIdentity = trustedKnowledgeWorkspaceIdentity(identity2.workspace);
+  if (currentIdentity.key !== identity2.workspaceKey || currentIdentity.home !== identity2.workspaceHome || currentIdentity.projectRoot !== identity2.projectRoot) {
+    throw new Error("Project panel service workspace identity changed after construction.");
+  }
+  if (options.cwd !== undefined) {
+    const expected = trustedKnowledgeWorkspaceIdentity(resolveScopedWorkspace(scope, options.cwd));
+    if (expected.key !== identity2.workspaceKey) {
+      throw new Error("Project panel service does not belong to the requested project workspace identity.");
+    }
+  }
+}
+function explicitOwnGlobalReadAuthority(scope, options) {
+  let descriptor;
+  try {
+    descriptor = options && typeof options === "object" ? Object.getOwnPropertyDescriptor(options, "allowGlobal") : undefined;
+  } catch {
+    throw new Error("Global knowledge reads require an explicit own allowGlobal=true data property (--allow-global on CLI).");
+  }
+  if (scope === "global" && (!descriptor || !("value" in descriptor) || descriptor.value !== true)) {
+    throw new Error("Global knowledge reads require an explicit own allowGlobal=true data property (--allow-global on CLI).");
+  }
+  return descriptor && "value" in descriptor ? descriptor.value : undefined;
+}
+function explicitOwnAppWikiAllowGlobal(scope, options) {
+  let descriptor;
+  try {
+    descriptor = options && typeof options === "object" ? Object.getOwnPropertyDescriptor(options, "allowGlobal") : undefined;
+  } catch {
+    throw new Error("Global app-wiki access requires an explicit own allowGlobal=true data property.");
+  }
+  if (scope === "global" && (!descriptor || !("value" in descriptor) || descriptor.value !== true)) {
+    throw new Error("Global app-wiki access requires an explicit own allowGlobal=true data property.");
+  }
+  return descriptor && "value" in descriptor ? descriptor.value : undefined;
+}
+var GLOBAL_READ_OPERATION_OPTION_INDEX = Object.freeze(new Map([
+  ["inventory", 0],
+  ["listAppWikiNotes", 0],
+  ["getAppWikiNote", 1],
+  ["searchAppWiki", 0],
+  ["queryAppWiki", 0],
+  ["search", 0],
+  ["retrieveContext", 0],
+  ["contextPack", 0]
+]));
 function resolvePeerWorkspace(input) {
-  const target = resolve5(input);
-  if (existsSync12(join6(target, "knowledge.db")) || existsSync12(join6(target, "config.json"))) {
+  const target = resolve11(input);
+  if (existsSync7(join6(target, "knowledge.db")) || existsSync7(join6(target, "config.json"))) {
     return ensureKnowledgeWorkspace(target);
   }
   return ensureKnowledgeWorkspace(workspaceForHome(projectKnowledgeHome(target)).home);
@@ -27885,7 +30679,7 @@ function parseJsonStringArray(value) {
 function recordValue(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
-function stringValue2(value) {
+function stringValue3(value) {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 function numberValue2(value) {
@@ -27899,17 +30693,17 @@ function stringArrayValue(value) {
 }
 function registryCacheability(value, resolver, prefix) {
   const raw = recordValue(value);
-  const observedAt = stringValue2(raw.observed_at) ?? stringValue2(resolver[`${prefix}_observed_at`]);
-  const sourceAuthority = stringValue2(raw.source_authority) ?? stringValue2(resolver[`${prefix}_source_authority`]);
+  const observedAt = stringValue3(raw.observed_at) ?? stringValue3(resolver[`${prefix}_observed_at`]);
+  const sourceAuthority = stringValue3(raw.source_authority) ?? stringValue3(resolver[`${prefix}_source_authority`]);
   if (!observedAt || !sourceAuthority)
     return null;
   return {
     observed_at: observedAt,
-    verified_at: stringValue2(raw.verified_at),
-    expires_at: stringValue2(raw.expires_at) ?? stringValue2(resolver[`${prefix}_expires_at`]),
+    verified_at: stringValue3(raw.verified_at),
+    expires_at: stringValue3(raw.expires_at) ?? stringValue3(resolver[`${prefix}_expires_at`]),
     ttl_ms: numberValue2(raw.ttl_ms),
     source_authority: sourceAuthority,
-    confidence: stringValue2(raw.confidence) ?? (prefix === "route" ? stringValue2(resolver.route_confidence) : null),
+    confidence: stringValue3(raw.confidence) ?? (prefix === "route" ? stringValue3(resolver.route_confidence) : null),
     cacheable: booleanValue(raw.cacheable) ?? booleanValue(resolver[`${prefix}_cacheable`]) ?? false,
     stale: booleanValue(raw.stale) ?? booleanValue(resolver[`${prefix}_stale`]) ?? false,
     reasons: stringArrayValue(raw.reasons)
@@ -27929,7 +30723,7 @@ function registryResolverCapabilities(row) {
 }
 function registryRouteKind(row) {
   const resolver = registryResolverCapabilities(row);
-  const kind = stringValue2(resolver.route_kind);
+  const kind = stringValue3(resolver.route_kind);
   if (kind === "local" || kind === "lan" || kind === "tailscale" || kind === "ssh" || kind === "unknown")
     return kind;
   if (row.tailscale_dns && row.ssh_target === row.tailscale_dns)
@@ -27938,13 +30732,13 @@ function registryRouteKind(row) {
 }
 function registryRouteTargetKind(row) {
   const resolver = registryResolverCapabilities(row);
-  const kind = stringValue2(resolver.route_target_kind);
+  const kind = stringValue3(resolver.route_target_kind);
   if (kind === "local" || kind === "lan" || kind === "tailscale" || kind === "ssh" || kind === "unknown")
     return kind;
   return registryRouteKind(row);
 }
 function registryRouteConfidence(row) {
-  return stringValue2(registryResolverCapabilities(row).route_confidence) ?? "medium";
+  return stringValue3(registryResolverCapabilities(row).route_confidence) ?? "medium";
 }
 function routeFromRegistry(row, machine, fallback) {
   const evidence = registryResolverEvidence(row);
@@ -27980,16 +30774,16 @@ function workspaceFromRegistry(row, machine, fallback) {
     adapter: fallback.adapter,
     requested_machine_id: machine,
     machine_id: row.machine_id,
-    project_id: stringValue2(workspaceEvidence.project_id) ?? fallback.project_id,
-    repo_name: stringValue2(workspaceEvidence.repo_name) ?? fallback.repo_name,
+    project_id: stringValue3(workspaceEvidence.project_id) ?? fallback.project_id,
+    repo_name: stringValue3(workspaceEvidence.repo_name) ?? fallback.repo_name,
     project_root: row.workspace_home,
-    project_root_source: stringValue2(resolver.project_root_source) ?? "registry",
-    workspace_root: stringValue2(workspaceEvidence.workspace_root),
-    workspace_root_source: stringValue2(resolver.workspace_root_source) ?? "registry",
-    open_files_root: stringValue2(workspaceEvidence.open_files_root),
-    open_files_root_source: stringValue2(resolver.open_files_root_source) ?? "registry",
-    trust_status: stringValue2(resolver.trust_status) ?? "unknown",
-    auth_status: stringValue2(resolver.auth_status) ?? "unknown",
+    project_root_source: stringValue3(resolver.project_root_source) ?? "registry",
+    workspace_root: stringValue3(workspaceEvidence.workspace_root),
+    workspace_root_source: stringValue3(resolver.workspace_root_source) ?? "registry",
+    open_files_root: stringValue3(workspaceEvidence.open_files_root),
+    open_files_root_source: stringValue3(resolver.open_files_root_source) ?? "registry",
+    trust_status: stringValue3(resolver.trust_status) ?? "unknown",
+    auth_status: stringValue3(resolver.auth_status) ?? "unknown",
     current: false,
     primary: false,
     diagnostics: [],
@@ -28121,18 +30915,21 @@ function selectInventoryRows(db, sql, params = []) {
   return db.query(sql).all(...params);
 }
 function readLegacyInventoryStore(path) {
-  if (!existsSync12(path))
+  const snapshot = readAnchoredRegularFileSnapshot(resolve11(path), MAX_INGEST_BODY_BYTES);
+  if (!snapshot)
     return { exists: false, read_error: null, items: [] };
   try {
-    const parsed = JSON.parse(readFileSync14(path, "utf8"));
+    const parsed = parseBoundedJsonData(snapshot.content, "Persisted legacy knowledge store");
     if (!parsed || !Array.isArray(parsed.items)) {
       return { exists: true, read_error: "invalid_store_shape", items: [] };
     }
     return { exists: true, read_error: null, items: parsed.items };
   } catch (error51) {
+    if (!(error51 instanceof SyntaxError))
+      throw error51;
     return {
       exists: true,
-      read_error: error51 instanceof Error ? error51.message : String(error51),
+      read_error: "invalid_json",
       items: []
     };
   }
@@ -28226,11 +31023,11 @@ function emptyContextPack(query2, limit, semantic = false) {
 }
 function legacyStorePathForRead(scope, workspace, preferred) {
   const current = preferred ?? workspace.jsonStorePath;
-  if (existsSync12(current))
+  if (existsSync7(current))
     return current;
   if (scope === "global") {
     const legacy = legacyGlobalStorePath();
-    if (existsSync12(legacy))
+    if (existsSync7(legacy))
       return legacy;
   }
   return current;
@@ -28552,7 +31349,7 @@ function artifactManifestStatus(dbPath, storage) {
     const missingSize = rows.length - withSize;
     const missingModifiedAt = rows.length - withModifiedAt - invalidModifiedAt;
     const missingProvenance = rows.length - withProvenance2;
-    const missingProvenanceArtifactKey = withProvenance2 - withProvenanceArtifactKey;
+    const missingProvenanceField = withProvenance2 - withProvenanceArtifactKey;
     const mismatchedPrefix = rows.length - matchingPrefix;
     const warnings = [
       missingHash > 0 ? `artifact_manifest_missing_hash:${missingHash}` : null,
@@ -28562,7 +31359,7 @@ function artifactManifestStatus(dbPath, storage) {
       prefixedKey > 0 ? `artifact_manifest_s3_key_contains_storage_prefix:${prefixedKey}` : null,
       invalidModifiedAt > 0 ? `artifact_manifest_invalid_modified_at:${invalidModifiedAt}` : null,
       missingProvenance > 0 ? `artifact_manifest_missing_provenance:${missingProvenance}` : null,
-      missingProvenanceArtifactKey > 0 ? `artifact_manifest_missing_provenance_artifact_key:${missingProvenanceArtifactKey}` : null,
+      missingProvenanceField > 0 ? `artifact_manifest_missing_provenance_artifact_key:${missingProvenanceField}` : null,
       provenanceArtifactKeyMismatches > 0 ? `artifact_manifest_provenance_key_mismatch:${provenanceArtifactKeyMismatches}` : null,
       rawPayloadSentinelHits > 0 ? `artifact_manifest_raw_payload_sentinels:${rawPayloadSentinelHits}` : null
     ].filter((entry) => Boolean(entry));
@@ -28592,7 +31389,7 @@ function artifactManifestStatus(dbPath, storage) {
         with_provenance: withProvenance2,
         missing_provenance: missingProvenance,
         with_artifact_key: withProvenanceArtifactKey,
-        missing_artifact_key: missingProvenanceArtifactKey,
+        missing_artifact_key: missingProvenanceField,
         artifact_key_mismatches: provenanceArtifactKeyMismatches,
         generated_from: [...generatedFrom.entries()].map(([value, count3]) => ({ value, count: count3 })).sort((a, b) => a.value.localeCompare(b.value)),
         examples: provenanceExamples
@@ -28615,7 +31412,7 @@ function artifactManifestStatus(dbPath, storage) {
         hash_algorithm: "sha256",
         portable_keys: prefixedKey === 0 && missingKey === 0,
         tracks_modified_time: withModifiedAt > 0 && invalidModifiedAt === 0,
-        preserves_provenance: missingProvenance === 0 && missingProvenanceArtifactKey === 0 && provenanceArtifactKeyMismatches === 0
+        preserves_provenance: missingProvenance === 0 && missingProvenanceField === 0 && provenanceArtifactKeyMismatches === 0
       },
       raw_payload_sentinel_hits: rawPayloadSentinelHits,
       warnings,
@@ -28764,7 +31561,7 @@ function assertRemoteSyncApplyResult(machine, value) {
     throw new Error(`Remote knowledge sync import on ${machine} uses an unsupported sync protocol. Install @hasna/knowledge 0.2.32 or newer on both machines.`);
   }
 }
-function normalizeMode(value) {
+function normalizeMode2(value) {
   if (!value)
     return;
   const normalized = value.trim().toLowerCase();
@@ -28774,23 +31571,119 @@ function normalizeMode(value) {
     return "hosted";
   throw new Error("Invalid setup mode. Use hosted or local.");
 }
+function assertLocalSourceInput(input) {
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(input)?.[1]?.toLowerCase();
+  if (scheme)
+    assertClassifiedSourceReference(input, { surface: "public-api" });
+}
 
 class KnowledgeService {
   options;
+  constructorWorkspace;
   ensuredWorkspace;
   cachedConfig;
   constructor(options = {}) {
-    this.options = options;
+    if (new.target !== KnowledgeService) {
+      throw new Error("Trusted knowledge services must use the owning runtime constructor directly.");
+    }
+    assertPublicInvocation();
+    const scope = canonicalKnowledgeScope(safePublicProperty(options, "scope", "sdk"));
+    const cwd = safePublicProperty(options, "cwd", "sdk");
+    const runtimeOptions = options;
+    const env = safePublicProperty(runtimeOptions, "env", "sdk");
+    const runtimeSurface = safePublicProperty(runtimeOptions, "runtimeSurface", "sdk");
+    const unsupportedConfig = safePublicProperty(options, "config", "sdk");
+    assertPublicInvocation([scope, cwd, runtimeSurface, unsupportedConfig], { surface: "sdk" });
+    this.options = Object.freeze({
+      scope,
+      cwd: typeof cwd === "string" ? cwd : process.cwd(),
+      env: env && typeof env === "object" ? env : undefined,
+      runtimeSurface: typeof runtimeSurface === "string" ? runtimeSurface : undefined
+    });
+    const initialWorkspace = resolveKnowledgeServiceWorkspace(this.options.scope, this.options.cwd, this.options.runtimeSurface ?? "sdk");
+    this.constructorWorkspace = initialWorkspace;
+    const initialWorkspaceIdentity = trustedKnowledgeWorkspaceIdentity(initialWorkspace);
+    let configRequired = false;
+    let identityInvalidated = false;
+    const revalidate = (operation = "service", args = []) => {
+      const globalReadOptionIndex = GLOBAL_READ_OPERATION_OPTION_INDEX.get(operation);
+      if (this.options.scope === "global" && globalReadOptionIndex !== undefined) {
+        explicitOwnGlobalReadAuthority(this.options.scope, args[globalReadOptionIndex]);
+      }
+      assertPublicInvocation(args, { surface: this.options.runtimeSurface ?? "sdk" });
+      if (identityInvalidated) {
+        throw new Error("Knowledge service workspace identity was permanently invalidated.");
+      }
+      try {
+        const currentIdentity = trustedKnowledgeWorkspaceIdentity(initialWorkspace);
+        if (currentIdentity.key !== initialWorkspaceIdentity.key || currentIdentity.home !== initialWorkspaceIdentity.home || currentIdentity.projectRoot !== initialWorkspaceIdentity.projectRoot) {
+          throw new Error("Knowledge service workspace identity changed after construction.");
+        }
+      } catch (error51) {
+        identityInvalidated = true;
+        throw new Error(`Knowledge service workspace identity was permanently invalidated: ${error51 instanceof Error ? error51.message : String(error51)}`);
+      }
+      const setupInput = operation === "setup" && args[0] && typeof args[0] === "object" ? args[0] : undefined;
+      const hostedRequested = operation === "authStatus" || operation === "saveAuth" || operation === "clearAuth" || operation === "remoteClient" || Boolean(setupInput?.apiUrl) || Boolean(setupInput?.canonicalExample);
+      return assertKnowledgeLocalRuntimeWithConfig({
+        surface: this.options.runtimeSurface ?? "sdk",
+        env: this.options.env ?? process.env,
+        explicitMode: setupInput?.mode,
+        hostedRequested
+      }, () => {
+        const mode2 = readKnowledgeConfiguredMode(initialWorkspace.configPath, undefined, configRequired);
+        if (mode2 !== undefined)
+          configRequired = true;
+        return mode2;
+      });
+    };
+    revalidate();
+    const proxy = new Proxy(this, {
+      get: (target, property) => {
+        let owner = target;
+        let descriptor;
+        while (owner && !descriptor) {
+          descriptor = Object.getOwnPropertyDescriptor(owner, property);
+          owner = Object.getPrototypeOf(owner);
+        }
+        if (descriptor && "value" in descriptor && typeof descriptor.value === "function") {
+          const value = descriptor.value;
+          return (...args) => {
+            revalidate(String(property), args);
+            return Reflect.apply(value, target, args);
+          };
+        }
+        revalidate(`get:${String(property)}`);
+        return Reflect.get(target, property, target);
+      },
+      set: () => false,
+      defineProperty: () => false,
+      deleteProperty: () => false,
+      setPrototypeOf: () => false
+    });
+    const serviceIdentity = Object.freeze({
+      role: "local",
+      scope,
+      projectRoot: initialWorkspaceIdentity.projectRoot,
+      workspaceHome: initialWorkspaceIdentity.home,
+      workspaceKey: initialWorkspaceIdentity.key,
+      workspace: initialWorkspace,
+      revalidate: () => revalidate("project-panel")
+    });
+    knowledgeServiceIdentities.set(this, serviceIdentity);
+    knowledgeServiceIdentities.set(proxy, serviceIdentity);
+    return proxy;
   }
   get scope() {
     return this.options.scope ?? "global";
   }
   get workspace() {
-    return this.ensuredWorkspace ?? resolveScopedWorkspace(this.options.scope, this.options.cwd);
+    return this.ensuredWorkspace ?? this.constructorWorkspace;
   }
   ensureWorkspace() {
-    if (!this.ensuredWorkspace)
-      this.ensuredWorkspace = ensureKnowledgeWorkspace(this.workspace.home);
+    if (!this.ensuredWorkspace) {
+      this.ensuredWorkspace = ensureTrustedKnowledgeWorkspace(this.workspace);
+    }
     return this.ensuredWorkspace;
   }
   jsonStorePath() {
@@ -28798,16 +31691,26 @@ class KnowledgeService {
   }
   config(options = {}) {
     const workspace = options.ensure ? this.ensureWorkspace() : this.workspace;
-    if (!this.cachedConfig || options.ensure || existsSync12(workspace.configPath)) {
-      this.cachedConfig = existsSync12(workspace.configPath) ? readKnowledgeConfig(workspace.configPath) : defaultKnowledgeConfig();
-    }
+    const configuredMode = readKnowledgeConfiguredMode(workspace.configPath, undefined, Boolean(this.ensuredWorkspace));
+    assertKnowledgeLocalRuntime({
+      surface: this.options.runtimeSurface ?? "sdk",
+      env: this.options.env ?? process.env,
+      configMode: configuredMode
+    });
+    this.cachedConfig = configuredMode === undefined ? defaultKnowledgeConfig() : readKnowledgeConfig(workspace.configPath);
     return this.cachedConfig;
   }
   safetyPolicy() {
     return resolveSafetyPolicy(this.config(), this.workspace);
   }
   artifactStore() {
-    return createArtifactStore(this.config(), this.ensureWorkspace());
+    const workspace = this.ensureWorkspace();
+    return createArtifactStore(this.config(), workspace, {
+      env: this.options.env ?? process.env,
+      surface: this.options.runtimeSurface ?? "sdk",
+      readConfigMode: () => readKnowledgeConfiguredMode(workspace.configPath, undefined, true),
+      requireConfig: true
+    });
   }
   storageContract() {
     return resolveStorageContract(this.config(), this.workspace, this.scope);
@@ -28834,7 +31737,7 @@ class KnowledgeService {
   setup(options = {}) {
     const workspace = this.ensureWorkspace();
     const current = this.config({ ensure: true });
-    const mode2 = normalizeMode(options.mode) ?? current.mode;
+    const mode2 = normalizeMode2(options.mode) ?? current.mode;
     const apiUrl = options.apiUrl ? normalizeKnowledgeApiOrigin(options.apiUrl) : current.hosted?.api_url ? normalizeKnowledgeApiOrigin(current.hosted.api_url) : null;
     const nextConfig = {
       ...current,
@@ -28861,9 +31764,11 @@ class KnowledgeService {
     };
   }
   authStatus(env = process.env) {
+    assertKnowledgeLocalRuntime({ surface: this.options.runtimeSurface ?? "sdk", env, hostedRequested: true });
     return knowledgeAuthStatus(this.config(), env);
   }
   saveAuth(input, env = process.env) {
+    assertKnowledgeLocalRuntime({ surface: this.options.runtimeSurface ?? "sdk", env, hostedRequested: true });
     const apiUrl = input.apiUrl ?? this.config().hosted?.api_url;
     return saveKnowledgeAuth({
       api_key: input.apiKey,
@@ -28875,6 +31780,7 @@ class KnowledgeService {
     }, env);
   }
   clearAuth(env = process.env) {
+    assertKnowledgeLocalRuntime({ surface: this.options.runtimeSurface ?? "sdk", env, hostedRequested: true });
     return clearKnowledgeAuth(env);
   }
   remoteContract() {
@@ -28887,6 +31793,7 @@ class KnowledgeService {
     });
   }
   remoteClient(env = process.env) {
+    assertKnowledgeLocalRuntime({ surface: this.options.runtimeSurface ?? "sdk", env, hostedRequested: true });
     return RemoteKnowledgeClient.fromConfig(this.config(), env);
   }
   paths() {
@@ -28895,13 +31802,13 @@ class KnowledgeService {
       ok: true,
       scope: this.scope,
       home: workspace.home,
-      exists: existsSync12(workspace.home),
+      exists: existsSync7(workspace.home),
       config_path: workspace.configPath,
-      config_exists: existsSync12(workspace.configPath),
+      config_exists: existsSync7(workspace.configPath),
       json_store_path: workspace.jsonStorePath,
-      json_store_exists: existsSync12(workspace.jsonStorePath),
+      json_store_exists: existsSync7(workspace.jsonStorePath),
       knowledge_db_path: workspace.knowledgeDbPath,
-      knowledge_db_exists: existsSync12(workspace.knowledgeDbPath),
+      knowledge_db_exists: existsSync7(workspace.knowledgeDbPath),
       artifacts_dir: workspace.artifactsDir,
       indexes_dir: workspace.indexesDir,
       logs_dir: workspace.logsDir,
@@ -28917,18 +31824,21 @@ class KnowledgeService {
   }
   dbStats() {
     const workspace = this.workspace;
-    if (!existsSync12(workspace.knowledgeDbPath))
+    if (!existsSync7(workspace.knowledgeDbPath))
       return emptyKnowledgeDbStats();
     return getKnowledgeDbStats(workspace.knowledgeDbPath);
   }
   inventory(options = {}) {
+    const identity2 = trustedKnowledgeServiceIdentity(this);
+    explicitOwnGlobalReadAuthority(identity2.scope, options);
+    identity2.revalidate();
     const workspace = this.workspace;
     const limit = inventoryLimit(options.limit);
     const storePath = options.storePath ?? workspace.jsonStorePath;
     const legacyStore = readLegacyInventoryStore(storePath);
     const activeItems = legacyStore.items.filter((item) => item.archived !== true);
     const visibleItems = options.includeArchived ? legacyStore.items : activeItems;
-    const dbExists = existsSync12(workspace.knowledgeDbPath);
+    const dbExists = existsSync7(workspace.knowledgeDbPath);
     if (!dbExists) {
       const stats2 = emptyKnowledgeDbStats();
       const summary = {
@@ -29228,34 +32138,36 @@ class KnowledgeService {
       db.close();
     }
   }
-  assertAppWikiWrite(allowGlobal) {
+  assertAppWikiWrite(options) {
+    const allowGlobal = explicitOwnAppWikiAllowGlobal(this.scope, options);
     assertAppWikiWriteAllowed({
       scope: this.scope,
       workspace: this.workspace,
       safetyPolicy: this.safetyPolicy(),
       allowGlobal
     });
+    return allowGlobal;
   }
   async initAppWiki(options = {}) {
-    this.assertAppWikiWrite(options.allowGlobal);
+    const allowGlobal = this.assertAppWikiWrite(options);
     const workspace = this.ensureWorkspace();
     return initAppWikiScope({
       scope: this.scope,
       workspace,
       store: this.artifactStore(),
       safetyPolicy: this.safetyPolicy(),
-      allowGlobal: options.allowGlobal
+      allowGlobal
     });
   }
   async addAppWikiNote(options) {
-    this.assertAppWikiWrite(options.allowGlobal);
+    const allowGlobal = this.assertAppWikiWrite(options);
     const workspace = this.ensureWorkspace();
     return writeAppWikiNote({
       scope: this.scope,
       workspace,
       store: this.artifactStore(),
       safetyPolicy: this.safetyPolicy(),
-      allowGlobal: options.allowGlobal,
+      allowGlobal,
       title: options.title,
       content: options.content,
       tags: options.tags,
@@ -29265,42 +32177,75 @@ class KnowledgeService {
     });
   }
   listAppWikiNotes(options = {}) {
+    const allowGlobal = explicitOwnGlobalReadAuthority(this.scope, options);
     const workspace = this.workspace;
-    if (!existsSync12(workspace.knowledgeDbPath))
+    assertAppWikiReadAllowed({
+      scope: this.scope,
+      workspace,
+      allowGlobal
+    });
+    if (!existsSync7(workspace.knowledgeDbPath))
       return [];
     return listAppWikiNotes({
       dbPath: workspace.knowledgeDbPath,
+      scope: this.scope,
+      workspace,
+      allowGlobal,
       limit: options.limit
     });
   }
   async getAppWikiNote(id, options = {}) {
+    const allowGlobal = explicitOwnGlobalReadAuthority(this.scope, options);
     const workspace = this.workspace;
-    if (!existsSync12(workspace.knowledgeDbPath))
+    assertAppWikiReadAllowed({
+      scope: this.scope,
+      workspace,
+      allowGlobal
+    });
+    if (!existsSync7(workspace.knowledgeDbPath))
       return null;
     return getAppWikiNote({
       dbPath: workspace.knowledgeDbPath,
+      scope: this.scope,
+      workspace,
+      allowGlobal,
       store: this.artifactStore(),
       id,
       includeContent: options.includeContent
     });
   }
   async addAppWikiSourceRef(options) {
-    this.assertAppWikiWrite(options.allowGlobal);
+    assertContainedSourceGraph(options, "public-api");
+    const sourceRef = safePublicProperty(options, "sourceRef", "public-api");
+    assertClassifiedSourceReference(sourceRef, { surface: "public-api" });
+    const allowGlobal = this.assertAppWikiWrite(options);
     const workspace = this.ensureWorkspace();
     return ingestAppWikiSourceRef({
       scope: this.scope,
       workspace,
-      sourceRef: options.sourceRef,
+      sourceRef,
       purpose: options.purpose,
       config: this.config(),
       safetyPolicy: this.safetyPolicy(),
-      allowGlobal: options.allowGlobal
+      allowGlobal
     });
   }
   async searchAppWiki(options) {
+    const allowGlobal = explicitOwnGlobalReadAuthority(this.scope, options);
+    assertAppWikiReadAllowed({
+      scope: this.scope,
+      workspace: this.workspace,
+      allowGlobal
+    });
     return this.search(options);
   }
   async queryAppWiki(options) {
+    const allowGlobal = explicitOwnGlobalReadAuthority(this.scope, options);
+    assertAppWikiReadAllowed({
+      scope: this.scope,
+      workspace: this.workspace,
+      allowGlobal
+    });
     return this.retrieveContext(options);
   }
   async initWiki() {
@@ -29348,7 +32293,8 @@ class KnowledgeService {
     return lintWiki({ dbPath: workspace.knowledgeDbPath });
   }
   async ingestManifest(input) {
-    const workspace = this.ensureWorkspace();
+    assertLocalSourceInput(input);
+    const workspace = this.workspace;
     return ingestOpenFilesManifest({
       dbPath: workspace.knowledgeDbPath,
       input,
@@ -29357,6 +32303,7 @@ class KnowledgeService {
     });
   }
   async ingestSource(sourceRef, purpose) {
+    assertClassifiedSourceReference(sourceRef, { surface: "public-api" });
     const workspace = this.ensureWorkspace();
     return ingestSourceRef({
       dbPath: workspace.knowledgeDbPath,
@@ -29384,6 +32331,7 @@ class KnowledgeService {
     });
   }
   async resolveSource(sourceRef, options = {}) {
+    assertClassifiedSourceReference(sourceRef, { allowStored: true, surface: "public-api" });
     const workspace = this.ensureWorkspace();
     return resolveOpenFilesSource({
       dbPath: workspace.knowledgeDbPath,
@@ -29394,6 +32342,7 @@ class KnowledgeService {
     });
   }
   async consumeOutbox(input) {
+    assertLocalSourceInput(input);
     const workspace = this.ensureWorkspace();
     return consumeOpenFilesOutbox({
       dbPath: workspace.knowledgeDbPath,
@@ -29404,7 +32353,7 @@ class KnowledgeService {
   }
   reindexHealth(options = {}) {
     const workspace = this.workspace;
-    if (!existsSync12(workspace.knowledgeDbPath))
+    if (!existsSync7(workspace.knowledgeDbPath))
       return emptyReindexHealth();
     return reindexHealth({
       ...options,
@@ -29436,7 +32385,7 @@ class KnowledgeService {
   }
   embeddingStatus() {
     const workspace = this.workspace;
-    if (!existsSync12(workspace.knowledgeDbPath))
+    if (!existsSync7(workspace.knowledgeDbPath))
       return emptyEmbeddingStatus();
     return embeddingIndexStatus(workspace.knowledgeDbPath);
   }
@@ -29450,7 +32399,7 @@ class KnowledgeService {
   }
   async semanticSearch(options) {
     const workspace = this.workspace;
-    if (!existsSync12(workspace.knowledgeDbPath)) {
+    if (!existsSync7(workspace.knowledgeDbPath)) {
       return {
         provider: "openai",
         model: "text-embedding-3-small",
@@ -29466,10 +32415,11 @@ class KnowledgeService {
     });
   }
   async search(options) {
+    explicitOwnGlobalReadAuthority(this.scope, options);
     const workspace = this.workspace;
     const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
-    if (!existsSync12(workspace.knowledgeDbPath)) {
-      if (existsSync12(legacyStorePath)) {
+    if (!existsSync7(workspace.knowledgeDbPath)) {
+      if (existsSync7(legacyStorePath)) {
         return hybridSearchLegacyStore({
           ...options,
           legacyStorePath,
@@ -29486,10 +32436,11 @@ class KnowledgeService {
     });
   }
   async retrieveContext(options) {
+    explicitOwnGlobalReadAuthority(this.scope, options);
     const workspace = this.workspace;
     const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
-    if (!existsSync12(workspace.knowledgeDbPath)) {
-      if (existsSync12(legacyStorePath)) {
+    if (!existsSync7(workspace.knowledgeDbPath)) {
+      if (existsSync7(legacyStorePath)) {
         const search = await hybridSearchLegacyStore({
           ...options,
           legacyStorePath,
@@ -29509,11 +32460,14 @@ class KnowledgeService {
     });
   }
   async contextPack(options) {
+    const identity2 = trustedKnowledgeServiceIdentity(this);
+    explicitOwnGlobalReadAuthority(identity2.scope, options);
+    identity2.revalidate();
     const workspace = this.workspace;
     const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
-    if (!existsSync12(workspace.knowledgeDbPath)) {
+    if (!existsSync7(workspace.knowledgeDbPath)) {
       const query2 = (options.query ?? options.topic ?? "").trim();
-      if (query2 && options.source !== "loops" && options.source !== "runs" && existsSync12(legacyStorePath)) {
+      if (query2 && options.source !== "loops" && options.source !== "runs" && existsSync7(legacyStorePath)) {
         const search = await hybridSearchLegacyStore({
           ...options,
           query: query2,
@@ -29548,13 +32502,7 @@ class KnowledgeService {
     });
   }
   async webSearch(options) {
-    const workspace = this.ensureWorkspace();
-    return runProviderWebSearch({
-      ...options,
-      dbPath: workspace.knowledgeDbPath,
-      config: this.config(),
-      safetyPolicy: this.safetyPolicy()
-    });
+    return runProviderWebSearch(undefined);
   }
   async machineTopology(options = {}) {
     const workspace = this.workspace;
@@ -29578,7 +32526,7 @@ class KnowledgeService {
   }
   syncStatus() {
     const workspace = this.workspace;
-    if (!existsSync12(workspace.knowledgeDbPath)) {
+    if (!existsSync7(workspace.knowledgeDbPath)) {
       return emptySyncStatus({
         scope: this.scope,
         workspaceHome: workspace.home
@@ -29799,7 +32747,7 @@ class KnowledgeService {
   }
   syncConflicts(options = {}) {
     const workspace = this.workspace;
-    if (!existsSync12(workspace.knowledgeDbPath))
+    if (!existsSync7(workspace.knowledgeDbPath))
       return [];
     return listKnowledgeSyncConflicts(workspace.knowledgeDbPath, options);
   }
@@ -29872,7 +32820,7 @@ class KnowledgeService {
   }
   syncMachines() {
     const workspace = this.workspace;
-    if (!existsSync12(workspace.knowledgeDbPath))
+    if (!existsSync7(workspace.knowledgeDbPath))
       return [];
     return listKnowledgeMachines(workspace.knowledgeDbPath);
   }
@@ -30015,12 +32963,16 @@ class KnowledgeService {
     const direction = options.direction ?? "both";
     const localWorkspace = this.ensureWorkspace();
     migrateKnowledgeDb(localWorkspace.knowledgeDbPath);
-    const peerWorkspaceInput = resolve5(options.peerWorkspace);
+    const peerWorkspaceInput = resolve11(options.peerWorkspace);
     const peerWorkspace = resolvePeerWorkspace(peerWorkspaceInput);
     migrateKnowledgeDb(peerWorkspace.knowledgeDbPath);
     const peerConfig = readKnowledgeConfig(peerWorkspace.configPath);
     const peerStorage = resolveStorageContract(peerConfig, peerWorkspace, this.scope);
-    const peerStore = createArtifactStore(peerConfig, peerWorkspace);
+    const peerStore = createArtifactStore(peerConfig, peerWorkspace, {
+      env: this.options.env ?? process.env,
+      surface: this.options.runtimeSurface ?? "sdk",
+      readConfigMode: () => readKnowledgeConfiguredMode(peerWorkspace.configPath)
+    });
     const localMachineId2 = options.machineId ?? workspaceMachineId(localWorkspace);
     const peerMachineId = workspaceMachineId(peerWorkspace);
     const resolvedWorkspace = await resolveKnowledgeMachineWorkspace({
@@ -30092,13 +33044,24 @@ class KnowledgeService {
     return result;
   }
 }
+Object.freeze(KnowledgeService.prototype);
 function createKnowledgeService(options = {}) {
   return new KnowledgeService(options);
 }
 
 // src/sdk.ts
+init_public_guard();
 function createKnowledgeClient(options = {}) {
-  const service = createKnowledgeService(options);
+  assertPublicInvocation([], { surface: "sdk" });
+  const requestedScope = safePublicProperty(options, "scope", "sdk") ?? "global";
+  if (requestedScope === "global")
+    assertExplicitOwnAllowGlobal(options);
+  assertPublicInvocation([options], { surface: "sdk" });
+  const { allowGlobal, ...serviceOptions } = options;
+  const service = createKnowledgeService(serviceOptions);
+  const withReadAuthority = (input) => withDefaultAllowGlobal(input, allowGlobal, () => {
+    service.modelRegistry();
+  });
   return {
     unstable_service: service,
     paths: () => service.paths(),
@@ -30133,7 +33096,7 @@ function createKnowledgeClient(options = {}) {
       peer: (input) => service.syncPeer(input),
       remotePeer: (input) => service.syncRemotePeer(input)
     },
-    inventory: (input = {}) => service.inventory(input),
+    inventory: (input = {}) => service.inventory(withReadAuthority(input)),
     db: {
       init: () => service.initDb(),
       stats: () => service.dbStats()
@@ -30146,17 +33109,17 @@ function createKnowledgeClient(options = {}) {
     },
     appWiki: {
       paths: () => service.paths(),
-      init: (input = {}) => service.initAppWiki(input),
+      init: (input = {}) => service.initAppWiki(withReadAuthority(input)),
       notes: {
-        add: (input) => service.addAppWikiNote(input),
-        list: (input = {}) => service.listAppWikiNotes(input),
-        get: (id, input = {}) => service.getAppWikiNote(id, input)
+        add: (input) => service.addAppWikiNote(withReadAuthority(input)),
+        list: (input = {}) => service.listAppWikiNotes(withReadAuthority(input)),
+        get: (id, input = {}) => service.getAppWikiNote(id, withReadAuthority(input))
       },
       sources: {
-        add: (input) => service.addAppWikiSourceRef(input)
+        add: (input) => service.addAppWikiSourceRef(withReadAuthority(input))
       },
-      search: (input) => service.searchAppWiki(input),
-      query: (input) => service.queryAppWiki(input)
+      search: (input) => service.searchAppWiki(withReadAuthority(input)),
+      query: (input) => service.queryAppWiki(withReadAuthority(input))
     },
     ingest: {
       manifest: (input) => service.ingestManifest(input),
@@ -30181,51 +33144,286 @@ function createKnowledgeClient(options = {}) {
       index: (input = {}) => service.indexEmbeddings(input),
       search: (input) => service.semanticSearch(input)
     },
-    search: (input) => service.search(input),
-    retrieveContext: (input) => service.retrieveContext(input),
-    contextPack: (input) => service.contextPack(input),
+    search: (input) => service.search(withReadAuthority(input)),
+    retrieveContext: (input) => service.retrieveContext(withReadAuthority(input)),
+    contextPack: (input) => service.contextPack(withReadAuthority(input)),
     context: {
-      pack: (input) => service.contextPack(input)
+      pack: (input) => service.contextPack(withReadAuthority(input))
     },
-    ask: (prompt, input = {}) => service.runPrompt({ ...input, prompt }),
-    build: (prompt, input = {}) => service.runPrompt({ ...input, prompt }),
+    ask: (prompt, input = {}) => {
+      assertPublicInvocation([], { surface: "sdk" });
+      service.modelRegistry();
+      return service.runPrompt({ ...input, prompt });
+    },
+    build: (prompt, input = {}) => {
+      assertPublicInvocation([], { surface: "sdk" });
+      service.modelRegistry();
+      return service.runPrompt({ ...input, prompt });
+    },
     web: {
       search: (input) => service.webSearch(input)
     }
   };
 }
 var createKnowledgeSdk = createKnowledgeClient;
-function withDefaultAllowGlobal(input, allowGlobal) {
+function assertExplicitOwnAllowGlobal(options) {
+  if (!options || typeof options !== "object") {
+    throw new Error("Global wiki access requires an explicit own allowGlobal=true data property.");
+  }
+  let descriptor;
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(options, "allowGlobal");
+  } catch {
+    throw new Error("Global wiki access requires an explicit own allowGlobal=true data property.");
+  }
+  if (!descriptor || !("value" in descriptor) || descriptor.value !== true) {
+    throw new Error("Global wiki access requires an explicit own allowGlobal=true data property.");
+  }
+}
+function withDefaultAllowGlobal(input, allowGlobal, assertAuthority) {
+  assertPublicInvocation([input], { surface: "sdk" });
+  assertAuthority();
   if (allowGlobal !== true)
     return input;
-  return { ...input ?? {}, allowGlobal: input?.allowGlobal ?? true };
+  if (input && typeof input === "object") {
+    const descriptor = Object.getOwnPropertyDescriptor(input, "allowGlobal");
+    if (descriptor && "value" in descriptor)
+      return input;
+  }
+  return { ...input ?? {}, allowGlobal: true };
 }
 function createAppWikiScope(options = {}) {
+  assertPublicInvocation([], { surface: "sdk" });
+  assertPublicInvocation([options], { surface: "sdk" });
   const { allowGlobal, ...clientOptions } = options;
+  if (clientOptions.scope === "global")
+    assertExplicitOwnAllowGlobal(options);
   const client = createKnowledgeClient({
     ...clientOptions,
-    scope: clientOptions.scope ?? "project"
+    scope: clientOptions.scope ?? "project",
+    ...allowGlobal === true ? { allowGlobal: true } : {}
+  });
+  const withAuthority = (input) => withDefaultAllowGlobal(input, allowGlobal, () => {
+    client.providers.models();
   });
   return {
     paths: () => client.appWiki.paths(),
-    init: (input = {}) => client.appWiki.init(withDefaultAllowGlobal(input, allowGlobal)),
+    init: (input = {}) => client.appWiki.init(withAuthority(input)),
     notes: {
-      add: (input) => client.appWiki.notes.add(withDefaultAllowGlobal(input, allowGlobal)),
-      list: (input = {}) => client.appWiki.notes.list(input),
-      get: (id, input = {}) => client.appWiki.notes.get(id, input)
+      add: (input) => client.appWiki.notes.add(withAuthority(input)),
+      list: (input = {}) => client.appWiki.notes.list(withAuthority(input)),
+      get: (id, input = {}) => client.appWiki.notes.get(id, withAuthority(input))
     },
     sources: {
-      add: (input) => client.appWiki.sources.add(withDefaultAllowGlobal(input, allowGlobal))
+      add: (input) => client.appWiki.sources.add(withAuthority(input))
     },
-    search: (input) => client.appWiki.search(input),
-    query: (input) => client.appWiki.query(input)
+    search: (input) => client.appWiki.search(withAuthority(input)),
+    query: (input) => client.appWiki.query(withAuthority(input))
   };
 }
 function openProjectWiki(options = {}) {
+  assertPublicInvocation([options], { surface: "sdk" });
   return createAppWikiScope({ ...options, scope: "project" });
 }
 function openGlobalWiki(options) {
+  assertPublicInvocation([], { surface: "sdk" });
+  assertExplicitOwnAllowGlobal(options);
+  assertPublicInvocation([options], { surface: "sdk" });
   return createAppWikiScope({ ...options, scope: "global", allowGlobal: true });
+}
+// src/public-local-api.ts
+init_public_guard();
+import { dirname as dirname7, join as join7 } from "path";
+init_workspace();
+init_source_resolver();
+function guarded(implementation, configPathForArgs) {
+  const invoke = (receiver, args) => {
+    assertPublicInvocation();
+    assertPublicInvocation(args, { explicitConfigPath: configPathForArgs?.(args) });
+    return Reflect.apply(implementation, receiver, args);
+  };
+  let wrapper;
+  try {
+    Reflect.construct(String, [], implementation);
+    wrapper = function(...args) {
+      return invoke(this, args);
+    };
+  } catch {
+    wrapper = (...args) => invoke(undefined, args);
+  }
+  Object.defineProperties(wrapper, {
+    name: { value: implementation.name, configurable: true },
+    length: { value: implementation.length, configurable: true }
+  });
+  return wrapper;
+}
+function guardedGlobalRead(implementation) {
+  const wrapped = guarded((options, ...rest) => {
+    const scope = options && typeof options === "object" ? safePublicProperty(options, "scope", "public-api") : undefined;
+    if (scope === "global") {
+      explicitOwnGlobalReadAuthority("global", options);
+    }
+    return Reflect.apply(implementation, undefined, [options, ...rest]);
+  });
+  Object.defineProperties(wrapped, {
+    name: { value: implementation.name, configurable: true },
+    length: { value: implementation.length, configurable: true }
+  });
+  return wrapped;
+}
+function configBesideDb(path) {
+  return typeof path === "string" ? join7(dirname7(path), "config.json") : undefined;
+}
+var buildKnowledgeAgentContextPack2 = guarded(buildKnowledgeAgentContextPack);
+var assertAppWikiWriteAllowed2 = guarded(assertAppWikiWriteAllowed);
+var initAppWikiScope2 = guarded(initAppWikiScope);
+var writeAppWikiNote2 = guarded(writeAppWikiNote);
+var listAppWikiNotes2 = guarded(listAppWikiNotes);
+var getAppWikiNote2 = guarded(getAppWikiNote);
+async function ingestAppWikiSourceRef2(options) {
+  assertPublicInvocation();
+  assertPublicInvocation([options]);
+  assertContainedSourceGraph(options);
+  assertClassifiedSourceReference(safePublicProperty(options, "sourceRef"));
+  return ingestAppWikiSourceRef(options);
+}
+var proposeKnowledgeSyncConflictResolutionWithAi2 = guarded(proposeKnowledgeSyncConflictResolutionWithAi);
+var discoverKnowledgeMachineTopology2 = guarded(discoverKnowledgeMachineTopology);
+var resolveKnowledgeMachineRoute2 = guarded(resolveKnowledgeMachineRoute);
+var resolveKnowledgeMachineWorkspace2 = guarded(resolveKnowledgeMachineWorkspace);
+var preflightKnowledgeMachine2 = guarded(preflightKnowledgeMachine);
+function createKnowledgeMachinesAdapter2(defaults = {}) {
+  assertPublicInvocation([defaults]);
+  const adapter = createKnowledgeMachinesAdapter(defaults);
+  const guardedAdapter = {
+    mode: adapter.mode,
+    status() {
+      assertPublicInvocation();
+      return adapter.status();
+    },
+    topology(options) {
+      assertPublicInvocation([options]);
+      return adapter.topology(options);
+    },
+    route(options) {
+      assertPublicInvocation([options]);
+      return adapter.route(options);
+    },
+    workspace(options) {
+      assertPublicInvocation([options]);
+      return adapter.workspace(options);
+    },
+    preflight(options) {
+      assertPublicInvocation([options]);
+      return adapter.preflight(options);
+    }
+  };
+  return guardedAdapter;
+}
+var applyKnowledgeSyncBundle2 = guarded(applyKnowledgeSyncBundle);
+var createKnowledgeSyncBundle2 = guarded(createKnowledgeSyncBundle);
+var createKnowledgeSyncSnapshot2 = guarded(createKnowledgeSyncSnapshot);
+var getKnowledgeSyncStatus2 = guarded(getKnowledgeSyncStatus);
+var listKnowledgeMachines2 = guarded(listKnowledgeMachines, ([path]) => configBesideDb(path));
+var listKnowledgeSyncConflicts2 = guarded(listKnowledgeSyncConflicts, ([path]) => configBesideDb(path));
+var recordKnowledgeSyncConflict2 = guarded(recordKnowledgeSyncConflict, ([path]) => configBesideDb(path));
+var refreshMachineRegistryFromTopology2 = guarded(refreshMachineRegistryFromTopology);
+var upsertKnowledgeMachine2 = guarded(upsertKnowledgeMachine);
+var ensureKnowledgeWorkspace2 = guarded(ensureKnowledgeWorkspace, ([home]) => typeof home === "string" ? join7(home, "config.json") : undefined);
+var readKnowledgeConfig2 = guarded(readKnowledgeConfig, ([path]) => typeof path === "string" ? path : undefined);
+var writeKnowledgeConfig2 = guarded(writeKnowledgeConfig, ([path]) => typeof path === "string" ? path : undefined);
+function createArtifactStore2(config2, workspace) {
+  assertPublicInvocation([config2, workspace]);
+  return createArtifactStore(config2, workspace);
+}
+var hybridSearch2 = guardedGlobalRead(hybridSearch);
+var retrieveKnowledgeContext2 = guardedGlobalRead(retrieveKnowledgeContext);
+var runKnowledgePrompt2 = guarded(runKnowledgePrompt);
+var embedTexts2 = guarded(embedTexts);
+var embeddingIndexStatus2 = guarded(embeddingIndexStatus, ([path]) => configBesideDb(path));
+var indexKnowledgeEmbeddings2 = guarded(indexKnowledgeEmbeddings);
+var searchVectorIndex2 = guarded(searchVectorIndex);
+var runProviderWebSearch2 = runProviderWebSearch;
+var compileWikiPage2 = guarded(compileWikiPage);
+var fileAnswerToWiki2 = guarded(fileAnswerToWiki);
+var lintWiki2 = guarded(lintWiki);
+function assertLocalInputPath(value) {
+  if (typeof value !== "string" || !value.trim())
+    assertClassifiedSourceReference(value);
+  if (/^[a-z][a-z0-9+.-]*:/i.test(value))
+    assertClassifiedSourceReference(value);
+}
+async function ingestOpenFilesManifest2(options) {
+  assertPublicInvocation();
+  assertPublicInvocation([options]);
+  assertLocalInputPath(safePublicProperty(options, "input"));
+  const implementation = await Promise.resolve().then(() => (init_manifest_ingest(), exports_manifest_ingest));
+  return implementation.ingestOpenFilesManifest(options);
+}
+async function ingestOpenFilesManifestItems2(options) {
+  assertPublicInvocation();
+  assertContainedSourceDataGraph(safePublicProperty(options, "items"));
+  assertPublicInvocation([options]);
+  const implementation = await Promise.resolve().then(() => (init_manifest_ingest(), exports_manifest_ingest));
+  return implementation.ingestOpenFilesManifestItems(options);
+}
+async function ingestSourceRef2(options) {
+  assertPublicInvocation();
+  assertPublicInvocation([options]);
+  assertContainedSourceGraph(options);
+  assertClassifiedSourceReference(safePublicProperty(options, "sourceRef"));
+  const implementation = await Promise.resolve().then(() => (init_source_ingest(), exports_source_ingest));
+  return implementation.ingestSourceRef(options);
+}
+var importRulesProvenance2 = guarded(importRulesProvenance);
+async function resolveOpenFilesSource2(options) {
+  assertPublicInvocation();
+  assertPublicInvocation([options]);
+  assertContainedSourceGraph(options);
+  assertClassifiedSourceReference(safePublicProperty(options, "sourceRef"), { allowStored: true });
+  return resolveOpenFilesSource(options);
+}
+async function consumeOpenFilesOutbox2(options) {
+  assertPublicInvocation();
+  assertPublicInvocation([options]);
+  assertLocalInputPath(safePublicProperty(options, "input"));
+  const implementation = await Promise.resolve().then(() => (init_outbox_consume(), exports_outbox_consume));
+  return implementation.consumeOpenFilesOutbox(options);
+}
+var enqueueMissingEmbeddings2 = guarded(enqueueMissingEmbeddings);
+var refreshEmbeddingIndex2 = guarded(refreshEmbeddingIndex);
+var reindexHealth2 = guarded(reindexHealth);
+function getKnowledgeAuth2(_env = undefined) {
+  return denyPublicAuth();
+}
+function saveKnowledgeAuth2(_auth, _env = undefined) {
+  return denyPublicAuth();
+}
+function clearKnowledgeAuth2(_env = undefined) {
+  return denyPublicAuth();
+}
+function getKnowledgeApiKey2(_env = undefined) {
+  return denyPublicAuth();
+}
+function knowledgeAuthStatus2(_config, _env = undefined) {
+  return denyPublicAuth();
+}
+for (const [callable, name] of [
+  [createKnowledgeMachinesAdapter2, "createKnowledgeMachinesAdapter"],
+  [createArtifactStore2, "createArtifactStore"],
+  [ingestAppWikiSourceRef2, "ingestAppWikiSourceRef"],
+  [ingestOpenFilesManifest2, "ingestOpenFilesManifest"],
+  [ingestOpenFilesManifestItems2, "ingestOpenFilesManifestItems"],
+  [ingestSourceRef2, "ingestSourceRef"],
+  [resolveOpenFilesSource2, "resolveOpenFilesSource"],
+  [consumeOpenFilesOutbox2, "consumeOpenFilesOutbox"],
+  [getKnowledgeAuth2, "getKnowledgeAuth"],
+  [saveKnowledgeAuth2, "saveKnowledgeAuth"],
+  [clearKnowledgeAuth2, "clearKnowledgeAuth"],
+  [getKnowledgeApiKey2, "getKnowledgeApiKey"],
+  [knowledgeAuthStatus2, "knowledgeAuthStatus"]
+]) {
+  Object.defineProperty(callable, "name", { value: name, configurable: true });
 }
 // node_modules/@hasna/contracts/dist/index.js
 var __defProp2 = Object.defineProperty;
@@ -34227,6 +37425,9 @@ var SCHEMA_IDS = {
   appCloudManifest: "hasna.app_cloud_manifest.v1",
   noCloudEvidencePack: "hasna.no_cloud_evidence_pack.v1",
   serviceContract: "hasna.service_contract.v1",
+  commsEventEnvelope: "hasna.comms_event_envelope.v1",
+  commsChannelMetadata: "hasna.comms_channel_metadata.v1",
+  commsMessageMetadata: "hasna.comms_message_metadata.v1",
   app: "hasna.app.v1",
   release: "hasna.release.v1",
   rolloutRecord: "hasna.rollout_record.v1",
@@ -35149,7 +38350,7 @@ var ScaffoldEnvVarSchema = exports_external2.object({
   key: exports_external2.string().regex(/^[A-Z][A-Z0-9_]*$/),
   description: exports_external2.string().min(1),
   required: exports_external2.boolean().default(false),
-  secret: exports_external2.boolean().default(false),
+  ["secret"]: exports_external2.boolean().default(false),
   group: exports_external2.string().min(1).optional(),
   default: exports_external2.string().optional()
 }).strict().superRefine((value, ctx) => {
@@ -36066,6 +39267,134 @@ var ReadyResponseSchema = exports_external2.object({
 var VersionResponseSchema = exports_external2.object({
   version: exports_external2.string().min(1)
 }).strict();
+var CommsSeveritySchema = exports_external2.enum(["info", "notice", "breaking", "critical"]);
+var CommsEventTypeSchema = exports_external2.string().regex(/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){1,3}$/, "Comms event types must be 2-4 lowercase dot-separated segments (<source>.<entity>.<action>)");
+var COMMS_SEVERITY_TAGS = ["FREEZE", "UNFREEZE", "BREAKING", "CUTOVER", "POLICY", "RELEASE"];
+var CommsSeverityTagSchema = exports_external2.enum(COMMS_SEVERITY_TAGS);
+var CommsScopeSchema = exports_external2.enum(["fleet", "package", "machine"]);
+var CommsEventEnvelopeSchema = contractBaseSchema(SCHEMA_IDS.commsEventEnvelope).extend({
+  type: CommsEventTypeSchema,
+  severity: CommsSeveritySchema,
+  scope: CommsScopeSchema,
+  summary: exports_external2.string().min(1).optional(),
+  source: ActorPointerSchema.optional(),
+  affected_packages: exports_external2.array(NonEmptyStringSchema).default([]),
+  affected_machines: exports_external2.array(NonEmptyStringSchema).default([]),
+  action_required: exports_external2.boolean().default(false),
+  ack_by: TimestampSchema.optional(),
+  dedupe_key: NonEmptyStringSchema,
+  resourceRefs: exports_external2.array(ResourcePointerSchema).default([]),
+  evidenceRefs: exports_external2.array(EvidencePointerSchema).default([])
+}).strict().superRefine((value, ctx) => {
+  if (value.scope === "package" && value.affected_packages.length === 0) {
+    ctx.addIssue({
+      code: exports_external2.ZodIssueCode.custom,
+      message: "Package-scoped comms events require affected_packages",
+      path: ["affected_packages"]
+    });
+  }
+  if (value.scope === "machine" && value.affected_machines.length === 0) {
+    ctx.addIssue({
+      code: exports_external2.ZodIssueCode.custom,
+      message: "Machine-scoped comms events require affected_machines",
+      path: ["affected_machines"]
+    });
+  }
+  if (value.ack_by && !value.action_required) {
+    ctx.addIssue({
+      code: exports_external2.ZodIssueCode.custom,
+      message: "Comms events with an ack_by deadline require action_required",
+      path: ["action_required"]
+    });
+  }
+  if (value.type === "fleet.freeze" || value.type === "fleet.unfreeze") {
+    if (value.severity !== "critical") {
+      ctx.addIssue({
+        code: exports_external2.ZodIssueCode.custom,
+        message: `${value.type} events are always critical`,
+        path: ["severity"]
+      });
+    }
+    if (value.scope !== "fleet") {
+      ctx.addIssue({
+        code: exports_external2.ZodIssueCode.custom,
+        message: `${value.type} events are always fleet-scoped`,
+        path: ["scope"]
+      });
+    }
+    if (!value.action_required) {
+      ctx.addIssue({
+        code: exports_external2.ZodIssueCode.custom,
+        message: `${value.type} events require action_required`,
+        path: ["action_required"]
+      });
+    }
+  }
+});
+var CommsChannelClassSchema = exports_external2.enum(["fleet", "package", "product", "loop-lane", "initiative", "personal"]);
+var CommsChannelNoiseSchema = exports_external2.enum(["quiet", "work", "firehose"]);
+var CommsUntilHorizonSchema = NonEmptyStringSchema.refine((value) => /^(?:\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)?|gate:[0-9a-f][0-9a-f-]{7,35})$/.test(value), "until must be an ISO date (YYYY-MM-DD), a UTC timestamp, or a gate id (gate:<todos-id>)");
+var CommsChannelMetadataSchema = contractBaseSchema(SCHEMA_IDS.commsChannelMetadata).extend({
+  class: CommsChannelClassSchema,
+  noise: CommsChannelNoiseSchema.optional(),
+  owner: NonEmptyStringSchema.optional(),
+  until: CommsUntilHorizonSchema.optional(),
+  successor: NonEmptyStringSchema.optional()
+}).strict().superRefine((value, ctx) => {
+  if (value.class === "initiative") {
+    if (!value.owner) {
+      ctx.addIssue({
+        code: exports_external2.ZodIssueCode.custom,
+        message: "Initiative channels require an owner",
+        path: ["owner"]
+      });
+    }
+    if (!value.until) {
+      ctx.addIssue({
+        code: exports_external2.ZodIssueCode.custom,
+        message: "Initiative channels require an until horizon (date or gate id)",
+        path: ["until"]
+      });
+    }
+  }
+});
+var COMMS_SEVERITY_TAG_INFO = {
+  FREEZE: { defaultSeverity: "critical", allowedSeverities: ["critical"], requiredEventType: "fleet.freeze" },
+  UNFREEZE: { defaultSeverity: "critical", allowedSeverities: ["critical"], requiredEventType: "fleet.unfreeze" },
+  BREAKING: { defaultSeverity: "breaking", allowedSeverities: ["breaking"], requiredEventType: null },
+  CUTOVER: { defaultSeverity: "notice", allowedSeverities: ["notice", "breaking"], requiredEventType: null },
+  POLICY: { defaultSeverity: "breaking", allowedSeverities: ["notice", "breaking"], requiredEventType: null },
+  RELEASE: { defaultSeverity: "info", allowedSeverities: ["info", "notice"], requiredEventType: null }
+};
+var CommsMessageMetadataSchema = contractBaseSchema(SCHEMA_IDS.commsMessageMetadata).extend({
+  tag: CommsSeverityTagSchema,
+  envelope: CommsEventEnvelopeSchema
+}).strict().superRefine((value, ctx) => {
+  const info = COMMS_SEVERITY_TAG_INFO[value.tag];
+  if (!info.allowedSeverities.includes(value.envelope.severity)) {
+    ctx.addIssue({
+      code: exports_external2.ZodIssueCode.custom,
+      message: `[${value.tag}] posts allow severities ${info.allowedSeverities.join(", ")}`,
+      path: ["envelope", "severity"]
+    });
+  }
+  if (info.requiredEventType && value.envelope.type !== info.requiredEventType) {
+    ctx.addIssue({
+      code: exports_external2.ZodIssueCode.custom,
+      message: `[${value.tag}] posts require event type ${info.requiredEventType}`,
+      path: ["envelope", "type"]
+    });
+  }
+  for (const [tag, tagInfo] of Object.entries(COMMS_SEVERITY_TAG_INFO)) {
+    if (tagInfo.requiredEventType === value.envelope.type && value.tag !== tag) {
+      ctx.addIssue({
+        code: exports_external2.ZodIssueCode.custom,
+        message: `${value.envelope.type} events must use the [${tag}] tag`,
+        path: ["tag"]
+      });
+    }
+  }
+});
 var ContractSchemaRegistry = {
   [SCHEMA_IDS.actorRef]: ActorRefSchema,
   [SCHEMA_IDS.resourceRef]: ResourceRefSchema,
@@ -36089,6 +39418,9 @@ var ContractSchemaRegistry = {
   [SCHEMA_IDS.appCloudManifest]: AppCloudManifestSchema,
   [SCHEMA_IDS.noCloudEvidencePack]: NoCloudEvidencePackSchema,
   [SCHEMA_IDS.serviceContract]: ServiceContractManifestSchema,
+  [SCHEMA_IDS.commsEventEnvelope]: CommsEventEnvelopeSchema,
+  [SCHEMA_IDS.commsChannelMetadata]: CommsChannelMetadataSchema,
+  [SCHEMA_IDS.commsMessageMetadata]: CommsMessageMetadataSchema,
   [SCHEMA_IDS.app]: AppSchema,
   [SCHEMA_IDS.release]: ReleaseSchema,
   [SCHEMA_IDS.rolloutRecord]: RolloutRecordSchema,
@@ -36281,10 +39613,12 @@ var SERVICE_CONTRACT_JSON_SCHEMA = {
     metadata: { type: "object" }
   }
 };
-var DEFAULT_API_KEY_TTL_SECONDS2 = 90 * 24 * 60 * 60;
+var DEFAULT_API_KEY_TTL_SECONDS = 90 * 24 * 60 * 60;
 var IDEMPOTENT_METHODS = new Set(["GET", "HEAD", "PUT", "DELETE", "OPTIONS"]);
 
 // src/project-panel.ts
+init_public_guard();
+init_workspace();
 var SOURCE_PACKAGE = "@hasna/knowledge";
 function clampLimit(limit) {
   if (!Number.isFinite(limit ?? 0))
@@ -36300,7 +39634,7 @@ function compact(value, max = 180) {
     return text;
   return `${text.slice(0, Math.max(0, max - 3))}...`;
 }
-function asString5(value, fallback = "") {
+function asString4(value, fallback = "") {
   return typeof value === "string" && value.length > 0 ? value : fallback;
 }
 function asNumber2(value) {
@@ -36376,9 +39710,9 @@ function inventoryItems(inventory, limit) {
     });
   }
   for (const row of inventory.sources.slice(0, Math.max(0, limit - items.length))) {
-    const id = asString5(row.id, asString5(row.uri, "source"));
-    const title = asString5(row.title, asString5(row.uri, id));
-    const uri = asString5(row.uri, `knowledge://source/${encodeURIComponent(id)}`);
+    const id = asString4(row.id, asString4(row.uri, "source"));
+    const title = asString4(row.title, asString4(row.uri, id));
+    const uri = asString4(row.uri, `knowledge://source/${encodeURIComponent(id)}`);
     items.push({
       id: `source_${id}`,
       title,
@@ -36397,16 +39731,16 @@ function inventoryItems(inventory, limit) {
     });
   }
   for (const row of inventory.chunks.slice(0, Math.max(0, limit - items.length))) {
-    const id = asString5(row.id, "chunk");
-    const sourceUri = asString5(row.source_uri);
+    const id = asString4(row.id, "chunk");
+    const sourceUri = asString4(row.source_uri);
     items.push({
       id: `chunk_${id}`,
-      title: asString5(row.wiki_title, sourceUri ? `Chunk from ${sourceUri}` : `Knowledge chunk ${id}`),
+      title: asString4(row.wiki_title, sourceUri ? `Chunk from ${sourceUri}` : `Knowledge chunk ${id}`),
       summary: compact(row.text_preview),
       status: "chunk",
       priority: "low",
       timestamp: toTimestamp(row.created_at),
-      resourceRefs: [resource("context_pack", id, asString5(row.wiki_title, id), `knowledge://chunk/${encodeURIComponent(id)}`)],
+      resourceRefs: [resource("context_pack", id, asString4(row.wiki_title, id), `knowledge://chunk/${encodeURIComponent(id)}`)],
       evidenceRefs: sourceUri && hasUriScheme(sourceUri) ? [{ id: `chunk_source_${id}`, kind: "url", uri: sourceUri, summary: "Chunk source reference." }] : [],
       metadata: {
         source: "knowledge_db.chunks",
@@ -36417,12 +39751,12 @@ function inventoryItems(inventory, limit) {
     });
   }
   for (const row of inventory.sync_conflicts.slice(0, Math.max(0, limit - items.length))) {
-    const id = asString5(row.id, "sync_conflict");
+    const id = asString4(row.id, "sync_conflict");
     items.push({
       id: `sync_conflict_${id}`,
-      title: `Sync conflict: ${asString5(row.entity_kind, "entity")}/${asString5(row.entity_id, id)}`,
-      summary: compact(`Status ${asString5(row.status, "unknown")}; strategy ${asString5(row.resolution_strategy, "none")}.`),
-      status: asString5(row.status, "unknown"),
+      title: `Sync conflict: ${asString4(row.entity_kind, "entity")}/${asString4(row.entity_id, id)}`,
+      summary: compact(`Status ${asString4(row.status, "unknown")}; strategy ${asString4(row.resolution_strategy, "none")}.`),
+      status: asString4(row.status, "unknown"),
       priority: "critical",
       timestamp: toTimestamp(row.created_at),
       resourceRefs: [resource("finding", id, "Knowledge sync conflict", `knowledge://sync-conflict/${encodeURIComponent(id)}`)],
@@ -36434,13 +39768,13 @@ function inventoryItems(inventory, limit) {
     });
   }
   for (const row of inventory.reindex_queue.slice(0, Math.max(0, limit - items.length))) {
-    const id = asString5(row.id, "reindex");
+    const id = asString4(row.id, "reindex");
     items.push({
       id: `reindex_${id}`,
-      title: `Reindex ${asString5(row.kind, "item")}: ${asString5(row.target_id, id)}`,
+      title: `Reindex ${asString4(row.kind, "item")}: ${asString4(row.target_id, id)}`,
       summary: compact(row.reason),
-      status: asString5(row.status, "unknown"),
-      priority: asString5(row.status).toLowerCase() === "failed" ? "high" : "medium",
+      status: asString4(row.status, "unknown"),
+      priority: asString4(row.status).toLowerCase() === "failed" ? "high" : "medium",
       timestamp: toTimestamp(row.updated_at ?? row.created_at),
       resourceRefs: [resource("action", id, "Knowledge reindex work item", `knowledge://reindex/${encodeURIComponent(id)}`)],
       metadata: {
@@ -36453,10 +39787,13 @@ function inventoryItems(inventory, limit) {
   return items.slice(0, limit);
 }
 function createKnowledgeProjectPanel(projectRef, options = {}) {
+  assertPublicInvocation([options], { surface: "sdk" });
+  const scope = canonicalKnowledgeScope(options.scope, "project");
   const limit = clampLimit(options.limit);
   const generatedAt = new Date().toISOString();
   const projectId = slugify4(projectRef);
-  const service = options.service ?? createKnowledgeService({ scope: options.scope ?? "project", cwd: options.cwd });
+  const service = options.service ?? createKnowledgeService({ scope, cwd: options.cwd });
+  assertKnowledgeServiceForProjectPanel(service, { scope, cwd: options.cwd });
   const inventory = service.inventory({
     limit,
     storePath: options.storePath,
@@ -36542,7 +39879,14 @@ function formatKnowledgeProjectPanel(panel) {
   return lines.join(`
 `);
 }
+
+// src/index.ts
+init_workspace();
+init_source_ref();
+
 // src/generated/knowledge-api-client.ts
+init_runtime_role();
+
 class ApiError extends Error {
   status;
   body;
@@ -36553,133 +39897,76 @@ class ApiError extends Error {
     this.name = "ApiError";
   }
 }
+function containedClientBoundary() {
+  throw new KnowledgeContainmentError("KNOWLEDGE_HOSTED_CONTAINED", 503, "hosted-client", "public-api", "KnowledgeApiClient is a zero-I/O compatibility boundary during Stage A");
+}
 
 class KnowledgeApiClient {
-  baseUrl;
-  apiKey;
-  fetchImpl;
-  baseHeaders;
   constructor(options) {
-    if (!options.baseUrl)
-      throw new Error("KnowledgeApiClient requires a baseUrl.");
-    this.baseUrl = options.baseUrl.replace(/\/$/, "");
-    this.apiKey = options.apiKey;
-    this.fetchImpl = options.fetch ?? globalThis.fetch;
-    this.baseHeaders = options.headers ?? {};
+    containedClientBoundary();
   }
-  async request(method, path, opts) {
-    const url2 = new URL(this.baseUrl + path);
-    if (opts.query) {
-      for (const [key, value] of Object.entries(opts.query)) {
-        if (value !== undefined && value !== null)
-          url2.searchParams.set(key, String(value));
-      }
-    }
-    const headers = { Accept: "application/json", ...this.baseHeaders, ...opts.init?.headers };
-    if (this.apiKey)
-      headers["x-api-key"] = this.apiKey;
-    let payload;
-    if (opts.body !== undefined) {
-      headers["Content-Type"] = "application/json";
-      payload = JSON.stringify(opts.body);
-    }
-    const response = await this.fetchImpl(url2.toString(), { ...opts.init, method, headers, body: payload });
-    const text = await response.text();
-    const data = text ? (() => {
-      try {
-        return JSON.parse(text);
-      } catch {
-        return text;
-      }
-    })() : undefined;
-    if (!response.ok) {
-      throw new ApiError(response.status, `${method} ${path} failed: ${response.status}`, data);
-    }
-    return data;
+  async request(_method, _path, _opts) {
+    return containedClientBoundary();
   }
   async listNotes(query2, init) {
-    return this.request("GET", `/v1/notes`, {
-      body: undefined,
-      query: query2,
-      init
-    });
+    return containedClientBoundary();
   }
   async createNote(body, init) {
-    return this.request("POST", `/v1/notes`, {
-      body,
-      query: undefined,
-      init
-    });
+    return containedClientBoundary();
   }
   async getNote(id, init) {
-    return this.request("GET", `/v1/notes/${encodeURIComponent(String(id))}`, {
-      body: undefined,
-      query: undefined,
-      init
-    });
+    return containedClientBoundary();
   }
   async deleteNote(id, init) {
-    return this.request("DELETE", `/v1/notes/${encodeURIComponent(String(id))}`, {
-      body: undefined,
-      query: undefined,
-      init
-    });
+    return containedClientBoundary();
   }
   async updateNote(id, body, init) {
-    return this.request("PATCH", `/v1/notes/${encodeURIComponent(String(id))}`, {
-      body,
-      query: undefined,
-      init
-    });
+    return containedClientBoundary();
   }
   async getRegistry(init) {
-    return this.request("GET", `/v1/registry`, {
-      body: undefined,
-      query: undefined,
-      init
-    });
+    return containedClientBoundary();
   }
 }
 export {
-  writeKnowledgeConfig,
-  writeAppWikiNote,
+  writeKnowledgeConfig2 as writeKnowledgeConfig,
+  writeAppWikiNote2 as writeAppWikiNote,
   workspaceForHome,
   validateStorageConfig,
-  upsertKnowledgeMachine,
+  upsertKnowledgeMachine2 as upsertKnowledgeMachine,
   syncTablesFromSnapshot,
   syncArtifactsFromSnapshot,
   storageSync,
   storagePush,
   storagePull,
   startKnowledgeServe,
-  searchVectorIndex,
+  searchVectorIndex2 as searchVectorIndex,
   saveKnowledgeAuth,
   runStorageMigrations,
-  runProviderWebSearch,
-  runKnowledgePrompt,
+  runProviderWebSearch2 as runProviderWebSearch,
+  runKnowledgePrompt2 as runKnowledgePrompt,
   revisionIdForSourceRef,
-  retrieveKnowledgeContext,
+  retrieveKnowledgeContext2 as retrieveKnowledgeContext,
   resolveTables,
   resolveStorageContract,
   resolveScopedWorkspace,
-  resolveOpenFilesSource,
+  resolveOpenFilesSource2 as resolveOpenFilesSource,
   resolveModelRef,
   resolveLegacyScopedWorkspace,
-  resolveKnowledgeMachineWorkspace,
-  resolveKnowledgeMachineRoute,
+  resolveKnowledgeMachineWorkspace2 as resolveKnowledgeMachineWorkspace,
+  resolveKnowledgeMachineRoute2 as resolveKnowledgeMachineRoute,
   resolveKnowledgeApiUrl,
   resolveEmbeddingModelRef,
-  reindexHealth,
-  refreshMachineRegistryFromTopology,
-  refreshEmbeddingIndex,
-  recordKnowledgeSyncConflict,
-  readKnowledgeConfig,
+  reindexHealth2 as reindexHealth,
+  refreshMachineRegistryFromTopology2 as refreshMachineRegistryFromTopology,
+  refreshEmbeddingIndex2 as refreshEmbeddingIndex,
+  recordKnowledgeSyncConflict2 as recordKnowledgeSyncConflict,
+  readKnowledgeConfig2 as readKnowledgeConfig,
   providerStatus,
   providerSettings,
   providerCredentialStatus,
-  proposeKnowledgeSyncConflictResolutionWithAi,
+  proposeKnowledgeSyncConflictResolutionWithAi2 as proposeKnowledgeSyncConflictResolutionWithAi,
   projectKnowledgeHome,
-  preflightKnowledgeMachine,
+  preflightKnowledgeMachine2 as preflightKnowledgeMachine,
   parseStorageTables,
   parseSourceRef,
   parseModelRef,
@@ -36690,10 +39977,10 @@ export {
   normalizeArtifactKey,
   modelAliases,
   listModelRegistry,
-  listKnowledgeSyncConflicts,
-  listKnowledgeMachines,
-  listAppWikiNotes,
-  lintWiki,
+  listKnowledgeSyncConflicts2 as listKnowledgeSyncConflicts,
+  listKnowledgeMachines2 as listKnowledgeMachines,
+  listAppWikiNotes2 as listAppWikiNotes,
+  lintWiki2 as lintWiki,
   legacyProjectKnowledgeHome,
   legacyGlobalKnowledgeHome,
   languageModelFor,
@@ -36702,14 +39989,14 @@ export {
   knowledgeAuthStatus,
   knowledgeAuthPath,
   isSupportedSourceRef,
-  initAppWikiScope,
-  ingestSourceRef,
-  ingestOpenFilesManifestItems,
-  ingestOpenFilesManifest,
-  ingestAppWikiSourceRef,
-  indexKnowledgeEmbeddings,
-  importRulesProvenance,
-  hybridSearch,
+  initAppWikiScope2 as initAppWikiScope,
+  ingestSourceRef2 as ingestSourceRef,
+  ingestOpenFilesManifestItems2 as ingestOpenFilesManifestItems,
+  ingestOpenFilesManifest2 as ingestOpenFilesManifest,
+  ingestAppWikiSourceRef2 as ingestAppWikiSourceRef,
+  indexKnowledgeEmbeddings2 as indexKnowledgeEmbeddings,
+  importRulesProvenance2 as importRulesProvenance,
+  hybridSearch2 as hybridSearch,
   hashArtifactBody,
   globalKnowledgeHome,
   getSyncMetaAll,
@@ -36719,38 +40006,38 @@ export {
   getStorageDatabaseUrl,
   getStorageDatabaseEnvName,
   getStorageDatabaseEnv,
-  getKnowledgeSyncStatus,
+  getKnowledgeSyncStatus2 as getKnowledgeSyncStatus,
   getKnowledgeAuth,
   getKnowledgeApiKey,
-  getAppWikiNote,
+  getAppWikiNote2 as getAppWikiNote,
   formatKnowledgeProjectPanel,
-  fileAnswerToWiki,
-  ensureKnowledgeWorkspace,
-  enqueueMissingEmbeddings,
-  embeddingIndexStatus,
-  embedTexts,
-  discoverKnowledgeMachineTopology,
+  fileAnswerToWiki2 as fileAnswerToWiki,
+  ensureKnowledgeWorkspace2 as ensureKnowledgeWorkspace,
+  enqueueMissingEmbeddings2 as enqueueMissingEmbeddings,
+  embeddingIndexStatus2 as embeddingIndexStatus,
+  embedTexts2 as embedTexts,
+  discoverKnowledgeMachineTopology2 as discoverKnowledgeMachineTopology,
   defaultKnowledgeConfig,
   createServeHandler,
-  createKnowledgeSyncSnapshot,
-  createKnowledgeSyncBundle,
+  createKnowledgeSyncSnapshot2 as createKnowledgeSyncSnapshot,
+  createKnowledgeSyncBundle2 as createKnowledgeSyncBundle,
   createKnowledgeService,
   createKnowledgeSdk,
   createKnowledgeProjectPanel,
-  createKnowledgeMachinesAdapter,
+  createKnowledgeMachinesAdapter2 as createKnowledgeMachinesAdapter,
   createKnowledgeClient,
   createArtifactStore,
   createAppWikiScope,
   createAiSdkProviderRegistry,
-  consumeOpenFilesOutbox,
-  compileWikiPage,
+  consumeOpenFilesOutbox2 as consumeOpenFilesOutbox,
+  compileWikiPage2 as compileWikiPage,
   clearKnowledgeAuth,
   catalogSourceUriForRef,
   canonicalExampleKnowledgeStorage,
-  buildKnowledgeAgentContextPack,
-  assertAppWikiWriteAllowed,
+  buildKnowledgeAgentContextPack2 as buildKnowledgeAgentContextPack,
+  assertAppWikiWriteAllowed2 as assertAppWikiWriteAllowed,
   artifactKindForKey,
-  applyKnowledgeSyncBundle,
+  applyKnowledgeSyncBundle2 as applyKnowledgeSyncBundle,
   STORAGE_TABLES,
   STORAGE_MODE_ENV,
   STORAGE_DATABASE_ENV,
@@ -36764,7 +40051,7 @@ export {
   ApiError as KnowledgeApiError,
   KnowledgeApiClient,
   KNOWLEDGE_SYNC_TABLES,
-  CURRENT_SCHEMA_VERSION as KNOWLEDGE_SYNC_SCHEMA_VERSION,
+  KNOWLEDGE_SYNC_SCHEMA_VERSION,
   KNOWLEDGE_SYNC_PROTOCOL_VERSION,
   KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION,
   KNOWLEDGE_STORAGE_TABLES,

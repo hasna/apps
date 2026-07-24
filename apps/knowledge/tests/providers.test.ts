@@ -1,8 +1,4 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { migrateKnowledgeDb, openKnowledgeDb } from '../src/knowledge-db';
 import {
   assertProviderCredentials,
   listModelRegistry,
@@ -19,7 +15,7 @@ describe('AI SDK provider registry metadata', () => {
     const status = providerStatus(config, {
       OPENAI_API_KEY: 'sk-test',
       ANTHROPIC_API_KEY: undefined,
-      DEEPSEEK_API_KEY: 'deepseek-test',
+      DEEPSEEK_API_KEY: 'synthetic-deepseek-key',
     });
     expect(status.default_model).toBe('openai:gpt-5.2');
     expect(status.providers.find((entry) => entry.provider === 'openai')?.configured).toBe(true);
@@ -42,12 +38,11 @@ describe('AI SDK provider registry metadata', () => {
     expect(resolveModelRef('sonnet', config)).toBe('anthropic:claude-sonnet-4-6');
   });
 
-  test('checks credentials and records normalized provider usage', () => {
-    expect(() => assertProviderCredentials('anthropic', defaultKnowledgeConfig(), {})).toThrow('Missing ANTHROPIC_API_KEY');
-    expect(assertProviderCredentials('openai', defaultKnowledgeConfig(), { OPENAI_API_KEY: 'sk-test' })).toMatchObject({
-      provider: 'openai',
-      configured: true,
-    });
+  test('contains credential and usage persistence capabilities before client access', () => {
+    expect(() => assertProviderCredentials('anthropic', defaultKnowledgeConfig(), {}))
+      .toThrow('KNOWLEDGE_HOSTED_CONTAINED');
+    expect(() => assertProviderCredentials('openai', defaultKnowledgeConfig(), { OPENAI_API_KEY: 'synthetic' }))
+      .toThrow('KNOWLEDGE_HOSTED_CONTAINED');
 
     const normalized = normalizeAiSdkUsage({
       provider: 'openai',
@@ -61,24 +56,12 @@ describe('AI SDK provider registry metadata', () => {
       cost_usd: 0,
     });
 
-    const dir = mkdtempSync(join(tmpdir(), 'ok-provider-'));
-    const dbPath = join(dir, 'knowledge.db');
-    migrateKnowledgeDb(dbPath);
-    const db = openKnowledgeDb(dbPath);
-    try {
-      const id = recordProviderUsage(db, normalized);
-      expect(id).toStartWith('usage_');
-      const row = db.query<{ provider: string; model: string; input_tokens: number; output_tokens: number }, []>(
-        'SELECT provider, model, input_tokens, output_tokens FROM provider_usage LIMIT 1',
-      ).get();
-      expect(row).toMatchObject({
-        provider: 'openai',
-        model: 'gpt-5.2',
-        input_tokens: 11,
-        output_tokens: 7,
-      });
-    } finally {
-      db.close();
-    }
+    let clientCalls = 0;
+    const db = new Proxy({}, {
+      get() { clientCalls += 1; throw new Error('database client tripwire'); },
+    });
+    expect(() => recordProviderUsage(db as never, normalized))
+      .toThrow('KNOWLEDGE_HOSTED_CONTAINED');
+    expect(clientCalls).toBe(0);
   });
 });

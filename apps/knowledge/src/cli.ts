@@ -7,22 +7,27 @@
 import { defaultStorePath, loadStore, loadStoreIfExists, saveStore, withLock, makeId, makeShortId, ensureStore, type KnowledgeItem } from './store';
 import { resolveKnowledgeCloudStore, fetchAllCloudItems, type KnowledgeCloudStore } from './cloud-store';
 import { openKnowledgeDb } from './knowledge-db';
-import { createKnowledgeService } from './service';
+import { createKnowledgeService, explicitOwnGlobalReadAuthority } from './service';
 import { createKnowledgeProjectPanel, formatKnowledgeProjectPanel } from './project-panel';
-import {
-  getStorageStatus as getDatabaseStorageStatus,
-  parseStorageTables,
-  storagePull as databaseStoragePull,
-  storagePush as databaseStoragePush,
-  storageSync as databaseStorageSync,
-  type SyncResult,
-} from './storage';
 import { assertProviderCredentials, parseModelRef, resolveModelRef, type AiProviderId } from './providers';
 import { approvalStatus, assertS3ReadAllowed, assertWebSearchAllowed, createApprovalGate, recordAuditEvent, recordRedactionFindings, redactSecrets } from './safety';
-import { Command } from 'commander';
-import { registerEventsCommands } from '@hasna/events/commander';
 import { basename } from 'node:path';
 import pkg from '../package.json' with { type: 'json' };
+import { canonicalKnowledgeScope, resolveScopedWorkspace } from './workspace';
+import { runProviderWebSearch } from './web-search';
+import { assertContainedSourceGraph } from './public-guard';
+import {
+  assertKnowledgeLocalRuntimeWithConfig,
+  isKnowledgeContainmentError,
+  readKnowledgeConfiguredMode,
+} from './runtime-role';
+
+interface SyncResult {
+  table: string;
+  rowsRead: number;
+  rowsWritten: number;
+  errors: string[];
+}
 
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 const LOG_LEVELS: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 };
@@ -185,7 +190,7 @@ function parseArgs(argv: string[]): ParseResult {
       case '--no-tailscale': flags.tailscale = false; break;
       case '--no-artifact-content': flags.artifactContent = false; break;
       case '--no-color': flags.noColor = true; break;
-      case '--scope': flags.scope = argv[i + 1]; i += 1; break;
+      case '--scope': flags.scope = canonicalKnowledgeScope(argv[i + 1]); i += 1; break;
       case '--tables': flags.tables = argv[i + 1]; i += 1; break;
       case '--peer-workspace': flags.peerWorkspace = argv[i + 1]; i += 1; break;
       case '--older-than': flags.olderThan = Number(argv[i + 1]); i += 1; break;
@@ -241,6 +246,10 @@ function invokedAsKnowledge(): boolean {
 
 async function runEventsCommand(argv: string[]): Promise<boolean> {
   if (!EVENTS_COMMANDS.includes(argv[0] ?? '')) return false;
+  const [{ Command }, { registerEventsCommands }] = await Promise.all([
+    import('commander'),
+    import('@hasna/events/commander'),
+  ]);
   const eventsProgram = new Command();
   eventsProgram
     .name('knowledge')
@@ -273,28 +282,28 @@ Commands:
   inventory                    Show all local knowledge layers and previews
   project-panel                Emit Projects dashboard project-panel contract
   paths                        Show resolved workspace/store paths
-  setup                        Configure local, hosted, or canonical example S3 mode
-  auth login|whoami|logout     Manage hosted API credentials
-  remote contracts|status      Inspect hosted client contracts/readiness
+  setup                        Configure explicit local mode (hosted/S3 contained in Stage A)
+  auth login|whoami|logout     Stage-A contained; no auth-store access
+  remote contracts|status      Stage-A contained; no hosted client construction
   storage status|validate|repair-artifact-keys|migrate-legacy-path
-                               Inspect or repair local/S3 artifact storage metadata
+                               Inspect or repair explicit-local artifact metadata
   machines topology|preflight  Inspect optional machine topology/sync readiness
   sync status|doctor|snapshot|conflicts
                                Inspect machine sync readiness, snapshots, conflicts
-  db init|stats|storage        Initialize, inspect, or sync local knowledge.db
+  db init|stats|storage        Initialize/inspect local DB (public Postgres sync contained)
   wiki init|compile|file-answer|lint
                                Initialize, compile, file, or lint wiki artifacts
   app-wiki init|note|source|search|query
                                Create scoped app/project wiki notes and source refs
   source resolve <source-ref>  Resolve read-only source content and citation evidence
-  ingest manifest <file|s3://> Ingest an open-files manifest into knowledge.db
-  ingest source <source-ref>   Ingest a read-only source ref into knowledge.db
+  ingest manifest <local-file>  Ingest a bounded local open-files manifest into knowledge.db
+  ingest source <source-ref>   Ingest an anchored local file ref into knowledge.db
   ingest rules                 Dry-run/apply global agent rules with provenance
   reindex status|enqueue|embeddings|outbox Inspect/refresh search indexes
   search <query>               Hybrid search sources, wiki pages, indexes, or context
   context pack <query>         Return compact cited JSON under token/item budgets
   proposals context            Return proposal-ready packs from loop/run evidence
-  web search <query>           Provider-native web search with citations
+  web search <query>           Base-compatible metadata; execution unavailable in Stage A
   ask|build <prompt>           Build a read-only citation answer/context pack
   embeddings status|index|search Build/query local vector embeddings
   providers status|models|check Inspect AI SDK provider config and credentials
@@ -322,19 +331,19 @@ Global Options:
   --approved-by <name>         Approver label for approval-gated sync conflict resolution
   --strategy <name>            Resolution strategy for sync conflicts
   --patch-uri <uri>            Proposed patch artifact URI for sync conflicts
-  --provider <name>            Provider override for web search
-  --mode local|hosted          Configure OSS local or hosted-aware mode
+  --provider <name>            Compatibility option for contained web search
+  --mode local|hosted          Configure local mode; hosted is contained compatibility metadata
   --machine <id>               Machine id/SSH alias for preflight or peer sync
   --workspace <path>           Repo workspace path for machine preflight
-  --api-url <url>              Hosted API origin (or KNOWLEDGE_API_URL)
-  --api-key <key>              Hosted API key for auth login
+  --api-url <url>              Contained hosted API compatibility metadata
+  --api-key <key>              Contained auth compatibility option; no credential access
   --email <email>              Hosted account email metadata
   --org <slug>                 Hosted organization slug metadata
   --org-id <id>                Hosted organization id metadata
   --user-id <id>               Hosted user id metadata
   --owner <name>               Provenance owner for repository rule docs
-  --domain <domain>            Restrict provider web search to a domain
-  --file-results               File web snippets as web source refs
+  --domain <domain>            Compatibility option for contained web search
+  --file-results               Contained Stage-A compatibility option; remote filing is disabled
   --full                       Force full embedding index rebuild
   --dry-run                   Preview sync writes without changing target state
   --fake                       Use deterministic fake embeddings for local tests
@@ -346,7 +355,7 @@ Global Options:
   --project <id>               Project id/name/slug for project-panel output
   --contract                   Emit contract JSON for project-panel output
   --source-ref <uri>           Attach a source ref to an app-wiki note
-  --allow-global               Explicitly allow app-wiki writes to global scope
+  --allow-global               Explicitly allow global inventory/list/get/search/context access
   --no-color                  Disable color output
   --completions <shell>       Output completions for bash|zsh|fish
   -v, --version               Show version
@@ -387,8 +396,8 @@ Prune Options:
 
 function printCommandHelp(command: string): void {
   if (command === 'add') { console.log('Usage: knowledge add <title> <content> [--url <url>] [-t <tag>] [--json]'); return; }
-  if (command === 'list' || command === 'ls') { console.log('Usage: knowledge list|ls [--format table|json] [-p <page>] [-l <limit>] [-s <search>] [-t <tag>] [--sort created|title] [--desc] [--json]'); return; }
-  if (command === 'get') { console.log('Usage: knowledge get --id <id> [--json]'); return; }
+  if (command === 'list' || command === 'ls') { console.log('Usage: knowledge list|ls [--format table|json] [-p <page>] [-l <limit>] [-s <search>] [-t <tag>] [--sort created|title] [--desc] [--scope project|local|global] [--allow-global] [--json]'); return; }
+  if (command === 'get') { console.log('Usage: knowledge get --id <id> [--scope project|local|global] [--allow-global] [--json]'); return; }
   if (command === 'update' || command === 'edit') { console.log('Usage: knowledge update|edit --id <id> [--title <title>] [--content <content>] [--url <url>] [-t <tag>] [--json]'); return; }
   if (command === 'archive') { console.log('Usage: knowledge archive --id <id> [--json]'); return; }
   if (command === 'restore' || command === 'unarchive') { console.log('Usage: knowledge restore|unarchive --id <id> [--json]'); return; }
@@ -399,10 +408,10 @@ function printCommandHelp(command: string): void {
   if (command === 'prune') { console.log('Usage: knowledge prune --yes [--older-than <days>] [--empty] [--json]'); return; }
   if (command === 'dedupe') { console.log('Usage: knowledge dedupe --yes [--json]'); return; }
   if (command === 'stats') { console.log('Usage: knowledge stats [--json]'); return; }
-  if (command === 'inventory') { console.log('Usage: knowledge inventory [--scope local|global|project] [--limit <n>] [--include-archived] [--json]'); return; }
+  if (command === 'inventory') { console.log('Usage: knowledge inventory [--scope local|global|project] [--allow-global] [--limit <n>] [--include-archived] [--json]'); return; }
   if (command === 'project-panel') { console.log('Usage: knowledge project-panel --project <id|name|slug> [--scope project|local|global] [--limit <n>] [--include-archived] [--json|--contract]'); return; }
   if (command === 'paths') { console.log('Usage: knowledge paths [--scope local|global|project] [--json]'); return; }
-  if (command === 'setup') { console.log('Usage: knowledge setup --mode local|hosted [--api-url https://...] [--canonical-example] [--scope local|global|project] [--json]'); return; }
+  if (command === 'setup') { console.log('Usage: knowledge setup --mode local|hosted [--api-url https://...] [--canonical-example] [--scope local|global|project] [--json]\n\nStage A executes local mode only; hosted options are contained compatibility metadata.'); return; }
   if (command === 'auth') { console.log('Usage: knowledge auth login|whoami|logout [--api-key <key>] [--email <email>] [--org <slug>] [--api-url https://...] [--scope local|global|project] [--json]'); return; }
   if (command === 'remote') { console.log('Usage: knowledge remote contracts|status [--scope local|global|project] [--json]'); return; }
   if (command === 'storage') { console.log('Usage: knowledge storage status|validate|repair-artifact-keys|migrate-legacy-path [--approve-write --approved-by <name>] [--scope local|global|project] [--json]'); return; }
@@ -412,12 +421,12 @@ function printCommandHelp(command: string): void {
   if (command === 'wiki') { console.log('Usage: knowledge wiki init|compile|file-answer|lint [query|prompt] [--title <title>] [--content <answer>] [--approve-write] [--limit <n>] [--scope local|global|project] [--json]'); return; }
   if (command === 'app-wiki') { console.log('Usage: knowledge app-wiki init | note add|get|list | source add <source-ref> | search <query> | query <query> [--title <title>] [--content <text>] [--tag <tag>] [--source-ref <uri>] [--scope project|local|global] [--allow-global] [--json]'); return; }
   if (command === 'source') { console.log('Usage: knowledge source resolve <source-ref> [--purpose knowledge_answer|knowledge_index] [--limit <n>] [--scope local|global|project] [--json]'); return; }
-  if (command === 'ingest') { console.log('Usage: knowledge ingest manifest <file|s3://bucket/key> | source <source-ref> | rules [--workspace <path>] [--owner <name>] [--dry-run] [--max-items <n>] [--limit <n>] [--purpose knowledge_index] [--scope local|global|project] [--json]'); return; }
-  if (command === 'reindex') { console.log('Usage: knowledge reindex status|enqueue|embeddings|outbox [file|s3://bucket/key] [--full] [--fake] [--scope local|global|project] [--json]'); return; }
-  if (command === 'search') { console.log('Usage: knowledge search <query> [--context] [--semantic] [--model openai:text-embedding-3-small] [--limit <n>] [--dimensions <n>] [--fake] [--scope local|global|project] [--json]'); return; }
-  if (command === 'context') { console.log('Usage: knowledge context pack <query> [--from search|runs|loops] [--max-tokens <n>] [--max-items <n>] [--limit <n>] [--semantic] [--model openai:text-embedding-3-small] [--dimensions <n>] [--fake] [--scope local|global|project] [--json]'); return; }
-  if (command === 'proposals') { console.log('Usage: knowledge proposals context --from loops --topic <text> [--since <duration|ISO>] [--dedupe] [--max-tokens <n>] [--max-items <n>] [--scope local|global|project] [--json]'); return; }
-  if (command === 'web') { console.log('Usage: knowledge web search <query> [--provider openai|anthropic] [--model provider:model] [--domain <domain>] [--file-results] [--fake] [--scope local|global|project] [--json]'); return; }
+  if (command === 'ingest') { console.log('Usage: knowledge ingest manifest <local-file> | source <local-source-ref> | rules [--workspace <path>] [--owner <name>] [--dry-run] [--max-items <n>] [--limit <n>] [--purpose knowledge_index] [--scope local|global|project] [--json]'); return; }
+  if (command === 'reindex') { console.log('Usage: knowledge reindex status|enqueue|embeddings|outbox [local-file] [--full] [--fake] [--scope local|global|project] [--json]'); return; }
+  if (command === 'search') { console.log('Usage: knowledge search <query> [--context] [--semantic] [--model openai:text-embedding-3-small] [--limit <n>] [--dimensions <n>] [--fake] [--scope local|global|project] [--allow-global] [--json]'); return; }
+  if (command === 'context') { console.log('Usage: knowledge context pack <query> [--from search|runs|loops] [--max-tokens <n>] [--max-items <n>] [--limit <n>] [--semantic] [--model openai:text-embedding-3-small] [--dimensions <n>] [--fake] [--scope local|global|project] [--allow-global] [--json]'); return; }
+  if (command === 'proposals') { console.log('Usage: knowledge proposals context --from loops --topic <text> [--since <duration|ISO>] [--dedupe] [--max-tokens <n>] [--max-items <n>] [--scope local|global|project] [--allow-global] [--json]'); return; }
+  if (command === 'web') { console.log('Usage: knowledge web search <query> [--provider openai|anthropic] [--model provider:model] [--domain <domain>] [--file-results] [--fake] [--scope local|global|project] [--json]\n\nWeb search execution, including fake mode, is unavailable during Stage A.'); return; }
   if (command === 'ask' || command === 'build') { console.log('Usage: knowledge ask|build <prompt> [--generate] [--semantic] [--model default|provider:model] [--approve-write] [--scope local|global|project] [--json]'); return; }
   if (command === 'embeddings') { console.log('Usage: knowledge embeddings status|index|search [query] [--model openai:text-embedding-3-small] [--limit <n>] [--dimensions <n>] [--fake] [--scope local|global|project] [--json]'); return; }
   if (command === 'providers') { console.log('Usage: knowledge providers status|models|check [provider|model-alias] [--scope local|global|project] [--json]'); return; }
@@ -511,9 +520,31 @@ function sortItems(items: KnowledgeItem[], flags: Flags): { sorted: KnowledgeIte
 }
 
 async function run(argv: string[]): Promise<void> {
-  if (await runEventsCommand(argv)) return;
+  if (
+    (argv[0] === 'web' && (argv[1] === '--help' || argv[1] === '-h'))
+    || (argv[0] === 'help' && argv[1] === 'web')
+  ) {
+    printCommandHelp('web');
+    return;
+  }
+  if (argv[0] === 'web') {
+    await runProviderWebSearch(undefined as never);
+  }
+  if (EVENTS_COMMANDS.includes(argv[0] ?? '')) {
+    const metadataOnly = argv.includes('--help') || argv.includes('-h');
+    if (!metadataOnly) {
+      assertKnowledgeLocalRuntimeWithConfig({
+        surface: 'cli',
+        env: process.env,
+      }, () => readKnowledgeConfiguredMode(resolveScopedWorkspace(undefined).configPath));
+    }
+    if (await runEventsCommand(argv)) return;
+  }
 
   const { positional, flags } = parseArgs(argv);
+  if (flags.url !== undefined) {
+    assertContainedSourceGraph({ url: flags.url }, 'cli');
+  }
   log('debug', 'CLI invoked', { command: positional[0], flags: { json: flags.json, store: flags.store } });
 
   if (flags.version) {
@@ -545,7 +576,38 @@ async function run(argv: string[]): Promise<void> {
   if (!command || flags.help || command === 'help') { printCommandHelp(positional[1]); return; }
 
   const serviceScope = command === 'project-panel' || command === 'app-wiki' ? (flags.scope ?? 'project') : flags.scope;
-  const service = createKnowledgeService({ scope: serviceScope });
+  const appWikiAction = command === 'app-wiki' ? (positional[1] ?? 'init') : undefined;
+  const appWikiNoteAction = appWikiAction === 'note' || appWikiAction === 'notes'
+    ? (positional[2] ?? 'list')
+    : undefined;
+  const globalReadRequested = command === 'inventory'
+    || command === 'list'
+    || command === 'get'
+    || command === 'search'
+    || (command === 'app-wiki' && (
+      appWikiAction === 'search'
+      || appWikiAction === 'query'
+      || appWikiAction === 'context'
+      || appWikiNoteAction === 'list'
+      || appWikiNoteAction === 'ls'
+      || appWikiNoteAction === 'get'
+      || appWikiNoteAction === 'show'
+    ));
+  if ((serviceScope ?? 'global') === 'global' && globalReadRequested) {
+    explicitOwnGlobalReadAuthority('global', flags);
+  }
+  assertKnowledgeLocalRuntimeWithConfig({
+    surface: 'cli',
+    env: process.env,
+    explicitMode: command === 'setup' ? flags.mode : undefined,
+    hostedRequested: command === 'auth' || command === 'remote' || Boolean(flags.apiUrl || flags.apiKey),
+    localStoreOverride: Boolean(flags.store),
+  }, () => readKnowledgeConfiguredMode(resolveScopedWorkspace(serviceScope).configPath));
+  const service = createKnowledgeService({
+    scope: serviceScope,
+    env: process.env,
+    runtimeSurface: 'cli',
+  } as never);
   if (command === 'storage') {
     const storageAction = positional[1] ?? 'status';
     if (storageAction === 'migrate-legacy-path' || storageAction === 'migrate-legacy' || storageAction === 'migrate-path') {
@@ -582,6 +644,7 @@ async function run(argv: string[]): Promise<void> {
       limit: flags.limit,
       includeArchived: flags.includeArchived || flags.archived,
       storePath,
+      allowGlobal: flags.allowGlobal,
     });
     output(flags.json ? inventory : formatInventory(inventory), flags.json);
     return;
@@ -918,6 +981,13 @@ async function run(argv: string[]): Promise<void> {
     }
     if (action === 'storage') {
       const storageAction = positional[2] ?? 'status';
+      const {
+        getStorageStatus: getDatabaseStorageStatus,
+        parseStorageTables,
+        storagePull: databaseStoragePull,
+        storagePush: databaseStoragePush,
+        storageSync: databaseStorageSync,
+      } = await import('./storage');
       const tables = parseStorageTables(flags.tables);
       if (storageAction === 'status') {
         const status = getDatabaseStorageStatus({ scope: flags.scope });
@@ -988,7 +1058,7 @@ async function run(argv: string[]): Promise<void> {
         return;
       }
       if (noteAction === 'list' || noteAction === 'ls') {
-        const notes = service.listAppWikiNotes({ limit: flags.limit });
+        const notes = service.listAppWikiNotes({ limit: flags.limit, allowGlobal: flags.allowGlobal });
         output({
           ok: true,
           scope: service.scope,
@@ -1001,7 +1071,10 @@ async function run(argv: string[]): Promise<void> {
       if (noteAction === 'get' || noteAction === 'show') {
         const id = positional[3] ?? flags.id;
         if (!id) throw new Error('Usage: knowledge app-wiki note get <id-or-path>');
-        const note = await service.getAppWikiNote(id, { includeContent: true });
+        const note = await service.getAppWikiNote(id, {
+          includeContent: true,
+          allowGlobal: flags.allowGlobal,
+        });
         if (!note) throw new Error(`App wiki note not found: ${id}`);
         output(note, flags.json);
         return;
@@ -1033,6 +1106,7 @@ async function run(argv: string[]): Promise<void> {
         modelRef: flags.model,
         dimensions: flags.dimensions,
         fake: flags.fake,
+        allowGlobal: flags.allowGlobal,
       });
       output({ ok: true, ...result, message: `${result.results.length} app wiki result(s)` }, flags.json);
       return;
@@ -1047,6 +1121,7 @@ async function run(argv: string[]): Promise<void> {
         modelRef: flags.model,
         dimensions: flags.dimensions,
         fake: flags.fake,
+        allowGlobal: flags.allowGlobal,
       });
       output({ ok: true, ...result, message: `${result.excerpts.length} app wiki excerpt(s)` }, flags.json);
       return;
@@ -1258,7 +1333,7 @@ async function run(argv: string[]): Promise<void> {
     }
     if (action === 'manifest') {
       const input = positional[2];
-      if (!input) throw new Error('Usage: knowledge ingest manifest <file|s3://bucket/key>');
+      if (!input) throw new Error('Usage: knowledge ingest manifest <local-file>');
       const result = await service.ingestManifest(input);
       output({ ok: true, ...result, message: `Ingested ${result.items_seen} manifest item(s)` }, flags.json);
       return;
@@ -1306,7 +1381,7 @@ async function run(argv: string[]): Promise<void> {
     }
     if (action === 'outbox') {
       const input = positional[2];
-      if (!input) throw new Error('Usage: knowledge reindex outbox <file|s3://bucket/key>');
+      if (!input) throw new Error('Usage: knowledge reindex outbox <local-file>');
       const result = await service.consumeOutbox(input);
       output({ ok: true, ...result, message: `Consumed ${result.events_seen} outbox event(s)` }, flags.json);
       return;
@@ -1368,6 +1443,7 @@ async function run(argv: string[]): Promise<void> {
       dimensions: flags.dimensions,
       fake: flags.fake,
       legacyStorePath: storePath,
+      allowGlobal: flags.allowGlobal,
     });
     outputCompactJson({ ok: true, ...result, message: result.message });
     return;
@@ -1390,6 +1466,7 @@ async function run(argv: string[]): Promise<void> {
       maxTokens: flags.maxTokens,
       maxItems: flags.maxItems,
       limit: flags.limit,
+      allowGlobal: flags.allowGlobal,
     });
     outputCompactJson({ ok: true, ...result, message: result.message });
     return;
@@ -1407,6 +1484,7 @@ async function run(argv: string[]): Promise<void> {
         dimensions: flags.dimensions,
         fake: flags.fake,
         legacyStorePath: storePath,
+        allowGlobal: flags.allowGlobal,
       });
       output({ ok: true, ...context, message: `${context.excerpts.length} context excerpt(s)` }, flags.json);
       return;
@@ -1419,6 +1497,7 @@ async function run(argv: string[]): Promise<void> {
       dimensions: flags.dimensions,
       fake: flags.fake,
       legacyStorePath: storePath,
+      allowGlobal: flags.allowGlobal,
     });
     output({ ok: true, ...result, message: `${result.results.length} search result(s)` }, flags.json);
     return;
@@ -1864,6 +1943,11 @@ async function run(argv: string[]): Promise<void> {
 
 if (import.meta.main) {
   run(process.argv.slice(2)).catch((error) => {
+    if (isKnowledgeContainmentError(error)) {
+      console.error(JSON.stringify(error.toJSON()));
+      process.exitCode = 1;
+      return;
+    }
     const message = error instanceof Error ? error.message : String(error);
     log('error', 'CLI error', { message, stack: error instanceof Error ? error.stack : undefined });
     console.error(`Error: ${message}`);

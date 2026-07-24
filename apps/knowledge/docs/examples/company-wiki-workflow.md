@@ -163,14 +163,10 @@ Agents should prefer stable tools such as `knowledge_search`, `knowledge_ask`,
 `knowledge://project/wiki/pages`, `knowledge://project/runs`, and
 `knowledge://project/open-files`.
 
-## 8. Optional Hosted And S3 Mode
+## 8. Deferred Hosted And S3 Compatibility
 
-Hosted mode is only a remote client boundary:
-
-```bash
-knowledge setup --mode hosted --api-url https://knowledge.hasna.xyz --scope project --json
-knowledge remote contracts --scope project --json
-```
-
-Generated artifacts may use S3 when configured, but raw source files still stay
-in `open-files`.
+Stage A executes this workflow only against the local project workspace.
+Hosted options, remote commands, S3 configuration, and remote source refs are
+compatibility metadata and return typed containment before client, credential,
+network, or workspace activity. A future hosted wrapper may store generated
+artifacts remotely; raw source ownership remains with `open-files`.

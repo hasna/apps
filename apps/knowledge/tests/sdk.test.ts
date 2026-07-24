@@ -305,10 +305,10 @@ describe('public knowledge sdk', () => {
     expect(paths.home).toBe(join(dir, '.hasna', 'knowledge'));
     expect(paths.config.storage.type).toBe('local');
 
-    const setup = client.setup({ mode: 'hosted', canonicalExample: true });
-    expect(setup.mode).toBe('hosted');
-    expect(setup.storage_type).toBe('s3');
-    expect(setup.canonical_example.active).toBe(true);
+    const setup = client.setup({ mode: 'local', canonicalExample: false });
+    expect(setup.mode).toBe('local');
+    expect(setup.storage_type).toBe('local');
+    expect(setup.canonical_example.active).toBe(false);
 
     const storage = client.storage.status();
     expect(storage.source_ownership.owner).toBe('open-files');

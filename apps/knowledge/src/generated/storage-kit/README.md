@@ -1,41 +1,17 @@
-# Vendored Hasna storage kit
+# Stage A storage-kit compatibility surface
 
-**Generated — do not edit.** This directory is stamped into the repo by
-[`@hasna/contracts`](https://github.com/hasna/contracts) and verified in CI.
+This directory preserves the `@hasna/contracts` storage-kit 0.4.0 public type
+and reflection contract. During Stage A it is intentionally inert: no function
+creates a PostgreSQL pool, reads database configuration, executes SQL, runs a
+migration, performs a health query, or accesses a provider. Capability methods
+return the typed Stage A containment result before inspecting caller values.
 
-- Regenerate: `bunx @hasna/contracts vendor-kit`
-- Verify (CI): `bunx @hasna/contracts vendor-kit --check` — fails on stale or hand-edited files.
+Names such as `PoolQueryClient`, `Migration`, `sql`, and `ledgerTable` remain
+only for source and declaration compatibility. They do not grant runtime
+database capability. Re-vendoring the operational contracts kit is not a Stage
+A enablement path and would violate containment.
 
-## What it is
-
-A canonical Postgres storage kit shared across the Hasna fleet:
-
-| File            | Purpose                                                              |
-| --------------- | ------------------------------------------------------------------- |
-| `mode.ts`       | Storage-mode + env resolution (`local` \| `cloud`), per the contract |
-| `tls.ts`        | The one correct TLS approach (libpq `sslmode` semantics + RDS CA)    |
-| `pool.ts`       | `pg.Pool` factory with fleet-standard TLS                            |
-| `query.ts`      | Typed query wrapper (`query` / `many` / `get` / `one` / `execute`)   |
-| `migrations.ts` | `schema_migrations` ledger with sha256 checksums                     |
-| `health.ts`     | `checkHealth` (SELECT 1) and `checkReady` (migrated?) probes         |
-
-## PURE REMOTE (Amendment A1)
-
-Cloud mode = reads **and** writes go directly to cloud Postgres. This kit
-contains **no sync engine, no cache-as-mode, and no merge logic**. In `local`
-mode there is no Postgres pool at all; SQLite is authoritative.
-
-## TLS
-
-`tls.ts` follows libpq `sslmode` semantics exactly:
-
-- `require` — encrypt, do not verify (RDS default without a bundle)
-- `verify-ca` / `verify-full` — encrypt **and** verify against a CA bundle
-  (mandatory; throws if none is available)
-
-Point `PGSSLROOTCERT` at the Amazon RDS global bundle to verify:
-<https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem>
-
-## Peer dependency
-
-Requires `pg` (and `@types/pg` for TypeScript) in the host repo.
+The repository build regenerates `.storage-kit-manifest.json`, and
+`scripts/verify-generated-artifacts.mjs` verifies that inner manifest plus the
+exact outer `src/generated` inventory. The published package ships only the
+contained declarations and bundles recorded in `generated-artifacts.json`.

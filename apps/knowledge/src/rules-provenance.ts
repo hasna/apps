@@ -420,7 +420,9 @@ function legacyRuleLike(item: KnowledgeItem): boolean {
 function manifestItemForRecord(record: RulesProvenanceRecord, text: string): ManifestObject {
   const ruleProvenance = {
     source_path: record.source_path,
-    source_path_ref: record.source_path_ref,
+    // Persist only the already classified URI form for ref-suffixed fields.
+    // The human-facing evidence record may retain its bounded relative label.
+    source_path_ref: record.source_ref,
     source_ref: record.source_ref,
     owner: record.owner,
     scope: record.scope,
@@ -447,7 +449,7 @@ function manifestItemForRecord(record: RulesProvenanceRecord, text: string): Man
     },
     rule_provenance: ruleProvenance,
     source_family: record.source_family,
-    source_path_ref: record.source_path_ref,
+    source_path_ref: record.source_ref,
     owner: record.owner,
     scope: record.scope,
     precedence: record.precedence,

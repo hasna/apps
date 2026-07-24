@@ -34,9 +34,6 @@ export type {
 export { PgAdapterAsync, createKnowledgeCloudClient, KNOWLEDGE_APP_NAME } from './db/remote-storage.js';
 export { PG_MIGRATIONS } from './db/pg-migrations.js';
 
-// Vendored @hasna/contracts storage kit — the sanctioned cloud-mode pg access
-// layer (PURE REMOTE per Amendment A1). Re-exported so downstream consumers get
-// the canonical TLS/pool/query/migration surface from one place.
 export {
   KIT_VERSION,
   createPgPool,

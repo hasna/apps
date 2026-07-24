@@ -1,11 +1,23 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
-import { basename } from 'node:path';
-import type { Database } from 'bun:sqlite';
+import { basename, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import type { KnowledgeDatabase as Database } from './knowledge-db';
 import { migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
+import { readAnchoredRegularFileSnapshot } from './anchored-fs';
+import {
+  MAX_INGEST_BATCH_ITEMS,
+  MAX_INGEST_BODY_BYTES,
+  assertBoundedJsonText,
+  cloneBoundedDataGraph,
+  parseBoundedJsonData,
+} from './input-limits';
+import {
+  assertClassifiedSourceReference,
+  assertContainedSourceDataGraph,
+} from './public-guard';
 import { parseSourceRef, type SourceRef } from './source-ref';
 import type { KnowledgeConfig } from './workspace';
-import { assertS3ReadAllowed, assertWriteAllowed, recordAuditEvent, type SafetyPolicy } from './safety';
+import { assertWriteAllowed, recordAuditEvent, type SafetyPolicy } from './safety';
 
 type OutboxObject = Record<string, unknown>;
 
@@ -186,43 +198,59 @@ function parseOutboxText(text: string): OutboxObject[] {
   });
 }
 
-async function readS3Text(uri: string, config?: KnowledgeConfig, safetyPolicy?: SafetyPolicy): Promise<string> {
-  const parsed = new URL(uri);
-  const bucket = parsed.hostname;
-  const key = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
-  if (!bucket || !key) throw new Error(`Invalid S3 outbox URI: ${uri}`);
-  if (safetyPolicy) assertS3ReadAllowed(uri, safetyPolicy);
-  const [{ S3Client, GetObjectCommand }, { fromIni }] = await Promise.all([
-    import('@aws-sdk/client-s3'),
-    import('@aws-sdk/credential-providers'),
-  ]);
-  const s3Config = config?.storage.type === 's3' && config.storage.s3?.bucket === bucket ? config.storage.s3 : undefined;
-  const client = new S3Client({
-    region: s3Config?.region,
-    credentials: s3Config?.profile ? fromIni({ profile: s3Config.profile }) : undefined,
-    maxAttempts: s3Config?.max_attempts,
-  });
-  const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
-  if (!response.Body) return '';
-  return await response.Body.transformToString();
+async function readOutboxInput(
+  input: string,
+): Promise<string> {
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(input)?.[1]?.toLowerCase();
+  if (scheme && scheme !== 'file') assertClassifiedSourceReference(input);
+  const path = scheme === 'file' ? fileURLToPath(input) : resolve(input);
+  const snapshot = readAnchoredRegularFileSnapshot(path, MAX_INGEST_BODY_BYTES);
+  if (!snapshot) throw new Error(`Outbox not found: ${path}`);
+  assertBoundedJsonText(
+    snapshot.content,
+    MAX_INGEST_BATCH_ITEMS,
+    MAX_INGEST_BATCH_ITEMS,
+  );
+  return snapshot.content;
 }
 
-async function readOutboxInput(input: string, config?: KnowledgeConfig, safetyPolicy?: SafetyPolicy): Promise<string> {
-  if (input.startsWith('s3://')) return readS3Text(input, config, safetyPolicy);
-  if (!existsSync(input)) throw new Error(`Outbox not found: ${input}`);
-  return readFileSync(input, 'utf8');
-}
-
-function mergeJson(existing: string | null | undefined, patch: OutboxObject): string {
-  let base: OutboxObject = {};
-  if (existing) {
-    try {
-      base = asObject(JSON.parse(existing)) ?? {};
-    } catch {
-      base = {};
-    }
+export function mergeOutboxMetadata(
+  existing: string | null | undefined,
+  patch: OutboxObject,
+): string {
+  const parsed = existing !== null && existing !== undefined
+    ? parseBoundedJsonData<unknown>(
+        existing,
+        'Stored data',
+        MAX_INGEST_BATCH_ITEMS,
+        1,
+      )
+    : Object.create(null);
+  const base = asObject(parsed);
+  if (!base) {
+    throw new Error('Stored outbox metadata must be a JSON object.');
   }
-  return JSON.stringify({ ...base, ...patch });
+  const boundedPatch = cloneBoundedDataGraph(patch, {
+    label: 'Input',
+    maxBytes: MAX_INGEST_BODY_BYTES,
+  });
+  if (!asObject(boundedPatch)) {
+    throw new Error('Outbox metadata patch must be a JSON object.');
+  }
+  const merged: OutboxObject = Object.create(null);
+  for (const [key, value] of Object.entries(base)) merged[key] = value;
+  for (const [key, value] of Object.entries(boundedPatch)) merged[key] = value;
+  const canonical = cloneBoundedDataGraph(merged, {
+    label: 'Input',
+    maxBytes: MAX_INGEST_BODY_BYTES,
+  });
+  const serialized = JSON.stringify(canonical);
+  if (Buffer.byteLength(serialized, 'utf8') > MAX_INGEST_BODY_BYTES) {
+    throw new Error(
+      `Outbox metadata exceeds the ${MAX_INGEST_BODY_BYTES} byte hard limit.`,
+    );
+  }
+  return serialized;
 }
 
 function ensureSource(db: Database, event: NormalizedOutboxEvent, now: string): string {
@@ -258,7 +286,7 @@ function ensureSource(db: Database, event: NormalizedOutboxEvent, now: string): 
   db.run(
     'UPDATE sources SET metadata_json = ?, acl_json = CASE WHEN ? IS NULL THEN acl_json ELSE ? END, updated_at = ? WHERE id = ?',
     [
-      mergeJson(row.metadata_json, patch),
+      mergeOutboxMetadata(row.metadata_json, patch),
       event.acl === undefined ? null : JSON.stringify(event.acl),
       event.acl === undefined ? null : JSON.stringify(event.acl),
       event.updatedAt,
@@ -331,7 +359,7 @@ function invalidateRevision(db: Database, revisionId: string): { chunksDeleted: 
   const revision = db.query<{ metadata_json: string }, [string]>('SELECT metadata_json FROM source_revisions WHERE id = ?').get(revisionId);
   db.run(
     'UPDATE source_revisions SET metadata_json = ? WHERE id = ?',
-    [mergeJson(revision?.metadata_json, { reindex_required: true, invalidated_at: new Date().toISOString() }), revisionId],
+    [mergeOutboxMetadata(revision?.metadata_json, { reindex_required: true, invalidated_at: new Date().toISOString() }), revisionId],
   );
   return { chunksDeleted: chunks.length, embeddingsDeleted, vectorEntriesDeleted };
 }
@@ -350,10 +378,16 @@ function isPermissionEvent(eventType: string): boolean {
 
 export async function consumeOpenFilesOutbox(options: OutboxConsumeOptions): Promise<OutboxConsumeResult> {
   const now = (options.now ?? new Date()).toISOString();
+  const maxEvents = MAX_INGEST_BATCH_ITEMS;
   if (options.safetyPolicy) assertWriteAllowed(options.dbPath, options.safetyPolicy);
-  migrateKnowledgeDb(options.dbPath);
-  const text = await readOutboxInput(options.input, options.config, options.safetyPolicy);
+  const text = await readOutboxInput(options.input);
   const events = parseOutboxText(text);
+  if (events.length > maxEvents) {
+    throw new Error(`Outbox contains too many events: ${events.length} exceeds ${maxEvents} event limit.`);
+  }
+  assertContainedSourceDataGraph(events);
+  const normalizedEvents = events.map((event) => normalizeEvent(event, now));
+  migrateKnowledgeDb(options.dbPath);
   const db = openKnowledgeDb(options.dbPath);
   const runId = `run_${randomUUID()}`;
   try {
@@ -393,8 +427,7 @@ export async function consumeOpenFilesOutbox(options: OutboxConsumeOptions): Pro
         created_at: now,
       });
 
-      events.forEach((raw, index) => {
-        const event = normalizeEvent(raw, now);
+      normalizedEvents.forEach((event, index) => {
         const sourceId = ensureSource(db, event, now);
         sourcesTouched.add(sourceId);
         const createdRevisionId = ensureRevision(db, sourceId, event, now);

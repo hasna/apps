@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { Database } from 'bun:sqlite';
+import type { KnowledgeDatabase as Database } from './knowledge-db';
 import type { ArtifactStore } from './artifact-store';
 import { generatedArtifactProvenance, type GeneratedArtifactProvenance } from './provenance';
 import {
@@ -60,7 +60,7 @@ export function agentSchemaTemplate(): string {
 ## Query Rules
 
 - Search wiki pages first, then source chunks, then deeper read-only source refs.
-- Use web search only when requested or when current external context is required.
+- Web search, including fake mode, is unavailable during Stage A; retained schemas are metadata only.
 - File useful answers back into the wiki only after approval or approved auto-write mode.
 
 ## Lint Rules
