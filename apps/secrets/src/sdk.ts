@@ -1,9 +1,10 @@
 /**
  * @hasna/secrets/sdk — typed client for the secrets serve API.
  *
- * The client is generated from the serve OpenAPI document (src/server/openapi.ts
- * via scripts/generate-sdk.ts). It speaks the Hasna self_hosted convention:
- * `SECRETS_API_URL` + `SECRETS_API_KEY` (the client never sees a DSN).
+ * The method surface mirrors the serve OpenAPI document (src/server/openapi.ts)
+ * and routes through the one shared Hasna HTTP transport (no raw fetch). It speaks
+ * the Hasna self_hosted convention: `SECRETS_API_URL` + `SECRETS_API_KEY` (the
+ * client never sees a DSN).
  */
 
 export * from "./sdk/client.js";

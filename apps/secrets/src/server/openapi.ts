@@ -1,7 +1,7 @@
 /**
  * OpenAPI 3 document for the secrets serve API. Single source of truth for the
- * `/openapi.json` route AND the generated SDK (scripts/generate-sdk.ts feeds
- * this to @hasna/contracts' generateSdkFromOpenApi).
+ * `/openapi.json` route and the reference shape of the typed SDK client
+ * (src/sdk/client.ts), whose method surface mirrors these paths.
  */
 
 export function buildOpenApiDocument(version: string): Record<string, unknown> {

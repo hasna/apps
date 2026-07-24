@@ -445,7 +445,7 @@ export HASNA_SECRETS_STORAGE_MODE=cloud
 export HASNA_SECRETS_DATABASE_URL=postgres://…            # or DATABASE_URL
 export HASNA_SECRETS_API_SIGNING_KEY=$(openssl rand -hex 32)
 export HASNA_SECRETS_MASTER_KEY=$(openssl rand -base64 32)
-secrets db migrate
+secrets-serve db migrate
 secrets-serve                                             # listens on $PORT (default 8080)
 
 # issue an API key (@hasna/contracts issuer), then call the SDK

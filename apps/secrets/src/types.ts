@@ -56,6 +56,43 @@ export interface AuditEntry {
   timestamp: string;
 }
 
+export interface User {
+  id: string;
+  name: string;
+  type: "human" | "agent";
+  registered_at: string;
+  last_seen?: string;
+}
+
+export interface SecretExportBundle {
+  version: number;
+  redacted: boolean;
+  secrets: Record<string, SecretEntry>;
+}
+
+export interface StoreCounts {
+  secrets: number;
+  byType: Record<SecretType, number>;
+  withLabels: number;
+  expired: number;
+  expiringSoon: number;
+  users: number;
+  usersByType: Record<"human" | "agent", number>;
+  auditEntries: number;
+}
+
+export interface StoreDescriptor {
+  /** `local` uses the on-box sqlite vault; `api` routes to the cloud HTTP API. */
+  mode: "local" | "api";
+  /** Human-safe location: the vault file path (local) or the API origin (api). Never a key. */
+  location: string;
+}
+
+export interface EncryptVaultResult {
+  migrated: number;
+  alreadyEncrypted: number;
+}
+
 export type AwsCredentialMode = "static" | "default" | "profile" | "role";
 
 export interface AwsConfig {

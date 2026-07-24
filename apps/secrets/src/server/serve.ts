@@ -110,11 +110,23 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
         const a = await auth(req, WRITE);
         if (!a.ok) return a.res;
         const body = (await req.json().catch(() => null)) as
-          | { key?: string; value?: string; type?: string; label?: string; ttl?: string }
+          | { key?: string; value?: string; type?: string; label?: string; ttl?: string; expires_at?: string }
           | null;
         if (!body?.key || typeof body.value !== "string") return json({ error: "key and value are required" }, 400);
         const type = (body.type && SECRET_TYPES.includes(body.type as SecretType) ? body.type : "other") as SecretType;
-        const expiresAt = body.ttl ? parseTtl(body.ttl) : undefined;
+        // Accept either an absolute ISO `expires_at` (Store-contract clients) or a `ttl` duration like "30d" (raw API).
+        let expiresAt: string | undefined;
+        if (body.expires_at) {
+          const parsed = Date.parse(body.expires_at);
+          if (Number.isNaN(parsed)) return json({ error: `Invalid expires_at: ${body.expires_at}` }, 400);
+          expiresAt = new Date(parsed).toISOString();
+        } else if (body.ttl) {
+          try {
+            expiresAt = parseTtl(body.ttl);
+          } catch (err) {
+            return json({ error: err instanceof Error ? err.message : "Invalid ttl" }, 400);
+          }
+        }
         const entry = await store.setSecret(body.key, body.value, type, body.label, expiresAt, a.actor);
         const { value, ...meta } = entry;
         return json(meta, 200);
@@ -209,6 +221,24 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
         const body = (await req.json().catch(() => null)) as { id?: string; name?: string; type?: "human" | "agent" } | null;
         if (!body?.id || !body.name) return json({ error: "id and name are required" }, 400);
         return json(await store.registerUser(body.id, body.name, body.type ?? "human"));
+      }
+      const userMatch = path.match(/^\/v1\/users\/([^/]+)$/);
+      if (userMatch && method === "DELETE") {
+        const a = await auth(req, WRITE);
+        if (!a.ok) return a.res;
+        const id = decodeURIComponent(userMatch[1]!);
+        const ok = await store.deleteUser(id);
+        return json({ deleted: ok }, ok ? 200 : 404);
+      }
+
+      // ---- /v1 feedback ----
+      if (path === "/v1/feedback" && method === "POST") {
+        const a = await auth(req, WRITE);
+        if (!a.ok) return a.res;
+        const body = (await req.json().catch(() => null)) as { message?: string; email?: string; category?: string } | null;
+        if (!body?.message) return json({ error: "message is required" }, 400);
+        await store.addFeedback(body.message, body.email, body.category ?? "general", VERSION);
+        return json({ ok: true });
       }
 
       return json({ error: "Not found" }, 404);
