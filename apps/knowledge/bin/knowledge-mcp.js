@@ -14997,7 +14997,7 @@ import { existsSync as existsSync14, readFileSync as readFileSync13, writeFileSy
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.88",
+  version: "0.2.89",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   exports: {
@@ -15024,14 +15024,28 @@ var package_default = {
   files: [
     "bin",
     "dist",
-    "scripts",
-    "docs",
+    "scripts/apply-cloud-migrations.mjs",
+    "scripts/smoke-machine-sync-release.mjs",
+    "scripts/smoke-machines-adapter.mjs",
+    "scripts/smoke-open-files-installed-boundary.mjs",
+    "scripts/strip-generated-trailing-whitespace.mjs",
+    "scripts/verify-generated-artifacts.mjs",
+    "docs/architecture/ai-native-knowledge-base.md",
+    "docs/architecture/hosted-wrapper-responsibilities.md",
+    "docs/architecture/hybrid-semantic-search.md",
+    "docs/architecture/machine-sync-schema.md",
+    "docs/examples/app-project-wiki-standard.md",
+    "docs/examples/company-wiki-workflow.md",
+    "docs/migration/global-rules-provenance-import.md",
+    "docs/migration/json-to-sqlite.md",
     "LICENSE",
     "README.md"
   ],
   scripts: {
     test: "bun test",
     "test:cli": "bun test tests/cli.test.ts",
+    "test:package": "bun test tests/package-release.test.ts",
+    "release:pack:check": "node scripts/validate-public-package.mjs",
     "smoke:machines-adapter": "bun scripts/smoke-machines-adapter.mjs",
     "smoke:machine-sync-release": "bun scripts/smoke-machine-sync-release.mjs",
     "smoke:open-files-installed-boundary": "bun scripts/smoke-open-files-installed-boundary.mjs",
@@ -15039,7 +15053,7 @@ var package_default = {
     serve: "bun src/serve-entry.ts",
     "verify:generated": "bun run build && bun scripts/verify-generated-artifacts.mjs",
     build: "rm -rf dist && bun build --target=bun --outfile=bin/knowledge.js --minify --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/cli.ts && bun build --target=bun --outfile=bin/knowledge-mcp.js --external pg --external @hasna/machines --external @hasna/machines/consumer --external @modelcontextprotocol/sdk --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/mcp.js && bun build --target=bun --outfile=bin/knowledge-serve.js --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/serve-entry.ts && bun build ./src/index.ts ./src/storage.ts ./src/serve.ts --outdir ./dist --target bun --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek && bun scripts/strip-generated-trailing-whitespace.mjs && bunx tsc -p tsconfig.build.json",
-    prepublishOnly: "bun run build"
+    prepublishOnly: "bun run build && node scripts/validate-public-package.mjs"
   },
   keywords: [
     "knowledge",
@@ -15082,6 +15096,7 @@ var package_default = {
     zod: "^4.3.6"
   },
   devDependencies: {
+    "@electric-sql/pglite": "^0.5.4",
     "@hasna/contracts": "0.5.2",
     "@types/bun": "^1.3.14",
     "@types/pg": "^8.15.6"
@@ -33972,10 +33987,10 @@ class KnowledgeService {
       home: workspace.home,
       limit,
       paths: {
-        json_store_path: storePath,
-        json_store_exists: storeExists,
+        json_store_path: workspace.jsonStorePath,
+        json_store_exists: existsSync13(workspace.jsonStorePath),
         knowledge_db_path: workspace.knowledgeDbPath,
-        knowledge_db_exists: false,
+        knowledge_db_exists: existsSync13(workspace.knowledgeDbPath),
         artifacts_dir: workspace.artifactsDir,
         indexes_dir: workspace.indexesDir,
         logs_dir: workspace.logsDir,

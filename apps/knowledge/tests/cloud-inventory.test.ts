@@ -61,9 +61,17 @@ describe('cloud-mode inventory over the shared item corpus', () => {
     expect(inv.sources).toEqual([]);
     expect(inv.chunks).toEqual([]);
     expect(inv.wiki_pages).toEqual([]);
-    expect(inv.paths.knowledge_db_exists).toBe(false);
-    // The store location is the cloud base URL, never a local file path.
-    expect(inv.paths.json_store_path).toContain('/v1');
+    // The `paths` block reports the real on-box workspace layout and MUST agree
+    // with the `paths` command even in cloud mode — it is NOT the item transport
+    // location. The cloud source is surfaced via `legacy_store` instead.
+    const paths = service.paths();
+    expect(inv.paths.json_store_path).toBe(paths.json_store_path);
+    expect(inv.paths.json_store_exists).toBe(paths.json_store_exists);
+    expect(inv.paths.knowledge_db_path).toBe(paths.knowledge_db_path);
+    expect(inv.paths.knowledge_db_exists).toBe(paths.knowledge_db_exists);
+    expect(inv.paths.json_store_path).not.toContain('/v1');
+    // The cloud transport URL is reported on legacy_store, not the paths block.
+    expect(inv.legacy_store.path).toContain('/v1');
   });
 
   test('cloudInventory includes archived items when requested', async () => {

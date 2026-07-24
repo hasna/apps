@@ -8097,7 +8097,15 @@ var PG_MIGRATIONS = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_knowledge_items_short_id ON knowledge_items(short_id)`,
   `CREATE INDEX IF NOT EXISTS idx_knowledge_items_archived ON knowledge_items(archived)`,
-  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_created ON knowledge_items(created_at)`
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_created ON knowledge_items(created_at)`,
+  `ALTER TABLE knowledge_items
+     ADD COLUMN IF NOT EXISTS search_vector tsvector
+     GENERATED ALWAYS AS (
+       setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
+       setweight(to_tsvector('english', coalesce(content, '')), 'B')
+     ) STORED`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_search_vector
+     ON knowledge_items USING GIN (search_vector)`
 ];
 export {
   wrapExecutor,

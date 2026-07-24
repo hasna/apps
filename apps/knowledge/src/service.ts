@@ -1837,17 +1837,26 @@ export class KnowledgeService {
       scope: this.scope,
       home: workspace.home,
       limit,
+      // The `paths` block describes the real on-box workspace layout and MUST
+      // agree with the `paths` command regardless of item transport. In cloud
+      // (api) mode the items come from the cloud corpus, but json_store_path /
+      // knowledge_db_exists here still report the local filesystem — the cloud
+      // source is surfaced via `legacy_store` below. Reporting the transport URL
+      // or a hardcoded db-missing flag here made `inventory` disagree with
+      // `paths`.
       paths: {
-        json_store_path: storePath,
-        json_store_exists: storeExists,
+        json_store_path: workspace.jsonStorePath,
+        json_store_exists: existsSync(workspace.jsonStorePath),
         knowledge_db_path: workspace.knowledgeDbPath,
-        knowledge_db_exists: false,
+        knowledge_db_exists: existsSync(workspace.knowledgeDbPath),
         artifacts_dir: workspace.artifactsDir,
         indexes_dir: workspace.indexesDir,
         logs_dir: workspace.logsDir,
         wiki_dir: workspace.wikiDir,
       },
       summary,
+      // `legacy_store` describes where the item corpus was actually read from —
+      // the local db.json in local mode, or the cloud base URL in api mode.
       legacy_store: {
         path: storePath,
         exists: storeExists,

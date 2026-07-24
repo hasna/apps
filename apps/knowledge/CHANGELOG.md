@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased — inventory paths block fix
+
+Fix `knowledge inventory --json` reporting the wrong `paths` block in
+self_hosted/cloud (api) mode, where it disagreed with `knowledge paths`.
+
+- fix(knowledge): the `inventory` `paths` block now reflects the real on-box
+  workspace layout (`json_store_path` = `workspace.jsonStorePath`,
+  `json_store_exists` / `knowledge_db_exists` via read-only `existsSync`),
+  matching `knowledge paths`. Previously `itemOnlyInventory()` echoed the cloud
+  transport URL as `json_store_path` and hardcoded `knowledge_db_exists: false`.
+  The cloud item-corpus source location is still surfaced via `legacy_store.path`.
+- test(knowledge): `tests/cloud-inventory.test.ts` now asserts `inventory.paths`
+  equals `service.paths()` for all four path fields, that the `/v1` URL never
+  appears in the paths block, and that it is reported on `legacy_store.path`.
+- Rebuilt generated bundles so shipped artifacts carry the fix and
+  `verify:generated` passes.
+
 ## Unreleased — Search overhaul, Stage 2 (Postgres full-text parity)
 
 Top-priority correctness fix: the hosted (cloud) notes list returned materially

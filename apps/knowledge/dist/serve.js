@@ -1166,13 +1166,17 @@ class NoteRepo {
     const params = [];
     if (!options.includeArchived)
       where.push("archived = FALSE");
-    if (options.search) {
-      params.push(`%${options.search}%`);
-      where.push(`(title ILIKE $${params.length} OR content ILIKE $${params.length})`);
+    const search = options.search?.trim();
+    let tsQueryExpr = null;
+    if (search) {
+      params.push(search);
+      tsQueryExpr = `websearch_to_tsquery('english', $${params.length})`;
+      where.push(`search_vector @@ ${tsQueryExpr}`);
     }
     const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const orderSql = tsQueryExpr ? `ORDER BY ts_rank_cd(search_vector, ${tsQueryExpr}) DESC, created_at DESC` : "ORDER BY created_at DESC";
     const totalRow = await this.client.get(`SELECT count(*)::text AS count FROM knowledge_items ${whereSql}`, params);
-    const rows = await this.client.many(`SELECT * FROM knowledge_items ${whereSql} ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`, params);
+    const rows = await this.client.many(`SELECT * FROM knowledge_items ${whereSql} ${orderSql} LIMIT ${limit} OFFSET ${offset}`, params);
     return { items: rows.map(rowToItem), total: Number(totalRow?.count ?? 0) };
   }
   async get(idOrShort) {

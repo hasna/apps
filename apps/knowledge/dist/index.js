@@ -22967,7 +22967,15 @@ var PG_MIGRATIONS = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_knowledge_items_short_id ON knowledge_items(short_id)`,
   `CREATE INDEX IF NOT EXISTS idx_knowledge_items_archived ON knowledge_items(archived)`,
-  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_created ON knowledge_items(created_at)`
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_created ON knowledge_items(created_at)`,
+  `ALTER TABLE knowledge_items
+     ADD COLUMN IF NOT EXISTS search_vector tsvector
+     GENERATED ALWAYS AS (
+       setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
+       setweight(to_tsvector('english', coalesce(content, '')), 'B')
+     ) STORED`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_search_vector
+     ON knowledge_items USING GIN (search_vector)`
 ];
 // src/serve.ts
 import { readFileSync as readFileSync4 } from "fs";
@@ -23571,13 +23579,17 @@ class NoteRepo {
     const params = [];
     if (!options.includeArchived)
       where.push("archived = FALSE");
-    if (options.search) {
-      params.push(`%${options.search}%`);
-      where.push(`(title ILIKE $${params.length} OR content ILIKE $${params.length})`);
+    const search = options.search?.trim();
+    let tsQueryExpr = null;
+    if (search) {
+      params.push(search);
+      tsQueryExpr = `websearch_to_tsquery('english', $${params.length})`;
+      where.push(`search_vector @@ ${tsQueryExpr}`);
     }
     const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const orderSql = tsQueryExpr ? `ORDER BY ts_rank_cd(search_vector, ${tsQueryExpr}) DESC, created_at DESC` : "ORDER BY created_at DESC";
     const totalRow = await this.client.get(`SELECT count(*)::text AS count FROM knowledge_items ${whereSql}`, params);
-    const rows = await this.client.many(`SELECT * FROM knowledge_items ${whereSql} ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`, params);
+    const rows = await this.client.many(`SELECT * FROM knowledge_items ${whereSql} ${orderSql} LIMIT ${limit} OFFSET ${offset}`, params);
     return { items: rows.map(rowToItem), total: Number(totalRow?.count ?? 0) };
   }
   async get(idOrShort) {
@@ -35538,10 +35550,10 @@ class KnowledgeService {
       home: workspace.home,
       limit,
       paths: {
-        json_store_path: storePath,
-        json_store_exists: storeExists,
+        json_store_path: workspace.jsonStorePath,
+        json_store_exists: existsSync13(workspace.jsonStorePath),
         knowledge_db_path: workspace.knowledgeDbPath,
-        knowledge_db_exists: false,
+        knowledge_db_exists: existsSync13(workspace.knowledgeDbPath),
         artifacts_dir: workspace.artifactsDir,
         indexes_dir: workspace.indexesDir,
         logs_dir: workspace.logsDir,
