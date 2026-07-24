@@ -227,6 +227,40 @@ describe("ApiStore end-to-end against the real /v1 server", () => {
     }
   });
 
+  test("ApiStore.updateLoop clears nextRunAt over HTTP when stop sets it undefined", async () => {
+    const storage = createSqliteLoopStorage(":memory:");
+    const principal = {
+      tenantId: "tenant-test", principalId: "principal-test", requestId: "request-test",
+      kid: "kid-test", agent: "principal-test", scopes: ["loops:*"],
+      roles: ["admin" as const], tokenKind: "api_key" as const,
+      claims: { v: 1, kid: "kid-test", app: "loops", agent: "principal-test", scopes: ["loops:*"], iat: 1, exp: null },
+    };
+    const server = createLoopsApiServer({
+      host: "127.0.0.1", port: 0,
+      authenticator: { authenticate: async () => ({ ok: true as const, status: 200 as const, principal }) },
+      withTenantStorage: (_principal, fn) => fn(storage),
+    });
+    try {
+      const store = apiStoreForServer((server as { port: number }).port);
+      const loop = await store.createLoop({ ...LOOP_INPUT, name: "api-store-stop-clears-nextrun" });
+      // Scheduled once at 2030, so nextRunAt is populated before stop.
+      expect(loop.nextRunAt).toBe("2030-01-01T00:00:00.000Z");
+
+      // Mirror the CLI `stop` path: status -> stopped, nextRunAt -> undefined.
+      // JSON.stringify drops undefined, so the clear only reaches the server if
+      // ApiStore.updateLoop maps the explicit undefined to a wire null.
+      const stopped = await store.updateLoop(loop.id, { status: "stopped", nextRunAt: undefined });
+      expect(stopped.status).toBe("stopped");
+      expect(stopped.nextRunAt).toBeUndefined();
+      // The server-side store must actually be cleared, not just the response.
+      expect((await storage.getLoop(loop.id))?.nextRunAt).toBeUndefined();
+      await store.close();
+    } finally {
+      server.stop?.(true);
+      await storage.close();
+    }
+  });
+
   test("ApiStore archive and unarchive preserve unique-name semantics over HTTP", async () => {
     const storage = createSqliteLoopStorage(":memory:");
     const principal = {

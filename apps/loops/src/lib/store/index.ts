@@ -428,7 +428,20 @@ export class ApiStore implements LoopStore {
     id: string,
     patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt" | "labels">>,
   ): Promise<Loop> {
-    return pickObject<Loop>(await this.t.patch(`/loops/${encodeURIComponent(id)}`, patch), "loop")!;
+    // The `/v1` PATCH contract distinguishes a present-null nullable field (an
+    // explicit clear) from an absent one (leave unchanged). Callers signal a
+    // clear with `undefined` (e.g. `stop` sets nextRunAt = undefined), but
+    // JSON.stringify silently drops undefined-valued keys, so the clear would
+    // never reach the server and the field stayed populated. Re-emit any
+    // nullable schedule field the caller included-but-left-undefined as a wire
+    // null so the server honours the clear.
+    const NULLABLE_FIELDS = new Set(["nextRunAt", "retryScheduledFor", "expiresAt"]);
+    const body: Record<string, unknown> = {};
+    for (const key of Object.keys(patch)) {
+      const value = (patch as Record<string, unknown>)[key];
+      body[key] = value === undefined && NULLABLE_FIELDS.has(key) ? null : value;
+    }
+    return pickObject<Loop>(await this.t.patch(`/loops/${encodeURIComponent(id)}`, body), "loop")!;
   }
   async renameLoop(id: string, name: string): Promise<Loop> {
     return pickObject<Loop>(await this.t.post(`/loops/${encodeURIComponent(id)}/rename`, { name }), "loop")!;
