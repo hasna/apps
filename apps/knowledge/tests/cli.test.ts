@@ -511,6 +511,12 @@ describe('knowledge cli', () => {
     expect(listOut.total_pages).toBe(1);
     expect(listOut.items[0].title).toBe('TitleA');
 
+    const verboseList = runCli(['list', '--store', store, '--verbose', '-l', '10', '--sort', 'title']);
+    expect(verboseList.exitCode).toBe(0);
+    const verboseListOut = JSON.parse(new TextDecoder().decode(verboseList.stdout));
+    expect(verboseListOut.items[0].title).toBe('TitleA');
+    expect(verboseListOut.items[0].content).toBe('BodyB');
+
     const get = runCli(['get', '--id', addAOut.item.id, '--store', store, '--json']);
     expect(get.exitCode).toBe(0);
     const getOut = JSON.parse(new TextDecoder().decode(get.stdout));
@@ -957,6 +963,31 @@ describe('knowledge cli', () => {
     expect(existsSync(join(legacyHome, 'TOMBSTONE.md'))).toBe(false);
   });
 
+  test('default status/path terminal output is compact with detail hints', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-compact-status-'));
+
+    const paths = runCli(['paths', '--scope', 'project'], dir);
+    expect(paths.exitCode).toBe(0);
+    const pathsOut = new TextDecoder().decode(paths.stdout);
+    expect(pathsOut).toContain('Knowledge paths (project)');
+    expect(pathsOut).toContain('Hint: use --verbose');
+    expect(pathsOut).not.toContain('"config"');
+
+    const sync = runCli(['sync', 'status', '--scope', 'project'], dir);
+    expect(sync.exitCode).toBe(0);
+    const syncOut = new TextDecoder().decode(sync.stdout);
+    expect(syncOut).toContain('Sync status (project)');
+    expect(syncOut).toContain('Machines: 0');
+    expect(syncOut).toContain('Hint: use --verbose');
+    expect(syncOut.trim().startsWith('{')).toBe(false);
+
+    const verbose = runCli(['sync', 'status', '--scope', 'project', '--verbose'], dir);
+    expect(verbose.exitCode).toBe(0);
+    const verboseOut = new TextDecoder().decode(verbose.stdout);
+    expect(verboseOut.trim().startsWith('{')).toBe(true);
+    expect(verboseOut).toContain('"machines"');
+  });
+
   test('machines topology command exposes adapter-aware topology shape', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-machines-cli-'));
     const home = mkdtempSync(join(tmpdir(), 'ok-machines-cli-home-'));
@@ -977,6 +1008,13 @@ describe('knowledge cli', () => {
     expect(existsSync(join(dir, '.hasna', 'knowledge'))).toBe(false);
     expect(out.machines.length).toBeGreaterThanOrEqual(1);
     expect(out.machines.some((machine: any) => machine.local)).toBe(true);
+
+    const compact = runCli(['machines', 'topology', '--scope', 'project', '--no-tailscale'], dir);
+    expect(compact.exitCode).toBe(0);
+    const compactOut = new TextDecoder().decode(compact.stdout);
+    expect(compactOut).toContain('machine(s) discovered');
+    expect(compactOut).toContain('Hint: use --verbose');
+    expect(compactOut.trim().startsWith('{')).toBe(false);
   });
 
   test('machines preflight checks package and workspace readiness', () => {
@@ -1462,6 +1500,10 @@ describe('knowledge cli', () => {
     expect(statusOut.conflicts.open).toBe(0);
     expect(existsSync(join(dir, '.hasna', 'knowledge'))).toBe(false);
 
+    const compactStatus = runCli(['sync', 'status', '--scope', 'project'], dir);
+    expect(compactStatus.exitCode).toBe(0);
+    expect(new TextDecoder().decode(compactStatus.stdout)).toContain('open conflicts: 0');
+
     const snapshot = runCli(['sync', 'snapshot', '--scope', 'project', '--no-tailscale', '--json'], dir);
     expect(snapshot.exitCode).toBe(0);
     const snapshotOut = JSON.parse(new TextDecoder().decode(snapshot.stdout));
@@ -1479,10 +1521,18 @@ describe('knowledge cli', () => {
     const machinesOut = JSON.parse(new TextDecoder().decode(machines.stdout));
     expect(machinesOut.machines.length).toBeGreaterThanOrEqual(1);
 
+    const compactMachines = runCli(['sync', 'machines', '--scope', 'project'], dir);
+    expect(compactMachines.exitCode).toBe(0);
+    expect(new TextDecoder().decode(compactMachines.stdout)).toContain('registered sync machine(s)');
+
     const conflicts = runCli(['sync', 'conflicts', '--scope', 'project', '--json'], dir);
     expect(conflicts.exitCode).toBe(0);
     const conflictsOut = JSON.parse(new TextDecoder().decode(conflicts.stdout));
     expect(conflictsOut.conflicts).toEqual([]);
+
+    const compactConflicts = runCli(['sync', 'conflicts', '--scope', 'project'], dir);
+    expect(compactConflicts.exitCode).toBe(0);
+    expect(new TextDecoder().decode(compactConflicts.stdout)).toContain('0 sync conflict(s)');
 
     const service = createKnowledgeService({ scope: 'project', cwd: dir });
     const conflict = recordKnowledgeSyncConflict(service.ensureWorkspace().knowledgeDbPath, {
@@ -1566,6 +1616,12 @@ describe('knowledge cli', () => {
     expect(dryRunOut.dry_run).toBe(true);
     expect(dryRunOut.push.tables.find((table: any) => table.table === 'sources').inserted).toBe(1);
     expect(existsSync(join(peerDir, '.hasna', 'knowledge', 'artifacts', 'wiki', 'README.md'))).toBe(false);
+
+    const compactDryRun = runCli(['sync', 'dry-run', '--peer-workspace', peerDir, '--scope', 'project'], sourceDir);
+    expect(compactDryRun.exitCode).toBe(0);
+    const compactDryRunOut = new TextDecoder().decode(compactDryRun.stdout);
+    expect(compactDryRunOut).toContain('Sync dry-run completed (dry run)');
+    expect(compactDryRunOut).toContain('Hint: use --verbose');
 
     const push = runCli(['sync', 'push', '--peer-workspace', peerDir, '--scope', 'project', '--json'], sourceDir);
     expect(push.exitCode).toBe(0);
@@ -2010,6 +2066,14 @@ describe('knowledge cli', () => {
     expect(sourceSearchOut.mode.semantic).toBe(false);
     expect(sourceSearchOut.results.some((entry: any) => entry.kind === 'source_chunk' && entry.source.uri === sourceRef)).toBe(true);
 
+    const compactSourceSearch = runCli(['search', 'source', 'company', 'wiki', '--scope', 'project'], dir);
+    expect(compactSourceSearch.exitCode).toBe(0);
+    const compactSourceSearchOut = new TextDecoder().decode(compactSourceSearch.stdout);
+    expect(compactSourceSearchOut).toContain('search result(s)');
+    expect(compactSourceSearchOut).toContain('source-governed company wiki content');
+    expect(compactSourceSearchOut).toContain('Hint: use --verbose');
+    expect(compactSourceSearchOut).not.toContain('"provenance"');
+
     const wikiSearch = runCli(['search', 'durable', 'knowledge', 'pages', '--scope', 'project', '--json'], dir);
     expect(wikiSearch.exitCode).toBe(0);
     const wikiSearchOut = JSON.parse(new TextDecoder().decode(wikiSearch.stdout));
@@ -2029,6 +2093,13 @@ describe('knowledge cli', () => {
     const contextOut = JSON.parse(new TextDecoder().decode(context.stdout));
     expect(contextOut.excerpts.length).toBeGreaterThan(0);
     expect(contextOut.citations[0].provenance.source_owner).toBe('open-files');
+
+    const compactContext = runCli(['search', 'company', 'wiki', 'content', '--context', '--scope', 'project', '--semantic', '--fake', '--dimensions', '8'], dir);
+    expect(compactContext.exitCode).toBe(0);
+    const compactContextOut = new TextDecoder().decode(compactContext.stdout);
+    expect(compactContextOut).toContain('context excerpt(s)');
+    expect(compactContextOut).toContain('Citations:');
+    expect(compactContextOut).toContain('Hint: use --verbose');
   }, 15000);
 
   test('context pack and proposal context commands return bounded agent JSON', () => {
@@ -2087,6 +2158,32 @@ describe('knowledge cli', () => {
     const missingTopic = runCli(['proposals', 'context', '--from', 'loops', '--scope', 'project', '--json'], dir);
     expect(missingTopic.exitCode).toBe(1);
     expect(new TextDecoder().decode(missingTopic.stderr)).toContain('--topic <text>');
+  });
+
+  test('export defaults to compact preview and full records require explicit machine-readable flags', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-export-compact-'));
+    const store = join(dir, 'db.json');
+
+    const add = runCli(['add', 'Exported compact item', 'Full export content stays out of default terminal output', '--store', store, '--json']);
+    expect(add.exitCode).toBe(0);
+
+    const compact = runCli(['export', '--store', store]);
+    expect(compact.exitCode).toBe(0);
+    const compactOut = new TextDecoder().decode(compact.stdout);
+    expect(compactOut).toContain('Export preview: 1 item(s) available');
+    expect(compactOut).not.toContain('Full export content stays out');
+
+    const json = runCli(['export', '--store', store, '--json']);
+    expect(json.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(json.stdout)).items[0].content).toContain('Full export content');
+
+    const verbose = runCli(['export', '--store', store, '--verbose']);
+    expect(verbose.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(verbose.stdout)).items[0].content).toContain('Full export content');
+
+    const jsonl = runCli(['export', '--store', store, '--format', 'jsonl']);
+    expect(jsonl.exitCode).toBe(0);
+    expect(new TextDecoder().decode(jsonl.stdout)).toContain('Full export content');
   });
 
   test('ask command and direct knowledge prompt build citation drafts with run ledger', () => {

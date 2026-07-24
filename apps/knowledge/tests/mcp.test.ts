@@ -387,6 +387,23 @@ describe('knowledge MCP', () => {
       }));
       expect(get.item.title).toBe('MCP item');
 
+      const compactList = parseToolJson(await client.callTool({
+        name: 'ok_list',
+        arguments: { store_path: store },
+      }));
+      expect(compactList.items[0].title).toBe('MCP item');
+      expect(compactList.items[0].tag_count).toBe(1);
+      expect(compactList.items[0].metadata_key_count).toBe(0);
+      expect(compactList.items[0].content).toBeUndefined();
+      expect(compactList.items[0].content_preview).toBe('Stored through MCP');
+      expect(compactList.detail_hint).toContain('ok_get');
+
+      const expandedList = parseToolJson(await client.callTool({
+        name: 'ok_list',
+        arguments: { store_path: store, include_content: true },
+      }));
+      expect(expandedList.items[0].content).toBe('Stored through MCP');
+
       const stableGetItem = parseToolJson(await client.callTool({
         name: 'knowledge_get',
         arguments: { kind: 'item', id: add.item.short_id, store_path: store },

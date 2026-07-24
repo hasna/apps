@@ -129,7 +129,11 @@ knowledge list --search ownership
 # List notes tagged "rust"
 knowledge list --tag rust
 
-# Inspect every local knowledge layer: notes, sources, chunks, wiki, artifacts, runs, sync
+# Compact status/search output is the default; use --verbose or --json for details
+knowledge sync status --scope project
+knowledge search "company wiki policy" --scope project
+
+# Inspect every local knowledge layer with full machine-readable output
 knowledge inventory --scope project --json
 
 # Get a note
@@ -144,7 +148,8 @@ knowledge delete --id <id> --yes
 # Export all notes as JSONL
 knowledge export --format jsonl
 
-# Show resolved workspace paths
+# Show resolved workspace paths compactly, or use --json for all paths/config
+knowledge paths --scope project
 knowledge paths --scope project --json
 
 # Inspect local/S3 artifact storage and source ownership
@@ -155,7 +160,7 @@ knowledge machines topology --scope project --json
 knowledge machines preflight linux-node-a --workspace /workspace/open-knowledge --scope project --json
 
 # Inspect and record knowledge-aware sync ledger state
-knowledge sync status --scope project --json
+knowledge sync status --scope project
 knowledge sync doctor --machine linux-node-a --scope project --json
 knowledge sync snapshot --scope project --no-tailscale --json
 knowledge sync conflicts --scope project --json
@@ -211,7 +216,7 @@ knowledge embeddings index --scope project --model openai:text-embedding-3-small
 knowledge embeddings search "company wiki policy" --scope project --json
 
 # Hybrid search over source chunks, generated wiki pages, indexes, and optional vectors
-knowledge search "company wiki policy" --scope project --json
+knowledge search "company wiki policy" --scope project
 knowledge search "company wiki policy" --scope project --semantic --json
 knowledge search "company wiki policy" --scope project --context --json
 
@@ -226,6 +231,16 @@ knowledge "How do we cite handbook policy?" --scope project --json
 # Provider-native web search, safety-gated for real network access
 HASNA_KNOWLEDGE_WEB_SEARCH=1 knowledge web search "latest AI SDK web search" --provider openai --json
 ```
+
+## Output Disclosure
+
+Human terminal output is compact by default so CLIs stay usable in agent
+contexts. List, status, search, sync, machine, and export commands show capped
+rows, truncated text, totals, and the next detail command instead of dumping
+full objects. Use `--verbose` for full pretty-printed terminal details, or
+`--json` for stable machine-readable contracts. Commands that intentionally
+export records require an explicit machine-readable mode such as
+`knowledge export --json` or `knowledge export --format jsonl`.
 
 ## Guides
 
@@ -277,10 +292,12 @@ state, or keyword retrieval across active compatibility notes too.
 | `-t, --tag <tag>` | Filter by tag |
 | `--sort created\|title` | Sort field (default: created) |
 | `--desc` | Sort descending |
+| `--verbose` | Print the full paginated item objects |
+| `--json` | Print the stable machine-readable list response |
 
 ### inventory
 ```bash
-knowledge inventory [--scope local|global|project] [--limit <n>] [--include-archived] [--json]
+knowledge inventory [--scope local|global|project] [--limit <n>] [--include-archived] [--verbose] [--json]
 ```
 Show a capped, unified local inventory across the compatibility JSON item
 store, the SQLite catalog, indexed source refs, source/wiki chunks, generated
@@ -335,16 +352,18 @@ Delete an item. Requires `--yes` to confirm.
 
 ### export
 ```bash
-knowledge export [--format jsonl]
+knowledge export [--json|--format json|--format jsonl]
 ```
-Export all items. Use `--format jsonl` for newline-delimited JSON.
+Default terminal output is a compact export preview. Use `--json` or
+`--format json` for a JSON object, or `--format jsonl` for newline-delimited
+records.
 
 ### paths
 ```bash
-knowledge paths [--scope global|project|local] [--json]
+knowledge paths [--scope global|project|local] [--verbose] [--json]
 ```
-Show the resolved app workspace, JSON compatibility store, SQLite path,
-artifact directories, and config.
+Show compact resolved app paths by default. Use `--verbose` or `--json` for
+every path and the loaded config.
 
 ### storage
 ```bash
@@ -648,9 +667,9 @@ only refreshes SQLite source/wiki chunks and vector rows.
 
 ### search
 ```bash
-knowledge search <query> [--scope project] [--limit <n>] [--json]
-knowledge search <query> --semantic [--model openai:text-embedding-3-small] [--scope project] [--json]
-knowledge search <query> --context [--semantic] [--scope project] [--json]
+knowledge search <query> [--scope project] [--limit <n>] [--verbose] [--json]
+knowledge search <query> --semantic [--model openai:text-embedding-3-small] [--scope project] [--verbose] [--json]
+knowledge search <query> --context [--semantic] [--scope project] [--verbose] [--json]
 ```
 Run hybrid search over active JSON-store notes, `chunks_fts`, generated wiki
 chunks, wiki/index catalog rows, and optional vector results. The default path
@@ -659,6 +678,10 @@ merges vector results from `vector_index_entries`, preserving source refs,
 artifact URIs, citations, revision/hash metadata, and provenance in each
 structured result. JSON notes are keyword-only results with `kind:
 legacy_item` and `knowledge://item/<id>` source refs.
+
+Default terminal search output shows compact result rows with source refs and
+text previews. Use `--context` for an agent-ready citation pack, `--verbose` for
+full human-readable result objects, or `--json` for stable structured output.
 
 `--context` returns a reranked context pack for agents: selected excerpts,
 assembled citations, freshness and permission notes, graph evidence from
@@ -831,6 +854,12 @@ item tools (`ok_add`, `ok_list`, `ok_get`, `ok_update`, `ok_delete`,
 workspace/storage inspection (`ok_paths`, `ok_storage_status`), providers,
 embeddings, reindexing, hybrid search, source parsing/resolution, and
 `ok_web_search`.
+
+MCP list-style compatibility tools also use gradual disclosure. Compatibility
+note: `ok_list` returns compact item summaries by default and omits full
+`content`/`metadata` fields from each row; call `ok_get` for a single full item
+or pass `include_content=true` / `include_metadata=true` when expanded list rows
+are required.
 
 MCP also publishes project-scope JSON resources for agent inspection:
 
