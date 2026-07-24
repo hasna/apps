@@ -112,4 +112,37 @@ describe("CloudShortlinksStore routes to /v1 with bearer key", () => {
     await s.addDomain({ hostname: "has.na", defaultDomain: true, originUrl: "https://o" });
     expect(calls[0].body).toMatchObject({ hostname: "has.na", default: true, origin_url: "https://o" });
   });
+
+  test("deleteDomain resolves the domain then DELETEs /v1/domains/:hostname", async () => {
+    const { s, calls } = store((c) => {
+      if (c.method === "GET") return { json: { items: [{ id: "dom_2", hostname: "has.na" }] } };
+      return { status: 200, json: { deleted: true, hostname: "has.na" } };
+    });
+    const domain = await s.deleteDomain("has.na");
+    expect(domain.hostname).toBe("has.na");
+    expect(calls.map((c) => c.method)).toEqual(["GET", "DELETE"]);
+    expect(calls[1].url).toContain("/v1/domains/has.na");
+  });
+
+  test("deleteDomain surfaces a DELETE 404 instead of a false success", async () => {
+    // Regression: the domain exists (GET resolves it) but the server's DELETE
+    // route is missing/returns 404. This MUST throw, never resolve as deleted —
+    // the generic client.delete() swallowing 404 was the false-success bug.
+    const { s, calls } = store((c) => {
+      if (c.method === "GET") return { json: { items: [{ id: "dom_9", hostname: "gone.na" }] } };
+      return { status: 404, json: { error: "Not found" } };
+    });
+    // Since the domain provably exists, a DELETE 404 means the deployed server
+    // lacks the route — the error must say so (actionable: redeploy), not just 404.
+    await expect(s.deleteDomain("gone.na")).rejects.toThrow(/predates the domain-delete route/);
+    expect(calls.map((c) => c.method)).toEqual(["GET", "DELETE"]);
+  });
+
+  test("deleteLink surfaces a DELETE 404 instead of a false success", async () => {
+    const { s } = store((c) => {
+      if (c.method === "GET") return { json: { id: "lnk_9", slug: "gone" } };
+      return { status: 404, json: { error: "Not found" } };
+    });
+    await expect(s.deleteLink("gone")).rejects.toThrow(/predates the link-delete route/);
+  });
 });

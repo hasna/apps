@@ -7,47 +7,16 @@
  *   shortlinks-mcp            stdio (default; for editor/agent clients)
  *   shortlinks-mcp --http     Streamable HTTP on 127.0.0.1:8851 (shared service)
  *
- * Store mode follows HASNA_SHORTLINKS_STORE (local SQLite | postgres). In
- * postgres mode it reads/writes RDS directly (Amendment A1).
+ * Every tool routes through the shared client {@link Store}: the cloud ApiStore
+ * (HTTPS `/v1` + bearer key) when the client flip is on, otherwise the on-box
+ * LocalStore SQLite. No DSN, no direct sqlite/fetch — same seam the CLI uses.
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { ShortlinksStore } from "../store.js";
-import { PgShortlinksStore } from "../pg-store.js";
-import { getShortlinksStoreMode } from "../runtime.js";
+import { withStore } from "../client-store.js";
 import { isHttpMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
-
-interface RuntimeStore {
-  addDomain(input: any): unknown | Promise<unknown>;
-  listDomains(): unknown | Promise<unknown>;
-  createLink(input: any): unknown | Promise<unknown>;
-  listLinks(options?: any): unknown | Promise<unknown>;
-  getLink(domainOrSlug: string, maybeSlug?: string): unknown | Promise<unknown>;
-  setLinkActive(domainOrSlug: string, slugOrActive: any, active?: boolean): unknown | Promise<unknown>;
-  deleteLink(domainOrSlug: string, maybeSlug?: string): unknown | Promise<unknown>;
-  getStats(domainOrSlug: string, maybeSlug?: string): unknown | Promise<unknown>;
-  totalStats(): unknown | Promise<unknown>;
-  close?(): unknown | Promise<unknown>;
-}
-
-async function withStore<T>(fn: (store: RuntimeStore) => Promise<T> | T): Promise<T> {
-  if (getShortlinksStoreMode() === "postgres") {
-    const store = await PgShortlinksStore.fromEnv();
-    try {
-      return await fn(store as unknown as RuntimeStore);
-    } finally {
-      await store.close();
-    }
-  }
-  const store = new ShortlinksStore();
-  try {
-    return await fn(store as unknown as RuntimeStore);
-  } finally {
-    store.close();
-  }
-}
 
 const TOOLS = [
   {
@@ -153,6 +122,15 @@ const TOOLS = [
     },
   },
   {
+    name: "delete_domain",
+    description: "Delete a shortlink domain and all of its links and clicks.",
+    inputSchema: {
+      type: "object",
+      properties: { hostname: { type: "string", description: "Hostname or domain id." } },
+      required: ["hostname"],
+    },
+  },
+  {
     name: "stats",
     description: "Total domains/links/clicks counts.",
     inputSchema: { type: "object", properties: {} },
@@ -198,6 +176,8 @@ async function dispatch(name: string, args: Record<string, any>): Promise<unknow
           notes: args.notes,
         }),
       );
+    case "delete_domain":
+      return withStore((s) => s.deleteDomain(args.hostname));
     case "stats":
       return withStore((s) => s.totalStats());
     default:

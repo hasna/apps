@@ -140,6 +140,18 @@ export function createServeApp(deps: ServeAppDeps): Hono {
     }
   });
 
+  app.delete("/v1/domains/:hostname", async (c) => {
+    const denied = await requireScopes(c, [`${APP_SLUG}:write`]);
+    if (denied) return denied;
+    const hostname = c.req.param("hostname");
+    try {
+      const domain = await store.deleteDomain(hostname);
+      return c.json({ deleted: true, hostname: domain.hostname });
+    } catch (error) {
+      return handleError(c, error);
+    }
+  });
+
   app.get("/v1/links", async (c) => {
     const denied = await requireScopes(c, [`${APP_SLUG}:read`]);
     if (denied) return denied;

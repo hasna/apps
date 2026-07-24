@@ -79,6 +79,13 @@ describe("shortlinks serve app", () => {
     const res = await makeApp().request("/v1/links", { headers: { "x-api-key": "hasna_shortlinks_bogus" } });
     expect(res.status).toBe(401);
   });
+
+  test("DELETE /v1/domains/:hostname without a key is 401", async () => {
+    const res = await makeApp().request("/v1/domains/zztest.example", { method: "DELETE" });
+    expect(res.status).toBe(401);
+    const body = (await res.json()) as any;
+    expect(body.reason).toBe("missing_token");
+  });
 });
 
 describe("shortlinks openapi", () => {
@@ -86,7 +93,7 @@ describe("shortlinks openapi", () => {
     const doc = buildOpenApiDocument("1.2.3") as any;
     expect(doc.info.version).toBe("1.2.3");
     const opIds = Object.values(doc.paths).flatMap((p: any) => Object.values(p).map((op: any) => op.operationId));
-    for (const id of ["createLink", "listLinks", "getLink", "deleteLink", "getHealth", "getReady", "getVersion"]) {
+    for (const id of ["createLink", "listLinks", "getLink", "deleteLink", "addDomain", "deleteDomain", "getHealth", "getReady", "getVersion"]) {
       expect(opIds).toContain(id);
     }
   });

@@ -20,6 +20,7 @@ import {
   type HasnaStorageClient,
 } from "@hasna/contracts/client/storage";
 import type { Env } from "@hasna/contracts/mode";
+import type { ListLinksOptions, Store, TotalStats } from "./store-interface.js";
 import type {
   AddDomainInput,
   Click,
@@ -41,7 +42,8 @@ function enc(value: string): string {
  * bearer key. Mirrors the async `PgShortlinksStore` method signatures so it is a
  * drop-in `RuntimeStore` for the CLI.
  */
-export class CloudShortlinksStore {
+export class CloudShortlinksStore implements Store {
+  readonly kind = "cloud-http" as const;
   readonly transport: HasnaStorageClient["transport"];
 
   private constructor(private readonly client: HasnaStorageClient) {
@@ -100,6 +102,24 @@ export class CloudShortlinksStore {
   async getDefaultDomain(): Promise<Domain | null> {
     const domains = await this.listDomains();
     return domains.find((d) => d.default_domain) ?? domains[0] ?? null;
+  }
+
+  async deleteDomain(hostnameOrId: string): Promise<Domain> {
+    // The API's DELETE returns { deleted, hostname }; the CLI needs the full
+    // domain record, so resolve it first, then delete by hostname.
+    const domain = await this.getDomain(hostnameOrId);
+    if (!domain) throw new Error("Domain not found.");
+    // Use the transport DELETE directly rather than the generic storage-client
+    // delete(), which swallows a 404 and would report a false success when the
+    // server lacks the route (or the row is already gone). We already proved the
+    // domain exists above, so any non-2xx here — including 404 — is a real
+    // failure that MUST surface, never a silent "deleted: true".
+    try {
+      await this.transport.del(`/domains/${enc(domain.hostname)}`);
+    } catch (error) {
+      throw missingRouteError(error, "domain", `DELETE /domains/${domain.hostname}`);
+    }
+    return domain;
   }
 
   // ── Links ──────────────────────────────────────────────────────────────────
@@ -165,11 +185,18 @@ export class CloudShortlinksStore {
       ? await this.getLink(domainOrSlug, maybeSlug)
       : await this.getLink(domainOrSlug);
     if (!link) throw new Error("Link not found.");
-    await this.client.delete(
-      "links",
-      link.slug,
-      maybeSlug ? { query: { domain: domainOrSlug } } : {},
-    );
+    // Transport DELETE directly (not the generic delete(), which swallows 404)
+    // so a missing route or already-gone row surfaces as an error instead of a
+    // false success — same defect class as deleteDomain.
+    try {
+      await this.transport.del(
+        `/links/${enc(link.slug)}`,
+        undefined,
+        maybeSlug ? { query: { domain: domainOrSlug } } : {},
+      );
+    } catch (error) {
+      throw missingRouteError(error, "link", `DELETE /links/${link.slug}`);
+    }
     return link;
   }
 
@@ -199,4 +226,23 @@ function isNotFound(error: unknown): boolean {
     "status" in error &&
     (error as { status?: number }).status === 404
   );
+}
+
+/**
+ * Turn a DELETE failure into an actionable error. The caller has already
+ * resolved the resource (proving it exists in the cloud store), so a 404 here
+ * cannot mean "not found" — it means the deployed server does not expose the
+ * delete route yet (its image predates it) and needs an ECS redeploy. Surface
+ * that explicitly instead of the cryptic raw "…-> 404", and re-throw any other
+ * transport error untouched.
+ */
+function missingRouteError(error: unknown, resource: string, request: string): Error {
+  if (isNotFound(error)) {
+    return new Error(
+      `Cloud server rejected ${request} with 404 even though the ${resource} exists. ` +
+        `The deployed shortlinks server predates the ${resource}-delete route — redeploy the ` +
+        `cloud service (ECS) to a version that exposes it, then retry.`,
+    );
+  }
+  return error instanceof Error ? error : new Error(String(error));
 }

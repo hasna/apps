@@ -22,6 +22,8 @@ export interface AddDomainRequest { "hostname": string; "provider"?: string; "de
 
 export interface DeleteResponse { "deleted": boolean; "slug"?: string }
 
+export interface DomainDeleteResponse { "deleted": boolean; "hostname"?: string }
+
 export interface HealthStatus { "status": string; "version": string; "mode": string; "db_latency_ms"?: number }
 
 export interface ReadyStatus { "status": string; "version": string; "mode": string; "pending_migrations"?: Array<string> }
@@ -116,6 +118,15 @@ export class ShortlinksApiClient {
     async addDomain(body: AddDomainRequest, init?: RequestInit): Promise<Domain> {
       return this.request("POST", `/v1/domains`, {
         body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Delete a domain and all of its links and clicks. */
+    async deleteDomain(hostname: string, init?: RequestInit): Promise<DomainDeleteResponse> {
+      return this.request("DELETE", `/v1/domains/${encodeURIComponent(String(hostname))}`, {
+        body: undefined,
         query: undefined,
         init,
       });

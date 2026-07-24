@@ -135,6 +135,11 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
           properties: { deleted: { type: "boolean" }, slug: { type: "string" } },
           required: ["deleted"],
         },
+        DomainDeleteResponse: {
+          type: "object",
+          properties: { deleted: { type: "boolean" }, hostname: { type: "string" } },
+          required: ["deleted"],
+        },
         HealthStatus: probe({ db_latency_ms: { type: "integer" } }),
         ReadyStatus: probe({ pending_migrations: { type: "array", items: { type: "string" } } }),
         VersionInfo: probe({ name: { type: "string" } }),
@@ -202,6 +207,19 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
           },
           responses: {
             "201": { content: { "application/json": { schema: { $ref: "#/components/schemas/Domain" } } } },
+          },
+        },
+      },
+      "/v1/domains/{hostname}": {
+        delete: {
+          operationId: "deleteDomain",
+          summary: "Delete a domain and all of its links and clicks.",
+          security: [{ apiKey: [] }],
+          parameters: [
+            { name: "hostname", in: "path", required: true, schema: { type: "string" } },
+          ],
+          responses: {
+            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/DomainDeleteResponse" } } } },
           },
         },
       },
