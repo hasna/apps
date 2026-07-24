@@ -1,0 +1,54 @@
+{
+  "name": "@hasna/connect-smile-io",
+  "version": "0.1.0",
+  "description": "Smile.io connector CLI - loyalty, points, rewards, and referrals with multi-profile support",
+  "type": "module",
+  "bin": {
+    "connect-smile-io": "./bin/index.js"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/cli/index.ts --outdir ./bin --target bun",
+    "dev": "bun run ./src/cli/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "prepublishOnly": "bun run build"
+  },
+  "keywords": [
+    "smile-io",
+    "loyalty",
+    "rewards",
+    "points",
+    "referrals",
+    "api",
+    "connector",
+    "cli",
+    "typescript",
+    "bun",
+    "hasna"
+  ],
+  "author": "Hasna",
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "chalk": "^5.3.0"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/connectors.git"
+  }
+}

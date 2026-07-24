@@ -374,6 +374,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["subscriptions", "billing", "recurring-payments", "ecommerce", "shopify"],
   },
   {
+    name: "smile-io",
+    displayName: "Smile.io",
+    description: "Loyalty, points, and rewards program platform for e-commerce",
+    category: "Commerce & Finance",
+    tags: ["loyalty", "rewards", "points", "ecommerce", "shopify"],
+  },
+  {
     name: "relysia",
     displayName: "Relysia",
     description: "Bitcoin SV blockchain wallet and payment API",
