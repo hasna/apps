@@ -1221,6 +1221,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["url-shortener", "links", "self-hosted"],
   },
   {
+    name: "write-binary-file",
+    displayName: "WriteBinaryFile",
+    description: "Binary file platform (files/events/search/raw API)",
+    category: "Developer Tools",
+    tags: ["files", "binary", "storage", "api"],
+  },
+  {
     name: "zabbix",
     displayName: "Zabbix",
     description: "Enterprise network and infrastructure monitoring",
