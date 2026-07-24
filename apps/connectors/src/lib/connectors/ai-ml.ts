@@ -913,6 +913,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ai", "video generation", "avatars", "synthetic media", "content creation"],
   },
   {
+    name: "syntheticsciences",
+    displayName: "Synthetic Sciences",
+    description: "AI co-scientist for research projects, literature search, experiments, and GPU jobs",
+    category: "AI & ML",
+    tags: ["ai", "research", "co-scientist", "experiments", "literature"],
+  },
+  {
     name: "talknotes",
     displayName: "TalkNotes",
     description: "AI-powered voice-to-text note-taking app for converting speech to structured notes",
