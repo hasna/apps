@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { buildServer } from "../src/mcp/index";
 
 const tempDirs: string[] = [];
@@ -105,6 +106,19 @@ describe("statusline MCP server", () => {
     }
   });
 
+  test("statusline_health returns server metadata", async () => {
+    const { client, close } = await connectClient();
+    try {
+      const health = parseToolText(await client.callTool({ name: "statusline_health", arguments: {} }));
+      expect(health.ok).toBe(true);
+      expect(health.name).toBe("statusline-mcp");
+      expect(health.version).toMatch(/^\d+\.\d+\.\d+/);
+      expect(typeof health.defaultConfigPath).toBe("string");
+    } finally {
+      await close();
+    }
+  });
+
   test("get, list, update, disable, order, reset, and preview config operations", async () => {
     const configPath = join(tempDir(), "config.json");
     const previousConfig = process.env.STATUSLINE_CONFIG;
@@ -150,6 +164,16 @@ describe("statusline MCP server", () => {
       const preview = parseToolText(await client.callTool({ name: "preview_statusline", arguments: { config_path: configPath } }));
       expect(typeof preview.line).toBe("string");
 
+      const resetDry = parseToolText(
+        await client.callTool({
+          name: "reset_config",
+          arguments: { config_path: configPath, dry_run: true },
+        }),
+      );
+      expect(resetDry.dryRun).toBe(true);
+      expect(resetDry.config.segments).toContain("model-context");
+      expect(JSON.parse(readFileSync(configPath, "utf8")).segments).toEqual(["machine", "cost"]);
+
       const reset = parseToolText(
         await client.callTool({
           name: "reset_config",
@@ -161,6 +185,37 @@ describe("statusline MCP server", () => {
       await close();
       if (previousConfig === undefined) delete process.env.STATUSLINE_CONFIG;
       else process.env.STATUSLINE_CONFIG = previousConfig;
+    }
+  });
+
+  test("startMcpServer subprocess prints stdio banner", async () => {
+    const proc = Bun.spawn(["bun", "src/mcp/index.ts"], {
+      cwd: import.meta.dir + "/..",
+      stderr: "pipe",
+      stdin: "ignore",
+      stdout: "ignore",
+    });
+    const stderr = await new Response(proc.stderr).text();
+    proc.kill();
+    await proc.exited;
+    expect(stderr).toContain("statusline MCP server running on stdio");
+  }, 10_000);
+
+  test("startMcpServer connects buildServer in-process", async () => {
+    const messages: string[] = [];
+    const origErr = console.error;
+    console.error = (...args: unknown[]) => {
+      messages.push(args.map(String).join(" "));
+    };
+    const connect = McpServer.prototype.connect;
+    McpServer.prototype.connect = async function () {};
+    try {
+      const { startMcpServer } = await import("../src/mcp/index");
+      await startMcpServer();
+      expect(messages.some((m) => m.includes("statusline MCP server running on stdio"))).toBe(true);
+    } finally {
+      McpServer.prototype.connect = connect;
+      console.error = origErr;
     }
   });
 });
