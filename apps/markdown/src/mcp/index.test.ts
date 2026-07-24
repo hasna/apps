@@ -22,6 +22,19 @@ function runMcp(args: string[]) {
   });
 }
 
+function makeLargeDoc(count: number = 25) {
+  const cards = Array.from({ length: count }, (_, index) => `type: custom
+id: card-${index}
+note: ${index}
+
+Card ${index}.`);
+  return `# LargeMcp\n\n---\n\n${cards.join("\n\n---\n\n")}`;
+}
+
+function firstText(result: Awaited<ReturnType<Client["callTool"]>>) {
+  return (result.content as Array<{ type: string; text: string }>)[0]?.text ?? "";
+}
+
 describe("mcp CLI flags", () => {
   test("prints help and exits when --help is used", () => {
     const out: string[] = [];
@@ -116,6 +129,69 @@ describe("MCP HTTP transport", () => {
     }
   });
 
+  test("markdown inspect and compile are compact by default with json opt-in", async () => {
+    const server = buildServer();
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "compact-test", version: "0.0.1" });
+
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    const inspect = await client.callTool({
+      name: "markdown_inspect",
+      arguments: { content: makeLargeDoc(), limit: 3 },
+    });
+    const inspectText = firstText(inspect);
+    expect(inspectText).toContain("Cards: 25");
+    expect(inspectText).toContain("... 22 more cards not shown");
+    expect(inspectText.trim().startsWith("{")).toBe(false);
+
+    const inspectJson = await client.callTool({
+      name: "markdown_inspect",
+      arguments: { content: makeLargeDoc(), json: true },
+    });
+    const inspectPayload = JSON.parse(firstText(inspectJson)) as { cards: unknown[]; executionPlan: { steps: unknown[] } };
+    expect(inspectPayload.cards).toHaveLength(25);
+    expect(Array.isArray(inspectPayload.executionPlan.steps)).toBe(true);
+
+    const compile = await client.callTool({
+      name: "markdown_compile",
+      arguments: { content: makeLargeDoc(), limit: 1 },
+    });
+    const compileText = firstText(compile);
+    expect(compileText).toContain("Execution Plan:");
+    expect(compileText).toContain("Hint: use --verbose");
+    expect(compileText.trim().startsWith("{")).toBe(false);
+
+    await client.close();
+    await server.close();
+  });
+
+  test("list_agents is compact by default with json opt-in", async () => {
+    const server = buildServer();
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "agents-test", version: "0.0.1" });
+
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    await client.callTool({ name: "register_agent", arguments: { name: "agent-one" } });
+    await client.callTool({ name: "register_agent", arguments: { name: "agent-two" } });
+
+    const compact = await client.callTool({ name: "list_agents", arguments: { limit: 1 } });
+    const compactText = firstText(compact);
+    expect(compactText).toContain("Agents:");
+    expect(compactText).toContain("... 1 more agents not shown");
+    expect(compactText.trim().startsWith("[")).toBe(false);
+
+    const json = await client.callTool({ name: "list_agents", arguments: { json: true } });
+    const agents = JSON.parse(firstText(json)) as Array<{ name: string }>;
+    expect(agents.map((agent) => agent.name)).toContain("agent-one");
+
+    await client.close();
+    await server.close();
+  });
+
   test("resolves HTTP mode and default port", () => {
     expect(isHttpMode(["--http"])).toBe(true);
     expect(resolveHttpPort([])).toBe(DEFAULT_HTTP_PORT);
@@ -169,12 +245,33 @@ describe("MCP HTTP transport", () => {
 
     const result = await client.callTool({
       name: "markdown_validate",
-      arguments: { content: "# Test\n\n```task id=t1\nDo thing\n```" },
+      arguments: { content: "# Test\n\n```task id=t1\nDo thing\n```", json: true },
     });
     const text = (result.content as Array<{ type: string; text: string }>)[0]?.text;
     expect(JSON.parse(text)).toMatchObject({ valid: expect.any(Boolean), cards: expect.any(Number) });
 
     await client.close();
+  });
+
+  test("markdown validate defaults to compact text", async () => {
+    const server = buildServer();
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "validate-compact-test", version: "0.0.1" });
+
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    const result = await client.callTool({
+      name: "markdown_validate",
+      arguments: { content: makeLargeDoc(), limit: 1 },
+    });
+    const text = firstText(result);
+    expect(text).toContain("Document is valid");
+    expect(text).toContain("25 cards");
+    expect(text.trim().startsWith("{")).toBe(false);
+
+    await client.close();
+    await server.close();
   });
 
   test("serves multiple concurrent HTTP clients from one process", async () => {

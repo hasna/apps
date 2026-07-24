@@ -24,11 +24,31 @@ omp --help
 - `omp inspect <file>`
 - `omp init`
 
+CLI output is compact by default for agent-friendly terminals. Commands that can
+produce large structures show summaries and hints first:
+
+```bash
+omp inspect app.omp.md --limit 10
+omp inspect app.omp.md --verbose
+omp inspect app.omp.md --json
+
+omp compile app.omp.md
+omp compile app.omp.md --json
+```
+
+- Use `--limit <n>` to increase or reduce compact rows.
+- Use `--verbose` for all cards, execution steps, and detail columns.
+- Use `--json` when another program needs the full machine-readable payload.
+
 ## MCP Server
 
 ```bash
 omp-mcp
 ```
+
+MCP tool outputs are also compact by default. Pass `json=true` for full
+machine-readable payloads, `verbose=true` for expanded text, and `limit=<n>` for
+larger compact previews.
 
 ## HTTP mode
 

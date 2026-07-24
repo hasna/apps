@@ -8,6 +8,12 @@ import { validateAndLint } from "../validator/validate.js";
 import { createLLMClient } from "../lib/llm-client.js";
 import { getPackageVersion } from "../lib/package-version.js";
 import { storagePull, storagePush, storageStatus, storageSync } from "../storage.js";
+import {
+  DEFAULT_OUTPUT_LIMIT,
+  normalizeLimit,
+  summarizeDocument,
+  summarizeExecutionPlan,
+} from "../lib/compact-output.js";
 import { writeFileSync, existsSync } from "fs";
 import type { OmpError, LLMClientOptions } from "../types/index.js";
 
@@ -126,12 +132,24 @@ program
 
 program
   .command("compile <file>")
-  .description("Parse and output the execution plan as JSON")
-  .action(async (file: string) => {
+  .description("Parse and summarize the execution plan")
+  .option("-j, --json", "Output full execution plan as JSON")
+  .option("--verbose", "Show all execution steps")
+  .option("--limit <n>", `Maximum rows to show in compact output (default: ${DEFAULT_OUTPUT_LIMIT})`)
+  .action(async (file: string, opts: { json?: boolean; verbose?: boolean; limit?: string }) => {
     try {
       const doc = parseFromFile(file);
       const plan = compile(doc);
-      console.log(JSON.stringify(plan, null, 2));
+
+      if (opts.json) {
+        printJson(plan);
+        return;
+      }
+
+      console.log(summarizeExecutionPlan(plan, {
+        limit: normalizeLimit(opts.limit),
+        verbose: opts.verbose,
+      }));
     } catch (err) {
       console.error(chalk.red(`Error: ${err instanceof Error ? err.message : err}`));
       process.exit(1);
@@ -189,7 +207,9 @@ program
   .command("inspect <file>")
   .description("Show parsed AST, card count, DAG visualization")
   .option("-j, --json", "Output result as JSON")
-  .action(async (file: string, opts: { json?: boolean }) => {
+  .option("--verbose", "Show all cards and header keys")
+  .option("--limit <n>", `Maximum cards/steps to show in compact output (default: ${DEFAULT_OUTPUT_LIMIT})`)
+  .action(async (file: string, opts: { json?: boolean; verbose?: boolean; limit?: string }) => {
     try {
       const doc = parseFromFile(file);
       const plan = compile(doc);
@@ -212,23 +232,10 @@ program
         return;
       }
 
-      console.log(chalk.bold(`Title: ${doc.title}`));
-      console.log(chalk.bold(`Cards: ${doc.cards.length}`));
-      console.log(chalk.bold(`Patterns: ${doc.patterns.length}`));
-      console.log();
-
-      for (const card of doc.cards) {
-        const deps = card.depends.length > 0 ? ` → depends: [${card.depends.join(", ")}]` : "";
-        const accepts = card.accepts.length > 0 ? ` (${card.accepts.length} criteria)` : "";
-        const directives = card.body.inlineDirectives.length > 0 ? ` {{${card.body.inlineDirectives.length}}}` : "";
-        console.log(`  ${chalk.cyan(card.type)}:${chalk.white(card.id)}${deps}${accepts}${directives}`);
-      }
-
-      console.log();
-      console.log(chalk.bold("Execution Plan:"));
-      for (const step of plan.steps) {
-        console.log(`  ${step.description}`);
-      }
+      console.log(summarizeDocument(doc, plan, {
+        limit: normalizeLimit(opts.limit),
+        verbose: opts.verbose,
+      }));
     } catch (err) {
       if (opts.json) {
         printJson({ error: err instanceof Error ? err.message : String(err) });

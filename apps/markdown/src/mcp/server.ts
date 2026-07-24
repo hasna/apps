@@ -7,6 +7,14 @@ import { parseFromFile, parseFromString, validate, compile, run } from "../lib/p
 import { getPackageVersion } from "../lib/package-version.js";
 import { saveFeedback, storagePull, storagePush, storageStatus, storageSync } from "../storage.js";
 import { validateAndLint } from "../validator/validate.js";
+import {
+  normalizeLimit,
+  summarizeAgents,
+  summarizeDocument,
+  summarizeExecutionPlan,
+  summarizeExecutionResult,
+  summarizeIssues,
+} from "../lib/compact-output.js";
 
 export { getPackageVersion };
 
@@ -28,6 +36,9 @@ export function buildServer(version: string = getPackageVersion()): Server {
           properties: {
             file: { type: "string", description: "Path to .omp.md file" },
             content: { type: "string", description: "Raw OMP document content (alternative to file)" },
+            json: { type: "boolean", description: "Return full machine-readable JSON instead of compact text" },
+            verbose: { type: "boolean", description: "Show all issues in compact text" },
+            limit: { type: "number", description: "Maximum issues to show in compact text" },
           },
         },
       },
@@ -39,17 +50,23 @@ export function buildServer(version: string = getPackageVersion()): Server {
           properties: {
             file: { type: "string", description: "Path to .omp.md file" },
             content: { type: "string", description: "Raw OMP document content" },
+            json: { type: "boolean", description: "Return full machine-readable JSON instead of compact text" },
+            verbose: { type: "boolean", description: "Show all cards and execution steps" },
+            limit: { type: "number", description: "Maximum cards/steps to show in compact text" },
           },
         },
       },
       {
         name: "markdown_compile",
-        description: "Parse an OMP document and return the execution plan as JSON (DAG with parallel groups).",
+        description: "Parse an OMP document and summarize the execution plan. Pass json=true for the full DAG JSON.",
         inputSchema: {
           type: "object" as const,
           properties: {
             file: { type: "string", description: "Path to .omp.md file" },
             content: { type: "string", description: "Raw OMP document content" },
+            json: { type: "boolean", description: "Return the full execution plan JSON" },
+            verbose: { type: "boolean", description: "Show all execution steps" },
+            limit: { type: "number", description: "Maximum steps to show in compact text" },
           },
         },
       },
@@ -61,6 +78,9 @@ export function buildServer(version: string = getPackageVersion()): Server {
           properties: {
             file: { type: "string", description: "Path to .omp.md file" },
             content: { type: "string", description: "Raw OMP document content" },
+            json: { type: "boolean", description: "Return full machine-readable JSON instead of compact text" },
+            verbose: { type: "boolean", description: "Show all issues in compact text" },
+            limit: { type: "number", description: "Maximum issues to show in compact text" },
           },
         },
       },
@@ -73,6 +93,9 @@ export function buildServer(version: string = getPackageVersion()): Server {
             file: { type: "string", description: "Path to .omp.md file" },
             output_dir: { type: "string", description: "Output directory (default: .)" },
             dry_run: { type: "boolean", description: "Preview without executing (default: true)" },
+            json: { type: "boolean", description: "Return full machine-readable JSON instead of compact text" },
+            verbose: { type: "boolean", description: "Show file and command details in compact text" },
+            limit: { type: "number", description: "Maximum errors to show in compact text" },
           },
           required: ["file"],
         },
@@ -94,8 +117,15 @@ export function buildServer(version: string = getPackageVersion()): Server {
       },
       {
         name: "list_agents",
-        description: "List all registered agents.",
-        inputSchema: { type: "object" as const, properties: {} },
+        description: "List registered agents compactly by default. Pass verbose=true for timestamps.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            json: { type: "boolean", description: "Return full machine-readable JSON instead of compact text" },
+            verbose: { type: "boolean", description: "Show all agents with timestamps" },
+            limit: { type: "number", description: "Maximum agents to show in compact text" },
+          },
+        },
       },
       {
         name: "send_feedback",
@@ -158,7 +188,15 @@ export function buildServer(version: string = getPackageVersion()): Server {
         }
         case "list_agents": {
           const agents = [..._agentReg.values()];
-          return { content: [{ type: "text" as const, text: agents.length === 0 ? "No agents registered." : JSON.stringify(agents, null, 2) }] };
+          if ((args as { json?: boolean } | undefined)?.json) {
+            return { content: [{ type: "text" as const, text: JSON.stringify(agents, null, 2) }] };
+          }
+          return {
+            content: [{
+              type: "text" as const,
+              text: summarizeAgents(agents, compactOptions(args)),
+            }],
+          };
         }
         case "send_feedback": {
           const p = args as { message: string; email?: string; category?: string };
@@ -186,15 +224,24 @@ export function buildServer(version: string = getPackageVersion()): Server {
             : parseFromString((args?.content as string) ?? "");
           const errors = validate(doc);
           const errorCount = errors.filter((e) => e.level === "error").length;
+          const payload = {
+            valid: errorCount === 0,
+            cards: doc.cards.length,
+            errors: errors.filter((e) => e.level === "error"),
+            warnings: errors.filter((e) => e.level === "warning"),
+          };
+          if ((args as { json?: boolean } | undefined)?.json) {
+            return { content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }] };
+          }
           return {
             content: [{
               type: "text" as const,
-              text: JSON.stringify({
-                valid: errorCount === 0,
-                cards: doc.cards.length,
-                errors: errors.filter((e) => e.level === "error"),
-                warnings: errors.filter((e) => e.level === "warning"),
-              }, null, 2),
+              text: summarizeIssues(
+                payload.valid ? "Document is valid" : "Document is invalid",
+                { cards: payload.cards, errors: payload.errors.length, warnings: payload.warnings.length },
+                [...payload.errors, ...payload.warnings],
+                compactOptions(args)
+              ),
             }],
           };
         }
@@ -203,23 +250,27 @@ export function buildServer(version: string = getPackageVersion()): Server {
             ? parseFromFile(args.file as string)
             : parseFromString((args?.content as string) ?? "");
           const plan = compile(doc);
+          const payload = {
+            title: doc.title,
+            cards: doc.cards.map((c) => ({
+              type: c.type,
+              id: c.id,
+              depends: c.depends,
+              accepts: c.accepts,
+              headerKeys: Object.keys(c.headers),
+              inlineDirectives: c.body.inlineDirectives.length,
+              tables: c.body.tables.length,
+            })),
+            patterns: doc.patterns.length,
+            executionPlan: plan,
+          };
+          if ((args as { json?: boolean } | undefined)?.json) {
+            return { content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }] };
+          }
           return {
             content: [{
               type: "text" as const,
-              text: JSON.stringify({
-                title: doc.title,
-                cards: doc.cards.map((c) => ({
-                  type: c.type,
-                  id: c.id,
-                  depends: c.depends,
-                  accepts: c.accepts,
-                  headerKeys: Object.keys(c.headers),
-                  inlineDirectives: c.body.inlineDirectives.length,
-                  tables: c.body.tables.length,
-                })),
-                patterns: doc.patterns.length,
-                executionPlan: plan,
-              }, null, 2),
+              text: summarizeDocument(doc, plan, compactOptions(args)),
             }],
           };
         }
@@ -228,8 +279,13 @@ export function buildServer(version: string = getPackageVersion()): Server {
             ? parseFromFile(args.file as string)
             : parseFromString((args?.content as string) ?? "");
           const plan = compile(doc);
+          if ((args as { json?: boolean } | undefined)?.json) {
+            return {
+              content: [{ type: "text" as const, text: JSON.stringify(plan, null, 2) }],
+            };
+          }
           return {
-            content: [{ type: "text" as const, text: JSON.stringify(plan, null, 2) }],
+            content: [{ type: "text" as const, text: summarizeExecutionPlan(plan, compactOptions(args)) }],
           };
         }
         case "markdown_lint": {
@@ -237,15 +293,24 @@ export function buildServer(version: string = getPackageVersion()): Server {
             ? parseFromFile(args.file as string)
             : parseFromString((args?.content as string) ?? "");
           const issues = validateAndLint(doc);
+          const payload = {
+            cards: doc.cards.length,
+            errors: issues.filter((e) => e.level === "error"),
+            warnings: issues.filter((e) => e.level === "warning"),
+            info: issues.filter((e) => e.level === "info"),
+          };
+          if ((args as { json?: boolean } | undefined)?.json) {
+            return { content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }] };
+          }
           return {
             content: [{
               type: "text" as const,
-              text: JSON.stringify({
-                cards: doc.cards.length,
-                errors: issues.filter((e) => e.level === "error"),
-                warnings: issues.filter((e) => e.level === "warning"),
-                info: issues.filter((e) => e.level === "info"),
-              }, null, 2),
+              text: summarizeIssues(
+                "Lint",
+                { cards: payload.cards, errors: payload.errors.length, warnings: payload.warnings.length, info: payload.info.length },
+                [...payload.errors, ...payload.warnings, ...payload.info],
+                compactOptions(args)
+              ),
             }],
           };
         }
@@ -256,8 +321,13 @@ export function buildServer(version: string = getPackageVersion()): Server {
             outputDir: (args?.output_dir as string) ?? ".",
             dryRun: (args?.dry_run as boolean) ?? true,
           });
+          if ((args as { json?: boolean } | undefined)?.json) {
+            return {
+              content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+            };
+          }
           return {
-            content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+            content: [{ type: "text" as const, text: summarizeExecutionResult(result, compactOptions(args)) }],
           };
         }
         default:
@@ -275,4 +345,12 @@ export function buildServer(version: string = getPackageVersion()): Server {
   });
 
   return server;
+}
+
+function compactOptions(args: unknown) {
+  const input = (args ?? {}) as { limit?: unknown; verbose?: boolean };
+  return {
+    limit: normalizeLimit(input.limit),
+    verbose: input.verbose,
+  };
 }
