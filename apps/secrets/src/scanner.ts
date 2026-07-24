@@ -47,6 +47,12 @@ interface Detector {
   severity: ExposureSeverity;
   pattern: RegExp;
   valueGroup?: number;
+  // High-signal detectors whose match is a rigid, vendor-specific structure
+  // (fixed prefixes, PEM markers, etc.). For these the lexical placeholder
+  // blocklist ("example", "dummy", ...) must NOT suppress a match — e.g. the
+  // canonical AWS id AKIAIOSFODNN7EXAMPLE is still a real access-key shape.
+  // Only structural placeholder checks (interpolation syntax, too short) apply.
+  structuralOnly?: boolean;
 }
 
 interface MatchSpan {
@@ -107,41 +113,64 @@ const DETECTORS: Detector[] = [
   {
     id: "anthropic_api_key",
     severity: "high",
+    structuralOnly: true,
     pattern: new RegExp(`${token("sk", "-", "ant", "-")}[A-Za-z0-9_-]{12,}`, "g"),
   },
   {
     id: "openai_api_key",
     severity: "high",
+    structuralOnly: true,
     pattern: new RegExp(`${token("sk", "-")}(?:${token("proj", "-")})?[A-Za-z0-9_-]{12,}`, "g"),
+  },
+  {
+    id: "stripe_secret_key",
+    severity: "high",
+    structuralOnly: true,
+    // Stripe secret ("sk_") and restricted ("rk_") keys, live or test. These
+    // use an underscore, so the openai "sk-" detector never matched them.
+    pattern: new RegExp(`${token("[sr]", "k", "_")}(?:live|test)${token("_")}[0-9A-Za-z]{10,}`, "g"),
+  },
+  {
+    id: "private_key_block",
+    severity: "high",
+    structuralOnly: true,
+    // PEM private-key markers (RSA/EC/DSA/OPENSSH/ENCRYPTED/plain PKCS#8).
+    pattern: new RegExp(`${token("---", "--")}BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY${token("---", "--")}`, "g"),
   },
   {
     id: "github_token",
     severity: "high",
+    structuralOnly: true,
     pattern: new RegExp(`${token("gh", "[opusr]", "_")}[A-Za-z0-9_]{12,}`, "g"),
   },
   {
     id: "package_registry_token",
     severity: "high",
+    structuralOnly: true,
     pattern: new RegExp(`${token("npm", "_")}[A-Za-z0-9_]{12,}`, "g"),
   },
   {
     id: "google_api_key",
     severity: "high",
+    structuralOnly: true,
     pattern: new RegExp(`${token("AI", "za")}[A-Za-z0-9_-]{20,}`, "g"),
   },
   {
     id: "aws_access_key_id",
     severity: "high",
+    structuralOnly: true,
     pattern: new RegExp(`${token("AK", "IA")}[0-9A-Z]{12,}`, "g"),
   },
   {
     id: "xai_api_key",
     severity: "high",
+    structuralOnly: true,
     pattern: new RegExp(`${token("x", "ai", "-")}[A-Za-z0-9_-]{12,}`, "g"),
   },
   {
     id: "context7_api_key",
     severity: "high",
+    structuralOnly: true,
     pattern: new RegExp(`${token("ctx", "7", "sk", "-")}[A-Za-z0-9_-]{12,}`, "g"),
   },
   {
@@ -160,6 +189,8 @@ const DETECTORS: Detector[] = [
 const GIT_GREP_PATTERN = [
   `${token("sk", "-", "ant", "-")}[A-Za-z0-9_-]{12,}`,
   `${token("sk", "-")}(${token("proj", "-")})?[A-Za-z0-9_-]{12,}`,
+  `${token("[sr]", "k", "_")}(live|test)${token("_")}[0-9A-Za-z]{10,}`,
+  `${token("---", "--")}BEGIN ([A-Z0-9]+ )*PRIVATE KEY${token("---", "--")}`,
   `${token("gh", "[opusr]", "_")}[A-Za-z0-9_]{12,}`,
   `${token("npm", "_")}[A-Za-z0-9_]{12,}`,
   `${token("AI", "za")}[A-Za-z0-9_-]{20,}`,
@@ -441,7 +472,7 @@ function collectMatchSpans(line: string): MatchSpan[] {
     let match: RegExpExecArray | null;
     while ((match = detector.pattern.exec(line)) !== null) {
       const rawValue = detector.valueGroup ? match[detector.valueGroup] : match[0];
-      if (!rawValue || isPlaceholder(rawValue)) continue;
+      if (!rawValue || isPlaceholder(rawValue, { lexical: !detector.structuralOnly })) continue;
       const localStart = detector.valueGroup ? match[0].indexOf(rawValue) : 0;
       if (localStart < 0) continue;
       const start = match.index + localStart;
@@ -572,15 +603,21 @@ function isLikelyBinary(buffer: Buffer): boolean {
   return sample.length > 0 && suspicious / sample.length > 0.2;
 }
 
-function isPlaceholder(value: string): boolean {
+function isPlaceholder(value: string, options: { lexical?: boolean } = {}): boolean {
+  const lexical = options.lexical !== false;
   const trimmed = value.trim();
   const lower = trimmed.toLowerCase();
   if (trimmed.length < 8) return true;
   if (trimmed.startsWith("$") || trimmed.startsWith("<") || trimmed.includes("...")) return true;
   if (/[(),;]/.test(trimmed)) return true;
-  if (lower.includes("example") || lower.includes("placeholder") || lower.includes("redacted")) return true;
-  if (lower.includes("changeme") || lower.includes("dummy")) return true;
   if (/^[*x_-]+$/i.test(trimmed)) return true;
+  // Lexical hints only suppress loosely-structured detectors (assignments,
+  // header values). Rigid vendor formats (structuralOnly) skip these so a real
+  // key shape like AKIAIOSFODNN7EXAMPLE is still reported.
+  if (lexical) {
+    if (lower.includes("example") || lower.includes("placeholder") || lower.includes("redacted")) return true;
+    if (lower.includes("changeme") || lower.includes("dummy")) return true;
+  }
   return false;
 }
 

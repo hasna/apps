@@ -132,4 +132,32 @@ describe("exposure scanner", () => {
     const result = scanWorkspaceExposures({ root: testDir });
     expect(result.findingCount).toBe(0);
   });
+
+  it("detects PEM private-key blocks, Stripe keys and AWS access-key ids by content", () => {
+    const stripeKey = ["sk", "live", "51abcDEF0123ghijKLMN4567"].join("_");
+    const awsId = ["AK", "IA", "IOSFODNN7EXAMPLE"].join("");
+    const pemHeader = `${"-".repeat(5)}BEGIN RSA PRIVATE KEY${"-".repeat(5)}`;
+
+    writeFileSync(
+      join(testDir, "server.key"),
+      [pemHeader, "MIIEpAIBAAKCAQEA0Zqfake", `${"-".repeat(5)}END RSA PRIVATE KEY${"-".repeat(5)}`].join("\n"),
+    );
+    writeFileSync(join(testDir, "creds.txt"), `STRIPE_KEY=${stripeKey}\nAWS=${awsId}\n`);
+
+    const result = scanWorkspaceExposures({ root: testDir });
+    const serialized = JSON.stringify(result);
+    const detectors = result.findings.map((finding) => finding.detector);
+
+    expect(detectors).toContain("private_key_block");
+    expect(detectors).toContain("stripe_secret_key");
+    expect(detectors).toContain("aws_access_key_id");
+    // High severity for every content-based key finding.
+    for (const finding of result.findings) {
+      expect(finding.severity).toBe("high");
+    }
+    // Values stay redacted in output.
+    expect(serialized).not.toContain(stripeKey);
+    expect(serialized).not.toContain(awsId);
+    expect(result.findings[0].preview).toContain("***REDACTED***");
+  });
 });
