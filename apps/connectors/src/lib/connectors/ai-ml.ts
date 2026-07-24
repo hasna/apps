@@ -990,6 +990,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ai", "healthcare", "automation", "revenue cycle", "medical"],
   },
   {
+    name: "tisane",
+    displayName: "Tisane",
+    description: "NLP API for content moderation, sentiment analysis, and language understanding",
+    category: "AI & ML",
+    tags: ["nlp", "content moderation", "sentiment", "language", "api"],
+  },
+  {
     name: "tisanelabs",
     displayName: "Tisane Labs",
     description: "NLP API for content moderation, sentiment analysis, and language understanding",
