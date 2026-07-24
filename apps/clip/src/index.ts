@@ -4,6 +4,7 @@ export { captureScreenshot, detectActiveWindow, detectCaptureCapabilities } from
 export { captureClipboardHistory, detectClipboardCapabilities, shareClipboard } from "./clipboard.js";
 export { buildShareUrl, resolveBaseUrl } from "./share.js";
 export { readConfig, updateConfig, writeConfig } from "./config.js";
+export { createShareQrCode, renderShareQrCode } from "./qr.js";
 export type {
   CaptureCapabilities,
   CaptureMode,

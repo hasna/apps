@@ -84,4 +84,54 @@ describe("CLI JSON contract", () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
+
+  it("renders QR output for show and copy-link without replacing JSON contracts", async () => {
+    const home = mkdtempSync(join(tmpdir(), "clip-cli-qr-"));
+    try {
+      const env = { ...process.env, HASNA_CLIP_HOME: home, CLIP_BASE_URL: "http://phone.lan:3741" };
+      const share = Bun.spawn(["bun", "run", "src/cli/index.ts", "--json", "share", "text", "hello"], {
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const shareOut = await new Response(share.stdout).text();
+      expect(await share.exited).toBe(0);
+      const record = JSON.parse(shareOut) as { id: string; slug: string; shareUrl: string };
+      const expectedShareUrl = `http://phone.lan:3741/s/${record.slug}`;
+      expect(record.shareUrl).toBe(expectedShareUrl);
+
+      const showQr = Bun.spawn(["bun", "run", "src/cli/index.ts", "show", record.slug, "--qr"], {
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const showQrOut = await new Response(showQr.stdout).text();
+      expect(await showQr.exited).toBe(0);
+      expect(showQrOut).toContain("\u001b[40m");
+      expect(showQrOut).toContain("\u001b[47m");
+      expect(showQrOut).toContain(expectedShareUrl);
+
+      const copyLinkQr = Bun.spawn(["bun", "run", "src/cli/index.ts", "copy-link", record.id, "--qr"], {
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const copyLinkQrOut = await new Response(copyLinkQr.stdout).text();
+      expect(await copyLinkQr.exited).toBe(0);
+      expect(copyLinkQrOut).toContain("\u001b[40m");
+      expect(copyLinkQrOut).toContain("\u001b[47m");
+      expect(copyLinkQrOut).toContain(expectedShareUrl);
+
+      const showJson = Bun.spawn(["bun", "run", "src/cli/index.ts", "--json", "show", record.slug, "--qr"], {
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const showJsonOut = await new Response(showJson.stdout).text();
+      expect(await showJson.exited).toBe(0);
+      expect((JSON.parse(showJsonOut) as { shareUrl: string }).shareUrl).toBe(expectedShareUrl);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });

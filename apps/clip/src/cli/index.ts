@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readConfig, updateConfig } from "../config.js";
 import { DEFAULT_PORT, resolveConfigPath } from "../paths.js";
+import { renderShareQrCode } from "../qr.js";
 import { ClipClient, createClipClient } from "../sdk.js";
 import type { CaptureMode, ClipboardHistoryRecord, ClipboardKind, ClipClientOptions, ClipRecord } from "../types.js";
 import { startClipServer } from "../server/server.js";
@@ -81,6 +82,13 @@ function outputRecord(program: Command, record: ClipRecord): void {
 function compactHistoryRecord(value: ClipboardHistoryRecord): string {
   const title = value.title ? ` ${value.title}` : "";
   return `${value.id} ${value.slug} ${value.kind}${title} ${value.createdAt}`;
+}
+
+async function outputShareQr(record: ClipRecord): Promise<void> {
+  if (!record.shareUrl) throw new Error(`Share URL unavailable for ${record.id}`);
+  const qr = await renderShareQrCode(record.shareUrl);
+  console.log(qr.terminal);
+  console.log(qr.payload);
 }
 
 function client(program: Command): ClipClient {
@@ -248,11 +256,16 @@ program
 program
   .command("show")
   .argument("<id-or-slug>")
+  .option("--qr", "Render the share URL as a terminal QR code")
   .description("Show one share")
-  .action((ref: string, command: Command) => {
+  .action(async (ref: string, opts: { qr?: boolean }, command: Command) => {
     try {
       const record = client(command).getShare(ref);
       if (!record) throw new Error(`Share not found: ${ref}`);
+      if (opts.qr && !isJson(command)) {
+        await outputShareQr(record);
+        return;
+      }
       output(command, record, JSON.stringify(record, null, 2));
     } catch (error) {
       handleError(command, error);
@@ -302,10 +315,15 @@ program
 program
   .command("copy-link")
   .argument("<id-or-slug>")
+  .option("--qr", "Render the share URL as a terminal QR code")
   .description("Copy a share URL to the system clipboard")
-  .action(async (ref: string, command: Command) => {
+  .action(async (ref: string, opts: { qr?: boolean }, command: Command) => {
     try {
       const result = await client(command).copyLink(ref);
+      if (opts.qr && !isJson(command)) {
+        await outputShareQr(result.record);
+        return;
+      }
       output(command, result, result.copied ? result.record.shareUrl ?? "" : `Copy failed: ${result.error}`);
     } catch (error) {
       handleError(command, error);
