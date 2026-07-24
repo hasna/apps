@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.hasna.xyz/machines/consumer/v1/machines-consumer.schema.json",
+  "$id": "https://schemas.example.com/machines/consumer/v1/machines-consumer.schema.json",
   "title": "@hasna/machines consumer contract schema bundle",
   "type": "object",
   "$defs": {
@@ -104,7 +104,7 @@
           "const": "@hasna/machines/consumer"
         },
         "schema_uri": {
-          "const": "https://schemas.hasna.xyz/machines/consumer/v1/machines-consumer.schema.json"
+          "const": "https://schemas.example.com/machines/consumer/v1/machines-consumer.schema.json"
         },
         "schema_artifact": {
           "const": "schemas/machines-consumer.schema.json"

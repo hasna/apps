@@ -44,7 +44,7 @@ describe("flip registry", () => {
       const UP = spec.app.toUpperCase();
       expect(spec.apiUrlEnv).toBe(`HASNA_${UP}_API_URL`);
       expect(spec.apiKeyEnv).toBe(`HASNA_${UP}_API_KEY`);
-      expect(spec.apiUrl).toBe(`https://${spec.app}.hasna.xyz`);
+      expect(spec.apiUrl).toBe(`https://${spec.app}.your-deployment.example`);
       expect(spec.apiKeySecretPath).toBe(`hasna/oss/${spec.app}/api-key`);
       expect(spec.serviceUnit).toContain(spec.app);
       expect(spec.statusArgs).toContain("--json");
@@ -117,7 +117,7 @@ describe("script generation", () => {
   test("self_hosted script writes API_URL + API_KEY, fetches the key from the secret store, never a DSN", () => {
     const script = buildFlipScript(spec, "self_hosted");
     expect(script).toContain("secrets get 'hasna/oss/todos/api-key'");
-    expect(script).toContain("HASNA_TODOS_API_URL=https://todos.hasna.xyz");
+    expect(script).toContain("HASNA_TODOS_API_URL=https://todos.your-deployment.example");
     expect(script).toContain("HASNA_TODOS_API_KEY");
     // Forbidden legacy surfaces must never appear.
     expect(script).not.toContain("STORAGE_MODE=remote");

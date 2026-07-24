@@ -3,7 +3,7 @@
  *
  * Coordinates flipping an @hasna OSS app's runtime storage mode across the
  * fleet from local (on-box sqlite/json) to **self_hosted** (the app's cloud
- * API at https://<app>.hasna.xyz) — and back — by:
+ * API at https://<app>.<fleet-domain>) — and back — by:
  *   1. writing a per-app fleet env file on each target machine,
  *   2. wiring that env file into the app's service manager (systemd / launchd),
  *   3. restarting the service,
@@ -11,13 +11,19 @@
  *   5. supporting one-command revert (unset the two vars -> local original).
  *
  * ARCHITECTURE (LOCKED): the only sanctioned cloud path for a CLIENT machine is
- * the app HTTPS API — client -> https://<app>.hasna.xyz/v1 with a bearer
+ * the app HTTPS API — client -> https://<app>.<fleet-domain>/v1 with a bearer
  * `HASNA_<APP>_API_KEY`. The raw RDS DSN is NEVER distributed to machines and
  * `STORAGE_MODE=remote` + `DATABASE_URL` is FORBIDDEN on clients. RDS is only
  * reachable by the in-VPC ECS services + the admin tunnel. This module therefore
  * writes exactly two vars per app:
- *     HASNA_<APP>_API_URL=https://<app>.hasna.xyz
+ *     HASNA_<APP>_API_URL=https://<app>.<fleet-domain>
  *     HASNA_<APP>_API_KEY=<key from Secrets Manager hasna/oss/<app>/api-key>
+ *
+ * The `<fleet-domain>` is REQUIRED for a real deployment: set
+ * `HASNA_FLEET_API_DOMAIN` to the operator's own private root domain before
+ * running this for real. This published package never bakes in a real
+ * internal hostname — absent that env var it falls back to a neutral,
+ * non-resolving placeholder domain.
  *
  * SECRETS: the API key is NEVER transported in cleartext by the orchestrator.
  * The remote script fetches it on the target machine via `secrets get <path>`;
@@ -50,7 +56,7 @@ export interface FlipAppSpec {
   apiUrlEnv: string;
   /** Env var carrying the app API bearer key, e.g. HASNA_TODOS_API_KEY. */
   apiKeyEnv: string;
-  /** App API base URL, e.g. https://todos.hasna.xyz (client appends /v1). */
+  /** App API base URL, e.g. https://todos.<fleet-domain> (client appends /v1). */
   apiUrl: string;
   /** Secret PATH (never the value) resolved on-target via `secrets get`. */
   apiKeySecretPath: string;
@@ -76,7 +82,7 @@ export interface FlipAppSpec {
 }
 
 /**
- * All 25 @hasna OSS apps that expose a self-hosted API at <app>.hasna.xyz.
+ * All 25 @hasna OSS apps that expose a self-hosted API at <app>.<fleet-domain>.
  * Coordination hot stores are freeze-gated (drain shadow before atomic flip).
  */
 const ALL_APPS = [
@@ -117,13 +123,22 @@ const FREEZE_REQUIRED_APPS = new Set(["todos", "loops", "mementos", "conversatio
 /** Per-app non-secret env overlays applied only in self_hosted mode. */
 const EXTRA_SELF_HOSTED_ENV: Record<string, Record<string, string>> = {};
 
+/**
+ * Fleet API domain suffix used to build each app's default self-hosted URL.
+ * REQUIRED for a real deployment: set `HASNA_FLEET_API_DOMAIN` to the
+ * operator's own private root domain before running fleet-flip for real. This
+ * published package never bakes in a real internal hostname — absent that env
+ * var, it falls back to a neutral, non-resolving placeholder domain.
+ */
+const FLEET_API_DOMAIN = process.env.HASNA_FLEET_API_DOMAIN?.trim() || "your-deployment.example";
+
 function defineFlipApp(app: string): FlipAppSpec {
   const UP = app.toUpperCase();
   const spec: FlipAppSpec = {
     app,
     apiUrlEnv: `HASNA_${UP}_API_URL`,
     apiKeyEnv: `HASNA_${UP}_API_KEY`,
-    apiUrl: `https://${app}.hasna.xyz`,
+    apiUrl: `https://${app}.${FLEET_API_DOMAIN}`,
     apiKeySecretPath: `hasna/oss/${app}/api-key`,
     serviceUnit: `hasna-${app}-mcp`,
     cliBin: app,

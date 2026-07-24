@@ -2,7 +2,7 @@
 
 Coordinated push that flips an `@hasna` OSS app's runtime storage mode across the
 fleet from **local** (on-box sqlite/json) to **self_hosted** (the app's cloud API
-at `https://<app>.hasna.xyz`) — and back — with a canary → batch → all rollout (or
+at `https://<app>.<fleet-domain>`) — and back — with a canary → batch → all rollout (or
 one atomic `--all-machines` wave), per-machine verification, and one-command
 revert.
 
@@ -17,24 +17,29 @@ The only sanctioned cloud path for a **client** machine (CLI / MCP / SDK) is the
 app's HTTPS API:
 
 ```
-client -> https://<app>.hasna.xyz/v1   (bearer HASNA_<APP>_API_KEY)
+client -> https://<app>.<fleet-domain>/v1   (bearer HASNA_<APP>_API_KEY)
 ```
 
 This is the **self_hosted** mode. The raw RDS DSN is **NEVER** distributed to a
 machine. `STORAGE_MODE=remote` + `DATABASE_URL` on a client is **FORBIDDEN** — the
-shared prod Postgres (`hasna-xyz-infra-apps-prod-postgres`, acct `789877399345`,
-`us-east-1`) is reachable only by the in-VPC ECS services and the admin tunnel.
+shared prod Postgres instance is reachable only by the in-VPC ECS services and the
+admin tunnel (operator-specific account/region — not published here).
 The flip therefore writes exactly **two vars** per app:
 
 ```
-HASNA_<APP>_API_URL=https://<app>.hasna.xyz
+HASNA_<APP>_API_URL=https://<app>.<fleet-domain>
 HASNA_<APP>_API_KEY=<key from Secrets Manager hasna/oss/<app>/api-key>
 ```
+
+`<fleet-domain>` is **REQUIRED** for a real deployment: set
+`HASNA_FLEET_API_DOMAIN` to the operator's own private root domain. This package
+never ships a real internal hostname — absent that env var, the default falls
+back to a neutral, non-resolving placeholder.
 
 ## What it does per machine
 
 1. Writes a per-app fleet env file `~/.hasna/cloud/<app>.env` (mode `0600`).
-   - **self_hosted**: `HASNA_<APP>_API_URL=https://<app>.hasna.xyz` +
+   - **self_hosted**: `HASNA_<APP>_API_URL=https://<app>.<fleet-domain>` +
      `HASNA_<APP>_API_KEY=<key>` (+ any non-secret extras).
    - **local** (revert): the env file is **removed entirely** so both vars are
      unset and the app falls back to its untouched local original.
@@ -74,7 +79,7 @@ Every app follows the shared conventions:
 | field | value |
 |-------|-------|
 | API URL env | `HASNA_<APP>_API_URL` |
-| API URL | `https://<app>.hasna.xyz` |
+| API URL | `https://<app>.<fleet-domain>` (set via `HASNA_FLEET_API_DOMAIN`) |
 | API key env | `HASNA_<APP>_API_KEY` |
 | API key secret | `hasna/oss/<app>/api-key` |
 | service unit | `hasna-<app>-mcp` |

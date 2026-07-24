@@ -6,6 +6,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-24
+
+### Security
+
+- Removed the shipped internal-infra hostname default (`*.hasna.xyz`) from the
+  fleet-flip / cloud-transport code, the `distribute-cloud-keys` script, docs,
+  and the JSON Schema `$id`. The per-app self-hosted API URL default is now
+  built from `HASNA_FLEET_API_DOMAIN` (REQUIRED for a real deployment) and
+  otherwise falls back to a neutral, non-resolving placeholder domain
+  (`your-deployment.example`) instead of a real internal hostname.
+  `MACHINES_CONSUMER_SCHEMA_URI` now uses the neutral `schemas.example.com`
+  placeholder (identifier string only; never fetched). Also redacted a real AWS
+  account ID + RDS instance identifier from `docs/FLEET-FLIP.md`. Any real
+  `machines flip` run must now set `HASNA_FLEET_API_DOMAIN` (or explicit per-app
+  `HASNA_<APP>_API_URL`). (#17)
+
 ## [0.2.0] - 2026-07-24
 
 ### Added

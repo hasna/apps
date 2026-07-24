@@ -11,7 +11,7 @@ import { getPackageVersion } from "./version.js";
 export const MACHINES_CONSUMER_CONTRACT_VERSION = 1;
 export const MACHINES_PACKAGE_NAME = "@hasna/machines";
 export const MACHINES_CONSUMER_ENTRYPOINT = "@hasna/machines/consumer";
-export const MACHINES_CONSUMER_SCHEMA_URI = "https://schemas.hasna.xyz/machines/consumer/v1/machines-consumer.schema.json";
+export const MACHINES_CONSUMER_SCHEMA_URI = "https://schemas.example.com/machines/consumer/v1/machines-consumer.schema.json";
 export const MACHINES_CONSUMER_SCHEMA_ARTIFACT = "schemas/machines-consumer.schema.json";
 export const DEFAULT_MACHINE_RESOLVER_TTL_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_HEARTBEAT_ONLINE_TTL_MS = 2 * 60 * 1000;

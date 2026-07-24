@@ -21,8 +21,11 @@
  *      (`aws secretsmanager get-secret-value --secret-id hasna/oss/<app>/api-key`),
  *   2. builds a per-app env file containing ONLY the two vars the installed
  *      @hasna/contracts@>=0.5.1 client resolver uses to select cloud-http mode:
- *          HASNA_<APP>_API_URL=https://<app>.hasna.xyz
+ *          HASNA_<APP>_API_URL=https://<app>.<fleet-domain>
  *          HASNA_<APP>_API_KEY=<bearer>
+ *      where `<fleet-domain>` comes from `HASNA_FLEET_API_DOMAIN` (REQUIRED for
+ *      a real run; this repo never bakes in a real internal hostname — absent
+ *      the env var it falls back to a neutral, non-resolving placeholder),
  *      (the resolver auto-appends `/v1`; presence of URL+KEY => transport
  *      "cloud-http". NO DSN. NO STORAGE_MODE=remote. NO AWS creds. NO subnet
  *      router. This matches the LOCKED self-hosted architecture.)
@@ -121,6 +124,14 @@ const DEFAULT_TARGETS = [
 
 const KNOWN_DOWN = new Set(["apple01", "apple07"]);
 
+/**
+ * Fleet API domain suffix used to build each app's self-hosted URL. This repo
+ * never bakes in a real internal hostname: set `HASNA_FLEET_API_DOMAIN` to the
+ * operator's own private root domain (REQUIRED for a real distribution run).
+ * Absent that env var this falls back to a neutral, non-resolving placeholder.
+ */
+const FLEET_API_DOMAIN = process.env.HASNA_FLEET_API_DOMAIN?.trim() || "your-deployment.example";
+
 interface AppSpec {
   app: string;
   apiUrlEnv: string;
@@ -135,7 +146,7 @@ function defineAppSpec(app: string): AppSpec {
     app,
     apiUrlEnv: `HASNA_${UP}_API_URL`,
     apiKeyEnv: `HASNA_${UP}_API_KEY`,
-    apiUrl: `https://${app}.hasna.xyz`,
+    apiUrl: `https://${app}.${FLEET_API_DOMAIN}`,
     apiKeySecretPath: `hasna/oss/${app}/api-key`,
   };
 }
