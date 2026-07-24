@@ -190,17 +190,31 @@ export class NoteRepo {
     const where: string[] = [];
     const params: unknown[] = [];
     if (!options.includeArchived) where.push('archived = FALSE');
-    if (options.search) {
-      params.push(`%${options.search}%`);
-      where.push(`(title ILIKE $${params.length} OR content ILIKE $${params.length})`);
+
+    // Full-text search via the weighted tsvector generated column + GIN index
+    // (see pg-migrations.ts). websearch_to_tsquery gives users implicit-AND,
+    // "phrases", and OR/-negation; ts_rank_cd ranks by relevance (title
+    // weighted over content) with created_at as a deterministic tiebreak.
+    // Replaces the old ILIKE-substring + recency-only path that returned
+    // materially different / near-empty results in cloud vs local.
+    const search = options.search?.trim();
+    let tsQueryExpr: string | null = null;
+    if (search) {
+      params.push(search);
+      tsQueryExpr = `websearch_to_tsquery('english', $${params.length})`;
+      where.push(`search_vector @@ ${tsQueryExpr}`);
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const orderSql = tsQueryExpr
+      ? `ORDER BY ts_rank_cd(search_vector, ${tsQueryExpr}) DESC, created_at DESC`
+      : 'ORDER BY created_at DESC';
+
     const totalRow = await this.client.get<{ count: string }>(
       `SELECT count(*)::text AS count FROM knowledge_items ${whereSql}`,
       params,
     );
     const rows = await this.client.many<Record<string, unknown>>(
-      `SELECT * FROM knowledge_items ${whereSql} ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`,
+      `SELECT * FROM knowledge_items ${whereSql} ${orderSql} LIMIT ${limit} OFFSET ${offset}`,
       params,
     );
     return { items: rows.map(rowToItem), total: Number(totalRow?.count ?? 0) };

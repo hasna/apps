@@ -356,4 +356,25 @@ export const PG_MIGRATIONS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_knowledge_items_short_id ON knowledge_items(short_id)`,
   `CREATE INDEX IF NOT EXISTS idx_knowledge_items_archived ON knowledge_items(archived)`,
   `CREATE INDEX IF NOT EXISTS idx_knowledge_items_created ON knowledge_items(created_at)`,
+
+  // --- Full-text search parity (search overhaul, Stage 2) ---------------------
+  // The cloud notes list previously matched with `title/content ILIKE '%q%'`
+  // and ordered by `created_at DESC` — a substring/recency path that misses
+  // word-order/multi-term queries (returning near-empty results) and never
+  // ranks by relevance. Add a weighted tsvector generated column (title = A,
+  // content = B) plus a GIN index so the serve layer can use
+  // websearch_to_tsquery + ts_rank_cd, matching the local SQLite FTS behavior.
+  //
+  // APPEND-ONLY: PG migration ids are derived from array index
+  // (`knowledge_pg_${index+1}`), so these must stay at the end of the array —
+  // never inserted mid-array — or every following id/checksum shifts and the
+  // ledger drift-guard trips. Both statements are idempotent.
+  `ALTER TABLE knowledge_items
+     ADD COLUMN IF NOT EXISTS search_vector tsvector
+     GENERATED ALWAYS AS (
+       setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
+       setweight(to_tsvector('english', coalesce(content, '')), 'B')
+     ) STORED`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_search_vector
+     ON knowledge_items USING GIN (search_vector)`,
 ];
