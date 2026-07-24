@@ -1,6 +1,6 @@
-# open-router
+# @hasna/router
 
-`open-router` is the smart model router companion for
+`@hasna/router` (CLI: `open-router`) is the smart model router companion for
 [`open-gateway`](https://github.com/hasna/open-gateway). It makes deterministic,
 inspectable route decisions for prompts; it does not execute provider calls,
 hold provider credentials, or expand gateway policy.
@@ -14,12 +14,33 @@ responses do not expose provider keys, auth headers, or private base URLs.
 ## Install
 
 ```bash
+# as a dependency
+bun add @hasna/router
+
+# as a CLI
+bun add -g @hasna/router
+open-router help
+```
+
+Local development:
+
+```bash
 bun install
 bun test
 bun run smoke
 ```
 
 ## CLI
+
+Installed globally, the binary is `open-router`:
+
+```bash
+open-router route --config router.config.json --model auto --prompt "..."
+open-router analyze --prompt "..."
+open-router validate --config router.config.json
+```
+
+From a source checkout:
 
 ```bash
 bun run src/cli/index.ts route \
