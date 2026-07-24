@@ -157,6 +157,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["auth", "identity", "oauth"],
   },
   {
+    name: "stytch",
+    displayName: "Stytch",
+    description: "Passwordless authentication and identity platform",
+    category: "Developer Tools",
+    tags: ["auth", "identity", "mfa"],
+  },
+  {
     name: "homeassistant",
     displayName: "Home Assistant",
     description: "Smart home automation",
