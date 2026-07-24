@@ -15,8 +15,42 @@ export { getPackageVersion };
 const stdoutRetryBuffer = new SharedArrayBuffer(4);
 const stdoutRetrySignal = new Int32Array(stdoutRetryBuffer);
 
+/**
+ * Detect whether the invocation requested JSON output, from raw argv.
+ *
+ * `handleError` runs from catch blocks that don't carry the parsed command
+ * options (and errors can be thrown before/around parse), so argv is the only
+ * reliable signal here. Matches the global/local `--json` long flag, a bare
+ * `-j` short flag, and combined short-flag clusters that include `j`
+ * (e.g. `-aj`) — mirroring how commander expands the `-j, --json` option.
+ */
+export function jsonModeRequested(argv: readonly string[] = process.argv): boolean {
+  return argv.some(
+    (arg) =>
+      arg === "--json" ||
+      (/^-[a-z]+$/i.test(arg) && arg.includes("j")),
+  );
+}
+
+/**
+ * Terminate the CLI with a failure, exit code 1.
+ *
+ * The human-readable, red message is always written to stderr (the human/log
+ * channel). In JSON mode the CLI ALSO emits the documented machine-readable
+ * error contract — `{"error":"message"}` — on stdout, so a caller parsing stdout
+ * gets a valid JSON envelope instead of empty output. Previously `--json` errors
+ * left stdout empty, violating the contract documented by `todos manual`.
+ *
+ * Keeping stderr populated in JSON mode preserves the CLI's long-standing
+ * human-facing diagnostics (and every test that asserts them) while adding the
+ * stdout envelope machine callers rely on.
+ */
 export function handleError(e: unknown): never {
-  console.error(chalk.red(e instanceof Error ? e.message : String(e)));
+  const message = e instanceof Error ? e.message : String(e);
+  console.error(chalk.red(message));
+  if (jsonModeRequested()) {
+    console.log(JSON.stringify({ error: message }));
+  }
   process.exit(1);
 }
 
@@ -51,8 +85,7 @@ export function resolveTaskId(partialId: string): string {
   const raw = (partialId ?? "").trim();
 
   if (!raw) {
-    console.error(chalk.red("Could not resolve task ID: (empty)"));
-    process.exit(1);
+    handleError(new Error("Could not resolve task ID: (empty)"));
   }
 
   // Rule 1: full UUID → trust it as-is (works for local AND cloud-only tasks).
@@ -83,7 +116,8 @@ export function resolveTaskId(partialId: string): string {
   const cached = cloud ? resolveCachedCloudTaskId(raw) : null;
   if (cached && "id" in cached) return cached.id;
 
-  console.error(chalk.red(`Could not resolve task ID: ${raw}`));
+  const message = `Could not resolve task ID: ${raw}`;
+  console.error(chalk.red(message));
   if (similar.length > 0) {
     console.error(chalk.dim(`Did you mean: ${similar.map(s => s.id.slice(0, 8)).join(", ")}?`));
   } else if (cached && "ambiguous" in cached) {
@@ -95,6 +129,8 @@ export function resolveTaskId(partialId: string): string {
       + "(copy it from `todos show <id>` or `todos list --json`).",
     ));
   }
+  // JSON callers still get the documented {"error":...} envelope on stdout.
+  if (jsonModeRequested()) console.log(JSON.stringify({ error: message }));
   process.exit(1);
 }
 

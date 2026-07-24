@@ -97,8 +97,7 @@ export function registerApiKeyCommands(program: Command) {
           return;
         }
         if (!record) {
-          console.error(chalk.red("API key is invalid, revoked, or expired."));
-          process.exit(1);
+          handleError(new Error("API key is invalid, revoked, or expired."));
         }
         console.log(chalk.green(`API key valid: ${record.name} (${record.prefix})`));
       } catch (e) {

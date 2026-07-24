@@ -105,8 +105,7 @@ function resolveProjectIdOrSlug(input: string): string {
   // Name substring last
   const row = db.query("SELECT id FROM projects WHERE name LIKE ? ORDER BY name LIMIT 1").get(`%${input}%`) as { id: string } | undefined;
   if (row) return row.id;
-  console.error(chalk.red(`Project not found: ${input}`));
-  process.exit(1);
+  handleError(new Error(`Project not found: ${input}`));
 }
 
 /** Validate and normalize a status value, rejecting unknowns before the DB does. */
@@ -114,8 +113,7 @@ function parseStatus(value: string | undefined): TaskStatus | undefined {
   if (!value) return undefined;
   const normalized = normalizeStatus(value);
   if (!(TASK_STATUSES as readonly string[]).includes(normalized)) {
-    console.error(chalk.red(`--status must be one of: ${TASK_STATUSES.join(", ")}`));
-    process.exit(1);
+    handleError(new Error(`--status must be one of: ${TASK_STATUSES.join(", ")}`));
   }
   return normalized as TaskStatus;
 }
@@ -125,8 +123,7 @@ function parseIntOption(value: string | undefined, flag: string): number | undef
   if (value === undefined) return undefined;
   const n = parseInt(value, 10);
   if (!Number.isFinite(n)) {
-    console.error(chalk.red(`${flag} must be a number`));
-    process.exit(1);
+    handleError(new Error(`${flag} must be a number`));
   }
   return n;
 }
@@ -139,8 +136,7 @@ function resolvePlanId(input: string): string {
   const db = getDatabase();
   const id = resolvePartialId(db, "plans", input);
   if (!id) {
-    console.error(chalk.red(`Could not resolve plan ID: ${input}`));
-    process.exit(1);
+    handleError(new Error(`Could not resolve plan ID: ${input}`));
   }
   return id;
 }
@@ -148,8 +144,7 @@ function resolvePlanId(input: string): string {
 function parsePriority(value: string | undefined): TaskPriority | undefined {
   if (!value) return undefined;
   if (!(TASK_PRIORITIES as readonly string[]).includes(value)) {
-    console.error(chalk.red("--priority must be one of: low, medium, high, critical"));
-    process.exit(1);
+    handleError(new Error("--priority must be one of: low, medium, high, critical"));
   }
   return value as TaskPriority;
 }
@@ -160,12 +155,10 @@ function parseJsonObject(value: string | undefined, flag: string): Record<string
   try {
     parsed = JSON.parse(value);
   } catch (error) {
-    console.error(chalk.red(`${flag} must be valid JSON: ${error instanceof Error ? error.message : String(error)}`));
-    process.exit(1);
+    handleError(new Error(`${flag} must be valid JSON: ${error instanceof Error ? error.message : String(error)}`));
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    console.error(chalk.red(`${flag} must be a JSON object`));
-    process.exit(1);
+    handleError(new Error(`${flag} must be a JSON object`));
   }
   return parsed as Record<string, unknown>;
 }
@@ -271,8 +264,7 @@ function computeLocalReparent(current: { project_id: string | null }, opts: Repa
   if (opts.listRef) {
     const resolved = resolveTaskListRef(opts.listRef, scope);
     if ("error" in resolved) {
-      console.error(chalk.red(resolved.error));
-      process.exit(1);
+      handleError(new Error(resolved.error));
     }
     taskListId = resolved.id;
   } else if (opts.clearList) {
@@ -381,8 +373,7 @@ export function registerTaskCommands(program: Command) {
         const db = getDatabase();
         const id = resolvePartialId(db, "task_lists", opts.list);
         if (!id) {
-          console.error(chalk.red(`Could not resolve task list ID: ${opts.list}`));
-          process.exit(1);
+          handleError(new Error(`Could not resolve task list ID: ${opts.list}`));
         }
         return id;
       })() : undefined;
@@ -498,8 +489,7 @@ export function registerTaskCommands(program: Command) {
         const db = getDatabase();
         const id = resolvePartialId(db, "task_lists", opts.list);
         if (!id) {
-          console.error(chalk.red(`Could not resolve task list ID: ${opts.list}`));
-          process.exit(1);
+          handleError(new Error(`Could not resolve task list ID: ${opts.list}`));
         }
         return id;
       })() : undefined;
@@ -655,13 +645,11 @@ export function registerTaskCommands(program: Command) {
       const hasExplicitProjectFilter = Boolean(globalOpts.project || opts.projectName);
       const allowedSortFields = new Set(["updated", "created", "priority", "status"]);
       if (opts.sort && !allowedSortFields.has(opts.sort)) {
-        console.error(chalk.red(`Invalid --sort value: ${opts.sort}. Allowed values: updated, created, priority, status.`));
-        process.exit(1);
+        handleError(new Error(`Invalid --sort value: ${opts.sort}. Allowed values: updated, created, priority, status.`));
       }
       const allowedFormats = new Set(["table", "compact", "csv", "json"]);
       if (opts.format && !allowedFormats.has(opts.format)) {
-        console.error(chalk.red(`Invalid --format value: ${opts.format}. Allowed values: table, compact, csv, json.`));
-        process.exit(1);
+        handleError(new Error(`Invalid --format value: ${opts.format}. Allowed values: table, compact, csv, json.`));
       }
 
       const filter: Record<string, unknown> = {};
@@ -674,8 +662,7 @@ export function registerTaskCommands(program: Command) {
         const db = getDatabase();
         const listId = resolvePartialId(db, "task_lists", opts.list);
         if (!listId) {
-          console.error(chalk.red(`Could not resolve task list ID: ${opts.list}`));
-          process.exit(1);
+          handleError(new Error(`Could not resolve task list ID: ${opts.list}`));
         }
         filter["task_list_id"] = listId;
       }
@@ -696,8 +683,7 @@ export function registerTaskCommands(program: Command) {
         if (match) {
           filter["project_id"] = match.id;
         } else {
-          console.error(chalk.red(`No project matching: ${opts.projectName}`));
-          process.exit(1);
+          handleError(new Error(`No project matching: ${opts.projectName}`));
         }
       }
       if (opts.agentName) {
@@ -707,8 +693,7 @@ export function registerTaskCommands(program: Command) {
       if (opts.limit !== undefined) {
         const parsedLimit = Number.parseInt(String(opts.limit), 10);
         if (!Number.isInteger(parsedLimit) || parsedLimit <= 0) {
-          console.error(chalk.red(`Invalid --limit value: ${opts.limit}. Must be a positive integer.`));
-          process.exit(1);
+          handleError(new Error(`Invalid --limit value: ${opts.limit}. Must be a positive integer.`));
         }
         filter["limit"] = parsedLimit;
       }
@@ -834,8 +819,7 @@ export function registerTaskCommands(program: Command) {
       }
 
       if (!task) {
-        console.error(chalk.red(`Task not found: ${id}`));
-        process.exit(1);
+        handleError(new Error(`Task not found: ${id}`));
       }
 
       if (globalOpts.json) {
@@ -931,7 +915,7 @@ export function registerTaskCommands(program: Command) {
         const active = await cloudListTasks(cloud, { status: "in_progress", assigned_to: globalOpts.agent, limit: 1 } as never);
         if (active.length > 0) resolvedId = active[0]!.id;
       }
-      if (!resolvedId) { console.error(chalk.red("No task ID given and no active task found. Pass an ID or use --agent.")); process.exit(1); }
+      if (!resolvedId) { handleError(new Error("No task ID given and no active task found. Pass an ID or use --agent.")); }
 
       let task: any;
       if (cloud) {
@@ -955,7 +939,7 @@ export function registerTaskCommands(program: Command) {
       } else {
         task = getTaskWithRelations(resolvedId);
       }
-      if (!task) { console.error(chalk.red(`Task not found: ${id || resolvedId}`)); process.exit(1); }
+      if (!task) { handleError(new Error(`Task not found: ${id || resolvedId}`)); }
 
       if (globalOpts.json && !cloud) {
         const { listTaskFiles } = await import("../../db/task-files.js");
@@ -1201,8 +1185,7 @@ export function registerTaskCommands(program: Command) {
       const resolvedId = resolveTaskId(id);
       const current = getTask(resolvedId);
       if (!current) {
-        console.error(chalk.red(`Task not found: ${id}`));
-        process.exit(1);
+        handleError(new Error(`Task not found: ${id}`));
       }
       const reparent = computeLocalReparent(current, {
         projectRef: opts.project || globalOpts.project,
@@ -1293,13 +1276,11 @@ export function registerTaskCommands(program: Command) {
       const resolvedId = resolveTaskId(id);
       const current = getTask(resolvedId);
       if (!current) {
-        console.error(chalk.red(`Task not found: ${id}`));
-        process.exit(1);
+        handleError(new Error(`Task not found: ${id}`));
       }
       const reparent = computeLocalReparent(current, { projectRef, listRef, clearList: opts.clearList });
       if (reparent.project_id === undefined && reparent.task_list_id === undefined) {
-        console.error(chalk.red("Nothing to move: the task is already in the requested project/list."));
-        process.exit(1);
+        handleError(new Error("Nothing to move: the task is already in the requested project/list."));
       }
       let task;
       try {
@@ -1333,8 +1314,7 @@ export function registerTaskCommands(program: Command) {
       if (opts.confidence !== undefined) {
         confidence = Number(opts.confidence);
         if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
-          console.error(chalk.red("--confidence must be a number between 0.0 and 1.0"));
-          process.exit(1);
+          handleError(new Error("--confidence must be a number between 0.0 and 1.0"));
         }
       }
       const completionOptions = {
@@ -1395,7 +1375,7 @@ export function registerTaskCommands(program: Command) {
         if (cloud) {
           const cloudId = await resolveTaskIdForCommand(id, cloud);
           const task = await cloudGetTask(cloud, cloudId);
-          if (!task) { console.error(chalk.red(`Task not found: ${id}`)); process.exit(1); }
+          if (!task) { handleError(new Error(`Task not found: ${id}`)); }
           if (!task.requires_approval) { console.log(chalk.yellow("This task does not require approval.")); return; }
           if (task.approved_by) { console.log(chalk.yellow(`Already approved by ${task.approved_by}.`)); return; }
           const updated = await cloudUpdateTask(cloud, cloudId, { approved_by: approver, version: task.version });
@@ -1409,7 +1389,7 @@ export function registerTaskCommands(program: Command) {
 
         const resolvedId = resolveTaskId(id);
         const task = getTask(resolvedId);
-        if (!task) { console.error(chalk.red(`Task not found: ${id}`)); process.exit(1); }
+        if (!task) { handleError(new Error(`Task not found: ${id}`)); }
 
         if (!task.requires_approval) {
           console.log(chalk.yellow("This task does not require approval."));
@@ -1493,8 +1473,7 @@ export function registerTaskCommands(program: Command) {
       } else if (result.success) {
         console.log(chalk.green(`Lock acquired by ${agentId}`));
       } else {
-        console.error(chalk.red(`Lock failed: ${result.error}`));
-        process.exit(1);
+        handleError(new Error(`Lock failed: ${result.error}`));
       }
     });
 
@@ -1535,8 +1514,7 @@ export function registerTaskCommands(program: Command) {
       } else if (deleted) {
         console.log(chalk.green("Task deleted."));
       } else {
-        console.error(chalk.red("Task not found."));
-        process.exit(1);
+        handleError(new Error("Task not found."));
       }
     });
 
@@ -1555,8 +1533,7 @@ export function registerTaskCommands(program: Command) {
         } else if (deleted) {
           console.log(chalk.green("Task removed."));
         } else {
-          console.error(chalk.red("Task not found."));
-          process.exit(1);
+          handleError(new Error("Task not found."));
         }
         return;
       }
@@ -1567,8 +1544,7 @@ export function registerTaskCommands(program: Command) {
       } else if (deleted) {
         console.log(chalk.green("Task removed."));
       } else {
-        console.error(chalk.red("Task not found."));
-        process.exit(1);
+        handleError(new Error("Task not found."));
       }
     });
 
@@ -1584,16 +1560,14 @@ export function registerTaskCommands(program: Command) {
       const cloud = getTodosCloudClient();
       const isPlanAction = action === "plan" || action === "move-plan";
       if (isPlanAction && Boolean(opts.plan) === Boolean(opts.clearPlan)) {
-        console.error(chalk.red("Use exactly one of --plan or --clear-plan with bulk plan."));
-        process.exit(1);
+        handleError(new Error("Use exactly one of --plan or --clear-plan with bulk plan."));
       }
       const planId = isPlanAction
         ? opts.plan ? resolvePlanId(opts.plan) : null
         : undefined;
       const knownActions = new Set(["done", "complete", "start", "delete", "plan", "move-plan"]);
       if (!knownActions.has(action)) {
-        console.error(chalk.red(`Unknown action: ${action}. Use: done, start, delete, plan`));
-        process.exit(1);
+        handleError(new Error(`Unknown action: ${action}. Use: done, start, delete, plan`));
       }
 
       // self_hosted cloud routing: run each op against the SHARED dataset. The local
@@ -1653,8 +1627,7 @@ export function registerTaskCommands(program: Command) {
             updateTask(resolvedId, { version: current.version, plan_id: planId });
             results.push({ id: resolvedId, success: true });
           } else {
-            console.error(chalk.red(`Unknown action: ${action}. Use: done, start, delete, plan`));
-            process.exit(1);
+            handleError(new Error(`Unknown action: ${action}. Use: done, start, delete, plan`));
           }
         } catch (e) {
           results.push({ id: rawId, success: false, error: e instanceof Error ? e.message : String(e) });

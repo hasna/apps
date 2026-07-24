@@ -6,7 +6,7 @@ import { getDatabase } from "../../db/database.js";
 import { listTasks } from "../../db/tasks.js";
 import { loadConfig } from "../../lib/config.js";
 import { getTodosGlobalDir } from "../../lib/sync-utils.js";
-import { autoProject, output, formatTaskLine, normalizeStatus, resolveTaskId } from "../helpers.js";
+import { autoProject, handleError, output, formatTaskLine, normalizeStatus, resolveTaskId } from "../helpers.js";
 
 export function registerConfigServeCommands(program: Command) {
   // config
@@ -1216,8 +1216,7 @@ export function registerConfigServeCommands(program: Command) {
       try {
         const resp = await fetch(url);
         if (!resp.ok || !resp.body) {
-          console.error(chalk.red(`Failed to connect: ${resp.status}`));
-          process.exit(1);
+          handleError(new Error(`Failed to connect: ${resp.status}`));
         }
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();

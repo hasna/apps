@@ -64,7 +64,7 @@ export function registerAgentCommands(program: Command) {
     .action(async (agent?: string) => {
       const globalOpts = program.opts();
       const agentId = agent || globalOpts.agent;
-      if (!agentId) { console.error(chalk.red("Agent ID required. Use --agent or pass as argument.")); process.exit(1); }
+      if (!agentId) { handleError(new Error("Agent ID required. Use --agent or pass as argument.")); }
       try {
         // self_hosted cloud routing: heartbeat the SHARED cloud roster so a flipped
         // machine refreshes the same agent every other agent sees. The local path
@@ -72,14 +72,14 @@ export function registerAgentCommands(program: Command) {
         const cloud = getTodosCloudClient();
         if (cloud) {
           const a = await cloudHeartbeatAgent(cloud, agentId);
-          if (!a) { console.error(chalk.red(`Agent not found: ${agentId}`)); process.exit(1); }
+          if (!a) { handleError(new Error(`Agent not found: ${agentId}`)); }
           if (globalOpts.json) { console.log(JSON.stringify({ agent_id: a.id, name: a.name, last_seen_at: a.last_seen_at })); }
           else { console.log(chalk.green(`♥ ${a.name} (${a.id.slice(0, 8)}) — heartbeat sent`)); }
           return;
         }
         const { updateAgentActivity, getAgent, getAgentByName } = await import("../../db/agents.js");
         const a = getAgent(agentId) || getAgentByName(agentId);
-        if (!a) { console.error(chalk.red(`Agent not found: ${agentId}`)); process.exit(1); }
+        if (!a) { handleError(new Error(`Agent not found: ${agentId}`)); }
         updateAgentActivity(a.id);
         if (globalOpts.json) { console.log(JSON.stringify({ agent_id: a.id, name: a.name, last_seen_at: new Date().toISOString() })); }
         else { console.log(chalk.green(`♥ ${a.name} (${a.id.slice(0, 8)}) — heartbeat sent`)); }
@@ -96,17 +96,16 @@ export function registerAgentCommands(program: Command) {
     .action(async (agent?: string, opts?: { sessionId?: string }) => {
       const globalOpts = program.opts();
       const agentId = agent || globalOpts.agent;
-      if (!agentId) { console.error(chalk.red("Agent ID or name required. Use --agent or pass as argument.")); process.exit(1); }
+      if (!agentId) { handleError(new Error("Agent ID or name required. Use --agent or pass as argument.")); }
       try {
         // self_hosted cloud routing: release in the SHARED cloud roster so the name
         // frees up for every agent. The local path 404'd cloud-only agents.
         const cloud = getTodosCloudClient();
         if (cloud) {
           const result = await cloudReleaseAgent(cloud, agentId, opts?.sessionId);
-          if (!result.agent) { console.error(chalk.red(`Agent not found: ${agentId}`)); process.exit(1); }
+          if (!result.agent) { handleError(new Error(`Agent not found: ${agentId}`)); }
           if (!result.released) {
-            console.error(chalk.red("Release denied: session_id does not match agent's current session."));
-            process.exit(1);
+            handleError(new Error("Release denied: session_id does not match agent's current session."));
           }
           if (globalOpts.json) {
             console.log(JSON.stringify({ agent_id: result.agent.id, name: result.agent.name, released: true }));
@@ -117,11 +116,10 @@ export function registerAgentCommands(program: Command) {
         }
         const { getAgent, getAgentByName } = await import("../../db/agents.js");
         const a = getAgent(agentId) || getAgentByName(agentId);
-        if (!a) { console.error(chalk.red(`Agent not found: ${agentId}`)); process.exit(1); }
+        if (!a) { handleError(new Error(`Agent not found: ${agentId}`)); }
         const released = releaseAgent(a.id, opts?.sessionId);
         if (!released) {
-          console.error(chalk.red("Release denied: session_id does not match agent's current session."));
-          process.exit(1);
+          handleError(new Error("Release denied: session_id does not match agent's current session."));
         }
         if (globalOpts.json) {
           console.log(JSON.stringify({ agent_id: a.id, name: a.name, released: true }));
@@ -140,7 +138,7 @@ export function registerAgentCommands(program: Command) {
     .action(async (project?: string) => {
       const globalOpts = program.opts();
       const agentId = globalOpts.agent;
-      if (!agentId) { console.error(chalk.red("Agent ID required. Use --agent.")); process.exit(1); }
+      if (!agentId) { handleError(new Error("Agent ID required. Use --agent.")); }
       const db = getDatabase();
       if (project) {
         const { getProjectByPath } = await import("../../db/projects.js");
@@ -221,8 +219,7 @@ export function registerAgentCommands(program: Command) {
         const { getAgentByName: findByName, updateAgent: doUpdate } = await import("../../db/agents.js");
         const agent = findByName(name);
         if (!agent) {
-          console.error(chalk.red(`Agent not found: ${name}`));
-          process.exit(1);
+          handleError(new Error(`Agent not found: ${name}`));
         }
         const updates: Record<string, unknown> = {};
         if (opts.description !== undefined) updates.description = opts.description;
@@ -258,8 +255,7 @@ export function registerAgentCommands(program: Command) {
         : findByName(name);
 
       if (!agent) {
-        console.error(chalk.red(`Agent not found: ${name}`));
-        process.exit(1);
+        handleError(new Error(`Agent not found: ${name}`));
       }
 
       const byAssigned = cloud ? await cloudListTasks(cloud, { assigned_to: agent.name }) : listTasks({ assigned_to: agent.name });
@@ -347,11 +343,11 @@ export function registerAgentCommands(program: Command) {
       if (opts.set) {
         const [agentName, managerName] = opts.set.split("=");
         const agent = getByName(agentName);
-        if (!agent) { console.error(chalk.red(`Agent not found: ${agentName}`)); process.exit(1); }
+        if (!agent) { handleError(new Error(`Agent not found: ${agentName}`)); }
         let managerId: string | null = null;
         if (managerName) {
           const manager = getByName(managerName);
-          if (!manager) { console.error(chalk.red(`Manager not found: ${managerName}`)); process.exit(1); }
+          if (!manager) { handleError(new Error(`Manager not found: ${managerName}`)); }
           managerId = manager.id;
         }
         update(agent.id, { reports_to: managerId });
@@ -446,16 +442,14 @@ export function registerAgentCommands(program: Command) {
             } else if (deleted) {
               console.log(chalk.green("Task list deleted."));
             } else {
-              console.error(chalk.red("Task list not found"));
-              process.exit(1);
+              handleError(new Error("Task list not found"));
             }
             return;
           }
           const db = getDatabase();
           const resolved = resolvePartialId(db, "task_lists", opts.delete);
           if (!resolved) {
-            console.error(chalk.red("Task list not found"));
-            process.exit(1);
+            handleError(new Error("Task list not found"));
           }
           deleteTaskList(resolved);
           console.log(chalk.green("Task list deleted."));
@@ -491,8 +485,7 @@ export function registerAgentCommands(program: Command) {
 
         const res = await fetch("https://registry.npmjs.org/@hasna/todos/latest");
         if (!res.ok) {
-          console.error(chalk.red("Failed to check for updates."));
-          process.exit(1);
+          handleError(new Error("Failed to check for updates."));
         }
         const data = (await res.json()) as { version: string };
         const latestVersion = data.version;

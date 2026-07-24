@@ -140,6 +140,53 @@ describe("M5/L1: input validation instead of raw SQLite / NaN", () => {
   }, T);
 });
 
+describe("JSON error contract: --json errors are a JSON object on stdout", () => {
+  /** Run expecting failure; capture stdout and stderr SEPARATELY. */
+  function runCapture(args: string): { code: number; stdout: string; stderr: string } {
+    try {
+      const stdout = execSync(`bun run src/cli/index.tsx ${args}`, {
+        encoding: "utf-8",
+        cwd: CWD,
+        timeout: 25000,
+        stdio: ["ignore", "pipe", "pipe"],
+        env: localRoutingTestEnv({ HOME: fakeHome, TODOS_DB_PATH: dbPath, TODOS_AUTO_PROJECT: "false" }),
+      });
+      return { code: 0, stdout, stderr: "" };
+    } catch (e: any) {
+      return { code: e.status ?? 1, stdout: String(e.stdout ?? ""), stderr: String(e.stderr ?? "") };
+    }
+  }
+
+  it("`show <missing> --json` prints a {error} JSON object on stdout, exit 1", () => {
+    // The reported bug: with --json the CLI left stdout EMPTY and only wrote
+    // plaintext to stderr. Contract (todos manual): JSON error object on stdout.
+    const { code, stdout } = runCapture("show nonexistent-id-xyz --json");
+    expect(code).toBe(1);
+    const parsed = JSON.parse(stdout.trim());
+    expect(parsed.error).toContain("nonexistent-id-xyz");
+  }, T);
+
+  it("`-j show <missing>` (short flag) also emits the JSON error envelope on stdout", () => {
+    const { code, stdout } = runCapture("-j show nonexistent-id-xyz");
+    expect(code).toBe(1);
+    expect(JSON.parse(stdout.trim()).error).toContain("nonexistent-id-xyz");
+  }, T);
+
+  it("a thrown lookup error (`comment <missing-uuid> --json`) also yields the stdout envelope", () => {
+    const uuid = "00000000-0000-4000-8000-000000000000";
+    const { code, stdout } = runCapture(`comment ${uuid} "x" --json`);
+    expect(code).toBe(1);
+    expect(JSON.parse(stdout.trim()).error).toContain(uuid);
+  }, T);
+
+  it("without --json the error stays human-readable on stderr, with empty stdout", () => {
+    const { code, stdout, stderr } = runCapture("show nonexistent-id-xyz");
+    expect(code).toBe(1);
+    expect(stdout.trim()).toBe("");
+    expect(stderr).toContain("nonexistent-id-xyz");
+  }, T);
+});
+
 describe("L3: update can clear the approval requirement", () => {
   it("--clear-approval removes requires_approval", () => {
     const t = JSON.parse(run("add 'L3 approval' --approval --json"));

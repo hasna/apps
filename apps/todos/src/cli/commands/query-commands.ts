@@ -92,8 +92,7 @@ function parseJsonObjectOption(value: string | undefined, label: string): Record
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not object");
     return parsed as Record<string, unknown>;
   } catch {
-    console.error(chalk.red(`${label} must be a valid JSON object`));
-    process.exit(1);
+    handleError(new Error(`${label} must be a valid JSON object`));
   }
 }
 
@@ -120,13 +119,11 @@ function resolveOptionalId(table: "plans" | "task_runs", value: string | undefin
     if (value.length >= 36) return value;
     const rows = db.query("SELECT id FROM task_runs WHERE id LIKE ?").all(`${value}%`) as { id: string }[];
     if (rows.length === 1) return rows[0]!.id;
-    console.error(chalk.red(`Could not resolve run ID: ${value}`));
-    process.exit(1);
+    handleError(new Error(`Could not resolve run ID: ${value}`));
   }
   const resolved = resolvePartialId(getDatabase(), table, value);
   if (!resolved) {
-    console.error(chalk.red(`Could not resolve ${table.slice(0, -1)} ID: ${value}`));
-    process.exit(1);
+    handleError(new Error(`Could not resolve ${table.slice(0, -1)} ID: ${value}`));
   }
   return resolved;
 }
@@ -135,8 +132,7 @@ function resolveProjectOption(value: string | undefined): string | undefined {
   if (!value) return undefined;
   const resolved = resolvePartialId(getDatabase(), "projects", value);
   if (!resolved) {
-    console.error(chalk.red(`Could not resolve project ID: ${value}`));
-    process.exit(1);
+    handleError(new Error(`Could not resolve project ID: ${value}`));
   }
   return resolved;
 }
@@ -145,8 +141,7 @@ function resolveFocusSessionId(value: string): string {
   if (value.length >= 36) return value;
   const rows = getDatabase().query("SELECT id FROM focus_sessions WHERE id LIKE ?").all(`${value}%`) as { id: string }[];
   if (rows.length === 1) return rows[0]!.id;
-  console.error(chalk.red(`Could not resolve focus session ID: ${value}`));
-  process.exit(1);
+  handleError(new Error(`Could not resolve focus session ID: ${value}`));
 }
 
 function parseFieldPairs(values: string[] | undefined): Record<string, unknown> | undefined {
@@ -155,8 +150,7 @@ function parseFieldPairs(values: string[] | undefined): Record<string, unknown> 
   for (const raw of values) {
     const index = raw.indexOf("=");
     if (index <= 0) {
-      console.error(chalk.red("--field entries must use key=value format"));
-      process.exit(1);
+      handleError(new Error("--field entries must use key=value format"));
     }
     result[raw.slice(0, index).trim()] = raw.slice(index + 1);
   }
@@ -174,8 +168,7 @@ function mergeCustomFields(
 function parsePriority(value: string | undefined): TaskPriority | undefined {
   if (!value) return undefined;
   if (!["low", "medium", "high", "critical"].includes(value)) {
-    console.error(chalk.red("--priority must be one of: low, medium, high, critical"));
-    process.exit(1);
+    handleError(new Error("--priority must be one of: low, medium, high, critical"));
   }
   return value as TaskPriority;
 }
@@ -183,8 +176,7 @@ function parsePriority(value: string | undefined): TaskPriority | undefined {
 function parseBoardScope(value: string | undefined): BoardScope {
   if (!value) return "tasks";
   if (value !== "tasks" && value !== "plans") {
-    console.error(chalk.red("--scope must be tasks or plans"));
-    process.exit(1);
+    handleError(new Error("--scope must be tasks or plans"));
   }
   return value;
 }
@@ -192,20 +184,17 @@ function parseBoardScope(value: string | undefined): BoardScope {
 function parseBoardLane(value: string, position: number): BoardLane {
   const [labelPart, statusPart] = value.split("=");
   if (!labelPart || !statusPart) {
-    console.error(chalk.red("--lane must use Name=status,status[:wip_limit] format"));
-    process.exit(1);
+    handleError(new Error("--lane must use Name=status,status[:wip_limit] format"));
   }
   const [statusesRaw, limitRaw] = statusPart.split(":");
   const statuses = statusesRaw!.split(",").map((status) => status.trim()).filter(Boolean);
   if (statuses.length === 0) {
-    console.error(chalk.red("--lane must include at least one status"));
-    process.exit(1);
+    handleError(new Error("--lane must include at least one status"));
   }
   const name = labelPart.trim();
   const wipLimit = limitRaw === undefined || limitRaw === "" ? null : parseInt(limitRaw, 10);
   if (wipLimit !== null && (!Number.isFinite(wipLimit) || wipLimit < 1)) {
-    console.error(chalk.red("lane WIP limit must be a positive integer"));
-    process.exit(1);
+    handleError(new Error("lane WIP limit must be a positive integer"));
   }
   return {
     id: name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || `lane-${position + 1}`,
@@ -225,8 +214,7 @@ function parseCalendarKind(value: string | undefined): CalendarEventKind | undef
   if (!value) return undefined;
   const allowed = ["task_due", "task_sla", "task_reminder", "milestone", "work_block", "run", "imported"];
   if (!allowed.includes(value)) {
-    console.error(chalk.red(`--kind must be one of: ${allowed.join(", ")}`));
-    process.exit(1);
+    handleError(new Error(`--kind must be one of: ${allowed.join(", ")}`));
   }
   return value as CalendarEventKind;
 }
@@ -236,8 +224,7 @@ function parseQuietHoursOption(value: string | undefined, timezone: string | und
   const [start, end] = value.split("-", 2).map((part) => part.trim());
   const clock = /^([01]?\d|2[0-3]):([0-5]\d)$/;
   if (!start || !end || !clock.test(start) || !clock.test(end)) {
-    console.error(chalk.red("--quiet-hours must use HH:MM-HH:MM"));
-    process.exit(1);
+    handleError(new Error("--quiet-hours must use HH:MM-HH:MM"));
   }
   const tz = timezone === "utc" ? "utc" : "local";
   return { start, end, timezone: tz };
@@ -593,7 +580,7 @@ export function registerQueryCommands(program: Command) {
       const json = opts.json || globalOpts.json;
       const db = getDatabase();
       const resolvedId = resolvePartialId(db, "tasks", id);
-      if (!resolvedId) { console.error(chalk.red(`Task not found: ${id}`)); process.exit(1); }
+      if (!resolvedId) { handleError(new Error(`Task not found: ${id}`)); }
       const result = failTask(resolvedId, opts.agent, opts.reason, { retry: opts.retry }, db);
       if (json) { console.log(JSON.stringify(result, null, 2)); return; }
       console.log(chalk.red(`Failed: ${result.task.short_id || result.task.id.slice(0, 8)} | ${result.task.title}`));
@@ -707,7 +694,7 @@ export function registerQueryCommands(program: Command) {
       const resolvedId = resolveTaskId(id);
       const db = getDatabase();
       const task = getTask(resolvedId, db);
-      if (!task) { console.error(chalk.red(`Task not found: ${id}`)); process.exit(1); }
+      if (!task) { handleError(new Error(`Task not found: ${id}`)); }
       try {
         const updated = updateTask(resolvedId, { assigned_to: agent, version: task.version }, db);
         if (opts.json || globalOpts.json) { console.log(JSON.stringify(updated)); return; }
@@ -725,7 +712,7 @@ export function registerQueryCommands(program: Command) {
       const resolvedId = resolveTaskId(id);
       const db = getDatabase();
       const task = getTask(resolvedId, db);
-      if (!task) { console.error(chalk.red(`Task not found: ${id}`)); process.exit(1); }
+      if (!task) { handleError(new Error(`Task not found: ${id}`)); }
       try {
         const updated = updateTask(resolvedId, { assigned_to: undefined, version: task.version }, db);
         if (opts.json || globalOpts.json) { console.log(JSON.stringify(updated)); return; }
@@ -757,7 +744,7 @@ export function registerQueryCommands(program: Command) {
       const resolvedId = resolveTaskId(id);
       const db = getDatabase();
       const task = getTask(resolvedId, db);
-      if (!task) { console.error(chalk.red(`Task not found: ${id}`)); process.exit(1); }
+      if (!task) { handleError(new Error(`Task not found: ${id}`)); }
       const newTags = [...new Set([...task.tags, tag])];
       try {
         const updated = updateTask(resolvedId, { tags: newTags, version: task.version }, db);
@@ -790,7 +777,7 @@ export function registerQueryCommands(program: Command) {
       const resolvedId = resolveTaskId(id);
       const db = getDatabase();
       const task = getTask(resolvedId, db);
-      if (!task) { console.error(chalk.red(`Task not found: ${id}`)); process.exit(1); }
+      if (!task) { handleError(new Error(`Task not found: ${id}`)); }
       const newTags = task.tags.filter(t => t !== tag);
       try {
         const updated = updateTask(resolvedId, { tags: newTags, version: task.version }, db);
@@ -2018,14 +2005,14 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
 
         if (opts.read) {
           const handoff = getHandoff(opts.read, db);
-          if (!handoff) { console.error(chalk.red(`Handoff not found: ${opts.read}`)); process.exit(1); }
+          if (!handoff) { handleError(new Error(`Handoff not found: ${opts.read}`)); }
           if (opts.json || globalOpts.json) { console.log(JSON.stringify(handoff)); return; }
           printHandoff(handoff);
           return;
         }
 
         if (opts.ack) {
-          if (!actor) { console.error(chalk.red("  --agent is required with --ack")); process.exit(1); }
+          if (!actor) { handleError(new Error("  --agent is required with --ack")); }
           const handoff = acknowledgeHandoff(opts.ack, actor, db);
           if (opts.json || globalOpts.json) { console.log(JSON.stringify(handoff)); return; }
           console.log(chalk.green(`  ✓ Handoff ${handoff.id.slice(0, 8)} acknowledged by ${actor}`));
@@ -2033,7 +2020,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
         }
 
         if (opts.recover) {
-          if (!actor) { console.error(chalk.red("  --agent is required with --recover")); process.exit(1); }
+          if (!actor) { handleError(new Error("  --agent is required with --recover")); }
           const handoff = createSessionRecoveryHandoff({
             agent_id: actor,
             session_id: sessionId,
@@ -2048,7 +2035,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
         }
 
         if (opts.create || opts.summary) {
-          if (!opts.summary) { console.error(chalk.red("  --summary is required for creating a handoff")); process.exit(1); }
+          if (!opts.summary) { handleError(new Error("  --summary is required for creating a handoff")); }
           const handoff = createHandoff({
             agent_id: actor,
             project_id: projectId,
@@ -2215,8 +2202,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
         const globalOpts = program.opts();
         const format = (opts.json || globalOpts.json) ? "json" : opts.format;
         if (!["markdown", "json"].includes(format)) {
-          console.error(chalk.red("Invalid --format. Allowed values: markdown, json."));
-          process.exit(1);
+          handleError(new Error("Invalid --format. Allowed values: markdown, json."));
         }
         const { generateReleaseNotes, renderReleaseNotesMarkdown } = await import("../../lib/release-notes.js");
         const projectInput = opts.project || globalOpts.project;
@@ -2265,12 +2251,10 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
       const globalOpts = program.opts();
       const format = globalOpts.json ? "json" : opts.format;
       if (!["codex", "claude", "takumi", "generic"].includes(opts.profile)) {
-        console.error(chalk.red("Invalid --profile. Allowed values: codex, claude, takumi, generic."));
-        process.exit(1);
+        handleError(new Error("Invalid --profile. Allowed values: codex, claude, takumi, generic."));
       }
       if (!["markdown", "json", "compact-markdown", "compact-json"].includes(format)) {
-        console.error(chalk.red("Invalid --format. Allowed values: markdown, json, compact-markdown, compact-json."));
-        process.exit(1);
+        handleError(new Error("Invalid --format. Allowed values: markdown, json, compact-markdown, compact-json."));
       }
       const { createAgentContextPack, renderAgentContextPack } = await import("../../lib/context-packs.js");
       const pack = createAgentContextPack({
@@ -3118,8 +3102,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
         if (opts.file) body = readFileSync(opts.file, "utf-8");
         if (!body && !opts.url && !process.stdin.isTTY) body = await Bun.stdin.text();
         if (!body.trim() && !opts.url) {
-          console.error(chalk.red("Provide text, --file, --url, or stdin input."));
-          process.exit(1);
+          handleError(new Error("Provide text, --file, --url, or stdin input."));
         }
         const report = importExternalIssues({
           provider: opts.provider,
@@ -3241,8 +3224,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
       if (opts.file) body = readFileSync(opts.file, "utf-8");
       if (!body && !process.stdin.isTTY) body = await Bun.stdin.text();
       if (!body.trim()) {
-        console.error(chalk.red("Provide text, --file, or stdin input."));
-        process.exit(1);
+        handleError(new Error("Provide text, --file, or stdin input."));
       }
       const result = createInboxItem({
         title: opts.title,
@@ -3310,8 +3292,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
       if (opts.file) body = readFileSync(opts.file, "utf-8");
       if (!body && !process.stdin.isTTY) body = await Bun.stdin.text();
       if (!body.trim()) {
-        console.error(chalk.red("Provide text, --file, or stdin input."));
-        process.exit(1);
+        handleError(new Error("Provide text, --file, or stdin input."));
       }
       const result = previewNaturalLanguageIntake({
         text: body,
@@ -3357,8 +3338,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
       const { getInboxItem } = await import("../../db/inbox.js");
       const item = getInboxItem(id);
       if (!item) {
-        console.error(chalk.red(`Inbox item not found: ${id}`));
-        process.exit(1);
+        handleError(new Error(`Inbox item not found: ${id}`));
       }
       if (opts.json || globalOpts.json) { output(item, true); return; }
       console.log(chalk.bold(`${item.id.slice(0, 8)} ${item.title}`));

@@ -209,8 +209,7 @@ export function registerProjectCommands(program: Command) {
       if (opts.pct !== undefined) {
         const pct = parseInt(opts.pct, 10);
         if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
-          console.error(chalk.red("--pct must be a number between 0 and 100"));
-          process.exit(1);
+          handleError(new Error("--pct must be a number between 0 and 100"));
         }
         content = `[progress ${pct}%] ${text}`;
         progressPct = pct;
@@ -490,8 +489,7 @@ export function registerProjectCommands(program: Command) {
         try {
           addDependency(resolvedId, depId);
         } catch (e) {
-          console.error(chalk.red(e instanceof Error ? e.message : String(e)));
-          process.exit(1);
+          handleError(new Error(e instanceof Error ? e.message : String(e)));
         }
         if (globalOpts.json) {
           output({ task_id: resolvedId, depends_on: depId }, true);
@@ -530,8 +528,7 @@ export function registerProjectCommands(program: Command) {
         // Show dependencies
         const task = getTaskWithRelations(resolvedId);
         if (!task) {
-          console.error(chalk.red("Task not found."));
-          process.exit(1);
+          handleError(new Error("Task not found."));
         }
 
         if (globalOpts.json) {
@@ -704,8 +701,7 @@ export function registerProjectCommands(program: Command) {
         const globalOpts = program.opts();
         const project = opts.project ? resolveExplicitProject(opts.project) : autoDetectProject(globalOpts);
         if (!project) {
-          console.error(chalk.red("Project not found: provide --project or run inside a registered project"));
-          process.exit(1);
+          handleError(new Error("Project not found: provide --project or run inside a registered project"));
         }
 
         const { createTodosProjectPanel } = await import("../../lib/project-panel.js");
@@ -749,8 +745,7 @@ export function registerProjectCommands(program: Command) {
             resolvedId = bySlug?.id ?? null;
           }
           if (!resolvedId) {
-            console.error(chalk.red(`Project not found: ${idOrSlug}`));
-            process.exit(1);
+            handleError(new Error(`Project not found: ${idOrSlug}`));
           }
           result = renameProject(resolvedId, { name: opts.name, new_slug: newSlug });
         }
@@ -763,8 +758,7 @@ export function registerProjectCommands(program: Command) {
           }
         }
       } catch (e) {
-        console.error(chalk.red(e instanceof Error ? e.message : String(e)));
-        process.exit(1);
+        handleError(new Error(e instanceof Error ? e.message : String(e)));
       }
     });
 
@@ -784,13 +778,12 @@ export function registerProjectCommands(program: Command) {
         const { setMachineLocalPath } = await import("../../db/projects.js");
         const db = getDatabase();
         const resolved = resolvePartialId(db, "projects", projectId);
-        if (!resolved) { console.error(chalk.red(`Project not found: ${projectId}`)); process.exit(1); }
+        if (!resolved) { handleError(new Error(`Project not found: ${projectId}`)); }
         const entry = setMachineLocalPath(resolved, resolve(projectPath));
         if (useJson) { output(entry, true); }
         else { console.log(chalk.green(`Local path set: ${entry.path} (machine: ${entry.machine_id.slice(0, 8)})`)); }
       } catch (e) {
-        console.error(chalk.red(e instanceof Error ? e.message : String(e)));
-        process.exit(1);
+        handleError(new Error(e instanceof Error ? e.message : String(e)));
       }
     });
 
@@ -805,7 +798,7 @@ export function registerProjectCommands(program: Command) {
         const { listMachineLocalPaths } = await import("../../db/projects.js");
         const db = getDatabase();
         const resolved = resolvePartialId(db, "projects", projectId);
-        if (!resolved) { console.error(chalk.red(`Project not found: ${projectId}`)); process.exit(1); }
+        if (!resolved) { handleError(new Error(`Project not found: ${projectId}`)); }
         const paths = listMachineLocalPaths(resolved);
         if (useJson) { output(paths, true); return; }
         if (paths.length === 0) { console.log(chalk.dim("No machine path overrides.")); return; }
@@ -813,8 +806,7 @@ export function registerProjectCommands(program: Command) {
           console.log(`${chalk.dim(p.machine_id.slice(0, 8))} ${p.path}  ${chalk.dim(p.updated_at)}`);
         }
       } catch (e) {
-        console.error(chalk.red(e instanceof Error ? e.message : String(e)));
-        process.exit(1);
+        handleError(new Error(e instanceof Error ? e.message : String(e)));
       }
     });
 
@@ -827,13 +819,12 @@ export function registerProjectCommands(program: Command) {
         const { removeMachineLocalPath } = await import("../../db/projects.js");
         const db = getDatabase();
         const resolved = resolvePartialId(db, "projects", projectId);
-        if (!resolved) { console.error(chalk.red(`Project not found: ${projectId}`)); process.exit(1); }
+        if (!resolved) { handleError(new Error(`Project not found: ${projectId}`)); }
         const removed = removeMachineLocalPath(resolved, opts.machine);
         if (removed) { console.log(chalk.green("Machine path override removed.")); }
         else { console.log(chalk.dim("No override found to remove.")); }
       } catch (e) {
-        console.error(chalk.red(e instanceof Error ? e.message : String(e)));
-        process.exit(1);
+        handleError(new Error(e instanceof Error ? e.message : String(e)));
       }
     });
 
@@ -1133,8 +1124,7 @@ export function registerProjectCommands(program: Command) {
         const agent = (opts.agent as string | undefined) || "claude";
         const taskListId = resolveTaskListForAgent(agent, opts.taskList, project?.task_list_id);
         if (!taskListId) {
-          console.error(chalk.red(`Could not detect task list ID for ${agent}. Use --task-list <id> or set appropriate env vars.`));
-          process.exit(1);
+          handleError(new Error(`Could not detect task list ID for ${agent}. Use --task-list <id> or set appropriate env vars.`));
         }
         result = syncWithAgent(agent, taskListId, projectId, direction, { prefer });
       }
@@ -1178,8 +1168,7 @@ function resolveTaskListId(partialId: string): string {
   const db = getDatabase();
   const id = resolvePartialId(db, "task_lists", partialId);
   if (!id) {
-    console.error(chalk.red(`Could not resolve task list ID: ${partialId}`));
-    process.exit(1);
+    handleError(new Error(`Could not resolve task list ID: ${partialId}`));
   }
   return id;
 }

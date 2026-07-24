@@ -292,8 +292,7 @@ export function registerPlanTemplateCommands(program: Command) {
         const resolvedId = resolvePlanCliRef(opts.artifact, projectId);
         const plan = getPlan(resolvedId);
         if (!plan) {
-          console.error(chalk.red(`Plan not found: ${opts.artifact}`));
-          process.exit(1);
+          handleError(new Error(`Plan not found: ${opts.artifact}`));
         }
         const inspection = inspectPlanArtifact(plan, db);
         if (!inspection) {
@@ -347,8 +346,7 @@ export function registerPlanTemplateCommands(program: Command) {
         if (cloud) {
           const plan = await cloudResolvePlan(cloud, opts.show, projectId);
           if (!plan) {
-            console.error(chalk.red(`Plan not found: ${opts.show}`));
-            process.exit(1);
+            handleError(new Error(`Plan not found: ${opts.show}`));
           }
           const tasks = await cloudListTasks(cloud, { plan_id: plan.id, include_subtasks: true });
           if (globalOpts.json) {
@@ -375,8 +373,7 @@ export function registerPlanTemplateCommands(program: Command) {
         const resolvedId = resolvePlanCliRef(opts.show, projectId);
         const plan = getPlan(resolvedId);
         if (!plan) {
-          console.error(chalk.red(`Plan not found: ${opts.show}`));
-          process.exit(1);
+          handleError(new Error(`Plan not found: ${opts.show}`));
         }
         const { listTasks } = require("../../db/tasks.js") as any;
         const tasks = listTasks({ plan_id: resolvedId });
@@ -422,8 +419,7 @@ export function registerPlanTemplateCommands(program: Command) {
       if (opts.delete) {
         const cloudPlan = cloud ? await cloudResolvePlan(cloud, opts.delete, projectId) : null;
         if (cloud && !cloudPlan) {
-          console.error(chalk.red(`Plan not found: ${opts.delete}`));
-          process.exit(1);
+          handleError(new Error(`Plan not found: ${opts.delete}`));
         }
         const resolvedId = cloudPlan?.id ?? resolvePlanCliRef(opts.delete, projectId);
         const deleted = cloud ? await cloudDeletePlan(cloud, resolvedId) : deletePlan(resolvedId);
@@ -433,8 +429,7 @@ export function registerPlanTemplateCommands(program: Command) {
         } else if (deleted) {
           console.log(chalk.green("Plan deleted."));
         } else {
-          console.error(chalk.red("Plan not found."));
-          process.exit(1);
+          handleError(new Error("Plan not found."));
         }
         return;
       }
@@ -442,8 +437,7 @@ export function registerPlanTemplateCommands(program: Command) {
       if (opts.complete) {
         const cloudPlan = cloud ? await cloudResolvePlan(cloud, opts.complete, projectId) : null;
         if (cloud && !cloudPlan) {
-          console.error(chalk.red(`Plan not found: ${opts.complete}`));
-          process.exit(1);
+          handleError(new Error(`Plan not found: ${opts.complete}`));
         }
         const resolvedId = cloudPlan?.id ?? resolvePlanCliRef(opts.complete, projectId);
         try {
@@ -505,7 +499,7 @@ export function registerPlanTemplateCommands(program: Command) {
         try {
           const projectId = globalOpts.project ? await cloudResolveProjectRef(cloud, globalOpts.project) : undefined;
           if (opts.add) {
-            if (!opts.title) { console.error(chalk.red("--title is required with --add")); process.exit(1); }
+            if (!opts.title) { handleError(new Error("--title is required with --add")); }
             const template = await cloudCreateTemplate(cloud, {
               name: opts.add,
               title_pattern: opts.title,
@@ -522,7 +516,7 @@ export function registerPlanTemplateCommands(program: Command) {
             const deleted = await cloudDeleteTemplate(cloud, opts.delete);
             if (globalOpts.json) { output({ deleted }, true); }
             else if (deleted) { console.log(chalk.green("Template deleted.")); }
-            else { console.error(chalk.red("Template not found.")); process.exit(1); }
+            else { handleError(new Error("Template not found.")); }
             return;
           }
           if (opts.update) {
@@ -532,11 +526,10 @@ export function registerPlanTemplateCommands(program: Command) {
             if (opts.priority) updates.priority = opts.priority;
             if (opts.tags) updates.tags = opts.tags.split(",").map((tag: string) => tag.trim()).filter(Boolean);
             if (Object.keys(updates).length === 0) {
-              console.error(chalk.red("Provide --title, --description, --priority, or --tags with --update"));
-              process.exit(1);
+              handleError(new Error("Provide --title, --description, --priority, or --tags with --update"));
             }
             const updated = await cloudUpdateTemplate(cloud, opts.update, updates);
-            if (!updated) { console.error(chalk.red("Template not found.")); process.exit(1); }
+            if (!updated) { handleError(new Error("Template not found.")); }
             if (globalOpts.json) { output(updated, true); }
             else { console.log(chalk.green(`Template updated: ${updated.id.slice(0, 8)} | ${updated.name} | "${updated.title_pattern}"`)); }
             return;
@@ -545,11 +538,11 @@ export function registerPlanTemplateCommands(program: Command) {
             const variables: Record<string, string> = {};
             for (const value of (opts.var ?? []) as string[]) {
               const separator = value.indexOf("=");
-              if (separator === -1) { console.error(chalk.red(`Invalid variable format: ${value} (expected key=value)`)); process.exit(1); }
+              if (separator === -1) { handleError(new Error(`Invalid variable format: ${value} (expected key=value)`)); }
               variables[value.slice(0, separator)] = value.slice(separator + 1);
             }
             const template = await cloudGetTemplate(cloud, opts.use);
-            if (!template) { console.error(chalk.red("Template not found.")); process.exit(1); }
+            if (!template) { handleError(new Error("Template not found.")); }
             const targetProjectId = template.project_id ?? projectId;
             const { tasks: created } = await createRemoteTemplateTasks(
               cloud,
@@ -591,7 +584,7 @@ export function registerPlanTemplateCommands(program: Command) {
       } = await import("../../db/templates.js");
 
       if (opts.add) {
-        if (!opts.title) { console.error(chalk.red("--title is required with --add")); process.exit(1); }
+        if (!opts.title) { handleError(new Error("--title is required with --add")); }
         const projectId = autoProject(globalOpts);
         const template = createTemplate({
           name: opts.add,
@@ -610,7 +603,7 @@ export function registerPlanTemplateCommands(program: Command) {
         const deleted = deleteTemplate(opts.delete);
         if (globalOpts.json) { output({ deleted }, true); }
         else if (deleted) { console.log(chalk.green("Template deleted.")); }
-        else { console.error(chalk.red("Template not found.")); process.exit(1); }
+        else { handleError(new Error("Template not found.")); }
         return;
       }
 
@@ -622,7 +615,7 @@ export function registerPlanTemplateCommands(program: Command) {
         if (opts.priority) updates.priority = opts.priority;
         if (opts.tags) updates.tags = opts.tags.split(",").map((t: string) => t.trim());
         const updated = updateTemplate(opts.update, updates);
-        if (!updated) { console.error(chalk.red("Template not found.")); process.exit(1); }
+        if (!updated) { handleError(new Error("Template not found.")); }
         if (globalOpts.json) { output(updated, true); }
         else { console.log(chalk.green(`Template updated: ${updated.id.slice(0, 8)} | ${updated.name} | "${updated.title_pattern}"`)); }
         return;
@@ -634,14 +627,13 @@ export function registerPlanTemplateCommands(program: Command) {
           if (opts.var) {
             for (const v of (opts.var as string[])) {
               const eq = v.indexOf("=");
-              if (eq === -1) { console.error(chalk.red(`Invalid variable format: ${v} (expected key=value)`)); process.exit(1); }
+              if (eq === -1) { handleError(new Error(`Invalid variable format: ${v} (expected key=value)`)); }
               variables[v.slice(0, eq)] = v.slice(eq + 1);
             }
           }
           const template = getTemplateWithTasks(opts.use);
           if (!template) {
-            console.error(chalk.red("Template not found."));
-            process.exit(1);
+            handleError(new Error("Template not found."));
           }
           if (template.tasks.length > 0) {
             const tasks = tasksFromTemplate(
@@ -770,7 +762,7 @@ export function registerPlanTemplateCommands(program: Command) {
       if (opts.var) {
         for (const v of opts.var) {
           const eq = v.indexOf("=");
-          if (eq === -1) { console.error(chalk.red(`Invalid variable format: ${v} (expected key=value)`)); process.exit(1); }
+          if (eq === -1) { handleError(new Error(`Invalid variable format: ${v} (expected key=value)`)); }
           variables[v.slice(0, eq)] = v.slice(eq + 1);
         }
       }
@@ -781,8 +773,7 @@ export function registerPlanTemplateCommands(program: Command) {
         if (cloud) {
           const template = await cloudGetTemplate(cloud, id);
           if (!template) {
-            console.error(chalk.red("Template not found."));
-            process.exit(1);
+            handleError(new Error("Template not found."));
           }
           result = previewRemoteTemplate(template, Object.keys(variables).length > 0 ? variables : undefined);
         } else {
@@ -821,8 +812,7 @@ export function registerPlanTemplateCommands(program: Command) {
           ? await cloudGetTemplate(cloud, id)
           : null;
         if (cloud && !template) {
-          console.error(chalk.red("Template not found."));
-          process.exit(1);
+          handleError(new Error("Template not found."));
         }
         const json = cloud
           ? exportRemoteTemplate(template!)
@@ -842,7 +832,7 @@ export function registerPlanTemplateCommands(program: Command) {
       const { readFileSync } = await import("node:fs");
       try {
         const filePath = file || opts.file;
-        if (!filePath) { console.error(chalk.red("Provide a file path: todos template-import <file> or --file <path>")); process.exit(1); }
+        if (!filePath) { handleError(new Error("Provide a file path: todos template-import <file> or --file <path>")); }
         const content = readFileSync(filePath, "utf-8");
         const json = JSON.parse(content);
         const cloud = getTodosCloudClient();
@@ -864,7 +854,7 @@ export function registerPlanTemplateCommands(program: Command) {
       const { listTemplateVersions, getTemplate } = await import("../../db/templates.js");
       try {
         const template = getTemplate(id);
-        if (!template) { console.error(chalk.red("Template not found.")); process.exit(1); }
+        if (!template) { handleError(new Error("Template not found.")); }
         const versions = listTemplateVersions(id);
         if (globalOpts.json) { output({ current_version: template.version, versions }, true); return; }
         console.log(chalk.bold(`${template.name} — current version: ${template.version}`));
