@@ -5,17 +5,18 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
-  createAppWikiScope,
   openProjectWiki,
 } from '../src/index';
+import { sanitizedLocalTestEnv } from './helpers/sanitized-env';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI = join(__dirname, '..', 'src', 'cli.ts');
+const GLOBAL_BLOCK_FIXTURE = join(__dirname, 'fixtures', 'app-wiki-global-block.ts');
 
 function runCli(args: string[], cwd: string, env: Record<string, string>) {
   return spawnSync('bun', [CLI, ...args], {
     cwd,
-    env: { ...process.env, ...env },
+    env: sanitizedLocalTestEnv(env),
     maxBuffer: 64 * 1024 * 1024,
   });
 }
@@ -39,7 +40,10 @@ describe('app wiki standard', () => {
       process.env.HOME = home;
       process.env.USERPROFILE = home;
 
-      const wiki = openProjectWiki({ cwd: projectDir });
+      const wiki = openProjectWiki({
+        cwd: projectDir,
+        env: { HASNA_KNOWLEDGE_STORAGE_MODE: 'local' },
+      } as never);
       expect(wiki.paths().home).toBe(join(projectDir, '.hasna', 'knowledge'));
       expect(existsSync(join(projectDir, '.hasna', 'knowledge'))).toBe(false);
 
@@ -87,15 +91,22 @@ describe('app wiki standard', () => {
     }
   });
 
-  test('sdk blocks global app wiki writes unless explicitly allowed', async () => {
+  test('sdk blocks global app wiki writes unless explicitly allowed', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'ok-app-wiki-global-block-'));
-    const wiki = createAppWikiScope({ scope: 'global', cwd: projectDir });
-
-    await expect(wiki.init()).rejects.toThrow('Global app-wiki writes require');
-    await expect(wiki.notes.add({
-      title: 'Blocked Global Wiki',
-      content: 'This write must require explicit global permission.',
-    })).rejects.toThrow('Global app-wiki writes require');
+    const home = mkdtempSync(join(tmpdir(), 'ok-app-wiki-global-block-home-'));
+    const result = spawnSync(process.execPath, [GLOBAL_BLOCK_FIXTURE], {
+      cwd: projectDir,
+      env: sanitizedLocalTestEnv({
+        HOME: home,
+        USERPROFILE: home,
+        HASNA_KNOWLEDGE_STORAGE_MODE: 'local',
+      }),
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout.toString('utf8'))).toEqual({ initBlocked: true, addBlocked: true });
+    expect(existsSync(join(home, '.hasna'))).toBe(false);
+    expect(existsSync(join(projectDir, '.hasna'))).toBe(false);
   });
 
   test('cli app-wiki workflow uses project scope and does not create ad hoc global markdown', () => {
@@ -139,7 +150,7 @@ describe('app wiki standard', () => {
       '--json',
     ], projectDir, env);
     expect(blocked.status).toBe(1);
-    expect(blocked.stderr.toString('utf8')).toContain('Global app-wiki writes require');
+    expect(blocked.stderr.toString('utf8')).toMatch(/Global app-wiki (?:writes|access) require/);
 
     expect(existsSync(join(projectDir, '.hasna', 'knowledge', 'artifacts', 'wiki', 'notes', 'cli-app-wiki.md'))).toBe(true);
     expect(existsSync(join(projectDir, '.hasna', 'knowledge', 'db.json'))).toBe(false);

@@ -1,11 +1,13 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { ingestOpenFilesManifestItems, type ManifestIngestResult, type ManifestObject } from './manifest-ingest';
+import { readAnchoredRegularFileSnapshot } from './anchored-fs';
+import { MAX_INGEST_BATCH_ITEMS, MAX_INGEST_BODY_BYTES } from './input-limits';
+import { assertClassifiedSourceReference, assertContainedSourceGraph } from './public-guard';
 import { parseSourceRef, type SourceRef } from './source-ref';
 import { resolveOpenFilesSource } from './source-resolver';
 import type { KnowledgeConfig } from './workspace';
-import { assertS3ReadAllowed, assertWebSearchAllowed, type SafetyPolicy } from './safety';
+import type { SafetyPolicy } from './safety';
 
 export interface SourceIngestOptions {
   dbPath: string;
@@ -40,56 +42,6 @@ function sha256Text(text: string): string {
   return `sha256:${createHash('sha256').update(text).digest('hex')}`;
 }
 
-function stripHtml(html: string): string {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/\s+\n/g, '\n')
-    .replace(/\n\s+/g, '\n')
-    .replace(/[ \t]{2,}/g, ' ')
-    .trim();
-}
-
-async function readS3Text(uri: string, config?: KnowledgeConfig, safetyPolicy?: SafetyPolicy): Promise<string> {
-  const parsed = new URL(uri);
-  const bucket = parsed.hostname;
-  const key = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
-  if (!bucket || !key) throw new Error(`Invalid S3 source URI: ${uri}`);
-  if (safetyPolicy) assertS3ReadAllowed(uri, safetyPolicy);
-  const [{ S3Client, GetObjectCommand }, { fromIni }] = await Promise.all([
-    import('@aws-sdk/client-s3'),
-    import('@aws-sdk/credential-providers'),
-  ]);
-  const s3Config = config?.storage.type === 's3' && config.storage.s3?.bucket === bucket ? config.storage.s3 : undefined;
-  const client = new S3Client({
-    region: s3Config?.region,
-    credentials: s3Config?.profile ? fromIni({ profile: s3Config.profile }) : undefined,
-    maxAttempts: s3Config?.max_attempts,
-  });
-  const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
-  if (!response.Body) return '';
-  return await response.Body.transformToString();
-}
-
-async function readWebText(uri: string, safetyPolicy?: SafetyPolicy): Promise<{ text: string; mime: string | null }> {
-  if (safetyPolicy) assertWebSearchAllowed(safetyPolicy);
-  const response = await fetch(uri, {
-    headers: {
-      accept: 'text/markdown,text/plain,text/html,application/json;q=0.8,*/*;q=0.5',
-      'user-agent': '@hasna/knowledge source-ingest',
-    },
-  });
-  if (!response.ok) throw new Error(`Web source read failed ${response.status}: ${uri}`);
-  const mime = response.headers.get('content-type');
-  const body = await response.text();
-  return { text: mime?.includes('html') ? stripHtml(body) : body, mime };
-}
-
 function titleForRef(parsed: SourceRef): string | null {
   if (parsed.kind === 'file') return basename(parsed.path);
   if (parsed.kind === 's3') return basename(parsed.key);
@@ -99,8 +51,9 @@ function titleForRef(parsed: SourceRef): string | null {
 
 async function readDirectSourceText(parsed: SourceRef, config?: KnowledgeConfig, safetyPolicy?: SafetyPolicy): Promise<ResolvedText> {
   if (parsed.kind === 'file') {
-    if (!existsSync(parsed.path)) throw new Error(`Source file not found: ${parsed.path}`);
-    const text = readFileSync(parsed.path, 'utf8');
+    const snapshot = readAnchoredRegularFileSnapshot(parsed.path, MAX_INGEST_BODY_BYTES);
+    if (!snapshot) throw new Error(`Source file not found: ${parsed.path}`);
+    const text = snapshot.content;
     return {
       text,
       contentSource: 'file',
@@ -115,45 +68,12 @@ async function readDirectSourceText(parsed: SourceRef, config?: KnowledgeConfig,
     };
   }
 
-  if (parsed.kind === 's3') {
-    const text = await readS3Text(parsed.uri, config, safetyPolicy);
-    return {
-      text,
-      contentSource: 's3',
-      title: titleForRef(parsed),
-      mime: 'text/plain',
-      size: text.length,
-      hash: sha256Text(text),
-      revision: null,
-      extractedTextRef: null,
-      metadata: { bucket: parsed.bucket, key: parsed.key },
-      permissions: { mode: 'read_only' },
-    };
-  }
-
-  if (parsed.kind === 'web') {
-    const web = await readWebText(parsed.url, safetyPolicy);
-    return {
-      text: web.text,
-      contentSource: 'web',
-      title: titleForRef(parsed),
-      mime: web.mime,
-      size: web.text.length,
-      hash: sha256Text(web.text),
-      revision: null,
-      extractedTextRef: null,
-      metadata: { url: parsed.url },
-      permissions: { mode: 'read_only' },
-    };
-  }
-
-  throw new Error(`Direct source reading is not available for ${parsed.uri}`);
+  assertClassifiedSourceReference(parsed.uri);
+  throw new Error(`Direct source reading is contained for ${parsed.kind} references.`);
 }
 
 async function readTextRef(uri: string, config?: KnowledgeConfig, safetyPolicy?: SafetyPolicy): Promise<{ text: string; contentSource: SourceIngestResult['content_source'] }> {
-  if (uri.startsWith('open-files://')) {
-    throw new Error('Open-files extracted text refs require an open-files resolver API. Ingest an open-files manifest with extracted_text or an extracted_text_ref using file://, s3://, or https://.');
-  }
+  assertClassifiedSourceReference(uri);
   const parsed = parseSourceRef(uri);
   const direct = await readDirectSourceText(parsed, config, safetyPolicy);
   return { text: direct.text, contentSource: 'extracted_text_ref' };
@@ -189,7 +109,23 @@ async function readOpenFilesSourceText(options: SourceIngestOptions): Promise<Re
   if (resolved.chunks.length === 0) {
     throw new Error('Open-files source has no extracted text chunks yet. Ingest an open-files manifest with extracted_text or extracted_text_ref first.');
   }
-  const text = resolved.chunks.map((chunk) => chunk.text).join('\n\n');
+  if (
+    resolved.content.chunks_total > MAX_INGEST_BATCH_ITEMS
+    || resolved.chunks.length > MAX_INGEST_BATCH_ITEMS
+  ) {
+    throw new Error(`Resolved source exceeds the ${MAX_INGEST_BATCH_ITEMS} chunk hard limit.`);
+  }
+  let joinedBytes = 0;
+  const parts: string[] = [];
+  for (const chunk of resolved.chunks) {
+    if (typeof chunk.text !== 'string') throw new Error('Resolved source chunk text must be a string.');
+    joinedBytes += Buffer.byteLength(chunk.text) + (parts.length === 0 ? 0 : 2);
+    if (joinedBytes > MAX_INGEST_BODY_BYTES) {
+      throw new Error(`Resolved source exceeds the ${MAX_INGEST_BODY_BYTES} joined byte hard limit.`);
+    }
+    parts.push(chunk.text);
+  }
+  const text = parts.join('\n\n');
   return {
     text,
     contentSource: 'catalog_chunks',
@@ -244,6 +180,8 @@ function manifestItemForSource(sourceRef: string, parsed: SourceRef, resolved: R
 }
 
 export async function ingestSourceRef(options: SourceIngestOptions): Promise<SourceIngestResult> {
+  assertContainedSourceGraph(options);
+  assertClassifiedSourceReference(options.sourceRef, { allowStored: true });
   const purpose = options.purpose ?? 'knowledge_index';
   const parsed = parseSourceRef(options.sourceRef);
   const resolved = parsed.kind === 'open-files'

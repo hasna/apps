@@ -5,6 +5,8 @@ export type SearchResultKind = 'source_chunk' | 'wiki_chunk' | 'legacy_item' | '
 export type SearchProvenance = KnowledgeProvenance | GeneratedArtifactProvenance;
 export interface HybridSearchOptions extends EmbeddingRuntimeOptions {
     dbPath: string;
+    scope?: 'local' | 'global' | 'project';
+    allowGlobal?: boolean;
     legacyStorePath?: string;
     query: string;
     limit?: number;

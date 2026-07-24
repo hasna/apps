@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "files": [
+    {
+      "path": "src/generated/knowledge-api-client.ts",
+      "sha256": "0a3c06ee318af23dd8e9e05dec9672d4b0884049f66e35d0a0365b3481bc8670",
+      "mode": 420
+    },
+    {
+      "path": "src/generated/storage-kit/.storage-kit-manifest.json",
+      "sha256": "fc74c2ca06ac7e5ff70b396b82ad7a0929de992628a72de864a211bf9d8ccbc4",
+      "mode": 420
+    },
+    {
+      "path": "src/generated/storage-kit/health.ts",
+      "sha256": "0b020555a15107cc5594bf052e8aff95db35dfa13ae7a921e31b43f1e10a22de",
+      "mode": 420
+    },
+    {
+      "path": "src/generated/storage-kit/index.ts",
+      "sha256": "119c10097bb0a5870173814fee5146c13b5632668a8cb5750d2605c04e9e0f5d",
+      "mode": 420
+    },
+    {
+      "path": "src/generated/storage-kit/migrations.ts",
+      "sha256": "20ca23e55c91c9e77297504140ff1075df5b76e1c8b8d327400965fa62151be2",
+      "mode": 420
+    },
+    {
+      "path": "src/generated/storage-kit/mode.ts",
+      "sha256": "366c25aad7e7e364ba41dea33a3053bf05793048aa1dd9902faf8fccbe7e50ad",
+      "mode": 420
+    },
+    {
+      "path": "src/generated/storage-kit/pool.ts",
+      "sha256": "118c6f2458d020146c2456c10f4bf5ad0541939d5fc2b533b6213ae41dfe1fd9",
+      "mode": 420
+    },
+    {
+      "path": "src/generated/storage-kit/query.ts",
+      "sha256": "8dbc6cf624132864a388899a093a00d995fc2c5d802b5185d4d8bf26344c7fbc",
+      "mode": 420
+    },
+    {
+      "path": "src/generated/storage-kit/README.md",
+      "sha256": "ed19ea4c941efec1f158b5fb6aac55da3b430fdf74af280ab3724d65e47d922b",
+      "mode": 420
+    },
+    {
+      "path": "src/generated/storage-kit/tls.ts",
+      "sha256": "05f1adbb5eeb52739d024dabc2b06901d96734dcb95b0130b7d8b2592d7c8f73",
+      "mode": 420
+    }
+  ],
+  "exact_roots": [
+    "src/generated"
+  ],
+  "exact_files": []
+}

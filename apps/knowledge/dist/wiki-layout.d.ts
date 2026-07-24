@@ -1,4 +1,4 @@
-import type { Database } from 'bun:sqlite';
+import type { KnowledgeDatabase as Database } from './knowledge-db';
 import type { ArtifactStore } from './artifact-store';
 import { type GeneratedStorageObject } from './storage-contract';
 export interface WikiLayoutInitResult {

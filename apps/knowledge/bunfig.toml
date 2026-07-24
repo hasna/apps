@@ -1,0 +1,6 @@
+[install]
+minimumReleaseAge = 259200
+minimumReleaseAgeExcludes = ["@hasna/contracts", "@hasna/events"]
+
+[test]
+preload = ["./tests/preload.ts"]

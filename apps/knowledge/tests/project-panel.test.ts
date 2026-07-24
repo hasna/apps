@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { createKnowledgeProjectPanel } from '../src/project-panel';
 import { createKnowledgeService } from '../src/service';
 import { saveStore } from '../src/store';
+import { sanitizedLocalTestEnv } from './helpers/sanitized-env';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI = join(__dirname, '..', 'src', 'cli.ts');
@@ -58,6 +59,7 @@ describe('knowledge project panel provider', () => {
 
     const result = spawnSync('bun', [CLI, 'project-panel', '--project', 'Swiss Bank Account', '--json', '--contract'], {
       cwd: dir,
+      env: sanitizedLocalTestEnv(),
       maxBuffer: 16 * 1024 * 1024,
     });
 

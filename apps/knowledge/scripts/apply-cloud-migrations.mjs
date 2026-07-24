@@ -1,9 +1,11 @@
 #!/usr/bin/env bun
 /**
- * Apply the @hasna/knowledge cloud-mode Postgres schema via the vendored
+ * Apply the @hasna/knowledge operator-only Postgres schema via the vendored
  * storage kit's MigrationLedger (checksum ledger + drift/downgrade guards).
  *
- * PURE REMOTE (Amendment A1): runs against the cloud Postgres only. Requires:
+ * Stage A keeps this capability outside public CLI/SDK/server authority. The
+ * bundled migration target runs only as an explicitly supervised operator task.
+ * It requires:
  *   HASNA_KNOWLEDGE_STORAGE_MODE=cloud
  *   HASNA_KNOWLEDGE_DATABASE_URL=postgres://...   (never logged)
  *
@@ -15,12 +17,10 @@
  *   export HASNA_KNOWLEDGE_DATABASE_URL="$(aws secretsmanager get-secret-value \
  *     --secret-id hasna/oss/knowledge/database-url --query SecretString --output text)"
  */
-import {
-  PG_MIGRATIONS,
-  MigrationLedger,
-  defineMigration,
-  createKnowledgeCloudClient,
-} from '../src/storage.ts';
+import { PG_MIGRATIONS } from '../src/db/pg-migrations.ts';
+import { createKnowledgeCloudClient } from '../src/db/remote-storage.ts';
+import { MigrationLedger, defineMigration } from '../src/generated/storage-kit/index.ts';
+import { createKnowledgeOperatorCapability } from '../src/operator-capability.ts';
 import { apiKeyMigrations } from '@hasna/contracts/auth';
 
 const dryRun = process.argv.includes('--dry-run');
@@ -61,7 +61,8 @@ const migrations = [
   ...apiKeyMigrations().map((m) => defineMigration(m.id, m.sql)),
 ];
 
-const client = createKnowledgeCloudClient();
+const operatorCapability = createKnowledgeOperatorCapability('scripts/apply-cloud-migrations.mjs');
+const client = createKnowledgeCloudClient(operatorCapability, process.env);
 try {
   const ledger = new MigrationLedger(client, migrations);
   const result = await ledger.migrate({ dryRun });

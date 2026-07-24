@@ -55,5 +55,4 @@ body:
       label: Runtime
       options:
         - Bun
-        - Node.js
         - Other

@@ -1,17 +1,35 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type { Database } from 'bun:sqlite';
-import type { ArtifactStore, ArtifactWrite } from './artifact-store';
+import { lstatSync, realpathSync } from 'node:fs';
+import type { KnowledgeDatabase as Database } from './knowledge-db';
+import {
+  assertArtifactStoreMatchesWorkspace,
+  type ArtifactStore,
+  type ArtifactWrite,
+} from './artifact-store';
 import { hashArtifactBody, recordStorageObjects, type GeneratedStorageObject } from './storage-contract';
-import { migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
+import { getSchemaVersion, openMigratedKnowledgeDb } from './knowledge-db';
 import { generatedArtifactProvenance } from './provenance';
 import { ingestSourceRef, type SourceIngestResult } from './source-ingest';
+import { assertContainedSourceGraph, safePublicProperty } from './public-guard';
+import { parseBoundedJsonData } from './input-limits';
 import { assertWriteAllowed, recordAuditEvent, type SafetyPolicy } from './safety';
-import type { KnowledgeConfig, KnowledgeWorkspace } from './workspace';
+import {
+  canonicalKnowledgeScope,
+  assertKnowledgeWorkspaceScope,
+  type KnowledgeConfig,
+  type KnowledgeWorkspace,
+} from './workspace';
 
 export interface AppWikiWriteGuardOptions {
   scope: string;
   workspace: KnowledgeWorkspace;
   safetyPolicy?: SafetyPolicy;
+  allowGlobal?: boolean;
+}
+
+export interface AppWikiReadGuardOptions {
+  scope: string;
+  workspace: KnowledgeWorkspace;
   allowGlobal?: boolean;
 }
 
@@ -31,12 +49,12 @@ export interface AppWikiNoteInput extends AppWikiWriteGuardOptions {
   now?: Date;
 }
 
-export interface AppWikiNoteListOptions {
+export interface AppWikiNoteListOptions extends AppWikiReadGuardOptions {
   dbPath: string;
   limit?: number;
 }
 
-export interface AppWikiNoteGetOptions {
+export interface AppWikiNoteGetOptions extends AppWikiReadGuardOptions {
   dbPath: string;
   store: ArtifactStore;
   id: string;
@@ -109,9 +127,10 @@ function slugify(value: string): string {
 function parseJsonObject(value: string | null | undefined): Record<string, unknown> {
   if (!value) return {};
   try {
-    const parsed = JSON.parse(value);
+    const parsed = parseBoundedJsonData<unknown>(value, 'Persisted app-wiki metadata');
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
-  } catch {
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
     return {};
   }
 }
@@ -161,8 +180,76 @@ function noteBody(input: {
   return sections.join('\n');
 }
 
-async function writeArtifact(store: ArtifactStore, entry: ArtifactWrite): Promise<GeneratedStorageObject> {
-  const written = await store.put(entry);
+interface AppWikiAuthority {
+  readonly scope: ReturnType<typeof canonicalKnowledgeScope>;
+  readonly workspace: KnowledgeWorkspace;
+  readonly store?: ArtifactStore;
+}
+
+function explicitOwnGlobalAuthority(options: AppWikiReadGuardOptions): boolean {
+  let descriptor: PropertyDescriptor | undefined;
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(options, 'allowGlobal');
+  } catch {
+    throw new Error('Global app-wiki access requires an explicit own allowGlobal=true data property.');
+  }
+  return Boolean(descriptor && 'value' in descriptor && descriptor.value === true);
+}
+
+function appWikiAuthority(
+  options: AppWikiReadGuardOptions & { store?: ArtifactStore; dbPath?: string },
+  requireStore = false,
+): AppWikiAuthority {
+  if (!options || typeof options !== 'object') {
+    throw new Error('App-wiki access requires explicit trusted options.');
+  }
+  const scope = canonicalKnowledgeScope(safePublicProperty(options, 'scope', 'public-api'));
+  if (scope === 'global' && !explicitOwnGlobalAuthority(options)) {
+    throw new Error('Global app-wiki access requires an explicit own allowGlobal=true data property.');
+  }
+  const workspace = safePublicProperty(options, 'workspace', 'public-api') as KnowledgeWorkspace;
+  const dbPath = safePublicProperty(options, 'dbPath', 'public-api');
+  const store = safePublicProperty(options, 'store', 'public-api') as ArtifactStore | undefined;
+  assertKnowledgeWorkspaceScope(workspace, scope);
+  if (dbPath !== undefined && dbPath !== workspace.knowledgeDbPath) {
+    throw new Error('App-wiki database path does not match the trusted workspace identity.');
+  }
+  if (requireStore && !store) {
+    throw new Error('A trusted artifact store from the owning workspace is required.');
+  }
+  if (store) assertArtifactStoreMatchesWorkspace(store, workspace);
+  return Object.freeze({ scope, workspace, store });
+}
+
+function revalidateAppWikiAuthority(authority: AppWikiAuthority): void {
+  assertKnowledgeWorkspaceScope(authority.workspace, authority.scope);
+  if (authority.store) assertArtifactStoreMatchesWorkspace(authority.store, authority.workspace);
+  try {
+    const stat = lstatSync(authority.workspace.knowledgeDbPath);
+    if (
+      !stat.isFile()
+      || stat.isSymbolicLink()
+      || stat.nlink !== 1
+      || realpathSync.native(authority.workspace.knowledgeDbPath) !== authority.workspace.knowledgeDbPath
+    ) {
+      throw new Error('App-wiki database identity must be one canonical regular file.');
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+}
+
+export function assertAppWikiReadAllowed(options: AppWikiReadGuardOptions): void {
+  appWikiAuthority(options);
+}
+
+async function writeArtifact(
+  authority: AppWikiAuthority & { readonly store: ArtifactStore },
+  entry: ArtifactWrite,
+): Promise<GeneratedStorageObject> {
+  revalidateAppWikiAuthority(authority);
+  const written = await authority.store.put(entry);
+  revalidateAppWikiAuthority(authority);
   return {
     key: written.key,
     uri: written.uri,
@@ -176,18 +263,23 @@ async function writeArtifact(store: ArtifactStore, entry: ArtifactWrite): Promis
   };
 }
 
-async function appendLog(store: ArtifactStore, event: Record<string, unknown>, now: Date): Promise<GeneratedStorageObject> {
+async function appendLog(
+  authority: AppWikiAuthority & { readonly store: ArtifactStore },
+  event: Record<string, unknown>,
+  now: Date,
+): Promise<GeneratedStorageObject> {
   const year = String(now.getUTCFullYear());
   const month = String(now.getUTCMonth() + 1).padStart(2, '0');
   const day = String(now.getUTCDate()).padStart(2, '0');
   const key = `logs/${year}/${month}/${day}.jsonl`;
   let existing = '';
   try {
-    existing = await store.getText(key);
+    revalidateAppWikiAuthority(authority);
+    existing = await authority.store.getText(key);
   } catch {
     existing = '';
   }
-  return writeArtifact(store, {
+  return writeArtifact(authority, {
     key,
     body: `${existing}${JSON.stringify(event)}\n`,
     content_type: 'application/x-ndjson',
@@ -420,53 +512,65 @@ function upsertNotePage(db: Database, input: {
   ]);
 }
 
+function appWikiWriteAuthority(
+  options: AppWikiWriteGuardOptions & { store?: ArtifactStore },
+  requireStore = false,
+): AppWikiAuthority {
+  const authority = appWikiAuthority(options);
+  if (authority.workspace.home.includes('/.husna/') || authority.workspace.home.endsWith('/.husna')) {
+    throw new Error(`Refusing app-wiki writes to legacy .husna path: ${authority.workspace.home}`);
+  }
+  if (authority.workspace.home.includes('/.hasna/apps/knowledge')) {
+    throw new Error(`Refusing app-wiki writes to legacy .hasna/apps/knowledge path: ${authority.workspace.home}`);
+  }
+  const safetyPolicy = safePublicProperty(options, 'safetyPolicy', 'public-api') as SafetyPolicy | undefined;
+  if (safetyPolicy) assertWriteAllowed(authority.workspace.knowledgeDbPath, safetyPolicy);
+  if (requireStore && !authority.store) {
+    throw new Error('A trusted artifact store from the owning workspace is required.');
+  }
+  return authority;
+}
+
 export function assertAppWikiWriteAllowed(options: AppWikiWriteGuardOptions): void {
-  if (options.scope === 'global' && options.allowGlobal !== true) {
-    throw new Error('Global app-wiki writes require allowGlobal=true or CLI --allow-global.');
-  }
-  if (options.workspace.home.includes('/.husna/') || options.workspace.home.endsWith('/.husna')) {
-    throw new Error(`Refusing app-wiki writes to legacy .husna path: ${options.workspace.home}`);
-  }
-  if (options.workspace.home.includes('/.hasna/apps/knowledge')) {
-    throw new Error(`Refusing app-wiki writes to legacy .hasna/apps/knowledge path: ${options.workspace.home}`);
-  }
-  if (options.safetyPolicy) assertWriteAllowed(options.workspace.knowledgeDbPath, options.safetyPolicy);
+  appWikiWriteAuthority(options);
 }
 
 export async function initAppWikiScope(options: AppWikiInitOptions): Promise<AppWikiInitResult> {
-  assertAppWikiWriteAllowed(options);
-  const migration = migrateKnowledgeDb(options.workspace.knowledgeDbPath);
-  const db = openKnowledgeDb(options.workspace.knowledgeDbPath);
+  const authority = appWikiWriteAuthority(options, true) as AppWikiAuthority & { readonly store: ArtifactStore };
+  revalidateAppWikiAuthority(authority);
+  const db = openMigratedKnowledgeDb(authority.workspace.knowledgeDbPath, { ensureParent: false });
   try {
+    revalidateAppWikiAuthority(authority);
+    const schemaVersion = getSchemaVersion(db);
     recordAuditEvent(db, {
       event_type: 'write',
       action: 'app_wiki_init',
-      target_uri: options.workspace.home,
+      target_uri: authority.workspace.home,
       decision: 'allow',
       metadata: {
-        scope: options.scope,
-        store_type: options.store.type,
+        scope: authority.scope,
+        store_type: authority.store.type,
         app_path: '.hasna/knowledge',
       },
       created_at: (options.now ?? new Date()).toISOString(),
     });
+    return {
+      ok: true,
+      scope: authority.scope,
+      workspace_home: authority.workspace.home,
+      knowledge_db_path: authority.workspace.knowledgeDbPath,
+      schema_version: schemaVersion,
+      store_type: authority.store.type,
+      global_write_allowed: authority.scope === 'global',
+      message: `Initialized app wiki scope at ${authority.workspace.home}`,
+    };
   } finally {
     db.close();
   }
-  return {
-    ok: true,
-    scope: options.scope,
-    workspace_home: options.workspace.home,
-    knowledge_db_path: options.workspace.knowledgeDbPath,
-    schema_version: migration.schema_version,
-    store_type: options.store.type,
-    global_write_allowed: options.scope === 'global' && options.allowGlobal === true,
-    message: `Initialized app wiki scope at ${options.workspace.home}`,
-  };
 }
 
 export async function writeAppWikiNote(options: AppWikiNoteInput): Promise<AppWikiNoteWriteResult> {
-  assertAppWikiWriteAllowed(options);
+  const authority = appWikiWriteAuthority(options, true) as AppWikiAuthority & { readonly store: ArtifactStore };
   const nowDate = options.now ?? new Date();
   const now = nowDate.toISOString();
   const tags = uniqueStrings(options.tags);
@@ -484,19 +588,19 @@ export async function writeAppWikiNote(options: AppWikiNoteInput): Promise<AppWi
     artifact_key: path,
     source_refs: sourceRefs,
   });
-  const artifact = await writeArtifact(options.store, {
+  const artifact = await writeArtifact(authority, {
     key: path,
     body,
     content_type: 'text/markdown',
     metadata: {
       generated_from: 'app_wiki_note',
       provenance,
-      scope: options.scope,
+      scope: authority.scope,
       tags: tags.join(','),
       source_refs: sourceRefs.join(','),
     },
   });
-  const log = await appendLog(options.store, {
+  const log = await appendLog(authority, {
     ts: now,
     event: 'app_wiki_note_written',
     page_key: path,
@@ -504,8 +608,8 @@ export async function writeAppWikiNote(options: AppWikiNoteInput): Promise<AppWi
     tags,
   }, nowDate);
 
-  migrateKnowledgeDb(options.workspace.knowledgeDbPath);
-  const db = openKnowledgeDb(options.workspace.knowledgeDbPath);
+  revalidateAppWikiAuthority(authority);
+  const db = openMigratedKnowledgeDb(authority.workspace.knowledgeDbPath, { ensureParent: false });
   try {
     const pageId = stableId('wiki', path);
     const metadata = noteMetadata({
@@ -515,7 +619,9 @@ export async function writeAppWikiNote(options: AppWikiNoteInput): Promise<AppWi
       provenance,
       metadata: options.metadata,
     });
+    revalidateAppWikiAuthority(authority);
     recordStorageObjects(db, [artifact, log], nowDate);
+    revalidateAppWikiAuthority(authority);
     upsertNotePage(db, {
       pageId,
       path,
@@ -526,7 +632,9 @@ export async function writeAppWikiNote(options: AppWikiNoteInput): Promise<AppWi
       metadata,
       now,
     });
+    revalidateAppWikiAuthority(authority);
     const citationsWritten = replaceNoteCitations(db, pageId, sourceRefs, now);
+    revalidateAppWikiAuthority(authority);
     upsertNoteIndex(db, {
       title: options.title,
       path,
@@ -536,19 +644,21 @@ export async function writeAppWikiNote(options: AppWikiNoteInput): Promise<AppWi
       sourceRefs,
       now,
     });
+    revalidateAppWikiAuthority(authority);
     recordAuditEvent(db, {
       event_type: 'write',
       action: 'app_wiki_note_write',
       target_uri: artifact.uri,
       decision: 'allow',
       metadata: {
-        scope: options.scope,
+        scope: authority.scope,
         path,
         source_refs: sourceRefs,
         tags,
       },
       created_at: now,
     });
+    revalidateAppWikiAuthority(authority);
     const row = db.query<{
       id: string;
       path: string;
@@ -562,8 +672,8 @@ export async function writeAppWikiNote(options: AppWikiNoteInput): Promise<AppWi
     if (!row) throw new Error(`Failed to write app wiki note: ${path}`);
     return {
       ok: true,
-      scope: options.scope,
-      workspace_home: options.workspace.home,
+      scope: authority.scope,
+      workspace_home: authority.workspace.home,
       note: noteRecord(row),
       artifact_uri: artifact.uri,
       content_hash: artifact.hash ?? '',
@@ -578,11 +688,13 @@ export async function writeAppWikiNote(options: AppWikiNoteInput): Promise<AppWi
 }
 
 export function listAppWikiNotes(options: AppWikiNoteListOptions): AppWikiNoteRecord[] {
+  const authority = appWikiAuthority(options);
   const limit = Math.max(1, Math.min(options.limit ?? 50, 200));
-  if (!options.dbPath) return [];
-  migrateKnowledgeDb(options.dbPath);
-  const db = openKnowledgeDb(options.dbPath);
+  if (!authority.workspace.knowledgeDbPath) return [];
+  revalidateAppWikiAuthority(authority);
+  const db = openMigratedKnowledgeDb(authority.workspace.knowledgeDbPath, { ensureParent: false });
   try {
+    revalidateAppWikiAuthority(authority);
     return db.query<{
       id: string;
       path: string;
@@ -607,9 +719,11 @@ export function listAppWikiNotes(options: AppWikiNoteListOptions): AppWikiNoteRe
 }
 
 export async function getAppWikiNote(options: AppWikiNoteGetOptions): Promise<AppWikiNoteGetResult | null> {
-  migrateKnowledgeDb(options.dbPath);
-  const db = openKnowledgeDb(options.dbPath);
+  const authority = appWikiAuthority(options, true) as AppWikiAuthority & { readonly store: ArtifactStore };
+  revalidateAppWikiAuthority(authority);
+  const db = openMigratedKnowledgeDb(authority.workspace.knowledgeDbPath, { ensureParent: false });
   try {
+    revalidateAppWikiAuthority(authority);
     const row = db.query<{
       id: string;
       path: string;
@@ -627,6 +741,7 @@ export async function getAppWikiNote(options: AppWikiNoteGetOptions): Promise<Ap
          AND metadata_json LIKE '%"app_wiki":true%'`,
     ).get(options.id, options.id);
     if (!row) return null;
+    revalidateAppWikiAuthority(authority);
     const citations = db.query<{
       id: string;
       chunk_id: string | null;
@@ -649,10 +764,13 @@ export async function getAppWikiNote(options: AppWikiNoteGetOptions): Promise<Ap
     let content: string | null = null;
     if (options.includeContent !== false) {
       try {
-        content = await options.store.getText(row.path);
+        revalidateAppWikiAuthority(authority);
+        content = await authority.store.getText(row.path);
       } catch {
+        revalidateAppWikiAuthority(authority);
         content = null;
       }
+      revalidateAppWikiAuthority(authority);
     }
     return {
       ok: true,
@@ -666,12 +784,18 @@ export async function getAppWikiNote(options: AppWikiNoteGetOptions): Promise<Ap
 }
 
 export async function ingestAppWikiSourceRef(options: AppWikiSourceRefInput): Promise<SourceIngestResult> {
-  assertAppWikiWriteAllowed(options);
-  return ingestSourceRef({
-    dbPath: options.workspace.knowledgeDbPath,
-    sourceRef: options.sourceRef,
+  assertContainedSourceGraph(options, 'public-api');
+  const sourceRef = safePublicProperty(options, 'sourceRef', 'public-api');
+  if (typeof sourceRef !== 'string') throw new Error('sourceRef must be a string.');
+  const authority = appWikiWriteAuthority(options);
+  revalidateAppWikiAuthority(authority);
+  const result = await ingestSourceRef({
+    dbPath: authority.workspace.knowledgeDbPath,
+    sourceRef,
     purpose: options.purpose ?? 'knowledge_index',
     config: options.config,
     safetyPolicy: options.safetyPolicy,
   });
+  revalidateAppWikiAuthority(authority);
+  return result;
 }

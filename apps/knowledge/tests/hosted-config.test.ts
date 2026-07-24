@@ -1,148 +1,223 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { clearKnowledgeAuth, knowledgeAuthStatus, normalizeKnowledgeApiOrigin } from '../src/auth';
-import { normalizeRemoteKnowledgeRunContract, REMOTE_KNOWLEDGE_CONTRACT_VERSION } from '../src/remote-client';
 import { createKnowledgeService } from '../src/service';
+import { KnowledgeContainmentError } from '../src/runtime-role';
+import {
+  defaultKnowledgeConfig,
+  workspaceForHome,
+  writeKnowledgeConfig,
+} from '../src/workspace';
 
-describe('hosted-aware config and remote contracts', () => {
-  test('normalizes hosted setup without requiring a hosted account for local use', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ok-hosted-config-'));
-    const service = createKnowledgeService({ scope: 'project', cwd: dir });
+describe('Stage-A hosted configuration containment', () => {
+  test('hosted setup is rejected before workspace or config creation', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'knowledge-hosted-setup-contained-'));
+    const env: Record<string, string | undefined> = {};
+    const service = createKnowledgeService({ scope: 'project', cwd: dir, env } as never);
 
-    const setup = service.setup({
-      mode: 'remote',
-      apiUrl: 'https://knowledge.example.com/api/v1',
-    });
-    expect(setup.mode).toBe('hosted');
-    expect(setup.api_url).toBe('https://knowledge.example.com');
-    expect(setup.storage_type).toBe('local');
-    expect(setup.canonical_example.active).toBe(false);
-    expect(setup.next).toContain('knowledge auth login --api-key <key>');
-
-    const config = JSON.parse(readFileSync(join(dir, '.hasna', 'knowledge', 'config.json'), 'utf8'));
-    expect(config.mode).toBe('hosted');
-    expect(config.hosted.api_url).toBe('https://knowledge.example.com');
-
-    const storage = service.storageContract();
-    expect(storage.hosted).toMatchObject({
-      enabled: true,
-      api_url: 'https://knowledge.example.com',
-      api_url_env: 'KNOWLEDGE_API_URL',
-      api_key_env: 'KNOWLEDGE_API_KEY',
-      requires_hosted_account_for_local_use: false,
-    });
-
-    const local = service.setup({ mode: 'local' });
-    expect(local.mode).toBe('local');
-    expect(service.config().mode).toBe('local');
+    expect(() => service.setup({
+      mode: 'hosted',
+      apiUrl: 'https://knowledge.invalid.test',
+    })).toThrow('KNOWLEDGE_HOSTED_CONTAINED');
+    expect(existsSync(join(dir, '.hasna'))).toBe(false);
   });
 
-  test('can opt into canonical example S3 artifact storage', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ok-hosted-canonical-storage-'));
-    const service = createKnowledgeService({ scope: 'project', cwd: dir });
+  test('hosted env is rejected during service construction with zero workspace I/O', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'knowledge-hosted-env-contained-'));
+    expect(() => createKnowledgeService({
+      scope: 'project',
+      cwd: dir,
+      env: { HASNA_KNOWLEDGE_STORAGE_MODE: 'hosted' },
+    } as never)).toThrow('KNOWLEDGE_HOSTED_CONTAINED');
+    expect(existsSync(join(dir, '.hasna'))).toBe(false);
+  });
 
-    const setup = service.setup({
+  test('an existing hosted role config denies before JSON or SQLite construction', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'knowledge-hosted-config-contained-'));
+    const home = join(dir, '.hasna', 'knowledge');
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, 'config.json'), JSON.stringify({
+      ...defaultKnowledgeConfig(),
       mode: 'hosted',
-      canonicalExample: true,
-    });
+    }));
 
-    expect(setup.mode).toBe('hosted');
-    expect(setup.storage_type).toBe('s3');
-    expect(setup.artifact_uri_prefix).toBe('s3://example-knowledge-prod/.hasna/knowledge/');
-    expect(setup.canonical_example.active).toBe(true);
+    expect(() => createKnowledgeService({ scope: 'project', cwd: dir, env: {} } as never))
+      .toThrow('KNOWLEDGE_HOSTED_CONTAINED');
+    expect(existsSync(join(home, 'db.json'))).toBe(false);
+    expect(existsSync(join(home, 'knowledge.db'))).toBe(false);
+  });
 
-    const config = JSON.parse(readFileSync(join(dir, '.hasna', 'knowledge', 'config.json'), 'utf8'));
-    expect(config.storage).toMatchObject({
+  test('explicit local setup remains available', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'knowledge-local-setup-'));
+    const service = createKnowledgeService({ scope: 'project', cwd: dir, env: {} } as never);
+    const result = service.setup({ mode: 'local', canonicalExample: false });
+    expect(result.mode).toBe('local');
+    expect(existsSync(join(dir, '.hasna', 'knowledge', 'config.json'))).toBe(true);
+  });
+
+  test('canonical S3 setup is hosted even when the caller also says local', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'knowledge-local-canonical-contained-'));
+    const service = createKnowledgeService({ scope: 'project', cwd: dir, env: {} } as never);
+    expect(() => service.setup({ mode: 'local', canonicalExample: true }))
+      .toThrow('KNOWLEDGE_RUNTIME_INTENT_INVALID');
+    expect(existsSync(join(dir, '.hasna'))).toBe(false);
+  });
+
+  test('direct S3 config writing is contained before changing an existing target', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'knowledge-s3-config-write-'));
+    const workspace = workspaceForHome(join(dir, '.hasna', 'knowledge'));
+    mkdirSync(workspace.home, { recursive: true });
+    const original = `${JSON.stringify(defaultKnowledgeConfig(), null, 2)}\n`;
+    writeFileSync(workspace.configPath, original);
+    const s3 = defaultKnowledgeConfig();
+    s3.storage = {
       type: 's3',
       artifacts_root: 'artifacts',
-      s3: {
-        bucket: 'example-knowledge-prod',
-        prefix: '.hasna/knowledge',
-        region: 'us-east-1',
-        profile: 'example-infra',
-        server_side_encryption: 'AES256',
-      },
-    });
+      s3: { bucket: 'synthetic-bucket' },
+    };
 
-    const storage = service.storageContract();
-    expect(storage.canonical_example.secrets.s3).toBe('example/knowledge/prod/s3');
-    expect(storage.source_ownership.owner).toBe('open-files');
+    expect(() => writeKnowledgeConfig(workspace.configPath, s3))
+      .toThrow('KNOWLEDGE_CONFIG_INVALID');
+    expect(readFileSync(workspace.configPath, 'utf8')).toBe(original);
+    expect(existsSync(workspace.artifactsDir)).toBe(false);
   });
 
-  test('stores auth locally, lets env credentials win, and clears credentials', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ok-hosted-auth-'));
-    const authDir = join(dir, 'auth');
-    const env = { HASNA_KNOWLEDGE_AUTH_DIR: authDir };
-    const service = createKnowledgeService({ scope: 'project', cwd: dir });
-    service.setup({ mode: 'hosted', apiUrl: 'https://knowledge.example.com/api' });
+  for (const [name, modeMutation] of [
+    ['missing', (config: Record<string, unknown>) => { delete config.mode; }],
+    ['null', (config: Record<string, unknown>) => { config.mode = null; }],
+    ['blank', (config: Record<string, unknown>) => { config.mode = '   '; }],
+  ] as const) {
+    test(`${name} persisted mode is structurally invalid before artifact directory creation`, () => {
+      const dir = mkdtempSync(join(tmpdir(), `knowledge-invalid-${name}-`));
+      const workspace = workspaceForHome(join(dir, '.hasna', 'knowledge'));
+      mkdirSync(workspace.home, { recursive: true });
+      const malformed = defaultKnowledgeConfig() as unknown as Record<string, unknown>;
+      modeMutation(malformed);
+      const original = `${JSON.stringify(malformed)}\n`;
+      writeFileSync(workspace.configPath, original);
 
-    expect(knowledgeAuthStatus(service.config(), env).authenticated).toBe(false);
-    const auth = service.saveAuth({
-      apiKey: 'kh_test',
-      email: 'agent@example.com',
-      orgSlug: 'hasna',
-      orgId: 'org_123',
-      userId: 'user_123',
-    }, env);
-    expect(auth.api_url).toBe('https://knowledge.example.com');
-    expect(existsSync(join(authDir, 'auth.json'))).toBe(true);
-
-    const status = service.authStatus(env);
-    expect(status).toMatchObject({
-      authenticated: true,
-      source: 'file',
-      email: 'agent@example.com',
-      org_slug: 'hasna',
-      api_url: 'https://knowledge.example.com',
+      let error: unknown;
+      try {
+        createKnowledgeService({ scope: 'project', cwd: dir, env: {} } as never);
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error).toBeInstanceOf(KnowledgeContainmentError);
+      expect(error).toMatchObject({ code: 'KNOWLEDGE_CONFIG_INVALID', status: 503 });
+      expect(readFileSync(workspace.configPath, 'utf8')).toBe(original);
+      expect(readdirSync(workspace.home).sort()).toEqual(['config.json']);
     });
+  }
 
-    const envStatus = service.authStatus({ ...env, KNOWLEDGE_API_KEY: 'kh_env', KNOWLEDGE_API_URL: 'https://env.example.com/api/v1' });
-    expect(envStatus).toMatchObject({
-      authenticated: true,
-      source: 'env',
-      email: null,
-      api_url: 'https://env.example.com',
-    });
+  test('invalid nested config fields are rejected before any workspace side effect', () => {
+    const mutations: Array<(config: Record<string, any>) => void> = [
+      (config) => { config.storage.artifacts_root = '../outside'; },
+      (config) => { config.embeddings.dimensions = 0; },
+      (config) => { config.providers.aliases.fast = 42; },
+      (config) => { config.safety.network.s3_reads_enabled = 'yes'; },
+    ];
+    for (const mutate of mutations) {
+      const dir = mkdtempSync(join(tmpdir(), 'knowledge-invalid-nested-'));
+      const workspace = workspaceForHome(join(dir, '.hasna', 'knowledge'));
+      mkdirSync(workspace.home, { recursive: true });
+      const malformed = defaultKnowledgeConfig() as unknown as Record<string, any>;
+      mutate(malformed);
+      const original = `${JSON.stringify(malformed)}\n`;
+      writeFileSync(workspace.configPath, original);
 
-    expect(service.clearAuth(env)).toBe(true);
-    expect(clearKnowledgeAuth(env)).toBe(false);
-    expect(service.authStatus(env).authenticated).toBe(false);
+      expect(() => createKnowledgeService({ scope: 'project', cwd: dir, env: {} } as never))
+        .toThrow('KNOWLEDGE_CONFIG_INVALID');
+      expect(readFileSync(workspace.configPath, 'utf8')).toBe(original);
+      expect(readdirSync(workspace.home).sort()).toEqual(['config.json']);
+    }
   });
 
-  test('exposes typed remote contracts and normalized run payloads', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ok-remote-contract-'));
-    const service = createKnowledgeService({ scope: 'project', cwd: dir });
-    const contract = service.remoteContract();
+  test('symlinked and non-regular config paths fail closed without following or clobbering', () => {
+    for (const kind of ['symlink', 'broken-symlink', 'directory'] as const) {
+      const dir = mkdtempSync(join(tmpdir(), `knowledge-config-${kind}-`));
+      const workspace = workspaceForHome(join(dir, '.hasna', 'knowledge'));
+      mkdirSync(workspace.home, { recursive: true });
+      const target = join(dir, 'outside.json');
+      const original = `${JSON.stringify(defaultKnowledgeConfig())}\n`;
+      if (kind === 'symlink') {
+        writeFileSync(target, original);
+        symlinkSync(target, workspace.configPath);
+      } else if (kind === 'broken-symlink') {
+        symlinkSync(target, workspace.configPath);
+      } else {
+        mkdirSync(workspace.configPath);
+      }
 
-    expect(contract.contract_version).toBe(REMOTE_KNOWLEDGE_CONTRACT_VERSION);
-    expect(contract.endpoints.search).toBe('/api/v1/knowledge/search');
-    expect(contract.capabilities).toContain('open-files-source-refs');
-    expect(contract.source_contract).toMatchObject({
-      owner: 'open-files',
-      preferred_ref: 'open-files',
-      raw_source_bytes_stored_in_open_knowledge: false,
-    });
-    expect(contract.artifact_contract.generated_only).toBe(true);
+      let error: unknown;
+      try {
+        createKnowledgeService({ scope: 'project', cwd: dir, env: {} } as never);
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error).toBeInstanceOf(KnowledgeContainmentError);
+      expect(error).toMatchObject({ code: 'KNOWLEDGE_CONFIG_INVALID', status: 503 });
+      if (kind === 'symlink') expect(readFileSync(target, 'utf8')).toBe(original);
+      if (kind === 'broken-symlink') expect(existsSync(target)).toBe(false);
+      expect(existsSync(workspace.artifactsDir)).toBe(false);
+    }
+  });
 
-    const run = normalizeRemoteKnowledgeRunContract({
-      id: 'run_remote',
-      status: 'completed',
-      output_preview: 'answer',
-      citations: [{ source_uri: 'open-files://file/f_1' }],
-      duration_ms: 12,
-    }, { type: 'ask', prompt: 'What is known?' });
-    expect(run).toMatchObject({
-      contract_version: REMOTE_KNOWLEDGE_CONTRACT_VERSION,
-      id: 'run_remote',
-      type: 'ask',
-      status: 'completed',
-      prompt: 'What is known?',
-      duration_ms: 12,
-    });
+  test('a symlinked Knowledge workspace parent is rejected before following its config', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'knowledge-config-parent-symlink-'));
+    const outside = join(dir, 'outside');
+    const hasna = join(dir, '.hasna');
+    const linkedHome = join(hasna, 'knowledge');
+    mkdirSync(outside, { recursive: true });
+    mkdirSync(hasna, { recursive: true });
+    const original = `${JSON.stringify(defaultKnowledgeConfig())}\n`;
+    writeFileSync(join(outside, 'config.json'), original);
+    symlinkSync(outside, linkedHome);
 
-    expect(normalizeKnowledgeApiOrigin('https://knowledge.example.com/api/v1')).toBe('https://knowledge.example.com');
-    expect(() => normalizeKnowledgeApiOrigin('ftp://knowledge.example.com')).toThrow('http or https');
+    let error: unknown;
+    try {
+      createKnowledgeService({ scope: 'project', cwd: dir, env: {} } as never);
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(KnowledgeContainmentError);
+    expect(error).toMatchObject({ code: 'KNOWLEDGE_CONFIG_INVALID', status: 503 });
+    expect(readFileSync(join(outside, 'config.json'), 'utf8')).toBe(original);
+    expect(existsSync(join(outside, 'artifacts'))).toBe(false);
+  });
+
+  test('config writes reject traversal and untrusted destinations without clobbering', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'knowledge-config-traversal-'));
+    const victimDir = join(dir, '.hasna', 'victim');
+    const victim = join(victimDir, 'config.json');
+    mkdirSync(victimDir, { recursive: true });
+    writeFileSync(victim, 'unchanged\n');
+    const traversal = join(dir, '.hasna', 'knowledge', '..', 'victim', 'config.json');
+
+    let error: unknown;
+    try {
+      writeKnowledgeConfig(traversal, defaultKnowledgeConfig());
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(KnowledgeContainmentError);
+    expect(error).toMatchObject({ code: 'KNOWLEDGE_CONFIG_INVALID', status: 503 });
+    expect(readFileSync(victim, 'utf8')).toBe('unchanged\n');
+    expect(existsSync(join(dir, '.hasna', 'knowledge'))).toBe(false);
+  });
+
+  test('auth-file operations are contained even from a local service', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'knowledge-auth-contained-'));
+    const service = createKnowledgeService({ scope: 'project', cwd: dir, env: {} } as never);
+    expect(() => service.authStatus({})).toThrow('KNOWLEDGE_HOSTED_CONTAINED');
+    expect(existsSync(join(dir, '.hasna'))).toBe(false);
   });
 });

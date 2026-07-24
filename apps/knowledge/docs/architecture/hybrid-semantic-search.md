@@ -69,9 +69,10 @@ lower-level vector-only command. MCP exposes the agent-facing path through
 tools for `ok_search`, embeddings, and reindexing. Deterministic `--fake`
 embeddings exist for tests and offline verification only.
 
-## Hosted Indexes
+## Future Hosted Indexes
 
-Hosted mode may use:
+A future hosted wrapper may use the following backends; Stage A does not
+construct or access them:
 
 - Postgres plus pgvector for sources/chunks/wiki/runs.
 - Managed vector stores for large corpora.
@@ -161,11 +162,11 @@ outline. `knowledge proposals context --from loops --topic <text>` uses the same
 schema over `runs`/`run_events` so proposal loops can cite prior evidence and
 duplicate candidates without embedding raw artifact bodies.
 
-Provider-native web search lives beside local retrieval. `knowledge web
-search` and MCP `knowledge_web_search` are safety-gated, capture provider
-sources, and can file snippets as read-only `web` source refs so later local
-retrieval treats them like other cited sources. The lower-level `ok_web_search`
-tool remains for compatibility.
+The base-compatible `knowledge web search`, MCP `knowledge_web_search`, and
+lower-level `ok_web_search` schemas remain available as metadata. Their
+execution paths, including fake mode and result filing, are unavailable during
+Stage A and return typed containment before reading arguments, provider
+configuration, environment settings, or workspace state.
 
 ## Reindexing
 

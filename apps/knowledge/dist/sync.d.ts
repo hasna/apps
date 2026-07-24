@@ -1,8 +1,26 @@
-import type { Database } from 'bun:sqlite';
-import { CURRENT_SCHEMA_VERSION } from './knowledge-db';
 import { type StorageContract } from './storage-contract';
 import { type ArtifactStore } from './artifact-store';
 import type { KnowledgeMachineRouteResolution, KnowledgeMachineTopology, KnowledgeMachineWorkspaceResolution } from './machines';
+interface SyncDatabaseChanges {
+    readonly changes: number;
+    readonly lastInsertRowid: number | bigint;
+}
+interface SyncDatabaseStatement<Row = unknown, Params extends unknown[] = unknown[]> {
+    all(...params: Params): Row[];
+    get(...params: Params): Row | null;
+    run(...params: Params): SyncDatabaseChanges;
+    values(...params: Params): unknown[][];
+}
+/** Self-contained structural surface retained for the public sync declaration. */
+interface Database {
+    readonly inTransaction: boolean;
+    run(sql: string, ...bindings: unknown[]): SyncDatabaseChanges;
+    exec(sql: string, ...bindings: unknown[]): SyncDatabaseChanges;
+    query<Row = unknown, Params extends unknown | unknown[] = unknown[]>(sql: string): SyncDatabaseStatement<Row, Params extends unknown[] ? Params : [Params]>;
+    prepare<Row = unknown, Params extends unknown | unknown[] = unknown[]>(sql: string, params?: Params): SyncDatabaseStatement<Row, Params extends unknown[] ? Params : [Params]>;
+    transaction<Args extends unknown[], Result>(callback: (...args: Args) => Result): (...args: Args) => Result;
+    close(throwOnError?: boolean): void;
+}
 export interface KnowledgeSyncMachineRow {
     machine_id: string;
     hostname: string | null;
@@ -392,4 +410,5 @@ export declare function syncArtifactsFromSnapshot(snapshot: KnowledgeSyncSnapsho
     hash: string | null;
     size_bytes: number | null;
 }>;
-export { CURRENT_SCHEMA_VERSION as KNOWLEDGE_SYNC_SCHEMA_VERSION };
+export declare const KNOWLEDGE_SYNC_SCHEMA_VERSION = 8;
+export {};

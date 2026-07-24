@@ -25,9 +25,10 @@ stay together.
 knowledge app-wiki source add file:///absolute/path/to/spec.md --scope project --json
 ```
 
-Prefer `open-files://...` refs in production. File, S3, and web refs are useful
-for local smoke tests, but raw source ownership still belongs outside
-`open-knowledge`.
+Prefer `open-files://...` refs for durable source identity. Stage A may ingest
+only an anchored local `file://` ref; S3 and web refs remain opaque metadata and
+are rejected before provider, credential, network, database, or workspace
+activity. Raw source ownership remains outside `knowledge`.
 
 ## 3. Add A Scoped Note
 

@@ -1,5 +1,7 @@
 import { KnowledgeService, type KnowledgeServiceOptions } from './service.js';
-export type KnowledgeClientOptions = KnowledgeServiceOptions;
+export interface KnowledgeClientOptions extends KnowledgeServiceOptions {
+    allowGlobal?: boolean;
+}
 export type KnowledgeSetupOptions = Parameters<KnowledgeService['setup']>[0];
 export type KnowledgeAuthInput = Parameters<KnowledgeService['saveAuth']>[0];
 export type KnowledgeAskOptions = Omit<Parameters<KnowledgeService['runPrompt']>[0], 'prompt'>;

@@ -1,161 +1,125 @@
 import { describe, expect, test } from 'bun:test';
 import {
   KIT_VERSION,
-  createKnowledgeCloudClient,
-  defineMigration,
-  normalizeCloudStorageMode,
   MigrationLedger,
-  resolveTlsConfig,
+  checkHealth,
+  checkReady,
+  createCloudPoolFromEnv,
+  createMigrationLedger,
+  createPgPool,
+  createQueryClient,
+  defineMigration,
+  getStorageDatabaseUrl,
+  normalizeCloudStorageMode,
+  resolveDatabaseUrl,
   resolveStorageMode,
+  resolveTlsConfig,
   storageEnvKeys,
   wrapExecutor,
   type TypedQueryClient,
-  type PgExecutor,
 } from '../src/storage';
+import { KnowledgeContainmentError } from '../src/runtime-role';
 
-/**
- * A tiny in-memory executor shim so the kit's typed query surface can be
- * exercised without a live Postgres. Mirrors the shape pg.Pool returns.
- */
-class FakeExecutor implements PgExecutor {
-  constructor(private readonly rows: Record<string, unknown>[]) {}
-  async query<T>(_sql: string, _params?: readonly unknown[]): Promise<{ rows: T[]; rowCount: number | null }> {
-    return { rows: this.rows as unknown as T[], rowCount: this.rows.length };
+async function expectPublicStorageContained(operation: () => unknown): Promise<void> {
+  try {
+    await Promise.resolve().then(operation);
+    throw new Error('expected public storage containment');
+  } catch (error) {
+    expect(error).toBeInstanceOf(KnowledgeContainmentError);
+    expect((error as KnowledgeContainmentError).status).toBe(503);
+    expect((error as KnowledgeContainmentError).code).toBe('KNOWLEDGE_HOSTED_CONTAINED');
   }
 }
 
-class FakeMigrationClient implements TypedQueryClient {
-  readonly executed: string[] = [];
-  transactionCount = 0;
-
-  async query<T>(): Promise<{ rows: T[]; rowCount: number }> {
-    return { rows: [], rowCount: 0 };
-  }
-
-  async many<T>(): Promise<T[]> {
-    return [];
-  }
-
-  async get<T>(): Promise<T | null> {
-    return null;
-  }
-
-  async one<T>(): Promise<T> {
-    throw new Error('No rows');
-  }
-
-  async execute(sql: string): Promise<void> {
-    this.executed.push(sql);
-  }
-
-  async transaction<T>(fn: (client: TypedQueryClient) => Promise<T>): Promise<T> {
-    this.transactionCount += 1;
-    this.executed.push('BEGIN');
-    try {
-      const result = await fn(this);
-      this.executed.push('COMMIT');
-      return result;
-    } catch (error) {
-      this.executed.push('ROLLBACK');
-      throw error;
-    }
-  }
+function hostile(reads: { count: number }): object {
+  return new Proxy({}, {
+    get() {
+      reads.count += 1;
+      throw new Error('storage argument getter tripwire');
+    },
+    ownKeys() {
+      reads.count += 1;
+      throw new Error('storage argument enumeration tripwire');
+    },
+  });
 }
 
-describe('vendored cloud storage kit surface', () => {
-  test('exposes a stamped kit version', () => {
-    expect(KIT_VERSION).toMatch(/^\d+\.\d+\.\d+/);
+describe('public cloud storage compatibility surface', () => {
+  test('exposes the exact base kit version and no runtime migration SQL', () => {
+    expect(KIT_VERSION).toBe('0.4.0');
+    const migration = defineMigration('synthetic-id', 'synthetic-sql-sentinel');
+    expect(migration as unknown).toEqual({});
+    expect(JSON.stringify(migration)).not.toContain('synthetic-sql-sentinel');
   });
 
-  test('restores the dropped single-row get() helper', async () => {
-    const populated = wrapExecutor(new FakeExecutor([{ id: 'a' }, { id: 'b' }]));
-    expect(await populated.get<{ id: string }>('SELECT ...')).toEqual({ id: 'a' });
-
-    const empty = wrapExecutor(new FakeExecutor([]));
-    expect(await empty.get('SELECT ...')).toBeNull();
+  test('executor wrapper itself is a zero-I/O containment stub', async () => {
+    const reads = { count: 0 };
+    await expectPublicStorageContained(() => wrapExecutor(hostile(reads) as never));
+    expect(reads.count).toBe(0);
   });
 
-  test('one() enforces exactly-one-row semantics', async () => {
-    const single = wrapExecutor(new FakeExecutor([{ id: 'only' }]));
-    expect(await single.one<{ id: string }>('SELECT ...')).toEqual({ id: 'only' });
-    const empty = wrapExecutor(new FakeExecutor([]));
-    await expect(empty.one('SELECT ...')).rejects.toThrow('exactly one row');
-  });
-
-  test('resolves the canonical HASNA_KNOWLEDGE_* env contract', () => {
-    const keys = storageEnvKeys('knowledge');
-    expect(keys.modeKeys[0]).toBe('HASNA_KNOWLEDGE_STORAGE_MODE');
-    expect(keys.databaseUrlKeys[0]).toBe('HASNA_KNOWLEDGE_DATABASE_URL');
-
-    expect(resolveStorageMode('knowledge', {}).mode).toBe('local');
-    expect(
-      resolveStorageMode('knowledge', {
-        HASNA_KNOWLEDGE_STORAGE_MODE: 'cloud',
-        HASNA_KNOWLEDGE_DATABASE_URL: 'postgres://x/y',
-      }).mode,
-    ).toBe('cloud');
-  });
-
-  test('maps sslmode prefer and allow to encrypted pg connections', () => {
-    const env = {};
-    expect(resolveTlsConfig('postgres://user:pass@example.test/db', { env })).toBeUndefined();
-    expect(resolveTlsConfig('postgres://user:pass@example.test/db?sslmode=disable', { env })).toBeUndefined();
-    expect(resolveTlsConfig('postgres://user:pass@example.test/db?sslmode=prefer', { env })).toEqual({
-      rejectUnauthorized: false,
-    });
-    expect(resolveTlsConfig('postgres://user:pass@example.test/db?sslmode=allow', { env })).toEqual({
-      rejectUnauthorized: false,
-    });
-    expect(resolveTlsConfig('postgres://user:pass@example.test/db?sslmode=require', { env })).toEqual({
-      rejectUnauthorized: false,
-    });
-    expect(() => resolveTlsConfig('postgres://user:pass@example.test/db?sslmode=verify-full', { env })).toThrow(
-      'requires a CA bundle',
-    );
-  });
-
-  test('applies migration SQL and ledger writes in one transaction', async () => {
-    const client = new FakeMigrationClient();
-    const ledger = new MigrationLedger(client, [
-      defineMigration('001_init', 'CREATE TABLE example (id TEXT PRIMARY KEY)'),
-    ]);
-
-    await ledger.migrate();
-
-    expect(client.transactionCount).toBe(1);
-    expect(client.executed).toEqual([
-      expect.stringContaining('CREATE TABLE IF NOT EXISTS schema_migrations'),
-      'BEGIN',
-      'CREATE TABLE example (id TEXT PRIMARY KEY)',
-      expect.stringContaining('INSERT INTO schema_migrations'),
-      'COMMIT',
-    ]);
-  });
-
-  test('normalizes deprecated aliases to cloud', () => {
-    expect(normalizeCloudStorageMode('remote').mode).toBe('cloud');
-    expect(normalizeCloudStorageMode('hybrid').mode).toBe('cloud');
-    expect(normalizeCloudStorageMode('self_hosted').mode).toBe('cloud');
-    expect(normalizeCloudStorageMode('local').mode).toBe('local');
-  });
-
-  test('createKnowledgeCloudClient refuses non-cloud mode without leaking the URL', () => {
-    const priorMode = process.env.HASNA_KNOWLEDGE_STORAGE_MODE;
-    const priorUrl = process.env.HASNA_KNOWLEDGE_DATABASE_URL;
-    try {
-      delete process.env.HASNA_KNOWLEDGE_STORAGE_MODE;
-      process.env.HASNA_KNOWLEDGE_DATABASE_URL = 'postgres://secret:secret@host/db';
-      expect(() => createKnowledgeCloudClient()).toThrow(/storage mode 'cloud'/);
-      try {
-        createKnowledgeCloudClient();
-      } catch (error) {
-        expect(String(error)).not.toContain('secret');
-      }
-    } finally {
-      if (priorMode === undefined) delete process.env.HASNA_KNOWLEDGE_STORAGE_MODE;
-      else process.env.HASNA_KNOWLEDGE_STORAGE_MODE = priorMode;
-      if (priorUrl === undefined) delete process.env.HASNA_KNOWLEDGE_DATABASE_URL;
-      else process.env.HASNA_KNOWLEDGE_DATABASE_URL = priorUrl;
+  test('migration ledger retains every base method but never touches its inputs', async () => {
+    const reads = { count: 0 };
+    const client = hostile(reads) as TypedQueryClient;
+    const migration = defineMigration('synthetic-id', 'synthetic-sql-sentinel');
+    for (const ledger of [
+      new MigrationLedger(client, [migration]),
+      createMigrationLedger(client, [migration]),
+    ]) {
+      const internals = ledger as unknown as {
+        readApplied(): Promise<unknown>;
+        buildPlan(input: unknown): unknown;
+        applyPendingMigration(input: unknown): Promise<unknown>;
+      };
+      for (const operation of [
+        () => ledger.ensureLedger(),
+        () => internals.readApplied(),
+        () => ledger.listApplied(),
+        () => internals.buildPlan([]),
+        () => internals.applyPendingMigration(migration),
+        () => ledger.migrate(),
+      ]) await expectPublicStorageContained(operation);
     }
+    expect(reads.count).toBe(0);
+  });
+
+  test('capability helper names fail before hostile argument inspection', async () => {
+    for (const helper of [
+      storageEnvKeys,
+      resolveStorageMode,
+      resolveTlsConfig,
+      normalizeCloudStorageMode,
+      createPgPool,
+      createCloudPoolFromEnv,
+      createQueryClient,
+      checkHealth,
+    ] as Array<(value: never) => unknown>) {
+      const reads = { count: 0 };
+      await expectPublicStorageContained(() => helper(hostile(reads) as never));
+      expect(reads.count).toBe(0);
+    }
+    const reads = { count: 0 };
+    await expectPublicStorageContained(() => checkReady(
+      hostile(reads) as never,
+      hostile(reads) as never,
+    ));
+    expect(reads.count).toBe(0);
+  });
+
+  test('DSN helpers are fixed zero-read containment metadata stubs', () => {
+    const env = { HASNA_KNOWLEDGE_DATABASE_URL: 'synthetic-presence-value' };
+    expect((getStorageDatabaseUrl as unknown as (env: unknown) => string | null)(env)).toBeNull();
+    expect(resolveDatabaseUrl('knowledge', env)).toBeNull();
+    expect((getStorageDatabaseUrl as unknown as (env: unknown) => string | null)({})).toBeNull();
+    expect(resolveDatabaseUrl('knowledge', {})).toBeNull();
+    let reads = 0;
+    const hostileEnv = new Proxy({}, {
+      get() { reads += 1; throw new Error('env get tripwire'); },
+      getOwnPropertyDescriptor() { reads += 1; throw new Error('env descriptor tripwire'); },
+      getPrototypeOf() { reads += 1; throw new Error('env prototype tripwire'); },
+    });
+    expect((getStorageDatabaseUrl as unknown as (env: unknown) => string | null)(hostileEnv)).toBeNull();
+    expect(resolveDatabaseUrl('knowledge', hostileEnv)).toBeNull();
+    expect(reads).toBe(0);
   });
 });
