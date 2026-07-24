@@ -52,6 +52,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ai", "llm", "google"],
   },
   {
+    name: "vertex-ai",
+    displayName: "Vertex AI",
+    description: "Google Cloud Vertex AI — Gemini, embeddings, and custom endpoints",
+    category: "AI & ML",
+    tags: ["google", "ai", "vertex", "gemini"],
+  },
+  {
     name: "huggingface",
     displayName: "Hugging Face",
     description: "ML models and datasets hub",

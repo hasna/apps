@@ -1,0 +1,53 @@
+{
+  "name": "@hasna/connect-vertex-ai",
+  "version": "0.0.1",
+  "description": "Google Cloud Vertex AI connector — Gemini, embeddings, prediction, and custom endpoints",
+  "type": "module",
+  "bin": {
+    "connect-vertex-ai": "./bin/index.js"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/cli/index.ts --outdir ./bin --target bun",
+    "dev": "bun run ./src/cli/index.ts",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "bun run build"
+  },
+  "keywords": [
+    "vertex-ai",
+    "google-cloud",
+    "gemini",
+    "ai",
+    "ml",
+    "connector",
+    "cli",
+    "typescript",
+    "bun",
+    "oauth2",
+    "hasna"
+  ],
+  "author": "Hasna",
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/open-connectors.git"
+  }
+}

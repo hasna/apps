@@ -65,6 +65,11 @@ const GOOGLE_SCOPES: Record<string, string> = {
     "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/userinfo.profile",
   ].join(" "),
+  "vertex-ai": [
+    "https://www.googleapis.com/auth/cloud-platform",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
+  ].join(" "),
 };
 
 export type AuthType = "oauth" | "apikey" | "bearer";
