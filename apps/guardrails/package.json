@@ -6,7 +6,14 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/hasna/open-guardrails.git"
+    "url": "https://github.com/hasna/guardrails.git"
+  },
+  "homepage": "https://github.com/hasna/guardrails#readme",
+  "bugs": {
+    "url": "https://github.com/hasna/guardrails/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "bin": {
     "guardrails": "dist/cli/index.js",
