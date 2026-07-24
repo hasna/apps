@@ -21794,6 +21794,7 @@ function assertLocalCatalogMode(operation = "catalog") {
     throw new Error(`knowledge: ${operation} builds/reads the on-box sqlite RAG catalog (source ingestion, chunk embeddings, ` + `wiki compilation, cross-machine sync, machine registry). That local indexing pipeline is not available while ` + `the cloud API flip is active (HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY set). In cloud mode the shared ` + `corpus is the cloud knowledge-items: 'add/list/get/update/delete' item commands AND 'search/ask/build/context' ` + `over that shared corpus all route to the cloud. Unset the API env to use the full local catalog pipeline.`);
   }
 }
+var CHUNKS_FTS_TOKENIZE = "porter unicode61 remove_diacritics 2";
 var MIGRATION_1 = `
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
@@ -22188,6 +22189,32 @@ CREATE INDEX IF NOT EXISTS idx_wiki_pages_superseded_by ON wiki_pages(superseded
 INSERT OR IGNORE INTO schema_versions(version, applied_at)
 VALUES (8, datetime('now'));
 `;
+var MIGRATION_9_REBUILD_FTS = `
+BEGIN;
+
+CREATE TEMP TABLE _chunks_fts_backup AS
+  SELECT chunk_id, text, title, source_uri FROM chunks_fts;
+
+DROP TABLE chunks_fts;
+
+CREATE VIRTUAL TABLE chunks_fts USING fts5(
+  chunk_id UNINDEXED,
+  text,
+  title,
+  source_uri,
+  tokenize='${CHUNKS_FTS_TOKENIZE}'
+);
+
+INSERT INTO chunks_fts (chunk_id, text, title, source_uri)
+  SELECT chunk_id, text, title, source_uri FROM _chunks_fts_backup;
+
+DROP TABLE _chunks_fts_backup;
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (9, datetime('now'));
+
+COMMIT;
+`;
 function openKnowledgeDb(path) {
   assertLocalCatalogMode("opening the local knowledge.db catalog");
   ensureParentDir(path);
@@ -22218,6 +22245,8 @@ function migrateKnowledgeDb(path) {
       applyMigration7(db);
     if (needsMigration8(db))
       applyMigration8(db);
+    if (needsMigration9(db))
+      applyMigration9(db);
     return { path, schema_version: getSchemaVersion(db) };
   } finally {
     db.close();
@@ -22279,6 +22308,24 @@ function applyMigration8(db) {
     WHERE valid_from IS NULL OR last_verified_at IS NULL OR confidence IS NULL;
   `);
   db.exec(MIGRATION_8_TABLES_AND_INDEXES);
+}
+function ftsUsesDiacriticFolding(db) {
+  const row = db.query("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get("chunks_fts");
+  return Boolean(row?.sql && row.sql.includes("remove_diacritics"));
+}
+function needsMigration9(db) {
+  if (!tableExists(db, "chunks_fts"))
+    return false;
+  return getSchemaVersion(db) < 9 || !ftsUsesDiacriticFolding(db);
+}
+function applyMigration9(db) {
+  if (!tableExists(db, "chunks_fts"))
+    return;
+  if (ftsUsesDiacriticFolding(db)) {
+    db.exec("INSERT OR IGNORE INTO schema_versions(version, applied_at) VALUES (9, datetime('now'));");
+    return;
+  }
+  db.exec(MIGRATION_9_REBUILD_FTS);
 }
 function getKnowledgeDbStats(path) {
   const db = openKnowledgeDb(path);
@@ -25378,10 +25425,94 @@ function queryTerms(query) {
   const terms = query.normalize("NFKC").toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [];
   return unique(terms.filter((term) => term.length > 0)).slice(0, 16);
 }
-function ftsQueryForTerms(terms) {
-  if (terms.length === 0)
-    return null;
-  return terms.map((term) => `${term}*`).join(" OR ");
+function normalizeWords(raw) {
+  return raw.normalize("NFKC").toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [];
+}
+function parseSearchQuery(query) {
+  const tokens = [];
+  const segment = /"([^"]*)"|(\S+)/g;
+  let match;
+  let pendingNegate = false;
+  while ((match = segment.exec(query)) !== null) {
+    if (match[1] !== undefined) {
+      const words2 = normalizeWords(match[1]);
+      if (words2.length > 0) {
+        tokens.push({ type: "phrase", value: words2.join(" "), negate: pendingNegate, prefix: false });
+      }
+      pendingNegate = false;
+      continue;
+    }
+    let raw = match[2] ?? "";
+    if (raw === "OR" || raw === "||" || raw === "|") {
+      tokens.push({ type: "or", value: "", negate: false, prefix: false });
+      continue;
+    }
+    if (raw === "AND" || raw === "&&")
+      continue;
+    if (raw === "NOT") {
+      pendingNegate = true;
+      continue;
+    }
+    let negate = pendingNegate;
+    pendingNegate = false;
+    if (raw.startsWith("-") && raw.length > 1) {
+      negate = true;
+      raw = raw.slice(1);
+    }
+    let prefix = false;
+    if (raw.endsWith("*")) {
+      prefix = true;
+      raw = raw.slice(0, -1);
+    }
+    const words = normalizeWords(raw);
+    if (words.length === 0)
+      continue;
+    tokens.push({
+      type: words.length > 1 ? "phrase" : "term",
+      value: words.join(" "),
+      negate,
+      prefix
+    });
+  }
+  return tokens.slice(0, 24);
+}
+function tokenToFragment(token) {
+  if (token.type === "phrase")
+    return `"${token.value}"`;
+  return `"${token.value}"*`;
+}
+function buildFtsMatch(query) {
+  const tokens = parseSearchQuery(query);
+  const positives = tokens.filter((t) => t.type !== "or" && !t.negate);
+  if (positives.length === 0)
+    return { and: null, or: null };
+  const compose = (defaultOp) => {
+    let expr = "";
+    let pendingOr = false;
+    const negations = [];
+    for (const token of tokens) {
+      if (token.type === "or") {
+        pendingOr = true;
+        continue;
+      }
+      const fragment = tokenToFragment(token);
+      if (token.negate) {
+        negations.push(fragment);
+        continue;
+      }
+      if (expr.length === 0)
+        expr = fragment;
+      else
+        expr = pendingOr ? `${expr} OR ${fragment}` : `${expr} ${defaultOp} ${fragment}`;
+      pendingOr = false;
+    }
+    for (const negation of negations)
+      expr = `(${expr}) NOT ${negation}`;
+    return expr.length > 0 ? expr : null;
+  };
+  const and = compose("AND");
+  const or = compose("OR");
+  return { and, or: or !== and ? or : null };
 }
 function escapeLikeTerm(term) {
   return term.replace(/[\\%_]/g, (char) => `\\${char}`);
@@ -25443,6 +25574,13 @@ function provenanceForChunk2(row) {
 function selectFtsChunks(db, ftsQuery, limit) {
   if (!ftsQuery)
     return [];
+  try {
+    return runFtsChunkQuery(db, ftsQuery, limit);
+  } catch {
+    return [];
+  }
+}
+function runFtsChunkQuery(db, ftsQuery, limit) {
   return db.query(`SELECT
        chunks_fts.chunk_id,
        c.kind AS chunk_kind,
@@ -25464,7 +25602,7 @@ function selectFtsChunks(db, ftsQuery, limit) {
        wp.content_hash AS wiki_content_hash,
        wp.status AS wiki_status,
        wp.metadata_json AS wiki_metadata_json,
-       bm25(chunks_fts) AS rank
+       bm25(chunks_fts, 0.0, 1.0, 5.0, 3.0) AS rank
      FROM chunks_fts
      JOIN chunks c ON c.id = chunks_fts.chunk_id
      LEFT JOIN source_revisions sr ON sr.id = c.source_revision_id
@@ -25677,8 +25815,10 @@ async function hybridSearch(options) {
   if (!query)
     throw new Error("Search query is required.");
   const limit = Math.max(1, Math.min(options.limit ?? 10, 100));
+  const offset = Math.max(0, Math.floor(options.offset ?? 0));
+  const window = offset + limit;
   const terms = queryTerms(query);
-  const ftsQuery = ftsQueryForTerms(terms);
+  const ftsMatch = buildFtsMatch(query);
   const semanticEnabled = options.semantic === true || options.fake === true || Boolean(options.modelRef);
   const warnings = [];
   let semanticProvider = null;
@@ -25691,12 +25831,16 @@ async function hybridSearch(options) {
   migrateKnowledgeDb(options.dbPath);
   const db = openKnowledgeDb(options.dbPath);
   try {
-    const ftsRows = selectFtsChunks(db, ftsQuery, Math.max(limit * 3, 20));
+    const ftsDepth = Math.max(window * 3, 20);
+    let ftsRows = selectFtsChunks(db, ftsMatch.and, ftsDepth);
+    if (ftsRows.length === 0 && ftsMatch.or) {
+      ftsRows = selectFtsChunks(db, ftsMatch.or, ftsDepth);
+    }
     keywordCount = ftsRows.length;
     ftsRows.forEach((row, index) => mergeResult(merged, chunkResult(row, scoreFromRank(row.rank, index))));
-    const wikiRows = selectWikiPages(db, terms, Math.max(limit, 10));
-    const indexRows = selectKnowledgeIndexes(db, terms, Math.max(limit, 10));
-    const legacyRows = selectLegacyItems(options.legacyStorePath, terms, Math.max(limit, 10));
+    const wikiRows = selectWikiPages(db, terms, Math.max(window, 10));
+    const indexRows = selectKnowledgeIndexes(db, terms, Math.max(window, 10));
+    const legacyRows = selectLegacyItems(options.legacyStorePath, terms, Math.max(window, 10));
     catalogCount = wikiRows.length + indexRows.length;
     keywordCount += legacyRows.length;
     legacyRows.forEach(({ item, score }) => mergeResult(merged, legacyItemResult(item, score)));
@@ -25710,7 +25854,7 @@ async function hybridSearch(options) {
       const semantic = await searchVectorIndex({
         dbPath: options.dbPath,
         query,
-        limit: Math.max(limit * 3, 20),
+        limit: Math.max(window * 3, 20),
         config: options.config,
         env: options.env,
         modelRef: options.modelRef,
@@ -25754,10 +25898,12 @@ async function hybridSearch(options) {
       warnings.push(`semantic_search_failed: ${error51 instanceof Error ? error51.message : String(error51)}`);
     }
   }
-  const results = sortResults(Array.from(merged.values())).slice(0, limit);
+  const ranked = sortResults(Array.from(merged.values()));
+  const results = ranked.slice(offset, offset + limit);
   return {
     query,
     limit,
+    offset,
     mode: {
       keyword: true,
       catalog: true,
@@ -25784,18 +25930,20 @@ async function hybridSearchItems(items, options, baseWarnings = []) {
   if (!query)
     throw new Error("Search query is required.");
   const limit = Math.max(1, Math.min(options.limit ?? 10, 100));
+  const offset = Math.max(0, Math.floor(options.offset ?? 0));
   const terms = queryTerms(query);
   const semanticEnabled = options.semantic === true || options.fake === true || Boolean(options.modelRef);
   const merged = new Map;
-  const itemRows = selectItems(items, terms, Math.max(limit, 10));
+  const itemRows = selectItems(items, terms, Math.max(offset + limit, 10));
   itemRows.forEach(({ item, score }) => mergeResult(merged, legacyItemResult(item, score)));
   const warnings = [...baseWarnings];
   if (semanticEnabled)
     warnings.push("semantic_search_requires_local_catalog");
-  const results = sortResults(Array.from(merged.values())).slice(0, limit);
+  const results = sortResults(Array.from(merged.values())).slice(offset, offset + limit);
   return {
     query,
     limit,
+    offset,
     mode: {
       keyword: true,
       catalog: true,
@@ -33025,6 +33173,7 @@ function emptySearchResult(query, limit, semantic = false) {
   return {
     query,
     limit,
+    offset: 0,
     mode: {
       keyword: true,
       catalog: true,

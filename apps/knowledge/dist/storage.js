@@ -6722,7 +6722,8 @@ function assertLocalCatalogMode(operation = "catalog") {
     throw new Error(`knowledge: ${operation} builds/reads the on-box sqlite RAG catalog (source ingestion, chunk embeddings, ` + `wiki compilation, cross-machine sync, machine registry). That local indexing pipeline is not available while ` + `the cloud API flip is active (HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY set). In cloud mode the shared ` + `corpus is the cloud knowledge-items: 'add/list/get/update/delete' item commands AND 'search/ask/build/context' ` + `over that shared corpus all route to the cloud. Unset the API env to use the full local catalog pipeline.`);
   }
 }
-var CURRENT_SCHEMA_VERSION = 8;
+var CURRENT_SCHEMA_VERSION = 9;
+var CHUNKS_FTS_TOKENIZE = "porter unicode61 remove_diacritics 2";
 var MIGRATION_1 = `
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
@@ -7117,6 +7118,32 @@ CREATE INDEX IF NOT EXISTS idx_wiki_pages_superseded_by ON wiki_pages(superseded
 INSERT OR IGNORE INTO schema_versions(version, applied_at)
 VALUES (8, datetime('now'));
 `;
+var MIGRATION_9_REBUILD_FTS = `
+BEGIN;
+
+CREATE TEMP TABLE _chunks_fts_backup AS
+  SELECT chunk_id, text, title, source_uri FROM chunks_fts;
+
+DROP TABLE chunks_fts;
+
+CREATE VIRTUAL TABLE chunks_fts USING fts5(
+  chunk_id UNINDEXED,
+  text,
+  title,
+  source_uri,
+  tokenize='${CHUNKS_FTS_TOKENIZE}'
+);
+
+INSERT INTO chunks_fts (chunk_id, text, title, source_uri)
+  SELECT chunk_id, text, title, source_uri FROM _chunks_fts_backup;
+
+DROP TABLE _chunks_fts_backup;
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (9, datetime('now'));
+
+COMMIT;
+`;
 function openKnowledgeDb(path) {
   assertLocalCatalogMode("opening the local knowledge.db catalog");
   ensureParentDir(path);
@@ -7147,6 +7174,8 @@ function migrateKnowledgeDb(path) {
       applyMigration7(db);
     if (needsMigration8(db))
       applyMigration8(db);
+    if (needsMigration9(db))
+      applyMigration9(db);
     return { path, schema_version: getSchemaVersion(db) };
   } finally {
     db.close();
@@ -7208,6 +7237,24 @@ function applyMigration8(db) {
     WHERE valid_from IS NULL OR last_verified_at IS NULL OR confidence IS NULL;
   `);
   db.exec(MIGRATION_8_TABLES_AND_INDEXES);
+}
+function ftsUsesDiacriticFolding(db) {
+  const row = db.query("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get("chunks_fts");
+  return Boolean(row?.sql && row.sql.includes("remove_diacritics"));
+}
+function needsMigration9(db) {
+  if (!tableExists(db, "chunks_fts"))
+    return false;
+  return getSchemaVersion(db) < 9 || !ftsUsesDiacriticFolding(db);
+}
+function applyMigration9(db) {
+  if (!tableExists(db, "chunks_fts"))
+    return;
+  if (ftsUsesDiacriticFolding(db)) {
+    db.exec("INSERT OR IGNORE INTO schema_versions(version, applied_at) VALUES (9, datetime('now'));");
+    return;
+  }
+  db.exec(MIGRATION_9_REBUILD_FTS);
 }
 function getKnowledgeDbStats(path) {
   const db = openKnowledgeDb(path);

@@ -110,7 +110,7 @@ function createSchema7KnowledgeDb(dbPath: string): void {
       FROM wiki_pages;
       DROP TABLE wiki_pages;
       ALTER TABLE wiki_pages_v7 RENAME TO wiki_pages;
-      DELETE FROM schema_versions WHERE version = 8;
+      DELETE FROM schema_versions WHERE version >= 8;
       PRAGMA foreign_keys = ON;
     `);
   } finally {
@@ -1372,13 +1372,13 @@ describe('knowledge cli', () => {
     const init = runCli(['db', 'init', '--scope', 'project', '--json'], dir);
     expect(init.exitCode).toBe(0);
     const initOut = JSON.parse(new TextDecoder().decode(init.stdout));
-    expect(initOut.schema_version).toBe(8);
+    expect(initOut.schema_version).toBe(9);
     expect(existsSync(join(dir, '.hasna', 'knowledge', 'knowledge.db'))).toBe(true);
 
     const stats = runCli(['db', 'stats', '--scope', 'project', '--json'], dir);
     expect(stats.exitCode).toBe(0);
     const statsOut = JSON.parse(new TextDecoder().decode(stats.stdout));
-    expect(statsOut.schema_version).toBe(8);
+    expect(statsOut.schema_version).toBe(9);
     expect(statsOut.sources).toBe(0);
     expect(statsOut.runs).toBe(0);
 
@@ -1404,7 +1404,7 @@ describe('knowledge cli', () => {
     expect(init.exitCode).toBe(0);
     const initOut = JSON.parse(new TextDecoder().decode(init.stdout));
     expect(initOut.ok).toBe(true);
-    expect(initOut.schema_version).toBe(8);
+    expect(initOut.schema_version).toBe(9);
 
     const stats = runCli(['db', 'stats', '--scope', 'global', '--json'], dir, {
       HOME: home,
@@ -1412,7 +1412,7 @@ describe('knowledge cli', () => {
     });
     expect(stats.exitCode).toBe(0);
     const statsOut = JSON.parse(new TextDecoder().decode(stats.stdout));
-    expect(statsOut.schema_version).toBe(8);
+    expect(statsOut.schema_version).toBe(9);
 
     const db = openKnowledgeDb(dbPath);
     try {
@@ -1446,7 +1446,7 @@ describe('knowledge cli', () => {
     const statusAfterSnapshot = runCli(['sync', 'status', '--scope', 'project', '--json'], dir);
     expect(statusAfterSnapshot.exitCode).toBe(0);
     const statusAfterSnapshotOut = JSON.parse(new TextDecoder().decode(statusAfterSnapshot.stdout));
-    expect(statusAfterSnapshotOut.sqlite_schema_version).toBe(8);
+    expect(statusAfterSnapshotOut.sqlite_schema_version).toBe(9);
 
     const machines = runCli(['sync', 'machines', '--scope', 'project', '--json'], dir);
     expect(machines.exitCode).toBe(0);

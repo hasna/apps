@@ -10,7 +10,14 @@ import { Database } from 'bun:sqlite';
  * directly — so this guard applies to CLI/MCP/SDK clients only.
  */
 export declare function assertLocalCatalogMode(operation?: string): void;
-export declare const CURRENT_SCHEMA_VERSION = 8;
+export declare const CURRENT_SCHEMA_VERSION = 9;
+/**
+ * FTS5 tokenizer for the chunk index. `porter` keeps English stemming; the
+ * wrapped `unicode61 remove_diacritics 2` folds accents/diacritics fully
+ * (level 2 also folds diacritics that level 1 leaves in place), so `cafe`
+ * matches `café`. Kept in one constant so the create + rebuild paths never drift.
+ */
+export declare const CHUNKS_FTS_TOKENIZE = "porter unicode61 remove_diacritics 2";
 export interface KnowledgeDbStats {
     schema_version: number;
     sources: number;

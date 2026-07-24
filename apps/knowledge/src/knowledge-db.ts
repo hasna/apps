@@ -24,7 +24,15 @@ export function assertLocalCatalogMode(operation = 'catalog'): void {
   }
 }
 
-export const CURRENT_SCHEMA_VERSION = 8;
+export const CURRENT_SCHEMA_VERSION = 9;
+
+/**
+ * FTS5 tokenizer for the chunk index. `porter` keeps English stemming; the
+ * wrapped `unicode61 remove_diacritics 2` folds accents/diacritics fully
+ * (level 2 also folds diacritics that level 1 leaves in place), so `cafe`
+ * matches `café`. Kept in one constant so the create + rebuild paths never drift.
+ */
+export const CHUNKS_FTS_TOKENIZE = 'porter unicode61 remove_diacritics 2';
 
 export interface KnowledgeDbStats {
   schema_version: number;
@@ -453,6 +461,40 @@ INSERT OR IGNORE INTO schema_versions(version, applied_at)
 VALUES (8, datetime('now'));
 `;
 
+// Rebuild chunks_fts with the diacritic-folding tokenizer. The current index
+// (MIGRATION_2) stores its column values, so the rebuild backfills losslessly
+// from the existing rows — no re-ingest from source required. Idempotent:
+// guarded by needsMigration9 (schema version AND live tokenizer inspection).
+// Wrapped in a transaction so the DROP + CREATE + backfill are atomic: a crash
+// mid-migration rolls back to the old index rather than leaving an empty one
+// (which the tokenizer guard would then treat as already-migrated).
+const MIGRATION_9_REBUILD_FTS = `
+BEGIN;
+
+CREATE TEMP TABLE _chunks_fts_backup AS
+  SELECT chunk_id, text, title, source_uri FROM chunks_fts;
+
+DROP TABLE chunks_fts;
+
+CREATE VIRTUAL TABLE chunks_fts USING fts5(
+  chunk_id UNINDEXED,
+  text,
+  title,
+  source_uri,
+  tokenize='${CHUNKS_FTS_TOKENIZE}'
+);
+
+INSERT INTO chunks_fts (chunk_id, text, title, source_uri)
+  SELECT chunk_id, text, title, source_uri FROM _chunks_fts_backup;
+
+DROP TABLE _chunks_fts_backup;
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (9, datetime('now'));
+
+COMMIT;
+`;
+
 export function openKnowledgeDb(path: string): Database {
   assertLocalCatalogMode('opening the local knowledge.db catalog');
   ensureParentDir(path);
@@ -485,6 +527,7 @@ export function migrateKnowledgeDb(path: string): { path: string; schema_version
     if (getSchemaVersion(db) < 6) db.exec(MIGRATION_6);
     if (needsMigration7(db)) applyMigration7(db);
     if (needsMigration8(db)) applyMigration8(db);
+    if (needsMigration9(db)) applyMigration9(db);
     return { path, schema_version: getSchemaVersion(db) };
   } finally {
     db.close();
@@ -565,6 +608,27 @@ function applyMigration8(db: Database): void {
     WHERE valid_from IS NULL OR last_verified_at IS NULL OR confidence IS NULL;
   `);
   db.exec(MIGRATION_8_TABLES_AND_INDEXES);
+}
+
+function ftsUsesDiacriticFolding(db: Database): boolean {
+  const row = db.query<{ sql: string | null }, [string]>(
+    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+  ).get('chunks_fts');
+  return Boolean(row?.sql && row.sql.includes('remove_diacritics'));
+}
+
+function needsMigration9(db: Database): boolean {
+  if (!tableExists(db, 'chunks_fts')) return false;
+  return getSchemaVersion(db) < 9 || !ftsUsesDiacriticFolding(db);
+}
+
+function applyMigration9(db: Database): void {
+  if (!tableExists(db, 'chunks_fts')) return;
+  if (ftsUsesDiacriticFolding(db)) {
+    db.exec("INSERT OR IGNORE INTO schema_versions(version, applied_at) VALUES (9, datetime('now'));");
+    return;
+  }
+  db.exec(MIGRATION_9_REBUILD_FTS);
 }
 
 export function getKnowledgeDbStats(path: string): KnowledgeDbStats {

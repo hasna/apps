@@ -9,12 +9,15 @@ export interface HybridSearchOptions extends EmbeddingRuntimeOptions {
     legacyStorePath?: string;
     query: string;
     limit?: number;
+    /** Zero-based result offset for stable pagination over the ranked list. */
+    offset?: number;
     semantic?: boolean;
     config?: KnowledgeConfig;
 }
 export interface HybridSearchResult {
     query: string;
     limit: number;
+    offset: number;
     mode: {
         keyword: true;
         catalog: true;
@@ -63,6 +66,18 @@ export interface HybridSearchEntry {
     } | null;
     provenance: SearchProvenance | null;
     reasons: string[];
+}
+export interface FtsMatchExpressions {
+    /** Precise expression: positive terms AND-joined (unless `OR` is explicit). */
+    and: string | null;
+    /**
+     * Recall expression: positive terms OR-joined. Used as a fallback when the
+     * AND expression yields nothing, so natural-language questions (whose terms
+     * rarely all co-occur in one chunk) still retrieve. Null when identical to
+     * `and` (single positive term or explicit boolean already), letting callers
+     * skip a redundant second query.
+     */
+    or: string | null;
 }
 export declare function hybridSearch(options: HybridSearchOptions): Promise<HybridSearchResult>;
 export declare function hybridSearchLegacyStore(options: Omit<HybridSearchOptions, 'dbPath'>): Promise<HybridSearchResult>;

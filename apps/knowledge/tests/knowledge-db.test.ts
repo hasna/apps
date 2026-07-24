@@ -34,7 +34,7 @@ function rewriteWikiPagesAsSchema7(dbPath: string): void {
       FROM wiki_pages;
       DROP TABLE wiki_pages;
       ALTER TABLE wiki_pages_v7 RENAME TO wiki_pages;
-      DELETE FROM schema_versions WHERE version = 8;
+      DELETE FROM schema_versions WHERE version >= 8;
       PRAGMA foreign_keys = ON;
     `);
   } finally {
@@ -48,7 +48,7 @@ describe('knowledge sqlite store', () => {
     const dbPath = join(dir, 'knowledge.db');
 
     const migration = migrateKnowledgeDb(dbPath);
-    expect(migration.schema_version).toBe(8);
+    expect(migration.schema_version).toBe(9);
 
     const db = openKnowledgeDb(dbPath);
     try {
@@ -88,7 +88,7 @@ describe('knowledge sqlite store', () => {
     }
 
     const stats = getKnowledgeDbStats(dbPath);
-    expect(stats.schema_version).toBe(8);
+    expect(stats.schema_version).toBe(9);
     expect(stats.sources).toBe(0);
     expect(stats.runs).toBe(0);
     expect(stats.redaction_findings).toBe(0);
@@ -137,7 +137,7 @@ describe('knowledge sqlite store', () => {
     }
 
     const migration = migrateKnowledgeDb(dbPath);
-    expect(migration.schema_version).toBe(8);
+    expect(migration.schema_version).toBe(9);
 
     const migrated = openKnowledgeDb(dbPath);
     try {
@@ -268,7 +268,7 @@ describe('knowledge sqlite store', () => {
     }
 
     const migration = migrateKnowledgeDb(dbPath);
-    expect(migration.schema_version).toBe(8);
+    expect(migration.schema_version).toBe(9);
 
     const recovered = openKnowledgeDb(dbPath);
     try {
@@ -306,7 +306,7 @@ describe('knowledge sqlite store', () => {
     }
 
     const migration = migrateKnowledgeDb(dbPath);
-    expect(migration.schema_version).toBe(8);
+    expect(migration.schema_version).toBe(9);
 
     const stats = getKnowledgeDbStats(dbPath);
     expect(stats.sync_table_clocks).toBe(0);
@@ -370,7 +370,7 @@ describe('knowledge sqlite store', () => {
     });
 
     const stats = getKnowledgeDbStats(dbPath);
-    expect(stats.schema_version).toBe(8);
+    expect(stats.schema_version).toBe(9);
     expect(stats.sources).toBe(2);
     expect(stats.source_revisions).toBe(2);
     expect(stats.chunks).toBe(1);

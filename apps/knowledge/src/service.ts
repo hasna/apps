@@ -888,6 +888,7 @@ function emptySearchResult(query: string, limit: number, semantic = false): Hybr
   return {
     query,
     limit,
+    offset: 0,
     mode: {
       keyword: true,
       catalog: true,
