@@ -260,6 +260,67 @@ export {
 } from "./commands/runtime.js";
 export type { TmuxPaneDiedHookPlan, TmuxPaneProbeResult, TmuxWatchOptions, TmuxWatchResult } from "./commands/runtime.js";
 
+export {
+  DISTRIBUTION_EVENT_TYPES,
+  ROLLOUT_RECORD_SCHEMA_ID,
+  buildRolloutRecord,
+  defaultAppIdForPackage,
+  isValidAppId,
+  rolloutRecordToEventData,
+} from "./distribution.js";
+export type {
+  BuildRolloutRecordInput,
+  EvidencePointer,
+  ReleasePublishedData,
+  RolloutAction,
+  RolloutData,
+  RolloutRecordDoc,
+  RolloutResult,
+  RolloutVerification,
+} from "./distribution.js";
+
+export {
+  addFreeze,
+  findFreeze,
+  listActiveFreezes,
+  readFreezeFile,
+  removeFreeze,
+  writeFreezeFile,
+} from "./commands/freeze.js";
+export type { FreezeFile } from "./commands/freeze.js";
+
+export {
+  appendRolloutRecord,
+  buildReconcilePlan,
+  defaultBinForPackage,
+  executeReconcilePlan,
+  getInstalledGlobalPackages,
+  parseBunGlobalList,
+  readInstalledSnapshot,
+  readRolloutRecords,
+  reconcileFromReleaseEvent,
+  releaseEventTrigger,
+  resolveDesiredPackages,
+} from "./commands/reconcile.js";
+export type {
+  BuildReconcilePlanOptions,
+  DesiredPackage,
+  ExecFn,
+  ExecResult,
+  ExecuteReconcileOptions,
+  InstalledPackage,
+  ReconcileActionKind,
+  ReconcileActionResult,
+  ReconcilePlan,
+  ReconcilePlanAction,
+  ReconcileResult,
+  ReconcileFromEventOptions,
+  ReleaseEventEnvelope,
+  ReleaseEventTrigger,
+  RolloutEmitInput,
+  RolloutEmitter,
+} from "./commands/reconcile.js";
+
 export { buildSetupPlan } from "./commands/setup.js";
 export type { RunSetupOptions } from "./commands/setup.js";
 export {

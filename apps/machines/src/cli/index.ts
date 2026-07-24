@@ -73,6 +73,15 @@ import { buildTmuxPaneDiedHookPlan, watchTmuxPane } from "../commands/runtime.js
 import { buildSshCommand, resolveSshTarget } from "../commands/ssh.js";
 import { resolveScreenTarget, buildScreenCommand, buildScreenEnableCommand, resolveScreenCredentials, screenCredentialsFailed } from "../commands/screen.js";
 import { buildSyncPlan, runSyncPlan } from "../commands/sync.js";
+import {
+  buildReconcilePlan,
+  executeReconcilePlan,
+  readInstalledSnapshot,
+  releaseEventTrigger,
+  type InstalledPackage,
+  type ReleaseEventEnvelope,
+} from "../commands/reconcile.js";
+import { addFreeze, findFreeze, listActiveFreezes, removeFreeze } from "../commands/freeze.js";
 import { getStatus } from "../commands/status.js";
 import {
   buildHeartbeatCollectorCommand,
@@ -193,6 +202,21 @@ function printJsonOrText(data: unknown, text: string, json = false): void {
     return;
   }
   console.log(text);
+}
+
+function renderReconcileResult(result: import("../commands/reconcile.js").ReconcileResult): string {
+  const lines: string[] = [
+    `Reconcile ${result.mode} for ${result.machineId}: ${result.results.length} package(s)`,
+  ];
+  for (const entry of result.results) {
+    const versions = entry.action === "skip"
+      ? entry.installedVersion ?? "-"
+      : `${entry.installedVersion ?? "none"} -> ${entry.desiredVersion ?? "-"}`;
+    lines.push(`  ${entry.action}\t${entry.package}\t${versions}\t${entry.status}${entry.error ? `\t${entry.error}` : ""}`);
+  }
+  if (result.mode === "apply") lines.push(`Records: ${result.records.length}, events emitted: ${result.emitted}`);
+  if (result.warnings.length) lines.push(`Warnings: ${result.warnings.join(", ")}`);
+  return lines.join("\n");
 }
 
 interface PrintableStorageResult {
@@ -1684,6 +1708,144 @@ program
     }
     const result = buildSyncPlan(options.machine);
     console.log(JSON.stringify(result, null, 2));
+  });
+
+program
+  .command("reconcile")
+  .description("Reconcile bun-global packages against the fleet manifest desired state")
+  .option("--machine <id>", "Machine identifier")
+  .option("--dry-run", "Preview the reconcile plan without executing (default)")
+  .option("--apply", "Execute install/update/rollback commands", false)
+  .option("--package <name>", "Limit reconcile to one package")
+  .option("--installed-json <path>", "Read installed packages from a JSON snapshot instead of bun pm ls -g")
+  .option("--event-json <path>", "Trigger from a release.published event envelope JSON file (use - for stdin)")
+  .option("--no-emit", "Do not emit rollout events")
+  .option("--deliver", "Deliver emitted rollout events to configured channels", false)
+  .option("--approval-token <token>", "Scoped mutation approval token")
+  .option("-j, --json", "Print JSON output", false)
+  .action(async (options: {
+    machine?: string;
+    dryRun?: boolean;
+    apply?: boolean;
+    package?: string;
+    installedJson?: string;
+    eventJson?: string;
+    emit?: boolean;
+    deliver?: boolean;
+    approvalToken?: string;
+    json?: boolean;
+  }, command: Command) => {
+    if (options.dryRun && options.apply) {
+      console.error("error: --dry-run and --apply are mutually exclusive");
+      process.exitCode = 1;
+      return;
+    }
+
+    let packageFilter = options.package;
+    let eventVersions: Record<string, string> | undefined;
+    if (options.eventJson) {
+      const raw = options.eventJson === "-" ? readFileSync(0, "utf8") : readFileSync(options.eventJson, "utf8");
+      const envelope = JSON.parse(raw) as ReleaseEventEnvelope;
+      const trigger = releaseEventTrigger(envelope);
+      if (!trigger) {
+        console.error(`error: --event-json requires a release.published event with data.package and data.version (got type "${envelope.type}")`);
+        process.exitCode = 1;
+        return;
+      }
+      packageFilter = packageFilter ?? trigger.packageFilter;
+      eventVersions = trigger.eventVersions;
+    }
+
+    let installed: InstalledPackage[] | undefined;
+    if (options.installedJson) {
+      installed = readInstalledSnapshot(options.installedJson);
+    }
+
+    const machineId = cliMachineId(options.machine ?? process.env["HASNA_MACHINES_MACHINE_ID"]);
+    const plan = buildReconcilePlan({
+      machineId,
+      packageFilter,
+      eventVersions,
+      installed,
+    });
+
+    if (options.apply) {
+      requireCliMutation("reconcile_apply", options.approvalToken, {
+        machineId,
+        resourceId: cliPlanResourceId("reconcile_apply", machineId, plan),
+        args: cliPlanApprovalArgs({ machine_id: machineId, package: packageFilter ?? null }, plan),
+      });
+      const result = await executeReconcilePlan(plan, {
+        dryRun: false,
+        emitter: options.emit === false ? null : createEventsClient(),
+        deliver: options.deliver === true,
+      });
+      printCommandResult(result, renderReconcileResult(result), wantsCommandJson(options, command));
+      if (result.results.some((entry) => entry.status === "failed" || entry.status === "blocked")) process.exitCode = 1;
+      return;
+    }
+
+    const result = await executeReconcilePlan(plan, { dryRun: true });
+    printCommandResult(result, renderReconcileResult(result), wantsCommandJson(options, command));
+  });
+
+const freezeCommand = program.command("freeze").description("Supply-chain freeze gate blocking reconcile installs of frozen packages");
+
+freezeCommand
+  .command("list")
+  .description("List active freeze entries (freeze.json plus manifest freeze list)")
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { json?: boolean }, command: Command) => {
+    const entries = listActiveFreezes();
+    printCommandResult({ packages: entries }, entries.length
+      ? entries.map((entry) => `${entry.name}\t${entry.reason ?? "no reason"}${entry.until ? `\tuntil ${entry.until}` : ""}`).join("\n")
+      : "No frozen packages.", wantsCommandJson(options, command));
+  });
+
+freezeCommand
+  .command("add")
+  .description("Freeze a package: reconcile will block installs/updates until it is removed")
+  .argument("<name>", "Package name")
+  .option("--reason <reason>", "Why the package is frozen (incident reference)")
+  .option("--until <iso>", "Freeze expiry timestamp")
+  .option("--approval-token <token>", "Scoped mutation approval token")
+  .option("-j, --json", "Print JSON output", false)
+  .action((name: string, options: { reason?: string; until?: string; approvalToken?: string; json?: boolean }, command: Command) => {
+    requireCliMutation("freeze_add", options.approvalToken, {
+      resourceId: `freeze:${name}`,
+      args: { package: name, reason: options.reason ?? null, until: options.until ?? null },
+    });
+    const file = addFreeze({ name, reason: options.reason, until: options.until });
+    printCommandResult(file, `Froze ${name} (${file.packages.length} frozen package(s))`, wantsCommandJson(options, command));
+  });
+
+freezeCommand
+  .command("remove")
+  .description("Remove a package from the freeze list")
+  .argument("<name>", "Package name")
+  .option("--approval-token <token>", "Scoped mutation approval token")
+  .option("-j, --json", "Print JSON output", false)
+  .action((name: string, options: { approvalToken?: string; json?: boolean }, command: Command) => {
+    requireCliMutation("freeze_remove", options.approvalToken, {
+      resourceId: `freeze:${name}`,
+      args: { package: name },
+    });
+    const result = removeFreeze(name);
+    printCommandResult(result, result.removed ? `Unfroze ${name}` : `${name} was not frozen`, wantsCommandJson(options, command));
+    if (!result.removed) process.exitCode = 1;
+  });
+
+freezeCommand
+  .command("check")
+  .description("Check whether a package is currently frozen (exit 1 when frozen)")
+  .argument("<name>", "Package name")
+  .option("-j, --json", "Print JSON output", false)
+  .action((name: string, options: { json?: boolean }, command: Command) => {
+    const entry = findFreeze(name, listActiveFreezes());
+    printCommandResult({ package: name, frozen: Boolean(entry), entry }, entry
+      ? `${name} is FROZEN: ${entry.reason ?? "no reason"}`
+      : `${name} is not frozen`, wantsCommandJson(options, command));
+    if (entry) process.exitCode = 1;
   });
 
 program

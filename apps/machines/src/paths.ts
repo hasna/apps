@@ -21,6 +21,14 @@ export function getNotificationsPath(): string {
   return process.env["HASNA_MACHINES_NOTIFICATIONS_PATH"] || join(getDataDir(), "notifications.json");
 }
 
+export function getFreezePath(): string {
+  return process.env["HASNA_MACHINES_FREEZE_PATH"] || join(getDataDir(), "freeze.json");
+}
+
+export function getRolloutRecordsPath(): string {
+  return process.env["HASNA_MACHINES_ROLLOUT_RECORDS_PATH"] || join(getDataDir(), "rollout-records.jsonl");
+}
+
 export function getClipboardKeyPath(): string {
   return process.env["HASNA_MACHINES_CLIPBOARD_KEY_PATH"] || join(getDataDir(), "clipboard.key");
 }

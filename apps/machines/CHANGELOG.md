@@ -6,6 +6,40 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-24
+
+### Added
+
+- Added `machines reconcile`: desired-state package reconcile for
+  machines-agent. Plans and executes `bun install -g pkg@version` against the
+  manifest, verifies CLI `--version` (and declared `hasna-*-mcp` health
+  endpoints), rolls back to the prior version on verification failure, and
+  emits `hasna.rollout_record.v1` events (`release.rollout.started/completed/
+  failed`, `app.installed`) through the `@hasna/events` envelope. Dry-run by
+  default; `--apply` requires scoped mutation approval. Triggerable from a
+  `release.published` event via `--event-json` or `reconcileFromReleaseEvent`.
+- Added `machines freeze add|remove|list|check`: supply-chain freeze gate that
+  blocks reconcile installs/updates of frozen packages (ported from the
+  skill-package-update incident-freeze rule), with optional `--until` expiry
+  and manifest-declared fleet-wide freeze entries.
+- Extended the `machines.json` schema (backward compatible): fleet-wide
+  `packages` desired-state list, `freeze` list, and per-package `appId`,
+  `bin`, `verify`, and `mcpHealthUrl` fields aligned with the distribution
+  contracts. `verify: false` marks library-only packages without a CLI so
+  reconcile skips the `<bin> --version` check instead of flapping through
+  verify-fail/rollback cycles.
+
+### Fixed
+
+- Closed a freeze-gate bypass for programmatic callers: `buildReconcilePlan`
+  (and `reconcileFromReleaseEvent`) with an in-memory `manifest` now merge the
+  on-disk `freeze.json` entries (`machines freeze add`) with the manifest's
+  freeze list instead of skipping the disk gate entirely.
+- Made the consumer conformance fixture hermetic: "SDK absent" cases now
+  install an always-failing tombstone package so ambient `node_modules`
+  directories above the temp app (for example `/tmp/node_modules`) cannot leak
+  a real `@hasna/machines` into resolution.
+
 ## [0.1.6] - 2026-07-24
 
 ### Fixed

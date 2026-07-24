@@ -94,6 +94,62 @@ Apple device management belongs in the private deployment layer. The public
 setup plan can report enrollment status with `profiles status -type enrollment`,
 but it does not enroll devices, install profiles, or publish team identifiers.
 
+## Package rollout reconcile (`machines reconcile`)
+
+`machines reconcile` compares the desired-state package versions declared in
+`machines.json` against the bun global tree (`bun pm ls -g`) and plans
+`bun install -g pkg@version` installs/updates. The manifest gains two
+backward-compatible fields: a fleet-wide `packages` list applied to every
+machine (per-machine `packages` override by name), and a `freeze` list for the
+supply-chain freeze gate. Package specs accept optional `version` (the pin),
+`appId` (the `hasna.app.v1` join key, defaulting to the `open-<name>`
+convention for `@hasna/*` packages), `bin` (verification CLI, defaulting to
+the unscoped package name), `verify` (set `false` for library-only packages
+without a CLI: rollouts succeed on install exit code alone, though a declared
+`mcpHealthUrl` is still checked), and `mcpHealthUrl`.
+
+```bash
+machines reconcile --dry-run --json            # plan only, never executes
+machines reconcile --apply --json              # install/update + verify + rollback
+machines reconcile --apply --package @hasna/todos
+machines reconcile --dry-run --event-json release-published.json
+machines reconcile --dry-run --installed-json snapshot.json   # plan against a snapshot
+```
+
+Reconcile is dry-run by default; `--apply` requires the same scoped mutation
+approval model as other mutating commands. Applied actions are verified
+(`<bin> --version` must report the target version; declared `hasna-*-mcp`
+health endpoints must answer) and roll back to the previously installed
+version when verification fails. Every terminal outcome is recorded as a
+`hasna.rollout_record.v1` document in `<dataDir>/rollout-records.jsonl` and
+emitted through the shared `@hasna/events` envelope as
+`release.rollout.started` / `release.rollout.completed` /
+`release.rollout.failed` / `app.installed` events.
+
+The loop is also triggerable by a `release.published` event: pipe the event
+envelope to `machines reconcile --event-json -` (or a file path). Pinned
+manifest versions stay authoritative; packages tracked without a pin adopt the
+released version. Programmatic consumers can call `reconcileFromReleaseEvent`
+from the package root exports.
+
+### Supply-chain freeze gate (`machines freeze`)
+
+Frozen packages are never installed or updated by reconcile; they surface as
+`freeze-blocked` plan actions and blocked rollout records (ported from the
+skill-package-update incident-freeze rule).
+
+```bash
+machines freeze add left-pad --reason "supply-chain incident #7" --json
+machines freeze add left-pad --until 2026-08-01T00:00:00Z
+machines freeze check left-pad        # exit 1 while frozen
+machines freeze list --json
+machines freeze remove left-pad
+```
+
+Freeze entries live in `<dataDir>/freeze.json` and can also be declared
+fleet-wide in the manifest `freeze` list; `until` timestamps expire
+automatically.
+
 ## Topology SDK
 
 `@hasna/machines` exposes a compact consumer SDK for other open-core packages

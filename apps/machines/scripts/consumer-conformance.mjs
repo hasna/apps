@@ -121,6 +121,26 @@ function installPackage(appDir, sourceDir) {
   copyPackage(sourceDir, target);
 }
 
+// Hermeticity barrier: module resolution walks UP from the temp app dir, so an
+// ambient node_modules in a parent directory (for example /tmp/node_modules
+// containing @hasna/machines from unrelated work) would make the "SDK absent"
+// cases resolve a real package. Install a tombstone that always fails to
+// import so those cases stay deterministic regardless of ambient state.
+function installUnavailableTombstone(appDir) {
+  const target = packagePath(join(appDir, "node_modules"), "@hasna/machines");
+  mkdirSync(target, { recursive: true });
+  writeFileSync(join(target, "package.json"), JSON.stringify({
+    name: "@hasna/machines",
+    version: "0.0.0-unavailable",
+    type: "module",
+    exports: {
+      ".": "./unavailable.mjs",
+      "./consumer": "./unavailable.mjs",
+    },
+  }, null, 2));
+  writeFileSync(join(target, "unavailable.mjs"), "throw new Error('machines_unavailable: @hasna/machines is not installed in this app');\n");
+}
+
 function installFutureContractPackage(appDir, version = 2) {
   const target = packagePath(join(appDir, "node_modules"), "@hasna/machines");
   mkdirSync(target, { recursive: true });
@@ -422,6 +442,7 @@ function runCase(input) {
   try {
     if (input.installSdk) installPackage(appDir, input.packageDir);
     if (input.installFutureSdk) installFutureContractPackage(appDir, 2);
+    if (!input.installSdk && !input.installFutureSdk) installUnavailableTombstone(appDir);
     const script = input.writeProbe(appDir);
     const env = {
       ...process.env,
