@@ -423,6 +423,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["crm", "sales", "pipeline", "analytics", "leads"],
   },
   {
+    name: "tave",
+    displayName: "Tave",
+    description: "Studio-management CRM for photographers: contacts, jobs, leads, and orders",
+    category: "Marketing & Sales",
+    tags: ["crm", "studio-management", "photography", "leads", "contacts", "jobs"],
+  },
+  {
     name: "thankster",
     displayName: "Thankster",
     description: "Handwritten card automation service for sending personalized thank-you notes",
