@@ -7,6 +7,7 @@ import {
   buildScreenEnableCommand,
   defaultScreenPasswordSecretKey,
   resolveScreenCredentials,
+  screenCredentialsFailed,
 } from "../src/commands/screen.js";
 
 function topologyWith(entry: Record<string, unknown>) {
@@ -157,5 +158,49 @@ describe("machines screen", () => {
     expect(plan.command).toContain("secrets' 'get' 'machines/screen-sharing/screen-demo-mac-005-vnc-password'");
     expect(plan.command).toContain("| ssh 'operator@demo-mac-005' ");
     expect(plan.command).not.toContain("example-vnc-password");
+  });
+});
+
+describe("screen-credentials exit code", () => {
+  const okEntry = { ok: true as const, passwordSecret: { checked: false as const, present: null } };
+  const unroutable = { ok: false as const };
+  const secretMissing = { ok: true as const, passwordSecret: { checked: true as const, present: false } };
+  const secretPresent = { ok: true as const, passwordSecret: { checked: true as const, present: true } };
+
+  test("does not fail closed when a full listing includes unroutable machines", () => {
+    // Regression: `screen-credentials --all --json` returned a full, valid array but
+    // exited 1 solely because >=1 machine was unroutable ("Machine route not found").
+    const results = [okEntry, okEntry, unroutable, okEntry];
+    expect(screenCredentialsFailed(results)).toBe(false);
+  });
+
+  test("still fails when no machine could be resolved", () => {
+    expect(screenCredentialsFailed([unroutable, unroutable])).toBe(true);
+  });
+
+  test("fails on empty result set", () => {
+    expect(screenCredentialsFailed([])).toBe(true);
+  });
+
+  test("passes when no secret check was requested", () => {
+    expect(screenCredentialsFailed([okEntry, okEntry, unroutable])).toBe(false);
+  });
+
+  test("still fails on a missing checked secret in non-strict mode", () => {
+    // --check-secret is an explicit, requested check; a resolved machine whose secret is
+    // absent stays fatal even though unroutable machines do not.
+    expect(screenCredentialsFailed([okEntry, secretMissing])).toBe(true);
+  });
+
+  test("strict mode fails closed on any unroutable machine", () => {
+    expect(screenCredentialsFailed([okEntry, unroutable], { strict: true })).toBe(true);
+  });
+
+  test("strict mode fails closed on a missing checked secret", () => {
+    expect(screenCredentialsFailed([okEntry, secretMissing], { strict: true })).toBe(true);
+  });
+
+  test("strict mode passes when every machine resolves and secrets are present", () => {
+    expect(screenCredentialsFailed([secretPresent, okEntry], { strict: true })).toBe(false);
   });
 });

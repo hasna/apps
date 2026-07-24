@@ -71,7 +71,7 @@ import {
 import { listPorts } from "../commands/ports.js";
 import { buildTmuxPaneDiedHookPlan, watchTmuxPane } from "../commands/runtime.js";
 import { buildSshCommand, resolveSshTarget } from "../commands/ssh.js";
-import { resolveScreenTarget, buildScreenCommand, buildScreenEnableCommand, resolveScreenCredentials } from "../commands/screen.js";
+import { resolveScreenTarget, buildScreenCommand, buildScreenEnableCommand, resolveScreenCredentials, screenCredentialsFailed } from "../commands/screen.js";
 import { buildSyncPlan, runSyncPlan } from "../commands/sync.js";
 import { getStatus } from "../commands/status.js";
 import {
@@ -2963,8 +2963,9 @@ program
   .option("--check-secret", "Check whether the password secret exists in the local secrets vault", false)
   .option("--secrets-command <command>", "Secrets CLI command to inspect", "secrets")
   .option("--no-tailscale", "Skip tailscale status probing")
+  .option("--strict", "Exit non-zero if any machine fails to resolve or its checked secret is missing", false)
   .option("-j, --json", "Print JSON output", false)
-  .action((options: { machine?: string; all?: boolean; checkSecret?: boolean; secretsCommand: string; tailscale?: boolean; json?: boolean }) => {
+  .action((options: { machine?: string; all?: boolean; checkSecret?: boolean; secretsCommand: string; tailscale?: boolean; strict?: boolean; json?: boolean }) => {
     const topology = discoverMachineTopology({ includeTailscale: options.tailscale !== false, limit: null, offset: 0 });
     const machineIds = options.all
       ? topology.machines.map((machine) => machine.machine_id)
@@ -2985,7 +2986,7 @@ program
         return { ok: false as const, machineId, error: error instanceof Error ? error.message : String(error) };
       }
     });
-    const hasFailures = results.some((result) => !result.ok || (result.ok && result.passwordSecret.checked && !result.passwordSecret.present));
+    const hasFailures = screenCredentialsFailed(results, { strict: options.strict });
     if (options.json) {
       console.log(JSON.stringify(results, null, 2));
       if (hasFailures) process.exitCode = 1;

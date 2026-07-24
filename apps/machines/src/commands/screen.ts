@@ -148,6 +148,45 @@ export function resolveScreenCredentials(machineId: string, options: ScreenCrede
 }
 
 /**
+ * One row of `screen-credentials` output as far as exit-code evaluation is concerned.
+ * `ok: false` marks a machine we could not resolve (e.g. no route); when a secret was
+ * checked, `passwordSecret.present` reports whether it exists in the vault.
+ */
+export interface ScreenCredentialOutcome {
+  ok: boolean;
+  passwordSecret?: { checked: boolean; present: boolean | null };
+}
+
+/**
+ * Decide whether `screen-credentials` should exit non-zero.
+ *
+ * A read/list command that returns data for at least one machine is a success: an
+ * unroutable machine (`ok: false`, e.g. "Machine route not found") is already surfaced
+ * per-entry in the output, so a fully-returned listing must not fail-close solely because
+ * one machine was unreachable. An explicitly checked-and-missing secret
+ * (`passwordSecret.present === false`) is a distinct, requested check that remains fatal.
+ *
+ * `strict` opts into full fail-closed behaviour: exit non-zero if ANY machine failed to
+ * resolve, in addition to the missing-secret check.
+ */
+export function screenCredentialsFailed(
+  entries: ScreenCredentialOutcome[],
+  options: { strict?: boolean } = {},
+): boolean {
+  if (entries.length === 0) return true;
+  const secretMissing = entries.some(
+    (entry) => Boolean(entry.passwordSecret?.checked && entry.passwordSecret.present === false),
+  );
+  if (options.strict) {
+    return entries.some((entry) => !entry.ok) || secretMissing;
+  }
+  // Non-strict: unroutable machines are informational as long as at least one machine
+  // returned data; only a total lookup miss or a missing checked secret is fatal.
+  const noData = !entries.some((entry) => entry.ok);
+  return noData || secretMissing;
+}
+
+/**
  * Build the macOS command that opens Screen Sharing to a machine.
  * `open vnc://user@host` launches Screen Sharing.app pointed at the resolved route.
  */
