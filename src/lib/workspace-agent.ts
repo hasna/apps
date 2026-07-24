@@ -4,12 +4,8 @@ import { join } from "node:path";
 import { z } from "zod/v4";
 import {
   acquireWorkspaceLock,
-  addWorkspaceLocation,
-  assignAgentToWorkspace,
   createRoot,
   createRecipe,
-  archiveWorkspace,
-  deleteWorkspace,
   completeAgentRun,
   createAgent,
   createTmuxProfile,
@@ -37,8 +33,6 @@ import {
   resolveWorkspace,
   scoreRoots,
   startAgentRun,
-  unarchiveWorkspace,
-  updateWorkspace,
 } from "../db/workspaces.js";
 import { applyWorkspaceTmux, applyWorkspaceTmuxProfile, workspaceMarkerPath, type WorkspaceTmuxWindowSpec } from "./workspace-runtime.js";
 import {
@@ -52,6 +46,7 @@ import {
   type GitHubVisibility,
 } from "./workspace-github.js";
 import { doctorWorkspace } from "./workspace-doctor.js";
+import { resolveProjectStore, type ProjectStore } from "../store/project-store.js";
 import { importRegisteredRoots, importWorkspace, importWorkspaceBulk, planWorkspaceImport } from "./workspace-import.js";
 import {
   cleanupWorkspaceCreationTarget,
@@ -760,14 +755,14 @@ function withAgentWorkspaceLock<T>(workspace: Workspace, agentId: string, reason
   }
 }
 
-function fallbackWorkspaceCreate(
+async function fallbackWorkspaceCreate(
   agent: Agent,
   options: Required<Pick<WorkspaceAgentPromptOptions, "prompt" | "dryRun" | "approve">> & {
     root_id?: string;
     recipe_id?: string;
     command: string;
   },
-): { call: JsonObject; workspace?: Workspace; text: string } | null {
+): Promise<{ call: JsonObject; workspace?: Workspace; text: string } | null> {
   if (!isCreateIntent(options.prompt)) return null;
   const workspaceInput = {
     name: splitPromptName(options.prompt),
@@ -794,7 +789,7 @@ function fallbackWorkspaceCreate(
   }
 
   if (options.approve && !options.dryRun) {
-    const result = executeWorkspaceCreation(workspaceInput);
+    const result = await executeWorkspaceCreation(workspaceInput);
     return {
       workspace: result.workspace ?? undefined,
       text: result.workspace
@@ -963,6 +958,64 @@ async function runMockPrompt(
     command: options.command,
     tags: ["agent-created"],
   };
+
+  const store = resolveProjectStore();
+  if (store.mode === "api") {
+    // Cloud project rows are created through the Store (shared registry), never
+    // the local sqlite island. Machine-local runtime does not apply to a cloud
+    // row, so this mirrors the projects_create tool's api-mode path.
+    const nameKey = comparisonKey(workspaceInput.name);
+    const cloudExisting = workspaceInput.name
+      ? (await store.listProjects({ query: workspaceInput.name, limit: 25 })).find((workspace) => (
+          comparisonKey(workspace.name) === nameKey || comparisonKey(workspace.slug) === nameKey
+        ))
+      : undefined;
+    const projects: Workspace[] = [];
+    let text: string;
+    if (cloudExisting) {
+      text = `Project ${cloudExisting.slug} already exists in the cloud registry.`;
+    } else if (options.approve && !options.dryRun) {
+      const project = await store.createProject({
+        name: workspaceInput.name,
+        root_id: workspaceInput.root_id,
+        recipe_id: workspaceInput.recipe_id,
+        tags: workspaceInput.tags,
+      });
+      projects.push(project);
+      text = `Created project ${project.slug} in the cloud registry.`;
+    } else {
+      text = `Plan: create cloud project "${workspaceInput.name}". Run with --yes to execute.`;
+    }
+    const toolCalls: JsonObject[] = [{
+      name: "projects_create",
+      input: workspaceInput,
+      dry_run: options.dryRun || !options.approve,
+      approved: options.approve,
+      output: projectPayload(cloudExisting
+        ? existingWorkspaceOutput(cloudExisting)
+        : { status: projects.length ? "created" : "planned", workspace: projects[0] ? compactProject(projects[0]) : null }) as JsonObject,
+    }];
+    completeAgentRun(runId, {
+      status: "completed",
+      workspace_id: projects[0]?.id ?? cloudExisting?.id,
+      tool_calls: toolCalls,
+      result: projectPayload({ text, workspaces: projects.map(compactProject) }) as JsonObject,
+    });
+    return {
+      mode: "mock",
+      run_id: runId,
+      agent_id: agent.id,
+      provider: "openrouter",
+      model: options.model,
+      actor_agent_id: agent.id,
+      approved: options.approve,
+      dry_run: options.dryRun,
+      text,
+      projects,
+      tool_calls: toolCalls,
+    };
+  }
+
   const existing = findExistingWorkspaceForCreate(workspaceInput);
   if (existing) {
     const output = existingWorkspaceOutput(existing);
@@ -1006,7 +1059,7 @@ async function runMockPrompt(
   }];
 
   if (options.approve && !options.dryRun) {
-    const result = executeWorkspaceCreation(workspaceInput);
+    const result = await executeWorkspaceCreation(workspaceInput);
     if (result.workspace) projects.push(result.workspace);
     toolCalls[0]!["output"] = {
       status: "created",
@@ -1068,111 +1121,55 @@ const projectManagementToolFields = {
   metadata: z.record(z.string(), z.unknown()).optional(),
 };
 
-export async function runWorkspaceAgentPrompt(options: WorkspaceAgentPromptOptions): Promise<WorkspaceAgentPromptResult> {
-  const model = pickModel(options.model);
-  const dryRun = Boolean(options.dryRun);
-  const approve = Boolean(options.approve) && !dryRun;
-  const mock = Boolean(options.mock || process.env["WORKSPACES_AGENT_MOCK"]);
-  const runAgent = ensureWorkspaceAgent(model);
-  const actorAgent = resolvePromptAgent(options.agent) ?? runAgent;
-  const forcedRootId = resolveRootId(options.root);
-  const forcedRecipeId = resolveRecipeId(options.recipe);
-  const budgetProject = resolveProjectTarget(options.budgetProject);
-  if (options.budgetProject && !budgetProject) {
-    throw new Error(`Budget project not found: ${options.budgetProject}`);
-  }
-  const tmuxAllowed = options.tmux !== false;
-  const command = promptCommand(options);
-  const runLock = acquireWorkspaceLock({
-    lock_key: `agent-run:${actorAgent.id}`,
-    agent_id: actorAgent.id,
-    reason: "active workspace agent prompt run",
-    ttl_seconds: 900,
-  });
-  const run = startAgentRun({
-    agent_id: runAgent.id,
-    workspace_id: budgetProject?.id,
-    provider: "openrouter",
-    model,
-    prompt: options.prompt,
-    metadata: {
-      dry_run: dryRun,
-      approved: approve,
-      mock,
-      actor_agent_id: actorAgent.id,
-      root_id: forcedRootId,
-      recipe_id: forcedRecipeId,
-      budget_project_id: budgetProject?.id,
-      run_budget: options.runBudget as JsonObject | undefined,
-      tmux_allowed: tmuxAllowed,
-    },
-  });
+interface WorkspaceAgentToolContext {
+  store: ProjectStore;
+  actorAgent: Agent;
+  approve: boolean;
+  options: WorkspaceAgentPromptOptions;
+  command: string;
+  forcedRootId?: string;
+  forcedRecipeId?: string;
+  tmuxAllowed: boolean;
+  createdWorkspaces: Workspace[];
+}
 
-  if (options.runBudget && (
-    options.runBudget.maxUsd !== undefined ||
-    options.runBudget.maxInputTokens !== undefined ||
-    options.runBudget.maxOutputTokens !== undefined ||
-    options.runBudget.maxTotalTokens !== undefined
-  )) {
-    createProjectBudget({
-      id: `run-${run.id}`,
-      scope_type: "run",
-      scope_id: run.id,
-      window: "lifetime",
-      mode: "hard",
-      max_usd: options.runBudget.maxUsd,
-      max_input_tokens: options.runBudget.maxInputTokens,
-      max_output_tokens: options.runBudget.maxOutputTokens,
-      max_total_tokens: options.runBudget.maxTotalTokens,
-      metadata: { source: "prompt-run" },
-    });
-  }
-
-  try {
-    assertProjectBudgets({ workspace_id: budgetProject?.id, run_id: run.id });
-  } catch (err) {
-    const error = err instanceof Error ? err.message : String(err);
-    completeAgentRun(run.id, { status: "failed", error, result: { error } });
-    releaseWorkspaceLock(runLock.lock_key);
-    throw err;
-  }
-
-  if (mock) {
-    try {
-      return runMockPrompt(actorAgent, run.id, {
-        prompt: options.prompt,
-        dryRun,
-        approve,
-        model,
-        root_id: forcedRootId,
-        recipe_id: forcedRecipeId,
-        tmuxAllowed,
-        command,
-      });
-    } finally {
-      releaseWorkspaceLock(runLock.lock_key);
-    }
-  }
-
-  const apiKey = resolveOpenRouterApiKey();
-  if (!apiKey) {
-    const error = "Missing OpenRouter API key. Set OPENROUTER_API_KEY or store it in the local secrets vault.";
-    completeAgentRun(run.id, { status: "failed", error, result: { error } });
-    releaseWorkspaceLock(runLock.lock_key);
-    throw new Error(error);
-  }
-
-  const createdWorkspaces: Workspace[] = [];
-  const observedToolCalls: JsonObject[] = [];
-  const observedBudgetStatuses: ProjectBudgetStatus[] = [];
+/**
+ * Build the prompt-agent tool set bound to the active ProjectStore. Extracted
+ * from runWorkspaceAgentPrompt so the mutation handlers can be unit-tested
+ * against a fake Store. In api/cloud mode every shared-registry mutation
+ * (create/update/archive/unarchive/delete/tag/untag/unlink/event/agent/location)
+ * routes through the Store (cloud HTTP), never local sqlite; local mode is
+ * byte-for-byte unchanged.
+ */
+export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
+  const {
+    store,
+    actorAgent,
+    approve,
+    options,
+    command,
+    forcedRootId,
+    forcedRecipeId,
+    tmuxAllowed,
+    createdWorkspaces,
+  } = ctx;
   let inspectedTmuxProfiles = false;
-  const provider = createOpenRouter({
-    apiKey,
-    appName: "open-projects",
-    appUrl: "https://github.com/hasna/projects",
-  });
-
-  const tools = {
+  // Attribution agent for a mutation: local uses the on-box actor agent;
+  // api/cloud leaves attribution to the server (derived from the bearer key),
+  // never sending a local agent id the cloud registry does not know.
+  const mutationAgentId = store.mode === "local" ? actorAgent.id : undefined;
+  // Resolve a caller-supplied target through the active Store (cloud-aware in
+  // api mode; on-disk path/marker aware in local mode). store.resolveTarget
+  // THROWS when nothing matches, whereas the prompt-agent tools expect a null
+  // so they can surface their existing friendly "Project not found" error.
+  const resolveStoreTargetOrNull = async (target: string | undefined): Promise<Workspace | null> => {
+    try {
+      return await store.resolveTarget(target);
+    } catch {
+      return null;
+    }
+  };
+  return {
     projects_roots_list: tool({
       description: "List registered root folders and templates where projects can be created.",
       inputSchema: z.object({}),
@@ -1336,7 +1333,7 @@ export async function runWorkspaceAgentPrompt(options: WorkspaceAgentPromptOptio
         metadata: z.record(z.string(), z.unknown()).optional(),
       }),
       execute: async (input) => {
-        const workspace = resolveProjectTarget(input.project);
+        const workspace = await resolveStoreTargetOrNull(input.project);
         if (!workspace) return { error: `Project not found: ${input.project}` };
         const assignedAgent = getAgent(input.agent) ?? getAgentBySlug(input.agent);
         if (!assignedAgent) return { error: `Agent not found: ${input.agent}` };
@@ -1356,28 +1353,24 @@ export async function runWorkspaceAgentPrompt(options: WorkspaceAgentPromptOptio
             note: "Run again with --yes to assign this project agent.",
           };
         }
-        const assignment = assignAgentToWorkspace(
-          workspace.id,
-          assignedAgent.id,
-          role,
-          actorAgent.id,
-          input.metadata as JsonObject | undefined,
-        );
-        recordWorkspaceEvent({
-          workspace_id: workspace.id,
-          agent_id: actorAgent.id,
-          event_type: "agent_assigned",
-          source: "agent",
-          prompt: options.prompt,
-          command,
-          after: {
-            agent_id: assignedAgent.id,
-            agent_slug: assignedAgent.slug,
-            role: assignment.role,
-            assignment_id: assignment.id,
-          },
-        });
-        return { status: "assigned", project: compactProject(workspace), assignment };
+        // Route the assignment (and its audit event) through the Store so it
+        // lands wherever the project lives. Per-project agent assignments are an
+        // on-box sub-resource: in api/cloud mode the Store throws
+        // LocalOnlyOperationError rather than silently writing local sqlite —
+        // surface that as a clean tool error, not an unhandled crash.
+        try {
+          const assignment = await store.assignAgent(workspace.id, {
+            agentId: assignedAgent.id,
+            role,
+            assignedBy: mutationAgentId,
+            metadata: input.metadata as JsonObject | undefined,
+            source: "agent",
+            command,
+          });
+          return { status: "assigned", project: compactProject(workspace), assignment };
+        } catch (err) {
+          return { error: err instanceof Error ? err.message : String(err) };
+        }
       },
     }),
     projects_list: tool({
@@ -1483,23 +1476,29 @@ export async function runWorkspaceAgentPrompt(options: WorkspaceAgentPromptOptio
         metadata: z.record(z.string(), z.unknown()).optional(),
       }),
       execute: async (input) => {
-        const workspace = resolveProjectTarget(input.project);
+        const workspace = await resolveStoreTargetOrNull(input.project);
         if (!workspace) return { error: `Project not found: ${input.project}` };
         const locationInput = {
-          workspace_id: workspace.id,
           path: input.path,
           label: input.label,
           kind: input.kind,
-          is_primary: input.primary,
+          isPrimary: input.primary,
           metadata: input.metadata as JsonObject | undefined,
-          agent_id: actorAgent.id,
+          agentId: mutationAgentId,
           source: "agent" as const,
-          prompt: options.prompt,
           command,
         };
         if (!approve) return projectPayload({ status: "planned", project: compactProject(workspace), location: locationInput, note: "Run again with --yes to register this project location." });
-        const location = withAgentWorkspaceLock(workspace, actorAgent.id, "project location add", () => addWorkspaceLocation(locationInput));
-        return projectPayload({ status: "registered", project: compactProject(resolveWorkspace(workspace.id) ?? workspace), location });
+        // Extra on-disk locations are an on-box sub-resource: route through the
+        // Store so local mode writes sqlite as before, while api/cloud mode
+        // throws LocalOnlyOperationError instead of silently writing local —
+        // surface that as a clean tool error.
+        try {
+          const { project: updated, location } = await store.addLocation(workspace.id, locationInput);
+          return projectPayload({ status: "registered", project: compactProject(updated), location });
+        } catch (err) {
+          return { error: err instanceof Error ? err.message : String(err) };
+        }
       },
     }),
     projects_events_list: tool({
@@ -1535,7 +1534,7 @@ export async function runWorkspaceAgentPrompt(options: WorkspaceAgentPromptOptio
         after: z.record(z.string(), z.unknown()).optional(),
       }),
       execute: async (input) => {
-        const workspace = input.project ? resolveProjectTarget(input.project) : null;
+        const workspace = input.project ? await resolveStoreTargetOrNull(input.project) : null;
         if (input.project && !workspace) return { error: `Project not found: ${input.project}` };
         const eventInput = {
           workspace_id: workspace?.id,
@@ -1548,7 +1547,21 @@ export async function runWorkspaceAgentPrompt(options: WorkspaceAgentPromptOptio
           metadata: input.metadata as JsonObject | undefined,
         };
         if (!approve) return projectPayload({ status: "planned", event: eventInput, note: "Run again with --yes to record this event." });
-        return projectPayload({ status: "recorded", project: workspace ? compactProject(workspace) : null, event: recordWorkspaceEvent(eventInput) });
+        // A project-scoped event routes through the Store so it lands wherever
+        // the project lives (cloud in api mode). A project-less system event has
+        // no shared-registry home and stays machine-local telemetry, as today.
+        const event = workspace
+          ? await store.recordEvent(workspace.id, {
+              event_type: input.event_type,
+              source: "agent",
+              agentId: mutationAgentId,
+              prompt: options.prompt,
+              command,
+              after: input.after as JsonObject | undefined,
+              metadata: input.metadata as JsonObject | undefined,
+            })
+          : recordWorkspaceEvent(eventInput);
+        return projectPayload({ status: "recorded", project: workspace ? compactProject(workspace) : null, event });
       },
     }),
     projects_doctor: tool({
@@ -1594,7 +1607,7 @@ export async function runWorkspaceAgentPrompt(options: WorkspaceAgentPromptOptio
         brief_path: z.string().nullable().optional(),
       }),
       execute: async (input) => {
-        const workspace = resolveProjectTarget(input.project);
+        const workspace = await resolveStoreTargetOrNull(input.project);
         if (!workspace) return { error: `Project not found: ${input.project}` };
         const metadataBase = input.metadata === undefined ? workspace.metadata : input.metadata as JsonObject;
         const metadataFields = {
@@ -1633,13 +1646,13 @@ export async function runWorkspaceAgentPrompt(options: WorkspaceAgentPromptOptio
           git_remote: input.git_remote,
           integrations,
           metadata,
-          agent_id: actorAgent.id,
+          agent_id: mutationAgentId,
           source: "agent" as const,
           prompt: options.prompt,
           command,
         };
         if (!approve) return projectPayload({ status: "planned", workspace: compactProject(workspace), input: updateInput, note: "Run again with --yes to update this project." });
-        const updated = withAgentWorkspaceLock(workspace, actorAgent.id, "workspace update", () => updateWorkspace(workspace.id, updateInput));
+        const updated = await store.updateProject(workspace.id, updateInput);
         return { status: "updated", project: compactProject(updated) };
       },
     }),
@@ -1647,30 +1660,30 @@ export async function runWorkspaceAgentPrompt(options: WorkspaceAgentPromptOptio
       description: "Archive an existing project. Mutates only when approved.",
       inputSchema: z.object({ project: z.string().min(1).describe("Project id or slug") }),
       execute: async (input) => {
-        const workspace = resolveProjectTarget(input.project);
+        const workspace = await resolveStoreTargetOrNull(input.project);
         if (!workspace) return { error: `Project not found: ${input.project}` };
         if (!approve) return { status: "planned", project: compactProject(workspace), next_status: "archived" };
-        return { status: "archived", project: compactProject(withAgentWorkspaceLock(workspace, actorAgent.id, "workspace archive", () => archiveWorkspace(workspace.id, {
-          agent_id: actorAgent.id,
+        return { status: "archived", project: compactProject(await store.archiveProject(workspace.id, {
+          agentId: mutationAgentId,
           source: "agent",
           prompt: options.prompt,
           command,
-        }))) };
+        })) };
       },
     }),
     projects_unarchive: tool({
       description: "Restore an archived or deleted project to active. Mutates only when approved.",
       inputSchema: z.object({ project: z.string().min(1).describe("Project id or slug") }),
       execute: async (input) => {
-        const workspace = resolveProjectTarget(input.project);
+        const workspace = await resolveStoreTargetOrNull(input.project);
         if (!workspace) return { error: `Project not found: ${input.project}` };
         if (!approve) return { status: "planned", project: compactProject(workspace), next_status: "active" };
-        return { status: "active", project: compactProject(withAgentWorkspaceLock(workspace, actorAgent.id, "workspace unarchive", () => unarchiveWorkspace(workspace.id, {
-          agent_id: actorAgent.id,
+        return { status: "active", project: compactProject(await store.unarchiveProject(workspace.id, {
+          agentId: mutationAgentId,
           source: "agent",
           prompt: options.prompt,
           command,
-        }))) };
+        })) };
       },
     }),
     projects_delete: tool({
@@ -1680,17 +1693,16 @@ export async function runWorkspaceAgentPrompt(options: WorkspaceAgentPromptOptio
         hard: z.boolean().optional(),
       }),
       execute: async (input) => {
-        const workspace = resolveProjectTarget(input.project);
+        const workspace = await resolveStoreTargetOrNull(input.project);
         if (!workspace) return { error: `Project not found: ${input.project}` };
         if (!approve) return { status: "planned", project: compactProject(workspace), hard: Boolean(input.hard), next_status: input.hard ? "removed" : "deleted" };
-        const result = withAgentWorkspaceLock(workspace, actorAgent.id, "workspace delete", () => deleteWorkspace(workspace.id, {
-          hard: input.hard,
-          agent_id: actorAgent.id,
+        const result = await store.deleteProject(workspace.id, { hard: input.hard }, {
+          agentId: mutationAgentId,
           source: "agent",
           prompt: options.prompt,
           command,
-        }));
-        return { status: result.hard ? "deleted" : "marked_deleted", hard: result.hard, project: compactProject(result.workspace) };
+        });
+        return { status: result.hard ? "deleted" : "marked_deleted", hard: result.hard, project: compactProject(result.workspace ?? workspace) };
       },
     }),
     projects_cleanup_create: tool({
@@ -1743,12 +1755,12 @@ export async function runWorkspaceAgentPrompt(options: WorkspaceAgentPromptOptio
       }),
       execute: async (input) => {
         if (!approve) {
-          if (input.bulk) return projectPayload({ status: "planned", result: await importWorkspaceBulk(input.path, { dryRun: true, tags: input.tags, agent_id: actorAgent.id }) });
-          return { status: "planned", preview: planWorkspaceImport(input.path, { tags: input.tags, agent_id: actorAgent.id }) };
+          if (input.bulk) return projectPayload({ status: "planned", result: await importWorkspaceBulk(store, input.path, { dryRun: true, tags: input.tags, agent_id: actorAgent.id }) });
+          return { status: "planned", preview: await planWorkspaceImport(store, input.path, { tags: input.tags, agent_id: actorAgent.id }) };
         }
         return projectPayload(input.bulk
-          ? await importWorkspaceBulk(input.path, { tags: input.tags, agent_id: actorAgent.id })
-          : await importWorkspace(input.path, { tags: input.tags, agent_id: actorAgent.id }));
+          ? await importWorkspaceBulk(store, input.path, { tags: input.tags, agent_id: actorAgent.id })
+          : await importWorkspace(store, input.path, { tags: input.tags, agent_id: actorAgent.id }));
       },
     }),
     projects_scan_roots: tool({
@@ -1761,7 +1773,7 @@ export async function runWorkspaceAgentPrompt(options: WorkspaceAgentPromptOptio
         tags: z.array(z.string()).optional(),
         remote_protocol: z.enum(["https", "ssh"]).optional(),
       }),
-      execute: async (input) => projectPayload(await syncWorkspaceGitHubRoots({
+      execute: async (input) => projectPayload(await syncWorkspaceGitHubRoots(store, {
         root: input.root,
         repoPrefix: input.repo_prefix,
         limit: input.limit,
@@ -1784,7 +1796,7 @@ export async function runWorkspaceAgentPrompt(options: WorkspaceAgentPromptOptio
         tags: z.array(z.string()).optional(),
         remote_protocol: z.enum(["https", "ssh"]).optional(),
       }),
-      execute: async (input) => projectPayload(await syncWorkspaceGitHubRoots({
+      execute: async (input) => projectPayload(await syncWorkspaceGitHubRoots(store, {
         root: input.root,
         repoPrefix: input.repo_prefix,
         limit: input.limit,
@@ -1802,7 +1814,7 @@ export async function runWorkspaceAgentPrompt(options: WorkspaceAgentPromptOptio
       inputSchema: z.object({
         tags: z.array(z.string()).optional(),
       }),
-      execute: async (input) => projectPayload(await importRegisteredRoots({
+      execute: async (input) => projectPayload(await importRegisteredRoots(store, {
         dryRun: !approve,
         tags: input.tags,
         agent_id: actorAgent.id,
@@ -1822,7 +1834,8 @@ export async function runWorkspaceAgentPrompt(options: WorkspaceAgentPromptOptio
       execute: async (input) => {
         const workspace = resolveProjectTarget(input.project);
         if (!workspace) return { error: `Project not found: ${input.project}` };
-        const publish = () => publishWorkspaceToGitHub(workspace, {
+        // Registry write serialized by store.updateProject; no coarse lock.
+        return projectPayload(await publishWorkspaceToGitHub(store, workspace, {
           org: input.org,
           repoName: input.repo,
           visibility: input.visibility as GitHubVisibility | undefined,
@@ -1834,8 +1847,7 @@ export async function runWorkspaceAgentPrompt(options: WorkspaceAgentPromptOptio
           source: "agent",
           prompt: options.prompt,
           command,
-        });
-        return projectPayload(approve ? withAgentWorkspaceLock(workspace, actorAgent.id, "project GitHub publish", publish) : publish());
+        }));
       },
     }),
     projects_github_unpublish: tool({
@@ -1847,15 +1859,14 @@ export async function runWorkspaceAgentPrompt(options: WorkspaceAgentPromptOptio
       execute: async (input) => {
         const workspace = resolveProjectTarget(input.project);
         if (!workspace) return { error: `Project not found: ${input.project}` };
-        const unpublish = () => unpublishWorkspaceFromGitHub(workspace, {
+        return projectPayload(await unpublishWorkspaceFromGitHub(store, workspace, {
           clearIntegrations: input.clear_integrations,
           dryRun: !approve,
           agent_id: actorAgent.id,
           source: "agent",
           prompt: options.prompt,
           command,
-        });
-        return projectPayload(approve ? withAgentWorkspaceLock(workspace, actorAgent.id, "project GitHub unpublish", unpublish) : unpublish());
+        }));
       },
     }),
     projects_import_github: tool({
@@ -1870,7 +1881,7 @@ export async function runWorkspaceAgentPrompt(options: WorkspaceAgentPromptOptio
         tags: z.array(z.string()).optional(),
         remote_protocol: z.enum(["https", "ssh"]).optional(),
       }),
-      execute: async (input) => projectPayload(await importWorkspaceFromGitHub(input.repo, {
+      execute: async (input) => projectPayload(await importWorkspaceFromGitHub(store, input.repo, {
         root: forcedRootId ?? input.root,
         path: forcedRootId ? undefined : input.path,
         clone: input.clone,
@@ -1926,12 +1937,12 @@ export async function runWorkspaceAgentPrompt(options: WorkspaceAgentPromptOptio
             note: "Run again with --yes to link these integrations.",
           };
         }
-        return { status: "linked", project: compactProject(withAgentWorkspaceLock(workspace, actorAgent.id, "project integration link", () => linkWorkspaceExternalIntegrations(workspace, integrations, {
+        return { status: "linked", project: compactProject(await linkWorkspaceExternalIntegrations(store, workspace, integrations, {
           agent_id: actorAgent.id,
           source: "agent",
           prompt: options.prompt,
           command,
-        }))) };
+        })) };
       },
     }),
     projects_unlink: tool({
@@ -1941,7 +1952,7 @@ export async function runWorkspaceAgentPrompt(options: WorkspaceAgentPromptOptio
         keys: z.array(z.string()).min(1).describe("Integration keys or groups to clear, such as github, todos, brief, files_index_id"),
       }),
       execute: async (input) => {
-        const workspace = resolveProjectTarget(input.project);
+        const workspace = await resolveStoreTargetOrNull(input.project);
         if (!workspace) return { error: `Project not found: ${input.project}` };
         const unlinked = expandProjectIntegrationUnlinkKeys(input.keys);
         if (unlinked.length === 0) return { error: "Provide at least one integration key or group to unlink" };
@@ -1955,13 +1966,13 @@ export async function runWorkspaceAgentPrompt(options: WorkspaceAgentPromptOptio
             note: "Run again with --yes to unlink these integrations.",
           };
         }
-        const updated = withAgentWorkspaceLock(workspace, actorAgent.id, "project integration unlink", () => updateWorkspace(workspace.id, {
+        const updated = await store.updateProject(workspace.id, {
           integrations,
-          agent_id: actorAgent.id,
+          agent_id: mutationAgentId,
           source: "agent",
           prompt: options.prompt,
           command,
-        }));
+        });
         return { status: "unlinked", project: compactProject(updated), unlinked };
       },
     }),
@@ -1972,17 +1983,17 @@ export async function runWorkspaceAgentPrompt(options: WorkspaceAgentPromptOptio
         tags: z.array(z.string()).min(1),
       }),
       execute: async (input) => {
-        const workspace = resolveProjectTarget(input.project);
+        const workspace = await resolveStoreTargetOrNull(input.project);
         if (!workspace) return { error: `Project not found: ${input.project}` };
         const tags = mergeProjectTags(workspace.tags, input.tags);
         if (!approve) return { status: "planned", project: compactProject(workspace), tags, note: "Run again with --yes to add these tags." };
-        const updated = withAgentWorkspaceLock(workspace, actorAgent.id, "project tag", () => updateWorkspace(workspace.id, {
+        const updated = await store.updateProject(workspace.id, {
           tags,
-          agent_id: actorAgent.id,
+          agent_id: mutationAgentId,
           source: "agent",
           prompt: options.prompt,
           command,
-        }));
+        });
         return { status: "tagged", project: compactProject(updated) };
       },
     }),
@@ -1993,17 +2004,17 @@ export async function runWorkspaceAgentPrompt(options: WorkspaceAgentPromptOptio
         tags: z.array(z.string()).min(1),
       }),
       execute: async (input) => {
-        const workspace = resolveProjectTarget(input.project);
+        const workspace = await resolveStoreTargetOrNull(input.project);
         if (!workspace) return { error: `Project not found: ${input.project}` };
         const tags = removeProjectTags(workspace.tags, input.tags);
         if (!approve) return { status: "planned", project: compactProject(workspace), tags, note: "Run again with --yes to remove these tags." };
-        const updated = withAgentWorkspaceLock(workspace, actorAgent.id, "project untag", () => updateWorkspace(workspace.id, {
+        const updated = await store.updateProject(workspace.id, {
           tags,
-          agent_id: actorAgent.id,
+          agent_id: mutationAgentId,
           source: "agent",
           prompt: options.prompt,
           command,
-        }));
+        });
         return { status: "untagged", project: compactProject(updated) };
       },
     }),
@@ -2106,6 +2117,69 @@ export async function runWorkspaceAgentPrompt(options: WorkspaceAgentPromptOptio
         tmux_profile: z.string().optional().describe("Existing tmux profile id or slug to apply"),
       }),
       execute: async (input) => {
+        if (store.mode === "api") {
+          // Cloud project rows are created through the Store so they land in
+          // the shared registry (not the local sqlite island). Machine-local
+          // runtime (directory/git/tmux/marker) and the on-box run ledger do
+          // not apply to a shared cloud row. Root/recipe are shared registry
+          // resources resolved through the Store so intent is honored.
+          const rootId = forcedRootId ?? (input.root ? (await store.getRoot(input.root))?.id : undefined);
+          if (input.root && !rootId) return { error: `Root not found: ${input.root}` };
+          const recipeId = forcedRecipeId ?? (input.recipe ? (await store.getRecipe(input.recipe))?.id : undefined);
+          if (input.recipe && !recipeId) return { error: `Recipe not found: ${input.recipe}` };
+
+          const cloudIntegrations = mergeProjectIntegrationFields(input.integrations as WorkspaceIntegrations | undefined, {
+            todos_project_id: input.todos_project_id,
+            todos_task_list_id: input.todos_task_list_id,
+            brief_id: input.brief_id,
+            brief_path: input.brief_path,
+          }) ?? input.integrations as WorkspaceIntegrations | undefined;
+          const cloudMetadata = mergeProjectManagementMetadata(input.metadata as JsonObject | undefined, {
+            stage: input.stage,
+            priority: input.priority,
+            owner: input.owner,
+            launch_profile: input.launch_profile,
+            start_agent: input.start_agent,
+            start_command: input.start_command,
+            start_session_policy: input.start_session_policy,
+            start_windows: input.start_windows as WorkspaceTmuxWindowSpec[] | undefined,
+          }) ?? input.metadata as JsonObject | undefined;
+
+          if (input.slug) {
+            const bySlug = await store.getProject(input.slug);
+            if (bySlug) return existingWorkspaceOutput(bySlug);
+          }
+          const nameKey = comparisonKey(input.name);
+          const nameMatch = nameKey
+            ? (await store.listProjects({ query: input.name, limit: 25 })).find((workspace) => (
+                comparisonKey(workspace.name) === nameKey || comparisonKey(workspace.slug) === nameKey
+              ))
+            : undefined;
+          if (nameMatch) return existingWorkspaceOutput(nameMatch);
+
+          if (!approve) {
+            return projectPayload({
+              status: "planned",
+              plan: { workspace: { name: input.name, slug: input.slug, kind: input.kind, root_id: rootId, recipe_id: recipeId } },
+              note: "Run again with --yes to create this project in the shared cloud registry. Machine-local runtime (directory/git/tmux) is not applied to cloud projects.",
+            });
+          }
+
+          const project = await store.createProject({
+            name: input.name,
+            slug: input.slug,
+            description: input.description,
+            kind: input.kind,
+            root_id: rootId,
+            recipe_id: recipeId,
+            git_remote: input.git_remote,
+            tags: input.tags,
+            integrations: cloudIntegrations,
+            metadata: cloudMetadata,
+          });
+          createdWorkspaces.push(project);
+          return projectPayload({ status: "created", workspace: compactProject(project) });
+        }
         if (tmuxAllowed && input.tmux_profile && !inspectedTmuxProfiles) {
           return { error: "Call projects_tmux_profiles_list before using a saved tmux_profile, then retry projects_create with the selected profile slug." };
         }
@@ -2167,7 +2241,7 @@ export async function runWorkspaceAgentPrompt(options: WorkspaceAgentPromptOptio
           });
         }
 
-        const result = executeWorkspaceCreation({
+        const result = await executeWorkspaceCreation({
           ...createInput,
           createDirectory: input.create_directory,
           gitInit: input.git_init,
@@ -2352,6 +2426,123 @@ export async function runWorkspaceAgentPrompt(options: WorkspaceAgentPromptOptio
       },
     }),
   };
+}
+
+export async function runWorkspaceAgentPrompt(options: WorkspaceAgentPromptOptions): Promise<WorkspaceAgentPromptResult> {
+  const model = pickModel(options.model);
+  const dryRun = Boolean(options.dryRun);
+  const approve = Boolean(options.approve) && !dryRun;
+  const mock = Boolean(options.mock || process.env["WORKSPACES_AGENT_MOCK"]);
+  const runAgent = ensureWorkspaceAgent(model);
+  const store = resolveProjectStore();
+  const actorAgent = resolvePromptAgent(options.agent) ?? runAgent;
+  const forcedRootId = resolveRootId(options.root);
+  const forcedRecipeId = resolveRecipeId(options.recipe);
+  const budgetProject = resolveProjectTarget(options.budgetProject);
+  if (options.budgetProject && !budgetProject) {
+    throw new Error(`Budget project not found: ${options.budgetProject}`);
+  }
+  const tmuxAllowed = options.tmux !== false;
+  const command = promptCommand(options);
+  const runLock = acquireWorkspaceLock({
+    lock_key: `agent-run:${actorAgent.id}`,
+    agent_id: actorAgent.id,
+    reason: "active workspace agent prompt run",
+    ttl_seconds: 900,
+  });
+  const run = startAgentRun({
+    agent_id: runAgent.id,
+    workspace_id: budgetProject?.id,
+    provider: "openrouter",
+    model,
+    prompt: options.prompt,
+    metadata: {
+      dry_run: dryRun,
+      approved: approve,
+      mock,
+      actor_agent_id: actorAgent.id,
+      root_id: forcedRootId,
+      recipe_id: forcedRecipeId,
+      budget_project_id: budgetProject?.id,
+      run_budget: options.runBudget as JsonObject | undefined,
+      tmux_allowed: tmuxAllowed,
+    },
+  });
+
+  if (options.runBudget && (
+    options.runBudget.maxUsd !== undefined ||
+    options.runBudget.maxInputTokens !== undefined ||
+    options.runBudget.maxOutputTokens !== undefined ||
+    options.runBudget.maxTotalTokens !== undefined
+  )) {
+    createProjectBudget({
+      id: `run-${run.id}`,
+      scope_type: "run",
+      scope_id: run.id,
+      window: "lifetime",
+      mode: "hard",
+      max_usd: options.runBudget.maxUsd,
+      max_input_tokens: options.runBudget.maxInputTokens,
+      max_output_tokens: options.runBudget.maxOutputTokens,
+      max_total_tokens: options.runBudget.maxTotalTokens,
+      metadata: { source: "prompt-run" },
+    });
+  }
+
+  try {
+    assertProjectBudgets({ workspace_id: budgetProject?.id, run_id: run.id });
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    completeAgentRun(run.id, { status: "failed", error, result: { error } });
+    releaseWorkspaceLock(runLock.lock_key);
+    throw err;
+  }
+
+  if (mock) {
+    try {
+      return runMockPrompt(actorAgent, run.id, {
+        prompt: options.prompt,
+        dryRun,
+        approve,
+        model,
+        root_id: forcedRootId,
+        recipe_id: forcedRecipeId,
+        tmuxAllowed,
+        command,
+      });
+    } finally {
+      releaseWorkspaceLock(runLock.lock_key);
+    }
+  }
+
+  const apiKey = resolveOpenRouterApiKey();
+  if (!apiKey) {
+    const error = "Missing OpenRouter API key. Set OPENROUTER_API_KEY or store it in the local secrets vault.";
+    completeAgentRun(run.id, { status: "failed", error, result: { error } });
+    releaseWorkspaceLock(runLock.lock_key);
+    throw new Error(error);
+  }
+
+  const createdWorkspaces: Workspace[] = [];
+  const observedToolCalls: JsonObject[] = [];
+  const observedBudgetStatuses: ProjectBudgetStatus[] = [];
+  const provider = createOpenRouter({
+    apiKey,
+    appName: "open-projects",
+    appUrl: "https://github.com/hasna/projects",
+  });
+
+  const tools = buildWorkspaceAgentTools({
+    store,
+    actorAgent,
+    approve,
+    options,
+    command,
+    forcedRootId,
+    forcedRecipeId,
+    tmuxAllowed,
+    createdWorkspaces,
+  });
 
   try {
     const result = await generateText({
@@ -2403,7 +2594,7 @@ export async function runWorkspaceAgentPrompt(options: WorkspaceAgentPromptOptio
 
     const toolCalls = observedToolCalls.length > 0 ? observedToolCalls : extractToolCalls(result);
     const fallback = shouldRunWorkspaceCreateFallback(toolCalls, options.prompt)
-      ? fallbackWorkspaceCreate(actorAgent, {
+      ? await fallbackWorkspaceCreate(actorAgent, {
         prompt: options.prompt,
         dryRun,
         approve,
