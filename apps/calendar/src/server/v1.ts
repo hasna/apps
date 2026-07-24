@@ -155,6 +155,12 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
 
     // ── /v1/attendees ──
     if (resource === "attendees") {
+      if (!id && method === "GET") {
+        const eventId = q.get("event_id");
+        if (!eventId) return error(400, "event_id is required");
+        const attendees = await store.getAttendeesForEvent(eventId);
+        return json({ attendees, count: attendees.length });
+      }
       if (!id && method === "POST") {
         const body = await readJson<{ event_id?: string }>(req);
         if (!body || !body.event_id) return error(400, "event_id is required");
@@ -162,6 +168,9 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
       }
       if (id && (method === "PATCH" || method === "PUT")) {
         return json({ attendee: await store.updateAttendee(id, (await readJson(req)) ?? {}) });
+      }
+      if (id && method === "DELETE") {
+        return json({ deleted: await store.deleteAttendee(id) });
       }
       return error(405, `method ${method} not allowed on /v1/attendees`);
     }
@@ -177,8 +186,10 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
         }
         return error(405, `method ${method} not allowed on /v1/agents`);
       }
-      if (method === "GET") { const agent = await store.getAgent(id); return agent ? json({ agent }) : error(404, "agent not found"); }
       if (segments[3] === "heartbeat" && method === "POST") { const agent = await store.heartbeatAgent(id); return agent ? json({ agent }) : error(404, "agent not found"); }
+      if (method === "GET") { const agent = await store.getAgent(id); return agent ? json({ agent }) : error(404, "agent not found"); }
+      if (method === "PATCH" || method === "PUT") { return json({ agent: await store.updateAgent(id, (await readJson(req)) ?? {}) }); }
+      if (method === "DELETE") { return json({ deleted: await store.deleteAgent(id) }); }
       return error(405, `method ${method} not allowed`);
     }
 
@@ -197,14 +208,22 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
         }
         return json({ availability: await store.upsertAgentAvailability(body.agent_id, body.org_id, body.day_of_week, body.start_time, body.end_time) }, 201);
       }
+      if (id && method === "DELETE") {
+        return json({ deleted: await store.deleteAvailability(id) });
+      }
       return error(405, `method ${method} not allowed on /v1/availability`);
     }
 
     // ── /v1/members ──
     if (resource === "members") {
       if (method === "GET") {
+        const agentId = q.get("agent_id");
+        if (agentId) {
+          const members = await store.getOrgsForAgent(agentId);
+          return json({ members, count: members.length });
+        }
         const orgId = q.get("org_id");
-        if (!orgId) return error(400, "org_id is required");
+        if (!orgId) return error(400, "org_id or agent_id is required");
         const members = await store.getMembershipsForOrg(orgId);
         return json({ members, count: members.length });
       }
@@ -212,6 +231,12 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
         const body = await readJson<{ org_id?: string; agent_id?: string }>(req);
         if (!body || !body.org_id || !body.agent_id) return error(400, "org_id and agent_id are required");
         return json({ member: await store.createMembership(body as never) }, 201);
+      }
+      if (method === "DELETE") {
+        const agentId = q.get("agent_id");
+        const orgId = q.get("org_id");
+        if (!agentId || !orgId) return error(400, "agent_id and org_id are required");
+        return json({ deleted: await store.deleteMembershipByAgentAndOrg(agentId, orgId) });
       }
       return error(405, `method ${method} not allowed on /v1/members`);
     }

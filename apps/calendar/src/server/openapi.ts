@@ -140,6 +140,13 @@ export function buildV1OpenApiDocument(): Record<string, unknown> {
           },
           required: ["event_id"],
         },
+        UpdateAttendeeInput: {
+          type: "object",
+          properties: {
+            status: { type: "string", enum: ["needsAction", "accepted", "declined", "tentative"] },
+            response_comment: { type: ["string", "null"] }, required: { type: "boolean" },
+          },
+        },
         Agent: {
           type: "object",
           properties: {
@@ -156,6 +163,13 @@ export function buildV1OpenApiDocument(): Record<string, unknown> {
             title: { type: "string" }, level: { type: "string" }, org_id: { type: "string" },
           },
           required: ["name"],
+        },
+        UpdateAgentInput: {
+          type: "object",
+          properties: {
+            description: { type: "string" }, role: { type: "string" },
+            title: { type: "string" }, level: { type: "string" }, org_id: { type: "string" },
+          },
         },
         Availability: {
           type: "object",
@@ -259,11 +273,28 @@ export function buildV1OpenApiDocument(): Record<string, unknown> {
         delete: { operationId: "deleteEvent", summary: "Delete an event", parameters: [idParam], responses: { "200": jsonResp(ref("DeleteResult")) } },
       },
       "/v1/attendees": {
+        get: {
+          operationId: "listAttendees", summary: "List attendees for an event",
+          parameters: [{ name: "event_id", in: "query", required: true, schema: { type: "string" } }],
+          responses: { "200": jsonResp({ type: "object", properties: { attendees: { type: "array", items: ref("Attendee") }, count: { type: "integer" } } }) },
+        },
         post: { operationId: "addAttendee", summary: "Add an attendee to an event", requestBody: jsonBody(ref("CreateAttendeeInput")), responses: { "201": jsonResp({ type: "object", properties: { attendee: ref("Attendee") } }, "Created") } },
+      },
+      "/v1/attendees/{id}": {
+        patch: { operationId: "updateAttendee", summary: "Update / respond to an attendee", parameters: [idParam], requestBody: jsonBody(ref("UpdateAttendeeInput")), responses: { "200": jsonResp({ type: "object", properties: { attendee: ref("Attendee") } }) } },
+        delete: { operationId: "deleteAttendee", summary: "Delete an attendee", parameters: [idParam], responses: { "200": jsonResp(ref("DeleteResult")) } },
       },
       "/v1/agents": {
         get: { operationId: "listAgents", summary: "List agents", responses: { "200": jsonResp({ type: "object", properties: { agents: { type: "array", items: ref("Agent") }, count: { type: "integer" } } }) } },
         post: { operationId: "registerAgent", summary: "Register (or upsert) an agent", requestBody: jsonBody(ref("RegisterAgentInput")), responses: { "201": jsonResp({ type: "object", properties: { agent: ref("Agent") } }, "Created") } },
+      },
+      "/v1/agents/{id}": {
+        get: { operationId: "getAgent", summary: "Get an agent by id or name", parameters: [idParam], responses: { "200": jsonResp({ type: "object", properties: { agent: ref("Agent") } }), "404": jsonResp(ref("Error"), "Not found") } },
+        patch: { operationId: "updateAgent", summary: "Update an agent", parameters: [idParam], requestBody: jsonBody(ref("UpdateAgentInput")), responses: { "200": jsonResp({ type: "object", properties: { agent: ref("Agent") } }) } },
+        delete: { operationId: "deleteAgent", summary: "Delete an agent", parameters: [idParam], responses: { "200": jsonResp(ref("DeleteResult")) } },
+      },
+      "/v1/agents/{id}/heartbeat": {
+        post: { operationId: "heartbeatAgent", summary: "Update an agent's last_seen_at", parameters: [idParam], responses: { "200": jsonResp({ type: "object", properties: { agent: ref("Agent") } }), "404": jsonResp(ref("Error"), "Not found") } },
       },
       "/v1/availability": {
         get: {
@@ -273,13 +304,27 @@ export function buildV1OpenApiDocument(): Record<string, unknown> {
         },
         post: { operationId: "upsertAvailability", summary: "Upsert an agent availability window", requestBody: jsonBody(ref("UpsertAvailabilityInput")), responses: { "201": jsonResp({ type: "object", properties: { availability: ref("Availability") } }, "Created") } },
       },
+      "/v1/availability/{id}": {
+        delete: { operationId: "deleteAvailability", summary: "Delete an availability window", parameters: [idParam], responses: { "200": jsonResp(ref("DeleteResult")) } },
+      },
       "/v1/members": {
         get: {
-          operationId: "listMembers", summary: "List org memberships",
-          parameters: [{ name: "org_id", in: "query", required: true, schema: { type: "string" } }],
+          operationId: "listMembers", summary: "List memberships by org or by agent",
+          parameters: [
+            { name: "org_id", in: "query", schema: { type: "string" } },
+            { name: "agent_id", in: "query", schema: { type: "string" } },
+          ],
           responses: { "200": jsonResp({ type: "object", properties: { members: { type: "array", items: ref("Membership") }, count: { type: "integer" } } }) },
         },
         post: { operationId: "addMember", summary: "Add an agent to an org", requestBody: jsonBody(ref("CreateMembershipInput")), responses: { "201": jsonResp({ type: "object", properties: { member: ref("Membership") } }, "Created") } },
+        delete: {
+          operationId: "removeMember", summary: "Remove an agent from an org",
+          parameters: [
+            { name: "agent_id", in: "query", required: true, schema: { type: "string" } },
+            { name: "org_id", in: "query", required: true, schema: { type: "string" } },
+          ],
+          responses: { "200": jsonResp(ref("DeleteResult")) },
+        },
       },
     },
   };

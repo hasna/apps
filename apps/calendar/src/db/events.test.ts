@@ -447,6 +447,23 @@ describe("events", () => {
     expect(results[0]!.title).toBe("Engineering Standup");
   });
 
+  test("search tolerates hyphenated, multi-token, and empty queries (FTS5 syntax)", () => {
+    createEvent({
+      title: "Meeting-XYZ Planning",
+      calendar_id: calendarId,
+      org_id: orgId,
+      start_at: "2026-04-15T09:00:00Z",
+      end_at: "2026-04-15T09:30:00Z",
+    });
+    // Hyphenated term must not crash FTS5 with "no such column: xyz".
+    expect(searchEvents("meeting-xyz").map((e) => e.title)).toEqual(["Meeting-XYZ Planning"]);
+    // Multi-token query (implicit AND) resolves both barewords.
+    expect(searchEvents("meeting planning").map((e) => e.title)).toEqual(["Meeting-XYZ Planning"]);
+    // Punctuation-only / empty queries return [] instead of throwing.
+    expect(searchEvents("   ")).toEqual([]);
+    expect(searchEvents("-")).toEqual([]);
+  });
+
   test("search events orders offset timestamps by instant", () => {
     createEvent({
       title: "Shared Query Later",
