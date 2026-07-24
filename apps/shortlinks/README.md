@@ -114,6 +114,12 @@ shortlinks domain add go.example.com --provider cloudflare
 
 Generated links use the default domain unless `--domain` is passed.
 
+Remove a domain (this also deletes all of its links and clicks):
+
+```bash
+shortlinks domain remove go.example.com
+```
+
 ## Cloudflare
 
 Create a dry-run plan:
@@ -149,32 +155,28 @@ shortlinks domain buy new-short-domain.ai --dry-run
 
 This package does not install or call any removed `connect-*` packages.
 
-## PostgreSQL Runtime
+## Storage modes
 
-Production serving can use a shortlinks-owned PostgreSQL database without any shared table-sync package:
+The client resolves ONE `Store` from the environment — there is no DSN on any client:
+
+- **local** (default): on-box SQLite. Every command, MCP tool, and SDK call reads
+  and writes the local database.
+- **self_hosted / cloud**: set `HASNA_SHORTLINKS_API_URL` + `HASNA_SHORTLINKS_API_KEY`
+  (and optionally `HASNA_SHORTLINKS_STORAGE_MODE`) to route every call to the cloud
+  `/v1` HTTP API with a bearer key. `self_hosted` and `cloud` are identical client
+  code; only the URL/key differ.
 
 ```bash
-export HASNA_SHORTLINKS_STORE=postgres
-export HASNA_SHORTLINKS_DATABASE_URL=postgres://shortlinks:password@db.example.com:5432/shortlinks
-export HASNA_SHORTLINKS_DATABASE_SSL=true
-
-shortlinks postgres status
-shortlinks postgres plan --schema-sql
-shortlinks postgres migrate
-shortlinks --store postgres serve --host 127.0.0.1 --port 8787 --default-host has.na
+# Route the client to the self-hosted cloud API (bearer key, never a DSN):
+export HASNA_SHORTLINKS_API_URL=https://shortlinks.hasna.xyz
+export HASNA_SHORTLINKS_API_KEY=hsk_...
+export HASNA_SHORTLINKS_STORAGE_MODE=self_hosted
+shortlinks doctor
 ```
 
-The canonical production runtime secret path is `hasna/xyz/opensource/shortlinks/prod/postgres`. Use the URL environment variables above rather than writing shared runtime config files into the shortlinks data directory.
-
-## AWS Origin
-
-For an apex domain that needs stable A records, `infra/aws-ec2-user-data.sh` bootstraps a small EC2 redirect origin with:
-
-- `@hasna/shortlinks` installed through Bun
-- direct reads and click writes against the app-owned `shortlinks` PostgreSQL database
-- Caddy terminating HTTPS and proxying to `shortlinks serve`
-
-The script reads the connection settings from AWS Secrets Manager through the instance role; it does not contain secret values.
+The cloud server (`shortlinks-serve`, run on ECS Fargate) is the only component
+that holds a Postgres connection, and it opens its pool server-side through the
+sanctioned storage kit — the raw RDS DSN is never distributed to clients.
 
 ## Development
 

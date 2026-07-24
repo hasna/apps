@@ -128,4 +128,25 @@ describe("ShortlinksStore", () => {
       rmSync(secondHome, { recursive: true, force: true });
     }
   });
+
+  test("deleteDomain removes the domain and cascades its links and clicks", () => {
+    const store = new ShortlinksStore(dbPath);
+    store.addDomain({ hostname: "has.na", defaultDomain: true });
+    const link = store.createLink({ destinationUrl: "https://example.com/a", slug: "a" });
+    store.recordClick(link, { ip: "203.0.113.10" });
+
+    expect(store.totalStats()).toEqual({ domains: 1, links: 1, clicks: 1 });
+
+    const deleted = store.deleteDomain("has.na");
+    expect(deleted.hostname).toBe("has.na");
+
+    // Domain, its links, and clicks are all gone (ON DELETE CASCADE).
+    expect(store.getDomain("has.na")).toBeNull();
+    expect(store.totalStats()).toEqual({ domains: 0, links: 0, clicks: 0 });
+
+    // Deleting a missing domain throws.
+    expect(() => store.deleteDomain("nope.example")).toThrow("Domain not found.");
+
+    store.close();
+  });
 });

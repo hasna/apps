@@ -5,8 +5,8 @@
  * vendored storage kit's MigrationLedger. The service reads and writes the same
  * cloud database — there is no local mirror, cache, or sync engine here.
  *
- * The domains/links/clicks schema mirrors src/pg-migrations.ts (SQLite-parity
- * TEXT/INTEGER shapes) so the existing SaaS-remnant tables are matched exactly
+ * The domains/links/clicks schema uses SQLite-parity TEXT/INTEGER shapes so the
+ * existing SaaS-remnant tables are matched exactly
  * (every statement is `IF NOT EXISTS` — applying the ledger never clobbers data).
  * The api_keys table migrations come from @hasna/contracts/auth so the API-key
  * middleware and the `contracts issue-key` issuer share one schema.

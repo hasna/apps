@@ -6,26 +6,14 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { ShortlinksStore } from "../store.js";
-import { PgShortlinksStore, applyPostgresMigrations } from "../pg-store.js";
-import { CloudShortlinksStore } from "../cloud-store.js";
+import { resolveStore, type Store } from "../client-store.js";
+import type { TotalStats } from "../store-interface.js";
 import { getConfigPath, getDataDir, getDatabasePath, loadConfig, saveConfig, updateConfig } from "../config.js";
 import { serveShortlinks } from "../server.js";
 import { createCloudflarePlan, writeWorkerFiles, upsertCloudflareDnsRecord } from "../cloudflare.js";
 import { runDomains } from "../domains-cli.js";
 import { createLocalSetupPlan, registerMachinesDns } from "../local.js";
-import { PG_MIGRATIONS } from "../pg-migrations.js";
-import {
-  getShortlinksDatabaseSsl,
-  getShortlinksDatabaseUrl,
-  getShortlinksRuntimeStatus,
-  parseShortlinksStoreMode,
-  redactDatabaseUrl,
-} from "../runtime.js";
-import type { Link } from "../types.js";
-import type { ShortlinksStoreMode } from "../runtime.js";
-
-type RuntimeStore = ShortlinksStore | PgShortlinksStore | CloudShortlinksStore;
+import type { Link, LinkStats } from "../types.js";
 
 function getPackageVersion(): string {
   try {
@@ -60,64 +48,18 @@ function handleError(error: unknown): never {
   process.exit(1);
 }
 
-function withStore<T>(fn: (store: ShortlinksStore) => T): T {
-  const store = new ShortlinksStore(program.opts().db);
-  try {
-    return fn(store);
-  } finally {
-    store.close();
-  }
-}
-
-async function withStoreAsync<T>(fn: (store: ShortlinksStore) => Promise<T>): Promise<T> {
-  const store = new ShortlinksStore(program.opts().db);
+/**
+ * Run `fn` with the resolved client {@link Store}. The store is the cloud
+ * ApiStore when the client flip is on (HASNA_SHORTLINKS_API_URL + _API_KEY /
+ * _STORAGE_MODE), otherwise the on-box LocalStore. There is no DSN/postgres
+ * client path: a client never touches the raw RDS.
+ */
+async function withRuntimeStore<T>(fn: (store: Store) => T | Promise<T>): Promise<T> {
+  const store = resolveStore(process.env, { dbPath: program.opts().db });
   try {
     return await fn(store);
   } finally {
-    store.close();
-  }
-}
-
-function storeMode(): ShortlinksStoreMode {
-  const opts = program.opts();
-  return parseShortlinksStoreMode(opts.store || process.env.HASNA_SHORTLINKS_STORE || process.env.SHORTLINKS_STORE || "local");
-}
-
-function runtimeEnv(): NodeJS.ProcessEnv {
-  const opts = program.opts();
-  return opts.store ? { ...process.env, HASNA_SHORTLINKS_STORE: opts.store } : process.env;
-}
-
-function localStatsIfDatabaseExists(dbPath: string): { domains: number; links: number; clicks: number } | null {
-  if (!existsSync(dbPath)) return null;
-  return withStore((store) => store.totalStats());
-}
-
-async function withRuntimeStore<T>(fn: (store: RuntimeStore) => T | Promise<T>): Promise<T> {
-  // self_hosted client flip: when HASNA_SHORTLINKS_MODE=self_hosted (or cloud)
-  // AND HASNA_SHORTLINKS_API_URL + HASNA_SHORTLINKS_API_KEY are set, route ALL
-  // reads/writes to the cloud /v1 HTTP API. No DSN, no local SQLite.
-  const cloud = CloudShortlinksStore.fromEnv(process.env);
-  if (cloud) {
-    try {
-      return await fn(cloud);
-    } finally {
-      await cloud.close();
-    }
-  }
-  if (storeMode() === "postgres") {
-    const store = await PgShortlinksStore.fromEnv();
-    try {
-      return await fn(store);
-    } finally {
-      await store.close();
-    }
-  }
-  const store = new ShortlinksStore(program.opts().db);
-  try {
-    return await fn(store);
-  } finally {
-    store.close();
+    await store.close();
   }
 }
 
@@ -132,10 +74,9 @@ function commandExists(command: string): boolean {
 
 program
   .name("shortlinks")
-  .description("CLI-only shortlink manager with custom domains, click tracking, Cloudflare helpers, and app-owned Postgres runtime support")
+  .description("Shortlink manager with custom domains, click tracking, and Cloudflare helpers — local SQLite or self-hosted cloud /v1 API storage")
   .version(getPackageVersion())
-  .option("--db <path>", "SQLite database path")
-  .option("--store <mode>", "Data store mode: local or postgres", process.env.HASNA_SHORTLINKS_STORE || process.env.SHORTLINKS_STORE || "local")
+  .option("--db <path>", "SQLite database path (local mode only)")
   .option("-j, --json", "Output JSON for agents and scripts");
 
 program
@@ -158,12 +99,12 @@ program
           config.defaultDomain = domain.hostname;
           config.publicBaseUrl = opts.publicBaseUrl || `https://${domain.hostname}`;
         }
-        if (storeMode() === "local") saveConfig(config);
+        if (store.kind === "local") saveConfig(config);
         return {
           data_dir: getDataDir(),
           config_path: getConfigPath(),
           db_path: getDatabasePath(program.opts().db),
-          store: storeMode(),
+          store: store.kind,
           config,
           stats: await store.totalStats(),
         };
@@ -287,6 +228,24 @@ domainCmd
       const domain = await withRuntimeStore((store) => store.getDomain(hostname));
       if (!domain) throw new Error("Domain not found.");
       print(domain, opts, () => console.log(JSON.stringify(domain, null, 2)));
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+domainCmd
+  .command("remove <hostname>")
+  .alias("delete")
+  .alias("rm")
+  .description("Delete a domain and all of its links and clicks")
+  .option("-j, --json", "Output JSON")
+  .action(async (hostname, opts) => {
+    try {
+      const domain = await withRuntimeStore((store) => store.deleteDomain(hostname));
+      print({ deleted: true, hostname: domain.hostname }, opts, () => {
+        console.log(chalk.green(`Domain removed: ${domain.hostname}`));
+        console.log(chalk.dim("Its links and clicks were deleted."));
+      });
     } catch (error) {
       handleError(error);
     }
@@ -503,7 +462,7 @@ program
   .option("-j, --json", "Output JSON")
   .action(async (slug, opts) => {
     try {
-      const result = await withRuntimeStore((store) => {
+      const result = await withRuntimeStore<LinkStats | TotalStats>((store) => {
         if (slug) return opts.domain ? store.getStats(opts.domain, slug) : store.getStats(slug);
         return store.totalStats();
       });
@@ -515,24 +474,23 @@ program
 
 program
   .command("serve")
-  .description("Run the redirect server that records clicks")
+  .description("Run the on-box redirect server that records clicks (routes through the resolved Store)")
   .option("--host <host>", "Bind host", "127.0.0.1")
   .option("--port <port>", "Port", "8787")
   .option("--default-host <hostname>", "Fallback host if the request has no Host header")
   .action(async (opts) => {
     try {
-      const store = storeMode() === "postgres"
-        ? await PgShortlinksStore.fromEnv()
-        : undefined;
+      // The redirect server reads/records through the same Store seam as every
+      // other command: LocalStore on-box, or the cloud ApiStore when the flip is
+      // on. There is no DSN path here — a client never opens the raw RDS.
+      const store = resolveStore(process.env, { dbPath: program.opts().db });
       const server = serveShortlinks({
         store,
-        dbPath: program.opts().db,
         host: opts.host,
         port: Number(opts.port),
         defaultHost: opts.defaultHost,
       });
-      const mode = store ? "postgres" : "local";
-      console.log(chalk.green(`shortlinks redirect server listening on http://${server.hostname}:${server.port} (${mode})`));
+      console.log(chalk.green(`shortlinks redirect server listening on http://${server.hostname}:${server.port} (${store.kind})`));
     } catch (error) {
       handleError(error);
     }
@@ -605,93 +563,6 @@ cfCmd
     }
   });
 
-const postgresCmd = program.command("postgres").description("Shortlinks-owned PostgreSQL runtime helpers");
-
-postgresCmd
-  .command("migrate")
-  .description("Apply shortlinks PostgreSQL migrations")
-  .option("--connection-string <url>", "PostgreSQL connection string")
-  .option("--no-ssl", "Disable PostgreSQL TLS only for local development")
-  .option("--dry-run", "Show migration settings without opening a network connection")
-  .option("-j, --json", "Output JSON")
-  .action(async (opts) => {
-    try {
-      const conn = opts.connectionString || getShortlinksDatabaseUrl();
-      if (!conn) throw new Error("HASNA_SHORTLINKS_DATABASE_URL or --connection-string is required.");
-      const ssl = opts.ssl === false ? false : getShortlinksDatabaseSsl();
-      if (opts.dryRun) {
-        const result = {
-          service: "shortlinks",
-          dry_run: true,
-          no_network: true,
-          database: {
-            configured: true,
-            redacted_url: redactDatabaseUrl(conn),
-            ssl,
-          },
-          migrations: PG_MIGRATIONS.length,
-        };
-        print(result, opts, () => console.log(JSON.stringify(result, null, 2)));
-        return;
-      }
-      const result = await applyPostgresMigrations(conn, PG_MIGRATIONS, { ssl });
-      print(result, opts, () => console.log(JSON.stringify(result, null, 2)));
-    } catch (error) {
-      handleError(error);
-    }
-  });
-
-postgresCmd
-  .command("status")
-  .description("Show local and PostgreSQL runtime configuration health without opening network connections")
-  .option("-j, --json", "Output JSON")
-  .action((opts) => {
-    try {
-      const dbPath = getDatabasePath(program.opts().db);
-      const data = {
-        ...getShortlinksRuntimeStatus(runtimeEnv()),
-        service: "shortlinks",
-        db_path: dbPath,
-        db_exists: existsSync(dbPath),
-      };
-      print(data, opts, () => console.log(JSON.stringify(data, null, 2)));
-    } catch (error) {
-      handleError(error);
-    }
-  });
-
-postgresCmd
-  .command("plan")
-  .description("Render a dry-run PostgreSQL setup plan")
-  .option("--schema-sql", "Include migration SQL")
-  .option("-j, --json", "Output JSON")
-  .action((opts) => {
-    try {
-      const status = getShortlinksRuntimeStatus(runtimeEnv());
-      const data = {
-        ok: status.ok,
-        service: "shortlinks",
-        dry_run: true,
-        no_network: true,
-        status,
-        postgres: {
-          required: status.mode === "postgres",
-          configured: status.database.configured,
-          schema_sql: opts.schemaSql ? PG_MIGRATIONS : [],
-        },
-        steps: [
-          "Read local SQLite state",
-          status.mode === "postgres" ? "Prepare direct shortlinks Postgres runtime" : "Keep serving from local SQLite",
-          "Run migrations with shortlinks postgres migrate before serving from Postgres",
-          "Report planned changes without opening network connections",
-        ],
-      };
-      print(data, opts, () => console.log(JSON.stringify(data, null, 2)));
-    } catch (error) {
-      handleError(error);
-    }
-  });
-
 const localCmd = program.command("local").description("Local domain setup helpers");
 
 localCmd
@@ -750,32 +621,33 @@ program
   .option("-j, --json", "Output JSON")
   .action(async (opts) => {
     try {
-      const runtime = getShortlinksRuntimeStatus(runtimeEnv());
       const dbPath = getDatabasePath(program.opts().db);
-      const data = {
+      const data = await withRuntimeStore(async (store) => ({
         service: "shortlinks",
-        ok: runtime.ok,
-        store: runtime.mode,
+        ok: true,
+        // Which transport the client flip resolved to: "local" or "cloud-http".
+        store: store.kind,
         data_dir: getDataDir(),
         config_path: getConfigPath(),
         db_path: dbPath,
         db_exists: existsSync(dbPath),
-        stats: localStatsIfDatabaseExists(dbPath),
-        runtime,
-        no_network: true,
+        stats: await store.totalStats(),
         commands: {
           domains: commandExists("domains"),
           wrangler: commandExists("wrangler"),
           secrets: commandExists("secrets"),
         },
         environment: {
-          shortlinks_database_url_present: Boolean(getShortlinksDatabaseUrl(runtimeEnv())),
+          // API mode is bearer-key only — never a DB DSN on the client.
+          api_url_present: Boolean(process.env.HASNA_SHORTLINKS_API_URL),
+          api_key_present: Boolean(process.env.HASNA_SHORTLINKS_API_KEY),
+          storage_mode: process.env.HASNA_SHORTLINKS_STORAGE_MODE || process.env.HASNA_SHORTLINKS_MODE || null,
           cloudflare_api_token_present: Boolean(process.env.CLOUDFLARE_API_TOKEN),
           cloudflare_api_key_present: Boolean(process.env.CLOUDFLARE_API_KEY),
           cloudflare_email_present: Boolean(process.env.CLOUDFLARE_EMAIL),
           shortlinks_origin_present: Boolean(process.env.SHORTLINKS_ORIGIN),
         },
-      };
+      }));
       print(data, opts, () => console.log(JSON.stringify(data, null, 2)));
     } catch (error) {
       handleError(error);
