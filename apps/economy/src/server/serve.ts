@@ -12,6 +12,7 @@ import {
   listMachineRegistry,
   queryBillingSummary,
   openDatabase,
+  bulkIngest,
 } from '../db/database.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
 import { AGENTS, isAgent } from '../lib/agents.js'
@@ -65,6 +66,8 @@ const CORS = {
   'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Economy-Token',
 }
+const APP = 'economy'
+const ECONOMY_WRITE_SCOPE = `${APP}:write`
 const AGENT_ERROR = `agent must be one of: ${AGENTS.join(', ')}`
 const SYNC_SOURCES = ['all', ...AGENTS, 'loops'] as const
 const DEFAULT_DASHBOARD_DIR = new URL('../../dashboard/dist', import.meta.url).pathname
@@ -123,6 +126,11 @@ function optionalString(value: unknown): string | null {
 function optionalAgent(value: unknown): Agent | null | undefined {
   if (value == null || value === '') return null
   return typeof value === 'string' && (AGENTS as readonly string[]).includes(value) ? value as Agent : undefined
+}
+
+function requiredScopesForRequest(method: string, path: string): readonly string[] | undefined {
+  if (method === 'POST' && path === '/api/ingest') return [ECONOMY_WRITE_SCOPE]
+  return undefined
 }
 
 function stringArray(value: unknown): string[] {
@@ -220,7 +228,11 @@ export function createHandler(db: Database, options: HandlerOptions = {}) {
     // Internet-facing path: the @hasna/contracts API-key verifier. Local/dev
     // path: the legacy shared-token check. Foundation probes above are open.
     if (options.authenticator) {
-      const decision = await options.authenticator.authenticate(req.headers, { method, path: rawPath })
+      const decision = await options.authenticator.authenticate(req.headers, {
+        method,
+        path: rawPath,
+        requiredScopes: requiredScopesForRequest(method, path),
+      })
       if (!decision.ok) return json({ error: decision.reason ?? 'unauthorized', message: decision.message }, decision.status || 401)
     } else if (!isAuthorizedRequest(req, path)) {
       return err('Unauthorized', 401)
@@ -491,6 +503,19 @@ export function createHandler(db: Database, options: HandlerOptions = {}) {
       return ok(results)
     }
 
+    // Bulk ingest — import a client's local rows into the cloud DB over the
+    // authed HTTPS API (self_hosted flip forbids a raw RDS DSN on fleet machines,
+    // and the big time-series tables have no other write path). Merges by primary
+    // key via explicit dialect-safe ON CONFLICT upserts, so re-runs are idempotent
+    // (no duplicates) on both SQLite and Postgres. Body: { requests?, sessions?,
+    // projects?, budgets?, goals?, billing_daily?, model_pricing?, subscriptions?,
+    // usage_snapshots? } — each an array of that table's rows.
+    if (path === '/api/ingest' && method === 'POST') {
+      const body = await jsonBody(req)
+      if (!body) return err('invalid JSON body')
+      return ok(bulkIngest(db, body))
+    }
+
     if (path === '/api/usage' && method === 'GET') {
       const period = (url.searchParams.get('period') ?? 'month') as Period
       const agent = url.searchParams.get('agent') ?? undefined
@@ -595,8 +620,6 @@ export function createHandler(db: Database, options: HandlerOptions = {}) {
     return err('Not found', 404)
   }
 }
-
-const APP = 'economy'
 
 function isLocalHost(host: string): boolean {
   return ['127.0.0.1', 'localhost', '::1'].includes(host)

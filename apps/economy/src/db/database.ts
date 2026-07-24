@@ -1599,3 +1599,190 @@ export function dedupeRequests(db: Database): number {
   }
   return removed
 }
+
+// ── Bulk ingest (authed cloud backfill) ─────────────────────────────────────────
+//
+// Idempotent, dialect-safe importer behind the authed POST /v1/ingest route. It
+// lets a fleet machine push its local rows into the shared cloud DB over
+// HTTPS + API-key — the locked self_hosted architecture forbids a raw RDS DSN on
+// clients, and the big time-series tables (requests/sessions) have no other write
+// path, so cloud parity was otherwise impossible.
+//
+// Why this does NOT reuse the `INSERT OR REPLACE` upsert helpers directly: against
+// Postgres the @hasna/cloud SQL translator rewrites `INSERT OR REPLACE` into a
+// bare `INSERT` with NO conflict clause, so re-importing any existing primary key
+// violates the PK constraint and aborts the batch (the helpers' idempotency is
+// SQLite-only). Here we emit an explicit `INSERT ... ON CONFLICT (<pk>) DO UPDATE
+// SET ...`, which is a native upsert on SQLite AND passes through the Postgres
+// translator unchanged — so re-runs merge by primary key (no duplicate rows) on
+// both engines.
+
+interface IngestSpec {
+  table: string
+  pk: string[]
+  columns: string[]
+  map: (row: Record<string, unknown>, now: string) => unknown[]
+}
+
+const numOr = (v: unknown, d = 0): number => {
+  if (v == null) return d
+  const num = Number(v)
+  return Number.isFinite(num) ? num : d
+}
+const strOr = (v: unknown, d = ''): string => (v == null ? d : String(v))
+
+function ingestSpecs(): IngestSpec[] {
+  return [
+    {
+      table: 'requests',
+      pk: ['id'],
+      columns: [
+        'id', 'agent', 'session_id', 'model', 'input_tokens', 'output_tokens',
+        'cache_read_tokens', 'cache_create_tokens', 'cache_create_5m_tokens',
+        'cache_create_1h_tokens', 'cost_usd', 'cost_basis', 'duration_ms', 'timestamp',
+        'source_request_id', 'machine_id', 'attribution_tag', 'account_key', 'account_tool',
+        'account_name', 'account_email', 'account_source', 'updated_at', 'synced_at',
+      ],
+      map: (r, now) => [
+        strOr(r['id']), strOr(r['agent']), strOr(r['session_id']), strOr(r['model']),
+        numOr(r['input_tokens']), numOr(r['output_tokens']), numOr(r['cache_read_tokens']), numOr(r['cache_create_tokens']),
+        numOr(r['cache_create_5m_tokens'] ?? r['cache_create_tokens']), numOr(r['cache_create_1h_tokens']),
+        numOr(r['cost_usd']), strOr(r['cost_basis'], 'estimated'), numOr(r['duration_ms']), strOr(r['timestamp']),
+        r['source_request_id'] == null ? null : strOr(r['source_request_id']), strOr(r['machine_id']),
+        strOr(r['attribution_tag']), strOr(r['account_key']), strOr(r['account_tool']),
+        strOr(r['account_name']), strOr(r['account_email']), strOr(r['account_source']),
+        strOr(r['updated_at'], now), strOr(r['synced_at']),
+      ],
+    },
+    {
+      table: 'sessions',
+      pk: ['id'],
+      columns: [
+        'id', 'agent', 'project_path', 'project_name', 'started_at', 'ended_at',
+        'total_cost_usd', 'total_tokens', 'request_count', 'machine_id', 'attribution_tag',
+        'account_key', 'account_tool', 'account_name', 'account_email', 'account_source',
+        'updated_at', 'synced_at',
+      ],
+      map: (r, now) => [
+        strOr(r['id']), strOr(r['agent']), strOr(r['project_path']), strOr(r['project_name']),
+        strOr(r['started_at']), r['ended_at'] == null ? null : strOr(r['ended_at']),
+        numOr(r['total_cost_usd']), numOr(r['total_tokens']), numOr(r['request_count']), strOr(r['machine_id']),
+        strOr(r['attribution_tag']), strOr(r['account_key']), strOr(r['account_tool']),
+        strOr(r['account_name']), strOr(r['account_email']), strOr(r['account_source']),
+        strOr(r['updated_at'], now), strOr(r['synced_at']),
+      ],
+    },
+    {
+      table: 'projects',
+      pk: ['id'],
+      columns: ['id', 'path', 'name', 'description', 'tags', 'created_at'],
+      map: (r) => [
+        strOr(r['id']), strOr(r['path']), strOr(r['name']),
+        r['description'] == null ? null : strOr(r['description']),
+        typeof r['tags'] === 'string' ? r['tags'] : JSON.stringify(r['tags'] ?? []),
+        strOr(r['created_at']),
+      ],
+    },
+    {
+      table: 'budgets',
+      pk: ['id'],
+      columns: ['id', 'project_path', 'agent', 'period', 'limit_usd', 'alert_at_percent', 'created_at', 'updated_at'],
+      map: (r) => [
+        strOr(r['id']), r['project_path'] == null ? null : strOr(r['project_path']),
+        r['agent'] == null ? null : strOr(r['agent']), strOr(r['period']),
+        numOr(r['limit_usd']), numOr(r['alert_at_percent']), strOr(r['created_at']), strOr(r['updated_at']),
+      ],
+    },
+    {
+      table: 'goals',
+      pk: ['id'],
+      columns: ['id', 'period', 'project_path', 'agent', 'limit_usd', 'created_at', 'updated_at'],
+      map: (r) => [
+        strOr(r['id']), strOr(r['period']), r['project_path'] == null ? null : strOr(r['project_path']),
+        r['agent'] == null ? null : strOr(r['agent']), numOr(r['limit_usd']), strOr(r['created_at']), strOr(r['updated_at']),
+      ],
+    },
+    {
+      table: 'billing_daily',
+      pk: ['date', 'provider', 'description'],
+      columns: ['date', 'provider', 'description', 'cost_usd', 'updated_at'],
+      map: (r) => [strOr(r['date']), strOr(r['provider']), strOr(r['description']), numOr(r['cost_usd']), strOr(r['updated_at'])],
+    },
+    {
+      table: 'model_pricing',
+      pk: ['model'],
+      columns: [
+        'model', 'input_per_1m', 'output_per_1m', 'cache_read_per_1m', 'cache_write_per_1m',
+        'cache_write_1h_per_1m', 'cache_storage_per_1m_hour', 'updated_at',
+      ],
+      map: (r) => [
+        strOr(r['model']), numOr(r['input_per_1m']), numOr(r['output_per_1m']), numOr(r['cache_read_per_1m']),
+        numOr(r['cache_write_per_1m']), numOr(r['cache_write_1h_per_1m']), numOr(r['cache_storage_per_1m_hour']), strOr(r['updated_at']),
+      ],
+    },
+    {
+      table: 'subscriptions',
+      pk: ['id'],
+      columns: [
+        'id', 'agent', 'provider', 'plan', 'monthly_fee_usd', 'included_usage_usd',
+        'billing_cycle_start', 'reset_policy', 'active', 'created_at', 'updated_at',
+      ],
+      map: (r) => [
+        strOr(r['id']), r['agent'] == null ? null : strOr(r['agent']), strOr(r['provider']), strOr(r['plan']),
+        numOr(r['monthly_fee_usd']), numOr(r['included_usage_usd']),
+        r['billing_cycle_start'] == null ? null : strOr(r['billing_cycle_start']),
+        strOr(r['reset_policy'], 'monthly'), numOr(r['active'], 1), strOr(r['created_at']), strOr(r['updated_at']),
+      ],
+    },
+    {
+      table: 'usage_snapshots',
+      pk: ['id'],
+      columns: ['id', 'agent', 'date', 'metric', 'value', 'unit', 'machine_id', 'updated_at'],
+      map: (r, now) => [
+        strOr(r['id'], `${strOr(r['agent'])}-${strOr(r['date'])}-${strOr(r['metric'])}-${strOr(r['machine_id'])}`),
+        strOr(r['agent']), strOr(r['date']), strOr(r['metric']), numOr(r['value']), strOr(r['unit']), strOr(r['machine_id']), strOr(r['updated_at'], now),
+      ],
+    },
+  ]
+}
+
+export function bulkIngest(db: Database, body: Record<string, unknown>): { ingested: Record<string, number>; total: number } {
+  const now = new Date().toISOString()
+  const ingested: Record<string, number> = {}
+  for (const spec of ingestSpecs()) {
+    const raw = body[spec.table]
+    if (!Array.isArray(raw) || raw.length === 0) continue
+    const cols = spec.columns
+    const pkIdx = spec.pk.map(k => cols.indexOf(k))
+    // De-dup by primary key within this payload (last write wins): Postgres
+    // rejects a statement that updates the same ON CONFLICT row twice, so this
+    // keeps the chunked multi-row upserts below safe.
+    const deduped = new Map<string, unknown[]>()
+    for (const row of raw as Record<string, unknown>[]) {
+      const values = spec.map(row, now)
+      const key = pkIdx.map(i => String(values[i])).join('\u0000')
+      deduped.set(key, values)
+    }
+    const rows = [...deduped.values()]
+    const updateCols = cols.filter(c => !spec.pk.includes(c))
+    const conflictAction = updateCols.length
+      ? `DO UPDATE SET ${updateCols.map(c => `"${c}" = excluded."${c}"`).join(', ')}`
+      : 'DO NOTHING'
+    const colList = cols.map(c => `"${c}"`).join(', ')
+    const conflict = spec.pk.map(c => `"${c}"`).join(', ')
+    // Keep bound-parameter counts within SQLite and Postgres limits on both engines.
+    const chunkRows = Math.max(1, Math.floor(20000 / cols.length))
+    const rowPlaceholder = `(${cols.map(() => '?').join(', ')})`
+    for (let i = 0; i < rows.length; i += chunkRows) {
+      const chunk = rows.slice(i, i + chunkRows)
+      const valuesSql = chunk.map(() => rowPlaceholder).join(', ')
+      const sql = `INSERT INTO ${spec.table} (${colList}) VALUES ${valuesSql} ON CONFLICT (${conflict}) ${conflictAction}`
+      const params: unknown[] = []
+      for (const values of chunk) params.push(...values)
+      db.prepare(sql).run(...params)
+    }
+    ingested[spec.table] = rows.length
+  }
+  const total = Object.values(ingested).reduce((a, b) => a + b, 0)
+  return { ingested, total }
+}

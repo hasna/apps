@@ -24,6 +24,16 @@ describe("resolveEconomyCloudStorage", () => {
     expect(r.active).toBe(false);
   });
 
+  it("infers self_hosted/cloud when API_URL + API_KEY are set without explicit mode", () => {
+    const r = resolveEconomyCloudStorage({
+      HASNA_ECONOMY_API_URL: "https://economy.hasna.xyz",
+      HASNA_ECONOMY_API_KEY: KEY,
+    });
+    expect(r.active).toBe(true);
+    expect(r.client).not.toBeNull();
+    expect(r.client!.baseUrl).toBe("https://economy.hasna.xyz/v1");
+  });
+
   it("throws when mode=self_hosted but the API key is missing (no silent local drift)", () => {
     expect(() =>
       resolveEconomyCloudStorage({

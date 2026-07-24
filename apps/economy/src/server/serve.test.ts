@@ -225,6 +225,27 @@ describe('REST API server', () => {
     }
   })
 
+  it('POST /v1/ingest requires an economy write scope when API-key auth is active', async () => {
+    const contexts: Array<{ requiredScopes?: readonly string[] }> = []
+    const scopedHandler = createHandler(db, {
+      authenticator: {
+        authenticate: async (_headers, context) => {
+          contexts.push({ requiredScopes: context?.requiredScopes })
+          return {
+            ok: false,
+            status: 403,
+            reason: 'insufficient_scope',
+            message: 'Missing required scope',
+          }
+        },
+      },
+    })
+
+    const response = await req(scopedHandler, '/v1/ingest', 'POST', { sessions: [] })
+    expect(response.status).toBe(403)
+    expect(contexts[0]?.requiredScopes).toEqual(['economy:write'])
+  })
+
   it('POST /api/billing/sync validates days', async () => {
     const { status, data } = await req(handler, '/api/billing/sync', 'POST', { days: 0 })
     expect(status).toBe(400)
@@ -447,6 +468,100 @@ describe('REST API server', () => {
     expect(budget['limit_usd']).toBe(10)
     expect(budget['current_spend_usd']).toBeNumber()
     expect(budget['percent_used']).toBeNumber()
+  })
+
+  it('POST /v1/ingest bulk-imports rows and merges by id (idempotent)', async () => {
+    const rows = {
+      sessions: [{
+        id: 'ing-sess-1', agent: 'claude', project_path: '/p/x', project_name: 'x',
+        started_at: NOW, ended_at: null, total_cost_usd: 2, total_tokens: 100, request_count: 1,
+        machine_id: 'machineZ',
+      }],
+      requests: [{
+        id: 'ing-req-1', agent: 'claude', session_id: 'ing-sess-1', model: 'claude-sonnet-4-6',
+        input_tokens: 10, output_tokens: 5, cache_read_tokens: 0, cache_create_tokens: 0,
+        cost_usd: 2, cost_basis: 'metered_api', duration_ms: 100, timestamp: NOW,
+        source_request_id: 'ing-src-1', machine_id: 'machineZ',
+      }],
+    }
+    const first = await req(handler, '/v1/ingest', 'POST', rows)
+    expect(first.status).toBe(200)
+    const fd = (first.data as Record<string, unknown>)['data'] as Record<string, unknown>
+    expect(fd['total']).toBe(2)
+    // readback via a cloud-routed GET
+    const sess = await req(handler, '/v1/sessions?machine=machineZ')
+    const list = (sess.data as Record<string, unknown>)['data'] as unknown[]
+    expect(list.some(s => (s as Record<string, unknown>)['id'] === 'ing-sess-1')).toBeTrue()
+    // re-run merges by primary key -> no duplicate rows
+    const second = await req(handler, '/v1/ingest', 'POST', rows)
+    expect(second.status).toBe(200)
+    const again = await req(handler, '/v1/sessions?machine=machineZ')
+    const list2 = (again.data as Record<string, unknown>)['data'] as unknown[]
+    expect(list2.filter(s => (s as Record<string, unknown>)['id'] === 'ing-sess-1').length).toBe(1)
+  })
+
+  it('POST /v1/ingest updates existing rows on conflict (merge, not just insert)', async () => {
+    const base = {
+      sessions: [{
+        id: 'ing-upd-1', agent: 'claude', project_path: '/p/y', project_name: 'y',
+        started_at: NOW, ended_at: null, total_cost_usd: 5, total_tokens: 10, request_count: 1,
+        machine_id: 'machineU',
+      }],
+    }
+    await req(handler, '/v1/ingest', 'POST', base)
+    // Re-ingest the SAME id with a changed cost — ON CONFLICT DO UPDATE must merge.
+    const changed = { sessions: [{ ...base.sessions[0], total_cost_usd: 42 }] }
+    const res = await req(handler, '/v1/ingest', 'POST', changed)
+    expect(res.status).toBe(200)
+    const sess = await req(handler, '/v1/sessions?machine=machineU')
+    const list = (sess.data as Record<string, unknown>)['data'] as Record<string, unknown>[]
+    const row = list.filter(s => s['id'] === 'ing-upd-1')
+    expect(row.length).toBe(1)
+    expect(row[0]!['total_cost_usd']).toBe(42)
+  })
+
+  it('POST /v1/ingest handles duplicate primary keys inside one payload (last row wins)', async () => {
+    const res = await req(handler, '/v1/ingest', 'POST', {
+      sessions: [
+        {
+          id: 'ing-dupe-1', agent: 'claude', project_path: '/p/d', project_name: 'd',
+          started_at: NOW, ended_at: null, total_cost_usd: 1, total_tokens: 10, request_count: 1,
+          machine_id: 'machineD',
+        },
+        {
+          id: 'ing-dupe-1', agent: 'claude', project_path: '/p/d', project_name: 'd',
+          started_at: NOW, ended_at: null, total_cost_usd: 9, total_tokens: 90, request_count: 9,
+          machine_id: 'machineD',
+        },
+      ],
+    })
+    expect(res.status).toBe(200)
+    const data = (res.data as Record<string, unknown>)['data'] as Record<string, unknown>
+    expect(data['total']).toBe(1)
+    const sess = await req(handler, '/v1/sessions?machine=machineD')
+    const list = (sess.data as Record<string, unknown>)['data'] as Record<string, unknown>[]
+    expect(list.length).toBe(1)
+    expect(list[0]!['total_cost_usd']).toBe(9)
+  })
+
+  it('POST /v1/ingest bulk-imports many rows in a single request (chunked upsert)', async () => {
+    const sessions = Array.from({ length: 250 }, (_, i) => ({
+      id: `ing-bulk-${i}`, agent: 'claude', project_path: '/p/b', project_name: 'b',
+      started_at: NOW, ended_at: null, total_cost_usd: 1, total_tokens: 1, request_count: 1,
+      machine_id: 'machineB',
+    }))
+    const res = await req(handler, '/v1/ingest', 'POST', { sessions })
+    expect(res.status).toBe(200)
+    const data = (res.data as Record<string, unknown>)['data'] as Record<string, unknown>
+    expect(data['total']).toBe(250)
+    const sess = await req(handler, '/v1/sessions?machine=machineB&limit=1000')
+    const list = (sess.data as Record<string, unknown>)['data'] as unknown[]
+    expect(list.length).toBe(250)
+  })
+
+  it('POST /v1/ingest rejects invalid JSON body', async () => {
+    const response = await rawReq(handler, '/v1/ingest', 'POST', '{not json')
+    expect(response.status).toBe(400)
   })
 
   it('POST /api/budgets rejects invalid numeric input', async () => {
