@@ -185,6 +185,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["email", "marketing", "automation"],
   },
   {
+    name: "zoho-campaigns",
+    displayName: "Zoho Campaigns",
+    description: "Email marketing campaigns and mailing lists",
+    category: "Communication",
+    tags: ["email", "marketing", "zoho", "campaigns"],
+  },
+  {
     name: "brevo",
     displayName: "Brevo",
     description: "Email marketing and transactional emails",
