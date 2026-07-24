@@ -336,6 +336,38 @@ describe('knowledge cli', () => {
     expect(new TextDecoder().decode(context.stdout)).toContain('knowledge context pack');
   });
 
+  test("'<sub> --help' prints that subcommand's usage, not root help", () => {
+    // Regression: `knowledge add --help` used to print the generic ROOT help
+    // (full command tree) instead of the per-command usage line.
+    const addHelp = runCli(['add', '--help']);
+    expect(addHelp.exitCode).toBe(0);
+    const addOut = new TextDecoder().decode(addHelp.stdout);
+    expect(addOut).toContain('Usage: knowledge add <title> <content> [--url <url>] [-t <tag>] [--json]');
+    // Must NOT fall through to the root help command tree.
+    expect(addOut).not.toContain('knowledge - local agent knowledge store');
+
+    // `-h` short flag behaves the same.
+    const addHelpShort = runCli(['add', '-h']);
+    expect(addHelpShort.exitCode).toBe(0);
+    const addShortOut = new TextDecoder().decode(addHelpShort.stdout);
+    expect(addShortOut).toContain('Usage: knowledge add <title> <content>');
+    expect(addShortOut).not.toContain('knowledge - local agent knowledge store');
+
+    // `<sub> --help` and `help <sub>` agree.
+    const listFlag = new TextDecoder().decode(runCli(['list', '--help']).stdout);
+    const listHelp = new TextDecoder().decode(runCli(['help', 'list']).stdout);
+    expect(listFlag).toContain('--sort created|title');
+    expect(listFlag).toBe(listHelp);
+
+    // An aliased subcommand resolves to its canonical usage.
+    const lsFlag = new TextDecoder().decode(runCli(['ls', '--help']).stdout);
+    expect(lsFlag).toContain('knowledge list|ls');
+
+    // Bare `--help` still shows the root help.
+    const rootHelp = new TextDecoder().decode(runCli(['--help']).stdout);
+    expect(rootHelp).toContain('knowledge - local agent knowledge store');
+  });
+
   test('events command uses shared help surface', () => {
     const dir = mkdtempSync(join(tmpdir(), 'knowledge-events-cli-'));
     const result = runCli(['events', '--help'], undefined, { HASNA_EVENTS_DIR: dir });

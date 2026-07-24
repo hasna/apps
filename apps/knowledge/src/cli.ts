@@ -542,7 +542,14 @@ async function run(argv: string[]): Promise<void> {
     commandArgOffset = 0;
   }
 
-  if (!command || flags.help || command === 'help') { printCommandHelp(positional[1]); return; }
+  if (!command || flags.help || command === 'help') {
+    // `help <sub>` names its target as positional[1]; `<sub> --help` / `<sub> -h`
+    // names it as the resolved command itself. Bare `--help`/`help` (no command)
+    // falls through to the global help.
+    const helpTarget = command === 'help' ? positional[1] : (command || positional[1]);
+    printCommandHelp(helpTarget);
+    return;
+  }
 
   const serviceScope = command === 'project-panel' || command === 'app-wiki' ? (flags.scope ?? 'project') : flags.scope;
   const service = createKnowledgeService({ scope: serviceScope });
