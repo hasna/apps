@@ -20,7 +20,7 @@ describe('knowledge cloud-store resolver (self_hosted client flip)', () => {
   test('returns null (local) when mode=local even with API url+key present', () => {
     const store = resolveKnowledgeCloudStore({
       HASNA_KNOWLEDGE_STORAGE_MODE: 'local',
-      HASNA_KNOWLEDGE_API_URL: 'https://knowledge.hasna.xyz',
+      HASNA_KNOWLEDGE_API_URL: 'https://knowledge.md',
       HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
     } as NodeJS.ProcessEnv);
     expect(store).toBeNull();
@@ -30,19 +30,19 @@ describe('knowledge cloud-store resolver (self_hosted client flip)', () => {
     expect(() =>
       resolveKnowledgeCloudStore({
         HASNA_KNOWLEDGE_STORAGE_MODE: 'self_hosted',
-        HASNA_KNOWLEDGE_API_URL: 'https://knowledge.hasna.xyz',
+        HASNA_KNOWLEDGE_API_URL: 'https://knowledge.md',
       } as NodeJS.ProcessEnv),
     ).toThrow();
   });
 
-  test('resolves a cloud-http store pointed at <app>.hasna.xyz/v1 when self_hosted + url + key', () => {
+  test('resolves a cloud-http store pointed at the configured URL when self_hosted + url + key', () => {
     const store = resolveKnowledgeCloudStore({
       HASNA_KNOWLEDGE_STORAGE_MODE: 'self_hosted',
-      HASNA_KNOWLEDGE_API_URL: 'https://knowledge.hasna.xyz',
+      HASNA_KNOWLEDGE_API_URL: 'https://knowledge.md',
       HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
     } as NodeJS.ProcessEnv);
     expect(store).not.toBeNull();
-    expect(store!.baseUrl).toBe('https://knowledge.hasna.xyz/v1');
+    expect(store!.baseUrl).toBe('https://knowledge.md/v1');
   });
 
   test('routes to cloud when ONLY API url+key are set (fleet-flip writes no STORAGE_MODE)', () => {
@@ -51,17 +51,17 @@ describe('knowledge cloud-store resolver (self_hosted client flip)', () => {
     // Presence of both must trigger the cloud-http client, else the installed
     // CLI silently keeps reading the local db.json even with the flip applied.
     const store = resolveKnowledgeCloudStore({
-      HASNA_KNOWLEDGE_API_URL: 'https://knowledge.hasna.xyz',
+      HASNA_KNOWLEDGE_API_URL: 'https://knowledge.md',
       HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
     } as NodeJS.ProcessEnv);
     expect(store).not.toBeNull();
-    expect(store!.baseUrl).toBe('https://knowledge.hasna.xyz/v1');
+    expect(store!.baseUrl).toBe('https://knowledge.md/v1');
   });
 
   test('stays local when only the API url is set (key missing -> not both)', () => {
     expect(
       resolveKnowledgeCloudStore({
-        HASNA_KNOWLEDGE_API_URL: 'https://knowledge.hasna.xyz',
+        HASNA_KNOWLEDGE_API_URL: 'https://knowledge.md',
       } as NodeJS.ProcessEnv),
     ).toBeNull();
   });
@@ -74,7 +74,11 @@ describe('knowledge cloud-store resolver (self_hosted client flip)', () => {
     ).toBeNull();
   });
 
-  test('defaults the base URL to https://knowledge.hasna.xyz/v1 when only mode+key set', () => {
+  test('defaults the base URL to the @hasna/contracts host template when only mode+key set', () => {
+    // NOTE: this default is NOT sourced from this package's DEFAULT_KNOWLEDGE_API_URL.
+    // It comes from `defaultCloudBaseUrl()` in the @hasna/contracts dependency,
+    // which still templates `https://<app>.hasna.xyz`. That default needs its own
+    // fix in the @hasna/contracts package; tracked separately from this repo.
     const store = resolveKnowledgeCloudStore({
       HASNA_KNOWLEDGE_STORAGE_MODE: 'self_hosted',
       HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',

@@ -1560,7 +1560,7 @@ function normalizeMode(value: string | undefined): KnowledgeConfig['mode'] | und
   if (!value) return undefined;
   const normalized = value.trim().toLowerCase();
   if (normalized === 'local' || normalized === 'offline') return 'local';
-  if (normalized === 'hosted' || normalized === 'remote' || normalized === 'knowledge.hasna.xyz') return 'hosted';
+  if (normalized === 'hosted' || normalized === 'remote' || normalized === 'knowledge.md') return 'hosted';
   throw new Error('Invalid setup mode. Use hosted or local.');
 }
 

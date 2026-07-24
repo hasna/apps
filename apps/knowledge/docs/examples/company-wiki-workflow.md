@@ -168,7 +168,7 @@ Agents should prefer stable tools such as `knowledge_search`, `knowledge_ask`,
 Hosted mode is only a remote client boundary:
 
 ```bash
-knowledge setup --mode hosted --api-url https://knowledge.hasna.xyz --scope project --json
+knowledge setup --mode hosted --api-url https://knowledge.md --scope project --json
 knowledge remote contracts --scope project --json
 ```
 

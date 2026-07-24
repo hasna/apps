@@ -19,7 +19,7 @@ export interface KnowledgeAuthStatus {
     user_id: string | null;
     api_key_present: boolean;
 }
-export declare const DEFAULT_KNOWLEDGE_API_URL = "https://knowledge.hasna.xyz";
+export declare const DEFAULT_KNOWLEDGE_API_URL = "https://knowledge.md";
 export declare function normalizeKnowledgeApiOrigin(apiUrl: string): string;
 export declare function knowledgeAuthPath(env?: Record<string, string | undefined>): string;
 export declare function resolveKnowledgeApiUrl(config?: KnowledgeConfig, env?: Record<string, string | undefined>): string;

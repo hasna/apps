@@ -7,7 +7,7 @@
  * knowledge CLI/MCP. When the client-flip contract resolves to `cloud-http`
  * (i.e. HASNA_KNOWLEDGE_STORAGE_MODE=self_hosted AND HASNA_KNOWLEDGE_API_URL +
  * HASNA_KNOWLEDGE_API_KEY are set), ALL knowledge-item reads and writes are
- * routed to the app's cloud HTTP API (`https://knowledge.hasna.xyz/v1/notes`)
+ * routed to the app's cloud HTTP API (`https://knowledge.md/v1/notes`)
  * with the bearer key — NOT the local db.json store, NOT a raw DSN.
  *
  * When the flip does not resolve to cloud, this returns `null` and the CLI uses

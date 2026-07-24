@@ -142,7 +142,7 @@ Hosted mode should not change local migration semantics. It only records a
 remote API boundary:
 
 ```bash
-knowledge setup --mode hosted --api-url https://knowledge.hasna.xyz --scope project --json
+knowledge setup --mode hosted --api-url https://knowledge.md --scope project --json
 knowledge remote contracts --scope project --json
 ```
 

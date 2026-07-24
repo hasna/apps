@@ -14973,7 +14973,7 @@ function defaultKnowledgeConfig() {
     version: 1,
     mode: "local",
     hosted: {
-      api_url: "https://knowledge.hasna.xyz"
+      api_url: "https://knowledge.md"
     },
     storage: {
       type: "local",
@@ -24073,7 +24073,7 @@ import { pathToFileURL as pathToFileURL2 } from "url";
 import { existsSync as existsSync4, mkdirSync as mkdirSync3, readFileSync as readFileSync6, unlinkSync as unlinkSync2, writeFileSync as writeFileSync4 } from "fs";
 import { homedir as homedir2 } from "os";
 import { dirname as dirname3, join as join3 } from "path";
-var DEFAULT_KNOWLEDGE_API_URL = "https://knowledge.hasna.xyz";
+var DEFAULT_KNOWLEDGE_API_URL = "https://knowledge.md";
 function normalizeKnowledgeApiOrigin(apiUrl) {
   const url = new URL(apiUrl);
   if (url.protocol !== "http:" && url.protocol !== "https:") {
@@ -35329,7 +35329,7 @@ function normalizeMode(value) {
   const normalized = value.trim().toLowerCase();
   if (normalized === "local" || normalized === "offline")
     return "local";
-  if (normalized === "hosted" || normalized === "remote" || normalized === "knowledge.hasna.xyz")
+  if (normalized === "hosted" || normalized === "remote" || normalized === "knowledge.md")
     return "hosted";
   throw new Error("Invalid setup mode. Use hosted or local.");
 }

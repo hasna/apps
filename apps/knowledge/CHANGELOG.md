@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.2.88
+
+Security/hygiene: stop shipping the internal infra host `knowledge.hasna.xyz` as the
+default hosted API URL in the published package. The default now resolves to the public
+product domain `https://knowledge.md`.
+
+- `DEFAULT_KNOWLEDGE_API_URL` (`src/auth.ts`), `defaultKnowledgeConfig()` hosted default
+  (`src/workspace.ts`), the `normalizeMode` alias (`src/service.ts`), and doc comments in
+  `src/cli.ts` / `src/cloud-store.ts` now use `knowledge.md` instead of the internal host.
+- Propagated to README, `docs/examples`, `docs/migration`, and `tests/cloud-store.test.ts`.
+- Rebuilt `dist/` and `bin/` (shipped artifacts) so the leaked default is gone from what
+  installs actually run, not just source.
+- Known residual (out of scope, needs a `@hasna/contracts` fix): when hosted mode is set
+  with a key but no URL, `defaultCloudBaseUrl()` in `@hasna/contracts` still templates
+  `https://<app>.hasna.xyz`. `createClientTransport` exposes no base-URL override, so this
+  repo cannot close that path alone. Documented explicitly in `tests/cloud-store.test.ts`.
+
 ## 0.2.87
 
 Reconcile `main` with the published npm line (`npm/knowledge/v0.2.86`), which had

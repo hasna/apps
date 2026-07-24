@@ -14997,7 +14997,7 @@ import { existsSync as existsSync14, readFileSync as readFileSync13, writeFileSy
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.87",
+  version: "0.2.88",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   exports: {
@@ -15175,7 +15175,7 @@ function defaultKnowledgeConfig() {
     version: 1,
     mode: "local",
     hosted: {
-      api_url: "https://knowledge.hasna.xyz"
+      api_url: "https://knowledge.md"
     },
     storage: {
       type: "local",
@@ -22844,7 +22844,7 @@ import { pathToFileURL as pathToFileURL2 } from "url";
 import { existsSync as existsSync5, mkdirSync as mkdirSync3, readFileSync as readFileSync4, unlinkSync as unlinkSync2, writeFileSync as writeFileSync4 } from "fs";
 import { homedir as homedir2 } from "os";
 import { dirname as dirname3, join as join3 } from "path";
-var DEFAULT_KNOWLEDGE_API_URL = "https://knowledge.hasna.xyz";
+var DEFAULT_KNOWLEDGE_API_URL = "https://knowledge.md";
 function normalizeKnowledgeApiOrigin(apiUrl) {
   const url2 = new URL(apiUrl);
   if (url2.protocol !== "http:" && url2.protocol !== "https:") {
@@ -33763,7 +33763,7 @@ function normalizeMode(value) {
   const normalized = value.trim().toLowerCase();
   if (normalized === "local" || normalized === "offline")
     return "local";
-  if (normalized === "hosted" || normalized === "remote" || normalized === "knowledge.hasna.xyz")
+  if (normalized === "hosted" || normalized === "remote" || normalized === "knowledge.md")
     return "hosted";
   throw new Error("Invalid setup mode. Use hosted or local.");
 }

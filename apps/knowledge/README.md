@@ -164,7 +164,7 @@ knowledge sync push --peer-workspace /path/to/peer/repo --scope project --json
 knowledge sync dry-run --machine linux-node-a --peer-workspace /workspace/open-knowledge --scope project --json
 
 # Configure optional hosted mode and inspect remote contracts
-knowledge setup --mode hosted --api-url https://knowledge.hasna.xyz --scope project --json
+knowledge setup --mode hosted --api-url https://knowledge.md --scope project --json
 knowledge auth whoami --scope project --json
 knowledge remote contracts --scope project --json
 
@@ -522,7 +522,7 @@ flip — `HASNA_KNOWLEDGE_API_URL` + `HASNA_KNOWLEDGE_API_KEY` — instead.)
 ### setup / auth / remote
 ```bash
 knowledge setup --mode local [--scope project] [--json]
-knowledge setup --mode hosted [--api-url https://knowledge.hasna.xyz] [--scope project] [--json]
+knowledge setup --mode hosted [--api-url https://knowledge.md] [--scope project] [--json]
 knowledge setup --mode hosted --canonical-example [--scope project] [--json]
 knowledge auth login --api-key <key> [--email you@example.com] [--org <slug>] [--scope project] [--json]
 knowledge auth whoami [--scope project] [--json]
