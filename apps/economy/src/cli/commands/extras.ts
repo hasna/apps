@@ -52,13 +52,33 @@ function parsePeriod(value: string | undefined, fallback: Period = 'month'): Per
   return p
 }
 
+function parseLimit(value: string | undefined, fallback: number, verbose?: boolean): number {
+  if (verbose && value == null) return Number.POSITIVE_INFINITY
+  const parsed = Number(value ?? String(fallback))
+  if (!Number.isFinite(parsed) || parsed <= 0 || !Number.isInteger(parsed)) {
+    console.error(chalk.red('--limit must be a positive integer'))
+    process.exit(1)
+  }
+  return parsed
+}
+
+function compactValue(value: unknown): string {
+  if (value == null) return '—'
+  if (Array.isArray(value)) return `${value.length} items`
+  if (typeof value === 'object') return `${Object.keys(value as Record<string, unknown>).length} fields`
+  if (typeof value === 'boolean') return value ? 'yes' : 'no'
+  return String(value)
+}
+
 export function registerExtendedCommands(program: Command): void {
   program
     .command('usage [period]')
     .description('Show subscription usage quotas and consumption metrics')
     .option('--agent <agent>', `Filter by agent (${AGENTS.join('|')})`)
+    .option('--limit <n>', 'Maximum snapshot rows to print (default: 20)')
+    .option('--verbose', 'Show all snapshot rows')
     .option('--json', 'Output JSON')
-    .action((periodArg: string | undefined, opts: { agent?: string; json?: boolean }) => {
+    .action((periodArg: string | undefined, opts: { agent?: string; limit?: string; verbose?: boolean; json?: boolean }) => {
       const db = openDatabase()
       const period = parsePeriod(periodArg, 'month')
       const agent = parseAgent(opts.agent, '--agent')
@@ -76,8 +96,17 @@ export function registerExtendedCommands(program: Command): void {
       if (snaps.length === 0) {
         console.log(chalk.yellow('  No usage snapshots yet. Run: economy sync --cursor'))
       } else {
-        for (const s of snaps) {
+        const limit = parseLimit(opts.limit, 20, opts.verbose)
+        const visibleSnaps = snaps.slice(0, limit)
+        if (visibleSnaps.length < snaps.length) {
+          console.log(chalk.dim(`  ${snaps.length} snapshots · showing ${visibleSnaps.length}`))
+          console.log()
+        }
+        for (const s of visibleSnaps) {
           console.log(`  ${chalk.white(s.agent.padEnd(10))} ${s.metric.padEnd(28)} ${s.value}${s.unit ? ` ${s.unit}` : ''}  ${chalk.dim(s.date)}`)
+        }
+        if (visibleSnaps.length < snaps.length) {
+          console.log(chalk.dim(`\n  ... ${snaps.length - visibleSnaps.length} more snapshots hidden. Use --limit <n>, --verbose, or --json.`))
         }
       }
       const spendLabel = agent ? `${agent} API-equivalent spend:` : 'Fleet API-equivalent spend:'
@@ -145,14 +174,25 @@ export function registerExtendedCommands(program: Command): void {
   subsCmd
     .command('list')
     .description('List subscription plans')
+    .option('--limit <n>', 'Maximum subscription rows to print (default: 20)')
+    .option('--verbose', 'Show all subscription rows')
     .option('--json', 'Output JSON')
-    .action((opts: { json?: boolean }) => {
+    .action((opts: { limit?: string; verbose?: boolean; json?: boolean }) => {
       const rows = listSubscriptions(openDatabase())
       if (opts.json) { console.log(JSON.stringify(rows, null, 2)); return }
       if (rows.length === 0) { console.log(chalk.yellow('No subscriptions configured.')); return }
+      const limit = parseLimit(opts.limit, 20, opts.verbose)
+      const visibleRows = rows.slice(0, limit)
       console.log()
-      for (const r of rows) {
+      if (visibleRows.length < rows.length) {
+        console.log(chalk.dim(`  ${rows.length} subscriptions · showing ${visibleRows.length}`))
+        console.log()
+      }
+      for (const r of visibleRows) {
         console.log(`  ${chalk.white(r.provider)} / ${r.plan}  ${fmt(r.monthly_fee_usd)}/mo  included ${fmt(r.included_usage_usd)}  ${r.agent ?? 'all agents'}`)
+      }
+      if (visibleRows.length < rows.length) {
+        console.log(chalk.dim(`\n  ... ${rows.length - visibleRows.length} more subscriptions hidden. Use --limit <n>, --verbose, or --json.`))
       }
       console.log()
     })
@@ -332,9 +372,20 @@ export function registerExtendedCommands(program: Command): void {
     scheduleCmd
       .command('status')
       .description('Show schedule status')
-      .action(async () => {
+      .option('--json', 'Output JSON')
+      .action(async (opts: { json?: boolean }) => {
         const status = await getCloudScheduleStatus()
-        console.log(JSON.stringify(status, null, 2))
+        if (opts.json) {
+          console.log(JSON.stringify(status, null, 2))
+          return
+        }
+        console.log()
+        console.log(chalk.bold.cyan('  Cloud Schedule'))
+        console.log()
+        for (const [key, value] of Object.entries(status as unknown as Record<string, unknown>)) {
+          console.log(`  ${key.padEnd(18)} ${compactValue(value)}`)
+        }
+        console.log()
       })
     scheduleCmd
       .command('remove')
@@ -351,8 +402,10 @@ export function registerFleetCommands(program: Command): void {
     .command('fleet')
     .description('Fleet-wide summaries across all machines')
     .option('--period <p>', 'Period', 'today')
+    .option('--limit <n>', 'Maximum machine rows to print (default: 20)')
+    .option('--verbose', 'Show all machine rows')
     .option('--json', 'Output JSON')
-    .action((opts: { period?: string; json?: boolean }) => {
+    .action((opts: { period?: string; limit?: string; verbose?: boolean; json?: boolean }) => {
       const db = openDatabase()
       const period = parsePeriod(opts.period, 'today')
       const summary = querySummary(db, period, undefined, true)
@@ -364,12 +417,20 @@ export function registerFleetCommands(program: Command): void {
         return
       }
 
+      const limit = parseLimit(opts.limit, 20, opts.verbose)
+      const visibleMachines = machines.slice(0, limit)
       console.log()
       console.log(chalk.bold.cyan(`  Fleet — ${period}`))
       console.log(`  Total: ${fmt(summary.total_usd)} · ${summary.sessions} sessions · ${summary.requests} requests`)
+      if (visibleMachines.length < machines.length) {
+        console.log(chalk.dim(`  ${machines.length} machines · showing ${visibleMachines.length}`))
+      }
       console.log()
-      for (const m of machines) {
+      for (const m of visibleMachines) {
         console.log(`  ${chalk.white(m.machine_id.padEnd(12))} ${fmt(m.total_cost_usd).padEnd(10)} ${m.sessions} sessions`)
+      }
+      if (visibleMachines.length < machines.length) {
+        console.log(chalk.dim(`\n  ... ${machines.length - visibleMachines.length} more machines hidden. Use --limit <n>, --verbose, or --json.`))
       }
       console.log()
     })

@@ -29,7 +29,7 @@ import { packageMetadata } from '../lib/package-metadata.js'
 import { isCloudMode, openCloudDatabase, resolveSigningSecret, createCloudPool, authClientFromPool } from '../db/cloud.js'
 import { verifyApiKey, ApiKeyStore } from '@hasna/contracts/auth'
 import { openApiSpec } from '../openapi.js'
-import type { CostCenterKind, Period } from '../types/index.js''
+import type { CostCenterKind, Period } from '../types/index.js'
 import type { Agent } from '../lib/agents.js'
 
 /** The serve OpenAPI document (source of the generated SDK), version-synced. */

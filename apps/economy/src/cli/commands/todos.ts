@@ -702,6 +702,9 @@ export const ROADMAP_PHASES: TodoPhase[] = [
   },
 ]
 
+const DEFAULT_TODO_LIST_LIMIT = 20
+const TODO_TITLE_WIDTH = 140
+
 function statusLabel(status: TodoStatus): string {
   if (status === 'done') return chalk.green('done')
   if (status === 'in_progress') return chalk.yellow('in progress')
@@ -718,6 +721,33 @@ function countByStatus(tasks: TodoTask[]): Record<TodoStatus, number> {
   )
 }
 
+function truncateText(value: string, max: number): string {
+  if (value.length <= max) return value
+  return `${value.slice(0, Math.max(0, max - 3)).trimEnd()}...`
+}
+
+function parseListLimit(value: string | undefined): number | undefined {
+  if (value == null) return undefined
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed <= 0 || !Number.isInteger(parsed)) {
+    console.error(chalk.red('--limit must be a positive integer'))
+    process.exit(1)
+  }
+  return parsed
+}
+
+function matchingTasks(
+  phases: TodoPhase[],
+  status?: TodoStatus,
+): Array<{ phase: TodoPhase; task: TodoTask }> {
+  const rows: Array<{ phase: TodoPhase; task: TodoTask }> = []
+  for (const phase of phases) {
+    const tasks = status ? phase.tasks.filter(task => task.status === status) : phase.tasks
+    for (const task of tasks) rows.push({ phase, task })
+  }
+  return rows
+}
+
 export function printTodosHelp(): void {
   console.log()
   console.log(chalk.bold.cyan('  Economy Roadmap — fleet, usage & savings'))
@@ -727,7 +757,9 @@ export function printTodosHelp(): void {
   console.log()
   console.log(chalk.bold('  Commands'))
   console.log('    economy todos              Overview of phases and progress')
-  console.log('    economy todos list         All granular tasks')
+  console.log('    economy todos list         Compact task list (first 20 by default)')
+  console.log('    economy todos list --verbose      Full task list with dependencies')
+  console.log('    economy todos list --json         Machine-readable roadmap payload')
   console.log('    economy todos list --phase <id>   Tasks for one phase (e.g. phase-9)')
   console.log('    economy todos show <task-id>      Task detail (e.g. 9.7)')
   console.log()
@@ -776,12 +808,13 @@ export function printTodosOverview(): void {
     console.log(chalk.dim(`    ${phase.summary}`))
   }
   console.log()
-  console.log(chalk.dim('  Run: economy todos list'))
+  console.log(chalk.dim('  Run: economy todos list --limit 20'))
+  console.log(chalk.dim('  Run: economy todos list --verbose'))
   console.log(chalk.dim('  Run: economy todos --help'))
   console.log()
 }
 
-export function printTodosList(opts: { phase?: string; status?: TodoStatus }): void {
+export function printTodosList(opts: { phase?: string; status?: TodoStatus; limit?: number; verbose?: boolean; json?: boolean }): void {
   const phases = opts.phase
     ? ROADMAP_PHASES.filter(phase => phase.id === opts.phase)
     : ROADMAP_PHASES
@@ -792,18 +825,56 @@ export function printTodosList(opts: { phase?: string; status?: TodoStatus }): v
     return
   }
 
+  const allMatches = matchingTasks(phases, opts.status)
+  const limit = opts.limit ?? (opts.verbose ? Number.POSITIVE_INFINITY : DEFAULT_TODO_LIST_LIMIT)
+  const visible = allMatches.slice(0, limit)
+
+  if (opts.json) {
+    const filteredPhases = phases.map(phase => ({
+      ...phase,
+      tasks: opts.status ? phase.tasks.filter(task => task.status === opts.status) : phase.tasks,
+    })).filter(phase => phase.tasks.length > 0)
+    console.log(JSON.stringify({
+      version: ROADMAP_VERSION,
+      goal: ROADMAP_GOAL,
+      total: allMatches.length,
+      phases: filteredPhases,
+    }, null, 2))
+    return
+  }
+
   console.log()
+  console.log(chalk.bold.cyan('  Economy Roadmap Tasks'))
+  console.log(chalk.dim(`  ${allMatches.length} matching tasks · showing ${visible.length}${visible.length < allMatches.length ? ` of ${allMatches.length}` : ''}`))
+  if (!opts.verbose && visible.length < allMatches.length) {
+    console.log(chalk.dim('  Use --verbose for all tasks or economy todos show <task-id> for details.'))
+  }
+  console.log()
+
+  const visibleByPhase = new Map<string, TodoTask[]>()
+  for (const { phase, task } of visible) {
+    const tasks = visibleByPhase.get(phase.id) ?? []
+    tasks.push(task)
+    visibleByPhase.set(phase.id, tasks)
+  }
+
   for (const phase of phases) {
-    const tasks = opts.status ? phase.tasks.filter(task => task.status === opts.status) : phase.tasks
+    const tasks = visibleByPhase.get(phase.id) ?? []
     if (tasks.length === 0) continue
 
     console.log(chalk.bold.cyan(`  ${phase.id} — ${phase.title}`))
-    console.log(chalk.dim(`  ${phase.summary}`))
+    if (opts.verbose) console.log(chalk.dim(`  ${phase.summary}`))
     console.log()
     for (const task of tasks) {
       const deps = task.deps?.length ? chalk.dim(`  deps: ${task.deps.join(', ')}`) : ''
-      console.log(`    ${chalk.dim(task.id.padEnd(5))} ${statusLabel(task.status).padEnd(14)} ${task.title}${deps ? `\n${' '.repeat(22)}${deps}` : ''}`)
+      const title = opts.verbose ? task.title : truncateText(task.title, TODO_TITLE_WIDTH)
+      console.log(`    ${chalk.dim(task.id.padEnd(5))} ${statusLabel(task.status).padEnd(14)} ${title}${opts.verbose && deps ? `\n${' '.repeat(22)}${deps}` : ''}`)
     }
+    console.log()
+  }
+
+  if (visible.length < allMatches.length) {
+    console.log(chalk.dim(`  ... ${allMatches.length - visible.length} more tasks hidden. Use --limit <n>, --verbose, --phase <id>, or economy todos show <task-id>.`))
     console.log()
   }
 }
@@ -847,13 +918,22 @@ export function registerTodosCommand(program: Command): void {
     .description('List granular roadmap tasks')
     .option('--phase <id>', 'Filter by phase id (e.g. phase-4)')
     .option('--status <status>', 'Filter by status: pending|in_progress|done')
-    .action((opts: { phase?: string; status?: string }) => {
+    .option('--limit <n>', 'Maximum tasks to print (default: 20)')
+    .option('--verbose', 'Print all matching tasks with phase summaries and dependencies')
+    .option('--json', 'Output the full filtered roadmap as JSON')
+    .action((opts: { phase?: string; status?: string; limit?: string; verbose?: boolean; json?: boolean }) => {
       const status = opts.status as TodoStatus | undefined
       if (status && !['pending', 'in_progress', 'done'].includes(status)) {
         console.error(chalk.red('--status must be one of: pending, in_progress, done'))
         process.exit(1)
       }
-      printTodosList({ phase: opts.phase, status })
+      printTodosList({
+        phase: opts.phase,
+        status,
+        limit: parseListLimit(opts.limit),
+        verbose: Boolean(opts.verbose),
+        json: Boolean(opts.json),
+      })
     })
 
   todosCmd

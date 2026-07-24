@@ -26,6 +26,49 @@ async function runCli(
   return { stdout, stderr, exitCode }
 }
 
+function seedBreakdownRows(dbPath: string): void {
+  const db = openDatabase(dbPath)
+  const timestamp = '2026-06-24T12:00:00.000Z'
+  for (let i = 0; i < 25; i++) {
+    upsertSession(db, {
+      id: `breakdown-session-${i}`,
+      agent: 'codex',
+      project_path: `/tmp/breakdown-project-${i}`,
+      project_name: `breakdown-project-${i}`,
+      started_at: timestamp,
+      ended_at: null,
+      total_cost_usd: i + 1,
+      total_tokens: 1000 + i,
+      request_count: 1,
+      account_key: `codex:breakdown-account-${i}`,
+      account_tool: 'codex',
+      account_name: `breakdown-account-${i}`,
+      account_email: `breakdown-account-${i}@example.test`,
+      account_source: 'test',
+    })
+    upsertRequest(db, {
+      id: `breakdown-request-${i}`,
+      agent: 'codex',
+      session_id: `breakdown-session-${i}`,
+      model: `breakdown-model-${i}`,
+      input_tokens: 100 + i,
+      output_tokens: 20 + i,
+      cache_read_tokens: 0,
+      cache_create_tokens: 0,
+      cost_usd: i + 1,
+      cost_basis: 'metered_api',
+      duration_ms: 10,
+      timestamp,
+      source_request_id: `breakdown-source-${i}`,
+      account_key: `codex:breakdown-account-${i}`,
+      account_tool: 'codex',
+      account_name: `breakdown-account-${i}`,
+      account_email: `breakdown-account-${i}@example.test`,
+      account_source: 'test',
+    })
+  }
+}
+
 afterEach(() => {
   for (const tempRoot of tempRoots.splice(0)) {
     if (existsSync(tempRoot)) rmSync(tempRoot, { recursive: true, force: true })
@@ -44,6 +87,31 @@ describe('economy CLI help', () => {
     expect(stdout).toContain('cursor')
     expect(stdout).toContain('hermes')
     expect(stdout).toContain('saved_usd')
+    expect(stdout).toContain('economy todos list --verbose')
+    expect(stderr).toBe('')
+  })
+
+  test('todos list is compact by default and points to detail paths', async () => {
+    const { stdout, stderr, exitCode } = await runCli(['todos', 'list'])
+
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain('Economy Roadmap Tasks')
+    expect(stdout).toContain('showing 20 of')
+    expect(stdout).toContain('more tasks hidden')
+    expect(stdout).toContain('--verbose')
+    expect(stdout).toContain('economy todos show <task-id>')
+    expect(stdout).not.toContain('14.5')
+    expect(stderr).toBe('')
+  })
+
+  test('todos list JSON preserves the full filtered roadmap', async () => {
+    const { stdout, stderr, exitCode } = await runCli(['todos', 'list', '--json'])
+
+    expect(exitCode).toBe(0)
+    const payload = JSON.parse(stdout)
+    expect(payload.total).toBeGreaterThan(20)
+    expect(payload.phases.some((phase: { id: string }) => phase.id === 'phase-14')).toBe(true)
+    expect(stdout).toContain('14.5')
     expect(stderr).toBe('')
   })
 
@@ -65,6 +133,64 @@ describe('economy CLI help', () => {
     expect(stdout).toContain('Multi-machine auto sync')
     expect(stdout).toContain('9.7')
     expect(stdout).toContain('registerSyncSchedule')
+    expect(stderr).toBe('')
+  })
+
+  test('machine and fleet commands document compact row controls', async () => {
+    let result = await runCli(['machines', '--help'])
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('--limit <n>')
+    expect(result.stdout).toContain('--verbose')
+    expect(result.stderr).toBe('')
+
+    result = await runCli(['fleet', '--help'])
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('--limit <n>')
+    expect(result.stdout).toContain('--verbose')
+    expect(result.stdout).toContain('--json')
+    expect(result.stderr).toBe('')
+  })
+
+  test('breakdown documents compact row controls', async () => {
+    const result = await runCli(['breakdown', '--help'])
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('--limit <n>')
+    expect(result.stdout).toContain('--verbose')
+    expect(result.stdout).toContain('--json')
+    expect(result.stderr).toBe('')
+  })
+
+  test('breakdown caps high-cardinality human output and keeps JSON complete', async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'economy-breakdown-test-'))
+    tempRoots.push(tempRoot)
+    const dbPath = join(tempRoot, 'economy.db')
+    seedBreakdownRows(dbPath)
+    const env = { HASNA_ECONOMY_DB_PATH: dbPath }
+
+    for (const by of ['model', 'project', 'account']) {
+      const result = await runCli(['breakdown', '--by', by], env)
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('more rows hidden')
+      expect(result.stdout).toContain('--verbose')
+      expect(result.stdout).toContain('--json')
+      expect(result.stderr).toBe('')
+    }
+
+    const jsonResult = await runCli(['breakdown', '--by', 'model', '--json'], env)
+    expect(jsonResult.exitCode).toBe(0)
+    const payload = JSON.parse(jsonResult.stdout)
+    expect(payload.by).toBe('model')
+    expect(payload.total).toBe(25)
+    expect(payload.rows).toHaveLength(25)
+    expect(jsonResult.stderr).toBe('')
+  })
+
+  test('cloud schedule status documents JSON escape hatch', async () => {
+    const { stdout, stderr, exitCode } = await runCli(['cloud', 'schedule', 'status', '--help'])
+
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain('--json')
     expect(stderr).toBe('')
   })
 

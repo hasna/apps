@@ -39,6 +39,26 @@ Open the dashboard with:
 economy dashboard --port 3456
 ```
 
+## CLI Output Defaults
+
+Economy CLI commands are compact by default so agent terminals do not fill their context with full records. High-cardinality list and status commands show essential columns, cap row counts, and print a hint when more rows are available.
+
+Use explicit detail paths when you need more:
+
+```bash
+economy sessions --limit 50
+economy session <id> --verbose
+economy accounts month --json
+economy usage month --verbose
+economy todos list --limit 20
+economy todos list --verbose
+economy todos show 9.7
+```
+
+`--json` remains the machine-readable path for commands that support it. Human output may truncate rows or long text; use `--json`, `--verbose`, `--limit`, or a `show`/detail command for complete data.
+
+Status subcommands follow the same rule. For example, `economy cloud schedule status` prints a compact human summary by default and `economy cloud schedule status --json` prints the structured schedule status.
+
 ## Agent Integrations
 
 Use the MCP server for live cost context inside coding agents:
@@ -71,7 +91,7 @@ Gemini settings:
 }
 ```
 
-The MCP server exposes read tools for summaries, sessions, machines, pricing, daily spend, budgets, goals, provider billing, usage snapshots, savings, project/account/agent/cost-center breakdowns, and subscriptions. It also exposes mutation tools for budgets, pricing rows, goals, and subscriptions so coding agents can manage Economy data through the same validated surface as the CLI and REST API.
+The MCP server exposes read tools for summaries, sessions, machines, pricing, daily spend, budgets, goals, provider billing, usage snapshots, savings, project/account/agent/cost-center breakdowns, and subscriptions. MCP tools are compact by default for agent context safety; high-cardinality tools accept `limit`, `verbose`, or `json=true` where raw structured output is useful. It also exposes mutation tools for budgets, pricing rows, goals, and subscriptions so coding agents can manage Economy data through the same validated surface as the CLI and REST API.
 
 ## Ingest
 
