@@ -8,19 +8,15 @@ import { registerExtendedCommands, registerFleetCommands } from './commands/extr
 import { registerBriefCommand } from './commands/brief.js'
 import { AGENTS, parseAgent } from '../lib/agents.js'
 import { syncAll } from '../lib/sync-all.js'
-import { maybePullFromCloud, cloudPush, cloudPull, cloudSyncFull, getCloudDatabaseUrl, getCloudPg } from '../lib/cloud-sync.js'
-import { mergePeerDatabase } from '../lib/peer-sync.js'
-import { runEconomyFleetSync, writeFleetSyncReport } from '../lib/fleet-sync.js'
 import type { Agent } from '../lib/agents.js'
-import { openDatabase, querySummary, querySessions, queryTopSessions, queryZeroCostTokenizedModels, queryModelBreakdown, queryProjectBreakdown, queryAgentBreakdown, queryAccountBreakdown, queryCostCenterBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertProject, deleteProject, getProject, listModelPricing, upsertModelPricing, deleteModelPricing, upsertGoal, deleteGoal, getGoalStatuses, listMachines, getMachineId, listMachineRegistry, type DbModelPricing, type GoalStatus } from '../db/database.js'
-import { queryBillingSummary } from '../db/database.js'
+import { openDatabase, queryZeroCostTokenizedModels, getMachineId } from '../db/database.js'
 import { syncAnthropicBilling, syncOpenAIBilling, syncGeminiBilling } from '../ingest/billing.js'
 import { packageMetadata } from '../lib/package-metadata.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
-import { randomUUID } from 'crypto'
 import { execSync } from 'child_process'
-import { economyCloudStorage, cloudListItems, cloudObject } from '../lib/cloud-storage.js'
-import type { AccountBreakdown, BudgetStatus, CostSummary, ModelBreakdown, AgentBreakdown, ProjectBreakdown, EconomySession, CostCenterKind, Period } from '../types/index.js'
+import { getStore, isCloudStore } from '../lib/store/index.js'
+import { HasnaHttpError } from '../lib/contracts-client/transport.js'
+import type { AccountBreakdown, CostSummary, CostCenterKind, ProjectBreakdown, Period } from '../types/index.js'
 
 const program = new Command()
 
@@ -31,13 +27,12 @@ program
 
 // ── Auto-sync helper ──────────────────────────────────────────────────────────
 
-async function autoSync(opts: { claude?: boolean; takumi?: boolean; codex?: boolean; gemini?: boolean; opencode?: boolean; cursor?: boolean; pi?: boolean; hermes?: boolean; loops?: boolean; verbose?: boolean; dedupe?: boolean; cloud?: boolean } = {}): Promise<void> {
+async function autoSync(opts: { claude?: boolean; takumi?: boolean; codex?: boolean; gemini?: boolean; opencode?: boolean; cursor?: boolean; pi?: boolean; hermes?: boolean; loops?: boolean; verbose?: boolean; dedupe?: boolean } = {}): Promise<void> {
   // self_hosted/cloud mode: reads come straight from the cloud API, so there is
-  // no local DB to ingest into or pull for. Skip the local sync entirely.
-  if (economyCloudStorage().active) return
+  // no local DB to ingest into. Skip the local sync entirely.
+  if (isCloudStore()) return
   const db = openDatabase()
   ensurePricingSeeded(db)
-  await maybePullFromCloud()
   await syncAll(db, opts)
 }
 
@@ -207,10 +202,7 @@ function parseSinceDate(since: string): string {
 }
 
 async function printSummary(label: string, period: Period): Promise<void> {
-  const cloud = economyCloudStorage()
-  const s = cloud.active
-    ? (await cloudObject<{ summary: CostSummary }>(cloud, '/usage', { period })).summary
-    : (() => { const db = openDatabase(); ensurePricingSeeded(db); return querySummary(db, period) })()
+  const s = await getStore().summary(period)
   console.log()
   console.log(chalk.bold.cyan(`  ${label}`))
   console.log()
@@ -230,31 +222,21 @@ async function printSummary(label: string, period: Period): Promise<void> {
 
 program.action(async () => {
   await autoSync()
-  const cloud = economyCloudStorage()
+  const store = getStore()
   let t: CostSummary, w: CostSummary, m: CostSummary
   let projects: ProjectBreakdown[]
   let dailyValues: number[]
-  if (cloud.active) {
-    // self_hosted/cloud: pull the dashboard straight from the cloud API.
-    ;[t, w, m] = await Promise.all([
-      cloudObject<{ summary: CostSummary }>(cloud, '/usage', { period: 'today' }).then(r => r.summary),
-      cloudObject<{ summary: CostSummary }>(cloud, '/usage', { period: 'week' }).then(r => r.summary),
-      cloudObject<{ summary: CostSummary }>(cloud, '/usage', { period: 'month' }).then(r => r.summary),
-    ])
-    projects = (await cloudListItems<ProjectBreakdown>(cloud, 'projects')).slice(0, 3)
-    dailyValues = []
-  } else {
-    const db = openDatabase()
-    t = querySummary(db, 'today')
-    w = querySummary(db, 'week')
-    m = querySummary(db, 'month')
-    projects = queryProjectBreakdown(db).slice(0, 3)
-    const daily = queryDailyBreakdown(db, 14).reduce((acc, d) => {
-      acc[d.date] = (acc[d.date] ?? 0) + d.cost_usd
-      return acc
-    }, {} as Record<string, number>)
-    dailyValues = Object.values(daily)
-  }
+  ;[t, w, m] = await Promise.all([
+    store.summary('today'),
+    store.summary('week'),
+    store.summary('month'),
+  ])
+  projects = (await store.projectBreakdown()).slice(0, 3)
+  const daily = (await store.daily(14)).reduce((acc, d) => {
+    acc[d.date] = (acc[d.date] ?? 0) + d.cost_usd
+    return acc
+  }, {} as Record<string, number>)
+  dailyValues = Object.values(daily)
 
   console.log()
   console.log(chalk.bold.cyan('  Economy'))
@@ -298,6 +280,14 @@ program
   .option('--backfill-machine', 'Tag existing records that have no machine_id with current hostname')
   .option('--recalculate', 'Recalculate costs for all requests with cost_usd = 0')
   .action(async (opts: { claude?: boolean; takumi?: boolean; codex?: boolean; gemini?: boolean; opencode?: boolean; cursor?: boolean; pi?: boolean; hermes?: boolean; loops?: boolean; verbose?: boolean; force?: boolean; backfillMachine?: boolean; recalculate?: boolean }) => {
+    // self_hosted/cloud mode: this client reads and writes the shared cloud API,
+    // it has no local DB to ingest into. Local log ingestion is a local-mode
+    // concept only — skip it here exactly like autoSync does before reads, so we
+    // never write to a local SQLite that the cloud transport will never read.
+    if (isCloudStore()) {
+      console.log(chalk.yellow('cloud mode: ingest is a local-only operation; nothing to sync (reads/writes route to the cloud API)'))
+      return
+    }
     const db = openDatabase()
     ensurePricingSeeded(db)
     const anySpecific = opts.claude || opts.takumi || opts.codex || opts.gemini || opts.opencode || opts.cursor || opts.pi || opts.hermes || opts.loops
@@ -328,7 +318,7 @@ program
       loops: opts.loops,
       verbose: opts.verbose,
     })
-    console.log(chalk.green(`✓ deduped ${result.deduped}${result.cloudPushed ? ', pushed to cloud' : ''}`))
+    console.log(chalk.green(`✓ deduped ${result.deduped}`))
     // Backfill empty machine_id records
     if (opts.backfillMachine) {
       const machine = getMachineId()
@@ -405,26 +395,15 @@ program
     const agent = parseOptionalCliAgent(opts.agent)
     await autoSync()
     const sinceDate = opts.since ? parseSinceDate(opts.since) : undefined
-    const cloud = economyCloudStorage()
-    let sessions: EconomySession[] = cloud.active
-      ? await cloudListItems<EconomySession>(cloud, 'sessions', {
-          agent,
-          project: opts.project,
-          account: opts.account,
-          machine: opts.machine,
-          limit,
-          since: sinceDate,
-          search: opts.search,
-        })
-      : querySessions(openDatabase(), {
-          agent,
-          project: opts.project,
-          account: opts.account,
-          machine: opts.machine,
-          limit,
-          since: sinceDate,
-          search: opts.search,
-        })
+    const sessions = await getStore().sessions({
+      agent,
+      project: opts.project,
+      account: opts.account,
+      machine: opts.machine,
+      limit,
+      since: sinceDate,
+      search: opts.search,
+    })
     if (sessions.length === 0) { console.log(chalk.yellow('No sessions found.')); return }
     const f = opts.format ?? 'table'
     if (f === 'compact') {
@@ -465,10 +444,7 @@ program
     const count = parsePositiveCliInteger(opts.n ?? '10', '-n')
     const agent = parseOptionalCliAgent(opts.agent)
     const sinceDate = opts.since ? parseSinceDate(opts.since) : undefined
-    const cloud = economyCloudStorage()
-    const sessions = cloud.active
-      ? await cloudListItems<EconomySession>(cloud, 'top', { n: count, agent, since: sinceDate })
-      : queryTopSessions(openDatabase(), count, agent, sinceDate)
+    const sessions = await getStore().topSessions(count, agent, sinceDate)
     if (sessions.length === 0) {
       console.log(chalk.yellow('No sessions found. Run `economy sync` first.'))
       return
@@ -499,30 +475,16 @@ program
   .option('--verbose', 'Show all breakdown rows')
   .option('--json', 'Output JSON')
   .action(async (opts: { by?: string; since?: string; limit?: string; verbose?: boolean; json?: boolean }) => {
-    const cloud = economyCloudStorage()
-    const db = cloud.active ? undefined : openDatabase()
+    const store = getStore()
     const by = requireCliChoice(opts.by, '--by', ['model', 'agent', 'project', 'account', 'cost-center', 'loop', 'app', 'repo'] as const)
-    const sinceDate = opts.since ? parseSinceDate(opts.since) : undefined
+    const since = opts.since ? parseSinceDate(opts.since) : undefined
     const limit = resolveRowLimit(opts.limit, opts.verbose, 20)
-    console.log()
     const costCenterKinds = new Set(['loop', 'app', 'repo'] as const)
+    console.log()
     if (by === 'project') {
-      const rows = cloud.active
-        ? await cloudListItems<ProjectBreakdown>(cloud, 'breakdown', { by: 'project', since: sinceDate })
-        : sinceDate
-        ? db!.prepare(`
-          SELECT project_path, project_name,
-                 COUNT(*) as sessions,
-                 COALESCE(SUM(total_tokens), 0) as total_tokens,
-                 COALESCE(SUM(request_count), 0) as requests,
-                 COALESCE(SUM(total_cost_usd), 0) as cost_usd,
-                 MAX(started_at) as last_active
-          FROM sessions WHERE started_at >= ?
-          GROUP BY project_path ORDER BY cost_usd DESC
-        `).all(sinceDate) as Array<{ project_path: string; project_name: string; sessions: number; total_tokens: number; requests: number; cost_usd: number; last_active: string }>
-        : queryProjectBreakdown(db!)
+      const rows = await store.projectBreakdown({ since })
       if (opts.json) {
-        console.log(JSON.stringify({ by, since: sinceDate ?? null, total: rows.length, rows }, null, 2))
+        console.log(JSON.stringify({ by, since: since ?? null, total: rows.length, rows }, null, 2))
         return
       }
       const visibleRows = rows.slice(0, limit)
@@ -538,26 +500,9 @@ program
       )
       printHiddenRowsHint(rows.length, visibleRows.length, 'Use --limit <n>, --verbose, or --json.')
     } else if (by === 'agent') {
-      const rows = cloud.active
-        ? await cloudListItems<AgentBreakdown>(cloud, 'breakdown', { by: 'agent', since: sinceDate })
-        : sinceDate
-        ? db!.prepare(`
-          SELECT agent,
-                 COUNT(DISTINCT session_id) as sessions,
-                 COUNT(*) as requests,
-                 COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_create_tokens), 0) as total_tokens,
-                 COALESCE(SUM(cost_usd), 0) as api_equivalent_usd,
-                 COALESCE(SUM(CASE WHEN cost_basis = 'metered_api' THEN cost_usd ELSE 0 END), 0) as billable_usd,
-                 COALESCE(SUM(CASE WHEN cost_basis = 'subscription_included' THEN cost_usd ELSE 0 END), 0) as subscription_included_usd,
-                 MAX(timestamp) as last_active
-          FROM requests
-          WHERE timestamp >= ?
-          GROUP BY agent
-          ORDER BY api_equivalent_usd DESC
-        `).all(sinceDate) as Array<{ agent: string; sessions: number; requests: number; total_tokens: number; api_equivalent_usd: number; billable_usd: number; subscription_included_usd: number }>
-        : queryAgentBreakdown(db!)
+      const rows = await store.agentBreakdown({ since })
       if (opts.json) {
-        console.log(JSON.stringify({ by, since: sinceDate ?? null, total: rows.length, rows }, null, 2))
+        console.log(JSON.stringify({ by, since: since ?? null, total: rows.length, rows }, null, 2))
         return
       }
       const visibleRows = rows.slice(0, limit)
@@ -575,112 +520,9 @@ program
       )
       printHiddenRowsHint(rows.length, visibleRows.length, 'Use --limit <n>, --verbose, or --json.')
     } else if (by === 'account') {
-      const rows = cloud.active
-        ? await cloudListItems<AccountBreakdown>(cloud, 'breakdown', { by: 'account', since: sinceDate })
-        : sinceDate
-        ? db!.prepare(`
-          WITH request_rows AS (
-            SELECT
-              r.session_id as session_id,
-              COALESCE(NULLIF(r.agent, ''), NULLIF(s.agent, ''), NULLIF(r.account_tool, ''), NULLIF(s.account_tool, ''), 'unknown') as account_agent,
-              COALESCE(NULLIF(r.account_key, ''), NULLIF(s.account_key, ''), '') as raw_account_key,
-              COALESCE(NULLIF(r.account_name, ''), NULLIF(s.account_name, ''), '') as raw_account_name,
-              LOWER(TRIM(COALESCE(NULLIF(r.account_email, ''), NULLIF(s.account_email, ''), ''))) as raw_account_email,
-              COALESCE(NULLIF(r.account_source, ''), NULLIF(s.account_source, ''), 'unknown') as account_source,
-              1 as requests,
-              COALESCE(r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_create_tokens, 0) as total_tokens,
-              COALESCE(r.cost_usd, 0) as cost_usd,
-              COALESCE(NULLIF(r.cost_basis, ''), 'estimated') as cost_basis,
-              r.timestamp as last_active
-            FROM requests r
-            LEFT JOIN sessions s ON s.id = r.session_id
-            WHERE r.timestamp >= ?
-              AND (
-                COALESCE(NULLIF(r.account_key, ''), NULLIF(s.account_key, ''), '') != ''
-                OR COALESCE(NULLIF(r.account_tool, ''), NULLIF(s.account_tool, ''), '') != ''
-                OR COALESCE(NULLIF(r.account_name, ''), NULLIF(s.account_name, ''), '') != ''
-                OR COALESCE(NULLIF(r.account_email, ''), NULLIF(s.account_email, ''), '') != ''
-              )
-          ),
-          session_only_rows AS (
-            SELECT
-              s.id as session_id,
-              COALESCE(NULLIF(s.agent, ''), NULLIF(s.account_tool, ''), 'unknown') as account_agent,
-              s.account_key as raw_account_key,
-              s.account_name as raw_account_name,
-              LOWER(TRIM(COALESCE(s.account_email, ''))) as raw_account_email,
-              COALESCE(NULLIF(s.account_source, ''), 'unknown') as account_source,
-              COALESCE(s.request_count, 0) as requests,
-              COALESCE(s.total_tokens, 0) as total_tokens,
-              COALESCE(s.total_cost_usd, 0) as cost_usd,
-              'estimated' as cost_basis,
-              s.started_at as last_active
-            FROM sessions s
-            WHERE s.started_at >= ?
-              AND s.id NOT IN (SELECT DISTINCT session_id FROM requests)
-              AND (s.account_key != '' OR s.account_tool != '' OR s.account_name != '' OR s.account_email != '')
-          ),
-          normalized AS (
-            SELECT
-              CASE
-                WHEN raw_account_email != '' THEN account_agent || ':' || raw_account_email
-                WHEN raw_account_name != '' THEN account_agent || ':' || raw_account_name
-                ELSE raw_account_key
-              END as account_key,
-              account_agent as account_tool,
-              raw_account_name as account_name,
-              raw_account_email as account_email,
-              account_source,
-              session_id,
-              requests,
-              total_tokens,
-              cost_usd,
-              cost_basis,
-              last_active
-            FROM request_rows
-            UNION ALL
-            SELECT
-              CASE
-                WHEN raw_account_email != '' THEN account_agent || ':' || raw_account_email
-                WHEN raw_account_name != '' THEN account_agent || ':' || raw_account_name
-                ELSE raw_account_key
-              END as account_key,
-              account_agent as account_tool,
-              raw_account_name as account_name,
-              raw_account_email as account_email,
-              account_source,
-              session_id,
-              requests,
-              total_tokens,
-              cost_usd,
-              cost_basis,
-              last_active
-            FROM session_only_rows
-          )
-          SELECT account_key,
-                 account_tool,
-                 COALESCE(MAX(NULLIF(account_name, '')), MAX(NULLIF(account_email, '')), account_key) as account_name,
-                 NULLIF(account_email, '') as account_email,
-                 COALESCE(MAX(NULLIF(account_source, 'unknown')), 'unknown') as account_source,
-                 COUNT(DISTINCT session_id) as sessions,
-                 COALESCE(SUM(requests), 0) as requests,
-                 COALESCE(SUM(total_tokens), 0) as total_tokens,
-                 COALESCE(SUM(cost_usd), 0) as api_equivalent_usd,
-                 COALESCE(SUM(CASE WHEN cost_basis = 'metered_api' THEN cost_usd ELSE 0 END), 0) as billable_usd,
-                 COALESCE(SUM(CASE WHEN cost_basis = 'metered_api' THEN cost_usd ELSE 0 END), 0) as metered_api_usd,
-                 COALESCE(SUM(CASE WHEN cost_basis = 'subscription_included' THEN cost_usd ELSE 0 END), 0) as subscription_included_usd,
-                 COALESCE(SUM(CASE WHEN cost_basis NOT IN ('metered_api', 'subscription_included', 'unknown') THEN cost_usd ELSE 0 END), 0) as estimated_usd,
-                 COALESCE(SUM(CASE WHEN cost_basis = 'unknown' THEN cost_usd ELSE 0 END), 0) as unknown_usd,
-                 COALESCE(SUM(cost_usd), 0) as cost_usd,
-                 MAX(last_active) as last_active
-          FROM normalized
-          WHERE account_key != ''
-          GROUP BY account_key, account_tool, account_email
-          ORDER BY api_equivalent_usd DESC
-        `).all(sinceDate, sinceDate) as AccountBreakdown[]
-        : queryAccountBreakdown(db!)
+      const rows = await store.accountBreakdown({ since })
       if (opts.json) {
-        console.log(JSON.stringify({ by, since: sinceDate ?? null, total: rows.length, rows }, null, 2))
+        console.log(JSON.stringify({ by, since: since ?? null, total: rows.length, rows }, null, 2))
         return
       }
       const visibleRows = rows.slice(0, limit)
@@ -688,12 +530,9 @@ program
       printHiddenRowsHint(rows.length, visibleRows.length, 'Use --limit <n>, --verbose, or --json.')
     } else if (by === 'cost-center' || costCenterKinds.has(by as 'loop' | 'app' | 'repo')) {
       const kind = costCenterKinds.has(by as 'loop' | 'app' | 'repo') ? by as CostCenterKind : undefined
-      type CostCenterRow = { kind: string; name: string; sessions: number; requests: number; total_tokens: number; cost_usd: number }
-      const rows = cloud.active
-        ? await cloudListItems<CostCenterRow>(cloud, 'breakdown', { by, since: sinceDate })
-        : queryCostCenterBreakdown(db!, 'all', { kind, since: sinceDate })
+      const rows = await store.costCenterBreakdown({ since, kind })
       if (opts.json) {
-        console.log(JSON.stringify({ by, since: sinceDate ?? null, total: rows.length, rows }, null, 2))
+        console.log(JSON.stringify({ by, since: since ?? null, total: rows.length, rows }, null, 2))
         return
       }
       if (rows.length === 0) {
@@ -714,22 +553,9 @@ program
         printHiddenRowsHint(rows.length, visibleRows.length, 'Use --limit <n>, --verbose, or --json.')
       }
     } else {
-      const rows = cloud.active
-        ? await cloudListItems<ModelBreakdown>(cloud, 'breakdown', { by: 'model', since: sinceDate })
-        : sinceDate
-        ? db!.prepare(`
-          SELECT model, agent,
-                 COUNT(*) as requests,
-                 COALESCE(SUM(input_tokens), 0) as input_tokens,
-                 COALESCE(SUM(output_tokens), 0) as output_tokens,
-                 COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_create_tokens), 0) as total_tokens,
-                 COALESCE(SUM(cost_usd), 0) as cost_usd
-          FROM requests WHERE timestamp >= ?
-          GROUP BY model, agent ORDER BY cost_usd DESC
-        `).all(sinceDate) as Array<{ model: string; agent: string; requests: number; total_tokens: number; cost_usd: number }>
-        : queryModelBreakdown(db!)
+      const rows = await store.modelBreakdown({ since })
       if (opts.json) {
-        console.log(JSON.stringify({ by, since: sinceDate ?? null, total: rows.length, rows }, null, 2))
+        console.log(JSON.stringify({ by, since: since ?? null, total: rows.length, rows }, null, 2))
         return
       }
       const visibleRows = rows.slice(0, limit)
@@ -760,10 +586,7 @@ program
   .option('--json', 'Output JSON')
   .action(async (periodArg: string | undefined, opts: { limit?: string; verbose?: boolean; json?: boolean }) => {
     const period = requireCliChoice(periodArg, 'period', ACCOUNT_PERIODS)
-    const cloud = economyCloudStorage()
-    const rows = cloud.active
-      ? await cloudListItems<AccountBreakdown>(cloud, 'accounts', { period })
-      : queryAccountBreakdown(openDatabase(), period)
+    const rows = await getStore().accounts(period)
 
     if (opts.json) {
       console.log(JSON.stringify(rows, null, 2))
@@ -826,31 +649,13 @@ budgetCmd
     if (alertAtPercent > 100) fail('--alert must be between 1 and 100')
     const period = requireCliChoice(opts.period, '--period', ['daily', 'weekly', 'monthly'] as const)
     const agent = parseOptionalCliAgent(opts.agent) ?? null
-    const cloud = economyCloudStorage()
-    if (cloud.active) {
-      // self_hosted: write the budget to the cloud API, not the local store.
-      await cloud.client.create('budgets', {
-        project_path: opts.project ?? null,
-        ...(agent ? { agent } : {}),
-        period,
-        limit_usd: limitUsd,
-        alert_at_percent: alertAtPercent,
-      })
-      console.log(chalk.green(`✓ Budget set (cloud): ${opts.project ?? 'global'} — ${period} $${limitUsd}`))
-      return
-    }
-    const db = openDatabase()
-    const now = new Date().toISOString()
-    upsertBudget(db, {
-      id: randomUUID(),
+    await getStore().setBudget({
       project_path: opts.project ?? null,
       agent,
       cost_center_id: opts.costCenter ?? null,
       period,
       limit_usd: limitUsd,
       alert_at_percent: alertAtPercent,
-      created_at: now,
-      updated_at: now,
     })
     console.log(chalk.green(`✓ Budget set: ${opts.costCenter ?? opts.project ?? 'global'} — ${period} $${limitUsd}`))
   })
@@ -861,10 +666,7 @@ budgetCmd
   .option('--limit <n>', 'Maximum budget rows to print (default: 20)')
   .option('--verbose', 'Show all budget rows')
   .action(async (opts: { limit?: string; verbose?: boolean }) => {
-    const cloud = economyCloudStorage()
-    const statuses = cloud.active
-      ? (await cloud.client.list<BudgetStatus>('budgets')).items
-      : getBudgetStatuses(openDatabase())
+    const statuses = await getStore().listBudgets()
     if (statuses.length === 0) { console.log(chalk.yellow('No budgets set.')); return }
     const limit = resolveRowLimit(opts.limit, opts.verbose, 20)
     const visibleStatuses = statuses.slice(0, limit)
@@ -897,13 +699,7 @@ budgetCmd
   .command('remove <id>')
   .description('Remove a budget by ID')
   .action(async (id: string) => {
-    const cloud = economyCloudStorage()
-    if (cloud.active) {
-      await cloud.client.delete('budgets', id)
-      console.log(chalk.green(`✓ Budget removed (cloud)`))
-      return
-    }
-    deleteBudget(openDatabase(), id)
+    await getStore().removeBudget(id)
     console.log(chalk.green(`✓ Budget removed`))
   })
 
@@ -918,20 +714,7 @@ projectCmd
   .action(async (path: string, opts: { name?: string }) => {
     const { basename } = require('path') as typeof import('path')
     const name = opts.name ?? basename(path)
-    const cloud = economyCloudStorage()
-    if (cloud.active) {
-      await cloud.client.create('project-registry', { path, name, description: null, tags: [] })
-      console.log(chalk.green(`✓ Project added (cloud): ${path}`))
-      return
-    }
-    upsertProject(openDatabase(), {
-      id: randomUUID(),
-      path,
-      name,
-      description: null,
-      tags: [],
-      created_at: new Date().toISOString(),
-    })
+    await getStore().addProject(path, name)
     console.log(chalk.green(`✓ Project added: ${path}`))
   })
 
@@ -940,9 +723,8 @@ projectCmd
   .description('List all projects with costs')
   .option('--limit <n>', 'Maximum project rows to print (default: 20)')
   .option('--verbose', 'Show all project rows')
-  .action((opts: { limit?: string; verbose?: boolean }) => {
-    const db = openDatabase()
-    const projects = queryProjectBreakdown(db)
+  .action(async (opts: { limit?: string; verbose?: boolean }) => {
+    const projects = await getStore().listProjects()
     if (projects.length === 0) { console.log(chalk.yellow('No projects tracked yet.')); return }
     const limit = resolveRowLimit(opts.limit, opts.verbose, 20)
     const visibleProjects = projects.slice(0, limit)
@@ -969,13 +751,7 @@ projectCmd
   .command('remove <path>')
   .description('Remove a project (keeps historical data)')
   .action(async (path: string) => {
-    const cloud = economyCloudStorage()
-    if (cloud.active) {
-      await cloud.client.delete('project-registry', path)
-      console.log(chalk.green(`✓ Project removed (cloud)`))
-      return
-    }
-    deleteProject(openDatabase(), path)
+    await getStore().removeProject(path)
     console.log(chalk.green(`✓ Project removed`))
   })
 
@@ -983,18 +759,11 @@ projectCmd
   .command('rename <path> <name>')
   .description('Rename a project')
   .action(async (path: string, name: string) => {
-    const cloud = economyCloudStorage()
-    if (cloud.active) {
-      // No PUT for project-registry; rename = delete-by-path then re-create with the new name.
-      await cloud.client.delete('project-registry', path)
-      await cloud.client.create('project-registry', { path, name, description: null, tags: [] })
-      console.log(chalk.green(`✓ Renamed to: ${name} (cloud)`))
-      return
+    try {
+      await getStore().renameProject(path, name)
+    } catch (e) {
+      console.error(chalk.red(e instanceof Error ? e.message : String(e))); process.exit(1)
     }
-    const db = openDatabase()
-    const existing = getProject(db, path)
-    if (!existing) { console.error(chalk.red('Project not found')); process.exit(1) }
-    upsertProject(db, { ...existing, name })
     console.log(chalk.green(`✓ Renamed to: ${name}`))
   })
 
@@ -1003,58 +772,33 @@ projectCmd
   .description('Detailed project breakdown with sparkline')
   .action(async (nameOrPath: string) => {
     await autoSync()
-    const db = openDatabase()
-    // Find project by name or path substring
-    const sessions = db.prepare(`SELECT * FROM sessions WHERE project_name LIKE ? OR project_path LIKE ? ORDER BY started_at DESC`).all(`%${nameOrPath}%`, `%${nameOrPath}%`) as Array<Record<string, unknown>>
-    if (sessions.length === 0) { console.log(chalk.yellow(`No sessions found for: ${nameOrPath}`)); return }
+    const detail = await getStore().projectDetail(nameOrPath)
+    if (!detail) { console.log(chalk.yellow(`No sessions found for: ${nameOrPath}`)); return }
 
-    const projectName = sessions[0]!['project_name'] as string || nameOrPath
-    const projectPath = sessions[0]!['project_path'] as string || ''
-    const totalCost = sessions.reduce((s, r) => s + (r['total_cost_usd'] as number), 0)
-    const totalTokens = sessions.reduce((s, r) => s + (r['total_tokens'] as number), 0)
-
-    // Daily sparkline
-    const daily = db.prepare(`
-      SELECT DATE(r.timestamp) as d, SUM(r.cost_usd) as cost
-      FROM requests r JOIN sessions s ON r.session_id = s.id
-      WHERE (s.project_name LIKE ? OR s.project_path LIKE ?)
-        AND r.timestamp >= DATE('now', '-14 days')
-      GROUP BY d ORDER BY d ASC
-    `).all(`%${nameOrPath}%`, `%${nameOrPath}%`) as Array<{ d: string; cost: number }>
-    const dailyValues = daily.map(d => d.cost)
-
-    // Model breakdown for project
-    const models = db.prepare(`
-      SELECT r.model, COUNT(*) as reqs, SUM(r.cost_usd) as cost
-      FROM requests r JOIN sessions s ON r.session_id = s.id
-      WHERE s.project_name LIKE ? OR s.project_path LIKE ?
-      GROUP BY r.model ORDER BY cost DESC LIMIT 5
-    `).all(`%${nameOrPath}%`, `%${nameOrPath}%`) as Array<{ model: string; reqs: number; cost: number }>
+    const dailyValues = detail.daily.map(d => d.cost_usd)
 
     console.log()
-    console.log(chalk.bold.cyan(`  ${projectName}`))
-    console.log(chalk.dim(`  ${projectPath}`))
+    console.log(chalk.bold.cyan(`  ${detail.project_name}`))
+    console.log(chalk.dim(`  ${detail.project_path}`))
     console.log()
     printTable(['Metric', 'Value'], [
-      ['Total cost', fmt(totalCost)],
-      ['Sessions', fmtCount(sessions.length)],
-      ['Total tokens', fmtTokens(totalTokens)],
+      ['Total cost', fmt(detail.total_cost_usd)],
+      ['Sessions', fmtCount(detail.sessions)],
+      ['Total tokens', fmtTokens(detail.total_tokens)],
     ])
     if (dailyValues.length > 0) {
       console.log(`\n  ${chalk.dim('14-day trend:')} ${sparkline(dailyValues)}`)
     }
-    if (models.length > 0) {
+    if (detail.models.length > 0) {
       console.log(`\n  ${chalk.dim('Model breakdown:')}`)
-      for (const m of models) {
-        console.log(`    ${chalk.white(m.model.padEnd(30))} ${fmt(m.cost)} (${fmtCount(m.reqs)} reqs)`)
+      for (const m of detail.models) {
+        console.log(`    ${chalk.white(m.model.padEnd(30))} ${fmt(m.cost_usd)} (${fmtCount(m.requests)} reqs)`)
       }
     }
-    // Top 5 sessions
-    const topSessions = sessions.sort((a, b) => (b['total_cost_usd'] as number) - (a['total_cost_usd'] as number)).slice(0, 5)
-    if (topSessions.length > 0) {
+    if (detail.top_sessions.length > 0) {
       console.log(`\n  ${chalk.dim('Top sessions:')}`)
-      for (const s of topSessions) {
-        console.log(`    ${chalk.dim((s['id'] as string).substring(0, 12))}  ${fmt(s['total_cost_usd'] as number)}  ${chalk.dim(String(s['started_at']).substring(0, 16))}`)
+      for (const s of detail.top_sessions) {
+        console.log(`    ${chalk.dim(s.id.substring(0, 12))}  ${fmt(s.total_cost_usd)}  ${chalk.dim(String(s.started_at).substring(0, 16))}`)
       }
     }
     console.log()
@@ -1133,15 +877,7 @@ pricingCmd
   .option('--limit <n>', 'Maximum pricing rows to print (default: 50)')
   .option('--verbose', 'Show all pricing rows')
   .action(async (opts: { limit?: string; verbose?: boolean }) => {
-    const cloud = economyCloudStorage()
-    let rows: DbModelPricing[]
-    if (cloud.active) {
-      rows = (await cloud.client.list<DbModelPricing>('pricing')).items
-    } else {
-      const db = openDatabase()
-      ensurePricingSeeded(db)
-      rows = listModelPricing(db)
-    }
+    const rows = await getStore().listPricing()
     const limit = resolveRowLimit(opts.limit, opts.verbose, 50)
     const visibleRows = rows.slice(0, limit)
     console.log()
@@ -1181,7 +917,7 @@ pricingCmd
     const cacheWrite = parseNonNegativeCliNumber(opts.cacheWrite ?? '0', '--cache-write')
     const cacheWrite1h = parseNonNegativeCliNumber(opts.cacheWrite1h ?? '0', '--cache-write-1h')
     const cacheStorage = parseNonNegativeCliNumber(opts.cacheStorage ?? '0', '--cache-storage')
-    const pricing = {
+    await getStore().setPricing({
       model,
       input_per_1m: input,
       output_per_1m: output,
@@ -1189,18 +925,7 @@ pricingCmd
       cache_write_per_1m: cacheWrite,
       cache_write_1h_per_1m: cacheWrite1h,
       cache_storage_per_1m_hour: cacheStorage,
-      updated_at: new Date().toISOString(),
-    }
-    const cloud = economyCloudStorage()
-    if (cloud.active) {
-      // self_hosted: write pricing to the cloud API, not the local store.
-      await cloud.client.create('pricing', pricing)
-      console.log(chalk.green(`✓ Pricing updated for ${model} (cloud)`))
-      return
-    }
-    const db = openDatabase()
-    ensurePricingSeeded(db)
-    upsertModelPricing(db, pricing)
+    })
     console.log(chalk.green(`✓ Pricing updated for ${model}`))
   })
 
@@ -1208,13 +933,7 @@ pricingCmd
   .command('remove <model>')
   .description('Remove pricing for a model')
   .action(async (model: string) => {
-    const cloud = economyCloudStorage()
-    if (cloud.active) {
-      await cloud.client.delete('pricing', model)
-      console.log(chalk.green(`✓ Pricing removed for ${model} (cloud)`))
-      return
-    }
-    deleteModelPricing(openDatabase(), model)
+    await getStore().removePricing(model)
     console.log(chalk.green(`✓ Pricing removed for ${model}`))
   })
 
@@ -1321,10 +1040,9 @@ program
   .action(async (id: string, opts: { limit?: string; verbose?: boolean }) => {
     const requestLimit = parsePositiveCliInteger(opts.limit ?? (opts.verbose ? '50' : '20'), '--limit')
     await autoSync()
-    const db = openDatabase()
-    const session = db.prepare(`SELECT * FROM sessions WHERE id = ? OR id LIKE ?`).get(id, `%${id}%`) as Record<string, unknown> | null
-    if (!session) { console.log(chalk.red(`Session not found: ${id}`)); process.exit(1) }
-    const requests = db.prepare(`SELECT * FROM requests WHERE session_id = ? ORDER BY timestamp ASC`).all(session['id'] as string) as Array<Record<string, unknown>>
+    const detail = await getStore().sessionDetail(id)
+    if (!detail) { console.log(chalk.red(`Session not found: ${id}`)); process.exit(1) }
+    const { session, requests } = detail
 
     console.log()
     console.log(chalk.bold.cyan(`  Session: ${(session['id'] as string).substring(0, 16)}...`))
@@ -1370,8 +1088,7 @@ program
   .option('--verbose', 'Show all machine rows')
   .action(async (opts: { limit?: string; verbose?: boolean }) => {
     await autoSync()
-    const db = openDatabase()
-    const machines = listMachines(db)
+    const machines = await getStore().machines()
     const current = getMachineId()
     if (machines.length === 0) {
       console.log(chalk.yellow(`No machine data yet. Current machine: ${current}`))
@@ -1400,80 +1117,6 @@ program
     console.log()
   })
 
-program
-  .command('fleet-sync')
-  .description('Loop-safe cross-machine sync using remote SQLite snapshots')
-  .option('--machine <ids>', 'Comma-separated remote machines', 'spark02,apple03')
-  .option('--no-local-sync', 'Skip local economy sync before remote merge')
-  .option('--no-remote-sync', 'Skip remote economy sync before snapshot')
-  .option('--cache-dir <path>', 'Directory for verified pulled DB snapshots')
-  .option('--report-dir <path>', 'Directory for JSON evidence reports')
-  .option('--remote-snapshot-dir <path>', 'Remote snapshot directory', '$HOME/.hasna/economy/fleet-sync-snapshots')
-  .option('--timeout-ms <n>', 'Per remote command timeout', '120000')
-  .option('--dry-run', 'Plan without syncing, pulling, or merging')
-  .option('--json', 'Output JSON')
-  .action((opts: {
-    machine?: string
-    localSync?: boolean
-    remoteSync?: boolean
-    cacheDir?: string
-    reportDir?: string
-    remoteSnapshotDir?: string
-    timeoutMs?: string
-    dryRun?: boolean
-    json?: boolean
-  }) => {
-    const result = runEconomyFleetSync({
-      machines: opts.machine?.split(',').map((entry) => entry.trim()).filter(Boolean),
-      localSync: opts.localSync !== false,
-      remoteSync: opts.remoteSync !== false,
-      cacheDir: opts.cacheDir,
-      remoteSnapshotDir: opts.remoteSnapshotDir,
-      timeoutMs: parsePositiveCliInteger(opts.timeoutMs, '--timeout-ms'),
-      dryRun: opts.dryRun,
-    })
-    const reportPath = opts.reportDir ? writeFleetSyncReport(opts.reportDir, result) : undefined
-    if (opts.json) {
-      console.log(JSON.stringify({ ...result, ...(reportPath ? { report_path: reportPath } : {}) }, null, 2))
-      return
-    }
-    const status = result.summary.failed === 0 ? chalk.green('ok') : chalk.red('failed')
-    console.log(`${status} machines=${result.summary.machines} merged=${result.summary.merged} failed=${result.summary.failed} dry_run=${result.summary.dry_run}`)
-    if (reportPath) console.log(chalk.dim(`report=${reportPath}`))
-    for (const row of result.remote.filter((entry) => entry.status !== 'merged').slice(0, 20)) {
-      console.log(`${row.status === 'failed' ? chalk.red('failed') : chalk.yellow(row.status)} ${row.machine} ${chalk.dim(row.error ?? '')}`)
-    }
-    if (result.local.status === 'failed' || result.summary.failed > 0) process.exitCode = 1
-  })
-
-program
-  .command('merge-db <source-db>')
-  .description('Merge another Economy SQLite database into this machine')
-  .option('--source-machine <id>', 'Machine id to use for source rows that do not have one')
-  .option('--json', 'Output JSON')
-  .action((sourceDb: string, opts: { sourceMachine?: string; json?: boolean }) => {
-    const db = openDatabase()
-    const result = mergePeerDatabase(db, sourceDb, { sourceMachine: opts.sourceMachine })
-    if (opts.json) {
-      console.log(JSON.stringify(result, null, 2))
-      return
-    }
-
-    console.log()
-    console.log(chalk.bold.cyan(`  Merged Economy DB — ${result.source_machine}`))
-    console.log(`  Rows written: ${fmtCount(result.rows_written)} · collisions remapped: ${fmtCount(result.collisions)} · deduped: ${fmtCount(result.deduped)}`)
-    for (const table of result.tables) {
-      console.log(
-        `  ${chalk.white(table.table.padEnd(16))}`
-        + ` inserted ${fmtCount(table.inserted).padStart(6)}`
-        + `  updated ${fmtCount(table.updated).padStart(6)}`
-        + `  skipped ${fmtCount(table.skipped).padStart(6)}`
-        + `  collisions ${fmtCount(table.collisions).padStart(3)}`,
-      )
-    }
-    console.log()
-  })
-
 // ── export ────────────────────────────────────────────────────────────────────
 
 program
@@ -1484,25 +1127,17 @@ program
   .option('--output <file>', 'Output file path (default: stdout)')
   .action(async (opts: { type?: string; period?: string; output?: string }) => {
     await autoSync()
-    const db = openDatabase()
+    const type = opts.type === 'requests' ? 'requests' : 'sessions'
+    const period = opts.period ?? 'month'
+    const rows = await getStore().exportRows(type, period)
     let csv: string
 
-    if (opts.type === 'requests') {
-      const where = opts.period === 'today' ? `DATE(timestamp) = DATE('now')`
-        : opts.period === 'week' ? `timestamp >= DATE('now', '-7 days')`
-        : opts.period === 'all' ? '1=1'
-        : `timestamp >= DATE('now', '-30 days')`
-      const rows = db.prepare(`SELECT * FROM requests WHERE ${where} ORDER BY timestamp ASC`).all() as Array<Record<string, unknown>>
+    if (type === 'requests') {
       csv = 'id,agent,session_id,model,input_tokens,output_tokens,cache_read_tokens,cache_create_tokens,cost_usd,duration_ms,timestamp\n'
       for (const r of rows) {
         csv += `${r['id']},${r['agent']},${r['session_id']},${r['model']},${r['input_tokens']},${r['output_tokens']},${r['cache_read_tokens']},${r['cache_create_tokens']},${r['cost_usd']},${r['duration_ms']},${r['timestamp']}\n`
       }
     } else {
-      const where = opts.period === 'today' ? `DATE(started_at) = DATE('now')`
-        : opts.period === 'week' ? `started_at >= DATE('now', '-7 days')`
-        : opts.period === 'all' ? '1=1'
-        : `started_at >= DATE('now', '-30 days')`
-      const rows = db.prepare(`SELECT * FROM sessions WHERE ${where} ORDER BY started_at DESC`).all() as Array<Record<string, unknown>>
       csv = 'id,agent,project_path,project_name,started_at,ended_at,total_cost_usd,total_tokens,request_count\n'
       for (const r of rows) {
         csv += `${r['id']},${r['agent']},"${r['project_path']}","${r['project_name']}",${r['started_at']},${r['ended_at'] ?? ''},${r['total_cost_usd']},${r['total_tokens']},${r['request_count']}\n`
@@ -1525,7 +1160,7 @@ program
   .description('Compare two periods (today/yesterday/week/lastweek/month/lastmonth)')
   .action(async (p1: string, p2: string) => {
     await autoSync()
-    const db = openDatabase()
+    const store = getStore()
 
     function dateRange(period: string): [string, string] {
       const now = new Date()
@@ -1559,16 +1194,10 @@ program
       }
     }
 
-    function queryRange(from: string, to: string) {
-      const r = db.prepare(`SELECT COALESCE(SUM(cost_usd),0) as cost, COUNT(*) as requests, COALESCE(SUM(input_tokens+output_tokens+cache_read_tokens+cache_create_tokens),0) as tokens FROM requests WHERE DATE(timestamp) BETWEEN ? AND ?`).get(from, to) as { cost: number; requests: number; tokens: number }
-      const s = db.prepare(`SELECT COUNT(*) as sessions FROM sessions WHERE DATE(started_at) BETWEEN ? AND ?`).get(from, to) as { sessions: number }
-      return { ...r, sessions: s.sessions }
-    }
-
     const [f1, t1] = dateRange(p1)
     const [f2, t2] = dateRange(p2)
-    const a = queryRange(f1, t1)
-    const b = queryRange(f2, t2)
+    const a = await store.rangeStats(f1, t1)
+    const b = await store.rangeStats(f2, t2)
 
     function delta(v1: number, v2: number): string {
       const d = v1 - v2
@@ -1600,38 +1229,20 @@ program
   .description('Project end-of-month cost based on current burn rate')
   .action(async () => {
     await autoSync()
-    const db = openDatabase()
-
-    const now = new Date()
-    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
-    const dayOfMonth = now.getDate()
-    const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
-
-    const monthSoFar = db.prepare(`SELECT COALESCE(SUM(cost_usd),0) as cost FROM requests WHERE DATE(timestamp) >= ?`).get(monthStart) as { cost: number }
-    const dailyAvg = dayOfMonth > 0 ? monthSoFar.cost / dayOfMonth : 0
-    const projected = dailyAvg * daysInMonth
-
-    // Last 7 days rate
-    const sevenDaysAgo = new Date(now); sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
-    const last7 = db.prepare(`SELECT COALESCE(SUM(cost_usd),0) as cost FROM requests WHERE DATE(timestamp) >= ?`).get(sevenDaysAgo.toISOString().substring(0, 10)) as { cost: number }
-    const last7DailyAvg = last7.cost / 7
-    const last7Projected = last7DailyAvg * daysInMonth
-
-    // Min/max day
-    const dailyCosts = db.prepare(`SELECT DATE(timestamp) as d, SUM(cost_usd) as cost FROM requests WHERE DATE(timestamp) >= ? GROUP BY d ORDER BY cost ASC`).all(monthStart) as Array<{ d: string; cost: number }>
-    const cheapest = dailyCosts[0]
-    const mostExpensive = dailyCosts[dailyCosts.length - 1]
+    const f = await getStore().forecast()
+    const cheapest = f.cheapest_day
+    const mostExpensive = f.most_expensive_day
 
     console.log()
-    console.log(chalk.bold.cyan(`  Forecast (${dayOfMonth} of ${daysInMonth} days)`))
+    console.log(chalk.bold.cyan(`  Forecast (${f.day_of_month} of ${f.days_in_month} days)`))
     console.log()
     printTable(['Metric', 'Value'], [
-      ['Spent so far', fmt(monthSoFar.cost)],
-      ['Daily average', fmt(dailyAvg)],
-      [chalk.bold('Projected total'), chalk.bold(fmt(projected).replace(chalk.green(''), ''))],
-      ['Last 7-day rate', `${fmt(last7DailyAvg)}/day → ${fmt(last7Projected)}`],
-      ['Cheapest day', cheapest ? `${fmt(cheapest.cost)} (${cheapest.d})` : '—'],
-      ['Most expensive', mostExpensive ? `${fmt(mostExpensive.cost)} (${mostExpensive.d})` : '—'],
+      ['Spent so far', fmt(f.spent_so_far_usd)],
+      ['Daily average', fmt(f.daily_avg_usd)],
+      [chalk.bold('Projected total'), chalk.bold(fmt(f.projected_usd).replace(chalk.green(''), ''))],
+      ['Last 7-day rate', `${fmt(f.last7_daily_avg_usd)}/day → ${fmt(f.last7_projected_usd)}`],
+      ['Cheapest day', cheapest ? `${fmt(cheapest.cost_usd)} (${cheapest.date})` : '—'],
+      ['Most expensive', mostExpensive ? `${fmt(mostExpensive.cost_usd)} (${mostExpensive.date})` : '—'],
     ])
     console.log()
   })
@@ -1643,13 +1254,7 @@ program
   .description('Show output/input token ratio per model')
   .action(async () => {
     await autoSync()
-    const db = openDatabase()
-    const models = db.prepare(`
-      SELECT model, SUM(input_tokens) as input, SUM(output_tokens) as output,
-             SUM(cache_read_tokens) as cache_read, SUM(cache_create_tokens) as cache_write,
-             COUNT(*) as requests, SUM(cost_usd) as cost
-      FROM requests GROUP BY model ORDER BY cost DESC
-    `).all() as Array<{ model: string; input: number; output: number; cache_read: number; cache_write: number; requests: number; cost: number }>
+    const models = await getStore().efficiency()
 
     console.log()
     console.log(chalk.bold.cyan('  Token Efficiency'))
@@ -1719,27 +1324,11 @@ goalCmd
     const limitUsd = parsePositiveCliNumber(opts.limit, '--limit')
     const period = requireCliChoice(opts.period, '--period', ['day', 'week', 'month', 'year'] as const)
     const agent = parseOptionalCliAgent(opts.agent) ?? null
-    const cloud = economyCloudStorage()
-    if (cloud.active) {
-      await cloud.client.create('goals', {
-        period,
-        project_path: opts.project ?? null,
-        ...(agent ? { agent } : {}),
-        limit_usd: limitUsd,
-      })
-      console.log(chalk.green(`✓ Goal set (cloud): ${period} $${limitUsd}${opts.project ? ` (${opts.project})` : ''}`))
-      return
-    }
-    const db = openDatabase()
-    const now = new Date().toISOString()
-    upsertGoal(db, {
-      id: randomUUID(),
+    await getStore().setGoal({
       period,
       project_path: opts.project ?? null,
       agent,
       limit_usd: limitUsd,
-      created_at: now,
-      updated_at: now,
     })
     console.log(chalk.green(`✓ Goal set: ${period} $${limitUsd}${opts.project ? ` (${opts.project})` : ''}`))
   })
@@ -1750,10 +1339,7 @@ goalCmd
   .option('--limit <n>', 'Maximum goal rows to print (default: 20)')
   .option('--verbose', 'Show all goal rows')
   .action(async (opts: { limit?: string; verbose?: boolean }) => {
-    const cloud = economyCloudStorage()
-    const statuses = cloud.active
-      ? (await cloud.client.list<GoalStatus>('goals')).items
-      : getGoalStatuses(openDatabase())
+    const statuses = await getStore().listGoals()
     if (statuses.length === 0) { console.log(chalk.yellow('No goals set.')); return }
     const limit = resolveRowLimit(opts.limit, opts.verbose, 20)
     const visibleStatuses = statuses.slice(0, limit)
@@ -1787,13 +1373,7 @@ goalCmd
   .command('remove <id>')
   .description('Remove a goal')
   .action(async (id: string) => {
-    const cloud = economyCloudStorage()
-    if (cloud.active) {
-      await cloud.client.delete('goals', id)
-      console.log(chalk.green(`✓ Goal removed (cloud)`))
-      return
-    }
-    deleteGoal(openDatabase(), id)
+    await getStore().removeGoal(id)
     console.log(chalk.green(`✓ Goal removed`))
   })
 
@@ -1803,10 +1383,7 @@ goalCmd
   .option('--limit <n>', 'Maximum goal rows to print (default: 20)')
   .option('--verbose', 'Show all goal rows')
   .action(async (opts: { limit?: string; verbose?: boolean }) => {
-    const cloud = economyCloudStorage()
-    const statuses = cloud.active
-      ? (await cloud.client.list<GoalStatus>('goals')).items
-      : getGoalStatuses(openDatabase())
+    const statuses = await getStore().listGoals()
     if (statuses.length === 0) { console.log(chalk.yellow('No goals set.')); return }
     const limit = resolveRowLimit(opts.limit, opts.verbose, 20)
     const visibleStatuses = statuses.slice(0, limit)
@@ -1835,110 +1412,25 @@ program
   .alias('rm')
   .description('Remove a record. Type: budget | project | goal | pricing')
   .action(async (type: string, id: string) => {
-    const cloud = economyCloudStorage()
-    const resourceFor: Record<string, string> = { budget: 'budgets', project: 'project-registry', goal: 'goals', pricing: 'pricing' }
     const label: Record<string, string> = { budget: 'Budget', project: 'Project', goal: 'Goal', pricing: 'Pricing entry' }
     try {
       const t = type.toLowerCase()
-      if (!(t in resourceFor)) {
+      if (!(t in label)) {
         console.error(chalk.red(`Unknown type: ${type}. Use: budget | project | goal | pricing`))
         process.exit(1)
       }
-      if (cloud.active) {
-        await cloud.client.delete(resourceFor[t]!, id)
-        console.log(chalk.green(`✓ ${label[t]} ${id} removed (cloud)`))
-        return
-      }
-      const db = openDatabase()
+      const store = getStore()
       switch (t) {
-        case 'budget':
-          deleteBudget(db, id)
-          console.log(chalk.green(`✓ Budget ${id} removed`))
-          break
-        case 'project':
-          deleteProject(db, id)
-          console.log(chalk.green(`✓ Project ${id} removed`))
-          break
-        case 'goal':
-          deleteGoal(db, id)
-          console.log(chalk.green(`✓ Goal ${id} removed`))
-          break
-        case 'pricing':
-          deleteModelPricing(db, id)
-          console.log(chalk.green(`✓ Pricing entry ${id} removed`))
-          break
+        case 'budget': await store.removeBudget(id); break
+        case 'project': await store.removeProject(id); break
+        case 'goal': await store.removeGoal(id); break
+        case 'pricing': await store.removePricing(id); break
       }
+      console.log(chalk.green(`✓ ${label[t]} ${id} removed`))
     } catch (e) {
       console.error(chalk.red(`Failed: ${e instanceof Error ? e.message : String(e)}`))
       process.exit(1)
     }
-  })
-
-// ── cloud ────────────────────────────────────────────────────────────────────
-
-const cloudCmd = program.command('cloud').description('Cross-machine sync via cloud PostgreSQL')
-
-cloudCmd
-  .command('push')
-  .description('Push local economy data to cloud PostgreSQL')
-  .option('--tables <tables>', 'Comma-separated table names (default: all)')
-  .action(async (opts: { tables?: string }) => {
-    const tableList = opts.tables ? opts.tables.split(',').map(t => t.trim()) : undefined
-    process.stdout.write(chalk.cyan('→ Pushing to cloud... '))
-    const r = await cloudPush({ tables: tableList })
-    console.log(chalk.green(`✓ ${r.rows} rows from ${r.machine}`))
-  })
-
-cloudCmd
-  .command('pull')
-  .description('Pull cloud PostgreSQL data to local')
-  .option('--tables <tables>', 'Comma-separated table names (default: all)')
-  .action(async (opts: { tables?: string }) => {
-    const tableList = opts.tables ? opts.tables.split(',').map(t => t.trim()) : undefined
-    process.stdout.write(chalk.cyan('→ Pulling from cloud... '))
-    const r = await cloudPull({ tables: tableList })
-    console.log(chalk.green(`✓ ${r.rows} rows to ${r.machine}`))
-  })
-
-cloudCmd
-  .command('sync')
-  .description('Full sync: ingest local → push to cloud → pull from cloud')
-  .action(async () => {
-    console.log(chalk.bold.cyan(`  Cloud Sync — ${getMachineId()}\n`))
-    process.stdout.write(chalk.cyan('→ Ingesting local data... '))
-    await autoSync()
-    console.log(chalk.green('✓'))
-    process.stdout.write(chalk.cyan('→ Cloud round-trip... '))
-    const r = await cloudSyncFull()
-    console.log(chalk.green(`✓ push ${r.push} / pull ${r.pull}`))
-    console.log(chalk.bold.green('\n✓ Cloud sync complete'))
-  })
-
-cloudCmd
-  .command('status')
-  .description('Check cloud connection and fleet machine registry')
-  .action(async () => {
-    console.log()
-    console.log(`  Machine: ${chalk.white(getMachineId())}`)
-    console.log(`  Cloud URL: ${chalk.white(getCloudDatabaseUrl() ?? '(not set — export ECONOMY_CLOUD_DATABASE_URL)')}`)
-    const registry = listMachineRegistry(openDatabase())
-    if (registry.length > 0) {
-      console.log(chalk.dim('\n  Fleet registry:'))
-      for (const m of registry) {
-        console.log(`    ${m.machine_id.padEnd(12)} push ${m.last_push_at?.substring(0, 16) ?? '—'}  pull ${m.last_pull_at?.substring(0, 16) ?? '—'}`)
-      }
-    }
-    try {
-      const cloud = await getCloudPg()
-      await cloud.get('SELECT 1 as ok')
-      const tables = await cloud.all("SELECT tablename FROM pg_tables WHERE schemaname = 'public'") as Array<{ tablename: string }>
-      console.log(`\n  PostgreSQL: ${chalk.green('connected')}`)
-      console.log(`  Tables: ${chalk.white(tables.map(t => t.tablename).join(', ') || '(none)')}`)
-      await cloud.close()
-    } catch (err: unknown) {
-      console.log(`\n  PostgreSQL: ${chalk.red(`failed — ${err instanceof Error ? err.message : String(err)}`)}`)
-    }
-    console.log()
   })
 
 // ── billing ──────────────────────────────────────────────────────────────────
@@ -1953,6 +1445,14 @@ billingCmd
   .option('--openai', 'Only sync OpenAI')
   .option('--gemini', 'Only sync Gemini')
   .action(async (opts: { days?: string; anthropic?: boolean; openai?: boolean; gemini?: boolean }) => {
+    // self_hosted/cloud mode: provider billing is pulled into the local DB by the
+    // machine that owns the provider credentials; there is no ApiStore write path
+    // for billing, so writing here would land in a local SQLite the cloud
+    // transport never reads. Skip+warn exactly like the `sync` command.
+    if (isCloudStore()) {
+      console.log(chalk.yellow('cloud mode: billing ingest is a local-only operation; nothing to sync (reads route to the cloud API)'))
+      return
+    }
     const days = parsePositiveCliInteger(opts.days ?? '31', '--days')
     if (days > 366) fail('--days must be between 1 and 366')
     const db = openDatabase()
@@ -1995,11 +1495,11 @@ billingCmd
   .command('show')
   .description('Show actual billing totals vs our estimated costs')
   .option('--period <p>', 'Period: today|yesterday|week|month|year|all', 'month')
-  .action((opts: { period?: string }) => {
-    const db = openDatabase()
+  .action(async (opts: { period?: string }) => {
+    const store = getStore()
     const period = (opts.period ?? 'month') as Period
-    const actual = queryBillingSummary(db, period)
-    const estimated = querySummary(db, period)
+    const actual = await store.billingSummary(period)
+    const estimated = await store.summary(period)
     console.log()
     console.log(chalk.bold.cyan(`  Billing ${period} (actual from admin APIs)\n`))
     printTable(
@@ -2019,10 +1519,30 @@ billingCmd
 
 registerBrainsCommand(program)
 registerTodosCommand(program)
-registerBriefCommand(program, { beforeRead: () => autoSync({ dedupe: false, cloud: false }) })
+registerBriefCommand(program, { beforeRead: () => autoSync({ dedupe: false }) })
 registerExtendedCommands(program)
 registerFleetCommands(program)
 
 registerEventsCommands(program, { source: 'economy' })
 
-program.parseAsync()
+// Render any command failure as a single clean line + exit 1 — never leak a raw
+// bundle stack trace. Cloud (self_hosted) API failures surface as HasnaHttpError;
+// a 404 there means the server is missing the endpoint (stale deploy) rather than
+// a client bug, so we say so instead of dumping the transport internals.
+function reportCliError(err: unknown): never {
+  if (err instanceof HasnaHttpError) {
+    if (err.status === 404) {
+      fail(
+        `economy: the cloud API has no endpoint for this command (${err.method} ${err.path} -> 404). ` +
+          `The self-hosted server is likely running an older build — it needs an ECS redeploy of the current version.`,
+      )
+    }
+    if (err.status === 401 || err.status === 403) {
+      fail(`economy: cloud API rejected the request (${err.status}). Check HASNA_ECONOMY_API_KEY.`)
+    }
+    fail(`economy: cloud API request failed (${err.method} ${err.path} -> ${err.status}).`)
+  }
+  fail(`economy: ${err instanceof Error ? err.message : String(err)}`)
+}
+
+program.parseAsync().catch(reportCliError)

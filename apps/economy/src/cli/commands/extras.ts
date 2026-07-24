@@ -1,32 +1,16 @@
 import { Command } from 'commander'
 import chalk from 'chalk'
-import { randomUUID } from 'crypto'
 import {
   openDatabase,
-  querySummary,
-  queryUsageSnapshots,
-  listSubscriptions,
-  upsertSubscription,
-  deleteSubscription,
-  listMachines,
-  listMachineRegistry,
-  queryBillingSummary,
   dedupeRequests,
   queryZeroCostTokenizedModels,
 } from '../../db/database.js'
-import { querySavingsSummary } from '../../lib/savings.js'
-import { queryBillingDiff } from '../../lib/billing-diff.js'
-import { usageSnapshotFilterForPeriod } from '../../lib/periods.js'
-import { buildStatusLine } from './tui.js'
-import { computeCostFromDb, ensurePricingSeeded, getPricingFromDb } from '../../lib/pricing.js'
+import { buildStatusLine, gatherStatusData } from './tui.js'
+import { getStore, isCloudStore } from '../../lib/store/index.js'
+import { ensurePricingSeeded, getPricingFromDb } from '../../lib/pricing.js'
 import { AGENTS, parseAgent } from '../../lib/agents.js'
-import type { Period } from '../../types/index.js'
-import {
-  getCloudDatabaseUrl,
-  getCloudScheduleStatus,
-  registerCloudSchedule,
-  removeCloudSchedule,
-} from '../../lib/cloud-sync.js'
+import type { SavingsSummary } from '../../lib/savings.js'
+import type { CostSummary, Period, UsageSnapshot } from '../../types/index.js'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import { printCompletion } from './completion.js'
@@ -62,14 +46,6 @@ function parseLimit(value: string | undefined, fallback: number, verbose?: boole
   return parsed
 }
 
-function compactValue(value: unknown): string {
-  if (value == null) return '—'
-  if (Array.isArray(value)) return `${value.length} items`
-  if (typeof value === 'object') return `${Object.keys(value as Record<string, unknown>).length} fields`
-  if (typeof value === 'boolean') return value ? 'yes' : 'no'
-  return String(value)
-}
-
 export function registerExtendedCommands(program: Command): void {
   program
     .command('usage [period]')
@@ -78,12 +54,13 @@ export function registerExtendedCommands(program: Command): void {
     .option('--limit <n>', 'Maximum snapshot rows to print (default: 20)')
     .option('--verbose', 'Show all snapshot rows')
     .option('--json', 'Output JSON')
-    .action((periodArg: string | undefined, opts: { agent?: string; limit?: string; verbose?: boolean; json?: boolean }) => {
-      const db = openDatabase()
+    .action(async (periodArg: string | undefined, opts: { agent?: string; limit?: string; verbose?: boolean; json?: boolean }) => {
       const period = parsePeriod(periodArg, 'month')
       const agent = parseAgent(opts.agent, '--agent')
-      const snaps = queryUsageSnapshots(db, { agent, ...usageSnapshotFilterForPeriod(period) })
-      const summary = querySummary(db, period, undefined, true, agent)
+      const { snapshots: snaps, summary } = await getStore().usage(period, agent) as {
+        snapshots: UsageSnapshot[]
+        summary: CostSummary
+      }
 
       if (opts.json) {
         console.log(JSON.stringify({ period, agent: agent ?? 'all', snapshots: snaps, summary }, null, 2))
@@ -119,11 +96,10 @@ export function registerExtendedCommands(program: Command): void {
     .description('Subscription vs API-equivalent savings breakdown')
     .option('--agent <agent>', 'Filter by agent')
     .option('--json', 'Output JSON')
-    .action((periodArg: string | undefined, opts: { agent?: string; json?: boolean }) => {
-      const db = openDatabase()
+    .action(async (periodArg: string | undefined, opts: { agent?: string; json?: boolean }) => {
       const period = parsePeriod(periodArg, 'month')
       const agent = parseAgent(opts.agent, '--agent')
-      const savings = querySavingsSummary(db, period, agent)
+      const savings = await getStore().savings(period, agent) as SavingsSummary
 
       if (opts.json) {
         console.log(JSON.stringify(savings, null, 2))
@@ -151,12 +127,9 @@ export function registerExtendedCommands(program: Command): void {
     .option('--agent <agent>', 'Agent scope')
     .option('--fee <usd>', 'Monthly fee USD', '0')
     .option('--included <usd>', 'Included usage USD', '0')
-    .action((opts: { provider: string; plan: string; agent?: string; fee?: string; included?: string }) => {
-      const db = openDatabase()
-      const now = new Date().toISOString()
+    .action(async (opts: { provider: string; plan: string; agent?: string; fee?: string; included?: string }) => {
       const agent = parseAgent(opts.agent, '--agent') ?? null
-      upsertSubscription(db, {
-        id: randomUUID(),
+      await getStore().setSubscription({
         agent,
         provider: opts.provider,
         plan: opts.plan,
@@ -165,8 +138,6 @@ export function registerExtendedCommands(program: Command): void {
         billing_cycle_start: null,
         reset_policy: 'monthly',
         active: 1,
-        created_at: now,
-        updated_at: now,
       })
       console.log(chalk.green(`✓ Subscription set: ${opts.provider} / ${opts.plan}`))
     })
@@ -177,8 +148,8 @@ export function registerExtendedCommands(program: Command): void {
     .option('--limit <n>', 'Maximum subscription rows to print (default: 20)')
     .option('--verbose', 'Show all subscription rows')
     .option('--json', 'Output JSON')
-    .action((opts: { limit?: string; verbose?: boolean; json?: boolean }) => {
-      const rows = listSubscriptions(openDatabase())
+    .action(async (opts: { limit?: string; verbose?: boolean; json?: boolean }) => {
+      const rows = await getStore().listSubscriptions()
       if (opts.json) { console.log(JSON.stringify(rows, null, 2)); return }
       if (rows.length === 0) { console.log(chalk.yellow('No subscriptions configured.')); return }
       const limit = parseLimit(opts.limit, 20, opts.verbose)
@@ -200,63 +171,75 @@ export function registerExtendedCommands(program: Command): void {
   subsCmd
     .command('remove <id>')
     .description('Remove subscription by id')
-    .action((id: string) => {
-      deleteSubscription(openDatabase(), id)
+    .action(async (id: string) => {
+      await getStore().removeSubscription(id)
       console.log(chalk.green('✓ Subscription removed'))
     })
 
   program
     .command('status')
     .description('One-line fleet health and spend summary')
-    .action(() => {
-      console.log(buildStatusLine(openDatabase()))
+    .action(async () => {
+      console.log(buildStatusLine(await gatherStatusData()))
     })
 
   program
     .command('doctor')
     .description('Diagnose agents, cloud, pricing, and billing health')
     .action(async () => {
-      const db = openDatabase()
-      ensurePricingSeeded(db)
+      const cloud = isCloudStore()
+      const store = getStore()
       const checks: Array<{ ok: boolean; msg: string }> = []
 
-      const paths: Array<[string, string]> = [
-        ['claude', agentPaths().claudeProjects],
-        ['codex', agentPaths().codexDb],
-        ['gemini', join(agentPaths().geminiTmp, '..')],
-        ['opencode', join(agentPaths().opencodeMessages, '..', '..')],
-        ['pi', agentPaths().piSessions],
-        ['hermes', agentPaths().hermesDb],
-      ]
-      for (const [agent, path] of paths) {
-        checks.push({ ok: existsSync(path), msg: `${agent}: ${existsSync(path) ? path : 'not found'}` })
+      // Agent log directories and the Cursor token are inputs to LOCAL ingestion
+      // only; in cloud mode this client never ingests, so these checks do not apply.
+      if (!cloud) {
+        const paths: Array<[string, string]> = [
+          ['claude', agentPaths().claudeProjects],
+          ['codex', agentPaths().codexDb],
+          ['gemini', join(agentPaths().geminiTmp, '..')],
+          ['opencode', join(agentPaths().opencodeMessages, '..', '..')],
+          ['pi', agentPaths().piSessions],
+          ['hermes', agentPaths().hermesDb],
+        ]
+        for (const [agent, path] of paths) {
+          checks.push({ ok: existsSync(path), msg: `${agent}: ${existsSync(path) ? path : 'not found'}` })
+        }
+        checks.push({ ok: Boolean(process.env['CURSOR_SESSION_TOKEN']), msg: `cursor token: ${process.env['CURSOR_SESSION_TOKEN'] ? 'set' : 'missing CURSOR_SESSION_TOKEN'}` })
       }
-      checks.push({ ok: Boolean(process.env['CURSOR_SESSION_TOKEN']), msg: `cursor token: ${process.env['CURSOR_SESSION_TOKEN'] ? 'set' : 'missing CURSOR_SESSION_TOKEN'}` })
-      checks.push({ ok: Boolean(getCloudDatabaseUrl()), msg: `cloud: ${getCloudDatabaseUrl() ? 'ECONOMY_CLOUD_DATABASE_URL set' : 'not configured'}` })
+      checks.push({ ok: true, msg: `storage: ${cloud ? 'self_hosted/cloud (HASNA_ECONOMY_API_URL + key)' : 'local'}` })
 
-      const zeroCostBuckets = queryZeroCostTokenizedModels(db, 5)
-      const zeroCost = db.prepare(`
-        SELECT COUNT(*) as c
-        FROM requests
-        WHERE cost_usd = 0
-          AND (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_create_tokens > 0)
-      `).get() as { c: number }
-      const zeroCostSuffix = zeroCostBuckets.length > 0
-        ? `; top buckets: ${zeroCostBuckets.map(row => {
-            const pricing = getPricingFromDb(db, row.model)
-            const status = pricing ? 'pricing configured' : 'missing pricing'
-            return `${row.agent}/${row.model} ${row.requests} req ${fmtTokens(row.total_tokens)} tok (${status})`
-          }).join('; ')}`
-        : ''
-      checks.push({ ok: zeroCost.c === 0, msg: `zero-cost requests with tokens: ${zeroCost.c}${zeroCostSuffix}` })
+      // Zero-cost tokenized-request detection and dedupe are LOCAL-DB maintenance
+      // operations; the cloud serve owns dedup + pricing for its dataset, so run
+      // them only against the local SQLite in local mode.
+      if (!cloud) {
+        const db = openDatabase()
+        ensurePricingSeeded(db)
+        const zeroCostBuckets = queryZeroCostTokenizedModels(db, 5)
+        const zeroCost = db.prepare(`
+          SELECT COUNT(*) as c
+          FROM requests
+          WHERE cost_usd = 0
+            AND (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_create_tokens > 0)
+        `).get() as { c: number }
+        const zeroCostSuffix = zeroCostBuckets.length > 0
+          ? `; top buckets: ${zeroCostBuckets.map(row => {
+              const pricing = getPricingFromDb(db, row.model)
+              const status = pricing ? 'pricing configured' : 'missing pricing'
+              return `${row.agent}/${row.model} ${row.requests} req ${fmtTokens(row.total_tokens)} tok (${status})`
+            }).join('; ')}`
+          : ''
+        checks.push({ ok: zeroCost.c === 0, msg: `zero-cost requests with tokens: ${zeroCost.c}${zeroCostSuffix}` })
 
-      const estimated = querySummary(db, 'month', undefined, true)
-      const actual = queryBillingSummary(db, 'month')
-      const drift = actual.total_usd > 0 ? Math.abs(estimated.total_usd - actual.total_usd) / actual.total_usd : 0
-      checks.push({ ok: drift < 0.15, msg: `billing drift month: ${(drift * 100).toFixed(1)}%` })
+        const removed = dedupeRequests(db)
+        if (removed > 0) checks.push({ ok: true, msg: `deduped ${removed} duplicate requests` })
+      }
 
-      const removed = dedupeRequests(db)
-      if (removed > 0) checks.push({ ok: true, msg: `deduped ${removed} duplicate requests` })
+      // Billing drift (estimated vs actual provider billing) routes through the
+      // Store so it reflects the SAME dataset the reads use in both modes.
+      const diff = await store.billingDiff('month')
+      const drift = Math.abs(diff.delta_pct) / 100
+      checks.push({ ok: !diff.is_alert, msg: `billing drift month: ${(drift * 100).toFixed(1)}%` })
 
       console.log()
       console.log(chalk.bold.cyan('  Economy Doctor'))
@@ -272,17 +255,18 @@ export function registerExtendedCommands(program: Command): void {
     .description('First-run setup wizard hints')
     .action(async () => {
       console.log(chalk.bold.cyan('\n  Economy Init\n'))
+      console.log('  Local mode (on-box SQLite):')
       console.log('  1. Set machine id:  export ECONOMY_MACHINE_ID=spark01')
-      console.log('  2. Cloud sync:      export ECONOMY_CLOUD_DATABASE_URL=postgresql://...')
-      console.log('  3. Auto cloud:      export ECONOMY_CLOUD_AUTO=1')
-      console.log('  4. Cursor token:    export CURSOR_SESSION_TOKEN=...')
-      console.log('  5. Run ingest:      economy sync --verbose')
-      console.log('  6. Schedule sync:   economy cloud schedule install --minutes 10')
-      console.log('  7. MCP install:     economy mcp --all')
-      console.log('  8. Subscriptions:   economy subscriptions set --provider cursor --plan pro --fee 20 --included 20 --agent cursor')
-      console.log('  9. OTel sidecar:   economy-otel --port 4318')
-      console.log('  10. API auth:      export ECONOMY_API_TOKEN=... (serve binds localhost)')
-      console.log('  11. Linux status:  economy tui --watch  |  economy waybar')
+      console.log('  2. Cursor token:    export CURSOR_SESSION_TOKEN=...')
+      console.log('  3. Run ingest:      economy sync --verbose')
+      console.log('  4. MCP install:     economy mcp --all')
+      console.log('  5. Subscriptions:   economy subscriptions set --provider cursor --plan pro --fee 20 --included 20 --agent cursor')
+      console.log('  6. OTel sidecar:    economy-otel --port 4318')
+      console.log('  7. Linux status:    economy tui --watch  |  economy waybar')
+      console.log()
+      console.log('  Self-hosted/cloud mode (shared cloud API — reads/writes route to it):')
+      console.log('  a. API URL:         export HASNA_ECONOMY_API_URL=https://economy.hasna.xyz/v1')
+      console.log('  b. API key:         export HASNA_ECONOMY_API_KEY=<bearer key>   (never a DB DSN)')
       console.log()
     })
 
@@ -304,7 +288,7 @@ export function registerExtendedCommands(program: Command): void {
     .description('Print waybar-compatible JSON status line')
     .action(async () => {
       const { printWaybarJson } = await import('./tui.js')
-      printWaybarJson()
+      await printWaybarJson()
     })
 
   const barCmd = program.command('bar').description('Status bar helpers (Linux)')
@@ -321,7 +305,7 @@ export function registerExtendedCommands(program: Command): void {
     .description('Alias for economy waybar')
     .action(async () => {
       const { printWaybarJson } = await import('./tui.js')
-      printWaybarJson()
+      await printWaybarJson()
     })
 
   program
@@ -330,10 +314,12 @@ export function registerExtendedCommands(program: Command): void {
     .requiredOption('--model <model>', 'Model name')
     .option('--input <n>', 'Input tokens', '0')
     .option('--output <n>', 'Output tokens', '0')
-    .action((opts: { model: string; input?: string; output?: string }) => {
-      const db = openDatabase()
-      ensurePricingSeeded(db)
-      const cost = computeCostFromDb(db, opts.model, Number(opts.input), Number(opts.output), 0, 0, 0)
+    .action(async (opts: { model: string; input?: string; output?: string }) => {
+      const cost = await getStore().estimate({
+        model: opts.model,
+        inputTokens: Number(opts.input),
+        outputTokens: Number(opts.output),
+      })
       console.log(`${opts.model}: ${fmt(cost)} (${opts.input} in / ${opts.output} out)`)
     })
 
@@ -343,10 +329,9 @@ export function registerExtendedCommands(program: Command): void {
       .command('diff')
       .description('Show estimated vs actual billing delta')
       .option('--period <p>', 'Period', 'month')
-      .action((opts: { period?: string }) => {
-        const db = openDatabase()
+      .action(async (opts: { period?: string }) => {
         const period = parsePeriod(opts.period, 'month')
-        const diff = queryBillingDiff(db, period)
+        const diff = await getStore().billingDiff(period)
 
         console.log()
         console.log(chalk.bold.cyan(`  Billing diff — ${period}`))
@@ -358,43 +343,6 @@ export function registerExtendedCommands(program: Command): void {
       })
   }
 
-  const cloudCmd = program.commands.find(c => c.name() === 'cloud')
-  if (cloudCmd) {
-    const scheduleCmd = cloudCmd.command('schedule').description('Manage automatic cloud sync schedule')
-    scheduleCmd
-      .command('install')
-      .description('Install launchd/systemd schedule')
-      .option('--minutes <n>', 'Interval minutes', '10')
-      .action(async (opts: { minutes?: string }) => {
-        await registerCloudSchedule(Number(opts.minutes ?? 10))
-        console.log(chalk.green(`✓ Cloud sync scheduled every ${opts.minutes ?? 10} minutes`))
-      })
-    scheduleCmd
-      .command('status')
-      .description('Show schedule status')
-      .option('--json', 'Output JSON')
-      .action(async (opts: { json?: boolean }) => {
-        const status = await getCloudScheduleStatus()
-        if (opts.json) {
-          console.log(JSON.stringify(status, null, 2))
-          return
-        }
-        console.log()
-        console.log(chalk.bold.cyan('  Cloud Schedule'))
-        console.log()
-        for (const [key, value] of Object.entries(status as unknown as Record<string, unknown>)) {
-          console.log(`  ${key.padEnd(18)} ${compactValue(value)}`)
-        }
-        console.log()
-      })
-    scheduleCmd
-      .command('remove')
-      .description('Remove schedule')
-      .action(async () => {
-        await removeCloudSchedule()
-        console.log(chalk.green('✓ Cloud sync schedule removed'))
-      })
-  }
 }
 
 export function registerFleetCommands(program: Command): void {
@@ -405,12 +353,9 @@ export function registerFleetCommands(program: Command): void {
     .option('--limit <n>', 'Maximum machine rows to print (default: 20)')
     .option('--verbose', 'Show all machine rows')
     .option('--json', 'Output JSON')
-    .action((opts: { period?: string; limit?: string; verbose?: boolean; json?: boolean }) => {
-      const db = openDatabase()
+    .action(async (opts: { period?: string; limit?: string; verbose?: boolean; json?: boolean }) => {
       const period = parsePeriod(opts.period, 'today')
-      const summary = querySummary(db, period, undefined, true)
-      const machines = listMachines(db, period)
-      const registry = listMachineRegistry(db)
+      const { summary, machines, registry } = await getStore().fleet(period)
 
       if (opts.json) {
         console.log(JSON.stringify({ period, summary, machines, registry }, null, 2))

@@ -10,7 +10,6 @@ import { ingestLoops } from '../ingest/loops.js'
 import { ingestClaudeQuota } from '../ingest/claude-quota.js'
 import { ingestCodexQuota } from '../ingest/codex-quota.js'
 import { dedupeRequests } from '../db/database.js'
-import { maybePullFromCloud, maybePushAfterIngest } from './cloud-sync.js'
 import type { SyncOptions } from '../types/index.js'
 
 export interface SyncAllResult {
@@ -26,8 +25,6 @@ export interface SyncAllResult {
   claudeQuota?: Awaited<ReturnType<typeof ingestClaudeQuota>>
   codexQuota?: Awaited<ReturnType<typeof ingestCodexQuota>>
   deduped: number
-  cloudPulled: boolean
-  cloudPushed: boolean
 }
 
 export async function syncAll(db: Database, opts: SyncOptions = {}): Promise<SyncAllResult> {
@@ -36,11 +33,8 @@ export async function syncAll(db: Database, opts: SyncOptions = {}): Promise<Syn
     || opts.opencode || opts.cursor || opts.pi || opts.hermes || opts.loops,
   )
   const all = !anySpecific
-  const useCloud = opts.cloud !== false
 
-  if (useCloud) await maybePullFromCloud()
-
-  const result: SyncAllResult = { deduped: 0, cloudPulled: false, cloudPushed: false }
+  const result: SyncAllResult = { deduped: 0 }
 
   if (all || opts.claude) {
     result.claude = await ingestClaude(db, opts.verbose)
@@ -59,7 +53,6 @@ export async function syncAll(db: Database, opts: SyncOptions = {}): Promise<Syn
   if (all || opts.loops) result.loops = await ingestLoops(db, opts.verbose)
 
   if (opts.dedupe !== false) result.deduped = dedupeRequests(db)
-  if (useCloud) result.cloudPushed = await maybePushAfterIngest()
 
   return result
 }

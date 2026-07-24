@@ -186,14 +186,6 @@ describe('economy CLI help', () => {
     expect(jsonResult.stderr).toBe('')
   })
 
-  test('cloud schedule status documents JSON escape hatch', async () => {
-    const { stdout, stderr, exitCode } = await runCli(['cloud', 'schedule', 'status', '--help'])
-
-    expect(exitCode).toBe(0)
-    expect(stdout).toContain('--json')
-    expect(stderr).toBe('')
-  })
-
   test('documents Gemini as a billing sync provider', async () => {
     const { stdout, stderr, exitCode } = await runCli(['billing', 'sync', '--help'])
 

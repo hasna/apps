@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { openDatabase, upsertRequest, upsertSession } from '../../db/database.js'
-import { buildBrief, renderBriefText } from './brief.js'
+import { buildBrief } from '../../lib/brief.js'
+import { renderBriefText } from './brief.js'
 import type { EconomyRequest, EconomySession } from '../../types/index.js'
 
 function session(overrides: Partial<EconomySession> = {}): EconomySession {
