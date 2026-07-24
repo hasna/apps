@@ -108,6 +108,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["chat", "marketing", "sales"],
   },
   {
+    name: "tidio",
+    displayName: "Tidio",
+    description: "Live chat support platform",
+    category: "Communication",
+    tags: ["chat", "support", "messaging"],
+  },
+  {
     name: "mailchimp",
     displayName: "Mailchimp",
     description: "Email marketing and automation",
