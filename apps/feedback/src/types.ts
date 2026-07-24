@@ -4,7 +4,7 @@ export type JsonObject = { [key: string]: JsonValue };
 
 export type FeedbackKind = "bug" | "idea" | "question" | "praise" | "other";
 export type FeedbackSeverity = "low" | "medium" | "high" | "critical";
-export type FeedbackStatus = "new" | "triaged" | "closed";
+export type FeedbackStatus = "new" | "triaged" | "shipped" | "closed";
 export type FeedbackSource = "api" | "cli" | "sdk" | "mcp" | "server";
 
 export interface FeedbackContext {
@@ -43,6 +43,13 @@ export interface FeedbackItem extends FeedbackInput {
   source: FeedbackSource;
   kind: FeedbackKind;
   tags: string[];
+  /**
+   * Changelog-entry linkage: id/URI of the changelog entry that shipped this
+   * feedback (set by `feedback shipped <id>`).
+   */
+  changelogRef?: string;
+  /** When the feedback was marked shipped. */
+  shippedAt?: string;
 }
 
 export interface FeedbackListFilter {
@@ -73,6 +80,8 @@ export interface FeedbackStore {
   listFeedback(filter?: FeedbackListFilter): Promise<FeedbackItem[]>;
   getFeedback(id: string): Promise<FeedbackItem | null>;
   updateFeedbackStatus(id: string, status: FeedbackStatus): Promise<FeedbackItem | null>;
+  /** Mark feedback shipped and link it to the changelog entry that shipped it. */
+  markFeedbackShipped?(id: string, changelogRef: string): Promise<FeedbackItem | null>;
   stats(): Promise<FeedbackStats>;
   exportJsonl(filter?: FeedbackListFilter): Promise<string>;
 }

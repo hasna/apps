@@ -115,7 +115,7 @@ export function buildFeedbackMcpTools(options: FeedbackStore | FeedbackMcpToolsO
       description: "List collected feedback entries.",
       paramsSchema: {
         app_id: z.string().optional(),
-        status: z.enum(["new", "triaged", "closed"]).optional(),
+        status: z.enum(["new", "triaged", "shipped", "closed"]).optional(),
         tag: z.string().optional(),
         search: z.string().optional(),
         since: z.string().optional(),
@@ -143,7 +143,7 @@ export function buildFeedbackMcpTools(options: FeedbackStore | FeedbackMcpToolsO
       description: "Update the triage status for one feedback entry.",
       paramsSchema: {
         id: z.string(),
-        status: z.enum(["new", "triaged", "closed"]),
+        status: z.enum(["new", "triaged", "shipped", "closed"]),
       },
       run: async (input) => {
         if (!store) return storageUnavailableContent(runtime);
@@ -162,7 +162,7 @@ export function buildFeedbackMcpTools(options: FeedbackStore | FeedbackMcpToolsO
       description: "Export collected feedback as JSONL or JSON.",
       paramsSchema: {
         app_id: z.string().optional(),
-        status: z.enum(["new", "triaged", "closed"]).optional(),
+        status: z.enum(["new", "triaged", "shipped", "closed"]).optional(),
         tag: z.string().optional(),
         search: z.string().optional(),
         since: z.string().optional(),

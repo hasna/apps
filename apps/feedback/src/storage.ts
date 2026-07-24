@@ -12,6 +12,13 @@ import type {
   FeedbackStore,
 } from "./types.js";
 import { feedbackKinds, feedbackStatuses, parseFeedbackInput, parseStoredFeedbackItem } from "./validation.js";
+import {
+  buildFeedbackCreatedEvent,
+  buildFeedbackTriagedEvent,
+  createDefaultFeedbackEventSink,
+  emitFeedbackEvent,
+} from "./events.js";
+import type { FeedbackEventSink } from "./events.js";
 
 export const DEFAULT_DATA_DIR = join(homedir(), ".hasna", "feedback");
 export const DEFAULT_FEEDBACK_FILE = "feedback.jsonl";
@@ -19,6 +26,12 @@ export const DEFAULT_FEEDBACK_FILE = "feedback.jsonl";
 export interface LocalFeedbackStoreOptions {
   dataDir?: string;
   filePath?: string;
+  /**
+   * Sink for `feedback.created` / `feedback.triaged` event envelopes
+   * (distribution event catalog). Defaults to emitting through
+   * `@hasna/events`; pass `null` to disable emission.
+   */
+  eventSink?: FeedbackEventSink | null;
 }
 
 export type FeedbackStoreRuntimeMode = "local" | "cloud";
@@ -238,10 +251,12 @@ async function withFileLock<T>(filePath: string, run: () => Promise<T>): Promise
 
 export class LocalFeedbackStore implements FeedbackStore {
   readonly filePath: string;
+  private readonly eventSink: FeedbackEventSink | null;
 
   constructor(options: LocalFeedbackStoreOptions = {}) {
     this.filePath = resolveFeedbackFilePath(options);
     ensureParentDir(this.filePath);
+    this.eventSink = options.eventSink === null ? null : options.eventSink ?? createDefaultFeedbackEventSink();
   }
 
   async createFeedback(input: FeedbackInput, options: FeedbackCreateOptions = {}): Promise<FeedbackItem> {
@@ -260,6 +275,7 @@ export class LocalFeedbackStore implements FeedbackStore {
     await withFileLock(this.filePath, async () => {
       await appendFile(this.filePath, `${JSON.stringify(item)}\n`, "utf8");
     });
+    if (this.eventSink) await emitFeedbackEvent(buildFeedbackCreatedEvent(item), this.eventSink);
     return item;
   }
 
@@ -272,20 +288,55 @@ export class LocalFeedbackStore implements FeedbackStore {
   }
 
   async updateFeedbackStatus(id: string, status: FeedbackStatus): Promise<FeedbackItem | null> {
-    return withFileLock(this.filePath, async () => {
+    const updated = await withFileLock(this.filePath, async () => {
       const items = await this.readAll();
       const index = items.findIndex((item) => item.id === id);
       if (index === -1) return null;
       const current = items[index]!;
-      const updated: FeedbackItem = {
+      const next: FeedbackItem = {
         ...current,
         status,
         updatedAt: new Date().toISOString(),
       };
-      items[index] = updated;
+      items[index] = next;
       await this.writeAll(items);
-      return updated;
+      return next;
     });
+    if (updated && status !== "new" && this.eventSink) {
+      await emitFeedbackEvent(buildFeedbackTriagedEvent(updated, status), this.eventSink);
+    }
+    return updated;
+  }
+
+  /**
+   * Changelog-entry linkage: mark feedback as shipped, record the changelog
+   * ref + shippedAt, and emit the `feedback.triaged` notification event with
+   * disposition "shipped".
+   */
+  async markFeedbackShipped(id: string, changelogRef: string): Promise<FeedbackItem | null> {
+    const ref = changelogRef?.trim();
+    if (!ref) throw new Error("changelogRef is required to mark feedback shipped");
+    const updated = await withFileLock(this.filePath, async () => {
+      const items = await this.readAll();
+      const index = items.findIndex((item) => item.id === id);
+      if (index === -1) return null;
+      const current = items[index]!;
+      const now = new Date().toISOString();
+      const next: FeedbackItem = {
+        ...current,
+        status: "shipped",
+        changelogRef: ref,
+        shippedAt: now,
+        updatedAt: now,
+      };
+      items[index] = next;
+      await this.writeAll(items);
+      return next;
+    });
+    if (updated && this.eventSink) {
+      await emitFeedbackEvent(buildFeedbackTriagedEvent(updated, "shipped"), this.eventSink);
+    }
+    return updated;
   }
 
   async stats(): Promise<FeedbackStats> {

@@ -11,7 +11,7 @@ import type {
 
 export const feedbackKinds = ["bug", "idea", "question", "praise", "other"] as const satisfies readonly FeedbackKind[];
 export const feedbackSeverities = ["low", "medium", "high", "critical"] as const satisfies readonly FeedbackSeverity[];
-export const feedbackStatuses = ["new", "triaged", "closed"] as const satisfies readonly FeedbackStatus[];
+export const feedbackStatuses = ["new", "triaged", "shipped", "closed"] as const satisfies readonly FeedbackStatus[];
 
 const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
   z.union([
@@ -51,6 +51,8 @@ export const feedbackItemSchema = feedbackInputSchema.extend({
   updatedAt: z.string().datetime(),
   status: feedbackStatusSchema,
   source: z.enum(["api", "cli", "sdk", "mcp", "server"]),
+  changelogRef: z.string().trim().min(1).max(2048).optional(),
+  shippedAt: z.string().datetime().optional(),
 });
 
 const sensitiveKeyPattern = /(?:api[_-]?key|authorization|cookie|password|secret|token|refresh[_-]?token|access[_-]?token|private[_-]?key)/i;

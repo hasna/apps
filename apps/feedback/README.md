@@ -117,11 +117,18 @@ feedback submit "Add export history" --app my-app --kind idea --tag reports --ro
 feedback list --app my-app --search export --since 2026-01-01 --limit 20
 feedback show <id>
 feedback status <id> triaged
+feedback shipped <id> --changelog-ref open-todos@1.2.3
 feedback stats
 feedback export --format jsonl --until 2026-12-31
 ```
 
 Use `--api-url` and `--token` to target a remote Open Feedback API instead of local JSONL storage. This is the CLI path for a shared production deployment; the CLI does not open database connections or create cloud resources itself.
+
+`feedback shipped <id> --changelog-ref <ref>` marks feedback as shipped, records the changelog-entry linkage (`changelogRef`, `shippedAt`), and emits the `feedback.triaged` notification event with disposition `shipped`. **Local store only for now**: the remote API has no shipped endpoint yet, so the command takes no `--api-url`/`--token`. Against a remote API, `feedback status <id> shipped` moves the status (without recording a `changelogRef`); a remote shipped endpoint is a follow-up.
+
+### Distribution events
+
+Feedback stores emit `feedback.created` and `feedback.triaged` event envelopes (distribution event catalog, contract `hasna.feedback.v1`) through `@hasna/events` on the create/triage paths. Pass `eventSink: null` to `LocalFeedbackStore` to disable emission, or provide your own `FeedbackEventSink`. The default sink respects `HASNA_EVENTS_DIR`.
 
 `feedback doctor` checks the package version, selected storage runtime, local data file path and permissions when local mode is active, token configuration, cloud configuration presence, and whether the expected binaries are on `PATH`. Diagnostics only report whether sensitive settings are configured; they do not print token, DSN, ARN, or secret values.
 

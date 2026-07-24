@@ -120,7 +120,7 @@ function recordingStore(captured: FeedbackInput[]): FeedbackStore {
         total: 0,
         byApp: {},
         byKind: { bug: 0, idea: 0, question: 0, praise: 0, other: 0 },
-        byStatus: { new: 0, triaged: 0, closed: 0 },
+        byStatus: { new: 0, triaged: 0, shipped: 0, closed: 0 },
         bySeverity: {},
       };
     },

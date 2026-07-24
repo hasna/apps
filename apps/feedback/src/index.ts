@@ -22,6 +22,22 @@ export type {
   LocalFeedbackStoreOptions,
 } from "./storage.js";
 export {
+  FEEDBACK_EVENT_CONTRACT_SCHEMA,
+  FEEDBACK_EVENT_SOURCE,
+  FEEDBACK_EVENT_TYPES,
+  buildFeedbackCreatedEvent,
+  buildFeedbackTriagedEvent,
+  createDefaultFeedbackEventSink,
+  emitFeedbackEvent,
+} from "./events.js";
+export type {
+  FeedbackCreatedData,
+  FeedbackEventEnvelope,
+  FeedbackEventSink,
+  FeedbackEventType,
+  FeedbackTriagedData,
+} from "./events.js";
+export {
   feedbackInputSchema,
   feedbackItemSchema,
   feedbackKinds,
