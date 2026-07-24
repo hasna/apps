@@ -147,6 +147,20 @@ describe("MCP tool operations", () => {
     expect(results[0]!.title).toBe("Fix authentication bug");
   });
 
+  it("search_tasks tool honors an explicit limit", async () => {
+    for (let i = 0; i < 5; i++) createTask({ title: `Limitable task ${i}` }, db);
+    const tools = captureTools(registerTaskProjectTools);
+    const result = await callCapturedTool(tools, "search_tasks", { query: "Limitable task", limit: 2 });
+    expect(result.content[0]!.text).toMatch(/^2 result\(s\)/);
+  });
+
+  it("search_tasks tool defaults to 20 results when limit is omitted", async () => {
+    for (let i = 0; i < 25; i++) createTask({ title: `Defaultable task ${i}` }, db);
+    const tools = captureTools(registerTaskProjectTools);
+    const result = await callCapturedTool(tools, "search_tasks", { query: "Defaultable task" });
+    expect(result.content[0]!.text).toMatch(/^20 result\(s\)/);
+  });
+
   it("add_comment", () => {
     const task = createTask({ title: "Commentable" }, db);
     const comment = addComment(

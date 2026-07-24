@@ -3063,7 +3063,10 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       async ({ query, project_id, status, limit }) => {
         try {
           const { searchTasks } = require("../../lib/search.js") as typeof import("../../lib/search.js");
-          const resolved: Record<string, unknown> = { query, limit };
+          // searchTasks now honors `limit` (previously it was accepted here but
+          // ignored because searchTasks applied no LIMIT). Default to the
+          // documented 20 when the caller omits it.
+          const resolved: Record<string, unknown> = { query, limit: limit ?? 20 };
           if (project_id) resolved.project_id = resolveId(project_id, "projects");
           if (status) resolved.status = status;
           const results = searchTasks(resolved as Parameters<typeof searchTasks>[0]);

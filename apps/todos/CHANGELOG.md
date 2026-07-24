@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.2] - 2026-07-24
+
+### Fixed
+- The MCP `search_tasks` tool now honors its `limit` argument. It was accepted and forwarded to `searchTasks` but silently ignored because `searchTasks` applied no `LIMIT` (fixed in 0.12.1); it now also defaults to the documented 20 results when the caller omits `limit`.
+
 ## [0.12.1] - 2026-07-24
 
 ### Fixed
