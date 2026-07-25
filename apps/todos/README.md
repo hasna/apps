@@ -1421,17 +1421,36 @@ MCP calls such as `get_task`, `get_status`, `get_context`, `bootstrap`, and
 todos-serve
 ```
 
-Generate an API key before exposing the REST API to another app. Once at least one
-generated key exists, all `/api/*` requests require `x-api-key` or
-`Authorization: Bearer`.
+`/api/*` and `/mcp` are **local-only data planes and they fail closed**. The server
+refuses to start unless one of the following is true:
+
+| Configuration | Result |
+| --- | --- |
+| `TODOS_API_KEY=<key>` (or `--api-key <key>`) | `/api/*` + `/mcp` require the key |
+| at least one `todos api-keys create` key exists | `/api/*` + `/mcp` require a key |
+| `--allow-anonymous` **and** a loopback bind | anonymous, loopback peers only (local dev) |
+| a cloud `DATABASE_URL` is configured (hosted `/v1` deployment) | `/api/*` + `/mcp` are **not served**; `/v1` stays authenticated |
+| nothing of the above | **server exits non-zero** with the env var to set |
 
 ```bash
-todos api-keys create "My app"
-todos-serve --host 0.0.0.0
+todos api-keys create "My app"          # then send x-api-key / Authorization: Bearer
+TODOS_API_KEY=<key> todos-serve --host 0.0.0.0
+todos serve --allow-anonymous           # local dev only; refused for a non-loopback --host
 ```
+
+`--allow-anonymous` (or `TODOS_ALLOW_ANONYMOUS=1`) is refused for any non-loopback
+bind host, and even when enabled it only serves requests whose transport peer is
+itself loopback — so it can never publish an anonymous task read/write plane
+off-box. `todos-mcp --http` sets it implicitly because that transport is pinned to
+`127.0.0.1`; set `TODOS_API_KEY` (and send it from your MCP client) to require a
+credential there too.
 
 Pass the generated key from your app as `x-api-key` or set `TODOS_API_KEY` for
 the SDK client.
+
+Always-on / hosted deployments should use the versioned `/v1` API, which
+authenticates independently against the cloud key store. `/health`, `/ready`,
+`/version` and `/openapi.json` are the only routes that are public by design.
 
 Agent callers can trim REST responses with field selectors:
 

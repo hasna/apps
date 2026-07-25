@@ -9,6 +9,15 @@ import { join, dirname, extname } from "path";
 import { fileURLToPath } from "url";
 import { getDatabase } from "../db/database.js";
 import { hasActiveApiKeys, verifyApiKey, safeEqualStrings } from "../db/api-keys.js";
+import {
+  ALLOW_ANONYMOUS_ENV_VAR,
+  AUTH_ENV_VAR,
+  describeAuthPosture,
+  isAnonymousOptInEnv,
+  isLoopbackAddress,
+  resolveAuthPosture,
+  type AuthPosture,
+} from "./auth-posture.js";
 import type { Task } from "../types/index.js";
 import type { RouteContext, FilteredClient } from "./routes.js";
 import * as handlers from "./routes.js";
@@ -69,22 +78,65 @@ function getProvidedApiKey(req: Request): string | null {
   return auth.replace(/^Bearer\s+/i, "").trim() || null;
 }
 
-/** Check API key auth — returns a Response if unauthorized, null if OK */
-function checkAuth(req: Request, apiKey: string | null): Response | null {
-  const generatedKeysEnabled = hasActiveApiKeys();
-  if (!apiKey && !generatedKeysEnabled) return null; // no key configured, skip auth
+function unauthorized(): Response {
+  return new Response(JSON.stringify({ error: "Unauthorized" }), {
+    status: 401,
+    headers: { "Content-Type": "application/json", "WWW-Authenticate": "Bearer", ...SECURITY_HEADERS },
+  });
+}
+
+/**
+ * The local-only data planes (`/api/*`, `/mcp`) are not mounted on a hosted
+ * deployment that has no local credential. 404 (not 401) keeps the hosted
+ * surface identical to the published contract, which only declares `/v1`.
+ */
+function localPlaneDisabled(): Response {
+  return new Response(
+    JSON.stringify({
+      error: "Not found",
+      code: "LOCAL_PLANE_DISABLED",
+      hint: `/api/* and /mcp are local-only planes and are disabled on this deployment. Set ${AUTH_ENV_VAR} to serve them behind an API key, or use the authenticated /v1 API.`,
+    }),
+    { status: 404, headers: { "Content-Type": "application/json", ...SECURITY_HEADERS } },
+  );
+}
+
+/**
+ * Check API key auth for a data route — returns a Response if the request must
+ * be refused, null if it may proceed.
+ *
+ * FAILS CLOSED. There is deliberately no "no key configured, skip auth" branch:
+ * the unconfigured case is resolved at startup by `resolveAuthPosture`, which
+ * either refuses to start or disables these routes entirely. A request is only
+ * ever served anonymously under the explicit `anonymous-loopback` posture, and
+ * then only when the peer address is itself loopback.
+ */
+export function checkAuth(
+  req: Request,
+  apiKey: string | null,
+  posture: AuthPosture,
+  clientIp?: string,
+): Response | null {
+  if (posture.mode === "local-plane-disabled") return localPlaneDisabled();
+
+  if (posture.mode === "anonymous-loopback") {
+    // An operator who mints a key while the server is running (`todos api-keys
+    // create`) expects it to take effect — re-check per request so the anonymous
+    // window closes without a restart. This is the same per-request query the old
+    // fail-open implementation already did.
+    if (!hasActiveApiKeys()) {
+      // Defense in depth: the bind host is already loopback, but a proxy/tunnel in
+      // front of the process must not be able to launder off-box traffic in.
+      return isLoopbackAddress(clientIp) ? null : unauthorized();
+    }
+  }
 
   const provided = getProvidedApiKey(req);
   // Constant-time compare for the static env/CLI key — avoids a timing oracle
   // that a plain `===` short-circuit would expose.
   const matchesEnvKey = Boolean(apiKey && provided && safeEqualStrings(provided, apiKey));
   const matchesGeneratedKey = Boolean(provided && verifyApiKey(provided));
-  if (!matchesEnvKey && !matchesGeneratedKey) {
-    return new Response(JSON.stringify({ error: "Unauthorized" }), {
-      status: 401,
-      headers: { "Content-Type": "application/json", "WWW-Authenticate": "Bearer", ...SECURITY_HEADERS },
-    });
-  }
+  if (!matchesEnvKey && !matchesGeneratedKey) return unauthorized();
   return null;
 }
 
@@ -184,12 +236,46 @@ export function taskToSummary(task: Task, fields?: string[]) {
   return Object.fromEntries(fields.map(f => [f, (full as Record<string, unknown>)[f] ?? null]));
 }
 
-export async function startServer(port: number, options?: { open?: boolean; host?: string; apiKey?: string }): Promise<void> {
+export interface StartServerOptions {
+  open?: boolean;
+  host?: string;
+  apiKey?: string;
+  /**
+   * Explicitly opt into serving `/api/*` + `/mcp` anonymously. Honored ONLY when
+   * no credential is configured AND the bind host is loopback; otherwise the
+   * server refuses to start. `todos-mcp --http` sets this because that transport
+   * is loopback-pinned by contract.
+   */
+  allowAnonymous?: boolean;
+}
+
+export async function startServer(port: number, options?: StartServerOptions): Promise<void> {
   const shouldOpen = options?.open ?? true;
   const apiKey = options?.apiKey || process.env.TODOS_API_KEY || null;
 
   // Initialize database
   const db = getDatabase();
+
+  // ── Auth posture (fail closed) ───────────────────────────────────────────────
+  // Resolved BEFORE the socket is bound so an unconfigured server never accepts a
+  // single anonymous data request. `resolveAuthPosture` throws when the only
+  // remaining option would be to expose /api/* + /mcp off-box.
+  const authPosture = resolveAuthPosture({
+    apiKey,
+    hasGeneratedKeys: hasActiveApiKeys(),
+    host: options?.host,
+    allowAnonymous: options?.allowAnonymous === true || isAnonymousOptInEnv(),
+  });
+  if (authPosture.mode === "anonymous-loopback") {
+    console.error(
+      `\n⚠  ${describeAuthPosture(authPosture)}\n`
+      + `   /api/* and /mcp accept UNAUTHENTICATED task read/write from any process on this\n`
+      + `   machine. Set ${AUTH_ENV_VAR}=<key> (or run \`todos api-keys create "<name>"\`) to require a\n`
+      + `   credential, and never combine ${ALLOW_ANONYMOUS_ENV_VAR} with an off-box bind.\n`,
+    );
+  } else {
+    console.log(describeAuthPosture(authPosture));
+  }
 
   // Durable dual-write shadow: capture triggers are installed at getDatabase();
   // this long-running server also drains the outbox to cloud Postgres.
@@ -278,6 +364,10 @@ export async function startServer(port: number, options?: { open?: boolean; host
       // ── Rate limiting (ALL requests, including /mcp and /health) ──
       // Keyed on the real socket peer, not spoofable client headers.
       const ip = resolveClientIp(req, server);
+      // The anonymous-loopback auth check must use the RAW transport peer, never
+      // resolveClientIp: with TODOS_TRUST_PROXY=1 a client could otherwise spoof
+      // `x-forwarded-for: 127.0.0.1` and impersonate a loopback caller.
+      const peerIp = server.requestIP(req)?.address;
       const rl = checkRateLimit(ip);
       if (!rl.allowed) {
         return new Response(JSON.stringify({ error: "Too many requests", retry_after: rl.retryAfter }), {
@@ -328,7 +418,7 @@ export async function startServer(port: number, options?: { open?: boolean; host
       // Gated by the SAME auth check as /api/* — otherwise the MCP transport is
       // an unauthenticated create/update/delete backdoor around the REST auth.
       if (path === "/mcp") {
-        const authError = checkAuth(req, apiKey);
+        const authError = checkAuth(req, apiKey, authPosture, peerIp);
         if (authError) return authError;
         const { handleMcpHttpRequest } = await import("../mcp/http.js");
         const { buildServer } = await import("../mcp/index.js");
@@ -336,8 +426,8 @@ export async function startServer(port: number, options?: { open?: boolean; host
       }
 
       // ── API key auth (all /api/* routes) ──
-      if (path.startsWith("/api/")) {
-        const authError = checkAuth(req, apiKey);
+      if (path === "/api" || path.startsWith("/api/")) {
+        const authError = checkAuth(req, apiKey, authPosture, peerIp);
         if (authError) return authError;
       }
 

@@ -335,9 +335,26 @@ function installSmoke(tarball: string): void {
 }
 
 function expectServeStartup(command: string, env: NodeJS.ProcessEnv): void {
-  const port = `${19600 + Math.floor(Math.random() * 1000)}`;
-  console.log(`$ timeout 3 ${command} --port=${port} --host 127.0.0.1 --no-open`);
-  const result = runCapture("timeout", ["3", command, `--port=${port}`, "--host", "127.0.0.1", "--no-open"], env);
+  // 1. FAIL CLOSED: with no credential the packed binary must refuse to start
+  //    rather than publish an anonymous /api/* + /mcp plane.
+  const denyPort = `${19600 + Math.floor(Math.random() * 1000)}`;
+  console.log(`$ timeout 3 ${command} --port=${denyPort} --host 127.0.0.1 --no-open  # expect refusal`);
+  const denied = runCapture("timeout", ["3", command, `--port=${denyPort}`, "--host", "127.0.0.1", "--no-open"], env);
+  const deniedOutput = `${denied.stdout}\n${denied.stderr}`;
+  if (deniedOutput.includes("Todos Dashboard running at") || !deniedOutput.includes("TODOS_API_KEY")) {
+    console.error(deniedOutput);
+    console.error("todos-serve started (or gave no actionable error) without an API credential — auth must fail closed.");
+    process.exit(denied.status || 1);
+  }
+
+  // 2. And it must still start for the documented local-dev path.
+  const port = `${20700 + Math.floor(Math.random() * 1000)}`;
+  console.log(`$ timeout 3 ${command} --port=${port} --host 127.0.0.1 --no-open --allow-anonymous`);
+  const result = runCapture(
+    "timeout",
+    ["3", command, `--port=${port}`, "--host", "127.0.0.1", "--no-open", "--allow-anonymous"],
+    env,
+  );
   const output = `${result.stdout}\n${result.stderr}`;
   if (!output.includes("Todos Dashboard running at")) {
     console.error(output);

@@ -5,6 +5,68 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-07-25
+
+### Security
+
+- **`/api/*` and `/mcp` no longer fail open when no API key is configured.** `checkAuth`
+  began with `if (!apiKey && !generatedKeysEnabled) return null; // no key configured,
+  skip auth`, so a server started without `TODOS_API_KEY` and without a stored key
+  treated **every** request as authorized. On any deployment that binds a non-loopback
+  host (e.g. `HOST=0.0.0.0` behind a load balancer) that published, to anonymous
+  callers: `POST /mcp` (the full MCP tool catalog plus `tools/call` — create/start/
+  complete/fail task, register agent, findings, run transactions), the entire `/api/*`
+  REST CRUD surface (tasks, projects, agents, plans, orgs, templates, webhooks,
+  pr-groups), the information-disclosing `/api/doctor` (internal database path) and
+  `/api/headless` (boundary manifest), and the unbounded SSE streams `/api/events` and
+  `/api/tasks/stream`. The MCP mount was already inside the auth choke point — the
+  choke point itself returned "authorized".
+  The unconfigured case now **denies**. A single startup decision
+  (`resolveAuthPosture`, `src/server/auth-posture.ts`) resolves one of:
+  - `enforce` — a credential source exists (`TODOS_API_KEY`/`--api-key`, or ≥1 stored
+    key): every `/api/*` and `/mcp` request must present it;
+  - `local-plane-disabled` — a hosted deployment (cloud `DATABASE_URL` configured, so
+    the self-authenticating `/v1` plane works) with no local credential: `/api/*` and
+    `/mcp` are not served at all (`404 LOCAL_PLANE_DISABLED`), while `/v1` and the
+    health probes keep working, so closing the hole cannot cause an outage;
+  - `anonymous-loopback` — explicitly requested via `--allow-anonymous` /
+    `TODOS_ALLOW_ANONYMOUS=1` **and** a loopback bind host; anonymous requests are
+    additionally required to come from a loopback transport peer (the check ignores
+    `x-forwarded-for`, so `TODOS_TRUST_PROXY=1` cannot be used to spoof one). The
+    stored-key check is re-evaluated per request under this posture, so
+    `todos api-keys create` closes an already-open anonymous window without a restart;
+  - otherwise the server **refuses to start**, exiting non-zero with an actionable
+    error naming `TODOS_API_KEY` — starting wide open is never an option.
+  `/v1` was not affected (it authenticates itself against the cloud API-key store) and
+  `/health`, `/ready`, `/version`, `/openapi.json` remain public by design, so
+  load-balancer and container health checks are unchanged.
+  Regression coverage: `src/server/auth-fail-closed.test.ts` (unconfigured server exits
+  non-zero and nothing listens; every `/api/*` read and write route, `POST`/`GET`/
+  `DELETE /mcp`, and `/v1` reject a credential-less request; probes stay public) and
+  `src/server/auth-posture.test.ts` (full posture matrix, including "no input ever
+  yields an anonymous plane on an off-box bind").
+
+### Changed
+
+- **BREAKING (local):** `todos serve` / `todos-serve` with no `TODOS_API_KEY` and no
+  stored API key now exits non-zero instead of serving `/api/*` anonymously. Migrate
+  with `todos api-keys create "<name>"` (then send `x-api-key`), or, for loopback-only
+  local development and the bundled dashboard, `todos serve --allow-anonymous`. The
+  flag is refused for a non-loopback `--host`. `todos-mcp --http` is unchanged: it is
+  loopback-pinned by contract, so it opts into the anonymous local plane implicitly
+  (set `TODOS_API_KEY` to enforce auth there too).
+- `src/test/local-routing-env.fixture.test.ts` also clears `DATABASE_URL` /
+  `TODOS_DATABASE_URL` / `HASNA_TODOS_DATABASE_URL` / `TODOS_ALLOW_ANONYMOUS` so a
+  live DSN or opt-in in a developer's environment cannot flip a local-intent test's
+  auth posture.
+
+### Docs
+
+- `docs/hosted-auth-runbook.md` — posture matrix, the per-caller migration table, the
+  owner-gated ECS redeploy steps (including that the deployed task definition sets no
+  `TODOS_API_KEY`, so no new secret is required to close the hole), and post-deploy
+  verification commands.
+
 ## [0.12.3] - 2026-07-25
 
 ### Fixed

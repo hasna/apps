@@ -197,11 +197,22 @@ async function main() {
   }
   const noOpen = process.argv.includes("--no-open") || process.env["TODOS_NO_OPEN"] === "true" || Boolean(envPort);
   const { startServer } = await import("./serve.js");
-  startServer(port, {
-    open: !noOpen,
-    host: parseStringArg("--host") || process.env.HOST,
-    apiKey: parseStringArg("--api-key"),
-  });
+  try {
+    await startServer(port, {
+      open: !noOpen,
+      host: parseStringArg("--host") || process.env.HOST,
+      apiKey: parseStringArg("--api-key"),
+      allowAnonymous: process.argv.includes("--allow-anonymous"),
+    });
+  } catch (error) {
+    // Fail closed and LOUD: never fall back to serving data anonymously.
+    const { AuthNotConfiguredError } = await import("./auth-posture.js");
+    if (error instanceof AuthNotConfiguredError) {
+      console.error(`\n${error.message}\n`);
+      process.exit(1);
+    }
+    throw error;
+  }
 }
 
 main();

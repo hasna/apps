@@ -315,7 +315,11 @@ async function main() {
   // Opt-in shared Streamable HTTP server (one process per MCP, many agents).
   const { startServer } = await import("../server/serve.js");
   const port = resolveHttpPort();
-  await startServer(port, { open: false, host: "127.0.0.1" });
+  // This transport is loopback-pinned by contract (README: "Bind: 127.0.0.1
+  // only"), and MCP clients spawn it with no credential, so it keeps the
+  // anonymous local plane — but ONLY on loopback, and only when no credential is
+  // configured. Set TODOS_API_KEY (and send it from the client) to enforce auth.
+  await startServer(port, { open: false, host: "127.0.0.1", allowAnonymous: true });
   console.error(`todos MCP HTTP mounted at http://127.0.0.1:${port}/mcp`);
 }
 

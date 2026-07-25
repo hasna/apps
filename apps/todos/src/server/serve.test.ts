@@ -59,7 +59,10 @@ beforeAll(async () => {
   dbPath = join(tmpDir, "test.db");
 
   proc = Bun.spawn({
-    cmd: ["bun", "run", "src/server/index.ts", `--port=${port}`, "--no-open"],
+    // `--allow-anonymous` keeps this suite focused on route behavior: the server
+    // now fails closed when no credential is configured, and auth itself is covered
+    // by auth.test.ts + auth-fail-closed.test.ts.
+    cmd: ["bun", "run", "src/server/index.ts", `--port=${port}`, "--no-open", "--allow-anonymous"],
     cwd: join(import.meta.dir, "..", ".."),
     env: localRoutingTestEnv({ TODOS_DB_PATH: dbPath, TODOS_AUTO_PROJECT: "false", TODOS_NO_OPEN: "true", TODOS_RATE_LIMIT_MAX: "1000" }),
     stdout: "pipe",
