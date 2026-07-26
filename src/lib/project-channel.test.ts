@@ -278,7 +278,7 @@ describe("project channel resolution", () => {
 });
 
 describe("ensureProjectChannel", () => {
-  test("creates the channel, links it on the project, and records an event", () => {
+  test("creates the channel and records an event, without linking it", () => {
     const db = makeDb();
     const project = createWorkspace({ name: "Fleet Comms", slug: "fleet-comms", kind: "project" }, db);
     const { calls, runner } = recordingRunner(() => ok);

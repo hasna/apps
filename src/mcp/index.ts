@@ -30,7 +30,7 @@ import {
   type ProjectBudgetStatus,
 } from "../lib/budget.js";
 import { filterProjectEvalArtifacts } from "../lib/project-eval-artifacts.js";
-import { resolveProjectChannelForProject } from "../lib/project-channel.js";
+import { projectChannelSummary, resolveProjectChannelForProject } from "../lib/project-channel.js";
 import { repairProjectPermissions } from "../lib/project-permissions.js";
 import { redactProjectValue } from "../lib/redaction.js";
 import {
@@ -913,12 +913,25 @@ server.tool(
       locations,
       events,
     });
-    if (!input.compact || input.verbose) return jsonText(withoutRender(payload));
+    // Same fallback as CLI `projects show -j`: `integrations` stays the raw
+    // record, and the resolved channel rides alongside it. Without this the
+    // agent-facing surface reports no channel for almost every project, since
+    // ensure no longer pins derived names.
+    const channel = projectChannelSummary(project);
+    if (!input.compact || input.verbose) {
+      return jsonText({
+        ...(withoutRender(payload) as Record<string, unknown>),
+        conversations_channel: channel.channel,
+        conversations_channel_source: channel.source,
+      });
+    }
     return jsonText({
       project: compactProject(project),
       management: projectManagementSummary(project),
       external_links: projectExternalLinksSummary(project),
       dashboard: projectDashboardSummary(project),
+      conversations_channel: channel.channel,
+      conversations_channel_source: channel.source,
       counts: {
         agents: agents.length,
         locations: locations.length,

@@ -87,6 +87,16 @@ const contracts: SurfaceContract[] = [
     promptAgent: ["projects_channel: tool("],
     sdk: ["deriveProjectChannel", "ensureProjectChannel", "resolveProjectChannel"],
   },
+  {
+    // The resolved channel must appear on every `show` surface, not just the
+    // CLI: ensure no longer pins derived names, so a surface that reports only
+    // the raw `integrations` record shows no channel for almost every project.
+    operation: "show-resolves-channel",
+    cli: ["conversations_channel_source: summary.source"],
+    mcp: ["conversations_channel_source: channel.source"],
+    promptAgent: [],
+    sdk: ["projectChannelSummary"],
+  },
 ];
 
 function expectAll(source: string, tokens: string[], label: string, operation: string): void {

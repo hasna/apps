@@ -450,10 +450,10 @@ function plannedResult(
 }
 
 /**
- * Ensure the project's conversations channel exists and is linked on the
- * project record. Failures (unreachable conversations CLI, underivable slug)
- * never throw; they are reported through `status: "error"` so project
- * create/start keep working.
+ * Ensure the project's conversations channel exists. It does NOT link the
+ * channel on the project record — see "Ensure never writes the link" above.
+ * Failures (unreachable conversations CLI, underivable slug) never throw; they
+ * are reported through `status: "error"` so project create/start keep working.
  */
 export function ensureProjectChannel(
   project: Workspace,
@@ -557,9 +557,9 @@ export interface StoreEnsureChannelOptions {
 /**
  * Store-routed variant of {@link ensureProjectChannel}. The channel derivation
  * is pure and the conversations channel creation is a machine-local side effect
- * (the local `conversations` client itself routes to the shared cloud), but the
- * project-record persistence (integration link + audit event) goes through the
- * Store so it lands wherever the project actually lives. Never throws for
+ * (the local `conversations` client itself routes to the shared cloud); the
+ * audit event goes through the Store so it lands wherever the project actually
+ * lives. Nothing here writes the project record. Never throws for
  * conversations/derivation failures; reports them via `status: "error"`.
  */
 export async function ensureProjectChannelViaStore(
@@ -573,7 +573,11 @@ export async function ensureProjectChannelViaStore(
   } catch (err) {
     return derivationErrorResult(project, errorText(err));
   }
-  const alreadyLinked = project.integrations[PROJECT_CHANNEL_INTEGRATION_KEY]?.trim() === derivation.channel;
+  // Same definition the real path uses at the end of this function: "the record
+  // carries a pin", not "the pin equals what we just derived". Comparing a raw
+  // pin against a normalized channel would make --dry-run disagree with the
+  // real run for any pin needing normalization.
+  const alreadyLinked = Boolean(project.integrations[PROJECT_CHANNEL_INTEGRATION_KEY]?.trim());
 
   if (options.dryRun) {
     return plannedResult(project, derivation, alreadyLinked);
