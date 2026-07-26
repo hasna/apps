@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach } from "bun:test";
-import { SqliteAdapter as Database } from "@hasna/cloud";
+import { SqliteAdapter as Database } from "./sqlite-adapter.js";
 import {
   acquireLock, releaseLock, releaseResourceLocks, releaseAllAgentLocks,
   checkLock, agentHoldsLock, listAgentLocks, cleanExpiredLocks,

@@ -166,16 +166,6 @@ Project-local enablement is lightweight:
 
 The package no longer copies full connector source trees into each project.
 
-## Cloud Sync
-
-This package supports cloud sync via `@hasna/cloud`:
-
-```bash
-cloud setup
-cloud sync push --service connectors
-cloud sync pull --service connectors
-```
-
 ## Data Directory
 
 Data is stored in `~/.hasna/connectors/`.

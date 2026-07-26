@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { SqliteAdapter as Database } from "@hasna/cloud";
+import { SqliteAdapter as Database } from "./sqlite-adapter.js";
 import { logUsage, getUsageStats, getTopConnectors, getUsageMap, cleanOldUsage } from "./usage.js";
 
 function makeDb(): Database {
