@@ -38,6 +38,7 @@ import {
   type ProjectTargetResolution,
 } from "./project-resolver.js";
 import { PROJECT_RENDER_SCHEMA_VERSION } from "./project-render.js";
+import { projectChannelSummary } from "./project-channel.js";
 import type { ProjectStore } from "../store/project-store.js";
 import { listSessions } from "./tmux.js";
 import type {
@@ -193,6 +194,7 @@ export async function buildProjectAgentContext(
   }
 
   const links = projectExternalLinksSummary(project);
+  const channelSummary = projectChannelSummary(project);
   const integrations: JsonObject = {
     github_repo: project.integrations.github_repo ?? null,
     github_url: project.integrations.github_url ?? null,
@@ -203,7 +205,11 @@ export async function buildProjectAgentContext(
       path_exists: links.brief.path ? existsSync(links.brief.path) : null,
     },
     conversations_space: project.integrations.conversations_space ?? null,
-    conversations_channel: project.integrations.conversations_channel ?? null,
+    // Fall back to derivation: since ensure stopped pinning the link, most
+    // projects resolve their channel rather than store it, and this bundle is
+    // what tells an agent where to post. `source` says which it is.
+    conversations_channel: channelSummary.channel,
+    conversations_channel_source: channelSummary.source,
     mementos_project_id: project.integrations.mementos_project_id ?? null,
     files_index_id: project.integrations.files_index_id ?? null,
   };
@@ -639,13 +645,15 @@ export async function buildProjectHandoff(
   const locations = await store.getProjectLocations(project.id);
 
   const links = projectExternalLinksSummary(project);
+  const channelSummary = projectChannelSummary(project);
   const integrations: JsonObject = {
     github_repo: project.integrations.github_repo ?? null,
     github_url: project.integrations.github_url ?? null,
     todos: links.todos,
     brief: { id: links.brief.id, path: links.brief.path, path_exists: links.brief.path ? existsSync(links.brief.path) : null },
     conversations_space: project.integrations.conversations_space ?? null,
-    conversations_channel: project.integrations.conversations_channel ?? null,
+    conversations_channel: channelSummary.channel,
+    conversations_channel_source: channelSummary.source,
   };
 
   const tmuxSessions = safeTmuxSessionNames().filter((n) => n.includes(project.slug));

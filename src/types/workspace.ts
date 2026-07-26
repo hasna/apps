@@ -197,6 +197,8 @@ export interface WorkspaceIntegrations {
   mementos_project_id?: string;
   conversations_space?: string;
   conversations_channel?: string;
+  /** Overrides the channel class implied by the project kind. */
+  conversations_channel_class?: string;
   files_index_id?: string;
   [key: string]: string | undefined;
 }

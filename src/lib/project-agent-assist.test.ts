@@ -8,6 +8,7 @@ import {
   startAgentRun,
   completeAgentRun,
   ensureCliAgent,
+  linkWorkspaceIntegrations,
 } from "../db/workspaces.js";
 import type { Workspace } from "../types/workspace.js";
 import { closeDatabase, getDatabase, PROJECTS_DB_PATH_ENV } from "../db/database.js";
@@ -70,6 +71,17 @@ describe("project-agent-assist: context", () => {
     expect(ctx.project?.["slug"]).toBe("agent-project");
     expect(ctx.machine.hostname).toBeTruthy();
     expect(ctx.kind).toBe("projects.agent_context");
+  });
+
+  test("reports the derived channel and labels it, for an unlinked project", async () => {
+    // Regression: ensure stopped writing integrations.conversations_channel, so
+    // reading that field directly left this bundle blank for ~96% of the
+    // registry. The bundle is what tells an agent where to post.
+    const project = makeProject();
+    const ctx = await buildProjectAgentContext(localStore(), { target: project.slug });
+    const integrations = ctx.integrations as Record<string, unknown>;
+    expect(integrations["conversations_channel"]).toBe("agent-project");
+    expect(integrations["conversations_channel_source"]).toBe("derived");
   });
 
   test("returns an unresolved bundle when nothing matches", async () => {
@@ -149,6 +161,23 @@ describe("project-agent-assist: handoff", () => {
     expect(h.project["slug"]).toBe(project.slug);
     expect(h.recent_runs.length).toBeGreaterThanOrEqual(1);
     expect(h.handoff_instructions).toContain(project.slug);
+  });
+
+  test("handoff reports the derived channel and labels it", async () => {
+    const project = makeProject();
+    const h = await buildProjectHandoff(localStore(), { target: project.slug });
+    const integrations = h.integrations as Record<string, unknown>;
+    expect(integrations["conversations_channel"]).toBe("agent-project");
+    expect(integrations["conversations_channel_source"]).toBe("derived");
+  });
+
+  test("handoff prefers an explicitly linked channel over the derived one", async () => {
+    const project = makeProject();
+    linkWorkspaceIntegrations(project.id, { conversations_channel: "internal-legacy-lane" });
+    const h = await buildProjectHandoff(localStore(), { target: project.slug });
+    const integrations = h.integrations as Record<string, unknown>;
+    expect(integrations["conversations_channel"]).toBe("internal-legacy-lane");
+    expect(integrations["conversations_channel_source"]).toBe("integration");
   });
 
   test("throws when project is not found", async () => {

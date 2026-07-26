@@ -59,7 +59,7 @@ import {
 } from "../../lib/oss-project-matrix.js";
 import { parseWorkspaceAgentEvalCaseIds, runWorkspaceAgentEval } from "../../lib/workspace-agent-eval.js";
 import { cleanupProjectEvalArtifacts, filterProjectEvalArtifacts } from "../../lib/project-eval-artifacts.js";
-import { resolveProjectChannelForProject } from "../../lib/project-channel.js";
+import { projectChannelSummary, resolveProjectChannelForProject } from "../../lib/project-channel.js";
 import {
   parseProjectStartAgent,
   parseProjectStartSessionPolicy,
@@ -919,7 +919,7 @@ function registerAgentAssistCommands(program: Command): void {
     .command("channel [target]")
     .description("Resolve the project's conversations channel (prints the channel name)")
     .option("--cwd <path>", "Working directory used when target is omitted")
-    .option("--ensure", "Create the conversations channel if missing and link it on the project record")
+    .option("--ensure", "Create the conversations channel if it does not exist (does not write the link)")
     .option("--from <identity>", "Conversations identity recorded as channel creator (with --ensure)")
     .option("--dry-run", "With --ensure: report what would happen without creating anything")
     .option("--agent <id-or-slug>", "Attributing agent")
@@ -933,6 +933,7 @@ function registerAgentAssistCommands(program: Command): void {
           const resolution = resolveProjectChannelForProject(project);
           if (wantsJson(opts)) { printObject(resolution, opts); return; }
           console.log(resolution.channel);
+          for (const warning of resolution.warnings) console.error(chalk.yellow(`! ${warning}`));
           return;
         }
         const agentId = mutationAgentId(store, opts.agent);
@@ -951,14 +952,13 @@ function registerAgentAssistCommands(program: Command): void {
             status: result.status,
             created: result.created,
             linked: result.linked,
-            persisted: result.persisted,
             message: result.message,
             warnings: result.warnings,
             side_effects: result.side_effects,
             project: { id: result.project.id, slug: result.project.slug, integrations: result.project.integrations },
           }, opts);
         } else if (result.status === "planned") {
-          console.log(chalk.dim(`[dry-run] Would ensure conversations channel #${result.channel} (${result.channel_class}).`));
+          console.log(chalk.dim(`[dry-run] Would ensure conversations channel #${result.channel}${result.channel_class ? ` (${result.channel_class})` : ""}.`));
         } else if (result.status === "error") {
           console.error(chalk.red(`Channel ensure failed for #${result.channel}: ${result.message ?? "unknown error"}`));
           // Partial-state evidence so a retry is informed rather than blind;
@@ -967,7 +967,8 @@ function registerAgentAssistCommands(program: Command): void {
             `  committed: channel_created=${result.side_effects.channel_created} channel_present=${result.side_effects.channel_present} integration_linked=${result.side_effects.integration_linked} event_recorded=${result.side_effects.event_recorded}`,
           ));
         } else {
-          console.log(chalk.green(`✓ Channel ${result.status === "created" ? "created" : "exists"}: #${result.channel}`) + chalk.dim(` (${result.channel_class}${result.persisted ? ", linked on project" : ""})`));
+          const detail = [result.channel_class, result.linked ? "linked on project" : null].filter(Boolean).join(", ");
+          console.log(chalk.green(`✓ Channel ${result.status === "created" ? "created" : "exists"}: #${result.channel}`) + (detail ? chalk.dim(` (${detail})`) : ""));
         }
         if (!wantsJson(opts)) {
           for (const warning of result.warnings) console.error(chalk.yellow(`! ${warning}`));
@@ -2076,7 +2077,20 @@ function registerProjectCommands(program: Command): void {
       const events = await store.listEvents(project.id);
       const payload = buildProjectDetailPayload({ project, agents, locations, events });
       if (wantsRenderSpec(opts)) { printRenderSpec(payload.render); return; }
-      if (wantsJson(opts)) { printObject(withoutRender(payload), opts); return; }
+      if (wantsJson(opts)) {
+        // `integrations` stays the raw record — it is the stored truth and
+        // scripts diff it. The resolved channel rides alongside it so the JSON
+        // answers the same question the human output does; without this,
+        // `show` and `show -j` disagree for every project whose channel is
+        // derived rather than pinned, which is most of them.
+        const summary = projectChannelSummary(project);
+        printObject({
+          ...(withoutRender(payload) as Record<string, unknown>),
+          conversations_channel: summary.channel,
+          conversations_channel_source: summary.source,
+        }, opts);
+        return;
+      }
       console.log(`${chalk.bold(project.name)} ${chalk.dim(`(${project.slug})`)} ${chalk.green(`[${project.status}]`)}`);
       console.log(`  ${chalk.dim("id:")}   ${project.id}`);
       console.log(`  ${chalk.dim("kind:")} ${project.kind}`);
@@ -2116,8 +2130,12 @@ function registerProjectCommands(program: Command): void {
         const briefTarget = externalLinks.brief.id ?? externalLinks.brief.path;
         console.log(`  ${chalk.dim("brief:")} ${opts.verbose ? briefTarget : compactText(briefTarget, 120)}${externalLinks.brief.path_exists === false ? " (path missing)" : ""}`);
       }
-      if (project.integrations.conversations_channel) {
-        console.log(`  ${chalk.dim("channel:")} #${project.integrations.conversations_channel}`);
+      const channelSummary = projectChannelSummary(project);
+      if (channelSummary.channel) {
+        // Derived is shown too, marked as such: the channel a project resolves
+        // to is not blank just because it was never pinned on the record.
+        const suffix = channelSummary.source === "derived" ? chalk.dim(" (derived)") : "";
+        console.log(`  ${chalk.dim("channel:")} #${channelSummary.channel}${suffix}`);
       }
       try {
         const tmux = await projectTmuxStatus(project.slug);

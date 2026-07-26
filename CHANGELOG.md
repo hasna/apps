@@ -4,6 +4,71 @@ All notable changes to `@hasna/projects` are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **BREAKING — channel derivation no longer imposes a prefix.** `deriveProjectChannel`
+  rewrote the project slug through two hardcoded tables that were this package's
+  private copy of the fleet channel naming convention. `KIND_CHANNEL_RULES`
+  pinned kind `project` to an `internal-` prefix, and the anti-double-prefix
+  guard only recognised prefixes listed in `CHANNEL_PREFIX_CLASSES`, which had
+  no `iproj-` row — so `iproj-agent-ceo` derived `internal-iproj-agent-ceo`.
+  `classifyProjectChannelName` guessed the class from the same list and fell
+  back to `package`, which is why no channel on the fleet ever carried the
+  convention's `work-project` class. Both tables are removed. The derived
+  channel is now the normalized slug, verbatim: no prefix is added and none is
+  stripped (including the former `open-` strip for `open-source` projects).
+  An explicitly linked `integrations.conversations_channel` still wins over
+  derivation, which is what keeps channels named under the old behaviour
+  resolving to the history they hold.
+- **BREAKING — `channel_class` is now resolved from the project, and nullable.**
+  `classifyProjectChannelName` and `CHANNEL_PREFIX_CLASSES` are removed from the
+  SDK surface, replaced by `resolveProjectChannelClass`: an explicit
+  `integrations.conversations_channel_class` (new,
+  `PROJECT_CHANNEL_CLASS_INTEGRATION_KEY`), else the project kind, else `null`.
+  `ProjectChannelDerivation.channel_class` is `ProjectChannelClass | null`, and
+  `--class` is omitted rather than guessed when it is `null`, leaving the
+  default to `conversations`, which owns `metadata.channel_schema.class`.
+  `PROJECT_CHANNEL_CLASSES` gains `work-project`.
+
+  Note the practical reach: `generic` is by far the largest kind in the
+  registry and maps to `null`, so most newly created project channels now carry
+  no class where 0.1.95 sent `initiative`. That label was itself inferred from
+  the deleted `internal-` prefix rule, so it was unfounded rather than correct —
+  but this is a behaviour change on the dominant path, not just a type change.
+  `experiment` maps to `null` for a related reason: the `initiative` class the
+  old table assigned it additionally requires the channel topic to carry
+  `owner:<agent> until:<date|gate-id>`, which nothing here can supply.
+- **BREAKING — `ensureProjectChannel` no longer writes the project record.**
+  It previously persisted the resolved channel onto
+  `integrations.conversations_channel`. For a *derived* name that write is
+  one-way: an explicit link outranks derivation permanently, so the first
+  `projects start` after a derivation change would pin the new name and keep
+  resolving to it even after the change was reverted, silently moving a project
+  off the channel holding its history. Ensure now only makes the channel exist;
+  the link is established at project creation or deliberately by an operator.
+  The `persist` option and the `persisted` result field are removed —
+  `linked` and `side_effects.integration_linked` report the record's state.
+
+  Consequence, and the reason the next entry exists: with nothing writing the
+  link, the overwhelming majority of projects resolve their channel by
+  derivation rather than storing it — 1460 of 1527 (96%) by a per-kind
+  enumeration, and the same ratio holds on a wider 2332-row sample. Both counts
+  are floors: `projects list` truncates, which is filed separately.
+- **Display and bundle surfaces fall back to derivation.** `projects show`,
+  `projects context` and `projects handoff` read
+  `integrations.conversations_channel` directly and would therefore have gone
+  blank for those 96%. `projects handoff` is the bundle an agent reads to find
+  out where to post, so a `null` there is worse than a stale value. All three
+  now use `projectChannelSummary`, which falls back to the derived name and
+  reports `conversations_channel_source: "integration" | "derived"` alongside
+  it, so the surface stays useful without pretending a derived name is pinned.
+  `projects show` marks a derived channel `(derived)`.
+- `ProjectChannelResolution` gains `warnings`, so an unusable
+  `conversations_channel_class` is reported on the read path
+  (`projects channel <x> --json`) and not only when `--ensure` is passed.
+
 ## [0.1.95]
 
 ### Fixed

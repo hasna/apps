@@ -769,13 +769,13 @@ describe("project-first CLI surface", () => {
 
     const channel = runProjects(["channel", "agent-assist"], env);
     expect(channel.exitCode).toBe(0);
-    expect(text(channel.stdout).trim()).toBe("internal-agent-assist");
+    expect(text(channel.stdout).trim()).toBe("agent-assist");
 
     const channelJson = runProjects(["channel", "agent-assist", "--json"], env);
     expect(channelJson.exitCode).toBe(0);
     const channelPayload = JSON.parse(text(channelJson.stdout)) as { channel: string; channel_class: string; linked: boolean };
-    expect(channelPayload.channel).toBe("internal-agent-assist");
-    expect(channelPayload.channel_class).toBe("initiative");
+    expect(channelPayload.channel).toBe("agent-assist");
+    expect(channelPayload.channel_class).toBe("work-project");
     expect(channelPayload.linked).toBe(false);
 
     const handoff = runProjects(["handoff", "agent-assist", "--json"], env);
@@ -2143,29 +2143,30 @@ describe("project-first CLI surface", () => {
         project: { integrations: Record<string, string> };
       };
       expect(created.status).toBe("created");
-      expect(created.channel).toBe("iapp-channel-ensure-probe");
+      expect(created.channel).toBe("channel-ensure-probe");
       expect(created.channel_class).toBe("product");
-      // Linked integration is persisted on the cloud project record.
-      expect(created.linked).toBe(true);
-      expect(created.project.integrations["conversations_channel"]).toBe("iapp-channel-ensure-probe");
-      expect(requests.some((r) => r.method === "PATCH" && r.path === `/v1/projects/${projectId}`)).toBe(true);
+      // Ensure creates the channel but never writes the project record: a
+      // derived name pinned as an explicit link would outrank derivation
+      // forever and survive a revert.
+      expect(created.linked).toBe(false);
+      expect(created.project.integrations["conversations_channel"]).toBeUndefined();
+      expect(requests.some((r) => r.method === "PATCH" && r.path === `/v1/projects/${projectId}`)).toBe(false);
       // The unsupported audit-event POST is reported as a non-fatal warning.
       expect(created.side_effects["channel_created"]).toBe(true);
-      expect(created.side_effects["integration_linked"]).toBe(true);
+      expect(created.side_effects["integration_linked"]).toBe(false);
       expect(created.side_effects["event_recorded"]).toBe(false);
       expect(created.warnings.join(" ")).toContain("audit event was not recorded");
       // Class metadata is forwarded to conversations.
       const conversationsArgs = readFileSync(conversationsLog, "utf-8");
       expect(conversationsArgs).toContain("--class product");
 
-      // Existing-channel retry stays successful and does not duplicate the link.
+      // Existing-channel retry stays successful and still writes nothing.
       const retry = await runEnsure();
       expect(retry.exitCode).toBe(0);
-      const existing = JSON.parse(retry.stdout) as { status: string; linked: boolean; persisted: boolean };
+      const existing = JSON.parse(retry.stdout) as { status: string; linked: boolean };
       expect(existing.status).toBe("exists");
-      expect(existing.linked).toBe(true);
-      expect(existing.persisted).toBe(false);
-      expect(requests.filter((r) => r.method === "PATCH").length).toBe(1);
+      expect(existing.linked).toBe(false);
+      expect(requests.filter((r) => r.method === "PATCH").length).toBe(0);
     } finally {
       server.stop(true);
       rmSync(root, { recursive: true, force: true });

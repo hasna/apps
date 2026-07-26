@@ -143,12 +143,24 @@ projects runs show <run-id> my-app         # full run detail + tool-call trace
 # Conversations channel linkage — every project has one channel
 projects channel my-app                    # print the project's channel name
 projects channel my-app --json             # full resolution (class, linked, source)
-projects channel my-app --ensure           # create the channel if missing + link it
+projects channel my-app --ensure           # create the channel if it does not exist
 # The channel name lives on the project record as
-# integrations.conversations_channel; when unset it is derived from the slug +
-# kind per the fleet naming convention (open-source -> flat repo name,
-# platform -> platform-*, internal-app -> iapp-*, company-website -> cweb-*,
-# community -> community-*, experiment -> research-*, else internal-*).
+# integrations.conversations_channel; when unset it IS the project slug,
+# normalized. This CLI adds no prefix of its own and strips none — it does not
+# own the fleet naming convention and will not carry a copy of it. (That is a
+# statement about authority, not conformance: plenty of registry slugs do not
+# match the convention. Repairing those is a project-rename decision, not a
+# derivation one.) A project whose channel is not named after its slug says so
+# by setting integrations.conversations_channel, which always wins.
+#
+# Ensure creates the channel but never writes the link back: pinning a derived
+# name would outrank derivation forever and survive a revert. The link is set at
+# project creation, or deliberately by an operator.
+#
+# The channel class comes from the project record too:
+# integrations.conversations_channel_class if set, else the project kind, else
+# unset — in which case no --class is sent and conversations picks the default.
+# Most projects (kind `generic`) fall in that last bucket.
 # `projects create` and `projects start` ensure the channel automatically
 # (disable with PROJECTS_CHANNEL_ENSURE=0); MCP tool: projects_channel
 

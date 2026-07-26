@@ -342,10 +342,10 @@ export interface ProjectStore {
   addTmuxProfileWindow(input: CreateTmuxProfileWindowInput & { profile_id: string }): Promise<TmuxProfileWindow>;
   listTmuxProfileWindows(profileId: string): Promise<TmuxProfileWindow[]>;
 
-  // ---- Conversations channel link (works in BOTH transports) ----
+  // ---- Conversations channel (works in BOTH transports) ----
   // Channel derivation is pure and channel creation is a machine-local side
-  // effect, but the integration link + audit event persist through the Store so
-  // they land on the project record wherever it lives (local or cloud).
+  // effect. Ensure does not write the project record; the audit event routes
+  // through the Store so it lands wherever the project lives (local or cloud).
   ensureChannel(project: Workspace, options?: StoreEnsureChannelOptions): Promise<ProjectChannelEnsureResult>;
 }
 
@@ -1001,9 +1001,9 @@ class ApiProjectStore implements ProjectStore {
   addTmuxProfileWindow = machineLocalTmuxProfiles.addTmuxProfileWindow;
   listTmuxProfileWindows = machineLocalTmuxProfiles.listTmuxProfileWindows;
 
-  // Channel derivation is pure; persistence routes through this same api
-  // transport (updateProject/recordEvent) so the link lands on the cloud
-  // project record.
+  // Channel derivation is pure and ensure writes no project record; the audit
+  // event routes through this same api transport (recordEvent) so it lands on
+  // the cloud project.
   async ensureChannel(project: Workspace, options?: StoreEnsureChannelOptions): Promise<ProjectChannelEnsureResult> {
     return ensureProjectChannelViaStore(this, project, options);
   }
