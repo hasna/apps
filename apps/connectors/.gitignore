@@ -22,6 +22,9 @@ bun.lock
 # Test coverage
 coverage/
 
+# Per-connector test HOME sandboxes (bun install cache blobs land here)
+.test-home/
+
 # Local connector installs
 .connectors/
 .playwright-mcp/

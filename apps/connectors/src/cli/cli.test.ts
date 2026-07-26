@@ -1118,10 +1118,4 @@ describe("CLI", () => {
     });
   });
 
-  describe("cloud", () => {
-    test("cloud command is registered in help", async () => {
-      const { stdout } = await run("--help");
-      expect(stdout).toContain("cloud");
-    });
-  });
 });

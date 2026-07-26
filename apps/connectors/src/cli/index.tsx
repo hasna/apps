@@ -14,7 +14,6 @@ import { registerCommands as registerAuthCommands } from "./commands/auth.js";
 import { registerCommands as registerMiscCommands } from "./commands/misc.js";
 import { registerCommands as registerOpsCommands } from "./commands/ops.js";
 import { registerCommands as registerSystemCommands } from "./commands/system.js";
-import { registerCommands as registerSyncCommands } from "./commands/sync.js";
 
 // Load versions from connector package.json files
 loadConnectorVersions();
@@ -57,7 +56,6 @@ registerAuthCommands(program);
 registerMiscCommands(program);
 registerOpsCommands(program);
 registerSystemCommands(program);
-registerSyncCommands(program);
 // @hasna/events 0.1.7 used webhooksCommandName; 0.1.13 renamed it to channelsCommandName.
 registerEventsCommands(program, {
   source: "connectors",

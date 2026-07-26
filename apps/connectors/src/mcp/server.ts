@@ -4,7 +4,6 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { maybeStrip } from "../lib/strip.js";
-import { registerCloudTools } from "@hasna/cloud";
 import pkg from "../../package.json" with { type: "json" };
 import {
   registerDiscoveryTools,
@@ -43,7 +42,6 @@ registerLlmTools(server, stripped);
 registerAgentTools(server, stripped);
 registerRateTools(server, stripped);
   registerFeedbackTools(server, stripped);
-  registerCloudTools(server, "connectors");
 
   return server;
 }

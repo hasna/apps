@@ -1,5 +1,6 @@
-import { SqliteAdapter } from "@hasna/cloud";
+import { SqliteAdapter } from "./sqlite-adapter.js";
 
+export { SqliteAdapter } from "./sqlite-adapter.js";
 export type Database = SqliteAdapter;
 import { dirname, join } from "path";
 import { homedir } from "os";
