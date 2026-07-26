@@ -4,7 +4,7 @@
   "class": "service",
   "contractVersion": "v1",
   "kitVersion": "0.4.1",
-  "description": "Universal calendar management for AI coding agents. CLI + MCP + HTTP API (calendar-serve) + generated SDK. Cloud mode (HASNA_CALENDAR_STORAGE_MODE=remote / HASNA_CALENDAR_DATABASE_URL set) is PURE REMOTE per Amendment A1: the serve process reads/writes the shared cloud Postgres directly with API-key auth via @hasna/contracts.",
+  "description": "Universal calendar management for AI coding agents. CLI + MCP + HTTP API (calendar-serve) + generated SDK. Hosted mode (HASNA_CALENDAR_STORAGE_MODE=self_hosted|cloud, or HASNA_CALENDAR_DATABASE_URL set) is PURE REMOTE per Amendment A1: the serve process reads/writes the shared cloud Postgres directly with API-key auth via @hasna/contracts.",
   "bins": ["calendar", "calendar-mcp", "calendar-serve"],
   "storage": {
     "mode": "local",

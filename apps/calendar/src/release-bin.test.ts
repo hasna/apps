@@ -194,6 +194,10 @@ describe("release bin artifacts", () => {
         BUN_TEST: "1",
         CALENDAR_DB_PATH: join(home, "calendar.db"),
         CALENDAR_PORT: String(port),
+        // A non-hosted calendar-serve must be given an auth posture or it now
+        // refuses to start rather than exposing /mcp anonymously. This bin smoke
+        // test binds loopback, so the loopback-only anonymous plane is correct.
+        CALENDAR_ALLOW_ANONYMOUS: "1",
       },
       stdio: "ignore",
     });

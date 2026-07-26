@@ -23,7 +23,7 @@ WORKDIR /app
 # verify-full-capable clients.
 COPY docker/rds-global-bundle.pem /etc/ssl/certs/rds-global-bundle.pem
 ENV NODE_ENV=production \
-    HASNA_CALENDAR_STORAGE_MODE=remote \
+    HASNA_CALENDAR_STORAGE_MODE=cloud \
     NODE_EXTRA_CA_CERTS=/etc/ssl/certs/rds-global-bundle.pem \
     PGSSLROOTCERT=/etc/ssl/certs/rds-global-bundle.pem \
     CALENDAR_NO_OPEN=true \

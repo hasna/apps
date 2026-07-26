@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { verifyApiKey, ApiKeyStore, type ApiKeyVerifier, type AuthQueryClient } from "@hasna/contracts/auth";
 import { createCalendarCloudQueryClient, type CalendarCloudQueryClient } from "./cloud-client.js";
 import { CalendarPgStore } from "./pg-store.js";
+import { isRemoteMode, resolveConfiguredStorageMode, type StorageMode } from "../store/storage-mode.js";
 
 export const CALENDAR_APP_SLUG = "calendar";
 
@@ -36,9 +37,32 @@ export function resolveSigningSecret(env: NodeJS.ProcessEnv = process.env): stri
   );
 }
 
-/** True when this process is configured to serve the cloud `/v1` API. */
+/**
+ * True when this process is configured to serve the hosted `/v1` API.
+ *
+ * Hosted iff a remote DSN is configured OR the canonical storage mode is
+ * `self_hosted`/`cloud`. This used to test `STORAGE_MODE === "remote"`, a value
+ * the client resolver rejects — so the two planes of the same process could
+ * (and in calendar-prod did) disagree about which store they were on.
+ *
+ * THROWS `UnknownStorageModeError` when the mode env var holds a non-canonical
+ * value, so the process fails loudly at startup instead of degrading.
+ */
 export function isCloudModeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(resolveCloudDatabaseUrl(env)) || env.HASNA_CALENDAR_STORAGE_MODE === "remote";
+  if (resolveCloudDatabaseUrl(env)) return true;
+  const configured = resolveConfiguredStorageMode(CALENDAR_APP_SLUG, env as Record<string, string | undefined>);
+  return configured ? isRemoteMode(configured.mode) : false;
+}
+
+/**
+ * The canonical mode label this process reports on `/health`, `/ready` and
+ * `/version`. `self_hosted`/`cloud` are reported verbatim; a process with a DSN
+ * but no explicit mode is `self_hosted` (Hasna-owned infra), never "remote".
+ */
+export function resolveServiceMode(env: NodeJS.ProcessEnv = process.env): StorageMode {
+  const configured = resolveConfiguredStorageMode(CALENDAR_APP_SLUG, env as Record<string, string | undefined>);
+  if (configured) return configured.mode;
+  return resolveCloudDatabaseUrl(env) ? "self_hosted" : "local";
 }
 
 let cachedClient: CalendarCloudQueryClient | null = null;

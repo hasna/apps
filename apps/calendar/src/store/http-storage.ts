@@ -13,12 +13,15 @@
 // Unsetting the env reverts to local — the flip is fully reversible.
 //
 // This module is a repo-local vendoring of the @hasna/contracts client storage
-// kit (createClientTransport + createHasnaStorageClient). It is intentionally
-// self-contained (no external imports) so the built CLI/MCP/SDK bundle carries
-// the cloud client with zero extra runtime dependencies.
+// kit (createClientTransport + createHasnaStorageClient). It has no EXTERNAL
+// runtime imports (only the sibling `storage-mode` vocabulary module) so the
+// built CLI/MCP/SDK bundle carries the cloud client with zero extra runtime
+// dependencies.
 //
 // SAFETY: the API key value is never logged, returned, or embedded anywhere; it
 // lives only inside the transport closure and travels only in request headers.
+
+import { isRemoteMode, parseStorageMode, storageModeEnvKeys } from "./storage-mode.js";
 
 export type Env = Record<string, string | undefined>;
 
@@ -27,16 +30,17 @@ function envToken(name: string): string {
 }
 
 /**
- * Normalize a raw storage-mode string to the client transport it maps to.
- * Only the canonical tiers are accepted: `local` uses the LocalStore, while
- * `self_hosted` and `cloud` both use the ApiStore (identical client code — the
- * distinction is server-side tenancy). Anything else is rejected.
+ * Map a raw storage-mode string to the client transport it implies.
+ * `local` uses the LocalStore; `self_hosted` and `cloud` both use the ApiStore
+ * (identical client code — the distinction is server-side tenancy).
+ *
+ * Anything else THROWS `UnknownStorageModeError`. It deliberately does not
+ * return `null` any more: the previous "warn and use local" branch is what let
+ * `HASNA_CALENDAR_STORAGE_MODE=remote` silently reroute every `getStore()`
+ * caller to an on-box SQLite island while `/v1` kept using Postgres.
  */
-function normalizeMode(value: string): "local" | "cloud" | null {
-  const normalized = value.trim().toLowerCase().replace(/-/g, "_");
-  if (normalized === "local") return "local";
-  if (normalized === "cloud" || normalized === "self_hosted") return "cloud";
-  return null;
+function normalizeMode(value: string, source: string): "local" | "cloud" {
+  return isRemoteMode(parseStorageMode(value, source)) ? "cloud" : "local";
 }
 
 function firstEnv(env: Env, keys: readonly string[]): { key: string; value: string } | null {
@@ -50,12 +54,7 @@ function firstEnv(env: Env, keys: readonly string[]): { key: string; value: stri
 function clientEnvKeys(name: string) {
   const token = envToken(name);
   return {
-    modeKeys: [
-      `HASNA_${token}_STORAGE_MODE`,
-      `HASNA_${token}_MODE`,
-      `${token}_STORAGE_MODE`,
-      `${token}_MODE`,
-    ],
+    modeKeys: storageModeEnvKeys(name),
     apiUrlKeys: [`HASNA_${token}_API_URL`, `${token}_API_URL`],
     apiKeyKeys: [`HASNA_${token}_API_KEY`, `${token}_API_KEY`],
   };
@@ -97,6 +96,10 @@ export interface ClientTransportResolution {
  * Cloud-http IFF the resolved mode is cloud/self_hosted AND an API key is set.
  * If cloud is requested but the key is missing/invalid, returns local with
  * `misconfigured: true` so callers can hard-fail instead of drifting.
+ *
+ * THROWS `UnknownStorageModeError` when a storage-mode env var is set to a
+ * non-canonical value. There is no degraded path: picking a different data
+ * store because a config string was unrecognised is the bug this replaces.
  */
 export function resolveClientTransport(name: string, env: Env = process.env): ClientTransportResolution {
   const keys = clientEnvKeys(name);
@@ -109,13 +112,8 @@ export function resolveClientTransport(name: string, env: Env = process.env): Cl
   const warnings: string[] = [];
 
   if (modeHit) {
-    const normalized = normalizeMode(modeHit.value);
-    if (normalized === null) {
-      warnings.push(`Unknown storage mode '${modeHit.value}' from ${modeHit.key}; using local.`);
-    } else {
-      mode = normalized;
-      modeSource = modeHit.key;
-    }
+    mode = normalizeMode(modeHit.value, modeHit.key);
+    modeSource = modeHit.key;
   } else if (urlHit && keyHit) {
     // Flip signal: the fleet flip writes exactly HASNA_<APP>_API_URL +
     // HASNA_<APP>_API_KEY (no explicit STORAGE_MODE). Their joint presence IS the

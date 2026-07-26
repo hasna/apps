@@ -1,2 +1,5 @@
 [test]
 maxWorkers = 1
+# Scrub the client-flip / hosted env so local-store tests can never be pointed
+# at a live deployment by an operator's exported env. See the preload for why.
+preload = ["./src/test/env-isolation.preload.ts"]
