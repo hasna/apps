@@ -360,13 +360,14 @@ export type {
 } from "./lib/workspace-plan.js";
 export {
   PROJECT_CHANNEL_CLASSES,
+  PROJECT_CHANNEL_CLASS_INTEGRATION_KEY,
   PROJECT_CHANNEL_INTEGRATION_KEY,
-  classifyProjectChannelName,
   conversationsCliRunner,
   deriveProjectChannel,
   ensureProjectChannel,
   normalizeProjectChannelName,
   resolveProjectChannel,
+  resolveProjectChannelClass,
   resolveProjectChannelForProject,
   shouldEnsureProjectChannel,
 } from "./lib/project-channel.js";

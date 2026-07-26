@@ -8,55 +8,82 @@ import { resolveRegisteredProjectTargetOrThrow } from "./project-resolver.js";
  *
  * Every project has exactly one conversations channel (fleet comms protocol).
  * The channel name is stored on the project record as
- * `integrations.conversations_channel`; when unset it is derived
- * deterministically from the project slug + kind per the fleet channel naming
- * convention (knowledge items tagged `convention`):
+ * `integrations.conversations_channel`.
  *
- * - `open-source`      -> package channel: flat repo name (`open-` prefix stripped)
- * - `platform`         -> product channel: `platform-<slug>`
- * - `internal-app`     -> product channel: `iapp-<slug>`
- * - `company-website`  -> product channel: `cweb-<slug>`
- * - `community`        -> product channel: `community-<slug>`
- * - `experiment`       -> initiative channel: `research-<slug>`
- * - everything else    -> initiative channel: `internal-<slug>`
+ * ## The channel name is the project name
  *
- * Slugs that already carry a recognized class prefix are kept as-is so the
- * derivation never double-prefixes (`platform-alumia` stays `platform-alumia`).
+ * When the integration is unset the channel name is the project slug,
+ * normalized — nothing more. This CLI does not own the fleet channel naming
+ * convention and must not carry a copy of it: the registry slug already
+ * carries whatever prefix the convention assigns (`iproj-pr-to-zero`,
+ * `platform-alumia`, `iapp-dispatch`, or a flat repo name for a package), so
+ * rewriting it here can only ever drift from, contradict, or double-apply the
+ * standard. It previously did exactly that: a `project`-kind slug fell through
+ * to a hardcoded `internal-` prefix and `iproj-agent-ceo` derived
+ * `internal-iproj-agent-ceo`.
+ *
+ * Projects whose channel does not match their slug say so explicitly by
+ * setting `integrations.conversations_channel`; that link always wins over
+ * derivation.
+ *
+ * ## Channel class
+ *
+ * The class is a property of the project, not of the channel string, so it is
+ * read from the project record — never guessed from the channel name's
+ * prefix. See {@link resolveProjectChannelClass}.
  */
 
-export const PROJECT_CHANNEL_CLASSES = ["package", "product", "initiative", "loop-lane"] as const;
+/**
+ * Channel class vocabulary, per the fleet channel naming + classes convention
+ * (`knowledge get hasna-channel-naming-convention`). `fleet` and `personal`
+ * are deliberately absent: they are not project channels and this CLI never
+ * creates one.
+ */
+export const PROJECT_CHANNEL_CLASSES = ["package", "product", "work-project", "initiative", "loop-lane"] as const;
 export type ProjectChannelClass = (typeof PROJECT_CHANNEL_CLASSES)[number];
 
 export const PROJECT_CHANNEL_INTEGRATION_KEY = "conversations_channel";
 
-const CHANNEL_PREFIX_CLASSES: ReadonlyArray<{ prefix: string; channel_class: ProjectChannelClass }> = [
-  { prefix: "platform-", channel_class: "product" },
-  { prefix: "iapp-", channel_class: "product" },
-  { prefix: "cweb-", channel_class: "product" },
-  { prefix: "community-", channel_class: "product" },
-  { prefix: "oss-", channel_class: "initiative" },
-  { prefix: "internal-", channel_class: "initiative" },
-  { prefix: "research-", channel_class: "initiative" },
-  { prefix: "loops-", channel_class: "loop-lane" },
-];
+/**
+ * Optional per-project override for the channel class. Set it on the project
+ * record when a project's class does not follow from its kind; it takes
+ * precedence over {@link WORKSPACE_KIND_CHANNEL_CLASSES}.
+ */
+export const PROJECT_CHANNEL_CLASS_INTEGRATION_KEY = "conversations_channel_class";
 
-const KIND_CHANNEL_RULES: Record<WorkspaceKind, { channel_class: ProjectChannelClass; prefix: string | null }> = {
-  "open-source": { channel_class: "package", prefix: null },
-  "internal-app": { channel_class: "product", prefix: "iapp-" },
-  platform: { channel_class: "product", prefix: "platform-" },
-  "company-website": { channel_class: "product", prefix: "cweb-" },
-  community: { channel_class: "product", prefix: "community-" },
-  experiment: { channel_class: "initiative", prefix: "research-" },
-  scaffold: { channel_class: "initiative", prefix: "internal-" },
-  project: { channel_class: "initiative", prefix: "internal-" },
-  docs: { channel_class: "initiative", prefix: "internal-" },
-  "remote-only": { channel_class: "initiative", prefix: "internal-" },
-  generic: { channel_class: "initiative", prefix: "internal-" },
+/**
+ * Project kind -> channel class.
+ *
+ * This is the one mapping that survives, and it is deliberately narrow: it
+ * maps this package's own `WorkspaceKind` enum onto the convention's class
+ * vocabulary. It contains no channel names and no name prefixes, so it cannot
+ * reintroduce the naming defect above — it only labels a channel that has
+ * already been named by the project slug.
+ *
+ * It exists here because nothing publishes the convention machine-readably
+ * today (the knowledge item is prose and `conversations` accepts `--class` as
+ * an unvalidated free-form string). `null` means "this kind does not imply a
+ * class": the CLI then asserts nothing rather than inventing a label, and
+ * `conversations` keeps ownership of the default.
+ */
+const WORKSPACE_KIND_CHANNEL_CLASSES: Record<WorkspaceKind, ProjectChannelClass | null> = {
+  "open-source": "package",
+  "internal-app": "product",
+  platform: "product",
+  "company-website": "product",
+  community: "product",
+  project: "work-project",
+  experiment: "initiative",
+  scaffold: null,
+  docs: null,
+  "remote-only": null,
+  generic: null,
 };
 
 export interface ProjectChannelDerivation {
   channel: string;
-  channel_class: ProjectChannelClass;
+  /** `null` when the project's kind does not imply a class — see {@link WORKSPACE_KIND_CHANNEL_CLASSES}. */
+  channel_class: ProjectChannelClass | null;
   source: "integration" | "derived";
 }
 
@@ -129,35 +156,44 @@ export function normalizeProjectChannelName(value: string): string {
     .replace(/^[-.]+|[-.]+$/g, "");
 }
 
-export function classifyProjectChannelName(channel: string): ProjectChannelClass {
-  const match = CHANNEL_PREFIX_CLASSES.find(({ prefix }) => channel.startsWith(prefix));
-  return match?.channel_class ?? "package";
+/**
+ * The project's channel class: an explicit `conversations_channel_class`
+ * integration if the project carries one, otherwise whatever its kind implies,
+ * otherwise `null` (unknown — assert nothing).
+ *
+ * Note this never inspects the channel *name*. Classifying by name prefix is
+ * what made a correctly named `iproj-*` channel report `package`, since the
+ * prefix table it consulted had no `iproj-` row.
+ */
+export function resolveProjectChannelClass(
+  project: Pick<Workspace, "kind"> & { integrations?: WorkspaceIntegrations },
+): ProjectChannelClass | null {
+  const explicit = project.integrations?.[PROJECT_CHANNEL_CLASS_INTEGRATION_KEY]?.trim().toLowerCase();
+  if (explicit) {
+    const known = PROJECT_CHANNEL_CLASSES.find((value) => value === explicit);
+    if (known) return known;
+  }
+  return WORKSPACE_KIND_CHANNEL_CLASSES[project.kind] ?? null;
 }
 
 export function deriveProjectChannel(
   project: Pick<Workspace, "slug" | "kind"> & { integrations?: WorkspaceIntegrations },
 ): ProjectChannelDerivation {
+  const channel_class = resolveProjectChannelClass(project);
+
+  // An explicitly linked channel always wins: it is how a project states that
+  // its channel is not named after its slug.
   const linked = project.integrations?.[PROJECT_CHANNEL_INTEGRATION_KEY]?.trim();
   if (linked) {
     const channel = normalizeProjectChannelName(linked);
     if (!channel) throw new Error(`Linked conversations channel is not a valid channel name: ${linked}`);
-    return { channel, channel_class: classifyProjectChannelName(channel), source: "integration" };
+    return { channel, channel_class, source: "integration" };
   }
 
-  const base = normalizeProjectChannelName(project.slug);
-  if (!base) throw new Error(`Project slug does not produce a valid channel name: ${project.slug}`);
-
-  const prefixed = CHANNEL_PREFIX_CLASSES.find(({ prefix }) => base.startsWith(prefix) && base.length > prefix.length);
-  if (prefixed) {
-    return { channel: base, channel_class: prefixed.channel_class, source: "derived" };
-  }
-
-  const rule = KIND_CHANNEL_RULES[project.kind] ?? KIND_CHANNEL_RULES.generic;
-  if (rule.prefix === null) {
-    const flat = base.replace(/^open-/, "");
-    return { channel: flat || base, channel_class: rule.channel_class, source: "derived" };
-  }
-  return { channel: `${rule.prefix}${base}`, channel_class: rule.channel_class, source: "derived" };
+  // The slug already carries the convention — use it as given.
+  const channel = normalizeProjectChannelName(project.slug);
+  if (!channel) throw new Error(`Project slug does not produce a valid channel name: ${project.slug}`);
+  return { channel, channel_class, source: "derived" };
 }
 
 export function resolveProjectChannelForProject(project: Workspace): ProjectChannelResolution {
@@ -217,12 +253,15 @@ export function conversationsCliRunner(binary?: string): ConversationsChannelRun
   };
 }
 
-function projectChannelDescription(project: Workspace, channelClass: ProjectChannelClass): string {
-  return `Project channel for ${project.name.trim() || project.slug} (${project.slug}) — class ${channelClass}; auto-created by @hasna/projects.`;
+function projectChannelDescription(project: Workspace, channelClass: ProjectChannelClass | null): string {
+  const label = project.name.trim() || project.slug;
+  const classPart = channelClass ? ` — class ${channelClass}` : "";
+  return `Project channel for ${label} (${project.slug})${classPart}; auto-created by @hasna/projects.`;
 }
 
-function projectChannelTopic(project: Workspace, channelClass: ProjectChannelClass): string {
-  return `${project.name.trim() || project.slug} (${project.slug}) — ${channelClass} channel`;
+function projectChannelTopic(project: Workspace, channelClass: ProjectChannelClass | null): string {
+  const label = project.name.trim() || project.slug;
+  return `${label} (${project.slug}) — ${channelClass ? `${channelClass} channel` : "project channel"}`;
 }
 
 function errorText(err: unknown): string {
@@ -230,12 +269,14 @@ function errorText(err: unknown): string {
 }
 
 /**
- * `conversations channel create` args. The derived channel class is passed
+ * `conversations channel create` args. The resolved channel class is passed
  * through as `--class` (stored by conversations at
  * `metadata.channel_schema.class`) so project channels satisfy the fleet
  * naming/class convention instead of landing class-less; `--topic` gives the
- * channel a human label. Older `conversations` builds do not know those flags,
- * so callers fall back to the minimal arg set — see {@link createConversationsChannel}.
+ * channel a human label. A project whose kind implies no class emits no
+ * `--class` at all rather than a made-up one, leaving the default to
+ * conversations. Older `conversations` builds do not know those flags, so
+ * callers fall back to the minimal arg set — see {@link createConversationsChannel}.
  */
 function buildChannelCreateArgs(
   project: Workspace,
@@ -250,7 +291,8 @@ function buildChannelCreateArgs(
     projectChannelDescription(project, derivation.channel_class),
   ];
   if (options.withMetadata !== false) {
-    args.push("--class", derivation.channel_class, "--topic", projectChannelTopic(project, derivation.channel_class));
+    if (derivation.channel_class) args.push("--class", derivation.channel_class);
+    args.push("--topic", projectChannelTopic(project, derivation.channel_class));
   }
   args.push("-j");
   if (options.from?.trim()) args.push("--from", options.from.trim());
@@ -298,7 +340,8 @@ const NO_SIDE_EFFECTS: ProjectChannelSideEffects = {
 function derivationErrorResult(project: Workspace, message: string): ProjectChannelEnsureResult {
   return {
     channel: "",
-    channel_class: "initiative",
+    // Derivation failed, so no class was established either.
+    channel_class: null,
     source: "derived",
     status: "error",
     created: false,
@@ -325,7 +368,7 @@ function plannedResult(
     warnings: [],
     side_effects: { ...NO_SIDE_EFFECTS, integration_linked: alreadyLinked },
     project,
-    message: `Would ensure conversations channel ${derivation.channel} (${derivation.channel_class}).`,
+    message: `Would ensure conversations channel ${derivation.channel}${derivation.channel_class ? ` (${derivation.channel_class})` : ""}.`,
   };
 }
 

@@ -769,13 +769,13 @@ describe("project-first CLI surface", () => {
 
     const channel = runProjects(["channel", "agent-assist"], env);
     expect(channel.exitCode).toBe(0);
-    expect(text(channel.stdout).trim()).toBe("internal-agent-assist");
+    expect(text(channel.stdout).trim()).toBe("agent-assist");
 
     const channelJson = runProjects(["channel", "agent-assist", "--json"], env);
     expect(channelJson.exitCode).toBe(0);
     const channelPayload = JSON.parse(text(channelJson.stdout)) as { channel: string; channel_class: string; linked: boolean };
-    expect(channelPayload.channel).toBe("internal-agent-assist");
-    expect(channelPayload.channel_class).toBe("initiative");
+    expect(channelPayload.channel).toBe("agent-assist");
+    expect(channelPayload.channel_class).toBe("work-project");
     expect(channelPayload.linked).toBe(false);
 
     const handoff = runProjects(["handoff", "agent-assist", "--json"], env);
@@ -2143,11 +2143,11 @@ describe("project-first CLI surface", () => {
         project: { integrations: Record<string, string> };
       };
       expect(created.status).toBe("created");
-      expect(created.channel).toBe("iapp-channel-ensure-probe");
+      expect(created.channel).toBe("channel-ensure-probe");
       expect(created.channel_class).toBe("product");
       // Linked integration is persisted on the cloud project record.
       expect(created.linked).toBe(true);
-      expect(created.project.integrations["conversations_channel"]).toBe("iapp-channel-ensure-probe");
+      expect(created.project.integrations["conversations_channel"]).toBe("channel-ensure-probe");
       expect(requests.some((r) => r.method === "PATCH" && r.path === `/v1/projects/${projectId}`)).toBe(true);
       // The unsupported audit-event POST is reported as a non-fatal warning.
       expect(created.side_effects["channel_created"]).toBe(true);
