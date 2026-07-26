@@ -6,6 +6,7 @@ import { join } from "node:path";
 const REPO_ROOT = join(import.meta.dir, "../..");
 const TEST_API_KEY = "hasna_todos_test_key";
 const PLAN_ID = "77777777-7777-4777-8777-777777777777";
+const TARGET_PLAN_ID = "88888888-8888-4888-8888-888888888888";
 const tempRoots: string[] = [];
 
 afterEach(() => {
@@ -103,6 +104,44 @@ describe("cloud CLI plan commands", () => {
       expect(completed).toMatchObject({ exitCode: 0, stderr: "" });
       expect(JSON.parse(completed.stdout)).toMatchObject({ id: PLAN_ID, status: "completed" });
 
+      const updated = await runCli(
+        [
+          "--json",
+          "plans",
+          "--update",
+          "codila-cli-control",
+          "--name",
+          "Codila delivery",
+          "--description",
+          "Updated delivery plan",
+          "--slug",
+          "codila-delivery",
+          "--status",
+          "active",
+        ],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(updated).toMatchObject({ exitCode: 0, stderr: "" });
+      expect(JSON.parse(updated.stdout)).toMatchObject({
+        id: PLAN_ID,
+        name: "Codila delivery",
+        description: "Updated delivery plan",
+        slug: "codila-delivery",
+        status: "active",
+      });
+
+      const renamed = await runCli(
+        ["--json", "plans", "--rename", "codila-delivery", "Codila final delivery"],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(renamed).toMatchObject({ exitCode: 0, stderr: "" });
+      expect(JSON.parse(renamed.stdout)).toMatchObject({
+        id: PLAN_ID,
+        name: "Codila final delivery",
+      });
+
       const deleted = await runCli(["--json", "plans", "--delete", PLAN_ID], root, `http://127.0.0.1:${server.port}`);
       expect(deleted).toMatchObject({ exitCode: 0, stderr: "" });
       expect(JSON.parse(deleted.stdout)).toEqual({ deleted: true });
@@ -115,8 +154,170 @@ describe("cloud CLI plan commands", () => {
           description: "Private CLI release plan",
         },
       });
-      expect(requests.at(-3)).toMatchObject({ method: "PATCH", path: `/v1/plans/${PLAN_ID}`, body: { status: "completed" } });
+      expect(requests).toContainEqual(expect.objectContaining({
+        method: "PATCH",
+        path: `/v1/plans/${PLAN_ID}`,
+        body: { status: "completed" },
+      }));
+      expect(requests).toContainEqual(expect.objectContaining({
+        method: "PATCH",
+        path: `/v1/plans/${PLAN_ID}`,
+        body: {
+          name: "Codila delivery",
+          description: "Updated delivery plan",
+          slug: "codila-delivery",
+          status: "active",
+        },
+      }));
+      expect(requests).toContainEqual(expect.objectContaining({
+        method: "PATCH",
+        path: `/v1/plans/${PLAN_ID}`,
+        body: { name: "Codila final delivery" },
+      }));
       expect(requests.at(-1)).toMatchObject({ method: "DELETE", path: `/v1/plans/${PLAN_ID}` });
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("moves every plan task through the remote authority before deleting the plan", async () => {
+    const requests: Array<{ method: string; path: string; query: string; body?: unknown }> = [];
+    const plans = [
+      { id: PLAN_ID, slug: "source", name: "Source", status: "active", project_id: null },
+      { id: TARGET_PLAN_ID, slug: "target", name: "Target", status: "active", project_id: null },
+    ];
+    const tasks: Array<Record<string, unknown>> = [
+      {
+        id: "11111111-1111-4111-8111-111111111111",
+        short_id: "PLAN-1",
+        title: "Root",
+        status: "pending",
+        priority: "medium",
+        plan_id: PLAN_ID,
+        parent_id: null,
+        version: 1,
+      },
+      {
+        id: "22222222-2222-4222-8222-222222222222",
+        short_id: "PLAN-2",
+        title: "Child",
+        status: "pending",
+        priority: "medium",
+        plan_id: PLAN_ID,
+        parent_id: "11111111-1111-4111-8111-111111111111",
+        version: 4,
+      },
+    ];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        const body = request.method === "PATCH" ? await request.json() : undefined;
+        requests.push({ method: request.method, path: url.pathname, query: url.search, body });
+
+        const planMatch = url.pathname.match(/^\/v1\/plans\/([^/]+)$/);
+        if (planMatch && request.method === "GET") {
+          const plan = plans.find((item) => item.id === planMatch[1]);
+          return plan ? Response.json({ plan }) : Response.json({ error: "not found" }, { status: 404 });
+        }
+        if (url.pathname === "/v1/tasks" && request.method === "GET") {
+          const filtered = tasks.filter((task) => task.plan_id === url.searchParams.get("plan_id"));
+          return Response.json({ tasks: filtered, count: filtered.length, total: filtered.length });
+        }
+        const taskMatch = url.pathname.match(/^\/v1\/tasks\/([^/]+)$/);
+        if (taskMatch && request.method === "PATCH") {
+          const task = tasks.find((item) => item.id === taskMatch[1]);
+          if (!task) return Response.json({ error: "not found" }, { status: 404 });
+          Object.assign(task, body, { version: Number(task.version) + 1 });
+          return Response.json({ task });
+        }
+        if (planMatch && request.method === "DELETE") {
+          const index = plans.findIndex((item) => item.id === planMatch[1]);
+          if (index < 0) return Response.json({ error: "not found" }, { status: 404 });
+          plans.splice(index, 1);
+          return Response.json({ deleted: true, id: planMatch[1] });
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-plan-move-delete-"));
+    tempRoots.push(root);
+    try {
+      const result = await runCli(
+        ["--json", "plans", "--delete", PLAN_ID, "--move-tasks-to", TARGET_PLAN_ID],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+      expect(JSON.parse(result.stdout)).toEqual({
+        deleted: true,
+        moved_tasks: 2,
+        orphaned_tasks: 0,
+      });
+      expect(tasks.map((task) => task.plan_id)).toEqual([TARGET_PLAN_ID, TARGET_PLAN_ID]);
+      expect(requests).toContainEqual(expect.objectContaining({
+        method: "GET",
+        path: "/v1/tasks",
+        query: expect.stringContaining(`plan_id=${PLAN_ID}`),
+      }));
+      expect(requests.filter((request) => request.method === "PATCH" && request.path.startsWith("/v1/tasks/")))
+        .toHaveLength(2);
+      const deleteIndex = requests.findIndex((request) =>
+        request.method === "DELETE" && request.path === `/v1/plans/${PLAN_ID}`);
+      const lastTaskPatchIndex = requests.findLastIndex((request) =>
+        request.method === "PATCH" && request.path.startsWith("/v1/tasks/"));
+      expect(deleteIndex).toBeGreaterThan(lastTaskPatchIndex);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("warns before a remote plan delete would orphan tasks", async () => {
+    const task = {
+      id: "33333333-3333-4333-8333-333333333333",
+      short_id: "PLAN-3",
+      title: "Orphaned",
+      status: "pending",
+      priority: "medium",
+      plan_id: PLAN_ID,
+      parent_id: null,
+      version: 1,
+    };
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "GET") {
+          return Response.json({ plan: { id: PLAN_ID, slug: "source", name: "Source", status: "active" } });
+        }
+        if (url.pathname === "/v1/tasks" && request.method === "GET") {
+          return Response.json({ tasks: [task], count: 1, total: 1 });
+        }
+        if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "DELETE") {
+          task.plan_id = null as unknown as string;
+          return Response.json({ deleted: true, id: PLAN_ID });
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-plan-orphan-warning-"));
+    tempRoots.push(root);
+    try {
+      const result = await runCli(
+        ["--json", "plans", "--delete", PLAN_ID],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toContain("Warning: deleting plan Source will orphan 1 task");
+      expect(result.stderr).toContain("--move-tasks-to");
+      expect(JSON.parse(result.stdout)).toEqual({
+        deleted: true,
+        moved_tasks: 0,
+        orphaned_tasks: 1,
+      });
     } finally {
       server.stop(true);
     }
