@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-07-26
+
+### Removed
+
+- **BREAKING: the `connectors cloud` command group is gone**, along with the
+  `@hasna/cloud` dependency. `hasna/cloud` is deleted and formally unsupported
+  (owner ruling 2026-07-26); the repo will not be restored, so depending on it
+  was both a `no_cloud_guard` contract breach and a build one unpublish away
+  from breaking. A fleet conformance sweep found it wired into the core DB
+  layer. Removed: `connectors cloud sync push|pull|status` and everything
+  `registerCloudCommands` provided (`src/cli/commands/sync.ts`), the cloud MCP
+  tools via `registerCloudTools` (the server now serves 34 tools), and
+  `src/db/pg-migrations.ts`, which had no consumers and existed only to mirror
+  the SQLite schema for that sync. All of it served one purpose — syncing local
+  SQLite into a shared Postgres — which is exactly the pattern being retired.
+  There is no replacement; connectors is local-first.
+
+### Changed
+
+- **`SqliteAdapter` is now in-repo** at `src/db/sqlite-adapter.ts` instead of
+  being imported from `@hasna/cloud`. The original was itself a thin wrapper
+  over `bun:sqlite`, so this is a like-for-like swap; `src/db/database.ts`
+  re-exports it and every `type Database` consumer is unchanged. Both original
+  PRAGMAs are preserved, including `foreign_keys=ON`, which is load-bearing for
+  `connector_job_runs`' `ON DELETE CASCADE`. Bindings are typed
+  `SQLQueryBindings | SQLQueryBindings[]` because call sites use both the spread
+  and array forms.
+
+### Added
+
+- `src/no-cloud-boundary.test.ts` fails the build if `@hasna/cloud` is
+  reintroduced — as a dependency, as an import in any source file, or as a
+  registration symbol in the CLI or MCP server. It matches module specifiers
+  rather than bare mentions, so prose explaining the removal does not trip it.
+
 ### Tests
 
 - **`connect-x` OAuth 2.0: lock in public-client token exchange (#1).** Added
