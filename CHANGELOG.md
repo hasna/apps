@@ -4,6 +4,34 @@ All notable changes to `@hasna/projects` are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **BREAKING — channel derivation no longer imposes a prefix.** `deriveProjectChannel`
+  rewrote the project slug through two hardcoded tables that were this package's
+  private copy of the fleet channel naming convention. `KIND_CHANNEL_RULES`
+  pinned kind `project` to an `internal-` prefix, and the anti-double-prefix
+  guard only recognised prefixes listed in `CHANNEL_PREFIX_CLASSES`, which had
+  no `iproj-` row — so `iproj-agent-ceo` derived `internal-iproj-agent-ceo`.
+  `classifyProjectChannelName` guessed the class from the same list and fell
+  back to `package`, which is why no channel on the fleet ever carried the
+  convention's `work-project` class. Both tables are removed. The derived
+  channel is now the normalized slug, verbatim: no prefix is added and none is
+  stripped (including the former `open-` strip for `open-source` projects).
+  An explicitly linked `integrations.conversations_channel` still wins over
+  derivation, which is what keeps channels named under the old behaviour
+  resolving to the history they hold.
+- **BREAKING — `channel_class` is now resolved from the project, and nullable.**
+  `classifyProjectChannelName` and `CHANNEL_PREFIX_CLASSES` are removed from the
+  SDK surface, replaced by `resolveProjectChannelClass`: an explicit
+  `integrations.conversations_channel_class` (new,
+  `PROJECT_CHANNEL_CLASS_INTEGRATION_KEY`), else the project kind, else `null`.
+  `ProjectChannelDerivation.channel_class` is `ProjectChannelClass | null`, and
+  `--class` is omitted rather than guessed when it is `null`, leaving the
+  default to `conversations`, which owns `metadata.channel_schema.class`.
+  `PROJECT_CHANNEL_CLASSES` gains `work-project`.
+
 ## [0.1.95]
 
 ### Fixed
