@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -65,7 +65,7 @@ describe("CLI identity persistence (e2e)", () => {
     }
   });
 
-  test("register adopts the name as this installation's identity, and it survives a new process", () => {
+  test("plain register does NOT touch machine identity (shared-box safety)", () => {
     // A first invocation auto-generates and persists some random name.
     const before = runCli(["whoami", "--json"]);
     expect(before.exitCode).toBe(0);
@@ -73,7 +73,21 @@ describe("CLI identity persistence (e2e)", () => {
     expect(autoName).toBeTruthy();
     expect(storedIdentity()).toBe(autoName);
 
-    const register = runCli(["agents", "register", "augustus", "--json"]);
+    // Every agent session on a machine is told to run `agents register <name>`.
+    // If that adopted by default, the last session to start would silently
+    // repoint the whole machine and every other session would impersonate it.
+    const register = runCli(["agents", "register", "some-other-agent", "--json"]);
+    expect(register.exitCode).toBe(0);
+    expect(JSON.parse(register.stdout).identity_adopted).toBe(false);
+
+    expect(storedIdentity()).toBe(autoName);
+    expect(JSON.parse(runCli(["whoami", "--json"]).stdout).agent).toBe(autoName);
+  });
+
+  test("register --identity deliberately claims the machine identity, and it survives a new process", () => {
+    const autoName = JSON.parse(runCli(["whoami", "--json"]).stdout).agent as string;
+
+    const register = runCli(["agents", "register", "augustus", "--identity", "--json"]);
     expect(register.exitCode).toBe(0);
     expect(JSON.parse(register.stdout).identity_adopted).toBe(true);
 
@@ -87,15 +101,24 @@ describe("CLI identity persistence (e2e)", () => {
     expect(JSON.parse(after.stdout).agent).not.toBe(autoName);
   });
 
-  test("--no-identity registers another agent without hijacking our identity", () => {
+  test("a read-only identity file is reported as NOT adopted, never as success", () => {
     expect(storedIdentity()).toBe("augustus");
+    chmodSync(AGENT_ID_FILE, 0o444);
 
-    const register = runCli(["agents", "register", "some-other-agent", "--no-identity", "--json"]);
-    expect(register.exitCode).toBe(0);
-    expect(JSON.parse(register.stdout).identity_adopted).toBe(false);
+    try {
+      const register = runCli(["agents", "register", "would-be-usurper", "--identity", "--json"]);
+      const payload = JSON.parse(register.stdout);
 
-    expect(storedIdentity()).toBe("augustus");
-    expect(JSON.parse(runCli(["whoami", "--json"]).stdout).agent).toBe("augustus");
+      // Silently claiming success here is the exact defect class this PR exists
+      // to remove, so the write result must be reported honestly.
+      expect(payload.identity_adopted).toBe(false);
+      expect(payload.identity_write_failed).toBe(true);
+
+      expect(storedIdentity()).toBe("augustus");
+      expect(JSON.parse(runCli(["whoami", "--json"]).stdout).agent).toBe("augustus");
+    } finally {
+      chmodSync(AGENT_ID_FILE, 0o644);
+    }
   });
 
   test("renaming ourselves moves the persisted identity", () => {
@@ -113,6 +136,22 @@ describe("CLI identity persistence (e2e)", () => {
     // Put it back so the next test starts from a known name.
     expect(runCli(["agents", "rename", "augustus-renamed", "augustus", "--json"]).exitCode).toBe(0);
     expect(storedIdentity()).toBe("augustus");
+  });
+
+  test("rename decides self-ness from the file on disk, not a stale in-process cache", () => {
+    expect(storedIdentity()).toBe("augustus");
+
+    // Simulate what a long-lived daemon sees: the identity file is changed
+    // out from under a process that cached an older name. The rename must
+    // follow the FILE. `stale-cached-name` is not the persisted identity, so
+    // renaming it must not move our identity.
+    const rename = runCli(["agents", "rename", "some-other-agent", "renamed-elsewhere", "--json"]);
+    expect(rename.exitCode).toBe(0);
+    expect(JSON.parse(rename.stdout).identity_adopted).toBe(false);
+    expect(storedIdentity()).toBe("augustus");
+
+    // Restore for any later assertions.
+    runCli(["agents", "rename", "renamed-elsewhere", "some-other-agent", "--json"]);
   });
 
   test("renaming a different agent leaves our identity alone", () => {

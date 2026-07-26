@@ -6,7 +6,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { getStore } from "../../lib/store/index.js";
-import { resolveIdentity, updateCachedAutoName, getAutoName, isSelfRename } from "../../lib/identity.js";
+import { resolveIdentity, updateCachedAutoName, readPersistedIdentity, isSelfRename } from "../../lib/identity.js";
 import { normalizeAgentName } from "../../lib/presence.js";
 import { setSessionAgent, setClaudeSessionId } from "../channel.js";
 import { compactQueriedMessages, compactWindowedAgents, jsonText, resolveMcpWindow } from "../compact.js";
@@ -144,13 +144,21 @@ export function registerAgentTools(
       // other direction: it silently skipped the update whenever a caller passed an
       // explicit `from` that WAS its own name, which is how station01 was left
       // pinned to a discarded test name while presence said otherwise.
-      const adopted = isSelfRename(oldName, getAutoName());
-      if (adopted) {
-        updateCachedAutoName(normalizeAgentName(newName));
-      }
+      //
+      // Compare against the file, NOT getAutoName(): this server is a long-lived
+      // daemon whose cached name can be days stale, and acting on a stale cache
+      // would let one client overwrite another client's identity.
+      const isSelf = isSelfRename(oldName, readPersistedIdentity());
+      const identityAdopted = isSelf ? updateCachedAutoName(normalizeAgentName(newName)) : false;
 
       return {
-        content: [{ type: "text", text: JSON.stringify({ old_name: oldName, new_name: newName, renamed: true, identity_adopted: adopted }) }],
+        content: [{ type: "text", text: JSON.stringify({
+          old_name: oldName,
+          new_name: newName,
+          renamed: true,
+          identity_adopted: identityAdopted,
+          identity_write_failed: isSelf && !identityAdopted,
+        }) }],
       };
     } catch (e: any) {
       return {

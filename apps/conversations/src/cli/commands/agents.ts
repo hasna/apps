@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import { getStore } from "../../lib/store/index.js";
 import chalk from "chalk";
 import { closeDb } from "../../lib/db.js";
-import { resolveIdentity, getAutoName, updateCachedAutoName, isSelfRename } from "../../lib/identity.js";
+import { resolveIdentity, readPersistedIdentity, updateCachedAutoName, isSelfRename } from "../../lib/identity.js";
 import { isAgentConflict, normalizeAgentName } from "../../lib/presence.js";
 import { windowItems } from "../../lib/compact-output.js";
 import { getCliWindow, printCompactFooter } from "../compact.js";
@@ -148,18 +148,27 @@ export function registerAgentCommands(program: Command): void {
         // Presence lives in the store, but this installation's identity lives in
         // the local agent-id file. Without this the rename succeeds remotely and
         // the very next process resolves the OLD name again — the identity looks
-        // like it "reverts". Only adopt the new name when we renamed ourselves.
-        const adopted = isSelfRename(old, getAutoName());
-        if (adopted) {
-          updateCachedAutoName(normalizeAgentName(renamed));
-        }
+        // like it "reverts". Only follow the rename when we renamed OURSELVES,
+        // and decide that from the file on disk, never from the in-process cache
+        // (in a long-lived daemon that cache can be days stale).
+        const isSelf = isSelfRename(old, readPersistedIdentity());
+        const identityAdopted = isSelf ? updateCachedAutoName(normalizeAgentName(renamed)) : false;
+        const identityWriteFailed = isSelf && !identityAdopted;
 
         if (opts.json) {
-          console.log(JSON.stringify({ old_name: old, new_name: renamed, renamed: true, identity_adopted: adopted }));
+          console.log(JSON.stringify({
+            old_name: old,
+            new_name: renamed,
+            renamed: true,
+            identity_adopted: identityAdopted,
+            identity_write_failed: identityWriteFailed,
+          }));
         } else {
           console.log(chalk.green(`Agent "${old}" renamed to "${renamed}".`));
-          if (adopted) {
+          if (identityAdopted) {
             console.log(chalk.dim(`This installation's identity is now "${normalizeAgentName(renamed)}".`));
+          } else if (identityWriteFailed) {
+            console.error(chalk.red(`Renamed in presence, but could not update the local agent-id file (pinned read-only?). This installation still resolves as "${resolveIdentity()}" — which no longer exists in presence.`));
           }
         }
       } catch (e: any) {
@@ -177,7 +186,7 @@ export function registerAgentCommands(program: Command): void {
     .option("--role <role>", "Agent role (default: agent)")
     .option("--project <id>", "Project ID to lock agent to")
     .option("--force", "Force takeover even if another session is active")
-    .option("--no-identity", "Register the agent without adopting the name as this installation's identity")
+    .option("--identity", "Also adopt this name as this installation's identity (writes the machine-wide agent-id file)")
     .option("-j, --json", "Output as JSON")
     .action(async (name, opts) => {
       const agentName = (typeof name === "string" ? name : "").trim();
@@ -199,22 +208,41 @@ export function registerAgentCommands(program: Command): void {
         process.exit(1);
       }
 
-      // Registering is how an agent declares "I am <name>". Persist it, or the
-      // next process falls back to the previously stored agent-id and the
-      // registration silently has no effect on attribution.
       const registeredName = result.agent.agent;
-      const adopted = opts.identity !== false;
-      if (adopted) {
-        updateCachedAutoName(registeredName);
+
+      // Adopting is OPT-IN. The agent-id file is machine-wide: every session on
+      // this host that passes neither --from nor CONVERSATIONS_AGENT_ID resolves
+      // through it. Registering on a shared box must not silently repoint the
+      // whole machine — that is last-writer-wins between concurrent agents.
+      // Pass --identity to deliberately claim the machine identity.
+      let identityAdopted = false;
+      let identityWriteFailed = false;
+      if (opts.identity) {
+        identityAdopted = updateCachedAutoName(registeredName);
+        identityWriteFailed = !identityAdopted;
       }
 
+      // The env var outranks the file, so adopting does not necessarily change
+      // what this environment resolves to. Say what is actually true.
+      const envOverride = process.env.CONVERSATIONS_AGENT_ID?.trim() || null;
+
       if (opts.json) {
-        console.log(JSON.stringify({ ...result, identity_adopted: adopted }));
+        console.log(JSON.stringify({
+          ...result,
+          identity_adopted: identityAdopted,
+          identity_write_failed: identityWriteFailed,
+          identity_env_override: envOverride,
+        }));
       } else {
         const action = result.took_over ? chalk.yellow("took over") : result.created ? chalk.green("registered") : chalk.cyan("updated");
         console.log(`  ${action}  ${chalk.bold(registeredName)}  session: ${chalk.dim(sessionId)}`);
-        if (adopted) {
-          console.log(chalk.dim(`  identity   this installation now resolves as "${registeredName}"`));
+        if (identityAdopted) {
+          console.log(chalk.dim(`  identity   installation identity set to "${registeredName}"`));
+          if (envOverride && normalizeAgentName(envOverride) !== normalizeAgentName(registeredName)) {
+            console.log(chalk.yellow(`  warning    CONVERSATIONS_AGENT_ID="${envOverride}" overrides the file; this environment still resolves as "${envOverride}"`));
+          }
+        } else if (identityWriteFailed) {
+          console.error(chalk.red(`  identity   NOT changed — could not write ${chalk.bold("agent-id")} (pinned read-only?). This installation still resolves as "${resolveIdentity()}".`));
         }
       }
       closeDb();
