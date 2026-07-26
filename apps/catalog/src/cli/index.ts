@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { Command } from "commander";
 import { AppLifecycleSchema, ReleaseChannelSchema, type App } from "../contracts.js";
 import { defaultOpensourceRoot } from "../paths.js";
-import { loadProjectsJoin, seedCatalog } from "../seed.js";
+import { loadProjectsJoin, resolveDuplicateCheckouts, seedCatalog } from "../seed.js";
 import { startCatalogServer } from "../server/index.js";
 import { generateSite } from "../site.js";
 import { CatalogStore } from "../store.js";
@@ -41,14 +41,18 @@ program
   .option("--root <dir>", "opensource checkout directory", defaultOpensourceRoot())
   .option("--db <path>", "catalog SQLite database path")
   .option("--fixture <path>", "also write the seeded apps as a JSONL fixture")
-  .option("--no-projects-join", "skip joining against the open-projects registry")
+  .option("--duplicates <path>", "JSON map of duplicate checkout folders to their canonical folder")
+  .option("--seeded-from <label>", "provenance label stamped on every produced record")
+  .option("--no-projects-join", "skip joining against the projects registry")
   .option("--json", "print the full seed report as JSON", false)
-  .action((options: { root: string; db?: string; fixture?: string; projectsJoin: boolean; json: boolean }) => {
+  .action((options: { root: string; db?: string; fixture?: string; duplicates?: string; seededFrom?: string; projectsJoin: boolean; json: boolean }) => {
     const store = openStore(options);
     const report = seedCatalog({
       root: resolve(options.root),
       store,
       fixturePath: options.fixture ? resolve(options.fixture) : undefined,
+      duplicateCheckouts: resolveDuplicateCheckouts(options.duplicates ? resolve(options.duplicates) : undefined),
+      ...(options.seededFrom ? { seededFrom: options.seededFrom } : {}),
       projectsJoin: options.projectsJoin ? loadProjectsJoin() : [],
     });
     if (options.json) {
@@ -56,7 +60,7 @@ program
       return;
     }
     console.log(`Scanned ${report.scanned} folders under ${report.root}`);
-    console.log(`Seeded ${report.seeded.length} apps (${report.joinedProjects} joined to open-projects records)`);
+    console.log(`Seeded ${report.seeded.length} apps (${report.joinedProjects} joined to projects records)`);
     console.log(`Skipped ${report.skipped.length}:`);
     for (const skip of report.skipped) {
       console.log(`  - ${skip.folder}: ${skip.reason}`);
@@ -103,7 +107,7 @@ program
 program
   .command("get")
   .description("Get one app by its appId slug")
-  .argument("<appId>", "app id slug, e.g. open-todos")
+  .argument("<appId>", "app id slug, e.g. example-widget")
   .option("--db <path>", "catalog SQLite database path")
   .action((appId: string, options: { db?: string }) => {
     const store = openStore(options);

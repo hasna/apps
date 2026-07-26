@@ -1,6 +1,6 @@
 {
   "name": "@hasna/catalog",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Read-model app catalog for Hasna distribution: seed hasna.app.v1 records from opensource repos, query them via CLI/MCP/HTTP, and generate the public static catalog site.",
   "type": "module",
   "main": "dist/index.js",
@@ -52,12 +52,17 @@
   "scripts": {
     "clean": "rm -rf dist",
     "build": "bun run clean && bun build src/index.ts src/contracts.ts src/store.ts src/seed.ts src/site.ts src/ingest.ts src/types.ts src/paths.ts src/version.ts --root src --outdir dist --target bun && bun build src/cli/index.ts --outdir dist/cli --target bun --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist && chmod +x dist/cli/index.js dist/mcp/index.js",
-    "typecheck": "tsc --noEmit",
-    "test": "bun test ./tests",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.scripts.json",
+    "test": "bun test ./tests ./scripts",
     "dev:cli": "bun run src/cli/index.ts",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/cli/index.ts serve",
-    "prepublishOnly": "bun run build && bun run typecheck && bun test"
+    "prepublishOnly": "bun run verify:release",
+    "check:artifact": "bun scripts/check-packed-artifact.ts",
+    "prepack": "bun run build && bun run check:artifact",
+    "verify:release": "bun run typecheck && bun test && bun run build && bun run check:artifact",
+    "check:artifact:tarball": "bun scripts/check-packed-artifact.ts --postpack",
+    "postpack": "bun run check:artifact:tarball"
   },
   "keywords": [
     "catalog",

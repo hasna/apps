@@ -5,11 +5,11 @@ const validApp = {
   schema: "hasna.app.v1",
   id: "app_open_todos",
   createdAt: "2026-07-06T08:00:00.000Z",
-  appId: "open-todos",
-  npmName: "@hasna/todos",
-  repoFolder: "open-todos",
-  githubUrl: "https://github.com/hasna/todos",
-  projectSlug: "open-todos",
+  appId: "open-alpha",
+  npmName: "@example/alpha",
+  repoFolder: "open-alpha",
+  githubUrl: "https://github.com/example/todos",
+  projectSlug: "open-alpha",
   surfaces: {
     bins: ["todos", "todos-cli", "todos-mcp"],
     mcp: { transport: "http", bin: "todos-mcp" },
@@ -24,7 +24,7 @@ const validApp = {
 describe("vendored hasna.app.v1 mirror", () => {
   it("accepts the foundation valid example", () => {
     const parsed = AppSchema.parse(validApp);
-    expect(parsed.appId).toBe("open-todos");
+    expect(parsed.appId).toBe("open-alpha");
     expect(parsed.surfaces.mcp?.transport).toBe("http");
   });
 
@@ -33,11 +33,11 @@ describe("vendored hasna.app.v1 mirror", () => {
       schema: "hasna.app.v1",
       id: "app_open_uptime",
       createdAt: "2026-07-06T08:00:00.000Z",
-      appId: "open-uptime",
-      npmName: "@hasna/uptime",
-      repoFolder: "open-uptime",
-      githubUrl: "https://github.com/hasna/uptime",
-      projectSlug: "open-uptime",
+      appId: "open-beta",
+      npmName: "@example/beta",
+      repoFolder: "open-beta",
+      githubUrl: "https://github.com/example/uptime",
+      projectSlug: "open-beta",
       lifecycle: "active",
     });
     expect(parsed.surfaces).toEqual({ bins: [] });

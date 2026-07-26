@@ -11,9 +11,9 @@ function makeApp(appId: string, overrides: Partial<App> = {}): App {
     id: `app_${appId.replaceAll("-", "_")}`,
     createdAt: "2026-07-06T08:00:00.000Z",
     appId,
-    npmName: `@hasna/${appId.replace(/^open-/, "")}`,
+    npmName: `@example/${appId.replace(/^open-/, "")}`,
     repoFolder: appId,
-    githubUrl: `https://github.com/hasna/${appId}`,
+    githubUrl: `https://github.com/example/${appId}`,
     projectSlug: appId,
     surfaces: { bins: [appId.replace(/^open-/, "")] },
     lifecycle: "active",
@@ -36,22 +36,22 @@ afterEach(() => {
 
 describe("generateSite", () => {
   it("renders an index page and one landing page per app", () => {
-    const apps = [makeApp("open-todos", { summary: "Task tracking" }), makeApp("open-uptime")];
+    const apps = [makeApp("open-alpha", { summary: "Task tracking" }), makeApp("open-beta")];
     const result = generateSite({ apps, outDir, generatedAt: "2026-07-06T09:00:00.000Z" });
     expect(result.appCount).toBe(2);
     expect(result.pages.length).toBe(3);
     expect(existsSync(join(outDir, "index.html"))).toBe(true);
-    expect(existsSync(join(outDir, "apps", "open-todos", "index.html"))).toBe(true);
+    expect(existsSync(join(outDir, "apps", "open-alpha", "index.html"))).toBe(true);
 
     const index = readFileSync(join(outDir, "index.html"), "utf8");
-    expect(index).toContain("open-todos");
+    expect(index).toContain("open-alpha");
     expect(index).toContain("Task tracking");
     expect(index).toContain("v1.2.3");
 
-    const page = readFileSync(join(outDir, "apps", "open-todos", "index.html"), "utf8");
-    expect(page).toContain("bun add -g @hasna/todos");
-    expect(page).toContain("https://github.com/hasna/open-todos");
-    expect(page).toContain("https://www.npmjs.com/package/@hasna/todos");
+    const page = readFileSync(join(outDir, "apps", "open-alpha", "index.html"), "utf8");
+    expect(page).toContain("bun add -g @example/alpha");
+    expect(page).toContain("https://github.com/example/open-alpha");
+    expect(page).toContain("https://www.npmjs.com/package/@example/alpha");
     expect(page).toContain("v1.2.3");
   });
 
@@ -69,6 +69,6 @@ describe("helpers", () => {
   });
 
   it("installCommand uses bun", () => {
-    expect(installCommand(makeApp("open-todos"))).toBe("bun add -g @hasna/todos");
+    expect(installCommand(makeApp("open-alpha"))).toBe("bun add -g @example/alpha");
   });
 });

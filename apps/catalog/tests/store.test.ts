@@ -8,9 +8,9 @@ function makeApp(appId: string, overrides: Partial<App> = {}): App {
     id: `app_${appId.replaceAll("-", "_")}`,
     createdAt: "2026-07-06T08:00:00.000Z",
     appId,
-    npmName: `@hasna/${appId.replace(/^open-/, "")}`,
+    npmName: `@example/${appId.replace(/^open-/, "")}`,
     repoFolder: appId,
-    githubUrl: `https://github.com/hasna/${appId}`,
+    githubUrl: `https://github.com/example/${appId}`,
     projectSlug: appId,
     surfaces: { bins: [] },
     lifecycle: "active",
@@ -23,25 +23,25 @@ function makeApp(appId: string, overrides: Partial<App> = {}): App {
 describe("CatalogStore", () => {
   it("upserts and gets apps", () => {
     const store = new CatalogStore({ dbPath: ":memory:" });
-    expect(store.upsertApps([makeApp("open-todos"), makeApp("open-uptime")])).toBe(2);
+    expect(store.upsertApps([makeApp("open-alpha"), makeApp("open-beta")])).toBe(2);
     expect(store.countApps()).toBe(2);
-    const app = store.getApp("open-todos");
-    expect(app?.npmName).toBe("@hasna/todos");
+    const app = store.getApp("open-alpha");
+    expect(app?.npmName).toBe("@example/alpha");
     expect(store.getApp("missing")).toBeNull();
   });
 
   it("upsert replaces existing records by appId", () => {
     const store = new CatalogStore({ dbPath: ":memory:" });
-    store.upsertApps([makeApp("open-todos")]);
-    store.upsertApps([makeApp("open-todos", { summary: "Updated summary" })]);
+    store.upsertApps([makeApp("open-alpha")]);
+    store.upsertApps([makeApp("open-alpha", { summary: "Updated summary" })]);
     expect(store.countApps()).toBe(1);
-    expect(store.getApp("open-todos")?.summary).toBe("Updated summary");
+    expect(store.getApp("open-alpha")?.summary).toBe("Updated summary");
   });
 
   it("lists with lifecycle and channel filters", () => {
     const store = new CatalogStore({ dbPath: ":memory:" });
     store.upsertApps([
-      makeApp("open-todos"),
+      makeApp("open-alpha"),
       makeApp("open-old", { lifecycle: "deprecated" }),
       makeApp("open-beta", { releaseChannel: "beta" }),
     ]);
@@ -54,18 +54,18 @@ describe("CatalogStore", () => {
   it("searches across id, npm name, summary, and tags", () => {
     const store = new CatalogStore({ dbPath: ":memory:" });
     store.upsertApps([
-      makeApp("open-uptime", { summary: "Uptime monitoring service" }),
-      makeApp("open-todos", { tags: ["oss", "tasks"] }),
+      makeApp("open-beta", { summary: "Uptime monitoring service" }),
+      makeApp("open-alpha", { tags: ["oss", "tasks"] }),
     ]);
-    expect(store.searchApps("monitoring").map((a) => a.appId)).toEqual(["open-uptime"]);
-    expect(store.searchApps("tasks").map((a) => a.appId)).toEqual(["open-todos"]);
-    expect(store.searchApps("@hasna/uptime").map((a) => a.appId)).toEqual(["open-uptime"]);
+    expect(store.searchApps("monitoring").map((a) => a.appId)).toEqual(["open-beta"]);
+    expect(store.searchApps("tasks").map((a) => a.appId)).toEqual(["open-alpha"]);
+    expect(store.searchApps("@example/beta").map((a) => a.appId)).toEqual(["open-beta"]);
     expect(store.searchApps("nothing-here").length).toBe(0);
   });
 
   it("rejects invalid documents on upsert", () => {
     const store = new CatalogStore({ dbPath: ":memory:" });
-    expect(() => store.upsertApps([{ ...makeApp("open-todos"), appId: "Bad Slug" } as App])).toThrow();
+    expect(() => store.upsertApps([{ ...makeApp("open-alpha"), appId: "Bad Slug" } as App])).toThrow();
     expect(store.countApps()).toBe(0);
   });
 

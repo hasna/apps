@@ -4,7 +4,11 @@ export { CatalogStore, type CatalogStoreOptions } from "./store.js";
 export {
   buildAppRecord,
   dedupeByNpmName,
+  DEFAULT_SEED_SOURCE,
   DUPLICATE_CHECKOUTS,
+  DUPLICATE_CHECKOUTS_ENV,
+  loadDuplicateCheckouts,
+  resolveDuplicateCheckouts,
   excludedFolderReason,
   loadProjectsJoin,
   readSeedCandidate,

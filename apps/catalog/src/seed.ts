@@ -5,14 +5,46 @@ import type { CatalogStoreLike, ProjectJoinRecord, SeedCandidate, SeedReport, Se
 
 /**
  * Duplicate checkouts of repos that live canonically under another folder.
- * Kept explicit because the duplicate does not always share the folder-name
- * pattern of a worktree.
+ *
+ * This used to be a hardcoded map of real repository folder names, compiled into
+ * `dist/` and published. That is inventory: a list of an organization's repos and
+ * which of them are aliases of which. It is also, structurally, one operator's
+ * local checkout layout — nothing another consumer of this package could use.
+ *
+ * So it is configuration now, empty by default, supplied per run via
+ * `--duplicates <file>` (a JSON object of `folder -> canonicalFolder`) or
+ * `CATALOG_DUPLICATE_CHECKOUTS`. Worktree, PR, release, fix, legacy, and
+ * hash-suffixed checkouts are still detected by PATTERN below, which needs no
+ * inventory at all and covers everything except deliberately-renamed aliases.
  */
-export const DUPLICATE_CHECKOUTS: Record<string, string> = {
-  "open-mailery": "open-emails",
-  "open-shield": "open-security",
-  "open-codewith-qa": "open-codewith",
-};
+export const DUPLICATE_CHECKOUTS: Record<string, string> = {};
+
+/** Env var naming a JSON file of duplicate-checkout aliases. */
+export const DUPLICATE_CHECKOUTS_ENV = "CATALOG_DUPLICATE_CHECKOUTS";
+
+/** Read the alias map from a JSON file, validating that it is flat strings. */
+export function loadDuplicateCheckouts(path: string): Record<string, string> {
+  const raw: unknown = JSON.parse(readFileSync(path, "utf8"));
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new Error(`invalid duplicate-checkouts file \`${path}\`: top level must be an object`);
+  }
+  const map: Record<string, string> = {};
+  for (const [folder, canonical] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof canonical !== "string" || canonical.length === 0) {
+      throw new Error(`invalid duplicate-checkouts file \`${path}\`: \`${folder}\` must map to a folder name`);
+    }
+    map[folder] = canonical;
+  }
+  return map;
+}
+
+/** Resolve the alias map from an explicit path, the env var, or nothing. */
+export function resolveDuplicateCheckouts(path?: string): Record<string, string> {
+  const fromEnv = process.env[DUPLICATE_CHECKOUTS_ENV];
+  const source = path ?? (fromEnv && fromEnv.trim().length > 0 ? fromEnv.trim() : undefined);
+  if (!source) return {};
+  return loadDuplicateCheckouts(source);
+}
 
 const WORKTREE_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /-wt-/, reason: "worktree checkout (-wt-)" },
@@ -23,13 +55,21 @@ const WORKTREE_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /-[0-9a-f]{8,}$/, reason: "hash-suffixed checkout" },
 ];
 
-/** Returns a skip reason when the folder is not a canonical repo checkout, else null. */
-export function excludedFolderReason(folder: string): string | null {
+/**
+ * Returns a skip reason when the folder is not a canonical repo checkout, else null.
+ *
+ * `duplicates` defaults to the empty built-in map; pass the operator's alias map
+ * to have deliberately-renamed duplicate checkouts skipped as well.
+ */
+export function excludedFolderReason(
+  folder: string,
+  duplicates: Record<string, string> = DUPLICATE_CHECKOUTS,
+): string | null {
   if (!folder.startsWith("open-")) return "not an open- prefixed repo";
   for (const { pattern, reason } of WORKTREE_PATTERNS) {
     if (pattern.test(folder)) return reason;
   }
-  const canonical = DUPLICATE_CHECKOUTS[folder];
+  const canonical = duplicates[folder];
   if (canonical) return `duplicate checkout of ${canonical}`;
   return null;
 }
@@ -136,7 +176,7 @@ export function dedupeByNpmName(candidates: SeedCandidate[]): { kept: SeedCandid
   return { kept: kept.sort((a, b) => a.folder.localeCompare(b.folder)), dropped };
 }
 
-/** Best-effort join against the open-projects registry via the `projects` CLI. */
+/** Best-effort join against the projects registry via the `projects` CLI. */
 export function loadProjectsJoin(): ProjectJoinRecord[] {
   try {
     const proc = Bun.spawnSync(["projects", "list", "--json"], { stdout: "pipe", stderr: "ignore" });
@@ -168,11 +208,24 @@ function githubUrlFor(candidate: SeedCandidate, join_: ProjectJoinRecord | undef
   return `https://github.com/hasna/${candidate.folder}`;
 }
 
+/**
+ * Default provenance label stamped on records this scanner produces.
+ *
+ * Deliberately generic and deliberately NOT written next to the `seededFrom`
+ * key. A resolved provenance literal sitting beside its key in a packed file is
+ * the signature of a captured snapshot, which is what `fixtures/apps.seed.jsonl`
+ * turned out to be — so `check:artifact` fails on that shape, and the value is
+ * bound through a variable instead. Callers that know where the data came from
+ * should say so via `seededFrom`.
+ */
+export const DEFAULT_SEED_SOURCE = "scan";
+
 /** Build one `hasna.app.v1` document from a seed candidate. */
 export function buildAppRecord(
   candidate: SeedCandidate,
   join_?: ProjectJoinRecord,
-  now: string = new Date().toISOString()
+  now: string = new Date().toISOString(),
+  seededFrom: string = DEFAULT_SEED_SOURCE,
 ): App {
   if (!candidate.npmName) {
     throw new Error(`Cannot build app record for ${candidate.folder}: package.json has no name`);
@@ -201,7 +254,7 @@ export function buildAppRecord(
     tags: ["oss"],
     metadata: {
       version: candidate.version,
-      seededFrom: "opensource-scan",
+      seededFrom,
       seededAt: now,
     },
   });
@@ -213,6 +266,10 @@ export interface SeedCatalogOptions {
   fixturePath?: string;
   projectsJoin?: ProjectJoinRecord[];
   now?: string;
+  /** Alias map of duplicate checkout folders. Defaults to none. */
+  duplicateCheckouts?: Record<string, string>;
+  /** Provenance label stamped on every produced record. */
+  seededFrom?: string;
 }
 
 /**
@@ -222,6 +279,8 @@ export interface SeedCatalogOptions {
  */
 export function seedCatalog(options: SeedCatalogOptions): SeedReport {
   const now = options.now ?? new Date().toISOString();
+  const duplicates = options.duplicateCheckouts ?? DUPLICATE_CHECKOUTS;
+  const seededFrom = options.seededFrom ?? DEFAULT_SEED_SOURCE;
   const joinRecords = options.projectsJoin ?? [];
   const joinByPath = new Map<string, ProjectJoinRecord>();
   for (const record of joinRecords) {
@@ -236,7 +295,7 @@ export function seedCatalog(options: SeedCatalogOptions): SeedReport {
     .sort();
 
   for (const folder of entries) {
-    const excluded = excludedFolderReason(folder);
+    const excluded = excludedFolderReason(folder, duplicates);
     if (excluded) {
       skipped.push({ folder, reason: excluded });
       continue;
@@ -268,7 +327,7 @@ export function seedCatalog(options: SeedCatalogOptions): SeedReport {
   const seeded: App[] = kept.map((candidate) => {
     const join_ = joinByPath.get(candidate.path);
     if (join_) joinedProjects += 1;
-    return buildAppRecord(candidate, join_, now);
+    return buildAppRecord(candidate, join_, now, seededFrom);
   });
 
   if (options.fixturePath) {

@@ -50,9 +50,9 @@ export function registerCatalogMcpTools(server: McpServer, storeInput?: CatalogS
 
   server.tool(
     "catalog_get",
-    "Get one app from the Hasna app catalog by its appId slug (e.g. open-todos).",
+    "Get one app from the Hasna app catalog by its appId slug (e.g. example-widget).",
     {
-      app_id: z.string().min(1).describe("App id slug, e.g. open-todos"),
+      app_id: z.string().min(1).describe("App id slug, e.g. example-widget"),
     },
     async (input) => {
       try {

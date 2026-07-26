@@ -80,7 +80,7 @@ export function contractBaseSchema<TSchema extends string>(schema: TSchema) {
 
 // --- shared distribution primitives ---------------------------------------
 
-/** Stable lowercase dashed app identity slug, e.g. `open-todos`. */
+/** Stable lowercase dashed app identity slug, e.g. `example-widget`. */
 export const AppIdSchema = z
   .string()
   .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "App ids must be lowercase dashed identifiers");

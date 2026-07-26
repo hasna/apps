@@ -2,8 +2,8 @@ import { describe, expect, it } from "bun:test";
 import { createRolloutIngestionHook } from "../src/ingest.js";
 
 const validData = {
-  appId: "open-todos",
-  package: "@hasna/todos",
+  appId: "open-alpha",
+  package: "@example/alpha",
   version: "1.2.3",
   machine: "spark01",
   action: "install",

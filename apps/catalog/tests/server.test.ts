@@ -9,9 +9,9 @@ function makeApp(appId: string, overrides: Partial<App> = {}): App {
     id: `app_${appId.replaceAll("-", "_")}`,
     createdAt: "2026-07-06T08:00:00.000Z",
     appId,
-    npmName: `@hasna/${appId.replace(/^open-/, "")}`,
+    npmName: `@example/${appId.replace(/^open-/, "")}`,
     repoFolder: appId,
-    githubUrl: `https://github.com/hasna/${appId}`,
+    githubUrl: `https://github.com/example/${appId}`,
     projectSlug: appId,
     surfaces: { bins: [] },
     lifecycle: "active",
@@ -24,8 +24,8 @@ function makeApp(appId: string, overrides: Partial<App> = {}): App {
 function makeHandler() {
   const store = new CatalogStore({ dbPath: ":memory:" });
   store.upsertApps([
-    makeApp("open-todos", { summary: "Task tracking" }),
-    makeApp("open-uptime", { summary: "Uptime monitoring", lifecycle: "stub" }),
+    makeApp("open-alpha", { summary: "Task tracking" }),
+    makeApp("open-beta", { summary: "Uptime monitoring", lifecycle: "stub" }),
   ]);
   return createCatalogHandler({ store });
 }
@@ -47,14 +47,14 @@ describe("catalog HTTP handler", () => {
     const stubs = (await handler(new Request("http://localhost/v1/apps?lifecycle=stub")).json()) as {
       apps: Array<{ appId: string }>;
     };
-    expect(stubs.apps.map((app) => app.appId)).toEqual(["open-uptime"]);
+    expect(stubs.apps.map((app) => app.appId)).toEqual(["open-beta"]);
   });
 
   it("GET /v1/apps/:appId returns one app or 404", async () => {
-    const found = handler(new Request("http://localhost/v1/apps/open-todos"));
+    const found = handler(new Request("http://localhost/v1/apps/open-alpha"));
     expect(found.status).toBe(200);
     const body = (await found.json()) as { app: { npmName: string } };
-    expect(body.app.npmName).toBe("@hasna/todos");
+    expect(body.app.npmName).toBe("@example/alpha");
     expect(handler(new Request("http://localhost/v1/apps/missing-app")).status).toBe(404);
   });
 
@@ -63,7 +63,7 @@ describe("catalog HTTP handler", () => {
     const result = (await handler(new Request("http://localhost/v1/search?q=monitoring")).json()) as {
       apps: Array<{ appId: string }>;
     };
-    expect(result.apps.map((app) => app.appId)).toEqual(["open-uptime"]);
+    expect(result.apps.map((app) => app.appId)).toEqual(["open-beta"]);
   });
 
   it("rejects non-GET methods (read model)", () => {
