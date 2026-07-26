@@ -577,16 +577,23 @@ export function registerPlanTemplateCommands(program: Command) {
         // so an unanswerable read reports no counts rather than counts we cannot
         // stand behind. With --move-tasks-to the read is load-bearing and any
         // failure surfaces.
+        //
+        // `include_archived` is REQUIRED here: archiving sets archived_at but
+        // leaves plan_id intact, so an archived task is still a member of the
+        // plan and is orphaned by the delete exactly like a live one. Without it
+        // the archived members are invisible — silently dropped by
+        // --move-tasks-to and missing from the orphan count. The plan artifact
+        // writer already reads the plan's task surface this way.
         let planTasks: Task[] | null;
         if (cloud) {
           try {
-            planTasks = await cloudListTasks(cloud, { plan_id: plan.id, include_subtasks: true });
+            planTasks = await cloudListTasks(cloud, { plan_id: plan.id, include_subtasks: true, include_archived: true });
           } catch (e) {
             if (target) handleError(e);
             planTasks = null;
           }
         } else {
-          planTasks = listTasks({ plan_id: plan.id });
+          planTasks = listTasks({ plan_id: plan.id, include_archived: true });
         }
 
         let movedTasks = 0;

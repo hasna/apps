@@ -372,6 +372,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             { name: "task_list_id", in: "query", schema: { type: "string" } },
             { name: "assigned_to", in: "query", schema: { type: "string" } },
             { name: "agent_id", in: "query", schema: { type: "string" } },
+            { name: "include_archived", in: "query", schema: { type: "boolean" } },
             { name: "limit", in: "query", schema: { type: "integer", minimum: 1 } },
             { name: "offset", in: "query", schema: { type: "integer", minimum: 0 } },
           ],

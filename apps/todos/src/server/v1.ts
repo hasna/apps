@@ -476,6 +476,14 @@ export async function handleV1Request(
           if (includeSubtasks !== null && includeSubtasks !== "true" && includeSubtasks !== "false") {
             return error(400, "include_subtasks must be true or false");
           }
+          // Archived tasks keep every other association (plan_id, task_list_id,
+          // project_id), so a client that needs a complete membership view — the
+          // CLI's plan-delete/migration preflight — has to be able to ask for
+          // them. Excluded by default, matching the local `listTasks` contract.
+          const includeArchived = url.searchParams.get("include_archived");
+          if (includeArchived !== null && includeArchived !== "true" && includeArchived !== "false") {
+            return error(400, "include_archived must be true or false");
+          }
           const hasParentFilter = url.searchParams.has("parent_id");
           const filter = {
             ...(url.searchParams.get("status") ? {
@@ -496,6 +504,7 @@ export async function handleV1Request(
             ...(url.searchParams.get("task_list_id") ? { task_list_id: url.searchParams.get("task_list_id")! } : {}),
             ...(url.searchParams.get("assigned_to") ? { assigned_to: url.searchParams.get("assigned_to")! } : {}),
             ...(url.searchParams.get("agent_id") ? { agent_id: url.searchParams.get("agent_id")! } : {}),
+            ...(includeArchived !== null ? { include_archived: includeArchived === "true" } : {}),
             ...(url.searchParams.get("limit") ? { limit: Number(url.searchParams.get("limit")) } : {}),
             ...(url.searchParams.get("offset") ? { offset: Number(url.searchParams.get("offset")) } : {}),
           };

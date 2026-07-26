@@ -268,7 +268,7 @@ export class TodosV1Client {
     }
 
     /** List tasks */
-    async listTasks(query?: { "status"?: string; "priority"?: string; "project_id"?: string; "parent_id"?: string | null; "include_subtasks"?: boolean; "plan_id"?: string; "task_list_id"?: string; "assigned_to"?: string; "agent_id"?: string; "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<{ "tasks": Array<Task>; "count": number; "total": number }> {
+    async listTasks(query?: { "status"?: string; "priority"?: string; "project_id"?: string; "parent_id"?: string | null; "include_subtasks"?: boolean; "plan_id"?: string; "task_list_id"?: string; "assigned_to"?: string; "agent_id"?: string; "include_archived"?: boolean; "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<{ "tasks": Array<Task>; "count": number; "total": number }> {
       return this.request("GET", `/v1/tasks`, {
         body: undefined,
         query,

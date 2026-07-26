@@ -382,6 +382,12 @@ function toListQuery(filter: TaskFilter = {}): Record<string, string | number> {
   if (filter.project_id) query["project_id"] = filter.project_id;
   if (filter.parent_id !== undefined) query["parent_id"] = filter.parent_id ?? "";
   if (filter.include_subtasks !== undefined) query["include_subtasks"] = filter.include_subtasks ? "true" : "false";
+  // Archived tasks keep their plan/list/project association, so a caller that
+  // needs the complete membership of a plan must be able to ask for them. The
+  // authority excludes them by default; an authority that predates the
+  // `include_archived` parameter ignores it and still hides archived rows, in
+  // which case deploy the current `@hasna/todos` `/v1` server.
+  if (filter.include_archived !== undefined) query["include_archived"] = filter.include_archived ? "true" : "false";
   if (filter.plan_id) query["plan_id"] = filter.plan_id;
   if (filter.task_list_id) query["task_list_id"] = filter.task_list_id;
   if (filter.assigned_to) query["assigned_to"] = filter.assigned_to;

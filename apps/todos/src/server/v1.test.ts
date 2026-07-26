@@ -446,6 +446,30 @@ describe("/v1 task hierarchy and lock authorization", () => {
     expect((await request("/v1/tasks?include_subtasks=1"))?.status).toBe(400);
   });
 
+  test("include_archived=true exposes archived tasks that keep their plan membership", async () => {
+    const plan = await store.plans.create({ name: "Archivable" });
+    const live = await store.tasks.create({ title: "live", plan_id: plan.id });
+    const archived = await store.tasks.create({ title: "archived", plan_id: plan.id });
+    db.run("UPDATE tasks SET archived_at = ? WHERE id = ?", ["2026-07-24T00:00:00.000Z", archived.id]);
+
+    const hidden = await request(`/v1/tasks?plan_id=${plan.id}`);
+    const hiddenBody = await hidden!.json() as { tasks: Array<{ id: string }>; total: number };
+    expect(hiddenBody.tasks.map((task) => task.id)).toEqual([live.id]);
+    expect(hiddenBody.total).toBe(1);
+
+    const included = await request(`/v1/tasks?plan_id=${plan.id}&include_archived=true`);
+    expect(included?.status).toBe(200);
+    const includedBody = await included!.json() as { tasks: Array<{ id: string }>; total: number };
+    expect(new Set(includedBody.tasks.map((task) => task.id))).toEqual(new Set([live.id, archived.id]));
+    expect(includedBody.total).toBe(2);
+
+    const explicitlyExcluded = await request(`/v1/tasks?plan_id=${plan.id}&include_archived=false`);
+    const excludedBody = await explicitlyExcluded!.json() as { tasks: Array<{ id: string }> };
+    expect(excludedBody.tasks.map((task) => task.id)).toEqual([live.id]);
+
+    expect((await request("/v1/tasks?include_archived=1"))?.status).toBe(400);
+  });
+
   test("force unlock is restricted to todos:* and clears a parent-owned lock", async () => {
     const task = await store.tasks.create({ title: "locked" });
     await store.tasks.start(task.id, "parent-agent");

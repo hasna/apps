@@ -342,6 +342,98 @@ describe("cloud CLI plan commands", () => {
     }
   });
 
+  test("asks the authority for archived plan tasks and migrates them too", async () => {
+    const requests: Array<{ method: string; path: string; query: string }> = [];
+    const plans = [
+      { id: PLAN_ID, slug: "source", name: "Source", status: "active", project_id: null },
+      { id: TARGET_PLAN_ID, slug: "target", name: "Target", status: "active", project_id: null },
+    ];
+    // Archiving leaves plan_id intact, so this task is still a member of the
+    // plan — the authority just hides it unless include_archived is requested.
+    const tasks: Array<Record<string, unknown>> = [
+      {
+        id: "44444444-4444-4444-8444-444444444444",
+        short_id: "PLAN-4",
+        title: "Live",
+        status: "pending",
+        priority: "medium",
+        plan_id: PLAN_ID,
+        parent_id: null,
+        archived_at: null,
+        version: 1,
+      },
+      {
+        id: "55555555-5555-4555-8555-555555555555",
+        short_id: "PLAN-5",
+        title: "Archived",
+        status: "cancelled",
+        priority: "medium",
+        plan_id: PLAN_ID,
+        parent_id: null,
+        archived_at: "2026-07-24T00:00:00.000Z",
+        version: 3,
+      },
+    ];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        const body = request.method === "PATCH" ? await request.json() : undefined;
+        requests.push({ method: request.method, path: url.pathname, query: url.search });
+
+        const planMatch = url.pathname.match(/^\/v1\/plans\/([^/]+)$/);
+        if (planMatch && request.method === "GET") {
+          const plan = plans.find((item) => item.id === planMatch[1]);
+          return plan ? Response.json({ plan }) : Response.json({ error: "not found" }, { status: 404 });
+        }
+        if (url.pathname === "/v1/tasks" && request.method === "GET") {
+          const includeArchived = url.searchParams.get("include_archived") === "true";
+          const filtered = tasks.filter((task) =>
+            task.plan_id === url.searchParams.get("plan_id") && (includeArchived || task.archived_at === null));
+          return Response.json({ tasks: filtered, count: filtered.length, total: filtered.length });
+        }
+        const taskMatch = url.pathname.match(/^\/v1\/tasks\/([^/]+)$/);
+        if (taskMatch && request.method === "PATCH") {
+          const task = tasks.find((item) => item.id === taskMatch[1]);
+          if (!task) return Response.json({ error: "not found" }, { status: 404 });
+          Object.assign(task, body, { version: Number(task.version) + 1 });
+          return Response.json({ task });
+        }
+        if (planMatch && request.method === "DELETE") {
+          const index = plans.findIndex((item) => item.id === planMatch[1]);
+          if (index < 0) return Response.json({ error: "not found" }, { status: 404 });
+          plans.splice(index, 1);
+          return Response.json({ deleted: true, id: planMatch[1] });
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-plan-archived-move-"));
+    tempRoots.push(root);
+    try {
+      const result = await runCli(
+        ["--json", "plans", "--delete", PLAN_ID, "--move-tasks-to", TARGET_PLAN_ID],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+      expect(JSON.parse(result.stdout)).toEqual({
+        deleted: true,
+        moved_tasks: 2,
+        orphaned_tasks: 0,
+      });
+      expect(tasks.map((task) => task.plan_id)).toEqual([TARGET_PLAN_ID, TARGET_PLAN_ID]);
+      expect(requests).toContainEqual(expect.objectContaining({
+        method: "GET",
+        path: "/v1/tasks",
+        query: expect.stringContaining("include_archived=true"),
+      }));
+    } finally {
+      server.stop(true);
+    }
+  });
+
   test("warns before a remote plan delete would orphan tasks", async () => {
     const task = {
       id: "33333333-3333-4333-8333-333333333333",
