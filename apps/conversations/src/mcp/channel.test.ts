@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { unlinkSync } from "fs";
+import { readFileSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
-import { closeDb, getDb } from "../lib/db.js";
+import { closeDb, getDb, getDataDir } from "../lib/db.js";
 import { readMessages, sendMessage } from "../lib/messages.js";
 import { createChannel } from "../lib/channels.js";
 import { readChannelNotifications, subscribeToChannelNotifications } from "../lib/channel-notifications.js";
@@ -191,6 +191,37 @@ describe("session agent tracking", () => {
   test("setSessionAgent stores agent id", () => {
     setSessionAgent("test-agent");
     expect(getSessionAgent()).toBe("test-agent");
+  });
+
+  test("setSessionAgent does NOT write the installation-wide identity file", () => {
+    // Regression: the MCP server is one long-lived daemon under a single HOME,
+    // shared by every client session on the machine. When setSessionAgent wrote
+    // the agent-id file, ANY heartbeat naming ANY agent silently re-stamped the
+    // whole machine's identity — including this very test suite, whose
+    // "rename-old" fixture (src/mcp/tools/agents.test.ts) repeatedly hijacked
+    // station01's identity just by running `bun test`.
+    const agentIdFile = join(getDataDir(), "agent-id");
+
+    let before: string | null;
+    try {
+      before = readFileSync(agentIdFile, "utf-8");
+    } catch {
+      before = null;
+    }
+
+    setSessionAgent("identity-hijack-canary");
+
+    let after: string | null;
+    try {
+      after = readFileSync(agentIdFile, "utf-8");
+    } catch {
+      after = null;
+    }
+
+    expect(after).toBe(before);
+    expect(after ?? "").not.toContain("identity-hijack-canary");
+    // In-memory session tracking must still work.
+    expect(getSessionAgent()).toBe("identity-hijack-canary");
   });
 
   test("setSessionAgent stores claude session id", () => {

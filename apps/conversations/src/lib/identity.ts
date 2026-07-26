@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
 import { AGENT_NAMES } from "./names.js";
 import { getDataDir } from "./db.js";
+import { normalizeAgentName } from "./presence.js";
 
 const AGENT_ID_FILE = join(getDataDir(), "agent-id");
 
@@ -88,6 +89,15 @@ export function requireIdentity(explicit?: string): string {
   throw new Error(
     "Agent identity required. Set CONVERSATIONS_AGENT_ID env var or pass --from flag."
   );
+}
+
+/**
+ * A rename should move this installation's persisted identity only when the
+ * agent being renamed IS the locally persisted identity. Renaming some other
+ * agent by name must never hijack who this machine claims to be.
+ */
+export function isSelfRename(oldName: string, localIdentity: string): boolean {
+  return normalizeAgentName(oldName) === normalizeAgentName(localIdentity);
 }
 
 /**

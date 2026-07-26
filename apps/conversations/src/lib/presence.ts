@@ -4,7 +4,7 @@ import type { AgentPresence, AgentConflictError, RegisterAgentResult } from "../
 const ONLINE_THRESHOLD_SECONDS = 60;
 const CONFLICT_THRESHOLD_SECONDS = 30 * 60; // 30 minutes
 
-function normalizeAgentName(name: string): string {
+export function normalizeAgentName(name: string): string {
   return name.trim().toLowerCase();
 }
 

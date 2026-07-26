@@ -26,14 +26,25 @@ const DEFAULT_START_DELAY_MS = 2000;
 let sessionAgentId: string | null = null;
 let sessionClaudeId: string | null = null; // agent-claude session UUID
 
-/** Called by agent tools when register_agent or heartbeat fires */
+/**
+ * Called by agent tools when register_agent or heartbeat fires.
+ *
+ * This records who the caller is *for this MCP process only*. It deliberately
+ * does NOT write the installation-wide identity file ($HOME/.hasna/conversations/agent-id).
+ *
+ * It used to. That was a fleet-wide footgun: the MCP server runs as one
+ * long-lived daemon under a single HOME, shared by every client session on the
+ * machine, so a single `heartbeat` naming any agent silently re-stamped the
+ * whole machine's identity — last writer wins, with no audit trail. On
+ * station01 that left the box answering to a throwaway test name ("rename-old")
+ * for two days, and every attempt to correct it was overwritten again.
+ *
+ * Machine identity is set deliberately, by `conversations agents register` or
+ * the CONVERSATIONS_AGENT_ID env var — never as a side effect of a heartbeat.
+ */
 export function setSessionAgent(agentId: string, claudeSessionId?: string): void {
   sessionAgentId = agentId;
   if (claudeSessionId) sessionClaudeId = claudeSessionId;
-  try {
-    const { updateCachedAutoName } = require("../lib/identity.js");
-    updateCachedAutoName(agentId);
-  } catch { /* ok */ }
 }
 
 /** Called by register_agent to store the claude session ID */

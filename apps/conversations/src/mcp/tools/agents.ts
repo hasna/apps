@@ -6,7 +6,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { getStore } from "../../lib/store/index.js";
-import { resolveIdentity, updateCachedAutoName } from "../../lib/identity.js";
+import { resolveIdentity, updateCachedAutoName, getAutoName, isSelfRename } from "../../lib/identity.js";
+import { normalizeAgentName } from "../../lib/presence.js";
 import { setSessionAgent, setClaudeSessionId } from "../channel.js";
 import { compactQueriedMessages, compactWindowedAgents, jsonText, resolveMcpWindow } from "../compact.js";
 
@@ -138,13 +139,18 @@ export function registerAgentTools(
         };
       }
 
-      // Update cached identity so subsequent calls resolve to the new name
-      if (!fromParam) {
-        updateCachedAutoName(newName);
+      // Move this installation's identity only when we renamed the installation's
+      // OWN identity. The previous check ("no `from` was passed") was wrong in the
+      // other direction: it silently skipped the update whenever a caller passed an
+      // explicit `from` that WAS its own name, which is how station01 was left
+      // pinned to a discarded test name while presence said otherwise.
+      const adopted = isSelfRename(oldName, getAutoName());
+      if (adopted) {
+        updateCachedAutoName(normalizeAgentName(newName));
       }
 
       return {
-        content: [{ type: "text", text: JSON.stringify({ old_name: oldName, new_name: newName, renamed: true }) }],
+        content: [{ type: "text", text: JSON.stringify({ old_name: oldName, new_name: newName, renamed: true, identity_adopted: adopted }) }],
       };
     } catch (e: any) {
       return {

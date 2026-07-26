@@ -2,8 +2,8 @@ import type { Command } from "commander";
 import { getStore } from "../../lib/store/index.js";
 import chalk from "chalk";
 import { closeDb } from "../../lib/db.js";
-import { resolveIdentity } from "../../lib/identity.js";
-import { isAgentConflict } from "../../lib/presence.js";
+import { resolveIdentity, getAutoName, updateCachedAutoName, isSelfRename } from "../../lib/identity.js";
+import { isAgentConflict, normalizeAgentName } from "../../lib/presence.js";
 import { windowItems } from "../../lib/compact-output.js";
 import { getCliWindow, printCompactFooter } from "../compact.js";
 
@@ -145,10 +145,22 @@ export function registerAgentCommands(program: Command): void {
           process.exit(1);
         }
 
+        // Presence lives in the store, but this installation's identity lives in
+        // the local agent-id file. Without this the rename succeeds remotely and
+        // the very next process resolves the OLD name again — the identity looks
+        // like it "reverts". Only adopt the new name when we renamed ourselves.
+        const adopted = isSelfRename(old, getAutoName());
+        if (adopted) {
+          updateCachedAutoName(normalizeAgentName(renamed));
+        }
+
         if (opts.json) {
-          console.log(JSON.stringify({ old_name: old, new_name: renamed, renamed: true }));
+          console.log(JSON.stringify({ old_name: old, new_name: renamed, renamed: true, identity_adopted: adopted }));
         } else {
           console.log(chalk.green(`Agent "${old}" renamed to "${renamed}".`));
+          if (adopted) {
+            console.log(chalk.dim(`This installation's identity is now "${normalizeAgentName(renamed)}".`));
+          }
         }
       } catch (e: any) {
         console.error(chalk.red(e.message));
@@ -165,6 +177,7 @@ export function registerAgentCommands(program: Command): void {
     .option("--role <role>", "Agent role (default: agent)")
     .option("--project <id>", "Project ID to lock agent to")
     .option("--force", "Force takeover even if another session is active")
+    .option("--no-identity", "Register the agent without adopting the name as this installation's identity")
     .option("-j, --json", "Output as JSON")
     .action(async (name, opts) => {
       const agentName = (typeof name === "string" ? name : "").trim();
@@ -186,11 +199,23 @@ export function registerAgentCommands(program: Command): void {
         process.exit(1);
       }
 
+      // Registering is how an agent declares "I am <name>". Persist it, or the
+      // next process falls back to the previously stored agent-id and the
+      // registration silently has no effect on attribution.
+      const registeredName = result.agent.agent;
+      const adopted = opts.identity !== false;
+      if (adopted) {
+        updateCachedAutoName(registeredName);
+      }
+
       if (opts.json) {
-        console.log(JSON.stringify(result));
+        console.log(JSON.stringify({ ...result, identity_adopted: adopted }));
       } else {
         const action = result.took_over ? chalk.yellow("took over") : result.created ? chalk.green("registered") : chalk.cyan("updated");
-        console.log(`  ${action}  ${chalk.bold(result.agent.agent)}  session: ${chalk.dim(sessionId)}`);
+        console.log(`  ${action}  ${chalk.bold(registeredName)}  session: ${chalk.dim(sessionId)}`);
+        if (adopted) {
+          console.log(chalk.dim(`  identity   this installation now resolves as "${registeredName}"`));
+        }
       }
       closeDb();
     });
