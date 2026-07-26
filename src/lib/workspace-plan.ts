@@ -676,7 +676,7 @@ export async function executeWorkspaceCreation(
         dryRun: runtimeDryRun,
         runner: options.channelRunner,
       });
-      if (channel.persisted) workspace = channel.project;
+      workspace = channel.project;
     }
 
     recordWorkspaceEvent({

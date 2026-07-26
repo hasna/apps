@@ -14,6 +14,7 @@ import {
   normalizeProjectChannelName,
   resolveProjectChannel,
   resolveProjectChannelClass,
+  resolveProjectChannelClassDetailed,
   resolveProjectChannelForProject,
   shouldEnsureProjectChannel,
   type ConversationsChannelRunner,
@@ -85,7 +86,7 @@ describe("project channel derivation", () => {
     expect(derived.channel_class).toBe("work-project");
   });
 
-  test("no project kind can produce an `internal-` channel", () => {
+  test("derivation never IMPOSES an `internal-` prefix, for any kind", () => {
     for (const kind of WORKSPACE_KINDS) {
       for (const slug of ["iproj-agent-ceo", "fleet-comms", "handbook", "misc", "open-projects"]) {
         const derived = deriveProjectChannel({ slug, kind });
@@ -93,6 +94,17 @@ describe("project channel derivation", () => {
         expect(derived.channel).toBe(slug);
       }
     }
+  });
+
+  test("an `internal-` slug still passes through — the CLI imposes, it does not sanitize", () => {
+    // Honest scope: the registry really does contain `internal-agent-runtime`
+    // (kind `project`, unlinked). Derivation hands the slug back unchanged, so
+    // an `internal-` channel name can still exist — it just is not this
+    // package's invention any more. Removing it is a project-rename decision,
+    // not a derivation one.
+    const derived = deriveProjectChannel({ slug: "internal-agent-runtime", kind: "project" });
+    expect(derived.channel).toBe("internal-agent-runtime");
+    expect(derived.source).toBe("derived");
   });
 
   test("derivation adds no prefix of its own for any kind", () => {
@@ -141,7 +153,8 @@ describe("resolveProjectChannelClass", () => {
     expect(resolveProjectChannelClass({ kind: "open-source" })).toBe("package");
     expect(resolveProjectChannelClass({ kind: "platform" })).toBe("product");
     expect(resolveProjectChannelClass({ kind: "internal-app" })).toBe("product");
-    expect(resolveProjectChannelClass({ kind: "experiment" })).toBe("initiative");
+    // `experiment` is intentionally null: see WORKSPACE_KIND_CHANNEL_CLASSES.
+    expect(resolveProjectChannelClass({ kind: "experiment" })).toBeNull();
   });
 
   test("is null when the kind implies nothing, so the CLI asserts no class", () => {
@@ -167,6 +180,16 @@ describe("resolveProjectChannelClass", () => {
       kind: "project",
       integrations: { conversations_channel_class: "not-a-class" },
     })).toBe("work-project");
+  });
+
+  test("an unknown explicit class is reported, not silently swallowed", () => {
+    const detailed = resolveProjectChannelClassDetailed({
+      kind: "project",
+      integrations: { conversations_channel_class: "produkt" },
+    });
+    expect(detailed.channel_class).toBe("work-project");
+    expect(detailed.warning).toContain("produkt");
+    expect(resolveProjectChannelClassDetailed({ kind: "project" }).warning).toBeUndefined();
   });
 });
 
@@ -232,14 +255,14 @@ describe("ensureProjectChannel", () => {
     expect(result.status).toBe("created");
     expect(result.created).toBe(true);
     expect(result.channel).toBe("fleet-comms");
-    expect(result.persisted).toBe(true);
-    expect(result.linked).toBe(true);
+    expect(result.linked).toBe(false);
     expect(calls).toHaveLength(1);
     expect(calls[0]?.slice(0, 3)).toEqual(["channel", "create", "fleet-comms"]);
     expect(calls[0]).toContain("--description");
 
+    // Ensure creates the channel but does NOT pin the derived name.
     const stored = getWorkspace(project.id, db);
-    expect(stored?.integrations.conversations_channel).toBe("fleet-comms");
+    expect(stored?.integrations.conversations_channel).toBeUndefined();
     const events = listWorkspaceEvents(project.id, db);
     expect(events.some((event) => event.event_type === "channel_ensured")).toBe(true);
     db.close();
@@ -255,7 +278,6 @@ describe("ensureProjectChannel", () => {
     expect(result.status).toBe("exists");
     expect(result.created).toBe(false);
     expect(result.channel).toBe("open-projects");
-    expect(result.persisted).toBe(true);
     expect(calls).toHaveLength(1);
     db.close();
   });
@@ -269,8 +291,6 @@ describe("ensureProjectChannel", () => {
 
     expect(result.status).toBe("error");
     expect(result.message).toContain("connection refused");
-    // The derived name is deterministic, so the link is still recorded.
-    expect(result.persisted).toBe(true);
     db.close();
   });
 
@@ -296,7 +316,6 @@ describe("ensureProjectChannel", () => {
     const result = ensureProjectChannel(project, { db, runner, dryRun: true });
 
     expect(result.status).toBe("planned");
-    expect(result.persisted).toBe(false);
     expect(calls).toHaveLength(0);
     expect(getWorkspace(project.id, db)?.integrations.conversations_channel).toBeUndefined();
     db.close();
@@ -498,18 +517,18 @@ describe("ensureProjectChannelViaStore (api/cloud mode)", () => {
     expect(result.status).toBe("created");
     expect(result.created).toBe(true);
     expect(result.channel).toBe("cloud-demo");
-    expect(result.linked).toBe(true);
-    expect(result.persisted).toBe(true);
+    expect(result.linked).toBe(false);
     expect(result.message).toBeUndefined();
     expect(calls).toHaveLength(1);
-    expect(updates).toHaveLength(1);
+    // No project-record write at all: ensure does not pin a derived name.
+    expect(updates).toHaveLength(0);
     // The failure is reported as a non-fatal warning with the audit event
     // marked as the only thing that did not land.
     expect(result.warnings.join(" ")).toContain("audit event was not recorded");
     expect(result.side_effects).toEqual({
       channel_created: true,
       channel_present: true,
-      integration_linked: true,
+      integration_linked: false,
       event_recorded: false,
     });
   });
@@ -557,10 +576,9 @@ describe("ensureProjectChannelViaStore (api/cloud mode)", () => {
 
     expect(first.status).toBe("exists");
     expect(second.status).toBe("exists");
-    expect(second.linked).toBe(true);
-    // Second run finds the link already correct: no duplicate write.
-    expect(updates).toHaveLength(1);
-    expect(second.persisted).toBe(false);
+    // Idempotent, and neither run touches the project record.
+    expect(updates).toHaveLength(0);
+    expect(second.linked).toBe(false);
   });
 
   test("an unreadable project record reports partial state instead of throwing", async () => {
@@ -577,7 +595,6 @@ describe("ensureProjectChannelViaStore (api/cloud mode)", () => {
 
     expect(result.status).toBe("error");
     expect(result.message).toContain("Could not read the project record back");
-    expect(result.persisted).toBe(false);
     expect(result.side_effects).toEqual({
       channel_created: true,
       channel_present: true,
@@ -586,19 +603,24 @@ describe("ensureProjectChannelViaStore (api/cloud mode)", () => {
     });
   });
 
-  test("a failed integration link reports structured partial state instead of throwing", async () => {
-    const { store, project } = makeStore({
+  test("never writes the project record — a derived name is not pinned as a link", async () => {
+    // Regression guard for the one-way repoint: if ensure wrote the derived
+    // name onto the record, that write would outrank derivation forever and
+    // would survive a revert of the change that produced it, silently moving a
+    // project off the channel holding its history.
+    const { store, project, updates } = makeStore({
       updateProject: async () => {
-        throw new Error("Hasna request failed: PATCH /projects/wks_cloud000000000000001 -> 503");
+        throw new Error("ensure must not write the project record");
       },
     });
     const { runner } = recordingRunner(() => ok);
 
     const result = await ensureProjectChannelViaStore(store, project, { runner });
 
-    expect(result.status).toBe("error");
-    expect(result.message).toContain("Could not link cloud-demo on the project record");
-    expect(result.persisted).toBe(false);
+    expect(result.status).toBe("created");
+    expect(result.channel).toBe("cloud-demo");
+    expect(result.linked).toBe(false);
+    expect(updates).toHaveLength(0);
     expect(result.side_effects).toEqual({
       channel_created: true,
       channel_present: true,

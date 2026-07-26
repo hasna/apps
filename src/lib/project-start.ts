@@ -474,7 +474,8 @@ export async function startProject(
       runner: options.channelRunner,
     });
   }
-  const startedProject = channel?.persisted ? channel.project : project;
+  // Ensure never rewrites the record, so its read-back is the freshest copy.
+  const startedProject = channel?.project ?? project;
 
   let attached = false;
   if (options.attach && !options.dryRun && tmux.success) {

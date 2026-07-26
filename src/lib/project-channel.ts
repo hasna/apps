@@ -14,17 +14,34 @@ import { resolveRegisteredProjectTargetOrThrow } from "./project-resolver.js";
  *
  * When the integration is unset the channel name is the project slug,
  * normalized — nothing more. This CLI does not own the fleet channel naming
- * convention and must not carry a copy of it: the registry slug already
- * carries whatever prefix the convention assigns (`iproj-pr-to-zero`,
- * `platform-alumia`, `iapp-dispatch`, or a flat repo name for a package), so
- * rewriting it here can only ever drift from, contradict, or double-apply the
- * standard. It previously did exactly that: a `project`-kind slug fell through
- * to a hardcoded `internal-` prefix and `iproj-agent-ceo` derived
- * `internal-iproj-agent-ceo`.
+ * convention and must not carry a copy of it: rewriting the slug here can only
+ * drift from, contradict, or double-apply the standard. It previously did
+ * exactly that — a `project`-kind slug fell through to a hardcoded `internal-`
+ * prefix, so `iproj-agent-ceo` derived `internal-iproj-agent-ceo`.
+ *
+ * This is emphatically NOT a claim that every registry slug already conforms.
+ * Many do not (a large share of `project`-kind slugs lack `iproj-`, and most
+ * `open-source` slugs are not the flat repo name the convention asks for). The
+ * claim is narrower and is about authority, not conformance: the slug is the
+ * only name this CLI is entitled to use. Where a slug is non-conforming the
+ * repair belongs in the project rename/lifecycle path, not in a prefix table
+ * here — renaming a project is a decision with a channel migration attached,
+ * and silently papering over it at derivation time is what produced the
+ * double-prefixed names in the first place.
  *
  * Projects whose channel does not match their slug say so explicitly by
  * setting `integrations.conversations_channel`; that link always wins over
  * derivation.
+ *
+ * ## Ensure never writes the link
+ *
+ * {@link ensureProjectChannel} makes the channel exist; it does not pin its
+ * name onto the project record. Writing a *derived* name back would convert
+ * this package's current opinion into an explicit link, and because an explicit
+ * link outranks derivation forever, that write is one-way: it would survive a
+ * revert of the very change that produced it, silently repointing a project
+ * away from the channel holding its history. The link is established once, at
+ * project creation, or deliberately by an operator.
  *
  * ## Channel class
  *
@@ -62,9 +79,16 @@ export const PROJECT_CHANNEL_CLASS_INTEGRATION_KEY = "conversations_channel_clas
  *
  * It exists here because nothing publishes the convention machine-readably
  * today (the knowledge item is prose and `conversations` accepts `--class` as
- * an unvalidated free-form string). `null` means "this kind does not imply a
- * class": the CLI then asserts nothing rather than inventing a label, and
- * `conversations` keeps ownership of the default.
+ * an unvalidated free-form string, with no lookup command). Closing that gap is
+ * tracked as OPE4-00010; until it is closed, this join has to live somewhere.
+ *
+ * `null` means "this kind does not imply a class": the CLI then asserts nothing
+ * rather than inventing a label, and `conversations` keeps ownership of the
+ * default. `experiment` is deliberately `null` even though the convention has
+ * an obvious candidate — the `initiative` class additionally requires the topic
+ * to carry `owner:<agent> until:<date|gate-id>`, which nothing here can supply,
+ * and stamping a class while breaking that class's own rules is worse than
+ * leaving it unset.
  */
 const WORKSPACE_KIND_CHANNEL_CLASSES: Record<WorkspaceKind, ProjectChannelClass | null> = {
   "open-source": "package",
@@ -73,7 +97,7 @@ const WORKSPACE_KIND_CHANNEL_CLASSES: Record<WorkspaceKind, ProjectChannelClass 
   "company-website": "product",
   community: "product",
   project: "work-project",
-  experiment: "initiative",
+  experiment: null,
   scaffold: null,
   docs: null,
   "remote-only": null,
@@ -108,8 +132,6 @@ export interface EnsureProjectChannelOptions {
   command?: string;
   /** Conversations identity recorded as channel creator. */
   from?: string;
-  /** Persist the resolved channel name on the project record (default true). */
-  persist?: boolean;
   dryRun?: boolean;
   runner?: ConversationsChannelRunner;
 }
@@ -134,8 +156,8 @@ export interface ProjectChannelSideEffects {
 export interface ProjectChannelEnsureResult extends ProjectChannelDerivation {
   status: "created" | "exists" | "planned" | "error";
   created: boolean;
+  /** The project record carries an explicit `integrations.conversations_channel`. */
   linked: boolean;
-  persisted: boolean;
   message?: string;
   /**
    * Non-fatal problems (e.g. the audit event could not be recorded). Present
@@ -168,12 +190,28 @@ export function normalizeProjectChannelName(value: string): string {
 export function resolveProjectChannelClass(
   project: Pick<Workspace, "kind"> & { integrations?: WorkspaceIntegrations },
 ): ProjectChannelClass | null {
+  return resolveProjectChannelClassDetailed(project).channel_class;
+}
+
+/**
+ * As {@link resolveProjectChannelClass}, but also reports an unusable explicit
+ * override. This override is the answer to "the class is configurable without a
+ * code change", so a typo in it silently reverting to the kind default is
+ * exactly the failure that wastes an afternoon — callers surface `warning`.
+ */
+export function resolveProjectChannelClassDetailed(
+  project: Pick<Workspace, "kind"> & { integrations?: WorkspaceIntegrations },
+): { channel_class: ProjectChannelClass | null; warning?: string } {
+  const fromKind = WORKSPACE_KIND_CHANNEL_CLASSES[project.kind] ?? null;
   const explicit = project.integrations?.[PROJECT_CHANNEL_CLASS_INTEGRATION_KEY]?.trim().toLowerCase();
-  if (explicit) {
-    const known = PROJECT_CHANNEL_CLASSES.find((value) => value === explicit);
-    if (known) return known;
-  }
-  return WORKSPACE_KIND_CHANNEL_CLASSES[project.kind] ?? null;
+  if (!explicit) return { channel_class: fromKind };
+
+  const known = PROJECT_CHANNEL_CLASSES.find((value) => value === explicit);
+  if (known) return { channel_class: known };
+  return {
+    channel_class: fromKind,
+    warning: `Ignoring unknown ${PROJECT_CHANNEL_CLASS_INTEGRATION_KEY} "${explicit}" on the project record (known: ${PROJECT_CHANNEL_CLASSES.join(", ")}); using ${fromKind ?? "no class"} from kind "${project.kind}" instead.`,
+  };
 }
 
 export function deriveProjectChannel(
@@ -269,14 +307,20 @@ function errorText(err: unknown): string {
 }
 
 /**
- * `conversations channel create` args. The resolved channel class is passed
- * through as `--class` (stored by conversations at
- * `metadata.channel_schema.class`) so project channels satisfy the fleet
- * naming/class convention instead of landing class-less; `--topic` gives the
- * channel a human label. A project whose kind implies no class emits no
- * `--class` at all rather than a made-up one, leaving the default to
- * conversations. Older `conversations` builds do not know those flags, so
- * callers fall back to the minimal arg set — see {@link createConversationsChannel}.
+ * `conversations channel create` args.
+ *
+ * A resolved channel class is passed through as `--class` (stored by
+ * conversations at `metadata.channel_schema.class`); `--topic` gives the
+ * channel a human label. When the class is `null` no `--class` is sent at all
+ * and conversations applies its own default — that is a deliberate narrowing of
+ * the behaviour added in #28, which always sent a class: the class it sent for
+ * kinds with no convention entry was `initiative`, inferred from the same
+ * `internal-` prefix rule this change deletes. An unfounded label is worse than
+ * none. Note this means most projects (`generic` is by far the largest kind in
+ * the registry) now create channels with no class.
+ *
+ * Older `conversations` builds do not know these flags, so callers fall back to
+ * the minimal arg set — see {@link createConversationsChannel}.
  */
 function buildChannelCreateArgs(
   project: Workspace,
@@ -346,7 +390,6 @@ function derivationErrorResult(project: Workspace, message: string): ProjectChan
     status: "error",
     created: false,
     linked: false,
-    persisted: false,
     message,
     warnings: [],
     side_effects: { ...NO_SIDE_EFFECTS },
@@ -364,7 +407,6 @@ function plannedResult(
     status: "planned",
     created: false,
     linked: alreadyLinked,
-    persisted: false,
     warnings: [],
     side_effects: { ...NO_SIDE_EFFECTS, integration_linked: alreadyLinked },
     project,
@@ -400,26 +442,17 @@ export function ensureProjectChannel(
   const status: ProjectChannelEnsureResult["status"] = create.status;
   const message = create.message;
   const warnings: string[] = [];
+  const classWarning = resolveProjectChannelClassDetailed(project).warning;
+  if (classWarning) warnings.push(classWarning);
 
-  let updated = project;
-  let persisted = false;
   let eventRecorded = false;
   const inStore = getWorkspace(project.id, options.db);
-  if (inStore && options.persist !== false && inStore.integrations[PROJECT_CHANNEL_INTEGRATION_KEY]?.trim() !== derivation.channel) {
-    updated = linkWorkspaceIntegrations(project.id, { [PROJECT_CHANNEL_INTEGRATION_KEY]: derivation.channel }, {
-      agent_id: options.agentId,
-      source: options.source,
-      command: options.command,
-    }, options.db);
-    persisted = true;
-  } else if (inStore) {
-    updated = inStore;
-  }
+  const updated = inStore ?? project;
 
   if (inStore) {
-    // Best-effort audit trail: the channel and the project link are already
-    // committed at this point, so a failure to append the event must not turn a
-    // completed ensure into a reported failure (see issue #28).
+    // Best-effort audit trail: the channel already exists at this point, so a
+    // failure to append the event must not turn a completed ensure into a
+    // reported failure (see issue #28).
     try {
       recordWorkspaceEvent({
         workspace_id: project.id,
@@ -432,7 +465,6 @@ export function ensureProjectChannel(
           channel_class: derivation.channel_class,
           status,
           created: status === "created",
-          persisted,
           message,
         },
       }, options.db);
@@ -448,7 +480,6 @@ export function ensureProjectChannel(
     status,
     created: status === "created",
     linked,
-    persisted,
     message,
     warnings,
     side_effects: {
@@ -488,8 +519,6 @@ export interface StoreEnsureChannelOptions {
   command?: string;
   /** Conversations identity recorded as channel creator. */
   from?: string;
-  /** Persist the resolved channel name on the project record (default true). */
-  persist?: boolean;
   dryRun?: boolean;
   runner?: ConversationsChannelRunner;
 }
@@ -524,17 +553,17 @@ export async function ensureProjectChannelViaStore(
   let status: ProjectChannelEnsureResult["status"] = create.status;
   const messages: string[] = create.message ? [create.message] : [];
   const warnings: string[] = [];
+  const classWarning = resolveProjectChannelClassDetailed(project).warning;
+  if (classWarning) warnings.push(classWarning);
 
-  let updated = project;
-  let persisted = false;
   let eventRecorded = false;
 
   // Everything past the channel creation is a store round-trip. In api/cloud
-  // mode any of these can fail against a backend that does not implement the
-  // route (or is momentarily unreachable) AFTER the channel already exists, so
-  // each step is fenced and reported through the result instead of thrown: a
-  // partially completed ensure must never surface as a raw transport error with
-  // no record of what landed (issue #28).
+  // mode it can fail against a backend that does not implement the route (or is
+  // momentarily unreachable) AFTER the channel already exists, so it is fenced
+  // and reported through the result instead of thrown: a partially completed
+  // ensure must never surface as a raw transport error with no record of what
+  // landed (issue #28).
   let inStore: Workspace | null = null;
   try {
     inStore = await store.getProject(project.id);
@@ -542,32 +571,12 @@ export async function ensureProjectChannelViaStore(
     status = "error";
     messages.push(`Could not read the project record back: ${errorText(err)}`);
   }
-
-  if (
-    inStore &&
-    options.persist !== false &&
-    inStore.integrations[PROJECT_CHANNEL_INTEGRATION_KEY]?.trim() !== derivation.channel
-  ) {
-    try {
-      updated = await store.updateProject(project.id, {
-        integrations: { ...inStore.integrations, [PROJECT_CHANNEL_INTEGRATION_KEY]: derivation.channel },
-        agent_id: options.agentId,
-        source: options.source,
-        command: options.command,
-      });
-      persisted = true;
-    } catch (err) {
-      status = "error";
-      messages.push(`Could not link ${derivation.channel} on the project record: ${errorText(err)}`);
-    }
-  } else if (inStore) {
-    updated = inStore;
-  }
+  const updated = inStore ?? project;
 
   if (inStore) {
-    // Best-effort audit trail. The channel and the project link are already
-    // committed here; a backend that does not expose POST /projects/:id/events
-    // must not turn a completed ensure into a total failure.
+    // Best-effort audit trail. The channel already exists here; a backend that
+    // does not expose POST /projects/:id/events must not turn a completed
+    // ensure into a total failure.
     try {
       await store.recordEvent(project.id, {
         event_type: "channel_ensured",
@@ -579,7 +588,6 @@ export async function ensureProjectChannelViaStore(
           channel_class: derivation.channel_class,
           status,
           created: status === "created",
-          persisted,
           message: messages[0] ?? null,
         } as JsonObject,
       });
@@ -595,7 +603,6 @@ export async function ensureProjectChannelViaStore(
     status,
     created: create.status === "created",
     linked,
-    persisted,
     message: messages.length ? messages.join("; ") : undefined,
     warnings,
     side_effects: {

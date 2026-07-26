@@ -32,6 +32,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   default to `conversations`, which owns `metadata.channel_schema.class`.
   `PROJECT_CHANNEL_CLASSES` gains `work-project`.
 
+  Note the practical reach: `generic` is by far the largest kind in the
+  registry and maps to `null`, so most newly created project channels now carry
+  no class where 0.1.95 sent `initiative`. That label was itself inferred from
+  the deleted `internal-` prefix rule, so it was unfounded rather than correct —
+  but this is a behaviour change on the dominant path, not just a type change.
+  `experiment` maps to `null` for a related reason: the `initiative` class the
+  old table assigned it additionally requires the channel topic to carry
+  `owner:<agent> until:<date|gate-id>`, which nothing here can supply.
+- **BREAKING — `ensureProjectChannel` no longer writes the project record.**
+  It previously persisted the resolved channel onto
+  `integrations.conversations_channel`. For a *derived* name that write is
+  one-way: an explicit link outranks derivation permanently, so the first
+  `projects start` after a derivation change would pin the new name and keep
+  resolving to it even after the change was reverted, silently moving a project
+  off the channel holding its history. Ensure now only makes the channel exist;
+  the link is established at project creation or deliberately by an operator.
+  The `persist` option and the `persisted` result field are removed —
+  `linked` and `side_effects.integration_linked` report the record's state.
+
 ## [0.1.95]
 
 ### Fixed

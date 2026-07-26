@@ -951,7 +951,6 @@ function registerAgentAssistCommands(program: Command): void {
             status: result.status,
             created: result.created,
             linked: result.linked,
-            persisted: result.persisted,
             message: result.message,
             warnings: result.warnings,
             side_effects: result.side_effects,
@@ -967,7 +966,7 @@ function registerAgentAssistCommands(program: Command): void {
             `  committed: channel_created=${result.side_effects.channel_created} channel_present=${result.side_effects.channel_present} integration_linked=${result.side_effects.integration_linked} event_recorded=${result.side_effects.event_recorded}`,
           ));
         } else {
-          const detail = [result.channel_class, result.persisted ? "linked on project" : null].filter(Boolean).join(", ");
+          const detail = [result.channel_class, result.linked ? "linked on project" : null].filter(Boolean).join(", ");
           console.log(chalk.green(`✓ Channel ${result.status === "created" ? "created" : "exists"}: #${result.channel}`) + (detail ? chalk.dim(` (${detail})`) : ""));
         }
         if (!wantsJson(opts)) {
