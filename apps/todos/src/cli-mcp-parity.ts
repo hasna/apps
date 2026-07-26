@@ -452,6 +452,8 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
       "todos plans",
       "todos plans --add",
       "todos plans --show",
+      "todos plans --update",
+      "todos plans --rename",
       "todos plans --complete",
       "todos plans --delete",
     ],

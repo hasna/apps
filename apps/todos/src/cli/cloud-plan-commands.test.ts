@@ -104,6 +104,63 @@ describe("cloud CLI plan commands", () => {
       expect(completed).toMatchObject({ exitCode: 0, stderr: "" });
       expect(JSON.parse(completed.stdout)).toMatchObject({ id: PLAN_ID, status: "completed" });
 
+      const deleted = await runCli(["--json", "plans", "--delete", PLAN_ID], root, `http://127.0.0.1:${server.port}`);
+      expect(deleted).toMatchObject({ exitCode: 0, stderr: "" });
+      expect(JSON.parse(deleted.stdout)).toEqual({ deleted: true });
+      expect(requests[0]).toMatchObject({
+        method: "POST",
+        path: "/v1/plans",
+        body: {
+          name: "Codila CLI control",
+          slug: "codila-cli-control",
+          description: "Private CLI release plan",
+        },
+      });
+      // Positional (`requests.at(-3)`) would break the moment the delete path
+      // gains its orphan preflight read, so assert the completion PATCH by value.
+      expect(requests).toContainEqual(expect.objectContaining({
+        method: "PATCH",
+        path: `/v1/plans/${PLAN_ID}`,
+        body: { status: "completed" },
+      }));
+      expect(requests.at(-1)).toMatchObject({ method: "DELETE", path: `/v1/plans/${PLAN_ID}` });
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("updates and renames a plan through the remote authority", async () => {
+    const requests: Array<{ method: string; path: string; body?: unknown }> = [];
+    let plan: Record<string, unknown> = {
+      id: PLAN_ID,
+      slug: "codila-cli-control",
+      name: "Codila CLI control",
+      description: "Private CLI release plan",
+      status: "completed",
+      project_id: null,
+      created_at: "2026-07-16T00:00:00.000Z",
+      updated_at: "2026-07-16T00:00:00.000Z",
+    };
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        const body = request.method === "PATCH" ? await request.json() : undefined;
+        requests.push({ method: request.method, path: url.pathname, body });
+        if (url.pathname === "/v1/plans" && request.method === "GET") {
+          return Response.json({ plans: [plan], count: 1 });
+        }
+        if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "PATCH") {
+          plan = { ...plan, ...(body as object) };
+          return Response.json({ plan });
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-plan-update-"));
+    tempRoots.push(root);
+    try {
       const updated = await runCli(
         [
           "--json",
@@ -142,39 +199,51 @@ describe("cloud CLI plan commands", () => {
         name: "Codila final delivery",
       });
 
-      const deleted = await runCli(["--json", "plans", "--delete", PLAN_ID], root, `http://127.0.0.1:${server.port}`);
-      expect(deleted).toMatchObject({ exitCode: 0, stderr: "" });
-      expect(JSON.parse(deleted.stdout)).toEqual({ deleted: true });
-      expect(requests[0]).toMatchObject({
-        method: "POST",
-        path: "/v1/plans",
-        body: {
-          name: "Codila CLI control",
-          slug: "codila-cli-control",
-          description: "Private CLI release plan",
+      // Only the flags the operator passed may reach the authority: a metadata
+      // update must never blank a field the caller did not name.
+      expect(requests.filter((request) => request.method === "PATCH")).toEqual([
+        {
+          method: "PATCH",
+          path: `/v1/plans/${PLAN_ID}`,
+          body: {
+            name: "Codila delivery",
+            description: "Updated delivery plan",
+            slug: "codila-delivery",
+            status: "active",
+          },
         },
-      });
-      expect(requests).toContainEqual(expect.objectContaining({
-        method: "PATCH",
-        path: `/v1/plans/${PLAN_ID}`,
-        body: { status: "completed" },
-      }));
-      expect(requests).toContainEqual(expect.objectContaining({
-        method: "PATCH",
-        path: `/v1/plans/${PLAN_ID}`,
-        body: {
-          name: "Codila delivery",
-          description: "Updated delivery plan",
-          slug: "codila-delivery",
-          status: "active",
+        {
+          method: "PATCH",
+          path: `/v1/plans/${PLAN_ID}`,
+          body: { name: "Codila final delivery" },
         },
-      }));
-      expect(requests).toContainEqual(expect.objectContaining({
-        method: "PATCH",
-        path: `/v1/plans/${PLAN_ID}`,
-        body: { name: "Codila final delivery" },
-      }));
-      expect(requests.at(-1)).toMatchObject({ method: "DELETE", path: `/v1/plans/${PLAN_ID}` });
+      ]);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("rejects an invalid plan status before it reaches the authority", async () => {
+    const requests: string[] = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        requests.push(`${request.method} ${new URL(request.url).pathname}`);
+        return Response.json({ error: "mutation must not run" }, { status: 500 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-plan-bad-status-"));
+    tempRoots.push(root);
+    try {
+      const result = await runCli(
+        ["--json", "plans", "--update", PLAN_ID, "--status", "done"],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain("Invalid plan status: done");
+      expect(requests).toEqual([]);
     } finally {
       server.stop(true);
     }

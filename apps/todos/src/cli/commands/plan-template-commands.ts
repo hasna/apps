@@ -9,9 +9,10 @@ import {
   updatePlan,
   deletePlan,
 } from "../../db/plans.js";
-import { createTask } from "../../db/tasks.js";
+import { createTask, listTasks, updateTask } from "../../db/tasks.js";
 import type { TemplatePreview } from "../../db/templates.js";
-import type { Plan, Task, TemplateWithTasks } from "../../types/index.js";
+import type { Plan, PlanStatus, Task, TemplateWithTasks, UpdatePlanInput } from "../../types/index.js";
+import { PLAN_STATUSES } from "../../types/index.js";
 import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
 import {
   evaluateTemplateCondition,
@@ -34,6 +35,7 @@ import {
   cloudListTasks,
   cloudResolvePlan,
   cloudResolveProjectRef,
+  cloudUpdateTask,
   cloudUpdateTemplate,
   cloudUpdatePlan,
 } from "../cloud-router.js";
@@ -241,18 +243,106 @@ function resolvePlanCliRef(ref: string, projectId: string | undefined): string {
   process.exit(1);
 }
 
+/** Metadata edit requested by `plans --update` or its `plans --rename` shorthand. */
+interface PlanMetadataUpdate {
+  ref: string;
+  patch: UpdatePlanInput;
+}
+
+interface PlanMetadataOptions {
+  update?: string;
+  rename?: string[];
+  name?: string;
+  slug?: string;
+  description?: string;
+  status?: string;
+}
+
+/**
+ * Resolve `plans --update <ref> [--name/--slug/--description/--status]` and the
+ * `plans --rename <ref> <new name>` shorthand into ONE metadata patch, so the
+ * local SQLite and remote-authority paths below apply exactly the same field
+ * set. Returns `null` when neither flag was used.
+ */
+function planMetadataUpdateRequest(opts: PlanMetadataOptions): PlanMetadataUpdate | null {
+  if (opts.update && opts.rename) {
+    console.error(chalk.red("Use either --update or --rename, not both."));
+    process.exit(1);
+  }
+
+  if (opts.rename) {
+    // `--rename` is variadic so the new name survives without quoting; the first
+    // value is always the plan reference and the rest are the name.
+    const [ref, ...nameParts] = opts.rename;
+    const name = nameParts.join(" ").trim();
+    if (!ref || !name) {
+      console.error(chalk.red("Usage: plans --rename <id-or-slug> <new name>"));
+      process.exit(1);
+    }
+    return { ref, patch: { name } };
+  }
+
+  if (!opts.update) return null;
+
+  const patch: UpdatePlanInput = {};
+  if (opts.name !== undefined) patch.name = opts.name;
+  if (opts.description !== undefined) patch.description = opts.description;
+  if (opts.slug !== undefined) patch.slug = opts.slug;
+  if (opts.status !== undefined) {
+    if (!(PLAN_STATUSES as readonly string[]).includes(opts.status)) {
+      console.error(chalk.red(`Invalid plan status: ${opts.status}. Use one of: ${PLAN_STATUSES.join(", ")}`));
+      process.exit(1);
+    }
+    patch.status = opts.status as PlanStatus;
+  }
+  if (Object.keys(patch).length === 0) {
+    console.error(chalk.red("Provide --name, --slug, --description, or --status with --update"));
+    process.exit(1);
+  }
+  return { ref: opts.update, patch };
+}
+
+/** Outcome of a `plans --delete`, including how its tasks were handled. */
+interface PlanDeleteOutcome {
+  deleted: boolean;
+  moved_tasks: number;
+  orphaned_tasks: number;
+}
+
+/**
+ * `plans --delete` historically printed `{ deleted }`, and callers depend on that
+ * shape. Report the migration counts only when the delete actually engaged the
+ * task surface — `--move-tasks-to` was requested, or the plan still held tasks —
+ * so a plan with no tasks keeps the original contract.
+ */
+function planDeleteResult(outcome: PlanDeleteOutcome, reportCounts: boolean): Record<string, unknown> {
+  return reportCounts ? { ...outcome } : { deleted: outcome.deleted };
+}
+
+function warnPlanDeleteOrphans(planName: string, count: number): void {
+  console.error(chalk.yellow(
+    `Warning: deleting plan ${planName} will orphan ${count} ${count === 1 ? "task" : "tasks"}; ` +
+      "pass --move-tasks-to <id-or-slug> to reassign them instead.",
+  ));
+}
+
 export function registerPlanTemplateCommands(program: Command) {
   // plans
   program
     .command("plans")
     .description("List and manage plans")
     .option("--add <name>", "Create a plan")
-    .option("--slug <slug>", "Readable plan slug (with --add)")
-    .option("-d, --description <text>", "Plan description (with --add)")
+    .option("--slug <slug>", "Readable plan slug (with --add or --update)")
+    .option("-d, --description <text>", "Plan description (with --add or --update)")
     .option("--show <id-or-slug>", "Show plan details with its tasks")
     .option("--artifact <id-or-slug>", "Show local Markdown artifact diagnostics for a plan")
     .option("--write-artifacts", "Write local Markdown artifacts for all project-scoped plans in scope")
+    .option("--update <id-or-slug>", "Update plan metadata (with --name, --slug, --description, or --status)")
+    .option("--rename <id-or-slug> <new-name...>", "Rename a plan (shorthand for --update --name)")
+    .option("--name <name>", "New plan name (with --update)")
+    .option("--status <status>", `New plan status (with --update): ${PLAN_STATUSES.join(", ")}`)
     .option("--delete <id>", "Delete a plan")
+    .option("--move-tasks-to <id-or-slug>", "Reassign the plan's tasks to another plan (with --delete)")
     .option("--complete <id>", "Mark a plan as completed")
     .action(async (opts) => {
       const globalOpts = program.opts();
@@ -419,6 +509,33 @@ export function registerPlanTemplateCommands(program: Command) {
         return;
       }
 
+      const metadataUpdate = planMetadataUpdateRequest(opts);
+      if (metadataUpdate) {
+        const cloudPlan = cloud ? await cloudResolvePlan(cloud, metadataUpdate.ref, projectId) : null;
+        if (cloud && !cloudPlan) {
+          console.error(chalk.red(`Plan not found: ${metadataUpdate.ref}`));
+          process.exit(1);
+        }
+        const resolvedId = cloudPlan?.id ?? resolvePlanCliRef(metadataUpdate.ref, projectId);
+        try {
+          const plan = cloud
+            ? await cloudUpdatePlan(cloud, resolvedId, metadataUpdate.patch)
+            : updatePlan(resolvedId, metadataUpdate.patch);
+          const artifact = cloud ? null : writePlanArtifact(plan);
+          if (globalOpts.json) {
+            output(plan, true);
+          } else {
+            console.log(chalk.green("Plan updated:"));
+            console.log(`${chalk.dim(plan.id.slice(0, 8))} ${chalk.bold(plan.name)} ${chalk.cyan(`[${plan.status}]`)}`);
+            if (plan.slug) console.log(`${chalk.dim("Slug:")} ${plan.slug}`);
+            if (artifact) console.log(`${chalk.dim("Artifact:")} ${artifact.path}`);
+          }
+        } catch (e) {
+          handleError(e);
+        }
+        return;
+      }
+
       if (opts.delete) {
         const cloudPlan = cloud ? await cloudResolvePlan(cloud, opts.delete, projectId) : null;
         if (cloud && !cloudPlan) {
@@ -426,12 +543,77 @@ export function registerPlanTemplateCommands(program: Command) {
           process.exit(1);
         }
         const resolvedId = cloudPlan?.id ?? resolvePlanCliRef(opts.delete, projectId);
-        const deleted = cloud ? await cloudDeletePlan(cloud, resolvedId) : deletePlan(resolvedId);
+        const plan = cloudPlan ?? getPlan(resolvedId);
+        if (!plan) {
+          console.error(chalk.red(`Plan not found: ${opts.delete}`));
+          process.exit(1);
+        }
+
+        // Resolve the migration target BEFORE touching anything: a bad
+        // --move-tasks-to must not leave the source plan half-emptied.
+        let target: Plan | null = null;
+        if (opts.moveTasksTo) {
+          if (cloud) {
+            target = await cloudResolvePlan(cloud, opts.moveTasksTo, projectId);
+            if (!target) {
+              console.error(chalk.red(`Plan not found: ${opts.moveTasksTo}`));
+              process.exit(1);
+            }
+          } else {
+            target = getPlan(resolvePlanCliRef(opts.moveTasksTo, projectId));
+            if (!target) {
+              console.error(chalk.red(`Plan not found: ${opts.moveTasksTo}`));
+              process.exit(1);
+            }
+          }
+          if (target.id === plan.id) {
+            console.error(chalk.red("--move-tasks-to must name a different plan than --delete."));
+            process.exit(1);
+          }
+        }
+
+        // The orphan preflight is ADVISORY when no migration was requested: an
+        // authority that cannot answer the task query must not block the delete,
+        // so an unanswerable read reports no counts rather than counts we cannot
+        // stand behind. With --move-tasks-to the read is load-bearing and any
+        // failure surfaces.
+        let planTasks: Task[] | null;
+        if (cloud) {
+          try {
+            planTasks = await cloudListTasks(cloud, { plan_id: plan.id, include_subtasks: true });
+          } catch (e) {
+            if (target) handleError(e);
+            planTasks = null;
+          }
+        } else {
+          planTasks = listTasks({ plan_id: plan.id });
+        }
+
+        let movedTasks = 0;
+        if (target && planTasks) {
+          try {
+            for (const task of planTasks) {
+              if (cloud) await cloudUpdateTask(cloud, task.id, { version: task.version, plan_id: target.id });
+              else updateTask(task.id, { version: task.version, plan_id: target.id });
+              movedTasks += 1;
+            }
+          } catch (e) {
+            handleError(e);
+          }
+        } else if (planTasks && planTasks.length > 0) {
+          warnPlanDeleteOrphans(plan.name, planTasks.length);
+        }
+
+        const orphanedTasks = (planTasks?.length ?? 0) - movedTasks;
+        const reportCounts = Boolean(target) || (planTasks?.length ?? 0) > 0;
+        const deleted = cloud ? await cloudDeletePlan(cloud, plan.id) : deletePlan(plan.id);
+        const result = planDeleteResult({ deleted, moved_tasks: movedTasks, orphaned_tasks: orphanedTasks }, reportCounts);
         if (globalOpts.json) {
-          output({ deleted }, true);
+          output(result, true);
           if (!deleted) process.exitCode = 1;
         } else if (deleted) {
           console.log(chalk.green("Plan deleted."));
+          if (target) console.log(chalk.dim(`Moved ${movedTasks} task(s) to ${target.name}.`));
         } else {
           console.error(chalk.red("Plan not found."));
           process.exit(1);
