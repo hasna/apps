@@ -25,8 +25,17 @@ export function parseClaudeInput(input: Record<string, any>): StatusContext {
       : undefined,
     transcriptPath: input?.transcript_path || undefined,
     sessionId: input?.session_id || undefined,
+    sessionName: input?.session_name || undefined,
     version: input?.version || undefined,
     outputStyle: input?.output_style?.name || undefined,
+    effort: input?.effort?.level || undefined,
+    thinking: typeof input?.thinking?.enabled === "boolean" ? input.thinking.enabled : undefined,
+    rateLimits: input?.rate_limits
+      ? {
+          fiveHour: { usedPercentage: numberOr(input.rate_limits.five_hour?.used_percentage) },
+          sevenDay: { usedPercentage: numberOr(input.rate_limits.seven_day?.used_percentage) },
+        }
+      : undefined,
   };
 }
 

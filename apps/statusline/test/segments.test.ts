@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { hostname } from "node:os";
@@ -252,6 +252,135 @@ describe("session segments", () => {
   });
   test("session-id is short", async () => {
     expect(await getSegment("session-id")!.render(ctx())).toBe("abc12345");
+  });
+});
+
+describe("codewith-mirroring segments", () => {
+  test("model-with-reasoning appends the effort level", async () => {
+    const out = await getSegment("model-with-reasoning")!.render(ctx({ effort: { level: "xhigh" } }));
+    expect(out).toBe("Fable (xhigh)");
+  });
+  test("model-with-reasoning falls back to thinking when no effort is reported", async () => {
+    const out = await getSegment("model-with-reasoning")!.render(ctx({ thinking: { enabled: true } }));
+    expect(out).toBe("Fable (thinking)");
+  });
+  test("model-with-reasoning is bare when neither is reported", async () => {
+    expect(await getSegment("model-with-reasoning")!.render(ctx())).toBe("Fable");
+  });
+  test("model-with-reasoning derives a name from the id when unlabelled", async () => {
+    const out = await getSegment("model-with-reasoning")!.render(
+      ctx({ model: { id: "claude-opus-4-8" }, effort: { level: "low" } }),
+    );
+    expect(out).toBe("opus 4.8 (low)");
+  });
+  test("model-with-reasoning null without a model", async () => {
+    expect(await getSegment("model-with-reasoning")!.render(ctx({ model: undefined }))).toBeNull();
+  });
+
+  test("five-hour-limit rounds the reported percentage", async () => {
+    const out = await getSegment("five-hour-limit")!.render(
+      ctx({ rate_limits: { five_hour: { used_percentage: 42.6 } } }),
+    );
+    expect(out).toBe("5h:43%");
+  });
+  test("five-hour-limit renders zero rather than dropping it", async () => {
+    const out = await getSegment("five-hour-limit")!.render(
+      ctx({ rate_limits: { five_hour: { used_percentage: 0 } } }),
+    );
+    expect(out).toBe("5h:0%");
+  });
+  test("five-hour-limit null when the host reports no limits", async () => {
+    expect(await getSegment("five-hour-limit")!.render(ctx())).toBeNull();
+  });
+  test("five-hour-limit escalates to red past 80%", () => {
+    const color = getSegment("five-hour-limit")!.color as (c: StatusContext) => string;
+    expect(color(ctx({ rate_limits: { five_hour: { used_percentage: 81 } } }))).toBe("red");
+    expect(color(ctx({ rate_limits: { five_hour: { used_percentage: 12 } } }))).toBe("yellow");
+  });
+
+  test("seven-day-limit reads the seven_day window, not a week alias", async () => {
+    const out = await getSegment("seven-day-limit")!.render(
+      ctx({ rate_limits: { seven_day: { used_percentage: 12.2 } } }),
+    );
+    expect(out).toBe("7d:12%");
+  });
+  test("seven-day-limit null when the host reports only the 5h window", async () => {
+    const out = await getSegment("seven-day-limit")!.render(
+      ctx({ rate_limits: { five_hour: { used_percentage: 30 } } }),
+    );
+    expect(out).toBeNull();
+  });
+  test("both limit windows render side by side", async () => {
+    const c = ctx({ rate_limits: { five_hour: { used_percentage: 90 }, seven_day: { used_percentage: 40 } } });
+    expect(await getSegment("five-hour-limit")!.render(c)).toBe("5h:90%");
+    expect(await getSegment("seven-day-limit")!.render(c)).toBe("7d:40%");
+  });
+
+  test("thread-title renders the renamed thread", async () => {
+    expect(await getSegment("thread-title")!.render(ctx({ session_name: "ship it" }))).toBe("ship it");
+  });
+  test("thread-title null until the thread is named", async () => {
+    expect(await getSegment("thread-title")!.render(ctx())).toBeNull();
+  });
+});
+
+describe("auth segments", () => {
+  const accountsRoot = mkdtempSync(join(tmpdir(), "statusline-seg-accounts-"));
+  const profileDir = join(accountsRoot, "profiles", "claude", "account042");
+  let saved: Record<string, string | undefined>;
+
+  beforeAll(() => {
+    mkdirSync(profileDir, { recursive: true });
+    writeFileSync(
+      join(accountsRoot, "accounts.json"),
+      JSON.stringify({ profiles: [{ name: "account042", tool: "claude", dir: profileDir }] }),
+    );
+    writeFileSync(
+      join(profileDir, ".claude.json"),
+      JSON.stringify({ oauthAccount: { emailAddress: "agent@example.com" } }),
+    );
+    saved = { ACCOUNTS_HOME: process.env.ACCOUNTS_HOME, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
+    process.env.ACCOUNTS_HOME = accountsRoot;
+    process.env.CLAUDE_CONFIG_DIR = profileDir;
+  });
+
+  afterAll(() => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  test("auth-profile names the profile owning this process", async () => {
+    expect(await getSegment("auth-profile")!.render(ctx())).toBe("account042");
+  });
+
+  test("auth-email reports the logged-in address", async () => {
+    expect(await getSegment("auth-email")!.render(ctx())).toBe("agent@example.com");
+  });
+
+  test("auth-profile falls back to the email for an unmanaged config dir", async () => {
+    const loose = mkdtempSync(join(tmpdir(), "statusline-seg-loose-"));
+    writeFileSync(
+      join(loose, ".claude.json"),
+      JSON.stringify({ oauthAccount: { emailAddress: "loose@example.com" } }),
+    );
+    process.env.CLAUDE_CONFIG_DIR = loose;
+    try {
+      expect(await getSegment("auth-profile")!.render(ctx())).toBe("loose@example.com");
+    } finally {
+      process.env.CLAUDE_CONFIG_DIR = profileDir;
+    }
+  });
+
+  test("auth-profile null when nothing identifies the config dir", async () => {
+    const blank = mkdtempSync(join(tmpdir(), "statusline-seg-blank-"));
+    process.env.CLAUDE_CONFIG_DIR = blank;
+    try {
+      expect(await getSegment("auth-profile")!.render(ctx())).toBeNull();
+    } finally {
+      process.env.CLAUDE_CONFIG_DIR = profileDir;
+    }
   });
 });
 

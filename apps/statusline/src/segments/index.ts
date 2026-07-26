@@ -3,6 +3,7 @@ import type { Segment, StatusContext } from "../providers/types.js";
 import { compactAge, compactDuration, compactNum, money } from "../format.js";
 import { gitBranch, gitProjectName, lastCommitEpoch, trackedLineCount } from "../git.js";
 import { contextUsage } from "../context-window.js";
+import { sessionAccount, sessionAccountEmail } from "../accounts.js";
 
 /**
  * Format a model id like "claude-fable-5[1m]" or "claude-3-5-sonnet-20241022"
@@ -25,6 +26,17 @@ function friendlyModel(id: string): { name: string; tag: string | null } {
 }
 
 const dir = (ctx: StatusContext) => ctx.cwd || process.cwd();
+
+/** Model name for display: the host's own label, else a tidied-up id. */
+function modelName(ctx: StatusContext): string | null {
+  if (ctx.model?.displayName) return ctx.model.displayName;
+  return ctx.model?.id ? friendlyModel(ctx.model.id).name : null;
+}
+
+/** Gauge value for colour escalation; an unreported window never escalates. */
+function limitPercent(pct: number | undefined): number {
+  return typeof pct === "number" ? pct : 0;
+}
 
 export const segments: Segment[] = [
   {
@@ -99,6 +111,65 @@ export const segments: Segment[] = [
       const { name, tag } = friendlyModel(ctx.model.id);
       return tag ? `${name} ${tag}` : name;
     },
+  },
+  {
+    id: "model-with-reasoning",
+    description: "Model name with its reasoning effort (or thinking, when on)",
+    defaultEnabled: false,
+    color: "cyan",
+    render(ctx) {
+      const name = modelName(ctx);
+      if (!name) return null;
+      if (ctx.effort) return `${name} (${ctx.effort})`;
+      if (ctx.thinking) return `${name} (thinking)`;
+      return name;
+    },
+  },
+  {
+    id: "auth-profile",
+    description: "Account profile this session runs as (omitted when unmanaged)",
+    defaultEnabled: false,
+    color: "magenta",
+    async render(ctx) {
+      // Resolved from this process's own config dir, never from a global
+      // "active profile" pointer — concurrent sessions must not agree.
+      const account = await sessionAccount(process.env, ctx.provider);
+      return account.profile ?? (await sessionAccountEmail(process.env, ctx.provider));
+    },
+  },
+  {
+    id: "auth-email",
+    description: "Account email this session is logged in as (omitted when unknown)",
+    defaultEnabled: false,
+    color: "magenta",
+    render: (ctx) => sessionAccountEmail(process.env, ctx.provider),
+  },
+  {
+    id: "five-hour-limit",
+    description: "Percentage of the 5-hour rate limit used (omitted when unreported)",
+    defaultEnabled: false,
+    color: (ctx) => (limitPercent(ctx.rateLimits?.fiveHour?.usedPercentage) >= 80 ? "red" : "yellow"),
+    render(ctx) {
+      const pct = ctx.rateLimits?.fiveHour?.usedPercentage;
+      return typeof pct === "number" ? `5h:${Math.round(pct)}%` : null;
+    },
+  },
+  {
+    id: "seven-day-limit",
+    description: "Percentage of the 7-day rate limit used (omitted when unreported)",
+    defaultEnabled: false,
+    color: (ctx) => (limitPercent(ctx.rateLimits?.sevenDay?.usedPercentage) >= 80 ? "red" : "yellow"),
+    render(ctx) {
+      const pct = ctx.rateLimits?.sevenDay?.usedPercentage;
+      return typeof pct === "number" ? `7d:${Math.round(pct)}%` : null;
+    },
+  },
+  {
+    id: "thread-title",
+    description: "Thread title set with /rename (omitted until named)",
+    defaultEnabled: false,
+    color: "blue",
+    render: (ctx) => ctx.sessionName || null,
   },
   {
     id: "context-used",

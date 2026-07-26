@@ -14,6 +14,7 @@ import {
   previewStatusline,
   renderStatusline,
   saveConfig,
+  setColors,
   setSeparator,
   statuslineVersion,
   type StatuslineConfig,
@@ -32,6 +33,7 @@ const configSchema = z
   .object({
     separator: z.string().min(1).optional(),
     segments: z.array(z.string().min(1)).optional(),
+    colors: z.boolean().optional(),
   })
   .optional();
 
@@ -158,11 +160,12 @@ export function buildServer(): McpServer {
 
   server.tool(
     "update_config",
-    "Update separator and/or the full enabled segment list.",
+    "Update separator, colours, and/or the full enabled segment list.",
     {
       config_path: configPathSchema,
       separator: z.string().min(1).optional(),
       segments: z.array(z.string().min(1)).optional(),
+      colors: z.boolean().optional(),
       dry_run: z.boolean().default(false),
       confirm_write: z.boolean().default(false),
     },
@@ -173,6 +176,7 @@ export function buildServer(): McpServer {
         let next = loaded.config;
         if (input.separator !== undefined) next = setSeparator(input.separator, next).config;
         if (input.segments !== undefined) next = orderSegments(input.segments, next).config;
+        if (input.colors !== undefined) next = setColors(input.colors, next).config;
         maybeWrite(loaded.path, next, input);
         return { configPath: loaded.path, dryRun: input.dry_run, config: next };
       }),

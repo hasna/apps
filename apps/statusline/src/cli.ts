@@ -11,6 +11,7 @@ import {
   previewStatusline,
   renderStatusline,
   saveConfig,
+  setColors,
   setSeparator,
   statuslineVersion,
   type SegmentInfo,
@@ -73,6 +74,7 @@ usage:
   statusline disable <id...>     disable segments
   statusline order <id...>       set the exact segment order (also defines enabled set)
   statusline separator <str>     set the separator (default " · ")
+  statusline colors <on|off>     toggle segment colours (default on)
   statusline preview             render with a sample payload from the current directory
   statusline reset               restore default config
   statusline install [claude]    wire into Claude Code (~/.claude/settings.json)
@@ -408,6 +410,15 @@ export async function runCli(argv = process.argv.slice(2)): Promise<void> {
         const result = setSeparator(args.join(" "), loadConfig());
         saveConfig(result.config);
         console.log(`separator: "${result.config.separator}"`);
+        return;
+      }
+
+      case "colors": {
+        const value = args[0];
+        if (value !== "on" && value !== "off") throw new Error("usage: statusline colors <on|off>");
+        const result = setColors(value === "on", loadConfig());
+        saveConfig(result.config);
+        console.log(`colors: ${value}`);
         return;
       }
 

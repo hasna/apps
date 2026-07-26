@@ -2,20 +2,23 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { installClaude } from "../src/install";
+import { claudeSettingsPath, installClaude } from "../src/install";
 import { statuslineVersion } from "../src/index";
 import { defaultConfig } from "../src/config";
 import { segments } from "../src/segments";
 
 function runCli(
   args: string[],
-  options: { stdin?: string; home?: string } = {},
+  options: { stdin?: string; home?: string; configDir?: string } = {},
 ): { exitCode: number | null; stdout: string; stderr: string; home?: string } {
   const dir = mkdtempSync(join(tmpdir(), "statusline-cli-"));
   const env: Record<string, string | undefined> = {
     ...process.env,
     STATUSLINE_CONFIG: join(dir, "config.json"),
+    // never let a test write into the config dir the developer is running under
+    CLAUDE_CONFIG_DIR: options.configDir,
   };
+  if (options.configDir === undefined) delete env.CLAUDE_CONFIG_DIR;
   if (options.home) env.HOME = options.home;
   const proc = Bun.spawnSync(["bun", "src/cli.ts", ...args], {
     cwd: join(import.meta.dir, ".."),
@@ -110,6 +113,28 @@ describe("CLI compatibility", () => {
     }
   });
 
+  test("install claude follows CLAUDE_CONFIG_DIR to the settings the agent reads", () => {
+    const configDir = mkdtempSync(join(tmpdir(), "statusline-configdir-"));
+    const home = mkdtempSync(join(tmpdir(), "statusline-home-"));
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    try {
+      const result = runCli(["install", "claude"], { home, configDir });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain(configDir);
+      expect(existsSync(join(configDir, "settings.json"))).toBe(true);
+      // the home-relative path is left alone: the agent never reads it here
+      expect(existsSync(join(home, ".claude", "settings.json"))).toBe(false);
+    } finally {
+      rmSync(configDir, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("claudeSettingsPath prefers the isolated config dir", () => {
+    expect(claudeSettingsPath({ CLAUDE_CONFIG_DIR: "/tmp/profile-x" })).toBe("/tmp/profile-x/settings.json");
+    expect(claudeSettingsPath({ HOME: "/tmp/home-x" })).toBe("/tmp/home-x/.claude/settings.json");
+  });
+
   test("installClaude backs up existing settings and wires command", () => {
     const dir = mkdtempSync(join(tmpdir(), "statusline-install-"));
     const settingsPath = join(dir, "settings.json");
@@ -121,6 +146,84 @@ describe("CLI compatibility", () => {
     expect(settings.theme).toBe("dark");
     expect(settings.statusLine.command).toMatch(/render$/);
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("installClaude installs into an explicit path while the session is bound to a profile", () => {
+    const ambient = mkdtempSync(join(tmpdir(), "statusline-ambient-"));
+    const dir = mkdtempSync(join(tmpdir(), "statusline-install-"));
+    const settingsPath = join(dir, "settings.json");
+    const previous = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = ambient;
+    try {
+      expect(installClaude(settingsPath)).toBe(settingsPath);
+      expect(JSON.parse(readFileSync(settingsPath, "utf8")).statusLine.type).toBe("command");
+      // the operator's own profile is not a party to this install
+      expect(existsSync(join(ambient, "settings.json"))).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = previous;
+      rmSync(ambient, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("installClaude never fabricates a dir it was pointed at, bound session or not", () => {
+    const base = mkdtempSync(join(tmpdir(), "statusline-missing-"));
+    const missing = join(base, "profile-nobody-created");
+    const settingsPath = join(missing, "settings.json");
+    const previous = process.env.CLAUDE_CONFIG_DIR;
+    try {
+      // same call, same answer — the installing shell must not decide this
+      for (const bound of [undefined, base]) {
+        if (bound === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+        else process.env.CLAUDE_CONFIG_DIR = bound;
+        expect(() => installClaude(settingsPath)).toThrow(`config dir ${missing} does not exist`);
+        expect(existsSync(missing)).toBe(false);
+      }
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = previous;
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test("installClaude refuses to create a missing isolated config dir", () => {
+    const ambient = mkdtempSync(join(tmpdir(), "statusline-ambient-"));
+    const base = mkdtempSync(join(tmpdir(), "statusline-isolated-"));
+    const missing = join(base, "account999");
+    const previous = process.env.CLAUDE_CONFIG_DIR;
+    // never let a regression here write into the profile the test runner is under
+    process.env.CLAUDE_CONFIG_DIR = ambient;
+    try {
+      expect(() => installClaude(undefined, { HOME: base, CLAUDE_CONFIG_DIR: missing })).toThrow(
+        `config dir ${missing} does not exist — create the profile first`,
+      );
+      expect(existsSync(missing)).toBe(false);
+      expect(existsSync(join(ambient, "settings.json"))).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = previous;
+      rmSync(ambient, { recursive: true, force: true });
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test("installClaude creates the default config dir on a first install, following the env it was given", () => {
+    const ambient = mkdtempSync(join(tmpdir(), "statusline-ambient-"));
+    const home = mkdtempSync(join(tmpdir(), "statusline-home-"));
+    const previous = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = ambient;
+    try {
+      const written = installClaude(undefined, { HOME: home });
+      expect(written).toBe(join(home, ".claude", "settings.json"));
+      expect(JSON.parse(readFileSync(written, "utf8")).statusLine.type).toBe("command");
+      expect(existsSync(join(ambient, "settings.json"))).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = previous;
+      rmSync(ambient, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });
 
@@ -178,7 +281,7 @@ describe("cli list", () => {
     const out = runCli(["list", "--search", "percentage", "--limit", "2"]);
     expect(out.exitCode).toBe(0);
     expect(out.stdout).toContain("showing 2 of");
-    expect(out.stdout).toContain("context-used");
+    expect(out.stdout).toContain("context-remaining");
     expect(out.stdout).toContain("context-remaining");
     expect(out.stdout).not.toContain("used-tokens");
   });
