@@ -499,7 +499,6 @@ describe("ensureProjectChannelViaStore (api/cloud mode)", () => {
   function makeStore(overrides: Partial<ProjectChannelStore> = {}): {
     store: ProjectChannelStore;
     project: Workspace;
-    updates: Array<Record<string, unknown>>;
     events: Array<Record<string, unknown>>;
   } {
     const project = {
@@ -512,33 +511,23 @@ describe("ensureProjectChannelViaStore (api/cloud mode)", () => {
       tags: [],
       metadata: {},
     } as unknown as Workspace;
-    const updates: Array<Record<string, unknown>> = [];
     const events: Array<Record<string, unknown>> = [];
-    let current = project;
     const store: ProjectChannelStore = {
       mode: "api",
-      async getProject() {
-        return current;
-      },
-      async updateProject(_id, patch) {
-        updates.push(patch as Record<string, unknown>);
-        current = { ...current, integrations: { ...current.integrations, ...(patch.integrations ?? {}) } };
-        return current;
-      },
       async recordEvent(_id, input) {
         events.push(input as unknown as Record<string, unknown>);
         return input;
       },
       ...overrides,
     };
-    return { store, project, updates, events };
+    return { store, project, events };
   }
 
   test("a 404 from the events route does not fail an ensure whose side effects landed", async () => {
     // Regression (issue #28): the channel was created and the integration was
     // persisted, then `POST /projects/:id/events` 404'd and the raw transport
     // error escaped -> the CLI exited 1 on a fully completed ensure.
-    const { store, project, updates } = makeStore({
+    const { store, project } = makeStore({
       recordEvent: async () => {
         throw new Error("Hasna request failed: POST /projects/wks_cloud000000000000001/events -> 404");
       },
@@ -554,7 +543,7 @@ describe("ensureProjectChannelViaStore (api/cloud mode)", () => {
     expect(result.message).toBeUndefined();
     expect(calls).toHaveLength(1);
     // No project-record write at all: ensure does not pin a derived name.
-    expect(updates).toHaveLength(0);
+    expect(project.integrations["conversations_channel"]).toBeUndefined();
     // The failure is reported as a non-fatal warning with the audit event
     // marked as the only thing that did not land.
     expect(result.warnings.join(" ")).toContain("audit event was not recorded");
@@ -597,7 +586,7 @@ describe("ensureProjectChannelViaStore (api/cloud mode)", () => {
   });
 
   test("an existing channel retry is idempotent and stays successful", async () => {
-    const { store, project, updates } = makeStore({
+    const { store, project } = makeStore({
       recordEvent: async () => {
         throw new Error("Hasna request failed: POST /projects/x/events -> 404");
       },
@@ -610,30 +599,16 @@ describe("ensureProjectChannelViaStore (api/cloud mode)", () => {
     expect(first.status).toBe("exists");
     expect(second.status).toBe("exists");
     // Idempotent, and neither run touches the project record.
-    expect(updates).toHaveLength(0);
+    expect(project.integrations["conversations_channel"]).toBeUndefined();
     expect(second.linked).toBe(false);
   });
 
-  test("an unreadable project record reports partial state instead of throwing", async () => {
-    // The store read-back happens after the channel already exists, so a
-    // backend hiccup there must not escape as a raw transport error either.
-    const { store, project } = makeStore({
-      getProject: async () => {
-        throw new Error("Hasna request failed: GET /projects/wks_cloud000000000000001 -> 502");
-      },
-    });
-    const { runner } = recordingRunner(() => ok);
-
-    const result = await ensureProjectChannelViaStore(store, project, { runner });
-
-    expect(result.status).toBe("error");
-    expect(result.message).toContain("Could not read the project record back");
-    expect(result.side_effects).toEqual({
-      channel_created: true,
-      channel_present: true,
-      integration_linked: false,
-      event_recorded: false,
-    });
+  test("the store surface carries no write path at all", () => {
+    // Structural guard: `ProjectChannelStore` intentionally exposes only
+    // recordEvent. If a future change reintroduces updateProject here, the
+    // one-way repoint fixed in this change becomes reachable again.
+    const { store } = makeStore();
+    expect(Object.keys(store).sort()).toEqual(["mode", "recordEvent"]);
   });
 
   test("never writes the project record — a derived name is not pinned as a link", async () => {
@@ -641,11 +616,7 @@ describe("ensureProjectChannelViaStore (api/cloud mode)", () => {
     // name onto the record, that write would outrank derivation forever and
     // would survive a revert of the change that produced it, silently moving a
     // project off the channel holding its history.
-    const { store, project, updates } = makeStore({
-      updateProject: async () => {
-        throw new Error("ensure must not write the project record");
-      },
-    });
+    const { store, project } = makeStore();
     const { runner } = recordingRunner(() => ok);
 
     const result = await ensureProjectChannelViaStore(store, project, { runner });
@@ -653,7 +624,7 @@ describe("ensureProjectChannelViaStore (api/cloud mode)", () => {
     expect(result.status).toBe("created");
     expect(result.channel).toBe("cloud-demo");
     expect(result.linked).toBe(false);
-    expect(updates).toHaveLength(0);
+    expect(project.integrations["conversations_channel"]).toBeUndefined();
     expect(result.side_effects).toEqual({
       channel_created: true,
       channel_present: true,

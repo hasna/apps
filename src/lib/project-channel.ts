@@ -528,20 +528,16 @@ export function ensureProjectChannel(
 }
 
 /**
- * Minimal structural view of the projects Store used to persist the channel
- * link. `ProjectStore` (local + api) is assignable to this. Routing channel
- * persistence through the Store is what keeps `projects channel --ensure`
- * correct in api/cloud mode: the integration is written to the project record
- * wherever it actually lives (the cloud) instead of a local sqlite file that
- * does not contain the project (the split-brain the standard forbids).
+ * Minimal structural view of the projects Store used by the store-routed
+ * ensure. `ProjectStore` (local + api) is assignable to this.
+ *
+ * Ensure no longer writes the channel link, so this carries no `updateProject`:
+ * the only thing routed through the Store is the audit event, which must land
+ * wherever the project actually lives (the cloud in api mode) rather than in a
+ * local sqlite file that does not contain the project.
  */
 export interface ProjectChannelStore {
   readonly mode: "local" | "api";
-  getProject(idOrSlug: string): Promise<Workspace | null>;
-  updateProject(
-    id: string,
-    patch: { integrations?: WorkspaceIntegrations; agent_id?: string; source?: EventSource; command?: string },
-  ): Promise<Workspace>;
   recordEvent(
     idOrSlug: string,
     input: { event_type: string; source: EventSource; agentId?: string; command?: string; after?: JsonObject | null },
@@ -593,25 +589,16 @@ export async function ensureProjectChannelViaStore(
 
   let eventRecorded = false;
 
-  // Everything past the channel creation is a store round-trip. In api/cloud
-  // mode it can fail against a backend that does not implement the route (or is
-  // momentarily unreachable) AFTER the channel already exists, so it is fenced
-  // and reported through the result instead of thrown: a partially completed
-  // ensure must never surface as a raw transport error with no record of what
-  // landed (issue #28).
-  let inStore: Workspace | null = null;
-  try {
-    inStore = await store.getProject(project.id);
-  } catch (err) {
-    status = "error";
-    messages.push(`Could not read the project record back: ${errorText(err)}`);
-  }
-  const updated = inStore ?? project;
+  // No store read-back: with the link write gone there is nothing to re-read.
+  // `linked` is answered by the record we were handed, and re-fetching it would
+  // only add a network round-trip in api/cloud mode whose transient failure
+  // would report a fully created channel as an error.
+  const updated = project;
 
-  if (inStore) {
+  {
     // Best-effort audit trail. The channel already exists here; a backend that
     // does not expose POST /projects/:id/events must not turn a completed
-    // ensure into a total failure.
+    // ensure into a total failure (issue #28).
     try {
       await store.recordEvent(project.id, {
         event_type: "channel_ensured",

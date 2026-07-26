@@ -919,7 +919,7 @@ function registerAgentAssistCommands(program: Command): void {
     .command("channel [target]")
     .description("Resolve the project's conversations channel (prints the channel name)")
     .option("--cwd <path>", "Working directory used when target is omitted")
-    .option("--ensure", "Create the conversations channel if missing and link it on the project record")
+    .option("--ensure", "Create the conversations channel if it does not exist (does not write the link)")
     .option("--from <identity>", "Conversations identity recorded as channel creator (with --ensure)")
     .option("--dry-run", "With --ensure: report what would happen without creating anything")
     .option("--agent <id-or-slug>", "Attributing agent")
@@ -933,6 +933,7 @@ function registerAgentAssistCommands(program: Command): void {
           const resolution = resolveProjectChannelForProject(project);
           if (wantsJson(opts)) { printObject(resolution, opts); return; }
           console.log(resolution.channel);
+          for (const warning of resolution.warnings) console.error(chalk.yellow(`! ${warning}`));
           return;
         }
         const agentId = mutationAgentId(store, opts.agent);
@@ -2076,7 +2077,20 @@ function registerProjectCommands(program: Command): void {
       const events = await store.listEvents(project.id);
       const payload = buildProjectDetailPayload({ project, agents, locations, events });
       if (wantsRenderSpec(opts)) { printRenderSpec(payload.render); return; }
-      if (wantsJson(opts)) { printObject(withoutRender(payload), opts); return; }
+      if (wantsJson(opts)) {
+        // `integrations` stays the raw record — it is the stored truth and
+        // scripts diff it. The resolved channel rides alongside it so the JSON
+        // answers the same question the human output does; without this,
+        // `show` and `show -j` disagree for every project whose channel is
+        // derived rather than pinned, which is most of them.
+        const summary = projectChannelSummary(project);
+        printObject({
+          ...(withoutRender(payload) as Record<string, unknown>),
+          conversations_channel: summary.channel,
+          conversations_channel_source: summary.source,
+        }, opts);
+        return;
+      }
       console.log(`${chalk.bold(project.name)} ${chalk.dim(`(${project.slug})`)} ${chalk.green(`[${project.status}]`)}`);
       console.log(`  ${chalk.dim("id:")}   ${project.id}`);
       console.log(`  ${chalk.dim("kind:")} ${project.kind}`);

@@ -1897,10 +1897,10 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
       })),
     }),
     projects_channel: tool({
-      description: "Resolve the project's conversations channel (project -> channel) from the stored integration or the fleet naming convention. ensure=true creates the channel if missing and links it on the project record; mutates only when approved.",
+      description: "Resolve the project's conversations channel (project -> channel): the channel explicitly linked on the project record if there is one, otherwise the project slug. ensure=true creates the channel if it does not exist; it never writes the link. Mutates only when approved.",
       inputSchema: z.object({
         target: z.string().optional().describe("Project id, slug, name, or path; defaults to the working directory"),
-        ensure: z.boolean().optional().describe("Create the conversations channel if missing and persist the link on the project record"),
+        ensure: z.boolean().optional().describe("Create the conversations channel if it does not exist. Does not write the link on the project record."),
       }),
       execute: async (input) => {
         const workspace = resolveProjectTarget(input.target?.trim() || ".");

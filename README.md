@@ -143,7 +143,7 @@ projects runs show <run-id> my-app         # full run detail + tool-call trace
 # Conversations channel linkage — every project has one channel
 projects channel my-app                    # print the project's channel name
 projects channel my-app --json             # full resolution (class, linked, source)
-projects channel my-app --ensure           # create the channel if missing + link it
+projects channel my-app --ensure           # create the channel if it does not exist
 # The channel name lives on the project record as
 # integrations.conversations_channel; when unset it IS the project slug,
 # normalized. This CLI adds no prefix of its own and strips none — it does not

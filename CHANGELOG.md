@@ -52,8 +52,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `linked` and `side_effects.integration_linked` report the record's state.
 
   Consequence, and the reason the next entry exists: with nothing writing the
-  link, the overwhelming majority of projects (1460 of 1527 at time of writing,
-  96%) resolve their channel by derivation rather than storing it.
+  link, the overwhelming majority of projects resolve their channel by
+  derivation rather than storing it — 1460 of 1527 (96%) by a per-kind
+  enumeration, and the same ratio holds on a wider 2332-row sample. Both counts
+  are floors: `projects list` truncates, which is filed separately.
 - **Display and bundle surfaces fall back to derivation.** `projects show`,
   `projects context` and `projects handoff` read
   `integrations.conversations_channel` directly and would therefore have gone

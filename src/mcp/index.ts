@@ -2519,7 +2519,7 @@ server.tool(
 
 server.tool(
   "projects_channel",
-  "Resolve a project's conversations channel (project -> channel) from the stored integration or the fleet naming convention. Pass ensure=true to create the channel if missing and link it on the project record.",
+  "Resolve a project's conversations channel (project -> channel): the channel explicitly linked on the project record if there is one, otherwise the project slug. Pass ensure=true to create the channel if it does not exist. Ensure never writes the link — a derived name stays derived.",
   {
     target: z.string().optional(),
     cwd: z.string().optional(),
