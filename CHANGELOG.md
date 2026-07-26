@@ -51,6 +51,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   The `persist` option and the `persisted` result field are removed —
   `linked` and `side_effects.integration_linked` report the record's state.
 
+  Consequence, and the reason the next entry exists: with nothing writing the
+  link, the overwhelming majority of projects (1460 of 1527 at time of writing,
+  96%) resolve their channel by derivation rather than storing it.
+- **Display and bundle surfaces fall back to derivation.** `projects show`,
+  `projects context` and `projects handoff` read
+  `integrations.conversations_channel` directly and would therefore have gone
+  blank for those 96%. `projects handoff` is the bundle an agent reads to find
+  out where to post, so a `null` there is worse than a stale value. All three
+  now use `projectChannelSummary`, which falls back to the derived name and
+  reports `conversations_channel_source: "integration" | "derived"` alongside
+  it, so the surface stays useful without pretending a derived name is pinned.
+  `projects show` marks a derived channel `(derived)`.
+- `ProjectChannelResolution` gains `warnings`, so an unusable
+  `conversations_channel_class` is reported on the read path
+  (`projects channel <x> --json`) and not only when `--ensure` is passed.
+
 ## [0.1.95]
 
 ### Fixed

@@ -12,6 +12,7 @@ import {
   ensureProjectChannel,
   ensureProjectChannelViaStore,
   normalizeProjectChannelName,
+  projectChannelSummary,
   resolveProjectChannel,
   resolveProjectChannelClass,
   resolveProjectChannelClassDetailed,
@@ -193,6 +194,26 @@ describe("resolveProjectChannelClass", () => {
   });
 });
 
+describe("projectChannelSummary", () => {
+  // Regression: ensure stopped pinning the link, so display/bundle surfaces
+  // that read integrations.conversations_channel directly went blank for the
+  // ~96% of registry projects that have no explicit link.
+  test("falls back to derivation and labels the source", () => {
+    expect(projectChannelSummary({ slug: "iproj-papercuts", kind: "project" }))
+      .toEqual({ channel: "iproj-papercuts", source: "derived" });
+    expect(projectChannelSummary({
+      slug: "iproj-papercuts",
+      kind: "project",
+      integrations: { conversations_channel: "internal-iproj-papercuts" },
+    })).toEqual({ channel: "internal-iproj-papercuts", source: "integration" });
+  });
+
+  test("never throws — an underivable slug yields a null channel", () => {
+    expect(projectChannelSummary({ slug: "___", kind: "project" }))
+      .toEqual({ channel: null, source: null });
+  });
+});
+
 describe("shouldEnsureProjectChannel", () => {
   test("defaults on outside tests, off under NODE_ENV=test, and honors explicit flags", () => {
     expect(shouldEnsureProjectChannel({})).toBe(true);
@@ -234,6 +255,18 @@ describe("project channel resolution", () => {
     expect(resolution.channel).toBe("alumia");
     expect(resolution.channel_class).toBe("product");
     expect(resolution.project.slug).toBe("alumia");
+    db.close();
+  });
+
+  test("the read path reports an unusable explicit class, not just ensure", () => {
+    const db = makeDb();
+    const project = createWorkspace({
+      name: "Typo", slug: "typo-class", kind: "project",
+      integrations: { conversations_channel_class: "produkt" },
+    }, db);
+    const resolution = resolveProjectChannelForProject(project);
+    expect(resolution.channel_class).toBe("work-project");
+    expect(resolution.warnings.join(" ")).toContain("produkt");
     db.close();
   });
 

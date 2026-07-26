@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { getWorkspace, linkWorkspaceIntegrations, recordWorkspaceEvent } from "../db/workspaces.js";
+import { getWorkspace, recordWorkspaceEvent } from "../db/workspaces.js";
 import type { EventSource, JsonObject, Workspace, WorkspaceIntegrations, WorkspaceKind } from "../types/workspace.js";
 import { resolveRegisteredProjectTargetOrThrow } from "./project-resolver.js";
 
@@ -115,6 +115,12 @@ export interface ProjectChannelResolution extends ProjectChannelDerivation {
   project: Pick<Workspace, "id" | "slug" | "name" | "kind">;
   linked: boolean;
   integration_key: typeof PROJECT_CHANNEL_INTEGRATION_KEY;
+  /**
+   * Non-fatal problems, e.g. an unusable `conversations_channel_class`. The
+   * read path carries these too: it is the path agents actually use, so a
+   * typo'd override must not be silent just because nothing is being created.
+   */
+  warnings: string[];
 }
 
 export interface ConversationsRunResult {
@@ -147,7 +153,10 @@ export interface ProjectChannelSideEffects {
   channel_created: boolean;
   /** The conversations channel exists now (created by this run or already there). */
   channel_present: boolean;
-  /** `integrations.conversations_channel` holds the derived channel on the project record. */
+  /**
+   * The project record carries an explicit `integrations.conversations_channel`.
+   * Ensure never sets this — it reports what the record already held.
+   */
   integration_linked: boolean;
   /** The `channel_ensured` audit event was recorded on the project. */
   event_recorded: boolean;
@@ -234,13 +243,39 @@ export function deriveProjectChannel(
   return { channel, channel_class, source: "derived" };
 }
 
+/**
+ * The channel to show an agent, and whether it is pinned or derived.
+ *
+ * Bundle and display surfaces must never render a blank channel just because
+ * the project has no explicit link: since ensure stopped writing the link, the
+ * overwhelming majority of projects resolve their channel by derivation, and a
+ * surface that tells an agent where to post would otherwise say `null`. The
+ * `source` sibling keeps that honest — a derived name is a current opinion, not
+ * a commitment, and callers can say so.
+ *
+ * Never throws: an underivable slug yields a `null` channel rather than taking
+ * down `projects show` or a handoff bundle.
+ */
+export function projectChannelSummary(
+  project: Pick<Workspace, "slug" | "kind"> & { integrations?: WorkspaceIntegrations },
+): { channel: string | null; source: ProjectChannelDerivation["source"] | null } {
+  try {
+    const { channel, source } = deriveProjectChannel(project);
+    return { channel, source };
+  } catch {
+    return { channel: null, source: null };
+  }
+}
+
 export function resolveProjectChannelForProject(project: Workspace): ProjectChannelResolution {
   const derivation = deriveProjectChannel(project);
+  const classWarning = resolveProjectChannelClassDetailed(project).warning;
   return {
     ...derivation,
     project: { id: project.id, slug: project.slug, name: project.name, kind: project.kind },
     linked: Boolean(project.integrations[PROJECT_CHANNEL_INTEGRATION_KEY]?.trim()),
     integration_key: PROJECT_CHANNEL_INTEGRATION_KEY,
+    warnings: classWarning ? [classWarning] : [],
   };
 }
 

@@ -366,8 +366,10 @@ export {
   deriveProjectChannel,
   ensureProjectChannel,
   normalizeProjectChannelName,
+  projectChannelSummary,
   resolveProjectChannel,
   resolveProjectChannelClass,
+  resolveProjectChannelClassDetailed,
   resolveProjectChannelForProject,
   shouldEnsureProjectChannel,
 } from "./lib/project-channel.js";

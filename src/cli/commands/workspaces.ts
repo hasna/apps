@@ -59,7 +59,7 @@ import {
 } from "../../lib/oss-project-matrix.js";
 import { parseWorkspaceAgentEvalCaseIds, runWorkspaceAgentEval } from "../../lib/workspace-agent-eval.js";
 import { cleanupProjectEvalArtifacts, filterProjectEvalArtifacts } from "../../lib/project-eval-artifacts.js";
-import { resolveProjectChannelForProject } from "../../lib/project-channel.js";
+import { projectChannelSummary, resolveProjectChannelForProject } from "../../lib/project-channel.js";
 import {
   parseProjectStartAgent,
   parseProjectStartSessionPolicy,
@@ -2116,8 +2116,12 @@ function registerProjectCommands(program: Command): void {
         const briefTarget = externalLinks.brief.id ?? externalLinks.brief.path;
         console.log(`  ${chalk.dim("brief:")} ${opts.verbose ? briefTarget : compactText(briefTarget, 120)}${externalLinks.brief.path_exists === false ? " (path missing)" : ""}`);
       }
-      if (project.integrations.conversations_channel) {
-        console.log(`  ${chalk.dim("channel:")} #${project.integrations.conversations_channel}`);
+      const channelSummary = projectChannelSummary(project);
+      if (channelSummary.channel) {
+        // Derived is shown too, marked as such: the channel a project resolves
+        // to is not blank just because it was never pinned on the record.
+        const suffix = channelSummary.source === "derived" ? chalk.dim(" (derived)") : "";
+        console.log(`  ${chalk.dim("channel:")} #${channelSummary.channel}${suffix}`);
       }
       try {
         const tmux = await projectTmuxStatus(project.slug);
