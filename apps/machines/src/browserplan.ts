@@ -40,40 +40,41 @@ export const BROWSERPLAN_SECRETS_OWNER = "open-identities/open-attachments/open-
  */
 export const BROWSERPLAN_INSTALL_UPDATE_COMMAND_PREFIX = `bun install -g ${BROWSERPLAN_PACKAGE_NAME}@`;
 /**
- * What may follow that prefix: either an EXACT semver, or a dist-tag of two or more
- * characters. Nothing else.
+ * What may follow that prefix: either an EXACT semver, or a DOT-FREE dist-tag of two or
+ * more characters. Nothing else.
  *
  * End-anchored, so no shell suffix can be appended after an otherwise valid install
  * (`&& rm -rf /`, `; curl … | sh`, `; cd d && git pull`, `` `id` ``, `$(id)`), and an
- * empty version is rejected. Semver *ranges* are rejected too — `0`, `1.2`, `0.x`, `0*`,
- * `^1.0.0`, `~1.0.0` and the bare wildcards `x`/`X` — because a range makes the installed
- * version unpredictable, which defeats both the pin below and the `<bin> --version`
- * assertion src/commands/reconcile.ts uses to verify a rollout. `0*` in particular is a
- * shell glob whose expansion depends on the caller's working directory.
+ * empty version is rejected.
+ *
+ * The tag arm forbids `.` on purpose, and that single restriction is what rejects the
+ * whole wildcard-range class rather than an enumeration of its members. Bun's resolver
+ * coerces far more than an `x`-character class into "any version": `bun add
+ * @hasna/open-chrome@<spec>` exits 0 and installs 0.1.0 for `x.x`, `x.y`, `X.Y`, `x.`,
+ * `x..x`, `x.x.`, `x.x-`, `x.-` and `x.x_1` — note `x.y` contains no wildcard character
+ * at all. Enumerating those forms was tried twice and leaked twice; the resolver, not a
+ * character class, is the oracle. Any range makes the installed version unpredictable,
+ * which defeats both the pin below and the `<bin> --version` assertion
+ * src/commands/reconcile.ts uses to verify a rollout.
+ *
+ * Also note bun and npm DISAGREE here: `npm view @hasna/open-chrome@x.y version` returns
+ * E404 while bun installs it. The hook command is `bun install -g`, so bun is the oracle
+ * that matters.
+ *
+ * Residual, accepted knowingly: a real dist-tag containing a dot would be rejected. npm
+ * dist-tags conventionally do not contain dots (a tag may not be a valid semver), and this
+ * rule governs exactly one package whose tags are `{"latest":"0.1.0"}`.
  *
  * MUST STAY UNFLAGGED. It is a shared module-level object, so adding `/g` (or `/y`) would
- * make `.test()` advance `lastIndex` between calls and return alternating results for
- * successive machines in one payload.
+ * make `.test()` advance `lastIndex` between calls — which is not hypothetical: it turns
+ * ordinary multi-machine tests red, because successive machines in one payload get
+ * alternating results.
  *
  * This constrains command *shape*, not registry trust: a legitimate but hostile-looking
  * dist-tag such as `latest-evil` is accepted.
  */
 export const BROWSERPLAN_INSTALL_VERSION_PATTERN =
-  /^(?:\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?|[A-Za-z][0-9A-Za-z._-]+)$/;
-/**
- * Dotted `x`-wildcard ranges, which must be subtracted from the tag arm above.
- *
- * The tag arm allows `.` inside a tag name, so a leading letter routes `x.x`, `x.x.x`,
- * `X.X`, `x.1` and `x.0.0` into it — while the digit-led equivalents `0.x` and `1.x.x` are
- * correctly rejected by the semver arm. That asymmetry turns on nothing but the first
- * character, and `bun install -g pkg@x.x` resolves as a RANGE (observed installing 0.1.0),
- * so those forms float exactly like `latest` and defeat the pin's auditability rationale.
- *
- * Deliberately narrow: only `x`/`X` optionally followed by dot-separated digit/`x` groups.
- * Legitimate tags that merely start with the letter — `xx`, `xenial`, `x-ray`, `xylophone`
- * — are untouched.
- */
-export const BROWSERPLAN_INSTALL_VERSION_WILDCARD_PATTERN = /^[xX](?:\.[0-9xX]+)*$/;
+  /^(?:\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?|[A-Za-z][0-9A-Za-z_-]+)$/;
 /**
  * Exact version the install hook pins.
  *

@@ -9,7 +9,6 @@ import {
   BROWSERPLAN_INSTALL_UPDATE_COMMAND_PREFIX,
   BROWSERPLAN_INSTALL_UPDATE_COMMAND_TEMPLATE,
   BROWSERPLAN_INSTALL_VERSION_PATTERN,
-  BROWSERPLAN_INSTALL_VERSION_WILDCARD_PATTERN,
   BROWSERPLAN_LEGACY_INSTALL_UPDATE_COMMAND_TEMPLATE,
   BROWSERPLAN_PACKAGE_NAME,
   BROWSERPLAN_PINNED_VERSION,
@@ -158,18 +157,29 @@ describe("BrowserPlan fleet contract", () => {
       for (const range of ["0", "1.2", "0.x", "0*", "^1.0.0", "~1.0.0", "x", "X", "*"]) {
         expect(withTemplate(`bun install -g @hasna/open-chrome@${range}`)).toBe(false);
       }
-      // Rejected: the x-LEADING wildcard family. These route into the dist-tag arm rather
-      // than the semver arm purely because the first character is a letter, so `0.x` was
-      // rejected while `x.0` was accepted. `bun install -g pkg@x.x` resolves as a range
-      // (observed installing 0.1.0), so it floats exactly like `latest`.
-      for (const wildcard of ["x.x", "x.x.x", "X.X", "x.1", "x.0.0", "X.x.X", "x.0"]) {
+      // Rejected: the whole wildcard-range class, which the dot-free tag arm covers by
+      // construction rather than by enumeration. Every form below was verified against the
+      // real resolver: `bun add @hasna/open-chrome@<spec>` exits 0 and installs 0.1.0 for
+      // all of them. Note `x.y` contains no wildcard character at all, which is why
+      // enumerating `x`-forms leaked twice before the tag arm simply dropped `.`.
+      for (const wildcard of [
+        "x.x", "x.y", "X.Y", "x.", "x..x", "x.x.", "x.x-", "x.-", "x.x_1",
+        "x.x.x", "X.X", "x.1", "x.0.0", "X.x.X", "x.0",
+      ]) {
         expect(withTemplate(`bun install -g @hasna/open-chrome@${wildcard}`)).toBe(false);
       }
-      // Kept: legitimate tags that merely begin with that letter.
-      for (const tag of ["xx", "xenial", "x-ray", "xylophone"]) {
+      // Kept: real dist-tags, including the ones that merely begin with that letter. This
+      // arm is what makes the dot restriction load-bearing in both directions — widening
+      // the tag arm turns the rejections above red, narrowing it turns these red.
+      for (const tag of [
+        "latest", "next", "beta", "canary", "rc", "nightly", "experimental", "lts",
+        "insiders", "latest-evil", "xx", "xenial", "x-ray", "xylophone", "x86", "x86-64",
+        "xterm", "xl",
+      ]) {
         expect(withTemplate(`bun install -g @hasna/open-chrome@${tag}`)).toBe(true);
       }
-      expect(BROWSERPLAN_INSTALL_VERSION_WILDCARD_PATTERN.flags).toBe("");
+      // Kept: exact semver with prerelease and build metadata, which still needs dots.
+      expect(withTemplate("bun install -g @hasna/open-chrome@1.0.0-rc.1+build.5")).toBe(true);
       // Accepted: exact semver with prerelease/build metadata, and multi-character tags.
       expect(withTemplate("bun install -g @hasna/open-chrome@1.0.0-beta.1")).toBe(true);
       expect(withTemplate("bun install -g @hasna/open-chrome@next")).toBe(true);

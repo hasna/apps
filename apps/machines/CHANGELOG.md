@@ -121,18 +121,27 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   would have been trivially evadable.
 
   The suffix must be an **exact semver or a dist-tag of two or more characters**.
-  Semver *ranges* are rejected — `0`, `1.2`, `0.x`, `0*`, `^1.0.0`, `~1.0.0`, the
-  bare wildcards `x`/`X`, and the dotted `x`-leading family `x.x`, `x.x.x`, `X.X`,
-  `x.1`, `x.0.0` — because a range makes the installed version unpredictable,
-  defeating both the pin and reconcile's `<bin> --version` assertion; `0*` is
+  Semver **ranges are rejected as a class**, not as an enumeration: the dist-tag
+  arm forbids `.`, so `0`, `1.2`, `0.x`, `0*`, `^1.0.0`, `~1.0.0`, `x`, `X`, and
+  every dotted form — `x.x`, `x.y`, `X.Y`, `x.`, `x..x`, `x.x.`, `x.x-`, `x.-`,
+  `x.x_1`, `x.0.0` — all fail. A range makes the installed version unpredictable,
+  defeating both the pin and reconcile's `<bin> --version` assertion, and `0*` is
   additionally a shell glob whose expansion depends on the caller's working
-  directory. The `x`-leading family needed subtracting separately
-  (`BROWSERPLAN_INSTALL_VERSION_WILDCARD_PATTERN`): because tag names may contain
-  `.`, a leading letter routed `x.x` into the dist-tag arm while the digit-led
-  `0.x` was correctly rejected by the semver arm — an asymmetry that turned on
-  nothing but the first character, and `bun install -g pkg@x.x` resolves as a
-  range. Legitimate tags that merely start with that letter (`xx`, `xenial`,
-  `x-ray`) are unaffected. The pattern is a shared module-level object and is
+  directory.
+
+  This was reached only after two narrower attempts leaked, and the reason is worth
+  recording: **the resolver, not a character class, is the oracle.** Bun coerces far
+  more than `x`-characters into "any version" — `bun add @hasna/open-chrome@x.y`
+  exits 0 and installs `0.1.0`, and `x.y` contains no wildcard character at all.
+  Note also that **bun and npm disagree**: `npm view @hasna/open-chrome@x.y
+  version` returns `E404` for the same spec bun happily resolves. The hook command
+  is `bun install -g`, so bun is the oracle that matters.
+
+  Residual, accepted knowingly: a dist-tag containing a dot would be rejected. npm
+  dist-tags conventionally do not contain dots, and this rule governs exactly one
+  package whose tags are `{"latest":"0.1.0"}`. Real tags — `latest`, `next`,
+  `beta`, `canary`, `rc`, `nightly`, `lts`, `x86-64`, `xenial`, `x-ray` — and exact
+  semver with prerelease and build metadata are all unaffected. The pattern is a shared module-level object and is
   asserted to carry **no flags**, since a `/g` added later would advance
   `lastIndex` between calls and return alternating results for successive machines
   in one payload. It is not a trust check: a legitimate but hostile-looking
