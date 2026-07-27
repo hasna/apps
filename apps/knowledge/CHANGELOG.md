@@ -1,5 +1,72 @@
 # Changelog
 
+## Unreleased — documentation corrections to the multi-tag work
+
+Wording-only corrections to claims landed by #34/#35. No behaviour change: the
+only non-comment source edit is one added `list --help` line, plus one added test
+case (six `expect()` calls, 860 -> 866 in `tests/cli.test.ts`); the removal
+semantics, exit codes and messages are untouched.
+
+- The `untag` whole-value-versus-split exclusivity is **per raw `-t` value**, not
+  "one shape per run". Four sites said per run (`README.md` twice, `src/cli.ts`
+  twice); repeated `-t` on `untag` still accumulates, so on an item carrying both
+  shapes `untag -t "a,b,c" -t a` removes 2 and `-t "a,b,c" -t a -t b -t c` removes
+  4 in a single run. The re-run contract itself is true and unchanged
+  (`removed: 1`, then `removed: 3`, then exit 1) — only its stated reason was
+  wrong, and the reason is what a reader would reimplement from. (Repeated `-t` on
+  `list` narrows instead; that has not changed.)
+- Corrected the justification for quoting names in the partial-miss `untag`
+  message, at three sites (`README.md`, `src/cli.ts`, `tests/cli.test.ts`). The
+  cited case — `(not found: p, q)` colliding with one tag literally named `p, q` —
+  is **unreachable**: a comma-bearing value only enters the removal set via the
+  whole-value branch, which requires the tag to be stored, so it is found by
+  definition and never appears in `not_found`. Because every entry is comma-free
+  the `", "` join is injective, so a plain space is a legibility problem, not a
+  collision. The load-bearing reachable case is whitespace `trim()` does not
+  strip: `-t $'p\nq'` yields `not_found: ["p\nq"]`, which joined raw would break
+  the single-line message in two. Now covered by a test assertion.
+- Documented an undocumented flag precedence on `list`: when both `--archived` and
+  `--include-archived` are passed, `--archived` wins (archived items only) in
+  either order. Documented, not changed.
+- Made the consequence of a split-only `list -t` conditional instead of universal,
+  at three sites (`README.md`, `src/cli.ts`, `tests/cli.test.ts`). All three said
+  the defect "returns a DIFFERENT item ... at `total: 1` and exit 0" outright. It
+  only does that when the corpus *also* holds an item carrying the three names
+  separately; with the glued item alone it returns `total: 0` at exit 0. Measured
+  by removing the whole-value branch from the `list` predicate and running both
+  corpora: `total: 0` / no ids with the glued item alone, `total: 1` / the other
+  item's id once a split-shape item exists. Both outcomes are silent, so the point
+  stands — but which one occurs is a property of the corpus, not of the query, and
+  a swap has to be constructed rather than assumed.
+- Corrected the `verify:generated` citation under "inventory paths block fix".
+  `scripts/verify-generated-artifacts.mjs` only (a) `git diff --exit-code`s
+  `bin/knowledge-mcp.js` and `dist`, and (b) greps four generated files for two
+  stale Windows-path patterns. It never compares a bundle against its source, so
+  its exit 0 says the *untouched* artifacts are untouched — measured: it exits 0
+  with `src/cli.ts` diverged from `bin/knowledge.js`, and exits 0 even with
+  `bin/knowledge.js` corrupted outright. To check bundle/source sync, rebuild the
+  bundle to a temp outfile with the `build` script's command and compare against
+  the committed file after per-line trailing-whitespace stripping (see
+  `scripts/strip-generated-trailing-whitespace.mjs`), and read the lockfile caveat
+  below first.
+
+Two pre-existing problems were found while verifying this and are **not** fixed
+here, because both need their own change and review:
+
+- **`bun run verify:generated` is red on `main`**, independently of this entry.
+  The script rebuilds first, and the rebuild does not reproduce the committed
+  `bin/knowledge-mcp.js` or `dist/index.js`: `package.json` is inlined into the
+  bundles and gained a `files` entry in #33 that the committed mcp bundle predates,
+  and the zod codegen in `dist/index.js` has drifted. `bin/knowledge.js` is not
+  affected (it is `--minify`ed). Only `bun scripts/verify-generated-artifacts.mjs`
+  on its own exits 0.
+- **There is no committed lockfile**, so `bun install --frozen-lockfile` exits 0
+  while pinning nothing. `@hasna/events` is bundled into `bin/knowledge.js` (it is
+  not in the `--external` list) and is declared `^0.1.3`, so the rebuild-and-compare
+  check below is dependency-state-dependent: 0.1.14 reproduces the committed bundle,
+  0.1.13 does not. Check `node_modules/@hasna/events/package.json` before concluding
+  a bundle is out of sync.
+
 ## 0.2.91
 
 Harden the local JSON item-store against lock corruption and add a sanctioned
@@ -59,8 +126,10 @@ self_hosted/cloud (api) mode, where it disagreed with `knowledge paths`.
 - test(knowledge): `tests/cloud-inventory.test.ts` now asserts `inventory.paths`
   equals `service.paths()` for all four path fields, that the `/v1` URL never
   appears in the paths block, and that it is reported on `legacy_store.path`.
-- Rebuilt generated bundles so shipped artifacts carry the fix and
-  `verify:generated` passes.
+- Rebuilt generated bundles so shipped artifacts carry the fix. `verify:generated`
+  passing is **not** evidence that a rebuilt bundle matches its source — see
+  "documentation corrections to the multi-tag work" for what that check does and
+  does not prove, and for the check that establishes bundle/source sync.
 
 ## Unreleased — Search overhaul, Stage 2 (Postgres full-text parity)
 

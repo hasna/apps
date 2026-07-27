@@ -439,7 +439,7 @@ Prune Options:
 
 function printCommandHelp(command: string): void {
   if (command === 'add') { console.log('Usage: knowledge add <title> <content> [--url <url>] [-t <tag>]... [--json]\n  -t/--tag is repeatable and accepts comma-separated values: -t a -t b  ==  -t "a,b"'); return; }
-  if (command === 'list' || command === 'ls') { console.log('Usage: knowledge list|ls [--format table|json] [-p <page>] [-l <limit>] [-s <search>] [-t <tag>]... [--sort created|title] [--desc] [--archived] [--include-archived] [--verbose] [--json]\n  -t/--tag is repeatable and accepts comma-separated values; repeated -t narrows (an item must carry every tag).\n  Each value matches an item carrying the whole value OR all of its comma-split names — a union, so\n  `-t "a,b,c"` finds items carrying a legacy literal "a,b,c" tag as well as items carrying the three\n  names separately. (`untag` differs on purpose: it stops at the whole-value match.)\n  Use --json to tell those two shapes apart; the table renders them near-identically.\n  Archived items are excluded by default; add --include-archived to sweep both.'); return; }
+  if (command === 'list' || command === 'ls') { console.log('Usage: knowledge list|ls [--format table|json] [-p <page>] [-l <limit>] [-s <search>] [-t <tag>]... [--sort created|title] [--desc] [--archived] [--include-archived] [--verbose] [--json]\n  -t/--tag is repeatable and accepts comma-separated values; repeated -t narrows (an item must carry every tag).\n  Each value matches an item carrying the whole value OR all of its comma-split names — a union, so\n  `-t "a,b,c"` finds items carrying a legacy literal "a,b,c" tag as well as items carrying the three\n  names separately. (`untag` differs on purpose: it stops at the whole-value match.)\n  Use --json to tell those two shapes apart; the table renders them near-identically.\n  Archived items are excluded by default; add --include-archived to sweep both.\n  If both --archived and --include-archived are passed, --archived wins (archived items only).'); return; }
   if (command === 'get') { console.log('Usage: knowledge get --id <id> [--json]'); return; }
   if (command === 'update' || command === 'edit') { console.log('Usage: knowledge update|edit --id <id> [--title <title>] [--content <content>] [--url <url>] [-t <tag>]... [--json]\n  -t/--tag is repeatable and accepts comma-separated values; tags are added, never replaced.\n  With -t the output reports how many tags were actually added, so 0 added is not read as 3.'); return; }
   if (command === 'archive') { console.log('Usage: knowledge archive --id <id> [--json]'); return; }
@@ -1802,17 +1802,22 @@ async function run(argv: string[]): Promise<void> {
     // A raw value matches an item when the stored tags contain the WHOLE value OR all of
     // its comma-split names — a UNION. This is deliberately NOT the rule `untag` uses:
     // there a whole-value hit short-circuits (`continue`), so the two shapes are mutually
-    // exclusive within one run.
+    // exclusive per RAW -t VALUE — not per run, since `untag` still accumulates across
+    // repeated -t. (Repeated -t here in `list` NARROWS instead: 3 -> 2 -> 1 matches as
+    // values are added. Do not read "accumulates" as describing this command.)
     //
     // Each rule is right for its own command. `untag` mutates, so it must take one shape
-    // per run — that exclusivity is exactly what makes its documented "re-run to clear the
-    // split names" behaviour true, and a test pins it. `list` only reads, so matching both
+    // per -t value — that exclusivity is exactly what makes its documented "re-run to clear
+    // the split names" behaviour true, and a test pins it. `list` only reads, so matching both
     // shapes destroys nothing, while narrowing to one would hide items. An item damaged by
     // the multi-tag defect carries one literal `"a,b,c"` tag that none of the split names
-    // equals, so a split-only filter does not merely fail to find it — it returns a
-    // DIFFERENT item that carries the three names separately, at total: 1 and exit 0, with
-    // nothing to tell the operator the answer changed. The union lets one query find both
-    // shapes, which is the one job `list -t` is needed for here.
+    // equals, so a split-only filter never matches it — and what it returns INSTEAD depends
+    // on the rest of the corpus, silently either way. Measured with the whole-value branch
+    // removed from the predicate below: total: 0 at exit 0 when the glued item is the only
+    // candidate, and total: 1 at exit 0 naming a DIFFERENT item once some other item carries
+    // the three names separately. Which one you get is a property of the corpus, not of the
+    // query, so neither is usable as a signal. The union lets one query find both shapes,
+    // which is the one job `list -t` is needed for here.
     //
     // So do not "align" the two: making this an exclusive match would break `list`, and
     // dropping `untag`'s `continue` would break its re-run contract.
@@ -1825,6 +1830,11 @@ async function run(argv: string[]): Promise<void> {
     const useJson = flags.json || flags.format === 'json';
 
     let filtered = db.items;
+    // Flag precedence, documented because it is not the intuitive one: --archived WINS over
+    // --include-archived when both are passed (the `else if` never reaches the wider flag),
+    // in either argument order. `--archived --include-archived` therefore returns archived
+    // items ONLY, not a widened sweep. A reader would reasonably expect the wider flag to
+    // win, so this is documented rather than changed — flipping it would alter behaviour.
     if (flags.archived) filtered = filtered.filter((x) => x.archived === true);
     else if (!flags.includeArchived) filtered = filtered.filter((x) => !x.archived);
     if (search) filtered = filtered.filter((x) => x.title.toLowerCase().includes(search) || x.content.toLowerCase().includes(search));
@@ -1918,11 +1928,20 @@ async function run(argv: string[]): Promise<void> {
     // clear those items, and `ok_untag` (which never split) stays in parity.
     //
     // The `continue` is load-bearing, not an optimisation: it is what keeps the two shapes
-    // mutually exclusive per run, and therefore what makes the documented "re-run to clear
-    // the split names" behaviour true. Drop it and an item carrying both shapes goes from
-    // removed: 1 to removed: 4. `list -t` matches the two shapes as a UNION instead —
-    // correct there, because a filter has nothing to destroy and suppressing a shape would
-    // defeat the search it exists for. Same inputs, two different rules, both deliberate.
+    // mutually exclusive PER RAW -t VALUE, and therefore what makes the documented "re-run
+    // to clear the split names" behaviour true. Drop it and one `-t "a,b,c"` against an item
+    // carrying both shapes goes from removed: 1 to removed: 4.
+    //
+    // Note the scope precisely: the `continue` sits INSIDE this loop, so it bounds one raw
+    // value, not the whole invocation. Repeated -t still accumulates, so `-t "a,b,c" -t a`
+    // removes 2 and `-t "a,b,c" -t a -t b -t c` removes 4 in a single run. That is intended —
+    // naming the split names is how a caller asks for both shapes. The narrower guarantee is
+    // the one the re-run contract needs: a lone `-t "a,b,c"` takes the glued tag and leaves
+    // the split names, so re-running the same command is meaningful (1, then 3, then exit 1).
+    //
+    // `list -t` matches the two shapes as a UNION instead — correct there, because a filter
+    // has nothing to destroy and suppressing a shape would defeat the search it exists for.
+    // Same inputs, two different rules, both deliberate.
     const remove = new Set<string>();
     for (const raw of flags.tagRaw ?? flags.tag) {
       const whole = raw.trim().toLowerCase();
@@ -1946,12 +1965,23 @@ async function run(argv: string[]): Promise<void> {
     }
     const item = await itemStore.update(current.id, { tags });
     // A partial miss must be visible too, not just the all-miss case — and it has to be
-    // in `message`, because non-JSON output prints nothing else. Quoted for the same
-    // reason the failure message above quotes: joined raw, two missing names render as
-    // `(not found: p, q)`, which is indistinguishable from ONE missing tag literally named
-    // `p, q` — the same ambiguity that made the all-miss message appear to deny a tag that
-    // was plainly present. `not_found` in the JSON was already unambiguous; this is the
-    // human line catching up.
+    // in `message`, because non-JSON output prints nothing else.
+    //
+    // Quoted, but NOT for the comma reason the failure message above has: `notFound` can
+    // never hold a comma. A comma-bearing value only reaches `remove` through the
+    // whole-value branch, which requires `stored.has(whole)`, so it is found by definition
+    // and filtered out of `notFound`; every other entry is a comma-split part. ONE tag
+    // literally named `p, q` is therefore unreachable here — and since every entry is
+    // comma-free, joining on ', ' is injective, so a plain space is a legibility problem
+    // rather than a collision (`["p","q"]` -> `p, q`, `["p q"]` -> `p q`, distinct strings).
+    //
+    // What makes the quoting load-bearing is whitespace the parser does NOT strip: `trim()`
+    // only touches the ends, so `-t $'p\nq'` yields `notFound: ["p\nq"]` and joining raw
+    // would break this single-line message in two, with the tail reading as separate output.
+    // Tab is the same. JSON.stringify escapes both, and a test pins it. Quoting also keeps
+    // the two messages symmetric, so no reader has to work out which line happens to be
+    // collision-proof. `not_found` in the JSON was already unambiguous; this is the human
+    // line catching up.
     const missed = notFound.length > 0 ? ` (not found: ${notFound.map((tag) => JSON.stringify(tag)).join(', ')})` : '';
     const result: Record<string, unknown> = { ok: true, item, removed, message: `Removed ${removed} tag${removed === 1 ? '' : 's'} from ${item?.id ?? current.id}${missed}` };
     if (notFound.length > 0) result.not_found = notFound;

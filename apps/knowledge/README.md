@@ -310,7 +310,7 @@ state, or keyword retrieval across active compatibility notes too.
 | `-t, --tag <tag>` | Filter by tag; repeatable/comma-separated, an item must match **all** of them |
 | `--sort created\|title` | Sort field (default: created) |
 | `--desc` | Sort descending |
-| `--archived` | Return archived items *only* |
+| `--archived` | Return archived items *only*; **wins** over `--include-archived` if both are passed |
 | `--include-archived` | Return live **and** archived items (default: live only) |
 | `--verbose` | Print the full paginated item objects |
 | `--json` | Print the stable machine-readable list response |
@@ -321,13 +321,20 @@ Each `-t` value matches an item when the item's stored tags contain the **whole 
 falling back to the split names *only* when no stored tag equals the whole value.
 
 Both rules are right for their own command. `untag` writes, so it must take one shape per
-run — that is exactly what makes its documented "re-run to clear the split names"
-behaviour true. `list` only reads, so matching both shapes destroys nothing, while
-matching only one would hide items from the very query used to find them. Items written
-before the multi-tag parse fix can carry a single literal `"a,b,c"` tag, which none of the
-split names equals, so a split-only filter does not merely miss the damaged item: it
-answers with a *different* item that carries the three names separately, at `total: 1` and
-exit 0, giving the operator no signal that the result changed. The union therefore finds
+`-t` **value** — that is exactly what makes its documented "re-run to clear the split
+names" behaviour true. The exclusivity is per raw `-t` value, **not** per run: repeating `-t`
+on `untag` still accumulates, so `untag -t "a,b,c" -t a -t b -t c` removes four tags from an
+item carrying both shapes in a single run. (Repeating `-t` on `list` narrows instead — see
+the `-t` row above.) `list` only reads, so matching both shapes destroys
+nothing, while matching only one would hide items from the very query used to find them.
+Items written before the multi-tag parse fix can carry a single literal `"a,b,c"` tag, which
+none of the split names equals, so a split-only filter never matches the damaged item — and
+what it returns *instead* depends on the rest of the corpus, silently either way. With
+nothing else matching it answers `total: 0` at exit 0, an empty result for an item that is
+demonstrably there. If some **other** item carries the three names separately, it answers
+with *that* item at `total: 1` and exit 0 — a different item from the one asked for, and
+nothing in the output says the answer changed. Which of the two you get is a property of the
+corpus, not of the query, so neither can be relied on as a signal. The union therefore finds
 both shapes in one query:
 
 ```bash
@@ -342,6 +349,10 @@ Prefer `--json` when you are looking for glued tags: the table renders `["a,b,c"
 tag that sits on an archived item. Add `--include-archived` to sweep live and archived
 items together, or `--archived` for archived items only — use the former when auditing the
 corpus for tag damage rather than reading live knowledge.
+
+If **both** are passed, `--archived` wins and the result is archived items *only* — the
+narrower flag, not the wider one, regardless of the order they appear in. So
+`--archived --include-archived` is not a way to widen the sweep; drop `--archived` for that.
 
 ### inventory
 ```bash
@@ -415,9 +426,25 @@ knowledge untag --id <id> -t "a,b,c"
 
 When an item somehow carries both shapes, the whole-value match wins and the literal
 tag is removed first; re-run to clear the split names. That exclusivity is the point: one
-shape per run is what makes re-running meaningful, so `untag` deliberately does **not**
-match both shapes at once. [`list -t`](#list) does — a union — because a filter has nothing
-to remove and suppressing a shape would hide items. Do not "unify" the two rules.
+shape per `-t` **value** is what makes re-running meaningful, so a *single* `-t` deliberately
+does **not** match both shapes at once. [`list -t`](#list) does — a union — because a filter
+has nothing to remove and suppressing a shape would hide items. Do not "unify" the two rules.
+
+The exclusivity is scoped to one `-t` value, **not** to the whole run. Repeated `-t` still
+accumulates, so on an item carrying both shapes:
+
+```bash
+# each line run against this same starting state, not as a sequence:
+#   stored tags ["a,b,c","a","b","c"]
+knowledge untag --id <id> -t "a,b,c"                 # removed: 1  (whole value only)
+knowledge untag --id <id> -t "a,b,c" -t a            # removed: 2
+knowledge untag --id <id> -t "a,b,c" -t a -t b -t c  # removed: 4  (both shapes, one run)
+```
+
+Naming the split names explicitly is a caller's way of asking for both shapes at once. What
+the `-t`-level exclusivity guarantees is narrower and is the part the re-run contract rests
+on: one `-t "a,b,c"` clears the glued tag and leaves the split names, so re-running the same
+command is meaningful (`removed: 1`, then `removed: 3`, then exit 1).
 
 Removing nothing **exits 1**. `removed: 0` at exit 0 with a `Removed tag from <id>`
 message is the same class of defect as the original bug — a success signal that
@@ -429,15 +456,39 @@ succeeds and the unmatched names are reported both in `message` (`Removed 1 tag 
 invisible to exactly the callers most likely to be reading it.
 
 Tag names are quoted on **both** paths — the stored tags in the failure message, and the
-unmatched names in the partial-miss success line. Unquoted, a single glued `"a,b,c"` tag
-renders identically to three separate ones, so the message appears to deny a tag that is
-plainly listed, and `(not found: p, q)` cannot be told apart from one missing tag literally
-named `p, q`:
+unmatched names in the partial-miss success line:
 
 ```
 Error: No matching tag on k_x: "iapp" not in ["iapp,integrations,architecture"]
 Removed 1 tag from k_y (not found: "p", "q")
 ```
+
+On the **failure** path the quoting resolves a real collision: stored tags can contain
+commas, so unquoted, a single glued `"a,b,c"` tag renders identically to three separate
+ones and the message appears to deny a tag that is plainly listed.
+
+On the **partial-miss** path the justification is different, and it is *not* the comma
+case. A `not_found` entry can never contain a comma: a comma-bearing value only enters the
+removal set through the whole-value branch, which requires the stored tags to already
+contain it — so it is found by definition — and every other entry comes from splitting on
+commas. One missing tag literally named `p, q` is therefore **unreachable**, and because
+every entry is comma-free the raw `", "` join is *injective*: `["p","q"]` prints `p, q` and
+`["p q"]` prints `p q`, which are different strings. A plain space is a **legibility**
+problem, not an ambiguity.
+
+The reachable case that does make quoting load-bearing is **whitespace the parser does not
+strip**. `trim()` only removes the ends, so a tab or newline inside a name survives:
+
+```
+-t $'p\nq'  ->  not_found: ["p\nq"]
+  quoted:    Removed 1 tag from k_x (not found: "p\nq")     <- one line
+  unquoted:  Removed 1 tag from k_x (not found: p
+             q)                                             <- message split in two
+```
+
+Joined raw, that name breaks the single-line message and the tail reads as separate output.
+`JSON.stringify` escapes it. Quoting also keeps the two messages symmetric, so a reader does
+not have to work out which of the two lines happens to be collision-proof.
 
 ### delete
 ```bash
