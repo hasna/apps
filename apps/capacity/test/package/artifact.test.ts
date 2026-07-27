@@ -15,6 +15,15 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
+import {
+  AUTH_REFERENCE,
+  CONTRACT_SHA256,
+  RESOLVED_CREDENTIAL,
+  startSelfHostedCapacityServer,
+  writeCredentialResolverModule,
+  type SelfHostedCapacityServer,
+} from "../self-hosted-server";
+
 const REPOSITORY_ROOT = join(import.meta.dir, "..", "..");
 const DIST_ROOT = join(REPOSITORY_ROOT, "dist");
 const TEMP_ROOT = mkdtempSync(join(tmpdir(), "capacity-package-artifact-"));
@@ -30,6 +39,7 @@ const BUN_GLOBAL_INSTALL_ROOT = join(TEMP_ROOT, "bun-global-install");
 const BUN_LOCAL_NO_TRUST_INSTALL_ROOT = join(TEMP_ROOT, "bun-local-no-trust-install");
 const BUN_GLOBAL_NO_TRUST_INSTALL_ROOT = join(TEMP_ROOT, "bun-global-no-trust-install");
 const INSTALL_HOME_ROOT = join(TEMP_ROOT, "install-home");
+const SELF_HOSTED_ROOT = join(TEMP_ROOT, "self-hosted");
 const COMMAND_TIMEOUT_MS = 25_000;
 const PACKAGE_LIFECYCLE_TIMEOUT_MS = 90_000;
 
@@ -93,6 +103,8 @@ let bunLocalNoTrustPayloadPath: string;
 let bunGlobalNoTrustCliPath: string;
 let bunGlobalNoTrustCliTarget: string;
 let bunGlobalNoTrustPayloadPath: string;
+let selfHostedServer: SelfHostedCapacityServer;
+let packagedResolverModulePath: string;
 
 async function run(
   command: readonly string[],
@@ -466,9 +478,13 @@ beforeAll(async () => {
   bunGlobalNoTrustPayloadPath = realpathSync(
     join(dirname(bunGlobalNoTrustCliTarget), "..", "dist", "cli.js"),
   );
+
+  selfHostedServer = startSelfHostedCapacityServer(SELF_HOSTED_ROOT);
+  packagedResolverModulePath = writeCredentialResolverModule(SELF_HOSTED_ROOT);
 }, { timeout: PACKAGE_LIFECYCLE_TIMEOUT_MS });
 
 afterAll(() => {
+  selfHostedServer?.stop();
   rmSync(DIST_ROOT, { recursive: true, force: true });
   rmSync(TEMP_ROOT, { recursive: true, force: true });
 });
@@ -633,6 +649,104 @@ describe("packed capacity CLI", () => {
         exitCode: 0,
       });
     }
+  });
+
+  test("publishes the documented CLI entry point in the package contract", () => {
+    const paths = pack.files.map(({ path }) => path);
+    expect(paths).toContain("dist/cli.d.ts");
+    const manifest = JSON.parse(
+      readFileSync(join(NPM_EXTRACT_ROOT, "package", "package.json"), "utf8"),
+    ) as Record<string, unknown>;
+    expect(manifest.exports).toMatchObject({
+      "./cli": { types: "./dist/cli.d.ts", import: "./dist/cli.js" },
+    });
+  });
+
+  /**
+   * The README documents a library import for deployments that supply their own
+   * resolver. It has to resolve from a real install, not just from this
+   * repository's source tree.
+   */
+  test("resolves the documented library import from the installed package", async () => {
+    const consumerPath = join(NPM_INSTALL_ROOT, "capacity-cli-consumer.mjs");
+    writeFileSync(
+      consumerPath,
+      [
+        'import { runAccountsCli } from "@hasna/capacity/cli";',
+        "",
+        'if (typeof runAccountsCli !== "function") throw new Error("runAccountsCli is not exported");',
+        'process.exitCode = await runAccountsCli(["list", "accounts", "--json"], {',
+        "  credentialResolver: { resolve: async () => Bun.env.CAPACITY_TEST_CREDENTIAL },",
+        "});",
+        "",
+      ].join("\n"),
+      { mode: 0o600 },
+    );
+
+    const result = await run([process.execPath, consumerPath], {
+      cwd: NPM_INSTALL_ROOT,
+      env: {
+        CAPACITY_TEST_CREDENTIAL: RESOLVED_CREDENTIAL,
+        HASNA_ACCOUNTS_CAPACITY_API_URL: selfHostedServer.baseUrl,
+        HASNA_ACCOUNTS_CAPACITY_AUTH_REF: AUTH_REFERENCE,
+        HASNA_ACCOUNTS_DEPLOYMENT: "self_hosted",
+        NODE_EXTRA_CA_CERTS: selfHostedServer.caPath,
+      },
+    });
+    expect({ exitCode: result.exitCode, stderr: result.stderr }).toEqual({ exitCode: 0, stderr: "" });
+    expect(JSON.parse(result.stdout).data.records).toMatchObject([
+      {
+        schemaVersion: "accounts.capacity-redacted.v1",
+        kind: "account",
+        data: { id: selfHostedServer.account.id, providerSubjectRefRedacted: true },
+      },
+    ]);
+  });
+
+  /**
+   * The headline claim of the self-hosted work is that the installed binary
+   * reads an api-mode catalog. This drives `capacity` itself — launcher, packed
+   * payload, and deployment-configured resolver module — against a real API.
+   */
+  test("drives self-hosted doctor and list through the installed capacity binary", async () => {
+    const environment = {
+      HASNA_ACCOUNTS_CAPACITY_API_URL: selfHostedServer.baseUrl,
+      HASNA_ACCOUNTS_CAPACITY_AUTH_REF: AUTH_REFERENCE,
+      HASNA_ACCOUNTS_CAPACITY_RESOLVER_MODULE: packagedResolverModulePath,
+      HASNA_ACCOUNTS_DEPLOYMENT: "self_hosted",
+      NODE_EXTRA_CA_CERTS: selfHostedServer.caPath,
+    };
+
+    const doctor = await run([npmInstalledCliPath, "doctor", "--json"], { env: environment });
+    expect({ exitCode: doctor.exitCode, stderr: doctor.stderr }).toEqual({ exitCode: 0, stderr: "" });
+    expect(JSON.parse(doctor.stdout).data).toEqual({
+      adapter: "http",
+      health: "ok",
+      readiness: "ready",
+      version: "0.1.1",
+      contractSha256: CONTRACT_SHA256,
+    });
+
+    const list = await run([npmInstalledCliPath, "list", "accounts", "--json"], { env: environment });
+    expect({ exitCode: list.exitCode, stderr: list.stderr }).toEqual({ exitCode: 0, stderr: "" });
+    expect(JSON.parse(list.stdout).data.records).toMatchObject([
+      {
+        schemaVersion: "accounts.capacity-redacted.v1",
+        kind: "account",
+        data: { id: selfHostedServer.account.id, providerSubjectRefRedacted: true },
+      },
+    ]);
+
+    const { HASNA_ACCOUNTS_CAPACITY_RESOLVER_MODULE: _unused, ...unconfigured } = environment;
+    const withoutResolver = await run([npmInstalledCliPath, "list", "accounts", "--json"], {
+      env: unconfigured,
+    });
+    expect(withoutResolver.exitCode).toBe(6);
+    expect(withoutResolver.stdout).toBe("");
+    expect(JSON.parse(withoutResolver.stderr).error.code).toBe("DEPENDENCY_UNAVAILABLE");
+
+    // Every authenticated read presented the resolved credential, never the reference.
+    expect([...new Set(selfHostedServer.presented)]).toEqual([`Bearer ${RESOLVED_CREDENTIAL}`]);
   });
 
   test("keeps explicit help precedence over the version flag", async () => {

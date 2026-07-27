@@ -1,7 +1,8 @@
-import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { afterAll, afterEach, beforeAll, describe, expect, mock, test } from "bun:test";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import {
   ACCOUNTS_CAPACITY_OPENAPI,
@@ -39,10 +40,15 @@ import {
   makeTestRecoveryLedger,
   seedActiveCatalog,
 } from "../fixtures";
+import {
+  AUTH_REFERENCE,
+  CONTRACT_SHA256,
+  RESOLVED_CREDENTIAL,
+  startSelfHostedCapacityServer,
+  writeCredentialResolverModule,
+  type SelfHostedCapacityServer,
+} from "../self-hosted-server";
 
-const AUTH_REFERENCE = "capacity-client-reference";
-/** Stands in for the audienced client credential a Secrets resolver returns. */
-const RESOLVED_CREDENTIAL = "resolved.capacity.client.credential";
 const TEST_CLI_OPTIONS: AccountsCliOptions = {
   credentialResolver: { resolve: async () => RESOLVED_CREDENTIAL },
 };
@@ -56,6 +62,7 @@ const CLI_ENV_KEYS = [
   "HASNA_ACCOUNTS_DATABASE_PATH",
   "HASNA_ACCOUNTS_CAPACITY_API_URL",
   "HASNA_ACCOUNTS_CAPACITY_AUTH_REF",
+  "HASNA_ACCOUNTS_CAPACITY_RESOLVER_MODULE",
 ] as const;
 
 afterAll(() => {
@@ -655,6 +662,146 @@ describe("self-hosted CLI credential resolution", () => {
     expect(calls).toHaveLength(2);
     expect(calls[0]).toBe("limit=100");
     expect(calls[1]).toMatch(/^cursor=[0-9a-f-]{36}&limit=100$/);
+  });
+});
+
+/**
+ * The in-process suites above inject a resolver through a library option no
+ * installed consumer holds. These drive the shipped entry point as a separate
+ * process against a real TLS capacity API, so they fail whenever the binary
+ * itself cannot reach the self-hosted path.
+ */
+describe("self-hosted CLI through the shipped entry point", () => {
+  let server: SelfHostedCapacityServer;
+  let resolverDirectory: string;
+  let resolverModulePath: string;
+
+  beforeAll(() => {
+    resolverDirectory = mkdtempSync(join(TEMP_ROOT, "resolver-"));
+    cleanup.push(resolverDirectory);
+    server = startSelfHostedCapacityServer(resolverDirectory);
+    resolverModulePath = writeCredentialResolverModule(resolverDirectory);
+  });
+
+  afterAll(() => {
+    server.stop();
+  });
+
+  function processEnvironment(
+    overrides: Readonly<Record<string, string | undefined>> = {},
+  ): Record<string, string> {
+    const environment: Record<string, string | undefined> = {
+      HASNA_ACCOUNTS_DEPLOYMENT: "self_hosted",
+      HASNA_ACCOUNTS_CAPACITY_API_URL: server.baseUrl,
+      HASNA_ACCOUNTS_CAPACITY_AUTH_REF: AUTH_REFERENCE,
+      HASNA_ACCOUNTS_CAPACITY_RESOLVER_MODULE: resolverModulePath,
+      NODE_EXTRA_CA_CERTS: server.caPath,
+      ...overrides,
+    };
+    return Object.fromEntries(
+      Object.entries(environment).filter(([, value]) => value !== undefined),
+    ) as Record<string, string>;
+  }
+
+  test("runs doctor and list against a real capacity API", async () => {
+    const doctor = await runCli(["doctor", "--json"], processEnvironment());
+    expect({ exitCode: doctor.exitCode, stderr: doctor.stderr }).toEqual({ exitCode: 0, stderr: "" });
+    expect(JSON.parse(doctor.stdout).data).toEqual({
+      adapter: "http",
+      health: "ok",
+      readiness: "ready",
+      version: PACKAGE_VERSION,
+      contractSha256: CONTRACT_SHA256,
+    });
+
+    const list = await runCli(["list", "accounts", "--json"], processEnvironment());
+    expect({ exitCode: list.exitCode, stderr: list.stderr }).toEqual({ exitCode: 0, stderr: "" });
+    const records = JSON.parse(list.stdout).data.records;
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      schemaVersion: "accounts.capacity-redacted.v1",
+      kind: "account",
+      data: { id: server.account.id, providerSubjectRefRedacted: true },
+    });
+    expect(records[0].data.providerSubjectRef).toBeUndefined();
+
+    // The resolved credential authenticated the read; the Secrets reference never travelled.
+    expect(server.presented).toEqual([`Bearer ${RESOLVED_CREDENTIAL}`]);
+
+    // A file: URL is the other accepted form of the module specifier.
+    const viaFileUrl = await runCli(
+      ["doctor", "--json"],
+      processEnvironment({
+        HASNA_ACCOUNTS_CAPACITY_RESOLVER_MODULE: pathToFileURL(resolverModulePath).href,
+      }),
+    );
+    expect(viaFileUrl.exitCode).toBe(0);
+  });
+
+  test("fails closed when the deployment configures no resolver module", async () => {
+    const presentedBefore = server.presented.length;
+    const result = await runCli(
+      ["list", "accounts", "--json"],
+      processEnvironment({ HASNA_ACCOUNTS_CAPACITY_RESOLVER_MODULE: undefined }),
+    );
+    expect(result.exitCode).toBe(6);
+    expect(result.stdout).toBe("");
+    expect(JSON.parse(result.stderr).error.code).toBe("DEPENDENCY_UNAVAILABLE");
+    expect(server.presented).toHaveLength(presentedBefore);
+  });
+
+  test("refuses relative, non-file, and local-mode resolver module configuration", async () => {
+    for (const specifier of [
+      "relative-resolver.mjs",
+      "https://resolver.example/module.mjs",
+      "file://resolver.example/module.mjs",
+    ]) {
+      const result = await runCli(
+        ["doctor", "--json"],
+        processEnvironment({ HASNA_ACCOUNTS_CAPACITY_RESOLVER_MODULE: specifier }),
+      );
+      expect(result.exitCode).toBe(2);
+      expect(JSON.parse(result.stderr).error.code).toBe("VALIDATION_FAILED");
+    }
+
+    const local = await runCli(["doctor", "--json"], {
+      ...localEnvironment(),
+      HASNA_ACCOUNTS_CAPACITY_RESOLVER_MODULE: resolverModulePath,
+    });
+    expect(local.exitCode).toBe(2);
+    expect(JSON.parse(local.stderr).error.code).toBe("VALIDATION_FAILED");
+  });
+
+  test("refuses a group-writable resolver module before importing it", async () => {
+    const sentinel = join(resolverDirectory, "writable-resolver-sentinel");
+    const writable = writeCredentialResolverModule(
+      join(resolverDirectory, "writable"),
+      [
+        `await Bun.write(${JSON.stringify(sentinel)}, "evaluated");`,
+        "export async function resolve() { return \"unused\"; }",
+      ].join("\n"),
+      0o664,
+    );
+    const result = await runCli(
+      ["doctor", "--json"],
+      processEnvironment({ HASNA_ACCOUNTS_CAPACITY_RESOLVER_MODULE: writable }),
+    );
+    expect(result.exitCode).toBe(7);
+    expect(JSON.parse(result.stderr).error.code).toBe("POLICY_DENIED");
+    expect(existsSync(sentinel)).toBe(false);
+  });
+
+  test("fails closed when the resolver module exports no resolve function", async () => {
+    const incomplete = writeCredentialResolverModule(
+      join(resolverDirectory, "incomplete"),
+      "export const unrelated = true;\n",
+    );
+    const result = await runCli(
+      ["doctor", "--json"],
+      processEnvironment({ HASNA_ACCOUNTS_CAPACITY_RESOLVER_MODULE: incomplete }),
+    );
+    expect(result.exitCode).toBe(6);
+    expect(JSON.parse(result.stderr).error.code).toBe("DEPENDENCY_UNAVAILABLE");
   });
 });
 

@@ -1,8 +1,10 @@
 #!/usr/bin/env bun
 
 import { randomUUID } from "node:crypto";
+import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   AccountsError,
@@ -43,6 +45,12 @@ const CLI_SCHEMA_VERSION = "accounts.cli.v1" as const;
 /** Largest page the capacity API accepts, and the bound on pages a list may walk. */
 const SELF_HOSTED_PAGE_LIMIT = 100;
 const SELF_HOSTED_MAX_PAGES = 1000;
+/**
+ * Absolute path or `file:` URL of the deployment-owned module the installed
+ * `capacity` binary loads to resolve capacity client credentials. Without it the
+ * self-hosted commands stay fail-closed.
+ */
+const CREDENTIAL_RESOLVER_MODULE_ENVIRONMENT = "HASNA_ACCOUNTS_CAPACITY_RESOLVER_MODULE";
 
 const NOUNS: Readonly<Record<string, EntityKind>> = {
   accounts: "account",
@@ -78,7 +86,9 @@ interface CliCatalog {
  * HASNA_ACCOUNTS_CAPACITY_AUTH_REF for the separately audienced client
  * credential the capacity API accepts. The reference is not credential
  * material, so the CLI never presents it as one; a deployment supplies the
- * resolver that its Secrets runtime backs.
+ * resolver that its Secrets runtime backs, either through
+ * {@link AccountsCliOptions} or through the module named by
+ * HASNA_ACCOUNTS_CAPACITY_RESOLVER_MODULE.
  */
 export interface CapacityClientCredentialResolver {
   resolve(reference: string, signal?: AbortSignal): Promise<string>;
@@ -113,7 +123,7 @@ export async function runAccountsCli(
       return await probeNativeCommand(positionals, parsed.flags, jsonRequested);
     }
 
-    const catalog = createCliCatalog(options);
+    const catalog = await createCliCatalog(options);
     try {
       if (command === "doctor") {
         requireNoPositionals(positionals, "doctor");
@@ -171,7 +181,7 @@ export async function runAccountsCli(
   }
 }
 
-function createCliCatalog(options: AccountsCliOptions): CliCatalog {
+async function createCliCatalog(options: AccountsCliOptions): Promise<CliCatalog> {
   const deployment = Bun.env.HASNA_ACCOUNTS_DEPLOYMENT;
   const localPath = Bun.env.HASNA_ACCOUNTS_DATABASE_PATH;
   if (deployment === "self_hosted" && localPath !== undefined) {
@@ -180,11 +190,15 @@ function createCliCatalog(options: AccountsCliOptions): CliCatalog {
   if (deployment === "self_hosted") {
     const baseUrl = requiredEnvironment("HASNA_ACCOUNTS_CAPACITY_API_URL");
     const authRef = requiredEnvironment("HASNA_ACCOUNTS_CAPACITY_AUTH_REF");
-    return createSelfHostedCliCatalog(baseUrl, authRef, options.credentialResolver);
+    // An embedding caller may inject the resolver directly; the installed binary
+    // has no such caller, so it loads the deployment-configured module instead.
+    const resolver = options.credentialResolver ?? (await loadConfiguredCredentialResolver());
+    return createSelfHostedCliCatalog(baseUrl, authRef, resolver);
   }
   const serviceConfigPresent =
     Bun.env.HASNA_ACCOUNTS_CAPACITY_API_URL !== undefined ||
-    Bun.env.HASNA_ACCOUNTS_CAPACITY_AUTH_REF !== undefined;
+    Bun.env.HASNA_ACCOUNTS_CAPACITY_AUTH_REF !== undefined ||
+    Bun.env[CREDENTIAL_RESOLVER_MODULE_ENVIRONMENT] !== undefined;
   if (deployment !== "local") {
     throw usageError("HASNA_ACCOUNTS_DEPLOYMENT must be local or self_hosted");
   }
@@ -236,6 +250,93 @@ function requiredEnvironment(name: string): string {
   const value = Bun.env[name];
   if (value === undefined || value.length === 0) throw usageError(`${name} is required`);
   return value;
+}
+
+/**
+ * Loads the deployment-owned credential resolver named by
+ * HASNA_ACCOUNTS_CAPACITY_RESOLVER_MODULE, so the installed `capacity` binary
+ * reaches the self-hosted path without an embedding library caller. Returns
+ * undefined when unset, which keeps self-hosted commands fail-closed with
+ * DEPENDENCY_UNAVAILABLE.
+ */
+async function loadConfiguredCredentialResolver(): Promise<CapacityClientCredentialResolver | undefined> {
+  const specifier = Bun.env[CREDENTIAL_RESOLVER_MODULE_ENVIRONMENT];
+  if (specifier === undefined || specifier.length === 0) return undefined;
+  const path = credentialResolverModulePath(specifier);
+  requireOwnerOnlyModule(path);
+  let loaded: Record<string, unknown>;
+  try {
+    loaded = (await import(pathToFileURL(path).href)) as Record<string, unknown>;
+  } catch {
+    throw new AccountsError(
+      "DEPENDENCY_UNAVAILABLE",
+      "Capacity client credential resolver module could not be loaded",
+    );
+  }
+  const exported = loaded.resolve;
+  if (typeof exported !== "function") {
+    throw new AccountsError(
+      "DEPENDENCY_UNAVAILABLE",
+      "Capacity client credential resolver module does not export resolve",
+    );
+  }
+  const moduleResolve = exported as CapacityClientCredentialResolver["resolve"];
+  return Object.freeze({
+    resolve: async (reference: string, signal?: AbortSignal) => {
+      const credential = await moduleResolve(reference, signal);
+      // A non-string would otherwise be stringified into a bearer credential by
+      // the visible-ASCII check the auth provider applies.
+      if (typeof credential !== "string") {
+        throw new AccountsError(
+          "DEPENDENCY_UNAVAILABLE",
+          "Capacity client credential resolver returned a non-string credential",
+        );
+      }
+      return credential;
+    },
+  });
+}
+
+/** The resolver module is executed in-process, so a remote or relative specifier is refused. */
+function credentialResolverModulePath(specifier: string): string {
+  if (/^file:/i.test(specifier)) {
+    try {
+      return fileURLToPath(new URL(specifier));
+    } catch {
+      throw resolverModuleUsageError();
+    }
+  }
+  if (!isAbsolute(specifier)) throw resolverModuleUsageError();
+  return specifier;
+}
+
+function resolverModuleUsageError(): AccountsError {
+  return usageError(`${CREDENTIAL_RESOLVER_MODULE_ENVIRONMENT} must be an absolute path or file: URL`);
+}
+
+/**
+ * Mirrors the packaged launcher's payload check: a resolver module any other
+ * account can rewrite is arbitrary code running with the operator's authority.
+ */
+function requireOwnerOnlyModule(path: string): void {
+  let mode: number;
+  let isFile: boolean;
+  try {
+    const status = statSync(path);
+    mode = status.mode;
+    isFile = status.isFile();
+  } catch {
+    throw new AccountsError(
+      "DEPENDENCY_UNAVAILABLE",
+      "Capacity client credential resolver module is missing or unreadable",
+    );
+  }
+  if (!isFile || (process.platform !== "win32" && (mode & 0o022) !== 0)) {
+    throw new AccountsError(
+      "POLICY_DENIED",
+      "Capacity client credential resolver module must be a regular file that is not group- or world-writable",
+    );
+  }
 }
 
 function resolvedCredentialAuthProvider(
