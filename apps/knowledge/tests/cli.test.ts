@@ -717,7 +717,18 @@ describe('knowledge cli', () => {
     seed('k_partial_human', ['alpha', 'beta']);
     const partialHuman = runCli(['untag', '--id', 'k_partial_human', '--store', store, '-t', 'alpha', '-t', 'nope']);
     expect(partialHuman.exitCode).toBe(0);
-    expect(decode(partialHuman.stdout)).toContain('not found: nope');
+    expect(decode(partialHuman.stdout)).toContain('not found: "nope"');
+
+    // Two missing names must not render identically to ONE missing tag literally named
+    // `p, q`. Joined raw, both print `(not found: p, q)` — the same ambiguity the all-miss
+    // failure message above already fixed, which the success line must not reintroduce.
+    // The JSON `not_found` array was never ambiguous; this pins the human line.
+    seed('k_partial_two', ['alpha']);
+    const partialTwo = runCli(['untag', '--id', 'k_partial_two', '--store', store, '-t', 'alpha', '-t', 'p,q']);
+    expect(partialTwo.exitCode).toBe(0);
+    const twoOut = decode(partialTwo.stdout);
+    expect(twoOut).toContain('(not found: "p", "q")');
+    expect(twoOut).not.toContain('(not found: p, q)');
 
     // The human success line must carry the count, so it cannot read the same for 1 and 0.
     seed('k_human', ['alpha', 'beta', 'gamma']);

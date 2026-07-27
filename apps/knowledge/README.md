@@ -310,15 +310,25 @@ state, or keyword retrieval across active compatibility notes too.
 | `-t, --tag <tag>` | Filter by tag; repeatable/comma-separated, an item must match **all** of them |
 | `--sort created\|title` | Sort field (default: created) |
 | `--desc` | Sort descending |
+| `--archived` | Return archived items *only* |
+| `--include-archived` | Return live **and** archived items (default: live only) |
 | `--verbose` | Print the full paginated item objects |
 | `--json` | Print the stable machine-readable list response |
 
-Each `-t` value is matched **whole first, then split on commas** — the same precedence
-[`untag`](#untag) uses, for the same reason. Items written before the multi-tag parse fix
-can carry a single literal `"a,b,c"` tag, which none of the split names equals, so a
-split-only filter does not merely miss the damaged item: it answers with a *different*
-item that carries the three names separately, at `total: 1` and exit 0, giving the
-operator no signal that the result changed. One query therefore finds both shapes:
+Each `-t` value matches an item when the item's stored tags contain the **whole value**
+*or* all of its **comma-split names** — a union. This is deliberately **not** the rule
+[`untag`](#untag) uses: `untag` is **exclusive**, matching the whole value first and
+falling back to the split names *only* when no stored tag equals the whole value.
+
+Both rules are right for their own command. `untag` writes, so it must take one shape per
+run — that is exactly what makes its documented "re-run to clear the split names"
+behaviour true. `list` only reads, so matching both shapes destroys nothing, while
+matching only one would hide items from the very query used to find them. Items written
+before the multi-tag parse fix can carry a single literal `"a,b,c"` tag, which none of the
+split names equals, so a split-only filter does not merely miss the damaged item: it
+answers with a *different* item that carries the three names separately, at `total: 1` and
+exit 0, giving the operator no signal that the result changed. The union therefore finds
+both shapes in one query:
 
 ```bash
 # returns items tagged with the literal "a,b,c" AND items tagged a + b + c separately
@@ -327,6 +337,11 @@ knowledge list -t "a,b,c" --json
 
 Prefer `--json` when you are looking for glued tags: the table renders `["a,b,c"]` and
 `["a","b","c"]` as `[a,b,c]` and `[a, b, c]`, which differ only by two spaces.
+
+`list` excludes **archived** items by default, so the query above will not surface a glued
+tag that sits on an archived item. Add `--include-archived` to sweep live and archived
+items together, or `--archived` for archived items only — use the former when auditing the
+corpus for tag damage rather than reading live knowledge.
 
 ### inventory
 ```bash
@@ -399,23 +414,29 @@ knowledge untag --id <id> -t "a,b,c"
 ```
 
 When an item somehow carries both shapes, the whole-value match wins and the literal
-tag is removed first; re-run to clear the split names.
+tag is removed first; re-run to clear the split names. That exclusivity is the point: one
+shape per run is what makes re-running meaningful, so `untag` deliberately does **not**
+match both shapes at once. [`list -t`](#list) does — a union — because a filter has nothing
+to remove and suppressing a shape would hide items. Do not "unify" the two rules.
 
 Removing nothing **exits 1**. `removed: 0` at exit 0 with a `Removed tag from <id>`
 message is the same class of defect as the original bug — a success signal that
 cannot distinguish 1 removed from 0 — so an absent tag is an error, as a missing
 `--id` already is. When some requested tags matched and others did not, the call
 succeeds and the unmatched names are reported both in `message` (`Removed 1 tag from
-<id> (not found: nope)`) and in `not_found`. `message` carries them because without
+<id> (not found: "nope")`) and in `not_found`. `message` carries them because without
 `--json` or `--verbose` that is the only line printed, so a `not_found`-only report is
 invisible to exactly the callers most likely to be reading it.
 
-Stored tags are quoted in the failure message, so a single glued `"a,b,c"` tag is
-distinguishable from three separate ones instead of the message appearing to deny a tag
-that is plainly listed:
+Tag names are quoted on **both** paths — the stored tags in the failure message, and the
+unmatched names in the partial-miss success line. Unquoted, a single glued `"a,b,c"` tag
+renders identically to three separate ones, so the message appears to deny a tag that is
+plainly listed, and `(not found: p, q)` cannot be told apart from one missing tag literally
+named `p, q`:
 
 ```
 Error: No matching tag on k_x: "iapp" not in ["iapp,integrations,architecture"]
+Removed 1 tag from k_y (not found: "p", "q")
 ```
 
 ### delete
