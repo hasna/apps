@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-07-27
+
+### Removed
+- **Breaking:** the `evals sync push` / `sync pull` / `sync status` command group,
+  and with it the `@hasna/cloud` dependency. That package is retired and its
+  repository no longer exists, so the dependency was a broken build waiting to
+  happen. The command group existed only to mirror the local SQLite store into a
+  shared Postgres, which is no longer a supported pattern — nothing replaces it.
+- The `sync` entry from `evals completion bash` and `evals completion zsh` output.
+
+Local eval history is unaffected: `src/db/store.ts` has always opened the SQLite
+database through `bun:sqlite` directly, with `journal_mode=WAL` and
+`foreign_keys=ON`, and never went through the removed package.
+
+### Added
+- `src/no-cloud-boundary.test.ts` — guards against reintroducing the retired
+  package via a manifest, a source import, a lockfile, or **built output**. The
+  last case is not theoretical: `bun build --target bun` inlined the package
+  bodily into `dist/cli/index.js`, so the shipped artifact carried it even
+  though the only source mention was a single dynamic `import()`.
+- Regression coverage asserting the removed command group no longer appears in
+  `--help` or in shell completion output.
+
 ## [0.1.20] - 2026-04-02
 
 ### Added

@@ -8,7 +8,7 @@ _evals_completions() {
   cur="\${COMP_WORDS[COMP_CWORD]}"
   prev="\${COMP_WORDS[COMP_CWORD-1]}"
 
-  local commands="run ci judge compare estimate generate calibrate capture doctor mcp completion sync runs --version --help"
+  local commands="run ci judge compare estimate generate calibrate capture doctor mcp completion runs --version --help"
 
   case "\${prev}" in
     evals)
@@ -55,7 +55,6 @@ _evals() {
     'doctor:Health check'
     'mcp:MCP server management'
     'completion:Print shell completion script'
-    'sync:Sync eval runs and datasets with cloud'
     'runs:List and inspect saved eval runs'
   )
 

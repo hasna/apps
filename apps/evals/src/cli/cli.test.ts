@@ -246,15 +246,35 @@ describe("evals ci set-baseline", () => {
 });
 
 describe("evals completion", () => {
-  test("includes sync and runs commands in bash and zsh completion output", async () => {
+  test("includes the runs command in bash and zsh completion output", async () => {
     const bash = await runCli(["completion", "bash"]);
     expect(bash.exitCode).toBe(0);
-    expect(bash.stdout).toContain("sync");
     expect(bash.stdout).toContain("runs");
 
     const zsh = await runCli(["completion", "zsh"]);
     expect(zsh.exitCode).toBe(0);
-    expect(zsh.stdout).toContain("sync:");
     expect(zsh.stdout).toContain("runs:");
+  });
+
+  // The `sync` group was removed with the retired shared-Postgres sync path.
+  // Completion output is generated from a hand-maintained list, so it drifts
+  // silently when a command group goes away — hence an explicit absence check.
+  test("no longer advertises the removed sync command group", async () => {
+    const bash = await runCli(["completion", "bash"]);
+    expect(bash.exitCode).toBe(0);
+    expect(bash.stdout).not.toContain("sync");
+
+    const zsh = await runCli(["completion", "zsh"]);
+    expect(zsh.exitCode).toBe(0);
+    expect(zsh.stdout).not.toContain("sync");
+  });
+});
+
+describe("evals --help", () => {
+  test("does not list the removed sync command group", async () => {
+    const { exitCode, stdout } = await runCli(["--help"]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("runs");
+    expect(stdout).not.toContain("sync");
   });
 });
