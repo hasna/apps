@@ -34,7 +34,7 @@ jobs:
         run: bun test
 
       - name: Verify generated artifacts
-        run: bun run build && bun scripts/verify-generated-artifacts.mjs
+        run: bun run verify:generated
 
   test-matrix:
     strategy:
