@@ -4,7 +4,6 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { readFileSync } from "fs";
-import { sliceBetween } from "./helpers/source-assertions.js";
 import {
   describeActiveStore,
   localStoreIsBehindSchema,
@@ -660,18 +659,21 @@ describe("probe marker rendering", () => {
     // or ignored outright (a fresh `chalk.green("✓")` in the `console.log`) — an exhaustively tested
     // helper the renderer discards is the same vacuous check in a new place.
     //
-    // `sliceBetween`, not two bare `indexOf` calls: `if (probeFailed)` occurs TWICE in this file, so
-    // slicing to its first occurrence produced an EMPTY region and everything below it was vacuous.
-    const persistenceBlock = sliceBetween(
-      cli,
-      "const persistenceMarker = renderPersistenceMarker(",
-      "if (probeFailed)",
-      { minimumLength: 120 },
+    // Bound to the identifier's own use sites, NOT to a sliced region. The previous end marker was
+    // the literal `if (probeFailed)`, which #38 renamed to `if (probeFailed || triggerFailed)` — so
+    // on a rebase onto that change the region stopped resolving and this test went red without any
+    // defect being present. A region whose bounds are unrelated statements inherits every edit to
+    // them; counting the identifier's uses cannot be invalidated by a neighbour changing shape.
+    const markerUses = [...cli.matchAll(/\bpersistenceMarker\b/g)];
+    // Exactly two: the declaration, and the one `console.log` that consumes it. A third use is not
+    // presumed wrong — it fails loudly so the next person has to justify it.
+    expect(markerUses.length).toBe(2);
+    expect(cli).toMatch(/const persistenceMarker = renderPersistenceMarker\(\s*persistence\.outcome,/);
+    expect(cli).toMatch(
+      /\n\s*console\.log\(persistenceMarker \+ ` Persistence round-trip: \$\{persistence\.message\}`\);/,
     );
-    expect(persistenceBlock).toMatch(
-      /console\.log\(persistenceMarker \+ ` Persistence round-trip: \$\{persistence\.message\}`\)/,
-    );
-    // No colour applied outside the injected palette in this block.
-    expect(persistenceBlock).not.toMatch(/chalk\.(?:green|yellow|red)\((?!\s*[,}])/);
+    // The computed marker is not re-coloured on its way to the output, in either operand order.
+    expect(cli).not.toMatch(/chalk\.(?:green|yellow|red)\([^;]*\bpersistenceMarker\b/);
+    expect(cli).not.toMatch(/\bpersistenceMarker\b[^;\n]*chalk\.(?:green|yellow|red)\(/);
   });
 });
