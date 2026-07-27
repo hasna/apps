@@ -7,7 +7,7 @@ import {
   getRemoteApiUrl,
   setRemoteApiUrl,
   setProfileOverride,
-  getConfigDir,
+  getBaseConfigDir,
   clearConfig,
 } from './config';
 
@@ -220,9 +220,14 @@ describe('Config utilities', () => {
     });
 
     afterEach(() => {
-      const profileDir = getConfigDir();
       setProfileOverride(undefined);
-      rmSync(profileDir, { recursive: true, force: true });
+      // Derive the throwaway path by name rather than from getConfigDir(), so
+      // this stays a delete of the test profile no matter how the override is
+      // sequenced above it.
+      rmSync(join(getBaseConfigDir(), 'profiles', REMOTE_URL_TEST_PROFILE), {
+        recursive: true,
+        force: true,
+      });
 
       if (originalEnv === undefined) delete process.env.ZENDESK_REMOTE_API_URL;
       else process.env.ZENDESK_REMOTE_API_URL = originalEnv;
