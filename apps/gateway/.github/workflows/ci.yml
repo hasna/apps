@@ -14,5 +14,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
-      - run: bun test
+      # Build before test: tests/no-cloud-boundary.test.ts inspects dist and skips that
+      # assertion when no build is present.
       - run: bun run build
+      - run: bun test

@@ -44,6 +44,21 @@ export function resolvePoolSsl(connectionString: string): PoolConfig["ssl"] {
 }
 
 /**
+ * Reads `bun:sqlite`'s `lastInsertRowid` out of a returned row, if a statement returned one.
+ *
+ * Postgres has no rowid, so this stays 0 unless a statement returns a numeric `id`. A
+ * non-numeric `id` is deliberately not surfaced: this repo's ledger declares `id TEXT`
+ * (`src/storage.ts`), so a future `RETURNING id` would hand back a uuid string, and
+ * passing that through would put a string behind a `number | bigint` annotation with no
+ * error anywhere. Callers read `changes`; nothing in this repo reads `lastInsertRowid`
+ * from the Postgres backend.
+ */
+export function resolveLastInsertRowid(row: unknown): number | bigint {
+  const id = (row as { id?: unknown } | undefined | null)?.id;
+  return typeof id === "number" || typeof id === "bigint" ? id : 0;
+}
+
+/**
  * Promise-based Postgres adapter backing the `storage.cloud` `backend: "postgres"`
  * usage ledger.
  *
@@ -60,8 +75,7 @@ export class PgAdapterAsync {
 
   async run(sql: string, ...params: unknown[]): Promise<RunResult> {
     const result = await this.pool.query(sqlitePlaceholdersToPostgres(sql), normalizeParams(params));
-    const firstRow = result.rows[0] as { id?: number | bigint } | undefined;
-    return { changes: result.rowCount ?? 0, lastInsertRowid: firstRow?.id ?? 0 };
+    return { changes: result.rowCount ?? 0, lastInsertRowid: resolveLastInsertRowid(result.rows[0]) };
   }
 
   async all(sql: string, ...params: unknown[]): Promise<unknown[]> {

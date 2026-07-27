@@ -42,11 +42,11 @@
   "scripts": {
     "build": "rm -rf dist && bun build src/index.ts src/cli/index.ts src/mcp/index.ts src/serve.ts --outdir dist --target bun && tsc -p tsconfig.build.json && chmod +x dist/cli/index.js dist/mcp/index.js dist/serve.js",
     "typecheck": "tsc --noEmit",
-    "check": "bun run typecheck && bun test && bun run build",
+    "check": "bun run typecheck && bun run build && bun test",
     "test": "bun test",
     "contracts:validate": "contracts conformance fixtures/contracts",
     "dev": "bun run src/cli/index.ts serve --config gateway.config.example.json",
-    "prepublishOnly": "bun run typecheck && bun run test && bun run build"
+    "prepublishOnly": "bun run typecheck && bun run build && bun run test"
   },
   "keywords": [
     "ai",

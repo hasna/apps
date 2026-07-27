@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   PgAdapterAsync,
   normalizeParams,
+  resolveLastInsertRowid,
   resolvePoolSsl,
   sqlitePlaceholdersToPostgres,
 } from "../src/db/pg-adapter";
@@ -67,6 +68,29 @@ describe("resolvePoolSsl", () => {
   test("leaves verifying and plaintext modes to pg", () => {
     expect(resolvePoolSsl("postgres://host/db?sslmode=verify-full")).toBeUndefined();
     expect(resolvePoolSsl("postgres://host/db")).toBeUndefined();
+  });
+});
+
+describe("resolveLastInsertRowid", () => {
+  test("reports 0 when a statement returns no rows", () => {
+    // The ledger INSERT has no RETURNING clause, so this is the live path today.
+    expect(resolveLastInsertRowid(undefined)).toBe(0);
+    expect(resolveLastInsertRowid(null)).toBe(0);
+    expect(resolveLastInsertRowid({})).toBe(0);
+  });
+
+  test("refuses a non-numeric id rather than typing a string as a rowid", () => {
+    // The ledger declares `id TEXT` (src/storage.ts), so adding `RETURNING id` would hand
+    // back a uuid string. RunResult.lastInsertRowid is `number | bigint`; passing the
+    // string through would be a silent type lie.
+    expect(resolveLastInsertRowid({ id: "3f1d0b1e-0000-4000-8000-000000000000" })).toBe(0);
+    expect(resolveLastInsertRowid({ id: null })).toBe(0);
+    expect(resolveLastInsertRowid({ id: { nested: true } })).toBe(0);
+  });
+
+  test("passes a numeric id through, including bigint", () => {
+    expect(resolveLastInsertRowid({ id: 42 })).toBe(42);
+    expect(resolveLastInsertRowid({ id: 9007199254740993n })).toBe(9007199254740993n);
   });
 });
 
