@@ -288,7 +288,13 @@ describe("evals completion", () => {
     const zsh = await runCli(["completion", "zsh"]);
     expect(zsh.stdout).not.toContain("sync");
 
+    // Anchored to commander's indented command-list entry rather than the bare
+    // word: `--help` also renders the `channels` and `events` commands supplied
+    // by @hasna/events on a floating `^0.1.6` range, so a plain substring check
+    // fails on an unrelated upstream *description* change instead of on a real
+    // regression. Verified non-vacuous: restoring the command group makes this
+    // fail on the `  sync   Sync eval runs and datasets with cloud` line.
     const help = await runCli(["--help"]);
-    expect(help.stdout).not.toContain("sync");
+    expect(help.stdout).not.toMatch(/^\s+sync\b/m);
   });
 });

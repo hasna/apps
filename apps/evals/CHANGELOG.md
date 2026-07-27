@@ -19,14 +19,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `sync` from the bash and zsh completion scripts.
 
 ### Added
-- `src/no-cloud-boundary.test.ts` regression guard: fails if a manifest, lockfile,
-  shipped source file or built artifact reintroduces the retired dependency, or if the
-  CLI/MCP/library entry points grow a cloud-sync surface again.
+- `src/no-cloud-boundary.test.ts` regression guard: fails if a manifest, any lockfile,
+  a shipped source file or a built artifact reintroduces the retired dependency, or if
+  the CLI/MCP/library entry points grow a cloud-sync surface again. The built-output
+  check reads every file under `dist/` and `dashboard/dist/` regardless of extension,
+  because bundling leaves no import specifier to match and a reference can land in a
+  sourcemap or a non-JavaScript chunk. On `main` the package really was bundled into
+  two shipped artifacts (`dist/cli/index.js`, `dist/mcp/index.js`); removing it takes
+  `dist/cli/index.js` from 1,267,809 to 888,211 bytes.
 
 ### Changed
 - The completion test now derives its expectations from the CLI's own `--help` output
   and asserts that completions advertise no command the CLI does not register — the
   failure mode that let a stale `sync` entry ship.
+- `prepublishOnly` builds before it tests. It previously tested first, which left the
+  built-output half of the guard scanning a stale or absent `dist/` at the one moment
+  it has to be armed: publish. This repo has no CI workflow, so `prepublishOnly` is
+  the only automated gate.
 
 ## [0.1.20] - 2026-04-02
 

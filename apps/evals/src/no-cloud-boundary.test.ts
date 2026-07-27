@@ -135,13 +135,20 @@ describe("no_cloud_guard boundary", () => {
     expect(offenders).toEqual([]);
   });
 
-  test("the lockfile does not resolve the retired package", () => {
-    const lockfile = ["bun.lock", "bun.lockb", "package-lock.json"]
-      .map((name) => join(repoRoot, name))
-      .find((path) => existsSync(path));
-    if (!lockfile) return;
+  /**
+   * Every lockfile, not just the first one that happens to exist: this repo has a
+   * second install root under `dashboard/`, and a `package-lock.json` can sit
+   * beside a `bun.lock` when someone runs the wrong package manager. Checking only
+   * the first match let a resolved entry in either of those hide from the guard.
+   */
+  test("no lockfile resolves the retired package", () => {
+    const offenders = ["bun.lock", "bun.lockb", "dashboard/bun.lock", "dashboard/bun.lockb", "package-lock.json"]
+      .map((entry) => join(repoRoot, entry))
+      .filter((file) => existsSync(file))
+      .filter((file) => readFileSync(file, "utf8").includes(FORBIDDEN_PACKAGE))
+      .map((file) => relative(repoRoot, file));
 
-    expect(readFileSync(lockfile, "utf8")).not.toContain(FORBIDDEN_PACKAGE);
+    expect(offenders).toEqual([]);
   });
 
   test("the CLI and MCP server register no cloud sync surface", () => {
@@ -154,7 +161,12 @@ describe("no_cloud_guard boundary", () => {
       "registerCloudCommands",
       "registerCloudTools",
     ];
-    const checkedFiles = ["src/cli/index.ts", "src/mcp/server.ts", "src/index.ts"];
+    const checkedFiles = [
+      "src/cli/index.ts",
+      "src/cli/commands/completion.ts",
+      "src/mcp/server.ts",
+      "src/index.ts",
+    ];
 
     const offenders = checkedFiles.flatMap((file) => {
       const content = readFileSync(join(repoRoot, file), "utf8");

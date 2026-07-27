@@ -31,7 +31,7 @@
     "dev:cli": "bun run src/cli/index.ts",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
-    "prepublishOnly": "bun run typecheck && bun test && bun run build",
+    "prepublishOnly": "bun run typecheck && bun run build && bun test",
     "postinstall": "mkdir -p $HOME/.hasna/evals 2>/dev/null || true"
   },
   "keywords": [
