@@ -11,23 +11,55 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **BrowserPlan `app_install_update` no longer depends on a git checkout.** The
   hook's `command_template` was
   `cd <open-chrome-project-root> && git pull --ff-only origin main && bun install
-  --frozen-lockfile`. That template is already unusable — no fleet machine
-  manifest defines an `open-chrome` workspace path, so
-  `<open-chrome-project-root>` has nothing to resolve to — and it cannot survive
-  the owner-authorised retirement of the BrowserPlan source repository. It is now
-  `bun install -g @hasna/open-chrome@<open-chrome-version>` — the same
-  desired-state rollout idiom `machines reconcile` already uses (`bun install -g
-  pkg@version`) against the npm package, which ships the `browserplan` bin.
-  `command_placeholders` changes from `["open-chrome-project-root"]` to
-  `["open-chrome-version"]`, and `required_capabilities` drops `git` (installing
-  from npm needs only `bun`), so machines without git are no longer reported as
-  blocked for this hook. `validateMachinesConsumerEnvelope("browserplan_fleet",
-  …)` now **rejects** any `app_install_update` template that contains `git pull`
-  or omits the `<open-chrome-version>` placeholder, so a stale consumer cannot
-  hand an operator a command that pulls a repository that will no longer exist.
-  Every other BrowserPlan surface is byte-for-byte unchanged: same owner ids,
-  target name, machine ids, operation ids, stable surfaces, and the same
-  published `schemas/machines-consumer.schema.json`.
+  --frozen-lockfile`, which cannot survive the owner-authorised retirement of the
+  BrowserPlan source repository. It is now
+  `bun install -g @hasna/open-chrome@latest`, installing from the npm package that
+  ships the `browserplan` bin. `command_placeholders` becomes `[]` and
+  `required_capabilities` drops `git` (installing from npm needs only `bun`), so
+  machines without git are no longer reported as blocked for this hook.
+
+  The template tracks the `latest` dist-tag rather than exposing a version
+  placeholder because **nothing in this package could resolve one**:
+  `getPackageVersion()` returns *machines*' own version, and unlike `machines
+  reconcile` — which pins versions from the fleet manifest — the hook contract has
+  no version source of truth. A placeholder with no resolver would only move the
+  problem to the caller.
+
+  On the old template: it was already unlikely to succeed, but **not for the
+  reason an earlier draft of this entry gave.** `<open-chrome-project-root>` does
+  resolve — `machines browserplan fleet --json` returns a non-null
+  `workspace.project_root` for all 11 target machines — but every one reports
+  `project_root_source: "inferred"`, a derived path rather than a manifest
+  mapping, and spot checks found no such directory on the machines examined.
+
+### Compatibility
+
+- **Consumers pinned to `@hasna/machines` <= 0.2.2 will reject the new
+  `app_install_update` payload.** The 0.2.2 validator *requires* the literal
+  `<open-chrome-project-root>` token, which the new template does not contain, so
+  an old validator reports `ok: false` with one `command_template` error per
+  machine. `MACHINES_CONSUMER_CONTRACT_VERSION` is deliberately **left at `1`**:
+  raising it would make consumers treat *every* envelope as unsupported —
+  `iapp-knowledge`'s adapter (`src/machines.ts`, adapter contract version 1)
+  reports `unsupported_contract_version` and returns `null` for topology, route
+  and workspace payloads whose `schema_version` exceeds 1 — a far larger break
+  than the one hook it does not read. No known consumer validates the
+  `browserplan_fleet` envelope.
+- **This release only expands validation; it never narrows it.**
+  `validateMachinesConsumerEnvelope` accepts an `app_install_update` template that
+  either starts with `bun install -g @hasna/open-chrome@` (so a caller may pin
+  `…@0.1.0` rather than track `latest`) **or** exactly equals the legacy checkout
+  template, so a cached pre-0.2.3 payload keeps validating. Templates that are
+  neither — including git-based rewrites such as `git fetch && git reset --hard`,
+  `git -C <dir> pull` and `git clone` — are rejected. This is an allowlist of
+  install shapes, not a `git pull` phrase denylist, which would have been
+  trivially evadable.
+- Every other BrowserPlan surface is unchanged — owner ids, target name, machine
+  ids, operation ids, stable surfaces — and
+  `schemas/machines-consumer.schema.json` is byte-for-byte identical, because the
+  emitted template is not constrained by the JSON Schema. **That artifact being
+  unchanged is not evidence that consumers are unaffected**; see the validator
+  skew above.
 
 ### Changed
 
@@ -35,6 +67,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   repeated across the contract, the schema bundle, and the validators:
   `BROWSERPLAN_APP_ID`, `BROWSERPLAN_PACKAGE_NAME`, `BROWSERPLAN_CLI_COMMAND`,
   `BROWSERPLAN_ROUTE_OWNER`, `BROWSERPLAN_SECRETS_OWNER`, and
+  `BROWSERPLAN_INSTALL_UPDATE_COMMAND_PREFIX` /
   `BROWSERPLAN_INSTALL_UPDATE_COMMAND_TEMPLATE` (`src/browserplan.ts`). A test
   pins `BROWSERPLAN_APP_ID === defaultAppIdForPackage(BROWSERPLAN_PACKAGE_NAME)`
   and `BROWSERPLAN_ROUTE_OWNER === defaultAppIdForPackage(MACHINES_PACKAGE_NAME)`

@@ -19,7 +19,8 @@ import type {
 import {
   BROWSERPLAN_APP_ID,
   BROWSERPLAN_EXCLUDED_MACHINE_IDS,
-  BROWSERPLAN_INSTALL_VERSION_PLACEHOLDER,
+  BROWSERPLAN_INSTALL_UPDATE_COMMAND_PREFIX,
+  BROWSERPLAN_LEGACY_INSTALL_UPDATE_COMMAND_TEMPLATE,
   BROWSERPLAN_MACHINE_IDS,
   BROWSERPLAN_ROUTE_OWNER,
   BROWSERPLAN_SECRETS_OWNER,
@@ -1466,9 +1467,19 @@ export function validateMachinesConsumerEnvelope(
             if (!["ready", "blocked", "unknown"].includes(String(hook.readiness))) errors.push(`${path}.readiness`);
             if (!hasString(hook, "command_template")) errors.push(`${path}.command_template`);
             if (hook.id === "supervisor_status" && String(hook.command_template).includes("remote start")) errors.push(`${path}.command_template`);
-            if (hook.id === "app_install_update" && !String(hook.command_template).includes(`<${BROWSERPLAN_INSTALL_VERSION_PLACEHOLDER}>`)) errors.push(`${path}.command_template`);
-            // The BrowserPlan source repository is being retired; a git-checkout install cannot be relied on.
-            if (hook.id === "app_install_update" && /\bgit\s+pull\b/.test(String(hook.command_template))) errors.push(`${path}.command_template`);
+            // Positive allowlist of the two known-good shapes, not a denylist of bad ones.
+            // A phrase denylist (e.g. rejecting "git pull") is trivially evaded by
+            // `git fetch && git reset --hard`, `git -C <dir> pull` or `git clone`, so it
+            // would assert a guarantee it does not provide.
+            //   - the emitted npm shape, with or without a pinned version
+            //   - the legacy checkout template, still accepted so consumers holding a
+            //     cached payload from <= 0.2.2 keep validating (see CHANGELOG compat note)
+            if (hook.id === "app_install_update") {
+              const template = String(hook.command_template);
+              const installsFromRegistry = template.startsWith(BROWSERPLAN_INSTALL_UPDATE_COMMAND_PREFIX);
+              const isLegacyTemplate = template === BROWSERPLAN_LEGACY_INSTALL_UPDATE_COMMAND_TEMPLATE;
+              if (!installsFromRegistry && !isLegacyTemplate) errors.push(`${path}.command_template`);
+            }
             if (!hasArray(hook, "command_placeholders")) errors.push(`${path}.command_placeholders`);
             if (!hasArray(hook, "required_capabilities")) errors.push(`${path}.required_capabilities`);
             if (!hasArray(hook, "blocked_by")) errors.push(`${path}.blocked_by`);

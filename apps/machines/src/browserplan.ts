@@ -34,13 +34,29 @@ export const BROWSERPLAN_APP_ID = "open-chrome";
 export const BROWSERPLAN_ROUTE_OWNER = "open-machines";
 export const BROWSERPLAN_SECRETS_OWNER = "open-identities/open-attachments/open-mailery";
 /**
- * `app_install_update` installs/updates BrowserPlan from npm, matching the desired-state
- * rollout idiom in src/commands/reconcile.ts (`bun install -g pkg@version`). It must NOT
- * git-pull a checkout: the source repository is being retired, and no fleet machine has
- * a checkout for the old template to resolve against.
+ * Command prefix every accepted `app_install_update` template must start with. Kept as a
+ * prefix rather than a whole command so a caller may pin a concrete version
+ * (`…@0.1.0`) instead of tracking the dist-tag and still validate.
  */
-export const BROWSERPLAN_INSTALL_VERSION_PLACEHOLDER = "open-chrome-version";
-export const BROWSERPLAN_INSTALL_UPDATE_COMMAND_TEMPLATE = `bun install -g ${BROWSERPLAN_PACKAGE_NAME}@<${BROWSERPLAN_INSTALL_VERSION_PLACEHOLDER}>`;
+export const BROWSERPLAN_INSTALL_UPDATE_COMMAND_PREFIX = `bun install -g ${BROWSERPLAN_PACKAGE_NAME}@`;
+/**
+ * `app_install_update` installs/updates BrowserPlan from npm rather than from a checkout,
+ * because the source repository is being retired under owner authorisation.
+ *
+ * This tracks the `latest` dist-tag instead of exposing a version placeholder. A
+ * placeholder would have no resolver: nothing in this package can discover the target
+ * package's version (`getPackageVersion()` returns *machines*' own version), unlike
+ * src/commands/reconcile.ts which pins versions from the fleet manifest. An unresolvable
+ * placeholder would leave callers guessing, so the template is directly runnable as-is.
+ */
+export const BROWSERPLAN_INSTALL_UPDATE_COMMAND_TEMPLATE = `${BROWSERPLAN_INSTALL_UPDATE_COMMAND_PREFIX}latest`;
+/**
+ * The pre-retirement template. Still ACCEPTED by validation so that a consumer holding a
+ * cached payload from `@hasna/machines` <= 0.2.2 does not start failing; it is simply no
+ * longer emitted. See the compatibility note in CHANGELOG.md.
+ */
+export const BROWSERPLAN_LEGACY_INSTALL_UPDATE_COMMAND_TEMPLATE =
+  "cd <open-chrome-project-root> && git pull --ff-only origin main && bun install --frozen-lockfile";
 
 export const BROWSERPLAN_TARGET_NAME = "browserplan-machine001-machine011";
 export const BROWSERPLAN_MACHINE_IDS = [
@@ -621,7 +637,7 @@ function operationHooks(machineId: string, routeReady: boolean, known: boolean, 
       description: `Install or update the BrowserPlan CLI from the ${BROWSERPLAN_PACKAGE_NAME} npm package on the target machine.`,
       machineId,
       commandTemplate: BROWSERPLAN_INSTALL_UPDATE_COMMAND_TEMPLATE,
-      placeholders: [BROWSERPLAN_INSTALL_VERSION_PLACEHOLDER],
+      placeholders: [],
       requiredCapabilities: ["bun"],
       routeReady,
       known,
