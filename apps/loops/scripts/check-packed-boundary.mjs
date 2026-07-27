@@ -56,8 +56,8 @@ try {
   const packageJson = JSON.parse(
     readFileSync(join(packageRoot, "package.json"), "utf8"),
   );
-  if (packageJson.bin?.["loops-api"] !== "dist/api/index.js") {
-    throw new Error("packed package did not preserve loops-api -> dist/api/index.js");
+  if (packageJson.bin?.["loops-api"] !== undefined) {
+    throw new Error("packed package still exposes the non-contract loops-api binary");
   }
   if (
     packageJson.exports?.["./api"]?.import !== "./dist/api/index.js" ||
@@ -69,27 +69,17 @@ try {
     !existsSync(join(packageRoot, "dist", "api", "index.js")) ||
     !existsSync(join(packageRoot, "dist", "api", "index.d.ts"))
   ) {
-    throw new Error("packed package omitted the loops-api runtime or types");
+    throw new Error("packed package omitted the @hasna/loops/api runtime or types");
   }
 
   symlinkSync(join(repoRoot, "node_modules"), join(extractRoot, "node_modules"), "dir");
-  const binSmoke = run(
-    "bun",
-    [join(packageRoot, "dist", "api", "index.js"), "--json", "status"],
-    extractRoot,
-  );
-  const binStatus = JSON.parse(binSmoke.stdout);
-  if (binStatus.service !== "loops-api" || binStatus.ok !== true) {
-    throw new Error("packed loops-api binary status smoke returned an invalid envelope");
-  }
-
   const exportSmoke = run(
     "bun",
     [
       "-e",
       [
-      'import { apiStatus } from "@hasna/loops/api";',
-      "process.stdout.write(JSON.stringify(apiStatus()));",
+        'import { apiStatus } from "@hasna/loops/api";',
+        "process.stdout.write(JSON.stringify(apiStatus()));",
       ].join("\n"),
     ],
     packageRoot,
@@ -106,7 +96,7 @@ try {
     packageRoot,
   ]);
   process.stdout.write(scan.stdout);
-  console.log("Loops packed artifact boundary and loops-api export/bin smokes passed");
+  console.log("Loops packed artifact boundary and @hasna/loops/api export smoke passed");
 } finally {
   rmSync(tempRoot, { recursive: true, force: true });
 }

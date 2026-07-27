@@ -4,7 +4,7 @@
   "name": "loops",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.5.2",
+  "kitVersion": "0.8.2",
   "description": "Persistent loop and workflow runner for deterministic commands and headless AI coding agents. CLI + MCP + HTTP API (loops-serve) + generated SDK. Canonical deployment modes are local, self_hosted, and cloud; self_hosted runs loops-serve against operator-owned Postgres with API-key auth.",
   "bins": [
     "loops",
@@ -21,9 +21,9 @@
   "serviceSurfaces": [
     {
       "name": "http",
+      "kind": "api",
       "status": "supported",
       "bin": "loops-serve",
-      "mcpBin": "loops-mcp",
       "authMode": "api-key",
       "deploymentModes": [
         "self-hosted"
@@ -63,27 +63,59 @@
           "summary": "Public readiness reports stable storage, auth, and migration codes without credential details."
         }
       ]
+    },
+    {
+      "name": "typescript-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "api-key",
+      "deploymentModes": [
+        "self-hosted"
+      ],
+      "exportSubpath": "./sdk",
+      "generatedFrom": "/openapi.json",
+      "clientClassName": "LoopsClient"
+    },
+    {
+      "name": "mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "loops-mcp",
+      "authMode": "api-key",
+      "deploymentModes": [
+        "self-hosted"
+      ]
+    },
+    {
+      "name": "cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "loops",
+      "authMode": "local-only",
+      "deploymentModes": [
+        "local",
+        "self-hosted"
+      ]
     }
   ],
   "storage": {
     "mode": "local",
+    "engines": [
+      "sqlite",
+      "postgres"
+    ],
     "envPrefix": "HASNA_LOOPS_",
-    "sqlitePath": "~/.hasna/loops/loops.db"
+    "sqlitePath": "~/.hasna/loops/loops.db",
+    "pgTestGate": {
+      "envVar": "LOOPS_TEST_DATABASE_URL",
+      "command": "bun test --timeout 60000 src/lib/storage/postgres-loop-storage.test.ts src/lib/storage/postgres-loop-storage-tenant-guard.test.ts"
+    }
   },
   "metadata": {
-    "conformance": {
-      "binCompatibilityWaivers": [
-        {
-          "checkId": "bins_match_package",
-          "failureDetail": "in package.json but undeclared: loops-api",
-          "bin": "loops-api",
-          "packageTarget": "dist/api/index.js",
-          "exportPath": "./api",
-          "exportImport": "./dist/api/index.js",
-          "exportTypes": "./dist/api/index.d.ts",
-          "reason": "Retain the published loops-api compatibility binary and the matching package export while the 0.5.2 checker has no first-class per-repo bin waiver."
-        }
-      ]
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
     },
     "service": {
       "port": 8787,
@@ -93,7 +125,6 @@
       "openapiPath": "/openapi.json",
       "apiVersion": "v1",
       "auth": "api-key",
-      "signingSecretSecretRef": "hasna/oss/loops/api-key-signing-secret",
       "deploymentModeMapping": {
         "contract": "self-hosted",
         "runtime": "self_hosted"
@@ -101,18 +132,15 @@
       "databaseDsnBindings": [
         {
           "purpose": "runtime",
-          "environmentVariable": "HASNA_LOOPS_DATABASE_URL",
-          "secretRef": "hasna/oss/loops/runtime-database-url"
+          "environmentVariable": "HASNA_LOOPS_DATABASE_URL"
         },
         {
           "purpose": "auth",
-          "environmentVariable": "HASNA_LOOPS_AUTH_DATABASE_URL",
-          "secretRef": "hasna/oss/loops/auth-database-url"
+          "environmentVariable": "HASNA_LOOPS_AUTH_DATABASE_URL"
         },
         {
           "purpose": "migrator",
-          "environmentVariable": "HASNA_LOOPS_MIGRATOR_DATABASE_URL",
-          "secretRef": "hasna/oss/loops/migrator-database-url"
+          "environmentVariable": "HASNA_LOOPS_MIGRATOR_DATABASE_URL"
         }
       ],
       "aws": {

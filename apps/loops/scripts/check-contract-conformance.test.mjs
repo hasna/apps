@@ -38,7 +38,7 @@ function conformanceFixture(mutatePackage) {
 }
 
 describe("Loops repository contract conformance", () => {
-  test("preserves the official loops-api failure and applies only its documented compatibility waiver", () => {
+  test("passes official conformance without a bin compatibility waiver", () => {
     const report = runContractConformance();
     const rawBinCheck = report.official.checks.find(
       ({ id }) => id === "bins_match_package",
@@ -54,30 +54,18 @@ describe("Loops repository contract conformance", () => {
       class: "service",
     });
     expect(report.official).toMatchObject({
-      ok: false,
+      ok: true,
       repoRoot,
       name: "loops",
       class: "service",
     });
     expect(rawBinCheck).toEqual({
       id: "bins_match_package",
-      status: "fail",
-      detail: "in package.json but undeclared: loops-api",
-    });
-    expect(adjudicatedBinCheck).toEqual({
-      id: "bins_match_package",
       status: "pass",
-      detail:
-        "waived exact published compatibility bin loops-api -> dist/api/index.js; official result: in package.json but undeclared: loops-api",
+      detail: "declared bins match package.json bin",
     });
-    expect(report.adjudications).toEqual([
-      {
-        checkId: "bins_match_package",
-        bin: "loops-api",
-        packageTarget: "dist/api/index.js",
-        exportPath: "./api",
-      },
-    ]);
+    expect(adjudicatedBinCheck).toEqual(rawBinCheck);
+    expect(report.adjudications).toEqual([]);
     expect(
       report.official.checks.find(({ id }) => id === "health_shape"),
     ).toMatchObject({ status: "pass" });
@@ -98,8 +86,7 @@ describe("Loops repository contract conformance", () => {
       ).toEqual({
         id: "bins_match_package",
         status: "fail",
-        detail:
-          "in package.json but undeclared: loops-api, loops-unwaived",
+        detail: "in package.json but undeclared: loops-unwaived",
       });
       expect(report.adjudications).toEqual([]);
     } finally {
@@ -107,38 +94,11 @@ describe("Loops repository contract conformance", () => {
     }
   });
 
-  test("requires the waived bin target and package export to match exactly", () => {
-    const mutations = [
-      (packageJson) => {
-        packageJson.bin["loops-api"] = "dist/other/index.js";
-      },
-      (packageJson) => {
-        packageJson.exports["./api"].import = "./dist/other/index.js";
-      },
-      (packageJson) => {
-        packageJson.exports["./api"].types = "./dist/other/index.d.ts";
-      },
-    ];
-    for (const mutatePackage of mutations) {
-      const root = conformanceFixture(mutatePackage);
-      try {
-        const report = runContractConformance(root);
-        expect(report.ok).toBe(false);
-        expect(
-          report.checks.find(({ id }) => id === "bins_match_package"),
-        ).toMatchObject({ status: "fail" });
-        expect(report.adjudications).toEqual([]);
-      } finally {
-        rmSync(root, { recursive: true, force: true });
-      }
-    }
-  });
-
   test("declares the exact package, deployment, and split DSN contracts", () => {
     const packageJson = readJson(join(repoRoot, "package.json"));
     const manifest = readJson(join(repoRoot, "hasna.contract.json"));
-    const httpSurface = manifest.serviceSurfaces.find(
-      ({ name }) => name === "http",
+    const surfaces = Object.fromEntries(
+      manifest.serviceSurfaces.map((surface) => [surface.kind, surface]),
     );
     const serviceMetadata = manifest.metadata.service;
     const serveSource = readFileSync(
@@ -153,12 +113,39 @@ describe("Loops repository contract conformance", () => {
       ),
     ].sort();
 
-    expect(packageJson.bin["loops-api"]).toBe("dist/api/index.js");
+    expect(packageJson.bin["loops-api"]).toBeUndefined();
     expect(packageJson.exports["./api"]).toEqual({
       types: "./dist/api/index.d.ts",
       import: "./dist/api/index.js",
     });
-    expect(httpSurface.deploymentModes).toEqual(["self-hosted"]);
+    expect(surfaces.api.deploymentModes).toEqual(["self-hosted"]);
+    expect(surfaces.sdk).toMatchObject({
+      status: "supported",
+      exportSubpath: "./sdk",
+      generatedFrom: "/openapi.json",
+      clientClassName: "LoopsClient",
+    });
+    expect(surfaces.mcp).toMatchObject({
+      status: "supported",
+      mcpBin: "loops-mcp",
+    });
+    expect(surfaces.cli).toMatchObject({
+      status: "supported",
+      bin: "loops",
+    });
+    expect(manifest.storage).toMatchObject({
+      engines: ["sqlite", "postgres"],
+      pgTestGate: {
+        envVar: "LOOPS_TEST_DATABASE_URL",
+        command:
+          "bun test --timeout 60000 src/lib/storage/postgres-loop-storage.test.ts src/lib/storage/postgres-loop-storage-tenant-guard.test.ts",
+      },
+    });
+    expect(manifest.metadata.release).toEqual({
+      artifactScan: { script: "scan:artifact" },
+    });
+    expect(packageJson.scripts.prepack).toContain("scan:artifact");
+    expect(JSON.stringify(manifest)).not.toContain("secretRef");
     expect(serviceMetadata.deploymentModeMapping).toEqual({
       contract: "self-hosted",
       runtime: "self_hosted",
@@ -181,17 +168,14 @@ describe("Loops repository contract conformance", () => {
       {
         purpose: "runtime",
         environmentVariable: "HASNA_LOOPS_DATABASE_URL",
-        secretRef: "hasna/oss/loops/runtime-database-url",
       },
       {
         purpose: "auth",
         environmentVariable: "HASNA_LOOPS_AUTH_DATABASE_URL",
-        secretRef: "hasna/oss/loops/auth-database-url",
       },
       {
         purpose: "migrator",
         environmentVariable: "HASNA_LOOPS_MIGRATOR_DATABASE_URL",
-        secretRef: "hasna/oss/loops/migrator-database-url",
       },
     ]);
   });

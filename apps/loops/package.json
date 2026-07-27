@@ -8,7 +8,6 @@
   "bin": {
     "loops": "dist/cli/index.js",
     "loops-daemon": "dist/daemon/index.js",
-    "loops-api": "dist/api/index.js",
     "loops-serve": "dist/serve/index.js",
     "loops-runner": "dist/runner/index.js",
     "loops-mcp": "dist/mcp/index.js"
@@ -83,10 +82,13 @@
     "test:boundary": "bun run scripts/no-private-cloud-boundary.mjs",
     "check:contracts": "bun run scripts/check-storage-kit.mjs && bun run scripts/check-contract-conformance.mjs",
     "check:supply-chain": "bun audit && bun audit --production && bun run check:contracts && bun run check:branding && bun pm pack --dry-run --ignore-scripts && bun run test:boundary && bun run scripts/check-packed-boundary.mjs",
+    "verify:release": "bun run build && bun run typecheck && bun test && bun run test:boundary && bun run check:supply-chain",
+    "scan:artifact": "bun scripts/scan-artifact.mjs",
     "prepare": "test -d dist || bun run build",
+    "prepack": "bun run build && bun run scan:artifact",
     "dev:cli": "bun run src/cli/index.ts",
     "dev:daemon": "bun run src/daemon/index.ts",
-    "prepublishOnly": "bun run build && bun run typecheck && bun test && bun run test:boundary && bun run check:supply-chain"
+    "prepublishOnly": "bun run verify:release"
   },
   "keywords": [
     "loops",
@@ -114,7 +116,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-secrets-manager": "^3.1083.0",
-    "@hasna/contracts": "0.5.2",
+    "@hasna/contracts": "0.8.2",
     "@hasna/events": "^0.1.9",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@openrouter/ai-sdk-provider": "2.9.1",
