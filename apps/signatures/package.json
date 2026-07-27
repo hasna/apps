@@ -4,7 +4,8 @@
   "description": "Open-source agreement and e-signature workflows for Markdown, PDFs, local signing, providers, CLI, API, and MCP",
   "type": "module",
   "bin": {
-    "open-signatures": "dist/cli/index.js",
+    "open-signatures": "dist/cli/launcher.js",
+    "signatures": "dist/cli/launcher.js",
     "signatures-mcp": "dist/mcp/index.js",
     "signatures-serve": "dist/server/index.js"
   },
@@ -18,7 +19,7 @@
   },
   "scripts": {
     "clean": "rm -rf dist",
-    "build:js": "bun build src/cli/index.tsx --outdir dist/cli --target bun --external @hasna/attachments && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @hasna/attachments && bun build src/server/index.ts --outdir dist/server --target bun --external @hasna/attachments && bun build src/index.ts --outdir dist --target bun --external @hasna/attachments",
+    "build:js": "bun build src/cli/index.tsx --outdir dist/cli --target bun --external @hasna/attachments && bun build src/cli/launcher.ts --outdir dist/cli --target node && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @hasna/attachments && bun build src/server/index.ts --outdir dist/server --target bun --external @hasna/attachments && bun build src/index.ts --outdir dist --target bun --external @hasna/attachments",
     "build:types": "tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
     "build": "bun run clean && bun run build:js && bun run build:types",
     "dev:serve": "bun run src/server/index.ts",
