@@ -5,6 +5,30 @@ node_modules/
 .env.*
 !.env.example
 
+# Lockfiles. This repo is Bun-first, so exactly ONE lockfile is tracked: bun.lock.
+#
+# `*.lock` above stays: `src/store.ts` writes `<storePath>.lock` beside any JSON store, so
+# `knowledge --store ./db.json` in a checkout leaves `./db.json.lock` behind. But as a
+# lockfile rule it got both halves wrong. It swallowed `bun.lock`, so the repo shipped with
+# NO committed lockfile and `bun install --frozen-lockfile` exited 0 while pinning nothing —
+# and because `@hasna/events` is bundled into `bin/knowledge.js` (it is not in the build's
+# `--external` list), the bundle a rebuild produces depended on whatever the tree happened
+# to resolve: 0.1.14 reproduces the committed bin, 0.1.13 does not. And it missed
+# `pnpm-lock.yaml` / `package-lock.json`, whose names do not end in `.lock`, so a stray
+# pnpm lockfile was untracked AND unignored — one `git add -A` from being committed, which
+# has already happened once (36b2099). That one is also a supply-chain hole: a pnpm or npm
+# install does not honour Bun's package release-age quarantine.
+#
+# So: un-ignore Bun's lockfile, and name the foreign ones. They are listed by name rather
+# than by pattern so adopting a new package manager is a deliberate edit here, not a silent
+# side effect. `tests/lockfile.test.ts` pins both halves — bun.lock tracked, every foreign
+# lockfile ignored and untracked — because a client-side hook cannot enforce either.
+!bun.lock
+pnpm-lock.yaml
+package-lock.json
+npm-shrinkwrap.json
+bun.lockb
+
 # IDE
 .vscode/
 .idea/
