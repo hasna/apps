@@ -37517,7 +37517,7 @@ function buildServer() {
     const item = await store.update(existing.id, patch);
     return item ? jsonText({ ok: true, item }) : errorText(`Item not found: ${id}`);
   });
-  registerTool(server, "ok_untag", "Remove tags from a knowledge item", "Remove specific tags from an item", {
+  registerTool(server, "ok_untag", "Remove tags from a knowledge item", "Remove specific tags from an item. Each value matches a stored tag whole before being split on commas. Removing nothing is an error, so removed is never 0.", {
     id: exports_external.string(),
     tags: exports_external.array(exports_external.string()),
     store_path: storePathField,
@@ -37527,11 +37527,34 @@ function buildServer() {
     const current = await store.get(id);
     if (!current)
       return errorText(`Item not found: ${id}`);
-    const remove = new Set(tags.map((tag) => tag.toLowerCase()));
-    const before = (current.tags ?? []).length;
-    const nextTags = (current.tags ?? []).filter((tag) => !remove.has(tag.toLowerCase()));
+    const before = current.tags ?? [];
+    const stored = new Set(before.map((tag) => tag.toLowerCase()));
+    const remove = new Set;
+    for (const raw of tags) {
+      const whole = raw.trim().toLowerCase();
+      if (whole.length > 0 && stored.has(whole)) {
+        remove.add(whole);
+        continue;
+      }
+      for (const name of raw.split(",").map((tag) => tag.trim().toLowerCase()).filter((tag) => tag.length > 0))
+        remove.add(name);
+    }
+    if (remove.size === 0)
+      return errorText(`No tag names given for ${current.id}. Each entry must contain at least one non-empty tag name.`);
+    const nextTags = before.filter((tag) => !remove.has(tag.toLowerCase()));
+    const removed = before.length - nextTags.length;
+    const notFound = [...remove].filter((tag) => !stored.has(tag));
+    if (removed === 0) {
+      return errorText(`No matching tag on ${current.id}: ${notFound.map((tag) => JSON.stringify(tag)).join(", ")} not in [${before.map((tag) => JSON.stringify(tag)).join(", ")}]`);
+    }
     const item = await store.update(current.id, { tags: nextTags });
-    return item ? jsonText({ ok: true, item, removed: before - nextTags.length }) : errorText(`Item not found: ${id}`);
+    if (!item)
+      return errorText(`Item not found: ${id}`);
+    const missed = notFound.length > 0 ? ` (not found: ${notFound.map((tag) => JSON.stringify(tag)).join(", ")})` : "";
+    const result = { ok: true, item, removed, message: `Removed ${removed} tag${removed === 1 ? "" : "s"} from ${item.id}${missed}` };
+    if (notFound.length > 0)
+      result.not_found = notFound;
+    return jsonText(result);
   });
   registerTool(server, "ok_bulk_delete", "Bulk delete knowledge items", "Delete multiple items by tag or search. Requires confirm=true.", {
     tag: exports_external.array(exports_external.string()).optional(),
