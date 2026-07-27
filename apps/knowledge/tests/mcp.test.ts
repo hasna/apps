@@ -857,4 +857,147 @@ describe('knowledge MCP', () => {
       await client.close();
     }
   }, 10000);
+
+  // ok_untag had no MCP-side coverage at all, which is how it kept returning `ok: true` on
+  // `removed: 0` through two PRs that fixed the same defect on the CLI side. Every assertion
+  // below reads the STORE back as well as the payload: asserting on the absence of an error is
+  // what let the original defect through.
+  test('ok_untag matches whole values before splitting and refuses to call a no-op a success', async () => {
+    const dir = makeTempDir('ok-untag-mcp-');
+    const store = join(dir, 'db.json');
+    const seededAt = '2026-07-06T14:31:34.606Z';
+    const seed = (id: string, tags: string[]): void => {
+      writeFileSync(store, JSON.stringify({
+        items: [{
+          id,
+          title: `Item ${id}`,
+          content: 'Body',
+          url: null,
+          tags,
+          metadata: {},
+          archived: false,
+          created_at: seededAt,
+          updated_at: seededAt,
+        }],
+      }));
+    };
+
+    const transport = new StdioClientTransport({
+      command: 'bun',
+      args: [MCP],
+      cwd: dir,
+      stderr: 'pipe',
+      // The cloud-flip variables are stripped rather than inherited. If either is exported in
+      // the parent shell the child routes to the cloud API and every store_path below is
+      // ignored, which turns this test into one that measures nothing. CI has neither set; a
+      // developer machine can easily have both.
+      env: Object.fromEntries(
+        Object.entries(process.env).filter(([key]) => key !== 'HASNA_KNOWLEDGE_API_URL' && key !== 'HASNA_KNOWLEDGE_API_KEY')
+      ) as Record<string, string>,
+    });
+    const client = new Client({ name: 'knowledge-test', version: '0.0.0' });
+
+    /** Call ok_untag and return both the error flag and the parsed-or-raw body. */
+    const untag = async (id: string, tags: string[]) => {
+      const result: any = await client.callTool({ name: 'ok_untag', arguments: { store_path: store, id, tags } });
+      const text = result.content?.[0]?.text;
+      expect(typeof text).toBe('string');
+      let parsed: any = null;
+      try { parsed = JSON.parse(text); } catch { parsed = null; }
+      return { isError: result.isError === true, text: text as string, parsed };
+    };
+    /** Read the item straight back out of the store, not out of the tool's own response. */
+    const storedItem = (id: string) => {
+      const db = JSON.parse(readFileSync(store, 'utf8')) as { items: Array<Record<string, any>> };
+      const found = db.items.find((item) => item.id === id);
+      expect(found).toBeDefined();
+      return found!;
+    };
+
+    try {
+      await client.connect(transport);
+
+      // Positive control: the fixture holds ONE glued tag, not three. Everything below depends
+      // on that distinction being real in the store.
+      seed('k_glued', ['a,b,c']);
+      expect(storedItem('k_glued').tags).toEqual(['a,b,c']);
+      const whole = await untag('k_glued', ['a,b,c']);
+      expect(whole.isError).toBe(false);
+      expect(whole.parsed.removed).toBe(1);
+      expect(storedItem('k_glued').tags).toEqual([]);
+
+      // The defect this test was written for. An untag that removed nothing must not report
+      // success, and must not write: the old code called store.update first, so a no-op still
+      // bumped updated_at.
+      seed('k_absent', ['alpha', 'beta']);
+      const absent = await untag('k_absent', ['gamma']);
+      expect(absent.isError).toBe(true);
+      expect(absent.text).toBe('Error: No matching tag on k_absent: "gamma" not in ["alpha", "beta"]');
+      expect(storedItem('k_absent').tags).toEqual(['alpha', 'beta']);
+      expect(storedItem('k_absent').updated_at).toBe(seededAt);
+
+      // Parity with `untag` in the CLI: a comma-bearing value falls back to its split names when
+      // no stored tag equals the whole value. This returned removed: 0 before.
+      seed('k_split', ['a', 'b', 'c', 'keep']);
+      const split = await untag('k_split', ['a,b,c']);
+      expect(split.isError).toBe(false);
+      expect(split.parsed.removed).toBe(3);
+      expect(storedItem('k_split').tags).toEqual(['keep']);
+
+      // The exclusivity is per raw VALUE, not per call — repeated entries still accumulate. This
+      // is the claim that has been misstated twice, so it is pinned by execution here.
+      seed('k_both', ['a,b,c', 'a', 'b', 'c']);
+      const accumulate = await untag('k_both', ['a,b,c', 'a', 'b', 'c']);
+      expect(accumulate.isError).toBe(false);
+      expect(accumulate.parsed.removed).toBe(4);
+      expect(storedItem('k_both').tags).toEqual([]);
+
+      // ...and the narrower guarantee the re-run contract rests on: one glued value takes the
+      // glued tag and leaves the split names, so calling again does more work, and the third
+      // call is the terminal error rather than a third silent success.
+      seed('k_rerun', ['a,b,c', 'a', 'b', 'c']);
+      const first = await untag('k_rerun', ['a,b,c']);
+      expect(first.parsed.removed).toBe(1);
+      expect(storedItem('k_rerun').tags).toEqual(['a', 'b', 'c']);
+      const second = await untag('k_rerun', ['a,b,c']);
+      expect(second.parsed.removed).toBe(3);
+      expect(storedItem('k_rerun').tags).toEqual([]);
+      const third = await untag('k_rerun', ['a,b,c']);
+      expect(third.isError).toBe(true);
+      expect(third.text).toBe('Error: No matching tag on k_rerun: "a", "b", "c" not in []');
+
+      // A partial miss still succeeds, but the unmatched name has to be reported in BOTH the
+      // JSON and the message — a client that renders only `message` saw nothing before.
+      seed('k_partial', ['alpha']);
+      const partial = await untag('k_partial', ['alpha', 'nope']);
+      expect(partial.isError).toBe(false);
+      expect(partial.parsed.removed).toBe(1);
+      expect(partial.parsed.not_found).toEqual(['nope']);
+      expect(partial.parsed.message).toBe('Removed 1 tag from k_partial (not found: "nope")');
+      expect(storedItem('k_partial').tags).toEqual([]);
+
+      // Naming no tag at all is a malformed request, not a missing tag. Reporting it as
+      // `not in [...]` with an empty list would read as the store's fault.
+      seed('k_bad', ['alpha']);
+      for (const bad of [[], [','], [' , ']]) {
+        const rejected = await untag('k_bad', bad as string[]);
+        expect(rejected.isError).toBe(true);
+        expect(rejected.text).toBe('Error: No tag names given for k_bad. Each entry must contain at least one non-empty tag name.');
+        expect(storedItem('k_bad').tags).toEqual(['alpha']);
+        expect(storedItem('k_bad').updated_at).toBe(seededAt);
+      }
+
+      // trim() strips only the ends, so a newline inside a name survives into not_found. Joined
+      // raw it would break the single-line message in two; quoted it stays on one line.
+      seed('k_ws', ['alpha']);
+      const ws = await untag('k_ws', ['alpha', 'p\nq']);
+      expect(ws.isError).toBe(false);
+      expect(ws.parsed.not_found).toEqual(['p\nq']);
+      expect(ws.parsed.message).toBe('Removed 1 tag from k_ws (not found: "p\\nq")');
+      expect(ws.parsed.message.split('\n')).toHaveLength(1);
+      expect(storedItem('k_ws').tags).toEqual([]);
+    } finally {
+      await client.close();
+    }
+  }, 30000);
 });
