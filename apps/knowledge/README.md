@@ -271,9 +271,20 @@ validate the packed contents.
 
 ### add
 ```bash
-knowledge add <title> <content> [--url <url>] [-t <tag>]
+knowledge add <title> <content> [--url <url>] [-t <tag>]...
 ```
 Add a new knowledge item.
+
+`-t/--tag` is repeatable and also accepts a comma-separated list, so these are
+equivalent and both store three tags:
+
+```bash
+knowledge add "Title" "Body" -t convention -t naming -t channels
+knowledge add "Title" "Body" -t "convention,naming,channels"
+```
+
+Tags are deduped case-insensitively, and the `[INFO] Item added` line reports the
+stored tag count so a partial write cannot pass unnoticed.
 
 ### list
 ```bash
@@ -289,7 +300,7 @@ state, or keyword retrieval across active compatibility notes too.
 | `-p, --page <n>` | Page number (default: 1) |
 | `-l, --limit <n>` | Items per page (default: 20) |
 | `-s, --search <text>` | Filter by title or content |
-| `-t, --tag <tag>` | Filter by tag |
+| `-t, --tag <tag>` | Filter by tag; repeatable/comma-separated, an item must carry **all** of them |
 | `--sort created\|title` | Sort field (default: created) |
 | `--desc` | Sort descending |
 | `--verbose` | Print the full paginated item objects |
@@ -323,7 +334,7 @@ Update an existing item.
 | `--title <title>` | New title |
 | `--content <content>` | New content |
 | `--url <url>` | New source URL |
-| `-t, --tag <tag>` | Add a tag |
+| `-t, --tag <tag>` | Add tag(s); repeatable/comma-separated. Tags are appended, never replaced |
 
 ### archive / restore
 ```bash
@@ -340,9 +351,10 @@ Create or update an item by ID.
 
 ### untag
 ```bash
-knowledge untag --id <id> -t <tag>
+knowledge untag --id <id> -t <tag>...
 ```
-Remove one tag from an item.
+Remove tag(s) from an item. `-t/--tag` is repeatable and accepts a
+comma-separated list, so several tags can be removed in one call.
 
 ### delete
 ```bash

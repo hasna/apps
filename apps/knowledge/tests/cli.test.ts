@@ -348,7 +348,9 @@ describe('knowledge cli', () => {
     const addHelp = runCli(['add', '--help']);
     expect(addHelp.exitCode).toBe(0);
     const addOut = new TextDecoder().decode(addHelp.stdout);
-    expect(addOut).toContain('Usage: knowledge add <title> <content> [--url <url>] [-t <tag>] [--json]');
+    expect(addOut).toContain('Usage: knowledge add <title> <content> [--url <url>] [-t <tag>]... [--json]');
+    // The repeatable/comma-separated -t contract is documented where agents will see it.
+    expect(addOut).toContain('-t/--tag is repeatable and accepts comma-separated values');
     // Must NOT fall through to the root help command tree.
     expect(addOut).not.toContain('knowledge - local agent knowledge store');
 
@@ -565,6 +567,92 @@ describe('knowledge cli', () => {
 
     const db = JSON.parse(readFileSync(store, 'utf8'));
     expect(db.items.length).toBe(0);
+  });
+
+  // Regression guard for the silent multi-tag data-loss defect: `add -t a -t b -t c`
+  // exited 0, logged "Item added", and persisted ONLY the last tag; `-t "a,b,c"`
+  // stored one literal comma string. Every assertion below reads the PERSISTED item
+  // back and counts tags — asserting on exitCode alone reproduces the original bug,
+  // because exit 0 could not distinguish "3 tags stored" from "1 tag stored".
+  test('repeated and comma-separated -t accumulate into the stored item', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-tags-'));
+    const store = join(dir, 'db.json');
+    const decode = (buf: Uint8Array) => new TextDecoder().decode(buf);
+    const storedTags = (id: string): string[] => {
+      const got = runCli(['get', '--id', id, '--store', store, '--json']);
+      expect(got.exitCode).toBe(0);
+      return JSON.parse(decode(got.stdout)).item.tags;
+    };
+
+    // add: five repeated -t must all persist, in order.
+    const add = runCli(['add', 'Five tags', 'Body', '--store', store, '-t', 'convention', '-t', 'naming', '-t', 'channels', '-t', 'repro', '-t', 'five', '--json']);
+    expect(add.exitCode).toBe(0);
+    const addId = JSON.parse(decode(add.stdout)).item.id;
+    expect(storedTags(addId)).toEqual(['convention', 'naming', 'channels', 'repro', 'five']);
+    // The success signal itself must carry the count, so "added" can no longer hide a drop.
+    expect(decode(add.stderr)).toContain('"tags":5');
+
+    // add: a comma-separated value splits; it must never persist as one literal tag.
+    const comma = runCli(['add', 'Comma tags', 'Body', '--store', store, '-t', 'alpha,beta, gamma', '--json']);
+    expect(comma.exitCode).toBe(0);
+    const commaId = JSON.parse(decode(comma.stdout)).item.id;
+    expect(storedTags(commaId)).toEqual(['alpha', 'beta', 'gamma']);
+    expect(storedTags(commaId)).not.toContain('alpha,beta, gamma');
+
+    // add: comma list plus repeats, deduped case-insensitively.
+    const mixed = runCli(['add', 'Mixed tags', 'Body', '--store', store, '-t', 'x, y', '-t', 'z', '-t', 'X', '--json']);
+    expect(mixed.exitCode).toBe(0);
+    expect(storedTags(JSON.parse(decode(mixed.stdout)).item.id)).toEqual(['x', 'y', 'z']);
+
+    // update: repeated -t must append every tag, not just the last one.
+    const seed = runCli(['add', 'Update target', 'Body', '--store', store, '-t', 'one', '--json']);
+    expect(seed.exitCode).toBe(0);
+    const seedId = JSON.parse(decode(seed.stdout)).item.id;
+    const update = runCli(['update', '--id', seedId, '--store', store, '-t', 'two', '-t', 'three', '-t', 'four', '--json']);
+    expect(update.exitCode).toBe(0);
+    expect(storedTags(seedId)).toEqual(['one', 'two', 'three', 'four']);
+
+    // untag: repeated -t removes every named tag in one pass.
+    const untag = runCli(['untag', '--id', seedId, '--store', store, '-t', 'two', '-t', 'four', '--json']);
+    expect(untag.exitCode).toBe(0);
+    expect(JSON.parse(decode(untag.stdout)).removed).toBe(2);
+    expect(storedTags(seedId)).toEqual(['one', 'three']);
+
+    // upsert: create path must persist every tag too.
+    const upsert = runCli(['upsert', 'Upsert tags', 'Body', '--id', 'k_tagupsert', '--store', store, '-t', 'p', '-t', 'q', '-t', 'r', '--json']);
+    expect(upsert.exitCode).toBe(0);
+    expect(JSON.parse(decode(upsert.stdout)).created).toBe(true);
+    expect(storedTags('k_tagupsert')).toEqual(['p', 'q', 'r']);
+
+    // upsert: update path appends all requested tags.
+    const upsertAgain = runCli(['upsert', '--id', 'k_tagupsert', '--content', 'Body 2', '--store', store, '-t', 's', '-t', 't', '--json']);
+    expect(upsertAgain.exitCode).toBe(0);
+    expect(storedTags('k_tagupsert')).toEqual(['p', 'q', 'r', 's', 't']);
+
+    // list: repeated -t narrows (item must carry every tag), matching the ok_list MCP tool.
+    const both = runCli(['list', '--store', store, '-t', 'convention', '-t', 'naming', '--json']);
+    expect(both.exitCode).toBe(0);
+    const bothOut = JSON.parse(decode(both.stdout));
+    expect(bothOut.total).toBe(1);
+    expect(bothOut.items[0].title).toBe('Five tags');
+
+    const impossible = runCli(['list', '--store', store, '-t', 'convention', '-t', 'alpha', '--json']);
+    expect(impossible.exitCode).toBe(0);
+    expect(JSON.parse(decode(impossible.stdout)).total).toBe(0);
+
+    // Positive control: the same store really does hold the items the filters ran over.
+    const all = runCli(['list', '--store', store, '--json', '-l', '50']);
+    expect(all.exitCode).toBe(0);
+    expect(JSON.parse(decode(all.stdout)).total).toBe(5);
+
+    // A -t with no usable value must fail loudly instead of silently dropping the tag.
+    const missing = runCli(['add', 'No tag value', 'Body', '--store', store, '-t']);
+    expect(missing.exitCode).toBe(1);
+    expect(decode(missing.stderr)).toContain('Missing value for --tag');
+
+    const blank = runCli(['add', 'Blank tag value', 'Body', '--store', store, '-t', ' , ']);
+    expect(blank.exitCode).toBe(1);
+    expect(decode(blank.stderr)).toContain('no tag name found');
   });
 
   test('upsert creates and updates items', () => {
