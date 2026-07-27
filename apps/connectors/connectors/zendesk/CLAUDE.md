@@ -43,7 +43,7 @@ connect-zendesk/
 - **EC2 Instance**: `hasna-prod-connect-zendesk`
 - **RDS Database**: `hasna-prod-connect-zendesk`
 - **S3 Bucket**: `hasna-prod-connect-zendesk`
-- **Remote API**: `https://connect.hasna.com/zendesk`
+- **Remote API**: deployment-specific; set `ZENDESK_REMOTE_API_URL` (no shipped default)
 
 ## Key Patterns
 

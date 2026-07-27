@@ -17,6 +17,8 @@ EC2_USER ?= ec2-user
 DEPLOY_PATH ?= /home/ec2-user/connectors/connect-zendesk
 SERVICE_NAME ?= connect-zendesk
 PORT ?= 21010
+# Public URL the deployed server is reachable at. Deployment-specific — no default.
+REMOTE_API_URL ?=
 
 # Default target
 help:
@@ -92,7 +94,7 @@ deploy-ec2: deploy-sync
 
 deploy: build deploy-ec2
 	@echo "✅ Deployment complete"
-	@echo "Server running at https://connect.hasna.com/zendesk"
+	@echo "Server running at $(if $(REMOTE_API_URL),$(REMOTE_API_URL),<REMOTE_API_URL not set>)"
 
 logs:
 	ssh $(EC2_USER)@$(EC2_HOST) "sudo journalctl -u $(SERVICE_NAME) -f"
