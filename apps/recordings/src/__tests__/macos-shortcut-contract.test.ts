@@ -365,6 +365,52 @@ describe("blocked state is visible in the always-on surface", () => {
  * only commented.
  */
 describe("secure-input delivery contract", () => {
+  /**
+   * `updateDeliveryStatus` clears the persisted reason, because two statuses that reach the
+   * screen produce no `PasteDeliveryOutcome` at all — the "Finish the previous paste" rejection
+   * and the conversation route's "Answered" — so clearing on `startRecording()` cannot reach
+   * them. That makes the secure-input caller order-dependent: set BEFORE the status write and
+   * the reason is wiped, silently reinstating the invisible-blocked bug with every test green.
+   */
+  test("the secure-input reason is re-set AFTER the status write that clears it", () => {
+    const completion = engineSource.slice(
+      engineSource.indexOf("Self.isSecureInputOutcome(outcome) ? message : nil") - 3000,
+      engineSource.indexOf("Self.isSecureInputOutcome(outcome) ? message : nil") + 200,
+    );
+    expect(completion.lastIndexOf("self.updateDeliveryStatus(")).toBeLessThan(
+      completion.indexOf("self.setBlockedReason("),
+    );
+
+    const deliveryStatus = engineSource.slice(
+      engineSource.indexOf("private func updateDeliveryStatus("),
+      engineSource.indexOf("private func selectedRunningPasteTarget("),
+    );
+    expect(deliveryStatus).toContain("setBlockedReason(nil, for: .delivery)");
+    expect(deliveryStatus).toContain("setBlockedReason(nil, for: .pressConsumed)");
+  });
+
+  /**
+   * A `==` comparison against one outcome answers `false` for every case added later, with
+   * nobody having considered it — and these two predicates decide whether the engine still
+   * believes it owns the transcript.
+   */
+  test("the payload-ownership predicates switch exhaustively instead of comparing", () => {
+    expect(engineSource).not.toContain("outcome == .targetUnavailable");
+    for (const name of [
+      "outcomeLeavesTranscriptOnClipboard",
+      "clipboardOwnershipWasLostAfterPasteFailure",
+      "shouldCopyAfterPasteFailure",
+    ]) {
+      const body = engineSource.slice(
+        engineSource.indexOf(`static func ${name}(`),
+        engineSource.indexOf("nonisolated static func", engineSource.indexOf(`static func ${name}(`) + 10),
+      );
+      expect(body).toContain("switch outcome {");
+      expect(body).toContain("case .targetUnavailable:");
+      expect(body).toContain(".secureInputActive:");
+    }
+  });
+
   test("the secure-input reason outlives the delivery status, and only that one does", () => {
     expect(engineSource).toContain("Self.isSecureInputOutcome(outcome) ? message : nil");
     expect(engineSource).toContain("for: .delivery");

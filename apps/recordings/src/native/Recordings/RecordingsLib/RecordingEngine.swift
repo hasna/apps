@@ -3749,7 +3749,10 @@ public final class RecordingEngine: ObservableObject {
             verificationAttempts: Self.pasteReadBackAttempts
         ) { transaction, outcome in
             let accessibilityTrusted = AXIsProcessTrusted()
-            let completedTranscriptAlreadyOnClipboard = outcome == .targetUnavailable
+            // Same reason the two static predicates below switch instead of comparing: a `==`
+            // test answers `false` for any outcome added later, and this feeds
+            // `shouldCopyAfterPasteFailure`, which decides whether the transcript is re-copied.
+            let completedTranscriptAlreadyOnClipboard = Self.outcomeLeavesTranscriptOnClipboard(outcome)
                 && !restoreClipboard
                 && (ownedPasteboardChangeCount.map {
                     Self.clipboardStillOwned(.general, text: transaction.text, changeCount: $0)
@@ -3827,14 +3830,17 @@ public final class RecordingEngine: ObservableObject {
             // means "could not tell", and a standing blocked banner would over-claim it. Secure
             // input has no such path: it is measured from the window-session dictionary, and an
             // uninterrogable session yields `.unknown`, which never reaches here.
-            self.setBlockedReason(
-                Self.isSecureInputOutcome(outcome) ? message : nil,
-                for: .delivery
-            )
+            // AFTER `updateDeliveryStatus`, not before: that call clears the delivery reason so
+            // statuses which produce no outcome cannot leave a stale one behind, and this is the
+            // one caller whose reason has to outlive its own status line.
             self.updateDeliveryStatus(
                 message,
                 kind: Self.deliveryStatusKind(for: outcome),
                 pipelineGeneration: transaction.generation
+            )
+            self.setBlockedReason(
+                Self.isSecureInputOutcome(outcome) ? message : nil,
+                for: .delivery
             )
         } settlement: { transaction, outcome in
             let pasteboard = NSPasteboard.general
@@ -3883,12 +3889,42 @@ public final class RecordingEngine: ObservableObject {
         }
     }
 
+    /// Whether an outcome ends with the transcript still sitting on the clipboard because the
+    /// paste never consumed it — so re-copying it would be redundant.
+    ///
+    /// Exhaustive on purpose. `.secureInputActive` answers `false` here even though it *does*
+    /// leave the transcript on the clipboard: it gets there because `shouldRestore` refuses to
+    /// restore, not because the paste was abandoned before the clipboard was written, and
+    /// `shouldCopyAfterPasteFailure` is additionally gated on `!accessibilityTrusted`, which is
+    /// never the path secure input takes.
+    nonisolated static func outcomeLeavesTranscriptOnClipboard(_ outcome: PasteDeliveryOutcome) -> Bool {
+        switch outcome {
+        case .targetUnavailable: true
+        case .pasted, .deliveryNotObserved, .deliveredUnverified, .clipboardOwnershipLost,
+             .clipboardWriteFailed, .eventPostFailed, .secureInputActive: false
+        }
+    }
+
     nonisolated static func clipboardOwnershipWasLostAfterPasteFailure(
         outcome: PasteDeliveryOutcome,
         hasOwnershipToken: Bool,
         stillOwnsPayload: Bool
     ) -> Bool {
-        outcome == .targetUnavailable && hasOwnershipToken && !stillOwnsPayload
+        // Switched rather than compared against `.targetUnavailable` so the compiler forces a
+        // decision here when an outcome is added. A `==` comparison answers `false` for every
+        // new case without anyone having considered it, and this predicate decides whether the
+        // engine still believes it owns the transcript — guessing wrong loses the text.
+        let outcomeCanStrandThePayload: Bool
+        switch outcome {
+        case .targetUnavailable:
+            outcomeCanStrandThePayload = true
+        // Secure input cannot strand the payload: nothing else wrote to the clipboard, and the
+        // transcript is deliberately kept there.
+        case .pasted, .deliveryNotObserved, .deliveredUnverified, .clipboardOwnershipLost,
+             .clipboardWriteFailed, .eventPostFailed, .secureInputActive:
+            outcomeCanStrandThePayload = false
+        }
+        return outcomeCanStrandThePayload && hasOwnershipToken && !stillOwnsPayload
     }
 
     @discardableResult
@@ -3972,7 +4008,19 @@ public final class RecordingEngine: ObservableObject {
         clipboardOwnershipWasLost: Bool = false,
         completedTranscriptAlreadyOnClipboard: Bool = false
     ) -> Bool {
-        outcome == .targetUnavailable
+        // Switched for the same reason as `clipboardOwnershipWasLostAfterPasteFailure`: a `==`
+        // test silently answers `false` for any outcome added later. Secure input already leaves
+        // the transcript on the clipboard, so re-copying it would be redundant at best — but that
+        // is a decision the compiler should make someone state, not one to inherit by accident.
+        let outcomeNeedsClipboardFallback: Bool
+        switch outcome {
+        case .targetUnavailable:
+            outcomeNeedsClipboardFallback = true
+        case .pasted, .deliveryNotObserved, .deliveredUnverified, .clipboardOwnershipLost,
+             .clipboardWriteFailed, .eventPostFailed, .secureInputActive:
+            outcomeNeedsClipboardFallback = false
+        }
+        return outcomeNeedsClipboardFallback
             && !accessibilityTrusted
             && !clipboardOwnershipWasLost
             && !completedTranscriptAlreadyOnClipboard
@@ -4106,6 +4154,18 @@ public final class RecordingEngine: ObservableObject {
         }
         statusMessage = message
         flowPhase = Self.flowPhase(forDeliveryStatus: message, kind: kind)
+        // A delivery status that actually reaches the screen replaces whatever explanation was
+        // there, so a persisted reason must not survive it — otherwise `updateStatus()`
+        // resurfaces it on the next return to idle. This closes the two leaks that produce no
+        // `PasteDeliveryOutcome` at all, and which clearing on `startRecording()` therefore
+        // cannot reach: the "Finish the previous paste before trying again" rejection, and the
+        // conversation route's "Answered".
+        //
+        // ORDERING: the secure-input caller must call this FIRST and re-set its reason after,
+        // which it does. `macos-shortcut-contract.test.ts` asserts that order, because getting it
+        // backwards silently reinstates the invisible-blocked bug with every test still green.
+        setBlockedReason(nil, for: .delivery)
+        setBlockedReason(nil, for: .pressConsumed)
     }
 
     private func selectedRunningPasteTarget(
