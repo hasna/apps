@@ -25,10 +25,9 @@ describe('syncOpenProjectsRegistry', () => {
     const { createProject } = await import('@hasna/projects')
     createProject({
       name: 'Economy Fixture',
-      path: projectDir,
+      primary_path: projectDir,
       description: 'fixture project',
       tags: ['test', 'economy'],
-      git_init: false,
     })
 
     const db = openDatabase(':memory:', true)

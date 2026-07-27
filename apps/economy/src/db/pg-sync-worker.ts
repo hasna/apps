@@ -1,7 +1,7 @@
 // Worker backing `SyncPgAdapter`. Runs Postgres queries on its own event loop
 // so the MAIN thread can block on `Atomics.wait` for a synchronous result
-// without deadlocking pg's async socket IO (the flaw that makes @hasna/cloud's
-// in-thread `PgAdapter` time out under Bun). Request in via `parentPort`; result
+// without deadlocking pg's async socket IO (the flaw that makes any in-thread
+// sync-over-async PG client time out under Bun). Request in via `parentPort`; result
 // out via a transferred `MessagePort` the main thread drains with
 // `receiveMessageOnPort` after it wakes.
 import { parentPort, workerData } from 'node:worker_threads'

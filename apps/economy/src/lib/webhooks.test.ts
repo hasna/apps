@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
-import type { SqliteAdapter as Database } from '@hasna/cloud'
+import type { SqliteAdapter as Database } from '../db/sqlite-adapter.js'
 import type { Budget, EconomyRequest, EconomySession } from '../types/index.js'
 
 const originalFetch = globalThis.fetch

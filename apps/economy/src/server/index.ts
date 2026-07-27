@@ -48,7 +48,7 @@ function parsePort(raw: string, label: string): number {
  */
 async function runMigrate(): Promise<void> {
   const { getCloudDatabaseUrl, createCloudPool, authClientFromPool, cloudMigrations } = await import('../db/cloud.js')
-  const { applyPgMigrations } = await import('@hasna/cloud')
+  const { applyPgMigrations } = await import('../db/pg-migrate.js')
   const { ApiKeyStore } = await import('@hasna/contracts/auth')
   const dsn = getCloudDatabaseUrl()
   if (!dsn) throw new Error('migrate requires a Postgres DSN: set HASNA_ECONOMY_DATABASE_URL (or ECONOMY_DATABASE_URL / DATABASE_URL)')

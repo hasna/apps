@@ -1,16 +1,26 @@
-import type { SqliteAdapter as Database } from '@hasna/cloud'
+import type { SqliteAdapter as Database } from '../db/sqlite-adapter.js'
 import { upsertProject } from '../db/database.js'
 
+/**
+ * The subset of a project-registry row economy needs. The registry renamed its
+ * filesystem-path field `path` -> `primary_path` when projects became
+ * workspaces, so both spellings are accepted and `resolveProjectPath` below
+ * picks whichever is present. Keeping both means the injectable
+ * `listActiveProjects` seam (and its tests) stays valid across that rename.
+ */
 interface OpenProject {
   id: string
   name: string
   description: string | null
-  path: string
+  path?: string | null
+  primary_path?: string | null
   tags: string[]
   created_at: string
 }
 
 type ListOpenProjects = (options: { status: 'active'; limit: number }) => OpenProject[]
+
+const resolveProjectPath = (project: OpenProject): string => project.primary_path || project.path || ''
 
 export async function syncOpenProjectsRegistry(
   db: Database,
@@ -26,13 +36,14 @@ export async function syncOpenProjectsRegistry(
   let skipped = 0
 
   for (const project of projects) {
-    if (!project.path) {
+    const path = resolveProjectPath(project)
+    if (!path) {
       skipped++
       continue
     }
     upsertProject(db, {
       id: project.id,
-      path: project.path,
+      path,
       name: project.name,
       description: project.description,
       tags: project.tags ?? [],

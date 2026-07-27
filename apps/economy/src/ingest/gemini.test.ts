@@ -4,7 +4,7 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { openDatabase } from '../db/database.js'
 import { ingestGemini } from './gemini.js'
-import type { SqliteAdapter as Database } from '@hasna/cloud'
+import type { SqliteAdapter as Database } from '../db/sqlite-adapter.js'
 
 let root: string
 let tmpDir: string

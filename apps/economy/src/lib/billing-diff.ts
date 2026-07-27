@@ -1,4 +1,4 @@
-import type { SqliteAdapter as Database } from '@hasna/cloud'
+import type { SqliteAdapter as Database } from '../db/sqlite-adapter.js'
 import { querySummary, queryBillingSummary } from '../db/database.js'
 import type { Period } from '../types/index.js'
 

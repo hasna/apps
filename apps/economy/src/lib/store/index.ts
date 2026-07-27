@@ -22,7 +22,7 @@
 // or embedded in any value produced here. Only the HTTP transport ever holds it.
 
 import { randomUUID } from 'crypto'
-import { SqliteAdapter as Database } from '@hasna/cloud'
+import { SqliteAdapter as Database } from '../../db/sqlite-adapter.js'
 import {
   openDatabase,
   getMachineId,

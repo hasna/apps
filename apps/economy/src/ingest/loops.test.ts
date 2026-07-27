@@ -5,7 +5,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { getCostCenter, openDatabase, queryCostCenterBreakdown } from '../db/database.js'
 import { ingestLoops } from './loops.js'
-import type { SqliteAdapter as Database } from '@hasna/cloud'
+import type { SqliteAdapter as Database } from '../db/sqlite-adapter.js'
 
 let root: string
 let loopsDbPath: string

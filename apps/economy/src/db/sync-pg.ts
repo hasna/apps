@@ -1,10 +1,10 @@
-// Synchronous Postgres adapter implementing the `@hasna/cloud` `DbAdapter`
-// surface the economy query layer relies on (prepare/run/get/all/exec). It runs
-// every query on a dedicated worker thread and blocks the main thread on
-// `Atomics.wait` for the result, then drains the reply with
+// Synchronous Postgres adapter implementing the same `DbAdapter` surface as
+// `SqliteAdapter` (prepare/run/get/all/exec), which is all the economy query
+// layer relies on. It runs every query on a dedicated worker thread and blocks
+// the main thread on `Atomics.wait` for the result, then drains the reply with
 // `receiveMessageOnPort`. This is the only way to expose a truly synchronous PG
-// client under Bun: an in-thread sync-over-async bridge (Bun.sleepSync polling,
-// as in @hasna/cloud's PgAdapter) starves pg's socket IO and always times out.
+// client under Bun: an in-thread sync-over-async bridge (Bun.sleepSync polling)
+// starves pg's socket IO and always times out.
 //
 // It lets the entire existing synchronous query layer (database.ts) run
 // unchanged against RDS Postgres for the self-hosted serve (Amendment A1: PURE
@@ -13,7 +13,8 @@ import { Worker, MessageChannel, receiveMessageOnPort, type MessagePort } from '
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { existsSync } from 'node:fs'
-import { translateSql, translateParams, type DbAdapter, type PreparedStatement, type RunResult } from '@hasna/cloud'
+import { translateSql, translateParams } from './dialect.js'
+import type { DbAdapter, PreparedStatement, RunResult } from './sqlite-adapter.js'
 
 type Reply = { id: number; ok: true; rows: Array<Record<string, unknown>>; rowCount: number } | { id: number; ok: false; error: string }
 

@@ -396,7 +396,7 @@ export const ROADMAP_PHASES: TodoPhase[] = [
     id: 'phase-9',
     title: 'Multi-machine auto sync (4-machine fleet)',
     summary:
-      'Investigation: machine_id + listMachines + manual cloud push/pull exist; @hasna/cloud has incremental sync, conflict resolution, and launchd/systemd schedulers — but economy does not use them, requests/sessions lack updated_at, ingest is local-only, RDS is hardcoded, and default commands never pull before query.',
+      'Investigation: machine_id + listMachines + manual cloud push/pull exist; the (since-retired) shared sync package had incremental sync, conflict resolution, and launchd/systemd schedulers — but economy does not use them, requests/sessions lack updated_at, ingest is local-only, RDS is hardcoded, and default commands never pull before query.',
     tasks: [
       {
         id: '9.1',
@@ -411,7 +411,7 @@ export const ROADMAP_PHASES: TodoPhase[] = [
       },
       {
         id: '9.3',
-        title: 'Switch cloud sync to @hasna/cloud incrementalSyncPush/Pull with _sync_meta (replace full table scans)',
+        title: 'Switch cloud sync to incrementalSyncPush/Pull with _sync_meta (replace full table scans)',
         status: 'done',
         deps: ['9.2'],
       },
@@ -435,7 +435,7 @@ export const ROADMAP_PHASES: TodoPhase[] = [
       },
       {
         id: '9.7',
-        title: 'CLI economy cloud schedule install|status|remove — wrap @hasna/cloud registerSyncSchedule (launchd/systemd every 5–15m)',
+        title: 'CLI economy cloud schedule install|status|remove — wrap registerSyncSchedule (launchd/systemd every 5–15m)',
         status: 'done',
         deps: ['9.5'],
       },

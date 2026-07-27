@@ -1,4 +1,4 @@
-import { SqliteAdapter as Database } from '@hasna/cloud'
+import { SqliteAdapter as Database } from './sqlite-adapter.js'
 import { execFileSync } from 'child_process'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'fs'
 import { hostname, platform } from 'os'
@@ -1802,7 +1802,7 @@ export function dedupeRequests(db: Database): number {
 // path, so cloud parity was otherwise impossible.
 //
 // Why this does NOT reuse the `INSERT OR REPLACE` upsert helpers directly: against
-// Postgres the @hasna/cloud SQL translator rewrites `INSERT OR REPLACE` into a
+// Postgres the SQL translator in `dialect.ts` rewrites `INSERT OR REPLACE` into a
 // bare `INSERT` with NO conflict clause, so re-importing any existing primary key
 // violates the PK constraint and aborts the batch (the helpers' idempotency is
 // SQLite-only). Here we emit an explicit `INSERT ... ON CONFLICT (<pk>) DO UPDATE

@@ -282,17 +282,6 @@ economy menubar stop
 economy menubar uninstall
 ```
 
-## Cloud Sync
-
-Economy can push and pull local SQLite data through `@hasna/cloud` PostgreSQL sync:
-
-```bash
-economy cloud status
-economy cloud push
-economy cloud pull
-economy cloud sync
-```
-
 ## Data Directory
 
 Data is stored in `~/.hasna/economy/`.

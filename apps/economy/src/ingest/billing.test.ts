@@ -4,7 +4,7 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { openDatabase, queryBillingSummary } from '../db/database.js'
 import { syncAnthropicBilling, syncGeminiBilling, syncOpenAIBilling } from './billing.js'
-import type { SqliteAdapter as Database } from '@hasna/cloud'
+import type { SqliteAdapter as Database } from '../db/sqlite-adapter.js'
 
 let root: string
 let db: Database

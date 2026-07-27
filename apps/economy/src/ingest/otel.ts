@@ -1,4 +1,4 @@
-import type { SqliteAdapter as Database } from '@hasna/cloud'
+import type { SqliteAdapter as Database } from '../db/sqlite-adapter.js'
 import { upsertRequest, upsertSession, rollupSession, getMachineId, upsertCostCenter } from '../db/database.js'
 import { isAgent } from '../lib/agents.js'
 import type { CostBasis, CostCenterKind, EconomyAgent } from '../types/index.js'
