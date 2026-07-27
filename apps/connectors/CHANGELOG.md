@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-07-27
+
+### Security
+
+- **Brand-owned hostnames removed from the published artifact.** 1.4.0 shipped
+  real deployment hostnames in `connectors/zendesk` config templates and docs,
+  in two other connectors' comments and examples, in `SECURITY.md`, and — via a
+  bundled dependency literal with no occurrence anywhere in this repo's source —
+  in the compiled `bin/index.js`. Every occurrence is gone. Verified against the
+  packed tarball rather than the working tree, because the working tree was
+  never where the whole problem was.
+
+### Changed
+
+- **`connect-zendesk` no longer ships a default remote API URL.** The value was
+  a hardcoded deployment host used as a fallback. It now comes from
+  `ZENDESK_REMOTE_API_URL` or `connect-zendesk config set-remote-url <url>`.
+  `config show` and `remote url` report `not set`; `remote status` and
+  `remote health` exit non-zero with guidance naming both mechanisms. `make`'s
+  deploy banner reads a new overridable `REMOTE_API_URL`.
+- **Vulnerability reports go through GitHub Security Advisories** instead of an
+  email address. Private vulnerability reporting is enabled on the repository.
+- `@hasna/events` is marked external in the CLI bundle, joining the existing
+  `ink` / `react` / `chalk` / `conf` externals. It is a declared runtime
+  dependency, so npm resolves it at install time.
+
+### Fixed
+
+- `.test-home/` sandboxes and per-connector lockfiles are no longer swept into
+  the published tarball by `files: ["connectors/"]`. 1.4.0 shipped a Bun
+  install-cache blob this way.
+- 1.4.0 shipped `.d.ts` files for two modules deleted in 1.4.0 itself, because
+  `dist/` was not clean at release time.
+
 ## [1.4.0] - 2026-07-26
 
 ### Removed

@@ -34,6 +34,35 @@ function trackedFiles(): string[] {
   return output.split("\0").filter(Boolean);
 }
 
+// What npm will actually ship. This is deliberately not `git ls-files`: `files`
+// in package.json is an allowlist over the working tree, so it picks up
+// untracked build output and per-connector lockfiles that a tracked-only scan
+// cannot see — which is exactly where a leaked credential would hide from us.
+function packedFiles(): string[] {
+  const output = execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
+    encoding: "utf-8",
+    maxBuffer: 256 * 1024 * 1024,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  const parsed = JSON.parse(output) as Array<{ files?: Array<{ path: string }> }>;
+  return (parsed[0]?.files ?? []).map((file) => file.path);
+}
+
+// Union, so the guard keeps covering tracked files that never ship (CI config,
+// scripts) while gaining everything that does.
+function filesToScan(): string[] {
+  const paths = new Set(trackedFiles());
+  try {
+    for (const path of packedFiles()) paths.add(path);
+  } catch (error) {
+    // A guard that silently degrades to a weaker scan is how this class of bug
+    // reaches the registry. Fail loudly instead.
+    console.error(`Could not enumerate the packed file list: ${String(error)}`);
+    process.exit(1);
+  }
+  return [...paths];
+}
+
 function shouldScan(path: string): boolean {
   const name = basename(path);
   return isNpmrcName(name) || name === "bunfig.toml" || name === ".bunfig.toml" || LOCKFILE_NAMES.has(name);
@@ -166,7 +195,7 @@ function isExactHasnaPackageName(item: string): boolean {
 
 const findings: Finding[] = [];
 let scanned = 0;
-for (const path of trackedFiles().filter(shouldScan)) {
+for (const path of filesToScan().filter(shouldScan)) {
   const text = readText(path);
   if (text === null) continue;
   scanned++;
@@ -177,7 +206,7 @@ for (const path of trackedFiles().filter(shouldScan)) {
 }
 
 if (findings.length === 0) {
-  console.log(`Package-manager secret guard clean (${scanned} tracked file(s) scanned).`);
+  console.log(`Package-manager secret guard clean (${scanned} tracked + packed file(s) scanned).`);
   process.exit(0);
 }
 

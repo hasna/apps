@@ -13,7 +13,15 @@
     "dist/",
     "dashboard/dist/",
     "connectors/",
-    "README.md"
+    "README.md",
+    "!connectors/**/.test-home/**",
+    "!connectors/**/node_modules/**",
+    "!connectors/**/bun.lock",
+    "!connectors/**/package-lock.json",
+    "!connectors/**/yarn.lock",
+    "!connectors/**/pnpm-lock.yaml",
+    "!connectors/**/.env",
+    "!connectors/**/.env.local"
   ],
   "exports": {
     ".": {

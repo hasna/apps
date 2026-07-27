@@ -23,8 +23,8 @@ follow up privately.
 
 | Version | Supported |
 |---------|-----------|
-| 0.2.x   | Yes       |
-| < 0.2   | No        |
+| 1.4.x   | Yes       |
+| < 1.4   | No        |
 
 ## Security Measures
 
@@ -36,8 +36,8 @@ This project implements the following security measures:
 - **Security headers** (`X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`)
 - **Request body size limits** (1MB max)
 - **Fetch timeouts** (10s) on external HTTP requests
-- **No secrets in source** — credentials stored in `~/.connectors/` only
+- **No secrets in source** — credentials stored in `~/.hasna/connectors/` only
 
 ## Credential Storage
 
-Connector credentials are stored locally at `~/.connectors/connect-{name}/`. OAuth tokens are written with `0o600` permissions. No credentials are ever sent to our servers or included in the npm package.
+Connector credentials are stored locally at `~/.hasna/connectors/connect-{name}/`. OAuth tokens are written with `0o600` permissions. No credentials are ever sent to our servers or included in the npm package.
