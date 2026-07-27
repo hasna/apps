@@ -56,14 +56,41 @@ function secretPatterns(): SecretPattern[] {
   return [...customPatterns(), ...DEFAULT_SECRET_PATTERNS];
 }
 
+const REDACTION_PLACEHOLDER = String.raw`\[REDACTED(?:_[A-Z_]+)?\]`;
+
 function isRedactionPlaceholderMatch(match: string): boolean {
-  const placeholder = String.raw`\[REDACTED(?:_[A-Z_]+)?\]`;
   const trimmed = match.trim();
-  return new RegExp(`^${placeholder}$`).test(trimmed)
-    || new RegExp(`=\\s*['"]?${placeholder}['"]?$`).test(trimmed);
+  return new RegExp(`^${REDACTION_PLACEHOLDER}$`).test(trimmed)
+    || new RegExp(`=\\s*['"]?${REDACTION_PLACEHOLDER}['"]?$`).test(trimmed);
+}
+
+/**
+ * True only when the key is *entirely* a placeholder, e.g. "[REDACTED_GITHUB_TOKEN]".
+ *
+ * Deliberately NOT isRedactionPlaceholderMatch: that predicate is match-scoped and also
+ * accepts "NAME=[REDACTED]" so findings suppression can ignore already-redacted env
+ * assignments. Accepting that shape as a *key* would disable key-based redaction for the
+ * exact keys the sanitizer itself produces — env-secret-assignment rewrites a
+ * "<credential-ish name>=<secret>" key into "<same name>=[REDACTED]" — and the opaque value
+ * beneath it matches no text pattern, so it would be emitted in cleartext.
+ *
+ * Widening REDACTION_PLACEHOLDER widens this key exemption too, silently: any shape it starts
+ * accepting stops having its value redacted. Treat a change to that constant as a change to
+ * this exemption and re-check the key matrix in redaction.test.ts.
+ *
+ * Known and accepted consequence: a key named *literally* "[REDACTED_PASSWORD]" (or any other
+ * placeholder spelling) no longer has its value redacted by key name. Such a key is
+ * indistinguishable from output this module produced itself.
+ */
+function isRedactionPlaceholderKey(key: string): boolean {
+  return new RegExp(`^${REDACTION_PLACEHOLDER}$`).test(key.trim());
 }
 
 function isSecretKey(key: string): boolean {
+  // A key that has already been reduced to a redaction placeholder is not a secret
+  // name: placeholders such as "[REDACTED_GITHUB_TOKEN]" contain "TOKEN", which would
+  // otherwise re-trigger key-based redaction and destroy the clean value beneath it.
+  if (isRedactionPlaceholderKey(key)) return false;
   if (NON_SECRET_USAGE_KEYS.has(key.toLowerCase())) return false;
   if (DEFAULT_SECRET_KEY_PATTERN.test(key)) return true;
   return unique(loadConfig().secret_safety?.redaction_keys).some((pattern) => key.toLowerCase().includes(pattern.toLowerCase()));

@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Secret redaction no longer destroys the clean value under a redacted key.** Once a
+  secret-shaped object key was reduced to a pattern-specific placeholder
+  (`[REDACTED_GITHUB_TOKEN]`, `[REDACTED_NPM_TOKEN]`), key-based redaction matched the word
+  `TOKEN` inside the placeholder itself and replaced the untouched value beneath it with
+  `[REDACTED]` — silent loss of non-secret data. Redaction is now idempotent for keys that are
+  *entirely* a placeholder. Keys of the form `NAME=[REDACTED]` are deliberately **not** exempt:
+  that shape is what env-assignment redaction produces, and the value beneath it is opaque, so
+  key-based redaction must still apply there. **Accepted trade-off:** a key named *literally*
+  `[REDACTED_GITHUB_TOKEN]` / `[REDACTED_TOKEN]` / `[REDACTED_PASSWORD]` no longer has its value
+  redacted by key name — previously it did, because the placeholder text contains `TOKEN` /
+  `PASSWORD`. Such a key is indistinguishable from this module's own output, and keeping it
+  exempt is what makes redaction idempotent.
+
+### Known issues
+
+- **Secret-bearing metadata *keys* are not redacted on every write path.** `redactValue()`
+  redacts metadata values but leaves key text intact; only `sanitizePreWriteValue()` rewrites
+  keys. Task metadata is covered (via `sanitizeUpdateTaskInput`), but `task_findings.metadata`
+  is built with `redactValue()` alone and persists a credential placed in key position — and
+  `metadata_keys` is emitted in compact finding output, whose contract states that "metadata
+  values are intentionally omitted", treating keys as the safe half. Pre-existing, not
+  introduced here; tracked separately.
+
+### Documentation
+
+- **Documents pre-write secret sanitation, which has been active and undocumented since
+  0.12.0.** Credential-shaped text in task `title`, `description`, `tags`, `metadata`, `reason`,
+  comments, verification, dispatch, inbox, run and artifact payloads is redacted **before it is
+  persisted**, not at display time. Consequences worth knowing: the original text is **not
+  recoverable** — `show`/`inspect` return the stored, redacted value, and there is currently no
+  `--raw` / `--no-redact` escape hatch. This supersedes the earlier contract (0.11.x) in which
+  only broad `list`/`search` output was redacted while explicit detail output returned the raw
+  value; the `redactBroadTask`/`redactBroadTasks` display layer still exists but can no longer
+  observe an unredacted stored value. Legitimate text that merely resembles a credential (for
+  example a note containing `Bearer <12+ chars>`) is redacted on write and cannot be restored.
+
 ## [0.13.1] - 2026-07-27
 
 ### Added

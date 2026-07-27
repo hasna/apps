@@ -72,6 +72,25 @@ describe("local secret redaction", () => {
     });
   });
 
+  test("exempts placeholder keys from key-based redaction without exempting env-assignment keys", () => {
+    // A key reduced entirely to a placeholder is not a secret name, so the clean value
+    // beneath it must survive.
+    expect(redactValue({ "[REDACTED_GITHUB_TOKEN]": "key text is sanitized too" }))
+      .toEqual({ "[REDACTED_GITHUB_TOKEN]": "key text is sanitized too" });
+
+    // But "NAME=[REDACTED]" is the shape env-secret-assignment *produces*, and the value
+    // beneath it is opaque (matches no text pattern). Exempting it would emit the secret
+    // in cleartext, so key-based redaction must still apply.
+    const opaque = ["hunter2", "hunter2", "hunter2"].join("");
+    const awsSecret = ["wJalrXUtnFEMIK7MDENG", "bPxRfiCYzEXAMPLEK"].join("");
+    expect(redactValue({ "DB_PASSWORD=[REDACTED]": opaque }))
+      .toEqual({ "DB_PASSWORD=[REDACTED]": "[REDACTED]" });
+    expect(redactValue({ "AWS_SECRET_ACCESS_KEY=[REDACTED]": awsSecret }))
+      .toEqual({ "AWS_SECRET_ACCESS_KEY=[REDACTED]": "[REDACTED]" });
+    expect(redactValue({ "API_KEY='[REDACTED]'": opaque }))
+      .toEqual({ "API_KEY='[REDACTED]'": "[REDACTED]" });
+  });
+
   test("detects npm and GitHub token families without returning values", () => {
     const npmValue = `npm_${"a".repeat(36)}`;
     const githubValue = `github_pat_${"A".repeat(32)}`;

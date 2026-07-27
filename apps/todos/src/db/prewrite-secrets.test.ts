@@ -127,6 +127,8 @@ describe("pre-write secret sanitation", () => {
     const persisted = JSON.stringify({ task: persistedTask, ledger });
     expect(persisted).not.toContain(FAKE_TOKEN);
     expect(persisted).not.toContain(FAKE_OPENAI);
-    expect(persisted).toContain("[REDACTED]");
+    // Match the placeholder family rather than one literal: token-specific patterns
+    // emit "[REDACTED_GITHUB_TOKEN]"/"[REDACTED_TOKEN]", key-name matches "[REDACTED]".
+    expect(persisted).toMatch(/\[REDACTED(?:_[A-Z_]+)?\]/);
   });
 });
