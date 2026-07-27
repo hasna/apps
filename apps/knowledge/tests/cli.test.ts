@@ -655,6 +655,72 @@ describe('knowledge cli', () => {
     expect(decode(blank.stderr)).toContain('no tag name found');
   });
 
+  // Once `-t` splits on commas, a split-only `untag` can no longer touch the items the
+  // multi-tag defect actually damaged: they carry ONE literal "a,b,c" tag, and none of
+  // the split names equals it, so the removal silently no-ops at exit 0. These items
+  // cannot be produced by the fixed CLI, so the fixture is written straight to the store
+  // exactly as the pre-fix CLI would have persisted it.
+  test('untag matches a tag value whole before splitting, and fails when nothing is removed', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-untag-'));
+    const store = join(dir, 'db.json');
+    const decode = (buf: Uint8Array) => new TextDecoder().decode(buf);
+    const glued = 'convention,canonical,policy,deployment';
+    const seed = (id: string, tags: string[]) => {
+      const now = '2026-07-06T14:31:34.606Z';
+      writeFileSync(store, JSON.stringify({
+        items: [{ id, title: `Item ${id}`, content: 'Body', url: null, tags, metadata: {}, archived: false, created_at: now, updated_at: now }]
+      }));
+    };
+    const storedTags = (id: string): string[] => {
+      const got = runCli(['get', '--id', id, '--store', store, '--json']);
+      expect(got.exitCode).toBe(0);
+      return JSON.parse(decode(got.stdout)).item.tags;
+    };
+
+    // Positive control: the fixture really does hold one glued tag, not four.
+    seed('k_glued', [glued]);
+    expect(storedTags('k_glued')).toEqual([glued]);
+
+    // The whole value matches the stored tag, so it is removed. Split-only logic scores
+    // removed: 0 here while still exiting 0 — the regression this guards.
+    const whole = runCli(['untag', '--id', 'k_glued', '--store', store, '-t', glued, '--json']);
+    expect(whole.exitCode).toBe(0);
+    expect(JSON.parse(decode(whole.stdout)).removed).toBe(1);
+    expect(storedTags('k_glued')).toEqual([]);
+
+    // Same argument against separately-stored tags must still split and remove all four.
+    seed('k_split', ['convention', 'canonical', 'policy', 'deployment', 'keep']);
+    const split = runCli(['untag', '--id', 'k_split', '--store', store, '-t', glued, '--json']);
+    expect(split.exitCode).toBe(0);
+    expect(JSON.parse(decode(split.stdout)).removed).toBe(4);
+    expect(storedTags('k_split')).toEqual(['keep']);
+
+    // Removing nothing must fail loudly and leave the item untouched, instead of
+    // printing "Removed tag from <id>" at exit 0 on removed: 0.
+    seed('k_absent', ['alpha', 'beta']);
+    const absent = runCli(['untag', '--id', 'k_absent', '--store', store, '-t', 'gamma', '--json']);
+    expect(absent.exitCode).toBe(1);
+    expect(decode(absent.stderr)).toContain('No matching tag on k_absent');
+    expect(decode(absent.stdout)).not.toContain('Removed');
+    expect(storedTags('k_absent')).toEqual(['alpha', 'beta']);
+
+    // A partial miss succeeds but must name the tags it could not find.
+    seed('k_partial', ['alpha', 'beta']);
+    const partial = runCli(['untag', '--id', 'k_partial', '--store', store, '-t', 'alpha', '-t', 'nope', '--json']);
+    expect(partial.exitCode).toBe(0);
+    const partialOut = JSON.parse(decode(partial.stdout));
+    expect(partialOut.removed).toBe(1);
+    expect(partialOut.not_found).toEqual(['nope']);
+    expect(storedTags('k_partial')).toEqual(['beta']);
+
+    // The human success line must carry the count, so it cannot read the same for 1 and 0.
+    seed('k_human', ['alpha', 'beta', 'gamma']);
+    const human = runCli(['untag', '--id', 'k_human', '--store', store, '-t', 'alpha', '-t', 'beta']);
+    expect(human.exitCode).toBe(0);
+    expect(decode(human.stdout)).toContain('Removed 2 tags from k_human');
+    expect(storedTags('k_human')).toEqual(['gamma']);
+  });
+
   test('upsert creates and updates items', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-upsert-'));
     const store = join(dir, 'db.json');

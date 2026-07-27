@@ -286,6 +286,13 @@ knowledge add "Title" "Body" -t "convention,naming,channels"
 Tags are deduped case-insensitively, and the `[INFO] Item added` line reports the
 stored tag count so a partial write cannot pass unnoticed.
 
+A `-t` whose value is missing, empty, or only separators (`-t`, `-t ""`, `-t " , "`)
+**exits 1**. It previously exited 0 and silently stored nothing, so this is a
+deliberate exit-code change: dropping a tag the caller asked for is the defect, and
+an empty `-t "$VAR"` expansion should fail where the caller can see it. Commas are
+handled the opposite way — they split rather than error — because a comma-joined
+value is unambiguous and recoverable, whereas an empty value carries no intent.
+
 ### list
 ```bash
 knowledge list|ls [options]
@@ -355,6 +362,27 @@ knowledge untag --id <id> -t <tag>...
 ```
 Remove tag(s) from an item. `-t/--tag` is repeatable and accepts a
 comma-separated list, so several tags can be removed in one call.
+
+Each `-t` value is matched **whole first, and only split on commas if no stored tag
+equals it**. Items written before the multi-tag parse fix was landed can carry a
+single literal `"a,b,c"` tag, which none of the split names would match — so a
+split-only `untag` would remove nothing while still exiting 0. One command therefore
+covers both shapes:
+
+```bash
+# stored tags ["a,b,c"]     -> removes the one literal tag  (whole-value match)
+# stored tags ["a","b","c"] -> removes all three            (falls back to splitting)
+knowledge untag --id <id> -t "a,b,c"
+```
+
+When an item somehow carries both shapes, the whole-value match wins and the literal
+tag is removed first; re-run to clear the split names.
+
+Removing nothing **exits 1**. `removed: 0` at exit 0 with a `Removed tag from <id>`
+message is the same class of defect as the original bug — a success signal that
+cannot distinguish 1 removed from 0 — so an absent tag is an error, as a missing
+`--id` already is. When some requested tags matched and others did not, the call
+succeeds and the unmatched names are reported in `not_found`.
 
 ### delete
 ```bash
