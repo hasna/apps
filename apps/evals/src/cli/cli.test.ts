@@ -275,6 +275,10 @@ describe("evals --help", () => {
     const { exitCode, stdout } = await runCli(["--help"]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("runs");
-    expect(stdout).not.toContain("sync");
+    // Matches a command entry in commander's indented command list rather than
+    // the bare word: `--help` also renders commands registered by @hasna/events
+    // on a floating range, so a substring check could fail on an unrelated
+    // upstream description change instead of on a real regression.
+    expect(stdout).not.toMatch(/^\s+sync\b/m);
   });
 });
