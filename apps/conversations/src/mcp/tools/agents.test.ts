@@ -14,6 +14,7 @@ const TEST_DB = join(tmpdir(), `conversations-test-agents-mcp-${Date.now()}.db`)
 
 describe("agent MCP tools", () => {
   let client: Client;
+  let server: McpServer;
   let agentFocus: Map<string, { project_id: string | null }>;
   const getAgentFocus = async (agentId: string) => agentFocus.get(agentId)?.project_id ?? null;
 
@@ -22,7 +23,7 @@ describe("agent MCP tools", () => {
     delete process.env.CONVERSATIONS_AGENT_ID;
     closeDb();
 
-    const server = new McpServer({ name: "test-agents-mcp", version: "0.0.1" });
+    server = new McpServer({ name: "test-agents-mcp", version: "0.0.1" });
     agentFocus = new Map();
     registerAgentTools(server, agentFocus, getAgentFocus);
 
@@ -331,7 +332,7 @@ describe("agent MCP tools", () => {
       process.env.USERPROFILE = tempHome;
       delete process.env.CONVERSATIONS_AGENT_ID;
       _resetAutoName();
-      setSessionAgent("");
+      setSessionAgent(server, "");
     });
 
     afterEach(() => {
@@ -341,7 +342,7 @@ describe("agent MCP tools", () => {
       else delete process.env.USERPROFILE;
       try { rmSync(tempHome, { recursive: true, force: true }); } catch {}
       _resetAutoName();
-      setSessionAgent("");
+      setSessionAgent(server, "");
     });
 
     test("rename_agent adopts the identity named by the file, not by a stale cache", async () => {
@@ -386,7 +387,7 @@ describe("agent MCP tools", () => {
       writeIdentity("machine-identity");
 
       await client.callTool({ name: "register_agent", arguments: { name: "Nova-Owl" } });
-      expect(getSessionAgent()).toBe("nova-owl");
+      expect(getSessionAgent(server)).toBe("nova-owl");
 
       // get_focus resolves its agent implicitly — the same path send_message and
       // every other messaging tool takes when no `from` is passed.
@@ -396,36 +397,50 @@ describe("agent MCP tools", () => {
       }) as any) as any;
       expect(focus.agent).toBe("nova-owl");
 
-      // Two clients on one daemon must not collapse into the single machine name.
+      // Registering must not repoint the box: the machine identity already
+      // belongs to someone, and last-writer-wins on it is the hijack this
+      // module stopped doing.
       expect(readPersistedIdentity()).toBe("machine-identity");
     });
 
-    test("implicit attribution never invents a machine identity once an agent has registered", async () => {
+    test("register_agent seeds the machine identity on a box that has none", async () => {
       // Fresh HOME: this box has no identity at all.
       expect(readPersistedIdentity()).toBeNull();
 
-      await client.callTool({ name: "register_agent", arguments: { name: "atlas-mcp" } });
+      await client.callTool({ name: "register_agent", arguments: { name: "Atlas-MCP" } });
+
+      // Without this, the box splits in two: this connection speaks as
+      // "atlas-mcp" while every CLI process and `conversations-hook` falls
+      // through to getAutoName(), invents a pool name, persists it, and then
+      // polls blockers addressed to an agent that does not exist.
+      expect(readPersistedIdentity()).toBe("atlas-mcp");
+
       const focus = parseResult(await client.callTool({
         name: "get_focus",
         arguments: {},
       }) as any) as any;
-
       expect(focus.agent).toBe("atlas-mcp");
-      // Falling through to getAutoName() here would both misattribute the caller
-      // to a random pool name and persist that name as the machine identity.
-      expect(readPersistedIdentity()).toBeNull();
+    });
+
+    test("register_agent does not overwrite a machine identity that already exists", async () => {
+      writeIdentity("already-claimed");
+
+      await client.callTool({ name: "register_agent", arguments: { name: "late-arrival" } });
+
+      // Seed-if-absent, never last-writer-wins.
+      expect(readPersistedIdentity()).toBe("already-claimed");
     });
 
     test("rename_agent moves this session's attribution to the new name", async () => {
       await client.callTool({ name: "register_agent", arguments: { name: "mcp-speaker" } });
-      expect(getSessionAgent()).toBe("mcp-speaker");
+      expect(getSessionAgent(server)).toBe("mcp-speaker");
 
       await client.callTool({
         name: "rename_agent",
         arguments: { new_name: "mcp-speaker-renamed" },
       });
 
-      expect(getSessionAgent()).toBe("mcp-speaker-renamed");
+      expect(getSessionAgent(server)).toBe("mcp-speaker-renamed");
       const focus = parseResult(await client.callTool({
         name: "get_focus",
         arguments: {},

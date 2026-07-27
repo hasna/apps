@@ -9,11 +9,13 @@ import { getStore } from "../../lib/store/index.js";
 // Writes (auto-DMs) route to the cloud API in self_hosted mode so a flipped
 // fleet sees them; falls through to the local store otherwise. Read-only tools
 // below still read the local store (no cloud endpoint yet) — documented residual.
-import { resolveIdentity } from "../identity.js";
+import { identityFor } from "../identity.js";
 import { pageQueriedItems, summarizeMessage, windowItems } from "../../lib/compact-output.js";
 import { jsonText, resolveMcpWindow } from "../compact.js";
 
 export function registerAdvancedTools(server: McpServer, pkgVersion: string): void {
+  // Bound to this connection: see ../identity.ts.
+  const resolveIdentity = identityFor(server);
 
   // ---- Read Receipts ----
 

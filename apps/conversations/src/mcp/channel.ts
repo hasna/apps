@@ -8,7 +8,7 @@
  *      until the agent checks, also injected if agent is online
  *
  * The bridge figures out who it is from:
- *   - The agent that registered/heartbeated in this MCP session
+ *   - The agent that registered/heartbeated on this MCP connection
  *   - The CONVERSATIONS_SESSION_ID env var (set by agent-claude)
  *   - Falls back to CONVERSATIONS_AGENT_ID if set
  *
@@ -22,14 +22,46 @@ import { getStore } from "../lib/store/index.js";
 const DEFAULT_POLL_INTERVAL_MS = 1000;
 const DEFAULT_START_DELAY_MS = 2000;
 
-// Track agent identity and session for this MCP connection
-let sessionAgentId: string | null = null;
-let sessionClaudeId: string | null = null; // agent-claude session UUID
+type SessionState = {
+  agentId: string | null;
+  claudeSessionId: string | null; // agent-claude session UUID
+};
+
+/**
+ * Agent identity and session, scoped to ONE MCP connection.
+ *
+ * This used to be two module-level globals, which is only correct for stdio,
+ * where the process serves exactly one client for its whole life. The default
+ * transport is Streamable HTTP — "one process per MCP, many agents" (see
+ * ./index.ts) — and ./http.ts builds a fresh server per request with
+ * `sessionIdGenerator: undefined`. Under module globals, the agent named by ONE
+ * client's register_agent became the implicit author for EVERY client on the
+ * box: the same last-writer-wins collapse that removing the agent-id write was
+ * meant to end, moved from disk into memory.
+ *
+ * Keying on the McpServer keeps the state exactly as wide as the connection
+ * that produced it. In stdio there is one server for the process, so the
+ * session behaves as before. On the stateless HTTP transport the server — and
+ * with it this entry — dies with the request, so nothing leaks between clients
+ * and implicit attribution falls through to CONVERSATIONS_AGENT_ID and then the
+ * machine identity. HTTP clients that need to be told apart must pass `from`
+ * explicitly, or run their own process with CONVERSATIONS_AGENT_ID set.
+ */
+const sessions = new WeakMap<McpServer, SessionState>();
+
+function sessionFor(server: McpServer): SessionState {
+  let state = sessions.get(server);
+  if (!state) {
+    state = { agentId: null, claudeSessionId: null };
+    sessions.set(server, state);
+  }
+  return state;
+}
 
 /**
  * Called by agent tools when register_agent or heartbeat fires.
  *
- * This records who the caller is *for this MCP process only*. It deliberately
+ * This records who the caller is *for this connection only*. It deliberately
  * does NOT write the installation-wide identity file ($HOME/.hasna/conversations/agent-id).
  *
  * It used to. That was a fleet-wide footgun: the MCP server runs as one
@@ -39,30 +71,32 @@ let sessionClaudeId: string | null = null; // agent-claude session UUID
  * station01 that left the box answering to a throwaway test name ("rename-old")
  * for two days, and every attempt to correct it was overwritten again.
  *
- * What is recorded here is still load-bearing: ./identity.ts resolves every MCP
- * tool's implicit author through it, so attribution follows the agent that
+ * What is recorded here is still load-bearing: ./identity.ts resolves this
+ * connection's implicit author through it, so attribution follows the agent that
  * actually registered rather than falling through to the machine identity.
  *
  * Machine identity is set deliberately, by `conversations agents register <name>
- * --identity` or the CONVERSATIONS_AGENT_ID env var — never as a side effect of
- * a heartbeat.
+ * --identity`, the CONVERSATIONS_AGENT_ID env var, or — on a box that has no
+ * identity at all — the first register_agent to claim it (see
+ * ./tools/agents.ts). Never as a side effect of a heartbeat.
  */
-export function setSessionAgent(agentId: string, claudeSessionId?: string): void {
-  sessionAgentId = agentId;
-  if (claudeSessionId) sessionClaudeId = claudeSessionId;
+export function setSessionAgent(server: McpServer, agentId: string, claudeSessionId?: string): void {
+  const state = sessionFor(server);
+  state.agentId = agentId;
+  if (claudeSessionId) state.claudeSessionId = claudeSessionId;
 }
 
 /** Called by register_agent to store the claude session ID */
-export function setClaudeSessionId(id: string): void {
-  sessionClaudeId = id;
+export function setClaudeSessionId(server: McpServer, id: string): void {
+  sessionFor(server).claudeSessionId = id;
 }
 
-export function getSessionAgent(): string | null {
-  return sessionAgentId || process.env.CONVERSATIONS_AGENT_ID || null;
+export function getSessionAgent(server: McpServer): string | null {
+  return sessionFor(server).agentId || process.env.CONVERSATIONS_AGENT_ID || null;
 }
 
-export function getClaudeSessionId(): string | null {
-  return sessionClaudeId || process.env.CONVERSATIONS_SESSION_ID || null;
+export function getClaudeSessionId(server: McpServer): string | null {
+  return sessionFor(server).claudeSessionId || process.env.CONVERSATIONS_SESSION_ID || null;
 }
 
 export function registerChannelBridge(
@@ -82,7 +116,7 @@ export function registerChannelBridge(
   let polling = false;
 
   function getSessionId(): string | null {
-    return getClaudeSessionId();
+    return getClaudeSessionId(server);
   }
 
   async function pushNotification(msg: {
@@ -117,7 +151,7 @@ export function registerChannelBridge(
       if (mode === "direct") {
         try { await await getStore().markReadByIds([msg.id]); } catch { /* ok */ }
       } else if (mode === "channel_blurb") {
-        const agent = getSessionAgent();
+        const agent = getSessionAgent(server);
         if (agent) {
           try { await getStore().markChannelNotificationsRead(agent, [msg.id]); } catch { /* ok */ }
         }
@@ -133,7 +167,7 @@ export function registerChannelBridge(
     if (polling) return;
     polling = true;
     try {
-      const agent = getSessionAgent();
+      const agent = getSessionAgent(server);
       const sid = getSessionId();
 
       // Poll DMs to this agent — skip messages FROM self (no echoes)

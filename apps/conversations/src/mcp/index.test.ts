@@ -560,7 +560,7 @@ describe("heartbeat from parameter", () => {
     // The agent that last registered or heartbeated on this connection is the
     // implicit author. Falling through to the machine identity instead would
     // stamp every client on this daemon with the same name.
-    setSessionAgent("heartbeat-session-agent");
+    setSessionAgent(server, "heartbeat-session-agent");
     const result = await client.callTool({
       name: "heartbeat",
       arguments: {},
@@ -570,7 +570,7 @@ describe("heartbeat from parameter", () => {
   });
 
   test("falls back to the machine identity when no agent has registered on this connection", async () => {
-    setSessionAgent("");
+    setSessionAgent(server, "");
     const autoName = resolveIdentity();
     const result = await client.callTool({
       name: "heartbeat",
@@ -581,7 +581,7 @@ describe("heartbeat from parameter", () => {
 
     // That heartbeat just pinned the machine name as this session's agent;
     // clear it so later tests are not attributed to it.
-    setSessionAgent("");
+    setSessionAgent(server, "");
   });
 
   test("includes custom status", async () => {

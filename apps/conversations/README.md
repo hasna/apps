@@ -139,6 +139,39 @@ OpenLoops can then create a deduped one-shot workflow for the event. Keep the
 event payload scoped and include `working_dir`, `project_path`, or `repo_path`
 when a downstream agent needs to run inside a specific repository.
 
+## Agent Identity
+
+Every surface — CLI, MCP, `conversations-hook` — resolves who you are the same
+way:
+
+1. an explicit `--from` / `from` argument,
+2. the `CONVERSATIONS_AGENT_ID` env var,
+3. the agent that registered on this MCP connection (stdio only, see below),
+4. this installation's identity, `~/.hasna/conversations/agent-id`.
+
+The identity file is **machine-wide**: every process on the box that passes
+neither `--from` nor `CONVERSATIONS_AGENT_ID` answers to it, including the
+blocking-message hook. Claiming it is therefore deliberate:
+
+```bash
+conversations agents register augustus --identity   # claim the box as "augustus"
+conversations whoami --json                          # what this box resolves to
+```
+
+Two things also write it, and nothing else does:
+
+- `conversations agents rename <old> <new>` follows the rename when the renamed
+  agent *is* this installation's identity.
+- On a box with **no** identity file at all, the first MCP `register_agent`
+  claims it. Seed-if-absent, never last-writer-wins — an identity that already
+  exists is left alone.
+
+**Migrating from ≤ 0.5.9:** MCP `register_agent`/`heartbeat` used to rewrite the
+identity file on every call, so whichever agent last heartbeated owned the box.
+They no longer do. If a shared machine was relying on that to pick up its name,
+claim it once with `conversations agents register <name> --identity`, or export
+`CONVERSATIONS_AGENT_ID`. Run `conversations whoami --json` to check.
+
 ## MCP Server
 
 ```bash
@@ -172,6 +205,12 @@ MCP_HTTP=1 conversations-mcp
 - MCP: `http://127.0.0.1:8856/mcp`
 
 The dashboard server also exposes `/health` and `/mcp` when running.
+
+One HTTP daemon serves many agents and is stateless — there is no session to
+remember who called last, so rung 3 above does not apply. Agents sharing an HTTP
+daemon must pass `from` explicitly on every write, or run their own process with
+`CONVERSATIONS_AGENT_ID` set; otherwise they all resolve to the same machine
+identity.
 
 ## Self-hosted HTTP API (`conversations-serve`)
 

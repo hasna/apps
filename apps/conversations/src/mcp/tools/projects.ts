@@ -5,10 +5,12 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { getStore } from "../../lib/store/index.js";
-import { resolveIdentity } from "../identity.js";
+import { identityFor } from "../identity.js";
 import { compactWindowedProjects, jsonText } from "../compact.js";
 
 export function registerProjectTools(server: McpServer): void {
+  // Bound to this connection: see ../identity.ts.
+  const resolveIdentity = identityFor(server);
 
   server.registerTool("create_project", {
     description: "Create a project for agent collaboration.",

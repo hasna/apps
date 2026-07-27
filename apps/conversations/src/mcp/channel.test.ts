@@ -53,12 +53,13 @@ describe("channel bridge delivery", () => {
 
     createChannel("notify-bridge", "creator");
     subscribeToChannelNotifications("notify-bridge", "watcher", { preview_chars: 24 });
-    setSessionAgent("watcher", "claude-session-channel");
 
     let allowDelivery = false;
     let attempts = 0;
     const delivered: Array<{ method: string; params: any }> = [];
-    const stop = registerChannelBridge({
+    // Session state is keyed by the server, so the bridge and setSessionAgent
+    // must be handed the same instance.
+    const bridgeServer = {
       server: {
         registerCapabilities() {},
         async notification(payload: { method: string; params: any }) {
@@ -67,7 +68,9 @@ describe("channel bridge delivery", () => {
           delivered.push(payload);
         },
       },
-    } as any, {
+    } as any;
+    setSessionAgent(bridgeServer, "watcher", "claude-session-channel");
+    const stop = registerChannelBridge(bridgeServer, {
       pollIntervalMs: 20,
       startDelayMs: 0,
     });
@@ -106,17 +109,18 @@ describe("channel bridge delivery", () => {
 
     createChannel("notify-bridge-redact", "creator");
     subscribeToChannelNotifications("notify-bridge-redact", "watcher", { preview_chars: 120 });
-    setSessionAgent("watcher", "claude-session-channel-redact");
 
     const delivered: Array<{ method: string; params: any }> = [];
-    const stop = registerChannelBridge({
+    const bridgeServer = {
       server: {
         registerCapabilities() {},
         async notification(payload: { method: string; params: any }) {
           delivered.push(payload);
         },
       },
-    } as any, {
+    } as any;
+    setSessionAgent(bridgeServer, "watcher", "claude-session-channel-redact");
+    const stop = registerChannelBridge(bridgeServer, {
       pollIntervalMs: 20,
       startDelayMs: 0,
     });
@@ -136,12 +140,10 @@ describe("channel bridge delivery", () => {
     process.env.CONVERSATIONS_DB_PATH = createTestDbPath();
     closeDb();
 
-    setSessionAgent("watcher", "claude-session-direct");
-
     let allowDelivery = false;
     let attempts = 0;
     const delivered: Array<{ method: string; params: any }> = [];
-    const stop = registerChannelBridge({
+    const bridgeServer = {
       server: {
         registerCapabilities() {},
         async notification(payload: { method: string; params: any }) {
@@ -150,7 +152,9 @@ describe("channel bridge delivery", () => {
           delivered.push(payload);
         },
       },
-    } as any, {
+    } as any;
+    setSessionAgent(bridgeServer, "watcher", "claude-session-direct");
+    const stop = registerChannelBridge(bridgeServer, {
       pollIntervalMs: 20,
       startDelayMs: 0,
     });
@@ -181,16 +185,31 @@ describe("channel bridge delivery", () => {
 });
 
 describe("session agent tracking", () => {
+  let connection: McpServer;
+
   beforeEach(() => {
-    setSessionAgent("");
-    setClaudeSessionId("");
+    connection = new McpServer({ name: "test-session-tracking", version: "0.0.1" });
     delete process.env.CONVERSATIONS_AGENT_ID;
     delete process.env.CONVERSATIONS_SESSION_ID;
   });
 
   test("setSessionAgent stores agent id", () => {
-    setSessionAgent("test-agent");
-    expect(getSessionAgent()).toBe("test-agent");
+    setSessionAgent(connection, "test-agent");
+    expect(getSessionAgent(connection)).toBe("test-agent");
+  });
+
+  test("one connection's agent is invisible to another connection on the same process", () => {
+    // Regression: this state used to be a module-level global, so on the default
+    // Streamable HTTP transport ("one process per MCP, many agents") the last
+    // agent to register became the implicit author for every other client on the
+    // box — one agent's messages filed under another agent's name.
+    const other = new McpServer({ name: "test-session-tracking-other", version: "0.0.1" });
+
+    setSessionAgent(connection, "alpha-agent");
+    setSessionAgent(other, "beta-agent");
+
+    expect(getSessionAgent(connection)).toBe("alpha-agent");
+    expect(getSessionAgent(other)).toBe("beta-agent");
   });
 
   test("setSessionAgent does NOT write the installation-wide identity file", () => {
@@ -209,7 +228,7 @@ describe("session agent tracking", () => {
       before = null;
     }
 
-    setSessionAgent("identity-hijack-canary");
+    setSessionAgent(connection, "identity-hijack-canary");
 
     let after: string | null;
     try {
@@ -221,33 +240,32 @@ describe("session agent tracking", () => {
     expect(after).toBe(before);
     expect(after ?? "").not.toContain("identity-hijack-canary");
     // In-memory session tracking must still work.
-    expect(getSessionAgent()).toBe("identity-hijack-canary");
+    expect(getSessionAgent(connection)).toBe("identity-hijack-canary");
   });
 
   test("setSessionAgent stores claude session id", () => {
-    setSessionAgent("test-agent", "session-123");
-    expect(getSessionAgent()).toBe("test-agent");
-    expect(getClaudeSessionId()).toBe("session-123");
+    setSessionAgent(connection, "test-agent", "session-123");
+    expect(getSessionAgent(connection)).toBe("test-agent");
+    expect(getClaudeSessionId(connection)).toBe("session-123");
   });
 
   test("setClaudeSessionId stores session id", () => {
-    setClaudeSessionId("my-session");
-    expect(getClaudeSessionId()).toBe("my-session");
+    setClaudeSessionId(connection, "my-session");
+    expect(getClaudeSessionId(connection)).toBe("my-session");
   });
 
   test("getSessionAgent falls back to env var", () => {
     process.env.CONVERSATIONS_AGENT_ID = "env-agent";
-    expect(getSessionAgent()).toBe("env-agent");
+    expect(getSessionAgent(connection)).toBe("env-agent");
   });
 
   test("getClaudeSessionId falls back to env var", () => {
     process.env.CONVERSATIONS_SESSION_ID = "env-session";
-    expect(getClaudeSessionId()).toBe("env-session");
+    expect(getClaudeSessionId(connection)).toBe("env-session");
   });
 
   test("returns null when nothing set", () => {
-    setSessionAgent("");
-    expect(getSessionAgent()).toBeNull();
+    expect(getSessionAgent(connection)).toBeNull();
   });
 
   test("registerChannelBridge returns cleanup function", () => {
