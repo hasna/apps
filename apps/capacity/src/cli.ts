@@ -11,6 +11,8 @@ import {
   createAccountsCapacity,
   createSQLiteAccounts,
   decodeRecordEnvelope,
+  decodeRedactedRecordEnvelope,
+  encodeRedactedRecordEnvelope,
   exitCodeForError,
   parseAccessMethodId,
   parseAccountId,
@@ -30,11 +32,17 @@ import {
   type EntityKind,
   type EntityMap,
   type EligibilityRequest,
+  type ListOptions,
+  type Page,
+  type RedactedRecord,
   type SlotEligibilityMetadata,
   type NativeSubscriptionBindingSnapshot,
 } from "./index";
 
 const CLI_SCHEMA_VERSION = "accounts.cli.v1" as const;
+/** Largest page the capacity API accepts, and the bound on pages a list may walk. */
+const SELF_HOSTED_PAGE_LIMIT = 100;
+const SELF_HOSTED_MAX_PAGES = 1000;
 
 const NOUNS: Readonly<Record<string, EntityKind>> = {
   accounts: "account",
@@ -59,13 +67,31 @@ interface ParsedArguments {
 
 interface CliCatalog {
   doctor(): Promise<unknown>;
-  list(kind: EntityKind): Promise<readonly unknown[]>;
-  get(kind: EntityKind, id: EntityMap[EntityKind]["id"]): Promise<unknown>;
+  list(kind: EntityKind): Promise<readonly RedactedRecord[]>;
+  get(kind: EntityKind, id: EntityMap[EntityKind]["id"]): Promise<RedactedRecord>;
   eligibility(request: EligibilityRequest): Promise<SlotEligibilityMetadata>;
   close(): Promise<void>;
 }
 
-export async function runAccountsCli(argv: readonly string[]): Promise<number> {
+/**
+ * Exchanges the Secrets-managed capacity client credential reference in
+ * HASNA_ACCOUNTS_CAPACITY_AUTH_REF for the separately audienced client
+ * credential the capacity API accepts. The reference is not credential
+ * material, so the CLI never presents it as one; a deployment supplies the
+ * resolver that its Secrets runtime backs.
+ */
+export interface CapacityClientCredentialResolver {
+  resolve(reference: string, signal?: AbortSignal): Promise<string>;
+}
+
+export interface AccountsCliOptions {
+  readonly credentialResolver?: CapacityClientCredentialResolver;
+}
+
+export async function runAccountsCli(
+  argv: readonly string[],
+  options: AccountsCliOptions = {},
+): Promise<number> {
   const jsonRequested = argv.includes("--json");
   try {
     const parsed = parseArguments(argv);
@@ -87,7 +113,7 @@ export async function runAccountsCli(argv: readonly string[]): Promise<number> {
       return await probeNativeCommand(positionals, parsed.flags, jsonRequested);
     }
 
-    const catalog = createCliCatalog();
+    const catalog = createCliCatalog(options);
     try {
       if (command === "doctor") {
         requireNoPositionals(positionals, "doctor");
@@ -100,11 +126,7 @@ export async function runAccountsCli(argv: readonly string[]): Promise<number> {
         const records = await catalog.list(kind);
         output(jsonRequested, "list", {
           kind,
-          records: records.map((data) => ({
-            schemaVersion: "accounts.capacity.v1",
-            kind,
-            data,
-          })),
+          records: records.map((data) => encodeRedactedRecordEnvelope(kind, data)),
         });
         return 0;
       }
@@ -113,11 +135,7 @@ export async function runAccountsCli(argv: readonly string[]): Promise<number> {
         requirePositionals(positionals, 2, "get");
         const id = parseEntityId(kind, positionals[1]);
         const record = await catalog.get(kind, id as never);
-        output(jsonRequested, "get", {
-          schemaVersion: "accounts.capacity.v1",
-          kind,
-          data: record,
-        });
+        output(jsonRequested, "get", encodeRedactedRecordEnvelope(kind, record));
         return 0;
       }
       if (command === "eligibility") {
@@ -153,7 +171,7 @@ export async function runAccountsCli(argv: readonly string[]): Promise<number> {
   }
 }
 
-function createCliCatalog(): CliCatalog {
+function createCliCatalog(options: AccountsCliOptions): CliCatalog {
   const deployment = Bun.env.HASNA_ACCOUNTS_DEPLOYMENT;
   const localPath = Bun.env.HASNA_ACCOUNTS_DATABASE_PATH;
   if (deployment === "self_hosted" && localPath !== undefined) {
@@ -162,7 +180,7 @@ function createCliCatalog(): CliCatalog {
   if (deployment === "self_hosted") {
     const baseUrl = requiredEnvironment("HASNA_ACCOUNTS_CAPACITY_API_URL");
     const authRef = requiredEnvironment("HASNA_ACCOUNTS_CAPACITY_AUTH_REF");
-    return createSelfHostedCliCatalog(baseUrl, authRef);
+    return createSelfHostedCliCatalog(baseUrl, authRef, options.credentialResolver);
   }
   const serviceConfigPresent =
     Bun.env.HASNA_ACCOUNTS_CAPACITY_API_URL !== undefined ||
@@ -180,15 +198,24 @@ function createCliCatalog(): CliCatalog {
   const catalog = createSQLiteAccounts({ path });
   return Object.freeze({
     doctor: () => catalog.doctor(),
-    list: (kind: EntityKind) => catalog.list(kind),
-    get: (kind: EntityKind, id: EntityMap[EntityKind]["id"]) => catalog.get(kind, id as never),
+    // Local records reach the envelope unprojected; encodeRedactedRecordEnvelope
+    // applies the same reader redactor the API applies, so both deployments emit
+    // the identical record projection.
+    list: async (kind: EntityKind) =>
+      (await catalog.list(kind)).map((record) => record as unknown as RedactedRecord),
+    get: async (kind: EntityKind, id: EntityMap[EntityKind]["id"]) =>
+      (await catalog.get(kind, id as never)) as unknown as RedactedRecord,
     eligibility: (request: EligibilityRequest) => catalog.eligibility(request),
     close: () => catalog.close(),
   });
 }
 
-function createSelfHostedCliCatalog(baseUrl: string, authRef: string): CliCatalog {
-  const authProvider = bearerReferenceAuthProvider(authRef);
+function createSelfHostedCliCatalog(
+  baseUrl: string,
+  authRef: string,
+  resolver: CapacityClientCredentialResolver | undefined,
+): CliCatalog {
+  const authProvider = resolvedCredentialAuthProvider(authRef, resolver);
   const client = createAccountsCapacity({
     mode: "self_hosted",
     baseUrl,
@@ -198,7 +225,8 @@ function createSelfHostedCliCatalog(baseUrl: string, authRef: string): CliCatalo
   return Object.freeze({
     doctor: () => selfHostedDoctor(origin, authProvider),
     list: (kind: EntityKind) => listSelfHosted(client, kind),
-    get: (kind: EntityKind, id: EntityMap[EntityKind]["id"]) => getSelfHosted(client, kind, id),
+    get: async (kind: EntityKind, id: EntityMap[EntityKind]["id"]) =>
+      (await getSelfHosted(client, kind, id)) as unknown as RedactedRecord,
     eligibility: (request: EligibilityRequest) => client.capacity.query(request),
     close: () => client.close(),
   });
@@ -210,32 +238,67 @@ function requiredEnvironment(name: string): string {
   return value;
 }
 
-function bearerReferenceAuthProvider(authRef: string): AccountsAuthProvider {
+function resolvedCredentialAuthProvider(
+  authRef: string,
+  resolver: CapacityClientCredentialResolver | undefined,
+): AccountsAuthProvider {
   if (!/^[\x21-\x7e]{1,4096}$/.test(authRef)) {
     throw usageError("HASNA_ACCOUNTS_CAPACITY_AUTH_REF must be a visible ASCII credential reference");
+  }
+  if (resolver === undefined) {
+    throw new AccountsError(
+      "DEPENDENCY_UNAVAILABLE",
+      "Capacity client credential resolution is not configured for this deployment",
+    );
   }
   return Object.freeze({
     authorize: async (headers: Headers, signal?: AbortSignal) => {
       if (signal?.aborted) throw signal.reason ?? new DOMException("The operation was aborted", "AbortError");
-      headers.set("authorization", `Bearer ${authRef}`);
+      const credential = await resolver.resolve(authRef, signal);
+      // A resolver that hands back its own input has resolved nothing; the
+      // reference must never travel to the API as a bearer credential.
+      if (credential === authRef || !/^[\x21-\x7e]{1,4096}$/.test(credential)) {
+        throw new AccountsError("DEPENDENCY_UNAVAILABLE", "Capacity client credential is unresolved or invalid");
+      }
+      headers.set("authorization", `Bearer ${credential}`);
     },
   });
 }
 
-async function listSelfHosted(client: AccountsCapacity, kind: EntityKind): Promise<readonly unknown[]> {
+/** Walks every page so an api-mode list returns the same record set a local list returns. */
+async function listSelfHosted(client: AccountsCapacity, kind: EntityKind): Promise<readonly RedactedRecord[]> {
+  const readPage = selfHostedListPage(client, kind);
+  const records: RedactedRecord[] = [];
+  let cursor: string | undefined;
+  for (let page = 0; page < SELF_HOSTED_MAX_PAGES; page += 1) {
+    const result = await readPage(
+      cursor === undefined ? { limit: SELF_HOSTED_PAGE_LIMIT } : { cursor, limit: SELF_HOSTED_PAGE_LIMIT },
+    );
+    for (const record of result.records) records.push(record as RedactedRecord);
+    if (result.nextCursor === null) return Object.freeze(records);
+    if (result.nextCursor === cursor) break;
+    cursor = result.nextCursor;
+  }
+  throw new AccountsError("DEPENDENCY_UNAVAILABLE", "Capacity list pagination did not terminate");
+}
+
+function selfHostedListPage(
+  client: AccountsCapacity,
+  kind: EntityKind,
+): (options: ListOptions) => Promise<Page<unknown>> {
   switch (kind) {
     case "account":
-      return (await client.providerAccounts.list()).records;
+      return (options) => client.providerAccounts.list(options);
     case "entitlement":
-      return (await client.entitlements.list()).records;
+      return (options) => client.entitlements.list(options);
     case "capacity_pool":
-      return (await client.capacityPools.list()).records;
+      return (options) => client.capacityPools.list(options);
     case "access_method":
-      return (await client.lanes.list()).records;
+      return (options) => client.lanes.list(options);
     case "auth_capsule":
-      return (await client.capsules.list()).records;
+      return (options) => client.capsules.list(options);
     case "credential_binding":
-      return (await client.credentialBindings.list()).records;
+      return (options) => client.credentialBindings.list(options);
   }
 }
 
@@ -387,6 +450,8 @@ async function validateCommand(
   let documentKind: string;
   if (schemaVersion === "accounts.capacity.v1") {
     documentKind = decodeRecordEnvelope(parsed).kind;
+  } else if (schemaVersion === "accounts.capacity-redacted.v1") {
+    documentKind = decodeRedactedRecordEnvelope(parsed).kind;
   } else if (schemaVersion === "accounts.slot-eligibility.v1") {
     validateSlotEligibility(parsed);
     documentKind = "slot_eligibility";

@@ -13,6 +13,13 @@ import type {
 
 export const ACCOUNTS_CAPACITY_SCHEMA_VERSION = "accounts.capacity.v1" as const;
 
+/**
+ * Envelope version for the redacted read projection. Reader surfaces never emit
+ * provider subject values, so their records are not full capacity records and
+ * carry their own version rather than the storage one.
+ */
+export const ACCOUNTS_CAPACITY_REDACTED_SCHEMA_VERSION = "accounts.capacity-redacted.v1" as const;
+
 export interface RecordBase<Id extends string> {
   readonly id: Id;
   readonly revision: Counter;

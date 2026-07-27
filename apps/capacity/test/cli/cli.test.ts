@@ -4,16 +4,48 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  ACCOUNTS_CAPACITY_OPENAPI,
+  AccountsError,
   NATIVE_SUBSCRIPTION_PROBE_REQUEST_SCHEMA_VERSION,
   PACKAGE_VERSION,
   canonicalJson,
+  createSQLiteAccounts,
   newAccessMethodId,
+  newCredentialBindingId,
   newEligibilityEvidenceId,
   parseCounter,
   serializeRecordEnvelope,
+  type Account,
+  type EntityKind,
+  type EntityMap,
 } from "../../src/index";
-import { runAccountsCli } from "../../src/cli";
-import { CREATED_AT, FUTURE, digest, makeFixtureGraph } from "../fixtures";
+import { runAccountsCli, type AccountsCliOptions } from "../../src/cli";
+import { AccountsCatalog } from "../../src/domain/catalog";
+import { createAccountsHttpHandler } from "../../src/http/handler";
+import type { CatalogHttpService } from "../../src/http/types";
+import { SQLiteAccountsRepository } from "../../src/storage/sqlite";
+import {
+  ACTOR_REF,
+  CATALOG_INCARNATION,
+  CREATED_AT,
+  FUTURE,
+  NOW,
+  TEST_AUTHORITY_POLICY,
+  TEST_CREDENTIAL_USE_AUTHORIZER,
+  TEST_CREDENTIAL_VERIFIER,
+  clock,
+  digest,
+  makeFixtureGraph,
+  makeTestRecoveryLedger,
+  seedActiveCatalog,
+} from "../fixtures";
+
+const AUTH_REFERENCE = "capacity-client-reference";
+/** Stands in for the audienced client credential a Secrets resolver returns. */
+const RESOLVED_CREDENTIAL = "resolved.capacity.client.credential";
+const TEST_CLI_OPTIONS: AccountsCliOptions = {
+  credentialResolver: { resolve: async () => RESOLVED_CREDENTIAL },
+};
 
 const TEMP_ROOT = mkdtempSync(join(tmpdir(), "capacity-cli-tests-"));
 chmodSync(TEMP_ROOT, 0o700);
@@ -71,13 +103,14 @@ function selfHostedEnvironment(): Record<string, string> {
   return {
     HASNA_ACCOUNTS_DEPLOYMENT: "self_hosted",
     HASNA_ACCOUNTS_CAPACITY_API_URL: "https://accounts.capacity.test",
-    HASNA_ACCOUNTS_CAPACITY_AUTH_REF: "capacity-client-reference",
+    HASNA_ACCOUNTS_CAPACITY_AUTH_REF: AUTH_REFERENCE,
   };
 }
 
 async function runCliInProcess(
   args: readonly string[],
   environment: Readonly<Record<string, string | undefined>>,
+  options: AccountsCliOptions = TEST_CLI_OPTIONS,
 ) {
   let stdout = "";
   let stderr = "";
@@ -110,7 +143,7 @@ async function runCliInProcess(
     Bun.stderr.write = capture((text) => {
       stderr += text;
     });
-    const exitCode = await runAccountsCli(args);
+    const exitCode = await runAccountsCli(args, options);
     return { stdout, stderr, exitCode };
   } finally {
     for (const key of CLI_ENV_KEYS) {
@@ -143,7 +176,7 @@ function installSelfHostedFetchMock() {
     const url = new URL(request.url);
     calls.push(`${request.method} ${url.pathname}`);
     expect(url.origin).toBe("https://accounts.capacity.test");
-    expect(request.headers.get("authorization")).toBe("Bearer capacity-client-reference");
+    expect(request.headers.get("authorization")).toBe(`Bearer ${RESOLVED_CREDENTIAL}`);
     if (request.method === "GET" && url.pathname === "/health") {
       return jsonResponse({ schemaVersion: "accounts.health.v1", status: "ok" });
     }
@@ -216,6 +249,99 @@ function jsonResponse(body: unknown, status = 200): Response {
     status,
     headers: { "content-type": "application/json" },
   });
+}
+
+/**
+ * Serves the CLI from this repository's own HTTP handler behind an
+ * authenticator that actually checks the presented credential, so an
+ * unauthenticated CLI cannot pass.
+ */
+function installHandlerBackedFetch(accounts: readonly Account[] = []) {
+  const graph = makeFixtureGraph("api_key", 7);
+  const records = new Map<EntityKind, EntityMap[EntityKind][]>([
+    ["account", accounts.length === 0 ? [graph.activeAccount] : [...accounts]],
+    ["entitlement", []],
+    ["capacity_pool", []],
+    ["access_method", []],
+    ["auth_capsule", []],
+    ["credential_binding", []],
+  ]);
+  const catalog: CatalogHttpService = {
+    get: async <K extends EntityKind>(kind: K, id: EntityMap[K]["id"]) => {
+      const record = records.get(kind)!.find((candidate) => candidate.id === id);
+      if (record === undefined) throw new AccountsError("NOT_FOUND", "The requested record was not found");
+      return record as EntityMap[K];
+    },
+    list: async <K extends EntityKind>(kind: K) => records.get(kind)! as EntityMap[K][],
+    eligibility: async () => {
+      throw new AccountsError("NOT_IMPLEMENTED", "not used");
+    },
+    doctor: async () => {
+      throw new AccountsError("NOT_IMPLEMENTED", "not used");
+    },
+  };
+  const presented: string[] = [];
+  const handler = createAccountsHttpHandler({
+    deployment: {
+      mode: "self_hosted",
+      identityRealm: "hasna",
+      organizationRef: "organization:hasna",
+      publicAudience: "accounts-capacity-public",
+      internalAudience: "accounts-capacity-internal",
+      allowedIssuers: new Set(["authority:identities"]),
+    },
+    authenticator: {
+      authenticate: async (request, expectedAudience) => {
+        const authorization = request.headers.get("authorization");
+        if (authorization !== null) presented.push(authorization);
+        if (authorization !== `Bearer ${RESOLVED_CREDENTIAL}`) return undefined;
+        return {
+          actorRef: ACTOR_REF,
+          subjectRef: ACTOR_REF,
+          issuer: "authority:identities",
+          audience: expectedAudience,
+          scopes: new Set(["accounts:read"] as const),
+          authorizedOwnerRefs: new Set([ACTOR_REF]),
+        };
+      },
+    },
+    catalog,
+    packageVersion: PACKAGE_VERSION,
+    contractSha256: "0".repeat(64),
+    openApiDocument: ACCOUNTS_CAPACITY_OPENAPI,
+  });
+  globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) =>
+    handler(new Request(input, init)),
+  ) as unknown as typeof fetch;
+  return { presented, graph };
+}
+
+/** Serves more records than a single page holds, exactly as the handler paginates them. */
+function installPaginatedFetchMock(total: number) {
+  const graph = makeFixtureGraph("api_key", 9);
+  const records = Array.from({ length: total }, (_unused, index) => ({
+    ...graph.binding,
+    id: newCredentialBindingId(NOW.getTime() + index),
+  })).sort((left, right) => left.id.localeCompare(right.id));
+  const calls: string[] = [];
+  globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const request = new Request(input, init);
+    const url = new URL(request.url);
+    expect(url.pathname).toBe("/v1/credential-bindings");
+    calls.push(url.searchParams.toString());
+    const cursor = url.searchParams.get("cursor");
+    const limit = Number(url.searchParams.get("limit") ?? "50");
+    const visible = records.filter((record) => cursor === null || record.id > cursor);
+    const page = visible.slice(0, limit);
+    return jsonResponse({
+      schemaVersion: "accounts.list.v1",
+      kind: "credential_binding",
+      records: page,
+      nextCursor: visible.length > limit ? page.at(-1)!.id : null,
+      route: url.pathname,
+    });
+  }) as unknown as typeof fetch;
+  return { calls, total };
 }
 
 describe("accounts CLI", () => {
@@ -488,5 +614,99 @@ describe("accounts CLI", () => {
       `GET /v1/provider-accounts/${graph.account.id}`,
       "POST /v1/capacity/query",
     ]);
+  });
+});
+
+describe("self-hosted CLI credential resolution", () => {
+  test("authenticates against the capacity HTTP handler only with a resolved credential", async () => {
+    const { presented, graph } = installHandlerBackedFetch();
+
+    const resolved = await runCliInProcess(["list", "accounts", "--json"], selfHostedEnvironment());
+    expect(resolved.exitCode).toBe(0);
+    expect(JSON.parse(resolved.stdout).data.records).toHaveLength(1);
+    expect(presented).toEqual([`Bearer ${RESOLVED_CREDENTIAL}`]);
+  });
+
+  test("never presents the Secrets reference itself as the capacity client credential", async () => {
+    const { presented } = installHandlerBackedFetch();
+
+    const unresolved = await runCliInProcess(["list", "accounts", "--json"], selfHostedEnvironment(), {
+      credentialResolver: { resolve: async (reference) => reference },
+    });
+    expect(unresolved.exitCode).toBe(6);
+    expect(JSON.parse(unresolved.stderr).error.code).toBe("DEPENDENCY_UNAVAILABLE");
+    expect(unresolved.stdout).toBe("");
+
+    const unconfigured = await runCliInProcess(["doctor", "--json"], selfHostedEnvironment(), {});
+    expect(unconfigured.exitCode).toBe(6);
+    expect(JSON.parse(unconfigured.stderr).error.code).toBe("DEPENDENCY_UNAVAILABLE");
+
+    // The reference never reaches the wire in either failure mode.
+    expect(presented).toEqual([]);
+  });
+
+  test("returns every page of a self-hosted list instead of the first page only", async () => {
+    const { calls, total } = installPaginatedFetchMock(120);
+    const result = await runCliInProcess(["list", "credential-bindings", "--json"], selfHostedEnvironment());
+    expect(result.exitCode).toBe(0);
+    const records = JSON.parse(result.stdout).data.records;
+    expect(records).toHaveLength(total);
+    expect(new Set(records.map((record: { data: { id: string } }) => record.data.id)).size).toBe(total);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toBe("limit=100");
+    expect(calls[1]).toMatch(/^cursor=[0-9a-f-]{36}&limit=100$/);
+  });
+});
+
+describe("local and self-hosted record envelope parity", () => {
+  test("emits the identical validatable record envelope in both deployment modes", async () => {
+    const directory = mkdtempSync(join(TEMP_ROOT, "parity-"));
+    cleanup.push(directory);
+    const filename = join(directory, "accounts.db");
+    const graph = makeFixtureGraph("api_key", 42);
+    const repository = new SQLiteAccountsRepository(filename, {
+      credentialVerifier: TEST_CREDENTIAL_VERIFIER,
+      recoveryLedger: makeTestRecoveryLedger(),
+      catalogIncarnation: CATALOG_INCARNATION,
+      credentialUseAuthorizer: TEST_CREDENTIAL_USE_AUTHORIZER,
+    });
+    const seedCatalog = new AccountsCatalog(repository, clock, TEST_AUTHORITY_POLICY);
+    await seedActiveCatalog(seedCatalog, graph, "cli-parity");
+    const reader = createSQLiteAccounts({ path: filename });
+    const stored = await reader.get("account", graph.account.id);
+    await reader.close();
+    await seedCatalog.close();
+    expect(stored.providerSubjectRef).toBeDefined();
+
+    const local = await runCliInProcess(["get", "accounts", graph.account.id, "--json"], {
+      HASNA_ACCOUNTS_DEPLOYMENT: "local",
+      HASNA_ACCOUNTS_DATABASE_PATH: filename,
+    });
+    expect(local.exitCode).toBe(0);
+
+    installHandlerBackedFetch([stored]);
+    const api = await runCliInProcess(["get", "accounts", graph.account.id, "--json"], selfHostedEnvironment());
+    expect(api.exitCode).toBe(0);
+
+    const localEnvelope = JSON.parse(local.stdout).data;
+    const apiEnvelope = JSON.parse(api.stdout).data;
+
+    // The repository's own validator round-trips what either mode emits.
+    for (const [name, envelope] of [
+      ["local.json", localEnvelope],
+      ["api.json", apiEnvelope],
+    ] as const) {
+      const path = join(directory, name);
+      await Bun.write(path, canonicalJson(envelope));
+      const validated = await runCli(["validate", path, "--json"]);
+      expect(validated.exitCode).toBe(0);
+      expect(JSON.parse(validated.stdout).data).toEqual({ valid: true, documentKind: "account" });
+    }
+
+    expect(localEnvelope.schemaVersion).toBe("accounts.capacity-redacted.v1");
+    expect(Object.keys(localEnvelope.data).sort()).toEqual(Object.keys(apiEnvelope.data).sort());
+    expect(localEnvelope).toEqual(apiEnvelope);
+    expect(localEnvelope.data.providerSubjectRef).toBeUndefined();
+    expect(localEnvelope.data.providerSubjectRefRedacted).toBe(true);
   });
 });

@@ -1586,6 +1586,29 @@ function prepareDatabasePath(input: string): void {
   }
 }
 
+/**
+ * Reason one resolved path component fails the fail-closed ownership floor, or
+ * undefined when the component is safe. Only the caller and root may own an
+ * ancestor directory, and a world- or group-writable ancestor is accepted only
+ * when it is the root-owned sticky temporary directory: the owner of a sticky
+ * directory can still rename or unlink the entries below it.
+ * Exported for the ownership-matrix tests, not through the package surface.
+ */
+export function sqlitePathComponentViolation(
+  status: { readonly uid: number; readonly mode: number },
+  uid: number,
+): string | undefined {
+  const writableByOthers = (status.mode & 0o022) !== 0;
+  const rootStickyDirectory = status.uid === 0 && (status.mode & 0o1000) !== 0;
+  if (status.uid !== uid && status.uid !== 0) {
+    return "SQLite path component has an unexpected owner";
+  }
+  if (status.uid !== uid && writableByOthers && !rootStickyDirectory) {
+    return "SQLite path component is writable by another user";
+  }
+  return undefined;
+}
+
 function validateExistingPath(path: string, uid: number): void {
   const absolute = resolve(path);
   const root = parse(absolute).root;
@@ -1597,11 +1620,8 @@ function validateExistingPath(path: string, uid: number): void {
     if (status.isSymbolicLink() || !status.isDirectory()) {
       throw new AccountsError("DATABASE_PATH_UNSAFE", "SQLite path contains an unsafe component");
     }
-    const writableByOthers = (status.mode & 0o022) !== 0;
-    const stickyDirectory = (status.mode & 0o1000) !== 0;
-    if (writableByOthers && !stickyDirectory) {
-      throw new AccountsError("DATABASE_PATH_UNSAFE", "SQLite path component is writable by another user");
-    }
+    const violation = sqlitePathComponentViolation(status, uid);
+    if (violation !== undefined) throw new AccountsError("DATABASE_PATH_UNSAFE", violation);
   }
 }
 
