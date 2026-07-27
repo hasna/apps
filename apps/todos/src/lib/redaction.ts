@@ -73,6 +73,14 @@ function isRedactionPlaceholderMatch(match: string): boolean {
  * exact keys the sanitizer itself produces — env-secret-assignment rewrites a
  * "<credential-ish name>=<secret>" key into "<same name>=[REDACTED]" — and the opaque value
  * beneath it matches no text pattern, so it would be emitted in cleartext.
+ *
+ * Widening REDACTION_PLACEHOLDER widens this key exemption too, silently: any shape it starts
+ * accepting stops having its value redacted. Treat a change to that constant as a change to
+ * this exemption and re-check the key matrix in redaction.test.ts.
+ *
+ * Known and accepted consequence: a key named *literally* "[REDACTED_PASSWORD]" (or any other
+ * placeholder spelling) no longer has its value redacted by key name. Such a key is
+ * indistinguishable from output this module produced itself.
  */
 function isRedactionPlaceholderKey(key: string): boolean {
   return new RegExp(`^${REDACTION_PLACEHOLDER}$`).test(key.trim());

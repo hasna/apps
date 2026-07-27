@@ -16,7 +16,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `[REDACTED]` — silent loss of non-secret data. Redaction is now idempotent for keys that are
   *entirely* a placeholder. Keys of the form `NAME=[REDACTED]` are deliberately **not** exempt:
   that shape is what env-assignment redaction produces, and the value beneath it is opaque, so
-  key-based redaction must still apply there.
+  key-based redaction must still apply there. **Accepted trade-off:** a key named *literally*
+  `[REDACTED_GITHUB_TOKEN]` / `[REDACTED_TOKEN]` / `[REDACTED_PASSWORD]` no longer has its value
+  redacted by key name — previously it did, because the placeholder text contains `TOKEN` /
+  `PASSWORD`. Such a key is indistinguishable from this module's own output, and keeping it
+  exempt is what makes redaction idempotent.
+
+### Known issues
+
+- **Secret-bearing metadata *keys* are not redacted on every write path.** `redactValue()`
+  redacts metadata values but leaves key text intact; only `sanitizePreWriteValue()` rewrites
+  keys. Task metadata is covered (via `sanitizeUpdateTaskInput`), but `task_findings.metadata`
+  is built with `redactValue()` alone and persists a credential placed in key position — and
+  `metadata_keys` is emitted in compact finding output, whose contract states that "metadata
+  values are intentionally omitted", treating keys as the safe half. Pre-existing, not
+  introduced here; tracked separately.
 
 ### Documentation
 
