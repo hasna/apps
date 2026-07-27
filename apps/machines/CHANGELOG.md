@@ -45,11 +45,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `serve|settings|profile|machine|secrets|chrome ask|remote start`, so
   `browserplan browser status` (`daemon_status`), `browserplan tab list`
   (`tab_inventory`) and `browserplan remote status` (`supervisor_status`) print
-  usage and exit 0 while the payload still reports them `available: true,
-  readiness: "ready"`. This is pre-existing and not changed here — correcting it
-  would mean touching the readiness contract — but it becomes materially more
-  significant now that npm is the only artifact, so a consumer reading
-  `readiness: "ready"` should know before building on it.
+  usage and **exit 0** while the payload still reports them `available: true,
+  readiness: "ready"` — so exit status cannot distinguish the no-op from success.
+  This is pre-existing and not changed here (correcting it would mean touching the
+  readiness contract) but it becomes materially more significant now that npm is
+  the only artifact, so a consumer reading `readiness: "ready"` should know before
+  building on it.
+
+- **Disclosure, worse than the above: for `supervisor_status` the validator
+  forbids the only command that works.** The emitted template is `browserplan
+  remote status …`, which `0.1.0` does not dispatch, while the long-standing rule
+  at `src/consumer-schema.ts` **rejects** any `supervisor_status` template
+  containing `remote start` — which is the *only* `remote` subcommand `0.1.0`
+  does dispatch. A consumer who diagnoses the broken command and corrects it
+  therefore gets a validation failure for the fix. Left in place here because
+  changing it is a consumer-visible validation change unrelated to the retirement,
+  but it is a trap and is recorded as such.
 
   On the old template: it was already unlikely to succeed, but **not for the
   reason an earlier draft of this entry gave.** `<open-chrome-project-root>` does
@@ -110,11 +121,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   would have been trivially evadable.
 
   The suffix must be an **exact semver or a dist-tag of two or more characters**.
-  Semver *ranges* are rejected — `0`, `1.2`, `0.x`, `0*`, `^1.0.0`, `~1.0.0` and
-  the bare wildcards `x`/`X` — because a range makes the installed version
-  unpredictable, defeating both the pin and reconcile's `<bin> --version`
-  assertion; `0*` is additionally a shell glob whose expansion depends on the
-  caller's working directory. The pattern is a shared module-level object and is
+  Semver *ranges* are rejected — `0`, `1.2`, `0.x`, `0*`, `^1.0.0`, `~1.0.0`, the
+  bare wildcards `x`/`X`, and the dotted `x`-leading family `x.x`, `x.x.x`, `X.X`,
+  `x.1`, `x.0.0` — because a range makes the installed version unpredictable,
+  defeating both the pin and reconcile's `<bin> --version` assertion; `0*` is
+  additionally a shell glob whose expansion depends on the caller's working
+  directory. The `x`-leading family needed subtracting separately
+  (`BROWSERPLAN_INSTALL_VERSION_WILDCARD_PATTERN`): because tag names may contain
+  `.`, a leading letter routed `x.x` into the dist-tag arm while the digit-led
+  `0.x` was correctly rejected by the semver arm — an asymmetry that turned on
+  nothing but the first character, and `bun install -g pkg@x.x` resolves as a
+  range. Legitimate tags that merely start with that letter (`xx`, `xenial`,
+  `x-ray`) are unaffected. The pattern is a shared module-level object and is
   asserted to carry **no flags**, since a `/g` added later would advance
   `lastIndex` between calls and return alternating results for successive machines
   in one payload. It is not a trust check: a legitimate but hostile-looking

@@ -61,6 +61,20 @@ export const BROWSERPLAN_INSTALL_UPDATE_COMMAND_PREFIX = `bun install -g ${BROWS
 export const BROWSERPLAN_INSTALL_VERSION_PATTERN =
   /^(?:\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?|[A-Za-z][0-9A-Za-z._-]+)$/;
 /**
+ * Dotted `x`-wildcard ranges, which must be subtracted from the tag arm above.
+ *
+ * The tag arm allows `.` inside a tag name, so a leading letter routes `x.x`, `x.x.x`,
+ * `X.X`, `x.1` and `x.0.0` into it — while the digit-led equivalents `0.x` and `1.x.x` are
+ * correctly rejected by the semver arm. That asymmetry turns on nothing but the first
+ * character, and `bun install -g pkg@x.x` resolves as a RANGE (observed installing 0.1.0),
+ * so those forms float exactly like `latest` and defeat the pin's auditability rationale.
+ *
+ * Deliberately narrow: only `x`/`X` optionally followed by dot-separated digit/`x` groups.
+ * Legitimate tags that merely start with the letter — `xx`, `xenial`, `x-ray`, `xylophone`
+ * — are untouched.
+ */
+export const BROWSERPLAN_INSTALL_VERSION_WILDCARD_PATTERN = /^[xX](?:\.[0-9xX]+)*$/;
+/**
  * Exact version the install hook pins.
  *
  * DELIBERATELY PINNED, NOT `latest` — do not "improve" this to a floating tag.

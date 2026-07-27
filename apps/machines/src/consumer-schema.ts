@@ -21,6 +21,7 @@ import {
   BROWSERPLAN_EXCLUDED_MACHINE_IDS,
   BROWSERPLAN_INSTALL_UPDATE_COMMAND_PREFIX,
   BROWSERPLAN_INSTALL_VERSION_PATTERN,
+  BROWSERPLAN_INSTALL_VERSION_WILDCARD_PATTERN,
   BROWSERPLAN_LEGACY_INSTALL_UPDATE_COMMAND_TEMPLATE,
   BROWSERPLAN_MACHINE_IDS,
   BROWSERPLAN_ROUTE_OWNER,
@@ -1485,7 +1486,9 @@ export function validateMachinesConsumerEnvelope(
               const suffix = template.startsWith(BROWSERPLAN_INSTALL_UPDATE_COMMAND_PREFIX)
                 ? template.slice(BROWSERPLAN_INSTALL_UPDATE_COMMAND_PREFIX.length)
                 : null;
-              const installsFromRegistry = suffix !== null && BROWSERPLAN_INSTALL_VERSION_PATTERN.test(suffix);
+              const installsFromRegistry = suffix !== null
+                && BROWSERPLAN_INSTALL_VERSION_PATTERN.test(suffix)
+                && !BROWSERPLAN_INSTALL_VERSION_WILDCARD_PATTERN.test(suffix);
               const isLegacyTemplate = template === BROWSERPLAN_LEGACY_INSTALL_UPDATE_COMMAND_TEMPLATE;
               if (!installsFromRegistry && !isLegacyTemplate) errors.push(`${path}.command_template`);
             }

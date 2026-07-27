@@ -9,6 +9,7 @@ import {
   BROWSERPLAN_INSTALL_UPDATE_COMMAND_PREFIX,
   BROWSERPLAN_INSTALL_UPDATE_COMMAND_TEMPLATE,
   BROWSERPLAN_INSTALL_VERSION_PATTERN,
+  BROWSERPLAN_INSTALL_VERSION_WILDCARD_PATTERN,
   BROWSERPLAN_LEGACY_INSTALL_UPDATE_COMMAND_TEMPLATE,
   BROWSERPLAN_PACKAGE_NAME,
   BROWSERPLAN_PINNED_VERSION,
@@ -157,6 +158,18 @@ describe("BrowserPlan fleet contract", () => {
       for (const range of ["0", "1.2", "0.x", "0*", "^1.0.0", "~1.0.0", "x", "X", "*"]) {
         expect(withTemplate(`bun install -g @hasna/open-chrome@${range}`)).toBe(false);
       }
+      // Rejected: the x-LEADING wildcard family. These route into the dist-tag arm rather
+      // than the semver arm purely because the first character is a letter, so `0.x` was
+      // rejected while `x.0` was accepted. `bun install -g pkg@x.x` resolves as a range
+      // (observed installing 0.1.0), so it floats exactly like `latest`.
+      for (const wildcard of ["x.x", "x.x.x", "X.X", "x.1", "x.0.0", "X.x.X", "x.0"]) {
+        expect(withTemplate(`bun install -g @hasna/open-chrome@${wildcard}`)).toBe(false);
+      }
+      // Kept: legitimate tags that merely begin with that letter.
+      for (const tag of ["xx", "xenial", "x-ray", "xylophone"]) {
+        expect(withTemplate(`bun install -g @hasna/open-chrome@${tag}`)).toBe(true);
+      }
+      expect(BROWSERPLAN_INSTALL_VERSION_WILDCARD_PATTERN.flags).toBe("");
       // Accepted: exact semver with prerelease/build metadata, and multi-character tags.
       expect(withTemplate("bun install -g @hasna/open-chrome@1.0.0-beta.1")).toBe(true);
       expect(withTemplate("bun install -g @hasna/open-chrome@next")).toBe(true);
