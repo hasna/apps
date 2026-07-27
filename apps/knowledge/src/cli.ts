@@ -1802,7 +1802,9 @@ async function run(argv: string[]): Promise<void> {
     // A raw value matches an item when the stored tags contain the WHOLE value OR all of
     // its comma-split names — a UNION. This is deliberately NOT the rule `untag` uses:
     // there a whole-value hit short-circuits (`continue`), so the two shapes are mutually
-    // exclusive per RAW -t VALUE — not per run, since repeated -t still accumulates there.
+    // exclusive per RAW -t VALUE — not per run, since `untag` still accumulates across
+    // repeated -t. (Repeated -t here in `list` NARROWS instead: 3 -> 2 -> 1 matches as
+    // values are added. Do not read "accumulates" as describing this command.)
     //
     // Each rule is right for its own command. `untag` mutates, so it must take one shape
     // per -t value — that exclusivity is exactly what makes its documented "re-run to clear
@@ -1965,13 +1967,18 @@ async function run(argv: string[]): Promise<void> {
     // Quoted, but NOT for the comma reason the failure message above has: `notFound` can
     // never hold a comma. A comma-bearing value only reaches `remove` through the
     // whole-value branch, which requires `stored.has(whole)`, so it is found by definition
-    // and filtered out of `notFound`; every other entry is a comma-split part. So
-    // `(not found: p, q)` always means two names, and ONE tag literally named `p, q` is
-    // unreachable here. The reachable ambiguity is WHITESPACE: `-t "p q"` gives
-    // `notFound: ["p q"]`, and unquoted that prints `(not found: p q)` with nothing to mark
-    // where the single name ends. Quoting fixes that and keeps the two messages symmetric,
-    // so no reader has to work out which line happens to be ambiguity-proof. `not_found` in
-    // the JSON was already unambiguous; this is the human line catching up.
+    // and filtered out of `notFound`; every other entry is a comma-split part. ONE tag
+    // literally named `p, q` is therefore unreachable here — and since every entry is
+    // comma-free, joining on ', ' is injective, so a plain space is a legibility problem
+    // rather than a collision (`["p","q"]` -> `p, q`, `["p q"]` -> `p q`, distinct strings).
+    //
+    // What makes the quoting load-bearing is whitespace the parser does NOT strip: `trim()`
+    // only touches the ends, so `-t $'p\nq'` yields `notFound: ["p\nq"]` and joining raw
+    // would break this single-line message in two, with the tail reading as separate output.
+    // Tab is the same. JSON.stringify escapes both, and a test pins it. Quoting also keeps
+    // the two messages symmetric, so no reader has to work out which line happens to be
+    // collision-proof. `not_found` in the JSON was already unambiguous; this is the human
+    // line catching up.
     const missed = notFound.length > 0 ? ` (not found: ${notFound.map((tag) => JSON.stringify(tag)).join(', ')})` : '';
     const result: Record<string, unknown> = { ok: true, item, removed, message: `Removed ${removed} tag${removed === 1 ? '' : 's'} from ${item?.id ?? current.id}${missed}` };
     if (notFound.length > 0) result.not_found = notFound;

@@ -322,9 +322,10 @@ falling back to the split names *only* when no stored tag equals the whole value
 
 Both rules are right for their own command. `untag` writes, so it must take one shape per
 `-t` **value** — that is exactly what makes its documented "re-run to clear the split
-names" behaviour true. The exclusivity is per raw `-t` value, **not** per run: repeating
-`-t` still accumulates, so `untag -t "a,b,c" -t a -t b -t c` removes four tags from an item
-carrying both shapes in a single run. `list` only reads, so matching both shapes destroys
+names" behaviour true. The exclusivity is per raw `-t` value, **not** per run: repeating `-t`
+on `untag` still accumulates, so `untag -t "a,b,c" -t a -t b -t c` removes four tags from an
+item carrying both shapes in a single run. (Repeating `-t` on `list` narrows instead — see
+the `-t` row above.) `list` only reads, so matching both shapes destroys
 nothing, while matching only one would hide items from the very query used to find them.
 Items written before the multi-tag parse fix can carry a single literal `"a,b,c"` tag, which
 none of the split names equals, so a split-only filter does not merely miss the damaged
@@ -429,7 +430,8 @@ The exclusivity is scoped to one `-t` value, **not** to the whole run. Repeated 
 accumulates, so on an item carrying both shapes:
 
 ```bash
-# stored tags ["a,b,c","a","b","c"]
+# each line run against this same starting state, not as a sequence:
+#   stored tags ["a,b,c","a","b","c"]
 knowledge untag --id <id> -t "a,b,c"                 # removed: 1  (whole value only)
 knowledge untag --id <id> -t "a,b,c" -t a            # removed: 2
 knowledge untag --id <id> -t "a,b,c" -t a -t b -t c  # removed: 4  (both shapes, one run)
@@ -465,12 +467,24 @@ On the **partial-miss** path the justification is different, and it is *not* the
 case. A `not_found` entry can never contain a comma: a comma-bearing value only enters the
 removal set through the whole-value branch, which requires the stored tags to already
 contain it — so it is found by definition — and every other entry comes from splitting on
-commas. `(not found: p, q)` therefore always means two names, and one missing tag literally
-named `p, q` is **unreachable**. What is reachable is **whitespace-bearing** names: `-t "p q"`
-yields `not_found: ["p q"]`, and unquoted that prints `(not found: p q)`, which gives the
-reader no marker of where one name ends — one tag named `p q` reads exactly like a pair.
-Quoting makes each name's extent explicit and keeps the two messages symmetric, so a reader
-does not have to know which of the two lines happens to be ambiguity-proof.
+commas. One missing tag literally named `p, q` is therefore **unreachable**, and because
+every entry is comma-free the raw `", "` join is *injective*: `["p","q"]` prints `p, q` and
+`["p q"]` prints `p q`, which are different strings. A plain space is a **legibility**
+problem, not an ambiguity.
+
+The reachable case that does make quoting load-bearing is **whitespace the parser does not
+strip**. `trim()` only removes the ends, so a tab or newline inside a name survives:
+
+```
+-t $'p\nq'  ->  not_found: ["p\nq"]
+  quoted:    Removed 1 tag from k_x (not found: "p\nq")     <- one line
+  unquoted:  Removed 1 tag from k_x (not found: p
+             q)                                             <- message split in two
+```
+
+Joined raw, that name breaks the single-line message and the tail reads as separate output.
+`JSON.stringify` escapes it. Quoting also keeps the two messages symmetric, so a reader does
+not have to work out which of the two lines happens to be collision-proof.
 
 ### delete
 ```bash

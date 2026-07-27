@@ -719,16 +719,38 @@ describe('knowledge cli', () => {
     expect(partialHuman.exitCode).toBe(0);
     expect(decode(partialHuman.stdout)).toContain('not found: "nope"');
 
-    // Two missing names must not render identically to ONE missing tag literally named
-    // `p, q`. Joined raw, both print `(not found: p, q)` — the same ambiguity the all-miss
-    // failure message above already fixed, which the success line must not reintroduce.
-    // The JSON `not_found` array was never ambiguous; this pins the human line.
+    // This pins the QUOTING of the unmatched names, not a comma collision. There is no
+    // comma collision to fix: a comma-bearing value only enters the removal set via the
+    // whole-value branch, which requires the tag to be stored, so it is found by definition
+    // and never reaches `not_found`. One missing tag literally named `p, q` is unreachable,
+    // and since every entry is comma-free the raw `', '` join is injective — `["p","q"]`
+    // prints `p, q` and `["p q"]` prints `p q`, which are different strings.
+    //
+    // The quoting is still load-bearing, for names carrying whitespace the parser does not
+    // strip: `trim()` only removes the ends, so `-t $'p\nq'` stores nothing but yields
+    // `not_found: ["p\nq"]`, and joined raw that would split the single-line message across
+    // two lines. Tab behaves the same. `JSON.stringify` escapes both, which is why the
+    // assertion below is on the quoted form. See the separate whitespace case at the end of
+    // this test; here the pair is what pins the delimiter itself.
     seed('k_partial_two', ['alpha']);
     const partialTwo = runCli(['untag', '--id', 'k_partial_two', '--store', store, '-t', 'alpha', '-t', 'p,q']);
     expect(partialTwo.exitCode).toBe(0);
     const twoOut = decode(partialTwo.stdout);
     expect(twoOut).toContain('(not found: "p", "q")');
     expect(twoOut).not.toContain('(not found: p, q)');
+
+    // The reachable reason the quoting exists: `trim()` strips only the ends, so a control
+    // character inside a name survives into `not_found`. Joined raw, that newline would
+    // break this single-line message in two and the tail would read as separate output.
+    // Quoted, the whole name stays on one line as `"p\nq"`.
+    seed('k_partial_ws', ['alpha']);
+    const partialWs = runCli(['untag', '--id', 'k_partial_ws', '--store', store, '-t', 'alpha', '-t', 'p\nq', '--json']);
+    expect(partialWs.exitCode).toBe(0);
+    const wsOut = JSON.parse(decode(partialWs.stdout));
+    expect(wsOut.not_found).toEqual(['p\nq']);
+    expect(wsOut.message).toBe('Removed 1 tag from k_partial_ws (not found: "p\\nq")');
+    expect(wsOut.message.split('\n')).toHaveLength(1);
+    expect(storedTags('k_partial_ws')).toEqual([]);
 
     // The human success line must carry the count, so it cannot read the same for 1 and 0.
     seed('k_human', ['alpha', 'beta', 'gamma']);
