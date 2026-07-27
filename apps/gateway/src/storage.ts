@@ -77,9 +77,9 @@ async function withStorageRetry<T>(fn: () => T | Promise<T>): Promise<T> {
 }
 
 async function openCloudDatabase(storage: GatewayCloudStorageConfig, env: StorageEnv = process.env): Promise<GatewayCloudDb> {
-  const cloud = await import("@hasna/cloud");
   if (storage.backend === "sqlite") {
-    return new cloud.SqliteAdapter(storage.sqlitePath);
+    const { SqliteAdapter } = await import("./db/sqlite-adapter");
+    return new SqliteAdapter(storage.sqlitePath);
   }
 
   const connectionString = storage.connectionString ?? (storage.connectionStringEnv ? env[storage.connectionStringEnv] : undefined);
@@ -91,7 +91,8 @@ async function openCloudDatabase(storage: GatewayCloudStorageConfig, env: Storag
       message: "storage.cloud postgres backend requires a connectionString or a populated connectionStringEnv.",
     });
   }
-  return new cloud.PgAdapterAsync(connectionString);
+  const { PgAdapterAsync } = await import("./db/pg-adapter");
+  return new PgAdapterAsync(connectionString);
 }
 
 async function ensureCloudLedgerSchema(db: GatewayCloudDb): Promise<void> {

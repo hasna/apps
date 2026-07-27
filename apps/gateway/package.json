@@ -77,13 +77,14 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
-    "@hasna/cloud": "0.1.41",
     "@hasna/contracts": "^0.2.2",
     "@modelcontextprotocol/sdk": "^1.12.1",
+    "pg": "^8.13.3",
     "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/bun": "^1.2.4",
+    "@types/pg": "^8.11.11",
     "typescript": "^5.7.3"
   }
 }
