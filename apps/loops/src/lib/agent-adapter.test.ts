@@ -709,6 +709,26 @@ describe("provider adapter contracts", () => {
     expect(invocation.args).not.toContain("exec-prompt");
   });
 
+  test("does not build legacy codewith agent start json invocations", () => {
+    // Current Codewith accepts JSON output on `exec`; `agent start --json` is not
+    // a supported launch shape and would fail before any OpenLoops work starts.
+    const invocation = providerAdapter("codewith").buildInvocation(baseTarget({
+      provider: "codewith",
+      prompt: "agent-start-regression",
+      cwd: "/tmp/repo",
+    }));
+    const execIndex = invocation.args.indexOf("exec");
+    const jsonIndex = invocation.args.indexOf("--json");
+
+    expect(invocation.command).toBe("codewith");
+    expect(execIndex).toBeGreaterThanOrEqual(0);
+    expect(jsonIndex).toBeGreaterThan(execIndex);
+    expect(invocation.args).not.toContain("agent");
+    expect(invocation.args).not.toContain("start");
+    expect(invocation.args).not.toContain("--idempotency-key");
+    expect(invocation.stdin).toBe("agent-start-regression");
+  });
+
   test("builds an honest auditable contract without claiming provider enforcement", () => {
     const target = baseTarget({
       provider: "codewith",

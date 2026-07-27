@@ -1,8 +1,9 @@
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { once } from "node:events";
-import { lstatSync, mkdirSync, realpathSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { closeSync, lstatSync, mkdirSync, mkdtempSync, openSync, realpathSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import type { LanguageModel } from "ai";
 import type {
   AccountRef,
@@ -126,6 +127,11 @@ interface MachineCommandPlan {
   command: string;
   args: string[];
   source: string;
+}
+
+interface SpawnStdinFile {
+  fd: number;
+  dir: string;
 }
 
 const AUTH_ENV_KEYS = [
@@ -459,6 +465,57 @@ function hereDoc(value: string, destinationVariable = "__OPENLOOPS_STDIN"): stri
     delimiter = `__OPENLOOPS_STDIN_${randomBytes(8).toString("hex").toUpperCase()}__`;
   }
   return [`cat > "$${destinationVariable}" <<'${delimiter}'`, value, delimiter];
+}
+
+function spawnStdinFile(input: string): SpawnStdinFile {
+  const dir = mkdtempSync(join(tmpdir(), "openloops-stdin-"));
+  const path = join(dir, "stdin");
+  let fd = -1;
+  try {
+    writeFileSync(path, input, { mode: 0o600 });
+    fd = openSync(path, "r");
+    unlinkSync(path);
+    return { fd, dir };
+  } catch (error) {
+    if (fd >= 0) {
+      try {
+        closeSync(fd);
+      } catch {
+        /* ignore */
+      }
+    }
+    try {
+      unlinkSync(path);
+    } catch {
+      /* ignore */
+    }
+    try {
+      rmdirSync(dir);
+    } catch {
+      /* ignore */
+    }
+    throw error;
+  }
+}
+
+function closeSpawnStdinFile(file: SpawnStdinFile | undefined): void {
+  if (!file || file.fd < 0) return;
+  try {
+    closeSync(file.fd);
+  } catch {
+    /* ignore */
+  }
+  file.fd = -1;
+}
+
+function cleanupSpawnStdinFile(file: SpawnStdinFile | undefined): void {
+  closeSpawnStdinFile(file);
+  if (!file) return;
+  try {
+    rmdirSync(file.dir);
+  } catch {
+    /* ignore */
+  }
 }
 
 function remoteBootstrapLines(
@@ -1114,17 +1171,25 @@ async function executeRemoteSpec(
     return failureResult(startedAt, err instanceof Error ? err.message : String(err));
   }
 
-  const child = spawn(plan.command, plan.args, {
-    env: transportEnv(opts),
-    detached: true,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
+  let stdinFile: SpawnStdinFile;
+  try {
+    stdinFile = spawnStdinFile(script);
+  } catch (err) {
+    return failureResult(startedAt, `failed to stage remote script stdin: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = spawn(plan.command, plan.args, {
+      env: transportEnv(opts),
+      detached: true,
+      stdio: [stdinFile.fd, "pipe", "pipe"],
+    });
+  } catch (err) {
+    cleanupSpawnStdinFile(stdinFile);
+    return failureResult(startedAt, err instanceof Error ? err.message : String(err));
+  }
+  closeSpawnStdinFile(stdinFile);
   notifySpawn(child.pid, opts);
-
-  child.stdin?.on("error", (err: NodeJS.ErrnoException) => {
-    if (err.code !== "EPIPE") error = err.message;
-  });
-  child.stdin?.end(script);
 
   const abortHandler = (): void => {
     error = "cancelled";
@@ -1176,6 +1241,7 @@ async function executeRemoteSpec(
     if (timer) clearTimeout(timer);
     if (idleTimer) clearTimeout(idleTimer);
     opts.signal?.removeEventListener("abort", abortHandler);
+    cleanupSpawnStdinFile(stdinFile);
   }
 
   const fields: ResultFields = { exitCode, stdout: stdout.value(), stderr: stderr.value(), pid: child.pid };
@@ -1272,21 +1338,27 @@ export async function executeTarget(
     Object.assign(env, allowlistEnv(spec.allowlist, spec.sessionContract));
   }
 
-  const child = spawn(spec.command, spec.args, {
-    cwd: spec.cwd,
-    env,
-    shell: spec.shell ?? false,
-    detached: true,
-    stdio: spec.stdin === undefined ? ["ignore", "pipe", "pipe"] : ["pipe", "pipe", "pipe"],
-  });
-  notifySpawn(child.pid, opts);
-
-  if (spec.stdin !== undefined && child.stdin) {
-    child.stdin.on("error", (err: NodeJS.ErrnoException) => {
-      if (err.code !== "EPIPE") error = err.message;
-    });
-    child.stdin.end(spec.stdin);
+  let stdinFile: SpawnStdinFile | undefined;
+  try {
+    stdinFile = spec.stdin === undefined ? undefined : spawnStdinFile(spec.stdin);
+  } catch (err) {
+    return failureResult(startedAt, `failed to stage process stdin: ${err instanceof Error ? err.message : String(err)}`);
   }
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = spawn(spec.command, spec.args, {
+      cwd: spec.cwd,
+      env,
+      shell: spec.shell ?? false,
+      detached: true,
+      stdio: [stdinFile?.fd ?? "ignore", "pipe", "pipe"],
+    });
+  } catch (err) {
+    cleanupSpawnStdinFile(stdinFile);
+    return failureResult(startedAt, err instanceof Error ? err.message : String(err));
+  }
+  closeSpawnStdinFile(stdinFile);
+  notifySpawn(child.pid, opts);
 
   const abortHandler = (): void => {
     error = "cancelled";
@@ -1338,6 +1410,7 @@ export async function executeTarget(
     if (timer) clearTimeout(timer);
     if (idleTimer) clearTimeout(idleTimer);
     opts.signal?.removeEventListener("abort", abortHandler);
+    cleanupSpawnStdinFile(stdinFile);
   }
 
   const fields: ResultFields = { exitCode, stdout: stdout.value(), stderr: stderr.value(), pid: child.pid };
