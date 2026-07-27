@@ -8,6 +8,7 @@ import {
   BROWSERPLAN_APP_ID,
   BROWSERPLAN_INSTALL_UPDATE_COMMAND_PREFIX,
   BROWSERPLAN_INSTALL_UPDATE_COMMAND_TEMPLATE,
+  BROWSERPLAN_INSTALL_VERSION_PATTERN,
   BROWSERPLAN_LEGACY_INSTALL_UPDATE_COMMAND_TEMPLATE,
   BROWSERPLAN_PACKAGE_NAME,
   BROWSERPLAN_PINNED_VERSION,
@@ -150,6 +151,19 @@ describe("BrowserPlan fleet contract", () => {
       expect(withTemplate("bun install -g @hasna/open-chrome@latest --cwd /tmp/x")).toBe(false);
       // Rejected: an empty version, which would resolve to whatever npm defaults to.
       expect(withTemplate("bun install -g @hasna/open-chrome@")).toBe(false);
+      // Rejected: semver RANGES. A range makes the installed version unpredictable, which
+      // defeats both the pin and reconcile's `<bin> --version` assertion. `0*` is also a
+      // shell glob whose expansion depends on the caller's working directory.
+      for (const range of ["0", "1.2", "0.x", "0*", "^1.0.0", "~1.0.0", "x", "X", "*"]) {
+        expect(withTemplate(`bun install -g @hasna/open-chrome@${range}`)).toBe(false);
+      }
+      // Accepted: exact semver with prerelease/build metadata, and multi-character tags.
+      expect(withTemplate("bun install -g @hasna/open-chrome@1.0.0-beta.1")).toBe(true);
+      expect(withTemplate("bun install -g @hasna/open-chrome@next")).toBe(true);
+      // The pattern must stay unflagged: a shared /g regex would advance lastIndex and
+      // return alternating results for successive machines in one payload.
+      expect(BROWSERPLAN_INSTALL_VERSION_PATTERN.flags).toBe("");
+      expect(BROWSERPLAN_INSTALL_VERSION_PATTERN.global).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

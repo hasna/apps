@@ -40,26 +40,45 @@ export const BROWSERPLAN_SECRETS_OWNER = "open-identities/open-attachments/open-
  */
 export const BROWSERPLAN_INSTALL_UPDATE_COMMAND_PREFIX = `bun install -g ${BROWSERPLAN_PACKAGE_NAME}@`;
 /**
- * What may follow that prefix: a bare npm version or dist-tag and nothing else. The
- * pattern is end-anchored so no shell suffix can be appended after a valid install
- * (`&& rm -rf /`, `; curl … | sh`, `; cd d && git pull`), and it rejects an empty
- * version. It deliberately allows the npm tag charset, so a hostile-looking but
- * legitimate tag such as `latest-evil` is accepted — the check constrains command
- * *shape*, not registry trust.
+ * What may follow that prefix: either an EXACT semver, or a dist-tag of two or more
+ * characters. Nothing else.
+ *
+ * End-anchored, so no shell suffix can be appended after an otherwise valid install
+ * (`&& rm -rf /`, `; curl … | sh`, `; cd d && git pull`, `` `id` ``, `$(id)`), and an
+ * empty version is rejected. Semver *ranges* are rejected too — `0`, `1.2`, `0.x`, `0*`,
+ * `^1.0.0`, `~1.0.0` and the bare wildcards `x`/`X` — because a range makes the installed
+ * version unpredictable, which defeats both the pin below and the `<bin> --version`
+ * assertion src/commands/reconcile.ts uses to verify a rollout. `0*` in particular is a
+ * shell glob whose expansion depends on the caller's working directory.
+ *
+ * MUST STAY UNFLAGGED. It is a shared module-level object, so adding `/g` (or `/y`) would
+ * make `.test()` advance `lastIndex` between calls and return alternating results for
+ * successive machines in one payload.
+ *
+ * This constrains command *shape*, not registry trust: a legitimate but hostile-looking
+ * dist-tag such as `latest-evil` is accepted.
  */
-export const BROWSERPLAN_INSTALL_VERSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._^~*-]*$/;
+export const BROWSERPLAN_INSTALL_VERSION_PATTERN =
+  /^(?:\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?|[A-Za-z][0-9A-Za-z._-]+)$/;
 /**
  * Exact version the install hook pins.
  *
- * DELIBERATELY PINNED, NOT `latest` — do not "improve" this to a floating tag. Once the
- * BrowserPlan source repository is retired, npm is the *sole* artifact for this package:
- * one version, shipping raw TypeScript with no build output, with no maintainer watching
- * the name. A floating `latest` would let a hijacked or mistakenly-moved dist-tag deliver
- * arbitrary code to every fleet machine through a hook whose command is `bun install -g`.
- * The usual argument for a floating tag — that a pin cannot deliver a future fix — costs
- * nothing here: republishing requires someone to hold the source mirror deliberately, and
- * that same change can bump this constant. A pin is also the only form
- * src/commands/reconcile.ts can verify.
+ * DELIBERATELY PINNED, NOT `latest` — do not "improve" this to a floating tag.
+ *
+ * The decisive reason is AUDITABILITY, not supply-chain risk. The published metadata for
+ * this package carries `gitHead: f49b5c42…`, which resolves to nothing once the BrowserPlan
+ * source repository is retired. If a floating tag ever moved after that point there would
+ * be no diff, no history and no provenance to inspect — and this hook installs it silently.
+ * A pin also gives src/commands/reconcile.ts something to verify: it asserts
+ * `<bin> --version` equals the target, which only works against an exact version.
+ *
+ * Secondary: npm becomes the sole artifact for the package (one version, raw TypeScript,
+ * no build output, no maintainer watching the name), so a moved dist-tag would reach every
+ * fleet machine through a `bun install -g`. The usual argument for a floating tag — that a
+ * pin cannot deliver a future fix — costs nothing here, because republishing requires
+ * someone to deliberately hold the source mirror, and that same change can bump this
+ * constant. `dist-tags` is `{"latest":"0.1.0"}` today, so the pin currently costs nothing
+ * at all.
  */
 export const BROWSERPLAN_PINNED_VERSION = "0.1.0";
 /**

