@@ -19,6 +19,32 @@ import { fileURLToPath } from "node:url";
 const FORBIDDEN_PACKAGE = "@hasna/cloud";
 
 /**
+ * The shipped tree includes the bundled output in `bin/`, `dist/` and
+ * `dashboard/dist/` alongside the vendored `connectors/` tree, so a full sweep
+ * covers ~14.5k files and ~71MB. Every specifier the regex can match contains
+ * the package name verbatim, so searching the raw bytes first is an exact
+ * prefilter rather than an approximation: only files that mention the package
+ * at all need decoding. Measured warm, that halves the sweep (~250ms against
+ * ~300-380ms); the point is to stop paying to decode 71MB of mostly generated
+ * bundles on a run where the answer is almost always "no match anywhere".
+ */
+const FORBIDDEN_PACKAGE_BYTES = Buffer.from(FORBIDDEN_PACKAGE);
+
+function mentionsForbiddenPackage(file: string): boolean {
+  return readFileSync(file).includes(FORBIDDEN_PACKAGE_BYTES);
+}
+
+/**
+ * A whole-tree filesystem sweep is not a unit test's worth of work, and its
+ * cost is dominated by how much of that 71MB is still in the page cache. Warm
+ * and idle it lands around 250ms, but inside a full-suite run on a constrained
+ * runner it was observed at 7169ms — over the 5s default, which is how this
+ * file started failing CI intermittently. Budget it explicitly so a cold cache
+ * or a busy runner reports a real breach instead of a timeout.
+ */
+const TREE_SWEEP_TIMEOUT_MS = 60_000;
+
+/**
  * Matches the package as a module specifier in every import form —
  * `from "x"`, `import "x"`, `import("x")`, `require("x")` — including deep
  * imports like `x/dist/adapter.js`. Matching specifiers rather than bare
@@ -98,15 +124,16 @@ describe("no_cloud_guard boundary", () => {
     });
 
     expect(offenders).toEqual([]);
-  });
+  }, TREE_SWEEP_TIMEOUT_MS);
 
   test("no shipped source file imports the retired package", () => {
     const offenders = collect((name) => SOURCE_EXTENSIONS.test(name))
+      .filter(mentionsForbiddenPackage)
       .filter((file) => FORBIDDEN_IMPORT.test(readFileSync(file, "utf8")))
       .map((file) => relative(repoRoot, file));
 
     expect(offenders).toEqual([]);
-  });
+  }, TREE_SWEEP_TIMEOUT_MS);
 
   test("the lockfile does not resolve the retired package", () => {
     const lockfile = join(repoRoot, "bun.lock");
