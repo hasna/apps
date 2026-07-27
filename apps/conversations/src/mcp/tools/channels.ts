@@ -12,7 +12,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { getStore } from "../../lib/store/index.js";
-import { resolveIdentity } from "../../lib/identity.js";
+import { identityFor } from "../identity.js";
 import { assertNoSensitiveContent, redactSensitiveText } from "../../lib/content-safety.js";
 import { compactQueriedMessages, compactWindowedChannels, jsonText, resolveMcpWindow } from "../compact.js";
 
@@ -24,6 +24,8 @@ function toolError(error: unknown, fallback: string) {
 }
 
 export function registerChannelTools(server: McpServer): void {
+  // Bound to this connection: see ../identity.ts.
+  const resolveIdentity = identityFor(server);
 
   server.registerTool("create_channel", {
     description: "Create a channel and auto-join.",

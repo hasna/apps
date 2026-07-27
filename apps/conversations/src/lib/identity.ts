@@ -2,8 +2,19 @@ import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
 import { AGENT_NAMES } from "./names.js";
 import { getDataDir } from "./db.js";
+import { normalizeAgentName } from "./presence.js";
 
-const AGENT_ID_FILE = join(getDataDir(), "agent-id");
+/**
+ * Path of the installation-wide identity file.
+ *
+ * Resolved per call rather than once at import: the MCP server is a daemon that
+ * can outlive any assumption made at load time, and a module-level constant
+ * also made this module impossible to isolate in tests (they ended up unlinking
+ * the developer's REAL identity file).
+ */
+function agentIdFile(): string {
+  return join(getDataDir(), "agent-id");
+}
 
 let cachedAutoName: string | null = null;
 
@@ -23,6 +34,36 @@ function isNameTaken(name: string): boolean {
 }
 
 /**
+ * Read the persisted identity straight from disk, bypassing the cache.
+ *
+ * Callers deciding whether to *rewrite* the identity file must use this, not
+ * getAutoName(): in a long-lived daemon the cache can be days stale, and acting
+ * on a stale cache is how one session overwrites another session's identity.
+ */
+export function readPersistedIdentity(): string | null {
+  try {
+    const name = readFileSync(agentIdFile(), "utf-8").trim();
+    return name || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Write the identity file. Returns whether the write actually succeeded. */
+function persistIdentity(name: string): boolean {
+  try {
+    mkdirSync(dirname(agentIdFile()), { recursive: true });
+    writeFileSync(agentIdFile(), name + "\n", "utf-8");
+    return true;
+  } catch {
+    // Non-fatal: the name still works for this process. Operators also pin this
+    // file read-only on purpose, so a failed write is an expected outcome and
+    // callers must report it rather than claim success.
+    return false;
+  }
+}
+
+/**
  * Get or create a persistent auto-generated agent name.
  * Stored in ~/.hasna/conversations/agent-id so the same installation
  * always gets the same name. Checks the DB to avoid duplicates.
@@ -30,15 +71,10 @@ function isNameTaken(name: string): boolean {
 export function getAutoName(): string {
   if (cachedAutoName) return cachedAutoName;
 
-  // Try to read existing name
-  try {
-    const name = readFileSync(AGENT_ID_FILE, "utf-8").trim();
-    if (name) {
-      cachedAutoName = name;
-      return name;
-    }
-  } catch {
-    // File doesn't exist yet
+  const persisted = readPersistedIdentity();
+  if (persisted) {
+    cachedAutoName = persisted;
+    return persisted;
   }
 
   // Pick a random name that isn't already taken
@@ -52,15 +88,7 @@ export function getAutoName(): string {
   }
 
   cachedAutoName = name;
-
-  // Persist it
-  try {
-    mkdirSync(dirname(AGENT_ID_FILE), { recursive: true });
-    writeFileSync(AGENT_ID_FILE, name + "\n", "utf-8");
-  } catch {
-    // Non-fatal: name works for this session even if we can't persist
-  }
-
+  persistIdentity(name);
   return name;
 }
 
@@ -91,16 +119,31 @@ export function requireIdentity(explicit?: string): string {
 }
 
 /**
- * Update the cached auto name after a successful rename.
+ * Whether a rename should carry the installation's identity along with it.
+ *
+ * True only when the agent being renamed IS the persisted identity — otherwise
+ * the file would be left naming an agent that no longer exists, or, worse, we
+ * would hijack an identity belonging to another session on the same machine.
  */
-export function updateCachedAutoName(newName: string): void {
+export function isSelfRename(oldName: string, localIdentity: string | null): boolean {
+  if (!localIdentity) return false;
+  return normalizeAgentName(oldName) === normalizeAgentName(localIdentity);
+}
+
+/**
+ * Adopt `newName` as this installation's identity.
+ *
+ * Returns false when the identity file could not be written (e.g. pinned
+ * read-only). On failure the in-memory name is left ALONE: adoption is
+ * all-or-nothing. Moving the cache first made resolveIdentity() report the name
+ * that was not adopted, so callers reporting the failure printed the exact
+ * opposite of the truth — and in the long-lived MCP daemon that wrong name
+ * stuck for the process's lifetime, with no path back to the file's value.
+ */
+export function updateCachedAutoName(newName: string): boolean {
+  if (!persistIdentity(newName)) return false;
   cachedAutoName = newName;
-  try {
-    mkdirSync(dirname(AGENT_ID_FILE), { recursive: true });
-    writeFileSync(AGENT_ID_FILE, newName + "\n", "utf-8");
-  } catch {
-    // Non-fatal
-  }
+  return true;
 }
 
 /**

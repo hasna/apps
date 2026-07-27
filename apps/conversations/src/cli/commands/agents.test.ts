@@ -1,5 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import { buildWhoamiPayload } from "./agents.js";
+import { isSelfRename } from "../../lib/identity.js";
+
+describe("isSelfRename", () => {
+  test("true when renaming the locally persisted identity", () => {
+    expect(isSelfRename("augustus", "augustus")).toBe(true);
+  });
+
+  test("normalizes case and surrounding whitespace like the store does", () => {
+    expect(isSelfRename("  Augustus  ", "augustus")).toBe(true);
+  });
+
+  test("false when renaming some other agent", () => {
+    expect(isSelfRename("nova-owl", "augustus")).toBe(false);
+  });
+});
 
 describe("buildWhoamiPayload", () => {
   test("returns offline payload when presence is missing", () => {

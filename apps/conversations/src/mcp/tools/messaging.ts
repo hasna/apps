@@ -10,7 +10,7 @@ import { z } from "zod";
 import { getStore } from "../../lib/store/index.js";
 // Reads/writes route through getStore(): ApiStore when HASNA_CONVERSATIONS_API_URL
 // + _API_KEY are set (self_hosted/cloud), else LocalStore.
-import { resolveIdentity } from "../../lib/identity.js";
+import { identityFor } from "../identity.js";
 import { compactQueriedMessages, compactQueriedSearchMessages, compactWindowedSessions, jsonText, resolveMcpWindow } from "../compact.js";
 
 function toolError(error: unknown, fallback: string) {
@@ -24,6 +24,8 @@ export function registerMessagingTools(
   server: McpServer,
   resolveProjectId: (explicitProjectId: string | undefined, agentId: string) => Promise<string | undefined>,
 ): void {
+  // Bound to this connection: see ../identity.ts.
+  const resolveIdentity = identityFor(server);
 
   // Per-(sender, session) rate limiter for session-targeted injections
   const _sessionInjectRate = new Map<string, { count: number; start: number }>();

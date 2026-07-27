@@ -6,8 +6,10 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { getStore } from "../../lib/store/index.js";
-import { resolveIdentity, updateCachedAutoName } from "../../lib/identity.js";
-import { setSessionAgent, setClaudeSessionId } from "../channel.js";
+import { updateCachedAutoName, readPersistedIdentity, isSelfRename } from "../../lib/identity.js";
+import { identityFor } from "../identity.js";
+import { normalizeAgentName } from "../../lib/presence.js";
+import { getSessionAgent, setSessionAgent, setClaudeSessionId } from "../channel.js";
 import { compactQueriedMessages, compactWindowedAgents, jsonText, resolveMcpWindow } from "../compact.js";
 
 export function registerAgentTools(
@@ -15,6 +17,8 @@ export function registerAgentTools(
   agentFocus: Map<string, { project_id: string | null }>,
   getAgentFocus: (agentId: string) => Promise<string | null>,
 ): void {
+  // Bound to this connection: see ../identity.ts.
+  const resolveIdentity = identityFor(server);
 
   server.registerTool("register_agent", {
     description: "Register an agent. Just provide the name — session_id is auto-detected.",
@@ -35,8 +39,22 @@ export function registerAgentTools(
     const session_id = manualSid || claudeSid || `${name}-${Date.now()}`;
     try {
       const result = await getStore().registerAgent(name, session_id, role, project_id);
-      setSessionAgent(name); // Bridge now knows who we are
-      if (claudeSid) setClaudeSessionId(claudeSid); // Track for channel bridge polling
+      // Normalized, because that is the form presence stores: implicit
+      // attribution must name the row that exists, not the caller's casing.
+      setSessionAgent(server, normalizeAgentName(name)); // Bridge and implicit attribution now know who we are
+      if (claudeSid) setClaudeSessionId(server, claudeSid); // Track for channel bridge polling
+
+      // Seed-if-absent, NOT last-writer-wins. A box with no identity of its own
+      // adopts the first agent that deliberately registers, so this connection,
+      // the CLI, and `conversations-hook` all resolve to the same name. Without
+      // this, a fresh install splits in two: the MCP session speaks as `name`
+      // while every CLI/hook process falls through to getAutoName(), which
+      // invents a pool name, persists it, and then polls blockers addressed to
+      // an agent nobody is. An identity that already exists is left alone —
+      // overwriting it is the machine-identity hijack this file stopped doing.
+      // A failed write leaves both the file and the cache untouched (see
+      // updateCachedAutoName), so the next register_agent simply tries again.
+      if (readPersistedIdentity() === null) updateCachedAutoName(normalizeAgentName(name));
       return {
         content: [{ type: "text", text: JSON.stringify(result) }],
       };
@@ -63,7 +81,7 @@ export function registerAgentTools(
     const { from: fromParam, name: nameParam, agent_name, status } = args;
     const agent = resolveIdentity(fromParam || nameParam || agent_name);
     await getStore().heartbeat(agent, status);
-    setSessionAgent(agent); // Bridge now knows who we are
+    setSessionAgent(server, normalizeAgentName(agent)); // Bridge and implicit attribution now know who we are
 
     return {
       content: [{ type: "text", text: JSON.stringify({ agent, status: status || "online", heartbeat: true }) }],
@@ -138,13 +156,33 @@ export function registerAgentTools(
         };
       }
 
-      // Update cached identity so subsequent calls resolve to the new name
-      if (!fromParam) {
-        updateCachedAutoName(newName);
+      // Move this installation's identity only when we renamed the installation's
+      // OWN identity. The previous check ("no `from` was passed") was wrong in the
+      // other direction: it silently skipped the update whenever a caller passed an
+      // explicit `from` that WAS its own name, which is how station01 was left
+      // pinned to a discarded test name while presence said otherwise.
+      //
+      // Compare against the file, NOT getAutoName(): this server is a long-lived
+      // daemon whose cached name can be days stale, and acting on a stale cache
+      // would let one client overwrite another client's identity.
+      const isSelf = isSelfRename(oldName, readPersistedIdentity());
+      const identityAdopted = isSelf ? updateCachedAutoName(normalizeAgentName(newName)) : false;
+
+      // Independently of the machine identity: if this connection was speaking
+      // as the renamed agent, its implicit attribution has to follow, or every
+      // later tool call stamps a presence row that no longer exists.
+      if (isSelfRename(oldName, getSessionAgent(server))) {
+        setSessionAgent(server, normalizeAgentName(newName));
       }
 
       return {
-        content: [{ type: "text", text: JSON.stringify({ old_name: oldName, new_name: newName, renamed: true }) }],
+        content: [{ type: "text", text: JSON.stringify({
+          old_name: oldName,
+          new_name: newName,
+          renamed: true,
+          identity_adopted: identityAdopted,
+          identity_write_failed: isSelf && !identityAdopted,
+        }) }],
       };
     } catch (e: any) {
       return {

@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Fixed
+- **MCP heartbeats no longer hijack the machine identity, and the CLI now persists it.** `register_agent`/`heartbeat` used to rewrite `~/.hasna/conversations/agent-id` on every call. The MCP server is one long-lived daemon under a single HOME, so whichever agent heartbeated last owned the whole box — last writer wins, no audit trail. They now record the caller *per MCP connection* only. In exchange, the identity file gets two deliberate writers: `conversations agents register <name> --identity` (opt-in, reports write failures instead of claiming success) and `conversations agents rename <old> <new>` (only when the renamed agent *is* this installation's identity, decided from the file on disk rather than a possibly days-stale in-process cache).
+- **A box with no identity file adopts the first agent that registers over MCP.** Seed-if-absent, never last-writer-wins: an identity that already exists is left alone. Without this, a fresh install split in two — the MCP session spoke as the registered agent while every CLI process and `conversations-hook` fell through to the auto-name generator, invented a pool name, persisted it as the machine identity, and then polled blocking messages addressed to an agent nobody was.
+- **Per-connection MCP session state.** The "agent that registered on this connection" rung is keyed by the MCP server instance instead of a module-level global. On the default Streamable HTTP transport (one process, many agents, a fresh stateless server per request) a global meant one client's `register_agent` silently became the implicit author for every other client on the box — one agent's unattributed channel posts stored under another agent's name. Covered by a two-client test over the real HTTP transport.
+
+### Migration
+- Nothing changes for agents that pass `--from`/`from` or export `CONVERSATIONS_AGENT_ID`. A machine that was relying on MCP heartbeats to set its name must now claim it once: `conversations agents register <name> --identity`. Check with `conversations whoami --json`. See "Agent Identity" in the README.
+
 ## [0.5.9] - 2026-07-24
 
 ### Added

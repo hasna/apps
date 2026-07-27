@@ -6,6 +6,7 @@ import { closeDb, getDb } from "../lib/db.js";
 import { sendMessage, readMessages } from "../lib/messages.js";
 import { createChannel } from "../lib/channels.js";
 import { resolveIdentity } from "../lib/identity.js";
+import { setSessionAgent } from "./channel.js";
 import { heartbeat } from "../lib/presence.js";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
@@ -555,7 +556,21 @@ describe("heartbeat from parameter", () => {
     expect(data.heartbeat).toBe(true);
   });
 
-  test("falls back to auto-generated name when from is omitted", async () => {
+  test("falls back to this MCP session's agent when from is omitted", async () => {
+    // The agent that last registered or heartbeated on this connection is the
+    // implicit author. Falling through to the machine identity instead would
+    // stamp every client on this daemon with the same name.
+    setSessionAgent(server, "heartbeat-session-agent");
+    const result = await client.callTool({
+      name: "heartbeat",
+      arguments: {},
+    });
+    const data = parseResult(result as any) as any;
+    expect(data.agent).toBe("heartbeat-session-agent");
+  });
+
+  test("falls back to the machine identity when no agent has registered on this connection", async () => {
+    setSessionAgent(server, "");
     const autoName = resolveIdentity();
     const result = await client.callTool({
       name: "heartbeat",
@@ -563,6 +578,10 @@ describe("heartbeat from parameter", () => {
     });
     const data = parseResult(result as any) as any;
     expect(data.agent).toBe(autoName);
+
+    // That heartbeat just pinned the machine name as this session's agent;
+    // clear it so later tests are not attributed to it.
+    setSessionAgent(server, "");
   });
 
   test("includes custom status", async () => {
