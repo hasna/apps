@@ -163,9 +163,20 @@ function main() {
     stdio: 'inherit',
   });
   if ((drift.status ?? 1) !== 0) {
+    // The bun version is printed because it is a real cause of this failure and the least
+    // guessable one. Measured: the same source at this commit builds 4 bytes-differing lines
+    // under bun 1.3.13 versus 1.3.14 (1.3.13 keeps empty `else {}` blocks that 1.3.14's
+    // dead-code elimination collapses), across bin/knowledge-mcp.js and dist/index.js. So a
+    // developer on a bun other than CI's pin sees this message with nothing stale at all — and
+    // "commit it" would then be the WRONG action: it makes CI red instead. Check the version
+    // against .github/workflows/ci.yml before committing a rebuild.
     console.error(
       'verify-generated-artifacts: the committed generated artifacts are not what the current source builds.\n' +
-      'Run `bun run build` and commit the result. If the only difference is toolchain churn, that is still drift — commit it.'
+      `This bun is ${process.versions?.bun ?? 'unknown'}. The byte comparison is bun-version-sensitive, so FIRST check that this\n` +
+      'matches the `bun-version` pinned in .github/workflows/ci.yml. If it does not, fix the version — do NOT\n' +
+      'commit a rebuild, which would only move the failure into CI.\n' +
+      'If the version already matches, run `bun run build` and commit the result. Genuine toolchain churn at the\n' +
+      'pinned version is still drift — commit it.'
     );
     process.exit(drift.status ?? 1);
   }

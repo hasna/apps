@@ -130,11 +130,44 @@ describe('generated artifact verification', () => {
     expect(workflow).not.toContain('bun scripts/verify-generated-artifacts.mjs');
     expect(workflow).toContain('bun run verify:generated');
   });
+
+  // Regression test for a defect found in adversarial review of this PR. `Verify generated
+  // artifacts` rebuilds bin/ and dist/ and compares BYTE-FOR-BYTE, so it passes only when CI's
+  // bun equals the bun that built the committed bundles. Measured at this commit: the committed
+  // bundles are bun 1.3.14 output, and rebuilding under bun 1.3.13 drifts by 4 lines across
+  // bin/knowledge-mcp.js and dist/index.js (1.3.13 keeps the empty `else {}` blocks 1.3.14's
+  // dead-code elimination collapses). The version cannot be asserted against the bundles from
+  // inside the suite without running a build, which is the trade documented at the bottom of
+  // this file — but the two jobs pinning DIFFERENT versions is checkable here, and pin skew
+  // would make the gate pass in one job and fail in the other for reasons unrelated to source.
+  test('every CI job pins the same bun version, so the byte comparison has one answer', () => {
+    const workflow = readFileSync(join(repoRoot, '.github', 'workflows', 'ci.yml'), 'utf8');
+    const pins = [...workflow.matchAll(/^\s*bun-version:\s*(\S+)\s*$/gm)].map((match) => match[1]);
+    // Positive control: an empty match list would make the uniqueness assertion below vacuous.
+    expect(pins.length).toBeGreaterThan(1);
+    expect(new Set(pins).size, `CI pins more than one bun version: ${pins.join(', ')}`).toBe(1);
+    // And it is pinned to an exact patch, not a floating range: `latest` or `1.3` would let the
+    // minifier change under the gate without any commit in this repo.
+    expect(pins[0]).toMatch(/^\d+\.\d+\.\d+$/);
+  });
 });
 
 // DELIBERATELY NOT TESTED HERE: end-to-end behaviour of the script itself — that it exits 1 on a
 // planted bundle divergence and 1 on a dirty-before-rebuild tree. Both would require running
 // `bun run build` inside the suite, which overwrites bin/ and dist/ in the working tree while
 // other test files are running. A guard that corrupts the tree it guards is a worse trade than
-// the coverage it buys. The pieces the script composes are unit-tested above; the end-to-end
-// path is exercised by CI on every PR, which is where a real divergence shows up.
+// the coverage it buys. The pieces the script composes are unit-tested above.
+//
+// AND THE COMPENSATING CONTROL IS NOT YET OPERATIVE — corrected in adversarial review, because
+// an earlier version of this comment claimed "the end-to-end path is exercised by CI on every
+// PR, which is where a real divergence shows up." It is not. `Verify generated artifacts` runs
+// AFTER `Run tests` in ci.yml with no `if: always()`, so a failing test suite skips it. Measured
+// on this PR's own CI run 30310387905, job `test (ubuntu-latest, bun)`: step 6 `Run tests`
+// failure, step 7 `Verify generated artifacts` **skipped**. The pre-existing
+// `context pack and proposal context commands return bounded agent JSON` failure is red on main
+// too, so the step is skipped on every run today — which is exactly the masking this PR's own
+// description identifies as the reason the stale bundle survived in the first place. Citing a
+// check that does not execute is the defect this PR exists to fix, so it must not be this file's
+// justification. Until the suite is green the end-to-end path is exercised only by hand.
+// Tracked: reorder the step or add `if: always()` so the gate cannot be skipped by an unrelated
+// red test.
