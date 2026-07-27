@@ -822,10 +822,13 @@ describe('knowledge cli', () => {
     expect(err).not.toContain('not in [iapp,integrations,architecture]');
   });
 
-  // `list -t` is the read-side twin of the untag defect above, and it fails worse than an
-  // empty result: split-only filtering returns a DIFFERENT item that carries the three
-  // names separately, at total: 1 and exit 0, so the command used to FIND remaining glued
-  // items silently reports a confident wrong answer instead.
+  // `list -t` is the read-side twin of the untag defect above. Split-only filtering never
+  // matches the glued item; what it returns instead depends on the corpus. The fixture below
+  // deliberately supplies the worse case — `k_control` carries the three names separately, so
+  // split-only answers total: 1 with a DIFFERENT item at exit 0, and the command used to FIND
+  // remaining glued items reports a confident wrong answer rather than an empty one. Without
+  // such a control item the same defect merely returns total: 0 at exit 0. Both are silent;
+  // the swap is the one a fixture has to construct, so this test constructs it.
   test('list -t matches a tag value whole before splitting, so glued items stay discoverable', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-list-glued-'));
     const store = join(dir, 'db.json');

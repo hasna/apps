@@ -1811,10 +1811,13 @@ async function run(argv: string[]): Promise<void> {
     // the split names" behaviour true, and a test pins it. `list` only reads, so matching both
     // shapes destroys nothing, while narrowing to one would hide items. An item damaged by
     // the multi-tag defect carries one literal `"a,b,c"` tag that none of the split names
-    // equals, so a split-only filter does not merely fail to find it — it returns a
-    // DIFFERENT item that carries the three names separately, at total: 1 and exit 0, with
-    // nothing to tell the operator the answer changed. The union lets one query find both
-    // shapes, which is the one job `list -t` is needed for here.
+    // equals, so a split-only filter never matches it — and what it returns INSTEAD depends
+    // on the rest of the corpus, silently either way. Measured with the whole-value branch
+    // removed from the predicate below: total: 0 at exit 0 when the glued item is the only
+    // candidate, and total: 1 at exit 0 naming a DIFFERENT item once some other item carries
+    // the three names separately. Which one you get is a property of the corpus, not of the
+    // query, so neither is usable as a signal. The union lets one query find both shapes,
+    // which is the one job `list -t` is needed for here.
     //
     // So do not "align" the two: making this an exclusive match would break `list`, and
     // dropping `untag`'s `continue` would break its re-run contract.

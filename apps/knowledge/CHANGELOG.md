@@ -4,7 +4,8 @@
 
 Wording-only corrections to claims landed by #34/#35. No behaviour change: the
 only non-comment source edit is one added `list --help` line, plus one added test
-assertion; the removal semantics, exit codes and messages are untouched.
+case (six `expect()` calls, 860 -> 866 in `tests/cli.test.ts`); the removal
+semantics, exit codes and messages are untouched.
 
 - The `untag` whole-value-versus-split exclusivity is **per raw `-t` value**, not
   "one shape per run". Four sites said per run (`README.md` twice, `src/cli.ts`
@@ -27,6 +28,16 @@ assertion; the removal semantics, exit codes and messages are untouched.
 - Documented an undocumented flag precedence on `list`: when both `--archived` and
   `--include-archived` are passed, `--archived` wins (archived items only) in
   either order. Documented, not changed.
+- Made the consequence of a split-only `list -t` conditional instead of universal,
+  at three sites (`README.md`, `src/cli.ts`, `tests/cli.test.ts`). All three said
+  the defect "returns a DIFFERENT item ... at `total: 1` and exit 0" outright. It
+  only does that when the corpus *also* holds an item carrying the three names
+  separately; with the glued item alone it returns `total: 0` at exit 0. Measured
+  by removing the whole-value branch from the `list` predicate and running both
+  corpora: `total: 0` / no ids with the glued item alone, `total: 1` / the other
+  item's id once a split-shape item exists. Both outcomes are silent, so the point
+  stands — but which one occurs is a property of the corpus, not of the query, and
+  a swap has to be constructed rather than assumed.
 - Corrected the `verify:generated` citation under "inventory paths block fix".
   `scripts/verify-generated-artifacts.mjs` only (a) `git diff --exit-code`s
   `bin/knowledge-mcp.js` and `dist`, and (b) greps four generated files for two

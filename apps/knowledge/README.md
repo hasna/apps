@@ -328,10 +328,14 @@ item carrying both shapes in a single run. (Repeating `-t` on `list` narrows ins
 the `-t` row above.) `list` only reads, so matching both shapes destroys
 nothing, while matching only one would hide items from the very query used to find them.
 Items written before the multi-tag parse fix can carry a single literal `"a,b,c"` tag, which
-none of the split names equals, so a split-only filter does not merely miss the damaged
-item: it answers with a *different* item that carries the three names separately, at
-`total: 1` and exit 0, giving the operator no signal that the result changed. The union
-therefore finds both shapes in one query:
+none of the split names equals, so a split-only filter never matches the damaged item — and
+what it returns *instead* depends on the rest of the corpus, silently either way. With
+nothing else matching it answers `total: 0` at exit 0, an empty result for an item that is
+demonstrably there. If some **other** item carries the three names separately, it answers
+with *that* item at `total: 1` and exit 0 — a different item from the one asked for, and
+nothing in the output says the answer changed. Which of the two you get is a property of the
+corpus, not of the query, so neither can be relied on as a signal. The union therefore finds
+both shapes in one query:
 
 ```bash
 # returns items tagged with the literal "a,b,c" AND items tagged a + b + c separately
