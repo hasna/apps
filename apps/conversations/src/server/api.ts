@@ -887,11 +887,26 @@ async function handleV1(
     assertNoSensitiveOptionalText(projectId, "Message project");
     assertNoSensitiveContent(sessionId, "Message session");
     const blocking = body.blocking === true;
+    // Thread linkage. `messages.reply_to` is a bare BIGINT with no FK
+    // (pg-migrations.ts:84), so a bogus parent would insert a dangling pointer
+    // and read back as an unthreaded post. Validate it here instead: a reply
+    // aimed at a message that does not exist is an error, not a silent
+    // top-level post.
+    let replyTo: number | null = null;
+    if (body.reply_to !== undefined && body.reply_to !== null) {
+      const n = Number(body.reply_to);
+      if (!Number.isInteger(n) || n <= 0) {
+        return json({ error: "reply_to must be a positive integer message id" }, 400);
+      }
+      const parent = await client.get<{ id: number }>("SELECT id FROM messages WHERE id = $1", [n]);
+      if (!parent) return json({ error: `reply_to message #${n} not found` }, 400);
+      replyTo = n;
+    }
     const row = await client.get<{ id: number }>(
-      `INSERT INTO messages (session_id, from_agent, to_agent, channel, project_id, content, priority, blocking)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-       RETURNING id, uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, blocking, created_at`,
-      [sessionId, from, toAgent, channelName ?? null, projectId ?? null, content, priority, blocking],
+      `INSERT INTO messages (session_id, from_agent, to_agent, channel, project_id, content, priority, blocking, reply_to)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       RETURNING id, uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, blocking, reply_to, created_at`,
+      [sessionId, from, toAgent, channelName ?? null, projectId ?? null, content, priority, blocking, replyTo],
     );
     // @mentions in channel messages create mention rows + notification DMs, so
     // mentions_only reads and mention counts work in cloud mode too.

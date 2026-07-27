@@ -382,9 +382,15 @@ export function registerMessagingCommands(program: Command): void {
     .option("--priority <level>", "Priority: low, normal, high, urgent", "normal")
     .option("-j, --json", "Output as JSON")
     .action(async (message, opts) => {
-      const original = await await getStore().getMessageById(opts.to);
+      // `parseInt` yields NaN for `--to not-a-number`; catch it here so the
+      // failure names the bad input instead of surfacing as "not found".
+      const parentId = opts.to;
+      if (!Number.isInteger(parentId) || parentId <= 0) {
+        emitCliError(`--to must be a positive message id (got: ${String(opts.to)}).`, opts);
+      }
+      const original = await await getStore().getMessageById(parentId);
       if (!original) {
-        emitCliError(`Message #${opts.to} not found.`, opts);
+        emitCliError(`Message #${parentId} not found.`, opts);
       }
 
       const from = resolveIdentity(opts.from).trim();
@@ -409,10 +415,29 @@ export function registerMessagingCommands(program: Command): void {
           content,
           session_id: original.session_id,
           priority: opts.priority,
+          // The whole point of `reply`: persist the parent link. Omitting this
+          // stored every reply with reply_to NULL while still printing "Reply
+          // sent", so threads could not be reconstructed from the data at all.
+          reply_to: parentId,
           channel,
         });
       } catch (error) {
         return failCommand(error, "Failed to send reply.");
+      }
+
+      // Fail closed on a write that did not thread. The success line is what
+      // concealed the original defect, so confirm the stored row actually
+      // carries the parent before claiming the reply was sent. This also
+      // catches a server image too old to persist reply_to, which would
+      // otherwise silently degrade the reply to a top-level post.
+      if (msg.reply_to !== parentId) {
+        emitCliError(
+          `Reply was stored as message #${msg.id} but its parent link did not persist ` +
+            `(expected reply_to=${parentId}, stored ${JSON.stringify(msg.reply_to)}). ` +
+            `The message is NOT threaded — check that the conversations server supports reply_to.`,
+          opts,
+          { id: msg.id, expected_reply_to: parentId, stored_reply_to: msg.reply_to ?? null },
+        );
       }
 
       if (opts.json) {

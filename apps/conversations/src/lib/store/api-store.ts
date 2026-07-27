@@ -497,6 +497,11 @@ export class ApiStore implements ConversationsStore {
       from: opts.from, to: opts.to, content: opts.content, channel: opts.channel,
       project_id: opts.project_id, session_id: opts.session_id, priority: opts.priority,
       blocking: opts.blocking === true,
+      // This is an explicit field whitelist, so anything missing here is
+      // silently dropped on the cloud path. reply_to was missing, which
+      // unthreaded every reply sent in self_hosted/cloud mode while the local
+      // SQLite path (and its tests) stayed correct.
+      reply_to: opts.reply_to ?? undefined,
     });
     return parseMessage(body.message) as never;
   };

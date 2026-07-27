@@ -82,6 +82,11 @@ function makeFakeClient() {
       if (/SELECT \* FROM messages WHERE id/i.test(sql)) {
         return messages.find((row) => row.id === (p as any[])[0]) ?? null;
       }
+      // Parent-existence probe for reply_to validation on POST /messages.
+      if (/SELECT id FROM messages WHERE id/i.test(sql)) {
+        const found = messages.find((row) => row.id === (p as any[])[0]);
+        return found ? { id: found.id } : null;
+      }
       if (/FROM channels c WHERE c\.name/i.test(sql) || /SELECT \* FROM channels WHERE name/i.test(sql) || /SELECT name, description/i.test(sql)) {
         const row = channels[(p as any[])[0]];
         return row
@@ -93,8 +98,11 @@ function makeFakeClient() {
           : null;
       }
       if (/INSERT INTO messages/i.test(sql)) {
-        const [session_id, from_agent, to_agent, channel, project_id, content, priority, blocking] = p as any[];
-        const row = { id: nextId++, uuid: `u${nextId}`, session_id, from_agent, to_agent, channel, project_id, content, priority, blocking, created_at: new Date().toISOString() };
+        // Destructured positionally, so this must track the column list in the
+        // INSERT. reply_to is last; a column missing from the statement is
+        // exactly how thread linkage got dropped on the cloud path.
+        const [session_id, from_agent, to_agent, channel, project_id, content, priority, blocking, reply_to] = p as any[];
+        const row = { id: nextId++, uuid: `u${nextId}`, session_id, from_agent, to_agent, channel, project_id, content, priority, blocking, reply_to: reply_to ?? null, created_at: new Date().toISOString() };
         messages.push(row);
         return row;
       }
@@ -209,6 +217,66 @@ describe("conversations-serve", () => {
 
     const list = await (await fetch(`${base}/v1/messages?channel=deploys`, { headers: { "x-api-key": rwKey } })).json();
     expect(list.messages.length).toBeGreaterThan(0);
+  });
+
+  // Regression cover for HC-00148, server layer. POST /v1/messages built its
+  // INSERT without a reply_to column and never read reply_to off the body, so a
+  // threaded reply came back 201 and stored as a top-level post. The local
+  // SQLite path was always correct, which is why the suite stayed green.
+  test("POST /v1/messages persists reply_to, and GET reads the parent link back", async () => {
+    await fetch(`${base}/v1/channels`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ name: "threads", created_by: "test" }),
+    });
+
+    const root = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ from: "a", to: "b", content: "root post", channel: "threads" }),
+    });
+    expect(root.status).toBe(201);
+    const rootBody = await root.json();
+    const rootId = rootBody.message.id as number;
+    // A root post must carry no parent — guards against "threads everything".
+    expect(rootBody.message.reply_to ?? null).toBeNull();
+
+    const reply = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ from: "b", to: "a", content: "threaded answer", channel: "threads", reply_to: rootId }),
+    });
+    expect(reply.status).toBe(201);
+    const replyId = (await reply.json()).message.id as number;
+
+    // READ-BACK through GET (a different handler than the POST that wrote it).
+    const got = await fetch(`${base}/v1/messages/${replyId}`, { headers: { "x-api-key": rwKey } });
+    expect(got.status).toBe(200);
+    const stored = (await got.json()).message;
+    expect(stored.id).toBe(replyId);
+    expect(stored.reply_to).toBe(rootId);
+  });
+
+  test("POST /v1/messages rejects a reply_to that names no existing message", async () => {
+    // reply_to has no FK, so an unvalidated bogus parent would insert a dangling
+    // pointer and read back as unthreaded — a success that lost the linkage.
+    const r = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ from: "a", to: "b", content: "orphan", channel: "threads", reply_to: 987654 }),
+    });
+    expect(r.status).toBe(400);
+    expect((await r.json()).error).toContain("not found");
+  });
+
+  test("POST /v1/messages rejects a non-numeric reply_to", async () => {
+    const r = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ from: "a", to: "b", content: "bad target", channel: "threads", reply_to: "not-a-number" }),
+    });
+    expect(r.status).toBe(400);
+    expect((await r.json()).error).toContain("positive integer");
   });
 
   test("POST /v1/channels links a valid project id", async () => {
