@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-07-27
+
+### Removed
+- **BREAKING:** `evals sync push`, `evals sync pull` and `evals sync status`. The
+  commands existed only to copy the local SQLite eval store into a shared Postgres
+  through a retired dependency that no longer has a maintained home, so they are
+  deleted rather than reimplemented. Local eval history in `~/.hasna/evals/evals.db`
+  is unaffected — `evals runs` and `evals compare` keep working exactly as before.
+- The retired shared-cloud runtime dependency, which nothing else in the package used.
+  `src/db/store.ts` already owns its own `bun:sqlite` connection (including
+  `PRAGMA journal_mode=WAL` and `PRAGMA foreign_keys=ON`), so no replacement was needed.
+- `sync` from the bash and zsh completion scripts.
+
+### Added
+- `src/no-cloud-boundary.test.ts` regression guard: fails if a manifest, lockfile,
+  shipped source file or built artifact reintroduces the retired dependency, or if the
+  CLI/MCP/library entry points grow a cloud-sync surface again.
+
+### Changed
+- The completion test now derives its expectations from the CLI's own `--help` output
+  and asserts that completions advertise no command the CLI does not register — the
+  failure mode that let a stale `sync` entry ship.
+
 ## [0.1.20] - 2026-04-02
 
 ### Added

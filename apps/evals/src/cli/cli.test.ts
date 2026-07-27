@@ -245,16 +245,50 @@ describe("evals ci set-baseline", () => {
   });
 });
 
-describe("evals completion", () => {
-  test("includes sync and runs commands in bash and zsh completion output", async () => {
-    const bash = await runCli(["completion", "bash"]);
-    expect(bash.exitCode).toBe(0);
-    expect(bash.stdout).toContain("sync");
-    expect(bash.stdout).toContain("runs");
+/** Top-level command names the CLI actually registers, per its own `--help`. */
+function commandsFromHelp(help: string): string[] {
+  const section = help.split(/^Commands:$/m)[1] ?? "";
+  return section
+    .split("\n")
+    .map((line) => /^ {2}(\S+)/.exec(line)?.[1])
+    .filter((name): name is string => Boolean(name) && name !== "help");
+}
 
+/** Command names the zsh completion script advertises, from its `'name:desc'` entries. */
+function commandsFromZshCompletion(script: string): string[] {
+  return [...script.matchAll(/^\s*'([a-z][a-z-]*):/gm)].map((match) => match[1]!);
+}
+
+describe("evals completion", () => {
+  test("advertises only commands the CLI still registers", async () => {
     const zsh = await runCli(["completion", "zsh"]);
     expect(zsh.exitCode).toBe(0);
-    expect(zsh.stdout).toContain("sync:");
-    expect(zsh.stdout).toContain("runs:");
+    const bash = await runCli(["completion", "bash"]);
+    expect(bash.exitCode).toBe(0);
+    const help = await runCli(["--help"]);
+    expect(help.exitCode).toBe(0);
+
+    const registered = commandsFromHelp(help.stdout);
+    expect(registered).toContain("runs");
+
+    // Guards the failure mode that shipped a `sync` completion after the command
+    // itself was gone: anything the completions offer must still be a real command.
+    const advertised = commandsFromZshCompletion(zsh.stdout);
+    expect(advertised.length).toBeGreaterThan(0);
+    expect(advertised.filter((name) => !registered.includes(name))).toEqual([]);
+    for (const name of advertised) expect(bash.stdout).toContain(name);
+  });
+
+  // The `sync` group pushed the local SQLite store into a shared Postgres via the
+  // retired `@hasna/cloud` package. Nothing may advertise it any more.
+  test("does not offer the removed sync command", async () => {
+    const bash = await runCli(["completion", "bash"]);
+    expect(bash.stdout).not.toContain("sync");
+
+    const zsh = await runCli(["completion", "zsh"]);
+    expect(zsh.stdout).not.toContain("sync");
+
+    const help = await runCli(["--help"]);
+    expect(help.stdout).not.toContain("sync");
   });
 });
