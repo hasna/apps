@@ -79,6 +79,12 @@ export const LOCAL_ONLY_APPROVED_TARGETS_POLICY_PATH = join(
 export function localOnlyApprovedTargets(
   policyPath: string = LOCAL_ONLY_APPROVED_TARGETS_POLICY_PATH,
 ): string[] {
+  // The shell reader requires a regular, non-symlinked policy file (`[ -f ] && [ ! -L ]`)
+  // while readFileSync follows a symlink, so a symlinked policy denied there was accepted
+  // here. Matching the shell reader closes that divergence instead of documenting it.
+  if (!lstatSync(policyPath, { throwIfNoEntry: false })?.isFile()) {
+    throw new Error("local-only approved target policy is missing");
+  }
   const contents = readFileSync(policyPath, "utf8").replace(/^﻿/, "");
   const targets = contents
     .split("\n")

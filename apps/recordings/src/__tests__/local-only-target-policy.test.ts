@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -8,15 +8,17 @@ import {
   isLocalOnlyApprovedTarget,
   localOnlyApprovedTargets,
 } from "../../scripts/macos_artifact";
+import {
+  IDENTITY_GUARD_RELATIVE_PATH,
+  POLICY_RELATIVE_PATH as policyRelativePath,
+  READER_RELATIVE_PATH as readerRelativePath,
+  readRepositoryFile,
+  runInstallerPreflight,
+} from "./helpers/installer-preflight";
 
 // Resolved from this module, not the working directory, so the suite passes from
 // any cwd (bun test is routinely invoked from a subdirectory).
 const repositoryRoot = new URL("../../", import.meta.url).pathname;
-const readRepositoryFile = (relativePath: string): string =>
-  readFileSync(join(repositoryRoot, relativePath), "utf8");
-
-const policyRelativePath = "scripts/policy/local-only-approved-targets.txt";
-const readerRelativePath = "scripts/read_local_only_targets.sh";
 
 function withPolicyFile<T>(contents: string, run: (path: string) => T): T {
   const directory = mkdtempSync(join(tmpdir(), "recordings-target-policy-"));
@@ -90,6 +92,9 @@ describe("local-only approved target policy", () => {
       ?.files.map((entry) => entry.path) ?? [];
     expect(files).toContain(policyRelativePath);
     expect(files).toContain(readerRelativePath);
+    // The installer refuses to run without it, so a tarball that omits it is a package
+    // that cannot install at all.
+    expect(files).toContain(IDENTITY_GUARD_RELATIVE_PATH);
   });
 
   test("declares both approved local-only targets", () => {
@@ -127,7 +132,14 @@ describe("local-only approved target policy", () => {
     }
   });
 
-  test("the shell reader and the TypeScript reader agree on every policy shape", () => {
+  // The title is deliberately bounded by this corpus. The two readers are separate
+  // implementations, so no test can establish agreement on every possible input; what is
+  // verified here is agreement on every shape enumerated below, which is what the shared
+  // contract is allowed to claim. Two shapes that did diverge are now included: a BOM
+  // after the first line (the shell reader stripped it per line, the TypeScript reader
+  // only at the start of the file) and a symlinked policy file (rejected by the shell
+  // reader's `[ -L ]`, followed by readFileSync) \u2014 see the symlink test below.
+  test("the shell reader and the TypeScript reader agree on every policy shape enumerated here", () => {
     const accepted = [
       "station03\nstation06\n",
       "station03\r\nstation06\r\n",
@@ -165,6 +177,11 @@ describe("local-only approved target policy", () => {
       "station03\ufeff\n",
       "station03\u0000station99\n",
       "station03\u0000\n",
+      // A BOM is a file prefix, so it is meaningful only on the first line. The shell
+      // reader stripped it from every line while the TypeScript reader strips it from
+      // the start of the file, which made this shape pass the shell reader and fail the
+      // TypeScript one. Both must now reject it.
+      "station03\n\ufeffstation06\n",
     ];
     for (const contents of rejected) {
       const shell = shellReaderVerdict(contents, "station03");
@@ -188,115 +205,50 @@ describe("local-only approved target policy", () => {
     expect(unapproved.matched).toBeFalse();
   });
 
-  test("the shell reader rejects a missing or symlinked policy", () => {
-    const missing = Bun.spawnSync([
-      "bash",
-      "-c",
-      `set -euo pipefail
+  test("both readers reject a missing policy and a symlinked policy", () => {
+    const readerVerdict = (policyPath: string): { exitCode: number; stderr: string } => {
+      const result = Bun.spawnSync([
+        "bash",
+        "-c",
+        `set -euo pipefail
 . ${JSON.stringify(join(repositoryRoot, readerRelativePath))}
 L=""; M=0
-read_local_only_targets /nonexistent/policy.txt L M station03`,
-    ]);
+read_local_only_targets ${JSON.stringify(policyPath)} L M station03`,
+      ]);
+      return { exitCode: result.exitCode, stderr: result.stderr.toString() };
+    };
+
+    const missing = readerVerdict("/nonexistent/policy.txt");
     expect(missing.exitCode).not.toBe(0);
-    expect(missing.stderr.toString()).toContain("policy is missing");
+    expect(missing.stderr).toContain("policy is missing");
+    expect(() => localOnlyApprovedTargets("/nonexistent/policy.txt")).toThrow("policy is missing");
+
+    // The shell reader has always refused a symlinked policy; readFileSync followed one,
+    // so this was a real divergence rather than an untested shape. Both refuse now.
+    const directory = mkdtempSync(join(tmpdir(), "recordings-target-policy-link-"));
+    try {
+      const real = join(directory, "real-policy.txt");
+      const link = join(directory, "linked-policy.txt");
+      writeFileSync(real, "station03\nstation06\n");
+      symlinkSync(real, link);
+      expect(localOnlyApprovedTargets(real)).toContain("station03");
+      const linked = readerVerdict(link);
+      expect(linked.exitCode).not.toBe(0);
+      expect(linked.stderr).toContain("policy is missing");
+      expect(() => localOnlyApprovedTargets(link)).toThrow("policy is missing");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
-  // The installer's own gate, actually executed. The macOS-only tool set is stubbed
-  // and HOME is placed outside the world-writable /tmp that makes the existing
-  // lifecycle fixtures fail on Linux, so the run reaches the local-only target check.
-  // Everything here is pre-mutation: the gate is at install_macos_app.sh:341 and the
-  // first user-data mutation is the `mv` far below it.
-  const installerToolOverrides = [
-    "AWK", "BASENAME", "CHMOD", "CODESIGN", "CP", "DATE", "DD", "DF", "DIFF", "DIRNAME",
-    "DITTO", "DU", "GREP", "HEAD", "HOSTNAME", "ID", "IOREG", "LS", "LSOF", "MDFIND",
-    "MKDIR", "MKTEMP", "MV", "OPEN", "PS", "RM", "RMDIR", "SED", "SHASUM", "SLEEP",
-    "SPCTL", "STAT", "SW_VERS", "SYSPOLICY_CHECK", "TAIL", "TR", "XCRUN",
-  ];
-
-  function runInstallerTargetGate(
+  // The installer's own gate, actually executed, through the shared preflight harness in
+  // helpers/installer-preflight.ts (src/__tests__/identity-migration-guard.test.ts drives
+  // the same harness, so the stub set lives in one place).
+  const runInstallerTargetGate = (
     approvedTarget: string,
     options: { policyContents?: string | null; removeReader?: boolean } = {},
-  ): { exitCode: number; stderr: string } {
-    const root = mkdtempSync(join(process.env["HOME"] ?? tmpdir(), ".rec-gate-"));
-    try {
-      const bin = join(root, "bin");
-      const home = join(root, "home");
-      const packageRoot = join(root, "pkg");
-      mkdirSync(bin, { recursive: true });
-      mkdirSync(home, { recursive: true });
-      mkdirSync(join(packageRoot, "scripts", "policy"), { recursive: true });
-
-      writeFileSync(join(bin, "stub"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-      writeFileSync(join(bin, "uname"), "#!/bin/sh\necho Darwin\n", { mode: 0o755 });
-      // The only stat format the script uses before the target gate is BSD `-f '%u'`
-      // (owner uid), which GNU stat spells `-c '%u'`. Translating just that is what
-      // lets the home-ancestor check pass on Linux and the run reach the gate.
-      writeFileSync(
-        join(bin, "stat"),
-        '#!/bin/sh\n[ "$1" = "-f" ] && [ "$2" = "%u" ] && exec /usr/bin/stat -c "%u" "$3"\nexec /usr/bin/stat "$@"\n',
-        { mode: 0o755 },
-      );
-
-      const scripts = join(packageRoot, "scripts");
-      writeFileSync(
-        join(scripts, "install_macos_app.sh"),
-        readRepositoryFile("scripts/install_macos_app.sh"),
-        { mode: 0o755 },
-      );
-      if (!options.removeReader) {
-        writeFileSync(
-          join(scripts, "read_local_only_targets.sh"),
-          readRepositoryFile(readerRelativePath),
-          { mode: 0o644 },
-        );
-      }
-      const policy = join(scripts, "policy", "local-only-approved-targets.txt");
-      if (options.policyContents !== null) {
-        writeFileSync(
-          policy,
-          options.policyContents ?? readRepositoryFile(policyRelativePath),
-        );
-      }
-      const artifact = join(root, "artifact.zip");
-      const manifest = join(root, "manifest.json");
-      writeFileSync(artifact, "");
-      writeFileSync(manifest, "{}");
-
-      const environment: Record<string, string> = {
-        PATH: process.env["PATH"] ?? "",
-        HOME: home,
-        RECORDINGS_BUN_EXECUTABLE: process.execPath,
-        RECORDINGS_TEST_INSTALL_UNAME_EXECUTABLE: join(bin, "uname"),
-      };
-      for (const tool of installerToolOverrides) {
-        // The script derives PACKAGE_ROOT from `dirname`, so tools whose OUTPUT it
-        // consumes must be real; only the macOS-only ones get the no-op stub.
-        const shimmed = tool === "STAT" ? join(bin, "stat") : null;
-        const real = shimmed ?? Bun.which(tool.toLowerCase());
-        environment[`RECORDINGS_TEST_INSTALL_${tool}_EXECUTABLE`] = real ?? join(bin, "stub");
-      }
-
-      const result = Bun.spawnSync(
-        [
-          "bash", join(scripts, "install_macos_app.sh"),
-          "--artifact", artifact,
-          "--manifest", manifest,
-          "--manifest-sha256", "a".repeat(64),
-          "--expected-source-sha", "b".repeat(40),
-          "--expected-version", "0.2.14",
-          "--artifact-policy", "local-only",
-          "--approved-target", approvedTarget,
-          "--approved-target-identity-kind", "tailscale_node_id_sha256",
-          "--approved-target-identity-sha256", "c".repeat(64),
-          "--acknowledge-local-signing-and-permissions",
-        ],
-        { env: environment },
-      );
-      return { exitCode: result.exitCode, stderr: result.stderr.toString() };
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  }
+  ): { exitCode: number; stderr: string } =>
+    runInstallerPreflight({ approvedTarget, ...options });
 
   test("the installer gate accepts approved targets and rejects everything else", () => {
     for (const approved of ["station03", "station06"]) {

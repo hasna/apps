@@ -7,10 +7,12 @@
 # scripts/macos_artifact.ts, not a shared one — shell cannot call that function without
 # spawning bun inside argument validation. The two are kept behaviourally equivalent by
 # an executing contract test ("the shell reader and the TypeScript reader agree on every
-# policy shape"), which is the only thing that actually holds them together. If you
-# change the rules here, change them there and extend that test.
+# policy shape enumerated here"), which is the only thing that actually holds them
+# together, and which can only speak for the shapes it enumerates. If you change the rules
+# here, change them there and extend that corpus.
 #
-# Rules: strip an optional UTF-8 BOM and a trailing CR, trim ASCII spaces and tabs only
+# Rules: strip an optional UTF-8 BOM from the first line and a trailing CR, trim ASCII
+# spaces and tabs only
 # (NOT Unicode whitespace — JS trim() strips U+FEFF/U+00A0 and bash does not, so both
 # sides must reject them via the hostname shape instead), reject any NUL byte, drop blank
 # and comment lines, then require every target to be a well-formed short hostname,
@@ -39,10 +41,17 @@ read_local_only_targets() {
     return 1
   fi
 
-  local line target list="" matched=0
+  local line target list="" matched=0 line_number=0
   local -a seen=()
   while IFS= read -r line || [ -n "$line" ]; do
-    line="${line#$'\xef\xbb\xbf'}"
+    line_number=$((line_number + 1))
+    # A UTF-8 BOM is a file prefix, so it is stripped from the first line only. The
+    # TypeScript reader strips it from the start of the file and nowhere else, so
+    # stripping it on every line here made a mid-file BOM pass this reader and fail that
+    # one; a BOM anywhere but the first line is part of the name and fails the shape.
+    if [ "$line_number" -eq 1 ]; then
+      line="${line#$'\xef\xbb\xbf'}"
+    fi
     line="${line%$'\r'}"
     # Trim leading and trailing blanks so an indented entry or comment behaves
     # the same here as it does in the TypeScript reader.
