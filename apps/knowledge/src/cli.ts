@@ -52,6 +52,12 @@ interface Flags {
   content?: string;
   url?: string;
   tag?: string[];
+  /**
+   * Every `-t` value exactly as given, before comma-splitting. `untag` needs it to
+   * match a stored tag whole: legacy items damaged by the multi-tag defect carry a
+   * single literal `"a,b,c"` tag, which none of the split names can match.
+   */
+  tagRaw?: string[];
   format?: string;
   completions?: string;
   purpose?: string;
@@ -130,18 +136,34 @@ function dedupeTags(tags: string[]): string[] {
   return unique;
 }
 
-/**
- * `-t/--tag` is repeatable AND accepts a comma-separated list, matching the
- * `todos` CLI (`-t, --tags <tags>` / "Comma-separated tags") and the array-typed
- * `tag`/`tags` inputs the MCP tools already expose. Every occurrence accumulates;
- * nothing is ever dropped or stored as a literal comma string.
- */
 /** Requested tags an item does not already carry (case-insensitive), in request order. */
 function tagsToAppend(existing: string[] | undefined, requested: string[]): string[] {
   const known = new Set((existing ?? []).map((tag) => tag.toLowerCase()));
   return requested.filter((tag) => !known.has(tag.toLowerCase()));
 }
 
+/**
+ * Attach an `added` tag count to an `update`/`upsert` result, in `message` as well as in
+ * JSON. `added` is present exactly when the caller passed `-t`, so a consumer never has
+ * to branch on created-versus-updated to know the field is meaningful, and 0 added is
+ * reported as plainly as 3 instead of hiding behind an unqualified `Updated <id>`.
+ */
+function tagCountResult(base: Record<string, unknown>, message: string, added: string[] | undefined): Record<string, unknown> {
+  if (added === undefined) return { ...base, message };
+  return { ...base, added: added.length, message: `${message} (added ${added.length} tag${added.length === 1 ? '' : 's'})` };
+}
+
+/**
+ * `-t/--tag` is repeatable AND accepts a comma-separated list, matching the
+ * `todos` CLI (`-t, --tags <tags>` / "Comma-separated tags") and the array-typed
+ * `tag`/`tags` inputs the MCP tools already expose. Every occurrence accumulates;
+ * nothing is ever dropped or stored as a literal comma string.
+ *
+ * A missing or separator-only value throws rather than storing nothing, so `-t ""`
+ * from an empty shell expansion fails at exit 1 instead of exiting 0 with the tag
+ * dropped. That is a deliberate exit-code change on input that previously "worked";
+ * see README for the contract.
+ */
 function collectTagFlag(current: string[] | undefined, raw: string | undefined): string[] {
   if (raw === undefined) throw new Error('Missing value for --tag. Example: knowledge add <title> <content> -t <tag> -t <tag>');
   const parsed = raw.split(',').map((tag) => tag.trim()).filter((tag) => tag.length > 0);
@@ -174,7 +196,7 @@ function parseArgs(argv: string[]): ParseResult {
       case '--title': flags.title = argv[i + 1]; i += 1; break;
       case '--content': flags.content = argv[i + 1]; i += 1; break;
       case '--url': flags.url = argv[i + 1]; i += 1; break;
-      case '--tag': case '-t': flags.tag = collectTagFlag(flags.tag, argv[i + 1]); i += 1; break;
+      case '--tag': case '-t': flags.tag = collectTagFlag(flags.tag, argv[i + 1]); flags.tagRaw = [...(flags.tagRaw ?? []), argv[i + 1] as string]; i += 1; break;
       case '--format': flags.format = argv[i + 1]; i += 1; break;
       case '--completions': flags.completions = argv[i + 1]; i += 1; break;
       case '--purpose': flags.purpose = argv[i + 1]; i += 1; break;
@@ -292,7 +314,7 @@ Commands:
   archive --id <id>           Archive an item
   restore --id <id>           Restore an archived item
   upsert [title] [content]    Create or update an item by --id
-  untag --id <id> -t <tag>    Remove tag(s) from an item (-t repeatable)
+  untag --id <id> -t <tag>    Remove tag(s) from an item (-t repeatable; exits 1 if nothing removed)
   delete (alias: rm) --id <id> Delete item (requires --yes)
   export                       Export all items (--format jsonl)
   prune                        Remove old/empty items (requires --yes)
@@ -415,13 +437,13 @@ Prune Options:
 
 function printCommandHelp(command: string): void {
   if (command === 'add') { console.log('Usage: knowledge add <title> <content> [--url <url>] [-t <tag>]... [--json]\n  -t/--tag is repeatable and accepts comma-separated values: -t a -t b  ==  -t "a,b"'); return; }
-  if (command === 'list' || command === 'ls') { console.log('Usage: knowledge list|ls [--format table|json] [-p <page>] [-l <limit>] [-s <search>] [-t <tag>]... [--sort created|title] [--desc] [--verbose] [--json]'); return; }
+  if (command === 'list' || command === 'ls') { console.log('Usage: knowledge list|ls [--format table|json] [-p <page>] [-l <limit>] [-s <search>] [-t <tag>]... [--sort created|title] [--desc] [--verbose] [--json]\n  -t/--tag is repeatable and accepts comma-separated values; repeated -t narrows (an item must carry every tag).\n  Each value is matched whole first, then split on commas, so `-t "a,b,c"` finds items carrying\n  a legacy literal "a,b,c" tag as well as items carrying the three names separately.\n  Use --json to tell those two shapes apart; the table renders them near-identically.'); return; }
   if (command === 'get') { console.log('Usage: knowledge get --id <id> [--json]'); return; }
-  if (command === 'update' || command === 'edit') { console.log('Usage: knowledge update|edit --id <id> [--title <title>] [--content <content>] [--url <url>] [-t <tag>]... [--json]\n  -t/--tag is repeatable and accepts comma-separated values; tags are added, never replaced.'); return; }
+  if (command === 'update' || command === 'edit') { console.log('Usage: knowledge update|edit --id <id> [--title <title>] [--content <content>] [--url <url>] [-t <tag>]... [--json]\n  -t/--tag is repeatable and accepts comma-separated values; tags are added, never replaced.\n  With -t the output reports how many tags were actually added, so 0 added is not read as 3.'); return; }
   if (command === 'archive') { console.log('Usage: knowledge archive --id <id> [--json]'); return; }
   if (command === 'restore' || command === 'unarchive') { console.log('Usage: knowledge restore|unarchive --id <id> [--json]'); return; }
-  if (command === 'upsert') { console.log('Usage: knowledge upsert [title] [content] [--id <id>] [--title <title>] [--content <content>] [--url <url>] [-t <tag>]... [--json]'); return; }
-  if (command === 'untag') { console.log('Usage: knowledge untag --id <id> -t <tag>... [--json]\n  -t/--tag is repeatable and accepts comma-separated values.'); return; }
+  if (command === 'upsert') { console.log('Usage: knowledge upsert [title] [content] [--id <id>] [--title <title>] [--content <content>] [--url <url>] [-t <tag>]... [--json]\n  -t/--tag is repeatable and accepts comma-separated values; tags are added, never replaced.\n  With -t the output reports how many tags were actually added, on both the create and update paths.'); return; }
+  if (command === 'untag') { console.log('Usage: knowledge untag --id <id> -t <tag>... [--json]\n  -t/--tag is repeatable and accepts comma-separated values.\n  Each value is matched whole first, and only split on commas if no stored tag equals it,\n  so a legacy literal "a,b,c" tag can still be removed.\n  Removing nothing exits 1; unmatched names are reported in not_found.'); return; }
   if (command === 'delete' || command === 'rm') { console.log('Usage: knowledge delete|rm --id <id> -y [--json]'); return; }
   if (command === 'export') { console.log('Usage: knowledge export [--verbose] [--json] [--format json|jsonl]'); return; }
   if (command === 'prune') { console.log('Usage: knowledge prune --yes [--older-than <days>] [--empty] [--json]'); return; }
@@ -1772,10 +1794,21 @@ async function run(argv: string[]): Promise<void> {
     const page = Number.isFinite(flags.page) && (flags.page as number) > 0 ? flags.page as number : 1;
     const limit = Number.isFinite(flags.limit) && (flags.limit as number) > 0 ? flags.limit as number : 20;
     const search = flags.search ? String(flags.search).toLowerCase() : '';
-    // Repeated -t narrows: an item must carry EVERY requested tag, matching the
+    // Repeated -t narrows: an item must match EVERY requested value, matching the
     // `ok_list` MCP tool ("item must match all tags").
-    const tagFilters = (flags.tag ?? []).map((entry) => entry.toLowerCase());
-    const tagLabel = tagFilters.length > 0 ? tagFilters.join(',') : 'none';
+    //
+    // Each raw value is matched WHOLE before it is split, the same precedence `untag`
+    // uses. An item damaged by the multi-tag defect carries one literal `"a,b,c"` tag
+    // that none of the split names equals, so splitting first does not merely fail to
+    // find it — it returns a DIFFERENT item that carries the three names separately, at
+    // total: 1 and exit 0, with nothing to tell the operator the answer changed. That
+    // makes `list -t` unusable for the one job it is needed for here: finding the
+    // remaining damage. Whole-value-first lets a single query find both shapes.
+    const tagFilters = (flags.tagRaw ?? flags.tag ?? []).map((raw) => ({
+      whole: raw.trim().toLowerCase(),
+      parts: raw.split(',').map((tag) => tag.trim().toLowerCase()).filter((tag) => tag.length > 0),
+    }));
+    const tagLabel = flags.tag?.length ? flags.tag.map((entry) => entry.toLowerCase()).join(',') : 'none';
     const useTable = flags.format === 'table' || (!flags.json && !flags.format && useColor(flags));
     const useJson = flags.json || flags.format === 'json';
 
@@ -1784,8 +1817,8 @@ async function run(argv: string[]): Promise<void> {
     else if (!flags.includeArchived) filtered = filtered.filter((x) => !x.archived);
     if (search) filtered = filtered.filter((x) => x.title.toLowerCase().includes(search) || x.content.toLowerCase().includes(search));
     if (tagFilters.length > 0) filtered = filtered.filter((x) => {
-      const itemTags = (x.tags ?? []).map((t) => t.toLowerCase());
-      return tagFilters.every((wanted) => itemTags.includes(wanted));
+      const itemTags = new Set((x.tags ?? []).map((t) => t.toLowerCase()));
+      return tagFilters.every(({ whole, parts }) => (whole.length > 0 && itemTags.has(whole)) || parts.every((wanted) => itemTags.has(wanted)));
     });
 
     const { sorted, sort, direction } = sortItems(filtered, flags);
@@ -1832,12 +1865,18 @@ async function run(argv: string[]): Promise<void> {
     if (flags.title !== undefined) patch.title = flags.title;
     if (flags.content !== undefined) patch.content = flags.content;
     if (flags.url !== undefined) patch.url = flags.url;
+    let added: string[] | undefined;
     if (flags.tag !== undefined) {
-      const added = tagsToAppend(current.tags, flags.tag);
+      added = tagsToAppend(current.tags, flags.tag);
       if (added.length > 0) patch.tags = [...(current.tags ?? []), ...added];
     }
     const item = await itemStore.update(current.id, patch);
-    output({ ok: true, item, message: `Updated ${item?.id ?? current.id}` }, flags.json, flags);
+    // When -t was asked for, report how many tags were actually added. Without this,
+    // "added 3" and "added none, they were all already there" both print `Updated <id>`
+    // at exit 0 and carry the count nowhere — not in `message`, not in JSON — the same
+    // untruthful-success class as untag's `removed: 0`. Adding an existing tag is
+    // idempotent, so unlike untag this stays exit 0; it just stops claiming nothing.
+    output(tagCountResult({ ok: true, item }, `Updated ${item?.id ?? current.id}`, added), flags.json, flags);
     return;
   }
 
@@ -1855,12 +1894,42 @@ async function run(argv: string[]): Promise<void> {
     if (!flags.tag?.length) throw new Error('Missing required --tag. Example: knowledge untag --id <id> -t <tag>');
     const current = await itemStore.get(flags.id!);
     if (!current) throw new Error(`Item not found: ${flags.id}`);
-    const before = current.tags?.length ?? 0;
+    const before = current.tags ?? [];
+    const stored = new Set(before.map((tag) => tag.toLowerCase()));
     // Repeated -t removes every named tag in one pass, matching the `ok_untag` MCP tool.
-    const remove = new Set(flags.tag.map((tag) => tag.toLowerCase()));
-    const tags = (current.tags ?? []).filter((tag) => !remove.has(tag.toLowerCase()));
+    // Each raw value is matched WHOLE before it is split: an item damaged by the
+    // multi-tag defect carries one literal `"a,b,c"` tag, and none of the split names
+    // equals it, so splitting first would remove nothing at exit 0 — the very failure
+    // this change exists to prevent. Whole-value-first keeps `untag -t "a,b,c"` able to
+    // clear those items, and `ok_untag` (which never split) stays in parity.
+    const remove = new Set<string>();
+    for (const raw of flags.tagRaw ?? flags.tag) {
+      const whole = raw.trim().toLowerCase();
+      if (whole.length > 0 && stored.has(whole)) { remove.add(whole); continue; }
+      for (const name of raw.split(',').map((tag) => tag.trim().toLowerCase()).filter((tag) => tag.length > 0)) remove.add(name);
+    }
+    const tags = before.filter((tag) => !remove.has(tag.toLowerCase()));
+    const removed = before.length - tags.length;
+    const notFound = [...remove].filter((tag) => !stored.has(tag));
+    // `Removed tag from <id>` at exit 0 on removed:0 is the same defect as the original
+    // bug: a success signal that cannot distinguish 1 removed from 0. An absent target
+    // is an error here, as a missing --id already is.
+    //
+    // Both sides of this message are quoted. Joining the stored tags raw renders one
+    // glued `"a,b,c"` tag identically to three separate tags, so on exactly the damaged
+    // items this fallback exists for the message read `"a" not in [a,b,c]` — denying
+    // something plainly present. Quoting each stored tag makes the glued-versus-split
+    // distinction visible, and the same for stored tags differing only in whitespace.
+    if (removed === 0) {
+      throw new Error(`No matching tag on ${current.id}: ${notFound.map((tag) => JSON.stringify(tag)).join(', ')} not in [${before.map((tag) => JSON.stringify(tag)).join(', ')}]`);
+    }
     const item = await itemStore.update(current.id, { tags });
-    output({ ok: true, item, removed: before - tags.length, message: `Removed tag from ${item?.id ?? current.id}` }, flags.json, flags);
+    // A partial miss must be visible too, not just the all-miss case — and it has to be
+    // in `message`, because non-JSON output prints nothing else.
+    const missed = notFound.length > 0 ? ` (not found: ${notFound.join(', ')})` : '';
+    const result: Record<string, unknown> = { ok: true, item, removed, message: `Removed ${removed} tag${removed === 1 ? '' : 's'} from ${item?.id ?? current.id}${missed}` };
+    if (notFound.length > 0) result.not_found = notFound;
+    output(result, flags.json, flags);
     return;
   }
 
@@ -1877,19 +1946,20 @@ async function run(argv: string[]): Promise<void> {
         url: flags.url ?? null,
         tags: flags.tag ?? [],
       });
-      output({ ok: true, created: true, item, message: `Upserted ${item.id}` }, flags.json, flags);
+      output(tagCountResult({ ok: true, created: true, item }, `Upserted ${item.id}`, flags.tag), flags.json, flags);
       return;
     }
     const patch: Record<string, unknown> = {};
     if (title !== undefined) patch.title = title;
     if (content !== undefined) patch.content = content;
     if (flags.url !== undefined) patch.url = flags.url;
+    let added: string[] | undefined;
     if (flags.tag !== undefined) {
-      const added = tagsToAppend(existing.tags, flags.tag);
+      added = tagsToAppend(existing.tags, flags.tag);
       if (added.length > 0) patch.tags = [...(existing.tags ?? []), ...added];
     }
     const item = await itemStore.update(existing.id, patch);
-    output({ ok: true, created: false, item, message: `Upserted ${item?.id ?? existing.id}` }, flags.json, flags);
+    output(tagCountResult({ ok: true, created: false, item }, `Upserted ${item?.id ?? existing.id}`, added), flags.json, flags);
     return;
   }
 
@@ -1937,7 +2007,7 @@ async function run(argv: string[]): Promise<void> {
     const seen = new Set<string>();
     const dupes: KnowledgeItem[] = [];
     for (const x of items) {
-      const key = `${x.title} ${x.content}`;
+      const key = `${x.title}\u0000${x.content}`;
       if (seen.has(key)) dupes.push(x); else seen.add(key);
     }
     const removed = await itemStore.deleteMany(dupes.map((x) => x.id));

@@ -286,6 +286,13 @@ knowledge add "Title" "Body" -t "convention,naming,channels"
 Tags are deduped case-insensitively, and the `[INFO] Item added` line reports the
 stored tag count so a partial write cannot pass unnoticed.
 
+A `-t` whose value is missing, empty, or only separators (`-t`, `-t ""`, `-t " , "`)
+**exits 1**. It previously exited 0 and silently stored nothing, so this is a
+deliberate exit-code change: dropping a tag the caller asked for is the defect, and
+an empty `-t "$VAR"` expansion should fail where the caller can see it. Commas are
+handled the opposite way — they split rather than error — because a comma-joined
+value is unambiguous and recoverable, whereas an empty value carries no intent.
+
 ### list
 ```bash
 knowledge list|ls [options]
@@ -300,11 +307,26 @@ state, or keyword retrieval across active compatibility notes too.
 | `-p, --page <n>` | Page number (default: 1) |
 | `-l, --limit <n>` | Items per page (default: 20) |
 | `-s, --search <text>` | Filter by title or content |
-| `-t, --tag <tag>` | Filter by tag; repeatable/comma-separated, an item must carry **all** of them |
+| `-t, --tag <tag>` | Filter by tag; repeatable/comma-separated, an item must match **all** of them |
 | `--sort created\|title` | Sort field (default: created) |
 | `--desc` | Sort descending |
 | `--verbose` | Print the full paginated item objects |
 | `--json` | Print the stable machine-readable list response |
+
+Each `-t` value is matched **whole first, then split on commas** — the same precedence
+[`untag`](#untag) uses, for the same reason. Items written before the multi-tag parse fix
+can carry a single literal `"a,b,c"` tag, which none of the split names equals, so a
+split-only filter does not merely miss the damaged item: it answers with a *different*
+item that carries the three names separately, at `total: 1` and exit 0, giving the
+operator no signal that the result changed. One query therefore finds both shapes:
+
+```bash
+# returns items tagged with the literal "a,b,c" AND items tagged a + b + c separately
+knowledge list -t "a,b,c" --json
+```
+
+Prefer `--json` when you are looking for glued tags: the table renders `["a,b,c"]` and
+`["a","b","c"]` as `[a,b,c]` and `[a, b, c]`, which differ only by two spaces.
 
 ### inventory
 ```bash
@@ -336,6 +358,12 @@ Update an existing item.
 | `--url <url>` | New source URL |
 | `-t, --tag <tag>` | Add tag(s); repeatable/comma-separated. Tags are appended, never replaced |
 
+When `-t` is passed, the result reports how many tags were actually added — `added` in
+JSON and `Updated <id> (added 2 tags)` in `message`. Appending a tag that is already
+present is idempotent, so this stays exit 0 (unlike `untag`, where removing nothing is an
+error), but a bare `Updated <id>` could not distinguish 2 added from 0 and reported the
+count nowhere at all.
+
 ### archive / restore
 ```bash
 knowledge archive --id <id>
@@ -345,9 +373,11 @@ Archive hides an item from default `list` output without deleting it.
 
 ### upsert
 ```bash
-knowledge upsert [title] [content] [--id <id>] [--title <title>] [--content <content>]
+knowledge upsert [title] [content] [--id <id>] [--title <title>] [--content <content>] [-t <tag>]...
 ```
-Create or update an item by ID.
+Create or update an item by ID. `-t` appends tags and reports an `added` count the same
+way [`update`](#update) does, on the create path as well as the update path — so a caller
+never has to branch on `created` to know whether `added` is meaningful.
 
 ### untag
 ```bash
@@ -355,6 +385,38 @@ knowledge untag --id <id> -t <tag>...
 ```
 Remove tag(s) from an item. `-t/--tag` is repeatable and accepts a
 comma-separated list, so several tags can be removed in one call.
+
+Each `-t` value is matched **whole first, and only split on commas if no stored tag
+equals it**. Items written before the multi-tag parse fix was landed can carry a
+single literal `"a,b,c"` tag, which none of the split names would match — so a
+split-only `untag` would remove nothing while still exiting 0. One command therefore
+covers both shapes:
+
+```bash
+# stored tags ["a,b,c"]     -> removes the one literal tag  (whole-value match)
+# stored tags ["a","b","c"] -> removes all three            (falls back to splitting)
+knowledge untag --id <id> -t "a,b,c"
+```
+
+When an item somehow carries both shapes, the whole-value match wins and the literal
+tag is removed first; re-run to clear the split names.
+
+Removing nothing **exits 1**. `removed: 0` at exit 0 with a `Removed tag from <id>`
+message is the same class of defect as the original bug — a success signal that
+cannot distinguish 1 removed from 0 — so an absent tag is an error, as a missing
+`--id` already is. When some requested tags matched and others did not, the call
+succeeds and the unmatched names are reported both in `message` (`Removed 1 tag from
+<id> (not found: nope)`) and in `not_found`. `message` carries them because without
+`--json` or `--verbose` that is the only line printed, so a `not_found`-only report is
+invisible to exactly the callers most likely to be reading it.
+
+Stored tags are quoted in the failure message, so a single glued `"a,b,c"` tag is
+distinguishable from three separate ones instead of the message appearing to deny a tag
+that is plainly listed:
+
+```
+Error: No matching tag on k_x: "iapp" not in ["iapp,integrations,architecture"]
+```
 
 ### delete
 ```bash
