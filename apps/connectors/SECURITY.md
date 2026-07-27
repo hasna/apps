@@ -5,7 +5,9 @@
 If you discover a security vulnerability, please report it responsibly:
 
 1. **Do not** open a public issue.
-2. Email the maintainers at **security@hasna.dev** with:
+2. Open a private report through
+   [GitHub Security Advisories](https://github.com/hasna/connectors/security/advisories/new)
+   with:
    - A description of the vulnerability
    - Steps to reproduce
    - Potential impact

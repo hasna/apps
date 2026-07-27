@@ -43,7 +43,7 @@ Each connector follows this naming pattern:
 | EC2 Instance | `hasna-prod-connect-{name}` | `hasna-prod-connect-notion` |
 | RDS Database | `hasna-prod-connect-{name}` | `hasna-prod-connect-notion` |
 | S3 Bucket | `hasna-prod-connect-{name}` | `hasna-prod-connect-notion` |
-| Remote API | `https://connect.hasna.com/{name}` | `https://connect.hasna.com/notion` |
+| Remote API | `https://<connect-host>/{name}` | `https://connect.example.com/notion` |
 
 ## Project Structure
 
@@ -175,4 +175,4 @@ The connector is deployed to AWS infrastructure:
 
 1. Build the project: `make build`
 2. Deploy to EC2: `make deploy-ec2`
-3. Configure the remote API at `https://connect.hasna.com/{name}`
+3. Point the CLI at the deployment via `<NAME>_REMOTE_API_URL` (no default is shipped)

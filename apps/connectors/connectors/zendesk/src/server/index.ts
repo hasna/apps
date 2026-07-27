@@ -2,7 +2,7 @@
 /**
  * connect-zendesk server
  * Remote API server for Zendesk connector
- * Deployed at https://connect.hasna.com/zendesk
+ * Deployment host is environment-specific; see nginx.conf for the reverse-proxy template.
  */
 
 const PORT = parseInt(process.env.PORT || '3000');

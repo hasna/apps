@@ -17,6 +17,7 @@ import {
   getBaseConfigDir,
   getExportsDir,
   getRemoteApiUrl,
+  findRemoteApiUrl,
   setRemoteApiUrl,
   setProfileOverride,
   getCurrentProfile,
@@ -238,7 +239,7 @@ configCmd
 
 configCmd
   .command('set-remote-url <url>')
-  .description('Set remote API URL (default: https://connect.hasna.com/zendesk)')
+  .description('Set remote API URL (no default; also settable via ZENDESK_REMOTE_API_URL)')
   .action((url: string) => {
     setRemoteApiUrl(url);
     success(`Remote API URL set to: ${url}`);
@@ -253,13 +254,13 @@ configCmd
     const apiToken = getApiToken();
     const baseUrl = getBaseUrl();
     const account = getDefaultAccount();
-    const remoteUrl = getRemoteApiUrl();
+    const remoteUrl = findRemoteApiUrl();
     info(`Profile: ${chalk.cyan(profile)}`);
     info(`Email: ${email || chalk.gray('not set')}`);
     info(`API Token: ${apiToken ? `${apiToken.substring(0, 6)}...${apiToken.substring(apiToken.length - 4)}` : chalk.gray('not set')}`);
     info(`Base URL: ${baseUrl || chalk.gray('not set')}`);
     info(`Default Account: ${account || chalk.gray('not set')}`);
-    info(`Remote API URL: ${remoteUrl}`);
+    info(`Remote API URL: ${remoteUrl || chalk.gray('not set')}`);
     info(`Config Directory: ${getBaseConfigDir()}`);
     info(`Profile Config: ${getConfigDir()}`);
     info(`Exports Directory: ${getExportsDir()}`);
@@ -274,7 +275,7 @@ configCmd
   });
 
 // ============================================
-// Remote API Commands (connect.hasna.com)
+// Remote API Commands (host comes from ZENDESK_REMOTE_API_URL / config)
 // ============================================
 const remoteCmd = program
   .command('remote')
