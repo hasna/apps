@@ -1668,7 +1668,36 @@ export function buildServer() {
     return item ? jsonText({ ok: true, item }) : errorText(`Item not found: ${id}`);
   });
 
-  registerTool(server, 'ok_untag', 'Remove tags from a knowledge item', 'Remove specific tags from an item', {
+  // Ported from `untag` in src/cli.ts, which is the reference implementation for this
+  // behaviour. Three defects were fixed here, all measured over real stdio first:
+  //
+  //   (a) `removed: 0` came back as `ok: true`. A success signal that cannot tell 1 removed
+  //       from 0 is the same defect class as the multi-tag bug this tool's CLI twin was fixed
+  //       for. It also called `store.update` before checking, so an untag that removed
+  //       nothing still bumped `updated_at` — a write with no effect, recorded as one.
+  //   (b) it never matched a comma-bearing value against separately-stored tags, so
+  //       `tags: ["a,b,c"]` against an item holding a, b and c removed 0 while the CLI
+  //       removed 3.
+  //   (c) a partial miss reported nothing: `tags: ["alpha","nope"]` on an item holding only
+  //       alpha returned `removed: 1` with no mention of "nope".
+  //
+  // WHOLE VALUE FIRST, THEN SPLIT — and note the scope precisely, because it has been
+  // misstated twice: the `continue` short-circuits ONE raw value, not the whole call.
+  // Repeated entries still accumulate, so `["a,b,c", "a", "b", "c"]` against an item holding
+  // both shapes removes 4 in one call. The narrower guarantee is the one the documented
+  // re-run contract needs: a lone `["a,b,c"]` takes the glued tag and leaves the split names,
+  // so calling again is meaningful. `list -t` matches the two shapes as a UNION instead —
+  // deliberately different, because a filter has nothing to destroy. Do not unify them.
+  // (`ok_list` has neither rule: it is exact-match only, tracked separately. Aligning THIS
+  // tool with `untag` does not close that gap and is not meant to.)
+  //
+  // REMOVING NOTHING IS AN ERROR, matching both the CLI (which exits 1) and the house idiom
+  // in this file, where errorText is how a tool says it could not do what was asked. This
+  // does mean a repeated untag of the same tag reports isError on the second call. That is
+  // intended and it is not destructive: the item is left exactly as it was, and the message
+  // names both the tags that missed and the tags the item actually holds, so a caller can
+  // tell "already gone" from "wrong name" without another round trip.
+  registerTool(server, 'ok_untag', 'Remove tags from a knowledge item', 'Remove specific tags from an item. Each value matches a stored tag whole before being split on commas. Removing nothing is an error, so removed is never 0.', {
     id: z.string(),
     tags: z.array(z.string()),
     store_path: storePathField,
@@ -1677,11 +1706,39 @@ export function buildServer() {
     const store = itemStoreFor(store_path, scope);
     const current = await store.get(id);
     if (!current) return errorText(`Item not found: ${id}`);
-    const remove = new Set(tags.map((tag) => tag.toLowerCase()));
-    const before = (current.tags ?? []).length;
-    const nextTags = (current.tags ?? []).filter((tag) => !remove.has(tag.toLowerCase()));
+    const before = current.tags ?? [];
+    const stored = new Set(before.map((tag) => tag.toLowerCase()));
+    const remove = new Set();
+    for (const raw of tags) {
+      const whole = raw.trim().toLowerCase();
+      if (whole.length > 0 && stored.has(whole)) { remove.add(whole); continue; }
+      for (const name of raw.split(',').map((tag) => tag.trim().toLowerCase()).filter((tag) => tag.length > 0)) remove.add(name);
+    }
+    // Separated from the not-found case below on purpose. `tags: []` and `tags: [","]` both
+    // name no tag at all, which is a malformed request, not a tag that is missing — and
+    // reporting it as "not in [...]" with an empty list would read as the store's fault. The
+    // CLI cannot reach this: collectTagFlag rejects a separator-only value at parse time.
+    if (remove.size === 0) return errorText(`No tag names given for ${current.id}. Each entry must contain at least one non-empty tag name.`);
+    const nextTags = before.filter((tag) => !remove.has(tag.toLowerCase()));
+    const removed = before.length - nextTags.length;
+    const notFound = [...remove].filter((tag) => !stored.has(tag));
+    // Checked BEFORE the write, so a no-op leaves updated_at alone. Both tag lists are quoted:
+    // joined raw, one glued "a,b,c" tag renders identically to three separate ones, so on
+    // exactly the damaged items this fallback exists for the message would deny a tag that is
+    // plainly listed.
+    if (removed === 0) {
+      return errorText(`No matching tag on ${current.id}: ${notFound.map((tag) => JSON.stringify(tag)).join(', ')} not in [${before.map((tag) => JSON.stringify(tag)).join(', ')}]`);
+    }
     const item = await store.update(current.id, { tags: nextTags });
-    return item ? jsonText({ ok: true, item, removed: before - nextTags.length }) : errorText(`Item not found: ${id}`);
+    if (!item) return errorText(`Item not found: ${id}`);
+    // The partial miss goes in `message` as well as `not_found`, matching the CLI, so a client
+    // that renders only the message still sees it. JSON.stringify rather than a raw join
+    // because trim() strips only the ends: a name carrying a newline would otherwise break the
+    // single-line message in two.
+    const missed = notFound.length > 0 ? ` (not found: ${notFound.map((tag) => JSON.stringify(tag)).join(', ')})` : '';
+    const result = { ok: true, item, removed, message: `Removed ${removed} tag${removed === 1 ? '' : 's'} from ${item.id}${missed}` };
+    if (notFound.length > 0) result.not_found = notFound;
+    return jsonText(result);
   });
 
   registerTool(server, 'ok_bulk_delete', 'Bulk delete knowledge items', 'Delete multiple items by tag or search. Requires confirm=true.', {
