@@ -63,6 +63,33 @@ sandboxes --provider local exec <id> echo hello
 E2B_API_KEY=... sandboxes --provider e2b create
 ```
 
+### Migrating from the pre-v1 CLI
+
+The v1 CLI does not route provider operations through a Hasna-cloud REST
+endpoint. It resolves E2B and Daytona directly from the environment or the
+`secrets` vault, so `sandboxes init` and provider keys in `sandboxes config`
+are not required.
+
+The legacy create syntax remains accepted for command-line compatibility:
+
+```sh
+sandboxes create -p e2b -i codewith-pr-drain -n probe -t 600
+```
+
+It is equivalent to:
+
+```sh
+sandboxes --provider e2b create \
+  --template codewith-pr-drain \
+  --metadata name=probe \
+  --timeout 600000
+```
+
+The pre-v1 `sandboxes agents` command listed a local agent-registration
+database that no longer exists in v1. The compatibility command now explains
+that migration without making a cloud request. Use `sandboxes exec` or the
+`sandboxes-mcp` `run_agent` tool for agent execution.
+
 ## V1 trust boundary
 
 The exact pinned official SDK modules (`e2b@2.31.0` and `@daytona/sdk@0.193.0`),
