@@ -3366,4 +3366,145 @@ describe('knowledge cli', () => {
     expect(parseSourceRef(fileRef)).toMatchObject({ kind: 'file', path: fileURLToPath(fileRef) });
     expect(parseSourceRef('https://example.com/docs')).toMatchObject({ kind: 'web', url: 'https://example.com/docs' });
   });
+
+  // `dedupe` had no test anywhere in the suite: `grep -rn "'dedupe'" tests/` returned zero hits
+  // across 37 test files. It calls `itemStore.deleteMany`, so it is a destructive command that
+  // was shipping with no regression guard at all.
+  //
+  // THE FIXTURE IS BUILT AS A DISCRIMINATOR, not as a happy path. It holds a real duplicate pair
+  // AND four items that must survive, so it fails in both directions: if dedupe stopped removing
+  // anything the pair assertions go red, and if it became too eager the survivor assertions go
+  // red. A fixture with only duplicates cannot tell working dedupe from absent dedupe, and a
+  // fixture with only distinct items cannot tell it from a no-op — that shape of fixture is
+  // exactly how wrong answers about this repo have survived review before.
+  //
+  // Every assertion reads the STORE back. `removed`/`remaining` from the JSON are checked
+  // against what is actually on disk, because a count is the easiest thing in this command to
+  // get right while deleting the wrong rows.
+  test('dedupe collapses only exact title+content duplicates, and refuses without --yes', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kn-dedupe-'));
+    const store = join(dir, 'db.json');
+    const decode = (buf: Uint8Array) => new TextDecoder().decode(buf);
+    const at = (day: string) => `2026-07-0${day}T00:00:00.000Z`;
+    const item = (id: string, title: string, content: string, extra: Record<string, unknown> = {}) => ({
+      id,
+      title,
+      content,
+      url: null,
+      tags: [],
+      metadata: {},
+      archived: false,
+      created_at: at(id.slice(-1)),
+      updated_at: at(id.slice(-1)),
+      ...extra,
+    });
+
+    // k_dup_1/k_dup_2 are the duplicate pair. They differ in url and tags ON PURPOSE: the key is
+    // title+content only, so the second one's url and tags are DESTROYED by dedupe. That is
+    // current behaviour, and pinning it here means changing it has to be deliberate rather than
+    // discovered by a user missing a tag.
+    const seedItems = [
+      item('k_dup_1', 'Same', 'Body', { url: 'https://first.example', tags: ['first'] }),
+      item('k_dup_2', 'Same', 'Body', { url: 'https://second.example', tags: ['second'] }),
+      // Same title, different content -> not a duplicate.
+      item('k_title_3', 'Same', 'Different body'),
+      // Same content, different title -> not a duplicate.
+      item('k_content_4', 'Other', 'Body'),
+      // THE SEPARATOR BOUNDARY, and the whole reason the key joins on NUL rather than on a
+      // printable delimiter. 'T' + 'AB' and 'TA' + 'B' concatenate to the same 'TAB', so with an
+      // EMPTY separator these two collide and dedupe deletes one of them — silent data loss on
+      // two unrelated items. With the NUL separator the keys differ. Do not "simplify" the
+      // separator away: emptying it is exactly the mutation this pair catches, and nothing else
+      // in this test would notice.
+      item('k_bound_5', 'T', 'AB'),
+      item('k_bound_6', 'TA', 'B'),
+    ];
+    writeFileSync(store, JSON.stringify({ items: seedItems }));
+    const seededBytes = readFileSync(store);
+
+    const storedIds = (): string[] => (JSON.parse(readFileSync(store, 'utf8')) as { items: Array<{ id: string }> }).items.map((entry) => entry.id);
+    const storedItem = (id: string) => {
+      const found = (JSON.parse(readFileSync(store, 'utf8')) as { items: Array<Record<string, any>> }).items.find((entry) => entry.id === id);
+      expect(found, `${id} should still be in the store`).toBeDefined();
+      return found!;
+    };
+
+    // Positive control: the fixture really is what the assertions below assume — six items, one
+    // genuine duplicate pair, and the two boundary items present and distinct.
+    expect(storedIds()).toEqual(['k_dup_1', 'k_dup_2', 'k_title_3', 'k_content_4', 'k_bound_5', 'k_bound_6']);
+    expect(`${storedItem('k_bound_5').title}${storedItem('k_bound_5').content}`).toBe(`${storedItem('k_bound_6').title}${storedItem('k_bound_6').content}`);
+
+    // Refusing without --yes must delete nothing. Compared byte-for-byte rather than by count,
+    // because a rewrite that preserves the count would still be a write this command must not do.
+    const refused = runCli(['dedupe', '--store', store, '--json']);
+    expect(refused.exitCode).not.toBe(0);
+    expect(decode(refused.stderr)).toContain('Refusing dedupe without --yes');
+    expect(readFileSync(store).equals(seededBytes)).toBe(true);
+
+    const deduped = runCli(['dedupe', '--yes', '--store', store, '--json']);
+    expect(deduped.exitCode).toBe(0);
+    const result = JSON.parse(decode(deduped.stdout));
+    expect(result.ok).toBe(true);
+    expect(result.removed).toBe(1);
+    expect(result.remaining).toBe(5);
+    expect(result.message).toBe('Dedupe removed 1 duplicate(s)');
+
+    // The reported counts must agree with the store, in both directions.
+    const after = storedIds();
+    expect(after).toHaveLength(result.remaining);
+    expect(seedItems.length - after.length).toBe(result.removed);
+
+    // The FIRST occurrence survives and the later one is dropped — not an arbitrary winner.
+    expect(after).toEqual(['k_dup_1', 'k_title_3', 'k_content_4', 'k_bound_5', 'k_bound_6']);
+    expect(storedItem('k_dup_1').url).toBe('https://first.example');
+    expect(storedItem('k_dup_1').tags).toEqual(['first']);
+
+    // The three non-duplicates are untouched, including both halves of the separator boundary.
+    // If the NUL separator is ever emptied, THIS is the assertion that fails.
+    expect(after).toContain('k_title_3');
+    expect(after).toContain('k_content_4');
+    expect(after).toContain('k_bound_5');
+    expect(after).toContain('k_bound_6');
+
+    // Idempotence: a second run has nothing left to collapse and must report 0 rather than
+    // deleting more.
+    const again = runCli(['dedupe', '--yes', '--store', store, '--json']);
+    expect(again.exitCode).toBe(0);
+    const secondResult = JSON.parse(decode(again.stdout));
+    expect(secondResult.removed).toBe(0);
+    expect(secondResult.remaining).toBe(5);
+    expect(storedIds()).toEqual(after);
+  });
+
+  // Archived items are deduped too, which is worth its own assertion because `dedupe` is the only
+  // destructive command here that does NOT filter on `archived` — `stats` and the default `list`
+  // both do. An archived item is a soft-delete, so collapsing archived duplicates is defensible,
+  // but it means dedupe reaches rows the operator has already put out of sight. Pinned so a change
+  // either way is deliberate.
+  test('dedupe reaches archived items as well as live ones', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kn-dedupe-arch-'));
+    const store = join(dir, 'db.json');
+    const decode = (buf: Uint8Array) => new TextDecoder().decode(buf);
+    const now = '2026-07-06T14:31:34.606Z';
+    const item = (id: string, title: string, content: string, archived: boolean) => ({
+      id, title, content, url: null, tags: [], metadata: {}, archived, created_at: now, updated_at: now,
+    });
+    writeFileSync(store, JSON.stringify({
+      items: [
+        item('k_arch_1', 'Arch', 'Arch body', true),
+        item('k_arch_2', 'Arch', 'Arch body', true),
+        // Live control: proves the run below is not simply deleting everything archived.
+        item('k_live_1', 'Live', 'Live body', false),
+      ],
+    }));
+
+    const deduped = runCli(['dedupe', '--yes', '--store', store, '--json']);
+    expect(deduped.exitCode).toBe(0);
+    const result = JSON.parse(decode(deduped.stdout));
+    expect(result.removed).toBe(1);
+    expect(result.remaining).toBe(2);
+    const items = (JSON.parse(readFileSync(store, 'utf8')) as { items: Array<{ id: string; archived: boolean }> }).items;
+    expect(items.map((entry) => entry.id)).toEqual(['k_arch_1', 'k_live_1']);
+    expect(items.find((entry) => entry.id === 'k_arch_1')!.archived).toBe(true);
+  });
 });
