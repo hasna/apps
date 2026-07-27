@@ -422,7 +422,7 @@ describe("CLI integration", () => {
     try { unlinkSync("/tmp/test-cli-list.db"); } catch {}
   });
 
-  it("redacts credential-like task descriptions in broad list/search output but not explicit detail output", async () => {
+  it("redacts credential-like task descriptions before persistence, in broad list/search and explicit detail output alike", async () => {
     const dbPath = join(testRoot, "broad-redaction.db");
     const previousDbPath = process.env["TODOS_DB_PATH"];
     closeDatabase();
@@ -475,15 +475,33 @@ describe("CLI integration", () => {
     expect(listText.exitCode).toBe(0);
     expect(listText.stdout).not.toContain("credentiallikevalue123456");
 
+    // Pre-write secret sanitation (createTask -> sanitizeCreateTaskInput) redacts
+    // credential-shaped text before it is persisted, so the raw credential is never stored
+    // and explicit detail output cannot resurrect it. Detail output is still complete and
+    // unabridged — it returns exactly what the store holds.
+    //
+    // Read the stored column directly rather than trusting createTask's return value, so the
+    // oracle is the database itself and any mangling on the read path is caught. Caveat: this
+    // cannot detect display-time redaction of detail output, because re-redacting an already
+    // redacted value is a no-op (the bearer pattern needs 12+ chars after "bearer";
+    // "[REDACTED]" is 10). That contract is untestable now that nothing raw is ever stored.
+    const readback = new Database(dbPath, { readonly: true });
+    const storedRow = readback.query("SELECT description FROM tasks WHERE id = ?").get(task.id) as { description: string };
+    readback.close();
+    const persistedDescription = storedRow.description;
+    expect(persistedDescription).toContain("Deployment notes");
+    expect(persistedDescription).not.toContain("credentiallikevalue123456");
+    expect(persistedDescription).toMatch(/\[REDACTED(?:_[A-Z_]+)?\]/);
+
     const showJson = await runCli(["--json", "show", task.id], dbPath);
     expect(showJson.stderr).toBe("");
     expect(showJson.exitCode).toBe(0);
-    expect(JSON.parse(showJson.stdout).description).toBe(rawDescription);
+    expect(JSON.parse(showJson.stdout).description).toBe(persistedDescription);
 
     const inspectJson = await runCli(["--json", "inspect", task.id], dbPath);
     expect(inspectJson.stderr).toBe("");
     expect(inspectJson.exitCode).toBe(0);
-    expect(JSON.parse(inspectJson.stdout).description).toBe(rawDescription);
+    expect(JSON.parse(inspectJson.stdout).description).toBe(persistedDescription);
   });
 
   it("should emit complete parseable JSON for large list output", async () => {
