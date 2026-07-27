@@ -2,6 +2,14 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { existsSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
+import {
+  findRemoteApiUrl,
+  getRemoteApiUrl,
+  setRemoteApiUrl,
+  setProfileOverride,
+  getConfigDir,
+  clearConfig,
+} from './config';
 
 // We need to test the config module with a custom config dir
 // to avoid messing with actual user config
@@ -188,6 +196,63 @@ describe('Config utilities', () => {
       // Restore
       if (originalEnv) process.env.ZENDESK_EMAIL = originalEnv;
       else delete process.env.ZENDESK_EMAIL;
+    });
+  });
+
+  // The remote API URL no longer falls back to a hardcoded deployment host, so
+  // these exercise the real module instead of re-implementing the priority
+  // logic: an unconfigured URL has to fail loudly rather than silently resolve
+  // to a baked-in default, and each configured source has to round-trip.
+  describe('remote API URL resolution', () => {
+    const REMOTE_URL_TEST_PROFILE = 'remote-url-test';
+    const ENV_URL = 'https://env.example.com/zendesk';
+    const STORED_URL = 'https://stored.example.com/zendesk';
+
+    let originalEnv: string | undefined;
+
+    beforeEach(() => {
+      originalEnv = process.env.ZENDESK_REMOTE_API_URL;
+      delete process.env.ZENDESK_REMOTE_API_URL;
+      // Profiles are the module's own isolation seam: point config reads and
+      // writes at a throwaway profile so the real one is never touched.
+      setProfileOverride(REMOTE_URL_TEST_PROFILE);
+      clearConfig();
+    });
+
+    afterEach(() => {
+      const profileDir = getConfigDir();
+      setProfileOverride(undefined);
+      rmSync(profileDir, { recursive: true, force: true });
+
+      if (originalEnv === undefined) delete process.env.ZENDESK_REMOTE_API_URL;
+      else process.env.ZENDESK_REMOTE_API_URL = originalEnv;
+    });
+
+    test('is unset and throws when neither env nor config provides a URL', () => {
+      expect(findRemoteApiUrl()).toBeUndefined();
+      expect(() => getRemoteApiUrl()).toThrow(/ZENDESK_REMOTE_API_URL/);
+    });
+
+    test('resolves from the environment variable', () => {
+      process.env.ZENDESK_REMOTE_API_URL = ENV_URL;
+
+      expect(findRemoteApiUrl()).toBe(ENV_URL);
+      expect(getRemoteApiUrl()).toBe(ENV_URL);
+    });
+
+    test('resolves from the stored config value', () => {
+      setRemoteApiUrl(STORED_URL);
+
+      expect(findRemoteApiUrl()).toBe(STORED_URL);
+      expect(getRemoteApiUrl()).toBe(STORED_URL);
+    });
+
+    test('environment variable takes precedence over the stored config value', () => {
+      setRemoteApiUrl(STORED_URL);
+      process.env.ZENDESK_REMOTE_API_URL = ENV_URL;
+
+      expect(findRemoteApiUrl()).toBe(ENV_URL);
+      expect(getRemoteApiUrl()).toBe(ENV_URL);
     });
   });
 });

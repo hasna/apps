@@ -6,13 +6,18 @@ If you discover a security vulnerability, please report it responsibly:
 
 1. **Do not** open a public issue.
 2. Open a private report through
-   [GitHub Security Advisories](https://github.com/hasna/connectors/security/advisories/new)
-   with:
+   [GitHub Security Advisories](https://github.com/hasna/connectors/security/advisories/new).
+   Private vulnerability reporting is enabled on this repository, so any signed-in
+   GitHub user can file a report and only the maintainers can read it. Include:
    - A description of the vulnerability
    - Steps to reproduce
    - Potential impact
 3. You will receive an acknowledgment within 48 hours.
 4. We will work with you to understand and address the issue before any public disclosure.
+
+If the advisory form is ever unreachable, open a public issue requesting a private
+contact channel — with **no** vulnerability details in it — and a maintainer will
+follow up privately.
 
 ## Supported Versions
 
