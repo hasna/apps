@@ -6,6 +6,7 @@ import { isAbsolute, join, resolve } from "node:path";
 
 import {
   AccountsError,
+  createAccountsCapacity,
   asAccountsError,
   canonicalJson,
   createSQLiteAccounts,
@@ -21,10 +22,16 @@ import {
   evaluateNativeSubscriptionProbe,
   StaticNativeSubscriptionSnapshotSource,
   PACKAGE_VERSION,
+  parseClosedJson,
   toErrorEnvelope,
   validateSlotEligibility,
+  type AccountsAuthProvider,
+  type AccountsCapacity,
   type EntityKind,
+  type EntityMap,
+  type EligibilityRequest,
   type NativeSubscriptionBindingSnapshot,
+  type SlotEligibilityMetadata,
 } from "./index";
 
 const CLI_SCHEMA_VERSION = "accounts.cli.v1" as const;
@@ -37,6 +44,16 @@ const NOUNS: Readonly<Record<string, EntityKind>> = {
   "auth-capsules": "auth_capsule",
   "credential-bindings": "credential_binding",
 };
+
+const SELF_HOSTED_AUTH_REF_PATTERN = /^[\x21-\x7e]{1,4096}$/;
+
+interface CliCatalog {
+  doctor(): Promise<unknown>;
+  list(kind: EntityKind): Promise<readonly unknown[]>;
+  get(kind: EntityKind, id: EntityMap[EntityKind]["id"]): Promise<unknown>;
+  eligibility(request: EligibilityRequest): Promise<SlotEligibilityMetadata>;
+  close(): Promise<void>;
+}
 
 interface ParsedArguments {
   readonly positionals: readonly string[];
@@ -65,7 +82,7 @@ export async function runAccountsCli(argv: readonly string[]): Promise<number> {
       return await probeNativeCommand(positionals, parsed.flags, jsonRequested);
     }
 
-    const catalog = createLocalCatalog();
+    const catalog = createCliCatalog();
     try {
       if (command === "doctor") {
         requireNoPositionals(positionals, "doctor");
@@ -131,21 +148,25 @@ export async function runAccountsCli(argv: readonly string[]): Promise<number> {
   }
 }
 
-function createLocalCatalog() {
+function createCliCatalog(): CliCatalog {
   const deployment = Bun.env.HASNA_ACCOUNTS_DEPLOYMENT;
   const localPath = Bun.env.HASNA_ACCOUNTS_DATABASE_PATH;
-  const serviceConfigPresent =
-    Bun.env.HASNA_ACCOUNTS_CAPACITY_API_URL !== undefined ||
-    Bun.env.HASNA_ACCOUNTS_CAPACITY_AUTH_REF !== undefined;
+  const apiUrl = Bun.env.HASNA_ACCOUNTS_CAPACITY_API_URL;
+  const authRef = Bun.env.HASNA_ACCOUNTS_CAPACITY_AUTH_REF;
+  const serviceConfigPresent = apiUrl !== undefined || authRef !== undefined;
   if (deployment === "self_hosted" && localPath !== undefined) {
     throw usageError("Self-hosted deployment cannot use a local database path");
   }
-  if (deployment !== "local") {
-    if (deployment === "self_hosted") {
-      throw new AccountsError("NOT_IMPLEMENTED", "The self-hosted CLI client is not configured", {
-        details: { adapter: "http" },
-      });
+  if (deployment === "self_hosted") {
+    if (apiUrl === undefined || apiUrl.length === 0) {
+      throw usageError("HASNA_ACCOUNTS_CAPACITY_API_URL is required for self_hosted");
     }
+    if (authRef === undefined || !SELF_HOSTED_AUTH_REF_PATTERN.test(authRef)) {
+      throw usageError("HASNA_ACCOUNTS_CAPACITY_AUTH_REF is required for self_hosted");
+    }
+    return createSelfHostedCliCatalog(apiUrl, authRef);
+  }
+  if (deployment !== "local") {
     throw usageError("HASNA_ACCOUNTS_DEPLOYMENT must be local or self_hosted");
   }
   if (serviceConfigPresent) {
@@ -155,7 +176,174 @@ function createLocalCatalog() {
     throw usageError("HASNA_ACCOUNTS_DATABASE_PATH must be absolute");
   }
   const path = localPath === undefined ? join(homedir(), ".hasna", "accounts", "accounts.db") : localPath;
-  return createSQLiteAccounts({ path });
+  const catalog = createSQLiteAccounts({ path });
+  return Object.freeze({
+    doctor: () => catalog.doctor(),
+    list: (kind: EntityKind) => catalog.list(kind),
+    get: (kind: EntityKind, id: EntityMap[EntityKind]["id"]) => catalog.get(kind, id as never),
+    eligibility: (request: EligibilityRequest) => catalog.eligibility(request),
+    close: () => catalog.close(),
+  });
+}
+
+function createSelfHostedCliCatalog(baseUrl: string, authRef: string): CliCatalog {
+  const authProvider: AccountsAuthProvider = Object.freeze({
+    authorize: async (headers: Headers): Promise<void> => {
+      headers.set("authorization", `Bearer ${authRef}`);
+    },
+  });
+  const client = createAccountsCapacity({ mode: "self_hosted", baseUrl, authProvider });
+  return new SelfHostedCliCatalog(baseUrl, client);
+}
+
+class SelfHostedCliCatalog implements CliCatalog {
+  private readonly baseUrl: URL;
+
+  constructor(
+    baseUrl: string,
+    private readonly client: AccountsCapacity,
+  ) {
+    this.baseUrl = new URL("/", new URL(baseUrl));
+  }
+
+  async doctor(): Promise<unknown> {
+    const [health, readiness, version] = await Promise.all([
+      this.fetchDiagnostic("/health", [200], ["schemaVersion", "status"]),
+      this.fetchDiagnostic("/ready", [200, 503], ["schemaVersion", "status"]),
+      this.fetchDiagnostic("/version", [200], ["schemaVersion", "version", "contractSha256"]),
+    ]);
+    expectLiteral(health.schemaVersion, "accounts.health.v1", "schemaVersion");
+    expectLiteral(health.status, "ok", "status");
+    expectLiteral(readiness.schemaVersion, "accounts.readiness.v1", "schemaVersion");
+    if (readiness.status !== "ready" && readiness.status !== "not_ready") invalidServiceField("status");
+    expectLiteral(version.schemaVersion, "accounts.version.v1", "schemaVersion");
+    if (typeof version.version !== "string" || version.version.length === 0) invalidServiceField("version");
+    if (typeof version.contractSha256 !== "string" || !/^[0-9a-f]{64}$/.test(version.contractSha256)) {
+      invalidServiceField("contractSha256");
+    }
+    return {
+      adapter: "http",
+      health: health.status,
+      readiness: readiness.status,
+      version: version.version,
+      contractSha256: version.contractSha256,
+    };
+  }
+
+  async list(kind: EntityKind): Promise<readonly unknown[]> {
+    const records: unknown[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await this.listPage(kind, cursor);
+      records.push(...page.records);
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor !== undefined);
+    return Object.freeze(records);
+  }
+
+  get(kind: EntityKind, id: EntityMap[EntityKind]["id"]): Promise<unknown> {
+    switch (kind) {
+      case "account":
+        return this.client.providerAccounts.get(parseAccountId(id));
+      case "entitlement":
+        return this.client.entitlements.get(parseEntitlementId(id));
+      case "capacity_pool":
+        return this.client.capacityPools.get(parseCapacityPoolId(id));
+      case "access_method":
+        return this.client.lanes.get(parseAccessMethodId(id));
+      case "auth_capsule":
+        return this.client.capsules.get(parseAuthCapsuleId(id));
+      case "credential_binding":
+        return this.client.credentialBindings.get(parseCredentialBindingId(id));
+    }
+  }
+
+  eligibility(request: EligibilityRequest): Promise<SlotEligibilityMetadata> {
+    return this.client.capacity.query(request);
+  }
+
+  close(): Promise<void> {
+    return this.client.close();
+  }
+
+  private async listPage(kind: EntityKind, cursor: string | undefined) {
+    const options = { ...(cursor === undefined ? {} : { cursor }), limit: 100 };
+    switch (kind) {
+      case "account":
+        return this.client.providerAccounts.list(options);
+      case "entitlement":
+        return this.client.entitlements.list(options);
+      case "capacity_pool":
+        return this.client.capacityPools.list(options);
+      case "access_method":
+        return this.client.lanes.list(options);
+      case "auth_capsule":
+        return this.client.capsules.list(options);
+      case "credential_binding":
+        return this.client.credentialBindings.list(options);
+    }
+  }
+
+  private async fetchDiagnostic(
+    path: string,
+    allowedStatuses: readonly number[],
+    requiredFields: readonly string[],
+  ): Promise<Record<string, unknown>> {
+    const url = new URL(path, this.baseUrl);
+    if (url.origin !== this.baseUrl.origin) {
+      throw new AccountsError("VALIDATION_FAILED", "Self-hosted diagnostic origin escaped");
+    }
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: "GET",
+        headers: { accept: "application/json" },
+        redirect: "error",
+        credentials: "omit",
+        cache: "no-store",
+      });
+    } catch {
+      throw new AccountsError("DEPENDENCY_UNAVAILABLE", "Capacity service is unavailable", {
+        retryable: true,
+      });
+    }
+    const body = await response.text();
+    if (!allowedStatuses.includes(response.status)) {
+      throw new AccountsError("DEPENDENCY_UNAVAILABLE", "Capacity service diagnostic failed", {
+        retryable: response.status >= 500,
+      });
+    }
+    let parsed: unknown;
+    try {
+      parsed = parseClosedJson(body);
+    } catch {
+      throw new AccountsError("DEPENDENCY_UNAVAILABLE", "Capacity service returned invalid JSON");
+    }
+    return closedDiagnosticObject(parsed, requiredFields);
+  }
+}
+
+function closedDiagnosticObject(
+  value: unknown,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) invalidServiceField("response");
+  const record = value as Record<string, unknown>;
+  const allowed = new Set([...required, ...optional]);
+  for (const key of Object.keys(record)) if (!allowed.has(key)) invalidServiceField(key);
+  for (const key of required) if (!Object.hasOwn(record, key)) invalidServiceField(key);
+  return record;
+}
+
+function expectLiteral(value: unknown, expected: string, field: string): void {
+  if (value !== expected) invalidServiceField(field);
+}
+
+function invalidServiceField(field: string): never {
+  throw new AccountsError("DEPENDENCY_UNAVAILABLE", "Capacity service returned an invalid diagnostic", {
+    details: { field: field.replace(/[^A-Za-z0-9_.]/g, "_").slice(0, 64) },
+  });
 }
 
 async function validateCommand(

@@ -96,3 +96,16 @@ Positive local evaluation requires an explicitly configured, owner-only signed
 recovery ledger through the SDK/factory. Without it, readiness and eligibility
 stay on recovery hold. CLI output is local diagnostic evidence only and never a
 reservation or production Infinity authority.
+
+## Self-hosted CLI
+
+```sh
+HASNA_ACCOUNTS_DEPLOYMENT=self_hosted \
+HASNA_ACCOUNTS_CAPACITY_API_URL=https://accounts.capacity.example \
+HASNA_ACCOUNTS_CAPACITY_AUTH_REF=capacity-client-reference \
+  capacity list access-methods --json
+```
+
+Self-hosted CLI commands use the same HTTPS Accounts Capacity API routes as the
+SDK. The capacity auth reference must be separately audienced for this service;
+local database configuration is refused in `self_hosted` mode.

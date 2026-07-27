@@ -1,5 +1,6 @@
-import { afterAll, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
@@ -7,19 +8,33 @@ import {
   PACKAGE_VERSION,
   canonicalJson,
   newAccessMethodId,
+  newEligibilityEvidenceId,
   parseCounter,
   serializeRecordEnvelope,
 } from "../../src/index";
 import { makeFixtureGraph } from "../fixtures";
+import { runAccountsCli } from "../../src/cli";
 
-const TEMP_ROOT = join(import.meta.dir, "..", "..", ".tmp", "cli-tests");
+const TEMP_PARENT = existsSync("/dev/shm") ? "/dev/shm" : tmpdir();
+const TEMP_ROOT = join(TEMP_PARENT, "capacity-cli-tests");
 mkdirSync(TEMP_ROOT, { recursive: true, mode: 0o700 });
-chmodSync(join(import.meta.dir, "..", "..", ".tmp"), 0o700);
 chmodSync(TEMP_ROOT, 0o700);
 const cleanup: string[] = [];
+const originalFetch = globalThis.fetch;
+const CLI_ENV_KEYS = [
+  "HASNA_ACCOUNTS_DEPLOYMENT",
+  "HASNA_ACCOUNTS_DATABASE_PATH",
+  "HASNA_ACCOUNTS_CAPACITY_API_URL",
+  "HASNA_ACCOUNTS_CAPACITY_AUTH_REF",
+] as const;
 
 afterAll(() => {
   for (const path of cleanup) rmSync(path, { recursive: true, force: true });
+});
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+  mock.restore();
 });
 
 async function runCli(
@@ -44,6 +59,48 @@ async function runCli(
   return { stdout, stderr, exitCode };
 }
 
+async function runCliInProcess(
+  args: readonly string[],
+  environment: Readonly<Record<string, string | undefined>>,
+) {
+  const stdoutTarget = Bun.stdout as unknown as { write: (chunk: string | Uint8Array) => number };
+  const stderrTarget = Bun.stderr as unknown as { write: (chunk: string | Uint8Array) => number };
+  const originalStdoutWrite = stdoutTarget.write;
+  const originalStderrWrite = stderrTarget.write;
+  const previousEnvironment = new Map<string, string | undefined>();
+  const keys = new Set<string>([...CLI_ENV_KEYS, ...Object.keys(environment)]);
+  let stdout = "";
+  let stderr = "";
+  const capture = (target: "stdout" | "stderr", chunk: string | Uint8Array): number => {
+    const text = typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);
+    if (target === "stdout") stdout += text;
+    else stderr += text;
+    return Buffer.byteLength(text);
+  };
+
+  try {
+    stdoutTarget.write = (chunk) => capture("stdout", chunk);
+    stderrTarget.write = (chunk) => capture("stderr", chunk);
+    for (const key of keys) {
+      previousEnvironment.set(key, Bun.env[key]);
+      delete Bun.env[key];
+    }
+    for (const [key, value] of Object.entries(environment)) {
+      if (value === undefined) delete Bun.env[key];
+      else Bun.env[key] = value;
+    }
+    const exitCode = await runAccountsCli(args);
+    return { stdout, stderr, exitCode };
+  } finally {
+    stdoutTarget.write = originalStdoutWrite;
+    stderrTarget.write = originalStderrWrite;
+    for (const [key, value] of previousEnvironment) {
+      if (value === undefined) delete Bun.env[key];
+      else Bun.env[key] = value;
+    }
+  }
+}
+
 function localEnvironment(): Record<string, string> {
   const directory = mkdtempSync(join(TEMP_ROOT, "database-"));
   cleanup.push(directory);
@@ -51,6 +108,21 @@ function localEnvironment(): Record<string, string> {
     HASNA_ACCOUNTS_DEPLOYMENT: "local",
     HASNA_ACCOUNTS_DATABASE_PATH: join(directory, "accounts.db"),
   };
+}
+
+function apiEnvironment(): Record<string, string> {
+  return {
+    HASNA_ACCOUNTS_DEPLOYMENT: "self_hosted",
+    HASNA_ACCOUNTS_CAPACITY_API_URL: "https://capacity.test",
+    HASNA_ACCOUNTS_CAPACITY_AUTH_REF: "capacity-cli-auth-reference",
+  };
+}
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(canonicalJson(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
 }
 
 describe("accounts CLI", () => {
@@ -115,6 +187,133 @@ describe("accounts CLI", () => {
     const list = await runCli(["list", "access-methods", "--json"], environment);
     expect(list.exitCode).toBe(0);
     expect(JSON.parse(list.stdout).data.records).toEqual([]);
+  });
+
+  test("self-hosted doctor, list, get, and eligibility use the HTTP API path", async () => {
+    const graph = makeFixtureGraph("api_key");
+    const calls: Array<{ readonly method: string; readonly path: string; readonly authorization: string | null }> = [];
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      const headers = init?.headers instanceof Headers ? init.headers : new Headers(init?.headers);
+      calls.push({
+        method: init?.method ?? "GET",
+        path: `${url.pathname}${url.search}`,
+        authorization: headers.get("authorization"),
+      });
+      if (url.origin !== "https://capacity.test") throw new Error("unexpected origin");
+      if (url.pathname === "/health") {
+        return jsonResponse({ schemaVersion: "accounts.health.v1", status: "ok" });
+      }
+      if (url.pathname === "/ready") {
+        return jsonResponse({ schemaVersion: "accounts.readiness.v1", status: "ready" });
+      }
+      if (url.pathname === "/version") {
+        return jsonResponse({
+          schemaVersion: "accounts.version.v1",
+          version: "1.0.0-test",
+          contractSha256: "a".repeat(64),
+        });
+      }
+      expect(headers.get("authorization")).toBe("Bearer capacity-cli-auth-reference");
+      if (url.pathname === "/v1/account-lanes" && url.searchParams.get("limit") === "100") {
+        return jsonResponse({
+          schemaVersion: "accounts.list.v1",
+          kind: "access_method",
+          route: "/v1/account-lanes",
+          records: [graph.method],
+          nextCursor: null,
+        });
+      }
+      if (url.pathname === `/v1/account-lanes/${graph.method.id}`) {
+        return jsonResponse({
+          schemaVersion: "accounts.record.v1",
+          kind: "access_method",
+          data: graph.method,
+        });
+      }
+      if (url.pathname === "/v1/capacity/query") {
+        return jsonResponse({
+          schemaVersion: "accounts.capacity-query.v1",
+          reservation: "none",
+          data: {
+            schemaVersion: "accounts.slot-eligibility.v1",
+            evidenceId: newEligibilityEvidenceId(),
+            evidenceClass: "local_diagnostic",
+            authority: "none",
+            reservation: "none",
+            accessMethodId: graph.method.id,
+            accessTarget: { kind: "unresolved" },
+            recordRevisionSet: {},
+            eligibilityRequestDigest: `sha256:${"e".repeat(64)}`,
+            eligible: false,
+            reasonCodes: ["ACCOUNT_NOT_ACTIVE"],
+            issuedAt: "2026-07-10T11:59:00.000Z",
+            expiresAt: "2026-07-10T13:00:00.000Z",
+          },
+        });
+      }
+      return jsonResponse({
+        schemaVersion: "accounts.error.v1",
+        error: {
+          code: "NOT_FOUND",
+          message: "The requested record was not found",
+          requestId: "018f0f00-0099-7000-8000-000000000099",
+          retryable: false,
+          details: {},
+        },
+      }, 404);
+    }) as unknown as typeof fetch;
+
+    const doctor = await runCliInProcess(["doctor", "--json"], apiEnvironment());
+    expect(doctor.exitCode).toBe(0);
+    expect(JSON.parse(doctor.stdout).data).toEqual({
+      adapter: "http",
+      health: "ok",
+      readiness: "ready",
+      version: "1.0.0-test",
+      contractSha256: "a".repeat(64),
+    });
+
+    const list = await runCliInProcess(["list", "access-methods", "--json"], apiEnvironment());
+    expect(list.exitCode).toBe(0);
+    expect(JSON.parse(list.stdout).data.records).toEqual([
+      { schemaVersion: "accounts.capacity.v1", kind: "access_method", data: graph.method },
+    ]);
+
+    const get = await runCliInProcess(["get", "access-methods", graph.method.id, "--json"], apiEnvironment());
+    expect(get.exitCode).toBe(0);
+    expect(JSON.parse(get.stdout).data).toEqual({
+      schemaVersion: "accounts.capacity.v1",
+      kind: "access_method",
+      data: graph.method,
+    });
+
+    const eligibility = await runCliInProcess([
+      "eligibility",
+      graph.method.id,
+      "--operation",
+      "responses.create",
+      "--model",
+      "model.example",
+      "--data-classification",
+      "internal",
+      "--json",
+    ], apiEnvironment());
+    expect(eligibility.exitCode).toBe(7);
+    expect(JSON.parse(eligibility.stdout).data).toMatchObject({
+      accessMethodId: graph.method.id,
+      eligible: false,
+      reservation: "none",
+    });
+    expect(eligibility.stderr).toBe("");
+    expect(calls.map((call) => call.path)).toEqual(expect.arrayContaining([
+      "/health",
+      "/ready",
+      "/version",
+      "/v1/account-lanes?limit=100",
+      `/v1/account-lanes/${graph.method.id}`,
+      "/v1/capacity/query",
+    ]));
   });
 
   test("validates a closed record DTO without database configuration", async () => {
@@ -247,10 +446,17 @@ describe("accounts CLI", () => {
     });
     expect(contradictory.exitCode).toBe(2);
 
-    const reserved = await runCli(["doctor", "--json"], {
+    const missingSelfHostedApi = await runCli(["doctor", "--json"], {
       HASNA_ACCOUNTS_DEPLOYMENT: "self_hosted",
     });
-    expect(reserved.exitCode).toBe(6);
-    expect(JSON.parse(reserved.stderr).error.code).toBe("NOT_IMPLEMENTED");
+    expect(missingSelfHostedApi.exitCode).toBe(2);
+    expect(JSON.parse(missingSelfHostedApi.stderr).error.code).toBe("VALIDATION_FAILED");
+
+    const missingSelfHostedAuth = await runCli(["list", "access-methods", "--json"], {
+      HASNA_ACCOUNTS_DEPLOYMENT: "self_hosted",
+      HASNA_ACCOUNTS_CAPACITY_API_URL: "https://capacity.test",
+    });
+    expect(missingSelfHostedAuth.exitCode).toBe(2);
+    expect(JSON.parse(missingSelfHostedAuth.stderr).error.code).toBe("VALIDATION_FAILED");
   });
 });
