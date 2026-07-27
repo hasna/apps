@@ -3367,9 +3367,12 @@ describe('knowledge cli', () => {
     expect(parseSourceRef('https://example.com/docs')).toMatchObject({ kind: 'web', url: 'https://example.com/docs' });
   });
 
-  // `dedupe` had no test anywhere in the suite: `grep -rn "'dedupe'" tests/` returned zero hits
-  // across 37 test files. It calls `itemStore.deleteMany`, so it is a destructive command that
-  // was shipping with no regression guard at all.
+  // The `dedupe` CLI command had no test: `grep -rn "'dedupe'" tests/` returns zero hits across
+  // the 38 test files. Corrected in adversarial review: that probe misses `ok_dedupe` in
+  // tests/mcp.test.ts, which does seed a duplicate pair and assert `removed === 1` - the MCP
+  // surface was covered, the CLI one was not, and the earlier claim of "no test anywhere in the
+  // suite" overstated it. It calls `itemStore.deleteMany`, so the CLI path was still a
+  // destructive command shipping without a regression guard.
   //
   // THE FIXTURE IS BUILT AS A DISCRIMINATOR, not as a happy path. It holds a real duplicate pair
   // AND four items that must survive, so it fails in both directions: if dedupe stopped removing
@@ -3399,6 +3402,12 @@ describe('knowledge cli', () => {
       ...extra,
     });
 
+    // `item()` derives its timestamps from the last character of the id, which only works for ids
+    // ending in a digit 1-9. The delimiter pairs below need distinct, valid timestamps and ids
+    // that name the delimiter they guard, so they pass theirs explicitly.
+    const sep = (id: string, title: string, content: string, iso: string) =>
+      item(id, title, content, { created_at: iso, updated_at: iso });
+
     // k_dup_1/k_dup_2 are the duplicate pair. They differ in url and tags ON PURPOSE: the key is
     // title+content only, so the second one's url and tags are DESTROYED by dedupe. That is
     // current behaviour, and pinning it here means changing it has to be deliberate rather than
@@ -3410,14 +3419,27 @@ describe('knowledge cli', () => {
       item('k_title_3', 'Same', 'Different body'),
       // Same content, different title -> not a duplicate.
       item('k_content_4', 'Other', 'Body'),
-      // THE SEPARATOR BOUNDARY, and the whole reason the key joins on NUL rather than on a
-      // printable delimiter. 'T' + 'AB' and 'TA' + 'B' concatenate to the same 'TAB', so with an
-      // EMPTY separator these two collide and dedupe deletes one of them — silent data loss on
-      // two unrelated items. With the NUL separator the keys differ. Do not "simplify" the
-      // separator away: emptying it is exactly the mutation this pair catches, and nothing else
-      // in this test would notice.
+      // THE EMPTY-SEPARATOR BOUNDARY. 'T' + 'AB' and 'TA' + 'B' concatenate to the same 'TAB', so
+      // with an EMPTY separator these two collide and dedupe deletes one of them — silent data
+      // loss on two unrelated items. With any non-empty separator the keys differ.
       item('k_bound_5', 'T', 'AB'),
       item('k_bound_6', 'TA', 'B'),
+      // THE PRINTABLE-DELIMITER BOUNDARY — added in adversarial review, because the pair above
+      // does NOT justify the NUL specifically. It only discriminates empty vs non-empty:
+      // substituting ',', '\t', '\n' or a multi-char sentinel for the NUL leaves 'T','AB' and
+      // 'TA','B' distinct, so all four substitutions kept this test GREEN. Measured with a ','
+      // separator against the comma pair below: `removed 1, remaining 1` — one of two unrelated
+      // items silently deleted, the exact failure class this test exists to catch.
+      //
+      // A fixture can only tell one delimiter from another by putting that delimiter INSIDE the
+      // data. Each pair below is distinct under NUL and collides under its own candidate
+      // delimiter, so all six must survive. Add a pair here before changing the separator.
+      sep('k_sep_comma_a', 'A', 'B,C', '2026-07-07T00:00:00.000Z'),
+      sep('k_sep_comma_b', 'A,B', 'C', '2026-07-08T00:00:00.000Z'),
+      sep('k_sep_tab_a', 'D', 'E\tF', '2026-07-09T00:00:00.000Z'),
+      sep('k_sep_tab_b', 'D\tE', 'F', '2026-07-10T00:00:00.000Z'),
+      sep('k_sep_nl_a', 'G', 'H\nI', '2026-07-11T00:00:00.000Z'),
+      sep('k_sep_nl_b', 'G\nH', 'I', '2026-07-12T00:00:00.000Z'),
     ];
     writeFileSync(store, JSON.stringify({ items: seedItems }));
     const seededBytes = readFileSync(store);
@@ -3429,10 +3451,34 @@ describe('knowledge cli', () => {
       return found!;
     };
 
-    // Positive control: the fixture really is what the assertions below assume — six items, one
-    // genuine duplicate pair, and the two boundary items present and distinct.
-    expect(storedIds()).toEqual(['k_dup_1', 'k_dup_2', 'k_title_3', 'k_content_4', 'k_bound_5', 'k_bound_6']);
+    // Positive control: the fixture really is what the assertions below assume — twelve items, one
+    // genuine duplicate pair, and every boundary pair present.
+    expect(storedIds()).toEqual([
+      'k_dup_1', 'k_dup_2', 'k_title_3', 'k_content_4', 'k_bound_5', 'k_bound_6',
+      'k_sep_comma_a', 'k_sep_comma_b', 'k_sep_tab_a', 'k_sep_tab_b', 'k_sep_nl_a', 'k_sep_nl_b',
+    ]);
     expect(`${storedItem('k_bound_5').title}${storedItem('k_bound_5').content}`).toBe(`${storedItem('k_bound_6').title}${storedItem('k_bound_6').content}`);
+
+    // Positive control on the DISCRIMINATING POWER of each delimiter pair, which is the whole
+    // point of them: under its own candidate delimiter the pair's keys are IDENTICAL (so
+    // substituting that delimiter collapses two unrelated items and reddens this test), and under
+    // the real NUL they are DISTINCT (so the pair does not itself get deduped). Asserted rather
+    // than described, because a pair that failed to collide under the substitute would look
+    // exactly like a passing test while guarding nothing.
+    const keyWith = (id: string, delim: string) => `${storedItem(id).title}${delim}${storedItem(id).content}`;
+    for (const [a, b, delim, name] of [
+      ['k_sep_comma_a', 'k_sep_comma_b', ',', 'comma'],
+      ['k_sep_tab_a', 'k_sep_tab_b', '\t', 'tab'],
+      ['k_sep_nl_a', 'k_sep_nl_b', '\n', 'newline'],
+      ['k_bound_5', 'k_bound_6', '', 'empty'],
+    ] as const) {
+      expect(keyWith(a, delim), `${name}: the pair must collide under ${JSON.stringify(delim)} or it guards nothing`).toBe(keyWith(b, delim));
+      // The NUL is written as the six-character escape backslash-u-0000, never as a literal NUL
+      // byte: a literal NUL in this file also makes `grep` treat it as binary and go silent,
+      // which is how a NUL survived unnoticed in this PR's own description. Byte-checked in CI
+      // by nothing, so it is asserted here instead - see the no-literal-NUL test below.
+      expect(keyWith(a, '\u0000'), `${name}: the pair must stay distinct under the real NUL separator`).not.toBe(keyWith(b, '\u0000'));
+    }
 
     // Refusing without --yes must delete nothing. Compared byte-for-byte rather than by count,
     // because a rewrite that preserves the count would still be a write this command must not do.
@@ -3446,7 +3492,7 @@ describe('knowledge cli', () => {
     const result = JSON.parse(decode(deduped.stdout));
     expect(result.ok).toBe(true);
     expect(result.removed).toBe(1);
-    expect(result.remaining).toBe(5);
+    expect(result.remaining).toBe(11);
     expect(result.message).toBe('Dedupe removed 1 duplicate(s)');
 
     // The reported counts must agree with the store, in both directions.
@@ -3455,16 +3501,29 @@ describe('knowledge cli', () => {
     expect(seedItems.length - after.length).toBe(result.removed);
 
     // The FIRST occurrence survives and the later one is dropped — not an arbitrary winner.
-    expect(after).toEqual(['k_dup_1', 'k_title_3', 'k_content_4', 'k_bound_5', 'k_bound_6']);
+    expect(after).toEqual([
+      'k_dup_1', 'k_title_3', 'k_content_4', 'k_bound_5', 'k_bound_6',
+      'k_sep_comma_a', 'k_sep_comma_b', 'k_sep_tab_a', 'k_sep_tab_b', 'k_sep_nl_a', 'k_sep_nl_b',
+    ]);
     expect(storedItem('k_dup_1').url).toBe('https://first.example');
     expect(storedItem('k_dup_1').tags).toEqual(['first']);
 
-    // The three non-duplicates are untouched, including both halves of the separator boundary.
-    // If the NUL separator is ever emptied, THIS is the assertion that fails.
+    // All TEN non-duplicates are untouched, including both halves of every separator pair.
+    // Corrected in adversarial review: an earlier comment here said "the three non-duplicates"
+    // while four were asserted, and claimed THIS assertion is the one that fails if the
+    // separator is emptied. It is not - bun aborts the test at the `result.removed` expectation
+    // above, so these lines never execute on that mutation. They are the second line of
+    // defence, not the detector.
     expect(after).toContain('k_title_3');
     expect(after).toContain('k_content_4');
     expect(after).toContain('k_bound_5');
     expect(after).toContain('k_bound_6');
+    expect(after).toContain('k_sep_comma_a');
+    expect(after).toContain('k_sep_comma_b');
+    expect(after).toContain('k_sep_tab_a');
+    expect(after).toContain('k_sep_tab_b');
+    expect(after).toContain('k_sep_nl_a');
+    expect(after).toContain('k_sep_nl_b');
 
     // Idempotence: a second run has nothing left to collapse and must report 0 rather than
     // deleting more.
@@ -3472,7 +3531,7 @@ describe('knowledge cli', () => {
     expect(again.exitCode).toBe(0);
     const secondResult = JSON.parse(decode(again.stdout));
     expect(secondResult.removed).toBe(0);
-    expect(secondResult.remaining).toBe(5);
+    expect(secondResult.remaining).toBe(11);
     expect(storedIds()).toEqual(after);
   });
 
