@@ -17,8 +17,12 @@ import type {
   MachineHealthReport,
 } from "./agent-abstractions.js";
 import {
+  BROWSERPLAN_APP_ID,
   BROWSERPLAN_EXCLUDED_MACHINE_IDS,
+  BROWSERPLAN_INSTALL_VERSION_PLACEHOLDER,
   BROWSERPLAN_MACHINE_IDS,
+  BROWSERPLAN_ROUTE_OWNER,
+  BROWSERPLAN_SECRETS_OWNER,
   BROWSERPLAN_TARGET_NAME,
   type BrowserPlanFleet,
 } from "./browserplan.js";
@@ -370,7 +374,7 @@ export const MACHINES_CONSUMER_SCHEMA_BUNDLE: MachinesConsumerSchemaBundle = {
           required: ["name", "owner", "machine_ids", "excluded_machine_ids", "install_target_excludes"],
           properties: {
             name: { const: BROWSERPLAN_TARGET_NAME },
-            owner: { const: "open-chrome" },
+            owner: { const: BROWSERPLAN_APP_ID },
             machine_ids: { const: [...BROWSERPLAN_MACHINE_IDS] },
             excluded_machine_ids: { const: [...BROWSERPLAN_EXCLUDED_MACHINE_IDS] },
             install_target_excludes: { const: [...BROWSERPLAN_EXCLUDED_MACHINE_IDS] },
@@ -392,8 +396,8 @@ export const MACHINES_CONSUMER_SCHEMA_BUNDLE: MachinesConsumerSchemaBundle = {
           type: "object",
           required: ["command_owner", "route_owner", "default_timeout_ms", "private_route_policy", "supported_operations", "stable_surfaces"],
           properties: {
-            command_owner: { const: "open-chrome" },
-            route_owner: { const: "open-machines" },
+            command_owner: { const: BROWSERPLAN_APP_ID },
+            route_owner: { const: BROWSERPLAN_ROUTE_OWNER },
             default_timeout_ms: { type: "number" },
             private_route_policy: { const: BROWSERPLAN_PRIVATE_ROUTE_POLICY },
             supported_operations: { const: [...BROWSERPLAN_OPERATION_IDS] },
@@ -469,7 +473,7 @@ export const MACHINES_CONSUMER_SCHEMA_BUNDLE: MachinesConsumerSchemaBundle = {
                   required: ["id", "label", "description", "owner", "available", "readiness", "required_capabilities", "blocked_by", "command_template", "command_placeholders", "safe_runner"],
                   properties: {
                     id: { enum: [...BROWSERPLAN_OPERATION_IDS] },
-                    owner: { const: "open-chrome" },
+                    owner: { const: BROWSERPLAN_APP_ID },
                     available: { type: "boolean" },
                     readiness: { enum: ["ready", "blocked", "unknown"] },
                     required_capabilities: { type: "array", items: { type: "string" } },
@@ -933,9 +937,9 @@ function validateBrowserPlanSafeRunner(value: unknown, path: string, machineId: 
     errors.push(`${path}.mcp`);
   }
   if (isRecord(value.ownership)) {
-    if (value.ownership.command_owner !== "open-chrome") errors.push(`${path}.ownership.command_owner`);
-    if (value.ownership.route_owner !== "open-machines") errors.push(`${path}.ownership.route_owner`);
-    if (value.ownership.secrets_owner !== "open-identities/open-attachments/open-mailery") errors.push(`${path}.ownership.secrets_owner`);
+    if (value.ownership.command_owner !== BROWSERPLAN_APP_ID) errors.push(`${path}.ownership.command_owner`);
+    if (value.ownership.route_owner !== BROWSERPLAN_ROUTE_OWNER) errors.push(`${path}.ownership.route_owner`);
+    if (value.ownership.secrets_owner !== BROWSERPLAN_SECRETS_OWNER) errors.push(`${path}.ownership.secrets_owner`);
   } else {
     errors.push(`${path}.ownership`);
   }
@@ -1346,7 +1350,7 @@ export function validateMachinesConsumerEnvelope(
       const target = value.target as Record<string, unknown>;
       requireFields(target, ["name", "owner", "machine_ids", "excluded_machine_ids", "install_target_excludes"], errors);
       if (target.name !== BROWSERPLAN_TARGET_NAME) errors.push("target.name");
-      if (target.owner !== "open-chrome") errors.push("target.owner");
+      if (target.owner !== BROWSERPLAN_APP_ID) errors.push("target.owner");
       if (!arrayEquals(target.machine_ids, BROWSERPLAN_MACHINE_IDS)) errors.push("target.machine_ids");
       if (!arrayEquals(target.excluded_machine_ids, BROWSERPLAN_EXCLUDED_MACHINE_IDS)) errors.push("target.excluded_machine_ids");
       if (!arrayEquals(target.install_target_excludes, BROWSERPLAN_EXCLUDED_MACHINE_IDS)) errors.push("target.install_target_excludes");
@@ -1371,8 +1375,8 @@ export function validateMachinesConsumerEnvelope(
     } else {
       const contract = value.operation_contract as Record<string, unknown>;
       requireFields(contract, ["command_owner", "route_owner", "default_timeout_ms", "private_route_policy", "supported_operations", "stable_surfaces"], errors);
-      if (contract.command_owner !== "open-chrome") errors.push("operation_contract.command_owner");
-      if (contract.route_owner !== "open-machines") errors.push("operation_contract.route_owner");
+      if (contract.command_owner !== BROWSERPLAN_APP_ID) errors.push("operation_contract.command_owner");
+      if (contract.route_owner !== BROWSERPLAN_ROUTE_OWNER) errors.push("operation_contract.route_owner");
       if (typeof contract.default_timeout_ms !== "number") errors.push("operation_contract.default_timeout_ms");
       if (contract.private_route_policy !== BROWSERPLAN_PRIVATE_ROUTE_POLICY) errors.push("operation_contract.private_route_policy");
       if (!arrayEquals(contract.supported_operations, BROWSERPLAN_OPERATION_IDS)) errors.push("operation_contract.supported_operations");
@@ -1457,12 +1461,14 @@ export function validateMachinesConsumerEnvelope(
             }
             requireFields(hook, ["id", "label", "description", "owner", "available", "readiness", "required_capabilities", "blocked_by", "command_template", "command_placeholders", "safe_runner"], errors);
             if (!BROWSERPLAN_OPERATION_ID_SET.has(String(hook.id))) errors.push(`${path}.id`);
-            if (hook.owner !== "open-chrome") errors.push(`${path}.owner`);
+            if (hook.owner !== BROWSERPLAN_APP_ID) errors.push(`${path}.owner`);
             if (typeof hook.available !== "boolean") errors.push(`${path}.available`);
             if (!["ready", "blocked", "unknown"].includes(String(hook.readiness))) errors.push(`${path}.readiness`);
             if (!hasString(hook, "command_template")) errors.push(`${path}.command_template`);
             if (hook.id === "supervisor_status" && String(hook.command_template).includes("remote start")) errors.push(`${path}.command_template`);
-            if (hook.id === "app_install_update" && !String(hook.command_template).includes("<open-chrome-project-root>")) errors.push(`${path}.command_template`);
+            if (hook.id === "app_install_update" && !String(hook.command_template).includes(`<${BROWSERPLAN_INSTALL_VERSION_PLACEHOLDER}>`)) errors.push(`${path}.command_template`);
+            // The BrowserPlan source repository was retired; installing from a git checkout can no longer succeed.
+            if (hook.id === "app_install_update" && /\bgit\s+pull\b/.test(String(hook.command_template))) errors.push(`${path}.command_template`);
             if (!hasArray(hook, "command_placeholders")) errors.push(`${path}.command_placeholders`);
             if (!hasArray(hook, "required_capabilities")) errors.push(`${path}.required_capabilities`);
             if (!hasArray(hook, "blocked_by")) errors.push(`${path}.blocked_by`);

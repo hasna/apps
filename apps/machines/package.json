@@ -47,6 +47,7 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "sdk:generate": "bun run scripts/generate-sdk.ts",
+    "schema:generate": "bun run scripts/generate-consumer-schema.ts",
     "kit:check": "bunx @hasna/contracts vendor-kit --check",
     "smoke:consumer-conformance": "bun scripts/consumer-conformance.mjs",
     "verify:release": "bun run typecheck && bun test && bun run build && bun run smoke:consumer-conformance && bun run scripts/verify-release.ts",

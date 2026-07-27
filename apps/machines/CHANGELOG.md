@@ -6,6 +6,45 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **BrowserPlan `app_install_update` no longer depends on a git checkout.** The
+  hook's `command_template` was
+  `cd <open-chrome-project-root> && git pull --ff-only origin main && bun install
+  --frozen-lockfile`, which cannot succeed now that the BrowserPlan source
+  repository is retired. It is now
+  `bun install -g @hasna/open-chrome@<open-chrome-version>` — the same
+  desired-state rollout idiom `machines reconcile` already uses (`bun install -g
+  pkg@version`) against the npm package, which ships the `browserplan` bin.
+  `command_placeholders` changes from `["open-chrome-project-root"]` to
+  `["open-chrome-version"]`, and `required_capabilities` drops `git` (installing
+  from npm needs only `bun`), so machines without git are no longer reported as
+  blocked for this hook. `validateMachinesConsumerEnvelope("browserplan_fleet",
+  …)` now **rejects** any `app_install_update` template that contains `git pull`
+  or omits the `<open-chrome-version>` placeholder, so a stale consumer cannot
+  hand an operator a command that pulls a repository that no longer exists.
+  Every other BrowserPlan surface is byte-for-byte unchanged: same owner ids,
+  target name, machine ids, operation ids, stable surfaces, and the same
+  published `schemas/machines-consumer.schema.json`.
+
+### Changed
+
+- The BrowserPlan owner ids are now single named exports instead of literals
+  repeated across the contract, the schema bundle, and the validators:
+  `BROWSERPLAN_APP_ID`, `BROWSERPLAN_PACKAGE_NAME`, `BROWSERPLAN_CLI_COMMAND`,
+  `BROWSERPLAN_ROUTE_OWNER`, `BROWSERPLAN_SECRETS_OWNER`, and
+  `BROWSERPLAN_INSTALL_UPDATE_COMMAND_TEMPLATE` (`src/browserplan.ts`). A test
+  pins `BROWSERPLAN_APP_ID === defaultAppIdForPackage(BROWSERPLAN_PACKAGE_NAME)`
+  and `BROWSERPLAN_ROUTE_OWNER === defaultAppIdForPackage(MACHINES_PACKAGE_NAME)`
+  so the ids stay derived from the package names that define them. Emitted
+  values are unchanged.
+- Added `bun run schema:generate`
+  (`scripts/generate-consumer-schema.ts`) to regenerate
+  `schemas/machines-consumer.schema.json` from
+  `MACHINES_CONSUMER_SCHEMA_BUNDLE`; the artifact is no longer hand-edited, and
+  `test/consumer.test.ts` now asserts byte identity rather than only deep
+  equality.
+
 ## [0.2.2] - 2026-07-24
 
 ### Fixed

@@ -495,6 +495,10 @@ know it.
 `operation_hooks` are contracts, not command execution. BrowserPlan/open-chrome
 owns the concrete remote commands for profile setup, headed launch, headless
 launch, daemon/supervisor status, tab/session inventory, and app install/update.
+`app_install_update` installs from the `@hasna/open-chrome` npm package (`bun
+install -g @hasna/open-chrome@<open-chrome-version>`), not from a git checkout;
+templates that git-pull a clone are rejected by
+`validateMachinesConsumerEnvelope`.
 Open-machines owns route resolution and exposes the safe runner pattern:
 `runMachineCommand()` in the SDK, `machines ssh --machine <id> --cmd
 <browserplan-owned command> --json` in the CLI, and MCP `machines_ssh_resolve`.

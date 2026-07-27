@@ -15,6 +15,32 @@ import {
 import { getPackageVersion } from "./version.js";
 
 export const BROWSERPLAN_FLEET_KIND = "browserplan_fleet";
+
+/**
+ * BrowserPlan distribution source of truth. The `hasna/chrome` git repository was
+ * retired, so the npm package is the only remaining artifact: it ships raw TypeScript
+ * (no `dist/`) and provides the `browserplan` bin.
+ */
+export const BROWSERPLAN_PACKAGE_NAME = "@hasna/open-chrome";
+export const BROWSERPLAN_CLI_COMMAND = "browserplan";
+/**
+ * Contract owner id for every BrowserPlan-owned surface (`target.owner`,
+ * `operation_contract.command_owner`, `operation_hooks[].owner`, safe-runner ownership)
+ * and the workspace/project key machine manifests use. Must stay equal to
+ * `defaultAppIdForPackage(BROWSERPLAN_PACKAGE_NAME)`; test/browserplan.test.ts pins that.
+ */
+export const BROWSERPLAN_APP_ID = "open-chrome";
+/** Route owner id for this package, i.e. `defaultAppIdForPackage(MACHINES_PACKAGE_NAME)`. */
+export const BROWSERPLAN_ROUTE_OWNER = "open-machines";
+export const BROWSERPLAN_SECRETS_OWNER = "open-identities/open-attachments/open-mailery";
+/**
+ * `app_install_update` installs/updates BrowserPlan from npm, matching the desired-state
+ * rollout idiom in src/commands/reconcile.ts (`bun install -g pkg@version`). It must NOT
+ * git-pull a checkout: the source repository no longer exists.
+ */
+export const BROWSERPLAN_INSTALL_VERSION_PLACEHOLDER = "open-chrome-version";
+export const BROWSERPLAN_INSTALL_UPDATE_COMMAND_TEMPLATE = `bun install -g ${BROWSERPLAN_PACKAGE_NAME}@<${BROWSERPLAN_INSTALL_VERSION_PLACEHOLDER}>`;
+
 export const BROWSERPLAN_TARGET_NAME = "browserplan-machine001-machine011";
 export const BROWSERPLAN_MACHINE_IDS = [
   "machine001",
@@ -123,9 +149,9 @@ export interface BrowserPlanSafeRunnerContract {
     private_metadata_note: string;
   };
   ownership: {
-    command_owner: "open-chrome";
-    route_owner: "open-machines";
-    secrets_owner: "open-identities/open-attachments/open-mailery";
+    command_owner: typeof BROWSERPLAN_APP_ID;
+    route_owner: typeof BROWSERPLAN_ROUTE_OWNER;
+    secrets_owner: typeof BROWSERPLAN_SECRETS_OWNER;
   };
 }
 
@@ -133,7 +159,7 @@ export interface BrowserPlanOperationHook {
   id: BrowserPlanOperationId;
   label: string;
   description: string;
-  owner: "open-chrome";
+  owner: typeof BROWSERPLAN_APP_ID;
   available: boolean;
   readiness: "ready" | "blocked" | "unknown";
   launch_mode?: "headed" | "headless";
@@ -182,7 +208,7 @@ export interface BrowserPlanFleet {
   kind: typeof BROWSERPLAN_FLEET_KIND;
   target: {
     name: typeof BROWSERPLAN_TARGET_NAME;
-    owner: "open-chrome";
+    owner: typeof BROWSERPLAN_APP_ID;
     machine_ids: BrowserPlanMachineId[];
     excluded_machine_ids: BrowserPlanExcludedMachineId[];
     install_target_excludes: BrowserPlanExcludedMachineId[];
@@ -196,8 +222,8 @@ export interface BrowserPlanFleet {
     excluded_requested: BrowserPlanExcludedMachineId[];
   };
   operation_contract: {
-    command_owner: "open-chrome";
-    route_owner: "open-machines";
+    command_owner: typeof BROWSERPLAN_APP_ID;
+    route_owner: typeof BROWSERPLAN_ROUTE_OWNER;
     default_timeout_ms: number;
     private_route_policy: "private targets are omitted unless caller explicitly requests private metadata on a trusted local operator surface";
     supported_operations: BrowserPlanOperationId[];
@@ -358,8 +384,8 @@ function installState(
       machineId,
       commands: CAPABILITY_COMMANDS.map((command) => ({ command, required: false })),
       packages: [
-        { name: "@hasna/machines", command: "machines", required: false },
-        { name: "@hasna/open-chrome", command: "browserplan", required: false },
+        { name: MACHINES_PACKAGE_NAME, command: "machines", required: false },
+        { name: BROWSERPLAN_PACKAGE_NAME, command: BROWSERPLAN_CLI_COMMAND, required: false },
       ],
       runner: options.runner,
       now: options.now,
@@ -398,8 +424,8 @@ function workspaceSummary(machineId: string, topology: MachineTopology, machine:
   try {
     const workspace = resolveMachineWorkspace({
       machineId,
-      projectId: "open-chrome",
-      repoName: "open-chrome",
+      projectId: BROWSERPLAN_APP_ID,
+      repoName: BROWSERPLAN_APP_ID,
       topology,
       now,
     });
@@ -447,9 +473,9 @@ function safeRunner(machineId: string): BrowserPlanSafeRunnerContract {
       private_metadata_note: "Set private_metadata:true only on trusted operator surfaces when the concrete SSH command must be printed or executed.",
     },
     ownership: {
-      command_owner: "open-chrome",
-      route_owner: "open-machines",
-      secrets_owner: "open-identities/open-attachments/open-mailery",
+      command_owner: BROWSERPLAN_APP_ID,
+      route_owner: BROWSERPLAN_ROUTE_OWNER,
+      secrets_owner: BROWSERPLAN_SECRETS_OWNER,
     },
   };
 }
@@ -487,7 +513,7 @@ function operationHook(input: {
     id: input.id,
     label: input.label,
     description: input.description,
-    owner: "open-chrome",
+    owner: BROWSERPLAN_APP_ID,
     available: blockedBy.length === 0,
     readiness,
     ...(input.launchMode ? { launch_mode: input.launchMode } : {}),
@@ -591,11 +617,11 @@ function operationHooks(machineId: string, routeReady: boolean, known: boolean, 
     operationHook({
       id: "app_install_update",
       label: "Install/update app",
-      description: "Install or update open-chrome/BrowserPlan from the machine's open-chrome workspace.",
+      description: `Install or update the BrowserPlan CLI from the ${BROWSERPLAN_PACKAGE_NAME} npm package on the target machine.`,
       machineId,
-      commandTemplate: "cd <open-chrome-project-root> && git pull --ff-only origin main && bun install --frozen-lockfile",
-      placeholders: ["open-chrome-project-root"],
-      requiredCapabilities: ["bun", "git"],
+      commandTemplate: BROWSERPLAN_INSTALL_UPDATE_COMMAND_TEMPLATE,
+      placeholders: [BROWSERPLAN_INSTALL_VERSION_PLACEHOLDER],
+      requiredCapabilities: ["bun"],
       routeReady,
       known,
       installState: install,
@@ -687,7 +713,7 @@ export function getBrowserPlanFleet(options: BrowserPlanFleetOptions = {}): Brow
     kind: BROWSERPLAN_FLEET_KIND,
     target: {
       name: BROWSERPLAN_TARGET_NAME,
-      owner: "open-chrome",
+      owner: BROWSERPLAN_APP_ID,
       machine_ids: [...BROWSERPLAN_MACHINE_IDS],
       excluded_machine_ids: [...BROWSERPLAN_EXCLUDED_MACHINE_IDS],
       install_target_excludes: [...BROWSERPLAN_EXCLUDED_MACHINE_IDS],
@@ -701,8 +727,8 @@ export function getBrowserPlanFleet(options: BrowserPlanFleetOptions = {}): Brow
       excluded_requested: excludedRequested,
     },
     operation_contract: {
-      command_owner: "open-chrome",
-      route_owner: "open-machines",
+      command_owner: BROWSERPLAN_APP_ID,
+      route_owner: BROWSERPLAN_ROUTE_OWNER,
       default_timeout_ms: DEFAULT_REMOTE_TIMEOUT_MS,
       private_route_policy: "private targets are omitted unless caller explicitly requests private metadata on a trusted local operator surface",
       supported_operations: [

@@ -4,9 +4,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDb } from "../src/db.js";
 import { manifestAdd, manifestInit } from "../src/commands/manifest.js";
-import { getBrowserPlanFleet, normalizeBrowserPlanMachineId } from "../src/browserplan.js";
+import {
+  BROWSERPLAN_APP_ID,
+  BROWSERPLAN_INSTALL_UPDATE_COMMAND_TEMPLATE,
+  BROWSERPLAN_INSTALL_VERSION_PLACEHOLDER,
+  BROWSERPLAN_PACKAGE_NAME,
+  BROWSERPLAN_ROUTE_OWNER,
+  getBrowserPlanFleet,
+  normalizeBrowserPlanMachineId,
+} from "../src/browserplan.js";
 import { validateMachinesConsumerEnvelope } from "../src/consumer-schema.js";
-import { discoverMachineTopology } from "../src/topology.js";
+import { defaultAppIdForPackage } from "../src/distribution.js";
+import { MACHINES_PACKAGE_NAME, discoverMachineTopology } from "../src/topology.js";
 import type { CompatibilityCommandRunner } from "../src/compatibility.js";
 
 const ENV_KEYS = [
@@ -80,6 +89,19 @@ function installRunner(overrides: Record<string, Set<string>> = {}): Compatibili
 }
 
 describe("BrowserPlan fleet contract", () => {
+  test("derives owner ids from the npm package names rather than repeating literals", () => {
+    expect(BROWSERPLAN_APP_ID).toBe(defaultAppIdForPackage(BROWSERPLAN_PACKAGE_NAME));
+    expect(BROWSERPLAN_ROUTE_OWNER).toBe(defaultAppIdForPackage(MACHINES_PACKAGE_NAME));
+  });
+
+  test("installs and updates BrowserPlan from npm, never from a git checkout", () => {
+    // hasna/chrome was deleted; @hasna/open-chrome on npm is the only remaining artifact,
+    // so the app_install_update hook must not reference a clone it can no longer pull.
+    expect(BROWSERPLAN_INSTALL_UPDATE_COMMAND_TEMPLATE).toBe(`bun install -g ${BROWSERPLAN_PACKAGE_NAME}@<${BROWSERPLAN_INSTALL_VERSION_PLACEHOLDER}>`);
+    expect(BROWSERPLAN_INSTALL_UPDATE_COMMAND_TEMPLATE).not.toMatch(/git\s+pull/);
+    expect(BROWSERPLAN_INSTALL_UPDATE_COMMAND_TEMPLATE).not.toContain("<open-chrome-project-root>");
+  });
+
   test("normalizes only BrowserPlan machine ids and excludes spark ids", () => {
     expect(normalizeBrowserPlanMachineId("machine001")).toBe("machine001");
     expect(normalizeBrowserPlanMachineId("Machine2")).toBe("machine002");
@@ -136,7 +158,12 @@ describe("BrowserPlan fleet contract", () => {
       ]);
       expect(fleet.machines[0]?.operation_hooks.every((hook) => hook.safe_runner.mcp.args.private_metadata === false)).toBe(true);
       expect(fleet.machines[0]?.operation_hooks.find((hook) => hook.id === "supervisor_status")?.command_template).toBe("browserplan remote status --machine <machine-id> --json");
-      expect(fleet.machines[0]?.operation_hooks.find((hook) => hook.id === "app_install_update")?.command_template).toBe("cd <open-chrome-project-root> && git pull --ff-only origin main && bun install --frozen-lockfile");
+      const installHook = fleet.machines[0]?.operation_hooks.find((hook) => hook.id === "app_install_update");
+      expect(installHook?.command_template).toBe("bun install -g @hasna/open-chrome@<open-chrome-version>");
+      expect(installHook?.command_placeholders).toEqual(["open-chrome-version"]);
+      // git is no longer required: the hook installs from npm, so a machine without git
+      // must not be reported as blocked for it.
+      expect(installHook?.required_capabilities).toEqual(["bun"]);
       expect(validateMachinesConsumerEnvelope("browserplan_fleet", fleet)).toMatchObject({ ok: true, errors: [] });
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -223,7 +250,10 @@ describe("BrowserPlan fleet contract", () => {
       malformed.operation_contract.stable_surfaces.mcp = "wrong_tool";
       malformed.machines[0].operation_hooks[0].safe_runner.mcp.args.private_metadata = true;
       malformed.machines[0].operation_hooks.find((hook: { id: string }) => hook.id === "supervisor_status").command_template = "browserplan remote start --machine <machine-id> --json";
-      malformed.machines[0].operation_hooks.find((hook: { id: string }) => hook.id === "app_install_update").command_template = "cd /tmp/open-chrome && git pull --ff-only origin main";
+      // The retired pre-deletion template must now fail validation, so a stale consumer or
+      // an older cached payload cannot hand an operator a command that git-pulls a repo
+      // that no longer exists.
+      malformed.machines[0].operation_hooks.find((hook: { id: string }) => hook.id === "app_install_update").command_template = "cd <open-chrome-project-root> && git pull --ff-only origin main && bun install --frozen-lockfile";
 
       const result = validateMachinesConsumerEnvelope("browserplan_fleet", malformed);
       expect(result.ok).toBe(false);
