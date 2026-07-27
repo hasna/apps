@@ -1,6 +1,6 @@
 import AVFoundation
 @preconcurrency import ApplicationServices
-// IsSecureEventInputEnabled lives in Carbon's HIToolbox, not AppKit.
+// CopySymbolicHotKeys lives in Carbon's HIToolbox.
 import Carbon.HIToolbox
 import Darwin
 import SwiftUI
@@ -305,34 +305,45 @@ struct PasteDeliveryTransaction: Equatable, Sendable {
 }
 
 enum PasteDeliveryOutcome: Equatable, Sendable {
+    /// Delivery *observed*: the focused field in the target app was read back after the
+    /// keystroke and had gained the pasted text. Reachable only from confirming evidence —
+    /// see `PasteDeliveryOutcome.forDeliveryEvidence`. A posted `CGEvent` never produces it,
+    /// because `CGEvent.post` returns no delivery receipt.
     case pasted
+    /// The keystroke was posted and the focused field, readable before and after, did not
+    /// change. The paste did not land where it was aimed.
+    case deliveryNotObserved
+    /// The keystroke was posted and the target app's focused field could not be read back, so
+    /// delivery is unknown. Carries the reason so the log says which surface refused to
+    /// answer instead of implying success.
+    case deliveredUnverified(PasteDeliveryUnverifiedReason)
+    /// Secure event input is on, so no synthetic keystroke can reach any app. Nothing was
+    /// posted; the payload is left on the clipboard for the user to paste.
+    case secureInputActive(SecureInputHolder)
     case targetUnavailable
     case clipboardOwnershipLost
     case clipboardWriteFailed
-    /// The Cmd-V events could not be *built*. Named for what it actually detects: the
-    /// previous name, `eventPostFailed`, implied the post itself was checked, and
-    /// `CGEvent.post` returns Void, so no code ever learned that.
-    case eventConstructionFailed
-    /// Some process holds secure event input (a password field, a password manager, certain
-    /// lock states). macOS then discards synthetic keystrokes and reports nothing, so the
-    /// paste cannot land. The transcript stays on the clipboard for a manual Cmd-V.
-    case secureInputBlocked
-}
+    case eventPostFailed
 
-/// What actually happened when the paste keystroke was attempted.
-///
-/// This exists because a Bool could not tell "the events would not build" apart from "the
-/// events were built and discarded by secure input" — and the old poster returned `true` for
-/// the second case, so the app reported a successful paste while nothing was typed.
-enum PastePostResult: Equatable, Sendable {
-    case posted
-    case eventConstructionFailed
-    case secureInputActive
+    /// The single place delivery evidence is allowed to become `.pasted`. Kept next to the
+    /// outcome so a reader can check the whole mapping at once: two confirming reads, one
+    /// contradicting read, everything else unverified.
+    static func forDeliveryEvidence(_ evidence: PasteDeliveryEvidence) -> PasteDeliveryOutcome {
+        switch evidence {
+        case .confirmedByFocusedValue, .confirmedBySelectedText: .pasted
+        case .notObservedFocusedValueUnchanged: .deliveryNotObserved
+        case .unverified(let reason): .deliveredUnverified(reason)
+        }
+    }
 }
 
 struct PasteboardWriteResult: Equatable, Sendable {
     let verified: Bool
     let ownershipChangeCount: Int
+    /// Whether the pasteboard's `changeCount` actually advanced past its pre-write value.
+    /// Weaker than `verified` (which also re-reads the stored string) and reported separately
+    /// so a log reader can tell "the pasteboard moved" from "the pasteboard holds our text".
+    var changeCountAdvanced: Bool = false
 }
 
 /// Outcome of revalidating the frozen rewrite target immediately before a rewrite runs.
@@ -354,7 +365,11 @@ final class PasteTransactionCoordinator {
     typealias ScheduledOperation = @MainActor @Sendable () -> Void
     typealias Scheduler = @MainActor @Sendable (TimeInterval, @escaping ScheduledOperation) -> Void
     typealias PayloadWriter = @MainActor @Sendable (String) -> PasteboardWriteResult
-    typealias PastePoster = @MainActor @Sendable () -> PastePostResult
+    typealias PastePoster = @MainActor @Sendable () -> PasteKeystrokeAttempt
+    /// Reads the target app back and reports what that read proves. Defaulted to
+    /// `.unverified(.readBackNotAttempted)` at every entry point so a caller that supplies no
+    /// verification gets an explicitly unverified outcome, never an assumed success.
+    typealias DeliveryVerifier = @MainActor @Sendable () -> PasteDeliveryEvidence
     typealias WriteObserver = @MainActor @Sendable (PasteboardWriteResult) -> Void
     typealias Completion = @MainActor @Sendable (PasteDeliveryTransaction, PasteDeliveryOutcome) -> Void
     typealias Settlement = @MainActor @Sendable (PasteDeliveryTransaction, PasteDeliveryOutcome) -> Void
@@ -399,6 +414,14 @@ final class PasteTransactionCoordinator {
         payloadIsReady: @escaping @MainActor @Sendable () -> Bool = { true },
         prepare: @escaping ScheduledOperation = {},
         writeAttempted: @escaping WriteObserver = { _ in },
+        verify: @escaping DeliveryVerifier = { .unverified(.readBackNotAttempted) },
+        // `verificationDelay` is the wait between posting the keystroke and reading the target
+        // app back; zero verifies on the posting turn, which only makes sense for tests since a
+        // real app cannot have processed the event yet. `verificationAttempts` bounds how many
+        // read-backs may run before "the field did not change" is accepted as the verdict —
+        // only that verdict is retried, and each retry costs one `verificationDelay`.
+        verificationDelay: TimeInterval = 0,
+        verificationAttempts: Int = 1,
         completion: @escaping Completion,
         settlement: @escaping Settlement = { _, _ in }
     ) -> Bool {
@@ -441,33 +464,91 @@ final class PasteTransactionCoordinator {
                 completion(transaction, .clipboardOwnershipLost)
                 return
             }
+            // `@MainActor` is required, not decorative: a local function does not inherit the
+            // enclosing closure's actor isolation, so without it `state` cannot be mutated and
+            // `completion`/`settlement` cannot be called from here at all.
+            @MainActor func failNow(with outcome: PasteDeliveryOutcome) {
+                settlement(transaction, outcome)
+                self.state = .idle
+                completion(transaction, outcome)
+            }
+
             switch self.postPaste() {
+            case .constructionFailed:
+                failNow(with: .eventPostFailed)
+                return
+            case .refusedSecureInput(let holder):
+                // Nothing was posted: with secure input on, the window server drops synthetic
+                // key events for every consumer, so posting would only manufacture a success
+                // log for a paste that cannot happen.
+                failNow(with: .secureInputActive(holder))
+                return
             case .posted:
                 break
-            case .eventConstructionFailed:
-                settlement(transaction, .eventConstructionFailed)
-                self.state = .idle
-                completion(transaction, .eventConstructionFailed)
-                return
-            case .secureInputActive:
-                settlement(transaction, .secureInputBlocked)
-                self.state = .idle
-                completion(transaction, .secureInputBlocked)
+            }
+
+            // The keystroke is out. `CGEvent.post` returned no receipt, so the transaction
+            // stays open: the outcome comes from reading the target app back.
+            let pending = PendingDelivery(
+                transaction: transaction,
+                verify: verify,
+                verificationDelay: verificationDelay,
+                verificationAttempts: verificationAttempts,
+                settlementDelay: settlementDelay,
+                completion: completion,
+                settlement: settlement
+            )
+            guard verificationDelay > 0 else {
+                self.settleFromDeliveryEvidence(pending, readBackAttempt: verificationAttempts)
                 return
             }
-            completion(transaction, .pasted)
-            guard settlementDelay > 0 else {
-                settlement(transaction, .pasted)
-                self.state = .idle
-                return
-            }
-            self.schedule(settlementDelay) { [weak self] in
+            self.schedule(verificationDelay) { [weak self] in
                 guard let self, self.state == .settling(transaction.id) else { return }
-                settlement(transaction, .pasted)
-                self.state = .idle
+                self.settleFromDeliveryEvidence(pending, readBackAttempt: 1)
             }
         }
         return true
+    }
+
+    /// Everything the read-back loop needs after the keystroke has been posted.
+    private struct PendingDelivery: Sendable {
+        let transaction: PasteDeliveryTransaction
+        let verify: DeliveryVerifier
+        let verificationDelay: TimeInterval
+        let verificationAttempts: Int
+        let settlementDelay: TimeInterval
+        let completion: Completion
+        let settlement: Settlement
+    }
+
+    /// Asks the verifier what the target app shows, retrying only the "field did not change"
+    /// verdict: that is the one a slow app can turn into a confirmation, while a confirmed or
+    /// unreadable result is already final.
+    private func settleFromDeliveryEvidence(_ pending: PendingDelivery, readBackAttempt: Int) {
+        let evidence = pending.verify()
+        guard evidence == .notObservedFocusedValueUnchanged,
+              readBackAttempt < pending.verificationAttempts else {
+            complete(pending, outcome: .forDeliveryEvidence(evidence))
+            return
+        }
+        schedule(pending.verificationDelay) { [weak self] in
+            guard let self, self.state == .settling(pending.transaction.id) else { return }
+            self.settleFromDeliveryEvidence(pending, readBackAttempt: readBackAttempt + 1)
+        }
+    }
+
+    private func complete(_ pending: PendingDelivery, outcome: PasteDeliveryOutcome) {
+        pending.completion(pending.transaction, outcome)
+        guard pending.settlementDelay > 0 else {
+            pending.settlement(pending.transaction, outcome)
+            state = .idle
+            return
+        }
+        schedule(pending.settlementDelay) { [weak self] in
+            guard let self, self.state == .settling(pending.transaction.id) else { return }
+            pending.settlement(pending.transaction, outcome)
+            self.state = .idle
+        }
     }
 }
 
@@ -648,9 +729,46 @@ public final class RecordingEngine: ObservableObject {
         didSet {
             UserDefaults.standard.set(useFnKey, forKey: "useFnKey")
             updateFnMonitor()
-            updateStatus()
+            refreshTriggerDiagnostics()
         }
     }
+    /// Where a blocked reason came from. The published reason is composed across these rather
+    /// than written per-source, because more than one can hold at once — fn and the hotkey can
+    /// both be blocked, and a delivery can be blocked while a trigger is too. A per-source
+    /// writer lets whichever ran last erase the others, which is the erasure bug this whole
+    /// mechanism exists to prevent.
+    ///
+    /// `Comparable` by declaration order, so the composed string is stable no matter which
+    /// source was written last: a reason that reorders itself between renders reads as two
+    /// different problems.
+    enum BlockedReasonSource: Int, CaseIterable, Comparable, Sendable {
+        /// The keyboard shortcut collides with an enabled system shortcut.
+        case hotkey
+        /// The fn monitor cannot run (Accessibility).
+        case fnKey
+        /// A trigger fired but the press was consumed before recording could start — the
+        /// permission-prompt case. Transient, and cleared by the next start.
+        case pressConsumed
+        /// The last delivery could not reach the target app and the transcript is sitting on
+        /// the clipboard waiting for the user. Cleared by the next recording, not by the next
+        /// status write.
+        case delivery
+
+        static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+    }
+
+    /// Why the app currently cannot record or deliver, when the reason outlives one status
+    /// write. Held separately from `statusMessage` because `updateStatus()` rewrites that on
+    /// every return to idle; see `updateStatus()`.
+    ///
+    /// This is the collapse of what were two fields — `triggerBlockedReason` (trigger health)
+    /// and `blockedReason` (secure-input delivery). Two published fields describing "the app
+    /// cannot do the thing you asked" is two places for a view to forget to read, and the
+    /// menu bar forgot to read either of them. One field, one writer.
+    @Published public private(set) var blockedReason: String?
+    /// The ONLY writer of `blockedReason` is `setBlockedReason(_:for:)`. Do not assign the
+    /// published property anywhere else; `macos-shortcut-contract.test.ts` asserts that.
+    private var blockedReasons: [BlockedReasonSource: String] = [:]
     /// Advanced fallback policy (Settings only): when off, every recording is dictated
     /// literally and the classifier is never consulted.
     @Published public var intentDetectionEnabled: Bool = true {
@@ -670,14 +788,6 @@ public final class RecordingEngine: ObservableObject {
     /// background recovery refresh the Library even after that pane has been unmounted.
     @Published public private(set) var persistedRecordingRevision: UInt64 = 0
     @Published public var statusMessage = "Starting..."
-    /// Why the app currently cannot deliver, when the reason outlives one status write.
-    ///
-    /// `updateDeliveryStatus` writes `statusMessage`, and `updateStatus()` rewrites it to
-    /// "Ready" on the next return to idle — which is exactly what happens once a delivery
-    /// settles. A transient success message can afford that; "this field blocks typing, press
-    /// Cmd-V" cannot, because it is the only thing telling the owner their transcript is
-    /// recoverable. Held here so the idle status keeps carrying it until the next delivery.
-    @Published public private(set) var blockedReason: String?
     @Published public var isTranscribing = false
     @Published public var recordingDuration: TimeInterval = 0
     @Published public var liveTranscriptionText = ""
@@ -789,26 +899,33 @@ public final class RecordingEngine: ObservableObject {
             let pasteboard = NSPasteboard.general
             return RecordingEngine.writeClipboardAttempt(text, to: pasteboard)
         },
-        postPaste: {
-            // Secure input is a global system state: while any process holds it, macOS
-            // discards synthetic keyboard events and `CGEvent.post` still returns Void. It
-            // is checked twice on purpose — a password field can take secure input between
-            // the check and the post, and a pre-check alone would just narrow the window in
-            // which the app claims a paste that never happened.
-            if IsSecureEventInputEnabled() { return .secureInputActive }
+        postPaste: { [weak self] in
+            // Secure input is checked here, on the posting turn, rather than earlier: a
+            // password field can take it between the readiness checks and the keystroke, and
+            // while it is held the window server drops every synthetic event.
+            let secureInput = SecureInputProbe.current()
+            self?.lastPasteSecureInputProbe = secureInput
+            if case .active(let holder) = secureInput {
+                return .refusedSecureInput(holder)
+            }
             let source = CGEventSource(stateID: .hidSystemState)
             guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: true),
                   let up = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: false) else {
-                return .eventConstructionFailed
+                return .constructionFailed
             }
             down.flags = .maskCommand
             up.flags = .maskCommand
             down.post(tap: .cgSessionEventTap)
             up.post(tap: .cgSessionEventTap)
-            if IsSecureEventInputEnabled() { return .secureInputActive }
+            // Constructed and posted. Nothing here observes delivery, which is why this
+            // returns `.posted` and not a success.
             return .posted
         }
     )
+    /// Secure-input reading taken on the last posting turn, or nil when no paste has reached
+    /// the posting step. Kept so the delivery log can say whether synthetic input was even
+    /// possible instead of leaving the reader to guess.
+    private var lastPasteSecureInputProbe: SecureInputState?
 
     /// Every coordinator the engine owns must publish its idle transitions:
     /// `canStartRecording` derives from coordinator state, and settlement back to idle is
@@ -868,6 +985,16 @@ public final class RecordingEngine: ObservableObject {
     /// *observable* rewrite time under the public ceiling even when the execution window,
     /// termination grace, and pipe drain all run to exhaustion.
     nonisolated static let commandRewriteReturnMargin: TimeInterval = 1
+    /// Wait before each read-back of the target app's focused field. The window server
+    /// delivers the posted keystroke asynchronously and the app then does its own work, so a
+    /// read taken on the posting turn would report "unchanged" for a paste that is simply
+    /// still in flight.
+    nonisolated static let pasteReadBackInterval: TimeInterval = 0.15
+    /// How many read-backs before "the field did not change" is accepted as the verdict.
+    /// Four reads spaced by `pasteReadBackInterval` give a slow target app ~0.6 s to show the
+    /// paste; a confirmation on any read ends the wait immediately. The transaction stays
+    /// pending for that window, which is why the budget is bounded rather than generous.
+    nonisolated static let pasteReadBackAttempts = 4
 
     // fn key monitor (CGEventTap-based, swallows fn to prevent emoji picker)
     private let fnMonitor = FnKeyMonitor()
@@ -887,18 +1014,24 @@ public final class RecordingEngine: ObservableObject {
         if KeyboardShortcuts.getShortcut(for: .toggleRecording) == nil {
             KeyboardShortcuts.setShortcut(.init(.f5), for: .toggleRecording)
         }
+        refreshHotkeyDiagnostics()
+        logResolvedTrigger()
 
         // Set up fn key monitor — hold fn to record, release to stop (like WisprFlow)
         fnMonitor.onFnKeyDown = { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.fnKeyIsDown = true
-                guard self.useFnKey, Self.canBeginRecording(
+                guard self.useFnKey else { return }
+                guard Self.canBeginRecording(
                     isRecording: self.isRecording,
                     isTranscribing: self.isTranscribing,
                     isAwaitingMicrophonePermission: self.microphonePermissionStartGate.isAwaitingResponse,
                     isDeliveryPending: self.deliveryIsPending
-                ) else { return }
+                ) else {
+                    self.logIgnoredTrigger(.fnKey)
+                    return
+                }
                 self.startRecording(trigger: .fnKey)
             }
         }
@@ -909,7 +1042,18 @@ public final class RecordingEngine: ObservableObject {
                 guard self.useFnKey, self.activeTrigger == .fnKey else { return }
                 guard self.isRecording else {
                     self.log("fn released before recording started; cancelling pending start")
+                    // The press was consumed and nothing was recorded. `resetRecordingIntent()`
+                    // + `updateStatus()` used to write "Ready" here, so the whole event was
+                    // invisible: the trigger fired, a permission was missing, and the app said
+                    // nothing. Cancelling stays; the silence does not.
+                    let consumedByPermissionPrompt = self.microphonePermissionStartGate.isAwaitingResponse
                     self.resetRecordingIntent()
+                    if consumedByPermissionPrompt {
+                        self.setBlockedReason(
+                            Self.pressConsumedByPermissionPromptMessage,
+                            for: .pressConsumed
+                        )
+                    }
                     self.updateStatus()
                     return
                 }
@@ -927,7 +1071,10 @@ public final class RecordingEngine: ObservableObject {
                     isTranscribing: self.isTranscribing,
                     isAwaitingMicrophonePermission: self.microphonePermissionStartGate.isAwaitingResponse,
                     isDeliveryPending: self.deliveryIsPending
-                ) else { return }
+                ) else {
+                    self.logIgnoredTrigger(.keyboardShortcut)
+                    return
+                }
                 self.startRecording(trigger: .keyboardShortcut)
             }
         }
@@ -938,7 +1085,16 @@ public final class RecordingEngine: ObservableObject {
                 guard self.activeTrigger == .keyboardShortcut else { return }
                 guard self.isRecording else {
                     self.log("shortcut released before recording started; cancelling pending start")
+                    // Same branch, same defect: the hotkey has an identical
+                    // released-before-start path, so it needs the identical disclosure.
+                    let consumedByPermissionPrompt = self.microphonePermissionStartGate.isAwaitingResponse
                     self.resetRecordingIntent()
+                    if consumedByPermissionPrompt {
+                        self.setBlockedReason(
+                            Self.pressConsumedByPermissionPromptMessage,
+                            for: .pressConsumed
+                        )
+                    }
                     self.updateStatus()
                     return
                 }
@@ -950,9 +1106,7 @@ public final class RecordingEngine: ObservableObject {
         // so retry until permissions arrive instead of requiring a relaunch.
         permissionRetryTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self, self.useFnKey, !self.fnMonitor.isRunning, AXIsProcessTrusted() else { return }
-                self.log("accessibility granted — retrying fn monitor")
-                self.updateFnMonitor()
+                self?.refreshFnMonitorHealth()
             }
         }
 
@@ -1015,7 +1169,85 @@ public final class RecordingEngine: ObservableObject {
         }
     }
 
+    /// Record which trigger is actually bound, at launch and whenever it changes.
+    ///
+    /// The log already showed `startRecording trigger=keyboardShortcut`, but never which
+    /// key was registered — so a hotkey silently rebound to a key the keyboard cannot send
+    /// was indistinguishable from a working one. Log the resolved binding so "is the
+    /// trigger armed, and to what" is answerable from the log alone.
+    public func logResolvedTrigger() {
+        let stored = KeyboardShortcuts.getShortcut(for: .toggleRecording)
+        let bound = stored
+            .map { "carbonKeyCode=\($0.carbonKeyCode) carbonModifiers=\($0.carbonModifiers)" }
+            ?? "none"
+        // `getShortcut` is a UserDefaults read, so it says what is *configured*, never what
+        // is *armed*: KeyboardShortcuts 1.12.0 discards RegisterEventHotKey's OSStatus, so a
+        // chord already owned by another app is indistinguishable from a working one here.
+        // Say "unknown" rather than let a stored value read as a live binding.
+        let systemReserved = stored.map {
+            Self.systemReservedShortcuts().contains([$0.carbonKeyCode, $0.carbonModifiers])
+        }
+        // The permission labels belong on the same line: a press that fires but delivers
+        // nothing is a permission problem, and correlating two log lines by timestamp was
+        // the only way to tell that apart from a trigger that never fired.
+        log(
+            "trigger bindings: shortcutStored=\(bound) "
+                + "shortcutArmed=unknown(carbon-registration-status-not-exposed) "
+                + "shortcutSystemReserved=\(systemReserved.map(String.init(describing:)) ?? "n/a") "
+                + "useFnKey=\(useFnKey) fnMonitorRunning=\(fnMonitor.isRunning) "
+                + "microphone=\(microphonePermissionLabel) accessibility=\(accessibilityPermissionLabel) "
+                + "blocked=\(blockedReason ?? "none")"
+        )
+    }
+
+    /// Both global triggers used to `return` silently when the engine was busy, so a press
+    /// that produced nothing left no trace at all — indistinguishable from a trigger that
+    /// never fired. Name the refusal instead.
+    private func logIgnoredTrigger(_ trigger: RecordingTrigger) {
+        log(
+            "trigger ignored trigger=\(trigger) isRecording=\(isRecording) "
+                + "isTranscribing=\(isTranscribing) deliveryPending=\(deliveryIsPending) "
+                + "awaitingMicrophonePermission=\(microphonePermissionStartGate.isAwaitingResponse)"
+        )
+    }
+
+    /// Accessibility is the gate in practice: `FnKeyMonitor` creates an *active* tap
+    /// (`options: .defaultTap`, and it returns nil to swallow fn), and an event-modifying
+    /// tap requires Accessibility. Only a listen-only tap would fall under Input
+    /// Monitoring, so naming both grants sent people to the wrong pane.
+    static let fnAccessibilityBlockedMessage =
+        "fn needs Accessibility: System Settings > Privacy & Security > Accessibility"
+
+    /// Periodic reconciliation of the fn tap against reality.
+    ///
+    /// Two failures this closes. Granting Accessibility does not revive a tap that failed to
+    /// create, so it has to be retried — and the retry used to run `updateFnMonitor()`
+    /// without `updateStatus()`, so the stale "fn needs Accessibility" line survived the
+    /// grant. And a tap can die *after* creation (Accessibility revoked at runtime), which
+    /// no creation-time check can see; `FnKeyMonitor.isRunning` now reflects whether the tap
+    /// is actually enabled, so that case is detected here instead of reading as "Ready".
+    private func refreshFnMonitorHealth() {
+        guard useFnKey else { return }
+        if fnMonitor.isRunning {
+            if blockedReasons[.fnKey] != nil {
+                setBlockedReason(nil, for: .fnKey)
+                updateStatus()
+            }
+            return
+        }
+        if AXIsProcessTrusted() {
+            log("fn monitor not running while trusted — retrying")
+            updateFnMonitor()
+        } else {
+            setBlockedReason(Self.fnAccessibilityBlockedMessage, for: .fnKey)
+        }
+        updateStatus()
+    }
+
     private func updateFnMonitor(allowAutomaticPrompt: Bool = true) {
+        // Decided as a local first, then handed to the single writer once. Assigning the
+        // published property from each branch is how the per-source erasure bug got in.
+        var reason: String?
         if useFnKey {
             let ok = fnMonitor.start()
             log("fn monitor start ok=\(ok)")
@@ -1024,15 +1256,102 @@ public final class RecordingEngine: ObservableObject {
                     let result = accessibilityPromptGate.trustForProtectedOperation()
                     log("fn monitor accessibility trusted=\(result.trusted) prompted=\(result.didPrompt)")
                 }
-                statusMessage = "fn needs Input Monitoring / Accessibility permission, and Globe must be set to Do Nothing"
+                reason = Self.fnAccessibilityBlockedMessage
+                log("trigger blocked: \(Self.fnAccessibilityBlockedMessage)")
             }
         } else {
             fnMonitor.stop()
         }
+        setBlockedReason(reason, for: .fnKey)
     }
+
+    /// Record or clear one source's reason and recompute the published value. Each source owns
+    /// its own slot; this is the **only** writer of `blockedReason`.
+    private func setBlockedReason(_ reason: String?, for source: BlockedReasonSource) {
+        if let reason, !reason.isEmpty {
+            blockedReasons[source] = reason
+        } else {
+            blockedReasons.removeValue(forKey: source)
+        }
+        let composed = blockedReasons
+            .sorted { $0.key < $1.key }
+            .map(\.value)
+            .joined(separator: " · ")
+        blockedReason = composed.isEmpty ? nil : composed
+    }
+
+    /// Enabled system-reserved shortcuts, read straight from Carbon.
+    ///
+    /// KeyboardShortcuts has an equivalent `Shortcut.isTakenBySystem`, but it sits in a
+    /// plain (internal) extension in the pinned 1.12.0 source, so it cannot be reached from
+    /// here. Only shortcuts flagged enabled count: a disabled system binding does not
+    /// contend for the key.
+    static func systemReservedShortcuts() -> Set<[Int]> {
+        var unmanaged: Unmanaged<CFArray>?
+        guard
+            CopySymbolicHotKeys(&unmanaged) == noErr,
+            let entries = unmanaged?.takeRetainedValue() as? [[String: Any]]
+        else {
+            return []
+        }
+        var reserved: Set<[Int]> = []
+        for entry in entries {
+            guard
+                (entry[kHISymbolicHotKeyEnabled] as? Bool) == true,
+                let code = entry[kHISymbolicHotKeyCode] as? Int,
+                let modifiers = entry[kHISymbolicHotKeyModifiers] as? Int
+            else {
+                continue
+            }
+            reserved.insert([code, modifiers])
+        }
+        return reserved
+    }
+
+    /// Re-evaluate whether the stored hotkey can plausibly arm.
+    ///
+    /// This is the honest half of a hard limit. `RegisterEventHotKey`'s `OSStatus` is
+    /// swallowed inside KeyboardShortcuts 1.12.0 (`CarbonKeyboardShortcuts.register` guards
+    /// on `registerError == noErr` and returns Void), so a hotkey stolen by *another
+    /// application* is not observable from here at all. A collision with an enabled
+    /// *system* shortcut is observable, and it is the case that silently wins, so it gets a
+    /// real blocked reason instead of a "Ready" that is not true.
+    /// Re-evaluate every trigger's health, push it to the UI, and record it. The one entry
+    /// point callers should use after anything changes a binding.
+    public func refreshTriggerDiagnostics() {
+        refreshHotkeyDiagnostics()
+        updateStatus()
+        logResolvedTrigger()
+    }
+
+    private func refreshHotkeyDiagnostics() {
+        guard let shortcut = KeyboardShortcuts.getShortcut(for: .toggleRecording) else {
+            setBlockedReason(nil, for: .hotkey)
+            return
+        }
+        let key = [shortcut.carbonKeyCode, shortcut.carbonModifiers]
+        var reason: String?
+        if Self.systemReservedShortcuts().contains(key) {
+            reason = "macOS already reserves this shortcut — pick another in Settings > Recording Shortcut"
+            log("trigger blocked: hotkey collides with an enabled system shortcut \(key)")
+        }
+        setBlockedReason(reason, for: .hotkey)
+    }
+
+    /// Message shown after a trigger fired but the press was consumed before recording could
+    /// start — in practice, the first fn press after a microphone permission prompt. Cancelling
+    /// is correct for push-to-talk (releasing the key before the recorder starts must not leave
+    /// a recording running with no key held); saying nothing about it is not.
+    static let pressConsumedByPermissionPromptMessage =
+        "Permission was requested — press and hold again to record"
 
     public func updateStatus() {
         if isRecording || isTranscribing || deliveryIsPending { return }
+        // A blocked trigger outlives one status write. `init` and every `useFnKey` change
+        // called `updateFnMonitor()` and then `updateStatus()`, so the fn permission
+        // warning was overwritten with "Ready" before it could ever be read — an enabled
+        // trigger that could not arm looked exactly like a working one. Idle now carries
+        // the reason until the blocker clears.
         if let blockedReason {
             statusMessage = blockedReason
             flowPhase = .idle
@@ -1075,6 +1394,18 @@ public final class RecordingEngine: ObservableObject {
         activeTrigger = trigger
         keyboardShortcutIsDown = trigger == .keyboardShortcut
         conversationReply = nil
+        // Both transient reasons are superseded by a new press, and the delivery one is the
+        // reason this clearing exists: "transcript copied, press Cmd-V" was only ever cleared
+        // by the NEXT delivery's completion, so a recording that produced no delivery left it
+        // asserted indefinitely — and by then the clipboard may hold something else, so Cmd-V
+        // pastes the wrong thing on the app's own instruction. This recording is about to
+        // rewrite the clipboard, so the old instruction stops being true here.
+        //
+        // Accepted cost, stated rather than hidden: if this recording is itself cancelled, a
+        // still-accurate "press Cmd-V" has been cleared early. Losing a true message is a
+        // smaller failure than asserting a false one forever.
+        setBlockedReason(nil, for: .pressConsumed)
+        setBlockedReason(nil, for: .delivery)
 
         let myPID = ProcessInfo.processInfo.processIdentifier
         let frontmostApp = frontmostAppSnapshot()
@@ -3313,7 +3644,17 @@ public final class RecordingEngine: ObservableObject {
 
         let pasteDelay: TimeInterval = alreadyFrontmost ? 0.15 : 0.5
         var ownedPasteboardChangeCount: Int?
+        var clipboardWrite: PasteboardWriteResult?
         var clipboardOwnershipWasLost = false
+        // Focused field of the target app as it read immediately before the keystroke. The
+        // read-back after the keystroke is compared against this and against nothing else.
+        var deliveryProbe: FocusedTextProbe?
+        // What the read-back proved, and how many reads it took. Both stay at their initial
+        // values when the paste failed before the keystroke, so the log reports "no read-back"
+        // rather than borrowing a verdict from a previous paste.
+        var deliveryEvidence: PasteDeliveryEvidence = .unverified(.readBackNotAttempted)
+        var readBackAttempts = 0
+        lastPasteSecureInputProbe = nil
         updateDeliveryStatus("Pasting...", kind: .progress, pipelineGeneration: pipelineGeneration)
         let accepted = pasteTransactionCoordinator.submit(
             text: text,
@@ -3347,12 +3688,31 @@ public final class RecordingEngine: ObservableObject {
                 if restoreClipboard {
                     previousClipboard = ClipboardSnapshot(pasteboard: .general)
                 }
+                // Captured before the clipboard write rather than immediately before the
+                // keystroke: the readiness checks that follow re-validate focus anyway, and
+                // two Accessibility round trips must not sit between the payload check and
+                // the keystroke. A focus move in the gap is caught by the read-back, which
+                // refuses to compare across a changed element.
+                deliveryProbe = FocusedTextProbe.capture(pid: app.processIdentifier)
             },
             writeAttempted: { result in
                 ownedPasteboardChangeCount = result.ownershipChangeCount
-            }
+                clipboardWrite = result
+            },
+            verify: {
+                guard let deliveryProbe else { return .unverified(.readBackNotAttempted) }
+                readBackAttempts += 1
+                let evidence = PasteDeliveryVerifier.classify(
+                    pastedText: text,
+                    baseline: deliveryProbe.baseline,
+                    readBack: deliveryProbe.readBack()
+                )
+                deliveryEvidence = evidence
+                return evidence
+            },
+            verificationDelay: Self.pasteReadBackInterval,
+            verificationAttempts: Self.pasteReadBackAttempts
         ) { transaction, outcome in
-            let posted = outcome == .pasted
             let accessibilityTrusted = AXIsProcessTrusted()
             let completedTranscriptAlreadyOnClipboard = outcome == .targetUnavailable
                 && !restoreClipboard
@@ -3369,15 +3729,42 @@ public final class RecordingEngine: ObservableObject {
             let copiedAfterFailure = shouldCopyAfterFailure
                 && Self.writeClipboardPreservingOnFailure(transaction.text, to: .general)
             self.log("paste outcome=\(outcome) target=\(app.bundleIdentifier ?? "?") alreadyFrontmost=\(alreadyFrontmost) transaction=\(transaction.id)")
+            // The line to read when asking "did the text land?". Every step reports itself, so
+            // a posted keystroke can no longer stand in for delivery.
+            self.log(PasteDeliveryReport(
+                targetBundleIdentifier: app.bundleIdentifier,
+                characterCount: transaction.text.count,
+                clipboardWriteVerified: clipboardWrite?.verified ?? false,
+                clipboardChangeCountAdvanced: clipboardWrite?.changeCountAdvanced ?? false,
+                attempt: .forOutcome(outcome),
+                secureInput: self.lastPasteSecureInputProbe,
+                evidence: deliveryEvidence,
+                readBackAttempts: readBackAttempts
+            ).logLine)
             if let pipelineTrace {
                 self.log(pipelineTrace.message(
-                    stage: posted ? "paste_posted" : "paste_failed",
+                    stage: Self.pasteTraceStage(for: outcome),
                     detail: "chars=\(transaction.text.count)"
                 ))
             }
             deliveryCompleted?()
             let message = switch outcome {
             case .pasted: "Pasted (\(transaction.text.count) chars)"
+            case .deliveryNotObserved: restoreClipboard
+                ? "Paste did not reach the target app"
+                : "Paste did not reach the target app — text kept on the clipboard"
+            case .deliveredUnverified: restoreClipboard
+                ? "Paste sent, delivery unconfirmed"
+                : "Paste sent, delivery unconfirmed — text kept on the clipboard"
+            // One message either way, because the clipboard is kept either way — see the
+            // `shouldRestore` switch in `settlement`. Telling the owner to press Cmd-V is only
+            // honest if the transcript is still there, so this branch may not depend on
+            // `restoreClipboard`. When restore WAS requested, say that it was overridden
+            // rather than letting the owner discover it.
+            case .secureInputActive: restoreClipboard
+                ? "This field blocks typing (secure input) — transcript kept on the clipboard "
+                    + "instead of restoring it, press Cmd-V"
+                : "This field blocks typing (secure input) — transcript copied, press Cmd-V"
             case .targetUnavailable: Self.targetUnavailableDeliveryStatus(
                 deliveryKind: deliveryKind,
                 accessibilityTrusted: accessibilityTrusted,
@@ -3388,20 +3775,30 @@ public final class RecordingEngine: ObservableObject {
             )
             case .clipboardOwnershipLost: "Paste cancelled because the clipboard changed"
             case .clipboardWriteFailed: "Paste failed because the clipboard could not be updated"
-            case .eventConstructionFailed: restoreClipboard
-                ? "Paste failed because the paste event could not be built"
-                : "Copied, but the paste event could not be built"
-            // The transcript is deliberately left on the clipboard here, so the instruction
-            // is something the owner can actually act on rather than a dead end.
-            case .secureInputBlocked:
-                "This field blocks typing (secure input) — transcript copied, press Cmd-V"
+            case .eventPostFailed: restoreClipboard
+                ? "Paste failed because the paste event could not be posted"
+                : "Copied, but paste event could not be posted"
             }
-            // Only a blocker the owner must act on is persisted. Everything else clears it,
-            // so a stale explanation can never outlive the condition it described.
-            self.blockedReason = outcome == .secureInputBlocked ? message : nil
+            // `updateDeliveryStatus` writes `statusMessage`, and `updateStatus()` rewrites it to
+            // "Ready" on the next return to idle. A transient success line can afford that;
+            // "press Cmd-V" cannot, because it is the only thing telling the owner their
+            // transcript is recoverable. So the secure-input reason is persisted through the
+            // one field every surface reads.
+            //
+            // ONLY this outcome persists, deliberately. `.deliveryNotObserved` also leaves the
+            // transcript on the clipboard, but it has a documented false negative — pasting text
+            // identical to the selection it replaces reads as "unchanged" — so persisting it
+            // would raise a standing warning over a paste that worked. `.deliveredUnverified`
+            // means "could not tell", and a standing blocked banner would over-claim it. Secure
+            // input has no such path: it is measured from the window-session dictionary, and an
+            // uninterrogable session yields `.unknown`, which never reaches here.
+            self.setBlockedReason(
+                Self.isSecureInputOutcome(outcome) ? message : nil,
+                for: .delivery
+            )
             self.updateDeliveryStatus(
                 message,
-                kind: posted ? .success : .failure,
+                kind: Self.deliveryStatusKind(for: outcome),
                 pipelineGeneration: transaction.generation
             )
         } settlement: { transaction, outcome in
@@ -3423,13 +3820,17 @@ public final class RecordingEngine: ObservableObject {
             let shouldRestore = switch outcome {
             case .clipboardWriteFailed:
                 stillOwnsChangeCount
-            case .targetUnavailable, .clipboardOwnershipLost, .eventConstructionFailed, .pasted:
-                stillOwnsPayload
-            // Never restore over a secure-input failure: the status line just told the owner
-            // to press Cmd-V, and restoring the previous clipboard would delete the very
-            // transcript they were told to paste.
-            case .secureInputBlocked:
+            // Never restore over secure input, even when `restoreClipboard` was requested.
+            // By the time this outcome is reachable the payload writer has already run, so the
+            // transcript IS the clipboard — and the status line has just told the owner to press
+            // Cmd-V. Restoring would delete the exact text the app told them to paste. This
+            // deliberately overrides an explicit opt-in, which is why the status message for
+            // this outcome says the clipboard was kept instead of restored.
+            case .secureInputActive:
                 false
+            case .targetUnavailable, .clipboardOwnershipLost, .eventPostFailed, .pasted,
+                 .deliveryNotObserved, .deliveredUnverified:
+                stillOwnsPayload
             }
             if shouldRestore {
                 previousClipboard.restore(to: pasteboard)
@@ -3478,18 +3879,21 @@ public final class RecordingEngine: ObservableObject {
         _ text: String,
         to pasteboard: NSPasteboard
     ) -> PasteboardWriteResult {
+        let changeCountBeforeWrite = pasteboard.changeCount
         let clearedChangeCount = pasteboard.clearContents()
         guard pasteboard.setString(text, forType: .string) else {
             return PasteboardWriteResult(
                 verified: false,
-                ownershipChangeCount: clearedChangeCount
+                ownershipChangeCount: clearedChangeCount,
+                changeCountAdvanced: clearedChangeCount > changeCountBeforeWrite
             )
         }
         let writtenChangeCount = pasteboard.changeCount
         let storedText = pasteboard.string(forType: .string)
         return PasteboardWriteResult(
             verified: pasteboard.changeCount == writtenChangeCount && storedText == text,
-            ownershipChangeCount: writtenChangeCount
+            ownershipChangeCount: writtenChangeCount,
+            changeCountAdvanced: writtenChangeCount > changeCountBeforeWrite
         )
     }
 
@@ -3593,6 +3997,11 @@ public final class RecordingEngine: ObservableObject {
     enum DeliveryStatusKind: Equatable, Sendable {
         case progress
         case success
+        /// The pipeline finished but delivery could not be observed. Presented like a finished
+        /// run — the recording is safe and the text is on the clipboard — while the message
+        /// itself says the paste is unconfirmed. Never folded into `.success`: that is the
+        /// false positive this state exists to avoid.
+        case unverified
         case failure
     }
 
@@ -3602,8 +4011,45 @@ public final class RecordingEngine: ObservableObject {
     ) -> RecordingFlowPhase {
         switch kind {
         case .progress: .processing(message)
-        case .success: .ready(message)
+        case .success, .unverified: .ready(message)
         case .failure: .failed(message)
+        }
+    }
+
+    /// Whether an outcome leaves a blocker the owner has to act on, so its explanation must
+    /// outlive the delivery status rather than being overwritten with "Ready".
+    ///
+    /// Written as an exhaustive switch rather than `if case`, so adding a `PasteDeliveryOutcome`
+    /// forces a decision here instead of silently defaulting to invisible.
+    nonisolated static func isSecureInputOutcome(_ outcome: PasteDeliveryOutcome) -> Bool {
+        switch outcome {
+        case .secureInputActive: true
+        case .pasted, .deliveryNotObserved, .deliveredUnverified, .targetUnavailable,
+             .clipboardOwnershipLost, .clipboardWriteFailed, .eventPostFailed: false
+        }
+    }
+
+    /// Only observed delivery is a success. An unreadable target is its own state, and both a
+    /// contradicted read-back and a refused post are failures.
+    nonisolated static func deliveryStatusKind(for outcome: PasteDeliveryOutcome) -> DeliveryStatusKind {
+        switch outcome {
+        case .pasted: .success
+        case .deliveredUnverified: .unverified
+        case .deliveryNotObserved, .secureInputActive, .targetUnavailable,
+             .clipboardOwnershipLost, .clipboardWriteFailed, .eventPostFailed: .failure
+        }
+    }
+
+    /// Pipeline-timing stage name. `paste_posted` used to be emitted for every posted
+    /// keystroke, which made the timing trace read like a delivery record; the three delivery
+    /// verdicts are now distinct stages.
+    nonisolated static func pasteTraceStage(for outcome: PasteDeliveryOutcome) -> String {
+        switch outcome {
+        case .pasted: "paste_delivery_confirmed"
+        case .deliveredUnverified: "paste_delivery_unverified"
+        case .deliveryNotObserved: "paste_delivery_not_observed"
+        case .secureInputActive, .targetUnavailable, .clipboardOwnershipLost,
+             .clipboardWriteFailed, .eventPostFailed: "paste_failed"
         }
     }
 
