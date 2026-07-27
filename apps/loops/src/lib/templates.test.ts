@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { AgentTarget, CreateWorkflowInput, WorkflowStepInput } from "../types.js";
-import { prHandoffCommand } from "./template-kit.js";
+import { prHandoffCommand, todosWorkerVerifierWritebackCommand } from "./template-kit.js";
 import {
   BOUNDED_AGENT_WORKER_VERIFIER_TEMPLATE_ID,
   DETERMINISTIC_CHECK_CREATE_TASK_TEMPLATE_ID,
@@ -130,6 +130,102 @@ describe("prompt fragment composition", () => {
     expect(verifierPrompt).toContain("- If valid and complete: todos --project /srv/todos done task-1200");
     expect(verifierPrompt).not.toContain("- Claim/start if appropriate:");
     expect(verifierPrompt).toContain("Act as an adversarial reviewer focused on correctness, regressions, missing tests, security, and incomplete requirements.");
+  });
+
+  test("todos task worker/verifier adds deterministic task writeback steps", () => {
+    expect(workflow.steps.map((step) => step.id)).toEqual([
+      "source-task-gate",
+      "worker",
+      "worker-writeback",
+      "verifier",
+      "verifier-writeback",
+    ]);
+    expect(stepById(workflow, "worker")).toMatchObject({
+      dependsOn: ["source-task-gate"],
+      continueOnFailure: true,
+    });
+    expect(stepById(workflow, "worker-writeback")).toMatchObject({
+      dependsOn: ["worker"],
+    });
+    expect(stepById(workflow, "verifier")).toMatchObject({
+      dependsOn: ["worker-writeback"],
+      continueOnFailure: true,
+    });
+    expect(stepById(workflow, "verifier-writeback")).toMatchObject({
+      dependsOn: ["verifier"],
+    });
+
+    const workerWriteback = commandOf(stepById(workflow, "worker-writeback"));
+    expect(workerWriteback).toContain("OPENLOOPS_TODOS_WRITEBACK_ROLE='worker'");
+    expect(workerWriteback).toContain("OPENLOOPS_TODOS_WRITEBACK_PROJECT='/srv/todos'");
+    expect(workerWriteback).toContain("OPENLOOPS_TODOS_WRITEBACK_TASK='task-1200'");
+    expect(workerWriteback).toContain("LOOPS_WORKFLOW_DEPENDENCY_STATUSES");
+    expect(workerWriteback).not.toContain("workflows', 'events");
+    expect(workerWriteback).toContain("raw agent stdout/stderr");
+
+    const verifierWriteback = commandOf(stepById(workflow, "verifier-writeback"));
+    expect(verifierWriteback).toContain("OPENLOOPS_TODOS_WRITEBACK_ROLE='verifier'");
+    expect(verifierWriteback).toContain("'done', taskId, '--notes', notes");
+    expect(verifierWriteback).toContain("completion_failed");
+  });
+
+  test("todos task writeback command completes only after verifier success", () => {
+    const bin = mkdtempSync(join(tmpdir(), "loops-todos-writeback-bin-"));
+    const todos = join(bin, "todos");
+    writeFileSync(todos, [
+      "#!/usr/bin/env bash",
+      "{",
+      "  printf 'argc=%s\\n' \"$#\"",
+      "  for arg in \"$@\"; do printf 'arg=%s\\n' \"$arg\"; done",
+      "  printf '%s\\n' '---'",
+      "} >> \"$OPENLOOPS_FAKE_TODOS_CAPTURE\"",
+      "exit 0",
+    ].join("\n"));
+    chmodSync(todos, 0o755);
+
+    const command = todosWorkerVerifierWritebackCommand({
+      role: "verifier",
+      todosProjectPath: "/srv/todos",
+      taskId: "task-1200",
+      eventId: "evt-1",
+    });
+    const env = {
+      ...process.env,
+      PATH: `${bin}:${process.env.PATH ?? ""}`,
+      LOOPS_WORKFLOW_ID: "workflow-1",
+      LOOPS_WORKFLOW_RUN_ID: "workflow-run-1",
+      LOOPS_RUN_ID: "loop-run-1",
+    };
+
+    const successCapture = join(bin, "success.log");
+    const success = spawnSync("bash", ["-c", command], {
+      cwd: fixtureRoot,
+      env: {
+        ...env,
+        OPENLOOPS_FAKE_TODOS_CAPTURE: successCapture,
+        LOOPS_WORKFLOW_DEPENDENCY_STATUSES: JSON.stringify({ verifier: "succeeded" }),
+      },
+      encoding: "utf8",
+    });
+    expect(success.status).toBe(0);
+    const successLog = readFileSync(successCapture, "utf8");
+    expect(successLog).toContain("arg=comment\narg=task-1200\narg=openloops:verifier=evidence task=task-1200 event=evt-1 workflow=workflow-1 workflow_run=workflow-run-1 loop_run=loop-run-1");
+    expect(successLog).toContain("arg=done\narg=task-1200\narg=--notes\narg=OpenLoops verifier passed for workflow=workflow-1 workflow_run=workflow-run-1 loop_run=loop-run-1.");
+
+    const failedCapture = join(bin, "failed.log");
+    const failed = spawnSync("bash", ["-c", command], {
+      cwd: fixtureRoot,
+      env: {
+        ...env,
+        OPENLOOPS_FAKE_TODOS_CAPTURE: failedCapture,
+        LOOPS_WORKFLOW_DEPENDENCY_STATUSES: JSON.stringify({ verifier: "failed" }),
+      },
+      encoding: "utf8",
+    });
+    expect(failed.status).not.toBe(0);
+    const failedLog = readFileSync(failedCapture, "utf8");
+    expect(failedLog).toContain("arg=comment\narg=task-1200\narg=openloops:verifier=failed task=task-1200 event=evt-1 workflow=workflow-1 workflow_run=workflow-run-1 loop_run=loop-run-1");
+    expect(failedLog).not.toContain("arg=done\n");
   });
 
   test("disabled worktree policy prose explains the mode instead of listing worktree paths", () => {
@@ -339,7 +435,7 @@ describe("executor-native worktree specs", () => {
       projectPath: repoPath,
       worktreeRoot,
     });
-    expect(workflow.steps.map((step) => step.id)).toEqual(["source-task-gate", "worker", "verifier"]);
+    expect(workflow.steps.map((step) => step.id)).toEqual(["source-task-gate", "worker", "worker-writeback", "verifier", "verifier-writeback"]);
     expect(stepById(workflow, "worker").dependsOn).toEqual(["source-task-gate"]);
     for (const step of workflow.steps) {
       const command = step.target.type === "command" ? commandOf(step) : "";

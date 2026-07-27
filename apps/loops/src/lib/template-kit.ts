@@ -380,6 +380,81 @@ export function todosDoneLine(todosProjectPath: string, taskId: string): string 
   return `- If valid and complete: todos --project ${todosProjectPath} done ${taskId}`;
 }
 
+export type TodosWorkerVerifierWritebackRole = "worker" | "verifier";
+
+export interface TodosWorkerVerifierWritebackCommandOptions {
+  role: TodosWorkerVerifierWritebackRole;
+  todosProjectPath: string;
+  taskId: string;
+  eventId?: string;
+}
+
+const TODOS_WORKER_VERIFIER_WRITEBACK_SCRIPT = [
+  "const { spawnSync } = await import('node:child_process');",
+  "const env = process.env;",
+  "const required = (name) => {",
+  "  const value = env[name];",
+  "  if (!value || !value.trim()) throw new Error(`${name} is required`);",
+  "  return value.trim();",
+  "};",
+  "const role = required('OPENLOOPS_TODOS_WRITEBACK_ROLE');",
+  "const project = required('OPENLOOPS_TODOS_WRITEBACK_PROJECT');",
+  "const taskId = required('OPENLOOPS_TODOS_WRITEBACK_TASK');",
+  "const eventId = env.OPENLOOPS_TODOS_WRITEBACK_EVENT || '';",
+  "const workflowId = env.LOOPS_WORKFLOW_ID || 'unknown-workflow';",
+  "const workflowRunId = env.LOOPS_WORKFLOW_RUN_ID || '';",
+  "const loopRunId = env.LOOPS_RUN_ID || '';",
+  "if (!workflowRunId) throw new Error('LOOPS_WORKFLOW_RUN_ID is required for todos writeback');",
+  "let dependencyStatuses = {};",
+  "try { dependencyStatuses = JSON.parse(env.LOOPS_WORKFLOW_DEPENDENCY_STATUSES || '{}'); } catch { throw new Error('LOOPS_WORKFLOW_DEPENDENCY_STATUSES is not valid JSON'); }",
+  "if (!dependencyStatuses || typeof dependencyStatuses !== 'object' || Array.isArray(dependencyStatuses)) throw new Error('LOOPS_WORKFLOW_DEPENDENCY_STATUSES must be an object');",
+  "const status = dependencyStatuses[role];",
+  "if (typeof status !== 'string' || !/^(succeeded|failed|timed_out|skipped|cancelled)$/.test(status)) throw new Error(`missing ${role} dependency status for todos writeback`);",
+  "const quietTodos = (args) => spawnSync('todos', args, { encoding: 'utf8', maxBuffer: 16 * 1024, timeout: 30_000, stdio: ['ignore', 'ignore', 'ignore'] });",
+  "const identity = [`task=${taskId}`, eventId && `event=${eventId}`, `workflow=${workflowId}`, `workflow_run=${workflowRunId}`, loopRunId && `loop_run=${loopRunId}`].filter(Boolean).join(' ');",
+  "const comment = (state, body) => {",
+  "  const text = [`openloops:${role}=${state} ${identity}`, body].join('\\n');",
+  "  const result = quietTodos(['--project', project, 'comment', taskId, text]);",
+  "  if (result.error || result.status !== 0) throw new Error(`todos ${role} writeback comment failed: status=${result.status ?? 'null'}`);",
+  "};",
+  "if (role === 'worker') {",
+  "  if (status === 'succeeded') {",
+  "    comment('evidence', 'Worker step succeeded; OpenLoops recorded this deterministic writeback without copying raw agent stdout/stderr into the task.');",
+  "    console.log(`todos worker writeback recorded ${identity}`);",
+  "    process.exit(0);",
+  "  }",
+  "  comment('failed', `Worker step ended with status ${status}; source task remains open for follow-up. Inspect bounded OpenLoops workflow metadata; raw agent output was not copied.`);",
+  "  throw new Error(`worker step did not pass: ${status}`);",
+  "}",
+  "if (role !== 'verifier') throw new Error(`unsupported writeback role: ${role}`);",
+  "if (status === 'succeeded') {",
+  "  comment('evidence', 'Verifier step passed after worker evidence; OpenLoops is marking the source task done without copying raw agent stdout/stderr into the task.');",
+  "  const notes = `OpenLoops verifier passed for workflow=${workflowId} workflow_run=${workflowRunId}${loopRunId ? ` loop_run=${loopRunId}` : ''}.`;",
+  "  const done = quietTodos(['--project', project, 'done', taskId, '--notes', notes]);",
+  "  if (done.error || done.status !== 0) {",
+  "    try { comment('completion_failed', 'Verifier passed, but todos done failed; source task remains open for follow-up.'); } catch {}",
+  "    throw new Error(`todos done failed after verifier passed: status=${done.status ?? 'null'}`);",
+  "  }",
+  "  console.log(`todos verifier writeback completed ${identity}`);",
+  "  process.exit(0);",
+  "}",
+  "comment('failed', `Verifier step ended with status ${status}; source task remains open for follow-up. Inspect bounded OpenLoops workflow metadata; raw agent output was not copied.`);",
+  "throw new Error(`verifier step did not pass: ${status}`);",
+].join("\n");
+
+export function todosWorkerVerifierWritebackCommand(opts: TodosWorkerVerifierWritebackCommandOptions): string {
+  return [
+    "set -euo pipefail",
+    `export OPENLOOPS_TODOS_WRITEBACK_ROLE=${shellQuote(opts.role)}`,
+    `export OPENLOOPS_TODOS_WRITEBACK_PROJECT=${shellQuote(opts.todosProjectPath)}`,
+    `export OPENLOOPS_TODOS_WRITEBACK_TASK=${shellQuote(opts.taskId)}`,
+    `export OPENLOOPS_TODOS_WRITEBACK_EVENT=${shellQuote(opts.eventId ?? "")}`,
+    "bun - <<'BUN'",
+    TODOS_WORKER_VERIFIER_WRITEBACK_SCRIPT,
+    "BUN",
+  ].join("\n");
+}
+
 /** Exact-todos-commands stanza: project pin, cwd-inference warning, inspect, then role-specific command lines. */
 export function todosExactCommandsFragment(todosProjectPath: string, taskId: string, commandLines: string[]): string[] {
   return [

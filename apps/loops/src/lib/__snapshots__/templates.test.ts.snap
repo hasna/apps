@@ -32,6 +32,7 @@ exports[`builtin rendered workflow snapshots todos-task-worker-verifier 1`] = `
       "dependsOn": [
         "source-task-gate"
       ],
+      "continueOnFailure": true,
       "target": {
         "type": "agent",
         "provider": "codewith",
@@ -63,12 +64,32 @@ exports[`builtin rendered workflow snapshots todos-task-worker-verifier 1`] = `
       "timeoutMs": null
     },
     {
+      "id": "worker-writeback",
+      "name": "Worker Writeback",
+      "description": "Record deterministic worker evidence on the source todos task.",
+      "dependsOn": [
+        "worker"
+      ],
+      "target": {
+        "type": "command",
+        "command": "bash",
+        "args": [
+          "-lc",
+          "set -euo pipefail\\nexport OPENLOOPS_TODOS_WRITEBACK_ROLE='worker'\\nexport OPENLOOPS_TODOS_WRITEBACK_PROJECT='<REPO>'\\nexport OPENLOOPS_TODOS_WRITEBACK_TASK='task-1200'\\nexport OPENLOOPS_TODOS_WRITEBACK_EVENT=''\\nbun - <<'BUN'\\nconst { spawnSync } = await import('node:child_process');\\nconst env = process.env;\\nconst required = (name) => {\\n  const value = env[name];\\n  if (!value || !value.trim()) throw new Error(\`\${name} is required\`);\\n  return value.trim();\\n};\\nconst role = required('OPENLOOPS_TODOS_WRITEBACK_ROLE');\\nconst project = required('OPENLOOPS_TODOS_WRITEBACK_PROJECT');\\nconst taskId = required('OPENLOOPS_TODOS_WRITEBACK_TASK');\\nconst eventId = env.OPENLOOPS_TODOS_WRITEBACK_EVENT || '';\\nconst workflowId = env.LOOPS_WORKFLOW_ID || 'unknown-workflow';\\nconst workflowRunId = env.LOOPS_WORKFLOW_RUN_ID || '';\\nconst loopRunId = env.LOOPS_RUN_ID || '';\\nif (!workflowRunId) throw new Error('LOOPS_WORKFLOW_RUN_ID is required for todos writeback');\\nlet dependencyStatuses = {};\\ntry { dependencyStatuses = JSON.parse(env.LOOPS_WORKFLOW_DEPENDENCY_STATUSES || '{}'); } catch { throw new Error('LOOPS_WORKFLOW_DEPENDENCY_STATUSES is not valid JSON'); }\\nif (!dependencyStatuses || typeof dependencyStatuses !== 'object' || Array.isArray(dependencyStatuses)) throw new Error('LOOPS_WORKFLOW_DEPENDENCY_STATUSES must be an object');\\nconst status = dependencyStatuses[role];\\nif (typeof status !== 'string' || !/^(succeeded|failed|timed_out|skipped|cancelled)$/.test(status)) throw new Error(\`missing \${role} dependency status for todos writeback\`);\\nconst quietTodos = (args) => spawnSync('todos', args, { encoding: 'utf8', maxBuffer: 16 * 1024, timeout: 30_000, stdio: ['ignore', 'ignore', 'ignore'] });\\nconst identity = [\`task=\${taskId}\`, eventId && \`event=\${eventId}\`, \`workflow=\${workflowId}\`, \`workflow_run=\${workflowRunId}\`, loopRunId && \`loop_run=\${loopRunId}\`].filter(Boolean).join(' ');\\nconst comment = (state, body) => {\\n  const text = [\`openloops:\${role}=\${state} \${identity}\`, body].join('\\\\n');\\n  const result = quietTodos(['--project', project, 'comment', taskId, text]);\\n  if (result.error || result.status !== 0) throw new Error(\`todos \${role} writeback comment failed: status=\${result.status ?? 'null'}\`);\\n};\\nif (role === 'worker') {\\n  if (status === 'succeeded') {\\n    comment('evidence', 'Worker step succeeded; OpenLoops recorded this deterministic writeback without copying raw agent stdout/stderr into the task.');\\n    console.log(\`todos worker writeback recorded \${identity}\`);\\n    process.exit(0);\\n  }\\n  comment('failed', \`Worker step ended with status \${status}; source task remains open for follow-up. Inspect bounded OpenLoops workflow metadata; raw agent output was not copied.\`);\\n  throw new Error(\`worker step did not pass: \${status}\`);\\n}\\nif (role !== 'verifier') throw new Error(\`unsupported writeback role: \${role}\`);\\nif (status === 'succeeded') {\\n  comment('evidence', 'Verifier step passed after worker evidence; OpenLoops is marking the source task done without copying raw agent stdout/stderr into the task.');\\n  const notes = \`OpenLoops verifier passed for workflow=\${workflowId} workflow_run=\${workflowRunId}\${loopRunId ? \` loop_run=\${loopRunId}\` : ''}.\`;\\n  const done = quietTodos(['--project', project, 'done', taskId, '--notes', notes]);\\n  if (done.error || done.status !== 0) {\\n    try { comment('completion_failed', 'Verifier passed, but todos done failed; source task remains open for follow-up.'); } catch {}\\n    throw new Error(\`todos done failed after verifier passed: status=\${done.status ?? 'null'}\`);\\n  }\\n  console.log(\`todos verifier writeback completed \${identity}\`);\\n  process.exit(0);\\n}\\ncomment('failed', \`Verifier step ended with status \${status}; source task remains open for follow-up. Inspect bounded OpenLoops workflow metadata; raw agent output was not copied.\`);\\nthrow new Error(\`verifier step did not pass: \${status}\`);\\nBUN"
+        ],
+        "cwd": "<REPO>",
+        "timeoutMs": 120000
+      },
+      "timeoutMs": 120000
+    },
+    {
       "id": "verifier",
       "name": "Verifier",
       "description": "Adversarially verify worker output and update todos.",
       "dependsOn": [
-        "worker"
+        "worker-writeback"
       ],
+      "continueOnFailure": true,
       "target": {
         "type": "agent",
         "provider": "codewith",
@@ -99,6 +120,25 @@ exports[`builtin rendered workflow snapshots todos-task-worker-verifier 1`] = `
         "idleTimeoutMs": 900000
       },
       "timeoutMs": null
+    },
+    {
+      "id": "verifier-writeback",
+      "name": "Verifier Writeback",
+      "description": "Record deterministic verifier evidence and complete the source todos task only after verifier success.",
+      "dependsOn": [
+        "verifier"
+      ],
+      "target": {
+        "type": "command",
+        "command": "bash",
+        "args": [
+          "-lc",
+          "set -euo pipefail\\nexport OPENLOOPS_TODOS_WRITEBACK_ROLE='verifier'\\nexport OPENLOOPS_TODOS_WRITEBACK_PROJECT='<REPO>'\\nexport OPENLOOPS_TODOS_WRITEBACK_TASK='task-1200'\\nexport OPENLOOPS_TODOS_WRITEBACK_EVENT=''\\nbun - <<'BUN'\\nconst { spawnSync } = await import('node:child_process');\\nconst env = process.env;\\nconst required = (name) => {\\n  const value = env[name];\\n  if (!value || !value.trim()) throw new Error(\`\${name} is required\`);\\n  return value.trim();\\n};\\nconst role = required('OPENLOOPS_TODOS_WRITEBACK_ROLE');\\nconst project = required('OPENLOOPS_TODOS_WRITEBACK_PROJECT');\\nconst taskId = required('OPENLOOPS_TODOS_WRITEBACK_TASK');\\nconst eventId = env.OPENLOOPS_TODOS_WRITEBACK_EVENT || '';\\nconst workflowId = env.LOOPS_WORKFLOW_ID || 'unknown-workflow';\\nconst workflowRunId = env.LOOPS_WORKFLOW_RUN_ID || '';\\nconst loopRunId = env.LOOPS_RUN_ID || '';\\nif (!workflowRunId) throw new Error('LOOPS_WORKFLOW_RUN_ID is required for todos writeback');\\nlet dependencyStatuses = {};\\ntry { dependencyStatuses = JSON.parse(env.LOOPS_WORKFLOW_DEPENDENCY_STATUSES || '{}'); } catch { throw new Error('LOOPS_WORKFLOW_DEPENDENCY_STATUSES is not valid JSON'); }\\nif (!dependencyStatuses || typeof dependencyStatuses !== 'object' || Array.isArray(dependencyStatuses)) throw new Error('LOOPS_WORKFLOW_DEPENDENCY_STATUSES must be an object');\\nconst status = dependencyStatuses[role];\\nif (typeof status !== 'string' || !/^(succeeded|failed|timed_out|skipped|cancelled)$/.test(status)) throw new Error(\`missing \${role} dependency status for todos writeback\`);\\nconst quietTodos = (args) => spawnSync('todos', args, { encoding: 'utf8', maxBuffer: 16 * 1024, timeout: 30_000, stdio: ['ignore', 'ignore', 'ignore'] });\\nconst identity = [\`task=\${taskId}\`, eventId && \`event=\${eventId}\`, \`workflow=\${workflowId}\`, \`workflow_run=\${workflowRunId}\`, loopRunId && \`loop_run=\${loopRunId}\`].filter(Boolean).join(' ');\\nconst comment = (state, body) => {\\n  const text = [\`openloops:\${role}=\${state} \${identity}\`, body].join('\\\\n');\\n  const result = quietTodos(['--project', project, 'comment', taskId, text]);\\n  if (result.error || result.status !== 0) throw new Error(\`todos \${role} writeback comment failed: status=\${result.status ?? 'null'}\`);\\n};\\nif (role === 'worker') {\\n  if (status === 'succeeded') {\\n    comment('evidence', 'Worker step succeeded; OpenLoops recorded this deterministic writeback without copying raw agent stdout/stderr into the task.');\\n    console.log(\`todos worker writeback recorded \${identity}\`);\\n    process.exit(0);\\n  }\\n  comment('failed', \`Worker step ended with status \${status}; source task remains open for follow-up. Inspect bounded OpenLoops workflow metadata; raw agent output was not copied.\`);\\n  throw new Error(\`worker step did not pass: \${status}\`);\\n}\\nif (role !== 'verifier') throw new Error(\`unsupported writeback role: \${role}\`);\\nif (status === 'succeeded') {\\n  comment('evidence', 'Verifier step passed after worker evidence; OpenLoops is marking the source task done without copying raw agent stdout/stderr into the task.');\\n  const notes = \`OpenLoops verifier passed for workflow=\${workflowId} workflow_run=\${workflowRunId}\${loopRunId ? \` loop_run=\${loopRunId}\` : ''}.\`;\\n  const done = quietTodos(['--project', project, 'done', taskId, '--notes', notes]);\\n  if (done.error || done.status !== 0) {\\n    try { comment('completion_failed', 'Verifier passed, but todos done failed; source task remains open for follow-up.'); } catch {}\\n    throw new Error(\`todos done failed after verifier passed: status=\${done.status ?? 'null'}\`);\\n  }\\n  console.log(\`todos verifier writeback completed \${identity}\`);\\n  process.exit(0);\\n}\\ncomment('failed', \`Verifier step ended with status \${status}; source task remains open for follow-up. Inspect bounded OpenLoops workflow metadata; raw agent output was not copied.\`);\\nthrow new Error(\`verifier step did not pass: \${status}\`);\\nBUN"
+        ],
+        "cwd": "<REPO>",
+        "timeoutMs": 120000
+      },
+      "timeoutMs": 120000
     }
   ]
 }"

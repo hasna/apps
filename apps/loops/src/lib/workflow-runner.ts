@@ -232,6 +232,15 @@ export async function executeWorkflow(
         workflowRunId: run.id,
         workflowStepId: step.id,
       });
+      const dependencyStatuses: Record<string, string> = {};
+      for (const dependencyId of step.dependsOn ?? []) {
+        const dependencyRun = await store.getWorkflowStepRun(run.id, dependencyId);
+        if (dependencyRun) dependencyStatuses[dependencyId] = dependencyRun.status;
+      }
+      const stepMetadata = executionMetadata(stepContext);
+      if (Object.keys(dependencyStatuses).length > 0) {
+        stepMetadata.workflowDependencyStatuses = JSON.stringify(dependencyStatuses);
+      }
       let result: ExecutorResult;
       const controller = new AbortController();
       const externalAbort = (): void => controller.abort();
@@ -258,7 +267,7 @@ export async function executeWorkflow(
             context: stepContext,
           });
         } else {
-          result = await executeTarget(executionTarget, executionMetadata(stepContext), {
+          result = await executeTarget(executionTarget, stepMetadata, {
             ...opts,
             machine: opts.machine ?? opts.loop?.machine,
             signal: controller.signal,

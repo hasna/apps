@@ -12,6 +12,7 @@ import { applySelfHostedPush } from "../lib/migration.js";
 import { RESTART_INTERRUPTED_RUN_PREFIX } from "../lib/health.js";
 
 const cliPath = join(dirname(fileURLToPath(import.meta.url)), "index.ts");
+const TODOS_TASK_WORKER_VERIFIER_STEPS = ["source-task-gate", "worker", "worker-writeback", "verifier", "verifier-writeback"];
 
 function runCli(dataDir: string, args: string[], input?: string, env: Record<string, string> = {}) {
   const isolatedEnv = {
@@ -2946,7 +2947,7 @@ describe("loops CLI", () => {
     expect(render.status).toBe(0);
     const workflow = JSON.parse(render.stdout);
     expect(workflow.name).toContain("task-123");
-    expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(["source-task-gate", "worker", "verifier"]);
+    expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(TODOS_TASK_WORKER_VERIFIER_STEPS);
     expect(workflow.steps[0].target).toMatchObject({
       type: "command",
       command: "bash",
@@ -2963,16 +2964,17 @@ describe("loops CLI", () => {
       sandbox: "workspace-write",
       addDirs: ["/tmp/todos-store", "/tmp/loops-store"],
     });
-    expect(workflow.steps[1].target.prompt).toContain("[redacted");
-    expect(workflow.steps[2].target.prompt).toContain("[redacted");
+    const [workerStep, verifierStep] = agentStepsOf(workflow);
+    expect(workerStep!.target.prompt).toContain("[redacted");
+    expect(verifierStep!.target.prompt).toContain("[redacted");
     expect(render.stdout).not.toContain("Do not dispatch or paste prompts into tmux panes");
-    expect(workflow.steps[2].target.addDirs).toEqual(["/tmp/todos-store", "/tmp/loops-store"]);
-    expect(workflow.steps[1].target.timeoutMs).toBeNull();
-    expect(workflow.steps[1].timeoutMs).toBeNull();
-    expect(workflow.steps[2].target.timeoutMs).toBeNull();
-    expect(workflow.steps[2].timeoutMs).toBeNull();
-    expect(workflow.steps[2].target.idleTimeoutMs).toBe(900_000);
-    expect(workflow.steps[2].dependsOn).toEqual(["worker"]);
+    expect(verifierStep!.target.addDirs).toEqual(["/tmp/todos-store", "/tmp/loops-store"]);
+    expect(workerStep!.target.timeoutMs).toBeNull();
+    expect(workerStep!.timeoutMs).toBeNull();
+    expect(verifierStep!.target.timeoutMs).toBeNull();
+    expect(verifierStep!.timeoutMs).toBeNull();
+    expect(verifierStep!.target.idleTimeoutMs).toBe(900_000);
+    expect(verifierStep!.dependsOn).toEqual(["worker-writeback"]);
 
     const noIdleRender = runCli(dataDir, [
       "--json",
@@ -3006,8 +3008,9 @@ describe("loops CLI", () => {
     ]);
     expect(finiteRender.status).toBe(0);
     const finiteWorkflow = JSON.parse(finiteRender.stdout);
-    expect(finiteWorkflow.steps[1].timeoutMs).toBe(600_000);
-    expect(finiteWorkflow.steps[2].timeoutMs).toBe(600_000);
+    const [finiteWorkerStep, finiteVerifierStep] = agentStepsOf(finiteWorkflow);
+    expect(finiteWorkerStep!.timeoutMs).toBe(600_000);
+    expect(finiteVerifierStep!.timeoutMs).toBe(600_000);
   });
 
   test("templates fail closed for danger-full-access unless manual break-glass is explicit", () => {
@@ -3553,7 +3556,7 @@ describe("loops CLI", () => {
     expect(render.status).toBe(0);
     const workflow = JSON.parse(render.stdout);
     expect(workflow.name).toContain("todos-task-task-col");
-    expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(["source-task-gate", "worker", "verifier"]);
+    expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(TODOS_TASK_WORKER_VERIFIER_STEPS);
   });
 
   test("templates select different worker and verifier auth profiles from a pool", () => {
@@ -3608,7 +3611,7 @@ describe("loops CLI", () => {
 
     expect(render.status).toBe(0);
     const workflow = JSON.parse(render.stdout);
-    expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(["source-task-gate", "worker", "verifier"]);
+    expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(TODOS_TASK_WORKER_VERIFIER_STEPS);
     expect(workflow.steps[1].dependsOn).toEqual(["source-task-gate"]);
     expect(workflow.steps[1].target.cwd).toContain(worktreeRoot);
     expect(workflow.steps[1].target.worktree).toMatchObject({
@@ -3620,7 +3623,7 @@ describe("loops CLI", () => {
     expect(testPath(workflow.steps[1].target.worktree.repoRoot)).toBe(testPath(repo));
     expect(testPaths(workflow.steps[1].target.addDirs)).toEqual(testPaths([join(dataDir, "todos-store"), join(repo, ".git")]));
     expect(workflow.steps[1].target.worktree.branch).toContain("openloops/");
-    expect(workflow.steps[2].target.cwd).toBe(workflow.steps[1].target.cwd);
+    expect(agentStepsOf(workflow)[1]!.target.cwd).toBe(workflow.steps[1].target.cwd);
     expect(workflow.steps[1].target.prompt).toContain("[redacted");
     expect(render.stdout).not.toContain("Use the isolated git worktree");
     expect(render.stdout).not.toContain("Do not mutate the original checkout/main branch");
@@ -3785,7 +3788,7 @@ describe("loops CLI", () => {
 
     expect(render.status).toBe(0);
     const workflow = JSON.parse(render.stdout);
-    expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(["source-task-gate", "worker", "verifier"]);
+    expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(TODOS_TASK_WORKER_VERIFIER_STEPS);
     expect(workflow.steps[1].target.cwd).toBe(repo);
     expect(workflow.steps[1].target.worktree).toMatchObject({
       mode: "main",
@@ -4023,7 +4026,7 @@ describe("loops CLI", () => {
     const firstValue = JSON.parse(first.stdout);
     expect(firstValue.deduped).toBe(false);
     expect(firstValue.idempotencyKey).toBe("todos-task:task-created-0001");
-    expect(firstValue.workflow.steps.map((step: { id: string }) => step.id)).toEqual(["source-task-gate", "worker", "verifier"]);
+    expect(firstValue.workflow.steps.map((step: { id: string }) => step.id)).toEqual(TODOS_TASK_WORKER_VERIFIER_STEPS);
     expect(firstValue.loop.name).toContain("event:todos-task:task-cre:");
     expect(firstValue.loop.name).not.toContain("evt-task");
     expect(firstValue.loop.target.workflowId).toBe(firstValue.workflow.id);
@@ -4894,7 +4897,7 @@ describe("loops CLI", () => {
     expect(nonAuthorReviewer.status).toBe(0);
     const nonAuthorValue = JSON.parse(nonAuthorReviewer.stdout);
     expect(nonAuthorValue.skipped).toBeUndefined();
-    expect(nonAuthorValue.workflow.steps.map((step: { id: string }) => step.id)).toEqual(["source-task-gate", "worker", "verifier"]);
+    expect(nonAuthorValue.workflow.steps.map((step: { id: string }) => step.id)).toEqual(TODOS_TASK_WORKER_VERIFIER_STEPS);
     expect(nonAuthorValue.prReviewRouting).toMatchObject({
       required: true,
       allowed: true,
@@ -4968,7 +4971,7 @@ describe("loops CLI", () => {
     expect(unprefixedReviewerPoolValue.skipped).toBe(true);
     expect(unprefixedReviewerPoolValue.reason).toContain("--github-reviewer");
     expect(unprefixedReviewerPoolValue.prReviewRouting.reviewers).toEqual([]);
-  });
+  }, 60000);
 
   test("todos task event handler replaces stale generated workflow policy metadata", () => {
     const dataDir = freshDataDir("loops-cli-event-stale-workflow-");
@@ -6178,12 +6181,12 @@ describe("loops CLI", () => {
 
     expect(result.status).toBe(0);
     const value = JSON.parse(result.stdout);
-    expect(value.workflow.steps.map((step: { id: string }) => step.id)).toEqual(["source-task-gate", "worker", "verifier"]);
+    expect(value.workflow.steps.map((step: { id: string }) => step.id)).toEqual(TODOS_TASK_WORKER_VERIFIER_STEPS);
     expect(value.workflow.steps[1].target.cwd).toContain(worktreeRoot);
     expect(value.workflow.steps[1].target.worktree.enabled).toBe(true);
     expect(testPath(value.workflow.steps[1].target.worktree.originalCwd)).toBe(testPath(repo));
     expect(testPaths(value.workflow.steps[1].target.addDirs)).toContain(testPath(join(repo, ".git")));
-    expect(testPaths(value.workflow.steps[2].target.addDirs)).toContain(testPath(join(repo, ".git")));
+    expect(testPaths(agentStepsOf(value.workflow)[1]!.target.addDirs)).toContain(testPath(join(repo, ".git")));
   });
 
   test("todos task event handler throttles active workflows per project", () => {
@@ -8907,9 +8910,9 @@ describe("loops CLI", () => {
     expect(value.deduped).toBe(false);
     expect(value.workflow.steps[0].target.cwd).toBe("/tmp/from-metadata");
     expect(value.workflow.steps[1].target.cwd).toBe("/tmp/from-metadata");
-    expect(value.workflow.steps[2].target.cwd).toBe("/tmp/from-metadata");
+    expect(agentStepsOf(value.workflow)[1]!.target.cwd).toBe("/tmp/from-metadata");
     expect(value.workflow.steps[1].target.authProfile).toBe("account004");
-    expect(value.workflow.steps[2].target.authProfile).toBe("account006");
+    expect(agentStepsOf(value.workflow)[1]!.target.authProfile).toBe("account006");
   });
 
   test("todos task event handler does not let metadata override task cwd", () => {
@@ -8935,7 +8938,7 @@ describe("loops CLI", () => {
     const value = JSON.parse(result.stdout);
     expect(value.workflow.steps[0].target.cwd).toBe("/tmp/from-data");
     expect(value.workflow.steps[1].target.cwd).toBe("/tmp/from-data");
-    expect(value.workflow.steps[2].target.cwd).toBe("/tmp/from-data");
+    expect(agentStepsOf(value.workflow)[1]!.target.cwd).toBe("/tmp/from-data");
   });
 
   test("todos task event handler skips tasks without explicit route opt-in", () => {

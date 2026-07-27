@@ -49,6 +49,7 @@ import {
   todosExactCommandsFragment,
   todosStartLine,
   todosVerificationLine,
+  todosWorkerVerifierWritebackCommand,
   VERIFIER_TINY_FIXES_FRAGMENT,
   verifierIdleTimeoutMs,
   verifierRuntimeGuidance,
@@ -555,6 +556,7 @@ interface CommandStepOptions {
   idleTimeoutMs?: number;
   dependsOn?: string[];
   blockedExitCodes?: number[];
+  continueOnFailure?: boolean;
 }
 
 /**
@@ -568,6 +570,7 @@ function commandStep(opts: CommandStepOptions): GateWorkflowStep {
     name: opts.name,
     description: opts.description,
     ...(opts.dependsOn ? { dependsOn: opts.dependsOn } : {}),
+    ...(opts.continueOnFailure !== undefined ? { continueOnFailure: opts.continueOnFailure } : {}),
     target: {
       type: "command",
       command: "bash",
@@ -634,6 +637,30 @@ function prHandoffStep(input: TodosTaskWorkflowTemplateInput, plan: WorktreePlan
       worktreeCwd: plan.cwd,
       worktreeRoot: plan.path ?? plan.cwd,
       expectedBranch: plan.branch ?? "",
+    }),
+    cwd: plan.originalCwd,
+    timeoutMs: 2 * 60_000,
+  });
+}
+
+function todosWritebackStep(
+  role: "worker" | "verifier",
+  todosProjectPath: string,
+  input: TodosTaskWorkflowTemplateInput,
+  plan: WorktreePlan,
+): WorkflowStep {
+  return commandStep({
+    id: `${role}-writeback`,
+    name: role === "worker" ? "Worker Writeback" : "Verifier Writeback",
+    description: role === "worker"
+      ? "Record deterministic worker evidence on the source todos task."
+      : "Record deterministic verifier evidence and complete the source todos task only after verifier success.",
+    dependsOn: [role],
+    command: todosWorkerVerifierWritebackCommand({
+      role,
+      todosProjectPath,
+      taskId: input.taskId,
+      eventId: input.eventId,
     }),
     cwd: plan.originalCwd,
     timeoutMs: 2 * 60_000,
@@ -796,16 +823,26 @@ export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTe
         plan,
         "Fail before worker execution when the source todos task is not resolvable.",
       ),
-      ...workerVerifierSteps({
-        input,
-        seed: input.taskId,
-        plan,
-        workerPrompt,
-        verifierPrompt,
-        workerDescription: "Implement the todos task and record evidence.",
-        verifierDescription: "Adversarially verify worker output and update todos.",
-        workerDependsOn: ["source-task-gate"],
-      }),
+      {
+        id: "worker",
+        name: "Worker",
+        description: "Implement the todos task and record evidence.",
+        dependsOn: ["source-task-gate"],
+        continueOnFailure: true,
+        target: agentTarget(input, workerPrompt, "worker", input.taskId, plan),
+        timeoutMs: agentTimeoutMs(input),
+      },
+      todosWritebackStep("worker", todosProjectPath, input, plan),
+      {
+        id: "verifier",
+        name: "Verifier",
+        description: "Adversarially verify worker output and update todos.",
+        dependsOn: ["worker-writeback"],
+        continueOnFailure: true,
+        target: agentTarget(input, verifierPrompt, "verifier", input.taskId, plan),
+        timeoutMs: agentTimeoutMs(input),
+      },
+      todosWritebackStep("verifier", todosProjectPath, input, plan),
     ],
   };
 }

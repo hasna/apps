@@ -83,6 +83,7 @@ export interface ExecutionMetadata {
   workflowName?: string;
   workflowRunId?: string;
   workflowStepId?: string;
+  workflowDependencyStatuses?: string;
   goalId?: string;
   goalObjective?: string;
   goalNodeKey?: string;
@@ -328,6 +329,7 @@ function metadataEnv(metadata: ExecutionMetadata): Record<string, string> {
   if (metadata.workflowName) env.LOOPS_WORKFLOW_NAME = metadata.workflowName;
   if (metadata.workflowRunId) env.LOOPS_WORKFLOW_RUN_ID = metadata.workflowRunId;
   if (metadata.workflowStepId) env.LOOPS_WORKFLOW_STEP_ID = metadata.workflowStepId;
+  if (metadata.workflowDependencyStatuses) env.LOOPS_WORKFLOW_DEPENDENCY_STATUSES = metadata.workflowDependencyStatuses;
   if (metadata.goalId) env.LOOPS_GOAL_ID = metadata.goalId;
   if (metadata.goalObjective) env.LOOPS_GOAL_OBJECTIVE = metadata.goalObjective;
   if (metadata.goalNodeKey) env.LOOPS_GOAL_NODE_KEY = metadata.goalNodeKey;

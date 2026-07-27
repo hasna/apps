@@ -87,6 +87,36 @@ describe("workflow runner", () => {
     }
   });
 
+  test("passes direct dependency statuses to command step environment", async () => {
+    const store = new Store(":memory:");
+    try {
+      const workflow = store.createWorkflow({
+        name: "dependency-status-env",
+        steps: [
+          {
+            id: "worker",
+            continueOnFailure: true,
+            target: { type: "command", command: "bash", args: ["-lc", "exit 7"] },
+          },
+          {
+            id: "worker-writeback",
+            dependsOn: ["worker"],
+            target: { type: "command", command: "bash", args: ["-lc", "printf '%s' \"$LOOPS_WORKFLOW_DEPENDENCY_STATUSES\""] },
+          },
+        ],
+      });
+
+      const result = await executeWorkflow(store, workflow);
+
+      expect(result.status).toBe("succeeded");
+      const run = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0]!;
+      const writeback = store.getWorkflowStepRun(run.id, "worker-writeback");
+      expect(JSON.parse(writeback?.stdout ?? "{}")).toEqual({ worker: "failed" });
+    } finally {
+      store.close();
+    }
+  });
+
   test("persists the exact advisory agent session contract before execution", async () => {
     const store = new Store(":memory:");
     const binDir = mkdtempSync(join(tmpdir(), "loops-workflow-agent-contract-"));
