@@ -19,14 +19,25 @@ import { fileURLToPath } from "node:url";
 const FORBIDDEN_PACKAGE = "@hasna/cloud";
 
 /**
+ * Every delimiter a module specifier can legally use. Backticks count:
+ * `import(`pkg`)` is a valid dynamic import, so a quote class of `["']` alone
+ * leaves an evasion route open.
+ */
+const QUOTE = "[\"'`]";
+const NOT_QUOTE = "[^\"'`]";
+
+/**
  * Matches the package as a module specifier in every import form —
  * `from "x"`, `import "x"`, `import("x")`, `require("x")` — including deep
  * imports like `x/dist/adapter.js`. Matching specifiers rather than bare
  * mentions means prose explaining the removal does not trip the guard.
+ *
+ * The whitespace between the keyword and the specifier is optional (`\s*`, not
+ * `\s+`): `import"pkg";` with no space is valid JS and must not slip through.
  */
 const FORBIDDEN_IMPORT = new RegExp(
-  String.raw`(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|\bimport\s+)` +
-    String.raw`["']${FORBIDDEN_PACKAGE}(?:/[^"']*)?["']`,
+  String.raw`(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|\bimport\s*)` +
+    `${QUOTE}${FORBIDDEN_PACKAGE}(?:/${NOT_QUOTE}*)?${QUOTE}`,
 );
 
 /** Every package.json field that can pull a package into an install. */
@@ -50,11 +61,22 @@ const SKIP_DIRS = new Set(["node_modules", ".git"]);
 const SOURCE_EXTENSIONS = /\.(ts|tsx|js|jsx|mjs|cjs|mts|cts)$/;
 
 /**
+ * `dist/` is gitignored and `bun test` does not build, so the built-output
+ * check has nothing to inspect on a fresh checkout. It is gated on this flag
+ * rather than filtering to an empty list, so an unbuilt tree reports the check
+ * as SKIPPED instead of reporting a green "no built bundle carries the retired
+ * package" over zero files.
+ */
+const distDir = join(repoRoot, "dist");
+const hasBuiltOutput = existsSync(distDir) && statSync(distDir).isDirectory();
+const isCi = Boolean(process.env["CI"]);
+
+/**
  * Roots to scan: everything `package.json` ships, plus the source tree that
  * produces it. Driven off `files` so that adding a shipped directory extends
  * this guard automatically instead of silently escaping it. `dist/` is absent
- * from a fresh checkout, so it is filtered out rather than asserted on — the
- * build step is what puts it in scope.
+ * from a fresh checkout, so it drops out here — the built-output check below
+ * gates on it explicitly instead of quietly scanning nothing.
  */
 function scanRoots(): string[] {
   const pkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as { files?: string[] };
@@ -110,22 +132,40 @@ describe("no_cloud_guard boundary", () => {
     expect(offenders).toEqual([]);
   });
 
-  test("no built bundle carries the retired package", () => {
+  test.if(hasBuiltOutput)("no built bundle carries the retired package", () => {
+    // EVERY file under dist/, not only the source extensions: declaration maps
+    // and any other emitted artifact ship to consumers too, and a specifier
+    // planted in a `.map` is invisible to both the regex above and to
+    // `contracts no-cloud-scan` in directory mode (dist/ is gitignored).
+    //
     // Bundlers inline dependency source under a `// node_modules/<pkg>/...`
-    // banner, so the specifier regex above does not see it. Any mention at all
-    // inside a build artifact means the dependency shipped.
-    const offenders = collect((name) => SOURCE_EXTENSIONS.test(name))
-      .filter((file) => relative(repoRoot, file).startsWith("dist/"))
+    // banner, so the specifier regex does not see that either. Any mention at
+    // all inside a build artifact means the dependency shipped.
+    const built = walk(distDir, () => true, []);
+
+    // Guards the guard: an empty dist/ must not read as a clean dist/.
+    expect(built.length).toBeGreaterThan(0);
+
+    const offenders = built
       .filter((file) => readFileSync(file, "utf8").includes(FORBIDDEN_PACKAGE))
       .map((file) => relative(repoRoot, file));
 
     expect(offenders).toEqual([]);
   });
 
+  // Locally the built-output check is allowed to skip; in CI, where the build
+  // runs before the tests, a missing dist/ means the check silently stopped
+  // covering the artifact consumers execute — so there it is a failure.
+  test.if(isCi)("built output is present when CI runs the guard", () => {
+    expect(hasBuiltOutput).toBe(true);
+  });
+
   test("the lockfile does not resolve the retired package", () => {
     const lockfile = join(repoRoot, "bun.lock");
-    if (!existsSync(lockfile)) return;
 
+    // The lockfile is tracked, so its absence is a broken checkout, not a
+    // reason to pass.
+    expect(existsSync(lockfile)).toBe(true);
     expect(readFileSync(lockfile, "utf8")).not.toContain(FORBIDDEN_PACKAGE);
   });
 
@@ -135,8 +175,17 @@ describe("no_cloud_guard boundary", () => {
     // The retired adapter was a thin wrapper over bun:sqlite that applied these
     // two PRAGMAs; `foreign_keys` is per-connection, so losing it silently stops
     // ON DELETE CASCADE from firing.
-    expect(database).toContain('from "bun:sqlite"');
-    expect(database).toMatch(/PRAGMA journal_mode = WAL/);
-    expect(database).toMatch(/PRAGMA foreign_keys = ON/);
+    //
+    // Anchored to a live statement at the start of a line: a plain substring
+    // match is satisfied by a commented-out PRAGMA, which enforces nothing.
+    // (Cascade itself is covered behaviourally by src/db/pages.test.ts.)
+    const liveStatement = (source: string) =>
+      new RegExp(String.raw`^[ \t]*[\w$.]+\.exec\(\s*${QUOTE}${source}${QUOTE}`, "m");
+
+    expect(database).toMatch(
+      new RegExp(String.raw`^import\s+\{[^}]*\bDatabase\b[^}]*\}\s+from\s*${QUOTE}bun:sqlite${QUOTE}`, "m"),
+    );
+    expect(database).toMatch(liveStatement("PRAGMA journal_mode = WAL"));
+    expect(database).toMatch(liveStatement("PRAGMA foreign_keys = ON"));
   });
 });
