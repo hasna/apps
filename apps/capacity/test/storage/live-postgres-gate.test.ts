@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  LEGACY_LIVE_POSTGRES_URL_VARIABLE,
   LIVE_POSTGRES_URL_VARIABLE,
   resolveLivePostgresGate,
 } from "../live-postgres-gate";
@@ -16,6 +17,12 @@ describe("Live PostgreSQL gate", () => {
 
     expect(
       resolveLivePostgresGate({ CI: "true", [LIVE_POSTGRES_URL_VARIABLE]: LIVE_URL }),
+    ).toEqual({ mode: "run", url: LIVE_URL });
+  });
+
+  test("accepts the legacy accounts connection URL for existing callers", () => {
+    expect(
+      resolveLivePostgresGate({ [LEGACY_LIVE_POSTGRES_URL_VARIABLE]: LIVE_URL }),
     ).toEqual({ mode: "run", url: LIVE_URL });
   });
 

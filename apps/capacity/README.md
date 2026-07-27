@@ -71,7 +71,7 @@ The live PostgreSQL conformance test is opt-in and expects an empty disposable
 database:
 
 ```sh
-ACCOUNTS_TEST_POSTGRES_URL='postgresql://user@127.0.0.1/accounts_test?sslmode=disable' \
+HASNA_CAPACITY_TEST_DATABASE_URL='postgresql://user@127.0.0.1/capacity_test?sslmode=disable' \
   bun test test/storage/postgres-live.test.ts
 ```
 

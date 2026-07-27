@@ -1,0 +1,72 @@
+{
+  "$schema": "https://github.com/hasna/contracts/schema/hasna.service_contract.v1.json",
+  "schema": "hasna.service_contract.v1",
+  "name": "capacity",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "0.8.1",
+  "description": "Fail-closed provider account capacity metadata for local and self-hosted Hasna deployments. Ships a local diagnostic CLI, SDK exports, SQLite local storage, and PostgreSQL self-hosted storage adapters without a runnable service binary.",
+  "bins": [
+    "capacity"
+  ],
+  "hosting": [
+    "user-hosted"
+  ],
+  "deploymentModes": [
+    "local",
+    "self_hosted"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "capacity-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "capacity",
+      "authMode": "local-only",
+      "deploymentModes": [
+        "local"
+      ]
+    },
+    {
+      "name": "capacity-sdk-local",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "local-only",
+      "deploymentModes": [
+        "local"
+      ],
+      "exportSubpath": "."
+    },
+    {
+      "name": "capacity-sdk-self-hosted",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "custom",
+      "deploymentModes": [
+        "self_hosted"
+      ],
+      "exportSubpath": "."
+    }
+  ],
+  "storage": {
+    "mode": "local",
+    "engines": [
+      "sqlite",
+      "postgres"
+    ],
+    "envPrefix": "HASNA_CAPACITY_",
+    "aliasEnvPrefix": "ACCOUNTS_",
+    "sqlitePath": "~/.hasna/accounts/accounts.db",
+    "pgTestGate": {
+      "envVar": "HASNA_CAPACITY_TEST_DATABASE_URL",
+      "command": "HASNA_CAPACITY_TEST_DATABASE_URL=postgresql://user@127.0.0.1/capacity_test?sslmode=disable bun test test/storage/postgres-live.test.ts"
+    }
+  },
+  "metadata": {
+    "release": {
+      "artifactScan": {
+        "script": "artifact-scan"
+      }
+    }
+  }
+}

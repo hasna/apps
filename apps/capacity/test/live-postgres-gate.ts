@@ -8,7 +8,8 @@
  * instead of reporting a green run.
  */
 
-export const LIVE_POSTGRES_URL_VARIABLE = "ACCOUNTS_TEST_POSTGRES_URL";
+export const LIVE_POSTGRES_URL_VARIABLE = "HASNA_CAPACITY_TEST_DATABASE_URL";
+export const LEGACY_LIVE_POSTGRES_URL_VARIABLE = "ACCOUNTS_TEST_POSTGRES_URL";
 
 export interface EnvironmentLike {
   readonly [key: string]: string | undefined;
@@ -29,7 +30,9 @@ function isContinuousIntegration(environment: EnvironmentLike): boolean {
 export function resolveLivePostgresGate(
   environment: EnvironmentLike = process.env,
 ): LivePostgresGate {
-  const url = environment[LIVE_POSTGRES_URL_VARIABLE];
+  const url =
+    environment[LIVE_POSTGRES_URL_VARIABLE] ??
+    environment[LEGACY_LIVE_POSTGRES_URL_VARIABLE];
 
   if (url !== undefined && url.trim() !== "") {
     return { mode: "run", url };
