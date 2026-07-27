@@ -1890,8 +1890,10 @@ async function run(argv: string[]): Promise<void> {
       throw new Error(`No matching tag on ${current.id}: ${notFound.map((tag) => JSON.stringify(tag)).join(', ')} not in [${before.join(', ')}]`);
     }
     const item = await itemStore.update(current.id, { tags });
-    const result: Record<string, unknown> = { ok: true, item, removed, message: `Removed ${removed} tag${removed === 1 ? '' : 's'} from ${item?.id ?? current.id}` };
-    // A partial miss must be visible too, not just the all-miss case.
+    // A partial miss must be visible too, not just the all-miss case — and it has to be
+    // in `message`, because non-JSON output prints nothing else.
+    const missed = notFound.length > 0 ? ` (not found: ${notFound.join(', ')})` : '';
+    const result: Record<string, unknown> = { ok: true, item, removed, message: `Removed ${removed} tag${removed === 1 ? '' : 's'} from ${item?.id ?? current.id}${missed}` };
     if (notFound.length > 0) result.not_found = notFound;
     output(result, flags.json, flags);
     return;

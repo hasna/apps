@@ -713,6 +713,12 @@ describe('knowledge cli', () => {
     expect(partialOut.not_found).toEqual(['nope']);
     expect(storedTags('k_partial')).toEqual(['beta']);
 
+    // ...and it must say so in `message` too, because non-JSON output prints nothing else.
+    seed('k_partial_human', ['alpha', 'beta']);
+    const partialHuman = runCli(['untag', '--id', 'k_partial_human', '--store', store, '-t', 'alpha', '-t', 'nope']);
+    expect(partialHuman.exitCode).toBe(0);
+    expect(decode(partialHuman.stdout)).toContain('not found: nope');
+
     // The human success line must carry the count, so it cannot read the same for 1 and 0.
     seed('k_human', ['alpha', 'beta', 'gamma']);
     const human = runCli(['untag', '--id', 'k_human', '--store', store, '-t', 'alpha', '-t', 'beta']);
