@@ -11,13 +11,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- **Brand-owned hostnames removed from the published artifact.** 1.4.0 shipped
+- **Brand-owned DNS domains removed from the published artifact.** 1.4.0 shipped
   real deployment hostnames in `connectors/zendesk` config templates and docs,
   in two other connectors' comments and examples, in `SECURITY.md`, and — via a
   bundled dependency literal with no occurrence anywhere in this repo's source —
-  in the compiled `bin/index.js`. Every occurrence is gone. Verified against the
-  packed tarball rather than the working tree, because the working tree was
-  never where the whole problem was.
+  in the compiled `bin/index.js`. Every occurrence of an owned DNS domain is gone
+  from the tarball this package publishes. Verified against the packed tarball
+  rather than the working tree, because the working tree was never where the
+  whole problem was.
+
+  Two limits on that claim, stated because "hostnames removed" would overstate it:
+
+  - `@hasna/events` is externalized out of `bin/index.js` (see *Changed*) but is
+    still a runtime dependency, and its own published package continues to carry
+    the literal. `npm install` therefore still places an owned domain on disk.
+    Removing it belongs to that package, and is tracked there.
+  - Scope here is DNS domains. Deployment **resource identifiers** — the
+    instance, database and bucket names in `connectors/zendesk`'s docs, `Makefile`
+    and `.env.example`, together with the naming pattern they follow — are
+    unchanged from 1.4.0 and still ship. They are a separate class with a
+    separate fix, tracked separately; this release does not address them and
+    should not be read as having done so.
 
 ### Changed
 
