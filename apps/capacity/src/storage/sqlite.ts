@@ -1598,11 +1598,8 @@ function validateExistingPath(path: string, uid: number): void {
       throw new AccountsError("DATABASE_PATH_UNSAFE", "SQLite path contains an unsafe component");
     }
     const writableByOthers = (status.mode & 0o022) !== 0;
-    const rootStickyDirectory = status.uid === 0 && (status.mode & 0o1000) !== 0;
-    if (status.uid !== uid && status.uid !== 0) {
-      throw new AccountsError("DATABASE_PATH_UNSAFE", "SQLite path component has an unexpected owner");
-    }
-    if (status.uid !== uid && writableByOthers && !rootStickyDirectory) {
+    const stickyDirectory = (status.mode & 0o1000) !== 0;
+    if (writableByOthers && !stickyDirectory) {
       throw new AccountsError("DATABASE_PATH_UNSAFE", "SQLite path component is writable by another user");
     }
   }

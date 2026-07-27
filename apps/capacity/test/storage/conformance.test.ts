@@ -2,12 +2,12 @@ import { Database } from "bun:sqlite";
 import { afterAll, describe, expect, test } from "bun:test";
 import {
   chmodSync,
-  mkdirSync,
   mkdtempSync,
   rmSync,
   statSync,
   symlinkSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
@@ -49,14 +49,13 @@ import {
   TEST_AUTHORITY_POLICY,
 } from "../fixtures";
 
-const TEMP_ROOT = join(import.meta.dir, "..", "..", ".tmp", "storage-tests");
-mkdirSync(TEMP_ROOT, { recursive: true, mode: 0o700 });
-chmodSync(join(import.meta.dir, "..", "..", ".tmp"), 0o700);
+const TEMP_ROOT = mkdtempSync(join(tmpdir(), "capacity-storage-tests-"));
 chmodSync(TEMP_ROOT, 0o700);
 
 const cleanup: string[] = [];
 afterAll(() => {
   for (const path of cleanup) rmSync(path, { recursive: true, force: true });
+  rmSync(TEMP_ROOT, { recursive: true, force: true });
 });
 
 type AdapterFactory = () => {

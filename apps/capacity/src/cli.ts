@@ -8,6 +8,7 @@ import {
   AccountsError,
   asAccountsError,
   canonicalJson,
+  createAccountsCapacity,
   createSQLiteAccounts,
   decodeRecordEnvelope,
   exitCodeForError,
@@ -15,6 +16,7 @@ import {
   parseAccountId,
   parseAuthCapsuleId,
   parseCapacityPoolId,
+  parseClosedJson,
   parseClosedJsonBytes,
   parseCredentialBindingId,
   parseEntitlementId,
@@ -23,7 +25,12 @@ import {
   PACKAGE_VERSION,
   toErrorEnvelope,
   validateSlotEligibility,
+  type AccountsAuthProvider,
+  type AccountsCapacity,
   type EntityKind,
+  type EntityMap,
+  type EligibilityRequest,
+  type SlotEligibilityMetadata,
   type NativeSubscriptionBindingSnapshot,
 } from "./index";
 
@@ -37,10 +44,25 @@ const NOUNS: Readonly<Record<string, EntityKind>> = {
   "auth-capsules": "auth_capsule",
   "credential-bindings": "credential_binding",
 };
+const FORBIDDEN_AUTH_HEADERS = new Set([
+  "cookie",
+  "proxy-authorization",
+  "x-api-key",
+  "x-auth-token",
+  "x-legacy-api-key",
+]);
 
 interface ParsedArguments {
   readonly positionals: readonly string[];
   readonly flags: Readonly<Record<string, string | true>>;
+}
+
+interface CliCatalog {
+  doctor(): Promise<unknown>;
+  list(kind: EntityKind): Promise<readonly unknown[]>;
+  get(kind: EntityKind, id: EntityMap[EntityKind]["id"]): Promise<unknown>;
+  eligibility(request: EligibilityRequest): Promise<SlotEligibilityMetadata>;
+  close(): Promise<void>;
 }
 
 export async function runAccountsCli(argv: readonly string[]): Promise<number> {
@@ -65,7 +87,7 @@ export async function runAccountsCli(argv: readonly string[]): Promise<number> {
       return await probeNativeCommand(positionals, parsed.flags, jsonRequested);
     }
 
-    const catalog = createLocalCatalog();
+    const catalog = createCliCatalog();
     try {
       if (command === "doctor") {
         requireNoPositionals(positionals, "doctor");
@@ -131,21 +153,21 @@ export async function runAccountsCli(argv: readonly string[]): Promise<number> {
   }
 }
 
-function createLocalCatalog() {
+function createCliCatalog(): CliCatalog {
   const deployment = Bun.env.HASNA_ACCOUNTS_DEPLOYMENT;
   const localPath = Bun.env.HASNA_ACCOUNTS_DATABASE_PATH;
-  const serviceConfigPresent =
-    Bun.env.HASNA_ACCOUNTS_CAPACITY_API_URL !== undefined ||
-    Bun.env.HASNA_ACCOUNTS_CAPACITY_AUTH_REF !== undefined;
   if (deployment === "self_hosted" && localPath !== undefined) {
     throw usageError("Self-hosted deployment cannot use a local database path");
   }
+  if (deployment === "self_hosted") {
+    const baseUrl = requiredEnvironment("HASNA_ACCOUNTS_CAPACITY_API_URL");
+    const authRef = requiredEnvironment("HASNA_ACCOUNTS_CAPACITY_AUTH_REF");
+    return createSelfHostedCliCatalog(baseUrl, authRef);
+  }
+  const serviceConfigPresent =
+    Bun.env.HASNA_ACCOUNTS_CAPACITY_API_URL !== undefined ||
+    Bun.env.HASNA_ACCOUNTS_CAPACITY_AUTH_REF !== undefined;
   if (deployment !== "local") {
-    if (deployment === "self_hosted") {
-      throw new AccountsError("NOT_IMPLEMENTED", "The self-hosted CLI client is not configured", {
-        details: { adapter: "http" },
-      });
-    }
     throw usageError("HASNA_ACCOUNTS_DEPLOYMENT must be local or self_hosted");
   }
   if (serviceConfigPresent) {
@@ -155,7 +177,198 @@ function createLocalCatalog() {
     throw usageError("HASNA_ACCOUNTS_DATABASE_PATH must be absolute");
   }
   const path = localPath === undefined ? join(homedir(), ".hasna", "accounts", "accounts.db") : localPath;
-  return createSQLiteAccounts({ path });
+  const catalog = createSQLiteAccounts({ path });
+  return Object.freeze({
+    doctor: () => catalog.doctor(),
+    list: (kind: EntityKind) => catalog.list(kind),
+    get: (kind: EntityKind, id: EntityMap[EntityKind]["id"]) => catalog.get(kind, id as never),
+    eligibility: (request: EligibilityRequest) => catalog.eligibility(request),
+    close: () => catalog.close(),
+  });
+}
+
+function createSelfHostedCliCatalog(baseUrl: string, authRef: string): CliCatalog {
+  const authProvider = bearerReferenceAuthProvider(authRef);
+  const client = createAccountsCapacity({
+    mode: "self_hosted",
+    baseUrl,
+    authProvider,
+  });
+  const origin = new URL(`${new URL(baseUrl).origin}/`);
+  return Object.freeze({
+    doctor: () => selfHostedDoctor(origin, authProvider),
+    list: (kind: EntityKind) => listSelfHosted(client, kind),
+    get: (kind: EntityKind, id: EntityMap[EntityKind]["id"]) => getSelfHosted(client, kind, id),
+    eligibility: (request: EligibilityRequest) => client.capacity.query(request),
+    close: () => client.close(),
+  });
+}
+
+function requiredEnvironment(name: string): string {
+  const value = Bun.env[name];
+  if (value === undefined || value.length === 0) throw usageError(`${name} is required`);
+  return value;
+}
+
+function bearerReferenceAuthProvider(authRef: string): AccountsAuthProvider {
+  if (!/^[\x21-\x7e]{1,4096}$/.test(authRef)) {
+    throw usageError("HASNA_ACCOUNTS_CAPACITY_AUTH_REF must be a visible ASCII credential reference");
+  }
+  return Object.freeze({
+    authorize: async (headers: Headers, signal?: AbortSignal) => {
+      if (signal?.aborted) throw signal.reason ?? new DOMException("The operation was aborted", "AbortError");
+      headers.set("authorization", `Bearer ${authRef}`);
+    },
+  });
+}
+
+async function listSelfHosted(client: AccountsCapacity, kind: EntityKind): Promise<readonly unknown[]> {
+  switch (kind) {
+    case "account":
+      return (await client.providerAccounts.list()).records;
+    case "entitlement":
+      return (await client.entitlements.list()).records;
+    case "capacity_pool":
+      return (await client.capacityPools.list()).records;
+    case "access_method":
+      return (await client.lanes.list()).records;
+    case "auth_capsule":
+      return (await client.capsules.list()).records;
+    case "credential_binding":
+      return (await client.credentialBindings.list()).records;
+  }
+}
+
+function getSelfHosted(
+  client: AccountsCapacity,
+  kind: EntityKind,
+  id: EntityMap[EntityKind]["id"],
+): Promise<unknown> {
+  switch (kind) {
+    case "account":
+      return client.providerAccounts.get(id as EntityMap["account"]["id"]);
+    case "entitlement":
+      return client.entitlements.get(id as EntityMap["entitlement"]["id"]);
+    case "capacity_pool":
+      return client.capacityPools.get(id as EntityMap["capacity_pool"]["id"]);
+    case "access_method":
+      return client.lanes.get(id as EntityMap["access_method"]["id"]);
+    case "auth_capsule":
+      return client.capsules.get(id as EntityMap["auth_capsule"]["id"]);
+    case "credential_binding":
+      return client.credentialBindings.get(id as EntityMap["credential_binding"]["id"]);
+  }
+}
+
+async function selfHostedDoctor(
+  origin: URL,
+  authProvider: AccountsAuthProvider,
+): Promise<Readonly<Record<string, unknown>>> {
+  const [health, ready, version] = await Promise.all([
+    fetchSelfHostedDiagnostic(origin, "/health", authProvider, new Set([200])),
+    fetchSelfHostedDiagnostic(origin, "/ready", authProvider, new Set([200, 503])),
+    fetchSelfHostedDiagnostic(origin, "/version", authProvider, new Set([200])),
+  ]);
+  const healthRecord = closedObject(health, ["schemaVersion", "status"]);
+  literal(healthRecord.schemaVersion, "accounts.health.v1", "schemaVersion");
+  literal(healthRecord.status, "ok", "status");
+  const readyRecord = closedObject(ready, ["schemaVersion", "status"]);
+  literal(readyRecord.schemaVersion, "accounts.readiness.v1", "schemaVersion");
+  if (readyRecord.status !== "ready" && readyRecord.status !== "not_ready") invalidDiagnostic("status");
+  const versionRecord = closedObject(version, ["schemaVersion", "version", "contractSha256"]);
+  literal(versionRecord.schemaVersion, "accounts.version.v1", "schemaVersion");
+  if (typeof versionRecord.version !== "string" || versionRecord.version.length === 0) {
+    invalidDiagnostic("version");
+  }
+  if (typeof versionRecord.contractSha256 !== "string" || !/^[0-9a-f]{64}$/.test(versionRecord.contractSha256)) {
+    invalidDiagnostic("contractSha256");
+  }
+  return Object.freeze({
+    adapter: "http",
+    health: "ok",
+    readiness: readyRecord.status,
+    version: versionRecord.version,
+    contractSha256: versionRecord.contractSha256,
+  });
+}
+
+async function fetchSelfHostedDiagnostic(
+  origin: URL,
+  path: string,
+  authProvider: AccountsAuthProvider,
+  acceptedStatuses: ReadonlySet<number>,
+): Promise<unknown> {
+  const url = new URL(path, origin);
+  if (url.origin !== origin.origin) {
+    throw new AccountsError("VALIDATION_FAILED", "Self-hosted diagnostic origin escape is forbidden", {
+      details: { field: "baseUrl" },
+    });
+  }
+  const headers = new Headers({ accept: "application/json" });
+  try {
+    await authProvider.authorize(headers);
+  } catch {
+    throw new AccountsError("DEPENDENCY_UNAVAILABLE", "Capacity authentication is unavailable");
+  }
+  validateAuthorizationHeaders(headers);
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "GET",
+      headers,
+      redirect: "error",
+      credentials: "omit",
+      cache: "no-store",
+    });
+  } catch {
+    throw new AccountsError("DEPENDENCY_UNAVAILABLE", "Capacity service is unavailable", {
+      retryable: true,
+    });
+  }
+  let decoded: unknown;
+  try {
+    decoded = parseClosedJson(await response.text());
+  } catch {
+    throw new AccountsError("DEPENDENCY_UNAVAILABLE", "Capacity service returned invalid JSON");
+  }
+  if (!acceptedStatuses.has(response.status)) {
+    throw new AccountsError("DEPENDENCY_UNAVAILABLE", "Capacity diagnostic endpoint is unavailable", {
+      retryable: response.status >= 500,
+    });
+  }
+  return decoded;
+}
+
+function validateAuthorizationHeaders(headers: Headers): void {
+  const authorization = headers.get("authorization");
+  if (authorization === null || !/^Bearer [\x21-\x7e]{1,4096}$/.test(authorization)) {
+    throw new AccountsError("FORBIDDEN", "Capacity authorization is missing or invalid");
+  }
+  for (const name of FORBIDDEN_AUTH_HEADERS) {
+    if (headers.has(name)) {
+      throw new AccountsError("VALIDATION_FAILED", "Legacy or ambient credential header is forbidden", {
+        details: { field: name.replace(/-/g, "_") },
+      });
+    }
+  }
+}
+
+function closedObject(value: unknown, required: readonly string[]): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) invalidDiagnostic("response");
+  const record = value as Record<string, unknown>;
+  for (const key of Object.keys(record)) if (!required.includes(key)) invalidDiagnostic(key);
+  for (const key of required) if (!Object.hasOwn(record, key)) invalidDiagnostic(key);
+  return record;
+}
+
+function literal(value: unknown, expected: string, field: string): void {
+  if (value !== expected) invalidDiagnostic(field);
+}
+
+function invalidDiagnostic(field: string): never {
+  throw new AccountsError("DEPENDENCY_UNAVAILABLE", "Capacity service returned an invalid diagnostic response", {
+    details: { field: field.replace(/[^A-Za-z0-9_.]/g, "_").slice(0, 64) },
+  });
 }
 
 async function validateCommand(
