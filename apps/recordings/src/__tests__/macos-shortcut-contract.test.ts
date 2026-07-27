@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
+  balancedRegion,
   evaluateSwiftCondition,
   expectOrder,
   sliceBetween,
@@ -379,6 +380,28 @@ describe("blocked-trigger reporting contract", () => {
     expect(section).toContain("case .chooseAnotherShortcut, .messageOnly:");
     expectOrder(section, "case .openAccessibilitySettings:", "openAccessibilitySettings()");
 
+    // And the other arms must render NOTHING. Asserting only that
+    // `case .chooseAnotherShortcut, .messageOnly:` exists says nothing about what it renders, so
+    // adding the Accessibility button to it — the exact wrong-remedy defect this test's own
+    // docstring above says it exists to prevent — passed the whole battery at EXIT=0. The button
+    // is offered under EVERY remedy and the guard cannot see it.
+    //
+    // Pinned two ways so neither alone has to be sufficient: the non-Accessibility arm renders
+    // `EmptyView()`, and the button's action occurs exactly once in the section. `.slice` from the
+    // arm to the switch's close rather than a marker literal, because the arm is last.
+    const otherRemediesArm = section.slice(
+      section.indexOf("case .chooseAnotherShortcut, .messageOnly:"),
+    );
+    expect(otherRemediesArm).toContain("EmptyView()");
+    expect(
+      otherRemediesArm,
+      "a non-Accessibility remedy must not offer the Accessibility button",
+    ).not.toContain("openAccessibilitySettings()");
+    // One button, one remedy. A second occurrence anywhere in the section is the same defect by
+    // another route (a duplicated arm, or a button hoisted out of the switch entirely).
+    expect([...section.matchAll(/openAccessibilitySettings\(\)/g)].length).toBe(1);
+    expect([...section.matchAll(/Button\("Open Accessibility Settings"\)?/g)].length).toBe(1);
+
     // And the remedy mapping is the engine's, exhaustive, so a new source must decide rather than
     // inherit a button that does not fit it.
     // End marker is the next declaration rather than an indentation literal, which broke whenever
@@ -701,11 +724,17 @@ describe("secure-input delivery contract", () => {
    * `restoreClipboard` is an explicit opt-in.
    */
   test("secure input never restores the clipboard, and the message says so", () => {
-    const settlement = sliceBetween(
+    // Brace-matched, not sliced to the literal `if shouldRestore {`. That end marker pinned the
+    // exact spelling of a guard two lines below this switch, so parenthesising the condition — or
+    // putting a comment in it — failed a test that is only about the decision TABLE. This region
+    // is the switch's own body; nothing outside it can change its bounds.
+    const settlement = balancedRegion(
       engineSource,
-      "let shouldRestore = switch outcome {",
-      "if shouldRestore {",
+      engineSource.indexOf("let shouldRestore = switch outcome {"),
+      "{",
+      "}",
     );
+    expect(settlement.length, "the shouldRestore switch is no longer locatable").toBeGreaterThan(80);
     expect(settlement).toContain("case .secureInputActive:\n                false");
     // The other outcomes still honour the opt-in.
     expect(settlement).toContain("stillOwnsPayload");

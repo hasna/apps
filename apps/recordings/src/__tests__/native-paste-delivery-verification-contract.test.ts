@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
-import { sliceBetween, withoutComments } from "./helpers/source-assertions.js";
+import {
+  balancedRegion,
+  interpolationsIn,
+  sliceBetween,
+  withoutComments,
+} from "./helpers/source-assertions.js";
 
 /// `CGEvent.post` returns `Void` and macOS reports no delivery. Until this contract existed
 /// the paste path treated "two CGEvents were constructed" as success: `postPaste()` returned
@@ -189,39 +194,6 @@ describe("native paste delivery verification contract", () => {
       "focusedValue",
     ];
 
-    /// Region from `open` at `start` to its matching close. Logging expressions in this codebase
-    /// span several lines — `logLine` is a `+`-chain of six string segments — so a per-line scan
-    /// misses exactly the case that matters: a segment carrying the text on a continuation line.
-    function balancedRegion(source: string, start: number, open: string, close: string): string {
-      const from = source.indexOf(open, start);
-      if (from === -1) return "";
-      let depth = 0;
-      let inString = false;
-      for (let index = from; index < source.length; index += 1) {
-        const character = source[index];
-        // Delimiters inside a string literal are TEXT, not structure. Counting them let an
-        // unmatched `)` in a format string — `log("paste read-back attempt) baseline=\(x)")` —
-        // close the region early, so the interpolation that followed was never inspected and the
-        // leak went unseen. Swift interpolations are themselves balanced inside the quotes, so
-        // skipping the whole literal is safe; the characters still appear in the returned slice.
-        if (character === "\\") {
-          index += 1;
-          continue;
-        }
-        if (character === '"') {
-          inString = !inString;
-          continue;
-        }
-        if (inString) continue;
-        if (character === open) depth += 1;
-        else if (character === close) {
-          depth -= 1;
-          if (depth === 0) return source.slice(from, index + 1);
-        }
-      }
-      return source.slice(from);
-    }
-
     /// Every expression whose value reaches the log: `log(...)` calls and the bodies of the
     /// `logLine` / `logToken` computed properties that those calls print.
     function loggingRegions(source: string): string[] {
@@ -238,9 +210,6 @@ describe("native paste delivery verification contract", () => {
       return regions.filter((region) => region.length > 0);
     }
 
-    function interpolationsIn(region: string): string[] {
-      return [...region.matchAll(/\\\(([^)]*)\)/g)].map((match) => match[1] ?? "");
-    }
 
     /**
      * Names that hold the user's text, closed over assignment.
