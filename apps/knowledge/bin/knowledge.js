@@ -1342,7 +1342,8 @@ Prune Options:
   \`-t "a,b,c"\` finds items carrying a legacy literal "a,b,c" tag as well as items carrying the three
   names separately. (\`untag\` differs on purpose: it stops at the whole-value match.)
   Use --json to tell those two shapes apart; the table renders them near-identically.
-  Archived items are excluded by default; add --include-archived to sweep both.`);return}if(_==="get"){console.log("Usage: knowledge get --id <id> [--json]");return}if(_==="update"||_==="edit"){console.log(`Usage: knowledge update|edit --id <id> [--title <title>] [--content <content>] [--url <url>] [-t <tag>]... [--json]
+  Archived items are excluded by default; add --include-archived to sweep both.
+  If both --archived and --include-archived are passed, --archived wins (archived items only).`);return}if(_==="get"){console.log("Usage: knowledge get --id <id> [--json]");return}if(_==="update"||_==="edit"){console.log(`Usage: knowledge update|edit --id <id> [--title <title>] [--content <content>] [--url <url>] [-t <tag>]... [--json]
   -t/--tag is repeatable and accepts comma-separated values; tags are added, never replaced.
   With -t the output reports how many tags were actually added, so 0 added is not read as 3.`);return}if(_==="archive"){console.log("Usage: knowledge archive --id <id> [--json]");return}if(_==="restore"||_==="unarchive"){console.log("Usage: knowledge restore|unarchive --id <id> [--json]");return}if(_==="upsert"){console.log(`Usage: knowledge upsert [title] [content] [--id <id>] [--title <title>] [--content <content>] [--url <url>] [-t <tag>]... [--json]
   -t/--tag is repeatable and accepts comma-separated values; tags are added, never replaced.
