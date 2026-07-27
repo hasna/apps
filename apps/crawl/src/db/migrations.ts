@@ -1,5 +1,23 @@
 import type { Database } from "bun:sqlite";
 
+/**
+ * Schema for the `feedback` table, owned by migration 6 below.
+ *
+ * Exported because `getDb()` replays this one statement after the migration
+ * ledger has been applied, so the `send_feedback` CLI and MCP paths can never
+ * hit a missing table. Keep it as the single definition of the table so the
+ * migration and that guard can never drift apart.
+ */
+export const FEEDBACK_TABLE_SQL = `CREATE TABLE IF NOT EXISTS feedback (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  message TEXT NOT NULL,
+  email TEXT,
+  category TEXT DEFAULT 'general',
+  version TEXT,
+  machine_id TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);`;
+
 export const migrations: string[] = [
   // Migration 1 — Initial schema
   `CREATE TABLE crawls (
@@ -132,15 +150,7 @@ CREATE INDEX idx_usage_api_key ON usage_events(api_key_id, created_at);
 CREATE INDEX idx_usage_type ON usage_events(event_type, created_at);`,
 
   // Migration 6 — Feedback
-  `CREATE TABLE IF NOT EXISTS feedback (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
-  message TEXT NOT NULL,
-  email TEXT,
-  category TEXT DEFAULT 'general',
-  version TEXT,
-  machine_id TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);`,
+  FEEDBACK_TABLE_SQL,
 ];
 
 export function runMigrations(db: Database): void {
