@@ -49,9 +49,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `.test-home/` sandboxes and per-connector lockfiles are no longer swept into
-  the published tarball by `files: ["connectors/"]`. 1.4.0 shipped a Bun
-  install-cache blob this way.
+- `.test-home/` sandboxes, per-connector lockfiles (`bun.lock`, `bun.lockb`,
+  `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`),
+  every `.env` variant except `.env.example`, and local tool output
+  (`.codewith/`, `.takumi/`, `.connectors/`, `.playwright-mcp/`) are no longer
+  swept into the published tarball by `files: ["connectors/"]`. 1.4.0 shipped a
+  Bun install-cache blob this way. Each exclusion was checked against
+  `npm pack --dry-run`, not assumed: an earlier pass denied only `bun.lock`, so
+  `bun.lockb` — what Bun still writes under `[install] saveTextLockfile = false`
+  — kept shipping, and Playwright traces embed request headers. The published
+  file list is otherwise byte-identical to what 1.4.1 already packed: the
+  1126 `.env.example` templates still ship.
+- The package-manager secret guard now runs **after** build and tests, in both
+  `prepublishOnly` and CI. It scans the union of tracked files and the files
+  `npm pack` would ship, and everything untracked-but-shipped is created by
+  install, build and test — so running it first, as it did, silently reduced it
+  to the tracked-only scan it was written to replace. It also reads `bun.lockb`
+  as a lockfile and now fails on any package-manager file it cannot scan
+  instead of skipping it; a binary lockfile is unread, not clean.
 - 1.4.0 shipped `.d.ts` files for two modules deleted in 1.4.0 itself, because
   `dist/` was not clean at release time.
 

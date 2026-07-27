@@ -12,6 +12,7 @@ type Finding = {
 
 const LOCKFILE_NAMES = new Set([
   "bun.lock",
+  "bun.lockb",
   "package-lock.json",
   "npm-shrinkwrap.json",
   "pnpm-lock.yaml",
@@ -38,6 +39,11 @@ function trackedFiles(): string[] {
 // in package.json is an allowlist over the working tree, so it picks up
 // untracked build output and per-connector lockfiles that a tracked-only scan
 // cannot see — which is exactly where a leaked credential would hide from us.
+//
+// This only has teeth if it runs AFTER install, build and test: those are what
+// create `dist/`, `bin/`, `dashboard/dist/`, per-connector lockfiles and the
+// `.test-home/` install-cache blobs. Both callers (`prepublishOnly` and the CI
+// job) therefore run this last. Do not move it earlier.
 function packedFiles(): string[] {
   const output = execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
     encoding: "utf-8",
@@ -72,10 +78,25 @@ function isNpmrcName(name: string): boolean {
   return name === ".npmrc" || name.startsWith(".npmrc.") || name.endsWith(".npmrc");
 }
 
-function readText(path: string): string | null {
-  const buf = readFileSync(path);
-  if (buf.includes(0)) return null;
-  return buf.toString("utf-8");
+type ReadResult = { kind: "text"; text: string } | { kind: "absent" } | { kind: "unscannable"; detail: string };
+
+function readText(path: string): ReadResult {
+  let buf: Buffer;
+  try {
+    buf = readFileSync(path);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // A path git tracks but that is not on disk cannot be packed, so it cannot
+    // leak. Anything else — a permission error, a directory where a file was
+    // expected — is a file we failed to clear, not a file we cleared.
+    if (code === "ENOENT") return { kind: "absent" };
+    return { kind: "unscannable", detail: `could not be read (${code ?? "unknown error"})` };
+  }
+  // Binary lockfiles (bun.lockb) record resolved registry URLs, so a scoped
+  // registry configured with in-URL credentials lives inside one. Skipping it
+  // silently is how that reaches the public registry.
+  if (buf.includes(0)) return { kind: "unscannable", detail: "is binary and cannot be scanned; it must not be packed" };
+  return { kind: "text", text: buf.toString("utf-8") };
 }
 
 function isSafeReference(value: string): boolean {
@@ -196,10 +217,14 @@ function isExactHasnaPackageName(item: string): boolean {
 const findings: Finding[] = [];
 let scanned = 0;
 for (const path of filesToScan().filter(shouldScan)) {
-  const text = readText(path);
-  if (text === null) continue;
+  const result = readText(path);
+  if (result.kind === "absent") continue;
+  if (result.kind === "unscannable") {
+    findings.push({ path, line: 1, rule: "unscannable-package-manager-file", detail: result.detail });
+    continue;
+  }
   scanned++;
-  const lines = text.split(/\r?\n/);
+  const lines = result.text.split(/\r?\n/);
   if (isNpmrcName(basename(path))) findings.push(...scanNpmrc(path, lines));
   else if (basename(path) === "bunfig.toml" || basename(path) === ".bunfig.toml") findings.push(...scanBunConfig(path, lines));
   else findings.push(...lines.flatMap((line, index) => scanTokenPatterns(path, index + 1, line)));

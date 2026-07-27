@@ -17,9 +17,6 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Package-manager secret guard
-        run: bun run check:package-secrets
-
       - name: Install dependencies
         run: bun install
 
@@ -38,3 +35,12 @@ jobs:
 
       - name: Test
         run: bun test
+
+      # Last, deliberately: this guard scans the union of tracked files and the
+      # files `npm pack` would ship. Everything untracked-but-shipped — `dist/`,
+      # `bin/`, `dashboard/dist/`, per-connector lockfiles, the `.test-home/`
+      # install-cache blobs `bun test` creates — only exists once install, build
+      # and test have run. Running it earlier (the previous order) reduced it to
+      # a tracked-only scan that could not see the artifacts it exists to catch.
+      - name: Package-manager secret guard
+        run: bun run check:package-secrets

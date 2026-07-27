@@ -7,6 +7,7 @@ bin/
 
 # Bun
 bun.lock
+bun.lockb
 
 # OS
 .DS_Store
