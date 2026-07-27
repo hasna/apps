@@ -2,7 +2,7 @@
 
 All notable changes to `@hasna/statusline` are documented here.
 
-## Unreleased
+## 0.0.3 - 2026-07-27
 
 - Add `auth-profile` and `auth-email` segments that report the account **this
   session** runs as, resolved from the process's own `CLAUDE_CONFIG_DIR` rather
