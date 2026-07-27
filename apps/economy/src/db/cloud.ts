@@ -4,14 +4,14 @@
 // There is NO local SQLite, NO cache-as-mode, and NO sync engine in the serve
 // process. The core query layer in `database.ts` is dialect-agnostic (it only
 // uses the `DbAdapter` surface: prepare/all/get/run/exec/transaction), so the
-// same functions run unchanged against the `PgAdapter`, which translates
+// same functions run unchanged against the `SyncPgAdapter`, which translates
 // SQLite-flavored SQL to Postgres and executes it synchronously against a pooled
 // connection.
-import type { DbAdapter } from '@hasna/cloud'
 import type { AuthQueryClient } from '@hasna/contracts/auth'
 import pg from 'pg'
-import type { SqliteAdapter as Database } from '@hasna/cloud'
+import type { DbAdapter, SqliteAdapter as Database } from './sqlite-adapter.js'
 import { SyncPgAdapter } from './sync-pg.js'
+import { resolvePgSsl } from './pg-migrate.js'
 import { PG_MIGRATIONS } from './pg-migrations.js'
 
 /** Resolve the cloud Postgres DSN from the standard env aliases. */
@@ -44,7 +44,7 @@ export function resolveSigningSecret(): string | undefined {
 
 /**
  * Open a pooled Postgres connection to the shared RDS. Returns a value typed as
- * the SQLite `Database` the query layer expects — safe because `PgAdapter`
+ * the SQLite `Database` the query layer expects — safe because `SyncPgAdapter`
  * implements the identical `DbAdapter` surface those functions rely on.
  */
 export function openCloudDatabase(dsn = getCloudDatabaseUrl()): Database {
@@ -53,16 +53,15 @@ export function openCloudDatabase(dsn = getCloudDatabaseUrl()): Database {
       'economy cloud mode requires a Postgres DSN: set HASNA_ECONOMY_DATABASE_URL (or ECONOMY_DATABASE_URL / DATABASE_URL)',
     )
   }
-  // SyncPgAdapter: a worker-backed synchronous PG client (see sync-pg.ts). The
-  // in-thread @hasna/cloud PgAdapter deadlocks pg's async IO under Bun.
+  // SyncPgAdapter: a worker-backed synchronous PG client (see sync-pg.ts). An
+  // in-thread sync-over-async PG client deadlocks pg's async IO under Bun.
   return new SyncPgAdapter(dsn) as unknown as Database
 }
 
 /** A raw pg Pool for auxiliary async work (API-key store, migrations). */
 export function createCloudPool(dsn = getCloudDatabaseUrl()): pg.Pool {
   if (!dsn) throw new Error('economy cloud mode requires a Postgres DSN (HASNA_ECONOMY_DATABASE_URL)')
-  const ssl = dsn.includes('sslmode=require') || dsn.includes('ssl=true') ? { rejectUnauthorized: false } : undefined
-  const pool = new pg.Pool({ connectionString: dsn, ssl, max: Number(process.env['ECONOMY_PG_POOL_MAX'] ?? '5'), connectionTimeoutMillis: 10_000 })
+  const pool = new pg.Pool({ connectionString: dsn, ssl: resolvePgSsl(dsn), max: Number(process.env['ECONOMY_PG_POOL_MAX'] ?? '5'), connectionTimeoutMillis: 10_000 })
   // Idle backends can drop (RDS failover, network blips, idle timeouts). Without
   // a listener, pg re-emits that as an uncaught 'error' and crashes the process.
   // Swallow it: the pool discards the dead client and dials a fresh one on the
@@ -76,7 +75,7 @@ export function createCloudPool(dsn = getCloudDatabaseUrl()): pg.Pool {
 /**
  * Adapt a pg Pool to the `@hasna/contracts/auth` `AuthQueryClient` surface
  * (many/get/execute). This backs the `ApiKeyStore` without pulling in the
- * generic vendored kit — economy's storage is the `@hasna/cloud` PG pool.
+ * generic vendored kit — economy's storage is this pg pool.
  */
 export function authClientFromPool(pool: pg.Pool): AuthQueryClient {
   return {

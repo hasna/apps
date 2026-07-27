@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'bun:test'
 import { openDatabase, upsertRequest, upsertSession } from '../db/database.js'
 import { createHandler } from './serve.js'
-import type { SqliteAdapter as Database } from '@hasna/cloud'
+import type { SqliteAdapter as Database } from '../db/sqlite-adapter.js'
 
 const NOW = new Date().toISOString()
 const TODAY = NOW.substring(0, 10)

@@ -5,7 +5,7 @@
 // serve `/api/brief` endpoint build the brief from the same SQL — the CLI command
 // never touches sqlite directly (no split-brain). Text rendering stays in the CLI.
 
-import type { SqliteAdapter as Database } from '@hasna/cloud'
+import type { SqliteAdapter as Database } from '../db/sqlite-adapter.js'
 import {
   listMachineRegistry,
   listMachines,

@@ -5,7 +5,7 @@ AI coding cost tracker — `@hasna/economy`
 ## Stack
 - Runtime: Bun
 - Language: TypeScript
-- DB: SQLite via `@hasna/cloud` `SqliteAdapter` at `~/.hasna/economy/economy.db`
+- DB: SQLite via the in-repo `SqliteAdapter` (`src/db/sqlite-adapter.ts`) at `~/.hasna/economy/economy.db`
 - CLI: Commander.js
 - MCP: @modelcontextprotocol/sdk
 - Server: Bun.serve

@@ -6,7 +6,7 @@
 // same SQL — the CLI commands themselves never touch sqlite. This is the seam
 // that keeps local and cloud reads identical (no split-brain).
 
-import type { SqliteAdapter as Database } from '@hasna/cloud'
+import type { SqliteAdapter as Database } from '../db/sqlite-adapter.js'
 
 // ── project detail (economy project show) ──────────────────────────────────────
 

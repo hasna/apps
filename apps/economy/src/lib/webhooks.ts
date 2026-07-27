@@ -1,7 +1,7 @@
 import { loadConfig } from './config.js'
 import { getBudgetStatuses, getIngestState, setIngestState } from '../db/database.js'
 import { getTodaySpike } from './spikes.js'
-import type { SqliteAdapter as Database } from '@hasna/cloud'
+import type { SqliteAdapter as Database } from '../db/sqlite-adapter.js'
 
 export async function checkAndFireWebhooks(db: Database): Promise<void> {
   const config = loadConfig()

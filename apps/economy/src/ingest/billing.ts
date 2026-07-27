@@ -1,5 +1,5 @@
 import { readFileSync } from 'fs'
-import type { SqliteAdapter as Database } from '@hasna/cloud'
+import type { SqliteAdapter as Database } from '../db/sqlite-adapter.js'
 import { upsertBillingDaily, clearBillingRange } from '../db/database.js'
 
 function getAnthropicAdminKey(): string | null {

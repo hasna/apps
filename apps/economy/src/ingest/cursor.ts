@@ -1,4 +1,4 @@
-import type { SqliteAdapter as Database } from '@hasna/cloud'
+import type { SqliteAdapter as Database } from '../db/sqlite-adapter.js'
 import {
   getIngestState, setIngestState, getMachineId,
   upsertRequest, upsertSession, rollupSession, upsertUsageSnapshot,
