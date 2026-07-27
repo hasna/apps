@@ -4,6 +4,7 @@ import { expect, test } from "bun:test";
 import { AccountsCatalog } from "../../src/domain/catalog";
 import { PostgresAccountsRepository } from "../../src/storage/postgres";
 import { runPostgresMigrations } from "../../src/storage/postgres-migrator";
+import { resolveLivePostgresGate } from "../live-postgres-gate";
 import {
   ACTOR_REF,
   CATALOG_INCARNATION,
@@ -19,12 +20,18 @@ import {
   seedActiveCatalog,
 } from "../fixtures";
 
-const testUrl = process.env.ACCOUNTS_TEST_POSTGRES_URL;
-const liveTest = testUrl === undefined ? test.skip : test;
+const gate = resolveLivePostgresGate();
+const liveTest = gate.mode === "run" ? test : test.skip;
+
+if (gate.mode === "fail") {
+  test("live PostgreSQL coverage is configured in CI", () => {
+    throw new Error(gate.reason);
+  });
+}
 
 liveTest("runs the authoritative catalog and RLS flow against live PostgreSQL", async () => {
-  if (testUrl === undefined) throw new Error("live PostgreSQL URL was not configured");
-  const client = new SQL(testUrl, {
+  if (gate.mode !== "run") throw new Error("live PostgreSQL URL was not configured");
+  const client = new SQL(gate.url, {
     adapter: "postgres",
     tls: false,
     bigint: true,
