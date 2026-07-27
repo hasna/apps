@@ -6,7 +6,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { getStore } from "../../lib/store/index.js";
-import { resolveIdentity } from "../../lib/identity.js";
+import { resolveIdentity } from "../identity.js";
 import { previewText, summarizeTask } from "../../lib/compact-output.js";
 import { compactQueriedTasks, jsonText, resolveMcpWindow } from "../compact.js";
 import type { TaskInfo } from "../../types.js";

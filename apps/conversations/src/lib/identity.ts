@@ -132,12 +132,18 @@ export function isSelfRename(oldName: string, localIdentity: string | null): boo
 
 /**
  * Adopt `newName` as this installation's identity.
+ *
  * Returns false when the identity file could not be written (e.g. pinned
- * read-only); the in-memory name is still updated for this process.
+ * read-only). On failure the in-memory name is left ALONE: adoption is
+ * all-or-nothing. Moving the cache first made resolveIdentity() report the name
+ * that was not adopted, so callers reporting the failure printed the exact
+ * opposite of the truth — and in the long-lived MCP daemon that wrong name
+ * stuck for the process's lifetime, with no path back to the file's value.
  */
 export function updateCachedAutoName(newName: string): boolean {
+  if (!persistIdentity(newName)) return false;
   cachedAutoName = newName;
-  return persistIdentity(newName);
+  return true;
 }
 
 /**

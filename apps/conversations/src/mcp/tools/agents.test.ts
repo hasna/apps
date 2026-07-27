@@ -3,9 +3,10 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerAgentTools } from "./agents";
-import { closeDb } from "../../lib/db";
-import { resolveIdentity, _resetAutoName } from "../../lib/identity";
-import { unlinkSync } from "fs";
+import { closeDb, getDataDir } from "../../lib/db";
+import { getAutoName, readPersistedIdentity, _resetAutoName } from "../../lib/identity";
+import { getSessionAgent, setSessionAgent } from "../channel";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -302,6 +303,149 @@ describe("agent MCP tools", () => {
       expect(Array.isArray(result.messages)).toBe(true);
       expect(result.messages).toHaveLength(1);
       expect(result.messages[0].preview).toContain("BLOCK");
+    });
+  });
+
+  /**
+   * The MCP server is a long-lived daemon, so its identity behaviour cannot be
+   * checked from a subprocess CLI test: every CLI process starts with an empty
+   * cache, where getAutoName() and readPersistedIdentity() agree by construction.
+   * These tests run in-process, against a throwaway HOME, and deliberately let
+   * the cache go stale — which is the only state in which the two disagree.
+   */
+  describe("identity and attribution", () => {
+    let savedHome: string | undefined;
+    let savedUserProfile: string | undefined;
+    let tempHome: string;
+
+    function writeIdentity(name: string): void {
+      mkdirSync(getDataDir(), { recursive: true });
+      writeFileSync(join(getDataDir(), "agent-id"), name + "\n", "utf-8");
+    }
+
+    beforeEach(() => {
+      savedHome = process.env.HOME;
+      savedUserProfile = process.env.USERPROFILE;
+      tempHome = mkdtempSync(join(tmpdir(), "conversations-mcp-identity-"));
+      process.env.HOME = tempHome;
+      process.env.USERPROFILE = tempHome;
+      delete process.env.CONVERSATIONS_AGENT_ID;
+      _resetAutoName();
+      setSessionAgent("");
+    });
+
+    afterEach(() => {
+      if (savedHome !== undefined) process.env.HOME = savedHome;
+      else delete process.env.HOME;
+      if (savedUserProfile !== undefined) process.env.USERPROFILE = savedUserProfile;
+      else delete process.env.USERPROFILE;
+      try { rmSync(tempHome, { recursive: true, force: true }); } catch {}
+      _resetAutoName();
+      setSessionAgent("");
+    });
+
+    test("rename_agent adopts the identity named by the file, not by a stale cache", async () => {
+      writeIdentity("mcp-cached");
+      expect(getAutoName()).toBe("mcp-cached");
+
+      // A deliberate `agents register --identity` elsewhere on the box moves the
+      // machine identity. This daemon's cache does not notice.
+      writeIdentity("mcp-current");
+      expect(getAutoName()).toBe("mcp-cached");
+
+      await client.callTool({ name: "heartbeat", arguments: { from: "mcp-current" } });
+      const result = parseResult(await client.callTool({
+        name: "rename_agent",
+        arguments: { from: "mcp-current", new_name: "mcp-current-renamed" },
+      }) as any) as any;
+
+      expect(result.renamed).toBe(true);
+      expect(result.identity_adopted).toBe(true);
+      expect(readPersistedIdentity()).toBe("mcp-current-renamed");
+    });
+
+    test("rename_agent leaves the identity alone when only the stale cache names the renamed agent", async () => {
+      writeIdentity("mcp-cached-2");
+      expect(getAutoName()).toBe("mcp-cached-2");
+      writeIdentity("mcp-current-2");
+
+      await client.callTool({ name: "heartbeat", arguments: { from: "mcp-cached-2" } });
+      const result = parseResult(await client.callTool({
+        name: "rename_agent",
+        arguments: { from: "mcp-cached-2", new_name: "mcp-cached-2-moved" },
+      }) as any) as any;
+
+      expect(result.renamed).toBe(true);
+      expect(result.identity_adopted).toBe(false);
+      // Acting on the cache here would overwrite the identity a different
+      // session had just claimed.
+      expect(readPersistedIdentity()).toBe("mcp-current-2");
+    });
+
+    test("implicit attribution follows the registered agent, not the machine identity", async () => {
+      writeIdentity("machine-identity");
+
+      await client.callTool({ name: "register_agent", arguments: { name: "Nova-Owl" } });
+      expect(getSessionAgent()).toBe("nova-owl");
+
+      // get_focus resolves its agent implicitly — the same path send_message and
+      // every other messaging tool takes when no `from` is passed.
+      const focus = parseResult(await client.callTool({
+        name: "get_focus",
+        arguments: {},
+      }) as any) as any;
+      expect(focus.agent).toBe("nova-owl");
+
+      // Two clients on one daemon must not collapse into the single machine name.
+      expect(readPersistedIdentity()).toBe("machine-identity");
+    });
+
+    test("implicit attribution never invents a machine identity once an agent has registered", async () => {
+      // Fresh HOME: this box has no identity at all.
+      expect(readPersistedIdentity()).toBeNull();
+
+      await client.callTool({ name: "register_agent", arguments: { name: "atlas-mcp" } });
+      const focus = parseResult(await client.callTool({
+        name: "get_focus",
+        arguments: {},
+      }) as any) as any;
+
+      expect(focus.agent).toBe("atlas-mcp");
+      // Falling through to getAutoName() here would both misattribute the caller
+      // to a random pool name and persist that name as the machine identity.
+      expect(readPersistedIdentity()).toBeNull();
+    });
+
+    test("rename_agent moves this session's attribution to the new name", async () => {
+      await client.callTool({ name: "register_agent", arguments: { name: "mcp-speaker" } });
+      expect(getSessionAgent()).toBe("mcp-speaker");
+
+      await client.callTool({
+        name: "rename_agent",
+        arguments: { new_name: "mcp-speaker-renamed" },
+      });
+
+      expect(getSessionAgent()).toBe("mcp-speaker-renamed");
+      const focus = parseResult(await client.callTool({
+        name: "get_focus",
+        arguments: {},
+      }) as any) as any;
+      expect(focus.agent).toBe("mcp-speaker-renamed");
+    });
+
+    test("CONVERSATIONS_AGENT_ID still outranks this session's agent", async () => {
+      await client.callTool({ name: "register_agent", arguments: { name: "session-agent" } });
+      process.env.CONVERSATIONS_AGENT_ID = "pinned-agent";
+
+      try {
+        const focus = parseResult(await client.callTool({
+          name: "get_focus",
+          arguments: {},
+        }) as any) as any;
+        expect(focus.agent).toBe("pinned-agent");
+      } finally {
+        delete process.env.CONVERSATIONS_AGENT_ID;
+      }
     });
   });
 });

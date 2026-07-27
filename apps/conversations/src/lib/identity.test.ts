@@ -1,9 +1,17 @@
 import { describe, test, expect, afterEach, beforeEach } from "bun:test";
-import { resolveIdentity, requireIdentity, getAutoName, _resetAutoName } from "./identity";
+import {
+  resolveIdentity,
+  requireIdentity,
+  getAutoName,
+  isSelfRename,
+  readPersistedIdentity,
+  updateCachedAutoName,
+  _resetAutoName,
+} from "./identity";
 import { AGENT_NAMES } from "./names";
-import { mkdtempSync, rmSync, unlinkSync, readFileSync } from "fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, unlinkSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { dirname, join } from "path";
 import { getDataDir } from "./db";
 
 /**
@@ -117,6 +125,65 @@ describe("getAutoName", () => {
     try { unlinkSync(agentIdFile()); } catch {}
     const name2 = getAutoName();
     expect(name1).toBe(name2);
+  });
+});
+
+describe("updateCachedAutoName", () => {
+  function writeIdentity(name: string): void {
+    mkdirSync(dirname(agentIdFile()), { recursive: true });
+    writeFileSync(agentIdFile(), name + "\n", "utf-8");
+  }
+
+  test("adopts the name in memory and on disk when the write succeeds", () => {
+    writeIdentity("augustus");
+    _resetAutoName();
+
+    expect(updateCachedAutoName("beatrix")).toBe(true);
+    expect(readPersistedIdentity()).toBe("beatrix");
+    expect(getAutoName()).toBe("beatrix");
+    expect(resolveIdentity()).toBe("beatrix");
+  });
+
+  test("leaves the in-memory identity alone when the file cannot be written", () => {
+    writeIdentity("augustus");
+    _resetAutoName();
+    chmodSync(agentIdFile(), 0o444);
+
+    try {
+      expect(updateCachedAutoName("would-be-usurper")).toBe(false);
+
+      // Nothing was adopted, so every reader must still say "augustus".
+      // Moving the cache first is what made the CLI report the opposite of
+      // the truth, and left the MCP daemon stuck on the rejected name.
+      expect(readPersistedIdentity()).toBe("augustus");
+      expect(getAutoName()).toBe("augustus");
+      expect(resolveIdentity()).toBe("augustus");
+    } finally {
+      chmodSync(agentIdFile(), 0o644);
+    }
+  });
+});
+
+describe("readPersistedIdentity", () => {
+  test("follows the file when the in-process cache has gone stale", () => {
+    mkdirSync(dirname(agentIdFile()), { recursive: true });
+    writeFileSync(agentIdFile(), "augustus\n", "utf-8");
+    _resetAutoName();
+    expect(getAutoName()).toBe("augustus");
+
+    // Another process on this box repoints the machine identity. A long-lived
+    // daemon keeps serving the cached name; only the file is current.
+    writeFileSync(agentIdFile(), "beatrix\n", "utf-8");
+
+    expect(getAutoName()).toBe("augustus");
+    expect(readPersistedIdentity()).toBe("beatrix");
+
+    // Which is why rename decides self-ness from the file: the cache would
+    // both miss the real identity and claim one that moved on.
+    expect(isSelfRename("beatrix", readPersistedIdentity())).toBe(true);
+    expect(isSelfRename("beatrix", getAutoName())).toBe(false);
+    expect(isSelfRename("augustus", readPersistedIdentity())).toBe(false);
+    expect(isSelfRename("augustus", getAutoName())).toBe(true);
   });
 });
 

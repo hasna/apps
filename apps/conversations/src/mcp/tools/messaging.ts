@@ -10,7 +10,7 @@ import { z } from "zod";
 import { getStore } from "../../lib/store/index.js";
 // Reads/writes route through getStore(): ApiStore when HASNA_CONVERSATIONS_API_URL
 // + _API_KEY are set (self_hosted/cloud), else LocalStore.
-import { resolveIdentity } from "../../lib/identity.js";
+import { resolveIdentity } from "../identity.js";
 import { compactQueriedMessages, compactQueriedSearchMessages, compactWindowedSessions, jsonText, resolveMcpWindow } from "../compact.js";
 
 function toolError(error: unknown, fallback: string) {

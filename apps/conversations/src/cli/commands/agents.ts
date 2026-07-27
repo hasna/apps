@@ -151,7 +151,8 @@ export function registerAgentCommands(program: Command): void {
         // like it "reverts". Only follow the rename when we renamed OURSELVES,
         // and decide that from the file on disk, never from the in-process cache
         // (in a long-lived daemon that cache can be days stale).
-        const isSelf = isSelfRename(old, readPersistedIdentity());
+        const persistedIdentity = readPersistedIdentity();
+        const isSelf = isSelfRename(old, persistedIdentity);
         const identityAdopted = isSelf ? updateCachedAutoName(normalizeAgentName(renamed)) : false;
         const identityWriteFailed = isSelf && !identityAdopted;
 
@@ -168,7 +169,9 @@ export function registerAgentCommands(program: Command): void {
           if (identityAdopted) {
             console.log(chalk.dim(`This installation's identity is now "${normalizeAgentName(renamed)}".`));
           } else if (identityWriteFailed) {
-            console.error(chalk.red(`Renamed in presence, but could not update the local agent-id file (pinned read-only?). This installation still resolves as "${resolveIdentity()}" — which no longer exists in presence.`));
+            // Report the file, not resolveIdentity(): the file is what survives
+            // this process, and it still names the agent we just renamed away.
+            console.error(chalk.red(`Renamed in presence, but could not update the local agent-id file (pinned read-only?). This installation still resolves as "${persistedIdentity}" — which no longer exists in presence.`));
           }
         }
       } catch (e: any) {
@@ -242,7 +245,13 @@ export function registerAgentCommands(program: Command): void {
             console.log(chalk.yellow(`  warning    CONVERSATIONS_AGENT_ID="${envOverride}" overrides the file; this environment still resolves as "${envOverride}"`));
           }
         } else if (identityWriteFailed) {
-          console.error(chalk.red(`  identity   NOT changed — could not write ${chalk.bold("agent-id")} (pinned read-only?). This installation still resolves as "${resolveIdentity()}".`));
+          // Read the file rather than resolveIdentity(): nothing was adopted, so
+          // the truth is whatever the unwritable file already says.
+          const persistedIdentity = readPersistedIdentity();
+          const stillResolves = persistedIdentity
+            ? `This installation still resolves as "${persistedIdentity}".`
+            : "This installation still has no machine identity.";
+          console.error(chalk.red(`  identity   NOT changed — could not write ${chalk.bold("agent-id")} (pinned read-only?). ${stillResolves}`));
         }
       }
       closeDb();

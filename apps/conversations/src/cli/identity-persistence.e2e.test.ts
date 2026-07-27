@@ -121,6 +121,49 @@ describe("CLI identity persistence (e2e)", () => {
     }
   });
 
+  test("the human-readable register failure names the identity that is actually still in force", () => {
+    // The path an operator hits first is the one without --json, and it is the
+    // one they read to decide what to do next. It must not name the rejected
+    // agent as if it had been adopted.
+    expect(storedIdentity()).toBe("augustus");
+    chmodSync(AGENT_ID_FILE, 0o444);
+
+    try {
+      const register = runCli(["agents", "register", "usurper-two", "--identity"]);
+      expect(register.stderr).toContain("NOT changed");
+      expect(register.stderr).toContain('still resolves as "augustus"');
+      expect(register.stderr).not.toContain('still resolves as "usurper-two"');
+
+      expect(storedIdentity()).toBe("augustus");
+      expect(JSON.parse(runCli(["whoami", "--json"]).stdout).agent).toBe("augustus");
+    } finally {
+      chmodSync(AGENT_ID_FILE, 0o644);
+    }
+  });
+
+  test("the human-readable rename failure names the identity that is actually still in force", () => {
+    expect(storedIdentity()).toBe("augustus");
+    chmodSync(AGENT_ID_FILE, 0o444);
+
+    try {
+      const rename = runCli(["agents", "rename", "augustus", "augustus-two"]);
+      expect(rename.exitCode).toBe(0);
+
+      // Presence moved to augustus-two; the file could not, so this box still
+      // answers to augustus — and augustus is the name that no longer exists.
+      expect(rename.stderr).toContain('still resolves as "augustus" — which no longer exists in presence');
+      expect(rename.stderr).not.toContain('still resolves as "augustus-two"');
+
+      expect(storedIdentity()).toBe("augustus");
+      expect(JSON.parse(runCli(["whoami", "--json"]).stdout).agent).toBe("augustus");
+    } finally {
+      chmodSync(AGENT_ID_FILE, 0o644);
+      // Put presence back so the later tests start from a known name.
+      expect(runCli(["agents", "rename", "augustus-two", "augustus", "--json"]).exitCode).toBe(0);
+      expect(storedIdentity()).toBe("augustus");
+    }
+  });
+
   test("renaming ourselves moves the persisted identity", () => {
     expect(storedIdentity()).toBe("augustus");
 
@@ -138,22 +181,12 @@ describe("CLI identity persistence (e2e)", () => {
     expect(storedIdentity()).toBe("augustus");
   });
 
-  test("rename decides self-ness from the file on disk, not a stale in-process cache", () => {
-    expect(storedIdentity()).toBe("augustus");
-
-    // Simulate what a long-lived daemon sees: the identity file is changed
-    // out from under a process that cached an older name. The rename must
-    // follow the FILE. `stale-cached-name` is not the persisted identity, so
-    // renaming it must not move our identity.
-    const rename = runCli(["agents", "rename", "some-other-agent", "renamed-elsewhere", "--json"]);
-    expect(rename.exitCode).toBe(0);
-    expect(JSON.parse(rename.stdout).identity_adopted).toBe(false);
-    expect(storedIdentity()).toBe("augustus");
-
-    // Restore for any later assertions.
-    runCli(["agents", "rename", "renamed-elsewhere", "some-other-agent", "--json"]);
-  });
-
+  // Deciding self-ness from the file rather than the in-process cache cannot be
+  // observed from here: every runCli() is a fresh process whose cache is empty,
+  // so getAutoName() and readPersistedIdentity() agree by construction. A test
+  // here claiming to cover it would pass either way. That distinction is
+  // exercised in-process instead — src/lib/identity.test.ts for the primitives,
+  // src/mcp/tools/agents.test.ts for the rename call site under a stale cache.
   test("renaming a different agent leaves our identity alone", () => {
     expect(storedIdentity()).toBe("augustus");
 

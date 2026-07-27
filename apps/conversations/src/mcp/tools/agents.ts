@@ -6,9 +6,10 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { getStore } from "../../lib/store/index.js";
-import { resolveIdentity, updateCachedAutoName, readPersistedIdentity, isSelfRename } from "../../lib/identity.js";
+import { updateCachedAutoName, readPersistedIdentity, isSelfRename } from "../../lib/identity.js";
+import { resolveIdentity } from "../identity.js";
 import { normalizeAgentName } from "../../lib/presence.js";
-import { setSessionAgent, setClaudeSessionId } from "../channel.js";
+import { getSessionAgent, setSessionAgent, setClaudeSessionId } from "../channel.js";
 import { compactQueriedMessages, compactWindowedAgents, jsonText, resolveMcpWindow } from "../compact.js";
 
 export function registerAgentTools(
@@ -36,7 +37,9 @@ export function registerAgentTools(
     const session_id = manualSid || claudeSid || `${name}-${Date.now()}`;
     try {
       const result = await getStore().registerAgent(name, session_id, role, project_id);
-      setSessionAgent(name); // Bridge now knows who we are
+      // Normalized, because that is the form presence stores: implicit
+      // attribution must name the row that exists, not the caller's casing.
+      setSessionAgent(normalizeAgentName(name)); // Bridge and implicit attribution now know who we are
       if (claudeSid) setClaudeSessionId(claudeSid); // Track for channel bridge polling
       return {
         content: [{ type: "text", text: JSON.stringify(result) }],
@@ -64,7 +67,7 @@ export function registerAgentTools(
     const { from: fromParam, name: nameParam, agent_name, status } = args;
     const agent = resolveIdentity(fromParam || nameParam || agent_name);
     await getStore().heartbeat(agent, status);
-    setSessionAgent(agent); // Bridge now knows who we are
+    setSessionAgent(normalizeAgentName(agent)); // Bridge and implicit attribution now know who we are
 
     return {
       content: [{ type: "text", text: JSON.stringify({ agent, status: status || "online", heartbeat: true }) }],
@@ -150,6 +153,13 @@ export function registerAgentTools(
       // would let one client overwrite another client's identity.
       const isSelf = isSelfRename(oldName, readPersistedIdentity());
       const identityAdopted = isSelf ? updateCachedAutoName(normalizeAgentName(newName)) : false;
+
+      // Independently of the machine identity: if this MCP session was speaking
+      // as the renamed agent, its implicit attribution has to follow, or every
+      // later tool call stamps a presence row that no longer exists.
+      if (isSelfRename(oldName, getSessionAgent())) {
+        setSessionAgent(normalizeAgentName(newName));
+      }
 
       return {
         content: [{ type: "text", text: JSON.stringify({

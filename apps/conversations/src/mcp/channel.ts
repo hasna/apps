@@ -39,8 +39,13 @@ let sessionClaudeId: string | null = null; // agent-claude session UUID
  * station01 that left the box answering to a throwaway test name ("rename-old")
  * for two days, and every attempt to correct it was overwritten again.
  *
- * Machine identity is set deliberately, by `conversations agents register` or
- * the CONVERSATIONS_AGENT_ID env var — never as a side effect of a heartbeat.
+ * What is recorded here is still load-bearing: ./identity.ts resolves every MCP
+ * tool's implicit author through it, so attribution follows the agent that
+ * actually registered rather than falling through to the machine identity.
+ *
+ * Machine identity is set deliberately, by `conversations agents register <name>
+ * --identity` or the CONVERSATIONS_AGENT_ID env var — never as a side effect of
+ * a heartbeat.
  */
 export function setSessionAgent(agentId: string, claudeSessionId?: string): void {
   sessionAgentId = agentId;
