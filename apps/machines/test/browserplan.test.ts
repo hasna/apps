@@ -10,6 +10,7 @@ import {
   BROWSERPLAN_INSTALL_UPDATE_COMMAND_TEMPLATE,
   BROWSERPLAN_LEGACY_INSTALL_UPDATE_COMMAND_TEMPLATE,
   BROWSERPLAN_PACKAGE_NAME,
+  BROWSERPLAN_PINNED_VERSION,
   BROWSERPLAN_ROUTE_OWNER,
   getBrowserPlanFleet,
   normalizeBrowserPlanMachineId,
@@ -100,11 +101,17 @@ describe("BrowserPlan fleet contract", () => {
     // Asserted against a hardcoded literal on purpose. Rebuilding the expected string from
     // the same constants the value is built from is a tautology: it would still pass if
     // BROWSERPLAN_PACKAGE_NAME were changed to a package that does not exist.
-    expect(BROWSERPLAN_INSTALL_UPDATE_COMMAND_TEMPLATE).toBe("bun install -g @hasna/open-chrome@latest");
+    expect(BROWSERPLAN_INSTALL_UPDATE_COMMAND_TEMPLATE).toBe("bun install -g @hasna/open-chrome@0.1.0");
     expect(BROWSERPLAN_PACKAGE_NAME).toBe("@hasna/open-chrome");
     expect(BROWSERPLAN_INSTALL_UPDATE_COMMAND_PREFIX).toBe("bun install -g @hasna/open-chrome@");
     // No placeholder: nothing in this package can resolve a version for the target package.
     expect(BROWSERPLAN_INSTALL_UPDATE_COMMAND_TEMPLATE).not.toContain("<");
+    // The emitted version must stay PINNED. Once the source repo is retired, npm is the
+    // sole artifact and nobody is watching the name, so a floating dist-tag would let a
+    // moved tag push arbitrary code to the fleet via `bun install -g`.
+    expect(BROWSERPLAN_PINNED_VERSION).toBe("0.1.0");
+    expect(BROWSERPLAN_INSTALL_UPDATE_COMMAND_TEMPLATE).not.toMatch(/@(latest|next|beta|canary|\*)$/);
+    expect(BROWSERPLAN_INSTALL_UPDATE_COMMAND_TEMPLATE).toMatch(/@\d+\.\d+\.\d+$/);
   });
 
   test("app_install_update validation is an allowlist of install shapes, not a git denylist", () => {
@@ -205,7 +212,7 @@ describe("BrowserPlan fleet contract", () => {
       expect(fleet.machines[0]?.operation_hooks.every((hook) => hook.safe_runner.mcp.args.private_metadata === false)).toBe(true);
       expect(fleet.machines[0]?.operation_hooks.find((hook) => hook.id === "supervisor_status")?.command_template).toBe("browserplan remote status --machine <machine-id> --json");
       const installHook = fleet.machines[0]?.operation_hooks.find((hook) => hook.id === "app_install_update");
-      expect(installHook?.command_template).toBe("bun install -g @hasna/open-chrome@latest");
+      expect(installHook?.command_template).toBe("bun install -g @hasna/open-chrome@0.1.0");
       expect(installHook?.command_placeholders).toEqual([]);
       // git is no longer required: the hook installs from npm, so a machine without git
       // must not be reported as blocked for it.

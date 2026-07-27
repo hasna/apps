@@ -13,17 +13,38 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `cd <open-chrome-project-root> && git pull --ff-only origin main && bun install
   --frozen-lockfile`, which cannot survive the owner-authorised retirement of the
   BrowserPlan source repository. It is now
-  `bun install -g @hasna/open-chrome@latest`, installing from the npm package that
+  `bun install -g @hasna/open-chrome@0.1.0`, installing from the npm package that
   ships the `browserplan` bin. `command_placeholders` becomes `[]` and
   `required_capabilities` drops `git` (installing from npm needs only `bun`), so
   machines without git are no longer reported as blocked for this hook.
 
-  The template tracks the `latest` dist-tag rather than exposing a version
-  placeholder because **nothing in this package could resolve one**:
-  `getPackageVersion()` returns *machines*' own version, and unlike `machines
-  reconcile` — which pins versions from the fleet manifest — the hook contract has
-  no version source of truth. A placeholder with no resolver would only move the
-  problem to the caller.
+  The version is **deliberately pinned rather than a floating `latest`** — see
+  `BROWSERPLAN_PINNED_VERSION`, and please do not "improve" it back. Once the
+  source repository is retired, npm is the *sole* artifact for this package: one
+  version, raw TypeScript, no maintainer watching the name. A floating dist-tag
+  would let a hijacked or mistakenly-moved tag deliver arbitrary code to every
+  fleet machine through a hook whose command is `bun install -g`. The usual
+  argument for a floating tag — that a pin cannot deliver a future fix — costs
+  nothing here, because republishing requires someone to deliberately hold the
+  source mirror, and that same change can bump the constant. A pin is also the
+  only form `machines reconcile` can verify.
+
+  No version *placeholder* is exposed either, because **nothing in this package
+  could resolve one**: `getPackageVersion()` returns *machines*' own version, and
+  unlike `machines reconcile` — which pins versions from the fleet manifest — the
+  hook contract has no version source of truth. The template is directly runnable
+  as emitted.
+
+- **Disclosure: 3 of the 8 advertised hook commands are non-functional in the
+  shipped artifact.** `@hasna/open-chrome@0.1.0` dispatches only
+  `serve|settings|profile|machine|secrets|chrome ask|remote start`, so
+  `browserplan browser status` (`daemon_status`), `browserplan tab list`
+  (`tab_inventory`) and `browserplan remote status` (`supervisor_status`) print
+  usage and exit 0 while the payload still reports them `available: true,
+  readiness: "ready"`. This is pre-existing and not changed here — correcting it
+  would mean touching the readiness contract — but it becomes materially more
+  significant now that npm is the only artifact, so a consumer reading
+  `readiness: "ready"` should know before building on it.
 
   On the old template: it was already unlikely to succeed, but **not for the
   reason an earlier draft of this entry gave.** `<open-chrome-project-root>` does

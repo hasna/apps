@@ -49,16 +49,29 @@ export const BROWSERPLAN_INSTALL_UPDATE_COMMAND_PREFIX = `bun install -g ${BROWS
  */
 export const BROWSERPLAN_INSTALL_VERSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._^~*-]*$/;
 /**
+ * Exact version the install hook pins.
+ *
+ * DELIBERATELY PINNED, NOT `latest` — do not "improve" this to a floating tag. Once the
+ * BrowserPlan source repository is retired, npm is the *sole* artifact for this package:
+ * one version, shipping raw TypeScript with no build output, with no maintainer watching
+ * the name. A floating `latest` would let a hijacked or mistakenly-moved dist-tag deliver
+ * arbitrary code to every fleet machine through a hook whose command is `bun install -g`.
+ * The usual argument for a floating tag — that a pin cannot deliver a future fix — costs
+ * nothing here: republishing requires someone to hold the source mirror deliberately, and
+ * that same change can bump this constant. A pin is also the only form
+ * src/commands/reconcile.ts can verify.
+ */
+export const BROWSERPLAN_PINNED_VERSION = "0.1.0";
+/**
  * `app_install_update` installs/updates BrowserPlan from npm rather than from a checkout,
  * because the source repository is being retired under owner authorisation.
  *
- * This tracks the `latest` dist-tag instead of exposing a version placeholder. A
- * placeholder would have no resolver: nothing in this package can discover the target
- * package's version (`getPackageVersion()` returns *machines*' own version), unlike
- * src/commands/reconcile.ts which pins versions from the fleet manifest. An unresolvable
- * placeholder would leave callers guessing, so the template is directly runnable as-is.
+ * No version placeholder is exposed: nothing in this package could resolve one
+ * (`getPackageVersion()` returns *machines*' own version), unlike
+ * src/commands/reconcile.ts which pins versions from the fleet manifest. The template is
+ * therefore directly runnable as emitted.
  */
-export const BROWSERPLAN_INSTALL_UPDATE_COMMAND_TEMPLATE = `${BROWSERPLAN_INSTALL_UPDATE_COMMAND_PREFIX}latest`;
+export const BROWSERPLAN_INSTALL_UPDATE_COMMAND_TEMPLATE = `${BROWSERPLAN_INSTALL_UPDATE_COMMAND_PREFIX}${BROWSERPLAN_PINNED_VERSION}`;
 /**
  * The pre-retirement template. Still ACCEPTED by validation so that a consumer holding a
  * cached payload from `@hasna/machines` <= 0.2.2 does not start failing; it is simply no

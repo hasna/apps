@@ -496,9 +496,15 @@ know it.
 owns the concrete remote commands for profile setup, headed launch, headless
 launch, daemon/supervisor status, tab/session inventory, and app install/update.
 `app_install_update` installs from the `@hasna/open-chrome` npm package (`bun
-install -g @hasna/open-chrome@<open-chrome-version>`), not from a git checkout;
-templates that git-pull a clone are rejected by
-`validateMachinesConsumerEnvelope`.
+install -g @hasna/open-chrome@0.1.0`), not from a git checkout. The version is
+pinned on purpose, not floating — npm is the sole artifact for that package, so a
+moved dist-tag would reach the fleet through `bun install -g`.
+`validateMachinesConsumerEnvelope` accepts that shape with any bare version or
+tag, plus the exact pre-retirement checkout template for backward compatibility,
+and rejects everything else — including anything chained after a valid install.
+Note that `daemon_status`, `tab_inventory` and `supervisor_status` advertise
+commands the published `0.1.0` artifact does not dispatch; they report ready but
+print usage and exit 0.
 Open-machines owns route resolution and exposes the safe runner pattern:
 `runMachineCommand()` in the SDK, `machines ssh --machine <id> --cmd
 <browserplan-owned command> --json` in the CLI, and MCP `machines_ssh_resolve`.
