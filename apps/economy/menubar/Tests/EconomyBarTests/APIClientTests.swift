@@ -35,7 +35,7 @@ final class APIClientTests: XCTestCase {
     var capturedRequest: URLRequest?
     MockURLProtocol.handler = { request in
       capturedRequest = request
-      return ok("""
+      return self.ok("""
       {
         "data": [
           {
@@ -74,7 +74,7 @@ final class APIClientTests: XCTestCase {
     var capturedRequest: URLRequest?
     MockURLProtocol.handler = { request in
       capturedRequest = request
-      return ok("""
+      return self.ok("""
       {
         "data": [
           {
@@ -120,7 +120,7 @@ final class APIClientTests: XCTestCase {
     var capturedRequest: URLRequest?
     MockURLProtocol.handler = { request in
       capturedRequest = request
-      return ok("""
+      return self.ok("""
       {
         "data": [
           {
@@ -154,7 +154,7 @@ final class APIClientTests: XCTestCase {
     var capturedRequest: URLRequest?
     MockURLProtocol.handler = { request in
       capturedRequest = request
-      return ok("""
+      return self.ok("""
       {
         "data": [
           {
@@ -196,7 +196,7 @@ final class APIClientTests: XCTestCase {
     var capturedRequest: URLRequest?
     MockURLProtocol.handler = { request in
       capturedRequest = request
-      return ok("""
+      return self.ok("""
       {
         "data": [
           {
@@ -234,7 +234,7 @@ final class APIClientTests: XCTestCase {
     var capturedRequest: URLRequest?
     MockURLProtocol.handler = { request in
       capturedRequest = request
-      return ok("""
+      return self.ok("""
       {
         "data": {
           "snapshots": [
@@ -287,7 +287,7 @@ final class APIClientTests: XCTestCase {
     var capturedRequest: URLRequest?
     MockURLProtocol.handler = { request in
       capturedRequest = request
-      return ok("""
+      return self.ok("""
       {
         "data": {
           "summary": {
@@ -337,7 +337,7 @@ final class APIClientTests: XCTestCase {
     var capturedRequest: URLRequest?
     MockURLProtocol.handler = { request in
       capturedRequest = request
-      return ok("""
+      return self.ok("""
       {
         "data": [
           {
@@ -378,7 +378,7 @@ final class APIClientTests: XCTestCase {
     var capturedRequest: URLRequest?
     MockURLProtocol.handler = { request in
       capturedRequest = request
-      return ok("""
+      return self.ok("""
       {
         "data": [
           {
@@ -417,23 +417,23 @@ final class APIClientTests: XCTestCase {
 
       switch request.url?.path {
       case "/api/summary":
-        return ok(#"{"data":{"total_usd":1,"sessions":1,"requests":1,"tokens":150}}"#, request: request)
+        return self.ok(#"{"data":{"total_usd":1,"sessions":1,"requests":1,"tokens":150}}"#, request: request)
       case "/api/daily":
-        return ok(#"{"data":[]}"#, request: request)
+        return self.ok(#"{"data":[]}"#, request: request)
       case "/api/hourly":
-        return ok(#"{"data":[]}"#, request: request)
+        return self.ok(#"{"data":[]}"#, request: request)
       case "/api/projects":
-        return ok(#"{"data":[]}"#, request: request)
+        return self.ok(#"{"data":[]}"#, request: request)
       case "/api/breakdown":
-        return ok(#"{"data":[]}"#, request: request)
+        return self.ok(#"{"data":[]}"#, request: request)
       case "/api/accounts":
-        return ok(#"{"data":[]}"#, request: request)
+        return self.ok(#"{"data":[]}"#, request: request)
       case "/api/fleet":
-        return ok(#"{"data":{"summary":{"total_usd":1,"sessions":1,"requests":1,"tokens":150},"machines":[],"current_machine":"apple06"}}"#, request: request)
+        return self.ok(#"{"data":{"summary":{"total_usd":1,"sessions":1,"requests":1,"tokens":150},"machines":[],"current_machine":"apple06"}}"#, request: request)
       case "/api/sessions":
-        return ok(#"{"data":[]}"#, request: request)
+        return self.ok(#"{"data":[]}"#, request: request)
       default:
-        return response(#"{"error":"unexpected path"}"#, request: request, status: 404)
+        return self.response(#"{"error":"unexpected path"}"#, request: request, status: 404)
       }
     }
 
@@ -464,14 +464,16 @@ final class APIClientTests: XCTestCase {
     let client = APIClient(baseURL: "http://economy.test", session: makeSession())
 
     MockURLProtocol.handler = { request in
-      ok(#"{"data":{"status":"ok"}}"#, request: request)
+      self.ok(#"{"data":{"status":"ok"}}"#, request: request)
     }
-    XCTAssertTrue(await client.isOnline())
+    let onlineOnSuccess = await client.isOnline()
+    XCTAssertTrue(onlineOnSuccess)
 
     MockURLProtocol.handler = { request in
-      response(#"{"error":"unavailable"}"#, request: request, status: 503)
+      self.response(#"{"error":"unavailable"}"#, request: request, status: 503)
     }
-    XCTAssertFalse(await client.isOnline())
+    let onlineOnServerError = await client.isOnline()
+    XCTAssertFalse(onlineOnServerError)
   }
 
   func testInvalidBaseURLReportsOfflineInsteadOfCrashing() async {
@@ -482,7 +484,8 @@ final class APIClientTests: XCTestCase {
 
     let client = APIClient(baseURL: "http://%", session: makeSession())
 
-    XCTAssertFalse(await client.isOnline())
+    let onlineOnInvalidBaseURL = await client.isOnline()
+    XCTAssertFalse(onlineOnInvalidBaseURL)
 
     var sawOffline = false
     do {
@@ -497,7 +500,7 @@ final class APIClientTests: XCTestCase {
 
   func testServerStatusThrowsServerError() async throws {
     MockURLProtocol.handler = { request in
-      response(#"{"data":{}}"#, request: request, status: 503)
+      self.response(#"{"data":{}}"#, request: request, status: 503)
     }
 
     let client = APIClient(baseURL: "http://economy.test", session: makeSession())
