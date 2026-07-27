@@ -59,7 +59,7 @@ export async function resolveBackend(provider: SandboxProvider, deps: ResolveDep
     const apiKey = readSecret("E2B_API_KEY")
     if (apiKey === undefined) {
       throw new MissingCredentialsError(
-        "e2b provider requires E2B_API_KEY (set the env var or store it in the `secrets` vault)",
+        "e2b provider requires direct E2B_API_KEY credentials (set the env var or store E2B_API_KEY in the `secrets` vault; the v1 CLI does not route this request through Hasna cloud)",
       )
     }
     return createE2bBackend({ apiKey })
@@ -69,7 +69,7 @@ export async function resolveBackend(provider: SandboxProvider, deps: ResolveDep
     const apiKey = readSecret("DAYTONA_API_KEY")
     if (apiKey === undefined) {
       throw new MissingCredentialsError(
-        "daytona provider requires DAYTONA_API_KEY (set the env var or store it in the `secrets` vault)",
+        "daytona provider requires direct DAYTONA_API_KEY credentials (set the env var or store DAYTONA_API_KEY in the `secrets` vault; the v1 CLI does not route this request through Hasna cloud)",
       )
     }
     const apiUrl = readSecret("DAYTONA_API_URL")

@@ -58,8 +58,8 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number
       writeErr: (str) => err(str),
     })
 
-  const backendFor = async (): Promise<SandboxBackend> => {
-    const providerOpt = String(program.opts().provider ?? "local")
+  const backendFor = async (providerOverride?: string): Promise<SandboxBackend> => {
+    const providerOpt = String(providerOverride ?? program.opts().provider ?? "local")
     if (!isSandboxProvider(providerOpt)) {
       throw new Error(`unknown provider '${providerOpt}' (expected ${SANDBOX_PROVIDERS.join("|")})`)
     }
@@ -76,10 +76,13 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number
     else out(`${human}\n`)
   }
 
-  const wrap = (action: (backend: SandboxBackend, ...args: never[]) => Promise<void>) => {
+  const wrap = (
+    action: (backend: SandboxBackend, ...args: never[]) => Promise<void>,
+    providerFromArgs?: (...args: unknown[]) => string | undefined,
+  ) => {
     return async (...args: unknown[]): Promise<void> => {
       try {
-        const backend = await backendFor()
+        const backend = await backendFor(providerFromArgs?.(...args))
         try {
           await action(backend, ...(args as never[]))
         } finally {
@@ -97,18 +100,53 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number
   program
     .command("create")
     .description("create a new sandbox")
-    .option("-t, --template <template>", "template / image alias")
+    .option("-t, --template <template>", "template alias (numeric -t is legacy timeout seconds with -p/-i/-n)")
     .option("--timeout <ms>", "auto-expire after N milliseconds")
     .option("-m, --metadata <kv>", "metadata key=value (repeatable)", collectKeyValue, {})
+    .option("-p, --provider <provider>", "legacy command-local provider option")
+    .option("-i, --image <image>", "legacy alias for --template")
+    .option("-n, --name <name>", "legacy sandbox name (stored as metadata)")
     .action(
-      wrap(async (backend, options: { template?: string; timeout?: string; metadata: Record<string, string> }) => {
+      wrap(async (
+        backend,
+        options: {
+          template?: string
+          timeout?: string
+          metadata: Record<string, string>
+          provider?: string
+          image?: string
+          name?: string
+        },
+      ) => {
+        const legacyMode = options.provider !== undefined || options.image !== undefined || options.name !== undefined
+        const legacyTimeoutSeconds =
+          legacyMode && options.template !== undefined && /^\d+$/u.test(options.template)
+            ? nonNegativeInt(options.template, "-t/--timeout")
+            : undefined
+        if (options.image !== undefined && options.template !== undefined && legacyTimeoutSeconds === undefined) {
+          throw new Error("provide either --image or --template, not both")
+        }
+        if (legacyTimeoutSeconds !== undefined && options.timeout !== undefined) {
+          throw new Error("provide either legacy -t seconds or --timeout milliseconds, not both")
+        }
+        const template = options.image ?? (legacyTimeoutSeconds === undefined ? options.template : undefined)
+        const timeoutMs =
+          legacyTimeoutSeconds === undefined
+            ? (options.timeout === undefined ? undefined : nonNegativeInt(options.timeout, "--timeout"))
+            : legacyTimeoutSeconds * 1000
+        if (timeoutMs !== undefined && !Number.isSafeInteger(timeoutMs)) {
+          throw new Error("legacy -t/--timeout seconds is too large")
+        }
         const record = await backend.create({
-          ...(options.template === undefined ? {} : { template: options.template }),
-          ...(options.timeout === undefined ? {} : { timeout_ms: nonNegativeInt(options.timeout, "--timeout") }),
-          metadata: options.metadata,
+          ...(template === undefined ? {} : { template }),
+          ...(timeoutMs === undefined ? {} : { timeout_ms: timeoutMs }),
+          metadata: {
+            ...options.metadata,
+            ...(options.name === undefined ? {} : { name: options.name }),
+          },
         })
         emit(`created ${record.id} (${record.provider}, ${record.status})`, record)
-      }),
+      }, (options) => (options as { provider?: string }).provider),
     )
 
   program
@@ -269,6 +307,17 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number
         emit(`snapshot ${snap.id} (${snap.ref})`, snap)
       }),
     )
+
+  program
+    .command("agents")
+    .description("show migration guidance for the removed v0 agent registry")
+    .action(() => {
+      const guidance =
+        "The legacy `sandboxes agents`/`sandboxes init` registry was removed in v1 and no cloud request was made. " +
+        "Agent registration is not required for E2B; set E2B_API_KEY (environment or `secrets` vault), then use " +
+        "`sandboxes --provider e2b create --template <template>` and `sandboxes exec`, or the sandboxes-mcp `run_agent` tool."
+      emit(guidance, { agents: [], legacy_registry: "removed", cloud_request: false, guidance })
+    })
 
   try {
     await program.parseAsync(argv, { from: "user" })

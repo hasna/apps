@@ -110,6 +110,50 @@ describe("sandboxes CLI", () => {
     expect(res.err).toContain("E2B_API_KEY")
   })
 
+  test("legacy create flags route directly to the selected provider", async () => {
+    const before = Date.now()
+    const res = await cli([
+      "--json",
+      "create",
+      "-p",
+      "local",
+      "-i",
+      "codewith-pr-drain",
+      "-n",
+      "probe",
+      "-t",
+      "600",
+    ])
+    expect(res.code).toBe(0)
+    const record = JSON.parse(res.out) as {
+      provider: string
+      template: string
+      metadata: Record<string, string>
+      expires_at: string
+    }
+    expect(record.provider).toBe("local")
+    expect(record.template).toBe("codewith-pr-drain")
+    expect(record.metadata.name).toBe("probe")
+    expect(new Date(record.expires_at).getTime()).toBeGreaterThanOrEqual(before + 600_000)
+  })
+
+  test("legacy e2b create reports missing direct credentials, not a cloud-route error", async () => {
+    const res = await cli(["create", "-p", "e2b", "-i", "codewith-pr-drain", "-n", "probe", "-t", "600"])
+    expect(res.code).toBe(1)
+    expect(res.err).toContain("E2B_API_KEY")
+    expect(res.err).toContain("direct")
+    expect(res.err).toContain("does not route this request through Hasna cloud")
+    expect(res.err).not.toContain("Hasna cloud request failed")
+  })
+
+  test("legacy agents command returns non-cloud v1 migration guidance", async () => {
+    const res = await cli(["agents"])
+    expect(res.code).toBe(0)
+    expect(res.out).toContain("registry was removed in v1")
+    expect(res.out).toContain("E2B_API_KEY")
+    expect(res.out).toContain("no cloud request was made")
+  })
+
   test("unknown provider is rejected", async () => {
     const res = await cli(["--provider", "banana", "list"])
     expect(res.code).toBe(1)
