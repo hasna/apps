@@ -12,6 +12,32 @@ import { join } from "node:path";
  * The same hole exists in `.slice(indexOf(...), indexOf(...))` region bounds, where a -1 silently
  * slices from the end of the file or to its start — a region assertion over the wrong text, or over
  * none of it, reads exactly like a satisfied one.
+ *
+ * ---------------------------------------------------------------------------------------------
+ * BEFORE YOU BUILD A MUTATION BATTERY: three suites are PERMANENTLY RED on Linux.
+ *
+ * A mutation battery is only evidence when its clean control is GREEN. Include any of these and
+ * every mutation "looks caught" — the run was already non-zero before you changed anything, so
+ * every verdict in the table is manufactured. This has already produced one wrong all-clear in
+ * this repo, and the list in circulation named two of the three.
+ *
+ *   src/__tests__/macos-app-lifecycle.test.ts             EXIT 1,  48 pass /  92 fail
+ *   src/__tests__/native-app-companion-contract.test.ts   EXIT 1,  13 pass /   1 fail
+ *   src/__tests__/config.test.ts                          EXIT 1,  43 pass /   1 fail
+ *
+ * All three measured deterministically, 3 of 3 runs each, on `main` at 40c37b1 with
+ * `bun install --frozen-lockfile` (`@hasna/events` must resolve 0.1.11; a plain `bun install`
+ * pulls 0.1.14, which dropped a shipped CLI command inside the patch range and manufactures an
+ * unrelated failure in `cli.test.ts`). Causes are environmental, not defects in the code under
+ * test: BSD `stat -f` and hardcoded macOS tool paths, a fixture server port reading `NaN`, and a
+ * `getDataDir` HOME-ancestor assumption respectively.
+ *
+ * Corollary, equally load-bearing: this repo has NO CI. There is no `.github/workflows/`, and
+ * `bun test` on `main` is EXIT 1 (1017 pass / 94 fail across 50 files at 40d800f), so
+ * `prepublishOnly = typecheck && test` cannot pass on this platform either. Nothing gates these
+ * suites except somebody choosing to run them. Compare failing test NAMES, never counts — the
+ * suite is nondeterministic at the margin (94-99 failures across four runs of one tree).
+ * ---------------------------------------------------------------------------------------------
  */
 
 /**
