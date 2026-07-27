@@ -15,6 +15,105 @@ import {
 import { getPackageVersion } from "./version.js";
 
 export const BROWSERPLAN_FLEET_KIND = "browserplan_fleet";
+
+/**
+ * BrowserPlan distribution source of truth. The `hasna/chrome` git repository is being
+ * retired under owner authorisation, so npm becomes the only distribution artifact: the
+ * package ships raw TypeScript (no `dist/`) and provides the `browserplan` bin.
+ */
+export const BROWSERPLAN_PACKAGE_NAME = "@hasna/open-chrome";
+export const BROWSERPLAN_CLI_COMMAND = "browserplan";
+/**
+ * Contract owner id for every BrowserPlan-owned surface (`target.owner`,
+ * `operation_contract.command_owner`, `operation_hooks[].owner`, safe-runner ownership)
+ * and the workspace/project key machine manifests use. Must stay equal to
+ * `defaultAppIdForPackage(BROWSERPLAN_PACKAGE_NAME)`; test/browserplan.test.ts pins that.
+ */
+export const BROWSERPLAN_APP_ID = "open-chrome";
+/** Route owner id for this package, i.e. `defaultAppIdForPackage(MACHINES_PACKAGE_NAME)`. */
+export const BROWSERPLAN_ROUTE_OWNER = "open-machines";
+export const BROWSERPLAN_SECRETS_OWNER = "open-identities/open-attachments/open-mailery";
+/**
+ * Command prefix every accepted `app_install_update` template must start with. Kept as a
+ * prefix rather than a whole command so a caller may pin a concrete version
+ * (`…@0.1.0`) instead of tracking the dist-tag and still validate.
+ */
+export const BROWSERPLAN_INSTALL_UPDATE_COMMAND_PREFIX = `bun install -g ${BROWSERPLAN_PACKAGE_NAME}@`;
+/**
+ * What may follow that prefix: either an EXACT semver, or a DOT-FREE dist-tag of two or
+ * more characters. Nothing else.
+ *
+ * End-anchored, so no shell suffix can be appended after an otherwise valid install
+ * (`&& rm -rf /`, `; curl … | sh`, `; cd d && git pull`, `` `id` ``, `$(id)`), and an
+ * empty version is rejected.
+ *
+ * The tag arm forbids `.` on purpose, and that single restriction is what rejects the
+ * whole wildcard-range class rather than an enumeration of its members. Bun's resolver
+ * coerces far more than an `x`-character class into "any version": `bun add
+ * @hasna/open-chrome@<spec>` exits 0 and installs 0.1.0 for `x.x`, `x.y`, `X.Y`, `x.`,
+ * `x..x`, `x.x.`, `x.x-`, `x.-` and `x.x_1` — note `x.y` contains no wildcard character
+ * at all. Enumerating those forms was tried twice and leaked twice; the resolver, not a
+ * character class, is the oracle. Any range makes the installed version unpredictable,
+ * which defeats both the pin below and the `<bin> --version` assertion
+ * src/commands/reconcile.ts uses to verify a rollout.
+ *
+ * Also note bun and npm DISAGREE here: `npm view @hasna/open-chrome@x.y version` returns
+ * E404 while bun installs it. The hook command is `bun install -g`, so bun is the oracle
+ * that matters.
+ *
+ * Residual, accepted knowingly: a real dist-tag containing a dot would be rejected. npm
+ * dist-tags conventionally do not contain dots (a tag may not be a valid semver), and this
+ * rule governs exactly one package whose tags are `{"latest":"0.1.0"}`.
+ *
+ * MUST STAY UNFLAGGED. It is a shared module-level object, so adding `/g` (or `/y`) would
+ * make `.test()` advance `lastIndex` between calls — which is not hypothetical: it turns
+ * ordinary multi-machine tests red, because successive machines in one payload get
+ * alternating results.
+ *
+ * This constrains command *shape*, not registry trust: a legitimate but hostile-looking
+ * dist-tag such as `latest-evil` is accepted.
+ */
+export const BROWSERPLAN_INSTALL_VERSION_PATTERN =
+  /^(?:\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?|[A-Za-z][0-9A-Za-z_-]+)$/;
+/**
+ * Exact version the install hook pins.
+ *
+ * DELIBERATELY PINNED, NOT `latest` — do not "improve" this to a floating tag.
+ *
+ * The decisive reason is AUDITABILITY, not supply-chain risk. The published metadata for
+ * this package carries `gitHead: f49b5c42…`, which resolves to nothing once the BrowserPlan
+ * source repository is retired. If a floating tag ever moved after that point there would
+ * be no diff, no history and no provenance to inspect — and this hook installs it silently.
+ * A pin also gives src/commands/reconcile.ts something to verify: it asserts
+ * `<bin> --version` equals the target, which only works against an exact version.
+ *
+ * Secondary: npm becomes the sole artifact for the package (one version, raw TypeScript,
+ * no build output, no maintainer watching the name), so a moved dist-tag would reach every
+ * fleet machine through a `bun install -g`. The usual argument for a floating tag — that a
+ * pin cannot deliver a future fix — costs nothing here, because republishing requires
+ * someone to deliberately hold the source mirror, and that same change can bump this
+ * constant. `dist-tags` is `{"latest":"0.1.0"}` today, so the pin currently costs nothing
+ * at all.
+ */
+export const BROWSERPLAN_PINNED_VERSION = "0.1.0";
+/**
+ * `app_install_update` installs/updates BrowserPlan from npm rather than from a checkout,
+ * because the source repository is being retired under owner authorisation.
+ *
+ * No version placeholder is exposed: nothing in this package could resolve one
+ * (`getPackageVersion()` returns *machines*' own version), unlike
+ * src/commands/reconcile.ts which pins versions from the fleet manifest. The template is
+ * therefore directly runnable as emitted.
+ */
+export const BROWSERPLAN_INSTALL_UPDATE_COMMAND_TEMPLATE = `${BROWSERPLAN_INSTALL_UPDATE_COMMAND_PREFIX}${BROWSERPLAN_PINNED_VERSION}`;
+/**
+ * The pre-retirement template. Still ACCEPTED by validation so that a consumer holding a
+ * cached payload from `@hasna/machines` <= 0.2.2 does not start failing; it is simply no
+ * longer emitted. See the compatibility note in CHANGELOG.md.
+ */
+export const BROWSERPLAN_LEGACY_INSTALL_UPDATE_COMMAND_TEMPLATE =
+  "cd <open-chrome-project-root> && git pull --ff-only origin main && bun install --frozen-lockfile";
+
 export const BROWSERPLAN_TARGET_NAME = "browserplan-machine001-machine011";
 export const BROWSERPLAN_MACHINE_IDS = [
   "machine001",
@@ -123,9 +222,9 @@ export interface BrowserPlanSafeRunnerContract {
     private_metadata_note: string;
   };
   ownership: {
-    command_owner: "open-chrome";
-    route_owner: "open-machines";
-    secrets_owner: "open-identities/open-attachments/open-mailery";
+    command_owner: typeof BROWSERPLAN_APP_ID;
+    route_owner: typeof BROWSERPLAN_ROUTE_OWNER;
+    secrets_owner: typeof BROWSERPLAN_SECRETS_OWNER;
   };
 }
 
@@ -133,7 +232,7 @@ export interface BrowserPlanOperationHook {
   id: BrowserPlanOperationId;
   label: string;
   description: string;
-  owner: "open-chrome";
+  owner: typeof BROWSERPLAN_APP_ID;
   available: boolean;
   readiness: "ready" | "blocked" | "unknown";
   launch_mode?: "headed" | "headless";
@@ -182,7 +281,7 @@ export interface BrowserPlanFleet {
   kind: typeof BROWSERPLAN_FLEET_KIND;
   target: {
     name: typeof BROWSERPLAN_TARGET_NAME;
-    owner: "open-chrome";
+    owner: typeof BROWSERPLAN_APP_ID;
     machine_ids: BrowserPlanMachineId[];
     excluded_machine_ids: BrowserPlanExcludedMachineId[];
     install_target_excludes: BrowserPlanExcludedMachineId[];
@@ -196,8 +295,8 @@ export interface BrowserPlanFleet {
     excluded_requested: BrowserPlanExcludedMachineId[];
   };
   operation_contract: {
-    command_owner: "open-chrome";
-    route_owner: "open-machines";
+    command_owner: typeof BROWSERPLAN_APP_ID;
+    route_owner: typeof BROWSERPLAN_ROUTE_OWNER;
     default_timeout_ms: number;
     private_route_policy: "private targets are omitted unless caller explicitly requests private metadata on a trusted local operator surface";
     supported_operations: BrowserPlanOperationId[];
@@ -358,8 +457,8 @@ function installState(
       machineId,
       commands: CAPABILITY_COMMANDS.map((command) => ({ command, required: false })),
       packages: [
-        { name: "@hasna/machines", command: "machines", required: false },
-        { name: "@hasna/open-chrome", command: "browserplan", required: false },
+        { name: MACHINES_PACKAGE_NAME, command: "machines", required: false },
+        { name: BROWSERPLAN_PACKAGE_NAME, command: BROWSERPLAN_CLI_COMMAND, required: false },
       ],
       runner: options.runner,
       now: options.now,
@@ -398,8 +497,8 @@ function workspaceSummary(machineId: string, topology: MachineTopology, machine:
   try {
     const workspace = resolveMachineWorkspace({
       machineId,
-      projectId: "open-chrome",
-      repoName: "open-chrome",
+      projectId: BROWSERPLAN_APP_ID,
+      repoName: BROWSERPLAN_APP_ID,
       topology,
       now,
     });
@@ -447,9 +546,9 @@ function safeRunner(machineId: string): BrowserPlanSafeRunnerContract {
       private_metadata_note: "Set private_metadata:true only on trusted operator surfaces when the concrete SSH command must be printed or executed.",
     },
     ownership: {
-      command_owner: "open-chrome",
-      route_owner: "open-machines",
-      secrets_owner: "open-identities/open-attachments/open-mailery",
+      command_owner: BROWSERPLAN_APP_ID,
+      route_owner: BROWSERPLAN_ROUTE_OWNER,
+      secrets_owner: BROWSERPLAN_SECRETS_OWNER,
     },
   };
 }
@@ -487,7 +586,7 @@ function operationHook(input: {
     id: input.id,
     label: input.label,
     description: input.description,
-    owner: "open-chrome",
+    owner: BROWSERPLAN_APP_ID,
     available: blockedBy.length === 0,
     readiness,
     ...(input.launchMode ? { launch_mode: input.launchMode } : {}),
@@ -591,11 +690,11 @@ function operationHooks(machineId: string, routeReady: boolean, known: boolean, 
     operationHook({
       id: "app_install_update",
       label: "Install/update app",
-      description: "Install or update open-chrome/BrowserPlan from the machine's open-chrome workspace.",
+      description: `Install or update the BrowserPlan CLI from the ${BROWSERPLAN_PACKAGE_NAME} npm package on the target machine.`,
       machineId,
-      commandTemplate: "cd <open-chrome-project-root> && git pull --ff-only origin main && bun install --frozen-lockfile",
-      placeholders: ["open-chrome-project-root"],
-      requiredCapabilities: ["bun", "git"],
+      commandTemplate: BROWSERPLAN_INSTALL_UPDATE_COMMAND_TEMPLATE,
+      placeholders: [],
+      requiredCapabilities: ["bun"],
       routeReady,
       known,
       installState: install,
@@ -687,7 +786,7 @@ export function getBrowserPlanFleet(options: BrowserPlanFleetOptions = {}): Brow
     kind: BROWSERPLAN_FLEET_KIND,
     target: {
       name: BROWSERPLAN_TARGET_NAME,
-      owner: "open-chrome",
+      owner: BROWSERPLAN_APP_ID,
       machine_ids: [...BROWSERPLAN_MACHINE_IDS],
       excluded_machine_ids: [...BROWSERPLAN_EXCLUDED_MACHINE_IDS],
       install_target_excludes: [...BROWSERPLAN_EXCLUDED_MACHINE_IDS],
@@ -701,8 +800,8 @@ export function getBrowserPlanFleet(options: BrowserPlanFleetOptions = {}): Brow
       excluded_requested: excludedRequested,
     },
     operation_contract: {
-      command_owner: "open-chrome",
-      route_owner: "open-machines",
+      command_owner: BROWSERPLAN_APP_ID,
+      route_owner: BROWSERPLAN_ROUTE_OWNER,
       default_timeout_ms: DEFAULT_REMOTE_TIMEOUT_MS,
       private_route_policy: "private targets are omitted unless caller explicitly requests private metadata on a trusted local operator surface",
       supported_operations: [
