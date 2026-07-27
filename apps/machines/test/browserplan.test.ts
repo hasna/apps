@@ -95,8 +95,8 @@ describe("BrowserPlan fleet contract", () => {
   });
 
   test("installs and updates BrowserPlan from npm, never from a git checkout", () => {
-    // hasna/chrome was deleted; @hasna/open-chrome on npm is the only remaining artifact,
-    // so the app_install_update hook must not reference a clone it can no longer pull.
+    // hasna/chrome is being retired, so npm is the only distribution artifact left and the
+    // app_install_update hook must not reference a clone it cannot rely on pulling.
     expect(BROWSERPLAN_INSTALL_UPDATE_COMMAND_TEMPLATE).toBe(`bun install -g ${BROWSERPLAN_PACKAGE_NAME}@<${BROWSERPLAN_INSTALL_VERSION_PLACEHOLDER}>`);
     expect(BROWSERPLAN_INSTALL_UPDATE_COMMAND_TEMPLATE).not.toMatch(/git\s+pull/);
     expect(BROWSERPLAN_INSTALL_UPDATE_COMMAND_TEMPLATE).not.toContain("<open-chrome-project-root>");
@@ -250,9 +250,9 @@ describe("BrowserPlan fleet contract", () => {
       malformed.operation_contract.stable_surfaces.mcp = "wrong_tool";
       malformed.machines[0].operation_hooks[0].safe_runner.mcp.args.private_metadata = true;
       malformed.machines[0].operation_hooks.find((hook: { id: string }) => hook.id === "supervisor_status").command_template = "browserplan remote start --machine <machine-id> --json";
-      // The retired pre-deletion template must now fail validation, so a stale consumer or
-      // an older cached payload cannot hand an operator a command that git-pulls a repo
-      // that no longer exists.
+      // The superseded template must now fail validation, so a stale consumer or an older
+      // cached payload cannot hand an operator a command that git-pulls a repo it has no
+      // checkout of and that is being retired.
       malformed.machines[0].operation_hooks.find((hook: { id: string }) => hook.id === "app_install_update").command_template = "cd <open-chrome-project-root> && git pull --ff-only origin main && bun install --frozen-lockfile";
 
       const result = validateMachinesConsumerEnvelope("browserplan_fleet", malformed);

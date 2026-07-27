@@ -17,9 +17,9 @@ import { getPackageVersion } from "./version.js";
 export const BROWSERPLAN_FLEET_KIND = "browserplan_fleet";
 
 /**
- * BrowserPlan distribution source of truth. The `hasna/chrome` git repository was
- * retired, so the npm package is the only remaining artifact: it ships raw TypeScript
- * (no `dist/`) and provides the `browserplan` bin.
+ * BrowserPlan distribution source of truth. The `hasna/chrome` git repository is being
+ * retired under owner authorisation, so npm becomes the only distribution artifact: the
+ * package ships raw TypeScript (no `dist/`) and provides the `browserplan` bin.
  */
 export const BROWSERPLAN_PACKAGE_NAME = "@hasna/open-chrome";
 export const BROWSERPLAN_CLI_COMMAND = "browserplan";
@@ -36,7 +36,8 @@ export const BROWSERPLAN_SECRETS_OWNER = "open-identities/open-attachments/open-
 /**
  * `app_install_update` installs/updates BrowserPlan from npm, matching the desired-state
  * rollout idiom in src/commands/reconcile.ts (`bun install -g pkg@version`). It must NOT
- * git-pull a checkout: the source repository no longer exists.
+ * git-pull a checkout: the source repository is being retired, and no fleet machine has
+ * a checkout for the old template to resolve against.
  */
 export const BROWSERPLAN_INSTALL_VERSION_PLACEHOLDER = "open-chrome-version";
 export const BROWSERPLAN_INSTALL_UPDATE_COMMAND_TEMPLATE = `bun install -g ${BROWSERPLAN_PACKAGE_NAME}@<${BROWSERPLAN_INSTALL_VERSION_PLACEHOLDER}>`;

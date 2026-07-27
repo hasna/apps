@@ -11,8 +11,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **BrowserPlan `app_install_update` no longer depends on a git checkout.** The
   hook's `command_template` was
   `cd <open-chrome-project-root> && git pull --ff-only origin main && bun install
-  --frozen-lockfile`, which cannot succeed now that the BrowserPlan source
-  repository is retired. It is now
+  --frozen-lockfile`. That template is already unusable — no fleet machine
+  manifest defines an `open-chrome` workspace path, so
+  `<open-chrome-project-root>` has nothing to resolve to — and it cannot survive
+  the owner-authorised retirement of the BrowserPlan source repository. It is now
   `bun install -g @hasna/open-chrome@<open-chrome-version>` — the same
   desired-state rollout idiom `machines reconcile` already uses (`bun install -g
   pkg@version`) against the npm package, which ships the `browserplan` bin.
@@ -22,7 +24,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   blocked for this hook. `validateMachinesConsumerEnvelope("browserplan_fleet",
   …)` now **rejects** any `app_install_update` template that contains `git pull`
   or omits the `<open-chrome-version>` placeholder, so a stale consumer cannot
-  hand an operator a command that pulls a repository that no longer exists.
+  hand an operator a command that pulls a repository that will no longer exist.
   Every other BrowserPlan surface is byte-for-byte unchanged: same owner ids,
   target name, machine ids, operation ids, stable surfaces, and the same
   published `schemas/machines-consumer.schema.json`.

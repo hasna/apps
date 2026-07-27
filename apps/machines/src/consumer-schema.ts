@@ -1467,7 +1467,7 @@ export function validateMachinesConsumerEnvelope(
             if (!hasString(hook, "command_template")) errors.push(`${path}.command_template`);
             if (hook.id === "supervisor_status" && String(hook.command_template).includes("remote start")) errors.push(`${path}.command_template`);
             if (hook.id === "app_install_update" && !String(hook.command_template).includes(`<${BROWSERPLAN_INSTALL_VERSION_PLACEHOLDER}>`)) errors.push(`${path}.command_template`);
-            // The BrowserPlan source repository was retired; installing from a git checkout can no longer succeed.
+            // The BrowserPlan source repository is being retired; a git-checkout install cannot be relied on.
             if (hook.id === "app_install_update" && /\bgit\s+pull\b/.test(String(hook.command_template))) errors.push(`${path}.command_template`);
             if (!hasArray(hook, "command_placeholders")) errors.push(`${path}.command_placeholders`);
             if (!hasArray(hook, "required_capabilities")) errors.push(`${path}.required_capabilities`);
