@@ -1,0 +1,30 @@
+{
+  // Typecheck-only program. Extends the build config and additionally covers the
+  // shared test helpers under src/test/, which several test suites depend on.
+  //
+  // Kept SEPARATE from tsconfig.json on purpose: `bun run build` ends with
+  // `tsc --emitDeclarationOnly --outDir dist`, and package.json publishes `dist`.
+  // Adding src/test/ to the build config's `include` therefore emitted
+  // dist/test/server-harness.d.ts, dist/test/spawn-budget.d.ts,
+  // dist/test/no-network.d.ts and even a .test.d.ts into the published package —
+  // `exclude` does not stop a file entering the program once something in the
+  // program imports it. This config gets the typecheck coverage without touching
+  // the published surface.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "src/index.ts",
+    "src/cli/index.tsx",
+    "src/mcp.ts",
+    "src/mcp/index.ts",
+    "src/registry.ts",
+    "src/contracts.ts",
+    "src/storage.ts",
+    "src/server/index.ts",
+    "src/sdk/index.ts",
+    "src/sdk/**/*.ts",
+    "src/test/**/*.ts"
+  ]
+}

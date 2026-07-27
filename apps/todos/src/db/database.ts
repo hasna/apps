@@ -85,9 +85,14 @@ function openDatabase(path: string): Database {
 
   const db = new Database(path);
 
+  // busy_timeout MUST be set before any pragma that takes a lock. Switching the
+  // journal mode acquires one, so with the timeout set afterwards the WAL pragma
+  // had no timeout in effect and failed instantly with SQLITE_BUSY whenever
+  // another connection held the database — the ordinary case of a `todos serve`
+  // starting while a CLI process still has the same file open. Now it waits.
+  db.run("PRAGMA busy_timeout = 5000");
   // Enable WAL mode for concurrent access
   db.run("PRAGMA journal_mode = WAL");
-  db.run("PRAGMA busy_timeout = 5000");
   db.run("PRAGMA foreign_keys = ON");
 
   // Run migrations

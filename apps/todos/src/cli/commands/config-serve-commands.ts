@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import chalk from "chalk";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { DEFAULT_PORT as DEFAULT_SERVER_PORT } from "../../server/port.js";
 import { getDatabase } from "../../db/database.js";
 import { listTasks } from "../../db/tasks.js";
 import { loadConfig } from "../../lib/config.js";
@@ -1165,24 +1166,24 @@ export function registerConfigServeCommands(program: Command) {
   program
     .command("serve")
     .description("Start the web dashboard")
-    .option("--port <port>", "Port number", "19427")
+    .option("--port <port>", "Port number", String(DEFAULT_SERVER_PORT))
     .option("--host <host>", "Host to bind (default: 127.0.0.1 localhost only, use 0.0.0.0 for all interfaces)")
     .option("--api-key <key>", "Require this API key for /api/* requests")
     .option("--allow-anonymous", "Local dev only: serve /api/* and /mcp without a credential (refused unless the bind host is loopback)")
     .option("--no-open", "Don't open browser automatically")
     .action(async (opts) => {
       const { startServer } = await import("../../server/serve.js");
-      const requestedPort = parseInt(opts.port, 10);
-      let port = requestedPort;
-      // Auto-find free port if default is in use
-      for (let p = requestedPort; p < requestedPort + 100; p++) {
-        try {
-          const s = Bun.serve({ port: p, fetch: () => new Response("") });
-          s.stop(true);
-          port = p;
-          break;
-        } catch { /* port in use */ }
-      }
+      const { coercePort, findFreePort, refuseInvalidPort } = await import("../../server/port.js");
+      // Shared with the standalone todos-serve entry point. This used to be its
+      // own `parseInt(opts.port, 10)` plus a duplicate scan loop, so an
+      // unparseable --port produced NaN, skipped the loop entirely, and reached
+      // Bun.serve as NaN — which silently binds a random ephemeral port.
+      // opts.port always has a value (commander defaults it to DEFAULT_PORT, which
+      // is itself valid), so coercePort only fails when the user supplied
+      // something that is not a port — refuse it instead of starting elsewhere.
+      const requestedPort = coercePort(opts.port) ?? refuseInvalidPort("--port", String(opts.port));
+      // 0 means "kernel, pick one": bind it as asked rather than scanning.
+      const port = requestedPort === 0 ? requestedPort : await findFreePort(requestedPort);
       if (port !== requestedPort) {
         console.log(`Port ${requestedPort} in use, using ${port}`);
       }

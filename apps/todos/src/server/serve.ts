@@ -341,7 +341,7 @@ export async function startServer(port: number, options?: StartServerOptions): P
       const path = url.pathname;
       const method = req.method;
       const reqOrigin = req.headers.get("origin") || undefined;
-      const corsHeaders = reqOrigin && (reqOrigin === `http://localhost:${port}` || reqOrigin === "http://localhost:0")
+      const corsHeaders = reqOrigin && reqOrigin === `http://localhost:${ctx.port}`
         ? {
             "Access-Control-Allow-Origin": reqOrigin,
             "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
@@ -760,7 +760,18 @@ export async function startServer(port: number, options?: StartServerOptions): P
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 
-  const serverUrl = `http://localhost:${port}`;
+  // `port` is what we ASKED for; `server.port` is what we GOT. They differ when 0
+  // was requested (kernel-assigned ephemeral port). Everything observable — the
+  // CORS origin check, ctx.port handed to route handlers, and the URL printed
+  // below, which is the readiness signal subprocess callers parse — must report
+  // the port actually bound, or callers connect to the wrong place.
+  // `server.port` is typed optional because a unix-socket server has none; this
+  // server always binds TCP, so fall back to the requested port rather than
+  // asserting.
+  const boundPort = server.port ?? port;
+  ctx.port = boundPort;
+
+  const serverUrl = `http://localhost:${boundPort}`;
   console.log(`Todos Dashboard running at ${serverUrl}`);
 
   if (shouldOpen) {

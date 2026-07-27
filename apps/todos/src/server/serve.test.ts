@@ -2,30 +2,21 @@ import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
+import {
+  SERVER_HOOK_BUDGET_MS,
+  SERVER_STOP_BUDGET_MS,
+  startTestServer,
+  type TestServer,
+} from "../test/server-harness.js";
 
+/** The port the kernel handed the child — used by the CORS origin assertions. */
 let port: number;
-let proc: ReturnType<typeof Bun.spawn>;
+let server: TestServer;
 let tmpDir: string;
 let dbPath: string;
 
-const SERVER_HOOK_TIMEOUT_MS = 15_000;
-
-function reserveFreePort(start: number): number {
-  for (let candidate = start; candidate < start + 100; candidate++) {
-    try {
-      const server = Bun.serve({ port: candidate, fetch: () => new Response("") });
-      server.stop(true);
-      return candidate;
-    } catch {
-      // Try the next port in the test range.
-    }
-  }
-  throw new Error(`No free test port found starting at ${start}`);
-}
-
 function url(path: string): string {
-  return `http://localhost:${port}${path}`;
+  return server.url(path);
 }
 
 async function api(
@@ -54,46 +45,23 @@ async function createTaskViaApi(
 }
 
 beforeAll(async () => {
-  port = reserveFreePort(19400 + Math.floor(Math.random() * 100));
   tmpDir = await mkdtemp(join(tmpdir(), "todos-server-test-"));
   dbPath = join(tmpDir, "test.db");
 
-  proc = Bun.spawn({
+  server = await startTestServer({
     // `--allow-anonymous` keeps this suite focused on route behavior: the server
     // now fails closed when no credential is configured, and auth itself is covered
     // by auth.test.ts + auth-fail-closed.test.ts.
-    cmd: ["bun", "run", "src/server/index.ts", `--port=${port}`, "--no-open", "--allow-anonymous"],
-    cwd: join(import.meta.dir, "..", ".."),
-    env: localRoutingTestEnv({ TODOS_DB_PATH: dbPath, TODOS_AUTO_PROJECT: "false", TODOS_NO_OPEN: "true", TODOS_RATE_LIMIT_MAX: "1000" }),
-    stdout: "pipe",
-    stderr: "pipe",
+    args: ["--allow-anonymous"],
+    env: { TODOS_DB_PATH: dbPath, TODOS_AUTO_PROJECT: "false", TODOS_RATE_LIMIT_MAX: "1000" },
   });
-
-  // Wait for server to be ready (up to 10 seconds)
-  let ready = false;
-  for (let i = 0; i < 50; i++) {
-    try {
-      const res = await fetch(url("/api/stats"));
-      if (res.ok) {
-        ready = true;
-        break;
-      }
-    } catch {
-      // Server not ready yet
-    }
-    await new Promise((r) => setTimeout(r, 200));
-  }
-
-  if (!ready) {
-    throw new Error(`Server did not start on port ${port} within 10 seconds`);
-  }
-}, SERVER_HOOK_TIMEOUT_MS);
+  port = server.port;
+}, SERVER_HOOK_BUDGET_MS);
 
 afterAll(async () => {
-  proc.kill();
-  await proc.exited;
+  await server?.stop();
   await rm(tmpDir, { recursive: true, force: true });
-}, SERVER_HOOK_TIMEOUT_MS);
+}, SERVER_STOP_BUDGET_MS);
 
 // ── GET /api/stats ──────────────────────────────────────────────────────────
 

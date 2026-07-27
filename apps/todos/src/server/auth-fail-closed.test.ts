@@ -23,6 +23,12 @@ import { join } from "node:path";
 import { createApiKey } from "../db/api-keys.js";
 import { closeDatabase, getDatabase, resetDatabase } from "../db/database.js";
 import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
+import {
+  SERVER_HOOK_BUDGET_MS,
+  SERVER_STOP_BUDGET_MS,
+  startTestServer,
+  type TestServer,
+} from "../test/server-harness.js";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const HOOK_TIMEOUT_MS = 20_000;
@@ -37,6 +43,17 @@ function localUrl(port: number, path: string): string {
   return `${LOOPBACK}:${port}${path}`;
 }
 
+/**
+ * Only the two "refuses to start" tests below still pick a concrete port, and only
+ * because they assert that NOTHING ends up listening on it — an assertion that
+ * needs a real port number to probe, so `--port=0` (which the server never gets
+ * far enough to bind) would make it vacuous. The suites that wait for a server to
+ * come UP use the kernel-assigned port from src/test/server-harness.ts instead.
+ *
+ * The windows below no longer collide with anything: ratelimit.test.ts used to
+ * share base 19700, and it now uses an ephemeral port, and these two tests run
+ * sequentially within this file.
+ */
 function reserveFreePort(start: number): number {
   for (let candidate = start; candidate < start + 200; candidate++) {
     try {
@@ -136,14 +153,13 @@ describe("unconfigured server fails closed", () => {
 // ── 2. Configured => every data route rejects a credential-less request ───────
 describe("data routes reject credential-less requests", () => {
   let port: number;
-  let proc: ReturnType<typeof Bun.spawn>;
+  let server: TestServer;
   let tmpDir: string;
   let apiKey: string;
 
   const url = (path: string) => localUrl(port, path);
 
   beforeAll(async () => {
-    port = reserveFreePort(19800 + Math.floor(Math.random() * 100));
     tmpDir = await mkdtemp(join(tmpdir(), "todos-authroutes-"));
     const dbPath = join(tmpDir, "test.db");
 
@@ -157,31 +173,20 @@ describe("data routes reject credential-less requests", () => {
     if (previousDbPath === undefined) delete process.env["TODOS_DB_PATH"];
     else process.env["TODOS_DB_PATH"] = previousDbPath;
 
-    proc = spawnServer(port, localRoutingTestEnv({
-      TODOS_DB_PATH: dbPath,
-      TODOS_AUTO_PROJECT: "false",
-      TODOS_NO_OPEN: "true",
-      TODOS_RATE_LIMIT_MAX: "1000",
-    }));
-
-    let ready = false;
-    for (let i = 0; i < 75; i++) {
-      try {
-        const res = await fetch(url("/health"));
-        if (res.ok) { ready = true; break; }
-      } catch {
-        // not up yet
-      }
-      await new Promise((resolve) => setTimeout(resolve, 200));
-    }
-    if (!ready) throw new Error(`auth-route test server did not start on port ${port}`);
-  }, HOOK_TIMEOUT_MS);
+    server = await startTestServer({
+      env: {
+        TODOS_DB_PATH: dbPath,
+        TODOS_AUTO_PROJECT: "false",
+        TODOS_RATE_LIMIT_MAX: "1000",
+      },
+    });
+    port = server.port;
+  }, SERVER_HOOK_BUDGET_MS);
 
   afterAll(async () => {
-    proc.kill();
-    await proc.exited;
+    await server?.stop();
     await rm(tmpDir, { recursive: true, force: true });
-  }, HOOK_TIMEOUT_MS);
+  }, SERVER_STOP_BUDGET_MS);
 
   const readRoutes = [
     "/api/stats",
@@ -280,40 +285,26 @@ describe("data routes reject credential-less requests", () => {
 // ── 3. Minting a key closes an already-open anonymous window ──────────────────
 describe("anonymous-loopback upgrades to enforce when a key appears", () => {
   let port: number;
-  let proc: ReturnType<typeof Bun.spawn>;
+  let server: TestServer;
   let tmpDir: string;
   let dbPath: string;
 
   const url = (path: string) => localUrl(port, path);
 
   beforeAll(async () => {
-    port = reserveFreePort(19900 + Math.floor(Math.random() * 100));
     tmpDir = await mkdtemp(join(tmpdir(), "todos-anon-upgrade-"));
     dbPath = join(tmpDir, "test.db");
-    proc = spawnServer(
-      port,
-      localRoutingTestEnv({ TODOS_DB_PATH: dbPath, TODOS_AUTO_PROJECT: "false", TODOS_NO_OPEN: "true" }),
-      ["--allow-anonymous"],
-    );
-
-    let ready = false;
-    for (let i = 0; i < 75; i++) {
-      try {
-        const res = await fetch(url("/api/stats"));
-        if (res.ok) { ready = true; break; }
-      } catch {
-        // not up yet
-      }
-      await new Promise((resolve) => setTimeout(resolve, 200));
-    }
-    if (!ready) throw new Error(`anonymous-upgrade test server did not start on port ${port}`);
-  }, HOOK_TIMEOUT_MS);
+    server = await startTestServer({
+      args: ["--allow-anonymous"],
+      env: { TODOS_DB_PATH: dbPath, TODOS_AUTO_PROJECT: "false" },
+    });
+    port = server.port;
+  }, SERVER_HOOK_BUDGET_MS);
 
   afterAll(async () => {
-    proc.kill();
-    await proc.exited;
+    await server?.stop();
     await rm(tmpDir, { recursive: true, force: true });
-  }, HOOK_TIMEOUT_MS);
+  }, SERVER_STOP_BUDGET_MS);
 
   it("stops serving anonymously as soon as an API key is minted, without a restart", async () => {
     // Sanity: the explicit loopback opt-in is in effect.

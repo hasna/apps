@@ -2,7 +2,12 @@ import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
+import {
+  SERVER_HOOK_BUDGET_MS,
+  SERVER_STOP_BUDGET_MS,
+  startTestServer,
+  type TestServer,
+} from "../test/server-harness.js";
 
 // ── M6: the rate limiter must key on the real socket peer, not spoofable
 // client headers. Bun.serve never sets x-forwarded-for for direct connections,
@@ -10,76 +15,43 @@ import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
 // (b) lets an attacker bypass the limiter by rotating a forged XFF value.
 // This test proves rotating XFF no longer creates independent buckets.
 
-let port: number;
-let proc: ReturnType<typeof Bun.spawn>;
+let server: TestServer;
 let tmpDir: string;
 let dbPath: string;
 
 const RATE_LIMIT_MAX = 5;
-const SERVER_HOOK_TIMEOUT_MS = 15_000;
-
-function reserveFreePort(start: number): number {
-  for (let candidate = start; candidate < start + 100; candidate++) {
-    try {
-      const server = Bun.serve({ port: candidate, hostname: "127.0.0.1", fetch: () => new Response("") });
-      server.stop(true);
-      return candidate;
-    } catch {
-      // try next
-    }
-  }
-  throw new Error(`No free test port found starting at ${start}`);
-}
 
 function url(path: string): string {
-  return `http://localhost:${port}${path}`;
+  return server.url(path);
 }
 
 beforeAll(async () => {
-  port = reserveFreePort(19700 + Math.floor(Math.random() * 100));
   tmpDir = await mkdtemp(join(tmpdir(), "todos-ratelimit-test-"));
   dbPath = join(tmpDir, "test.db");
 
-  proc = Bun.spawn({
+  // Readiness comes from the server's own ready line rather than by polling
+  // /health, which keeps liveness probing out of the budget this suite asserts
+  // on: with TODOS_RATE_LIMIT_MAX=5, every probe request that reached the server
+  // spent one of the 5 tokens the assertion below depends on.
+  server = await startTestServer({
     // `--allow-anonymous` keeps this suite focused on route behavior: the server
     // now fails closed when no credential is configured, and auth itself is covered
     // by auth.test.ts + auth-fail-closed.test.ts.
-    cmd: ["bun", "run", "src/server/index.ts", `--port=${port}`, "--no-open", "--allow-anonymous"],
-    cwd: join(import.meta.dir, "..", ".."),
-    env: localRoutingTestEnv({
+    args: ["--allow-anonymous"],
+    env: {
       TODOS_DB_PATH: dbPath,
       TODOS_AUTO_PROJECT: "false",
-      TODOS_NO_OPEN: "true",
       TODOS_RATE_LIMIT_MAX: String(RATE_LIMIT_MAX),
       // Ensure proxy header trust is OFF (default), so XFF must be ignored.
       TODOS_TRUST_PROXY: "0",
-    }),
-    stdout: "pipe",
-    stderr: "pipe",
+    },
   });
-
-  let ready = false;
-  for (let i = 0; i < 50; i++) {
-    try {
-      // /health is unauthenticated; a 200 or 429 both mean the server is up.
-      const res = await fetch(url("/health"));
-      if (res.status === 200 || res.status === 429) {
-        ready = true;
-        break;
-      }
-    } catch {
-      // not ready yet
-    }
-    await new Promise((r) => setTimeout(r, 200));
-  }
-  if (!ready) throw new Error(`Rate-limit test server did not start on port ${port}`);
-}, SERVER_HOOK_TIMEOUT_MS);
+}, SERVER_HOOK_BUDGET_MS);
 
 afterAll(async () => {
-  proc.kill();
-  await proc.exited;
+  await server?.stop();
   await rm(tmpDir, { recursive: true, force: true });
-}, SERVER_HOOK_TIMEOUT_MS);
+}, SERVER_STOP_BUDGET_MS);
 
 describe("Rate limiter keying (M6)", () => {
   it("does not let a rotating X-Forwarded-For bypass the limit", async () => {

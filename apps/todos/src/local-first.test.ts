@@ -7,6 +7,7 @@ import { createTask } from "./db/task-crud.js";
 import { closeDatabase, getDatabase, resetDatabase } from "./db/database.js";
 import { createMcpManifest } from "./mcp.js";
 import { withNoNetwork } from "./test/no-network.js";
+import { cliSpawnBudgetMs } from "./test/spawn-budget.js";
 
 const CWD = join(import.meta.dir, "..");
 const cloudPackage = "@hasna" + "/cloud";
@@ -151,7 +152,11 @@ describe("OSS local-first runtime defaults", () => {
     } finally {
       server.stop(true);
     }
-  });
+    // Two sequential cold CLI starts (`add`, then `list`). This file runs in the
+    // `test:no-cloud` release-guard lane, which deliberately has NO `--retry` —
+    // a boundary violation must not be retried into a pass — so the budget here
+    // is the only thing standing between a slow runner and a blocked merge.
+  }, cliSpawnBudgetMs(2));
 
   // Regression: `--project` is parsed onto the global program opts, so the add
   // command (which only read its local opts.project) silently dropped it and
@@ -171,5 +176,6 @@ describe("OSS local-first runtime defaults", () => {
     );
     expect(added.exitCode).toBe(0);
     expect(JSON.parse(added.stdout).project_id).toBe(projectId);
-  });
+    // Two sequential cold CLI starts (`projects --add`, then `add --project`).
+  }, cliSpawnBudgetMs(2));
 });
