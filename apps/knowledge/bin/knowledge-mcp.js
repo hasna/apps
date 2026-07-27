@@ -23725,14 +23725,49 @@ REDACTION_PATTERNS.push(...COMMON_BARE_TOKEN_PATTERNS);
 
 // src/private-ref.ts
 import { createHash as createHash3 } from "crypto";
+import { realpathSync } from "fs";
+import { homedir as homedir3, tmpdir } from "os";
+var PATH_TAIL = String.raw`[^\s"'<>),\]}]`;
+var PATH_SEGMENT = String.raw`[^/\\\s"'<>]+`;
 var FILE_URI_RE = /file:\/\/[^\s"'<>),\]}]+/gi;
 var ABSOLUTE_HASNA_PATH_RE = /\/[^\s"'<>),\]}]*\.hasna\/[^\s"'<>),\]}]*/g;
-var ABSOLUTE_LOCAL_PATH_RE = /\/(?:home|tmp)\/[^\s"'<>),\]}]+/g;
-var HASNA_PATH_RE = /(?:~|\/home\/[^/\s"'<>]+)?\/?\.hasna(?:\/[^\s"'<>),\]}]*)?/gi;
-var PRIVATE_WORKSPACE_PATH_RE = /\/home\/[^/\s"'<>]+\/(?:workspace|Workspace)\/[^\s"'<>),\]}]*/g;
+var HASNA_PATH_RE = /(?:~|\/(?:home|Users)\/[^/\s"'<>]+)?\/?\.hasna(?:\/[^\s"'<>),\]}]*)?/gi;
+var PRIVATE_WORKSPACE_PATH_RE = new RegExp(String.raw`/(?:home|Users)/${PATH_SEGMENT}/(?:workspace|Workspace)/${PATH_TAIL}*`, "g");
+var LOCAL_PATH_PATTERNS = [
+  new RegExp(String.raw`/(?:home|Users)/${PATH_SEGMENT}(?:/${PATH_TAIL}*)?`, "g"),
+  new RegExp(String.raw`(?:/private)?/var/(?:folders|tmp)/${PATH_TAIL}+`, "g"),
+  new RegExp(String.raw`(?:/private)?/tmp/${PATH_TAIL}+`, "g"),
+  new RegExp(String.raw`(?<![A-Za-z0-9])[A-Za-z]:[\\/]${PATH_TAIL}+`, "g"),
+  new RegExp(String.raw`\\\\${PATH_SEGMENT}\\${PATH_TAIL}+`, "g")
+];
 var RAW_DB_OR_ENV_RE = /\b(?:knowledge\.db(?:[-.][A-Za-z0-9_-]+)?|db\.json(?:[-.][A-Za-z0-9_-]+)?|cloud\.env|migration-exports\/[^\s"'<>),\]}]+)\b/gi;
 var DATABASE_URL_RE = /\b(?:postgres(?:ql)?|mysql|mariadb):\/\/[^\s"'<>),\]}]+/gi;
 var OPAQUE_EXPORT_KEYS = new Set(["content_base64"]);
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function isUsableRoot(root) {
+  return root.length >= 4 && root !== "/" && !/^[A-Za-z]:[\\/]?$/.test(root);
+}
+var hostRootCacheKey = null;
+var hostRootCache = [];
+function hostRootPatterns() {
+  const roots = new Set;
+  for (const root of [homedir3(), tmpdir()]) {
+    if (!root)
+      continue;
+    roots.add(root);
+    try {
+      roots.add(realpathSync(root));
+    } catch {}
+  }
+  const key = [...roots].sort().join("\x00");
+  if (key === hostRootCacheKey)
+    return hostRootCache;
+  hostRootCacheKey = key;
+  hostRootCache = [...roots].filter(isUsableRoot).sort((a, b) => b.length - a.length).map((root) => new RegExp(`${escapeRegExp(root)}(?:[/\\\\]${PATH_TAIL}*)?`, "g"));
+  return hostRootCache;
+}
 function fingerprint(value) {
   return createHash3("sha256").update(value).digest("hex").slice(0, 12);
 }
@@ -23820,7 +23855,11 @@ function assertNoPrivateRefs(value, options = {}) {
   throw new Error(`Knowledge private-ref lint failed (${summary}). Store open-files/s3 refs or approved runtime secret refs instead of private .hasna, file://, raw DB/export, or cloud.env refs.`);
 }
 function redactString(value) {
-  return redactSecrets(value).text.replace(DATABASE_URL_RE, (match) => `[REDACTED:database-url:${fingerprint(match)}]`).replace(FILE_URI_RE, (match) => `[REDACTED:local-file-uri:${fingerprint(match)}]`).replace(ABSOLUTE_HASNA_PATH_RE, (match) => `[REDACTED:local-hasna-path:${fingerprint(match)}]`).replace(PRIVATE_WORKSPACE_PATH_RE, (match) => `[REDACTED:private-workspace:${fingerprint(match)}]`).replace(ABSOLUTE_LOCAL_PATH_RE, (match) => `[REDACTED:local-path:${fingerprint(match)}]`).replace(HASNA_PATH_RE, (match) => `[REDACTED:hasna-path:${fingerprint(match)}]`).replace(RAW_DB_OR_ENV_RE, (match) => `[REDACTED:private-artifact:${fingerprint(match)}]`);
+  let text = redactSecrets(value).text.replace(DATABASE_URL_RE, (match) => `[REDACTED:database-url:${fingerprint(match)}]`).replace(FILE_URI_RE, (match) => `[REDACTED:local-file-uri:${fingerprint(match)}]`).replace(ABSOLUTE_HASNA_PATH_RE, (match) => `[REDACTED:local-hasna-path:${fingerprint(match)}]`).replace(PRIVATE_WORKSPACE_PATH_RE, (match) => `[REDACTED:private-workspace:${fingerprint(match)}]`);
+  for (const pattern of [...hostRootPatterns(), ...LOCAL_PATH_PATTERNS]) {
+    text = text.replace(pattern, (match) => `[REDACTED:local-path:${fingerprint(match)}]`);
+  }
+  return text.replace(HASNA_PATH_RE, (match) => `[REDACTED:hasna-path:${fingerprint(match)}]`).replace(RAW_DB_OR_ENV_RE, (match) => `[REDACTED:private-artifact:${fingerprint(match)}]`);
 }
 function redactPrivateRefs(value) {
   if (typeof value === "string")
