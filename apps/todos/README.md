@@ -595,9 +595,18 @@ services. Use them to keep agents from starting blocked work:
 ```bash
 todos deps <task-id> --needs <blocking-task-id>
 todos deps <task-id> --graph
+todos deps <task-id> --json            # machine-readable edges (ids + status) for this task
+todos deps --project <ref> --json      # the whole-project graph (nodes + edges + cycles) in one read
 todos blocked
 todos ready
 ```
+
+`--json` returns versioned, machine-readable shapes for schedulers:
+`todos.task_dependency_edges.v1` for a single task (`dependencies` = upstream
+prerequisites, `blocked_by` = downstream dependents) and
+`todos.project_dependency_graph.v1` for `--project` (a `nodes`/`edges`/`cycles`
+adjacency list). Both are identical in local and self-hosted mode. Human output
+and `--graph --json` are unchanged.
 
 The same workflow is available to MCP clients through
 `add_task_dependency`, `remove_task_dependency`, `get_task_dependencies`, and

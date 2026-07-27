@@ -1241,6 +1241,8 @@ export type {
 // Dependency graph
 export {
   DEPENDENCY_GRAPH_SCHEMA,
+  TASK_DEPENDENCY_EDGES_SCHEMA,
+  PROJECT_DEPENDENCY_GRAPH_SCHEMA,
   getReadyTasks,
   getBlockedTaskReports,
   getCriticalPath,
@@ -1248,9 +1250,18 @@ export {
   analyzeDependencyGraph,
   getDependents,
   getBlockers,
+  toDependencyNode,
+  detectCyclesFromEdges,
+  buildTaskDependencyEdges,
+  getTaskDependencyEdges,
+  buildProjectDependencyGraph,
+  getProjectDependencyGraph,
 } from "./lib/dependency-graph.js";
 export type {
   DependencyNode,
+  DependencyEdge,
+  TaskDependencyEdges,
+  ProjectDependencyGraph,
   BlockedTaskReport,
   ReadyTaskReport,
   CriticalPathEntry,

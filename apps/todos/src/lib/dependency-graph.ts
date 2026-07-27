@@ -12,6 +12,12 @@ import type { Task } from "../types/index.js";
 
 export const DEPENDENCY_GRAPH_SCHEMA = "todos.dependency_graph.v1";
 
+/** Machine-readable edge read for a single task (`todos deps <id> --json`). */
+export const TASK_DEPENDENCY_EDGES_SCHEMA = "todos.task_dependency_edges.v1";
+
+/** Machine-readable whole-project graph (`todos deps --project <ref> --json`). */
+export const PROJECT_DEPENDENCY_GRAPH_SCHEMA = "todos.project_dependency_graph.v1";
+
 export interface DependencyNode {
   id: string;
   short_id: string | null;
@@ -20,6 +26,61 @@ export interface DependencyNode {
   priority: string;
   plan_id: string | null;
   project_id: string | null;
+}
+
+/**
+ * A single dependency edge: `task_id` depends on `depends_on` (the prerequisite
+ * must complete before the dependent can run). Same orientation as the
+ * `task_dependencies` table and the cloud `/v1/tasks/:id/dependencies` payload.
+ */
+export interface DependencyEdge {
+  task_id: string;
+  depends_on: string;
+}
+
+/**
+ * A task's direct dependency edges, resolved to nodes with id + status so a
+ * scheduler can honor ordering without a second lookup and without scraping
+ * human output.
+ *
+ * IMPORTANT — field orientation (kept identical to `getTaskWithRelations` and
+ * the human `Depends on:` / `Blocks:` output):
+ *   - `dependencies` = this task's PREREQUISITES (upstream). This task depends
+ *     on them; they must complete first. These are its blockers.
+ *   - `blocked_by` = this task's DEPENDENTS (downstream). They depend on this
+ *     task; this task blocks THEM. (The name reads backwards versus its
+ *     contents — a dependent is a task this one "blocks" — so consume by
+ *     meaning, not by name.)
+ * A scheduler gating "is this runnable" cares about `dependencies`.
+ */
+export interface TaskDependencyEdges {
+  schema_version: typeof TASK_DEPENDENCY_EDGES_SCHEMA;
+  task_id: string;
+  /**
+   * The root task's short id when the caller already holds the row (local
+   * store); `null` from a self-hosted authority, where surfacing it would cost
+   * an extra round trip and consumers key on `task_id` anyway.
+   */
+  short_id: string | null;
+  dependencies: DependencyNode[];
+  blocked_by: DependencyNode[];
+}
+
+/**
+ * The full dependency graph for a project in one read: every in-scope task as a
+ * node (with status) plus the adjacency list, so a scheduler can compute a
+ * runnable order and detect cycles in a single call. `edges` are the edges
+ * whose dependent (`task_id`) is one of `nodes`; a `depends_on` may reference a
+ * task outside `nodes` (a cross-project prerequisite). `cycles` are computed
+ * over exactly the returned `edges`.
+ */
+export interface ProjectDependencyGraph {
+  schema_version: typeof PROJECT_DEPENDENCY_GRAPH_SCHEMA;
+  generated_at: string;
+  project_id: string | null;
+  nodes: DependencyNode[];
+  edges: DependencyEdge[];
+  cycles: string[][];
 }
 
 export interface BlockedTaskReport {
@@ -87,6 +148,15 @@ function toNode(task: Task): DependencyNode {
   };
 }
 
+/**
+ * Project a full task row down to the compact {@link DependencyNode} used by the
+ * machine-readable dependency reads. Exported so callers that already hold task
+ * rows (e.g. the cloud CLI path hydrating remote edges) emit the same shape.
+ */
+export function toDependencyNode(task: Task): DependencyNode {
+  return toNode(task);
+}
+
 const PRIORITY_SCORE: Record<string, number> = {
   critical: 4,
   high: 3,
@@ -118,7 +188,16 @@ function findMissingDependencies(db: Database): Array<{ task_id: string; missing
 }
 
 function detectCycles(db: Database): string[][] {
-  const edges = db.query("SELECT task_id, depends_on FROM task_dependencies").all() as { task_id: string; depends_on: string }[];
+  const edges = db.query("SELECT task_id, depends_on FROM task_dependencies").all() as DependencyEdge[];
+  return detectCyclesFromEdges(edges);
+}
+
+/**
+ * Detect dependency cycles over an explicit edge list (`task_id -> depends_on`).
+ * A `depends_on` that never appears as a `task_id` is a leaf (no outgoing
+ * edges), so a cycle is only reported when it is fully contained in `edges`.
+ */
+export function detectCyclesFromEdges(edges: DependencyEdge[]): string[][] {
   const adj = new Map<string, string[]>();
   const nodes = new Set<string>();
   for (const e of edges) {
@@ -338,4 +417,84 @@ export function getBlockers(taskId: string, db?: Database): BlockedTaskReport | 
     stale_blockers: blockers.filter(isStaleBlocker).map(toNode),
     missing_dependencies: missing,
   };
+}
+
+/**
+ * Assemble a {@link TaskDependencyEdges} payload from already-resolved task
+ * rows. Pure (no DB access) so both the local reader below and the cloud CLI
+ * path — which hydrates remote edges via `cloudGetTaskRelations` — emit the
+ * identical versioned shape.
+ */
+export function buildTaskDependencyEdges(
+  task: { id: string; short_id: string | null },
+  dependencies: Task[],
+  blocked_by: Task[],
+): TaskDependencyEdges {
+  return {
+    schema_version: TASK_DEPENDENCY_EDGES_SCHEMA,
+    task_id: task.id,
+    short_id: task.short_id,
+    dependencies: dependencies.map(toNode),
+    blocked_by: blocked_by.map(toNode),
+  };
+}
+
+/**
+ * Read a single task's direct dependency edges as a machine-readable,
+ * versioned payload (`todos deps <id> --json`). Returns `null` when the task
+ * does not exist. Edges whose target row is missing (a dangling dependency) are
+ * skipped here; use {@link analyzeDependencyGraph} for missing-edge reporting.
+ */
+export function getTaskDependencyEdges(taskId: string, db?: Database): TaskDependencyEdges | null {
+  const d = db || getDatabase();
+  const task = getTask(taskId, d);
+  if (!task) return null;
+
+  const dependencies = getTaskDependencies(taskId, d)
+    .map((edge) => getTask(edge.depends_on, d))
+    .filter((t): t is Task => Boolean(t));
+  const blocked_by = getTaskDependents(taskId, d)
+    .map((edge) => getTask(edge.task_id, d))
+    .filter((t): t is Task => Boolean(t));
+
+  return buildTaskDependencyEdges(task, dependencies, blocked_by);
+}
+
+/**
+ * Assemble a {@link ProjectDependencyGraph} from resolved nodes and edges.
+ * Pure (no DB access) so the local reader and the cloud CLI path share one
+ * shape. `edges` are filtered to those whose dependent (`task_id`) is a node;
+ * cycles are detected over that filtered set.
+ */
+export function buildProjectDependencyGraph(
+  projectId: string | null,
+  tasks: Task[],
+  edges: DependencyEdge[],
+  generatedAt: string = new Date().toISOString(),
+): ProjectDependencyGraph {
+  const nodeIds = new Set(tasks.map((t) => t.id));
+  const scoped = edges
+    .filter((edge) => nodeIds.has(edge.task_id))
+    .map((edge) => ({ task_id: edge.task_id, depends_on: edge.depends_on }));
+  return {
+    schema_version: PROJECT_DEPENDENCY_GRAPH_SCHEMA,
+    generated_at: generatedAt,
+    project_id: projectId,
+    nodes: tasks.map(toNode),
+    edges: scoped,
+    cycles: detectCyclesFromEdges(scoped),
+  };
+}
+
+/**
+ * Read a whole project's dependency graph in one call (`todos deps --project
+ * <ref> --json`): every in-scope task as a node plus the adjacency list and any
+ * cycles. `filter.project_id` scopes the nodes; an absent scope reads every
+ * task in the local store.
+ */
+export function getProjectDependencyGraph(filter: GraphFilter = {}, db?: Database): ProjectDependencyGraph {
+  const d = db || getDatabase();
+  const tasks = filterTasks(listTasks({}, d), filter);
+  const edges = d.query("SELECT task_id, depends_on FROM task_dependencies").all() as DependencyEdge[];
+  return buildProjectDependencyGraph(filter.project_id ?? null, tasks, edges);
 }

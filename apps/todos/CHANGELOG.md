@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Machine-readable dependency reads.** `todos deps <id> --json` now returns a versioned,
+  status-bearing edge payload (`schema_version: "todos.task_dependency_edges.v1"`) with
+  `dependencies` (upstream prerequisites) and `blocked_by` (downstream dependents) as compact
+  `{ id, short_id, title, status, priority, plan_id, project_id }` nodes — identical in local
+  and self-hosted mode. New whole-project graph read `todos deps --project <ref> --json`
+  (`schema_version: "todos.project_dependency_graph.v1"`) returns `nodes` + adjacency `edges` +
+  `cycles` in a single call, so a scheduler can order a batch of tasks without one `deps <id>`
+  call per task.
+
+### Changed
+
+- **BREAKING (CLI JSON contract): `todos deps <id> --json` output shape changed.** It previously
+  emitted divergent, unversioned shapes — local returned full task rows under
+  `dependencies`/`blocked_by`, while self-hosted returned bare `{ task_id, depends_on }` edges
+  with no status. Both now emit the unified `todos.task_dependency_edges.v1` shape above (compact
+  nodes; self-hosted gains id + status parity). Scripts that read fields only present on the full
+  task row (e.g. `description`, `tags`, `created_at`, `metadata`) from `deps --json` must migrate to
+  `show --json` / `inspect --json`. Human (non-JSON) output and `deps <id> --graph --json` are
+  unchanged.
+
 ## [0.13.0] - 2026-07-25
 
 ### Security

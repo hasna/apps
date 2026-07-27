@@ -11,7 +11,16 @@ import {
   updateProject,
 } from "../../db/projects.js";
 import { addComment } from "../../db/comments.js";
-import { getTodosCloudClient, cloudAddComment, cloudCreateProject, cloudListProjects, cloudListTasks, cloudResolveProject, cloudUpdateProject, cloudAddDependency, cloudRemoveDependency, cloudGetDependencies, cloudRenameProject } from "../cloud-router.js";
+import { getTodosCloudClient, cloudAddComment, cloudCreateProject, cloudListProjects, cloudListTasks, cloudResolveProject, cloudResolveProjectRef, cloudUpdateProject, cloudAddDependency, cloudRemoveDependency, cloudGetDependencies, cloudGetTaskRelations, cloudRenameProject } from "../cloud-router.js";
+import {
+  buildProjectDependencyGraph,
+  buildTaskDependencyEdges,
+  getProjectDependencyGraph,
+  getTaskDependencyEdges,
+  type DependencyEdge,
+  type ProjectDependencyGraph,
+} from "../../lib/dependency-graph.js";
+import type { Task } from "../../types/index.js";
 import { searchTasks } from "../../lib/search.js";
 import {
   deleteSearchView,
@@ -30,6 +39,76 @@ import { redactBroadOutput, redactBroadTasks } from "../output-redaction.js";
 
 function collectOption(value: string, previous: string[] = []): string[] {
   return [...previous, value];
+}
+
+/** The resolved cloud/self-hosted client, when a remote authority is selected. */
+type CloudClient = NonNullable<ReturnType<typeof getTodosCloudClient>>;
+
+/** Bounded concurrency for per-task edge reads while assembling a cloud graph. */
+const CLOUD_GRAPH_EDGE_CONCURRENCY = 6;
+
+/**
+ * True unless the row is the `unresolved` placeholder `cloudGetTaskRelations`
+ * synthesizes for an edge whose target task cannot be read. Dropping these
+ * keeps the cloud per-task edge read identical to local (whose SQL JOIN already
+ * omits dangling edges) instead of leaking a synthetic "pending" node.
+ */
+function isResolvedTask(task: Task): boolean {
+  const metadata = task.metadata as Record<string, unknown> | null | undefined;
+  return !(metadata && metadata["unresolved"] === true);
+}
+
+/**
+ * Assemble the whole-project dependency graph from a self-hosted authority.
+ * The cloud API exposes edges per task, so nodes come from one list call and
+ * the adjacency list is gathered from each task's dependency edges (bounded
+ * concurrency). A single unreadable task degrades to a missing node/edge rather
+ * than failing the whole read, mirroring `cloudGetTaskRelations`.
+ */
+async function buildCloudProjectDependencyGraph(
+  cloud: CloudClient,
+  projectId: string | null,
+): Promise<ProjectDependencyGraph> {
+  const tasks = await cloudListTasks(cloud, projectId ? { project_id: projectId } : {});
+  const edges: DependencyEdge[] = [];
+  const seen = new Set<string>();
+  let cursor = 0;
+  const workers = Array.from(
+    { length: Math.min(CLOUD_GRAPH_EDGE_CONCURRENCY, tasks.length) },
+    async () => {
+      for (let index = cursor++; index < tasks.length; index = cursor++) {
+        const task = tasks[index]!;
+        try {
+          const deps = await cloudGetDependencies(cloud, task.id);
+          for (const edge of deps.dependencies) {
+            const key = `${edge.task_id}|${edge.depends_on}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            edges.push({ task_id: edge.task_id, depends_on: edge.depends_on });
+          }
+        } catch {
+          // A single unreadable task must not fail the whole-project read.
+        }
+      }
+    },
+  );
+  await Promise.all(workers);
+  return buildProjectDependencyGraph(projectId, tasks, edges);
+}
+
+/** Human rendering for the whole-project graph (JSON is the primary surface). */
+function printProjectDependencyGraph(graph: ProjectDependencyGraph): void {
+  if (graph.nodes.length === 0) {
+    console.log(chalk.dim("No tasks in scope."));
+    return;
+  }
+  console.log(chalk.bold(`Dependency graph: ${graph.nodes.length} task(s), ${graph.edges.length} edge(s)`));
+  if (graph.cycles.length > 0) {
+    console.log(chalk.red(`  ${graph.cycles.length} cycle(s) detected`));
+  }
+  for (const edge of graph.edges) {
+    console.log(`  ${chalk.cyan(edge.task_id.slice(0, 8))} depends on ${chalk.cyan(edge.depends_on.slice(0, 8))}`);
+  }
 }
 
 function splitList(value: string | string[] | undefined): string[] | undefined {
@@ -476,15 +555,51 @@ export function registerProjectCommands(program: Command) {
 
   // deps
   program
-    .command("deps <id>")
-    .description("Manage task dependencies")
+    .command("deps [id]")
+    .description("Read or manage task dependencies. With no id, --project reads the whole-project dependency graph")
     .option("--needs <dep-id>", "Add dependency (this task needs dep-id)")
     .option("--remove <dep-id>", "Remove dependency")
     .option("--graph", "Show the dependency graph instead of direct edges")
     .option("--direction <direction>", "Graph direction: up, down, or both", "both")
-    .action(async (id: string, opts) => {
+    .option("--project <ref>", "With no id: read the whole-project graph (project id, slug, name, or path)")
+    .action(async (id: string | undefined, opts) => {
       const globalOpts = program.opts();
       const cloud = getTodosCloudClient();
+
+      // Whole-project dependency graph in one read — `todos deps --project <ref>
+      // --json` (or, inside a registered repo, `todos deps` against the
+      // auto-detected project). Emits a versioned adjacency list + cycles so a
+      // scheduler can order a batch without one `deps <id>` call per task.
+      if (!id) {
+        // A mutating or edge-scoped flag with no id is a forgotten argument, not
+        // a whole-project request. Fail loudly (commander used to reject this as
+        // a missing required argument) rather than silently ignoring the write.
+        if (opts.needs || opts.remove || opts.graph || opts.direction !== "both") {
+          handleError(new Error("A task id is required with --needs, --remove, --graph, or --direction."));
+        }
+        const projectRef = opts.project ?? globalOpts.project;
+        if (cloud) {
+          // Fail closed: a bulk read must be scoped to a project. There is no
+          // cwd-based project to auto-detect against a shared authority, and
+          // crawling every task in the dataset is never the intent.
+          if (!projectRef) {
+            handleError(new Error("deps needs a task id, or --project <ref> to read a whole-project graph."));
+          }
+          const projectId = await cloudResolveProjectRef(cloud, projectRef);
+          const graph = await buildCloudProjectDependencyGraph(cloud, projectId);
+          if (globalOpts.json) { output(graph, true); return; }
+          printProjectDependencyGraph(graph);
+          return;
+        }
+        const resolvedProjectId = projectRef ? resolveExplicitProject(projectRef).id : autoProject(globalOpts);
+        if (!resolvedProjectId) {
+          handleError(new Error("deps needs a task id, or --project <ref> to read a whole-project graph."));
+        }
+        const graph = getProjectDependencyGraph({ project_id: resolvedProjectId });
+        if (globalOpts.json) { output(graph, true); return; }
+        printProjectDependencyGraph(graph);
+        return;
+      }
 
       // self_hosted cloud routing: dependency edges live on the SHARED dataset.
       // The previous path read LOCAL sqlite and 404'd cloud tasks. The recursive
@@ -506,8 +621,28 @@ export function registerProjectCommands(program: Command) {
           else console.log(removed ? chalk.green("Dependency removed.") : chalk.red("Dependency not found."));
           return;
         }
+        if (globalOpts.json) {
+          // Hydrate the remote edges into nodes with status so the JSON read
+          // carries ids + status (the bare edge payload has neither) and
+          // matches the local shape exactly. Edges whose target row is
+          // unreadable are DROPPED — mirroring the local SQL JOIN, which omits
+          // dangling edges — rather than emitting the `unresolved` placeholder
+          // (a synthetic "pending" node a scheduler would mistake for a real
+          // task). The edge read fires first (staying on
+          // `/v1/tasks/:id/dependencies`); `short_id` is null rather than
+          // spending an extra round trip on the root task row.
+          const relations = await cloudGetTaskRelations(cloud, cloudId);
+          output(
+            buildTaskDependencyEdges(
+              { id: cloudId, short_id: null },
+              relations.dependencies.filter(isResolvedTask),
+              relations.blocked_by.filter(isResolvedTask),
+            ),
+            true,
+          );
+          return;
+        }
         const edges = await cloudGetDependencies(cloud, cloudId);
-        if (globalOpts.json) { output(edges, true); return; }
         if (edges.dependencies.length > 0) {
           console.log(chalk.bold("Depends on:"));
           for (const dep of edges.dependencies) console.log(`  ${chalk.cyan(dep.depends_on)}`);
@@ -565,16 +700,18 @@ export function registerProjectCommands(program: Command) {
         };
 
         printNode(graph, 0, "root");
+      } else if (globalOpts.json) {
+        // Machine-readable edge read via the single canonical reader, so the
+        // JSON path and the exported library helper cannot drift apart.
+        const edges = getTaskDependencyEdges(resolvedId);
+        if (!edges) handleError(new Error("Task not found."));
+        output(edges, true);
+        return;
       } else {
-        // Show dependencies
+        // Show dependencies (human)
         const task = getTaskWithRelations(resolvedId);
         if (!task) {
           handleError(new Error("Task not found."));
-        }
-
-        if (globalOpts.json) {
-          output({ dependencies: task.dependencies, blocked_by: task.blocked_by }, true);
-          return;
         }
 
         if (task.dependencies.length > 0) {

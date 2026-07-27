@@ -652,6 +652,17 @@ describe("remote CLI entrypoint authority boundary", () => {
             blocked_by: [],
           });
         }
+        // The JSON read hydrates edge targets into nodes (id + status), so the
+        // dependency task row is served too. The recursive graph and the human
+        // views still only need the flat edge endpoint above.
+        const taskRow = url.pathname.match(/^\/v1\/tasks\/([^/]+)$/);
+        if (taskRow && request.method === "GET") {
+          const id = decodeURIComponent(taskRow[1]!);
+          if (id === DEP_ID) {
+            return Response.json({ task: { id: DEP_ID, short_id: null, project_id: null, parent_id: null, plan_id: null, title: "Upstream dep", description: null, status: "pending", priority: "medium", tags: [], metadata: {}, version: 1, created_at: "2026-07-10T00:00:00.000Z", updated_at: "2026-07-10T00:00:00.000Z" } });
+          }
+          return Response.json({ error: "task not found" }, { status: 404 });
+        }
         return Response.json({ error: `fixture route missing: ${request.method} ${url.pathname}` }, { status: 404 });
       },
     });
@@ -676,7 +687,6 @@ describe("remote CLI entrypoint authority boundary", () => {
     };
     const before = recursiveInventory(cwd);
     try {
-      const baseJson = { dependencies: [{ task_id: TASK_ID, depends_on: DEP_ID }], blocked_by: [] };
       for (const args of [
         ["--json", "deps", TASK_ID],
         ["--json", "deps", TASK_ID, "--graph"],
@@ -686,10 +696,19 @@ describe("remote CLI entrypoint authority boundary", () => {
         const requestCount = requests.length;
         const result = await runCli(executable, args, env, cwd);
         expect({ args, exitCode: result.exitCode, stderr: result.stderr }).toEqual({ args, exitCode: 0, stderr: "" });
-        // Every variant reaches HTTP (no Stage-A rejection, no local fallback).
+        // Every variant reaches HTTP (no Stage-A rejection, no local fallback)
+        // and the edge read is the FIRST call for the flag combination.
         expect(requests[requestCount]).toBe(`GET /v1/tasks/${TASK_ID}/dependencies`);
         if (args.includes("--json")) {
-          expect(JSON.parse(result.stdout)).toEqual(baseJson);
+          // The machine-readable read hydrates the flat edges into a versioned,
+          // status-bearing shape that matches local mode (never the bare edge rows).
+          const payload = JSON.parse(result.stdout);
+          expect(payload.schema_version).toBe("todos.task_dependency_edges.v1");
+          expect(payload.task_id).toBe(TASK_ID);
+          expect(payload.dependencies).toEqual([
+            { id: DEP_ID, short_id: null, title: "Upstream dep", status: "pending", priority: "medium", plan_id: null, project_id: null },
+          ]);
+          expect(payload.blocked_by).toEqual([]);
         } else {
           expect(result.stdout).toContain(DEP_ID);
         }

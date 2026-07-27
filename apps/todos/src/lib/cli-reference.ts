@@ -112,7 +112,7 @@ export const CLI_COMMAND_GROUPS: CliCommandGroup[] = [
       { name: "watch", summary: "Terminal notifications and watch rules", example: "todos watch once" },
       { name: "handoff-packet", summary: "Rich offline handoff", example: "todos handoff-packet build --agent me" },
       { name: "decisions", summary: "ADR decision records and knowledge snapshots", example: "todos decisions create -t \"Use SQLite\" -d \"Local WAL DB\"" },
-      { name: "deps", summary: "Dependency graph", example: "todos deps ready --json" },
+      { name: "deps", summary: "Dependency graph", example: "todos deps <id> --json" },
     ],
   },
   {
