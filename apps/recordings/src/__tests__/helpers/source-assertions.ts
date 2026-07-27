@@ -83,6 +83,50 @@ export function withoutComments(source: string): string {
 }
 
 /**
+ * Evaluate a Swift boolean condition for a given binding of its identifiers.
+ *
+ * Folded in from PR #43, which pinned the clipboard-restore guard by evaluating it for BOTH values
+ * of the decision rather than by comparing its text. That is the half worth keeping: an exact
+ * `toBe("shouldRestore")` on the captured condition kills the inversion, but it also fails on
+ * `(shouldRestore)`, on a trailing comment, and on any other semantics-preserving rewrite — so it
+ * reports refactors as defects while proving nothing about behaviour.
+ *
+ * Deliberately narrow and fail-CLOSED: `true`, `false`, `!x`, parentheses, and identifiers present
+ * in `env`. Anything else throws. An added disjunct (`shouldRestore || stillOwnsChangeCount`) is an
+ * unevaluatable expression, not a passing one — which is the behaviour that matters, because that
+ * disjunct is exactly how the transcript-destroying defect gets reintroduced. Extend the evaluator
+ * when a new shape is legitimate; do not loosen the assertion.
+ */
+export function evaluateSwiftCondition(condition: string, env: Record<string, boolean>): boolean {
+  // Block and line comments carry no truth value; #43's version threw on `if x /* why */ {`.
+  const text = condition
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/\/\/[^\n]*/g, " ")
+    .trim();
+  if (text === "true") return true;
+  if (text === "false") return false;
+  if (text.startsWith("!")) return !evaluateSwiftCondition(text.slice(1), env);
+  // Only strip parens that wrap the WHOLE expression, so `(a) || (b)` is not silently reduced.
+  if (text.startsWith("(") && text.endsWith(")")) {
+    let depth = 0;
+    let wrapsAll = true;
+    for (let i = 0; i < text.length; i += 1) {
+      if (text[i] === "(") depth += 1;
+      else if (text[i] === ")") {
+        depth -= 1;
+        if (depth === 0 && i < text.length - 1) wrapsAll = false;
+      }
+    }
+    if (wrapsAll) return evaluateSwiftCondition(text.slice(1, -1), env);
+  }
+  if (text in env) return env[text]!;
+  throw new Error(
+    `condition contains an expression this evaluator cannot decide: ${JSON.stringify(text)} — ` +
+      "extend the evaluator, do not loosen the assertion",
+  );
+}
+
+/**
  * Every Swift source under a root, so an absence claim can be made about the app rather than about
  * whichever files were on the reviewer's mind.
  */

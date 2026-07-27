@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
+  evaluateSwiftCondition,
   expectOrder,
   sliceBetween,
   sliceBetweenUnique,
@@ -736,7 +737,24 @@ describe("secure-input delivery contract", () => {
     // or renaming `pasteboard`, is a refactor rather than a test failure.
     const restoreGuard = settlementClosure.match(/if ([^\n{]+?)\s*\{[^{}]*?previousClipboard\.restore\(/);
     expect(restoreGuard, "the restore is no longer guarded by a single `if`").not.toBeNull();
-    expect(restoreGuard?.[1]).toBe("shouldRestore");
+
+    // Folded in from PR #43 (closed as superseded by this test): evaluate the captured guard for
+    // BOTH values of the decision instead of pinning its spelling. Each direction is a distinct
+    // real defect — inverted, a secure-input refusal restores over the transcript the status line
+    // has just told the owner to press Cmd-V for; hardcoded `true`, every refusal destroys it;
+    // hardcoded `false`, no successful dictation ever gets the owner's clipboard back.
+    //
+    // #43 located this call site by `condition.includes("shouldRestore")`, a substring test on the
+    // guard's text. That located it by a proxy a plausible edit can satisfy or break: a second
+    // restore added INSIDE this closure under any condition not mentioning `shouldRestore` left
+    // #43's assertion satisfied (measured: EXIT=0 across all 104 engine-facing tests), and a
+    // legitimate third site guarded by `if shouldRestoreAfterRetry {` tripped it as a false
+    // positive. The `restores.length` count above, scoped to this closure, is the discriminator
+    // that holds — it excludes `writeClipboardPreservingOnFailure` because that restore is in a
+    // different FUNCTION, not because its guard happens to be spelled differently.
+    const restoreCondition = restoreGuard?.[1] ?? "";
+    expect(evaluateSwiftCondition(restoreCondition, { shouldRestore: true })).toBe(true);
+    expect(evaluateSwiftCondition(restoreCondition, { shouldRestore: false })).toBe(false);
 
     // And nothing else in settlement may destroy the clipboard. `pasteboard.clearContents()` wipes
     // the transcript the status line just told the owner to press Cmd-V for, without touching
