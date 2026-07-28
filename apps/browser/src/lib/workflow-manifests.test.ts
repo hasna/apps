@@ -11,6 +11,8 @@ let executeResult: Record<string, unknown> = { result: { result: { status: "ok" 
 let executeError: Error | undefined;
 let readFileError: Error | undefined;
 let retrieveDeleted = true;
+let deletedIds: string[] = [];
+let retrievedIds: string[] = [];
 
 const provider: KernelSecretsProvider = {
   async getSecretValue(key) {
@@ -33,16 +35,29 @@ beforeEach(() => {
   executeError = undefined;
   readFileError = undefined;
   retrieveDeleted = true;
+  deletedIds = [];
+  retrievedIds = [];
   setKernelSecretsProviderForTests(provider);
   setKernelClientFactoryForTests(() => ({
     browsers: {
       async create() {
-        return { session_id: "kernel-workflow-session", cdp_ws_url: "wss://kernel.test/cdp" };
+        return { session_id: "kernel-workflow-exec", cdp_ws_url: "wss://kernel.test/cdp" };
       },
-      async deleteByID() {},
-      async retrieve() {
+      async list() {
         return {
-          session_id: "kernel-workflow-session",
+          items: [{
+            session_id: "kernel-workflow-close",
+            cdp_ws_url: "wss://kernel.test/cdp",
+          }],
+        };
+      },
+      async deleteByID(id) {
+        deletedIds.push(id);
+      },
+      async retrieve(id) {
+        retrievedIds.push(id);
+        return {
+          session_id: "kernel-workflow-close",
           status: retrieveDeleted ? "deleted" : "active",
           deleted_at: retrieveDeleted ? "2026-06-29T00:00:00.000Z" : null,
         };
@@ -82,6 +97,8 @@ describe("file-backed Kernel workflow runs", () => {
     expect(evidence.ok).toBe(false);
     expect(evidence.error).toContain("remote failed");
     expect(evidence.cleanup).toMatchObject({ closeAttempted: true, closed: true, verified: true });
+    expect(deletedIds).toEqual(["kernel-workflow-close"]);
+    expect(retrievedIds).toEqual(["kernel-workflow-close"]);
   });
 
   it("closes and verifies cleanup when Kernel execution throws", async () => {

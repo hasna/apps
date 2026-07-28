@@ -685,7 +685,10 @@ function isAlreadyClosedKernelError(err: unknown): boolean {
 async function verifyKernelSandboxClosed(
   sandbox: KernelSandbox,
 ): Promise<{ closed: boolean; verified: boolean; status?: string }> {
-  const sessionId = sandbox.metadata.sessionId;
+  const closeId = sandbox.metadata.closeId;
+  if (!closeId) {
+    return { closed: false, verified: false, status: "close-id-unavailable" };
+  }
   const deadline = Date.now() + 1500;
   let latest: { closed: boolean; verified: boolean; status?: string } = {
     closed: false,
@@ -694,7 +697,7 @@ async function verifyKernelSandboxClosed(
   };
 
   while (Date.now() <= deadline) {
-    latest = await inspectKernelSessionClosed(sessionId);
+    latest = await inspectKernelSessionClosed(closeId);
     if (latest.verified) return latest;
     await new Promise((resolveWait) => setTimeout(resolveWait, Math.min(500, Math.max(0, deadline - Date.now()))));
   }

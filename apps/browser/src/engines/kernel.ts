@@ -44,6 +44,8 @@ export interface KernelCreateOptions {
 
 export interface KernelBrowserMetadata {
   sessionId: string;
+  execId: string;
+  closeId?: string;
   cdpWsUrl: string;
   webdriverWsUrl?: string;
   browserLiveViewUrl?: string;
@@ -240,6 +242,7 @@ export interface KernelReplayInfo {
 
 export interface KernelPlaywrightResult {
   success: boolean;
+  exec_id?: string;
   result?: unknown;
   error?: string;
   stdout?: string;
@@ -276,9 +279,13 @@ let kernelClientFactoryOverride: KernelClientFactory | undefined;
 let secretsProviderOverride: KernelSecretsProvider | undefined;
 let cdpConnectorOverride: KernelCdpConnector | undefined;
 let cachedSecretsProvider: KernelSecretsProvider | undefined;
+const kernelCloseIds = new Map<string, string>();
+const KERNEL_CLOSE_ID_RESOLVE_MAX_ATTEMPTS = 5;
+const KERNEL_CLOSE_ID_RESOLVE_RETRY_BASE_MS = 100;
 
 export function setKernelClientFactoryForTests(factory?: KernelClientFactory): void {
   kernelClientFactoryOverride = factory;
+  kernelCloseIds.clear();
 }
 
 export function setKernelSecretsProviderForTests(provider?: KernelSecretsProvider): void {
@@ -455,10 +462,14 @@ export async function createKernelSandbox(options: KernelCreateOptions = {}): Pr
   } catch (err) {
     throw toRedactedKernelError(err, "Failed to create Kernel browser session", "KERNEL_CREATE_FAILED");
   }
+  const closeId = await findKernelCloseId(client, browser.cdp_ws_url);
+  if (closeId) kernelCloseIds.set(browser.session_id, closeId);
   return {
     client,
     metadata: {
       sessionId: browser.session_id,
+      execId: browser.session_id,
+      closeId,
       cdpWsUrl: browser.cdp_ws_url,
       webdriverWsUrl: browser.webdriver_ws_url,
       browserLiveViewUrl: browser.browser_live_view_url,
@@ -480,16 +491,32 @@ export async function createKernelSandbox(options: KernelCreateOptions = {}): Pr
 }
 
 export async function closeKernelSandbox(sandbox: KernelSandbox): Promise<void> {
-  await sandbox.client.browsers.deleteByID(sandbox.metadata.sessionId);
+  const closeId = sandbox.metadata.closeId
+    ?? kernelCloseIds.get(sandbox.metadata.execId)
+    ?? await resolveKernelCloseId(sandbox.client, sandbox.metadata.cdpWsUrl);
+  if (!closeId) {
+    throw new BrowserError(
+      "Unable to resolve close_id for the Kernel browser; refusing to delete it with exec_id",
+      "KERNEL_CLOSE_ID_NOT_FOUND",
+      true,
+    );
+  }
+  sandbox.metadata.closeId = closeId;
+  await sandbox.client.browsers.deleteByID(closeId);
+  kernelCloseIds.delete(sandbox.metadata.execId);
 }
 
-export async function deleteKernelBrowser(idOrName: string, options: KernelCreateOptions = {}): Promise<{ deleted: string }> {
+export async function deleteKernelBrowser(idOrName: string, options: KernelCreateOptions = {}): Promise<{ deleted: string; close_id: string }> {
   const client = await createConfiguredKernelClient(options);
+  const closeId = kernelCloseIds.get(idOrName) ?? idOrName;
   try {
-    await client.browsers.deleteByID(idOrName);
-    return { deleted: idOrName };
+    await client.browsers.deleteByID(closeId);
+    for (const [execId, mappedCloseId] of kernelCloseIds) {
+      if (execId === idOrName || mappedCloseId === closeId) kernelCloseIds.delete(execId);
+    }
+    return { deleted: closeId, close_id: closeId };
   } catch (err) {
-    throw toRedactedKernelError(err, `Failed to delete Kernel browser '${idOrName}'`, "KERNEL_DELETE_FAILED");
+    throw toRedactedKernelError(err, `Failed to delete Kernel browser '${closeId}'`, "KERNEL_DELETE_FAILED");
   }
 }
 
@@ -651,6 +678,7 @@ export async function executeKernelPlaywright(
     });
     return {
       ...result,
+      exec_id: sessionId,
       result: redactKernelResult(result.result),
       error: result.error ? redactKernelSensitiveText(result.error) : undefined,
       stderr: result.stderr ? redactKernelSensitiveText(result.stderr) : undefined,
@@ -802,9 +830,32 @@ async function listKernelBrowsersWithClient(
   return (payload.items ?? payload.data ?? []).slice(0, limit);
 }
 
+async function findKernelCloseId(client: KernelClientLike, cdpWsUrl: string): Promise<string | undefined> {
+  if (!client.browsers.list) return undefined;
+  try {
+    const sessions = await listKernelBrowsersWithClient(client, { status: "active", limit: 100 });
+    return sessions.find((session) => session.cdp_ws_url === cdpWsUrl)?.session_id;
+  } catch {
+    return undefined;
+  }
+}
+
+async function resolveKernelCloseId(client: KernelClientLike, cdpWsUrl: string): Promise<string | undefined> {
+  if (!client.browsers.list) return undefined;
+  for (let attempt = 1; attempt <= KERNEL_CLOSE_ID_RESOLVE_MAX_ATTEMPTS; attempt += 1) {
+    const closeId = await findKernelCloseId(client, cdpWsUrl);
+    if (closeId) return closeId;
+    if (attempt < KERNEL_CLOSE_ID_RESOLVE_MAX_ATTEMPTS) {
+      await sleep(KERNEL_CLOSE_ID_RESOLVE_RETRY_BASE_MS * attempt);
+    }
+  }
+  return undefined;
+}
+
 function sanitizeKernelBrowser(browser: KernelBrowserCreateResponse): Record<string, unknown> {
   return {
     session_id: browser.session_id,
+    close_id: browser.session_id,
     name: browser.name,
     status: browser.deleted_at ? "deleted" : "active",
     created_at: browser.created_at,

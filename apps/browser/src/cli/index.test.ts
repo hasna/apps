@@ -29,6 +29,7 @@ async function runCli(
 async function runCliWithTimeout(
   args: string[],
   timeoutMs: number,
+  envOverrides: Record<string, string> = {},
 ): Promise<{ stdout: string; stderr: string; code: number; timedOut: boolean }> {
   const proc = Bun.spawn(
     ["bun", "run", join(import.meta.dir, "index.tsx"), ...args],
@@ -40,6 +41,7 @@ async function runCliWithTimeout(
         BROWSER_DB_PATH: process.env["BROWSER_DB_PATH"],
         BROWSER_DATA_DIR: process.env["BROWSER_DATA_DIR"],
         HASNA_EVENTS_DIR: join(tmpDir, "events"),
+        ...envOverrides,
       },
     }
   );
@@ -143,6 +145,8 @@ describe("CLI — help flags", () => {
     expect(code).toBe(0);
     expect(stdout).toContain("status");
     expect(stdout).toContain("sessions");
+    expect(stdout).toContain("<exec_id> <code>");
+    expect(stdout).toContain("<close_id>");
     expect(stdout).toContain("files");
     expect(stdout).toContain("replays");
   });
@@ -159,8 +163,95 @@ describe("CLI — help flags", () => {
   it("browser kernel open --help shows stealth mode", async () => {
     const { stdout, code } = await runCli("kernel", "open", "--help");
     expect(code).toBe(0);
+    expect(stdout).toContain("exec_id");
     expect(stdout).toContain("--kernel-stealth");
   });
+
+  it("routes explicit Kernel exec_id and close_id values end to end", async () => {
+    const requests: string[] = [];
+    const cdpUrl = "wss://kernel.test/cdp-distinct";
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        requests.push(`${request.method} ${url.pathname}`);
+        if (request.method === "POST" && url.pathname === "/browsers") {
+          return Response.json({ session_id: "kernel-exec-id", cdp_ws_url: cdpUrl });
+        }
+        if (request.method === "GET" && url.pathname === "/browsers") {
+          return Response.json(
+            [{ session_id: "kernel-close-id", cdp_ws_url: cdpUrl, tags: { workflow: "test" } }],
+            { headers: { "x-has-more": "false" } },
+          );
+        }
+        if (request.method === "POST" && url.pathname === "/browsers/kernel-exec-id/playwright/execute") {
+          return Response.json({ success: true, result: "ok" });
+        }
+        if (request.method === "DELETE" && url.pathname === "/browsers/kernel-close-id") {
+          return new Response(null, { status: 204 });
+        }
+        return Response.json({ error: "unexpected request" }, { status: 404 });
+      },
+    });
+    const env = {
+      KERNEL_API_KEY: "kernel-test-key",
+      HASNA_SECRETS_DB_PATH: join(tmpDir, "secrets.db"),
+      HASNA_SECRETS_KEY_DIR: join(tmpDir, "secrets-key"),
+    };
+    const baseUrl = server.url.origin;
+
+    try {
+      const open = await runCliWithTimeout(
+        ["kernel", "open", "--json", "--kernel-base-url", baseUrl],
+        10_000,
+        env,
+      );
+      expect(open.code).toBe(0);
+      expect(JSON.parse(open.stdout).session).toMatchObject({
+        id: "kernel-exec-id",
+        remote_session_id: "kernel-exec-id",
+        exec_id: "kernel-exec-id",
+      });
+
+      const sessions = await runCliWithTimeout(
+        ["kernel", "sessions", "--json"],
+        10_000,
+        { ...env, KERNEL_BASE_URL: baseUrl },
+      );
+      expect(sessions.code).toBe(0);
+      expect(JSON.parse(sessions.stdout).sessions[0]).toMatchObject({
+        session_id: "kernel-close-id",
+        close_id: "kernel-close-id",
+      });
+
+      const execution = await runCliWithTimeout(
+        ["kernel", "exec", "kernel-exec-id", "return 'ok';", "--json"],
+        10_000,
+        { ...env, KERNEL_BASE_URL: baseUrl },
+      );
+      expect(execution.code).toBe(0);
+      expect(JSON.parse(execution.stdout)).toMatchObject({
+        success: true,
+        result: "ok",
+        exec_id: "kernel-exec-id",
+      });
+
+      const close = await runCliWithTimeout(
+        ["kernel", "close", "kernel-close-id", "--json"],
+        10_000,
+        { ...env, KERNEL_BASE_URL: baseUrl },
+      );
+      expect(close.code).toBe(0);
+      expect(JSON.parse(close.stdout)).toEqual({
+        deleted: "kernel-close-id",
+        close_id: "kernel-close-id",
+      });
+      expect(requests).toContain("POST /browsers/kernel-exec-id/playwright/execute");
+      expect(requests).toContain("DELETE /browsers/kernel-close-id");
+    } finally {
+      server.stop(true);
+    }
+  }, 45_000);
 
   it("browser extension --help shows subcommands", async () => {
     const { stdout, code } = await runCli("extension", "--help");

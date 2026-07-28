@@ -156,7 +156,7 @@ export function register(program: Command) {
 
   kernel
     .command("sessions")
-    .description("List Kernel browser sessions")
+    .description("List Kernel browser sessions and their close_id values")
     .option("--status <status>", "Kernel status filter", "active")
     .option("--limit <n>", "Maximum sessions", "25")
     .option("--json", "Output as JSON")
@@ -164,7 +164,7 @@ export function register(program: Command) {
       const sessions = await listKernelBrowsers({ status: opts.status, limit: parseNumber(opts.limit, "--limit") });
       printJsonOrText({ sessions }, opts.json, () => {
         if (sessions.length === 0) console.log(chalk.gray("No Kernel sessions found"));
-        for (const session of sessions) console.log(`${session.session_id} ${session.status ?? ""} ${session.name ?? ""}`);
+        for (const session of sessions) console.log(`${session.close_id} ${session.status ?? ""} ${session.name ?? ""}`);
       });
     });
 
@@ -178,11 +178,12 @@ export function register(program: Command) {
     });
 
   kernel
-    .command("close <session>")
-    .description("Delete a Kernel browser session")
-    .action(async (session: string) => {
-      const result = await deleteKernelBrowser(remoteId(session));
-      console.log(chalk.green(`✓ Deleted Kernel session: ${result.deleted}`));
+    .command("close <close_id>")
+    .description("Delete a Kernel browser using close_id from `kernel sessions`")
+    .option("--json", "Output as JSON")
+    .action(async (closeId: string, opts: { json?: boolean }) => {
+      const result = await deleteKernelBrowser(closeId);
+      printJsonOrText(result, opts.json, () => console.log(chalk.green(`✓ Deleted Kernel session: ${result.close_id}`)));
     });
 
   const files = kernel.command("files").description("Inspect and download files from active Kernel browser sessions");
@@ -215,12 +216,12 @@ export function register(program: Command) {
     });
 
   kernel
-    .command("exec <session> <code>")
-    .description("Execute Playwright/TypeScript code inside a Kernel browser VM")
+    .command("exec <exec_id> <code>")
+    .description("Execute Playwright/TypeScript code using exec_id from `kernel open`")
     .option("--timeout-sec <seconds>", "Execution timeout")
     .option("--json", "Output as JSON")
-    .action(async (session: string, code: string, opts: { timeoutSec?: string; json?: boolean }) => {
-      const result = await executeKernelPlaywright(remoteId(session), code, { timeoutSec: parseNumber(opts.timeoutSec, "--timeout-sec") });
+    .action(async (execId: string, code: string, opts: { timeoutSec?: string; json?: boolean }) => {
+      const result = await executeKernelPlaywright(remoteId(execId), code, { timeoutSec: parseNumber(opts.timeoutSec, "--timeout-sec") });
       printJsonOrText(result, opts.json, () => console.log(JSON.stringify(result.result ?? result, null, 2)));
     });
 
@@ -289,7 +290,7 @@ export function register(program: Command) {
 
   addKernelOptions(kernel
     .command("open")
-    .description("Create a Kernel cloud browser session and return its remote id")
+    .description("Create a Kernel cloud browser session and return its exec_id")
     .option("--url <url>", "Start URL")
     .option("--headed", "Run headful for live view/computer controls")
     .option("--json", "Output as JSON"))
@@ -319,6 +320,7 @@ export function register(program: Command) {
       });
       const session = {
         id: sandbox.metadata.sessionId,
+        exec_id: sandbox.metadata.execId,
         engine: "kernel",
         remote_session_id: sandbox.metadata.sessionId,
         start_url: opts.url,
@@ -334,7 +336,8 @@ export function register(program: Command) {
         baseUrl: sandbox.metadata.baseUrl ? redactKernelSensitiveText(sandbox.metadata.baseUrl) : undefined,
       };
       printJsonOrText({ session, metadata }, opts.json, () => {
-        console.log(chalk.green(`✓ Kernel session created: ${sandbox.metadata.sessionId}`));
+        console.log(chalk.green(`✓ Kernel exec_id: ${sandbox.metadata.execId}`));
+        console.log(chalk.gray("  Cleanup: use close_id from `browser kernel sessions`"));
         if (sandbox.metadata.browserLiveViewUrl) console.log(chalk.gray(`  Live view: ${redactKernelSensitiveText(sandbox.metadata.browserLiveViewUrl)}`));
       });
     });

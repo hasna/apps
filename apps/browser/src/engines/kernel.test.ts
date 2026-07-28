@@ -5,8 +5,10 @@ import { tmpdir } from "node:os";
 import type { Browser } from "playwright";
 import {
   captureKernelComputerScreenshotToDownloads,
+  closeKernelSandbox,
   connectKernelBrowser,
   createKernelSandbox,
+  deleteKernelBrowser,
   downloadKernelFileToDownloads,
   downloadKernelReplayToDownloads,
   executeKernelPlaywright,
@@ -132,6 +134,14 @@ describe("kernel engine", () => {
         async create() {
           return { session_id: "kernel-session-2", cdp_ws_url: "wss://kernel.test/cdp-2" };
         },
+        async list() {
+          return {
+            items: [{
+              session_id: "kernel-close-2",
+              cdp_ws_url: "wss://kernel.test/cdp-2",
+            }],
+          };
+        },
         async deleteByID(id) {
           deletes.push(id);
         },
@@ -148,7 +158,61 @@ describe("kernel engine", () => {
     expect(connectOptions).toEqual([{ timeoutMs: 120_000 }]);
 
     await connected.close();
-    expect(deletes).toEqual(["kernel-session-2"]);
+    expect(deletes).toEqual(["kernel-close-2"]);
+  });
+
+  it("retries close_id discovery when a new Kernel browser is not immediately listed", async () => {
+    const deletes: string[] = [];
+    let listCalls = 0;
+    setKernelSecretsProviderForTests(secretsProvider());
+    setKernelClientFactoryForTests(() => ({
+      browsers: {
+        async create() {
+          return { session_id: "kernel-exec-retry", cdp_ws_url: "wss://kernel.test/cdp-retry" };
+        },
+        async list() {
+          listCalls += 1;
+          return {
+            items: listCalls < 3
+              ? []
+              : [{ session_id: "kernel-close-retry", cdp_ws_url: "wss://kernel.test/cdp-retry" }],
+          };
+        },
+        async deleteByID(id) {
+          deletes.push(id);
+        },
+      },
+    }));
+
+    const sandbox = await createKernelSandbox({ authMode: "off" });
+    await closeKernelSandbox(sandbox);
+
+    expect(listCalls).toBe(3);
+    expect(deletes).toEqual(["kernel-close-retry"]);
+  });
+
+  it("does not use exec_id for cleanup when close_id cannot be resolved", async () => {
+    const deletes: string[] = [];
+    setKernelSecretsProviderForTests(secretsProvider());
+    setKernelClientFactoryForTests(() => ({
+      browsers: {
+        async create() {
+          return { session_id: "kernel-exec-missing", cdp_ws_url: "wss://kernel.test/cdp-missing" };
+        },
+        async list() {
+          return { items: [] };
+        },
+        async deleteByID(id) {
+          deletes.push(id);
+        },
+      },
+    }));
+
+    const sandbox = await createKernelSandbox({ authMode: "off" });
+    expect(closeKernelSandbox(sandbox)).rejects.toMatchObject({
+      code: "KERNEL_CLOSE_ID_NOT_FOUND",
+    });
+    expect(deletes).toEqual([]);
   });
 
   it("passes explicit Kernel request timeout to CDP attach", async () => {
@@ -179,6 +243,14 @@ describe("kernel engine", () => {
         async create() {
           return { session_id: "kernel-session-redact", cdp_ws_url: "wss://secret.kernel.test/devtools/browser/token" };
         },
+        async list() {
+          return {
+            items: [{
+              session_id: "kernel-close-redact",
+              cdp_ws_url: "wss://secret.kernel.test/devtools/browser/token",
+            }],
+          };
+        },
         async deleteByID(id) {
           deletes.push(id);
         },
@@ -196,7 +268,7 @@ describe("kernel engine", () => {
     }
     expect(message).toContain("[redacted-kernel-websocket-url]");
     expect(message).not.toContain("secret.kernel.test");
-    expect(deletes).toEqual(["kernel-session-redact"]);
+    expect(deletes).toEqual(["kernel-close-redact"]);
   });
 
   it("uses Kernel managed auth without returning vault passwords in metadata", async () => {
@@ -393,6 +465,57 @@ describe("kernel engine", () => {
     expect(serialized).not.toContain("cdp?jwt=secret");
     expect(serialized).toContain("has_cdp_ws_url");
     expect(serialized).toContain("jwt=%5Bredacted%5D");
+  });
+
+  it("labels create and list identifiers by the operations that accept them", async () => {
+    const deleted: string[] = [];
+    const executed: string[] = [];
+    setKernelSecretsProviderForTests(secretsProvider());
+    setKernelClientFactoryForTests(() => ({
+      browsers: {
+        async create() {
+          return {
+            session_id: "kernel-exec-id",
+            cdp_ws_url: "wss://kernel.test/cdp",
+          };
+        },
+        async deleteByID(id) {
+          deleted.push(id);
+        },
+        async list() {
+          return {
+            items: [{
+              session_id: "kernel-close-id",
+              cdp_ws_url: "wss://kernel.test/cdp",
+            }],
+          };
+        },
+        playwright: {
+          async execute(id) {
+            executed.push(id);
+            return { success: true };
+          },
+        },
+      },
+    }));
+
+    const sandbox = await createKernelSandbox({ authMode: "off" });
+    const sessions = await listKernelBrowsers();
+    const execution = await executeKernelPlaywright("kernel-exec-id", "return true;");
+    const close = await deleteKernelBrowser("kernel-exec-id");
+
+    expect(sandbox.metadata).toMatchObject({
+      sessionId: "kernel-exec-id",
+      execId: "kernel-exec-id",
+    });
+    expect(sessions[0]).toMatchObject({
+      session_id: "kernel-close-id",
+      close_id: "kernel-close-id",
+    });
+    expect(execution).toMatchObject({ success: true, exec_id: "kernel-exec-id" });
+    expect(close).toEqual({ deleted: "kernel-close-id", close_id: "kernel-close-id" });
+    expect(executed).toEqual(["kernel-exec-id"]);
+    expect(deleted).toEqual(["kernel-close-id"]);
   });
 
   it("downloads Kernel filesystem files and computer screenshots into downloads", async () => {

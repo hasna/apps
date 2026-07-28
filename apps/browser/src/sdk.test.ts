@@ -243,7 +243,8 @@ describe("BrowserSDK", () => {
       const result = await sdk.executeKernel("remote-sdk", "return 'ok';");
 
       expect(sessions[0].session_id).toBe("remote-sdk");
-      expect(result).toEqual({ success: true, result: "ok" });
+      expect(sessions[0].close_id).toBe("remote-sdk");
+      expect(result).toEqual({ success: true, exec_id: "remote-sdk", result: "ok" });
       expect(JSON.stringify(sessions)).not.toContain("jwt=secret");
     } finally {
       setKernelClientFactoryForTests(undefined);

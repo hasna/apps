@@ -185,16 +185,29 @@ Kernel session options are available through CLI, SDK, MCP, and REST:
 Remote operations:
 
 ```bash
-browser kernel sessions --json
-browser kernel exec <session> "await page.goto('https://example.com'); return await page.title();"
-browser kernel computer screenshot <session>
-browser kernel files list <session> --path /tmp
-browser kernel files download <session> /tmp/report.pdf
-browser kernel replays start <session>
-browser kernel replays stop <session> <replay_id>
-browser kernel replays download <session> <replay_id>
-browser kernel close <session>
+OPEN_JSON=$(browser kernel open --url https://example.com --kernel-tag workflow=example-agent --json)
+EXEC_ID=$(jq -r '.session.exec_id' <<<"$OPEN_JSON")
+
+browser kernel exec "$EXEC_ID" "await page.goto('https://example.com'); return await page.title();"
+browser kernel computer screenshot "$EXEC_ID"
+browser kernel files list "$EXEC_ID" --path /tmp
+browser kernel files download "$EXEC_ID" /tmp/report.pdf
+browser kernel replays start "$EXEC_ID"
+browser kernel replays stop "$EXEC_ID" <replay_id>
+browser kernel replays download "$EXEC_ID" <replay_id>
+
+# Cleanup IDs come from the active-session listing, not from `kernel open`.
+CLOSE_ID=$(browser kernel sessions --json | jq -r '.sessions[] | select(.tags.workflow == "example-agent") | .close_id')
+browser kernel close "$CLOSE_ID" --json
 ```
+
+Kernel currently exposes different identifiers for execution and lifecycle
+cleanup. `kernel open` labels the value accepted by `exec`, files, computer, and
+replay commands as `exec_id`. `kernel sessions` labels the value accepted by
+`close` as `close_id`. Do not pass a listed `close_id` to `exec`, or an
+`exec_id` from `open` to `close`. For compatibility, `session.id` and
+`session.remote_session_id` in `open --json` remain aliases of `exec_id`, while
+`session_id` in `sessions --json` remains an alias of `close_id`.
 
 MCP tools include `browser_kernel_status`, `browser_kernel_sessions`,
 `browser_kernel_playwright_execute`, `browser_kernel_computer_action`,
