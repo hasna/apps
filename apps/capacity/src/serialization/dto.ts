@@ -722,6 +722,27 @@ export function validateEntity<K extends EntityKind>(kind: K, input: unknown): E
   }
 }
 
+/**
+ * The single reader projection for catalog records. Every read surface — HTTP,
+ * SDK, and CLI, in normal and --json output — serves this exact shape so a
+ * local and a self_hosted deployment emit the same record schema and neither
+ * discloses a provider subject value.
+ */
+export function redactEntity<K extends EntityKind>(
+  kind: K,
+  record: EntityMap[K],
+): Readonly<Record<string, unknown>> {
+  const safe = { ...(record as unknown as Record<string, unknown>) };
+  if (kind === "account") {
+    const hadSubject = safe.providerSubjectRef !== undefined || safe.providerSubjectCandidateRef !== undefined;
+    delete safe.providerSubjectRef;
+    delete safe.providerSubjectCandidateRef;
+    if (hadSubject) safe.providerSubjectRefRedacted = true;
+  }
+  assertNoSensitiveFields(safe);
+  return Object.freeze(safe);
+}
+
 export function validateEligibilityRequest(input: unknown): EligibilityRequest {
   const value = object(input, "eligibilityRequest");
   assertNoSensitiveFields(value);

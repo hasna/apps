@@ -125,6 +125,7 @@ export {
   decodeRecordEnvelope,
   deserializeRecordEnvelope,
   encodeRecordEnvelope,
+  redactEntity,
   serializeRecordEnvelope,
   validateEntity,
   validateEligibilityRequest,
@@ -230,11 +231,12 @@ export const POSTGRES_ADAPTER_STATUS = POSTGRES_ADAPTER_STATUS_V1;
 export { runPostgresMigrations } from "./storage/postgres-migrator";
 export type { PostgresMigrationReport } from "./storage/postgres-migrator";
 export { ACCOUNTS_V1_CONTRACT_SHA256, PACKAGE_VERSION } from "./version";
-export { createAccountsCapacity } from "./sdk/index";
+export { createAccountsCapacity, createReferenceAuthProvider } from "./sdk/index";
 export type {
   AccountLanesApi,
   AccountsAuthProvider,
   AccountsCapacity,
+  AccountsCapacityCredentialResolver,
   AccountsDeployment,
   AuthCapsulesApi,
   BootstrapIntentInput,

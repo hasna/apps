@@ -97,15 +97,40 @@ recovery ledger through the SDK/factory. Without it, readiness and eligibility
 stay on recovery hold. CLI output is local diagnostic evidence only and never a
 reservation or production Infinity authority.
 
+Local CLI reads and API reads emit the same record schema: both apply the one
+reader projection, so `providerSubjectRef` is disclosed by neither deployment
+mode and normal output and `--json` stay on the same redactor.
+
 ## Self-hosted CLI
+
+`HASNA_ACCOUNTS_CAPACITY_AUTH_REF` is a Secrets-managed capacity client
+credential *reference*. It is not a bearer token, and Accounts never puts it on
+the wire — resolving it into the separately audienced credential is a
+deployment-owned Secrets capability. This package ships no resolver, so the
+packaged `capacity` binary refuses `self_hosted` commands with
+`DEPENDENCY_UNAVAILABLE` (exit 6) before any request is built:
 
 ```sh
 HASNA_ACCOUNTS_DEPLOYMENT=self_hosted \
 HASNA_ACCOUNTS_CAPACITY_API_URL=https://accounts.capacity.example \
 HASNA_ACCOUNTS_CAPACITY_AUTH_REF=capacity-client-reference \
   capacity list access-methods --json
+# DEPENDENCY_UNAVAILABLE: A required dependency is unavailable
 ```
 
-Self-hosted CLI commands use the same HTTPS Accounts Capacity API routes as the
-SDK. The capacity auth reference must be separately audienced for this service;
-local database configuration is refused in `self_hosted` mode.
+Self-hosted reads are reached through the SDK, which takes the resolver the
+deployment owns and uses the same HTTPS Accounts Capacity API routes:
+
+```ts
+import { createAccountsCapacity, createReferenceAuthProvider } from "@hasna/capacity";
+
+const capacity = createAccountsCapacity({
+  mode: "self_hosted",
+  baseUrl: "https://accounts.capacity.example",
+  authProvider: createReferenceAuthProvider("capacity-client-reference", secretsResolver),
+});
+```
+
+`createReferenceAuthProvider` fails closed when the resolver returns the
+reference itself or a value that is not a usable credential. Local database
+configuration is refused in `self_hosted` mode.

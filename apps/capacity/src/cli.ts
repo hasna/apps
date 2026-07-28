@@ -7,6 +7,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import {
   AccountsError,
   createAccountsCapacity,
+  createReferenceAuthProvider,
   asAccountsError,
   canonicalJson,
   createSQLiteAccounts,
@@ -20,13 +21,14 @@ import {
   parseCredentialBindingId,
   parseEntitlementId,
   evaluateNativeSubscriptionProbe,
+  redactEntity,
   StaticNativeSubscriptionSnapshotSource,
   PACKAGE_VERSION,
   parseClosedJson,
   toErrorEnvelope,
   validateSlotEligibility,
-  type AccountsAuthProvider,
   type AccountsCapacity,
+  type AccountsCapacityCredentialResolver,
   type EntityKind,
   type EntityMap,
   type EligibilityRequest,
@@ -45,7 +47,21 @@ const NOUNS: Readonly<Record<string, EntityKind>> = {
   "credential-bindings": "credential_binding",
 };
 
-const SELF_HOSTED_AUTH_REF_PATTERN = /^[\x21-\x7e]{1,4096}$/;
+/**
+ * HASNA_ACCOUNTS_CAPACITY_AUTH_REF carries a Secrets-managed credential
+ * reference, never credential material, so it is held to the reference shape
+ * and is never used as a bearer value.
+ */
+const SELF_HOSTED_AUTH_REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$/;
+
+/**
+ * Resolving the capacity client credential reference is a deployment-owned
+ * Secrets capability. This package ships no resolver, so an embedder supplies
+ * one; without it the self-hosted CLI refuses before any request is built.
+ */
+export interface AccountsCliOptions {
+  readonly credentialResolver?: AccountsCapacityCredentialResolver;
+}
 
 interface CliCatalog {
   doctor(): Promise<unknown>;
@@ -60,7 +76,10 @@ interface ParsedArguments {
   readonly flags: Readonly<Record<string, string | true>>;
 }
 
-export async function runAccountsCli(argv: readonly string[]): Promise<number> {
+export async function runAccountsCli(
+  argv: readonly string[],
+  options: AccountsCliOptions = {},
+): Promise<number> {
   const jsonRequested = argv.includes("--json");
   try {
     const parsed = parseArguments(argv);
@@ -82,7 +101,7 @@ export async function runAccountsCli(argv: readonly string[]): Promise<number> {
       return await probeNativeCommand(positionals, parsed.flags, jsonRequested);
     }
 
-    const catalog = createCliCatalog();
+    const catalog = createCliCatalog(options);
     try {
       if (command === "doctor") {
         requireNoPositionals(positionals, "doctor");
@@ -148,7 +167,7 @@ export async function runAccountsCli(argv: readonly string[]): Promise<number> {
   }
 }
 
-function createCliCatalog(): CliCatalog {
+function createCliCatalog(options: AccountsCliOptions): CliCatalog {
   const deployment = Bun.env.HASNA_ACCOUNTS_DEPLOYMENT;
   const localPath = Bun.env.HASNA_ACCOUNTS_DATABASE_PATH;
   const apiUrl = Bun.env.HASNA_ACCOUNTS_CAPACITY_API_URL;
@@ -164,7 +183,13 @@ function createCliCatalog(): CliCatalog {
     if (authRef === undefined || !SELF_HOSTED_AUTH_REF_PATTERN.test(authRef)) {
       throw usageError("HASNA_ACCOUNTS_CAPACITY_AUTH_REF is required for self_hosted");
     }
-    return createSelfHostedCliCatalog(apiUrl, authRef);
+    if (options.credentialResolver === undefined) {
+      throw new AccountsError(
+        "DEPENDENCY_UNAVAILABLE",
+        "Capacity client credential resolution is unavailable",
+      );
+    }
+    return createSelfHostedCliCatalog(apiUrl, authRef, options.credentialResolver);
   }
   if (deployment !== "local") {
     throw usageError("HASNA_ACCOUNTS_DEPLOYMENT must be local or self_hosted");
@@ -179,19 +204,24 @@ function createCliCatalog(): CliCatalog {
   const catalog = createSQLiteAccounts({ path });
   return Object.freeze({
     doctor: () => catalog.doctor(),
-    list: (kind: EntityKind) => catalog.list(kind),
-    get: (kind: EntityKind, id: EntityMap[EntityKind]["id"]) => catalog.get(kind, id as never),
+    // Local reads pass through the same reader projection the API serves, so
+    // both deployment modes emit one record schema and neither discloses a
+    // provider subject value.
+    list: async (kind: EntityKind) =>
+      (await catalog.list(kind)).map((record) => redactEntity(kind, record)),
+    get: async (kind: EntityKind, id: EntityMap[EntityKind]["id"]) =>
+      redactEntity(kind, await catalog.get(kind, id as never)),
     eligibility: (request: EligibilityRequest) => catalog.eligibility(request),
     close: () => catalog.close(),
   });
 }
 
-function createSelfHostedCliCatalog(baseUrl: string, authRef: string): CliCatalog {
-  const authProvider: AccountsAuthProvider = Object.freeze({
-    authorize: async (headers: Headers): Promise<void> => {
-      headers.set("authorization", `Bearer ${authRef}`);
-    },
-  });
+function createSelfHostedCliCatalog(
+  baseUrl: string,
+  authRef: string,
+  credentialResolver: AccountsCapacityCredentialResolver,
+): CliCatalog {
+  const authProvider = createReferenceAuthProvider(authRef, credentialResolver);
   const client = createAccountsCapacity({ mode: "self_hosted", baseUrl, authProvider });
   return new SelfHostedCliCatalog(baseUrl, client);
 }
