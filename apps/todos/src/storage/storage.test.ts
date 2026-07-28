@@ -1195,7 +1195,10 @@ describe("storage adapter contracts", () => {
     expect(dep).toEqual({ task_id: a.id, depends_on: b.id });
     const edges = await adapter.dependencies!.list(a.id);
     expect(edges.dependencies).toEqual([{ task_id: a.id, depends_on: b.id }]);
-    expect((await adapter.dependencies!.list(b.id)).blocked_by).toEqual([{ task_id: a.id, depends_on: b.id }]);
+    const incoming = await adapter.dependencies!.list(b.id);
+    expect(incoming.blocks).toEqual([{ task_id: a.id, depends_on: b.id }]);
+    // Legacy wire alias for pre-0.13.2 clients: same contents as `blocks`.
+    expect(incoming.blocked_by).toEqual(incoming.blocks);
     // cycle guard: B depends on A would close a loop
     await expect(Promise.resolve(adapter.dependencies!.add(b.id, a.id))).rejects.toThrow(/cycle/);
     // missing task rejected

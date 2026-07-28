@@ -524,11 +524,29 @@ export interface CreateChecklistItemInput {
   position?: number; // appended to end if omitted
 }
 
+/**
+ * Whether a prerequisite in this status still blocks its dependents. A
+ * completed prerequisite is satisfied; a cancelled one will never complete, so
+ * treating it as blocking would deadlock the dependent forever. Single source
+ * of truth for every `blocked_by` derivation (regression 4599ef37).
+ */
+export function isBlockingDependencyStatus(status: string): boolean {
+  return status !== "completed" && status !== "cancelled";
+}
+
 // Task with relations loaded
 export interface TaskWithRelations extends Task {
   subtasks: Task[];
+  /** Prerequisites (upstream): the tasks this one depends on. */
   dependencies: Task[];
+  /**
+   * The prerequisites still incomplete — the tasks blocking this one right
+   * now. Empty means dispatchable. (Regression 4599ef37: this used to carry
+   * the dependents, inverting the meaning for every JSON consumer.)
+   */
   blocked_by: Task[];
+  /** Dependents (downstream): the tasks this one blocks. */
+  blocks: Task[];
   comments: TaskComment[];
   parent: Task | null;
   checklist: ChecklistItem[];

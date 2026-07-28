@@ -738,9 +738,16 @@ describe("cloud agent + lock + deps + verification routing (identity/coordinatio
     const client = getTodosCloudClient(CLOUD_ENV)!;
     const edges = await cloudGetDependencies(client, "t1");
     expect(edges.dependencies).toHaveLength(1);
-    expect(edges.blocked_by).toEqual([]);
+    expect(edges.blocks).toEqual([]);
     expect(calls[0]!.method).toBe("GET");
     expect(calls[0]!.url).toBe("https://todos.example.com/v1/tasks/t1/dependencies");
+  });
+
+  test("deps list reads incoming edges from the legacy wire name blocked_by (pre-0.13.2 server)", async () => {
+    installFetch(() => ({ body: { dependencies: [], blocked_by: [{ task_id: "t9", depends_on: "t1" }] } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const edges = await cloudGetDependencies(client, "t1");
+    expect(edges.blocks).toEqual([{ task_id: "t9", depends_on: "t1" }]);
   });
 
   test("record-verification -> POST /v1/tasks/:id/verifications, unwraps { verification }", async () => {

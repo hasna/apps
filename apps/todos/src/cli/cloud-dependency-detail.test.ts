@@ -128,15 +128,20 @@ describe("cloud task detail dependencies (issue #58)", () => {
       const shownTask = JSON.parse(shown.stdout);
       expect(shownTask.dependencies).toHaveLength(1);
       expect(shownTask.dependencies[0]).toMatchObject({ id: UPSTREAM_ID, title: "Upstream blocker", status: "in_progress" });
+      // The in-progress upstream blocks this task; the downstream dependent
+      // lives under `blocks` (regression 4599ef37 — orientation).
       expect(shownTask.blocked_by).toHaveLength(1);
-      expect(shownTask.blocked_by[0]).toMatchObject({ id: DOWNSTREAM_ID, title: "Downstream consumer", status: "pending" });
+      expect(shownTask.blocked_by[0]).toMatchObject({ id: UPSTREAM_ID, title: "Upstream blocker", status: "in_progress" });
+      expect(shownTask.blocks).toHaveLength(1);
+      expect(shownTask.blocks[0]).toMatchObject({ id: DOWNSTREAM_ID, title: "Downstream consumer", status: "pending" });
 
       const inspected = await runCli(["--json", "inspect", TASK_ID], root, baseUrl);
       expect(inspected.stderr).toBe("");
       expect(inspected.exitCode).toBe(0);
       const inspectedTask = JSON.parse(inspected.stdout);
       expect(inspectedTask.dependencies[0]).toMatchObject({ id: UPSTREAM_ID, title: "Upstream blocker", status: "in_progress" });
-      expect(inspectedTask.blocked_by[0]).toMatchObject({ id: DOWNSTREAM_ID, title: "Downstream consumer" });
+      expect(inspectedTask.blocked_by[0]).toMatchObject({ id: UPSTREAM_ID, title: "Upstream blocker" });
+      expect(inspectedTask.blocks[0]).toMatchObject({ id: DOWNSTREAM_ID, title: "Downstream consumer" });
 
       expect(requests).toContain(`GET /v1/tasks/${TASK_ID}/dependencies`);
     } finally {
@@ -189,6 +194,7 @@ describe("cloud task detail dependencies (issue #58)", () => {
       const task = JSON.parse(shown.stdout);
       expect(task.dependencies).toEqual([]);
       expect(task.blocked_by).toEqual([]);
+      expect(task.blocks).toEqual([]);
       // Only the task row, its comments and the dependency edges — no per-edge fan-out.
       expect(requests).toEqual([
         `GET /v1/tasks/${TASK_ID}`,
@@ -227,7 +233,9 @@ describe("cloud task detail dependencies (issue #58)", () => {
       const task = JSON.parse(shown.stdout);
       expect(task.dependencies.map((d: { id: string }) => d.id)).toEqual(upstreamIds);
       expect(task.dependencies.every((d: { title: string }) => d.title.startsWith("Upstream "))).toBe(true);
-      expect(task.blocked_by.map((d: { id: string }) => d.id)).toEqual([DOWNSTREAM_ID]);
+      // Every upstream is pending, so all of them block this task.
+      expect(task.blocked_by.map((d: { id: string }) => d.id)).toEqual(upstreamIds);
+      expect(task.blocks.map((d: { id: string }) => d.id)).toEqual([DOWNSTREAM_ID]);
       const lookups = requests.filter((entry) => /^GET \/v1\/tasks\/[^/]+$/.test(entry));
       // The task itself + 14 upstream + 1 downstream, no repeats.
       expect(lookups).toHaveLength(16);
@@ -258,6 +266,9 @@ describe("cloud task detail dependencies (issue #58)", () => {
       expect(task.dependencies.map((d: { id: string }) => d.id).sort()).toEqual([GHOST_ID, UPSTREAM_ID].sort());
       const ghost = task.dependencies.find((d: { id: string }) => d.id === GHOST_ID);
       expect(ghost.title).toContain("unavailable");
+      // The completed upstream no longer blocks; the unresolved placeholder
+      // stays pending, so it does.
+      expect(task.blocked_by.map((d: { id: string }) => d.id)).toEqual([GHOST_ID]);
     } finally {
       server.stop(true);
     }
@@ -274,6 +285,7 @@ describe("cloud task detail dependencies (issue #58)", () => {
       expect(task.id).toBe(TASK_ID);
       expect(task.dependencies).toEqual([]);
       expect(task.blocked_by).toEqual([]);
+      expect(task.blocks).toEqual([]);
       expect(shown.stderr).toContain("dependencies");
     } finally {
       server.stop(true);

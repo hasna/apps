@@ -132,8 +132,22 @@ export interface TodosLockResult {
   error?: string;
 }
 
+/**
+ * A task's raw dependency edges as served by `GET /v1/tasks/:id/dependencies`.
+ * `dependencies` are the OUTGOING edges (this task depends on `depends_on`);
+ * `blocks` are the INCOMING edges (their `task_id` depends on this task).
+ *
+ * `blocked_by` is a DEPRECATED wire alias that carries the SAME contents as
+ * `blocks` (the incoming/dependent edges — despite what the name suggests).
+ * It is kept because fleet clients up to @hasna/todos 0.13.1 read it for the
+ * `Blocks:` rendering and the show/inspect hydration; renaming it server-side
+ * would silently flip their display (regression 4599ef37). New consumers must
+ * read `blocks`.
+ */
 export interface TodosTaskDependencies {
   dependencies: TaskDependency[];
+  blocks: TaskDependency[];
+  /** @deprecated legacy wire alias of {@link TodosTaskDependencies.blocks}. */
   blocked_by: TaskDependency[];
 }
 

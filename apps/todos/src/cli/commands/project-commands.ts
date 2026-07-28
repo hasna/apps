@@ -636,7 +636,7 @@ export function registerProjectCommands(program: Command) {
             buildTaskDependencyEdges(
               { id: cloudId, short_id: null },
               relations.dependencies.filter(isResolvedTask),
-              relations.blocked_by.filter(isResolvedTask),
+              relations.blocks.filter(isResolvedTask),
             ),
             true,
           );
@@ -647,11 +647,11 @@ export function registerProjectCommands(program: Command) {
           console.log(chalk.bold("Depends on:"));
           for (const dep of edges.dependencies) console.log(`  ${chalk.cyan(dep.depends_on)}`);
         }
-        if (edges.blocked_by.length > 0) {
+        if (edges.blocks.length > 0) {
           console.log(chalk.bold("Blocks:"));
-          for (const b of edges.blocked_by) console.log(`  ${chalk.cyan(b.task_id)}`);
+          for (const b of edges.blocks) console.log(`  ${chalk.cyan(b.task_id)}`);
         }
-        if (edges.dependencies.length === 0 && edges.blocked_by.length === 0) {
+        if (edges.dependencies.length === 0 && edges.blocks.length === 0) {
           console.log(chalk.dim("No dependencies."));
         }
         return;
@@ -720,13 +720,13 @@ export function registerProjectCommands(program: Command) {
             console.log(`  ${formatTaskLine(dep)}`);
           }
         }
-        if (task.blocked_by.length > 0) {
+        if (task.blocks.length > 0) {
           console.log(chalk.bold("Blocks:"));
-          for (const b of task.blocked_by) {
+          for (const b of task.blocks) {
             console.log(`  ${formatTaskLine(b)}`);
           }
         }
-        if (task.dependencies.length === 0 && task.blocked_by.length === 0) {
+        if (task.dependencies.length === 0 && task.blocks.length === 0) {
           console.log(chalk.dim("No dependencies."));
         }
       }

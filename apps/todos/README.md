@@ -603,7 +603,8 @@ todos ready
 
 `--json` returns versioned, machine-readable shapes for schedulers:
 `todos.task_dependency_edges.v1` for a single task (`dependencies` = upstream
-prerequisites, `blocked_by` = downstream dependents) and
+prerequisites, `blocked_by` = the incomplete prerequisites currently blocking
+the task — empty means dispatchable, `blocks` = downstream dependents) and
 `todos.project_dependency_graph.v1` for `--project` (a `nodes`/`edges`/`cycles`
 adjacency list). Both are identical in local and self-hosted mode. Human output
 and `--graph --json` are unchanged.

@@ -10,6 +10,7 @@
 import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
 import { resolve as resolvePath } from "node:path";
 import type { Agent, CreatePlanInput, CreateTaskListInput, CreateTemplateInput, Plan, Project, RegisterAgentInput, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList, TaskTemplate, TemplateWithTasks, UpdatePlanInput, UpdateTaskListInput } from "../types/index.js";
+import { isBlockingDependencyStatus } from "../types/index.js";
 import type { UpdateTemplateInput } from "../storage/interfaces.js";
 import { redactEvidenceText } from "../lib/redaction.js";
 import type { PrGroupEventListOptions, PrGroupEventPage, PrGroupStateView } from "../pr-groups/types.js";
@@ -1257,29 +1258,45 @@ export async function cloudUnlockTask(
   return true;
 }
 
-/** A task's dependency edges from the cloud (`GET /v1/tasks/:id/dependencies`). */
+/**
+ * A task's dependency edges from the cloud (`GET /v1/tasks/:id/dependencies`),
+ * normalized to the corrected orientation: `dependencies` are the OUTGOING
+ * edges (this task depends on their `depends_on`), `blocks` are the INCOMING
+ * edges (their `task_id` depends on this task).
+ *
+ * WIRE COMPATIBILITY (regression 4599ef37): the deployed authority still sends
+ * the incoming edges under the legacy field name `blocked_by` — old clients in
+ * the fleet render that field as `Blocks:`, so the server payload cannot be
+ * renamed out from under them. A newer server may additionally send `blocks`
+ * with the same contents; this reader prefers it and falls back to the legacy
+ * name.
+ */
 export interface CloudTaskDependencies {
   dependencies: TaskDependency[];
-  blocked_by: TaskDependency[];
+  blocks: TaskDependency[];
 }
 
 /** List a cloud task's dependency edges (`GET /v1/tasks/:id/dependencies`). */
 export async function cloudGetDependencies(client: HasnaStorageClient, id: string): Promise<CloudTaskDependencies> {
   const raw = await client.transport.get<unknown>(`/tasks/${encodeURIComponent(id)}/dependencies`);
-  const env = (raw ?? {}) as Partial<CloudTaskDependencies>;
-  return { dependencies: env.dependencies ?? [], blocked_by: env.blocked_by ?? [] };
+  const env = (raw ?? {}) as { dependencies?: TaskDependency[]; blocks?: TaskDependency[]; blocked_by?: TaskDependency[] };
+  return { dependencies: env.dependencies ?? [], blocks: env.blocks ?? env.blocked_by ?? [] };
 }
 
 /**
  * A remote task's dependency neighbours, hydrated into full task rows so the
  * detail renderers can print title/status and compute the blocker warning.
- * `dependencies` are upstream (this task depends on them); `blocked_by` are
- * downstream (they depend on this task) — same orientation as the local
- * `getTaskWithRelations`.
+ * Same orientation as the local `getTaskWithRelations` (every name means what
+ * it says — regression 4599ef37):
+ *   - `dependencies` are upstream (this task depends on them);
+ *   - `blocked_by` is the incomplete subset of `dependencies` — what blocks
+ *     this task right now;
+ *   - `blocks` are downstream (they depend on this task).
  */
 export interface CloudTaskRelations {
   dependencies: Task[];
   blocked_by: Task[];
+  blocks: Task[];
 }
 
 /** Parallel task-row lookups used while hydrating dependency edges. */
@@ -1363,7 +1380,7 @@ function unresolvedRelatedTask(id: string): Task {
 export async function cloudGetTaskRelations(client: HasnaStorageClient, id: string): Promise<CloudTaskRelations> {
   const edges = await cloudGetDependencies(client, id);
   const upstream = dedupe(edges.dependencies.map((edge) => edge.depends_on));
-  const downstream = dedupe(edges.blocked_by.map((edge) => edge.task_id));
+  const downstream = dedupe(edges.blocks.map((edge) => edge.task_id));
   const wanted = dedupe([...upstream, ...downstream]).filter((ref) => ref !== id);
   const rows = new Map<string, Task>();
 
@@ -1386,7 +1403,12 @@ export async function cloudGetTaskRelations(client: HasnaStorageClient, id: stri
   await Promise.all(workers);
 
   const materialize = (ref: string): Task => rows.get(ref) ?? unresolvedRelatedTask(ref);
-  return { dependencies: upstream.map(materialize), blocked_by: downstream.map(materialize) };
+  const dependencies = upstream.map(materialize);
+  // An unresolved prerequisite keeps status "pending" (see
+  // unresolvedRelatedTask), so it counts as blocking rather than being
+  // optimistically treated as done.
+  const blocked_by = dependencies.filter((dep) => isBlockingDependencyStatus(dep.status));
+  return { dependencies, blocked_by, blocks: downstream.map(materialize) };
 }
 
 function dedupe(ids: Array<string | null | undefined>): string[] {

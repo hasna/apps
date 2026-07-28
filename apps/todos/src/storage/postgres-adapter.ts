@@ -1258,12 +1258,21 @@ async function removeDependency(taskId: string, dependsOn: string, store: Postgr
   return true;
 }
 
-/** List a task's outgoing (dependencies) and incoming (blocked_by) dependency edges. */
+/**
+ * List a task's outgoing (`dependencies`) and incoming (`blocks`) dependency
+ * edges. The incoming edges are ALSO emitted under the deprecated legacy wire
+ * name `blocked_by` for fleet clients up to 0.13.1, which read that field for
+ * the `Blocks:` rendering — see {@link TodosTaskDependencies}.
+ */
 async function listDependencies(taskId: string, store: PostgresJsonRecordStore): Promise<TodosTaskDependencies> {
   const edges = await store.list<TaskDependency>("dependencies");
+  const incoming = edges
+    .filter((edge) => edge.depends_on === taskId)
+    .map((edge) => ({ task_id: edge.task_id, depends_on: edge.depends_on }));
   return {
     dependencies: edges.filter((edge) => edge.task_id === taskId).map((edge) => ({ task_id: edge.task_id, depends_on: edge.depends_on })),
-    blocked_by: edges.filter((edge) => edge.depends_on === taskId).map((edge) => ({ task_id: edge.task_id, depends_on: edge.depends_on })),
+    blocks: incoming,
+    blocked_by: incoming,
   };
 }
 

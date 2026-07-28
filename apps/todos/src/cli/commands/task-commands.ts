@@ -89,7 +89,7 @@ async function cloudDetailRelations(
     if (status !== 404 && status !== 501) {
       console.error(chalk.dim(`Warning: could not load task dependencies: ${e instanceof Error ? e.message : String(e)}`));
     }
-    return { dependencies: [], blocked_by: [] };
+    return { dependencies: [], blocked_by: [], blocks: [] };
   }
 }
 
@@ -833,6 +833,7 @@ export function registerTaskCommands(program: Command) {
               subtasks: [], ...remote, tags: remote.tags ?? [],
               dependencies: relations!.dependencies,
               blocked_by: relations!.blocked_by,
+              blocks: relations!.blocks,
               comments: commentPage!.comments,
               comments_page: {
                 count: commentPage!.count,
@@ -905,9 +906,9 @@ export function registerTaskCommands(program: Command) {
         }
       }
 
-      if (task.blocked_by.length > 0) {
-        console.log(chalk.bold(`\n  Blocks (${task.blocked_by.length}):`));
-        for (const b of task.blocked_by) {
+      if (task.blocks.length > 0) {
+        console.log(chalk.bold(`\n  Blocks (${task.blocks.length}):`));
+        for (const b of task.blocks) {
           console.log(`    ${formatTaskLine(b)}`);
         }
       }
@@ -961,6 +962,7 @@ export function registerTaskCommands(program: Command) {
               subtasks: [], checklist: [], ...remote, tags: remote.tags ?? [],
               dependencies: relations!.dependencies,
               blocked_by: relations!.blocked_by,
+              blocks: relations!.blocks,
               comments: commentPage!.comments,
               comments_page: {
                 count: commentPage!.count,
@@ -1027,9 +1029,9 @@ export function registerTaskCommands(program: Command) {
         console.log(chalk.red(`\n  BLOCKED by ${unfinishedDeps.length} unfinished dep(s)`));
       }
 
-      if (task.blocked_by.length > 0) {
-        console.log(chalk.bold(`\n  Blocks (${task.blocked_by.length}):`));
-        for (const b of task.blocked_by) console.log(`    ${formatTaskLine(b)}`);
+      if (task.blocks.length > 0) {
+        console.log(chalk.bold(`\n  Blocks (${task.blocks.length}):`));
+        for (const b of task.blocks) console.log(`    ${formatTaskLine(b)}`);
       }
 
       if (task.subtasks.length > 0) {
