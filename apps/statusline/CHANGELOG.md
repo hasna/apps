@@ -2,6 +2,23 @@
 
 All notable changes to `@hasna/statusline` are documented here.
 
+## 0.0.4 - 2026-07-28
+
+- Lowercase model labels everywhere: `model-with-reasoning` now lowercases the
+  host's display label and the effort level, so "Fable 5" + "High" render as
+  `fable 5 (high)` and match the id-derived form.
+- Add `fast-mode` segment: renders `fast` when the session config dir's
+  `settings.json` has `fastMode: true`, resolved per-process via
+  `CLAUDE_CONFIG_DIR` so concurrent sessions under different profiles stay
+  independent.
+- Add `newline` segment: starts a new status row (Claude Code renders each
+  stdout line as its own row); rows that end up empty are dropped.
+- Pin `@modelcontextprotocol/sdk@1.12.1`, `zod@3.25.76`, and
+  `typescript@5.9.3` exactly. `bun.lock` is gitignored, so installs resolve
+  fresh from ranges; the caret'd SDK drifted to 1.29.0, which nests its own
+  zod 4 copy and fails typecheck under TS 5.9. Exact pins restore a single-zod,
+  deterministic tree.
+
 ## 0.0.3 - 2026-07-27
 
 - Add `auth-profile` and `auth-email` segments that report the account **this
