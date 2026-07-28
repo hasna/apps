@@ -3042,6 +3042,11 @@ describe('knowledge cli', () => {
     expect(packOut.evidence[0].citation_ids.length).toBeGreaterThan(0);
 
     const db = openKnowledgeDb(join(dir, '.hasna', 'knowledge', 'knowledge.db'));
+    // Relative to now, NOT a hardcoded date: this row is filtered through `--since 30d`
+    // below, so a fixed timestamp is a time bomb. The original '2026-06-25T00:00:00.000Z'
+    // aged out of the 30-day window on 2026-07-25 and turned main's CI red on wall clock
+    // alone, with no code change.
+    const runCreatedAt = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString();
     try {
       db.run(
         `INSERT INTO runs (id, type, prompt, status, provider, model, metadata_json, created_at, updated_at)
@@ -3054,8 +3059,8 @@ describe('knowledge cli', () => {
           'local',
           'context-pack',
           JSON.stringify({ loop_id: 'loop_cli', artifact_uri: 'file:///tmp/run_cli_loop.json' }),
-          '2026-06-25T00:00:00.000Z',
-          '2026-06-25T00:00:00.000Z',
+          runCreatedAt,
+          runCreatedAt,
         ],
       );
     } finally {
