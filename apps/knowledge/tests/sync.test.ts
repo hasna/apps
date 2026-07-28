@@ -183,6 +183,10 @@ function fakeTopology(workspaceHome: string): KnowledgeMachineTopology {
     warnings: [],
     adapter: {
       package: '@hasna/machines',
+      entrypoint: '@hasna/machines/consumer',
+      mode: 'sdk',
+      implementation: 'sdk',
+      contract_version: 1,
       available: true,
       error: null,
     },
@@ -287,6 +291,7 @@ describe('knowledge machine sync ledger', () => {
       proposedPatchUri: 'file:///tmp/proposed.patch',
     });
     expect(approvedResolution.ok).toBe(true);
+    if (!approvedResolution.ok) throw new Error('Expected conflict resolution to succeed');
     expect(approvedResolution.conflict.status).toBe('resolved');
     expect(approvedResolution.conflict.approved_by).toBe('test-reviewer');
     expect(approvedResolution.audit_event_id).toStartWith('audit_');

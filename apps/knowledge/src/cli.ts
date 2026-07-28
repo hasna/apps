@@ -1273,7 +1273,11 @@ async function run(argv: string[]): Promise<void> {
         output({
           ok: true,
           ...status,
-          message: `knowledge.db storage mode ${status.mode}${status.activeEnv ? ` via ${status.activeEnv}` : ''}`,
+          // 5213a51 dropped the DATABASE_URL reporting fields (configured/env/activeEnv)
+          // from StorageStatus — a raw DB DSN is never a client concept — but missed this
+          // call site, which kept reading `status.activeEnv` (always undefined, so the
+          // ` via …` suffix had been dead since then). Message output is unchanged.
+          message: `knowledge.db storage mode ${status.mode}`,
         }, flags.json, flags);
         return;
       }
