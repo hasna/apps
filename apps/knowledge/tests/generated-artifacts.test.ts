@@ -14,7 +14,9 @@ import {
   generatedJsFiles,
   patternSelfCheck,
   scanForStalePatterns,
-  // @ts-expect-error - .mjs build script, intentionally untyped and not part of the public API
+  // Untyped .mjs build script, intentionally so — not part of the public API. The import
+  // resolves as `any`. No @ts-expect-error here: this tsconfig has `strict: false`, so the
+  // TS7016 that directive was written for never fires, and tsc flags it unused (TS2578).
 } from '../scripts/verify-generated-artifacts.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');

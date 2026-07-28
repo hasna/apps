@@ -116,7 +116,7 @@ describe('knowledge sqlite store', () => {
           id, path, title, artifact_uri, content_hash, status, metadata_json, created_at, updated_at
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
+      `, [
         'wiki_legacy',
         'wiki/legacy.md',
         'Legacy Wiki Page',
@@ -126,7 +126,7 @@ describe('knowledge sqlite store', () => {
         '{}',
         '2026-06-30T10:00:00.000Z',
         '2026-06-30T11:00:00.000Z',
-      );
+      ]);
       const version = before.query<{ version: number }, []>('SELECT MAX(version) AS version FROM schema_versions').get();
       expect(version?.version).toBe(7);
       const columns = before.query<{ name: string }, []>('PRAGMA table_info(wiki_pages)').all()
@@ -194,7 +194,7 @@ describe('knowledge sqlite store', () => {
           bundle_id
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
+      `, [
         'change_partial_v7',
         'linux-node-b',
         'linux-node-a',
@@ -205,7 +205,7 @@ describe('knowledge sqlite store', () => {
         '2026-06-09T00:00:00.000Z',
         42,
         'syncbundle_partial',
-      );
+      ]);
       db.run(`
         INSERT INTO knowledge_sync_table_clocks (
           table_name,
@@ -221,7 +221,7 @@ describe('knowledge sqlite store', () => {
           updated_at
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
+      `, [
         'wiki_pages',
         'linux-node-b',
         42,
@@ -233,7 +233,7 @@ describe('knowledge sqlite store', () => {
         '{}',
         '2026-06-09T00:00:01.000Z',
         '2026-06-09T00:00:01.000Z',
-      );
+      ]);
       db.run(`
         INSERT INTO knowledge_sync_imports (
           bundle_id,
@@ -249,7 +249,7 @@ describe('knowledge sqlite store', () => {
           metadata_json
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
+      `, [
         'syncbundle_partial',
         'linux-node-b',
         'linux-node-a',
@@ -261,7 +261,7 @@ describe('knowledge sqlite store', () => {
         '2026-06-09T00:00:00.000Z',
         '2026-06-09T00:00:01.000Z',
         '{}',
-      );
+      ]);
       db.run('DELETE FROM schema_versions WHERE version = 7');
     } finally {
       db.close();
