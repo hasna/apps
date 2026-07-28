@@ -4,6 +4,7 @@ import { compactAge, compactDuration, compactNum, money } from "../format.js";
 import { gitBranch, gitProjectName, lastCommitEpoch, trackedLineCount } from "../git.js";
 import { contextUsage } from "../context-window.js";
 import { sessionAccount, sessionAccountEmail } from "../accounts.js";
+import { sessionFastMode } from "../settings.js";
 
 /**
  * Format a model id like "claude-fable-5[1m]" or "claude-3-5-sonnet-20241022"
@@ -27,9 +28,12 @@ function friendlyModel(id: string): { name: string; tag: string | null } {
 
 const dir = (ctx: StatusContext) => ctx.cwd || process.cwd();
 
-/** Model name for display: the host's own label, else a tidied-up id. */
+/**
+ * Model name for display: the host's own label, else a tidied-up id — always
+ * lowercase, so host labels ("Fable 5") match the id-derived form ("fable 5").
+ */
 function modelName(ctx: StatusContext): string | null {
-  if (ctx.model?.displayName) return ctx.model.displayName;
+  if (ctx.model?.displayName) return ctx.model.displayName.toLowerCase();
   return ctx.model?.id ? friendlyModel(ctx.model.id).name : null;
 }
 
@@ -120,10 +124,17 @@ export const segments: Segment[] = [
     render(ctx) {
       const name = modelName(ctx);
       if (!name) return null;
-      if (ctx.effort) return `${name} (${ctx.effort})`;
+      if (ctx.effort) return `${name} (${ctx.effort.toLowerCase()})`;
       if (ctx.thinking) return `${name} (thinking)`;
       return name;
     },
+  },
+  {
+    id: "fast-mode",
+    description: 'Shows "fast" when fast mode is on for this session\'s config dir',
+    defaultEnabled: false,
+    color: "yellow",
+    render: () => (sessionFastMode(process.env) ? "fast" : null),
   },
   {
     id: "auth-profile",
@@ -250,6 +261,14 @@ export const segments: Segment[] = [
     description: "Session identifier (short)",
     defaultEnabled: false,
     render: (ctx) => (ctx.sessionId ? ctx.sessionId.split("-")[0] : null),
+  },
+  {
+    id: "newline",
+    description: "Row break — segments after it render on the next line",
+    defaultEnabled: false,
+    // The renderer owns row breaks; this entry exists so the id is listable,
+    // orderable, and validated like any other segment.
+    render: () => null,
   },
 ];
 

@@ -1,7 +1,7 @@
 {
   "name": "@hasna/statusline",
   "version": "0.0.3",
-  "description": "Tiny composable statusline CLI for AI coding agents — pre-built toggleable segments for Claude Code, with a provider model for others",
+  "description": "Tiny composable statusline CLI for AI coding agents \u2014 pre-built toggleable segments for Claude Code, with a provider model for others",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -60,11 +60,11 @@
     "bun": ">=1.0.0"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.1",
-    "zod": "^3.25.76"
+    "@modelcontextprotocol/sdk": "1.12.1",
+    "zod": "3.25.76"
   },
   "devDependencies": {
     "@types/bun": "^1.2.4",
-    "typescript": "^5.7.3"
+    "typescript": "5.9.3"
   }
 }

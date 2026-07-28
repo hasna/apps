@@ -6,6 +6,7 @@ import { hostname } from "node:os";
 import { contextUsage } from "../src/context-window";
 import { gitProjectName, lastCommitEpoch, trackedLineCount } from "../src/git";
 import { getSegment, segments } from "../src/segments";
+import { sessionFastMode } from "../src/settings";
 import { parseClaudeInput } from "../src/providers/claude";
 import type { StatusContext } from "../src/providers/types";
 import fixture from "./fixtures/claude-input.json";
@@ -256,16 +257,22 @@ describe("session segments", () => {
 });
 
 describe("codewith-mirroring segments", () => {
-  test("model-with-reasoning appends the effort level", async () => {
+  test("model-with-reasoning appends the effort level, lowercased", async () => {
     const out = await getSegment("model-with-reasoning")!.render(ctx({ effort: { level: "xhigh" } }));
-    expect(out).toBe("Fable (xhigh)");
+    expect(out).toBe("fable (xhigh)");
   });
   test("model-with-reasoning falls back to thinking when no effort is reported", async () => {
     const out = await getSegment("model-with-reasoning")!.render(ctx({ thinking: { enabled: true } }));
-    expect(out).toBe("Fable (thinking)");
+    expect(out).toBe("fable (thinking)");
   });
   test("model-with-reasoning is bare when neither is reported", async () => {
-    expect(await getSegment("model-with-reasoning")!.render(ctx())).toBe("Fable");
+    expect(await getSegment("model-with-reasoning")!.render(ctx())).toBe("fable");
+  });
+  test("model-with-reasoning lowercases a capitalized host label and effort", async () => {
+    const out = await getSegment("model-with-reasoning")!.render(
+      ctx({ model: { id: "claude-fable-5", display_name: "Fable 5" }, effort: { level: "High" } }),
+    );
+    expect(out).toBe("fable 5 (high)");
   });
   test("model-with-reasoning derives a name from the id when unlabelled", async () => {
     const out = await getSegment("model-with-reasoning")!.render(
@@ -404,5 +411,43 @@ describe("context segments", () => {
   test("null when transcript missing", async () => {
     const c = ctx({ transcript_path: "/tmp/does-not-exist-xyz.jsonl" });
     expect(await getSegment("context-used")!.render(c)).toBeNull();
+  });
+});
+
+describe("fast-mode", () => {
+  function configDirWith(settings?: unknown): string {
+    const dir = mkdtempSync(join(tmpdir(), "statusline-fastmode-"));
+    if (settings !== undefined) writeFileSync(join(dir, "settings.json"), JSON.stringify(settings));
+    return dir;
+  }
+  test("on when the session config dir enables fastMode", () => {
+    expect(sessionFastMode({ CLAUDE_CONFIG_DIR: configDirWith({ fastMode: true }) })).toBe(true);
+  });
+  test("off when fastMode is false or absent", () => {
+    expect(sessionFastMode({ CLAUDE_CONFIG_DIR: configDirWith({ fastMode: false }) })).toBe(false);
+    expect(sessionFastMode({ CLAUDE_CONFIG_DIR: configDirWith({}) })).toBe(false);
+  });
+  test("off when settings.json is missing or malformed", () => {
+    expect(sessionFastMode({ CLAUDE_CONFIG_DIR: configDirWith() })).toBe(false);
+    const dir = mkdtempSync(join(tmpdir(), "statusline-fastmode-"));
+    writeFileSync(join(dir, "settings.json"), "{not json");
+    expect(sessionFastMode({ CLAUDE_CONFIG_DIR: dir })).toBe(false);
+  });
+  test("segment renders \"fast\" from the process env", async () => {
+    const previous = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = configDirWith({ fastMode: true });
+    try {
+      expect(await getSegment("fast-mode")!.render(ctx())).toBe("fast");
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = previous;
+    }
+  });
+});
+
+describe("newline segment", () => {
+  test("exists for row breaks and renders nothing itself", async () => {
+    expect(getSegment("newline")).toBeDefined();
+    expect(await getSegment("newline")!.render(ctx())).toBeNull();
   });
 });

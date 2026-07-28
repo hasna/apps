@@ -77,3 +77,24 @@ describe("renderLine", () => {
     expect(typeof line).toBe("string");
   });
 });
+
+describe("multi-line", () => {
+  test("newline splits segments into rows", async () => {
+    const ctx = parseClaudeInput({ ...fixture, session_name: "ship it" });
+    const line = await renderLine(ctx, {
+      separator: " · ",
+      segments: ["cost", "newline", "thread-title"],
+      colors: false,
+    });
+    expect(line).toBe("$1,234.50\nship it");
+  });
+  test("rows with no rendered segments are dropped", async () => {
+    const ctx = parseClaudeInput(fixture);
+    const line = await renderLine(ctx, {
+      separator: " · ",
+      segments: ["newline", "cost", "newline", "output-style", "newline"],
+      colors: false,
+    });
+    expect(line).toBe("$1,234.50");
+  });
+});

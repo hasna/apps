@@ -26,19 +26,30 @@ function paint(segment: Segment, text: string, ctx: StatusContext): string {
   return code ? `${code}${text}${RESET}` : text;
 }
 
-/** Render the configured segments; a failing segment is dropped, never fatal. */
+/**
+ * Render the configured segments; a failing segment is dropped, never fatal.
+ * A `newline` id starts a new row (hosts render each stdout line as its own
+ * row); rows that end up empty are dropped rather than rendered blank.
+ */
 export async function renderLine(ctx: StatusContext, cfg: StatuslineConfig): Promise<string> {
   const colorize = colorsEnabled(cfg);
-  const parts: string[] = [];
+  const rows: string[][] = [[]];
   for (const id of cfg.segments) {
+    if (id === "newline") {
+      rows.push([]);
+      continue;
+    }
     const segment = getSegment(id);
     if (!segment) continue;
     try {
       const out = await segment.render(ctx);
-      if (out) parts.push(colorize ? paint(segment, out, ctx) : out);
+      if (out) rows[rows.length - 1]!.push(colorize ? paint(segment, out, ctx) : out);
     } catch {
       // statuslines must never break the host UI
     }
   }
-  return parts.join(cfg.separator);
+  return rows
+    .map((parts) => parts.join(cfg.separator))
+    .filter((row) => row.length > 0)
+    .join("\n");
 }
