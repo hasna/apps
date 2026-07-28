@@ -12,6 +12,7 @@ import type {
 import {
   TaskNotFoundError,
   VersionConflictError,
+  isBlockingDependencyStatus,
 } from "../types/index.js";
 import { getDatabase, now, uuid } from "./database.js";
 import { checkCompletionGuard } from "../lib/completion-guard.js";
@@ -202,15 +203,21 @@ export function getTaskWithRelations(
     .all(id) as TaskRow[];
   const dependencies = depRows.map(rowToTask);
 
-  // Get blocked_by (tasks that depend on this task)
-  const blockedByRows = d
+  // blocked_by = the prerequisites still standing in the way. A completed or
+  // cancelled prerequisite no longer blocks (same rule as getBlockedTasks).
+  // Regression 4599ef37: this field used to carry the DEPENDENTS, so JSON
+  // consumers gating on it by name blocked the wrong side of every edge.
+  const blocked_by = dependencies.filter((dep) => isBlockingDependencyStatus(dep.status));
+
+  // Get blocks (tasks that depend on this task — the ones this task blocks)
+  const blocksRows = d
     .query(
       `SELECT t.* FROM tasks t
        JOIN task_dependencies td ON td.task_id = t.id
        WHERE td.depends_on = ?`,
     )
     .all(id) as TaskRow[];
-  const blocked_by = blockedByRows.map(rowToTask);
+  const blocks = blocksRows.map(rowToTask);
 
   // Get comments
   const comments = d
@@ -230,6 +237,7 @@ export function getTaskWithRelations(
     subtasks,
     dependencies,
     blocked_by,
+    blocks,
     comments,
     parent,
     checklist,

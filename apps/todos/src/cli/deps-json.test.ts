@@ -72,8 +72,11 @@ describe("deps --json (local store)", () => {
     expect(edges.task_id).toBe(b.id);
     expect(edges.dependencies).toHaveLength(1);
     expect(edges.dependencies[0]).toMatchObject({ id: a.id, title: "A", status: "pending" });
+    // A is pending, so it blocks B; C (B's dependent) lives under `blocks`.
     expect(edges.blocked_by).toHaveLength(1);
-    expect(edges.blocked_by[0]).toMatchObject({ id: c.id, title: "C", status: "pending" });
+    expect(edges.blocked_by[0]).toMatchObject({ id: a.id, title: "A", status: "pending" });
+    expect(edges.blocks).toHaveLength(1);
+    expect(edges.blocks[0]).toMatchObject({ id: c.id, title: "C", status: "pending" });
   });
 
   test("human output is unchanged (no schema_version, keeps Depends on:/Blocks:)", async () => {
@@ -287,8 +290,13 @@ describe("deps --json (self-hosted store)", () => {
       expect(edges.task_id).toBe(TASK_ID);
       expect(edges.dependencies).toHaveLength(1);
       expect(edges.dependencies[0]).toMatchObject({ id: UPSTREAM_ID, title: "Upstream blocker", status: "in_progress" });
+      // The in-progress upstream still blocks this task; the downstream
+      // dependent lands under `blocks` (regression 4599ef37 — it used to be
+      // misfiled in `blocked_by`).
       expect(edges.blocked_by).toHaveLength(1);
-      expect(edges.blocked_by[0]).toMatchObject({ id: DOWNSTREAM_ID, title: "Downstream consumer", status: "pending" });
+      expect(edges.blocked_by[0]).toMatchObject({ id: UPSTREAM_ID, title: "Upstream blocker", status: "in_progress" });
+      expect(edges.blocks).toHaveLength(1);
+      expect(edges.blocks[0]).toMatchObject({ id: DOWNSTREAM_ID, title: "Downstream consumer", status: "pending" });
     } finally {
       server.stop(true);
     }
@@ -316,6 +324,7 @@ describe("deps --json (self-hosted store)", () => {
       const edges = JSON.parse(res.stdout);
       expect(edges.dependencies).toEqual([]);
       expect(edges.blocked_by).toEqual([]);
+      expect(edges.blocks).toEqual([]);
     } finally {
       server.stop(true);
     }

@@ -8,6 +8,7 @@ import { getDatabase } from "../db/database.js";
 import { listTasks, getTask } from "../db/tasks.js";
 import { getTaskDependencies, getTaskDependents } from "../db/task-graph.js";
 import { getBlockingDeps } from "../db/task-lifecycle.js";
+import { isBlockingDependencyStatus } from "../types/index.js";
 import type { Task } from "../types/index.js";
 
 export const DEPENDENCY_GRAPH_SCHEMA = "todos.dependency_graph.v1";
@@ -43,15 +44,19 @@ export interface DependencyEdge {
  * scheduler can honor ordering without a second lookup and without scraping
  * human output.
  *
- * IMPORTANT — field orientation (kept identical to `getTaskWithRelations` and
- * the human `Depends on:` / `Blocks:` output):
+ * Field orientation — every name means exactly what it says (regression
+ * 4599ef37: `blocked_by` used to carry the DEPENDENTS, so schedulers consuming
+ * it by name gated the wrong side and deadlocked the upstream task of every
+ * chain):
  *   - `dependencies` = this task's PREREQUISITES (upstream). This task depends
- *     on them; they must complete first. These are its blockers.
- *   - `blocked_by` = this task's DEPENDENTS (downstream). They depend on this
- *     task; this task blocks THEM. (The name reads backwards versus its
- *     contents — a dependent is a task this one "blocks" — so consume by
- *     meaning, not by name.)
- * A scheduler gating "is this runnable" cares about `dependencies`.
+ *     on them; they must complete first.
+ *   - `blocked_by` = the subset of `dependencies` that is still incomplete —
+ *     the tasks blocking this one RIGHT NOW. Empty means dispatchable. A
+ *     completed or cancelled prerequisite no longer blocks (same rule as
+ *     `getBlockedTasks`/`getBlockingDeps`).
+ *   - `blocks` = this task's DEPENDENTS (downstream). They depend on this
+ *     task; this task blocks THEM. Matches the human `Blocks:` output.
+ * A scheduler gating "is this runnable" cares about `blocked_by`.
  */
 export interface TaskDependencyEdges {
   schema_version: typeof TASK_DEPENDENCY_EDGES_SCHEMA;
@@ -64,6 +69,7 @@ export interface TaskDependencyEdges {
   short_id: string | null;
   dependencies: DependencyNode[];
   blocked_by: DependencyNode[];
+  blocks: DependencyNode[];
 }
 
 /**
@@ -419,23 +425,28 @@ export function getBlockers(taskId: string, db?: Database): BlockedTaskReport | 
   };
 }
 
+export { isBlockingDependencyStatus } from "../types/index.js";
+
 /**
  * Assemble a {@link TaskDependencyEdges} payload from already-resolved task
  * rows. Pure (no DB access) so both the local reader below and the cloud CLI
  * path — which hydrates remote edges via `cloudGetTaskRelations` — emit the
- * identical versioned shape.
+ * identical versioned shape. `blocked_by` is derived here from the incomplete
+ * prerequisites so no caller can reintroduce the inverted orientation
+ * (regression 4599ef37).
  */
 export function buildTaskDependencyEdges(
   task: { id: string; short_id: string | null },
   dependencies: Task[],
-  blocked_by: Task[],
+  blocks: Task[],
 ): TaskDependencyEdges {
   return {
     schema_version: TASK_DEPENDENCY_EDGES_SCHEMA,
     task_id: task.id,
     short_id: task.short_id,
     dependencies: dependencies.map(toNode),
-    blocked_by: blocked_by.map(toNode),
+    blocked_by: dependencies.filter((dep) => isBlockingDependencyStatus(dep.status)).map(toNode),
+    blocks: blocks.map(toNode),
   };
 }
 
@@ -453,11 +464,11 @@ export function getTaskDependencyEdges(taskId: string, db?: Database): TaskDepen
   const dependencies = getTaskDependencies(taskId, d)
     .map((edge) => getTask(edge.depends_on, d))
     .filter((t): t is Task => Boolean(t));
-  const blocked_by = getTaskDependents(taskId, d)
+  const blocks = getTaskDependents(taskId, d)
     .map((edge) => getTask(edge.task_id, d))
     .filter((t): t is Task => Boolean(t));
 
-  return buildTaskDependencyEdges(task, dependencies, blocked_by);
+  return buildTaskDependencyEdges(task, dependencies, blocks);
 }
 
 /**

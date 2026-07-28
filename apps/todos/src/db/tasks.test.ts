@@ -127,7 +127,7 @@ describe("getTaskWithRelations", () => {
     expect(full!.subtasks).toHaveLength(2);
   });
 
-  it("should include dependencies and blocked_by", () => {
+  it("should include dependencies, blocked_by, and blocks with correct orientation", () => {
     const a = createTask({ title: "Task A" }, db);
     const b = createTask({ title: "Task B" }, db);
     addDependency(b.id, a.id, db); // B depends on A
@@ -135,10 +135,17 @@ describe("getTaskWithRelations", () => {
     const fullB = getTaskWithRelations(b.id, db);
     expect(fullB!.dependencies).toHaveLength(1);
     expect(fullB!.dependencies[0]!.id).toBe(a.id);
+    // A is pending, so it blocks B right now.
+    expect(fullB!.blocked_by).toHaveLength(1);
+    expect(fullB!.blocked_by[0]!.id).toBe(a.id);
+    expect(fullB!.blocks).toHaveLength(0);
 
     const fullA = getTaskWithRelations(a.id, db);
-    expect(fullA!.blocked_by).toHaveLength(1);
-    expect(fullA!.blocked_by[0]!.id).toBe(b.id);
+    // Nothing blocks A (regression 4599ef37: its dependent used to land here).
+    expect(fullA!.dependencies).toHaveLength(0);
+    expect(fullA!.blocked_by).toHaveLength(0);
+    expect(fullA!.blocks).toHaveLength(1);
+    expect(fullA!.blocks[0]!.id).toBe(b.id);
   });
 });
 

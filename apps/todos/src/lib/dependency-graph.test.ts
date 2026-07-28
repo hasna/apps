@@ -135,9 +135,12 @@ describe("machine-readable dependency edges", () => {
     // Prerequisites of B (upstream): A only.
     expect(edges!.dependencies).toHaveLength(1);
     expect(edges!.dependencies[0]).toMatchObject({ id: a.id, title: "A", status: "completed" });
-    // Dependents of B (downstream): C only.
-    expect(edges!.blocked_by).toHaveLength(1);
-    expect(edges!.blocked_by[0]).toMatchObject({ id: c.id, title: "C", status: "pending" });
+    // A is completed, so nothing blocks B right now.
+    expect(edges!.blocked_by).toEqual([]);
+    // Dependents of B (downstream): C only — under `blocks`, never `blocked_by`
+    // (regression 4599ef37).
+    expect(edges!.blocks).toHaveLength(1);
+    expect(edges!.blocks[0]).toMatchObject({ id: c.id, title: "C", status: "pending" });
     // Compact node — carries id + status but not the full task row.
     expect(Object.keys(edges!.dependencies[0]!).sort()).toEqual(
       ["id", "plan_id", "priority", "project_id", "short_id", "status", "title"],
@@ -147,7 +150,7 @@ describe("machine-readable dependency edges", () => {
   it("returns empty edge arrays for a task with no dependencies", () => {
     const solo = createTask({ title: "Solo" });
     const edges = getTaskDependencyEdges(solo.id);
-    expect(edges).toMatchObject({ task_id: solo.id, dependencies: [], blocked_by: [] });
+    expect(edges).toMatchObject({ task_id: solo.id, dependencies: [], blocked_by: [], blocks: [] });
   });
 
   it("returns null for a task that does not exist", () => {

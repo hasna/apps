@@ -733,7 +733,12 @@ describe("remote CLI entrypoint authority boundary", () => {
           expect(payload.dependencies).toEqual([
             { id: DEP_ID, short_id: null, title: "Upstream dep", status: "pending", priority: "medium", plan_id: null, project_id: null },
           ]);
-          expect(payload.blocked_by).toEqual([]);
+          // The pending prerequisite blocks this task (regression 4599ef37:
+          // blocked_by used to carry the dependents instead).
+          expect(payload.blocked_by).toEqual([
+            { id: DEP_ID, short_id: null, title: "Upstream dep", status: "pending", priority: "medium", plan_id: null, project_id: null },
+          ]);
+          expect(payload.blocks).toEqual([]);
         } else {
           expect(result.stdout).toContain(DEP_ID);
         }

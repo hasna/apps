@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`blocked_by` now means "tasks that block me" on every machine-readable surface —
+  the inverted orientation deadlocked dependency chains** (task 4599ef37). `todos deps
+  <id> --json` (schema `todos.task_dependency_edges.v1`), `todos show/inspect --json`,
+  `getTaskWithRelations`, and the self-hosted hydration all placed this task's
+  DEPENDENTS in the field named `blocked_by`, while the human `Depends on:`/`Blocks:`
+  output read the same data correctly. Schedulers consuming the JSON by name
+  (@hasnaxyz/factory) therefore refused to dispatch the UPSTREAM task of every
+  dependency chain with `dependency_unmet` — the chain deadlocked its own blocker.
+  Now: `dependencies` = all prerequisites (upstream), `blocked_by` = the incomplete
+  prerequisites currently blocking the task (empty ⇒ dispatchable; completed and
+  cancelled prerequisites do not block, matching `getBlockedTasks`), and the
+  dependents moved to a new `blocks` field (matching the human `Blocks:` label). The
+  schema version stays `v1`: consumers pin it fail-closed, and the payload now finally
+  matches what v1's field names always claimed. The `/v1/tasks/:id/dependencies` wire
+  payload additionally carries the incoming edges under a new `blocks` key while
+  keeping the deprecated `blocked_by` alias (same contents) so pre-0.13.2 fleet
+  clients keep rendering `Blocks:` correctly; the CLI prefers `blocks` and falls back
+  to the legacy name against older servers.
+
 - **Secret redaction no longer destroys the clean value under a redacted key.** Once a
   secret-shaped object key was reduced to a pattern-specific placeholder
   (`[REDACTED_GITHUB_TOKEN]`, `[REDACTED_NPM_TOKEN]`), key-based redaction matched the word

@@ -131,10 +131,10 @@ export function TaskDetail({ task }: TaskDetailProps) {
         </Box>
       )}
 
-      {task.blocked_by.length > 0 && (
+      {task.blocks.length > 0 && (
         <Box flexDirection="column" marginBottom={1}>
-          <Text bold>Blocks ({task.blocked_by.length}):</Text>
-          {task.blocked_by.map((b) => (
+          <Text bold>Blocks ({task.blocks.length}):</Text>
+          {task.blocks.map((b) => (
             <Box key={b.id} marginLeft={2}>
               <Text dimColor>{b.id.slice(0, 8)} </Text>
               <Text color={statusColors[b.status] || "white"}>[{b.status}] </Text>
