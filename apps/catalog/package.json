@@ -46,6 +46,7 @@
   "files": [
     "dist",
     "fixtures",
+    "hasna.contract.json",
     "LICENSE",
     "README.md"
   ],
@@ -58,9 +59,10 @@
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/cli/index.ts serve",
     "prepublishOnly": "bun run verify:release",
-    "check:artifact": "bun scripts/check-packed-artifact.ts",
-    "prepack": "bun run build && bun run check:artifact",
-    "verify:release": "bun run typecheck && bun test && bun run build && bun run check:artifact",
+    "artifact-scan": "bun scripts/check-packed-artifact.ts",
+    "check:artifact": "bun run artifact-scan",
+    "prepack": "bun run build && bun run artifact-scan",
+    "verify:release": "bun run typecheck && bun test && bun run build && bun run artifact-scan",
     "check:artifact:tarball": "bun scripts/check-packed-artifact.ts --postpack",
     "postpack": "bun run check:artifact:tarball"
   },

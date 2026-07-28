@@ -674,6 +674,42 @@ export interface PackedFile {
 }
 
 /**
+ * Environment for every `npm pack` this guard runs. Exported so the tests can
+ * capture npm's own answer under exactly these conditions and compare the bun
+ * fallback against it, rather than against a second run of bun.
+ */
+export function npmPackEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const cache = process.env["npm_config_cache"] ?? process.env["NPM_CONFIG_CACHE"] ?? join(tmpdir(), "catalog-npm-cache");
+  return {
+    ...process.env,
+    npm_config_cache: cache,
+    NPM_CONFIG_CACHE: cache,
+    ...extra,
+  };
+}
+
+function listPackedFilesWithBun(cwd: string): PackedFile[] {
+  const result = spawnSync("bun", ["pm", "pack", "--dry-run", "--ignore-scripts"], {
+    cwd,
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (result.error) throw new Error(`could not run \`bun pm pack\`: ${result.error.message}`);
+  if (result.status !== 0) {
+    throw new Error(`\`bun pm pack --dry-run\` failed (exit ${result.status}):\n${result.stderr ?? ""}`);
+  }
+  const files = (result.stdout ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.match(/^packed\s+\S+\s+(.+)$/)?.[1])
+    .filter((path): path is string => Boolean(path))
+    .map((path) => ({ path, size: statSync(join(cwd, path)).size }));
+  if (!files.length) {
+    throw new Error(`\`bun pm pack --dry-run\` reported no packed files:\n${result.stdout ?? ""}`);
+  }
+  return files;
+}
+
+/**
  * Ask npm exactly which files it would publish.
  *
  * `--ignore-scripts` is REQUIRED: this guard itself runs from `prepack`, and
@@ -688,7 +724,7 @@ export function listPackedFiles(cwd: string): PackedFile[] {
     // suppressing the prepack hook, the nested guard sees this and exits 2 — a
     // loud failure instead of an infinite loop. It is never read from the
     // ambient parent environment, so it cannot serve as a kill switch.
-    env: { ...process.env, CATALOG_PACK_GUARD_ACTIVE: "1" },
+    env: npmPackEnv({ CATALOG_PACK_GUARD_ACTIVE: "1" }),
   });
   if (result.error) throw new Error(`could not run \`npm pack\`: ${result.error.message}`);
   if (result.status !== 0) {
@@ -696,7 +732,7 @@ export function listPackedFiles(cwd: string): PackedFile[] {
   }
   const stdout = (result.stdout ?? "").trim();
   const start = stdout.indexOf("[");
-  if (start === -1) throw new Error(`\`npm pack --dry-run --json\` produced no JSON:\n${stdout}`);
+  if (start === -1) return listPackedFilesWithBun(cwd);
   const parsed = JSON.parse(stdout.slice(start)) as Array<{ files?: PackedFile[] }>;
   const files = parsed[0]?.files;
   if (!files?.length) throw new Error("`npm pack --dry-run --json` reported no files");

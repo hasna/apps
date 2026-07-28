@@ -571,7 +571,7 @@ describe("the tarball itself is verifiable", () => {
   // scans the produced .tgz, which is the artifact rather than a prediction.
   test("scanTarball reads a real .tgz and finds what is inside it", () => {
     writePackage({ "dist/index.js": `export const d = "${apex("xyz")}";\n` });
-    const packed = spawnSync("npm", ["pack", "--ignore-scripts"], { cwd: pkgDir, encoding: "utf8" });
+    const packed = spawnSync("bun", ["pm", "pack", "--ignore-scripts", "--quiet"], { cwd: pkgDir, encoding: "utf8" });
     expect(packed.status).toBe(0);
     const name = (packed.stdout ?? "").trim().split("\n").pop()!;
     const report = scanTarball(join(pkgDir, name));
@@ -669,5 +669,70 @@ describe("the fixture that shipped in 0.1.0", () => {
     });
     expect(scanText(synthetic, "fixtures/apps.seed.jsonl")).toEqual([]);
     expect(findOrgAssetInventories(scanTextDetailed(synthetic).sightings)).toEqual([]);
+  });
+});
+
+// ── the packed-file list ─────────────────────────────────────────────────────
+// `npm pack --dry-run --json` is the primary source of the file list this guard
+// certifies. On CI runners where npm exits 0 but writes nothing to stdout the
+// guard used to throw "produced no JSON" and abort the release, so it now falls
+// back to `bun pm pack --dry-run`. The fallback is only worth having if it
+// returns the same list NPM would, which is what these tests pin — so the
+// expected value comes from real npm.
+//
+// It must not come from a second run of `bun pm pack`: a packager that disagrees
+// with npm would then sit on BOTH sides of the equality and stay green while an
+// uncertified file shipped. That is the divergence class this guard exists for
+// ("106 files certified, 107 shipped, the extra one full of mailboxes").
+
+import { listPackedFiles, npmPackEnv } from "./check-packed-artifact.js";
+
+/** The packed paths REAL npm reports, sorted — the fallback's expected answer. */
+function npmPackedPaths(cwd: string): string[] {
+  const result = spawnSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
+    cwd,
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+    env: npmPackEnv(),
+  });
+  expect(result.status).toBe(0);
+  const stdout = (result.stdout ?? "").trim();
+  const start = stdout.indexOf("[");
+  // An npm that printed nothing here would leave no independent expectation to
+  // compare against, so it is a test failure, never a quiet second bun run.
+  expect(start).toBeGreaterThanOrEqual(0);
+  const parsed = JSON.parse(stdout.slice(start)) as Array<{ files?: Array<{ path: string }> }>;
+  const paths = (parsed[0]?.files ?? []).map((file) => file.path).sort();
+  expect(paths.length).toBeGreaterThan(0);
+  return paths;
+}
+
+/** Puts a stub `npm` first on PATH for the duration of `run`. */
+function withStubNpm<T>(script: string, run: () => T): T {
+  const binDir = mkdtempSync(join(tmpdir(), "stub-npm-"));
+  writeFileSync(join(binDir, "npm"), script, { mode: 0o755 });
+  const realPath = process.env["PATH"];
+  process.env["PATH"] = `${binDir}:${realPath ?? ""}`;
+  try {
+    return run();
+  } finally {
+    process.env["PATH"] = realPath;
+    rmSync(binDir, { recursive: true, force: true });
+  }
+}
+
+describe("listPackedFiles survives an npm that prints no JSON", () => {
+  test("the `bun pm pack --dry-run` fallback certifies exactly the list npm would", () => {
+    writePackage({ "dist/index.js": "export const ok = 1;\n", "dist/nested/util.js": "export const u = 2;\n" });
+    // Captured while real npm is still on PATH, before the stub shadows it.
+    const expected = npmPackedPaths(pkgDir);
+    const files = withStubNpm("#!/bin/sh\nexit 0\n", () => listPackedFiles(pkgDir));
+    expect(files.map((file) => file.path).sort()).toEqual(expected);
+    expect(files.every((file) => file.size > 0)).toBe(true);
+  });
+
+  test("an npm that fails outright still fails loudly rather than falling back", () => {
+    writePackage({ "dist/index.js": "export const ok = 1;\n" });
+    expect(() => withStubNpm("#!/bin/sh\necho boom >&2\nexit 1\n", () => listPackedFiles(pkgDir))).toThrow(/npm pack --dry-run/);
   });
 });
