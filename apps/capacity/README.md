@@ -1,98 +1,106 @@
 # @hasna/capacity
 
-> **WIP CHECKPOINT — NO-GO.** This branch is preserved for local review only.
-> The Accounts V1 successor contract is not independently approved or pinned,
-> and the credential-effect journal still targets an obsolete candidate. Do not
-> deploy, merge to `main`, publish, or treat `ACCOUNTS_V1_CONTRACT_SHA256` as a
-> successor attestation until the exact contract, implementation, and final
-> adversarial gates all pass.
->
-> The current immutable but unpinned review pair is preserved under
-> [`contracts/accounts-v1`](contracts/accounts-v1/README.md). Its presence on
-> this branch is provenance only, not approval.
+Fail-closed provider account capacity metadata for local and self-hosted Hasna deployments.
 
-Accounts is the fail-closed provider-capacity metadata boundary for Hasna
-`local` and `self_hosted` deployments. It models provider accounts,
-entitlements, capacity pools, account lanes, credential bindings, native
-AuthCapsule metadata, signed authority evidence, and non-reservational slot
-eligibility.
+Capacity models provider accounts, entitlements, capacity pools, account lanes,
+credential bindings, native AuthCapsule metadata, signed authority evidence,
+and non-reservational slot eligibility. Public TypeScript names, environment
+variables, and wire schemas retain `Accounts` for compatibility.
 
-Implemented adapters and surfaces:
+Implemented surfaces include deterministic in-memory storage, owner-only SQLite,
+RLS-isolated PostgreSQL, signed recovery and effect journals, local/self-hosted
+SDKs with no fallback, authenticated HTTP handlers, OpenAPI 3.1, and a local
+read/diagnostic CLI with offline validation and native probing.
 
-- deterministic in-memory and owner-only SQLite repositories for local use;
-- RLS-isolated PostgreSQL for Hasna-owned AWS self-hosting;
-- persistent signed recovery and credential-effect journals outside the
-  restorable catalog;
-- closed Ed25519 authority evidence and online generation-check receipts;
-- local/self-hosted SDK selection with no fallback;
-- authenticated HTTP handlers and generated OpenAPI 3.1;
-- a safe local read/diagnostic CLI.
+Capacity does not issue Infinity leases, schedule work, run provider calls,
+return raw credential handles, launch processes, or provide SaaS tenant, signup,
+billing, or registration features. Capacity queries always report
+`reservation: "none"`.
 
-Accounts does not issue Infinity resource leases, schedule work, run provider
-calls, return raw credential handles, launch processes, or provide SaaS tenant,
-signup, billing, or public registration features. Ordinary model-call effects
-remain broker/Run-Authority owned. Credential lifecycle execution requires the
-separate one-use capsule-maintenance authority and external effect journal.
+> The content-addressed files in [`contracts/accounts-v1`](contracts/accounts-v1/README.md)
+> are an unpinned review candidate preserved for provenance. Their presence is
+> not approval, and `ACCOUNTS_V1_CONTRACT_SHA256` does not attest that candidate.
 
-## Build and verify locally
+## Install
+
+The package and CLI require Bun 1.3 or later:
+
+```sh
+bun add @hasna/capacity
+bun add --global --trust @hasna/capacity
+```
+
+Bun blocks dependency lifecycle scripts unless explicitly trusted. The library
+remains usable, but the packaged CLI refuses a `dist/cli.js` payload writable by
+group or world. Trust allows the postinstall hardener to normalize file modes.
+An npm global install runs the hardener but still requires Bun on `PATH`:
+
+```sh
+npm install --global @hasna/capacity
+```
+
+## Library
+
+```ts
+import { createAccountsCapacity } from "@hasna/capacity";
+
+const capacity = createAccountsCapacity({
+  mode: "local",
+  actorRef: "principal:human:hasna:alice",
+  sqlitePath: "/var/lib/hasna/accounts.db",
+});
+const accounts = await capacity.providerAccounts.list({ limit: 25 });
+await capacity.close();
+```
+
+Deployment selection is explicit; self-hosted failures never fall back to
+SQLite. Local writes require an `idempotencyKey`. Positive local readiness and
+eligibility require a configured owner-only signed recovery ledger.
+See [`docs/library.md`](docs/library.md).
+
+## CLI
+
+```sh
+capacity --help
+capacity validate ./record.json --json
+capacity probe-native ./request.json ./snapshot.json \
+  --owner principal:human:hasna:alice --json
+HASNA_ACCOUNTS_DEPLOYMENT=local capacity doctor --json
+HASNA_ACCOUNTS_DEPLOYMENT=local capacity list access-methods --json
+HASNA_ACCOUNTS_DEPLOYMENT=local capacity eligibility <account-lane-uuidv7> \
+  --operation responses.create --model model.example \
+  --data-classification internal --destination-policy-class default --json
+```
+
+`validate`, `probe-native`, `help`, and `version` do not open the catalog.
+Catalog commands currently support only explicit local deployment. CLI
+eligibility is diagnostic evidence, never a reservation or production Infinity
+authority. See [`docs/cli.md`](docs/cli.md).
+
+## HTTP
+
+`createAccountsHttpHandler` exposes authenticated public and internal routes,
+plus unauthenticated health, readiness, version, and OpenAPI endpoints. The
+package does not start a server. See [`docs/http-api.md`](docs/http-api.md) and
+[`openapi/accounts.capacity.v1.json`](openapi/accounts.capacity.v1.json).
+
+## Build and verify
 
 ```sh
 bun install
 bun test
 bun run typecheck
 bun run build
+bun openapi/generate.ts
+git diff --exit-code -- openapi/accounts.capacity.v1.json
 ```
 
-## Install the CLI artifact
-
-Bun blocks dependency lifecycle scripts unless a package is explicitly trusted.
-An ordinary Bun install is therefore fail-closed: if the blocked lifecycle
-leaves `dist/cli.js` writable by group or world, `capacity` refuses to run. The
-packaged launcher opens that payload without following symlinks, verifies the
-open descriptor is a regular file with an acceptable mode, and evaluates only
-the bytes read from that descriptor. Trusting the package during installation
-lets the lifecycle hardener normalize both launcher and payload to mode `0755`:
-
-```sh
-bun add --trust @hasna/capacity
-bun add --global --trust @hasna/capacity
-```
-
-An npm install runs the same permission-hardening lifecycle automatically:
-
-```sh
-npm install --global @hasna/capacity
-```
-
-The package remains a Bun CLI; an npm-based install still requires Bun on
-`PATH`.
-
-The live PostgreSQL conformance test is opt-in and expects an empty disposable
-database:
+The live PostgreSQL test is opt-in and requires an empty disposable database:
 
 ```sh
 ACCOUNTS_TEST_POSTGRES_URL='postgresql://user@127.0.0.1/accounts_test?sslmode=disable' \
   bun test test/storage/postgres-live.test.ts
 ```
 
-Plaintext PostgreSQL is accepted only by this explicit loopback test path.
-Self-hosted connections require `sslmode=verify-full`.
-
-## Local CLI
-
-```sh
-HASNA_ACCOUNTS_DEPLOYMENT=local capacity doctor --json
-capacity validate ./record.json --json
-HASNA_ACCOUNTS_DEPLOYMENT=local capacity list access-methods --json
-HASNA_ACCOUNTS_DEPLOYMENT=local capacity get access-methods <uuidv7> --json
-HASNA_ACCOUNTS_DEPLOYMENT=local capacity eligibility <account-lane-uuidv7> \
-  --operation responses.create \
-  --model model.example \
-  --data-classification internal \
-  --json
-```
-
-Positive local evaluation requires an explicitly configured, owner-only signed
-recovery ledger through the SDK/factory. Without it, readiness and eligibility
-stay on recovery hold. CLI output is local diagnostic evidence only and never a
-reservation or production Infinity authority.
+Plaintext PostgreSQL is accepted only by this explicit literal-loopback test
+path. Self-hosted connections require `sslmode=verify-full`.

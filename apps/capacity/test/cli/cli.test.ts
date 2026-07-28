@@ -100,7 +100,10 @@ describe("accounts CLI", () => {
     expect(noCommand).toEqual(help);
     expect(noCommand.exitCode).toBe(0);
     expect(noCommand.stderr).toBe("");
+    expect(noCommand.stdout).toContain("capacity help [--json]");
+    expect(noCommand.stdout).toContain("capacity version [--json]");
     expect(noCommand.stdout).toContain("capacity validate <file|-> [--json]");
+    expect(noCommand.stdout).toContain("[--destination-policy-class <id>]");
     expect(noCommand.stdout).not.toContain(PACKAGE_VERSION);
   });
 

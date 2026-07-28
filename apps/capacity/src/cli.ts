@@ -283,12 +283,14 @@ function output(json: boolean, command: string, data: unknown): void {
 
 function usageText(): string {
   return [
+    "capacity help [--json]",
+    "capacity version [--json]",
     "capacity validate <file|-> [--json]",
     "capacity probe-native <request-file> <snapshot-file> --owner <principal> [--json]",
     "capacity doctor [--json]",
     "capacity list <accounts|entitlements|capacity-pools|access-methods|auth-capsules|credential-bindings> [--json]",
     "capacity get <noun> <uuidv7> [--json]",
-    "capacity eligibility <access-method-uuidv7> --operation <id> --model <id> --data-classification <id> [--json]",
+    "capacity eligibility <access-method-uuidv7> --operation <id> --model <id> --data-classification <id> [--destination-policy-class <id>] [--json]",
   ].join("\n");
 }
 
