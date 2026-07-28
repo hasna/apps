@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, join, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { migrateKnowledgeDb, openKnowledgeDb } from '../src/knowledge-db';
+import { KNOWLEDGE_API_KEY_ENV_KEYS, KNOWLEDGE_API_URL_ENV_KEYS } from '../src/knowledge-mode';
 import { createKnowledgeService } from '../src/service';
 import { parseSourceRef } from '../src/source-ref';
 import { recordStorageObjects } from '../src/storage-contract';
@@ -24,10 +25,35 @@ const packageJson = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'
   bin: Record<string, string>;
 };
 
+/**
+ * The env every spawned CLI gets: the parent's, minus the cloud pointer vars,
+ * plus the caller's overrides.
+ *
+ * Those two variables are exported in a login shell on developer machines and
+ * inherited by every pane from the tmux server, so a child that gets the parent
+ * environment verbatim is configured differently from one run in CI. That is not
+ * hypothetical: `auth whoami` reports `authenticated: true` purely from the
+ * presence of an API key, so this suite's hosted-auth contract test measured the
+ * developer's shell rather than the temp auth dir it had just created, and
+ * failed for a reason that had nothing to do with the code under test.
+ *
+ * This is DEFENCE IN DEPTH, not the control. The control is the outbound request
+ * guard in src/net-guard.ts, which refuses non-loopback traffic under
+ * NODE_ENV=test no matter how the variables got set or when. Stripping here only
+ * removes the noise; it cannot be relied on, because a test that assigns the
+ * vars at module scope runs after any clearing step. A caller that genuinely
+ * wants them passes them explicitly and wins, since the overrides land last.
+ */
+function childEnv(env?: Record<string, string>): Record<string, string> {
+  const inherited = { ...process.env } as Record<string, string>;
+  for (const key of [...KNOWLEDGE_API_URL_ENV_KEYS, ...KNOWLEDGE_API_KEY_ENV_KEYS]) delete inherited[key];
+  return { ...inherited, ...(env ?? {}) };
+}
+
 function runCli(args: string[], cwd?: string, env?: Record<string, string>) {
   return Bun.spawnSync(['bun', CLI, ...args], {
     cwd,
-    env: env ? { ...process.env, ...env } : undefined,
+    env: childEnv(env),
     stdout: 'pipe',
     stderr: 'pipe'
   });
@@ -40,7 +66,7 @@ function homeEnv(home: string): Record<string, string> {
 function runCliWithInput(args: string[], input: string, cwd?: string, env?: Record<string, string>) {
   const result = spawnSync('bun', [CLI, ...args], {
     cwd,
-    env: env ? { ...process.env, ...env } : undefined,
+    env: childEnv(env),
     input,
     maxBuffer: 64 * 1024 * 1024,
   });
@@ -63,7 +89,7 @@ function runKnowledgeBin(args: string[], cwd?: string, env?: Record<string, stri
   ].join('\n'));
   return Bun.spawnSync(['bun', wrapper, ...args], {
     cwd,
-    env: env ? { ...process.env, ...env } : undefined,
+    env: childEnv(env),
     stdout: 'pipe',
     stderr: 'pipe',
   });
@@ -73,7 +99,7 @@ function runBuiltKnowledgeBin(args: string[], cwd?: string, env?: Record<string,
   const builtCli = join(__dirname, '..', packageJson.bin.knowledge);
   return Bun.spawnSync(['bun', builtCli, ...args], {
     cwd,
-    env: env ? { ...process.env, ...env } : undefined,
+    env: childEnv(env),
     stdout: 'pipe',
     stderr: 'pipe',
   });
@@ -1399,7 +1425,7 @@ describe('knowledge cli', () => {
       console.log(JSON.stringify(result));
     `;
     const child = Bun.spawnSync(['bun', '-e', script], {
-      env: { ...process.env, ...homeEnv(home) },
+      env: childEnv(homeEnv(home)),
       stdout: 'pipe',
       stderr: 'pipe',
     });

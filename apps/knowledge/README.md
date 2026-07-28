@@ -511,6 +511,31 @@ knowledge paths [--scope global|project|local] [--verbose] [--json]
 Show compact resolved app paths by default. Use `--verbose` or `--json` for
 every path and the loaded config.
 
+### mode
+```bash
+knowledge mode [--json]
+```
+Report which backend this process would use — `local` (the on-box store) or
+`cloud` (the HTTP `/v1` API) — and which environment variable selected it.
+
+Selection is **explicit only**. Set `HASNA_KNOWLEDGE_STORAGE_MODE=local|cloud`
+(aliases `HASNA_KNOWLEDGE_MODE`, `KNOWLEDGE_STORAGE_MODE`, `KNOWLEDGE_MODE`, in
+that precedence order; `self_hosted` is accepted as a deprecated spelling of
+`cloud`). Setting `HASNA_KNOWLEDGE_API_URL` / `HASNA_KNOWLEDGE_API_KEY` alone
+does **not** switch backends — those are pointers saying where the cloud is and
+how to authenticate, and `mode` reports them as present-but-ignored so a machine
+that has them exported in its shell is not silently reading a different store
+than a machine that does not.
+
+The command reads the environment only: no store is opened, no config file is
+read, and no request is made, so it answers correctly on a machine with no
+config and no network. Environment variable **names** are printed, never values.
+
+While `NODE_ENV=test`, every non-loopback outbound request from this package is
+refused before a socket is opened; `mode` reports that as
+`network_guard_active`. Point the API URL at `127.0.0.1` for a hermetic
+cloud-transport test.
+
 ### storage
 ```bash
 knowledge storage status [--scope project] [--json]
@@ -706,8 +731,10 @@ the remote repo root or remote `.hasna/knowledge` path.
 `knowledge sync` owns knowledge semantics and conflict visibility for
 peer/machine catalog transfer. It is distinct from `db storage status`, which is
 a read-only local catalog inspector. (The legacy `db storage sync`/`push`/`pull`
-Postgres-DSN commands were removed; cross-machine sharing uses the cloud API
-flip — `HASNA_KNOWLEDGE_API_URL` + `HASNA_KNOWLEDGE_API_KEY` — instead.)
+Postgres-DSN commands were removed; cross-machine sharing uses cloud mode —
+`HASNA_KNOWLEDGE_STORAGE_MODE=cloud` plus `HASNA_KNOWLEDGE_API_URL` +
+`HASNA_KNOWLEDGE_API_KEY` — instead. The mode var is required: the two pointer
+vars on their own do not switch backends. See [`mode`](#mode).)
 
 ### setup / auth / remote
 ```bash
@@ -741,10 +768,12 @@ Initialize or inspect the versioned SQLite catalog at
 durable table list, and local sync history. It is read-only. The legacy
 `push`/`pull`/`sync` Postgres commands and the client `HASNA_KNOWLEDGE_DATABASE_URL`
 DSN were removed — a raw database DSN is never distributed to clients. To share
-knowledge across machines, use the cloud API flip instead: set
-`HASNA_KNOWLEDGE_API_URL` + `HASNA_KNOWLEDGE_API_KEY` so every read/write routes
-through the self-hosted HTTP API. The optional mode env vars are
-`HASNA_KNOWLEDGE_STORAGE_MODE` / `KNOWLEDGE_STORAGE_MODE` (`local` or `cloud`).
+knowledge across machines, use cloud mode instead: set
+`HASNA_KNOWLEDGE_STORAGE_MODE=cloud` **and** `HASNA_KNOWLEDGE_API_URL` +
+`HASNA_KNOWLEDGE_API_KEY` so every read/write routes through the HTTP API. The
+mode var is **not** optional and the pointer vars are **not** a substitute for
+it: presence of a URL and a key never switches backends on its own. Run
+[`knowledge mode`](#mode) to see what the current environment resolves to.
 The durable table list excludes local derived FTS indexes such as `chunks_fts`.
 
 ### wiki

@@ -48,6 +48,26 @@ export {
   type KnowledgeCloudPatch,
 } from './cloud-store.js';
 export {
+  KNOWLEDGE_API_KEY_ENV_KEYS,
+  KNOWLEDGE_API_URL_ENV_KEYS,
+  KNOWLEDGE_MODE_ENV_KEYS,
+  knowledgeModeReport,
+  pinnedTransportEnv,
+  resolveKnowledgeModeSelection,
+  type KnowledgeMode,
+  type KnowledgeModeReport,
+  type KnowledgeModeResolution,
+  type KnowledgeModeSource,
+} from './knowledge-mode.js';
+export {
+  NETWORK_GUARD_ENV,
+  KnowledgeNetworkGuardError,
+  assertOutboundRequestAllowed,
+  guardedFetch,
+  isLoopbackHostname,
+  isNetworkGuardActive,
+} from './net-guard.js';
+export {
   buildKnowledgeAgentContextPack,
   type KnowledgeAgentContextCitation,
   type KnowledgeAgentContextEvidence,

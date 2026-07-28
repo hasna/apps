@@ -7,6 +7,7 @@ import { resolveOpenFilesSource } from './source-resolver';
 import type { KnowledgeConfig } from './workspace';
 import { assertS3ReadAllowed, assertWebSearchAllowed, type SafetyPolicy } from './safety';
 import { assertNoPrivateRefs, redactPrivateRefs } from './private-ref';
+import { guardedFetch } from './net-guard';
 
 export interface SourceIngestOptions {
   dbPath: string;
@@ -79,7 +80,11 @@ async function readS3Text(uri: string, config?: KnowledgeConfig, safetyPolicy?: 
 
 async function readWebText(uri: string, safetyPolicy?: SafetyPolicy): Promise<{ text: string; mime: string | null }> {
   if (safetyPolicy) assertWebSearchAllowed(safetyPolicy);
-  const response = await fetch(uri, {
+  // The package's second outbound path, and it goes through the same guard as
+  // the cloud item transport: under NODE_ENV=test a `web://` source ref must not
+  // reach the network any more than a note write must. Nothing in the suite
+  // ingests a web ref today, which is exactly why this is easy to leave open.
+  const response = await guardedFetch(uri, {
     headers: {
       accept: 'text/markdown,text/plain,text/html,application/json;q=0.8,*/*;q=0.5',
       'user-agent': '@hasna/knowledge source-ingest',
