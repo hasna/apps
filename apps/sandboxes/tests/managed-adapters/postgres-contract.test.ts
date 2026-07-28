@@ -87,6 +87,50 @@ class SetRoleMigrationIdentityClient implements PostgresClientV1 {
   async close(): Promise<void> {}
 }
 
+class QuerylessMigrationSessionClient implements PostgresClientV1 {
+  transactions = 0
+
+  constructor(
+    readonly kind: "journal" | "witness",
+  ) {}
+
+  async query<Row extends Record<string, unknown>>(statement: string): Promise<Row[]> {
+    const migrationRole = this.kind === "journal" ? "journal_migration" : "witness_migration"
+    if (statement.includes("current_user::text AS current_user")) {
+      return [{
+        session_user: migrationRole,
+        current_user: migrationRole,
+        current_database: this.kind,
+        database_oid: 42n,
+        cluster_system_identifier: this.kind === "journal" ? "100" : "200",
+        ssl_in_use: true,
+        owner: migrationRole,
+        can_create_database: false,
+        can_create_temporary: false,
+        database_owner_member: false,
+        is_superuser: false,
+        can_create_db_role: false,
+        can_create_role: false,
+        can_replicate: false,
+        can_bypass_rls: false,
+        parent_memberships: 0n,
+        settable_memberships: 0n,
+      }] as unknown as Row[]
+    }
+    if (statement.includes("owner.rolname::text AS owner")) {
+      return [{ owner: migrationRole }] as unknown as Row[]
+    }
+    throw new Error("unexpected pre-mutation query")
+  }
+
+  async transaction<T>(fn: (session: PostgresSessionV1) => Promise<T>): Promise<T> {
+    this.transactions += 1
+    return await fn({} as PostgresSessionV1)
+  }
+
+  async close(): Promise<void> {}
+}
+
 test("checked native journal migrations load with their exact published digests", () => {
   expect(digest(loadPostgresDisposableTaskJournalMigrationSourceV1()))
     .toBe(POSTGRES_DISPOSABLE_TASK_JOURNAL_MIGRATION_V1.checksum_sha256)
@@ -202,4 +246,66 @@ test("self-hosted migrations reject SET ROLE session identities before mutation"
 
   expect(journal.transactions).toBe(0)
   expect(witness.transactions).toBe(0)
+})
+
+test("self-hosted migrations surface a database initialization failure before querying a bad transaction session", async () => {
+  const keys = generateKeyPairSync("ed25519")
+  const journalCrypto = createEd25519DisposableTaskJournalCryptoV1({
+    signer_principal: "service:sandboxes-journal",
+    signing_key_id: "journal-key-v1",
+    private_key: keys.privateKey,
+    public_key: keys.publicKey,
+  })
+  const witnessCrypto = createEd25519DurableJournalWitnessCryptoV1({
+    signer_principal: "service:sandboxes-witness",
+    signing_key_id: "witness-key-v1",
+    private_key: keys.privateKey,
+    public_key: keys.publicKey,
+  })
+  const sha = (seed: string) =>
+    `sha256:${createHash("sha256").update(seed).digest("hex")}` as const
+  const journal = new QuerylessMigrationSessionClient("journal")
+  const witness = new QuerylessMigrationSessionClient("witness")
+
+  await expect(applyPostgresDisposableTaskJournalMigrationV2(journal, {
+    expected_migration_role: "journal_migration",
+    expected_database: "journal",
+    expected_journal_cluster_system_identifier: "100",
+    runtime_role: "journal_runtime",
+    witness_acknowledgement_role: "journal_witness_ack",
+    journal_identity_sha256: sha("journal"),
+    restore_domain_sha256: sha("journal-restore"),
+    external_head_witness_sha256: sha("witness"),
+    witness_verification_key_sha256: witnessCrypto.signer.verification_key_sha256,
+    signer_principal: journalCrypto.signer.signer_principal,
+    signing_key_id: journalCrypto.signer.signing_key_id,
+    verification_key_sha256: journalCrypto.signer.verification_key_sha256,
+    encrypted_at_rest: true,
+  })).rejects.toMatchObject({
+    code: "dependency_unavailable",
+    message: "postgres database initialization failed: disposable task journal migration transaction did not provide a query-capable session",
+    retryable: true,
+  })
+
+  await expect(applyPostgresDurableJournalWitnessMigrationV1(witness, {
+    expected_migration_role: "witness_migration",
+    reader_role: "witness_reader",
+    witness_acknowledgement_role: "witness_ack",
+    expected_database: "witness",
+    protected_journal_cluster_system_identifier: "100",
+    expected_witness_cluster_system_identifier: "200",
+    encrypted_at_rest: true,
+    restore_domain_sha256: sha("witness-restore"),
+    witness_identity_sha256: sha("witness-identity"),
+    signer_principal: witnessCrypto.signer.signer_principal,
+    signing_key_id: witnessCrypto.signer.signing_key_id,
+    verification_key_sha256: witnessCrypto.signer.verification_key_sha256,
+  })).rejects.toMatchObject({
+    code: "dependency_unavailable",
+    message: "postgres database initialization failed: durable journal witness migration transaction did not provide a query-capable session",
+    retryable: true,
+  })
+
+  expect(journal.transactions).toBe(1)
+  expect(witness.transactions).toBe(1)
 })
